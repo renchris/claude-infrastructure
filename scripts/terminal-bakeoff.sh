@@ -78,6 +78,7 @@ echo "== terminal-bakeoff  app=$APP panes=$PANES stage=$([ "$IDLE" = 1 ] && echo
 # One window, N panes — the same shape for every candidate, because comparing a 30-pane window
 # against 6 windows of 5 panes would measure the LAYOUT rather than the terminal.
 SPAWNED=0
+GHOSTTY_WIN=""   # set by spawn_ghostty; scopes both the census and the teardown to OUR window
 spawn_wezterm() {
   local cli=/opt/homebrew/bin/wezterm
   [ -x "$cli" ] || cli="$(command -v wezterm)"
@@ -119,10 +120,83 @@ spawn_kitty() {
   done
 }
 
+spawn_ghostty() {
+  # NO CLI IPC ON MACOS — this is the thing that makes Ghostty different from the other two.
+  # `ghostty +new-window` answers literally "+new-window is not supported on this platform", and
+  # there is no control socket to point a --to at. What Ghostty DOES ship is a full AppleScript
+  # dictionary (Contents/Resources/Ghostty.sdef, Info.plist NSAppleScriptEnabled=1) in which `split`
+  # takes a terminal specifier and RETURNS the new terminal, and the application object exposes a
+  # global `terminals` element. So the driver is osascript — and, better than the keystroke path,
+  # every split is acknowledged individually, so an under-spawn is observed rather than inferred.
+  #
+  # SCOPED TO OUR OWN WINDOW. Ghostty may already be running with the operator's surfaces in it (on
+  # this box it was, restored by the reboot), so the window id is recorded at creation and both the
+  # census and the teardown are scoped to it. Counting `terminals` at the application level would
+  # fold somebody else's panes into our denominator.
+  #
+  # PANE_CMD GOES THROUGH A FILE, NOT THROUGH THE QUOTES. Ghostty word-splits `command` itself, and
+  # PANE_CMD contains embedded single quotes, so interpolating it would put a quoting round-trip
+  # through AppleScript -> Ghostty -> sh. The file removes the round-trip entirely; the pane command
+  # is `/bin/sh <file>`, which is one word list with no quoting in it at all.
+  local app=/Applications/Ghostty.app
+  [ -d "$app" ] || { echo "  ✗ Ghostty.app not installed" >&2; return 1; }
+  local sh="${TMPDIR:-/tmp}/bakeoff-ghostty-pane.sh"
+  printf '%s\n' "$PANE_CMD" > "$sh"
+  open -a Ghostty; sleep 3
+  # ROUND-ROBIN OVER EVERY TERMINAL, for exactly the reason spawn_wezterm does it: a Ghostty split
+  # halves the target surface, so repeatedly splitting the newest one shrinks that branch
+  # geometrically and hits the minimum surface size early. One split of every existing terminal per
+  # round grows a balanced tree. Alternating right/down keeps the cells from degenerating into
+  # slivers in one axis.
+  local out
+  out="$(osascript - "$PANES" "/bin/sh $sh" <<'APPLESCRIPT' 2>&1
+on run argv
+	set target to (item 1 of argv) as integer
+	set paneCmd to (item 2 of argv)
+	tell application "Ghostty"
+		set cfg to new surface configuration
+		set command of cfg to paneCmd
+		set win to new window with configuration cfg
+		delay 1.5
+		set made to 1
+		set progressed to true
+		repeat while (made < target) and progressed
+			set progressed to false
+			repeat with t in (terminals of win)
+				if made >= target then exit repeat
+				try
+					split t direction right with configuration cfg
+					set made to made + 1
+					set progressed to true
+				end try
+				if made >= target then exit repeat
+				try
+					split t direction down with configuration cfg
+					set made to made + 1
+					set progressed to true
+				end try
+			end repeat
+		end repeat
+		delay 1
+		return "winid=" & (id of win) & " achieved=" & (count of terminals of win)
+	end tell
+end run
+APPLESCRIPT
+)"
+  # A round in which nothing could be split means the layout is saturated. Report what Ghostty
+  # acknowledged, never what was requested.
+  case "$out" in
+    winid=*) GHOSTTY_WIN="${out#winid=}"; GHOSTTY_WIN="${GHOSTTY_WIN%% *}"
+             SPAWNED="${out##*achieved=}" ;;
+    *) echo "  ✗ ghostty AppleScript driver failed: $out" >&2; SPAWNED=0; return 1 ;;
+  esac
+}
+
 if [ "$MEASURE_ONLY" = 0 ]; then
   case "$APP" in
     wezterm|WezTerm) spawn_wezterm ;;
     kitty)           spawn_kitty ;;
+    ghostty|Ghostty) spawn_ghostty ;;
     iTerm2)          echo "  iTerm2 is measure-only here — creating panes would disturb live sessions" >&2
                      MEASURE_ONLY=1 ;;
     *) echo "  ✗ no spawn strategy for '$APP'; use --measure-only" >&2; exit 2 ;;
@@ -148,6 +222,11 @@ actual_panes() {
     kitty)
       timeout 25 /Applications/kitty.app/Contents/MacOS/kitty @ --to "unix:${TMPDIR:-/tmp}/kitty-bakeoff" ls 2>/dev/null \
         | grep -c '"is_focused"' | tr -d ' ' ;;
+    ghostty|Ghostty)
+      # Scoped to the window we created, not `count of terminals` at the application level — Ghostty
+      # is frequently already running with surfaces that are not ours.
+      [ -n "${GHOSTTY_WIN:-}" ] || { echo 0; return; }
+      timeout 25 osascript -e "tell application \"Ghostty\" to return count of terminals of (first window whose id is \"$GHOSTTY_WIN\")" 2>/dev/null | tr -dc '0-9' ;;
     *) echo 0 ;;
   esac
 }
@@ -162,4 +241,12 @@ if [ "$MEASURE_ONLY" = 0 ]; then
 fi
 bash "$BENCH" --app "$APP" --panes "$MEASURED_PANES" --interval 0 ${OUT:+--out "$OUT"}
 
-echo "  (teardown: quit $APP from its own UI, or 'pkill -x $APP' — this script does not kill what it did not launch)"
+if [ -n "$GHOSTTY_WIN" ]; then
+  # NOT 'pkill -x ghostty'. Ghostty is a single shared process that may already have been hosting
+  # surfaces before this run; killing it would take those with it. Close the one window we made.
+  # (`close` is the terminal-class command; the window-class command is the distinct `close window`.)
+  echo "  (teardown: osascript -e 'tell application \"Ghostty\" to close window (first window whose id is \"$GHOSTTY_WIN\")')"
+  echo "   pane processes reap a few seconds after the window closes — re-check 'pgrep -P <ghostty-pid> | wc -l'"
+else
+  echo "  (teardown: quit $APP from its own UI, or 'pkill -x $APP' — this script does not kill what it did not launch)"
+fi
