@@ -386,10 +386,22 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
 
 **Free, today, no migration — and these are worth doing regardless of the terminal decision.**
 
-1. **Apply the 8 measured render knobs that are already declared and never activated.**
-   `config/iterm2-perf.keys` is a checked-in SSOT priced at **~1–2 cores**; `scripts/iterm2-perf-parity.sh`
-   currently reports `match=1 drift=1 unset=7` — i.e. **the app defaults are still live.** Two of the
-   eight are now independently corroborated from upstream source:
+1. ✅ **DONE 2026-07-31T06:50Z — the 8 render knobs are applied and parity-verified**
+   (`match=9 drift=0 unset=0`, undo saved to `~/.claude/autonomy/iterm2-perf-undo.tsv`; activation
+   marked `.done`). `config/iterm2-perf.keys` prices them at **~1–2 cores**.
+
+   **Effect so far: NOT YET MEASURABLE, and that is the expected reading, not a failure.** Five
+   post-change samples of iTerm2 gave 25.2–30.1% CPU (median 29.3) against a pre-change 19.6–31.5%
+   (median 29.4) — indistinguishable. Both the activation script and the SSOT say why:
+   `activeUpdateCadence` is **new-sessions-only**, and the keys file warns verbatim *"Do not read an
+   unchanged live number as a failed setting."* The knobs govern panes created **after** the write.
+   ⇒ The real test is after the panes recycle, or after an iTerm2 restart — which is **safe on this
+   box and already proven**: the shells are children of `iTermServer`, not of iTerm2, and all 40
+   sessions survived the 2026-07-30 restart with the same PIDs.
+   ⇒ Re-measure with `scripts/terminal-bench.sh --app iTerm2 --interval 1800` **after** a recycle
+   before crediting these knobs with anything.
+
+   Two of the eight are independently corroborated from upstream source:
    - `disableAdaptiveFrameRateInInteractiveApps` — the default of **YES** *exempts* alternate-screen
      TUI panes (i.e. all ~30 agent panes) from the frame-rate throttle. Largest single lever.
    - `DimInactiveSplitPanes` — currently **on** (with `SplitPaneDimmingAmount 0.4`). Dimming makes
