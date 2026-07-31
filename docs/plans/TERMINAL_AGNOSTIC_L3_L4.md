@@ -109,15 +109,34 @@ project-local `/ship` · C10 (never edit settings.json / live hooks / launchd in
 
 ## 2. Phases
 
-### P1 — the seam (T1)
-`CC_PANE_ID` replaces `ITERM_SESSION_ID` at the 18 class-2 sites (mechanical; keep `ITERM_SESSION_ID`
-as a read fallback for one release). Interface verbs, driver-selected by `CC_PANE_DRIVER`
-(`iterm2` default). The 12 class-1 files are **not touched** — they keep calling `it2`.
+### P1 — the seam (T1) — ✅ **DONE**, landed on `origin/main` 2026-07-31
+`bin/cc-pane`: 4 verbs + `list`, driver-selected by `CC_PANE_DRIVER` (`iterm2` default), the
+`iterm2` driver built in and reproducing today's behaviour — verified against the **live** iTerm2,
+not only fakes: 16 panes enumerated, self-address stripping `w3t0p5:` correctly, id round-tripped
+through the real `it2`. `CC_PANE_ID` landed at **17 class-2 own-env sites across 15 files**, with
+`ITERM_SESSION_ID` kept as a read fallback for one release. The 12 class-1 files were **not
+touched**.
 
-### P2 — headless driver (T2) — *the one that scales*
-`spawn` mints an id, starts the session with no surface, registers it. `address`/`send` work by id.
-`close` reaps. Design rule: **headless is the DEFAULT and a pane is the exception** — build it that
-way or it gets rebuilt.
+| sha | what |
+|---|---|
+| `1f7be212` | the seam + both drivers |
+| `457c19db` | 38 tests across seam + headless |
+| `b2601ced` | red-proof mutation harness (and the weak test it exposed) |
+| `6c94a26d` | `CC_PANE_ID` at the 17 class-2 sites |
+| `3ff736cb` · `82ebb42d` · `93f2f605` | three test defects the land gate caught (§6.10) |
+
+### P2 — headless driver (T2) — ✅ **DONE**, landed on `origin/main` 2026-07-31
+`bin/cc-pane-headless` (`1f7be212`): `spawn` mints an id and starts the agent with **no surface**,
+`address`/`send` work by id, `close` reaps TERM→KILL and is **ps-verified**. The registry holds
+*claims*, the OS holds *truth* — liveness is pid + start-time + process state, and `list` reaps what
+it disproves, so a reboot is self-healing rather than leaving confident corpses. Design rule held:
+nothing in the contract assumes a surface (§6.4), and the suite proves it by putting poisoned
+`it2`/`osascript`/`tmux` stubs on `PATH`.
+
+**Not yet true, and neither is T1/T2 scope** — both named precisely rather than implied:
+the **class-B** env-scrapers of §6.9 still cannot see a headless agent, and nothing yet *drains* a
+headless inbox. `send` guarantees durable delivery, never consumption; P4's queue is what closes
+that. Until both land, headless is addressable but not yet load-bearing.
 
 ### P3 — port the 6 (T3)
 Incremental, never a cutover: each file gains the interface call with the iTerm2 path as default.
@@ -398,3 +417,28 @@ an error. Making them accept either key is correct and small, but it is fleet-wi
 headless-awareness (T3 territory), not the mechanical rename T1 was scoped to, and
 `teammate-auto-shutdown.sh` is high-traffic machinery with its own extensive suite. Filed rather
 than smuggled in.
+
+### 6.10 Three test defects the LAND GATE caught that 658 green tests did not
+
+T1/T2 landed only after three consecutive `exit 6` gate reds. All three were in the **tests**, none
+in the subject, and none was visible from a green suite — worth recording because the pattern is
+"my tests passed" concealing "my tests were not being checked":
+
+1. **`tests/cc-pane.bats` ran against the operator's live `~/`** (`3ff736cb`). `cc-pane`'s
+   `it2_bin()` defaults to `$HOME/.claude/bin/it2`, so any test that forgot `$CC_PANE_IT2` would
+   have driven the **real** it2 shim — the live fleet — from a test run. The headless suite had the
+   same exposure via `$HOME/.claude/autonomy/panes`, where the verbs under test *spawn and reap
+   processes*, so both were fixtured, not just the one the ratchet named.
+2. **A prose comment opened with the tool's name** (`82ebb42d`). shellcheck parses a comment-initial
+   `shellcheck` as a **directive** and aborts the whole file ⇒ `bats-shellcheck-lint` was *silently
+   blind* to that suite and its clean verdict meant nothing. The word had merely wrapped onto an
+   unlucky column. `--selftest` passes on `origin/main`, so the regression was unambiguously mine.
+3. **A trailing `return 0` made 15 later tests unreachable** (`93f2f605`). A `.bats` file is linted
+   as plain bash, where `@test "…" { … }` is not valid function syntax — so shellcheck read the
+   zombie test's closing `return` as a **top-level** return ending control flow, and flagged every
+   subsequent test body SC2317.
+
+**The two defects composed, and the order matters:** #3 was *invisible until #2 was fixed*, because
+the abort meant the lint saw nothing in that file at all. A gate that only reported "clean" would
+have shipped both. This is the same shape as the §6.8 red-proof result — a green signal that was
+green because nothing was actually looking.
