@@ -480,6 +480,36 @@ makes the addressing hazard go away. Both correct §5b; neither subsumes the oth
    nowhere on disk and is inconsistent with every kitty RSS reading available today (M2 loaded 18 panes
    = 223 MB; marginal ~5.8 MB/pane over a 157 MB base ⇒ ~435 MB projected at 48). It is now
    permanently unfalsifiable and must not be cited.
+
+   → **2026-07-31 22:17Z — a 30-minute attempt that failed on its PRECONDITION, not its result.**
+   Longer than any read above (`--interval 1800`, live kitty pid 26094, 21:46:59→22:16:59Z,
+   `verdict=OK`) and still not a closure:
+
+   ```
+   mem MB         +20 over 1800s  = +40.0/hr
+   mach ports      +5 over 1800s  = +10.0/hr
+   windows        -17 over 1800s  = -34.0/hr
+   offscreen win  -18 over 1800s  = -36.0/hr
+   ```
+
+   **Do not quote the +10 ports/hr as a drift bound.** The instrument is only meaningful at *constant
+   visible layout*, and this window was not: the census fell **36 → 19** while it held — 17 windows
+   closed underneath it. Ports and windows move together, so +5 across 17 closures cannot be separated
+   into leaked-versus-released. Critically, **`verdict=OK` does not certify the precondition**: the
+   token attests that two readings and a GPU profile were obtained, nothing about layout stability. A
+   consumer trusting the token alone would file this as the clean bound it is not.
+
+   What it *does* add is a **churn** result on a live fleet rather than a synthetic one: 17 windows
+   closed and both counters fell with them (**−17 onscreen, −18 offscreen**) for +5 ports and +20 MB —
+   kitty gave the windows back, where iTerm2 had **98 survive `close()`**. Raw transcript:
+   `docs/research/data/kitty-drift-30min-2026-07-31.txt`.
+
+   **What would close item 1:** the same command over a window in which nothing opens or closes.
+   Resolution scales with the interval — at 1800 s one mach port is 2/hr, sharp enough to discriminate
+   against iTerm2's **+76/hr**; at 45 s it is ~80/hr and cannot. The obstacle is not instrument time,
+   it is finding a half-hour on a shared box when no session opens a pane. **Gate the run on a
+   layout-stability check that ABORTS rather than emitting a confounded row** — as shipped, the
+   instrument cannot tell you its own precondition broke.
 2. ✅ **CLOSED 2026-07-31 PM — it renders correctly.** **No real Claude Code in a kitty pane.** Every
    challenger measurement used a synthetic alternate-screen repainter. kitty is a strict VT
    implementation and should render Ink correctly — but "should" is the word the evidence rules ban.

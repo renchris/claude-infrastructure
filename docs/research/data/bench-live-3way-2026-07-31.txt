@@ -1,0 +1,36 @@
+############ kitty ############
+terminal-bench — app=kitty pid=26094 panes=0 interval=45s  2026-07-31T21:44:36Z
+  T0  app   cpu=0.0 mem=321MB th=8 ports=362 win=36 off=34 mpx=3.08
+  T0  WS    cpu=46.2 mem=1283MB th=27 ports=5019 win=13 off=9 mpx=9.37
+  GPU path taken: gpu_frames=50 cpu_frames=1  ratio=50.00:1
+  … holding 45s at constant layout (do not create or close panes) …
+  T1  app   cpu=0.3 mem=336MB th=8 ports=362 win=36 off=34 mpx=3.08
+  T1  WS    cpu=39.2 mem=1298MB th=26 ports=5052 win=13 off=9 mpx=9.37
+  DRIFT (app, constant layout — this is the leak instrument):
+    mem MB         +15 over 45s  = +1200.0/hr
+    mach ports     +0 over 45s  = +0.0/hr
+    windows        +0 over 45s  = +0.0/hr
+    offscreen win  +0 over 45s  = +0.0/hr
+  appended → /private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/c0033a12-e236-4b3b-89ce-fccf8a005afc/scratchpad/bakeoff-live.jsonl
+verdict=OK
+(exit=0)
+############ ghostty ############
+terminal-bench — app=ghostty pid=584 panes=0 interval=45s  2026-07-31T21:45:34Z
+  T0  app   cpu=0.0 mem=84MB th=8 ports=338 win=14 off=14 mpx=0.00
+  T0  WS    cpu=39.0 mem=1298MB th=26 ports=5052 win=13 off=9 mpx=9.37
+  GPU path taken: gpu_frames=16 cpu_frames=1  ratio=16.00:1
+  … holding 45s at constant layout (do not create or close panes) …
+  T1  app   cpu=0.0 mem=84MB th=8 ports=338 win=14 off=14 mpx=0.00
+  T1  WS    cpu=45.8 mem=1282MB th=27 ports=5039 win=13 off=9 mpx=9.37
+  DRIFT (app, constant layout — this is the leak instrument):
+    mem MB         +0 over 45s  = +0.0/hr
+    mach ports     +0 over 45s  = +0.0/hr
+    windows        +0 over 45s  = +0.0/hr
+    offscreen win  +0 over 45s  = +0.0/hr
+  appended → /private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/c0033a12-e236-4b3b-89ce-fccf8a005afc/scratchpad/bakeoff-live.jsonl
+verdict=OK
+(exit=0)
+############ cmux ############
+terminal-bench: no running process named 'cmux' (tried: cmux via pgrep -x and ps-comm-basename)
+verdict=NO-DATA
+(exit=3)
