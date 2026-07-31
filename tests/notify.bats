@@ -86,7 +86,8 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
   fire "$(payload s-inj /w/proj 'git commit -m "fix: \ the thing" && echo "done"')" permission
   script="$(osa)"
   [[ -n "$script" ]]
-  [[ "$script" != *'\'* ]]                          # no backslash survives into the literal
+  bs=$'\\'                                          # a lone backslash, ANSI-C quoted
+  [[ "$script" != *"$bs"* ]]                        # no backslash survives into the literal
   # Compile the REAL artifact, unmodified — `if false then <stmt>` parses the whole statement
   # without displaying anything. Rewriting the script into some other shape would test an
   # approximation and pass vacuously (memory control-must-replay-the-real-artifact).
@@ -97,7 +98,10 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 @test "RED CONTROL: the parse check can actually fail on a script with a stray escape" {
   # Without this, the test above could pass because osascript accepts anything. This proves the
   # instrument detects exactly the defect that shipped in the first draft.
-  run /usr/bin/osascript -e 'if false then display notification "a\'"'"'b" with title "t"'
+  # Assemble the bad script from parts so the escape sequence under test is DATA, not something
+  # this file has to quote its way around.
+  bad="$(printf 'if false then display notification "a%s%sb" with title "t"' $'\\' "'")"
+  run /usr/bin/osascript -e "$bad"
   [ "$status" -ne 0 ]
 }
 
@@ -183,7 +187,9 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
       | "$H" permission
   done
   [ ! -e "$BATS_TEST_TMPDIR/evil-permission.lock" ]
-  [ "$(ls "$CC_NOTIFY_DIR" | grep -c 'nosid-permission.lock')" -eq 1 ]   # all fell back to nosid
+  n=0
+  for f in "$CC_NOTIFY_DIR"/*nosid-permission.lock; do [ -e "$f" ] && n=$((n + 1)); done
+  [ "$n" -eq 1 ]                                     # every unsafe sid fell back to the nosid key
 }
 
 # ── QUIET EVENTS — `complete` is sound-only and must stay that way ───────────────────────────────
