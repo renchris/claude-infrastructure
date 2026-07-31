@@ -433,14 +433,80 @@ Each is a command whose output decides the claim. `<W>` is the window under test
 | **AC-1** | p95 recycle fill is computable | `cc-ctx-audit --p95-recycle-fill --since <W>` | exits `0` with a number **and** prints the excluded-for-no-denominator count; exits `3` (non-verdict, not red) when the whole window lacks denominators |
 | **AC-2** | wall-hits are counted from disk | `cc-ctx-audit --wall-hits --since <W>` | reproduces **7 sessions / 10 events** over all-time (C6) |
 | **AC-3** | compactions are classified by literal trigger | `cc-ctx-audit --compactions --since all` | **39 total, 39 manual, 0 auto** (C3/C4) — and any future `auto` appears as `auto`, never folded |
-| **AC-4** | a live recycle stamps its own denominator | `jq -r 'select(.verdict=="executed")\|"\(.used_pct) \(.window)"' ~/.claude/autonomy/recycle-events.jsonl` | every `executed` row has a **non-null** `window`. **ACCRUING** — 0 rows until an exec path is armed (C17), which is an operator call |
-| **AC-5** | the compaction event is no longer discarded | `jq -r 'select(.hook=="context-econ" and .reason=="fill-drop")' ~/.claude/autonomy/idl.jsonl` | ≥1 record after the next observed drop; **ACCRUING** |
+| **AC-4** | a live recycle stamps its own denominator | `jq -r 'select(.verdict=="executed")\|"\(.used_pct) \(.window)"' ~/.claude/autonomy/recycle-events.jsonl` | every `executed` row has a **non-null** `window`. ~~**ACCRUING** — 0 rows until an exec path is armed (C17)~~ **ACCRUED — see §7.1(b): 3 `executed` rows exist; GREEN on the 1 real row, the other 2 are this row's own pre-fix fixture pollution (producer-verified, deliberately not deleted)** |
+| **AC-5** | the compaction event is no longer discarded | `jq -r 'select(.hook=="context-econ" and .reason=="fill-drop")' ~/.claude/autonomy/idl.jsonl` | ≥1 record after the next observed drop; ~~**ACCRUING**~~ **GREEN — 3 records, the first carrying `input_tokens:284419, window:1000000` (§7.1a)** |
 | **AC-6** | the graveyard take is live | `git ls-tree origin/main -- tests/session-continue-telemetry.bats` **and** `grep -c CONTINUE_IDL hooks/session-continue.sh` | both non-empty / ≥1 |
-| **AC-7** | every new mechanism has a kill switch | `for v in CC_CTX_AUDIT CC_CE_DENOM CC_RECYCLE_EVENTS; do grep -rq "$v" bin/ hooks/; done` | all present (R3) |
+| **AC-7** | every new mechanism has a kill switch | `for v in CC_CTX_AUDIT CC_CE_DROP_LOG CC_RECYCLE_LOG; do grep -rq "$v" bin/ hooks/; done` | all present (R3) |
+
+> **⚠ AC-7's variable list was STALE AS LANDED and is corrected above — the check falsified itself.**
+> As originally written it read `CC_CTX_AUDIT CC_CE_DENOM CC_RECYCLE_EVENTS`, which was already
+> refuted by this document's own §4.2 and §4.3 by the time the row closed: **`CC_CE_DENOM` never
+> shipped** (§4.2 reverted the 4th-column plan on merit, so there is no behaviour to switch off), and
+> **`CC_RECYCLE_EVENTS` is the store's PATH override, not an off-switch** — §4.3 renamed the kill
+> switch to `CC_RECYCLE_LOG` precisely because overloading one variable as both is how a kill switch
+> stops working. Run verbatim today the old line **fails on `CC_CE_DENOM` and passes on
+> `CC_RECYCLE_EVENTS` by matching a path variable** — a false green on the one check that exists to
+> prove R3. The invariant itself was never in doubt: all three real switches are present
+> (`bin/cc-ctx-audit`, `hooks/lib/context-econ.sh` ×2), verified 2026-07-31. **The lesson is the
+> two-oracle tell** (memory `spec-named-mechanism-may-be-prose-only`): when a spec section and its
+> acceptance check name different identifiers, the check is the one that rots silently, because
+> nothing re-runs it. Corrections to §4.x must be propagated into §7 in the same commit.
 
 **Honest accrual note.** AC-4 and AC-5 are **time-dependent by construction** and are reported as
 ACCRUING, not as green. AC-1/2/3/6/7 are provable the moment the code lands, because the reader is
 retrospective (§3 property 1) — which is the whole reason the architecture was inverted.
+
+### 7.1 Post-land re-verification, 2026-07-31 (all seven ACs re-run against the LANDED code)
+
+Run ~1.5 days after close. **AC-2, AC-3, AC-6 reproduce exactly** (10 events / 7 sessions · 39 events,
+39 `manual`, 0 `auto` · take present with 10 wired `log_idl` call sites and **29 fresh live records**,
+so the graveyard emitter is not merely present but *emitting*). **AC-7 was stale as landed and is
+corrected above.** The three findings that change what this row knows:
+
+**(a) AC-4 and AC-5 have ACCRUED — both are now measurable, and AC-5 is GREEN.** The store holds
+**374 records** with the verdict enum working exactly as designed (R8/F5): `advised` 354 ·
+`shadow-would-fire` 12 · `nudged` 5 · `executed` **3**. AC-5 has **3 `fill-drop` records**, the first
+of which carries `input_tokens:284419, window:1000000` — the discarded compaction event (F7) is
+demonstrably captured now.
+
+**(b) AC-4 reads RED (1 of 3) but is GREEN on real data (1 of 1) — two `executed` rows are this
+row's OWN pre-fix test pollution, classified by producer per R6, never by shape.** The suspicious
+rows have 3-char sids and null token counts, but shape is not evidence: the *literal producers* are
+`tests/waiting-recycle.bats:221-222` (`mk_tel s6e 61`, the "Stage 2 LIVE" case) and `:646-647`
+(`mk_tel t3c 81`, "Stage-2 busy LIVE"), whose fixture `used_pct` values match the polluted rows
+exactly. Both are dated `2026-07-30T02:48/02:59Z` — during this row's own build, **before** the
+`CLAUDE_CONFIG_DIR` hermeticity fix in Learnings. **The leak is confirmed CLOSED empirically, not
+structurally**: `context-econ.sh:149` now resolves the store through `CLAUDE_CONFIG_DIR`, which
+`tests/waiting-recycle.bats:19` sets — and re-running both polluting tests today left the live store
+**byte-identical** (374 lines, md5 `55d3aba6…` before and after; 2/2 ok, `not ok` count 0, rc read
+unpiped per §10 Trap 1). The one *genuine* `executed` record (`89922bd6…`, 2026-07-31T17:56:46Z)
+carries `used_pct:32, input_tokens:319142, window:1000000` — **a non-null denominator, so the
+mechanism works.** ⚠ **The 2 rows are deliberately NOT deleted.** §8 rejects exactly this cleanup for
+the IDL, and R7 says archive-never-delete is a property of the destination; on a box this concurrent,
+rewriting a live append-only store also races every appending session. They stay as the audit trail of
+the leak, and **any future AC-4 read must exclude them by the producer evidence above** — a consumer
+cannot classify them itself, which is R6's point restated.
+
+**(c) THE p95 DECAYS TOWARD ZERO ON EVERY REBOOT — the headline fill number is not stable, and C9
+understates the problem.** AC-1 re-run today gives **p95=58.5%, p50=15.1%, n=11, with 5,189 of 5,200
+excluded**. The close-out reported **p95=61.4%, p50=23.1%, n=59**. The population *grew* (4,893 →
+5,200) while recoverable denominators *fell* (59 → 11, coverage 1.2% → **0.2%**). Cause, verified:
+the box **kernel-panicked at 2026-07-31 11:46** (memory `agent-benchmark-panicked-the-box` — our own
+`threadprice` probe), wiping `/tmp`; only **18** telemetry files survive versus C9's 74, and the
+oldest is timestamped 12:00, *after* the boot. ⇒ **§1.1's "wiped on reboot" is not a footnote about
+coverage, it is the dominant term.** M-2/M-3 made the *store* durable but the *value still originates
+in `/tmp`*, so durable capture only ever preserves what the ephemeral source happened to hold at that
+instant — visible directly in the store: **368 of 374 records have `window:null`.** This is the §1.1
+lesson recursing one level, and it is exactly the Learnings entry *"'make it durable' is a question
+about the STORE"* applied to the source instead. **Not fixed here, by seam discipline:**
+`/tmp/cc-telemetry` is **row 10's** surface (§9), and R9 forbids redesigning another row's mechanism.
+Named as the follow-on below. Quote no p95 as a standing fact — **re-derive it** (R6); this row's own
+close-out figure was stale within 36 hours.
+
+**Follow-on for row 10 (named, not built here):** persist the statusline's `window` under `$HOME`
+rather than `/tmp`, so the fill denominator survives a reboot. Until then every fill percentage in
+this repo — including the four thresholds §4.5 deliberately left alone — is computable for ~0.2% of
+sessions after a panic, and `null`/*unknown* (R2) for the rest.
 
 ---
 
@@ -622,3 +688,36 @@ live on the next checkout fast-forward. Only `bin/cc-ctx-audit` needs the one `l
   designed. The right response is to stop adding load and wait, not to bypass the chokepoint; but a
   reader of a slow suite needs to distinguish *starved* from *wedged* before reaching for a timeout,
   and `ps -o stat=` showing `SN` is the discriminator.
+
+*(added by the 2026-07-31 post-land re-verification, §7.1)*
+
+- **A measured constant whose SOURCE is ephemeral has a half-life, and mine was ~36 hours.** This row
+  published `p95=61.4%, n=59` as its headline achievement — "the first sound fill number this row has
+  ever had". Re-run 1.5 days later it is `p95=58.5%, n=11`: the population grew while recoverable
+  denominators fell 5×, because a kernel panic wiped `/tmp`. The number was never wrong; it was
+  **perishable**, and nothing in the close-out said so. R5 says a record must carry its units — the
+  sibling rule this taught is that a *published figure* must carry its **coverage and its decay mode**,
+  or the next reader quotes a fossil. Concretely: `n` and the exclusion count are not footnotes to the
+  p95, they *are* the p95's meaning.
+- **Fixing the STORE does not fix the SOURCE — and I recorded the proof of that in my own store.**
+  M-2/M-3 correctly moved the denominator into durable `$HOME` stores, and the Learnings above even
+  name the insight ("'make it durable' is a question about the STORE"). But durable capture can only
+  preserve what the ephemeral source held at that instant, so **368 of 374 records carry
+  `window:null`**. The fix was real and the gap survived it one level up. When a value is copied from
+  a volatile source into a durable store, ask what fraction of copies find the source populated —
+  that ratio, not the store's durability, is the mechanism's true coverage.
+- **An acceptance check rots faster than the spec it checks, because nothing re-runs it.** §4.2 and
+  §4.3 were both corrected mid-build, and each correction is meticulously documented — but AC-7 still
+  named the *superseded* variables at close, so running it verbatim failed on a switch that never
+  shipped and passed on a path variable mistaken for a switch. The prose stayed honest while the
+  executable claim went stale, which is the inverse of the usual failure. **Propagate a §4.x
+  correction into §7 in the same commit**, and treat "spec and its check name different identifiers"
+  as the two-oracle tell.
+- **My own test pollution convicted my own acceptance criterion.** AC-4 reads 1-of-3 RED; the truth
+  is 1-of-1 GREEN, because two `executed` rows are fixtures my build deposited in the live store
+  before its own hermeticity fix landed. The shape screamed "fixture" (3-char sid, null tokens) but
+  shape is not evidence — R6 forced me to the literal producer (`tests/waiting-recycle.bats:221`,
+  `:646`), whose fixture values match the rows exactly. Two further discipline points: the leak was
+  proved CLOSED **empirically** (re-ran both tests; live store byte-identical) rather than by reading
+  the code path, and the rows were **not deleted** — §8 rejects that cleanup for the IDL and R7 makes
+  archive-never-delete a property of the destination, so a permanently-explained RED beat a tidy store.
