@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""permission-prompt audit — rank the commands most likely to be BLOCKING sessions.
+
+Method: every Bash tool_use in the transcript corpus is matched against the live
+settings.json allow/deny/ask rules. Commands matching NO allow rule are prompt
+CANDIDATES; ranked by frequency they are the highest-value allow-list additions.
+
+HONEST BOUND: this is an UPPER bound on prompts, not the true prompt set. Auto mode
+runs a classifier on top of the static rules and silently approves much of what does
+not match a literal rule. It also cannot see prompts the classifier raised for a
+command that DOES match. The true set needs the beacon to archive (it currently
+rm -f's each record once answered, so no history exists).
+"""
+
+import json, glob, re, sys, collections, os
+
+SETTINGS = os.path.expanduser("~/.claude/settings.json")
+DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 0  # 0 = all history
+
+
+def load_rules():
+    o = json.load(open(SETTINGS))
+    p = o.get("permissions", {})
+
+    def bash_rules(key):
+        out = []
+        for r in p.get(key, []):
+            m = re.match(r"^Bash\((.*)\)$", r)
+            if m:
+                pat = m.group(1)
+                out.append(pat[:-2] if pat.endswith(":*") else pat)
+        return out
+
+    return bash_rules("allow"), bash_rules("deny"), bash_rules("ask")
+
+
+def norm(cmd):
+    """Collapse a command to the comparable prefix a rule would match."""
+    c = " ".join(cmd.strip().split())
+    # strip leading env assignments and cd-chains — they are not the decided verb
+    while True:
+        m = re.match(r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)(.*)$", c)
+        if not m:
+            break
+        c = m.group(1)
+    return c
+
+
+def head(cmd, n=2):
+    parts = norm(cmd).split()
+    return " ".join(parts[:n]) if parts else ""
+
+
+def matches(cmd, rules):
+    c = norm(cmd)
+    for r in rules:
+        if c == r or c.startswith(r + " ") or c.startswith(r):
+            return r
+    return None
+
+
+def main():
+    allow, deny, ask = load_rules()
+    files = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
+    files += glob.glob(os.path.expanduser("~/.claude-next/projects/*/*.jsonl"))
+    if DAYS:
+        import time
+
+        cutoff = time.time() - DAYS * 86400
+        files = [f for f in files if os.path.getmtime(f) >= cutoff]
+
+    total = 0
+    unmatched = collections.Counter()
+    matched = 0
+    hit_ask = collections.Counter()
+    hit_deny = collections.Counter()
+    examples = {}
+
+    for f in files:
+        try:
+            for ln in open(f, errors="ignore"):
+                if '"Bash"' not in ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                except Exception:
+                    continue
+                msg = o.get("message") or {}
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for blk in content:
+                    if not (
+                        isinstance(blk, dict)
+                        and blk.get("type") == "tool_use"
+                        and blk.get("name") == "Bash"
+                    ):
+                        continue
+                    cmd = (blk.get("input") or {}).get("command", "")
+                    if not cmd:
+                        continue
+                    total += 1
+                    if matches(cmd, ask):
+                        hit_ask[head(cmd)] += 1
+                        continue
+                    if matches(cmd, deny):
+                        hit_deny[head(cmd)] += 1
+                        continue
+                    if matches(cmd, allow):
+                        matched += 1
+                    else:
+                        h = head(cmd)
+                        unmatched[h] += 1
+                        examples.setdefault(h, norm(cmd)[:110])
+        except Exception:
+            continue
+
+    print(f"corpus: {len(files)} transcripts, {total} Bash invocations")
+    print(f"rules:  allow={len(allow)} deny={len(deny)} ask={len(ask)}")
+    if not total:
+        print("no data")
+        return
+    print(f"\nmatched an allow rule : {matched:6d}  ({100 * matched / total:.1f}%)")
+    ua = sum(unmatched.values())
+    print(
+        f"matched NOTHING       : {ua:6d}  ({100 * ua / total:.1f}%)  <- prompt candidates (upper bound)"
+    )
+    print(f"hit an ASK rule       : {sum(hit_ask.values()):6d}  <- these SHOULD stop")
+    print(f"hit a DENY rule       : {sum(hit_deny.values()):6d}")
+
+    print(f"\n── TOP 25 PROMPT CANDIDATES (add these to permissions.allow) ──")
+    print(f"{'count':>7}  {'head':<26} example")
+    for h, n in unmatched.most_common(25):
+        print(f"{n:7d}  {h:<26} {examples.get(h, '')[:80]}")
+
+    if hit_ask:
+        print(f"\n── ASK rules actually exercised (these are your REAL blocks) ──")
+        for h, n in hit_ask.most_common(10):
+            print(f"{n:7d}  {h}")
+
+
+if __name__ == "__main__":
+    main()
