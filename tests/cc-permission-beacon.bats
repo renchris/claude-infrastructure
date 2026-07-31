@@ -364,5 +364,7 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   printf '%s' "$(jq -nc '{session_id:"s-lost",hook_event_name:"Stop"}')" | "$H" clear
   chmod 755 "$CC_PERMARCHIVE_DIR"
   # the claim is retained (dot-prefixed, so it cannot re-page) — the record still exists on disk
-  [ "$(ls -A "$CC_PERMPEND_DIR" | grep -c 'claimed-s-lost')" -ge 1 ]
+  n=0
+  for f in "$CC_PERMPEND_DIR"/.claimed-s-lost.*; do [ -e "$f" ] && n=$((n + 1)); done
+  [ "$n" -ge 1 ]
 }
