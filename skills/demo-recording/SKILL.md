@@ -66,6 +66,20 @@ common: **never plain lossy WebP for a screen recording.**
 | Live screen capture (a real window, real UI) | **WebP** via `img2webp -near_lossless 40` | the only WebP that does not seam flat regions; +21 % vs GIF, ~3× better colour |
 | …if the byte budget is hard | GIF | the cheapest *clean* option; every lossy WebP small enough to beat it seams |
 
+**If a frame rate is specified, VHS may not be able to hit it — and it fails silently.** VHS
+**0.11.0 ignores `Set Framerate` for its mp4 muxer** and emits **25 fps** whatever the tape asks.
+Probed directly rather than inferred: a minimal tape at `Set Framerate 60` still produced
+`avg_frame_rate=25/1`. The setting does govern the GIF, so the inline artifact is unaffected —
+but a linked "1080p60 master" rendered by VHS is a caption that lies. When a rate is part of the
+ask, **split the artifact**: tape → GIF → `gif2webp` for the inline image, and a real
+`screencapture` at display refresh for the linked master, with **no `Output …mp4` line in the
+tape** (it would overwrite the real capture on the next render). Always `ffprobe` the result and
+caption what the file actually is:
+
+```bash
+ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate -of default=nw=1 out.mp4
+```
+
 ### A GIF you already have → WebP: `gif2webp`, and `-min_size` is not optional
 
 ```bash
@@ -216,11 +230,34 @@ osascript -e 'tell application "System Events" to tell process "iTerm2" to get {
 ```bash
 screencapture -v -V60 /tmp/take.mov           # -v = video; -V<secs> self-stops. NO space: it is -V60
 # interactive window pick instead:  screencapture -v -w /tmp/take.mov
-# a specific window id (no chrome): screencapture -v -l<window-id> /tmp/take.mov   # also attached
+# SCOPE A VIDEO TO ONE WINDOW WITH -R, NOT -l:
+screencapture -v -V60 -R0,38,1280,720 /tmp/take.mov
 ```
 
-`screencapture -v` records the **whole screen** unless told otherwise, so crop to the
-window afterwards — bounds × 2 on Retina, and `crop` takes `w:h:x:y`:
+🚨 **`-l<window-id>` does NOT scope a VIDEO capture — measured 2026-07-31.** This line
+previously read *"a specific window id (no chrome)"*, carried over from the **still**-image
+behaviour where `-l` genuinely does crop to the window. In `-v` mode it silently falls back to
+**the entire display**: a take made with `-l<id>` on a 1280×720 window came out **3456×2234**
+— the whole built-in screen, with the Dock, the wallpaper and every other application's window
+in frame. Nothing errored; the only symptom was the frame size. That take was deleted unused,
+and it would have shipped the operator's desktop into a public README.
+
+**Use `-R x,y,w,h` and make your own window cover the rect exactly.** Two corollaries, both
+measured the same session:
+
+- **Keep the rect clear of the notification zone.** macOS banners are right-aligned, and one
+  carrying live session ids landed in the top-right of a 1600-wide take. On a 1728-pt-wide
+  display a 1280-wide rect at `x=0` clears them by 88 pt — and at 2× it captures 2560×1440,
+  which downscales to 1080p with no upscaling anywhere.
+- **Trim the tail: the window can close before `-V` expires.** A demo script that ends while
+  the capture is still running films the desktop for the remainder. Find the cut by mean luma
+  rather than by eye (`magick identify -format '%[fx:mean*65535]'`) — a dark terminal reads
+  ≈6.4k against a wallpaper's ≈22.8k of 65535, which is unambiguous — then **scan every
+  second** of the final encode for bright frames, not a sample. A contact sheet at `fps=1/4`
+  can step straight over a two-second leak.
+
+`screencapture -v` records the **whole screen** unless given `-R`, so an un-scoped take must be
+cropped afterwards — bounds × 2 on Retina, and `crop` takes `w:h:x:y`:
 
 ```bash
 ffmpeg -i /tmp/take.mov -vf "crop=3840:2400:0:0" -c:v libx264 -crf 18 -preset slow /tmp/win.mp4
