@@ -22,7 +22,7 @@ re-reads the emitted PNGs and fails if a pair is byte-identical, because two ide
 the exact signature of a patch that did not apply.
 
     scripts/banner-sky-ab.py --out /tmp/sky-ab           # all three knobs, then open index.html
-    scripts/banner-sky-ab.py --knob horns --out /tmp/ab  # one knob
+    scripts/banner-sky-ab.py --knob grain --out /tmp/ab  # one knob
 """
 
 from __future__ import annotations
@@ -51,31 +51,14 @@ AMBIENT_T = (
 # Each option is (label, scheme, [(old_source, new_source), ...], note). An empty patch list is the
 # as-shipped control, which every knob must have — without a control there is nothing to compare to.
 KNOBS: dict[str, dict] = {
-    "horns": {
-        "title": "Moon — horn direction",
-        "question": "Which way should the crescent open?",
-        "detail": (
-            "Astronomically horns-UP is the correct night crescent, and the spec's own rule — "
-            "<em>the horns point away from the Sun</em> — gives horns up at night, because at night "
-            "the Sun is below the horizon. The spec then says &ldquo;down&rdquo; twice, so it "
-            "contradicts itself. Horns-down is the familiar storybook moon. This is an art call, "
-            "not a physics one."
-        ),
-        "options": [
-            (
-                "horns DOWN — ships today, storybook",
-                "dark",
-                [],
-                "MOON_LIT_DEG = -100.0",
-            ),
-            (
-                "horns UP — astronomically correct",
-                "dark",
-                [("MOON_LIT_DEG = -100.0", "MOON_LIT_DEG = 100.0")],
-                "MOON_LIT_DEG = 100.0",
-            ),
-        ],
-    },
+    # THE HORN-DIRECTION KNOB IS GONE, and its absence is the record of a bigger reversal.
+    # It parameterised `MOON_LIT_DEG` on the rebuilt crescent — and that whole moon construction was
+    # REVERTED (§ "The sky-craft moon is a REGRESSION against what ships"): measured on a raw centre
+    # scanline at 838 px it peaked at 54 against trunk's 195, a flat plateau where a crescent should
+    # be. Trunk's moon is a masked disc with no lit-limb bearing to turn, so there is no constant
+    # here to flip. Deleted rather than left pointing at a name that no longer exists: this script
+    # asserts every substitution matches exactly once, so a stale knob is a hard failure on every
+    # run, and a knob that cannot render both sides is not a decision anyone can take by looking.
     "grain": {
         "title": "Sky grain — the last SVG filter",
         "question": "Keep the feTurbulence grain, or drop it?",
