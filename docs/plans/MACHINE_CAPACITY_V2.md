@@ -270,9 +270,9 @@ Each criterion names the exact command whose output proves it. Narration does no
 | **AC6** ✅ **MET** | Stop chain ≤1500 ms | min-of-2/3 timing of the 9 Stop hooks, steady state | **3688 ms → 882 ms** |
 | **AC7** ✅ **MET** | `operator-readout.sh` unchanged-state path ≤300 ms | min-of-3, warm latch | **2711 ms → 140 ms** (19×; cold render still 3221 ms, by design) |
 | **AC8** ✅ **MET** | The rendered readout block is byte-identical before/after M3 | `--render` old-vs-new on the SAME tree → identical sha `707c143f78f66e62` | — |
-| **AC9** ❌ **NOT MET** — M4 shipped nothing | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires. **Evidence 2026-07-30:** `grep -c watchdog-census bin/cc-reaper` → **0**; `ls tests/watchdog-census.bats` → *No such file or directory*; `grep -rn 'watchdog[-_]census\|WATCHDOG_CENSUS' bin/ scripts/ hooks/ tests/` → **0 hits** (`bin/cc-reaper` itself exists, 65193 B, and contains no `census` / `--watchdog` token at all). **Missing:** the whole M4 leg — the `--watchdog-census` subcommand, the spawned/live/exited/lost ledger, the `control=OK` positive control, and the `CC_WATCHDOG_CENSUS=off` kill switch §8 already declares | ledger off by **~102**, no census exists |
-| **AC10** ⚠ **PARTIAL** — the read passes on code this row did not write; the poll it names is unchanged (note [b]) | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead. **Evidence 2026-07-30:** count = **4** — so the read as written passes — but all four sit in the daemon's **own** identity check (`daemon_alive()` at `:718`, `WATCHDOG_START` at `:1008`), and `git blame -L 705,725` attributes 100% of them to sibling commit `2f62ee62` *"single-instance guard + one-handler-per-death"* (2026-07-29 17:48), not to this row. **The liveness this AC names — the daemon's poll of the LEAD — is still a bare `kill -0 "$pid"` at `hooks/lead-crash-watchdog.sh:761`** (base `6ce912b3` line 630; the `:601` cited in R5/M4). The recycled-PID RED-proof at `tests/lead-crash-watchdog.bats:301-311` exists but `git blame -L 301,311` → **11/11 lines `2f62ee626`**, and it asserts the *daemon-record* path (a recycled pid must not suppress the spawn), never the lead-liveness classification. **Missing:** pid+lstart on the lead poll, and a RED-proof that a recycled **lead** pid is classified dead | bare `kill -0`, line 601 |
-| **AC11** ❌ **NOT MET** — M5 shipped nothing; the read never reached `0` (note [c]) | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0`. **Evidence 2026-07-30:** the read returns **2**, not 0 — and returns the **same 2** against the pristine base tree (`git archive 6ce912b3 hooks/` → identical count), i.e. this row moved it by zero. Both residual hits are non-invocations (note [c]), so no *unbounded* osascript CALL survives in `hooks/` — but that was already true at base, from the pre-existing per-caller helpers `nty_osa` / `lcw_osa` / `wrc_osa` landed by `7774734a` (2026-07-26), which predates this row. **Missing:** M5 itself — the one sourced helper and the conversion of the bare sites. Repo-wide the same read returns **33** (`hooks/ bin/ scripts/`), including genuinely unbounded calls at `scripts/handoff-fire.sh:2218,2224,3341,3348` (`osascript -e 'delay …'`), `bin/screenshot-to-clipboard.sh:18`, `bin/dia-cdp-launch.sh:322` | **31** repo-wide |
+| **AC9** ✅ **MET — SUPERSEDES the ❌ below, which is STALE (re-read 2026-07-31)**. The ❌ was assigned by the §7.0 sweep on 2026-07-30 and was true *then*; the §11 completion wave built M4 hours later (§11.12), and the sweep was never re-run. Disk, this tree: `grep -c 'watchdog-census' bin/cc-reaper` → **6** (the sweep recorded 0); `ls tests/watchdog-census.bats` → **PRESENT** (the sweep recorded "No such file"); the ledger reads at `bin/cc-reaper:1146` (`n_spawn=$(grep -cF 'spawned watchdog daemon' …)`). Suite green this session: **12/12 ok, 0 not-ok**, reconciled against its `1..12` header. ~~❌ NOT MET — M4 shipped nothing~~ | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires. **Evidence 2026-07-30:** `grep -c watchdog-census bin/cc-reaper` → **0**; `ls tests/watchdog-census.bats` → *No such file or directory*; `grep -rn 'watchdog[-_]census\|WATCHDOG_CENSUS' bin/ scripts/ hooks/ tests/` → **0 hits** (`bin/cc-reaper` itself exists, 65193 B, and contains no `census` / `--watchdog` token at all). **Missing:** the whole M4 leg — the `--watchdog-census` subcommand, the spawned/live/exited/lost ledger, the `control=OK` positive control, and the `CC_WATCHDOG_CENSUS=off` kill switch §8 already declares | ledger off by **~102**, no census exists |
+| **AC10** ✅ **MET — SUPERSEDES the ⚠ below, which is STALE (re-read 2026-07-31)**. Note [b]'s complaint was exact and is now answered: the daemon's poll of the **LEAD** — not just its own identity record — pins pid+lstart. `hooks/lead-crash-watchdog.sh:849-855` `lead_alive()` does `kill -0` **then** compares `ps -o lstart= -p "$p"` against the pinned value, with the DST-safe three-state degradation (§11.11); `:813` records the change in its own words — *"The check here used to be a bare `kill -0 \"$pid\"`"*; `:743` states the invariant. `grep -c lstart` → **11** (was 4, all of which note [b] correctly discounted as the daemon's own record). ~~⚠ PARTIAL — the read passes on code this row did not write; the poll it names is unchanged (note [b])~~ | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead. **Evidence 2026-07-30:** count = **4** — so the read as written passes — but all four sit in the daemon's **own** identity check (`daemon_alive()` at `:718`, `WATCHDOG_START` at `:1008`), and `git blame -L 705,725` attributes 100% of them to sibling commit `2f62ee62` *"single-instance guard + one-handler-per-death"* (2026-07-29 17:48), not to this row. **The liveness this AC names — the daemon's poll of the LEAD — is still a bare `kill -0 "$pid"` at `hooks/lead-crash-watchdog.sh:761`** (base `6ce912b3` line 630; the `:601` cited in R5/M4). The recycled-PID RED-proof at `tests/lead-crash-watchdog.bats:301-311` exists but `git blame -L 301,311` → **11/11 lines `2f62ee626`**, and it asserts the *daemon-record* path (a recycled pid must not suppress the spawn), never the lead-liveness classification. **Missing:** pid+lstart on the lead poll, and a RED-proof that a recycled **lead** pid is classified dead | bare `kill -0`, line 601 |
+| **AC11** ✅ **MET via its successor AC22 — SUPERSEDES the ❌ below, which is STALE (re-read 2026-07-31)**. M5 shipped in the §11 wave: `hooks/lib/osa.sh` exists on trunk and the bare sites were converted. Note [c] was right that the criterion's *own* grep is miscalibrated, so AC22 (§11.4) carries the corrected predicate and `tests/osa-bounds.bats` makes it a **standing** test rather than a one-time read — **14/14 ok, 0 not-ok**, reconciled against `1..14`. ⚠ That predicate was miscalibrated a **second** time and was RED on trunk when this session opened — it convicted `sup_bounded 10 osascript` (`scripts/lead-supervisor.sh:159`), a genuinely bounded call, because the exemption required the wrapper to sit *immediately* before `osascript`. Fixed + two mutant-RED-proved controls (`47c68a1c`). ~~❌ NOT MET — M5 shipped nothing; the read never reached `0` (note [c])~~ | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0`. **Evidence 2026-07-30:** the read returns **2**, not 0 — and returns the **same 2** against the pristine base tree (`git archive 6ce912b3 hooks/` → identical count), i.e. this row moved it by zero. Both residual hits are non-invocations (note [c]), so no *unbounded* osascript CALL survives in `hooks/` — but that was already true at base, from the pre-existing per-caller helpers `nty_osa` / `lcw_osa` / `wrc_osa` landed by `7774734a` (2026-07-26), which predates this row. **Missing:** M5 itself — the one sourced helper and the conversion of the bare sites. Repo-wide the same read returns **33** (`hooks/ bin/ scripts/`), including genuinely unbounded calls at `scripts/handoff-fire.sh:2218,2224,3341,3348` (`osascript -e 'delay …'`), `bin/screenshot-to-clipboard.sh:18`, `bin/dia-cdp-launch.sh:322` | **31** repo-wide |
 | **AC12** ✅ **MET** | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable. **Evidence 2026-07-30:** `launchctl list \| grep capacity-alarm` → `-	0	com.claude.capacity-alarm` (loaded; last exit 0), plist present at `~/Library/LaunchAgents/com.claude.capacity-alarm.plist`. Live run → `live sessions 20 · reclaimable headroom 28.77 GB · swap used 0.00 MB · est. room ~46 more · **VERDICT: OK**` (rc=0). `--selftest` → `OK / WARN / ALARM / ALARM-on-swap>0 / NO-DATA` each reached with `control OK`, closing `capacity-alarm: selftest GREEN (4 rungs + no-data reachable)` | unstated -> OK@29.3 GB headroom |
 | **AC13** ✅ **MET** | Row 13 exists in the map with plan link + landed shas | `grep -c 'MACHINE_CAPACITY_V2' docs/plans/GROUND_UP_REBUILD_MAP.md` → `>0`. **Evidence 2026-07-30:** count = **1**, at `docs/plans/GROUND_UP_REBUILD_MAP.md:30`, and the row carries both halves the criterion asks for — the plan link `[MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md)` and landed shas `b9fc76b0` (design) · `5370b2ff` (activation) · `fa8f15a8` (fan-out) · `8160416b` (close-out) · `bfe4da1e` (§9.7 census fix) | absent |
 
@@ -286,7 +286,23 @@ were swept here** (AC1-b · AC2 · AC3 · AC4 · AC5 · AC9 · AC10 · AC11 · A
 2 NOT MET · 1 PARTIAL**; AC1 and AC6/AC7/AC8 were left exactly as previously proven (§9.7, §9.2).
 Whole-table tally: **11 MET · 2 NOT MET · 1 PARTIAL.** The two NOT-MET and the one PARTIAL are all
 the same fact stated three ways: **`cap-leak` (M4) and M5 shipped nothing**, so the leaks leg and
-the AppleEvent leg of the frozen DoD are open. This matches — and is the disk-truth form of —
+the AppleEvent leg of the frozen DoD are open.
+
+> #### ⚠ THE TALLY ABOVE IS STALE — corrected 2026-07-31, and the correction is the whole point of dating a sweep
+>
+> **Whole-table tally is now 14 MET · 0 NOT MET · 0 PARTIAL.** The sweep above ran on 2026-07-30 and
+> was accurate *at that hour*; the §11 completion wave built M4 and M5 later the **same day** (§11.12)
+> and nobody re-ran it, so the plan spent a day asserting that its own DoD's leaks leg was open when
+> the code was on trunk. Re-read from disk this session — AC9 (6 `watchdog-census` refs in
+> `bin/cc-reaper`, `tests/watchdog-census.bats` present), AC10 (`lead_alive()` pins pid+lstart on the
+> **lead** poll at `:849-855`, the exact gap note [b] named), AC11 (M5 landed; carried forward as AC22
+> with a standing test). All three suites green this session.
+>
+> **The generalisable half, because this row keeps re-learning it against itself:** a status sweep is
+> a MEASUREMENT, and it decays exactly like the instrument readings §9.7 and §9.5 had to retract. Two
+> oracles inside one document disagreeing (§7.0 said M4/M5 shipped nothing; §11.12 said they shipped)
+> means one is stale — **date them and let the shipping side win**. The markers above are struck
+> through rather than deleted so the decay itself stays legible. This matches — and is the disk-truth form of —
 `GROUND_UP_REBUILD_MAP.md` addendum (0b) ("M4 and M5 are now explicitly declared NOT BUILT",
 backlog `cb5514b9d1b4` / `b72a2b8e7666`). No status here contradicts §9.x.
 
@@ -1251,3 +1267,55 @@ same instrument §9.7's fix hardened, merged compatibly at land. Backlog reconci
 sibling's cb5514b9d1b4 (M4) and b72a2b8e7666 (M5) were closed with landed evidence — the wave built
 exactly what they filed; 0086d70f85c7 closed as implemented-in-the-surviving-form (rewrite, not
 DEFER); 2193948bb00e (O(N²) hook broker, row 6) stays open, its worst single term removed by M13.
+
+## 11.14 The wave's own suites were RED on trunk — "merged compatibly at land" was not checked (2026-07-31)
+
+§11.13 closes with the claim that M1-rev's census rewrite and §9.7's denominator fix were *"merged
+compatibly at land."* **They were not.** Two of this row's own suites were RED on trunk when this
+session opened — four failing tests across `qos-chokepoint` (39 cases) and `osa-bounds` (12) — and
+the only backlog item that knew about any of it (`01ab67ffa27d`) had one of the four and
+mis-diagnosed it. The row was carrying a DONE map cell over a red gate for a day.
+
+**All four are one class: an artifact changed, and a guard or fixture calibrated to its predecessor
+was left behind.** The merges were textually clean every time; nothing a diff review would catch.
+
+| Failing | Root cause | Fix |
+|---|---|---|
+| (xix), (xx) | `bfe4da1e` (01:06) narrowed the census POPULATION to a positional discriminator (argv field 5/6 must be the bats libexec shape). `2514226e` (01:51, parallel session) added the M1-rev clamp tests, whose `_marker_script` builds its subject at a plain `$TMP/<name>` path — invisible to that discriminator. Measured on one live proc: `procs_total` **0** shipped-strict vs **1** under `QOS_CENSUS_STRICT=off`. The tests could only ever have passed against a NON-SHIPPED configuration. | `_marker_script` writes to `<name>/libexec/bats-core/bats-exec-test`, the shape `_qos_probe_bin` already used — `ef2f2f8d` |
+| (xxxiii) | Its one-way-ratchet guard skipped on `own <= 10`. M1-rev then moved the fleet band background(4)→utility(20), so the shim demotes this very suite to pri=20, `20 <= 10` is false, the test did not skip, its children inherited pri=20, the census **correctly** counted them demoted, coverage never dropped. (v)'s sibling guard over the *same* constraint HAD been updated to `<= 20`. | band-relative construction so it RUNS instead of skipping — `ef2f2f8d` |
+| AC22 (osa-bounds) | The exemption required a wrapper *immediately* before `osascript` — true of `hf_bounded`/`osa_bounded`/`lcw_osa`, false of `sup_bounded 10 osascript` (`lead-supervisor.sh:159`, landed the same day by `e6d789a8`), which passes its bound as an argument. A genuinely bounded call convicted. | tolerate an optional NUMERIC argument only — `47c68a1c` |
+
+**Found while fixing, and worse than its backlog entry said.** `32be90485a45` filed the unquoted
+`$PATH` walk against `scripts/qos-census.sh` as *"harmless in every constructed case"*. Both halves
+were wrong: the site is `bin/cc-bats:195`, and it is **arbitrary binary selection** — `for d in $PATH`
+pathname-expands, so an entry holding a glob metacharacter is replaced by whatever it MATCHES.
+Two-sided against the pristine artifact from `git show HEAD:bin/cc-bats`: pre-fix executed a planted
+fake, post-fix printed `Bats 1.13.0`. This is the identity walk whose last inversion produced the
+§9.6 fork-storm, and cc-bats is on PATH as `bats` for every session on the box. Fixed + RED-proved
+regression test — `50bac438`.
+
+### Learnings (accumulate; never delete)
+
+- **A guard is calibrated to a constant, so changing the constant silently retires the guard.** M1-rev
+  updated the band everywhere it was *read* and missed one place it was *assumed*. Generalisation of
+  memory `config-change-invalidates-its-own-guard-proofs`, now with a cheap detector: **two sibling
+  guards over one constraint disagreeing is the tell** — `<= 20` at `:113` and `<= 10` at `:880`, same
+  file, same ratchet, one stale. Grep for the constant, not for the guard.
+- **Repairing a stale precondition can quietly convert a RED test into a permanently-SKIPPED one**,
+  which scores as green and proves nothing. (xxxiii)'s guard, fixed naively, would have skipped on
+  every ordinary PATH-invoked run because the shim always demotes. When a precondition becomes
+  unsatisfiable, re-express the property **relative to the configuration** rather than accepting the
+  skip — the same trade the file already makes in (xix).
+- **A control cannot be recovered by `git archive` when the subject lives inside the test file.** The
+  first RED-proof of the AC22 fix copied the new tests into a pristine tree and came back ALL-GREEN —
+  because the predicate travels with the tests. The valid form is a NAIVE MUTANT of the predicate with
+  the mutation anchor asserted to match **exactly once**. Sibling of §11.11's equivalence-contract
+  learning; the failure mode is that a vacuous control looks exactly like a passing one.
+- **`rc` is not a verdict, twice over.** An invalid `BATS_TMPDIR` produced `rc=1` with **zero** TAP
+  bytes this session — indistinguishable from "tests failed" to anything reading the exit code. Every
+  count here reconciles against the `1..N` header. (Also: the first attempt at the cc-bats control ran
+  from `/tmp`, died `rc=127` on an unresolved `$CENSUS`, and *looked* like a successful RED.)
+- **A backlog item's file attribution decays like everything else** — verify the symptom against the
+  tree before fixing where it points. `32be90485a45` named the wrong file AND understated the
+  severity; taking it at its word would have produced a no-op edit to `qos-census.sh` and left real
+  arbitrary-binary-selection in the shim.
