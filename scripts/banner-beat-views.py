@@ -45,51 +45,28 @@ import shutil
 import subprocess
 import sys
 
-# EDITORIAL notes only, keyed by the generator's own beat name. No windows here — those are read
-# from gen.py (see read_beats). `lead` is how far BEFORE the window a view starts, so the entry is on
-# screen rather than already over; a beat is easiest to read from just before it begins.
-NOTES = {
-    "rSummon": (
-        "THE SUMMONING",
-        "the magician beat: hat, summon, hand over the brief, take the work back, self-remove",
-        1.0,
-        "A dons a hat and summons a SMALLER second clawd — the binary's own in-session creature, so "
-        "it is derived rather than invented, and the smaller mass keeps the source's rule of one "
-        "saturated orange subject. A hands over the brief; B hands back the finished work; B removes "
-        "ITSELF. Watch that the two never overlap and that nothing detaches from A while it hops.",
-    ),
-    "rRefuse": (
-        "THE REFUSAL",
-        "completion-assert.sh refuses a false 'done'",
-        1.0,
-        "A post arrives riding the ground. The bar drops across the path, the world pulls BACK exactly "
-        "one print pitch, and the creature re-steps into a print it already made — a returned turn is "
-        "redoing a step. Then it makes the lost ground up above nominal. Watch for the predicted "
-        "misread: a ground scrolling backward is also what a broken animation looks like.",
-    ),
-    "rAsk": (
-        "THE ASK",
-        "a class-C decision waits with no default",
-        1.0,
-        "Nothing arrives. The world rate goes to ZERO, ears up, gaze parked straight out — then a "
-        "catch-up above nominal, because a looping world cannot hold for free. The operator read the "
-        "first build of this as 'buggy being halted', so the creature now BLINKS through the stop: "
-        "stillness must not read as a stalled image.",
-    ),
-    "rOverlap": (
-        "THE OVERLAP",
-        "self-close --successor overlaps rather than touches",
-        1.0,
-        "The print pitch HALVES for 12 prints — two walkers' worth of record — so the foot lands on "
-        "every second print. Ruled INVISIBLE by the operator and withdrawn; the geometry is kept so "
-        "one name restores it.",
-    ),
-    "rCheer": (
-        "VISITOR / CHEER",
-        "on hold — operator: 'silly'",
-        1.5,
-        "The peek/peer/cheer machinery. Withdrawn, not deleted.",
-    ),
+# `lead` is how far BEFORE the window a view starts, so the entry is on screen rather than already
+# over; a beat is easiest to read from just before it begins. This is a property of REVIEWING a beat,
+# not of the beat, so it lives here — unlike the beat's story, which does not.
+#
+# THE STORY USED TO LIVE HERE TOO, in a hand-maintained `NOTES` dict, and it rotted exactly the way
+# this file's own docstring says the WINDOWS rotted before them. The windows were de-duplicated into
+# gen.py; the notes beside them were not, so the rot just moved house: `rShoot` and `rTrace` shipped
+# on 2026-07-30 and every panel this tool drew for them read "no editorial note yet — added to gen.py
+# after this file was written", which is the review surface describing two live beats as unwritten.
+# The story now comes from `gen.BEAT_STORY` through the same parse as the windows, so a beat and its
+# reason cannot drift apart, and `assert_every_beat_tells_a_story` refuses a build where one is
+# missing.
+LEAD = {"rCheer": 1.5}
+LEAD_DEFAULT = 1.0
+
+# What the mechanism line says when a beat names none. The two cases are NOT the same absence and the
+# review page must not render them alike: a SKY beat is silent about the system on purpose, while a
+# WITHDRAWN one is silent because the argument for its cause failed.
+_NO_MECHANISM = {
+    "SKY": "nothing — a sky occurrence says nothing about the system, by design",
+    "WITHDRAWN": "none that survived review — the beat is withdrawn, its machinery kept",
+    "NARRATIVE": "unnamed (the generator's story gate refuses this)",
 }
 
 AMBIENT = {
@@ -118,36 +95,59 @@ def read_beats(gen: pathlib.Path) -> list[dict]:
         if not isinstance(node, ast.Assign):
             continue
         for tgt in node.targets:
-            if isinstance(tgt, ast.Name) and tgt.id in ("RARE_EVENTS", "ALWAYS_EMITTED"):
+            if isinstance(tgt, ast.Name) and tgt.id in (
+                "RARE_EVENTS",
+                "ALWAYS_EMITTED",
+                "BEAT_STORY",
+            ):
                 try:
                     found[tgt.id] = ast.literal_eval(node.value)
                 except ValueError:
                     pass
     windows = found.get("RARE_EVENTS")
     emitted = found.get("ALWAYS_EMITTED")
+    story = found.get("BEAT_STORY")
     if not isinstance(windows, dict):
         sys.exit(
             f"banner-beat-views: could not read RARE_EVENTS from {gen}. The windows live there and "
             "are deliberately not duplicated here — fix the parse rather than restoring a local copy."
         )
-    emitted_set = set(emitted) if isinstance(emitted, (list, tuple, set)) else set(windows)
+    if not isinstance(story, dict):
+        sys.exit(
+            f"banner-beat-views: could not read BEAT_STORY from {gen}. Each beat's cause, behaviour "
+            "and exit live there and are deliberately not duplicated here — fix the parse rather "
+            "than restoring a local copy. That copy is what went stale last time."
+        )
+    emitted_set = (
+        set(emitted) if isinstance(emitted, (list, tuple, set)) else set(windows)
+    )
 
     out = [AMBIENT]
     for name, win in sorted(windows.items(), key=lambda kv: kv[1][0]):
-        label, mech, lead, look = NOTES.get(
-            name, (name, "no editorial note yet — added to gen.py after this file was written", 1.0,
-                   "Newly declared in RARE_EVENTS. It gets a panel automatically so a new beat is "
-                   "never invisible to review; add a note for it in NOTES.")
+        # No local fallback. `assert_every_beat_tells_a_story` refuses to build a beat that has no
+        # story, so a missing one here means this tool is reading a generator older than the gate —
+        # and inventing placeholder prose for it is what produced the panels that described two live
+        # sky beats as "no editorial note yet".
+        s = story.get(name)
+        if not isinstance(s, dict):
+            sys.exit(
+                f"banner-beat-views: {name} is in RARE_EVENTS but has no BEAT_STORY entry in {gen}. "
+                "The generator's own gate refuses that combination, so this is a stale generator or "
+                "a failed parse — not a beat to paper over."
+            )
+        out.append(
+            {
+                "key": name,
+                "name": s["label"],
+                "window": (float(win[0]), float(win[1])),
+                "lead": LEAD.get(name, LEAD_DEFAULT),
+                "emitted": name in emitted_set,
+                "kind": s["kind"],
+                "mech": s["mechanism"] or _NO_MECHANISM[s["kind"]],
+                "look": f"CAUSE — {s['cause']}. BEHAVIOUR — {s['behaviour']}. "
+                f"EXIT — {s['exit']}.",
+            }
         )
-        out.append({
-            "key": name,
-            "name": label,
-            "window": (float(win[0]), float(win[1])),
-            "lead": lead,
-            "emitted": name in emitted_set,
-            "mech": mech,
-            "look": look,
-        })
     return out
 
 
@@ -177,7 +177,11 @@ def page(asset_name: str, beats: list[dict]) -> str:
             w0, w1 = win
             span = f"{w0:g}\u2013{w1:g}s &#183; {w1 - w0:g}s long"
             start = max(0.0, w0 - b["lead"])
-        withdrawn = "" if b.get("emitted", True) else '<span class="wd">NOT IN THIS BUILD</span>'
+        withdrawn = (
+            ""
+            if b.get("emitted", True)
+            else '<span class="wd">NOT IN THIS BUILD</span>'
+        )
         panels.append(f"""
     <section class="beat" id="{b["key"]}">
       <header>
@@ -297,8 +301,11 @@ def page(asset_name: str, beats: list[dict]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--asset", default="assets/banner/v6c-dusk-line.svg")
-    ap.add_argument("--gen", default="tools/banner/gen.py",
-                    help="generator to read RARE_EVENTS from (never duplicated here)")
+    ap.add_argument(
+        "--gen",
+        default="tools/banner/gen.py",
+        help="generator to read RARE_EVENTS from (never duplicated here)",
+    )
     ap.add_argument("--out", default="")
     ap.add_argument("--only", default="", help="comma-separated beat keys")
     ap.add_argument("--open", action="store_true", help="open the page when done")
