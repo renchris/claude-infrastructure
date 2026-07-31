@@ -1,5 +1,5 @@
 ---
-status: open
+status: in-progress
 ---
 
 # AUTONOMY DISPATCH V2 — first-principles rebuild of dispatch & discovery
@@ -9,7 +9,11 @@ within 5 minutes of a backlog-add and ZERO false cliffs, under the standing cons
 **backlog > concurrency is NORMAL and never a cliff** — measured, landed, and verified by
 disk-truth acceptance reads.
 
-Status: DESIGN 2026-07-29 · owner session 8891c11f · branch `gu-autonomy-dispatch` ·
+Status: **BUILT + LANDED + LIVE-VERIFIED** (2026-07-31) — S1–S8 on trunk, both labels activated by
+the operator 2026-07-30, 13/14 acceptance criteria PASS against a 10 h live window (§10). Open:
+**A2** (the 5-min bound — 3 of 18 in-window adds missed it; lock-scope cause identified, tracked as
+`de5e3e24be8f`) and the §9 activation-SSOT drift. Design 2026-07-29 · owner session 8891c11f ·
+branch `gu-autonomy-dispatch` ·
 row 5 of docs/plans/GROUND_UP_REBUILD_MAP.md · methodology: skills/ground-up/SKILL.md ·
 exemplar: docs/plans/LAND_PIPELINE_V2.md
 
@@ -395,7 +399,90 @@ Consequences for this rebuild, and they are deliberate:
   What *is* provable now, and is proven, is everything measurable from source and fixtures
   (A4/A5/A8/A9/A10/A12). §10 splits the close on exactly this line.
 
+### §9.1 — UPDATE 2026-07-31: the premise above is spent, the operator activated both labels
+
+Every claim in §9 was true when written and is now **historical**. Verified live this session:
+
+| Read | 2026-07-29 (§9 as written) | 2026-07-31 (measured) |
+|---|---|---|
+| `launchctl print-disabled gui/$(id -u)` | `dispatcher`/`discovery` ⇒ **disabled** | both ⇒ **enabled** |
+| `launchctl list` | absent | both **loaded** (pids 52966 / 36579) |
+| installed dispatcher `StartInterval` | 900 (stale mirror) | **300** — the §3 S5 backstop |
+| `/tmp/claude-dispatcher.*.log` | absent | present |
+
+Activation happened **2026-07-30 ≈01:38–01:41** (live plist mtime + the `.done` markers). So the
+open operator question §9 raised — was the fleet-wide mass-disable deliberate? — was answered by
+the operator acting, not by this rebuild deciding. Nothing here activated anything, as designed.
+
+**The ACCRUING criteria have now accrued**, and this section's own instruction is therefore
+discharged: A2/A3/A7 are no longer "provable later", they are measured in §10 against the journal
+window `2026-07-30T19:35:46Z → 2026-07-31T05:32:57Z` (~10 h). **Read that window, not the whole
+file**: `idl.jsonl` rotated at `20260730T193526Z`, so the 12 abstentions §2 cites live in
+`idl.jsonl.20260730T193526Z.gz` and a naive all-time grep on the live file reads 0 for the wrong
+reason. A count is only a verdict once its denominator is named.
+
+**One §9 side-claim is now falsified and is corrected here rather than deleted.** `bin/cc-blockers`
+:139-144 justifies naming the REPO copy of `02-load-dispatcher-activate.sh` with "…which is why the
+label is disabled today". The label is not disabled today. The *choice* remains correct — the live
+mirror is still content-drifted and still bootstraps without enabling first, so handing the
+operator the mirror would still reproduce the original failure — but the reason is now "the mirror
+is stale", not "the mirror is why we are down". The activation SSOT drift (§9's third paragraph)
+is therefore **still open**: repo and `~/.claude/autonomy/pending-activation/` disagree on
+`02`/`03`, and the repo side is the correct one.
+
 ---
+
+## §10 The close — what is proven, what is measured, what remains
+
+§9 promised this section would "split the close on exactly this line". It now can, because the
+labels are live (§9.1). Every row is a read taken **2026-07-31** against the journal window
+`2026-07-30T19:35:46Z → 2026-07-31T05:32:57Z`: 14,199 decision records over 154 distinct passes,
+220 admits, 13,941 defers, 28 fires, 112 spawn-failures, **0 abstentions, 0 quota-cliffs**.
+
+| # | Verdict | Evidence |
+|---|---|---|
+| A1 | **PASS** | 154 passes each journal the whole dispatchable set (~125–140 records/pass vs the live open count); latency is not O(N) — the decision phase over a full backlog costs 7–45 s |
+| A2 | **PARTIAL — the one DoD clause not met** | 18 in-window adds: p50 **8 s** (the S5 kick working as designed), but **3 exceeded 300 s** (338/515/714 s). Cause below; tracked as `de5e3e24be8f` |
+| A3 | **PASS** | 13,941 `defer` records with `position`+`reason` and **0 `abstained`** — surplus is a recorded decision, never an abstention |
+| A4 | **PASS (structurally, and now live)** | 0 `capped` verdicts because 0 wall verdicts of any kind were reached; the entire measured abstention population of §2 is gone, exactly as S2 predicted |
+| A5 | PASS | `tests/cc-wave-plan-verdict.bats` — a stubbed oracle timeout yields `unknown`, never `capped`, with no page |
+| A6 | PASS | same suite — `auth` routes to `/relogin`, distinct from `capped`'s `/limit-recover` |
+| A7 | **PASS** | every pass records `ceiling=6`; the at-ceiling path makes zero wave-plan calls. The dispatcher never exhausted quota in 10 h of continuous running — the §2 incident is structurally unreachable |
+| A8 | PASS | zero unwrapped `claude-accounts`/`cc-route` call sites; `run_oracle` is the single bounded chokepoint |
+| A9 | **PASS (live, not just fixtured)** | 21 real `{action:"skipped",reason:"pass-in-flight"}` records — S6 skip-not-queue observed under genuine contention, not only in a stub |
+| A10 | PASS | `tests/dispatch-cadence.bats` — `NOT-ACTIVATED` vs `STALE` with a positive control each |
+| A11 | **PASS** (was NOT-RUN) | label loaded, absent from `print-disabled`, log present. Note the messages land on **stderr**; `/tmp/claude-dispatcher.stdout.log` is legitimately 0 bytes, so an A11 read that requires a non-empty *stdout* log reports a false negative |
+| A12 | PASS | selftest 113/113; cc-dispatch 12/12, -v2 15/15, -projects 18/18, cadence 23/23, dispatch-assert 21/21, cc-blockers 67/67 |
+| A13 | **PASS — built this session** | was specified and never implemented: `CC_DISPATCH_SATURATED_H` existed **only in this document**, zero occurrences in `bin/`, `tests/`, `scripts/`. Now a third `dispatch-inert` state (`f56041ae`), correctly silent against the live journal (220 admits in-window) |
+| A14 | PASS | ceiling reads the `claimed` fold (measured 5) and never `claude-accounts .rows[].k` — the corrected S2 has not regressed |
+
+### The one gap, stated plainly
+
+**A2 is not met, and the reason is not what the design predicted.** The decision phase is fast —
+7–45 s for ~135 items — so S1 does what it claimed. The miss comes from the **singleton lock being
+held across the SPAWN tail**: admission (wave-plan → claim → warm worktree → `handoff-fire`) takes
+**414–833 s**, one lock covers both phases, so a kick arriving during a spawn is skipped (S6,
+correctly) and its item waits for the next pass. Pass gaps reach **1073 s** (58 of 170 over 300 s),
+which is why the 300 s launchd backstop cannot hold its guarantee.
+
+This contradicts S1's own premise — *"a decision is a pure read: it costs no quota, no session, no
+lock"* — which the implementation violates by holding the decision lock through admission. The fix
+is deliberately **not** attempted here: the lock is load-bearing for the ceiling (`cc-dispatch:118`
+records that two concurrent passes would each compute `free_slots` and each admit that many), so
+splitting it needs a separate admission lock plus a double-admission RED-proof. Filed as
+`de5e3e24be8f` rather than rushed — an un-RED-proofed change to the mechanism that prevents
+double-claiming is exactly the trade this rebuild's own F9 warns against.
+
+### Also found live, and fixed (`8d182bc0`)
+
+The actuator discarded the evidence it was reporting on: `"$spawn" … >/dev/null 2>&1` meant every
+failure record read only `"<id>: spawn non-zero (reopened)"`. **112 such records accrued in 10 h
+against 28 successful fires** — all distinct ids, so systemic rather than per-item thrash, and with
+both streams discarded there was no way to tell which. That is §1(c)'s defect class reproduced
+inside our own fire path, and it violates R3 and this plan's own rule that a verdict must carry the
+evidence that falsifies it. The record now carries the rc and a bounded excerpt. The *underlying*
+spawn failure belongs to the row-2 fire seam and is **not** claimed here — only its diagnosability,
+which is dispatch-side, was ours to fix.
 
 ## Phase 0 — Agent Team Orchestration
 
@@ -430,6 +517,26 @@ rebase+ff-only serialized, land via project-local `/ship` continuously.
 
 **Checkpoint log:** (appended as acks land — never delete entries)
 
+- **2026-07-29 — all three teammates landed.** `gu5-decide` → `e4b17229` (S1/S2/S6/S7) plus
+  `f16c37ee` (the S2 correction: the ceiling reads the ledger's `claimed` fold, not a live-session
+  count). `gu5-verdict` → `8c0ae731` (S3/S4) plus the deliberate split of the falsified
+  wave-sizing cliff from a genuine capped stop. `gu5-cadence` → `21d8e869` (S5/S8).
+  Later: `f90fd1bd` multi-project coverage, `5375088b` the `/`-project fix (F11).
+- **2026-07-31 — branch hygiene, verified by CONTENT not by count.** `gu5/decide`, `gu5/verdict`
+  and `gu5/cadence` each still read 1–2 commits "ahead" of trunk, which looks like stranded work.
+  `git cherry -v origin/main <branch>` marks **every one `-`** — all four patches are in trunk by
+  patch-id, rebase-landed under different shas. Nothing stranded; the branches are stale pointers.
+  Recorded because the ahead-count alone would have prompted a pointless re-land (memory
+  `landing-safety-tooling`: verify by CONTENT).
+- **2026-07-31 — checkpoint criterion 1–3 re-verified post-landing, criterion 4 extended.** The
+  lead's own criteria were re-run against trunk rather than trusted from the acks. Criterion 2's
+  "unwrapped call sites == 0" and criterion 3's activation-script assertions both still hold. What
+  the criteria did **not** cover, and what a live read caught: A13 was specified in §5/§7 and never
+  built (see §10), and the fire path discarded its own failure evidence. Both are now closed —
+  `f56041ae`, `8d182bc0`. Lesson for the next row: a checkpoint that greps for the *mechanisms a
+  teammate was told to build* cannot see a mechanism **no teammate was assigned**. A13 fell in the
+  gap between `gu5-decide` (ceiling) and `gu5-cadence` (alarms) and nobody owned it.
+
 ---
 
 ## Learnings (accumulate; never delete)
@@ -447,3 +554,24 @@ rebase+ff-only serialized, land via project-local `/ship` continuously.
   could not be *measured* at all before this rebuild — the acceptance criterion had to create its
   own evidence (A4). Design rule: a verdict that gates an alarm must carry the evidence that
   falsifies it.
+- **2026-07-31 — the design's own rule caught the design breaking it, one layer down.** The rule
+  directly above was written about `cc-wave-plan`'s cliff. The *same* defect was sitting in our own
+  actuator the whole time: `"$spawn" … >/dev/null 2>&1` threw away both streams, so 112 spawn
+  failures in a 10 h window each recorded only that something failed. A principle stated about one
+  seam is worth re-running over every seam you own — the second instance was found by *measuring*
+  the live journal, never by re-reading the code that had already been reviewed at checkpoint.
+- **2026-07-31 — a specified mechanism can ship as prose.** `CC_DISPATCH_SATURATED_H` appeared in
+  §5 F16 and §7 A13 as though it existed; `grep -rn SATURATED bin/ tests/ scripts/` returned **only
+  this document**. It fell between two teammates' ownership boundaries and no checkpoint asked
+  "does the thing the doc names actually exist?". Cheap, general guard for the remaining rows: grep
+  the plan's own env-var and verdict names against the tree before declaring the row done — a doc
+  that describes a mechanism is not evidence the mechanism was built.
+- **2026-07-31 — S1's premise was right and the implementation still lost the bound.** "A decision
+  costs no quota, no session, no lock" is true of the decision *phase* (7–45 s over 135 items) and
+  false of the *pass*, because one lock spans decision and spawn (414–833 s). The architecture was
+  never the problem; the lock's SCOPE was. Generalisable: when a design's key claim is about
+  cost-of-X, check that the *unit holding the lock* is X and not X-plus-something-slow.
+- **2026-07-31 — a rotated journal silently changes a count's denominator.** `idl.jsonl` rotated at
+  `20260730T193526Z`. An all-time `grep -c abstained` on the live file reads 0 — the right answer
+  for the wrong reason, since §2's 12 abstentions moved into the `.gz`. Every number in §10 names
+  its window for this reason (memory `positive-control-the-denominator`).
