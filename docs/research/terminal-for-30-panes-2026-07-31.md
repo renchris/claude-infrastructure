@@ -426,8 +426,34 @@ answer *for the iTerm2 case*:
 
 **This is why kitty wins over "iTerm2 + tmux".** kitty needs no multiplexer to get one surface for N
 panes, so it gets the compositor win *and* keeps genuine per-pane addressing — the combination
-neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
-`tmux-panes-inherit-server-iterm-session-id` hazard class disappear rather than be re-solved.
+neither plain tmux nor `-CC` can offer under iTerm2.
+
+#### Correction (2026-07-31): the hazard class does NOT disappear on kitty
+
+This subsection previously closed by claiming kitty "makes the whole
+`tmux-panes-inherit-server-iterm-session-id` hazard class disappear rather than be re-solved."
+**That contradicts §5a and is withdrawn.** §5a establishes that Claude Code ships **no kitty
+backend**, so on kitty *teammate spawning falls to the in-process or tmux path*. Re-verified by
+`strings` on **both** live binaries — **0 `KittyBackend`, 0 `GhosttyBackend`** in 2.1.114 *and* 2.1.183.
+
+The zeroes are the load-bearing fact and they are **method-independent**. *(The positive counts are
+not: §5a above reports 43/39, the plan reports 40/32, and a re-count measures 47/41 occurrences or
+21/24 matching lines for 2.1.183. Cite the zero; the positives read as contradiction and settle
+nothing.)*
+
+So the honest statement is: **kitty removes the hazard only for panes it owns natively** — `kitten @`
+addressing with a real per-pane `$KITTY_WINDOW_ID`. The moment Agent Teams spawn teammates they land
+on the **tmux** backend, and every tmux pane under one kitty window shares one `KITTY_WINDOW_ID`
+exactly as they shared one `ITERM_SESSION_ID`. **Same hazard, new spelling** — re-solved, not
+dissolved, which is precisely the argument for the `CC_PANE_ID` seam in
+[`TERMINAL_AGNOSTIC_L3_L4.md`](../plans/TERMINAL_AGNOSTIC_L3_L4.md) rather than a terminal migration.
+
+What kitty *does* remove is the **compositor** half (one surface for N panes). The **addressing** half
+survives any terminal switch until the seam exists.
+
+*Independent of the 2026-07-31 PM finding that §5b's dismissal of **plain tmux** rested on a false
+premise: that one concerns whether tmux is viable as a substrate, this one concerns whether kitty
+makes the addressing hazard go away. Both correct §5b; neither subsumes the other.*
 
 ---
 
