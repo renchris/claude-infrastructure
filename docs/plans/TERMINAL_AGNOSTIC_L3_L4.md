@@ -142,9 +142,13 @@ that. Until both land, headless is addressable but not yet load-bearing.
 Incremental, never a cutover: each file gains the interface call with the iTerm2 path as default.
 `handoff-fire.sh` last and in slices — it fires sessions and is the most dangerous file in the repo.
 
-### P4 — the queue (T4)
+### P4 — the queue (T4) — ✅ **DONE** (`5e5e82de` · `0e09dd9e` · `f66047b1`)
 `cc-permission-beacon.sh` already fires on `PermissionRequest` → `/tmp/cc-permission-pending/<sid>.json`.
 It has no face. 100 rows fits one screen; 1000 needs grouping (a list problem, not a rendering one).
+
+**Shipped:** `bin/cc-queue` — blocked-first list across ALL 4 config dirs, exact blocked command + wait
+duration, `--attach` to jump, `--group-by`/filters for scale, `--check` as a gate. 1000 rows in 0.39 s.
+Full design, measurements, and learnings in **§6**.
 
 ### P5 — `it2` facade (after P1)
 Widen `bin/it2-wrapper` to serve the same 4 verbs so Agent-Team panes work under any driver without
@@ -721,7 +725,10 @@ green because nothing was actually looking.
 
 ## 7. T4 — `bin/cc-queue`: measured findings + design (2026-07-31)
 
-**Status:** IN PROGRESS · branch `feat/cc-queue` (cut from `origin/main` @ `49569d04`).
+**Status:** ✅ **DONE** · branch `feat/cc-queue` (cut from `origin/main` @ `49569d04`) · commits
+`5e5e82de` (tool) · `0e09dd9e` (RED-proof harness) · `f66047b1` (truncation marker, attach proof,
+scale measurement). Deliverables: `bin/cc-queue` + `tests/cc-queue.bats` (35 assertions) +
+`tests/cc-queue-redproof.py` (15 mutations).
 
 ### 7.1 The four disk sources (NO terminal polling — all reads are files)
 
@@ -784,3 +791,58 @@ The **live** `~/.claude/hooks/cc-permission-beacon.sh` **differs from `origin/ma
 the durable archive (`CC_PERMARCHIVE_DIR`, default `~/.claude/autonomy/permission-archive`); the live copy
 still does a bare `rm -f` on clear. So the archive that task #89 landed is **committed but not deployed**.
 `cc-queue` therefore does **not** depend on the archive existing.
+
+### 6.6 The surface, as shipped
+
+```
+⛔ BLOCKED (1) — waiting on a permission answer; nothing in-session can self-approve
+   1    3m12s  tertiary   claude-infrastructure  Bash: cd …/wt-terminal-arm && python3 - <<'PY' p='…
+  → answer one:  cc-queue --attach <#>   (jumps to that pane)
+● WORKING (13) … ○ IDLE (5) … · DONE (12)
+36 agents across all config dirs · ⛔1 ●13 ○5 ·12
+```
+
+`cc-queue` · `--json` · `--check` (gate) · `--attach ROW|SID` · `--state` · `--group-by cwd|account|model|state`
+· `--account` / `--cwd` filters · `--limit N` · `--watch [S]` · `--selftest`.
+
+**It found a real blocked agent on its first live run** — a `tertiary` session in `wt-terminal-arm`,
+blocked 3m12s on a Bash heredoc, that nothing else was surfacing. That is the 6.6-minute case the plan
+was written around, caught by a list instead of by eyeballing panes.
+
+### 6.7 Scale — MEASURED, not asserted
+
+Synthetic fleet of **1000** telemetry rows (4 config dirs, 7 cwds) + 12 blocked beacons: **0.39 s wall**,
+all 1000 rows rendered (2026-07-31, this box). Every syscall class is batched — ONE `ps`, ONE `stat`,
+one `jq` slurp per source dir — so cost does not scale with row count. Re-measure rather than quoting
+this: it is one box on one day, and the per-file fallback (malformed source only) is O(files).
+
+Readability at 1000 is a **grouping** problem, not a rendering one: `--group-by account` collapses the
+fleet to one line per group with per-state counts, blocked-bearing groups first. Blocked rows are
+**never** capped; other states cap at `--limit` and always print what they withheld.
+
+### 6.8 Learnings (the durable ones)
+
+1. **A non-final `[[ ]]` never fails a bats test.** MEASURED on bats 1.13.0 + this bash: a non-final
+   failing `[[ ]]` does **not** fail the test, while a non-final `[ ]` does. Every multi-assertion test
+   written with `[[ ]]` was therefore checking **only its last line**. Found because a mutation deleting
+   the cap notice left the suite fully green. Fix: assertion **helper functions** (`has`/`hasnt`) — a
+   simple command, so errexit fails at the failing line. **This likely affects other suites in this
+   repo** — a `grep -n '\[\[' tests/*.bats` sweep is a genuine follow-up (NOT done here: out of T4 scope).
+2. **`|| fallback` attached to a pipeline double-prints under `pipefail`.** `cmd | grep | jq || printf '[]'`
+   emits `[][]` when grep matches nothing (jq already printed `[]`, then the pipeline's failure fires the
+   fallback) — invalid JSON that killed the whole render whenever **no claude process was running**.
+   Caught by a test, not by review. Fix: capture, then decide.
+3. **A one-row fixture cannot test "row N".** The attach test passed a mutation replacing `.[$n-1]` with
+   `.[-1]`, because with one row those are the same row.
+4. **Mutate the verdict, not a redundant guard.** Deleting the `[ -d ]` check was unobservable (the
+   heartbeat check subsumes it), which reads as "the test is vacuous" when the truth is "the mutation
+   is unsound".
+
+### 6.9 Not done (named, not silently dropped)
+
+- **`cc-queue` is not wired into any hook, statusline, or launchd job** — it is a command the operator
+  runs. Wiring it (e.g. a blocked-count segment in the statusline, or `--check` in a sweep) touches
+  files T4 does not own (C10) and is a separate decision.
+- **The `[[ ]]` sweep across the other ~90 bats suites** (learning 1) is filed above, not performed.
+- **`claude agents --json` enrichment** is designed for but not implemented — the binary that has it is
+  not installed here (§6.2), so implementing it would be untestable on this box.
