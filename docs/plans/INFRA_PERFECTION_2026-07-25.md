@@ -479,6 +479,38 @@ Two reds, both genuine, both fixed:
   than fixed off a grep (memory `third-state-skips-the-unnamed-gate`: the defect survives in the leg
   a residual list calls strong).
 
+  **CLOSED 2026-07-31 (`28e591ac`) — and the measured-proof DoD is why the census above is wrong on
+  two of its three sites.** The paragraph above was written from a `command -v` grep. Measurement
+  found a `type -t` guard already present at both pane-closing sites, so "no such guard" was true of
+  the *spelling* and false of the *fact* — the real question was never whether a guard existed but
+  which way it branched:
+  - **`hooks/teammate-auto-shutdown.sh` — the one real defect, and the worst of the family.** Its
+    guard branched to `WARN + skip` → `close_and_log`. Measured on the incident fixture (operator
+    prompt 950s ago, idle 900s, landed, spawn 50000s ago, reap-guard absent so this belt is the only
+    who-gate): **lib present ⇒ held + paged; lib absent ⇒ `it2 session close -f -s PANE-INC`** — a
+    live operator conversation killed. Its own bats **pinned that fail-open as correct**, using a
+    fixture carrying a REAL operator prompt — the identical pathology `cc-teardown` carried until R3.
+    Fixed via the BEAT second oracle (`beat_or_refuse`'s pattern), never an unconditional hold: that
+    would make the belt a single point of inertness, the amplifier outage cc-teardown RED-proved.
+  - **`bin/cc-teardown` — already fixed, before this item was filed.** R3 (§4.3.5) routes lib-absent
+    through `beat_or_refuse`; 17/17 bats green *with positive controls*. No edit needed.
+  - **`hooks/lib/context-econ.sh` — ZERO calls.** Both greppable "uses" (`:315`, `:332`) are
+    **comments**. It defines its own self-contained `ce_last_interactive_age` and has no dependency on
+    the lib, so it has no lib-absent failure mode to guard. The "2 uses" was a miscount.
+
+  Two premises of the item had also **rotted** by the time it ran: `hooks/lib/idl-log.sh` is no longer
+  live-missing, and **no** tracked `hooks/lib/` file is — so the deploy-lag path that made this
+  reachable is currently closed, making the defect latent rather than live. It was still worth fixing:
+  a fail-open on a pane-closing actuator is wrong independent of today's deploy state, and this was the
+  only site in a three-site safety family still branching that way. Also logged the previously **silent**
+  `reap-guard` skip (`-x` test with no `else`) — R-d and this belt are the two who-gates here and both
+  degrade on the same per-file-symlink layer, so a guard that vanishes without a trace is how the
+  vanishing stays invisible until an incident.
+
+  **Method note:** the DoD's "measure, do not assume the grep" is what caught all three corrections.
+  A grep for one spelling of a guard cannot distinguish *absent* from *present-but-inverted*, and the
+  inverted one is the dangerous state — it looks guarded in review and reads green in its own suite.
+
 **Method note worth keeping:** a green ratchet does not prove the suites pass, and a passing land
 does not prove the corpus. Both defects above were invisible to the landing gate and were found only
 by running the union files' own suites. Also: two bats runs were CUT by my own `timeout` bound and a
