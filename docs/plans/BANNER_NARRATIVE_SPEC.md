@@ -1647,3 +1647,62 @@ once, so a stale knob is a hard failure on every run rather than a quiet no-op.
 
 **Still open, and now the only sky question left:** re-deriving a crescent from trunk's *smooth*
 glow rather than from the banded rebuild. Trunk names that the honest path and it remains untaken.
+
+## THE ACCEPTANCE TEST IS NOW A BUILD GATE, NOT A PARAGRAPH (2026-07-31)
+
+This document's own Acceptance section is verbatim: *"An event passes only if a viewer can answer all
+three of why did it appear, what did it do, and how did it leave."* That was the whole point of the
+track, and until this land it was **prose** — and this repo's chokepoint rule, which every other
+banner gate already obeys, is that a ruling living only in prose is not enforced. The cause, the
+behaviour and the exit of each beat lived in comments beside `RARE_EVENTS`, which a formatter can
+reflow and a re-timing can leave stranded, and no check read them. The **sibling emote family already
+had this gate** — `emotes.assert_story_shape` refuses a candidate without three written acts, because
+a stub registered `entry="a", showcase="b", exit="c"` once passed every other gate. The banner, the
+asset that actually ships in the README, had none.
+
+**`BEAT_STORY` is now the single source of that answer**, beside the windows it belongs to in
+`tools/banner/gen.py`, and `assert_every_beat_tells_a_story` is wired into `build()` between
+`assert_event_names_known` and `assert_events_disjoint`. Each beat carries `cause` / `behaviour` /
+`exit` — the three questions, as fields — plus a `kind` and, for narrative beats, the `mechanism` it
+depicts.
+
+**Three kinds, because a single rule convicts a beat for obeying the design:**
+
+| kind | the obligation the gate enforces | why |
+|---|---|---|
+| `NARRATIVE` | names a `mechanism`, and the gate **resolves that path on disk** | every other gate here is geometric, so a beat whose cited script was renamed away keeps passing while the banner misdescribes the system it depicts. `rSummon`→`scripts/handoff-fire.sh`, `rRefuse`→`hooks/completion-assert.sh`, `rAsk`→`bin/cc-decide` |
+| `SKY` | must name **no** mechanism | a sky beat's whole placement rule — late, rare, inverted from every narrative beat — rests on it saying *nothing* about the system. A mechanism here is a kind error. `rShoot`, `rTrace` |
+| `WITHDRAWN` | must stay **out of `ALWAYS_EMITTED`** | removing the name from that tuple *is* how the visitor and THE OVERLAP were withdrawn. The "one line restores it" every comment promises now costs a build failure that must be argued, not a silent revert |
+
+The two withdrawals are withdrawn for **opposite** reasons and the table keeps them apart: the
+visitor's *cause* was indicted (a session is never co-present with its peers, so it names no mechanism
+at all), while THE OVERLAP's cause is sound — `handoff-fire.sh` is right there — and what failed was
+its *visibility*. A reader restoring one needs to know which argument they re-open.
+
+**The review page carried a second copy, and it had already rotted.** `scripts/banner-beat-views.py`
+kept a hand-maintained `NOTES` dict of exactly these strings. This is the same second-source-of-truth
+trap its own docstring records for the *windows* — those were de-duplicated into `gen.py` after a
+private copy went stale and drew correct beats as ambient — but the notes beside them were left, so
+the rot merely moved house: `rShoot` and `rTrace` shipped 2026-07-30 and every panel the tool drew
+for them read *"no editorial note yet"*. It now reads `BEAT_STORY` through the same `ast` parse as the
+windows, **with no local fallback**, because inventing placeholder prose is precisely what produced
+those panels.
+
+**Proven, not asserted.** Six red-proofs, **one per branch of the gate** — a shared case proves only
+that *some* arm fires, which is how a gate comes to have a dead one nobody notices:
+
+- a beat with no story (`no story in BEAT_STORY`)
+- an act filled with a keystroke (`too short to be a written act`)
+- a story that outlived its beat — the half that rots in silence (`no longer exist in RARE_EVENTS`)
+- a beat depicting a script this repo no longer has (`does not exist in this checkout`)
+- a withdrawn beat put back in the ratified set (`it is in ALWAYS_EMITTED`)
+- a sky beat that claims to mean something (`yet it claims to depict`)
+
+`scripts/banner-gate-redproof.py` goes **24 → 30 cases, all firing**. Verified this land, not recalled:
+build byte-**identical** across all four variants (so the shipped banner is untouched — this is pure
+enforcement), `banner-verify.sh` 6/6 on `v6c-dusk-line`, `banner-gate-redproof.py` 30/30.
+
+**What this does NOT touch, named so it is not mistaken for closed:** the moon-crescent re-derivation
+(§ above), the WebKit probe, the subtitle font-size and the banner height all remain exactly as their
+sections leave them. This land closes the *cause/behaviour/exit* question — that every surviving
+micro-event declares its three acts and cannot silently stop doing so — and nothing else.
