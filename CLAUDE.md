@@ -222,15 +222,35 @@ the wall:
   it — and do not ride it blindly either. From **~50%**, plan the pause-point deliberately: finish the
   exchange, **persist** what it produced (dod-persist / plan doc / memory / commit), THEN `/handoff` at
   its natural end.
-- **Heavy build / high 2-way volume**: watch **velocity, not just level** — at high burn the 90%
-  auto-compact wall arrives mid-turn. Land the drain (commit → persist → `/handoff`) **before ~75%**;
-  never ride past ~85%. Rot degrades decisions well before the wall breaks the session.
+- **Heavy build / high 2-way volume**: watch **velocity, not just level** — at high burn the ceiling
+  arrives mid-turn. Land the drain (commit → persist → `/handoff`) **before ~75%**; never ride past
+  ~85%. Rot degrades decisions well before the ceiling breaks the session.
+
+🚨 **The ceiling is a hard REFUSAL, not an auto-compaction — nothing rescues you at it.** Measured over
+4,890 transcripts (`docs/plans/CONTEXT_ECONOMY_V2.md`, which supersedes the design doc below on the
+numbers): **39/39 compactions fleet-wide are `trigger:"manual"`, 0 auto** — with no existence evidence
+the harness emits `auto` at all, so the "90% auto-compact wall" this rule used to cite is an event with
+no observed instance. What actually kills sessions is a bare `Prompt is too long` API refusal: **7
+sessions, 10 events, and compaction saved none of them** (6 of the 7 had zero compactions). The terminal
+state is *dead in place* — every later turn returns the same error, including the reply to the
+operator's own "you're about to run out" warning. **Drain on your own schedule; there is no safety net
+at the top.**
+
+⚠️ **Every % here is a fraction of a denominator the fleet mostly does not record** — so treat them as
+operating discipline, not as measurements. Fill is `input_tokens / window`: the numerator is durable in
+every transcript, but the **window** lives only in ephemeral `/tmp/cc-telemetry/<sid>.json` (wiped on
+reboot — coverage falls to ~0.2% of sessions after one) and cannot be imputed from the model id:
+measured 2026-07-29, `claude-opus-4-8` ran at **both** 1,000,000 and 200,000 in this fleet, and today's
+live sample still spans both windows. Trust the statusline % **when it is there**, treat
+its absence as *unknown* and never as *safe*, and **re-derive** any retrospective figure with
+`cc-ctx-audit` rather than quoting one — published p95s in this repo have gone stale within 36 hours.
 
 Deterministic rails back this judgment (claude-infrastructure): `waiting-recycle.sh` (desk — tiered
 free-win/forced-drain + S6 conversation-hold + burn-forecast early trigger + pause-point nudge) and
 `boundary-handoff.sh` (all sessions, committed+green Stop, forecast-early). Treat their `⟳`/`⚑`
 advisories as **authoritative — act on the FIRST one** (each escalates deterministically if ignored).
-Design + signals: `docs/research/context-econ-2026-07-20.md`.
+Design + signals: `docs/research/context-econ-2026-07-20.md` (the original hypothesis — **superseded on
+the numbers and the signal** by `docs/plans/CONTEXT_ECONOMY_V2.md`).
 
 ---
 
