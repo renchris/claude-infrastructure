@@ -36,6 +36,12 @@ Auth policy (rotation-safe by construction):
 Usage:
   claude-accounts                     human table + route hints
   claude-accounts --json              machine-readable (rows + window + scores; tokens redacted)
+  claude-accounts --readout           the /accounts chat readout, as finished markdown.
+      THE renderer for that surface — paste it, do not rebuild it. Every formatting rule
+      (column set, Xd Yh relatives, the ➤ route marker, ⚠ on a login inside login_warn_h,
+      `*` on inherited numbers, flags-as-bullets) lives here in code, so it can be tested
+      and cannot drift from the CLI table. commands/accounts.md keeps only the judgment:
+      how to INTERPRET a stale row, an exclusion, or a cliff.
   claude-accounts --route general|fable   best account name (bare, on stdout)
   claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
       Both print the EXCLUDED accounts and why on stderr, on every invocation — a winner is
@@ -1399,6 +1405,189 @@ def _fmt_when(iso):
             if (dt - datetime.now(dt.tzinfo)).days < 6 else dt.strftime("%a %b %d"))
 
 
+def _same_instant(a, b, tol_s=120.0):
+    """Do two stamps name the same reset moment? Tolerance, never string equality.
+
+    The weekly and weekly-Fable buckets roll together but are stamped a fraction of a
+    second apart, so any exact or truncated comparison is a coin flip on whether that
+    fraction happens to cross a boundary. Unparseable on either side ⇒ False: the caller
+    footnotes a divergence it cannot rule out rather than silently merging two columns.
+    """
+    try:
+        da = datetime.fromisoformat(str(a).replace("Z", "+00:00"))
+        db = datetime.fromisoformat(str(b).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    return abs((da - db).total_seconds()) <= tol_s
+
+
+def _md_when(iso):
+    """Absolute LOCAL wall-clock for the markdown readout: `Sat 07:21`, dated beyond ~6 days
+    (`Sat Jul 18 03:59`) because a bare weekday a week out is ambiguous with today.
+
+    Distinct from _fmt_when, which DROPS the time past a week — fine for a login deadline
+    the operator only needs to find a day for, wrong for a reset the readout must answer to
+    the minute. Empty string when there is no parseable stamp; the caller renders that as
+    an em dash, never as a past date and never as a negative countdown.
+    """
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    near = (dt - datetime.now(dt.tzinfo)).days < 6
+    return dt.strftime("%a %H:%M") if near else dt.strftime("%a %b %d %H:%M")
+
+
+def _md_cell(iso, hours):
+    """One `absolute (in relative)` reset/expiry cell, or `—`.
+
+    An em dash covers BOTH null and already-elapsed: a past absolute reads as a deadline
+    that still stands, and a negative relative reads as nonsense. Which of the two it is
+    is a per-row fact the caller explains in a bullet (row not live vs bucket unused).
+    """
+    when = _md_when(iso)
+    if not when or hours is None or hours < 0:
+        return "—"
+    return f"{when} (in {fmt_h(hours)})"
+
+
+def render_readout(rows, cfg, win, cached):
+    """Emit the /accounts chat readout as finished markdown — the SINGLE renderer.
+
+    Why this exists: the readout used to be ~200 lines of prose in commands/accounts.md
+    instructing the model to rebuild this table by hand from --json on every invocation —
+    column order, which flag is a bullet and which a column, staleness suffixes, bolding,
+    the relative-time format. Every one of those facts is already computed here, so the
+    project had two renderers for one table kept in sync by discipline alone: a single
+    format change (`2.3d` → `2d 6h`) had to be made in both, and nothing but care stopped
+    them drifting. Prose cannot be tested; this can. The doc keeps what genuinely needs
+    judgment — how to INTERPRET a stale row, an exclusion, a cliff — and stops restating
+    what the code already knows.
+    """
+    warn_h = float(cfg.get("login_warn_h", 72.0))
+    s_cut = cfg["router"]["S_CUT"] * 100
+    rank_g, _gre = ranked(rows, cfg, win, "general")
+    rank_f, _fre = ranked(rows, cfg, win, "fable")
+    pick_g = rank_g[0][1]["acct"] if rank_g else None
+    pick_f = rank_f[0][1]["acct"] if rank_f else None
+
+    def pctc(r, key):
+        """A percent, `*`-suffixed when the row is inherited history rather than a reading.
+
+        Withheld (null) on a bucket whose window has ROLLED since that reading: reporting
+        the last-known number there would state a figure the reset has already voided.
+        """
+        v = r.get(key)
+        if v is None:
+            return "—"
+        return f"{v:.0f}%" + ("*" if r.get("stale_quota") or r.get("error") else "")
+
+    out = ["| account | live | 5h used | 5h resets | weekly used | Fable used "
+           "| weekly resets | login expires |",
+           "|---|---|---|---|---|---|---|---|"]
+    notes, footnotes = [], []
+    for r in rows:
+        acct, a = r["acct"], r.get("auth")
+        marks = ""
+        if pick_g and acct == pick_g:
+            marks += " ➤"
+        if pick_f and acct == pick_f and pick_f != pick_g:
+            marks += " ➤ᶠ"
+        name = (f"**{acct}**" if marks else acct) + marks + (" ← you" if r.get("is_self") else "")
+
+        # ONE weekly-resets column: both weekly buckets reset at the same instant, and the
+        # CLI stamps them a fraction of a second apart — so compare with a TOLERANCE and
+        # footnote only a genuine split, rather than adding a column the operator then has
+        # to reconcile. Minute-precision truncation (what the prose rule used to say) is
+        # NOT enough: a sub-second gap that straddles a minute boundary (03:59:59.80 vs
+        # 04:00:00.01) truncates to two different minutes, and this printed a bogus
+        # "they differ" footnote on two of four accounts the first time it ran for real.
+        wr, fr_ = r.get("weekly_reset_at"), r.get("fable_reset_at")
+        if wr and fr_ and not _same_instant(wr, fr_):
+            footnotes.append(f"`{acct}` weekly and Fable reset at different minutes: "
+                             f"Fable {_md_cell(fr_, r.get('fable_reset_h'))}")
+
+        # login expires: never a quota, never a reset. A login-required row shows the state
+        # instead of a stamp — a future date there reads as "fine until then" when in fact
+        # the grant was already rejected.
+        lxh = r.get("login_expires_h")
+        if a == "login-required":
+            login = "⊘ REQUIRED"
+        else:
+            login = _md_cell(r.get("login_expires_at"), lxh)
+            if lxh is not None and lxh <= warn_h and login != "—":
+                login = f"⚠ **{login}**"
+
+        out.append("| " + " | ".join([
+            name, str(r.get("k", 0)), pctc(r, "session_pct"),
+            _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
+            pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
+            _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
+
+        # ---- flags: bullets, never extra columns, and enumerated by SOURCE not by literal
+        if r.get("stale_quota") or r.get("error"):
+            asof = _fmt_asof(r.get("quota_as_of"))
+            if r.get("poll_throttled"):
+                notes.append(f"↻ `{acct}` — poll throttled (a 90s endpoint throttle, NOT a usage "
+                             f"cap); numbers are last-known"
+                             + (f" as of {asof}" if asof else "") + "; `--fresh` retries")
+            else:
+                notes.append(f"↻ `{acct}` — last-known"
+                             + (f", as of {asof}" if asof else "")
+                             + "; not polled this sweep, excluded from routing")
+        if r.get("rolled_since"):
+            notes.append(f"↻ `{acct}` — {'/'.join(r['rolled_since'])} window(s) have RESET since "
+                         f"that reading; those buckets read `—` and are likely fresh again")
+        sp = r.get("session_pct")
+        if sp is not None and sp >= s_cut:
+            notes.append(f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff")
+        if (r.get("weekly_pct") or 0) >= 100:
+            notes.append(f"○ `{acct}` — weekly **LIMITED** (100%)")
+        if (r.get("route_reasons") or {}).get("fable") == "fable-exhausted":
+            notes.append(f"○ `{acct}` — Fable exhausted")
+        # ¢ keys on SPEND, not on the toggle: an account read credits_on=false with $176.91
+        # already spent. And the dollar field, never credits_used — that one is in CENTS.
+        if (r.get("credits_used") or 0) > 0:
+            notes.append(f"¢ `{acct}` — ${r.get('credits_used_usd', 0.0):.2f} extra-usage spend "
+                         f"(toggle currently {'on' if r.get('credits_on') else 'off'})")
+        if a not in ("ok", None):
+            notes.append(f"○ `{acct}` — auth `{a}`"
+                         + (f" → {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
+        # the login cliff, with the identity that makes it actionable
+        if a != "login-required" and lxh is not None and lxh <= warn_h:
+            gone = lxh <= 0
+            notes.append(("⊘ " if gone else "⚠ ")
+                         + f"`{acct}` login {'EXPIRED' if gone else 'expires'} "
+                         + (_md_when(r.get("login_expires_at")) or "?")
+                         + ("" if gone else f" (in {fmt_h(lxh)})")
+                         + " — a refresh does NOT renew it · run "
+                         + f"`{r.get('launcher') or '?'}` → `/login`"
+                         + (f" · {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
+
+    for n in notes:
+        out.append("- " + n)
+    for n in footnotes:
+        out.append("- " + n)
+
+    # ---- footer: the router's own answer, never a re-rank of score_*
+    out.append("")
+    out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
+    if win.get("permanent"):
+        # permanent means NO expiry — never quote a countdown off the sentinel `end` date
+        out.append("Fable window: **permanent** (no expiry).")
+    elif win.get("active"):
+        out.append(f"Fable window: open through {win.get('end')}.")
+    else:
+        out.append("Fable window: **inactive** — router excluding Fable.")
+    if cached:
+        out.append(f"_Cache ≤{cfg.get('cache_ttl_s', 90)}s old; `--fresh` forces a live sweep._")
+    print("\n".join(out))
+
+
 def _iso_utc(iso):
     """A stamp → `2026-08-02T20:21:49Z`, the ONE form a machine consumer can parse.
 
@@ -2024,6 +2213,10 @@ def main():
         else:
             for s, r in cand:
                 print(f"{r['acct']} {s:.6f}")
+        return
+
+    if "--readout" in args:
+        render_readout(rows, cfg, win, cached)
         return
 
     # human table
