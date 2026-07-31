@@ -12,6 +12,30 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CB="$REPO/bin/cc-backlog"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+  # The reap VERDICT JOURNAL writes to the autonomy IDL, which defaults under $HOME — and this suite
+  # is one of the 109 grandfathered by scripts/test-hermeticity-lint.sh, i.e. $HOME is the OPERATOR'S.
+  # Unfixtured, every non-dry reap test below would append verdict rows to the live
+  # ~/.claude/autonomy/idl.jsonl: precisely the "404 stray idl.jsonl lines traced to one unfixtured
+  # suite" incident that lint exists for. In setup(), never per-test, for that lint's own stated
+  # reason — a per-test seam leaves every OTHER test in the file pointed at live state.
+  export CC_BACKLOG_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+}
+
+# verdict_of <id> → THE journal row for <id>, and fails loud unless there is exactly one. The count
+# assertion is not incidental: "one verdict per item per sweep" is the contract, and a helper that
+# silently took the first of several would let a double-journalled item read green.
+verdict_of() {
+  # The absent-journal case is the RED case, so it must produce the DIAGNOSTIC and nothing else: a
+  # bare `jq … || echo 0` on a missing file yields "0\n0" (slurp prints 0 over empty input AND exits
+  # non-zero), and `[ "0\n0" -eq 1 ]` fails as a shell type error that buries the real message. An
+  # `if`, not `[ -s … ] && n=…`: bats bodies run under errexit, where a top-level AND-list that
+  # fails aborts the test at the guard instead of reaching the assertion.
+  local n=0
+  if [ -s "$CC_BACKLOG_IDL" ]; then
+    n="$(jq -s --arg i "$1" '[.[]|select(.id==$i)]|length' "$CC_BACKLOG_IDL" 2>/dev/null)" || n=0
+  fi
+  [ "${n:-0}" -eq 1 ] || { echo "expected exactly 1 journal row for $1 in $CC_BACKLOG_IDL, got ${n:-0}" >&2; return 1; }
+  jq -c --arg i "$1" 'select(.id==$i)' "$CC_BACKLOG_IDL"
 }
 
 # NEGATIVE assertions must NOT be written `! cmd`: bash exempts a `!`-inverted command from set -e, so
@@ -1268,6 +1292,188 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   run bash "$CB" reap
   [ "$status" -eq 0 ]
   [ "$(status_of sessgone0ee2)" = open ]
+}
+
+# ── the reap DECISION JOURNAL (backlog ab52bfd8c958) ─────────────────────────────────────────────
+# Every verdict appends one IDL record carrying the ORACLE EVIDENCE it turned on. Before this, a
+# verdict survived only as stdout (kept only when cc-reaper is the caller, in a size-rotated text
+# log) and, for a block, as the prose `needs` remedy — which names what to DO and nothing about
+# which oracle spoke, what it said, or how stale the claim was. A blocking verdict with no retained
+# evidence is undiagnosable, and `block` is exactly the verdict that leaves the wave to wait for a
+# human. CC_BACKLOG_IDL is fixtured in setup() (see the hermeticity note there).
+
+@test "journal: a REOPEN records the dead-worker evidence — the verdict that ACTS on a death" {
+  reap_env
+  rec '{"id":"jrnlreop0001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JReop"}'
+  rec "{\"id\":\"jrnlreop0001\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of jrnlreop0001)" = open ]
+  local row; row="$(verdict_of jrnlreop0001)"
+  # The row is ONE line of valid JSON (a multi-line record would corrupt the JSONL for every reader).
+  [ "$(printf '%s' "$row" | wc -l | tr -d ' ')" -eq 0 ]
+  printf '%s' "$row" | jq -e '.actor=="cc-backlog-reap" and .action=="verdict"' >/dev/null
+  printf '%s' "$row" | jq -e '.verdict=="reopen" and .reason=="dead-worker" and .acted==true' >/dev/null
+  # The evidence: which oracle spoke (1 = a REAL not-live verdict), what the worktree said, and the
+  # numbers that gated the decision.
+  printf '%s' "$row" | jq -e '.claimer_rc==1 and .worktree=="none"' >/dev/null
+  printf '%s' "$row" | jq -e '.claim_age_s==7200 and .attempts==1 and .fast_fail==0' >/dev/null
+  printf '%s' "$row" | jq -e --arg b "$HOST-2147483647" '.claim_by==$b' >/dev/null
+}
+
+@test "journal: a BLOCK records the block reason AND the remedy the operator will be handed" {
+  reap_env
+  export CC_BACKLOG_UNRESOLVED_MAX_S=60                # the 7200s claim is far past it
+  export CC_BACKLOG_LSOF_BIN=                          # probe off ⇒ permanently unresolved
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-jrnlblok0002"
+  rec '{"id":"jrnlblok0002","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JBlok"}'
+  rec "{\"id\":\"jrnlblok0002\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of jrnlblok0002)" = blocked ]
+  local row; row="$(verdict_of jrnlblok0002)"
+  printf '%s' "$row" | jq -e '.verdict=="block" and .acted==true' >/dev/null
+  # A STABLE token, not the display prose — `why` has been reworded once already, and a reason field
+  # consumers group by must survive the next rewording.
+  printf '%s' "$row" | jq -e '.reason=="unresolvable-worktree-oracle"' >/dev/null
+  # …and the probe's own words about why it could not look, which is the whole diagnosis.
+  printf '%s' "$row" | jq -e '.worktree|test("lsof")' >/dev/null
+  printf '%s' "$row" | jq -e '.detail|test("unblock jrnlblok0002")' >/dev/null
+}
+
+@test "journal: an ABSTENTION is recorded AS an abstention, distinct from a real not-live answer" {
+  # The KEEP/REOPEN asymmetry rests entirely on the three-valued oracles, so the row has to preserve
+  # the distinction it turns on: 2 = asked and got NO ANSWER (this row) vs 1 = a real not-live verdict
+  # (the reopen test above). Collapsing them would misdiagnose the exact bug class this journal serves.
+  reap_env
+  export CC_BACKLOG_ORACLE_TIMEOUT_S=2
+  printf '#!/bin/bash\nsleep 300\n' > "$BATS_TEST_TMPDIR/hungsess"; chmod +x "$BATS_TEST_TMPDIR/hungsess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/hungsess"
+  rec '{"id":"jrnlabst0003","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JAbst"}'
+  rec '{"id":"jrnlabst0003","ts":"2026-01-01T00:00:00Z","event":"claim","by":"PANE-SHAPED-CLAIMER"}'
+  run timeout 30 bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of jrnlabst0003)" = claimed ]
+  local row; row="$(verdict_of jrnlabst0003)"
+  printf '%s' "$row" | jq -e '.verdict=="keep" and .reason=="claimer-unresolved"' >/dev/null
+  printf '%s' "$row" | jq -e '.claimer_rc==2' >/dev/null      # asked; no answer
+  printf '%s' "$row" | jq -e '.worktree=="none"' >/dev/null   # the OTHER oracle did answer
+  printf '%s' "$row" | jq -e '.acted==false' >/dev/null       # a keep directs no transition
+}
+
+@test "journal: an OWNED WAIT keep carries the oracle's own words (what is holding the item)" {
+  reap_env
+  owned_wait_fixture jrnlownd0004
+  rec '{"id":"jrnlownd0004","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JOwnd"}'
+  rec "{\"id\":\"jrnlownd0004\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  [ "$(status_of jrnlownd0004)" = claimed ]
+  local row; row="$(verdict_of jrnlownd0004)"
+  printf '%s' "$row" | jq -e '.verdict=="keep" and .reason=="owned-wait"' >/dev/null
+  printf '%s' "$row" | jq -e '.worktree|test("wt-jrnlownd0004")' >/dev/null
+}
+
+@test "journal: the THRASH block records both oracles as NEVER ASKED, not the previous item's answer" {
+  # PROVENANCE, and the reason this test needs TWO items. Rule B fires on the trail shape alone,
+  # before any liveness probe runs — but `clrc` is FUNCTION-scoped and assigned only inside the stale
+  # branch, so at the thrash site it still holds whatever the PREVIOUS item left there. Item A below
+  # is a stale claim with a LIVE claimer (clrc := 0); item B is a pure thrash. Journaling `$clrc` at
+  # the thrash site would therefore record `claimer_rc: 0` — a fabricated LIVE answer about an item no
+  # oracle ever looked at. `null` is the only honest value, and it is a DIFFERENT state from 2
+  # ("asked, no answer"). Ids are ordered so A is folded first (group_by sorts by id).
+  reap_env
+  printf '#!/bin/bash\ncat <<EOF\n[{"session_id":"aaaaaaaa-0000-0000-0000-000000000000","pane":"p","alive":true}]\nEOF\n' \
+    > "$BATS_TEST_TMPDIR/livesess"
+  chmod +x "$BATS_TEST_TMPDIR/livesess"; export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/livesess"
+  rec '{"id":"aaalive00005","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JLive"}'
+  rec '{"id":"aaalive00005","ts":"2026-01-01T00:00:00Z","event":"claim","by":"aaaaaaaa-0000-0000-0000-000000000000"}'
+  rec '{"id":"bbbthrsh0006","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JThrash"}'
+  rec '{"id":"bbbthrsh0006","ts":"2026-01-01T00:00:10Z","event":"claim","by":"h-1"}'
+  rec '{"id":"bbbthrsh0006","ts":"2026-01-01T00:00:14Z","event":"reopen"}'
+  rec '{"id":"bbbthrsh0006","ts":"2026-01-01T00:00:20Z","event":"claim","by":"h-2"}'
+  rec '{"id":"bbbthrsh0006","ts":"2026-01-01T00:00:24Z","event":"reopen"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  # The control: the LIVE item ran first and DID record a real oracle answer, so a null below is the
+  # thrash site's own honesty and not a journal that simply never records oracles.
+  printf '%s' "$(verdict_of aaalive00005)" | jq -e '.reason=="claimer-live" and .claimer_rc==0' >/dev/null
+  local row; row="$(verdict_of bbbthrsh0006)"
+  printf '%s' "$row" | jq -e '.verdict=="block" and .reason=="thrash" and .fast_fail==2' >/dev/null
+  printf '%s' "$row" | jq -e '.claimer_rc==null and .worktree==null' >/dev/null
+}
+
+@test "journal: a REFUSED transition is recorded with acted:false — the verdict that used to vanish" {
+  # The TOCTOU flip. Reap probes the claimer (not live ⇒ dead-worker path), then `cmd_transition
+  # reopen` probes it AGAIN through the live-claim guard, which refuses at rc 4 if it now reads LIVE.
+  # Reap's `elif` then contributed nothing to STDOUT and nothing to the counters — and stdout is the
+  # only stream the production caller keeps (cc-reaper:587 runs `"$BACKLOG_BIN" reap 2>/dev/null`, so
+  # the guard's own prose on stderr is discarded). The sweep's summary then reads "0 reopened, 0
+  # blocked", which does not merely omit the verdict — it asserts that nothing happened. The stateful
+  # stub below answers empty-then-live across the two calls, which is exactly the race.
+  reap_env
+  printf '#!/bin/bash\nn=$(cat "%s" 2>/dev/null || echo 0); echo $((n+1)) > "%s"\nif [ "$n" -eq 0 ]; then echo "[]"; else\ncat <<EOF\n[{"session_id":"cccccccc-0000-0000-0000-000000000000","pane":"p","alive":true}]\nEOF\nfi\n' \
+    "$BATS_TEST_TMPDIR/probes" "$BATS_TEST_TMPDIR/probes" > "$BATS_TEST_TMPDIR/flipsess"
+  chmod +x "$BATS_TEST_TMPDIR/flipsess"; export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/flipsess"
+  rec '{"id":"jrnlflip0007","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JFlip"}'
+  rec '{"id":"jrnlflip0007","ts":"2026-01-01T00:00:00Z","event":"claim","by":"cccccccc-0000-0000-0000-000000000000"}'
+  # Streams kept APART on purpose: `run` merges them, which would hide the whole point — the verdict
+  # is absent from the stream the caller keeps and present only in the one it throws away.
+  bash "$CB" reap >"$BATS_TEST_TMPDIR/flip.out" 2>"$BATS_TEST_TMPDIR/flip.err"
+  [ "$(status_of jrnlflip0007)" = claimed ]            # the guard held: no duplicate peer
+  refute_in_file 'jrnlflip0007' "$BATS_TEST_TMPDIR/flip.out"
+  grep -q '0 reopened, 0 blocked' "$BATS_TEST_TMPDIR/flip.out"   # stdout ASSERTS nothing happened…
+  grep -q 'REFUSED — jrnlflip0007' "$BATS_TEST_TMPDIR/flip.err"  # …while stderr, which cc-reaper
+                                                                 #    discards, held the only trace
+  local row; row="$(verdict_of jrnlflip0007)"
+  printf '%s' "$row" | jq -e '.verdict=="reopen" and .acted==false' >/dev/null
+  printf '%s' "$row" | jq -e '.detail|test("REFUSED")' >/dev/null
+}
+
+@test "journal: --dry-run writes NO journal row (its contract is 'writes NOTHING'), live mode does" {
+  # Two halves, and the second is the positive control: a dry-run assertion alone would pass just as
+  # happily against a journal that is broken everywhere (memory: control-must-replay-the-real-artifact).
+  reap_env
+  rec '{"id":"jrnldry00008","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JDry"}'
+  rec "{\"id\":\"jrnldry00008\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap --dry-run
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'WOULD-REOPEN jrnldry00008'      # the verdict WAS reached…
+  [ ! -e "$CC_BACKLOG_IDL" ]                                       # …and nothing was written
+  run bash "$CB" reap                                              # positive control
+  [ "$status" -eq 0 ]
+  printf '%s' "$(verdict_of jrnldry00008)" | jq -e '.verdict=="reopen"' >/dev/null
+}
+
+@test "journal: an UNWRITABLE IDL never changes the sweep's decisions — and is never silent about it" {
+  # Blast radius: a side-car must fail no wider than itself. The transition, the counters, the stdout
+  # verdict and the exit code are all unchanged by a dead journal — but the failure is COUNTED and
+  # NAMED, because a silently-dropped evidence row is the precise defect this journal exists to fix.
+  reap_env
+  export CC_BACKLOG_IDL=/dev/null/cannot/exist/idl.jsonl           # mkdir -p and >> both fail
+  rec '{"id":"jrnlfail0009","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JFail"}'
+  rec "{\"id\":\"jrnlfail0009\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]                                              # never widens into the sweep
+  [ "$(status_of jrnlfail0009)" = open ]                           # the decision still happened
+  printf '%s' "$output" | grep -q 'REOPEN jrnlfail0009'
+  printf '%s' "$output" | grep -q '1 reopened, 0 blocked'
+  printf '%s' "$output" | grep -q 'could NOT be journalled'        # …and says so
+}
+
+@test "journal: the row is NOT hook-shaped — reap is not silently enrolled in the paging population" {
+  # idl-abstain-alarm.sh selects on {.hook, .disposition} and PAGES a hook whose in-window abstentions
+  # are 100% BLIND. Reap's UNRESOLVED keeps are genuinely blind, so hook-shaping these rows would
+  # enroll reap in a nightly paging population against whose reason vocabulary it has never been
+  # calibrated — a 3am page manufactured as a side effect of adding a journal. Wiring that alarm is a
+  # real change and gets its own verification; this pins the shape so it cannot happen by accident.
+  reap_env
+  rec '{"id":"jrnlshap0010","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JShape"}'
+  rec "{\"id\":\"jrnlshap0010\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  printf '%s' "$(verdict_of jrnlshap0010)" | jq -e 'has("hook")==false and has("disposition")==false' >/dev/null
 }
 
 # ── project_default — the `add` project fallback (backlog f7abcbdee98c) ────────────────────────────

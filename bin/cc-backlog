@@ -126,9 +126,14 @@
 # Why the asymmetry is not merely tidy: `reopen` sets status=open, which is exactly cc-dispatch's
 # fire predicate, so a false dead verdict SPAWNS A DUPLICATE PEER onto live work (a60d62a215f1 →
 # 6488617). A missed dead worker only strands an item, visibly, until the next sweep.
+#
+# THE DECISION JOURNAL — every verdict above (KEEP / BLOCK / REOPEN / abstain) appends one record to
+# the autonomy IDL (${CC_BACKLOG_IDL:-~/.claude/autonomy/idl.jsonl}), carrying the ORACLE EVIDENCE it
+# turned on. Live mode only: `--dry-run` writes nothing, journal included. See idl_verdict.
 set -uo pipefail
 
 BACKLOG="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
+IDL="${CC_BACKLOG_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 
 usage() {
   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'
@@ -974,6 +979,76 @@ land_lock_owner() {
   printf 'land lock held for wt-%s by live pid %s' "$id" "$holder"
 }
 
+# ── the reap DECISION JOURNAL (backlog ab52bfd8c958) ─────────────────────────────────────────────
+# idl_verdict <id> <keep|block|reopen> <reason> <acted true|false> <by> <ageS> <claims> <fast>
+#             <claimer_rc|-> <worktree|-> <detail>
+#
+# ONE append-only IDL record per verdict — the retained EVIDENCE behind every reap decision. Until
+# now a verdict survived only as (a) a line of stdout, which the caller may or may not keep — under
+# `cc-reaper --reap` it lands in ~/.claude/logs/cc-reaper.log, rotated by SIZE, and under any other
+# caller (a hand-run sweep, a future one) it is simply gone — and (b) for a block, the prose `needs`
+# string, which names the REMEDY but not the oracles that produced the verdict. So a `blocked` item
+# the operator meets an hour later answered none of the only questions that matter: which oracle
+# spoke, what did it say, how stale was the claim, how many workers had already been fired at it.
+# That is the undiagnosable case this closes, and it is the worst one precisely for `block`, whose
+# whole point is to leave the wave and wait for a human.
+#
+# SHAPE — deliberately the {actor, action} row cc-dispatch's `idl_decision` writes (same ledger
+# family, same consumers), NOT the {hook, disposition} hook row. idl-abstain-alarm.sh selects exactly
+# on `.hook` + `.disposition`, so a hook-shaped row would silently enroll reap in a PAGING population
+# against whose blind/dormant reason vocabulary it has never been calibrated. Wiring the abstain
+# alarm to these rows is a real and separate change (reap's UNRESOLVED keeps are genuinely BLIND, so
+# a permanently starved oracle SHOULD page); manufacturing 3am pages as a side effect of adding a
+# journal is not (memory: alarm-polarity-and-attention-budget).
+#
+# ORACLE PROVENANCE — `claimer_rc` and `worktree` are JSON `null` when the oracle was NOT CONSULTED,
+# never a carried-over value. `clrc` is FUNCTION-scoped and assigned only inside the stale branch, so
+# at the thrash site it still holds the PREVIOUS item's answer; journaling that would fabricate
+# evidence about an item no oracle ever looked at (memory: synthesis-loses-provenance). Read them as:
+#   claimer_rc  null = never asked · 0 = LIVE · 1 = proven not-live · 2 = asked, NO ANSWER
+#   worktree    null = never asked · "none" = probe answered, nobody there · any other string = the
+#               probe's own words, either the owned wait it found or why it could not look
+# The three-valued oracles are the whole basis of the KEEP/REOPEN asymmetry, so an evidence row that
+# collapsed "never asked" into "no answer" would misdiagnose the exact bug class it exists to serve.
+#
+# `acted` is the transition, not the verdict: false on every `keep` BY CONSTRUCTION (a keep directs
+# no transition), and on a `block`/`reopen` ONLY when cmd_transition REFUSED it. That row is new
+# evidence in itself — a refused transition contributed nothing to stdout and nothing to the
+# counters, and stdout is the only stream the production caller keeps (cc-reaper runs `reap
+# 2>/dev/null`, discarding the guard's own prose). The summary then reads "0 reopened, 0 blocked",
+# which does not merely omit that verdict — it asserts that nothing happened.
+#
+# BEST-EFFORT, BOUNDED BLAST RADIUS: a side-car must fail no wider than itself (memory:
+# addon-failure-exceeds-its-blast-radius) — a write failure never changes reap's transitions, its
+# stdout verdicts, its counters or its exit code. It is NOT silent, though: failures are counted and
+# named in the summary line, because a silently-dropped evidence row is the precise defect this
+# journal exists to fix (memory: claimed-outcome-vs-checked-outcome).
+#
+# VOLUME: one row per verdict per sweep, undamped. A long owned wait re-KEEPs every sweep (~10 rows/h
+# at the ~6-min cadence — the shape already in the reaper log). Damping it would be wrong: the
+# SEQUENCE of KEEPs is what diagnoses a wedge, and the IDL is size-rotated.
+idl_verdict() {
+  # DRY-RUN GATE, once, here rather than at nine call sites: `--dry-run` classifies and writes
+  # NOTHING, and a journal is a write. Gating centrally makes that contract structural instead of a
+  # rule nine future edits have to remember. `dry` is cmd_reap's local, visible by dynamic scope;
+  # defaulted so a stray caller cannot trip `set -u`.
+  if [ "${dry:-0}" = 1 ]; then return 0; fi
+  local id="$1" verdict="$2" reason="$3" acted="$4" by="$5" ageS="$6" claims="$7" fast="$8" \
+        clrc="$9" wt="${10}" detail="${11}"
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  # `2>/dev/null` FIRST: a failed `>>` open is reported by the shell to whatever stderr is current at
+  # that point, so the ordering decides whether an unwritable IDL leaks noise into reap's stderr.
+  jq -cn --arg ts "$(now_iso)" --arg id "$id" --arg verdict "$verdict" --arg reason "$reason" \
+     --argjson acted "$acted" --arg by "$by" --argjson age "$ageS" --argjson claims "$claims" \
+     --argjson fast "$fast" --arg clrc "$clrc" --arg wt "$wt" --arg detail "$detail" \
+     '{ts:$ts, actor:"cc-backlog-reap", action:"verdict", id:$id, verdict:$verdict, reason:$reason,
+       acted:$acted, claim_by:$by, claim_age_s:$age, attempts:$claims, fast_fail:$fast,
+       claimer_rc:(if $clrc=="-" then null else ($clrc|tonumber) end),
+       worktree:(if $wt=="-" then null else $wt end),
+       detail:$detail}' 2>/dev/null >> "$IDL" || journal_fail=$((journal_fail + 1))
+  return 0
+}
+
 # cmd_reap — the stale-claim maintenance sweep (see the REAP header block). Append-only, idempotent,
 # and safe to run every cc-reaper sweep. Terminal (done) and already-blocked items are never touched.
 # --dry-run classifies + prints WOULD-* and writes NOTHING.
@@ -1002,6 +1077,7 @@ land_lock_owner() {
 #                                       normal one; see the Rule A body.
 #   CC_BACKLOG_WT_ROOT          (~/Development/.worktrees)  dispatch worktree parent (see owned_wait)
 #   CC_BACKLOG_NOW              (now)   epoch "now" seam (deterministic age/window math in tests)
+#   CC_BACKLOG_IDL              (~/.claude/autonomy/idl.jsonl)  the verdict journal (see idl_verdict)
 cmd_reap() {
   local dry=0
   while [ $# -gt 0 ]; do
@@ -1070,7 +1146,7 @@ cmd_reap() {
   # `read` COALESCES consecutive whitespace-IFS chars (tab included) — two adjacent tabs would drop
   # the empty field and shift every later column left (fast → empty → "integer expression" error).
   # A non-whitespace IFS preserves empty fields positionally.
-  local reopened=0 blocked=0 scanned=0 id status by ageS claims fast clrc=0
+  local reopened=0 blocked=0 scanned=0 journal_fail=0 id status by ageS claims fast clrc=0
   while IFS=$'\037' read -r id status by ageS claims fast; do
     [ -n "$id" ] || continue
     scanned=$((scanned + 1))
@@ -1081,6 +1157,11 @@ cmd_reap() {
         printf 'cc-backlog reap: WOULD-BLOCK %s [thrash x%s]\n' "$id" "$fast"
       elif cmd_transition block "$id" --needs "$bmsg" --by cc-backlog-reap >/dev/null; then
         blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [thrash x%s]\n' "$id" "$fast"
+        # Both oracles are `-` (never asked): rule B fires on the TRAIL SHAPE alone, before any
+        # liveness probe runs. Passing $clrc here would journal the PREVIOUS item's answer.
+        idl_verdict "$id" block thrash true "$by" "$ageS" "$claims" "$fast" - - "$bmsg"
+      else
+        idl_verdict "$id" block thrash false "$by" "$ageS" "$claims" "$fast" - - "$bmsg"
       fi
       continue
     fi
@@ -1098,6 +1179,8 @@ cmd_reap() {
         # dead-worker paths and nothing would show that oracle 1 had stopped answering LIVE (memory:
         # feature-durability-mechanism-not-memory — an inert mechanism must be loud, not silent).
         printf 'cc-backlog reap: KEEP %s [claimer %s LIVE; claimed %ss]\n' "$id" "$by" "$ageS"
+        idl_verdict "$id" keep claimer-live false "$by" "$ageS" "$claims" "$fast" "$clrc" - \
+          "claimer ${by:-<none>} is LIVE (claimed ${ageS}s, under the ${liveclaimmax}s ceiling)"
         continue
       fi
       # A LIVE claimer past LIVE_CLAIM_MAX_S is a WEDGED WORKER — the mirror of the wedged owned wait
@@ -1116,6 +1199,9 @@ cmd_reap() {
         elif cmd_transition block "$id" --needs "$lmsg" --by cc-backlog-reap >/dev/null; then
           blocked=$((blocked + 1))
           printf 'cc-backlog reap: BLOCK %s [wedged live worker — %s, claimed %ss]\n' "$id" "$by" "$ageS"
+          idl_verdict "$id" block wedged-live-worker true "$by" "$ageS" "$claims" "$fast" "$clrc" - "$lmsg"
+        else
+          idl_verdict "$id" block wedged-live-worker false "$by" "$ageS" "$claims" "$fast" "$clrc" - "$lmsg"
         fi
         continue
       fi
@@ -1132,6 +1218,8 @@ cmd_reap() {
       if [ "$owrc" -eq 2 ]; then starved="$owned"; owned=""; fi
       if [ -n "$owned" ] && [ "$ageS" -le "$ownedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [owned wait — %s; claimed %ss]\n' "$id" "$owned" "$ageS"
+        idl_verdict "$id" keep owned-wait false "$by" "$ageS" "$claims" "$fast" "$clrc" "$owned" \
+          "owned wait — ${owned} (claimed ${ageS}s, under the ${ownedmax}s ceiling)"
         continue
       fi
       # ABSTAIN on a non-verdict. Every oracle has now spoken and none of them said "dead": the
@@ -1142,6 +1230,10 @@ cmd_reap() {
       if [ -z "$owned" ] && [ "$clrc" -eq 2 ] && [ "$ageS" -le "$unresolvedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [claimer UNRESOLVED — %s; no answer is not proof of death, abstaining; claimed %ss]\n' \
           "$id" "${by:-<none>}" "$ageS"
+        # worktree = "none": the occupancy probe RAN and found nobody. That is an answer, and it is
+        # what distinguishes this abstention (one oracle silent) from the starved one below (both).
+        idl_verdict "$id" keep claimer-unresolved false "$by" "$ageS" "$claims" "$fast" "$clrc" none \
+          "claimer ${by:-<none>} UNRESOLVED (registry absent/wedged/unparseable) and the worktree probe found nobody — abstaining; no answer is not proof of death (claimed ${ageS}s, under the ${unresolvedmax}s ceiling)"
         continue
       fi
       # TOTAL ORACLE STARVATION — the same abstention, one oracle down. Here the claimer DID answer
@@ -1154,6 +1246,8 @@ cmd_reap() {
       if [ -n "$starved" ] && [ "$ageS" -le "$unresolvedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [worktree oracle UNRESOLVED — %s; no answer is not proof of death, abstaining; claimed %ss]\n' \
           "$id" "$starved" "$ageS"
+        idl_verdict "$id" keep worktree-unresolved false "$by" "$ageS" "$claims" "$fast" "$clrc" "$starved" \
+          "worktree oracle UNRESOLVED — ${starved}; the claimer read not-live but for a dispatched item that is the DISPATCHER's spent pid, so no oracle has spoken about the WORKER — abstaining (claimed ${ageS}s, under the ${unresolvedmax}s ceiling)"
         continue
       fi
       # A WEDGED owned wait (live worktree, but past the ceiling) BLOCKS regardless of the attempt
@@ -1163,27 +1257,45 @@ cmd_reap() {
       # ceiling blocks for the mirror-image reason: still not proof of death, so still never reopened
       # — but the abstention itself has to end somewhere, and it ends at a human.
       local why="stall, $claims attempts"
+      # rtoken/wtev shadow why/smsg for the JOURNAL: `why` is prose that has already been reworded
+      # once, and a reason field consumers group by must be a STABLE token. wtev carries the
+      # worktree oracle's own words, or "none" when it answered and found nobody.
+      local rtoken="dead-worker-stall" wtev="none"
       if [ "$claims" -ge "$maxattempts" ] || [ -n "$owned" ] || [ "$clrc" -eq 2 ] || [ -n "$starved" ]; then
         local smsg="dead-worker stall after ${claims} dispatch attempt(s) (idle ${ageS}s) — not auto-completable. Investigate, then \`cc-backlog unblock ${id}\`."
         if [ -n "$owned" ]; then
           why="wedged owned wait"
+          rtoken="wedged-owned-wait"; wtev="$owned"
           smsg="wedged owned wait past the ${ownedmax}s ceiling — ${owned} — after ${claims} dispatch attempt(s) (claimed ${ageS}s). The worker is NOT dead and its worktree is still occupied, so this was NOT reopened: find what the wait is blocked on, then \`cc-backlog unblock ${id}\`."
         elif [ -n "$starved" ]; then
           why="unresolvable worktree oracle"
+          rtoken="unresolvable-worktree-oracle"; wtev="$starved"
           smsg="the worktree occupancy oracle could not be RESOLVED past the ${unresolvedmax}s ceiling — ${starved} — after ${claims} dispatch attempt(s) (claimed ${ageS}s). The claimer read not-live, but for a dispatched item that is the DISPATCHER's spent pid, so nothing here is evidence about the worker. NOT reopened: reopening on a probe that never ran would fire a second peer at possibly-live work. Restore the probe (lsof / CC_BACKLOG_WT_ROOT) or establish by hand whether the worker is alive, then \`cc-backlog unblock ${id}\`."
         elif [ "$clrc" -eq 2 ]; then
           why="unresolvable claimer"
+          rtoken="unresolvable-claimer"
           smsg="claimer ${by:-<none>} could not be RESOLVED past the ${unresolvedmax}s ceiling — the liveness registry gave no answer (absent, wedged, or unparseable) and the worktree shows no live work, after ${claims} dispatch attempt(s) (claimed ${ageS}s). NOT reopened: an unanswered probe is a non-verdict, never proof of death, and reopening would fire a second worker at possibly-live work. Establish whether the worker is alive (or repair the registry), then \`cc-backlog unblock ${id}\`."
         fi
         if [ "$dry" = 1 ]; then
           printf 'cc-backlog reap: WOULD-BLOCK %s [%s]\n' "$id" "$why"
         elif cmd_transition block "$id" --needs "$smsg" --by cc-backlog-reap >/dev/null; then
           blocked=$((blocked + 1)); printf 'cc-backlog reap: BLOCK %s [%s]\n' "$id" "$why"
+          idl_verdict "$id" block "$rtoken" true "$by" "$ageS" "$claims" "$fast" "$clrc" "$wtev" "$smsg"
+        else
+          idl_verdict "$id" block "$rtoken" false "$by" "$ageS" "$claims" "$fast" "$clrc" "$wtev" "$smsg"
         fi
       elif [ "$dry" = 1 ]; then
         printf 'cc-backlog reap: WOULD-REOPEN %s [dead-worker, claimed %ss, %s attempt(s)]\n' "$id" "$ageS" "$claims"
       elif cmd_transition reopen "$id" --by cc-backlog-reap >/dev/null; then
         reopened=$((reopened + 1)); printf 'cc-backlog reap: REOPEN %s [dead-worker, claimed %ss]\n' "$id" "$ageS"
+        # The one verdict that ACTS on a death, so it is the one whose evidence must be recoverable:
+        # a false dead verdict fires a duplicate peer onto live work (a60d62a215f1 → 6488617), and
+        # after the fact the only way to tell that apart from a genuine reap is which oracle said what.
+        idl_verdict "$id" reopen dead-worker true "$by" "$ageS" "$claims" "$fast" "$clrc" none \
+          "dead-worker reopen — claimer proven not-live and the worktree probe answered with nobody there (claimed ${ageS}s, ${claims} dispatch attempt(s), under the ${maxattempts}-attempt bound)"
+      else
+        idl_verdict "$id" reopen dead-worker false "$by" "$ageS" "$claims" "$fast" "$clrc" none \
+          "dead-worker reopen REFUSED by the ledger (claimed ${ageS}s, ${claims} dispatch attempt(s))"
       fi
     fi
   done <<< "$analysis"
@@ -1192,6 +1304,14 @@ cmd_reap() {
     printf 'cc-backlog reap (dry-run): %s non-terminal item(s) scanned — no writes\n' "$scanned"
   else
     printf 'cc-backlog reap: %s reopened, %s blocked (%s non-terminal scanned)\n' "$reopened" "$blocked" "$scanned"
+    # A dropped evidence row is the exact defect the journal exists to fix, so its failure is never
+    # `|| true`-silent (memory: claimed-outcome-vs-checked-outcome). An `if` block, NOT a trailing
+    # `[ … ] && printf`: that would make the FALSE test the function's exit status on every clean
+    # sweep and hand rc 1 to cc-reaper (memory: blanket-remedy-inverts-guards).
+    if [ "$journal_fail" -gt 0 ]; then
+      printf 'cc-backlog reap: WARNING — %s verdict(s) could NOT be journalled to %s; those decisions have no retained evidence\n' \
+        "$journal_fail" "$IDL" >&2
+    fi
   fi
 }
 
