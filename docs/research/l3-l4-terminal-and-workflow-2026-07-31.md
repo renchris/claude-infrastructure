@@ -104,6 +104,23 @@ PID    COMMAND          %CPU   MEM     #TH
 - This reproduces the prior finding (31 sessions = 111.9% total; one iTerm2 process exceeded the whole
   fleet) on a fresh boot and a fresh sample.
 
+**The ratio is a band, not a point — re-measured five times so it cannot be a single-sample
+artifact.** This repo's own rule is that a projection from one high-variance window is not a
+measurement, and the renderer's instantaneous CPU does swing hard (iTerm2 read 122.1%, 87.6% and
+45.4% at different moments). Five consecutive `top -l 2` second-samples at a constant 11 sessions:
+
+| sample | iTerm2 | WindowServer | fleet sum | renderer / fleet |
+|---|---|---|---|---|
+| 1 | 40.8 | 44.1 | 29.4 | **2.89×** |
+| 2 | 45.3 | 46.2 | 22.4 | **4.08×** |
+| 3 | 50.0 | 40.1 | 31.3 | **2.88×** |
+| 4 | 46.0 | 39.7 | 31.3 | **2.74×** |
+| 5 | 44.7 | 41.7 | 28.9 | **2.99×** |
+
+**Median 2.89×, range 2.74–4.08× — so the headline "2.3×" is the CONSERVATIVE end**, and the finding
+survives re-measurement rather than resting on the moment it was first taken. What varies is the
+absolute CPU of both terms; what is stable is that the renderer costs multiples of the fleet.
+
 ### The incumbent leaks mach ports at constant layout — measured, `verdict=OK`
 
 `scripts/terminal-bench.sh --app iTerm2 --panes 15 --interval 900`, two readings 900 s apart with the
