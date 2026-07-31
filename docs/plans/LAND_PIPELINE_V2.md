@@ -351,6 +351,37 @@ Change:
    set. A tree-suite that asserts live state reds in the verifier ⇒ normal attribution names
    it ⇒ it moves to the manifest by a 1-line land. The partition is total by construction
    (set difference), never hand-synced.
+
+   **AMENDMENT (2026-07-31, backlog 5ef018dfc992 — landed): the unit is the FILE, so the
+   1-line land above is only correct when the file's live-layer dependence is the WHOLE file.**
+   Listing a suite does not exempt its live-layer tests; it exempts every test in it, from the
+   tree verdict AND (per the §4.1 addition below) the land smoke. A mixed file therefore rides
+   its hermetic tests out of both lanes, and the entry looks exactly like a correct one — the
+   loss is nameless. Live in `tests/deploy-parity.bats`: 31 tests, 29 fully hermetic, 2 reading
+   the real `~/bin` + `~/.claude`. Measured at 09a0214a, `gate-select --direct` on the last land
+   touching `scripts/deploy-parity-assert.sh` named exactly one direct suite — that file —
+   which `filter_host_suites` then removed, so **the land ran zero tests**, and the exit-3
+   third-state guards (7a40d5a8) were first exercised only post-deploy, after the change was
+   live. Fixed by SPLITTING (`tests/deploy-parity-live.bats` holds the 2; the manifest lists
+   it) rather than by loosening the frozen contract — matching the file boundary to the
+   partition boundary honours per-file granularity instead of amending it. The split is pinned
+   in both directions by two tests in `tests/deploy-parity.bats`, each two-sided RED-proved.
+   **Admission rule going forward:** admit a file only when the live-layer dependence is the
+   whole file; if it is a minority of the tests, split first.
+
+   **AND RE-READ THE SEEDING RATIONALE ABOVE IN THAT LIGHT.** "Manifest seeds: the 6 measured
+   reds" (and the 2026-07-28 10:53 log at §4.2) conflated two causes with different fixes —
+   *asserts the deployed layer* vs *went red under corpus load*. The manifest header already
+   records that correction for the two meta-lint wrappers (b4e49b4b5014: a bare `grep` rc=2
+   under fork exhaustion FABRICATED failures about a clean tree; fixed at source by afaf40de +
+   ed4e6c6a). A census of the other five seeded suites (2026-07-31, filed as backlog
+   22b839c85a52) reports **zero** live-layer tests among them — desk-arm-live 8, desk-recycle-
+   durable 9, lr-team-audit 3, session-continue 21, waiting-recycle 106, each pinning its
+   subject through `CC_*` fixture seams — i.e. 147 tests excluded from the tree verdict and the
+   smoke on a rationale that may never have applied to them. NOT acted on here and deliberately
+   not treated as settled: 2 of the 5 were spot-verified by hand, the rest by the census alone,
+   and de-listing risks re-entering the very bootstrap circle §4.2 exists to kill — so each
+   suite needs its own clean-room AND in-corpus proof before it moves. Filed, not assumed.
 3. **Background QoS, no admission sleeping** — run the corpus under `nice -n 19` +
    `taskpolicy -c background` (Darwin: background CPU/IO band, yields to sessions). Delete
    gate_admit-style load waits (closes 60ec4c2d86d4 by construction). The singleton MUST make
