@@ -19,7 +19,7 @@
 # never answers a permission prompt. `--attach` is the ONE action, and it only moves the operator's
 # focus.
 #
-# ── the four disk sources (TERMINAL_AGNOSTIC_L3_L4.md §6.1) ──────────────────────────────────────
+# ── the four disk sources (TERMINAL_AGNOSTIC_L3_L4.md §7.1) ──────────────────────────────────────
 #   beacon      $CC_PERMPEND_DIR/<sid>.json    BLOCKED + the exact command + since-when   [the spine]
 #   telemetry   $CC_TELEMETRY_DIR/<sid>.json   census: cwd, config_dir, model, pid, ctx%
 #   registry    $CC_REGISTRY_DIR/<pane>.json   sid -> paneUUID (attach) + account label
@@ -31,9 +31,9 @@
 # row CARRIES `config_dir` as a field, so there is no sharding blindness to defeat — the census is
 # whole-fleet by construction, not by remembering to loop over four directories. (`claude agents
 # --json` is additionally unavailable on this box: the pinned stable is 2.1.114 and the flag errors.
-# It is optional enrichment here, never a dependency — §6.2.)
+# It is optional enrichment here, never a dependency — §7.2.)
 #
-# ── the THREE-STATE world (the load-bearing correctness property — §6.4) ─────────────────────────
+# ── the THREE-STATE world (the load-bearing correctness property — §7.4) ─────────────────────────
 # An EMPTY beacon dir and a beacon that has NEVER RUN are the same observation — absence — and only
 # one is good news. The hook stamps a `.beacon-alive` heartbeat on EVERY invocation precisely so a
 # consumer can tell them apart:
@@ -175,7 +175,7 @@ read_registry(){
     'select(type=="object" and (.session_id//"")!="") | {sid:.session_id, pane:(.paneUUID//""), account:(.account//""), name:(.name//"")}'
 }
 
-# ── existence evidence (§6.4) — the three-state read, computed BEFORE any row is rendered ────────
+# ── existence evidence (§7.4) — the three-state read, computed BEFORE any row is rendered ────────
 beacon_world(){   # inert | live
   [ -d "$PERMPEND_DIR" ] || { printf 'inert'; return; }
   [ -e "$PERMPEND_DIR/.beacon-alive" ] || { printf 'inert'; return; }
