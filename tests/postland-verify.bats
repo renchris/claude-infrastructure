@@ -1235,3 +1235,70 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
   # substring assertion as a LIVE `[ ]` — a non-final `[[ ]]` here would be errexit-exempt and dead
   [ "${output#*unbound variable}" = "$output" ]
 }
+
+# ── the retry ladder: a re-run KILLED by a signal is a CUT, never a RED ───────────────────────────
+# THE 0-GREEN DEADLOCK, second half (2026-07-31). The 124 case was already handled here; the SIGNAL
+# case was not, and it is the one that actually fired. Of 35 flake rows, 34 are `pass-on-retry` or
+# `1-of-3`, dominated by `exit 143` (x8) and `exit 137` (x3) at median loadavg 13.9 — suites killed
+# by machine pressure on a box with no quiet window. Each kill scored as a genuine failure, two on
+# one file minted a "reproducible RED", and 40 of 42 stamps went red with the last green 24h stale,
+# so deploy-live sat fail-closed and the live layer fell behind trunk.
+#
+# Distinct from the C13 cut tests above: those kill the WHOLE corpus run with ZERO `not ok`. This
+# drives the LADDER — a real `not ok` engages the retry, and the RETRY is what dies.
+stub_ladder_kill() {   # $1 = rc the retries die with; first corpus run emits a REAL not ok
+  stub_bats "ladder$1" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+n=\$(cat '$REC/ladder.n' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$REC/ladder.n'
+if [ \"\$n\" = 1 ]; then
+  printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+  exit 1
+fi
+exit $1"
+}
+
+@test "ladder: a retry killed by SIGKILL (137) is a CUT, not a RED" {
+  b="$(stub_ladder_kill 137)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                     # THE regression: this read "red"
+  [ "$(pages_n)" = "0" ]                    # and a RED page can auto-revert an innocent commit
+  run jq -r '.failing | length' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "0" ]                       # nothing may be NAMED as failing on a kill
+}
+
+@test "ladder: a retry killed by SIGTERM (143) is a CUT, not a RED" {
+  b="$(stub_ladder_kill 143)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]
+  [ "$(pages_n)" = "0" ]
+}
+
+@test "ladder: a retry that FAILS (rc 1) is still a RED — the fix must not blind the verifier" {
+  # The control that keeps the widening honest. If a kill and a genuine failure both became cuts,
+  # nothing could ever go red again and the verifier would be decorative.
+  b="$(stub_ladder_kill 1)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                     # a reproducible failure still convicts
+  run jq -r '.failing | length' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" != "0" ]                      # and it NAMES the file
+}
+
+@test "ladder: a retry that PASSES (rc 0) is a flake, not a RED (control)" {
+  b="$(stub_ladder_kill 0)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                   # 1-of-3 ⇒ flake ⇒ the tree is not convicted
+}

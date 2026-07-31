@@ -626,7 +626,7 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
   return "$rc"
 }
 classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
-  local pairs f t rc i tdir fails notok abstain
+  local pairs f t rc i tdir fails notok abstain ABSTAIN_RC arc why
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
   pairs="$(awk '/^not ok /{p=1; n=$0; sub(/^not ok [0-9]+ /,"",n); next}
                 /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH) "\t" n; p=0 } }' "$1" \
@@ -656,7 +656,7 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
   fi
   while IFS="$(printf '\t')" read -r f t; do
     [ -n "$f" ] || continue
-    fails=1; rc=1; abstain=0
+    fails=1; rc=1; abstain=0; ABSTAIN_RC=124   # RESET per file: a stale rc would misname the cut
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
       # NO ADMISSION WAIT before a retry (v1 slept here, per file, per attempt — the ~12-call ×
       # 600s budget that made a run 2h of sleeping). The ladder's premise — "a re-run under a
@@ -676,7 +676,30 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
       # "reproducible RED", and a red stamp is what blocks deploy forever. Attempt 2 is skipped
       # deliberately — under an identical bound it would abstain identically, so it buys no
       # information and costs another RETRY_TO.
-      if [ "$rc" -eq 124 ]; then abstain=1; break; fi
+      #
+      # 124 WAS NOT THE ONLY NON-VERDICT, and fixing only that half left the deadlock standing
+      # (2026-07-31). bats(1) answers with exactly TWO codes about the tree — measured, not assumed:
+      # 0 = every test passed, 1 = at least one test FAILED (1 whether one test failed or all of
+      # them). Every OTHER code therefore says the run could not be MADE, exactly as prelint's
+      # `rc != 1 ⇒ non-verdict` contract already spells out one function away:
+      #     124        our own bound fired
+      #     >128       killed by a signal — 137 SIGKILL, 143 SIGTERM (rc-128 names it)
+      #     126/127    not executable / not found
+      # The evidence this matters more than the 124 case: of 35 flake rows, 34 are `pass-on-retry`
+      # or `1-of-3`, and their signals are dominated by `exit 143` (x8) and `exit 137` (x3) at a
+      # median loadavg of 13.9 — i.e. suites SIGKILLed by machine pressure on a box that never goes
+      # quiet. Each one was scored as a genuine failure; two on one file minted a "reproducible RED";
+      # and 40 of 42 stamps went red with the last green 24h stale, so nothing could deploy. Run
+      # standalone at load 15, four of the five "consistently RED" suites pass outright.
+      #
+      # Stated plainly because it is a real widening: a suite killed by an OOM/pressure signal can no
+      # longer be convicted here. That is the correct trade — a kill is a fact about the MACHINE, and
+      # a verifier that convicts the tree for the box's load blocks deploy forever while proving
+      # nothing. Unproven is not silent: it takes the CUT path below and is retried next sweep.
+      case "$rc" in
+        0|1) ;;                                  # the only two codes that speak about the tree
+        *)   abstain=1; ABSTAIN_RC="$rc"; break ;;   # 124 / >128 signal / 126 / 127 ⇒ nothing proven
+      esac
       [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
     if [ "$fails" -ge 2 ]; then FAILING+=("$f"); [ -n "$FAILTEST" ] || FAILTEST="$t"
@@ -684,7 +707,16 @@ classify_failures() { # <tapfile> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = 
       # Not a red (nothing was proven) and not a flake (nothing was cleared) ⇒ the cut path, which
       # says exactly that and retries next sweep. FAILTEST carries the name so the cut is diagnosable.
       LADDER_UNPROVEN=1; [ -n "$FAILTEST" ] || FAILTEST="$t"
-      log "ladder UNPROVEN for $f — our own bound fired on the re-run; no verdict (cut, not red)"
+      # Name WHICH non-verdict fired. "our own bound" was accurate while 124 was the only abstaining
+      # code; now that a signal kill also abstains, a fixed message would misattribute a SIGKILL to
+      # our timeout and send the next reader hunting a slow test that was never slow.
+      arc="${ABSTAIN_RC:-124}"
+      if   [ "$arc" -eq 124 ]; then why="our own ${RETRY_TO}s bound fired on the re-run"
+      elif [ "$arc" -gt 128 ]; then why="the re-run was KILLED by signal $(( arc - 128 )) (machine pressure, not the tree)"
+      elif [ "$arc" -eq 126 ] || [ "$arc" -eq 127 ]; then why="the re-run could not execute (rc $arc)"
+      else why="the re-run exited $arc — not a tree verdict (bats says 0=pass, 1=fail)"
+      fi
+      log "ladder UNPROVEN for $f — $why; no verdict (cut, not red)"
     else record_flake "$f" "$t" "$rc"; fi
   done <<EOF
 $pairs
