@@ -167,8 +167,55 @@ Claude Code knowing. Contract to reverse: `session split` · `session send` · `
 
 1. **kitty multi-hour drift at constant layout** — the 12 h/48-pane run was destroyed by the 11:46 panic
    before its second reading. §6.1 of `terminal-for-30-panes-2026-07-31.md` remains OPEN.
-2. **cmux socket auth from outside** — `socketControlMode: "passwordOrCmux"` is NOT a valid enum; the
-   correct value is unknown, and without it external automation cannot drive cmux.
+2. ~~**cmux socket auth from outside** — `socketControlMode: "passwordOrCmux"` is NOT a valid enum; the
+   correct value is unknown, and without it external automation cannot drive cmux.~~
+   → **CLOSED 2026-07-31**, §4.2 below · `docs/research/cmux-external-control-2026-07-31.md`.
+
+### 4.2 CLOSED — cmux socket auth: `automation` (no secret) or `password` (shared secret)
+
+**External automation CAN drive cmux.** The plan had the field name right and the *value* invented:
+`grep -a -c passwordOrCmux` over the 208 MB app binary returns **0** (calibration: `socketControlMode`
+returns 24). Published schema `/properties/automation/properties/socketControlMode`:
+
+| Value | Meaning (verbatim from shipped UI strings) | External automation? |
+|---|---|---|
+| `off` | "Disable the local control socket." | no socket |
+| **`cmuxOnly`** (default) | "Only processes started inside cmux terminals can send commands." | **BLOCKED** |
+| **`automation`** | "Allow external local automation clients from this macOS user (no ancestry check)." | **YES — no secret** |
+| `password` | "Require socket authentication with a password stored in a local file." | YES — shared secret |
+| `allowAll` | "Allow any local process and user to connect with no auth. Unsafe." | **do not use** |
+
+Nine schema values but only five canonical; the other four are a lowercased legacy-alias
+normalization table. **`automation` is the right one for us** — it drops only the process-ancestry
+check, staying scoped to this macOS user, and needs no secret on disk.
+
+**Proven end-to-end from an iTerm2-parented shell** (a genuine external caller, not a cmux child):
+`cmux list-panes` · `cmux new-split right --workspace workspace:1` · `cmux send … "echo … >
+/tmp/cmux-proof.txt"` — and the send **executed**, confirmed by an independent on-disk oracle, not
+just by a zero exit. Negative control: under the untouched `cmuxOnly` default the same caller is
+refused with `Access denied - only processes started inside cmux can connect`.
+
+**⚠ Operational blocker, separately verified and NOT an auth problem:** cmux 0.64.20 **deterministically
+wedges at 100 % CPU with unbounded RSS when launched with no workspace to open** — 6/6 launches, in
+every socket mode including the untouched default. Launch as `cmux <path>` instead; that path is
+healthy. Anything automating cmux must always pass a path.
+
+**Consequence for D4 (kitty/cmux drivers only if we switch):** the cmux driver is now *unblocked* —
+external drive is a settings change, not a patch. D4 stands on its own merits; it is no longer
+blocked on an unknown.
+
+**Config safety:** `~/.config/cmux/cmux.json` was edited twice and restored from a pristine pre-edit
+copy; final sha256 **matches** the recorded pre-edit hash (independently re-verified here). The revert
+was also confirmed *behaviourally* — the app refused the external caller again — because a
+byte-identical file is not sufficient on its own: cmux imports file-managed values into UserDefaults.
+Probe password file, probe sockets and cmux's own probe-triggered backup were removed; cmux left not
+running, as found.
+
+> **Pre-existing hygiene item, surfaced not fixed:** `~/.config/cmux/cmux.20260731T204525.bak` (13:45
+> today, *before* this session) is the artifact of the earlier experiment that produced the bogus
+> value — it still contains `"socketControlMode": "passwordOrCmux"` **and a plaintext
+> `"socketPassword": "bakeoff-temp-…"`**. A throwaway local-socket password, but a plaintext secret at
+> rest in the config dir. Deleting files in the operator's config dir is the operator's call.
 3. ~~**The exact `it2` contract surface** Claude Code calls — reversed only partially.~~
    → **CLOSED 2026-07-31**, §4.3 below · `docs/research/it2-contract-surface-2026-07-31.md`.
 4. ~~**Agent View coverage** — `claude agents --json` is scoped to `CLAUDE_CONFIG_DIR`; it saw 3 of 25
