@@ -60,7 +60,7 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"com.chrisren.cc-reaper"* ]]
+  [[ "$output" == *"com.chrisren.cc-reaper"* ]] || false
   [[ "$output" == *"clean"* ]]
 }
 
@@ -94,8 +94,8 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"NO repo SSOT"* ]]
-  [[ "$output" == *"com.claude.lead-supervisor"* ]]
+  [[ "$output" == *"NO repo SSOT"* ]] || false
+  [[ "$output" == *"com.claude.lead-supervisor"* ]] || false
   [[ "$output" == *"unrecoverable"* ]]
 }
 
@@ -106,8 +106,8 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"CONTENT DRIFT"* ]]
-  [[ "$output" == *"would CHANGE live behaviour"* ]]
+  [[ "$output" == *"CONTENT DRIFT"* ]] || false
+  [[ "$output" == *"would CHANGE live behaviour"* ]] || false
   [[ "$output" == *"RunAtLoad"* ]]     # the actual diff is printed, not just the verdict
 }
 
@@ -132,7 +132,7 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"plutil -lint FAILED"* ]]
+  [[ "$output" == *"plutil -lint FAILED"* ]] || false
   [[ "$output" == *"com.claude.broken.plist"* ]]
 }
 
@@ -165,7 +165,7 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"com.reso.lr-reset-poller"* ]]
+  [[ "$output" == *"com.reso.lr-reset-poller"* ]] || false
   [[ "$output" == *"NO repo SSOT"* ]]
 }
 
@@ -189,7 +189,7 @@ EOF
 @test "an empty live dir reports VACUOUS rather than a misleading green" {
   run "$LINT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VACUOUS (nothing was verified)"* ]]
+  [[ "$output" == *"VACUOUS (nothing was verified)"* ]] || false
   [[ "$output" != *"clean"* ]]
 }
 

@@ -64,7 +64,7 @@ backups_for() { # <file>
   local i
   for ((i = 0; i < 12; i++)); do
     write_n "$SRC_A" 1
-    [ "$i" -lt 3 ] && write_n "$SRC_B" 1
+    [ "$i" -lt 3 ] && write_n "$SRC_B" 1 || false
   done
   [ "$(backups_for "$SRC_A")" -eq 10 ]
   [ "$(backups_for "$SRC_B")" -eq 3 ]

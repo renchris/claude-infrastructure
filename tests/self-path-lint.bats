@@ -171,7 +171,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"'
   printf '#!/bin/bash\nexit 2\n' > "$stub/awk"; chmod +x "$stub/awk"
   PATH="$stub:$PATH" CC_SELFPATH_ALLOWLIST="" run bash "$LINT" "$FIX/killed"
   [ "$status" -eq 2 ] || { echo "expected the non-verdict rc 2, got $status: $output"; false; }
-  printf '%s' "$output" | grep -q 'SELF-PATH' && { echo "an unrunnable detector fabricated a finding: $output"; false; }
+  printf '%s' "$output" | grep -q 'SELF-PATH' && { echo "an unrunnable detector fabricated a finding: $output"; false; } || false
   printf '%s' "$output" | grep -q 'UNUSABLE' || { echo "the non-verdict was not announced: $output"; false; }
 }
 

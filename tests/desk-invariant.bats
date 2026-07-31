@@ -136,7 +136,7 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   run "$DI" --once
   [ "$(disp)" = no-desk ]
   [ -f "$C/stubs/fire.log" ]                       # the fire still happens (the 41h defect stays fixed)
-  ! grep -q -- '--window' "$C/stubs/fire.log"      # …and it does not mint a window
+  ! grep -q -- '--window' "$C/stubs/fire.log" || false # …and it does not mint a window
   grep -q -- '--prompt-file' "$C/stubs/fire.log"
 }
 

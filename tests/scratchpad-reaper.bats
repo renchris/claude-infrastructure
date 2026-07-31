@@ -121,7 +121,7 @@ exists() { [ -d "$CC_SCRATCHPAD_ROOT/-Users-x-proj/$1" ]; }
   mk_empty_dir "$SID_EMPTY"
   run bash "$REAPER" --apply
   [ "$status" -eq 0 ]
-  ! exists "$SID_EMPTY"
+  ! exists "$SID_EMPTY" || false
   echo "$output" | grep -q "empty=1"
 }
 
