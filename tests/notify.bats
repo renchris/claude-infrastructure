@@ -10,6 +10,11 @@
 # fail-open path — a hook that renders nothing is worse than the anonymous alert it replaced.
 
 setup() {
+  # HOME is fixtured even though every path this suite exercises is already pinned by an explicit
+  # seam: the hook resolves the account label as ${CLAUDE_CONFIG_DIR:-$HOME/.claude}, so an
+  # unfixtured HOME is one deleted export away from writing the operator's real config dir. The
+  # ratchet is structural on purpose — it must not wait for the day the fallback is taken.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   H="$REPO/hooks/notify.sh"
   export CC_NOTIFY_DIR="$BATS_TEST_TMPDIR/nty"
