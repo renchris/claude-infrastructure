@@ -17,6 +17,16 @@
 #   differ materially the comparison is not evidence, and it says so rather than printing a number
 #   that reads like a result.
 #
+#   THE THIRD TRAP. This script's verdict certifies stability WITHIN one run only. Comparing a
+#   number from one run against a number from an earlier run is invalid: two runs 20 minutes apart
+#   read 163 ms and 216 ms for the SAME chain purely because load moved 16.4 -> 20.4. To compare a
+#   change against its baseline, INTERLEAVE both sides inside a single run so load hits them
+#   equally -- that is how the 18 ms/call cat-fork saving (c957df9e) was established.
+#
+#   THE FOURTH TRAP. Run this under bash, not zsh. zsh does not word-split unquoted `$VAR`, so
+#   `for m in $MEMBERS` iterates ONCE over the whole string, every hook path is invalid, and the
+#   loop reports ~0 ms -- a vacuous pass that looks like a spectacular win.
+#
 # Usage:  hook-chain-bench.sh [reps]        default 11
 #         hook-chain-bench.sh --marginal    just the artifact demonstration
 
@@ -68,7 +78,7 @@ fi
 echo "── the real chain: serial (today) vs collapsed ──"
 MEMBERS="curl-gate.py validate-bash.sh git-worktree-guard.sh keychain-guard.sh rm-safe-allowlist.sh ship-rail-push-allow.sh"
 bench "SERIAL 6 guards (today's settings.json)" \
-      "for m in $MEMBERS; do '$REPO/hooks/'\$m < '$PF'; done"
+      "for m in $MEMBERS; do cat '$PF' | '$REPO/hooks/'\$m; done"
 bench "DISPATCHER exec mode" \
       "env CC_HOOK_CHAIN_DIR='$REPO/config/hook-chains.d' CC_HOOK_CHAIN_MEMBER_DIR='$REPO/hooks' CC_HOOK_CHAIN_MODE=exec '$REPO/hooks/hook-chain.sh' pretooluse-bash < '$PF'"
 bench "DISPATCHER source mode" \
@@ -76,9 +86,9 @@ bench "DISPATCHER source mode" \
 echo
 
 echo "── per-guard cost, and the curl-gate finding ──"
-for m in $MEMBERS; do bench "$m" "'$REPO/hooks/$m' < '$PF'"; done
+for m in $MEMBERS; do bench "$m" "cat '$PF' | '$REPO/hooks/$m'"; done
 bench "chain WITHOUT curl-gate.py (5 guards)" \
-      "for m in validate-bash.sh git-worktree-guard.sh keychain-guard.sh rm-safe-allowlist.sh ship-rail-push-allow.sh; do '$REPO/hooks/'\$m < '$PF'; done"
+      "for m in validate-bash.sh git-worktree-guard.sh keychain-guard.sh rm-safe-allowlist.sh ship-rail-push-allow.sh; do cat '$PF' | '$REPO/hooks/'\$m; done"
 echo "  ^ curl-gate.py self-scopes to reso-management-app (curl-gate.py:409) but is registered"
 echo "    GLOBALLY in settings.json — outside that one project every ms above is unconditional waste."
 echo
