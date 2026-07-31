@@ -405,6 +405,29 @@ both real work, both outside this rebuild's frozen scope (zero live reaps · ≤
 neither is blocked by anything here. They are recorded as the A11 residue rather than quietly folded
 into a criterion re-write.
 
+### R5 bound sizing — measured IN-BAND, 2026-07-31
+
+A bound sized from a foreground bench is a permanent non-verdict once launchd's `ProcessType
+Background` taxes the process, so these were measured under the plist's actual band
+(`nice -n 5 taskpolicy -c background`, band verified by `PRI=4`, not the default 31) at loadavg ~9-12:
+
+| Call | Foreground | **In-band worst of 5** | Bound | Headroom |
+|---|---|---|---|---|
+| `cc-reconcile` | 1.40s | **9.25s** | 60s | **6.5×** |
+| `cc-classify --all --json` | 2.13s | 0.02s (warm) / 2.13s cold | 90s | **43×** |
+| `cc-backlog reap` | 2ms | — | 60s | ~30,000× |
+| `cc-inbox-guard sweep` | 2ms | — | 60s | ~30,000× |
+
+The band tax on `cc-reconcile` is ~4-6.6× — real, and exactly why the foreground number alone would
+have been the wrong basis. `cc-reconcile` is the tightest at 6.5×, which is the right place for it:
+its own internal it2 shim self-bounds at 30s, so the 60s outer bound sits at **2× its worst
+*internal* bound** and therefore fires only when that inner bound has itself failed. That is the case
+worth detecting, and it is the shape the whole requirement exists for.
+
+Verified during measurement that the in-band `cc-classify` run was not a fast *failure* masquerading
+as a fast success: it returned the same 6 rows / ~2,767 bytes as the foreground control. A 300×
+speed-up is a reason to check the output, not to record the number.
+
 ---
 
 ## §8 Bootstrap & rollout
