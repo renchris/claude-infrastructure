@@ -1,0 +1,9 @@
+# PreToolUse / matcher:Bash — collapsed from 6 settings.json entries (§8.5.4, §12.5).
+# ORDER IS THE SETTINGS.JSON ORDER. Adding a member here without adding it to settings.json's
+# replaced set (or vice versa) is drift — tests/hook-chain-live-parity.bats pins the two together.
+curl-gate.py
+validate-bash.sh
+git-worktree-guard.sh
+keychain-guard.sh
+rm-safe-allowlist.sh
+ship-rail-push-allow.sh
