@@ -31,7 +31,16 @@
 #         hook-chain-bench.sh --marginal    just the artifact demonstration
 
 set -uo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve $0 through its symlinks BEFORE deriving the root: ~/.claude/scripts/ are per-file
+# symlinks into the checkout, so `dirname "$0"/..` through the LIVE path is ~/.claude — no tests/,
+# no docs/, no .git — and this script would silently benchmark the wrong tree. Canonical loop from
+# scripts/ship-land.sh `_resolve_self` (no `readlink -f`: GNU-only, this box is BSD).
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _d="$(cd "$(dirname "$_self")" && pwd)"; _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
+done
+REPO="$(cd "$(dirname "$_self")/.." && pwd)"
 REPS="${1:-11}"
 [ "$REPS" = "--marginal" ] && REPS=15
 
