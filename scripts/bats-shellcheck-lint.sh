@@ -70,11 +70,39 @@
 # it can never rot unseen. A newly INTRODUCED abort blocks by the ordinary line rule, because
 # SC1072/SC1073 are reported at the offending line.
 #
-# Exit: 0 = clean · 1 = violation · 2 = bad usage / no scannable file / no shellcheck (LOUD, never
-# silent-green — a lint that cannot run must not look like a lint that found nothing).
+# MODES — how the blocking set is decided. The invariant across all of them: NEVER GUESS SILENTLY.
+#   CC_BATS_SC_OWN=<lines>  the gate path — ship-land and task-quality-gate both always set it
+#                           (to "" when a range will not resolve), so they never reach the others.
+#   --range <git-range>     a verdict on exactly that range; derives the own-set via own_lines.
+#   --census                the whole-corpus report, attributed to NOBODY.
+#   <no args>               infers `<trunk>...HEAD` and SAYS SO; refuses (exit 2) if it cannot.
+#
+# THE BARE RUN, and why it needed fixing. `bats-shellcheck-lint.sh` with no arguments used to run a
+# whole-corpus census WORDED AS A VERDICT ON YOUR CHANGE: "171 finding(s) above are on lines THIS
+# CHANGE WROTE", naming suites the working tree had never touched. Proven a misattribution rather
+# than a real red — with the session's only edit stashed the output was BYTE-IDENTICAL, while the
+# same lint own-scoped by ship-land correctly said "blocking on 18 changed line(s)". No gate was
+# ever wrong, because no gate takes this path. But bare IS the natural manual/agent invocation, and
+# a verdict that reads "you broke 171 lines" every single time is an alarm that always fires — it
+# carries the same zero bits as an alarm that cannot fire, and it trains its readers to skip the
+# one line that would have named a real regression.
+# The fix is both halves of the obvious pair, because either alone leaves a hole:
+#   • a DEFAULT RANGE, so the natural invocation gives the same answer the gate gives — and it is
+#     announced, never silent, since an inferred frame a reader cannot see is indistinguishable
+#     from a stated fact (and $ROOT may be the symlink target, i.e. another checkout entirely);
+#   • a REFUSAL TO GUESS when no trunk resolves (not a work tree, no origin/HEAD|main|master),
+#     because the alternative is inventing a change-set — the same lie in a quieter voice.
+# The census is kept, since the corpus debt is worth reading, but it is now opt-in and says what it
+# is. Its rc is deliberately UNCHANGED: a census of a dirty corpus is honestly non-zero, and the
+# defect was never the number, it was the sentence.
+#
+# Exit: 0 = clean · 1 = violation · 2 = bad usage / no scannable file / no shellcheck / no way to
+# tell which lines are yours (LOUD, never silent-green — a lint that cannot run must not look like
+# a lint that found nothing, and one that cannot tell whose line it is must not name a culprit).
 #
 # Env seams: CC_BATS_SC_OWN scopes which findings may BLOCK ("path:line" per line; see OWN-SCOPE) ·
-# CC_BATS_SC_EXCLUDE overrides the exclude set (selftest only).
+# CC_BATS_SC_EXCLUDE overrides the exclude set (selftest only) · CC_BATS_SC_TRUNK overrides the
+# trunk ref the bare run infers from.
 set -uo pipefail
 
 SELF="$0"
@@ -94,10 +122,16 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 EXCLUDE_DEFAULT="SC2030,SC2031,SC2329,SC2016,SC2314,SC2315,SC1091"
 
 # OWN-SCOPE — the same three-state contract as the sibling ratchets, at line granularity. States:
-# own-set ABSENT ⇒ strict, every finding blocks (a bare hand-run reports the whole truth) ·
+# own-set ABSENT ⇒ CENSUS: every finding is reported and counted, attributed to NOBODY ·
 # SET-BUT-EMPTY ⇒ "I wrote no line" ⇒ nothing blocks · SET ⇒ only findings on those lines block.
 # `${VAR:-}` cannot express set-but-empty, so presence rides on argument count here and on
 # `${CC_BATS_SC_OWN+set}` at the entry point.
+#
+# The ABSENT state reports exactly what it always did and returns exactly what it always did; what
+# it may no longer do is CALL THOSE FINDINGS YOURS. "Census" and "a verdict on your change" are two
+# different questions, and answering the first in the vocabulary of the second was the whole defect
+# (see THE BARE RUN above). The distinction lives in the banner, not the rc, so every existing
+# caller and every existing proof of this function's discrimination is untouched.
 in_own() {  # $1=path:line · $2=own-set text · $3=1 if an own-set was supplied at all
   [ "${3:-0}" = "1" ] || return 0
   [ -n "$2" ] || return 1
@@ -196,11 +230,22 @@ EOF
   [ "$abort_other" -eq 0 ] || echo "bats-shellcheck-lint: $abort_other file(s) UNANALYZABLE but not in your diff — advisory."
 
   if [ "$bad" -gt 0 ]; then
-    echo "bats-shellcheck-lint: ⛔ $bad finding(s) above are on lines THIS CHANGE WROTE."
-    echo "  Fix the line, or — if the construct is deliberate — annotate it narrowly:"
-    echo "      # shellcheck disable=SCnnnn   (one code, on the line above)"
-    echo "  This gate had never run on a .bats file before, so the $other pre-existing finding(s) are"
-    echo "  advisory and can only shrink; only lines you wrote block."
+    if [ "$own_scoped" = "1" ]; then
+      echo "bats-shellcheck-lint: ⛔ $bad finding(s) above are on lines THIS CHANGE WROTE."
+      echo "  Fix the line, or — if the construct is deliberate — annotate it narrowly:"
+      echo "      # shellcheck disable=SCnnnn   (one code, on the line above)"
+      echo "  This gate had never run on a .bats file before, so the $other pre-existing finding(s) are"
+      echo "  advisory and can only shrink; only lines you wrote block."
+    else
+      # CENSUS. No own-set was supplied, so not one of these findings is attributable to a caller —
+      # nearly all of them are inherited debt this lint was built to grandfather. The ⛔ is dropped
+      # with the claim: nothing here blocks anyone, and a glyph that means "you are stopped" on a
+      # line that stops nobody is the same misattribution wearing punctuation.
+      echo "bats-shellcheck-lint: $bad finding(s) above — CENSUS over $seen suite(s), attributed to NOBODY."
+      echo "  No change-set was supplied, so every finding in scope is listed, inherited debt included."
+      echo "  For a verdict on YOUR change instead, scope it to a range:"
+      echo "      bats-shellcheck-lint.sh --range <trunk>...HEAD   (or run it with no arguments)"
+    fi
   fi
   if [ "$abort_own" -gt 0 ]; then
     echo "bats-shellcheck-lint: ⛔ $abort_own file(s) above abort shellcheck, so NOTHING in them is checked."
@@ -340,12 +385,52 @@ if [ "${1:-}" = "--selftest" ]; then
     [ "${ab:-0}" -eq 0 ] || { echo "SELFTEST FAIL: $ab suite(s) in tests/ open a comment with the tool's name — shellcheck aborts on them"; fails=1; }
   fi
 
+  # ── CENSUS vs VERDICT: the misattribution this lint shipped with ─────────────────────────────
+  # A census must never speak in the vocabulary of a verdict on a change. Asserted in BOTH
+  # directions, because "the phrase is absent" passes just as well over an empty string — the
+  # own-scoped control proves the phrase is still emitted where it is TRUE.
+  census_out="$(lint_files "$EXCLUDE_DEFAULT" "" 0 "$d/real.bats" 2>&1)"
+  own_out="$(lint_files "$EXCLUDE_DEFAULT" "$d/real.bats:3" 1 "$d/real.bats" 2>&1)"
+  case "$census_out" in
+    *'THIS CHANGE WROTE'*) echo "SELFTEST FAIL: a CENSUS (no own-set) blamed its findings on the caller's change"; fails=1 ;;
+  esac
+  case "$census_out" in
+    *CENSUS*) ;;
+    *) echo "SELFTEST FAIL: a census did not name itself one — a reader cannot tell it from a verdict"; fails=1 ;;
+  esac
+  case "$own_out" in
+    *'THIS CHANGE WROTE'*) ;;
+    *) echo "SELFTEST FAIL: a real own-scoped verdict lost its attribution — the control cannot fail the way it must"; fails=1 ;;
+  esac
+
+  # ── REFUSING TO GUESS: a bare run that cannot derive a change-set must not invent one ─────────
+  # Driven through the real ENTRY POINT (a copy of this script), because the refusal lives there and
+  # $ROOT is derived from $0 — a fixture tree is the only way to reach it.
+  mkrepo() {  # $1=name → an isolated tree holding this script and one dirty suite
+    mkdir -p "$d/$1/scripts" "$d/$1/tests"
+    cp "$SELF" "$d/$1/scripts/lint.sh"; chmod +x "$d/$1/scripts/lint.sh"
+    printf '#!/usr/bin/env bats\n@test "x" {\n  foo= bar\n}\n' > "$d/$1/tests/x.bats"
+  }
+  if git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Not a skip: a control that cannot be built is a control that cannot fail, and this one is
+    # asserting a REFUSAL — the failure mode it guards is a confident verdict, i.e. a silent pass.
+    echo "SELFTEST FAIL: \$TMPDIR is inside a git work tree, so the no-git control cannot be built"; fails=1
+  else
+    mkrepo nogit
+    ( cd "$d/nogit" && env -u CC_BATS_SC_OWN ./scripts/lint.sh >/dev/null 2>&1 ); rc=$?
+    [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: a bare run outside a git work tree did not refuse (rc $rc, expected 2)"; fails=1; }
+  fi
+  mkrepo notrunk
+  git -C "$d/notrunk" init -q >/dev/null 2>&1
+  ( cd "$d/notrunk" && env -u CC_BATS_SC_OWN ./scripts/lint.sh >/dev/null 2>&1 ); rc=$?
+  [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: a bare run with no resolvable trunk did not refuse (rc $rc, expected 2)"; fails=1; }
+
   # nothing scannable is a NON-VERDICT (2), never a false all-clear
   lint_files "$EXCLUDE_DEFAULT" "" 0 "$d/absent.bats" >/dev/null 2>&1
   [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: an absent file did not exit 2 (LOUD)"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "bats-shellcheck-lint --selftest: 14/14 — RED on a finding on an own line, on an ABSENT own-set, and on an UNANALYZABLE file (in-own or strict); GREEN on a clean suite, on a finding outside the own-set, on a set-empty own-set, on an unanalyzable file outside it, and on every excluded class; the abort control proves its real SC1007 goes UNSEEN and the same defect IS seen without the prose comment; own_lines emits only path:line; tests/ has 0 unanalyzable suites; LOUD on an absent file."
+    echo "bats-shellcheck-lint --selftest: 19/19 — RED on a finding on an own line, on an ABSENT own-set, and on an UNANALYZABLE file (in-own or census); GREEN on a clean suite, on a finding outside the own-set, on a set-empty own-set, on an unanalyzable file outside it, and on every excluded class; the abort control proves its real SC1007 goes UNSEEN and the same defect IS seen without the prose comment; a CENSUS never says THIS CHANGE WROTE and names itself, while a real own-scoped verdict still does; a bare run REFUSES (exit 2) both outside a work tree and with no resolvable trunk, rather than inventing a change-set; own_lines emits only path:line; tests/ has 0 unanalyzable suites; LOUD on an absent file."
     exit 0
   fi
   echo "bats-shellcheck-lint --selftest: FAILED — the lint does not discriminate."
@@ -357,10 +442,122 @@ command -v shellcheck >/dev/null 2>&1 || {
   exit 2
 }
 
+# ── MODE selection — see MODES in the header. Flags first, so a target may never be mistaken for
+# one and an unknown option is a LOUD usage error rather than a silently-scanned nonexistent path.
+MODE=""        # "" = decide from CC_BATS_SC_OWN below · "range" · "census"
+RANGE=""
+INFERRED=0
+usage_die() {
+  echo "usage: $0 [--census | --range <git-range>] [target...]" >&2
+  echo "       $0 --own-lines <git-range> | --selftest" >&2
+  exit 2
+}
+mode_clash() {  # asking two different questions at once has no single right answer — say so
+  [ -z "$MODE" ] || [ "$MODE" = "$1" ] || {
+    echo "bats-shellcheck-lint: --census and --range ask different questions; pick one" >&2
+    usage_die
+  }
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --census)  mode_clash census; MODE="census"; shift ;;
+    --range)   mode_clash range; MODE="range"; RANGE="${2:-}"; [ -n "$RANGE" ] || usage_die; shift 2 ;;
+    --range=*) mode_clash range; MODE="range"; RANGE="${1#--range=}"; [ -n "$RANGE" ] || usage_die; shift ;;
+    --)        shift; break ;;
+    -*)        echo "bats-shellcheck-lint: unknown option '$1'" >&2; usage_die ;;
+    *)         break ;;
+  esac
+done
+
+# ── THE BARE RUN: infer a range, or REFUSE — never invent a change-set ────────────────────────────
+# Reached only with no mode flag, no target and no own-set, i.e. exactly the hand-run that used to
+# report the corpus as the caller's own work. Three-dot deliberately: `A...B` diffs from the MERGE
+# BASE, so a trunk that moved since the branch point cannot attribute a sibling's commits to this
+# branch (the RANGE CONTRACT above measured that at 26 suites for a 4-suite branch). The header
+# already prescribed the three-dot form for a hand-run; it simply had no way to act on it.
+if [ -z "$MODE" ] && [ "$#" -eq 0 ] && [ -z "${CC_BATS_SC_OWN+set}" ]; then
+  refuse_to_guess() {
+    echo "bats-shellcheck-lint: ⛔ no range given and $1, so there is no way to tell which lines" >&2
+    echo "  are yours. REFUSING TO GUESS — naming a culprit here is how this lint used to report" >&2
+    echo "  the whole corpus as your change. Pick the question you actually meant:" >&2
+    echo "      $0 --census              # report every finding, attributed to nobody" >&2
+    echo "      $0 --range <A>...<B>     # a verdict on exactly that range" >&2
+    exit 2
+  }
+  git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || refuse_to_guess "$ROOT is not a git work tree"
+  _trunk="${CC_BATS_SC_TRUNK:-}"
+  if [ -z "$_trunk" ]; then
+    # The repo's standard ladder: origin/HEAD → origin/main → origin/master. Each rung is VERIFIED
+    # before it is accepted, and that is not belt-and-braces: `rev-parse --abbrev-ref origin/HEAD`
+    # prints the literal string "origin/HEAD" on STDOUT when the ref does not exist (the error goes
+    # to stderr, and the rc is swallowed by the `|| true` that keeps `set -o pipefail` happy). So the
+    # naive ladder captures a non-empty non-ref, short-circuits past origin/main, and every repo
+    # without an origin/HEAD refuses. Caught by the fixture repo in tests/, which has exactly that
+    # shape. (scripts/wrap-ledger.sh:55 carries the same pattern — noted, out of scope here.)
+    if git -C "$ROOT" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
+      _trunk="$(git -C "$ROOT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || true)"
+    fi
+    [ -n "$_trunk" ] || { git -C "$ROOT" rev-parse --verify -q origin/main   >/dev/null 2>&1 && _trunk="origin/main"; }
+    [ -n "$_trunk" ] || { git -C "$ROOT" rev-parse --verify -q origin/master >/dev/null 2>&1 && _trunk="origin/master"; }
+  fi
+  [ -n "$_trunk" ] && git -C "$ROOT" rev-parse --verify -q "$_trunk" >/dev/null 2>&1 \
+    || refuse_to_guess "no trunk ref resolves (tried \$CC_BATS_SC_TRUNK, origin/HEAD, origin/main, origin/master)"
+  MODE="range"; RANGE="$_trunk...HEAD"; INFERRED=1
+fi
+
+_had_targets=0
 if [ "$#" -gt 0 ]; then
-  targets=("$@")
+  targets=("$@"); _had_targets=1
 else
   targets=("$ROOT/tests")
+fi
+
+# ── PATH FORM: the own-set and the scan must speak the same dialect ───────────────────────────────
+# own_lines emits REPO-ROOT-RELATIVE "tests/f.bats:N". If the scan holds absolute paths, the own-set
+# matches NONE of them and the run exits a confident, silent "clean — no scanned suite carries a
+# line from this change" — a non-verdict wearing a clean verdict's clothes, and the exact failure
+# class this whole change exists to remove. Verified reachable: `--range HEAD~1..HEAD "$PWD/tests"`
+# printed precisely that. So range mode moves to the git root and makes every target RELATIVE to it,
+# after which collect_bats yields repo-relative paths by construction and no string surgery on the
+# results is needed. Census mode needs none of this: with no own-set there is nothing to match.
+#
+# Resolved PHYSICALLY on both sides, because a string prefix-strip is not sound here: on macOS
+# $TMPDIR is /var/folders/… while `git rev-parse --show-toplevel` reports /private/var/folders/…,
+# so the two spellings of one directory share no prefix and the strip silently no-ops (caught by the
+# tests/ fixture repo, which lives under exactly that symlink).
+#
+# The repository in question is $ROOT's, never the caller's cwd: that is what `targets` already
+# defaults to and what the trunk inference above already resolves against (`git -C "$ROOT"`), and a
+# lint that scanned one checkout while diffing another would be the same misattribution one level up.
+phys() {  # absolute path → physical form (dirs directly; files via their dir, which is what matters)
+  if [ -d "$1" ]; then (cd "$1" 2>/dev/null && pwd -P)
+  else printf '%s/%s' "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" "$(basename "$1")"; fi
+}
+if [ "$MODE" = "range" ]; then
+  git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "bats-shellcheck-lint: ⛔ --range needs a git work tree ($ROOT is not one) — NOT a clean verdict" >&2
+    exit 2
+  }
+  GITROOT="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$GITROOT" ] || { echo "bats-shellcheck-lint: ⛔ cannot resolve the git root of $ROOT — NOT a clean verdict" >&2; exit 2; }
+  GITROOT="$(phys "$GITROOT")"
+  if [ "$_had_targets" = "0" ]; then
+    targets=("tests")                     # the default, relative to the root we are about to enter
+  else
+    _rel=()
+    for _t in "${targets[@]}"; do
+      case "$_t" in /*) _p="$(phys "$_t")" ;; *) _p="$(phys "$PWD/$_t")" ;; esac
+      case "$_p" in
+        "$GITROOT"/*) _rel+=("${_p#"$GITROOT"/}") ;;
+        # Outside the tree being diffed: keep it, and let the own-set simply not match — that is a
+        # genuine miss, not a dialect mismatch, and the existing message says exactly that.
+        *) _rel+=("$_t") ;;
+      esac
+    done
+    targets=("${_rel[@]}")
+  fi
+  cd "$GITROOT" || { echo "bats-shellcheck-lint: ⛔ cannot cd to $GITROOT — NOT a clean verdict" >&2; exit 2; }
 fi
 
 # Built as a real ARRAY, and emptiness is a NON-VERDICT: a mistyped path that printed nothing and
@@ -377,8 +574,32 @@ if [ "${#batsfiles[@]}" -eq 0 ]; then
   exit 2
 fi
 
-if [ -z "${CC_BATS_SC_OWN+set}" ]; then
-  # No own-set: a bare hand-run, and a CENSUS is the point — scan everything, strict.
+# ── --range (explicit or inferred): derive the own-set from the ONE tested parser ─────────────────
+# A bogus range must be LOUD. `git rev-parse --verify` cannot validate a RANGE (it returns 1 for
+# every one of them, valid or not — measured); `git diff --quiet <range> --` answers 0/1 for a range
+# git can resolve and 128 for one it cannot. Without this check a typo would yield an empty own-set,
+# which means "I wrote no line" ⇒ a confident green over an unlinted tree.
+if [ "$MODE" = "range" ]; then
+  # cwd is $GITROOT here (moved above), so own_lines and this validation both speak repo-relative.
+  git diff --quiet "$RANGE" -- >/dev/null 2>&1
+  [ "$?" -le 1 ] || {
+    echo "bats-shellcheck-lint: ⛔ '$RANGE' is not a range git can resolve — NOT a clean verdict" >&2
+    exit 2
+  }
+  CC_BATS_SC_OWN="$(own_lines "$RANGE")"
+  if [ "$INFERRED" = "1" ]; then
+    # Announced, never silent: the frame this verdict is computed in is not visible from the command
+    # the reader typed, and $ROOT may be a DIFFERENT checkout (everything under ~/.claude/scripts is
+    # a symlink into one), so the root is named too.
+    _n="$(printf '%s' "$CC_BATS_SC_OWN" | grep -c . 2>/dev/null || true)"
+    echo "bats-shellcheck-lint: no range given — inferred own-scope ${RANGE} in ${PWD} (${_n:-0} changed .bats line(s)); --census reports the whole corpus."
+  fi
+fi
+
+if [ "$MODE" = "census" ] || { [ "$MODE" != "range" ] && [ -z "${CC_BATS_SC_OWN+set}" ]; }; then
+  # CENSUS — no change-set exists, so every finding is reported and NONE is attributed. Reached by
+  # --census, or by naming a target with no own-set (e.g. `… tests/foo.bats`, "lint this file"). The
+  # bare no-target run no longer lands here: it infers a range above, or refuses.
   lint_files "${CC_BATS_SC_EXCLUDE-$EXCLUDE_DEFAULT}" "" 0 "${batsfiles[@]}"
   exit "$?"
 fi
@@ -394,6 +615,9 @@ fi
 # typically 1-3 files and sub-second, and the RULE is unchanged.
 if [ -z "$CC_BATS_SC_OWN" ]; then
   echo "bats-shellcheck-lint: clean — this change writes no .bats line, so nothing can block."
+  # The common bare-run outcome on a branch that touched no suite. Say what this green does NOT
+  # cover, so it is never read as "the corpus is clean" — it is scoped to lines you wrote.
+  [ "$INFERRED" = "1" ] && echo "  Inherited corpus debt is out of scope here by design — run --census to see it."
   exit 0
 fi
 
