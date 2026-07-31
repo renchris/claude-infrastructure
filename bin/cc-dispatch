@@ -154,9 +154,18 @@ PROJECT="$(basename "$PROJECT")"
 # THE DECISION — one multi-project pass, NOT a second launchd instance per project. Four reasons,
 # each independently sufficient:
 #   1. THE SINGLETON LOCK IS SHARED. LOCK_DIR is `dirname($IDL)/dispatch.lock` — one path for every
-#      instance. N instances mutually record {skipped, pass-in-flight}, so coverage becomes
-#      INTERMITTENT BY CONSTRUCTION. Giving each its own IDL to dodge that fragments thrash_map (the
-#      S7 fairness key reads the IDL) and breaks dispatch-acceptance.sh's single-IDL group_by(.pass).
+#      instance, so N instances SERIALISE. Giving each its own IDL to dodge that fragments
+#      thrash_map (the S7 fairness key reads the IDL) and breaks dispatch-acceptance.sh's single-IDL
+#      group_by(.pass).
+#      [AMENDED 2026-07-31, item de5e3e24be8f] This clause used to read "N instances mutually record
+#      {skipped, pass-in-flight}, so coverage becomes INTERMITTENT BY CONSTRUCTION". That mechanism
+#      is GONE: the lock now gates admission only, so N instances would each DECIDE about the whole
+#      set every pass and coverage would not be intermittent at all. The conclusion is unchanged and
+#      the cost is simply a different one — N instances would write N duplicate decision journals per
+#      cadence over one shared IDL, N-folding its growth and making `group_by(.pass)` report N passes
+#      that all cover the same items. Reasons 2-4 below are untouched and each remains independently
+#      sufficient. Recorded rather than silently rewritten: a fix that falsifies a neighbouring
+#      argument owes that argument an amendment, not a quiet deletion.
 #   2. THE FLEET CEILING WOULD MULTIPLY. live_workers is the GLOBAL `claimed` fold, so N instances
 #      each compute free_slots = CEILING − live independently and can each admit that many in the
 #      same window → up to N×CEILING concurrent workers against cc-wave-plan's total concurrency of
