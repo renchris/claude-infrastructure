@@ -706,21 +706,31 @@ STUB
 }
 
 # ── M4: the label is DECLARED, so its inertness is READABLE (ACCOUNT_ROUTING_V2) ─────────────────
-# The poller has existed and been tested since 2026-07-26 and has never been scheduled — two log
+# The poller existed and was tested from 2026-07-26 and went unscheduled for four days — two log
 # lines all-time. Nothing reported that, because launchd/fleet.manifest never declared the label, so
 # bin/cc-fleet never evaluated it. And it never COULD have been caught by the three-way coverage
 # lint: that loop globs launchd/*.plist, and this plist lives in launchd/staged/ on purpose
 # (install.sh globs launchd/*.plist, so a plist there would let a routine install turn on
 # credentials automation). Existence evidence comes from the DECLARATION, never the subject.
+#
+# The operator activated it on 2026-07-30 and it has been polling hourly since, so the assertions
+# below are about the SHAPE of the declaration — sensor, cadence, ok_exits — and deliberately not
+# about which side of the activation the box is on.
 
 @test "M4: com.claude.relogin is declared in the fleet manifest, with a per-tick sensor and ok_exits 0,5" {
   M="$REPO/launchd/fleet.manifest"
   row="$(grep '^com\.claude\.relogin *|' "$M")"
   [ -n "$row" ] || false
   f() { printf '%s' "$row" | awk -F'|' -v i="$1" '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i); print $i}'; }
-  # `staged`, from disk truth: neither installed nor loaded ⇒ exactly ONE UNDECIDED row, which is
-  # "declared, decision pending" — not a daemon-fault row, because nothing is broken.
-  [ "$(f 2)" = staged ] || false
+  # expect must be EVALUATED — `staged` (declared, decision pending ⇒ one UNDECIDED row) or `run`
+  # (the full S1-S6 state function). NOT pinned to a single value: this field tracks an operator
+  # decision, and `= staged` was a real assertion for the four days before the operator activated
+  # the job on 2026-07-30 and a false one every day after. A test that pins the pre-activation
+  # value goes RED precisely when someone does the thing the row is ASKING them to do, which
+  # inverts it from a ratchet into a reason not to act. What M4 actually needs is that the label
+  # is under evaluation at all, so `retired` — never a row, back to unreadable inertness — is the
+  # one value still excluded here.
+  case "$(f 2)" in run|staged) ;; *) echo "expect '$(f 2)' leaves M4 unevaluated"; return 1 ;; esac
   [ "$(f 3)" = 3600 ] || false            # = the plist's StartInterval
   [ "$(f 5)" = 7 ] || false               # owner row
   # evidence must be the PER-TICK artifact, never `auto`: the plist's StandardOutPath is a
