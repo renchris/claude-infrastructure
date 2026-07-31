@@ -784,16 +784,25 @@ plist_parity_rows() { # → one JSON object per line (possibly none)
   for f in "$LIVE_AGENTS_DIR"/com.claude.*.plist; do
     [ -f "$f" ] || continue
     b="${f##*/}"; label="${b%.plist}"
+    # The SSOT may be committed at launchd/<name> OR launchd/staged/<name>. Both are COMMITTED; the
+    # staged/ one is merely withheld from installation, so neither "never committed" nor the `cp into
+    # launchd/` remedy is true of it. That remedy was actively harmful: install.sh:452 globs
+    # launchd/*.plist and bootstraps each one, so pasting it would make a routine install
+    # auto-activate whatever was staged — for com.claude.relogin, credentials automation, which is
+    # precisely what staging it prevents (8a1e49ab). Resolving staged/ HERE, on the live side only,
+    # keeps the REPO-side glob below non-recursive, so a staged plist is still never REPO-ONLY.
+    ssot="$repo/$b"
+    [ -f "$ssot" ] || ssot="$repo/staged/$b"
     # Mirrors activation-watch.sh's `.local` convention: an adjacent <name>.plist.local declares the
     # file intentionally live-only, so a legitimately un-committable plist does not train
     # alarm-fatigue on this channel. It exempts LIVE-ONLY only — drift still reports.
-    if [ ! -f "$repo/$b" ]; then
+    if [ ! -f "$ssot" ]; then
       [ -f "$f.local" ] && continue
       printf '{"kind":"plist-parity","state":"LIVE-ONLY","detail":"installed but never committed to launchd/","subject":"%s","recover_cmd":"cp %s %s   # then commit it","ts":%s}\n' \
         "$label" "$f" "$repo/$b" "$now"
-    elif ! cmp -s "$f" "$repo/$b"; then
+    elif ! cmp -s "$f" "$ssot"; then
       printf '{"kind":"plist-parity","state":"CONTENT-DRIFT","detail":"live bytes differ from the committed SSOT","subject":"%s","recover_cmd":"diff %s %s","ts":%s}\n' \
-        "$label" "$repo/$b" "$f" "$now"
+        "$label" "$ssot" "$f" "$now"
     fi
   done
   # REPO side. Only the top-level launchd/*.plist are declared installable — launchd/staged/ is the
