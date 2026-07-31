@@ -38,7 +38,7 @@ setup() {
   [ "$status" -eq 0 ]
   rec="$(ls "$CC_DEATH_RECORDS_DIR"/death-recyc-*.json | head -1)"
   [ "$(jq -r '.reason' "$rec")" = "recycled" ]
-  kill "$live" 2>/dev/null; wait "$live" 2>/dev/null || true
+  kill "$live" 2>/dev/null || true; wait "$live" 2>/dev/null || true
 }
 
 @test "L1-e: a SIGKILLing kqueue helper yields a watcher-died alarm record and exit 3" {

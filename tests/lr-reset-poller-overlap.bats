@@ -33,7 +33,7 @@ setup() {
   DEAD_PID=999999
 }
 
-teardown() { [ -n "${HOLDER_PID:-}" ] && kill "$HOLDER_PID" 2>/dev/null; true; }
+teardown() { [ -n "${HOLDER_PID:-}" ] && kill "$HOLDER_PID" 2>/dev/null || true; }
 
 _lstart_of() { ps -o lstart= -p "$1" 2>/dev/null | tr -s ' '; }
 

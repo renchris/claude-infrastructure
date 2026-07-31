@@ -635,7 +635,7 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   printf 'pid=%s\n' "$wpid" > "$CC_MAILBOX_DIR/$UUID.watching"
   run "$NOTIFY" "$UUID" "live watcher"
   [[ "$output" == *"wake-path armed"* ]] || false          # alive pid → armed
-  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null || true
+  kill "$wpid" 2>/dev/null || true; wait "$wpid" 2>/dev/null || true
   touch "$CC_MAILBOX_DIR/$UUID.watching"                    # still perfectly FRESH — only the pid died
   run "$NOTIFY" "$UUID" "dead watcher"
   [[ "$output" == *"NO watcher armed"* ]] || false          # dead pid → NOT armed (the fix)
