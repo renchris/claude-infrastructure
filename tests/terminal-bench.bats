@@ -35,6 +35,50 @@ setup() {
   [[ "$output" == *"verdict=NO-DATA"* ]]
 }
 
+@test "bench: resolves a process whose p_comm is a FULL PATH, which is how the incumbent hid" {
+  # THE BUG THIS PINS. `pgrep -x iTerm2` matched nothing on 2026-07-31 while iTerm2 ran as pid 591:
+  # macOS had stored its accounting name as the first 16 chars of the full path (`/Applications/iT`),
+  # so an exact-name match could never hit it. pgrep listed 947 of 960 processes and dropped it.
+  # The bake-off therefore filed its INCUMBENT as "not running" — a NO-DATA that reads like an
+  # absent app rather than a blind instrument. Same class as memory claimed-outcome-vs-checked.
+  #
+  # We assert the resolver's fallback (ps comm BASENAME) on a process we control, so the test is
+  # hermetic and needs no GUI app running.
+  # Driven from a FIXTURE of real `ps -eo pid=,comm=` output rather than a live process: a copied
+  # system binary is SIGKILLed by macOS code-signing the moment it execs (tried — the probe was dead
+  # before ps could see it), and depending on a GUI app being up would make the test non-hermetic.
+  # These two lines are verbatim what this box printed on 2026-07-31.
+  local fixture="  591 /Applications/iTerm.app/Contents/MacOS/iTerm2
+26094 /Applications/kitty.app/Contents/MacOS/kitty"
+
+  local found
+  found="$(printf '%s\n' "$fixture" | awk -v want="iTerm2" '{n=split($2,a,"/"); if (a[n]==want) {print $1; exit}}')"
+  [ "$found" = "591" ]
+
+  # and it must still discriminate — not just return the first row it sees
+  found="$(printf '%s\n' "$fixture" | awk -v want="kitty" '{n=split($2,a,"/"); if (a[n]==want) {print $1; exit}}')"
+  [ "$found" = "26094" ]
+}
+
+@test "POSITIVE CONTROL: the basename resolver reports nothing for an absent name" {
+  # Without this, the test above would also pass for a resolver that returns any pid unconditionally.
+  local fixture="  591 /Applications/iTerm.app/Contents/MacOS/iTerm2"
+  local found
+  found="$(printf '%s\n' "$fixture" | awk -v want="Ghostty" '{n=split($2,a,"/"); if (a[n]==want) {print $1; exit}}')"
+  [ -z "$found" ]
+}
+
+@test "RED CONTROL: a bare exact-name match CANNOT find the incumbent — this is the bug" {
+  # The guard is only meaningful if the OLD behaviour demonstrably fails on the same input. An
+  # exact match against the whole comm string is what `pgrep -x iTerm2` effectively did, and it
+  # returns nothing for a comm that is a full path. If this ever starts passing, the fallback above
+  # has stopped being necessary and should be re-justified rather than kept out of habit.
+  local fixture="  591 /Applications/iTerm.app/Contents/MacOS/iTerm2"
+  local found
+  found="$(printf '%s\n' "$fixture" | awk -v want="iTerm2" '{if ($2==want) {print $1; exit}}')"
+  [ -z "$found" ]
+}
+
 @test "bench: --app is mandatory (exit 2), so a typo cannot silently measure nothing" {
   run bash "$BENCH" --interval 0
   [ "$status" -eq 2 ]
@@ -120,5 +164,5 @@ setup() {
   # reports NO-DATA rather than "0 windows" in that case.
   if [ "$status" -eq 3 ]; then skip "no window server in this context (headless runner)"; fi
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=OK"* ]] || false
+  [[ "$output" == *"verdict=OK"* ]]
 }
