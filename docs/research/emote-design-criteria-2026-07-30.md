@@ -172,9 +172,34 @@ Four categories, ordered so a reader meets the charming ones first:
 - **What it does** — the S8 tier, drawn from `repo-semantics.md`. Kept **only** where the beat is
   still fun with S8 covered up.
 
-## 6. Open — to be integrated when the research wave lands
+## 6. What the build then taught, which the criteria did not predict
 
-A five-axis research wave (cute-craft, emote catalogues, repo→action mapping, sprite capability,
-page engineering) is running against this same question. Its findings are **additive** to this file
-and should be INTEGRATED into the sections above rather than appended as a second opinion. Expected
-to sharpen: the amplitude numbers in §1, the glyph vocabulary, and the candidate list in §5.
+Three findings came out of actually rendering 27 candidates, and each corrects something above.
+
+1. **A "legibility gate" cannot be built out of pixel counting — measured, not assumed.**
+   `scripts/emote-verify.py` was written to mechanise §3's S3 row. Calibration killed it: the two
+   candidates a reviewer rejected from contact sheets scored HIGHER than two he accepted
+   (`itch` 3.43% and `trip` 3.61% of the frame changed, versus `curious` 1.24% and `startle` 1.83%).
+   Whole-frame delta counts repainted pixels; legibility depends on whether the **silhouette**
+   changed. A body nudged sideways repaints a large area and changes shape not at all. So S3 stays a
+   human judgement from a contact sheet, and the tool is honest about being only an inertness
+   tripwire. `--calibrate` re-tests the claim rather than making the next person inherit it.
+
+2. **Two candidates can pass every rule and still collide.** `trip` was authored with the arms-up
+   pose and became visually indistinguishable from `delight`. Nothing in §3 forbade it, because each
+   passed on its own. **Add S9: no two candidates may share a silhouette signature** — on a
+   comparison grid, two beats that look the same are one beat and a wasted panel.
+
+3. **The 0%-state reset is a moving target.** The sprite's optional groups were covered; glyphs were
+   added later and were not, so `prefers-reduced-motion` — which switches animations off and paints
+   each element's static rule — rendered every `!`, `?` and spark floating unattached in the sky.
+   The rule generalises: **anything whose only opacity lives in keyframes is visible in the still.**
+
+### Still open
+
+The five-axis research wave (cute-craft, emote catalogues, repo→action mapping, sprite capability,
+page engineering) had not reported when the candidates were built, so **nothing in this file or in
+the candidate set derives from it**. Everything here comes from the prior on-disk research named in
+§0 plus what the renders taught. If that wave lands, its findings are additive: INTEGRATE them into
+the sections above rather than appending a second opinion, and expect them to sharpen the amplitude
+numbers in §1 and the glyph vocabulary.
