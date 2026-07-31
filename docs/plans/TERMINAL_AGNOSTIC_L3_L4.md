@@ -169,9 +169,71 @@ Claude Code knowing. Contract to reverse: `session split` · `session send` · `
    before its second reading. §6.1 of `terminal-for-30-panes-2026-07-31.md` remains OPEN.
 2. **cmux socket auth from outside** — `socketControlMode: "passwordOrCmux"` is NOT a valid enum; the
    correct value is unknown, and without it external automation cannot drive cmux.
-3. **The exact `it2` contract surface** Claude Code calls — reversed only partially.
+3. ~~**The exact `it2` contract surface** Claude Code calls — reversed only partially.~~
+   → **CLOSED 2026-07-31**, §4.3 below · `docs/research/it2-contract-surface-2026-07-31.md`.
 4. **Agent View coverage** — `claude agents --json` is scoped to `CLAUDE_CONFIG_DIR`; it saw 3 of 25
    sessions. A 4-account fleet fragments into 4 views.
+
+### 4.3 CLOSED — the `it2` contract surface (T1/T5 unblocked)
+
+Recovered as **readable JavaScript** from `claude.exe` 2.1.219 (the Bun bundle stores its JS as plain
+text), then confirmed against the real `it2` 0.2.3 CLI and its Python source. `strings(1)` alone was
+not sufficient and would have been actively misleading: its 4-char default drops every 2-char flag,
+so an argv rebuilt from it is missing exactly `-v`, `-s`, `-f`.
+
+**The headline is resolution, not argv — and it falsifies a claim this repo relies on.** Claude Code
+runs `$SHELL -lc "command -v it2"` **once**, caches the resulting **absolute path**, and execs that
+path forever (`Uor` → `ocs` → `Drn`). Measured here: it resolves to `~/.local/bin/it2` (the raw uv
+CLI) because the **login** PATH puts `~/.local/bin` at position **1** and `~/.claude/bin` at **15**,
+and the lookup finishes in 0.02 s against CC's 2000 ms bound — so the bare-name fallback, the only
+branch a PATH search could reach, is never taken.
+
+⇒ **`bin/it2-wrapper` is bypassed for Claude Code's own teammate panes.** Its header claim that it
+intercepts "Claude Code's native ITermBackend killPane — both spawn PATH-resolved `it2`" is false on
+this box. All three interceptions are lost for CC's panes: the `-p Claude-Teammate` never-prompt
+profile (those panes do **not** close cleanly from ⌘W), the `force=True` modal suppression (CC's
+`killPane` **does** pop the running-job modal), and the 30 s bound on the fleet's hot liveness probe.
+**This decides where the facade lives: it must win a LOGIN-shell lookup.** A shim on the current
+process PATH cannot even *observe* CC's it2 traffic — verified with an instrumented shim and a real
+teammate spawn that recorded **zero** calls.
+
+**The contract — complete; there is nothing else in the class:**
+
+| Verb | exact argv | stdout contract |
+|---|---|---|
+| split (1st, leader known) | `session split -v -s <leaderId>` | `Created new pane: <id>` |
+| split (1st, no leader) | `session split -v` | ” |
+| split (subsequent) | `session split -s <lastTeammateId>` · else `session split` | ” |
+| send | `session send -s <id> $'\x15'` **then** `session run -s <id> <cmd>` | — (only `run`'s code is checked) |
+| close | `session close -f -s <id>` | code 0 ⇒ true |
+| list | `session list` — **no `--json`** | must exit 0; ids must be FULL (below) |
+
+- `-v` is **`--vertical`, not verbose**, and appears **only on the first split** — subsequent splits
+  are horizontal. Reading it as verbosity gives wrong geometry on every pane after the first.
+- Leader id = `ITERM_SESSION_ID` with everything up to and including the **first colon** stripped;
+  **no colon ⇒ null**, silently downgrading to the untargeted shape. A facade minting ids for another
+  terminal must emit `<prefix>:<id>`.
+- Split output is parsed `/Created new pane:\s*(.+)/` then `.trim()` — greedy to end of line, so any
+  trailing text on that line **becomes part of the id**.
+- `sendCommandToPane` makes **two** calls: `send` (Ctrl-U, clears the input line) then `run` (appends
+  `\r`). Implementing one verb either leaves stale input or never submits.
+
+**`session list` is structurally broken as a liveness test.** CC's dead-session check is
+`!stdout.includes(fullSessionId)`, but `rich` truncates the Session ID column to the 80 columns it
+assumes when stdout is a pipe: `A5B61882-E2AD-438D-…`. Measured — full id absent, 18-char prefix
+present (positive control), `COLUMNS=250` restores it. So the check always reads "dead": CC prunes
+teammates unconditionally, on no evidence. A facade printing **full ids** makes that check work —
+strictly better than real iTerm2 behaves today.
+
+**`claude -p` is unconditionally in-process — no pane, no backend, no `it2` call at all**
+(`isInProcessEnabled`: "true (non-interactive session)"). That is not a caveat, it is **D3/P2 already
+true in the product**: headless is the norm and the pane is the exception. P2 is building what the
+product already does — the strongest available evidence the seam is drawn in the right place.
+
+**Minimum viable facade**, ordered by what breaks first: win the login-shell lookup · `session list`
+exit 0 with full ids · `session split` printing that exact line · colon-bearing ids · `send`
+tolerating `\x15` · `run` appending `\r` · `close -f -s` · non-zero + stderr on real failure.
+`capture`, `focus`, `set-var`, `restart` and `monitor` are **never** called by ITermBackend.
 
 ---
 
@@ -284,6 +346,12 @@ console layer (sidebar row per pane, blue ring on attention, notifications panel
 ---
 
 ## 5. Corrections this plan supersedes
+
+- **"`bin/it2-wrapper` intercepts Claude Code's native `it2` calls"** (the wrapper's own header, and
+  the premise behind D5's "we already intercept `it2`") — **FALSE on this box.** CC resolves it2
+  through a *login* shell and execs the absolute path, which is `~/.local/bin/it2`, not the wrapper.
+  The 12 class-1 files still route through the wrapper because *they* are PATH-resolved; Claude Code
+  itself is not. See §4.3.
 
 - **"Maximising the GPU is the wrong goal"** — WRONG AS STATED. Derived from iTerm2's per-pane
   `CAMetalLayer` and over-generalised. Ghostty is Metal-native *and* per-pane and measures 24 panes at
