@@ -16,6 +16,11 @@
 #
 # Exit: 0 = every mutant was caught by its named test · 1 = at least one survived (tests are weak)
 
+# shellcheck disable=SC2016
+# SC2016 is disabled file-wide ON PURPOSE: the mutation table below is made of single-quoted
+# LITERAL SOURCE FRAGMENTS of the subject scripts. Every `$var` in them must stay unexpanded —
+# expanding one would make the anchor fail to match, which this harness reports as a BROKEN
+# MUTANT. The lint is right about the syntax and wrong about the intent.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BATS="${BATS_BIN:-$HOME/.claude/bin/bats}"
@@ -45,7 +50,12 @@ check() {
   local label="$1" rel="$2" from="$3" to="$4" want="$5"
   local sandbox="$WORK/$RANDOM$$"
   mkdir -p "$sandbox"
-  cp -R "$REPO/bin" "$REPO/tests" "$sandbox/" || { echo "SETUP FAIL $label"; fail=$((fail+1)); return; }
+  # hooks/ and scripts/ come along because the suite now asserts against REAL consumers (the
+  # session-register.sh live-rename test and the bare-read ratchet). Without them those tests fail
+  # for a missing-file reason under EVERY mutant, which would drown the signal this harness exists
+  # to produce.
+  cp -R "$REPO/bin" "$REPO/tests" "$REPO/hooks" "$REPO/scripts" "$sandbox/" \
+    || { echo "SETUP FAIL $label"; fail=$((fail+1)); return; }
 
   if ! mutate "$sandbox/$rel" "$from" "$to"; then
     printf '  \033[31mBROKEN MUTANT\033[0m %-42s (anchor did not apply — harness is stale)\n' "$label"
@@ -101,9 +111,9 @@ check "unknown-driver-falls-back-silently" bin/cc-pane \
 
 check "ITERM_SESSION_ID-wins-over-CC_PANE_ID" bin/cc-pane \
   '  local v="${CC_PANE_ID:-}"
-  [ -n "$v" ] || v="${ITERM_SESSION_ID:-}"' \
+  [ -n "$v" ] || v="${ITERM_SESSION_ID:-}"   # cc-pane-id-lint:allow — this line IS the fallback' \
   '  local v="${ITERM_SESSION_ID:-}"
-  [ -n "$v" ] || v="${CC_PANE_ID:-}"' \
+  [ -n "$v" ] || v="${CC_PANE_ID:-}"   # cc-pane-id-lint:allow — this line IS the fallback' \
   'CC_PANE_ID WINS when both are set'
 
 check "close-drops-the-force-flag" bin/cc-pane \

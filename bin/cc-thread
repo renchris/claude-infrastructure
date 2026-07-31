@@ -61,7 +61,7 @@ _thread() { # _thread <uuid>
 
 case "${1:-}" in
   --me)
-    u="${ITERM_SESSION_ID:-}"; u="${u##*:}"
+    u="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; u="${u##*:}"
     [ -n "$u" ] || { echo "not inside a registered session (ITERM_SESSION_ID unset)" >&2; exit 1; }
     _thread "$u" ;;
   --pending)

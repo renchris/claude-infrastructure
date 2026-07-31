@@ -70,7 +70,7 @@ command -v jq >/dev/null 2>&1 || return 0
 
 # Pane UUID from $ITERM_SESSION_ID (strip the "wNtNpN:" prefix → bare UUID the
 # it2 shim addresses). No pane / not a UUID → nothing to register.
-pane="${ITERM_SESSION_ID:-}"; pane="${pane##*:}"
+pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
 case "$pane" in
   ''|*[!0-9A-Fa-f-]*) return 0 ;;
 esac

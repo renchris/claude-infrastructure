@@ -16,7 +16,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 reason=$(printf '%s' "$input" | jq -r '.reason // empty' 2>/dev/null)
 [ "$reason" = "clear" ] && exit 0
 
-pane="${ITERM_SESSION_ID:-}"; pane="${pane##*:}"
+pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
 case "$pane" in
   ''|*[!0-9A-Fa-f-]*) exit 0 ;;
 esac

@@ -340,7 +340,7 @@ done
 [ "$HAVE_TARGET" = 1 ] || { echo "cc-notify: no target given" >&2; usage >&2; exit 2; }
 
 # --- resolve target -> pane UUID ---
-own_uuid="${ITERM_SESSION_ID:-}"; own_uuid="${own_uuid##*:}"
+own_uuid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_uuid="${own_uuid##*:}"
 # rc 0 = resolved (uuid on stdout) · 1 = target genuinely UNKNOWN · 4 = RESOLVER UNAVAILABLE
 # · 6 = AMBIGUOUS prefix (candidates on stdout). The caller MUST branch on these: reporting a
 # resolver outage as "not a live session name or a pane UUID" is what sent this desk chasing the

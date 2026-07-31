@@ -102,7 +102,7 @@ cmd_wait() {
     die "REFUSED — --on-timeout '$ontimeout' is not an allowed action. It is a STRUCTURED enum from {$ONTIMEOUT_ALLOW}: a deadline RE-OBSERVES the effect, pages, or escalates — it NEVER disposes on silence (S-3b/L2-d; a busy waitee that ignores its deadline is still alive). Put human context in --note (the guard ignores it)."
   fi
 
-  [ -n "$waiter" ] || { local it="${ITERM_SESSION_ID:-}"; waiter="${it##*:}"; }
+  [ -n "$waiter" ] || { local it="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; waiter="${it##*:}"; }
   [ -n "$waiter" ] || { echo "cc-wait: no --waiter and no \$ITERM_SESSION_ID" >&2; exit 3; }
 
   local wpid wstart id now

@@ -171,7 +171,7 @@ kill_switch_active() {
 _mbxlib="$_scd/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
-_ouid="${ITERM_SESSION_ID:-}"; _ouid="${_ouid##*:}"
+_ouid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _ouid="${_ouid##*:}"
 # KEEP THE RAW PANE KEY. The canonicalisation below deliberately rewrites $_ouid to the SESSION-keyed
 # mailbox key — right for every mailbox read, wrong for the teardown marker, which is PANE-keyed (and
 # sid-keyed) by all three of its writers. A reader using the canonicalised value would look up a key
