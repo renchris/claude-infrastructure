@@ -4,9 +4,17 @@
 such that 30+ concurrent Claude Code split-pane sessions do not lag the machine, drop sessions, or
 freeze/crash it. Out of the box, or cheaply modifiable without constant re-work.
 
-**Answer, one line.** **kitty** — measured on this box at **7–8 total threads and 1 on-screen
-surface whether it is running 2 panes or 36**, against WezTerm's ~7 threads *per pane* and iTerm2's
-one CAMetalLayer + one CVDisplayLink thread per GPU-rendered pane.
+**Answer, one line.** **kitty** — it holds all 30–40 panes in **one OS window** (measured: the
+cheapest possible grouping on this box) at **7–8 total threads whether it is running 2 panes or 36**,
+against WezTerm's ~7 threads *per pane* and against iTerm2, whose only all-GPU layout **forces six
+windows** and whose window leak is an open, unfixed upstream bug.
+
+**The single most actionable sentence in this document, and it is not about which terminal:** on a
+controlled benchmark here, the same 30 panes cost **2.35× more WindowServer CPU spread across 30
+windows than gathered into 1**, while the number of surfaces *inside* a window barely matters
+(1.17×). **Windows are the expensive unit. Panes are nearly free.** macOS itself has ample headroom —
+30 panes repainting at 20 Hz in one window cost ~+10 pp of a single core — so the ceiling is the
+application's window architecture, not the platform.
 
 **And one premise has to be corrected, because it changes what to optimise.** "Maximally utilise the
 GPU" is the **wrong goal on iTerm2** — the GPU path is what *creates* the compositor objects that
@@ -30,13 +38,50 @@ at ~220 MB.
 
 Measured this session, the two axes price very differently:
 
-| Unit added | Cost to the window server | Source |
+| Unit added | Cost | Source |
 |---|---|---|
 | one visible **pane** | ~3 IOSurfaces, **~0 net bytes** | measured, this box |
 | one **window** | **28–34 MB** backing store + **~4.9 mach ports** | measured, this box |
 
-**An order of magnitude apart, and the freeze was a *window*-count failure.** 98 zero-tab iTerm2
-windows had accumulated, each surviving `close()`.
+**An order of magnitude apart on the app side**, and 98 zero-tab iTerm2 windows had accumulated, each
+surviving `close()`.
+
+### What the compositor actually charges for — a controlled benchmark, and it trims my own claim
+
+A purpose-built Cocoa/IOSurface harness presented **30 panes in a fixed 6×5 grid, identical on-screen
+geometry and identical pixels-per-second in every arm**, 20 Hz updates, 5 reps, with two controls that
+both held: frame delivery was exactly 120/120 in every arm, and app-side CPU was 1.4–1.9% in every arm
+— so the delta is entirely WindowServer. Mean percentage-points of one core added:
+
+| grouping of the same 30 panes | WindowServer |
+|---|---|
+| **30 windows** × 1 surface | **+22.6 pp** |
+| 6 windows × 5 surfaces | +17.5 pp |
+| **1 window** × 30 surfaces | **+11.2 pp** |
+| 1 window × 1 surface | +9.6 pp |
+
+**Windows cost 2.35×. Surfaces *inside* one window cost only 1.17×.**
+
+This **corrects the emphasis of this document, including my own earlier framing.** The
+"one surface per pane vs one per window" axis — the thing that made kitty's architecture look
+decisive — is worth about **17%**. The axis worth **2–4×** is simply *do not spray one OS window per
+session*. kitty still wins, but the honest reason is narrower: it puts all 30 panes in **one window**
+(the cheapest arm) with no per-pane thread cost, whereas iTerm2's only all-GPU layout **requires six
+windows** and its leak manufactures more.
+
+**And macOS is not the ceiling.** 30 panes repainting at 20 Hz in one window cost only ~+10 pp of a
+single core. The platform has ample headroom for 30–40 panes; **the application's window architecture
+is the constraint**, which is why this is a terminal-choice question at all.
+
+> **A correction to the inherited freeze narrative, from the same harness.** Idle windows are nearly
+> free: 200 idle on-screen windows were indistinguishable from baseline, 900 cost ~+30 pp, and
+> WindowServer grew only ~78 KB per idle window. Window churn does **not** leak the compositor —
+> 5,000 create/close cycles moved WindowServer RSS by −8 MB, and ~10,000 windows created across the
+> session left **exactly 0** behind. ⇒ **98 leaked zombie windows cannot by themselves explain
+> WindowServer at 94%.** Something else was also running, and the best candidate is the
+> CoreAnimation defer-lock storm (§6.4) — one `CAContext` per layer-hosting window, 117/s across 33
+> contexts, lock counts climbing monotonically and never released. The zombies remain a real defect
+> and a real memory cost; they are no longer a sufficient explanation for the CPU.
 
 ### The GPU path is the expensive one, and the cap's own justification is four years stale
 
@@ -308,9 +353,16 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
    but "should" is the word the evidence rules ban.
 3. **No 4-display test.** Challenger windows were cascaded, not tiled one per monitor at 5120×2880,
    so per-display `CVDisplayLink` behaviour at mixed refresh is unmeasured.
-4. **The CoreAnimation defer-lock storm is only ~half iTerm2's.** Restarting iTerm2 took it 117/s →
-   58/s, so another client produces the remainder. **Switching terminals does not obviously fix
-   this**, and its producer is still unidentified.
+4. **The CoreAnimation defer-lock storm is only ~half iTerm2's, and is now the leading suspect for
+   the CPU that the zombie windows do not explain.** Restarting iTerm2 took it 117/s → 58/s, so
+   another client produces the remainder; **switching terminals does not obviously fix it.** The
+   three format strings were located in the dyld shared cache and belong to QuartzCore
+   (`"Defer Lock context 0x%x unlocked but lock count is not zero (was %d)"`,
+   `"…not found in defer lock watchlist"`, `"Defer Lock missing release ?"`) — an instrumented
+   balance check on deferred presentation locks against a `CAContext`, **one per layer-hosting
+   window**. There is **no public documentation, no userspace diagnostic, and no workaround short of
+   restarting the offending client.** The emitting symbol could not be resolved, so the mechanism is
+   inferred from the strings, not from Apple.
 5. **kitty's load-bearing claim rests on CGWindow counts**, not IOSurfaces, CALayers, or
    per-window WindowServer mach ports — and the freeze was characterised by *ports* and *CA
    contexts*. One `NSOpenGLContext` could in principle be backed by several IOSurfaces.
@@ -344,8 +396,20 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
      `-[iTermTextDrawingHelper textAppearanceDependsOnBackgroundColor]` return YES, which routes each
      dimmed pane through the **slower** `drawForegroundForBackgroundRunArrays` path. With one pane
      focused out of 30–40, that is 29–39 panes on the slow CPU text path, every frame.
-2. **Stop the window leak, which is the actual freeze cause** — the producer was caught on the
-   `--split-right` path, one surface over from the closed `--window` regression.
+2. **Stop the automation minting windows.** This is the highest-value change that requires no
+   migration at all: windows are the 2.35× unit. The producer was caught on the `--split-right`
+   path, one surface over from the closed `--window` regression.
+
+   ⚠ **This supersedes the layout advice in `iterm2-freeze-30-sessions-2026-07-30.md` §7b, which
+   recommended `6 windows × 1 tab × 5 panes`.** That layout is correct *for the Metal gate* and
+   measured **+17.5 pp**, versus **+11.2 pp** for the same 30 panes in one window. So on iTerm2 the
+   two goals genuinely conflict and neither is free:
+   - `6 × 5` → every pane on the GPU, but 6 windows and 30 CAMetalLayers + 30 CVDisplayLink threads.
+   - `1 × 30` → cheapest on WindowServer, but every pane on the CPU rasterizer (>5 per tab), which
+     is the 1.39-core main-thread glyph-drawing bottleneck already measured on this box.
+
+   **Unresolved for iTerm2, and it is the §8 experiment.** It is resolved *structurally* by kitty,
+   which has no cap and therefore takes the cheap grouping and the GPU at the same time.
 3. **Add a window-count rung to `capacity-alarm.sh`.** Nothing watches window-object count today; it
    is invisible to every existing headroom/swap/pressure rung. Warn at 25, page at 60 — measured as
    **drift**, per §3.
