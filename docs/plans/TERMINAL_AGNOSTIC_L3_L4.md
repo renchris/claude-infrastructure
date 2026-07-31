@@ -1,0 +1,156 @@
+---
+status: open
+created: 2026-07-31
+owner: desk
+---
+
+# Terminal-agnostic pane layer → Level 3/4 — PLAN
+
+**Status:** ACTIVE · created 2026-07-31 · survives crashes by design (this file IS the recovery point)
+
+**Scope (frozen).** Make claude-infrastructure's pane layer terminal-agnostic behind ONE seam with a
+HEADLESS-FIRST driver model, so that (a) no future terminal choice forces a migration, (b) Agent-Team
+panes work on any terminal via an `it2` facade, and (c) the fleet can scale past the ~38-pane physical
+ceiling toward Level 3 (~100 agents). Explicitly NOT in scope: migrating terminals, supporting three
+terminals, or building kitty/cmux drivers speculatively.
+
+> **Why this file exists.** This machine hard-crashed twice in 48 h (2026-07-30 compressor-segment
+> panic; 2026-07-31 11:46 spinlock panic from a research probe's 8,368-thread ladder, which killed 19
+> live sessions and a 12-hour measurement). Work has been repeatedly rediscovered. **Everything needed
+> to resume is in this file — do not re-derive any of it.**
+
+---
+
+## 0. The decisions ALREADY MADE (do not re-litigate)
+
+| # | Decision | Basis |
+|---|---|---|
+| D1 | **Do not build a terminal from scratch** | prize measured at **0.105 core = 1.05%** of the box; iTerm2→kitty already captures **92.4%** of the total available prize (12.2:1 split) |
+| D2 | **Do not migrate terminals now** | the readable-pane ceiling is **38 panes** across all 3 displays — *physical*, identical for every terminal. A migration buys ≤38 when the target is 100 → 1000 |
+| D3 | **Build ONE seam, TWO drivers: `iterm2` + `headless`** | at Level 3 ~95 of 100 agents need no pane; at Level 4 ~999 of 1000. Headless is the driver that scales |
+| D4 | **kitty/cmux drivers only when/if we actually switch** | ~150 lines each behind a proven interface; building them now is guessing |
+| D5 | **The `it2` facade is how Agent Teams work anywhere** | Claude Code shells out to an EXTERNAL `it2` CLI (`ERROR: iTerm2 detected but no it2 CLI`); it has **0 KittyBackend / 0 GhosttyBackend** (40 ITermBackend, 32 TmuxBackend). We already intercept `it2` in `bin/it2-wrapper` |
+| D6 | **The real ceiling is QUOTA, not hardware** | live read 2026-07-31: next2 **95%** weekly, next 69%, next4 62%, next3 35%. 100 concurrent = 21.5 GB / 3.6 cores — *fits*. Level 4 volume is quota-bound on 4 Max plans |
+
+---
+
+## 1. Measured evidence base (all on this box — never re-derive)
+
+**Physical ceiling.** Readable 80×20 TUI pane ≈ 600×340 logical px ⇒ built-in 6 + DELL 16 + DELL 16 =
+**38 panes total**, already unreadably dense. Level 3 (100) is 2.6× over; Level 4 (1000) is 26× over.
+
+**Resource ceiling.** 215 MB and 0.036 cores per session ⇒ 100 sessions = **21.5 GB / 3.6 cores (fits)**;
+1000 *simultaneous* = 215 GB (impossible) but Level 4 is **throughput, not concurrency**.
+
+**Cost model — the true axis is NOT the graphics API.** Three orthogonal terms, fitted from the four
+compositor arms {1w×1s 9.6pp · 1w×30s 11.2pp · 6w×5s 17.5pp · 30w×1s 22.6pp}:
+
+| Axis | Coefficient | Lever at 30 panes |
+|---|---|---|
+| **Presentation cadence** | 0.480 pp/Hz | **9.6pp — dominant (6× the surface lever)** |
+| OS-window count | 0.4483 pp/window | 13.0pp across 1→30 |
+| Surface count *within* a window | 0.0552 pp/surface | 1.60pp ceiling — 8.1× cheaper per unit than a window |
+| Metal vs OpenGL vs CPU | — | **not a term in the model** |
+
+**Threads per pane (measured, one ruler):** kitty **flat ~10 @ 48 panes** (one GL context per window,
+panes as `glViewport` sub-rects, one `CVDisplayLink` **per monitor**) · **cmux 5.18/pane linear**
+(fit `5.18×panes + 10.6`; 2→21, 8→53, 13→78; ⇒ ~166 @ 30) · Ghostty **4.00/pane linear**
+(`6 + 4.00×panes`; 24 panes in ONE window = 101 threads, 0.0% idle CPU, 351 MB) · iTerm2 ~0.9/pane.
+
+**iTerm2 today:** renderer+compositor = **2.74–4.08× the whole agent fleet** (median 2.89×, five
+samples); **+76 mach ports/hr drift at frozen layout** while RSS falls; perf-parity `match=9 drift=0`
+⇒ **tuning is exhausted**.
+
+**Memory is exonerated (4×):** both panics non-memory; 31 live sessions at 93% free / `Pageouts: 0`;
+compressor 0 B at load 15.
+
+**Coupling census (production files, tests excluded):**
+
+| Class | Files | Work |
+|---|---|---|
+| 1 — shells out to `it2` | **12** | **zero** — already behind the wrapper seam |
+| 2 — reads `$ITERM_SESSION_ID` | **18** | mechanical rename → `CC_PANE_ID` |
+| 3 — AppleScript at iTerm2 directly | **6** | real porting |
+| total touching iTerm2 | 44 | — |
+
+Class-3 files: `scripts/handoff-fire.sh` (4,024 lines — highest risk in the repo), `boot-resume-launch.sh`,
+`handoff-selfclose-e2e.sh`, `render-census.sh`, `limit-recover/lr-handoff.sh`, `limit-recover/lr-reset-poller.sh`.
+
+---
+
+## Phase 0 — Agent Team Orchestration
+
+Four independent tracks; no shared file between them. T1 and T2 may run concurrently from the start.
+T3 depends on T1's interface landing. T4 is independent throughout.
+
+| Track | Deliverable | Owns (no overlap) | Blocked by |
+|---|---|---|---|
+| **T1** | `CC_PANE_ID` + 4-verb driver interface (`spawn`·`address`·`send`·`close` + `list`), `iterm2` driver = today's behaviour | `bin/cc-pane` (new), `bin/it2-wrapper` | — |
+| **T2** | **`headless` driver** — spawn returns an addressable id with NO surface; the agent surfaces only via the queue | `bin/cc-pane-headless` (new), registry glue | — |
+| **T3** | Port the 6 class-3 files behind the interface, `iterm2` path staying default until headless is proven | the 6 named files | T1 |
+| **T4** | Queue front-end over `cc-permission-beacon.sh` — one row per agent, blocked-first | `bin/cc-queue` (new) | — |
+
+**Rails for every track:** dedicated worktree + own branch · gate green before commit · land ONLY via
+project-local `/ship` · C10 (never edit settings.json / live hooks / launchd in place) · brief ≤150 lines.
+
+---
+
+## 2. Phases
+
+### P1 — the seam (T1)
+`CC_PANE_ID` replaces `ITERM_SESSION_ID` at the 18 class-2 sites (mechanical; keep `ITERM_SESSION_ID`
+as a read fallback for one release). Interface verbs, driver-selected by `CC_PANE_DRIVER`
+(`iterm2` default). The 12 class-1 files are **not touched** — they keep calling `it2`.
+
+### P2 — headless driver (T2) — *the one that scales*
+`spawn` mints an id, starts the session with no surface, registers it. `address`/`send` work by id.
+`close` reaps. Design rule: **headless is the DEFAULT and a pane is the exception** — build it that
+way or it gets rebuilt.
+
+### P3 — port the 6 (T3)
+Incremental, never a cutover: each file gains the interface call with the iTerm2 path as default.
+`handoff-fire.sh` last and in slices — it fires sessions and is the most dangerous file in the repo.
+
+### P4 — the queue (T4)
+`cc-permission-beacon.sh` already fires on `PermissionRequest` → `/tmp/cc-permission-pending/<sid>.json`.
+It has no face. 100 rows fits one screen; 1000 needs grouping (a list problem, not a rendering one).
+
+### P5 — `it2` facade (after P1)
+Widen `bin/it2-wrapper` to serve the same 4 verbs so Agent-Team panes work under any driver without
+Claude Code knowing. Contract to reverse: `session split` · `session send` · `session close` · `session list`.
+
+---
+
+## 3. Free wins, independent of all of the above
+
+1. **Drop the 120 Hz DELL to 60 Hz** — cadence is the dominant compositor term (0.480 pp/Hz) and a text
+   UI gains nothing from 120 Hz. One click, reversible.
+2. **Do NOT set `NODE_OPTIONS=--max-old-space-size`** — `claude.exe` is a compiled Mach-O already
+   carrying `--max-old-space-size=8192`; the flag is either inert or an 8× cut, and can only bind
+   during a spike, i.e. only ever kills a session mid-task.
+3. **Stop the automation minting windows** — windows are the 2.35× unit.
+
+---
+
+## 4. NOT established (open, and honest)
+
+1. **kitty multi-hour drift at constant layout** — the 12 h/48-pane run was destroyed by the 11:46 panic
+   before its second reading. §6.1 of `terminal-for-30-panes-2026-07-31.md` remains OPEN.
+2. **cmux socket auth from outside** — `socketControlMode: "passwordOrCmux"` is NOT a valid enum; the
+   correct value is unknown, and without it external automation cannot drive cmux.
+3. **The exact `it2` contract surface** Claude Code calls — reversed only partially.
+4. **Agent View coverage** — `claude agents --json` is scoped to `CLAUDE_CONFIG_DIR`; it saw 3 of 25
+   sessions. A 4-account fleet fragments into 4 views.
+
+---
+
+## 5. Corrections this plan supersedes
+
+- **"Maximising the GPU is the wrong goal"** — WRONG AS STATED. Derived from iTerm2's per-pane
+  `CAMetalLayer` and over-generalised. Ghostty is Metal-native *and* per-pane and measures 24 panes at
+  0.0% idle CPU. The true axis is cadence + window count; the API is not a term.
+- **"kitty makes the tmux-ISID hazard disappear"** (`terminal-for-30-panes` §5b) contradicts §5a: with
+  **0 KittyBackend**, teammates on kitty fall back to tmux — where every pane shares one
+  `KITTY_WINDOW_ID` exactly as they shared one `ITERM_SESSION_ID`. Same hazard, new spelling.
+- **"Ghostty 3 threads/pane"** — measured **4.00** (`renderer`, `io`, `io-reader`, `cf_release`).
+- **Level 4 = 215 GB locally** — wrong frame; Level 4 is throughput, not concurrency.
