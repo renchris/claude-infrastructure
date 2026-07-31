@@ -718,3 +718,69 @@ in the subject, and none was visible from a green suite — worth recording beca
 the abort meant the lint saw nothing in that file at all. A gate that only reported "clean" would
 have shipped both. This is the same shape as the §6.8 red-proof result — a green signal that was
 green because nothing was actually looking.
+
+## 7. T4 — `bin/cc-queue`: measured findings + design (2026-07-31)
+
+**Status:** IN PROGRESS · branch `feat/cc-queue` (cut from `origin/main` @ `49569d04`).
+
+### 7.1 The four disk sources (NO terminal polling — all reads are files)
+
+| Source | Path | Gives | Cross-account? |
+|---|---|---|---|
+| **beacon** (spine) | `/tmp/cc-permission-pending/<sid>.json` | `{ts, tool_name, tool_input, cwd}` ⇒ BLOCKED + exact cmd + since | **YES** — shared `/tmp`, config-dir agnostic |
+| **telemetry** (census) | `/tmp/cc-telemetry/<sid>.json` | `{ts, session_id, cwd, config_dir, model, effort, pid, used_pct, …}` | **YES** — shared `/tmp`, and it *records* `config_dir` per row |
+| **registry** (attach) | `~/.claude/cc-registry/<paneUUID>.json` | `{paneUUID, name, cwd, account, pid, session_id}` ⇒ sid→pane | **YES** — ONE dir for all 4 accounts, carries `account` |
+| **transcript** (activity) | `<config_dir>/projects/<mangled-cwd>/<sid>.jsonl` | mtime = last message/tool event | resolved per-row from telemetry's `config_dir` |
+
+### 7.2 `claude agents --json` is NOT available on this box (supersedes the T4 brief's premise)
+
+The brief specifies it as the per-config-dir enrichment source. **Verified false here today:** the pinned
+stable is **2.1.114** (`claude-latest` refuses 2.1.220 — "available but not in MANIFEST allow-list"), and
+`agents --json` returns `error: unknown option '--json'`. Installed versions are **2.1.113 / 2.1.114 /
+2.1.183** — none ≥ 2.1.219. So the enrichment source is **prose-only on this box** until the binary
+advances (memory: `spec-named-mechanism-may-be-prose-only`).
+
+**This is not a loss — telemetry is strictly better for the stated purpose.** The brief wanted
+`claude agents --json` *per config dir* precisely to defeat the 4-account sharding that made it report 3
+of 25. The telemetry row already **carries `config_dir` as a field**, and the registry already carries
+`account`, so the census has **no sharding blindness to defeat**. `cc-queue` therefore takes telemetry as
+the census and treats `claude agents --json` as strictly-optional enrichment that is never depended on.
+
+### 7.3 Classification — reuse the supervisor's measured lessons, do NOT re-derive
+
+Both classifiers are lifted from `scripts/lead-supervisor.sh` (mirrored, not imported — cc-queue is
+standalone and lead-supervisor is not T4's file):
+
+- **Activity = TRANSCRIPT mtime, never telemetry `ts`** (`lead-supervisor.sh:426-442`). The telemetry
+  writer is `statusline.sh`, which stops emitting when a pane is not actively rendering — a healthy
+  backgrounded/long-turn session goes telemetry-stale for hours while its transcript stays warm
+  (**measured 2026-07-19: a live session 3.5 DAYS telemetry-stale with a 5-min-warm transcript**).
+  Unresolvable transcript ⇒ sentinel ⇒ treated COLD (fail-safe: never exempt a stall we cannot disprove).
+- **Liveness = `kill -0` AND the process command matches `claude`** (`lead-supervisor.sh:468-479`). Bare
+  `kill -0` reads a **recycled pid** as the original session (the STALL? zombie: 266841ba 14h-stale,
+  5277b63a 3d-stale).
+
+### 7.4 The load-bearing correctness property — the THREE-state world
+
+The beacon hook (`hooks/cc-permission-beacon.sh:60-98`) maintains a `.beacon-alive` heartbeat on EVERY
+invocation specifically so consumers can tell these apart:
+
+| Observation | Meaning |
+|---|---|
+| dir **ABSENT** | the hook has **never run** — INERT/mis-wired. "Nothing blocked" is **NOT trustworthy** |
+| dir present, **no** `<sid>.json` | genuinely nothing pending — the all-clear that **can** be trusted |
+| dir present, `<sid>.json` present | a real pending prompt |
+
+A queue that renders "0 blocked" for an absent dir reproduces the exact 2026-07-29 failure (a teammate sat
+blocked while the board read all-clear). `cc-queue` renders this split explicitly and **loudly**; the same
+existence-evidence discipline applies to the telemetry census.
+
+**Corollary (fail-safe):** a beacon whose sid has **no** telemetry row is still rendered as a BLOCKED row.
+The exception queue must never drop an exception for lack of enrichment.
+
+### 7.5 Deploy-lag observed in passing (NOT T4 scope, C10 — surfaced only)
+
+The **live** `~/.claude/hooks/cc-permission-beacon.sh` **differs from `origin/main`**: the repo version has
+the durable archive (`CC_PERMARCHIVE_DIR`, default `~/.claude/autonomy/permission-archive`); the live copy
+still does a bare `rm -f` on clear. So the archive that task #89 landed is **committed but not deployed**.
+`cc-queue` therefore does **not** depend on the archive existing.
