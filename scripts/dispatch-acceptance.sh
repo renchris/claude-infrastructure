@@ -37,7 +37,21 @@ CEILING="${CC_DISPATCH_CEILING:-6}"
 REPO="${CC_ACCEPT_REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 LAUNCHCTL="${CC_ACCEPT_LAUNCHCTL:-launchctl}"
 JSON=0; FAILS=0
-ROWS=""   # accumulated "id\tverdict\tdetail\tsource" lines
+# accumulated "id\tverdict\tdetail\tsource" lines. The two readers of $ROWS (render, below) need no
+# padding: `row()` is their only emitter, every call site passes a non-empty literal for cells 1-3,
+# and the one variable cell ($4, a source path) is LAST — where an empty value cannot shift anything.
+ROWS=""
+
+# TSV padding — tab is an IFS-*whitespace* character, so `IFS=$'\t' read` collapses a RUN of
+# delimiters into one. An empty cell therefore does NOT yield an empty variable: it shifts every
+# LATER cell one position LEFT, silently, at exit status 0. The ledger read in a2() is the exposed
+# one, because a malformed `add` record with no `.id` collapses into `id=<the ts>, ts=""` — which
+# SURVIVES that loop's own `[ -n "$id" ] || continue` guard (id is non-empty, just wrong) and is
+# then counted as an UNDECIDED add. That is a FALSE FAIL on A2, reported by the very instrument the
+# rebuild's DoD is measured with. Padding at the emitter restores the guard's intent: a cell that is
+# genuinely empty arrives as the sentinel, un-pads back to empty, and is skipped as the author meant.
+TSV_PAD=$'\037'
+unpad() { if [ "$1" = "$TSV_PAD" ]; then printf ''; else printf '%s' "$1"; fi; }
 
 command -v jq >/dev/null 2>&1 || { echo "dispatch-acceptance: jq is required" >&2; exit 3; }
 
@@ -99,9 +113,13 @@ a2() {
   have_v2 || { row A2 NOT-RUN "no v2 decision records yet" "$IDL"; return; }
   first_pass_ts="$(jq -r 'select(.actor=="cc-dispatch" and .action=="decision") | .ts' "$IDL" 2>/dev/null | sort | head -1)"
   pairs="$(
-    jq -r --arg since "$first_pass_ts" '
-      select(.event=="add" and .ts >= $since) | [.id, .ts] | @tsv' "$BACKLOG" 2>/dev/null \
+    jq -r --arg since "$first_pass_ts" --arg pad "$TSV_PAD" '
+      def cell(ph): (if . == null then "" else . end) | tostring
+                    | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+      select(.event=="add" and .ts >= $since)
+      | [(.id|cell($pad)), (.ts|cell($pad))] | @tsv' "$BACKLOG" 2>/dev/null \
     | sort -u | while IFS=$'\t' read -r id ts; do
+        id="$(unpad "$id")"; ts="$(unpad "$ts")"
         [ -n "$id" ] || continue
         d="$(jq -r --arg i "$id" 'select(.actor=="cc-dispatch" and .action=="decision" and .id==$i) | .ts' "$IDL" 2>/dev/null | sort | head -1)"
         if [ -z "$d" ]; then echo "UNDECIDED"; continue; fi
