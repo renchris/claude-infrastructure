@@ -136,7 +136,12 @@ if [ "$made" -lt "$PANES" ]; then echo "  ⚠ only $made panes came up — repor
 # during that transient would book one-off allocation as drift.
 sleep 20
 
-printf 'ts\telapsed_s\tcpu\tmem_mb\tthreads\tports\twin\toff\tws_cpu\tws_ports\n' > "$OUT"
+# Column 7 is the LIVE PANE COUNT, not a window count. Naming it `win` would collide with the
+# window-census column of the same name in terminal-bench.sh, where it means CGWindowList entries
+# (kitty measures 36 there at this same layout — one visible OS window plus a large offscreen
+# population). Two columns named `win` meaning different things is how a comparison table acquires a
+# silent off-by-36.
+printf 'ts\telapsed_s\tcpu\tmem_mb\tthreads\tports\tpanes\toff\tws_cpu\tws_ports\n' > "$OUT"
 
 START=$(date +%s)
 END=$((START + HOURS*3600))
