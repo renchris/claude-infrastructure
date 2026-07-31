@@ -90,8 +90,22 @@ CENSUS_BIN="${TMPDIR:-/tmp}/window-census.$(id -u)"
 # pgrep -x on the app name, then the bundle-name fallback. Deliberately NOT `pgrep -f`: argv on this
 # box carries whole agent briefs, so a -f match counts every session that merely MENTIONS the app
 # (memory pgrep-f-matches-agent-briefs — that error read 50 where the truth was 1).
-PID="$(pgrep -x "$APP" | head -1 || true)"
-[ -n "$PID" ] || PID="$(pgrep -x "$(basename "$APP")" | head -1 || true)"
+# THE GUI PROCESS NAME IS NOT ALWAYS THE APP NAME, and neither is the window-server owner name.
+# WezTerm's GUI process is `wezterm-gui` while its CGWindow owner is `WezTerm`; matching the app
+# name alone found nothing and the run correctly reported NO-DATA — loud, but still a run wasted.
+# Both names are therefore resolved from an explicit table rather than assumed equal.
+case "$APP" in
+  wezterm|WezTerm) PROC_NAMES="wezterm-gui WezTerm wezterm"; CENSUS_OWNER="WezTerm" ;;
+  ghostty|Ghostty) PROC_NAMES="ghostty Ghostty";             CENSUS_OWNER="Ghostty" ;;
+  kitty|kitty.app) PROC_NAMES="kitty";                        CENSUS_OWNER="kitty" ;;
+  iTerm2|iTerm)    PROC_NAMES="iTerm2";                       CENSUS_OWNER="iTerm2" ;;
+  *)               PROC_NAMES="$APP";                         CENSUS_OWNER="$APP" ;;
+esac
+PID=""
+for _p in $PROC_NAMES; do
+  PID="$(pgrep -x "$_p" | head -1 || true)"
+  [ -n "$PID" ] && break
+done
 if [ -z "$PID" ]; then
   echo "terminal-bench: no running process named '$APP'" >&2
   echo "verdict=NO-DATA"; exit 3
@@ -158,7 +172,7 @@ show() {
     "$label" "$cpu" "$mem" "$th" "$ports" "$win" "$off" "$mpx"
 }
 
-T0_APP="$(reading "$PID" "$APP")"; T0_WS="$(reading "${WS_PID:-0}" 'Window Server')"
+T0_APP="$(reading "$PID" "$CENSUS_OWNER")"; T0_WS="$(reading "${WS_PID:-0}" 'Window Server')"
 show "T0  app " "$T0_APP"
 show "T0  WS  " "$T0_WS"
 
@@ -185,7 +199,7 @@ VERDICT="PARTIAL"
 if [ "$INTERVAL" -gt 0 ]; then
   echo "  … holding ${INTERVAL}s at constant layout (do not create or close panes) …"
   sleep "$INTERVAL"
-  T1_APP="$(reading "$PID" "$APP")"; T1_WS="$(reading "${WS_PID:-0}" 'Window Server')"
+  T1_APP="$(reading "$PID" "$CENSUS_OWNER")"; T1_WS="$(reading "${WS_PID:-0}" 'Window Server')"
   show "T1  app " "$T1_APP"
   show "T1  WS  " "$T1_WS"
 
