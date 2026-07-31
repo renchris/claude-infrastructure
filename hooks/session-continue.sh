@@ -466,7 +466,17 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   ttl="${CC_WAKE_FLOOR_TTL_S:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
   # Absolute, not "~/…": the model pastes this verbatim, and a tilde inside a quoted string is not a
   # path (SC2088). $HOME also keeps the message truthful under a fixture $HOME in the suites.
-  armcmd="$HOME/.claude/bin/cc-await-ping $_ouid --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-14400} --interval 15"
+  # NO-ARG (2026-07-31) — supersedes the 2026-07-29 box-key agreement above, which fixed the two
+  # advisories' DISAGREEMENT by pointing both at the key mailbox-drain.sh reads. That agreed on the
+  # wrong key: nothing WRITES the session box directly. cc-notify addresses panes (cc-roles/desk and
+  # every cc-registry row hold pane uuids) and resolves no alias, so a session-keyed watcher waits out
+  # its full timeout while the line sits in <pane>.md, harvested only by a boundary — the very thing
+  # the watcher exists to cause. Measured on one write: session-keyed rc 2 (deaf), pane-keyed woke in
+  # one poll. Passing NO id makes cc-await-ping derive ${ITERM_SESSION_ID##*:}, the same expression
+  # cc-notify resolves a target with, and cover that key's whole set — reader ⊇ writer by construction
+  # rather than by two hooks agreeing. The armed-check above stays keyed on $_ouid and still works:
+  # the watcher writes a .watching marker under EVERY key of the set, so either question answers true.
+  armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-14400} --interval 15"
 
   # Budget exhausted → do NOT block. Say it where a human can see it, then allow the stop.
   if [ "$cnt" -ge "$maxa" ]; then

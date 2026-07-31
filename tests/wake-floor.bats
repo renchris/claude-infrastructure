@@ -47,8 +47,8 @@ tx() {
 @test "unarmed session going idle ⇒ BLOCKS and names the exact arm command" {
   run actuate sidA
   blocked "$output"
-  # the model must be able to paste this verbatim — an absolute path, this pane's uuid, background-able
-  printf '%s' "$output" | jq -r .reason | grep -q "/cc-await-ping $U --timeout"
+  # the model must be able to paste this verbatim — an absolute path, no id to get wrong, background-able
+  printf '%s' "$output" | jq -r .reason | grep -q "/cc-await-ping --timeout"
   printf '%s' "$output" | jq -r .reason | grep -q 'run_in_background=true'
   # and the human must see that it happened
   printf '%s' "$output" | jq -er .systemMessage >/dev/null
@@ -182,47 +182,74 @@ CC_WAKE_FLOOR_PREFIX_SHA="${CC_WAKE_FLOOR_PREFIX_SHA:-a219de9d}"
   ! blocked "$output"                                # RED: the defect this change closes
 }
 
-# ── Box-key agreement (2026-07-29) ────────────────────────────────────────────────────────────────
-# The floor advertises a `cc-await-ping <key>` arm. That key MUST be the box key mailbox-drain.sh
-# actually reads — session-keyed once the pane→session alias exists (drain's :64-68). It used to be
-# the raw PANE uuid, so following the advice armed a watcher on a key nothing writes to while the
-# nudge kept firing (each side checking its own key). cc-await-ping resolves no alias, so the hook
-# has to resolve it. These three lock the mapping in both directions plus the pre-fix control.
+# ── No advertised key at all (2026-07-31) — SUPERSEDES "box-key agreement" (2026-07-29) ──────────
+# The 2026-07-29 tests here pinned the opposite mapping: the floor must advertise the SESSION key,
+# "the key the drain reads". That fixed the two advisories DISAGREEING by pointing both at the wrong
+# side of the channel. Nothing writes the session box directly — cc-notify addresses panes (cc-roles/*
+# and every cc-registry row hold pane uuids) and resolves no alias, so the session box fills only when
+# a BOUNDARY runs mailbox_migrate, and a boundary is the very thing a waiting watcher exists to cause.
+# A session that followed that advice reported armed and was deaf. Measured on one cc-notify write:
+# session-keyed watcher rc 2 (timed out), pane-keyed watcher woke in one poll.
+#
+# So the invariant is no longer "the two hooks agree on a key" — agreement is satisfiable by two wrong
+# answers. It is COVERAGE: the reader must cover the writer's key space. The arm command therefore
+# carries NO id (cc-await-ping derives ${ITERM_SESSION_ID##*:}, the same expression cc-notify resolves
+# a target with, then covers that key's whole set via the lib's mailbox_keyset). There is no key left
+# here to agree or disagree about. End-to-end coverage is pinned in tests/cc-await-ping.bats; these
+# pin the ADVERTISEMENT, which is this hook's half.
 alias_to() { mkdir -p "$CC_MAILBOX_DIR/.alias"; printf '2026-07-29T00:00:00+0000 %s\n' "$1" > "$CC_MAILBOX_DIR/.alias/$U"; }
 
-@test "box key: with a pane→session alias, the advertised arm names the SESSION key" {
+@test "box key: with a pane→session alias, the advertised arm still names NO key" {
   local S="11111111-2222-3333-4444-555555555555"
   alias_to "$S"
   run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$HOOK' 2>/dev/null"
   [ "$status" -eq 0 ]
   blocked "$output" || false
-  echo "$output" | grep -q "cc-await-ping $S" || false      # the key the drain reads
-  ! echo "$output" | grep -q "cc-await-ping $U" || false    # never the bare pane
+  echo "$output" | grep -q "cc-await-ping --timeout" || false
+  ! echo "$output" | grep -q "cc-await-ping $S" || false    # not the session key (deaf: nothing writes it)
+  ! echo "$output" | grep -q "cc-await-ping $U" || false    # nor the bare pane — the watcher derives it
 }
 
-@test "box key: with NO alias, the advertised arm still names the pane (unchanged fallback)" {
+@test "box key: with NO alias, the advertised arm is byte-identical (the key never entered it)" {
   run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$HOOK' 2>/dev/null"
   [ "$status" -eq 0 ]
   blocked "$output" || false
-  echo "$output" | grep -q "cc-await-ping $U" || false
+  echo "$output" | grep -q "cc-await-ping --timeout" || false
+  ! echo "$output" | grep -qE "cc-await-ping +[0-9A-Fa-f-]{8}" || false
+}
+
+@test "the two advisories emit the IDENTICAL arm command (the disagreement cannot recur)" {
+  local S="11111111-2222-3333-4444-555555555555"
+  alias_to "$S"
+  run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$HOOK' 2>/dev/null"
+  local floor; floor="$(printf '%s' "$output" | jq -r .reason | grep -o '/cc-await-ping [^)]*' | head -n1)"
+  # the drain's half, run against the SAME fixture mailbox/pane
+  run bash -c "echo '{}' | bash '$REPO/hooks/mailbox-drain.sh' prompt 2>/dev/null"
+  local drain; drain="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' \
+    | grep -o '/cc-await-ping [^)]*' | head -n1)"
+  [ -n "$floor" ] && [ -n "$drain" ]                       # neither side may be silently empty
+  [ "$floor" = "$drain" ] || { echo "floor=[$floor] drain=[$drain]" >&2; false; }
 }
 
 # Pinned, never a moving ref — same reasoning as the RED-PROOF above: once this change lands on
 # origin/main, a floating control IS the fixed tree and the proof inverts.
 CC_BOXKEY_PREFIX_SHA="${CC_BOXKEY_PREFIX_SHA:-c967d7cd}"
-@test "RED-PROOF: the pre-fix hook advertises the PANE key even when an alias exists" {
+@test "RED-PROOF: the pre-fix hook advertises a KEY at all (either key, both wrong)" {
   local S="11111111-2222-3333-4444-555555555555"
   local old="$BATS_TEST_TMPDIR/prekey"; mkdir -p "$old"
   git -C "$REPO" archive "$CC_BOXKEY_PREFIX_SHA" hooks | tar -x -C "$old" \
     || skip "pre-fix tree $CC_BOXKEY_PREFIX_SHA unavailable"
   [ -f "$old/hooks/session-continue.sh" ]
-  # sanity: the control must genuinely predate the fix
+  # sanity: the control must genuinely predate BOTH fixes (no resolve_key, and it interpolates an id)
   ! grep -q 'mailbox_resolve_key' "$old/hooks/session-continue.sh" || false
+  grep -q 'cc-await-ping \$_ouid' "$old/hooks/session-continue.sh" || false
   alias_to "$S"
   run bash -c "printf '{\"cwd\":\"%s\",\"session_id\":\"sidA\",\"transcript_path\":\"\"}' '$CWD' | bash '$old/hooks/session-continue.sh' 2>/dev/null"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "cc-await-ping $U" || false     # RED: pane key, the defect
-  ! echo "$output" | grep -q "cc-await-ping $S" || false
+  # RED: an id is interpolated at all. WHICH id it is was the 2026-07-29 argument; that both candidates
+  # are wrong is this one — so the proof asserts the shape, not the side.
+  echo "$output" | grep -qE "cc-await-ping +[0-9A-Fa-f-]{8}" || false
+  ! echo "$output" | grep -q "cc-await-ping --timeout" || false
 }
 
 # ══ THE THIRD STATE: terminating / lead-owned ⇒ the floor ABSTAINS ════════════════════════════════

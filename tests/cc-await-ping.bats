@@ -208,3 +208,91 @@ LIB
   [ "$status" -eq 0 ]
   [[ "$output" == *"corrupt row still wakes"* ]] || false
 }
+
+# ══ KEYSET COVERAGE (2026-07-31) — the reader must cover the WRITER's key space ══════════════════
+# One logical inbox, two physical keys. cc-notify addresses a target by role file / registry row /
+# raw uuid — all PANE-keyed — and resolves no alias, so its line lands in <pane>.md. mailbox-drain.sh
+# reads <session>.md and harvests the pane box by mailbox_migrate at each BOUNDARY. That merge hides
+# the split from a session taking turns and is fatal to one that is waiting: a watcher parked on the
+# session key sees nothing until a boundary runs, and causing that boundary is the watcher's whole job.
+# It reports armed and is deaf — silent, because "armed" and "reachable" were never the same claim.
+#
+# Mail is seeded BEFORE the watcher runs so every case fires on the first poll in the FOREGROUND: no
+# backgrounded watcher, so no fork can outlive the test and fabricate a `not ok` beside a passing body.
+SESSKEY="bbbbbbbb-9999-8888-7777-666666666666"
+alias_pane_to_session() {
+  mkdir -p "$CC_MAILBOX_DIR/.alias"
+  printf '2026-07-31T00:00:00+0000 %s\n' "$SESSKEY" > "$CC_MAILBOX_DIR/.alias/$UUID"
+}
+
+@test "keyset: a no-arg watcher wakes on a write to the PANE box (what cc-notify actually writes)" {
+  alias_pane_to_session
+  printf '2026-07-31T10:00:00+0000 [peer] addressed by pane\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  ITERM_SESSION_ID="w0t0p0:$UUID" run "$AWAIT" --interval 1 --timeout 4
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"addressed by pane"* ]] || false
+}
+
+@test "keyset: the SAME no-arg watcher also wakes on a write to the SESSION box" {
+  alias_pane_to_session
+  printf '2026-07-31T10:00:00+0000 [peer] addressed by session\n' > "$CC_MAILBOX_DIR/$SESSKEY.md"
+  ITERM_SESSION_ID="w0t0p0:$UUID" run "$AWAIT" --interval 1 --timeout 4
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"addressed by session"* ]] || false
+}
+
+@test "keyset REVERSE: a watcher armed with the SESSION id still covers its pane box" {
+  # No forward alias edge exists session→pane, so this direction is resolved by the tip lookup. It is
+  # the form every already-running pane will paste from the OLD advisory text during the rollout.
+  alias_pane_to_session
+  printf '2026-07-31T10:00:00+0000 [peer] reverse edge\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  run "$AWAIT" "$SESSKEY" --interval 1 --timeout 4
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reverse edge"* ]] || false
+}
+
+@test "DISCRIMINATOR: a pane whose trail has MOVED ON is not adopted (tip, never containment)" {
+  # $UUID's trail mentions SESSKEY but its current occupant is someone else — that box is the NEW
+  # occupant's mail. Covering it would be a cross-session read, so the shortlist must be adjudicated.
+  mkdir -p "$CC_MAILBOX_DIR/.alias"
+  printf '2026-07-31T00:00:00+0000 %s\n2026-07-31T01:00:00+0000 %s\n' \
+    "$SESSKEY" "cccccccc-5555-4444-3333-222222222222" > "$CC_MAILBOX_DIR/.alias/$UUID"
+  printf '2026-07-31T10:00:00+0000 [peer] belongs to the NEW occupant\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  run "$AWAIT" "$SESSKEY" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]                                     # timed out — correctly did NOT take it
+  [[ "$output" != *"NEW occupant"* ]] || false
+}
+
+@test "keyset: the .watching marker is written under EVERY key (either hook's check answers true)" {
+  alias_pane_to_session
+  ( sleep 3; printf '2026-07-31T10:00:00+0000 [peer] ping\n' >> "$MB" ) & local writer=$!
+  ITERM_SESSION_ID="w0t0p0:$UUID" "$AWAIT" --interval 1 --timeout 10 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  # mailbox-drain.sh asks about its SESSION key; session-continue.sh asks about the canonicalised key.
+  # A single-key marker answers one and not the other, and the hook that misses re-nudges an armed
+  # session forever — the mirror of the deafness this whole change closes.
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+  [ -f "$CC_MAILBOX_DIR/$SESSKEY.watching" ]
+  wait "$watcher" 2>/dev/null || true
+  wait "$writer" 2>/dev/null || true
+  # and BOTH are cleared on exit, so a finished watcher stops claiming a wake path under either key
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+  [ ! -f "$CC_MAILBOX_DIR/$SESSKEY.watching" ]
+}
+
+# Pinned, never a moving ref: once this lands, a floating control IS the fixed tree and the proof
+# inverts. Replays the REAL pre-fix artifact from git, never a hand-edited approximation.
+CC_KEYSET_PREFIX_SHA="${CC_KEYSET_PREFIX_SHA:-0272e835}"
+@test "RED-PROOF: the pre-fix watcher is DEAF to the box the writer actually writes" {
+  local old="$BATS_TEST_TMPDIR/prekeyset"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_KEYSET_PREFIX_SHA" bin hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_KEYSET_PREFIX_SHA unavailable"
+  [ -x "$old/bin/cc-await-ping" ]
+  ! grep -q 'mailbox_keyset' "$old/hooks/lib/mailbox-pending.sh" || false   # genuinely predates the fix
+  alias_pane_to_session
+  printf '2026-07-31T10:00:00+0000 [peer] addressed by pane\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  # armed on the SESSION key — exactly what the pre-fix advisories told a session to do
+  run "$old/bin/cc-await-ping" "$SESSKEY" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]                                     # RED: timed out with the mail one filename away
+  [[ "$output" != *"addressed by pane"* ]] || false
+}

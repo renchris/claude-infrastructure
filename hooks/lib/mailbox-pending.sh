@@ -498,3 +498,49 @@ mailbox_resolve_key() { # <pane-or-session> → box key
   printf '%s' "$sess"
   return 0
 }
+
+# ── THE READER MUST COVER THE WRITER'S KEY SPACE, NOT ITS OWN (2026-07-31) ───────────────────────
+# One LOGICAL inbox is physically spread over more than one key, and the two ends of the channel pick
+# different ones:
+#   WRITER  cc-notify addresses a target by whatever the ecosystem hands it — a role file, a registry
+#           row, a raw uuid — and every one of those is PANE-keyed (measured: cc-roles/desk and every
+#           cc-registry/*.json hold pane uuids). It resolves no alias, so the line lands in <pane>.md.
+#   READER  mailbox-drain.sh reads <session>.md (its :64-68) and harvests the pane box with
+#           mailbox_migrate at each boundary.
+# That merge makes the split invisible to a session that takes TURNS — and fatal to one that is
+# WAITING. A watcher parked on the session key sees nothing until a boundary runs, and the boundary is
+# the very thing the watcher exists to cause: it reports armed and is deaf. (Measured for this fix: on
+# one cc-notify write, a session-keyed cc-await-ping timed out at rc 2 while a pane-keyed watcher on
+# the SAME write woke in one poll.) Naming "the key the drain reads" — as the 2026-07-29 box-key
+# agreement did — makes both sides agree on a key nothing writes to; agreement is not the invariant,
+# COVERAGE is.
+#
+# mailbox_keyset is that cover: the key itself plus its alias target, one per line, deduped. At most
+# two entries and no directory scan, so it is cheap enough to recompute every poll — which it must be,
+# because a pane that has not yet taken a boundary has no alias and its session key joins the set only
+# later. Callers that also WRITE a per-key marker (cc-await-ping's .watching heartbeat) must write one
+# for every key, so a reader asking about EITHER key gets the same answer.
+mailbox_keyset() { # <pane-or-session> → every physical key of this logical inbox, one per line
+  local k="${1:-}" sess f
+  _mbx_valid_uuid "$k" || return 1
+  printf '%s\n' "$k"
+  [ "${CC_MBX_SESSION_KEY:-1}" = 0 ] && return 0
+  sess="$(mailbox_alias_of "$k")"
+  if [ -n "$sess" ] && [ "$sess" != "$k" ]; then printf '%s\n' "$sess"; return 0; fi
+
+  # REVERSE EDGE (session → its pane). The trail maps pane→session, so a caller holding a SESSION id
+  # has no forward edge to the pane box cc-notify actually writes — coverage would hold for the no-arg
+  # arm and quietly fail for any other. It is not hypothetical during a rollout: every pane already
+  # running carries the OLD session-keyed advisory in its context and may arm from it.
+  # TIP, never containment: a pane whose trail merely MENTIONS this session has since been re-occupied,
+  # and adopting its box would consume the current occupant's mail. So grep only shortlists (one fork
+  # over the whole dir) and the tail adjudicates each candidate — normally exactly one.
+  local shortlist
+  shortlist="$(grep -lF " $k" "$(_mbx_alias_dir)"/* 2>/dev/null)"
+  [ -n "$shortlist" ] || return 0
+  printf '%s\n' "$shortlist" | while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')" = "$k" ] && printf '%s\n' "${f##*/}"
+  done
+  return 0
+}
