@@ -167,6 +167,58 @@ And `paranoid-deps` must be re-run on every Xcode bump, against ~7 stable releas
 **That is the "constant re-work" the operator wanted to avoid, and it is the maximum case of it.**
 (kitty and WezTerm need no patch at all; their scaling behaviour is the shipped default.)
 
+### …but the cap does not need a source build at all — measured 2026-07-31
+
+The paragraph above is about *rebuilding iTerm2*, and it stands. It does **not** establish that the
+cap is unreachable, and §8's all-Metal row already said the counterfactual "needs no source build".
+It is now scripted: `scripts/iterm-metal-bench-app.sh` clones the shipped app, raises the cap with a
+**4-byte patch to the shipped binary**, re-signs, and verifies — 16 s end to end, no Xcode, no
+`paranoid-deps`, no toolchain.
+
+The gate is one instruction in `-[PTYTab updateUseMetal]`, at vmaddr `0x100491c34` in the arm64
+slice (file offset `0x31adc34`): `cmp x8, #0x6` followed by `b.hs`. Rewriting the immediate is the
+whole patch. The site is located by **anchor, not offset** — the symbol is looked up, the function
+disassembled, and the `cmp x8,#N`+`b.hs` pair required to occur **exactly once** — because the bare
+`cmp x8,#6` encoding occurs 21 times across the fat binary, and an iTerm2 update that reshapes this
+code must make the script *refuse* rather than silently patch an unrelated comparison.
+
+**This does not soften the recommendation.** It removes an obstacle to *testing* it. The cost model
+in §1 is unchanged; what changes is that the §8 falsification row is now cheap to run, and it should
+be run before iTerm2's score is treated as settled. Note also that the patch is per-iTerm2-release
+rework, so it is a *bench* instrument, not a migration path.
+
+#### Two traps, both of which produced a confidently wrong artifact first
+
+Recorded because each failed while looking like success, and both cost a crash report to find:
+
+1. **The clone would not launch, and blamed a file that was present.** It died with
+   `Library not loaded: @rpath/iTermSwiftPackages.framework` — while that framework sat intact in
+   the bundle, and `codesign --verify --deep --strict` returned **rc=0**. iTerm2 ships with the
+   hardened runtime; editing `Info.plist` to change the bundle id breaks the seal and forces a
+   re-sign; an ad-hoc re-sign has **no Team ID**; and hardened runtime implies **Library
+   Validation**, which admits a non-platform library only on a Team ID *identity match* — which
+   "absent" never satisfies, not even against another "absent". So AMFI refused to map the app's own
+   framework and dyld reported that refusal as a missing library. Proven by a three-arm control, all
+   three built from one bundle with only the signing differing:
+
+   | Arm | Signing | `flags` | Result |
+   |---|---|---|---|
+   | A | adhoc + runtime, no entitlements | `0x10002` | **DIED** rc=134, dyld halt |
+   | B | adhoc, runtime dropped | `0x2` | LAUNCHED |
+   | C | adhoc + runtime + `disable-library-validation` | `0x10002` | LAUNCHED |
+
+   Arm A is the negative control and it **must** fail; B and C prove nothing without it. The builder
+   takes **C, not B**: dropping the hardened runtime also changes JIT policy and `DYLD_*` acceptance,
+   and this bundle's only purpose is to be comparable to the shipping iTerm2. C relaxes exactly the
+   one check an ad-hoc signature cannot satisfy, and nothing else.
+
+2. **The first clone was never patched at all.** Its `cmp x8,#0x6` count was *identical* to stock
+   iTerm2 — a plain second iTerm2 carrying the stock 5-pane cap. Had trap 1 been fixed without
+   noticing, the counterfactual would have produced a confident all-Metal measurement of an iTerm2
+   that was never all-Metal. This is why the builder re-reads the cap **back out of the patched
+   binary by disassembly**, and deletes any bundle it cannot prove patched rather than trusting that
+   it once wrote bytes. Same class as [[control-must-replay-the-real-artifact]].
+
 ---
 
 ## 2. Measured on this box, one ruler for every candidate
@@ -482,6 +534,14 @@ multi-hour behaviour, kitty under real Claude Code, and the all-Metal iTerm2 cou
 - `scripts/terminal-bakeoff.sh` — drives a candidate to N panes; iTerm2 is measure-only so the
   operator's live sessions are never disturbed.
 - `tests/terminal-bench.bats` — 9 tests, all asserting the *failure* paths.
+- `scripts/iterm-metal-bench-app.sh` — builds the all-Metal counterfactual bundle §8 needs: clones
+  the shipped iTerm2 under its own bundle id (own defaults domain, runs alongside the operator's
+  live one), raises the hardcoded Metal cap by a 4-byte anchored binary patch, and re-signs it so it
+  can actually launch. Verifies the cap by reading it back out by disassembly, and **deletes any
+  bundle whose launch probe does not survive dyld** — so a bundle it returns has run at least once.
+- `tests/iterm-metal-bench-app.bats` — 8 tests. The two that matter are negative controls for the
+  two ways this artifact silently lied: a bundle that `codesign --verify` passes but cannot launch,
+  and a bundle that launches but carries the stock cap.
 
 Related: `iterm2-freeze-30-sessions-2026-07-30.md` · `gpu-vs-cpu-lag-2026-07-29.md` ·
 [[capability-initialized-is-not-capability-used]] · [[positive-control-the-denominator]] ·
