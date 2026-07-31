@@ -10,9 +10,11 @@ within 5 minutes of a backlog-add and ZERO false cliffs, under the standing cons
 disk-truth acceptance reads.
 
 Status: **BUILT + LANDED + LIVE-VERIFIED** (2026-07-31) — S1–S8 on trunk, both labels activated by
-the operator 2026-07-30, 13/14 acceptance criteria PASS against a 10 h live window (§10). Open:
-**A2** (the 5-min bound — 3 of 18 in-window adds missed it; lock-scope cause identified, tracked as
-`de5e3e24be8f`) and the §9 activation-SSOT drift. Design 2026-07-29 · owner session 8891c11f ·
+the operator 2026-07-30, 14/14 acceptance criteria PASS (§10). **A2 closed 2026-07-31** (`a9ea55aa`,
+item `de5e3e24be8f`): the singleton gated DECISION as well as admission, so a kick arriving during a
+414–833 s spawn tail produced no verdict at all; the lock now gates admission only, RED-proved
+against two pinned pre-change artifacts. Its live re-measurement over a fresh 10 h journal window is
+the remaining read. Open: the §9 activation-SSOT drift. Design 2026-07-29 · owner session 8891c11f ·
 branch `gu-autonomy-dispatch` ·
 row 5 of docs/plans/GROUND_UP_REBUILD_MAP.md · methodology: skills/ground-up/SKILL.md ·
 exemplar: docs/plans/LAND_PIPELINE_V2.md
@@ -451,7 +453,7 @@ labels are live (§9.1). Every row is a read taken **2026-07-31** against the jo
 | # | Verdict | Evidence |
 |---|---|---|
 | A1 | **PASS** | 154 passes each journal the whole dispatchable set (~125–140 records/pass vs the live open count); latency is not O(N) — the decision phase over a full backlog costs 7–45 s |
-| A2 | **PARTIAL — the one DoD clause not met** | 18 in-window adds: p50 **8 s** (the S5 kick working as designed), but **3 exceeded 300 s** (338/515/714 s). Cause below; tracked as `de5e3e24be8f` |
+| A2 | **PASS structurally — CLOSED `a9ea55aa`** (was PARTIAL, the one DoD clause not met) | The measured miss: 18 in-window adds, p50 **8 s** (the S5 kick working as designed), but **3 exceeded 300 s** (338/515/714 s) — every one of them a pass that found the singleton held and returned without deciding. Cause and fix below; the lock now gates admission only, so no pass can be silenced by a concurrent one. The live re-measurement over a fresh window is the remaining read |
 | A3 | **PASS** | 13,941 `defer` records with `position`+`reason` and **0 `abstained`** — surplus is a recorded decision, never an abstention |
 | A4 | **PASS (structurally, and now live)** | 0 `capped` verdicts because 0 wall verdicts of any kind were reached; the entire measured abstention population of §2 is gone, exactly as S2 predicted |
 | A5 | PASS | `tests/cc-wave-plan-verdict.bats` — a stubbed oracle timeout yields `unknown`, never `capped`, with no page |
@@ -465,22 +467,73 @@ labels are live (§9.1). Every row is a read taken **2026-07-31** against the jo
 | A13 | **PASS — built this session** | was specified and never implemented: `CC_DISPATCH_SATURATED_H` existed **only in this document**, zero occurrences in `bin/`, `tests/`, `scripts/`. Now a third `dispatch-inert` state (`f56041ae`), correctly silent against the live journal (220 admits in-window) |
 | A14 | PASS | ceiling reads the `claimed` fold (measured 5) and never `claude-accounts .rows[].k` — the corrected S2 has not regressed |
 
-### The one gap, stated plainly
+### The one gap, stated plainly — and CLOSED 2026-07-31 (`a9ea55aa`)
 
-**A2 is not met, and the reason is not what the design predicted.** The decision phase is fast —
-7–45 s for ~135 items — so S1 does what it claimed. The miss comes from the **singleton lock being
+**A2 was not met, and the reason was not what the design predicted.** The decision phase is fast —
+7–45 s for ~135 items — so S1 does what it claimed. The miss came from the **singleton lock being
 held across the SPAWN tail**: admission (wave-plan → claim → warm worktree → `handoff-fire`) takes
-**414–833 s**, one lock covers both phases, so a kick arriving during a spawn is skipped (S6,
-correctly) and its item waits for the next pass. Pass gaps reach **1073 s** (58 of 170 over 300 s),
-which is why the 300 s launchd backstop cannot hold its guarantee.
+**414–833 s**, one lock covered both phases, so a kick arriving during a spawn was skipped (S6,
+correctly) and its item waited for the next pass. Pass gaps reach **1073 s** (58 of 170 over 300 s),
+which is why the 300 s launchd backstop could not hold its guarantee.
 
-This contradicts S1's own premise — *"a decision is a pure read: it costs no quota, no session, no
-lock"* — which the implementation violates by holding the decision lock through admission. The fix
-is deliberately **not** attempted here: the lock is load-bearing for the ceiling (`cc-dispatch:118`
-records that two concurrent passes would each compute `free_slots` and each admit that many), so
-splitting it needs a separate admission lock plus a double-admission RED-proof. Filed as
-`de5e3e24be8f` rather than rushed — an un-RED-proofed change to the mechanism that prevents
-double-claiming is exactly the trade this rebuild's own F9 warns against.
+This contradicted S1's own premise — *"a decision is a pure read: it costs no quota, no session, no
+lock"* — which the implementation violated by holding the decision lock through admission.
+
+**The fix — narrow what the lock GATES, never what it PROTECTS.** A pass that loses the singleton no
+longer returns at step 0. It runs the whole decision phase, journals a verdict for every
+dispatchable item (`verdict:"defer"`, `reason:"pass-in-flight"`, `free_slots:0`,
+`live_workers:null`), and returns before the first capacity-consuming act. Decision latency is back
+to the pass cadence for **every** pass, contended or not, and A9's `{skipped, pass-in-flight}` record
+is still written — now *alongside* the decisions rather than instead of them.
+
+`live_workers:null` is deliberate, not an omission: `free_slots` is 0 because a lock is held, not
+because the fleet is full, and a live count on that record would read as though the pass had
+evaluated capacity and found none. `pass-in-flight` also outranks `at-ceiling` in the reason
+precedence for a second reason — `cc-blockers`' SATURATED premise gate counts `reason=="at-ceiling"`
+deferrals as evidence of real ceiling pressure, and these carry none.
+
+**Why the ceiling cannot double-admit.** The invariant is enforced by the lock's *presence* over
+[read `live_workers` … take claims], not by its *duration*, and that whole region is unreachable
+without it: `admit_n` is forced to 0 before the journal is written, and the pass returns before
+wave-plan, before claim and before spawn. The holder's path is byte-identical to before.
+
+**Both obvious alternatives were rejected on evidence, and the plan's framing of the fix was wrong.**
+This document (and the backlog item) said the split needed *"a separate admission lock or an atomic
+claim-based ceiling"*. Neither is required, and one is unsafe:
+
+- *"Release the lock before the spawn tail, keep the pull inside."* Unsafe twice over.
+  `cc-backlog claim` has **no** already-claimed guard — `cmd_transition` appends the event from any
+  status, deliberately — so two passes whose pulls straddle a claim both claim the same id: the
+  2026-07-20 double-worker incident exactly. And `warm_worktree` runs `git -C <repo> worktree add`,
+  which races `.git/config.lock` when two tails run concurrently (GH #34645/#48927). The tail
+  genuinely needs serialising; only the *journal* needed freeing.
+- *"A second, separate admission lock."* Buys nothing. The loser of an admission lock still has to
+  decide lock-free to fix A2, and once it does, the first lock has no remaining job.
+
+**RED-proved against two pinned real artifacts, never approximations** (`tests/cc-dispatch-v2.bats`,
+memory `control-must-replay-the-real-artifact`): `bf796c57` (pre-S6) still double-claims the same id
+under concurrency — the double-admission proof this change had to survive; and a second pinned
+control `ec92e68c` (S6 held across the tail) decides **zero** items under an identical held-lock
+fixture where the shipped tree decides all three. A second sha was needed because the v2 rebuild's
+own control has no singleton at all, so it cannot testify about a defect *inside* the singleton.
+Each zero-effect read has a positive control. Suites: selftest 121/121 · cc-dispatch 12/12 ·
+-v2 16/16 · -projects 18/18 · cadence 23/23 · cc-blockers 67/67 · dispatch-acceptance 10/10.
+
+**A2 is now met structurally; the live re-measurement is the operator's next window.** What is
+proved is that no pass can be silenced by a concurrent one; what the next 10 h journal window will
+show is the resulting max-latency figure against the 300 s bound.
+
+### Also closed in the same session (`39689331`) — the acceptance reader's own selftest was RED
+
+`dispatch-acceptance.sh selftest` had been exiting 1 (8 passed, **1 failed**), reproduced
+byte-identically on `origin/main`, so it predates this work. Not a reader defect: the A2-scoping case
+asserted *"an add for ANOTHER project must not be counted undecided — cc-dispatch never had it"*,
+a premise multi-project coverage (`f7abcbdee98c`) retired. The producer now decides about every open
+item, and an undeclared foreign one gets `{verdict:"skip", reason:"project-not-dispatched"}`. A1's
+denominator was taught that new state; this fixture was not — one consumer updated, another left
+behind, which is `named-failure-vs-no-verdict` exactly. Re-aimed rather than deleted: the same
+foreign add now PASSes with its skip record present and FAILs with it absent, so an undrained
+foreign project can never read as healthy. 10/10, 0 failed.
 
 ### What "landed green" is worth on this box — read the A12 row with this caveat
 
@@ -602,6 +655,31 @@ rebase+ff-only serialized, land via project-local `/ship` continuously.
   false of the *pass*, because one lock spans decision and spawn (414–833 s). The architecture was
   never the problem; the lock's SCOPE was. Generalisable: when a design's key claim is about
   cost-of-X, check that the *unit holding the lock* is X and not X-plus-something-slow.
+  **Resolved `a9ea55aa`, and the resolution taught a second thing: this document's own prescription
+  for the fix was wrong.** Both the §10 text and the backlog item said the split needed *"a separate
+  admission lock or an atomic claim-based ceiling"*. It needed neither — moving the *acquisition
+  point* was enough, because what a lock protects is a REGION, not a duration, and the region here
+  (`read live_workers … take claims`) was never the slow part. A prescription written at the moment
+  a defect is *filed* is a hypothesis, and the item's remedy half rots independently of its symptom
+  half (memory `work-item-remedy-can-become-forbidden`): derive the fix from the mechanism at the
+  time you implement it, and re-verify the *reasons* the filing gave, not just its diagnosis. Here
+  one of them was actively unsafe — the "obvious" alternative of releasing the lock before the spawn
+  tail would have re-created the 2026-07-20 double-worker incident, because `cc-backlog claim`
+  refuses nothing and `warm_worktree` races `.git/config.lock`.
+- **2026-07-31 — a suite with a pinned control needs a NEW pin per change, not the original one.**
+  `tests/cc-dispatch-v2.bats` pins `bf796c57` so landing cannot invert its RED halves — correct, and
+  it kept working. But that control is *pre-S6*: it has no singleton at all, so it is structurally
+  incapable of testifying about a defect **inside** the singleton, and a RED half written against it
+  would have passed for the wrong reason. The A2 fix needed a second pin (`ec92e68c`) carrying the
+  S6-era tree. Generalisable: the control is not "the old code", it is "the artifact that exhibits
+  the specific behaviour you are changing" — when the file changes twice, that is two shas.
+- **2026-07-31 — a green suite is not a green subsystem: check the reader's own selftest too.**
+  Every bats suite this diff touched was green while `scripts/dispatch-acceptance.sh selftest` — the
+  reader that grades *this entire plan* — had been exiting 1 on `origin/main`. It was found only by
+  running it, not by any gate. A criterion's producer and its reader are two consumers of one
+  contract, and `f7abcbdee98c` updated the producer plus A1's denominator while leaving A2's fixture
+  asserting the retired premise. When a state is added to a system, enumerate its consumers and
+  visit each (memory `named-failure-vs-no-verdict`).
 - **2026-07-31 — the plan named a second tool that does not exist, and this row certified it.** A12's
   stated read was "`bin/cc-backlog` selftest + `cc-dispatch` selftest". `cc-backlog` has **no**
   selftest and never has (rc 2 `unknown verb`; zero occurrences in source or `--help`). Caught by a
