@@ -210,7 +210,54 @@ routing does not scale with agent count at all.
 The uncomfortable implication, stated plainly: **the visibility requirement is not a constraint to
 design around — it is the Step-2 residue to retire.** Not by hiding panes (that only trades
 observability for silence), but by making a blocked session *reach out* rather than be *found*.
-Detailed audit of what already exists here versus what is inert is pending.
+
+### The gap is not the notifier — it is that the notifier has no face
+
+`~/.claude/hooks/cc-permission-beacon.sh` is **already wired on `PermissionRequest`** (with
+PostToolUse / Stop / SessionEnd clears) and writes `{ts, tool_name, tool_input, cwd}` per blocked
+session to `/tmp/cc-permission-pending/<sid>.json`. Its own header records why it exists: an
+unattended session that hits a prompt hangs until a human answers — the 133-minute `git reset --hard`
+incident.
+
+**So the exception-routing primitive is built, wired and firing. What does not exist is anything that
+renders that queue as the operator's primary surface.** That is precisely why the operator falls back
+on eyes, and why 30 panes of continuous rendering are being paid for a job a 3-row list does better.
+
+**Caught live while writing this file** — two sessions blocked simultaneously, with full pane
+visibility across three monitors, one unattended for **6.6 minutes**:
+
+```
+83726a35  BLOCKED 0.1 min  Bash: cd /tmp && rm -rf ccmail-test && mkdir … && cp … && git show …
+abf47077  BLOCKED 6.6 min  Bash: cd …/wt-capacity-chokepoint; REPO=$PWD; TMPH=$(mktemp -d); …
+```
+
+Both are **compound** commands — the structural reason the allow-list has plateaued: 88.3% of
+prompting Bash calls are compound, so a `Bash(prefix:*)` allow-list caps at ~2.4% coverage regardless
+of rule count. Live config confirms the plateau is not for lack of effort: `defaultMode: auto`,
+**350 allow / 6 ask / 41 deny** rules, `autoMode` block present.
+
+⇒ **Stop growing the allow-list; it is bounded by structure, not by effort.** And do not try to
+eliminate the residue — a compound command touching `rm -rf`, a keychain and a worktree *should* stop
+and ask. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
+
+### Corollary: do not build a terminal from scratch
+
+Considered and rejected on this box's own numbers. **WindowServer is the ceiling and it is Apple's** —
+30 panes in one window cost ~+11.2 pp of a core inside the compositor, the floor for *any*
+application, and kitty already sits on it (10 threads at 48 panes). A from-scratch emulator's best
+case is matching something already installed and free. Worse, "maximise Metal" is the premise that
+**already inverted here**: every GPU surface is a compositor object, and compositor objects are what
+saturated WindowServer, so a Metal-maximising terminal would allocate exactly the thing that froze the
+box. Add the real difficulty — VT correctness under Ink's alternate-screen / resize / wide-char usage
+— plus permanent maintenance, and it is the maximum case of the "constant re-work" the operator ruled
+out.
+
+**What is worth building is ~2% of that work: a console, not a terminal.** One row per session
+(status / blocked / last line), a queue fed by the beacon, zoom-to-full-screen on demand, and a
+dispatch composer. It implements **no VT at all** — it drives kitty underneath — and its inputs already
+exist here (the beacon, `cc-notify`, the mailbox, the session registry). Rendering then scales with how
+many sessions are *blocked* (0–3), not how many are *running* (30+). Check Claude Code's own **Agent
+view** and mobile/remote approval first; they may cover most of this for zero build.
 
 ---
 
