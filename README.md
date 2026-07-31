@@ -477,18 +477,32 @@ The whole 15-session fleet costs **≈0.75 cores**. Agent count is not the expen
 | **Tuning headroom** | [`iterm2-perf-parity.sh`](scripts/iterm2-perf-parity.sh) → `match=9 drift=0`, and it still burns 1.2 cores at *half* load ⇒ **configuration is exhausted** |
 | **The unit that costs** | the same 30 panes cost **+22.6 pp** of a core across 30 windows vs **+11.2 pp** in one — **windows are 2.35×; panes are nearly free** |
 
-This inverts the obvious remedy. iTerm2 disables Metal for any tab holding ≥6 sessions *and* for every background tab, so its only all-GPU layout for 30 sessions is **6 windows** — which forces you into the expensive unit. Maximising the GPU allocates the very compositor objects that saturate WindowServer. **The cap is protecting you.**
+This inverts the obvious remedy **on iTerm2**. It disables Metal for any tab holding ≥6 sessions *and* for every background tab, so its only all-GPU layout for 30 sessions is **6 windows** — which forces you into the expensive unit. On *that* architecture, "more GPU" and "more compositor objects" are the same request, because iTerm2 allocates one `CAMetalLayer` **per pane**. **The cap is protecting you.**
+
+But the axis is not the graphics API — it is **cadence, then windows, then surfaces**, fitted from four compositor arms at identical geometry and pixels/second:
+
+| Axis | Coefficient | Lever at 30 panes |
+|---|---|---|
+| **Presentation cadence** | **0.480 pp/Hz** | **9.6pp — dominant, 6× the surface lever** |
+| OS-window count | 0.4483 pp/window | 13.0pp across 1→30 |
+| Surface count *within* a window | 0.0552 pp/surface | 1.60pp ceiling — 8.1× cheaper per unit than a window |
+| **Metal vs OpenGL vs CPU** | **—** | **not a term** |
+
+**Ghostty is the falsifier** — and the reason an earlier version of this section, *"maximising the GPU is backwards,"* was wrong as stated. Ghostty is **Metal-native *and* per-pane**, and measures **24 panes in one window at 0.0% idle CPU / 351 MB**. If the API were the cost axis, that reading is impossible. What survives is **surfaces per window**, not *GPU or not* — so the cheapest lever is the one nobody files under "renderer": **drop the 120 Hz display to 60 Hz.** One reversible click, and a text UI gains nothing from 120 Hz.
 
 ### Therefore: stop rendering what you do not read
 
-| Terminal | threads / pane | windows for 30 panes | per-pane scripting |
-|---|---|---|---|
-| **kitty** | **flat** — 10 threads at 48 panes | **1** | `kitten @` · `$KITTY_WINDOW_ID` |
-| iTerm2 | ~0.87–1.1 | 6 (forced by the Metal gate) | `ITERM_SESSION_ID` |
-| WezTerm | **7.0, linear** (~210 at 30 panes) | 1 | `wezterm cli` |
-| Ghostty | 3 *(from source; not yet run at pane scale)* | ? | **no CLI IPC on macOS** |
+Every row measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/terminal-bench.sh), per-pid threads/RSS/ports from the **second** sample of `top -l 2` (never `ps %cpu`, a lifetime average that misread this box 2.3×):
 
-kitty wins on one structural property: **all N panes in one OS window at a thread count that does not grow**, without giving up the per-pane addressing that 22 load-bearing files here depend on.
+| Terminal | threads / pane | windows for 30 panes | per-pane scripting | console layer |
+|---|---|---|---|---|
+| **kitty** | **flat** — 10 threads at 48 panes | **1** | `kitten @` · `$KITTY_WINDOW_ID` | — |
+| iTerm2 | ~0.87–1.1 | 6 (forced by the Metal gate) | `ITERM_SESSION_ID` | — |
+| Ghostty | **4.00, linear** (`6 + 4.00×panes` → ~126 at 30) | **1** | **none on macOS** (`performIpc` false; AppleScript only) | — |
+| cmux | **5.18, linear** (`5.18×panes + 10.6` → ~166 at 30) | 1 | **`CMUX_SURFACE_ID` + full socket API** | **built in** — sidebar row per pane, blue ring on attention, notifications panel, `notify` CLI |
+| WezTerm | **7.0, linear** (~210 at 30 panes) | 1 | `wezterm cli` | — |
+
+kitty wins on one structural property: **all N panes in one OS window at a thread count that does not grow**, without giving up the per-pane addressing that 22 load-bearing files here depend on. Ghostty and cmux are both **libghostty/Metal** and both scale *linearly* — they lose the thread axis, not the API argument. **cmux does not dominate kitty**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and loses on threads.
 
 But the renderer is the *second*-order fix. A 30-pane grid is a **polling** interface — its cost scales with agent count, which is precisely the cost saturating the compositor. Exception routing does not scale with agent count at all. And the notifier that replaces it **already exists**: [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) is wired on `PermissionRequest` and writes every blocked session to `/tmp/cc-permission-pending/`. **It simply has no face** — nothing renders that queue as the operator's primary surface, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
 
