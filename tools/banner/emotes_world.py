@@ -49,6 +49,10 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+# SUPERSEDED, kept only because it is a harmless no-op: `emotes.py` now aliases itself into
+# `sys.modules['emotes']` before importing any pack, so a plain `import emotes` binds to the
+# RUNNING framework and needs no shim. The resolution below still returns that same object.
+# Do not copy this block into a new pack — write `import emotes`.
 # BIND TO THE FRAMEWORK THAT IS ALREADY RUNNING, never to a fresh copy of it — the same resolution
 # `emotes_reactions.py` documents at length. `emotes.py` is the entrypoint as well as the framework,
 # so at `load_packs()` time it is already loaded as `__main__`; a plain `import emotes` builds a

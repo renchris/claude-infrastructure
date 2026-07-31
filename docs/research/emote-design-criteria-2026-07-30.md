@@ -195,6 +195,30 @@ Three findings came out of actually rendering 27 candidates, and each corrects s
    each element's static rule — rendered every `!`, `?` and spark floating unattached in the sky.
    The rule generalises: **anything whose only opacity lives in keyframes is visible in the still.**
 
+4. **The contact sheet is an instrument, and it has two failure modes that both produce a wrong
+   verdict.** Both were hit during this build, in opposite directions:
+
+   - **A fixed-offset crop measures the crop.** Cropping every frame at the same offset turns a
+     translation of the subject into apparent displacement against the crop edge, which made a
+     12-unit move look like an event. The correct test is to resize WHOLE frames to the honest
+     332 px and append them — harsher, and it is what exposed two failed drafts.
+   - **An even-interval strip ALIASES against a periodic beat.** Sampled at 0.8 s against a 0.44 s
+     shudder cycle the motion was nearly invisible; sampled at that beat's own half-cycle it was
+     obvious. So a periodic candidate may never be convicted on an even-interval sheet alone.
+
+   The design consequence is sharper than the review one: a periodic beat whose extremes are not
+   HELD spends most of its time in transit, and the midpoint of that transit is approximately the
+   resting pose. Hold each extreme for roughly a third of the cycle and the beat survives a coarse
+   glance as well as a careful one.
+
+5. **"Nameable in three words" is a veto, and it was exercised.** THE ITCH was rebuilt three times
+   until it was legible, and it still could not be named: this creature has no paw and no separable
+   leg — `gen.clawd_sprite` emits legs as two interleaved PAIRS plus one four-leg standing group —
+   so there is no scratching affordance to draw. The motion reads, and reads as a whole-body
+   convulsion. It ships as **THE SHUDDER**, which is what the picture actually shows. Renaming a
+   beat to match its render is cheaper than defending a name the artwork cannot support, and S1
+   exists precisely to force that choice.
+
 ### Still open
 
 The five-axis research wave (cute-craft, emote catalogues, repo→action mapping, sprite capability,
