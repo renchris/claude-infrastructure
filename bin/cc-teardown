@@ -18,6 +18,15 @@
 #       exit 5  = FAIL LOUD (acted, but effect-verify says the pane/process SURVIVED — never a false success)
 #   cc-teardown --selftest        (RED-proves every branch with mock panes/pids + temp git; no real session)
 #
+# THE VERDICT TOKEN (2026-07-31). Every decision branch prints ONE machine-parseable line to stderr —
+#   cc-teardown: verdict=<DECISION> reason_kind=<kind> exit=<n> pane=<uuid|-> pid=<pid|->
+# emitted by record(), so a branch cannot forget it (record() is already mandatory on every branch —
+# the no-silent-teardown rule). Callers parse THIS, never the prose: an exit code alone cannot tell
+# "a safety gate declined" from "the actuator could not see the target", and prose drifts. A run that
+# exits WITHOUT a verdict line is itself a distinguishable state — a usage/precondition error (die()),
+# never a decision. Why it was needed: a false `exit 0` is indistinguishable from a real reap to an
+# automated caller, and lead-crash-watchdog's orphan-close leg became exactly that caller.
+#
 # THE SIX STEPS (brief-verbatim):
 #   1. RESOLVE via cc-sessions --all --json. Refuse --self + unknown ids (fail-closed exit 2).
 #   2. SAFETY GATE — delegate work-safe + positive-done to cc-teardown-safety-gate.sh (the standalone
@@ -115,6 +124,7 @@ TARGET=""; paneUUID=""; pid=""; cwd=""; sname=""; done_ev=""; git_state=""
 sess_id=""; started_ms=""          # 1c operator-adoption belt (2026-07-24): transcript + spawn source
 EXPECT_PID=""; EXPECT_LSTART=""   # classify-time identity pin (a17 S-4); empty = no pin (back-compat)
 ASSIGNEE_OF=""; ASSIGNEE_SID=""   # 1b-A unregistered-assignee adoption (2026-07-29); empty = off
+ADOPT_OCCUPANTS=""                # pids proving an "absent" pane is still occupied (refusal evidence)
 
 iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say()  { echo "cc-teardown: $*" >&2; }
@@ -123,29 +133,57 @@ usage() {
   cat >&2 <<'U'
 cc-teardown <pane-uuid|name> --done-evidence <text> [--force-adopted]
   0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived)
+  every decision also prints: verdict=<D> reason_kind=<k> exit=<n> target=… pane=… pid=…
+                             (parse THAT, not the prose; no verdict line = a usage error)
   --force-adopted   operator CLI ONLY — skip the operator-adoption belt (no autonomous caller passes it)
   --assignee-of <lead-sid>   target is an Agent-Team assignee of that (dead) lead: allow ADOPTION of a
-                             pane that has no session-registry row, on positive it2+argv proof only
+                             pane that has no session-registry row, on positive it2+argv proof only.
+                             The target MUST be the PANE UUID — an assignee has no registry row, so
+                             there is no name to look up and an agent name is REFUSED
+                             (reason_kind=target-not-a-pane-uuid), never reported as already-gone.
   --assignee-sid <own-sid>   the assignee's OWN session id — keeps the operator-adoption belt ARMED
 cc-teardown --selftest
 U
 }
 
 # R-c analog — NO silent teardown: every decision branch writes one outcome record.
-record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1>
+#
+# …and prints the VERDICT TOKEN (see header). Folded in HERE rather than added at ~15 exit sites for
+# a durability reason this repo has been bitten by: a token a branch can forget is a token a caller
+# cannot trust, and the branch that forgets it will be the rare one. record() is already mandatory on
+# every decision branch, so binding the token to it makes coverage structural. The exit code is a
+# PURE FUNCTION of the decision (the documented 0/10/2/5 contract), so the line can state the code
+# the caller is about to see without record() being told it.
+record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1> [exit_code]
   mkdir -p "$RECORDS_DIR" 2>/dev/null || true
-  local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+  local ts vex; ts="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+  case "$1" in
+    TEARDOWN|ALREADY-GONE) vex=0 ;;
+    DEFER)                 vex=10 ;;
+    FAILED)                vex=5 ;;
+    *)                     vex=2 ;;   # REFUSE and anything unforeseen — fail-closed, never 0
+  esac
+  # The derivation holds wherever THIS file decides the exit. It does not at the one site where the
+  # code comes from another program (the delegated safety gate), so that site passes it explicitly —
+  # a token advertising an exit the caller will not get is the same defect class as a false success,
+  # and here it would be introduced by a change to a DIFFERENT file's contract.
+  case "${5:-}" in ''|*[!0-9]*) ;; *) vex="$5" ;; esac
+  # `target` as well as `pane`: on every REFUSE that fires BEFORE resolution, paneUUID is still empty
+  # — and a caller correlating verdicts to the panes it asked about needs the key it passed in.
+  printf 'cc-teardown: verdict=%s reason_kind=%s exit=%s target=%s pane=%s pid=%s\n' \
+    "$1" "$2" "$vex" "${TARGET:--}" "${paneUUID:--}" "${pid:--}" >&2
   jq -n \
     --arg decision "$1" --arg rk "$2" --arg reason "$3" --arg blv "${4:-0}" \
     --arg pane "$paneUUID" --arg pid "$pid" --arg cwd "$cwd" --arg name "$sname" \
     --arg target "$TARGET" --arg ev "$done_ev" --arg gs "$git_state" --arg at "$(iso)" \
+    --arg vex "$vex" \
     '{kind:"cc-teardown", decision:$decision, reason_kind:$rk, reason:$reason,
       paneUUID:(if $pane=="" then null else $pane end),
       pid:(if $pid=="" then null else ($pid|tonumber? // null) end),
       name:(if $name=="" then null else $name end),
       cwd:(if $cwd=="" then null else $cwd end), target:$target,
       done_evidence:$ev, git_state:(if $gs=="" then null else $gs end),
-      both_legs_verified:($blv=="1"), at:$at}' \
+      both_legs_verified:($blv=="1"), exit_code:($vex|tonumber), at:$at}' \
     > "$RECORDS_DIR/${ts}.json" 2>/dev/null || true
 }
 
@@ -182,6 +220,58 @@ write_teardown_marker() { # $1=target pane-uuid  $2=target sid  $3=mode
 pid_alive()  { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 pid_lstart() { "$PS_BIN" -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
 
+# is_pane_uuid <s> → rc 0 iff <s> is a canonical iTerm2 session id (8-4-4-4-12 hex).
+# The ONE question that makes "no pane has this id" mean anything. Ask a pane enumerator for a key
+# that is not a pane key and the miss is guaranteed BY CONSTRUCTION — see resolve_assignee's guard.
+is_pane_uuid() {
+  [[ "${1:-}" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]
+}
+
+# pane_occupants <uuid> → prints occupant pids; rc 0 OCCUPIED · 1 provably VACANT · 2 blind oracle.
+#
+# The SECOND, INDEPENDENT presence oracle for a pane — and deliberately not another it2 call. iTerm2
+# exports ITERM_SESSION_ID="<wNtNpN>:<pane-uuid>" into the pane's shell, and every process started
+# there inherits it, so the kernel's own process table carries a pane→process binding that shares no
+# code, no daemon and no failure mode with `it2 session list`. A pane whose processes are all gone is
+# gone; a pane still hosting live processes is NOT gone, whatever the enumerator says. This is what
+# turns "the lookup failed" into "absence was READ".
+#
+# TOKEN-EXACT, never substring (memory: pgrep-f-matches-agent-briefs / detector-matching-its-own-
+# skill-description). `ps -E` prints argv AND the environment in one column, so a bare grep for the
+# uuid also matches (a) any process carrying that uuid as an ARGUMENT — including cc-teardown's own
+# `<pane-uuid> --done-evidence ...` argv and the watchdog's evidence prose — and (b) the scan's own
+# awk. Measured on this machine: substring matching returned the scanning awk as an occupant; the
+# token-exact form drops it and keeps the genuine ones. So the match must be a whole whitespace-
+# delimited token that IS an ITERM_SESSION_ID assignment whose value ENDS in ":<uuid>". Compared
+# upper-cased: iTerm2 emits uppercase on both sides, and a lowercase target would otherwise miss
+# every occupant and read as VACANT — a silent false "gone", the exact bug class this closes.
+#
+# TRI-STATE with a POSITIVE CONTROL. "Zero occupants" is only evidence when the scan could see
+# occupancy AT ALL: if the whole process table yields no ITERM_SESSION_ID token, `ps -E` is not
+# reporting environments (restricted context, foreign owner, mock) and the read is BLIND, not vacant.
+# Without that control this oracle would answer "vacant" most confidently exactly when it is broken —
+# and broken-oracle and empty-pane both measure zero (memory: structural-gates-are-blind-to-zero-ink).
+pane_occupants() {
+  local uuid out res tok pids
+  uuid="$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')"
+  [ -n "$uuid" ] || return 2
+  out="$(cct_bounded "$PS_BIN" -E -Ao pid=,command= 2>/dev/null)" || return 2
+  [ -n "$out" ] || return 2
+  res="$(printf '%s\n' "$out" | awk -v u=":$uuid" '
+    { for (i = 2; i <= NF; i++)
+        if (index($i, "ITERM_SESSION_ID=") == 1) {
+          tok++
+          if (substr(toupper($i), length($i) - length(u) + 1) == u) pids[$1] = 1
+        } }
+    END { printf "tok=%d\n", tok + 0; for (p in pids) print p }' 2>/dev/null)" || return 2
+  tok="$(printf '%s\n' "$res" | sed -n '1s/^tok=//p')"
+  case "${tok:-}" in ''|*[!0-9]*) return 2 ;; esac
+  [ "$tok" -eq 0 ] && return 2                       # no env visible anywhere ⇒ blind, never "vacant"
+  pids="$(printf '%s\n' "$res" | sed 1d | tr '\n' ' ' | sed 's/  */ /g;s/^ //;s/ $//')"
+  [ -n "$pids" ] && { printf '%s' "$pids"; return 0; }
+  return 1
+}
+
 # pane_present <uuid> → rc 0 present · 1 absent · 2 list-unreadable (fail-safe: never assume absent).
 # The real it2 CLI walks ONLY app.windows and returns a VALID but EMPTY array `[]` at exit 0
 # when that model is blind — detached desk / different GUI login / restoration-pending / buried
@@ -203,6 +293,40 @@ pane_present() {
 
 # resolve_assignee <pane-uuid> <lead-sid> → rc 0 ADOPTED (globals set) · 1 pane provably ABSENT
 #                                          · 2 REFUSE (indeterminate or identity unproven)
+#                                          · 3 REFUSE (target is not a pane uuid — unanswerable)
+#                                          · 4 REFUSE (absence CONTRADICTED — the pane is occupied)
+#                                          · 5 REFUSE (absence UNCORROBORATED — occupancy read blind)
+#
+# ── THE FALSE-SUCCESS FIX (2026-07-31, backlog 99f87bf7a6f7) ───────────────────────────────────────
+# As first written this function inferred rc 1 ("provably absent") from a single failed lookup:
+# `.[] | select(.id == $target)` matching nothing in a readable it2 list. Two ways that inference was
+# wrong, both reproduced hermetically against the pre-fix tree:
+#
+#   (i)  THE TARGET WAS NEVER A PANE KEY. $1 was used as a pane uuid with no check. Given an agent
+#        NAME — `cc-teardown gu2-seams --assignee-of a8e72ae5` — no pane can ever have `.id ==
+#        "gu2-seams"`, so the miss is guaranteed by construction and says NOTHING about the pane. It
+#        returned 1 ⇒ ALREADY-GONE ⇒ **exit 0** while pid 44938 was alive at 6h48m and the pane sat
+#        in the registry with that exact pid. The tool's own contract has 5 = FAIL(pane survived) for
+#        precisely that state; it was booked as SUCCESS instead. The tell that it was a coin flip and
+#        not a verdict: the IDENTICAL command for the sibling gu2-archaeology returned REFUSE
+#        assignee-unproven (exit 2) — same state, same flags, opposite answers, differing only in
+#        whether the it2 call happened to be readable at that instant.
+#   (ii) THE ENUMERATOR CAN BE PARTIALLY BLIND. `it2 session list` walks only app.windows. The
+#        all-blind case (0 panes) was already handled; a list that enumerates SOME windows and omits
+#        the target's is readable, non-empty, and still wrong — and that one IS reachable by the
+#        automated caller, which always passes a real uuid.
+#
+# So absence is no longer INFERRED from a failed lookup; it is READ, positively, on two independent
+# oracles that must AGREE — the it2 enumeration and the kernel process table (pane_occupants). Either
+# one unable to answer ⇒ REFUSE. This matters more since 2026-07-31: LCW_ORPHAN_CLOSE=1 gave
+# --assignee-of its first autonomous caller, and to that caller a false 0 is indistinguishable from a
+# real reap — the orphan survives forever while the log reads "TORN DOWN + effect-verified".
+#
+# The process-table leg is keyed on ITERM_SESSION_ID rather than on `--agent-id …@session-<lead>`
+# argv, which is the other obvious reading of "no argv match". Argv keys on the LEAD, and a lead has
+# many assignees: with siblings still alive it would refuse a genuinely-gone pane forever, and with
+# the target the only survivor it would prove no more than the env leg does. ITERM_SESSION_ID keys on
+# the PANE — the exact thing whose absence is in question.
 #
 # THE MISSING CATEGORY (backlog 95281da714f0 leg b, 2026-07-29). resolve() above knows exactly one
 # oracle — the session registry — and an Agent-Team assignee is NEVER in it: measured 134 of 134
@@ -232,8 +356,15 @@ pane_present() {
 #      substring match would have adopted — then killed — an unrelated live session
 #      (memory: detector-matching-its-own-skill-description — text is never evidence).
 resolve_assignee() {
-  local uuid="$1" lead="$2" lst n obj _tty base rpid rcomm rargs agid
+  local uuid="$1" lead="$2" lst n obj _tty base rpid rcomm rargs agid occ orc
   [ -n "$uuid" ] && [ -n "$lead" ] || return 2
+
+  # ── leg 0: is the target even a pane key? ──
+  # Cheapest and most load-bearing guard in the function. Every leg below asks the world about a PANE
+  # UUID; asked about anything else they can only return "not found", which is a fact about the
+  # question, never about the pane. Refuse rather than answer an unanswerable question — an
+  # unresolvable target is a caller error to be REPORTED, never an idempotent success.
+  is_pane_uuid "$uuid" || return 3
 
   # ── leg 1: pane liveness, tri-state (see pane_present for why zero ⇒ indeterminate) ──
   # A LONGER bound than the 10s default, for a measured reason: `it2 session list --json` took
@@ -250,7 +381,21 @@ resolve_assignee() {
   { [ -z "$n" ] || [ "$n" = -1 ]; } && return 2
   [ "$n" -eq 0 ] && return 2
   obj="$(printf '%s' "$lst" | jq -c --arg t "$uuid" '.[] | select(.id==$t)' 2>/dev/null | head -1)"
-  [ -n "$obj" ] || return 1          # enumerator was READABLE and non-empty ⇒ a real absence
+  if [ -z "$obj" ]; then
+    # ── leg 1b: CORROBORATE the absence on the independent oracle before claiming it ──
+    # One readable enumeration that omits the pane is a lookup MISS, and a miss is only an absence if
+    # a second, unrelated oracle agrees. pane_occupants asks the kernel instead of iTerm2; it cannot
+    # share the app.windows blindness that produced the miss. Only unanimous absence ⇒ rc 1.
+    occ="$(pane_occupants "$uuid")"; orc=$?
+    case "$orc" in
+      1) return 1 ;;   # both oracles say gone — a READ absence, the only ALREADY-GONE we now allow
+      0) ADOPT_OCCUPANTS="$occ"   # named in the refusal so an operator sees WHAT is still running.
+         # Deliberately NOT assigned to `pid`: these processes were never identity-proven as the
+         # target, and `pid` is what the ACT legs kill. Evidence for a refusal, never a kill list.
+         return 4 ;;   # it2 says gone, the process table says occupied — refuse, never "success"
+      *) return 5 ;;   # occupancy unreadable ⇒ absence unproven ⇒ refuse (fail-closed)
+    esac
+  fi
 
   # ── leg 2: pane → tty ──
   _tty="$(printf '%s' "$obj" | jq -r '.tty // empty' 2>/dev/null)"
@@ -419,8 +564,18 @@ main() {
       resolve_assignee "$TARGET" "$ASSIGNEE_OF" || _ar=$?
       case "$_ar" in
         0) say "NOTE — adopted UNREGISTERED assignee pane $paneUUID (pid $pid, agent $sname of dead lead $ASSIGNEE_OF): no registry row, identity proven from it2 pane liveness + argv" ;;
-        1) record ALREADY-GONE idempotent "assignee pane '$TARGET' is absent from a READABLE it2 enumeration — nothing to close" 1
-           say "OK — assignee pane already gone (idempotent success, exit 0)"; exit 0 ;;
+        1) record ALREADY-GONE idempotent "assignee pane '$TARGET' is absent from a READABLE it2 enumeration AND hosts no live process carrying its ITERM_SESSION_ID — absence READ on two independent oracles, nothing to close" 1
+           say "OK — assignee pane already gone (absence corroborated on it2 + process table; idempotent success, exit 0)"; exit 0 ;;
+        3) # The target was never a pane key, so no enumerator could have answered — the miss was
+           # guaranteed by construction. This is the refusal that replaces the false exit 0.
+           record REFUSE target-not-a-pane-uuid "target '$TARGET' is not a pane UUID, and --assignee-of resolves ONLY by pane UUID (an assignee has no registry row to look a name up in). A pane enumerator asked for a non-pane key can only answer 'not found', which is a fact about the QUESTION and never about the pane — so this can never be reported as already-gone. Pass the pane UUID: cc-teardown <pane-uuid> --done-evidence ... --assignee-of $ASSIGNEE_OF" 0
+           say "REFUSE reason_kind=target-not-a-pane-uuid — '$TARGET' is not a pane UUID; --assignee-of needs the pane UUID, not an agent name (exit 2)"; exit 2 ;;
+        4) # Two oracles DISAGREE and the safe one wins: it2 omitted the pane, but live processes
+           # still carry its ITERM_SESSION_ID. Never exit 0 on a contradiction.
+           record REFUSE absence-contradicted "the it2 enumeration omitted pane '$TARGET', but the process table shows live process(es) [$ADOPT_OCCUPANTS] whose ITERM_SESSION_ID names that pane — the pane is NOT gone and the enumeration was partially blind; refusing to report a reap that did not happen" 0
+           say "REFUSE reason_kind=absence-contradicted — it2 omits pane '$TARGET' but pid(s) [$ADOPT_OCCUPANTS] are still live in it; NOT gone (exit 2)"; exit 2 ;;
+        5) record REFUSE absence-uncorroborated "the it2 enumeration omitted pane '$TARGET', but the independent occupancy oracle could not read process environments at all (no ITERM_SESSION_ID visible anywhere — restricted context or unavailable ps -E), so the absence rests on a single oracle that has been wrong before; refusing rather than claiming an unverified reap" 0
+           say "REFUSE reason_kind=absence-uncorroborated — pane '$TARGET' looks absent but occupancy could not be read; absence unproven (exit 2)"; exit 2 ;;
         *) # INDETERMINATE or identity unproven. Fail-closed, and named distinctly from
            # unknown-target so a caller can tell "the actuator could not SEE the target" (a wiring
            # or load problem, retryable) from "a safety gate declined" (a verdict to respect).
@@ -456,6 +611,16 @@ main() {
   fi
 
   # ── 6. IDEMPOTENT short-circuit: dead pid AND already-absent pane ⇒ success (nothing to do) ─────────
+  # DELIBERATELY NOT corroborated by pane_occupants, unlike the assignee absence path above — the two
+  # are asymmetric and applying that check here would be a regression, not a hardening:
+  #   · there, the TARGET IS A PANE (adoption resolves by pane uuid and nothing else), so "the pane
+  #     still has live processes" means the thing we were asked to close is still there;
+  #   · here, the target is a REGISTERED SESSION whose pid this branch has already proven dead by a
+  #     direct kill -0. A pane can legitimately outlive it holding nothing but a login shell — and
+  #     that shell inherits ITERM_SESSION_ID, so pane_occupants would report OCCUPIED and refuse
+  #     every crashed-session cleanup forever.
+  # The residue this branch can mis-read is an empty pane, never a live agent: materially not the
+  # false-success class (backlog 99f87bf7a6f7), whose whole harm was a RUNNING assignee booked as reaped.
   if ! pid_alive "$pid"; then
     pane_present "$paneUUID"; local pp0=$?
     if [ "$pp0" = 1 ]; then
@@ -569,7 +734,7 @@ main() {
     [ -n "$gdec" ] || { [ "$grc" = 2 ] && gdec=REFUSE || gdec=DEFER; }
     grk="$(printf '%s'     "$gate_out" | jq -r '.reason_kind // "gate"' 2>/dev/null)"
     greason="$(printf '%s' "$gate_out" | jq -r '.reason // "safety gate blocked teardown"' 2>/dev/null)"
-    record "$gdec" "$grk" "$greason" 0
+    record "$gdec" "$grk" "$greason" 0 "$grc"
     say "$gdec — $greason (exit $grc)"; exit "$grc"
   fi
 
@@ -684,11 +849,16 @@ EOF
   chmod +x "$d/bin/cc-sessions" "$d/bin/it2"
 
   # mock ps — real lstart passthrough; tty faked to a fixed line; tty process-table read from <table-file>
+  # PS_ENV serves the `-E -Ao pid=,command=` occupancy scan (pane_occupants), verbatim in `ps -E`
+  # shape: `pid argv0 argv... KEY=v KEY=v`. DEFAULT EMPTY = a BLIND oracle, deliberately: a scenario
+  # that forgets to pose one must refuse loudly, never fall through to the real machine's process
+  # table and decide a teardown branch on whatever panes happen to be open right now.
   make_ps() { # <dest> <table-file>
     cat > "$1" <<EOF
 #!/bin/bash
 case "\$*" in
   *"-o tty="*) echo "ttys900" ;;
+  *"-E "*)     printf '%s\n' "\${PS_ENV:-}" ;;
   *"-t "*)     cat "$2" 2>/dev/null ;;
   *)           exec /bin/ps "\$@" ;;
 esac
@@ -704,6 +874,11 @@ EOF
   set_session() { printf '[{"paneUUID":"%s","name":"test-sess","pid":%s,"cwd":"%s","session_id":"s","startedAt":0}]\n' \
     "$U" "${1:-0}" "$2" > "$d/state/sessions.json.t" && mv "$d/state/sessions.json.t" "$d/state/sessions.json"; }
   set_panes() { printf '%s' "$1" > "$d/state/panes.json.t" && mv "$d/state/panes.json.t" "$d/state/panes.json"; }
+  # An EMPTY registry — the measured condition of every Agent-Team assignee pane (134/134 had no
+  # row). Mandatory for the adoption scenarios: leave a prior scenario's row in place and resolve()
+  # succeeds, the run never enters the adoption path, and the scenario passes on a branch it is not
+  # testing (which is exactly how 16 first went green while proving nothing).
+  no_session() { printf '[]\n' > "$d/state/sessions.json.t" && mv "$d/state/sessions.json.t" "$d/state/sessions.json"; }
   spawn()     { /bin/sleep 300 & P=$!; }
   reap()      { [ -n "${P:-}" ] && { kill "$P" 2>/dev/null; wait "$P" 2>/dev/null; }; P=""; }
 
@@ -849,13 +1024,58 @@ EOF
     || badp "identity-pin REFUSE still killed the process — collateral kill"
   reap
 
+  # ── 14-16. THE FALSE-SUCCESS CLASS (backlog 99f87bf7a6f7). An "already gone" that was INFERRED from
+  #    a failed lookup rather than READ is the one wrong answer an automated caller cannot catch: it
+  #    is byte-identical to a real reap. Pre-fix, `cc-teardown gu2-seams --assignee-of <lead>` exited 0
+  #    while that pane's pid was alive at 6h48m. Adoption needs no registry row, so these pose only a
+  #    lead id; the exhaustive matrix (incl. adoption + lowercase + argv-not-env) is in
+  #    tests/cc-teardown-assignee-adopt.bats, RED-proved against the pre-fix tree via CCT_UNDER_TEST.
+  local LEAD_SELFTEST=a8e72ae5
+
+  # 14. target is an AGENT NAME, not a pane uuid → no enumerator can answer → REFUSE (exit 2).
+  rm -f "$d/rec"/*.json; set_panes "[]"
+  rc=0; run_td "$d/bin/ps_clean" "$SELF" "gu2-seams" --done-evidence "x" --assignee-of "$LEAD_SELFTEST" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(jq -r '.reason_kind' "$(last_record)")" = target-not-a-pane-uuid ] \
+    && okp "agent-name target (not a pane uuid) → REFUSE (exit 2), never a false already-gone" \
+    || badp "a non-pane-uuid target was not refused (rc=$rc rk=$(jq -r '.reason_kind' "$(last_record)" 2>/dev/null); want 2/target-not-a-pane-uuid)"
+
+  # 15. pane absent from a READABLE list, but live processes still carry its ITERM_SESSION_ID: the
+  #     enumerator was partially blind. Two oracles disagree ⇒ the SAFE one wins ⇒ REFUSE (exit 2).
+  rm -f "$d/rec"/*.json; set_panes "[]"; no_session
+  rc=0; PS_ENV="31337 claude.exe --agent-id a@session-$LEAD_SELFTEST ITERM_SESSION_ID=w0t0p1:$U" \
+    run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" --assignee-of "$LEAD_SELFTEST" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] && [ "$(jq -r '.reason_kind' "$(last_record)")" = absence-contradicted ] \
+    && okp "pane 'absent' but still OCCUPIED → REFUSE (exit 2) — a reap that did not happen is never 0" \
+    || badp "an occupied pane was reported gone (rc=$rc rk=$(jq -r '.reason_kind' "$(last_record)" 2>/dev/null); want 2/absence-contradicted)"
+
+  # 16. …and the converse, so the fix cannot be "refuse everything": both oracles agree the pane is
+  #     vacant (a live UNRELATED pane supplies the positive control) → ALREADY-GONE (exit 0).
+  rm -f "$d/rec"/*.json; set_panes "[]"; no_session
+  rc=0; PS_ENV="777 -zsh ITERM_SESSION_ID=w9t9p9:D0D0D0D0-1111-2222-3333-444455556666" \
+    run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" --assignee-of "$LEAD_SELFTEST" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] && [ "$(last_decision)" = ALREADY-GONE ] \
+    && okp "absence agreed by BOTH oracles → ALREADY-GONE (exit 0) — corroborated, not inferred" \
+    || badp "a corroborated absence was not accepted (rc=$rc dec=$(last_decision); want 0/ALREADY-GONE)"
+
   # 11. NO-SILENT-RECORD: the just-run branch wrote an auditable outcome record
   [ -n "$(last_decision)" ] && okp "no-silent-record: every decision branch writes an outcome record" \
     || badp "a decision was SILENT (no record) — an unauditable teardown"
 
+  # 17. VERDICT TOKEN: the branch that just ran printed one machine-parseable verdict line whose
+  #     advertised exit code matches the contract. A caller must never parse prose or guess from rc.
+  rm -f "$d/rec"/*.json; set_panes "[]"; no_session
+  local vout
+  vout="$(PS_ENV="777 -zsh ITERM_SESSION_ID=w9t9p9:D0D0D0D0-1111-2222-3333-444455556666" \
+    run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" --assignee-of "$LEAD_SELFTEST" 2>&1 >/dev/null)"
+  case "$vout" in
+    *"verdict=ALREADY-GONE reason_kind=idempotent exit=0 target=$U"*)
+      okp "verdict token: one parseable 'verdict=… reason_kind=… exit=… target=…' line per decision" ;;
+    *) badp "no parseable verdict token on stderr (got: $(printf '%s' "$vout" | head -1))" ;;
+  esac
+
   echo "cc-teardown --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self/identity-pin-recycle→REFUSE(2), idempotent(0), no-silent-record all fire."
+  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self/identity-pin-recycle/non-pane-uuid-target/absence-contradicted→REFUSE(2), idempotent + corroborated-absence(0), no-silent-record, verdict-token all fire."
   exit 0
 }
 

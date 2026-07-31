@@ -643,12 +643,37 @@ close_orphaned_panes() {
         2)  # UNRESOLVED is NOT a policy refusal — it means our own resolution wiring is blind, the
             # exact failure that made this leg inert. It must never be absorbed into the trusted
             # refuse bucket (memory: feature-durability-mechanism-not-memory / named-failure).
-            if [[ "$tout" == *"reason_kind=unknown-target"* || "$tout" == *"reason_kind=assignee-unproven"* ]]; then
-              n_unres=$((n_unres + 1))
-              echo "[watchdog $sid] close: $member pane=$pane UNRESOLVED — cc-teardown could not SEE this pane (not a safety verdict; the close leg is BLIND here): ${tout##*cc-teardown: }"
-            else
-              n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE (rc 2); left alone"
-            fi ;;
+            #
+            # Keyed on cc-teardown's VERDICT TOKEN — `verdict=<D> reason_kind=<k> exit=<n> …`, one
+            # line per decision, emitted by its record() so no branch can omit it. Prose is not a
+            # protocol: this arm used to substring-match message text, which meant a reworded
+            # refusal silently changed which bucket a pane landed in. The token is the contract.
+            local trk=""
+            if [[ "$tout" =~ verdict=[A-Z-]+[[:space:]]+reason_kind=([a-z-]+) ]]; then
+              trk="${BASH_REMATCH[1]}"
+            elif [[ "$tout" =~ reason_kind=([a-z-]+) ]]; then
+              # PRE-TOKEN FALLBACK. Both files are symlinks into one checkout and land together, so
+              # skew should not arise — but `command -v cc-teardown` can resolve a copy this repo
+              # does not control, and an older one prints reason_kind only inside its prose. Without
+              # this arm that skew would silently demote every blind outcome into the trusted refuse
+              # bucket: quieter, and quiet is the wrong direction for a wiring failure.
+              trk="${BASH_REMATCH[1]}"
+            fi
+            case "$trk" in
+              # "the actuator could not SEE the target" — a wiring/load problem, retryable, and NOT
+              # a verdict any safety gate reached.
+              unknown-target|assignee-unproven|target-not-a-pane-uuid|absence-uncorroborated)
+                n_unres=$((n_unres + 1))
+                echo "[watchdog $sid] close: $member pane=$pane UNRESOLVED ($trk) — cc-teardown could not SEE this pane (not a safety verdict; the close leg is BLIND here): ${tout##*cc-teardown: }" ;;
+              # A POSITIVE finding, not a blind spot: the pane looked absent to iTerm2 but still hosts
+              # live processes. Counted with UNRESOLVED because the outcome is the same — still
+              # running, no gate judged it — and named separately because the cause is the opposite.
+              absence-contradicted)
+                n_unres=$((n_unres + 1))
+                echo "[watchdog $sid] close: $member pane=$pane STILL OCCUPIED — the pane is NOT gone; iTerm2 omitted it but its processes are alive: ${tout##*cc-teardown: }" ;;
+              *)
+                n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE${trk:+ ($trk)} (rc 2); left alone" ;;
+            esac ;;
         5)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane FAIL LOUD — acted but the pane SURVIVED (rc 5)" ;;
         124) # The bound above CUT the call — timeout(1)'s own rc, not cc-teardown's. A THIRD state:
              # we have NO verdict at all, and the pane may or may not have been acted on. It must not

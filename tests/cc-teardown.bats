@@ -9,11 +9,15 @@ setup() {
   export CC_TEARDOWN_SELF_UUID="none"   # deterministic self-guard in a headless test
 }
 
-@test "selftest passes and runs all 17 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 21 checks (a zero-check suite must not 'pass')" {
+  # A RATCHET, not a tally: `--selftest` exits 0 when every check it happened to run passed, so a
+  # suite that silently stopped running checks would report GREEN. Raise this ONLY together with the
+  # scenarios that justify it. 17 → 21 on 2026-07-31 (backlog 99f87bf7a6f7): the false-success class
+  # added non-pane-uuid target, absence-contradicted, corroborated-absence and the verdict token.
   run "$T" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 17 ]
+  [ "$n_ok" -eq 21 ]
 }
 
 @test "identity-pin: --expect-pid mismatch (pane recycled) → REFUSE (exit 2), records identity-pin (a17 S-4)" {

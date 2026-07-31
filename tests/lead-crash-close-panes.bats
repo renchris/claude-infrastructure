@@ -314,8 +314,11 @@ EOF
 @test "(xv) UNRESOLVED is NOT the trusted refuse bucket — a blind actuator reports BLIND" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"
-  # the REAL pre-fix outcome, verbatim from cc-teardown's refuse path
-  echo "cc-teardown: REFUSE reason_kind=unknown-target — unknown target 'PANE-OK' (exit 2)" > "$TD_SAY"
+  # the REAL outcome, verbatim from cc-teardown's refuse path — verdict token line THEN the prose,
+  # which is the shape record() + say() actually produce (memory: fixture-shape-parity).
+  printf '%s\n%s\n' \
+    "cc-teardown: verdict=REFUSE reason_kind=unknown-target exit=2 target=PANE-OK pane=- pid=-" \
+    "cc-teardown: REFUSE reason_kind=unknown-target — unknown target 'PANE-OK' (exit 2)" > "$TD_SAY"
   LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"UNRESOLVED"* ]] || false
@@ -330,10 +333,56 @@ EOF
 @test "(xvi) assignee-unproven is UNRESOLVED too — cannot prove identity ≠ gate declined" {
   row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
   echo 2 > "$TD_RC"
-  echo "cc-teardown: REFUSE reason_kind=assignee-unproven — cannot prove pane hosts an assignee (exit 2)" > "$TD_SAY"
+  printf '%s\n%s\n' \
+    "cc-teardown: verdict=REFUSE reason_kind=assignee-unproven exit=2 target=PANE-OK pane=- pid=-" \
+    "cc-teardown: REFUSE reason_kind=assignee-unproven — cannot prove pane hosts an assignee (exit 2)" > "$TD_SAY"
   LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
   [[ "$output" == *"1 UNRESOLVED"* ]] || false
   [[ "$output" == *"close BLIND"* ]] || false
+}
+
+# ── the false-success class reaches THIS caller too (backlog 99f87bf7a6f7) ─────────────────────────
+# LCW_ORPHAN_CLOSE=1 made this leg cc-teardown's first autonomous caller, and to an autonomous caller
+# a false `exit 0` is indistinguishable from a real reap — the orphan survives forever while the log
+# says TORN DOWN. cc-teardown now refuses instead of inventing a success; these pin that each new
+# refusal reaches the LOUD bucket rather than the trusted one.
+
+@test "(xvi-b) target-not-a-pane-uuid is UNRESOLVED — the actuator was handed an unanswerable key" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  printf '%s\n%s\n' \
+    "cc-teardown: verdict=REFUSE reason_kind=target-not-a-pane-uuid exit=2 target=gu2-seams pane=- pid=-" \
+    "cc-teardown: REFUSE reason_kind=target-not-a-pane-uuid — 'gu2-seams' is not a pane UUID (exit 2)" > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
+  [[ "$output" == *"1 UNRESOLVED"* ]] || false
+  [[ "$output" == *"target-not-a-pane-uuid"* ]] || false
+  [[ "$output" == *"0 refuse"* ]] || false
+}
+
+@test "(xvi-c) absence-contradicted reports STILL OCCUPIED — a positive finding, not a blind spot" {
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  printf '%s\n%s\n' \
+    "cc-teardown: verdict=REFUSE reason_kind=absence-contradicted exit=2 target=PANE-OK pane=- pid=-" \
+    "cc-teardown: REFUSE reason_kind=absence-contradicted — it2 omits pane 'PANE-OK' but pid(s) [44938] are still live in it; NOT gone (exit 2)" > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
+  [[ "$output" == *"STILL OCCUPIED"* ]] || false
+  [[ "$output" == *"44938"* ]] || false
+  # the outcome is the same as blind — still running, no gate judged it — so it must stay LOUD
+  [[ "$output" == *"1 UNRESOLVED"* ]] || false
+  [[ "$output" == *"0 refuse"* ]] || false
+}
+
+@test "(xvi-d) PRE-TOKEN SKEW: an older cc-teardown emitting only prose still lands in UNRESOLVED" {
+  # `command -v cc-teardown` can resolve a copy this repo does not control. A token-only parse would
+  # silently demote that skew into the trusted refuse bucket — quieter, and quiet is exactly wrong
+  # for a wiring failure. This is the control that the fallback arm is not dead code.
+  row "w-ok" "PANE-OK" "HARVESTED" 4242 "/tmp/t.jsonl"
+  echo 2 > "$TD_RC"
+  echo "cc-teardown: REFUSE reason_kind=assignee-unproven — cannot prove pane hosts an assignee (exit 2)" > "$TD_SAY"
+  LCW_ORPHAN_CLOSE=1 run_wd --close-panes "$TEAM" sid-1
+  [[ "$output" == *"1 UNRESOLVED"* ]] || false
+  [[ "$output" == *"0 refuse"* ]] || false
 }
 
 @test "(xvii) a GENUINE policy refusal stays a trusted refuse — the split must cut both ways" {
