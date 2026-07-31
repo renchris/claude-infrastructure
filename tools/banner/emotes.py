@@ -31,6 +31,7 @@ effect and there is nothing to contrast against in a beat that never stops.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +164,11 @@ class Emote:
     # its own showcase. Nothing errors. This field is what `assert_css_targets_exist` checks in BOTH
     # directions — declared-but-undrawn, and drawn-but-unstyled.
     uses: tuple[str, ...] = ()
+    # Sprite suffixes this candidate actually draws, filled in by `clawd()` as it emits each body.
+    # It has to be discovered rather than declared: a candidate may draw a second creature from
+    # inside `props()` or `front()`, and asking authors to also list the suffix by hand is exactly
+    # the kind of duplicated bookkeeping that goes stale.
+    _sfx: set = field(default_factory=set)
     props: Callable[[], str] = field(
         default=lambda: ""
     )  # extra SVG, drawn behind the creature
@@ -330,6 +336,8 @@ def clawd(
     once rendered as a permanent pair of horns. The inverse mistake is quieter and cost this file a
     render to find: gating a group that was never drawn removes the arms and reports nothing.
     """
+    if sfx:
+        e._sfx.add(sfx)
     sc = CLAWD_SCALE if scale is None else scale
     px = e.cx if x is None else x
     ty = E_GROUND - gen.SPRITE_H * sc
@@ -405,8 +413,24 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
         ".rCheer,.legsStill,.eShut,.aShut,.eyesAsk,.armsAlert{opacity:0}"
         ".legsWalk,.eOpen,.aOpen,.armsGate,.lookGate{opacity:1}"
         ".smHat,.smHeld{opacity:0}"
+        # THE SAME RESET, ONCE PER EXTRA CREATURE. `gen.clawd_sprite(sfx)` suffixes every class it
+        # emits, so a second creature's optional groups are `.legsStillB`, `.eShutB`, `.aShutB`,
+        # `.eyesAskB`, `.armsAlertB` — and the unsuffixed rules above do not reach any of them. Left
+        # alone the visitor renders with BOTH leg sets at once, blink-lids painted over its open
+        # eyes, ears permanently raised and the ask-pose's centred eyes stacked on the normal pair.
+        # Two packs hit this and each wrote its own reset helper; a third candidate (this file's own
+        # NEIGHBOUR) shipped with `aShutB` on and nothing noticed until the reset gate was tightened
+        # from prefix matching to exact class tokens. Emitting it here fixes every candidate at once
+        # and is why a pack no longer needs to know about it.
+        + "".join(
+            f".rCheer{x},.legsStill{x},.eShut{x},.aShut{x},.eyesAsk{x},.armsAlert{x},"
+            f".smHat{x},.smHeld{x}{{opacity:0}}"
+            f".legsWalk{x},.eOpen{x},.aOpen{x},.armsGate{x},.lookGate{x}{{opacity:1}}"
+            for x in sorted(e._sfx)
+        )
         # ── palette (dark is the default; light is a media override of the same geometry) ─────────
-        f".skT{{stop-color:{d.sky_top}}}.skM{{stop-color:{d.sky_mid}}}.skL{{stop-color:{d.sky_low}}}"
+        + f".skT{{stop-color:{d.sky_top}}}.skM{{stop-color:{d.sky_mid}}}"
+        f".skL{{stop-color:{d.sky_low}}}"
         f".gnT{{stop-color:{d.ground_top}}}.gnB{{stop-color:{d.ground_bot}}}"
         f".eprint{{fill:{d.rule}}}.esh{{fill:#000;opacity:.42}}"
         f".eink{{fill:{d.rule}}}.efg{{fill:{d.fg}}}.eclawd{{fill:{gen.CLAWD}}}"
@@ -453,6 +477,10 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
 
 def render(e: Emote, scheme: str = "auto") -> str:
     """One candidate as a standalone, self-contained SVG. `auto` is the shipping form."""
+    # Body FIRST, stylesheet second. `clawd()` is what discovers the extra-creature suffixes, so a
+    # stylesheet written before the body would emit resets for a set that is still empty — the bug
+    # would look fixed and stay live.
+    body = f"{stage_body(e)}{e.props()}{clawd(e)}{e.front()}"
     css = base_css(e, scheme) + e.css()
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {STAGE_W} {STAGE_H}" '
@@ -462,10 +490,7 @@ def render(e: Emote, scheme: str = "auto") -> str:
         f"<desc>{gen_escape(e.entry)} {gen_escape(e.showcase)} {gen_escape(e.exit)}</desc>"
         f"<defs>{stage_defs()}</defs>"
         f"<style>{css}</style>"
-        f"{stage_body(e)}"
-        f"{e.props()}"
-        f"{clawd(e)}"
-        f"{e.front()}"
+        f"{body}"
         f"</svg>"
     )
 
@@ -692,21 +717,27 @@ def assert_reset_covers_sprite(svg: str, e: Emote) -> None:
     rendered sprite and require each one to appear in the CSS.
     """
     css = svg.split("<style>", 1)[1].split("</style>", 1)[0]
-    optional = (
-        "rCheer",
-        "legsStill",
-        "eShut",
-        "aShut",
-        "eyesAsk",
-        "armsAlert",
-        "smHat",
-        "smHeld",
-    )
-    for cls in optional:
-        if f'class="{cls}' in svg and cls not in css:
+
+    # EXACT CLASS TOKENS, never prefixes. The first version tested `class="legsStill` against the
+    # document and `"legsStill" in css`, and BOTH are satisfied by a suffixed group. A second
+    # creature drawn as `clawd(e, sfx="B")` emits `.legsStillB`, `.eShutB`, `.armsAlertB`,
+    # `.eyesAskB` — none of which `base_css`'s reset list names — so every one renders ON for the
+    # whole loop: a visitor with both leg sets at once, blink-lids painted over its open eyes, ears
+    # permanently raised. The prefix match reported all of that as covered, because the UNSUFFIXED
+    # rule exists. Two packs hit it independently and each wrote its own per-suffix reset helper,
+    # which is the tell that the gate was passing something it should have refused.
+    drawn = {
+        tok
+        for attr in re.findall(r'class="([^"]+)"', svg)
+        for tok in attr.split()
+        if any(tok.startswith(g) for g in OPTIONAL_GROUPS)
+    }
+    for cls in sorted(drawn):
+        if not re.search(rf"\.{re.escape(cls)}\b", css):
             raise SystemExit(
                 f"emotes[{e.key}]: sprite emits '{cls}' but no rule names it — it would render ON "
-                f"for the entire loop"
+                f"for the entire loop. A SUFFIXED group (a second creature) needs its own reset; "
+                f"the unsuffixed rule in base_css does not reach it."
             )
 
 
@@ -968,10 +999,45 @@ def load_packs() -> None:
     its candidates from the page silently, and a missing panel is indistinguishable from a candidate
     nobody wrote — the review would be quietly incomplete, which is the one thing a review surface
     may never be.
+
+    THE ALIAS BELOW EXISTS BECAUSE THAT FATAL-IMPORT RULE HAD A HOLE, AND THE HOLE WAS FOUND BY THREE
+    AUTHORS PAYING THE SAME TAX. This file is both the framework and the entrypoint, so when it runs
+    as a script it lives in `sys.modules` under `__main__`. A pack that writes the obvious
+    `import emotes` therefore did not find it — Python re-executed this file as a SECOND module object
+    with its OWN empty `EMOTES` list, every `emote(...)` in that pack registered into a registry
+    nobody renders, and the build reported success with the pack's panels simply absent. The
+    fatal-import rule cannot see it, because the import SUCCEEDS.
+
+    Reproduced before fixing: a pack doing nothing but `import emotes as E` and registering one
+    candidate left the count unchanged at 27 and wrote no file, with zero complaint. Each of the
+    three packs had independently discovered this and carried its own binding shim, which is the tell
+    that the framework was wrong rather than the packs.
+
+    Aliasing the running module under its importable name closes it at the source: `import emotes`
+    now returns THIS object, so a pack needs no shim and the obvious spelling is the correct one.
     """
+    me = sys.modules[
+        __name__
+    ]  # '__main__' under `python3 emotes.py`, 'emotes' when imported
+    canonical = sys.modules.setdefault("emotes", me)
+    if canonical is not me:
+        raise SystemExit(
+            "emotes: two framework module objects exist — `sys.modules['emotes']` is not the running "
+            "module, so packs would register into a registry this process never renders."
+        )
+
     here = Path(__file__).resolve().parent
     for mod in sorted(here.glob("emotes_*.py")):
+        before = len(EMOTES)
         __import__(mod.stem)
+        # Belt and braces, and independent of the cause: a pack that registers NOTHING is a pack
+        # whose panels are missing from the review, whatever the reason. Silence here is the exact
+        # failure this function's contract forbids, so it is an error rather than an empty section.
+        if len(EMOTES) == before:
+            raise SystemExit(
+                f"emotes: pack '{mod.name}' registered no candidates. Either it calls no `emote(...)`, "
+                f"or it bound to a different framework object than the one building this run."
+            )
 
 
 def build_all(

@@ -31,6 +31,10 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+# SUPERSEDED, kept only because it is a harmless no-op: `emotes.py` now aliases itself into
+# `sys.modules['emotes']` before importing any pack, so a plain `import emotes` binds to the
+# RUNNING framework and needs no shim. The resolution below still returns that same object.
+# Do not copy this block into a new pack — write `import emotes`.
 # BIND TO THE FRAMEWORK THAT IS ALREADY RUNNING, never to a fresh copy of it. `emotes.py` is the
 # entrypoint as well as the framework, so by the time `load_packs()` imports this file it is already
 # loaded under the name `__main__`. A plain `import emotes` therefore builds a SECOND module object
@@ -250,7 +254,7 @@ def _yawn() -> Emote:
 
 
 # ── THE ITCH ──────────────────────────────────────────────────────────────────────────────────────
-def _itch() -> Emote:
+def _shudder() -> Emote:
     """A high-frequency judder against a braced posture.
 
     THE BRIEF ASKED FOR ONE BACK LEG TO LIFT AND IT CANNOT BE DRAWN. `gen.clawd_sprite` emits the
@@ -263,11 +267,12 @@ def _itch() -> Emote:
     """
     e = emote(
         Emote(
-            key="itch",
-            title="THE ITCH",
+            key="shudder",
+            title="THE SHUDDER",
             category="Reactions",
             entry="the walk quits and it drops into a braced hunch — a tenth wider, a tenth lower",
-            showcase="the whole silhouette pumps in and out four times, a shudder it cannot stop",
+            showcase="the whole silhouette pumps wide-and-low then tall-and-narrow, four times, "
+            "a shiver it cannot stop",
             exit="one long stretch up out of the hunch, and it ambles off as if nothing happened",
             window=(3.0, 7.4),
             cls="BEAT",
@@ -740,7 +745,7 @@ def _potter() -> Emote:
 
 _sneeze()
 _yawn()
-_itch()
+_shudder()
 _trip()
 _delight()
 _fright()

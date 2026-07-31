@@ -33,7 +33,12 @@ _FRAMEWORK = _HERE / "emotes.py"
 def _framework():
     """The RUNNING emotes module, found by file identity rather than by name.
 
-    `import emotes` is WRONG here and fails silently, which is the worst way for it to fail.
+    SUPERSEDED: `emotes.py` now aliases itself into `sys.modules['emotes']` before importing any
+    pack, so a plain `import emotes` is CORRECT and this resolver is a no-op that returns the same
+    object. Do not copy it into a new pack. The original hazard it was written against, retained
+    because it explains why the framework had to change:
+
+    `import emotes` was WRONG here and failed silently, which is the worst way for it to fail.
     `emotes.py` is normally executed as a script, so it lives in `sys.modules` under `__main__`;
     a plain `import emotes` therefore does not find it — it re-executes the file as a SECOND,
     distinct module object with its own empty `EMOTES` list. Every candidate this pack registers
@@ -516,7 +521,7 @@ def _standaside() -> Emote:
         lumps = "".join(
             _mound(k * TILE + x, wd, ht)
             for k in range(-1, 4)
-            for x, wd, ht in ((14, 168, 72), (214, 112, 44))
+            for x, wd, ht in ((10, 152, 58), (196, 106, 30))
         )
         return f'<g class="saH"><g class="emd0">{lumps}</g></g>'
 
@@ -622,6 +627,10 @@ def _wells() -> Emote:
         exit="the emptied pile creeps back up from flat, in its own time",
         window=(2.4, 10.0),
         cls="BEAT",
+        # The resident is pushed right of centre so the four piles and the grazer all have room on
+        # the rule: at the default cx the dry pile is squeezed into the left EDGE, where the beat's
+        # one legible change happens in the reader's periphery.
+        cx=300,
         tie="bin/claude-accounts — four accounts, four budgets, each emptying and refilling on its "
         "own five-hour clock; when one is dry the work simply happens elsewhere",
     )
@@ -630,15 +639,15 @@ def _wells() -> Emote:
     # in `.emd0` at the horizon, where they abutted the ridge silhouettes and simply disappeared
     # into them — terrain the same colour as terrain is not terrain, it is nothing.
     piles = [
-        (6.0, 46.0, 34.0),
-        (62.0, 68.0, 66.0),  # the one that runs dry
-        (540.0, 54.0, 38.0),
-        (632.0, 76.0, 58.0),
+        (14.0, 48.0, 34.0),
+        (84.0, 72.0, 66.0),  # the one that runs dry
+        (596.0, 56.0, 38.0),
+        (676.0, 72.0, 56.0),
     ]
     dry = 1
     trek = (w(e, 0.22), w(e, 0.62))
-    wx0, wsc = 136.0, 0.5
-    wdx = 424.0  # ends among the two full piles on the right
+    wx0, wsc = 170.0, 0.5
+    wdx = 415.0  # ends among the two full piles on the right
 
     def props() -> str:
         out = []
