@@ -430,6 +430,15 @@ is stale", not "the mirror is why we are down". The activation SSOT drift (§9's
 is therefore **still open**: repo and `~/.claude/autonomy/pending-activation/` disagree on
 `02`/`03`, and the repo side is the correct one.
 
+**CLOSED 2026-07-31.** The live mirror held **zero** occurrences of `enable` in either script
+(repo: 8 each) — i.e. the operator's queue was handing over exactly the version that bootstraps a
+label sitting in launchd's disabled DB and fails with a bare EIO naming neither cause nor cure.
+Both were synced repo → live (`~/.claude/autonomy/pending-activation/`, prior copies preserved at
+`/tmp/pending-activation-backup-20260731/`); `diff` is now empty for both, each still parses, and
+each is still a no-op without `CONFIRM=1`. This is a **live-layer** sync, not a repo change: no
+script was executed and nothing was activated — the repo SSOT was already correct and only the
+mirror moved. §9's remaining scope is now empty; the only open item in this plan is A2.
+
 ---
 
 ## §10 The close — what is proven, what is measured, what remains
