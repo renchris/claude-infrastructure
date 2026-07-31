@@ -14,6 +14,10 @@
 # So the tests below assert on the FAILURE paths, and each guard gets a control that can fail.
 
 setup() {
+  # Fixture $HOME. These tests launch scripts that read ${TMPDIR}/ and could write stats files; a
+  # suite that runs against the live ~/ can perturb the operator's real state, and the hermeticity
+  # lint (scripts/test-hermeticity-lint.sh) fails the build for exactly this.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   BENCH="$REPO/scripts/terminal-bench.sh"
   LOAD="$REPO/scripts/tui-load.sh"
