@@ -155,7 +155,6 @@ fi
 "$LR/lr-preseed-env.sh" "$TCFG" "${WT_TOP:-$CWD}" || true
 
 # --- launch ----------------------------------------------------------------
-FIRE_MODEL=""; [[ "$MODEL" == "fable" ]] && FIRE_MODEL="--model claude-fable-5 --effort high"
 # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). This file is written, chmod +x'd
 # and then executed BY PATH from another process (an iTerm2 pane types `exec /bin/bash $LAUNCHER`),
 # so a name another uid can pre-create turns the `cat >` into an arbitrary-file clobber plus a
@@ -174,13 +173,28 @@ lrh_tmpdir() {
 LAUNCHER="$(mktemp "$(lrh_tmpdir)/lr-launch-${SID:0:8}-XXXXXX")" || {
   echo "lr-handoff: could not mint a launch script in a secure temp dir" >&2; exit 1; }
 mv "$LAUNCHER" "$LAUNCHER.sh" && LAUNCHER="$LAUNCHER.sh"
+# The launcher is GENERATED BASH that is then EXECUTED (`write text "exec /bin/bash $LAUNCHER"`
+# in both osascript branches below, and by hand on the manual-fallback path) — so every field
+# interpolated here is SOURCE, not data. An unquoted one is arbitrary code execution, not a
+# quoting nit. `git check-ref-format` ACCEPTS $ ` ( ) ; | & ' " in a branch name — it refuses
+# only control chars, space, ~, ^ and : , and ${IFS} substitutes for the space — so a branch
+# this session did not NAME (a fetched remote/PR branch, a pool/* name, any name read rather
+# than authored) carries a payload straight into the launcher. Worse, it lands SILENTLY: the
+# `"$BRANCH"` quotes in the old `${BRANCH:+--branch "$BRANCH"}` were consumed by the WRITING
+# shell, so the payload was emitted unquoted and the substitution left a plausible `--branch wip`
+# in the launcher's argv with nothing to show code had run.
+# Build the argv as an ARRAY and render it with %q, which round-trips under bash 3.2 (the
+# /bin/bash that runs the launcher) and never emits a raw newline — that single-line guarantee
+# is also what keeps the header comments below un-escapable.
+FIRE_ARGV=("$LR/lr-fire-resume.sh" "$TARGET" "${WT_TOP:-$CWD}" "$SID")
+[[ -n "$BRANCH" ]] && FIRE_ARGV+=(--branch "$BRANCH")
+[[ "$MODEL" == "fable" ]] && FIRE_ARGV+=(--model claude-fable-5 --effort high)
+FIRE_ARGV+=(--prompt "$INGEST_PROMPT")
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
-# Resume the handed-off session $SID on account '$TARGET' with the ingest prompt.
-# Regenerable: bundle at $BUNDLE
-exec "$LR/lr-fire-resume.sh" "$TARGET" "${WT_TOP:-$CWD}" "$SID" \\
-  ${BRANCH:+--branch "$BRANCH"} $FIRE_MODEL \\
-  --prompt "$INGEST_PROMPT"
+# Resume the handed-off session $(printf '%q' "$SID") on account $(printf '%q' "$TARGET") with the ingest prompt.
+# Regenerable: bundle at $(printf '%q' "$BUNDLE")
+exec $(printf '%q ' "${FIRE_ARGV[@]}")
 EOF
 chmod +x "$LAUNCHER"
 
