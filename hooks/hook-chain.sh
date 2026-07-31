@@ -267,6 +267,8 @@ selftest() {
       printf '  FAIL %s (status=%s want=%s out=%s)\n' "$label" "$s" "$exp" "$o"; fail=$((fail+1))
     fi
   }
+  # shellcheck disable=SC2016  # single quotes are DELIBERATE: this is a printf FORMAT that must
+  #                               emit a literal `$(cat)` into the generated fixture, not expand it
   mk() { printf '#!/usr/bin/env bash\nINPUT=$(cat)\nprintf %%s %s\nexit %s\n' "'$3'" "$2" > "$T/hooks/$1"; chmod +x "$T/hooks/$1"; }
   local DENY='{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"d"}}'
   local ALLOW='{"hookSpecificOutput":{"permissionDecision":"allow","permissionDecisionReason":"a"}}'
