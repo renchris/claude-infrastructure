@@ -133,7 +133,18 @@ FRAME_BYTES="${#FRAME[0]}"
 # loadavg. perl is present at /usr/bin/perl on every macOS. The bash `sleep` loop is kept ONLY as a
 # fallback, and the strategy actually used is recorded in the stats row so no reader has to guess
 # which one produced a number.
-EMITTER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/tools/terminal-bench/tui-emit.pl"
+# Resolve THIS script through its symlink chain before deriving the repo root. ~/.claude/scripts/ is
+# a directory of per-file symlinks into the checkout, so `dirname "$0"/..` is ~/.claude — which has
+# no tools/. The failure would be silent AND self-defeating here: EMITTER would simply not exist,
+# NAP_STRATEGY would fall back to `sleep`, and every measurement taken through the live layer would
+# carry the load-dependent bias this file exists to avoid. Caught by scripts/self-path-lint.sh.
+# (`pwd -P` alone resolves the DIRECTORY, not the final symlink component.)
+_SELF="${BASH_SOURCE[0]}"
+while [ -L "$_SELF" ]; do
+  _lnk="$(readlink "$_SELF")"
+  case "$_lnk" in /*) _SELF="$_lnk" ;; *) _SELF="$(cd "$(dirname "$_SELF")" && pwd -P)/$_lnk" ;; esac
+done
+EMITTER="$(cd "$(dirname "$_SELF")/.." && pwd -P)/tools/terminal-bench/tui-emit.pl"
 NAP_STRATEGY="sleep"
 [ -f "$EMITTER" ] && [ -x /usr/bin/perl ] && NAP_STRATEGY="perl"
 nap() { sleep "$SLEEP"; }
