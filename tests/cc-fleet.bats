@@ -542,7 +542,24 @@ STUB
   # 97d4984b landed launchd/com.claude.scratchpad-reaper.plist with no manifest row, so THIS test and
   # the coverage lint were RED on pristine origin/main for every lander after it. Identical shape to
   # the capacity-alarm repair above; fixed the same way rather than loosened.
-  [ "$n" = 23 ]
+  # 24 since 2026-07-30: com.claude.qos-census (72405f63, MACHINE_CAPACITY_V2 M12). The FIRST bump of
+  # a different shape: every prior one paid for a defect (a plist landed with no row, coverage RED).
+  # 72405f63 did it CORRECTLY — plist and manifest row in one commit — and this assertion still went
+  # red, alone, on pristine origin/main for every lander after it, because the count is a hand-copied
+  # mirror of a fact the manifest already states. So the count now also fires on the correct action.
+  # It is bumped, NOT derived, because it is the only manifest-side ratchet there is: the coverage
+  # loop below runs plist->manifest only, so nothing else in this file would notice a row invented for
+  # a plist that does not exist, or a staged row (relogin) silently deleted. Deriving `n` from the
+  # plists on disk would buy back the misses and give up that direction — a loosening wearing the
+  # costume of a fix. What DID change is the diagnostic: this used to fail as a bare `[ "$n" = 23 ]`
+  # with the observed count nowhere in the output, so a lander could not tell a legitimate fleet
+  # addition from a plist that skipped its row without re-deriving both by hand.
+  if [ "$n" != 24 ]; then
+    echo "manifest declares $n labels, expected 24 — if a plist was legitimately added or retired,"
+    echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
+    grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
+    return 1
+  fi
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
   for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do
