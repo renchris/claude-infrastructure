@@ -5,16 +5,24 @@ Method: every Bash tool_use in the transcript corpus is matched against the live
 settings.json allow/deny/ask rules. Commands matching NO allow rule are prompt
 CANDIDATES; ranked by frequency they are the highest-value allow-list additions.
 
-HONEST BOUND: this is an UPPER bound on prompts, not the true prompt set. Auto mode
-runs a classifier on top of the static rules and silently approves much of what does
-not match a literal rule. It also cannot see prompts the classifier raised for a
-command that DOES match. The true set needs the beacon to archive (it currently
-rm -f's each record once answered, so no history exists).
+HONEST BOUND: the candidate ranking is an UPPER bound on prompts, not the true prompt
+set. Auto mode runs a classifier on top of the static rules and silently approves much
+of what does not match a literal rule; it also cannot see prompts the classifier raised
+for a command that DOES match.
+
+The OBSERVED section closes that gap where data exists. cc-permission-beacon.sh now
+appends every resolved prompt to a durable archive before removing it, so this report
+carries a measured set alongside the inferred bound. The archive only accumulates
+FORWARD from the day it landed, so a short history means a small observed set, not an
+absence of prompts — the two are distinguished explicitly below.
 """
 
-import json, glob, re, sys, collections, os
+import json, glob, re, sys, collections, os, time
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
+ARCHDIR = os.environ.get(
+    "CC_PERMARCHIVE_DIR", os.path.expanduser("~/.claude/autonomy/permission-archive")
+)
 DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 0  # 0 = all history
 
 
@@ -57,6 +65,79 @@ def matches(cmd, rules):
         if c == r or c.startswith(r + " ") or c.startswith(r):
             return r
     return None
+
+
+def archive_report():
+    """The OBSERVED prompt set, from cc-permission-beacon.sh's durable archive.
+
+    Absence is read as THREE states, not two — the same existence-evidence split the
+    beacon's own heartbeat makes. A missing directory and an empty one are the same
+    observation (no rows) but opposite news: one means the archiver has never run and
+    this report is blind, the other means nothing has actually blocked. Collapsing them
+    is how "no pending approvals" once meant "the hook has never fired once".
+    """
+    print("\n── OBSERVED PROMPTS (measured, from the beacon archive) ──")
+    if not os.path.isdir(ARCHDIR):
+        print(f"  archive ABSENT ({ARCHDIR})")
+        print("  ⇒ the beacon has never archived a resolution. This report is BLIND to")
+        print("    actual prompts; the ranking above remains an upper bound only.")
+        return
+
+    cutoff = time.time() - DAYS * 86400 if DAYS else 0
+    rows = []
+    for f in sorted(glob.glob(os.path.join(ARCHDIR, "*.jsonl"))):
+        try:
+            for ln in open(f, errors="ignore"):
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                except Exception:
+                    continue  # a torn line is dropped, never guessed at
+                if cutoff and (o.get("resolved_ts") or 0) < cutoff:
+                    continue
+                rows.append(o)
+        except Exception:
+            continue
+
+    if not rows:
+        print(f"  archive present but EMPTY ({ARCHDIR})")
+        print("  ⇒ the archiver is wired and running; nothing has actually blocked in range.")
+        return
+
+    by = collections.Counter(r.get("resolved_by") or "unknown" for r in rows)
+    # PostToolUse fires only on the grant path; Stop/SessionEnd clear a denial or an
+    # abandonment. Anything else is left UNCLASSIFIED rather than folded into either.
+    approved = by.get("PostToolUse", 0)
+    refused = by.get("Stop", 0) + by.get("SessionEnd", 0)
+    other = sum(by.values()) - approved - refused
+    span = ""
+    ts = [r.get("resolved_ts") for r in rows if r.get("resolved_ts")]
+    if ts:
+        span = f"  {time.strftime('%Y-%m-%d', time.localtime(min(ts)))} → {time.strftime('%Y-%m-%d', time.localtime(max(ts)))}"
+    print(f"  {len(rows)} resolved prompts across "
+          f"{len({r.get('session_id') for r in rows})} sessions{span}")
+    print(f"  approved {approved}  ·  denied/abandoned {refused}  ·  unclassified {other}")
+
+    waits = sorted((r.get("waited_s") or 0) for r in rows)
+    if waits:
+        worst = max(rows, key=lambda r: r.get("waited_s") or 0)
+        print(f"  median block {waits[len(waits) // 2]:.0f}s  ·  longest "
+              f"{(worst.get('waited_s') or 0) / 3600:.1f}h  "
+              f"({cmd_of(worst)[:60]})")
+
+    seen = collections.Counter(head(cmd_of(r)) for r in rows if cmd_of(r))
+    print("\n  ── commands that ACTUALLY blocked (rank these first) ──")
+    for h, n in seen.most_common(15):
+        print(f"  {n:5d}  {h}")
+
+
+def cmd_of(row):
+    ti = row.get("tool_input")
+    if isinstance(ti, dict):
+        return ti.get("command") or ti.get("file_path") or ti.get("description") or ""
+    return row.get("tool_input_summary") or ""
 
 
 def main():
@@ -119,6 +200,7 @@ def main():
     print(f"rules:  allow={len(allow)} deny={len(deny)} ask={len(ask)}")
     if not total:
         print("no data")
+        archive_report()   # the archive is independent of the transcript corpus
         return
     print(f"\nmatched an allow rule : {matched:6d}  ({100 * matched / total:.1f}%)")
     ua = sum(unmatched.values())
@@ -137,6 +219,8 @@ def main():
         print(f"\n── ASK rules actually exercised (these are your REAL blocks) ──")
         for h, n in hit_ask.most_common(10):
             print(f"{n:7d}  {h}")
+
+    archive_report()
 
 
 if __name__ == "__main__":
