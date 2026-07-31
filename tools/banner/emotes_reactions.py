@@ -15,9 +15,12 @@ built out of them and nothing else:
     GLYPH     one standardized mark, large enough to read at the README column
 
 Everything finer — a raised eyebrow, a turned head, one lifted foot — was tried on paper and dropped.
-THE ITCH is the honest casualty: its brief called for a single back leg lifting off, and the leg
-groups are drawn as two interleaved pairs that cannot be split without redrawing the sprite. It
-scratches with its whole body instead, and the story says so.
+THE SHUDDER is the honest casualty, and it lost its NAME rather than its place: commissioned as THE
+ITCH, it needed one back leg to lift and a scratch against the flank, and the legs are drawn as two
+interleaved pairs that cannot be split without redrawing the sprite. With no scratch affordance, no
+frame can say what it is doing about the itch — only that something is bothering it. So it convulses
+with its whole body and is named for that, because a title the artwork cannot support is worse than
+an honest one.
 
     python3 tools/banner/emotes.py --out /tmp/emotes-react
 """
@@ -253,17 +256,27 @@ def _yawn() -> Emote:
     return e
 
 
-# ── THE ITCH ──────────────────────────────────────────────────────────────────────────────────────
+# ── THE SHUDDER ───────────────────────────────────────────────────────────────────────────────────
 def _shudder() -> Emote:
-    """A high-frequency judder against a braced posture.
+    """A high-frequency pump of the whole silhouette, out of and back into a braced hunch.
 
-    THE BRIEF ASKED FOR ONE BACK LEG TO LIFT AND IT CANNOT BE DRAWN. `gen.clawd_sprite` emits the
-    legs as two interleaved PAIRS (`legA` at columns 1 and 7, `legB` at 3 and 9) for the walk, and
-    one four-legged group for standing; there is no single leg to raise, and raising a pair lifts one
-    limb on each side, which reads as the body floating rather than as a foot coming up. Redrawing
-    the sprite to get it is the one thing this preview is forbidden to do. So the scratch is carried
-    entirely by the body — braced low and buzzing — and the story below says that rather than
-    claiming a foot the render does not contain.
+    IT WAS COMMISSIONED AS 'THE ITCH' AND IT IS NOT ONE. The brief asked for one back leg to lift and
+    a scratch against the flank, and neither can be drawn: `gen.clawd_sprite` emits the legs as two
+    interleaved PAIRS (`legA` at columns 1 and 7, `legB` at 3 and 9) for the walk plus one
+    four-legged group for standing, so there is no single leg to raise, and raising a pair lifts one
+    limb on each side and reads as the body floating. Redrawing the sprite is the one thing this
+    preview is forbidden to do.
+
+    So there is no scratch affordance on this creature — nothing in any frame can say what it is
+    DOING about the itch, only that something is bothering it. What the body can say is that it is
+    convulsing, and that is what this now is. Renamed rather than shipped under the commissioned
+    title, because 'nameable in three words' is a veto in the criteria and a name the artwork cannot
+    support is worse than an honest one.
+
+    The prose below is kept in the language of what the render actually contains — a pump, a hunch, a
+    shiver — and deliberately not in the language of scratching. A docstring that still described the
+    retired idea would re-teach it to whoever reads this next, which is how a corrected decision
+    quietly comes back.
     """
     e = emote(
         Emote(
@@ -283,18 +296,18 @@ def _shudder() -> Emote:
     back = b - 0.5
 
     # THE THIRD DRAFT, AND THE FIRST TWO BOTH FAILED THE SAME TEST FOR THE SAME REASON. Draft one
-    # scrubbed +-5 units, draft two +-10, and both moved the body WITHOUT CHANGING ITS OUTLINE. A
+    # displaced the body +-5 units, draft two +-10, and both moved it WITHOUT CHANGING ITS OUTLINE. A
     # reviewer sampling the loop at even 1 s intervals saw five frames that differed only in where
     # the same shape sat — which on a stopped world is nearly nothing, because there is no relative
     # motion to measure it against. My own contact sheet hid this: I cropped every frame at a FIXED
     # offset, which turns a translation into an apparent displacement of the subject against the
     # crop and makes 12 units look like an event. It is not. The crop was measuring the crop.
     #
-    # So the scrub is now carried by the SQUASH, not by the translate: the body's width swings a
+    # So the pump is now carried by the SQUASH, not by the translate: the body's width swings a
     # full 15% each cycle, from 1.15 to 1.00, which is 40 units of outline change on a 264-unit
     # body. That is a silhouette doing something rather than a silhouette being moved. The translate
-    # stays, counter-phased and smaller, so the pump reads as scrubbing against something instead of
-    # as breathing.
+    # stays, counter-phased and smaller, so the pump reads as a body working against something
+    # instead of as breathing.
     #
     # And the BRACE is now deep (1.10 x 0.90) and held for most of the window, so that the thing a
     # sample lands on between cycles is still an obviously different posture from the walk. That is
@@ -366,7 +379,7 @@ def _shudder() -> Emote:
                 [(0, 0, 0), (a, 0, 0), (w(e, 0.20), 0, 0)]
                 + slide
                 + [(w(e, 0.70), 0, 0), (b, 0, 0), (EMOTE_P, 0, 0)],
-                ease="linear",  # a scrub has no easing; ease-out would make every stroke decay
+                ease="linear",  # a shudder has no easing; ease-out would make every jerk decay
             )
         )
 
