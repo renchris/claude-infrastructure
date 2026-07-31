@@ -8,10 +8,20 @@
 # and at reset (with account headroom) resumes them — prompt-free, thanks to
 # lr-preseed-env.sh (see memory reference-limit-recover-autonomous-resume-preseed).
 #
-# SAFETY — auto-spawn is OFF by default. Unset/0 LR_POLLER_AUTOFIRE ⇒ detect + NOTIFY +
-# log only (no session is spawned). Set LR_POLLER_AUTOFIRE=1 ONLY after eyeballing a live
-# cycle's log. Kill switch: LR_POLLER_DISABLED=1. Idempotent, fail-open, never crashes the
-# daemon.
+# SHIPPED-POSTURE: LR_POLLER_AUTOFIRE=1
+#   The installed LaunchAgent SETS this, so unattended auto-resume is LIVE in production. This marker
+#   and com.reso.lr-reset-poller.plist are ONE SSOT pair; LR-v in tests/lr-reset-poller.bats compares
+#   them structurally, so drifting either side fails the suite. Change both in the same commit.
+#
+# SAFETY — the CODE default is notify-only, but that is NOT the shipped posture. Unset/0
+# LR_POLLER_AUTOFIRE ⇒ detect + NOTIFY + log only (no session is spawned); production overrides it to
+# 1 in the plist, so a limit-parked session IS resumed unattended with nobody watching. Do not read
+# the code default as "auto-resume is off" — read the plist (until 2026-07-30 this header still said
+# "OFF by default … set it ONLY after eyeballing a live cycle", which had been false for 12 days and
+# understated what the daemon does). Live receipt: the LaunchAgent was installed
+# 2026-07-18T17:00:15-0700 and RunAtLoad fired a REAL resume 10s later —
+# `2026-07-19T00:00:25Z RESUMED 6802c9b8 … on next4 (autofire) — pane opened` in poller.log.
+# Kill switch: LR_POLLER_DISABLED=1 (or unload). Idempotent, fail-open, never crashes the daemon.
 #
 # SPAWN MECHANISM (P0-8, 2026-07-19): LR_POLLER_SPAWN=auto|gui|tmux (default auto). The GUI
 # path (osascript → iTerm2 window) needs an Aqua session; a LaunchDaemon / SSH / pre-login
@@ -63,7 +73,22 @@ STATE="$HOME/.reso/limit-recover"
 PARKED="$STATE/parked"; RESUMED="$STATE/resumed"; LOG="$STATE/poller.log"
 CLAIMS="$STATE/fire-claims"
 mkdir -p "$PARKED" "$RESUMED" "$CLAIMS"
-DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
+# Parse EVERY argument, not just $1. Until 2026-07-30 this read `[[ "${1:-}" == "--dry-run" ]] && DRY=1`,
+# so `--once --dry-run` silently ran FOR REAL and spawned live sessions — a preview flag that is
+# silently ignored is worse than no preview flag at all, because the operator has already decided it is
+# safe to run. The documented order is [--dry-run] [--once], but `--once --dry-run` is what a human
+# types when ADDING dry-run to a command already in their shell history, and no test had ever passed
+# --dry-run in a non-first position, which is exactly why it survived (found by LR-t).
+# Unknown args are REFUSED, not ignored: silence is what hid this. launchd runs the script bare, so
+# the loop is a no-op there.
+DRY=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY=1 ;;
+    --once)    : ;;   # accepted no-op — this script is single-pass by construction (launchd re-runs it)
+    *) printf 'lr-reset-poller: unknown argument: %s\nusage: lr-reset-poller.sh [--dry-run] [--once]\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 # ── SELF-OVERLAP LOCK (skip, never queue) ──────────────────────────────────────────────
 # launchd fires this every ~10 min, but a tick does per-session lr-audit subprocesses and
@@ -461,11 +486,19 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
       log "ERROR  $sid — resume spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH; no GUI and no tmux)"
     fi
   elif [[ ! -f "$PARKED/$sid.notified" ]]; then    # notify ONCE per parked session (no per-tick spam)
-    mode=$([[ "$AUTOFIRE" == "1" ]] && echo "dry-run" || echo "notify-only")
+    # The REMEDY must match WHY this branch was reached. Both strings said "Set LR_POLLER_AUTOFIRE=1"
+    # unconditionally until 2026-07-30 — but reaching here with AUTOFIRE=1 means --dry-run suppressed
+    # the fire, so on the production box (AUTOFIRE=1) that advised setting a variable already set and
+    # read as "auto-resume is off" while it was on. Same defect class as the plist/header drift.
+    if [[ "$AUTOFIRE" == "1" ]]; then
+      mode="dry-run";     hint="autofire IS on; --dry-run suppressed the resume"
+    else
+      mode="notify-only"; hint="set LR_POLLER_AUTOFIRE=1 to auto-resume"
+    fi
     # headless-safe user alert (a LaunchAgent runs in the Aqua session ⇒ notifications work)
-    lrp_bounded osascript -e "display notification \"${sid:0:8} ($acct) limit reset — resumable. Set LR_POLLER_AUTOFIRE=1 to auto-resume.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+    lrp_bounded osascript -e "display notification \"${sid:0:8} ($acct) limit reset — resumable. ${hint}.\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
     : > "$PARKED/$sid.notified"
-    log "READY $sid on $acct — $mode, notified once (LR_POLLER_AUTOFIRE=1 to auto-resume)"
+    log "READY $sid on $acct — $mode, notified once ($hint)"
   fi
 done
 exit 0

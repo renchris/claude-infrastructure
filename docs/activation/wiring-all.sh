@@ -138,9 +138,19 @@ cat <<TEMPLATES
 
 == 4/4 templates — your hand from here ==
 
-════ ① LIMIT-RESET POLLER (B1-d) — install + the ruled AUTOFIRE flip ═══════════════════════════════════
-# The notify-only precondition cycle RAN live 2026-07-12 (poller.log) and LR-a..i are proven, so the
-# design's "notify-first for one cycle, then flip" is satisfied: install WITH autofire.
+════ ① LIMIT-RESET POLLER (B1-d) — ✅ DONE 2026-07-18, DO NOT RE-RUN ════════════════════════════════════
+# STATUS: COMPLETE. The plist is installed, the job is launchd-loaded, and the RUNNING job's env carries
+# LR_POLLER_AUTOFIRE => 1 (verify: launchctl print gui/\$(id -u)/com.reso.lr-reset-poller | grep AUTOFIRE).
+# Receipt: installed 2026-07-18T17:00:15-0700; RunAtLoad fired a real resume 10s later
+# (2026-07-19T00:00:25Z RESUMED 6802c9b8 … (autofire) — pane opened).
+# Re-running the PlistBuddy line below on the already-installed file is NOT idempotent: its Add verb on
+# an existing :EnvironmentVariables dict errors out, and copying from the repo first would overwrite live
+# with the repo copy — safe only because they now match (launchd-parity-lint asserts it). Left here as
+# the record of what was run; if you ever need to REINSTALL, cp then load, and skip the PlistBuddy line
+# entirely (the repo plist already sets autofire since 4b0efff2).
+#
+# HISTORY: the notify-only precondition cycle RAN live 2026-07-12 (poller.log) and LR-a..i are proven,
+# so the design's "notify-first for one cycle, then flip" was satisfied: installed WITH autofire.
 cp "$REPO/scripts/limit-recover/com.reso.lr-reset-poller.plist" ~/Library/LaunchAgents/
 /usr/libexec/PlistBuddy -c 'Add :EnvironmentVariables dict' -c 'Add :EnvironmentVariables:LR_POLLER_AUTOFIRE string 1' \\
   ~/Library/LaunchAgents/com.reso.lr-reset-poller.plist

@@ -33,6 +33,26 @@ seal that proves the bundle passed OpenAI's own validator. A future scan can dif
 bundle (`deferred_lr_handoff_branch_name`, `deferred_line_by_line_review`,
 `deferred_esc_scan_binary_diff`).
 
+**`openQuestions[0]` (lr-reset-poller plist vs deployed AUTOFIRE) — RESOLVED 2026-07-30, and the
+resolution is a methodology note worth more than the finding.** The question asked which side was
+authoritative between the committed plist (`Auto-resume is OFF by default`, block commented out) and
+the deployed LaunchAgent (`LR_POLLER_AUTOFIRE=1`). Answer: **live is authoritative and the template
+already matched it** — `4b0efff2` reconciled the plist on 2026-07-25, four days before the scan.
+The scan revision `38eec335` forked BEFORE that commit, so it observed a snapshot where the drift was
+still real. **A scan pinned to a revision reports that revision's truth, not trunk's — date every
+finding against the fix that may already have landed on another branch, or you rebuild a closed fix.**
+
+The residue it surfaced WAS real, and is what the follow-up actually fixed: reconciling the plist had
+not reconciled the *subsystem*. Four sibling surfaces still told the pre-activation story 12 days
+after the flip — `lr-reset-poller.sh`'s own header ("OFF by default … set it ONLY after eyeballing a
+live cycle"), `limit-reset-safety-gate.sh` (asserting "activation C10-queued: plist NOT in
+~/Library/LaunchAgents" on every run), `wiring-all.sh` ① (presenting the completed flip as a pending
+hand-step), and the poller's own dry-run notification (advising the operator to set a variable already
+set to 1). The plist's recorded activation date was also wrong — `2026-07-21` with no supporting
+evidence, versus a LaunchAgent mtime of `2026-07-18T17:00:15-0700` and a `RESUMED … (autofire)` log
+line 10 s later. **`launchd-parity-lint.sh` guarded the one file it knew about and was structurally
+blind to prose in siblings; `LR-v` in `tests/lr-reset-poller.bats` now pins the plist↔header pair.**
+
 ### doc_classifier
 
 | Scan | Revision | Scope | Completeness | Findings |

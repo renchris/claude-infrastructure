@@ -19,10 +19,23 @@
 # (zero tests, no gate row), and the activation is C10-queued (plist NOT in ~/Library/LaunchAgents).
 # This gate registers the proof obligations; tests/lr-reset-poller.bats discharges them.
 #
+# ── ACTIVATED (2026-07-18) — supersedes the "C10-queued" status above ─────────────────────────────────
+# The two hand-steps below HAVE BEEN RUN. The plist is installed in ~/Library/LaunchAgents, the job is
+# launchctl-loaded, and `launchctl print gui/$(id -u)/com.reso.lr-reset-poller` shows
+# LR_POLLER_AUTOFIRE => 1 in the RUNNING job's environment — so unattended auto-resume is LIVE, not
+# pending. Receipt: installed 2026-07-18T17:00:15-0700, and RunAtLoad fired a real resume 10s later
+# (`2026-07-19T00:00:25Z RESUMED 6802c9b8 … (autofire) — pane opened`). Read the paragraph above as
+# history dated 2026-07-15, not as current status.
+#
+# The LR-d row below still registers "notify-only default" as a proof obligation, and correctly so:
+# that is the CODE default when the variable is unset, which the suite must keep proving. It is not a
+# claim about the shipped posture — production overrides it in the plist.
+#
 # ── BUILD-vs-ACTIVATION SPLIT (C10) ────────────────────────────────────────────────────────────────────
-# The agent builds + proves the poller; the OPERATOR installs the launchd plist and (after eyeballing a
-# live cycle — already satisfied by the 2026-07-12 log) sets LR_POLLER_AUTOFIRE=1. Both hand-steps ride
-# the consolidated /tmp/wiring-all.sh bundle. The agent NEVER loads launchd or flips autofire itself.
+# The agent builds + proves the poller; installing the launchd plist and setting LR_POLLER_AUTOFIRE=1
+# were OPERATOR hand-steps, ridden via the consolidated wiring-all.sh bundle (docs/activation/
+# wiring-all.sh ①) and completed 2026-07-18. The rule is unchanged and still binds: the agent NEVER
+# loads launchd or flips autofire itself.
 #
 # Exit: 0 = every registered criterion met · 1 = not ready (with reasons).
 set -uo pipefail
@@ -35,7 +48,7 @@ todo(){ printf '  ⏳ %-7s %s\n' "$1" "$2"; TODO=$((TODO+1)); }
 SUITE=tests/lr-reset-poller.bats
 POLLER=scripts/limit-recover/lr-reset-poller.sh
 
-echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-s registered; RED until $SUITE proves them)"
+echo "limit-reset-safety-gate — never-park-forever bar (LR-a..LR-v registered; RED until $SUITE proves them)"
 echo
 
 if [ ! -f "$POLLER" ]; then
@@ -60,12 +73,15 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-q" "NOT PROVEN — RECORD FIELDS ARE DATA (codex-security finding 1, medium): a parked record whose cwd carries \$(…) or a backtick is READ, never executed. RED-provable: the pre-2026-07-30 reader was \`eval \"\$(python3 … json.dumps …)\"\`, and json.dumps escapes \" and \\ but NOT \$/backtick — a legal APFS directory name detonated inside a LOADED launchd job."
   todo "LR-r" "NOT PROVEN — FAIL CLOSED ON A BAD RECORD: an unreadable/malformed parked record is SKIPPED with a logged outcome, never processed with half-assigned fields carrying stale values from the previous loop iteration (the abstention law applied to the reader)."
   todo "LR-s" "NOT PROVEN — GENERATED LAUNCHER QUOTING: the resume launcher is bash SOURCE, so every interpolated field must be %q. Executing it must pass cwd VERBATIM as ONE argv element. RED-provable: the pre-2026-07-30 printf spent its only %q on the /limit-recover CONSTANT and gave the three record-derived fields %s inside literal double quotes, so cwd re-expanded when the launcher ran."
+  todo "LR-t" "NOT PROVEN — HINT MATCHES REASON: the notify branch is reached both when autofire is OFF and when autofire is ON with --dry-run; the hint it emits must name the ACTUAL reason. RED-provable: the pre-2026-07-30 poller emitted 'Set LR_POLLER_AUTOFIRE=1 to auto-resume' in BOTH cases, i.e. it told the production operator to set a variable already set to 1."
+  todo "LR-u" "NOT PROVEN — --dry-run IS POSITIONAL-INDEPENDENT: --dry-run suppresses the fire in ANY argument position, and an unknown argument is REFUSED (exit 2) rather than silently ignored. RED-provable: the pre-2026-07-30 parser inspected only \$1, so \`--once --dry-run\` silently RAN FOR REAL and spawned live sessions while the operator had asked for a preview."
+  todo "LR-v" "NOT PROVEN — SSOT PAIR (plist ↔ header): the committed com.reso.lr-reset-poller.plist and the poller's own SHIPPED-POSTURE header marker declare the SAME autofire value, and the plist ACTIVELY sets it. RED-provable: re-commenting the EnvironmentVariables block (the pre-4b0efff2 shape) reads as absent via plistlib and fails. Why registered: launchd-parity-lint.sh chains live == plist but is blind to PROSE in siblings, which is how the header kept saying 'OFF by default' for 12 days after autofire went live."
 else
   if command -v bats >/dev/null 2>&1; then
     if bats "$SUITE" >/dev/null 2>&1; then
-      ok "LR-a..s" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p), and the 2026-07-30 injection triad — parked-record fields read as DATA not code (LR-q), fail-closed on a malformed record (LR-r), %q-quoted launcher argv (LR-s) — all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
+      ok "LR-a..v" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p), and the 2026-07-30 injection triad — parked-record fields read as DATA not code (LR-q), fail-closed on a malformed record (LR-r), %q-quoted launcher argv (LR-s), plus the posture-honesty trio â hint-matches-reason (LR-t), positional-independent --dry-run + unknown-arg refusal (LR-u, which fixed a silent REAL run), and the SSOT-pair ratchet (LR-v: plist â header cannot drift) â all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
-      bad "LR-a..s" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
+      bad "LR-a..v" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"
     fi
   else
     bad "LR-*" "bats unavailable — the proof cannot run (install bats-core)"
@@ -90,4 +106,4 @@ if [ "$FAIL" -gt 0 ] || [ "$TODO" -gt 0 ]; then
   echo "⇒ LIMIT-RESET AUTO-RESUME: NOT READY. (Red here is not a bug — it is the bar. Prove LR-a..LR-h in $SUITE.)"
   exit 1
 fi
-echo "⇒ every registered limit-reset criterion is mechanically proven; the poller is build-complete (activation C10-queued: plist install + LR_POLLER_AUTOFIRE=1 are operator hand-steps in wiring-all.sh)."
+echo "⇒ every registered limit-reset criterion is mechanically proven; the poller is build-complete AND LIVE (activation done 2026-07-18: plist installed, launchd-loaded, LR_POLLER_AUTOFIRE=1 in the running job's env — unattended auto-resume is ON, not queued)."
