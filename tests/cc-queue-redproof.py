@@ -110,6 +110,20 @@ CASES: list[tuple[str, str, str, str]] = [
         "--check exits 2 (never 0) when the beacon is INERT",
     ),
     (
+        # The dangerous failure is not "attach errors" — it is attach silently focusing the WRONG
+        # pane when the requested row has none (a headless agent). Prove that cannot pass.
+        "paneless-row-focuses-someone-elses-pane",
+        'if [ -z "$pane" ]; then',
+        "if false; then",
+        "NO registered pane fails loudly",
+    ),
+    (
+        "attach-ignores-the-requested-row",
+        'sid="$(printf \'%s\' "$rows" | jq -r --argjson n "$want" \'.[$n-1].sid // empty\')"',
+        "sid=\"$(printf '%s' \"$rows\" | jq -r '.[-1].sid // empty')\"",
+        "focuses the pane registered for THAT row",
+    ),
+    (
         "malformed-source-takes-out-the-run",
         'out="$(jq -c "$filt" "$f" 2>/dev/null)" || continue',
         "continue",

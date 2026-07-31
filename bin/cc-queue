@@ -58,11 +58,14 @@
 #     5277b63a 3d-stale).
 #
 # ── scale: designed for 1000 from the start ──────────────────────────────────────────────────────
-# Every syscall CLASS is batched into ONE fork, so cost is ~6 forks whether the fleet is 3 or 1000
-# (never one fork per row): one `ps` for all pids, one `stat` for all transcripts, one `jq` slurp per
-# source dir. And NO CAP IS EVER SILENT — `--limit` always prints what it withheld and the exact
-# command to see it. Blocked rows are NEVER capped: truncating the exception queue would defeat the
-# tool.
+# Every syscall CLASS is batched, never one fork per row: ONE `ps` for all pids, ONE `stat` for all
+# transcripts, ONE `jq` slurp per source dir. MEASURED 2026-07-31 on this box — a synthetic fleet of
+# 1000 telemetry rows (4 config dirs, 7 cwds) + 12 blocked beacons renders in **0.39 s wall**, all
+# 1000 rows present. Re-measure rather than quoting this if it ever matters: the figure is one box on
+# one day, and the per-file FALLBACK path (taken only when a source file is malformed) is O(files).
+#
+# And NO CAP IS EVER SILENT — `--limit` always prints what it withheld and the exact command to see
+# it. Blocked rows are NEVER capped: truncating the exception queue would defeat the tool.
 #
 # Seams (all overridable — hermetic tests depend on it):
 #   CC_PERMPEND_DIR  CC_TELEMETRY_DIR  CC_REGISTRY_DIR  CC_QUEUE_OWNER_PAT  CC_QUEUE_WORKING_S
@@ -362,9 +365,12 @@ render_table(){
       to_entries | map(select(.value.state=="blocked"))
       | .[] | "\(.key+1)\t\(.value.wait_s)\t\(.value.account // "?")\t\((.value.cwd//"")|sub("^.*/";""))\t\(.value.tool)\t\(.value | desc)\t\(if .value.enriched then "" else " [enrich:none]" end)"' \
     | while IFS=$'\t' read -r idx wait acct proj tool cmd note; do
+        # Mark truncation EXPLICITLY. An operator deciding whether to approve `rm -rf /x` must never
+        # be shown a silently-cut prefix that reads like the whole command. Full text: --json.
+        show="${cmd:0:70}"; [ "${#cmd}" -gt 70 ] && show="${show}…"
         printf '  %s%2s%s  %s%7s%s  %-10s %-22s %s%s%s%s\n' \
           "$C_BLD" "$idx" "$C_OFF" "$C_RED" "$(fmt_dur "$wait")" "$C_OFF" \
-          "${acct:0:10}" "${proj:0:22}" "$C_BLD" "${tool}: ${cmd:0:70}" "$C_OFF" "$note"
+          "${acct:0:10}" "${proj:0:22}" "$C_BLD" "${tool}: ${show}" "$C_OFF" "$note"
       done
     printf '%s\n' "${C_DIM}  → answer one:  cc-queue --attach <#>   (jumps to that pane)${C_OFF}"
     printf '\n'
