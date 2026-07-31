@@ -295,8 +295,13 @@ an embedded newline that must not leak into the operator line"
   [ "$status" -eq 0 ]
   ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
   [ "$ctx" != "null" ] || false
-  printf '%s' "$ctx" | grep -q "cc-await-ping $UUID --timeout" || false
+  printf '%s' "$ctx" | grep -q "cc-await-ping --timeout" || false
   printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
+  # NO id (2026-07-31). This asserted `cc-await-ping $UUID` while session-continue.sh asserted its own
+  # separately-derived key — two suites each green on a DIFFERENT id for one mechanism, which is how
+  # the disagreement survived. An arm command with no id cannot disagree with anything.
+  printf '%s' "$ctx" | grep -qE 'cc-await-ping +[0-9A-Fa-f-]{8}' && false
+  true
 }
 
 @test "arm-on-open: EMPTY inbox + ARMED watcher ⇒ silent (nothing to say)" {

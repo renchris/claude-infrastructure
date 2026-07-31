@@ -168,7 +168,13 @@ fi
 nudge=""
 _watched=0
 mailbox_wake_armed "$own_uuid" && _watched=1
-_armcmd="$HOME/.claude/bin/cc-await-ping $own_uuid --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-14400} --interval 15"
+# NO-ARG (2026-07-31). This used to interpolate $own_uuid — our SESSION key — while session-continue.sh
+# interpolated its own separately-derived key, so the two advisories named DIFFERENT ids for one
+# mechanism and a session following either could arm a box nothing writes to. Passing no id at all
+# removes the disagreement by construction: cc-await-ping with no argument derives
+# ${ITERM_SESSION_ID##*:}, which is the SAME expression cc-notify uses to resolve a target, and it
+# then covers that key's whole set (lib → mailbox_keyset). There is no longer an id here to get wrong.
+_armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-14400} --interval 15"
 [ "$_watched" = 1 ] || nudge="
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
 

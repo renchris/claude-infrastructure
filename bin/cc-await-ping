@@ -19,6 +19,11 @@
 #   --interval <s>  poll cadence in seconds (default 15)
 #   -h, --help
 #
+# Watches EVERY key of its inbox, not just the one it was handed: cc-notify writes the PANE box and
+# mailbox-drain.sh reads the SESSION box, so a single-key watcher can sit deaf beside a delivered line
+# (lib → mailbox_keyset). Hence the no-arg form is the one to advertise — it derives the same key
+# cc-notify resolves, then covers the rest.
+#
 # Exit: 0 = new line(s) arrived (printed to stdout); 2 = timed out; 3 = no uuid/role;
 #       4 = line(s) DELIVERED but the shared cursor could not be advanced (F9 — you WILL see this mail
 #           again; that is a dup, not a loss). Loud on purpose: a cursor-write failure that exits 0 is
@@ -113,9 +118,29 @@ echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 's
 # "wake-path armed" for a full CC_WATCH_FRESH_S window, and cc-announce stamped VERIFIED on a wake that
 # could not happen. Recording the pid lets cc-notify / mailbox-drain require it to be ALIVE. Format is
 # one `pid=<n>` line; a legacy/empty marker still reads as armed-by-freshness, so nothing regresses.
-_watchfile() { printf '%s/%s.watching' "$MAILBOX_DIR" "$CUR_UUID"; }
-_beat() { printf 'pid=%s\n' "$$" > "$(_watchfile)" 2>/dev/null || true; }
-trap 'rm -f "$(_watchfile)" 2>/dev/null || true' EXIT
+#
+# BEATEN UNDER EVERY KEY OF THE INBOX (2026-07-31), for the same reason the take below reads every
+# key: the two hooks that ask "is this session armed?" ask about DIFFERENT keys — mailbox-drain.sh
+# passes its session id (:170) and session-continue.sh passes the canonicalised key (:412) — so a
+# single-key marker answers one of them and not the other, and the hook that misses re-nudges a
+# session that is in fact armed. One marker per key makes the question key-agnostic.
+_keys() {   # every physical key of this logical inbox (see the lib's mailbox_keyset)
+  if [ "$_have_lib" = 1 ] && command -v mailbox_keyset >/dev/null 2>&1; then
+    mailbox_keyset "$CUR_UUID" 2>/dev/null || printf '%s\n' "$CUR_UUID"
+  else
+    printf '%s\n' "$CUR_UUID"   # no lib ⇒ no alias to resolve ⇒ exactly the single-key behaviour
+  fi
+}
+BEAT_KEYS="$CUR_UUID"
+_beat() {
+  local k
+  BEAT_KEYS="$(_keys)"
+  for k in $BEAT_KEYS; do printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true; done
+}
+# Clears exactly the markers this process wrote — never a key it merely resolved once. bash 3.2, default
+# IFS: the unquoted expansion splits the newline-separated set (this file is #!/bin/bash, not zsh).
+_unbeat() { local k; for k in $BEAT_KEYS; do rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true; done; }
+trap '_unbeat' EXIT
 
 # ── OWNER GUARD — a watcher must never outlive the session it wakes ───────────────────────────────
 # MEASURED (2026-07-29): a watcher whose owner dies is reparented to pid 1 and keeps polling. When
@@ -150,7 +175,7 @@ elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
   if [ -n "$next_uuid" ] && [ "$next_uuid" != "$CUR_UUID" ]; then
-    rm -f "$(_watchfile)" 2>/dev/null || true
+    _unbeat
     CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline="$(_lc)"
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
@@ -163,8 +188,15 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   fi
 
   if [ "$_have_lib" = 1 ]; then
-    if mailbox_has_pending "$CUR_UUID"; then
-      mailbox_take "$CUR_UUID" 1    # print the new line(s) + advance the shared cursor (reliable delivery)
+    # FIRST key of the set that has anything — not just our own. cc-notify writes the PANE box while
+    # the drain reads the SESSION box (lib → mailbox_keyset), so checking one key is how a watcher
+    # ends up deaf to a delivery sitting one filename away.
+    _HIT=""
+    for _k in $(_keys); do
+      if mailbox_has_pending "$_k"; then _HIT="$_k"; break; fi
+    done
+    if [ -n "$_HIT" ]; then
+      mailbox_take "$_HIT" 1        # print the new line(s) + advance the shared cursor (reliable delivery)
       _trc=$?
       # F9: rc 2 = the body WAS printed but the cursor write FAILED — "the caller must escalate + still
       # deliver, never silently drop". This caller used to exit 0 regardless, so the lib's one escalation
@@ -174,7 +206,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
         # of the operator's live root — see hooks/lib/comms-alarm.sh). Lib absent → the original
         # inline write, so this backstop never gets weaker than before the chokepoint existed.
         if command -v jq >/dev/null 2>&1; then
-          _ca_rec="$(jq -nc --arg u "$CUR_UUID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+          _ca_rec="$(jq -nc --arg u "$_HIT" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
             '{kind:"cursor-write-failed", uuid:$u, actor:"cc-await-ping", reason:"mailbox_take delivered the body but could not advance .seen — the same mail will be re-delivered (dup, not loss); the guard cannot key on a cursor that is not moving", ts:$ts}' 2>/dev/null)"
           if command -v comms_alarm_write >/dev/null 2>&1; then
             comms_alarm_write cursor-fail "$_ca_rec" || true
@@ -186,7 +218,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
             fi
           fi
         fi
-        echo "cc-await-ping: ⚠ delivered, but the shared cursor could NOT be advanced for $CUR_UUID — you will see this mail again (a dup, never a loss); alarm recorded" >&2
+        echo "cc-await-ping: ⚠ delivered, but the shared cursor could NOT be advanced for $_HIT — you will see this mail again (a dup, never a loss); alarm recorded" >&2
         exit 4
       fi
       exit 0
