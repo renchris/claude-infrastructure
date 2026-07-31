@@ -17,7 +17,13 @@
 set -uo pipefail
 [ "${WT_GUARD_DISABLED:-0}" = "1" ] && exit 0
 
-input="$(cat)"
+# Builtin read, NOT `$(cat)`: command substitution forks AND execs /bin/cat on the hottest path
+# in the system (this hook fires on EVERY Bash tool call). Measured 2026-07-31: ~6 ms per hook,
+# ~18% of the 163 ms PreToolUse/Bash chain across the five hooks that did this. `read -d ''`
+# returns non-zero at EOF -- the normal case here -- hence `|| true`; it also PRESERVES the
+# trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
+IFS= read -r -d '' input || true
+while [ "${input%$'\n'}" != "${input}" ]; do input="${input%$'\n'}"; done
 if command -v jq >/dev/null 2>&1; then
   cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 else

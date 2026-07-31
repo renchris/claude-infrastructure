@@ -20,7 +20,13 @@
 [[ "${RM_SAFE_ALLOWLIST_DISABLED:-0}" == "1" ]] && exit 0
 set -uo pipefail
 
-INPUT=$(cat)
+# Builtin read, NOT `$(cat)`: command substitution forks AND execs /bin/cat on the hottest path
+# in the system (this hook fires on EVERY Bash tool call). Measured 2026-07-31: ~6 ms per hook,
+# ~18% of the 163 ms PreToolUse/Bash chain across the five hooks that did this. `read -d ''`
+# returns non-zero at EOF -- the normal case here -- hence `|| true`; it also PRESERVES the
+# trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
+IFS= read -r -d '' INPUT || true
+while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
 
 # ── JQ / PAYLOAD GUARD — fail OPEN, but never SILENTLY (audit 09 D-4) ──────────────────────
 # Fail-open on a missing jq / malformed payload stays correct (defer to the ask prompt + the deny

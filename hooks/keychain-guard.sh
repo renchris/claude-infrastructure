@@ -12,7 +12,13 @@
 # This guard blocks ONLY that pattern and FAILS OPEN on any parse error (never blocks unrelated cmds).
 # See memory: dia-keychain-searchlist-encryption.
 
-payload="$(cat 2>/dev/null)" || exit 0
+# Builtin read, NOT `$(cat)`: command substitution forks AND execs /bin/cat on the hottest path
+# in the system (this hook fires on EVERY Bash tool call). Measured 2026-07-31: ~6 ms per hook,
+# ~18% of the 163 ms PreToolUse/Bash chain across the five hooks that did this. `read -d ''`
+# returns non-zero at EOF -- the normal case here -- hence `|| true`; it also PRESERVES the
+# trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
+IFS= read -r -d '' payload || true
+while [ "${payload%$'\n'}" != "${payload}" ]; do payload="${payload%$'\n'}"; done
 [ -n "$payload" ] || exit 0
 
 cmd=""
