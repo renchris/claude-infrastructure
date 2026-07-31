@@ -1,7 +1,8 @@
 ---
-status: open
+status: complete
 owner: banner-v2
 created: 2026-07-29
+closed: 2026-07-31
 supersedes: none
 ---
 
@@ -10,6 +11,12 @@ supersedes: none
 The v1 bake-off compared three **mediums** of one idea and never tested the **subject**. That is
 the one check that failed. So this doc is the check: *what is the header about?* — decided before
 a single SVG is written.
+
+> **RESOLVED 2026-07-31 — the check ran, in the intended order, and the work it gated shipped.**
+> The subject went to the operator before any SVG was written; the ruling was *build all three
+> subjects, and variants of each* rather than a single pick. Full record in **[§ Resolution](#resolution)**
+> at the foot of this doc. The **R1–R4 bindings below remain the ruling source-of-record** and are
+> still enforced in code — this doc is closed, not retired, and nothing here should be deleted.
 
 Binding: **R1** whole-system (not a handoff/subsystem infographic) · **R2** title legible at t=0
 and every t, motion supplements it · **R3** seamless indefinite loop, ambient not narrative ·
@@ -106,3 +113,58 @@ settled (vector), so the variants will differ in composition and density, not in
 
 While this is open I am authoring the clawd vector geometry from the extracted 11×8 grid and the
 four pose cells, which every one of the three needs.
+
+---
+
+## Resolution
+
+*Answered 2026-07-29; recorded here 2026-07-31. The ask above is kept verbatim as the historical
+record — this section answers it. The doc is closed against evidence rather than deleted, because
+the R1–R4 bindings it fixes are still cited in code.*
+
+**The pick: none — the operator ruled all three.** `README_HERO_BANNER.md` § Log:
+
+> **2026-07-29 (v2)** — subject validated with the operator BEFORE any SVG was written, which is the
+> check whose absence sank v1. Ruling: build all three subjects and variants of each. Nine
+> candidates shipped to `assets/banner/v2/`, gate still closed.
+
+So S2's "my recommendation" above was **not** taken as a decision, and the "pick one" framing was
+overtaken by the ruling itself. The check this doc exists to run — *validate the subject before
+building any variant* — did run, and it ran before a single SVG was written.
+
+**What got built** — `e063e5d9`, nine candidates, three per subject, all present at HEAD:
+
+| Subject | Variants |
+|---|---|
+| **S1** the world it lives in — *safely* | `s1a-horizon` · `s1b-close` · `s1c-scene` |
+| **S2** the fleet — *many* | `s2a-lanes` · `s2b-depth` · `s2c-row` |
+| **S3** the night shift — *unattended* | `s3a-starfield` · `s3b-tree` · `s3c-longwatch` |
+
+Screenshot-compared through `assets/banner/v2/comparison.html` exactly as this doc promised, each
+with a frozen near-lossless WebP still. Three defects were caught by the checks rather than by eye —
+a fleet that placed three creatures and rendered two, a title collision visible only on the
+arms-up pose, and night scenery sitting behind the type — all recorded in `e063e5d9`.
+
+**"Gate still closed"** in that entry means the README header edit was deliberately withheld:
+*"The README header is NOT touched — that gate is the operator's."* (`e063e5d9`)
+
+**Where the track went next.** The v2 nine did not become the header. Work continued through v3–v6,
+and the README now ships `assets/banner/v6c-dusk-line.svg`, picked in `3ff7a361`. **No lineage from
+S1/S2/S3 to v6c is recorded anywhere on disk** — v6 is described as "four art directions on the
+settled v5 constraint set", not as a descendant of one of these three subjects. That is left
+unstated here rather than inferred from the fact that v6c happens to be a night scene.
+
+**Nothing is stranded by closing this.** The clawd vector geometry promised in the line above was
+authored and now lives in `tools/banner/gen.py`. Still-live banner work has its own docs and its own
+backlog items — `README_HERO_BANNER.md` and `BANNER_NARRATIVE_SPEC.md`. R1–R4 remain enforced in
+code, which carries its own copies of the rules and does not read this file at runtime:
+`scripts/banner-build.py:18-25` restates all four as the build contract, `scripts/banner-collide.py`
+enforces R2 at every timestamp, and `tools/banner/gen.py` cites R1 and R4.
+
+**Why the front-matter changed.** `status: open` is what kept re-emitting this finished doc into the
+autonomous dispatch wave. `bin/cc-discover`'s C2 critic (`cc-discover:167,183`) turns every row of
+`find-plan.sh --list-open` into an "advance \<plan\>" backlog item, and `find-plan.sh:97` treats
+**only** `complete` and `superseded` as terminal — every other value, *including an unrecognised
+one*, is listed and re-dispatched. So `closed` or `decided` would have parsed to `unknown` and
+changed nothing. `complete` is the value the repo's own test pins
+(`tests/find-plan-list-open.bats:43`, "complete and superseded plans are EXCLUDED").
