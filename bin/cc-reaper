@@ -226,6 +226,44 @@ if [ -z "$GUARD_BIN" ]; then
   done
 fi
 
+# ── R5 (SESSION_REGISTRY_V2 §4.3.1): EVERY external fork in the sweep is bounded ────────────────
+# Measured 2026-07-29: `grep -c 'timeout ' bin/cc-reaper` = 0 — the sweep synchronously invoked three
+# foreign binaries with no bound at all, one of them (cc-inbox-guard) the exact binary whose unbounded
+# fork caused the 5-day gate blockage. Consequence: sweep p90 403s / p99 2,099s / max 55,659s (15.5h)
+# against a 300s StartInterval, and a decision acted on minutes after the evidence it rests on.
+#
+# PATH alone cannot find timeout(1): this process runs under launchd with a minimal PATH that does not
+# include Homebrew, which is exactly where coreutils installs it — so an interactive shell looks fine
+# while the AUTOMATED caller (the only one that matters here) stays unbounded. Absolute-path fallback
+# list required. Same resolution as cc-inbox-guard:109-118 and it2-wrapper's _resolve_timeout.
+#
+# SIZING — the bound must fit the BAND, not a bench. com.chrisren.cc-reaper.plist sets
+# `ProcessType Background` + `Nice 5`, the Darwin background QoS band, where wall time is taxed
+# several-fold versus a foreground measurement. A bound sized from a foreground run is a permanent
+# non-verdict: it fires on healthy work and proves nothing. These are sized as WEDGE detectors — far
+# above any healthy run, far below the 300s interval — not as latency targets.
+#
+# No timeout(1) anywhere ⇒ run unbounded rather than break the call (degrade, never regress).
+# Seams: CC_REAPER_TIMEOUT_BIN (set-but-EMPTY disables bounding) · CC_REAPER_{RECONCILE,BACKLOG,GUARD,CLASSIFY}_TIMEOUT_S
+if [ -n "${CC_REAPER_TIMEOUT_BIN+set}" ]; then
+  _RP_TIMEOUT_BIN="$CC_REAPER_TIMEOUT_BIN"
+else
+  _RP_TIMEOUT_BIN=""
+  for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+            /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { _RP_TIMEOUT_BIN="$_c"; break; }
+  done
+fi
+# rc 124 is timeout(1)'s "I fired" code and MUST stay distinguishable from the child's own failure —
+# a bound that fires silently is indistinguishable from a binary that legitimately returned nothing,
+# which is how an inert mechanism hides. Callers log 124 explicitly.
+_rp_bounded() { # <secs> <cmd...> — run bounded; rc 124 = the bound fired
+  local s="${1:-60}"; shift
+  if [ -z "$_RP_TIMEOUT_BIN" ] || [ ! -x "$_RP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$_RP_TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+
 utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
 # desk-board IDL rows — supervisor-shaped {ts,actor,kind,…}. Values pass as jq --arg/--argjson (NEVER
 # string-interpolated into the filter) so a name/pane carrying quotes can't corrupt or inject the row.
@@ -576,23 +614,32 @@ sweep() {
   # Self-heal the registry BEFORE enumerating, so a pane that missed SessionStart is backfilled and
   # ENUMERATED this same sweep (delta closes) rather than only surfaced. Additive + idempotent; gated on
   # --reap so a DRY-RUN sweep still writes nothing (its self-check then reports the true pre-heal delta).
+  # R5: bounded. cc-reconcile is the ONE foreign call that must stay ahead of classify — it backfills
+  # rows classify then enumerates, so deferring it would delay the delta-close by a full sweep. It is
+  # therefore bounded rather than moved. (cc-backlog + cc-inbox-guard have no such ordering tie and
+  # run AFTER the decision loop — see the ride-along block below.)
   if [ "$reap" = 1 ] && [ -n "$RECONCILE_BIN" ]; then
-    local rout; rout="$("$RECONCILE_BIN" 2>/dev/null || true)"
+    local rout rrc
+    rout="$(_rp_bounded "${CC_REAPER_RECONCILE_TIMEOUT_S:-60}" "$RECONCILE_BIN" 2>/dev/null)"; rrc=$?
+    [ "$rrc" = 124 ] && log "bound-fired reconcile: exceeded ${CC_REAPER_RECONCILE_TIMEOUT_S:-60}s — registry backfill INCOMPLETE this sweep"
     [ -n "$rout" ] && { say "$rout"; log "reconcile: $rout"; }
   fi
-  # Claim-ledger reap (dead-worker stale claim → reopen · thrash → block). Same --reap gating as
-  # reconcile (a DRY-RUN sweep writes nothing); append-only + idempotent, so it is safe every sweep.
-  if [ "$reap" = 1 ] && [ -n "$BACKLOG_BIN" ]; then
-    local bout; bout="$("$BACKLOG_BIN" reap 2>/dev/null || true)"
-    [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
+  # ── THE DECISION begins here. classify_t0 is the instant the evidence every reap rests on was
+  #    taken; A8's "decision→act gap" is measured from THIS stamp, not from sweep_t0 (which precedes
+  #    it by whatever the reconcile call cost, i.e. time that elapsed BEFORE the evidence existed and
+  #    so cannot be part of its age). sweep_t0 is left untouched — the Gap-3 suspend guard below is
+  #    calibrated to it, and both spans are logged so neither number is hidden by the other.
+  local cj crc classify_t0
+  cj="$(_rp_bounded "${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}" "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+  if [ "$crc" = 124 ]; then
+    # The evidence producer itself wedged. There is no verdict this sweep, so there is nothing to act
+    # on — a bounded classify must yield an EMPTY candidate set, never a partial one a reap could ride.
+    say "cc-classify exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — no verdict this sweep; reaping nothing"
+    log "bound-fired classify: exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — sweep yields NO candidates (fail-closed)"
+    cj='[]'
   fi
-  # v2-comms fail-loud backstop: escalate inbox mail enqueued but never consumed. Same --reap gating; the
-  # guard is self-damping (one escalation per undelivered state), so it is safe every sweep.
-  if [ "$reap" = 1 ] && [ -n "$GUARD_BIN" ]; then
-    local gout; gout="$("$GUARD_BIN" sweep 2>/dev/null || true)"
-    [ -n "$gout" ] && log "inbox-guard: $gout"
-  fi
-  local cj; cj="$("$CLASSIFY_BIN" --all --json 2>/dev/null || echo '[]')"
+  case "$cj" in '') cj='[]' ;; esac
+  classify_t0="$(reaper_now)"; case "$classify_t0" in ''|*[!0-9]*) classify_t0="$(date +%s)" ;; esac
   local n; n="$(printf '%s' "$cj" | jq 'length' 2>/dev/null || echo 0)"
   local reaped=0 candidates=0 surfaced=0 surfaced_keys=" " i
   for ((i=0; i<n; i++)); do
@@ -820,16 +867,43 @@ sweep() {
       fi
     fi
     decided_at="$(reaper_now)"; case "$decided_at" in ''|*[!0-9]*) decided_at="$(date +%s)" ;; esac
-    decided_age=$(( decided_at - sweep_t0 ))   # evidence age of the CLASSIFY half — the A8 read
+    # A8's read is the DECISION→ACT gap: how long after the evidence was taken did we act on it. The
+    # evidence is the classify verdict, so the span starts at classify_t0. It previously started at
+    # sweep_t0, which sits BEFORE classify ran and so charged this gap for foreign work that finished
+    # before the evidence existed — an overstatement of the thing being bounded, not a measure of it.
+    # sweep_age is logged beside it so the wider span stays visible and the change is auditable.
+    decided_age=$(( decided_at - classify_t0 ))
+    local sweep_age=$(( decided_at - sweep_t0 ))
     "$TEARDOWN_BIN" "$pane" --done-evidence "$ev" --decided-at "$decided_at" "${expect_args[@]+"${expect_args[@]}"}"; trc=$?
     if [ "$trc" = 0 ]; then
-      reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane decided_age=${decided_age}s"
+      reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane decided_age=${decided_age}s sweep_age=${sweep_age}s"
       clear_fired_marker "$pane"        # the pane is gone — retire its fired-peer marker (T-P3-4)
       worktree_cleanup "$cwd"
     else
       say "    cc-teardown returned $trc (10=DEFER 2=REFUSE 5=FAIL) — its gate refused; NOT reaped (trusted)"; log "teardown-refused $name rc=$trc"
     fi
   done
+
+  # ── RIDE-ALONG WORK — bounded, and OFF the decision path (R5, SESSION_REGISTRY_V2 §4.3.1) ───────
+  # Neither of these feeds the reap decision: `cc-backlog reap` heals the CLAIM ledger and
+  # `cc-inbox-guard sweep` escalates unconsumed mail. They ran BEFORE classify purely because that is
+  # where they were added — which put two unbounded foreign forks between the sweep's start and the
+  # evidence, and made the reaper the cron carrier for three subsystems' periodic work. They still
+  # ride the reaper's cadence (that part was always the point), but they can no longer delay a
+  # decision or the act that follows it. Both are append-only/idempotent and self-damping, so running
+  # them after the loop changes nothing about what they do.
+  if [ "$reap" = 1 ] && [ -n "$BACKLOG_BIN" ]; then
+    local bout brc
+    bout="$(_rp_bounded "${CC_REAPER_BACKLOG_TIMEOUT_S:-60}" "$BACKLOG_BIN" reap 2>/dev/null)"; brc=$?
+    [ "$brc" = 124 ] && log "bound-fired backlog-reap: exceeded ${CC_REAPER_BACKLOG_TIMEOUT_S:-60}s — claim-ledger sweep INCOMPLETE this cadence"
+    [ -n "$bout" ] && { say "$bout"; log "backlog-reap: $bout"; }
+  fi
+  if [ "$reap" = 1 ] && [ -n "$GUARD_BIN" ]; then
+    local gout grc
+    gout="$(_rp_bounded "${CC_REAPER_GUARD_TIMEOUT_S:-60}" "$GUARD_BIN" sweep 2>/dev/null)"; grc=$?
+    [ "$grc" = 124 ] && log "bound-fired inbox-guard: exceeded ${CC_REAPER_GUARD_TIMEOUT_S:-60}s — mail escalation INCOMPLETE this cadence"
+    [ -n "$gout" ] && log "inbox-guard: $gout"
+  fi
 
   # ── T-P3-3 re-arm: a pane no longer in the surface set (recovered / cause cleared) drops its damping
   #    marker, so a future re-hang re-pages. A persistent hang stays surfaced every sweep → never cleared.
