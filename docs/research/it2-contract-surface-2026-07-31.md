@@ -148,6 +148,35 @@ Claude Code refuses control characters in `command` *before* sending (`qur(t)` �
 `swarm_pane_command_control_chars`, "Refusing to send command containing control character U+… to
 terminal pane") — while itself sending `\x15`. A facade must accept `\x15` on `send`.
 
+### 3.2b The send contract is the ONE thing that changed across deployed versions
+
+**Both tracks are live on this box**, so a facade must satisfy both: `claude-latest` →
+`~/.claude-versions/current` → **2.1.114** (the pinned stable), while **15 of the running
+`claude` processes are 2.1.219** (matched on the command *position*, not `pgrep -f`, whose argv
+matching counts every session that merely mentions claude).
+
+| | 2.1.114 | 2.1.183 | 2.1.219 |
+|---|---|---|---|
+| `sendCommandToPane` | `session run -s <id> <cmd>` — **one call** | `send` + `run` | `send` + `run` |
+| `"session","send"` present in binary | **absent entirely** | present | present |
+| split shapes (all four) | identical | identical | identical |
+| `killPane` | `session close -f -s <id>` | identical | identical |
+| `session list` liveness (+ truncation bug) | identical | identical | identical |
+
+2.1.114:
+
+```js
+async sendCommandToPane(H,_,q){
+  let O = await ar_(H ? ["session","run","-s",H,_] : ["session","run",_]);
+  if(O.code!==0) throw Error(`Failed to send command to iTerm2 pane ${H}: ${O.stderr}`) }
+```
+
+The Ctrl-U prelude landed **between 2.1.114 and 2.1.183**. Everything else in the contract is stable
+across all three. The practical consequence: **a facade validated only against the pinned stable
+would never observe `session send` at all**, and would then silently drop the line-clearing keystroke
+for the 15 sessions actually running 2.1.219. 2.1.114 also carries `hidePane` / `showPane` /
+`rebalancePanes`, but all are no-ops for iTerm2 and issue no `it2` call.
+
 ### 3.3 `killPane(paneId)`
 
 `session close -f -s <paneId>` — returns `code===0` as a boolean. The pane id is removed from the
@@ -222,6 +251,33 @@ nothing else on it.
 | both `send` and `run` are used | JS `sendCommandToPane` body | — |
 | `session list` ids are truncated | measured, with a prefix positive control | run it where stdout is a tty ≥ ~110 cols |
 | `-p` never calls it2 | JS `isInProcessEnabled` + a live teammate spawn logging zero calls | — |
+
+## 6. Why this stopped at source-reading rather than a live argv capture
+
+The brief asked for a runtime capture as well, and the honest report is that the instrumented capture
+**returned zero invocations** — twice over, for two independent structural reasons, both now
+documented above: `claude -p` never creates a pane, and a PATH shim cannot intercept a callee that
+was resolved through a *login shell* to an absolute path. Those two null results are the finding;
+they are what located the login-shell resolution in the first place.
+
+A positive capture **was** reachable safely. `$SHELL` is read from the environment, so a stand-in
+shell that answers `-lc "command -v it2"` from a PATH with the shim prepended scopes the interception
+to a single child process and never touches the fleet — built and verified here (the redirected
+lookup returns the shim; the control confirms the unredirected lookup still returns
+`~/.local/bin/it2`). It was **not** then fired at a live interactive session, deliberately:
+
+- Source coverage is **strictly greater**. One run exercises whichever branch it happens to take —
+  realistically split-shape 1 or 2, plus `run`. It would never reach shapes 3 and 4, the
+  `session list` pruning path, or the version delta in §3.2b. Reading the class gives all of them.
+- The remaining risk a capture would have retired — "am I reading the version that actually runs?" —
+  was retired more completely by reading **all three deployed binaries** instead, which is what
+  surfaced the 2.1.114 send difference. A single capture on one version would have *hidden* it.
+- The alternative interception point that requires no new session — repointing `~/.local/bin/it2` —
+  would put a shim in front of every live `it2` call on a box with ~25 running sessions, for
+  marginal confirmation. That trade is not worth taking against a live fleet.
+
+Stated plainly so a later reader does not assume the dynamic path was simply forgotten: it was
+built, scoped, and then judged lower-yield than the static path it was meant to check.
 
 The instrument used for the live check is committed at `tools/it2-probe/it2-logging-shim.sh`. Its
 transparency was positive-controlled: byte-identical passthrough on a *deterministic* subject
