@@ -1,0 +1,8 @@
+#!/bin/bash
+# A $SHELL stand-in used ONLY by the one claude process under test. CC calls
+# $SHELL -lc "command -v it2"; we answer from a PATH with the shim prepended, so the
+# interception is scoped to this single child and never touches the live fleet.
+if [ "$1" = "-lc" ] || [ "$1" = "-c" ]; then
+  exec /bin/zsh "$1" "export PATH=/private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/57c440db-5c85-4e5d-b451-8ed9d3b3c628/scratchpad/it2shim:\$PATH; ${2}"
+fi
+exec /bin/zsh "$@"
