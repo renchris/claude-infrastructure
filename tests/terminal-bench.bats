@@ -166,3 +166,176 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=OK"* ]] || false
 }
+
+# ── the constant-layout PRECONDITION (added 2026-07-31) ───────────────────────────────────────────
+# THE BUG THESE PIN. The 2026-07-31 22:17Z 30-minute kitty run returned `verdict=OK` and its
+# +10 ports/hr is unusable: the window census fell 36 → 19 while the interval held. `verdict=OK`
+# certified that two readings and a GPU profile were obtained and NOTHING about layout stability,
+# so the confounded row was indistinguishable from the clean bound §6.1 is still waiting for.
+#
+# These drive the REAL script end-to-end rather than re-implementing its comparison, because the
+# defect is in control flow (what the script DOES with a broken precondition), which no extracted
+# expression can pin. The census is stubbed through the script's own documented derivation —
+# CENSUS_BIN is "${TMPDIR}/window-census.$(id -u)" and is rebuilt only when the .swift source is
+# NEWER — so a fresh executable at that path inside a fixture TMPDIR is used as-is, untouched.
+
+# The stub answers from a single mutable file, and the layout is moved by a BACKGROUND writer at a
+# wall-clock offset. An earlier version encoded the whole timeline as "value at t+N" measured from
+# test setup and THREE of these tests passed or failed for the wrong reason: the script's baseline
+# probe does not happen at t+0, it happens after two `top -l 2` samples and the GPU sample — about
+# five seconds in — by which point a "change at t+2" had already been folded into the baseline, so
+# there was nothing left to detect. Hence two rules that every test below obeys:
+#   · the flip is scheduled well clear of that start-up cost, and
+#   · every test ASSERTS THE PRINTED BASELINE, so a run whose timing slipped fails loudly instead of
+#     certifying a layout that never moved. A control that cannot fail is not a control.
+stub_census() {   # initial "<onscreen>" "<offscreen>"
+  export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
+  printf '%s %s\n' "$1" "$2" > "$TMPDIR/current"
+  cat > "$TMPDIR/window-census.$(id -u)" <<'STUB'
+#!/bin/bash
+d="$(dirname "$0")"
+read -r on off < "$d/current"
+[ -n "${on:-}" ] || exit 3
+printf 'owner\tpid\twindows\tonscreen\toffscreen\tzeroArea\tonscreenMpx\tlayers\n'
+printf 'stub\t1\t%s\t%s\t%s\t0\t1.00\t1\n' "$((on+off))" "$on" "$off"
+STUB
+  chmod +x "$TMPDIR/window-census.$(id -u)"
+}
+
+# Moves the layout mid-run. Written via an atomic rename so a poll can never read a half-written
+# file and mistake it for a census failure. Its three standard fds are detached: an abort test ends
+# while a later flip is still sleeping, and a background child that still holds bats' TAP descriptor
+# keeps the run open after the test has finished (memory fixture-lifetime-is-an-orphan-leak-bound,
+# where exactly this wedged a suite for five minutes). teardown kills them regardless.
+flip_layout_after() {  # seconds onscreen offscreen
+  ( sleep "$1"; printf '%s %s\n' "$2" "$3" > "$TMPDIR/.next"; mv "$TMPDIR/.next" "$TMPDIR/current" ) \
+    >/dev/null 2>&1 </dev/null &
+  FLIP_PIDS="${FLIP_PIDS:-} $!"
+}
+
+# A census that runs but answers nothing — the "I could not look" state, which must never be
+# spelled the same way as "I looked and it was fine".
+stub_census_silent() {
+  export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
+  printf '#!/bin/bash\nexit 3\n' > "$TMPDIR/window-census.$(id -u)"
+  chmod +x "$TMPDIR/window-census.$(id -u)"
+}
+
+# A uniquely-named subject we control, so the run cannot be hijacked by a stray system process and
+# cannot die underneath the test. A SYMLINK to /bin/sleep, never a copy: macOS code-signing SIGKILLs
+# a copied system binary at exec (the note on the resolver test above), while the symlink execs the
+# signed original and still takes the link's basename as its p_comm.
+start_subject() {
+  SUBJ_NAME="tbsubject$$"
+  ln -sf /bin/sleep "$BATS_TEST_TMPDIR/$SUBJ_NAME"
+  "$BATS_TEST_TMPDIR/$SUBJ_NAME" 240 &
+  SUBJ_PID=$!
+  sleep 0.3
+}
+teardown() {
+  [ -n "${SUBJ_PID:-}" ] && kill "$SUBJ_PID" 2>/dev/null
+  for p in ${FLIP_PIDS:-}; do kill "$p" 2>/dev/null; done
+  return 0
+}
+
+# Seconds to wait before moving the layout. Must clear the script's pre-hold cost — T0 app reading,
+# T0 WindowServer reading (a `top -l 2` each) and the GPU sample — measured at ~5 s on this box.
+FLIP_AT=12
+
+@test "precondition: a RISING offscreen count is the SIGNAL, and must NOT abort the measurement" {
+  # THE CONTROL THAT KILLS THE OBVIOUS IMPLEMENTATION. The tempting gate is the `windows` column
+  # the script already reads — but that is the ON- AND OFF-SCREEN TOTAL, and a growing offscreen
+  # population is precisely the window leak this instrument exists to convict. A gate keyed on it
+  # makes a leaking terminal abort its own measurement and become structurally unable to report the
+  # leak. So: offscreen 20 → 25 at constant onscreen must still produce a drift row.
+  start_subject
+  stub_census 1 20
+  flip_layout_after "$FLIP_AT" 1 25
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 20 --watch 1 --sample-secs 1
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [[ "$output" != *"PRECONDITION BROKE"* ]]
+  [[ "$output" == *"CERTIFIED-constant layout"* ]]
+  [[ "$output" == *"offscreen win  +5"* ]]
+  [[ "$output" != *"verdict=LAYOUT-DRIFT"* ]]
+  [ "$status" -eq 0 ]
+}
+
+@test "precondition: onscreen CHANGING aborts with verdict=LAYOUT-DRIFT and exit 4, no drift row" {
+  # The 22:17Z failure, reproduced: panes opened or closed underneath the interval. Ports move WITH
+  # windows, so the delta cannot be split into leaked-versus-released — the row must not be printed
+  # at all, because a caveat does not travel with a number once it is quoted.
+  #
+  # This also pins LAYOUT-DRIFT as STICKY for free: the subject is a `sleep`, whose sample matches
+  # no GPU or CPU discriminator, so the GPU axis is NO-DATA. If the final downgrade were allowed to
+  # rewrite this verdict the way it rewrites OK, this would read PARTIAL.
+  start_subject
+  stub_census 1 20
+  flip_layout_after "$FLIP_AT" 4 20
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"verdict=LAYOUT-DRIFT"* ]]
+  [[ "$output" == *"PRECONDITION BROKE"* ]]
+  [[ "$output" == *"onscreen 1→4"* ]]
+  [[ "$output" != *"DRIFT (app"* ]]
+}
+
+@test "precondition: a poll catches a window that opens and closes INSIDE the interval" {
+  # Why polling exists at all rather than just comparing the two endpoints. Here onscreen goes
+  # 1 → 3 → 1, so both endpoints agree and an endpoint-only gate would certify the window as
+  # constant — while the ports had already been allocated and freed underneath it.
+  # The abort must therefore be attributed to a POLL (t+Ns), not to the endpoint check.
+  start_subject
+  stub_census 1 20
+  flip_layout_after "$FLIP_AT" 3 20
+  flip_layout_after "$((FLIP_AT + 8))" 1 20
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"onscreen 1→3"* ]]
+  [[ "$output" == *"PRECONDITION BROKE — t+"* ]]
+  [[ "$output" != *"PRECONDITION BROKE — endpoint"* ]]
+}
+
+@test "precondition: a FALLING offscreen count aborts — released windows move ports too" {
+  # The other half of the asymmetry. Offscreen rising is the signal; offscreen falling is a release
+  # event that churns the population, and the 22:17Z run's −18 offscreen is exactly what made its
+  # +5 ports uninterpretable.
+  start_subject
+  stub_census 1 20
+  flip_layout_after "$FLIP_AT" 1 12
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"offscreen 20→12"* ]]
+}
+
+@test "precondition: a census that cannot answer yields PARTIAL — never OK" {
+  # The header has promised since the file was written that a missing window census yields PARTIAL.
+  # Until 2026-07-31 the code set VERDICT=OK unconditionally once two readings existed, so a run
+  # with no census at all — the case where layout stability is pure assumption — was filed as a
+  # full comparable row. "I could not look" must not be spelled like "I looked and it was fine".
+  start_subject
+  stub_census_silent
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 4 --watch 1 --sample-secs 1
+  [[ "$output" == *"verdict=PARTIAL"* ]]
+  [[ "$output" == *"layout UNCERTIFIED"* ]]
+  [[ "$output" != *"verdict=OK"* ]]
+}
+
+@test "the JSONL row carries the SAME verdict as stdout" {
+  # The machine-readable sink used to be appended BEFORE the final downgrade, so a run whose stdout
+  # read PARTIAL could leave "OK" in the file a consumer parses — the overclaim landing on the
+  # surface that gets quoted rather than the one a human reads.
+  start_subject
+  stub_census 1 20
+  flip_layout_after "$FLIP_AT" 9 20
+  local out="$BATS_TEST_TMPDIR/rows.jsonl"
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1 --out "$out"
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  local stdout_verdict; stdout_verdict="$(printf '%s\n' "$output" | sed -n 's/^verdict=//p' | tail -1)"
+  local json_verdict;   json_verdict="$(sed -n 's/.*"verdict":"\([^"]*\)".*/\1/p' "$out" | tail -1)"
+  [ "$stdout_verdict" = "LAYOUT-DRIFT" ]
+  [ "$json_verdict" = "$stdout_verdict" ]
+  grep -q '"layout":"broken"' "$out"
+}
