@@ -136,5 +136,34 @@ if [[ -n "$CHMOD_MATCH" ]]; then
   allow "chmod: safe mode, target under CWD"
 fi
 
+# 6. sed -n — READ-ONLY paging. Measured 2026-07-31 (bin/cc-permission-audit) as the single
+#    largest allow-listable slice: 730 of the 1,014 simple-verb unmatched invocations (72%), out
+#    of 41,829 Bash calls in the transcript corpus.
+#    `-n` suppresses auto-print, so sed emits only what an explicit p/=/l prints — it cannot
+#    write. The dangerous sibling is `-i` (in-place), which rule 3 handles with its own
+#    DENY_DIR/DENY_SENSITIVE gauntlet; the anchored pattern here cannot match it, and the explicit
+#    guard below refuses it belt-and-braces.
+#    Same conservatism as every rule above: whole-command anchor plus [^;&|], so a compound like
+#    `sed -n 1p f; rm -rf /` never reaches this branch — it falls through to the normal gate.
+#    w/W (write-to-file) and e (execute) are sed COMMANDS that still have effects under -n, so any
+#    script containing one is refused.
+#    The script is validated by POSITIVE WHITELIST, not by blacklisting effectful commands. A
+#    blacklist here enumerates spellings rather than the class — the first draft listed w/W/e and
+#    still let `sed -n 'w /tmp/out' f` through, because the guard assumed a character preceded the
+#    command letter. Only the address+print forms actually observed in the corpus are admitted;
+#    everything else falls through to the normal permission gate.
+SED_N_MATCH=$(echo "$CMD" | grep -oE "^[[:space:]]*sed[[:space:]]+-n[[:space:]]+[^;&|]+$" || true)
+if [[ -n "$SED_N_MATCH" ]]; then
+  # the script is the first argument after -n; strip one layer of surrounding quotes
+  SED_SCRIPT=$(echo "$SED_N_MATCH" | awk '{print $3}' | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+  # WHITELIST: numeric line/range print, or /regex/ (range) print. p/=/l only; no other command.
+  if echo "$SED_SCRIPT" | grep -qE '^[0-9]+(,[0-9]+|,\$)?[p=l]$'                 \
+  || echo "$SED_SCRIPT" | grep -qE '^\$[p=l]$'                                    \
+  || echo "$SED_SCRIPT" | grep -qE '^/[^/]*/(,/[^/]*/)?[p=l]$'                    \
+  || echo "$SED_SCRIPT" | grep -qE '^[0-9]+,/[^/]*/[p=l]$'; then
+    allow "sed -n: read-only paging (whitelisted address+print script, single command)"
+  fi
+fi
+
 # No match — defer to downstream hooks
 exit 0
