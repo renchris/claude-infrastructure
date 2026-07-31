@@ -104,7 +104,6 @@ cc-idl.bats
 cc-inbox-guard.bats
 cc-notify.bats
 cc-permission-beacon.bats
-cc-reaper.bats
 cc-reconcile.bats
 cc-recover-safeguard.bats
 cc-respawn.bats

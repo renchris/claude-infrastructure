@@ -8,6 +8,14 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   R="$REPO/bin/cc-reaper"
   D="$BATS_TEST_TMPDIR"; mkdir -p "$D/bin"
+  # FIXTURE $HOME — must come before anything that runs the sweep. This suite read the operator's
+  # LIVE ~/ until 2026-07-31, which was harmless only while nothing under $HOME fed a decision. The
+  # SESSION_REGISTRY_V2 beat re-take changed that: cc-reaper now resolves ~/.claude/cc-beats, so the
+  # suite saw the operator's real beats, cb_system_live returned TRUE, and every fixture sid — which
+  # of course has no beat — took the R3 fail-closed path and was REFUSED. 17 of 81 tests went red on
+  # trunk, all of them `td_called`, with no defect in the subject at all. A suite that reads live
+  # $HOME does not test the program, it tests the box.
+  export HOME="$D/home"; mkdir -p "$HOME/.claude"
   # real git repos: clean+shipped (landed) and dirty (not landed)
   mkrepo() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
              echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
