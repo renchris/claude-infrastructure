@@ -431,7 +431,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 | `com.claude.session-search-sweep` | 60 s | catch missed session transcripts |
 | `com.claude.session-search-backfill` | Sun 3 am | full backfill of all sessions |
 
-**Status line.** [`statusline.sh`](statusline.sh) shows `dir (commit) branch* · N%`. The context percentage applies a 48% offset to the input-only token share to approximate what is actually left (output buffer ~32%, auto-compact ~6.5%, warning ~10%). Under 60% gray, 60–90% default, over 90% red. [`notify.sh`](hooks/notify.sh) pairs a system sound with a desktop alert, 2 s debounce — Funk for a permission request, Blow for a question, Glass for a plan ready to review, Purr for task completion (sound only).
+**Status line.** [`statusline.sh`](statusline.sh) shows `dir (commit) branch* · N%`. The context percentage applies a 48% offset to the input-only token share to approximate what is actually left (output buffer ~32%, auto-compact ~6.5%, warning ~10%). Under 60% gray, 60–90% default, over 90% red. [`notify.sh`](hooks/notify.sh) pairs a system sound with a desktop alert that **names the session it came from** — `Permission · <dir>` over `<session> · <tool>` over the actual blocked command — debounced 2 s **per session**, so two sessions blocking at once are two alerts rather than one. Funk for a permission request, Blow for a question, Glass for a plan ready to review, Purr for task completion (sound only).
 
 **Browser automation.** [`bin/browsermcp-wrapper.sh`](bin/browsermcp-wrapper.sh) wraps [BrowserMCP](https://browsermcp.io) to load the NVM environment consistently — which fixes most MCP connection failures — registered in `~/.claude/.mcp.json`:
 
