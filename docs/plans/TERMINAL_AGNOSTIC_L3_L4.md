@@ -185,6 +185,33 @@ says "3 threads/pane"; measured **4.00/pane** (`renderer`, `io`, `io-reader`, `c
 console layer (sidebar row per pane, blue ring on attention, notifications panel, `Cmd+Shift+U`,
 `notify` CLI). It does NOT dominate kitty — it wins on the console axis and loses on threads.
 
+### 4b-STATUS — Q1·Q2·Q4·Q5 CLOSED 2026-07-31 (successor lead, branch `docs/l3l4-readout-evidence`)
+
+| Q | State | Commit | What landed |
+|---|---|---|---|
+| Q1 | **CLOSED** | `4455f175`, `ffddbaa9` | Falsified premise retracted **in place** at all 5 sites (4 in the research doc, 1 in README). Superseded reasoning kept visible, not deleted, so the retraction is auditable. |
+| Q2 | **CLOSED** | `a1793357` | §5b gains a correction subsection quoting its own withdrawn sentence; §5a untouched as instructed. |
+| Q4 | **CLOSED** | `a1793357`, `4455f175`, `ffddbaa9` | 4.00 threads/pane in all four places it was wrong — §6.7, §8 falsification row, the §5 verdict table, the README table. |
+| Q5 | **CLOSED** | `ffddbaa9` | cmux in the README table; table reordered by thread cost and given a **console** column, the axis cmux actually wins. |
+| Q3 | **in flight** | — | recording + hands-on evidence; see below. |
+
+**Three traps found while closing these — each would have cost a successor a re-derivation:**
+
+1. **Q4's own line reference had drifted.** §4b cites `terminal-for-30-panes-2026-07-31.md:377`; line
+   377 is the stranded-branch paragraph. The real sites were **:427, :429, :505**. Line numbers in a
+   queue rot as soon as anyone edits above them — **cite the section + a quoted phrase**, never a bare
+   line number.
+2. **The backend symbol counts are method-sensitive, and three sources already disagree.** §1/D5 of
+   this plan says `40 ITermBackend / 32 TmuxBackend`; `terminal-for-30-panes` §5a says `43/39`; a
+   re-count on 2.1.183 measures **47/41 occurrences** or **21/24 matching lines**. Only the **zero**
+   (`0 KittyBackend`, `0 GhosttyBackend` — confirmed on *both* 2.1.114 and 2.1.183) is
+   method-independent. **Cite the zero; the zero is the load-bearing fact.** The positives are noise
+   that reads as contradiction.
+3. **Closing Q4 opened a coherence gap in the same file.** §6.7 said "Ghostty was not measured";
+   closing it left §2 — the doc's primary *"one ruler for every candidate"* table — as the only place
+   still written as though Ghostty and cmux did not exist. Added as a marked **addendum** rather than
+   folded in, so which figures came from which run stays visible.
+
 ---
 
 ## 5. Corrections this plan supersedes
