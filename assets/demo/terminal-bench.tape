@@ -1,7 +1,7 @@
 # terminal-bench.tape — the terminal bake-off instrument, run against the LIVE fleet.
 #
 #   vhs assets/demo/terminal-bench.tape     → assets/demo/terminal-bench.gif  (intermediate, gitignored)
-#                                           → assets/demo/terminal-bench.mp4  (1080p60 master, committed)
+#                                           → assets/demo/terminal-bench.mp4  (1920x1080 master, committed)
 #   gif2webp -m 6 -min_size -mt assets/demo/terminal-bench.gif \
 #            -o assets/demo/terminal-bench.webp                               (the inline artifact)
 #
@@ -53,6 +53,12 @@ Set FontSize 22
 Set Width 1920
 Set Height 1080
 Set Padding 30
+# MEASURED, do not "fix" this to 60 and assume it took: VHS 0.11.0 IGNORES Set Framerate for the
+# mp4 muxer and emits 25 fps regardless. Probed directly — a minimal tape at `Set Framerate 60`
+# still produced avg_frame_rate=25/1. The setting is kept because it governs the GIF; the mp4's
+# real rate is 25, and the README caption says 25 rather than claiming a 60 the file does not have.
+# A genuine 60 fps master would need the screencapture path (see the demo-recording skill), which
+# films a real window and therefore carries a content-leak risk this scripted tape does not.
 Set Framerate 60
 Set TypingSpeed 12ms
 Set Theme { "name": "gh-dark", "background": "#0d1117", "foreground": "#c9d1d9", "cursor": "#d4af37", "selection": "#264f78", "black": "#484f58", "red": "#ff7b72", "green": "#3fb950", "yellow": "#d29922", "blue": "#58a6ff", "magenta": "#bc8cff", "cyan": "#39c5cf", "white": "#b1bac4", "brightBlack": "#6e7681", "brightRed": "#ffa198", "brightGreen": "#56d364", "brightYellow": "#e3b341", "brightBlue": "#79c0ff", "brightMagenta": "#d2a8ff", "brightCyan": "#56d4dd", "brightWhite": "#f0f6fc" }
@@ -68,24 +74,18 @@ Sleep 1200ms
 Type "grep -n 'READ-ONLY' scripts/terminal-bench.sh" Enter
 Sleep 3500ms
 
-Type "clear" Enter
-Sleep 400ms
 Type "# 2 — WHAT IS ACTUALLY UP RIGHT NOW.  Matched on the comm BASENAME: macOS stores iTerm2's" Enter
 Type "#     accounting name as the first 16 chars of its full path, so pgrep -x can never see it." Enter
 Sleep 1500ms
 Type "ps -eo comm= | sed 's|.*/||' | grep -Eix 'kitty|ghostty|cmux|iTerm2' | sort | uniq -c" Enter
 Sleep 3500ms
 
-Type "clear" Enter
-Sleep 400ms
 Type "# 3 — kitty, THE INCUMBENT'S CHALLENGER.  A full row: two readings, GPU path by PROFILE" Enter
 Type "#     (not by flag), and the drift instrument at constant layout.  ~30s." Enter
 Sleep 1500ms
 Type "scripts/terminal-bench.sh --app kitty --interval 20" Enter
 Sleep 42s
 
-Type "clear" Enter
-Sleep 400ms
 Type "# 4 — THE INCUMBENT, LIVE, UNDER THE OPERATOR'S REAL LOAD.  Watch the GPU:CPU frame ratio:" Enter
 Type "#     iTerm2 is drawing MOSTLY ON THE CPU.  That is the whole terminal argument, measured." Enter
 Sleep 1500ms
@@ -95,10 +95,8 @@ Type "# PARTIAL, not OK — every number above is real, but ONE reading cannot s
 Type "# verdict, so the instrument refuses the OK token rather than overclaim." Enter
 Sleep 4s
 
-Type "clear" Enter
-Sleep 400ms
 Type "# 5 — AND IT SAYS WHEN IT DID NOT MEASURE.  WezTerm is not installed here: NO-DATA, exit 3," Enter
 Type "#     never a silent zero a consumer could mistake for a measured one." Enter
 Sleep 1500ms
-Type "scripts/terminal-bench.sh --app wezterm --interval 0; echo \"exit=$?\"" Enter
+Type "scripts/terminal-bench.sh --app wezterm --interval 0; echo exit=$?" Enter
 Sleep 5s
