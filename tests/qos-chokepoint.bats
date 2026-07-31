@@ -303,12 +303,25 @@ EOF
 # already assert `>= 1` on, and (xix)'s reject-side clamp set is `actual + 1`, a value no marker can
 # occupy. A $$-suffixed name was tried and abandoned — it did not survive the census's pattern seam
 # inside bats, and an unverified mechanism guarding a negligible risk is worse than none.
+#
+# THE PATH SHAPE IS LOAD-BEARING, NOT COSMETIC (fixed 2026-07-31). The marker must live at
+# `<dir>/libexec/bats-core/bats-exec-*` because the SHIPPED census is strict by default and admits a
+# row only when argv field 5 or 6 matches that libexec shape (§9.7's POSITIONAL discriminator,
+# `qos-census.sh:256`). A marker at a plain `$TMP/<name>` path is invisible to it: measured on this
+# box, the same live proc reads `procs_total:0` under the shipped default and `procs_total:1` under
+# `QOS_CENSUS_STRICT=off`. That is why (xix)/(xx) failed on trunk — they were written against the
+# M1-rev clamp classifier (`2514226e`, 01:51) while the discriminator that narrows the population had
+# landed 45 min EARLIER from a parallel session (`bfe4da1e`, 01:06); the merge was textually clean and
+# semantically broken, so the tests asserted on a population the shipped tool cannot see. Keep this
+# shape, or fix the tests against `QOS_CENSUS_STRICT=off` — never assert a non-shipped configuration.
 _marker_script() {
   local name="$1"
-  echo '#!/bin/bash' > "$TMP/$name"
-  echo '/bin/sleep 6' >> "$TMP/$name"
-  chmod +x "$TMP/$name"
-  printf '%s' "$TMP/$name"
+  local d="$TMP/$name/libexec/bats-core"
+  mkdir -p "$d"
+  echo '#!/bin/bash' > "$d/bats-exec-test"
+  echo '/bin/sleep 6' >> "$d/bats-exec-test"
+  chmod +x "$d/bats-exec-test"
+  printf '%s' "$d/bats-exec-test"
 }
 
 @test "(xix) M1-rev: the CLAMP FILTER decides, not the ceiling — admit and reject, same proc" {
@@ -871,15 +884,32 @@ EOF
   # WITHOUT the demotion path put a full-priority population in front of a strict census; coverage
   # must fall below threshold and the verdict must be FAIL (rc 1), not PASS and not NO-BURST.
   #
-  # SAME ONE-WAY-RATCHET CONSTRAINT AS (v): a child of a demoted process inherits pri=4 and cannot be
-  # lifted, so an undemoted population is UNCONSTRUCTIBLE from a demoted caller. Rather than ship a
-  # test that flips with how the suite was invoked, this states the precondition and skips — a bound
-  # that cannot be met from here can only convict falsely.
-  local own
+  # SAME ONE-WAY-RATCHET CONSTRAINT AS (v): a clamp only ever LOWERS and is immutable once spawned,
+  # so a child of a demoted suite inherits that clamp and an ABSOLUTELY-undemoted (pri=31) population
+  # is UNCONSTRUCTIBLE from here.
+  #
+  # This used to skip on `own <= 10`, and that constant went stale the moment M1-rev (`2514226e`)
+  # moved the fleet band from background(4) to utility(20): the shim on PATH demotes this very suite
+  # to pri=20, `20 <= 10` is false, so the test did NOT skip, its children inherited pri=20, the
+  # census correctly counted them as DEMOTED, coverage never dropped and line 922 failed on trunk —
+  # while (v)'s sibling guard at :113 was updated to `<= 20` and kept working. Two guards over one
+  # constraint disagreeing was the tell.
+  #
+  # Repairing the constant alone would make this test SKIP on every ordinary PATH-invoked run — the
+  # shim always demotes — retiring the one property it exists to prove. So the population is now made
+  # undemoted RELATIVE TO THE CONFIGURED BAND instead of absolutely: the children inherit whatever
+  # clamp this suite holds, and the census is pointed at the OTHER clamp constant, so they classify as
+  # full-priority. Real bats processes, the real classifier, the real verdict arithmetic — only the
+  # policy's clamp set is varied, which is the same documented seam (xix) uses to prove admit/reject
+  # on one proc. From a genuinely undemoted caller the default set is used and this is the original,
+  # absolute form.
+  local own clamps
   own=$(ps -p $$ -o pri= 2>/dev/null | tr -d ' ')
-  if [ -n "$own" ] && [ "$own" -le 10 ]; then
-    skip "suite is itself in the background band (pri=$own); an undemoted population is unconstructible from here — see (v)/(xv)"
-  fi
+  case "$own" in
+    4)  clamps="20" ;;      # suite (and children) in background ⇒ measure against utility
+    20) clamps="4"  ;;      # suite (and children) in utility    ⇒ measure against background
+    *)  clamps="4 20" ;;    # genuinely undemoted (or unreadable) ⇒ shipped default, absolute form
+  esac
   local real
   real=$(_cellar_bats)
   if [ -z "$real" ]; then skip "no real bats binary on this host to run"; fi
@@ -901,6 +931,7 @@ EOF
   local burst=0
   if _qos_wait_runs "$tok" 3; then burst=1; fi
   run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      QOS_CLAMP_PRIS="$clamps" \
       QOS_CENSUS_LOG="$TMP/census-xxxiii.jsonl" /bin/bash "$CENSUS" --json --no-append
   local st="$status" out="$output"
   kill "$r1" "$r2" 2>/dev/null || true
@@ -917,6 +948,9 @@ EOF
   [ "$total" -ge 1 ] || false                            # non-vacuity: something was counted
   [ -n "$runs" ] || false
   [ "$runs" -ge 2 ] || false                             # and it cleared the NO-BURST gate
+  # The construction really did place the whole population OUTSIDE the demoted set. Without this a
+  # coverage drop could come from some unrelated row and the test would pass for the wrong reason.
+  [ "$(_json_field procs_demoted "$out")" -eq 0 ] || false
   local below
   below=$(awk -v c="$(_json_field coverage_proc_pct "$out")" -v t=95 'BEGIN{print (c+0 < t+0) ? 1 : 0}')
   [ "$below" = "1" ] || false                            # coverage really did drop
