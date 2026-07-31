@@ -176,13 +176,13 @@ EOF
   cd "$BATS_TEST_TMPDIR"
   run /bin/bash "$LAUNCHER"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"argc=11"* ]]
-  [[ "$output" == *"argv[4]=<--branch>"* ]]
-  [[ "$output" == *"argv[5]=<feat/ordinary>"* ]]
-  [[ "$output" == *"argv[6]=<--model>"* ]]
-  [[ "$output" == *"argv[7]=<claude-fable-5>"* ]]
-  [[ "$output" == *"argv[8]=<--effort>"* ]]
-  [[ "$output" == *"argv[9]=<high>"* ]]
+  [[ "$output" == *"argc=11"* ]] || false
+  [[ "$output" == *"argv[4]=<--branch>"* ]] || false
+  [[ "$output" == *"argv[5]=<feat/ordinary>"* ]] || false
+  [[ "$output" == *"argv[6]=<--model>"* ]] || false
+  [[ "$output" == *"argv[7]=<claude-fable-5>"* ]] || false
+  [[ "$output" == *"argv[8]=<--effort>"* ]] || false
+  [[ "$output" == *"argv[9]=<high>"* ]] || false
   # the ingest prompt has spaces and must survive as ONE element
   [[ "$output" == *"argv[11]=</limit-recover ingest "* ]]
 }
@@ -197,7 +197,7 @@ EOF
   cd "$BATS_TEST_TMPDIR"
   run /bin/bash "$LAUNCHER"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"argc=5"* ]]
+  [[ "$output" == *"argc=5"* ]] || false
   [[ "$output" != *"--branch"* ]]
 }
 

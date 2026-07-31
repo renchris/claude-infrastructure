@@ -149,7 +149,7 @@ SH
   [ "$status" -eq 0 ]
   [ -f "$FRONTMOST_MARK" ]                              # a window WAS minted — the new contract
   [ "$(cat "$LAND_MARK")" != BGPANE ]                   # and the bg-tab path was NOT taken
-  [[ "$output" == *"NEW WINDOW"* ]]
+  [[ "$output" == *"NEW WINDOW"* ]] || false
   [[ "$output" == *"every tab is at the cap"* ]]
 }
 

@@ -31,22 +31,22 @@ print(json.dumps({'type':'assistant','message':{'content':[
   mk "git status --short"; mk "ls -la /tmp"
   run python3 "$AUDIT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"2 Bash invocations"* ]]
+  [[ "$output" == *"2 Bash invocations"* ]] || false
   [[ "$output" == *"matched an allow rule :      2"* ]]
 }
 
 @test "an unmatched command is ranked as a prompt candidate" {
   mk "sed -n '1,5p' file.txt"
   run python3 "$AUDIT"
-  [[ "$output" == *"matched NOTHING       :      1"* ]]
+  [[ "$output" == *"matched NOTHING       :      1"* ]] || false
   [[ "$output" == *"sed -n"* ]]
 }
 
 @test "ASK and DENY are counted separately — they are NOT prompt candidates to allow-list" {
   mk "git push origin main"; mk "dd if=/dev/zero of=/tmp/x"
   run python3 "$AUDIT"
-  [[ "$output" == *"hit an ASK rule       :      1"* ]]
-  [[ "$output" == *"hit a DENY rule       :      1"* ]]
+  [[ "$output" == *"hit an ASK rule       :      1"* ]] || false
+  [[ "$output" == *"hit a DENY rule       :      1"* ]] || false
   # Neither may appear in the allow-list recommendations — recommending a DENY'd or gated
   # command would be the one way this tool could do real harm.
   # Write the slice to a FILE rather than holding it in a var consumed inside `bash -c`:
