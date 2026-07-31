@@ -120,5 +120,5 @@ setup() {
   # reports NO-DATA rather than "0 windows" in that case.
   if [ "$status" -eq 3 ]; then skip "no window server in this context (headless runner)"; fi
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=OK"* ]]
+  [[ "$output" == *"verdict=OK"* ]] || false
 }

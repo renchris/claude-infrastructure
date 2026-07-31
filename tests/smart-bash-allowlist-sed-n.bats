@@ -57,7 +57,7 @@ decide() { # $1=command -> "allow" | "defer"
 
 @test "REFUSES every chaining operator — nothing may ride in on the sed prefix" {
   [ "$(decide "sed -n '1p' f; echo chained")" = defer ]
-  [ "$(decide "sed -n '1p' f && echo chained")" = defer ]
+  [ "$(decide "sed -n '1p' f && echo chained")" = defer ] || false
   [ "$(decide "sed -n '1p' f || echo chained")" = defer ]
   [ "$(decide "sed -n '1p' f | sh")" = defer ]
 }

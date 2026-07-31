@@ -231,7 +231,7 @@ EOF
 
   run "$LINT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"clean"* ]]
+  [[ "$output" == *"clean"* ]] || false
   [[ "$output" == *"launchd/staged/"* ]] || false   # found THERE, not merely found
 
   # NEGATIVE CONTROL: a live plist whose label is in no SSOT dir still goes RED. Without this, the
