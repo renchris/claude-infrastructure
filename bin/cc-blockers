@@ -156,6 +156,9 @@ LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subco
 # by machine (memory hermetic-suite-leaks-caller-identity).
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hooks/cc-permission-beacon.sh + lead-supervisor.sh
 BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
+# The cross-session comms registry, keyed by paneUUID and carrying `session_id` — the join that lets
+# a pending beacon name an ACTUAL iTerm2 pane instead of an opaque uuid. Same file cc-sessions reads.
+CC_REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 BEACON_CONFIG_DIRS="${CC_BEACON_CONFIG_DIRS:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-next $HOME/.claude-tertiary $HOME/.claude-quaternary}"
 # The LIVE queue copy, NOT the repo path — the opposite choice from DISPATCH_ACTIVATE_SH above, for
 # the opposite reason. That one names the repo because its mirror is content-DRIFTED; this one is
@@ -703,6 +706,63 @@ beacon_alarm_rows() { # → one JSON object per line (possibly none)
     "$PERMPEND_DIR" "'{\\\"session_id\\\":\\\"smoke-1\\\"}'" "$BEACON_HOOK" "$PERMPEND_DIR" "$now"
 }
 
+# (f) PERMISSION-PENDING — the READING half of the beacon, and the reason this exists is that it was
+# missing. `beacon-inert` above only ever asked "is the beacon WIRED", answering with the presence of
+# the directory: `[ -d "$PERMPEND_DIR" ] && return 0`. That was the ONLY consumption of PERMPEND_DIR
+# in this file, so the board proved the sensor works and then never read what the sensor recorded.
+# Measured 2026-07-31: three live beacons sat in that directory — one 18 HOURS old — while
+# cc-blockers rendered LAND-PIPELINE and FLEET sections and not one word about a blocked approval.
+# The incident quoted at the top of this file ("said no safeguard-blocked sessions surfaced while a
+# teammate was demonstrably blocked") was therefore only half-closed: the wiring half was fixed, the
+# reading half was not, and the board stayed silent for the same operator-visible reason.
+#
+# ADDRESSING is the whole value. A row saying "something is blocked" is barely better than silence at
+# this fleet's size, so each row resolves its session to an iTerm2 pane through the cc-registry
+# (which carries `session_id` alongside `paneUUID`) and hands over `it2 session focus <uuid>` — one
+# command that puts the operator in front of the prompt. An UNRESOLVED session is reported as
+# unresolved and still listed: dropping it would rebuild the silence this row exists to break.
+permission_pending_rows() { # → one JSON object per line (possibly none)
+  local now f sid age cmd cwd bts pane reg
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  # Absence here is NOT this row's verdict to give — `beacon_alarm_rows` owns the never-ran case,
+  # and a second implementation of that premise would be a second answer.
+  [ -d "$PERMPEND_DIR" ] || return 0
+
+  for f in "$PERMPEND_DIR"/*.json; do
+    [ -e "$f" ] || continue                                   # the glob itself when nothing matches
+    sid="$(basename "$f" .json)"
+    bts="$(jq -r '.ts // empty' "$f" 2>/dev/null || true)"
+    case "${bts:-}" in ''|*[!0-9]*) bts="$now" ;; esac         # unreadable ts ⇒ age 0, never negative
+    age=$(( now - bts )); [ "$age" -lt 0 ] && age=0
+    cmd="$(jq -r '(.tool_input.command? // .tool_input.file_path? // (.tool_input? | tostring) // "")
+                  | gsub("[\n\r\t]"; " ") | .[0:60]' "$f" 2>/dev/null || true)"
+    cwd="$(jq -r '.cwd // ""' "$f" 2>/dev/null || true)"
+
+    # Join to the pane. Matching on the FILE CONTENT keyed by session_id, because the registry is
+    # keyed by paneUUID — the two identifiers are different, and assuming otherwise is how a writer
+    # and a reader end up addressing different boxes (memory mailbox-writer-reads-different-key).
+    pane=""
+    for reg in "$CC_REGISTRY_DIR"/*.json; do
+      [ -e "$reg" ] || continue
+      [ "$(jq -r '.session_id // empty' "$reg" 2>/dev/null || true)" = "$sid" ] || continue
+      pane="$(jq -r '.paneUUID // empty' "$reg" 2>/dev/null || true)"
+      [ -n "$pane" ] && break
+    done
+
+    jq -nc --arg sid "$sid" --arg cmd "$cmd" --arg cwd "${cwd##*/}" --arg pane "$pane" \
+           --arg bf "$f" --argjson age "$age" --argjson now "$now" '
+      { kind: "permission-pending",
+        state: (if $age >= 3600 then "BLOCKED-\(($age / 3600) | floor)h"
+                else "BLOCKED-\(($age / 60) | floor)m" end),
+        subject: $sid,
+        detail: (($cwd | if . == "" then "?" else . end) + ": " + $cmd),
+        recover_cmd: (if $pane == "" then "jq . \($bf)"
+                      else "it2 session focus \($pane)" end),
+        ts: $now }' 2>/dev/null || true
+  done
+}
+
 # ── FLEET alarm (DAEMON_FLEET_V2 §4.3) ───────────────────────────────────────────────────────────
 # The ONLY consumer-side code for the fleet: bin/cc-fleet reads launchd/fleet.manifest, reconciles
 # declared-vs-actual, and emits one kind=="fleet-inert" line per label that is not in its declared
@@ -896,7 +956,7 @@ fi
 # this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
 # `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
 # fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -936,7 +996,7 @@ DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —
 # "an approval cannot reach an approver" — seen from the live end and the visibility end.
-APPR_SEL='select(.kind=="orphaned-approver" or .kind=="beacon-inert")'
+APPR_SEL='select(.kind=="orphaned-approver" or .kind=="beacon-inert" or .kind=="permission-pending")'
 nl="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $LAND_SEL] | length" 2>/dev/null || echo 0)"
 nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null || echo 0)"
 np="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $APPR_SEL] | length" 2>/dev/null || echo 0)"

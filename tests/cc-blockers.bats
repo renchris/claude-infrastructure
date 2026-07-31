@@ -40,6 +40,10 @@ setup() {
   export CC_BEACON_CONFIG_DIRS="$D/cfg-void"
   export CC_BEACON_ACTIVATE_SH="$D/activate.sh"
   export CC_PERMPEND_DIR="$D/permpend"
+  # MUST be fixtured, for the same reason as every sensor above and the same lesson a third time:
+  # permission-pending joins beacons to panes through the cc-registry, and unfixtured that read is
+  # the OPERATOR'S LIVE REGISTRY — the verdict would then depend on which of their sessions are up.
+  export CC_REGISTRY_DIR="$D/registry"
   export CC_TEAM_ROOTS="$D/absent-teams"
   export CC_WATCHDOG_DIR="$D/watchdog"; mkdir -p "$CC_WATCHDOG_DIR"
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
@@ -803,4 +807,95 @@ wire_cfg() { # <dir> <wired:0|1> — a settings.json that does or does not regis
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -c '.')" = '[]' ]
+}
+
+# ── PERMISSION-PENDING: the READING half of the beacon ───────────────────────────────────────────
+# WHY THESE EXIST: `beacon-inert` only ever asked "is the beacon WIRED", answering with the presence
+# of CC_PERMPEND_DIR — which was the ONLY consumption of that path in the whole tool. So the board
+# proved its sensor worked and never read what the sensor recorded. Measured 2026-07-31: three live
+# beacons, one EIGHTEEN HOURS old, while cc-blockers rendered LAND-PIPELINE and FLEET and not one
+# word about a blocked approval. That is the file's own opening incident, re-run with the wiring
+# half fixed and the reading half still missing.
+pend() { # <sid> <age_seconds> <command> [cwd]
+  mkdir -p "$CC_PERMPEND_DIR"
+  jq -nc --arg c "$3" --arg w "${4:-/w/wt-abc}" --argjson ts "$(( $(date +%s) - $2 ))" \
+    '{ts:$ts,tool_name:"Bash",tool_input:{command:$c},cwd:$w}' > "$CC_PERMPEND_DIR/$1.json"
+}
+reg() { # <paneUUID> <session_id>
+  mkdir -p "$CC_REGISTRY_DIR"
+  jq -nc --arg p "$1" --arg s "$2" '{paneUUID:$p,session_id:$s,cwd:"/w",name:"n",account:"a",pid:1}' \
+    > "$CC_REGISTRY_DIR/$1.json"
+}
+
+@test "a pending beacon is RENDERED — the board no longer stays silent on a blocked approval" {
+  pend sess-block 64800 'git push --force origin main'
+  run "$C"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"permission-pend"* ]]
+  [[ "$output" == *"git push --force origin main"* ]]
+}
+
+@test "RED CONTROL: with no beacon the board says nothing about a pending permission" {
+  mkdir -p "$CC_PERMPEND_DIR"          # dir exists (wired) but empty — the trustworthy all-clear
+  run "$C"
+  [[ "$output" != *"permission-pend"* ]]
+}
+
+@test "the age is rendered, so an 18-hour block cannot read like a 1-minute one" {
+  pend sess-old 64800 'x'              # 18h
+  pend sess-new 120   'y'              # 2m
+  run "$C" --json
+  [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-old").state')" = "BLOCKED-18h" ]
+  [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-new").state')" = "BLOCKED-2m" ]
+}
+
+@test "a resolvable session hands over ONE command that focuses its actual pane" {
+  pend sess-p 60 'rm -rf /tmp/x'
+  reg 706DA5A2-A877-464D-831F-7CD448E364AD sess-p
+  run "$C" --json
+  [ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-p").recover_cmd')" \
+    = "it2 session focus 706DA5A2-A877-464D-831F-7CD448E364AD" ]
+}
+
+@test "an UNRESOLVABLE session is still listed — dropping it rebuilds the silence" {
+  pend sess-ghost 60 'dd if=/dev/zero'
+  reg AAAA1111-0000-0000-0000-000000000000 some-other-session
+  run "$C" --json
+  [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-ghost")]|length')" = 1 ]
+  [[ "$(echo "$output" | jq -r '.[]|select(.subject=="sess-ghost").recover_cmd')" == "jq . "* ]]
+}
+
+@test "the registry join keys on session_id, NOT on the paneUUID filename" {
+  # The two identifiers are different. Keying on the filename would silently never match.
+  pend 11111111-2222-3333-4444-555555555555 60 'x'
+  reg 99999999-8888-7777-6666-555555555555 11111111-2222-3333-4444-555555555555
+  run "$C" --json
+  [[ "$(echo "$output" | jq -r '.[]|select(.kind=="permission-pending").recover_cmd')" \
+     == *"99999999-8888-7777-6666-555555555555"* ]]
+}
+
+@test "a malformed or unreadable beacon degrades to a row, never a traceback or a lost block" {
+  mkdir -p "$CC_PERMPEND_DIR"; printf 'not json {{{' > "$CC_PERMPEND_DIR/sess-bad.json"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-bad")]|length')" = 1 ]
+}
+
+@test "the heartbeat dotfile is never mistaken for a pending prompt" {
+  mkdir -p "$CC_PERMPEND_DIR"; : > "$CC_PERMPEND_DIR/.beacon-alive"
+  run "$C" --json
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 0 ]
+}
+
+@test "a command containing quotes/newlines cannot break the JSON the board emits" {
+  pend sess-q 60 "$(printf 'git commit -m "a\nb" && echo \x27x\x27')"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e . >/dev/null
+}
+
+@test "many pending beacons all render — none is dropped by a cap" {
+  for i in 1 2 3 4 5 6 7; do pend "sess-$i" $((i * 60)) "cmd-$i"; done
+  run "$C" --json
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 7 ]
 }
