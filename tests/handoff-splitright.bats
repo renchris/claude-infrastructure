@@ -125,15 +125,32 @@ SH
   [[ "$output" == *"anchored to live pane GOOD"* ]]
 }
 
-@test "HEADLESS: a DENSE anchor tab degrades to a bg-tab in the SAME window, not a new one" {
+@test "HEADLESS: a FULL anchor tab overflows to a NEW WINDOW, never a background tab" {
+  # CONTRACT DELIBERATELY REVERSED 2026-07-30. This asserted the opposite — dense tab => background
+  # tab, never a new window — and that was correct while the only cost of a dense tab was
+  # unreadable slivers. Two measured facts changed it:
+  #   1. iTerm2 kills Metal for a WHOLE TAB at sessions.count >= 6 (shipped arm64 slice:
+  #      `cmp x8,#0x6` + `b.hs` in -[PTYTab updateUseMetal]), and a BACKGROUND tab is
+  #      unconditionally CPU-rendered at ANY pane count.
+  #   2. The operator's binding constraint is ~30 sessions VISIBLE AT ALL TIMES across three
+  #      monitors, to scan for permission prompts. A background tab is never seen.
+  # The old degrade therefore satisfied the Metal gate by HIDING the session — the worst of both.
+  # A fresh window's single tab is by definition foreground, so it keeps Metal AND stays visible
+  # (parkable on the next Space; one swipe beats never seen).
+  #
+  # This does NOT re-open the 2026-07-25 window leak. That minted a window on a PROBE FAILURE — an
+  # unknown. This mints one only after the resolver positively established that EVERY tab is at the
+  # cap. The probe-failure path still refuses loudly (tests/handoff-anchor-third-state.bats), and
+  # the resolver is now room-aware, so it returns a full tab only when nothing anywhere has room.
   FIRING_SID=""; SURFACE=split-right; ANCHOR_INTENT=0
-  resolve_headless_anchor() { echo "GOOD 9"; }          # 9 panes ≥ CC_FIRE_MAX_PANES default 6
-  it2_bgtab() { echo BGPANE; }
+  resolve_headless_anchor() { echo "GOOD 9"; }          # 9 panes ≥ CC_FIRE_MAX_PANES default 5
+  it2_bgtab() { echo BGPANE; }                          # must NOT be chosen
   run spawn
   [ "$status" -eq 0 ]
-  [ ! -f "$FRONTMOST_MARK" ]               # sliver-avoidance must NOT become a new window
-  [ "$(cat "$LAND_MARK")" = BGPANE ]
-  [[ "$output" == *"degrading split-right to a background tab"* ]]
+  [ -f "$FRONTMOST_MARK" ]                              # a window WAS minted — the new contract
+  [ "$(cat "$LAND_MARK")" != BGPANE ]                   # and the bg-tab path was NOT taken
+  [[ "$output" == *"NEW WINDOW"* ]]
+  [[ "$output" == *"every tab is at the cap"* ]]
 }
 
 @test "HEADLESS: a 4-pane tab still SPLITS — the degrade must not eat the common case" {

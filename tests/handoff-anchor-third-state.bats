@@ -114,7 +114,13 @@ setup() {
   # If someone reintroduces `|| return 1` on the it2py call, the dedicated guard must catch it.
   tmp="$BATS_TEST_TMPDIR/regress.sh"
   cp "$FIRE" "$tmp"
-  perl -0pi -e 's/  out="\$\(it2py anchor "\$desk" 2>\/dev\/null\)" \|\| rc=\$\?/  out="\$(it2py anchor "\$desk" 2>\/dev\/null)" || return 1/' "$tmp"
+  # The sabotaged line now also carries the pane cap as argv[3] (room-aware anchoring). This
+  # pattern must TRACK the real line — when it did not, the substitution silently no-op'd, no
+  # regression was produced, and the control failed instead of proving anything. A control that
+  # can no longer reproduce the defect is inert, which is worse than absent.
+  perl -0pi -e 's/^  out="\$\(it2py anchor .*\|\| rc=\$\?$/  out="\$(it2py anchor "\$desk" 2>\/dev\/null)" || return 1/m' "$tmp"
+  # prove the sabotage actually landed before asserting on it
+  grep -q 'it2py anchor "\$desk" 2>/dev/null)" || return 1' "$tmp"
   run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$tmp'"
   # the regressed text matches the forbidden pattern the real guard rejects
   echo "$output" | grep -qE 'it2py anchor .*\|\| return 1'
@@ -125,4 +131,57 @@ setup() {
 @test "handoff-fire.sh remains syntactically valid" {
   run bash -n "$FIRE"
   [ "$status" -eq 0 ]
+}
+
+# ── Metal-gate room awareness (2026-07-30) ────────────────────────────────────────────
+# iTerm2 kills Metal for a WHOLE TAB at sessions.count >= 6. The operator needs ~30 sessions
+# VISIBLE at all times, so the degrade may never be a background tab (invisible AND always
+# CPU-rendered) — it must be a window (foreground tab => keeps Metal, and it stays swipeable).
+
+@test "the pane cap defaults to 5, not 6 — -ge 6 permits a 6th pane and kills Metal" {
+  grep -q 'CC_FIRE_MAX_PANES:-5' "$FIRE"
+  run grep -q 'CC_FIRE_MAX_PANES:-6' "$FIRE"
+  [ "$status" -ne 0 ]
+}
+
+@test "the anchor probe is told the cap, so it can prefer a tab with room" {
+  grep -q 'it2py anchor "$desk" "${CC_FIRE_MAX_PANES:-5}"' "$FIRE"
+  # and the python must actually consume argv[3] as the cap
+  grep -q 'cap = int(sys.argv\[3\])' "$FIRE"
+}
+
+@test "anchor prefers a tab with ROOM before falling back to a full one" {
+  run bash -c "sed -n '/ROOM-AWARE ANCHORING/,/if cand is None:/p' '$FIRE'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '_has_room'
+  echo "$output" | grep -q 'len(t2.sessions) < cap'
+}
+
+@test "overflow degrades to a WINDOW, never a background tab" {
+  elif_line=$(grep -n 'every tab is at the cap' "$FIRE" | head -1 | cut -d: -f1)
+  [ -n "$elif_line" ]
+  # within the overflow arm, the surface must be window and must NOT be bg-tab
+  run bash -c "sed -n '${elif_line},$((elif_line+12))p' '$FIRE'"
+  echo "$output" | grep -q 'SURFACE="window"'
+  run bash -c "sed -n '${elif_line},$((elif_line+12))p' '$FIRE' | grep -q 'SURFACE=\"bg-tab\"'"
+  [ "$status" -ne 0 ]
+}
+
+@test "the overflow arm MINTS the window itself — SURFACE alone would hit no case arm" {
+  # spawn()'s SURFACE=window dispatch is above this point and the case has no `window` arm,
+  # so setting SURFACE without spawning would silently launch nothing.
+  line=$(grep -n 'every tab is at the cap' "$FIRE" | head -1 | cut -d: -f1)
+  run bash -c "sed -n '${line},$((line+14))p' '$FIRE'"
+  echo "$output" | grep -q 'spawn_frontmost'
+  echo "$output" | grep -q 'it2_land'
+}
+
+@test "the dry-run preview mirrors all three states, not two" {
+  run bash -c "sed -n '/dry_anchor_note()/,/^      else\$/p' '$FIRE'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'INCONCLUSIVE'
+  echo "$output" | grep -q 'DETERMINED to hold zero live panes'
+  # the old collapsing shape must be gone from the preview
+  run grep -q 'resolve_headless_anchor 2>/dev/null || true' "$FIRE"
+  [ "$status" -ne 0 ]
 }
