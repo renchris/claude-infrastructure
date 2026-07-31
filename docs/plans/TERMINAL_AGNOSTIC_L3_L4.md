@@ -57,9 +57,21 @@ panes as `glViewport` sub-rects, one `CVDisplayLink` **per monitor**) · **cmux 
 (fit `5.18×panes + 10.6`; 2→21, 8→53, 13→78; ⇒ ~166 @ 30) · Ghostty **4.00/pane linear**
 (`6 + 4.00×panes`; 24 panes in ONE window = 101 threads, 0.0% idle CPU, 351 MB) · iTerm2 ~0.9/pane.
 
+> ⚠ **The thread axis above is RETIRED as the decisive criterion (2026-07-31 PM, `4faa1cb6`)** — still
+> true, no longer load-bearing. WezTerm measured **4.00**/pane, not the ~7.0 published, and §8's own
+> kill condition for the thread finding **fired**: 87 WezTerm threads produced *fewer* context
+> switches than kitty's 10. The axis that survived a matched-load test is **loaded app CPU** — 18
+> panes, byte-identical stream, all at 10.00 achieved fps ⇒ **kitty 9.5% · WezTerm 24.4% · Ghostty
+> 27.3%**, kitty carrying 22% *more* bytes. **D2 is reinforced, not weakened:** the one iTerm2
+> datapoint in the *cheap* layout (1 window × 20 panes, CPU renderer) read **10.5% against kitty's
+> 9.5%** — the incumbent has not been beaten, and the migration is explicitly on **HOLD**. This is
+> also why D3 (the seam) is the right shape: `CC_PANE_ID` costs the same whichever terminal wins.
+
 **iTerm2 today:** renderer+compositor = **2.74–4.08× the whole agent fleet** (median 2.89×, five
 samples); **+76 mach ports/hr drift at frozen layout** while RSS falls; perf-parity `match=9 drift=0`
-⇒ **tuning is exhausted**.
+⇒ **tuning is exhausted**. *(That +76/hr remains the only clean drift number in the corpus — a
+30-minute kitty counterpart was attempted 22:17Z and failed its constant-layout precondition; see
+`terminal-for-30-panes` §6.1.)*
 
 **Memory is exonerated (4×):** both panics non-memory; 31 live sessions at 93% free / `Pageouts: 0`;
 compressor 0 B at load 15.
