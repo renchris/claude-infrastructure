@@ -957,3 +957,32 @@ EOF
   [[ "$out" =~ \"verdict\":\"FAIL\" ]] || false
   [ "$st" -eq 1 ] || false
 }
+
+@test "(xxxiv) a PATH entry holding a glob metacharacter is NOT pathname-expanded by the resolver" {
+  # Unquoted `$PATH` in a `for` list is word-split AND pathname-expanded, so an entry containing a
+  # glob metacharacter is replaced by whatever it happens to MATCH and the resolver execs a binary
+  # PATH never named. This is the identity walk (§9.6), so a wrong pick here is not cosmetic.
+  #
+  # Measured 2026-07-31 against the pristine pre-fix artifact recovered with `git show HEAD:bin/cc-bats`
+  # — never a retyped approximation: it printed the fake's marker, the fixed shim printed `Bats 1.13.0`.
+  local c="$TMP/globctl"
+  mkdir -p "$c/dX"
+  printf '#!/bin/bash\necho GLOB_EXPANDED_REACHED_FAKE\n' > "$c/dX/bats"
+  chmod +x "$c/dX/bats"
+
+  # POSITIVE CONTROL, and it is load-bearing: without it this test passes just as well when the
+  # fixture is inert (dX never created, the fake not executable, the marker misspelled) — an absence
+  # assertion over a subject that was never there proves nothing. Prove the bait is live and reachable
+  # BEFORE asserting the resolver refused it.
+  run "$c/dX/bats"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *GLOB_EXPANDED_REACHED_FAKE* ]] || false
+  # ...and that the glob really does match it, so the pre-fix expansion had somewhere to land.
+  local matched; matched=$(compgen -G "$c/d*" | head -1)
+  [ "$matched" = "$c/dX" ] || false
+
+  run env PATH="$c/d*:/usr/bin:/bin" CC_BATS_QOS=off "$SHIM" --version
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *GLOB_EXPANDED_REACHED_FAKE* ]] || false   # the entry stayed literal
+  [[ "$output" == *Bats* ]] || false                         # and a REAL bats is what ran
+}
