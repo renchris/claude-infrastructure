@@ -272,6 +272,52 @@ touch_transcript() { # $1=sid $2=epoch mtime
   has "# all" "$output"
 }
 
+# ── C1 — --attach: the ONE action, keyed to the row number the operator actually reads ───────────
+# A stub `it2` on PATH records what it was asked to focus, so the jump is provable without moving the
+# operator's real focus mid-session.
+stub_it2() {
+  mkdir -p "$TD/binstub"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/it2.args"\n' "$TD" > "$TD/binstub/it2"
+  chmod +x "$TD/binstub/it2"
+  PATH="$TD/binstub:$PATH"
+}
+
+@test "C1: --attach <row> focuses the pane registered for THAT row" {
+  # MUST have >1 row, and the target must NOT be the last one — with a single-row fixture "row 1" and
+  # "whatever row happens to be last" are indistinguishable, so the row number is not actually being
+  # tested. (Found by redproof: a mutation replacing .[$n-1] with .[-1] survived the one-row version.)
+  stub_it2
+  printf '{"session_id":"sid-b","paneUUID":"PANE-BLOCKED","account":"claude-next"}' > "$CC_REGISTRY_DIR/p1.json"
+  printf '{"session_id":"sid-z","paneUUID":"PANE-OTHER","account":"claude-next"}'   > "$CC_REGISTRY_DIR/p3.json"
+  beacon sid-b 999700 Bash '{"command":"x"}'
+  telem sid-b 4242
+  telem sid-z 4242                                  # a second, NON-blocked row sorts after the blocked one
+  run "$Q" --attach 1
+  [ "$status" -eq 0 ]
+  has "session focus PANE-BLOCKED" "$(cat "$TD/it2.args")"
+  hasnt "PANE-OTHER" "$(cat "$TD/it2.args")"
+}
+
+@test "C1: --attach <sid> resolves by session id, not only by row number" {
+  stub_it2
+  printf '{"session_id":"sid-x","paneUUID":"PANE-X","account":"claude-next"}' > "$CC_REGISTRY_DIR/p2.json"
+  telem sid-x 4242
+  run "$Q" --attach sid-x
+  [ "$status" -eq 0 ]
+  has "session focus PANE-X" "$(cat "$TD/it2.args")"
+}
+
+@test "C1: a row with NO registered pane fails loudly and still names the sid" {
+  # A headless agent (T2's driver) has no pane BY DESIGN. Attach must say so and hand back the sid —
+  # never silently focus some OTHER row's pane.
+  stub_it2
+  telem sid-headless 4242
+  run "$Q" --attach sid-headless
+  [ "$status" -eq 1 ]
+  has "sid-headless" "$output"
+  [ ! -e "$TD/it2.args" ]
+}
+
 # ── malformed input must degrade, never blind the surface ────────────────────────────────────────
 
 @test "a malformed telemetry file does not hide the other rows" {
@@ -286,4 +332,19 @@ touch_transcript() { # $1=sid $2=epoch mtime
   printf '{{{garbage' > "$CC_PERMPEND_DIR/sid-bad.json"
   run "$Q" --no-color
   has "visible" "$output"
+}
+
+@test "C2: a TRUNCATED blocked command is marked as truncated" {
+  # An operator deciding whether to approve must never see a silently-cut prefix that reads like the
+  # whole command. (Live 2026-07-31: a real blocked heredoc cut mid-string with no indication.)
+  long=$(printf 'x%.0s' $(seq 1 200))
+  beacon sid-long 999900 Bash "{\"command\":\"$long\"}"
+  run "$Q" --no-color
+  has "…" "$output"
+}
+
+@test "C2: a SHORT blocked command is NOT marked truncated" {
+  beacon sid-short 999900 Bash '{"command":"ls"}'
+  run "$Q" --no-color --state blocked
+  hasnt "…" "$output"
 }
