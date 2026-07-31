@@ -106,8 +106,24 @@ for _p in $PROC_NAMES; do
   PID="$(pgrep -x "$_p" | head -1 || true)"
   [ -n "$PID" ] && break
 done
+# FALLBACK, and it is not theoretical — it is the incumbent. `pgrep` CANNOT SEE iTerm2 on this box:
+# not `pgrep -x iTerm2`, not `pgrep iTerm`, not `pgrep -i`, not even `pgrep -f MacOS/iTerm2`, while
+# `ps` shows pid 591 plainly (measured 2026-07-31; pgrep listed 947 of 960 processes and iTerm2 was
+# among the 13 it dropped). The cause is the accounting name: macOS stored iTerm2's p_comm as the
+# first 16 chars of its FULL PATH — `/Applications/iT` — where kitty's is plain `kitty`. So -x can
+# never match, and the whole bake-off silently lost its incumbent baseline row to a NO-DATA that
+# looked like "iTerm2 isn't running".
+# We match the BASENAME of ps's comm instead. Still deliberately NOT `pgrep -f`: argv on this box
+# carries whole agent briefs (memory pgrep-f-matches-agent-briefs — it read 50 where the truth was 1),
+# and -f would also match every session merely discussing the app.
 if [ -z "$PID" ]; then
-  echo "terminal-bench: no running process named '$APP'" >&2
+  for _p in $PROC_NAMES; do
+    PID="$(ps -eo pid=,comm= | awk -v want="$_p" '{n=split($2,a,"/"); if (a[n]==want) {print $1; exit}}')"
+    [ -n "$PID" ] && break
+  done
+fi
+if [ -z "$PID" ]; then
+  echo "terminal-bench: no running process named '$APP' (tried: $PROC_NAMES via pgrep -x and ps-comm-basename)" >&2
   echo "verdict=NO-DATA"; exit 3
 fi
 WS_PID="$(pgrep -x WindowServer | head -1 || true)"
@@ -150,15 +166,7 @@ reading() {
       win="$(cut -f3 <<<"$c")"; off="$(cut -f5 <<<"$c")"; mpx="$(cut -f7 <<<"$c")"
     fi
   fi
-  # PAD AT THE EMITTER. Tab is an IFS-*whitespace* character, so `IFS=$'\t' read` collapses a RUN
-  # of delimiters into one: an empty cell does NOT produce an empty variable, it shifts every LATER
-  # column one position LEFT, silently, at exit status 0. Splitting on tab explicitly (see `show`)
-  # does not prevent that — only a non-empty cell does. The live sources of an empty cell here are
-  # `cut -f3/-f5/-f7` on a census row with fewer columns than expected, which returns EMPTY and
-  # OVERWRITES the "NA" defaults above, and `awk '{print $N}'` on a short `top` line. Either one
-  # would misattribute ports to threads — the exact confusion the note above `show` warns about.
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${cpu:--}" "${mem:--}" "${th:--}" "${ports:--}" "${win:--}" "${off:--}" "${mpx:--}"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$cpu" "$mem" "$th" "$ports" "$win" "$off" "$mpx"
 }
 
 # ── build the census once (interpreted start-up is ~0.4 s, which distorts a tight loop) ───────────
@@ -173,11 +181,6 @@ echo "terminal-bench — app=$APP pid=$PID panes=${PANES:-unset} interval=${INTE
 
 # Split on TAB explicitly. Relying on `printf ... $(echo "$row")` word-splitting silently shifts
 # every column left the moment one field is empty, which would misattribute ports to threads.
-#
-# The explicit split is only HALF the fix, and this note used to imply it was the whole one: tab is
-# an IFS-whitespace character, so `IFS=$'\t' read` collapses a run of tabs too and an empty cell
-# shifts the row here exactly as word-splitting would. What actually closes it is `reading()`
-# padding every cell to "-" at the emitter; this reader is safe only because that holds.
 show() {
   local label="$1" row="$2" cpu mem th ports win off mpx
   IFS=$'\t' read -r cpu mem th ports win off mpx <<<"$row"
