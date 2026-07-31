@@ -144,6 +144,49 @@ Claude Code knowing. Contract to reverse: `session split` · `session send` · `
 
 ---
 
+## 4b. QUEUED FOR A SUCCESSOR — not done, not dropped (2026-07-31 recycle boundary)
+
+Three tracks were fired at 14:18-14:27 (T1+T2 seam+headless · T4 queue · R1 the four gaps), all on
+`next4`, all engagement-confirmed, all carrying the crash-durability clause. They own the
+implementation. What the LEAD still owed and did not finish:
+
+**Q1 — the landed docs carry a premise the workflow later FALSIFIED.** Both `README.md` §6 and
+`docs/research/l3-l4-terminal-and-workflow-2026-07-31.md` still say, in effect, *"maximising the GPU is
+backwards"*. That was derived from iTerm2's per-pane `CAMetalLayer` and over-generalised into a claim
+about GPU rendering as such. It is **wrong as stated** — Ghostty is Metal-native AND per-pane and
+measures 24 panes in one NSWindow at 0.0% idle CPU. Replace with the three-term model in §1 above
+(cadence 0.480 pp/Hz dominant · window 0.4483 pp · surface 0.0552 pp · **graphics API is not a term**).
+Exact sites: `README.md:480`, and `l3-l4-terminal-and-workflow-2026-07-31.md:163,183,355,357`.
+
+**Q2 — an internal contradiction is live on trunk.** `terminal-for-30-panes-2026-07-31.md` §5b claims
+kitty makes the `tmux-panes-inherit-server-iterm-session-id` hazard class *disappear*; §5a establishes
+that on kitty, teammate spawning falls to the **tmux** path. Both cannot hold — and `strings` on both
+live binaries confirms **0 KittyBackend / 0 GhosttyBackend** (40 ITermBackend, 32 TmuxBackend), so on
+kitty every tmux pane shares one `KITTY_WINDOW_ID` exactly as they shared one `ITERM_SESSION_ID`. Same
+hazard, new spelling. Fix §5b; do not delete §5a.
+
+**Q3 — the operator asked for hands-on evidence IN the README, plus a recording.** Requested verbatim:
+link or contain the hands-on evidence, and a 1080p60 recording of the terminal test's
+visualisation/animation/colouring, *"to ensure the README demonstrates we validated against real
+testing not just comparing summaries/source code at a reading glance."* The repo's existing convention
+is the model: `assets/demo/handoff-real.webp` (VHS, re-runnable, `gif2webp` lossless for flat terminal
+output) and `assets/demo/handoff-live.webp` (real screen capture, **`img2webp -near_lossless 40`** —
+ordinary lossy WebP seams flat greys). The natural subject is `scripts/terminal-bench.sh` emitting real
+`verdict=` lines plus the drift readings. See the `demo-recording` skill for the measured encode
+recipes and the mandatory contact-sheet review.
+
+**Q4 — Ghostty's thread count is wrong in the older doc.** `terminal-for-30-panes-2026-07-31.md:377`
+says "3 threads/pane"; measured **4.00/pane** (`renderer`, `io`, `io-reader`, `cf_release`), fit
+`6 + 4.00×panes`, confirmed to 24 panes.
+
+**Q5 — cmux is absent from the README §6 candidate table** and now has measured numbers:
+**5.18 threads/pane linear** (`5.18×panes + 10.6`; 2→21, 8→53, 13→78 ⇒ ~166 at 30 panes),
+~10.5 MB/pane, libghostty renderer, full socket control API with `CMUX_SURFACE_ID`, and a built-in
+console layer (sidebar row per pane, blue ring on attention, notifications panel, `Cmd+Shift+U`,
+`notify` CLI). It does NOT dominate kitty — it wins on the console axis and loses on threads.
+
+---
+
 ## 5. Corrections this plan supersedes
 
 - **"Maximising the GPU is the wrong goal"** — WRONG AS STATED. Derived from iTerm2's per-pane
