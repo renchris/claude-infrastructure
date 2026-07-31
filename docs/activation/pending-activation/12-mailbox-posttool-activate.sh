@@ -72,10 +72,61 @@ fi
 
 PT_ENTRY="$(jq -c --arg m "$PT_MATCH" 'first(.hooks.PostToolUse[]?.hooks[]? | select(.command? // "" | contains($m)))' "$TEMPLATE" 2>/dev/null)"
 if [ -z "$PT_ENTRY" ] || [ "$PT_ENTRY" = "null" ]; then
+  # ── WHY THIS BRANCH ASKS A SECOND QUESTION ────────────────────────────────────────────────────
+  # It used to report ONE cause — "the checkout predates the v3-D5 commit" — and prescribe an
+  # ff-merge. That is right for a LAGGING checkout and useless for an UNLANDED feature, and on
+  # 2026-07-29 it was the second: D5 sat on three ship/backup refs and a worktree branch, an
+  # ancestor of none of them origin/main. The prescription then cannot terminate — the operator
+  # ff-merges a checkout that is already current, sees no change, and runs it again. A wrong cause
+  # is worse than no cause precisely because it is actionable. So: ask trunk, and never name a
+  # cause the answer does not support.
+  #
+  # NO PIPE INTO grep -q HERE. This script runs under `set -o pipefail` (:36), and `producer |
+  # grep -q PAT` inverts under it: grep exits at the first match, the producer takes SIGPIPE, and
+  # the pipeline reports 141 — a MATCH reads as NO MATCH. A shell case-glob asks the same question
+  # with no pipeline at all.
+  _trunk_tmpl="$(git -C "$REPO" show "origin/main:settings-templates/settings.example.json" 2>/dev/null || true)"
+  _behind="$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
+  if [ -z "$_trunk_tmpl" ]; then _trunk=unknown
+  else case "$_trunk_tmpl" in *"$PT_MATCH"*) _trunk=has ;; *) _trunk=lacks ;; esac
+  fi
+
   echo "✗ no '$PT_MATCH' entry under .hooks.PostToolUse in $TEMPLATE — nothing to copy. STOP." >&2
-  echo "  The checkout predates the v3-D5 commit. Deploy it first, then re-run:" >&2
-  echo "      git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2
-  echo "      (currently behind origin/main by: $(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo '?') commit(s))" >&2
+  echo >&2
+  case "$_trunk" in
+    has)
+      # Trunk has it, we do not — but "behind" and "diverged locally" are different causes with
+      # different fixes, and ff-merge only answers the first. A checkout that is level with trunk
+      # and STILL lacks the entry has a modified/stale working file; merging it is a no-op, which
+      # is the same dead end in a different costume.
+      if [ "$_behind" != '?' ] && [ "$_behind" -gt 0 ] 2>/dev/null; then
+        echo "  CAUSE: deploy lag. origin/main HAS the entry; this checkout is behind by ${_behind}." >&2
+        echo "  FIX — advance the checkout, then re-run this script:" >&2
+        echo "      git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2
+      else
+        echo "  CAUSE: local divergence, NOT deploy lag. origin/main HAS the entry and this checkout" >&2
+        echo "  is level with it (behind by ${_behind}) — so the working copy of the template has been" >&2
+        echo "  modified or is stale. Merging would change nothing." >&2
+        echo "  FIX — see what diverged, then restore that one file:" >&2
+        echo "      git -C $REPO diff origin/main -- settings-templates/settings.example.json" >&2
+        echo "      git -C $REPO checkout origin/main -- settings-templates/settings.example.json" >&2
+      fi ;;
+    lacks)
+      echo "  CAUSE: the FEATURE IS NOT LANDED. origin/main's template does not carry the entry" >&2
+      echo "  either, so this is not deploy lag and NO amount of merging will produce it." >&2
+      echo "  (This checkout is behind origin/main by ${_behind} commit(s) — irrelevant here.)" >&2
+      echo >&2
+      echo "  Do NOT re-run this script until the mail-v3 D5 commit is an ancestor of origin/main." >&2
+      echo "  Wiring alone would no-op regardless: hooks/mailbox-drain.sh only accepts" >&2
+      echo "  session-start|prompt until D5 lands, so a 'post-tool' argument exits 0 silently." >&2
+      echo "  Confirm with:" >&2
+      echo "      git -C $REPO log --all --oneline -S 'post-tool' -- hooks/mailbox-drain.sh" >&2 ;;
+    *)
+      echo "  CAUSE: UNDETERMINED — could not read origin/main's template, so this is not known to" >&2
+      echo "  be deploy lag and is not known to be an unlanded feature. Do not guess between them." >&2
+      echo "  Establish which, then act:" >&2
+      echo "      git -C $REPO fetch origin && git -C $REPO show origin/main:settings-templates/settings.example.json | grep -c '$PT_MATCH'" >&2 ;;
+  esac
   exit 1
 fi
 
