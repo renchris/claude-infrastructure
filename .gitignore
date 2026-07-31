@@ -53,3 +53,6 @@ node_modules/
 # converted to the committed animated WebP (see the tape header). The GIF is a build
 # intermediate — regenerable, ~709 KB, and never referenced by the README.
 /assets/demo/handoff-real.gif
+
+# VHS emits a GIF that gif2webp converts to the committed WebP; the GIF is a build intermediate.
+/assets/demo/terminal-bench.gif
