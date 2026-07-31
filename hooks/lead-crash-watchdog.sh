@@ -592,7 +592,7 @@ close_orphaned_panes() {
     [[ -n "$tdbin" ]] || { [[ -x "$HOME/.claude/bin/cc-teardown" ]] && tdbin="$HOME/.claude/bin/cc-teardown"; }
   fi
   local plan="$hdir/close-plan.tsv"; : > "$plan" 2>/dev/null || true
-  local n_elig=0 n_skip=0 n_ok=0 n_defer=0 n_refuse=0 n_fail=0 n_unres=0
+  local n_elig=0 n_skip=0 n_ok=0 n_defer=0 n_refuse=0 n_fail=0 n_unres=0 n_indet=0
   local member pane state bytes tpath
 
   while IFS=$'\t' read -r member pane state bytes tpath; do
@@ -675,6 +675,14 @@ close_orphaned_panes() {
                 n_refuse=$((n_refuse + 1)); echo "[watchdog $sid] close: $member pane=$pane REFUSE${trk:+ ($trk)} (rc 2); left alone" ;;
             esac ;;
         5)  n_fail=$((n_fail + 1)); echo "[watchdog $sid] close: $member pane=$pane FAIL LOUD — acted but the pane SURVIVED (rc 5)" ;;
+        6)  # INDETERMINATE — the process is gone but cc-teardown could not READ the pane's fate (blind
+            # or cut enumerator). Distinct from rc 5 BY CONSTRUCTION: 5 is the definite claim "the pane
+            # survived", and this leg is armed (LCW_ORPHAN_CLOSE=1) and autonomous, so counting "I could
+            # not see" as a survivor would have it log failures on successful reaps and escalate on them.
+            # Not n_unres either — that bucket's summary says "STILL RUNNING and no gate judged them";
+            # here a gate DID judge and the process IS dead. Own counter, own words.
+            n_indet=$((n_indet + 1))
+            echo "[watchdog $sid] close: $member pane=$pane INDETERMINATE — process gone, pane fate UNREADABLE (rc 6); NOT a survivor claim, re-observe before acting" ;;
         124) # The bound above CUT the call — timeout(1)'s own rc, not cc-teardown's. A THIRD state:
              # we have NO verdict at all, and the pane may or may not have been acted on. It must not
              # land in n_fail ("acted, pane survived" — a claim we cannot make) nor in n_refuse ("a
@@ -694,7 +702,7 @@ close_orphaned_panes() {
   done < "$status"
 
   if (( armed )); then
-    echo "[watchdog $sid] close complete: $n_ok torn down, $n_defer defer, $n_refuse refuse, $n_unres UNRESOLVED, $n_fail FAIL, $n_skip skipped"
+    echo "[watchdog $sid] close complete: $n_ok torn down, $n_defer defer, $n_refuse refuse, $n_unres UNRESOLVED, $n_indet INDETERMINATE, $n_fail FAIL, $n_skip skipped"
     # A leg that resolved NOTHING is not a leg that had nothing to do. Say so at the same volume as
     # a failure, so inertness can never again read as a clean run (this is the signal whose absence
     # let 100%-abstain look like success for three days).

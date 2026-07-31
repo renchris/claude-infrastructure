@@ -16,6 +16,9 @@
 #       exit 10 = DEFER  (work-unsafe: dirty | committed-not-pushed | tty-busy | tty-indeterminate)
 #       exit 2  = REFUSE (fail-closed: unknown target | self | --self literal | no done-evidence | operator-adopted)
 #       exit 5  = FAIL LOUD (acted, but effect-verify says the pane/process SURVIVED — never a false success)
+#       exit 6  = INDETERMINATE (acted, process gone, but the pane's fate is UNREADABLE — a blind/cut
+#                 enumerator. "I could not tell" is a THIRD state; it is never the DEFINITE claim exit 5
+#                 makes, and a caller must not retry/escalate on it as if the pane had survived.)
 #   cc-teardown --selftest        (RED-proves every branch with mock panes/pids + temp git; no real session)
 #
 # THE VERDICT TOKEN (2026-07-31). Every decision branch prints ONE machine-parseable line to stderr —
@@ -33,8 +36,10 @@
 #      decision module); ADD the runtime-only (c) tty-exclusivity guard here (no foreign live process on
 #      the pane tty beyond the target claude tree). ALL hold else DEFER+record (exit 10) / REFUSE (exit 2).
 #   3. ACT both legs: kill -TERM <pid> → confirm dead (escalate KILL) → it2 session close -f -s <paneUUID>.
-#   4. EFFECT-VERIFY both legs, RE-OBSERVED: process gone AND pane absent from a FRESH it2 list. Success
-#      ONLY if both verified; a surviving pane → FAIL LOUD (exit 5), never a false success.
+#   4. EFFECT-VERIFY both legs, RE-OBSERVED: process gone AND pane absent from a FRESH it2 list, re-read
+#      over a bounded SETTLE window (iTerm2 drops the pane asynchronously — one look convicts a success).
+#      Success ONLY if both verified; a pane PROVABLY still there → FAIL LOUD (exit 5), never a false
+#      success; a pane whose fate is UNREADABLE → INDETERMINATE (exit 6), never a false FAIL.
 #   5. RECORD every branch (teardown | defer | refuse | fail | already-gone) to ~/.claude/cc-teardown/.
 #   6. IDEMPOTENT: already-gone pane + dead pid ⇒ success.
 #
@@ -92,6 +97,24 @@ GATE="${CC_TEARDOWN_GATE_BIN:-$HERE/cc-teardown-safety-gate.sh}"
 PS_BIN="${CC_TEARDOWN_PS_BIN:-ps}"
 RECORDS_DIR="${CC_TEARDOWN_RECORDS_DIR:-$HOME/.claude/cc-teardown}"
 TERM_GRACE_S="${CC_TEARDOWN_TERM_GRACE_S:-5}"
+
+# ── pane-settle window: the process leg polls, the PANE leg used to look exactly ONCE ───────────────
+# `it2 session close` returns as soon as iTerm2 accepts the close; the pane leaves app.windows some
+# time LATER. The old verify re-listed on the very next statement and convicted on that single look,
+# so a SUCCESSFUL teardown reported "pane survived" (reproduced twice 2026-07-30 on panes 2323ADBC
+# and CB29B303: proc_gone=1 pane_gone=0 close_rc=0 → exit 5, while both panes were in fact already
+# absent, both pids gone, both registry rows gone — the tool convicted itself). The process leg had
+# a poll loop from day one; this is the same discipline for the pane leg.
+#
+# Bounded by WALL CLOCK, not by an attempt count, and the deadline is checked BEFORE each attempt —
+# so the cost of the attempt itself (a bounded `it2 session list`, measured at 10.59s at 33 panes
+# under fleet load) counts against the budget instead of being excluded from it
+# (memory: poll-loop-bound-excludes-its-own-check — a loop that counts only its sleeps ships 40×13s
+# as "120s"). Worst case therefore = SETTLE_S + one CCT_TIMEOUT_S list call, well inside the 60s
+# bound lead-crash-watchdog puts on the whole call. Under that load the first attempt is CUT and
+# returns indeterminate, which now has its OWN exit code — the honest outcome, not a false FAIL.
+PANE_SETTLE_S="${CC_TEARDOWN_PANE_SETTLE_S:-5}"
+PANE_SETTLE_INTERVAL_S="${CC_TEARDOWN_PANE_SETTLE_INTERVAL_S:-0.5}"
 _sid="${CC_TEARDOWN_SELF_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"
 SELF_UUID="${_sid##*:}"   # ITERM_SESSION_ID = "wNtMpK:<UUID>" → <UUID>; an injected bare UUID passes through
 
@@ -132,7 +155,7 @@ die()  { say "$*"; exit 2; }
 usage() {
   cat >&2 <<'U'
 cc-teardown <pane-uuid|name> --done-evidence <text> [--force-adopted]
-  0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived)
+  0 torn-down+verified · 10 DEFER · 2 REFUSE · 5 FAIL(pane survived) · 6 INDETERMINATE(pane unreadable)
   every decision also prints: verdict=<D> reason_kind=<k> exit=<n> target=… pane=… pid=…
                              (parse THAT, not the prose; no verdict line = a usage error)
   --force-adopted   operator CLI ONLY — skip the operator-adoption belt (no autonomous caller passes it)
@@ -161,6 +184,7 @@ record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1> [exit_co
     TEARDOWN|ALREADY-GONE) vex=0 ;;
     DEFER)                 vex=10 ;;
     FAILED)                vex=5 ;;
+    INDETERMINATE)         vex=6 ;;   # acted, pane fate unreadable — NOT the 5 "it survived" claim
     *)                     vex=2 ;;   # REFUSE and anything unforeseen — fail-closed, never 0
   esac
   # The derivation holds wherever THIS file decides the exit. It does not at the one site where the
@@ -781,16 +805,44 @@ main() {
     lstart_now="$(pid_lstart "$pid")"
     [ -n "$lstart_before" ] && [ -n "$lstart_now" ] && [ "$lstart_now" != "$lstart_before" ] && proc_gone=1  # recycled ⇒ original gone
   fi
-  pane_present "$paneUUID"; local ppv=$?
+  # Pane leg: re-read over the bounded settle window (see PANE_SETTLE_S). Break the INSTANT the pane
+  # reads ABSENT — the success path costs one extra `date`, never a sleep. Keep polling while the
+  # answer is "not absent YET" (present OR indeterminate): both are states the very next look can
+  # resolve, and neither is evidence to convict on. The deadline is tested BEFORE the next attempt,
+  # so a slow attempt spends the budget rather than escaping it.
+  local ppv settle_tries=0 settle_deadline
+  settle_deadline=$(( $(date +%s) + PANE_SETTLE_S ))
+  while :; do
+    pane_present "$paneUUID"; ppv=$?
+    settle_tries=$((settle_tries + 1))
+    [ "$ppv" = 1 ] && break                                    # ABSENT — verified gone, stop looking
+    [ "$(date +%s)" -ge "$settle_deadline" ] && break           # budget spent — settle it with what we have
+    sleep "$PANE_SETTLE_INTERVAL_S"
+  done
   [ "$ppv" = 1 ] && pane_gone=1
 
   if [ "$proc_gone" = 1 ] && [ "$pane_gone" = 1 ]; then
-    record TEARDOWN "done" "both legs effect-verified (re-observed): process gone AND pane absent; close_rc=$close_rc" 1
+    record TEARDOWN "done" "both legs effect-verified (re-observed): process gone AND pane absent; close_rc=$close_rc settle_tries=$settle_tries" 1
     say "OK — torn down + effect-verified: process gone AND pane absent (exit 0)"; exit 0
   fi
-  # ── 5(fail). LOUD — acted but a leg SURVIVED. Never a false success. ───────────────────────────────
-  record FAILED not-verified "effect-verify FAILED (re-observed): proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc — LOUD, never a false success" 0
-  say "FAIL — teardown NOT verified: proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc (exit 5)"; exit 5
+
+  # ── 5(indeterminate). NO VERDICT — acted, process gone, but the pane is UNREADABLE. ────────────────
+  # ppv=2 means the enumerator was blind or cut (empty/unparseable list, or the bounded it2 call timed
+  # out), NOT that the pane is there — pane_present is fail-safe by construction and never converts an
+  # unreadable list into "absent". Folding that into exit 5 collapsed the third state into a DEFINITE
+  # claim the evidence does not support: exit 5 documents "the pane SURVIVED", so a caller could not
+  # tell "it really survived" from "I could not see". LCW_ORPHAN_CLOSE=1 (armed 2026-07-30) made that
+  # ambiguity autonomous — a caller that may retry or escalate must not do so on "I could not see".
+  # Ordered AFTER the proc check on purpose: a process that outlived TERM+KILL is a DEFINITE survival
+  # (kill -0 is readable), and exit 5 is the honest verdict for it whatever the pane list says.
+  if [ "$proc_gone" = 1 ] && [ "$ppv" = 2 ]; then
+    record INDETERMINATE pane-unreadable "process gone, but the pane enumerator is BLIND or CUT after ${settle_tries} look(s) over ${PANE_SETTLE_S}s — pane fate UNKNOWN, close_rc=$close_rc; NOT a claim the pane survived" 0
+    say "INDETERMINATE — process gone, pane fate UNREADABLE after ${settle_tries} look(s)/${PANE_SETTLE_S}s: enumerator blind or cut, close_rc=$close_rc (exit 6). Not a survival claim — re-observe before acting."; exit 6
+  fi
+
+  # ── 5(fail). LOUD — acted but a leg PROVABLY SURVIVED. Never a false success. ──────────────────────
+  record FAILED not-verified "effect-verify FAILED (re-observed over ${settle_tries} look(s)/${PANE_SETTLE_S}s settle): proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc — LOUD, never a false success" 0
+  say "FAIL — teardown NOT verified: proc_gone=$proc_gone pane_gone=$pane_gone close_rc=$close_rc settle_tries=$settle_tries (exit 5)"; exit 5
 }
 
 # ── selftest: SEE every branch fire. Mock cc-sessions/it2/ps + temp git repos + REAL killable sleeps. ──
@@ -830,11 +882,21 @@ if [ "$1" = session ] && [ "$2" = list ]; then
   # IT2_BLIND=1 simulates a blind app.windows enumerator (detached desk / restoration-pending):
   # a VALID but EMPTY [] at exit 0 — the "it2 ls returned 0" incident shape.
   if [ "${IT2_BLIND:-0}" = 1 ]; then echo '[]'; exit 0; fi
+  # IT2_LAG_N=<n> simulates the CLOSE-SETTLE LAG this tool's exit-5 false-FAIL came from: the close
+  # already SUCCEEDED (the pane is out of PF below), but app.windows still enumerates it for the
+  # first <n> list calls AFTER that close. Injecting the uuid back is exactly what iTerm2 does, and
+  # arming on the close (not on process start) keeps the count anchored to the close — any list
+  # calls made BEFORE it cannot consume the lag budget and silently weaken the fixture.
+  extra='[]'
+  if [ -n "${IT2_LAG_UUID:-}" ] && [ -f "${IT2_LAG_COUNT_FILE:-/nonexistent}" ]; then
+    c=$(( $(cat "$IT2_LAG_COUNT_FILE" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$IT2_LAG_COUNT_FILE"
+    [ "$c" -le "${IT2_LAG_N:-0}" ] && extra="[\"$IT2_LAG_UUID\"]"
+  fi
   # Reality: cc-teardown always runs FROM a live pane, so the desk's own pane is ALWAYS enumerated.
   # Append a persistent non-target desk pane so an emptied panes-file lists as [desk] (target
   # genuinely absent → rc 1), NOT [] (blind → rc 2). Without this the mock is a fictional
   # single-pane world that no real desk is ever in.
-  jq -n --slurpfile a "$PF" '($a[0] + ["DESK-PANE-PERSIST-0000"]) | unique | map({id: .})'; exit 0
+  jq -n --slurpfile a "$PF" --argjson e "$extra" '($a[0] + $e + ["DESK-PANE-PERSIST-0000"]) | unique | map({id: .})'; exit 0
 fi
 if [ "$1" = session ] && [ "$2" = close ]; then
   shift 2; sid=""
@@ -842,6 +904,7 @@ if [ "$1" = session ] && [ "$2" = close ]; then
   if [ "${IT2_CLOSE_REMOVES:-1}" = 1 ] && [ -n "$sid" ]; then
     jq --arg u "$sid" 'map(select(. != $u))' "$PF" > "$PF.t" && mv "$PF.t" "$PF"
   fi
+  [ -n "${IT2_LAG_COUNT_FILE:-}" ] && echo 0 > "$IT2_LAG_COUNT_FILE"   # arm the lag AT the close
   exit "${IT2_CLOSE_RC:-0}"
 fi
 exit 0
@@ -900,6 +963,7 @@ EOF
   last_record()   { find "$d/rec" -name '*.json' 2>/dev/null | head -1; }
   last_decision() { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.decision' "$f"; }
   last_blv()      { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.both_legs_verified' "$f"; }
+  last_reason()   { local f; f="$(last_record)"; [ -n "$f" ] && jq -r '.reason' "$f"; }
 
   echo "cc-teardown --selftest — every teardown RED-proof must fire (mock panes/pids + temp git; NO real session):"
 
@@ -921,11 +985,20 @@ EOF
   reap
 
   # 2. pane SURVIVES the close → FAIL LOUD (exit 5), never a false success  [the anti-keystroke-faith proof]
+  #    The settle window (12b) must not soften this: a pane the enumerator can READ and still SEE is a
+  #    DEFINITE survival, so it stays exit 5 after the retries are spent — the settle buys re-observation,
+  #    never the benefit of the doubt. Settle pinned to 1s here so the suite does not pay the full
+  #    default waiting for a verdict this fixture can never change.
   rm -f "$d/rec"/*.json; mkrepo "$d/r2"; spawn; set_session "$P" "$d/r2"; set_panes "[\"$U\"]"
-  rc=0; IT2_CLOSE_REMOVES=0 IT2_CLOSE_RC=0 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  rc=0; IT2_CLOSE_REMOVES=0 IT2_CLOSE_RC=0 CC_TEARDOWN_PANE_SETTLE_S=1 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
   [ "$rc" = 5 ] && [ "$(last_decision)" = FAILED ] \
     && okp "pane SURVIVES close → FAIL LOUD (exit 5), never a false success" \
     || badp "a surviving pane was not caught (rc=$rc dec=$(last_decision); want 5/FAILED)"
+  case "$(last_reason)" in
+    *"over 1 look(s)"*) badp "a REAL survivor was convicted on the FIRST look — the settle never ran" ;;
+    *"look(s)/1s settle"*) okp "the survivor verdict came AFTER the settle was spent, not on look 1" ;;
+    *) badp "FAIL record lost its settle accounting: $(last_reason)" ;;
+  esac
   reap
 
   # 3. dirty tree → DEFER (exit 10), pane left intact
@@ -1002,13 +1075,45 @@ EOF
   reap
 
   # 12. BLIND ENUMERATOR: live pane, but it2 returns a 0-list ([]) → pane_present INDETERMINATE →
-  #     verify can never read false-gone → FAIL LOUD (exit 5). RED-proof of the app.windows-blind fix:
-  #     before it, a spurious [] read as "pane absent" ⇒ a FALSE TEARDOWN success on a live pane.
+  #     verify can never read false-gone. Two properties, and BOTH matter:
+  #       (a) never a false TEARDOWN — a spurious [] must not read as "pane absent" (the app.windows
+  #           blind fix; before it this was a FALSE success on a live pane), AND
+  #       (b) never a false FAIL either — "I could not see the pane" is not "the pane survived", so
+  #           this is exit 6 (INDETERMINATE), NOT exit 5. It exited 5 until 2026-07-30: one exit code
+  #           carrying both meanings left an autonomous caller unable to tell them apart.
   rm -f "$d/rec"/*.json; mkrepo "$d/r12"; spawn; set_session "$P" "$d/r12"; set_panes "[\"$U\"]"
-  rc=0; IT2_BLIND=1 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
-  [ "$rc" = 5 ] && [ "$(last_decision)" = FAILED ] \
-    && okp "blind enumerator (0-list) → INDETERMINATE, never a false teardown; FAIL LOUD (exit 5)" \
-    || badp "blind enumerator produced a false result (rc=$rc dec=$(last_decision); want 5/FAILED)"
+  rc=0; local v12
+  v12="$(IT2_BLIND=1 CC_TEARDOWN_PANE_SETTLE_S=1 run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" 2>&1 >/dev/null)" || rc=$?
+  [ "$rc" = 6 ] && [ "$(last_decision)" = INDETERMINATE ] \
+    && okp "blind enumerator (0-list) → INDETERMINATE (exit 6): neither a false teardown NOR a false FAIL" \
+    || badp "blind enumerator produced a false result (rc=$rc dec=$(last_decision); want 6/INDETERMINATE)"
+  # The token must advertise the code the caller ACTUALLY gets. record() derives it from the decision
+  # string, and an unlisted decision falls to the fail-closed `*)` arm — so INDETERMINATE would have
+  # announced exit=2 while exiting 6. A verdict line that misstates the exit is the same defect class
+  # as the false FAIL this whole change removes, one layer up: the caller parses the token, not $?.
+  case "$v12" in
+    *"verdict=INDETERMINATE reason_kind=pane-unreadable exit=6"*)
+      okp "the INDETERMINATE verdict token advertises exit=6 — the code the caller actually gets" ;;
+    *) badp "verdict token misstates the INDETERMINATE exit (got: $(printf '%s' "$v12" | grep -o 'verdict=[^ ]* [^ ]* exit=[0-9]*' | head -1))" ;;
+  esac
+  reap
+
+  # 12b. CLOSE-SETTLE LAG — the false-FAIL this settle window exists for (reproduced twice 2026-07-30
+  #      on panes 2323ADBC / CB29B303: proc_gone=1 pane_gone=0 close_rc=0 → exit 5 while BOTH panes
+  #      were already absent). The close SUCCEEDS, but app.windows still enumerates the pane for the
+  #      next 2 looks. One look convicts a successful teardown; the settle re-observes and gets it
+  #      right. RED-proof: with the single-look verify this is exit 5/FAILED, not 0/TEARDOWN — and it
+  #      runs on the DEFAULT settle, so the shipped bound is what is under test, not a test-only one.
+  rm -f "$d/rec"/*.json; rm -rf "$d/tdmark"; mkrepo "$d/r12b"; spawn; set_session "$P" "$d/r12b"; set_panes "[\"$U\"]"
+  rc=0; IT2_LAG_UUID="$U" IT2_LAG_N=2 IT2_LAG_COUNT_FILE="$d/state/lag.n" \
+    run_td "$d/bin/ps_clean" "$SELF" "$U" --done-evidence "x" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 0 ] && [ "$(last_decision)" = TEARDOWN ] && [ "$(last_blv)" = true ] \
+    && okp "lagging enumerator (pane closed, still listed 2 looks) → settle re-observes → TEARDOWN (exit 0)" \
+    || badp "close-settle lag still convicts a successful teardown (rc=$rc dec=$(last_decision); want 0/TEARDOWN)"
+  case "$(last_reason)" in
+    *"settle_tries=3"*) okp "the settle RETRIED (3 looks) — it is a real re-observation, not a sleep" ;;
+    *) badp "settle did not retry as expected (reason: $(last_reason))" ;;
+  esac
   reap
 
   # 13. IDENTITY PIN (a17 S-4): the pane RECYCLED between classify and act — the registry now resolves a
@@ -1075,7 +1180,7 @@ EOF
 
   echo "cc-teardown --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), pane-survives→FAIL-LOUD(5), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self/identity-pin-recycle/non-pane-uuid-target/absence-contradicted→REFUSE(2), idempotent + corroborated-absence(0), no-silent-record, verdict-token all fire."
+  echo "cc-teardown --selftest: GREEN — teardown(both-legs-verified), close-settle-lag→re-observe→TEARDOWN(0), pane-survives→FAIL-LOUD(5), unreadable-pane→INDETERMINATE(6), dirty/unpushed/tty-busy→DEFER(10), missing-done/unknown/self/--self/identity-pin-recycle/non-pane-uuid-target/absence-contradicted→REFUSE(2), idempotent + corroborated-absence(0), no-silent-record, verdict-token all fire."
   exit 0
 }
 
