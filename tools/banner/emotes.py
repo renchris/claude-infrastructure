@@ -418,7 +418,8 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
         # `.eyesAskB`, `.armsAlertB` — and the unsuffixed rules above do not reach any of them. Left
         # alone the visitor renders with BOTH leg sets at once, blink-lids painted over its open
         # eyes, ears permanently raised and the ask-pose's centred eyes stacked on the normal pair.
-        # Two packs hit this and each wrote its own reset helper; a third candidate (this file's own
+        # The world pack hit this and wrote its own `sfx_rest`/`sfx_walk` helpers; the infra pack
+        # documented the same hazard independently. A third candidate (this file's own
         # NEIGHBOUR) shipped with `aShutB` on and nothing noticed until the reset gate was tightened
         # from prefix matching to exact class tokens. Emitting it here fixes every candidate at once
         # and is why a pack no longer needs to know about it.
@@ -724,7 +725,7 @@ def assert_reset_covers_sprite(svg: str, e: Emote) -> None:
     # `.eyesAskB` — none of which `base_css`'s reset list names — so every one renders ON for the
     # whole loop: a visitor with both leg sets at once, blink-lids painted over its open eyes, ears
     # permanently raised. The prefix match reported all of that as covered, because the UNSUFFIXED
-    # rule exists. Two packs hit it independently and each wrote its own per-suffix reset helper,
+    # rule exists. The world pack found it and worked around it with per-suffix reset helpers,
     # which is the tell that the gate was passing something it should have refused.
     drawn = {
         tok
