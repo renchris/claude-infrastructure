@@ -115,6 +115,13 @@ def _steps(name: str, sel: str, rest: float, frames: list[tuple[float, float]]) 
     The rest value is asserted to be where the track ends, because a track that finishes somewhere
     else seams the loop in a way `assert_seamless` cannot see — that gate checks a 100% stop EXISTS,
     not that it agrees with the frame before it.
+
+    The rest value is ALSO written as a STATIC declaration, not only into the keyframes, and that is
+    not belt-and-braces. Under `prefers-reduced-motion` every animation is switched off and an
+    element falls back to its static rule: a track whose only `opacity` lived in its keyframes paints
+    at the CSS default of 1. Rendered as a still, THE COPIES showed its whole ghost stack at once and
+    THE UNSWITCHED showed the one thing it promises never to show — a fully lit block. `base_css`
+    records the identical lesson for `.eglyph`, found the same way, by looking at the still.
     """
     if frames and abs(frames[-1][1] - rest) > 1e-9:
         raise SystemExit(
@@ -124,7 +131,7 @@ def _steps(name: str, sel: str, rest: float, frames: list[tuple[float, float]]) 
     ks = "".join(f"{pctx(t)}%{{opacity:{fmt(o)}}}" for t, o in sorted(frames))
     return (
         f"@keyframes {name}{{0%{{opacity:{fmt(rest)}}}{ks}100%{{opacity:{fmt(rest)}}}}}"
-        f"{sel}{{animation:{name} {fmt(EMOTE_P)}s steps(1,end) infinite}}"
+        f"{sel}{{opacity:{fmt(rest)};animation:{name} {fmt(EMOTE_P)}s steps(1,end) infinite}}"
     )
 
 
@@ -333,6 +340,10 @@ def _gate() -> Emote:
             _extra("GL")
             + _extra("GR")
             + stop_world("gtScr", *hold)
+            # `.gtN{opacity:0}` as a STATIC rule as well as a gated one: with animations off the
+            # gate does not run and the notch would paint permanently lit, which is the one thing
+            # this beat says never happens except for a moment.
+            + ".gtN{opacity:0}"
             + egate("gtNo", ".gtN", [hold])
             # the two that WAIT — this is the whole beat. Planted legs alone were not enough to
             # read at this size (walking already shows four legs, just at two heights), so the
@@ -411,7 +422,7 @@ def _nightlight() -> Emote:
             + f"@keyframes nlD{{0%,{pctx(a)}%{{opacity:0}}"
             f"{wp(e, 0.22)}%,{wp(e, 0.80)}%{{opacity:.72}}"
             f"{pctx(b)}%,100%{{opacity:0}}}}"
-            f".nlDim{{animation:nlD {fmt(EMOTE_P)}s ease-in-out infinite}}"
+            f".nlDim{{opacity:0;animation:nlD {fmt(EMOTE_P)}s ease-in-out infinite}}"
         )
 
     e.front, e.css = front, css
