@@ -27,6 +27,31 @@ renderer that needs only one surface for all 30 panes, which is what kitty is.
 
 Machine: MacBookPro18,2 · M1 Max (8P+2E, 32-core GPU) · 64 GiB · Darwin 24.6.0 · iTerm2 3.6.11.
 
+> ## ⚠ UPDATE 2026-07-31 (afternoon measurement session) — read §9 before acting on anything above
+>
+> A live-measurement session (3 recon · 3 serial arms · 3 adversarial refuters) **ran the two biggest
+> falsification tests in §8** and re-measured the challengers under matched load. Net effect on the
+> answer above:
+>
+> - **kitty survives as the pick among the challengers, and for the first time it is measured under
+>   load** — 18 panes, byte-identical 10 fps, all panes at 10.00 achieved fps: **kitty 9.5% app CPU vs
+>   WezTerm 24.4% and Ghostty 27.3%** (2.6–2.9×, while kitty carried 22% *more* bytes). That is a
+>   stronger result than anything in §2.
+> - **"beating iTerm2" is still not measured, and the one iTerm2 datapoint in the cheap layout matched
+>   kitty within ~10%.** The migration recommendation (§7 item 5) should **not** start yet.
+> - **The stated reason kitty wins in the answer line above is retired.** WezTerm is **4.00** threads
+>   per pane, not ~7.0 — and §8's own kill condition for the thread finding **fired**: 87 WezTerm
+>   threads produced *fewer* context switches than kitty's 10. kitty still beats WezTerm, on **loaded
+>   app CPU**, not on threads.
+> - **§1's mechanism is half-refuted.** The per-pane `CAMetalLayer` is real and confirmed by direct
+>   measurement; the per-pane **`CVDisplayLink` thread does not exist on 3.6.11** (+1.5 threads for 20
+>   Metal panes, not +20). "Raising the cap adds ~30 display-link threads" is void. §1's *direction*
+>   (Metal is not cheaper) survives; its *arithmetic* does not.
+> - **Ghostty is measured and eliminated** (§6.7 closed): 4.00 threads/pane **linear**, highest loaded
+>   CPU of the three, 3 processes per loaded pane.
+>
+> Full evidence, provenance and the corrected instrument list: **§9**.
+
 ---
 
 ## 1. The two cost axes, and why they conflict on iTerm2
@@ -241,6 +266,17 @@ census, and the GPU path established **by profile, not by flag**.
 
 ### The decisive number, and it reversed a desk-research ranking
 
+> **⚠ SUPERSEDED 2026-07-31 PM — this subsection's number is wrong twice, and its axis is not a cost.**
+> (a) **The constant is 4.00 threads/pane, not 7.0.** Two independent same-session measurements of
+> WezTerm agree on 4.00 — recon 4 by symbol count (8 × `mux::read_from_pane_pty` + 8 ×
+> `mux::parse_buffered_data` + 8 × `portable_pty Child::wait` + 8 × `mpmc Channel::recv` = 32 pane
+> threads / 8 panes) and M2's loaded arm at 4.28 marginal. The 6→33 / 38→257 slope below was never
+> reproduced and the box rebooted, so it cannot be re-checked. **Two oracles disagree; the shipping
+> side is the 4.00 pair.**
+> (b) **The axis is not a cost.** §8's own kill condition for this finding fired under load —
+> see §9.2. Retain the *method* lesson (a perfect source review can be reversed only by running it);
+> retire this number and this ranking rationale.
+
 WezTerm's source review was the strongest of any candidate — one `NSView` + one `CAMetalLayer` per
 *window*, all panes composited by a single `paint_impl`, and `wezterm cli` covering all five required
 automation capabilities. On surfaces it is correct: **1 on-screen CGWindow for 38 panes.** It was
@@ -397,15 +433,57 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
 
 ## 6. What is NOT established
 
-1. **No multi-hour run of any challenger.** Total kitty uptime across this investigation is well
+*(Status column added 2026-07-31 PM. Items 2, 6, 7 and 8 are CLOSED; 4 is partially closed; 1, 3 and
+5 remain open, and item 1 got **further** from closure. Original text preserved.)*
+
+> **Item 2 was closed by the LEAD, not by a workflow arm**, so the synthesis agent's own return still
+> reports it open — it saw only the arms' digest. Recorded here because the discrepancy is otherwise
+> unexplainable to a later reader, and because it is the general hazard of splitting work between a
+> lead and a fan-out: **the synthesis surface only knows what was routed through it.**
+
+1. 🔴 **OPEN — and it moved backwards.** **No multi-hour run of any challenger.** Total kitty uptime
+   across this investigation is well
    under an hour; the operator leaves the fleet up for hours. The churn control is encouraging but is
    a different measurement than sustained runtime. **This is the single largest gap.**
-2. **No real Claude Code in a kitty pane.** Every challenger measurement used a synthetic
-   alternate-screen repainter. kitty is a strict VT implementation and should render Ink correctly —
-   but "should" is the word the evidence rules ban.
-3. **No 4-display test.** Challenger windows were cascaded, not tiled one per monitor at 5120×2880,
+   → **2026-07-31 PM:** the 12 h / 48-pane kitty (`kadv`) that was the closest thing to this evidence
+   **did not survive the 11:46 reboot** — `/tmp/kadv.sock-*` is gone and `pgrep -x kitty` returns only
+   post-reboot agent probes (recon 3). The longest constant-layout drift reads taken since are M1's
+   6 min on Ghostty (threads flat 118, ports non-monotonic range 8, RSS +1 MB ⇒ no drift) and a 3-point
+   read on a live 30-pane kitty (RSS 318→319→322 MB, threads flat at 6) — both explicitly **too short
+   for a leak verdict**. Note also that the ~23.7 MB/pane-at-48 kitty figure quoted from `kadv` appears
+   nowhere on disk and is inconsistent with every kitty RSS reading available today (M2 loaded 18 panes
+   = 223 MB; marginal ~5.8 MB/pane over a 157 MB base ⇒ ~435 MB projected at 48). It is now
+   permanently unfalsifiable and must not be cited.
+2. ✅ **CLOSED 2026-07-31 PM — it renders correctly.** **No real Claude Code in a kitty pane.** Every
+   challenger measurement used a synthetic alternate-screen repainter. kitty is a strict VT
+   implementation and should render Ink correctly — but "should" is the word the evidence rules ban.
+   → **Run by the lead, not by an arm** (which is why the synthesis agent's own return still lists
+   this as open — it saw only the workflow's digest). Claude Code **v2.1.220** was launched into a
+   kitty window and captured by window id (`screencapture -l1056`, image kept at
+   `/tmp/cc-in-kitty.png`). Verified present and correct in the frame: the pixel-art sprite logo, the
+   box rule above the input, the glyphs `⚠ ⓘ ▶▶ ›`, 24-bit colour on three status lines, full-frame
+   alternate screen, and **no column offset or tearing**.
+   **Bounded honestly:** this is ONE STATIC FRAME. Resize reflow and long-run alt-screen behaviour are
+   *not* proven by it, and remain open (§8 keeps the resize row).
+   **Incidental, and not a kitty defect:** the pane reported `Transcript saving is off — inherited
+   CLAUDE_CODE_CHILD_SESSION marker`, because it was launched from an agent-owned shell. A session
+   started that way keeps no transcript — relaunch from a clean terminal or set
+   `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`.
+   ⚠ **The classifier blocked the agent from doing this itself** (spawning a nested Claude Code
+   session is denied in auto mode, and driving it via `kitten @ send-text` would launder the same
+   denied action). It took an operator-run command. Any future item of this shape must be handed to
+   the operator, not scheduled as agent work.
+3. 🔴 **OPEN — and currently NOT RUNNABLE.** **No 4-display test.** Challenger windows were cascaded,
+   not tiled one per monitor at 5120×2880,
    so per-display `CVDisplayLink` behaviour at mixed refresh is unmeasured.
-4. **The CoreAnimation defer-lock storm is only ~half iTerm2's, and is now the leading suspect for
+   → **2026-07-31 PM:** only **3** displays are attached now, both externals at 60.00 Hz (recon 3;
+   re-verified this session, `system_profiler SPDisplaysDataType | grep -c Resolution:` = 3). The
+   freeze ran on **4** displays, ~52 Mpx, **two at 120 Hz**. Compositing work scales as Mpx × Hz, so
+   the display configuration has changed by roughly the size of the whole freeze excursion — which
+   makes this both un-runnable today *and* a live alternative explanation for the freeze that no arm
+   in this investigation controls for.
+4. 🟡 **PARTIALLY CLOSED — the "exogenous floor" half is refuted.** **The CoreAnimation defer-lock
+   storm is only ~half iTerm2's, and is now the leading suspect for
    the CPU that the zombie windows do not explain.** Restarting iTerm2 took it 117/s → 58/s, so
    another client produces the remainder; **switching terminals does not obviously fix it.** The
    three format strings were located in the dyld shared cache and belong to QuartzCore
@@ -415,22 +493,70 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
    window**. There is **no public documentation, no userspace diagnostic, and no workaround short of
    restarting the offending client.** The emitting symbol could not be resolved, so the mechanism is
    inferred from the strings, not from Apple.
-5. **kitty's load-bearing claim rests on CGWindow counts**, not IOSurfaces, CALayers, or
+   → **2026-07-31 PM (measured live, refuter 2, with a positive control that mattered):** a 65 s
+   foreground `log stream --level debug --predicate 'eventMessage CONTAINS "Defer Lock" OR
+   eventMessage CONTAINS "lock count"'` (rc=124, ran to timeout) at 3 h uptime, loadavg 54.8, iTerm2
+   at 20 windows returned **48 records in ~47 s ≈ 1.0/s across 12 distinct contexts, lock counts 4–6**
+   — versus **117/s across 33 contexts, counts to 13** at the freeze. Positive control: a 20 s
+   `process == "WindowServer"` debug stream returned 978 lines, so a zero would have been
+   distinguishable from no-data — and this mattered, because a narrower
+   `subsystem == "com.apple.coreanimation"` predicate returned **0** Defer Lock records and would have
+   been a **false clean**.
+   **Two consequences.** (a) The "**58/s is a floor another client produces ⇒ switching terminals does
+   not fix it**" reading is **refuted** — the remainder decayed to 1.0/s, so it was not a floor and
+   there is no longer a basis for calling the residue exogenous-and-unfixable. (b) The drift signature
+   the rules require **is present now**: identical 12-context population in two bursts 46 s apart,
+   burst 1 = 12 × `was 4`, burst 2 = 12 × `was 4` + 12 × `was 5` + 12 × `was 6` — a **monotonic climb
+   at constant layout**, i.e. an **accumulator over uptime** (4–6 at 3 h; 13 by the freeze) with 12
+   contexts against 314 live CGWindows. Still NOT established: that this is what took WindowServer to
+   95% — 1.0/s is ~120× below the freeze rate, so the accumulator was caught early, not proven causal.
+   Neither "group the windows" nor "switch terminals" touches its independent variable.
+5. 🔴 **OPEN — and the metric now cuts against kitty.** **kitty's load-bearing claim rests on CGWindow
+   counts**, not IOSurfaces, CALayers, or
    per-window WindowServer mach ports — and the freeze was characterised by *ports* and *CA
    contexts*. One `NSOpenGLContext` could in principle be backed by several IOSurfaces.
-6. **No candidate was load-tested by me.** Every challenger figure above is from **idle** panes
+   → **2026-07-31 PM:** a live census (refuter 2, `tools/terminal-bench/window-census.swift`) reads
+   **kitty pid 26094: win=36, on=0, off=36, 8 zero-area** — the *highest* CGWindow count of any app on
+   the box, above iTerm2's 20. Either offscreen windows are free (in which case the 2.35× arm
+   describes no layout the operator runs) or kitty is the worst offender on the model's own metric.
+   Not both. Note also that `window-census.swift`'s `layers=N` column is the count of distinct
+   **CGWindowLayer Z-order values**, not CALayers (recon 3, `window-census.swift:30,101`) — reading it
+   as a CALayer count would be a false close of this very item. IOSurface counts remain unavailable
+   root-free.
+6. ✅ **CLOSED by §9.2 — with a caveat on N.** ~~No candidate was load-tested by me.~~ Every
+   challenger figure above is from **idle** panes
    (Stage A), which is what isolates the structural axes — threads, surfaces, ports — but says
    nothing about CPU under load. The only loaded challenger measurement in this document is the
    fleet agent's kitty run (36 panes at 10 Hz → 12.9–13.9% CPU, main thread 89% idle).
-7. **Ghostty was not measured.** It scored lowest of the survivors (52) on the strength of its
+   → **2026-07-31 PM:** M2 ran a byte-matched Stage-B head-to-head — kitty, WezTerm, Ghostty at 18
+   panes / 10 fps, **every loaded pane at exactly 10.00 achieved fps, zero SUSPECT rows**. Result in
+   §9.2. **Caveat:** N=18, not 30–40 (bound by the 64-process safety ceiling, not by any terminal
+   refusing a split), and **iTerm2 was excluded by construction** — so this closes "no challenger was
+   load-tested", *not* "kitty beats iTerm2".
+7. ✅ **CLOSED by §9.1 — and the desk figure it rested on was wrong.** ~~Ghostty was not measured.~~
+   It scored lowest of the survivors (52) on the strength of its
    scripting story rather than its renderer: per pane it allocates one `NSView` + one plain
    `IOSurfaceLayer` (not a `CAMetalLayer`) and, in the shipped 1.3.1, **three OS threads**. It has no
    working CLI IPC on macOS (`performIpc` returns false) but does ship a full AppleScript dictionary.
    Given WezTerm's measured 7 threads/pane, Ghostty's 3/pane deserves a measurement before it is
    dismissed — it may sit between kitty and WezTerm.
-8. **The all-Metal iTerm2 configuration has never been run**, here or upstream. The claim that
+   → **2026-07-31 PM:** measured at 8 and 24 panes. **4.00 threads/pane exactly, linear, `threads =
+   4N + 6` with residual 0 at three independent pane counts.** The desk "3 threads/pane" figure missed
+   the `cf_release` thread. Ghostty lands **with WezTerm, not near kitty**, and under load it was the
+   most expensive of the three (27.3% app CPU). The one axis where it beats iTerm2's Metal path
+   decisively: **zero** CVDisplayLink threads at any N, and zero added CGWindows from 8→24 panes. Its
+   CLI-IPC gap is real (`+new-window is not supported on this platform`) but AppleScript `split`
+   drives it fine. **Ghostty is eliminated as the recommendation, on measurement.**
+8. ✅ **CLOSED by §9.3 — and it split.** ~~The all-Metal iTerm2 configuration has never been run~~,
+   here or upstream. The claim that
    raising the cap makes things worse is INFERRED from source (§1) and is the sharpest falsifiable
    claim in this document.
+   → **2026-07-31 PM:** the arm **ran**, in an ad-hoc-signed sandbox bundle with its own bundle id and
+   its own `iTermServer`, with both controls passing (positive: `iTermMetalDriver`=158 frames;
+   negative: **exactly 0**). Verdict in §9.3: the per-pane `CAMetalLayer` is **confirmed**, the
+   per-pane `CVDisplayLink` thread is **refuted**, the WindowServer question is **UNDECIDED**, and
+   Metal did **not** come out cheaper on any CPU axis. §1's conclusion survives; §1's mechanism does
+   not.
 
 ---
 
@@ -489,21 +615,371 @@ neither plain tmux nor `-CC` can offer under iTerm2. It also makes the whole
 5. Migrate the 13 capabilities to `kitten @`, starting with `bin/it2-wrapper` (175 lines, the
    chokepoint) rather than `handoff-fire.sh` (4,024 lines).
 
+   ⛔ **HOLD 2026-07-31 PM — do not start this.** Three reasons from §9, none of which existed when
+   this item was written: (a) **"kitty beats iTerm2" is unmeasured** and the only iTerm2 datapoint in
+   the cheap layout matched kitty within ~10% (§9.4a); (b) **two cheaper, more reversible rungs are
+   live and unevaluated** — the 8 knobs have now passed their own recycle gate unmeasured, and plain
+   tmux was dismissed on a premise that is false (§9.6); (c) **the port is ~3× the advertised size**
+   — 611 `it2` hits across 119 files, not 209/73 (§9.4c). Ordering by reversibility is
+   **knobs < tmux ≪ kitty**, and rungs 1 and 2 have not been climbed.
+
+**New rung, ahead of everything expensive.**
+
+6. **Fix the instruments before the next campaign** — §9.5. In particular `terminal-bench.sh` cannot
+   see iTerm2 at all (`pgrep -x iTerm2` rc=1 against a live pid), which makes item 1's own
+   re-measurement command unrunnable, and `terminal-bakeoff.sh` has no lock, a 5 s settle that
+   under-reports 2×, and per-pane arithmetic that overstated Ghostty by 2×.
+
 ---
 
 ## 8. Falsification plan
 
-The recommendation is **wrong** if any of these come back negative, and each is cheap:
+The recommendation is **wrong** if any of these come back negative, and each is cheap.
+**Status column added 2026-07-31 PM — 3 of 7 have now run; the results are in §9.**
 
-| Test | Kills the recommendation if |
-|---|---|
-| kitty, 30 panes, real Claude Code, **6+ hours**, `terminal-bench.sh --interval 1800` | windows/ports/RSS drift is non-zero at constant layout |
-| Claude Code TUI in a kitty pane, visual check | Ink renders incorrectly (glyphs, resize, alt-screen) |
-| kitty across 4 displays at mixed refresh | WindowServer CPU scales with display count worse than iTerm2's |
-| `kitten @ launch --next-to` **without** `--match` | (already known to silently mis-place — needs a guard, not a test) |
-| **all-Metal iTerm2** — 5 windows × 5 panes (Metal, under the cap) vs 5 × 8 (CPU), matched pane count and pixels, `top -l 2` second sample | WindowServer CPU goes **down** in the Metal case ⇒ §1 is wrong, the cap is a real ceiling worth patching, and iTerm2's score rises sharply. **Needs no source build.** |
-| Ghostty at 24+ panes, same Stage-A protocol | Ghostty's 3 threads/pane lands near kitty rather than WezTerm |
-| kitty and WezTerm under **load** (Stage B), not idle | WezTerm's 210 parked threads at 30 panes cost nothing measurable ⇒ the thread finding is a curiosity, not a risk |
+| Test | Kills the recommendation if | Status |
+|---|---|---|
+| kitty, 30 panes, real Claude Code, **6+ hours**, `terminal-bench.sh --interval 1800` | windows/ports/RSS drift is non-zero at constant layout | 🔴 **NOT RUN** — and further away: the 12 h `kadv` evidence was destroyed by the 11:46 reboot (§6.1). Longest read since is 6 min. |
+| Claude Code TUI in a kitty pane, visual check | Ink renders incorrectly (glyphs, resize, alt-screen) | ✅ **RAN — PASSED (glyphs + alt-screen).** CC v2.1.220 captured by window id; sprite logo, box rule, `⚠ ⓘ ▶▶ ›`, 24-bit colour, full-frame alt-screen, no column offset (§6.2). **Resize reflow NOT covered** — one static frame. Operator-run: the classifier denies an agent spawning a nested CC session. |
+| kitty across 4 displays at mixed refresh | WindowServer CPU scales with display count worse than iTerm2's | ⛔ **NOT RUNNABLE** — only 3 displays attached, both externals at 60.00 Hz (§6.3) |
+| `kitten @ launch --next-to` **without** `--match` | (already known to silently mis-place — needs a guard, not a test) | 🔴 **guard still not written** |
+| **all-Metal iTerm2** — 5 windows × 5 panes (Metal, under the cap) vs 5 × 8 (CPU), matched pane count and pixels, `top -l 2` second sample | WindowServer CPU goes **down** in the Metal case ⇒ §1 is wrong, the cap is a real ceiling worth patching, and iTerm2's score rises sharply. **Needs no source build.** | ✅ **RAN (§9.3)** — as specified it was **confounded** (varies renderer *and* pane count *and* pixels), so it was rerun as `UseMetal` flipped at byte-identical layout. **Did not kill it:** Metal cost **+1.07 pp** WindowServer (wrong direction for the kill, and 12× below the noise floor ⇒ UNDECIDED) and **+20.3 pp app CPU** (wrong direction, n=1). But it **voided §1's mechanism** — no per-pane CVDisplayLink thread exists. |
+| Ghostty at 24+ panes, same Stage-A protocol | Ghostty's 3 threads/pane lands near kitty rather than WezTerm | ✅ **RAN (§9.1) — did not kill it.** 4.00 threads/pane linear (`4N+6`, residual 0 at 3 pane counts); lands with WezTerm. The "3 threads/pane" premise was itself wrong. |
+| kitty and WezTerm under **load** (Stage B), not idle | WezTerm's 210 parked threads at 30 panes cost nothing measurable ⇒ the thread finding is a curiosity, not a risk | ✅ **RAN (§9.2) — this kill condition FIRED.** WezTerm's 87 threads under load produced **4,917 csw/s vs kitty's 10 threads at 5,280 csw/s**, 0 idle wakeups, 2 of 86 runnable. **The thread finding is a curiosity.** The recommendation survives on a *different* axis (loaded app CPU 9.5% vs 24.4%), not on threads. |
+
+### New falsification tests this session opened
+
+| Test | Kills the recommendation if | Why it is now the priority |
+|---|---|---|
+| **iTerm2 vs kitty, byte-matched Stage-B load, same session, 1 window each** | iTerm2 in one window matches kitty ⇒ there is no measured performance case for migrating | The only iTerm2 loaded datapoint that exists (§9.3 arm B: 1 window × 20 panes, CPU renderer → **10.5% app CPU, 9 threads**) sits within ~10% of kitty's 9.48% / 10 threads — **and its own load telemetry recorded 0 frames, 0 bytes, fps 0.00 SUSPECT**, so it proves nothing in either direction. Blocked on the `pgrep` defect in §9.5. |
+| **Re-measure the 8 render knobs now that the panes have recycled** (§7.1's own gate) | the knobs recover a meaningful share of the cost ⇒ the free rung beats the expensive one | The gate is now satisfiable: knobs written 06:50Z, iTerm2 pid 591 started 11:46:52 — the whole app is post-write, `iterm2-perf-parity.sh` reads `match=9 drift=0 unset=0`, and a live profile shows two knobs working on the exact named mechanisms. **Never evaluated.** |
+| **Plain tmux inside one iTerm2 window, per-pane addressing via `#{pane_id}`** | it delivers one surface for N panes *and* real per-pane ids ⇒ kitty's structural advantage is not unique | §5b dismissed plain tmux on "per-pane addressing is architecturally absent". Refuted live in an isolated tmux 3.6a server: `list-panes -F '#{pane_id}'` → `%0`; `split-window -t %0 -h -P -F '#{pane_id}'` → `%1`; `display -p -t %1 '#{pane_tty}'` → `/dev/ttys050`. All three primitives exist natively. See §9.6. |
+| **Replicate the 2.35× window/surface harness** | it does not reproduce ⇒ the document's most-cited number has no artifact | The Cocoa/IOSurface harness was **never committed** (`git log --all --diff-filter=A` finds no such file) and `/tmp` was destroyed by the reboot. See §9.4. |
+
+---
+
+## 9. 2026-07-31 PM — live measurement session
+
+**What ran:** 4 recon agents (Ghostty drivability · all-Metal protocol design · noise-floor
+characterisation · WezTerm thread pricing), 3 serial measurement arms (M1 Ghostty Stage-A · M2 loaded
+head-to-head · M3 all-Metal counterfactual), and 3 adversarial refuters against the three most
+load-bearing claims in §§1–5. **All three refutations came back REFUTED** — unlike the 2026-07-30
+adversarial phase, which never returned.
+
+**Box state — measure it, do not inherit it.** The machine **hard-rebooted at 11:46:47** (kernel
+spinlock-timeout panic, `locks.c:446`, provoked by an earlier agent's thread-exhaustion probe at
+8,368 threads in one task). Every pre-11:46 absolute in this document is stale. During this session
+loadavg swung **6.06 → 132.76** with sibling agents on the box, so **only interleaved bracketed
+deltas are admissible**, and several arms were cut short by the >12-WAIT / >25-ABORT rule.
+
+### 9.0 The measurement result that governs how to read every number here
+
+Recon 3 characterised this box's noise before any arm ran, and the answer is that **the axis the
+freeze actually lived on is not measurable here at the n this session could afford.**
+
+| axis | verdict | evidence |
+|---|---|---|
+| per-process **threads** | ✅ trustworthy | WezTerm held th=40 / ports=389 / RSS=188M **identical across 12 consecutive samples** spanning loadavg 11.49→23.86 and WindowServer 33.1→48.0%. iTerm2 threads sd **0.00** over n=10. |
+| per-process **ports**, **RSS** | ✅ trustworthy | cv 0.5–2.5% |
+| **CGWindow** counts | ✅ trustworthy | single instantaneous enumeration, no CPU term |
+| GPU:CPU **symbol ratio** | ✅ trustworthy | contamination scales numerator and denominator together |
+| **WindowServer CPU %** | ❌ **unusable at low n** | bracketed-residual SD **4.44 pp** intra-arm ⇒ **MDD 12.44 pp at n=1, 4.15 pp at n=9**. Worse, it is **sign-inverted**: removing a live 40-thread arm moved WindowServer CPU **UP by 8.11 pp**. |
+| **WindowServer mach ports** | ❌ **instrument dead** | range 193 across 12 samples at constant layout, non-monotonic. Historical leak signal was "+32 ports over ~10 min". **Noise ≈ 6× signal.** |
+| **loadavg**, box **idle %**, box **total threads** | ❌ never a readout | loadavg 2.08× swing at constant layout; idle% cv ~50% in *both* conditions |
+
+⇒ Every WindowServer-CPU number below is reported with its noise floor attached, and none of them
+decides anything. The structural axes carry this session's conclusions.
+
+### 9.1 Ghostty, measured (closes §6.7) — LINEAR, not flat
+
+Driven via AppleScript `split` (no CLI IPC exists on macOS: `+new-window is not supported on this
+platform`), scoped to a window id the arm created, bracketed by baselines on both sides because
+another agent's 4 stale Ghostty terminals could not be torn down under the safety rule.
+
+| N (app-wide terminals) | threads | ports | RSS | CGWindows (onscreen) |
+|---|---|---|---|---|
+| 4 (baseline, foreign) | 24 | 438.7 | 134 MB | 16 (2) |
+| 12 (8 mine) | 54 | ~584 | 237 MB | 17 (3) |
+| 28 (24 mine) | 118 | ~867 | 418 MB | **17 (3)** |
+| 4 (post-teardown) | 22 | 427 | 158 MB | 16 (2) |
+
+- **`threads = 4N + 6`, residual 0 at three independent pane counts** (N=12 → 54; N=28 → 118;
+  post-teardown N=4 → 22). Slope `(118−54)/(28−12)` = **exactly 4.00/pane**.
+- **Independently confirmed by thread-name census**, which is immune to base-pool drift: at 12
+  terminals `renderer=12, io=12, io-reader=12, cf_release=12`; at 28 terminals `28/28/28/28`. The
+  prior desk figure of 3 threads/pane **missed `cf_release`**.
+- **Growing 8 → 24 panes added 0 CGWindows and 0 onscreen pixels.** Linear in the cheap axis only.
+- **Zero CVDisplayLink threads at any N** — the axis §1 convicts iTerm2's Metal path on.
+- **Metal is the only backend in the binary** (`strings` yields exactly `renderer.generic.Renderer`
+  and `renderer.Metal`; no OpenGL, no CPU rasterizer to fall back to). Under repaint at 24 panes: **48
+  call-graph frames** in `renderer.Metal.{updateFrame, rebuildRow, addGlyph, rebuildCells}` vs **0**
+  in `CGContext|ripc_|argb32|CGSBlend`. **21 distinct renderer threads** built frames concurrently
+  while the main thread sat **6312/6312 samples** parked in the AppKit event loop with **0** frames in
+  `psynch_mutexwait|semaphore_wait_trap|ulock_wait`.
+- **No drift** over 6 min at constant 24-pane layout: threads flat at 118, ports non-monotonic range
+  8, RSS +1 MB. (Too short for a leak verdict — see §6.1.)
+- **Ceiling reached, not omission:** Ghostty spends **2 processes per idle pane** (3 per *loaded*
+  pane — it inserts `/usr/bin/login`), so 24 panes = 56 processes against the 64-process safety
+  ceiling. 30 panes would be 68. **Nothing above 24 was measured**; the 30/40-pane rows are arithmetic
+  from `4N+6`, not readings.
+
+> **Not established:** GPU *submission* at 24 panes. The frame **build** is proven Metal, but 0
+> AGX/IOSurface/QuartzCore frames were recorded because Ghostty's window was **occluded** (census
+> `on=0, 0.00 Mpx`) — the driving tooling runs inside the operator's iTerm2, which re-raises itself.
+> Recon 1 *did* observe the full `renderer.Metal.drawFrame → AGXG13XFamilyRenderContext::drawPrimitives
+> → AGX::RenderContext::encodeAndEmitRenderState` chain at 4 panes with a visible window. It was not
+> reproduced at 24.
+
+### 9.2 The first byte-matched loaded head-to-head (closes §6.6)
+
+18 panes per candidate, 10 fps, `scripts/tui-load.sh`. **Load parity verified, not assumed:** every
+loaded pane in every arm reported **exactly 10.00 achieved fps** (min = max = 10.00 for 18/18, 19/19,
+18/18), **zero SUSPECT rows**. kitty's window resize succeeded so its panes were *larger* — it carried
+**8.45 MB/pane vs 6.90 / 6.94** for the others.
+
+| | kitty | WezTerm | Ghostty |
+|---|---|---|---|
+| **app CPU under load** | **9.48%** (replicate 8.77%) | **24.36%** (replicate 23.28%) | **27.32%** (no replicate) |
+| **CPU per KB/s delivered** | **0.0122** | 0.0364 (**3.0×**) | 0.0429 (**3.5×**) |
+| threads (marginal/loaded pane) | 10 (**0.11**) | 87 (4.28) | 98 (4.89) |
+| **context switches/s** | 5,280 | **4,917** | 6,386 |
+| idle wakeups added | 2 | **0** | 0 |
+| runnable threads at profile | 0 R / 9 S | **2 R / 84 S** | 0 R / 97 S |
+| GPU : CPU-raster frames | 375 : 15 | 299 : 0 | 897 : 0 |
+| RSS / loaded pane | 3.7 MB | 5.8 MB | 22.4 MB |
+| onscreen painted area | 4.61–6.15 Mpx | **0.26 Mpx** | 2.48 Mpx |
+
+**Two conclusions, and they are not the same conclusion.**
+
+1. **kitty is 2.6–2.9× cheaper on app CPU than either rival, and that ordering is a lower bound** —
+   kitty simultaneously carried the most bytes per pane *and* ~18× the painted area of WezTerm, and
+   still spent the least CPU. This is the strongest challenger result in the document.
+2. **§8's thread kill-condition fired.** WezTerm's **87 threads produced FEWER context switches than
+   kitty's 10** (4,917 vs 5,280/s), zero idle wakeups, and 2 of 86 runnable. Recon 4 priced a parked
+   thread independently: **24.4 KB user-resident** (`vmmap`: 992 KB dirty / 40 threads) + **16 KB
+   wired kernel stack** (`kern.stack_size`) ≈ 40 KB, i.e. **~4.8 MB for 30 panes** — 0.55% of
+   WezTerm's own per-pane RSS, and 1.4% of the 8,368-thread empirical panic point. Recon 4 also
+   classified the quartet: `mux::read_from_pane_pty` (blocking pty read) · `mux::parse_buffered_data`
+   (VT parse) · `portable_pty Child::wait` (reap) · `mpmc Channel::recv` (park) — **0 of 40 runnable**
+   at idle, all in a kernel trap, spawned at split time, one shared `async-io` reactor. **Threads are
+   not the cost. Retire the §2 ranking rationale.**
+
+> **The WezTerm-vs-Ghostty ordering is NOT safe and should be read as a tie**: the forced 1600×1000
+> geometry took for kitty and Ghostty and **silently failed for WezTerm** (0.26 Mpx), so Ghostty
+> painted ~6× WezTerm's area and renderer cost cannot be separated from pixel count. Only the
+> kitty-vs-both ordering survives the confound, and it survives it in the conservative direction.
+>
+> **N=18, not 30–40.** The binding constraint was the **64-process safety ceiling**, not any terminal
+> refusing a split — `tui-load.sh` costs 2 processes per pane (3 under Ghostty). All three spawners
+> reported "spawned 18 of 18". Reaching 30–40 inside the ceiling requires `tui-load` to **exec** the
+> perl emitter instead of forking it (1 proc/pane) — a change to a shared instrument, deliberately not
+> made mid-campaign.
+
+### 9.3 The all-Metal iTerm2 counterfactual (closes §6.8) — §1 splits in half
+
+Run in an **ad-hoc-signed sandbox copy** with its own bundle id (`com.googlecode.iterm2.allmetalbench`)
+and its own `iTermServer` — the operator's live iTerm2 was never a target (only two read-only
+`count of windows` queries were addressed to it; pid 591 ended the session with the same 3 windows).
+
+Three protocol defects were found and fixed **before** the arm, each of which would have produced a
+vacuous pass:
+
+1. **Recon 2's sandbox was unlaunchable as specified** — `-o runtime` re-enables Library Validation,
+   so an ad-hoc main binary may not load ad-hoc frameworks (`dyld` abort: *"mapping process and mapped
+   file (non-platform) have different Team IDs"*). Fix: drop the hardened-runtime flag (flags
+   `0x10002` → `0x2`). The entitlement route (`disable-library-validation`) was **classifier-denied**.
+2. **The `UseMetal` lever was inert.** The protocol wrote prefs to `$BENCH_HOME/Library/Preferences/`
+   (353 B, never read); the app reads `~/Library/Preferences/<bundleid>.plist` —
+   `NSSearchPathForDirectoriesInDomains` ignores `$HOME`. **Arm C would have been a second Metal arm.**
+3. **The handed-down Metal verifier was wrong.** Distinct `CAMetalLayerEventListenerQueue` dispatch
+   ids read **4, then 0, then 2** at unchanged layout while `iTermMetalDriver` read **75, 70, 98** in
+   the same samples — used as the negative control it would have **passed vacuously on a fully-Metal
+   arm**. Control moved onto `iTermMetalDriver == 0`.
+
+Controls then held: positive `iTermMetalDriver`=158 frames vs `iTermTextDrawingHelper`=20; negative
+**`iTermMetalDriver` = 0 exactly**, `get-drawable` = 0, layer queues = 0. One rep was **discarded as
+void** on three independent grounds (achieved 8w/40p instead of 4w/20p; positive control gpu=0 with
+UseMetal=YES; probe returned `0 0 0 0` = NO-DATA) — **including it inverted the result to "Metal 12.2
+pp cheaper", the exact vacuous-pass shape.**
+
+| §1 sub-claim | verdict | measurement |
+|---|---|---|
+| one **`CAMetalLayer`** per Metal pane | ✅ **CONFIRMED** | **20 distinct** `CAMetalLayerEventListenerQueue` ids at 20 Metal panes, **0** in both CPU arms. Plus 20 `com.Metal.CommandQueueDispatch` + 21 `CompletionQueueDispatch` ⇒ **~3 dispatch queues per Metal pane**, *more* granular than §1 states. (Lower bound that saturated at the pane count — a layer-tree read is still the missing instrument.) |
+| one **`CVDisplayLink` thread** per Metal pane | 🚨 **REFUTED** | **0** occurrences of `CVDisplayLink\|CADisplayLink\|iTermDisplayLink` in **either** arm. Threads: **12.0** (20 Metal panes) vs **10.5** (20 CPU panes) = **+1.5 total = +0.075/pane**. §1 predicts +20. **At 30 panes: §1 says +30 threads; measurement says +2.3 to +4.5.** |
+| one **`NSTimer`** per Metal pane | ⚪ untested | 2 hits vs 0 in 10 s samples — presence, not a per-pane count |
+| **the ≤5-panes-per-tab cap** | ✅ **CONFIRMED BY MEASUREMENT** (first direct observation; previously only read from source) | `UseMetal=YES` with **20 sessions in ONE tab** → `iTermMetalDriver` = **0 frames**, drawable = 0, layer queues = 0. **The pref was ON; the cap overrode it.** |
+| **Metal costs more WindowServer CPU** | ⚠️ **UNDECIDED** | Metal − CPU = **+1.07 pp** at 20 panes (Δ_Metal −1.40, Δ_CPU −2.47 mean of 2), against an **MDD of 12.44 pp at n=1**. ~12× below the noise floor. **An underpowered null is not a confirmation of §1** — §1 predicts a *positive* effect. Needed n≥9; a sibling agent drove loadavg to 132 and the ABORT rule fired. |
+| **Metal costs more app CPU** | 🟡 **SUGGESTIVE** | **96.5%** (20 Metal panes) vs **76.2%** mean of 71.9/80.5 (20 CPU panes, identical geometry/fps) = **+20.3 pp, +1.01 pp per Metal pane**. n=1 vs n=2, **no measured noise band for the sandbox**. Metal was *cheaper* on memory (−58 MB) and cost +89.5 mach ports. |
+
+**Net effect on §1: the conclusion survives, the mechanism does not.** Metal did not come out cheaper
+on any CPU axis, so "the cap is protecting you" is not contradicted — but it is now supported (weakly,
+n=1) by *app* CPU and per-pane `CAMetalLayer`/dispatch-queue count, **not** by display-link threads,
+which do not exist on 3.6.11. Any future argument for or against raising the cap must be rebuilt on
+the confirmed half.
+
+**Also unmeasured, and it is the test that would actually decide whether raising the cap is
+dangerous:** §1's freeze path is main-thread blocking in `acquireScarceResources` /
+`com.iterm2.get-drawable`. The drawable queue was observed present in the Metal arm and absent in the
+CPU arms, but **main-thread samples inside `psynch_mutexwait` versus paint frames were never counted**.
+
+**Bonus result — the window axis relocates into the application.** Renderer held **constant** (both
+CPU-rendered), 20 panes, matched **3.36 Mpx** onscreen: **4 windows × 5 panes = 76.2% app CPU vs
+1 window × 20 panes = 10.5% app CPU — 7.3×** — while every WindowServer bracketed delta in that same
+run was *negative*. ⚠️ **n=1 and work-matching is unproven** (see §9.4). Direction corroborates
+"windows are the expensive unit"; magnitude does not transfer, and the *location* of the cost does not.
+
+### 9.4 Adversarial phase — all three load-bearing claims REFUTED
+
+**(a) "kitty beats iTerm2" — REFUTED as stated (high confidence).** The compression half survives;
+the performance half was never measured and the instrument forbids it.
+`scripts/terminal-bakeoff.sh:200-201` **hard-forces `MEASURE_ONLY=1` for iTerm2**, so the shipped
+driver *structurally cannot* run a loaded iTerm2 arm — and §9.2, the only byte-matched head-to-head,
+excluded it. The one iTerm2 arm in the cheap layout (§9.3 arm B: 1 window × 20 panes, CPU renderer)
+read **10.5% app CPU / 9 threads / 683 ports / 1 window** against kitty's **9.48% / 10 threads** at 18
+loaded panes — **within ~10% on both axes**, and iTerm2 there is 0.45 threads/pane, **as flat as
+kitty**. The thread axis that "reversed the desk ranking" convicts WezTerm and Ghostty, not iTerm2.
+**But that arm's own load telemetry is void**: `/tmp/allmetal/load.tsv` exists (816 B) and every data
+row reads `frames=0 bytes=0 fps=0.00 SUSPECT` — all arms wrote to one shared path. **So iTerm2 has
+zero valid loaded measurements at any pane count, and the comparison fails in both directions.**
+Separately, the live "kitty at 30 panes" evidence on the box is **not a load**: all 30 children are
+`while :; do date +%H:%M:%S; sleep 5; done` ≈ **1.8 B/s/pane**, against tui-load's ~35 KB/s/pane —
+~19,000× less — and its window is **not composited at all** (`win=36 on=0 0.00 Mpx`) while iTerm2 sits
+at `win=20 on=7 9.77 Mpx`.
+
+**(b) "Windows are the expensive unit (2.35×), panes nearly free (1.17×), so the fix is grouping, not
+the renderer" — REFUTED (high confidence) on the second clause; the ordering survives.**
+- **The harness does not exist.** `git log --all --diff-filter=A` since 2026-07-25 finds no
+  `.swift`/`.m` harness file but `window-census.swift`; it is absent from this document's own
+  artifacts list; `/tmp` was destroyed by the reboot. **The most load-bearing number here is a
+  citation, not a replayable artifact.**
+- **The 1.17× half is an underpowered null.** The pane effect is 11.2 − 9.6 = **1.6 pp** at 5 reps,
+  against this box's MDD(n=5) of **5.56 pp** intra-arm. "Panes are nearly free" is a **non-verdict read
+  as a measurement**. (The 11.4 pp window effect *does* clear even the pessimistic MDD.)
+- **The effect cannot explain the phenomenon.** The harness's entire dynamic range across all four
+  arms is **13.0 pp**; the freeze was WindowServer at **92.7–99.9%** — an ~85 pp excursion. At the
+  operator's actual ~8 real windows the realizable grouping gain interpolates to **~6.3 pp**, i.e.
+  ~7–13% of the observed event.
+- **The freeze doc already falsified window-count as the driver**, verbatim: *"WindowServer CPU swung
+  52% → 98% at **constant** window count."* A 46 pp swing at constant windows is 3.5× the whole harness
+  range.
+- **The two halves are inconsistent unless "window" is silently redefined** — the same harness found
+  200 idle onscreen windows indistinguishable from baseline, so 2.35× applies **only** to windows
+  repainting at 20 Hz. Live census now: **314 CGWindows, 296 offscreen, 18 onscreen, 37.7 Mpx**, with
+  WindowServer at 52.3% and not frozen. The applicable population is ~18, of which iTerm2 owns 7 — not
+  30, not 98. And 314 × 30 MB = 9.2 GB against WindowServer's actual **1,283 MB** RSS: the per-window
+  memory figure fails by ~8× on the same census.
+- **On real terminals the window penalty relocates OUT of the compositor** (§9.3 bonus: 7.3× on *app*
+  CPU while every WindowServer delta was negative), which makes "grouping, **not** the renderer" the
+  wrong disjunction — an app-CPU window penalty *is* a per-terminal renderer property.
+- **What survives:** the **ordering**. The marginal decomposition of the harness's own arms is
+  stronger than 2.35× (0.393 pp/window vs 0.055 pp/surface ≈ 7×), and §9.3's 7.3× points the same way.
+  Grouping is probably a real win. It is small, unreproducible, inapplicable to the layout the operator
+  actually runs, and insufficient as a cause — so it cannot carry the "so".
+
+**(c) "Migrating off iTerm2 is worth it — 209 hits collapse to 13 capabilities" — REFUTED (medium
+confidence) on the cost framing, not the arithmetic.** The **13 capabilities figure held under attack**
+(the distinct `it2` verb set really is ~13: session, close, window, ls, split, write, send, keystroke,
+capture, force-close, notify, run, ping). What failed:
+- **The counts are wrong and internally inconsistent.** At the doc's own commit `git grep` returns
+  **217 hits / 75 files**, not 209/73. §4's decomposition says "36 (of 41 …) plus 48 test files" =
+  89 files, which cannot sit inside a 73-file total; the tree has **21** test files, not 48.
+- **`ITERM_SESSION_ID` is ~35% of the coupling.** On the same tree: `it2` = **611 hits / 119 files**;
+  `osascript` = 288 / 80; `iTerm2|iTerm.app|com.googlecode.iterm2` = 621 / 144. **The port is ~3×
+  larger than "209 hits" implies.**
+- **The two cheaper rungs were never evaluated, and one was dismissed on a false premise.** See §9.6.
+- **The reversibility ordering is knobs < tmux ≪ kitty**, and the two cheap rungs are unmeasured.
+
+### 9.5 Instrument defects found this session — fix before the next campaign
+
+| defect | location | consequence |
+|---|---|---|
+| 🚨 **`pgrep` cannot see iTerm2 on this box** | `scripts/terminal-bench.sh` keys presence on `pgrep -x` | `pgrep -x iTerm2` **and** `pgrep iTerm` both return rc=1 against live pid 591 whose `ps -o ucomm` is exactly `iTerm2` (`pgrep -x ghostty` works; re-verified this session). ⇒ `--app iTerm2` emits **`verdict=NO-DATA` for the one terminal the decision is about**, and §7.1's own re-measurement command is structurally unrunnable. `ps` reads the same kernel table and *does* see it. |
+| per-pane arithmetic divides app-wide totals by the **user-typed** `--panes` | `terminal-bench.sh:235-242` | no baseline subtraction, no measured denominator. Printed **8.00 threads/pane** for Ghostty against a marginal truth of **4.00**, and `threads/pane 0.87 · MB/pane 49.5` for iTerm2 whose numerator contains 20 CGWindows and hours of scrollback. |
+| driver invokes the bench with `--interval 0` | `terminal-bakeoff.sh:242` | the bench's own header says `--interval 0` **always yields PARTIAL**. ⇒ every driven arm has **no drift verdict and no bracketing baseline** — absolute levels only. |
+| **no serialization** | zero `flock` in `terminal-bakeoff.sh` | a sibling agent drove a 24-pane Ghostty arm **through** M2's WezTerm round-2 arm. Needs a repo-wide lock held across spawn + settle + reps + teardown + recovery. |
+| `sleep 5` settle **under-reports 2×** | `terminal-bakeoff.sh:135` | WezTerm climbed 14 → 17 → 21 → **40** threads over ~90 s. A read at +5 s records ~17 against a true 40. Criterion: two consecutive equal thread reads. |
+| `BAKEOFF_MAXLOAD` defaults to **40** | `terminal-bakeoff.sh:36` | 3.3× looser than the safety rule (WAIT 12 / ABORT 25). Gate **admission only** — never retroactively void a completed reading on load, since load is not attributable to the arm. |
+| kitty control socket is a **global** path | `terminal-bakeoff.sh:111,223` | `unix:${TMPDIR:-/tmp}/kitty-bakeoff` — `$TMPDIR` is one per-*user* directory. Two concurrent kitty arms silently merge and each reads the other's denominator. |
+| `tui-load.sh` costs **2 processes per pane** (3 under Ghostty) | shared instrument | the 64-process ceiling binds at **18–24 panes**, which is why nothing in this session reached 30–40. Fix: `exec` the perl emitter instead of forking it. |
+| `--interval 0` / shared load-stats path ⇒ matched-work control silently absent | M3 harness | `load.tsv` rows all `fps=0.00 SUSPECT` ⇒ the one iTerm2 loaded datapoint has **no verified work behind it**. |
+| a **CPU-ordered `top`** manufactures NO-DATA | ad-hoc census scripts | `top -l 2 -n 400 -o cpu` dropped Ghostty from two consecutive samples purely because it sat at 0.0% CPU, while `ps` proved it alive with 22 threads. Presence must be `pgrep -x` or pid-scoped. (`terminal-bench.sh` is already pid-scoped and immune.) |
+
+**Protocol for the next campaign** (recon 3, derived from measured noise, **not yet validated by
+running it**): repo-wide `flock`; **ABBA** arm ordering, never AABB (the box drifted loadavg 10 → 24 →
+9 inside 12 minutes); statistic = `arm_i − mean(base_before, base_after)` (SD = 1.22σ vs 1.41σ for a
+single trailing baseline, and it is the only form that removes drift); settle ≥60 s **with a
+stationarity check**; minimum reps **per axis** — threads n=1, ports n=3, app RSS n=5, WindowServer CPU
+**n=9 floor**, WindowServer ports **no n closes it**; tear down and re-verify the floor between arms.
+
+### 9.6 The two cheaper rungs, both unevaluated — this is now the top of §7
+
+**(i) The 8 render knobs are LIVE and have never been measured.** §7.1 gated them on "re-measure after
+a recycle". **That gate is now satisfiable and nobody has walked through it:** the knobs were written
+**06:50Z**, iTerm2 pid 591 **started 11:46:52** — the entire app and every `PTYSession` in it is
+post-write; `scripts/iterm2-perf-parity.sh` returns **`match=9 drift=0 unset=0`**; and a live 5 s
+`sample 591` shows two knobs working on the exact mechanisms the SSOT names — `__sysctl` = **8**
+samples (against 803 samples doing `__sysctl` ×387 pre-change ⇒ `fastForegroundJobUpdates=false`
+landed) and `drawForegroundForBackgroundRunArrays` = **3** (⇒ `DimInactiveSplitPanes=false` landed, the
+slow dimmed-text path is gone).
+**But the knobs have a measured ceiling:** the same post-knob profile reads
+`iTermTextDrawingHelper` = **247** call-graph frames vs `iTermMetalDriver` = **110** — the legacy CPU
+glyph path still carries **~69% of drawing frames**, which is the 1.39-core main-thread bottleneck, and
+**no knob in the set addresses it**. Note also that "iTerm2 is at ~83% CPU" is **not evidence in either
+direction**: five interleaved second-samples of pid 591 gave **52.6, 112.3, 112.6, 101.5, 101.3%** — a
+60 pp swing inside 20 seconds — against an MDD of 30.4 pp at n=1.
+
+**(ii) Plain tmux was dismissed on a defect that does not exist.** §5b rejects it because *"every tmux
+pane shares ONE iTerm2 UUID … no resolver can recover an id that was never allocated."* All three
+required primitives were tested live in an isolated tmux 3.6a server (own socket, torn down):
+
+```
+tmux list-panes  -F '#{pane_id}'                    → %0        # (1) opaque pane id
+tmux split-window -t %0 -h -P -F '#{pane_id}'       → %1        # (2) create adjacent, learn id
+tmux display -p  -t %1 '#{pane_tty}'                → /dev/ttys050   # (3) id → tty
+```
+
+The objection is to keying on `ITERM_SESSION_ID` — which §4 counts as a **free** port for kitty
+(`→ $KITTY_WINDOW_ID`) and a **fatal** one for tmux (`→ $TMUX_PANE`). **Same call sites, same work,
+opposite verdict.** Nor does the `-CC` evidence bear on plain tmux: the 2960 → 3263 MB result is
+*control mode*, where iTerm2 allocates a native session per tmux pane. **Plain tmux is ONE iTerm2
+session for N panes** — which is simultaneously (a) the cheap grouping §1 credits only to kitty and
+(b) the configuration in which the ≤5-panes-per-tab Metal cap **stops binding at all** (§9.3 measured
+that cap directly). And the integration cost runs the *other* way: the Claude Code binary ships
+**`TmuxBackend` (39 symbols) and a persisted `preferTmuxOverIterm2` flag**, and ships **no kitty
+backend** (§5a) — so kitty forfeits a native backend that tmux keeps.
+
+### 9.7 Safety record
+
+- **One incident.** M2's teardown reaped "all descendants of the app pid" and **killed 4 foreign
+  Ghostty pane processes** belonging to another agent's earlier probe, closing their 2 windows.
+  Ghostty (pid 584) survived and no operator work was in it — it had 0 windows at boot and every
+  surface since has been an agent probe — but this violated *"only tear down terminals YOU launched"*.
+  A `PRE_DESC` snapshot-and-exclude guard was added immediately after and reported "foreign descendants
+  EXCLUDED: 0" on the two subsequent arms, i.e. **the guard is present but has never had a foreign
+  descendant to exclude — untested against the condition it exists for.** Same for an EXIT-trap
+  teardown added after a loadavg abort left 18 loaded panes live.
+- **Ghostty is one shared process** — `pkill -x ghostty` would take foreign surfaces with it. Teardown
+  must always be by window id.
+- **The operator's iTerm2 was never written to.** pid 591 untouched from boot through session end,
+  same 3 windows; `iTermServer` pid 1067 alive.
+- **Ceilings held.** Peak footprint across all arms: 24 panes / 119 threads / 63 processes / 8 windows,
+  against 512 threads / 64 panes / 16 windows / 64 processes. No escalation ladder was run anywhere;
+  every slope is a two-or-three-point fit inside the cap. `kern.num_taskthreads` = 16,384 and
+  `kern.num_threads` = 81,920 were **read from sysctl, never probed** — note the 11:46 panic occurred
+  at **8,368 threads in one task, ~51% of the documented per-task limit**, and the failure mode was a
+  **spinlock-timeout panic, not `EAGAIN`**. That is a finding in its own right: the practical ceiling
+  is roughly half the documented one and it does not fail safe.
+
+### 9.8 Where the answer stands after this session
+
+| | before | after |
+|---|---|---|
+| kitty vs WezTerm | on **threads** (~7/pane) | on **loaded app CPU** (2.6×). The thread rationale is retired — WezTerm is 4.00/pane and its threads cost nothing measurable. |
+| kitty vs Ghostty | unmeasured | **kitty**, on loaded app CPU (2.9×) and threads (0.11 vs 4.89/pane). Ghostty eliminated. |
+| **kitty vs iTerm2** | asserted | **still unmeasured** — and the single iTerm2 datapoint in the cheap layout matched kitty within ~10% on CPU *and* threads, with void load telemetry. |
+| §1 "the cap is protecting you" | inferred from source | **conclusion holds, mechanism half-refuted**; the cap itself is now confirmed by direct measurement |
+| "windows are the 2.35× unit" | headline | **ordering survives; magnitude unreproducible, the pane null is underpowered, and the cost relocates into the app on real terminals** |
+| migration | recommended after §6.1 closes | **do not start.** Two cheaper rungs (knobs, plain tmux) are live/available and unevaluated, and the port is ~3× the advertised size. |
 
 ---
 
@@ -524,6 +1000,13 @@ lead's independent `terminal-bench.sh` — agreeing that thread count is flat in
 **What remains unrefuted by anyone**, and is therefore where a reader should push first: kitty's
 multi-hour behaviour, kitty under real Claude Code, and the all-Metal iTerm2 counterfactual (§6, §8).
 
+> **UPDATE 2026-07-31 PM — the adversarial phase ran, and it returned.** Three refuters attacked the
+> three most load-bearing claims in this document (§§1, 2, 4/5) and **all three came back REFUTED**
+> — see §9.4. The all-Metal counterfactual named above as unrefuted has now also been **run** (§9.3).
+> The two that remain genuinely untouched are **kitty's multi-hour behaviour** (which moved
+> *backwards* — the 12 h evidence was destroyed by the reboot) and **kitty under real Claude Code**
+> (never attempted, and the cheapest open item in the document).
+
 ## Instruments added by this investigation
 
 - `tools/terminal-bench/window-census.swift` — root-free `CGWindowList` census, app-agnostic, sends
@@ -542,6 +1025,14 @@ multi-hour behaviour, kitty under real Claude Code, and the all-Metal iTerm2 cou
 - `tests/iterm-metal-bench-app.bats` — 8 tests. The two that matter are negative controls for the
   two ways this artifact silently lied: a bundle that `codesign --verify` passes but cannot launch,
   and a bundle that launches but carries the stock cap.
+
+⚠ **2026-07-31 PM: every instrument above has at least one measured defect — see §9.5 before
+believing any per-pane figure it prints.** The most severe: `terminal-bench.sh` **cannot see iTerm2**
+(`pgrep -x` rc=1 against live pid 591) and emits `verdict=NO-DATA` for the incumbent; both scripts
+compute per-pane figures by dividing app-wide totals by the *requested* pane count, with no baseline
+subtraction and no measured denominator; and `terminal-bakeoff.sh` holds no lock, so concurrent arms
+silently interleave. Also note `window-census.swift`'s `layers=N` column counts distinct **CGWindow
+Z-order values, not CALayers** — reading it as a CALayer count would falsely close §6.5.
 
 Related: `iterm2-freeze-30-sessions-2026-07-30.md` · `gpu-vs-cpu-lag-2026-07-29.md` ·
 [[capability-initialized-is-not-capability-used]] · [[positive-control-the-denominator]] ·
