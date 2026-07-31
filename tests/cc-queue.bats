@@ -148,14 +148,14 @@ touch_transcript() { # $1=sid $2=epoch mtime
 @test "C7: a pid that is NOT a live claude owner ⇒ done" {
   telem sid-d 999999; touch_transcript sid-d 999990    # transcript warm, but pid is not an owner
   run "$Q" --json
-  [ "$(echo "$output" | jq -r '.[]|select(.sid=="sid-d").state')" = done ]
+  [ "$(echo "$output" | jq -r '.[]|select(.sid=="sid-d").state')" = 'done' ]
 }
 
 @test "C7: liveness requires the COMMAND to match, not merely a live pid" {
   export CC_QUEUE_PS="echo 4242 some-unrelated-process"   # pid alive, but not a claude session
   telem sid-r 4242; touch_transcript sid-r 999990
   run "$Q" --json
-  [ "$(echo "$output" | jq -r '.[]|select(.sid=="sid-r").state')" = done ]
+  [ "$(echo "$output" | jq -r '.[]|select(.sid=="sid-r").state')" = 'done' ]
 }
 
 # ── C8 — ordering: the exception queue is what the operator sees first ───────────────────────────
