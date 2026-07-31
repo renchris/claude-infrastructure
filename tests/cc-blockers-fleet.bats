@@ -426,6 +426,38 @@ setup() {
   [ "$(pstates)" = "LIVE-ONLY " ]
 }
 
+# The complement of the test above, and the case it did NOT cover: staged/ is out of scope on the
+# REPO side (a staged plist is never REPO-ONLY — that is the invariant above), but a staged plist
+# that IS live still has a committed SSOT. com.claude.relogin went live on 2026-07-30 and this tool
+# called it "installed but never committed to launchd/", handing the operator
+# `cp <live> launchd/com.claude.relogin.plist   # then commit it` — which install.sh:452 would then
+# glob and bootstrap on the next routine install, auto-activating credentials automation. The alarm
+# was false and its remedy would have destroyed the guard the staging exists to provide.
+@test "parity: a live plist whose SSOT is committed under staged/ is NOT live-only" {
+  plist "$CC_BLOCKERS_LAUNCHAGENTS_DIR"   com.claude.relogin same
+  plist "$CC_BLOCKERS_PLIST_REPO/staged"  com.claude.relogin same
+  [ "$(pstates)" = "" ]
+  # ...and it is still never REPO-ONLY: the repo-side glob stays non-recursive.
+  rm -f "$CC_BLOCKERS_LAUNCHAGENTS_DIR/com.claude.relogin.plist"
+  [ "$(pstates)" = "" ]
+
+  # POSITIVE CONTROL: drop the staged SSOT and the LIVE-ONLY row returns, so the silence above is
+  # the staged lookup and not a leg that stopped firing.
+  plist "$CC_BLOCKERS_LAUNCHAGENTS_DIR" com.claude.relogin same
+  rm -f "$CC_BLOCKERS_PLIST_REPO/staged/com.claude.relogin.plist"
+  [ "$(pstates)" = "LIVE-ONLY " ]
+}
+
+@test "parity: drift against a staged SSOT still reports, and diffs against staged/" {
+  plist "$CC_BLOCKERS_LAUNCHAGENTS_DIR"  com.claude.relogin live
+  plist "$CC_BLOCKERS_PLIST_REPO/staged" com.claude.relogin committed
+  [ "$(pstates)" = "CONTENT-DRIFT " ]
+  # The recover command must point at the staged SSOT — a diff against the non-existent
+  # launchd/com.claude.relogin.plist would print the whole file as added and read as "uncommitted".
+  run ccb --plist-parity
+  echo "$output" | grep -q "diff $CC_BLOCKERS_PLIST_REPO/staged/com.claude.relogin.plist $CC_BLOCKERS_LAUNCHAGENTS_DIR/com.claude.relogin.plist"
+}
+
 @test "parity: an UNRESOLVABLE repo side is REPORTED as a row, never a silent pass" {
   export CC_BLOCKERS_PLIST_REPO="$D/no-such-launchd"
   plist "$CC_BLOCKERS_LAUNCHAGENTS_DIR" com.claude.lead-supervisor live
