@@ -81,6 +81,15 @@ done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 
 # ── the ratchet: suites grandfathered as non-hermetic. ONLY EVER DELETE LINES FROM THIS LIST. ──
+# ONE recorded exception to "only delete", and it is a RENAME, not an addition (2026-07-31):
+# `deploy-parity.bats` left this list because it was genuinely fixed — it now exports a fixture HOME
+# in setup() — and `deploy-parity-live.bats` took its place. That is the SAME grandfathered
+# non-hermeticity under a new file name: tests/deploy-parity.bats was split so that the two tests
+# which must resolve the real ~/bin and ~/.claude live in their own file (scripts/host-suites.manifest
+# explains why the split was forced — the corpus partition is per FILE, so those two rode 29 hermetic
+# tests out of the land gate). The count is unchanged and the substance strictly improved: 29 tests
+# that were exempt are now held to the rule. Anything that is NOT a split of an already-listed suite
+# is still an addition, and additions are still forbidden.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 activation-watch.bats
 agent-teams-enforce.bats
@@ -121,7 +130,7 @@ completion-assert.bats
 completion-push.bats
 context-econ.bats
 delivery-verify.bats
-deploy-parity.bats
+deploy-parity-live.bats
 desk-arm-live.bats
 desk-assert-wiring.bats
 desk-assert.bats
