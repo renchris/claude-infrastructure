@@ -71,7 +71,7 @@ _resign() {
 
 @test "build: produces a bundle that is patched, hardened, and entitlement-relaxed" {
   [ "$BUILD_STATUS" -eq 0 ] || { echo "$BUILD_OUT"; false; }
-  [[ "$BUILD_OUT" == *"verdict=OK"* ]]
+  [[ "$BUILD_OUT" == *"verdict=OK"* ]] || false
   [ -d "$GOOD" ]
   # The identity must differ from the real iTerm2, or the clone shares its defaults domain and
   # LaunchServices identity — and the operator's live terminal is the thing we must not perturb.
@@ -102,7 +102,7 @@ PLIST
 
   run bash "$BUILD" --verify-only "$bad" --cap 64
   [ "$status" -ne 0 ]
-  [[ "$output" == *"verdict=FAILED"* ]]
+  [[ "$output" == *"verdict=FAILED"* ]] || false
   [[ "$output" == *"disable-library-validation"* ]]
 }
 
@@ -116,7 +116,7 @@ PLIST
   rm -rf "$stock"; cp -R "$SRC_APP" "$stock"
   run bash "$BUILD" --verify-only "$stock" --cap 64
   [ "$status" -ne 0 ]
-  [[ "$output" == *"verdict=FAILED"* ]]
+  [[ "$output" == *"verdict=FAILED"* ]] || false
   # It must fail ON THE CAP, not merely fail. A test satisfied by any non-zero exit would also pass
   # if the script crashed on an unrelated error.
   [[ "$output" == *"cap"* ]]
@@ -147,7 +147,7 @@ PLIST
   # Code sessions are inside it. This guard is cheap and the blast radius it prevents is not.
   run bash "$BUILD" --out /Applications/nope
   [ "$status" -ne 0 ]
-  [[ "$output" == *"refusing to build into"* ]]
+  [[ "$output" == *"refusing to build into"* ]] || false
   [ ! -e /Applications/nope ]
 }
 
@@ -164,6 +164,6 @@ PLIST
     skip "set ITERM_BENCH_LAUNCH_TEST=1 to launch a real GUI app from the suite"
   run bash "$BUILD" --cap 64 --out "$BATS_TEST_TMPDIR/launch"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"launch probe: process survived dyld"* ]]
+  [[ "$output" == *"launch probe: process survived dyld"* ]] || false
   [[ "$output" == *"verdict=OK"* ]]
 }
