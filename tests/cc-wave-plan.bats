@@ -80,19 +80,46 @@ STUB
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
-# ── surface by anchor context (drain incident 2026-07-25: headless split-right = 100%-dead wave) ──
-@test "headless plan (no ITERM_SESSION_ID) emits --window, never the anchored --split-right" {
+# ── surface by anchor context — TWICE-INVERTED, and both inversions matter ───────────────────────
+# 2026-07-25 (drain incident): a hardcoded --split-right killed EVERY headless spawn, because under
+#   launchd $ITERM_SESSION_ID never exists and handoff-fire REFUSED an anchorless split. 0 `fired`
+#   IDL records ever, 408 `failed` in one day. The fix: emit --window when headless.
+# 2026-07-30 (d6b417e9): that cure opened a brand-new iTerm2 WINDOW per dispatched session — 174 in
+#   one day. The anchor is now resolved at the CHOKEPOINT (handoff-fire's resolve_headless_anchor),
+#   so cc-wave-plan's surface became UNCONDITIONALLY --split-right and the anchorless refusal that
+#   caused the drain no longer fires here (bin/cc-wave-plan:555-568).
+#
+# This test asserted the 2026-07-25 contract and was left behind by the 2026-07-30 change: the
+# binary moved on 07-30, the suite last moved 07-29, and it has been RED on trunk since — while
+# cc-wave-plan's OWN selftest (:728-731, 63/63 green) asserted the opposite. Two oracles for one
+# behaviour disagreeing is the tell. Updated to the live contract per §4's rule: a test can encode a
+# falsified premise, and CHANGING it is legitimate where HIDING it would not be.
+@test "headless plan (no ITERM_SESSION_ID) emits --split-right and NEVER --window (d6b417e9)" {
   run bash -c "env -u ITERM_SESSION_ID '$WP' --items '[{\"id\":\"h\",\"slot\":\"lead\"}]' --json"
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.[0].fire_line | test("--window")'
-  echo "$output" | jq -e '.[0].fire_line | test("--split-right") | not'
-  echo "$output" | jq -e '.[0].fire_line | test("--surface-reason headless-dispatch-no-anchor-pane")'
+  echo "$output" | jq -e '.[0].fire_line | test("--split-right")'
+  # the load-bearing half: --window is what minted 174 windows in a day
+  echo "$output" | jq -e '.[0].fire_line | test("--window") | not'
 }
 
 @test "anchored plan (ITERM_SESSION_ID present) keeps the --split-right ⌘D default" {
   ITERM_SESSION_ID="w0t0p0:TEST" run "$WP" --items '[{"id":"a","slot":"lead"}]' --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0].fire_line | test("--split-right")'
+}
+
+@test "the surface no longer varies by anchor context — the choice moved to the chokepoint" {
+  # The PAIR above now asserts the same surface on both sides, so on its own it can no longer tell
+  # "decided correctly, twice" from "the decision was dropped". That is the point post-d6b417e9 —
+  # the surface is not cc-wave-plan's call any more — but it must be asserted POSITIVELY rather than
+  # left as an accident of two tests happening to agree (memory decision-moved-out-of-the-guarded-unit).
+  # scan() with a capture GROUP yields the group, not the match, so the alternation is spelled out
+  # without one — otherwise both sides read as arrays and compare equal for the wrong reason.
+  surf='.[0].fire_line | [scan("--split-right|--window")] | sort | join(",")'
+  headless="$(bash -c "env -u ITERM_SESSION_ID '$WP' --items '[{\"id\":\"h\",\"slot\":\"lead\"}]' --json" | jq -r "$surf")"
+  anchored="$(ITERM_SESSION_ID="w0t0p0:TEST" "$WP" --items '[{"id":"h","slot":"lead"}]' --json | jq -r "$surf")"
+  [ "$headless" = "$anchored" ]
+  [ "$headless" = "--split-right" ]   # and NOT "" — an empty match on both sides would also be equal
 }
 
 @test "unknown flag → exit 2 (fail-loud, no silent no-op)" {
