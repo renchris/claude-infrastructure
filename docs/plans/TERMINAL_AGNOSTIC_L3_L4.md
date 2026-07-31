@@ -171,8 +171,58 @@ Claude Code knowing. Contract to reverse: `session split` · `session send` · `
    correct value is unknown, and without it external automation cannot drive cmux.
 3. ~~**The exact `it2` contract surface** Claude Code calls — reversed only partially.~~
    → **CLOSED 2026-07-31**, §4.3 below · `docs/research/it2-contract-surface-2026-07-31.md`.
-4. **Agent View coverage** — `claude agents --json` is scoped to `CLAUDE_CONFIG_DIR`; it saw 3 of 25
-   sessions. A 4-account fleet fragments into 4 views.
+4. ~~**Agent View coverage** — `claude agents --json` is scoped to `CLAUDE_CONFIG_DIR`; it saw 3 of 25
+   sessions. A 4-account fleet fragments into 4 views.~~
+   → **CLOSED 2026-07-31**, §4.4 below · `docs/research/agent-view-coverage-2026-07-31.md`.
+
+### 4.4 CLOSED — Agent View coverage: one view for SEEING, N for DISPATCH
+
+**Verdict: one view CAN aggregate the 4-account fleet for observation, and CANNOT for dispatch.**
+The only scoping input is the single path `join(CLAUDE_CONFIG_DIR, "sessions")` — a *directory*, with
+no account identity anywhere in the read path and **no auth required**. But a session launched *from*
+the view inherits the view process's own `CLAUDE_CONFIG_DIR`, so a unified view can only ever start
+work on one account. **N views is structural for starting work, not for seeing it** — so the
+operator's account-sharding survives Agent View for monitoring, and only the launch path stays
+per-account.
+
+**`CLAUDE_CONFIG_DIR` does not accept a list, and fails SILENTLY.** Measured: single path → rows;
+`"$A:$B"` → **0 rows, no error** (`readdir` throws on the bogus path, `catch { return [] }`). An
+operator who tries the obvious thing gets an empty view and no diagnostic.
+
+**The cheapest real fix already exists in production.** Symlink each account's `sessions/` **directory**
+to one shared real directory — `~/.claude-next/sessions -> ~/.claude/sessions` has been doing exactly
+this since 2026-06-03 (verified live). No code, no patch, no upstream change.
+
+**⚠ The obvious variant is a trap: per-FILE symlinks read as ZERO, silently.** `qI()` uses `lstat`, so
+`isFile()` is false for a symlink and every row maps to `null` — no warning, no telemetry. Verified
+back-to-back on the same directory: **symlinked files → 0 · copied files → 3** (positive control). A
+symlinked *directory* is fine because `readdir` follows it and the entries inside are real files.
+
+**Loop-and-merge works today with zero config change:**
+`for d in $DIRS; do CLAUDE_CONFIG_DIR=$d claude agents --json; done | dedupe-by-pid` — a **complete**
+aggregation of the registry, ~1.4 s wall for four accounts. Dedupe by `pid` is **mandatory** (the
+`.claude-next` symlink means two roots enumerate one registry). `--json` only; no TUI equivalent.
+
+**Coverage, with denominators that are stated rather than blurred** (ground truth taken independently
+of `claude agents`, by argv0-**position** census — `pgrep -f`-style substring matching reads ~122 where
+the truth is ~15, the 6-8× trap this repo has recorded before):
+
+| View | of live REPL sessions (D_sess≈13) |
+|---|---|
+| default (`~/.claude`) | **7.7 %** |
+| best single account | 38.5 % |
+| loop-and-merge / shared registry | **92.3 %** |
+
+**The plan's recalled "3 of 25" is retired, not corroborated** — no denominator on this box
+reproduces 25 (disk truth is ~13 live REPLs / ~15 processes / ~122 naive). Do not treat it as a
+second data point.
+
+**Second, orthogonal defect — the residue is NOT a scoping failure.** `NDc()` returns before writing
+when `CLAUDE_CODE_CHILD_SESSION` is set, interactive, and **not** in tmux. Claude Code sets that var on
+every process it spawns ⇒ **any interactive `claude` REPL launched from inside another session's Bash
+tool, outside tmux, is invisible to Agent View — including in its own account's view.** That is
+precisely this fleet's handoff / dedicated-split-pane pattern, and no amount of view-merging fixes it.
+Escape hatch exists: `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE`.
 
 ### 4.3 CLOSED — the `it2` contract surface (T1/T5 unblocked)
 
