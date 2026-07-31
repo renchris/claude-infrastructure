@@ -104,6 +104,27 @@ PID    COMMAND          %CPU   MEM     #TH
 - This reproduces the prior finding (31 sessions = 111.9% total; one iTerm2 process exceeded the whole
   fleet) on a fresh boot and a fresh sample.
 
+### The incumbent leaks mach ports at constant layout — measured, `verdict=OK`
+
+`scripts/terminal-bench.sh --app iTerm2 --panes 15 --interval 900`, two readings 900 s apart with the
+visible layout unchanged (the repo's defined leak instrument — **drift, never level**):
+
+```
+T0  app cpu=95.5 mem=743MB th=13 ports=659      T1  app cpu=98.9 mem=736MB th=12 ports=678
+DRIFT (app, constant layout):
+  mem MB        -7 over 900s  = -28.0/hr      ← no memory leak; RSS falls
+  mach ports   +19 over 900s  = +76.0/hr      ← LEAK
+PER-PANE at n=15:  threads/pane 0.87 · ports/pane 43.93 · MB/pane 49.5 · cpu%/pane 6.37
+verdict=OK
+```
+
+**Memory is exonerated again and the port axis convicts.** ~76 ports/hour at a frozen layout is ~900
+over a 12-hour day — on precisely the axis whose unbounded growth characterised the 2026-07-30 freeze
+(WindowServer's mach-port table). This is the first clean drift reading on the incumbent, and it
+converts the earlier "port growth is real and unexplained" note from an observation into a measured
+rate. It also independently corroborates that the failure is **not** memory: RSS drifted *negative*
+over the same window.
+
 ### Configuration is exhausted — this is the new finding
 
 `scripts/iterm2-perf-parity.sh` → **`match=9 drift=0 unset=0 · VERDICT: MATCH`**. Every render knob in
