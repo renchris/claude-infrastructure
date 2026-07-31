@@ -3347,8 +3347,17 @@ async def main(connection):
                 if cand is not None:
                     break
         if cand is None:
+            # A VERDICT, not a failure. "iTerm2 has zero live panes" is something the probe
+            # successfully DETERMINED; an API/connection error is something it FAILED to determine.
+            # Both used to leave with status 1 — `rc = 1` here is indistinguishable from the bare
+            # `except Exception: sys.exit(1)` at the foot of this heredoc, and from hf_bounded's
+            # 124 on timeout. So the shell collapsed all three and minted a fresh WINDOW on any of
+            # them: the ~12 windows/hour leak measured 2026-07-30, self-amplifying because each
+            # leaked window congests the very API the next probe needs.
+            # Emit a PARSEABLE token on stdout and exit 0, so the caller can tell "determined
+            # empty" (a fresh window is honest) from "could not determine" (refuse, never mint).
             print("Error: no live iTerm2 session to anchor to", file=sys.stderr)
-            rc = 1
+            out.append("NO-LIVE-SESSION")
             return
         _w, t = app.get_window_and_tab_for_session(cand)
         npanes = len(t.sessions) if t is not None else 1
@@ -3436,18 +3445,31 @@ restore_focus_or_fail() {
 }
 
 # resolve_headless_anchor — echoes "<session-id> <panes-in-its-tab>" for a caller that supplied NO
-# anchor at all (ANCHOR_INTENT=0). Returns 1 when iTerm2 has no live session (then, and ONLY then, a
-# fresh window is the honest surface). Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off restores the old
+# anchor at all (ANCHOR_INTENT=0). Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off restores the old
 # refuse-or---window behaviour. The desk role file is a HINT, not a truth: it2py anchor verifies the
 # uuid is live and falls through when it is stale (it was stale on 2026-07-30 when this was built).
+#
+# THREE return states — the whole point of this function (2026-07-30). "Could not determine" is NOT
+# "determined empty":
+#   0 → anchor resolved; stdout is "<session-id> <panes-in-tab>"
+#   1 → DETERMINED that iTerm2 holds zero live panes. A fresh window is then honest.
+#   2 → probe FAILED / INCONCLUSIVE (API error, timeout, congestion, kill-switch off). The caller
+#       MUST refuse — minting a window here is what leaked ~12 iTerm2 windows/hour on 2026-07-30,
+#       and it self-amplifies: each leaked window congests the API the next probe depends on, so
+#       the failure rate climbs until the compositor is saturated and the GUI stops.
+# stderr is deliberately NO LONGER discarded — a silent probe failure is unfalsifiable after the
+# fact, the same defect recorded in decision-moved-out-of-the-guarded-unit.
 resolve_headless_anchor() {
-  [ "${CC_FIRE_HEADLESS_ANCHOR:-on}" != off ] || return 1
+  [ "${CC_FIRE_HEADLESS_ANCHOR:-on}" != off ] || return 2
   local desk=""
   desk="$(tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
-  local out; out="$(it2py anchor "$desk" 2>/dev/null)" || return 1
+  local out rc=0
+  out="$(it2py anchor "$desk" 2>/dev/null)" || rc=$?
+  [ "$rc" = 0 ] || { echo "   anchor probe FAILED (it2py anchor rc=$rc) — inconclusive, not empty." >&2; return 2; }
   case "$out" in
+    NO-LIVE-SESSION) return 1 ;;
     ????????-*\ [0-9]*) printf '%s' "$out"; return 0 ;;
-    *) return 1 ;;
+    *) echo "   anchor probe returned unparseable output — inconclusive, not empty." >&2; return 2 ;;
   esac
 }
 
@@ -3574,8 +3596,12 @@ spawn() {
   # ${ANCHOR_INTENT:-1} — an unset/unknown intent defaults to 1, i.e. to the fail-loud refusal below.
   # The safe direction is always "refuse", never "resolve some pane and fire into it".
   if [ -z "$FIRING_SID" ] && [ "${ANCHOR_INTENT:-1}" = 0 ]; then
-    local ares=""; ares="$(resolve_headless_anchor || true)"
-    if [ -n "$ares" ]; then
+    # Capture the STATUS, not just the output. The old `|| true` here discarded the return code and
+    # branched on emptiness alone, so "probe failed" and "determined empty" both fell to the
+    # fresh-window else — the 2026-07-30 window leak. Three states now, and only state 1 may mint.
+    local ares="" arc=0
+    ares="$(resolve_headless_anchor)" || arc=$?
+    if [ "$arc" = 0 ] && [ -n "$ares" ]; then
       FIRING_SID="${ares%% *}"
       local npanes="${ares##* }"
       echo "→ headless fire: no firing pane (launchd/cron caller); anchored to live pane $FIRING_SID (${npanes} pane(s) in its tab)" >&2
@@ -3592,9 +3618,19 @@ spawn() {
         echo "   ${npanes} panes ≥ ${CC_FIRE_MAX_PANES:-6} — degrading $SURFACE to a background tab in that SAME window (sliver-avoidance, not a new window)." >&2
         SURFACE="bg-tab"
       fi
+    elif [ "$arc" != 1 ]; then
+      # INCONCLUSIVE (arc=2): the probe could not determine anything — API error, timeout,
+      # congestion, or the kill-switch. iTerm2 may well be full of live panes; we simply cannot see
+      # them. Minting a window here is the leak: on 2026-07-30 this branch produced ~12 undestroyable
+      # iTerm2 windows/hour while 39 panes were live the whole time, and it SELF-AMPLIFIES because
+      # each leaked window congests the very API the next probe needs. Refuse; the caller re-fires.
+      echo "!! headless fire: anchor probe INCONCLUSIVE (rc=$arc) — iTerm2 may be busy or congested." >&2
+      echo "   REFUSING to mint a fresh window on an unknown, since that is indistinguishable from" >&2
+      echo "   a real anchor being available. Nothing was launched; retry once iTerm2 is responsive." >&2
+      return 1
     else
-      # Genuinely nothing to anchor to (iTerm2 has no live session, or the kill-switch is off).
-      # A fresh window is then the honest surface, not a drift — say so and take it.
+      # DETERMINED empty (arc=1): iTerm2 really has zero live panes, so a fresh window is the honest
+      # surface, not a drift — say so and take it.
       echo "→ headless fire: no live iTerm2 session to anchor to — falling back to a fresh window." >&2
       SURFACE="window"
       [ -n "$SURFACE_REASON" ] || SURFACE_REASON="headless: no live iTerm2 pane to anchor to"
