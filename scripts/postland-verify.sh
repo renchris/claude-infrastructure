@@ -211,6 +211,38 @@ if [ -n "$TASKPOLICY_BIN" ] && [ -x "$TASKPOLICY_BIN" ]; then
 else
   LINT_QOS=()                                  # absent taskpolicy(8) ⇒ inherit; the bound still fits
 fi
+# RETRY BAND — utility, for the SAME reason as the prelints, and it was the third site of this same
+# oversight (measured 2026-07-31). The ladder's premise is "a re-run under a CHANGED environment
+# discriminates a real failure from an environmental one" (see classify_failures). It ran that re-run
+# in the CORPUS's background band — which does not de-contend the re-run, it DE-PRIORITISES it, and
+# that moves the environment in the WRONG DIRECTION for the failure mode that actually dominates
+# here. The file's own evidence, one function below: of 35 flake rows, 34 are `pass-on-retry`/`1-of-3`
+# and their signals are dominated by `exit 143` (x8) and `exit 137` (x3) at a median loadavg of 13.9
+# — suites SIGTERMed/SIGKILLed by machine pressure. A ladder starved at PRI 4 therefore cannot render
+# the verdict it exists to render: post the 2026-07-31 non-verdict widening those kills correctly
+# ABSTAIN, so the run takes the cut path and NO GREEN IS EVER CLAIMABLE. The deadlock simply changed
+# shape — from false RED to perpetual CUT — which is why 45 of 46 stamps carry no green.
+#
+# WHY THIS IS NOT THE C-DIRECTION RISK ("foreground the verifier"). The CORPUS stays background,
+# unchanged: it is hours of bats and its wall time is deploy latency, never blockage. Only the
+# ladder moves, and the ladder re-runs a SINGLE NAMED TEST (retry_once GRANULARITY=test, "costs
+# seconds"). Elevating seconds of decision procedure is not the same act as foregrounding 233
+# suites on a box that crashed twice in 48h.
+#
+# WHY IT DOES NOT WEAKEN THE CLAIM (the A-direction risk). Nothing here excuses a failure: a test
+# that fails at utility priority is still convicted, and 2-of-3 still convicts. This removes a
+# machine artefact from the evidence, it does not lower the bar for the tree — the opposite of
+# gating on absence-of-RED.
+#
+# Mechanism is already verified in this file (see the LINT_QOS note): taskpolicy(8) sets a FRESH
+# clamp on the CHILD, so utility is reachable out of a background-clamped parent, and the exit codes
+# the verdict/non-verdict split keys on (0/1/124/>128) pass through the timeout+taskpolicy chain
+# intact. Seam: shares CC_POSTLAND_TASKPOLICY_BIN (set-but-EMPTY ⇒ no band, honored verbatim).
+if [ -n "$TASKPOLICY_BIN" ] && [ -x "$TASKPOLICY_BIN" ]; then
+  RETRY_QOS=(nice -n 5 "$TASKPOLICY_BIN" -c utility)
+else
+  RETRY_QOS=(nice -n 5)                        # absent taskpolicy(8) ⇒ nice alone, never a hard fail
+fi
 # ── WHOLE-TREE META-LINTS, RUN STANDALONE BEFORE THE CORPUS ──────────────────────────────────────
 # These two judge the tree AS A WHOLE (every suite's hermeticity; every suite's wall-clock literals).
 # Their bats WRAPPERS are LOAD-SENSITIVE from inside a full run, which is why clean-room runs failed
@@ -265,6 +297,9 @@ CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+# Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
+# where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
+CORPUS_N=0
 # WHY the cut fired, in the CUT log line. Default names case (a); case (c) overwrites it. A fixed
 # string here would have the log assert "zero not-ok" about a run that carried one — see C13c.
 CUT_WHY='zero not-ok in a non-zero run - truncated'
@@ -617,7 +652,7 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
     out="$td/tap"
     # `bats -f` takes a REGEX: escape every metachar in the TAP-reported name, then anchor it.
     filt="$(printf '%s' "$t" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
-    ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${QOS[@]}" \
+    ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${RETRY_QOS[@]}" \
         "$BATS_BIN" -f "^${filt}\$" "$f" ) > "$out" 2>&1 || rc=$?
     # A filter that matched NOTHING exits 0 with `1..0` — a NON-VERDICT that would exonerate the file
     # for free. Only trust this run if it actually PLANNED a test; otherwise fall through to the file.
@@ -625,7 +660,7 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
     rm -f "$out"; rc=0
   fi
   # FALLBACK: the whole file, under the bound sized for a whole file.
-  ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1 || rc=$?
+  ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${RETRY_QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1 || rc=$?
   return "$rc"
 }
 classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
@@ -693,11 +728,18 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
     fails=1; rc=1; abstain=0; ABSTAIN_RC=124   # RESET per file: a stale rc would misname the cut
     for i in 1 2; do                                     # each re-run gets a FRESH private TMPDIR
       # NO ADMISSION WAIT before a retry (v1 slept here, per file, per attempt — the ~12-call ×
-      # 600s budget that made a run 2h of sleeping). The ladder's premise — "a re-run under a
-      # CHANGED environment discriminates a real failure from an environmental one" — is served by
-      # the background QoS band instead: the retry runs de-prioritised, which changes the
-      # environment WITHOUT waiting for the box to go quiet (it never does — §1: no quiet window
-      # by construction). Waiting was never the cheap half of that trade; it was the amplifier.
+      # 600s budget that made a run 2h of sleeping). Waiting was never the cheap half of that
+      # trade; it was the amplifier, and the verifier is the one party that may never wait (R7).
+      #
+      # The ladder's premise is "a re-run under a CHANGED environment discriminates a real failure
+      # from an environmental one", and the change it applies is a BAND CHANGE, not a wait: the
+      # re-run is elevated OUT of the corpus's background clamp into utility (RETRY_QOS, see the
+      # RETRY BAND note at the top). Until 2026-07-31 this ran in "${QOS[@]}" — the corpus band —
+      # which de-prioritises the re-run rather than de-contending it, i.e. it moved the environment
+      # the WRONG WAY for the dominant failure mode (pressure kills: exit 143/137, see below) and
+      # left the ladder unable to render the verdict it exists to render. Elevating buys the same
+      # "different environment" the wait used to buy, for seconds, without waiting for a quiet
+      # window that never comes (§1: none by construction).
       tdir="$(mktemp -d "$RUN_TMP/retry.XXXXXX")"
       # BOUNDED for the same reason the full suite is: a file that WEDGES would hold the ladder —
       # and this runner's mutex — open forever, turning one hung test into a dead post-land net.
@@ -791,8 +833,8 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
 write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   local tree="$1" commit="$2" verdict="$3" run_s="$4" retries="$5" adv="$6" gcd; shift 6
   mkdir -p "$STAMPS" 2>/dev/null || true
-  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
-    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
+  printf '{"tree":"%s","commit":"%s","verdict":"%s","failing":%s,"ts":"%s","run_s":%s,"retries":%s,"suites":%s,"checks":"bats+bash-n","shellcheck_advisory":%s,"env":%s}\n' \
+    "$tree" "$commit" "$verdict" "$(json_array "$@")" "$(now_iso)" "$run_s" "$retries" "${CORPUS_N:-0}" "$adv" "$ENV_FP" > "$STAMPS/$tree.json"
   # ── GATE-GREEN SYNC (§4.2.5) ───────────────────────────────────────────────────────────────────
   # gate-green asserts "the FULL suite proved this tree". In v2 the land lane no longer runs a
   # corpus, so it can no longer make that claim and stops writing the marker — this is the ONLY
@@ -1006,7 +1048,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/postland-run.XXXXXX")" || return 1
-  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0   # reset per requeue pass
+  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
@@ -1037,6 +1079,13 @@ EOF
       bargs=("tests/")
     fi
     log "corpus: ${#bargs[@]} tree suite(s), $HOST_SKIPPED host suite(s) partitioned out @ $(sha12 "$sha")"
+    # THE STAMP'S DENOMINATOR. Recorded here because a verdict without the size of the population it
+    # judged is not auditable: `{"verdict":"green","failing":[]}` reads identically whether 197 suites
+    # passed or the corpus collapsed to a handful and passed by absence. That ambiguity cost real time
+    # on 2026-07-31 — the one green stamp in 46 had to be cleared of being a vacuous partial run by
+    # cross-reading runner.log for its `corpus:` line, and runner.log is rotated/GC'd on a different
+    # schedule from the stamps it would be needed to explain. `suites` makes the stamp self-contained.
+    CORPUS_N="${#bargs[@]}"
     # BOUNDED BY PROGRESS, backstopped by wall-clock. A fixed duration bound conflates two runs a
     # busy box cannot tell apart: STARVED-BUT-PROGRESSING (the background band yielding to 12+
     # sessions — measured 2026-07-29: two healthy runs CUT at 5437s/2737s with ZERO not-ok) and
@@ -1229,11 +1278,44 @@ verb_is_green() { # <sha> — exit 0 green-stamped, 1 not
   return 0
 }
 
+# last-green, RENDERED WITH ITS STAMP RESOLVED — never the bare sha (measured misdiagnosis 2026-07-31).
+# `last-green` holds a COMMIT sha; the stamp store is keyed by TREE sha. Printing the commit alone
+# invites the one wrong inference that store shape makes available: a reader looks for
+# `stamps/<that-sha>.json`, does not find it, and concludes the pointer is DANGLING and the verifier's
+# records are corrupt. That inference was drawn and acted on — it became the headline finding of a
+# whole diagnosis doc ("no stamp file with that name exists", filed as a standalone bug) when in fact
+# the pointer was correct, the stamp existed, and it was green under its TREE name. So resolve the
+# hop and print BOTH names plus the verdict actually on disk.
+#
+# This is verify-before-print, not decorate-before-print: the file is opened, so a genuinely GC'd or
+# unreadable stamp renders as MISSING rather than being implied healthy by a sha that merely LOOKS
+# plausible. That is the difference between a claimed outcome and a checked one, and the reason a
+# status surface is allowed to be trusted at all.
+render_lastgreen() {
+  local sha tree f
+  sha="$(cat "$LASTGREEN" 2>/dev/null || true)"
+  [ -n "$sha" ] || { printf '(none)'; return 0; }
+  tree="$(tree_of "$sha" 2>/dev/null || true)"
+  if [ -z "$tree" ]; then
+    # A THIRD state, and it must not read as either healthy or dangling: the commit is simply not in
+    # this checkout (GC'd, or a sha from a repo this invocation cannot see), so nothing is claimed.
+    printf '%s (commit UNRESOLVABLE here — cannot check its stamp)' "$(sha12 "$sha")"
+    return 0
+  fi
+  f="$STAMPS/$tree.json"
+  if [ ! -f "$f" ]; then
+    printf '%s → stamp %s.json MISSING (tree-keyed; GCd or never written)' "$(sha12 "$sha")" "$(sha12 "$tree")"
+  elif grep -q '"verdict":"green"' "$f" 2>/dev/null; then
+    printf '%s → stamp %s.json green' "$(sha12 "$sha")" "$(sha12 "$tree")"
+  else
+    printf '%s → stamp %s.json present but NOT green' "$(sha12 "$sha")" "$(sha12 "$tree")"
+  fi
+}
 verb_status() {
   # `worktree` is the cell this invocation WOULD mint — cells are per-run and torn down, so between
   # runs there is deliberately nothing there to look at (§4.2.1). `reverts` is the never-twice ledger.
   printf 'postland-verify status\n  state      : %s\n  worktree   : %s (minted per run)\n  last-green : %s\n' \
-    "$STATE" "$WORKTREE" "$(cat "$LASTGREEN" 2>/dev/null || echo '(none)')"
+    "$STATE" "$WORKTREE" "$(render_lastgreen)"
   printf '  reverts    : %s\n' "$(find "$REVERTS" -type f 2>/dev/null | wc -l | tr -d ' ')"
   printf '  stamps     : %s\n  queue      : %s\n  lock       : %s\n  flakes     : %s\n  pages      : %s\n  last run   : %s\n' \
     "$(find "$STAMPS" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" \
