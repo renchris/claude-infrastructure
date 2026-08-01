@@ -754,10 +754,63 @@ real deploy-lag fact but NOT the same as "the mechanism is absent".
 **2. "Deployed as written it is a permanent dispatch outage" — OVERSTATED, and now measured false.**
 That projection came from 13 samples in a window where load sat at 29.15-59.80 (2.92-5.98/core), all
 above the 2.0 ceiling. It assumed load would never fall back. **It did:** measured after the fleet
-drained from 31 sessions to 8, `loadavg1 = 15.5` on 10 cores = **1.55/core ⇒ the gate ADMITS.** And
+drained from 31 sessions to 8, `loadavg1 = 15.5` on 10 cores = **1.55/core ⇒ the gate ADMITS.** ~~And
 the IDL carries **1498 `"reason":"capacity"` rows**, i.e. the gate has been exercising both verdicts,
-not wedged on one. A ceiling that refuses at 4.0/core and admits at 1.55/core is behaving as a
+not wedged on one.~~ *(struck 2026-07-31 — see §9.5.1: those rows are a different gate's, and they are
+all refusals.)* A ceiling that refuses at 4.0/core and admits at 1.55/core is behaving as a
 ceiling, not as an outage.
+
+### 9.5.1 AMENDMENT (2026-07-31) — the retraction's corroboration was itself wrong, and the reason it could be
+
+The retraction's *conclusion* stands: the single live measurement (1.55/core ⇒ ADMITS) falsifies the
+permanent-outage projection on its own. Its *second* piece of evidence does not survive checking, and
+it is worth being precise about, because it is the same defect one level up.
+
+| Claim as written | Checked on disk 2026-07-31 |
+|---|---|
+| "the IDL carries 1498 `reason:"capacity"` rows" | Real rows, **wrong gate**. Every one is `actor:"cc-dispatch"` with `free_slots`/`ceiling`/`live_workers` — cc-dispatch's 6-**worker-slot** ceiling, which has nothing to do with `capacity_gate()`'s loadavg + headroom terms. Now 5518 of them. |
+| "…i.e. the gate has been exercising both verdicts" | **Cannot follow from those rows either way.** All 5518 are `verdict:"defer"` — refusals. A refusal-only population can never evidence "both verdicts". |
+| (implicit) handoff-fire's gate writes to the IDL | **It writes no IDL row at all.** Actor census over the whole IDL: `lead-supervisor`, `cc-dispatch`, `cc-reaper`, `cc-inbox-guard`, `cc-wave-plan`, `cc-discover`, `cc-backlog-reap`, `cc-relogin-poll` — no `handoff-fire`. Its 10 literal mentions are another producer's free text (`hook:"session-continue"` `step` strings). |
+
+**Why the wrong evidence was reachable at all — and the fix.** `capacity_gate()` printed ADMIT to
+stderr and recorded only REFUSALS (`handoffs.jsonl`, `class:"refused"`). So the one store that could
+have answered "what is this gate's admit/refuse ratio?" was **refusal-only by construction**, and the
+nearest thing on disk that looked like an answer belonged to a different gate. A row-13 claim about
+the ratio was unprovable from disk in either direction — which is exactly how the refuted projection
+survived long enough to need retracting, and how its replacement corroboration went unchecked.
+
+**Landed:** `capacity_gate()` now emits an ADMIT row into the same log as the refusals
+(`class:"admitted"`, `verdict:"admit"`, `gate:"capacity"`), so the ratio is one symmetric predicate:
+
+```sh
+jq -rs '[.[]|select(.gate=="capacity")] | group_by(.verdict)
+         | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl
+```
+
+Three properties make that number trustworthy rather than merely present, each answering a way this
+repo has previously been misled:
+
+- **`basis` splits measured from not-measured** (`measured` · `load-only` · `fail-open` · `gate-off`).
+  The gate fails OPEN on an unreadable `sysctl`/`vm_stat`, so a dead probe otherwise produces a
+  100%-admit population that reads exactly like a healthy box — the gate deleted, reporting as the
+  gate fine. **Split on `basis` before believing any ratio computed here.**
+- **`engaged` is ABSENT on an admit, never `false`.** The fire has not happened yet, so `false` would
+  be a fabricated outcome, and it would land in `group_by(.engaged)` — the engagement-rate metric
+  (SESSION_LIFECYCLE_V2 M-1) — deflating it by one row per admitted fire.
+- **`gate` is carried on BOTH verdicts**, so admits and refusals are selected by one predicate rather
+  than two hand-written asymmetric ones. `class=="refused"` alone spans the payload gates too, and a
+  denominator polluted with payload refusals is precisely the shape of mis-derivation above.
+
+Retention was raised with it (600/500 → 1200/1000 rows): admits add ~60% more rows, and at the old
+bound the window would have fallen from ~2.2 days to ~1.4 at peak — shrinking the very window whose
+narrowness produced the 13-sample projection in the first place.
+
+**The lesson this row keeps re-learning, now one level up from §9.5's own version of it.** §9.5
+correctly warned that a projection from one high-variance window is not a measurement. The amendment
+here is narrower and sharper: **when the corroborating artifact is not the subject's own output, check
+whose output it is.** "1498 rows exist with the word capacity in them" was true; every inference drawn
+from it was not. An instrument that records only one of its two verdicts will always leave that
+question answerable only by something else's data.
 
 **What survives, and it is still worth having:** the gate keys on a quantity that is *not*
 session-attributable (§8.5.7 — loadavg is dominated by the TUI renderer and macOS scanning, and swung

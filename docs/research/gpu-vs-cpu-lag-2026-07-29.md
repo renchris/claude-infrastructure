@@ -324,8 +324,18 @@ landing *is* deploying. Landed `0fc3a3d3`.
 ceiling — already tried, recorded as a permanent outage," citing memory *Load ≠ session count*. **That
 memory is stale against its own source.** `MACHINE_CAPACITY_V2.md` §9.5 **self-retracts** the
 permanent-outage projection: the gate is not inert (symlink), and not an outage — load did fall back
-(fleet drained 31→8, 1.55/core ⇒ ADMITS), and the IDL holds **1,498 `reason:"capacity"` rows**, proving
-both verdicts fire. Anyone reading only the memory index line gets the falsified verdict.
+(fleet drained 31→8, 1.55/core ⇒ ADMITS). ~~and the IDL holds **1,498 `reason:"capacity"` rows**, proving
+both verdicts fire.~~ Anyone reading only the memory index line gets the falsified verdict.
+
+**Correction 2026-07-31 (inherited from the sentence above, now struck).** The IDL-rows half of that
+citation does not survive checking, and this document repeated it from §9.5 rather than verifying it:
+those rows are `actor:"cc-dispatch"` (its **worker-slot** ceiling — `free_slots`/`ceiling`/
+`live_workers`), not `capacity_gate()`, they are **all `verdict:"defer"`** i.e. refusals, and
+handoff-fire.sh writes **no IDL row at all**. The conclusion is unaffected — the live 1.55/core ADMIT
+measurement carries it alone — but "both verdicts fire" had no producer on disk until
+`capacity_gate()` was given an ADMIT record (MACHINE_CAPACITY_V2 §9.5.1). Read the ratio with
+`select(.gate=="capacity") | .verdict` over `~/.claude/logs/handoffs.jsonl`, and split the admits by
+`basis` first — `fail-open` and `gate-off` admits are not measurements of the gate.
 
 What *does* survive is the **instrument** critique, and it is the useful part: **loadavg is not
 session-attributable.** It is dominated by iTerm2, WindowServer and browsers — none of which a refused
