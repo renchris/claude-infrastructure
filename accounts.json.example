@@ -1,0 +1,58 @@
+{
+  "_what": "SSOT for your Claude Max account(s): identity map (launcher -> config dir -> email -> mailbox -> Dia profile) + router/endpoint config. Consumed by bin/claude-accounts, /accounts, scripts/handoff-fire.sh, skills/account-relogin. Copy this file to accounts.json (gitignored — it holds your real email addresses) and edit the accounts[] array for however many accounts you actually have: one entry is enough to start, add more later by appending, never by hand-editing code (see scripts/gen-account-map.sh).",
+  "_secrets": "NO tokens live here, ever. OAuth tokens stay in the macOS Keychain (item 'Claude Code-credentials-<sha256(config-dir)[:8]>', account = keychain_account).",
+  "_order": "accounts[] order is your own spend-priority preference (checked first -> last) when the router picks which account to use. Order it however makes sense for you.",
+  "_port_index": "port_index is a SEPARATE, frozen numbering used only by bin/cc-authbrowser's per-account CDP port (PORT_BASE + port_index) — deliberately independent of accounts[] array order, so reordering accounts[] never reshuffles a live CDP port. Optional per account; an entry with no port_index gets the next unused integer, so appending accounts never renumbers existing ones. fable_name/aliases are also optional (a bare CLI shorthand for the fable variant, and extra config-dir basenames that resolve to this account).",
+  "keychain_account": "YOUR_MACOS_USERNAME",
+  "oauth_client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+  "oauth_scopes": "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
+  "usage_endpoint": "https://api.anthropic.com/api/oauth/usage",
+  "token_endpoint": "https://platform.claude.com/v1/oauth/token",
+  "user_agent": "claude-cli/2.1.183",
+  "claude_bin": "~/.claude-versions/current/node_modules/.bin/claude",
+  "model_config_ssot": "~/.claude/model-config.yaml",
+  "dia_local_state": "~/Library/Application Support/Dia/User Data/Local State",
+  "cache_file": "/tmp/claude-accounts-cache.json",
+  "cache_ttl_s": 90,
+  "_lock": "lock_wait_s = how long a caller waits for the single-flight lock before serving a grace-TTL cache instead of blocking. cache_grace_s = the widened TTL used ONLY on that degrade path. --fresh NEVER degrades.",
+  "lock_wait_s": 5,
+  "cache_grace_s": 600,
+  "_login": "login_warn_h = how far ahead the LOGIN cliff is surfaced. The cliff is the keychain payload's refreshTokenExpiresAt: once it passes, every refresh grant returns invalid_grant and only an interactive /login recovers the account. It is anchored to the last INTERACTIVE login and is NOT extended by a refresh, so it is a hard, roughly-monthly-per-account cliff and lead time is the only defence.",
+  "login_warn_h": 72.0,
+  "frontier": {
+    "_": "Window end/active are READ LIVE from model_config_ssot frontier_access — never hardcode a date here. coupling = fable_cap/weekly_cap. end_date_inclusive: SSOT 'end:' means available THROUGH that date.",
+    "scoped_display_name": "Fable",
+    "coupling": 0.5,
+    "deadline_margin_h": 2.0,
+    "end_date_inclusive": true,
+    "credits_authorized": false
+  },
+  "router": {
+    "_": "Scoring constants for picking which account to route work to when more than one exists. Sane defaults; tune only if you've measured your own routing needs.",
+    "S_CUT": 0.85,
+    "S_SOFT": 0.5,
+    "SF_FLOOR": 0.05,
+    "KMAX": 8,
+    "KFLOOR": 0.1,
+    "MARGIN_H": 0.5,
+    "EPS_H": 0.25,
+    "NO_RESET_H": 168.0,
+    "WEEKLY_FLOOR": 0.005,
+    "FABLE_FLOOR": 0.02,
+    "JB_BONUS": 1.25
+  },
+  "accounts": [
+    {
+      "name": "next",
+      "config_dir": "~/.claude-next",
+      "launcher": "claude-next",
+      "fable_launcher": "claude-fable",
+      "fable_name": "fable",
+      "port_index": 0,
+      "email": "you@example.com",
+      "mailbox": "you@example.com",
+      "dia_profile": "Default",
+      "aliases": ["claude"]
+    }
+  ]
+}
