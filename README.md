@@ -370,13 +370,16 @@ The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `hando
 ### Install
 
 ```bash
-git clone https://github.com/renchris/claude-infrastructure.git
+git clone <your fork's URL> claude-infrastructure
 cd claude-infrastructure
+cp accounts.json.example accounts.json   # then edit it: your email(s), one entry per Max account
 ./install.sh --dry-run   # preview
 ./install.sh             # idempotent — safe to re-run
 ```
 
 It symlinks hooks, commands and scripts into `~/.claude`; copies `bin/` tools, `statusline.sh` and the LaunchAgents; loads the daemons; and validates `settings.json`. For an alternate account: `./install.sh --config-dir ~/.claude-secondary`. Re-run it after every trunk fast-forward — it links **brand-new** files, which per-file symlink directories otherwise never pick up. `--wire-hooks` additively merges the template hook roster into a live `settings.json`, with backup and validation.
+
+**However many Claude accounts you have (1-N, not just the 4 this repo was built against):** `accounts.json`'s `accounts[]` array is the single source of truth — every account-aware tool (`claude-accounts`, `cc-board`, `handoff-fire.sh`, `lr-*`, …) reads through `scripts/gen-account-map.sh`'s generated map or the array itself, never a hardcoded account list. One entry is enough to start; add more later by appending to the array (`install.sh` regenerates the map automatically). `accounts.json` is gitignored on a fresh clone — it holds real email addresses — so it's yours to edit freely without it showing up in `git status`.
 
 **Terminal: iTerm2 or kitty.** `install.sh` runs [`scripts/kitty-setup.sh`](scripts/kitty-setup.sh) automatically whenever kitty is present; run it by hand to wire or inspect kitty on its own:
 

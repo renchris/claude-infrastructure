@@ -25,6 +25,11 @@
 # ad-hoc token-usage snapshot dumps (cross-account transcript analysis, 2026-07-16) — generated, never source
 usage/
 
+# accounts.json holds real email addresses — a fresh clone copies accounts.json.example instead.
+# NOT retroactive: this repo's own tracked accounts.json (added before this rule existed, by
+# deliberate operator choice) stays tracked — gitignore never untracks an already-added file.
+/accounts.json
+
 # agents/ — name-invoked subagent definitions; this repo IS their source of truth.
 # The global gitignore's RESEARCH-*.md rule (meant for UPPERCASE research OUTPUT docs) also
 # matches lowercase research-*.md on macOS's case-insensitive filesystem. It already had to
