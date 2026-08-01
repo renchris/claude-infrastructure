@@ -26,6 +26,12 @@ setup() {
   export CC_RENDER_SAMPLE_S=1
   STUB="$BATS_TEST_TMPDIR/stub"
   mkdir -p "$STUB"
+  # PIN THE TERMINAL. The pane count has had a kitty arm since 2026-07-31, and this suite stubs
+  # `osascript` — i.e. it asserts the iTerm2 arm SPECIFICALLY. Run from inside kitty (now routine)
+  # an inherited KITTY_WINDOW_ID would send the query to a kitty this suite does not stub, making
+  # the verdict depend on the operator's own window. Kitty's arm: tests/kitty-recovery-launch.bats.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
 }
 
 # Build a stub `top` whose SECOND sample carries the given iTerm2 / WindowServer / indexing CPU.

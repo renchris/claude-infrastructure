@@ -7,6 +7,12 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LAUNCH="$REPO/scripts/boot-resume-launch.sh"
   export CC_RESUME_ONE_BIN="/Users/x/.reso/bin/reso-resume-one"
+  # PIN THE TERMINAL. Since 2026-07-31 the script has a kitty arm, so every assertion below is
+  # about the iTerm2 arm SPECIFICALLY — and this suite is now routinely run from inside kitty,
+  # where an inherited KITTY_WINDOW_ID would otherwise decide the verdict. The kitty arm has its
+  # own suite (tests/kitty-recovery-launch.bats).
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
 }
 
 @test "--help exits 0" {

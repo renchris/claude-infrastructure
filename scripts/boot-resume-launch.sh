@@ -11,7 +11,9 @@
 #     account-alias: next|next2|next3|next4|fable.. (already MAPPED by boot-resume.sh)
 #   --dry-run (or CC_LAUNCH_DRYRUN=1): print the reso-resume-one command + the osascript, run nothing.
 #
-# Env: CC_RESUME_ONE_BIN (default ~/.reso/bin/reso-resume-one) · CC_OSASCRIPT_BIN (default osascript).
+# Env: CC_RESUME_ONE_BIN (default ~/.reso/bin/reso-resume-one) · CC_OSASCRIPT_BIN (default osascript)
+#      · CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (kitty control socket) · IT2_WRAPPER_NO_KITTY=1
+#      (kill switch: force the iTerm2 path even inside kitty).
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
@@ -55,6 +57,32 @@ fi
 
 RESUME_ONE="${CC_RESUME_ONE_BIN:-$HOME/.reso/bin/reso-resume-one}"
 OSASCRIPT="${CC_OSASCRIPT_BIN:-osascript}"
+KITTY="${CC_TERM_KITTY:-kitty}"
+
+# ── terminal dispatch (2026-07-31) ────────────────────────────────────────────────────────────────
+# This file's whole job is "open a window with a tty and run the resume in it". That intent is
+# terminal-shaped, and until now it could only be spelled in iTerm2: `open -a iTerm` + AppleScript.
+# Inside kitty that spelling is not merely inert, it is ACTIVE HARM — it would RESURRECT iTerm2
+# behind an operator whose fleet deliberately left it, and then resume the session into a window in
+# the wrong terminal. Under kitty the equivalent intent is `kitty @ launch --type=os-window`.
+# The predicate MIRRORS bin/it2-wrapper:75 exactly, kill switch included, so this file cannot
+# disagree with handoff-fire.sh / cc-pane about which terminal this is (a resume fired into one
+# terminal while the fleet lives in the other is a silent strand, not a visible failure).
+#
+# THE FAILURE TAXONOMY IS THE SAME ON BOTH SIDES — callers key on these codes, so kitty reuses them
+# rather than minting new ones: exit 3 = the driver is unavailable (osascript missing / kitty
+# missing), exit 4 = the driver ran and FAILED to open the window. exit 2 (usage) and exit 3
+# (reso-resume-one not executable) are terminal-independent and unchanged.
+#
+# No --keep-focus: the iTerm2 arm `activate`s deliberately (a boot resume is a window the operator
+# is meant to SEE and type into), so the kitty arm must not silently become a background pop-up.
+IN_KITTY=0
+if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+
+brl_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then brl_bounded "$KITTY" @ --to "$CC_TERM_KITTY_TO" "$@"
+  else brl_bounded "$KITTY" @ "$@"; fi
+}
 
 # shell-quote a single argument (wrap in single quotes, escaping embedded single quotes) so a cwd
 # with spaces survives the osascript `write text` shell.
@@ -63,9 +91,21 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 CMD="$(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 [ -n "$branch" ] && CMD="$CMD $(shq "$branch")"
 
-# osascript escaping: the command runs inside an AppleScript double-quoted string → escape " and \.
-osa_cmd="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-read -r -d '' OSA <<OSA_EOF || true
+if [ "$IN_KITTY" = 1 ]; then
+  # ARGV, not a typed command line. `kitty @ launch … -- prog args…` execs the program directly, so
+  # nothing here is re-parsed by a shell — the spacey-cwd quoting the AppleScript arm needs shq for
+  # cannot bite, and there is no `write text` race between window creation and the shell's prompt.
+  # $cwd is passed to reso-resume-one ALWAYS (even empty, matching the AppleScript arm's shq ''),
+  # but only becomes --cwd when it is a real directory: kitty refuses to launch on a bad --cwd, and
+  # a resume that could have run in $HOME must not die over the working directory.
+  KARGS=(launch --type=os-window)
+  { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
+  KARGS+=(-- "$RESUME_ONE" "$acct" "$cwd" "$sid")
+  [ -n "$branch" ] && KARGS+=("$branch")
+else
+  # osascript escaping: the command runs inside an AppleScript double-quoted string → escape " and \.
+  osa_cmd="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  read -r -d '' OSA <<OSA_EOF || true
 tell application id "com.googlecode.iterm2"
   activate
   set w to (create window with default profile)
@@ -74,10 +114,12 @@ tell application id "com.googlecode.iterm2"
   end tell
 end tell
 OSA_EOF
+fi
 
 if [ "$DRYRUN" = "1" ]; then
   printf 'CMD: %s\n' "$CMD"
-  printf '%s\n' "$OSA"
+  if [ "$IN_KITTY" = 1 ]; then printf 'KITTY: %s @ %s\n' "$KITTY" "$(printf '%q ' "${KARGS[@]}")"
+  else printf '%s\n' "$OSA"; fi
   exit 0
 fi
 
@@ -85,6 +127,16 @@ if [ ! -x "$RESUME_ONE" ]; then
   echo "boot-resume-launch: reso-resume-one not executable at $RESUME_ONE" >&2
   exit 3
 fi
+
+if [ "$IN_KITTY" = 1 ]; then
+  command -v "$KITTY" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty unavailable" >&2; exit 3; }
+  # No `open -a kitty` counterpart on purpose: we are RUNNING inside kitty (that is the predicate),
+  # so the app is up by construction, and the control socket — not the app — is the thing that can
+  # be missing. If it is, the launch fails and rc 4 reports the cut exactly as osascript's does.
+  brl_kitty "${KARGS[@]}" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4; }
+  exit 0
+fi
+
 command -v "${OSASCRIPT%% *}" >/dev/null 2>&1 || { echo "boot-resume-launch: osascript unavailable" >&2; exit 3; }
 
 # ensure iTerm2 is up (post-login it may not be running yet), then drive it.

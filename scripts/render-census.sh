@@ -169,7 +169,7 @@ if [ -n "$ITERM_PID" ] && [ "$ITERM_PID" != "0" ]; then
   fi
 fi
 
-# ── pane count: ONE bounded osascript, never a guess on failure ───────────────────────────────────
+# ── pane count: ONE bounded terminal query, never a guess on failure ──────────────────────────────
 # A failed pane query reports null. Substituting a remembered or derived number would make the log
 # claim a measurement that never happened.
 #
@@ -179,14 +179,43 @@ fi
 # undismissable "Where is iTerm2?" modal instead. `application id` cannot raise that modal, but it
 # CAN launch the app, which a census must never do: an observer that starts its own subject is not
 # an observer. Not running ⇒ zero iTerm2 panes, and that is a MEASUREMENT (0), not a failure (null).
+#
+# …AND THAT SHORT-CIRCUIT IS ONLY HALF THE FIX (2026-07-31). Inside kitty the AppleScript above is
+# CORRECT and USELESS: it measures 0 iTerm2 panes truthfully while the fleet it was built to watch
+# is elsewhere, so the render alarm's pane column — the operator's only shed lever (:278) — reads 0
+# on a box with a dozen live panes. Under kitty the same quantity is the number of `windows` entries
+# across every tab of every OS window in `kitty @ ls`; a kitty window IS a pane.
+# The predicate MIRRORS bin/it2-wrapper:75 exactly, kill switch included, so this file cannot
+# disagree with the handoff/pane machinery about which terminal this is.
+# EVERY kitty failure mode lands on null, never on 0: no control socket, no kitty binary, no
+# python3, a wedged socket cut by rc_bounded, or malformed JSON all yield EMPTY output, and the
+# `case` below reads empty as INDETERMINATE. That asymmetry with the iTerm2 arm is deliberate —
+# `is running` is a POSITIVE reading that no panes exist, whereas an unreadable socket asserts
+# nothing at all, and a census that reports 0 for "could not look" lets a caller reap a live fleet.
+rc_kitty() { # $1=seconds, rest=`kitty @` args — socket seam kept out of the call sites
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then
+    rc_bounded "$1" "${CC_TERM_KITTY:-kitty}" @ --to "$CC_TERM_KITTY_TO" "${@:2}"
+  else
+    rc_bounded "$1" "${CC_TERM_KITTY:-kitty}" @ "${@:2}"
+  fi
+}
 PANES="null"
-PANE_OUT="$(rc_bounded 5 osascript \
-  -e 'if not (application id "com.googlecode.iterm2" is running) then return 0' \
-  -e 'tell application id "com.googlecode.iterm2" to set n to 0' \
-  -e 'tell application id "com.googlecode.iterm2" to repeat with w in windows' \
-  -e 'repeat with t in tabs of w' \
-  -e 'set n to n + (count of sessions of t)' \
-  -e 'end repeat' -e 'end repeat' -e 'return n' 2>/dev/null || true)"
+if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
+  # python3 is the JSON reader this repo already uses for `kitty @ ls` (bin/it2-kitty:158), so the
+  # two cannot drift on the os-windows→tabs→windows shape. Its absence is an unreadable terminal.
+  PANE_OUT="$(rc_kitty 5 ls 2>/dev/null | python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+print(sum(len(t["windows"]) for ow in d for t in ow["tabs"]))' 2>/dev/null || true)"
+else
+  PANE_OUT="$(rc_bounded 5 osascript \
+    -e 'if not (application id "com.googlecode.iterm2" is running) then return 0' \
+    -e 'tell application id "com.googlecode.iterm2" to set n to 0' \
+    -e 'tell application id "com.googlecode.iterm2" to repeat with w in windows' \
+    -e 'repeat with t in tabs of w' \
+    -e 'set n to n + (count of sessions of t)' \
+    -e 'end repeat' -e 'end repeat' -e 'return n' 2>/dev/null || true)"
+fi
 case "$PANE_OUT" in ''|*[!0-9]*) PANES="null" ;; *) PANES="$PANE_OUT" ;; esac
 
 # ── session census: BOTH pid families, root-deduped by in-family ppid ─────────────────────────────
