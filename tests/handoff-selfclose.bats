@@ -23,6 +23,17 @@
 # no detach, no real panes.
 
 setup() {
+  # PIN THE TERMINAL. Every test in this file asserts the iTerm2 path and stubs `osascript`, but
+  # handoff-fire.sh's primitives now branch on KITTY_WINDOW_ID (in_kitty), so run from inside kitty
+  # the subject takes the kitty branch while only osascript is stubbed — and the suite's verdict
+  # silently becomes a function of which terminal the developer is sitting in. Measured 2026-08-01:
+  # unpinned from kitty this file went red; env-pinned it returns to its exact baseline count, and
+  # baseline HEAD is green either way. The dependency PREDATES the branch (nothing read
+  # KITTY_WINDOW_ID before); the branch only made it observable. Same pin, same reason, as
+  # tests/it2-wrapper.bats and tests/cc-pane.bats. The kitty branches have their own coverage in
+  # tests/handoff-fire-kitty.bats. Unset the real var AND pin the kill switch — both spellings.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
