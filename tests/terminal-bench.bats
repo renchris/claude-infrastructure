@@ -109,7 +109,7 @@ setup() {
   # candidate" premise silently did not hold. Recording which probe answered is what lets a later
   # reader tell a comparable run from a non-comparable one.
   local geom; geom="$(awk -F'\t' '{print $10; exit}' "$STATS")"
-  [[ "$geom" =~ ^[0-9]+x[0-9]+/(stty|tput|default)$ ]]
+  [[ "$geom" =~ ^[0-9]+x[0-9]+/(stty|tput|default)$ ]] || false
   # The nap strategy is RECORDED, never inferred: a reader must be able to tell a forkless run from
   # a `sleep`-per-frame run, because only the latter's absolute CPU carries a producer tax.
   local strategy; strategy="$(awk -F'\t' '{print $8; exit}' "$STATS")"
@@ -260,11 +260,11 @@ FLIP_AT=12
   stub_census 1 20
   flip_layout_after "$FLIP_AT" 1 25
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 20 --watch 1 --sample-secs 1
-  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
-  [[ "$output" != *"PRECONDITION BROKE"* ]]
-  [[ "$output" == *"CERTIFIED-constant layout"* ]]
-  [[ "$output" == *"offscreen win  +5"* ]]
-  [[ "$output" != *"verdict=LAYOUT-DRIFT"* ]]
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]] || false
+  [[ "$output" != *"PRECONDITION BROKE"* ]] || false
+  [[ "$output" == *"CERTIFIED-constant layout"* ]] || false
+  [[ "$output" == *"offscreen win  +5"* ]] || false
+  [[ "$output" != *"verdict=LAYOUT-DRIFT"* ]] || false
   [ "$status" -eq 0 ]
 }
 
@@ -280,11 +280,11 @@ FLIP_AT=12
   stub_census 1 20
   flip_layout_after "$FLIP_AT" 4 20
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
-  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]] || false
   [ "$status" -eq 4 ]
-  [[ "$output" == *"verdict=LAYOUT-DRIFT"* ]]
-  [[ "$output" == *"PRECONDITION BROKE"* ]]
-  [[ "$output" == *"onscreen 1→4"* ]]
+  [[ "$output" == *"verdict=LAYOUT-DRIFT"* ]] || false
+  [[ "$output" == *"PRECONDITION BROKE"* ]] || false
+  [[ "$output" == *"onscreen 1→4"* ]] || false
   [[ "$output" != *"DRIFT (app"* ]]
 }
 
@@ -298,10 +298,10 @@ FLIP_AT=12
   flip_layout_after "$FLIP_AT" 3 20
   flip_layout_after "$((FLIP_AT + 8))" 1 20
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
-  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]] || false
   [ "$status" -eq 4 ]
-  [[ "$output" == *"onscreen 1→3"* ]]
-  [[ "$output" == *"PRECONDITION BROKE — t+"* ]]
+  [[ "$output" == *"onscreen 1→3"* ]] || false
+  [[ "$output" == *"PRECONDITION BROKE — t+"* ]] || false
   [[ "$output" != *"PRECONDITION BROKE — endpoint"* ]]
 }
 
@@ -313,7 +313,7 @@ FLIP_AT=12
   stub_census 1 20
   flip_layout_after "$FLIP_AT" 1 12
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1
-  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]] || false
   [ "$status" -eq 4 ]
   [[ "$output" == *"offscreen 20→12"* ]]
 }
@@ -326,8 +326,8 @@ FLIP_AT=12
   start_subject
   stub_census_silent
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 4 --watch 1 --sample-secs 1
-  [[ "$output" == *"verdict=PARTIAL"* ]]
-  [[ "$output" == *"layout UNCERTIFIED"* ]]
+  [[ "$output" == *"verdict=PARTIAL"* ]] || false
+  [[ "$output" == *"layout UNCERTIFIED"* ]] || false
   [[ "$output" != *"verdict=OK"* ]]
 }
 
@@ -340,7 +340,7 @@ FLIP_AT=12
   flip_layout_after "$FLIP_AT" 9 20
   local out="$BATS_TEST_TMPDIR/rows.jsonl"
   run bash "$BENCH" --app "$SUBJ_NAME" --interval 45 --watch 1 --sample-secs 1 --out "$out"
-  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]]
+  [[ "$output" == *"baseline: onscreen=1 offscreen=20"* ]] || false
   local stdout_verdict; stdout_verdict="$(printf '%s\n' "$output" | sed -n 's/^verdict=//p' | tail -1)"
   local json_verdict;   json_verdict="$(sed -n 's/.*"verdict":"\([^"]*\)".*/\1/p' "$out" | tail -1)"
   [ "$stdout_verdict" = "LAYOUT-DRIFT" ]
