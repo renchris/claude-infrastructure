@@ -20,6 +20,7 @@
 #   reopen  <id> [--by <sid>] [--force]
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
 #   unblock <id>                                                 → back to "open"
+#   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
 #
@@ -55,6 +56,25 @@
 # from the wave (no re-dispatch loop), while `list --open`/`--blocked` and the desk
 # digest still SURFACE it + its `needs`. The operator `unblock`s once the step is
 # done → back to `open` → dispatchable again.
+#
+# `needs` is the ONE-LINE front door to that state, and exists because the two-command
+# path (`add` then `block`) is what made an agent PROSE the step instead of filing it:
+# an operator-only step that lives nowhere on disk cannot be rendered by
+# hooks/operator-readout.sh, which builds the close block BY CONSTRUCTION from disk truth,
+# so it gets buried in prose and missed. `needs "<step>"` appends the SAME two records
+# (`add` then `block`, via cmd_add + cmd_transition — no third writer) and echoes the id.
+# It deliberately does NOT fire dispatch_kick: the item is born `blocked`, which is
+# excluded from the wave by construction, so a kick is pure waste AND risks spawning a
+# worker onto a human-only step. `--source needs` keys it apart from a same-titled `add`.
+# Two extra fields ride the `block` record for the renderers (frozen contract, carried
+# through the fold to `list --blocked --json`):
+#   run     — the EXACT runnable command (`--run`), so cc-do can offer it verbatim rather
+#             than the operator reconstructing it from prose. Omitted when absent.
+#   session — the filing session (`--session` > $CLAUDE_SESSION_ID > $CC_SESSION_ID),
+#             so a step can be attributed back to the close that raised it. Omitted when
+#             none resolves.
+# Both are OMITTED, never emitted empty: a consumer must be able to tell "no command" from
+# "an empty command".
 #
 # REAP (stale-claim maintenance — the dead-worker/thrash sweep): `block` above covers only
 # OPERATOR-gated items and cc-reconcile heals only the SESSION registry — neither touches a
@@ -260,6 +280,13 @@ fold() {
         by:       ($r.by       // $p.by       // ""),
         evidence: ($r.evidence // $p.evidence // ""),
         needs:    ($r.needs    // $p.needs    // ""),
+        # `run` + `session` ride the `block` record from the `needs` verb. This fold
+        # WHITELISTS fields, so anything not named here is dropped silently on the way to
+        # `list --blocked --json` — that silent drop is the whole reason they are spelled
+        # out. Carried as ""-default like every sibling; cmd_list re-omits an empty one so a
+        # consumer can still tell "no command" from "an empty command".
+        run:      ($r.run      // $p.run      // ""),
+        session:  ($r.session  // $p.session  // ""),
         status: (
           if   $r.event == "done"    then "done"
           elif $r.event == "block"   then "blocked"
@@ -369,13 +396,17 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence="" needs="" force=0
+  local by="" evidence="" needs="" run="" session="" force=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
       --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
+      # `run` + `session` ride a `block` record (see the `needs` verb in the header). Accepted
+      # here rather than in a third writer so the ONE transition writer stays the ONE writer.
+      --run)      run="${1:-}";      [ $# -gt 0 ] && shift ;;
+      --session)  session="${1:-}";  [ $# -gt 0 ] && shift ;;
       --force)    force=1 ;;
       *) printf 'cc-backlog %s: unknown arg %s\n' "$event" "$key" >&2; return 2 ;;
     esac
@@ -423,13 +454,88 @@ cmd_transition() {
     fi
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
-     --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" --argjson force "$force" \
+     --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
+     --arg run "$run" --arg session "$session" --argjson force "$force" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
       + (if $needs != ""    then {needs:$needs}       else {} end)
+      + (if $run != ""      then {run:$run}           else {} end)
+      + (if $session != ""  then {session:$session}   else {} end)
       + (if $force == 1     then {force:true}         else {} end)' \
      >> "$BACKLOG"
+  echo "$id"
+}
+
+# cmd_needs "<operator-only step>" [--run "<cmd>"] [--project P] [--session SID]
+#
+# One-line filing of a step ONLY THE OPERATOR can do — see the `needs` paragraph in the header for
+# why this verb exists at all. Composition, not a third writer: cmd_add mints the item, then
+# cmd_transition writes the `block`, so both records are byte-identical to what the two-command
+# path would have produced and every guard on those paths still applies.
+#
+# Two deliberate departures from `add`:
+#   · NO dispatch_kick. `add` kicks so new OPEN work gets decided in seconds; this item is born
+#     `blocked`, which cc-dispatch excludes from the wave by construction, so a kick could only
+#     burn a pass — and, on any future widening of the fire predicate, spawn a worker onto a step
+#     no worker can perform. The `needs)` dispatch line below therefore does NOT call it.
+#   · `--source needs`, so an operator step and an ordinary `add` of the same title in the same
+#     project do not collide on the event key (the id is a hash of project+title+source).
+#
+# The positional step is BOTH the item title and the `--needs` prose: they are the same sentence,
+# and asking the caller to write it twice is the friction this verb removes.
+cmd_needs() {
+  local step="" run="" project="" session=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --run)     run="${1:-}";     [ $# -gt 0 ] && shift ;;
+      --project) project="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --session) session="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --*) printf 'cc-backlog needs: unknown arg %s\n' "$key" >&2; return 2 ;;
+      *)
+        # Exactly one positional. A second is far more likely an unquoted step than a real
+        # second argument, and silently keeping the first would file a truncated sentence.
+        if [ -z "$step" ]; then step="$key"
+        else
+          { printf 'cc-backlog needs: unexpected extra argument %s\n' "$key"
+            printf '  the step is ONE quoted argument:  cc-backlog needs "authenticate motion-plus in /mcp"\n'
+          } >&2
+          return 2
+        fi ;;
+    esac
+  done
+  [ -n "$step" ] || {
+    { printf 'cc-backlog needs: "<operator-only step>" is required\n'
+      printf '  usage: cc-backlog needs "<step>" [--run "<cmd>"] [--project P] [--session SID]\n'
+    } >&2
+    return 2
+  }
+  # Session resolution order is a CONTRACT (--session > CLAUDE_SESSION_ID > CC_SESSION_ID > omitted):
+  # an explicit flag beats the ambient env so a caller filing on another session's behalf can say so.
+  [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CC_SESSION_ID:-}"
+
+  # cmd_add's stdout is the id and must NOT reach ours twice — capture it, echo once at the end.
+  # Its stderr (the already-DONE warning) is deliberately left flowing to the caller.
+  local id rc
+  if [ -n "$project" ]; then
+    id="$(cmd_add --project "$project" --title "$step" --source needs)"; rc=$?
+  else
+    id="$(cmd_add --title "$step" --source needs)"; rc=$?
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  [ -n "$id" ] || { printf 'cc-backlog needs: add returned no id\n' >&2; return 2; }
+
+  # Built as an array so a step or command containing spaces survives — an unquoted
+  # ${run:+--run "$run"} would word-split the command back apart.
+  local -a targs
+  targs=(block "$id" --needs "$step")
+  [ -n "$run" ]     && targs=("${targs[@]}" --run "$run")
+  [ -n "$session" ] && targs=("${targs[@]}" --session "$session")
+  cmd_transition "${targs[@]}" >/dev/null; rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+
   echo "$id"
 }
 
@@ -516,12 +622,20 @@ cmd_list() {
   # --json: the SAME filtered fold as the table, as a compact JSON array (one object per
   # item, full carried meta incl. `needs`) for machine consumers (cc-dispatch, the desk
   # digest). The default (table) branch is byte-unchanged for non-blocked rows.
+  #
+  # `run` + `session` (the `needs`-verb fields) are OMITTED when empty rather than emitted
+  # as "". The fold carries them ""-defaulted like every sibling field, but a renderer must
+  # be able to distinguish "this step has no runnable command" from "its command is the
+  # empty string" — an empty `run` handed to cc-do would be a blank line the operator is
+  # invited to paste. Deleted here, at the one place machine consumers read.
   if [ "$fmt" = json ]; then
     fold | jq -c --arg mode "$mode" --arg proj "$projfilter" '
       def keep: if $mode=="all" then true elif $mode=="blocked" then .status=="blocked" else .status!="done" end;
       sort_by(.project, .title)
       | map( select(keep)
-           | select($proj == "" or .project == $proj) )'
+           | select($proj == "" or .project == $proj)
+           | (if (.run     // "") == "" then del(.run)     else . end)
+           | (if (.session // "") == "" then del(.session) else . end) )'
     return 0
   fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" --arg pad "$TSV_PAD" "$CELL"'
@@ -1371,6 +1485,9 @@ case "${1:-}" in
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;
   unblock) shift; cmd_transition unblock "$@" ;;
+  # NO dispatch_kick — unlike `add` above. The item is born `blocked`, i.e. already outside the
+  # dispatch wave, so a kick is pure waste and risks a worker on a human-only step (header § needs).
+  needs)   shift; cmd_needs "$@" ;;
   reap)    shift; cmd_reap "$@" ;;
   compact) shift; cmd_compact "$@" ;;
   ""|-h|--help|help) usage ;;
