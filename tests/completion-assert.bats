@@ -479,3 +479,32 @@ Say the word and I'll take it on: which of these two approaches do you want, the
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"genuine-blocker"' "$COMPLETION_IDL"
 }
+
+# ── QUOTED SPANS ARE MENTION, NOT USE ─────────────────────────────────────────────────────────
+# Found by this hook firing on the very close that shipped it: a table citing the operator's own
+# examples matched D1 and D4, so the guard convicted the change that fixes the thing it names.
+# The pair below is the discriminator — same phrases, quoted vs bare — so a future strip that is
+# too greedy (kills the real fire) or too timid (keeps the FP) fails exactly one of them.
+@test "D1/D4 abstain when the close QUOTES the defect instead of committing it" {
+  local w; w="$(mkrepo_landed a2quote)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed, all green.
+
+| Your example | Now |
+|---|---|
+| ✅ then "two things remain yours" in ¶4 | filed via `cc-backlog needs`, renders in the block |
+| "Say the word and I'"'"'ll pick up either" | three dispositions, never a fourth |
+
+Curly variant, same rule: “two things remain yours” is a citation too.')" "$w" "a2-quote"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "CONTROL: the same phrases UNQUOTED still fire — the strip did not defang the arm" {
+  local w; w="$(mkrepo_landed a2quotectl)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed, all green.
+
+Two things remain yours: authenticate motion-plus, and restart Cursor.
+
+Say the word and I will pick up either of the remaining items.')" "$w" "a2-quote-ctl"
+  [ "$status" -ne 0 ] || [ -n "$output" ]
+  printf '%s' "$output" | grep -q 'cc-backlog needs'
+}
