@@ -40,6 +40,10 @@ done
 # itself for a caller with no anchor intent (resolve_headless_anchor), so a launchd respawn splits
 # the operator's existing window instead of minting a new one. The stub therefore models ACCEPTANCE.
 printf '%s\n' "$orig" >> "$(dirname "$0")/fire.log"
+# ISOLATION (2026-08-01): model handoff-fire.sh:3070 — --in-place is ONLY an env prefix on the typed
+# launch line. Writing it to fire.env lets the tests assert on the FIRED SESSION'S ENV (the property
+# that matters) rather than on argv alone; the fixture-parity test pins that this mapping is real.
+case " $orig " in *" --in-place "*) printf 'CLAUDE_ISOLATION_SKIP=1\n' >> "$(dirname "$0")/fire.env" ;; esac
 exit 0
 FIRE
   chmod +x "$C/stubs/fire"
@@ -138,6 +142,55 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   [ -f "$C/stubs/fire.log" ]                       # the fire still happens (the 41h defect stays fixed)
   ! grep -q -- '--window' "$C/stubs/fire.log" || false # …and it does not mint a window
   grep -q -- '--prompt-file' "$C/stubs/fire.log"
+}
+
+# ── WORKTREE-ISOLATION EXEMPTION (2026-08-01) ────────────────────────────────────────────────────
+# always-isolate routes every new interactive session into its own git worktree. The desk must be
+# exempt: this is a LAUNCHD respawn path, so an isolated fire either re-lands on the shared root the
+# policy exists to drain, or mints a NEW worktree per respawn — an unbounded leak that nothing here
+# ever reaps. The exemption travels as handoff-fire's --in-place (env prefix, nothing else).
+
+@test "isolation: the respawn fires --in-place — the new desk's env carries CLAUDE_ISOLATION_SKIP=1" {
+  printf 'UISO\n' > "$C/roles/desk"
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  grep -q -- '--in-place' "$C/stubs/fire.log"
+  grep -qx 'CLAUDE_ISOLATION_SKIP=1' "$C/stubs/fire.env"   # …and it reaches the fired session's ENV
+  grep -q -- "--cwd $C" "$C/stubs/fire.log"                # in place AT the canned cwd, not a worktree
+}
+
+@test "isolation: DESK_INVARIANT_ISOLATION_SKIP=0 drops the exemption (no --in-place, no env prefix)" {
+  # The exemption is a policy call, not a law — it must be revocable without a code edit, and the
+  # revocation must be TOTAL (argv and env), not merely absent from the log we happen to read.
+  printf 'UISO0\n' > "$C/roles/desk"
+  export DESK_INVARIANT_ISOLATION_SKIP=0
+  run "$DI" --once
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]                               # the respawn still happens…
+  ! grep -q -- '--in-place' "$C/stubs/fire.log" || false   # …carrying no exemption
+  [ ! -f "$C/stubs/fire.env" ]
+}
+
+@test "isolation: --in-place IS handoff-fire's CLAUDE_ISOLATION_SKIP seam (fixture parity)" {
+  # setup()'s stub MODELS the mapping; a model is a claim. Pin the producer's own two lines so a
+  # rename there goes red HERE instead of silently un-exempting the desk — the failure mode is a
+  # worktree leaked per respawn, which no other assertion in this suite can see.
+  grep -q -- '--in-place)    IN_PLACE=1;' "$REPO/scripts/handoff-fire.sh"
+  grep -qF 'PREFIX="CLAUDE_ISOLATION_SKIP=1 "' "$REPO/scripts/handoff-fire.sh"
+}
+
+@test "isolation: CANNED_CWD still defaults to the shared root and is still overridable" {
+  # The exemption is only worth anything if the cwd it launches in place AT is unchanged.
+  printf 'UCWD1\n' > "$C/roles/desk"
+  run "$DI" --once
+  grep -q -- "--cwd $C" "$C/stubs/fire.log"                # override honoured (this suite's own setup)
+  # Default path: $HOME is FIXTURED so the default expands inside the tmpdir — an unfixtured run
+  # would assert against the operator's real checkout and read green for the wrong reason.
+  rm -f "$C/stubs/fire.log"
+  printf 'UCWD2\n' > "$C/roles/desk"
+  run env -u DESK_INVARIANT_CANNED_CWD HOME="$C/home" "$DI" --once
+  grep -q -- "--cwd $C/home/Development/claude-infrastructure" "$C/stubs/fire.log"
 }
 
 @test "no-desk: a FAILING fire still consumes respawn budget (no unbounded loop)" {
