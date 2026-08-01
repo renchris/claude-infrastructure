@@ -5,6 +5,9 @@
 #     stdout: `FULL` (run everything) | newline list of tests/*.bats | EMPTY (provably inert)
 #     exit:   always 0 on completion.
 #   gate-select.sh lint      — anti-rot guard, see below. exit 0 clean / 1 + orphan list.
+#   gate-select.sh --selftest — RED-proves the fail-closed law, the live map lint (with a planted
+#     orphan as its positive control), and NON-DEGENERACY. exit 1 on any failed assertion.
+#     CWD-independent on purpose: it resolves its own checkout (see the ROOT guard below).
 #
 # THE LAW: any doubt fails CLOSED. An unrecognised status, an unmapped file, a missing
 # python3, an unparseable range, an internal error — every one of them prints FULL. A
@@ -35,10 +38,19 @@ DIRECT=0
 MODE=select
 RANGES=()
 
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 
 fail_closed() {  # $1=reason — the single exit used by every uncertainty in this wrapper
   [ "$EXPLAIN" -eq 1 ] && printf 'FULL <- %s\n' "$1" >&2
+  # A SELFTEST that cannot run has proved nothing, so it must never take the FULL/exit-0 door:
+  # that is the same law the python side already applies to `lint`, and taking it here would hand
+  # the nightly a green it never earned — the exact vacuous `ok` --selftest exists to end.
+  if [ "$MODE" = selftest ]; then
+    printf 'gate-select --selftest: cannot run (%s)\n' "$1" >&2
+    exit 1
+  fi
   printf 'FULL\n'
   exit 0
 }
@@ -48,6 +60,7 @@ while [ $# -gt 0 ]; do
     --explain) EXPLAIN=1 ;;
     --direct)  DIRECT=1 ;;
     -h|--help) usage; exit 0 ;;
+    --selftest) MODE=selftest ;;
     lint)      MODE=lint ;;
     --)        shift; while [ $# -gt 0 ]; do RANGES+=("$1"); shift; done; break ;;
     -*)        fail_closed "unknown-option:$1" ;;
@@ -59,7 +72,12 @@ done
 command -v git >/dev/null 2>&1 || fail_closed "no-git"
 command -v python3 >/dev/null 2>&1 || fail_closed "no-python3"
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-[ -n "$ROOT" ] || fail_closed "not-a-git-checkout"
+# --selftest is exempt ON PURPOSE, and this is the load-bearing line of the whole dispatch: the
+# nightly runs every scripts/*gate*.sh BY ABSOLUTE PATH, and its plist sets no WorkingDirectory, so
+# CWD is launchd's `/` — where rev-parse finds no checkout. Failing closed there would print FULL
+# and exit 0, handing the nightly a green the selftest never ran for: the very vacuous `ok` this
+# selftest was added to end. The selftest resolves its own checkout from $SELF instead.
+[ -n "$ROOT" ] || [ "$MODE" = selftest ] || fail_closed "not-a-git-checkout"
 
 if [ "$MODE" = select ]; then
   [ "${#RANGES[@]}" -gt 0 ] || fail_closed "no-range"
@@ -543,6 +561,124 @@ except Exception as exc:               # noqa: BLE001 — every internal error f
     sys.stdout.write("FULL\n")
 PY
 }
+
+# ════ selftest — RED-prove THE LAW, the live map lint, and NON-DEGENERACY ══════════════════════
+# WHY THIS EXISTS: nightly-regression.sh step 4 globs scripts/*gate*.sh and BARE-RUNS anything with
+# no --selftest dispatch. A bare run of this file has no range, so it fails closed to FULL and
+# exits 0 — an `ok` that can never fail, i.e. a deleted check (cc-backlog 94f0b1fcc5c8).
+#
+# The hard part is that FULL/exit-0 is also this selector's CORRECT answer to almost every
+# uncertainty, so a check that merely runs it can never distinguish "healthy" from "degenerate".
+# Two assertions below carry that weight and nothing else does:
+#   * the EMPTY RANGE must select NOTHING — the one input whose right answer is not FULL, so it is
+#     the only cheap probe that separates a working selector from one stuck at fail-closed;
+#   * the live map lint gets a PLANTED ORPHAN as its positive control — a green lint proves the map
+#     is sound only once the same code has been shown to go RED on a tree that deserves it.
+PASS=0; FAIL=0
+# shellcheck disable=SC2317
+okp()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
+# shellcheck disable=SC2317
+badp() { printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
+# shellcheck disable=SC2317
+selftest() {
+  local repo real link d out rc
+
+  # $SELF may be reached through the ~/.claude/scripts/<name> symlink, whose parent is NOT a
+  # checkout. `cd $(dirname)` + pwd resolves the DIRECTORY, never the final link, so derive the
+  # root only after walking the link itself — otherwise the live-tree assertions below would run
+  # against ~/.claude and abstain into a false green.
+  real="$SELF"
+  while [ -L "$real" ]; do
+    link="$(readlink "$real")"
+    case "$link" in
+      /*) real="$link" ;;
+      *)  real="$(cd "$(dirname "$real")" && pwd)/$link" ;;
+    esac
+  done
+  repo="$(cd "$(dirname "$real")/.." && pwd 2>/dev/null)" || repo=""
+  if [ -z "$repo" ] || ! git -C "$repo" rev-parse --show-toplevel >/dev/null 2>&1; then
+    printf 'gate-select --selftest: %s is not a git checkout — proved nothing\n' "${repo:-<unresolved>}" >&2
+    return 1
+  fi
+  echo "gate-select --selftest: repo=$repo"
+
+  sel() { ( cd "$repo" && "$SELF" "$@" </dev/null 2>/dev/null ); }
+
+  # ── THE LAW: any doubt fails CLOSED to FULL, and never with a nonzero exit. ──
+  out="$(sel)"; rc=$?
+  [ "$out" = FULL ] && [ "$rc" -eq 0 ] && okp "no range → FULL, exit 0" \
+                                       || badp "no range → '$out' rc=$rc (want FULL/0)"
+  out="$(sel notarange)"; rc=$?
+  [ "$out" = FULL ] && [ "$rc" -eq 0 ] && okp "unparseable range → FULL, exit 0" \
+                                       || badp "bad range → '$out' rc=$rc (want FULL/0)"
+  out="$(sel --no-such-option)"; rc=$?
+  [ "$out" = FULL ] && [ "$rc" -eq 0 ] && okp "unknown option → FULL, exit 0" \
+                                       || badp "unknown option → '$out' rc=$rc (want FULL/0)"
+
+  # ── NON-DEGENERACY. FULL is the right answer to nearly every uncertainty, so a selector stuck
+  #    at fail-closed passes every assertion above. An empty range is the one input whose correct
+  #    answer is EMPTY, which makes it the cheapest thing that can tell the two apart. ──
+  out="$(sel HEAD..HEAD)"; rc=$?
+  [ -z "$out" ] && [ "$rc" -eq 0 ] \
+    && okp "empty range selects NOTHING, not FULL (selector is not stuck fail-closed)" \
+    || badp "empty range → '$out' rc=$rc (want empty/0 — a FULL here means degenerate)"
+
+  # ── The live map lint: every tests/*.bats is reachable, i.e. none has silently stopped running. ──
+  out="$(sel lint)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && okp "live tree: map lint green — no unreachable suite" \
+                                   || badp "live map lint rc=$rc — suite(s) nothing selects: $out"
+
+  # ── …and its POSITIVE CONTROL. A lint that cannot go RED is the same deleted check as a bare
+  #    run, so plant an orphan in a hermetic fixture and require this same code to name it. ──
+  d="$(mktemp -d "${TMPDIR:-/tmp}/gate-select-selftest.XXXXXX")" || {
+    printf 'gate-select --selftest: mktemp failed — cannot run the lint control\n' >&2; return 1; }
+  # shellcheck disable=SC2064
+  trap "rm -rf '$d'" EXIT
+  mkdir -p "$d/scripts" "$d/tests" "$d/home"
+  printf '#!/bin/bash\necho alpha\n' > "$d/scripts/alpha-tool.sh"
+  printf '#!/usr/bin/env bats\n@test "alpha" {\n  run bash scripts/alpha-tool.sh\n}\n' > "$d/tests/alpha-tool.bats"
+  printf '#!/usr/bin/env bats\n@test "nothing selects me" {\n  true\n}\n' > "$d/tests/zzz-orphan-control.bats"
+  (                                        # HOME is redirected: the fixture must not inherit the
+    cd "$d" || exit 1                      # operator's ~/.gitconfig (hooks, signing, templates).
+    HOME="$d/home" git init -q . &&
+    HOME="$d/home" git -c user.email=t@example.com -c user.name=tester -c commit.gpgsign=false \
+      -c core.hooksPath=/dev/null add -A &&
+    HOME="$d/home" git -c user.email=t@example.com -c user.name=tester -c commit.gpgsign=false \
+      -c core.hooksPath=/dev/null commit -q -m base
+  ) >/dev/null 2>&1 || { badp "lint control: fixture repo could not be built"; }
+  out="$( cd "$d" && HOME="$d/home" "$SELF" lint </dev/null 2>/dev/null )"; rc=$?
+  [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'zzz-orphan-control' \
+    && okp "lint POSITIVE CONTROL: a planted orphan suite is named, exit 1" \
+    || badp "lint control rc=$rc out='$out' (want rc=1 naming zzz-orphan-control)"
+  # …and the same fixture WITHOUT the orphan must be green, so the control is not just "lint
+  # always reds on a small tree" — the two runs differ by exactly one file. It has to leave the
+  # INDEX, not just the working tree: the lint enumerates suites with `git ls-files`, so a plain
+  # rm leaves the orphan tracked and the "clean" run reds identically (it did, first try).
+  ( cd "$d" && HOME="$d/home" git -c core.hooksPath=/dev/null rm -q -f tests/zzz-orphan-control.bats ) >/dev/null 2>&1 \
+    || badp "lint control: could not untrack the planted orphan"
+  out="$( cd "$d" && HOME="$d/home" "$SELF" lint </dev/null 2>/dev/null )"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && okp "lint control: same fixture minus the orphan is GREEN" \
+                                   || badp "lint control (clean) rc=$rc out='$out' (want 0/empty)"
+
+  # ── `lint` must refuse a range rather than lint the wrong thing and report green. ──
+  out="$( cd "$repo" && "$SELF" lint HEAD..HEAD </dev/null 2>&1 )"; rc=$?
+  [ "$rc" -eq 1 ] && okp "lint refuses a range (exit 1, no green on the wrong question)" \
+                  || badp "lint+range rc=$rc out='$out' (want 1)"
+
+  out="$( cd "$repo" && "$SELF" --help </dev/null 2>/dev/null )"; rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$out" ] && okp "--help prints the usage block, exit 0" \
+                                   || badp "--help rc=$rc, $(printf '%s' "$out" | wc -c) bytes"
+
+  echo "gate-select --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || return 1
+  echo "gate-select --selftest: GREEN — fail-closed law held, empty range stayed EMPTY (not degenerate), map lint green and RED-proved."
+  return 0
+}
+
+if [ "$MODE" = selftest ]; then
+  selftest
+  exit $?
+fi
 
 if [ "$MODE" = lint ]; then
   # An arg to `lint` means the caller expected selection semantics; refusing beats linting
