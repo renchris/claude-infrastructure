@@ -70,14 +70,37 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Account stores. `.claude` and `.claude-next` are the SAME account (mirror) — a
-# session present in both is ONE `next` session, so `.claude` is not scanned.
-STORES = [
-    ("next", ".claude-next"),
-    ("next2", ".claude-secondary"),
-    ("next3", ".claude-tertiary"),
-    ("next4", ".claude-quaternary"),
-]
+
+def _load_stores() -> list[tuple[str, str]]:
+    """Account stores: (name, config-dir basename), from accounts.json's accounts[] — the
+    same SSOT bin/claude-accounts reads, so this works for any N accounts, not a hardcoded
+    4. `.claude` is never scanned even if declared as an alias: it and the primary account's
+    real dir are the SAME account (mirror), so scanning both would double-count one session.
+    Falls back to the historical 4-account list if accounts.json is absent/unreadable (e.g. a
+    fresh checkout before setup) so this stays a decision point, never a hard crash."""
+    cfg_path = os.environ.get("CLAUDE_ACCOUNTS_JSON") or str(
+        Path.home() / ".claude" / "accounts.json"
+    )
+    try:
+        accounts = json.loads(Path(cfg_path).read_text()).get("accounts", [])
+        stores = [
+            (a["name"], Path(a["config_dir"]).name)
+            for a in accounts
+            if a.get("name") and a.get("config_dir")
+        ]
+        if stores:
+            return stores
+    except (OSError, ValueError, KeyError):
+        pass
+    return [
+        ("next", ".claude-next"),
+        ("next2", ".claude-secondary"),
+        ("next3", ".claude-tertiary"),
+        ("next4", ".claude-quaternary"),
+    ]
+
+
+STORES = _load_stores()
 
 TS_RE = re.compile(r'"timestamp"\s*:\s*"([^"]+)"')
 DEFAULT_MAX_PER_WORKTREE = 1
