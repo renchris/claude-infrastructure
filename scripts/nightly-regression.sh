@@ -52,6 +52,10 @@ ngr_osa() {
 
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# The scripts dir this file SHIPS in — BASH_SOURCE-derived, so NOT redirectable by CC_NIGHTLY_REPO.
+# NGR_UNSAFE_DECL declares basenames that travel WITH this script, so its staleness must be judged
+# against this directory and never against $REPO (see the stale-declaration loop in step 4).
+SELF_SCRIPTS="$(dirname "$SELF")"
 REPO="${CC_NIGHTLY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PAGEDIR="${CC_NIGHTLY_PAGEDIR:-$HOME/.claude/autonomy/pages}"
 LOG="${CC_NIGHTLY_LOG:-$HOME/.claude/autonomy/regression.log}"
@@ -368,11 +372,18 @@ regress() {
   # are env-overridable (the selftest points them at empty fixture dirs), so a glob-derived answer
   # would report every declaration stale whenever the glob is narrowed — which is a statement about
   # the glob, not about the declaration.
+  # …and $REPO is the SAME class of redirectable input, one level up. It defaults to this script's
+  # checkout but CC_NIGHTLY_REPO overrides it, and a harness legitimately points it at a fixture
+  # checkout to exercise the git-based checks (tests/deploy-live.bats does exactly this for
+  # postland-inertness). A $REPO-derived answer then reports EVERY declaration stale — a statement
+  # about the fixture repo, not about the declaration. NGR_UNSAFE_DECL names basenames that ship in
+  # THIS file's own scripts dir, so judge it against $SELF_SCRIPTS, which no env var can move.
+  # (Landed red: eb85b3f4 keyed this on $REPO and turned deploy-live.bats:187 red from 2026-07-30.)
   local d dn
   for d in "${NGR_UNSAFE_DECL[@]}"; do
     dn="${d%%|*}"
-    [ -f "$REPO/scripts/$dn" ] && continue
-    printf '  RED  stale UNSAFE declaration: %s no longer exists under %s/scripts\n' "$dn" "$REPO"
+    [ -f "$SELF_SCRIPTS/$dn" ] && continue
+    printf '  RED  stale UNSAFE declaration: %s no longer exists under %s\n' "$dn" "$SELF_SCRIPTS"
     REDS+=("stale-decl:$dn")
   done
 
