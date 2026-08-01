@@ -204,9 +204,24 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
 # session-lifecycle-safety-gate:70, comms-safety-gate:39) → a cosmetic `--selftest` in the log name
 # for gates that ignore argv entirely. Now: a literal `--selftest` must appear as a real DISPATCH —
 # a case pattern (own line, or on the `case … in` line) or an option comparison. Nothing else counts.
+#
+# The redirect below is NOT a style choice. As a PIPELINE this function was position-dependent:
+# `grep -q` exits the instant it matches, the upstream `grep -vE` dies of SIGPIPE on its next block
+# write, and `set -uo pipefail` (line 27) promotes that 141 to the pipeline's status — so an EARLY
+# match read as "no --selftest" and the gate was silently BARE-RUN. A LATE match survives because the
+# producer has already finished writing.
+#
+# It was a LATENT trap, not a live one: no shipped script had an early arm, so nothing had ever
+# tripped it, and every S4 fixture below is 3-5 lines long — their matches sit at EOF by
+# construction, so all five passed with the defect present. The first script to add an early arm hit
+# it on the first run (gate-select.sh, arm at stripped line 27 of 521, rc=141 ⇒ bare-run), while
+# gate-classify.sh (arm at 91 of 94) worked purely by position. Measured on /bin/bash 3.2, the shell
+# the plist runs — under zsh the same pipeline returns 0, so probing in the wrong shell hides it.
+# Process substitution keeps the producer OUT of the exit status, so the rc is grep -q's alone.
 supports_selftest() {
-  grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -qE -- \
-    '^[[:space:]]*\(?[-|A-Za-z0-9_*."]*--selftest[-|A-Za-z0-9_*."]*\)|(^|[^[:alnum:]_])case[[:space:]].*[[:space:]]in[[:space:]].*--selftest[-|A-Za-z0-9_*."]*\)|==?[[:space:]]*"?--selftest"?'
+  grep -qE -- \
+    '^[[:space:]]*\(?[-|A-Za-z0-9_*."]*--selftest[-|A-Za-z0-9_*."]*\)|(^|[^[:alnum:]_])case[[:space:]].*[[:space:]]in[[:space:]].*--selftest[-|A-Za-z0-9_*."]*\)|==?[[:space:]]*"?--selftest"?' \
+    < <(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null)
 }
 
 # ════ step-4 CLASSIFICATION — why the RED set could never empty ═══════════════════════════════════
@@ -597,6 +612,19 @@ selftest() {
   supports_selftest "$d/detect/opt.sh"      && okp "S4: detects an option comparison" || badp "S4: missed an option comparison"
   supports_selftest "$d/detect/prose.sh"    && badp "S4: matched PROSE / another script's flag" || okp "S4: ignores prose + calls to other scripts"
   supports_selftest "$d/detect/bareverb.sh" && badp "S4: matched a BARE-verb arm (would pass a rejected flag)" || okp "S4: ignores a bare-verb arm"
+
+  # S4-b: POSITION INDEPENDENCE. Every fixture above is 3-5 lines, so its match is always near EOF
+  # and the old pipeline form passed all five while silently bare-running the one real script whose
+  # arm sits early in a long file. A control that cannot fail the way production failed is not a
+  # control — so this one puts the arm on line 3 and ~2000 lines BEHIND it, which is what makes the
+  # producer still be writing when `grep -q` short-circuits.
+  # shellcheck disable=SC2016  # the ${1:-} below is LITERAL fixture script text, never an expansion
+  { printf '#!/bin/bash\ncase "${1:-}" in\n  --selftest) run ;;\nesac\n'
+    i=0; while [ "$i" -lt 2000 ]; do printf 'filler_%d=1\n' "$i"; i=$((i+1)); done
+  } > "$d/detect/early-arm-long.sh"
+  supports_selftest "$d/detect/early-arm-long.sh" \
+    && okp "S4-b: an EARLY arm in a long file is still detected (no SIGPIPE/pipefail inversion)" \
+    || badp "S4-b: early arm in a long file read as unsupported — the gate would be BARE-RUN"
 
   # S3: an unmarked transitive e2e call inside a declared gate must go RED; a reviewed one must not
   mkdir -p "$d/e2egates"
