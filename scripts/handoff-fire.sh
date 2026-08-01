@@ -186,6 +186,24 @@ FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"   # T-P3-4 fired-peer marker
 # proj_dir()'s account map (account 1 mirrors projects/ back into ~/.claude — hence the first entry).
 CC_PROJECTS_DIRS="${CC_PROJECTS_DIRS:-$HOME/.claude/projects $HOME/.claude-next/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}"
 
+# THE DETECTOR IS THE LATENCY (V2 A2). engagement_seen's marker path content-greps every transcript
+# under $pdir on EVERY poll iteration. Measured on this box 2026-07-31: 1,888 files / 1.1 GB, warm
+# cache, 9.3-10.4s PER PASS — so the nominal 3s FIRE_ENGAGE_INTERVAL is really ~13s, and that is the
+# floor, at idle. Decomposing all 115 schema-2 records against their own transcripts attributed the
+# DoD's headline number: of a 126s p50 fire→engaged, spawn+boot is 26.6s and the model's first turn
+# is 9.2s, while DETECTION LAG alone is 89.8s (p95 280.6s) — 71% of the metric was the poll noticing,
+# not the successor working. A marker can only be in a transcript WRITTEN SINCE THE FIRE, so the scan
+# is mtime-scoped: 6 files / 0.20s at the 240-min default, a ~50x cut with a 4-hour safety margin
+# (the marker lands within ~3 min of fire start; even a 24h window is only 66 files).
+#
+# The window is minutes-based (-mmin), never a parsed date: BSD and GNU find agree on -mmin, and it
+# needs no clock arithmetic in a hot loop. F2 is preserved BY THE SAME PROPERTY the resume fix relies
+# on — a --resume writes into the ORIGINAL sid's transcript, and writing is what updates its mtime,
+# so a resumed successor stays inside the window exactly when it ingests the marked prompt.
+# R8 kill switch: CC_ENGAGE_SCAN_WINDOW=0 restores the unscoped full-corpus scan.
+CC_ENGAGE_SCAN_WINDOW="${CC_ENGAGE_SCAN_WINDOW:-1}"
+CC_ENGAGE_SCAN_WINDOW_MIN="${CC_ENGAGE_SCAN_WINDOW_MIN:-240}"
+
 # This script is symlinked into ~/.claude/scripts; resolve its REAL dir so the sibling comms-safety
 # tools it now wires — payload-lint.sh (F3, T-P2-5) and completion-push.sh (F5, T-P2-1) — are found
 # beside the actual file (NOT via $REPO, which is the TARGET-of-fire repo). Env-overridable for tests.
@@ -734,8 +752,11 @@ assistant_turn_in() { # $1=transcript jsonl → 0 a content-bearing assistant tu
 }
 
 engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 not
-  local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid
+  local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid scan_win=""
   ENGAGE_PROOF="" ENGAGE_TRANSCRIPT=""    # R12 — every success names the oracle that produced it
+  # mtime-scope the marker scan (see CC_ENGAGE_SCAN_WINDOW above — 71% of the DoD metric was this
+  # grep). Built as a variable because it must expand to TWO find operands or to nothing at all.
+  [ "${CC_ENGAGE_SCAN_WINDOW:-1}" != 0 ] && scan_win="-mmin -${CC_ENGAGE_SCAN_WINDOW_MIN:-240}"
   # (a) the transcript carrying the marker must ALSO show an assistant turn (ingested AND ran).
   # V2 §5.2: this CONTENT path is what makes a RESUMED successor provable. `--resume` writes into the
   # ORIGINAL sid's transcript, so no "new" transcript is ever created — but that transcript DOES now
@@ -747,7 +768,9 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
       [ -n "$hit" ] || continue
       assistant_turn_in "$hit" && { ENGAGE_PROOF="marker"; ENGAGE_TRANSCRIPT="$hit"; return 0; }
     done <<EOF
-$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
+$(
+      # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
+      find "$pdir" -name '*.jsonl' -type f $scan_win -exec grep -lF -- "$marker" {} + 2>/dev/null)
 EOF
   fi
   # (b) a cc-registry row's (non-null) session_id NAMES a transcript — that transcript must show an
@@ -924,7 +947,14 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
 # the token ever reached its own stream the check would pass on the predecessor's turns — the exact
 # false-positive this function exists to prevent. Cheap belt, no cost when the leak never happens.
 recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
-  local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit
+  local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
+  # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
+  # CC_PROJECTS_DIRS (5 dirs / 4.6 GB measured), so an unscoped pass costs ~40s inside a watcher that
+  # is polling. Scoped, all five dirs together measure 0.54s. Inlined rather than shared with
+  # engagement_seen on purpose: both functions are sed-extracted as ISOLATED units by their suites
+  # (tests/handoff-recycle-engagement.bats:58, tests/fire-engagement.bats:33), so a new collaborator
+  # would be a 127 under `set -e` — the trap this file has already paid for once (V2 §11, defect 1).
+  [ "${CC_ENGAGE_SCAN_WINDOW:-1}" != 0 ] && scan_win="-mmin -${CC_ENGAGE_SCAN_WINDOW_MIN:-240}"
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
   if [ -n "$marker" ]; then
     for pdir in $CC_PROJECTS_DIRS; do
@@ -934,7 +964,9 @@ recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
         [ -n "$oldsid" ] && [ "$(basename "$hit")" = "$oldsid.jsonl" ] && continue
         if assistant_turn_in "$hit"; then return 0; fi
       done <<EOF
-$(find "$pdir" -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
+$(
+        # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
+        find "$pdir" -name '*.jsonl' -type f $scan_win -exec grep -lF -- "$marker" {} + 2>/dev/null)
 EOF
     done
   fi
