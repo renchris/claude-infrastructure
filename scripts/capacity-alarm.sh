@@ -100,6 +100,23 @@ SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
 # 400; the sample taken 4.3 min before the panic read 1002. 500/700 is 1.42x/1.98x the observed
 # healthy max — no false positive in the whole series, and the fatal sample clears both. Re-derive
 # before touching these (panic-iterm2-coalition-2026-07-31.md §7).
+#
+# ⚠️ THESE TWO NUMBERS ARE NOT CALIBRATED — measured 2026-08-01, see §8 of the same doc. Every figure
+# above reproduces, but only against ONE boot. Two findings bound what this rung can do:
+#   (1) WRONG NOUN. The PREVIOUS boot's iTerm2 coalition (331 samples) sat >=500 procs for 3h10m,
+#       10 samples >=700, peaking at 996 — and SURVIVED. The fatal sample was 1002. Six processes
+#       separate the survived class from the fatal one, so no setting of these thresholds can tell
+#       them apart. What does separate them is mass per process: every healthy sample across four
+#       boots is 19.7-36.4 MiB/proc, the fatal one is 142.6 (3.9x outside the band).
+#   (2) WRONG UNITS. The thresholds were derived from systemstats CoalitionMemory.process_count, but
+#       read_coalition_procs() below is a ps tree-walk, which measures 0.57x that (6 time-aligned
+#       pairs, mean 0.57, range 0.43-0.62): a coalition keeps reparented orphans, the walk stops at
+#       pid 1 by construction. So 500/700 here mean ~877/~1228 coalition procs, and the fatal sample
+#       would have walked to ~571 — WARN, never ALARM, on the very event this rung exists for.
+# Left AS-IS deliberately: fixing (2) alone would make the rung fire correctly on a quantity that
+# (1) shows cannot discriminate. Re-nouning needs a per-coalition FOOTPRINT instrument that does not
+# exist yet (summing `ps rss` is the ~2.34x shared-page over-count this header bans above), so it is
+# a design change, not a maintenance edit. Backlogged; do not tune these in the meantime.
 COAL_WARN="${CC_CAP_COAL_WARN:-500}"
 COAL_ALARM="${CC_CAP_COAL_ALARM:-700}"
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
