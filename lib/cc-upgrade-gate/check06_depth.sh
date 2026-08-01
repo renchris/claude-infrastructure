@@ -9,12 +9,22 @@
 # #5 (which checks the whole launched flag-set): here the single question is CONTAINMENT, verified on
 # BOTH surfaces that start the binary in this system —
 #   (A) the gate's OWN headless path: `gate_headless` in common.sh must export the guard, and
-#   (B) the interactive launcher: `claude-opus5` must pass SPAWN_DEPTH=1 into the child (effect-read).
+#   (B) the interactive launcher: `claude` must pass SPAWN_DEPTH=1 into the child (effect-read).
 # PASS iff BOTH pin the guard. If the launcher can't be extracted, part B is unverifiable → SKIP.
+#
+# RETARGETED 2026-08-01 (was `claude-opus5`). Same root cause as check05: the 2026-07-31
+# consolidation turned claude-opus5 into a one-line shim `{ claude "$@"; }`, so extracting it and
+# effect-reading it found launcher_pins=0 and this check reported "#68619 runaway risk" against a
+# system whose guard was in fact intact — the alarm was reading the wrong function. A control run
+# on 2026-08-01 confirmed the identical FAIL on BOTH 2.1.219 and 2.1.220, which is what separated
+# a stale check from a real regression. Part B now reuses check05's `_gate05_effect_read` helper,
+# which derives the stub path from the launcher's own `_bin=` line and plants a passthrough
+# cc-close-attrib — without the latter the exec chain dies under the fake $HOME and the empty argv
+# reads as an un-pinned guard, i.e. this check would fail LOUD for a purely harness reason.
 # shellcheck shell=bash
 
 check_06() {
-  local zshrc="$HOME/.zshrc" body_o5="" gate_pins=0 launcher_pins=0 argv=""
+  local zshrc="$HOME/.zshrc" body_main="" gate_pins=0 launcher_pins=0 argv=""
 
   # (A) the gate's own headless path pins the guard — introspect the ALREADY-SOURCED gate_headless
   # function body (layout-independent: robust to a CHECKS_DIR override where common.sh is not a
@@ -24,33 +34,32 @@ check_06() {
   fi
 
   # (B) effect-read: the launcher passes SPAWN_DEPTH=1 into the candidate binary's env.
-  [ -f "$zshrc" ] && body_o5="$(extract_function claude-opus5 "$zshrc")"
-  if [ -z "$body_o5" ]; then
+  [ -f "$zshrc" ] && body_main="$(extract_function claude "$zshrc")"
+  if [ -z "$body_main" ]; then
     emit_result 06 spawn-depth-containment SKIP \
-      "claude-opus5() not extractable from ~/.zshrc — launcher effect-read unavailable" \
+      "claude() not extractable from ~/.zshrc — launcher effect-read unavailable" \
       "gate_headless pins the guard in common.sh=$gate_pins"
     return 0
   fi
 
-  local fakehome="" log=""
+  # Shared with check05: derives the stub path from the launcher's OWN `_bin=` line (so a version
+  # bump cannot strand this probe) and plants a passthrough cc-close-attrib under the fake $HOME
+  # (without it, claude()'s exec chain dies before the stub and the guard reads as ABSENT).
+  _g5_main_rel="$(_gate05_bin_relpath "$body_main")"
+  if [ -z "$_g5_main_rel" ]; then
+    emit_result 06 spawn-depth-containment SKIP \
+      "claude() carries no \$HOME/.claude-NNN binary pin to plant a stub against" \
+      "gate_headless pins the guard in common.sh=$gate_pins"
+    return 0
+  fi
+
+  local fakehome=""
   fakehome="$(mktemp -d)"
-  log="$(mktemp)"
-  build_stub_binary "$fakehome/.claude-219/node_modules/.bin/claude"
-  (
-    export HOME="$fakehome" STUB_LOG="$log"
-    unset CLAUDE_CONFIG_DIR CLAUDE_OPUS5_PERM CLAUDE_OPUS5_EFFORT
-    # shellcheck disable=SC2317  # invoked indirectly by the eval'd launcher body
-    _cc_route_check()  { return 0; }
-    # shellcheck disable=SC2317
-    _cc_sync_account() { :; }
-    # shellcheck disable=SC2317
-    _cc_tlid()         { echo t; }
-    eval "$body_o5"
-    claude-opus5 -p ok >/dev/null 2>&1
-  )
-  grep -q '^SPAWN_DEPTH=1$' "$log" 2>/dev/null && launcher_pins=1
-  argv="$(grep '^ARGV:' "$log" 2>/dev/null | tail -1)"
-  rm -rf "$fakehome" "$log"
+  _gate05_stub_closeattrib "$fakehome"
+  _gate05_effect_read claude "$zshrc" "$fakehome"
+  [ "$_g5_depth" = "SPAWN_DEPTH=1" ] && launcher_pins=1
+  argv="$_g5_argv"
+  rm -rf "$fakehome"
 
   if [ "$gate_pins" = 1 ] && [ "$launcher_pins" = 1 ]; then
     emit_result 06 spawn-depth-containment PASS \
