@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.worktree-gc-infra — the SCHEDULED worktree janitor for claude-infrastructure.
+
+  scripts/worktree-gc.sh has been a complete, safe janitor for this repo since 2026-07-25 and
+  nothing ever ran it on a cadence: the only scheduled reaper on this box is gl.reso.worktree-gc,
+  whose runner hardcodes the reso repo. Measured 2026-08-01: 126 worktrees, 1,193 branches. This
+  plist is the missing cron and nothing else — every safety gate stays in worktree-gc.sh.
+
+  04:15, NOT 03:15. reso's reaper owns 03:15, and both sweeps run `git worktree remove` / `git
+  branch -d` against repos that share ~/Development/.worktrees; an hour of separation keeps them
+  off each other's git objects. (They also share worktree-gc.sh's own CC_WTGC_LOCK default, which
+  is the correctness guarantee; the offset is what keeps that lock from turning one sweep into a
+  no-op every night.)
+
+  `bash -c` (not a bare ProgramArguments path) for the same reason as deploy-live: launchd expands
+  neither ~ nor $HOME inside ProgramArguments. Standard*Path cannot take $HOME at all, hence the
+  literals. The script hardens its own PATH on line 1 — including /usr/sbin, where lsof lives and
+  whose omission made reso's reaper blind to live sessions and reap one (2026-06-19).
+
+  RunAtLoad false: unlike deploy-live, a stale sweep costs nothing and a login is a moment when
+  worktrees are MOST likely to be in use. There is no urgency that justifies reaping at boot.
+
+  C10: the OPERATOR loads this, via docs/activation/pending-activation/27-worktree-gc-infra-activate.sh.
+  Kill switch (no unload needed): touch ~/.claude/autonomy/worktree-gc-infra.disabled
+  Full stop:                      launchctl bootout gui/$(id -u)/com.claude.worktree-gc-infra
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.worktree-gc-infra</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh"</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/logs/worktree-gc-infra.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/logs/worktree-gc-infra.out.log</string>
+</dict>
+</plist>

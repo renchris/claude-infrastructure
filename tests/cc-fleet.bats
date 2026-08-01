@@ -554,8 +554,13 @@ STUB
   # costume of a fix. What DID change is the diagnostic: this used to fail as a bare `[ "$n" = 23 ]`
   # with the observed count nowhere in the output, so a lander could not tell a legitimate fleet
   # addition from a plist that skipped its row without re-deriving both by hand.
-  if [ "$n" != 24 ]; then
-    echo "manifest declares $n labels, expected 24 — if a plist was legitimately added or retired,"
+  # 25 since 2026-08-01: com.claude.worktree-gc-infra — the cron scripts/worktree-gc.sh never had
+  # (126 worktrees / 1,193 branches, swept by nothing, because the only worktree reaper with a plist
+  # on this box hardcodes the reso repo). Second bump of the qos-census shape: plist and manifest row
+  # landed in ONE commit, so this count is the only thing that had to move, and it moves WITH the
+  # addition rather than the addition waiting to red someone else's land.
+  if [ "$n" != 25 ]; then
+    echo "manifest declares $n labels, expected 25 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
