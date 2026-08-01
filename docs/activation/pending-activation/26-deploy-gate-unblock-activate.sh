@@ -50,11 +50,22 @@ git -C "$REPO" fetch origin main >/dev/null 2>&1 \
 
 # (a) the fix must EXIST on trunk. Verified by CONTENT in the trunk blob, never by a commit count —
 #     a count answers "how far behind", which is a different question from "is the fix there".
-if ! git -C "$REPO" show "origin/main:$REL" 2>/dev/null | grep -q "$MARKER"; then
-  echo "✗ origin/main:$REL does not contain $MARKER — the fix has NOT landed yet." >&2
-  echo "  Land it first (project-local /ship), then re-run this script." >&2
-  exit 1
-fi
+#
+#     CAPTURED, NOT PIPED — and that is not style. `git show … | grep -q "$MARKER"` under the
+#     `set -o pipefail` above reads FALSE **on a match**: grep -q exits at the first hit, git show is
+#     still writing the remaining ~1400 lines, takes SIGPIPE, exits 141, and pipefail promotes that
+#     141 to the pipeline's status. Measured on this host while writing this script — rc=141 with
+#     pipefail, rc=0 without, same command — so the guard refused to deploy a fix that WAS on trunk
+#     and said "the fix has NOT landed yet". A probe whose verdict inverts on success is worse than
+#     no probe. Capturing the blob and matching with `case` has no pipe and no rc to misread.
+BLOB="$(git -C "$REPO" show "origin/main:$REL" 2>/dev/null || true)"
+case "$BLOB" in
+  *"$MARKER"*) ;;
+  *)
+    echo "✗ origin/main:$REL does not contain $MARKER — the fix has NOT landed yet." >&2
+    echo "  Land it first (project-local /ship), then re-run this script." >&2
+    exit 1 ;;
+esac
 
 # (b) the file must be CLEAN in the shared checkout. A dirty one is a peer session's live WIP and
 #     overwriting it would destroy work this script has no way to attribute or recover.
