@@ -87,12 +87,22 @@ kt() {
 shift
 verb="${1:-}"; shift 2>/dev/null || true
 
-SESSION=""; VERTICAL=0
+SESSION=""; VERTICAL=0; JSON=0
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -s|--session) SESSION="${2:-}"; shift 2 ;;
     -v|--vertical) VERTICAL=1; shift ;;
+    # --json is NOT part of Claude Code's contract (ITermBackend calls bare `session list`) but it IS
+    # part of THIS REPO's contract: bin/cc-pane:153 and bin/cc-notify both call `session list --json`
+    # and jq-parse `.[].id`. Until this flag existed it fell through to the `*)` arm below, landed in
+    # ARGS, and `list` ignored ARGS entirely — so both callers got bare integers where they demanded
+    # an array. Measured 2026-07-31: jq read each line as a scalar, `n` became a multi-line string,
+    # and cc-pane:160 `[ "$n" -eq 0 ]` raised `integer expression expected` and exited INDETERMINATE,
+    # while cc-notify's `type=="array"` test failed and its pane-liveness oracle returned "unknown".
+    # Both degraded SAFELY, and both were non-functional. Parsed as a flag so it can never reach the
+    # send/run text either.
+    --json)       JSON=1; shift ;;
     # -f is ACCEPTED AND DISCARDED, deliberately — not stored, because nothing downstream can use
     # it: kitty has no running-job confirmation modal, which is the entire reason the iTerm2 wrapper
     # needed a force=True interception. Claude Code always passes it on close, so it must parse
@@ -132,15 +142,30 @@ case "$verb" in
     ;;
 
   list)
-    # Raw ids, one per line. The backend only does stdout.includes(<id>) for dead-pane pruning.
-    kt ls 2>/dev/null | python3 -c '
-import json,sys
+    # TWO output shapes, one enumeration — and both are load-bearing, so neither may be dropped:
+    #   bare (Claude Code)  raw ids, one per line. The backend only does stdout.includes(<id>) for
+    #                       dead-pane pruning, and it never passes --json.
+    #   --json (this repo)  a JSON array of {id,…}. cc-pane and cc-notify both jq `.[].id`.
+    # ids are emitted as STRINGS on the --json side to match the "opaque token" contract the split
+    # verb already honours (Claude Code hands whatever token we printed straight back as `-s <id>`),
+    # and because every consumer compares them with `grep -qxF` against shell strings.
+    #
+    # NOTE the ids are FULL and untruncated on both paths. The real it2 renders this list through
+    # `rich`, which truncates the Session ID column to the 80 columns it assumes when stdout is a
+    # pipe — which makes Claude Code's own `!stdout.includes(fullSessionId)` liveness test always
+    # read "dead" and prune teammates on no evidence (plan §4.3). Printing full ids is deliberately
+    # BETTER than the incumbent, not merely equal to it.
+    kt ls 2>/dev/null | JSON="$JSON" python3 -c '
+import json,os,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
-for ow in d:
-    for t in ow["tabs"]:
-        for w in t["windows"]:
-            print(w["id"])' || { err "kitty ls failed"; exit 1; }
+rows=[w for ow in d for t in ow["tabs"] for w in t["windows"]]
+if os.environ.get("JSON")=="1":
+    json.dump([{"id": str(w["id"]), "title": w.get("title",""),
+                "cwd": w.get("cwd",""), "pid": w.get("pid")} for w in rows], sys.stdout)
+    sys.stdout.write("\n")
+else:
+    for w in rows: print(w["id"])' || { err "kitty ls failed"; exit 1; }
     ;;
 
   send)
