@@ -2848,20 +2848,17 @@ case "$MODEL" in
 esac
 
 # ---- account maps + activity proxy ---------------------------------------------------------
-cfg_dir() { case "$1" in
-  next)  echo "$HOME/.claude-next" ;;
-  next2) echo "$HOME/.claude-secondary" ;;
-  next3) echo "$HOME/.claude-tertiary" ;;
-  next4) echo "$HOME/.claude-quaternary" ;;
-  *) return 1 ;; esac; }
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+cfg_dir() { cc_acct_dir_for_name "$1" && echo "$CC_ACCT_DIR"; }
 
 env_account() { # reverse of cfg_dir: THIS session's account from its own CLAUDE_CONFIG_DIR
-  case "${CLAUDE_CONFIG_DIR:-}" in
-    "$HOME/.claude-next")       echo next ;;
-    "$HOME/.claude-secondary")  echo next2 ;;
-    "$HOME/.claude-tertiary")   echo next3 ;;
-    "$HOME/.claude-quaternary") echo next4 ;;
-    *) return 1 ;; esac; }
+  local name; name="$(cc_acct_name_for_dir_basename "${CLAUDE_CONFIG_DIR##*/}")"
+  [ -n "$name" ] && echo "$name" || return 1
+}
 
 # ---- recycle mode pre-pass: exit + relaunch in the CURRENT pane ------------------------------
 # WHY exit+relaunch, not /clear + queued payload (the 2026-07-03 catnav incident): CC's message

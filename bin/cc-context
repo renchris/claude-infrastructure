@@ -53,16 +53,13 @@ rows() { ls -t "$TDIR"/*.json 2>/dev/null; }   # newest first
 CELL='def cell(ph): (if . == null then "" else . end) | tostring
       | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end; '
 
-# config_dir → account name (statusline suffix convention; rows carry no config_dir)
-map_acct() {
-  case "$1" in
-    */.claude-next)       echo "next" ;;
-    */.claude-secondary)  echo "next2" ;;
-    */.claude-tertiary)   echo "next3" ;;
-    */.claude-quaternary) echo "next4" ;;
-    *) echo "" ;;
-  esac
-}
+# config_dir → account name (statusline suffix convention; rows carry no config_dir). Backed by
+# the accounts.json-generated map (any N accounts, not a hardcoded 4) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+map_acct() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
 # bound /tmp growth (P3) — but NEVER at the cost of hiding a stall.
 #

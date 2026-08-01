@@ -42,13 +42,16 @@ set -euo pipefail
 
 CFG_IN="${1:?config-dir or account alias}"; WT="${2:?worktree}"
 
-case "$CFG_IN" in
-  next|claude-next)     CFG="$HOME/.claude-next" ;;
-  next2|claude-next2)   CFG="$HOME/.claude-secondary" ;;
-  next3|claude-next3)   CFG="$HOME/.claude-tertiary" ;;
-  next4|claude-next4)   CFG="$HOME/.claude-quaternary" ;;
-  *)                    CFG="${CFG_IN/#\~/$HOME}" ;;
-esac
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+if cc_acct_dir_for_name "$CFG_IN"; then
+  CFG="$CC_ACCT_DIR"
+else
+  CFG="${CFG_IN/#\~/$HOME}"
+fi
 
 # ── 1. iTerm2 clear-scrollback modal (global, durable, live-applied) ──────────────────
 if command -v defaults >/dev/null 2>&1; then

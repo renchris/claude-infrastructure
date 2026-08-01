@@ -96,15 +96,16 @@ transcript_mtime() {
 }
 
 # ── config-dir basename (registry `account` field) → reso-resume-one account alias. ──
-# .claude and .claude-next are the SAME account (mirror) → next. Unknown → echo raw (reso rejects loud).
+# .claude and .claude-next are the SAME account (mirror) → next (accounts.json's "next" entry
+# declares "claude" as an alias for exactly this). Unknown → echo raw (reso rejects loud). Backed
+# by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
 map_account() { # <config-basename>
-  case "$1" in
-    claude|claude-next)  printf 'next'  ;;
-    claude-secondary)    printf 'next2' ;;
-    claude-tertiary)     printf 'next3' ;;
-    claude-quaternary)   printf 'next4' ;;
-    *)                   printf '%s' "$1" ;;
-  esac
+  local r; r="$(cc_acct_name_for_dir_basename "$1")"
+  [ -n "$r" ] && printf '%s' "$r" || printf '%s' "$1"
 }
 
 # ── posture mode: env → <state>/mode → default page (ruling #1 safe default). ──

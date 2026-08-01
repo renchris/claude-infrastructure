@@ -143,10 +143,11 @@ SELECT="${LR_SELECT_BIN:-$LR/lr-select.py}"
 MAX_PER_WT="${LR_POLLER_MAX_PER_WORKTREE:-1}"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
-acct_of_cfg() { case "$1" in
-  *.claude-next) echo next ;; *.claude-secondary) echo next2 ;;
-  *.claude-tertiary) echo next3 ;; *.claude-quaternary) echo next4 ;; *) echo "" ;;
-esac; }
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+acct_of_cfg() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
 # account headroom: session_pct AND weekly_pct < 100 (never resume into a still-capped acct).
 # ⚠️ Blind-check fix (2026-07-15, caught by LR-c): the original captured the JSON into $j but ran
