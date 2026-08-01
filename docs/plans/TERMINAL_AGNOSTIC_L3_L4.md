@@ -883,3 +883,81 @@ All three were invisible to 35 passing tests + 15 caught mutations. The gate is 
 looking. Here the suite was green while `[[ ]]` silently swallowed non-final assertions, the hermeticity
 leak was invisible to every test, and a weaker local shellcheck invented an all-clear. Three different
 instruments, one failure mode.
+
+---
+
+## 8. P3/P5 — dual-terminal parity (branch `feat/kitty-parity`, 2026-07-31)
+
+**Frame correction, and it is the load-bearing one.** §2/P3 is written as *"port the 6 class-3
+files"* and §4b/D2 as a migration held on HOLD. Both framings are now wrong in the same way: the
+goal is **not** to move to kitty and **not** to port everything, it is that **iTerm2 and kitty both
+work**. Most of the fleet was already portable and nobody had checked — the useful work turned out
+to be four small seams, not six file ports.
+
+### 8.1 The census, re-run — most of the "coupling" was already behind a seam
+
+| Surface | Verdict | Why |
+|---|---|---|
+| `bin/cc-notify` · `bin/cc-teardown` · `hooks/teammate-auto-shutdown.sh` | **already portable** | all resolve `$HOME/.claude/bin/it2`, i.e. the shim, so the kitty divert carries them unchanged |
+| `hooks/waiting-recycle.sh` · `hooks/lead-crash-watchdog.sh` | **already portable** | their `osascript` is `display notification` — a macOS call, not an iTerm2 one. A raw osascript count is NOT a coupling count |
+| two-way comms | **already portable** | delivery is a FILE that hooks read (README §1). The only terminal call in the path is the pane-liveness oracle |
+| `scripts/handoff-fire.sh` | real work | 5 functions + 4 it2py verbs, below |
+| `lr-handoff.sh` · `lr-reset-poller.sh` · `boot-resume-launch.sh` · `render-census.sh` | real work | AppleScript pane-open / pane-count |
+
+⇒ **§1's "class 3 = 6 files needing real porting" overstates it.** `handoff-selfclose-e2e.sh` is a
+harness, and the genuine production surface is 5 functions in one file plus 4 launcher/census
+scripts. Count *functions reached*, not files touched.
+
+### 8.2 The four defects found, all by measurement on a live kitty (19 panes)
+
+1. **`it2-kitty` ignored `--json`** (`8ba40a02`). It fell through the arg loop's `*)` arm into ARGS,
+   which `list` ignores. `cc-pane:153` and `cc-notify` both call `session list --json` and jq
+   `.[].id` ⇒ `cc-pane list` exited **2 INDETERMINATE** with a `[: -1\n-1…: integer expression
+   expected` bash error, and cc-notify's liveness oracle returned **unknown**. Both degraded SAFELY
+   and both were non-functional — the shape a green suite cannot see.
+2. **The `REAL_IT2` bypass inverts under kitty** (`65e46727`). `handoff-fire.sh` and `cc-pane`
+   resolve the raw it2 to escape the shim's `-p Claude-Teammate` injection. That injection sits
+   BELOW the shim's terminal dispatch, so inside kitty the shim never adds it — the bypass buys
+   nothing and resolves an iTerm2 client with no iTerm2 to talk to. **`it2_split` is the DEFAULT
+   fire path** (`:3922`; it2py only saves/restores focus around it), so this one line decided
+   whether handoff fired at all on kitty.
+3. **The CC_PANE_ID ratchet convicted the PRODUCER** (`9d5e2a50`). `tests/cc-pane.bats`' ratchet was
+   RED on trunk since kitty-setup landed, firing on the file that *creates* `ITERM_SESSION_ID` from
+   `KITTY_WINDOW_ID` and on the `--check` line that asserts it took effect. A red ratchet ratchets
+   nothing. Fixed with the ratchet's own per-LINE marker, never a path exemption.
+4. **`tests/cc-pane.bats` depended on which terminal it ran from.** Same defect
+   `tests/it2-wrapper.bats` already carries; it predates both diverts (`KITTY_WINDOW_ID` was simply
+   never read) and only became observable when the branch was added. **Any suite asserting the
+   iTerm2 path must PIN the terminal in `setup()`.**
+
+### 8.3 The divert predicate is now in THREE files — and that is the standing risk
+
+`[ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]` — origin `bin/it2-wrapper:75`,
+copied into `handoff-fire.sh` and `bin/cc-pane`. The failure mode if they drift is specific and
+nasty: **a handoff that splits the pane with one binary and addresses it with another.** No
+single-file test can see it, so `tests/kitty-divert-real-it2.bats` pins that all three agree
+textually — and that test fired on its own mutant, so it is not decorative.
+
+### 8.4 What a successor must NOT re-derive
+
+- **`kitty @ ls` already carries each pane's `env`.** That is strictly better than the class-B
+  `ps eww` scrapers of §7.9 — the "which pane is process X in?" question has a first-class answer on
+  kitty and does not need the env-scrape at all.
+- **There is no `tty` field**; derive it as pane → `pid` → `ps -o tty= -p <pid>`.
+- **`ITERM_SESSION_ID` is synthesized inside kitty** as `w0t0p0:$KITTY_WINDOW_ID` by a `.zshrc`
+  block, so a "session uuid" in a kitty fleet IS the integer kitty window id, and every `${x##*:}`
+  consumer keeps working untouched. **`CC_PANE_ID` itself is still never exported by anything** —
+  consumers only work because of the `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}` fallback. Worth closing,
+  but it is not what breaks anything today.
+- **`session list` has two consumers with two shapes.** Claude Code calls it BARE (and prunes with
+  `stdout.includes`); this repo calls it `--json`. Both must keep working — that was defect 1.
+- **The login-PATH race is CLOSED** via `~/.claude/shims` prepended in `.zprofile`
+  (`scripts/kitty-setup.sh --check` reports 15/15 live, including that `it2 session list` exits 0).
+  Do not re-open it; `-lc` reads `.zprofile` and never `.zshrc`.
+
+### 8.5 Status
+
+`cc-pane` seam · Agent-Teams panes · two-way comms · session register/teardown/crash-watchdog:
+**verified on both terminals**. Handoff's split path routes correctly on both. Remaining at the time
+of writing, on their own branches: `feat/kitty-handoff-primitives` (the 5 AppleScript functions +
+4 it2py verbs) and `feat/kitty-recovery-launch` (limit-recover, boot-resume, render-census).
