@@ -187,7 +187,7 @@ if [ "$MODE" = apply ] && ! grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
 # and derives the leader pane id as ITERM_SESSION_ID.slice(indexOf(":")+1) — so the COLON IS
 # REQUIRED; without one it returns null and silently splits from whatever pane is active.
 # ~/.claude/bin/it2 then translates every backend call into \`kitty @\`.
-if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -z "\${ITERM_SESSION_ID:-}" ]; then
+if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -z "\${ITERM_SESSION_ID:-}" ]; then  # cc-pane-id-lint:allow
   export ITERM_SESSION_ID="w0t0p0:\$KITTY_WINDOW_ID"
 fi
 # <<< $BLOCK_ID <<<
@@ -306,8 +306,16 @@ if [ -n "${KITTY_WINDOW_ID:-}" ]; then
   else
     no "INERT — this kitty has no control socket; it started before the config. RESTART kitty."
   fi
-  [ -n "${ITERM_SESSION_ID:-}" ] && ok "ITERM_SESSION_ID=$ITERM_SESSION_ID" \
-                                 || no "ITERM_SESSION_ID unset in this pane (new shell needed)"
+  # This is the ASSERTION that step 3's block took effect in THIS pane, so it must read the BARE
+  # variable. Adding the `${CC_PANE_ID:-…}` fallback the ratchet normally wants would make the check
+  # report green whenever CC_PANE_ID happened to be set by anything else — it would stop measuring
+  # the thing it exists to measure. Written as if/else rather than `&&/||` purely so the marker has
+  # a line to sit on: the ratchet filters by LINE, and the old form ended in a continuation.
+  if [ -n "${ITERM_SESSION_ID:-}" ]; then  # cc-pane-id-lint:allow
+    ok "ITERM_SESSION_ID=$ITERM_SESSION_ID"
+  else
+    no "ITERM_SESSION_ID unset in this pane (new shell needed)"
+  fi
 else
   info "not running inside kitty — cannot judge live state from here"
 fi
