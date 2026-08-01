@@ -30,7 +30,7 @@ setup() {
 }
 
 # A dry-run with a fake anchor + explicit launcher/account (account-probe is a no-op in --dry-run).
-dry() { bash "$HF" --prompt-file "$PF" --session-id "w1t0p0:FAKE-UUID" --account next --launcher claude-next "$@" --dry-run; }
+dry() { bash "$HF" --prompt-file "$PF" --session-id "w1t0p0:FAKE-UUID" --account next --launcher claude "$@" --dry-run; }
 
 @test "--follow is a known flag (not 'unknown arg')" {
   run dry --follow

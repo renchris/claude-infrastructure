@@ -165,7 +165,7 @@ esac
 exit 0
 SH
   chmod +x "$H/.claude/bin/it2"
-  CMDF="$BATS_TEST_TMPDIR/cmd.sh"; printf 'cd /tmp && claude-next "$(cat /tmp/p)"\n' > "$CMDF"
+  CMDF="$BATS_TEST_TMPDIR/cmd.sh"; printf 'cd /tmp && claude "$(cat /tmp/p)"\n' > "$CMDF"
 }
 
 @test "RED-PROOF watcher: claude alive but never engaged → RECYCLE FAILED, desk paged, exit 1" {

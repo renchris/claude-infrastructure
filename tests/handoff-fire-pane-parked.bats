@@ -79,10 +79,14 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 }
 
 @test "parked: the launcher word itself failing to resolve (the un-shielded E1 shape)" {
-  screen "PS% cd /wt && claude-next5 --effort max" "zsh: command not found: claude-next5"
+  # `claude5` is the post-2026-08-01 spelling of "a launcher name that cannot resolve": the family
+  # is claude/claude2/claude3/claude4, so 5 is the first free digit — the same idea the old
+  # claude-next5 fixture carried. It must stay a NONEXISTENT name: claude4 is real now, and a
+  # command-not-found fixture naming a live launcher models nothing.
+  screen "PS% cd /wt && claude5 --effort max" "zsh: command not found: claude5"
   run pane_parked_reason "$IT2" "$PANE"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q 'command not found: claude-next5'
+  printf '%s\n' "$output" | grep -q 'command not found: claude5'
 }
 
 @test "parked: NOMATCH refuses the whole line on an unmatched glob" {
@@ -92,7 +96,7 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 }
 
 @test "parked: history expansion refusing a '!' (bash printf %q leaves it unescaped)" {
-  screen "PS% cd /wt/hello!world && claude-next4" 'zsh: event not found: world'
+  screen "PS% cd /wt/hello!world && claude4" 'zsh: event not found: world'
   run pane_parked_reason "$IT2" "$PANE"
   [ "$status" -eq 0 ]
 }
@@ -101,10 +105,11 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 # `zsh: command not found: <cmd>` (both measured on this box). A pattern written for zsh alone
 # passes its own suite and is silently blind here.
 @test "parked: a bash pane reports the same class (subject in the MIDDLE, not the tail)" {
-  screen "$ cd /wt && claude-next4" "bash: claude-next4: command not found"
+  # Same unresolvable-name discipline as the zsh case above — `claude5`, not a live launcher.
+  screen "$ cd /wt && claude5" "bash: claude5: command not found"
   run pane_parked_reason "$IT2" "$PANE"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q 'claude-next4'
+  printf '%s\n' "$output" | grep -q 'claude5'
 }
 
 @test "parked: bash's no-such-file shape too" {
@@ -237,7 +242,7 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
 
 @test "MECHANISM: 'nocorrect' still expands the launcher alias and passes the env prefix" {
   # The reason `nocorrect` beats quoting: quoting suppresses correction AND alias expansion, so a
-  # quoted 'claude-fable2' would simply not resolve. And --in-place's CLAUDE_ISOLATION_SKIP=1 must
+  # quoted 'claude2' would simply not resolve. And --in-place's CLAUDE_ISOLATION_SKIP=1 must
   # still reach the process.
   command -v zsh >/dev/null 2>&1 || skip "zsh not installed"
   local rc="$BATS_TEST_TMPDIR/rc2.zsh" out

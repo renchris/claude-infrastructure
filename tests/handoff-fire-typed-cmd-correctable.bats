@@ -142,10 +142,14 @@ setup() {
 # `${LAUNCHER}` is still a bare word in command position in every typed shape, and it is the one
 # token that can NEVER be validated before typing: the launchers are zsh aliases/functions from the
 # operator's INTERACTIVE rc, so `command -v` from this script sees nothing (`zsh -c 'whence -w
-# claude-next4'` → none). They are also mutual near-misses inside CORRECT's own dictionary —
-# measured live: `claude-nex` → `correct 'claude-nex' to 'claude-next' [nyae]?`. And `--launcher`
-# is unvalidated (:2291), unlike `--account`, so a typo or a 5th account without a matching alias
-# types a word that parks the pane instead of failing cleanly.
+# claude4'` → none). They are also mutual near-misses inside CORRECT's own dictionary, and the
+# 2026-08-01 consolidation made that WORSE rather than moot: claude-nextN shared a 11-char stem, but
+# claude/claude2/claude3/claude4 differ by a single trailing character, so every member is within
+# one edit of every other. Re-measured on this box against a fixture rc defining exactly the new
+# family: `claude5` → `correct 'claude5' to 'claude' [nyae]?` (the old note measured `claude-nex` →
+# `claude-next`; that spelling no longer resolves to anything). And `--launcher` is unvalidated,
+# unlike `--account`, so a typo or a 5th account without a matching alias types a word that parks
+# the pane instead of failing cleanly.
 
 @test "EVERY typed launch shape shields the launcher with 'nocorrect'" {
   # The invariant is per-SHAPE, not "the file mentions nocorrect somewhere": a new fire mode that
@@ -164,7 +168,7 @@ setup() {
 }
 
 @test "NC is exactly the zsh reserved word, with its separating space" {
-  # A bare `nocorrect` with no trailing space would concatenate into `nocorrectclaude-next4`.
+  # A bare `nocorrect` with no trailing space would concatenate into `nocorrectclaude4`.
   grep -q '^NC="nocorrect "$' "$HF" || { echo "NC is not 'nocorrect ' — check the definition"; false; }
 }
 
@@ -177,7 +181,7 @@ setup() {
 
 @test "the shield is NOT applied by quoting (which would kill alias expansion)" {
   # Quoting the launcher also suppresses correction, but suppresses ALIAS EXPANSION with it — and
-  # claude-next2/3/4 and claude-fable2/3/4 are aliases, so a quoted form simply would not resolve.
+  # claude and claude2/3/4 are aliases, so a quoted form simply would not resolve.
   ! grep -qE "CMD=.*'\\\$\{LAUNCHER\}'" "$HF" || false
   ! grep -qE 'CMD=.*\\"\$\{LAUNCHER\}\\"' "$HF" || false
 }

@@ -60,7 +60,7 @@ setup() {
 # The `command:` line of a recycle --dry-run, run FROM <dir>. Real artifact, real dry-run.
 # --launcher is EXPLICIT so the assertion cannot depend on which account the RUNNING session uses
 # (account derivation reads CLAUDE_CONFIG_DIR — a caller-identity leak, the hermetic-suite trap).
-cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --session-id "fake:UUID" --launcher claude-next 2>&1 ) | grep -E '^command:' | head -1; }
+cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --session-id "fake:UUID" --launcher claude 2>&1 ) | grep -E '^command:' | head -1; }
 
 @test "linked worktree: the relaunch cd carries a durable fallback to the main checkout" {
   run cmd_line "$WT"
@@ -89,7 +89,7 @@ cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --s
   # PATH stub is what lets the chain execute end-to-end without a real account or iTerm2.
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   local rec="$BATS_TEST_TMPDIR/launched-from"
-  for l in claude-next claude-next2 claude-next3 claude-next4 claude claude-fable; do
+  for l in claude claude2 claude3 claude4 claude-prev; do
     printf '#!/bin/bash\npwd > %s\n' "$rec" > "$BATS_TEST_TMPDIR/bin/$l"
     chmod +x "$BATS_TEST_TMPDIR/bin/$l"
   done
@@ -108,8 +108,8 @@ cmd_line() { ( cd "$1" && bash "$HF" --recycle --dry-run --prompt-file "$PF" --s
   cmd="$(cmd_line "$WT")"; cmd="${cmd#command:}"
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   local rec="$BATS_TEST_TMPDIR/launched-from-intact"
-  printf '#!/bin/bash\npwd > %s\n' "$rec" > "$BATS_TEST_TMPDIR/bin/claude-next"
-  chmod +x "$BATS_TEST_TMPDIR/bin/claude-next"
+  printf '#!/bin/bash\npwd > %s\n' "$rec" > "$BATS_TEST_TMPDIR/bin/claude"
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   # shellcheck disable=SC2030,SC2031  # the subshell IS the point: the stub PATH and the cd must not
   # leak into the next test, and `cd "$MAIN"` proves the chain's own cd moved us, not the caller.
   ( export PATH="$BATS_TEST_TMPDIR/bin:$PATH"; cd "$MAIN" && run_emitted "$cmd" ) >/dev/null 2>&1 || true

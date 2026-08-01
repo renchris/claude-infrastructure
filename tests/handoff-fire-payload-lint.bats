@@ -29,7 +29,7 @@ setup() {
 
 @test "RED-with-intent (cc-notify, no uuid/role) → real fire ABORTS exit 4 before spawn" {
   printf 'Continue the build.\nOn completion, cc-notify the desk when finished.\n' > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID"
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID"
   [ "$status" -eq 4 ]
   [[ "$output" == *"ABORTED (F3 / T-P2-5)"* ]] || false
   [[ "$output" == *"BACK-CHANNEL BLOCK missing"* ]] || false
@@ -40,14 +40,14 @@ setup() {
 @test "SendMessage terminal-announce (F3/a) → real fire ABORTS exit 4 even WITH a valid block" {
   { printf 'Continue. cc-notify D5D419C8-8B79-4C05-A38C-DF0A85A1AAE2 is the desk.\n'
     printf 'On ship, announce the ship-witness to the desk via SendMessage.\n'; } > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID"
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID"
   [ "$status" -eq 4 ]
   [[ "$output" == *"F3/a"* ]]
 }
 
 @test "role-indirection (cc-notify + cc-roles/<role>, no uuid) → NOT blocked (dry reaches full output)" {
   printf 'Continue.\nOn completion cc-notify "$(cat ~/.claude/cc-roles/desk)".\n' > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" != *"WOULD BLOCK"* ]] || false
   [[ "$output" == *"command:"* ]]     # reached the end of the dry readout — the gate let it through
@@ -57,7 +57,7 @@ setup() {
 
 @test "one-way fire (no cc-notify) → advisory note, NOT blocked, dry exit 0" {
   printf 'Go build feature X. Fire and forget.\n' > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"payload-lint (advisory): one-way fire"* ]] || false
   [[ "$output" != *"WOULD BLOCK"* ]]
@@ -67,7 +67,7 @@ setup() {
 
 @test "dry-run preview REPORTS a would-be block (RED-with-intent) but exits 0 (nothing fires)" {
   printf 'Continue.\nOn completion, cc-notify the desk when finished.\n' > "$P"
-  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"WOULD BLOCK"* ]]
 }
@@ -77,7 +77,7 @@ setup() {
 @test "missing payload-lint tool → fire is NOT gated (best-effort), no abort" {
   printf 'Continue.\nOn completion, cc-notify the desk when finished.\n' > "$P"
   run timeout 25 env CC_PAYLOAD_LINT_BIN="$BATS_TEST_TMPDIR/nonexistent-lint.sh" \
-    bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude-next --session-id "$SID" --dry-run
+    bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" != *"ABORTED (F3 / T-P2-5)"* ]]
 }
