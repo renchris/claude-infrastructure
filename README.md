@@ -4,9 +4,9 @@
 
 ### `~/.claude` becomes a system you deploy — and the sessions become the schedulers.
 
-[![sessions](https://img.shields.io/badge/sessions-5%2C709-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
-[![hooks](https://img.shields.io/badge/hooks-69%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
-[![tests](https://img.shields.io/badge/bats%20tests-2%2C358-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
+[![sessions](https://img.shields.io/badge/sessions-6%2C908-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
+[![hooks](https://img.shields.io/badge/hooks-77%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
+[![tests](https://img.shields.io/badge/bats%20tests-4%2C564-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
 [**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**6 · The next ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) · [**Install**](#install)
@@ -34,7 +34,7 @@ and exercised across **~6,900 sessions**.
 |---|---|---|
 | **1** | [**Sessions run each other**](#1-sessions-run-each-other) | You are no longer the scheduler. Sessions open, message, and retire one another — and page you only when a human must decide. |
 | **2** | [**Parallel work cannot collide**](#2-parallel-work-cannot-collide) | A worktree per writer, an account per lane, and exactly one machine-wide lock on landing. |
-| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 69 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
+| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 77 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
 
@@ -188,12 +188,12 @@ Full evidence, the hypotheses that got killed along the way, and the migration p
 
 ## 3. Autonomy is bounded
 
-**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 60 hook scripts; the live config wires **69 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
+**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 82 hook scripts; the live config wires **77 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
 
 <!-- Diagram source: assets/diagrams/guardrail-pipeline.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/guardrail-pipeline-dark.svg">
-  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes eleven PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then ten PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, nine Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
+  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then ten PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
 </picture>
 
 <details>
@@ -202,14 +202,14 @@ Full evidence, the hypotheses that got killed along the way, and the migration p
 <!-- mermaid-fence: assets/diagrams/guardrail-pipeline.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    P(["your prompt"]) --> UPS["UserPromptSubmit — 5 hooks<br/>mail · nudges"]
+    P(["your prompt"]) --> UPS["UserPromptSubmit — 6 hooks<br/>mail · nudges"]
     UPS --> M(["Claude"])
-    M --> Pre{"PreToolUse<br/>12 hooks"}
+    M --> Pre{"PreToolUse<br/>14 hooks"}
     Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
-    Tool --> Post["PostToolUse — 9 hooks<br/>plan version · bash log · context watch"]
+    Tool --> Post["PostToolUse — 10 hooks<br/>plan version · bash log · context watch"]
     Post --> M
-    M --> Stop{"Stop<br/>9 hooks"}
+    M --> Stop{"Stop<br/>11 hooks"}
     Stop -->|"the live git ledger disagrees"| M
     Stop -->|"genuinely done"| End(["turn ends"])
     classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
@@ -242,18 +242,21 @@ flowchart TB
 SessionStart (14)     session-start · session-register · live-session-registry · desk-brief-inject · dod-persist ·
                       mailbox-drain · setup-plan/task-symlinks · session-index-start · pre-session-validate ·
                       config-mirror-assert · activation-watch · frontier-status · lead-crash-watchdog
-UserPromptSubmit (5)  mailbox-drain · handoff-intent-nudge · research-precognition-nudge · memory-nudge · cache-expiry-warning
-PreToolUse (12)       validate-bash · backup-before-write (OVERWRITE GUARD) · git-worktree-guard · agent-teams-enforce ·
+UserPromptSubmit (6)  mailbox-drain · handoff-intent-nudge · research-precognition-nudge · memory-nudge ·
+                      cache-expiry-warning · session-beat
+PreToolUse (14)       validate-bash · backup-before-write (OVERWRITE GUARD) · git-worktree-guard · agent-teams-enforce ·
                       rm-safe-allowlist · check-edit-boundary · plan-agent-teams-default · frontier-spawn-gate ·
-                      cc-unattended-ask-guard · keychain-guard · curl-gate · enforce-email-formatting
-PostToolUse (9)       post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
-                      log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle
-Stop (9)              completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
-                      anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify
-SessionEnd (6)        session-end (watchdog handshake) · session-deregister · session-index-end · session-save-id ·
-                      live-session-registry · harvest-skill-end
-Notification (2)      notify (audio + desktop) · push-critical        PermissionRequest (3)  notify ×3 (Bash · question · plan)
-                      cc-permission-beacon is NOT wired — staged only (pending-activation/17-…); cc-blockers raises beacon-inert
+                      cc-unattended-ask-guard · keychain-guard · curl-gate · enforce-email-formatting ·
+                      ship-rail-push-allow · qos-rewrite
+PostToolUse (10)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
+                      log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle · cc-permission-beacon
+Stop (11)             completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
+                      anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify ·
+                      session-beat · cc-permission-beacon
+SessionEnd (7)        session-end (watchdog handshake) · session-deregister · session-index-end · session-save-id ·
+                      live-session-registry · harvest-skill-end · cc-permission-beacon
+Notification (5)      notify ×2 (audio + desktop) · push-critical ×3    PermissionRequest (4)  notify ×3 (Bash · question · plan) ·
+                      cc-permission-beacon — WIRED on 4 events (PostToolUse · Stop · SessionEnd · PermissionRequest)
 PreCompact (3)        dod-persist · compact logging                   TeammateIdle (1)       teammate-auto-shutdown
 WorktreeCreate (1)    worktree-setup                                  TaskCompleted (1)      task-quality-gate
 ```
@@ -272,8 +275,8 @@ WorktreeCreate (1)    worktree-setup                                  TaskComple
 | `deny` rules | 41 | **Always enforced** — the classifier cannot override |
 | `ask` rules | 6 | Classifier decides instead of prompting (collapsed from 45 as autonomy moved routine calls behind classifier + hook rails) |
 | `allow` rules | 350 | Auto-approved: read-only commands, WebFetch domains, Edit/Write, MCP tools |
-| PreToolUse hooks | 12 | Always fire — a hook deny is an absolute block |
-| PostToolUse hooks | 9 | Always fire — logging, plan versioning, task indexing |
+| PreToolUse hooks | 14 | Always fire — a hook deny is an absolute block |
+| PostToolUse hooks | 10 | Always fire — logging, plan versioning, task indexing |
 
 Key deny rules, enforced even in auto mode: `git push --force`, `sudo`/`su`, `eval`/`exec`, `git clean`, `wget`, `dd`, and reads of `.env*` / `*.key` / `*.pem`.
 
@@ -323,7 +326,7 @@ flowchart TB
     Repo["claude-infrastructure<br/>1,134 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · COPY"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
-    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>45 tools · 13 daemons · statusline"]
+    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>49 tools · 20 daemons · statusline"]
     classDef src fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef dep fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
     class Repo src
@@ -349,7 +352,7 @@ The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `hando
 ├── CLAUDE.md                    # global instructions (synced)
 ├── model-config.yaml            # model / effort / frontier SSOT (per-machine, NOT synced)
 ├── hooks/  commands/  scripts/  # SYMLINKED from this repo — edits go live
-├── skills/  agents/             # SYMLINKED — 12 skills, 4 custom agents
+├── skills/  agents/             # SYMLINKED — 15 skills, 4 custom agents
 ├── bin/it2                      # teammate pane wrapper (copied) — iTerm2, or kitty via it2-kitty
 ├── mailbox/  cc-roles/          # per-pane inboxes · role → pane resolution
 ├── backups/                     # auto-backups (10/file, 30-day TTL)
@@ -358,8 +361,8 @@ The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `hando
 └── projects/                    # per-project memory + transcripts
 
 ~/.claude-versions/   current -> 2.1.114      # atomically-symlinked installs
-~/bin/                claude-latest · claude-update · claude-versions · 45 cc-* fleet tools
-~/Library/LaunchAgents/   13 daemons — dispatcher · discovery · reapers · regression · search · …
+~/bin/                claude-latest · claude-update · claude-versions   (the 49 cc-* fleet tools live in ~/.claude/bin)
+~/Library/LaunchAgents/   24 daemons — dispatcher · discovery · reapers · regression · search · …
 ```
 
 </details>
@@ -419,7 +422,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ### Held to ground truth
 
-**2,358 bats tests across 144 files (31,841 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim), plus a nightly full-suite regression daemon. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
+**4,564 bats tests across 262 files (68,005 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim), plus a nightly full-suite regression daemon. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
 
 ---
 
@@ -741,7 +744,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 
 <br>
 
-**13 launchd daemons** (`launchd/`, all low-priority; `install.sh` copies and loads them):
+**20 launchd daemons** (`launchd/`, all low-priority; `install.sh` copies and loads them):
 
 | Plist | Schedule | Purpose |
 |---|---|---|
@@ -758,6 +761,13 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | `com.claude.nightly-regression` | 4 am | full bats suite against the live deployment |
 | `com.claude.session-search-sweep` | 60 s | catch missed session transcripts |
 | `com.claude.session-search-backfill` | Sun 3 am | full backfill of all sessions |
+| `com.claude.deploy-live` | 10 min | advance the live `~/.claude` layer once the green stamp allows it |
+| `com.claude.lead-supervisor` | KeepAlive | watch the leads; reap stranded panes and beacons |
+| `com.claude.capacity-alarm` | 60 s | fail-loud when the box runs out of headroom |
+| `com.claude.qos-census` | 10 min | census the fleet's QoS bands (the PRI-4 ratchet is one-way) |
+| `com.chrisren.cc-reaper` | 5 min | reap dead sessions the registry still lists |
+| `com.chrisren.screenshot-clipboard` | WatchPaths | put new screenshots on the clipboard |
+| `com.chrisren.watch-claude-code-2118-hold` | 9:12 am | hold the CC 2.1.18 pin until the upgrade gate clears it |
 
 **Status line.** [`statusline.sh`](statusline.sh) shows `dir (commit) branch* · N%`. The context percentage applies a 48% offset to the input-only token share to approximate what is actually left (output buffer ~32%, auto-compact ~6.5%, warning ~10%). Under 60% gray, 60–90% default, over 90% red. [`notify.sh`](hooks/notify.sh) pairs a system sound with a desktop alert that **names the session it came from** — `Permission · <dir>` over `<session> · <tool>` over the actual blocked command — debounced 2 s **per session**, so two sessions blocking at once are two alerts rather than one. Funk for a permission request, Blow for a question, Glass for a plan ready to review, Purr for task completion (sound only).
 
