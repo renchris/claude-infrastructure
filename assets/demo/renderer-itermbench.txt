@@ -1,0 +1,14 @@
+terminal-bench — app=itermbench pid=89114 panes=18 interval=0s  2026-08-01T08:15:40Z
+  T0  app   cpu=76.1 mem=314MB th=11 ports=702 win=NA off=NA mpx=NA
+  T0  WS    cpu=47.4 mem=1770MB th=27 ports=4851 win=22 off=13 mpx=13.05
+  GPU path taken: gpu_frames=4384 cpu_frames=7  ratio=626.29:1
+  PER-PANE at n=18 panes:
+    threads/pane   0.61
+    ports/pane     39.00
+    MB/pane        17.4
+    cpu%/pane      4.23
+verdict=PARTIAL
+film: 1920x1080 @ 60/1  7309792 bytes
+stalls: 0 gap(s) >1.5s between delivered frames, 0.00s total, longest 0.04s, over a 15s take
+load delivered: see /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/renderer-film-load.tsv (achieved fps + SUSPECT flag per pane)
+measured pid: 89114 (that pid pre-existed this run: no)
