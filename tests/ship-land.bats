@@ -113,6 +113,102 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   [ -z "$(git ls-tree origin/main -- bad.sh)" ]           # NOT pushed
 }
 
+# ── the hermeticity ratchet's TWO non-zero codes are two different CLAIMS ────────────────────────
+# The lint exits 1 when it NAMES a file and 2 when a predicate could not run (or the scan found
+# nothing to judge) — a non-verdict whose own message ends "do not 'fix' any suite on it". Both
+# landed here as "✗ RED — fix the file named above", with no file named, until rule 4 (embedded
+# selftests) added two more ways to reach 2: its denominator floor and its own killed predicates.
+# Fail-closed is unchanged in BOTH cases — nothing is pushed either way; only the code, and the
+# sentence the operator reads, now tell the two apart.
+# `seed_herm` builds the shape the gate needs: a tests/*.bats that exists (the block's guard) and
+# an executable stub the SHIP_LAND_HERM_LINT seam points at.
+seed_herm() {   # $1 = exit code the stub lint returns
+  mkdir -p tests
+  printf '#!/usr/bin/env bats\nsetup() { export HOME="$BATS_TEST_TMPDIR/home"; }\n@test "x" { true; }\n' > tests/zz.bats
+  printf '#!/bin/bash\necho "stub lint: exiting %s" >&2\nexit %s\n' "$1" "$1" > herm-stub.sh
+  chmod +x herm-stub.sh
+  git add tests/zz.bats herm-stub.sh && git commit -q -m "feat: herm fixture"
+}
+
+@test "hermeticity gate: the lint's exit 2 is a NON-VERDICT → exit 9 GATE-KILLED, never a RED" {
+  git checkout -q -b feat/herm-nonverdict main
+  seed_herm 2
+
+  run env SHIP_LAND_HERM_LINT="$WORK/herm-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                      # 9 = no verdict, NOT 6 = your tree is dirty
+  echo "$output" | grep -q "NON-VERDICT" || false
+  echo "$output" | grep -q "GATE-KILLED" || false
+  ! echo "$output" | grep -q "GATE RED" || false           # never both, never the wrong one
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- herm-stub.sh)" ]      # fail-closed either way: nothing landed
+}
+
+@test "hermeticity gate: the lint's exit 1 is still a REAL verdict → exit 6 GATE RED" {
+  # The positive control for the case above. Without it, "exit 2 → 9" could be passing because the
+  # ratchet stopped blocking altogether, which is the one way this split could silently go wrong.
+  git checkout -q -b feat/herm-verdict main
+  seed_herm 1
+
+  run env SHIP_LAND_HERM_LINT="$WORK/herm-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "test-hermeticity RED" || false
+  ! echo "$output" | grep -q "GATE-KILLED" || false        # a verdict is never softened
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- herm-stub.sh)" ]
+}
+
+# ── THE CHOKEPOINT: own-scope must cover every population the lint judges ────────────────────────
+# Own-scope makes a violation OUTSIDE the lander's diff advisory, so the pathspec that builds the
+# own-set IS the gate's scope. It listed only `tests/*.bats` until rule 4 (embedded selftests)
+# landed, whose population is bin/, scripts/ and hooks/ — leaving a land that ADDS a colliding
+# selftest to bin/ with an own-set that did not contain it, an advisory `collides?` line, and a
+# green light. Detection, never a gate (memory: enforcement-must-live-at-the-chokepoint).
+# These two drive the REAL lint, not a stub, and they are a matched pair: the first proves the
+# violation blocks when it IS the lander's, the second that own-scope still steps over it when it
+# is not — without which the first would pass just as well for a ratchet that blocks everybody.
+herm_tool() {   # writes a tool whose embedded selftest names a constant scratch path
+  mkdir -p bin tests
+  printf '#!/usr/bin/env bats\nsetup() { export HOME="$BATS_TEST_TMPDIR/home"; }\n@test "x" { true; }\n' > tests/zz.bats
+  { echo '#!/bin/bash'; echo 'selftest() {'; echo '  tmp=/tmp/zz-tool-selftest'; echo '  mkdir -p "$tmp"'; echo '}'; } > bin/zz-tool
+  chmod +x bin/zz-tool
+}
+
+@test "hermeticity CHOKEPOINT: a land ADDING a colliding embedded selftest is REFUSED" {
+  git checkout -q -b feat/colliding-selftest main
+  herm_tool
+  git add tests/zz.bats bin/zz-tool && git commit -q -m "feat: colliding selftest"
+
+  run env SHIP_LAND_HERM_LINT="$REPO/scripts/test-hermeticity-lint.sh" \
+          CC_HERM_SELFTEST_ROOT="$WORK" \
+          bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "COLLIDES" || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- bin/zz-tool)" ]        # fail-closed: nothing landed
+}
+
+@test "hermeticity CHOKEPOINT: the SAME collision already on trunk is advisory — own-scope intact" {
+  # The control. Seeded straight onto trunk, so it is nobody's diff; the next land must be reported
+  # and stepped over, exactly as the docs-only fix (GATE_ARCHITECTURE_PLAN §9) requires. This is
+  # also the empty-own-set path under the widened pathspec — the one a `${VAR:-}` collapse breaks.
+  git checkout -q -b seed main
+  herm_tool
+  git add tests/zz.bats bin/zz-tool && git commit -q -m "seed colliding selftest"
+  git push -q origin seed:main
+  git fetch -q origin main
+
+  git checkout -q -b docs/unrelated origin/main
+  echo hello > notes.md
+  git add notes.md && git commit -q -m "docs: notes"
+
+  run env SHIP_LAND_HERM_LINT="$REPO/scripts/test-hermeticity-lint.sh" \
+          CC_HERM_SELFTEST_ROOT="$WORK" \
+          bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "collides?" || false             # reported…
+  echo "$output" | grep -q "LANDED" || false                # …never hidden, and never blocking
+}
+
 @test "deleted files: git-rm of a tracked .sh/.py lands GREEN (b452/1bc4 regression) → exit 0" {
   # run_gate builds shellfiles/pyfiles by extension/shebang; before the fix it did NOT drop paths
   # removed at HEAD, so shellcheck / py_compile ran on the now-absent path → gate RED (exit 6),

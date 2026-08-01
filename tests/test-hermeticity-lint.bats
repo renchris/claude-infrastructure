@@ -1,18 +1,42 @@
 #!/usr/bin/env bats
-# test-hermeticity-lint — the RATCHET that stops NEW bats suites from running against AMBIENT STATE.
-# Two rules, one mechanism: rule 1 is the operator's live ~/ ($HOME fixtured in setup()), rule 2 is
-# the machine's live LOAD (CC_FIRE_CAPACITY_GATE=off pinned in setup(), for any suite that drives
-# handoff-fire). Two properties matter for each and both are proved here: it discriminates (RED on a
-# new violation, RED on an entry that stayed grandfathered after being fixed), and it is GREEN on the
-# tree as it stands — a lint that ships standing-RED is the rot this repo is killing, and the nightly
-# auto-runs every scripts/*lint*.sh, so a false RED here poisons the whole nightly signal.
+# test-hermeticity-lint — the RATCHET that stops NEW test harnesses from running against AMBIENT
+# STATE. Four rules, one mechanism: rule 1 is the operator's live ~/ ($HOME fixtured in setup()),
+# rule 2 the machine's live LOAD (CC_FIRE_CAPACITY_GATE=off, for a suite that drives handoff-fire),
+# rule 3 an operator-armed lever (LCW_ORPHAN_CLOSE, for a suite driving the orphan-close leg), and
+# rule 4 a SIBLING RUN OF ITSELF — a tool's EMBEDDED selftest whose scratch path is the same string
+# every time, so two concurrent runs collide. Rules 1-3 judge tests/*.bats; rule 4 judges the ~50
+# tools in bin/, scripts/ and hooks/ that ship a selftest instead of a suite and were outside the
+# ratchet entirely until it landed. Two properties matter for each and both are proved here: it
+# discriminates (RED on a new violation, RED on an entry that stayed grandfathered after being
+# fixed), and it is GREEN on the tree as it stands — a lint that ships standing-RED is the rot this
+# repo is killing, and the nightly auto-runs every scripts/*lint*.sh, so a false RED here poisons
+# the whole nightly signal.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LINT="$REPO/scripts/test-hermeticity-lint.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # dogfood: this suite obeys its own rule 1
   export CC_FIRE_CAPACITY_GATE=off                         # dogfood rule 2 — this file names handoff-fire
+  # Rule 4 OFF by default here, and switched back ON by name in the cases that mean to test it.
+  # Every fixture-targeted case below passes a temp dir as the scan dir, but rule 4's population is
+  # the REPO's tool dirs — it is driven off $ROOT, not off that argument, precisely so ship-land's
+  # `lint tests` still gets its selftests judged. Left ambient, a rule-4 verdict about the checkout
+  # would silently become the answer to a rule-1 or rule-2 assertion about a two-file fixture.
+  export CC_HERM_SELFTEST_RULE=off
   FIX="$BATS_TEST_TMPDIR/fix"; mkdir -p "$FIX"
+  # A neutral, rule-1-clean bats dir for the rule-4 cases. They still have to pass a scan dir (the
+  # two passes compose, and 2 dominates 1), so it must be one lint_dir returns 0 on — otherwise the
+  # exit code under test would be lint_dir's verdict about a missing directory, not rule 4's.
+  NEUTRAL="$FIX/neutral"; mkdir -p "$NEUTRAL"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'; echo '  export HOME="$BATS_TEST_TMPDIR/home"'
+    echo '}'; echo '@test "x" { true; }'; } > "$NEUTRAL/zz-neutral.bats"
+}
+
+# write a fixture TOOL into a fresh root $1 (rule 4 scans <root>/bin, <root>/scripts, <root>/hooks),
+# named $2, whose body is $3. Rule 4's fixtures are tools, not suites, so they need their own maker.
+mk_tool() {
+  mkdir -p "$FIX/$1/bin"
+  { echo '#!/bin/bash'; printf '%s\n' "$3"; } > "$FIX/$1/bin/$2"
 }
 
 # write a fixture suite into a fresh dir $1, whose setup() body is $2 and whose single @test body is
@@ -25,7 +49,7 @@ mk_suite() {
 }
 
 @test "the real tree is CLEAN (exit 0) — the embedded allowlist matches HEAD, nightly stays green" {
-  run bash "$LINT"
+  CC_HERM_SELFTEST_RULE=on run bash "$LINT"          # ALL FOUR rules judge the tree here
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'test-hermeticity-lint: clean'
 }
@@ -159,6 +183,29 @@ mk_suite() {
   grep -q 'git diff --name-only "\$range" -- .tests/\*\.bats' "$REPO/scripts/ship-land.sh" || false
 }
 
+@test "CHOKEPOINT: ship-land's own-set covers every population the lint judges, incl. rule 4's" {
+  # Own-scope makes a violation OUTSIDE the lander's diff advisory. So the pathspec that builds the
+  # own-set IS the gate's scope: while it listed only tests/*.bats, a land ADDING a colliding
+  # selftest to bin/ produced an own-set without it, the lint said `collides?` — advisory — and the
+  # land went through. The rule would have been detection, never a gate. These three pins are the
+  # regression cover for that, one per directory rule 4 walks.
+  local spec; spec="$(grep -m1 'git diff --name-only "\$range" --' "$REPO/scripts/ship-land.sh")"
+  [[ "$spec" == *"'bin/*'"* ]] || false
+  [[ "$spec" == *"'scripts/*.sh'"* ]] || false
+  [[ "$spec" == *"'hooks/*.sh'"* ]] || false
+}
+
+@test "CHOKEPOINT: ship-land routes the lint's exit 2 to GATE-KILLED, not to a RED about your tree" {
+  # The lint has two non-zero codes and they are different CLAIMS: 1 names a file, 2 says a
+  # predicate could not run (or the scan found nothing to judge) and ends "do not 'fix' any suite on
+  # it". Rule 4 adds two more ways to reach 2 — the denominator floor and its own killed predicates
+  # — so the gate must stop reporting a non-verdict as "✗ RED, fix the file named above" with no
+  # file named. GATE_KILLED yields the retryable exit 9 that gate_nonzero_code() already exists for.
+  grep -q 'herm_rc == 2' "$REPO/scripts/ship-land.sh" || false
+  grep -A2 'herm_rc == 2' "$REPO/scripts/ship-land.sh" | grep -q 'NON-VERDICT' || false
+  grep -A5 'herm_rc == 2' "$REPO/scripts/ship-land.sh" | grep -q 'GATE_KILLED=1' || false
+}
+
 # ── RULE 2: the capacity-gate ratchet — the SAME class as rule 1, a different ambient input ───────
 # handoff-fire.sh's capacity_gate() reads live `sysctl vm.loadavg` and REFUSES a net-new fire above
 # 2.0 load/core (exit 9); this box sits permanently at 3.4-7.3/core. So a suite that exercises a fire
@@ -252,9 +299,121 @@ mk_suite() {
   [ "$(echo "$output" | grep -c 'AMBIENT')" -eq 0 ] || false
 }
 
-@test "the real tree is clean under BOTH ratchets and the summary reports both counts" {
-  run bash "$LINT"
+@test "the real tree is clean under ALL ratchets and the summary reports every count" {
+  CC_HERM_SELFTEST_RULE=on run bash "$LINT"
   [ "$status" -eq 0 ] || false
   echo "$output" | grep -q 'grandfathered (\$HOME)' || false
   echo "$output" | grep -q 'grandfathered (capacity gate)' || false
+  echo "$output" | grep -q 'grandfathered (orphan-close lever)' || false
+  echo "$output" | grep -q 'grandfathered (scratch path)' || false
+}
+
+# ── RULE 4: the embedded-selftest ratchet — the population rules 1-3 are structurally blind to ────
+# Their scan is `for f in "$dir"/*.bats`, so ~50 tools that RED-prove themselves via `<tool>
+# selftest` and own no .bats file were never judged at all. Reported 2026-07-30 (backlog f7abcbdee98c
+# spillover) after a selftest went RED in 2 of 4 CONCURRENT runs on a scratch path that was the same
+# string both times — rule 1's failure with the seam moved from an inherited $HOME to a named path.
+
+@test "RULE 4 RED: a selftest whose scratch dir is the same string on every run" {
+  mk_tool s4red zz-tool 'selftest() {
+  tmp=/tmp/zz-tool-selftest
+  mkdir -p "$tmp"; echo ok > "$tmp/f"
+}'
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4red" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'COLLIDES' || false
+  echo "$output" | grep -q 'Do NOT add to the selftest allowlist' || false
+}
+
+@test "RULE 4 GREEN: mktemp clears it — the prescribed fix actually works" {
+  mk_tool s4ok zz-tool 'selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-tool-selftest.XXXXXX")"
+  mkdir -p "$tmp"; echo ok > "$tmp/f"
+}'
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4ok" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 0 ] || false
+  [ "$(echo "$output" | grep -c 'COLLIDES')" -eq 0 ] || false
+}
+
+@test "RULE 4 SCOPE CONTROL: a tool with NO embedded selftest is neither flagged nor counted" {
+  # The positive control that makes the RED above mean something — and the COUNT is the half that
+  # discriminates: with the scope predicate stubbed to match every file the verdict stays 0 (an
+  # absent selftest body yields nothing for either probe to find), so only the denominator moves.
+  mk_tool s4scope zz-ok 'selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-ok.XXXXXX")"
+  echo ok > "$tmp/f"
+}'
+  { echo '#!/bin/bash'; echo 'main() {'; echo '  tmp=/tmp/zz-plain-state'; echo '  mkdir -p "$tmp"'; echo '}'; } \
+    > "$FIX/s4scope/bin/zz-plain"
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4scope" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q '1 embedded selftest(s)' || false
+}
+
+@test "RULE 4: an extractor blind to its OWN anchor is a NON-VERDICT (exit 2), never a clean bill" {
+  # The extractor control. The region extractor is textual: rename the convention and it matches
+  # nothing, and a rule that inspected ZERO tools would otherwise print "clean" — an alarm carrying
+  # the same zero bits as one that cannot fire. The lint ships an embedded selftest by
+  # construction, so wherever its own file sits under the scanned root it MUST be detected; a file
+  # at that path with no selftest is what a broken extractor looks like from the inside.
+  #
+  # NOT A COUNT, and that distinction was earned: the first version was `seen < 20`, calibrated on
+  # the 45 selftests measured in this repo, and it made a NON-VERDICT of every smaller tree — the
+  # fixture repos in tests/ship-land.bats included, whose scripts/ holds one file. Their suite
+  # caught it. A tree must be judged by the ratchet it SHIPS, never condemned for being small.
+  mk_tool s4anchor zz-tool 'selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz.XXXXXX")"
+  echo ok > "$tmp/f"
+}'
+  mkdir -p "$FIX/s4anchor/scripts"
+  printf '#!/bin/bash\necho "a lint with no embedded selftest"\n' > "$FIX/s4anchor/scripts/$(basename "$LINT")"
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4anchor" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 2 ] || false
+  echo "$output" | grep -q 'did not detect its own selftest' || false
+  [ "$(echo "$output" | grep -c 'lint: clean — 1 embedded')" -eq 0 ] || false
+}
+
+@test "RULE 4: a SMALL tree with no anchor at all is CLEAN — never unlandable for being small" {
+  # The paired case, and the regression cover for the calibration defect above. One compliant tool,
+  # no copy of the lint anywhere under the root: `seen` is honestly 1 and the verdict is clean.
+  mk_tool s4small zz-tool 'selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz.XXXXXX")"
+  echo ok > "$tmp/f"
+}'
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4small" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q '1 embedded selftest(s)' || false
+}
+
+@test "RULE 4 kill switch: CC_HERM_SELFTEST_RULE=off disables it — with the RED as positive control" {
+  mk_tool s4kill zz-tool 'selftest() {
+  tmp=/tmp/zz-tool-selftest
+  mkdir -p "$tmp"
+}'
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4kill" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 1 ] || false                        # control: the rule DOES fire on this fixture
+  CC_HERM_SELFTEST_RULE=off CC_HERM_SELFTEST_ROOT="$FIX/s4kill" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$NEUTRAL"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 4 is INDEPENDENT of rules 1-3 — a clean bats tree does not excuse a colliding selftest" {
+  # Why a fourth pass and not a fourth check inside lint_dir(): the populations differ, so a land
+  # whose suites are all hermetic must still be judged on the tools it ships.
+  mk_tool s4indep zz-tool 'selftest() {
+  tmp=/tmp/zz-tool-selftest
+  mkdir -p "$tmp"
+}'
+  mk_suite herm 'export HOME="$BATS_TEST_TMPDIR/home"'
+  CC_HERM_SELFTEST_RULE=on CC_HERM_SELFTEST_ROOT="$FIX/s4indep" CC_HERM_SELFTEST_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/herm"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'COLLIDES' || false
+  [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false      # rule 1 is satisfied; only rule 4 fired
 }
