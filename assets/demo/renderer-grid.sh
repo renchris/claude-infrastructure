@@ -101,7 +101,11 @@ for k in range(n):
     d = ImageDraw.Draw(sheet)
     for i, seq in enumerate(seqs):
         cx, cy = (i % cols) * w, (i // cols) * (h + LAB)
-        d.text((8, cy + 4), labels[i], font=font, fill=(185, 185, 185))
+        # cx + 8, NOT 8. With the 1-column stack this file shipped with, cx is always 0 and the two
+        # spellings are identical — so a hardcoded x survived every run until the fourth film turned
+        # cols into 2, and then both right-hand labels were drawn on top of the left-hand ones and
+        # the header read as garbled overstrike. The bug was always here; only a 2x2 can show it.
+        d.text((cx + 8, cy + 4), labels[i], font=font, fill=(185, 185, 185))
         sheet.paste(Image.open(seq[k]).convert("RGB"), (cx, cy + LAB))
     sheet.save(os.path.join(out, "%04d.png" % k))
 print("composited %d frames at %dx%d" % (n, cols * w, rows * (h + LAB)))
