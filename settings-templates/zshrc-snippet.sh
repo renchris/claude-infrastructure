@@ -1,5 +1,10 @@
 #!/bin/bash
 # Claude Code shell integration — add to ~/.zshrc
+#
+# This is the PORTABLE starter: the auto-updating `claude-latest` track, which needs nothing pinned
+# on the machine. It is deliberately not a copy of this repo's own ~/.zshrc, where `claude` is the
+# pinned Opus-5 eval entrypoint and this body's track is named `claude-prev` (README § Shell
+# launchers). Names below are the post-2026-08-01 set — no claude-next / claude-opus5 / claude-fable.
 
 # Main entrypoint: auto-update + task list persistence + max effort default.
 # Effort rides the --effort flag injected BEFORE "$@" (Commander last-wins → an
@@ -18,7 +23,9 @@ alias claude-plan='claude --permission-mode plan --append-system-prompt "ultrath
 # alias claude-auto='claude --permission-mode auto'
 
 # Second isolated Claude instance
-alias claude2="CLAUDE_CONFIG_DIR=$HOME/.claude-secondary claude"
+# Single-quoted so $HOME expands at USE time, not definition time (SC2139) — and so this template
+# matches how the live ~/.zshrc spells its account aliases.
+alias claude2='CLAUDE_CONFIG_DIR=$HOME/.claude-secondary claude'
 alias claude-which='echo "Config: ${CLAUDE_CONFIG_DIR:-$HOME/.claude (default)}"'
 alias claude-sync-mcp='cp ~/.claude/.mcp.json ~/.claude-secondary/.mcp.json && echo "MCP config synced"'
 
