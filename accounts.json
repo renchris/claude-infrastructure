@@ -8,7 +8,7 @@
   "usage_endpoint": "https://api.anthropic.com/api/oauth/usage",
   "token_endpoint": "https://platform.claude.com/v1/oauth/token",
   "user_agent": "claude-cli/2.1.183",
-  "claude_bin": "~/.claude-183/node_modules/.bin/claude",
+  "claude_bin": "~/.claude-219/node_modules/.bin/claude",
   "model_config_ssot": "~/.claude/model-config.yaml",
   "dia_local_state": "~/Library/Application Support/Dia/User Data/Local State",
   "cache_file": "/tmp/claude-accounts-cache.json",
