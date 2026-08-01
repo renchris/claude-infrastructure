@@ -87,7 +87,9 @@ until a human logged in. So on a cliff:
    session uuid). If the limit re-hits mid-recovery, the next invocation re-derives everything
    from ledger + disk.
 7. **Never push / ship / deploy from a recovery.** Task-clean local commits are allowed; landing
-   is the user's explicit call.
+   is the user's explicit call. This is a DELIBERATE exception to § Session Close Protocol's
+   ship policy (which auto-`/ship`s outside reso): a recovery runs on reconstructed, not
+   observed, state — exactly the condition under which an automatic land is least trustworthy.
 
 ## Step 0 — ground truth (every mode, before any judgment)
 
