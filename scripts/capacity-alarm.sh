@@ -44,12 +44,26 @@
 # process was large. A per-process ceiling cannot see a population explosion, so the mass has to be
 # counted as a population or it is not counted at all.
 #
-# WHAT THIS GUARD STILL CANNOT DO — stated here so its OK is not over-read. At StartInterval 600 it
-# samples every 10 minutes, and the 2026-07-31 event went from healthy to unrecoverable inside ONE
-# interval (the sample due mid-event never landed; the last one before the panic was 20m23s stale
-# and every field in it was true when taken). Rung 6 makes the event VISIBLE; it does not make this
-# sampler FAST enough to precede it. Until the cadence is adaptive, treat a green row as forensic
-# evidence about 10 minutes ago, not as protection now.
+# THE CADENCE IS PART OF THE INSTRUMENT — a rung you cannot sample in time is not a rung.
+# This ran at StartInterval 600 through the 2026-07-31 panic and could not resolve it: the box went
+# from a genuinely healthy sample to dead inside ONE interval (last row OK and 20m23s stale, the row
+# due mid-event never landed). The interval is now 60 s, measured at 0.73 s/tick ⇒ ~1.2% of one core.
+# Against that event's own growth rate (~68 procs/min off a 257 baseline) 60 s yields rung-6 WARN at
+# ~3.6 min and ALARM at ~6.5 min, against death at ~11-12 min — roughly five minutes of ALARM where
+# 600 s produced none. tests/capacity-alarm-launchd-path.bats pins the interval, because the number
+# living in a plist while the reasoning lives here is exactly how a cadence silently regresses.
+#
+# WHY NOT A DWELL LOOP (the cheaper-looking design that does not work). Tightening the cadence only
+# AFTER a non-green reading can only arm once a bad sample exists, and the 2026-07-31 series went
+# green → dead with no non-green sample in between: a dwell would never have armed. Fast always, or
+# fast only when it is already too late. This is also why the script still NEVER sleeps or polls
+# (R1) — the fix was the interval, not a wait.
+#
+# WHAT IT STILL DOES NOT DO: it does not ACT. Five minutes of ALARM on an unattended box is five
+# minutes of a page nobody reads. Shedding — refusing new session spawns above a coalition ceiling —
+# is the only thing that would make this preventive rather than merely early, and it is deliberately
+# NOT here: this file's whole design is ALARM-NOT-GATE (see the header below and §8.5.7), and
+# flipping that is an operator decision, not a maintenance edit.
 #
 # WHY RUNG 3 EXISTS. 2026-07-26 proved the swap rung fires only AFTER the pain: 2.56 GB of swap was
 # in use at 57 procs, and the swap file was later reset by a reboot — so "swap 0" today is not

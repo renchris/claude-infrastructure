@@ -9,9 +9,31 @@
   thing that fires it.
 
   WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST (this row is about NOT adding load): one vm_stat +
-  one sysctl + one ps + one python3, measured ~100-200 ms per tick. At 600 s that is a duty cycle
-  around 0.03% of one core. It stays cheap via Nice + LowPriorityIO, which yield to interactive
-  sessions.
+  one sysctl + one ps + one python3 + one top, measured 0.71-0.77 s per tick (median 0.73 s, 5
+  trials, 2026-07-31 — the older "~100-200 ms" figure predated rungs 4-6). At 60 s that is a duty
+  cycle of ~1.2% of ONE core, i.e. ~0.12% of this 10-core box. It stays cheap via Nice +
+  LowPriorityIO, which yield to interactive sessions.
+
+  THE INTERVAL IS 60 s, NOT 600 s, AND THAT IS THE WHOLE POINT OF THIS ROW.
+  At 600 s this sensor could not resolve the event it exists to catch. On 2026-07-31 the box went
+  from a genuinely healthy sample to a kernel panic inside ONE interval: the last row before death
+  read OK at 00:52:48Z with every field true when taken, the row due at ~01:02:48Z never landed at
+  all, and the panic was at 01:13:11Z. Twenty minutes stale, zero samples inside the fatal window.
+  A sensor slower than its subject is not a guard, it is a post-mortem.
+
+  WHY NOT "SAMPLE FAST ONLY WHEN WORRIED" (the design that looks cheaper and does not work): a
+  dwell loop that tightens the cadence after a non-green reading can only arm AFTER a bad sample
+  exists. The 2026-07-31 series went green -> dead with no non-green sample in between, so a dwell
+  would never have armed. The sampler has to be fast ALWAYS, or it is fast only when it is already
+  too late. Measured margin at 60 s against that event's own growth rate (~68 procs/min from a 257
+  baseline): rung 6 WARN at ~3.6 min, ALARM at ~6.5 min, death at ~11-12 min — about five minutes
+  of ALARM, where 600 s delivered none.
+
+  THE LOG IS NOW A ROTATION TARGET, because this row is what made it grow. 60 s is ~1,440 rows/day
+  (~640 KB/day) against 144 before. capacity-alarm.jsonl was NOT in rotate-autonomy-logs.sh's
+  DEFAULT_TARGETS; raising the rate without adding it would have shipped the unbounded-growth
+  defect this repo already ate once (idl.jsonl at 183 MB). It is added in the same commit — the
+  cadence and its exhaust are one change, never two.
 
   PROCESSTYPE WAS "Background" AND THAT MADE THE SENSOR INERT WHEN IT MATTERED — measured, not
   theorised. After the 2026-07-30 02:18:05 panic-reboot this job did not emit a single sample for
@@ -51,8 +73,8 @@
   i.e. a permanent dispatch outage. See docs/plans/MACHINE_CAPACITY_V2.md §8.5.7.
 
   Pages to ~/.claude/autonomy/pages/capacity-alarm.page on WARN/ALARM, and REMOVES that page on
-  OK/NO-DATA — one fixed slug, so a 10-minute cadence cannot accumulate pages, and a cleared
-  condition stops being reported.
+  OK/NO-DATA — one fixed slug, so no cadence can accumulate pages (this mattered more at 600 s and
+  matters more still at 60 s), and a cleared condition stops being reported.
 
   C10: the OPERATOR loads it. Kill switches after load: CC_CAPACITY_ALARM=off (whole script),
   CC_CAP_PAGE=off (page channel only), or launchctl bootout.
@@ -70,7 +92,7 @@
     </array>
 
     <key>StartInterval</key>
-    <integer>600</integer>
+    <integer>60</integer>
 
     <key>RunAtLoad</key>
     <false/>

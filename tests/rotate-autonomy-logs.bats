@@ -191,10 +191,14 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/teammate-lifecycle.log
 .claude/logs/team-reaper.log
 .claude/autonomy/postland/flakes.jsonl
-.claude/autonomy/postland/runner.log'
+.claude/autonomy/postland/runner.log
+.claude/logs/capacity-alarm.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
+  # capacity-alarm.jsonl (16th) joined 2026-07-31 with the sampler's 600s->60s cadence change:
+  # 10x the row rate on a file that was never a rotation target. This count assertion is what
+  # caught it — a target added without a fixture here rotates 15 and reports "skipped":1.
   # postland/ too: DEFAULT_TARGETS is the UNION of this audit's 13 and the 2 post-land verifier
   # logs that landed on trunk separately. A target with no fixture file counts as SKIPPED, not
   # rotated, so omitting them here broke both the rotated count and the "skipped":0 assertion.
@@ -205,7 +209,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 15 ]
+  [ "$n" -eq 16 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -213,7 +217,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":15' "$CC_IDL"
+  grep -q '"rotated":16' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 

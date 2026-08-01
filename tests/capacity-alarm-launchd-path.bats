@@ -69,3 +69,28 @@ plist_path() {
   run env -i PATH="$p" HOME="$HOME" bash -c 'command -v sysctl'
   [ "$status" -eq 0 ]
 }
+
+# ── CADENCE (2026-07-31) ──────────────────────────────────────────────────────────────────────
+# The interval is a load-bearing part of the instrument, and it lives in a DIFFERENT file from the
+# reasoning that justifies it — the exact shape in which a number silently regresses. At 600 s this
+# sensor could not resolve the panic it exists to catch (healthy sample -> dead inside one interval,
+# last row 20m23s stale). Pin it, in a form that says WHY, so a future "600 is cheaper" edit has to
+# argue with a red test rather than with a comment nobody reads.
+@test "cadence: StartInterval is 60s — 600s could not resolve the 2026-07-31 panic" {
+  local iv
+  iv="$(/usr/libexec/PlistBuddy -c 'Print :StartInterval' "$PLIST" 2>/dev/null)"
+  [ "$iv" = "60" ]
+}
+
+# A faster sampler writes 10x the rows, so the rotation target is not a nicety here — it is the
+# other half of the cadence change. Unrotated + 640 KB/day is how idl.jsonl reached 183 MB.
+@test "cadence: the 60s sampler's log is a rotation target (the exhaust ships with the rate)" {
+  grep -q 'logs/capacity-alarm\.jsonl' "$REPO/scripts/rotate-autonomy-logs.sh"
+}
+
+# The plist and the script must not disagree about the cadence. The script's header states 60s and
+# derives its warning-margin claim from it; if someone edits one and not the other, the surviving
+# number is a lie in whichever file kept it.
+@test "cadence: the script header and the plist agree on 60s" {
+  grep -qE 'interval is now 60 s' "$REPO/scripts/capacity-alarm.sh"
+}
