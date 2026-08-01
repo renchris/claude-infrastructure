@@ -64,7 +64,7 @@ json.dump({
   "cache_grace_s": r["cache_grace_s"], "login_warn_h": r["login_warn_h"],
   "frontier": r["frontier"], "router": r["router"],
   "accounts": [{"name": "next3", "config_dir": "/tmp/ca-cliff-test-nonexistent-xyz",
-                "launcher": "claude-next3", "fable_launcher": "claude-fable3",
+                "launcher": "claude3",
                 "email": "test@example.com", "mailbox": "test@example.com", "dia_profile": "T"}],
 }, open(cfg_path, "w"))
 PY

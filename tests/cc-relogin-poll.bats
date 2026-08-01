@@ -119,8 +119,8 @@ build() {
     [ -n "$a" ] || continue
     at="$(iso_in_h "$h")"; st=EXPIRING; [ "$h" -le 0 ] && st=REQUIRED
     jq -nc --arg a "$a" --argjson k "$k" --arg at "$at" \
-      '{acct:$a,k:$k,launcher:("claude-"+$a),auth:"ok",login_expires_at:$at,login_expired:false,login_fixable:true}' >> "$D/rows.login"
-    jq -nc --arg a "$a" --argjson k "$k" '{acct:$a,k:$k,launcher:("claude-"+$a),auth:"ok"}' >> "$D/rows.plain"
+      '{acct:$a,k:$k,launcher:("claude"+($a|ltrimstr("next"))),auth:"ok",login_expires_at:$at,login_expired:false,login_fixable:true}' >> "$D/rows.login"
+    jq -nc --arg a "$a" --argjson k "$k" '{acct:$a,k:$k,launcher:("claude"+($a|ltrimstr("next"))),auth:"ok"}' >> "$D/rows.plain"
     # PRODUCER-LITERAL, not ISO+integer: see the fixture/producer-parity note above.
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$a" "$st" "token-expiry" "$(fmt_when_like "$h")" "$(fmt_h_like "$h")" "claude-$a" >> "$D/ls.tsv"
@@ -330,7 +330,7 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
 
 @test "an empty field never shifts the parse — k==0 rows are still attempted" {
   build none      # hand-written rows with an ABSENT login_expires_h → an empty middle field
-  jq -nc '{window:{},cached:false,rows:[{acct:"next3",k:0,launcher:"claude-next3",
+  jq -nc '{window:{},cached:false,rows:[{acct:"next3",k:0,launcher:"claude3",
            login_expires_at:"'"$(iso_in_h 100)"'",login_expired:false,login_fixable:true}]}' > "$D/fresh.json"
   run "$P" --json
   [ "$status" -eq 0 ]
@@ -377,7 +377,7 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
 
 @test "ladder 2 — login_expires_h is honored when login_expires_at is absent" {
   build none                            # base fixtures, then hand-write an h-only row
-  jq -nc '{window:{},cached:false,rows:[{acct:"next4",k:0,launcher:"claude-next4",login_expires_h:100,login_expired:false}]}' > "$D/fresh.json"
+  jq -nc '{window:{},cached:false,rows:[{acct:"next4",k:0,launcher:"claude4",login_expires_h:100,login_expired:false}]}' > "$D/fresh.json"
   run "$P" --json
   [ "$status" -eq 0 ]
   json | jq -e '.detection=="json-fields" and .acct=="next4" and .hours_left==100' >/dev/null
@@ -683,7 +683,7 @@ STUB
   # the escalation." So the row is the invariant; the exit code is asserted on --dry-run below,
   # where nothing is forked at all.
   build ls
-  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
+  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude3\n' > "$D/ls.tsv"
   printf '1\n' > "$D/ls.rc"
   run "$P" --dry-run --json
   [ "$status" -eq 0 ] || false                       # --dry-run decides and reports, forking nothing
@@ -698,7 +698,7 @@ STUB
   # DISCRIMINATING CONTROL: the same shape as EXPIRING is genuinely unknowable and MUST be skipped
   # rather than given a fabricated now-deadline. (Also on --dry-run, same reason.)
   rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
-  printf 'next3\tEXPIRING\tlogin-expiry\t—\t—\tclaude-next3\n' > "$D/ls.tsv"
+  printf 'next3\tEXPIRING\tlogin-expiry\t—\t—\tclaude3\n' > "$D/ls.tsv"
   run "$P" --dry-run --json
   [ "$status" -eq 0 ] || false
   json | jq -e '.candidates==0' >/dev/null || false

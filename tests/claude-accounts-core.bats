@@ -41,7 +41,7 @@ json.dump({
   "cache_grace_s": r["cache_grace_s"], "login_warn_h": r["login_warn_h"],
   "frontier": r["frontier"], "router": r["router"],
   "accounts": [{"name": "next3", "config_dir": "/tmp/ca-test-nonexistent-xyz",
-                "launcher": "claude-next3", "fable_launcher": "claude-fable3",
+                "launcher": "claude3",
                 "email": "test@example.com", "mailbox": "test@example.com", "dia_profile": "T"}],
 }, open(cfg_path, "w"))
 PY
@@ -407,7 +407,7 @@ import io, contextlib, re
 # you meant keeps expiring (operator directive 2026-07-30).
 rows = [{"acct": "next", "auth": "ok", "k": 0, "session_pct": 2, "weekly_pct": 10,
          "fable_pct": 5, "email": "ichris96+claude@hotmail.com", "dia_profile": "Personaly",
-         "launcher": "claude-next", "weekly_reset_h": 40.0, "fable_reset_h": 40.0,
+         "launcher": "claude", "weekly_reset_h": 40.0, "fable_reset_h": 40.0,
          "session_reset_h": 2.0, "login_expires_h": 12.0,
          "login_expires_at": "2026-07-31T02:00:00+00:00"}]
 buf = io.StringIO()
@@ -418,7 +418,7 @@ plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
 cliff = [ln for ln in plain.splitlines() if "login expires" in ln]
 assert cliff, plain
 # the identity travels ON the same line as the instruction, never a lookup away from it
-assert "claude-next → /login" in cliff[0], cliff
+assert "claude → /login" in cliff[0], cliff
 assert "ichris96+claude@hotmail.com" in cliff[0], cliff
 assert "Personaly" in cliff[0], cliff
 # and when that same account is the pick, the route warning names the mailbox too
@@ -1108,7 +1108,7 @@ stamp = due.isoformat()
 assert "." in stamp and stamp.endswith("+00:00"), stamp
 src = open(sys.argv[1]).read().replace(
     'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
-    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude-next3",\n'
+    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude3",\n'
     '         "login_expires_h": 50.0, "login_fixable": False,\n'
     '         "login_expires_at": "' + stamp + '"}]\n'
     '    wj, cached, prev = {}, False, None')
@@ -1150,13 +1150,13 @@ PY
   # the deadline columns stay blank: this verdict is NOT driven by a deadline, and printing a
   # future expiry beside REQUIRED reads as "required, and it expires later"
   [[ "${lines[0]}" == *"—"*"—"* ]] || false
-  [[ "${lines[0]}" == *claude-next3* ]] || false
+  [[ "${lines[0]}" == *claude3* ]] || false
   # all-clear is silent AND exit 0 — a check that always prints stops being read
   CLAUDE_ACCOUNTS_JSON="$CA_CFG" run python3 - "$CA_BIN" <<'PY'
 import importlib.machinery, importlib.util, os, subprocess, sys, time
 src = open(sys.argv[1]).read().replace(
     'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
-    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude-next3",\n'
+    'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude3",\n'
     '         "login_expires_h": 500.0, "login_expires_at": "2099-01-01T00:00:00+00:00",\n'
     '         "login_fixable": False}]\n    wj, cached, prev = {}, False, None')
 p = subprocess.run([sys.executable, "-c", src, "--login-status"], capture_output=True, text=True)
@@ -1225,7 +1225,7 @@ ca = importlib.util.module_from_spec(importlib.util.spec_from_loader("ca", loade
 loader.exec_module(ca)
 cfg = json.load(open(sys.argv[2]))
 now = datetime.now(timezone.utc)
-rows = [{"acct": "next3", "auth": "ok", "k": 0, "launcher": "claude-next3",
+rows = [{"acct": "next3", "auth": "ok", "k": 0, "launcher": "claude3",
          "email": "t@e", "dia_profile": "T", "session_pct": 5, "weekly_pct": 10,
          "fable_pct": 5, "auth_actionable": False, "login_fixable": False,
          "login_expires_at": (now - timedelta(hours=1)).isoformat(),   # lapsed an hour ago...
@@ -1258,7 +1258,7 @@ import io, contextlib
 now = datetime.now(timezone.utc)
 ca.COLOR = False
 def render(h):
-    r = row(acct="next4", auth="ok", launcher="claude-next4", email="e", dia_profile="D",
+    r = row(acct="next4", auth="ok", launcher="claude4", email="e", dia_profile="D",
             login_expires_at=(now + timedelta(hours=h)).isoformat(), login_expires_h=h,
             login_expired=h <= 0)
     buf = io.StringIO()
@@ -1274,7 +1274,7 @@ out = render(-1.0)
 # the same words, so a loose "login EXPIRED" in out passes even with the bullet suppressed —
 # it did exactly that on the first attempt at this test.
 assert "\u2298 next4 login EXPIRED" in out, out
-assert "claude-next4 \u2192 /login" in out, out
+assert "claude4 \u2192 /login" in out, out
 # ...and it reaches the routing footer too: such a row is still fully routable, so it can WIN
 assert "is the pick, but its login EXPIRED" in out, out
 # comfortably outside the window ⇒ silence (a check that always fires stops being read)

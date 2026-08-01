@@ -54,7 +54,7 @@ setup() {
 import json, sys
 cfg_path, cache = sys.argv[1], sys.argv[2]
 acct = lambda n: {"name": n, "config_dir": "/tmp/ca-relogin-nonexistent-" + n,
-                  "launcher": "claude-" + n, "fable_launcher": "claude-fable-" + n,
+                  "launcher": "claude" + n[4:],   # next->claude, next2->claude2 (launcher consolidation)
                   "email": n + "@example.com", "mailbox": n + "@example.com", "dia_profile": n.upper()}
 json.dump({
   "keychain_account": "test", "oauth_scopes": "x",

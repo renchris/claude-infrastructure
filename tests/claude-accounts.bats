@@ -37,7 +37,7 @@ json.dump({
              "MARGIN_H": 0.5, "EPS_H": 0.25, "WEEKLY_FLOOR": 0.005, "FABLE_FLOOR": 0.02,
              "JB_BONUS": 1.25},
   "accounts": [{"name": "next3", "config_dir": "/tmp/ca-test-nonexistent-xyz",
-                "launcher": "claude-next3", "fable_launcher": "claude-fable3",
+                "launcher": "claude3",
                 "email": "test@example.com", "mailbox": "test@example.com", "dia_profile": "T"}],
 }, open(cfg_path, "w"))
 PY
