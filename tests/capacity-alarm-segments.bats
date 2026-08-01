@@ -112,9 +112,33 @@ run_classify() { # <script> <args...>
   [[ "$output" == 814807\ * ]] || false
 }
 
-@test "the in-script selftest is GREEN and reports 5 rungs" {
+@test "the in-script selftest is GREEN and reports 6 rungs" {
   run env CC_CAP_SELFTEST=1 bash "$A"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"selftest GREEN (5 rungs"* ]] || false
+  [[ "$output" == *"selftest GREEN (6 rungs"* ]] || false
   [[ "$output" != *"control FAIL"* ]] || false
+}
+
+# Rung 6 (the 2026-07-31 panic). That box died with 1002 procs in ONE terminal coalition while
+# every other rung read healthy 20 minutes earlier. This asserts the same shape as the rung-5 pair
+# above, in BOTH directions: the fatal sample must ALARM, and the highest HEALTHY sample of the
+# 38-sample series the threshold was derived from (353) must stay OK. That second row IS the
+# no-false-positive claim, executable — it goes RED if anyone retunes COAL_WARN down without
+# re-deriving the denominator. See docs/research/panic-iterm2-coalition-2026-07-31.md §7.
+@test "rung 6: the fatal 1002-proc coalition ALARMs, the healthy 353 max stays OK" {
+  run env CC_CAP_SELFTEST=1 bash "$A"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"coal='1002' → ALARM"* ]] || false
+  [[ "$output" == *"coal='353' → OK"* ]]     || false
+}
+
+# An unreadable process table must SKIP rung 6, never report a healthy 0 — rung 3's standing policy,
+# and the same failure the 2026-07-30 zprint control pins for rung 5.
+@test "rung 6: an unreadable coalition count is SKIPPED, never a fabricated healthy 0" {
+  run env CC_CAP_SELFTEST=1 bash "$A"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"coal='?' → OK"* ]] || false
+  run env CC_CAP_PS=/nonexistent/ps bash "$A" --no-append
+  [[ "$output" == *"SKIPPED (ps unreadable)"* ]] || false
+  [[ "$output" != *"0 procs in"* ]] || false
 }

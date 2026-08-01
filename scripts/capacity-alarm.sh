@@ -29,12 +29,27 @@
 #   ALARM    any rung at its alarm floor.                             exit 2
 #   NO-DATA  vm_stat unreadable — nothing is asserted.                exit 3
 #
-# FOUR RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
+# SIX RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
 # evaluated — so a new term can only ever raise the verdict, never mask an existing one:
 #   1. swap in use            > 0 MB           ⇒ ALARM   (the hard, LAGGING signal)
 #   2. reclaimable headroom   < ALARM_GB/WARN_GB
 #   3. kernel pressure level  >= 4 / >= 2      ⇒ ALARM / WARN   (the kernel's own LEADING indicator)
 #   4. per-proc phys outlier  > PROC_WARN_GB   ⇒ WARN    (the leak term; report always, gate softly)
+#   5. compressor SEGMENTS    >= 70% / >= 45%  ⇒ ALARM / WARN   (the 2026-07-30 panic axis)
+#   6. terminal-coalition procs >= 700 / >= 500 ⇒ ALARM / WARN  (the 2026-07-31 panic axis)
+#
+# WHY RUNG 6 IS NOT PART OF RUNG 4. They count different nouns, and 2026-07-31 proved the
+# difference is fatal. That box died with the iTerm2 coalition at 139.5 GiB — 89.6% of all process
+# memory — spread across 1,002 child processes. Rung 4 read 1.64 GB and was CORRECT: no single
+# process was large. A per-process ceiling cannot see a population explosion, so the mass has to be
+# counted as a population or it is not counted at all.
+#
+# WHAT THIS GUARD STILL CANNOT DO — stated here so its OK is not over-read. At StartInterval 600 it
+# samples every 10 minutes, and the 2026-07-31 event went from healthy to unrecoverable inside ONE
+# interval (the sample due mid-event never landed; the last one before the panic was 20m23s stale
+# and every field in it was true when taken). Rung 6 makes the event VISIBLE; it does not make this
+# sampler FAST enough to precede it. Until the cadence is adaptive, treat a green row as forensic
+# evidence about 10 minutes ago, not as protection now.
 #
 # WHY RUNG 3 EXISTS. 2026-07-26 proved the swap rung fires only AFTER the pain: 2.56 GB of swap was
 # in use at 57 procs, and the swap file was later reset by a reboot — so "swap 0" today is not
@@ -50,7 +65,9 @@
 #
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
-#        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control)
+#        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
+#        CC_CAP_COAL_WARN (default 500) · CC_CAP_COAL_ALARM (default 700) ·
+#        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -64,6 +81,13 @@ PROC_WARN_GB="${CC_CAP_PROC_WARN_GB:-3}"
 # after the box was already unrecoverable. These are canary values, not capacity values.
 SEG_WARN_PCT="${CC_CAP_SEG_WARN_PCT:-45}"
 SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
+# Terminal-coalition process population (rung 6). DERIVED, not chosen: 38 healthy CoalitionMemory
+# samples of the iTerm2 coalition over the 2026-07-31 boot top out at 353 procs with ZERO above
+# 400; the sample taken 4.3 min before the panic read 1002. 500/700 is 1.42x/1.98x the observed
+# healthy max — no false positive in the whole series, and the fatal sample clears both. Re-derive
+# before touching these (panic-iterm2-coalition-2026-07-31.md §7).
+COAL_WARN="${CC_CAP_COAL_WARN:-500}"
+COAL_ALARM="${CC_CAP_COAL_ALARM:-700}"
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
 APPEND=1; WANT_JSON=0; QUIET=0
 
@@ -288,6 +312,49 @@ if [ -n "$TOP_PROCS" ]; then
                   | awk 'BEGIN{m=0} {if ($2+0 > m) m = $2+0} END{printf "%.2f", m/1024}')"
 fi
 
+# ── terminal-coalition process population (rung 6) ────────────────────────────────────────────────
+# THE 2026-07-31 PANIC IS THIS RUNG. That box died with the iTerm2 coalition holding 139.5 GiB —
+# 89.6% of all process memory — while iTerm2 ITSELF held 983 MB. The mass was in 1,002 child
+# processes, up from 257 twelve minutes earlier. Rung 4 read 1.64 GB and was right: no SINGLE
+# process was large. A per-process ceiling is blind to a population explosion BY CONSTRUCTION, which
+# is why this rung cannot be folded into rung 4 — it counts a different noun.
+#
+# macOS rolls coalition memory up to the owning app, so the operator's out-of-memory modal blamed
+# the terminal for what we launched inside it. There is no cheap per-coalition sysctl, so the live
+# read walks the process tree and counts descendants of the controlling terminal app.
+#
+# Reports the LARGEST terminal coalition, not the sum: two terminals at 300 each is a different
+# (and benign) state from one at 600, and the threshold was derived against a single coalition.
+# Unreadable ⇒ prints nothing ⇒ rung SKIPPED, never a fabricated healthy 0 (rung 3's policy).
+read_coalition_procs() { # → "<procs> <app>" for the largest terminal coalition, or nothing
+  "${CC_CAP_PS:-ps}" -Ao pid=,ppid=,comm= 2>/dev/null | awk '
+    { p = $1; pp = $2; c = $3; for (i = 4; i <= NF; i++) c = c " " $i
+      sub(/.*\//, "", c)
+      parent[p] = pp; pids[++np] = p
+      if (c == "iTerm2" || c == "kitty" || c == "ghostty" || c == "Ghostty") root[p] = c }
+    END {
+      for (i = 1; i <= np; i++) {
+        q = pids[i]; d = 0
+        # Depth cap is a cycle guard, not a tree-depth assumption: a corrupt ppid chain must not
+        # spin here. Exceeding it drops the process from the count (under-counts, never over).
+        while (q != "" && q + 0 > 1 && d < 64) {
+          if (q in root) { cnt[q]++; break }
+          q = parent[q]; d++
+        }
+      }
+      best = -1; bestn = ""
+      for (r in root) if (cnt[r] + 0 > best) { best = cnt[r] + 0; bestn = root[r] }
+      if (bestn != "") printf "%d %s\n", best, bestn
+    }'
+}
+
+COAL_ROW="$(read_coalition_procs || true)"
+COAL_PROCS=""; COAL_APP=""
+if [ -n "$COAL_ROW" ]; then
+  COAL_PROCS="${COAL_ROW%% *}"
+  COAL_APP="${COAL_ROW#* }"
+fi
+
 # ── positive control (R6) — prove the ladder can reach every rung ─────────────────────────────────
 # Without this, "OK" is indistinguishable from "the thresholds are unreachable". Runs the SAME
 # classify function against synthetic inputs, so it tests the real code path, not a description.
@@ -295,8 +362,8 @@ fi
 # MAX-COMBINED, not first-match. The rungs are evaluated into a severity level and the WORST wins, so
 # adding a rung can only raise a verdict. The incumbent returned on first match, which would have let
 # a later-added rung be shadowed — and worse, would have made rung ORDER a silent policy decision.
-classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] → prints verdict
-  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" v=0 si=0
+classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] [coal_procs] → verdict
+  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" v=0 si=0
   # headroom is the ONE instrument the verdict cannot exist without (see header).
   if [ -z "$h" ]; then printf 'NO-DATA'; return 0; fi
 
@@ -339,6 +406,16 @@ classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] 
        fi ;;
   esac
 
+  # rung 6 — terminal-coalition process population (2026-07-31 panic). Reaches ALARM: this is the
+  # axis that box died on, and it died with rungs 1-5 all reading healthy 20 minutes earlier.
+  # Absent instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK.
+  case "$cp" in
+    ''|*[!0-9]*) : ;;
+    *) if [ "$cp" -ge "$COAL_ALARM" ]; then v=2
+       elif [ "$cp" -ge "$COAL_WARN" ]; then if [ "$v" -lt 1 ]; then v=1; fi
+       fi ;;
+  esac
+
   case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
 }
 
@@ -347,26 +424,35 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   # Every rung, in both directions, plus the three cases that are POLICY rather than arithmetic:
   # max-combine (a WARN rung must not downgrade an ALARM), an unreadable pressure level staying OK,
   # and the outlier rung being unable to reach ALARM. probe = headroom:swap:pressure:maxproc:want
-  # probe = headroom:swap:pressure:maxproc:seg:want
-  # The rung-5 rows encode the 2026-07-30 panic directly: `99:0:1:0:100:ALARM` is the machine's
+  # probe = headroom:swap:pressure:maxproc:seg:coalprocs:want
+  # The rung-5 rows encode the 2026-07-30 panic directly: `99:0:1:0:100::ALARM` is the machine's
   # actual dying state — abundant headroom, zero swap, normal pressure, no outlier process, and
   # segments at 100%. Every pre-existing rung called that box HEALTHY, which is the whole point.
+  #
+  # The rung-6 rows do the same for 2026-07-31: `99:0:1:0::1002:ALARM` is THAT machine's dying
+  # state, and `99:0:1:0::353:OK` is the highest reading of the 38 healthy samples it was derived
+  # from — that row is the no-false-positive claim, executable. If a future threshold edit makes
+  # 353 fire, this control goes RED rather than the fleet learning it the expensive way.
   for probe in \
-      "99:0:1:0::OK"      "5:0:1:0::WARN"   "1:0:1:0::ALARM"  "99:512:1:0::ALARM" ":0:1:0::NO-DATA" \
-      "99:0:2:0::WARN"    "99:0:4:0::ALARM" "99:0:1:9::WARN"  "5:0:4:0::ALARM"    "1:0:1:9::ALARM" \
-      "99:0::0::OK"       "99:0:1:::OK" \
-      "99:0:1:0:100:ALARM" "99:0:1:0:70:ALARM" "99:0:1:0:45:WARN" "99:0:1:0:44:OK" \
-      "99:0:1:0:0:OK"      "99:0:1:0:?:OK"     "1:0:1:0:0:ALARM"  "99:0:1:9:100:ALARM"; do
+      "99:0:1:0:::OK"      "5:0:1:0:::WARN"   "1:0:1:0:::ALARM" "99:512:1:0:::ALARM" ":0:1:0:::NO-DATA" \
+      "99:0:2:0:::WARN"    "99:0:4:0:::ALARM" "99:0:1:9:::WARN" "5:0:4:0:::ALARM"    "1:0:1:9:::ALARM" \
+      "99:0::0:::OK"       "99:0:1::::OK" \
+      "99:0:1:0:100::ALARM" "99:0:1:0:70::ALARM" "99:0:1:0:45::WARN" "99:0:1:0:44::OK" \
+      "99:0:1:0:0::OK"      "99:0:1:0:?::OK"     "1:0:1:0:0::ALARM"  "99:0:1:9:100::ALARM" \
+      "99:0:1:0::1002:ALARM" "99:0:1:0::700:ALARM" "99:0:1:0::699:WARN" "99:0:1:0::500:WARN" \
+      "99:0:1:0::499:OK"     "99:0:1:0::353:OK"    "99:0:1:0::?:OK"     "1:0:1:0::353:ALARM" \
+      "99:0:1:0:100:1002:ALARM"; do
     h="${probe%%:*}";  r="${probe#*:}"
     s="${r%%:*}";      r="${r#*:}"
     pl="${r%%:*}";     r="${r#*:}"
     mp="${r%%:*}";     r="${r#*:}"
-    sg="${r%%:*}";     want="${r#*:}"
-    got="$(classify "$h" "$s" "$pl" "$mp" "$sg")"
+    sg="${r%%:*}";     r="${r#*:}"
+    cp="${r%%:*}";     want="${r#*:}"
+    got="$(classify "$h" "$s" "$pl" "$mp" "$sg" "$cp")"
     if [ "$got" = "$want" ]; then
-      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' → $got"
+      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got"
     else
-      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' → $got (want $want)"
+      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got (want $want)"
       fails=$((fails+1))
     fi
   done
@@ -380,7 +466,25 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   else
     echo "  control FAIL census trees=${1:-?} != exe ${2:-?} + bin ${3:-?}"; fails=$((fails+1))
   fi
-  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (5 rungs + no-data + census reachable)"; exit 0; }
+  # Rung 6's instrument has the same failure mode the census has: a plausible-looking nothing. An
+  # empty read is INDISTINGUISHABLE from "no terminal is running" at the verdict, so without this
+  # control a broken tree-walk would skip the rung silently and forever — the exact shape of the
+  # 2026-07-31 blind spot. Assert the invariant a miscount breaks: the coalition is a SUBSET of the
+  # process table, so 1 <= procs <= total. (Absent terminal ⇒ genuinely empty ⇒ reported, not failed.)
+  cr="$(read_coalition_procs || true)"
+  ctot="$(ps -Ao pid= 2>/dev/null | wc -l | tr -d ' ')"
+  if [ -z "$cr" ]; then
+    echo "  control SKIP coalition — no terminal app in the process table (instrument returned empty)"
+  else
+    cn="${cr%% *}"; ca="${cr#* }"
+    if [ "$cn" -ge 1 ] 2>/dev/null && [ "$cn" -le "$ctot" ] 2>/dev/null; then
+      echo "  control OK   coalition ${ca}=${cn} procs, within 1..${ctot} process table (subset invariant)"
+    else
+      echo "  control FAIL coalition ${ca}=${cn} outside 1..${ctot} — tree-walk is miscounting"
+      fails=$((fails+1))
+    fi
+  fi
+  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (6 rungs + no-data + census + coalition reachable)"; exit 0; }
   echo "capacity-alarm: selftest RED ($fails)" >&2; exit 70
 fi
 
@@ -391,7 +495,7 @@ if [ -n "$MEM" ]; then
   HEAD="${1:-}"; COMP="${2:-}"; ACT="${3:-}"; WIRED="${4:-}"
 fi
 
-VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT")"
+VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS")"
 case "$VERDICT" in
   OK)      RC=0 ;;
   WARN)    RC=1 ;;
@@ -439,11 +543,12 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # change stays parseable. `sessions` keeps its name and gains its correct VALUE (trees across both
 # families); the two per-family counts are added beside it so a future census regression is visible in
 # the log itself rather than only in an aggregate that looks plausible either way.
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"top_procs":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
   "${SEG_PCT:-null}" "$SEG_WARN_PCT" "$SEG_ALARM_PCT" \
+  "${COAL_PROCS:-null}" "${COAL_APP:-}" "$COAL_WARN" "$COAL_ALARM" \
   "$TOP_JSON")"
 
 if [ "$APPEND" = 1 ]; then
@@ -512,6 +617,8 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  compressor segments:    ${SEG_PCT:-SKIPPED (zprint unreadable)}${SEG_PCT:+% of limit  (warn ${SEG_WARN_PCT}% / alarm ${SEG_ALARM_PCT}%)}"
   echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=2 ⇒ WARN · >=4 ⇒ ALARM · absent ⇒ rung skipped)"
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
+  # SKIPPED, not "0" — an unreadable ps must never render as an empty, healthy-looking coalition.
+  echo "  terminal coalition:     ${COAL_PROCS:-SKIPPED (ps unreadable)}${COAL_PROCS:+ procs in ${COAL_APP}  (warn >=${COAL_WARN} / alarm >=${COAL_ALARM})}"
   if [ -n "$TOP_PROCS" ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
