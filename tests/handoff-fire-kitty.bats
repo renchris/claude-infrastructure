@@ -32,6 +32,12 @@
 # bats and are silently DEAD anywhere but a body's last line — that has burned this repo twice.
 
 setup() {
+  # Pin the fire capacity gate OFF. handoff-fire's capacity_gate() refuses a net-new fire above
+  # 2.0/core and this box lives well above that, so an unpinned suite goes red-by-LOAD rather than
+  # by its subject — a verdict that depends on what else the operator is running. Named by
+  # test-hermeticity-lint, which blocks the land on it (and was right: this file exercises
+  # handoff-fire). Do NOT add to the fire allowlist instead.
+  export CC_FIRE_CAPACITY_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"   # hermeticity ratchet: never live ~/
