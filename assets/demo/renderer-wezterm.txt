@@ -1,0 +1,14 @@
+terminal-bench — app=wezterm pid=65851 panes=18 interval=0s  2026-08-01T05:23:55Z
+  T0  app   cpu=27.2 mem=177MB th=82 ports=502 win=21 off=19 mpx=0.91
+  T0  WS    cpu=26.8 mem=1552MB th=26 ports=4667 win=22 off=11 mpx=13.18
+  GPU path taken: gpu_frames=215 cpu_frames=2  ratio=107.50:1
+  PER-PANE at n=18 panes:
+    threads/pane   4.56
+    ports/pane     27.89
+    MB/pane        9.8
+    cpu%/pane      1.51
+verdict=PARTIAL
+film: 1920x1080 @ 60/1  4590638 bytes
+stalls: 0 gap(s) >1.5s between delivered frames, 0.00s total, longest 0.06s, over a 15s take
+load delivered: see /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/renderer-film-load.tsv (achieved fps + SUSPECT flag per pane)
+measured pid: 65851 (that pid pre-existed this run: no)
