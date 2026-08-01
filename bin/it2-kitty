@@ -77,6 +77,32 @@ kt() {
   fi
 }
 
+# ── AM I ACTUALLY IN KITTY? ──────────────────────────────────────────────────────────────────────
+# KITTY_LISTEN_ON alone cannot answer this. It is an ordinary exported env var, so an iTerm2.app
+# launched from a kitty pane carries it — along with KITTY_WINDOW_ID and KITTY_PID — into every
+# iTerm2 pane under it, forever. On 2026-07-31 that made this file drive a background kitty from
+# inside genuine iTerm2 panes: the socket check passed, `session list` returned rc 0 (so Claude Code
+# cached the pane backend as AVAILABLE), and every assignee spawn then died at USE time on the id
+# rejection below, with no fallback to in-process teammates.
+#
+# This check is deliberately DUPLICATED here rather than left to bin/it2-wrapper's dispatch. The two
+# halves deploy by different mechanisms — ~/.claude/bin/it2 is a COPY refreshed only by install.sh,
+# while ~/.claude/bin/it2-kitty is a SYMLINK that goes live the moment the repo moves — so a partial
+# deploy can leave a stale wrapper diverting to a current translator. The always-fresh half is the
+# one that has to be able to say no.
+#
+# CC_TERM_KITTY_TO is an explicit operator choice of socket and bypasses the ancestry requirement:
+# naming a socket IS the statement that you mean to drive that kitty from wherever you are.
+if [ -z "${CC_TERM_KITTY_TO:-}" ]; then
+  _cc_in_kitty="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/cc-in-kitty"
+  if [ -x "$_cc_in_kitty" ] && ! "$_cc_in_kitty"; then
+    err "$("$_cc_in_kitty" --why 2>/dev/null)"
+    err "refusing to drive kitty from a pane that is not kitty's — that would send Agent Teams panes"
+    err "into a window you are not looking at. Set CC_TERM_KITTY_TO=<socket> if you meant this."
+    exit 3
+  fi
+fi
+
 [ -n "${KITTY_LISTEN_ON:-}${CC_TERM_KITTY_TO:-}" ] || {
   err "no kitty control socket (KITTY_LISTEN_ON unset). kitty.conf needs 'allow_remote_control socket-only' + 'listen_on', and kitty must be RESTARTED — neither option is reloadable."
   exit 4
@@ -118,13 +144,29 @@ done
 # refuse rather than silently target the active pane, which would hijack the operator's own window.
 valid_id(){ case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
+# A rejection has to name its own cause. `not a kitty window id: 'E5D77446-…'` was the whole
+# diagnostic an operator got on 2026-07-31 while every teammate spawn failed, and it points at the
+# id — the one innocent party. The id is correct; the caller is the wrong terminal's.
+reject_id(){
+  err "not a kitty window id: '$1' (verb: session ${2:-?})"
+  case "$1" in
+    *-*-*-*-*)
+      err "that is an iTerm2 session UUID, so this process was handed an iTerm2 pane to drive."
+      err "Cause: KITTY_* env vars are INHERITED — an iTerm2 launched from a kitty pane carries them"
+      err "into every pane under it, and bin/it2-wrapper used to divert on KITTY_WINDOW_ID alone."
+      err "Fix: deploy the current bin/cc-in-kitty + bin/it2-wrapper (scripts/kitty-setup.sh --apply)."
+      ;;
+  esac
+  exit 65
+}
+
 case "$verb" in
 
   split)
     # -v ⇒ RIGHT (iTerm2 "Split Vertically"), default ⇒ BELOW. See contract above.
     if [ "$VERTICAL" = 1 ]; then loc=vsplit; else loc=hsplit; fi
     if [ -n "$SESSION" ]; then
-      valid_id "$SESSION" || { err "not a kitty window id: '$SESSION'"; exit 65; }
+      valid_id "$SESSION" || reject_id "$SESSION" split
       # --match window_id: is NOT redundant with --next-to. kitty's launch.py drops --next-to when
       # the target tab does not contain it, and the target tab defaults to the ACTIVE tab — so
       # without --match the anchor is silently discarded and the pane lands somewhere else.
@@ -171,7 +213,7 @@ else:
   send)
     # Raw text, NO newline. Claude Code sends \x15 (Ctrl-U) here to clear the prompt line.
     text="${ARGS[*]:-}"
-    if [ -n "$SESSION" ]; then valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+    if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" send
       kt send-text --match "id:$SESSION" -- "$text" || exit 1
     else kt send-text -- "$text" || exit 1; fi
     ;;
@@ -179,7 +221,7 @@ else:
   run)
     # Text + Enter. This is how the teammate's launch command is actually executed.
     text="${ARGS[*]:-}"
-    if [ -n "$SESSION" ]; then valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+    if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" run
       kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
     else kt send-text -- "$text"$'\r' || exit 1; fi
     ;;
@@ -189,7 +231,7 @@ else:
     # reason the iTerm2 wrapper needed a force=True interception. That workaround does not port —
     # it disappears.
     [ -n "$SESSION" ] || { err "close requires -s <id>"; exit 65; }
-    valid_id "$SESSION" || { err "bad id '$SESSION'"; exit 65; }
+    valid_id "$SESSION" || reject_id "$SESSION" close
     kt close-window --match "id:$SESSION" || exit 1
     ;;
 

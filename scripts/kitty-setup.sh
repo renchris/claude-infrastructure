@@ -161,6 +161,10 @@ if [ "$MODE" = apply ]; then
   # refreshed explicitly or the kitty divert never reaches the live layer.
   cp "$REPO/bin/it2-wrapper" "$BIN_DIR/it2" && chmod +x "$BIN_DIR/it2"
   ln -sfn "$REPO/bin/it2-kitty" "$BIN_DIR/it2-kitty"
+  # cc-in-kitty answers "is this process genuinely inside a kitty pane?" and is what both halves of
+  # the divert consult. install.sh's bin/cc-* glob also deploys it; linking it here too keeps this
+  # script's promise of being ONE command, and `ln -sfn` makes the overlap a no-op.
+  ln -sfn "$REPO/bin/cc-in-kitty" "$BIN_DIR/cc-in-kitty"
   # NOTE: no separate pane adapter is linked here. bin/cc-pane is the repo's terminal-agnostic
   # seam and install.sh already deploys it; because its iterm2 driver shells out to
   # $HOME/.claude/bin/it2, the divert above makes cc-pane work on kitty with no kitty driver.
@@ -169,6 +173,15 @@ fi
 grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
 [ -x "$BIN_DIR/it2-kitty" ] && ok "it2-kitty deployed" || no "it2-kitty missing at $BIN_DIR"
+# The wrapper is a COPY (refreshed only by this script or install.sh) while it2-kitty is a SYMLINK
+# that tracks the repo live, so the two halves CAN skew. Assert the copy is a version that verifies
+# the terminal before diverting — a stale copy still diverts on $KITTY_WINDOW_ID alone, which is
+# inherited by every iTerm2 pane launched from kitty and takes Agent Teams down at USE time.
+[ -x "$BIN_DIR/cc-in-kitty" ] && ok "cc-in-kitty deployed (terminal identity by ancestry)" \
+                              || no "cc-in-kitty missing at $BIN_DIR — the divert cannot verify the terminal"
+grep -q "cc-in-kitty" "$BIN_DIR/it2" 2>/dev/null \
+  && ok "$BIN_DIR/it2 verifies the terminal before diverting" \
+  || no "$BIN_DIR/it2 is a STALE COPY that diverts on \$KITTY_WINDOW_ID alone — re-run --apply"
 # A DANGLING symlink is the failure this checks for, not mere absence: -x follows the link, so a
 # link pointing at a file that no longer exists reports missing rather than passing on the name.
 if [ -e "$BIN_DIR/cc-term" ] || [ -L "$BIN_DIR/cc-term" ]; then
@@ -177,24 +190,65 @@ fi
 
 # ── 3. the env var Claude Code's iTerm2 check reads ──────────────────────────────────────────────
 hdr "3. pane identity for Claude Code"
-if [ "$MODE" = apply ] && ! grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
-  cp "$SHELL_RC" "$SHELL_RC.bak-kitty-$(date +%Y%m%d%H%M%S)" 2>/dev/null
-  cat >> "$SHELL_RC" <<EOF
-
+# Write $HOME back as a literal so the block survives a HOME that differs at shell-startup time.
+CC_IN_KITTY_RC="${BIN_DIR/#$HOME/\$HOME}/cc-in-kitty"
+read -r -d '' RC_BLOCK <<EOF
 # >>> $BLOCK_ID >>>
 # Claude Code gates its iTerm2 pane backend on an ENV VAR (it never handshakes with iTerm2):
 #   TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID || terminal==="iTerm.app"
 # and derives the leader pane id as ITERM_SESSION_ID.slice(indexOf(":")+1) — so the COLON IS
 # REQUIRED; without one it returns null and silently splits from whatever pane is active.
 # ~/.claude/bin/it2 then translates every backend call into \`kitty @\`.
-if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -z "\${ITERM_SESSION_ID:-}" ]; then  # cc-pane-id-lint:allow
+#
+# The override is UNCONDITIONAL inside kitty. It used to be guarded by \`[ -z "\$ITERM_SESSION_ID" ]\`,
+# which reads as conservative and is in fact the bug: a kitty pane launched from iTerm2 INHERITS
+# that variable, so the guard preserved a stale iTerm2 pane UUID, Claude Code sliced it out as the
+# leader pane, and handed it to a kitty translator that cannot map it — every teammate spawn died
+# with "not a kitty window id" while the backend probe stayed green. Inside kitty, KITTY_WINDOW_ID
+# is the only authority on which pane this is.
+#
+# cc-in-kitty is what decides "inside kitty", by ANCESTRY rather than by \$KITTY_WINDOW_ID — which
+# iTerm2 also inherits, permanently, when it is launched from a kitty pane. If it is missing we
+# change nothing: a WRONG ITERM_SESSION_ID is worse than none, since iTerm2 wrote a correct one.
+if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -x "$CC_IN_KITTY_RC" ] && "$CC_IN_KITTY_RC"; then
   export ITERM_SESSION_ID="w0t0p0:\$KITTY_WINDOW_ID"
 fi
 # <<< $BLOCK_ID <<<
 EOF
+if [ "$MODE" = apply ]; then
+  if ! grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
+    cp "$SHELL_RC" "$SHELL_RC.bak-kitty-$(date +%Y%m%d%H%M%S)" 2>/dev/null
+    printf '\n%s\n' "$RC_BLOCK" >> "$SHELL_RC"
+  elif ! grep -q "cc-in-kitty" "$SHELL_RC" 2>/dev/null; then
+    # UPGRADE IN PLACE. Idempotence by "block already present" is not enough once the block's
+    # CONTENT is the defect: every existing ~/.zshrc carries the stale-guard version, and skipping
+    # on the marker alone would mean this fix never reaches a single machine that already ran the
+    # old setup. Splice between the markers rather than appending a second block — two blocks would
+    # both run, and the survivor would depend on their order.
+    cp "$SHELL_RC" "$SHELL_RC.bak-kitty-$(date +%Y%m%d%H%M%S)" 2>/dev/null
+    RC_BLOCK="$RC_BLOCK" python3 - "$SHELL_RC" "$BLOCK_ID" <<'PY'
+import os, re, sys
+path, block_id = sys.argv[1], sys.argv[2]
+src = open(path).read()
+pat = re.compile(r"^# >>> %s >>>\n.*?^# <<< %s <<<\n?" % (re.escape(block_id), re.escape(block_id)),
+                 re.S | re.M)
+new, n = pat.subn(lambda _: os.environ["RC_BLOCK"] + "\n", src)
+if n != 1:
+    print("   could not splice the %s block (%d matches) — left untouched" % (block_id, n))
+    sys.exit(0)
+open(path, "w").write(new)
+PY
+  fi
 fi
-grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null \
-  && ok "$SHELL_RC exports ITERM_SESSION_ID inside kitty" || no "$SHELL_RC has no $BLOCK_ID block"
+if ! grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
+  no "$SHELL_RC has no $BLOCK_ID block"
+elif ! grep -q "cc-in-kitty" "$SHELL_RC" 2>/dev/null; then
+  # The stale block is WORSE than no block on a kitty pane opened from iTerm2: it leaves the
+  # inherited iTerm2 UUID in place and the failure surfaces only at spawn time.
+  no "$SHELL_RC has the STALE $BLOCK_ID block (keeps an inherited iTerm2 id) — re-run --apply"
+else
+  ok "$SHELL_RC exports ITERM_SESSION_ID inside kitty (verified by ancestry)"
+fi
 
 # ── 3b. login-shell PATH precedence — the step without which NONE of step 2 runs ─────────────────
 # Steps 1-3 can all be green while Agent Teams still fails with
@@ -299,23 +353,93 @@ EOF
 # ── 5. the live state — is any of it actually ON? ────────────────────────────────────────────────
 # Config on disk is NOT the same claim as config loaded. A setup that reports green while the
 # running kitty predates the config is exactly how the operator lost a window on 2026-07-31.
+#
+# THIS SECTION EXERCISES THE USE PATH, NOT THE PROBE PATH. `session list` returning rc 0 is what
+# Claude Code caches availability from, and it is ALSO what stayed green through the whole 2026-07-31
+# outage while every single spawn failed. A checker that stops at the probe reproduces the defect it
+# is supposed to catch, so when we are genuinely in kitty this does a real split → id → close round
+# trip. Seam: CC_KITTY_NO_SPAWN_CHECK=1 skips it.
 hdr "5. live state (needs a kitty RESTART to become true)"
-if [ -n "${KITTY_WINDOW_ID:-}" ]; then
+# THE VERDICT IS THREE-VALUED AND THIS READS IT AS SUCH. `cc-in-kitty && …` collapses rc 1 (kitty is
+# genuinely not an ancestor) with rc 2 and with the file being ABSENT — and absence is the normal
+# state of a machine running --check BEFORE --apply. Collapsed, the else-branch printed
+# "KITTY_* present but INHERITED — this is not a kitty pane" inside a genuine kitty pane, i.e. the
+# checker asserted the wrong terminal because its verifier was missing. That is the same shape as
+# the outage this whole file exists to fix: a confident sentence built on an unasked question. The
+# deployed copy stays the authority (step 5 judges the LIVE layer, not the repo) — its absence is
+# reported as UNVERIFIABLE, never as a terminal.
+if [ -x "$BIN_DIR/cc-in-kitty" ]; then
+  "$BIN_DIR/cc-in-kitty"; term_rc=$?
+else
+  term_rc=127
+fi
+if [ "$term_rc" = 0 ]; then
   if [ -n "${KITTY_LISTEN_ON:-}" ]; then
     ok "control socket live: $KITTY_LISTEN_ON"
   else
     no "INERT — this kitty has no control socket; it started before the config. RESTART kitty."
   fi
-  # This is the ASSERTION that step 3's block took effect in THIS pane, so it must read the BARE
+  # The id must MAP to this window, not merely exist. A non-empty ITERM_SESSION_ID inherited from an
+  # iTerm2 ancestor passes "is set" and then fails every spawn — which is how the 2026-07-31 outage
+  # stayed invisible to a checker that only asked whether the variable was populated.
+  #
+  # These are the ASSERTION that step 3's block took effect in THIS pane, so they must read the BARE
   # variable. Adding the `${CC_PANE_ID:-…}` fallback the ratchet normally wants would make the check
   # report green whenever CC_PANE_ID happened to be set by anything else — it would stop measuring
-  # the thing it exists to measure. Written as if/else rather than `&&/||` purely so the marker has
-  # a line to sit on: the ratchet filters by LINE, and the old form ended in a continuation.
-  if [ -n "${ITERM_SESSION_ID:-}" ]; then  # cc-pane-id-lint:allow
-    ok "ITERM_SESSION_ID=$ITERM_SESSION_ID"
+  # the thing it exists to measure. Each bare read therefore carries the per-line marker; the ratchet
+  # (tests/cc-pane.bats) filters by LINE, deliberately, so a genuine bare read added here later is
+  # still caught.
+  want="w0t0p0:$KITTY_WINDOW_ID"
+  if [ "${ITERM_SESSION_ID:-}" = "$want" ]; then  # cc-pane-id-lint:allow
+    ok "ITERM_SESSION_ID=$ITERM_SESSION_ID (maps to this kitty window)"
+  elif [ -n "${ITERM_SESSION_ID:-}" ]; then  # cc-pane-id-lint:allow
+    no "ITERM_SESSION_ID=$ITERM_SESSION_ID does NOT map to kitty window $KITTY_WINDOW_ID (want $want) — inherited from an iTerm2 ancestor; open a NEW shell after --apply"
   else
     no "ITERM_SESSION_ID unset in this pane (new shell needed)"
   fi
+
+  if [ -n "${CC_KITTY_NO_SPAWN_CHECK:-}" ]; then
+    info "spawn round-trip skipped (CC_KITTY_NO_SPAWN_CHECK set)"
+  elif [ ! -x "$BIN_DIR/it2" ]; then
+    no "no $BIN_DIR/it2 to round-trip through"
+  elif [ "${ITERM_SESSION_ID:-}" != "$want" ]; then  # cc-pane-id-lint:allow
+    info "spawn round-trip skipped — the leader id above is wrong, so it would prove nothing"
+  else
+    # Exactly what ITermBackend does for the first teammate: slice the id at the colon, split -v.
+    split_out="$("$BIN_DIR/it2" session split -v -s "${ITERM_SESSION_ID##*:}" 2>&1)"
+    new_pane=""
+    case "$split_out" in *"Created new pane: "*) new_pane="${split_out##*Created new pane: }" ;; esac
+    new_pane="${new_pane%%[!0-9]*}"
+    if [ -z "$new_pane" ]; then
+      no "spawn round-trip FAILED — the state where 'session list' is green and every teammate spawn dies: $split_out"
+    elif close_out="$("$BIN_DIR/it2" session close -f -s "$new_pane" 2>&1)"; then
+      ok "spawn round-trip: split → pane $new_pane → closed (Agent Teams can really spawn)"
+    else
+      no "spawn round-trip: pane $new_pane was created but NOT closed — close it by hand: $close_out"
+    fi
+  fi
+elif [ "$term_rc" = 1 ] && [ -n "${KITTY_WINDOW_ID:-}" ]; then
+  # The polluted case, and the reason this branch is not simply "not in kitty": the vars are all
+  # here, so the OLD check called this a live kitty pane and every downstream tool agreed. Reaching
+  # it requires a DEFINITIVE rc 1 from a deployed verifier — an inference, not a default.
+  info "KITTY_* present but INHERITED — this is not a kitty pane:"
+  # `--why` exits NON-ZERO by design: it is a predicate that also explains itself. A `|| fallback`
+  # here therefore fires on a SUCCESSFUL diagnostic and prints both, which it did — capture first,
+  # then judge on emptiness (memory: claimed-outcome-vs-checked-outcome).
+  why="$("$BIN_DIR/cc-in-kitty" --why 2>/dev/null)"
+  info "  ${why:-cc-in-kitty produced no reason}"
+  info "  the it2 divert is correctly INERT here; iTerm2 keeps its own pane identity"
+elif [ -n "${KITTY_WINDOW_ID:-}" ]; then
+  # rc 2 (walk failed) or 127 (not deployed). Both mean the terminal is UNKNOWN, which is a third
+  # state and not a quieter way of saying iTerm2. It is also why nothing below ran: the spawn
+  # round-trip is the one check that proves the USE path, and it is not skipped for a green reason.
+  if [ "$term_rc" = 127 ]; then
+    no "terminal UNVERIFIABLE — $BIN_DIR/cc-in-kitty is not deployed, so live state cannot be judged (run --apply)"
+  else
+    why="$("$BIN_DIR/cc-in-kitty" --why 2>/dev/null)"
+    no "terminal UNVERIFIABLE (cc-in-kitty rc $term_rc): ${why:-no reason given}"
+  fi
+  info "  the spawn round-trip did NOT run — this section proved nothing either way"
 else
   info "not running inside kitty — cannot judge live state from here"
 fi
