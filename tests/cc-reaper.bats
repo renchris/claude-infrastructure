@@ -68,9 +68,15 @@ EOF
   # test assert the addressing form itself.
   # The ATTEMPT is recorded first, then CC_TEST_NOTIFY_RC scripts the OUTCOME — the split lets a test
   # count re-attempts of a page the transport REFUSED. Default 0 keeps every other test unchanged.
+  # The real cc-notify prints a parseable `verdict=` token on STDERR and returns rc 0 for BOTH a live
+  # delivery and a mailbox-only enqueue, so the stub emits one too: CC_TEST_NOTIFY_VERDICT scripts it
+  # (default `delivered` = a live desk read it, the pre-2026-08-01 fixture assumption; `mailbox-only`
+  # = the desk-less steady state of this machine; `none` = no token at all, the unreadable third state).
   cat > "$D/bin/notify" <<EOF
 #!/bin/bash
 printf 'NOTIFY %s\n' "\$*" >> "$D/notify-calls"
+_v="\${CC_TEST_NOTIFY_VERDICT:-delivered}"
+[ "\$_v" = none ] || printf 'cc-notify: enqueued=1 verdict=%s\n' "\$_v" >&2
 exit \${CC_TEST_NOTIFY_RC:-0}
 EOF
   cat > "$D/bin/ps" <<EOF
@@ -637,6 +643,106 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   mock_classify active "$D/clean" 10 no PANE-H      # recovered → no longer surfaced
   run "$R" sweep --reap
   [ ! -f "$D/pages/PANE-H.cause" ]                  # marker pruned → re-armed
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# NO DESK IS REGISTERED — a supported configuration, not a fault (2026-08-01)
+#
+# `cc-notify --role desk` returns rc 0 with verdict=mailbox-only/unverified FOREVER on a machine that
+# runs no desk orchestrator (the role file holds a self-closed iTerm2 pane and nothing can create a
+# successor). notify_desk checked ONLY $? , so every such page was claimed as a delivery ("→ desk")
+# AND the per-(session,cause) damper was written — silencing, permanently, a finding nothing alive had
+# read. The three outcomes are now partitioned as in scripts/lead-supervisor.sh (e5894631):
+# REACHED (rc 0 + verdict=delivered) · RECORDED (rc 0 + anything else) · REFUSED (rc != 0).
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+save_out() { printf '%s\n' "$output" > "$D/sweep.out"; }   # $output survives the NEXT run/grep this way
+
+@test "no-desk RECORDED: a mailbox-only page (rc 0) is never claimed as a desk delivery" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_VERDICT=mailbox-only run "$R" sweep --reap
+  save_out
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 1 ]                  # the send WAS attempted
+  ! grep -q -- '→ desk' "$D/sweep.out" || false                      # …and must NOT be claimed as reaching one
+  grep -q 'NO live desk received it' "$D/sweep.out"                  # says plainly what happened
+  grep -q 'verdict=mailbox-only' "$D/sweep.out"
+  grep -q 'page RECORDED verdict=mailbox-only' "$D/reaper.log"
+  grep -q 'surface-page RECORDED' "$D/reaper.log"
+  ! grep -q 'surface-page DELIVERED' "$D/reaper.log" || false
+}
+
+@test "no-desk RECORDED: the mailbox record still damps — no per-sweep re-page storm" {
+  # The anti-storm half, and the reason RECORDED returns 0: the record stands and re-deriving it every
+  # 300s sweep is the 2026-07-19 composer storm. Truthfulness must not cost damping.
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_VERDICT=mailbox-only run "$R" sweep --reap
+  [ -f "$D/pages/PANE-H.cause" ]                                     # (session,cause) damper KEPT
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 1 ]
+  CC_TEST_NOTIFY_VERDICT=mailbox-only run "$R" sweep --reap          # identical second sweep
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'NOTIFY' "$D/notify-calls")" -eq 1 ]                   # not re-sent
+}
+
+@test "no-desk REACHED control: verdict=delivered DOES claim the desk (the gate is not always-recorded)" {
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_VERDICT=delivered run "$R" sweep --reap
+  save_out
+  [ "$status" -eq 0 ]
+  grep -q -- '→ desk' "$D/sweep.out"
+  ! grep -q 'NO live desk received it' "$D/sweep.out" || false
+  grep -q 'surface-page DELIVERED' "$D/reaper.log"
+}
+
+@test "no-desk UNREADABLE: an rc-0 page with NO verdict token is a third state, never promoted" {
+  # A verdict we cannot read is not a delivery. Fail-closed: it takes the RECORDED path, keeps the
+  # damper, and says so — it must never inherit the `delivered` claim by default.
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_VERDICT=none run "$R" sweep --reap
+  save_out
+  [ "$status" -eq 0 ]
+  ! grep -q -- '→ desk' "$D/sweep.out" || false
+  grep -q 'verdict=unreadable' "$D/sweep.out"
+  grep -q 'page RECORDED verdict=unreadable' "$D/reaper.log"
+}
+
+@test "no-desk REFUSED: rc != 0 still wins over a delivered verdict (marker withheld, retried)" {
+  # The rc arm is unchanged and takes precedence: a transport that refused took NOTHING, whatever the
+  # (stale/partial) token on its stderr says.
+  set_desk; set_live 1
+  mock_classify coordination-hang "$D/clean" 9000 no PANE-H
+  CC_TEST_NOTIFY_RC=3 CC_TEST_NOTIFY_VERDICT=delivered run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  [ "$(find "$D/pages" -name '*.cause' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  grep -q 'page SEND FAILED rc=3' "$D/reaper.log"
+  grep -q 'UNDELIVERED' "$D/reaper.log"
+}
+
+@test "no-desk: the self-check blind-spot page stops claiming a desk when none received it" {
+  set_desk; set_live 4                                               # 4 live panes, 1 enumerated
+  mock_classify active "$D/clean" 10 no PANE-1
+  CC_TEST_NOTIFY_VERDICT=mailbox-only run "$R" sweep --reap
+  save_out
+  [ "$status" -eq 0 ]
+  grep -q 'BLIND to 3' "$D/notify-calls"                             # the finding is still recorded
+  ! grep -q 'self-check: PAGE' "$D/sweep.out" || false
+  grep -q 'self-check: RECORD' "$D/sweep.out"
+  grep -q 'NO live desk received it' "$D/sweep.out"
+  grep -q 'self-check RECORDED' "$D/reaper.log"
+}
+
+@test "no-desk: safeguard-blocked stops reporting '+ desk' when the desk mailbox took it" {
+  mock_classify_safeguard "$WPANE" "$D/clean"; mark_fired "$WPANE"; set_desk
+  CC_TEST_NOTIFY_VERDICT=mailbox-only run "$R" sweep --reap
+  save_out
+  [ "$status" -eq 0 ]
+  grep -q 'REAPER SURFACE' "$D/notify-calls"                         # the desk page is still ATTEMPTED
+  ! grep -q -- '+ desk +' "$D/sweep.out" || false
+  grep -q 'desk MAILBOX (no live desk' "$D/sweep.out"
+  grep -q 'desk=recorded' "$D/reaper.log"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
