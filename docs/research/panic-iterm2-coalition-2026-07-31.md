@@ -230,3 +230,48 @@ instead. (The separate WindowServer-saturation case for migrating is unaffected 
 Related: [[compressor-segment-exhaustion-panic]] · [[agent-benchmark-panicked-the-box]] ·
 [[darwin-qos-band-mechanics]] · [[liveness-proxy-cannot-be-output-age]] ·
 [[positive-control-the-denominator]]
+
+---
+
+## 7. Implementation spec for rung 6 — with its denominator
+
+`scripts/capacity-alarm.sh` has five rungs, max-combined in `classify()`. Rung 6 is
+**process count under the controlling terminal coalition** — the one quantity that separated the
+fatal sample from every healthy one.
+
+**Measured denominator (this boot, 39 CoalitionMemory samples of cid 640 over 6h22m):**
+
+| statistic | value |
+|---|---|
+| min | 24 |
+| median | 226 |
+| **max, healthy** | **353** |
+| samples > 400 | **0** |
+| samples > 500 | **0** |
+| **fatal sample** | **1002** (2.84× healthy max) |
+
+**Therefore:** `PROC_WARN=500` · `PROC_ALARM=700`. That is 1.42× and 1.98× the observed healthy
+maximum, with **zero** false positives across the full boot, and the fatal sample clears both by a
+wide margin. These numbers are derived, not chosen — do not adjust them without re-deriving against
+a fresh series (published figures in this repo have gone stale inside 36 hours; see
+[[published-figure-decays-with-its-source]]).
+
+**Live read.** There is no cheap per-coalition sysctl. Walk `ps -Ao pid,ppid,comm` and count
+descendants of the controlling terminal app pids (`iTerm2`, `kitty`, `ghostty`). Unreadable ⇒
+**SKIPPED**, never a fabricated 0 — rung 3's standing policy.
+
+**Alarm on slope as well as level.** The 17:38 precursor (free 620 Mi, compressed 2.22 GiB)
+**recovered unaided**, so a level trigger alone will emit false positives. A +134 GiB / 12 min
+slope has no benign counterpart in this series. Rung 6 should carry both, with the slope arm
+requiring two consecutive samples.
+
+**Cadence is a separate defect and rung 6 does not fix it.** At `StartInterval 600` the entire
+fatal transition fits inside one interval, and the sample due mid-event never landed. Rung 6 makes
+the guard *able* to see the event; it does not make it *fast enough*. Until the cadence is adaptive
+(sample every ~60 s whenever any rung is non-green), this guard remains **forensic, not
+preventive** — and its own output should say so rather than implying protection it cannot deliver.
+
+**Sequencing note.** Rung 6 is specified here rather than implemented, because implementing it
+touches `classify()`, the R6 positive-control probe table, and the JSON emitter in one edit, and a
+half-applied change to a working five-rung guard is worse than none. It is the next commit, not a
+research question — every input it needs is in this section.
