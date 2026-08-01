@@ -30,7 +30,26 @@ setup() {
   mkdir -p "$BATS_TEST_TMPDIR/wt" "$BATS_TEST_TMPDIR/other"
   WT="$(cd "$BATS_TEST_TMPDIR/wt" && pwd -P)"
   OTHER="$(cd "$BATS_TEST_TMPDIR/other" && pwd -P)"
-  BATS_BIN_PATH="/opt/homebrew/Cellar/bats-core/1.13.0/libexec/bats-core"
+  # The bats libexec dir the fixtures below embed. Resolved at RUNTIME from the bats running this
+  # very suite: $BATS_LIBEXEC is bats-core's own export, so it is the real producer's path BY
+  # CONSTRUCTION and follows `brew upgrade` for free. A literal …/bats-core/<version>/… is a guess
+  # with a shelf life — the same version-shaped-path trap the cc-bats seed exists to avoid
+  # (bin/cc-bats:152-158), and strictly worse here, because resolving from `bats` on PATH would
+  # find the cc-bats SHIM on this box, not a libexec at all.
+  #
+  # What a stale literal rots is the CLAIM, not the run. Nothing here stats or executes this path,
+  # and is_gate_exec() reads only the BASENAME of argv tokens 0-1 (scripts/gate-cleanup.sh:103-113)
+  # — measured 2026-07-31, this file's then-19 tests ALL passed with the version rewritten to a
+  # nonexistent 9.99.9. So a rotted literal never goes red; it quietly stops being the shape the
+  # real producer emits, while the fixture-seam comment below still promises it is. Green forever,
+  # wrong forever.
+  # The fixture-integrity test is what converts that silence into a failure.
+  BATS_BIN_PATH="${BATS_LIBEXEC:-}"
+  # Shape-preserving fallback for a bats that did not export it. Deliberately NOT a Cellar sweep:
+  # this fixture needs a path SHAPE, not a runnable binary, so `find … | sort -V | tail -1` would
+  # import a version guess to buy nothing. Empty is not an option either — it would emit
+  # `bash /bats tests/`, which still matches on basename and would therefore pass VACUOUSLY.
+  [ -n "$BATS_BIN_PATH" ] || BATS_BIN_PATH="/opt/homebrew/Cellar/bats-core/UNRESOLVED/libexec/bats-core"
 }
 
 # ── fixture seams ───────────────────────────────────────────────────────────────────────────────
@@ -102,6 +121,32 @@ mk_cwd() {  # pid→cwd resolver. 1xxx/3000/4000/5000 live in WT; 2xxx in OTHER;
 }
 
 selection() { "$CLEANUP" --worktree "$WT" --dry-run --quiet 2>/dev/null | sort -n | tr '\n' ' '; }
+
+# ════ fixture integrity — the embedded bats path must stay REAL ═════════════════════════════════
+
+@test "fixture: the embedded bats libexec is resolved at runtime, never a pinned version" {
+  # Every OTHER test in this file passes whether or not $BATS_BIN_PATH names anything real, so none
+  # of them can carry this property — that is precisely why the pinned version could rot unseen.
+  # Two halves, because each alone is satisfied by the defect this replaces.
+  #
+  # (a) LIVENESS — the path the fixtures embed is a real bats install on THIS host, so the parity
+  #     claim in the fixture-seam comment above is CHECKED rather than asserted. A pinned version
+  #     satisfies this only until `brew upgrade bats-core` + cleanup removes that Cellar dir; from
+  #     then on it fails HERE, loudly, instead of rotting green everywhere.
+  [ -n "$BATS_BIN_PATH" ] || { echo "BATS_BIN_PATH is empty — the fixture would emit 'bash /bats'"; false; }
+  # An unresolvable path is a THIRD state, not a pass: red with the cause named beats a skip that
+  # silently stops guarding (bin/cc-bats:140-141 records the same rule for its own self-identity).
+  [ -d "$BATS_BIN_PATH" ] || { echo "fixture bats libexec absent: $BATS_BIN_PATH (BATS_LIBEXEC='${BATS_LIBEXEC:-<unset>}')"; false; }
+  [ -x "$BATS_BIN_PATH/bats" ] || { echo "no executable bats(1) at: $BATS_BIN_PATH/bats"; false; }
+
+  # (b) SOURCE — no version literal may come back. (a) cannot catch a re-pin of the CURRENT
+  #     version (it exists, so it passes); this fails on the day the pin is written rather than on
+  #     the day it rots. Comment lines are exempt for the same reason the guard below lets
+  #     `git commit -m "…pkill…"` through: describing the rule is not doing it.
+  local bad
+  bad="$(grep -nE 'Cellar/bats-core/[0-9]+(\.[0-9]+)+' "$BATS_TEST_FILENAME" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+  [ -z "$bad" ] || { echo "pinned bats version in fixture source:"; echo "$bad"; false; }
+}
 
 # ════ scripts/gate-cleanup.sh — selection ═══════════════════════════════════════════════════════
 
