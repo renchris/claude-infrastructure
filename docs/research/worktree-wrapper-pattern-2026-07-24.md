@@ -499,3 +499,69 @@ at face value, a commit **subject** read as if it were the **diff**, and a null 
 that could not have detected the failure. Deleting §6 would leave §7 asserting a conclusion with no
 visible reason for the reversal — which is the same "verdict with no provenance" defect that made §4
 dangerous in the first place. **When correcting a verdict, leave the falsified reasoning visible.**
+
+---
+
+## 8. IMPLEMENTATION (2026-08-01) — §7.4's prescription was unsafe as written
+
+§7's verdict (adopt) stands. Its **prescription** did not survive contact with the tree: all three
+of its named prerequisites were mis-stated, each in a way that would have caused a real defect.
+Corrected here at implementation time, with what actually shipped.
+
+### 8.1 "Branch/worktree GC … remains unbuilt" — FALSE; the script is built, the SCHEDULER is not
+
+`scripts/worktree-gc.sh` exists (49 KB) with a six-oracle safety model, `git branch -d`-only
+deletion, and a full `CC_WTGC_*` env surface. What is missing is a **scheduler for this repo**:
+the only reaper on the machine is `gl.reso.worktree-gc.plist` → `~/.reso/worktree-gc-run.sh`,
+which hardcodes `REPO="…/reso-management-app"`. So claude-infrastructure has never been swept —
+**126 worktrees, 1,193 branches** — and `--prune-branches` is off by default besides. This is the
+[[desk-autonomy-dormancy-staged-not-loaded]] shape: built, correct, and inert. Shipped as
+`scripts/worktree-gc-infra-run.sh` + `launchd/com.claude.worktree-gc-infra.plist` (04:15, so it
+never contends with reso's 03:15 slot for the same git objects).
+
+### 8.2 The one-line gate change would have run RESO's pool script against any repo
+
+§7.4 says "via the `~/.zshrc:112` gate (basename → `.harnessrc` opt-in)". Changing only the
+**condition** is unsafe, because the gate's **body** resolves the creation path through a ladder
+whose second rung is **not repo-scoped**:
+
+```zsh
+elif [[ -f "$HOME/.reso/bin/worktree-pool.sh" ]]; then      # ← a GLOBAL path, no repo test
+    _wtpath="$( cd "$_top" && bash "$HOME/.reso/bin/worktree-pool.sh" claim "$_wt" )"
+```
+
+That file exists. Any repo newly opted in falls straight into it and gets reso's pool logic
+(env copying, port assignment, pnpm install, DB setup) executed against it. The rung must be
+gated on the repo actually being reso before the condition is widened — **widening an opt-in
+without scoping the branches it unlocks is how a policy change becomes an execution bug.**
+
+### 8.3 `.harnessrc` / `worktree-harness` was the wrong mechanism for THIS repo
+
+`worktree-harness` is installed and generic, but `doctor` on this repo reports two defaults that
+are wrong and **silent**: worktree home `~/.worktrees` (this repo's entire convention, its gc
+exclude lists and every operator habit say `~/Development/.worktrees`) and package manager
+`npm → npm ci`, inferred from a `package.json` that exists only to render diagrams
+(`beautiful-mermaid`; `node_modules` is absent even in the primary checkout). A `.harnessrc`
+could correct both — at which point the tool is configured to do exactly what a 40-line script
+does, plus a version-skew surface. Shipped instead: `scripts/new-worktree.sh`, which fills the
+gate's **already-supported third rung** (fixed contract: name→derived path, stderr-only, non-zero
+on failure) and branches off `origin/main` after an explicit fetch, never the local ref
+(backlog #68). Marker file is **`.worktree-isolate`**, not `.harnessrc` — naming it after a tool
+we deliberately do not use would invite someone to "fix" the mismatch by adopting it.
+
+### 8.4 Ordering constraint the rollout must respect (this is what remains)
+
+The gate flip is LAST and has a **live-content** precondition, not merely a landed one:
+
+1. `~/.claude/scripts/desk-invariant.sh` is a **symlink into the root checkout**, so the desk
+   exemption is live only once root has advanced to the commit carrying it.
+2. Root advances **only** via `deploy-live.sh --auto`. A raw `git merge --ff-only` in root is
+   forbidden here for a reason that bites this very change: it advances *files* but creates **no
+   symlinks**, and §8.1 ships **brand-new** files (`worktree-gc-infra-run.sh`, the plist, the
+   activation script) that need `install.sh` to be linked. A raw ff would make the desk exemption
+   live while leaving the new reaper unlinked and silently inert.
+3. Therefore: land → deploy → **verify by CONTENT** that the live
+   `~/.claude/scripts/desk-invariant.sh` contains the exemption → only then flip `~/.zshrc`.
+
+Flipping before (3) does not merely lose the exemption — it makes the desk mint a **new worktree
+per respawn**, an unbounded leak in the exact subsystem §8.1 exists to bound.
