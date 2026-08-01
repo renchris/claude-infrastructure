@@ -27,7 +27,12 @@
 #                       high-effort default; this script warns if the frontier window is closed);
 #                       other non-default → appended `--model M` (last-wins).
 #   --effort E          low|medium|high|xhigh|max → appended `--effort E` (last-wins over the
-#                       launcher-injected default: claude-next=max, claude-fable=high).
+#                       launcher-injected default: claude/claude-next=HIGH, claude-fable=high).
+#                       NB the claude-next default was `max` until the 2026-07-31 entrypoint
+#                       consolidation folded claude-next + claude-opus5 into `claude`, which
+#                       took Opus 5's own `high` (max over-thinks it). A fire with no --effort
+#                       therefore lands a HIGH successor now, not a max one — pass `--effort max`
+#                       explicitly when a handoff genuinely needs the ceiling.
 #   --cwd PATH          Launch in an EXISTING directory (worktree, repo, or anywhere).
 #   --worktree BRANCH   Get a worktree for BRANCH. Fast path: when <repo>/scripts/worktree-pool.sh
 #                       exists AND --base is origin/main, CLAIM a warm pre-provisioned pool slot
@@ -170,9 +175,36 @@
 # non-reso dir it launches in place).
 set -euo pipefail
 
-# Probe binary — MUST match the path claude-next execs in ~/.zshrc (the version-bump procedure
-# there repoints two path refs; repoint this one in the same edit or the probe tests a stale build).
-BIN="$HOME/.claude-183/node_modules/.bin/claude"
+# Probe binary — MUST be the binary the launchers exec. Hardcoding it here made that a
+# promise nobody kept: the 2.1.215 -> 2.1.219 repoint moved ~/.zshrc but not this line, so
+# for a week probe_account() certified accounts against ~/.claude-183 (2.1.215) while every
+# successor launched ~/.claude-219 (2.1.219) — a control that does not replay the real
+# artifact. A hardcoded path CANNOT hold this invariant, so derive it from the launcher
+# itself and keep the literal only as a fallback.
+#   Override for tests: CC_EVAL_BIN=/path/to/claude
+_resolve_eval_bin() {
+  local from_zshrc=""
+  # The `claude()` launcher's exec line is the single source of truth for which build a
+  # successor actually runs. Last match wins (later definitions shadow earlier ones in zsh).
+  # Match only the path SUFFIX, never the "$HOME" prefix: the prefix is spelled
+  # three different ways in practice ($HOME, ~, absolute) and grepping for one of
+  # them would silently miss the other two. The suffix is invariant.
+  local suffix
+  [ -r "$HOME/.zshrc" ] && suffix="$(grep -oE '/\.claude-[0-9]+/node_modules/\.bin/claude' "$HOME/.zshrc" 2>/dev/null | tail -1)"
+  [ -n "${suffix:-}" ] && from_zshrc="$HOME$suffix"
+  if [ -n "$from_zshrc" ] && [ -x "$from_zshrc" ]; then printf '%s' "$from_zshrc"; return; fi
+  printf '%s' "$HOME/.claude-219/node_modules/.bin/claude"
+}
+BIN="${CC_EVAL_BIN:-$(_resolve_eval_bin)}"
+# NOTE: deliberately NO top-level `[ -x "$BIN" ] || exit` here. The first version of this
+# fix had one, and it fired on the VERIFIER: the hermetic suites run under a synthetic
+# $HOME that has no ~/.claude-219, so a load-time refusal killed every handoff-fire test
+# before it reached its own assertion (2 suites RED, exit 3 where 4 was expected). A guard
+# keyed on "is my environment normal?" always hits the harness first, because being
+# abnormal is what a harness IS. Scope the guard to the dangerous EFFECT instead — see
+# probe_account(), which checks executability at the point of use and returns a NAMED
+# rejection class, so an absent binary is distinguishable from four dead accounts rather
+# than merely loud.
 DEFAULT_REPO="$HOME/Development/reso-management-app"
 MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 # Cross-account comms substrate (FIXED $HOME/.claude — cross-account addressing, never
@@ -2866,6 +2898,11 @@ pre_trust() { # $1=launch dir  $2=config dir
 probe_account() { # $1=account → 0 pass; prints rejection class on fail
   local dir out probe_model="claude-haiku-4-5"
   [ "$MODEL" = "claude-fable-5" ] && probe_model="claude-fable-5"
+  # Point-of-use check, not a load-time one (see the BIN block above for why). A NAMED
+  # class matters: without it an absent binary fails all four probes identically and
+  # reads as "every account is dead" — the wrong diagnosis, and one that would send the
+  # operator re-logging in to fix a missing install.
+  [ -x "$BIN" ] || { echo "probe-binary-missing ($BIN — set CC_EVAL_BIN)"; return 1; }
   dir="$(cfg_dir "$1")"
   if out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
       perl -e 'alarm 90; exec @ARGV' "$BIN" -p 'Reply with exactly: ok' \
