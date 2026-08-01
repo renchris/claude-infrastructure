@@ -30,13 +30,35 @@ setup() {
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
            "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR"
-  # stub cc-notify: log every call to <stub>.log, exit 0.
+  # stub cc-notify: log every call to <stub>.log, and emit a cc-notify-SHAPED verdict token on
+  # STDERR — the real binary does, and the exit code alone is NOT the outcome (measured against a
+  # dead pane: `verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997` at rc=0). A stub
+  # that emitted nothing would let the sweep read `unreadable` on every test and prove the wrong
+  # thing. CC_STUB_VERDICT / CC_STUB_RC select the outcome per test.
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/stub-notify"
   cat > "$CC_NOTIFY_BIN" <<'SH'
 #!/bin/bash
 echo "$@" >> "$0.log"
+echo "cc-notify: verdict=${CC_STUB_VERDICT:-delivered} enqueued=1 uuid=desk-pane-uuid-current" >&2
+exit "${CC_STUB_RC:-0}"
 SH
   chmod +x "$CC_NOTIFY_BIN"
+  export CC_STUB_VERDICT=delivered
+  export CC_STUB_RC=0
+  # HERMETIC osascript: the sweep's liveness-free channel is Notification Center. `auto` probes with
+  # `command -v`, which no suite can un-find, so the stub goes on PATH — a test that reaches this
+  # channel must never post a real notification to the operator's machine. Belt: the seam defaults
+  # to `off` here, so a test that forgets to opt in cannot reach it at all.
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  export OSA_LOG="$BATS_TEST_TMPDIR/osascript.log"
+  cat > "$BATS_TEST_TMPDIR/bin/osascript" <<'SH'
+#!/bin/bash
+cat >/dev/null
+printf '%s\n' "$*" >> "$OSA_LOG"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/bin/osascript"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  export CC_SWEEP_OS_CHANNEL=off
   echo "desk-pane-uuid-current" > "$CC_ROLES_DIR/desk"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
@@ -55,7 +77,9 @@ notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | t
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
-  grep -q 'desk-pane-uuid-current' "$CC_NOTIFY_BIN.log"   # resolved the desk role at send-time
+  # addressed by ROLE, not by the uuid snapshot the sweep read: cc-notify re-reads cc-roles/desk at
+  # SEND time and follows the .forward chain, so a desk recycled mid-sweep still gets the wake.
+  grep -q -- '--role desk' "$CC_NOTIFY_BIN.log"
   grep -q '"disposition":"fired"' "$CC_IDL"
   # second run: the alarm is now .seen → nothing new → abstain, still exactly ONE notify total
   run bash "$SWEEP"
@@ -265,6 +289,114 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   [ "$status" -eq 0 ]
   run jq -r 'select(.source=="autonomy-sweep") | .project + "|" + .title' "$CC_BACKLOG_FILE"
   [ "$output" = "host-proj|class-B default fired: carry this out" ]
+}
+
+# ══ DELIVERY IS A VERDICT, NOT AN EXIT CODE (task #120) ═══════════════════════════════════════════
+# The sweep used to discard cc-notify's rc (`|| true`), route its stderr to /dev/null, and then
+# mark_seen UNCONDITIONALLY on the strength of the desk role file merely being NON-EMPTY. On this
+# machine no desk orchestrator runs: cc-roles/desk holds an iTerm2 pane uuid whose pane self-closed
+# and whose .forward successor is equally dead, so cc-notify returns rc 0 with
+# verdict=mailbox-only/unverified FOREVER. The a17 S-7 guard below ("no desk role ⇒ do NOT mark
+# seen") keys on the target being EMPTY, and a DEAD uuid is not empty — so it was structurally
+# unreachable in exactly the configuration it exists for. Every page, comms alarm, push-failure and
+# open decision was therefore written into a box no drain will run and then forgotten: PERMANENT
+# SILENT LOSS. 964 markers were sitting in ~/.claude/autonomy/sweep-seen when this was found.
+# memory: claimed-outcome-vs-checked-outcome.
+
+@test "RECORDED (rc 0, verdict=mailbox-only) with no liveness-free channel does NOT mark seen" {
+  # THE data-loss regression. A dead-pane desk is the machine's steady state, and rc 0 says nothing
+  # about whether a reader exists — so nothing here may be forgotten.
+  export CC_STUB_VERDICT=mailbox-only
+  export CC_SWEEP_OS_CHANNEL=off
+  echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 1 ]
+  # the marker store must be EMPTY — nothing proved a reader, so nothing may be forgotten
+  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  grep -q '"delivered":false' "$CC_IDL"
+  # …and the SAME record re-surfaces on the next sweep. This is the whole point: an escalation that
+  # nobody read must keep asking.
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 2 ]
+}
+
+@test "RECORDED but the liveness-free channel TAKES it → operator reached, records marked seen" {
+  # The other half of the failure-distinct pair. Withholding markers forever against a permanently
+  # desk-less fleet is the 2026-07-19 storm, not a fix — the operator is reached on a channel with
+  # no liveness dependency instead, and only THEN are the records forgotten.
+  export CC_STUB_VERDICT=mailbox-only
+  export CC_SWEEP_OS_CHANNEL=auto          # resolves the stub osascript on PATH (hermetic)
+  echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -s "$OSA_LOG" ]                        # something was actually put in front of a human
+  grep -q '"channel":"notification-center"' "$CC_IDL"
+  grep -q '"delivered":true' "$CC_IDL"
+  # marked seen ⇒ no re-surface, so the channel cannot become a per-sweep notification storm
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 1 ]
+}
+
+@test "REFUSED (cc-notify rc != 0) never marks seen, and never posts to the OS channel either" {
+  # rc 3 unresolvable · 5 inbox unwritable · 124 cut at the bound — the transport took NOTHING.
+  # No OS post on this path: a permanently refusing transport re-surfaces its records every 300 s
+  # and there is no damping store here, so a post would be an unbounded notification storm.
+  export CC_STUB_RC=3
+  export CC_STUB_VERDICT=unresolvable
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  [ ! -s "$OSA_LOG" ]
+  echo "$output" | grep -q 'UNDELIVERED'          # loud, never silent (a17 S-4)
+  grep -q '"delivered":false' "$CC_IDL"
+}
+
+@test "an UNREADABLE verdict is a THIRD state — never promoted to success" {
+  # A cc-notify that prints nothing parseable (a future version, a wrapper, a truncated stream) has
+  # not proven a reader. Absence of evidence is not delivery.
+  cat > "$CC_NOTIFY_BIN" <<'SH'
+#!/bin/bash
+echo "$@" >> "$0.log"
+SH
+  chmod +x "$CC_NOTIFY_BIN"
+  export CC_SWEEP_OS_CHANNEL=off
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  grep -q '"verdict":"unreadable"' "$CC_IDL"
+}
+
+@test "POSITIVE CONTROL: REACHED (verdict=delivered) DOES mark seen — the gate is not just off" {
+  # Without this, a change that simply never marked anything seen would pass every test above while
+  # re-paging the desk with the same records forever.
+  export CC_STUB_VERDICT=delivered
+  export CC_SWEEP_OS_CHANNEL=off
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ -n "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  grep -q '"channel":"desk"' "$CC_IDL"
+  run bash "$SWEEP"
+  [ "$(notify_count)" -eq 1 ]
+  grep -q '"disposition":"abstained"' "$CC_IDL"
+}
+
+@test "the old shape is gone: the notify call is neither rc-discarded nor stderr-discarded" {
+  # The exact three lines that made this a data-loss bug, pinned so they cannot come back.
+  run grep -c '"\$NOTIFY" "\$DESK_TARGET" "\$summary" >/dev/null 2>&1 || true' "$SWEEP"
+  [ "$output" = "0" ]
+  run bash -c "grep -q 'notify_verdict:=unreadable' '$SWEEP'"
+  [ "$status" -eq 0 ]
+  run bash -c "grep -q 'CC_SWEEP_OS_CHANNEL' '$SWEEP'"
+  [ "$status" -eq 0 ]
+  run bash -n "$SWEEP"
+  [ "$status" -eq 0 ]
 }
 
 @test "the summary distinguishes queued fires from no-change fires" {

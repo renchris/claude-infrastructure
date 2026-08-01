@@ -17,7 +17,9 @@
 #      spawned on "hold (no change without ruling)". The item is filed against the packet's own
 #      declared `subject_project` when it has one, else this sweep's host project.
 #   3. If anything NEW exists → ONE cc-notify to the desk ROLE (cc-roles/desk, resolved at
-#      send-time — SO-1 role indirection), then mark those records .seen.
+#      send-time — SO-1 role indirection), then mark those records .seen IF AND ONLY IF a delivery
+#      was actually PROVEN — cc-notify's `verdict=` token, never its exit code, and never the mere
+#      existence of a role file (see § DELIVERY IS A VERDICT below; a dead uuid is still non-empty).
 #   4. Write ONE {fired|abstained} IDL record (B-3: didn't-fire ≠ never-ran).
 #   5. Age-compact: the .seen markers AND the six write-only event dirs (see below).
 #
@@ -36,7 +38,9 @@
 #   · CC_ROLES_DIR · CC_IDL · CC_SWEEP_SEEN_DIR · CC_SWEEP_SEEN_TTL_DAYS (default 7)
 #   · CC_COMMS_ALARM_DIR · CC_PUSH_RECORDS_DIR · CC_TEARDOWN_RECORDS_DIR
 #   · CC_INBOX_GUARD_STATE_DIR · CC_MAILBOX_DIR · CC_EVENT_TTL_DAYS (default 7)
-#   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN.  BSD+GNU portable, no eval, fail-loud.
+#   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN
+#   · CC_SWEEP_OS_CHANNEL (auto|on|off) · CC_SWEEP_NOTIFY_TIMEOUT_S (default 25)
+#   BSD+GNU portable, no eval, fail-loud.
 set -uo pipefail
 
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
@@ -242,14 +246,134 @@ if [ "$fired_defaults" -gt 0 ]; then
 fi
 summary="${summary%,}"
 
+# ── DELIVERY IS A VERDICT, NOT AN EXIT CODE (2026-08-01) ──────────────────────────────────────────
+# This block used to discard cc-notify's rc (`|| true`), route its stderr to /dev/null, and then
+# mark_seen UNCONDITIONALLY on the strength of the desk role file merely being NON-EMPTY. Both
+# halves were wrong on this machine, and had been for weeks:
+#   · No desk orchestrator runs here. cc-roles/desk holds an iTerm2 pane uuid from 2026-07-26 whose
+#     pane has self-closed and whose `.forward` successor is equally dead, so cc-notify returns
+#     rc 0 with verdict=mailbox-only/unverified FOREVER. That is a STATIC CONFIGURATION, not a
+#     transient fault, and this sweep must be correct in it.
+#   · The a17 S-7 protection below ("no desk role ⇒ do NOT mark seen, retry next sweep") keys on
+#     DESK_TARGET being EMPTY. A role file holding a DEAD uuid is non-empty, so that branch is
+#     structurally UNREACHABLE in precisely the configuration it exists for.
+# Net effect: every page, comms alarm, push-failure and open decision was written into a box no
+# drain will ever run and then marked .seen — permanent SILENT LOSS, never re-surfaced. The inline
+# comment asserting "delivered … makes this durable" was simply false. (964 markers were sitting in
+# ~/.claude/autonomy/sweep-seen when this was found.)
+#
+# The remedy mirrors scripts/lead-supervisor.sh § send_page (e5894631): "not delivered to a live
+# pane" is THREE outcomes, and only .seen-worthiness distinguishes them.
+#   REACHED   rc 0 + verdict=delivered — a live session holds it ⇒ mark seen.
+#   RECORDED  rc 0 + any other verdict — enqueued to a mailbox with NO PROVEN READER. Under a
+#             desk-less fleet this is the NORMAL steady state, so a bare retry-forever is the
+#             2026-07-19 storm, not a fix. Reach the operator on a channel with no liveness
+#             dependency instead, and mark seen ONLY if that channel actually took it.
+#   REFUSED   rc != 0 (3 unresolvable · 5 inbox unwritable · 124 cut at the bound), or RECORDED
+#             with no liveness-free channel to fall back on — nothing anywhere took it ⇒ NEVER
+#             mark seen, say so loudly, and let the next sweep re-surface the same records.
+# memory: claimed-outcome-vs-checked-outcome — the structured verdict token existed all along;
+# nobody parsed it.
+
+# BOUNDED: cc-notify reaches the iTerm2/AppleEvent path, the proven machine-wide wedge class
+# (2026-07-26: a bare `it2 session list --json` returned rc 124 with blocked forks piling up across
+# ~110 sessions). This runs from launchd on a 300 s tick; an unbounded send would wedge the sweep
+# INSIDE the one act it exists to perform. rc 124 needs no branch of its own — it is non-zero, so it
+# takes the REFUSED path, records stay unseen, and the next sweep retries. That is exactly right for
+# a cut send: we never learned whether it was enqueued, so re-surfacing is the safe error.
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+sweep_bounded() { # <seconds> <cmd…> — rc 124 on a cut (timeout(1)'s contract)
+  local s="$1"; shift
+  if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+NOTIFY_TIMEOUT_S="${CC_SWEEP_NOTIFY_TIMEOUT_S:-25}"
+
+# Is a liveness-free operator surface available AT ALL? Notification Center needs no live pane and
+# no role file, so it cannot rot the way cc-roles/desk did. Where it is absent there is no desk-less
+# delivery path at all, and RECORDED must stay a hard non-delivery that retries — the pre-fix
+# posture, minus the false .seen.
+#
+# CC_SWEEP_OS_CHANNEL is a real operator switch as well as the test seam: `off` restores
+# mailbox-only-and-retry (for a box where Notification Center is not the right surface, or where a
+# desk IS being run), `on` forces the channel, `auto` (default) probes. A bare `command -v` with no
+# seam would leave the no-channel branch untestable — no suite can un-find /usr/bin/osascript via
+# PATH — which is how this whole class shipped unproven in the first place.
+os_channel_available() {
+  case "${CC_SWEEP_OS_CHANNEL:-auto}" in
+    off) return 1 ;;
+    on)  return 0 ;;
+    *)   command -v osascript >/dev/null 2>&1 ;;
+  esac
+}
+
+# Delivery on a channel with NO liveness dependency. Best-effort — it can never break the sweep that
+# raised it — but it RETURNS ITS OUTCOME (0 = posted · 1 = no channel, or the post failed/was cut),
+# because the caller forgets records on the strength of this call and must be able to tell whether
+# anything was actually put in front of a human (memory: claimed-outcome-vs-checked-outcome).
+# Text is passed as an AppleScript ARGV item, never interpolated into the script source: the summary
+# is machine-built from counts today, but a caller that ever widens it must not be able to inject.
+# One post per SWEEP at most, and only when NEW records exist — a record surfaces once, so the
+# channel is self-damping and needs no marker store of its own.
+sweep_escalate_os() { # <title-tail> <message> → 0 = POSTED · 1 = not posted
+  os_channel_available || return 1
+  sweep_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
+on run argv
+  set v to item 1 of argv
+  set m to item 2 of argv
+  if (count of m) > 200 then set m to (text 1 thru 200 of m)
+  display notification m with title ("Claude fleet — " & v) sound name "Funk"
+end run
+OSA
+  return 0
+}
+
+mark_surfaced_seen() { # forget the records — ONLY ever called on a proven delivery
+  printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
+}
+
 DESK_TARGET=""
 [ -f "$ROLES_DIR/desk" ] && DESK_TARGET="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
 
 if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
-  "$NOTIFY" "$DESK_TARGET" "$summary" >/dev/null 2>&1 || true
-  # delivered (cc-notify's mailbox fallback makes this durable) → mark the surfaced records seen.
-  printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
-  log_idl fired "$(jq -cn --arg notified "$DESK_TARGET" --arg summary "$summary" '{notified:$notified,summary:$summary}')"
+  # Address the ROLE, never the uuid read above: cc-notify re-reads cc-roles/desk at SEND time and
+  # follows the `.forward` chain, so a desk recycled since this sweep started still gets the wake
+  # (a18 SO-1 role indirection — which this file's header has claimed since it was written, while
+  # the code sent to a snapshot). DESK_TARGET is now read ONLY to gate on "is a channel wired at
+  # all", which is also precisely why it can never be the delivery evidence.
+  # CAPTURE stderr: cc-notify prints a machine-parseable `verdict=` token there, and the exit code
+  # alone is NOT the outcome. Measured 2026-07-31 against a dead pane:
+  #   cc-notify: verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997   with rc=0
+  notify_out="$(CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk "$summary" 2>&1)"
+  notify_rc=$?
+  # A verdict we cannot READ is a THIRD state — never silently promoted to success.
+  notify_verdict="$(printf '%s' "$notify_out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+  : "${notify_verdict:=unreadable}"
+
+  if [ "$notify_rc" -eq 0 ] && [ "$notify_verdict" = delivered ]; then
+    # ── REACHED — a live session holds it. ──
+    mark_surfaced_seen
+    log_idl fired "$(jq -cn --arg summary "$summary" --arg v "$notify_verdict" \
+      '{notified:"role:desk",delivered:true,channel:"desk",verdict:$v,summary:$summary}')"
+  elif [ "$notify_rc" -eq 0 ] && sweep_escalate_os "${total_new} new escalation record(s)" \
+         "No live desk session took this, so it was recorded to the mailbox and surfaced here. ${summary}"; then
+    # ── RECORDED, and the liveness-free channel TOOK it. The records were delivered — by the other
+    # channel — so they are forgotten. Re-surfacing them every 300 s adds no information. ──
+    mark_surfaced_seen
+    log_idl fired "$(jq -cn --arg summary "$summary" --arg v "$notify_verdict" \
+      '{notified:"role:desk",delivered:true,channel:"notification-center",verdict:$v,summary:$summary,
+        why:"no live desk — enqueued to the mailbox with no proven reader, so the operator was reached on the liveness-free channel instead"}')"
+  else
+    # ── REFUSED — nothing anywhere took it. Markers WITHHELD so the next sweep re-surfaces the same
+    # records. Deliberately NOT escalated to the OS channel: a permanently refusing transport
+    # re-surfaces its records every 300 s, and there is no damping store here, so a post on this
+    # path would be an unbounded notification storm (the failure mode e5894631 was fixed for).
+    # NEVER silent: the wake the operator did not get is itself an incident record (a17 S-4). ──
+    log_idl fired "$(jq -cn --arg summary "$summary" --arg v "$notify_verdict" --argjson rc "$notify_rc" \
+      '{notified:"role:desk",delivered:false,channel:"none",verdict:$v,notify_rc:$rc,summary:$summary,
+        why:"cc-notify did not reach a live reader and no liveness-free channel took it — records NOT marked seen, the next sweep re-surfaces them"}')"
+    echo "autonomy-sweep: NEW records UNDELIVERED verdict=$notify_verdict rc=$notify_rc target=role:desk — nothing proved a reader; records left unseen, will retry" >&2
+  fi
 else
   # No desk role (or no notify binary): fail LOUD and do NOT mark seen → the SAME records
   # re-surface next sweep once the role is set (a17 S-7: never let a wake drain to nobody).
