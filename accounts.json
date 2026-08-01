@@ -2,6 +2,7 @@
   "_what": "SSOT for the 4 Claude Max accounts: identity map (launcher -> config dir -> email -> mailbox -> Dia profile) + router/endpoint config. Consumed by bin/claude-accounts, /accounts, scripts/handoff-fire.sh, skills/account-relogin. Deployed as a symlink at ~/.claude/accounts.json (install.sh); the knowledge-layer mirror shares it into every account config dir.",
   "_secrets": "NO tokens live here, ever. OAuth tokens stay in the macOS Keychain (item 'Claude Code-credentials-<sha256(config-dir)[:8]>', account = keychain_account). Emails are fine: this repo is private.",
   "_order": "accounts[] order = operator spend priority (next > next4 > next3 > next2, resume-sessions REFERENCE.md operator policy 2026-07-04).",
+  "_port_index": "port_index is a SEPARATE, frozen numbering used only for cc-authbrowser's per-account CDP port (PORT_BASE + port_index) — deliberately independent of accounts[] array order (contract SS1) so reordering accounts[] for spend priority never reshuffles a live CDP port. Optional per account; an entry with no port_index gets the next unused integer, so appending accounts never renumbers existing ones. fable_name/aliases are also optional (bare CLI shorthand for the fable variant, and extra config-dir basenames that resolve to this account).",
   "keychain_account": "chrisren",
   "oauth_client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
   "oauth_scopes": "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload",
@@ -46,15 +47,20 @@
       "config_dir": "~/.claude-next",
       "launcher": "claude-next",
       "fable_launcher": "claude-fable",
+      "fable_name": "fable",
+      "port_index": 0,
       "email": "ichris96+claude@hotmail.com",
       "mailbox": "ichris96@hotmail.com",
-      "dia_profile": "Personaly"
+      "dia_profile": "Personaly",
+      "aliases": ["claude"]
     },
     {
       "name": "next4",
       "config_dir": "~/.claude-quaternary",
       "launcher": "claude-next4",
       "fable_launcher": "claude-fable4",
+      "fable_name": "fable4",
+      "port_index": 3,
       "email": "chris.claudecode@outlook.com",
       "mailbox": "chris.claudecode@outlook.com",
       "dia_profile": "Claude4"
@@ -64,6 +70,8 @@
       "config_dir": "~/.claude-tertiary",
       "launcher": "claude-next3",
       "fable_launcher": "claude-fable3",
+      "fable_name": "fable3",
+      "port_index": 2,
       "email": "ren.chris+claude@outlook.com",
       "mailbox": "ren.chris@outlook.com",
       "dia_profile": "Claude3"
@@ -73,6 +81,8 @@
       "config_dir": "~/.claude-secondary",
       "launcher": "claude-next2",
       "fable_launcher": "claude-fable2",
+      "fable_name": "fable2",
+      "port_index": 1,
       "email": "chris.swe+claude@outlook.com",
       "mailbox": "chris.swe@outlook.com",
       "dia_profile": "Claude2"
