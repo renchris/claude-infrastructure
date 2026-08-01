@@ -645,3 +645,189 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "queue: 1 open ($(basename "$w"))"
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# `yours` — the steps THIS session filed (cc-backlog needs → .session / .run)
+#
+# THE DEFECT: a step the agent discovered THIS turn ("authenticate motion-plus in /mcp") lands as a
+# blocked backlog item, and therefore folded into the standing `◆ 180 blocked backlog — your call`
+# count — indistinguishable from 180 items the operator has been ignoring for weeks. The `👤` rung
+# says "N step(s) need you; see the OPERATOR block", so line 1 pointed at a block that could not
+# answer the question line 1 had just raised.
+#
+# STUBBED cc-backlog throughout (CC_BACKLOG_BIN): `needs`, `.session` and `.run` are landing on the
+# real binary in a sibling change, and a suite that depended on it would be a function of that
+# half-finished state rather than of this renderer. The seam under test is exactly the emission
+# shape of `cc-backlog list --blocked --json`, which is what the stub pins.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+_stub_backlog() {  # $1 = the JSON array `list --blocked --json` must emit
+  printf '%s\n' "$1" > "$BATS_TEST_TMPDIR/blocked.json"
+  export STUB_BLOCKED="$BATS_TEST_TMPDIR/blocked.json"
+  cat > "$BATS_TEST_TMPDIR/cc-backlog-stub" <<'EOS'
+#!/bin/bash
+# only two reads exist in the renderer: the blocked fold and the open-queue count.
+case "$*" in
+  *--blocked*) cat "$STUB_BLOCKED" ;;
+  *)           printf '[]\n' ;;
+esac
+EOS
+  chmod +x "$BATS_TEST_TMPDIR/cc-backlog-stub"
+  export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/cc-backlog-stub"
+}
+
+_blocked_item() { # $1=id $2=title $3=needs $4=run("" for none) $5=session("" for none)
+  jq -nc --arg id "$1" --arg t "$2" --arg n "$3" --arg r "$4" --arg s "$5" \
+    '{id:$id, title:$t, needs:$n, status:"blocked"}
+     + (if $r != "" then {run:$r} else {} end)
+     + (if $s != "" then {session:$s} else {} end)'
+}
+
+hookrun_sid() { # $1=session_id $2=cwd
+  printf '{"session_id":"%s","cwd":"%s"}' "$1" "${2:-}" | "$HOOK"
+}
+
+@test "YOURS: a step this session filed WITH .run is itemized ▶ with its exact command, FIRST" {
+  # The whole point: it must not be reachable only by following a count. The command is on the
+  # board, above everything the operator has been ignoring for weeks.
+  _stub_backlog "[ $(_blocked_item y-1 "Authenticate motion-plus" "operator must authenticate" "claude --mcp auth motion-plus" S1),
+                   $(_blocked_item b-1 "Rotate the API key" "operator must mint the key" "" ""),
+                   $(_blocked_item b-2 "Approve the vendor SOW" "operator must sign" "" "") ]"
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/70-y-activate.sh"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-1: Authenticate motion-plus\]' || false
+  # FIRST: immediately under the governing line, above the runnable and judgment classes.
+  [ "$(echo "$output" | grep -n 'this session y-1' | head -1 | cut -d: -f1)" -eq 2 ]
+  echo "$output" | head -1 | grep -q '1 step(s) are yours' || false
+}
+
+@test "YOURS: a session-filed step with NO .run is itemized ◆ — the file's existing judgment mark" {
+  # `▶`/`◆` are the file's vocabulary and `▸` is the header's own glyph; no new mark is minted.
+  _stub_backlog "[ $(_blocked_item y-2 "Restart Cursor" "operator must restart Cursor to reload the extension" "" S1) ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '◆ \[this session y-2\] Restart Cursor — needs: operator must restart Cursor' || false
+  ! echo "$output" | grep -q '▶' || false
+  ! echo "$output" | grep -q '▸ .*y-2' || false
+}
+
+@test "YOURS DOUBLE-COUNT GUARD: an item counted in yours is SUBTRACTED from the backlog count" {
+  # THE most likely way to get this wrong. 3 blocked items, 1 filed by this session ⇒ the operator
+  # must see 1 itemized + a count of 2, never 1 itemized + a count of 3 (a phantom extra item that
+  # exists nowhere on disk). The exclusion is structural — the class is decided once, in the jq
+  # that reads the single `list --blocked --json` stream — and this pins it from the outside.
+  _stub_backlog "[ $(_blocked_item y-9 "Authenticate motion-plus" "operator must authenticate" "" S1),
+                   $(_blocked_item b-8 "Rotate the API key" "operator must mint the key" "" ""),
+                   $(_blocked_item b-9 "Approve the vendor SOW" "operator must sign" "" "") ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '◆ \[this session y-9\] Authenticate motion-plus' || false
+  echo "$output" | grep -q '◆ 2 blocked backlog — your call' || false
+  ! echo "$output" | grep -q '3 blocked backlog' || false
+  # and it appears EXACTLY once in the whole block — not itemized here and counted there
+  [ "$(echo "$output" | grep -c 'y-9')" -eq 1 ]
+  echo "$output" | head -1 | grep -q '1 step(s) are yours · 2 need your call' || false
+}
+
+@test "YOURS: items filed by a DIFFERENT session are NOT yours — render is byte-identical to no-sid" {
+  # The standing pile belongs to whoever filed it. A session must never adopt another's steps.
+  _stub_backlog "[ $(_blocked_item o-1 "Someone else's step" "operator must do it" "run-this" OTHER),
+                   $(_blocked_item b-7 "Rotate the API key" "operator must mint the key" "" "") ]"
+  mine="$("$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1)"
+  none="$("$HOOK" --render --cwd "$BATS_TEST_TMPDIR")"
+  [ "$mine" = "$none" ]
+  ! printf '%s' "$mine" | grep -q 'this session' || false
+  ! printf '%s' "$mine" | grep -q 'are yours' || false
+  printf '%s' "$mine" | grep -q '◆ 2 blocked backlog — your call' || false
+}
+
+@test "YOURS: no session id on stdin ⇒ yours EMPTY and the block is the unchanged render" {
+  # A missing session id must never promote the standing pile into `yours` — the failure mode where
+  # every blocked item on the machine suddenly reads as "you just saw this happen".
+  w="$(mkrepo_landed ys)"
+  _stub_backlog "[ $(_blocked_item y-5 "Authenticate motion-plus" "operator must authenticate" "" S1),
+                   $(_blocked_item b-5 "Rotate the API key" "operator must mint the key" "" "") ]"
+  msg="$(printf '{"cwd":"%s"}' "$w" | "$HOOK" | jq -r '.systemMessage')"
+  ref="$("$HOOK" --render --cwd "$w")"
+  [ "$msg" = "$ref" ]
+  ! printf '%s' "$msg" | grep -q 'are yours' || false
+  printf '%s' "$msg" | grep -q '◆ 2 blocked backlog — your call' || false
+}
+
+@test "YOURS fires the block alone: session-filed step + every other class empty + ✅ git" {
+  # The fire predicate extension. Without it the `👤` rung's "see the OPERATOR block" would point at
+  # a block that never rendered, because a clean landed repo with no standing steps is silent.
+  w="$(mkrepo_landed yf)"
+  _stub_backlog "[ $(_blocked_item y-6 "Authenticate motion-plus" "operator must authenticate" "claude --mcp auth motion-plus" S6) ]"
+  out="$(hookrun_sid S6 "$w")"
+  [ -n "$out" ]
+  msg="$(printf '%s' "$out" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | head -1 | grep -q 'OPERATOR ▸ 1 step(s) are yours · ✅ live on trunk' || false
+  printf '%s' "$msg" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-6' || false
+  # control: the SAME repo with no session-filed step is silent, so the fire came from `yours`
+  : > "$STUB_BLOCKED"; printf '[]\n' > "$STUB_BLOCKED"
+  export CC_OPREADOUT_STATE_DIR="$BATS_TEST_TMPDIR/state2"
+  [ -z "$(hookrun_sid S6 "$w")" ]
+}
+
+@test "YOURS is exempt from the COLLAPSE: itemized while the standing classes stay counted" {
+  # The one place the volume rule yields. These are the steps from the work the operator just
+  # watched happen; the rest is the pile.
+  _stub_backlog "[ $(_blocked_item y-7 "Authenticate motion-plus" "operator must authenticate" "claude --mcp auth motion-plus" S1),
+                   $(_blocked_item b-1 "one" "operator" "" ""), $(_blocked_item b-2 "two" "operator" "" ""),
+                   $(_blocked_item b-3 "three" "operator" "" ""), $(_blocked_item b-4 "four" "operator" "" ""),
+                   $(_blocked_item b-5 "five" "operator" "" "") ]"
+  for i in 1 2 3 4; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/7$i-c-activate.sh"; done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-7' || false   # itemized
+  echo "$output" | grep -q '▶ cc-do   \[4 runnable\]' || false                               # collapsed
+  echo "$output" | grep -q '◆ 5 blocked backlog — your call   cc-backlog list --blocked' || false
+  echo "$output" | head -1 | grep -q '1 step(s) are yours · 4 runnable now, 5 need your call' || false
+}
+
+@test "YOURS is exempt from MAX: 4 session steps all itemize at MAX=1" {
+  # MAX bounds the STANDING itemisation. A session's own steps are few by construction and are the
+  # entire reason the 👤 rung exists, so the budget does not reach them.
+  _stub_backlog "[ $(_blocked_item y-a "step a" "operator a" "cmd-a" S1), $(_blocked_item y-b "step b" "operator b" "cmd-b" S1),
+                   $(_blocked_item y-c "step c" "operator c" "cmd-c" S1), $(_blocked_item y-d "step d" "operator d" "cmd-d" S1) ]"
+  CC_OPREADOUT_MAX=1 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  for id in y-a y-b y-c y-d; do echo "$output" | grep -q "this session $id" || false; done
+  ! echo "$output" | grep -q 'more yours' || false
+}
+
+@test "YOURS rollup: 6 session steps → 5 itemized + ONE ↳ carrying cc-backlog list --blocked" {
+  # Bounded anyway: above YMAX the tail becomes the standard class-rollup, so the completeness
+  # guarantee (I10 — a class can be shortened, never deleted) holds here like everywhere else.
+  items=""
+  for i in 1 2 3 4 5 6; do
+    items="${items:+$items,} $(_blocked_item "y-r$i" "step $i" "operator $i" "cmd-$i" S1)"
+  done
+  _stub_backlog "[ $items ]"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  [ "$(echo "$output" | grep -c 'this session y-r')" -eq 5 ]
+  echo "$output" | grep -q '↳ cc-backlog list --blocked   \[+1 more yours\]' || false
+  echo "$output" | head -1 | grep -q '6 step(s) are yours' || false
+  # the rollup names the class it summarises, and the 6th item is NOT silently dropped
+  [ "$(echo "$output" | grep -c '↳')" -eq 1 ]
+}
+
+@test "YOURS under CC_OPREADOUT_CLASSBUDGET=on: numbered like its neighbours, still first + exempt" {
+  # The numbering follows the surrounding MODE (bare under collapse, numbered under itemisation) so
+  # the downstream `^ [0-9]+ (▶|◆)` step count keeps counting whatever that mode counts.
+  _stub_backlog "[ $(_blocked_item y-8 "Authenticate motion-plus" "operator must authenticate" "cmd-8" S1),
+                   $(_blocked_item b-6 "Rotate the API key" "operator must mint the key" "" "") ]"
+  CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" --sid S1
+  echo "$output" | grep -q ' 1 ▶ cmd-8   \[this session y-8: Authenticate motion-plus\]' || false
+  echo "$output" | grep -q ' 2 ◆ \[backlog b-6\] Rotate the API key' || false
+  echo "$output" | head -1 | grep -q 'OPERATOR ▸ 1 step(s) are yours · 2 manual step(s)' || false
+}
+
+@test "YOURS: hook mode takes the session id from stdin (the live path), not only --sid" {
+  # --sid is the pull surface's seam; the Stop hook's own SID comes from the harness JSON. Both must
+  # reach the same renderer or push and pull drift — the defect one-renderer exists to prevent.
+  w="$(mkrepo_landed yh)"
+  _stub_backlog "[ $(_blocked_item y-h "Authenticate motion-plus" "operator must authenticate" "cmd-h" live-sid-123) ]"
+  msg="$(hookrun_sid live-sid-123 "$w" | jq -r '.systemMessage')"
+  printf '%s' "$msg" | grep -q '▶ cmd-h   \[this session y-h' || false
+  ref="$("$HOOK" --render --cwd "$w" --sid live-sid-123)"
+  [ "$msg" = "$ref" ]
+}

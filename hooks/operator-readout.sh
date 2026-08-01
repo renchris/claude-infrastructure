@@ -15,7 +15,11 @@
 #   boundary-handoff advises handoff). Bare-systemMessage-on-Stop is the proven channel
 #   (session-continue.sh cap message precedent).
 #
-# ── FIRE PREDICATE ── steps>0 ∨ RUNG=📦 ∨ open-queue>0. Silent otherwise: 🔧 with no operator
+# ── FIRE PREDICATE ── steps>0 ∨ RUNG=📦 ∨ open-queue>0, where steps INCLUDES the `yours` class —
+#   so a session that filed an operator step this turn renders its block even when every other
+#   class is empty and the git state is otherwise ✅ (that is the whole point of `yours`: the
+#   `👤` rung's line 1 says "N step(s) need you; see the OPERATOR block", and a block that did not
+#   render would leave that pointing at nothing). Silent otherwise: 🔧 with no operator
 #   step is the MODEL's job (auto-continue), ✅/read-only needs no block (protocol: suppress on
 #   read-only). 📦 always renders — committed-but-unlanded is the invisible-risk state (parked
 #   work is lost work if never surfaced). open-queue>0 (cwd project's OPEN cc-backlog items)
@@ -28,6 +32,18 @@
 #   the block at the close they actually read.
 #
 # ── STEP SOURCES (disk truth, machine-wide; each independently fail-open) ──
+#   yours        the steps THIS session filed (`cc-backlog needs "<step>" [--run …] [--session SID]`)
+#                — blocked backlog items whose `.session` equals this hook's own SID. Rendered
+#                FIRST and ALWAYS ITEMIZED. THE DEFECT it closes: a step the agent discovered this
+#                turn ("authenticate motion-plus in /mcp") folded into the standing `◆ 180 blocked
+#                backlog — your call` count and became indistinguishable from 180 items the
+#                operator has been ignoring for weeks — so the `👤` rung's line 1 pointed at a
+#                block that could not answer the question line 1 had just raised.
+#                EXCLUSION IS STRUCTURAL: the split happens inside the ONE `cc-backlog list
+#                --blocked --json` jq that already reads this stream, so an item carries exactly
+#                one class and can never be both itemized here and counted in `backlog`.
+#                Session UNRESOLVABLE (SID absent / "?") ⇒ `yours` is EMPTY — a missing session id
+#                must never promote the standing pile.
 #   deploy-lag   shared checkout ON trunk but behind its origin/main → the exact ff-sync command
 #                (deploy-lag incident 2026-07-20: landed ≠ live; ordered FIRST — activations abort
 #                on a stale checkout)
@@ -45,6 +61,9 @@
 #                footer otherwise.
 #   Line marks: `▶` = run this exact command · `◆` = judgment/decision (no single command exists) ·
 #   `↳` = N more of this class, and this command lists them (the class-rollup, §4 M2).
+#   `yours` reuses that SAME vocabulary rather than minting a glyph: `▶` when the item carries a
+#   `.run`, `◆` when it does not. A new mark would have to be taught; these two already mean
+#   exactly the right thing, and the operator's eye already reads them.
 #   (`▸` is NOT available as a mark — it is the header's own glyph, `OPERATOR ▸`; caught by a test.)
 #
 # ── CLASS BUDGET (OPERATOR_SURFACE_V2 §4 M2) ── the render budget is allocated per CLASS, not
@@ -57,6 +76,11 @@
 #   Within the activation class, CONFIRM-gated (effect-bearing) scripts outrank print-only ones —
 #   filename order had `18-fleet` (12 dark launchd labels) permanently below `04-page-channel`.
 #   Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer.
+#   `yours` IS EXEMPT from this budget (and from the collapse below). Deliberate, and the one place
+#   the volume rule yields: these are the steps from the work the operator JUST WATCHED HAPPEN, they
+#   are few by construction (a session files 0-3), and they are the entire reason the `👤` rung
+#   exists. Bounded anyway — above YMAX=5 the first 5 itemize and the rest become one `↳` rollup
+#   carrying `cc-backlog list --blocked`, the same class-rollup pattern.
 #
 # ── COLLAPSE (DEFAULT since 2026-07-31 — operator directive) ── the class budget fixed STARVATION;
 #   it did not fix VOLUME. Measured on the operator's own close: 204 steps → 9 numbered lines, of
@@ -71,6 +95,10 @@
 #   (`cc-decide veto` resolves an EXACT id), and `cc-do --list` itemises everything, always.
 #   A class holding exactly ONE item is still itemised: a count of 1 says strictly less than the
 #   step itself and costs the same line.
+#   `yours` IS NEVER COLLAPSED — see the class-budget note above. Its lines take the surrounding
+#   mode's idiom (bare `▶`/`◆` under collapse, where nothing is numbered; numbered under the
+#   itemised/legacy modes, where everything is) so the `^ [0-9]+ (▶|◆)` NSTEPS count downstream
+#   stays consistent within each mode rather than agreeing with neither.
 #   Modes: CC_OPREADOUT_CLASSBUDGET=collapse (default) · =on (per-class itemisation) · =off (legacy).
 #   DEGRADATION: collapse is refused when cc-do does not resolve — a close naming a command the
 #   machine lacks is worse than a long command that runs (I11).
@@ -79,9 +107,11 @@
 #   {fired|abstained:<reason>} line per invocation; kill-switch CC_OPREADOUT_DISABLE=1;
 #   compose-guard abstains while session-continue's 🔧 loop is armed (lib/continue-sentinel SSOT).
 #
-# ── MODES ── (default, stdin JSON) hook mode · `--render [--cwd <d>]` prints the block to stdout
-#   with no damping/state/IDL — /wrap's pull surface and the bats harness call this; ONE renderer
-#   serves push + pull so the surfaces cannot drift.
+# ── MODES ── (default, stdin JSON) hook mode · `--render [--cwd <d>] [--sid <id>]` prints the block
+#   to stdout with no damping/state/IDL — /wrap's pull surface and the bats harness call this; ONE
+#   renderer serves push + pull so the surfaces cannot drift. `--sid` is how the pull surface names
+#   the session whose steps are `yours`; omitted ⇒ SID stays "?" ⇒ `yours` is empty, which is the
+#   correct read for a caller that cannot name a session.
 #
 # Env seams (tests): CC_OPREADOUT_DISABLE · CC_OPREADOUT_MAX · CC_OPREADOUT_TTL_S ·
 #   CC_OPREADOUT_NOW (epoch) · CC_OPREADOUT_STATE_DIR · CC_ACTIVATION_DIR · CC_DECISIONS_DIR ·
@@ -129,6 +159,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --render) MODE="render" ;;
     --cwd)    shift; RCWD="${1:-}" ;;
+    # the pull surface's way to name the session whose filed steps are `yours`. Hook mode overwrites
+    # SID from stdin below; absent here, SID stays "?" and `yours` is empty (never the standing pile).
+    --sid)    shift; SID="${1:-?}" ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
     *) : ;;   # tolerate unknown args — a hook must never die on harness argv drift
   esac
@@ -296,7 +329,18 @@ render_block() {
     done | sort | cut -f2- >> "$steps_file"
   fi
 
-  # 4 · blocked backlog: operator-only `needs` steps, with the run command when the item carries one.
+  # 4 · blocked backlog → TWO classes off ONE read: `yours` (filed by THIS session) and `backlog`
+  #     (the standing pile). Operator-only `needs` steps, with the run command when the item
+  #     carries one.
+  #
+  #     THE EXCLUSION IS STRUCTURAL, NOT ARITHMETIC. `cc-backlog needs` files a step the agent
+  #     discovered this session and stamps `.session`; those items fold into the SAME
+  #     `list --blocked --json` stream as the 180-item standing pile. The obvious implementation —
+  #     itemize the session's items, then subtract their count from the backlog count — is the
+  #     documented way to fail this: two independent computations that must agree forever. Instead
+  #     the class is decided ONCE, inside the jq that already reads this stream, so an item carries
+  #     exactly one class label and the per-class counters below cannot double-count it. No second
+  #     subprocess either (C19: no new fork may enter render_block).
   local blg="${CC_BACKLOG_BIN:-}"
   if [ -z "$blg" ]; then
     for f in "$SCRIPT_DIR/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
@@ -304,13 +348,19 @@ render_block() {
     done
   fi
   if [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
-    "$blg" list --blocked --json 2>/dev/null | jq -r '
+    "$blg" list --blocked --json 2>/dev/null | jq -r --arg sid "$SID" '
       .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
       | (.run // .run_command // "" | gsub("[\n\t]"; " ")) as $run
-      | if $run != "" then "backlog\t▶\t\($run)   [backlog \(.id // "?"): \($t)]\t\(.id // "?")"
-        else "backlog\t◆\t[backlog \(.id // "?")] \($t) — needs: \($n)\t\(.id // "?")" end' 2>/dev/null >> "$steps_file"
+      | (.id // "?") as $id
+      # `?` is this hook`s own unresolvable-session sentinel, and "" is a caller that passed none;
+      # neither may ever match an item, or a session-less close would promote the whole standing
+      # pile into `yours`.
+      | (if $sid != "" and $sid != "?" and (.session // "") == $sid then "yours" else "backlog" end) as $c
+      | (if $c == "yours" then "this session" else "backlog" end) as $w
+      | if $run != "" then "\($c)\t▶\t\($run)   [\($w) \($id): \($t)]\t\($id)"
+        else "\($c)\t◆\t[\($w) \($id)] \($t) — needs: \($n)\t\($id)" end' 2>/dev/null >> "$steps_file"
   fi
 
   # 5 · open-queue visibility (operator crux 2026-07-25: "we are just sitting here on todo items…
@@ -411,7 +461,7 @@ render_block() {
   # class = MAX + 4 lines worst case. MAX's meaning narrows from "total lines" to "itemized lines".
   # Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer exactly.
   local total=0 cls mark text stem
-  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0
+  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0 c_yours=0
   # PASS 1 — count per class. Fork-free: a `< file` redirect is not a fork, and this REPLACES the
   # `grep -c .` that used to compute the total, so the class budget costs one fork LESS than the
   # flat renderer it supersedes (C19: no new fork may enter render_block).
@@ -423,6 +473,9 @@ render_block() {
       activation) c_activation=$((c_activation + 1)) ;;
       decision)   c_decision=$((c_decision + 1)) ;;
       backlog)    c_backlog=$((c_backlog + 1)) ;;
+      # `yours` counts toward the TOTAL (so it can fire the block on its own) but into its own
+      # counter — which is precisely what keeps it out of c_backlog and out of the allocation below.
+      yours)      c_yours=$((c_yours + 1)) ;;
     esac
   done < "$steps_file"
   TOTAL="$total"
@@ -430,6 +483,8 @@ render_block() {
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
+  # `yours` is ABSENT from every line of this block on purpose — it draws no slot and therefore
+  # cannot starve a standing class, and no standing class can starve it.
   local budget="$MAX" before legacy=0
   local a_deploy=0 a_activation=0 a_decision=0 a_backlog=0
   if [ "$CBUDGET" = off ]; then
@@ -463,15 +518,51 @@ render_block() {
   # says nothing about it, on the one line the operator's eye is guaranteed to read. The honest
   # summary of the level below is the PARTITION: what one command clears vs what needs a human.
   # Collapse only — the itemised/legacy modes keep the historic header their tests pin.
+  #
+  # `yours` LEADS the partition when it is non-empty, because it is the leg that answers the
+  # question the `👤` rung raises: of everything on this board, THESE came out of the work you just
+  # watched. It is a real partition — c_yours, the runnable legs and the judgment legs are disjoint
+  # and sum to `total` — so the line still summarises exactly the groupings printed below it.
+  local _y=""
+  [ "$c_yours" -gt 0 ] && _y="${c_yours} step(s) are yours"
   if [ "$total" -gt 0 ] && [ "$CBUDGET" = collapse ]; then
     local _run=$(( c_deploy + c_activation )) _jud=$(( c_decision + c_backlog )) _lead=""
     [ "$_run" -gt 0 ] && _lead="${_run} runnable now"
     [ "$_jud" -gt 0 ] && _lead="${_lead:+$_lead, }${_jud} need your call"
-    hdr="OPERATOR ▸ ${_lead:-${total} manual step(s)}${state:+ · $state}"
-  elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${total} manual step(s)${state:+ · $state}"
+    # `yours`-only ⇒ the fallback must NOT fire: "2 step(s) are yours · 2 manual step(s)" restates
+    # the same two items as if they were four.
+    if [ -n "$_y" ]; then _lead="${_y}${_lead:+ · $_lead}"; else _lead="${_lead:-${total} manual step(s)}"; fi
+    hdr="OPERATOR ▸ ${_lead}${state:+ · $state}"
+  elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
+
+  # ── YOURS — first, itemized, never collapsed, exempt from MAX ────────────────────────────────
+  # Rendered BEFORE every standing class: the operator reads top-down, and these are the only rows
+  # on the board whose provenance is this turn. Volume is safe by construction (a session files
+  # 0-3), and above YMAX the tail becomes the standard `↳` rollup carrying its own listing command,
+  # so the completeness guarantee (I10) holds here exactly as it does for every other class.
+  # Numbering follows the surrounding MODE, not this class: bare under collapse (where nothing is
+  # numbered), numbered under itemised/legacy (where everything is) — so `NSTEPS`
+  # (`grep -cE '^ [0-9]+ (▶|◆)'`) keeps counting whatever that mode counts.
+  local YMAX=5 y_shown=0 y_lines=0 y_num=""
+  [ "$CBUDGET" = collapse ] || y_num=1
+  if [ "$c_yours" -gt 0 ]; then
+    while IFS="$TABC" read -r cls mark text stem; do
+      [ "$cls" = yours ] || continue
+      [ "$y_shown" -lt "$YMAX" ] || continue
+      y_shown=$((y_shown + 1)); y_lines=$((y_lines + 1))
+      if [ -n "$y_num" ]; then printf ' %d %s %s\n' "$y_lines" "$mark" "$text"
+      else                     printf ' %s %s\n'    "$mark" "$text"; fi
+    done < "$steps_file"
+    if [ "$c_yours" -gt "$y_shown" ]; then
+      y_lines=$((y_lines + 1))
+      if [ -n "$y_num" ]; then printf ' %d ↳ cc-backlog list --blocked   [+%s more yours]\n' "$y_lines" "$(( c_yours - y_shown ))"
+      else                     printf ' ↳ cc-backlog list --blocked   [+%s more yours]\n'    "$(( c_yours - y_shown ))"; fi
+    fi
+    shown="$y_shown"
+  fi
 
   # ── COLLAPSE (default) ───────────────────────────────────────────────────────────────────────
   # The class budget below solved starvation; it did not solve VOLUME. Measured on the operator's
@@ -534,7 +625,8 @@ render_block() {
     shown="$total"
   else
 
-  local n=0 alloc pc=0 last_cls="" rest rcmd rtot
+  # `n` continues the numbering the `yours` block already used, so the operator reads ONE sequence.
+  local n="$y_lines" alloc pc=0 last_cls="" rest rcmd rtot
   # close_class — the COMPLETENESS guarantee. Emits at most one `▸` rollup for whatever the class
   # could not itemize, carrying the exact command that LISTS the rest. `▸` is deliberately a third
   # mark: `▶` = run this exact step · `◆` = judgment, no single command exists · `▸` = N more of
@@ -563,6 +655,11 @@ render_block() {
 
   while IFS="$TABC" read -r cls mark text stem; do
     [ -n "$mark" ] || continue
+    # `yours` is already rendered above. Skipped BEFORE the last_cls transition so the remaining
+    # classes stay contiguous: session-filed items interleave with standing ones in the backlog
+    # stream, and letting them through here would make close_class see backlog→yours→backlog and
+    # emit that class's rollup twice.
+    [ "$cls" = yours ] && continue
     if [ "$cls" != "$last_cls" ]; then
       [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
       last_cls="$cls"; pc=0
@@ -574,7 +671,9 @@ render_block() {
       backlog)    alloc="$a_backlog" ;;
       *)          alloc="$MAX" ;;
     esac
-    if [ "$legacy" = 1 ] && [ "$n" -ge "$MAX" ]; then break; fi
+    # MAX bounds the STANDING itemisation only — `yours` is exempt, so subtract the lines it took
+    # rather than letting a session's own steps eat the legacy budget for everything else.
+    if [ "$legacy" = 1 ] && [ $(( n - y_lines )) -ge "$MAX" ]; then break; fi
     if [ "$pc" -lt "$alloc" ]; then
       n=$((n + 1)); pc=$((pc + 1)); shown=$((shown + 1))
       printf ' %d %s %s\n' "$n" "$mark" "$text"
