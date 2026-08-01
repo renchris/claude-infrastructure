@@ -13,7 +13,22 @@
 #   isAvailable() = wpe() && Uor()
 #     wpe(): TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID || terminal==="iTerm.app"
 #            — a pure ENV CHECK. Setting ITERM_SESSION_ID satisfies it. There is no deeper probe.
-#     Uor(): $SHELL -lc "command -v it2"  — only that `it2` RESOLVES ON PATH (2s timeout).
+#     Uor(): NOT a resolution check, despite how it starts. Re-read from the 2.1.219 binary
+#            2026-07-31 after an earlier draft of this header described it as resolution-only and
+#            that error cost a live outage. In full:
+#              1. r = $SHELL -lc "command -v it2"   (2s timeout) → LAST non-empty line, .at(-1)
+#              2. o = r || "it2"
+#              3. RUNS `<o> session list` and requires exit 0.   ← the actual gate
+#              4. retries once with bare "it2" ONLY if that exits 127 / ENOENT — so a program that
+#                 exists and fails for any other reason (e.g. the real it2's rc=2 "Not running
+#                 inside iTerm2") is terminal: no retry, no fallback.
+#              5. on success it CACHES o and drives that exact path for every later call.
+#            Two consequences. (a) `-lc` is login-but-NOT-interactive: it reads .zprofile/.zshenv
+#            and NEVER .zshrc, so a PATH entry added only in .zshrc does not exist for this lookup.
+#            (b) because step 5 caches the resolved path, losing the PATH race does not merely fail
+#            on kitty — on iTerm2 it silently bypasses bin/it2-wrapper and all three of its
+#            interceptions. scripts/kitty-setup.sh step 3b is what wins that race; it replays this
+#            exact sequence in --check rather than testing for files.
 #
 #   leader id  = ITERM_SESSION_ID.slice(indexOf(":")+1)     ← returns null if there is NO colon,
 #                which downgrades the first split to "from active pane". So the session shim MUST

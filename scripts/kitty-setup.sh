@@ -29,6 +29,7 @@
 # and skipped), or a JSON key (set to a fixed value). Nothing appends twice.
 #
 # Seams: CC_KITTY_CONFIG_DIR · CC_KITTY_BIN_DIR · CC_KITTY_SHELL_RC · CC_KITTY_SETTINGS
+#        CC_KITTY_LOGIN_RC · CC_KITTY_SHIM_DIR
 
 set -uo pipefail
 
@@ -37,6 +38,10 @@ KCONF_DIR="${CC_KITTY_CONFIG_DIR:-$HOME/.config/kitty}"
 BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 SHELL_RC="${CC_KITTY_SHELL_RC:-$HOME/.zshrc}"
 BLOCK_ID="cc-kitty-agent-teams"
+# Step 3b writes to the LOGIN rc, which is a DIFFERENT file from SHELL_RC on purpose — see §3b.
+LOGIN_RC="${CC_KITTY_LOGIN_RC:-$HOME/.zprofile}"
+SHIM_DIR="${CC_KITTY_SHIM_DIR:-$HOME/.claude/shims}"
+PATH_BLOCK_ID="cc-it2-login-path"
 
 MODE=apply
 case "${1:-}" in
@@ -80,6 +85,16 @@ if [ "$MODE" = undo ]; then
     # Delete the whole keyed block, inclusive of its markers.
     sed -i '' "/# >>> $BLOCK_ID >>>/,/# <<< $BLOCK_ID <<</d" "$SHELL_RC"
     ok "removed the $BLOCK_ID block from $SHELL_RC (backup: $SHELL_RC.bak-kitty-undo)"
+  fi
+  # 3b's two artifacts. The shim dir itself is removed only when EMPTY — `rmdir` refuses a dir
+  # holding anything else, so a second tool that later parks a shim here is never collaterally
+  # deleted by an undo of this one.
+  [ -L "$SHIM_DIR/it2" ] && { rm -f "$SHIM_DIR/it2"; ok "removed $SHIM_DIR/it2"; }
+  rmdir "$SHIM_DIR" 2>/dev/null && ok "removed empty $SHIM_DIR"
+  if grep -q "$PATH_BLOCK_ID" "$LOGIN_RC" 2>/dev/null; then
+    cp "$LOGIN_RC" "$LOGIN_RC.bak-kitty-undo"
+    sed -i '' "/# >>> $PATH_BLOCK_ID >>>/,/# <<< $PATH_BLOCK_ID <<</d" "$LOGIN_RC"
+    ok "removed the $PATH_BLOCK_ID block from $LOGIN_RC (backup: $LOGIN_RC.bak-kitty-undo)"
   fi
   info "teammateMode left as-is — set it yourself if you want tmux back"
   info "restart kitty for the config removal to take effect"
@@ -145,6 +160,81 @@ EOF
 fi
 grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null \
   && ok "$SHELL_RC exports ITERM_SESSION_ID inside kitty" || no "$SHELL_RC has no $BLOCK_ID block"
+
+# ── 3b. login-shell PATH precedence — the step without which NONE of step 2 runs ─────────────────
+# Steps 1-3 can all be green while Agent Teams still fails with
+#   'teammateMode is set to "iterm2" but the it2 CLI is not reachable'
+# because Claude Code never resolves `it2` the way your prompt does. Read out of the live 2.1.219
+# binary (function Uor), the gate is:
+#
+#   r = $SHELL -lc "command -v it2"        ← LOGIN shell, non-interactive, 2s timeout
+#       ...last non-empty line, .at(-1)
+#   o = r || "it2"
+#   run `<o> session list`                 ← A DEEP PROBE. Resolution alone is NOT the contract;
+#                                            the process must EXIT 0. (bin/it2-kitty's header
+#                                            documented resolution-only — that was stale.)
+#   on success: the RESOLVED PATH is cached and used for every later it2 call.
+#
+# Two consequences, both load-bearing:
+#
+#   (a) `zsh -lc` is login-but-NOT-interactive, so it reads .zshenv/.zprofile and NEVER .zshrc.
+#       ~/.claude/bin is added to PATH only in .zshrc (line ~267), while .zprofile prepends
+#       ~/.local/bin — which on this box holds a uv-installed REAL it2. So the login shell resolved
+#       /Users/chrisren/.local/bin/it2, the real iTerm2 client, which inside kitty fails its probe
+#       with `Not running inside iTerm2 or Python API not enabled` (rc=2) and takes Agent Teams
+#       down with it. Measured 2026-07-31: real it2 `session list` rc=2, our wrapper rc=0.
+#   (b) Because the resolved path is CACHED, losing this race does not merely fail on kitty — on
+#       iTerm2 it silently BYPASSES bin/it2-wrapper, forfeiting all three of its interceptions
+#       (never-prompt profile, force=True close, and the 30s process bound whose absence produced
+#       the 2026-07-25 fleet-wide deadlock). This step is therefore a fix for BOTH terminals.
+#
+# WHY A ONE-ENTRY SHIM DIR AND NOT `PATH=$HOME/.claude/bin:$PATH` IN .zprofile.
+# The broad fix would make the login PATH agree with the interactive one, which is tempting — but
+# ~/.claude/bin also contains `bats` (a symlink to cc-bats, the QoS chokepoint). Prepending the
+# whole dir would silently change which `bats` every login-shell gate runs, moving gate processes
+# into a taskpolicy band as a side effect of an unrelated terminal fix. cc-bats defends itself
+# against self-shadowing, so it would not fork-bomb — but a blast radius wider than the defect is
+# how an add-on takes down more than itself. Exactly one name needs to change, so exactly one name
+# does. Add a second symlink here only when a second name is PROVEN to need it.
+hdr "3b. login-shell PATH precedence (the it2 Claude Code actually runs)"
+if [ "$MODE" = apply ]; then
+  mkdir -p "$SHIM_DIR"
+  ln -sfn "$BIN_DIR/it2" "$SHIM_DIR/it2"
+  if ! grep -q "$PATH_BLOCK_ID" "$LOGIN_RC" 2>/dev/null; then
+    [ -e "$LOGIN_RC" ] && cp "$LOGIN_RC" "$LOGIN_RC.bak-kitty-$(date +%Y%m%d%H%M%S)"
+    cat >> "$LOGIN_RC" <<EOF
+
+# >>> $PATH_BLOCK_ID >>>
+# Claude Code resolves the it2 it will drive with \`\$SHELL -lc "command -v it2"\` — a login,
+# NON-interactive shell, which never reads .zshrc. Without this line that lookup finds whichever
+# it2 an earlier PATH entry owns (here: ~/.local/bin, a uv tool), NOT the wrapper, and Agent Teams
+# dies with "the it2 CLI is not reachable" on kitty / silently loses the wrapper's interceptions on
+# iTerm2. Must stay AFTER any other PATH prepend in this file to actually win.
+export PATH="$SHIM_DIR:\$PATH"
+# <<< $PATH_BLOCK_ID <<<
+EOF
+  fi
+fi
+[ "$(readlink "$SHIM_DIR/it2" 2>/dev/null)" = "$BIN_DIR/it2" ] \
+  && ok "$SHIM_DIR/it2 -> $BIN_DIR/it2" || no "$SHIM_DIR/it2 does not point at the wrapper"
+grep -q "$PATH_BLOCK_ID" "$LOGIN_RC" 2>/dev/null \
+  && ok "$LOGIN_RC prepends $SHIM_DIR" || no "$LOGIN_RC has no $PATH_BLOCK_ID block"
+
+# The un-fakeable assertion: replay Claude Code's OWN gate rather than checking that files exist.
+# A file-existence check would have passed all through the outage this step fixes.
+probe_shell="${SHELL:-/bin/zsh}"
+probe_r=$("$probe_shell" -lc 'command -v it2' 2>/dev/null | tr -d '\r' | awk 'NF' | tail -1)
+probe_o="${probe_r:-it2}"
+case "$probe_r" in
+  "$SHIM_DIR/it2"|"$BIN_DIR/it2") ok "login-shell it2 resolves to the wrapper ($probe_r)" ;;
+  "") no "login-shell 'command -v it2' found NOTHING — Claude Code would fall back to bare 'it2'" ;;
+  *)  no "login-shell it2 resolves to $probe_r — NOT the wrapper; Claude Code will drive that instead" ;;
+esac
+if probe_out=$("$probe_o" session list 2>&1) && [ -n "$probe_out" ]; then
+  ok "'$(basename "$probe_o") session list' exits 0 ($(printf '%s' "$probe_out" | grep -c .) panes) — Uor() would pass"
+else
+  no "'$probe_o session list' FAILED — Uor() returns false and teammateMode=iterm2 will throw: ${probe_out%%$'\n'*}"
+fi
 
 # ── 4. teammateMode ──────────────────────────────────────────────────────────────────────────────
 hdr "4. teammateMode (decides whether you SEE your assignees)"
