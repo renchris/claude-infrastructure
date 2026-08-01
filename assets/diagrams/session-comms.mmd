@@ -6,7 +6,7 @@ flowchart TB
     Res -->|"gone entirely"| Desk["tee'd to the desk<br/>tagged for:&lt;uuid&gt;"]
     Fwd --> Box
     Desk --> Box
-    Box --> Drain["drained at a SAFE boundary<br/>SessionStart · UserPromptSubmit"]
+    Box --> Drain["drained at a SAFE boundary<br/>SessionStart · UserPromptSubmit<br/>(a post-tool mid-turn channel exists, unwired)"]
     Drain --> Ctx["arrives as CONTEXT —<br/>never keystrokes on a live input line"]
     Ctx --> Ack["acked at Stop:<br/>exactly-once cursor"]
     Wake["idle peer?<br/>cc-await-ping"] -.->|"the write IS the wake"| Box

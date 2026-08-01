@@ -84,7 +84,7 @@ flowchart TB
     Res -->|"gone entirely"| Desk["tee'd to the desk<br/>tagged for:&lt;uuid&gt;"]
     Fwd --> Box
     Desk --> Box
-    Box --> Drain["drained at a SAFE boundary<br/>SessionStart · UserPromptSubmit"]
+    Box --> Drain["drained at a SAFE boundary<br/>SessionStart · UserPromptSubmit<br/>(a post-tool mid-turn channel exists, unwired)"]
     Drain --> Ctx["arrives as CONTEXT —<br/>never keystrokes on a live input line"]
     Ctx --> Ack["acked at Stop:<br/>exactly-once cursor"]
     Wake["idle peer?<br/>cc-await-ping"] -.->|"the write IS the wake"| Box
@@ -148,7 +148,7 @@ flowchart LR
     B["session B<br/>own worktree · acct 2"] --> G
     C["session C<br/>own worktree · acct 3"] --> G
     G["fast gate — UNLOCKED, seconds<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
-    G --> Lock{"land-lock<br/>held seconds:<br/>the CAS push window only"}
+    G --> Lock{"land-lock<br/>held seconds-to-minutes:<br/>the CAS push window only"}
     Lock --> Push["push → verify by CONTENT,<br/>not commit count"]
     Push --> Trunk[("origin/main")]
     Trunk --> V["verifier — ONE, background band<br/>full corpus, fresh cell,<br/>host suites partitioned out"]
@@ -292,7 +292,7 @@ Teammate models must be on the account's auto-mode allowlist, or the spawn silen
 
 | What survives | How | Recover it with |
 |---|---|---|
-| **Every file version** | [`backup-before-write.sh`](hooks/backup-before-write.sh) stamps a backup before every Write/Edit — nanosecond+PID names (parallel-agent-safe), sidecar `.path` files for basename collisions, atomic `mktemp`+`mv` restore, capped at 10/file with a 30-day TTL by [`prune-backups.sh`](scripts/prune-backups.sh) | [`restore-file`](scripts/restore-file.sh) `<path>` · `--diff` · `--pick N` · `--recent 10` |
+| **Every file version** | [`backup-before-write.sh`](hooks/backup-before-write.sh) stamps a backup before every Write/Edit — nanosecond+PID names (parallel-agent-safe), sidecar `.path` files for basename collisions, atomic `mktemp`+`mv` restore, capped at 10/file — but only **3** for `*.sh`, the file type this repo is mostly made of — with a 30-day TTL by [`prune-backups.sh`](scripts/prune-backups.sh) | [`restore-file`](scripts/restore-file.sh) `<path>` · `--diff` · `--pick N` · `--recent 10` |
 | **Every plan revision** | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) writes two layers: an append-only `MANIFEST.jsonl` (timestamp, session, SHA256, line count) and full snapshots in a separate git repo | `cd ~/.claude/plan-history && git log` |
 | **Every task list** | Claude Code uses UUID task dirs and ignores `CLAUDE_CODE_TASK_LIST_ID`; [`setup-task-symlinks.sh`](hooks/setup-task-symlinks.sh) detects the active list at SessionStart, symlinks it to `.claude-tasks/_current/`, and generates a readable `TASKS.md` beside it | `.claude-tasks/TASKS.md` |
 | **Every conversation** | SQLite FTS5 index over all ~6,900 sessions, kept self-maintaining by three hooks — a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses | `claude-search "<query>"` · `--fzf` · `--stats` |
@@ -314,7 +314,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-model-dark.svg">
-  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,134 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir copies the same system into the four billing-isolated account directories. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
+  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,134 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
 </picture>
 
 <details>
@@ -325,7 +325,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 flowchart TB
     Repo["claude-infrastructure<br/>1,134 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
-    Repo -->|"--config-dir · COPY"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
+    Repo -->|"--config-dir · code SYMLINKED<br/>auth + settings per-account"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
     Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>49 tools · 20 daemons · statusline"]
     classDef src fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef dep fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
@@ -422,7 +422,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ### Held to ground truth
 
-**4,564 bats tests across 262 files (68,005 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim), plus a nightly full-suite regression daemon. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
+**4,564 bats tests across 262 files (68,005 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim). A nightly full-suite regression daemon is declared but **staged, not loaded** — `com.claude.nightly-regression` is absent from `launchctl list`, and `launchd/fleet.manifest` marks it `staged`. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
 
 ---
 
@@ -667,9 +667,10 @@ only when iTerm2 is not running" — no live sessions present, none disturbed �
 windows that had not existed a second earlier, the driver's `current window` resolved to one of
 *theirs*, and 18 splits landed in restored sessions before the take was aborted and the app returned
 to not-running. The resurrection happens **at launch**, before any check can run — so
-[`renderer-film.sh`](assets/demo/renderer-film.sh) now refuses iTerm2 outright and points at
-[`iterm-metal-bench-app.sh`](scripts/iterm-metal-bench-app.sh), which clones iTerm2 under its own
-bundle id and defaults domain and is the only route that restores nothing.
+[`renderer-film.sh`](assets/demo/renderer-film.sh) still refuses `--app iterm2` outright — but it no
+longer merely points elsewhere. It now *implements* the isolated route itself as `--app itermbench`,
+driving [`iterm-metal-bench-app.sh`](scripts/iterm-metal-bench-app.sh), which clones iTerm2 under its
+own bundle id and defaults domain and is the only route that restores nothing.
 
 **Stalls are measured at the source, and every candidate has none.** ScreenCaptureKit emits a frame
 only when the window's content changes, so the gap between delivered frames *is* how long that window
@@ -760,7 +761,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | `com.claude.log-rotation` | 60 min | size-gated rotation of `idl.jsonl` + bash command logs |
 | `com.claude.caffeinate-floor` | KeepAlive | sleep-prevention floor while sessions run |
 | `com.claude.power-policy-verify` | 60 min | assert pmset/caffeinate continuity posture |
-| `com.claude.nightly-regression` | 4 am | full bats suite against the live deployment |
+| `com.claude.nightly-regression` | 4 am | full bats suite against the live deployment — **staged, not loaded** (`fleet.manifest`) |
 | `com.claude.session-search-sweep` | 60 s | catch missed session transcripts |
 | `com.claude.session-search-backfill` | Sun 3 am | full backfill of all sessions |
 | `com.claude.deploy-live` | 10 min | advance the live `~/.claude` layer once the green stamp allows it |
@@ -783,7 +784,7 @@ Workflow: `navigate → snapshot → click/type` by element ref. `agent-browser`
 
 **Shell aliases** (`~/.zshrc`): `claude` (auto-update + auto mode + task-list persistence) · `claude-default` (no auto mode) · `claude-plan` (plan mode + "ultrathink") · `claude2`/`3`/`4` (isolated `CLAUDE_CONFIG_DIR` per account) · `claude-fable*` (frontier tier) · `claude-which` (active config dir).
 
-**19 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **15 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `deep-research` (frontier/adversarial research), `deep-research-sonnet` (bulk-fan-out worker, currently benched), `frontier-derivation` (baseline-blind derivation panelist for `/frontier-run`), `research-decomposition-critic` (pre-spawn decomposition critic). Deployed by COPY into each config dir's `agents/`, never by symlink.
+**19 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **15 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `deep-research` (frontier/adversarial research), `deep-research-sonnet` (bulk-fan-out worker, currently benched), `frontier-derivation` (baseline-blind derivation panelist for `/frontier-run`), `research-decomposition-critic` (pre-spawn decomposition critic). Symlinked into `~/.claude/agents/` like the skills beside them, so editing the repo file edits the live agent.
 
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
