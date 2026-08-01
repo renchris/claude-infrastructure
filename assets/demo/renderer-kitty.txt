@@ -1,0 +1,14 @@
+terminal-bench — app=kitty pid=61689 panes=18 interval=0s  2026-08-01T05:23:17Z
+  T0  app   cpu=10.4 mem=163MB th=10 ports=398 win=50 off=46 mpx=4.72
+  T0  WS    cpu=25.6 mem=1546MB th=27 ports=4536 win=22 off=11 mpx=13.18
+  GPU path taken: gpu_frames=222 cpu_frames=12  ratio=18.50:1
+  PER-PANE at n=18 panes:
+    threads/pane   0.56
+    ports/pane     22.11
+    MB/pane        9.1
+    cpu%/pane      0.58
+verdict=PARTIAL
+film: 1920x1080 @ 60/1  11469777 bytes
+stalls: 0 gap(s) >1.5s between delivered frames, 0.00s total, longest 0.05s, over a 15s take
+load delivered: see /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/renderer-film-load.tsv (achieved fps + SUSPECT flag per pane)
+measured pid: 61689 (that pid pre-existed this run: no)

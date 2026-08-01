@@ -547,6 +547,61 @@ A 30-minute run was taken to get a sharp one (at 1800 s, one port is 2/hr) and *
 
 **So the sustained-runtime question is open, and it is the largest gap in the terminal case** — stated here rather than papered over. It compounds with the HOLD above rather than being offset by it: the challenger is ahead of its rivals on loaded CPU, level with the incumbent in the incumbent's cheap layout, and unproven over hours. **That is exactly why the move below is a seam and not a migration** — a `CC_PANE_ID` abstraction costs the same whichever terminal eventually wins, and stops the question from having to be answered before anything else can proceed.
 
+#### And the renderers themselves, under the load — one film per terminal
+
+The section above films the *instrument*. This films the *subject*: 18 panes of the identical
+Ink-shaped load ([`tui-load.sh`](scripts/tui-load.sh) — alternate screen, 24-bit colour, full-frame
+repaint at 10 fps) repainting in each candidate, recorded at **1920×1080, 60 fps**, with that
+terminal's [`terminal-bench.sh`](scripts/terminal-bench.sh) row taken **during the same take** so the
+film and the numbers describe one event rather than two.
+
+<div align="center">
+
+<img src="assets/demo/renderer-grid.webp" width="900" alt="Three stacked frames, one per terminal, each showing an 18-pane window under the same synthetic load. kitty's panes form an even grid of coloured dot rows; WezTerm's and Ghostty's form uneven binary split trees. Each pane's header shows its own measured column-by-row geometry.">
+
+<sub><b>One frame from each film — 18 panes, one window, the same load, this machine.</b> Full 1080p60 recordings: <a href="assets/demo/renderer-kitty.mp4">kitty</a> · <a href="assets/demo/renderer-wezterm.mp4">WezTerm</a> · <a href="assets/demo/renderer-ghostty.mp4">Ghostty</a>, with the measurement row taken during each take beside it (<a href="assets/demo/renderer-kitty.txt">kitty</a> · <a href="assets/demo/renderer-wezterm.txt">WezTerm</a> · <a href="assets/demo/renderer-ghostty.txt">Ghostty</a>). Reproduce any of them with <a href="assets/demo/renderer-film.sh"><code>assets/demo/renderer-film.sh --app kitty</code></a>.</sub>
+
+</div>
+
+**What the films are evidence of, and what they are not.** They show that the load really ran, in
+that terminal, on this box — not that one terminal beat another on looks. Three things a reader
+should know before drawing anything from them:
+
+- **The pane geometry differs because the terminals differ.** kitty is run with its `grid` layout,
+  which is what an 18-pane kitty user would actually use; WezTerm and Ghostty have no grid layout, so
+  they get their own binary split trees and their cells come out uneven. That asymmetry is a property
+  of the candidates, and it is disclosed rather than equalised away.
+- **Each pane's header shows its own measured geometry** (`62x19`, `94x22`, `79x40`…) — and that is
+  there because it was wrong. `tui-load.sh` sized itself with `tput cols`, which inside a command
+  substitution reports the terminfo default **80×24** instead of the pane, so every WezTerm pane
+  painted a fixed small frame while kitty painted full-size ones. The generator whose entire purpose
+  is an *identical* load across candidates was not delivering one, and nothing said so — 80×24 is a
+  plausible size, not an error. Fixed to read `stty size`; the geometry and which probe answered are
+  now recorded per pane.
+- **Ghostty's row is app-wide, not per-pane.** Ghostty is a single shared process that was already
+  running the operator's own surfaces, so its totals include panes these films did not create. The
+  row says so; the per-pane division there is an upper bound.
+
+**The incumbent is missing, and the reason is worth more than the film would have been.** iTerm2 is
+the terminal this whole section argues about, and it is the one not filmed. The guard was "film it
+only when iTerm2 is not running" — no live sessions present, none disturbed — and that guard passed.
+**Launching iTerm2 restored the operator's windows anyway.** Window restoration reopened three
+windows that had not existed a second earlier, the driver's `current window` resolved to one of
+*theirs*, and 18 splits landed in restored sessions before the take was aborted and the app returned
+to not-running. The resurrection happens **at launch**, before any check can run — so
+[`renderer-film.sh`](assets/demo/renderer-film.sh) now refuses iTerm2 outright and points at
+[`iterm-metal-bench-app.sh`](scripts/iterm-metal-bench-app.sh), which clones iTerm2 under its own
+bundle id and defaults domain and is the only route that restores nothing.
+
+**Stalls are measured at the source, and every candidate has none.** ScreenCaptureKit emits a frame
+only when the window's content changes, so the gap between delivered frames *is* how long that window
+sat unchanged: kitty, WezTerm and Ghostty each recorded **0 gaps over 1.5 s**, with longest gaps of
+**0.07 s, 0.06 s and 0.04 s**. An earlier pixel-based reading off ffmpeg `freezedetect` said otherwise
+and was **withdrawn** — it averages over the whole frame, so on sparse coloured text it called an
+entire 20-second film "frozen from t=0" while 808 distinct frames sat in it, and its verdict moved
+with how much letterboxing each window's shape happened to need, which made it non-comparable across
+the very candidates being compared.
+
 **Reproduce any row yourself** — it is one read-only command per terminal, and it will refuse to invent a number:
 
 ```bash

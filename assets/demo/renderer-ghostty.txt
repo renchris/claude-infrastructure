@@ -1,0 +1,16 @@
+terminal-bench — app=ghostty pid=649 panes=18 interval=0s  2026-08-01T05:24:33Z
+  T0  app   cpu=31.7 mem=700MB th=139 ports=1075 win=21 off=18 mpx=1.84
+  T0  WS    cpu=38.4 mem=1559MB th=26 ports=4399 win=22 off=11 mpx=13.18
+  GPU path taken: gpu_frames=808 cpu_frames=1  ratio=808.00:1
+  PER-PANE at n=18 panes:
+    threads/pane   7.72
+    ports/pane     59.72
+    MB/pane        38.9
+    cpu%/pane      1.76
+verdict=PARTIAL
+film: 1920x1080 @ 60/1  5405639 bytes
+stalls: 0 gap(s) >1.5s between delivered frames, 0.00s total, longest 0.04s, over a 15s take
+load delivered: see /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/renderer-film-load.tsv (achieved fps + SUSPECT flag per pane)
+measured pid: 649 (that pid pre-existed this run: yes)
+CAVEAT: that process pre-existed this run, so its totals may include surfaces this film
+        did not create. Read the app-wide columns; the per-pane division is an upper bound.
