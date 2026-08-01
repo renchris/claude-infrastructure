@@ -18,10 +18,16 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 (If the repo root differs, the launcher resolves the script under the repo — `scripts/wrap-ledger.sh`.)
 
 The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hook pushes at turn
-close (one code path — the push and pull surfaces cannot drift): one state line, then numbered
-`▶ <exact runnable command>` lines from disk truth (deploy-lag · pending activations · open
-class-C decisions · blocked backlog), `◆` for genuine judgment calls. Relay it VERBATIM at the
-top of your close — never paraphrase the commands into prose (the silver-platter rule).
+close (one code path — the push and pull surfaces cannot drift): one state line, then the collapsed
+step lines from disk truth — `▶ cc-do` for everything runnable (deploy-lag · pending activations),
+one `◆ <n> …` counted line per judgment class (open decisions · blocked backlog), each naming up to
+3 ids and carrying its exact listing command. Relay it VERBATIM at the top of your close — never
+paraphrase the commands into prose (the silver-platter rule).
+
+**Hand over ONE command, not a list.** Whatever the block shows, the operator gets a single fenced
+thing to paste — `cc-do` runs the runnable set after one confirm (`cc-do --list` to look first,
+`cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the close itself is capped at the
+governing line + ≤3 supporting facts + that one command block.
 
 ## Read the rung, then act on it
 
@@ -30,7 +36,7 @@ The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > �
 | Rung | Fact that produced it | Your next verb |
 |---|---|---|
 | 🔧 | dirty tree ∨ gate stale on HEAD ∨ frozen-DoD remainder > 0 | **continue** — finish · run-gate · commit (explicit paths) |
-| 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **/ship** to land — verified net-positive work is drivable, NOT a hold |
+| 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — and per §Session Close's ship policy you FIRE it yourself in every repo except `reso-management-app`, where each land bills an Amplify + Fly deploy so it stays the operator's call |
 | ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
 
 Two rungs the ledger CANNOT derive from git — they are model-state you overlay when true, and

@@ -22,8 +22,9 @@ Primary stack + language/style/file-naming conventions — Next.js 15/16 (App Ro
 ### Git Commit Workflow
 
 **Commit proactively — one atomic commit per completed logical task, as you go,
-without waiting to be asked.** Pushing to origin stays the user's explicit call
-(see Git Safety). Each commit follows these rules:
+without waiting to be asked.** Landing goes through `/ship` on the same terms — fired
+by you everywhere except `reso-management-app` (see Git Safety → § Session Close
+Protocol's ship policy). Each commit follows these rules:
 
 1. **One commit per logical task.** Each task/phase/fix gets its own atomic commit.
    Never bundle unrelated changes. Never commit pre-existing unstaged changes from
@@ -45,7 +46,7 @@ without waiting to be asked.** Pushing to origin stays the user's explicit call
 - **Never use `--no-verify` to bypass pre-commit hooks.** If a hook blocks your commit,
   it caught a real issue. Fix the underlying problem instead of bypassing the safeguard.
 - Never force push to main/master
-- **`git push` only on explicit user request** — commit per task and accumulate locally; the user decides when to push to origin.
+- **Landing goes through `/ship`, per § Session Close Protocol's ship policy** — auto in every repo except `reso-management-app` (where each land bills an Amplify + Fly deploy, so it stays the user's explicit call). A bare `git push` is still never the move: `/ship` is the sanctioned rail (gates, land-lock, reconcile). *(Revised 2026-07-31 from "push only on explicit user request" — accumulating verified commits locally was losing work to crashes and forgotten branches.)*
 - Never run destructive commands (hard reset, force push) without explicit user request
 - Never run interactive git commands (rebase -i, add -i) - they require terminal interaction
 - **Never run `git clean` with `-x` or `-X` flags** — these delete gitignored files which may include paid assets (AI-generated images, API outputs) that cost real money and have cooldown periods to regenerate. `git clean -f -d` (without -x) is safer but still confirm with user first.
@@ -278,7 +279,7 @@ Unreconstructable scope is itself a STOP-ASK, never a guess.
 | Read-only / advisory / research (no tracked writes) | **No ledger, no auto-continue.** Answer and yield. |
 | In-scope: unwritten / unverified / uncommitted | **Auto-continue:** finish → run gate → commit (atomic, explicit paths). ≥2 code tasks → Agent Teams. |
 | In-scope: gate ran **red** | **Auto-debug** the root cause (cap ~2 cycles → commit partial + report). Never blind-retry, never bypass the hook. |
-| Committed, **not pushed/landed** | **Terminal-valid** — a neutral fact, *not* a loose end. Offer ship/land as the user's call. |
+| Committed, **not pushed/landed** | **Ship policy by repo (below).** Default: **auto-`/ship`** — a land is the last step of the work, not a favour. `reso-management-app` ONLY: **terminal-valid**, offer `/ship` as the user's call. |
 | Needs a **decision** (destructive migration / auth / nav pattern / timeout) or **info** | **STOP-ASK** (overrides auto-continue); commit in-progress work first. |
 | Out-of-scope discovery | **Triage via the Follow-On Gate (F1-F4 below)**: PASS → **pursue now, no re-ask** (append `Scope (grown): +<item>` where the DoD lives — growth is auditable, never silent); any FAIL → name + backlog. Security / data-integrity → **stop-surface now**. |
 | Genuinely complete | **Assert plainly, no hedge.** |
@@ -287,9 +288,24 @@ Unreconstructable scope is itself a STOP-ASK, never a guess.
 **Auto-continue is permitted IFF all four hold** — else surface/ask, do not continue:
 **G1** inside the frozen-or-grown DoD (adjacencies enter ONLY via the Follow-On Gate's F1-F4 — never silently) ·
 **G2** touches no escalation surface (auth/session, destructive migration, navigation pattern, DB timeout) ·
-**G3** the action is local — edit / run-gate / commit; **never push / deploy / ship / land** (that is always the user's explicit call) ·
+**G3** the action is local — edit / run-gate / commit — **plus `/ship` where the repo's ship policy says auto** (below); never deploy by hand, never force-push ·
 **G4** the commit is task-clean (explicit paths; never sweep unrelated / parked / other-session changes).
 Honor explicit pauses ("stop here", "come back to this") as terminal-valid parked WIP.
+
+**Ship policy — land by default; ASK only where landing spends money** (operator directive
+2026-07-31, superseding the blanket "push is always the user's call" in § Git Safety, which now
+means *never force-push / never deploy by hand*, not *never land*). A verified commit sitting on a
+branch is unfinished work, not a resting state: `📦` means the value is stranded where only this
+machine can see it — one crash, stale worktree, or forgotten branch from being lost.
+
+| Repo | On `📦`, gates green | Why |
+|---|---|---|
+| **`reso-management-app`** | **STOP — offer `/ship`, never fire it.** `📦` is terminal-valid here; hand back with the command ready to paste. | Every land bills a real Amplify (Oregon) + Fly (LAX/SIN) deploy. Spending the operator's compute is their call. |
+| **every other repo** (incl. `claude-infrastructure`) | **Auto-`/ship`** as the closing act, then re-read the ledger and report the landed state. | No per-land billing; unlanded ⇒ pure loss risk. |
+
+Both paths still require G1/G2/G4 and green gates — `/ship` never launders a red gate or a dirty
+tree, and a `/ship` that *refuses* to auto-land (landing-range escalation, land-lock contention) is
+a `⛔` to surface, never a silent 📦.
 
 **Follow-On Gate — "net-positive → just do it, don't ask" (operator standing directive
 2026-07-18).** Identified follow-on/optional work is pursued WITHOUT re-affirmation IFF ALL
@@ -323,22 +339,49 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposit
 | ⛔ **Blocked** | needs a **decision** (destructive migration / auth / nav / timeout) or **info** | `⛔ Blocked — need your call: <decision>.` |
 | 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — /handoff.` |
 | 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
-| 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, but only on a branch — /ship to land it (else lost).` |
-| ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — nothing to do.` |
+| 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, on a branch only — /ship to land it (else lost).` |
+| ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — safe to close, nothing unsaved.` |
 | _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield |
 
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
-The line's verb = the `→ Next` below; only ⛔/📦 wait on the user, the rest auto-continue. Mixed turn →
-show the worst-open rung only.
+Mixed turn → show the worst-open rung only.
 
-**Manual steps are rendered by construction (silver-platter close).** When operator-owned steps
-exist on disk (deploy-lag · pending activations · open class-C decisions · blocked backlog) or
-work sits 📦-parked, the `operator-readout.sh` Stop hook renders the close block itself — the
-state line plus numbered `▶ <exact runnable command>` lines (`◆` marks a genuine judgment call
-with no single command), damped: any change renders NOW; unchanged re-asserts after 15 min. Your
-close prose must lead with the same governing line and must NEVER bury or paraphrase a rendered
-command back into paragraphs (Silver-Platter rule); `/wrap` prints the same block
-(`hooks/operator-readout.sh --render` — one renderer, so the push and pull surfaces cannot drift).
+**Only ⛔ and 📦-in-reso may end a turn holding work.** Everything else the agent drives:
+
+- **🔧 never yields.** Ending a turn on 🔧 is a defect, not a status report. Keep going — scale up if
+  that is what it takes (subagents for read-only breadth, **Agent Teams** for 2+ code tasks), and
+  when context runs out before the work does, `/handoff` rather than stopping mid-air. "I have
+  identified the remaining items" is not a close; the items are the work.
+- **📦 outside reso auto-`/ship`s**, then re-reads the ledger — the turn closes on the *landed* state.
+- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk ·
+  the repo's gates run green *this turn* · frozen-DoD remainder 0 · no operator step this session
+  created left unrun. Any one of those unknown ⇒ it is not ✅; say which.
+
+**The close message — pyramid-lite, hard-capped.** The operator reads a close to make exactly ONE
+decision. Anything that does not change that decision belongs in the commit message, the plan file,
+or nowhere — a close needing paragraphs has buried its own decision point. Cap every close at:
+
+1. **Line 1 = the governing state**, the rung verbatim from live reads. The answer, first — no
+   preamble, no narrative wind-up, no chronology of what you tried.
+2. **≤3 supporting lines**, each a fact that *changes what the operator does* (a gate verdict, a
+   named blocker, the landed sha). Not a tour of the work; `git log` holds that.
+3. **The command block — only if the operator must run something.** See ONE COMMAND below.
+
+**Manual steps are rendered by construction (silver-platter close) and collapse to ONE COMMAND.**
+When operator-owned steps exist on disk (deploy-lag · pending activations · open class-C decisions ·
+blocked backlog) or work sits 📦-parked, the `operator-readout.sh` Stop hook renders the block from
+disk truth, damped: any change renders NOW; unchanged re-asserts after 15 min. `/wrap` prints the
+same block (`hooks/operator-readout.sh --render` — one renderer, so push and pull cannot drift).
+Two rules bind your prose:
+
+- **Relay, never paraphrase.** Lead with the same governing line and reproduce any rendered command
+  verbatim — never dissolve it back into a sentence (the Silver-Platter rule).
+- **ONE command, never a list.** Give the operator exactly one thing to select and paste, in its own
+  fenced block. Multiple runnable steps collapse to **`cc-do`** — the driver that prints them,
+  confirms once, and runs them in irreversibility order (`cc-do --list` to look first, `cc-do <stem>`
+  for exactly one). Judgment items are counted, not itemized. A numbered wall of commands that wrap
+  four lines each is the defect this replaced — it is unreadable in a terminal and unpasteable
+  besides.
 
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 
@@ -362,10 +405,10 @@ hook actuates it (`decision:block` feeds the step back as your next turn); a har
 DoD) — the hook is a dumb actuator. This is the *cross-turn* arm of auto-continue; *within* a turn you
 just keep working (don't stop on 🔧 in the first place).
 
-The single `→ Next` verb may be **auto-fired** for continue / commit / run-gate / handoff; ship and
-land are only ever **offered**, never the default verb (no editorializing toward pushing — push is
-the user's call). Per-project gate names, escalation greps, and the trunk live in the project
-`CLAUDE.md` "Session Close" section; `/wrap` computes the ledger from live git/gate reads.
+The single `→ Next` verb may be **auto-fired** for continue / commit / run-gate / handoff — and, per
+the ship policy above, for **`/ship` in every repo except `reso-management-app`**, where it stays an
+offer. Per-project gate names, escalation greps, and the trunk live in the project `CLAUDE.md`
+"Session Close" section; `/wrap` computes the ledger from live git/gate reads.
 
 **Kill-switch:** any per-prompt "…and stop", "no auto-continue", or "just do X" suspends
 auto-continue for that turn — surface and yield instead.
