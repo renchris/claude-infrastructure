@@ -17,6 +17,16 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 
 (If the repo root differs, the launcher resolves the script under the repo — `scripts/wrap-ledger.sh`.)
 
+⚠️ **The `👤` rung and the `yours` step class are NOT computed on this pull path.** Both count
+operator-only steps filed by THIS session (`cc-backlog needs`), which requires the session id — and
+`CLAUDE_SESSION_ID` is **unset** in a shell (verified 2026-08-01). Only the Stop-hook path resolves
+it, from the hook's own stdin JSON. So `/wrap` reports `YOURS_SRC=none` and a rung of at most `✅`,
+where the Stop hook would correctly say `👤`. Deliberately NOT guessed from
+`<config-dir>/projects/<hash>/.last-session-id`: that file holds whichever pane wrote LAST, so in
+this repo's normal multi-session state it would attribute a SIBLING session's steps to you — a false
+`👤` is worse than a missing one, because the whole point of the rung is that the operator can trust
+it. Read the Stop-hook block as authoritative for what is yours; `/wrap` is the git/gate view.
+
 The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hook pushes at turn
 close (one code path — the push and pull surfaces cannot drift): one state line, then the collapsed
 step lines from disk truth — `▶ cc-do` for everything runnable (deploy-lag · pending activations),
