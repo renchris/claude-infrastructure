@@ -47,9 +47,16 @@ All figures: this box, **load 14–18** (recorded per block; `uptime` before and
 | `zsh -c :` | 10.23 ms | 12.50 ms |
 | `python3 -c pass` | **31.45 ms** | 33.48 ms |
 
-`bash -c :` costs 0.29 ms more than `/usr/bin/true`. **Bash's own startup is ~0.3 ms; the other 7 ms
-is `fork`+`exec` itself.** So the only metric that matters is *total process creations per event* —
-and `python3` is worth **4.3 bash forks**.
+`bash -c :` costs 0.29 ms more than `/usr/bin/true`. **Bash's own startup is ~0.3 ms; the rest is
+`fork`+`exec` itself.** So the only metric that matters is *total process creations per event* — and
+`python3` is worth ~4 bash forks.
+
+> ⚠ **These absolutes are ~2× inflated and the correction is `5c88633f`'s, not this row's.** Timing a
+> child *from a wrapper* bills the wrapper's own fork too; the marginal cost of an extra exec of a
+> page-cached binary is **~2–4 ms**, not ~7 ms. Every figure in this subsection was taken with
+> `subprocess.run(["bash", …])` from python and carries that bias. Use the **ratios** (python3 ≈ 4×
+> bash; external `$()` ≈ 5× builtin `$()`) and the **interleaved deltas** in §4 — those are
+> bias-cancelling — and do **not** quote the absolute floor. See §3.
 
 ### 2.2 `$(` is not a fork count
 
@@ -85,8 +92,12 @@ Real hook scripts, real 18 MB transcript, real session id. The plan's chain leng
 
 The model predicts each hook: `7 ms (fork) + ~3.5 ms × external execs`. Traced dynamically,
 `validate-bash.sh` performs 18 external execs → predicted 70 ms, **measured 70.26 ms**. The model is
-validated, and it says the registered-hook count is the *minority* term:
-**11 × 7 ms = 77 ms = 19% of the chain; the other 81% is inside the hooks.**
+validated, and it says the registered-hook count is the *minority* term: **11 × 7 ms = 77 ms = 19% of
+the chain; the other 81% is inside the hooks.** Corrected for the wrapper bias above, the registered
+term is nearer **11 × ~3 ms ≈ 33 ms (~8%)** and the share inside the hooks rises to ~92% — the
+direction of the conclusion is unchanged and its margin is larger. `5c88633f` measured the collapse
+directly and found it does not pay, which is the same answer arrived at by measurement rather than
+by this model.
 
 ### 2.4 Absolute stakes — the number that decides how much to spend
 
@@ -145,13 +156,45 @@ bounded fallback collapse the PreToolUse/Bash hooks into one process and the Sto
    launchd plists absent from the live layer (§8.5.5). A new long-lived per-session process is a new
    instance of a class this repo is already failing to keep loaded.
 
-**Collapse-into-one-process — deferred, not rejected.** It is the honest fallback and needs no new
-daemon: one registered command per (event, matcher) running each hook in a subshell preserves `exit`
-semantics and saves 11 × 7 ms − ~17 ms ≈ **60 ms (15%)**. It is deferred because (a) it changes the
-execution model for every hook at once, (b) the stdout-merge contract for multiple JSON emitters in
-one chain is not yet pinned by any test, and (c) at 0.054 cores the yield does not yet justify that.
-**Revisit if the fleet's Bash rate rises materially above the measured p95 of 1332/h**, which is the
-condition under which the arithmetic changes.
+**Collapse-into-one-process — ALREADY BUILT AND MEASURED NEGATIVE, by a sibling session, `5c88633f`
+(2026-07-31), landed INERT.** `hooks/hook-chain.sh` (331 lines) + `config/hook-chains.d/` +
+`tests/hook-chain.bats` + `tests/hook-chain-live-parity.bats`. Its measurement:
+
+| | serial | dispatcher |
+|---|---|---|
+| real 6-guard PreToolUse/Bash chain | 174 ms | ~180 ms |
+| 6 **no-op** members | 60 ms | 41 ms |
+
+It wins only on trivial members, and `validate-bash.sh` — the chain's biggest member — gets **worse**
+under sourcing (94 → 142 ms). So the dispatcher is deliberately not wired: default mode `exec`,
+process model unchanged, landed so the next session does not rebuild it.
+
+**That session's methodology critique lands on this document, and it is right.** It found that timing
+`bash -c 'exit 0'` *from a wrapper* bills the wrapper's own fork, so the marginal cost of an extra
+exec of a page-cached binary is **~2–4 ms, not the ~7 ms** §2.1 measures — §2.1 used
+`subprocess.run(["bash", …])` from python and carries the same bias. **Two consequences, stated
+separately because they differ:**
+
+- **The absolute fork-floor attribution in §2.1 and §2.3 is inflated ~2×.** The registered-hook term
+  is nearer 11 × ~3 ms ≈ 33 ms (**~8%**) than 77 ms (19%). This does not weaken the §3 conclusion —
+  **it strengthens it**: the collapse targets an even smaller share than this document first claimed,
+  which is exactly what `5c88633f` then measured directly.
+- **Every *delta* in this document is unaffected**, because each was measured as an interleaved A/B
+  under one method, so a constant wrapper bias cancels: M1's −30.4 ms and M2's −32.6 ms stand. The
+  per-site figures in §2.2 are also unaffected — they are deltas measured *inside* a single `bash -c`
+  loop, with no wrapper fork per site.
+
+**Both sessions independently reached the same verdict from opposite directions** — that one is worth
+recording. `5c88633f` built the collapse and measured it not to pay; this row measured the cost
+distribution and predicted it would not pay, because the collapse addresses the minority term. It
+also independently flagged the same `curl-gate.py` waste (its live-parity suite calls it "a 46 ms
+no-op that can never decide anything"), documented it, and left it — M1 is that fix.
+
+**Remaining condition for revisiting:** `5c88633f`'s finding 3 is the sharp one — load swung
+10.6→24.0 *during* its runs at constant session count, so every delta sat inside the noise. The win
+scales with cost-per-fork, which is O(load), **so a collapse pays only in the regime it exists to
+prevent and cannot be validated at normal load.** Any future attempt must therefore be measured under
+*sustained, controlled* high load, not at the ambient load either of us had.
 
 **What the measurement supports instead:** attack the abstain class (§2.5). It needs no new process
 model, no daemon, and no change to any hook's decisions — only to what a hook spends before
@@ -226,7 +269,8 @@ one payload, the desk-role file read **3×**, `key_cwd`'s `shasum`+`cut` **2×**
 | ~~R-1~~ | **DONE — see M2 below.** | — | — |
 | R-2 | `teammate-checkpoint.sh` runs on the **match-all** PostToolUse matcher and pays 9 externals to find no team. | ~32 ms | 6 |
 | R-3 | `validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. **Deliberately not taken here** — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes. | ~42 ms | 6 |
-| R-4 | The registration collapse (§3), if the Bash rate rises above p95 1332/h. Requires first pinning the multi-emitter stdout-merge contract with a test — no such test exists today. | ~60 ms (15%) | 6 |
+| ~~R-4~~ | **Superseded before it was filed** — the collapse is built and measured negative in `5c88633f`, landed inert. Not a remainder; see §3. Any revival must be measured under *sustained controlled* high load, since the win is O(load) and vanishes into noise at ambient. | — | — |
+| R-6 | **Registry/settings coupling introduced by M1.** `config/hook-chains.d/pretooluse-bash` names `curl-gate.py` because that is what settings.json registers today. If the operator runs `26-curl-gate-scope-activate.sh`, settings.json will name `curl-gate-scope.sh` and the two sets diverge. **No runtime effect while the dispatcher is inert** (it cannot run), and `tests/hook-chain-live-parity.bats`'s drift guard compares the registry against a test-internal `MEMBERS` array rather than live settings, so nothing reds either. But whoever wires the dispatcher must reconcile them — a note to that effect is in the registry file itself, at the point of use. | — | 6 |
 | R-5 | `bash-execution.log` is **9.46 MB** and unbounded (§8.5.5 flagged it at 23% over its stated cap; it has since grown). It is the *only* source for the fleet Bash rate in §2.4, so its rotation policy silently sets the decay window of every figure in this document. | — | 6 / 10 |
 
 ---

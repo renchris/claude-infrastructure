@@ -29,6 +29,13 @@
 #   NOT replicate the "curl" substring test — that one IS attacker-influenced and replicating it in
 #   raw bytes would open a real bypass.
 #
+# ⚠ COUPLED FILE (HOOK_CHAIN_COST.md R-6): config/hook-chains.d/pretooluse-bash is the member list
+#   for the INERT hook-chain dispatcher landed in 5c88633f, and it names `curl-gate.py` because that
+#   is what settings.json registers today. After this activation runs, that registry should name
+#   `curl-gate-scope.sh` too — otherwise a future session that wires the dispatcher would silently
+#   reinstate the slow path this removes. No runtime effect until the dispatcher is wired (it is
+#   inert, default mode `exec`), and no test reds either way — hence a note rather than an edit.
+#
 # WHY C10: settings.json is the live permission/hook surface of every account — operator loads it.
 # Kill after wiring: CC_CURL_GATE_SCOPE=off (env — the shim then delegates unconditionally, i.e.
 #   byte-identical incumbent behaviour), or `--undo` (full restore).
