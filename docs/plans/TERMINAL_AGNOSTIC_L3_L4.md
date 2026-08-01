@@ -142,7 +142,7 @@ that. Until both land, headless is addressable but not yet load-bearing.
 Incremental, never a cutover: each file gains the interface call with the iTerm2 path as default.
 `handoff-fire.sh` last and in slices — it fires sessions and is the most dangerous file in the repo.
 
-### P4 — the queue (T4) — ✅ **DONE** (`5e5e82de` · `0e09dd9e` · `f66047b1`)
+### P4 — the queue (T4) — ✅ **DONE**, landed on `origin/main` 2026-07-31
 `cc-permission-beacon.sh` already fires on `PermissionRequest` → `/tmp/cc-permission-pending/<sid>.json`.
 It has no face. 100 rows fits one screen; 1000 needs grouping (a list problem, not a rendering one).
 
@@ -725,10 +725,28 @@ green because nothing was actually looking.
 
 ## 7. T4 — `bin/cc-queue`: measured findings + design (2026-07-31)
 
-**Status:** ✅ **DONE** · branch `feat/cc-queue` (cut from `origin/main` @ `49569d04`) · commits
-`5e5e82de` (tool) · `0e09dd9e` (RED-proof harness) · `f66047b1` (truncation marker, attach proof,
-scale measurement). Deliverables: `bin/cc-queue` + `tests/cc-queue.bats` (35 assertions) +
-`tests/cc-queue-redproof.py` (15 mutations).
+**Status:** ✅ **DONE — LANDED on `origin/main`** 2026-07-31, content-verified (4 paths present +
+diff-empty). Deliverables: `bin/cc-queue` · `tests/cc-queue.bats` (35 assertions) ·
+`tests/cc-queue-redproof.py` (15 mutations, all caught).
+
+| landed sha | what |
+|---|---|
+| `c95ca590` | §7 findings — telemetry spine, three-state world, `agents --json` unavailable |
+| `57e16249` | the tool |
+| `cfb59850` | RED-proof harness — and the vacuous-pass surface it exposed |
+| `f9f023ec` | truncation marker, attach proof, 1000-row measurement |
+| `4fb28f34` · `a151a0d7` | P4 done; §6→§7 renumber after T1/T2 landed their own §6 |
+| `8bbbca2a` · `9e15b9e3` · `2d4b201f` | three defects the LAND GATE caught (§7.10) |
+
+> ⚠ **Landed ≠ on the operator's PATH.** `bin/cc-queue` is a **brand-new file**, so it needs a symlink
+> minted in `~/.claude/bin/` — existing files stay fresh because their symlinks already track the
+> checkout, which is exactly why only new files rot here (memory: `repair-gated-behind-advance`). That
+> link is minted by `deploy-live.sh`'s link-only partition, which is **fail-closed on a GREEN postland
+> stamp — and the newest stamp is RED and 41 h old**. So the tool is on trunk and correct, but not yet
+> runnable as `cc-queue`. Pre-existing deploy-lag (backlog #71/#72), NOT caused by this track.
+> Unblock = advance the shared checkout, then let deploy link it:
+> `git -C ~/Development/claude-infrastructure pull --ff-only && ~/.claude/scripts/deploy-live.sh --auto`
+> (the shared checkout also holds another session's staged work — check `git status` there first).
 
 ### 7.1 The four disk sources (NO terminal polling — all reads are files)
 
