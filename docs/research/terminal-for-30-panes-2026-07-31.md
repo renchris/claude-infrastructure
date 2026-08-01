@@ -571,6 +571,30 @@ makes the addressing hazard go away. Both correct §5b; neither subsumes the oth
    **Still required to close item 1: a real multi-hour run.** The gate supplies no evidence; it only
    guarantees the next attempt is either clean or loudly void, and makes a wasted window cost seconds
    instead of the full interval — which is what makes retrying on a shared box practical at all.
+
+   → **2026-07-31 23:57Z — the gate fired on its FIRST live run, and that failure is the most useful
+   thing yet learned about how to close this item.** A gate-enforced `--interval 1800 --watch 30`
+   against live kitty (pid 7089, baseline **onscreen=4 offscreen=46**) aborted at **t+211 s**:
+   `onscreen 4→3, offscreen 46→47`, `verdict=LAYOUT-DRIFT`, exit 4, **no drift row emitted**. Three
+   consequences, the third being the one that changes the plan:
+
+   - **The abort economics are measured, not projected:** 211 s spent instead of 1800 s, and the
+     operator learns immediately rather than being handed a number to re-litigate later.
+   - **One close moved a window into the offscreen population rather than destroying it** (onscreen
+     −1, offscreen +1, total unchanged at 50). n=1, and it **convicts nobody** — every macOS app
+     carries a large offscreen population (§3), and this is precisely the single-reading inference the
+     calibration section bans. Noted only because a leak would have this same shape, so a later reader
+     must not mistake it for evidence in either direction.
+   - 🚨 **The binding constraint on item 1 is FLEET QUIESCENCE, not instrument time.** The layout
+     moved within **3.5 minutes** on an ordinarily-busy box. A 30-minute constant-layout window is
+     therefore not something to *wait* for on a live fleet — at this churn rate a clean 1800 s window
+     is improbable and a 6-hour one effectively unreachable. **Closing item 1 needs a kitty instance
+     nothing else touches**: a fleet held deliberately still, which is an operator-scale provisioning
+     decision (30 panes on a box that has panicked twice in 48 h, against the 64-pane / 512-thread
+     ceiling) rather than something to attempt opportunistically between other work. That reframes
+     the item from *"find a quiet half hour"* to *"provision a quiet fleet"*, and is why it stays
+     🔴 OPEN here instead of being retried in a loop. Raw transcript of the abort is not committed —
+     it contains no drift row by construction, and the four lines above are its entire content.
 2. ✅ **CLOSED 2026-07-31 PM — it renders correctly.** **No real Claude Code in a kitty pane.** Every
    challenger measurement used a synthetic alternate-screen repainter. kitty is a strict VT
    implementation and should render Ink correctly — but "should" is the word the evidence rules ban.
