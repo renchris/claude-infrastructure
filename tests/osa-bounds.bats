@@ -22,11 +22,18 @@
 # nobody reads its output twice. So the scan below is anchored to osascript in COMMAND POSITION with
 # an actual flag after it, and every exclusion below is a NAMED class, not a blanket carve-out.
 #
-# EXEMPTION, stated rather than hidden: `osascript -e 'delay <n>'` is a sleep implemented in the
+# EXEMPTION 1, stated rather than hidden: `osascript -e 'delay <n>'` is a sleep implemented in the
 # osascript interpreter with NO target application. It cannot block on another process's event loop,
 # which is the entire hazard. The pattern is narrow enough that no call carrying a `tell application`
 # can launder itself through it, and the exempted lines are printed by the tree test rather than
 # silently dropped.
+#
+# EXEMPTION 2, likewise: a line that only PRINTS the word — an echo/printf of a teardown hint for a
+# human. No process is spawned, so bounding it would change a string and fix nothing. Stated in full
+# at MENTION_RE below, where the rule is written as a statement about execution (no separator, no
+# substitution ⇒ nothing on the line can run) rather than as "it looks like an echo"; it is likewise
+# printed by its own tree test, and has a positive control proving a real call on an echo line is
+# still caught.
 #
 # RED-PROOF: fails against the pristine pre-change tree, where hooks/lib/osa.sh does not exist and
 # bin/screenshot-to-clipboard.sh:18 + bin/dia-cdp-launch.sh:322 are bare calls:
@@ -57,13 +64,41 @@ setup() {
 # ── the scan: ONE implementation, used by both controls AND the tree assertion ──────────────────
 # A control that exercised a re-typed copy of the expression would prove nothing about the
 # expression the tree is actually judged by.
-ac22_scan() { # <path>… → hazardous "file:line:text" rows
+ac22_scan_raw() { # <path>… → rows before the mention-exemption (see MENTION_RE below)
   "$G" -rnE '^[^#]*(^|[[:space:];&|(`])osascript[[:space:]]+-' "$@" 2>/dev/null \
     | "$G" -vE '[a-z0-9_]+_(osa|bounded)[[:space:]]+([0-9]+[[:space:]]+)?osascript' \
     | "$G" -vE 'timeout[[:space:]]+[0-9]' \
     | "$G" -vE 'command -v' \
     | "$G" -vE 'additionalContext' \
     | "$G" -vE "osascript -e '(delay)[[:space:]]+[0-9.]+'"
+}
+
+# EXEMPTION 2, stated rather than hidden: a line that only NAMES osascript inside a hint it PRINTS.
+# scripts/terminal-bakeoff.sh:248 echoes the teardown command a human should run; no osascript
+# process is spawned, so "bounding" it would change a string and fix nothing.
+#
+# THE RULE IS NOT "it starts with echo" — that would be exactly the denylist-of-spellings defect this
+# file already carries a scar from, and it would exempt `echo "$(osascript …)"`, a real call. The rule
+# is a statement about EXECUTION: for the named osascript to run, the line must either introduce a new
+# command (a `;`, `&`, `|` separator) or substitute one (`$(` or a backtick). Deny both and nothing on
+# the line can execute — the word is an argument to echo/printf and cannot be anything else. `$` is
+# tolerated only when NOT followed by `(`, so `$GHOSTTY_WIN` interpolates but `$(…)` never exempts.
+# Anchored past grep's own `path:line:` prefix so the restriction covers the whole source line.
+MENTION_RE='^[^:]*:[0-9]+:[[:space:]]*(echo|printf)[[:space:]]([^;&|`$]|\$[^(])*$'
+
+ac22_scan() { # <path>… → hazardous "file:line:text" rows
+  ac22_scan_raw "$@" | "$G" -vE "$MENTION_RE"
+}
+mention_exempt() { # <path>… → the rows exemption 2 removed (reported, never silently dropped)
+  ac22_scan_raw "$@" | "$G" -E "$MENTION_RE" || true
+}
+# The counterpart, and the reason exemption 2 is safe to have at all — an INDEPENDENT property, not a
+# restatement of MENTION_RE: in a genuinely-printed mention the word sits inside a quoted string, so
+# an ODD number of double quotes precedes it. A row that got exempted while its osascript sits OUTSIDE
+# any string is a laundered call, whatever the separator rule thought.
+mention_launder(){ # <path>… → exempt rows whose osascript is NOT inside a quoted string (empty = clean)
+  mention_exempt "$@" | awk '{ i=index($0,"osascript"); if(i==0) next;
+    pre=substr($0,1,i-1); if (gsub(/"/,"\"",pre) % 2 == 0) print }'
 }
 
 # The counterpart to that last exclusion, and the reason it is safe. `delay N` runs inside the
@@ -192,6 +227,45 @@ delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty 
   [ "$s" -eq 0 ] || { echo "precondition changed: ac22_scan now catches this unaided, so this guard's premise needs re-deriving"; false; }
   n="$(delay_launder "$D/laund" | "$G" -c . || true)"
   [ "$n" -eq 1 ] || { echo "the laundering guard did not fire (n=$n) — the delay exemption is a hole"; false; }
+}
+
+@test "AC22: the printed-mention exemption is reported, never silently dropped" {
+  # Same discipline as the delay exemption above: an exemption nobody can see is indistinguishable
+  # from a hole. If this list ever grows a row that is not a printed hint, it is visible in the gate.
+  ex="$(mention_exempt "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts")"
+  echo "mention-exempt sites (osascript NAMED in an echo/printf hint — no separator, no substitution, so nothing executes):"
+  printf '%s\n' "$ex"
+  bad="$(mention_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts" | "$G" -c . || true)"
+  [ "$bad" -eq 0 ] || { echo "a call outside any quoted string was exempted as a printed mention:"; mention_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts"; false; }
+}
+
+@test "AC22 control (+): a real call sharing a line with an echo does NOT escape the mention-exemption" {
+  # The mandatory counterpart to exemption 2, in the shape of the delay control above. A rule that
+  # merely matched `echo` would exempt BOTH of these — the first executes osascript in a new command
+  # after the separator, the second substitutes it into echo's own argument list. Neither is a
+  # printed mention, and both must survive the exemption.
+  mkdir -p "$D/mention"
+  {
+    printf '#!/bin/bash\n'
+    printf 'echo "teardown hint: osascript -e ..."; osascript -e %s\n' "'tell application \"Finder\" to activate'"
+    printf 'echo "$(osascript -e %s)"\n' "'tell application \"Dia\" to activate'"
+  } > "$D/mention/m.sh"
+  n="$(ac22_scan "$D/mention" | "$G" -c . || true)"
+  [ "$n" -eq 2 ] || { echo "expected BOTH real calls to survive the mention exemption (n=$n):"; ac22_scan_raw "$D/mention"; echo "-- exempted:"; mention_exempt "$D/mention"; false; }
+}
+
+@test "AC22 control (-): a printed teardown hint is NOT flagged" {
+  # The line the exemption exists for, reproduced as a fixture so the rule is pinned in BOTH
+  # directions — a later tightening that re-convicts a printed hint fails here rather than in review.
+  mkdir -p "$D/mention2"
+  {
+    printf '#!/bin/bash\n'
+    printf '  echo "  (teardown: osascript -e %s)"\n' "'tell application \\\"Ghostty\\\" to close window (first window whose id is \\\"\$WIN\\\")'"
+  } > "$D/mention2/hint.sh"
+  n="$(ac22_scan "$D/mention2" | "$G" -c . || true)"
+  [ "$n" -eq 0 ] || { echo "a printed teardown hint was flagged as a call site:"; ac22_scan "$D/mention2"; false; }
+  m="$(mention_exempt "$D/mention2" | "$G" -c . || true)"
+  [ "$m" -eq 1 ] || { echo "the hint was dropped by some OTHER filter (m=$m) — this control is vacuous"; false; }
 }
 
 # ── the shared lib ──────────────────────────────────────────────────────────────────────────────
