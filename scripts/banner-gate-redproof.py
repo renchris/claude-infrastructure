@@ -87,10 +87,11 @@ def sandbox():
         # those cases are currently last: "last" is a property of the file's ordering, not of the
         # sabotage, and this list going stale is the documented way one case comes to fail on
         # another's damage.
-        "HAT_CROWN_H",
+        "HAT_CONE_ROWS",
+        "HAT_H",
         "HAT_BRIM_W",
         "WAND_CELLS",
-        "PROP_INK",
+        "prop_accent",
     ]
     saved = {n: copy.deepcopy(getattr(g, n)) for n in names}
     try:
@@ -493,9 +494,13 @@ def _story_sky_with_mechanism():
 # than one cell up, i.e. it compared a number to itself. It could not fire in either direction, and
 # it duly reported a green build for as long as the crown was two cells tall. A gate over the props
 # is worth having only if sabotaging each prop makes it speak, so each one is sabotaged here.
-@case("prop: a hat crown tall enough to reach the type", "inside the one cell of air")
+@case("prop: a hat cone tall enough to reach the type", "inside the one cell of air")
 def _hat_too_tall():
-    g.HAT_CROWN_H = 4
+    # One more step on the cone. HAT_H is derived from the row list, so both must move together —
+    # exactly as the emitter reads them, or the sabotage would draw a taller hat than it declares
+    # and the gate would be judging a shape nothing renders.
+    g.HAT_CONE_ROWS = (1, 3, 5, 7)
+    g.HAT_H = len(g.HAT_CONE_ROWS) + 1
     g.build(v())
 
 
@@ -515,9 +520,10 @@ def _wand_reaches_b():
 
 @case("prop: a hatband invisible against the crown it is on", "under the 3.0:1 floor")
 def _band_no_contrast():
-    # The measured shape of the shipped defect, aimed at the band instead of the tip: ink a shade off
-    # the thing it sits on. `l.fg` on `l.rule` was 1.2:1 and the wand had no tip in daylight.
-    g.PROP_INK = "#7d6a76"
+    # The measured shape of the shipped defect: an accent a shade off the prop it sits on. `l.fg` on
+    # `l.rule` was 1.2:1 and the wand had no tip in daylight. Sabotaging the FUNCTION rather than a
+    # constant is what the accent now is, and it is in the sandbox list for that reason.
+    g.prop_accent = lambda theme, scheme: "#7d6a76"
     g.build(v())
 
 
