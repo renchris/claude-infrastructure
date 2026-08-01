@@ -38,7 +38,9 @@ machinery that verifies the model.**
 - **Concision rule: landed 01:05 today** (`9b969edb`) as § Communication Discipline + a closing
   `<tone_preference>` block — chat brevity, narration cadence, written-file length, and
   "never add verification you were not asked for". This is the single most important Opus 5 prompt
-  change and it is done. **But see D1 below — it landed in only one of the two files.**
+  change and it is done — in the repo **and**, since the 01:18 deploy, in the live `~/.claude` layer
+  (byte-identical to trunk). *An earlier revision of this doc claimed the live layer had missed it;
+  that claim is withdrawn — see D1.*
 
 ## Measured state of the live fleet (2026-08-01 01:03)
 
@@ -57,23 +59,45 @@ machinery that verifies the model.**
 
 ## D. The open gaps, in priority order
 
-### D1 — The live global `~/.claude/CLAUDE.md` never got the concision fix
-`~/.claude/CLAUDE.md` is a **separate real file, not a symlink** (`-rw-------`, Jul 31 12:51). The
-project CLAUDE.md is the one `9b969edb` edited. So § Communication Discipline and `<tone_preference>`
-are live **only for sessions running in claude-infrastructure** — every other project still loads the
-verbose-by-default corpus. The project CLAUDE.md documents this exact hazard ("apply the same edits
-there"); it was missed this time. *Cheapest high-value fix on this list.*
+### ~~D1 — The live global `~/.claude/CLAUDE.md` never got the concision fix~~ — WITHDRAWN, I was wrong
+**Retracted 2026-08-01, same session, before anyone acted on it.** The original claim was that
+`~/.claude/CLAUDE.md` is a separate real file that had missed `9b969edb`, leaving every non-infra
+project verbose-by-default. That was a **misdiagnosis of a transient deploy-lag window as permanent
+drift.**
+
+What is actually true: the file *is* a real file rather than a symlink, but `install.sh:407-409`
+**copies** `<repo>/CLAUDE.md` → `~/.claude/CLAUDE.md` (and `sync.sh:97` mirrors it) — the repo is the
+declared source of truth and the live layer is advanced by the `deploy-live` lane, not by hand.
+The sibling commit landed **01:05:58**; the deploy ran at **01:18:16**. I sampled the live file inside
+that ~13-minute window, saw `grep -c 'Communication Discipline'` = 0, and wrote it up as a missed
+hand-edit. Re-checked after: `git show origin/main:CLAUDE.md | diff - ~/.claude/CLAUDE.md` is
+**byte-identical**. There was never anything to fix.
+
+**The durable lesson, which is the part worth keeping:** in a repo whose live layer is deployed
+asynchronously from trunk, *any* live-vs-trunk comparison taken without first checking the deploy
+lane's clock measures **lag, not drift** — and lag and drift call for opposite responses (wait vs.
+intervene). Before reporting live-layer drift: read `deploy.log` / the newest `postland/stamps`, and
+compare against the commit's own timestamp. A hand-sync "fix" here would have been a no-op racing a
+lane that was already doing the work correctly.
+
+*(This also cost the doc its "cheapest high-value fix". Genuine remaining work starts at D2.)*
 
 ### D2 — Two rules in the resident corpus are now factually false or actively harmful
 Both appear in **both** CLAUDE.md files:
 
-- `:190/:191` — **"Default model = Opus 4.8 @ effort max."** False on both halves (lead is
-  `claude-opus-5` @ `high`, measured). The entire § Frontier Tier Routing is built on this premise.
-- `:171-173/:172-174` — **"No parallelism cap; decomposition determines count… Default N=12"**, plus
+- **D2a — FIXED 2026-08-01.** `:190/:191` said **"Default model = Opus 4.8 @ effort max"** — false on
+  both halves (lead is `claude-opus-5` @ `high`, measured), and the entire § Frontier Tier Routing
+  rested on it. Corrected in place to `Opus 5 @ effort high`, citing the SSOT and the launcher flags,
+  with the narrowed-Fable-delta caveat added inline. A pure fact-fix, so it was driven, not asked.
+- **D2b — YOUR CALL, not driven.** `:171-173/:172-174` — **"No parallelism cap; decomposition
+  determines count… Default N=12"**, plus
   🚨 **PARALLELIZE BY DEFAULT** at `:130/:131`. Anthropic's guidance for Opus 5 is the opposite:
   cap delegation, don't delegate what you can do in a handful of tool calls, don't use subagents to
   verify your own work, prefer one subagent to several. We are spurring a horse that is already
-  bolting.
+  bolting. **Left standing deliberately:** this is an explicit operator standing directive
+  (2026-07-29) carrying its own written rationale for outranking runtime instructions — the kind of
+  settled value-choice a session does not get to overturn on new evidence alone. The evidence says
+  revisit it; the decision is the operator's.
 
 ### D3 — Effort re-tier: the config was written but nothing reads it
 `model-config.yaml` carries a complete Opus 5 ladder — `opus5_default: high`,
@@ -164,7 +188,13 @@ on Claude Code or Cowork surfaces."** Do not design around it for CC sessions.
 
 ## Sequencing
 
-- **Now, cheap:** D1 (sync the global file), D2 (two false rules).
+- ~~D1~~ — withdrawn (was a deploy-lag misread, not a defect).
+- **DONE 2026-08-01:** D2a — the `Default model = Opus 4.8 @ effort max` line corrected to
+  `Opus 5 @ effort high`, with the narrowed-Fable-delta caveat inline.
+- **Blocked on you (value-fork):** D2b — 🚨 PARALLELIZE BY DEFAULT · "No parallelism cap" · N=12.
+  These are an explicit **operator standing directive (2026-07-29)** with a written rationale for
+  outranking runtime instructions. Anthropic's Opus 5 guidance points the other way. Changing a
+  standing directive is your call, not a fact-fix — so it is surfaced, not driven.
 - **Next:** D3 (wire the `opus5_*` ladder, un-invert the effort floor), D4 (rescale five constants).
 - **Then, design work:** D5, D6, D7.
 
