@@ -358,7 +358,7 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposit
 | State | = disposition row | One-line readout |
 |---|---|---|
 | ⛔ **Blocked** | needs a **decision** (destructive migration / auth / nav / timeout) or **info** | `⛔ Blocked — need your call: <decision>.` |
-| 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — /handoff.` |
+| 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — recycling / handing off.` (three dispositions below) |
 | 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
 | 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, on a branch only — /ship to land it (else lost).` |
 | ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — safe to close, nothing unsaved.` |
@@ -382,6 +382,23 @@ Mixed turn → show the worst-open rung only.
   it, and close on *your* state. The converse binds equally — never launder someone else's red into
   a ✅; say whose it is.
 - **📦 outside reso auto-`/ship`s**, then re-reads the ledger — the turn closes on the *landed* state.
+- **Context is a CLOSE-TIME decision, not a background worry** (operator directive 2026-08-01).
+  Judge the context exactly as you judge the work, and **never idle waiting on the user because you
+  are low** — that spends context without banking anything. § Context Stewardship owns the fill
+  thresholds; this owns the disposition:
+
+  | | Test | Action |
+  |---|---|---|
+  | **♻️ Recycle** | Everything of value is already on disk (committed · plan · memory · packet). The context holds no judgment a successor could not re-derive. | `handoff-fire.sh --recycle` — same pane, fresh context. The cheapest case and the common one. |
+  | **📤 Handoff** | Work remains AND it needs a *different* setup (another repo, account, or worklist), or this pane should retire. | `Skill(handoff)` — build the bridge, then fire. Never hand-type the chain. |
+  | **⏸ Hold** | The context IS the asset: a live exchange, a half-formed judgment, an investigation whose *dead ends* are the value and are nowhere on disk. | **Do not cut.** Finish the thought, PERSIST it, then recycle at the natural seam. |
+
+  **The Hold test, stated so it cannot become an excuse:** ask *"what would a successor reading only
+  the disk get wrong?"* A concrete answer — a rejected approach and why, a measurement that
+  contradicts the obvious reading, an operator preference given in words — is a real Hold, and its
+  FIRST action is to write that answer down, which converts the Hold into a Recycle. **No concrete
+  answer means no Hold.** "I have a lot of context" is not an answer; persisting is precisely what
+  stops it being true.
 - **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
