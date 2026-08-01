@@ -3603,14 +3603,38 @@ def ground_detail(art: Art) -> str:
 # is the same number on both sides of the comparison. It was true by construction, could not fail,
 # and went on passing while the crown was two cells tall — a checker holding its own stale copy of
 # its subject's geometry, which is a defect this repo has now paid for more than once.
-HAT_CROWN_W, HAT_CROWN_H = (
-    5,
-    3,
-)  # the crown: TALL, and narrower than the brim. Both are the read.
-HAT_BAND_H = 1  # the hatband — the crown's bottom row, in the contrasting band colour
+# IT IS A WIZARD'S HAT, NOT A TOP HAT. That was the operator's third and decisive correction, with
+# reference images: a tall CONE, a wide flaring brim, a contrasting band at the cone's base, stars.
+# The two earlier rounds were both answering the wrong question — the first grew the crown, the second
+# widened the brim, and both were building a top hat, which was never what "magician hat" meant.
+#
+# A cone's whole identity is HEIGHT, so the binding question was how much of it exists. That was
+# MEASURED rather than argued this time (scratch `headroom.py`: render each variant twice, once with
+# `.wm,.sub` suppressed, diff, and read the lowest type pixel in the columns the crown occupies).
+# The type's real ink sits at canvas y=182-189 depending on the variant's subtitle baseline, not at
+# the KEEPOUT box's 208 and certainly not at the 262 the original prose claimed. With a full cell of
+# air that puts the crown's ceiling at FOUR cells above the creature's own top edge — one more than
+# the top hat had, and exactly enough for a three-step cone over a band.
+#
+# The cone is a stepped stack, widths from the point down. Two steps of two cells each is the taper;
+# anything shallower needs height this frame does not have.
+HAT_CONE_ROWS = (1, 3, 5)
+HAT_BAND_W = (
+    7  # the band, at the cone's base — 64% of the brim, the reference proportion
+)
 HAT_BRIM_W, HAT_BRIM_H = 11, 1
-HAT_CROWN_X = (11 - HAT_CROWN_W) / 2  # centred on the sprite's own 11-cell grid
-HAT_BRIM_X = (11 - HAT_BRIM_W) / 2
+# ...and the brim DROOPS: one cell at each end hangs a row lower, which is what turns a flat plank
+# into the flared brim every reference photo has. Costs no headroom because it grows downward.
+HAT_BRIM_DROOP = 1
+# Total rows above the body — the cone plus its band. Read by the emitter AND by the ceiling gate,
+# so a taller cone cannot be drawn without the gate seeing it.
+HAT_H = len(HAT_CONE_ROWS) + 1
+# NO STAR. Every reference hat carries them and this scene has a whole starfield to rhyme with, but
+# a star has to be ONE CELL here, and at one cell on a 5-cell-wide cone it renders as a NOTCH — a
+# hole punched in the silhouette, not a mark on it. Tested at the README's own size in both schemes
+# (scratch `wizardlab.py`, candidates X2/X3/X4) and it read as damage in all six panels. The
+# one-cell legibility floor is the same rule that governs the barrier; a feature that cannot be
+# drawn above it is not drawn.
 # The wand, left to right: [ferrule][rod][rod][tip]. Four cells starting at the right arm's own
 # column, so it is HELD rather than floating.
 WAND_X, WAND_ROW = 11, 2
@@ -3623,14 +3647,19 @@ WAND_CELLS = WAND_ROD_CELLS + 2  # the two tips
 # ITSELF — the barrier that shipped at a third of it read as a scratch on the render. These are an
 # accent on a prop already a full cell thick, and they are the same sizes as the cheer's own sparks.
 WAND_SPARKS = ((15.2, 2.0, 0.6), (15.0, 3.2, 0.5), (15.5, 2.7, 0.45))
-# The hatband is scheme-INDEPENDENT and the wand's TIPS are not, and the split is this file's own
-# palette rule — ink is coloured by WHAT IT SITS ON. The band sits entirely on the crown, i.e. on
-# `rule`, and every theme already picks `rule` to read against its own sky, so one near-black serves
-# all eight themes and the hat is the same object at dusk as at dawn. The wand's tips are silhouetted
-# against the SKY on both sides of the rod, so they invert with it like every other sky-borne prop.
-# The contrast that decides whether either is SEEN is against `rule` in both cases — the band's
-# background and the tips' own rod — and the gate measures exactly that, per theme, both schemes.
-PROP_INK = "#15111c"
+
+
+# The hatband and the wand's two TIPS take the SAME accent, and it inverts with the scheme: the
+# brightest ink at night, the wordmark's near-black by day. A wizard hat's band is silver or gold in
+# every reference photo, so bright is right at dusk — but a bright band on the light scheme's pale
+# taupe `rule` would be a band nobody sees, which is the defect this pair already shipped once (the
+# light scheme tipped the wand in `l.fg`, #8e7d6b on a #a8968a rod, 1.2:1). What decides whether
+# either mark EXISTS for the reader is its contrast against `rule` — the band's background and the
+# tips' own rod — so that is what the gate measures, per theme, in both schemes.
+def prop_accent(theme: Theme, scheme: str) -> str:
+    return theme.star if scheme == "dark" else theme.wm
+
+
 PROP_CONTRAST_MIN = 3.0
 
 
@@ -3742,29 +3771,24 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
 
     # THE SUMMONING's hat and wand — the two things that say MAGICIAN, and neither did.
     #
-    # THE HAT READ AS A CAP, TWICE. The first version was a 5x1 crown on a 7x1 brim; the fix doubled
-    # the crown to 5x2 and the operator's verdict on the shipped result was unchanged — "it looks like
-    # a normal hat". Rendering it at the README's own 838 px, beside candidates, says why, and neither
-    # reason was the one the first fix addressed:
+    # THE HAT WAS THE WRONG HAT — for three rounds, and the first two were answering the wrong
+    # question. v1 was a 5x1 crown on a 7x1 brim; v2 doubled the crown; v3 widened the brim to 11 and
+    # made it a proper top hat with a band. The operator's verdict after v2 was unchanged and after
+    # v3 came with reference photographs: it is a WIZARD's hat. A tall cone, a wide flaring brim, a
+    # contrasting band at the cone's base. "Magician hat" never meant a stovepipe, and no amount of
+    # tuning a top hat was going to arrive at a cone — a repeated verdict indicts the DIAGNOSIS, not
+    # the magnitude, and that lesson cost two builds here.
     #
-    #   1. THE BRIM DID NOT OVERHANG ANYTHING. The body is nine cells wide; the brim was SEVEN. A brim
-    #      narrower than the head is not a brim — no sky shows under it, so the whole prop collapses
-    #      into one grey mass sitting on the head, which is exactly what a cap is. Eleven cells puts a
-    #      full cell PROUD of the body on each side, and that overhang is what the eye reads as "hat".
-    #   2. THE CROWN WAS STILL WIDER THAN TALL. 5 wide by 2 high is a block. Three cells is the point
-    #      at which the crown stops being a lid and starts being a stovepipe.
+    # What v3 did get right survives unchanged, because a wizard hat needs both: the brim must be
+    # WIDER THAN THE HEAD (nine cells) or no sky shows under it and the whole prop collapses into the
+    # silhouette; and the band is the cheapest cue on the hat, a colour change rather than a shape
+    # detail, so it survives the render scale.
     #
-    # THREE CELLS IS AVAILABLE, and the note that said otherwise was wrong on its own arithmetic: it
-    # claimed "the keep-out ends at y=262" when `KEEPOUT` ends at y=208, and 262 is simply where a
-    # two-cell crown happens to reach. A three-cell crown tops out at canvas y=242 and clears the
-    # keep-out box by 34 px. It is the FOURTH cell that is unavailable, and `assert_summon_geometry`
-    # now derives that from KEEPOUT instead of from prose. (The hop cannot spend the margin either:
-    # `hop_pulses` slides every hop clear of every declared beat window, so the creature is not
-    # airborne while it is wearing this.)
-    #
-    # THE HATBAND is the third cue and the cheapest — a contrasting row at the base of the crown, the
-    # one marking every top hat in the world carries. It costs no height, and it survives the render
-    # scale because it is a colour change rather than a shape detail.
+    # THE CONE'S HEIGHT was the one thing genuinely in doubt, and it is now MEASURED rather than
+    # argued — see HAT_CONE_ROWS. Four cells, and `assert_summon_geometry` derives the ceiling from
+    # the subtitle's own baseline so the gate moves if the type does. (The hop cannot spend the
+    # margin either: `hop_pulses` slides every hop clear of every declared beat window, so the
+    # creature is not airborne while it is wearing this.)
     #
     # THE WAND WAS A STUB. Two cells of rod plus a tip, in two tones a shade apart, reads as a grey
     # bar poking out of the body — and in the LIGHT scheme the tip was `l.fg` against `l.rule`, which
@@ -3779,13 +3803,28 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
     hat = (
         (
             f'<g class="smHat{sfx}">'
-            f'<rect x="{fmt(HAT_CROWN_X * c)}" y="{-HAT_CROWN_H * c}" '
-            f'width="{HAT_CROWN_W * c}" height="{(HAT_CROWN_H - HAT_BAND_H) * c}"/>'
-            f'<rect class="smHatBand" x="{fmt(HAT_CROWN_X * c)}" y="{-HAT_BAND_H * c}" '
-            f'width="{HAT_CROWN_W * c}" height="{HAT_BAND_H * c}"/>'
-            f'<rect x="{fmt(HAT_BRIM_X * c)}" y="0" width="{HAT_BRIM_W * c}" '
+            # the cone, point first: each row centred on the sprite's own 11-cell grid
+            + "".join(
+                f'<rect x="{fmt((11 - w) / 2 * c)}" y="{-(HAT_H - i) * c}" '
+                f'width="{w * c}" height="{c}"/>'
+                for i, w in enumerate(HAT_CONE_ROWS)
+            )
+            + f'<rect class="smHatBand" x="{fmt((11 - HAT_BAND_W) / 2 * c)}" y="{-c}" '
+            f'width="{HAT_BAND_W * c}" height="{c}"/>'
+            f'<rect x="{fmt((11 - HAT_BRIM_W) / 2 * c)}" y="0" width="{HAT_BRIM_W * c}" '
             f'height="{HAT_BRIM_H * c}"/>'
-            f"</g>"
+            # the brim's drooping ends. They sit a row BELOW the brim, over sky rather than over the
+            # body — row 0 of the sprite is only 1..10, so these two columns are open at this height
+            # — which is what lets a flat plank read as a brim that curves.
+            + "".join(
+                f'<rect x="{fmt(x * c)}" y="{HAT_BRIM_H * c}" '
+                f'width="{HAT_BRIM_DROOP * c}" height="{c}"/>'
+                for x in (
+                    (11 - HAT_BRIM_W) / 2,
+                    (11 + HAT_BRIM_W) / 2 - HAT_BRIM_DROOP,
+                )
+            )
+            + f"</g>"
             f'<g class="smWand{sfx}">'
             f'<rect class="smWandT{sfx}" x="{WAND_X * c}" y="{WAND_ROW * c}" '
             f'width="{c}" height="{c}"/>'
@@ -4084,19 +4123,28 @@ def assert_summon_clear_plate(art: Art) -> None:
     # not below `a_top - u`, i.e. compared one cell against one cell. It could not fail in either
     # direction, and it duly went on passing while the crown was two cells.
     #
-    # The ceiling is KEEPOUT — the file's one declared "no ink here" rectangle around the wordmark —
-    # plus a cell of air, so the crown never merely grazes the box. At scale 1.2 that puts the fourth
-    # cell out of reach and the third comfortably inside it, which is the arithmetic the prose beside
-    # the emitter used to get wrong in the other direction.
+    # The ceiling is THE SUBTITLE'S OWN BASELINE — the lowest type in the frame, and the number this
+    # file already uses to place it, so the gate moves if the type does. KEEPOUT was the previous
+    # ceiling and it is the wrong instrument: it is a padded rectangle for STAR placement, 26 px
+    # lower than the ink it stands in for, and it cost the cone a cell it turned out to have.
+    #
+    # Cross-checked against a render rather than trusted (scratch `headroom.py`: banner with `.wm,
+    # .sub` suppressed, diffed against the whole frame, lowest type pixel in the crown's own columns)
+    # — measured y=183 for the two variants at baseline 182 and y=189 for the two at 188, i.e. the
+    # allowance below is right to a pixel on all four.
+    sub_baseline = 188 if art.hairline else 182
+    type_ink = (
+        sub_baseline + 0.25 * 17
+    )  # + a descender's worth of the subtitle's 17px face
     a_top = GROUND - SPRITE_H * art.clawd_scale
-    hat_top = a_top - HAT_CROWN_H * u
-    type_floor = KEEPOUT[3] + u
+    hat_top = a_top - HAT_H * u
+    type_floor = type_ink + u
     if hat_top < type_floor:
         raise SystemExit(
-            f"gen[{art.key}]: the hat's {HAT_CROWN_H}-cell crown reaches y={hat_top:.0f}, inside the "
-            f"one cell of air this scene keeps under the wordmark keep-out (y={KEEPOUT[3]}, so the "
-            f"floor is y={type_floor:.0f}). A prop that grazes the type is the one thing nothing in "
-            f"this frame may do. Reduce HAT_CROWN_H."
+            f"gen[{art.key}]: the hat is {HAT_H} cells tall and reaches y={hat_top:.0f}, inside the "
+            f"one cell of air this scene keeps under the subtitle (its ink ends at y={type_ink:.0f}, "
+            f"so the floor is y={type_floor:.0f}). A prop that grazes the type is the one thing "
+            f"nothing in this frame may do. Shorten HAT_CONE_ROWS."
         )
     # The brim is the read — a brim no wider than the head shows no sky under it and collapses into
     # the silhouette, which is how two rounds of "it looks like a normal hat" happened. The body is
@@ -4111,11 +4159,9 @@ def assert_summon_clear_plate(art: Art) -> None:
     # `rule` and nothing else. This is not hypothetical tidiness: the light scheme shipped a #8e7d6b
     # tip on a #a8968a rod, 1.2:1, and every daylight reader got a wand with no tip. The same class of
     # miss shipped a cake iced at 1.05:1 against the day sky. Measured, per theme, both schemes.
-    for scheme, theme, tip in (
-        ("dark", art.dark, art.dark.star),
-        ("light", art.light, art.light.wm),
-    ):
-        for what, ink in (("hatband", PROP_INK), ("wand tip", tip)):
+    for scheme, theme in (("dark", art.dark), ("light", art.light)):
+        accent = prop_accent(theme, scheme)
+        for what, ink in (("hatband", accent), ("wand tip", accent)):
             ratio = contrast(ink, theme.rule)
             if ratio < PROP_CONTRAST_MIN:
                 raise SystemExit(
@@ -4660,12 +4706,14 @@ def css(art: Art) -> str:
         #   · the returned work reuses the letter's OWN edge class, so it needs no
         #     override at all — which is the whole reason the brief specified an icing row.
         #   · the sparkle dots land on the ground plate, so they invert with it.
-        #   · the HATBAND lands on the crown, never on a background, so it is PROP_INK in BOTH
-        #     schemes and has no light override at all. The wand's TIPS are silhouetted against the
-        #     sky and DO invert: the light scheme used to tip the wand in `l.fg` — #8e7d6b against a
-        #     #a8968a rod, 1.2:1 — so for every daylight reader the wand simply had no tip. The
-        #     contrast gate in `assert_summon_geometry` is what makes that unrepeatable.
-        f".smHat{{fill:{d.rule}}}.smHatBand{{fill:{PROP_INK}}}"
+        #   · the HATBAND and the wand's TIPS share one accent and it INVERTS with the scheme:
+        #     bright at night (a wizard hat's band is silver or gold in every reference photo), the
+        #     wordmark's near-black by day, where a bright band on pale taupe `rule` would be a band
+        #     nobody sees. That is not hypothetical — the light scheme shipped the wand tipped in
+        #     `l.fg`, #8e7d6b against a #a8968a rod, 1.2:1, so for every daylight reader the wand
+        #     had no tip. `prop_accent` is the one definition and the contrast gate in
+        #     `assert_summon_geometry` measures it against every theme.
+        f".smHat{{fill:{d.rule}}}.smHatBand{{fill:{d.star}}}"
         f".smWandS{{fill:{d.rule}}}.smWandT{{fill:{d.star}}}"
         f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
         f".smResF{{fill:#5fa860}}"
@@ -4935,8 +4983,7 @@ def css(art: Art) -> str:
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
-        # `.smHatBand` is absent on purpose — PROP_INK sits on the crown, so it does not invert.
-        f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.wm}}}"
+        f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.wm}}}.smHatBand{{fill:{l.wm}}}"
         f".smHat{{fill:{l.rule}}}"
         f".smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
         # The cake had NO light override at all: its #f4ead8 icing measured 1.05:1 against the day
