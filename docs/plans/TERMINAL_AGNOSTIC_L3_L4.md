@@ -863,4 +863,23 @@ fleet to one line per group with per-state counts, blocked-bearing groups first.
   files T4 does not own (C10) and is a separate decision.
 - **The `[[ ]]` sweep across the other ~90 bats suites** (learning 1) is filed above, not performed.
 - **`claude agents --json` enrichment** is designed for but not implemented — the binary that has it is
-  not installed here (§6.2), so implementing it would be untestable on this box.
+  not installed here (§7.2), so implementing it would be untestable on this box.
+
+### 7.10 Three defects the LAND GATE caught that a green suite did not
+
+All three were invisible to 35 passing tests + 15 caught mutations. The gate is not ceremony.
+
+1. **The suite ran against the operator's LIVE `~/`** (`8bbbca2a`). `CC_REGISTRY_DIR` defaults to
+   `$HOME/.claude/cc-registry` and `setup()` never fixtured `$HOME`, so real fleet rows could mix into
+   assertions. Every seam *was* overridden explicitly; the leak was the backstop nobody set. Fix:
+   `export HOME="$TD/home"` in `setup()`. Caught by `test-hermeticity-lint` in seconds, by name.
+2. **`shellcheck -S warning` hid an *info*-level finding the gate blocks on** (`2d4b201f`). I verified
+   locally at `warning`; the gate runs default severity, where SC2016 fires. **Match the gate's own
+   invocation or a local green means nothing** — a weaker local check manufactures a false all-clear.
+3. **A bare `done` inside `[ ]` parses as the loop keyword** (`9e15b9e3`, SC1010) — `[ "$x" = done ]`
+   needs `'done'`. It appeared in both the tool and the suite.
+
+**The meta-lesson matches T1/T2's independently** (§6): a green signal can be green because nothing was
+looking. Here the suite was green while `[[ ]]` silently swallowed non-final assertions, the hermeticity
+leak was invisible to every test, and a weaker local shellcheck invented an all-clear. Three different
+instruments, one failure mode.
