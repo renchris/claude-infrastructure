@@ -338,3 +338,55 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   [ "$status" -eq 2 ]
   echo "$output" | grep -q 'unknown option' || false
 }
+
+# ── deploy refusal is a STEADY STATE, not an error ────────────────────────────────────────────────
+
+mklag() {  # a shared checkout that is BEHIND its origin, with a deploy script of the given exit code
+  o="$BATS_TEST_TMPDIR/lo.git"; w="$BATS_TEST_TMPDIR/lw"
+  git init -q --bare "$o"; git clone -q "$o" "$w"
+  # `cd || exit` is not ceremony here: the whole body is redirected to /dev/null, so a failed cd
+  # would silently build the fixture in the TEST's cwd and the lag assertion would then measure
+  # the wrong repo — a false green in a test whose entire job is to observe a lagging checkout.
+  ( cd "$w" || exit 1
+    git config user.email t@e.com; git config user.name t; git checkout -q -b main
+    echo base > base.txt; git add base.txt; git commit -q -m base; git push -q -u origin main
+    echo more > more.txt; git add more.txt; git commit -q -m ahead; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  printf '#!/bin/bash\nexit %s\n' "$1" > "$BATS_TEST_TMPDIR/dep.sh"
+  chmod +x "$BATS_TEST_TMPDIR/dep.sh"
+  export CC_DEPLOY_SCRIPT="$BATS_TEST_TMPDIR/dep.sh"
+}
+
+@test "a REFUSING deploy step does NOT halt the run — the activations behind it still execute" {
+  # deploy-live is fail-closed on a background verifier's green stamp ("the live layer is FROZEN
+  # until a tree verifies green"), and this box's trunk is PERSISTENT-RED for reasons no operator
+  # action clears. Deploy sorts FIRST, so treating its refusal as fatal meant the ONE COMMAND ran
+  # NOTHING: every pending activation sat behind a step that cannot succeed today.
+  mklag 1
+  mkact 70-after "$BATS_TEST_TMPDIR/ran"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$BATS_TEST_TMPDIR/ran" ]
+  [ -f "$CC_ACTIVATION_DIR/70-after.sh.done" ]
+}
+
+@test "POSITIVE CONTROL: a SUCCEEDING deploy is not merely skipped — it actually runs" {
+  # Without this, "deploy never fails the run" could be satisfied by never running deploy at all.
+  mklag 0
+  printf '#!/bin/bash\ntouch "%s"\n' "$SENT" > "$BATS_TEST_TMPDIR/dep.sh"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ -f "$SENT" ]
+}
+
+@test "POSITIVE CONTROL: an ACTIVATION failure still halts — deploy is the ONLY non-fatal class" {
+  # Making deploy non-fatal must not have made everything non-fatal — that would gut the .done
+  # earn-guard, whose whole point is that a failed activation stays pending.
+  mkact 71-bad "$BATS_TEST_TMPDIR/bad" 1
+  mkact 72-after "$BATS_TEST_TMPDIR/should-not-run"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 1 ]
+  [ ! -f "$CC_ACTIVATION_DIR/71-bad.sh.done" ]
+  [ ! -f "$BATS_TEST_TMPDIR/should-not-run" ]
+}
