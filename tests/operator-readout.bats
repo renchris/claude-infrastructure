@@ -98,6 +98,15 @@ mkrepo_unlanded() {
   ! echo "$output" | grep -q '&& touch' || false
 }
 
+@test "COLLAPSE: 2-3 judgment items name EVERY id — the round-trip case cc-decide veto needs" {
+  _legacy_pkt shipland-esc-aaaaaaa
+  _legacy_pkt shipland-esc-bbbbbbb
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 2 decisions — your call: ' || false
+  echo "$output" | grep -q 'shipland-esc-aaaaaaa' || false
+  echo "$output" | grep -q 'shipland-esc-bbbbbbb' || false
+}
+
 @test "COLLAPSE: exactly ONE runnable step is still itemised verbatim, not collapsed to a count" {
   # A count of 1 says strictly less than the step itself, and costs the same line.
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/10-solo-activate.sh"
@@ -118,14 +127,27 @@ mkrepo_unlanded() {
   ! echo "$output" | grep -q 'cc-do' || false
 }
 
-@test "COLLAPSE POSITIVE CONTROL: >3 runnable names 3 stems then +N, and never itemises the rest" {
+@test "COLLAPSE: >3 runnable drops the stem list entirely — a partial naming is noise, not info" {
+  # Naming 3 of 174 pushed these lines past 130 chars, i.e. back into the wrapping this change
+  # exists to kill, while telling the operator almost nothing. Above 3, cc-do enumerates.
   for i in 1 2 3 4 5; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/5$i-x-activate.sh"; done
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q '▶ cc-do   \[5 runnable: ' || false
-  echo "$output" | grep -q '+2' || false
+  echo "$output" | grep -q '▶ cc-do   \[5 runnable\]' || false
+  ! echo "$output" | grep -q '5 runnable:' || false
   # bounded by construction: the whole step render is ONE line here, not five.
   nlines="$(echo "$output" | grep -cE '^ (▶|◆)')"
   [ "$nlines" -eq 1 ]
+  # and it fits a terminal — the entire point.
+  [ "$(echo "$output" | awk '{print length($0)}' | sort -rn | head -1)" -le 100 ]
+}
+
+@test "COLLAPSE: 2-3 runnable DO name every stem (the naming is complete, so it round-trips)" {
+  for i in 1 2 3; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/6$i-y-activate.sh"; done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '▶ cc-do   \[3 runnable: ' || false
+  echo "$output" | grep -q '61-y-activate' || false
+  echo "$output" | grep -q '63-y-activate' || false
+  ! echo "$output" | grep -q '+' || false
 }
 
 @test "COLLAPSE: many judgment items become ONE counted line per class, carrying ids + the listing cmd" {
@@ -133,10 +155,9 @@ mkrepo_unlanded() {
   # veto` resolves an EXACT id, so the ids must survive the collapse or there is nothing to paste.
   for i in 1 2 3 4 5; do _legacy_pkt "shipland-esc-many$i"; done
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -q '◆ 5 decisions — your call: ' || false
-  echo "$output" | grep -q 'shipland-esc-many1' || false
-  echo "$output" | grep -q '+2' || false
-  echo "$output" | grep -q 'cc-decide list --open' || false
+  echo "$output" | grep -q '◆ 5 decisions — your call   cc-decide list --open' || false
+  ! echo "$output" | grep -q 'shipland-esc-many1' || false
+  [ "$(echo "$output" | awk '{print length($0)}' | sort -rn | head -1)" -le 100 ]
   nlines="$(echo "$output" | grep -cE '^ (▶|◆)')"
   [ "$nlines" -eq 1 ]
 }

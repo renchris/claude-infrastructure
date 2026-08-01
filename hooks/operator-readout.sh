@@ -486,8 +486,12 @@ render_block() {
             [ "$sc" -le 3 ] && [ -n "$stem" ] && stems="${stems:+$stems · }${stem}" ;;
         esac
       done < "$steps_file"
-      [ "$runnable" -gt 3 ] && stems="${stems} +$((runnable - 3))"
-      printf ' ▶ %s   [%s runnable: %s]\n' "$CC_DO" "$runnable" "$stems"
+      # NAME THEM ONLY WHEN THE NAMING IS COMPLETE. Three of 174 is noise, not information, and it
+      # was what pushed these lines past 130 chars — i.e. back into the wrapping this change exists
+      # to kill. At <=3 the list IS the full set (round-trippable, nothing to look up); above that
+      # the listing command is the honest pointer and cc-do itself enumerates.
+      if [ "$runnable" -le 3 ]; then printf ' ▶ %s   [%s runnable: %s]\n' "$CC_DO" "$runnable" "$stems"
+      else                           printf ' ▶ %s   [%s runnable]\n'     "$CC_DO" "$runnable"; fi
     fi
     for cls in decision backlog; do
       case "$cls" in
@@ -503,14 +507,16 @@ render_block() {
         # Name the ids it counts, up to 3. `cc-decide veto` / `cc-backlog` resolve an EXACT id, so a
         # bare count would leave nothing to paste — the round-trip defect the 8-char slice caused,
         # re-introduced by collapsing. Beyond 3 the listing command is the honest pointer.
-        stems=""; sc=0
-        while IFS="$TABC" read -r c2 mark text stem; do
-          [ "$c2" = "$cls" ] || continue
-          sc=$((sc + 1))
-          [ "$sc" -le 3 ] && [ -n "$stem" ] && stems="${stems:+$stems · }${stem}"
-        done < "$steps_file"
-        [ "$cn" -gt 3 ] && stems="${stems} +$((cn - 3))"
-        printf ' ◆ %s %s — your call: %s   %s\n' "$cn" "$clabel" "$stems" "$rcmd"
+        if [ "$cn" -le 3 ]; then
+          stems=""
+          while IFS="$TABC" read -r c2 mark text stem; do
+            [ "$c2" = "$cls" ] || continue
+            [ -n "$stem" ] && stems="${stems:+$stems · }${stem}"
+          done < "$steps_file"
+          printf ' ◆ %s %s — your call: %s   %s\n' "$cn" "$clabel" "$stems" "$rcmd"
+        else
+          printf ' ◆ %s %s — your call   %s\n' "$cn" "$clabel" "$rcmd"
+        fi
       fi
     done
     rm -f "$steps_file"
