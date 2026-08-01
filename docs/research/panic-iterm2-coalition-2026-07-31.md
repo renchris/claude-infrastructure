@@ -256,6 +256,13 @@ wide margin. These numbers are derived, not chosen — do not adjust them withou
 a fresh series (published figures in this repo have gone stale inside 36 hours; see
 [[published-figure-decays-with-its-source]]).
 
+> 🚨 **SUPERSEDED 2026-08-01 — see §8.** Every figure in the table above reproduces exactly, but
+> "zero false positives across the full boot" is true only of **this** boot. Against the *previous*
+> boot's iTerm2 coalition (331 samples) the same thresholds fire on **6.0%** of the boot, including
+> ten samples at or above the ALARM floor and a peak of **996 procs that the box survived** — six
+> processes below the fatal sample. The derivation set was one boot; the population is not.
+> **Do not treat `PROC_WARN`/`PROC_ALARM` as calibrated.** §8 has the wider denominator.
+
 **Live read.** There is no cheap per-coalition sysctl. Walk `ps -Ao pid,ppid,comm` and count
 descendants of the controlling terminal app pids (`iTerm2`, `kitty`, `ghostty`). Unreadable ⇒
 **SKIPPED**, never a fabricated 0 — rung 3's standing policy.
@@ -275,3 +282,131 @@ preventive** — and its own output should say so rather than implying protectio
 touches `classify()`, the R6 positive-control probe table, and the JSON emitter in one edit, and a
 half-applied change to a working five-rung guard is worse than none. It is the next commit, not a
 research question — every input it needs is in this section.
+
+---
+
+## 8. Verification of the fan-out claim — REFUTED, and rung 6 is mis-nouned (2026-08-01)
+
+§3 left the allocator unresolved. A follow-up reading proposed banking this:
+
+> healthy fleet ≈ **13.7 procs/session** (151/11, live 05:35Z) vs ≈ **59/session** at the panic
+> (1002/17) ⇒ the event was per-session subprocess **FAN-OUT**, not more sessions.
+
+It was flagged "one sample; confirm before banking." Confirmed against a wider denominator, it does
+not survive — and the failure is more useful than the claim would have been.
+
+### 8.1 Neither ratio is a measurement
+
+**The healthy side is not reproducible.** `~/.claude/logs/capacity-alarm.jsonl` now emits `coal_procs`
+and `sessions` in the *same* row at 60 s cadence — a paired series, first row `2026-08-01T04:56:59Z`.
+Over its 21 samples (all `coal_app:"kitty"`), `coal_procs/sessions` runs **min 3.47 · median 5.29 ·
+max 6.76**. No row reads 151 procs; none reads 11 sessions (the 05:27→05:47Z window never drops below
+16 sessions, and `coal_procs` peaks at 142). 13.7 is a hand-read the instrument does not corroborate.
+
+**The panic side mixes two populations.** The numerator (1002) is systemstats `CoalitionMemory.
+process_count` for cid 640 — **iTerm2 alone**. The denominator (17) is the guard's box-wide Claude
+tree count from `2026-08-01T00:52:48Z`, **17 minutes earlier**. That boot had **seven** terminal
+coalitions live — a terminal bakeoff: `com.googlecode.iterm2` (max 1002), `com.mitchellh.ghostty`
+(97), `com.apple.Terminal` ×2 (62, 5), `com.cmuxterm.app` (10), `com.googlecode.iterm2.metalbench`
+(61), `net.kovidgoyal.kitty` (99). The guard row's own `top_procs` lists **both** kitty (1156 MB)
+*and* iTerm2 (983 MB). How many of the 17 sessions were inside cid 640 is unrecoverable, so 1002/17
+has no defined value. (Direction, for the record: it can only *understate* the iTerm2-only ratio.)
+
+### 8.2 The control the derivation never had: 996 procs, survived
+
+Partitioning `systemstats --dump` by boot (cids are reused across boots — the 07-27 → 08-01 archive
+holds five) gives the previous boot's iTerm2 coalition, cid 1121, **331 samples**:
+
+| | boot 4 cid 640 (derivation set) | boot 2 cid 1121 |
+|---|---|---|
+| samples | 39 | **331** |
+| max | 1002 (fatal) | **996 — survived** |
+| samples ≥ 500 | 1 (the fatal one) | **20** |
+| samples ≥ 700 | 1 (the fatal one) | **10** |
+| % of boot ≥ WARN | 2.6% | **6.0%** |
+
+Boot 2 held ≥500 procs continuously from **07-29 22:36 → 07-30 01:46 (3 h 10 m)** and peaked at 996.
+The box stayed up. The fatal boot-4 sample was 1002. **The survived and fatal classes are separated
+by six processes (0.6%)** — no threshold on this noun can distinguish them, at any setting.
+
+### 8.3 What does separate them: mass per process
+
+| sample | procs | anon | **MiB/proc** |
+|---|---|---|---|
+| boot 4 @17:58:01 healthy | 257 | 5.46 GiB | 21.8 |
+| boot 4 @16:28:01 healthy peak | 353 | 6.78 GiB | 19.7 |
+| boot 2 @00:36 **996 — survived** | 996 | 24.03 GiB | **24.7** |
+| boot 2 @02:06 last before 02:18 panic | 473 | 16.80 GiB | 36.4 |
+| boot 5 @today, peak | 224 | 6.29 GiB | 28.7 |
+| **boot 4 @18:09:51 — FATAL** | **1002** | **139.50 GiB** | **142.6** |
+
+Every healthy sample across four boots sits in **19.7–36.4 MiB/proc**; the fatal sample is **142.6**,
+**3.9× outside the band**. Boot 2 and boot 4 held the *same population* at **5.8× different mass**.
+So §3's "both count and size exploded together" is right, but only **size left the healthy envelope**
+— and size is the term rung 6 does not measure.
+
+### 8.4 The deployed rung would not have fired on its own event
+
+Rung 6's thresholds were derived from systemstats `process_count`, but the live rung measures a
+**`ps` tree-walk** (`read_coalition_procs`, `scripts/capacity-alarm.sh:343`). Those are different
+instruments. Six time-aligned pairs on today's kitty coalition:
+
+| systemstats (UTC) | procs | guard row | `coal_procs` | Δ | walk/ss |
+|---|---|---|---|---|---|
+| 04:56:21Z | 106 | 04:56:59Z | 64 | +38 s | 0.60 |
+| 05:06:21Z | 97 | 05:07:05Z | 60 | +44 s | 0.62 |
+| 05:16:21Z | 136 | 05:17:12Z | 59 | +51 s | 0.43 |
+| 05:26:21Z | 108 | 05:27:16Z | 64 | +55 s | 0.59 |
+| 05:36:21Z | 224 | 05:36:36Z | 130 | +15 s | 0.58 |
+| 05:46:21Z | 158 | 05:46:30Z | 97 | +9 s | 0.61 |
+
+**Mean 0.57 — the tree-walk reads 43% low.** Not a lag artifact: the two tightest-aligned pairs
+(Δ +9 s, +15 s) sit at 0.61 and 0.58, right on the mean. **Mechanism, corroborated:** a kernel
+coalition keeps a process that has been reparented away from the terminal, because membership is
+inherited at `posix_spawn` and does not follow reparenting — but the walk stops at pid 1 by
+construction (`while (q != "" && q + 0 > 1 && d < 64)`), so every orphan leaves its tree. Right now
+**767 of 1125 live processes have ppid 1**, among them 21 `bash` and 6 `zsh`.
+
+Consequence, in deployed units: `PROC_WARN=500` and `PROC_ALARM=700` correspond to roughly **877**
+and **1228** coalition procs.
+
+- The **fatal** sample (1002) would have walked to ≈ **571** → **WARN, never ALARM**.
+- Boot 2's **survived** 996 would have walked to ≈ **568** → **WARN**.
+
+The rung as deployed emits **the same verdict for the survived state and the fatal one**, and cannot
+reach ALARM on the event it was built for. §7's "the fatal sample clears both by a wide margin" holds
+only in the derivation instrument's units, not in the ones the code actually reads.
+
+**Why the suite is green anyway — the test is blind by construction.** `capacity-alarm-segments.bats:128`
+("the fatal 1002-proc coalition ALARMs, the healthy 353 max stays OK") calls `classify()` with the
+literals **1002 and 353**, which are *systemstats* numbers, while the live caller passes
+`read_coalition_procs` output, which is *walk* numbers. The test bypasses the instrument entirely, so
+it asserts correct behaviour on values the instrument can never emit. Its own comment says that row
+"IS the no-false-positive claim, executable" — but a claim pinned in the wrong units cannot go red for
+this defect, and did not. All 48 tests pass on the code as it stands. A control has to replay the real
+artifact, not a hand-picked stand-in for it: [[control-must-replay-the-real-artifact]],
+[[sibling-guard-makes-the-fixture-vacuous]].
+
+### 8.5 What reproduced, and what this changes
+
+Every §7 figure reproduces exactly against its own denominator — N=39, median 226, healthy max 353,
+`>400`=0, `>500`=0. §7 was accurate; it was **generalized past its population**. The correction is not
+a new number, it is a wider one.
+
+Standing conclusions:
+
+1. **Do not bank "per-session fan-out."** The count did rise without a session rise, but that state
+   has a survived precedent at the same magnitude. Fan-out is not what killed the box.
+2. **Rung 6 counts the wrong noun.** Population size cannot separate the classes; **mass per process**
+   separates them by 3.9×. Re-nouning is a design change, not a threshold tweak — the guard has no
+   per-coalition footprint instrument, and the obvious one (summing `ps rss`) is the ~2.34× shared-page
+   over-count this script's own header bans. Filed rather than half-applied, per §7's sequencing note.
+3. **A threshold must be derived in the units its consumer reads.** The 43% instrument gap turned a
+   correct derivation into a rung that cannot fire on its own event. See
+   [[control-must-replay-the-real-artifact]] and [[proxy-must-be-independent-of-what-it-supplements]].
+
+**Method note.** The claim's two halves failed for *different* reasons — the healthy half was
+unreproducible, the panic half was incommensurable — and each looked plausible beside the other.
+Two numbers that agree on a story are not corroboration when neither was measured against the same
+population; see [[wrong-cause-corroborated-by-true-metric]] and
+[[positive-control-the-denominator]].
