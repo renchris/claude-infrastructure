@@ -596,8 +596,33 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   "$BACKLOG" add --title "queued item" --project "$(basename "$w")" >/dev/null
   run hookrun "$w"
   msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
-  printf '%s' "$msg" | head -1 | grep -q '1 manual step(s)'
+  # The governing line states the IDEA (what is runnable), not the category+count. Minto Ch 7 p. 94:
+  # "There are three problems" tells the kind, not the idea — `1 manual step(s)` was exactly that.
+  printf '%s' "$msg" | head -1 | grep -q '1 runnable now'
+  ! printf '%s' "$msg" | head -1 | grep -q 'manual step(s)' || false
   printf '%s' "$msg" | grep -q 'queue: 1 open'
+}
+
+@test "governing line PARTITIONS runnable vs judgment — the summary of the level below" {
+  # Minto's first pyramid rule: an idea at any level must SUMMARISE the ideas grouped below it.
+  # Below this line sit exactly two groupings — what cc-do can clear, and what needs a human — so
+  # the honest summary is that partition, not a total that conflates them.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/80-p-activate.sh"
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/81-p-activate.sh"
+  _legacy_pkt shipland-esc-part1
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | head -1 | grep -q '2 runnable now, 1 need your call' || false
+  ! echo "$output" | head -1 | grep -q '3 manual step(s)' || false
+}
+
+@test "governing line degrades honestly when a side is EMPTY (no '0 runnable now')" {
+  # A partition that prints a zero leg is worse than the label it replaced — it asserts an idea
+  # about a grouping that does not exist.
+  _legacy_pkt shipland-esc-only1
+  _legacy_pkt shipland-esc-only2
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | head -1 | grep -q '2 need your call' || false
+  ! echo "$output" | head -1 | grep -q 'runnable' || false
 }
 
 @test "queue counts ONLY status==open of the cwd project: claimed, blocked and other-project items excluded" {

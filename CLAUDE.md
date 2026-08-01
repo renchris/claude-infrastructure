@@ -395,10 +395,23 @@ decision. Anything that does not change that decision belongs in the commit mess
 or nowhere — a close needing paragraphs has buried its own decision point. Cap every close at:
 
 1. **Line 1 = the governing state**, the rung verbatim from live reads. The answer, first — no
-   preamble, no narrative wind-up, no chronology of what you tried.
+   preamble, no narrative wind-up, no chronology of what you tried. It must carry an **idea, not a
+   category**: *"205 manual steps"* names the pile and says nothing about it — the blank assertion
+   Minto kills with *"'There are three problems' tells the kind, not the idea"* (Ch 7 p. 94).
+   *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it must
+   **summarise the level below it** (pyramid rule 1) — so it partitions along the groupings that
+   actually follow, never a total that conflates them.
 2. **≤3 supporting lines**, each a fact that *changes what the operator does* (a gate verdict, a
-   named blocker, the landed sha). Not a tour of the work; `git log` holds that.
+   named blocker, the landed sha). Not a tour of the work; `git log` holds that. (≤3 is the mind's
+   limit, Ch 6 p. 78 — aim 4–5 per grouping, never 7+.)
 3. **The command block — only if the operator must run something.** See ONE COMMAND below.
+   **Action before argument** (Ch 5 pp. 65–66): the command comes BEFORE its justification, *unless*
+   the operator cannot act without the reason first — a `--force`, a destructive flag, a choice
+   between two commands. Then one line of why, then the command. Never more than one line of why.
+
+**Acceptance — the 30-second test** (Ch 3 p. 29): if the operator cannot get the whole thinking —
+state · what it means · what to do — inside 30 seconds, the close has FAILED. And the defect is in
+the ideas, not the wording (Ch 1 p. 11): restructure it, do not polish it.
 
 **Manual steps are rendered by construction (silver-platter close) and collapse to ONE COMMAND.**
 When operator-owned steps exist on disk (deploy-lag · pending activations · open class-C decisions ·

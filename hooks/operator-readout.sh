@@ -457,7 +457,18 @@ render_block() {
 
   # ── compose (Pyramid: governing line → numbered steps → counted footer) ──
   local hdr shown=0 over
-  if [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${total} manual step(s)${state:+ · $state}"
+  # THE GOVERNING LINE MUST CARRY AN IDEA, NOT A CATEGORY (Minto, Ch 7 p. 94 — "no intellectually
+  # blank assertions": *"There are three problems" tells the kind, not the idea*; Ch 4 p. 42 "ideas,
+  # not categories"). `205 manual step(s)` is exactly that blank assertion — it names the pile and
+  # says nothing about it, on the one line the operator's eye is guaranteed to read. The honest
+  # summary of the level below is the PARTITION: what one command clears vs what needs a human.
+  # Collapse only — the itemised/legacy modes keep the historic header their tests pin.
+  if [ "$total" -gt 0 ] && [ "$CBUDGET" = collapse ]; then
+    local _run=$(( c_deploy + c_activation )) _jud=$(( c_decision + c_backlog )) _lead=""
+    [ "$_run" -gt 0 ] && _lead="${_run} runnable now"
+    [ "$_jud" -gt 0 ] && _lead="${_lead:+$_lead, }${_jud} need your call"
+    hdr="OPERATOR ▸ ${_lead:-${total} manual step(s)}${state:+ · $state}"
+  elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
