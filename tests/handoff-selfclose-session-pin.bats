@@ -27,6 +27,17 @@
 # EXTENDED here to answer `-p <pid>` for comm/tty/args, because that is the form the pin uses.
 
 setup() {
+  # PIN THE TERMINAL. Every test in this file asserts the iTerm2 path and stubs `osascript`, but
+  # handoff-fire.sh's primitives now branch on KITTY_WINDOW_ID (in_kitty), so run from inside kitty
+  # the subject takes the kitty branch while only osascript is stubbed — and the suite's verdict
+  # silently becomes a function of which terminal the developer is sitting in. Measured 2026-08-01:
+  # unpinned from kitty this file went red; env-pinned it returns to its exact baseline count, and
+  # baseline HEAD is green either way. The dependency PREDATES the branch (nothing read
+  # KITTY_WINDOW_ID before); the branch only made it observable. Same pin, same reason, as
+  # tests/it2-wrapper.bats and tests/cc-pane.bats. The kitty branches have their own coverage in
+  # tests/handoff-fire-kitty.bats. Unset the real var AND pin the kill switch — both spellings.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
 
