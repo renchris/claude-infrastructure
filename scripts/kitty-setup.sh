@@ -111,12 +111,19 @@ if [ "$MODE" = apply ]; then
   # refreshed explicitly or the kitty divert never reaches the live layer.
   cp "$REPO/bin/it2-wrapper" "$BIN_DIR/it2" && chmod +x "$BIN_DIR/it2"
   ln -sfn "$REPO/bin/it2-kitty" "$BIN_DIR/it2-kitty"
-  ln -sfn "$REPO/bin/cc-term"   "$BIN_DIR/cc-term"
+  # NOTE: no separate pane adapter is linked here. bin/cc-pane is the repo's terminal-agnostic
+  # seam and install.sh already deploys it; because its iterm2 driver shells out to
+  # $HOME/.claude/bin/it2, the divert above makes cc-pane work on kitty with no kitty driver.
+  # An earlier draft linked a second adapter here and would have dangled on a fresh clone.
 fi
 grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
 [ -x "$BIN_DIR/it2-kitty" ] && ok "it2-kitty deployed" || no "it2-kitty missing at $BIN_DIR"
-[ -x "$BIN_DIR/cc-term" ]   && ok "cc-term deployed"   || no "cc-term missing at $BIN_DIR"
+# A DANGLING symlink is the failure this checks for, not mere absence: -x follows the link, so a
+# link pointing at a file that no longer exists reports missing rather than passing on the name.
+if [ -e "$BIN_DIR/cc-term" ] || [ -L "$BIN_DIR/cc-term" ]; then
+  [ -x "$BIN_DIR/cc-term" ] || no "$BIN_DIR/cc-term is a DANGLING symlink — remove it (superseded by cc-pane)"
+fi
 
 # ── 3. the env var Claude Code's iTerm2 check reads ──────────────────────────────────────────────
 hdr "3. pane identity for Claude Code"
