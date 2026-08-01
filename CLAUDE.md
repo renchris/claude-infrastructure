@@ -447,7 +447,12 @@ Two rules bind your prose:
 - **Relay, never paraphrase.** Lead with the same governing line and reproduce any rendered command
   verbatim — never dissolve it back into a sentence (the Silver-Platter rule).
 - **ONE command, never a list.** Give the operator exactly one thing to select and paste, in its own
-  fenced block. Multiple runnable steps collapse to **`cc-do`** — the driver that prints them,
+  fenced block **tagged `bash`** — ` ```bash `, never a bare ` ``` `. The tag is what makes the TUI
+  syntax-highlight it, and that highlighting is the only thing that makes the one runnable line pop
+  out of a close made of prose (operator directive 2026-08-01). A bare fence renders as flat
+  undifferentiated text — the operator then has to *find* the command before they can run it, which
+  is the same defect as burying it in a sentence, one step less severe. Multiple runnable steps
+  collapse to **`cc-do`** — the driver that prints them,
   confirms once, and runs them in irreversibility order (`cc-do --list` to look first, `cc-do <stem>`
   for exactly one). Judgment items are counted, not itemized. A numbered wall of commands that wrap
   four lines each is the defect this replaced — it is unreadable in a terminal and unpasteable
