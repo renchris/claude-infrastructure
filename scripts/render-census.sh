@@ -172,10 +172,18 @@ fi
 # ── pane count: ONE bounded osascript, never a guess on failure ───────────────────────────────────
 # A failed pane query reports null. Substituting a remembered or derived number would make the log
 # claim a measurement that never happened.
+#
+# iTerm2 is addressed by BUNDLE ID and short-circuited on `is running` (2026-07-31). "iTerm2" is
+# only the CFBundleName of iTerm.app, so a NAME lookup resolves solely while iTerm2 is already
+# running — once the fleet moved to kitty this query stopped measuring and could raise an
+# undismissable "Where is iTerm2?" modal instead. `application id` cannot raise that modal, but it
+# CAN launch the app, which a census must never do: an observer that starts its own subject is not
+# an observer. Not running ⇒ zero iTerm2 panes, and that is a MEASUREMENT (0), not a failure (null).
 PANES="null"
 PANE_OUT="$(rc_bounded 5 osascript \
-  -e 'tell application "iTerm2" to set n to 0' \
-  -e 'tell application "iTerm2" to repeat with w in windows' \
+  -e 'if not (application id "com.googlecode.iterm2" is running) then return 0' \
+  -e 'tell application id "com.googlecode.iterm2" to set n to 0' \
+  -e 'tell application id "com.googlecode.iterm2" to repeat with w in windows' \
   -e 'repeat with t in tabs of w' \
   -e 'set n to n + (count of sessions of t)' \
   -e 'end repeat' -e 'end repeat' -e 'return n' 2>/dev/null || true)"

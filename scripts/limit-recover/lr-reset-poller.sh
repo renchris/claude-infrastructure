@@ -212,8 +212,16 @@ spawn_gui() {
   # Multi `-e` (not a heredoc) on purpose: the AppleScript stays in ARGV, which is where
   # tests/lr-reset-poller.bats' osascript stub observes the spawn — a heredoc would move it to
   # stdin and silently blind three GUI-spawn assertions (fixture-shape parity).
+  # `is running` FIRST, and iTerm2 addressed by bundle id (2026-07-31). "iTerm2" is only the
+  # CFBundleName of iTerm.app, so the old NAME lookup resolved solely while iTerm2 was already
+  # running; after the kitty migration this poller could hang on an undismissable "Where is iTerm2?"
+  # modal every 10 minutes. Failing here is the DESIGNED path, not a regression: spawn_resume's
+  # `auto` mechanism falls back to spawn_tmux, which is exactly what LR-m pins ("GUI unavailable →
+  # falls back to tmux rather than stranding the resume"). Launching iTerm2 instead would resurrect
+  # the app behind the operator on a fleet that deliberately left it.
   lrp_bounded osascript >/dev/null 2>&1 \
-    -e 'tell application "iTerm2"' \
+    -e 'if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"' \
+    -e 'tell application id "com.googlecode.iterm2"' \
     -e 'set newWin to (create window with default profile)' \
     -e "tell current session of newWin to write text \"exec /bin/bash $1\"" \
     -e 'end tell'

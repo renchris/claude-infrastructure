@@ -32,7 +32,7 @@ set -u
 # `it2 session list --json` returned rc 124 with zero output while blocked forks piled up across
 # ~110 sessions). The ~/.claude/bin/it2 shim self-bounds at 30s, but 30s of dead wait per call is
 # still a stall this caller should not absorb — and these osascript calls
-# `tell application "iTerm2"` directly — the exact wedged surface — inside a gate script.
+# `tell application id "com.googlecode.iterm2"` directly — the exact wedged surface — inside a gate script.
 # timeout(1) is resolved by ABSOLUTE PATH as well as PATH: hooks and launchd jobs run with a
 # minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
 # leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
@@ -70,7 +70,8 @@ BASE="${ITERM_SESSION_ID##*:}"
 
 list_uuids() {
   e2e_bounded osascript <<'AS' 2>/dev/null
-tell application "iTerm2"
+if not (application id "com.googlecode.iterm2" is running) then return ""
+tell application id "com.googlecode.iterm2"
   set out to ""
   repeat with w in windows
     repeat with t in tabs of w
@@ -87,7 +88,8 @@ AS
 pane_tty() { # $1=uuid → tty path or empty
   e2e_bounded osascript - "$1" <<'AS' 2>/dev/null
 on run argv
-  tell application "iTerm2"
+  if not (application id "com.googlecode.iterm2" is running) then return ""
+  tell application id "com.googlecode.iterm2"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t

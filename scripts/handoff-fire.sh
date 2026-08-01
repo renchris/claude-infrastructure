@@ -416,11 +416,32 @@ hf_bounded() {
   "$HF_TIMEOUT_BIN" -k 3 "$HF_TIMEOUT_S" "$@"
 }
 
+# iTerm2 IS ADDRESSED BY BUNDLE ID, AND NEVER LAUNCHED IMPLICITLY (2026-07-31).
+# Two separate defects, one line apart:
+#   1. Addressing it by the bare name (tell application + "iTerm2") is a NAME lookup, and the
+#      is only its CFBundleName, which AppleScript resolves ONLY while the app is already running.
+#      Once the fleet moved to kitty and iTerm2 stopped running, the name resolved to nothing:
+#      AppleScript then loads no terminology, every iTerm2 verb below parses as a class name
+#      (-2740/-2741), and on a desktop it puts up a "Choose Application — Where is iTerm2?" MODAL
+#      that a launchd/hook caller cannot dismiss. `application id` resolves through LaunchServices
+#      and cannot produce that modal.
+#   2. But `application id` also SUCCEEDS at launching — so a bare id swap would silently start
+#      iTerm2 (the app whose window objects saturated WindowServer on 2026-07-30) every time a
+#      5-minute timer polled. Every site that merely INSPECTS existing panes therefore short-
+#      circuits on `is running` first, which is the one iTerm2 reference that never launches it.
+# Net effect: with iTerm2 up, behaviour is byte-identical to before; with iTerm2 down, these calls
+# fail fast down their existing fail-loud paths instead of hanging on an undismissable modal.
+# The sole exception is boot-resume-launch.sh, which launches iTerm2 EXPLICITLY (`open -a iTerm`)
+# one line earlier — there the launch is the intent, so it carries the id swap and no guard.
+
 # Shared single-lookup writer: find the session once, type one line into it.
 as_write() { # $1=session-uuid $2=text
   hf_bounded osascript - "$1" "$2" <<'AS'
 on run argv
-  tell application "iTerm2"
+  if not (application id "com.googlecode.iterm2" is running) then
+    error "iTerm2 is not running"
+  end if
+  tell application id "com.googlecode.iterm2"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t
@@ -474,7 +495,8 @@ _as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query i
   fi
   hf_bounded osascript - "$1" <<'AS' 2>/dev/null
 on run argv
-  tell application "iTerm2"
+  if not (application id "com.googlecode.iterm2" is running) then return ""
+  tell application id "com.googlecode.iterm2"
     repeat with w in windows
       repeat with t in tabs of w
         repeat with s in sessions of t
@@ -3710,7 +3732,8 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
   hf_bounded osascript - "$1" <<'AS'
 on run argv
   set sid to item 1 of argv
-  tell application "iTerm2"
+  if not (application id "com.googlecode.iterm2" is running) then return "NOTFOUND"
+  tell application id "com.googlecode.iterm2"
     set foundWin to missing value
     repeat with w in windows
       repeat with t in tabs of w
@@ -3747,14 +3770,20 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
   # --follow raises iTerm2 (operator watching); autonomous omits `activate` so the fresh window is
   # created in the background and never pulls the operator off their current app/window (C1). The
   # raise + focus on --follow is completed by it2_land (session focus); autonomous stays background.
+  # `is running` first: this surface CREATES a window, so `application id` would happily LAUNCH a
+  # not-running iTerm2. Empty output is the failure this function already documents, and the caller
+  # (`winid="$(spawn_frontmost …)"`) already fails loud on it — a handoff must never resurrect
+  # iTerm2 behind the operator's back on a kitty fleet.
   if [ "$FOLLOW" = 1 ]; then
-    hf_bounded osascript -e 'tell application "iTerm2"' \
+    hf_bounded osascript -e 'if not (application id "com.googlecode.iterm2" is running) then return ""' \
+              -e 'tell application id "com.googlecode.iterm2"' \
               -e 'activate' \
               -e 'set newWin to (create window with default profile)' \
               -e 'return id of current session of newWin' \
               -e 'end tell'
   else
-    hf_bounded osascript -e 'tell application "iTerm2"' \
+    hf_bounded osascript -e 'if not (application id "com.googlecode.iterm2" is running) then return ""' \
+              -e 'tell application id "com.googlecode.iterm2"' \
               -e 'set newWin to (create window with default profile)' \
               -e 'return id of current session of newWin' \
               -e 'end tell'
