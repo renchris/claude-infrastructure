@@ -26,7 +26,14 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    claude-accounts --readout   # the finished markdown table + flag bullets + router footer
    ```
 
-   Paste that output. It IS the canonical structure (user directive 2026-07-11: the readout
+   🚨 **Paste that output VERBATIM into chat — every row and column, before any commentary.**
+   Not a style preference, and CLAUDE.md § Communication Discipline's conciseness rule does NOT
+   override it (that rule governs your prose — see its "brevity governs YOUR prose, never a
+   rendered artifact" clause). A summary like "all 4 accounts healthy, router says next" is a
+   FAILED `/accounts`: the operator runs this to READ the reset times, not to be told they exist.
+   Observed 2026-08-01 — the readout rendered correctly and was then dissolved into three bullets.
+
+   It IS the canonical structure (user directive 2026-07-11: the readout
    must always answer "when does the 5h limit expire" and "when does the weekly limit expire"
    at a glance). **Never hand-assemble this table from `--json`, and never improvise columns.**
 
