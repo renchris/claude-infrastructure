@@ -105,7 +105,7 @@ SH
   eval "$(sed -n '/^it2_type_verified() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^it2_paste_submit() {/,/^}/p' "$HF")"
 
-  CMD='cd /private/tmp/wt-x && claude-next3 --effort max "$(cat /tmp/fire-abc.txt)"'
+  CMD='cd /private/tmp/wt-x && claude3 --effort max "$(cat /tmp/fire-abc.txt)"'
 }
 
 set_mode() { printf '%s' "$1" > "$MODE_FILE"; }

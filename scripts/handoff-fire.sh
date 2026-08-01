@@ -5,8 +5,8 @@
 #
 # Generalizes the proven /tmp/fire.sh pattern (2026-07-02 parallel-track launch): open an
 # interactive iTerm2 surface (tab / split pane / window) and TYPE the launch command into it via
-# the it2 API (bracketed-paste + echo-verify), because the per-account launchers (claude-next,
-# claude-next2/3/4, claude-fable*) are zsh FUNCTIONS/ALIASES that only resolve in an interactive shell.
+# the it2 API (bracketed-paste + echo-verify), because the per-account launchers (claude,
+# claude2/3/4) are zsh FUNCTIONS/ALIASES that only resolve in an interactive shell.
 #
 #   handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt [options]
 #
@@ -20,15 +20,18 @@
 #                       trailing-5h transcript-activity proxy ONLY when live limits are
 #                       unreadable; halts (never fires blind) when limits say NO account is
 #                       routable. Static hint orders are retired — they went stale in 48h.
-#   --launcher L        Explicit launcher name (e.g. claude-fable3). Overrides --account/--model
-#                       launcher composition; still gets --effort/--model/--extra args appended.
+#   --launcher L        Explicit launcher name (e.g. claude3, or claude-prev for the stable
+#                       track). Overrides --account/--model launcher composition; still gets
+#                       --effort/--model/--extra args appended.
 #   --model M           opus|claude-opus-4-8 (launcher default) | fable|claude-fable-5 | other.
-#                       fable → claude-fableN launcher (the LAUNCHER prints its ~2× cost warning;
-#                       high-effort default; this script warns if the frontier window is closed);
-#                       other non-default → appended `--model M` (last-wins).
+#                       Since the 2026-08-01 consolidation FABLE IS A MODEL, NOT A NAME — there is
+#                       no claude-fableN launcher any more, so fable fires the SAME claudeN
+#                       entrypoint with `--model claude-fable-5` appended (this script prints the
+#                       ~2× cost note the old launcher used to, and warns if the frontier window
+#                       is closed); other non-default → appended `--model M` (last-wins).
 #   --effort E          low|medium|high|xhigh|max → appended `--effort E` (last-wins over the
-#                       launcher-injected default: claude/claude-next=HIGH, claude-fable=high).
-#                       NB the claude-next default was `max` until the 2026-07-31 entrypoint
+#                       launcher-injected default: claude=HIGH).
+#                       NB the account-1 entrypoint's default was `max` until the 2026-07-31
 #                       consolidation folded claude-next + claude-opus5 into `claude`, which
 #                       took Opus 5's own `high` (max over-thinks it). A fire with no --effort
 #                       therefore lands a HIGH successor now, not a max one — pass `--effort max`
@@ -45,7 +48,7 @@
 #   --wtroot PATH       Worktree parent dir (default $HOME/Development/.worktrees).
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
 #   --in-place          Prefix CLAUDE_ISOLATION_SKIP=1 (launch in cwd even at the reso primary
-#                       root, where claude-next otherwise auto-creates a fresh worktree).
+#                       root, where claude otherwise auto-creates a fresh worktree).
 #   --follow            OPT-IN. "The operator is WATCHING this fire — land their view on the
 #                       continuation": RAISE + focus the new surface (⌘D split of the firing pane by
 #                       default) exactly as a manual /handoff wants. WITHOUT --follow the fire is
@@ -836,8 +839,8 @@ it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 
 # an unanchored grep would read our own backlog text back as proof of a wedge. Every pattern below
 # is a message only a SHELL emits, at the start of a line, after refusing to run something.
 # THE TWO SHELLS ORDER THE MESSAGE DIFFERENTLY — both shapes are needed, measured on this box:
-#   zsh:  `zsh: command not found: claude-next5`   (message first, subject last)
-#   bash: `bash: claude-next5: command not found`  (subject in the MIDDLE)
+#   zsh:  `zsh: command not found: claude5`   (message first, subject last)
+#   bash: `bash: claude5: command not found`  (subject in the MIDDLE)
 # A single `^(zsh|bash): <message>` pattern silently covers only zsh — the bash arm needs its own
 # `[^:]*:` middle. The middle is deliberately colon-free so bash's benign startup chatter
 # (`bash: no job control in this shell`, emitted by any `bash -i` without a tty) can never match:
@@ -2928,10 +2931,14 @@ ranked_accounts() {
   }
 }
 
-launcher_for() { # $1=account — compose launcher name from account + model
+launcher_for() { # $1=account → launcher name. ACCOUNT ONLY — the model is a FLAG, never a name.
+  # 2026-08-01 consolidation: `claude` is THE entrypoint and claude2/3/4 are the same body on
+  # accounts 2/3/4. The claude-fableN family is DELETED — the frontier tier is selected by
+  # `--model claude-fable-5` on these same names (composed in the ARGS block below), so this
+  # function no longer reads $MODEL at all. Account 1 has NO trailing digit by design.
   local suffix=""
   case "$1" in next2) suffix="2" ;; next3) suffix="3" ;; next4) suffix="4" ;; esac
-  if [ "$MODEL" = "claude-fable-5" ]; then echo "claude-fable${suffix}"; else echo "claude-next${suffix}"; fi
+  echo "claude${suffix}"
 }
 
 # ---- fire autonomy: pre-trust the launch dir -------------------------------------------------
@@ -3037,9 +3044,22 @@ else
 fi
 
 # Fable is window-gated: warn (not block — the hard gate is the API rejection) when the SSOT says
-# the frontier window is closed. Gate on the EFFECTIVE launcher family or an explicit fable model.
-case "$LAUNCHER" in claude-fable*) FABLE_EFFECTIVE=1 ;; *) FABLE_EFFECTIVE=0 ;; esac
+# the frontier window is closed.
+#
+# $MODEL IS THE SOLE SOURCE OF TRUTH. Until 2026-08-01 this also sniffed the launcher NAME
+# (`claude-fable*`), which was sound only while the name encoded the model. The consolidation
+# deleted that family, so a name-based arm can no longer detect Fable — and worse, it would have
+# been a SECOND, disagreeing oracle: probe_account() and the dry-run probe line already key on
+# $MODEL, so an explicit `--launcher claude-fable3` with no --model used to set FABLE_EFFECTIVE=1
+# while the probe still ran haiku. One predicate now, matching every other Fable test in the file.
+FABLE_EFFECTIVE=0
 [ "$MODEL" = "claude-fable-5" ] && FABLE_EFFECTIVE=1
+if [ "$FABLE_EFFECTIVE" = 1 ]; then
+  # The ~2× cost note the deleted claude-fable launcher used to print at spawn. It has to live
+  # wherever Fable is still SELECTED, and for a fired session that is here — the typed line is a
+  # bare `claudeN --model claude-fable-5`, which prints nothing.
+  echo "⚠️  Fable 5 is the frontier tier — ~2× the default model's cost (\$10/\$50 per Mtok vs \$5/\$25)." >&2
+fi
 if [ "$FABLE_EFFECTIVE" = 1 ] && [ -f "$MODEL_CONFIG" ]; then
   # match ONLY the real key (indented `active: <val>`), never a comment that mentions
   # `active:false` — the Jul-9 window-extension comment did exactly that and false-warned.
@@ -3054,11 +3074,15 @@ ARGS=""
 [ -n "$EFFORT" ] && ARGS="$ARGS --effort $EFFORT"
 if [ -n "$MODEL" ]; then
   if [ "$EXPLICIT_LAUNCHER" = 1 ]; then
-    # Explicit launcher may carry a different model family — always append (last-wins, harmless
-    # when redundant) so `--launcher claude-fable3 --model opus` really runs Opus.
+    # Explicit launcher may pin a different model (e.g. the stable `claude-prev` track) — always
+    # append (last-wins, harmless when redundant) so `--launcher claude-prev3 --model opus` really
+    # runs Opus.
     ARGS="$ARGS --model $MODEL"
-  elif [ "$MODEL" != "claude-fable-5" ] && [ "$MODEL" != "claude-opus-4-8" ]; then
-    ARGS="$ARGS --model $MODEL"   # non-default model on a claude-nextN launcher
+  elif [ "$MODEL" != "claude-opus-4-8" ]; then
+    # Everything except the launcher's OWN default is appended. claude-fable-5 is in this arm by
+    # necessity since 2026-08-01: with the claude-fableN family deleted, this flag is the ONLY way
+    # a fired session reaches the frontier tier — omitting it would silently fire the default.
+    ARGS="$ARGS --model $MODEL"
   fi
 fi
 [ -n "$EXTRA" ] && ARGS="$ARGS $EXTRA"
@@ -3071,10 +3095,12 @@ PREFIX=""
 # closed the `go`→`god` wedge. It did NOT close the class: `${LAUNCHER}` is still a bare word in
 # COMMAND POSITION in all six typed shapes, and it is the ONE token that provably cannot be
 # validated before typing — the launchers are zsh aliases/functions defined only in the operator's
-# INTERACTIVE rc (`whence -w claude-next4` → alias interactively, `none` under `zsh -c`), so no
+# INTERACTIVE rc (`whence -w claude4` → alias interactively, `none` under `zsh -c`), so no
 # `command -v` in this script can ever see them. Worse, the family members are mutual near-misses
-# inside CORRECT's own dictionary: on the live shell `claude-nex` offers `claude-next` and
-# `claude-fabl2` offers `claude-fable`. `--launcher` (:2291) is entirely unvalidated — unlike
+# inside CORRECT's own dictionary — and the 2026-08-01 consolidation TIGHTENED that, because
+# claude/claude2/claude3/claude4 sit within one edit of each other where claude-nextN had a longer
+# stem. Re-measured on this box against a fixture rc defining exactly the new family:
+# `claude5` offers `correct 'claude5' to 'claude' [nyae]?`. `--launcher` is entirely unvalidated — unlike
 # `--account` (:2558) — so one typo, or a 5th account added without a matching zshrc alias, types a
 # word that does not resolve and parks the pane at `[nyae]` forever instead of failing cleanly.
 #
@@ -3088,7 +3114,7 @@ PREFIX=""
 #   nocorrect CLAUDE_ISOLATION_SKIP=1 claudenxt4 → alias/function still expands AND the env var
 #     still reaches the process (`env | grep ^CLAUDE_ISOLATION_SKIP=` → `1`, identical to today)
 # Quoting the launcher would also suppress correction but is WRONG here: it suppresses alias
-# expansion too, so `'claude-fable2'` would simply not resolve.
+# expansion too, so `'claude2'` would simply not resolve.
 #
 # Unconditional, no zsh-detection guard: the launcher IS a zsh alias/function, so a non-zsh target
 # shell cannot run this line at all. There is no shell where the old form works and this one does

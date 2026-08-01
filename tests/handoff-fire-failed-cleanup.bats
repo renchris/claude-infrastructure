@@ -81,7 +81,7 @@ fire_that_fails() { # $1=worktree slug  [extra args…]
   printf 'do the thing\n\n## BACK-CHANNEL — ping the originator\n  cc-notify  "HANDOFF-PING: x"\n' > "$bad"
   run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
       CC_PAYLOAD_LINT_BIN="$REPO_SRC/scripts/payload-lint.sh" \
-      bash "$HF" --prompt-file "$bad" --launcher claude-next --worktree "$slug" \
+      bash "$HF" --prompt-file "$bad" --launcher claude --worktree "$slug" \
       --repo "$REPO" --wtroot "$WTROOT" "$@"
 }
 
@@ -137,7 +137,7 @@ run_cleanup() { # $1=output file
   printf 'do the thing\n\n## BACK-CHANNEL — ping the originator\n  cc-notify  "HANDOFF-PING: x"\n' > "$bad"
   run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
       CC_PAYLOAD_LINT_BIN="$REPO_SRC/scripts/payload-lint.sh" \
-      bash "$old" --prompt-file "$bad" --launcher claude-next --worktree wt-cleanup-red \
+      bash "$old" --prompt-file "$bad" --launcher claude --worktree wt-cleanup-red \
       --repo "$REPO" --wtroot "$WTROOT"
   [ "$status" -eq 4 ] || skip "pre-fix build aborted at $status, not the payload-lint gate"
   [ -d "$WTROOT/wt-cleanup-red" ] || { echo "pre-fix run did not even create the worktree"; false; }
@@ -165,7 +165,7 @@ run_cleanup() { # $1=output file
 @test "a SUCCESSFUL dry run cleans up nothing (the trap is disarmed on rc 0)" {
   run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
       CC_PAYLOAD_LINT_BIN="$REPO_SRC/scripts/payload-lint.sh" \
-      bash "$HF" --prompt-file "$PF" --launcher claude-next --worktree wt-cleanup-dry \
+      bash "$HF" --prompt-file "$PF" --launcher claude --worktree wt-cleanup-dry \
       --repo "$REPO" --wtroot "$WTROOT" --dry-run
   [ "$status" -eq 0 ]
   ! [[ "$output" == *"fire-cleanup"* ]] || { echo "cleanup ran on a successful run"; false; }
@@ -210,7 +210,7 @@ run_cleanup() { # $1=output file
   FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$WTROOT/wt-live-pane"
   FIRE_CLEAN_BRANCH="wt-live-pane"; REPO="$REPO"
   SPAWNED_PANE="AAAABBBB-1111-2222-3333-444455556666"
-  REG_DIR="$reg"; FIRED_DIR="$fired"; LAUNCH_DIR="$WTROOT/wt-live-pane"; CMD="claude-next"
+  REG_DIR="$reg"; FIRED_DIR="$fired"; LAUNCH_DIR="$WTROOT/wt-live-pane"; CMD="claude"
   FIRING_SID="ORIGIN-PANE"; PROMPT_FILE="$PF"; WANT_SELF_RETIRE=1
   run_cleanup "$BATS_TEST_TMPDIR/live.out"
 
@@ -232,7 +232,7 @@ run_cleanup() { # $1=output file
   mkdir -p "$reg" "$fired"
   FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT=""; FIRE_CLEAN_BRANCH=""
   SPAWNED_PANE="CCCCDDDD-1111-2222-3333-444455556666"
-  REG_DIR="$reg"; FIRED_DIR="$fired"; LAUNCH_DIR="/tmp"; CMD="claude-next"
+  REG_DIR="$reg"; FIRED_DIR="$fired"; LAUNCH_DIR="/tmp"; CMD="claude"
   FIRING_SID="ORIGIN-PANE"; PROMPT_FILE="$PF"; WANT_SELF_RETIRE=0
   run_cleanup "$BATS_TEST_TMPDIR/nosr.out"
 
@@ -256,7 +256,12 @@ SH
   FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT=""; FIRE_CLEAN_BRANCH=""
   SPAWNED_PANE="EEEEFFFF-1111-2222-3333-444455556666"
   REG_DIR="$BATS_TEST_TMPDIR/reg3"; FIRED_DIR="$BATS_TEST_TMPDIR/fired3"
-  LAUNCH_DIR="/tmp"; CMD="claude-next"; FIRING_SID="ORIGIN"; PROMPT_FILE="$PF"; WANT_SELF_RETIRE=1
+  # EXPORTED rather than plain assignments: run_cleanup is eval'd out of handoff-fire.sh
+  # above, so shellcheck cannot see the consumer and reads all five as dead (SC2034).
+  # export is shellcheck's own documented remedy and is behaviour-neutral here, since the
+  # subshell already inherited them. Pre-existing; it surfaced only because the
+  # claude-next to claude rename rewrote this line and the land gate is own-scope.
+  export LAUNCH_DIR="/tmp" CMD="claude" FIRING_SID="ORIGIN" PROMPT_FILE="$PF" WANT_SELF_RETIRE=1
   HOME="$h" run_cleanup /dev/null
   [ ! -f "$h/it2-calls.log" ] || { echo "the live pane was CLOSED on a negative read"; false; }
 

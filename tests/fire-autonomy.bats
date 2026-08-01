@@ -110,11 +110,18 @@ STUB
 }
 
 @test "config_dir_for_launcher maps launcher → account config dir" {
-  [ "$(config_dir_for_launcher claude-next)"  = "$HOME/.claude" ]
-  [ "$(config_dir_for_launcher claude-next2)" = "$HOME/.claude-secondary" ]
-  [ "$(config_dir_for_launcher claude-next3)" = "$HOME/.claude-tertiary" ]
-  [ "$(config_dir_for_launcher claude-next4)" = "$HOME/.claude-quaternary" ]
-  [ "$(config_dir_for_launcher claude-fable2)" = "$HOME/.claude-secondary" ]
+  # The mapping keys on the TRAILING DIGIT, not on the family stem — which is why the 2026-08-01
+  # claude-nextN → claudeN rename needed no code change. `claude` carries no digit and MUST fall
+  # through to the account-1 default arm; that is the case the rename newly exercises.
+  [ "$(config_dir_for_launcher claude)"  = "$HOME/.claude" ]
+  [ "$(config_dir_for_launcher claude2)" = "$HOME/.claude-secondary" ]
+  [ "$(config_dir_for_launcher claude3)" = "$HOME/.claude-tertiary" ]
+  [ "$(config_dir_for_launcher claude4)" = "$HOME/.claude-quaternary" ]
+  # A non-`claudeN` stem still maps by its digit — `--launcher` can name the stable track. (This
+  # slot used to be claude-fable2; that family is deleted, but the prefix-agnostic property it
+  # pinned is what matters and claude-prev2 pins it with a name that still exists.)
+  [ "$(config_dir_for_launcher claude-prev2)" = "$HOME/.claude-secondary" ]
+  [ "$(config_dir_for_launcher claude-prev)"  = "$HOME/.claude" ]
 }
 
 @test "dry-run: --worktree fire pre-trusts the worktree path in the account config" {
