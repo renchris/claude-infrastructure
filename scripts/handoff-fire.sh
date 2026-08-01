@@ -263,14 +263,53 @@ _iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 # into an alarm predicate and suppressed it). So a successful-but-unverified recycle must NOT be filed
 # as "refused" — it would inflate the refusal metric with non-refusals and make a genuine fire outage
 # unreadable. One writer, an explicit class per caller.
-emit_fire_event() { # $1=class $2=reason $3=detail → always 0
+#
+# ---- THE ADMIT SIDE (2026-07-31): A RATIO NEEDS BOTH VERDICTS -------------------------------
+# F13 above records only REFUSALS, so the durable record answers "how often did the gate refuse?"
+# and nothing else. Any claim about the gate's admit/refuse RATIO was therefore unprovable from
+# disk — and one was made and had to be retracted: MACHINE_CAPACITY_V2 §9.5 called capacity_gate a
+# "permanent dispatch outage" projecting from 13 refusal samples in one high-variance window, then
+# self-retracted. Worse, the retraction's own corroboration ("the IDL carries 1498 reason:capacity
+# rows, i.e. both verdicts fire") does not survive checking: those rows are `actor:"cc-dispatch"`
+# (its 6-WORKER-SLOT ceiling — free_slots/ceiling/live_workers), a different gate entirely, they are
+# ALL `verdict:"defer"` (refusals), and handoff-fire.sh writes NO IDL row at all. Verified
+# 2026-07-31: 5518 such rows, 0 with actor handoff-fire.
+# So the admit side is emitted here, into the SAME log as the refusals. Deliberately not the
+# autonomy IDL: a ratio whose numerator and denominator live in two stores with two schemas is a
+# join, and this is the second time a wrong ratio has been read off the easier half.
+#
+# THREE RULES the admit row obeys, each paid for by a defect this repo has already shipped:
+#   `basis`   an admit is NOT self-evidently a measurement. The gate fails OPEN on an unreadable
+#             sysctl/vm_stat, so a broken probe yields a 100%-admit population that reads exactly
+#             like a healthy box — an always-degrading verifier in "everything is fine" clothing.
+#             basis names which: measured · load-only · fail-open · gate-off. A ratio computed
+#             without splitting on it is not a measurement of the gate.
+#   `engaged` ABSENT, never false. A refusal is terminal (nothing engaged, ever) so false is true
+#             there; an admit's fire has NOT HAPPENED YET, so `false` would be a fabricated
+#             outcome — and it would land in `group_by(.engaged)`, the engagement-rate metric
+#             (V2 M-1), deflating it by one row per admitted fire. R9: unmeasured reads ABSENT.
+#   `gate`    both verdicts carry it, so the ratio is ONE symmetric predicate
+#             (`select(.gate=="capacity") | .verdict`) instead of two hand-written asymmetric ones
+#             — `class=="refused"` alone spans the payload gates too, and a denominator polluted
+#             with payload refusals is precisely the shape of mis-derivation being fixed here.
+# Read the ratio:
+#   jq -rs '[.[]|select(.gate=="capacity")] | group_by(.verdict)
+#            | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl
+#   …and split the admits by `basis` before believing any of it.
+emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   if command -v jq >/dev/null 2>&1; then
+    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte, key order included —
+    # the two recycle-* callers below are unchanged by construction, not by inspection.
     line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
                   --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
-      '{ts:$ts, class:$cl, engaged:false, refuse_reason:$r}
+                  --arg vd "${4:-}" --arg gt "${5:-}" \
+      '{ts:$ts, class:$cl}
+       + (if $vd == "admit" then {basis:$r} else {engaged:false, refuse_reason:$r} end)
+       + (if $vd == "" then {} else {verdict:$vd} end)
+       + (if $gt == "" then {} else {gate:$gt}    end)
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
        + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
@@ -278,8 +317,25 @@ emit_fire_event() { # $1=class $2=reason $3=detail → always 0
   fi
   return 0
 }
+# Which GATE produced a refusal reason. The `*)` arm is fail-VISIBLE on purpose: a reason nobody
+# mapped becomes its own gate name, so a new refusal can never be silently absorbed into the
+# capacity denominator and deflate its admit ratio. It can only ever be missing from it — and the
+# ENUM guard in tests/handoff-fire-capacity-gate.bats goes RED when a new reason appears unmapped,
+# so "missing" is loud rather than permanent. capacity+headroom are the two TERMS of the single
+# capacity_gate(): a fire must clear BOTH, so they share one gate name and stay distinguishable
+# by refuse_reason.
+_fire_gate_of() { # $1=refusal reason → gate name
+  case "${1:-}" in
+    capacity|headroom) printf capacity ;;
+    payload-*)         printf payload  ;;
+    *)                 printf '%s' "${1:-unknown}" ;;
+  esac
+}
 emit_fire_refusal() { # $1=reason $2=detail → always 0 — a fire that did NOT happen
-  emit_fire_event refused "${1:-unknown}" "${2:-}"
+  emit_fire_event refused "${1:-unknown}" "${2:-}" refuse "$(_fire_gate_of "${1:-unknown}")"
+}
+emit_gate_admit() { # $1=gate $2=basis $3=detail → always 0 — a gate decision that let a fire THROUGH
+  emit_fire_event admitted "${2:-unknown}" "${3:-}" admit "${1:-unknown}"
 }
 
 _iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
@@ -1397,6 +1453,12 @@ check_goal_length() { # $1=prompt-file → 0 ok, 1 (loud) if a /goal line body e
           bytes=$(printf '%s' "$body" | wc -c | tr -d ' ')
           echo "!! /goal condition is ${chars} chars (${bytes} bytes) — the harness HARD-CAPS /goal at ${limit} chars; over-cap is a SILENT dead fire (the pane spawns task-less and idles). a19 D-11 / observed 2026-07-10." >&2
           echo "   Fix: use the POINTER form — '/goal read <plan/brief path> § \"Definition of Done\" and satisfy every item' — keeping the literal condition <=${limit} chars." >&2
+          # F13, found 2026-07-31 by the capacity-gate admit work: this branch and the empty-payload
+          # branch were the last two pre-fire refusals leaving NO trace anywhere — the same "a
+          # refused fire reads exactly like no fire attempted" hole, two guards over. Distinct from
+          # check_slash_head's payload-goal-cap: that one is the WHOLE payload parsed as a /goal
+          # head; this is one /goal LINE's own body over the cap.
+          emit_fire_refusal payload-goal-line "/goal condition is ${chars} chars > ${limit}"
           return 1
         fi ;;
     esac
@@ -1500,22 +1562,36 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 # environment is pinned, not ambient). NEVER set them in production: an override silences the
 # instrument it replaces, and a gate reading a constant is a deleted gate.
 capacity_gate() {
-  [ "${CC_FIRE_CAPACITY_GATE:-on}" = off ] && return 0
+  # EVERY `return 0` below is preceded by an emit_gate_admit — the admit record cannot acquire a
+  # silent branch, and the ADMIT-COVERAGE test in tests/handoff-fire-capacity-gate.bats greps this
+  # function for exactly that property, so a future term added with a bare `return 0` goes RED.
+  if [ "${CC_FIRE_CAPACITY_GATE:-on}" = off ]; then
+    # Recorded, not silent: an operator override or a pinned test suite must not read back later as
+    # a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
+    emit_gate_admit capacity gate-off "CC_FIRE_CAPACITY_GATE=off — no term evaluated"; return 0
+  fi
   local ncpu load ceiling verdict lpc floor head_gb vms
   ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
   load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
   if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
   ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"
+  # Each fail-open below is an admit the gate did NOT measure. Filed as basis "fail-open" with the
+  # dead probe named, because a broken sysctl otherwise manufactures a 100%-admit population that is
+  # indistinguishable from a quiet box — the gate deleted, reading as the gate healthy.
   case "$ncpu" in ''|*[!0-9]*)
-    echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') -> ADMIT (fail-open)" >&2; return 0 ;;
+    echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "hw.ncpu unreadable ('$ncpu') — load term not evaluated"; return 0 ;;
   esac
   case "$load" in ''|*[!0-9.]*)
-    echo "-- capacity gate: vm.loadavg unreadable ('$load') -> ADMIT (fail-open)" >&2; return 0 ;;
+    echo "-- capacity gate: vm.loadavg unreadable ('$load') -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "vm.loadavg unreadable ('$load') — load term not evaluated"; return 0 ;;
   esac
   case "$ceiling" in ''|*[!0-9.]*)
-    echo "-- capacity gate: bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)" >&2; return 0 ;;
+    echo "-- capacity gate: bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') — load term not evaluated"; return 0 ;;
   esac
-  [ "$ncpu" -gt 0 ] || { echo "-- capacity gate: hw.ncpu=0 -> ADMIT (fail-open)" >&2; return 0; }
+  [ "$ncpu" -gt 0 ] || { echo "-- capacity gate: hw.ncpu=0 -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "hw.ncpu=0 — load term not evaluated"; return 0; }
   verdict="$(awk -v l="$load" -v n="$ncpu" -v c="$ceiling" \
     'BEGIN { lpc = l / n; printf "%s %.2f", (lpc > c ? "REFUSE" : "ADMIT"), lpc }')"
   lpc="${verdict#* }"; verdict="${verdict%% *}"
@@ -1534,7 +1610,13 @@ capacity_gate() {
 
   # ---- M10: memory-headroom term. Runs ONLY once the load term above has admitted, so the load
   # refusal keeps its reason and its numbers; this term can only ever narrow admission further.
-  [ "${CC_FIRE_HEADROOM_GATE:-on}" = off ] && return 0
+  if [ "${CC_FIRE_HEADROOM_GATE:-on}" = off ]; then
+    # A REAL measurement, but of one term only — kept out of `measured` so a headroom-blind window
+    # can never be counted as evidence that both terms were exercised.
+    emit_gate_admit capacity load-only \
+      "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · headroom term off"
+    return 0
+  fi
   floor="${CC_FIRE_MIN_HEADROOM_GB:-4}"
   if [ -n "${CC_FIRE_HEADROOM_OVERRIDE:-}" ]; then
     head_gb="$CC_FIRE_HEADROOM_OVERRIDE"
@@ -1551,10 +1633,14 @@ capacity_gate() {
     ')" || head_gb=""
   fi
   case "$floor" in ''|*[!0-9.]*)
-    echo "-- capacity gate: bad CC_FIRE_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)" >&2; return 0 ;;
+    echo "-- capacity gate: bad CC_FIRE_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "bad CC_FIRE_MIN_HEADROOM_GB ('$floor') — headroom term not evaluated"
+    return 0 ;;
   esac
   case "$head_gb" in ''|*[!0-9.]*)
-    echo "-- capacity gate: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)" >&2; return 0 ;;
+    echo "-- capacity gate: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "reclaimable headroom unreadable ('$head_gb') — headroom term not evaluated"
+    return 0 ;;
   esac
   verdict="$(awk -v h="$head_gb" -v f="$floor" 'BEGIN { print (h < f ? "REFUSE" : "ADMIT") }')"
   if [ "$verdict" = REFUSE ]; then
@@ -1566,6 +1652,12 @@ capacity_gate() {
     return 9
   fi
   echo "-- capacity gate: headroom ADMIT — reclaimable ${head_gb}GB (floor ${floor}GB)" >&2
+  # The only basis that means what a naive reader assumes "admit" means: BOTH terms read a live
+  # instrument and both cleared. One row per gate evaluation, carrying both terms' numbers, so the
+  # admit is as auditable as the refusal already was ("a refusal with no numbers is unauditable" —
+  # and an admit with no numbers is worse, because nothing about it looks wrong).
+  emit_gate_admit capacity measured \
+    "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · reclaimable ${head_gb}GB (floor ${floor}GB)"
   return 0
 }
 
@@ -2517,7 +2609,8 @@ esac; done
 # FM-D (Fable panel 2026-07-19): an EMPTY prompt file passed the [ -f ] check and fired `claude ""` →
 # a task-less-idle successor (the same class the /goal-over-cap guard documents). Reject empty BEFORE
 # any side effect — every fire mode, incl. the deterministic waiting-recycle Stage-2 fire.
-[ -s "$PROMPT_FILE" ] || { echo "!! empty prompt file: $PROMPT_FILE — an empty payload fires a task-less successor (FM-D)" >&2; exit 1; }
+[ -s "$PROMPT_FILE" ] || { echo "!! empty prompt file: $PROMPT_FILE — an empty payload fires a task-less successor (FM-D)" >&2
+  emit_fire_refusal payload-empty "prompt file is empty: $PROMPT_FILE"; exit 1; }
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
 check_slash_head  "$PROMPT_FILE" || exit 1
@@ -3995,7 +4088,7 @@ else
   # raced CC boot sits at an empty composer (INC-4) — re-send once, then FAIL LOUD.
   # per-handoff telemetry — one JSONL line per real fire so "did this handoff engage / leak / at
   # what firing-session RSS" is answerable in one grep (~/.claude/logs/handoffs.jsonl, self-bounded
-  # to 500). Fully guarded: a telemetry hiccup can never affect the fire.
+  # to 1000 — see the trim below). Fully guarded: a telemetry hiccup can never affect the fire.
   emit_handoff_telemetry() { # $1 = engaged (1|0)
     local _hf_log="$HOME/.claude/logs/handoffs.jsonl" _hf_pid _hf_rss _hf_class
     # Prefer the CC session id (SESSION_ID) — watchdog pidfiles are keyed by it; FIRING_SID is a
@@ -4060,8 +4153,16 @@ else
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
         >> "$_hf_log" 2>/dev/null || true
     fi
-    if [ -f "$_hf_log" ] && [ "$(wc -l < "$_hf_log" 2>/dev/null || echo 0)" -gt 600 ]; then
-      tail -500 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null || true
+    # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
+    # gate started recording its ADMITS as well as its refusals (~+60% rows: measured 504 rows over
+    # 2026-07-24..31, peaking 227/day, of which 308 were fires that would now each add an admit row).
+    # At the old bound the log held ~2.2 days at peak and would have fallen to ~1.4 — and the defect
+    # this admit-side record exists to prevent (§9.5: a "permanent outage" projected from 13 samples
+    # in one high-variance window) gets EASIER, not harder, as the window shrinks. Doubling the bound
+    # against a doubled write rate holds the window constant in TIME, which is the thing that matters.
+    # ~250 B/row ⇒ ~250 KB. Tail-trimming keeps a CONTIGUOUS suffix, so the ratio stays unbiased.
+    if [ -f "$_hf_log" ] && [ "$(wc -l < "$_hf_log" 2>/dev/null || echo 0)" -gt 1200 ]; then
+      tail -1000 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null || true
     fi
   }
   if [ "$ENGAGE_VERIFY" = 1 ]; then

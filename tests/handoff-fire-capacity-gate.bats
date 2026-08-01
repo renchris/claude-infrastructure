@@ -362,3 +362,172 @@ _setup_pins() {
   rc=0; _setup_pins "$BATS_TEST_TMPDIR/pinned.bats" || rc=$?
   [ "$rc" -eq 0 ] || false
 }
+
+# ---- ADMIT-SIDE TELEMETRY (2026-07-31) --------------------------------------------------------
+# Test 21 proved the REFUSALS are recorded. Nothing recorded the ADMITS, so the durable record could
+# only ever answer "how often did it refuse?" — and the admit/refuse RATIO, the quantity every claim
+# about this gate actually rests on, was unprovable from disk. MACHINE_CAPACITY_V2 §9.5 is the
+# receipt: this gate was called a "permanent dispatch outage" on 13 refusal samples and retracted.
+#
+# RED-PROOF (recorded 2026-07-31, and re-runnable): cases 25-30 were replayed against the pristine
+# pre-change scripts/handoff-fire.sh from `git show HEAD:scripts/handoff-fire.sh` — 25/26/27/28/29
+# FAIL there (no `admitted` row exists to select) and 30 FAILS (no `gate` field on the refusals), so
+# every assertion below is caused BY the change. Case 31 is a source lint and passes on both trees
+# only because the old tree has no emit sites to miss; its positive control is inline.
+
+@test "25 ADMIT is RECORDED — the ratio has a numerator, not just a denominator" {
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  fire 10 1.00                       # idle box, headroom pinned to 64 by setup() ⇒ both terms admit
+  [ "$status" -ne 9 ]
+  run bash -c "jq -rc 'select(.class==\"admitted\")|[.gate,.verdict,.basis]|@tsv' '$LOG'"
+  [ "$output" = "$(printf 'capacity\tadmit\tmeasured')" ]
+  # the numbers travel with the verdict — an admit with no numbers is worse than a refusal with
+  # none, because nothing about it looks wrong
+  run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG'"
+  [ "$output" = "load 1.00 on 10 cores = 0.10/core (ceiling 2.0/core) · reclaimable 64GB (floor 4GB)" ]
+}
+
+@test "26 an admit carries NO engaged field — absent, never a fabricated false (R9)" {
+  # An admit's fire has not happened yet, so `engaged:false` would be an invented outcome AND would
+  # land in group_by(.engaged) — the engagement-rate metric (V2 M-1) — deflating it by one row per
+  # admitted fire. A refusal is terminal, so IT keeps engaged:false; the asymmetry is the point.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  fire 10 1.00
+  fire 10 27.16
+  run bash -c "jq -rs '[.[]|select(.verdict==\"admit\" and has(\"engaged\"))]|length' '$LOG'"
+  [ "$output" = "0" ]
+  # positive control: the refusal in the same log DOES carry it, so "0" above is a property of the
+  # admit row and not of a jq expression that cannot match anything
+  run bash -c "jq -rs '[.[]|select(.verdict==\"refuse\" and .engaged==false)]|length' '$LOG'"
+  [ "$output" = "1" ]
+}
+
+@test "27 FAIL-OPEN admits are filed as fail-open — a dead probe cannot read back as a healthy box" {
+  # The load-bearing one. The gate fails OPEN on an unreadable instrument, so a broken sysctl yields
+  # a 100%-admit population indistinguishable from a quiet fleet: the gate DELETED, reading as the
+  # gate HEALTHY. basis splits measured from not-measured.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  fire abc 1.00                                   # hw.ncpu unreadable ⇒ load term never evaluated
+  [ "$status" -ne 9 ]
+  run bash -c "jq -r 'select(.class==\"admitted\")|.basis' '$LOG'"
+  [ "$output" = "fail-open" ]
+  run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG'"
+  echo "$output" | grep -q "hw.ncpu unreadable" || false
+  echo "$output" | grep -q "load term not evaluated" || false
+  # and an unreadable vm_stat is the headroom term's equivalent — the SECOND term must not be the
+  # silent one, exactly as test 21 established for the refusal side
+  printf '#!/bin/bash\necho garbage\n' > "$BIN/vm_stat"; chmod +x "$BIN/vm_stat"
+  run env STUB_NCPU=10 STUB_LOAD=1.00 CC_FIRE_HEADROOM_OVERRIDE= \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  run bash -c "jq -rs '[.[]|select(.basis==\"fail-open\")]|length' '$LOG'"
+  [ "$output" = "2" ]
+}
+
+@test "28 the two DISABLED bases are recorded, not silent — gate-off and load-only" {
+  # A kill switch that leaves no trace lets an override-heavy window be counted later as evidence
+  # the gate was exercised. Neither is `measured`, and that is the whole distinction.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  run env STUB_NCPU=10 STUB_LOAD=1.00 CC_FIRE_CAPACITY_GATE=off \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  run env STUB_NCPU=10 STUB_LOAD=1.00 CC_FIRE_HEADROOM_GATE=off \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  run bash -c "jq -rs '[.[]|select(.class==\"admitted\")|.basis]|sort|join(\",\")' '$LOG'"
+  [ "$output" = "gate-off,load-only" ]
+  # the load-only row still carries the term it DID measure — one disabled term must not blind the
+  # record to the other
+  run bash -c "jq -r 'select(.basis==\"load-only\")|.detail' '$LOG'"
+  echo "$output" | grep -q "0.10/core" || false
+  echo "$output" | grep -q "headroom term off" || false
+}
+
+@test "29 THE RATIO IS READABLE — one symmetric predicate returns both verdicts" {
+  # The item this whole block exists for. Two hand-written asymmetric predicates (class=="admitted"
+  # vs class=="refused") are what produce mis-derivations: `refused` spans the PAYLOAD gates too, so
+  # that denominator is polluted. `gate` carries on both sides, so the ratio is one select().
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  fire 10 1.00                                                            # admit (measured)
+  fire 10 27.16                                                           # refuse (load term)
+  fire_h 1.50                                                             # refuse (headroom term)
+  run bash -c "jq -rs '[.[]|select(.gate==\"capacity\")]|group_by(.verdict)|map(\"\(.[0].verdict)=\(length)\")|join(\" \")' '$LOG'"
+  [ "$output" = "admit=1 refuse=2" ]
+}
+
+@test "30 a PAYLOAD refusal is NOT in the capacity denominator — gate names its own surface" {
+  # If payload refusals counted as capacity refusals the ratio would understate the admit side, and
+  # that is precisely the class of error being fixed. A payload gate carries gate:"payload".
+  #
+  # Both cases here were found BY this test and are new records (2026-07-31): the empty-payload
+  # (FM-D) and /goal-line-over-cap guards were the last two pre-fire refusals that wrote NOTHING
+  # anywhere — F13's own defect, two guards upstream of the one it fixed. They run BEFORE
+  # capacity_gate, so a correct log carries the payload refusal and no capacity row at all.
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  printf '/goal %s\n' "$(head -c 5000 < /dev/zero | tr '\0' 'x')" > "$BATS_TEST_TMPDIR/over.txt"
+  run env STUB_NCPU=10 STUB_LOAD=1.00 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/over.txt" --dry-run
+  [ "$status" -ne 0 ]
+  : > "$BATS_TEST_TMPDIR/empty.txt"
+  run env STUB_NCPU=10 STUB_LOAD=1.00 bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/empty.txt" --dry-run
+  [ "$status" -ne 0 ]
+  run bash -c "jq -rs '[.[]|select(.class==\"refused\")|\"\(.gate):\(.refuse_reason)\"]|sort|join(\" \")' '$LOG'"
+  [ "$output" = "payload:payload-empty payload:payload-goal-line" ]
+  run bash -c "jq -rs '[.[]|select(.gate==\"capacity\")]|length' '$LOG'"
+  [ "$output" = "0" ]
+}
+
+@test "31 ADMIT-COVERAGE + ENUM guard — no silent admit branch, no unmapped refusal reason" {
+  # Two standing properties, not one-time edits. (a) every `return 0` in capacity_gate() is preceded
+  # by an emit_gate_admit, so a term added later with a bare `return 0` cannot re-open the hole this
+  # block closed; (b) every refusal reason the script actually emits maps to a named gate in
+  # _fire_gate_of, so a new reason cannot fall into the fail-visible `*)` arm and quietly go missing
+  # from the capacity denominator.
+  local body prev line n=0
+  body="$(awk '/^capacity_gate\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$REPO/scripts/handoff-fire.sh")"
+  [ -n "$body" ] || { echo "capacity_gate() not found — the extractor, not the gate, is broken"; false; }
+  # Normalise before scanning, or the lint fails on a correct tree twice over: comments are stripped
+  # because this function's own prose says `return 0` (a scan that reads its own documentation as
+  # code), and line-continuations are JOINED because an emit split across `\` puts the call two
+  # physical lines above its return — an adjacency test on raw lines would call that unrecorded.
+  body="$(printf '%s\n' "$body" | sed 's/^[[:space:]]*//' | grep -v '^#' \
+            | sed -e :a -e '/\\$/N; s/\\\n//; ta')"
+  prev=""
+  while IFS= read -r line; do
+    case "$line" in
+      *"return 0"*)
+        n=$((n + 1))
+        printf '%s\n%s\n' "$prev" "$line" | grep -q 'emit_gate_admit' \
+          || { echo "UNRECORDED ADMIT — a 'return 0' with no emit_gate_admit: $line"; false; } ;;
+    esac
+    prev="$line"
+  done <<< "$body"
+  [ "$n" -ge 9 ] || { echo "expected >=9 admitting returns, found $n — extractor drifted"; false; }
+  # positive control: the same scan MUST reject a body whose return is unrecorded, or (a) is vacuous
+  prev=""; rc=0
+  while IFS= read -r line; do
+    case "$line" in
+      *"return 0"*) printf '%s\n%s\n' "$prev" "$line" | grep -q 'emit_gate_admit' || rc=1 ;;
+    esac
+    prev="$line"
+  done <<< "$(printf 'capacity_gate() {\n  return 0\n}\n')"
+  [ "$rc" -eq 1 ] || { echo "the admit-coverage scan cannot fail — it is a deleted check"; false; }
+  # (b) ENUM: every reason passed to emit_fire_refusal is mapped
+  local reason mapped
+  mapped="$(awk '/^_fire_gate_of\(\)/{p=1} p{print} p&&/^\}$/{exit}' "$REPO/scripts/handoff-fire.sh")"
+  [ -n "$mapped" ] || { echo "_fire_gate_of() not found"; false; }
+  while read -r reason; do
+    [ -n "$reason" ] || continue
+    case "$reason" in
+      capacity|headroom) printf '%s' "$mapped" | grep -q 'capacity|headroom' || false ;;
+      payload-*)         printf '%s' "$mapped" | grep -q 'payload-\*'        || false ;;
+      *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
+         echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
+    esac
+  done <<< "$(grep -oE 'emit_fire_refusal [a-z-]+' "$REPO/scripts/handoff-fire.sh" | awk '{print $2}' | sort -u)"
+}
