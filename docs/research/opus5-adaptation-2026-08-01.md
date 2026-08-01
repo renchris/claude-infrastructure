@@ -99,7 +99,37 @@ Both appear in **both** CLAUDE.md files:
   settled value-choice a session does not get to overturn on new evidence alone. The evidence says
   revisit it; the decision is the operator's.
 
-### D3 — Effort re-tier: the config was written but nothing reads it
+### D3 — Effort re-tier — **PARTLY DONE 2026-08-01**, one operator-owned remainder
+
+**Done:** `effort_defaults.default` max → **high**, executing the re-sweep directive the SSOT had
+written into its own opus5 block. The 4.8 certification is kept verbatim as HISTORY — it is
+model-scoped, and reproducing it on Opus 5 is exactly what restoring `max` should require.
+`settings_floor` xhigh → **high**: that floor was derived *from* `default: max`, and left stale it had
+**inverted the guard** — `effort-parity-assert` was emitting `PS-WARN … --effort high < floor xhigh`
+against 8 live sessions, convicting them of obeying Opus 5's documented default. Verified: those lines
+are gone; it now reports `SSOT floor=high launcher-default=high`.
+
+**The deeper half — `bin/cc-route` only *claimed* to read the SSOT.** Its SLOT TABLE documented the
+lead slot as `@ max (effort_defaults.default)` while the code hardcoded `eff=max` / `fb_eff=max`. So
+moving the ladder into `model-config.yaml` would have been **cosmetic for every routed spawn**. Added
+`ssot_effort()` (key-anchored, value-bounded, comment-landmine-safe — the `ssot_model` shape), wired
+lead + Opus-fallback through it, **fail-open** to the SSOT's own value: a mis-read *model* is a
+correctness hazard worth refusing on, a mis-read *effort* is only cost/quality.
+Guarded by a control test, because the naive assertion (`lead_effort == "high"` against a fixture
+saying `high`) passes just as happily against a hardcoded literal — the very bug being removed. The
+control varies **only** the SSOT and requires the output to follow, plus asserts an unparseable value
+fails open rather than emitting a non-enum. RED-proven against a re-hardcoding mutant: the naive test
+stayed green, the control went red. `cc-route selftest` 26/26, `tests/cc-route.bats` 9/9.
+
+**Remainder — operator-owned, and the one thing here I did not do.** `~/.zshrc:80` still sets
+`CLAUDE_DEFAULT_EFFORT="${CLAUDE_DEFAULT_EFFORT:-max}"`, which the parity assert now reports as
+`DRIFT … != SSOT high`. It is outside the repo, it is a **shell profile** (a named soft-deny surface),
+and the SSOT's own comment calls it "the stable track's knob". Note the everyday `claude()` launcher
+is *unaffected* — it reads `CLAUDE_EFFORT:-high`, not this var — so this is the older launchers only.
+Three `settings.json` files also sit below the new floor (`medium`, `low`); the script already classes
+those as a class-C authority-ceiling surface it declines to realign.
+
+*Original finding, retained:*
 `model-config.yaml` carries a complete Opus 5 ladder — `opus5_default: high`,
 `opus5_coding_agentic: medium`, `opus5_capability_sensitive: xhigh`, `opus5_routine: low`.
 **Grep confirms the only file referencing those keys is `model-config.yaml` itself.** Meanwhile:
