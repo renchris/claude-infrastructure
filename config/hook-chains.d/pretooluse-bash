@@ -1,6 +1,15 @@
 # PreToolUse / matcher:Bash — collapsed from 6 settings.json entries (§8.5.4, §12.5).
 # ORDER IS THE SETTINGS.JSON ORDER. Adding a member here without adding it to settings.json's
 # replaced set (or vice versa) is drift — tests/hook-chain-live-parity.bats pins the two together.
+#
+# ⚠ PENDING OPERATOR ACTIVATION — READ BEFORE WIRING THIS DISPATCHER (HOOK_CHAIN_COST.md R-6):
+#   docs/activation/pending-activation/26-curl-gate-scope-activate.sh repoints settings.json's
+#   first entry from `curl-gate.py` to `curl-gate-scope.sh` — a bash scope gate that skips python3
+#   startup entirely outside reso-management-app (the "46 ms no-op" tests/hook-chain-live-parity.bats
+#   already names at its own :34-38). Once that activation runs, THIS FILE must name
+#   `curl-gate-scope.sh` too, or the collapsed chain would run the slow path the activation removed.
+#   It is left naming curl-gate.py deliberately: the registry mirrors what settings.json registers
+#   TODAY, and the dispatcher is inert, so there is no runtime effect either way until it is wired.
 curl-gate.py
 validate-bash.sh
 git-worktree-guard.sh
