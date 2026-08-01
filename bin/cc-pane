@@ -100,6 +100,15 @@ it2_bin() { printf '%s' "${CC_PANE_IT2:-$HOME/.claude/bin/it2}"; }
 it2_real_bin() {
   local shim real
   shim="$(it2_bin)"
+  # UNDER KITTY THERE IS NO PROFILE TO INHERIT, so there is nothing to bypass — and bypassing
+  # anyway resolves an iTerm2 Python-API client that, from inside kitty, has no iTerm2 to talk to.
+  # The shim's `-p Claude-Teammate` injection sits BELOW its terminal dispatch (bin/it2-wrapper:75),
+  # so inside kitty the shim execs bin/it2-kitty and never adds the flag: the shim IS the
+  # profile-neutral binary here. This was the KNOWN GAP named in 171673df — `spawn --inherit-profile`
+  # was the one cc-pane path still aimed at iTerm2 from a kitty session. Predicate mirrors
+  # it2-wrapper:75 and handoff-fire.sh's copy exactly, kill switch included, so all three agree on
+  # which terminal this is.
+  if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then printf '%s' "$shim"; return; fi
   real="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$shim" 2>/dev/null | head -1)"
   # Degrade to the shim when unreadable: still the correct pane, only the profile differs.
   if [ -n "$real" ] && [ -x "$real" ]; then printf '%s' "$real"; else printf '%s' "$shim"; fi

@@ -36,7 +36,17 @@ setup() {
   REALF="$BATS_TEST_TMPDIR/fake-it2-real"
   LOG="$BATS_TEST_TMPDIR/argv.log"
   export CC_PANE_IT2="$SHIM"
-  unset CC_PANE_ID ITERM_SESSION_ID CC_PANE_DRIVER || true
+  # PIN THE TERMINAL. Every test in this file exercises the iTerm2 path, and it2_real_bin() now
+  # resolves the SHIM instead of the raw binary when KITTY_WINDOW_ID is set (inside kitty the shim
+  # execs bin/it2-kitty and never injects -p Claude-Teammate, so there is nothing to bypass). Without
+  # this pin the suite's verdict depends on which terminal the developer happens to be sitting in:
+  # measured 2026-07-31, run from kitty, "spawn --inherit-profile uses the REAL binary" failed; from
+  # the same shell with the divert pinned off it passes, and so does baseline HEAD.
+  # This is the SAME defect tests/it2-wrapper.bats:setup() already carries, for the same reason, and
+  # it predates the divert in both files — KITTY_WINDOW_ID was simply never read before. Unsetting
+  # the real var AND pinning the kill switch covers both spellings.
+  unset CC_PANE_ID ITERM_SESSION_ID CC_PANE_DRIVER KITTY_WINDOW_ID || true
+  export IT2_WRAPPER_NO_KITTY=1
 }
 
 # Build the fake shim. $1 = body. The REAL_IT2= line is part of the fixture on purpose: cc-pane

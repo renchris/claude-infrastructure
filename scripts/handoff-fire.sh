@@ -3420,8 +3420,23 @@ if [ -n "${SESSION_ID:-}" ] || [ -n "$_itsid" ]; then ANCHOR_INTENT=1; fi
 # Python-version bump stays a one-file edit there; if the shim is unreadable we degrade to it
 # (still the correct pane — only the teammate profile differs).
 IT2_SHIM="$HOME/.claude/bin/it2"
-REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
-[ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
+# …BUT THE BYPASS IS AN iTerm2 ARGUMENT, AND UNDER KITTY IT INVERTS (2026-07-31).
+# The whole reason to prefer the raw binary is the shim's `-p Claude-Teammate` injection. That
+# injection lives on the shim's iTerm2 path, BELOW its terminal dispatch — so inside kitty the shim
+# `exec`s bin/it2-kitty and the profile flag is never added at all. There is nothing left to bypass,
+# and bypassing anyway is pure loss: it resolves the real it2, an iTerm2 Python-API client, which
+# from inside kitty has no iTerm2 to talk to and exits 2 ("Not running inside iTerm2"). Because
+# `it2_split` is the DEFAULT fire path (:3922 — it2py only saves/restores focus around it), that one
+# resolution decided whether handoff worked at all on kitty.
+# The predicate MIRRORS bin/it2-wrapper:75 exactly, kill switch included, so the two cannot disagree
+# about which terminal this is — a divert that fired in one and not the other would split the pane
+# with one binary and address it with another.
+if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
+  REAL_IT2="$IT2_SHIM"
+else
+  REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
+  [ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
+fi
 [ -n "${IT2_BIN:-}" ] && REAL_IT2="$IT2_BIN"   # test seam (same convention as cc-sessions)
 
 # PYTHON_BIN — same single-source-of-truth resolution as REAL_IT2 (the shim's own PYTHON_BIN= line,
