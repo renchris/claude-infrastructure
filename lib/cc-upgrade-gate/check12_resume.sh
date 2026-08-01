@@ -3,12 +3,20 @@
 #   indirectly by the eval'd cc-next body, not statically — shellcheck cannot see the call site.
 # check12_resume.sh — #12 Resume flows route a candidate session to the right binary.
 # ─────────────────────────────────────────────────────────────────────────────
-# We resume sessions via `cc-next` (per-account) and `ccr` (cross-worktree picker). The gate proves
-# `cc-next` routes a resumable session to the `claude-next` eval-track launcher (which runs the
-# candidate binary) — an EFFECT-READ: extract the real cc-next body, stub `claude-next` as a recorder,
-# stage a fake resumable session under the config dir cc-next computes, invoke it, and assert it
-# emitted `claude-next --resume <sid>`. `ccr` is a zsh-only picker (emulate -L zsh) not bash-sourceable
-# → its version→track routing is checked STRUCTURALLY (the routing line is present + intact).
+# We resume sessions via `cc` (per-account) and `ccr` (cross-worktree picker). The gate proves
+# `cc` routes a resumable session to the `claude` launcher (which runs the candidate binary) — an
+# EFFECT-READ: extract the real cc body, stub `claude` as a recorder, stage a fake resumable session
+# under the config dir cc computes, invoke it, and assert it emitted `claude --resume <sid>`.
+# `ccr` is a zsh-only picker (emulate -L zsh) not bash-sourceable → its version→track routing is
+# checked STRUCTURALLY (the routing line is present + intact).
+#
+# RETARGETED 2026-08-01 (was `cc-next` → asserting `claude-next --resume`). The 2026-07-31
+# consolidation renamed the resumer cc-next → `cc` and made `cc-next() { cc "$@"; }`, while `cc`
+# itself now invokes `claude --resume`. So the old assertion could not match any longer: it recorded
+# nothing and reported FAIL against a resume path that works. Confirmed harness-side, not
+# version-side, by a control run on 2026-08-01 that produced the identical FAIL on 2.1.219 (the
+# binary we already run) and 2.1.220. `ccr`'s structural probe likewise now looks for the
+# post-rename launcher names — `claude` for >=2.1.150, `claude-previous` for the pinned stable track.
 # shellcheck shell=bash
 
 check_12() {
@@ -17,9 +25,9 @@ check_12() {
     emit_result 12 resume-routing SKIP "no ~/.zshrc to extract cc-next/ccr from" ""
     return 0
   fi
-  body="$(extract_function cc-next "$zshrc")"
+  body="$(extract_function cc "$zshrc")"
   if [ -z "$body" ]; then
-    emit_result 12 resume-routing SKIP "cc-next() not found in ~/.zshrc" ""
+    emit_result 12 resume-routing SKIP "cc() not found in ~/.zshrc" ""
     return 0
   fi
 
@@ -35,28 +43,34 @@ check_12() {
     printf 'gatesid123' >"$pdir/.last-session-id"
     printf '{"type":"user"}\n' >"$pdir/gatesid123.jsonl"
     _cc_sync_account() { :; }
-    claude-next() { echo "claude-next $*" >>"$STUB_LOG"; }
+    claude() { echo "claude $*" >>"$STUB_LOG"; }
     eval "$body"
-    cc-next >/dev/null 2>&1
+    cc >/dev/null 2>&1
   )
-  recorded="$(grep '^claude-next' "$log" 2>/dev/null | tail -1)"
+  recorded="$(grep '^claude ' "$log" 2>/dev/null | tail -1)"
   rm -rf "$faketmp" "$log"
 
-  # --- structural: ccr routes recorded-version 2.1.150+ to the claude-next track --------------------
-  if extract_function ccr "$zshrc" | grep -q 'claude-next'; then
-    ccr_note="ccr (zsh-only) routes to claude-next for the eval track — routing line present"
+  # --- structural: ccr routes recorded-version 2.1.150+ to `claude`, older to claude-previous ------
+  # Post-2026-07-31 the names moved (claude = eval/candidate track, claude-previous = pinned 2.1.114),
+  # so BOTH arms must be present — a picker that lost the stable arm would resume an old session on
+  # the wrong binary, which is the exact failure this probe exists to catch.
+  local ccr_body=""
+  ccr_body="$(extract_function ccr "$zshrc")"
+  if printf '%s' "$ccr_body" | grep -q 'launcher=claude-previous' \
+     && printf '%s' "$ccr_body" | grep -q 'launcher=claude'; then
+    ccr_note="ccr (zsh-only) routes >=2.1.150 to claude and older to claude-previous — both arms present"
   else
-    ccr_note="ccr not found / no claude-next route (non-fatal)"
+    ccr_note="ccr not found / version→track routing arms missing (non-fatal)"
   fi
 
   case "$recorded" in
     *"--resume gatesid123"*)
       emit_result 12 resume-routing PASS \
-        "cc-next routes a resumable session to the claude-next eval-track launcher (--resume gatesid123)" \
+        "cc routes a resumable session to the claude launcher (--resume gatesid123)" \
         "$ccr_note" ;;
     *)
       emit_result 12 resume-routing FAIL \
-        "cc-next did NOT route to 'claude-next --resume <sid>' (got: ${recorded:-<nothing>})" \
+        "cc did NOT route to 'claude --resume <sid>' (got: ${recorded:-<nothing>})" \
         "$ccr_note" ;;
   esac
   return 0
