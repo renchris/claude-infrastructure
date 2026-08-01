@@ -282,7 +282,12 @@ and that finishes the wiring")" "$w" "a2-d2-env"
   [ "$status" -eq 0 ]; fired "$output"
 }
 
-# ── D2 abstain: the SAME command inside a ```bash fence is the COMPLIANT form ──
+# ── D2 abstain: a ```bash fence is DELIMITED and copy-clean, so it is not the defect D2 hunts —
+#    though it is no longer the PREFERRED form (screenshot-measured 2026-08-01: a fence renders
+#    plain WHITE, because syntax highlighting colours syntax and a bare command has none, while
+#    inline code is blue unconditionally). D2 hunts a command with NO code styling at all, bare in
+#    a paragraph. Firing on a fence would be over-enforcement — it would convict every legitimate
+#    fenced example in a doc or a review. The preferred form is pinned two tests below. ──
 @test "D2 abstains when the command is in a bash-tagged fence" {
   local w; w="$(mkrepo_landed a2d2ok)"
   run run_ca "$(mkfix "✅ Complete & live on trunk.
@@ -507,4 +512,41 @@ Two things remain yours: authenticate motion-plus, and restart Cursor.
 Say the word and I will pick up either of the remaining items.')" "$w" "a2-quote-ctl"
   [ "$status" -ne 0 ] || [ -n "$output" ]
   printf '%s' "$output" | grep -q 'cc-backlog needs'
+}
+
+# ── THE PREFERRED FORM (CLAUDE.md § ONE command, screenshot-measured 2026-08-01): a marker line of
+#    its own, then the command as an inline-code span alone on the next line. Blue on every wrapped
+#    row, marker breaks left-align scanning, and no row starts with chrome so a drag-copy is exact.
+#    This MUST abstain, or the rule the docs mandate would be blocked by the hook that enforces it —
+#    the same self-contradiction the quoted-span FP already cost us once. ──
+@test "D2 abstains on the PREFERRED marker-line + inline-span form" {
+  local w; w="$(mkrepo_landed a2d2pref)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed, all green.
+
+▶ Run this:
+
+`cc-do`')" "$w" "a2-d2-pref"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "D2 abstains on the preferred form with a LONG wrapping command" {
+  local w; w="$(mkrepo_landed a2d2preflong)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed, all green.
+
+▶ Run this:
+
+`CLAUDE_CONFIG_DIR=~/.claude-next claude-latest mcp add -e TOKEN=X --scope user motion-local -- node ~/Development/motion-plus/ai-kit/mcp/dist/es/index.mjs`')" "$w" "a2-d2-preflong"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+# ── CONTROL: strip the styling and the SAME command bare in a paragraph still FIRES, so the two
+#    abstains above are the form being recognised, not D2 having gone quiet. ──
+@test "CONTROL: the same command BARE in a paragraph still fires D2" {
+  local w; w="$(mkrepo_landed a2d2barectl)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed, all green.
+
+Run this:
+
+cc-do')" "$w" "a2-d2-barectl"
+  [ "$status" -ne 0 ] || [ -n "$output" ]
 }

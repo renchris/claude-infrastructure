@@ -32,7 +32,19 @@
 #       prose. Run it or not? Unanswerable. The operator: "I had to comb through the entire
 #       return body to fish out which is the command to copy and paste and not just more
 #       paragraph text because our command has no syntax highlighting to visually pull it
-#       apart." The ```bash tag is the ONLY thing that makes the TUI highlight it.
+#       apart."
+#       THE COMPLIANT FORM IS NOT A FENCE (corrected 2026-08-01, measured in the operator's own
+#       TUI). A ```bash fence renders the command PLAIN WHITE — syntax highlighting colours
+#       syntax, and a bare command name has none — while INLINE code renders blue
+#       unconditionally. The fence was strictly less visible than the prose around it, the exact
+#       inversion of the rule this hook first shipped with. A blockquote gives blue AND a left
+#       rule, but its `│` is selected by a click-drag and lands in the paste, corrupting the
+#       command. So the form is: a marker line of its own ("▶ Run this:"), then the command as
+#       an inline-code span on the next line — blue on every wrapped row, a marker that breaks
+#       left-align scanning, and NO row beginning with chrome, so a drag from first character to
+#       last yields exactly the command. D2 already abstains on inline-backtick spans, so this
+#       form passes unchanged; what D2 still catches is the real defect above — a command sitting
+#       BARE in a paragraph with no code styling at all.
 #   D3  operator: "Good to close?" → "Yes — with one thing still parked." → operator: "so you want
 #       me to run the command or want me to close? that is contradictory" → the agent's own
 #       admission: "Ignore the command — that was me hedging on a yes/no question." Line 1 asserted
@@ -339,7 +351,7 @@ reason=""
 [ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
-[ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command outside a bash-tagged fence, so the TUI cannot highlight it and the operator cannot tell prose from the thing to paste. Put the ONE command in a \`\`\`bash fence with at most one line of why before it. A close shows a command ONLY if you are asking the operator to run it — a command you would then tell them to ignore must not appear at all, neither fenced nor bare."
+[ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"
 reason="$reason (completion-assert $((N+1))/${MAX})"
 

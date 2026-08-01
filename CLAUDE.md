@@ -486,25 +486,45 @@ Two rules bind your prose:
 
 - **Relay, never paraphrase.** Lead with the same governing line and reproduce any rendered command
   verbatim — never dissolve it back into a sentence (the Silver-Platter rule).
-- **ONE command, never a list.** Give the operator exactly one thing to select and paste, in its own
-  fenced block **tagged `bash`** — ` ```bash `, never a bare ` ``` ` and never a naked line in a
-  paragraph. The tag is what makes the TUI syntax-highlight it, and that highlighting is the only
-  thing that makes the one runnable line pop out of a close made of prose (operator directive
-  2026-08-01). A bare fence renders as flat undifferentiated text, and the operator then has to
-  *find* the command before they can run it — the same defect as burying it in a sentence, one step
-  less severe. Their words: *"I had to comb through the entire return body to fish out which is the
-  command to copy and paste and not just more paragraph text."*
+- **ONE command, never a list — and the form is MEASURED, not assumed.** Give the operator exactly
+  one thing to select and paste. Their words: *"I had to comb through the entire return body to fish
+  out which is the command to copy and paste and not just more paragraph text."* The form that
+  actually works in this TUI, screenshot-verified 2026-08-01:
+
+  ```text
+  ▶ Run this:
+
+  `<the one command>`          ← inline-code span, alone on its line
+  ```
+
+  A marker line of its own, then the command as an **inline-code span**. Three properties, and only
+  this form has all three: it renders **blue on every wrapped row** · the `▶` **breaks left-align
+  scanning** · **no row begins with chrome**, so a click-drag from first character to last pastes
+  exactly the command.
+
+  🚨 **Do NOT use a ` ```bash ` fence.** That was this rule's first form and the operator's
+  screenshot disproved it: a fence gets *syntax* highlighting, and a bare command name has no syntax
+  to colour, so it renders **plain white — less visible than the prose around it**, while inline code
+  is blue unconditionally. **Do NOT use a blockquote** either: it gives blue *and* a left rule, but
+  the `│` is inside the selection and lands in the paste, corrupting the command (verified by the
+  operator pasting one). A `$` prompt prefix corrupts a drag-copy the same way.
+  *(Generalisable lesson: a rendering claim is only true of the renderer you measured. The fence rule
+  shipped, landed, and was enforced by a hook for a whole session before anyone looked at a
+  screenshot.)*
+
   Multiple runnable steps collapse to **`cc-do`** — the driver that prints them,
   confirms once, and runs them in irreversibility order (`cc-do --list` to look first, `cc-do <stem>`
   for exactly one). Judgment items are counted, not itemized. A numbered wall of commands that wrap
   four lines each is the defect this replaced — it is unreadable in a terminal and unpasteable
   besides.
 - **Every command shown carries a run / don't-run verdict — and at a close there is only one verdict.**
-  A fenced command means *run this*. If you would tell the operator to ignore it, **it does not
-  appear at all** — not fenced, not bare. (One close showed a command, then had to follow up with
-  "Ignore the command"; another trailed a command with "which is the main reason I'd leave it",
-  leaving the operator unable to tell a recommendation from an instruction.) Reference-only commands
-  stay in inline backticks, mid-sentence, never on their own line — and never in the closing block.
+  A command under a `▶ Run this:` marker means *run this*. If you would tell the operator to ignore
+  it, **it does not appear at all** — not marked, not bare. (One close showed a command, then had to
+  follow up with "Ignore the command"; another trailed a command with "which is the main reason I'd
+  leave it", leaving the operator unable to tell a recommendation from an instruction.)
+  Reference-only commands stay in inline backticks **mid-sentence, never alone on their own line** —
+  the marker line plus a lone span is what makes a command an instruction, so the discriminator is
+  position, not styling. Never in the closing block either way.
 
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 
