@@ -38,12 +38,46 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Frozen account order (contract SS1) -- explicit, NOT accounts.json file order. An account's
-# CDP port is PORT_BASE_DEFAULT + its index HERE, so the frozen map is unchanged:
-# next=9341 - next2=9342 - next3=9343 - next4=9344.
-ACCOUNTS: Tuple[str, ...] = ("next", "next2", "next3", "next4")
+
+def _load_accounts() -> Tuple[str, ...]:
+    """Frozen account order (contract SS1) -- explicit, NOT accounts.json ARRAY order. An
+    account's CDP port is PORT_BASE_DEFAULT + its index HERE, so the map must stay stable
+    even if accounts.json is reordered (it already is: array order is operator spend
+    priority, next/next4/next3/next2). The stable key is accounts.json's own `port_index`
+    field, so this reads accounts[] sorted by port_index -- any entry missing one is
+    frozen at the next unused slot (append-only: adding an account never renumbers an
+    existing one). Falls back to the historical 4-account map if accounts.json is
+    absent/unreadable (e.g. a fresh checkout before setup), so an N-account SSOT never
+    turns a missing file into a hard crash.
+    """
+    cfg_path = os.environ.get("CLAUDE_ACCOUNTS_JSON") or str(Path.home() / ".claude" / "accounts.json")
+    try:
+        accounts = json.loads(Path(cfg_path).read_text()).get("accounts", [])
+        named = [a["name"] for a in accounts if a.get("name")]
+        if not named:
+            raise ValueError("no named accounts")
+        used = {a["port_index"] for a in accounts if isinstance(a.get("port_index"), int)}
+        next_free = 0
+        order: Dict[str, int] = {}
+        for a in accounts:
+            name = a.get("name")
+            if not name:
+                continue
+            idx = a.get("port_index")
+            if not isinstance(idx, int):
+                while next_free in used:
+                    next_free += 1
+                idx, used = next_free, used | {next_free}
+            order[name] = idx
+        return tuple(sorted(order, key=lambda n: order[n]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return ("next", "next2", "next3", "next4")
+
+
+ACCOUNTS: Tuple[str, ...] = _load_accounts()
 PORT_BASE_DEFAULT = 9341
 CHROME_DEFAULT = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 CDP_TIMEOUT_S = 15.0      # default; CC_AUTHBROWSER_CDP_TIMEOUT_S overrides (see budget())
