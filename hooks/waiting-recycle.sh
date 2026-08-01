@@ -217,7 +217,12 @@ is_monitoring_desk() {
   local rf="$COORD/cc-roles/$DESK_ROLE" rv u="$UUID"
   [ -n "$u" ] || { u="${CC_WR_UUID:-${CC_PANE_ID:-${ITERM_SESSION_ID:-}}}"; u="${u##*:}"; }
   [ -f "$rf" ] || return 1
-  rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; [ -n "$rv" ] || return 1
+  # Memoized role value (R-1): traced 3 reads of this one file per invocation. Set-but-empty is a
+  # DISTINCT state from unset — an empty role file must still `return 1` — so the guard tests for
+  # the variable's EXISTENCE, never its truthiness.
+  if [ -n "${_WR_ROLE_V+set}" ]; then rv="$_WR_ROLE_V"
+  else rv="$(head -1 "$rf" 2>/dev/null | tr -d '[:space:]')"; fi
+  [ -n "$rv" ] || return 1
   { [ -n "$SID" ] && [ "$rv" = "$SID" ]; } || { [ -n "$u" ] && [ "$rv" = "$u" ]; }
 }
 NOTIFY_CMD="${CC_WR_NOTIFY:-}"                              # T-P1-8: empty → builtin osascript operator page
@@ -244,7 +249,21 @@ RSS_PAGE_MB="${CC_WR_RSS_PAGE_MB:-1500}"                  # process RSS ≥ this
 
 # Per-cwd key (arm + cooldown survive a recycle since cwd is stable across it); per-session key (cap
 # resets on the fresh successor). Mirrors session-continue.sh's config-dir|path hash.
-key_cwd() { printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16; }
+# PER-INVOCATION MEMO (HOOK_CHAIN_COST.md R-1). This hook fires on EVERY PostToolUse and traced 17
+# external execs before abstaining on a non-desk session — of which `shasum`+`cut` ran twice for the
+# SAME cwd and the role file was read three times. Each external exec costs ~3.5 ms at load 16.
+#
+# WHY THE CACHE IS FILLED BY THE PARENT AND ONLY READ HERE: every caller reaches these through a
+# command substitution — `[ -f "$(arm_for "$CWD")" ]` → sentinel_for → key_cwd — and a `$( )` runs in
+# a SUBSHELL, so anything assigned inside it is discarded at the closing paren. A self-populating
+# memo would therefore never hit. The values depend only on $CFG/$DESK_ROLE/$CWD, all known before
+# the first substitution, so wr_memo_init (called once, in the parent) fills them and these functions
+# only ever READ. Unset memo ⇒ compute exactly as before, so every non-hook caller (the CLI modes,
+# the bats suite) is byte-identical.
+key_cwd() {
+  [ -n "${_WR_KC_KEY:-}" ] && [ "$1" = "${_WR_KC_ARG:-}" ] && { printf '%s' "$_WR_KC_KEY"; return; }
+  printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16
+}
 # ROLE-KEYED identity (2026-07-26). The desk's identity is a ROLE FILE, not a directory — but these six
 # sentinels were keyed on (cfg,cwd), so they only resolved because desk-invariant happens to respawn with
 # a fixed `--cwd $CANNED_CWD`. A desk started by hand (`desk-register` exists precisely for that) from any
@@ -258,7 +277,10 @@ key_cwd() { printf '%s|%s' "$CFG" "$1" | shasum 2>/dev/null | cut -c1-16; }
 # off an opt-in that was on. It is safe in the same direction for all six: `live`/`arm` finding state means
 # armed; `disarm`/`cooldown` finding state means SUPPRESSED. Both directions err toward the status quo.
 # New writes go role-keyed, so state migrates forward as it is touched (no migration script, no flag day).
-key_role() { printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16; }
+key_role() {
+  [ -n "${_WR_KR_KEY:-}" ] && { printf '%s' "$_WR_KR_KEY"; return; }
+  printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16
+}
 sentinel_for() { # <prefix> <cwd> → path to USE (role-keyed for a role-holder, else legacy cwd-keyed)
   local pfx="$1" cwd="$2" rp cp
   cp="$STATE_DIR/$pfx-$(key_cwd "$cwd")"
@@ -460,7 +482,33 @@ command -v jq >/dev/null 2>&1 || { SID="?"; abstain "no-jq"; }
 SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
-CMD="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+# CMD is extracted LAZILY at its ONE use site (the recycle-machinery guard below): on the abstain
+# paths that precede it — `disarmed`, `not-armed`, the overwhelmingly common case — the value is
+# never read, so the incumbent paid a jq fork (~9 ms) for a variable it discarded. Nothing between
+# here and there references $CMD (verified by grep: one use in the whole file).
+
+# ── FILL THE PER-INVOCATION MEMO (R-1) ────────────────────────────────────────────────────────────
+# Must run HERE: after $CWD exists, and before the first `$(arm_for …)` / `$(disarm_for …)`, because
+# those are command substitutions and a memo filled inside one dies with its subshell. Every value
+# below is a pure function of state that cannot change within one invocation, so reading it once and
+# reusing it is not merely cheaper — it is a strictly more CONSISTENT view than three separate reads
+# of a file another process may be rewriting mid-hook.
+# Set-but-empty is meaningful (an empty/unreadable role file must still fail is_monitoring_desk), so
+# this is assigned unconditionally when the file exists and left UNSET when it does not. FIRST,
+# because the two below depend on it.
+[ -f "$COORD/cc-roles/$DESK_ROLE" ] && \
+  _WR_ROLE_V="$(head -1 "$COORD/cc-roles/$DESK_ROLE" 2>/dev/null | tr -d '[:space:]')"
+if [ -n "$CWD" ]; then
+  _WR_KC_ARG="$CWD"
+  _WR_KC_KEY="$(printf '%s|%s' "$CFG" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+fi
+# The role key is precomputed ONLY for an actual role-holder. A builder never calls key_role (
+# sentinel_for returns the cwd-keyed path before reaching it), so precomputing it unconditionally
+# would ADD a shasum+cut to the common path to serve a branch it never takes — paying for the
+# optimization on exactly the sessions it cannot help. The test is free now that the role value
+# above is memoized.
+is_monitoring_desk && \
+  _WR_KR_KEY="$(printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16)"
 
 [ -n "$SID" ] || abstain "no-session-id"
 
@@ -488,6 +536,7 @@ fi
 
 # GUARD: never advise-recycle off the recycle/handoff machinery's OWN Bash calls (defense-in-depth;
 # the cooldown set at fire-time also covers this, but an explicit guard removes any ordering risk).
+CMD="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 case "$CMD" in
   *handoff-fire*|*/handoff*|*waiting-recycle*|*"self-close"*) abstain "recycle-machinery" ;;
 esac

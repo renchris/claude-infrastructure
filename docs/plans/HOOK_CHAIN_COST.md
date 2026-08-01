@@ -186,13 +186,44 @@ reachable and no edit inside the `.py` can recover its own startup.
   smoke-gated. Verified dry-run → apply → re-apply → undo against a fixture config dir; live layer
   confirmed untouched.
 
+### M2 — per-invocation memo in `waiting-recycle.sh`
+
+The chain's single most expensive hook recomputed the same values within one invocation: 4 `jq` on
+one payload, the desk-role file read **3×**, `key_cwd`'s `shasum`+`cut` **2×**.
+
+- **The constraint that makes it non-obvious:** every caller reaches these through a command
+  substitution (`[ -f "$(arm_for "$CWD")" ]` → `sentinel_for` → `key_cwd`), and a `$( )` runs in a
+  **subshell**, so anything it assigns dies at the closing paren. A self-populating memo could never
+  hit. The values depend only on `$CFG`/`$DESK_ROLE`/`$CWD` — all known before the first substitution
+  — so the parent fills the memo once and the functions only ever *read* it. Unset memo ⇒ compute
+  exactly as before, so the CLI modes and the bats suite are byte-identical.
+- **`CMD` is now lazy**, extracted at its one use site: the abstain paths that precede it never read
+  it, so the incumbent paid a `jq` fork for a value it discarded.
+- **The role key is precomputed only for an actual role-holder** — a builder never calls `key_role`,
+  so precomputing it unconditionally would have added a `shasum`+`cut` to the common path to serve a
+  branch it never takes. (First draft did exactly that; caught by re-tracing rather than by a test.)
+- **Measured, interleaved A/B at load 14** (same payload, alternating arms so drift hits both
+  equally): **100.08 ms → 67.46 ms median (−32.6%)**, p95 139.10 → 96.89 ms, **20 → 13 external
+  execs**, stdout byte-identical on the abstain path.
+- **Verification:** `waiting-recycle.bats` 106/0 and `waiting-recycle-bounded-read.bats` 12/0,
+  identical before and after. Because identical-before-and-after means those suites cannot
+  *distinguish* a correct memo, two things were done rather than assumed: (a) the lazy-`CMD` move was
+  **mutation-proved** against the existing suite — forcing `CMD` empty reds *"guard: a handoff-fire
+  --recycle command does not trigger a fresh advisory"*; (b) `tests/waiting-recycle-memo.bats` (5
+  cases) pins what nothing covered, with case 5 keying an arm marker on a hash the test computes
+  independently, so memo-vs-uncached drift of one byte is visible.
+- **A claim this section does NOT make:** the set-but-empty role-value distinction is a *performance*
+  choice, not a correctness one. Mutating the existence guard into a truthiness guard reds **zero**
+  cases, because the truthiness form falls through to a re-read yielding the same empty value. The
+  suite header says so explicitly, so no future reader infers a contract no test enforces.
+
 ---
 
 ## 5. Remainders (named, with owners — none silently dropped)
 
 | # | Remainder | Measured value | Owner |
 |---|---|---|---|
-| R-1 | `waiting-recycle.sh` recomputes within one invocation: 4 `jq` on one payload, the desk-role file read 3×, `key_cwd`'s `shasum`+`cut` 2×. **Memoization only — no reordering, no semantic change.** Note the constraint that makes it non-trivial: `key_cwd` is called inside `$( )` **subshells**, so a cache written there is lost; the value must be computed once in the parent before any subshell reads it. | ~48 ms of 96.55 ms | 6 |
+| ~~R-1~~ | **DONE — see M2 below.** | — | — |
 | R-2 | `teammate-checkpoint.sh` runs on the **match-all** PostToolUse matcher and pays 9 externals to find no team. | ~32 ms | 6 |
 | R-3 | `validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. **Deliberately not taken here** — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes. | ~42 ms | 6 |
 | R-4 | The registration collapse (§3), if the Bash rate rises above p95 1332/h. Requires first pinning the multi-emitter stdout-merge contract with a test — no such test exists today. | ~60 ms (15%) | 6 |
