@@ -208,6 +208,11 @@
           {
             "type": "command",
             "command": "~/.claude/hooks/waiting-recycle.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/relay-verbatim.sh",
+            "timeout": 5
           }
         ]
       },
