@@ -1,6 +1,6 @@
 # desk.zsh — `claude-desk`: one command to START the machine-wide orchestrator desk.
 #
-# Source from ~/.zshrc (after the claude-next block, which this composes):
+# Source from ~/.zshrc (after the `claude` block, which this composes):
 #     [[ -f "$HOME/.claude/lib/desk.zsh" ]] && source "$HOME/.claude/lib/desk.zsh"
 #
 # THE PROBLEM THIS SOLVES: a hand-started Claude session cannot presume the desk role, because the
@@ -8,9 +8,9 @@
 # handoff-fire recycle prompt (re-authored into /tmp every time, evaporating on recycle) and a
 # hand-written ~/.claude/cc-roles/desk. `claude-desk` does both, mechanically, in the right order.
 #
-# Composition mirrors claude-fable(): a THIN wrapper that sets up state and delegates to
-# claude-next() for binary/config/model/effort/isolation. Account variants follow the house pattern
-# (claude-desk2/3/4 = CLAUDE_CONFIG_DIR prefix), exactly like claude-next2 / claude-fable2.
+# COMPOSITION: a THIN wrapper that sets up state and delegates to `claude` — THE entrypoint — for
+# binary/config/model/effort/isolation. Account variants follow the house pattern
+# (claude-desk2/3/4 = CLAUDE_CONFIG_DIR prefix), exactly like claude2/3/4.
 
 CLAUDE_DESK_HOME="${CLAUDE_DESK_HOME:-$HOME/Development/claude-infrastructure}"
 CLAUDE_DESK_BRIEF="${CLAUDE_DESK_BRIEF:-$CLAUDE_DESK_HOME/docs/templates/desk-boot-brief.md}"
@@ -48,7 +48,7 @@ claude-desk() {
   fi
 
   # --- claim the role BEFORE launch ---
-  # Ordering is load-bearing: claude-next execs in THIS pane, so the role file must already name
+  # Ordering is load-bearing: `claude` execs in THIS pane, so the role file must already name
   # this pane when the new session's SessionStart hooks run — that is what lets
   # hooks/desk-brief-inject.sh recognise the desk and inject the brief.
   "$reg" || return 1
@@ -64,10 +64,10 @@ Read ${CLAUDE_DESK_BRIEF} in full and assume that role NOW — it is your standi
 
 Then do exactly what its 'First three actions' say: orient (cc-blockers, cc-board + cc-backlog, cc-notify --list, /wrap), confirm you hold the role, and DRIVE every non-blocked track. Do not re-introduce yourself and do not ask what to do."
 
-  ( cd "$CLAUDE_DESK_HOME" && claude-next "$kickoff" "$@" )
+  ( cd "$CLAUDE_DESK_HOME" && claude "$kickoff" "$@" )
 }
 
-# Account variants — same shape as claude-next2/3/4 and claude-fable2.
+# Account variants — same shape as claude2/3/4.
 alias claude-desk2='CLAUDE_CONFIG_DIR=$HOME/.claude-secondary claude-desk'
 alias claude-desk3='CLAUDE_CONFIG_DIR=$HOME/.claude-tertiary claude-desk'
 alias claude-desk4='CLAUDE_CONFIG_DIR=$HOME/.claude-quaternary claude-desk'

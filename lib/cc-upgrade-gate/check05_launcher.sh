@@ -32,8 +32,12 @@
 # launcher's DIRECT (non-worktree) branch runs. Returning non-zero would trip the launcher's own
 # "worktree isolation failed" guard and abort BEFORE the binary is ever invoked (nothing recorded).
 #
-# Secondary (non-fatal) spot-check: the back-compat shims `claude-next` / `claude-opus5` still
-# forward the same flag-set, so the ~40 repo callers that invoke them keep working.
+# Secondary (non-fatal) spot-check, INVERTED 2026-08-01: the retired names `claude-next` /
+# `claude-opus5` must NOT be defined. They were back-compat shims onto this same body, kept while
+# ~40 repo files still invoked them by name; the launcher consolidation deleted both the callers and
+# the shims (LAUNCHER_SPEC.md — `claude` is the only entrypoint). The probe therefore asserts
+# ABSENCE, which is what stops the consolidation regressing silently: a re-added shim resurrects the
+# duplicate-name state this change exists to end, and nothing else in the repo would notice.
 # shellcheck shell=bash
 
 # Derive the pinned binary path the launcher actually uses, from its own body.
@@ -63,8 +67,8 @@ _gate05_effect_read() {
   body="$(extract_function "$fn" "$zshrc")" || return 1
   [ -n "$body" ] || return 1
   rel="$(_gate05_bin_relpath "$body")"
-  # A shim body carries no _bin= line; fall back to the resolved `claude` path so a shim that
-  # FORWARDS still reaches a stub — which is exactly what the secondary check asserts.
+  # A body carrying no _bin= line (a forwarding wrapper such as claude-x / claude-desk) falls back
+  # to the resolved `claude` path, so it still reaches the stub instead of reading as "no flags".
   [ -n "$rel" ] || rel="$_g5_main_rel"
   [ -n "$rel" ] || return 1
   log="$(mktemp)"
@@ -128,21 +132,37 @@ check_05() {
     return 0
   fi
 
-  # --- secondary (non-fatal): the back-compat shims forward the same flag-set ------------------
-  # ~40 repo files still invoke claude-next / claude-opus5 (handoff-fire's launcher_for(),
-  # lib/desk.zsh, the model-upgrade skill). If a shim stops forwarding, those break silently.
-  local ok_shims="" bad_shims="" shim
-  for shim in claude-next claude-opus5; do
-    if _gate05_effect_read "$shim" "$zshrc" "$fakehome" \
-       && case "$_g5_argv" in *"--model claude-opus-5"*) [ "$_g5_depth" = "SPAWN_DEPTH=1" ] ;; *) false ;; esac
-    then ok_shims="$ok_shims $shim"
-    else bad_shims="$bad_shims $shim"
+  # --- secondary (non-fatal): the retired names stay retired -----------------------------------
+  # An ABSENCE cannot be effect-read — there is no body to run — so this half IS a source read, and
+  # deliberately so: it looks for a DEFINITION (function or alias), which is the only way a name can
+  # come back. Past-tense mentions in the file's own consolidation history are therefore unaffected.
+  # `claude-default` is NOT in this list: it is retired by activation 28, a separate pending item,
+  # and convicting it here would make this check WARN for a reason outside the consolidation.
+  local back_names="" n_dead=0 dead
+  for dead in claude-next claude-next2 claude-next3 claude-next4 \
+              claude-opus5 claude-opus5-2 claude-opus5-3 claude-opus5-4 \
+              cc-next cc-next2 cc-next3 cc-next4 \
+              claude-fable claude-fable2 claude-fable3 claude-fable4 \
+              claude-fable-x claude-fable-h claude-fable-q \
+              claude-previous claude-previous2 claude-previous3 claude-previous4 \
+              cc-previous claude-stable; do
+    n_dead=$((n_dead + 1))
+    if grep -qE "^[[:space:]]*(${dead}\(\)|alias[[:space:]]+${dead}=)" "$zshrc"; then
+      back_names="$back_names $dead"
     fi
   done
-  if [ -n "$bad_shims" ]; then
-    shim_note="shim WARN (non-fatal):${bad_shims} did NOT forward the full flag-set; ok:${ok_shims:- none}"
+  # Positive control: with no launchers at all in the file, "every retired name is absent" is
+  # vacuously true. `claude-prev` is the rename half's survivor, so requiring it makes the absence
+  # claim mean something — and catches a half-applied consolidation (deletes done, renames not).
+  local survivor_note="claude-prev present"
+  if ! grep -qE '^[[:space:]]*claude-prev\(\)' "$zshrc"; then
+    survivor_note="claude-prev MISSING (rename half not applied)"
+    back_names="$back_names (no-claude-prev)"
+  fi
+  if [ -n "$back_names" ]; then
+    shim_note="consolidation WARN (non-fatal): retired names still defined:${back_names}; ${survivor_note}"
   else
-    shim_note="back-compat shims forward intact:${ok_shims}"
+    shim_note="consolidation intact: all ${n_dead} retired launcher names absent; ${survivor_note}"
   fi
 
   emit_result 05 launcher-resolution PASS \
