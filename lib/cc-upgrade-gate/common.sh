@@ -23,15 +23,15 @@
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 # shellcheck disable=SC2086  # $GATE_ACCOUNTS is a deliberate space-split word list, never quoted.
 
-# ---- account name → config dir (verified 2026-07-24; see the plan's "Verified facts") ---------------
+# ---- account name → config dir. Backed by the accounts.json-generated map (any N accounts) —
+# see lib/account-map.generated.sh. This file is SOURCED (never executed), so $0 is the caller's
+# path, not ours — locate ourselves via BASH_SOURCE instead.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "${BASH_SOURCE[0]}")/../account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
 gate_cfg_for() {
-  case "$1" in
-    next)  printf '%s\n' "$HOME/.claude-next" ;;
-    next2) printf '%s\n' "$HOME/.claude-secondary" ;;
-    next3) printf '%s\n' "$HOME/.claude-tertiary" ;;
-    next4) printf '%s\n' "$HOME/.claude-quaternary" ;;
-    *)     printf '%s\n' "" ;;
-  esac
+  if cc_acct_dir_for_name "$1"; then printf '%s\n' "$CC_ACCT_DIR"; else printf '%s\n' ""; fi
 }
 
 gate_primary_account() { set -- $GATE_ACCOUNTS; printf '%s\n' "$1"; }

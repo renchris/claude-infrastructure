@@ -69,15 +69,14 @@ done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
 CFG="${CFG/#\~/$HOME}"
 
-# --- account routing -------------------------------------------------------
+# --- account routing --------------------------------------------------------
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
 acct_to_cfg() {
-  case "$1" in
-    next) echo "$HOME/.claude-next" ;;
-    next2) echo "$HOME/.claude-secondary" ;;
-    next3) echo "$HOME/.claude-tertiary" ;;
-    next4) echo "$HOME/.claude-quaternary" ;;
-    *) echo "" ;;
-  esac
+  if cc_acct_dir_for_name "$1"; then echo "$CC_ACCT_DIR"; else echo ""; fi
 }
 if [[ "$TARGET" == "auto" ]]; then
   kind="general"; [[ "$MODEL" == "fable" ]] && kind="fable"

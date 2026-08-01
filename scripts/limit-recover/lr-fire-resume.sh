@@ -25,17 +25,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 cfg="" model="claude-opus-4-8" effort="max"
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
 case "$ACCT" in
-  next|claude-next)            cfg="$HOME/.claude-next" ;;
-  next2|claude-next2)          cfg="$HOME/.claude-secondary" ;;
-  next3|claude-next3)          cfg="$HOME/.claude-tertiary" ;;
-  next4|claude-next4)          cfg="$HOME/.claude-quaternary" ;;
-  fable|claude-fable)          cfg="$HOME/.claude-next";       model="claude-fable-5"; effort="high" ;;
-  fable2|claude-fable2)        cfg="$HOME/.claude-secondary";  model="claude-fable-5"; effort="high" ;;
-  fable3|claude-fable3)        cfg="$HOME/.claude-tertiary";   model="claude-fable-5"; effort="high" ;;
-  fable4|claude-fable4)        cfg="$HOME/.claude-quaternary"; model="claude-fable-5"; effort="high" ;;
   /*|~*)                       cfg="${ACCT/#\~/$HOME}" ;;
-  *) echo "lr-fire-resume: unknown account '$ACCT'" >&2; exit 2 ;;
+  *)
+    if cc_acct_dir_for_name "$ACCT"; then
+      cfg="$CC_ACCT_DIR"
+      [ "$CC_ACCT_IS_FABLE" = 1 ] && { model="claude-fable-5"; effort="high"; }
+    else
+      echo "lr-fire-resume: unknown account '$ACCT'" >&2; exit 2
+    fi
+    ;;
 esac
 [[ -n "$MODEL" ]] && model="$MODEL"
 [[ -n "$EFFORT" ]] && effort="$EFFORT"

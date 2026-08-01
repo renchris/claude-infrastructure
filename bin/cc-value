@@ -72,10 +72,12 @@ epoch_to_iso() {
 }
 
 # config_dir → account name (statusline suffix convention; same map as cc-board/cc-context).
-map_acct() { case "$1" in
-  */.claude-next)       echo next  ;;  */.claude-secondary)  echo next2 ;;
-  */.claude-tertiary)   echo next3 ;;  */.claude-quaternary) echo next4 ;;  *) echo "" ;;
-esac ; }
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+map_acct() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
 # TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md. Tab is IFS-*whitespace*,
 # so `IFS=$'\t' read` collapses a RUN of tabs and ANY empty cell shifts every later field LEFT. This

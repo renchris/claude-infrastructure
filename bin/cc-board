@@ -20,11 +20,13 @@ HANDOFF_T="${CC_BOARD_HANDOFF_PCT:-73}"
 STALE_S="${CC_BOARD_STALE_S:-900}"
 [ -d "$TDIR" ] || { echo "no telemetry ($TDIR absent — statusline exports each turn boundary)" >&2; exit 3; }
 
-# config_dir → account name (statusline suffix convention; accounts rows carry no config_dir)
-map_acct() { case "$1" in
-  */.claude-next)       echo next  ;;  */.claude-secondary)  echo next2 ;;
-  */.claude-tertiary)   echo next3 ;;  */.claude-quaternary) echo next4 ;;  *) echo "" ;;
-esac ; }
+# config_dir → account name (statusline suffix convention; accounts rows carry no config_dir).
+# Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+map_acct() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
 # ONE cached accounts read (never --fresh: 90s single-flight); joined per row below.
 ACCTS_JSON=""
