@@ -532,6 +532,108 @@ idl_has '"kind":"heartbeat"' && ok "the sweep still completes and heartbeats wit
                              || no "a broken ps broke the sweep"
 rm -rf "$PSBIN"                                                   # never leave the stub on PATH for later tests
 
+echo "T32 DESK-LESS DELIVERY — no desk registered is a SUPPORTED configuration, not a permanent failure"
+# The 2026-08-01 incident: this machine runs no desk orchestrator, com.claude.desk-invariant (the only
+# organ that can create one) is not loaded, and cc-roles/desk still names a self-closed iTerm2 pane whose
+# .forward successor is equally dead. So every page returns rc 0 + verdict=mailbox-only FOREVER.
+# e6d789a8 routed every non-delivered verdict down the failure path, which damp_forgets the marker so the
+# next sweep re-sends — measured 8,025 `page SEND FAILED` lines and up to 1,519 OS notifications in one
+# hour, 14 per 30 s sweep. The fix splits RECORDED (enqueued, no live reader — the desk-less steady
+# state, delivered on the liveness-free channel and DIGESTED) from REFUSED (rc != 0, nothing took it —
+# still retried, T29's law). These assertions are the discriminator: pre-fix, the send counts below
+# grow every sweep and the notification count tracks the FINDING count.
+#
+# NOTE the fixture shape: CC_NOTIFY_STUB_VERDICT=mailbox-only is what makes this the desk-less case —
+# the rest of this suite runs the stub's default `delivered`, i.e. the live-desk case, which must stay
+# untouched. osascript is stubbed on PATH so the suite never posts a real notification (the pre-fix
+# code would have posted one per finding, on the operator's actual desktop, during every gate run).
+OSBIN="$SBX/osabin"; mkdir -p "$OSBIN"
+# A quoted heredoc, not `echo` lines: the stub body carries both a `$` expansion and a `\n`, which
+# `echo` has shellcheck flagging (SC2016/SC2028) and which some shells would expand for real.
+cat > "$OSBIN/osascript" <<'OSASTUB'
+#!/bin/bash
+printf '%s\n' "post" >> "${CC_OSA_CAPTURE:-/dev/null}"
+exit 0
+OSASTUB
+chmod +x "$OSBIN/osascript"
+ocap(){ local n=0
+  [ -f "$SBX/osa.log" ] && { n=$(wc -l < "$SBX/osa.log" 2>/dev/null) || n=0; }
+  printf '%s' "$(( ${n:-0} + 0 ))"; }
+ndreset(){ reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$SBX/osa.log" \
+             "$CC_SUPERVISOR_PAGEDIR"/*.notified "$CC_SUPERVISOR_PAGEDIR/digest.pending" 2>/dev/null; rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"; }
+ndsweep(){ # the desk-less case: enqueued to a box with no live reader
+  CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+  CC_NOTIFY_STUB_VERDICT=mailbox-only CC_OSA_CAPTURE="$SBX/osa.log" PATH="$OSBIN:$PATH" \
+  bash "$SUP" --once >/dev/null 2>&1; }
+
+ndreset; mktel nd1 40 2 999991 "$REPO"                            # pid gone + unlanded ⇒ a DEAD page
+ndsweep
+[ "$(scap)" -eq 1 ] && ok "a desk-less page is still RECORDED to the mailbox (it survives for a desk registered later)" \
+                    || no "desk-less page not enqueued (sends=$(scap))"
+[ "$(ocap)" -eq 1 ] && ok "…and the operator IS reached, on the channel with no liveness dependency" \
+                    || no "nobody was reached in the desk-less case (posts=$(ocap))"
+ndsweep                                                            # same state, next sweep
+[ "$(scap)" -eq 1 ] && ok "an unchanged RECORDED page is NOT re-sent every sweep (the 8,025-line storm)" \
+                    || no "RECORDED page re-sent (sends=$(scap)) — storm regression"
+[ "$(ocap)" -eq 1 ] && ok "…and no second notification for news that has not changed" \
+                    || no "notification re-posted for unchanged state (posts=$(ocap))"
+
+# DIGEST: the volume knob. 14 findings a sweep must cost ONE notification, not 14.
+ndreset
+mktel nda 40 2 999992 "$REPO"; mktel ndb 40 2 999993 "$REPO"; mktel ndc 40 2 999994 "$REPO"
+ndsweep
+[ "$(scap)" -eq 3 ] && ok "three findings ⇒ three mailbox records (no finding is dropped)" \
+                    || no "findings lost on the mailbox path (sends=$(scap))"
+[ "$(ocap)" -eq 1 ] && ok "…but exactly ONE notification for the sweep (digested, never one-per-finding)" \
+                    || no "one notification PER FINDING (posts=$(ocap)) — the 14-per-sweep storm"
+# Asserted HERE and not at the end of T32: ndreset truncates the IDL, and the CC_SUP_OS_CHANNEL=off
+# block below deliberately posts nothing — so an end-of-block check would read the absence of a
+# record this sweep genuinely wrote and call it a missing one. Audit the claim against the sweep
+# that made it.
+idl_has '"kind":"page_digest"' && ok "the digest is IDL-recorded (S-4: the delivery claim is itself a record)" \
+                               || no "digest left no IDL record"
+ndsweep
+[ "$(ocap)" -eq 1 ] && ok "an unchanged cause set stays quiet across sweeps" \
+                    || no "digest re-posted unchanged news (posts=$(ocap))"
+# …and a genuinely NEW cause class must still break through the damping on the next sweep.
+mkbeacon ndperm 10 Bash '{"command":"blocked on a prompt"}'
+ndsweep
+[ "$(ocap)" -eq 2 ] && ok "a NEW cause class (permission-pending) breaks through the digest damping" \
+                    || no "new cause class stayed damped (posts=$(ocap)) — damping hiding escalation"
+
+# REFUSED is the OTHER class and keeps T29's law: nothing took the page ⇒ no marker ⇒ genuine retry.
+ndreset; mktel ndr 40 2 999995 "$REPO"
+for _i in 1 2; do
+  CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+  CC_NOTIFY_STUB_RC=3 CC_OSA_CAPTURE="$SBX/osa.log" PATH="$OSBIN:$PATH" \
+  bash "$SUP" --once >/dev/null 2>&1
+done
+[ "$(scap)" -ge 2 ] && ok "a transport-REFUSED page is still RETRIED next sweep (T29's law intact)" \
+                    || no "refused page was not retried (sends=$(scap)) — regression on 60b28d8c/e6d789a8"
+
+# NO liveness-free channel at all ⇒ RECORDED must NOT be laundered as handled; it reverts to retry.
+# A capability we cannot use must never be assumed present (this is why the seam exists — a suite
+# cannot un-find /usr/bin/osascript via PATH, so without it this branch would ship unproven).
+ndreset; mktel ndo 40 2 999996 "$REPO"
+for _i in 1 2; do
+  CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+  CC_NOTIFY_STUB_VERDICT=mailbox-only CC_SUP_OS_CHANNEL=off CC_OSA_CAPTURE="$SBX/osa.log" PATH="$OSBIN:$PATH" \
+  bash "$SUP" --once >/dev/null 2>&1
+done
+[ "$(scap)" -ge 2 ] && ok "with NO liveness-free channel, a RECORDED page retries (never silently 'handled')" \
+                    || no "RECORDED laundered as delivered with no channel (sends=$(scap)) — silent page loss"
+[ "$(ocap)" -eq 0 ] && ok "…and nothing is posted to a channel that is switched off" \
+                    || no "posted despite CC_SUP_OS_CHANNEL=off (posts=$(ocap))"
+
+# The operator must be able to read WHY from the log, not infer it — the desk-less state is named.
+grep -q 'page RECORDED (no live desk)' "$CC_SUPERVISOR_LOG" 2>/dev/null \
+  && ok "the log names the desk-less state explicitly (not a bare 'SEND FAILED')" \
+  || no "desk-less state not named in the supervisor log"
+grep -q 'digest POSTED' "$CC_SUPERVISOR_LOG" 2>/dev/null \
+  && ok "the digest post is auditable in the supervisor log" \
+  || no "no digest record in the supervisor log"
+rm -rf "$OSBIN"                                                   # never leave the stub on PATH
+
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
 [ "$F" -eq 0 ] || exit 1
