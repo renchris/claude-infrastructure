@@ -267,7 +267,26 @@ NEVER existed; ghost pointer removed 2026-07-18):
 
 **Subagents vs Teammates (Agent Teams = Default):**
 - **Teammates** (`team_name` set): **DEFAULT for all implementation.** Persist until shutdown. Max **6 concurrent**. Use for ANY task that writes code.
-- **Subagents** (no `team_name`): Research/exploration ONLY. Auto-terminate after returning results. Safe at ~50 parallel. Never for code changes.
+- **Subagents** (no `team_name`): Research/exploration ONLY. Safe at ~50 parallel. Never for code changes.
+
+🚨 **`name:` SILENTLY MAKES IT A TEAMMATE — the auto-terminate you are counting on does not happen.**
+Observed 2026-08-01 on CC 2.1.219: three `Explore` agents spawned with `name:` and **no `team_name`**
+came back with `--team-name session-<sid>` in their **own argv** — the implicit-team runtime assigns
+one. They reported, went idle, and their panes **stayed open indefinitely** (~1h16m) until an explicit
+`shutdown_request` was sent. The lead had torn down the two agents it *thought* of as teammates and
+left these three, because the mental model said "unnamed research subagent ⇒ fire-and-forget."
+
+So the real rule on this runtime is: **`name:` is the switch, not `team_name`.** A named Agent call
+persists and needs explicit teardown, whatever you meant it to be. Two consequences:
+- Naming a research agent is a *lifecycle* decision, not just a labelling convenience. Name it when
+  you need to `SendMessage` it later; otherwise leave it unnamed and let it reap itself.
+- **Tear down every agent you named**, research included, then **ps-verify** — this is the same
+  discipline the Shutdown Protocol below already demands for teammates, and the audit is one line:
+  `pgrep -f "agent-id <name>@"` (empty ⇒ actually gone).
+
+Good news, and it corrects the pessimism in [[shutdown-request-is-not-an-actuator]]: on 2.1.219
+`shutdown_request` **did** reap all five — three research agents and two teammates — every one
+ps-verified gone. Send it, then verify; do not assume it is inert.
 
 **Shutdown Protocol:**
 1. Send `{"type": "shutdown_request"}` to EACH teammate individually (parallel OK)
