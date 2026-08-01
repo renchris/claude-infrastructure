@@ -216,6 +216,19 @@ run_one() { # $1=path $2=cmd $3=class $4=name → 0 ok, 1 failed (named)
   if [ "${2#CONFIRM=1 }" != "$2" ]; then CONFIRM=1 bash "$1" </dev/null; rc=$?
   else bash "$1" </dev/null; rc=$?; fi
   if [ "$rc" -ne 0 ]; then
+    # A DEPLOY refusal is a STEADY STATE, not an error — and it must not halt the run.
+    # deploy-live is fail-closed on a background verifier's green stamp ("the live layer is FROZEN
+    # until a tree verifies green"), and this box's trunk has been PERSISTENT-RED for reasons no
+    # operator action clears. Deploy sorts FIRST (irreversibility order), so treating its refusal as
+    # fatal meant the ONE COMMAND ran nothing at all: every pending activation sat behind a step
+    # that cannot succeed today. Deploy is idempotent and self-gating, so skipping it is safe.
+    # ACTIVATION failures still halt: those are sequential machine mutations, and after one fails
+    # the state the next assumes is no longer known to hold.
+    if [ "$3" = deploy ]; then
+      printf 'cc-do: SKIPPED — %s (exit %s). Deploy is gated on a green verifier stamp; it will\n' "$4" "$rc" >&2
+      printf 'cc-do:   advance on its own once trunk verifies. Continuing with the rest.\n' >&2
+      return 0
+    fi
     printf 'cc-do: FAILED — %s (exit %s): %s\n' "$4" "$rc" "$2" >&2
     printf 'cc-do: stopped here; nothing after it was run, and no .done marker was written.\n' >&2
     return 1
