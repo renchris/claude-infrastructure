@@ -57,6 +57,19 @@ REPO="${CC_REPO:-$(cd "$(dirname "$SELF")/.." && pwd -P)}"
 BENCH="$REPO/scripts/terminal-bench.sh"
 LOAD="$REPO/scripts/tui-load.sh"
 
+# ── BOUNDED osascript ─────────────────────────────────────────────────────────────────────────────
+# The Ghostty spawn driver below is an AppleEvent into Ghostty, and an AppleEvent has no timeout of
+# its own: a Ghostty that is wedged, mid-relaunch, or sitting on its own permission modal does not
+# fail the call — it holds it, forever (the full argument is in hooks/lib/osa.sh). That would hang a
+# measurement run on a shared box, which is exactly the failure this script is written to avoid
+# causing. $REPO above already followed $0's symlink chain, which is what makes the lib reachable
+# when this script is invoked through a per-file symlink in ~/bin.
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if   [ -r "$REPO/hooks/lib/osa.sh" ];         then . "$REPO/hooks/lib/osa.sh"
+elif [ -r "$HOME/.claude/hooks/lib/osa.sh" ]; then . "$HOME/.claude/hooks/lib/osa.sh"
+else osa_bounded() { timeout "${CC_OSA_TIMEOUT_S:-10}" "$@"; }
+fi
+
 # ── abort guard ───────────────────────────────────────────────────────────────────────────────────
 # loadavg is a poor attribution signal (measured on this box: a 2.05x swing at CONSTANT session
 # count — memory load-is-not-a-function-of-session-count), so it is NOT used to draw conclusions.
@@ -148,8 +161,15 @@ spawn_ghostty() {
   # geometrically and hits the minimum surface size early. One split of every existing terminal per
   # round grows a balanced tree. Alternating right/down keeps the cells from degenerating into
   # slivers in one axis.
-  local out
-  out="$(osascript - "$PANES" "/bin/sh $sh" <<'APPLESCRIPT' 2>&1
+  #
+  # THE BOUND MUST FIT THE BAND, not the bench. This AppleScript is not one round-trip: it opens a
+  # window, waits 2.5s in interpreter delays, and makes up to $PANES splits, each its own AppleEvent
+  # into an app that is simultaneously laying out a growing pane tree. The lib's 10s default would
+  # cut a perfectly healthy 30-pane run and report it as a driver failure, so the bound is scaled to
+  # the work it bounds — still a bound, just one a healthy run fits inside.
+  local out rc
+  local CC_OSA_TIMEOUT_S=$(( 60 + PANES * 5 ))
+  out="$(osa_bounded osascript - "$PANES" "/bin/sh $sh" <<'APPLESCRIPT' 2>&1
 on run argv
 	set target to (item 1 of argv) as integer
 	set paneCmd to (item 2 of argv)
@@ -182,13 +202,16 @@ on run argv
 	end tell
 end run
 APPLESCRIPT
-)"
+)"; rc=$?
   # A round in which nothing could be split means the layout is saturated. Report what Ghostty
   # acknowledged, never what was requested.
   case "$out" in
     winid=*) GHOSTTY_WIN="${out#winid=}"; GHOSTTY_WIN="${GHOSTTY_WIN%% *}"
              SPAWNED="${out##*achieved=}" ;;
-    *) echo "  ✗ ghostty AppleScript driver failed: $out" >&2; SPAWNED=0; return 1 ;;
+    *) # rc 124 is the bound firing, not Ghostty answering — name it, because "driver failed" with
+       # empty output otherwise reads as a scripting-dictionary problem rather than a wedged app.
+       [ "$rc" -eq 124 ] && out="CUT at ${CC_OSA_TIMEOUT_S}s — Ghostty never answered (wedged, or on a modal)"
+       echo "  ✗ ghostty AppleScript driver failed (rc=$rc): $out" >&2; SPAWNED=0; return 1 ;;
   esac
 }
 
