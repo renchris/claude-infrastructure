@@ -547,6 +547,20 @@ A 30-minute run was taken to get a sharp one (at 1800 s, one port is 2/hr) and *
 
 **So the sustained-runtime question is open, and it is the largest gap in the terminal case** — stated here rather than papered over. It compounds with the HOLD above rather than being offset by it: the challenger is ahead of its rivals on loaded CPU, level with the incumbent in the incumbent's cheap layout, and unproven over hours. **That is exactly why the move below is a seam and not a migration** — a `CC_PANE_ID` abstraction costs the same whichever terminal eventually wins, and stops the question from having to be answered before anything else can proceed.
 
+**Reproduce any row yourself** — it is one read-only command per terminal, and it will refuse to invent a number:
+
+```bash
+scripts/terminal-bench.sh --app kitty  --interval 1800   # full row + drift  → verdict=OK
+scripts/terminal-bench.sh --app iTerm2 --interval 0      # single reading    → verdict=PARTIAL
+scripts/terminal-bench.sh --app wezterm --interval 0     # not running       → verdict=NO-DATA, exit 3
+```
+
+The first command is the one that failed above, and **it can no longer fail that way quietly**. `verdict=OK` never certified the constant-layout precondition — it attested that two readings and a GPU profile were obtained, and nothing about whether panes opened underneath the run — so the instrument now measures the precondition itself, re-checks it every `--watch` seconds, and **aborts with `verdict=LAYOUT-DRIFT` (exit 4) instead of printing a confounded row**. The gate keys on the *onscreen* count, and on offscreen only when offscreen **falls**: a *rising* offscreen count is the leak being measured, so a gate keyed on the `windows` total would make a leaking terminal abort its own measurement and become structurally unable to report the leak.
+
+**The raw transcripts are committed**, so every number above is auditable against the run that produced it rather than against this table: [`bench-live-3way-2026-07-31.txt`](docs/research/data/bench-live-3way-2026-07-31.txt) (the kitty/Ghostty/cmux readings) and [`kitty-drift-30min-2026-07-31.txt`](docs/research/data/kitty-drift-30min-2026-07-31.txt) (the 30-minute run, including the window census that invalidates it as a drift bound).
+
+Full method, per-candidate rows and the falsification plan: [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) · adjudication of the two outside reports: [`l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md) · the plan this feeds: [`TERMINAL_AGNOSTIC_L3_L4.md`](docs/plans/TERMINAL_AGNOSTIC_L3_L4.md).
+
 #### And the renderers themselves, under the load — one film per terminal
 
 The section above films the *instrument*. This films the *subject*: 18 panes of the identical
@@ -601,20 +615,6 @@ and was **withdrawn** — it averages over the whole frame, so on sparse coloure
 entire 20-second film "frozen from t=0" while 808 distinct frames sat in it, and its verdict moved
 with how much letterboxing each window's shape happened to need, which made it non-comparable across
 the very candidates being compared.
-
-**Reproduce any row yourself** — it is one read-only command per terminal, and it will refuse to invent a number:
-
-```bash
-scripts/terminal-bench.sh --app kitty  --interval 1800   # full row + drift  → verdict=OK
-scripts/terminal-bench.sh --app iTerm2 --interval 0      # single reading    → verdict=PARTIAL
-scripts/terminal-bench.sh --app wezterm --interval 0     # not running       → verdict=NO-DATA, exit 3
-```
-
-The first command is the one that failed above, and **it can no longer fail that way quietly**. `verdict=OK` never certified the constant-layout precondition — it attested that two readings and a GPU profile were obtained, and nothing about whether panes opened underneath the run — so the instrument now measures the precondition itself, re-checks it every `--watch` seconds, and **aborts with `verdict=LAYOUT-DRIFT` (exit 4) instead of printing a confounded row**. The gate keys on the *onscreen* count, and on offscreen only when offscreen **falls**: a *rising* offscreen count is the leak being measured, so a gate keyed on the `windows` total would make a leaking terminal abort its own measurement and become structurally unable to report the leak.
-
-**The raw transcripts are committed**, so every number above is auditable against the run that produced it rather than against this table: [`bench-live-3way-2026-07-31.txt`](docs/research/data/bench-live-3way-2026-07-31.txt) (the kitty/Ghostty/cmux readings) and [`kitty-drift-30min-2026-07-31.txt`](docs/research/data/kitty-drift-30min-2026-07-31.txt) (the 30-minute run, including the window census that invalidates it as a drift bound).
-
-Full method, per-candidate rows and the falsification plan: [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) · adjudication of the two outside reports: [`l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md) · the plan this feeds: [`TERMINAL_AGNOSTIC_L3_L4.md`](docs/plans/TERMINAL_AGNOSTIC_L3_L4.md).
 
 But the renderer is the *second*-order fix. A 30-pane grid is a **polling** interface — its cost scales with agent count, which is precisely the cost saturating the compositor. Exception routing does not scale with agent count at all. And the notifier that replaces it **already exists**: [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) is wired on `PermissionRequest` and writes every blocked session to `/tmp/cc-permission-pending/`. **It simply has no face** — nothing renders that queue as the operator's primary surface, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
 
