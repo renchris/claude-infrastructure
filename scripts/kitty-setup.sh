@@ -36,6 +36,41 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.." && pwd)"
 KCONF_DIR="${CC_KITTY_CONFIG_DIR:-$HOME/.config/kitty}"
 BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
+
+# ── EPHEMERAL-TREE GUARD ─────────────────────────────────────────────────────────────────────────
+# REPO above is derived from $0, so this script links the live layer at WHATEVER TREE IT WAS RUN
+# FROM. postland-verify runs the corpus (and install.sh, which calls this script) inside a
+# throwaway worktree at ~/.claude/autonomy/postland/wt-run-$$ — so a verification run silently
+# repointed the operator's LIVE config at a directory that is later deleted.
+#
+# Measured 2026-08-01: ~/.config/kitty/kitty.conf and ~/.claude/bin/it2-kitty both pointed into
+# wt-run-26747. The operator's terminal reverted to kitty's stock defaults with no error anywhere —
+# the file on disk in the real checkout was still correct, so every by-content check passed while
+# the live layer read a stale 11,776-byte copy. Once that worktree is reaped the links DANGLE and
+# kitty starts with no config at all.
+#
+# The guard is scoped to the dangerous EFFECT (writing the operator's REAL live layer), NOT to
+# "am I running from an unusual directory" — a location-keyed refusal would fire on the verifier
+# corpus itself, which runs from a throwaway worktree BY CONSTRUCTION and is perfectly legitimate
+# so long as it has fixtured its seams. REAL_HOME comes from the passwd DB via ~user expansion, not
+# from $HOME, precisely so a hermetic test that fixtures HOME writes to its tmpdir and sails past.
+# --check is a read-only probe and stays legal from anywhere; --apply and --undo both MUTATE the
+# live layer (--undo would delete the operator's links), so both are guarded.
+REAL_HOME="$(eval printf '%s' "~$(id -un)" 2>/dev/null || printf '%s' "$HOME")"
+[ "${1:-}" = "--check" ] && REPO_GUARD_SKIP=1 || REPO_GUARD_SKIP=0
+[ "$REPO_GUARD_SKIP" = 1 ] || case "$REPO" in
+  "$REAL_HOME"/.claude/autonomy/postland/wt-run-*|"$REAL_HOME"/.claude/autonomy/postland/wt-revert-*)
+    case "$KCONF_DIR/|$BIN_DIR/" in
+      *"$REAL_HOME"/*)
+        printf 'kitty-setup: REFUSING to link the live layer from an ephemeral verifier worktree\n' >&2
+        printf '  repo   : %s\n' "$REPO" >&2
+        printf '  target : %s , %s\n' "$KCONF_DIR" "$BIN_DIR" >&2
+        printf '  why    : this tree is deleted after the run; the links would dangle.\n' >&2
+        printf '  fix    : deploy from the canonical checkout, or fixture CC_KITTY_CONFIG_DIR\n' >&2
+        printf '           and CC_KITTY_BIN_DIR if this is a test.\n' >&2
+        exit 3 ;;
+    esac ;;
+esac
 SHELL_RC="${CC_KITTY_SHELL_RC:-$HOME/.zshrc}"
 BLOCK_ID="cc-kitty-agent-teams"
 # Step 3b writes to the LOGIN rc, which is a DIFFERENT file from SHELL_RC on purpose — see §3b.
