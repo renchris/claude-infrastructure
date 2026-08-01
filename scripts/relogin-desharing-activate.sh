@@ -49,7 +49,7 @@ echo "PRECONDITIONS (verify BOTH before continuing):"
 echo "  [ ] E1 returned VARIANT A  — concurrent same-account logins coexist"
 echo "  [ ] cc-relogin has proven at least one real renewal"
 echo
-echo "Then apply the launcher half by hand in ~/.zshrc — inside claude-next(), replace:"
+echo "Then apply the launcher half by hand in ~/.zshrc — inside claude(), replace:"
 # SC2016: the single quotes are the point — these two lines are LITERAL shell source the
 # operator copies into ~/.zshrc. Expanding them here would print this machine's resolved
 # paths instead of the portable snippet, which is exactly the wrong thing to paste.
