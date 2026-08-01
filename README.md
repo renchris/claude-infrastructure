@@ -175,7 +175,7 @@ flowchart LR
 Three traps make naive automation fail. Each is defeated by a mechanism, not by discipline:
 
 - **A shared index means a bare `git commit` sweeps another session's staged files** — plus ref-lock races and shared-file clobber. Every writer therefore gets its **own worktree**, handed out warm (`node_modules`, codegen, `.env.local`, seeded DB already built) in about three seconds.
-- **The launchers are zsh functions**, carrying per-account isolation, so no script can `exec` them. `handoff-fire.sh` **types** the launch command into a fresh iTerm2 surface through the it2 Python API with echo-verified keystrokes — anchored to the firing agent's own window, so the split lands where you are looking.
+- **The launchers are zsh functions**, carrying per-account isolation, so no script can `exec` them. `handoff-fire.sh` **types** the launch command into a fresh surface with echo-verified keystrokes — anchored to the firing agent's own window, so the split lands where you are looking. The surface is a real iTerm2 pane or a real kitty pane depending on where you are sitting ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)); the anchoring and the echo-verification are the same either way.
 - **A hot trunk means N landers race — and a per-land test corpus means they starve each other.** A week of measurement proved the frame, not the tree, was the blocker: full-corpus-per-land collapsed P(green) to ~2.3% under fleet load (one branch died 37 straight times on a tree that was never red). So the verdict is **inverted** ([`docs/plans/LAND_PIPELINE_V2.md`](docs/plans/LAND_PIPELINE_V2.md)): [`ship-land.sh`](scripts/ship-land.sh) lands in seconds-to-minutes with only O(diff) statics, ratchets and a ≤120s direct-suite smoke that *skips* under load — nothing heavy can enter [`land-lock.sh`](scripts/land-lock.sh), which holds for seconds around the CAS push window. The full-suite claim belongs to one background verifier ([`postland-verify.sh`](scripts/postland-verify.sh) — fresh cell per run, [`host-suites.manifest`](scripts/host-suites.manifest) partition, progress-keyed stall bound, auto-revert of bisected culprits), and the live layer only ever advances to its green stamp ([`deploy-live.sh`](scripts/deploy-live.sh) on a launchd tick). Landing is still verified **by content** ([`land-verify.sh`](scripts/land-verify.sh)) — a commit-count check reads "landed" for work that was silently dropped, which is exactly how a 5-file commit went missing on 2026-07-11.
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
@@ -356,7 +356,7 @@ The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `hando
 ├── model-config.yaml            # model / effort / frontier SSOT (per-machine, NOT synced)
 ├── hooks/  commands/  scripts/  # SYMLINKED from this repo — edits go live
 ├── skills/  agents/             # SYMLINKED — 12 skills, 4 custom agents
-├── bin/it2                      # iTerm2 teammate wrapper (copied)
+├── bin/it2                      # teammate pane wrapper (copied) — iTerm2, or kitty via it2-kitty
 ├── mailbox/  cc-roles/          # per-pane inboxes · role → pane resolution
 ├── backups/                     # auto-backups (10/file, 30-day TTL)
 ├── plan-history/                # plan snapshots (its own git repo)
@@ -380,6 +380,15 @@ cd claude-infrastructure
 ```
 
 It symlinks hooks, commands and scripts into `~/.claude`; copies `bin/` tools, `statusline.sh` and the LaunchAgents; loads the daemons; and validates `settings.json`. For an alternate account: `./install.sh --config-dir ~/.claude-secondary`. Re-run it after every trunk fast-forward — it links **brand-new** files, which per-file symlink directories otherwise never pick up. `--wire-hooks` additively merges the template hook roster into a live `settings.json`, with backup and validation.
+
+**Terminal: iTerm2 or kitty.** `install.sh` runs [`scripts/kitty-setup.sh`](scripts/kitty-setup.sh) automatically whenever kitty is present; run it by hand to wire or inspect kitty on its own:
+
+```bash
+scripts/kitty-setup.sh --check   # report only — exits 1 if anything is missing or INERT
+scripts/kitty-setup.sh           # apply (idempotent) · --undo reverts
+```
+
+It reports **live** state separately from on-disk state, because config present is not config loaded: `allow_remote_control` and `listen_on` are the only two options kitty refuses to reload, so a kitty older than its config is **INERT** and `--check` exits 1 rather than reporting green. It never clobbers a hand-written `kitty.conf`, and `install.sh` does not propagate its exit status — non-zero means *restart kitty*, not *the install failed*. What it wires, and why each piece is load-bearing, is in [§6](#so-the-question-stopped-being-which-one--it-runs-on-both).
 
 ```bash
 ./sync.sh          # pull hand-edits of COPIED surfaces back into the repo
@@ -517,6 +526,42 @@ Measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/te
 **And the migration is on HOLD, because the incumbent has not been beaten.** The one iTerm2 datapoint taken in the *cheap* layout — one window, 20 panes, CPU renderer — read **10.5% against kitty's 9.5%**: within ~10% on CPU and within one thread. Every other iTerm2 figure above comes from the *expensive* layout it is normally run in, which is a statement about how it is configured, not about what it can do. Two cheaper rungs are live and unmeasured: the eight render knobs have never been benchmarked since passing their own gate, and the dismissal of plain `tmux` rested on a premise since verified **false**. Switching terminals is the expensive move and it is **not yet justified** — see [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §9.
 
 **cmux does not dominate kitty either**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and has not been run under load at all.
+
+#### So the question stopped being "which one" — it runs on both
+
+A HOLD is only tolerable if it is not also a blocker. It stopped being one: **iTerm2 and kitty are both first-class**, and the same session machinery — Agent Teams, handoff, recycling, two-way comms, teardown — runs on either. One command wires the second one:
+
+```bash
+scripts/kitty-setup.sh          # idempotent · --check reports · --undo reverts
+```
+
+**The lock was never the renderer — it was a process boundary this repo already owned.** Claude Code's Agent-Teams pane backend is not linked against iTerm2 and never handshakes with it. Decompiled from the live 2.1.219 binary, its gate is an **env check plus a PATH lookup** — `TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID`, then `$SHELL -lc "command -v it2"` — after which it drives panes through exactly five subcommands of whatever `it2` it resolved. So a program answering those five commands against `kitty @` gets **native kitty split panes** for assignee sessions. That is [`bin/it2-kitty`](bin/it2-kitty), and [`bin/it2-wrapper`](bin/it2-wrapper) execs it when `KITTY_WINDOW_ID` is set. No fork of either terminal — which is just as well, since iTerm2 is GPL-2.0-only and kitty is GPL-3.0, i.e. legally uncombinable.
+
+Three seams carry the rest, and each was a measured defect before it was a design:
+
+| Seam | What it does | The defect that proved it necessary |
+|---|---|---|
+| `ITERM_SESSION_ID = w0t0p0:$KITTY_WINDOW_ID` | gives a kitty pane an id the whole fleet already knows how to read | the **colon is required** — Claude Code derives the leader id as everything after the first colon, and returns `null` without one, silently splitting from whatever pane is active |
+| `~/.claude/shims` first on the **login** PATH | wins the lookup Claude Code actually performs | `-lc` is login-but-not-interactive: it reads `.zprofile` and **never `.zshrc`**, and the resolved path is **cached for the process lifetime** — losing that race bypasses the wrapper on iTerm2 too |
+| the divert predicate, written once | decides "am I in kitty" identically everywhere | `handoff-fire.sh` and `cc-pane` deliberately resolve the *raw* it2 to inherit a pane's profile. Inside kitty there is no profile to inherit, so that bypass is pure loss — it resolves an iTerm2 client with no iTerm2 to talk to |
+
+That last row is the one that bites, and it is why the predicate is pinned by a test rather than trusted: a handoff that **splits the pane with one binary and addresses it with another** fails in a way no single-file test can see.
+
+**What is verified, and on which terminal.** Every ✅ below names the evidence that earned it; none of them is an inference from reading source:
+
+| Surface | iTerm2 | kitty | Evidence |
+|---|---|---|---|
+| Agent-Teams assignee panes | ✅ | ✅ | **this change was written by two of them** — see below |
+| Pane seam (`cc-pane` address/list/send/close) | ✅ | ✅ | live on this box; `address <gone>` correctly returns an authoritative **NO**, not indeterminate |
+| Two-way comms | ✅ | ✅ | delivery is **a file, not a keystroke** (§1) — terminal-agnostic by construction; only the pane-liveness oracle touched a terminal |
+| Session register · teardown · crash watchdog | ✅ | ✅ | live registry holds kitty-hosted sessions keyed by bare kitty pane ids across all four accounts; teardown resolves the shim, and the operator page is a macOS notification, not an iTerm2 call |
+| Handoff / recycle — **split + type + focus** | ✅ | ✅ | argv verified verb by verb against the contract: `focus-window --match id:`, `close-window`, `send-text` preserving the raw `Ctrl-U` byte, and `run` appending `\r`. `focus` with no target **refuses** rather than hijacking the active pane |
+| Handoff — tty / tab / background-tab helpers | ✅ | ⏳ | kitty branches in review on `feat/kitty-handoff-primitives`; until merged these fail *safe* on kitty (an empty tty aborts the caller) rather than mis-addressing |
+| Limit-recovery · boot-resume · pane census | ✅ | ⏳ | kitty branches in review on `feat/kitty-recovery-launch`; the census must stay **indeterminate** on an unreadable terminal, never `0` |
+
+**The Agent-Teams row is self-demonstrating.** Part of this section's own work was done by two assignee sessions spawned from a kitty pane, and the census taken across that spawn is the evidence: 19 panes before, **21 after**, the two new ones being kitty windows `30` and `31` whose foreground process is `claude.exe --agent-id k2-handoff@…` and `--agent-id k3-recovery@…`. That is the entire chain exercised end to end — Claude Code's pane backend → the login-PATH-resolved `it2` → the wrapper → the divert → `kitty @ launch` — with no stub anywhere in it.
+
+**Two-way comms was already portable and nobody had noticed** — which is the useful lesson. Because a message is a file that hooks read, none of it was ever terminal-coupled; the *only* terminal call in the path was asking "is that pane still alive". When that oracle broke on kitty it returned **unknown** rather than **dead**, so nothing was mis-delivered and nothing went red. **A safe degradation is still a defect** — it was invisible precisely because it failed correctly.
 
 #### The instrument, running — not a table read off somebody's source tree
 
@@ -670,7 +715,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | When | Move | Why it is sized this way |
 |---|---|---|
 | **Now** | Do **not** cap V8 heaps; stop the automation minting **windows**; add a window-count rung to `capacity-alarm.sh` (warn 25 / page 60, measured as *drift*) | free, reversible, and windows are the 2.35× unit |
-| **Next** | Migrate the renderer to **kitty** | 22 load-bearing files over 3 primitives; chokepoint is [`bin/it2-wrapper`](bin/it2-wrapper) (175 lines), *not* `handoff-fire.sh` (4,024) |
+| ~~**Next**~~ **Done** | ~~Migrate the renderer to **kitty**~~ → **support both**, behind one seam ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)) | the migration framing was wrong: a seam costs the same and does not require winning the argument first. `scripts/kitty-setup.sh` wires it in one command |
 | **Then** | Give the beacon a face — **a console, not a terminal**: one row per session, a queue fed by the beacon, zoom-to-full-screen on demand, a dispatch composer | implements no VT at all; rendering then scales with sessions *blocked* (0–3), not sessions *running* (30+) |
 
 **Writing a terminal from scratch was considered and rejected.** WindowServer is the ceiling and it is Apple's — 30 panes in one window cost ~+11.2 pp of a core inside the compositor, the floor for *any* application, and kitty already sits on it. A from-scratch emulator's best case is matching something already installed, while owning VT correctness under Ink's alternate-screen/resize/wide-char usage forever.
