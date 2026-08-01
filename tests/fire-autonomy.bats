@@ -6,6 +6,14 @@
 # assert the dir-resolution via --dry-run (no real fire).
 
 setup() {
+  # M11 pins — this suite reaches the real fire path via --dry-run, so without them the
+  # BOX'S MOOD is a test input. Measured 2026-07-31 on a PRISTINE tree at load 41.72 on
+  # 10 cores (4.17/core vs the 2.0 ceiling): tests 10, 11, 17 and 23 went RED with exit 9
+  # — the capacity gate's refusal, not a defect in anything they assert. Because
+  # ship-land reports any red as "a VERDICT about your diff", that blocked EVERY land in
+  # the repo, including diffs nowhere near handoff-fire.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   eval "$(sed -n '/^config_dir_for_launcher() {/,/^}/p' "$HF")"

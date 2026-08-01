@@ -268,7 +268,6 @@ claude-accounts-fresh-lock-bound.bats
 desk-invariant.bats
 desk-land.bats
 desk-register.bats
-fire-autonomy.bats
 handoff-close-mail-guard.bats
 handoff-fire-account-sweep.bats
 handoff-fire-capacity-gate.bats
@@ -292,7 +291,6 @@ handoff-splitright.bats
 handoff-teardown-marker.bats
 it2-wrapper.bats
 lead-crash-watchdog.bats
-notify-back.bats
 self-path-lint.bats
 teammate-auto-shutdown.bats
 waiting-recycle.bats

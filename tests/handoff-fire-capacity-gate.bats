@@ -328,13 +328,23 @@ _setup_pins() {
   return 0
 }
 
-@test "23 PIN-GUARD (M11) — the three red-by-load fire suites pin BOTH terms off in setup()" {
+@test "23 PIN-GUARD (M11) — the known red-by-load fire suites pin BOTH terms off in setup()" {
   # 16 corpus tests were RED on a PRISTINE tree purely because the box was busy (map R-1) — a gate
   # failing its own suite and blocking deploy verification. The remedy is a STANDING property of the
   # corpus, not a one-time edit, so it gets a guard: a new fire suite, or a setup() rewrite that
   # drops the pin, goes RED here instead of quietly making the machine's mood a test input.
+  #
+  # 2026-07-31 — the "a new fire suite goes RED here" half of that promise was FALSE, and this
+  # roster is why. A hardcoded list cannot notice a suite it does not name: fire-autonomy.bats and
+  # notify-back.bats both reach the real fire path, neither was listed, and at load 41.72 on 10
+  # cores they went RED on a PRISTINE tree (4 and 8 tests, exit 9) — blocking every land in the
+  # repo, including diffs nowhere near handoff-fire. The guard stayed green throughout, because it
+  # was only ever asserting that THESE THREE files kept their pins. Enumerating examples cannot
+  # express the class. Both are added below, but the roster is a FLOOR — test 25 derives the real
+  # population from the corpus so the next unlisted fire suite cannot repeat this.
   local f rc
-  for f in handoff-fire-focus.bats handoff-fire-payload-lint.bats fire-engagement.bats; do
+  for f in handoff-fire-focus.bats handoff-fire-payload-lint.bats fire-engagement.bats \
+           fire-autonomy.bats notify-back.bats; do
     rc=0; _setup_pins "$REPO/tests/$f" || rc=$?
     [ "$rc" -eq 0 ] || { echo "UNPINNED: tests/$f setup() is missing a gate export"; false; }
   done
@@ -361,6 +371,86 @@ _setup_pins() {
     > "$BATS_TEST_TMPDIR/pinned.bats"
   rc=0; _setup_pins "$BATS_TEST_TMPDIR/pinned.bats" || rc=$?
   [ "$rc" -eq 0 ] || false
+}
+
+# _fires <file> — 0 when that file EXECUTES handoff-fire (command position), not merely
+# mentions the path. The distinction is load-bearing: the source lints (self-path-lint,
+# test-hermeticity-lint, iterm2-appname-lint) all name handoff-fire.sh while never running
+# it, and sweeping them in would demand pins on suites the gate can never reach.
+_fires() {
+  grep -qE '(^|[[:space:];|&])(bash|run bash|env [^|;]*bash)[[:space:]]+"\$\{?HF\}?"' "$1"
+}
+
+@test "25 PIN-GUARD is DERIVED — no NEW unpinned fire suite may appear (ratchet)" {
+  # Test 23's roster is a list of names, so it can only ever re-check files someone already
+  # thought of — which is exactly how fire-autonomy + notify-back reached trunk unpinned and
+  # blocked every land. This derives the population instead: every suite that EXECUTES the
+  # fire must be pinned, or be named below as grandfathered. New arrivals go RED here.
+  #
+  # The grandfathered set is NOT an endorsement — those 11 execute the fire and are unpinned,
+  # so they are load-sensitive on paper. They are held rather than blanket-pinned because
+  # blanket-pinning is the M11 failure mode test 23's DISJOINTNESS clause warns about, and
+  # because none of them has been OBSERVED red (they are not in the smoke's direct set). Pin
+  # one the moment it is measured red; never widen the list. Tracked as task #112.
+  local grandfathered=" desk-land.bats handoff-fire-account-sweep.bats
+    handoff-fire-completion-push.bats handoff-fire-failed-cleanup.bats
+    handoff-fire-validate.bats handoff-orphaned-assignee.bats
+    handoff-recycle-durable-cwd.bats handoff-recycle-engagement.bats
+    handoff-selfclose-session-pin.bats handoff-selfclose-teammate-gate.bats
+    handoff-selfclose.bats "
+  # Collapse the literal's newlines/indent to single spaces BEFORE the membership test.
+  # `case *" $b "*` needs a space on BOTH sides, and a name that lands at end-of-line is
+  # followed by a newline — so the wrapped entries silently missed and reported as NEW.
+  # Caught here by exactly the 5 line-final names; the delimiter must not depend on how
+  # the list happens to be wrapped.
+  grandfathered=" $(printf '%s' "$grandfathered" | tr -s '[:space:]' ' ' | sed 's/^ *//; s/ *$//') "
+  local f b nnew=0 nfire=0
+  for f in "$REPO"/tests/*.bats; do
+    b="$(basename "$f")"
+    _fires "$f" || continue
+    nfire=$((nfire+1))
+    # this suite is disjoint BY DESIGN (test 23) — pinning it would delete the gate's coverage
+    [ "$b" = "$(basename "$BATS_TEST_FILENAME")" ] && continue
+    case "$grandfathered" in *" $b "*) continue ;; esac
+    if ! _setup_pins "$f"; then
+      echo "NEW UNPINNED FIRE SUITE: tests/$b — add the two M11 exports to its setup()"
+      nnew=$((nnew+1))
+    fi
+  done
+  echo "pin-guard: $nfire fire-executing suite(s); 11 grandfathered; $nnew new unpinned"
+  # the population must be non-trivial, else this ratchet passes by finding nothing at all
+  [ "$nfire" -ge 10 ] || { echo "derivation found only $nfire suites — predicate broke"; false; }
+  # ...and the hold-list must not have rotted into a wildcard. Every grandfathered name must
+  # still name a REAL suite: an entry that no longer exists is a silent exemption, and the
+  # normalization above is exactly the kind of edit that could widen the match to everything.
+  local g ng=0
+  for g in $grandfathered; do
+    [ -f "$REPO/tests/$g" ] || { echo "STALE grandfather entry: $g no longer exists — drop it"; false; }
+    ng=$((ng+1))
+  done
+  [ "$ng" -eq 11 ] || { echo "grandfathered count drifted: $ng (expected 11) — the hold-list may only SHRINK"; false; }
+  [ "$nnew" -eq 0 ] || false
+}
+
+@test "26 DERIVATION POSITIVE CONTROL — _fires separates executing from merely mentioning" {
+  # Without this, test 25 could be green because _fires matches nothing (an empty population
+  # ratchets nothing). Assert both directions on synthetic files.
+  printf '@test "t" { run bash "$HF" --dry-run; }\n'      > "$BATS_TEST_TMPDIR/exec.bats"
+  _fires "$BATS_TEST_TMPDIR/exec.bats" || { echo "_fires MISSED a real execution"; false; }
+  printf 'grep -n handoff-fire.sh "$REPO/scripts/handoff-fire.sh"\n' > "$BATS_TEST_TMPDIR/mention.bats"
+  ! _fires "$BATS_TEST_TMPDIR/mention.bats" || { echo "_fires matched a mere MENTION"; false; }
+  # and the two suites this change pinned must be inside the derived population, not outside it
+  # (if _fires missed them, test 25 would be green for the wrong reason — the original defect)
+  _fires "$REPO/tests/fire-autonomy.bats" || { echo "_fires misses fire-autonomy"; false; }
+  _fires "$REPO/tests/notify-back.bats"   || { echo "_fires misses notify-back"; false; }
+
+  # MEMBERSHIP CONTROL — test 25 normalizes its hold-list's whitespace, and a normalization
+  # that over-reaches (e.g. collapsing to a bare `*`) would grandfather the whole corpus and
+  # make the ratchet vacuously green. Assert the predicate still SEPARATES: a real member
+  # matches, an invented name does not.
+  local gl=" desk-land.bats handoff-selfclose.bats "
+  case "$gl" in *" desk-land.bats "*) : ;; *) echo "membership REJECTED a real member"; false ;; esac
+  case "$gl" in *" not-a-real-suite.bats "*) echo "membership ACCEPTED a non-member"; false ;; esac
 }
 
 # ---- ADMIT-SIDE TELEMETRY (2026-07-31) --------------------------------------------------------
