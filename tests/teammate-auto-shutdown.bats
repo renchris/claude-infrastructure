@@ -488,3 +488,52 @@ wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=
   grep -q "worktree removed: $wt" "$LOGF"
   [ -d "$D/repo4" ]                                          # …and the shared repo root was NOT touched
 }
+
+# ── shared-cwd never-reaps: the defer must TERMINATE, and only for the shared case ────────────────
+# THE DEFECT (measured 2026-08-01, team session-01d229a2). Teammates inherit the LEAD's cwd at spawn
+# — a `cd` in the brief does not change what the harness records — so all four members recorded
+# cwd=<the shared checkout>. That one value defeats two gates at once: the ownership test
+# (occupants==1 can never hold, so removal is refused) and reap-guard, which then looks for work
+# products in the LEAD's tree where a teammate working in its own worktree has produced none. So
+# "no-products" was guaranteed rather than measured, this leg deferred every sweep forever, and
+# three teammates sat idle-but-alive with no terminal state and no alarm.
+#
+# The fix must not add a close path — the only tree it could gate on is the shared checkout, which
+# must never be reaped. It converts a permanent silence into ONE page. These two tests pin both
+# halves, and the second is what stops the fix from becoming "reap young teammates sooner".
+teamcfg_shared() {  # <team> <member> <pane> <shared-cwd> — member AND lead both record <shared-cwd>
+  mkdir -p "$HOME/.claude/teams/$1"
+  printf '{"members":[{"name":"team-lead","cwd":"%s"},{"name":"%s","tmuxPaneId":"%s","cwd":"%s"}]}' \
+    "$4" "$2" "$3" "$4" > "$HOME/.claude/teams/$1/config.json"
+}
+# a reap-guard that always DEFERS — which is exactly what the real one does on a shared cwd,
+# because it is reading a tree the member never wrote to.
+denying_guard() {
+  export CC_REAP_GUARD_BIN="$D/bin/reap-guard-deny"
+  printf '#!/bin/bash\nexit 1\n' > "$CC_REAP_GUARD_BIN"; chmod +x "$CC_REAP_GUARD_BIN"
+}
+
+@test "shared cwd: reap-guard DEFER is bounded and SURFACES instead of deferring forever" {
+  local team=tshared member=mshared pane=%99 shared="$D/sharedco"
+  mkdir -p "$shared"; teamcfg_shared "$team" "$member" "$pane" "$shared"
+  denying_guard
+  # Four sweeps: MAX_DEFERS is 3, so the 4th must surface rather than defer a 4th time.
+  for _ in 1 2 3 4; do hookrun "$member" "$team" sidshared "$shared" >/dev/null 2>&1 || true; done
+  grep -q "SURFACE $member" "$LOGF" || { echo "never terminated — still deferring:"; cat "$LOGF"; false; }
+  grep -q "SHARED cwd" "$LOGF"      || { echo "surfaced, but not for the shared-cwd reason"; false; }
+  # The pane must NOT have been closed: a shared checkout can never be gated on, so a close here
+  # would be the ungated-close defect wearing a fix's clothes.
+  [ ! -s "$D/it2-calls.log" ] || { echo "pane was CLOSED on a shared cwd:"; cat "$D/it2-calls.log"; false; }
+}
+
+@test "RED-PROOF: a DEDICATED cwd keeps the unbounded defer (the fix must not reap young teammates)" {
+  # Same denying guard, same four sweeps — but the member owns its cwd, so the DEFER is informative
+  # (birth-grace / operator-adoption are self-resolving) and must stay uncounted and unsurfaced.
+  # Without this, "bound the defer" would silently become "reap anything reap-guard is protecting".
+  local team=towned member=mowned pane=%98 wt="$D/wt_owned"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  denying_guard
+  for _ in 1 2 3 4; do hookrun "$member" "$team" sidowned "$wt" >/dev/null 2>&1 || true; done
+  ! grep -q "SURFACE $member" "$LOGF" || { echo "a dedicated-cwd defer was surfaced — fix over-reaches:"; cat "$LOGF"; false; }
+  [ ! -s "$D/it2-calls.log" ] || { echo "pane closed despite reap-guard DEFER"; false; }
+}

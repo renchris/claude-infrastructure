@@ -682,6 +682,36 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
      | jq -r --arg s "$SESSION_ID" '.[] | select((.session_id // .sessionId)==$s) | .startedAt // empty' 2>/dev/null | head -1)"
   if [[ "$_started_ms" =~ ^[0-9]+$ ]]; then _spawn_s=$(( _started_ms / 1000 )); else _spawn_s="$(date +%s)"; fi
   if ! "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" >/dev/null 2>&1; then
+    # A DEFER here is only INFORMATIVE when $WORKTREE is actually this member's tree. When the path
+    # came from the shared team-config cwd (WORKTREE_OWNED=false), reap-guard just evaluated the
+    # WRONG TREE: it looked for work products in the lead's checkout, where a teammate that did all
+    # its work in a dedicated worktree has produced exactly none. "no-products" is then guaranteed,
+    # not measured — so this leg deferred every sweep, forever, and the teammate was never reaped.
+    #
+    # Measured 2026-08-01 (team session-01d229a2): all four members recorded
+    # cwd=/Users/chrisren/Development/claude-infrastructure because teammates inherit the LEAD's cwd
+    # at spawn — a `cd` instruction in the brief does not change what the harness records. That one
+    # wrong value defeats BOTH gates at once: the ownership test (occupants==1 can never hold, so
+    # removal is refused) and this one. Three teammates sat idle-but-alive with no terminal state
+    # and no alarm; a guard that always defers carries the same zero bits as one that cannot fire.
+    #
+    # So: keep deferring (never close ungated — the tree we could gate on is the SHARED checkout,
+    # which must never be reaped), but make it TERMINATE. Charge the shared-cwd case against the
+    # same MAX_DEFERS as the unresolved-worktree leg below and SURFACE at the end. This adds no
+    # close path; it only converts a permanent silence into one page. Birth-grace and
+    # operator-adoption keep their unbounded defer — both are self-resolving, this one is not.
+    if ! $WORKTREE_OWNED; then
+      if (( DEFER_COUNT < MAX_DEFERS )); then
+        DEFER_COUNT=$((DEFER_COUNT + 1))
+        echo "$DEFER_COUNT" > "$DEFER_COUNTER"
+        log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER on a SHARED cwd ($WORKTREE) — gates evaluated the wrong tree"
+        exit 0
+      fi
+      log "⚑ SURFACE $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard has deferred $MAX_DEFERS times on a SHARED cwd ($WORKTREE) — this member records the lead's cwd, so no gate can ever read its real tree and it will never self-reap. Pane NOT closed. Fix at spawn (give the member its own cwd) or close manually (session=$SESSION_ID)"
+      _page_desk_damped "SHARED-CWD-NEVER-REAPS:$TEAM_NAME:$TEAMMATE_NAME" \
+        "teammate-auto-shutdown SURFACE: $TEAMMATE_NAME (team $TEAM_NAME) records the LEAD's cwd, so reap-guard evaluates the wrong tree and defers forever — teammate will never self-reap. Pane left open deliberately; confirm-close manually."
+      exit 0
+    fi
     log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products / operator-adopted)"
     # Do NOT emit {"continue": false}; let the just-born teammate keep working.
     exit 0
