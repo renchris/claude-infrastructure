@@ -582,7 +582,27 @@ That last row is the one that bites, and it is why the predicate is pinned by a 
 | **iTerm2** (incumbent) | **106.9%** | 12 | 700 | 800 MB | **0.53 : 1 — draws mostly on the CPU** | `PARTIAL` |
 | **kitty** | **0.0%** | **8** | 362 | 321 MB | **50.0 : 1** | `OK` |
 | Ghostty | 0.0% | 8 | 338 | 84 MB | 16.0 : 1 | `OK` |
-| WezTerm | — | — | — | — | — | `NO-DATA` (not installed) |
+| WezTerm | — | — | — | — | — | `NO-DATA` (not installed **at the time of that run**) |
+| cmux | — | — | — | — | — | **not driveable by this instrument** — see below |
+
+**WezTerm is no longer NO-DATA — it was measured under the films** (2026-08-01), and the two
+instruments agree: **27.2% app CPU, 82 threads (4.56/pane), 177 MB, GPU:CPU 107.5 : 1** at 18 panes
+of the same load, against the candidate table's independently-derived 24.4% and 4.00 threads/pane.
+Those columns are not the same experiment as the idle row above it — the rows above are the LIVE
+fleet at rest, these are 18 panes under load — so they are reported here rather than merged into a
+table that would then be mixing two regimes. The same run puts kitty at **10.4% / 10 threads** and
+Ghostty at **31.7% / 139 threads**, each with the row committed beside its film.
+
+**cmux is absent because this instrument cannot drive it, and that is a property of cmux, not an
+omission.** Two independent blockers, both measured 2026-08-01: its control socket refuses processes
+that did not start inside cmux (`Access denied - only processes started inside cmux can connect`,
+with `socketPassword` empty in `~/.config/cmux/cmux.json`), and `cmux new-split` accepts no
+`--command`, so even an authorised caller cannot put the load into the panes it creates — only
+`workspace create` takes one, which yields a single loaded pane and seventeen idle shells. Filming
+it would mean writing the operator's cmux settings to mint a socket password AND reverse-engineering
+the `--layout` JSON schema, which is a disproportionate change to a running app for a screen
+recording. Its **thread cost is still in the candidate table above** (5.18/pane, linear), measured
+by the earlier structural pass that did not need per-pane commands.
 
 That `0.53 : 1` is the finding the whole section rests on, and it is **measured by profile, not read off a flag** — `sample` symbol counts, because a loaded GPU driver and a warm shader cache can only ever refute *"absent"*, never establish *"used"*. iTerm2 ships a Metal renderer and was still resolving 235 CPU frames to 125 GPU frames while burning a full core.
 
@@ -616,9 +636,9 @@ film and the numbers describe one event rather than two.
 
 <div align="center">
 
-<img src="assets/demo/renderer-grid.webp" width="620" alt="An animated clip, three terminals stacked, each showing an 18-pane window repainting under the same synthetic load. Colour ramps shift row by row in every pane. kitty's panes form an even grid; WezTerm's and Ghostty's form uneven binary split trees. Each pane header shows its own measured column-by-row geometry.">
+<img src="assets/demo/renderer-grid.webp" width="900" alt="An animated clip, three terminals stacked, each showing an 18-pane window repainting under the same synthetic load. Colour ramps shift row by row in every pane. kitty's panes form an even grid; WezTerm's and Ghostty's form uneven binary split trees. Each pane header shows its own measured column-by-row geometry.">
 
-<sub><b>The films themselves, playing — 18 panes, one window, the same load, this machine.</b> 3 s of each take at 8 fps; the panes are repainting at 10 fps, so this is the real cadence, not a slideshow. <b>Full 1080p60 masters</b> (1920×1080, 60/1, ~15 s): <a href="assets/demo/renderer-kitty.mp4">kitty</a> · <a href="assets/demo/renderer-wezterm.mp4">WezTerm</a> · <a href="assets/demo/renderer-ghostty.mp4">Ghostty</a> — GitHub strips <code>&lt;video&gt;</code>, so an inline image is the only thing that can move here and the masters are links by necessity. Measurement row taken during each take: <a href="assets/demo/renderer-kitty.txt">kitty</a> · <a href="assets/demo/renderer-wezterm.txt">WezTerm</a> · <a href="assets/demo/renderer-ghostty.txt">Ghostty</a>. Reproduce: <a href="assets/demo/renderer-film.sh"><code>renderer-film.sh --app kitty</code></a>, then <a href="assets/demo/renderer-grid.sh"><code>renderer-grid.sh</code></a>.</sub>
+<sub><b>The films themselves, playing — 18 panes, one window, the same load, this machine.</b> 3 s of each take at 10 fps, 900 px per tile; the panes are repainting at 10 fps, so this is the real cadence, not a slideshow. <b>Full 1080p60 masters</b> (1920×1080, 60/1, ~15 s): <a href="assets/demo/renderer-kitty.mp4">kitty</a> · <a href="assets/demo/renderer-wezterm.mp4">WezTerm</a> · <a href="assets/demo/renderer-ghostty.mp4">Ghostty</a> — GitHub strips <code>&lt;video&gt;</code>, so an inline image is the only thing that can move here and the masters are links by necessity. Measurement row taken during each take: <a href="assets/demo/renderer-kitty.txt">kitty</a> · <a href="assets/demo/renderer-wezterm.txt">WezTerm</a> · <a href="assets/demo/renderer-ghostty.txt">Ghostty</a>. Reproduce: <a href="assets/demo/renderer-film.sh"><code>renderer-film.sh --app kitty</code></a>, then <a href="assets/demo/renderer-grid.sh"><code>renderer-grid.sh</code></a>.</sub>
 
 </div>
 
