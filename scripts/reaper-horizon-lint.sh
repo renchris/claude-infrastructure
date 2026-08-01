@@ -116,7 +116,17 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 #   bin/cc-await-ping         NOT an age reaper: `rm -f` of its OWN watchfile in an EXIT trap and on
 #                             wake — self-owned lifecycle, no horizon (same class as the
 #                             bin/cc-recover-safeguard declaration in 8195561a).
-DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping'
+#   bin/cc-queue              NOT a reaper at all. It READS CC_TELEMETRY_DIR (:77) and
+#                             CC_REGISTRY_DIR (:78) to render the operator's queue and never
+#                             deletes a row — the evidence spine is only ever CONSUMED here. Its
+#                             SINGLE `rm -f` (:440) lives inside `--selftest` and clears a fixture
+#                             heartbeat under that selftest's own `mktemp -d` sandbox ($tmp/pend),
+#                             the handoff-fire.sh / cc-value temp-scaffold shape declared above —
+#                             it cannot name a path outside that sandbox. No -mmin / -mtime /
+#                             RETAIN_H / MARKER_MAX_AGE_S / CC_SUP_GC_S, so §1/1b/1c/2/2b find
+#                             nothing to bound. Declared = reviewed (2026-07-31; the land of
+#                             57e16249 is what made §3 fire).
+DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue'
 
 viol=0
 say(){ printf '  %s\n' "$1"; }
