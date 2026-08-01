@@ -121,8 +121,11 @@ SH
   run "$K" session send -s 7 --json hello
   [ "$status" -eq 0 ]
   grep -q 'hello' "$CC_ARGS_SINK" || false
-  grep -q -- '--json' "$CC_ARGS_SINK" && false
-  true
+  # `! A || false`, NOT `A && false`. The latter is what the dead-assertion ratchet named here: as a
+  # non-final `A && B` the failure is absorbed and errexit never sees it, so the assertion could not
+  # fail — it only LOOKED like it was checking. And a uniform `|| false` is the wrong repair for this
+  # class (it fails on BOTH branches); the negation has to move onto the command itself.
+  ! grep -q -- '--json' "$CC_ARGS_SINK" || false
 }
 
 # ── the integration that actually regressed ──────────────────────────────────────────────────────
