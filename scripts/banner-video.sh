@@ -19,7 +19,7 @@
 #
 # THE ORDERING TRAP — the reason this script exists rather than a two-line ffmpeg glob.
 # banner-shots.sh names each frame after its timestamp with `.` rewritten to `p`:
-#   recycle-bmo-dark-t0.png  …-t0p0417.png  …-t0p125.png  …-t1p5.png  …-t10p5.png
+#   v6c-dusk-line-dark-t0.png  …-t0p0417.png  …-t0p125.png  …-t1p5.png  …-t10p5.png
 # Those names DO NOT sort into time order. `t10p5` sorts before `t2`; `t9` sorts after both. A glob
 # (`ffmpeg -pattern_type glob -i '*.png'`) or an `ls`-driven list therefore hands the encoder frames
 # out of sequence — and nothing fails: it encodes cleanly, it plays, it is simply not the animation.

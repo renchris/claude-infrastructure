@@ -9,10 +9,10 @@ a candidate becomes a self-contained 12 s SVG that can be looked at in seconds, 
 that survive review get the expensive treatment in `gen.py`.
 
 THE SPRITE IS IMPORTED, NEVER REDRAWN. Every candidate here uses `gen.clawd_sprite()` and `gen`'s own
-constants, so a review page cannot show a creature that differs from the shipping one. This is the
-same discipline `recycle.py` follows for the palette, and it exists because of a measured failure in
-this repo: a checker that kept its own copy of its subject's geometry convicted a green asset, every
-row off by exactly 4/3 — the model was stale, not the subject. A preview that redrew the sprite would
+constants, so a review page cannot show a creature that differs from the shipping one. It exists
+because of a measured failure in this repo: a checker that kept its own copy of its subject's
+geometry convicted a green asset, every row off by exactly 4/3 — the model was stale, not the
+subject. A preview that redrew the sprite would
 be that same defect aimed at the design decision instead of at a test.
 
 WHAT A CANDIDATE OWES. Each one is a STORY with three acts, because the operator's ask is for beats
