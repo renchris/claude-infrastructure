@@ -28,6 +28,41 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [worktree-setup] $1" >> "$LOG_FILE"
 
 command -v jq >/dev/null 2>&1 || { log "jq missing — cannot parse hook input"; exit 1; }
 
+# Point the new worktree's PROJECT MEMORY at the primary repo's. Claude Code keys project state on
+# cwd, so a worktree otherwise starts memory-blind — measured 2026-07-31: 164 worktree-keyed project
+# dirs on this box, 0 with a memory/ dir, against 213 topic files in the primary's. Full rationale
+# (and why it is a symlink, not a copy) in scripts/worktree-memory-link.sh.
+#
+# STDOUT DISCIPLINE IS LOAD-BEARING: this hook's contract is that stdout carries ONLY the worktree
+# path — anything else makes CC abort with "WorktreeCreate hook failed: no successful output", which
+# is exactly how a previous version of this hook broke `claude -w`. So the call is fully redirected
+# into the log and can never fail the hook.
+#
+# $0 MUST BE RESOLVED THROUGH ITS SYMLINKS BEFORE DERIVING '..'. Live, this file is
+# ~/.claude/hooks/worktree-setup.sh — a per-file symlink into the checkout. An unresolved
+# `dirname "$0"/../scripts/…` therefore points at ~/.claude/scripts/…, and a BRAND-NEW tracked file
+# lands there UNLINKED until install.sh runs, so the hook would silently no-op on the live path
+# while looking correct from a worktree. self-path-lint caught exactly this. No `readlink -f` —
+# that is GNU-only and this box is BSD.
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 / POSIX-safe)
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+
+link_memory() {
+  local wt="$1" wml self
+  self="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+  wml="$(cd "$(dirname "$self")/.." && pwd)/scripts/worktree-memory-link.sh"
+  [ -f "$wml" ] || { log "worktree-memory-link.sh not found at $wml"; return 0; }
+  CC_WML_QUIET=1 bash "$wml" "$wt" >>"$LOG_FILE" 2>&1 || log "memory-link failed (non-fatal): $wt"
+  return 0
+}
+
 INPUT=$(cat)
 NAME=$(echo "$INPUT" | jq -r '.name // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -40,6 +75,7 @@ if [ -n "$WORKTREE_PATH" ]; then
     cp "$MAIN_WORKTREE/.env.local" "$WORKTREE_PATH/.env.local" && chmod 0600 "$WORKTREE_PATH/.env.local"
     log "copied .env.local into $WORKTREE_PATH"
   fi
+  link_memory "$WORKTREE_PATH"
   log "setup complete (pre-created): $WORKTREE_PATH"
   printf '%s\n' "$WORKTREE_PATH"
   exit 0
@@ -58,6 +94,7 @@ POOL_SH="$REPO/scripts/worktree-pool.sh"
 if [ -f "$POOL_SH" ] && [ -f "$REPO/scripts/new-worktree.sh" ]; then
   WT="$(cd "$REPO" && bash "$POOL_SH" claim "$BRANCH" 2>>"$LOG_FILE")"
   [ -n "$WT" ] && [ -d "$WT" ] || { log "pool claim failed for $BRANCH"; exit 1; }
+  link_memory "$WT"
   log "claimed pool worktree: $WT (branch $BRANCH)"
   printf '%s\n' "$WT"
   exit 0
@@ -67,6 +104,7 @@ if [ -f "$REPO/scripts/new-worktree.sh" ]; then
   SAFE="${BRANCH//\//-}"
   WT="$HOME/Development/.worktrees/wt-$SAFE"
   ( cd "$REPO" && bash scripts/new-worktree.sh "$BRANCH" "$WT" ) >>"$LOG_FILE" 2>&1 || { log "new-worktree.sh failed for $BRANCH"; exit 1; }
+  link_memory "$WT"
   log "cold-built worktree: $WT (branch $BRANCH)"
   printf '%s\n' "$WT"
   exit 0
@@ -78,6 +116,7 @@ WT="$HOME/Development/.worktrees/$(basename "$REPO")-$SAFE"
 mkdir -p "$(dirname "$WT")"
 git -C "$REPO" worktree add "$WT" -b "$BRANCH" >>"$LOG_FILE" 2>&1 || { log "git worktree add failed for $BRANCH"; exit 1; }
 [ -f "$REPO/.env.local" ] && { cp "$REPO/.env.local" "$WT/.env.local"; chmod 0600 "$WT/.env.local"; }
+link_memory "$WT"
 log "generic worktree: $WT (branch $BRANCH)"
 printf '%s\n' "$WT"
 exit 0
