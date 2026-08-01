@@ -49,6 +49,26 @@ setup() {
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
     jq -nc --arg ts "$1" --arg p "$2" --arg n "$3" --arg m "$4" --arg r "$5" --arg cmd "$6" \
       '{ts:$ts,actor:"cc-reaper",kind:"safeguard-blocked",pane:$p,name:$n,account:"claude-quaternary",blocked_model:$m,refusal:$r,firedBy:"ORIG",recover_cmd:$cmd}' >> "$BOARD"; }
+  # ── the account SSOT, fixtured (stale-relogin drop) ──
+  # Points at a path that does NOT exist by default, deliberately: every test above has no
+  # relogin-blocked row, so the tool never asks — and if that gate ever regressed, this pin makes the
+  # regression read as a fail-OPEN here instead of silently shelling out to the operator's real
+  # `claude-accounts` (which would put this suite's verdict at the mercy of their live login state).
+  export CC_BLOCKERS_ACCOUNTS_BIN="$D/stub-claude-accounts"
+  ACCT_MARK="$D/accounts-invoked"
+  rb() { # <ts> <acct> <deadline> — append a relogin-blocked row, recover_cmd `cc-relogin <acct>`
+    jq -nc --arg ts "$1" --arg a "$2" --arg d "$3" \
+      '{ts:$ts,actor:"cc-relogin-poll",kind:"relogin-blocked",acct:$a,account:$a,deadline:$d,
+        launcher:"claude-next",reason:"T-47h to the login deadline",recover_cmd:("cc-relogin " + $a)}' >> "$BOARD"; }
+  accts() { # <json> — install a claude-accounts stub emitting $1 on stdout, exit 0
+    printf '%s\n' "$1" > "$D/accts.json"
+    { printf '#!/usr/bin/env bash\n'; printf 'touch %q\n' "$ACCT_MARK"; printf 'cat %q\n' "$D/accts.json"; } \
+      > "$CC_BLOCKERS_ACCOUNTS_BIN"
+    chmod +x "$CC_BLOCKERS_ACCOUNTS_BIN"; }
+  accts_fail() { # install a stub that errors — the "SSOT unreadable" fail-open premise
+    { printf '#!/usr/bin/env bash\n'; printf 'touch %q\n' "$ACCT_MARK"
+      printf 'echo "claude-accounts: unavailable" >&2\nexit 1\n'; } > "$CC_BLOCKERS_ACCOUNTS_BIN"
+    chmod +x "$CC_BLOCKERS_ACCOUNTS_BIN"; }
 }
 
 @test "absent board → clean 'none' message, exit 0" {
@@ -883,4 +903,115 @@ reg() { # <paneUUID> <session_id>
   [ "$(echo "$output" | jq -r '[.[]|select(.subject=="sess-bad")]|length')" = 1 ]
   [ "$(echo "$output" | jq -r '[.[]|select(.kind=="permission-pending")]|length')" = 9 ]
   [ "$(echo "$output" | jq -r '[.[]|select(.subject==".beacon-alive")]|length')" = 0 ]
+}
+
+# ── the STALE-RELOGIN drop (2026-08-01) ──────────────────────────────────────────────────────────
+# A relogin-blocked row LATCHES: cc-relogin-poll skips healthy accounts before its escalate block
+# (bin/cc-relogin-poll:183), so no retraction row is reachable by construction once the operator
+# re-logs in. Measured live: a row raised 2026-07-31 for deadline 2026-08-02 was still rendered after
+# the account's real deadline moved to 2026-08-28, and the exact command the board printed answered
+# `cc-relogin next: REFUSED (2) — no re-auth needed — healthy`. The drop rule is TIMESTAMPS ONLY —
+# never a second copy of cc-relogin's need_relogin() — and it fails OPEN on every uncertainty, which
+# is what the four fail-open cases below pin. Case 2 is the positive control: without it a filter
+# that muted EVERY relogin row would pass case 1 just as well.
+#
+# EVERY stamp below is seeded RELATIVE to now. An absolute future date silently changes meaning as
+# the clock passes it, and the suite would go red on a calendar boundary with no code change (the
+# 2026-07-27 fleet-wide gate outage; the wall-clock ratchet blocks the land over exactly this, and
+# caught this file on its first land attempt). The drop rule compares the two stamps to EACH OTHER
+# and never to now, so only their ORDER is load-bearing: later-than-deadline ⇒ dropped, equal or
+# earlier ⇒ kept. Seeding relative keeps that order fixed forever.
+#   ts_at   — the board's shape (…:49Z)              ts_acct — claude-accounts' shape (…:10.065000+00:00)
+# SIGNED offset is required: bare `date -v 12H` SETS the hour to 12 instead of adding 12h.
+ts_at()   { date -u -v"$1" +%Y-%m-%dT%H:%M:%SZ; }
+ts_acct() { date -u -v"$1" +%Y-%m-%dT%H:%M:%S.065000+00:00; }
+
+@test "STALE: a relogin row the account's live deadline has moved PAST is dropped" {
+  sg "$(ts_at -24H)" "PANE9" "peer-9" "Fable 5" "safeguards flagged this" "cc-recover-safeguard PANE9"
+  rb "$(ts_at -12H)" "next" "$(ts_at +47H)"
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"ok\",\"login_expires_h\":654.35,\"login_expires_at\":\"$(ts_acct +654H)\",\"state\":null}]}"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="safeguard-blocked")]|length')" = 1 ]
+}
+
+@test "STALE: the RELOGIN-BLOCKED table does not render, and the safeguard table is untouched" {
+  sg "$(ts_at -24H)" "PANE9" "peer-9" "Fable 5" "safeguards flagged this" "cc-recover-safeguard PANE9"
+  rb "$(ts_at -12H)" "next" "$(ts_at +47H)"
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"ok\",\"login_expires_at\":\"$(ts_acct +654H)\"}]}"
+  run "$C"
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'RELOGIN-BLOCKED')" -eq 0 ]
+  [ "$(echo "$output" | grep -c 'cc-relogin next')" -eq 0 ]
+  echo "$output" | grep -q 'peer-9'
+  echo "$output" | grep -q 'cc-recover-safeguard PANE9'
+}
+
+@test "POSITIVE CONTROL: rows the account has NOT outlived are KEPT — not a blanket mute" {
+  # $dl is computed ONCE and reused: the equal-stamps case is the load-bearing boundary (>=, not >),
+  # and two separate `date` calls could land a second apart and silently make it the > case instead.
+  local dl; dl="$(ts_at +47H)"
+  rb "$(ts_at -12H)" "next"  "$dl"   # live == deadline  ⇒ not moved
+  rb "$(ts_at -12H)" "next2" "$dl"   # live  < deadline  ⇒ still due, sooner
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"token-invalid\",\"login_expires_at\":\"${dl%Z}.000000+00:00\"},
+                  {\"acct\":\"next2\",\"auth\":\"ok\",\"login_expires_at\":\"$(ts_acct +6H)\"}]}"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 2 ]
+}
+
+@test "POSITIVE CONTROL: a kept row still renders its table and its EXACT recover command" {
+  local dl; dl="$(ts_at +47H)"
+  rb "$(ts_at -12H)" "next" "$dl"
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"token-invalid\",\"login_expires_at\":\"${dl%Z}.000000+00:00\"}]}"
+  run "$C"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'RELOGIN-BLOCKED'
+  echo "$output" | grep -q 'cc-relogin next'
+}
+
+@test "FAIL-OPEN: claude-accounts ABSENT ⇒ the row is KEPT" {
+  rb "$(ts_at -12H)" "next" "$(ts_at +47H)"     # no stub installed ⇒ the bin is missing
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 1 ]
+  [ ! -e "$ACCT_MARK" ]
+}
+
+@test "FAIL-OPEN: claude-accounts ERRORS ⇒ the row is KEPT" {
+  rb "$(ts_at -12H)" "next" "$(ts_at +47H)"
+  accts_fail
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 1 ]
+  [ -e "$ACCT_MARK" ]
+}
+
+@test "FAIL-OPEN: unparseable account JSON ⇒ the row is KEPT" {
+  rb "$(ts_at -12H)" "next" "$(ts_at +47H)"
+  accts 'not json {{{'
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 1 ]
+}
+
+@test "FAIL-OPEN: no login_expires_at, an unknown account, and an unparseable stamp ⇒ all KEPT" {
+  rb "$(ts_at -12H)" "next"  "$(ts_at +47H)"    # row present, field absent
+  rb "$(ts_at -12H)" "next2" "$(ts_at +47H)"    # no row for this account at all
+  rb "$(ts_at -12H)" "next3" "not-a-timestamp"  # the ROW's own stamp will not parse
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"ok\",\"login_expires_h\":654.35},
+                  {\"acct\":\"next3\",\"auth\":\"ok\",\"login_expires_at\":\"$(ts_acct +654H)\"}]}"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 3 ]
+}
+
+@test "with NO relogin row the account SSOT is never consulted (the suite cannot read the live one)" {
+  sg "2026-07-25T09:05:00Z" "PANE1" "peer-1" "Fable 5" "refusal" "cc-recover-safeguard PANE1"
+  accts "{\"rows\":[{\"acct\":\"next\",\"auth\":\"ok\",\"login_expires_at\":\"$(ts_acct +654H)\"}]}"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq 'length')" = 1 ]
+  [ ! -e "$ACCT_MARK" ]
 }
