@@ -2,12 +2,13 @@
 
 **Date:** 2026-07-24 · **Type:** read-only investigation + verdict · **Repos:** `reso-management-app` (source), `claude-infrastructure` (candidate)
 
-> ⚠️ **SUPERSEDED ON THE ADOPT DECISION — see §6 (re-measured 2026-07-31).** The verdict directly
-> below is **reversed**: do NOT adopt always-isolate here. Its central figures decayed (direct-on-main
-> root pressure went from "33 of the last 60 reflog entries" to **0.5% of commits**), the one dated
-> data-loss incident happened to a session that was **already worktree-isolated**, and this repo had
-> already soaked hard enforcement and reverted it (`528bf705` — "hard-deny cost > benefit").
-> §1–§3 (provenance, mechanism) remain accurate and are unaffected.
+> ⚠️ **READ §6 AND §7 BEFORE ACTING. Net verdict: ADOPT — i.e. the answer below STANDS.**
+> §6 (2026-07-31) reversed this to "do not adopt"; §7 (same day) found §6 wrong on two of its three
+> legs — its "zero recorded failures" null came from an instrument blind to the actual failure, and
+> its "we tried it and reverted it" commits reverted the *hook-deny alternative*, not worktree
+> isolation. §6's re-measured FIGURES are still the current ones and are worth reading; its
+> conclusion is not. §4's cost analysis also has one sign error, corrected in §7.3: editing in the
+> shared root does not merely risk a sweep, it **structurally blocks the deploy lane**.
 
 **Answer up front:** Yes — extend it, but *not* by porting reso's bespoke scripts. The
 generalized extraction already exists and is already installed (`worktree-harness`, Homebrew).
@@ -100,9 +101,10 @@ sessions across per-worktree project dirs and no single launch point can see the
 
 ## 4. SHOULD claude-infrastructure adopt it
 
-> ⚠️ **This section's conclusion is SUPERSEDED by §6 (2026-07-31): the answer is now NO.** The
-> measurements below are preserved as the record of what was true on 2026-07-24; §6.1 tabulates how
-> each one moved. Read both before acting.
+> ⚠️ **This section's CONCLUSION (adopt) stands — but its numbers are stale and one cost is
+> mis-signed.** §6.1 tabulates how each 2026-07-24 figure moved (use §6's numbers, not these);
+> §7.3 corrects the "instant-live edit loop" cost — losing it is a BENEFIT, not a price, because
+> editing in root is what blocks `deploy-live`'s ff-merge. Read §6 and §7 before acting.
 
 ### The pattern is already here — unmanaged
 
@@ -295,6 +297,11 @@ a desk — has been in a failing respawn loop for ~41 hours. This wants its own 
 
 ## 6. RE-MEASURED 2026-07-31 — the §4 verdict is REVERSED
 
+> ⚠️ **§6 IS ITSELF SUPERSEDED — see §7 (same day).** Two of the three legs below do not hold: the
+> "zero recorded failures" null came from an instrument structurally blind to the failure, and the
+> "we tried it and reverted it" commits reverted the *hook-deny alternative*, not worktree isolation.
+> **The correct verdict is §4's: ADOPT.** §6's measurements stand; its conclusion does not.
+
 **Answer up front: do NOT adopt always-isolate in claude-infrastructure.** §4 above recommended
 adoption. That recommendation rested on measurements taken 2026-07-24 which have since decayed, and
 on an incident attribution that does not survive checking. The concurrency premise is *confirmed*;
@@ -402,3 +409,93 @@ M1 patch; it is superseded, and trunk deliberately rejects the timeout it adds (
 can only make a safety refusal fail OPEN — `git-worktree-guard.sh:70-74`). The parse bypasses it
 diagnoses (`git -c` between verb and subcommand, `--git-dir=`) do still appear real on trunk and are
 the salvageable part.
+
+---
+
+## 7. CORRECTION to §6 (same day, 2026-07-31) — §6 is wrong; §4's "adopt" was right
+
+**§6 reversed §4 on three legs. Two of them do not hold, and the operator supplied the evidence
+that broke them. Net: ADOPT always-isolate for claude-infrastructure.** §6's *measurements* stand;
+its *verdict* does not. Both sections are kept because the way this went wrong is the reusable part.
+
+### 7.1 "Zero recorded failures in 114,859 commands" — wrong instrument, not a null result
+
+§6.4 searched the logs for `cannot lock ref` / `index.lock`. **The failure the operator actually
+hits — one session's commit sweeping another session's files out of the shared index — raises no
+error at all. It succeeds.** It can never appear in a search for error strings, so the null was
+guaranteed before it was run and carried no information. A second attempt to count blind
+`git add -A` / `git commit -a` in `~/.claude/logs/bash-commands.log` was also void: the probe
+matched its **own** command line in the log (the same self-match trap already recorded in
+`docs/research/…` and in memory). Two instruments, both structurally blind. **Absence of a logged
+error is not absence of the failure** — and per-worktree indexes prevent this class by construction:
+each linked worktree owns a physically distinct `index`/`HEAD`, so one session's `git add` *cannot*
+reach another's staged work.
+
+### 7.2 "This repo tried it and reverted it" — backwards; the revert was of the ALTERNATIVE
+
+§6.3 cited `528bf705` ("soak verdict: hard-deny cost > benefit") and `fdf0bda7` as this repo
+rejecting isolation. Reading what those commits actually **changed** rather than what their subjects
+**say**:
+
+- `528bf705` touches exactly one file — `hooks/concurrent-writer-guard.sh` (+6/−5).
+- `fdf0bda7` deletes `hooks/concurrent-writer-guard.sh` (142), `hooks/reso-writer-lock.py` (207),
+  and 34 lines of `hooks/validate-bash.sh`.
+
+That stack is a **PreToolUse hook that denied git writes mid-session, plus an advisory lock** — the
+*policy* approach. "Hard-deny cost > benefit" is a verdict on **being blocked mid-session by a hook**,
+not on starting in a worktree. And §1 of this very document already quotes why the stack was deleted:
+
+> The writer-lock and guard defend an invariant git already enforces per-worktree, and are already
+> no-ops inside every worktree — so they are deleted, **and the launcher always isolates.**
+
+It was retired **because worktree isolation replaced it**. §6 cited the retirement of the losing
+alternative as evidence against the winner. **Generalizable rule: date and read the DIFF, never the
+subject line — a commit message describes intent, the diff describes the change.**
+
+### 7.3 The surviving leg is real but narrow, and the cost argument INVERTS
+
+`dfacccd` was indeed committed from `wt-pool-4`, so worktrees do not fix the **landing-race** class.
+True, and irrelevant to the **index-sweep** and **deploy-block** classes, which are what actually
+bite here. Distinct failure classes need distinct fixes; one class's immunity is not the other's.
+
+**And §6.5's headline cost — "isolating kills the instant-live edit loop" — has the sign backwards.**
+Observed live 2026-07-31 (operator screenshot + independent confirmation):
+
+- `config/kitty.conf` and `README.md` sat **uncommitted in the shared checkout**, owned by a sibling
+  session, and were **also modified by incoming commits**.
+- `deploy-live.sh`'s `git merge --ff-only` therefore **refused**, correctly, rather than overwrite them.
+- Root fell **16 commits behind trunk**; `com.claude.deploy-live` sat at **exit 1** for hours; the
+  live `~/.claude` layer went stale fleet-wide.
+- The triage a session produced was: *"the blocker clears itself (not yours, not mine) … Nothing to
+  run; it resolves when they commit."* — **an unbounded wait on work nobody present owns.**
+
+The root checkout is being asked to be two incompatible things at once: a **scratch tree many
+sessions edit**, and the **ff-merge target that must stay clean**. Editing in root does not merely
+risk a sweep; it **structurally blocks the deploy lane**. Under always-isolate no session edits root,
+so root is always clean and the ff always succeeds. Isolation does not cost the deploy loop — **it is
+what keeps it unblocked.** (§4 said this — *"`merge --ff-only` needs a clean root tree, and today
+concurrent sessions dirty it"* — and §6 underweighted it.)
+
+### 7.4 Verdict, and what must ship with it
+
+**Adopt always-isolate**, via the `~/.zshrc:112` gate (basename → `.harnessrc` opt-in, reusing the
+installed `worktree-harness`). Ship these in the same change or the cure hurts:
+
+1. **Branch/worktree GC** — 1,334 branches, **639 already merged into main**, growing ~5.5×/week with
+   no reaper. Always-isolate adds one branch + one worktree per session at 14–27 sessions/day. This
+   was §4's recommendation #3 and remains unbuilt; it is the one genuine cost §6 got right.
+2. **Desk exemption** — and re-point `scripts/desk-invariant.sh:93`'s `CANNED_CWD`, or a respawned
+   desk silently lands back in root and re-creates the dirty-root condition on its own.
+3. **Accept the deploy-latency trade explicitly**: a hook edit stops being instantly live and goes
+   land → green stamp → deploy tick. Note the flip side — today a half-finished hook edit in root
+   breaks every running session *immediately*; isolation removes that blast radius. Note also that
+   the green gate is currently deadlocked at this commit rate
+   (`docs/plans/DEPLOY_GATE_CONVERGENCE.md`) — that is prerequisite work, not a consequence of this.
+
+### 7.5 Why §6 is kept rather than deleted
+
+The error is instructive and cheap to re-make: a decayed prior verdict (§4), a subagent report taken
+at face value, a commit **subject** read as if it were the **diff**, and a null from an instrument
+that could not have detected the failure. Deleting §6 would leave §7 asserting a conclusion with no
+visible reason for the reversal — which is the same "verdict with no provenance" defect that made §4
+dangerous in the first place. **When correcting a verdict, leave the falsified reasoning visible.**
