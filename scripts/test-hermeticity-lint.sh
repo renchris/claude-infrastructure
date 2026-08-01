@@ -56,14 +56,59 @@
 #   last possible moment and exactly one suite is in scope, and it pins. A ratchet that starts empty
 #   can only stay empty.
 #
+# RULE 4 (the embedded selftest) — not a fourth ambient INPUT but a fourth POPULATION, and the one
+# rules 1-3 are structurally blind to. Their scan is `for f in "$dir"/*.bats`, so the only test
+# harness this file has ever judged is a bats suite. Roughly fifty tools in bin/, scripts/ and
+# hooks/ ship an EMBEDDED selftest instead of (or as well as) a suite — `cc-dispatch selftest`
+# RED-proves 142 branches and owns no .bats file of its own — and every one of them was outside the
+# ratchet entirely. Reported 2026-07-30 as a spillover from backlog f7abcbdee98c, where a selftest
+# went RED in 2 of 4 CONCURRENT runs: two runs of the same harness collided on a scratch path that
+# was the same string both times.
+#   That is rule 1's failure with the seam moved: the result depends on what else is running. The
+#   difference is only that a bats suite inherits an ambient $HOME while a selftest names its own
+#   scratch dir — so the compliant position is not "fixture $HOME" but "make the path PER-RUN
+#   UNIQUE", which on this box means `mktemp`.
+#   A selftest is compliant iff its region (a) names no CONSTANT /tmp-family path in a
+#   state-bearing position — an assignment, a redirect target, or an argument to mkdir/touch/tee/
+#   install/cp/mv/rm — and (b) if it creates scratch state at all, obtains that state from
+#   `mktemp`. (b) is what catches a constant path that does not live under /tmp; (a) is what
+#   catches a `mktemp` that is present but bypassed. A selftest that creates nothing cannot
+#   collide and is never flagged — that scoping is why the "creates" probe exists.
+#   MEASURED BEFORE IT WAS WRITTEN, against trunk at the last possible moment, for the reason rules
+#   2-3 record: 45 extractable selftest regions, ZERO violations of either half. So RULE 4's
+#   grandfather list (EMBEDDED_SELFTEST_ALLOWLIST) ships EMPTY and, like rule 3's, should never
+#   gain a line — a NEW selftest is one that can `mktemp` from the start.
+#   ACCEPTED FLOOR, stated rather than hidden. The scan set is exactly `bin/*`, `scripts/*.sh` and
+#   `hooks/*.sh` — flat globs, so a selftest that lands in `tools/` or in a subdirectory is not
+#   reached (measured 2026-07-31: no shell file under tools/ ships one). A region is recognised in
+#   three shapes — a `selftest()` / `cmd_selftest()` function, and the
+#   `if [ "${1:-}" = "--selftest" ]` block. A tool that instead sets a flag
+#   (`--selftest) MODE=selftest`) has no delimited region to read and is not matched; a tool that
+#   `exec bats <suite>` (bin/cc-classify, bin/cc-reaper) is already covered by rules 1-3 through
+#   that suite.
+#   THE FLOOR IS GUARDED, NOT MERELY DOCUMENTED — by a positive control on the extractor rather
+#   than by a count. THIS script ships an embedded selftest by construction, so wherever it sits
+#   inside the scanned root the extractor must find it; if it cannot see its own, it is broken and
+#   the pass is a LOUD non-verdict instead of a vacuous green. A COUNT cannot say that: the first
+#   version of this guard was `seen < 20`, calibrated against the 45 measured here, and it turned
+#   every SMALLER tree into a non-verdict — including the fixture repos ship-land's own tests land,
+#   whose scripts/ holds a single file. That collides with this repo's standing rule that a tree is
+#   judged by the ratchet it SHIPS and must never become unlandable for being small. Absent the
+#   anchor, `seen` may legitimately be 0 and "clean" is the honest answer. Partial collapse — one
+#   of the three shapes breaking while another still matches — is caught where it belongs, by the
+#   per-shape fixtures in --selftest, which is also calibration-free.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
-#   CC_HERM_ALLOWLIST        overrides rule 1's embedded allowlist (set-but-empty = no grandfathering)
-#   CC_HERM_FIRE_ALLOWLIST   overrides rule 2's embedded allowlist (same set-but-empty semantics)
-#   CC_HERM_FIRE_RULE=off    kill switch — disables rule 2 entirely, leaving rule 1 exactly as it was
-#   CC_HERM_ORPHAN_ALLOWLIST overrides rule 3's embedded allowlist (same set-but-empty semantics)
-#   CC_HERM_ORPHAN_RULE=off  kill switch — disables rule 3 entirely, leaving rules 1-2 untouched
+#   CC_HERM_ALLOWLIST          overrides rule 1's embedded allowlist (set-but-empty = no grandfathering)
+#   CC_HERM_FIRE_ALLOWLIST     overrides rule 2's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_FIRE_RULE=off      kill switch — disables rule 2 entirely, leaving rule 1 exactly as it was
+#   CC_HERM_ORPHAN_ALLOWLIST   overrides rule 3's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_ORPHAN_RULE=off    kill switch — disables rule 3 entirely, leaving rules 1-2 untouched
+#   CC_HERM_SELFTEST_ALLOWLIST overrides rule 4's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_SELFTEST_RULE=off  kill switch — disables rule 4 entirely, leaving rules 1-3 untouched
+#   CC_HERM_SELFTEST_ROOT      overrides the repo root rule 4 scans (default: this script's ROOT)
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -277,6 +322,51 @@ EMBEDDED_ORPHAN_ALLOWLIST=""
 ORPHAN_ALLOW="${CC_HERM_ORPHAN_ALLOWLIST-$EMBEDDED_ORPHAN_ALLOWLIST}"
 ORPHAN_RULE="${CC_HERM_ORPHAN_RULE:-on}"
 
+# ── RULE 4's ratchet: tools whose EMBEDDED selftest names a scratch path that is the same string on
+# every run. Ships EMPTY, and that is a measurement: on 2026-07-31 all 45 extractable regions under
+# bin/, scripts/ and hooks/ obtain their scratch dir from `mktemp` and none names a constant
+# /tmp-family path. Derived against trunk at the last possible moment, for the reason rules 2-3
+# record — a list read earlier ships stale, i.e. RED on its first run.
+# ONLY EVER DELETE LINES FROM THIS LIST. It should never gain one.
+EMBEDDED_SELFTEST_ALLOWLIST=""
+
+# Rule 4's runtime knobs. Globals rather than parameters for rules 2-3's reason verbatim (arity is
+# load-bearing on the own-scope seam). `-` not `:-`, so set-but-EMPTY means "grandfather nothing" —
+# which is also the shipped default, so the two agree by construction.
+SELFTEST_ALLOW="${CC_HERM_SELFTEST_ALLOWLIST-$EMBEDDED_SELFTEST_ALLOWLIST}"
+SELFTEST_RULE="${CC_HERM_SELFTEST_RULE:-on}"
+SELFTEST_ROOT="${CC_HERM_SELFTEST_ROOT:-$ROOT}"
+
+# A CONSTANT /tmp-family path in a STATE-BEARING position: an assignment (`tmp=/tmp/x`,
+# `d="/tmp/x"`), a redirect target (`> /tmp/x`), or an argument to a create/destroy verb
+# (`mkdir -p /tmp/x`). Anchored at a statement boundary — `(^|[[:space:];&|(])` — and that anchor is
+# not cosmetic: without it `<string>/tmp/$label.sh</string>` matches on the tag's own `>`, and a
+# /tmp literal quoted INSIDE an argument to something else (`arow s3 "rm -rf /tmp/x"`, four such
+# lines in tests/) reads as a write. All four shapes were checked against this pattern and none
+# matches. The narrow miss it buys — `printf x>/tmp/f`, with no space before the redirect — is the
+# same accepted floor rules 2-3 take: the ratchet binds where the evidence is plain.
+SELFTEST_CONST_RE='(^|[[:space:];&|(])((>>?[[:space:]]*"?|(mkdir|touch|tee|install|cp|mv|rm)([[:space:]]+-[a-zA-Z-]+)*[[:space:]]+"?)|[A-Za-z_][A-Za-z0-9_]*="?)(/private)?/(var/)?tmp/'
+# Does the region create scratch state AT ALL? This is rule 4's SCOPE probe, and it exists for the
+# reason references_fire()/references_close_leg() exist: a selftest that writes nothing cannot
+# collide with a concurrent copy of itself, so demanding `mktemp` of it would be a rule firing on
+# everything — which passes every RED assertion while proving nothing.
+SELFTEST_CREATES_RE='(^|[[:space:];&|(])(>>?[[:space:]]|mkdir([[:space:]]|$)|touch([[:space:]]|$)|tee([[:space:]]|$))'
+
+# The body of a tool's EMBEDDED selftest, comments stripped. Three shapes, matching what the tree
+# actually uses: a `selftest()` / `cmd_selftest()` function terminated by a bare `}` at column 0
+# (the same convention setup_bodies() relies on), and the `if [ "${1:-}" = "--selftest" ]` block
+# terminated by a bare `fi`. COMMENT-STRIPPED for setup_statements()'s reason — a predicate must
+# key on what the selftest DOES, never on what it says about itself — using that function's exact
+# sed, so the two cannot drift.
+selftest_region() {
+  awk '/^[[:space:]]*(_?cmd_)?(selftest|_selftest|run_selftest)\(\)[[:space:]]*\{/{inf=1;next}
+       inf && /^\}[[:space:]]*$/{inf=0;next}
+       inf{print;next}
+       /^if \[ "\$\{1:-\}" = "--selftest" \]/{ini=1;next}
+       ini && /^fi[[:space:]]*$/{ini=0;next}
+       ini{print}' "$1" 2>/dev/null | sed 's/[[:space:]]#.*$//; s/^#.*$//'
+}
+
 # The setup()/setup_file() bodies of a suite. Terminator is a bare `}` at column 0 — the convention
 # every suite in tests/ follows; the extraction was verified against all 118 before this landed.
 setup_bodies() {
@@ -433,6 +523,85 @@ is_orphan_pinned() {
   CHECK_FAILED=1
   echo "test-hermeticity-lint: ⛔ orphan-close pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
   return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
+# ── RULE 4's three predicates. Same shape as rules 2-3's pairs: the same 3-try retry, the same
+# CHECK_FAILED third state, and fail-SAFE directions chosen so a check that could not RUN can never
+# fabricate a violation naming a good tool.
+#
+# HERE-STRINGS, not `selftest_region "$f" | grep -q …`. This file runs under `set -o pipefail`, and
+# a `producer | grep -q` probe returns the PIPELINE's status: grep -q exits the instant it matches,
+# the producer takes SIGPIPE, and 141 is promoted — so a MATCH reads as rc>1, which these
+# predicates are built to interpret as "the check could not run". Measured elsewhere in this fleet
+# at 66% of runs on a hot pipe (memory: pipefail-inverts-early-exit-probe); the predicates above
+# pipe from awk over inputs small enough that it has never been observed, but rule 4's largest
+# region is 502 lines and new code should not inherit a hazard it can trivially avoid.
+
+# Is this tool in scope for rule 4 at all? 0 = it ships an embedded selftest · 1 = it does not.
+# Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a tool INTO the rule.
+has_selftest() {
+  local rc
+  for _ in 1 2 3; do
+    grep -qE '^[[:space:]]*(_?cmd_)?(selftest|_selftest|run_selftest)\(\)[[:space:]]*\{|^if \[ "\$\{1:-\}" = "--selftest" \]' "$1" 2>/dev/null; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ selftest-scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate a COLLISION
+}
+
+# 0 = the selftest names a CONSTANT /tmp-family path (VIOLATION) · 1 = it names none.
+# Fail-SAFE = 1: 'names none' cannot fabricate a violation.
+selftest_names_const_path() {
+  local rc region
+  region="$(selftest_region "$1")"
+  for _ in 1 2 3; do
+    grep -qE "$SELFTEST_CONST_RE" <<<"$region"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ constant-path check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'names none' cannot fabricate a COLLISION
+}
+
+# 0 = the selftest creates scratch state but never obtains it from mktemp (VIOLATION) · 1 = it
+# either creates nothing (out of scope — it cannot collide) or it mktemps.
+# Fail-SAFE = 1 in BOTH halves: a check that could not run must not fabricate a violation.
+selftest_state_unconfined() {
+  local rc region
+  region="$(selftest_region "$1")"
+  for _ in 1 2 3; do              # SCOPE: does it create scratch state at all?
+    grep -qE "$SELFTEST_CREATES_RE" <<<"$region"; rc=$?
+    case "$rc" in
+      0) break ;;
+      1) return 1 ;;              # writes nothing ⇒ nothing to collide on ⇒ never flagged
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  if [ "$rc" -gt 1 ]; then
+    CHECK_FAILED=1
+    echo "test-hermeticity-lint: ⛔ selftest-writes check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+    return 1
+  fi
+  for _ in 1 2 3; do              # POSITION: is that state per-run unique?
+    grep -qF 'mktemp' <<<"$region"; rc=$?
+    case "$rc" in
+      0) return 1 ;;              # mktemp ⇒ a different path every run ⇒ compliant
+      1) return 0 ;;              # creates state, never mktemps ⇒ the same path every run
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ mktemp check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'confined' cannot fabricate a COLLISION
 }
 
 # 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
@@ -626,6 +795,92 @@ lint_dir() {
   return 0
 }
 
+# lint_selftests <repo-root> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable
+#
+# RULE 4's pass, and a SEPARATE pass rather than a fourth rule inside lint_dir() on purpose: its
+# population is not the one lint_dir walks. lint_dir globs `*.bats` under ONE directory; rule 4
+# walks the repo's TOOL directories. Folding it in would have forced every existing caller — and
+# every fixture assertion in --selftest that lints a temp dir — to start caring about the real
+# bin/, which is precisely how an assertion stops measuring what it claims to.
+lint_selftests() {
+  local root="$1" allow="$2" own="${3:-}" own_scoped=0 f base seen=0 collide=0 stuck=0 other=0 why
+  local anchor anchor_seen=0
+  [ "$#" -ge 3 ] && own_scoped=1
+  CHECK_FAILED=0
+  [ -d "$root" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $root" >&2; return 2; }
+  # The extractor's POSITIVE CONTROL: this script's own copy under the scanned root. It ships an
+  # embedded selftest by construction, so if it is there the extractor must see it.
+  anchor="$root/scripts/$(basename "$SELF")"
+  for f in "$root"/bin/* "$root"/scripts/*.sh "$root"/hooks/*.sh; do
+    [ -f "$f" ] || continue
+    has_selftest "$f" || continue
+    [ "$f" = "$anchor" ] && anchor_seen=1
+    seen=$((seen + 1)); base="$(basename "$f")"
+    why=""
+    if   selftest_names_const_path "$f"; then why="names a CONSTANT /tmp path"
+    elif selftest_state_unconfined "$f"; then why="creates scratch state without mktemp"
+    fi
+    if [ -z "$why" ]; then
+      if in_allowlist "$base" "$allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  RATCHET-SELF %s confines its selftest now — delete its SELFTEST allowlist line\n' "$base"
+          stuck=$((stuck + 1))
+        else
+          printf '  ratchet-self? %s confines its selftest but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    elif ! in_allowlist "$base" "$allow"; then
+      if in_own "$base" "$own" "$own_scoped"; then
+        printf '  COLLIDES %s: its embedded selftest %s — two concurrent runs share it\n' "$base" "$why"
+        collide=$((collide + 1))
+      else
+        printf '  collides? %s: its embedded selftest %s (NOT in your diff — advisory, not blocking)\n' "$base" "$why"
+        other=$((other + 1))
+      fi
+    fi
+  done
+  # THE EXTRACTOR CONTROL, and deliberately NOT a count. `seen` comes from a TEXTUAL extractor:
+  # rename the convention and it matches nothing, and a rule that inspected zero tools would still
+  # print "clean" — an alarm carrying the same zero bits as one that cannot fire. A floor cannot
+  # express that, because a floor is calibration: `seen < 20`, sized against the 45 measured here,
+  # made a NON-VERDICT of every smaller tree — the fixture repos ship-land lands included, against
+  # this repo's rule that a tree is judged by the ratchet it SHIPS and never becomes unlandable for
+  # being small. So the guard asks the one question that needs no calibration: when this script is
+  # itself inside the scanned root, did the extractor find IT? If not, the extractor is broken.
+  # If the anchor simply is not there, `seen` may honestly be 0 and the tree is clean.
+  if [ -f "$anchor" ] && [ "$anchor_seen" -eq 0 ]; then
+    echo "test-hermeticity-lint: ⛔ the region extractor did not detect its own selftest in $anchor" >&2
+    echo "  That file ships one by construction, so this is the EXTRACTOR failing, not a clean tree." >&2
+    echo "  Every rule-4 verdict in this run is therefore void; do not read it as a clean bill." >&2
+    return 2
+  fi
+  [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing selftest violation(s) NOT in your diff — reported, not blocking (own-scope)."
+  # Same ordering as lint_dir: the own-scope report first, so a killed predicate cannot masquerade
+  # as a clean own-scope pass.
+  if [ "$CHECK_FAILED" -ne 0 ]; then
+    echo "test-hermeticity-lint: ⛔ UNUSABLE — a rule-4 predicate failed to run (see above); no verdict." >&2
+    echo "  This is NOT a collision report. Re-run when the box is quieter; do not 'fix' any tool on it." >&2
+    return 2
+  fi
+
+  if [ "$collide" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $collide embedded selftest(s) above name a scratch path that is the SAME STRING every run."
+    echo "  WHY: the gate, the nightly and a sibling session all run these concurrently, so two copies"
+    echo "       of one selftest meet on that path and the loser goes RED for a reason that is not its"
+    echo "       subject — 2 of 4 concurrent runs, measured (backlog f7abcbdee98c spillover)."
+    echo "  Fix: \`d=\"\$(mktemp -d \"\\\${TMPDIR:-/tmp}/<tool>-selftest.XXXXXX\")\"; trap 'rm -rf \"\$d\"' EXIT\`"
+    echo "       and hang every fixture off \$d. Do NOT add to the selftest allowlist."
+  fi
+  if [ "$stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $stuck tool(s) above confine their selftest but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_SELFTEST_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
+  [ $((collide + stuck)) -eq 0 ] || return 1
+  echo "test-hermeticity-lint: clean — $seen embedded selftest(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (scratch path), 0 collisions."
+  return 0
+}
+
 # ── --selftest: PROVE both RED paths fire and both GREEN paths don't (harness law: every assertion
 # traps). Case (e) lints the REAL tree with the REAL allowlist, so a stale ratchet is caught here too.
 if [ "${1:-}" = "--selftest" ]; then
@@ -748,6 +1003,123 @@ setup() {
 @test "a" { LCW_ORPHAN_CLOSE=1 run bash "$WD" --close-panes "$TEAM" sid-1; }
 @test "b" { run bash "$WD" --close-panes "$TEAM" sid-1; }
 F
+  # ── RULE 4 fixtures: TOOL trees, not suite dirs, because rule 4's population is bin/scripts/hooks.
+  #
+  # THE SELF-REFERENCE TRAP, and why three fixture lines are spliced in with printf. This block is
+  # INSIDE the `if [ "${1:-}" = "--selftest" ]` region, which is exactly what selftest_region()
+  # extracts from THIS file — so a heredoc line reading `tmp=<constant>` would be read as this
+  # script's OWN violation and the real tree would go RED on its own fixture, with rule 4 accusing
+  # the file that defines it. Splicing those lines through constant_line() keeps the assignment and
+  # the path from ever being adjacent here, while the fixture on disk is byte-for-byte the shape
+  # under test. Every other line comes from a quoted heredoc, which cannot expand and cannot lie.
+  mkdir -p "$d/s_collide/bin" "$d/s_ok/bin" "$d/s_nostate/bin" "$d/s_nomktemp/bin" \
+           "$d/s_prose/bin" "$d/s_scope/bin" "$d/s_bypass/bin"
+  # constant_line <printf-fmt> — emits ONE fixture line carrying a literal /tmp path. The format
+  # string never places the path next to the assignment or redirect, so this file never contains the
+  # shape it is asserting about; the fixture on disk does. Quoted heredocs supply every other line
+  # (and, unlike the equivalent `echo '…$x…'`, do not trip SC2016, which this repo does not waive).
+  # shellcheck disable=SC2059  # the format string IS the payload here — the caller supplies a
+  # literal, and the whole point is that this file never spells the path inside it.
+  constant_line() { printf "$1" /tmp; }
+  { cat <<'F'
+#!/bin/bash
+selftest() {
+F
+    constant_line '  tmp=%s/zz-tool-selftest\n'
+    cat <<'F'
+  mkdir -p "$tmp"; echo ok > "$tmp/f"
+}
+F
+  } >"$d/s_collide/bin/zz-tool"
+  # The GREEN twin: same shape, same writes, differing only in where the scratch dir comes from.
+  cat >"$d/s_ok/bin/zz-tool" <<'F'
+#!/bin/bash
+selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-tool-selftest.XXXXXX")"
+  mkdir -p "$tmp"; echo ok > "$tmp/f"
+}
+F
+  # mktemp PRESENT but BYPASSED — the fixture that isolates the const-path half. It exists because
+  # mutation proved (a4) could not: s_collide also creates state without mktemp, so stubbing the
+  # const-path probe out left it RED via the OTHER half and the whole probe read as load-bearing
+  # when it was not. Here the mktemp half is satisfied by construction, so only the const-path probe
+  # can produce the verdict.
+  { cat <<'F'
+#!/bin/bash
+selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-bypass.XXXXXX")"
+F
+    constant_line '  echo ok > %s/zz-tool-selftest.log\n'
+    echo '}'
+  } >"$d/s_bypass/bin/zz-tool"
+  # Creates NOTHING: it cannot collide with a concurrent copy of itself, so rule 4 must not reach
+  # it. Without this control the "creates" probe could be inert and every RED below would still pass.
+  cat >"$d/s_nostate/bin/zz-tool" <<'F'
+#!/bin/bash
+selftest() {
+  [ "$(echo hi)" = hi ] || return 1
+}
+F
+  # Creates state at a constant path that is NOT under /tmp — the half the const-path probe alone
+  # would miss, and the reason rule 4 asks for mktemp rather than only banning one prefix.
+  cat >"$d/s_nomktemp/bin/zz-tool" <<'F'
+#!/bin/bash
+selftest() {
+  scratch="$HOME/.cache/zz-tool-selftest"
+  mkdir -p "$scratch"; echo ok > "$scratch/f"
+}
+F
+  # The PROSE-MATCH regression control. Rules 2 and 3 were each shipped VACUOUS by a predicate that
+  # matched a setup() comment naming the lever; this is the same shape one rule later — the word
+  # mktemp is present, the CALL is not, and it must be RED.
+  cat >"$d/s_prose/bin/zz-tool" <<'F'
+#!/bin/bash
+selftest() {
+  # scratch is obtained with mktemp -d, per the ratchet
+  scratch="$HOME/.cache/zz-tool-selftest"
+  mkdir -p "$scratch"; echo ok > "$scratch/f"
+}
+F
+  # SCOPE CONTROL: zz-plain names a constant path in a state-bearing position but ships NO selftest,
+  # so it is out of rule 4 entirely. Paired with a compliant tool so the denominator floor is met —
+  # a dir of one out-of-scope file would exit 2 and prove nothing about scoping.
+  cat >"$d/s_scope/bin/zz-ok" <<'F'
+#!/bin/bash
+selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-ok.XXXXXX")"
+  echo ok > "$tmp/f"
+}
+F
+  { cat <<'F'
+#!/bin/bash
+main() {
+F
+    constant_line '  tmp=%s/zz-plain-state\n'
+    cat <<'F'
+  mkdir -p "$tmp"
+}
+F
+  } >"$d/s_scope/bin/zz-plain"
+  # THE EXTRACTOR CONTROL's pair. s_anchor carries a file at the anchor path that ships NO selftest
+  # — which is what a broken extractor looks like from the inside: the anchor is present and
+  # undetected. s_anchor_ok carries a REAL copy of this script, so the two differ only in whether
+  # the extractor can see the anchor, and the second also proves the IFBLOCK shape is detectable at
+  # all (every other rule-4 fixture uses the function shape).
+  mkdir -p "$d/s_anchor/scripts" "$d/s_anchor/bin" "$d/s_anchor_ok/scripts" "$d/s_anchor_ok/bin"
+  cat >"$d/s_anchor/scripts/$(basename "$SELF")" <<'F'
+#!/bin/bash
+echo "a lint that ships no embedded selftest at all"
+F
+  cp "$SELF" "$d/s_anchor_ok/scripts/$(basename "$SELF")"
+  for _r in s_anchor s_anchor_ok; do
+    cat >"$d/$_r/bin/zz-tool" <<'F'
+#!/bin/bash
+selftest() {
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/zz-anchor.XXXXXX")"
+  echo ok > "$tmp/f"
+}
+F
+  done
   fails=0
   # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
   # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
@@ -759,6 +1131,9 @@ F
   # every rule-3 assertion below pass vacuously, which is exactly what pinning forecloses.
   ORPHAN_RULE=on
   ORPHAN_ALLOW=""
+  # Rule 4's knobs, pinned for that same reason.
+  SELFTEST_RULE=on
+  SELFTEST_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -815,8 +1190,12 @@ F
   #     so together they prove the three states are really distinguished.
   lint_dir "$d/leak" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an ABSENT own-set did not block — strict default lost"; fails=1; }
   # (m) entrypoint-level parity for the same distinction, via the real CC_HERM_OWN seam.
-  ( unset CC_HERM_OWN; CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_OWN="" CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
+  # Rule 4 is pinned OFF in every entrypoint sub-invocation below: those spawn a fresh process, so
+  # unlike the in-process lint_dir cases they would ALSO run rule 4 against the real $ROOT, and a
+  # rule-4 verdict about the checkout would silently become this rule-1/2 assertion's answer.
+  # Rule 4 gets its own entrypoint parity pair at (a4)-(m4), where it is pinned ON.
+  ( unset CC_HERM_OWN; CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_OWN="" CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
   # (n) COULD-NOT-CHECK is a non-verdict, not a leak — and own-scope must not paper over it.
   # Simulates the real incident: a `grep` that cannot RUN (rc>1). Shadowing grep in a subshell
   # reproduces exactly what fork exhaustion / a reaped child does to these predicates. Before the
@@ -873,13 +1252,97 @@ F
   #     variable. Rule 1's allowlist is emptied in both so only rule 2 can produce the verdict.
   #     CC_HERM_FIRE_RULE=on is passed explicitly so an ambient kill switch in the CALLER's
   #     environment cannot neuter the child and turn (y)'s RED half into an unexplained failure.
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   # (z) the kill switch turns rule 2 off — and ONLY rule 2 (rule 1 still judges the same tree).
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+
+  # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
+  # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
+  # and firing on selftests that create no state. Each RED below is paired with the GREEN that
+  # proves it fired for its own reason. ─────────────────────────────────────────────────────────
+  # (a4) RED: a selftest whose scratch dir is the same string on every run.
+  lint_selftests "$d/s_collide" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a selftest naming a CONSTANT scratch path did not go RED (rule 4 is inert)"; fails=1; }
+  # (b4) GREEN: the identical selftest with mktemp — the fix the RED prescribes actually clears it.
+  lint_selftests "$d/s_ok" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an mktemp-confined selftest did not go GREEN"; fails=1; }
+  # (n4) RED: mktemp is present but BYPASSED. The ISOLATING case for the const-path half — (a4)
+  #      alone cannot prove that half fires, because s_collide violates both. Mutation found it.
+  lint_selftests "$d/s_bypass" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a selftest that mktemps and then writes a constant path anyway did not go RED — the const-path probe is inert"; fails=1; }
+  # (c4) SCOPE CONTROL 1 — zz-plain names a constant path in a state-bearing position but ships NO
+  #      selftest, so rule 4 must neither FLAG it nor COUNT it. Without this, (a4) could be passing
+  #      because rule 4 flags every file in bin/.
+  #      THE COUNT IS THE LOAD-BEARING HALF, and that is a mutation result rather than a hunch: the
+  #      verdict-only form of this case was a DEAD assertion. Stubbing has_selftest() to match every
+  #      file killed nothing, because selftest_region() yields an empty body for a file with no
+  #      opener and both violation probes then correctly find nothing in it — so the exit code was 0
+  #      either way. The denominator is the only observable that moves, and a wrong denominator is
+  #      what silently dilutes the floor guard below.
+  ( out="$(lint_selftests "$d/s_scope" "" 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] || { echo "SELFTEST FAIL: a file with no embedded selftest was FLAGGED by rule 4 (scoping broken)"; exit 1; }
+    case "$out" in
+      *"1 embedded selftest(s)"*) ;;
+      *) echo "SELFTEST FAIL: a file with no embedded selftest was COUNTED in rule 4's denominator (scoping broken)"; exit 1 ;;
+    esac
+    exit 0
+  ) || fails=1
+  # (d4) SCOPE CONTROL 2 — a selftest that creates nothing cannot collide, so it is never flagged.
+  #      This is what keeps the mktemp half from becoming a blanket mandate.
+  lint_selftests "$d/s_nostate" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a selftest that creates NO state was flagged — the creates-probe is not scoping"; fails=1; }
+  # (e4) RED: creates state at a constant path that is NOT under /tmp. The const-path probe alone is
+  #      blind here, so this is the assertion that earns the second half of the rule.
+  lint_selftests "$d/s_nomktemp" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a selftest creating state without mktemp did not go RED"; fails=1; }
+  # (f4) RED: the PROSE-MATCH regression, one rule later. The word is in a comment; the call is not
+  #      there. Rules 2 and 3 both shipped vacuous on exactly this shape.
+  lint_selftests "$d/s_prose" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a COMMENT naming mktemp counted as confinement — rule 4 is matching prose"; fails=1; }
+  # (g4)/(h4) the ratchet is consulted in BOTH directions: grandfathered ⇒ green, fixed-but-listed ⇒ red.
+  lint_selftests "$d/s_collide" "zz-tool" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered colliding selftest did not go GREEN"; fails=1; }
+  lint_selftests "$d/s_ok" "zz-tool" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a confined-but-still-grandfathered tool did not go RED (rule-4 ratchet not shrinking)"; fails=1; }
+  # (i4) own-scope governs rule 4 too: advisory OUTSIDE the lander's diff, blocking INSIDE it.
+  lint_selftests "$d/s_collide" "" "some-other-tool" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a COLLIDES violation OUTSIDE the own-set blocked"; fails=1; }
+  lint_selftests "$d/s_collide" "" "bin/zz-tool"    >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a COLLIDES violation INSIDE the own-set did not block (path form not matched by basename)"; fails=1; }
+  # (j4) COULD-NOT-CHECK survives rule 4: a NON-VERDICT (exit 2) and no COLLIDES line naming a tool
+  #      nobody was able to check. The output test is a `case`, not a grep — grep is what is stubbed.
+  ( grep() { return 2; }
+    out="$(lint_selftests "$d/s_ok" "" 2>&1)"; rc=$?
+    [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable rule-4 predicate did not exit 2 (got $rc)"; exit 1; }
+    case "$out" in *COLLIDES*) echo "SELFTEST FAIL: an unrunnable rule-4 predicate still fabricated a COLLIDES line"; exit 1 ;; esac
+    exit 0
+  ) || fails=1
+  # (k4) THE EXTRACTOR CONTROL. An extractor blind to its own anchor is a NON-VERDICT, never the
+  #      "clean" it would otherwise print — the assertion that stops rule 4 going silently inert if
+  #      the region convention ever changes. It replaced a numeric floor, which could only express
+  #      this as "the tree looks small" and so condemned every tree smaller than the one it was
+  #      calibrated on (ship-land's fixture repos among them, caught by their own suite).
+  ( out="$(lint_selftests "$d/s_anchor" "" 2>&1)"; rc=$?
+    [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an extractor blind to its OWN anchor did not exit 2 — a vacuous rule would read as clean (got $rc)"; exit 1; }
+    # The token, not the word: the guard's own explanation contains "clean" ("do not read it as a
+    # clean bill"), so a bare *clean* glob matches the very message that proves the case passed.
+    case "$out" in *"lint: clean"*) echo "SELFTEST FAIL: an extractor blind to its own anchor still printed a clean summary"; exit 1 ;; esac
+    exit 0
+  ) || fails=1
+  # (k4b) THE PAIRED GREEN, and the IFBLOCK SHAPE COVERAGE in one. Same root shape, but the anchor
+  #      is a real copy of THIS script — so the control fires on the extractor's blindness rather
+  #      than on the anchor merely being present, AND the `if [ "${1:-}" = "--selftest" ]` shape is
+  #      proved detectable (every other rule-4 fixture uses the `selftest()` function shape, so
+  #      without this one a broken IFBLOCK arm would go unnoticed here).
+  lint_selftests "$d/s_anchor_ok" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a WORKING anchor (this script itself, IFBLOCK shape) was not detected — shape coverage or the anchor control is broken"; fails=1; }
+  # (l4) the REAL tree: it must be clean under the embedded allowlist, and its anchor must be found.
+  #      Rule 4's analogue of case (e) — a stale rule-4 ratchet is caught here.
+  lint_selftests "$ROOT" "$EMBEDDED_SELFTEST_ALLOWLIST" >/dev/null 2>&1; rc_real4=$?
+  case "$rc_real4" in
+    0) ;;
+    2) echo "SELFTEST FAIL: could not scan $ROOT for embedded selftests — a NON-VERDICT (bad ROOT? extractor broken?), NOT a stale allowlist"; fails=1 ;;
+    *) echo "SELFTEST FAIL: EMBEDDED_SELFTEST_ALLOWLIST is stale, or a tool's selftest collides — the real tree is not clean"; fails=1 ;;
+  esac
+  # (m4) entrypoint parity for rule 4's two seams, and the kill switch with its positive control.
+  #      The scan dir is the hermetic fixture with rule 1's allowlist emptied, so rule 1 contributes
+  #      0 and only rule 4 can produce the verdict.
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="zz-tool" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 38/38 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control), and CC_HERM_ORPHAN_RULE=off proved to actually disable it."
+    echo "test-hermeticity-lint --selftest: 56/56 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
@@ -891,9 +1354,27 @@ fi
 # where an empty value legitimately means "I change no suite, so nothing may block me". `+set` is
 # the only test that separates those; `${CC_HERM_OWN:-}` would collapse them and silently reinstate
 # the hard stop for precisely the docs-only land this fixes.
+rc_bats=0 rc_self=0
 if [ -n "${CC_HERM_OWN+set}" ]; then
-  lint_dir "${1:-$ROOT/tests}" "${CC_HERM_ALLOWLIST-$EMBEDDED_ALLOWLIST}" "$CC_HERM_OWN"
+  lint_dir "${1:-$ROOT/tests}" "${CC_HERM_ALLOWLIST-$EMBEDDED_ALLOWLIST}" "$CC_HERM_OWN"; rc_bats=$?
 else
-  lint_dir "${1:-$ROOT/tests}" "${CC_HERM_ALLOWLIST-$EMBEDDED_ALLOWLIST}"
+  lint_dir "${1:-$ROOT/tests}" "${CC_HERM_ALLOWLIST-$EMBEDDED_ALLOWLIST}"; rc_bats=$?
 fi
-exit $?
+
+# RULE 4's pass. Its population is the repo's TOOL dirs, so it is driven off $SELFTEST_ROOT and NOT
+# off the positional scan dir — a caller that says "judge tests/" (ship-land does exactly that) must
+# still have its embedded selftests judged, or the rule is detection rather than a gate.
+if [ "$SELFTEST_RULE" = on ]; then
+  if [ -n "${CC_HERM_OWN+set}" ]; then
+    lint_selftests "$SELFTEST_ROOT" "$SELFTEST_ALLOW" "$CC_HERM_OWN"; rc_self=$?
+  else
+    lint_selftests "$SELFTEST_ROOT" "$SELFTEST_ALLOW"; rc_self=$?
+  fi
+fi
+
+# 2 (NON-VERDICT) dominates 1 (violation) dominates 0. A pass that could not RUN must never be
+# softened into "your tree is dirty" by the other pass, nor into a green by it — the same
+# verdict/non-verdict split lint_dir keeps internally, lifted to the composition of the two.
+if [ "$rc_bats" -eq 2 ] || [ "$rc_self" -eq 2 ]; then exit 2; fi
+if [ "$rc_bats" -ne 0 ] || [ "$rc_self" -ne 0 ]; then exit 1; fi
+exit 0

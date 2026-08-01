@@ -1071,12 +1071,36 @@ run_gate() {  # $1=range → 0 green / 1 red
     if [[ "${SHIP_LAND_HERM_OWN_SCOPE:-on}" != "off" ]]; then
       # Basenames are matched, so a path form is fine. Failure to resolve the range yields an EMPTY
       # own-set, which the lint treats as STRICT — the fail-closed direction, never fail-open.
-      own="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
-      [[ -n "$own" ]] && echo "→ gate: hermeticity own-scope — blocking on $(printf '%s\n' "$own" | grep -c .) suite(s) in this land's diff; others advisory." >&2
+      #
+      # THE PATHSPEC IS THE GATE'S SCOPE, and it must list every population the lint judges. It was
+      # `tests/*.bats` alone until rule 4 (embedded selftests) landed, whose population is the TOOL
+      # files below. Left unwidened, a land that adds a colliding selftest to bin/ produces an
+      # own-set that does not contain it, the lint reports it `collides?` — advisory — and the land
+      # goes through: the rule would have been detection, never a gate (memory:
+      # enforcement-must-live-at-the-chokepoint). A docs-only land still yields an EMPTY own-set and
+      # still blocks on nothing, so the fix measured for GATE_ARCHITECTURE_PLAN §9 is preserved.
+      own="$(git diff --name-only "$range" -- 'tests/*.bats' 'bin/*' 'scripts/*.sh' 'hooks/*.sh' 2>/dev/null || true)"
+      [[ -n "$own" ]] && echo "→ gate: hermeticity own-scope — blocking on $(printf '%s\n' "$own" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: test-hermeticity ratchet (before bats — seconds, and it names the file)" >&2
-    if ! CC_HERM_OWN="$own" "$HERM_LINT" tests >&2; then
-      echo "✗ gate: test-hermeticity RED — a bats suite THIS LAND CHANGES runs against the operator's live ~/." >&2
+    local herm_rc=0
+    CC_HERM_OWN="$own" "$HERM_LINT" tests >&2 || herm_rc=$?
+    # 2 is the lint's NON-VERDICT: a predicate that could not run, or a scan that found nothing to
+    # judge. It says NOTHING about this tree, so it must not be dressed up as one — that is the
+    # exact conflation gate_nonzero_code() exists to keep apart, and the lint's own message ends
+    # "do not 'fix' any suite on it". Routing it to GATE_KILLED yields the retryable 9; before rule
+    # 4 the only exit-2 paths were an unusable scan dir and a killed predicate, and both landed here
+    # as "✗ RED — fix the file named above" with no file named.
+    if (( herm_rc == 2 )); then
+      echo "⛔ gate: test-hermeticity could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  Nothing is wrong with the files named above (if any). Re-run /ship when the box is quieter." >&2
+      GATE_KILLED=1
+      return 1
+    fi
+    if (( herm_rc != 0 )); then
+      echo "✗ gate: test-hermeticity RED — something THIS LAND CHANGES runs against ambient state:" >&2
+      echo "  a bats suite on the operator's live ~/, or an embedded selftest on a scratch path that" >&2
+      echo "  is the same string on every run (so two concurrent runs collide). See the line above." >&2
       echo "  Not running bats: an unfixtured suite mutates live state, so the whole run's results" >&2
       echo "  would be untrustworthy. Fix the file named above (2 lines), then re-run /ship." >&2
       # A REAL verdict, never a non-verdict: the ratchet names a file and is deterministic, so it
