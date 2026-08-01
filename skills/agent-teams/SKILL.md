@@ -55,6 +55,26 @@ teams verdict).
 | Writes/modifies code (1 task) | Single agent in lead session OR one assignee |
 | Research/exploration (no code) | `Explore` subagent (read-only, fire-and-forget) |
 | 50+ parallel read-only tasks | Subagents |
+| **Re-checking work YOU just did** | **Never spawn for this.** See below. |
+
+### Never spawn an agent to verify your own output (Opus 5, 2026-08-01)
+
+Anthropic's Opus 5 guide is explicit: the model already checks its own work, so a
+"spawn a subagent to verify / double-check" step **compounds** with behaviour that is
+already happening and burns tokens for no quality gain. Removing such instructions
+"reduces wasted tokens with no loss in quality."
+
+The line is **whose output is being judged**, not whether an agent is involved:
+
+| Spawn | Verdict | Why |
+|---|---|---|
+| Fresh-context reviewer of a **teammate's** output | **KEEP** | A genuine second pair of eyes. Fresh-context reviewers beat self-critique — that finding stands. |
+| Adversarial red-team of a **research wave's findings** | **KEEP** | Judges a *corpus* the lead did not author; the 15-20% floor is measured, not ceremonial. |
+| An agent to re-read the spec and confirm **you** did it right | **DROP** | Self-recheck. This is exactly what the guide says to remove. |
+| "Interval self-verification" clauses inside a teammate brief | **DROP** | Same defect, one level down: it tells the teammate to re-check *itself*. |
+
+This does **not** narrow *§ PARALLELIZE BY DEFAULT* — that governs independent WORK
+running concurrently, which is untouched. It removes only redundant self-inspection.
 
 ## Why an Assignee at All
 
