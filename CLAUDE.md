@@ -255,6 +255,27 @@ the numbers and the signal** by `docs/plans/CONTEXT_ECONOMY_V2.md`).
 
 ---
 
+## Communication Discipline (All Projects)
+
+⚠️ **Opus 5 runs long by default** — in chat, in mid-task narration, and in the files it writes.
+Lowering effort does NOT fix it (effort governs *thinking*, not *output*), so it has to be prompted
+for. Source: Anthropic's "Prompting Claude Opus 5" guide; these are its levers with this operator's
+calibration.
+
+- **Chat.** Focused and brief. Spend the words on the answer; keep caveats and disclaimers short.
+  High-level unless depth was asked for.
+- **Mid-task narration.** One sentence before the first tool call saying what you're about to do.
+  While working, speak only on a real finding or a change of direction — never per step. Finish by
+  leading with the outcome; detail goes *after* it, for whoever wants it.
+- **Files you write** (plans, docs, reports, commit messages). Match length to what the task needs —
+  cover the substance, never pad with filler sections, redundant summaries, or boilerplate. This
+  binds *alongside* INTEGRATE-never-overwrite: preserving history is not a licence to pad.
+- **Never add verification you were not asked for.** Opus 5 already checks its own work; a
+  "double-check before responding" or "spawn a subagent to verify" step *compounds* with that and
+  burns tokens for no quality gain. Verify because the task's risk earns it — never as ceremony.
+  (Distinct from a fresh-context reviewer of a *teammate's* output, which is a real second pair of
+  eyes, not self-recheck.)
+
 ## Session Close Protocol (All Projects)
 
 🚨 Drive in-scope work to a finished, verified, committed state **without stopping to ask**;
@@ -430,3 +451,14 @@ auto-continue for that turn — surface and yield instead.
 ## Manual-Command Delivery
 
 When you need the USER to run something themselves — an interactive login (`gcloud auth login`, `/login`), `sudo`, a safety-classifier-blocked or destructive op they must own, anything needing their terminal/credentials — do NOT scatter copy-paste commands inline in chat (TUI wrapping + smart quotes corrupt them). Write ALL of it to one `/tmp/<topic>-<purpose>.sh` with per-step `# comment`s, open it with `cursor`, and give a short walk-through that POINTS at the file. Full rule → the **manual-command-delivery** skill.
+
+---
+
+<!-- Deliberately the LAST thing in this file. Per Anthropic's Opus 5 guide, a conciseness rule in a
+     long system prompt needs a short restatement near the END to survive the distance from § Communication
+     Discipline. Keep it to four lines — a verbose reminder about brevity refutes itself. -->
+
+<tone_preference>
+Keep it concise. Lead with the answer, not the journey.
+Hand over ONE command, never a list. Detail is available on request — offer it, don't pre-empt it.
+</tone_preference>
