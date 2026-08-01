@@ -1,0 +1,28 @@
+# .worktree-isolate — this repo OPTS IN to always-isolate session launching.
+#
+# Presence of this file is the whole contract. `~/.zshrc:_cc_route_check()` — the gate shared by
+# every launcher (`claude`, `claude-default`, `claude-previous`) — reads it and, when a session
+# starts in this repo's PRIMARY checkout, creates a per-session git worktree via
+# `scripts/new-worktree.sh` and launches there instead of in the shared root.
+#
+# WHY A MARKER FILE and not a hardcoded repo name: the gate previously read
+#   [[ "$(basename "$_top")" == "reso-management-app" ]]
+# so isolation was a property of ONE name baked into an untracked 41 KB shell file. Every other
+# repo silently launched in its shared checkout, and nothing in any repo could tell you that.
+# The policy now lives in the repo it governs, in git, next to the script that implements it.
+#
+# WHY NOT `.harnessrc` (which docs/research/worktree-wrapper-pattern-2026-07-24.md §7.4 proposed):
+# that name belongs to the installed `worktree-harness` tool, and we deliberately do NOT use it
+# here — its defaults are silently wrong for this repo (worktree home `~/.worktrees` vs this
+# repo's `~/Development/.worktrees`; an `npm ci` inferred from a package.json that exists only to
+# render diagrams). Naming the marker `.harnessrc` would have implied a tool that is not in the
+# path and invited someone to "fix" the mismatch by adopting it.
+#
+# WHAT THIS BUYS (docs/research/worktree-wrapper-pattern-2026-07-24.md §7.3): the shared checkout
+# stops being asked to be two incompatible things at once — a scratch tree many sessions edit AND
+# the clean ff-merge target `deploy-live.sh` needs. Under isolation no session edits root, so root
+# stays clean and the deploy lane stays unblocked.
+#
+# TO OPT OUT for one launch: CLAUDE_ISOLATION_SKIP=1 claude
+# The desk sets exactly that on its own respawns (scripts/desk-invariant.sh) — it is long-lived,
+# machine-wide, and must stay pinned to a stable cwd rather than minting a worktree per respawn.
