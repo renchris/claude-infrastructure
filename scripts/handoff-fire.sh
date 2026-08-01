@@ -3546,9 +3546,29 @@ PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | he
 it2py() {
   if in_kitty; then
     # Three of the four verbs are pure iTerm2-object reads and have kitty equivalents on the control
-    # socket. `frontapp` is DELIBERATELY NOT here: it asks System Events which macOS app is frontmost,
-    # which is terminal-agnostic and already correct — it falls through to the block below unchanged.
+    # socket. `frontapp` is the fourth and it is here for the OPPOSITE reason — see below.
     case "${1:-}" in
+      frontapp)
+        # THE QUESTION IS TERMINAL-AGNOSTIC; THE TRANSPORT IS NOT. This verb asks System Events which
+        # macOS app is frontmost — nothing to do with iTerm2 — so an earlier version of this branch
+        # let it fall through "unchanged, already correct". It is not: the driver below dispatches
+        # every verb INSIDE main(connection) after `import iterm2` and an async connect, so on kitty
+        # it cannot connect and returns EMPTY. Measured 2026-08-01 from a live kitty pane:
+        # `it2py frontapp` → '' while the identical osascript → 'iTermMetalBench'.
+        #
+        # Empty is not harmless here, only quiet: the sole caller (:4120) captures front="" before an
+        # AUTONOMOUS fire (FOLLOW=0), and `restore` then skips the operator's frontmost-app re-focus.
+        # So a background fire on kitty leaves the operator in whatever app the fire raised. It fails
+        # SAFE and it fails EVERY time — the shape this repo keeps re-learning.
+        #
+        # Answered directly. `|| true` matches the callers' own contract (both sites already read this
+        # through `|| true` and treat empty as "nothing to assert"), so a System-Events refusal or a
+        # missing automation grant degrades exactly as before rather than becoming a new failure.
+        hf_bounded osascript -e \
+          'tell application "System Events" to name of first process whose frontmost is true' \
+          2>/dev/null || true
+        return 0
+        ;;
       active)
         # The operator-focused surface = the window with is_focused true. Empty output (nobody
         # focused / query failed) is the same "unreadable focus" the iTerm2 path emits, and every
@@ -3557,10 +3577,12 @@ it2py() {
         return $?
         ;;
       restore)
-        # focus-window is the whole restore under kitty: there is no separate window-order call, and
-        # the frontmost-APP re-focus is skipped because it lives in the `frontapp` verb this branch
-        # does not implement. Then RE-READ is_focused — the contract is rc 0 restored / rc 5 NOT
-        # restored, so a focus-window that returns 0 without moving focus must still convict.
+        # focus-window is the whole PANE restore under kitty: there is no separate window-order call.
+        # The frontmost-APP re-focus is a separate concern and is NOT done here — the caller passes
+        # the app name it captured from `frontapp` (which now answers correctly on kitty, above) and
+        # re-focusing it is the iTerm2 driver's job at the same call site. Then RE-READ is_focused —
+        # the contract is rc 0 restored / rc 5 NOT restored, so a focus-window that returns 0 without
+        # moving focus must still convict.
         local rsid="${2:-}"; rsid="${rsid##*:}"
         kt focus-window --match "id:$rsid" >/dev/null 2>&1 || return 5
         [ "$(kt_window_field "" id 2>/dev/null || true)" = "$rsid" ] || return 5

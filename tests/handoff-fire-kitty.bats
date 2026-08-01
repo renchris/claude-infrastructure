@@ -410,15 +410,33 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ "$status" -eq 1 ]
 }
 
-@test "it2py frontapp is UNCHANGED in kitty — it falls through to the Python driver" {
-  # The frontmost macOS app is terminal-agnostic (System Events), so there is nothing to port. It
-  # must NOT be captured by the kitty case arm.
+@test "it2py frontapp in kitty answers via System Events — NOT the unreachable Python driver" {
+  # The QUESTION is terminal-agnostic; the TRANSPORT was not. This verb asks System Events which
+  # macOS app is frontmost, so an earlier version of this arm let it fall through "unchanged, already
+  # correct". It is not: the driver dispatches every verb inside main(connection) after an async
+  # iterm2 connect, so on kitty it cannot connect and returned EMPTY. Measured on a live kitty pane
+  # 2026-08-01: `it2py frontapp` -> '' while the identical osascript -> 'iTermMetalBench'.
+  #
+  # Empty was quiet, not harmless: the sole caller (:4120) captures front="" before an AUTONOMOUS
+  # fire, so `restore` skipped the operator's frontmost-app re-focus, every time.
   pin_kitty
+  export KFAKE_OSA_OUT="Safari"
+  run it2py frontapp
+  [ "$status" -eq 0 ]
+  [ "$output" = "Safari" ]
+  [ -s "$OLOG" ]        # answered by osascript…
+  [ ! -s "$PLOG" ]      # …and the iterm2 driver was never reached (this is the whole fix)
+  [ ! -s "$KLOG" ]      # …nor the kitty socket — the question is not about the terminal
+}
+
+@test "it2py frontapp on iTerm2 is BYTE-IDENTICAL — still the Python driver, not osascript" {
+  # Positive control for the arm above: the fix must not smuggle a behaviour change onto iTerm2,
+  # where the driver connects fine and is the established transport.
+  pin_iterm2
   run it2py frontapp
   [ "$status" -eq 0 ]
   [ "$output" = "PyPath" ]
   [ -s "$PLOG" ]
-  [ ! -s "$KLOG" ]
 }
 
 @test "it2py anchor is UNCHANGED in kitty too — headless anchoring was not ported" {
