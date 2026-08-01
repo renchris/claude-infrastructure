@@ -957,7 +957,32 @@ textually — and that test fired on its own mutant, so it is not decorative.
 
 ### 8.5 Status
 
-`cc-pane` seam · Agent-Teams panes · two-way comms · session register/teardown/crash-watchdog:
-**verified on both terminals**. Handoff's split path routes correctly on both. Remaining at the time
-of writing, on their own branches: `feat/kitty-handoff-primitives` (the 5 AppleScript functions +
-4 it2py verbs) and `feat/kitty-recovery-launch` (limit-recover, boot-resume, render-census).
+**P3 and P5 are DONE — every surface in the frozen scope works on both terminals.** `cc-pane` seam ·
+Agent-Teams panes · two-way comms · session register/teardown/crash-watchdog · handoff (split, type,
+focus, tty, tab, background-tab) · limit-recovery · boot-resume · pane census. Both teammate branches
+merged and independently re-verified by the lead, not accepted on report.
+
+### 8.6 Two defects the teammates found that were NOT in their briefs
+
+1. **`render-census.sh` was worse than inert on kitty — it was CONFIDENTLY WRONG.** The
+   `is running` short-circuit landed 2026-07-31 makes it report **0 iTerm2 panes**, which is a
+   truthful measurement and a useless one: the fleet is elsewhere. `capacity-alarm.sh:278` reads
+   that column as the operator's only load-shed lever, so it read `0` on a box with a dozen live
+   panes. A correct answer to the wrong question outranks a missing one in how long it survives.
+2. **`boot-resume-launch.sh` RESURRECTS iTerm2 on a kitty box.** It runs `open -a iTerm` one line
+   before its AppleScript, deliberately — there the launch IS the intent. On a kitty fleet that
+   starts the app whose window objects saturated WindowServer on 2026-07-30, at boot, unattended.
+
+### 8.7 The terminal-dependent-suite class is now at FIVE instances
+
+`it2-wrapper.bats` · `cc-pane.bats` · `handoff-orphaned-assignee.bats` ·
+`handoff-selfclose-session-pin.bats` · `handoff-selfclose.bats` — plus five more k3 pinned
+pre-emptively. Every one asserts an iTerm2 path while stubbing only `osascript`, so once the subject
+branches on `KITTY_WINDOW_ID` the verdict becomes a function of **which terminal the developer is
+sitting in**. In each case the dependency PREDATED the branch and was simply unobservable.
+
+**The diagnostic that settles it in one step:** re-run the suite with the terminal pinned at the ENV
+level (`env -u KITTY_WINDOW_ID IT2_WRAPPER_NO_KITTY=1 …`) and change nothing else. Returning to the
+exact baseline count proves the harness, not the subject — and it is proof, not inference, because
+no test and no production line was touched to obtain it. **Any suite asserting a terminal-specific
+path must pin the terminal in `setup()`.**
