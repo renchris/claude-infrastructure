@@ -91,6 +91,7 @@ PUSH="${DESK_INVARIANT_PUSH:-$HOME/.claude/hooks/push-critical.sh}"
 NOTIFY_CMD="${DESK_INVARIANT_NOTIFY:-}"                                    # empty → builtin osascript
 FIRE_BIN="${DESK_INVARIANT_FIRE_BIN:-$HOME/.claude/scripts/handoff-fire.sh}"
 CANNED_CWD="${DESK_INVARIANT_CANNED_CWD:-$HOME/Development/claude-infrastructure}"
+ISOLATION_SKIP="${DESK_INVARIANT_ISOLATION_SKIP:-1}"   # 1 = desk exempt from worktree isolation (fire_replacement)
 BRIEF="${DESK_INVARIANT_BRIEF:-$SCRIPT_DIR/../docs/templates/desk-boot-brief.md}"
 STALE_MIN="${DESK_INVARIANT_STALE_MIN:-45}"
 RESPAWN_MAX="${DESK_INVARIANT_RESPAWN_MAX:-2}"
@@ -234,7 +235,17 @@ fire_replacement() { # fire a fresh desk from the canned brief (role-tagged). Re
   # STDERR IS CAPTURED, not discarded: the old `2>&1 >/dev/null` is why 41h of identical failures were
   # undiagnosable from the IDL. The caller puts $FIRE_ERR into the fire-failed record.
   [ -f "$BRIEF" ] || { FIRE_ERR="boot brief missing: $BRIEF"; echo "desk-invariant: $FIRE_ERR" >&2; return 1; }
-  FIRE_ERR="$("$FIRE_BIN" --prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD" 2>&1 >/dev/null)"
+  #
+  # ISOLATION EXEMPT (2026-08-01): with always-isolate on, a fresh session is routed into its own
+  # worktree — wrong for the desk twice over. (a) THIS is a launchd respawn path, so each fire would
+  # either land back on the shared root the policy exists to drain, or mint a NEW worktree per
+  # respawn — an unbounded leak. (b) The desk is long-lived and machine-wide, not the writer session
+  # the policy targets. `--in-place` is handoff-fire's exemption seam and does nothing else: it
+  # prefixes CLAUDE_ISOLATION_SKIP=1 onto the typed launch line (handoff-fire.sh:3070), so the new
+  # desk launches IN PLACE at $CANNED_CWD. DESK_INVARIANT_ISOLATION_SKIP=0 drops it, no code edit.
+  local -a fire_args=(--prompt-file "$BRIEF" --as-role "$ROLE" --cwd "$CANNED_CWD")
+  [ "$ISOLATION_SKIP" = 1 ] && fire_args+=(--in-place)
+  FIRE_ERR="$("$FIRE_BIN" "${fire_args[@]}" 2>&1 >/dev/null)"
   local rc=$?
   FIRE_ERR="$(printf '%s' "$FIRE_ERR" | tr '\n' ' ' | cut -c1-300)"
   return "$rc"
