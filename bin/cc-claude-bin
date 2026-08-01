@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# cc-claude-bin — resolve THE claude binary the interactive launcher actually runs.
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS EXISTS. Two scripts each hardcoded `$HOME/.claude-183/node_modules/.bin/claude`
+# (scripts/limit-recover/lr-fire-resume.sh, bin/claude-kimi). Three separate drifts followed, and
+# none of them could be detected by the drifting party:
+#
+#   1. The DIRECTORY NAME STOPPED MATCHING ITS CONTENT. `~/.claude-183` was advanced in place to
+#      2.1.215 on 2026-07-20. Nothing renamed it, so a reader who trusts the name is wrong by 32
+#      versions while every path check still passes.
+#   2. The LAUNCHER MOVED AND THEY DID NOT. `claude()` was repointed to `~/.claude-219` for Opus 5
+#      support. From that moment these two scripts launched a DIFFERENT binary than every
+#      interactive session — 2.1.215, which does not register claude-opus-5 at all.
+#   3. NEITHER SITE CAN CHECK THE OTHER. Two constants that must agree, with no shared reader, is
+#      exactly the shape that rots silently (worklist item #116).
+#
+# The fix is to stop copying the constant. The launcher's own `_bin=` line in ~/.zshrc is the real
+# SSOT — it is what actually starts every interactive session — so this resolver READS it rather
+# than restating it. A repoint of the launcher moves every consumer in the same edit, which is the
+# property the two hardcoded copies could never have.
+#
+# ORDER (first hit wins), each rung strictly more authoritative than the one below:
+#   0. $CC_CLAUDE_BIN            — explicit operator/test override, always honoured
+#   1. ~/.zshrc `claude()` _bin= — the SSOT: what interactive sessions actually run
+#   2. newest ~/.claude-NNN      — zshrc unreadable (a stripped $HOME, a test fixture): pick the
+#                                  highest version dir present rather than guessing a number
+#   3. claude-latest             — the pinned STABLE track's wrapper (2.1.114)
+#   4. `claude` on PATH          — last resort; may be the shadowed stock install
+#
+# FAIL-CLOSED: prints nothing and exits 1 when no rung resolves to an executable. Callers must
+# treat empty output as fatal — silently falling back to a wrong binary is the failure this file
+# exists to prevent.
+#
+# Usage:  bin="$(cc-claude-bin)" || { echo "no claude binary" >&2; exit 1; }
+#         cc-claude-bin --explain     # print the resolved path AND which rung produced it
+set -euo pipefail
+
+explain=0
+[ "${1:-}" = "--explain" ] && explain=1
+
+emit() {  # $1=path $2=rung-description
+  [ -n "$1" ] || return 1
+  [ -x "$1" ] || return 1
+  if [ "$explain" = 1 ]; then printf '%s\t%s\n' "$1" "$2"; else printf '%s\n' "$1"; fi
+  exit 0
+}
+
+# --- 0. explicit override ---------------------------------------------------------------------
+if [ -n "${CC_CLAUDE_BIN:-}" ]; then
+  emit "$CC_CLAUDE_BIN" "CC_CLAUDE_BIN override" || {
+    echo "cc-claude-bin: CC_CLAUDE_BIN='$CC_CLAUDE_BIN' is not executable" >&2; exit 1; }
+fi
+
+zshrc="${CC_ZSHRC:-$HOME/.zshrc}"
+
+# --- 1. the launcher's own pin (SSOT) ----------------------------------------------------------
+# Match the `local _bin="$HOME/.claude-NNN/..."` assignment inside claude(). Anchored on `_bin=` so
+# a comment MENTIONING a path cannot be mistaken for the pin — the launcher header documents old
+# versions in prose, and a looser grep would happily return ~/.claude-170 from a rollback note.
+if [ -r "$zshrc" ]; then
+  pin="$(grep -oE '^[[:space:]]*(local[[:space:]]+)?_bin="\$HOME/\.claude-[0-9]+/[A-Za-z0-9_./-]*claude"' "$zshrc" 2>/dev/null \
+         | head -1 | sed -E 's|.*_bin="\$HOME/||; s|"$||')" || pin=""
+  if [ -n "$pin" ]; then
+    emit "$HOME/$pin" "zshrc claude() _bin pin ($pin)" || true
+  fi
+fi
+
+# --- 2. newest ~/.claude-NNN version dir --------------------------------------------------------
+# Numeric sort on the NNN suffix, highest first. Only reached when the zshrc pin is unavailable.
+newest=""
+for d in "$HOME"/.claude-[0-9]*; do
+  [ -d "$d" ] || continue
+  n="${d##*/.claude-}"
+  case "$n" in ''|*[!0-9]*) continue ;; esac
+  if [ -z "$newest" ] || [ "$n" -gt "${newest##*/.claude-}" ] 2>/dev/null; then newest="$d"; fi
+done
+if [ -n "$newest" ]; then
+  for cand in "$newest/node_modules/.bin/claude" \
+              "$newest/node_modules/@anthropic-ai/claude-code/bin/claude.exe"; do
+    emit "$cand" "newest version dir ($(basename "$newest"))" || true
+  done
+fi
+
+# --- 3. the pinned stable track's wrapper -------------------------------------------------------
+if command -v claude-latest >/dev/null 2>&1; then
+  emit "$(command -v claude-latest)" "claude-latest (pinned stable track)" || true
+fi
+
+# --- 4. PATH ------------------------------------------------------------------------------------
+if command -v claude >/dev/null 2>&1; then
+  emit "$(command -v claude)" "claude on PATH (may be the stock install)" || true
+fi
+
+echo "cc-claude-bin: no claude binary resolved (checked CC_CLAUDE_BIN, $zshrc _bin pin, ~/.claude-NNN, claude-latest, PATH)" >&2
+exit 1

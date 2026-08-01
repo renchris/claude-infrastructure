@@ -101,11 +101,27 @@ DISABLE_AUTOUPDATER=1
 EOF
 }
 
-# --- locate the claude binary (pinned track first, then PATH) ----------------------------------
+# --- locate the claude binary (ONE SSOT, then PATH) --------------------------------------------
+# This used to hardcode `$HOME/.claude-183/node_modules/.bin/claude`. By 2026-08-01 that constant
+# was wrong twice over: ~/.claude-183 had been advanced IN PLACE to 2.1.215 (so the directory name
+# no longer described its content), and the interactive launcher had since moved to ~/.claude-219.
+# Two copies of a value that must agree, with no shared reader, drift silently by construction
+# (worklist #116). cc-claude-bin reads the launcher's own `_bin=` line, so a repoint of the launcher
+# moves this consumer in the same edit. The claude-latest/PATH tail is kept for a partial deploy
+# where the resolver has not landed in ~/.claude/bin yet.
 _resolve_bin() {
   if [ -n "${CLAUDE_KIMI_CLAUDE_BIN:-}" ]; then printf '%s' "$CLAUDE_KIMI_CLAUDE_BIN"; return 0; fi
-  local pinned="$HOME/.claude-183/node_modules/.bin/claude"
-  if [ -x "$pinned" ]; then printf '%s' "$pinned"; return 0; fi
+  local self_dir resolver="" resolved=""
+  self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || self_dir=""
+  if [ -n "$self_dir" ] && [ -x "$self_dir/cc-claude-bin" ]; then
+    resolver="$self_dir/cc-claude-bin"
+  else
+    resolver="$(command -v cc-claude-bin 2>/dev/null || true)"
+  fi
+  if [ -n "$resolver" ] && [ -x "$resolver" ]; then
+    resolved="$("$resolver" 2>/dev/null || true)"
+    if [ -n "$resolved" ] && [ -x "$resolved" ]; then printf '%s' "$resolved"; return 0; fi
+  fi
   if command -v claude-latest >/dev/null 2>&1; then command -v claude-latest; return 0; fi
   if command -v claude >/dev/null 2>&1; then command -v claude; return 0; fi
   return 1

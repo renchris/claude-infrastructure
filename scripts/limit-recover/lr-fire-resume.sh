@@ -62,8 +62,18 @@ printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'
 _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
 
-BIN="$HOME/.claude-183/node_modules/.bin/claude"
-[[ -x "$BIN" ]] || BIN="$HOME/.claude-183/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+# Resolve the binary from the ONE SSOT (bin/cc-claude-bin), never a local constant. This used to
+# hardcode ~/.claude-183, which by 2026-08-01 was wrong twice over: that directory had been advanced
+# in place to 2.1.215 (name no longer matches content), and the interactive launcher had since moved
+# to ~/.claude-219 — so a limit-recover resume relaunched a session on a DIFFERENT binary than the
+# one it was recovering, and on a build with no claude-opus-5 at all. Fail CLOSED: a resume that
+# cannot name its binary must not silently pick another one.
+BIN="$("$_LR_DIR/../../bin/cc-claude-bin" 2>/dev/null)" || BIN=""
+if [[ -z "$BIN" || ! -x "$BIN" ]]; then
+  echo "✗ lr-fire-resume: cannot resolve the claude binary (cc-claude-bin found none)." >&2
+  echo "  Set CC_CLAUDE_BIN=/path/to/claude, or check the claude() _bin pin in ~/.zshrc." >&2
+  exit 1
+fi
 
 # Single-line prompt only — the composer submits on CR; newlines are unsafe here.
 PROMPT=${PROMPT//$'\n'/ }
