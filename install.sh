@@ -163,6 +163,30 @@ $DRY_RUN && echo "(dry-run mode — no changes will be made)"
 $IS_GLOBAL || echo "(non-default config — skipping global items)"
 echo ""
 
+# --- Accounts SSOT bootstrap + account-map codegen ---
+# A first-time install has no accounts.json (it's gitignored — real emails live there): seed it
+# from the generic template so the rest of this script, and every account-aware tool it deploys,
+# has something to read. One account is enough to start; accounts.json's own comments explain
+# how to add more.
+if [[ ! -f "$REPO_DIR/accounts.json" ]]; then
+  if [[ -f "$REPO_DIR/accounts.json.example" ]]; then
+    echo "No accounts.json — seeding one from accounts.json.example (edit it: your email, account count)"
+    run cp "$REPO_DIR/accounts.json.example" "$REPO_DIR/accounts.json"
+  else
+    echo "  ⚠ no accounts.json and no accounts.json.example — account-aware tools (cc-board, handoff-fire, …) will be unavailable" >&2
+    warnings=$((warnings + 1))
+  fi
+fi
+# Regenerate lib/account-map.generated.sh from accounts.json so it never drifts, for both a
+# fresh install and every subsequent re-run after accounts.json changes.
+if [[ -f "$REPO_DIR/accounts.json" ]]; then
+  if $DRY_RUN; then
+    echo "  [dry-run] scripts/gen-account-map.sh"
+  else
+    "$REPO_DIR/scripts/gen-account-map.sh" || { echo "  ⚠ gen-account-map.sh failed — account-name/config-dir lookups may be stale" >&2; warnings=$((warnings + 1)); }
+  fi
+fi
+
 # --- Hooks ---
 echo "Hooks → $CONFIG_DIR/hooks/"
 ensure_real_dir "$CONFIG_DIR/hooks"
@@ -197,6 +221,9 @@ for zlib in "$REPO_DIR"/lib/*.zsh; do
   [[ -f "$zlib" ]] || continue
   link_file "$zlib" "$CONFIG_DIR/lib/$(basename "$zlib")"
 done
+# account-map.generated.sh (regenerated above from accounts.json) — the account-name/config-dir
+# lookup every cc-*/lr-*/handoff-fire.sh tool sources. .sh, not .zsh, so it needs its own line.
+[[ -f "$REPO_DIR/lib/account-map.generated.sh" ]] && link_file "$REPO_DIR/lib/account-map.generated.sh" "$CONFIG_DIR/lib/account-map.generated.sh"
 
 # --- Commands ---
 echo ""
