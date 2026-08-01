@@ -59,7 +59,7 @@ setup() {
   rb() { # <ts> <acct> <deadline> — append a relogin-blocked row, recover_cmd `cc-relogin <acct>`
     jq -nc --arg ts "$1" --arg a "$2" --arg d "$3" \
       '{ts:$ts,actor:"cc-relogin-poll",kind:"relogin-blocked",acct:$a,account:$a,deadline:$d,
-        launcher:"claude-next",reason:"T-47h to the login deadline",recover_cmd:("cc-relogin " + $a)}' >> "$BOARD"; }
+        launcher:"claude",reason:"T-47h to the login deadline",recover_cmd:("cc-relogin " + $a)}' >> "$BOARD"; }
   accts() { # <json> — install a claude-accounts stub emitting $1 on stdout, exit 0
     printf '%s\n' "$1" > "$D/accts.json"
     { printf '#!/usr/bin/env bash\n'; printf 'touch %q\n' "$ACCT_MARK"; printf 'cat %q\n' "$D/accts.json"; } \

@@ -268,9 +268,9 @@ ENV_TOK = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 def concurrency(cfg):
     """Live interactive-session count per account. Counts processes whose argv[0] is the claude
     binary (excludes expect wrappers and node/MCP children that inherit the env), attributed via
-    the CLAUDE_CONFIG_DIR env var that every launcher sets (ps -E appends env). Bare `claude`
-    (env CLAUDE_CONFIG_DIR absent or ~/.claude) counts toward 'next' — .claude mirrors
-    .claude-next. Headless one-shots (-p/--print) are skipped."""
+    the CLAUDE_CONFIG_DIR env var that every launcher sets (ps -E appends env). A session with NO
+    CLAUDE_CONFIG_DIR — or ~/.claude, which is the stable `claude-prev` track's dir — counts
+    toward 'next': .claude mirrors .claude-next. Headless one-shots (-p/--print) are skipped."""
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     by_dir = {a["config_dir"]: a["name"] for a in cfg["accounts"]}
     mirror_next = next((a["name"] for a in cfg["accounts"] if a["config_dir"].endswith(".claude-next")), None)

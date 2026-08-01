@@ -152,8 +152,9 @@ def live_sessions(config_dir: str) -> int:
     Mirrors claude-accounts concurrency() (bin/claude-accounts:225-259) exactly: argv[0] must
     be the claude binary; headless one-shots (-p/--print/--version in the first few argv slots)
     are skipped; attribution uses the LAST CLAUDE_CONFIG_DIR= match because `ps -E` appends the
-    environment AFTER argv (an earlier match could be prompt text merely mentioning it). Bare
-    `claude` counts toward the ~/.claude-next account — ~/.claude mirrors it.
+    environment AFTER argv (an earlier match could be prompt text merely mentioning it). A session
+    with no CLAUDE_CONFIG_DIR — or ~/.claude, the stable `claude-prev` track's dir — counts toward
+    the ~/.claude-next account: ~/.claude mirrors it.
     """
     target = os.path.expanduser(config_dir or "").rstrip("/")
     default_dir = os.path.join(HOME, ".claude")

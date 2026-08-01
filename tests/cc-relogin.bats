@@ -147,7 +147,7 @@ PY
   mk_info() { # <n|all> <has_refresh_token> [keychain_state] [config_dir]
     local f="$D/info.$1.json"; [ "$1" = all ] && f="$D/info.json"
     cat > "$f" <<EOF
-{"name":"next3","config_dir":"${4:-$CFG}","launcher":"claude-next3","email":"e@example.test",
+{"name":"next3","config_dir":"${4:-$CFG}","launcher":"claude3","email":"e@example.test",
  "dia_profile":"Claude3","dia_profile_dir":"/p",
  "keychain_service":"Claude Code-credentials-deadbeef","keychain_state":"${3:-present}",
  "claude_bin":"$D/stub-claude","oauth_scopes":"user:profile user:inference",
@@ -161,7 +161,7 @@ EOF
     [ -n "${4:-}" ] && extra="$extra,\"login_expires_h\":$4"
     cat > "$f" <<EOF
 {"window":{},"cached":false,"rows":[{"acct":"next3","email":"e@example.test",
- "launcher":"claude-next3","k":0,"auth":"$2"$extra}]}
+ "launcher":"claude3","k":0,"auth":"$2"$extra}]}
 EOF
   }
   mk_creds() { echo '{"claudeAiOauth":{"refreshToken":"rt-FIXTURE-not-a-real-token"}}' > "$D/creds.json"; }
