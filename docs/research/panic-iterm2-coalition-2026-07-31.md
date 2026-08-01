@@ -329,21 +329,64 @@ Boot 2 held ≥500 procs continuously from **07-29 22:36 → 07-30 01:46 (3 h 10
 The box stayed up. The fatal boot-4 sample was 1002. **The survived and fatal classes are separated
 by six processes (0.6%)** — no threshold on this noun can distinguish them, at any setting.
 
-### 8.3 What does separate them: mass per process
+### 8.3 What separates them: total footprint — *not* mass per process
 
-| sample | procs | anon | **MiB/proc** |
+The six samples below are each accurate, and the direction they point (size, not count) survives.
+The **per-process normalisation does not** — see §8.3a, which supersedes it.
+
+| sample | procs | anon | MiB/proc |
 |---|---|---|---|
 | boot 4 @17:58:01 healthy | 257 | 5.46 GiB | 21.8 |
 | boot 4 @16:28:01 healthy peak | 353 | 6.78 GiB | 19.7 |
-| boot 2 @00:36 **996 — survived** | 996 | 24.03 GiB | **24.7** |
+| boot 2 @00:36 **996 — survived** | 996 | 24.03 GiB | 24.7 |
 | boot 2 @02:06 last before 02:18 panic | 473 | 16.80 GiB | 36.4 |
 | boot 5 @today, peak | 224 | 6.29 GiB | 28.7 |
-| **boot 4 @18:09:51 — FATAL** | **1002** | **139.50 GiB** | **142.6** |
+| **boot 4 @18:09:51 — FATAL** | **1002** | **139.50 GiB** | 142.6 |
 
-Every healthy sample across four boots sits in **19.7–36.4 MiB/proc**; the fatal sample is **142.6**,
-**3.9× outside the band**. Boot 2 and boot 4 held the *same population* at **5.8× different mass**.
-So §3's "both count and size exploded together" is right, but only **size left the healthy envelope**
-— and size is the term rung 6 does not measure.
+Boot 2 and boot 4 held the *same population* at **5.8× different mass**. So §3's "both count and
+size exploded together" is right, but only **size left the healthy envelope** — and size is the term
+rung 6 does not measure.
+
+### 8.3a MiB/proc does not separate them either (2026-08-01, verification pass)
+
+The table above was read as *"every healthy sample across four boots sits in 19.7–36.4 MiB/proc, so
+the fatal 142.6 is 3.9× outside the band."* **That band is an artifact of six hand-picked rows.**
+Re-derived over **every** terminal-coalition sample in the archive (all five boots; iTerm2, kitty,
+ghostty, Terminal, cmuxterm; `procs ≥ 50`, n = **567** survived samples):
+
+| MiB/proc over all survived samples | value |
+|---|---|
+| min | 2.4 |
+| median | **31.8** |
+| p95 | **62.8** |
+| max | **458.0** — boot 4 `net.kovidgoyal.kitty` @17:38:01, 63 procs / 28.18 GiB, **survived** |
+| survived samples above the claimed 36.4 ceiling | **234 / 567** |
+
+A survived sample reaches **458.0 MiB/proc — 3.2× *above* the fatal sample's 142.6.** The doc's own
+control boot (boot 2, cid 1121) has a *median* of 49.9 and a survived peak of 121.2, with 173 of its
+238 samples above 36.4. **Mass per process cannot separate the classes at any cutoff**, and §8.3 as
+first written committed the exact error it convicts §7 of: a band derived on a six-row sample and
+generalised past its population.
+
+**What does separate them, cleanly, is the coalition's total anon footprint:**
+
+| | anon |
+|---|---|
+| **FATAL** — boot 4 cid 640 @18:09:51 | **139.50 GiB** |
+| max **survived**, any terminal coalition, any boot | **28.18 GiB** |
+| separation | **4.95×**, with the interval 28.18–139.50 GiB **empty** |
+
+The mechanism corroborates it: this box has **64 GiB** of physical RAM, so the fatal sample is
+**2.2× physical oversubscription**, and the panic is a *watchdog timeout* — `no checkins from
+watchdogd in 93 seconds`, boot session UUID `F1993755`, matching boot 4 exactly
+(`/Library/Logs/DiagnosticReports/panic-base+socd-2026-07-31-181532.000.panic`). A machine driving
+2.2× its RAM through the compressor starves `watchdogd` of CPU; that is the kill, and no terminal
+coalition ever survived past **28.18 GiB** (0.44× RAM).
+
+**Bound this honestly: n = 1 fatal sample.** 567 survived samples establish the *ordering* — total
+footprint separates, count and MiB/proc do not — but one fatal point cannot calibrate a threshold.
+Setting a number on total anon needs more fatal events or a deliberate load test, and inventing one
+from a single sample would repeat §7's mistake a third time.
 
 ### 8.4 The deployed rung would not have fired on its own event
 
@@ -397,10 +440,13 @@ Standing conclusions:
 
 1. **Do not bank "per-session fan-out."** The count did rise without a session rise, but that state
    has a survived precedent at the same magnitude. Fan-out is not what killed the box.
-2. **Rung 6 counts the wrong noun.** Population size cannot separate the classes; **mass per process**
-   separates them by 3.9×. Re-nouning is a design change, not a threshold tweak — the guard has no
-   per-coalition footprint instrument, and the obvious one (summing `ps rss`) is the ~2.34× shared-page
-   over-count this script's own header bans. Filed rather than half-applied, per §7's sequencing note.
+2. **Rung 6 counts the wrong noun.** Population size cannot separate the classes — and neither can
+   mass per process (§8.3a: a survived sample reads 458 MiB/proc against the fatal 142.6). The one
+   quantity that does is the coalition's **total anon footprint**: 139.50 GiB fatal vs a 28.18 GiB
+   survived ceiling, 4.95× apart with an empty interval, on a 64 GiB box. Re-nouning is a design
+   change, not a threshold tweak — the guard has no per-coalition footprint instrument, and the
+   obvious one (summing `ps rss`) is the ~2.34× shared-page over-count this script's own header bans.
+   Filed rather than half-applied, per §7's sequencing note.
 3. **A threshold must be derived in the units its consumer reads.** The 43% instrument gap turned a
    correct derivation into a rung that cannot fire on its own event. See
    [[control-must-replay-the-real-artifact]] and [[proxy-must-be-independent-of-what-it-supplements]].
