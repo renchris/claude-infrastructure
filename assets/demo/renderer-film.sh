@@ -316,12 +316,98 @@ case "$APP" in
 esac
 PIDS_BEFORE=" $(ps -eo pid=,comm= | awk -v want="$_procname" '{n=split($2,a,"/"); if (tolower(a[n])==tolower(want)) print $1}' | tr '\n' ' ')"
 
+spawn_itermbench() {
+  # THE INCUMBENT, FILMED SAFELY — via an isolated CLONE, which is the only way it can be done.
+  # Filming the real iTerm2 was tried and had to be aborted: launching it RESTORES the operator's
+  # windows, `current window` then resolves to one of theirs, and 18 splits landed in restored
+  # sessions. scripts/iterm-metal-bench-app.sh clones iTerm2 under its own CFBundleIdentifier, which
+  # gives it its own defaults domain and therefore NO window arrangement to restore — so the window
+  # this driver creates is the only window that exists, and `current window` cannot mean anyone
+  # else's. (The clone also carries a raised Metal pane cap, which is why it exists at all.)
+  local app="${ITERMBENCH_APP:-/tmp/itermbench/iTermMetalBench.app}"
+  [ -d "$app" ] || {
+    echo "  ✗ no bench clone at $app — build it: scripts/iterm-metal-bench-app.sh --out /tmp/itermbench" >&2
+    return 1; }
+  local sh="${TMPDIR:-/tmp}/renderer-film-itermbench-pane.sh"
+  printf '%s\n' "$PANE_CMD" > "$sh"
+  open -n -a "$app" >/dev/null 2>&1
+  sleep 10
+  local out
+  # `application id`, never the name: an unlaunched name lookup loads no terminology and puts up a
+  # blocking "Choose Application" modal. `write text` rather than the `command` parameter, which
+  # collides with a class name in this dictionary. `current window` rather than a held reference,
+  # which goes stale across splits ("Can-t get window id 4547").
+  out="$(osascript - "$PANES" "exec /bin/sh $sh" <<'ITERMBENCHSCRIPT' 2>&1
+on run argv
+	set target to (item 1 of argv) as integer
+	set paneCmd to (item 2 of argv)
+	-- The bundle id must be a LITERAL. A `tell application id <variable>` form cannot load the
+	-- terminology at compile time, so every verb below parses as a class name and the script dies
+	-- with "Expected end of line, etc. but found class name" — the same failure mode as targeting
+	-- an unlaunched app by NAME.
+	-- (No apostrophes or backticks in this heredoc: it sits inside a $( ), where bash tracks quotes
+	-- while scanning for the closing paren. This file has now been broken that way TWICE.)
+	tell application id "com.googlecode.iterm2.metalbench"
+		activate
+		create window with default profile
+		delay 3
+		-- Addressed as `window 1` — the clone has exactly one window, because its own bundle id
+		-- gives it its own defaults domain and therefore nothing to restore. All three other
+		-- specifiers were tried and all three fail here: a held reference goes stale across splits,
+		-- `current window` is nil until a window becomes key (which under load does not happen
+		-- inside the delay), and even `window id <n>` died mid-loop non-deterministically as iTerm2
+		-- renumbered under contention. An index into a single-window app cannot go stale.
+		tell (current session of current tab of window 1) to write text paneCmd
+		set made to 1
+		set progressed to true
+		repeat while (made < target) and progressed
+			set progressed to false
+			repeat with s in (sessions of current tab of window 1)
+				if made >= target then exit repeat
+				try
+					set ns to (split vertically with default profile) of s
+					tell ns to write text paneCmd
+					set made to made + 1
+					set progressed to true
+				end try
+				if made >= target then exit repeat
+				try
+					set ns to (split horizontally with default profile) of s
+					tell ns to write text paneCmd
+					set made to made + 1
+					set progressed to true
+				end try
+			end repeat
+		end repeat
+		-- CREATED IS NOT ON SCREEN — the same trap Ghostty sprang. After the splits the resolver
+		-- reported owner_windows=0 for a window that plainly existed, because it was not mapped on
+		-- the active Space. `select` is the iTerm2 dictionary verb that maps it back.
+		activate
+		-- Defensive: the window id can go stale by the time the splits finish, and a raise failing
+		-- must not discard a window that already has 18 panes in it. The resolver still refuses if
+		-- the window never comes on screen, so this cannot hide a bad take.
+		try
+			tell window 1 to select
+		end try
+		delay 2
+		return "achieved=" & made
+	end tell
+end run
+ITERMBENCHSCRIPT
+)"
+  case "$out" in
+    achieved=*) SPAWNED="${out#achieved=}"; SPAWNED="${SPAWNED%% *}" ;;
+    *) echo "  ✗ iTermMetalBench AppleScript driver failed: $out" >&2; SPAWNED=0; return 1 ;;
+  esac
+}
+
 echo "== renderer-film  app=$APP panes=$PANES fps=$FPS take=${SECONDS_TAKE}s loadavg=$LOADNOW =="
 case "$APP" in
   kitty)            spawn_kitty ;;
   wezterm|WezTerm)  spawn_wezterm ;;
   ghostty|Ghostty)  spawn_ghostty ;;
   iterm2|iTerm2)    spawn_iterm2 ;;
+  itermbench)       spawn_itermbench ;;
   *) echo "renderer-film: no spawn strategy for '$APP'" >&2; exit 2 ;;
 esac
 if [ "${SPAWNED:-0}" -lt 2 ]; then
@@ -345,6 +431,7 @@ case "$APP" in
   wezterm|WezTerm) OWNER="WezTerm" ;;
   ghostty|Ghostty) OWNER="Ghostty" ;;
   iterm2|iTerm2)   OWNER="iTerm2" ;;
+  itermbench)      OWNER="iTermMetalBench" ;;
   kitty)           OWNER="kitty" ;;
 esac
 RECT_OUT="$(swift "$RECT_SWIFT" --owner "$OWNER" --title "$FILM_TITLE" --largest 2>&1)"
@@ -515,6 +602,8 @@ case "$APP" in
   kitty)   "$KITTY_BIN" @ --to "$KITTY_SOCK" close-os-window >/dev/null 2>&1 ;;
   ghostty|Ghostty)
     [ -n "$GHOSTTY_WIN" ] && osascript -e "tell application \"Ghostty\" to close window (first window whose id is \"$GHOSTTY_WIN\")" >/dev/null 2>&1 ;;
+  itermbench)
+    osascript -e 'tell application id "com.googlecode.iterm2.metalbench" to quit' >/dev/null 2>&1 ;;
   iterm2|iTerm2)
     # Safe to quit outright: spawn_iterm2 refuses unless iTerm2 was NOT running, so this instance is
     # entirely ours and no operator session can be inside it.
