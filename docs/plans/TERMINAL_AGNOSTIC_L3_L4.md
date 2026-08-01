@@ -986,3 +986,28 @@ level (`env -u KITTY_WINDOW_ID IT2_WRAPPER_NO_KITTY=1 …`) and change nothing e
 exact baseline count proves the harness, not the subject — and it is proof, not inference, because
 no test and no production line was touched to obtain it. **Any suite asserting a terminal-specific
 path must pin the terminal in `setup()`.**
+
+### 8.8 Four MORE defects the LAND GATE caught that ~340 passing assertions did not
+
+This matches §6.10 and §7.10 exactly, on a third independent track. Every one was invisible to a
+fully green suite, and each was named by the gate in seconds, by file and line:
+
+1. **Two new suites read AMBIENT machine load.** Neither pinned `CC_FIRE_CAPACITY_GATE=off`, and
+   both exercise handoff-fire, whose `capacity_gate()` refuses a net-new fire above 2.0/core — a box
+   this one lives well above. Their verdict was a function of what else the operator was running.
+2. **A DEAD assertion in `tests/it2-kitty.bats`.** `grep -q -- '--json' … && false` could not fail:
+   as a non-final `A && B` the failure is absorbed and errexit never sees it. Repaired to
+   `! A || false` **by hand**, because the prescribed fixer's uniform `|| false` is wrong for this
+   class — on `A && false` it fails on BOTH branches (backlog #100). Proven in both directions
+   after: green when the flag is consumed, `not ok 5` against a mutant that lets it leak.
+3. **A ShellCheck directive covered only half its line.** A directive applies to the **next
+   command**, so on `A=1; B=2` it suppresses A and leaves B flagged. Split onto separate lines.
+4. **And fixing (3) walked straight into this repo's own documented trap.** The explanatory comment
+   began with the lowercase tool name, which parses as a MALFORMED DIRECTIVE and **aborts analysis
+   of the entire file** — the §6.10 defect #2 class, re-committed by someone who had read §6.10.
+   The parser is case-sensitive; `ShellCheck` is safe.
+
+**The compounding lesson, now three-for-three:** a green suite is evidence about the axes something
+is looking at, and nothing else. Across T1/T2, T4 and this track the gate has caught 10 defects that
+zero passing tests could see — hermeticity leaks, ambient-load dependence, dead assertions, and
+lints that were structurally blind. **Run the gate's own invocation, never a weaker local one.**
