@@ -1200,10 +1200,19 @@ F
   # Simulates the real incident: a `grep` that cannot RUN (rc>1). Shadowing grep in a subshell
   # reproduces exactly what fork exhaustion / a reaped child does to these predicates. Before the
   # fix this reported a LEAK naming a perfectly good suite; the contract is exit 2 and no leak line.
+  # The output test is a `case`, not a grep — for (x)'s reason, which applies here FIRST: grep is the
+  # very thing stubbed above, so `… | grep -q LEAK` inherits the stub's rc=2 and can never fire. That
+  # spelling left this leg with NO live guard: under it the selftest stayed a green 38/38 even with the
+  # 2026-07-26 incident reinstated in the source.
+  # RED-PROOF (it takes a DOUBLE mutant — a single one is too weak to reach the LEAK line, so a control
+  # that reverts only one fail-SAFE proves nothing and reads as "the fix didn't work"): revert BOTH
+  # fail-SAFE returns in series — is_hermetic() `return 0`→1 (~line 324) AND in_allowlist() `return 0`→1
+  # (~line 443). Either one alone still short-circuits the printf at line ~504. With both reverted this
+  # case fires and the selftest exits 1; with the old grep spelling it stayed silent at rc=0.
   ( grep() { return 2; }
     out="$(lint_dir "$d/leak" "" 2>&1)"; rc=$?
     [ "$rc" -eq 2 ] || { echo "SELFTEST FAIL: an unrunnable predicate did not exit 2 (got $rc) — a killed check must never be a verdict"; exit 1; }
-    printf '%s' "$out" | grep -q 'LEAK' && { echo "SELFTEST FAIL: an unrunnable predicate still fabricated a LEAK line"; exit 1; }
+    case "$out" in *LEAK*) echo "SELFTEST FAIL: an unrunnable predicate still fabricated a LEAK line"; exit 1 ;; esac
     exit 0
   ) || fails=1
   # (o) …and it stays a non-verdict WITH an own-set supplied: own-scope narrows which violations

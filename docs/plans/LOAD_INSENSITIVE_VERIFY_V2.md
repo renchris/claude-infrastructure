@@ -189,6 +189,35 @@ is what stops the next relocation from re-inheriting it.
   on a **descendant of live HEAD**, and the capacity-gate reds were the reason no recent commit could
   earn one. Do not "fix" this by forcing the orphaned stamp — refusing a rollback is the gate working.
 
+### A6 — the verdict path's own assertions must be able to FAIL (added 2026-07-31, item `487d9f7c6bd5`)
+
+Pinning the gate (C1) makes the corpus load-indifferent; it does not make the corpus's assertions
+*discriminating*. Both halves of T3's filing were swept against disk truth:
+
+**Use the deterministic two-arm control, never ambient load.** `CC_FIRE_LOADAVG_OVERRIDE=<n>`
+(`scripts/handoff-fire.sh:1486`) forces `capacity_gate`'s verdict without touching the box, so A3's
+arm-A/arm-B evidence no longer needs a loaded machine: arm A `CC_FIRE_CAPACITY_GATE=off` → rc 0, arm B
+`CC_FIRE_LOADAVG_OVERRIDE=999` → rc 9, both measured. A control that *waits for load* would itself
+violate this document's standing constraint.
+
+- **Selftest case (n) was a dead assertion — FIXED.** `scripts/test-hermeticity-lint.sh` stubs
+  `grep() { return 2; }`, then asserted with `printf … | grep -q 'LEAK'` — which inherits the stub's
+  rc=2 and can never fire. It was the ONLY live guard on `is_hermetic()`'s fail-SAFE direction: with the
+  2026-07-26 incident reinstated in the source, `--selftest` still exited 0 at a green 38/38. Now a
+  `case`, per (x)'s precedent. ⚠️ RED-proof needs a **DOUBLE** mutant — `is_hermetic()` (~324) *and*
+  `in_allowlist()` (~443) both `return 0`→`1`; either alone short-circuits before the LEAK line, so a
+  single-mutant control proves nothing and misreads as "the fix didn't work".
+- **"Non-zero status passes on exit 9" — measured, no live instance.** All 131 `[ "$status" -ne 0 ]` in
+  `tests/` (one spelling only; 45 in fire-reaching suites) swept. Every one that can reach the gate
+  carries a message discriminator; the 19 undiscriminated ones never execute the script top-level at
+  all — they `run` either a sourced function (`composer_owned`, `pane_parked_reason`, `it2_split`,
+  `spawn`, `originator_liveness`, `resolve_headless_anchor`) or a bare command (`grep`, `mktemp`, `kill`).
+  Positive control: `notify-back.bats`'s bare-`--notify-back` test targets line 2859 (post-gate) and DID
+  flip to `not ok` under arm B — proving both that it reaches the gate and that its companion grep
+  catches an exit-9 substitution. **Structural rule for future review:** an assertion is exposed iff the
+  failure it names is raised *after* `handoff-fire.sh:2505` — self-close (`exit 0` at 2460) and the
+  payload checks (2496–2502) are all before it, so their suites cannot produce this class.
+
 Kill switches: the change is additive env pins plus one lint rule; `CC_HERM_ALLOWLIST` already overrides
 the lint's list, and the new rule ships with its own off seam.
 
