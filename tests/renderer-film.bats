@@ -79,7 +79,7 @@ EOF
   stub_ioreg Yes
   run "$FILM" --app kitty --panes 2 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 9 ]
-  [[ "$output" == *"verdict=LOCKED"* ]]
+  [[ "$output" == *"verdict=LOCKED"* ]] || false
   # It must refuse BEFORE creating panes: 18 repainting panes on a machine that cannot draw them is
   # pure load on a shared box, and the refusal would arrive 60 s later wearing a renderer's face.
   [[ "$output" != *"spawned"* ]]
@@ -90,7 +90,7 @@ EOF
   # nothing would ever film again. The unknown app makes it exit early with a different code.
   stub_ioreg No
   run "$FILM" --app NoSuchTerminal9731 --panes 2 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
-  [[ "$output" != *"verdict=LOCKED"* ]]
+  [[ "$output" != *"verdict=LOCKED"* ]] || false
   [ "$status" -eq 2 ]
 }
 
@@ -100,7 +100,7 @@ EOF
   stub_ioreg No
   FILM_MAXLOAD=0 run "$FILM" --app kitty --panes 18 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 4 ]
-  [[ "$output" == *"verdict=REFUSED"* ]]
+  [[ "$output" == *"verdict=REFUSED"* ]] || false
   [[ "$output" != *"spawned"* ]]
 }
 
@@ -122,7 +122,7 @@ EOF
   # attributable to the title and not to the app being absent.
   run swift "$RECT" --owner kitty --title ZZ_NO_SUCH_TITLE_4471_ZZ
   [ "$status" -eq 4 ]
-  [[ "$output" == *"verdict=NO-MATCH"* ]]
+  [[ "$output" == *"verdict=NO-MATCH"* ]] || false
   # The diagnostic must distinguish "app not running" from "title matched nothing" — they need
   # opposite fixes, and a bare NO-MATCH sends the reader to the wrong one.
   [[ "$output" == *"owner_windows="* ]]
@@ -148,7 +148,7 @@ EOF
   swiftc -O "$FILM_SWIFT" -o "$bin" 2>/dev/null || skip "swiftc failed in this environment"
   run "$bin" --window-id 999999999 --seconds 1 --out "$BATS_TEST_TMPDIR/never.mov"
   [ "$status" -eq 4 ]
-  [[ "$output" == *"verdict=NO-WINDOW"* ]]
+  [[ "$output" == *"verdict=NO-WINDOW"* ]] || false
   [ ! -f "$BATS_TEST_TMPDIR/never.mov" ]
 }
 
