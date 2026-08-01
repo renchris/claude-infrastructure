@@ -79,6 +79,9 @@ fi
 PROMPT=${PROMPT//$'\n'/ }
 
 export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT"
+# shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
+#   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
+#   corrupt the script — the values are passed in via the LR_* environment exported above.
 exec expect -c '
   set timeout 300
   set cfg    $env(LR_CFG)

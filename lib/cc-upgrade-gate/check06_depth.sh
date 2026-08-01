@@ -57,7 +57,11 @@ check_06() {
   fakehome="$(mktemp -d)"
   _gate05_stub_closeattrib "$fakehome"
   _gate05_effect_read claude "$zshrc" "$fakehome"
+  # shellcheck disable=SC2154  # _g5_depth / _g5_argv are OUT-params of _gate05_effect_read, which
+  #   lives in check05_launcher.sh. The driver sources CHECKS_DIR/check*.sh in glob order, so 05 is
+  #   always loaded before 06 — shellcheck simply cannot see across that file boundary.
   [ "$_g5_depth" = "SPAWN_DEPTH=1" ] && launcher_pins=1
+  # shellcheck disable=SC2154  # same cross-file OUT-param as above (set by check05's helper).
   argv="$_g5_argv"
   rm -rf "$fakehome"
 

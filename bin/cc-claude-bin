@@ -58,6 +58,8 @@ zshrc="${CC_ZSHRC:-$HOME/.zshrc}"
 # a comment MENTIONING a path cannot be mistaken for the pin — the launcher header documents old
 # versions in prose, and a looser grep would happily return ~/.claude-170 from a rollback note.
 if [ -r "$zshrc" ]; then
+  # shellcheck disable=SC2016  # $HOME is matched LITERALLY — it is the text of the launcher's own
+  #   assignment (`_bin="$HOME/.claude-NNN/..."`), not a value to expand here.
   pin="$(grep -oE '^[[:space:]]*(local[[:space:]]+)?_bin="\$HOME/\.claude-[0-9]+/[A-Za-z0-9_./-]*claude"' "$zshrc" 2>/dev/null \
          | head -1 | sed -E 's|.*_bin="\$HOME/||; s|"$||')" || pin=""
   if [ -n "$pin" ]; then

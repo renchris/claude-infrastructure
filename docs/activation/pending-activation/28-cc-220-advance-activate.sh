@@ -73,6 +73,9 @@ ok()  { echo "✓ $*"; }
 
 # ── --undo ────────────────────────────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--undo" ]; then
+  # shellcheck disable=SC2012  # `ls -1t` is deliberate: we need NEWEST-FIRST over a glob whose
+  #   names we control (zshrc.cc220-<stamp>[.N], no spaces or newlines possible). find(1) has no
+  #   portable mtime sort on macOS, so the usual SC2012 remedy would be strictly worse here.
   latest="$(ls -1t "$BACKUP_DIR"/zshrc.cc220-* 2>/dev/null | head -1)"
   [ -n "$latest" ] || die "no backup found under $BACKUP_DIR (zshrc.cc220-*)"
   cp "$latest" "$ZSHRC" || die "restore failed"
@@ -91,9 +94,12 @@ fi
 got="$("$HOME/.$TO_DIR/node_modules/.bin/claude" --version 2>/dev/null | grep -oE '2\.1\.[0-9]+' | head -1)"
 [ "$got" = "2.1.220" ] || die "$TO_DIR reports version '${got:-unknown}', expected 2.1.220 — refusing"
 
+# shellcheck disable=SC2016  # $HOME stays LITERAL in both patterns below — we are matching the
+#   characters '$HOME' as they appear in ~/.zshrc, not this shell's home directory.
 pin_line="$(grep -nE '^[[:space:]]*local _bin="\$HOME/\.claude-[0-9]+/' "$ZSHRC" | head -1)"
 [ -n "$pin_line" ] || die "no claude() _bin pin found in $ZSHRC — refusing to guess"
 
+# shellcheck disable=SC2016  # literal $HOME again — see the note on pin_line above.
 n_pins="$(grep -cE '^[[:space:]]*local _bin="\$HOME/\.claude-[0-9]+/' "$ZSHRC")"
 [ "$n_pins" -eq 1 ] || die "expected exactly 1 _bin pin, found $n_pins — refusing (resolve by hand)"
 
@@ -196,6 +202,7 @@ cp "$tmp" "$ZSHRC" || die "install failed — backup at $BACKUP"
 rm -f "$tmp"
 
 echo
+# shellcheck disable=SC2088  # the tilde is prose in a message to the operator, not a path we open.
 ok "~/.zshrc updated."
 echo "  Next:  source ~/.zshrc     (existing sessions keep their loaded binary via the vnode)"
 echo "  Verify: claude --version   → 2.1.220"

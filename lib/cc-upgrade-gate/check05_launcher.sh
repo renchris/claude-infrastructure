@@ -39,6 +39,9 @@
 # Derive the pinned binary path the launcher actually uses, from its own body.
 # Echoes a $HOME-relative path (e.g. .claude-219/node_modules/.bin/claude); empty if not found.
 _gate05_bin_relpath() {
+  # shellcheck disable=SC2016  # $HOME must stay LITERAL here: we are matching the four characters
+  #   '$HOME' as they appear verbatim in ~/.zshrc, not this shell's home directory. Expanding it
+  #   would make the pattern '/Users/<me>/.claude-NNN' and match nothing in the launcher source.
   printf '%s\n' "$1" \
     | grep -oE '\$HOME/\.claude-[0-9]+/[A-Za-z0-9_./-]*claude' \
     | head -1 | sed 's|^\$HOME/||'
