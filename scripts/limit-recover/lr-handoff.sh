@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
 # 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
-# piled up). Both call sites `tell application "iTerm2"` — the exact wedged surface; each already has a
+# piled up). Both call sites `tell application id "com.googlecode.iterm2"` — the exact wedged surface; each already has a
 # manual-fallback message on failure, so a cut degrades into a path that exists.
 # timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
 # minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
@@ -216,7 +216,8 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   FIRED=""
   if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
     FIRED=$(lrh_bounded osascript 2>/dev/null <<OSA || true
-tell application "iTerm2"
+if not (application id "com.googlecode.iterm2" is running) then return ""
+tell application id "com.googlecode.iterm2"
   repeat with w in windows
     repeat with t in tabs of w
       repeat with s in sessions of t
@@ -239,7 +240,8 @@ OSA
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
     lrh_bounded osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
-tell application "iTerm2"
+if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"
+tell application id "com.googlecode.iterm2"
   set newWin to (create window with default profile)
   tell current session of newWin to write text "exec /bin/bash $LAUNCHER"
 end tell

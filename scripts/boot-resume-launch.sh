@@ -66,7 +66,7 @@ CMD="$(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 # osascript escaping: the command runs inside an AppleScript double-quoted string → escape " and \.
 osa_cmd="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 read -r -d '' OSA <<OSA_EOF || true
-tell application "iTerm2"
+tell application id "com.googlecode.iterm2"
   activate
   set w to (create window with default profile)
   tell current session of w
