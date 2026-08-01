@@ -448,6 +448,53 @@ hf_bounded() {
   "$HF_TIMEOUT_BIN" -k 3 "$HF_TIMEOUT_S" "$@"
 }
 
+# ── TERMINAL DISPATCH (2026-07-31) ───────────────────────────────────────────────────────────────
+# Five primitives below reach the terminal through iTerm2 AppleScript / the iterm2 Python API, which
+# is a vendor lock: from inside kitty there is no iTerm2 to answer, so each one degrades to its own
+# fail-loud path and a handoff cannot fire at all. Each therefore grows a kitty branch keyed on the
+# predicate below. iTerm2 remains the DEFAULT and its branch is untouched — byte-identical.
+#
+# THE PREDICATE IS COPIED VERBATIM from bin/it2-wrapper:75 (kill switch included), and is mirrored a
+# third time at the REAL_IT2= block (:3397 area) and a fourth in bin/cc-pane it2_real_bin(). They
+# MUST NOT drift: a divert that fired in one and not another would create the pane with one backend
+# and address it with the other. tests/kitty-divert-real-it2.bats pins the agreement textually.
+in_kitty() { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; }
+
+# kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
+# unix socket has no serializing queue, but an unbounded call inside a spawn path still hangs the
+# fire with no diagnostic (the 2026-07-26 wedge class, tests/handoff-fire-it2-bound.bats).
+# Seams MIRROR bin/it2-kitty's so one export configures both: CC_TERM_KITTY (binary) ·
+# CC_TERM_KITTY_TO (socket). Unquoted ${:+} is the same idiom as bin/it2-kitty:75 — it must expand
+# to TWO words or vanish entirely.
+# shellcheck disable=SC2086
+kt() { hf_bounded "${CC_TERM_KITTY:-kitty}" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"; }
+
+# Resolve one kitty window id out of `kitty @ ls` and print ONE field of it. `kitty @ ls` is the only
+# read this file needs, so the JSON walk is shared: os-windows → tabs → windows, each with id / pid /
+# is_focused. Exit 1 ⇒ the QUERY failed (no socket, wedged kitty, unparseable JSON) — a state the
+# callers must be able to tell apart from "the pane is gone", which is exit 0 with empty output.
+# json.load() drains stdin to EOF BEFORE the walk, so an early match cannot SIGPIPE `kitty @ ls` and
+# have pipefail promote a 141 into a fake failure (memory: pipefail-inverts-early-exit-probe).
+kt_window_field() { # $1=window-id ("" ⇒ the focused window)  $2=field (pid|id)  → value | empty
+  kt ls 2>/dev/null | KID="${1##*:}" KFIELD="$2" /usr/bin/python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+kid, field = os.environ["KID"], os.environ["KFIELD"]
+for ow in d:
+    for t in ow.get("tabs", []):
+        for w in t.get("windows", []):
+            hit = (str(w.get("id")) == kid) if kid else bool(w.get("is_focused"))
+            if hit:
+                v = w.get(field)
+                if v is not None:
+                    print(v)
+                sys.exit(0)
+sys.exit(0)'
+}
+
 # iTerm2 IS ADDRESSED BY BUNDLE ID, AND NEVER LAUNCHED IMPLICITLY (2026-07-31).
 # Two separate defects, one line apart:
 #   1. Addressing it by the bare name (tell application + "iTerm2") is a NAME lookup, and the
@@ -468,6 +515,21 @@ hf_bounded() {
 
 # Shared single-lookup writer: find the session once, type one line into it.
 as_write() { # $1=session-uuid $2=text
+  if in_kitty; then
+    # ONE SEAM, NOT TWO: route through the it2 shim rather than calling `kitty @ send-text` here.
+    # Inside kitty the shim execs bin/it2-kitty, whose `session run` is byte-for-byte the transport
+    # every other kitty caller in this repo already uses (text + \r, --match id:<n>) — so a change
+    # to how text reaches a kitty pane stays a one-file edit there, and a second spelling of it
+    # cannot drift from the first.
+    #
+    # ${REAL_IT2:-…}: as_write is called from SELF-CLOSE mode (:2616 the /exit, :2624 the anti-strand
+    # CR), which `exit 0`s at :2627 — ABOVE the top-level REAL_IT2= assignment. Referencing a bare
+    # $REAL_IT2 there would trip `set -u` and abort the close mid-teardown, so the shim path is the
+    # default; under kitty the REAL_IT2 block resolves to that exact same shim anyway (:3397 area),
+    # which is why the two spellings cannot disagree.
+    hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session run -s "${1##*:}" "$2"
+    return $?
+  fi
   hf_bounded osascript - "$1" "$2" <<'AS'
 on run argv
   if not (application id "com.googlecode.iterm2" is running) then
@@ -524,6 +586,24 @@ _as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query i
       printf '%s' "$((left - 1))" > "$HANDOFF_TTY_FAIL_FILE"
       return 1
     fi
+  fi
+  if in_kitty; then
+    # kitty exposes no tty for a window, only the pid of the process it launched — so resolve
+    # id → pid via `kitty @ ls`, then pid → tty via ps, and re-attach the /dev prefix that iTerm2's
+    # `tty of s` already carries (callers `basename` it: :917, :2597).
+    #
+    # THE TWO EXIT STATES ARE THE CONTRACT, and getting them backwards makes a LIVE successor read
+    # as DEAD (as_tty's header: a FAILED query is retried, an ABSENT pane is believed immediately).
+    #   query failed (no socket / wedged kitty / bad JSON)  → return 1, nothing printed → retried
+    #   pane genuinely absent, or alive with no tty yet     → return 0, nothing printed → believed
+    local kpid ktty
+    kpid="$(kt_window_field "$1" pid)" || return 1
+    [ -n "$kpid" ] || return 0
+    ktty="$(ps -o tty= -p "$kpid" 2>/dev/null | tr -d '[:space:]')" || ktty=""
+    # `??` is ps's own "no controlling terminal" — an answer, not a failure: exit 0, print nothing.
+    [ -n "$ktty" ] && [ "$ktty" != "??" ] || return 0
+    printf '/dev/%s' "$ktty"
+    return 0
   fi
   hf_bounded osascript - "$1" <<'AS' 2>/dev/null
 on run argv
@@ -3464,6 +3544,46 @@ PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | he
 # surface — restoring the OPERATOR's own focus is the mechanism that makes "active-session unchanged"
 # hold. The frontmost-app re-focus undoes any transient iTerm2 raise for an operator in another app.
 it2py() {
+  if in_kitty; then
+    # Three of the four verbs are pure iTerm2-object reads and have kitty equivalents on the control
+    # socket. `frontapp` is DELIBERATELY NOT here: it asks System Events which macOS app is frontmost,
+    # which is terminal-agnostic and already correct — it falls through to the block below unchanged.
+    case "${1:-}" in
+      active)
+        # The operator-focused surface = the window with is_focused true. Empty output (nobody
+        # focused / query failed) is the same "unreadable focus" the iTerm2 path emits, and every
+        # caller already treats it as "nothing to assert" (restore_focus_or_fail:3712 area).
+        kt_window_field "" id
+        return $?
+        ;;
+      restore)
+        # focus-window is the whole restore under kitty: there is no separate window-order call, and
+        # the frontmost-APP re-focus is skipped because it lives in the `frontapp` verb this branch
+        # does not implement. Then RE-READ is_focused — the contract is rc 0 restored / rc 5 NOT
+        # restored, so a focus-window that returns 0 without moving focus must still convict.
+        local rsid="${2:-}"; rsid="${rsid##*:}"
+        kt focus-window --match "id:$rsid" >/dev/null 2>&1 || return 5
+        [ "$(kt_window_field "" id 2>/dev/null || true)" = "$rsid" ] || return 5
+        return 0
+        ;;
+      bgtab)
+        # --keep-focus IS the whole point of this verb: it is what makes the new tab a BACKGROUND
+        # one. Without it kitty focuses the tab it just created and the fire steals the operator's
+        # view — the exact C1 failure it2py bgtab exists to prevent. It also makes the iTerm2 path's
+        # capture-restore-assert dance unnecessary here: focus never moves, so there is nothing to
+        # restore and no window to self-clean.
+        # --match pins the tab to the FIRING window's os-window; kitty otherwise silently targets
+        # the ACTIVE tab (same trap bin/it2-kitty documents for --next-to on split).
+        local bsid="${2:-}"; bsid="${bsid##*:}"
+        local bnew
+        bnew="$(kt launch --type=tab --keep-focus --cwd=current --match "id:$bsid" 2>/dev/null | tr -d '[:space:]')" || return 1
+        case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
+        # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
+        printf 'Created new pane: %s\n' "$bnew"
+        return 0
+        ;;
+    esac
+  fi
   hf_bounded "$PYTHON_BIN" - "$@" <<'PY'
 import subprocess
 import sys
@@ -3781,6 +3901,19 @@ it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists bu
 # deliberate --window does that). No `write text` char-stream here → no ttys018 mis-inject (the
 # --tab half of item 0b878805bc27; the split/bg-tab half is e4c7e7fb41bd).
 as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
+  if in_kitty; then
+    # STDOUT CONTRACT IS LOAD-BEARING and unchanged: "OK <new-id>" | "NOTFOUND", rc 0 either way
+    # (the caller at :3949 area captures with `|| out="ERR($?)"`, so a non-zero return would be
+    # reported as a bridge error rather than as a gone window).
+    # --match pins the tab into the FIRING window's os-window. Without it kitty creates the tab in
+    # whatever os-window is ACTIVE — i.e. the exact "handoff fired into another window" drift the
+    # iTerm2 branch's foundWin walk exists to prevent. A dead anchor makes launch exit non-zero,
+    # which is what NOTFOUND means.
+    local tnew
+    tnew="$(kt launch --type=tab --cwd=current --match "id:${1##*:}" 2>/dev/null | tr -d '[:space:]')" || tnew=""
+    case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) printf 'OK %s\n' "$tnew" ;; esac
+    return 0
+  fi
   hf_bounded osascript - "$1" <<'AS'
 on run argv
   set sid to item 1 of argv
@@ -3826,6 +3959,22 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
   # not-running iTerm2. Empty output is the failure this function already documents, and the caller
   # (`winid="$(spawn_frontmost …)"`) already fails loud on it — a handoff must never resurrect
   # iTerm2 behind the operator's back on a kitty fleet.
+  if in_kitty; then
+    # kitty focuses a newly-created os-window unconditionally, so --keep-focus carries the SAME
+    # FOLLOW split the iTerm2 branch expresses with `activate`: --follow raises the continuation for
+    # a watching operator, autonomous leaves the operator where they were (C1). Same semantics, the
+    # opposite polarity of flag — kitty's default is the raise, iTerm2's default is not.
+    # Same `local flag=""; test && flag=…` shape as it2_split's -v, for the same reason: the flag
+    # must expand to one word or to nothing at all.
+    local wnew kfocus=""
+    [ "${FOLLOW:-0}" = 1 ] || kfocus="--keep-focus"
+    # shellcheck disable=SC2086
+    wnew="$(kt launch --type=os-window --cwd=current $kfocus 2>/dev/null | tr -d '[:space:]')" || wnew=""
+    # Empty output IS this function's documented failure and the caller (:3821 area) already fails
+    # loud on it — never print a non-id, which would be landed into as a pane.
+    case "$wnew" in ''|*[!0-9]*) return 0 ;; *) printf '%s\n' "$wnew" ;; esac
+    return 0
+  fi
   if [ "$FOLLOW" = 1 ]; then
     hf_bounded osascript -e 'if not (application id "com.googlecode.iterm2" is running) then return ""' \
               -e 'tell application id "com.googlecode.iterm2"' \
