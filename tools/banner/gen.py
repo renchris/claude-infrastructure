@@ -2258,15 +2258,63 @@ STAR_HUES = ("sc", "sc", "sw", "sw", "sw")
 # Incommensurate twinkle periods. The brief's 2.3 / 3.1 / 4.7 / 5.9 s cannot be used verbatim —
 # every sub-period must divide P=240 s or the composite loop seams at the LCM — so these are the
 # nearest set that both divides P exactly and formats exactly at two decimals. They realign only at
-# the full 240 s loop, which is the property the odd numbers were chosen for.
-STAR_PERIODS = (2.5, 3.2, 4.8, 6.0)
+# the full 240 s loop, which is the property the odd numbers were chosen for. SIX rates rather than
+# four: 3.75 s (240/64) and 8.0 s (240/30) both divide P, and the whole set still realigns only at
+# 240 s — in units of 0.05 s the LCM of (50,64,96,120,75,160) is 4800, i.e. exactly one loop.
+STAR_PERIODS = (2.5, 3.2, 4.8, 6.0, 3.75, 8.0)
+# WHY THE FIELD LOOKED STILL, and it was never the machinery — the phases are distinct and the
+# rates are live. It was AMPLITUDE against SIZE. At the README's real 838 px column the whole 1920 px
+# canvas is scaled by 0.436, so the majority tier's 2.4 px star is 1.05 CSS px and the brightest is
+# 1.83 px. A floor of .70 on a tier that already renders at .34 opacity is an on-canvas swing of
+# 0.34*(1-.70) = 0.10 — a tenth of a level, on one pixel. Operator: "I dont see our stars being
+# ... opacity/flickering changing/twinkling for depth". Three levers move together below, because
+# any one of them alone is still under the threshold:
+#
+#   AMPLITUDE  the floors drop to ~.44-.60, so the swing is about half the star's own brightness
+#              rather than a fifth of it. It still MULTIPLIES the tier opacity (see starfield), so
+#              the magnitude hierarchy is preserved and the faint tier never out-swings the bright.
+#   COUNT      the cap took 18 of an eligible 41-54, so two thirds of the stars that were ALLOWED
+#              to scintillate were not. 48 takes the whole low field on the shipped variant.
+#   RATES      four -> six, so a field this size does not resolve into four visibly synchronous
+#              groups once there are enough of them to compare.
+#
+# Each entry is (floor, peak%, scale_lo, scale_hi) and pairs positionally with STAR_PERIODS. The
+# reduced-motion still is DERIVED from the floor rather than named again — a hand-written pin is how
+# the last one drifted off the mid-point it claimed to be.
+STAR_TWINKLE = (
+    (0.46, 50, 0.86, 1.12),
+    (0.54, 38, 0.90, 1.14),
+    (0.50, 62, 0.88, 1.10),
+    (0.60, 44, 0.92, 1.08),
+    (0.44, 56, 0.85, 1.16),
+    (0.58, 34, 0.91, 1.06),
+)
 STAR_TWINKLE_MAX = (
-    18  # animated elements, not a share: the field can grow without the cost doing so
+    48  # animated elements, not a share: the field can grow without the cost doing so
 )
 # Scintillation is atmospheric, so only stars BELOW this may twinkle. The field spans y 8..330, so
 # this is its lower half — the thick air near the horizon — and it leaves the stars nearest the
 # wordmark perfectly still.
 STAR_LOW_Y = 168.0
+
+
+def assert_twinkle_tables_paired() -> None:
+    """STAR_PERIODS and STAR_TWINKLE are indexed by the SAME k and must stay the same length.
+
+    Only one direction fails loudly. A longer STAR_TWINKLE raises IndexError on STAR_PERIODS[k] the
+    first time it builds. A longer STAR_PERIODS is SILENT and is the dangerous one: `starfield`
+    assigns classes as `k % len(STAR_PERIODS)`, so it would emit `tw6` on real stars while the
+    stylesheet — which iterates STAR_TWINKLE — declares no rule for it. Those stars keep their tier
+    opacity and simply never animate, which is invisible in every structural gate and reads as
+    exactly the defect this whole change exists to fix.
+    """
+    if len(STAR_PERIODS) != len(STAR_TWINKLE):
+        raise SystemExit(
+            f"gen: STAR_PERIODS has {len(STAR_PERIODS)} rates but STAR_TWINKLE has "
+            f"{len(STAR_TWINKLE)} envelopes. They are indexed by the same k — a rate with no "
+            f"envelope emits a class the stylesheet never declares, and those stars silently "
+            f"stop twinkling. Add or remove the matching entry."
+        )
 
 
 def starfield(
@@ -4481,24 +4529,30 @@ def css(art: Art) -> str:
         # a world-borne single object travels the whole loop's worth of ground in one pass
         f"@keyframes gsc{{from{{transform:translateX(0)}}"
         f"to{{transform:translateX(-{fmt(GROUND_TRAVEL)}px)}}}}"
-        f".ovl,.rfPost{{animation:gsc {fmt(P)}s linear infinite}}" + warp_css() +
-        # ---- twinkle: four rates so the sky has depth rather than one uniform pulse ----
+        f".ovl,.rfPost{{animation:gsc {fmt(P)}s linear infinite}}"
+        + warp_css()
+        +
+        # ---- twinkle: six rates so the sky has depth rather than one uniform pulse ----
         # Scintillation is fast and it is atmospheric, so these are SECONDS rather than the old
         # minute-long breaths — and they are mutually incommensurate (they realign only at the full
         # 240 s loop), which is what stops the animating minority pulsing as one organism.
         #
         # Each varies opacity AND scale together on an eased curve. A pure opacity blink reads as a
         # rendering glitch; a pure scale change on a 3 px feature is invisible. The opacity swing is
-        # about one magnitude step, and it MULTIPLIES the tier opacity on the parent group rather
-        # than replacing it — see starfield() for why that nesting exists.
-        f"@keyframes twA{{0%,100%{{opacity:.7;transform:scale(.88)}}50%{{opacity:1;transform:scale(1.1)}}}}"
-        f"@keyframes twB{{0%,100%{{opacity:.76;transform:scale(.92)}}38%{{opacity:1;transform:scale(1.12)}}}}"
-        f"@keyframes twC{{0%,100%{{opacity:.72;transform:scale(.9)}}62%{{opacity:1;transform:scale(1.08)}}}}"
-        f"@keyframes twD{{0%,100%{{opacity:.8;transform:scale(.94)}}44%{{opacity:1;transform:scale(1.06)}}}}"
-        f".tw0{{animation:twA {fmt(STAR_PERIODS[0])}s ease-in-out infinite}}"
-        f".tw1{{animation:twB {fmt(STAR_PERIODS[1])}s ease-in-out infinite}}"
-        f".tw2{{animation:twC {fmt(STAR_PERIODS[2])}s ease-in-out infinite}}"
-        f".tw3{{animation:twD {fmt(STAR_PERIODS[3])}s ease-in-out infinite}}"
+        # about half the star's own brightness, and it MULTIPLIES the tier opacity on the parent
+        # group rather than replacing it — see starfield() for why that nesting exists and
+        # STAR_TWINKLE for why the floors moved.
+        #
+        # Emitted from the table rather than written out, so a seventh rate is one tuple and cannot
+        # arrive with a keyframe but no class (or the reverse — the frozen-still pin below reads the
+        # SAME table, and that is the pair that drifted last time).
+        "".join(
+            f"@keyframes twT{k}{{0%,100%{{opacity:{fmt(lo)};transform:scale({fmt(slo)})}}"
+            f"{peak}%{{opacity:1;transform:scale({fmt(shi)})}}}}"
+            f".tw{k}{{animation:twT{k} {fmt(STAR_PERIODS[k])}s ease-in-out infinite}}"
+            for k, (lo, peak, slo, shi) in enumerate(STAR_TWINKLE)
+        )
+        +
         # ---- THE SHOOTING STAR: travel, ablation, and a train that outlives the head ----
         # Three keyframes for three elements, because the freeze is per-element and a comma-list
         # would break it (see `shooting_star`). Every edge below is derived from the ONE window in
@@ -4692,8 +4746,15 @@ def css(art: Art) -> str:
         ".moonHalo{opacity:.26}.moonLit{opacity:.9}"
         # Same reasoning for the twinkling stars: un-animated they revert to scale(1) at full
         # opacity, i.e. every one of them pinned at its own peak, which is a brighter horizon than
-        # the animation ever shows. Pin them to the mid-point of their own swing.
-        ".tw0,.tw1,.tw2,.tw3{opacity:.86}"
+        # the animation ever shows. Pin them to the mid-point of their OWN swing — per class, read
+        # from the same STAR_TWINKLE table the keyframes come from. One shared literal was the old
+        # spelling and it is exactly what goes stale: the floors moved and .86 stopped being the
+        # mid-point of anything.
+        + "".join(
+            f".tw{k}{{opacity:{fmt(round((lo + 1) / 2, 3))}}}"
+            for k, (lo, _peak, _slo, _shi) in enumerate(STAR_TWINKLE)
+        )
+        +
         # The sky's two occurrences resolve to NOT HAVING HAPPENED, which is the only still either
         # of them has. A frozen meteor is a dash floating in the sky with no way to read it as
         # moving, and a half-drawn constellation is a still of a thing mid-gesture — both are
@@ -4739,6 +4800,7 @@ def build(art: Art) -> str:
     _ENCODED_STRIP.clear()
     assert_all_gates_wired()
     assert_texture_not_eventised()
+    assert_twinkle_tables_paired()
     assert_event_names_known(art)
     assert_every_beat_tells_a_story(art)
     assert_events_disjoint(art)
