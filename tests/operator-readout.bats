@@ -79,16 +79,66 @@ mkrepo_unlanded() {
 
 # ── step sources (fixture-parity: real producers) ────────────────────────────────────────────────
 
-@test "un-run activation renders bash+touch one-liner; .done-marked and CONFIRM-gated handled" {
+@test "COLLAPSE: 2 un-run activations render ONE cc-do line naming both stems; .done never appears" {
+  # The operator's 2026-07-31 close: nine numbered lines, the activation ones wrapping to FOUR
+  # terminal lines each because `CONFIRM=1 bash <60-char path> && touch <same 60-char path>.done`
+  # names the same path twice. Collapse emits one short line instead. Its stems are what make the
+  # line informative rather than a bare count.
   printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
   printf '#!/bin/bash\n[ "${CONFIRM:-0}" = 1 ] || exit 0\n' > "$CC_ACTIVATION_DIR/11-gated-activate.sh"
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/12-done-activate.sh"
   : > "$CC_ACTIVATION_DIR/12-done-activate.sh.done"
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'bash .*/10-plain-activate.sh && touch .*/10-plain-activate.sh.done   \[activation\]'
-  echo "$output" | grep -q 'CONFIRM=1 bash .*/11-gated-activate.sh'
-  ! echo "$output" | grep -q '12-done-activate'
+  echo "$output" | grep -q '▶ cc-do   \[2 runnable: ' || false
+  echo "$output" | grep -q '11-gated-activate' || false          # CONFIRM-gated named first (F6)
+  echo "$output" | grep -q '10-plain-activate' || false
+  ! echo "$output" | grep -q '12-done-activate' || false
+  # THE POINT: the long double-path form is GONE from the default render.
+  ! echo "$output" | grep -q '&& touch' || false
+}
+
+@test "COLLAPSE: exactly ONE runnable step is still itemised verbatim, not collapsed to a count" {
+  # A count of 1 says strictly less than the step itself, and costs the same line.
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/10-solo-activate.sh"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '▶ cc-do 10-solo-activate   \[activation\]' || false
+  ! echo "$output" | grep -q 'runnable:' || false
+}
+
+@test "I11 DEGRADATION: cc-do absent → the long bash+touch form renders (the one that DOES run)" {
+  # A close naming a command the machine does not have is worse than a long command that works.
+  # bin/cc-* deploys by install.sh glob, so this hook can land before the driver reaches PATH.
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  printf '#!/bin/bash\n[ "${CONFIRM:-0}" = 1 ] || exit 0\n' > "$CC_ACTIVATION_DIR/11-gated-activate.sh"
+  CC_DO_BIN=none run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'bash .*/10-plain-activate.sh && touch .*/10-plain-activate.sh.done   \[activation\]' || false
+  echo "$output" | grep -q 'CONFIRM=1 bash .*/11-gated-activate.sh' || false
+  ! echo "$output" | grep -q 'cc-do' || false
+}
+
+@test "COLLAPSE POSITIVE CONTROL: >3 runnable names 3 stems then +N, and never itemises the rest" {
+  for i in 1 2 3 4 5; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/5$i-x-activate.sh"; done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '▶ cc-do   \[5 runnable: ' || false
+  echo "$output" | grep -q '+2' || false
+  # bounded by construction: the whole step render is ONE line here, not five.
+  nlines="$(echo "$output" | grep -cE '^ (▶|◆)')"
+  [ "$nlines" -eq 1 ]
+}
+
+@test "COLLAPSE: many judgment items become ONE counted line per class, carrying ids + the listing cmd" {
+  # 19 decisions itemised is the wall; 19 counted with 3 ids named is a decision point. `cc-decide
+  # veto` resolves an EXACT id, so the ids must survive the collapse or there is nothing to paste.
+  for i in 1 2 3 4 5; do _legacy_pkt "shipland-esc-many$i"; done
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 5 decisions — your call: ' || false
+  echo "$output" | grep -q 'shipland-esc-many1' || false
+  echo "$output" | grep -q '+2' || false
+  echo "$output" | grep -q 'cc-decide list --open' || false
+  nlines="$(echo "$output" | grep -cE '^ (▶|◆)')"
+  [ "$nlines" -eq 1 ]
 }
 
 @test "open class-C decision with staged artifact renders '▶ bash <staged>' (real cc-decide packet)" {
@@ -225,7 +275,7 @@ EOS
 
 @test "cap: >MAX steps → numbered MAX, footer counts the overflow and the total is in the header" {
   for i in 1 2 3; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/2$i-s-activate.sh"; done
-  CC_OPREADOUT_MAX=2 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  CC_OPREADOUT_MAX=2 CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -q 'OPERATOR ▸ 3 manual step(s)'
   echo "$output" | grep -q ' 2 ▶ '
   ! echo "$output" | grep -q ' 3 ▶ ' || false
@@ -261,7 +311,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   # must appear in the render — itemized or as its own counted rollup. Pre-fix, `decision` and
   # `backlog` appeared in neither.
   mk4 6
-  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'activation' || false
   echo "$output" | grep -q 'decision C' || false
@@ -270,7 +320,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
 
 @test "CLASS BUDGET: each starved class rolls up with its OWN exact listing command (I5)" {
   mk4 6
-  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   echo "$output" | grep -qF '↳ for f in ~/.claude/autonomy/pending-activation/*.sh; do [ -f "$f.done" ] || echo "$f"; done' || false
   # Was `cc-decide list --open --class C`. The decisions leg now also renders a class-B packet that
   # carries neither a default nor a deadline (a hard block wearing the wrong label — six live
@@ -296,7 +346,7 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   # 20 items in each of three classes. The bound is structural, not a magic number: <= MAX itemized
   # plus at most one rollup per class.
   mk4 20
-  CC_OPREADOUT_MAX=6 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  CC_OPREADOUT_MAX=6 CC_OPREADOUT_CLASSBUDGET=on run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   nlines="$(echo "$output" | grep -cE '^ [0-9]+ (▶|◆|↳)')"
   [ "$nlines" -le 10 ]
   [ "$nlines" -ge 7 ]                       # 6 itemized + >=1 rollup: it did not silently shrink
@@ -510,7 +560,12 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
   [ "$status" -eq 0 ]
   msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
   printf '%s' "$msg" | grep -q "OPERATOR ▸ queue: 1 open ($(basename "$w"))"
-  printf '%s' "$msg" | grep -q "cc-backlog list --open --project $(basename "$w")"
+  printf '%s' "$msg" | grep -q "cc-dispatch auto-drains"
+  # The per-project listing command was DROPPED from this line (2026-07-31): at ~140 chars the
+  # footer wrapped to a second terminal row, and this token was the longest on it. The rollup-
+  # carries-a-command invariant still holds — `board: cc-blockers` reaches the same items and is
+  # already on the line. Pinned so a future re-add is a deliberate act, not a regression.
+  ! printf '%s' "$msg" | grep -q -- "--project $(basename "$w")" || false
   grep -q '"queue_open":1' "$CC_IDL"
 }
 

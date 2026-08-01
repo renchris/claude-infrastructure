@@ -58,6 +58,23 @@
 #   filename order had `18-fleet` (12 dark launchd labels) permanently below `04-page-channel`.
 #   Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer.
 #
+# ── COLLAPSE (DEFAULT since 2026-07-31 — operator directive) ── the class budget fixed STARVATION;
+#   it did not fix VOLUME. Measured on the operator's own close: 204 steps → 9 numbered lines, of
+#   which each activation line (`CONFIRM=1 bash <60-char path> && touch <same path>.done`) wrapped
+#   to FOUR terminal rows — ~25 visual lines of grey with nothing single to paste. The close exists
+#   to surface ONE decision point, so:
+#     runnable (deploy + activation) → ONE `▶ cc-do` line, naming up to 3 stems then `+N`
+#     judgment (decision, backlog)   → ONE `◆ <n> …` counted line each, naming up to 3 IDS then
+#                                      `+N`, carrying that class's exact listing command
+#   Live result: 10 lines → 5, none wrapping. Counting a class is NOT hiding it — every class stays
+#   named, counted, and reachable by its own command (the I10 guarantee), the ids stay pasteable
+#   (`cc-decide veto` resolves an EXACT id), and `cc-do --list` itemises everything, always.
+#   A class holding exactly ONE item is still itemised: a count of 1 says strictly less than the
+#   step itself and costs the same line.
+#   Modes: CC_OPREADOUT_CLASSBUDGET=collapse (default) · =on (per-class itemisation) · =off (legacy).
+#   DEGRADATION: collapse is refused when cc-do does not resolve — a close naming a command the
+#   machine lacks is worse than a long command that runs (I11).
+#
 # ── SAFETY (house pattern) ── every hook path exits 0; jq/read failure → abstain; B-3 one IDL
 #   {fired|abstained:<reason>} line per invocation; kill-switch CC_OPREADOUT_DISABLE=1;
 #   compose-guard abstains while session-continue's 🔧 loop is armed (lib/continue-sentinel SSOT).
@@ -69,7 +86,8 @@
 # Env seams (tests): CC_OPREADOUT_DISABLE · CC_OPREADOUT_MAX · CC_OPREADOUT_TTL_S ·
 #   CC_OPREADOUT_NOW (epoch) · CC_OPREADOUT_STATE_DIR · CC_ACTIVATION_DIR · CC_DECISIONS_DIR ·
 #   CC_BACKLOG_FILE · CC_BACKLOG_BIN · WRAP_LEDGER_BIN · WRAP_TRUNK (passes through) ·
-#   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL · CC_OPREADOUT_CLASSBUDGET · CC_DEPLOY_SCRIPT
+#   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL · CC_OPREADOUT_CLASSBUDGET · CC_DEPLOY_SCRIPT ·
+#   CC_DO_BIN (unset ⇒ search · path/name ⇒ verbatim · `none` ⇒ absent, forces the I11 degradation)
 set -uo pipefail
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -88,6 +106,23 @@ TTL="${CC_OPREADOUT_TTL_S:-900}"
 NOW="${CC_OPREADOUT_NOW:-$(date +%s 2>/dev/null || echo 0)}"
 SID="?"
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+
+# cc-do — the ONE-COMMAND driver the collapse render points at. RESOLVED, never assumed (I11 again):
+# `bin/cc-*` deploys by glob in install.sh, so this hook can land BEFORE the driver reaches PATH, and
+# a close that names a command which does not exist is worse than a long one that runs. Unresolvable
+# ⇒ the collapse is REFUSED and the class-budget itemisation renders instead (see CBUDGET below).
+# CC_DO_BIN: unset ⇒ search · a path/name ⇒ use verbatim · the literal `none` ⇒ ABSENT. The `none`
+# value is the only way to exercise the degradation path from a test, because the search's first tier
+# is $0's own checkout — which always holds bin/cc-do — so no amount of HOME/CFG tmpdir isolation can
+# make it miss. A degradation path with no test is a degradation path that has never run.
+CC_DO="${CC_DO_BIN:-}"
+[ "$CC_DO" = none ] && CC_DO=""
+if [ -z "$CC_DO" ] && [ "${CC_DO_BIN:-}" != none ]; then
+  for _d in "$SCRIPT_DIR/../bin/cc-do" "$CFG/bin/cc-do" "$HOME/.claude/bin/cc-do"; do
+    [ -x "$_d" ] && { CC_DO="cc-do"; break; }
+  done
+  [ -n "$CC_DO" ] || { command -v cc-do >/dev/null 2>&1 && CC_DO="cc-do"; }
+fi
 
 MODE="hook"; RCWD=""
 while [ $# -gt 0 ]; do
@@ -147,7 +182,15 @@ render_block() {
   # because F6's CONFIRM-first reorder happens at APPEND time: gating only the allocation left the
   # reorder live under `off`, so the switch did not restore the incumbent and A15 was unprovable.
   # Caught by A15 itself, which is the point of asserting byte-identity rather than "looks the same".
-  local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-on}"
+  # THREE modes now (operator directive 2026-07-31):
+  #   collapse (DEFAULT) — runnable classes → ONE `cc-do` line · judgment classes → ONE counted line
+  #                        each. The class budget below is right at 6 steps and unreadable at 204.
+  #   on               — the per-class itemisation + rollups (§4 M2). Kill switch for collapse.
+  #   off              — legacy flat first-come + `+N more` footer.
+  local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-collapse}"
+  # The collapse's whole output is a pointer to cc-do; without cc-do it would be a pointer to
+  # nothing. Degrade to the itemisation that always runs, rather than to a lie.
+  [ "$CBUDGET" = collapse ] && [ -z "$CC_DO" ] && CBUDGET=on
 
   # 1 · deploy-lag: shared checkout on trunk but behind its already-fetched origin/main.
   if [ -d "$SHARED" ] && git -C "$SHARED" rev-parse --git-dir >/dev/null 2>&1; then
@@ -166,7 +209,9 @@ render_block() {
       dscript="$DEPLOY_SCRIPT"
       [ -e "$dscript" ] || dscript="$SHARED/scripts/deploy-live.sh"
       # green-stamp-gated deploy (never a raw pull — that ships whatever is on origin, verified or not)
-      [ "$behind" -gt 0 ] && printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\n' \
+      # Field 4 = the STEM: a short human name for this step, used by the collapse line so it can
+      # say WHICH runnable steps cc-do covers without pasting three full command lines.
+      [ "$behind" -gt 0 ] && printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\tdeploy-live\n' \
         "$(tildify "$dscript")" "$behind" "$sbr" >> "$steps_file"
     fi
   fi
@@ -180,19 +225,27 @@ render_block() {
   #     for it anyway — and it is exactly the right one: a CONFIRM-gated script does real work
   #     (cp + lint + bootstrap), a plain one prints instructions. Measured 2026-07-29: 9 of 12
   #     pending were CONFIRM-gated. Effect-bearing first.
-  local f disp pre act_c="" act_p=""
+  local f disp pre act_c="" act_p="" stem aline
   if [ -d "$ACT_DIR" ]; then
     for f in "$ACT_DIR"/*.sh; do
       [ -f "$f" ] || continue
       [ -f "$f.done" ] && continue
       disp="$(tildify "$f")"; pre=""
+      stem="$(basename "$f" .sh)"
       grep -q 'CONFIRM' "$f" 2>/dev/null && pre="CONFIRM=1 "
+      # THE WRAPPING CULPRIT (operator screenshot 2026-07-31): `CONFIRM=1 bash <path> && touch
+      # <path>.done` names the same 60-char path TWICE and wrapped to four terminal lines per step —
+      # nine of them made the close a grey wall. `cc-do <stem>` is the identical action (CONFIRM=1,
+      # run, touch .done only on exit 0) in one short line. Emitted only when cc-do RESOLVES; the
+      # long form still renders on a machine that lacks it, because it is the form that works there.
+      if [ -n "$CC_DO" ]; then aline="cc-do ${stem}   [activation]"
+      else                     aline="${pre}bash ${disp} && touch ${disp}.done   [activation]"; fi
       if [ "$CBUDGET" = off ]; then       # legacy: glob order, one stream
-        act_c="${act_c}activation${TABC}▶${TABC}${pre}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+        act_c="${act_c}activation${TABC}▶${TABC}${aline}${TABC}${stem}"$'\n'
       elif [ -n "$pre" ]; then
-        act_c="${act_c}activation${TABC}▶${TABC}${pre}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+        act_c="${act_c}activation${TABC}▶${TABC}${aline}${TABC}${stem}"$'\n'
       else
-        act_p="${act_p}activation${TABC}▶${TABC}bash ${disp} && touch ${disp}.done   [activation]"$'\n'
+        act_p="${act_p}activation${TABC}▶${TABC}${aline}${TABC}${stem}"$'\n'
       fi
     done
     [ -n "$act_c$act_p" ] && printf '%s' "$act_c$act_p" >> "$steps_file"
@@ -233,9 +286,12 @@ render_block() {
         # the packet is EVIDENCE — label the row with the class it actually carries, never the class
         # this leg folded it in as, so the id still reconciles with `cc-decide list --all`
         | (.class // "?") as $cls
-        | (if $run != ""      then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]"
-           elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]"
-           else "decision\t◆\t[decision \($cls) \($id8)] \($sent)" end) as $line
+        # Field 4 = the id, so the COLLAPSE line can name the packets it counts. `cc-decide veto`
+        # resolves an EXACT id, so a counted line that dropped the ids would leave the operator
+        # nothing to paste — the same round-trip defect the 8-char slice caused.
+        | (if $run != ""      then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
+           elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
+           else "decision\t◆\t[decision \($cls) \($id8)] \($sent)\t\($id8)" end) as $line
         | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
     done | sort | cut -f2- >> "$steps_file"
   fi
@@ -253,8 +309,8 @@ render_block() {
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
       | (.run // .run_command // "" | gsub("[\n\t]"; " ")) as $run
-      | if $run != "" then "backlog\t▶\t\($run)   [backlog \(.id // "?"): \($t)]"
-        else "backlog\t◆\t[backlog \(.id // "?")] \($t) — needs: \($n)" end' 2>/dev/null >> "$steps_file"
+      | if $run != "" then "backlog\t▶\t\($run)   [backlog \(.id // "?"): \($t)]\t\(.id // "?")"
+        else "backlog\t◆\t[backlog \(.id // "?")] \($t) — needs: \($n)\t\(.id // "?")" end' 2>/dev/null >> "$steps_file"
   fi
 
   # 5 · open-queue visibility (operator crux 2026-07-25: "we are just sitting here on todo items…
@@ -275,7 +331,10 @@ render_block() {
       | jq --arg p "$q_proj" '[ .[]? | select(.status=="open" and .project==$p) ] | length' \
           2>/dev/null || echo 0)"
     case "$Q_N" in ''|*[!0-9]*) Q_N=0 ;; esac
-    [ "$Q_N" -gt 0 ] && q_line="queue: ${Q_N} open (${q_proj}) — cc-dispatch auto-drains · cc-backlog list --open --project ${q_proj}"
+    # NO listing command here: open items are the DISPATCHER's work, not operator steps, and this
+    # token was the longest on the footer — the one that wrapped it to a second row. `board:
+    # cc-blockers` (appended below) already reaches them.
+    [ "$Q_N" -gt 0 ] && q_line="queue: ${Q_N} open (${q_proj}) — cc-dispatch auto-drains"
   fi
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
@@ -351,12 +410,12 @@ render_block() {
   # The output is bounded BY CONSTRUCTION, not by a magic number: <= MAX itemized + one rollup per
   # class = MAX + 4 lines worst case. MAX's meaning narrows from "total lines" to "itemized lines".
   # Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer exactly.
-  local total=0 cls mark text
+  local total=0 cls mark text stem
   local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0
   # PASS 1 — count per class. Fork-free: a `< file` redirect is not a fork, and this REPLACES the
   # `grep -c .` that used to compute the total, so the class budget costs one fork LESS than the
   # flat renderer it supersedes (C19: no new fork may enter render_block).
-  while IFS="$TABC" read -r cls mark text; do
+  while IFS="$TABC" read -r cls mark text stem; do
     [ -n "$mark" ] || continue
     total=$((total + 1))
     case "$cls" in
@@ -403,6 +462,61 @@ render_block() {
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
+  # ── COLLAPSE (default) ───────────────────────────────────────────────────────────────────────
+  # The class budget below solved starvation; it did not solve VOLUME. Measured on the operator's
+  # own close 2026-07-31: 204 steps rendered 9 numbered lines, of which the activation lines wrapped
+  # to four terminal lines each — ~25 visual lines of grey with no single thing to paste. Counting a
+  # class is not hiding it: every class stays NAMED, COUNTED, and reachable by its own command, which
+  # is exactly the I10 guarantee, while the operator gets ONE verb.
+  #   runnable (deploy + activation) → one `▶ cc-do` line naming up to 3 stems
+  #   judgment (decision, backlog)   → one `◆ <n> …` counted line each, carrying its listing command
+  # A class holding exactly ONE item is still itemised: one specific line costs nothing and says
+  # strictly more than "1 decision". `cc-do --list` itemises everything, always.
+  if [ "$CBUDGET" = collapse ]; then
+    local runnable=$(( c_deploy + c_activation )) stems="" sc=0 cn=0 c2 rcmd clabel
+    if [ "$runnable" -eq 1 ]; then
+      while IFS="$TABC" read -r cls mark text stem; do
+        case "$cls" in deploy|activation) printf ' %s %s\n' "$mark" "$text" ;; esac
+      done < "$steps_file"
+    elif [ "$runnable" -gt 1 ]; then
+      while IFS="$TABC" read -r cls mark text stem; do
+        case "$cls" in
+          deploy|activation)
+            sc=$((sc + 1))
+            [ "$sc" -le 3 ] && [ -n "$stem" ] && stems="${stems:+$stems · }${stem}" ;;
+        esac
+      done < "$steps_file"
+      [ "$runnable" -gt 3 ] && stems="${stems} +$((runnable - 3))"
+      printf ' ▶ %s   [%s runnable: %s]\n' "$CC_DO" "$runnable" "$stems"
+    fi
+    for cls in decision backlog; do
+      case "$cls" in
+        decision) cn="$c_decision"; rcmd='cc-decide list --open';     clabel="decisions" ;;
+        backlog)  cn="$c_backlog";  rcmd='cc-backlog list --blocked'; clabel="blocked backlog" ;;
+      esac
+      [ "$cn" -gt 0 ] || continue
+      if [ "$cn" -eq 1 ]; then
+        while IFS="$TABC" read -r c2 mark text stem; do
+          [ "$c2" = "$cls" ] && printf ' %s %s\n' "$mark" "$text"
+        done < "$steps_file"
+      else
+        # Name the ids it counts, up to 3. `cc-decide veto` / `cc-backlog` resolve an EXACT id, so a
+        # bare count would leave nothing to paste — the round-trip defect the 8-char slice caused,
+        # re-introduced by collapsing. Beyond 3 the listing command is the honest pointer.
+        stems=""; sc=0
+        while IFS="$TABC" read -r c2 mark text stem; do
+          [ "$c2" = "$cls" ] || continue
+          sc=$((sc + 1))
+          [ "$sc" -le 3 ] && [ -n "$stem" ] && stems="${stems:+$stems · }${stem}"
+        done < "$steps_file"
+        [ "$cn" -gt 3 ] && stems="${stems} +$((cn - 3))"
+        printf ' ◆ %s %s — your call: %s   %s\n' "$cn" "$clabel" "$stems" "$rcmd"
+      fi
+    done
+    rm -f "$steps_file"
+    shown="$total"
+  else
+
   local n=0 alloc pc=0 last_cls="" rest rcmd rtot
   # close_class — the COMPLETENESS guarantee. Emits at most one `▸` rollup for whatever the class
   # could not itemize, carrying the exact command that LISTS the rest. `▸` is deliberately a third
@@ -430,7 +544,7 @@ render_block() {
     printf ' %d ↳ %s   [+%s more %s]\n' "$n" "${rcmd:-cc-blockers}" "$rest" "$1"
   }
 
-  while IFS="$TABC" read -r cls mark text; do
+  while IFS="$TABC" read -r cls mark text stem; do
     [ -n "$mark" ] || continue
     if [ "$cls" != "$last_cls" ]; then
       [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
@@ -451,6 +565,7 @@ render_block() {
   done < "$steps_file"
   [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
   rm -f "$steps_file"
+  fi   # ── end CBUDGET collapse / itemise branch ──
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
