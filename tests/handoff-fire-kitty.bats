@@ -102,6 +102,7 @@ printf '%s\n' "$*" >> "$ILOG"
 exit 0
 FAKE
   chmod +x "$SHIM"
+  # shellcheck disable=SC2034  # consumed by the eval-extracted as_write, which shellcheck cannot see
   REAL_IT2="$SHIM"
 
   # it2py's fallthrough interpreter (the `frontapp` verb must still reach it, unchanged).
@@ -340,7 +341,9 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 }
 
 @test "spawn_frontmost on iTerm2 still goes to osascript — kitty is never consulted" {
-  pin_iterm2; FOLLOW=1
+  pin_iterm2
+  # shellcheck disable=SC2034  # read by the eval-extracted spawn_frontmost, not by this file
+  FOLLOW=1
   export KFAKE_OSA_OUT="ABC-DEF"
   run spawn_frontmost
   [ "$output" = "ABC-DEF" ]

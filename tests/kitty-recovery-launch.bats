@@ -191,7 +191,14 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
 # Sourcing the poller whole is not an option (it polls and can fire resumes), so the spawn seam is
 # extracted exactly as tests/kitty-divert-real-it2.bats extracts its subject.
 load_spawn_gui() {
-  LRP_TIMEOUT_BIN=""; LRP_TIMEOUT_S=5      # lrp_bounded degrades to a direct call, still bounded-shaped
+  # lrp_bounded degrades to a direct call, still bounded-shaped. Split onto separate lines because a
+  # ShellCheck directive applies to the NEXT COMMAND only — on `A=1; B=2` it would cover A and not B.
+  # (Capitalised deliberately: a comment whose first word is the lowercase tool name parses as a
+  # MALFORMED DIRECTIVE and aborts analysis of the whole file, so nothing in it is checked at all.)
+  # shellcheck disable=SC2034  # read by the eval-extracted lrp_bounded below
+  LRP_TIMEOUT_BIN=""
+  # shellcheck disable=SC2034  # read by the eval-extracted lrp_bounded below
+  LRP_TIMEOUT_S=5
   eval "$(sed -n '/^lrp_bounded() {/,/^}/p' "$POLLER")"
   eval "$(sed -n '/^lrp_kitty() {/,/^}/p' "$POLLER")"
   eval "$(sed -n '/^spawn_gui() {/,/^}/p' "$POLLER")"
