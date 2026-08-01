@@ -6,6 +6,13 @@
 # TMPDIR is pointed at the bats temp dir so the materialized prompt COPIES auto-clean.
 
 setup() {
+  # M11 pins — see fire-autonomy.bats. The "--launcher makes this fully side-effect-free"
+  # note above was true of iTerm2/git/accounts but NOT of the capacity gate, which sits
+  # upstream of all of them: at load 41.72/10 cores this suite went 8-of-9 RED on a
+  # pristine tree. It also went GREEN once in three runs on the same tree, so the
+  # failure presents as flake — a single green run is NOT evidence of health here.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   PF="$BATS_TEST_TMPDIR/prompt.md"
