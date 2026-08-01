@@ -224,12 +224,31 @@ while IFS= read -r ca_ln || [ -n "$ca_ln" ]; do
   d2=1; break
 done <<< "$MSG"
 
+# QUOTED SPANS ARE MENTION, NOT USE — FP found 2026-08-01 by this hook firing on the very close
+# that shipped it. D1 and D4 match PROSE: a close that QUOTES a defect is discussing it, not
+# committing it. That close carried a table of the operator's own examples — "two things remain
+# yours" and "Say the word and I'll pick up either" — and both matched, so the guard convicted the
+# change that fixes the thing it names. That is the denylist-blocks-its-own-fix class (MEMORY.md
+# denylist-enumerates-spellings: the same family of guard once denied the commit message describing
+# its own rule). Not hypothetical here — every future review, doc or post-mortem of these four
+# defects re-triggers it, and each costs exactly the round-trip this arm exists to remove.
+#
+# So D1/D4 match a view with backtick, ASCII-double-quoted and curly-quoted spans REMOVED. D2
+# already did this for inline-backtick command mentions; this extends the same rule to the two
+# prose arms. It cannot launder a REAL handoff: a genuine "two things remain yours" is written as
+# a bare statement — wrapping it in quotes is precisely what marks it as a citation.
+# D3 is deliberately NOT stripped: it scopes to line 1, where a quoted verdict is still the verdict.
+# shellcheck disable=SC2016  # the backticks are LITERAL markdown being stripped, not a subshell —
+# single quotes are exactly right here, and double-quoting would make shellcheck's suggestion true.
+MSG_UNQ="$(printf '%s' "$MSG" | sed -E 's/`[^`]*`//g; s/"[^"]*"//g; s/“[^“”]*”//g' 2>/dev/null || true)"
+[ -n "$MSG_UNQ" ] || MSG_UNQ="$MSG"     # a strip that ate everything ⇒ fall back, never a silent 0
+
 # D1 — the close hands the operator work in a sentence, and nothing on disk records it.
 #   The disk oracle is `cc-backlog list --blocked --json` filtered on THIS session: a peer-filed
 #   `cc-backlog needs "<step>"` lands a blocked item carrying `.session`, and THAT is what
 #   operator-readout.sh can render. Any failure to read ⇒ cannot tell ⇒ d1 stays 0 (fail-open).
 CA_HANDOFF='remains? yours|are yours|is yours|on your (end|side)|you.?ll need to|you will need to|requires your|needs your|still needs (a|the|your|to be)|left (to|for) you|for you to (run|do)|keep an eye on|worth (watching|keeping)|i.?d recommend you|up to you|your call to|manual step'
-if printf '%s' "$MSG" | grep -iqE "$CA_HANDOFF"; then
+if printf '%s' "$MSG_UNQ" | grep -iqE "$CA_HANDOFF"; then
   CCB="${CC_BACKLOG_BIN:-}"
   if [ -z "$CCB" ]; then
     for cand in "$(dirname "$0")/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
@@ -274,8 +293,11 @@ fi
 #   remaining work ("let me know if you hit anything") cannot fire.
 CA_OFFER='say the word|if you want (me|a|another)|want me to|shall i|let me know if you.?d? ?(like|want)|happy to (pick|take|go|proceed|do|continue)|i can pick (it|these|either) up|clean stopping point|otherwise (this|that) is a|for a next (thread|session)|if you.?d? ?like me to|ready when you are'
 CA_WORKLEFT='^[[:space:]]*([-*+•]|[0-9]+[.)])[[:space:]]+|remaining|parked|stranded|still open|not done|left to do|next thread|older frozen dod|unlanded|outstanding'
-if printf '%s' "$MSG" | grep -iqE "$CA_OFFER"; then
-  ca_rest="$(printf '%s' "$MSG" | grep -ivE "$CA_OFFER" || true)"
+# Both halves read the quote-stripped view (see QUOTED SPANS above): a close QUOTING an offer is
+# citing the defect, not making one. Stripping before the (b) pass matters as much as before (a) —
+# a cited bullet list of someone else's remaining work is not this session's remaining work.
+if printf '%s' "$MSG_UNQ" | grep -iqE "$CA_OFFER"; then
+  ca_rest="$(printf '%s' "$MSG_UNQ" | grep -ivE "$CA_OFFER" || true)"
   printf '%s' "$ca_rest" | grep -iqE "$CA_WORKLEFT" && d4=1
 fi
 
