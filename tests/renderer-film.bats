@@ -33,6 +33,13 @@ setup() {
   touch "$BIN"
 
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
+
+  # 🚨 EVERY invocation below passes --out into this directory, and that is not tidiness. The
+  # harness defaults --out to the REPO's assets/demo, so while RED-proving the lock guard — with the
+  # guard deliberately broken — a test spawned a real 2-pane kitty window and wrote a measurement
+  # row into the working tree. A suite must stay hermetic against the code under test being WRONG,
+  # which is the only state it is ever run in on purpose.
+  mkdir -p "$BATS_TEST_TMPDIR/out"
 }
 
 # Stub ioreg so the lock state is a test INPUT rather than whatever the machine happens to be doing.
@@ -70,7 +77,7 @@ EOF
   # pipefail promotes the producer's status — so the probe read FALSE on a MATCH. Verified by hand
   # in a shell WITHOUT pipefail, where it read true, which is what made it look correct.
   stub_ioreg Yes
-  run "$FILM" --app kitty --panes 2 --seconds 2
+  run "$FILM" --app kitty --panes 2 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 9 ]
   [[ "$output" == *"verdict=LOCKED"* ]]
   # It must refuse BEFORE creating panes: 18 repainting panes on a machine that cannot draw them is
@@ -82,7 +89,7 @@ EOF
   # Without this, a screen_locked() that returned true unconditionally would pass the test above and
   # nothing would ever film again. The unknown app makes it exit early with a different code.
   stub_ioreg No
-  run "$FILM" --app NoSuchTerminal9731 --panes 2 --seconds 2
+  run "$FILM" --app NoSuchTerminal9731 --panes 2 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
   [[ "$output" != *"verdict=LOCKED"* ]]
   [ "$status" -eq 2 ]
 }
@@ -91,7 +98,7 @@ EOF
 
 @test "film: refuses to add 18 repainting panes to an already-loaded box" {
   stub_ioreg No
-  FILM_MAXLOAD=0 run "$FILM" --app kitty --panes 18 --seconds 2
+  FILM_MAXLOAD=0 run "$FILM" --app kitty --panes 18 --seconds 2 --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 4 ]
   [[ "$output" == *"verdict=REFUSED"* ]]
   [[ "$output" != *"spawned"* ]]
@@ -157,7 +164,7 @@ EOF
 
 @test "film: an unknown app is rejected rather than filmed as something else" {
   stub_ioreg No
-  run "$FILM" --app definitely-not-a-terminal
+  run "$FILM" --app definitely-not-a-terminal --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 2 ]
 }
 
