@@ -360,7 +360,7 @@ DROP X"), never "probably fine".
 
 **The readout** — emit at every write-turn close; **suppress on read-only turns**. Default = **ONE
 line**: the governing state (Pyramid, answer-first), from live reads not memory. Pick the worst-open
-rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposition row above (the map stays MECE):
+rung (priority **⛔ > 📤 > 🔧 > 📦 > 👤 > ✅**); each is exactly one disposition row above (the map stays MECE):
 
 | State | = disposition row | One-line readout |
 |---|---|---|
@@ -368,10 +368,17 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > ✅**); each is exactly one disposit
 | 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — recycling / handing off.` (three dispositions below) |
 | 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
 | 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, on a branch only — /ship to land it (else lost).` |
+| 👤 **Yours** | agent side complete AND landed, but operator-only step(s) THIS SESSION filed are unrun | `👤 My side is done & landed — N step(s) need you; see the OPERATOR block.` |
 | ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — safe to close, nothing unsaved.` |
 | _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield |
 
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
+`👤` vs `✅` is the second one (*mine done ≠ yours done*), added 2026-08-01 after a close read
+`✅ Complete & live on trunk` at line 1 and revealed "two things remain yours" in its second-to-last
+paragraph. The operator had already decided to close at line 1. **`👤` counts only steps THIS SESSION
+filed** — never the machine's standing pile of pending activations and blocked backlog, which has its
+own home in the `operator-readout.sh` counted `◆` line. A rung that fired on 200 standing items would
+fire at every close forever and carry exactly as many bits as one that never fires.
 Mixed turn → show the worst-open rung only.
 
 **Only ⛔ and 📦-in-reso may end a turn holding work.** Everything else the agent drives:
@@ -412,7 +419,8 @@ Mixed turn → show the worst-open rung only.
   remainder 0 · no operator step this session created left unrun. Any one unknown ⇒ not ✅; say
   which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
   diff green + content-verified land* is the standard — waiting on a trunk-wide stamp you do not
-  control is not diligence, it is a hang.
+  control is not diligence, it is a hang. The "no operator step left unrun" clause is no longer
+  prose discipline: file each one (below) and `wrap-ledger.sh` computes `👤` instead of `✅` for you.
 
 **The close message — pyramid-lite, hard-capped.** The operator reads a close to make exactly ONE
 decision. Anything that does not change that decision belongs in the commit message, the plan file,
@@ -425,6 +433,12 @@ or nowhere — a close needing paragraphs has buried its own decision point. Cap
    *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it must
    **summarise the level below it** (pyramid rule 1) — so it partitions along the groupings that
    actually follow, never a total that conflates them.
+   🚨 **ONE rung, UNHEDGED — line 1 answers "is it safe to close?" with no qualifier riding along.**
+   *"Yes — with one thing still parked"* asserts and withdraws in the same sentence, and it cost a
+   full round-trip: the operator had to ask *"so you want me to run the command or want me to
+   close?"*, and the answer turned out to be *"Close. Ignore the command — that was me hedging on a
+   yes/no question."* If something is parked or is the operator's, **that IS the rung** (`📦` / `👤`);
+   if it is immaterial, it does not appear in line 1 at all. Never both.
 2. **≤3 supporting lines**, each a fact that *changes what the operator does* (a gate verdict, a
    named blocker, the landed sha). Not a tour of the work; `git log` holds that. (≤3 is the mind's
    limit, Ch 6 p. 78 — aim 4–5 per grouping, never 7+.)
@@ -437,6 +451,32 @@ or nowhere — a close needing paragraphs has buried its own decision point. Cap
 state · what it means · what to do — inside 30 seconds, the close has FAILED. And the defect is in
 the ideas, not the wording (Ch 1 p. 11): restructure it, do not polish it.
 
+🚨 **Three dispositions, never a fourth. "Say the word" is not a disposition.** Every open item a
+close names resolves to exactly one of:
+
+| | Disposition | What it looks like in the close |
+|---|---|---|
+| **DRIVEN** | you did it this turn | it is in the ≤3 supporting lines, past tense, with its evidence |
+| **FILED** | it is in a store, so a renderer surfaces it | `cc-backlog needs "<step>"` for an operator-only step (`--run "<cmd>"` when one exists) · `cc-backlog add` for agent work. It then renders as ONE counted line in the `OPERATOR ▸` block — never as your prose |
+| **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS your line-1 rung (`⛔`), stated as the one decision you need |
+
+**Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job
+is not done until the job is done."* A close that names researched, in-scope remaining work and then
+says *"say the word and I'll pick up either; otherwise this is a clean stopping point"* has spent a
+round-trip to learn something already settled — the Follow-On Gate (F1-F4) authorised it before you
+asked, and re-asking an F1-F4 PASS is deference-fishing. **Drive it, or file it.** The corollary
+binds the operator's side too: they should never have to ask *"good to close?"*, because the close
+already answered it in line 1.
+
+**Operator-owned steps are FILED, never prosed.** `operator-readout.sh` renders the close block by
+construction from disk truth — but it can only render what a store holds. A step you discovered
+*this session* ("authenticate X in /mcp", "restart Cursor") exists in no store until you file it, so
+it can only be prose, and prose is exactly where it gets buried. File it the moment you discover it;
+`wrap-ledger.sh` then counts it into the `👤` rung and line 1 tells the operator before they close.
+The test for filing rather than doing is unchanged and strict: file it only if **you genuinely
+cannot** — credentials, a GUI-only action, something physical, or a value judgment that is theirs.
+An operator-only step is not an escape hatch from work you could have done.
+
 **Manual steps are rendered by construction (silver-platter close) and collapse to ONE COMMAND.**
 When operator-owned steps exist on disk (deploy-lag · pending activations · open class-C decisions ·
 blocked backlog) or work sits 📦-parked, the `operator-readout.sh` Stop hook renders the block from
@@ -447,16 +487,24 @@ Two rules bind your prose:
 - **Relay, never paraphrase.** Lead with the same governing line and reproduce any rendered command
   verbatim — never dissolve it back into a sentence (the Silver-Platter rule).
 - **ONE command, never a list.** Give the operator exactly one thing to select and paste, in its own
-  fenced block **tagged `bash`** — ` ```bash `, never a bare ` ``` `. The tag is what makes the TUI
-  syntax-highlight it, and that highlighting is the only thing that makes the one runnable line pop
-  out of a close made of prose (operator directive 2026-08-01). A bare fence renders as flat
-  undifferentiated text — the operator then has to *find* the command before they can run it, which
-  is the same defect as burying it in a sentence, one step less severe. Multiple runnable steps
-  collapse to **`cc-do`** — the driver that prints them,
+  fenced block **tagged `bash`** — ` ```bash `, never a bare ` ``` ` and never a naked line in a
+  paragraph. The tag is what makes the TUI syntax-highlight it, and that highlighting is the only
+  thing that makes the one runnable line pop out of a close made of prose (operator directive
+  2026-08-01). A bare fence renders as flat undifferentiated text, and the operator then has to
+  *find* the command before they can run it — the same defect as burying it in a sentence, one step
+  less severe. Their words: *"I had to comb through the entire return body to fish out which is the
+  command to copy and paste and not just more paragraph text."*
+  Multiple runnable steps collapse to **`cc-do`** — the driver that prints them,
   confirms once, and runs them in irreversibility order (`cc-do --list` to look first, `cc-do <stem>`
   for exactly one). Judgment items are counted, not itemized. A numbered wall of commands that wrap
   four lines each is the defect this replaced — it is unreadable in a terminal and unpasteable
   besides.
+- **Every command shown carries a run / don't-run verdict — and at a close there is only one verdict.**
+  A fenced command means *run this*. If you would tell the operator to ignore it, **it does not
+  appear at all** — not fenced, not bare. (One close showed a command, then had to follow up with
+  "Ignore the command"; another trailed a command with "which is the main reason I'd leave it",
+  leaving the operator unable to tell a recommendation from an instruction.) Reference-only commands
+  stay in inline backticks, mid-sentence, never on their own line — and never in the closing block.
 
 **Opt-in detail** (`/wrap --full` / on request) appends the dense per-field ledger — never the default:
 
