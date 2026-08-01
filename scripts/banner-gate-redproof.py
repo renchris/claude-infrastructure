@@ -83,6 +83,14 @@ def sandbox():
         # the story table and the ratified set, both mutated by the story cases below
         "BEAT_STORY",
         "ALWAYS_EMITTED",
+        # THE SUMMONING's prop geometry and ink, mutated by the four prop cases. Listed even though
+        # those cases are currently last: "last" is a property of the file's ordering, not of the
+        # sabotage, and this list going stale is the documented way one case comes to fail on
+        # another's damage.
+        "HAT_CROWN_H",
+        "HAT_BRIM_W",
+        "WAND_CELLS",
+        "PROP_INK",
     ]
     saved = {n: copy.deepcopy(getattr(g, n)) for n in names}
     try:
@@ -476,6 +484,40 @@ def _story_sky_with_mechanism():
     # The sky beats' entire placement rule — late and rare, inverted from every narrative beat — is
     # justified by them saying nothing about the system, so a mechanism here is a kind error.
     g.BEAT_STORY["rShoot"] = dict(g.BEAT_STORY["rShoot"], mechanism="bin/cc-backlog")
+    g.build(v())
+
+
+# ── the magician's props ───────────────────────────────────────────────────────────────────────
+# These four exist because the gate they replaced was the purest form of the defect this suite is
+# for: it recomputed the hat's crown top from a one-cell literal and asserted that value was not more
+# than one cell up, i.e. it compared a number to itself. It could not fire in either direction, and
+# it duly reported a green build for as long as the crown was two cells tall. A gate over the props
+# is worth having only if sabotaging each prop makes it speak, so each one is sabotaged here.
+@case("prop: a hat crown tall enough to reach the type", "inside the one cell of air")
+def _hat_too_tall():
+    g.HAT_CROWN_H = 4
+    g.build(v())
+
+
+@case("prop: a brim that does not overhang the head", "does not overhang the head")
+def _brim_too_narrow():
+    g.HAT_BRIM_W = 9
+    g.build(v())
+
+
+@case("prop: a wand long enough to touch what it summons", "within a cell of B's left")
+def _wand_reaches_b():
+    # v6a is the variant that emits THE SUMMONING with the tightest plate, so the sabotage has to be
+    # a real overrun rather than a number that only fails on a generous layout.
+    g.WAND_CELLS = 9
+    g.build(v())
+
+
+@case("prop: a hatband invisible against the crown it is on", "under the 3.0:1 floor")
+def _band_no_contrast():
+    # The measured shape of the shipped defect, aimed at the band instead of the tip: ink a shade off
+    # the thing it sits on. `l.fg` on `l.rule` was 1.2:1 and the wand had no tip in daylight.
+    g.PROP_INK = "#7d6a76"
     g.build(v())
 
 

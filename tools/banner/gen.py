@@ -231,6 +231,19 @@ def seed_of(name: str) -> int:
     return zlib.crc32(name.encode("utf-8")) & 0xFFFFFFFF
 
 
+def _luminance(hexc: str) -> float:
+    """WCAG relative luminance of a `#rrggbb` string."""
+    r, g, b = (int(hexc[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio, 1..21."""
+    la, lb = _luminance(a), _luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
 def in_keepout(x: float, y: float, pad: float = 0) -> bool:
     x0, y0, x1, y1 = KEEPOUT
     return (x0 - pad) <= x <= (x1 + pad) and (y0 - pad) <= y <= (y1 + pad)
@@ -663,6 +676,11 @@ def assert_every_beat_tells_a_story(art: Art) -> None:
 BEAT_INK: dict[str, tuple[tuple[float, str], ...]] = {
     "rSummon": (
         (4.8, ".smHat,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smCake,.smHeld"),
+        # The wand and its sparkle need their OWN probe and it cannot be the 4.8 s one: the wand is
+        # put away at 2.2 s into the window and the sparkle lives for 0.38 s around the flick, so a
+        # single probe covering the beat's long-lived props would have said nothing about either.
+        # This is the meteor's lesson again — one probe on the head passed over the missing train.
+        (0.75, ".smWand,.smWandSpk"),
     ),
     "rRefuse": ((2.5, ".rfBar"),),
     "rAsk": ((3.0, ".eyesAsk,.armsAlert"),),
@@ -3578,6 +3596,44 @@ def ground_detail(art: Art) -> str:
     return "".join(out)
 
 
+# ── THE SUMMONING's two props, as geometry a gate can read ────────────────────────────────────────
+# Everything is in SPRITE CELLS, declared HERE because the emitter and `assert_summon_geometry` both
+# read it. The previous version of that gate did not: it recomputed the crown's top from a hardcoded
+# `a_top - CELL * scale` and then asserted that value was not more than one cell above `a_top`, which
+# is the same number on both sides of the comparison. It was true by construction, could not fail,
+# and went on passing while the crown was two cells tall — a checker holding its own stale copy of
+# its subject's geometry, which is a defect this repo has now paid for more than once.
+HAT_CROWN_W, HAT_CROWN_H = (
+    5,
+    3,
+)  # the crown: TALL, and narrower than the brim. Both are the read.
+HAT_BAND_H = 1  # the hatband — the crown's bottom row, in the contrasting band colour
+HAT_BRIM_W, HAT_BRIM_H = 11, 1
+HAT_CROWN_X = (11 - HAT_CROWN_W) / 2  # centred on the sprite's own 11-cell grid
+HAT_BRIM_X = (11 - HAT_BRIM_W) / 2
+# The wand, left to right: [ferrule][rod][rod][tip]. Four cells starting at the right arm's own
+# column, so it is HELD rather than floating.
+WAND_X, WAND_ROW = 11, 2
+WAND_ROD_CELLS = 2
+WAND_CELLS = WAND_ROD_CELLS + 2  # the two tips
+# The cast's own sparkle, off the TIP: (x, y, size) in cells, authored at the wand's REST offset —
+# `wand_css` lifts the whole group half a cell at the flick, which is where these are seen, so the
+# floor check in `assert_summon_geometry` subtracts that lift rather than trusting the authored y.
+# Sub-cell on purpose. The one-cell legibility floor governs a feature that has to carry a read BY
+# ITSELF — the barrier that shipped at a third of it read as a scratch on the render. These are an
+# accent on a prop already a full cell thick, and they are the same sizes as the cheer's own sparks.
+WAND_SPARKS = ((15.2, 2.0, 0.6), (15.0, 3.2, 0.5), (15.5, 2.7, 0.45))
+# The hatband is scheme-INDEPENDENT and the wand's TIPS are not, and the split is this file's own
+# palette rule — ink is coloured by WHAT IT SITS ON. The band sits entirely on the crown, i.e. on
+# `rule`, and every theme already picks `rule` to read against its own sky, so one near-black serves
+# all eight themes and the hat is the same object at dusk as at dawn. The wand's tips are silhouetted
+# against the SKY on both sides of the rod, so they invert with it like every other sky-borne prop.
+# The contrast that decides whether either is SEEN is against `rule` in both cases — the band's
+# background and the tips' own rod — and the gate measures exactly that, per theme, both schemes.
+PROP_INK = "#15111c"
+PROP_CONTRAST_MIN = 3.0
+
+
 # ── clawd ─────────────────────────────────────────────────────────────────────────────────────────
 def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -> str:
     """The creature as nested single-animation groups (S8).
@@ -3686,31 +3742,66 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
 
     # THE SUMMONING's hat and wand — the two things that say MAGICIAN, and neither did.
     #
-    # THE HAT WAS A SLAB. Crown 5c x 1c over a brim 7c x 1c is 2 cells tall against 7 wide — a 1:3.5
-    # wide flat block, which is a CAP, not a top hat. Operator: "the magician hat and wand casting the
-    # spell doesn't look like a magician hat and a magician wand." A top hat is a TALL crown on a thin
-    # brim, so the crown doubles to 2c and the hat becomes 3 cells tall at a 2:1 crown:brim.
+    # THE HAT READ AS A CAP, TWICE. The first version was a 5x1 crown on a 7x1 brim; the fix doubled
+    # the crown to 5x2 and the operator's verdict on the shipped result was unchanged — "it looks like
+    # a normal hat". Rendering it at the README's own 838 px, beside candidates, says why, and neither
+    # reason was the one the first fix addressed:
     #
-    # Two cells is the CEILING, measured, not chosen: A's top edge is canvas y=314, a cell is 24 canvas
-    # px, and the wordmark keep-out ends at y=262. A 2c crown reaches y=266 and clears it by 4 px; a 3c
-    # crown reaches 242 and sits inside the type. The hat cannot be made taller without moving the
-    # creature or the title.
+    #   1. THE BRIM DID NOT OVERHANG ANYTHING. The body is nine cells wide; the brim was SEVEN. A brim
+    #      narrower than the head is not a brim — no sky shows under it, so the whole prop collapses
+    #      into one grey mass sitting on the head, which is exactly what a cap is. Eleven cells puts a
+    #      full cell PROUD of the body on each side, and that overhang is what the eye reads as "hat".
+    #   2. THE CROWN WAS STILL WIDER THAN TALL. 5 wide by 2 high is a block. Three cells is the point
+    #      at which the crown stops being a lid and starts being a stovepipe.
     #
-    # THE WAND DID NOT EXIST AT ALL. The operator was describing something they expected to see and
-    # could not find — nothing in this generator ever emitted one, so the "spell" was cast by a hat
-    # alone. It is held out from the right arm toward the plate where B will appear, and it must live
-    # in the ARM BAND: SUMMON_Y_FLOOR forbids new ink in the clear plate above y=340, which puts the
-    # floor at local y=1.08 cells, so a raised-overhead wand is not available. Held-out is also the
-    # better read — it points AT the thing it summons.
+    # THREE CELLS IS AVAILABLE, and the note that said otherwise was wrong on its own arithmetic: it
+    # claimed "the keep-out ends at y=262" when `KEEPOUT` ends at y=208, and 262 is simply where a
+    # two-cell crown happens to reach. A three-cell crown tops out at canvas y=242 and clears the
+    # keep-out box by 34 px. It is the FOURTH cell that is unavailable, and `assert_summon_geometry`
+    # now derives that from KEEPOUT instead of from prose. (The hop cannot spend the margin either:
+    # `hop_pulses` slides every hop clear of every declared beat window, so the creature is not
+    # airborne while it is wearing this.)
+    #
+    # THE HATBAND is the third cue and the cheapest — a contrasting row at the base of the crown, the
+    # one marking every top hat in the world carries. It costs no height, and it survives the render
+    # scale because it is a colour change rather than a shape detail.
+    #
+    # THE WAND WAS A STUB. Two cells of rod plus a tip, in two tones a shade apart, reads as a grey
+    # bar poking out of the body — and in the LIGHT scheme the tip was `l.fg` against `l.rule`, which
+    # is barely a tone apart at all, so there was no tip. It is now the classic silhouette: a rod
+    # TIPPED AT BOTH ENDS, four cells long, with the ferrule at the hand — plus a sparkle thrown off
+    # the tip at the instant of the flick, which is the only part of this prop that says the stick is
+    # doing something rather than being held.
+    #
+    # It stays in the ARM BAND: SUMMON_Y_FLOOR forbids new ink in the clear plate above y=340, which
+    # puts the floor at local y=1.08 cells, so a raised-overhead wand is not available. Held-out is
+    # also the better read — it points AT the thing it summons.
     hat = (
         (
             f'<g class="smHat{sfx}">'
-            f'<rect x="{3 * c}" y="{-2 * c}" width="{5 * c}" height="{2 * c}"/>'
-            f'<rect x="{2 * c}" y="0" width="{7 * c}" height="{c}"/>'
+            f'<rect x="{fmt(HAT_CROWN_X * c)}" y="{-HAT_CROWN_H * c}" '
+            f'width="{HAT_CROWN_W * c}" height="{(HAT_CROWN_H - HAT_BAND_H) * c}"/>'
+            f'<rect class="smHatBand" x="{fmt(HAT_CROWN_X * c)}" y="{-HAT_BAND_H * c}" '
+            f'width="{HAT_CROWN_W * c}" height="{HAT_BAND_H * c}"/>'
+            f'<rect x="{fmt(HAT_BRIM_X * c)}" y="0" width="{HAT_BRIM_W * c}" '
+            f'height="{HAT_BRIM_H * c}"/>'
             f"</g>"
             f'<g class="smWand{sfx}">'
-            f'<rect class="smWandS{sfx}" x="{11 * c}" y="{2 * c}" width="{2 * c}" height="{c}"/>'
-            f'<rect class="smWandT{sfx}" x="{13 * c}" y="{2 * c}" width="{c}" height="{c}"/>'
+            f'<rect class="smWandT{sfx}" x="{WAND_X * c}" y="{WAND_ROW * c}" '
+            f'width="{c}" height="{c}"/>'
+            f'<rect class="smWandS{sfx}" x="{(WAND_X + 1) * c}" y="{WAND_ROW * c}" '
+            f'width="{WAND_ROD_CELLS * c}" height="{c}"/>'
+            f'<rect class="smWandT{sfx}" x="{(WAND_X + WAND_CELLS - 1) * c}" y="{WAND_ROW * c}" '
+            f'width="{c}" height="{c}"/>'
+            # the sparkle gets its own gate INSIDE the wand's: the wand carries opacity and the flick
+            # on one animation (S8), and the spark is alive for a fraction of the wand's own life
+            f'<g class="smWandSpk{sfx}">'
+            + "".join(
+                f'<rect class="smWandT{sfx}" x="{fmt(sx * c)}" y="{fmt(sy * c)}" '
+                f'width="{fmt(ss * c)}" height="{fmt(ss * c)}"/>'
+                for sx, sy, ss in WAND_SPARKS
+            )
+            + f"</g>"
             f"</g>"
         )
         if summon
@@ -3852,6 +3943,12 @@ SM_HAT_ON, SM_HAT_OFF = 0.0, 0.9375
 # the same hand is never holding two things.
 SM_WAND_ON, SM_WAND_OFF = 0.0, 0.229
 SM_WAND_FLICK = 0.0625
+# The sparkle thrown off the tip, as its own window rather than a duration: it opens ON the flick and
+# holds 0.384 s, long enough to be caught at the README's frame rate and short enough that the wand is
+# a stick again before the letter is handed over. It is INSIDE the burst (SM_SPARK) on purpose — the
+# spark at the tip and the burst on the plate are one cause and its effect, and a reader who sees only
+# one of them still sees the other.
+SM_WAND_SPARK = (SM_WAND_FLICK, SM_WAND_FLICK + 0.04)
 SM_SPARK = (
     0.0625,
     0.198,
@@ -3980,16 +4077,64 @@ def assert_summon_clear_plate(art: Art) -> None:
             f"this beat may author in. The sky is ambient; only the resident's own silhouette goes up "
             f"there. Reduce SUMMON_B_SCALE."
         )
-    # The hat is the one exemption, and it is BOUNDED rather than waived: it may clear the body's own
-    # top edge by exactly one cell and no more. A's silhouette already reaches y=314, above the
-    # floor, so a floor cannot apply to on-creature ink — but an unbounded exemption would let the
-    # crown grow into the sky, which is the thing the floor exists to prevent.
+    # The hat is the one exemption from SUMMON_Y_FLOOR — A's own silhouette already reaches y=314,
+    # above the floor, so a floor written for the clear plate cannot apply to on-creature ink. What
+    # bounds the crown instead is THE TYPE, and this now reads the crown's real height rather than a
+    # literal: the previous form recomputed `hat_top = a_top - CELL * scale` and then asserted it was
+    # not below `a_top - u`, i.e. compared one cell against one cell. It could not fail in either
+    # direction, and it duly went on passing while the crown was two cells.
+    #
+    # The ceiling is KEEPOUT — the file's one declared "no ink here" rectangle around the wordmark —
+    # plus a cell of air, so the crown never merely grazes the box. At scale 1.2 that puts the fourth
+    # cell out of reach and the third comfortably inside it, which is the arithmetic the prose beside
+    # the emitter used to get wrong in the other direction.
     a_top = GROUND - SPRITE_H * art.clawd_scale
-    hat_top = a_top - CELL * art.clawd_scale
-    if hat_top < a_top - u - 1e-9:
+    hat_top = a_top - HAT_CROWN_H * u
+    type_floor = KEEPOUT[3] + u
+    if hat_top < type_floor:
         raise SystemExit(
-            f"gen[{art.key}]: the hat's crown reaches y={hat_top:.0f}, more than one cell above the "
-            f"body's own top edge y={a_top:.0f}"
+            f"gen[{art.key}]: the hat's {HAT_CROWN_H}-cell crown reaches y={hat_top:.0f}, inside the "
+            f"one cell of air this scene keeps under the wordmark keep-out (y={KEEPOUT[3]}, so the "
+            f"floor is y={type_floor:.0f}). A prop that grazes the type is the one thing nothing in "
+            f"this frame may do. Reduce HAT_CROWN_H."
+        )
+    # The brim is the read — a brim no wider than the head shows no sky under it and collapses into
+    # the silhouette, which is how two rounds of "it looks like a normal hat" happened. The body is
+    # nine cells wide, so anything at or under nine is not a brim.
+    if HAT_BRIM_W <= 9:
+        raise SystemExit(
+            f"gen[{art.key}]: the brim is {HAT_BRIM_W} cells against a 9-cell body, so it does not "
+            f"overhang the head at all and the hat reads as a cap. HAT_BRIM_W must exceed 9."
+        )
+    # The two DETAILS that carry the magician read — the hatband and the wand's tips — are marks ON a
+    # `rule`-coloured prop, so what decides whether they exist for the reader is their contrast with
+    # `rule` and nothing else. This is not hypothetical tidiness: the light scheme shipped a #8e7d6b
+    # tip on a #a8968a rod, 1.2:1, and every daylight reader got a wand with no tip. The same class of
+    # miss shipped a cake iced at 1.05:1 against the day sky. Measured, per theme, both schemes.
+    for scheme, theme, tip in (
+        ("dark", art.dark, art.dark.star),
+        ("light", art.light, art.light.wm),
+    ):
+        for what, ink in (("hatband", PROP_INK), ("wand tip", tip)):
+            ratio = contrast(ink, theme.rule)
+            if ratio < PROP_CONTRAST_MIN:
+                raise SystemExit(
+                    f"gen[{art.key}]: the {what} measures {ratio:.2f}:1 against the {scheme} "
+                    f"scheme's rule {theme.rule}, under the {PROP_CONTRAST_MIN}:1 floor. A mark that "
+                    f"cannot be seen against the prop it is on is not a mark, and it is the whole of "
+                    f"what makes this read as a magician's kit."
+                )
+    # ...and the wand, sparkle included, must stop a clear cell short of B. It is authored pointing
+    # AT the plate B materialises in, so it is the one prop that can grow into another creature.
+    wand_right = art.clawd_x + max(
+        (WAND_X + WAND_CELLS) * u,
+        max(sx + ss for sx, sy, ss in WAND_SPARKS) * u,
+    )
+    if wand_right > b_left - u:
+        raise SystemExit(
+            f"gen[{art.key}]: the wand's ink reaches x={wand_right:.0f}, within a cell of B's left "
+            f"edge x={b_left:.0f} — the thing that casts the spell would touch the thing it summons. "
+            f"Shorten WAND_CELLS / WAND_SPARKS, or raise SUMMON_GAP_CELLS."
         )
 
 
@@ -4353,6 +4498,11 @@ def summon_css(art: Art) -> str:
         [
             gate("smh", ".smHat", [(sm_at(SM_HAT_ON), sm_at(SM_HAT_OFF))]),
             wand_css(),
+            gate(
+                "smwk",
+                ".smWandSpk",
+                [(sm_at(SM_WAND_SPARK[0]), sm_at(SM_WAND_SPARK[1]))],
+            ),
             gate("smb", ".smPeer", [(sm_at(SM_B_ON), sm_at(SM_B_OFF))]),
             # B's idle arms off while the raised pair is up, or B shows four arms — the same defect
             # that made A's cheer read as horns, and it is no less wrong on a smaller body.
@@ -4510,7 +4660,13 @@ def css(art: Art) -> str:
         #   · the returned work reuses the letter's OWN edge class, so it needs no
         #     override at all — which is the whole reason the brief specified an icing row.
         #   · the sparkle dots land on the ground plate, so they invert with it.
-        f".smHat{{fill:{d.rule}}}.smWandS{{fill:{d.rule}}}.smWandT{{fill:{d.star}}}"
+        #   · the HATBAND lands on the crown, never on a background, so it is PROP_INK in BOTH
+        #     schemes and has no light override at all. The wand's TIPS are silhouetted against the
+        #     sky and DO invert: the light scheme used to tip the wand in `l.fg` — #8e7d6b against a
+        #     #a8968a rod, 1.2:1 — so for every daylight reader the wand simply had no tip. The
+        #     contrast gate in `assert_summon_geometry` is what makes that unrepeatable.
+        f".smHat{{fill:{d.rule}}}.smHatBand{{fill:{PROP_INK}}}"
+        f".smWandS{{fill:{d.rule}}}.smWandT{{fill:{d.star}}}"
         f".smMailE{{fill:{d.fg}}}.smMailF{{fill:#f4ead8}}"
         f".smResF{{fill:#5fa860}}"
         f".smSpk{{fill:{d.star}}}.smFlash{{fill:{d.star}}}"
@@ -4734,7 +4890,8 @@ def css(art: Art) -> str:
         # so the frozen still would otherwise show the hat on, both copies of the result at once, the letter in
         # mid-air and two bursts at rest scale. The one thing a still must never be is a frame that
         # could not occur.
-        ".smHat,.smWand,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,.smFlash{opacity:0}"
+        ".smHat,.smWand,.smWandSpk,.smPeer,.smBUp,.smSpark,.smPoof,.smMail,.smWork,.smHeld,"
+        ".smFlash{opacity:0}"
         ".smBArm{opacity:1}"
         # The barrier rests RETRACTED. `animation:none` already leaves it there (translateY(0) is its
         # un-animated base), but the still is the deliverable, so it is pinned rather than inferred —
@@ -4778,8 +4935,10 @@ def css(art: Art) -> str:
         f".tf0,.tf1{{fill:{l.tuft}}}.fgb{{fill:{l.fg}}}.fpr{{fill:{l.fg};opacity:.40}}"
         f".rfp{{fill:{l.rule};opacity:.9}}"
         f".brd{{fill:{l.mound[0]}}}.sh{{opacity:.20}}"
-        f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.fg}}}"
-        f".smHat{{fill:{l.rule}}}.smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
+        # `.smHatBand` is absent on purpose — PROP_INK sits on the crown, so it does not invert.
+        f".smWandS{{fill:{l.rule}}}.smWandT{{fill:{l.wm}}}"
+        f".smHat{{fill:{l.rule}}}"
+        f".smMailE{{fill:{l.fg}}}.smSpk{{fill:{l.fg}}}.smFlash{{fill:{l.fg}}}"
         # The cake had NO light override at all: its #f4ead8 icing measured 1.05:1 against the day
         # sky. A prop that vanishes for every daylight reader is not a prop.
         f".smResF{{fill:#3d7f42}}"
