@@ -88,6 +88,12 @@ def sandbox():
         # sabotage, and this list going stale is the documented way one case comes to fail on
         # another's damage.
         "HAT_CONE_ROWS",
+        "HAT_BUILD_STEP",
+        "HAT_STAGE_N",
+        "WAND_DRAW_STEP",
+        "WAND_DRAW_STEPS",
+        "SM_WAND_OFF",
+        "SM_HAT_OFF",
         "HAT_H",
         "HAT_BRIM_W",
         "WAND_CELLS",
@@ -524,6 +530,35 @@ def _band_no_contrast():
     # `l.rule` was 1.2:1 and the wand had no tip in daylight. Sabotaging the FUNCTION rather than a
     # constant is what the accent now is, and it is in the sandbox list for that reason.
     g.prop_accent = lambda theme, scheme: "#7d6a76"
+    g.build(v())
+
+
+# ── the entry animation's causal chain ─────────────────────────────────────────────────────────
+# All three of these fire on a defect that WAS committed while every structural gate stayed green:
+# the first cut of the build ran 0.50 s into a 0.60 s runway, so the wand was flicked before it
+# finished coming out and the burst preceded its own cause. Nothing in the file could see it.
+@case("entry: the wand is flicked before it is drawn", "out of order")
+def _entry_inverted():
+    # The exact shape of the shipped defect: a build too slow for its runway.
+    g.HAT_BUILD_STEP = 0.16
+    g.build(v())
+
+
+@case("entry: the wand is still out when the letter travels", "would hold two things")
+def _wand_overstays():
+    g.SM_WAND_OFF = 0.228  # one frame before the mail sets off
+    g.build(v())
+
+
+@case("entry: the hat's dissolve outlives its own beat", "past its window's close")
+def _hat_dissolve_overruns():
+    # Not the same as a slow build: this end is bounded by the WINDOW, not by the burst, so it needs
+    # its own case. The sabotage has to move ONLY the back end — the first attempt here raised
+    # HAT_STAGE_N, which also lengthens the build and so convicted on the front-of-chain check
+    # instead. The harness caught that by comparing the MESSAGE rather than the exit status, which is
+    # the whole reason it does. Moving the hat's exit later touches nothing else: SM_WAND_ON is
+    # derived at import from the build, so it does not follow.
+    g.SM_HAT_OFF = 0.99
     g.build(v())
 
 

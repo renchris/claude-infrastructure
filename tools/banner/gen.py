@@ -3662,6 +3662,55 @@ def prop_accent(theme: Theme, scheme: str) -> str:
 
 PROP_CONTRAST_MIN = 3.0
 
+# ── HOW THE TWO PROPS ARRIVE ──────────────────────────────────────────────────────────────────────
+# They used to be SWITCHED ON — one `steps(1,end)` opacity gate each, so a five-row hat and a
+# four-cell wand both went from absent to whole between two frames. Operator: "it cant just harsh
+# appear like that." The pop costs more here than it would anywhere else in the composition, because
+# THE SUMMONING's whole subject is a thing being CONJURED: a prop that simply exists on frame N+1
+# asserts no cause at all, and the beat is then carrying its entire meaning on the burst 0.6 s later.
+#
+# NEITHER ENTRY IS A FADE, and that is forced rather than stylistic. An interpolated opacity is a
+# colour that is not in the palette — the same rule that makes every blink in this file a hard swap
+# to a thin lid rather than a scaleY tween. So both are built from the vocabulary this file already
+# has: WHOLE-CELL STOPS held by `steps(1,end)`, which is how the letter and the returned work already
+# cross the gap.
+#
+#   THE HAT IS BUILT, one row at a time from the brim UP — the disc lands on the head, the band
+#   follows, then the cone grows to its point. Bottom-up is the direction that reads as GROWTH;
+#   top-down reads as something being lowered onto the creature, which is a different and duller
+#   sentence. The exit runs the same list backwards, so it dissolves point-first instead of
+#   vanishing — what this file used to call "the ONE plain swap" is now neither end.
+#
+#   THE WAND IS DRAWN FROM THE SLEEVE — it slides out to the right in whole cells from a start
+#   position entirely behind the body. That is why `clawd_sprite` now emits it BEFORE the body while
+#   the hat stays last: occluded, not invisible, exactly as the returned work already exits. The arm
+#   stub at column 10 is what it appears from behind, which is as close to a sleeve as this sprite
+#   has.
+#
+# THE ORDER IS A CAUSAL CHAIN, and these timings are what make it one rather than three things
+# happening at once: hat (3.40-3.80) -> wand drawn (3.80-3.98) -> FLICK + burst (4.00). Quiet, quiet,
+# LOUD. Overlapping the hat and the wand was tried first and reads as clutter — two props competing
+# for the same half second, with nothing left to tell the eye which of them caused the burst.
+# 60 ms between rows. NOT GATE_EDGE, which was the first choice and blew the budget — the burst is
+# pinned at 4.00 s and the window opens at 3.40, so the hat's build AND the wand's draw have to fit
+# inside 0.60 s. Five rows at a 0.10 s edge is 0.50 s on its own, which pushed the draw past the
+# flick and INVERTED the causal chain: the wand was flicked 0.28 s before it finished coming out.
+# Caught by `assert_prop_entry_sequence`, which exists because reading it off the render is exactly
+# the kind of 0.3 s ordering error the eye forgives and the beat does not.
+HAT_BUILD_STEP = 0.06
+# brim + band + one per cone row. DERIVED, so adding a cone row joins the build animation by
+# construction — the emitter's `hat_stages` list and this count cannot disagree.
+HAT_STAGE_N = 2 + len(HAT_CONE_ROWS)
+# The wand hides 5 cells to the left. FOUR is the minimum that clears the arm stub's right edge (the
+# wand spans columns 11..15 and the stub ends at 11); the fifth is margin, because a prop one pixel
+# short of hidden pops at its own first frame, which is the defect being fixed.
+WAND_DRAW_CELLS = 5
+WAND_DRAW_STEPS = 5  # one cell per stop
+WAND_DRAW_STEP = (
+    0.03  # s per stop — 0.15 s to clear the sleeve: a whip-out, not a reach
+)
+WAND_FLICK_HOLD = 0.12  # s the wand holds at the top of the flick before dropping back
+
 
 # ── clawd ─────────────────────────────────────────────────────────────────────────────────────────
 def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -> str:
@@ -3800,31 +3849,53 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
     # It stays in the ARM BAND: SUMMON_Y_FLOOR forbids new ink in the clear plate above y=340, which
     # puts the floor at local y=1.08 cells, so a raised-overhead wand is not available. Held-out is
     # also the better read — it points AT the thing it summons.
+    # THE HAT, AS BUILD STAGES. Each row is its own gated group so it can arrive in its own instant —
+    # bottom-up on the way in, top-down on the way out. The order of this list IS the build order, and
+    # `hat_build_css` reads its length rather than a second copy of the count, so a row added to the
+    # cone joins the animation by construction instead of by anyone remembering to.
+    #
+    # `.smHat` itself carries NO animation now: it is the container the reduced-motion still and
+    # emotes.py's reset already target, and the stages inside it are what move. That also keeps the
+    # one-animation-per-element rule (S8) true without a wrapper.
+    brim = (
+        f'<rect x="{fmt((11 - HAT_BRIM_W) / 2 * c)}" y="0" width="{HAT_BRIM_W * c}" '
+        f'height="{HAT_BRIM_H * c}"/>'
+        # the brim's drooping ends. They sit a row BELOW the brim, over sky rather than over the
+        # body — row 0 of the sprite is only 1..10, so these two columns are open at this height
+        # — which is what lets a flat plank read as a brim that curves.
+        + "".join(
+            f'<rect x="{fmt(x * c)}" y="{HAT_BRIM_H * c}" '
+            f'width="{HAT_BRIM_DROOP * c}" height="{c}"/>'
+            for x in ((11 - HAT_BRIM_W) / 2, (11 + HAT_BRIM_W) / 2 - HAT_BRIM_DROOP)
+        )
+    )
+    band = (
+        f'<rect class="smHatBand" x="{fmt((11 - HAT_BAND_W) / 2 * c)}" y="{-c}" '
+        f'width="{HAT_BAND_W * c}" height="{c}"/>'
+    )
+    # the cone, point first in the source; REVERSED here so the stages run widest-first, i.e. upward
+    cone = [
+        f'<rect x="{fmt((11 - w) / 2 * c)}" y="{-(HAT_H - i) * c}" '
+        f'width="{w * c}" height="{c}"/>'
+        for i, w in enumerate(HAT_CONE_ROWS)
+    ]
+    hat_stages = [brim, band, *reversed(cone)]
     hat = (
         (
             f'<g class="smHat{sfx}">'
-            # the cone, point first: each row centred on the sprite's own 11-cell grid
             + "".join(
-                f'<rect x="{fmt((11 - w) / 2 * c)}" y="{-(HAT_H - i) * c}" '
-                f'width="{w * c}" height="{c}"/>'
-                for i, w in enumerate(HAT_CONE_ROWS)
-            )
-            + f'<rect class="smHatBand" x="{fmt((11 - HAT_BAND_W) / 2 * c)}" y="{-c}" '
-            f'width="{HAT_BAND_W * c}" height="{c}"/>'
-            f'<rect x="{fmt((11 - HAT_BRIM_W) / 2 * c)}" y="0" width="{HAT_BRIM_W * c}" '
-            f'height="{HAT_BRIM_H * c}"/>'
-            # the brim's drooping ends. They sit a row BELOW the brim, over sky rather than over the
-            # body — row 0 of the sprite is only 1..10, so these two columns are open at this height
-            # — which is what lets a flat plank read as a brim that curves.
-            + "".join(
-                f'<rect x="{fmt(x * c)}" y="{HAT_BRIM_H * c}" '
-                f'width="{HAT_BRIM_DROOP * c}" height="{c}"/>'
-                for x in (
-                    (11 - HAT_BRIM_W) / 2,
-                    (11 + HAT_BRIM_W) / 2 - HAT_BRIM_DROOP,
-                )
+                f'<g class="smHatS{k}{sfx}">{markup}</g>'
+                for k, markup in enumerate(hat_stages)
             )
             + f"</g>"
+        )
+        if summon
+        else ""
+    )
+    # THE WAND, drawn from the sleeve — emitted separately from the hat because it is drawn at a
+    # different DEPTH: before the body, so its first cells are occluded rather than merely absent.
+    wand = (
+        (
             f'<g class="smWand{sfx}">'
             f'<rect class="smWandT{sfx}" x="{WAND_X * c}" y="{WAND_ROW * c}" '
             f'width="{c}" height="{c}"/>'
@@ -3868,6 +3939,10 @@ def clawd_sprite(idsuffix: str = "", cheer: bool = True, summon: bool = False) -
         f'<g class="armsGate{sfx}"><g class="armsIdle{sfx}">{arms_idle}</g></g>'
         f"{cheer_group}"
         f"{arms_alert}"
+        # the wand BEFORE the body, so the cells it has not yet drawn out of the sleeve are hidden
+        # BEHIND the creature rather than merely switched off — the same depth trick the returned
+        # work uses for its exit, running the other way
+        f"{wand}"
         f"{held}"
         f"{body}"
         # The look cycle needs an opacity gate for THE ASK, and it already carries the 8 s pan, so it
@@ -3978,9 +4053,17 @@ SUMMON_Y_FLOOR = (
 # The hat and wand are up at 3.4 s, the burst fires at 4.0 s. Previously the hat was emitted 72 ms
 # AFTER the burst it was supposed to be causing, which is Michotte's priority condition inverted.
 SM_HAT_ON, SM_HAT_OFF = 0.0, 0.9375
-# The wand: up with the hat, FLICKED at the instant of the burst, gone before the letter travels so
-# the same hand is never holding two things.
-SM_WAND_ON, SM_WAND_OFF = 0.0, 0.229
+# The wand: drawn from the sleeve AFTER the hat has finished building, FLICKED at the instant of the
+# burst, and put away before the letter travels so the same hand is never holding two things.
+#
+# Its start is DERIVED from the hat's build, not written down beside it: HAT_STAGE_N stages of
+# HAT_BUILD_STEP, plus the last stage's own swap edge, expressed as a fraction of this beat's window.
+# A literal here would be a second copy of the build's length, and the moment someone added a cone row
+# the two gestures would start overlapping — silently, because nothing would be wrong with either one.
+SM_WAND_ON = ((HAT_STAGE_N - 1) * HAT_BUILD_STEP + GATE_EDGE) / (
+    RARE_EVENTS["rSummon"][1] - RARE_EVENTS["rSummon"][0]
+)
+SM_WAND_OFF = 0.18
 SM_WAND_FLICK = 0.0625
 # The sparkle thrown off the tip, as its own window rather than a duration: it opens ON the flick and
 # holds 0.384 s, long enough to be caught at the README's frame rate and short enough that the wand is
@@ -4074,6 +4157,67 @@ def assert_summon_on_grid(art: Art) -> None:
             f"gen[{art.key}]: THE SUMMONING's prop step(s) {bad} are not whole canvas pixels at "
             f"clawd_scale={art.clawd_scale}. A prop moving a fractional pixel per step crawls at the "
             f"render scale the README uses. Pick step counts that divide the travel exactly."
+        )
+
+
+def assert_prop_entry_sequence(art: Art) -> None:
+    """The two entries and the cast must happen IN THAT ORDER, with no overlap.
+
+    This gate exists because its defect was committed. The first cut of the entry animation set the
+    hat's row spacing to GATE_EDGE, which made the build 0.50s long inside a 0.60s runway — so the
+    wand's draw ran 4.10-4.28s while the FLICK it is the wind-up for fired at 4.00s. The wand was
+    flicked before it finished coming out of the sleeve, and the burst it supposedly caused arrived
+    first. That is Michotte's priority condition inverted, which is the exact defect the beat's own
+    header records fixing once already for the hat.
+
+    Nothing else could catch it. Every structural gate stayed green — the periods still divide P, the
+    loop still seams, each element still carries one animation, and the beat still puts ink on the
+    canvas at both probe times. And it is a 0.28s ordering error inside a 9.6s beat that fires once
+    every four minutes, i.e. precisely the kind of thing the eye forgives on a render and the
+    composition does not.
+
+    Checked in ABSOLUTE seconds off the same helpers the CSS uses, so a re-timing of the window drags
+    the check with it.
+    """
+    if not emits(art, "rSummon"):
+        return
+    build_done = sm_at(SM_HAT_ON) + (HAT_STAGE_N - 1) * HAT_BUILD_STEP + GATE_EDGE
+    draw_start = sm_at(SM_WAND_ON) + GATE_EDGE
+    draw_done = draw_start + WAND_DRAW_STEPS * WAND_DRAW_STEP
+    flick = sm_at(SM_WAND_FLICK)
+    burst = sm_at(SM_SPARK[0])
+    for earlier, later, a, b in (
+        (
+            build_done,
+            draw_start,
+            "the hat finishes building",
+            "the wand starts to come out",
+        ),
+        (draw_done, flick, "the wand is fully drawn", "it is flicked"),
+        (flick, burst + 1e-9, "the flick", "the burst it causes"),
+    ):
+        if earlier > later + 1e-9:
+            raise SystemExit(
+                f"gen[{art.key}]: THE SUMMONING's entry is out of order — {a} at t={earlier:.3f}s, "
+                f"AFTER {b} at t={later:.3f}s. The beat is a causal chain (hat, then wand, then the "
+                f"cast); played out of order it shows an effect before its cause. Shorten "
+                f"HAT_BUILD_STEP / WAND_DRAW_STEP, or open the window earlier."
+            )
+    # ...and the wand must be back in the sleeve before the letter sets off, or the same hand is
+    # holding the wand and the brief at once.
+    away = sm_at(SM_WAND_OFF) + WAND_DRAW_STEPS * WAND_DRAW_STEP + GATE_EDGE
+    if away > sm_at(SM_MAIL[0]) + 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the wand is not put away until t={away:.3f}s, after the letter starts "
+            f"travelling at t={sm_at(SM_MAIL[0]):.3f}s — the same hand would hold two things. "
+            f"Lower SM_WAND_OFF."
+        )
+    # The hat's own exit must finish inside the declared window, or a prop outlives its beat.
+    gone = sm_at(SM_HAT_OFF) + (HAT_STAGE_N - 1) * HAT_BUILD_STEP + GATE_EDGE
+    if gone > ev("rSummon")[1] + 1e-9:
+        raise SystemExit(
+            f"gen[{art.key}]: the hat's dissolve ends at t={gone:.3f}s, past its window's close at "
+            f"t={ev('rSummon')[1]:.3f}s. Lower SM_HAT_OFF."
         )
 
 
@@ -4284,23 +4428,75 @@ SM_FLASH_LEAD, SM_FLASH_TAIL = (
 )  # s — total 0.22s, inside §2b's 0.3s opacity concession
 
 
+def hat_build_css() -> str:
+    """The hat conjured a row at a time: brim, band, then the cone up to its point — and back down.
+
+    One gate per stage, staggered by HAT_BUILD_STEP, which is GATE_EDGE — so a stage reaches full
+    opacity in the same instant the next one begins, and the build reads as continuous rather than as
+    five separate switches. The exit reverses the order (`n - 1 - k`), so the hat comes apart from the
+    point downward and the brim is the last thing to leave the head, which is the order a hat being
+    taken off would actually go.
+
+    The stage COUNT comes from the emitter's own list length via HAT_STAGE_N, never from a literal
+    here. A checker or an animator holding its own copy of its subject's geometry is the defect this
+    file has now paid for twice — the crown gate that compared a literal to itself, and the review
+    page that redrew the sprite it was reviewing.
+    """
+    on, off = sm_at(SM_HAT_ON), sm_at(SM_HAT_OFF)
+    n = HAT_STAGE_N
+    return "".join(
+        gate(
+            f"smhs{k}",
+            f".smHatS{k}",
+            [(on + k * HAT_BUILD_STEP, off + (n - 1 - k) * HAT_BUILD_STEP)],
+        )
+        for k in range(n)
+    )
+
+
 def wand_css() -> str:
-    """The wand's whole life in one keyframe block: raised, flicked at the cast, put away.
+    """The wand's whole life in one keyframe block: drawn from the sleeve, flicked, put away.
 
     Opacity and transform ride the SAME block because they are one element's one animation (S8) — the
-    flick IS the gate, not a second declaration layered on it.
+    draw and the flick are one continuous gesture, not a gate with a move layered on it.
+
+    IT IS DRAWN, NOT SWITCHED ON. The wand starts WAND_DRAW_CELLS to the left, entirely behind the
+    body (`clawd_sprite` emits it before the body for exactly this), and slides out one whole cell per
+    stop under `steps(1,end)`. Whole cells because a prop moving a fractional pixel per frame crawls:
+    its edges shimmer at the scale the README actually renders. Behind the body rather than merely
+    transparent, because a fade is a colour that is not in the palette.
 
     The flick is a single cell up. That is the whole cast: at 10.5 CSS px per cell it is 100 % of the
     wand's own thickness, and the vocabulary has no rotation — a rotated pixel-art rect resamples to
     mush at the fractional render scale the README actually uses.
     """
     on, flick, off = sm_at(SM_WAND_ON), sm_at(SM_WAND_FLICK), sm_at(SM_WAND_OFF)
+    d = WAND_DRAW_CELLS * CELL
+    n = WAND_DRAW_STEPS
+    lo, hi = CELL * 0.5, -CELL * 0.5  # rest and flicked heights
+    f = [f"0%,{pctx(on)}%{{opacity:0;transform:translate(-{fmt(d)}px,{fmt(lo)}px)}}"]
+    # drawn out of the sleeve, one cell per stop
+    for k in range(n + 1):
+        f.append(
+            f"{pctx(on + GATE_EDGE + k * WAND_DRAW_STEP)}%"
+            f"{{opacity:1;transform:translate({fmt(-d + k * d / n)}px,{fmt(lo)}px)}}"
+        )
+    f.append(f"{pctx(flick)}%{{opacity:1;transform:translate(0px,{fmt(hi)}px)}}")
+    f.append(
+        f"{pctx(flick + WAND_FLICK_HOLD)}%{{opacity:1;transform:translate(0px,{fmt(lo)}px)}}"
+    )
+    # ...and put away the way it came, so the exit is the entrance played backwards
+    for k in range(n + 1):
+        f.append(
+            f"{pctx(off + k * WAND_DRAW_STEP)}%"
+            f"{{opacity:1;transform:translate({fmt(-k * d / n)}px,{fmt(lo)}px)}}"
+        )
+    f.append(
+        f"{pctx(off + n * WAND_DRAW_STEP + GATE_EDGE)}%,100%"
+        f"{{opacity:0;transform:translate(-{fmt(d)}px,{fmt(lo)}px)}}"
+    )
     return (
-        f"@keyframes smwf{{"
-        f"0%,{pctx(on)}%{{opacity:0;transform:translateY({fmt(CELL * 0.5)}px)}}"
-        f"{pctx(on + GATE_EDGE)}%{{opacity:1;transform:translateY({fmt(CELL * 0.5)}px)}}"
-        f"{pctx(flick)}%{{opacity:1;transform:translateY(-{fmt(CELL * 0.5)}px)}}"
-        f"{pctx(off)}%,100%{{opacity:0;transform:translateY({fmt(CELL * 0.5)}px)}}}}"
+        f"@keyframes smwf{{{''.join(f)}}}"
         f".smWand{{animation:smwf {fmt(P)}s steps(1,end) infinite}}"
     )
 
@@ -4542,7 +4738,7 @@ def summon_css(art: Art) -> str:
     held_marks.append((SM_HELD_OFF, 4 * st["held_dx"], 0.0, 0))
     return "".join(
         [
-            gate("smh", ".smHat", [(sm_at(SM_HAT_ON), sm_at(SM_HAT_OFF))]),
+            hat_build_css(),
             wand_css(),
             gate(
                 "smwk",
@@ -5018,6 +5214,7 @@ def build(art: Art) -> str:
     assert_warp_within_tile()
     assert_hop_clear_of_stopped_world(art)
     assert_summon_on_grid(art)
+    assert_prop_entry_sequence(art)
     assert_summon_clear_plate(art)
     rng = random.Random(20260729 + sum(ord(ch) for ch in art.key))
     scale = art.clawd_scale
