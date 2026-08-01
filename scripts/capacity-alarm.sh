@@ -106,8 +106,12 @@ SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
 #   (1) WRONG NOUN. The PREVIOUS boot's iTerm2 coalition (331 samples) sat >=500 procs for 3h10m,
 #       10 samples >=700, peaking at 996 — and SURVIVED. The fatal sample was 1002. Six processes
 #       separate the survived class from the fatal one, so no setting of these thresholds can tell
-#       them apart. What does separate them is mass per process: every healthy sample across four
-#       boots is 19.7-36.4 MiB/proc, the fatal one is 142.6 (3.9x outside the band).
+#       them apart. Mass per process does not separate them either (a SURVIVED kitty sample reads
+#       458 MiB/proc vs the fatal 142.6; 234 of 567 survived samples exceed what looked like the
+#       healthy ceiling). The one quantity that does is the coalition's TOTAL ANON FOOTPRINT:
+#       139.50 GiB fatal vs a 28.18 GiB survived ceiling across every boot -- 4.95x apart with an
+#       empty interval, on a 64 GiB box (2.2x oversubscription; the panic was a watchdogd timeout).
+#       n=1 fatal sample, so that is an ORDERING, not yet a calibrated threshold.
 #   (2) WRONG UNITS. The thresholds were derived from systemstats CoalitionMemory.process_count, but
 #       read_coalition_procs() below is a ps tree-walk, which measures 0.57x that (6 time-aligned
 #       pairs, mean 0.57, range 0.43-0.62): a coalition keeps reparented orphans, the walk stops at
