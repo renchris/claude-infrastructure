@@ -2,6 +2,13 @@
 
 **Date:** 2026-07-24 · **Type:** read-only investigation + verdict · **Repos:** `reso-management-app` (source), `claude-infrastructure` (candidate)
 
+> ⚠️ **SUPERSEDED ON THE ADOPT DECISION — see §6 (re-measured 2026-07-31).** The verdict directly
+> below is **reversed**: do NOT adopt always-isolate here. Its central figures decayed (direct-on-main
+> root pressure went from "33 of the last 60 reflog entries" to **0.5% of commits**), the one dated
+> data-loss incident happened to a session that was **already worktree-isolated**, and this repo had
+> already soaked hard enforcement and reverted it (`528bf705` — "hard-deny cost > benefit").
+> §1–§3 (provenance, mechanism) remain accurate and are unaffected.
+
 **Answer up front:** Yes — extend it, but *not* by porting reso's bespoke scripts. The
 generalized extraction already exists and is already installed (`worktree-harness`, Homebrew).
 claude-infrastructure has independently re-derived reso's exact failure three times and patched
@@ -92,6 +99,10 @@ sessions across per-worktree project dirs and no single launch point can see the
 ---
 
 ## 4. SHOULD claude-infrastructure adopt it
+
+> ⚠️ **This section's conclusion is SUPERSEDED by §6 (2026-07-31): the answer is now NO.** The
+> measurements below are preserved as the record of what was true on 2026-07-24; §6.1 tabulates how
+> each one moved. Read both before acting.
 
 ### The pattern is already here — unmanaged
 
@@ -279,3 +290,115 @@ operator-facing:
 
 So the desk-existence invariant — the organ whose whole purpose is that nothing else can *create*
 a desk — has been in a failing respawn loop for ~41 hours. This wants its own investigation.
+
+---
+
+## 6. RE-MEASURED 2026-07-31 — the §4 verdict is REVERSED
+
+**Answer up front: do NOT adopt always-isolate in claude-infrastructure.** §4 above recommended
+adoption. That recommendation rested on measurements taken 2026-07-24 which have since decayed, and
+on an incident attribution that does not survive checking. The concurrency premise is *confirmed*;
+the *harm* premise is not. This section supersedes §4's "Recommended shape" on the adopt/don't
+decision. §1–§3 (provenance and mechanism) are unaffected and remain accurate.
+
+### 6.1 The evidence §4 relied on has decayed
+
+| §4 figure (2026-07-24) | Re-measured 2026-07-31 |
+|---|---|
+| "33 commit events in the last 60 reflog entries" of direct-on-main root pressure | **5 direct-on-main in 7 days against 1,002 commits — 0.5%** |
+| 50 worktrees, **11 prunable**, 244 branches | 118 worktrees, **0 prunable**, **1,334 branches** |
+| root "frequently sits on another session's feature branch" (`.claude/CLAUDE.md`) | the root has left `main` **7 times all-time, last on 2026-07-15** — 16 days |
+
+The single 33-event spike was **2026-07-21**. It did not recur.
+
+### 6.2 The load-bearing incident would not have been prevented by worktrees
+
+`.claude/CLAUDE.md` and §4 both cite incident 2026-07-11 — `dfacccd` (limit-recover, 5 files)
+silently dropped by a sibling `/ship`. `SHIP_LAND_HARDENING_PLAN.md:28` records that
+**"Session A (`wt-pool-4`) committed `dfacccd`"** — the losing session was **already
+worktree-isolated**. `land-gate-serialization-2026-07-25.md:26` classifies it exactly: *"a sibling
+moved `origin/main` between one rebase and its push."* That is a **landing race on the shared remote
+ref**, a class per-session worktrees do not touch. It was fixed by `land-lock.sh` +
+`stranded-sweep.sh` (`981c8ac7`, same day) and the fail-closed `ship-land.sh` pipeline (`40a016ce`).
+
+Same pattern in the 2026-07-26 session-close incidents: both affected sessions (`session-a3f68174`,
+`9850bcd5`) were **in worktrees**. And the 2026-06-12 incident in `git-worktree-guard.sh`'s header is
+harm *caused by* worktrees — a reap that deleted an active session's tree.
+
+The one incident worktrees genuinely did fix — dispatch workers fighting one index (`cc-wave-plan:267`)
+— **is already done**: workers have spawned in their own worktrees since `8460d71f` (2026-07-20).
+
+### 6.3 This repo already ran the experiment and reverted it on a measured soak
+
+```
+8f4264ba 2026-06-02 feat(worktree-isolation): reso-writer-lock.py — OS advisory writer-lock
+8ed7cf3c 2026-06-02 feat(worktree-isolation): concurrent-writer-guard.sh — PreToolUse guard
+528bf705 2026-06-03 fix(guard): default CLAUDE_ISOLATION_MODE to log — soak verdict: hard-deny cost > benefit
+fdf0bda7 2026-06-03 chore(worktree): remove writer-lock + concurrent-writer-guard stack
+```
+
+`528bf705`'s subject **is** the verdict. Re-proposing hard enforcement without new harm evidence
+re-runs a settled experiment.
+
+### 6.4 The concurrency is real — concurrency is not harm
+
+Confirmed, keyed on process **cwd** (never `pgrep -f`, which matches agent briefs): **11 live
+claude-infra sessions, 9 of them in the shared root, 5 of those concurrent writers**; over 7 days
+**≥2 concurrent writers 74% of the time ≥1 writer is live**, peak 12.
+
+Against that: **zero recorded index-collision or ref-lock failures** across **114,859 commands / 310
+sessions / ~46 h** — and that window (2026-07-30T08:33Z →) is the *highest-concurrency period on
+record*. The `INC-1` claim in `docs/WORKTREE_WORKFLOW.md:12-13` ("bare commits sweep another
+session's staged files… observed repeatedly"), copied verbatim into `CLAUDE.md:196`, has **one prose
+source and zero grounding** — no sha, log, test, or artifact.
+
+### 6.5 The cost side is what actually grew
+
+**244 → 1,334 branches in 7 days (5.5×)**, of which **639 are already merged into main** (dead
+weight), with **no GC**. Auto-wrapping adds one branch + one worktree per session at 14–27
+sessions/day. Disk is *not* the constraint (claude-infra's 116 worktrees sum to ~3.8 GB, avg 33 MB —
+the 148 GB under `~/Development/.worktrees` is reso's `node_modules`, not ours). **Cardinality is.**
+
+And the cost unique to this repo stands: **`~/.claude` is ~302 per-file symlinks into the root
+working tree**. Editing there is instantly live machine-wide; from a worktree an edit is inert until
+landed **and** ff-synced **and**, for brand-new files, symlinked. Always-isolate would make
+`deploy-lag-checkout-behind-origin` the default state rather than the exception.
+
+### 6.6 What was done instead
+
+- **Implemented** (`d94f1bf9`): project memory now follows the worktree. Measured 2026-07-31: **164
+  worktree-keyed project dirs, 0 with a `memory/` dir**, against 213 topic files in the primary's —
+  so every worktree session, including the 79 per-dispatch `wt-<12hex>` trees, ran memory-blind.
+  This is worth fixing *regardless* of the adopt decision and is the cc-tlid repo-identity pattern.
+- **Not built, deliberately**: the two other "HIGH" provisioning breakages did not survive
+  verification. A permission storm is contradicted by **350 global allows + `defaultMode: auto`**
+  (the 86 project-local entries are one-offs like `Bash(rm -rf bin/__pycache__)`), and the trust
+  dialog does **not** block start — `gu-session-lifecycle` ran 4 sessions totalling 5.1 MB at
+  `hasTrustDialogAccepted: false`.
+- **Backlogged, named**: (a) branch GC for the 639 merged-dead refs — the real growing cost;
+  (b) the never-landed A3 shared-checkout commit guard (`SESSION_AUTONOMY_RESEARCH.md:288`) — note a
+  *hard-deny* variant would repeat §6.3's reverted experiment, so if built it should be
+  warn/checkpoint first.
+
+### 6.7 Limits of this re-measurement
+
+- `bash-commands.log` starts **2026-07-30T08:33Z**, so "zero recorded failures" is scoped to ~46 h,
+  not all time.
+- Writer *overlap* was measured, not write *conflict* — whether two overlapping writers ever touched
+  the same file was not established.
+- Session liveness is proxied by transcript first→last span (median 27.4 min, p90 474 min), which an
+  idle-but-open session inflates; the live process+cwd census is the independent corroboration.
+- **What would flip this back:** a dated, grounded working-tree/index collision in the shared
+  checkout — i.e. the INC-1 class with an artifact attached. On current evidence it has zero
+  recorded instances.
+
+### 6.8 Note for anyone resuming the stranded `gu-worktree-warmpool-b` branch
+
+That branch's headline finding — the `git worktree remove` guard arm costing **96,457 ms** against a
+registered `timeout: 10`, i.e. failing open in the destroy direction — was measured **2026-07-30**
+against pre-fix code. The batched-`lsof` fix landed on trunk as **`86b52e32` (2026-07-31T14:09)**,
+**34 h after that branch's tip**. Re-timed live 2026-07-31: **502 ms**. Do not re-apply that branch's
+M1 patch; it is superseded, and trunk deliberately rejects the timeout it adds (a bound that gives up
+can only make a safety refusal fail OPEN — `git-worktree-guard.sh:70-74`). The parse bypasses it
+diagnoses (`git -c` between verb and subcommand, `--git-dir=`) do still appear real on trunk and are
+the salvageable part.
