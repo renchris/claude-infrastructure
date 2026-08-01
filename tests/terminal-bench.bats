@@ -96,12 +96,20 @@ setup() {
 
 # ── tui-load: the rate it claims must be the rate it achieved ─────────────────────────────────────
 
-@test "load: writes a 9-field stats row including strategy and flag" {
+@test "load: writes a 10-field stats row including strategy, flag and the measured geometry" {
   run bash "$LOAD" --fps 10 --duration 1 --label unit --stats "$STATS"
   [ "$status" -eq 0 ]
   [ -s "$STATS" ]
   local fields; fields="$(awk -F'\t' '{print NF; exit}' "$STATS")"
-  [ "$fields" -eq 9 ]
+  [ "$fields" -eq 10 ]
+  # Field 10 is <cols>x<rows>/<source>, and the SOURCE is the load-bearing half. `tput cols` inside
+  # a command substitution reports the terminfo default 80x24 rather than the pane — measured in one
+  # WezTerm pane, same instant: tput 80x24 vs stty 44 95 — so every pane in that terminal painted a
+  # fixed small frame while kitty painted full-size ones, and the "identical load in every
+  # candidate" premise silently did not hold. Recording which probe answered is what lets a later
+  # reader tell a comparable run from a non-comparable one.
+  local geom; geom="$(awk -F'\t' '{print $10; exit}' "$STATS")"
+  [[ "$geom" =~ ^[0-9]+x[0-9]+/(stty|tput|default)$ ]]
   # The nap strategy is RECORDED, never inferred: a reader must be able to tell a forkless run from
   # a `sleep`-per-frame run, because only the latter's absolute CPU carries a producer tax.
   local strategy; strategy="$(awk -F'\t' '{print $8; exit}' "$STATS")"

@@ -88,6 +88,12 @@ final class Recorder: NSObject, SCStreamOutput {
     let lock = NSLock()
     var frames = 0
     var dropped = 0
+    var maxGap: Double = 0
+    var stalls = 0
+    var stalledSeconds: Double = 0
+    // 1.5 s is the threshold a viewer reads as "it hung", and the same one the harness used when it
+    // was still asking ffmpeg. Kept identical so the two eras of this number stay comparable.
+    let stallThreshold: Double = 1.5
     var startFailure: String?
     var appendFailure: String?
     var started = false
@@ -145,7 +151,24 @@ final class Recorder: NSObject, SCStreamOutput {
         // Not an error: the encoder applies backpressure and SCStream keeps delivering. Count the
         // drops so a take thinned by a busy box is visible rather than inferred from a low fps.
         guard input.isReadyForMoreMediaData else { dropped += 1; return }
-        if input.append(buf) { frames += 1; lastPTS = pts }
+        if input.append(buf) {
+            // STALL MEASUREMENT, TAKEN AT THE SOURCE. ScreenCaptureKit emits a frame only when the
+            // window's content CHANGES, so the interval between two delivered frames is exactly how
+            // long the window sat unchanged. That makes stalls measurable without looking at pixels
+            // at all — which matters, because the pixel route was tried and is not trustworthy here:
+            // ffmpeg's freezedetect averages the difference over the WHOLE frame, so on sparse
+            // coloured text (and after the letterboxing an off-16:9 window needs) it called an
+            // entire 20 s film "frozen from t=0" while 808 distinct frames were plainly present.
+            // Worse, its answer varied with how much black padding each candidate's window shape
+            // happened to need — i.e. it was not comparable ACROSS the very candidates being
+            // compared. Frame-arrival gaps have no such dependence.
+            if frames > 0 {
+                let gap = CMTimeGetSeconds(CMTimeSubtract(pts, lastPTS))
+                if gap > maxGap { maxGap = gap }
+                if gap > stallThreshold { stalls += 1; stalledSeconds += gap }
+            }
+            frames += 1; lastPTS = pts
+        }
         else { appendFailure = writer.error.map { "\($0)" } ?? "append returned false" }
     }
 
@@ -276,6 +299,8 @@ Task {
         print(String(format: "frames=%d dropped=%d seconds=%.2f fps=%.2f size=%dx%d out=%s",
                      frames, rec.dropped, wall, Double(frames) / wall, w, h, (out as NSString).utf8String!))
         print(String(format: "pts_span=%.2fs", span))
+        print(String(format: "stalls=%d stalled_s=%.2f max_gap_s=%.2f",
+                     rec.stalls, rec.stalledSeconds, rec.maxGap))
         print("verdict=OK")
     } catch {
         print("verdict=ERROR reason=\(error.localizedDescription)")

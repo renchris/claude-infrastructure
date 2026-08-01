@@ -77,10 +77,17 @@ set -uo pipefail
 TIMEOUT="$(command -v timeout || command -v gtimeout || true)"
 run() { if [ -n "$TIMEOUT" ]; then "$TIMEOUT" "$@"; else shift; "$@"; fi; }
 
-APP=""; PANES=0; INTERVAL=180; SAMPLE_SECS=5; OUT=""; WATCH=30
+APP=""; PID_OVERRIDE=""; PANES=0; INTERVAL=180; SAMPLE_SECS=5; OUT=""; WATCH=30
 while [ $# -gt 0 ]; do
   case "$1" in
     --app)         APP="${2:-}"; shift 2 ;;
+    # 🚨 MEASURE THIS EXACT PROCESS. Name resolution below picks `pgrep -x <name> | head -1`, i.e.
+    # the LOWEST pid with that name — which is the wrong one whenever more than one instance is up.
+    # Measured: a film of WezTerm under 18 panes of load recorded cpu=0.0 mem=61MB th=13, because a
+    # stale wezterm-gui from an earlier run outranked the instance actually being filmed. A caller
+    # that already knows which window it is looking at (assets/demo/renderer-film.sh reads the pid
+    # straight off the CGWindow) can say so instead of hoping the name resolves to the same process.
+    --pid)         PID_OVERRIDE="${2:-}"; shift 2 ;;
     --panes)       PANES="${2:-0}"; shift 2 ;;
     --interval)    INTERVAL="${2:-180}"; shift 2 ;;
     --watch)       WATCH="${2:-30}"; shift 2 ;;
@@ -130,7 +137,18 @@ case "$APP" in
   *)               PROC_NAMES="$APP";                         CENSUS_OWNER="$APP" ;;
 esac
 PID=""
+if [ -n "$PID_OVERRIDE" ]; then
+  # Verify it: a pid that has already exited would otherwise be measured as a row of zeroes, which
+  # is the vacuous pass this instrument exists to refuse.
+  if kill -0 "$PID_OVERRIDE" 2>/dev/null; then
+    PID="$PID_OVERRIDE"
+  else
+    echo "terminal-bench: --pid $PID_OVERRIDE is not running" >&2
+    echo "verdict=NO-DATA"; exit 3
+  fi
+fi
 for _p in $PROC_NAMES; do
+  [ -n "$PID" ] && break
   PID="$(pgrep -x "$_p" | head -1 || true)"
   [ -n "$PID" ] && break
 done

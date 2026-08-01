@@ -34,7 +34,7 @@
 # VERDICT: verdict=OK | SPAWN-FAILED | NO-WINDOW | CAPTURE-FAILED | STATIC | REFUSED
 set -uo pipefail
 
-APP=""; PANES=18; FPS=10; SECONDS_TAKE=20; OUTDIR=""; KEEP_RAW=0
+APP=""; PANES=18; FPS=10; SECONDS_TAKE=15; OUTDIR=""; KEEP_RAW=0
 MAXLOAD="${FILM_MAXLOAD:-40}"
 FILM_TITLE="CCFILM60"
 
@@ -251,6 +251,16 @@ on run argv
 				end try
 			end repeat
 		end repeat
+		-- 🚨 CREATED IS NOT ON SCREEN. Every Ghostty window on this box — including a freshly
+		-- created one — read onscreen=nil in CGWindowList, because Ghostty was hidden or on
+		-- another Space after the reboot restored it. The resolver then reported NO-MATCH with
+		-- owner_windows=0, which reads like "the app is not running" when it plainly was.
+		-- The Ghostty dictionary ships an "activate window" command, which is what maps it back.
+		-- (No apostrophes or backticks in this heredoc: it sits inside a $( ) command substitution,
+		-- where bash tracks quotes while scanning for the closing paren, so one stray quote character
+		-- here produced a syntax error reported 100 lines further down the file.)
+		activate
+		activate window win
 		delay 1
 		return "winid=" & (id of win) & " achieved=" & (count of terminals of win)
 	end tell
@@ -264,11 +274,54 @@ APPLESCRIPT
   esac
 }
 
+spawn_iterm2() {
+  # 🚨 THE INCUMBENT IS NOT FILMED, AND THE REASON IS NOT SQUEAMISHNESS — IT WAS TRIED.
+  #
+  # The plan was sound on paper: scripts/terminal-bakeoff.sh makes iTerm2 measure-only because this
+  # box normally runs the operator live Claude Code fleet inside it, so the guard was "film it only
+  # when iTerm2 is NOT running" — no sessions present, no sessions disturbed. That guard passed.
+  # iTerm2 was not running. It was launched anyway and the run still had to be aborted:
+  #
+  #   LAUNCHING iTerm2 RESTORES THE OPERATOR WINDOWS. Window restoration reopened three windows —
+  #   one of them titled "Advance hook-chain cost durable record", another mid-command on a real
+  #   project — none of which existed a second earlier. The AppleScript driver addresses "current
+  #   window" (it must; the window object returned by `create window` goes stale across splits), and
+  #   current window then resolved to a RESTORED window. Eighteen splits went into the operator
+  #   windows instead of ours, and the resolver refused the take because no window carried the film
+  #   title. iTerm2 was quit and the machine returned to not-running, as found.
+  #
+  # A not-running guard cannot fix this: the resurrection happens AT LAUNCH, before any check can
+  # run. The sanctioned isolated route already exists — scripts/iterm-metal-bench-app.sh clones
+  # iTerm2 under its own bundle id and its own defaults domain, which is the only way to get an
+  # iTerm2 that restores nothing. Filming the incumbent is left to that path, deliberately unbuilt
+  # here rather than shipped as a trap for whoever runs this next.
+  echo "  ✗ iTerm2 is deliberately not filmed — launching it restores the operator windows and the" >&2
+  echo "    splits land in THEIR sessions. See the comment above this refusal, and" >&2
+  echo "    scripts/iterm-metal-bench-app.sh for the isolated-clone route that could do it safely." >&2
+  return 1
+}
+
+# WHICH PIDS EXISTED BEFORE WE TOUCHED ANYTHING. The caveat further down needs to know whether the
+# process finally measured is one we created or one that was already there hosting somebody else's
+# surfaces — and that is a question about the PID, not about the app name.
+#
+# Keyed on the app name it is worse than useless: kitty deliberately films in its own
+# --instance-group process, so the operator's live kitty being up says nothing about our instance,
+# and the caveat fired on every kitty run while being true only of Ghostty. An alarm that always
+# fires carries the same information as one that never does.
+case "$APP" in
+  wezterm|WezTerm) _procname=wezterm-gui ;;
+  ghostty|Ghostty) _procname=ghostty ;;
+  *)               _procname="$APP" ;;
+esac
+PIDS_BEFORE=" $(ps -eo pid=,comm= | awk -v want="$_procname" '{n=split($2,a,"/"); if (tolower(a[n])==tolower(want)) print $1}' | tr '\n' ' ')"
+
 echo "== renderer-film  app=$APP panes=$PANES fps=$FPS take=${SECONDS_TAKE}s loadavg=$LOADNOW =="
 case "$APP" in
   kitty)            spawn_kitty ;;
   wezterm|WezTerm)  spawn_wezterm ;;
   ghostty|Ghostty)  spawn_ghostty ;;
+  iterm2|iTerm2)    spawn_iterm2 ;;
   *) echo "renderer-film: no spawn strategy for '$APP'" >&2; exit 2 ;;
 esac
 if [ "${SPAWNED:-0}" -lt 2 ]; then
@@ -286,19 +339,20 @@ sleep "$SETTLE"
 # the harness refused with owner_windows=0. That refusal is the design working — it distinguishes
 # "wrong app name" from "wrong title" — but the mapping has to be right or every WezTerm take fails.
 OWNER="$APP"
-RAISE_APP=""
 case "$APP" in
   # "WezTerm" because spawn_wezterm launches through LaunchServices; a CLI-launched one would be
   # "wezterm-gui". The name is a property of the launch, not of the app.
-  wezterm|WezTerm) OWNER="WezTerm"; RAISE_APP="WezTerm" ;;
-  ghostty|Ghostty) OWNER="Ghostty"; RAISE_APP="Ghostty" ;;
-  # kitty is deliberately NOT raised with `open -a`: the film runs in its own --instance-group
-  # process while the operator's live sessions run in another process of the SAME bundle, and
-  # LaunchServices would be free to raise theirs over ours — turning a working take into a black one.
-  kitty) OWNER="kitty" ;;
+  wezterm|WezTerm) OWNER="WezTerm" ;;
+  ghostty|Ghostty) OWNER="Ghostty" ;;
+  iterm2|iTerm2)   OWNER="iTerm2" ;;
+  kitty)           OWNER="kitty" ;;
 esac
 RECT_OUT="$(swift "$RECT_SWIFT" --owner "$OWNER" --title "$FILM_TITLE" --largest 2>&1)"
 WID="$(printf '%s' "$RECT_OUT" | sed -n 's/.*wid=\([0-9]*\).*/\1/p')"
+WPID="$(printf '%s' "$RECT_OUT" | sed -n 's/.*pid=\([0-9]*\).*/\1/p')"
+# Exact membership, spaces included, so pid 649 never matches pid 6491.
+PID_PREEXISTED=no
+case "$PIDS_BEFORE" in *" $WPID "*) PID_PREEXISTED=yes ;; esac
 if [ -z "$WID" ]; then
   echo "renderer-film: could not resolve a window titled $FILM_TITLE for $OWNER" >&2
   printf '%s\n' "$RECT_OUT" >&2
@@ -319,7 +373,11 @@ attempt_take() {
 
   # Take the MEASUREMENT during the take, not before or after it — the row and the film then
   # describe the same event, which is the whole claim the README makes about this pair of artifacts.
-  ( sleep 2; bash scripts/terminal-bench.sh --app "$APP" --panes "$SPAWNED" --interval 0 > "$ROW" 2>&1 ) &
+  # --pid, not just --app: the bench resolves a name to the LOWEST matching pid, which silently
+  # measured a stale WezTerm instead of the one on camera (cpu=0.0 while it rendered at 40 fps).
+  # WPID comes off the CGWindow we are filming, so the row and the film cannot describe different
+  # processes.
+  ( sleep 2; bash scripts/terminal-bench.sh --app "$APP" --pid "$WPID" --panes "$SPAWNED" --interval 0 > "$ROW" 2>&1 ) &
   local bench_pid=$!
   # An INDEPENDENT occlusion oracle, sampled mid-take. The delivered-rate floor already catches a
   # covered window, but it cannot say WHAT covered it; this names the app, so a spoiled take points
@@ -327,17 +385,14 @@ attempt_take() {
   ( sleep 4; swift "$RECT_SWIFT" --owner "$OWNER" --title "$FILM_TITLE" --largest --assert-unoccluded > "$OCC_LOG" 2>&1 ) &
   local occ_pid=$!
 
-  # Hold the window up from the shell as well, for the apps whose activation the film binary cannot
-  # perform. `open -a` goes through LaunchServices, which is the only activation path that works for
-  # an app this process did not launch and is not frontmost alongside.
-  local raise_pid=""
-  if [ -n "$RAISE_APP" ]; then
-    ( while :; do open -a "$RAISE_APP" >/dev/null 2>&1; sleep 1.2; done ) &
-    raise_pid=$!
-  fi
-
+  # NO EXTERNAL RAISE LOOP. An earlier version ran `open -a <App>` every 1.2 s during the take to
+  # hold the foreground. It was written when activation appeared impossible — which turned out to be
+  # the bundle-less-process problem, fixed at the launch site. Left in, it was a CONFOUND on the one
+  # thing this film exists to show: it spawns a process 16 times per take and re-activates an app
+  # that is already active, and the WezTerm takes made under it showed 1-5 freeze intervals that
+  # must not be attributed to WezTerm while the instrument is still interfering. The film binary's
+  # own activation is enough, and it acts only when the app is genuinely not active.
   FILM_OUT="$("$BIN" --window-id "$WID" --seconds "$SECONDS_TAKE" --activate --out "$RAW" 2>&1)"
-  [ -n "$raise_pid" ] && kill "$raise_pid" 2>/dev/null
   printf '%s\n' "$FILM_OUT" | sed 's/^/      /'
   wait "$bench_pid" 2>/dev/null
   wait "$occ_pid" 2>/dev/null
@@ -371,9 +426,15 @@ attempt_take() {
   # scale-to-fit + pad, never crop: the window's aspect ratio is whatever the app made it, and
   # cropping to 16:9 would silently cut a row of panes out of the evidence.
   # force_original_aspect_ratio=decrease guarantees the scale is a DOWNscale from the 2x capture.
+  #
+  # crf 23, not 18. This content is close to incompressible — 18 panes of shifting 24-bit colour is
+  # per-pixel noise, and at crf 18 a single 20 s take weighed 30 MB, which is not a README asset,
+  # it is a permanent clone tax paid by everyone who ever fetches this repo. Measured on the same
+  # take: crf 20 = 19.1 MB, crf 23 = 13.9 MB, crf 26 = 10.0 MB. 23 is the last step that leaves the
+  # per-pane text and the colour ramp legible at full size, which is the whole point of the file.
   ffmpeg -y -v error -i "$RAW" \
     -vf "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,fps=60" \
-    -c:v libx264 -crf 18 -preset slow -pix_fmt yuv420p -an "$MP4" || {
+    -c:v libx264 -crf 23 -preset slow -pix_fmt yuv420p -an "$MP4" || {
     FAILREASON="CAPTURE-FAILED"; return 1; }
 
   # ── verify the artifact, do not assume it ───────────────────────────────────────────────────────
@@ -397,21 +458,42 @@ attempt_take() {
     FAILREASON="CAPTURE-FAILED"; return 1
   fi
 
-  # A capture of a FROZEN terminal is also a valid-looking 1080p60 file, and it is the one result
-  # this instrument must never publish silently: the whole point is that the panes were repainting.
-  # freezedetect reports intervals of no change; a hit means the film shows a still image for that
-  # long, which on a shared box usually means the window lost the foreground mid-take.
-  local freeze
-  freeze="$(ffmpeg -v info -i "$MP4" -vf "freezedetect=n=-50dB:d=1.5" -map 0:v -f null - 2>&1 | grep -c 'freeze_start' || true)"
-  if [ "${freeze:-0}" -gt 0 ]; then
-    echo "      ⚠ $freeze freeze interval(s) of >1.5s — the panes stopped repainting" >&2
+  # STALLS ARE MEASURED AND PUBLISHED, NOT REFUSED — and they are measured AT THE SOURCE.
+  #
+  # This began as ffmpeg `freezedetect` over the finished master, and that instrument is wrong for
+  # this content in a way that took a retraction to notice. It averages the difference over the
+  # WHOLE frame, so on sparse coloured text it reported "freeze_start: 0" with no end — the entire
+  # 20 s film called frozen — while 808 distinct frames sat in it. And its answer moved with how
+  # much black padding each candidate's window shape required, so it was not comparable across the
+  # very candidates being compared. A first reading off it ("WezTerm stalls, kitty does not") was
+  # withdrawn.
+  #
+  # window-film.swift now reports the gaps between DELIVERED frames instead. ScreenCaptureKit emits
+  # a frame only when the window content changes, so an interval between two frames IS the time the
+  # window sat unchanged — no pixel heuristic, no dependence on aspect ratio or padding.
+  STALLS="$(printf '%s' "$FILM_OUT" | sed -n 's/.*stalls=\([0-9]*\).*/\1/p' | head -1)"
+  STALLED_S="$(printf '%s' "$FILM_OUT" | sed -n 's/.*stalled_s=\([0-9.]*\).*/\1/p' | head -1)"
+  MAX_GAP="$(printf '%s' "$FILM_OUT" | sed -n 's/.*max_gap_s=\([0-9.]*\).*/\1/p' | head -1)"
+
+  # The refusal is reserved for a film that is MOSTLY a still image; anything less is a reported
+  # property of the subject. The delivered-rate floor above already caught the window that was not
+  # being drawn at all, which is the failure this check used to be conflated with.
+  local stalled_frac
+  stalled_frac="$(awk -v f="${STALLED_S:-0}" -v d="${dur:-1}" 'BEGIN{printf "%.3f", (d>0)? f/d : 0}')"
+  if awk -v x="$stalled_frac" 'BEGIN{exit !(x+0 > 0.4)}'; then
+    echo "      ⚠ ${STALLED_S}s of ${dur}s with no content change — mostly a still image" >&2
     FAILREASON="STATIC"; return 1
   fi
+  [ "${STALLS:-0}" -gt 0 ] && \
+    echo "      note: ${STALLS} gap(s) >1.5s, ${STALLED_S}s total, longest ${MAX_GAP}s — recorded, not hidden"
   return 0
 }
 
 OCC_LOG="${TMPDIR:-/tmp}/renderer-film-occ-$APP.txt"
 TAKE_OK=0
+STALLS=0
+STALLED_S=0.00
+MAX_GAP=0.00
 for attempt in $(seq 1 "$ATTEMPTS"); do
   # Re-checked per attempt, not just at start: the screen can lock DURING a run, and when it does
   # every remaining attempt is guaranteed to fail for a reason that has nothing to do with the
@@ -433,6 +515,10 @@ case "$APP" in
   kitty)   "$KITTY_BIN" @ --to "$KITTY_SOCK" close-os-window >/dev/null 2>&1 ;;
   ghostty|Ghostty)
     [ -n "$GHOSTTY_WIN" ] && osascript -e "tell application \"Ghostty\" to close window (first window whose id is \"$GHOSTTY_WIN\")" >/dev/null 2>&1 ;;
+  iterm2|iTerm2)
+    # Safe to quit outright: spawn_iterm2 refuses unless iTerm2 was NOT running, so this instance is
+    # entirely ours and no operator session can be inside it.
+    osascript -e 'tell application "iTerm2" to quit' >/dev/null 2>&1 ;;
   wezterm|WezTerm)
     cli=/opt/homebrew/bin/wezterm; [ -x "$cli" ] || cli="$(command -v wezterm)"
     for p in $(timeout 15 "$cli" cli list --format json 2>/dev/null | sed -n 's/.*"pane_id": *\([0-9]*\).*/\1/p' | sort -un); do
@@ -451,6 +537,20 @@ if [ "$TAKE_OK" != 1 ]; then
 fi
 
 BYTES="$(wc -c < "$MP4" | tr -d ' ')"
+# Written INTO the row file: the stall count is a reading from this take, and a reading that lives
+# only in a terminal scrollback is a reading that will be misremembered.
+{
+  printf 'film: %sx%s @ %s  %s bytes\n' "$W" "$H" "$R" "$BYTES"
+  printf 'stalls: %s gap(s) >1.5s between delivered frames, %ss total, longest %ss, over a %ss take\n' \
+    "${STALLS:-0}" "${STALLED_S:-0.00}" "${MAX_GAP:-0.00}" "$SECONDS_TAKE"
+  printf 'load delivered: see %srenderer-film-load.tsv (achieved fps + SUSPECT flag per pane)\n' "${TMPDIR:-/tmp}"
+  printf 'measured pid: %s (that pid pre-existed this run: %s)\n' "${WPID:-?}" "$PID_PREEXISTED"
+  if [ "$PID_PREEXISTED" = yes ]; then
+    printf 'CAVEAT: that process pre-existed this run, so its totals may include surfaces this film\n'
+    printf '        did not create. Read the app-wide columns; the per-pane division is an upper bound.\n'
+  fi
+} >> "$ROW"
 echo "  master: $MP4  ${W}x${H} @ $R  ${BYTES} bytes"
+echo "  stalls: ${STALLS:-0} gap(s) >1.5s totalling ${STALLED_S:-0.00}s, longest ${MAX_GAP:-0.00}s"
 echo "  row:    $ROW  ($(sed -n 's/.*\(verdict=[A-Z-]*\).*/\1/p' "$ROW" | tail -1))"
 echo "verdict=OK app=$APP panes=$SPAWNED"

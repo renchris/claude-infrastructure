@@ -44,10 +44,33 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-COLS="$(tput cols 2>/dev/null || echo 80)"
-ROWS="$(tput lines 2>/dev/null || echo 24)"
-[ "$COLS" -gt 4 ] 2>/dev/null || COLS=80
-[ "$ROWS" -gt 4 ] 2>/dev/null || ROWS=24
+# 🚨 `stty size` FIRST, BECAUSE `tput cols` SILENTLY LIES IN A COMMAND SUBSTITUTION — and it lied in
+# a way that broke the one property this whole file exists to provide.
+#
+# `tput cols` sizes the terminal on its STDOUT, and inside `$( )` stdout is a pipe, not the tty, so
+# tput falls back to the terminfo entry's default: 80x24. Measured 2026-08-01 in one WezTerm pane,
+# same process, same instant:  tput = 80x24  ·  stty size = 44 95.
+#
+# The consequence is not cosmetic. Every pane in that terminal painted an 80x24 frame REGARDLESS of
+# its real size, while the same script in kitty painted each pane at its true dimensions — so the
+# "IDENTICAL, parameterised load in every candidate" that makes a cross-terminal comparison fair was
+# not identical at all, and the candidate doing LESS work was the one being charged more for it. It
+# hid because 80x24 is a plausible size, not an error: nothing failed, nothing warned.
+#
+# `stty size` reads the winsize ioctl on STDIN, which is still the tty, and prints "rows cols". tput
+# stays as the fallback for the genuinely no-tty case (a pipe, a CI runner), where 80x24 is an
+# honest answer rather than a wrong one. SIZE_SRC goes into the stats row so that no future reader
+# has to guess which path produced a number.
+SIZE_SRC='stty'   # quoted: shellcheck SC2209 reads a bare word here as a command name
+_sz="$(stty size 2>/dev/null || true)"
+ROWS="${_sz%% *}"; COLS="${_sz##* }"
+if ! { [ "${COLS:-0}" -gt 4 ] && [ "${ROWS:-0}" -gt 4 ]; } 2>/dev/null; then
+  SIZE_SRC='tput'
+  COLS="$(tput cols 2>/dev/null || echo 80)"
+  ROWS="$(tput lines 2>/dev/null || echo 24)"
+fi
+[ "$COLS" -gt 4 ] 2>/dev/null || { COLS=80; SIZE_SRC='default'; }
+[ "$ROWS" -gt 4 ] 2>/dev/null || { ROWS=24; SIZE_SRC='default'; }
 BODY_ROWS=$(( ROWS - 3 ))
 [ "$BODY_ROWS" -ge 1 ] || BODY_ROWS=1
 
@@ -72,8 +95,13 @@ cleanup() {
   # stops it being read later as a clean measurement.
   local flag
   flag="$(awk -v a="$afps" -v r="$FPS" 'BEGIN{ d=a-r; if(d<0)d=-d; print (r>0 && d/r>0.2) ? "SUSPECT" : "OK" }')"
-  [ -n "$STATS" ] && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$(date -u +%FT%TZ)" "$LABEL" "$$" "$FRAMES" "$BYTES" "${elapsed}s" "$afps" "$NAP_STRATEGY" "$flag" >> "$STATS"
+  # Column 9 stays EXACTLY the OK/SUSPECT flag and nothing else. Appending the geometry to it broke
+  # two existing tests that read `$9` as the verdict — the flag is a contract with its readers, and
+  # widening a field in place is how a consumer silently starts comparing against a string that no
+  # longer means what it did. The new information goes in a NEW column instead.
+  [ -n "$STATS" ] && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -u +%FT%TZ)" "$LABEL" "$$" "$FRAMES" "$BYTES" "${elapsed}s" "$afps" "$NAP_STRATEGY" "$flag" \
+    "${COLS}x${ROWS}/$SIZE_SRC" >> "$STATS"
   [ "$flag" = SUSPECT ] && printf 'tui-load: SUSPECT — requested %s fps, achieved %s\n' "$FPS" "$afps" >&2
   exit 0
 }
