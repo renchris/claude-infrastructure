@@ -404,8 +404,11 @@ Tear down every teammate FIRST, then the worktrees/branches. The teardown call i
   "teams are unavailable".
 
 Detect the running runtime by tool availability (or `CLAUDE_CODE_EXECPATH`), **not** by
-`claude --version` — `claude` is a shell function pinned to the stable launcher, so it reports
-2.1.114 even inside an eval-track session.
+`claude --version` — `claude` is a shell function, so its version answers *which launcher the
+name currently points at*, never *which binary this session is running*. (Since the 2026-07-31
+entrypoint consolidation it reports 2.1.219; before that it reported 2.1.114 even inside an
+eval-track session. Both readings are wrong for the same reason, so the rule is unchanged —
+only the wrong number moved. `claude-previous --version` is the 2.1.114 stable launcher.)
 
 ```bash
 # After every teammate has shut down (per the runtime-conditional call above) and the merge loop completes:

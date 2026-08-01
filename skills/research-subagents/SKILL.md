@@ -432,8 +432,9 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
 **`Explore` vs `deep-research` vs `general-purpose`**:
 
 - `Explore`: built-in, fast, read-only. **Cost is track-conditional — verify
-  the running track before pricing a fan-out:** stable `claude`/`cc` (2.1.114)
-  → Haiku-tier (~70× cheaper); eval `claude-next` (**≥2.1.198**) → Explore
+  the running track before pricing a fan-out:** stable `claude-previous`/`cc-previous`
+  (2.1.114 — these were `claude`/`cc` before the 2026-07-31 entrypoint consolidation)
+  → Haiku-tier (~70× cheaper); eval `claude`/`claude-next` (**≥2.1.198**) → Explore
   inherits the **LEAD model, capped at opus** (2.1.198 change), so a heavy
   Explore fan-out draws opus/lead-tier quota — the ~70× discount does NOT hold
   on the eval track. Use for terminal codebase lookups, file:line discovery,
@@ -763,7 +764,7 @@ less. The framing is the trigger; the actual question space is what counts.
 
 > Recursion status (May 2026 — SUPERSEDED on CC 2.1.183; see Update below): depth-2 fan-out NOT operational in stock Claude Code. The `Agent` tool is not exposed to subagents regardless of frontmatter declaration (GH #46424 primary blocker; also #4182, #19077, #31977, #30703). Default to depth-1 flat fan-out and re-spawn from lead context when sub-axes emerge. Workarounds + re-evaluation trigger: `~/.claude/memory/research-subagents-recursion-regression.md`.
 >
-> **Update 2026-06-19 — RESOLVED on CC 2.1.183 (claude-next), empirically verified.** A controlled headless probe against the 2.1.183 binary (`--safe-mode --permission-mode auto`, Opus parent) returned `{"fanout4_completed": true, "depth2_DEPTH2OK": true}`: a worker subagent spawned its own leaf sub-subagent via the `Agent` tool and relayed the result up (depth-2 works → #46424 cleared), and four parallel workers under an Opus parent all completed with no session termination (→ GH #61258 does not reproduce on 2.1.183). So on the **2.1.183 runtime** hierarchical fan-out (lead → mid-tier synthesizers → leaf workers — the § Synthesis Bottleneck N>50 pattern) is available; prefer it over re-spawn-from-lead when sub-axes emerge. **Scope:** verified depth-2 (the operationally relevant tier; the 2.1.172 changelog claims up to 5, untested past 2). The **stable `claude` track (still 2.1.114 until bumped) keeps the old non-recursive behavior** — hold depth-1 discipline there. Probe provenance: claude-next 2.1.170→2.1.183 upgrade session, 2026-06-19.
+> **Update 2026-06-19 — RESOLVED on CC 2.1.183 (claude-next), empirically verified.** A controlled headless probe against the 2.1.183 binary (`--safe-mode --permission-mode auto`, Opus parent) returned `{"fanout4_completed": true, "depth2_DEPTH2OK": true}`: a worker subagent spawned its own leaf sub-subagent via the `Agent` tool and relayed the result up (depth-2 works → #46424 cleared), and four parallel workers under an Opus parent all completed with no session termination (→ GH #61258 does not reproduce on 2.1.183). So on the **2.1.183 runtime** hierarchical fan-out (lead → mid-tier synthesizers → leaf workers — the § Synthesis Bottleneck N>50 pattern) is available; prefer it over re-spawn-from-lead when sub-axes emerge. **Scope:** verified depth-2 (the operationally relevant tier; the 2.1.172 changelog claims up to 5, untested past 2). The **stable track (2.1.114, reached as `claude-previous` since the 2026-07-31 entrypoint consolidation renamed it off `claude`) keeps the old non-recursive behavior** — hold depth-1 discipline there. Probe provenance: claude-next 2.1.170→2.1.183 upgrade session, 2026-06-19.
 
 ## Relationship to Other Rules
 
