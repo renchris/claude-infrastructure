@@ -28,7 +28,7 @@
 #            CC_SUP_PAGE_DEADLINE_S · CC_SUP_TRUNK · CC_SUP_GC_S · CC_SUP_OWNER_PAT · CC_PAGE_TO_FILE ·
 #            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_SUP_TIMEOUT_BIN ·
 #            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S ·
-#            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST
+#            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST · CC_SUP_OS_CHANNEL
 set -uo pipefail
 
 # ── BOUNDED EXTERNALS: one hung fork must never end all supervision (audit 2026-07-22 root cause 4, S1) ──
@@ -147,23 +147,135 @@ done
 # deliberately NOT re-paged here (a per-sweep re-page of an undrainable box is the 2026-07-19 storm).
 # Returns 0 = ENQUEUED (or damping-suppressed) ⇒ caller records its marker · 1 = no channel wired ·
 # 2 = send attempted and cc-notify FAILED ⇒ marker NOT recorded, so the next sweep retries.
-# page_escalate_os <verdict> <message> — last-resort delivery for a page cc-notify could not put in
-# front of a human. Notification Center needs no live pane and no role file, so it is the one
-# channel that cannot rot the way cc-roles/desk did (it addressed a dead pane for 15 h on
-# 2026-07-31). Text is passed as an AppleScript ARGV item, never interpolated into the script
-# source — the message is attacker-adjacent (it quotes a blocked session's command line, which on
-# 2026-07-31 was a shell-injection probe full of quotes and $( )). Best-effort and always rc 0: a
-# failed escalation must never break the sweep that raised it.
-page_escalate_os(){ # $1=verdict  $2=message
-  command -v osascript >/dev/null 2>&1 || return 0
-  sup_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || true
+# ── THERE IS NO DESK, AND THAT IS A SUPPORTED CONFIGURATION (2026-08-01) ─────────────────────────
+# This pager was designed around a live "desk" orchestrator session: cc-roles/desk names a pane, and
+# a page counts as DELIVERED when cc-notify reaches it. That fleet is not what runs here. No desk
+# session is kept; com.claude.desk-invariant — the only organ that can CREATE one — is not loaded;
+# and the role file still holds an iTerm2 pane uuid from 2026-07-26 whose pane has self-closed and
+# whose `.forward` successor is equally dead, in a fleet that has since moved to kitty panes. So
+# `cc-notify --role desk` returns rc 0 with verdict=mailbox-only/unverified FOREVER. That is a
+# STATIC CONFIGURATION, not a transient fault, and the pager must be excellent in it — not merely
+# survive it.
+#
+# e6d789a8 was right that rc alone is not the outcome (15.2 h of pages recorded as sent into a box
+# holding 997 unacked lines). But it routed EVERY non-delivered verdict down the failure path, which
+# `damp_forget`s the D7 marker so the next sweep re-sends. Against a permanently dead desk that is an
+# unbounded loop: measured 2026-08-01, 8,025 `page SEND FAILED` lines and up to 1,519 OS
+# notifications in ONE hour, 14 per 30 s sweep — precisely the 2026-07-19 composer storm the D7
+# comments forbid. The remedy overshot the bug: silence became noise, and noise is the same zero bits
+# (memory: alarm-polarity-and-attention-budget).
+#
+# The missing distinction is that "not delivered to a live pane" is THREE outcomes, and only the
+# last is retryable:
+#   REACHED   rc 0 + verdict=delivered  — a live session holds it. Done.
+#   RECORDED  rc 0 + any other verdict  — enqueued to a mailbox with no proven reader. Under a
+#             desk-less fleet this is the NORMAL steady state. The operator is reached on the
+#             liveness-free channel instead, and the D7 marker is KEPT: the page WAS delivered, just
+#             by the other channel. Re-deriving it every 30 s adds no information.
+#   REFUSED   rc != 0 (3 unresolvable · 5 inbox unwritable · 124 cut at the bound) — the transport
+#             took nothing at all. Marker withheld ⇒ the next sweep genuinely retries. This, and
+#             only this, is the case e6d789a8's retry was built for.
+#
+# And because one notification PER FINDING is still a storm at 14 findings a sweep, the RECORDED
+# class is DIGESTED (digest_flush): findings accumulate across the sweep and leave as ONE
+# notification naming the causes.
+#
+# page_escalate_os <title-tail> <message> — delivery on a channel with NO liveness dependency.
+# Notification Center needs no live pane and no role file, so it cannot rot the way cc-roles/desk did
+# (it addressed a dead pane for 15 h on 2026-07-31). Text is passed as an AppleScript ARGV item,
+# never interpolated into the script source — the message is attacker-adjacent (it quotes a blocked
+# session's command line, which on 2026-07-31 was a shell-injection probe full of quotes and $( )).
+# Still best-effort — it can never break the sweep that raised it — but it now RETURNS ITS OUTCOME
+# (0 = posted · 1 = no channel, or the post failed/was cut) instead of always claiming 0. A caller
+# that keeps a damping marker on the strength of this call must be able to tell whether anything was
+# actually put in front of a human (memory: claimed-outcome-vs-checked-outcome).
+page_escalate_os(){ # $1=title-tail  $2=message → 0 = POSTED · 1 = not posted
+  os_channel_available || return 1
+  sup_bounded 10 osascript - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
 on run argv
   set v to item 1 of argv
   set m to item 2 of argv
   if (count of m) > 200 then set m to (text 1 thru 200 of m)
-  display notification m with title ("Claude fleet — page UNDELIVERED (" & v & ")") sound name "Funk"
+  display notification m with title ("Claude fleet — " & v) sound name "Funk"
 end run
 OSA
+  return 0
+}
+
+# Is a liveness-free operator surface available AT ALL? If osascript is absent there is no desk-less
+# delivery path, so RECORDED must stay a hard failure that retries — exactly the pre-2026-08-01
+# posture. A capability we cannot use must never be assumed present.
+#
+# CC_SUP_OS_CHANNEL is a real operator switch as well as the test seam: `off` gives back the
+# mailbox-only-and-retry posture (for a box where Notification Center is not the right surface, or a
+# desk IS being run), `on` forces the channel, `auto` (default) probes. A pure `command -v` with no
+# seam would be untestable in the one direction that matters — a suite cannot un-find /usr/bin/
+# osascript via PATH, so the no-channel branch would ship unproven, which is how this whole class
+# shipped in the first place.
+os_channel_available(){
+  case "${CC_SUP_OS_CHANNEL:-auto}" in
+    off) return 1 ;;
+    on)  return 0 ;;
+    *)   command -v osascript >/dev/null 2>&1 ;;
+  esac
+}
+
+# ── DIGEST — one notification per SWEEP, never one per finding ────────────────────────────────────
+# Accumulated by send_page's RECORDED branch, flushed once at the end of sweep().
+#
+# FILE-backed, not shell globals, and that is load-bearing: sweep() collects its findings through
+# COMMAND SUBSTITUTION — `r="$(assess "$f")"` and `pp="$(sweep_permission_pending)"` — so every
+# send_page call runs inside a SUBSHELL. A counter incremented there mutates a copy that dies with
+# the subshell, leaving the parent to flush an empty digest: findings recorded, operator never told.
+# Measured on T32's first GREEN run — the anti-storm assertions passed while posts=0, i.e. the half
+# that suppresses noise worked and the half that delivers had silently gone. A file crosses the
+# subshell boundary; a variable cannot.
+DIGEST_FILE="${CC_SUP_DIGEST_FILE:-$PAGEDIR/digest.pending}"
+digest_add(){ # $1=state-fingerprint — reduce it to its CAUSE word and record it
+  local c="${1:-page}"
+  case "$c" in
+    page:*:*) c="${c##*:}" ;;        # page:<sid>:<STATE> → the STATE is the news, not the sid
+    *:*)      c="${c%%:*}" ;;        # permpend:… / selfcheck:… → the class word
+  esac
+  [ -n "$c" ] || c="page"
+  _ensure
+  printf '%s\n' "$c" >> "$DIGEST_FILE" 2>/dev/null || true
+}
+# The digest fingerprint is the distinct CAUSE SET plus a BUCKETED count — never the raw count. A
+# fleet flapping 13↔14 findings is the same news and must stay quiet, while a NEW cause class, or a
+# jump from 2 to 14, crosses a bucket and breaks through on the next sweep. (page-damp's contract:
+# the fingerprint is the page's STATE, never a counter — a raw count is a counter wearing a state's
+# clothes, and it would silently disable damping while looking wired.)
+digest_bucket(){ # $1=n
+  if   [ "$1" -le 1 ]; then printf '1'
+  elif [ "$1" -le 4 ]; then printf '2-4'
+  elif [ "$1" -le 9 ]; then printf '5-9'
+  else                      printf '10+'
+  fi
+}
+digest_flush(){
+  [ -s "$DIGEST_FILE" ] || { rm -f "$DIGEST_FILE" 2>/dev/null; return 0; }
+  local n causes fp
+  n="$(wc -l < "$DIGEST_FILE" 2>/dev/null | tr -dc '0-9')"; : "${n:=0}"
+  causes="$(sort -u "$DIGEST_FILE" 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+  # CONSUME before deciding: a flush that returns early (damped) must not leave the pending set to
+  # be re-counted next sweep, which would inflate every later digest by the whole backlog.
+  rm -f "$DIGEST_FILE" 2>/dev/null
+  [ "$n" -gt 0 ] || return 0
+  fp="digest:${causes}:$(digest_bucket "$n")"
+  if command -v damp_should_send >/dev/null 2>&1; then
+    damp_should_send "os:notification-center" "$fp" || return 0    # unchanged news, inside the TTL
+  fi
+  if page_escalate_os "${n} session(s) need attention" \
+       "No desk session is registered, so these were recorded to the mailbox and surfaced here instead. Causes: ${causes}. Detail: tail ${SUPLOG}"; then
+    idl page_digest "\"n\":$n,\"causes\":$(json_str "$causes"),\"channel\":\"notification-center\",\"why\":\"no live desk — the liveness-free channel is the PRIMARY operator surface in this configuration; one digest per sweep, damped on the cause set\""
+    printf '%s  digest POSTED n=%s causes=%s\n' "$(utc)" "$n" "$causes" >> "$SUPLOG" 2>/dev/null || true
+  else
+    # Nothing reached a human. Drop the digest's own marker so the next sweep re-posts it — the
+    # per-finding markers stay (they are mailbox records); this one is the operator-facing claim.
+    command -v damp_forget >/dev/null 2>&1 && damp_forget "os:notification-center" "$fp"
+    printf '%s  digest POST FAILED n=%s causes=%s\n' "$(utc)" "$n" "$causes" >> "$SUPLOG" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -204,19 +316,33 @@ send_page(){ # $1=message [$2=state-fingerprint]
   _verdict="$(printf '%s' "$_out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
   : "${_verdict:=unreadable}"
 
+  # ── REACHED ──
   if [ "$rc" = 0 ] && [ "$_verdict" = delivered ]; then
     return 0
   fi
 
-  # Reached a mailbox nobody drains, or the verdict was unreadable. The operator did NOT get this.
-  # Escalate to a channel with NO liveness dependency: an OS notification needs no live pane and no
-  # role file, so it cannot rot the way cc-roles/desk does (it pointed at a dead pane for 15h).
-  if [ "$rc" = 0 ]; then
-    page_escalate_os "$_verdict" "$msg"
-    echo "lead-supervisor: PAGE-UNDELIVERED verdict=$_verdict rc=$rc target=${PAGE_TO:-role:$PAGE_TO_FILE} — enqueued to a box with no drain; escalated to an OS notification." >&2
+  # ── RECORDED — enqueued, but no live reader. The steady state of a desk-less fleet. ──
+  # The mailbox record stands (a desk registered later drains it); the OPERATOR is reached on the
+  # liveness-free channel, digested to one notification per sweep. The D7 marker is KEPT, because
+  # the page was delivered — by the other channel. Re-sending it every 30 s is the storm, not the fix.
+  if [ "$rc" = 0 ] && os_channel_available; then
+    digest_add "$fp"
+    printf '%s  page RECORDED (no live desk) verdict=%s fp=%s → digest\n' \
+      "$(utc)" "$_verdict" "${fp:-none}" >> "$SUPLOG" 2>/dev/null || true
+    return 0
   fi
-  # The D7 marker was written BEFORE the attempt (an intent to send). A failed send must not burn its
-  # TTL suppressing the retry — drop it, so the next sweep genuinely re-sends rather than re-damping.
+
+  # ── REFUSED (or RECORDED with no liveness-free channel to fall back on) ──
+  # Nothing anywhere took this page. Escalate what we can and RETRY: the D7 marker was written BEFORE
+  # the attempt (an intent to send), and a failed send must not burn its TTL suppressing the retry.
+  # The notification for THIS class goes through the digest as well, never one-per-finding: a
+  # transport that starts refusing does so for every finding at once, so a per-finding escalation
+  # here would rebuild the same storm in the other arm.
+  if [ "$rc" = 0 ]; then
+    echo "lead-supervisor: PAGE-UNDELIVERED verdict=$_verdict rc=$rc target=${PAGE_TO:-role:$PAGE_TO_FILE} — enqueued to a box with no drain, and no osascript channel to fall back on." >&2
+  else
+    digest_add "transport-refused"
+  fi
   [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
   # NEVER silent: the page the operator did not get is itself an incident record (S-4).
   idl page_send_failed "\"target\":$(json_str "${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")}"),\"notify_rc\":$rc,\"why\":\"cc-notify refused the page (rc $rc: 3=unresolvable target, 5=inbox unwritable, 124=CUT at the ${SUP_NOTIFY_TIMEOUT_S}s bound — send never completed) — NOT delivered; damping marker withheld so the next sweep retries\""
@@ -686,6 +812,10 @@ sweep(){
   # V3 self-check LAST, on the count this sweep actually enumerated: a heartbeat of "swept 0, found 0" is
   # an all-clear that must not be emitted while live panes sit outside the world-view it swept.
   self_check "$n"
+  # LAST act of the sweep: every page RECORDED-but-not-delivered above leaves as ONE notification.
+  # This is the desk-less fleet's primary operator surface, so it must run after self_check — a
+  # blind-spot page belongs in the same digest as the findings it may explain.
+  digest_flush
   heartbeat "$n" "$found" "$gc"
 }
 

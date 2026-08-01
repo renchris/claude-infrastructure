@@ -32,13 +32,14 @@ setup() {
   # the summary line is the un-fakeable outcome: "N passed, 0 failed"
   echo "$output" | grep -qE 'supervisor-e2e: [0-9]+ passed, 0 failed'
   # guard against a zero-check 'pass' (a suite that silently runs nothing must not read green).
-  # RATCHET: raised 36 → 74 (T30 bounded externals) → 83 (T31 V3 self-check). The floor is the whole
-  # point — a refactor that silently drops checks must fail here rather than read green on a shrunken suite.
+  # RATCHET: raised 36 → 74 (T30 bounded externals) → 83 (T31 V3 self-check) → 97 (T32 desk-less
+  # delivery). The floor is the whole point — a refactor that silently drops checks must fail here
+  # rather than read green on a shrunken suite.
   # T30's 9 checks need a real timeout(1); where the box has none it SKIPs wholesale, so the floor drops
-  # to 74 for that case only. Deriving the floor from the skip line (rather than pinning the lower number
-  # everywhere) keeps the ratchet at full strength on every box that can actually run the checks.
-  floor=83
-  if echo "$output" | grep -q 'SKIP T30'; then floor=74; fi
+  # by exactly those 9 for that case only. Deriving the floor from the skip line (rather than pinning the
+  # lower number everywhere) keeps the ratchet at full strength on every box that can actually run them.
+  floor=97
+  if echo "$output" | grep -q 'SKIP T30'; then floor=88; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
   [ "${n_pass:-0}" -ge "$floor" ]
 }
@@ -79,6 +80,22 @@ setup() {
   echo "$output" | grep -q 'refused send leaves NO damping marker'
   echo "$output" | grep -q 'refused send is IDL-recorded'
   echo "$output" | grep -q 'refused page RETRIED on the next sweep'
+}
+
+@test "T32: no desk registered is a supported configuration — delivered, digested, never a storm" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T32 DESK-LESS DELIVERY'
+  # the incident itself: a permanently-dead desk must not re-send every sweep (8,025 SEND FAILED
+  # lines / up to 1,519 notifications an hour, 14 per 30s sweep), and must not cost one
+  # notification PER FINDING
+  echo "$output" | grep -q 'is NOT re-sent every sweep'
+  echo "$output" | grep -q 'exactly ONE notification for the sweep'
+  # …while still actually reaching the operator, and still letting real change through
+  echo "$output" | grep -q 'the operator IS reached'
+  echo "$output" | grep -q 'NEW cause class .* breaks through'
+  # the two directions that must NOT be collapsed into the quiet path
+  echo "$output" | grep -q "REFUSED page is still RETRIED"
+  echo "$output" | grep -q "never silently 'handled'"
 }
 
 @test "T30: a hung external fork does not end supervision — bounded git/find + the INDETERMINATE third state" {
