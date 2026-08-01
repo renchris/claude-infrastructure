@@ -230,3 +230,26 @@ subagents/sidechains).
   premise corrected. P0 writer/reader key split confirmed and quantified at **1,747 unacked lines in
   79 pane-keyed boxes**. Design W1–W3 frozen. **Nothing implemented yet** — this is the investigation
   deliverable; W1 is a settings + stream change, ordered behind the P0 address fix.
+
+- **2026-08-01** — **Currency re-confirmed on 2.1.220** (the binary now in use; §1 measured 2.1.219).
+  `asyncRewake` 7 · `rewakeSummary` 5 · `rewakeMessage` 4 · `watchPaths` 13 occurrences — **identical
+  counts in both bundles**, so the §1 schema table and the W1 design are current, not stale. A
+  successor does not need to re-probe.
+
+  Also read off the bundle: the **exact render path** for the grey in-pane block, which settles a
+  question §1 only implied — *who owns the operator-visible text*. On a hook exiting 2:
+
+  ```js
+  if (f.code === 2) {
+    let y = `Stop hook blocking error from command "${i}":`, T = "Stop hook feedback";
+    if (l !== void 0) y = l;          // prefix override
+    if (_ !== void 0) T = _;          // _ = rewakeSummary  → overrides the summary label
+    else if (c !== void 0) T = c;
+  ```
+
+  So the **dark-grey styling and both default strings are the binary's**, not ours — our hooks emit
+  zero ANSI. What IS ours is the `reason` body, and `rewakeSummary` is the only lever over the label.
+  Consequence for the wake floor: its ~160-word `decision:"block"` reason
+  (`hooks/session-continue.sh:499-513`) is operator-visible by construction and cannot be styled away
+  — **W1 is the fix, because it deletes the block entirely** (the harness arms at birth, so there is
+  no Stop turn to render). Shortening the reason is a palliative for the pre-W1 window only.
