@@ -11,9 +11,11 @@ Loaded by `~/.claude/CLAUDE.md` Agent Teams section. Applies to **every project*
 ## Runtime assumption (CC version — corrected 2026-06-20)
 
 **Two tracks, and BOTH are teams runtimes — they differ only in the team API surface:**
-- **Stable** (`claude` / `cc` → CC **2.1.114**, deliberately pinned): exposes the classic
+- **Stable** (`claude-previous` / `cc-previous` → CC **2.1.114**, deliberately pinned; these were
+  named `claude` / `cc` before the 2026-07-31 entrypoint consolidation): exposes the classic
   **`TeamCreate` / `TeamDelete`** tools that this file's examples use.
-- **Eval** (`claude-next` → CC **2.1.183**, the `~/.claude-183` binary): on **2.1.178+**, which
+- **Eval** (`claude` / `cc` → CC **2.1.219**, the `~/.claude-219` binary; `claude-next` and
+  `claude-opus5` are back-compat shims onto the same body): on **2.1.178+**, which
   **removed `TeamCreate` / `TeamDelete`** for an **implicit-team model** — you spawn teammates by
   calling the **`Agent` tool with `team_name`** (the runtime forms the team implicitly; the
   `TeamCreate`/`TeamDelete` *tools* simply don't exist). Agent Teams are ENABLED here
@@ -22,10 +24,14 @@ Loaded by `~/.claude/CLAUDE.md` Agent Teams section. Applies to **every project*
   framing is **superseded**. Stable 2.1.114 stays pinned — by *choice*, not by a teams gap.
 
 **Detect the RUNNING runtime — do NOT trust `claude --version`.** `claude` / `cc` are shell
-functions that resolve the *stable-pinned* launcher (`~/.claude-versions/current` → 2.1.114), so
-`claude --version` reports **2.1.114 even inside a 2.1.183 `claude-next` session** — the classic
-"claude is a shell function" trap, except it returns a plausible-but-wrong number instead of
-failing, so the usual alarm doesn't fire. Identify the actual session by: the `AI_AGENT` env
+functions, so their version reports **which launcher the name points at right now, never which
+binary this session is running** — the classic "claude is a shell function" trap, except it
+returns a plausible-but-wrong number instead of failing, so the usual alarm doesn't fire.
+The wrong number is not even stable: before the 2026-07-31 entrypoint consolidation `claude`
+resolved the stable pin (`~/.claude-versions/current` → 2.1.114) and under-reported inside an
+eval-track session; it now resolves the consolidated eval launcher (`~/.claude-219` → 2.1.219)
+and **over**-reports inside a stable session. `claude-previous` / `cc-previous` are the stable
+2.1.114 names. Identify the actual session by: the `AI_AGENT` env
 (`claude-code_2-1-XXX_agent`), `CLAUDE_CODE_EXECPATH` (`.../.claude-183/...` ⟹ eval/2.1.183), the
 parent process command, or **tool availability** (`TeamCreate`/`TeamDelete` present ⟹ 2.1.114;
 absent ⟹ implicit-team model ⟹ 2.1.178+). **Absence of `TeamCreate` means USE the implicit-team
