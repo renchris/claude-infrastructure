@@ -179,14 +179,27 @@ fake_hang() { fake 'sleep 300'; }
 # ── terminal dispatch: inside kitty this shim must speak kitty, not iTerm2 ────────────────────────
 # Claude Code's ITermBackend spawns a PATH-resolved `it2` and never handshakes with iTerm2, so the
 # divert is what turns Agent Teams assignee panes into NATIVE KITTY SPLITS. These tests own the
-# divert's three states; the wrapper's own `setup` pins it OFF, so each one opts back in explicitly.
+# divert's states; the wrapper's own `setup` pins it OFF, so each one opts back in explicitly.
+#
+# KITTY_WINDOW_ID IS NOT WHAT DECIDES THIS, and these tests used to say it was. It is an ordinary
+# exported env var: an iTerm2.app launched from a kitty pane hands it to every iTerm2 pane under it
+# forever, so on 2026-07-31 the wrapper diverted inside genuine iTerm2 panes and every Agent Teams
+# spawn died at USE time while `session list` stayed green. bin/cc-in-kitty now answers the question
+# by ancestry; the wrapper's job — and all this file asserts — is to ASK it and obey.
 
-# A stand-in translator, so the divert is proven WITHOUT needing a live kitty.
+# A stand-in translator and a stand-in verdict, so the divert is proven WITHOUT needing a live kitty.
+# $1 is the exit code cc-in-kitty returns: 0 = genuinely kitty, 1 = inherited vars only, 2 = cannot
+# tell. Passing "none" omits the helper entirely (the stale/partial-deploy state).
 fake_kitty_translator() {
   KDIR="$BATS_TEST_TMPDIR/bin"; mkdir -p "$KDIR"
   cp "$W" "$KDIR/it2-wrapper"
   { printf '#!/bin/bash\n'; printf 'printf "KITTYPATH:%%s\\n" "$*"; exit 0\n'; } > "$KDIR/it2-kitty"
   chmod +x "$KDIR/it2-kitty"
+  rm -f "$KDIR/cc-in-kitty"
+  if [ "${1:-0}" != "none" ]; then
+    { printf '#!/bin/bash\n'; printf 'exit %s\n' "${1:-0}"; } > "$KDIR/cc-in-kitty"
+    chmod +x "$KDIR/cc-in-kitty"
+  fi
 }
 
 @test "inside kitty, the wrapper diverts to it2-kitty instead of the iTerm2 CLI" {
@@ -233,4 +246,46 @@ fake_kitty_translator() {
   # happens to be running — a pane in a window the operator is not even looking at.
   [ "$status" -eq 4 ]
   [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 0 ]
+}
+
+@test "REGRESSION ANCHOR: an iTerm2 pane that INHERITED KITTY_WINDOW_ID must NOT divert" {
+  # The exact 2026-07-31 state. Under the old predicate this diverted, `session list` returned rc 0
+  # from a background kitty, Claude Code cached the backend as AVAILABLE, and every teammate spawn
+  # then died on `not a kitty window id` with no fallback. KITTY_WINDOW_ID is set here on purpose:
+  # if the wrapper ever goes back to reading it directly, this test is what goes red.
+  fake_kitty_translator 1
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=11
+  run "$KDIR/it2-wrapper" session split -v -s E5D77446-2AE5-4463-929A-7ACBCD97018E
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "an UNVERIFIABLE terminal (rc 2) is treated as not-kitty, not as kitty" {
+  # rc 2 means cc-in-kitty could not walk the tree. Fail-closed: the iTerm2 path is the one that is
+  # correct in the common polluted case, and on a real kitty box the real it2 fails loudly instead.
+  fake_kitty_translator 2
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=7
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "cc-in-kitty MISSING: falls back to iTerm2 and says so — never a silent terminal choice" {
+  # ~/.claude/bin/it2 is a COPY and cc-in-kitty a SYMLINK, so a partial deploy really can land a
+  # wrapper whose verifier is absent. Guessing either way would be the original defect; the wrapper
+  # takes the pre-divert path and names the missing file.
+  fake_kitty_translator none
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY
+  export KITTY_WINDOW_ID=7
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
+  echo "$output" | grep -q 'cannot verify the terminal' || { echo "$output"; false; }
 }

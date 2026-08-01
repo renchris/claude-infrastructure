@@ -37,6 +37,11 @@ setup() {
   export CC_KITTY_LOGIN_RC="$HOME/.zprofile"
   export CC_KITTY_SHIM_DIR="$HOME/.claude/shims"
   export CC_KITTY_SETTINGS="$HOME/settings.json"
+  # Step 5 proves the USE path by really splitting a pane and closing it. That is the right check
+  # for an operator running --check in their own terminal and the WRONG thing for a test suite: run
+  # from a genuine kitty pane it would open and close panes in the operator's live window on every
+  # invocation. A guard whose verifier triggers the guarded effect is its own defect.
+  export CC_KITTY_NO_SPAWN_CHECK=1
   printf '{"teammateMode":"iterm2"}\n' > "$CC_KITTY_SETTINGS"
   : > "$CC_KITTY_SHELL_RC"
   : > "$CC_KITTY_LOGIN_RC"

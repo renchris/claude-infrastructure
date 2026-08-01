@@ -1,0 +1,109 @@
+#!/bin/sh
+# cc-in-kitty — is THIS process genuinely running inside a kitty pane?
+#
+# exit 0 = yes   ·   exit 1 = no   ·   exit 2 = KITTY_* present but UNVERIFIABLE (treat as no)
+# `--why` prints the reason on stdout; silent otherwise. Callers use it as a predicate:
+#
+#     if cc-in-kitty; then ...        # 1 and 2 are both "not kitty" — fail-closed by construction
+#
+# ── WHY THIS EXISTS: `[ -n "$KITTY_WINDOW_ID" ]` IS NOT A TERMINAL TEST ──────────────────────────
+# KITTY_WINDOW_ID, KITTY_PID, KITTY_LISTEN_ON and KITTY_INSTALLATION_DIR are ordinary exported
+# environment variables. Every process launched from a kitty pane inherits them TRANSITIVELY AND
+# PERMANENTLY — and neither terminal scrubs the other's. Measured on this box 2026-07-31:
+#
+#   iTerm2.app (pid 78683, a direct child of launchd) carried KITTY_WINDOW_ID=11, KITTY_PID=613,
+#   KITTY_LISTEN_ON=unix:/tmp/kitty-613 — and ITERM_SESSION_ID=w0t0p0:11, the synthetic value
+#   scripts/kitty-setup.sh's own rc block had exported into the kitty pane it was launched from.
+#
+# iTerm2 overwrites ITERM_SESSION_ID per pane, so each pane got a correct iTerm2 id — but the
+# KITTY_* vars survived untouched into EVERY pane of that iTerm2 instance. So bin/it2-wrapper's
+# divert fired inside iTerm2 and handed a real iTerm2 UUID to bin/it2-kitty:
+#
+#   $ it2 session list                       → rc 0 (kitty is alive, 20 windows)   ← probe PASSES
+#   $ it2 session split -v -s E5D77446-…     → it2-kitty: not a kitty window id    ← every USE fails
+#
+# That shape is worse than a failing probe. Claude Code's isAvailable() caches AVAILABLE off the
+# rc-0 `session list`, so teammateMode=iterm2 stays on and every assignee spawn dies at use time
+# with no fallback to in-process teammates. It blocked a 3-way research fan-out on 2026-07-31.
+# The mirror also holds: a kitty pane launched from iTerm2 inherits a stale ITERM_SESSION_ID.
+#
+# ── THE DISCRIMINATOR: ANCESTRY, NOT ENVIRONMENT ─────────────────────────────────────────────────
+# An env var says where a process CAME FROM; the process tree says where it IS. If we are genuinely
+# inside a kitty pane then kitty itself is one of our ancestors, because kitty forks the pane's
+# shell. Inheritance cannot fake that: an app launched from a kitty pane via LaunchServices is
+# reparented to launchd (verified — both iTerm.app and iTermServer had ppid 1), so its descendants
+# carry the vars but not the lineage.
+#
+# Positive control, measured 2026-07-31 (this is the calibration that makes the test meaningful —
+# without it, "kitty is not an ancestor" could just mean the walk never works):
+#   6 of 6 foreground processes in genuine kitty windows found kitty(613) at depth 3-4;
+#   the iTerm2 pane with the FULLY polluted env (all four KITTY_* set) found it at no depth.
+#
+# TERM was rejected as the discriminator: kitty's is configurable (`term` in kitty.conf) and both
+# terminals' values are rewritten by ssh/tmux/screen, so it answers a different question.
+#
+# ── FAIL-CLOSED ──────────────────────────────────────────────────────────────────────────────────
+# Every unverifiable state resolves to NOT-kitty, whose consequence is that bin/it2-wrapper keeps
+# its pre-divert iTerm2 behaviour. On iTerm2 that is correct; on kitty the real it2 exits 2 and
+# Claude Code falls back to in-process teammates — the visible degradation the wrapper is designed
+# for, never a silent wrong-terminal drive.
+#
+# Seam: CC_TERM — honored verbatim ahead of every check (`CC_TERM=kitty` forces yes, any other
+# non-empty value forces no). Deliberately NOT written by the rc block: a cached verdict in an
+# exported variable is the very inheritance defect this file exists to fix.
+
+set -u
+
+VERBOSE=0
+case "${1:-}" in
+  --why) VERBOSE=1 ;;
+  "")    ;;
+  *)     printf 'cc-in-kitty: unknown argument: %s (accepts --why)\n' "$1" >&2; exit 64 ;;
+esac
+
+say() { [ "$VERBOSE" = 1 ] && printf '%s\n' "$*"; return 0; }
+
+# 1. Explicit override wins over any inference.
+if [ -n "${CC_TERM:-}" ]; then
+  if [ "$CC_TERM" = kitty ]; then say "CC_TERM=kitty — explicit override"; exit 0; fi
+  say "CC_TERM=$CC_TERM — explicit override, not kitty"; exit 1
+fi
+
+# 2. The cheap reject. A machine that has never run kitty pays nothing beyond this line: no fork,
+#    no ps, no measurable cost on `session list`, the fleet's hot liveness probe.
+case "${KITTY_WINDOW_ID:-}" in
+  ''|*[!0-9]*) say "KITTY_WINDOW_ID unset or non-numeric — not kitty"; exit 1 ;;
+esac
+
+# 3. Without KITTY_PID there is nothing to check the lineage AGAINST. Say so rather than guessing:
+#    "unverifiable" and "not kitty" have the same fail-closed consequence but different fixes, and
+#    collapsing them is how a broken deploy reads as a terminal choice.
+case "${KITTY_PID:-}" in
+  ''|*[!0-9]*) say "KITTY_WINDOW_ID=$KITTY_WINDOW_ID but KITTY_PID unset/non-numeric — UNVERIFIABLE"; exit 2 ;;
+esac
+if [ "$KITTY_PID" -le 1 ]; then
+  # pid 1 is launchd, an ancestor of everything — accepting it would make the walk answer yes for
+  # every process on the box, i.e. exactly the false positive this file removes.
+  say "KITTY_PID=$KITTY_PID is not a real kitty pid — UNVERIFIABLE"; exit 2
+fi
+
+# 4. Walk our own ancestry. ONE ps snapshot rather than a ps per hop: the walk is 3-4 deep in
+#    practice but the fork count is what shows up on the hot path.
+ps -Ao pid=,ppid= 2>/dev/null | awk -v start="$$" -v target="$KITTY_PID" '
+  { parent[$1] = $2 }
+  END {
+    if (!(start in parent)) exit 3           # our own pid missing from the snapshot: a bad read
+    c = start
+    for (i = 0; i < 128; i++) {              # bounded: a cycle must not hang a spawn path
+      if (c == target) exit 0
+      if (!(c in parent)) exit 3             # chain broke mid-walk (an ancestor was reaped)
+      c = parent[c]
+      if (c <= 1) exit 1                     # reached launchd without meeting kitty: DEFINITIVE no
+    }
+    exit 3
+  }'
+case "$?" in
+  0) say "kitty[$KITTY_PID] is an ancestor — genuinely inside kitty window $KITTY_WINDOW_ID"; exit 0 ;;
+  1) say "KITTY_WINDOW_ID=$KITTY_WINDOW_ID/KITTY_PID=$KITTY_PID are INHERITED, not ours — kitty is not an ancestor, so this is NOT a kitty pane"; exit 1 ;;
+  *) say "could not walk the process tree (ps unreadable or a chain was reaped) — UNVERIFIABLE"; exit 2 ;;
+esac

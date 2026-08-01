@@ -68,18 +68,43 @@ TIMEOUT_S="${IT2_WRAPPER_TIMEOUT_S:-30}"
 # `sed -n 's/^REAL_IT2="\(.*\)"$/\1/p'`, and tests/it2-wrapper.bats pins that contract. Nothing here
 # matches that pattern.
 #
-# FAIL-SAFE BY CONSTRUCTION — the divert requires BOTH a kitty pane id AND the translator to exist
-# on disk. On iTerm2, KITTY_WINDOW_ID is unset and this block is inert, so every iTerm2 behaviour
-# below (never-prompt profile injection, the force=True close, the process bound) is untouched.
+# FAIL-SAFE BY CONSTRUCTION — the divert requires a VERIFIED kitty pane AND the translator to exist
+# on disk. Every unverified state keeps the iTerm2 behaviour below (never-prompt profile injection,
+# the force=True close, the process bound) untouched.
 # IT2_WRAPPER_NO_KITTY=1 forces the old path for A/B testing.
+#
+# ⚠ `-n "$KITTY_WINDOW_ID"` USED TO BE THE WHOLE TEST, AND IT IS NOT A TERMINAL TEST. An earlier
+# draft of this header asserted "On iTerm2, KITTY_WINDOW_ID is unset and this block is inert" — that
+# premise is false, and it cost a live outage on 2026-07-31. KITTY_* are ordinary exported env vars:
+# an iTerm2.app launched from a kitty pane inherits all four and hands them to EVERY pane under it
+# forever. This wrapper then diverted inside genuine iTerm2 panes, and because bin/it2-kitty's own
+# gate (KITTY_LISTEN_ON) is equally inherited, it drove a background kitty the operator was not
+# looking at. The observable shape was worse than an outright failure:
+#
+#   it2 session list                     → rc 0     ← Claude Code caches the backend as AVAILABLE
+#   it2 session split -v -s <iTerm2 UUID> → rc 65   ← every assignee spawn dies at USE time,
+#                                                     with no fallback to in-process teammates
+#
+# bin/cc-in-kitty replaces the env check with an ancestry check (kitty must be one of our parents,
+# which inheritance cannot fake) and is fail-closed: 1 = no, 2 = unverifiable, both mean iTerm2.
 if [[ -n "${KITTY_WINDOW_ID:-}" && -z "${IT2_WRAPPER_NO_KITTY:-}" ]]; then
-  _it2_kitty="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/it2-kitty"
-  if [[ -x "$_it2_kitty" ]]; then exec "$_it2_kitty" "$@"; fi
-  # Present-but-not-executable is a THIRD state, not "use iTerm2": forwarding to a real it2 from
-  # inside kitty would fail confusingly several frames deeper (or worse, drive a background iTerm2).
-  if [[ -e "$_it2_kitty" ]]; then
-    printf 'it2-wrapper: %s exists but is not executable — refusing to fall through to iTerm2 from inside kitty\n' "$_it2_kitty" >&2
-    exit 4
+  _it2_bin="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")"
+  _it2_kitty="$_it2_bin/it2-kitty"
+  _cc_in_kitty="$_it2_bin/cc-in-kitty"
+  if [[ ! -x "$_cc_in_kitty" ]]; then
+    # We cannot tell which terminal we are in, so we must not exec away. Falling through to iTerm2
+    # is the pre-divert behaviour and is correct in the common polluted case; on a genuine kitty box
+    # the real it2 exits 2 and Claude Code degrades visibly to in-process teammates. Loud, because a
+    # missing deploy that silently picked a terminal is what this whole block exists to prevent.
+    printf 'it2-wrapper: %s missing — cannot verify the terminal, using iTerm2 (run scripts/kitty-setup.sh)\n' "$_cc_in_kitty" >&2
+  elif "$_cc_in_kitty"; then
+    if [[ -x "$_it2_kitty" ]]; then exec "$_it2_kitty" "$@"; fi
+    # Present-but-not-executable is a THIRD state, not "use iTerm2": forwarding to a real it2 from
+    # inside kitty would fail confusingly several frames deeper (or worse, drive a background iTerm2).
+    if [[ -e "$_it2_kitty" ]]; then
+      printf 'it2-wrapper: %s exists but is not executable — refusing to fall through to iTerm2 from inside kitty\n' "$_it2_kitty" >&2
+      exit 4
+    fi
   fi
 fi
 
