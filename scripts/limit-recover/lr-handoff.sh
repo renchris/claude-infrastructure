@@ -15,7 +15,9 @@ set -euo pipefail
 # Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
 # 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
 # piled up). Both call sites `tell application id "com.googlecode.iterm2"` — the exact wedged surface; each already has a
-# manual-fallback message on failure, so a cut degrades into a path that exists.
+# manual-fallback message on failure, so a cut degrades into a path that exists. (Both call sites
+# now have a kitty arm as well — see the terminal dispatch at the launch block — and it is bounded
+# through the SAME wrapper, so neither terminal can strand a recovery on an unbounded call.)
 # timeout(1) is resolved by ABSOLUTE PATH as well as PATH — launchd jobs and hooks run with a
 # minimal PATH excluding Homebrew, exactly where coreutils installs it, so a PATH-only lookup would
 # leave the AUTOMATED callers unbounded while interactive shells stayed safe. No timeout(1) ⇒ run
@@ -35,6 +37,13 @@ fi
 lrh_bounded() {
   if [ -z "$LRH_TIMEOUT_BIN" ] || [ ! -x "$LRH_TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$LRH_TIMEOUT_BIN" -k 3 "$LRH_TIMEOUT_S" "$@"
+}
+# The kitty control socket gets the SAME bound as the AppleEvent surface. kitty's socket has no
+# serializing queue to wedge the way iTerm2's Python API did on 2026-07-25, but an unbounded call
+# in a RECOVERY path is the shape of that incident, not the app it happened to.
+lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrh_bounded "${CC_TERM_KITTY:-kitty}" @ --to "$CC_TERM_KITTY_TO" "$@"
+  else lrh_bounded "${CC_TERM_KITTY:-kitty}" @ "$@"; fi
 }
 
 
@@ -212,9 +221,36 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   # pattern handoff-fire.sh already uses. `exec` preserves the old lifecycle (pane dies with the
   # launcher); the pane's profile stays clean, so ⌘D yields a login shell.
   # Repair for panes created before this fix: scripts/iterm-clear-sticky-command.sh
+  #
+  # TERMINAL DISPATCH (2026-07-31). Both branches below `tell application id "com.googlecode.iterm2"`,
+  # so inside a kitty fleet BOTH of them refuse and the recovery degrades to the printed manual
+  # fallback — i.e. limit recovery, the one path whose entire job is to lose nothing, silently
+  # stopped firing anything. Under kitty the same two intents are `kitty @ launch --type=window
+  # --location=vsplit` (the ⌘D-equivalent split, RIGHT of the invoking pane — the same orientation
+  # mapping bin/it2-kitty:125 pins) and `--type=os-window` (the no-invoking-pane fallback).
+  # ITERM_SESSION_ID is SYNTHESIZED inside kitty as "w0t0p0:$KITTY_WINDOW_ID" by the login shim, so
+  # the existing `${ITERM_SESSION_ID##*:}` strip already yields the right anchor: in a kitty fleet a
+  # "session uuid" IS the integer kitty window id. The predicate MIRRORS bin/it2-wrapper:75 exactly,
+  # kill switch included — a split made with one terminal's client and addressed with the other's is
+  # precisely the failure the three-way predicate agreement test exists to prevent.
+  # The launcher reaches kitty as ARGV (`launch … -- /bin/bash "$LAUNCHER"`), never as typed text,
+  # so the write-text quoting above does not apply on that side; `exec`-equivalent lifecycle is
+  # preserved (the window dies with the launcher) and, kitty having no profile-override concept, the
+  # 2026-07-25 sticky-command incident has no analogue to re-create there.
   OWN_PANE="${ITERM_SESSION_ID##*:}"
   FIRED=""
-  if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
+  IN_KITTY=0
+  if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+  if [[ -n "${ITERM_SESSION_ID:-}" && $IN_KITTY -eq 1 ]]; then
+    # A kitty window id is always an integer. A non-integer means the id came from a real-iTerm2
+    # run; refuse the split rather than let --match fall through to the operator's ACTIVE window.
+    case "$OWN_PANE" in
+      ''|*[!0-9]*) FIRED="" ;;
+      *) lrh_kitty launch --type=window --location=vsplit \
+           --match "window_id:$OWN_PANE" --next-to "id:$OWN_PANE" --cwd=current \
+           -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 && FIRED="split" ;;
+    esac
+  elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
     FIRED=$(lrh_bounded osascript 2>/dev/null <<OSA || true
 if not (application id "com.googlecode.iterm2" is running) then return ""
 tell application id "com.googlecode.iterm2"
@@ -238,6 +274,10 @@ OSA
   fi
   if [[ "$FIRED" == "split" ]]; then
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+  elif [[ $IN_KITTY -eq 1 ]]; then
+    lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 \
+      || { echo "lr-handoff: kitty launch failed — run manually: $LAUNCHER" >&2; }
+    echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
     lrh_bounded osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
 if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"

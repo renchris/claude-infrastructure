@@ -201,13 +201,34 @@ lrp_tmpdir() {
 
 # ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
 SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
-# spawn_gui <launcher> — open an iTerm2 window (needs an Aqua session). 0 = opened.
+# spawn_gui <launcher> — open a terminal window (kitty when we are in kitty, else iTerm2; either way
+# an Aqua session is required). 0 = opened.
 # ⚠️ NEVER `create window with default profile command "X"` (incident 2026-07-25): iTerm2 keeps X as
 # a SESSION-SCOPED PROFILE OVERRIDE, and ⌘D copies the current session's profile — so every split off
 # the spawned window silently re-ran the launcher (concurrent duplicate `claude --resume` of one
 # transcript) where the operator expected a plain shell. Create a bare window, then `write text` the
 # launcher; `exec` keeps the old lifecycle. Repair pre-fix panes: scripts/iterm-clear-sticky-command.sh
+lrp_kitty() { # bounded `kitty @ …` — socket seam kept out of the call site
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrp_bounded "${CC_TERM_KITTY:-kitty}" @ --to "$CC_TERM_KITTY_TO" "$@"
+  else lrp_bounded "${CC_TERM_KITTY:-kitty}" @ "$@"; fi
+}
 spawn_gui() {
+  # ── kitty first, when this IS kitty (2026-07-31) ──────────────────────────────────────────────
+  # The AppleScript below now refuses correctly inside a kitty fleet (`is running` short-circuit),
+  # which means the GUI mechanism degrades to tmux — a DETACHED session the operator never sees.
+  # That is the right failure and the wrong outcome: on a box where a terminal is right there, a
+  # resume belongs in a visible window. The predicate MIRRORS bin/it2-wrapper:75 exactly, kill
+  # switch included, so this poller cannot disagree with handoff-fire.sh / cc-pane about the
+  # terminal. Failure still `return 1` → spawn_resume's `auto` falls through to tmux, so LR-m's
+  # contract ("GUI unavailable → tmux rather than stranding the resume") is unchanged.
+  # The launcher is passed as ARGV to `launch`, not typed into a shell, so none of the iTerm2 arm's
+  # write-text quoting applies; and kitty has no profile-override concept, so the 2026-07-25
+  # sticky-command incident below has no kitty analogue to re-create.
+  if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
+    command -v "${CC_TERM_KITTY:-kitty}" >/dev/null 2>&1 || return 1
+    lrp_kitty launch --type=os-window -- /bin/bash "$1" >/dev/null 2>&1 || return 1
+    return 0
+  fi
   command -v osascript >/dev/null 2>&1 || return 1
   # Multi `-e` (not a heredoc) on purpose: the AppleScript stays in ARGV, which is where
   # tests/lr-reset-poller.bats' osascript stub observes the spawn — a heredoc would move it to

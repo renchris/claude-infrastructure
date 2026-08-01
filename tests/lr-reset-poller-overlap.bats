@@ -27,6 +27,10 @@ setup() {
   mkdir -p "$HOME/bin" "$STATE/parked" "$STATE/resumed"
   export LR_POLLER_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
   LOG="$STATE/poller.log"
+  # PIN THE TERMINAL: spawn_gui has had a kitty arm since 2026-07-31, and inside kitty an inherited
+  # KITTY_WINDOW_ID would let a spawn reach the operator's real fleet from a test.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
   # A pid that CANNOT exist (macOS pid_max is 99999) — a deterministic "dead holder" with no
   # spawn/kill fixture. The spawn-then-kill idiom is what flaked land-lock.bats (debc016): under
   # bats errexit the sleep may already have exited, `kill` returns 1, and the test dies.

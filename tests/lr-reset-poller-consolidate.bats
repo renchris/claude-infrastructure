@@ -28,6 +28,12 @@ setup() {
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   for b in osascript tmux pgrep; do printf '#!/bin/bash\nexit 1\n' > "$STUBS/$b"; chmod +x "$STUBS/$b"; done
   export PATH="$STUBS:$PATH"
+  # …and PIN THE TERMINAL, which is the same rule one layer up: since 2026-07-31 spawn_gui has a
+  # kitty arm, and a stub list is only a fence around the binaries it names. Inside kitty an
+  # inherited KITTY_WINDOW_ID would route the spawn past all three stubs to the operator's real
+  # fleet — "nothing in this suite may open a window" has to survive the terminal, not just PATH.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
 
   # stub lr-select: log the invocation; emit the winner TSV written to .winners (empty = none).
   export LR_SELECT_BIN="$BATS_TEST_TMPDIR/stub-select"

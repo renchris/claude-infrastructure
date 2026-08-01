@@ -20,6 +20,12 @@ setup() {
   STATE="$HOME/.reso/limit-recover"
   mkdir -p "$HOME/bin" "$STATE/parked" "$STATE/resumed" "$BATS_TEST_TMPDIR/stubs" "$BATS_TEST_TMPDIR/cwd"
   CWD="$BATS_TEST_TMPDIR/cwd"
+  # PIN THE TERMINAL. spawn_gui has had a kitty arm since 2026-07-31; this suite stubs `osascript`
+  # and asserts the iTerm2 arm SPECIFICALLY. Run from inside kitty (now routine), an inherited
+  # KITTY_WINDOW_ID would send the spawn to the operator's REAL kitty — a live window opened by a
+  # test, not merely a red one. Kitty's arm: tests/kitty-recovery-launch.bats.
+  unset KITTY_WINDOW_ID
+  export IT2_WRAPPER_NO_KITTY=1
 
   # osascript stub — records every invocation, opens/notifies NOTHING. OSA_FAIL=1 makes the
   # window-open FAIL (exit 1) AFTER recording — simulates a no-GUI context for the auto→tmux fallback.
