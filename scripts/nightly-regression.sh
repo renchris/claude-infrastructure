@@ -205,6 +205,13 @@ NGR_UNSAFE_DECL=(
 )
 # READINESS-BAR baselines: "<basename>|<max failed criteria that is NOT a regression>".
 # Raise a number ONLY with the measurement that justifies it; lower it when a bar is genuinely met.
+# SC2034 is a FALSE POSITIVE here, and the discriminator is worth recording: every read of this array
+# goes through ngr_decl_lookup's `eval "set -- \"\${${arr}[@]}\""` indirection (:137 live, :511
+# selftest), which no static linter can follow. Its sibling NGR_UNSAFE_DECL is NOT flagged only
+# because :365 also expands it directly — the difference is the linter's visibility, not the read.
+# Do not "fix" this by adding a decorative direct expansion: the live proof is the selftest's
+# "B: premortem-gate baseline resolves to a number", which an actually-unused array cannot pass.
+# shellcheck disable=SC2034
 NGR_BAR_BASELINE=(
   # premortem + wait-safety reached their bars on 2026-07-30 (8·0 and 13·0, both "un-hold is
   # defensible") once reaper-horizon-lint went clean. They now exit 0 and never reach the bar branch
