@@ -31,6 +31,25 @@ Then emit verbatim:
 
 > `Decomposition: <N> axes → <M> sub-questions → <K> parallel subagents. Axes: [...]`
 
+**What the never-cap rule governs — and what it does not** (scoping, added 2026-08-01; it changes
+no number below). Anthropic's Opus 5 guide warns that Opus 5 *delegates more readily* than prior
+models and says to keep spawn counts low. That does **not** contradict the operator's never-cap
+directive, because the two speak to different failure modes on different axes:
+
+| Axis | Rule | Failure it prevents |
+|---|---|---|
+| **How wide a research WAVE fans** once you have decided to research | never-cap; `N` below | UNDER-spawning — matching agent count to bucket count, "batch into rounds", inventing a Plan-Mode cap. Measured here, repeatedly. |
+| **Whether to delegate AT ALL** | the Opus 5 guide | OVER-delegating a task you would finish in a handful of tool calls, or spawning to re-check your own output (→ `agent-teams` § Never spawn an agent to verify your own output). |
+
+So: *decide to research → fan wide, uncapped.* The guide's caution applies **before** that, to whether
+the work is a research wave at all. A single-fact lookup was already `N=1` in the table below —
+that row is the guide's point, and it predates the guide.
+
+The one genuinely open question is whether the **numbers** below should move for Opus 5. That is
+not settleable from a doc: the guide's own instruction is to re-run a sweep on *your own* evals.
+Until such a sweep exists, the measured local defaults stand. Ledger: `cc-decide` packet
+`264154f10d1a`.
+
 **Default N = 10** for typical complex (multi-axis, ambiguous, cross-domain)
 research. Anchor band 8–12. Specific drift triggers:
 
