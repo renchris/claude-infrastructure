@@ -19,8 +19,8 @@ the two share one git index, one binary, and one operator's attention. **So how 
 once, safely, unattended?**
 
 Make `~/.claude` a *deployment* of a git repo — and make the sessions themselves the schedulers.
-That is this repo: **620 files, ~119,000 lines**, held to ground truth by a **2,358-test** bats suite
-and exercised across **5,709 sessions**.
+That is this repo: **1,134 files, ~269,000 lines**, held to ground truth by a **4,564-test** bats suite
+and exercised across **~6,900 sessions**.
 
 <div align="center">
 
@@ -193,7 +193,7 @@ Full evidence, the hypotheses that got killed along the way, and the migration p
 <!-- Diagram source: assets/diagrams/guardrail-pipeline.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/guardrail-pipeline-dark.svg">
-  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through five UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes twelve PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then nine PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, nine Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
+  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes eleven PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then ten PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, nine Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
 </picture>
 
 <details>
@@ -291,8 +291,8 @@ Teammate models must be on the account's auto-mode allowlist, or the spawn silen
 |---|---|---|
 | **Every file version** | [`backup-before-write.sh`](hooks/backup-before-write.sh) stamps a backup before every Write/Edit — nanosecond+PID names (parallel-agent-safe), sidecar `.path` files for basename collisions, atomic `mktemp`+`mv` restore, capped at 10/file with a 30-day TTL by [`prune-backups.sh`](scripts/prune-backups.sh) | [`restore-file`](scripts/restore-file.sh) `<path>` · `--diff` · `--pick N` · `--recent 10` |
 | **Every plan revision** | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) writes two layers: an append-only `MANIFEST.jsonl` (timestamp, session, SHA256, line count) and full snapshots in a separate git repo | `cd ~/.claude/plan-history && git log` |
-| **Every task list** | Claude Code uses UUID task dirs and ignores `CLAUDE_CODE_TASK_LIST_ID`; [`setup-task-symlinks.sh`](hooks/setup-task-symlinks.sh) detects the active list at SessionStart, symlinks it to `.claude-tasks/_current/`, and generates a readable `TASKS.md` | `.claude-tasks/_current/TASKS.md` |
-| **Every conversation** | SQLite FTS5 index over all 5,709 sessions, kept self-maintaining by three hooks — a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses | `claude-search "<query>"` · `--fzf` · `--stats` |
+| **Every task list** | Claude Code uses UUID task dirs and ignores `CLAUDE_CODE_TASK_LIST_ID`; [`setup-task-symlinks.sh`](hooks/setup-task-symlinks.sh) detects the active list at SessionStart, symlinks it to `.claude-tasks/_current/`, and generates a readable `TASKS.md` beside it | `.claude-tasks/TASKS.md` |
+| **Every conversation** | SQLite FTS5 index over all ~6,900 sessions, kept self-maintaining by three hooks — a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses | `claude-search "<query>"` · `--fzf` · `--stats` |
 
 ```bash
 restore-file path/to/file --diff     # unified diff against the latest backup
@@ -311,7 +311,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-model-dark.svg">
-  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 620 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir copies the same system into the four billing-isolated account directories. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
+  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,134 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir copies the same system into the four billing-isolated account directories. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
 </picture>
 
 <details>
@@ -320,7 +320,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- mermaid-fence: assets/diagrams/deploy-model.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    Repo["claude-infrastructure<br/>620 files · one reviewable history"]
+    Repo["claude-infrastructure<br/>1,134 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · COPY"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
     Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>45 tools · 13 daemons · statusline"]
@@ -771,7 +771,7 @@ Workflow: `navigate → snapshot → click/type` by element ref. `agent-browser`
 
 **Shell aliases** (`~/.zshrc`): `claude` (auto-update + auto mode + task-list persistence) · `claude-default` (no auto mode) · `claude-plan` (plan mode + "ultrathink") · `claude2`/`3`/`4` (isolated `CLAUDE_CONFIG_DIR` per account) · `claude-fable*` (frontier tier) · `claude-which` (active config dir).
 
-**22 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **12 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `deep-research` (frontier/adversarial research), `deep-research-sonnet` (bulk-fan-out worker, currently benched), `frontier-derivation` (baseline-blind derivation panelist for `/frontier-run`), `research-decomposition-critic` (pre-spawn decomposition critic). Deployed by COPY into each config dir's `agents/`, never by symlink.
+**19 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **15 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `deep-research` (frontier/adversarial research), `deep-research-sonnet` (bulk-fan-out worker, currently benched), `frontier-derivation` (baseline-blind derivation panelist for `/frontier-run`), `research-decomposition-critic` (pre-spawn decomposition critic). Deployed by COPY into each config dir's `agents/`, never by symlink.
 
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
