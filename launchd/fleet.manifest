@@ -188,6 +188,26 @@ com.claude.scratchpad-reaper      | staged | 21600 | auto | 11 | 18-fleet-activa
 # operator activates via 23-qos-census-activate.sh.
 com.claude.qos-census             | staged | 600  | ~/.claude/logs/qos-census.jsonl | 13 | 23-qos-census-activate.sh
 
+# ── com.claude.worktree-gc-infra (row 11) — the cron the janitor never had ────────────────────────
+# scripts/worktree-gc.sh has been a complete, safe janitor for THIS repo since 2026-07-25 and was
+# scheduled by NOTHING: the only worktree reaper with a plist on this box is gl.reso.worktree-gc,
+# whose runner hardcodes REPO=/Users/chrisren/Development/reso-management-app. Measured 2026-08-01:
+# 126 worktrees, 1,193 branches. Declared here in the SAME commit as the plist, so this file never
+# goes RED on a lander who comes after — capacity-alarm and scratchpad-reaper each cost that.
+# `staged` from DISK TRUTH, read not assumed: absent from ~/Library/LaunchAgents and `launchctl
+# print gui/501/com.claude.worktree-gc-infra` → not found. Arming an unattended DELETER is a C10
+# operator decision, and ONE UNDECIDED row is exactly what "declared, decision pending" means.
+# interval 0 = StartCalendarInterval (04:15 daily, deliberately an hour off reso's 03:15 slot so two
+# sweeps never contend for the same git objects).
+# evidence is the EXPLICIT log, NOT `auto`: `auto` resolves to StandardOutPath, but the runner routes
+# every line — its verdict AND the janitor's captured output — through its own writer into
+# worktree-gc-infra.log, leaving the .out.log ~0 bytes on a healthy run. `auto` here would be a
+# sensor that could only ever say STALLED (lead-supervisor's and relogin's lesson, same shape).
+# ok_exits stays 0: this job's non-zero codes are real faults that MUST row — 3 = it could not fetch
+# origin/main or had no liveness oracle (swept nothing), 4 = a disposal it could not verify as
+# preserved. None is a designed refusal in deploy-live's sense.
+com.claude.worktree-gc-infra      | staged | 0    | ~/.claude/logs/worktree-gc-infra.log | 11 | 27-worktree-gc-infra-activate.sh
+
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).
 # All six are enabled-by-default (ABSENT from the override db — never disabled, which is a THIRD
