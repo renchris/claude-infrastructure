@@ -12,7 +12,18 @@
 #   C3 state    $CC_POSTLAND_DIR/{stamps/<tree-sha>.json,last-green,queue,
 #               run.lock.d/,flakes.jsonl,runner.log}   (the SUT owns creation)
 #   C4 stamp    {tree,commit,verdict:"green"|"red",failing[],ts,run_s,retries,
-#               checks,shellcheck_advisory}
+#               suites,checks,shellcheck_advisory}
+#   C4b denom   `suites` is the COUNT handed to bats — the denominator of the population the
+#               verdict judged. 0 on every path where the corpus never ran (a prelint red skips
+#               it). Without it a green cannot be told from a green-by-collapsed-corpus.
+#   C9b render  `status` resolves last-green (a COMMIT sha) through to its TREE-keyed stamp and
+#               prints BOTH names plus the verdict READ OFF DISK. A stamp that is absent renders
+#               MISSING; a commit this checkout cannot resolve renders UNRESOLVABLE. Never a bare
+#               sha — that is what let a correct pointer be misread as dangling.
+#   C24 band    the ladder's RETRY runs in the UTILITY band, not the corpus's background clamp:
+#               it is a seconds-long decision procedure on the critical path to a green stamp, and
+#               at PRI 4 it is starved into the non-verdict that blocks deploy forever. RETRY_QOS
+#               never expands empty (nice is its floor) — bash 3.2 + set -u would die instead.
 #   C5 target   origin/main of $CC_POSTLAND_REPO; ABSTAIN (exit 0) when that
 #               TREE already has a stamp
 #   C6 mutex    run.lock.d mkdir+pid — a second LIVE instance exits 0 quietly;
@@ -1367,4 +1378,127 @@ exit $1"
   run bash "$SUT" --run-if-needed
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "green" ]                   # 1-of-3 ⇒ flake ⇒ the tree is not convicted
+}
+
+# ── the retry ladder's BAND — the third site of the same band oversight ───────────────────────────
+# C24 band: the ladder's re-run is elevated OUT of the corpus's background clamp into utility. The
+# ladder is a DECISION PROCEDURE on a single named test ("costs seconds"), not bulk throughput, and
+# it sits on the critical path to a green stamp — the identical argument the prelints already won
+# (C22 band, PRI 20 vs 4). Running it in the corpus band de-prioritises rather than de-contends it,
+# which moves the environment the WRONG WAY for the failure mode this file measures as dominant:
+# 34 of 35 flake rows are pressure kills (exit 143 x8, 137 x3) at median loadavg 13.9. Starved at
+# PRI 4 the ladder cannot render a verdict at all — post the signal-widening above those kills
+# correctly ABSTAIN, so every run takes the cut path and NO GREEN IS EVER CLAIMABLE. Measured
+# 2026-07-31: 45 of 46 stamps carried no green, and the one green was 2 days stale and 318 commits
+# behind trunk, so deploy-live sat fail-closed and the live layer froze 122 commits back.
+stub_ladder_band() {   # first corpus run emits a REAL not ok; the RETRY records its own PRI
+  stub_bats "ladderband" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+n=\$(cat '$REC/band.n' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$REC/band.n'
+if [ \"\$n\" = 1 ]; then
+  printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+  exit 1
+fi
+ps -o pri= -p \$\$ | tr -d ' \n' > '$REC/bandpri.txt'
+printf '1..1\nok 1 beta\n'
+exit 0"
+}
+
+@test "C24: the ladder's RETRY runs in the UTILITY band — a background-clamped parent cannot drag it to PRI 4" {
+  # Reproduced faithfully by running the SUT under `taskpolicy -c background`, exactly as launchd
+  # does (the plist is ProcessType Background), because that inherited clamp IS the defect: absent
+  # an explicit band the retry runs at PRI 4 and gets starved into a non-verdict.
+  [ -x /usr/sbin/taskpolicy ] || skip "taskpolicy(8) absent — no bands to assert"
+  b="$(stub_ladder_band)"
+  export CC_POSTLAND_BATS="$b"
+  run /usr/sbin/taskpolicy -c background bash "$SUT" --run-if-needed
+  [ -f "$REC/bandpri.txt" ]                     # the ladder actually engaged (else vacuous)
+  [ "$(cat "$REC/bandpri.txt")" = "20" ]        # utility. PRE-FIX this reads 4 — the inherited band.
+  # CONTROL ON THE INSTRUMENT — same reader, same background-clamped parent, WITHOUT the band fix.
+  # It must read 4. Absent this, "20" above could be a probe that cannot observe a demotion at all
+  # (a green proving only that ps and tr ran), and the assertion would pass vacuously.
+  run /usr/sbin/taskpolicy -c background bash -c 'ps -o pri= -p $$ | tr -d " \n"'
+  [ "$output" = "4" ]
+}
+
+@test "C24: the taskpolicy-absent retry path still RUNS the ladder (bash 3.2 empty-array guard)" {
+  # RETRY_QOS must never expand EMPTY: this is bash 3.2 under `set -u`, where an unguarded empty
+  # array expansion is an unbound-variable DEATH — which would not read as a crash but as rc!=1,
+  # i.e. a permanent NON-VERDICT, the same deadlock arriving through the fallback path. The array
+  # therefore keeps `nice` as its floor even when taskpolicy(8) is gone.
+  b="$(stub_ladder_band)"
+  export CC_POSTLAND_BATS="$b" CC_POSTLAND_TASKPOLICY_BIN=
+  run bash "$SUT" --run-if-needed
+  [ -f "$REC/bandpri.txt" ]                     # the retry ran at all
+  # substring assertion as a LIVE `[ ]` — a non-final `[[ ]]` here would be errexit-exempt and dead
+  [ "${output#*unbound variable}" = "$output" ]
+}
+
+# ── C4b: the stamp carries the DENOMINATOR of the population it judged ────────────────────────────
+stub_pass() { stub_bats "pass" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+printf '1..1\nok 1 alpha\n'
+exit 0"; }
+
+@test "C4b: a stamp records the corpus SIZE, so a verdict cannot hide a collapsed corpus" {
+  # A verdict without the size of the population it judged is not auditable:
+  # {"verdict":"green","failing":[]} reads identically whether the whole corpus passed or the corpus
+  # collapsed to a handful and passed BY ABSENCE. Measured cost 2026-07-31: clearing the single green
+  # stamp in 46 of being a vacuous partial run required cross-reading runner.log for its `corpus:`
+  # line — a file rotated on a different schedule from the stamps it is needed to explain.
+  b="$(stub_pass)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]
+  run jq -r '.suites' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" != "null" ]                       # PRE-FIX: the field does not exist at all
+  [ "$output" -ge 1 ]                           # and it counts something real
+}
+
+# ── C9b: last-green is rendered WITH its tree-keyed stamp resolved ────────────────────────────────
+# THE MISDIAGNOSIS THIS STANDS AGAINST (2026-07-31). `last-green` holds a COMMIT sha; the stamp store
+# is keyed by TREE sha. Printing the commit alone invites the one wrong inference the store's shape
+# makes available: a reader looks for stamps/<that-sha>.json, does not find it, and concludes the
+# pointer is DANGLING. That inference was drawn and acted on — it became the headline finding of a
+# diagnosis doc and was filed as a standalone bug — when the pointer was correct, the stamp existed,
+# and it was green under its TREE name. No test could fail, because nothing asserted the rendering.
+@test "C9b: status resolves last-green to its TREE-keyed stamp, so a commit sha cannot read as dangling" {
+  b="$(stub_pass)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ -f "$CC_POSTLAND_DIR/stamps/$tree.json" ]
+  run bash "$SUT" status
+  [ "$status" -eq 0 ]
+  # the COMMIT (what the pointer holds) and the TREE (what the stamp is named) must BOTH appear, or
+  # the reader is left to guess the hop that produced the whole misdiagnosis. Both needles are
+  # computed into variables and quoted INSIDE the ${..} pattern: an unquoted expansion there is
+  # taken as a GLOB (SC2295), which for a hex sha happens to be harmless and would rot the moment
+  # the needle carried a metachar.
+  commit12="$(git -C "$CC_POSTLAND_REPO" rev-parse origin/main | cut -c1-12)"
+  tree12="$(printf '%s' "$tree" | cut -c1-12)"
+  [ "${output#*"$commit12"}" != "$output" ]
+  [ "${output#*"$tree12"}" != "$output" ]
+  [ "${output#*green}" != "$output" ]           # and the verdict READ OFF DISK, not implied
+}
+
+@test "C9b: a GC'd stamp renders MISSING — status verifies the file instead of implying health" {
+  # Verify-before-print, not decorate-before-print. If the stamp is gone, a plausible-looking sha
+  # must not be allowed to stand in for a record that no longer exists — that is the difference
+  # between a claimed outcome and a checked one.
+  b="$(stub_pass)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  rm -f "$CC_POSTLAND_DIR/stamps/$tree.json"    # GC, exactly as the real store ages out
+  run bash "$SUT" status
+  [ "$status" -eq 0 ]
+  [ "${output#*MISSING}" != "$output" ]         # PRE-FIX: prints the bare sha and reads healthy
+  # Must NOT claim a verdict off a deleted record. Asserted on the verdict IN POSITION (".json
+  # green") rather than the bare word: the field LABEL is `last-green`, so a substring test for
+  # "green" can never be absent and would fail this test no matter how the SUT behaves — an
+  # assertion that cannot pass is as useless as one that cannot fail.
+  [ "${output#*.json green}" = "$output" ]
 }
