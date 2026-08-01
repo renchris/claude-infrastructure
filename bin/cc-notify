@@ -43,10 +43,13 @@
 #                        already blesses as a sanctioned back-channel (P0-15) — the flag now exists.
 #     2. forward chain   <uuid>.forward, written by handoff-fire at succession, followed here to the
 #                        chain head (bounded 4 hops, cycle-safe — hooks/lib/mailbox-pending.sh).
-#     3. reroute         a target that is neither live NOR forwarded would enqueue into a box nothing
-#                        will ever drain. The line is still recorded there (forensics are never lost),
-#                        AND tee'd to the desk role's box tagged "[for:<orig-uuid>]" — the desk is the
-#                        standing triager, so mail lands where triage happens instead of rotting.
+#     3. reroute         a target that is not live — whether unforwarded, or forwarded to a chain head
+#                        that is ALSO dead — would enqueue into a box nothing will ever drain. The line
+#                        is still recorded there (forensics are never lost), AND tee'd to the desk
+#                        role's box tagged "[for:<orig-uuid>]" so mail lands where triage happens
+#                        instead of rotting. "the desk is the standing triager" is asserted ONLY when
+#                        that desk box itself passes the liveness test — a desk that is down is
+#                        reported as recorded-with-no-proven-reader, never as a reroute that worked.
 #
 # ── DELIVERABILITY (honest exit codes — an enqueue to a DEAD inbox must not read as delivered) ──
 #   The target's liveness decides the verdict cc-announce trusts. A LIVE session (registered live in
@@ -655,34 +658,54 @@ case "$_lv" in
     verdict mailbox-only reason=target-not-live
     echo "cc-notify 📤 peer mail ▶ [$uuid] mailbox only — target is NOT a live session (closed/recycled pane); no drain will run. The message is recorded but unread until/unless that pane returns.${READ_NOTE}" >&2
       _echo_sent
-    # D3 REROUTE — a dead, unforwarded target is the silent-loop class (570 pages into one dead box for
-    # three days). The line stays in the original box (forensics are never moved), and a COPY goes to
-    # the desk role tagged [for:<orig>] so a human/triager actually sees it. Skipped when a forward was
-    # followed (the chain already re-addressed it) and when the desk IS the target (no self-tee).
-    if [ "$uuid" = "$ORIG_UUID" ]; then
-      desk_uuid="$(role_uuid "$DESK_ROLE" 2>/dev/null || true)"
-      # The reroute target gets the SAME forward-chain treatment as the primary target. Without this
-      # a reroute could tee into a desk box that has itself self-closed — re-creating, in the very
-      # mechanism built to end stranding, the stranding class this whole change exists to kill. (The
-      # role file is normally repointed at succession, but a stale role + a live forward is exactly
-      # the window this covers.)
-      if [ -n "$desk_uuid" ] && command -v mailbox_forward_of >/dev/null 2>&1; then
-        _dfwd="$(mailbox_forward_of "$desk_uuid" 2>/dev/null || true)"
-        [ -n "$_dfwd" ] && desk_uuid="$_dfwd"
-      fi
-      if [ -z "$desk_uuid" ]; then
-        echo "cc-notify: no reroute — the '$DESK_ROLE' role is unset ($ROLES_DIR/$DESK_ROLE), so there is no triager to receive it; the message sits in a box nothing drains" >&2
-      elif [ "$desk_uuid" = "$uuid" ]; then
-        # The dead target IS the desk. Teeing would copy the line into the same dead box; say so
-        # plainly rather than reporting a reroute that changed nothing (this is the desk-is-down case
-        # the desk-invariant replacement path exists for).
-        echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead pane [$uuid]; the triager itself is down (desk-invariant fires a replacement). Message recorded, undrained." >&2
-      elif printf '%s [%s] [for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$uuid" "$MSG_1LINE" \
-             >> "$MAILBOX_DIR/$desk_uuid.md" 2>/dev/null; then
-        echo "cc-notify: rerouted to desk [$desk_uuid] tagged [for:$uuid] — the original addressee is gone; the desk is the standing triager. NOT a delivery to the original target." >&2
+    # D3 REROUTE — a dead target is the silent-loop class (570 pages into one dead box for three days).
+    # The line stays in the original box (forensics are never moved), and a COPY goes to the desk role
+    # tagged [for:<orig>] so a human/triager actually sees it. Only a self-tee is skipped.
+    #
+    # REACHABILITY (2026-08-01). This block used to be gated on `[ "$uuid" = "$ORIG_UUID" ]` — i.e.
+    # skipped entirely whenever a forward had been followed, on the reasoning that "the chain already
+    # re-addressed it". Backwards: we are INSIDE the not-live arm, so reaching here means the chain
+    # HEAD is dead too — the re-addressing FAILED and the successor's box has no reader either. The
+    # gate turned that into total silence: the caller got a bare "mailbox only" with no word that the
+    # triager was gone. That is the exact shape found on disk (role → self-closed pane → .forward → a
+    # successor that is also gone; ~1446 lines, no cursor). The gate is removed; the tee is tagged with
+    # $ORIG_UUID — the addressee the SENDER named — in both shapes.
+    desk_uuid="$(role_uuid "$DESK_ROLE" 2>/dev/null || true)"
+    desk_uuid_role="$desk_uuid"   # the role file's OWN value, BEFORE any forward-following
+    # The reroute target gets the SAME forward-chain treatment as the primary target. Without this
+    # a reroute could tee into a desk box that has itself self-closed — re-creating, in the very
+    # mechanism built to end stranding, the stranding class this whole change exists to kill. (The
+    # role file is normally repointed at succession, but a stale role + a live forward is exactly
+    # the window this covers.)
+    if [ -n "$desk_uuid" ] && command -v mailbox_forward_of >/dev/null 2>&1; then
+      _dfwd="$(mailbox_forward_of "$desk_uuid" 2>/dev/null || true)"
+      [ -n "$_dfwd" ] && desk_uuid="$_dfwd"
+    fi
+    if [ -z "$desk_uuid" ]; then
+      echo "cc-notify: no reroute — the '$DESK_ROLE' role is unset ($ROLES_DIR/$DESK_ROLE), so there is no triager to receive it; the message sits in a box nothing drains" >&2
+    elif [ "$desk_uuid" = "$uuid" ] || [ "$desk_uuid" = "$ORIG_UUID" ] \
+      || [ "$desk_uuid_role" = "$uuid" ] || [ "$desk_uuid_role" = "$ORIG_UUID" ]; then
+      # The dead target IS the desk — in EITHER form, the role file's own value or its chain head, and
+      # matched against the target in EITHER form too. Comparing only the FORWARDED desk against the
+      # FORWARDED target let the pre-forward identity slip through into the reroute arm below, which
+      # then claimed "the desk is the standing triager" about a pane that had just failed target_live.
+      # Teeing would copy the line into the same dead box; say so plainly rather than reporting a
+      # reroute that changed nothing (the desk-is-down case the desk-invariant replacement exists for).
+      echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead address (role=[$desk_uuid_role], chain head=[$desk_uuid]); the triager itself is down (desk-invariant fires a replacement). Message recorded, undrained." >&2
+    elif printf '%s [%s] [for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$ORIG_UUID" "$MSG_1LINE" \
+           >> "$MAILBOX_DIR/$desk_uuid.md" 2>/dev/null; then
+      # HONESTY GATE. The tee landed — but "the desk is the standing triager" is a claim about a
+      # READER, and a box is not a reader. Assert it ONLY for a desk that passes target_live; a desk
+      # that is itself dead (or unverifiable) gets the sentence that is actually true — recorded, no
+      # proven reader — because a false reroute claim is precisely how mail rotted unnoticed before.
+      target_live "$desk_uuid"; _dlv=$?
+      if [ "$_dlv" -eq 0 ]; then
+        echo "cc-notify: rerouted to desk [$desk_uuid] tagged [for:$ORIG_UUID] — the original addressee is gone; the desk is the standing triager. NOT a delivery to the original target." >&2
       else
-        echo "cc-notify: reroute to desk FAILED (inbox $MAILBOX_DIR/$desk_uuid.md unwritable) — the message is recorded in the dead box only" >&2
+        echo "cc-notify: NO triager — copied to the '$DESK_ROLE' box [$desk_uuid] tagged [for:$ORIG_UUID], but that box is NOT a live session either: recorded with NO proven reader, so this is not a reroute to a triager (desk-invariant fires a replacement). NOT a delivery to the original target." >&2
       fi
+    else
+      echo "cc-notify: reroute to desk FAILED (inbox $MAILBOX_DIR/$desk_uuid.md unwritable) — the message is recorded in the dead box only" >&2
     fi
     exit 0 ;;
   *) verdict unverified reason=liveness-unverifiable

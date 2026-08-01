@@ -717,3 +717,92 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [[ "$output" == *"uuid=$SUCC"* ]] || false                  # ...answered about the successor's box
   [[ "$output" == *"receipt=unread"* ]] || false
 }
+
+# ── D3 REROUTE, the two holes that let a FALSE reroute claim out (task #121, 2026-08-01) ──────────
+# Ground truth that produced these: ~/.claude/cc-roles/desk named a self-closed pane, that pane's
+# .forward named a successor that was ALSO gone, and the successor's box held ~1446 lines with no
+# cursor. Two independent holes in the block that exists to end exactly that class:
+#   HOLE 1 — the whole block was gated on `[ "$uuid" = "$ORIG_UUID" ]`, so following a forward
+#            SKIPPED the reroute (and the desk-is-down warning with it): total silence on the path
+#            where the chain head is dead, which is the only way to reach that arm at all.
+#   HOLE 2 — the self-tee guard compared the FORWARDED desk against the FORWARDED target, so a desk
+#            that is the target in its PRE-forward form fell through to the reroute arm, which then
+#            asserted "the desk is the standing triager" about a uuid that had just failed
+#            target_live. The invariant these pin: that sentence is a claim about a READER, and it is
+#            never printed about a box with none.
+
+@test "HOLE 1: a forward followed to a DEAD successor still REROUTES (the gate made it silent)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local D1="D1D1D1D1-1111-2222-3333-444444444444"     # the addressee the sender named — dead
+  local D2="D2D2D2D2-1111-2222-3333-444444444444"     # its successor — ALSO dead
+  printf '%s\n' "$D2"   > "$CC_MAILBOX_DIR/$D1.forward"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"        # the desk itself IS live here
+  run "$NOTIFY" "$D1" "chained page"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"following its forward chain"* ]] || false
+  [[ "$output" == *"mailbox only"* ]] || false
+  [[ "$output" == *"rerouted to desk [$UUID]"* ]] || false
+  grep -q "\[for:$D1\] chained page" "$CC_MAILBOX_DIR/$UUID.md"   # tagged with the ORIGINAL addressee
+  grep -q 'chained page' "$CC_MAILBOX_DIR/$D2.md"                 # forensics stay in the chain head
+}
+
+@test "HOLE 1: a forward followed to a dead successor with NO desk role still SAYS so (never silence)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local D1="D1D1D1D1-1111-2222-3333-444444444444"
+  local D2="D2D2D2D2-1111-2222-3333-444444444444"
+  printf '%s\n' "$D2" > "$CC_MAILBOX_DIR/$D1.forward"
+  run "$NOTIFY" "$D1" "nobody at the head"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no reroute"* ]] || false
+  [[ "$output" == *"role is unset"* ]] || false
+  [[ "$output" != *"standing triager"* ]] || false
+}
+
+@test "HOLE 2: a DEAD desk box is never called 'the standing triager' — recorded, no proven reader" {
+  # The disk-truth case: desk role → a self-closed pane → .forward → a successor that is also gone.
+  # The tee still happens (forensics), but the CLAIM must degrade to what is true.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local DK="DCDCDCDC-1111-2222-3333-444444444444"     # role names this pane — self-closed
+  local DS="DEDEDEDE-1111-2222-3333-444444444444"     # its successor — ALSO dead, no reader
+  local D3="D3D3D3D3-1111-2222-3333-444444444444"     # an unrelated dead addressee
+  printf '%s\n' "$DK" > "$CC_ROLES_DIR/desk"
+  printf '%s\n' "$DS" > "$CC_MAILBOX_DIR/$DK.forward"
+  run "$NOTIFY" "$D3" "page into the void"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"the desk is the standing triager"* ]] || false
+  [[ "$output" != *"rerouted to desk"* ]] || false
+  [[ "$output" == *"NO triager"* ]] || false
+  [[ "$output" == *"NO proven reader"* ]] || false
+  [[ "$output" == *"NOT a delivery to the original target"* ]] || false
+  grep -q "\[for:$D3\] page into the void" "$CC_MAILBOX_DIR/$DS.md"   # forensics still land
+}
+
+@test "HOLE 2: the target IS the desk in its PRE-forward form → desk-is-down, never a self-tee" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local DK="DCDCDCDC-1111-2222-3333-444444444444"     # the desk pane, self-closed
+  local DS="DEDEDEDE-1111-2222-3333-444444444444"     # its successor, also dead
+  printf '%s\n' "$DK" > "$CC_ROLES_DIR/desk"
+  printf '%s\n' "$DS" > "$CC_MAILBOX_DIR/$DK.forward"
+  run "$NOTIFY" "$DK" "paging the desk itself"        # addressed by its PRE-forward uuid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the triager itself is down"* ]] || false
+  [[ "$output" == *"no reroute"* ]] || false
+  [[ "$output" != *"the desk is the standing triager"* ]] || false
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/$DS.md")" -eq 1 ]  # the enqueue only — never tee'd onto itself
+}
+
+@test "CONTROL: a LIVE desk still gets the full reroute claim (the honesty gate is not a blanket mute)" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  local D3="D3D3D3D3-1111-2222-3333-444444444444"
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/desk"
+  run "$NOTIFY" "$D3" "live desk page"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the desk is the standing triager"* ]] || false
+  [[ "$output" != *"NO proven reader"* ]] || false
+  grep -q "\[for:$D3\] live desk page" "$CC_MAILBOX_DIR/$UUID.md"
+}
