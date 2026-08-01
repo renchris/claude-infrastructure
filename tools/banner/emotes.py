@@ -77,9 +77,11 @@ OPTIONAL_GROUPS = (
     "eyesAsk",
     "armsAlert",
     "smHat",
+    "smWand",
+    "smWandSpk",
     "smHeld",
 )
-SUMMON_GROUPS = {"smHat", "smHeld"}
+SUMMON_GROUPS = {"smHat", "smWand", "smWandSpk", "smHeld"}
 
 # The twinkle vocabulary: (period, peak position as a % of that period). Periods are COPRIME to each
 # other and to the 12 s loop, so the field's combined pattern never repeats and cannot form a beat;
@@ -425,7 +427,10 @@ def base_css(e: Emote, scheme: str = "auto") -> str:
         # ── the 0% state: every optional group off, so the reduced-motion still is composed ────────
         ".rCheer,.legsStill,.eShut,.aShut,.eyesAsk,.armsAlert{opacity:0}"
         ".legsWalk,.eOpen,.aOpen,.armsGate,.lookGate{opacity:1}"
-        ".smHat,.smHeld{opacity:0}"
+        # `.smWand`/`.smWandSpk` were missing here from the moment the wand was added, which is the
+        # exact hazard this docstring describes: a summon-using candidate rendered the creature
+        # holding a permanently-lit wand, and nothing said so. The list is the gate.
+        ".smHat,.smWand,.smWandSpk,.smHeld{opacity:0}"
         # THE SAME RESET, ONCE PER EXTRA CREATURE. `gen.clawd_sprite(sfx)` suffixes every class it
         # emits, so a second creature's optional groups are `.legsStillB`, `.eShutB`, `.aShutB`,
         # `.eyesAskB`, `.armsAlertB` — and the unsuffixed rules above do not reach any of them. Left
