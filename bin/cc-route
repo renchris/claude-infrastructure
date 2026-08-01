@@ -15,10 +15,11 @@
 #
 # SLOT TABLE (effort provenance: model-config effort_defaults + agent-teams §Per-Teammate-Effort — the
 # emitted effort is the LEAD's; teammate effort INHERITS the lead on CC 2.1.183, no per-member surface):
-#   lead            lead_default model  @ max    (effort_defaults.default)
+#   lead            lead_default model  @ effort_defaults.default (LIVE READ — `high` as of 2026-08-01;
+#                   was a hardcoded `max` that only CLAIMED this provenance in comments)
 #   transcription   lead_default model  @ high   (mechanical/routine ladder; roadmap a-stubs precedent)
 #   judgment-dense  frontier model      @ xhigh  (Fable ladder: xhigh = capability-sensitive)
-#                   → fallback lead_default @ max (Opus ladder: default max) — reason-carrying
+#                   → fallback lead_default @ effort_defaults.default (LIVE READ) — reason-carrying
 #   adversarial     frontier model      @ xhigh  (effort_defaults.verify_judge — holds on BOTH tiers)
 #                   → fallback lead_default @ xhigh — reason-carrying
 #
@@ -115,6 +116,25 @@ ssot_model() { # <block> <key>  e.g. ssot_model frontier_access model
   case "$v" in claude-*) echo "$v"; return 0 ;; *) return 1 ;; esac
 }
 
+# effort_defaults.<key> → its value, key-anchored and value-bounded exactly like ssot_model (the
+# comment landmine applies here too: a `# default: max` comment line must never match).
+# 2026-08-01 — added because the SLOT TABLE above CLAIMED "(effort_defaults.default)" provenance
+# while the code hardcoded `eff=max`; the SSOT was documentation, not an input. Moving the Opus 5
+# ladder into model-config.yaml would have been cosmetic for every routed spawn without this.
+# Fail-open by design (unlike ssot_model, which refuses to route): a mis-read MODEL is a correctness
+# hazard, a mis-read EFFORT is only cost/quality — and the fallbacks below are the SSOT's own current
+# values, so a fallback and a successful read are indistinguishable in effect.
+ssot_effort() { # <key>  e.g. ssot_effort default
+  [ -f "$MODEL_CONFIG" ] || return 1
+  local v
+  v="$(awk -v key="$1" '
+      /^effort_defaults:/ {f=1; next}
+      /^[^ #]/ {f=0}
+      f && $1 == key":" {print $2; exit}
+    ' "$MODEL_CONFIG" 2>/dev/null)"
+  case "$v" in low|medium|high|xhigh|max) echo "$v"; return 0 ;; *) return 1 ;; esac
+}
+
 # route via claude-accounts; stdout = account name. rc semantics per the reference contract.
 route_account() { # <fable|general> ; sets ROUTE_ACCT / ROUTE_REASON, returns rc
   local kind="$1" bin out rc
@@ -155,7 +175,10 @@ cmd_route() {
 
   case "$slot" in
     lead|transcription)
-      local eff; [ "$slot" = lead ] && eff=max || eff=high
+      # lead effort now READS effort_defaults.default (was hardcoded `max`); non-lead stays the
+      # mechanical/routine `high` of the slot table. Fallback == the SSOT's own value.
+      local eff
+      if [ "$slot" = lead ]; then eff="$(ssot_effort default)" || eff=high; else eff=high; fi
       if route_account general; then
         emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$eff" "general route"
       else
@@ -176,7 +199,11 @@ cmd_route() {
       elif [ "$rc" -eq 2 ]; then
         # RT-b FRONTIER-WINDOW EDGE: the SSOT-designed degrade — EXPLICIT, reason-carrying, never silent.
         local fb_reason="frontier unavailable (${ROUTE_REASON:-window closed / exhausted}) → designed Opus fallback"
-        local fb_eff; [ "$slot" = adversarial ] && fb_eff=xhigh || fb_eff=max
+        # Opus-fallback effort also reads the SSOT: adversarial keeps verify_judge (xhigh, certified
+        # to hold on BOTH tiers), everything else takes effort_defaults.default.
+        local fb_eff
+        if [ "$slot" = adversarial ]; then fb_eff="$(ssot_effort verify_judge)" || fb_eff=xhigh
+        else fb_eff="$(ssot_effort default)" || fb_eff=high; fi
         if route_account general; then
           record "$slot" fallback "$fb_reason"
           emit_plan "$slot" "$lead_model" "$ROUTE_ACCT" "$fb_eff" "$fb_reason"
@@ -242,6 +269,10 @@ frontier_access:
   active: true
 roles:
   lead_default: claude-opus-4-8             # trailing comment
+# effort_defaults landmine: this comment line says default: max and must NEVER match the parse
+effort_defaults:
+  default: high                             # trailing comment
+  verify_judge: xhigh
 YAML
   export CC_MODEL_CONFIG="$tmp/model-config.yaml"
 

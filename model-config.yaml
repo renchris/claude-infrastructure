@@ -329,15 +329,27 @@ frontier_discovery_budget:
 #     is correct, not manual steering. See docs/research/FABLE5_PROMPTING_PLAYBOOK_2026-06-30.md.
 # Rule doc: memory/feedback-agent-team-models.md (2026-04-17 revision).
 effort_defaults:
-  default: max                              # implementer, reviewer, doctor, lead, researcher, CODING, SYNTHESIS,
-                                            # mechanical-with-search. CERTIFIED 2026-06-30 (freewin probe T1,
-                                            # wf_771c1e9f-644, blind default-to-equivalent judge panels over real
-                                            # reso briefs): xhigh does NOT tie max on grounding-heavy classes —
-                                            # synthesis (max surfaced a VERIFIED SUPERSET of findings xhigh missed)
-                                            # and mechanical-search (xhigh HALLUCINATED a fabricated diff against a
-                                            # non-existent file + misclassified an internal alias) both show real
-                                            # xhigh quality regressions; coding marginal (xhigh's only miss was a
-                                            # git-apply-tolerant cosmetic hunk-header). Keep max. Probe § CERTIFIED.
+  default: high                             # implementer, reviewer, doctor, lead, researcher, CODING, SYNTHESIS,
+                                            # mechanical-with-search.
+                                            # 2026-08-01 — max → high, executing the re-sweep directive written into
+                                            # the opus5 block below ("max is wrong-signed for Opus 5"). `high` IS
+                                            # Opus 5's own API default and Anthropic's stated starting point; `max`
+                                            # is "prone to overthinking" and feeds the self-correction /
+                                            # re-verification loops the system card documents. This is the guide's
+                                            # STARTING POINT, not a measured optimum — a real per-class sweep is
+                                            # still owed (docs/research/opus5-adaptation-2026-08-01.md §D3), and the
+                                            # opus5_* keys below are the per-class starting points to sweep FROM.
+                                            # [HISTORY — do not delete: why it was max] CERTIFIED 2026-06-30
+                                            # (freewin probe T1, wf_771c1e9f-644, blind default-to-equivalent judge
+                                            # panels over real reso briefs) **on Opus 4.8**: xhigh did NOT tie max on
+                                            # grounding-heavy classes — synthesis (max surfaced a VERIFIED SUPERSET
+                                            # of findings xhigh missed) and mechanical-search (xhigh HALLUCINATED a
+                                            # fabricated diff against a non-existent file + misclassified an internal
+                                            # alias) both showed real xhigh quality regressions; coding marginal.
+                                            # That certification is MODEL-SCOPED and does not transfer to Opus 5 —
+                                            # Anthropic: "run a fresh effort sweep on your evals rather than
+                                            # reusing" a setting tuned for an earlier model. Restore `max` only with
+                                            # an Opus-5 probe that reproduces the above.
   verify_judge: xhigh                       # CERTIFIED FREE WIN (T1, wf_771c1e9f-644): LLM-judge / adversarial-
                                             # verify tasks with BOUNDED grounding (verify ONE specific claim) tie max
                                             # on quality (2/2 briefs TIE, one cheaper-lean) at lower cost — the
@@ -352,10 +364,16 @@ effort_defaults:
                                             # fabricated edit there. xhigh is safe only when the targets are given.
   frontier: max                             # novel algorithm, security audit (= default tier)
   # settings_floor: the persistable "effortLevel" floor for every CLAUDE_CONFIG_DIR's settings.json
-  # (non-wrapped surfaces: IDE ext, teammate panes, bare-binary calls). The settings schema enum caps
-  # at xhigh, so xhigh is the floor. These are NOT symlinked — five independent real files that drift
-  # apart; scripts/effort-parity-assert.sh asserts the live dirs against this key (exit 1 on drift).
-  settings_floor: xhigh
+  # (non-wrapped surfaces: IDE ext, teammate panes, bare-binary calls). These are NOT symlinked — five
+  # independent real files that drift apart; scripts/effort-parity-assert.sh asserts the live dirs
+  # against this key (exit 1 on drift).
+  # 2026-08-01 — xhigh → high. The old floor was derived FROM `default: max`: max is not expressible
+  # in the settings schema (its enum caps at xhigh), so xhigh was "the highest persistable
+  # approximation of max". With the default now `high`, that derivation is void — and the stale floor
+  # had INVERTED the guard: effort-parity-assert was emitting PS-WARN against 8 live sessions for
+  # running `--effort high`, i.e. convicting them of obeying Opus 5's own documented default. A guard
+  # that reds on the correct value trains you to ignore it. Floor tracks `default`; move both together.
+  settings_floor: high
   # Fable-5 SURFACES follow a DIFFERENT ladder (Anthropic "Prompting Claude Fable 5"
   # guide, 2026-06-11 audit). The binary's live-session effort enum is
   # low < medium < high < xhigh < max — `max` is the absolute ceiling, ABOVE xhigh.

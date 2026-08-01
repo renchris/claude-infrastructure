@@ -14,6 +14,9 @@ frontier_access:
   active: true
 roles:
   lead_default: claude-opus-4-8
+effort_defaults:
+  default: high
+  verify_judge: xhigh
 YAML
   cat > "$BATS_TEST_TMPDIR/accounts-stub" <<'STUB'
 #!/bin/bash
@@ -54,8 +57,27 @@ STUB
 @test "lead → one-line JSON plan {slot,model,account,lead_effort,reason} on stdout" {
   run bash -c "'$T' lead 2>/dev/null"
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e 'select(.slot=="lead" and .model=="claude-opus-4-8" and .account=="next3" and .lead_effort=="max" and (.reason|length)>0)'
+  # lead_effort is a LIVE READ of effort_defaults.default (fixture: high), not a hardcoded literal.
+  echo "$output" | jq -e 'select(.slot=="lead" and .model=="claude-opus-4-8" and .account=="next3" and .lead_effort=="high" and (.reason|length)>0)'
   [ "$(echo "$output" | wc -l)" -eq 1 ]
+}
+
+@test "lead_effort TRACKS effort_defaults.default — not a hardcoded literal" {
+  # Control for the test above: asserting lead_effort=="high" against a fixture that says `high`
+  # passes just as happily if the value is hardcoded, which is exactly the bug this replaced
+  # (the SLOT TABLE claimed "(effort_defaults.default)" provenance while the code hardcoded `max`).
+  # Vary ONLY the SSOT and require the output to follow, so a re-hardcoding regression goes red.
+  local before after
+  before="$(bash -c "'$T' lead 2>/dev/null" | jq -r .lead_effort)"
+  [ "$before" = high ]
+
+  sed -i '' 's/^  default: high$/  default: medium/' "$CC_MODEL_CONFIG"
+  after="$(bash -c "'$T' lead 2>/dev/null" | jq -r .lead_effort)"
+  [ "$after" = medium ] || { echo "lead_effort did not follow the SSOT: got '$after', want 'medium'"; false; }
+
+  # …and an UNPARSEABLE effort must fail OPEN to `high`, never emit an invalid enum value.
+  sed -i '' 's/^  default: medium$/  default: bogus-not-an-enum/' "$CC_MODEL_CONFIG"
+  [ "$(bash -c "'$T' lead 2>/dev/null" | jq -r .lead_effort)" = high ]
 }
 
 @test "judgment-dense with window open → fable plan; with fable-route none → reason-carrying fallback" {
