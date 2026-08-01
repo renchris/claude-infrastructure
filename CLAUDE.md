@@ -352,10 +352,22 @@ Mixed turn → show the worst-open rung only.
   that is what it takes (subagents for read-only breadth, **Agent Teams** for 2+ code tasks), and
   when context runs out before the work does, `/handoff` rather than stopping mid-air. "I have
   identified the remaining items" is not a close; the items are the work.
+- **…but 🔧 you did not CAUSE is not your loose end.** The ledger reads facts, not authorship, and
+  some 🔧 are structurally permanent: a sibling's dirty file in a shared checkout, a trunk that was
+  already red, a `gate-green` marker the land path *cannot* advance (claude-infrastructure v2 — only
+  the background `postland-verify` stamp moves it, and it has been red since long before your diff).
+  Driving those is an infinite loop wearing diligence's clothes. **Attribute before you drive:** is
+  the cause inside your diff? If yes, it is yours — finish it. If no, name it in ONE line, surface
+  it, and close on *your* state. The converse binds equally — never launder someone else's red into
+  a ✅; say whose it is.
 - **📦 outside reso auto-`/ship`s**, then re-reads the ledger — the turn closes on the *landed* state.
-- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk ·
-  the repo's gates run green *this turn* · frozen-DoD remainder 0 · no operator step this session
-  created left unrun. Any one of those unknown ⇒ it is not ✅; say which.
+- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
+  verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
+  after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
+  remainder 0 · no operator step this session created left unrun. Any one unknown ⇒ not ✅; say
+  which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
+  diff green + content-verified land* is the standard — waiting on a trunk-wide stamp you do not
+  control is not diligence, it is a hang.
 
 **The close message — pyramid-lite, hard-capped.** The operator reads a close to make exactly ONE
 decision. Anything that does not change that decision belongs in the commit message, the plan file,
