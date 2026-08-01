@@ -159,6 +159,14 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# notify_desk's OUT-PARAMS (set -u: declared here so a reader can never trip on an unset var). The exit
+# code alone cannot carry the distinction that matters — rc 0 covers BOTH "a live desk holds it" and
+# "enqueued to a mailbox nothing drains" — so the outcome word travels beside it. Callers read it
+# IMMEDIATELY after their notify_desk call, in the same shell (no subshell hop), to pick their prose.
+#   reached  rc 0 + verdict=delivered   · recorded rc 0 + any other verdict (no live desk)
+#   damped   suppressed inside the TTL  · refused  rc != 0 · no-channel no cc-notify wired
+NOTIFY_OUTCOME=""
+NOTIFY_VERDICT=""
 # ── safeguard-blocked recovery (2026-07-25) — a fired peer refused by model content-safeguards is
 # SURFACED (originator page + board row + desk page), NEVER reaped. Auto-recovery (re-fire on another
 # model + sanctioned self-close) is OPT-IN: default OFF, so the desk decides. When on, the sweep invokes
@@ -305,19 +313,53 @@ idl_safeguard(){ # <pane> <name> <account> <model> <refusal> <firedBy> <recover_
 # with no log line, no IDL row and no retry — while the D7 marker written just before the attempt
 # suppressed the next 30 min of re-sends. A refused page is now LOGGED and the marker dropped, so the
 # next sweep re-sends. Exit: 0 = enqueued (or damped) · 1 = no cc-notify · 2 = the transport refused it.
+#
+# ── THERE IS NO DESK, AND THAT IS A SUPPORTED CONFIGURATION (2026-08-01) ─────────────────────────
+# rc alone is STILL not the outcome. This machine runs no desk orchestrator: cc-roles/desk holds a
+# 2026-07-26 iTerm2 pane uuid whose pane self-closed, the only organ that could create a successor is
+# not loaded, and `cc-notify --role desk` therefore returns rc 0 with verdict=mailbox-only (or
+# =unverified) FOREVER. Checking only `$?` made every such page a claimed delivery: handle_surface
+# said "→ desk (surfaced, never-reap)" and wrote the per-(session,cause) damper, so a finding nothing
+# alive had seen was ALSO silenced permanently. The three-way accounting documented above (marker
+# withheld on a refusal) never engaged, because a dead desk never produces a refusal.
+#
+# So the outcome is partitioned exactly as scripts/lead-supervisor.sh (e5894631) partitions it:
+#   REACHED   rc 0 + verdict=delivered  — a live session holds it. Claim the desk; keep the marker.
+#   RECORDED  rc 0 + any other verdict  — enqueued to a mailbox with no proven reader. THE STEADY
+#             STATE of a desk-less fleet, not a fault. The mailbox record stands (a desk registered
+#             later drains it) and the marker is KEPT — re-paging every 300 s sweep is the 2026-07-19
+#             composer storm this whole class exists to prevent — but nothing may SAY it reached a
+#             desk, because nothing did.
+#   REFUSED   rc != 0 (3 unresolvable · 5 inbox unwritable) — the transport took nothing at all.
+#             Marker withheld ⇒ the next sweep genuinely retries. Unchanged from today.
+# cc-notify emits its `verdict=` token on STDERR, so it is captured with 2>&1 and PARSED (memory:
+# claimed-outcome-vs-checked-outcome — the token existed; nobody read it). A verdict we cannot read
+# is a THIRD state (`unreadable`), never silently promoted to success.
 notify_desk(){ # <message> [fingerprint]
-  local msg="$1" fp="${2:-}" rdir rname rc=0
+  local msg="$1" fp="${2:-}" rdir rname rc=0 out=""
+  NOTIFY_OUTCOME=no-channel; NOTIFY_VERDICT=""
   [ -n "$NOTIFY_BIN" ] || return 1
   if [ -n "$fp" ] && command -v damp_should_send >/dev/null 2>&1; then
-    damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || { log "page-damped [$fp]"; return 0; }
+    damp_should_send "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp" || { log "page-damped [$fp]"; NOTIFY_OUTCOME=damped; return 0; }
   fi
   if [ -n "$PAGE_TO" ]; then
-    "$NOTIFY_BIN" "$PAGE_TO" "$msg" >/dev/null 2>&1; rc=$?
+    out="$("$NOTIFY_BIN" "$PAGE_TO" "$msg" 2>&1)"; rc=$?
   else
     rdir="$(dirname "$PAGE_TO_FILE")"; rname="$(basename "$PAGE_TO_FILE")"
-    CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" >/dev/null 2>&1; rc=$?
+    out="$(CC_ROLES_DIR="$rdir" "$NOTIFY_BIN" --role "$rname" "$msg" 2>&1)"; rc=$?
   fi
-  [ "$rc" = 0 ] && return 0
+  NOTIFY_VERDICT="$(printf '%s' "$out" | grep -oE 'verdict=[A-Za-z-]+' | head -1 | cut -d= -f2)"
+  [ -n "$NOTIFY_VERDICT" ] || NOTIFY_VERDICT=unreadable
+  # ── REACHED ──
+  if [ "$rc" = 0 ] && [ "$NOTIFY_VERDICT" = delivered ]; then NOTIFY_OUTCOME=reached; return 0; fi
+  # ── RECORDED — enqueued, but no live reader. The desk-less steady state. ──
+  if [ "$rc" = 0 ]; then
+    NOTIFY_OUTCOME=recorded
+    log "page RECORDED verdict=$NOTIFY_VERDICT target=${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")} [$fp] — enqueued to the mailbox; NO live desk received it (no re-send: the record stands and re-paging every sweep is the storm)"
+    return 0
+  fi
+  # ── REFUSED — the transport took nothing; retry next sweep. ──
+  NOTIFY_OUTCOME=refused
   [ -n "$fp" ] && command -v damp_forget >/dev/null 2>&1 && damp_forget "${PAGE_TO:-role:$PAGE_TO_FILE}" "$fp"
   log "page SEND FAILED rc=$rc target=${PAGE_TO:-role:$(basename "$PAGE_TO_FILE")} — NOT delivered (cc-notify refused it); damping marker dropped so the next sweep retries"
   return 2
@@ -494,6 +536,7 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
   local nrc=0
   notify_desk "⚠️ REAPER SURFACE — session ${name} is ${cause}: ${detail} (never-reap; desk/operator resolves — re-engage a hang · close a crashed pane · confirm-close a shared-review). cc-reaper never auto-acts on this." \
               "surface:${name}:${cause}" || nrc=$?
+  local outcome="${NOTIFY_OUTCOME:-unknown}"
   # The FINDING is recorded either way — the classification is true whether or not anyone was reached.
   # The DELIVERY claim is not, and $mk is this sweep's "already paged this cause" damper. Three
   # outcomes, deliberately NOT collapsed:
@@ -502,6 +545,10 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
   #   · NO-CHANNEL-WIRED keeps the marker (unchanged): a missing cc-notify is static config, not a
   #     transient fault, so retrying it every sweep only floods the IDL — but the line must stop
   #     saying "→ desk", because nothing went there.
+  #   · RECORDED (rc 0, verdict ≠ delivered) keeps the marker for exactly the same reason — a fleet
+  #     with no desk registered is static config too, and re-paging it every 300 s sweep is the
+  #     composer storm — but it likewise must stop saying "→ desk": the page sits in a mailbox no
+  #     live session has read.
   # Retry cost is bounded by the sweep cadence (launchd, 300s): a standing refusal costs ~12 attempts
   # + IDL rows an hour, which is the correct volume for "the desk role is unset and a session needs
   # attention" — the same S-4 posture as the supervisor's per-sweep page record.
@@ -512,13 +559,20 @@ handle_surface() { # <reap> <key> <name> <cause> <pane> <detail>
     return 0
   fi
   printf '%s\n' "$cause" > "$mk" 2>/dev/null || true
-  if [ "$nrc" = 0 ]; then
-    say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
-    log "surface-page $name [$cause] pane=$pane"
-  else
-    say "  SURFACE $name [$cause] — recorded, NOT paged (no desk channel wired)"
-    log "surface-page NO-CHANNEL $name [$cause] pane=$pane — cc-notify unavailable; recorded to the IDL only"
-  fi
+  case "$outcome" in
+    reached)
+      say "  PAGE   $name [$cause] → desk (surfaced, never-reap)"
+      log "surface-page DELIVERED $name [$cause] pane=$pane" ;;
+    recorded)
+      say "  SURFACE $name [$cause] — recorded to the desk mailbox; NO live desk received it (verdict=$NOTIFY_VERDICT)"
+      log "surface-page RECORDED $name [$cause] pane=$pane verdict=$NOTIFY_VERDICT — no desk is registered; the finding stands in the IDL + mailbox, nothing live has read it" ;;
+    damped)
+      say "  SURFACE $name [$cause] — recorded; page suppressed (identical page inside the damping TTL)"
+      log "surface-page DAMPED $name [$cause] pane=$pane — identical (target,fingerprint) inside the TTL" ;;
+    *)
+      say "  SURFACE $name [$cause] — recorded, NOT paged (no desk channel wired)"
+      log "surface-page NO-CHANNEL $name [$cause] pane=$pane — cc-notify unavailable; recorded to the IDL only" ;;
+  esac
 }
 
 # ── safeguard-blocked (2026-07-25): surface a fired peer that model content-safeguards refused on
@@ -555,7 +609,17 @@ handle_safeguard_blocked(){ # <reap> <obj-json>
     log "safeguard-blocked $pane has no firedBy originator — desk + board only"
   fi
   # 2. desk page (damped) — same cadence as other surface causes.
-  notify_desk "⚠️ REAPER SURFACE — ${name} is safeguard-blocked (${account}${model:+, ${model}}): model content-safeguards refused its first turn — idle DOA, brief never ran. Originator ${firedBy:-<unknown>} notified. Recover: ${recover_cmd}. cc-reaper never auto-acts on this." "surface:${name}:safeguard-blocked"
+  notify_desk "⚠️ REAPER SURFACE — ${name} is safeguard-blocked (${account}${model:+, ${model}}): model content-safeguards refused its first turn — idle DOA, brief never ran. Originator ${firedBy:-<unknown>} notified. Recover: ${recover_cmd}. cc-reaper never auto-acts on this." "surface:${name}:safeguard-blocked" || true
+  # Name the desk leg by what actually happened to it — the summary line below is the operator-facing
+  # claim, and "+ desk" is false in the desk-less configuration (rc 0, verdict=mailbox-only).
+  local dnote
+  case "${NOTIFY_OUTCOME:-unknown}" in
+    reached)  dnote="desk" ;;
+    recorded) dnote="desk MAILBOX (no live desk; verdict=$NOTIFY_VERDICT)" ;;
+    damped)   dnote="desk (page damped inside the TTL)" ;;
+    refused)  dnote="desk NOT reached (transport refused)" ;;
+    *)        dnote="no desk channel wired" ;;
+  esac
   # 3. blockers-board row (carries the recovery command for the one-glance operator view).
   idl_safeguard "$pane" "$name" "$account" "$model" "$refusal" "$firedBy" "$recover_cmd"
   # 4. opt-in auto-recovery (default OFF — surface-and-let-the-desk-decide).
@@ -564,8 +628,8 @@ handle_safeguard_blocked(){ # <reap> <obj-json>
     log "safeguard auto-recover $pane via $RECOVER_BIN"
     "$RECOVER_BIN" "$pane" --execute >/dev/null 2>&1 || log "safeguard auto-recover FAILED for $pane"
   fi
-  say "  SURFACE $name [safeguard-blocked] → originator ${firedBy:-<none>} + desk + board (autorecover=$SAFEGUARD_AUTORECOVER)"
-  log "safeguard-blocked surfaced $name pane=$pane firedBy=${firedBy:-none} autorecover=$SAFEGUARD_AUTORECOVER"
+  say "  SURFACE $name [safeguard-blocked] → originator ${firedBy:-<none>} + ${dnote} + board (autorecover=$SAFEGUARD_AUTORECOVER)"
+  log "safeguard-blocked surfaced $name pane=$pane firedBy=${firedBy:-none} desk=${NOTIFY_OUTCOME:-unknown} autorecover=$SAFEGUARD_AUTORECOVER"
 }
 
 # ── P0-12b: enumerated≈live-panes self-check. `enum` = what cc-classify saw this sweep; `live` = the
@@ -588,10 +652,22 @@ self_check() { # <reap> <enumerated>
   consec=$(( consec + 1 ))
   if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
     notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): a spawn mode isn't registering in cc-registry, so they can't be classified or reaped. Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
-                "selfcheck-blind:delta${delta}"
+                "selfcheck-blind:delta${delta}" || true
     idl_selfcheck "$live" "$enum" "$delta"
-    say "cc-reaper self-check: PAGE — Δ$delta blind spot ($live live vs $enum enumerated) → desk"
-    log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))"
+    # Same three-way accounting as handle_surface: the blind-spot FINDING is recorded either way, but
+    # only a verdict=delivered page may claim a desk saw it. `paged` (the re-page hysteresis) advances
+    # in every case — the record stands, and re-paging a desk-less fleet each sweep is the storm.
+    case "${NOTIFY_OUTCOME:-unknown}" in
+      reached)
+        say "cc-reaper self-check: PAGE — Δ$delta blind spot ($live live vs $enum enumerated) → desk"
+        log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))" ;;
+      refused)
+        say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — desk page REFUSED by the transport"
+        log "self-check page REFUSED: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))" ;;
+      *)
+        say "cc-reaper self-check: RECORD — Δ$delta blind spot ($live live vs $enum enumerated) — recorded; NO live desk received it (${NOTIFY_OUTCOME:-unknown}${NOTIFY_VERDICT:+, verdict=$NOTIFY_VERDICT})"
+        log "self-check RECORDED: live=$live enum=$enum delta=$delta outcome=${NOTIFY_OUTCOME:-unknown} verdict=${NOTIFY_VERDICT:-none} (persisted ${consec} sweep(s))" ;;
+    esac
     paged="$delta"
   else
     say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — persist ${consec}/${SELFCHECK_MIN_PERSIST}$([ "$paged" != 0 ] && printf ' (already paged; damped)')"
