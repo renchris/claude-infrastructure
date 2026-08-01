@@ -112,7 +112,7 @@ fi
 if [ "$MODE" = undo ]; then
   hdr "reverting"
   [ -L "$KCONF_DIR/kitty.conf" ] && { rm -f "$KCONF_DIR/kitty.conf"; ok "removed kitty.conf symlink"; }
-  for f in it2-kitty cc-term; do
+  for f in it2-kitty cc-term kitty-split-cwd.sh; do
     [ -L "$BIN_DIR/$f" ] && { rm -f "$BIN_DIR/$f"; ok "removed $BIN_DIR/$f"; }
   done
   if grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
@@ -165,6 +165,11 @@ if [ "$MODE" = apply ]; then
   # the divert consult. install.sh's bin/cc-* glob also deploys it; linking it here too keeps this
   # script's promise of being ONE command, and `ln -sfn` makes the overlap a no-op.
   ln -sfn "$REPO/bin/cc-in-kitty" "$BIN_DIR/cc-in-kitty"
+  # kitty.conf's cmd+D / cmd+shift+D bindings name this script as the program they launch, so a
+  # missing link is not a degraded split — it is a split that cannot open at all. It lives under
+  # $BIN_DIR because the conf resolves it as ${HOME}/.claude/bin/..., which is how the conf stays
+  # free of a hardcoded home path (verified: kitty DOES expand ${HOME} in launch argv, 0.48.2).
+  ln -sfn "$REPO/bin/kitty-split-cwd.sh" "$BIN_DIR/kitty-split-cwd.sh"
   # NOTE: no separate pane adapter is linked here. bin/cc-pane is the repo's terminal-agnostic
   # seam and install.sh already deploys it; because its iterm2 driver shells out to
   # $HOME/.claude/bin/it2, the divert above makes cc-pane work on kitty with no kitty driver.
@@ -173,6 +178,10 @@ fi
 grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
 [ -x "$BIN_DIR/it2-kitty" ] && ok "it2-kitty deployed" || no "it2-kitty missing at $BIN_DIR"
+# -x follows the symlink, so this fails on a DANGLING link as well as on absence — the two ways
+# cmd+D breaks. Reported here rather than under step 1 because the link, not the conf, is the artifact.
+[ -x "$BIN_DIR/kitty-split-cwd.sh" ] && ok "kitty-split-cwd.sh deployed (cmd+D lands in the main checkout)" \
+                                     || no "kitty-split-cwd.sh missing at $BIN_DIR — cmd+D cannot open a split"
 # The wrapper is a COPY (refreshed only by this script or install.sh) while it2-kitty is a SYMLINK
 # that tracks the repo live, so the two halves CAN skew. Assert the copy is a version that verifies
 # the terminal before diverting — a stale copy still diverts on $KITTY_WINDOW_ID alone, which is
