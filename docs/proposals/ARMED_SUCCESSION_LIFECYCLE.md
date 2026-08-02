@@ -537,6 +537,38 @@ grepping for it, like the problem is solved.
 The corollary for §10: the reader is not a new feature. It is the unbuilt half of a design already
 ratified, and building it is what makes the landed half worth anything.
 
+### 9.2c `--terminal` is the close mode with no legibility at all — and 158 used it
+
+The July fix is real, but it is **half a fix, and the uncovered half is the one Incident B took.**
+Memory `handoff-succession-legibility` states the rule it installed:
+
+> *"an operator judges a handoff by what their EYES land on when a pane vanishes. A close whose
+> continuation is not visible is indistinguishable from a crash, no matter how clean the mechanics
+> were."*
+
+Its mechanism — `self-close` refuses without a succession statement; `--successor` verifies the
+survivor is alive, **announces into it** via `cc-notify`, and **moves operator focus** — makes a
+*successor* close visible. `--terminal` has no survivor to announce into, so by construction it
+inherits none of that. Its entire operator-visible surface is one line (grep `post-close: terminal`):
+
+```sh
+[ -n "$SC_SUCCESSOR" ] && echo "→ post-close: operator focus hands to successor $SC_SUCCESSOR" \
+                       || echo "→ post-close: terminal (nothing continues this session's work)"
+```
+
+An `echo` **into the pane that is about to disappear**. That is the July defect — *"its handover
+report died with its own pane"* — reproduced verbatim inside the branch its own fix did not cover.
+
+Pane 158 closed `--terminal`, correctly: nothing continued its work. So the single close mode that
+has **no live surface to be legible through** is also the one whose **only** durable artifact —
+`closedAt` + `succession` — has no reader. The two gaps compose exactly, and their product is
+Incident B.
+
+Generalising the memory's own rule one level: **a close whose DELIVERY is not visible is
+indistinguishable from a death, no matter how clean the mechanics were.** For `--successor` the
+survivor carries the news. For `--terminal` only the record can, which is why §10.1 (the reader) and
+§10.2 (the receipt) are not two ideas but one: *`--terminal`'s announce channel is the record.*
+
 ### 9.3 There IS a rich reader — for the living only
 
 `bin/cc-classify` is a 12-cause idle classifier (`active`, `rate-limited`, `owned-wait`,
