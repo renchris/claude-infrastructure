@@ -414,13 +414,15 @@ operator-visible sentinel file at all.**
 >
 > **Verification level of Part II, stated so it is not over-trusted** (the `cc-await-ping` habit of
 > explaining your own designed outcome, applied to a document). Provenance: 6 mapping lenses + 6
-> adversarial verifiers; **2 verifier passes had returned when this landed**, and their verdicts on
-> everything they touched were *"substance CONFIRMED, precision errors"* — one REFUTED item concerned
-> a claim not used here. Independently of the fan-out, the **load-bearing facts below were each
+> adversarial verifiers; **all 12 agents completed, 0 errors**; verifier verdicts on everything they
+> touched were *"substance CONFIRMED, precision errors"*, with one REFUTED item concerning a claim
+> not used here. Independently of the fan-out, the **load-bearing facts below were each
 > re-checked at source by the lead**, and only those are asserted flatly:
 > the 158 forensic chain · the 17.1 % census (reproduced by a second agent via a different
 > classification route: 301 records → 141 closed, 35 null → 2 alive / 5 dead-pid / 28 no-row) ·
-> the zero-reader grep across the repo **and** the deployed `~/.claude` tree · the husk log ·
+> the zero-reader grep across the repo **and** the deployed `~/.claude` tree — *re-run with `grep -R`
+> after a verifier caught that plain `grep -r` does **not** follow the symlinks in `~/.claude/bin`, so
+> the first sweep was a false negative by method even though its conclusion held* · the husk log ·
 > `DELIVERABLE`'s four files and 3-of-290 payloads · the slug-vs-registry-name namespace mismatch ·
 > both `ship.md` frontmatters · `KILL_RE` in `session-continue.sh` · `clear_fired_marker` in
 > `cc-reaper`. Anything not in that list is single-source and marked where it matters.
@@ -678,7 +680,35 @@ So: **the fleet has a first-class reader for sessions that still exist, and none
 no longer do.** The cc-fired record is the only artifact that outlives the session, and it is
 exactly the one nothing consults.
 
-### 9.6 The lifecycle, stated
+### 9.6 The R10 fix does not cover the panes the operator actually watches
+
+`succession.kind` across all 301 records is `{terminal: 141, null: 160}`. **`successor`: zero.
+`orphan-assignee`: zero.** Not "rare" — never, in the entire population.
+
+The cause is one guard in `record_close_succession`:
+
+```sh
+[ -s "$f" ] || return 0     # no record (origin session) — nothing to annotate
+```
+
+Only **fired peers** have a `cc-fired` record, so only fired peers can have a succession statement
+written. A **desk**, or the operator's own pane, handing off to a successor writes its succession
+**nowhere** — and that is precisely the 2026-07-13 23:03 incident class the mechanism was built for:
+*a coordinator pane closing while its successor lived one pane over, illegibly.*
+
+The guard is not a bug — its comment gives the real reason: *"inventing one would license
+`cc-reaper` against it"*, and `cc-reaper` does gate auto-reap on file **presence**
+(`fired_stamp_state … = valid`). So the origin session cannot simply be given a `cc-fired` record.
+It needs either a **distinct store** the reaper does not read, or a record kind the reaper's
+predicate explicitly excludes — and §3's *"do not put the arm record in `cc-fired/`"* constraint
+(Part I) is the same lesson arrived at from the other side.
+
+**Consequence for scope:** the observability gap is *wider* than the brief's two incidents. A fired
+peer at least has a record with an unread field. A desk or operator pane has **no record at all** —
+the armed-recycle situation (§7.5 class A), for the panes whose disappearance the operator is most
+likely to notice.
+
+### 9.7 The lifecycle, stated
 
 | State | Set by | Where observable **today** | Where it must be |
 |---|---|---|---|
@@ -701,7 +731,7 @@ the reason the fired half already does.**
 ### 10.1 (a) Make a silent peer death loud — a READER, no new state
 
 Everything needed already exists on disk for all 28 dark peers. Required: something that reads
-`cc-fired × cc-sessions` and reports the four derived outcomes of §9.6. Two placements, both small:
+`cc-fired × cc-sessions` and reports the four derived outcomes of §9.7. Two placements, both small:
 
 - extend `cc-classify` with a **departed-peer domain** (its `--all` currently enumerates live
   sessions only), or add a sibling that reuses its evidence discipline; and
@@ -760,6 +790,27 @@ delivered* (declared deliverable paths; landed shas; repo) to a write that alrea
 smallest possible change — no new store, no ceremony, no stay-open term. It also fixes the
 cross-repo blindness of §8, because the receipt names the repo the work landed in rather than
 leaving the operator to guess from the worktree.
+
+**Where the receipt is written matters as much as what it says.** `record_close_succession` runs
+*before* the `/exit` chain — its own comment says *"persist the succession statement … BEFORE the
+pane can evaporate (R10)"* — and there is **no rollback path** (`closedAt` has exactly two write
+sites: the null initialiser and the close stamp). Strictly after it sit at least three aborts that
+leave the session **alive**:
+
+- `!! self-close ABORTED: watcher heartbeat never appeared … /exit NOT typed, session stays alive`
+- `!! could not type /exit into $SID — watcher disarmed`
+- `!! self-close ABORTED at close-instant: successor … is NO LONGER ALIVE … Predecessor left alive.`
+
+Plus the husk case (§8.3), where the pane close fails 4/4 *after* the stamp. So **`closedAt != null`
+cannot mean "this pane is gone"** — it means "this session asked to be closed." A reader built on it
+would page for strands that did not happen and stay silent on the live session that never left.
+
+The fix is a split, not a new store: **`closeIntentAt`** written where the stamp is today (it must
+precede the evaporation, that reasoning is sound), and **`closeVerifiedAt` + `closeOutcome`**
+(`closed` | `husk` | `aborted`) written by the detached `__selfclose` watcher *after* the pane-close
+verdict — the same watcher that already knows the answer and already prints it to a self-erasing
+`/tmp` log. The delivery receipt belongs with the **verified** half, because that is the write that
+happens when the outcome is actually known.
 
 **And the un-fakeable source is already named by the record itself.** `mark_fired_peer` writes a
 `transcript:` pointer into `cc-fired/<pane>.json`, and a transcript's `toolUseResult` records are
