@@ -313,8 +313,39 @@ if printf '%s' "$MSG_UNQ" | grep -iqE "$CA_OFFER"; then
   printf '%s' "$ca_rest" | grep -iqE "$CA_WORKLEFT" && d4=1
 fi
 
+# D5 — a command offered for copy-paste that STILL CONTAINS A PLACEHOLDER.
+#   Found the only way it gets found: the operator pasted one and their shell answered
+#   `(eval):1: no such file or directory: checkout`. The close had handed over
+#   `git -C <checkout> pull --rebase origin main && <checkout>/install.sh` under a run marker —
+#   correctly styled, correctly single, and guaranteed to fail. Every other arm passed it: D2 sees
+#   code styling and abstains, and nothing else looks INSIDE the command. But "one thing to select
+#   and paste" is the whole contract, and a template is not pasteable — it is homework.
+#
+#   Scope: only a command the close is telling the operator to RUN — an inline-code span alone on
+#   its line (the mandated form), or a line under a `▶`/"Run this" marker. A placeholder inside a
+#   mid-sentence mention is legitimate documentation and must NOT fire, which is what keeps this
+#   from convicting every doc paragraph that names a command shape.
+#
+#   ANGLE-BRACKET SHAPE ONLY, plus the two conventional literals. `<word>` cannot be confused with
+#   a shell redirect (`cmd < file` has spaces; `<<EOF` is doubled), and $VAR / ~ / $(cmd) are all
+#   things a shell RESOLVES on paste — they are not placeholders and are deliberately excluded.
+CA_PLACEHOLDER='<[A-Za-z][A-Za-z0-9_.-]*>|PASTE_[A-Z_]*|YOUR_[A-Z_]+|<your-|xxxxx'
+d5=0
+ca_prev=""
+while IFS= read -r ca_l; do
+  ca_t="${ca_l#"${ca_l%%[![:space:]]*}"}"          # left-trim
+  ca_is_run=0
+  # the mandated form: an inline-code span ALONE on its line
+  case "$ca_t" in '`'*'`') ca_is_run=1 ;; esac
+  # or a marked line: `▶ <cmd>` / a line following a "Run this"-style marker
+  case "$ca_t" in '▶'*) ca_is_run=1 ;; esac
+  printf '%s' "$ca_prev" | grep -qiE '(^|[^a-z])run (this|it)\b|▶' && [ -n "$ca_t" ] && ca_is_run=1
+  if [ "$ca_is_run" -eq 1 ] && printf '%s' "$ca_t" | grep -qE "$CA_PLACEHOLDER"; then d5=1; break; fi
+  ca_prev="$ca_t"
+done <<< "$MSG"
+
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
-  || abstain "ledger-clean"
+  || [ "$d5" -eq 1 ] || abstain "ledger-clean"
 
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -341,6 +372,7 @@ arm=""
 [ "$d1" -eq 1 ] && arm="${arm:+$arm+}handoff"
 [ "$d4" -eq 1 ] && arm="${arm:+$arm+}offer"
 [ "$d2" -eq 1 ] && arm="${arm:+$arm+}fence"
+[ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
 log_idl fired "false-done" \
   "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{facts:$facts,rung:$rung,arm:$arm,count:$count,max:$max}')"
@@ -351,6 +383,7 @@ reason=""
 [ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
+[ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all — it is a question to ask or a step to file."
 [ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"
 reason="$reason (completion-assert $((N+1))/${MAX})"
