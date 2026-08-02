@@ -70,7 +70,18 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die_notrepo
 # ── Trunk ref: explicit override → origin/HEAD → origin/main → origin/master → none ──
 TRUNK="${WRAP_TRUNK:-}"
 if [ -z "$TRUNK" ]; then
-  TRUNK="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null || true)"
+  # `git rev-parse --abbrev-ref origin/HEAD` PRINTS "origin/HEAD" ON STDOUT EVEN WHEN IT FAILS
+  # fatally — rev-parse echoes the argument back before erroring. With `|| true` swallowing the rc,
+  # TRUNK was assigned that bogus ref, and the `[ -n "$TRUNK" ]` guards below then SKIPPED the
+  # origin/main and origin/master fallbacks as "already resolved". The verify on :77 blanked it
+  # again, so a repo with a perfectly good origin/main reported TRUNK=none ⇒ AHEAD=0 ⇒ UNLANDED=0
+  # ⇒ RUNG=✅ for work that was never landed. That is a false ✅ on parked work — the exact FM1
+  # hazard this ledger exists to prevent — and it is SILENT: the output cannot distinguish "landed"
+  # from "found no trunk to compare against".
+  # Measured 2026-08-01: 66 of 436 clones on this machine have no refs/remotes/origin/HEAD (cloning
+  # from a bare/mirror never sets it), so this was live rather than theoretical.
+  # `symbolic-ref -q` is the probe that actually answers the question — it prints NOTHING on failure.
+  TRUNK="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
   [ -n "$TRUNK" ] || { git rev-parse --verify -q origin/main >/dev/null 2>&1 && TRUNK="origin/main"; }
   [ -n "$TRUNK" ] || { git rev-parse --verify -q origin/master >/dev/null 2>&1 && TRUNK="origin/master"; }
 fi
