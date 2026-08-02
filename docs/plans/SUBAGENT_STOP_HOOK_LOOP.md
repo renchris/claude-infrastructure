@@ -1,5 +1,5 @@
 ---
-status: open
+status: closed
 ---
 
 <!-- markdownlint-configure-file { "MD013": false, "MD041": false } -->
@@ -78,13 +78,42 @@ non-terminating** — `completion-assert` caps at `COMPLETION_MAX` (3) with a pe
 cost is real (a wave that delivers nothing) but the "burns the whole agent budget" framing overstates
 it; R4's unbounded-loop premise does not hold.
 
-### What this session fixed, and what it did not
+### R1 CLOSED — and why the attribution arm alone did not close it
 
-The remaining conviction lives in `hooks/completion-assert.sh`, and a **concurrent session on
-`fix/completion-assert-attribution` was actively editing that file** during this investigation, so it
-was left to that owner rather than same-hunk-collided.
+`6e406c7b` (attribution) landed mid-session and **did not reach R1**, which the acceptance run
+caught: it exonerates only on POSITIVE evidence — *the session wrote things, and none of them is
+this* — and treats "no writes recorded" as cannot-tell ⇒ convict. Correct in general (the transcript
+may predate the commits; the work may have gone through Bash, invisible to the oracle) but **a
+read-only research subagent records no writes by construction, so it was convicted by construction.**
 
-What this session did fix is the thing that fix rests on: `hooks/lib/session-writes.sh`, the SSOT
+Closed in `57b67f10`: rc 1 (*read cleanly, wrote nothing*) exonerates **only for a confirmed
+assignee**; rc 2 (*cannot tell*) stays strict for everyone. The framing that keeps this from being an
+exemption: **agent-ness VALIDATES THE TRANSCRIPT, it does not excuse the session.** Both objections
+above are objections about the transcript's *completeness*, and neither survives for an assignee —
+the harness creates its transcript when it spawns it, so it cannot predate the lead's commits, and it
+is its own file. Detection is the SSOT `hooks/lib/agent-identity.sh` (`3333b9a0`), extracted verbatim
+from `session-continue.sh` so the two hooks cannot disagree about who is an assignee.
+
+Acceptance, RED-proved against pristine `2cc71a7b` with `git archive` — **exactly the two R1 tests
+fail there; all five controls and all four fail-safes pass on BOTH trees**, so the fix narrows only
+what it should and the controls are not accidentally green:
+
+| | Assertion | Pristine | Fixed |
+|---|---|---|---|
+| **R1** | write-free assignee stops and delivers | ✗ blocked | ✓ |
+| **R1** | argv-only evidence (no team config) also exonerates | ✗ blocked | ✓ |
+| **R3** | assignee's own dirty file → still blocked | ✓ | ✓ |
+| **R3** | assignee's own write in a NEW DIRECTORY → still blocked | ✓ | ✓ |
+| **R3** | assignee's own unlanded commit → still blocked | ✓ | ✓ |
+| **R2** | main session, no recorded writes → blocked as before | ✓ | ✓ |
+| fail-safe | argv match REFUTED by team config · no ancestry · no lib · unreadable transcript | ✓ | ✓ |
+
+196 tests green (r1 10 · completion-assert 55 · wake-floor 34 · session-continue 23 · session-writes
+16 · operator-readout 58).
+
+### What else this session fixed
+
+The other thing this session fixed is what R1's fix rests on: `hooks/lib/session-writes.sh`, the SSOT
 attribution oracle, **had no test coverage at all**, and pinning it found a live R3 false-green —
 `git status --porcelain` collapses a wholly untracked directory to one record (`?? src/`), so a
 session's own new file inside a **new directory** matched nothing and was reported as *"nothing of
@@ -169,5 +198,12 @@ not proof of the subagent path specifically.
   **Fixed here:** `hooks/lib/session-writes.sh` untracked-directory collapse — an R3 false-green that
   silently exonerated a session's own new-directory writes — plus `tests/session-writes.bats`, first
   coverage for the SSOT attribution oracle (16 tests, RED-proved via `git archive`).
-  **Left to its owner:** the `completion-assert.sh` exoneration wiring, in flight on
-  `fix/completion-assert-attribution` during this session; not same-hunk collided.
+  The `completion-assert.sh` exoneration wiring was in flight on `fix/completion-assert-attribution`
+  during this investigation and was left to that owner rather than same-hunk-collided; it landed as
+  `6e406c7b`.
+- 2026-08-02 — **R1 CLOSED (`57b67f10`), plan COMPLETE.** The landed attribution arm did not reach a
+  read-only subagent — it exonerates only on positive write evidence, and such a session has none by
+  construction. Fixed by trusting "wrote nothing" ONLY for a confirmed assignee (`3333b9a0` extracts
+  the detector into the SSOT `hooks/lib/agent-identity.sh`). R2 untouched by construction; R3 proved
+  by three controls; four fail-safes stay strict. RED-proved against pristine `2cc71a7b` — exactly
+  the two R1 tests fail there. 196 tests green.
