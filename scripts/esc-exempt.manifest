@@ -65,6 +65,14 @@ hooks/lib/session-index-*.sh
 # covers every file below, so a key pasted into a doc is still caught.
 docs/*
 *.md
+# Diagram sources and their rendered output are the same non-executing prose one format down, and
+# they are now the FOURTH instance of the "docs describing the defect" park class above: a flowchart
+# node labelling what the landing rail guards against necessarily spells the verbs it guards
+# against, and the label is copied verbatim into the generated .svg. A mermaid source cannot reach a
+# database and neither can an XML drawing of one. Without this, documenting the guard parks the
+# land — and the pressure is again on the author to mangle the picture until the scan stops
+# noticing, which is precisely how the audit record rots.
+assets/diagrams/*
 
 # ── self-reference: pattern tables and the corpora that test them ────────────────────────────────
 # An escalation classifier's pattern table necessarily CONTAINS the patterns it classifies, and its
