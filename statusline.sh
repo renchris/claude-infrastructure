@@ -302,17 +302,30 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         # ellipsis never eats it. RESET after it so the following segment keeps its own
         # color (default in the no-context path, or the GRAY the context-% block adds).
         #
-        # PER-TERMINAL, and the gate is a POSITIVE iTerm2 check, never "not kitty".
-        # "Draw the fallback glyph at natural size and let it overflow the cell" is an
-        # iTerm2 behaviour, not a universal one — it is exactly what makes ① legible there
-        # (~27px, i.e. BIGGER than the 23px text) and it is the thing kitty declines to do.
-        # A `!= xterm-kitty` gate would hand the glyph to every OTHER terminal too, and any
-        # of them that squeezes like kitty (or worse, has no CJK fallback at all) silently
-        # gets back the unreadable 18px ring this whole block exists to prevent. So: iTerm2
-        # opts IN by name; everything else — kitty, Terminal.app, Ghostty, WezTerm, tmux,
-        # a pipe — takes the ASCII ring, which is 28px and correct everywhere.
+        # PER-TERMINAL. iTerm2 opts IN by name; everything else — kitty, Terminal.app,
+        # Ghostty, WezTerm, tmux, a pipe — takes the ASCII ring, which is 28px and correct
+        # everywhere. "Draw the fallback glyph at natural size and let it overflow the
+        # cell" is an iTerm2 behaviour, not a universal one: it is exactly what makes ①
+        # legible there (~27px, BIGGER than the 23px text) and exactly what kitty declines
+        # to do. So the check must be a positive iTerm2 one — a bare `!= xterm-kitty` would
+        # hand the glyph to every other terminal too, and any that squeezes like kitty (or
+        # has no CJK fallback at all) silently gets back the unreadable 18px ring.
+        #
+        # 🚨 TERM_PROGRAM is the ONLY trustworthy iTerm2 signal on this box. Do NOT add
+        # `|| [ -n "$ITERM_SESSION_ID" ]` — that shipped, and it put the small glyph back
+        # in kitty within minutes. ~/.zshrc DELIBERATELY EXPORTS
+        # `ITERM_SESSION_ID=w0t0p0:$KITTY_WINDOW_ID` *inside kitty*, because Claude Code
+        # gates its iTerm2 pane backend on that variable and ~/.claude/bin/it2 translates
+        # the calls into `kitty @`. So under kitty it is always set, by design — it says
+        # nothing about which terminal this is.
+        # The `!= xterm-kitty` conjunct is belt-and-braces for the mirror-image trap the
+        # same zshrc block documents: an iTerm2 session launched FROM a kitty pane inherits
+        # $KITTY_WINDOW_ID permanently, so no single variable is authoritative alone. $TERM
+        # is set by the emulator itself on each attach, so kitty's own claim wins here.
+        # (The ancestry-based ~/.claude/bin/cc-in-kitty is the real authority, but this is
+        # a per-render hot path — see the de-forking note at the top — so it stays env-only.)
         GLYPHS=(① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ ⑪ ⑫ ⑬ ⑭ ⑮ ⑯ ⑰ ⑱ ⑲ ⑳)
-        if [ "$NIDX" -le 20 ] && { [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || [ -n "${ITERM_SESSION_ID:-}" ]; }; then
+        if [ "$NIDX" -le 20 ] && [ "${TERM_PROGRAM:-}" = "iTerm.app" ] && [ "${TERM:-}" != "xterm-kitty" ]; then
             GLYPH_PREFIX="${NEXT_NUM}${GLYPHS[$((NIDX-1))]}${RESET}  "
         else
             # Ring muted, digit bright: the number is what gets read, the ring only frames it.
