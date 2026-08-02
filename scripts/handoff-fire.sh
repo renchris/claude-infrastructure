@@ -463,6 +463,28 @@ hf_bounded() {
 # and address it with the other. tests/kitty-divert-real-it2.bats pins the agreement textually.
 in_kitty() { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; }
 
+# Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
+# Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
+# green where a human tests it, dead where it runs. That is what left a teammate pane open for 3h09m
+# with its 653 MB claude.exe resident on 2026-08-01 (full account: bin/cc-kitty-bin header).
+# Falling back to the previous spelling keeps a partial deploy degraded rather than broken.
+CC_KITTY_BIN="${CC_TERM_KITTY:-kitty}"
+# Candidate order matters: the SYMLINK-RESOLVED sibling first. ~/.claude/scripts/*.sh are symlinks
+# into this checkout, so `dirname "$0"/../bin` alone points at ~/.claude/bin — which only holds
+# cc-kitty-bin AFTER install.sh runs. Resolving the link first finds the repo's own bin/ and makes
+# the fix live the moment the file does, instead of waiting on a deploy it cannot trigger.
+_CC_KS="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _CC_KB in "$(dirname "$_CC_KS")/../bin/cc-kitty-bin" "$(dirname "$0")/../bin/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+  [ -x "$_CC_KB" ] || continue
+  _CC_KR="$("$_CC_KB" 2>/dev/null)" && [ -n "$_CC_KR" ] && { CC_KITTY_BIN="$_CC_KR"; break; }
+done
+# NOTE the ${CC_KITTY_BIN:-…} fallback at every call site below. These functions are EXTRACTED
+# INDIVIDUALLY with sed by tests/*.bats ("NOTHING HERE EXECUTES scripts/handoff-fire.sh"), so a
+# function that depends on a top-level variable is unset in every extracted-function test — measured
+# 2026-08-01, it turned `it2py bgtab` red. Each call site therefore re-states the pre-resolution
+# spelling as its own default: production gets the absolute path from the block above, an extracted
+# function degrades to exactly the behaviour it had before this change.
+
 # kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
 # unix socket has no serializing queue, but an unbounded call inside a spawn path still hangs the
 # fire with no diagnostic (the 2026-07-26 wedge class, tests/handoff-fire-it2-bound.bats).
@@ -470,7 +492,7 @@ in_kitty() { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]
 # CC_TERM_KITTY_TO (socket). Unquoted ${:+} is the same idiom as bin/it2-kitty:75 — it must expand
 # to TWO words or vanish entirely.
 # shellcheck disable=SC2086
-kt() { hf_bounded "${CC_TERM_KITTY:-kitty}" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"; }
+kt() { hf_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"; }
 
 # Resolve one kitty window id out of `kitty @ ls` and print ONE field of it. `kitty @ ls` is the only
 # read this file needs, so the JSON walk is shared: os-windows → tabs → windows, each with id / pid /

@@ -38,12 +38,34 @@ lrh_bounded() {
   if [ -z "$LRH_TIMEOUT_BIN" ] || [ ! -x "$LRH_TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$LRH_TIMEOUT_BIN" -k 3 "$LRH_TIMEOUT_S" "$@"
 }
+# Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
+# Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
+# green where a human tests it, dead where it runs. That is what left a teammate pane open for 3h09m
+# with its 653 MB claude.exe resident on 2026-08-01 (full account: bin/cc-kitty-bin header).
+# Falling back to the previous spelling keeps a partial deploy degraded rather than broken.
+CC_KITTY_BIN="${CC_TERM_KITTY:-kitty}"
+# Candidate order matters: the SYMLINK-RESOLVED sibling first. ~/.claude/scripts/*.sh are symlinks
+# into this checkout, so `dirname "$0"/../bin` alone points at ~/.claude/bin — which only holds
+# cc-kitty-bin AFTER install.sh runs. Resolving the link first finds the repo's own bin/ and makes
+# the fix live the moment the file does, instead of waiting on a deploy it cannot trigger.
+_CC_KS="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _CC_KB in "$(dirname "$_CC_KS")/../../bin/cc-kitty-bin" "$(dirname "$0")/../../bin/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+  [ -x "$_CC_KB" ] || continue
+  _CC_KR="$("$_CC_KB" 2>/dev/null)" && [ -n "$_CC_KR" ] && { CC_KITTY_BIN="$_CC_KR"; break; }
+done
+# NOTE the ${CC_KITTY_BIN:-…} fallback at every call site below. These functions are EXTRACTED
+# INDIVIDUALLY with sed by tests/*.bats ("NOTHING HERE EXECUTES scripts/handoff-fire.sh"), so a
+# function that depends on a top-level variable is unset in every extracted-function test — measured
+# 2026-08-01, it turned `it2py bgtab` red. Each call site therefore re-states the pre-resolution
+# spelling as its own default: production gets the absolute path from the block above, an extracted
+# function degrades to exactly the behaviour it had before this change.
+
 # The kitty control socket gets the SAME bound as the AppleEvent surface. kitty's socket has no
 # serializing queue to wedge the way iTerm2's Python API did on 2026-07-25, but an unbounded call
 # in a RECOVERY path is the shape of that incident, not the app it happened to.
 lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
-  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrh_bounded "${CC_TERM_KITTY:-kitty}" @ --to "$CC_TERM_KITTY_TO" "$@"
-  else lrh_bounded "${CC_TERM_KITTY:-kitty}" @ "$@"; fi
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrh_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ --to "$CC_TERM_KITTY_TO" "$@"
+  else lrh_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ "$@"; fi
 }
 
 

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# cc-kitty-bin — print an ABSOLUTE path to the kitty binary, or exit 1.
+#
+# WHY THIS EXISTS. `${CC_TERM_KITTY:-kitty}` — a bare name — appeared independently in six files, and
+# in every one of them it made the AUTOMATED caller a no-op while the interactive caller worked.
+# Hooks and launchd jobs run with PATH=/usr/bin:/bin:/usr/sbin:/sbin, which excludes Homebrew, so
+# `kitty` does not exist for them. Measured 2026-08-01: a teammate pane close from a hook exited
+# `kitty: command not found` rc=1 and the pane survived 3h09m with its 653 MB claude.exe resident;
+# the identical command from the operator's shell closed it, rc=0. Worst possible polarity — green
+# where a human tests it, dead where it runs.
+#
+# The correct form was ALREADY in this repo twice (scripts/kitty-setup.sh's `command -v kitty ||
+# [ -x /Applications/kitty.app/... ]`, and bin/it2-wrapper's absolute REAL_IT2 + `_resolve_timeout`,
+# whose comment states this exact hazard in words). It was simply not applied at the call sites. One
+# resolver so the seventh file cannot reintroduce it.
+#
+# CONTRACT: stdout = one absolute path, exit 0. No path resolvable ⇒ empty stdout, exit 1. Callers
+# must fall back to their previous spelling on non-zero so a partial deploy degrades rather than
+# breaks (this is a side-car; it must never fail wider than itself).
+#
+# CC_TERM_KITTY is an EXPLICIT operator choice: it wins verbatim or REFUSES. It is deliberately not a
+# candidate in the search — folding it in would silently SKIP a non-executable override and drive an
+# auto-detected kitty instead, i.e. the operator pins a binary and gets a different one.
+
+set -uo pipefail
+
+if [ -n "${CC_TERM_KITTY:-}" ]; then
+  if [ -x "$CC_TERM_KITTY" ]; then printf '%s\n' "$CC_TERM_KITTY"; exit 0; fi
+  printf 'cc-kitty-bin: CC_TERM_KITTY=%s is not executable — refusing to substitute a different kitty\n' \
+    "$CC_TERM_KITTY" >&2
+  exit 1
+fi
+
+for c in "$(command -v kitty 2>/dev/null || true)" \
+         /opt/homebrew/bin/kitty /usr/local/bin/kitty \
+         /Applications/kitty.app/Contents/MacOS/kitty \
+         "$HOME/Applications/kitty.app/Contents/MacOS/kitty"; do
+  [ -n "$c" ] && [ -x "$c" ] && { printf '%s\n' "$c"; exit 0; }
+done
+
+printf 'cc-kitty-bin: no kitty binary found (PATH=%s)\n' "$PATH" >&2
+exit 1

@@ -202,6 +202,28 @@ lrp_tmpdir() {
 
 # ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
 SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
+# Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
+# Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
+# green where a human tests it, dead where it runs. That is what left a teammate pane open for 3h09m
+# with its 653 MB claude.exe resident on 2026-08-01 (full account: bin/cc-kitty-bin header).
+# Falling back to the previous spelling keeps a partial deploy degraded rather than broken.
+CC_KITTY_BIN="${CC_TERM_KITTY:-kitty}"
+# Candidate order matters: the SYMLINK-RESOLVED sibling first. ~/.claude/scripts/*.sh are symlinks
+# into this checkout, so `dirname "$0"/../bin` alone points at ~/.claude/bin — which only holds
+# cc-kitty-bin AFTER install.sh runs. Resolving the link first finds the repo's own bin/ and makes
+# the fix live the moment the file does, instead of waiting on a deploy it cannot trigger.
+_CC_KS="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _CC_KB in "$(dirname "$_CC_KS")/../../bin/cc-kitty-bin" "$(dirname "$0")/../../bin/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+  [ -x "$_CC_KB" ] || continue
+  _CC_KR="$("$_CC_KB" 2>/dev/null)" && [ -n "$_CC_KR" ] && { CC_KITTY_BIN="$_CC_KR"; break; }
+done
+# NOTE the ${CC_KITTY_BIN:-…} fallback at every call site below. These functions are EXTRACTED
+# INDIVIDUALLY with sed by tests/*.bats ("NOTHING HERE EXECUTES scripts/handoff-fire.sh"), so a
+# function that depends on a top-level variable is unset in every extracted-function test — measured
+# 2026-08-01, it turned `it2py bgtab` red. Each call site therefore re-states the pre-resolution
+# spelling as its own default: production gets the absolute path from the block above, an extracted
+# function degrades to exactly the behaviour it had before this change.
+
 # spawn_gui <launcher> — open a terminal window (kitty when we are in kitty, else iTerm2; either way
 # an Aqua session is required). 0 = opened.
 # ⚠️ NEVER `create window with default profile command "X"` (incident 2026-07-25): iTerm2 keeps X as
@@ -210,8 +232,8 @@ SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
 # transcript) where the operator expected a plain shell. Create a bare window, then `write text` the
 # launcher; `exec` keeps the old lifecycle. Repair pre-fix panes: scripts/iterm-clear-sticky-command.sh
 lrp_kitty() { # bounded `kitty @ …` — socket seam kept out of the call site
-  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrp_bounded "${CC_TERM_KITTY:-kitty}" @ --to "$CC_TERM_KITTY_TO" "$@"
-  else lrp_bounded "${CC_TERM_KITTY:-kitty}" @ "$@"; fi
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrp_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ --to "$CC_TERM_KITTY_TO" "$@"
+  else lrp_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ "$@"; fi
 }
 spawn_gui() {
   # ── kitty first, when this IS kitty (2026-07-31) ──────────────────────────────────────────────
@@ -226,7 +248,7 @@ spawn_gui() {
   # write-text quoting applies; and kitty has no profile-override concept, so the 2026-07-25
   # sticky-command incident below has no kitty analogue to re-create.
   if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
-    command -v "${CC_TERM_KITTY:-kitty}" >/dev/null 2>&1 || return 1
+    command -v "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" >/dev/null 2>&1 || return 1
     lrp_kitty launch --type=os-window -- /bin/bash "$1" >/dev/null 2>&1 || return 1
     return 0
   fi

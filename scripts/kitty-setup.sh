@@ -427,6 +427,28 @@ if [ "$term_rc" = 0 ]; then
       no "spawn round-trip: pane $new_pane was created but NOT closed — close it by hand: $close_out"
     fi
   fi
+
+  # ── THE DAEMON-ENVIRONMENT PROBE ────────────────────────────────────────────────────────────────
+  # Every check above runs with the OPERATOR's PATH, and that is exactly why they all stayed green
+  # through the 2026-08-01 outage: `bin/it2-kitty` resolved the kitty binary by BARE NAME, so it
+  # worked from a shell (Homebrew on PATH) and did not exist for hooks and launchd jobs, which run
+  # with `/usr/bin:/bin:/usr/sbin:/sbin`. Those are precisely the callers that close teammate panes
+  # — teammate-auto-shutdown, cc-teardown, cc-reaper, handoff-fire — so the whole auto-close path was
+  # dead while this script reported a healthy kitty. A live teammate pane sat open for 3h09m with its
+  # 653 MB claude.exe resident.
+  #
+  # So the probe REPLAYS THE CALLER'S ENVIRONMENT rather than the operator's: same binary, same verb,
+  # PATH stripped to what launchd actually hands a job. Checking that files exist is what stayed green.
+  if [ ! -x "$BIN_DIR/it2" ]; then
+    :   # already reported above
+  elif dp_out="$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        KITTY_WINDOW_ID="${KITTY_WINDOW_ID:-}" KITTY_PID="${KITTY_PID:-}" \
+        KITTY_LISTEN_ON="${KITTY_LISTEN_ON:-}" ITERM_SESSION_ID="${ITERM_SESSION_ID:-}" \
+        "$BIN_DIR/it2" session list 2>&1)"; then
+    ok "daemon-PATH probe: 'session list' works with no Homebrew on PATH ($(printf '%s' "$dp_out" | grep -c .) panes) — hooks and launchd can drive kitty"
+  else
+    no "daemon-PATH probe FAILED — hooks and launchd cannot drive kitty, so NO teammate pane will ever auto-close (this is invisible to every other check here): $dp_out"
+  fi
 elif [ "$term_rc" = 1 ] && [ -n "${KITTY_WINDOW_ID:-}" ]; then
   # The polluted case, and the reason this branch is not simply "not in kitty": the vars are all
   # here, so the OLD check called this a live kitty pane and every downstream tool agreed. Reaching
