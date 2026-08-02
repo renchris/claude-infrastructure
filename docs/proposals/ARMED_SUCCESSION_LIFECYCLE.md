@@ -569,6 +569,15 @@ indistinguishable from a death, no matter how clean the mechanics were.** For `-
 survivor carries the news. For `--terminal` only the record can, which is why §10.1 (the reader) and
 §10.2 (the receipt) are not two ideas but one: *`--terminal`'s announce channel is the record.*
 
+> **Live reproduction, n=1, this session.** The fire that produced Part II is *also* one-way — no
+> `--notify-back`, no `cc-notify` recipe (`cc-fired/170.prompt`) — and its closing instruction is
+> `self-close --terminal`. Following it literally would land Part II on `origin/main` and then close
+> a pane whose only trace is `closedAt` in an unread record: **the 29th dark peer, by the same
+> mechanism, two hours after diagnosing it.** The defect is not a rare race; it is the default path,
+> and it re-arms itself on every fire. This session escapes it only by hand-writing the announce
+> (`cc-notify` to the firing desk) that §10.2 argues should be a field on a write that already
+> happens.
+
 ### 9.3 There IS a rich reader — for the living only
 
 `bin/cc-classify` is a 12-cause idle classifier (`active`, `rate-limited`, `owned-wait`,
