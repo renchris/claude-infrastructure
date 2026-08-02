@@ -504,6 +504,39 @@ The reason this went unnoticed is written in the code that created the field.
 **The identical defect was diagnosed in July, the record was built to fix it, and the reader was
 never built.** Incident B is that same sentence one level up: a perfect *delivery* nobody could see.
 
+### 9.2b The reader was not merely forgotten — it was the ratified architecture
+
+`docs/plans/SESSION_LIFECYCLE_V2.md` §5, the plan that specified this record, states the intent in a
+bolded clause of its own:
+
+> **The inversion: row 2 keeps ONE durable, append-only-per-transition LIFECYCLE RECORD per pane,
+> written by row 2 at every transition, and every lifecycle decision reads THAT first. Foreign
+> oracles become CORROBORATION, never the primary read.**
+
+and names, as the thing being *discarded*:
+
+> *"the assumption that lifecycle facts are **derivable at read time** from foreign state (row 4's
+> registry, the process table, iTerm2's pane list)"*
+
+with the diagnosis:
+
+> *"row 2 throws away the evidence only row 2 can produce, then re-derives it from state it does not
+> own."*
+
+**The record landed; the inversion did not.** Every lifecycle consumer still reads foreign oracles
+first — `cc-classify` from registry pid, git, and the transcript; `cc-reaper` from those verdicts;
+the operator from worktree commits and `cc-sessions`. The record is consulted only for *existence*
+(§9.2), which is precisely the "5-field stamp" read V2 listed as an example of the incumbent defect.
+
+That makes Incident B a textbook instance of the sentence above: the operator re-derived *"did it
+deliver?"* from state nobody owned, while the evidence only the fire path could produce sat unread
+four feet away. **The half-built state is worse than either end** — a record that exists but is not
+primary invites exactly the foreign-oracle re-derivation V2 discarded, while looking, to anyone
+grepping for it, like the problem is solved.
+
+The corollary for §10: the reader is not a new feature. It is the unbuilt half of a design already
+ratified, and building it is what makes the landed half worth anything.
+
 ### 9.3 There IS a rich reader — for the living only
 
 `bin/cc-classify` is a 12-cause idle classifier (`active`, `rate-limited`, `owned-wait`,
