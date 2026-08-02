@@ -537,13 +537,14 @@ scripts/kitty-setup.sh          # idempotent · --check reports · --undo revert
 
 **The lock was never the renderer — it was a process boundary this repo already owned.** Claude Code's Agent-Teams pane backend is not linked against iTerm2 and never handshakes with it. Decompiled from the live 2.1.219 binary, its gate is an **env check plus a PATH lookup** — `TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID`, then `$SHELL -lc "command -v it2"` — after which it drives panes through exactly five subcommands of whatever `it2` it resolved. So a program answering those five commands against `kitty @` gets **native kitty split panes** for assignee sessions. That is [`bin/it2-kitty`](bin/it2-kitty), and [`bin/it2-wrapper`](bin/it2-wrapper) execs it when `KITTY_WINDOW_ID` is set. No fork of either terminal — which is just as well, since iTerm2 is GPL-2.0-only and kitty is GPL-3.0, i.e. legally uncombinable.
 
-Three seams carry the rest, and each was a measured defect before it was a design:
+Four seams carry the rest, and each was a measured defect before it was a design:
 
 | Seam | What it does | The defect that proved it necessary |
 |---|---|---|
 | `ITERM_SESSION_ID = w0t0p0:$KITTY_WINDOW_ID` | gives a kitty pane an id the whole fleet already knows how to read | the **colon is required** — Claude Code derives the leader id as everything after the first colon, and returns `null` without one, silently splitting from whatever pane is active |
 | `~/.claude/shims` first on the **login** PATH | wins the lookup Claude Code actually performs | `-lc` is login-but-not-interactive: it reads `.zprofile` and **never `.zshrc`**, and the resolved path is **cached for the process lifetime** — losing that race bypasses the wrapper on iTerm2 too |
 | the divert predicate, written once | decides "am I in kitty" identically everywhere | `handoff-fire.sh` and `cc-pane` deliberately resolve the *raw* it2 to inherit a pane's profile. Inside kitty there is no profile to inherit, so that bypass is pure loss — it resolves an iTerm2 client with no iTerm2 to talk to |
+| [`bin/cc-kitty-bin`](bin/cc-kitty-bin) — the kitty binary by **absolute path** | one resolver, so the seventh caller cannot reintroduce the bare name | `${CC_TERM_KITTY:-kitty}` appeared in six files, and hooks/launchd run with a PATH that excludes Homebrew — so `kitty` did not exist for exactly the callers that close panes. Measured: a teammate pane close from a hook exited `kitty: command not found`, rc 1, and the pane survived **3h09m** with its 653 MB `claude.exe` resident; the same command from the operator's shell closed it, rc 0. The worst polarity — **green where a human tests it, dead where it runs** |
 
 That last row is the one that bites, and it is why the predicate is pinned by a test rather than trusted: a handoff that **splits the pane with one binary and addresses it with another** fails in a way no single-file test can see.
 
