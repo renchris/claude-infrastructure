@@ -18,6 +18,15 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # HERMETIC $HOME. The subjects this suite executes — e1-concurrent-logins.sh and
+  # e3-warm-profile-authorize.sh — default to `$HOME/.claude/accounts.json` and
+  # `$HOME/.claude/auth-profiles` (e1:24, e3:28,32). Today the leak is LATENT: the tests only
+  # awk the `row()` function out and run it against $FIX, so nothing reads those paths. That is
+  # precisely why it must be pinned now rather than later — the suite is one edit away from
+  # executing a probe for real, and at that moment it would read the operator's live account
+  # config instead of a fixture, silently. No seeding is needed because nothing under $HOME is
+  # read on the current paths; if a future test does execute a probe, seed it here.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   E1="$REPO/scripts/relogin-probes/e1-concurrent-logins.sh"
   E3="$REPO/scripts/relogin-probes/e3-warm-profile-authorize.sh"
   # A fixture shaped like the real --json: rows keyed on `acct`, NO `name` key anywhere.
