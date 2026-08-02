@@ -135,13 +135,22 @@ EOF
   # -z: NUL-delimited records, each `XY<space>path`; a rename/copy emits `XY<space>NEW<NUL>OLD<NUL>`,
   # i.e. the OLD path arrives as its own bare record with NO status prefix.
   #
+  # -uall IS LOAD-BEARING, not tidiness (2026-08-02). git's DEFAULT untracked mode collapses a wholly
+  # untracked directory to a single directory record — `?? src/` — instead of the files inside it. The
+  # intersection below compares FILE paths, so a session that created `src/mine.ts` in a NEW directory
+  # matched nothing and was reported as "nothing of mine is dirty". That is the FALSE-GREEN direction:
+  # it EXONERATES a session that really did leave its own uncommitted work, which is precisely the
+  # difference between this oracle working and this oracle being disabled (the R3 positive control).
+  # Creating a file in a new directory is ordinary — a new docs/ subdir, a new fixture dir — so this
+  # was not an edge case, and like every other failure mode in this file it fails silently green.
+  #
   # THE OUTPUT GOES TO A FILE, NEVER A VARIABLE. Command substitution strips NUL bytes, so
   # `porc="$(git status -z)"` silently concatenates every record into one string and the
   # intersection below reads empty forever — a defect that fails GREEN (no false continuation,
   # just permanent silence) and would therefore never have surfaced on its own.
   local tmpf
   tmpf="$(mktemp "${TMPDIR:-/tmp}/sw-porc.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z ) >"$tmpf" 2>/dev/null; then
+  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$tmpf" 2>/dev/null; then
     rm -f "$tmpf" 2>/dev/null; return 2
   fi
 
