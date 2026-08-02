@@ -174,60 +174,74 @@ Three traps make naive automation fail. Each is defeated by a mechanism, not by 
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
 
-### The second half: when landing costs money, landing stops happening
+### Two verbs: landing is free, deploying is the only thing that spends
 
-**Everything above assumes landing is free. In an app repo it wasn't — and that one fact produced every symptom people blame on git.** `reso-management-app` runs the same architecture, where a push to trunk fired an AWS Amplify build *and* a two-region Fly release. So `/ship` was one atomic act meaning two different things: *integrate my work* (cheap, should be constant) and *update production for paying users* (expensive, deliberate). Gating the second gated the first.
+**Everything above assumes landing is free — so in an app repo, that has to be made true.** `reso-management-app` runs this same architecture against 8 production tenants, where a build costs real money. It splits the one act people call "ship" into two: **`/ship` integrates your work with everyone else's** (constant, cheap, a durability act) and **`/deploy` updates production** (deliberate, batched, the only step that bills). The trunk is not the deploy trigger; a separate release ref is.
 
-<!-- Diagram source: assets/diagrams/deploy-trigger-decoupling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<!-- Diagram source: assets/diagrams/land-to-production.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-trigger-decoupling-dark.svg">
-  <img src="assets/diagrams/deploy-trigger-decoupling-light.svg" alt="Before and after the decoupling. BEFORE: 30+ concurrent worktree sessions push to origin/main, and every push — even a docs-only commit — fires an Amplify Oregon build plus Fly LAX and Fly SIN releases, reaching 8 production tenants. AFTER: the same sessions land continuously on origin/main, which is now a free integration trunk that bills nothing; a single postland verifier running in the background band proves each tip and emits a GREEN stamp; the operator's explicit /deploy fast-forwards origin/release to a stamped sha, and only that produces one build per batch of lands, reaching the 8 production tenants.">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/land-to-production-dark.svg">
+  <img src="assets/diagrams/land-to-production-light.svg" alt="How a commit reaches production. 30+ concurrent sessions, each in its own worktree and account, commit atomically with explicit paths. /ship runs ship-land.sh, which costs nothing: an escalation scan for DROP TABLE or COLUMN, auth, navigation and DB-timeout surfaces parks a decision packet first; ship-reconcile.sh runs in full on every compare-and-swap round so migrations are never dropped; only O(diff) statics run — eslint on changed files, tsc, migrate:lint; then a CAS push retried on non-fast-forward and verified by content rather than commit count. That reaches origin/main, the integration trunk, which builds nothing and deploys nothing so it can be landed on all day. Each land kicks postland-verify.sh, with a launchd backstop: one singleton in a fresh worktree, running under nice -n 19 and taskpolicy -c background so it blocks nobody, executing typecheck, test:unit, build and design:gate with VITEST_TIMEOUT_FACTOR set to 12 so the scheduling band and the timeout budget are chosen together. It writes a tree-keyed stamp. RED means a real regression with evidence kept in ~/.reso/verify-logs; CUT or HUNG mean the gate could not run and convict nobody; both leave production pinned to the last green sha. Only GREEN unlocks /deploy, which runs deploy-release.sh — fail-closed, refusing without a green stamp, showing the commit range and migrations in the batch and re-asserting the DROP stop-ask across the whole range. It does two things: pushes the green sha to origin/release, and calls aws amplify start-job with that commit id. The release push hits a deploy-ref filter: any ref but refs/heads/release, including every land on main, is skipped as not-deploy-ref, which is why a land is free; refs/heads/release reaches the reso-deploy runner on Fly in iad, which runs flyctl deploy against both regions in parallel with a drift assertion after each, producing reso-lax and reso-sin. Amplify Oregon, whose auto-build on main is off, runs pnpm migrate canary-first then pnpm build. All three paths converge on 8 production tenants, one build per batch of lands.">
 </picture>
 
 <details>
 <summary>Interactive Diagram</summary>
 
-<!-- mermaid-fence: assets/diagrams/deploy-trigger-decoupling.mmd (auto-synced by `npm run diagrams`) -->
+<!-- mermaid-fence: assets/diagrams/land-to-production.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    subgraph before["BEFORE · land = deploy"]
-        direction TB
-        BS["30+ concurrent worktree sessions"] --> BM[("origin/main")]
-        BM -->|"EVERY push — even a docs-only commit"| BP["Amplify Oregon build<br/>+ Fly LAX + Fly SIN"]
-        BP --> BT["8 production tenants"]
-    end
-    subgraph after["AFTER · land ≠ deploy"]
-        direction TB
-        AS["30+ concurrent worktree sessions"] --> AM[("origin/main<br/><i>free integration trunk</i>")]
-        AM -->|"lands continuously · bills nothing"| AV["postland verifier<br/>ONE singleton · background band<br/>full suite, blocking nobody"]
-        AV -->|"GREEN stamp only · fail-closed"| AD(["<b>/deploy</b> — the operator's explicit act"])
-        AD -->|"fast-forward to a stamped sha"| AR[("origin/release")]
-        AR -->|"ONE build per BATCH of lands"| AT["8 production tenants"]
-    end
+    S["<b>30+ concurrent sessions</b><br/>each: own worktree · own account"] -->|"commit — atomic, explicit paths"| L["<b>/ship</b> → ship-land.sh · costs nothing<br/>esc-scan FIRST: DROP TABLE/COLUMN · auth · nav · DB-timeout → PARK<br/>ship-reconcile.sh in full on every CAS round (migration-safe)<br/>O(diff) statics only: eslint(changed) · tsc · migrate:lint<br/>CAS push, retry on non-ff → verify by CONTENT, never by count"]
+    L --> M[("<b>origin/main</b> — THE INTEGRATION TRUNK<br/>builds nothing · deploys nothing · land all day")]
+    M -->|"kicked per land + launchd backstop · blocks nobody"| V["<b>postland-verify.sh</b> — ONE singleton, fresh worktree per run<br/>nice -n 19 + taskpolicy -c background<br/>typecheck · test:unit · build · design:gate<br/><i>VITEST_TIMEOUT_FACTOR=12 — band and budget chosen together</i>"]
+    V --> ST{"tree-keyed<br/>stamp"}
+    ST -->|"<b>RED</b> — real regression<br/>evidence in ~/.reso/verify-logs/"| P["production stays pinned<br/>to the last GREEN sha"]
+    ST -->|"<b>CUT</b> / <b>HUNG</b> — the gate could not RUN<br/>non-verdicts: convict nobody"| P
+    ST -->|"<b>GREEN</b>"| D(["<b>/deploy</b> → deploy-release.sh — THE ONLY STEP THAT SPENDS<br/>fail-closed: refuses without a green stamp<br/>shows the commit range + migrations in the batch<br/>re-asserts the DROP STOP-ASK across the whole range"])
+    D -->|"git push &lt;green-sha&gt;:release"| R[("origin/release")]
+    D -->|"aws amplify start-job --commit-id &lt;green-sha&gt;"| AO["<b>Amplify Oregon</b> — auto-build on main is OFF<br/>pnpm migrate (canary first) → pnpm build"]
+    R --> W{"deploy-ref<br/>filter"}
+    W -->|"any ref but refs/heads/release<br/><i>— including every land on main</i>"| SK["skipped: not-deploy-ref<br/><i>this is why a land is free</i>"]
+    W -->|"refs/heads/release"| PF["<b>reso-deploy</b> runner (Fly, iad)<br/>flyctl deploy — both regions in parallel<br/>drift-assert after each"]
+    PF --> LAX["reso-lax"]
+    PF --> SIN["reso-sin"]
+    LAX --> T["<b>8 production tenants</b><br/>ONE build per BATCH of lands"]
+    SIN --> T
+    AO --> T
     classDef trunk fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
-    classDef cost fill:#2b1618,stroke:#f85149,color:#e6edf3
     classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef safe fill:#12261a,stroke:#3fb950,color:#e6edf3
-    class BM,AM,AR trunk
-    class BP cost
-    class AV,AD gate
-    class AT safe
+    classDef hold fill:#161b22,stroke:#6e7681,color:#e6edf3
+    class M,R trunk
+    class V,ST,D,W gate
+    class T,LAX,SIN safe
+    class P,SK hold
 ```
 
-<sup><a href="assets/diagrams/deploy-trigger-decoupling-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/deploy-trigger-decoupling-light.svg?raw=true">light</a> · <a href="assets/diagrams/deploy-trigger-decoupling.mmd">source</a></sup>
+<sup><a href="assets/diagrams/land-to-production-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/land-to-production-light.svg?raw=true">light</a> · <a href="assets/diagrams/land-to-production.mmd">source</a></sup>
 
 </details>
 
-The measured cost of the coupling, before the cutover: **1,811 commits across 168 branches that existed on exactly one Mac's disk**, 176 branches diverged from trunk, and a **50.2% first-attempt land success rate** over 277 attempts. None of that is a merge problem — merge-conflict probability is a function of *divergence time*, and divergence time was being set by a billing gate that has nothing to do with merging. So the fix is not a better merge strategy:
+The load-bearing split: **`origin/main` is where work becomes safe; `origin/release` is where money gets spent.** Nothing left of `/deploy` bills anything, which is what makes 30+ sessions landing continuously affordable — and it is why the merge-conflict class stops mattering, since conflict probability is a function of *divergence time* and branches now stay 0–3 commits from trunk. Production safety goes **up** in the same move: it advances only to a sha the singleton verifier stamped green, where before it received whatever was pushed.
 
-> Landing stops costing money ⇒ the reason to gate `/ship` evaporates ⇒ agents land continuously ⇒ branches stay 0–3 commits from trunk ⇒ **the conflict class collapses on its own.**
+**The invariant is asserted, not assumed.** "A push to trunk builds nothing" rests on two independent mechanisms — an Amplify console checkbox and the runner's ref filter — and a setting someone can flip back is a hope, not an invariant. Both are read from the live APIs on every readout:
 
-**And production safety goes up, not down.** Before, production received whatever was pushed, gated only by a local pre-push hook that could be flaky, skipped, or SIGPIPE'd. After, it advances only to a sha the singleton verifier stamped green — fail-closed, and a guarantee that repo had never had. Proven end to end on 2026-08-02: a commit landed to trunk and moved **zero** Amplify jobs and **zero** Fly releases, while the tenants kept serving the previously-deployed sha.
+```text
+land-status.sh — both, or the ✓ is a lie:
+  ✓ Amplify auto-build on main is OFF      ← AWS API
+  ✓ Path F watches refs/heads/release      ← curl reso-deploy.fly.dev/health
+  ⚠ either unreadable ⇒ UNKNOWN, never "assumed safe"
 
-Two findings from that second implementation are **not** repo-specific, and both are worth auditing wherever this architecture runs — full write-up in [`docs/plans/DEPLOY_DECOUPLING_V2.md`](docs/plans/DEPLOY_DECOUPLING_V2.md):
+rollback, in preference order:
+  1. flyctl secrets set DEPLOY_REF=refs/heads/main   (no rebuild, ~10s restart)
+  2. rollback-runner.sh <image-ref>                  (image pin, no rebuild)
+```
 
-- **An invariant with N triggers needs N assertions.** "A push to trunk builds nothing" rested on two independent mechanisms — a console checkbox and a deployed service's ref filter. Only one was asserted, so the cutover *reported success at half done* while the other half shipped 13 production releases in 24 hours, the last four off documentation-only commits. Neither half is visible from the other, which makes one ✓ actively misleading rather than merely incomplete. Both are now read from the live APIs on every readout, and unreadable reports **UNKNOWN**, never "assumed safe".
-- **A scheduling decision is a timeout decision.** The verifier runs in the background band so it can never block a colleague — but its test runner's per-test budgets are *wall clock*, and deprioritising a process whose deadlines are wall-clock doesn't slow it gracefully, it **fails** it. Its first real run stamped the trunk RED with twelve failed files, **zero** assertion failures, on a tree that was green at normal priority. This repo's exposure is genuinely smaller — bats has no per-test deadline — but 16 of its 269 `tests/*.bats` hardcode a `timeout N`, the shortest 2–3s, which is the same race.
+Asserting only one of the two is worse than asserting neither: it *reports success at half done*. That is not hypothetical — it shipped 13 production releases in 24 hours, the last four off documentation-only commits, while the finished half showed a green ✓. Neither half is visible from the other.
+
+Two findings from that build are **not** repo-specific, and both are worth auditing wherever this architecture runs — full write-up in [`docs/plans/DEPLOY_DECOUPLING_V2.md`](docs/plans/DEPLOY_DECOUPLING_V2.md):
+
+- **An invariant with N triggers needs N assertions**, each read from live state and each carrying its own fix command. Enumerate the triggers before declaring a cutover done.
+- **A scheduling decision is a timeout decision.** The verifier runs in the background band so it can never block a colleague — but its test runner's per-test budgets are *wall clock*, and deprioritising a process whose deadlines are wall-clock doesn't slow it gracefully, it **fails** it. Its first real run stamped the trunk RED with twelve failed files and **zero** assertion failures, on a tree that was green at normal priority. This repo's exposure is smaller — bats has no per-test deadline — but 16 of its 269 `tests/*.bats` hardcode a `timeout N`, the shortest 2–3s, which is the same race.
 
 ### Why 30+ panes freezes iTerm2 — and why the GPU can't fix it
 
