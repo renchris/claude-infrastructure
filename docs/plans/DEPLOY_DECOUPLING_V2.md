@@ -20,55 +20,20 @@ what makes axis 1 *reachable* in a repo where a push bills real money.
 
 > **No Phase 0 here, deliberately.** This is a pattern record with its implementation
 > already shipped and measured elsewhere, not an implementation plan — there are no
-> code-writing tasks to orchestrate. The build log lives in
-> `reso-management-app/docs/plans/LAND_SHIP_V2.md`.
+> code-writing tasks to orchestrate.
+>
+> **And no pipeline diagram here, also deliberately.** The concrete flow is *reso's
+> implementation*, not a portable one: `/ship` the command is fleet-wide and generic
+> (`commands/ship.md` auto-detects the trunk and the package manager), but the
+> `ship-land.sh` scripts are per-repo and share **no code** — this repo's is 1,777 lines
+> of `~/.claude` deploy-parity, reso's is 288 lines of drizzle and pnpm. A graph naming
+> `reso-deploy`, LAX/SIN and Amplify Oregon documents reso and would be wrong here.
+> It lives with its implementation, in `reso-management-app/docs/plans/LAND_SHIP_V2.md`,
+> which is also the build log. **What this document keeps is only the part that transfers.**
 
 ---
 
 ## §1 The inversion
-
-<!-- Diagram source: assets/diagrams/land-to-production.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../assets/diagrams/land-to-production-dark.svg">
-  <img src="../../assets/diagrams/land-to-production-light.svg" alt="How a commit reaches production. 30+ concurrent sessions, each in its own worktree and account, commit atomically with explicit paths. /ship runs ship-land.sh, which costs nothing: an escalation scan for DROP TABLE or COLUMN, auth, navigation and DB-timeout surfaces parks a decision packet first; ship-reconcile.sh runs in full on every compare-and-swap round so migrations are never dropped; only O(diff) statics run — eslint on changed files, tsc, migrate:lint; then a CAS push retried on non-fast-forward and verified by content rather than commit count. That reaches origin/main, the integration trunk, which builds nothing and deploys nothing so it can be landed on all day. Each land kicks postland-verify.sh, with a launchd backstop: one singleton in a fresh worktree, running under nice -n 19 and taskpolicy -c background so it blocks nobody, executing typecheck, test:unit, build and design:gate with VITEST_TIMEOUT_FACTOR set to 12 so the scheduling band and the timeout budget are chosen together. It writes a tree-keyed stamp. RED means a real regression with evidence kept in ~/.reso/verify-logs; CUT or HUNG mean the gate could not run and convict nobody; both leave production pinned to the last green sha. Only GREEN unlocks /deploy, which runs deploy-release.sh — fail-closed, refusing without a green stamp, showing the commit range and migrations in the batch and re-asserting the DROP stop-ask across the whole range. It does two things: pushes the green sha to origin/release, and calls aws amplify start-job with that commit id. The release push hits a deploy-ref filter: any ref but refs/heads/release, including every land on main, is skipped as not-deploy-ref, which is why a land is free; refs/heads/release reaches the reso-deploy runner on Fly in iad, which runs flyctl deploy against both regions in parallel with a drift assertion after each, producing reso-lax and reso-sin. Amplify Oregon, whose auto-build on main is off, runs pnpm migrate canary-first then pnpm build. All three paths converge on 8 production tenants, one build per batch of lands.">
-</picture>
-
-<details>
-<summary>Interactive Diagram</summary>
-
-<!-- mermaid-fence: assets/diagrams/land-to-production.mmd (auto-synced by `npm run diagrams`) -->
-```mermaid
-flowchart TB
-    S["<b>30+ concurrent sessions</b><br/>each: own worktree · own account"] -->|"commit — atomic, explicit paths"| L["<b>/ship</b> → ship-land.sh · costs nothing<br/>esc-scan FIRST: DROP TABLE/COLUMN · auth · nav · DB-timeout → PARK<br/>ship-reconcile.sh in full on every CAS round (migration-safe)<br/>O(diff) statics only: eslint(changed) · tsc · migrate:lint<br/>CAS push, retry on non-ff → verify by CONTENT, never by count"]
-    L --> M[("<b>origin/main</b> — THE INTEGRATION TRUNK<br/>builds nothing · deploys nothing · land all day")]
-    M -->|"kicked per land + launchd backstop · blocks nobody"| V["<b>postland-verify.sh</b> — ONE singleton, fresh worktree per run<br/>nice -n 19 + taskpolicy -c background<br/>typecheck · test:unit · build · design:gate<br/><i>VITEST_TIMEOUT_FACTOR=12 — band and budget chosen together</i>"]
-    V --> ST{"tree-keyed<br/>stamp"}
-    ST -->|"<b>RED</b> — real regression<br/>evidence in ~/.reso/verify-logs/"| P["production stays pinned<br/>to the last GREEN sha"]
-    ST -->|"<b>CUT</b> / <b>HUNG</b> — the gate could not RUN<br/>non-verdicts: convict nobody"| P
-    ST -->|"<b>GREEN</b>"| D(["<b>/deploy</b> → deploy-release.sh — THE ONLY STEP THAT SPENDS<br/>fail-closed: refuses without a green stamp<br/>shows the commit range + migrations in the batch<br/>re-asserts the DROP STOP-ASK across the whole range"])
-    D -->|"git push &lt;green-sha&gt;:release"| R[("origin/release")]
-    D -->|"aws amplify start-job --commit-id &lt;green-sha&gt;"| AO["<b>Amplify Oregon</b> — auto-build on main is OFF<br/>pnpm migrate (canary first) → pnpm build"]
-    R --> W{"deploy-ref<br/>filter"}
-    W -->|"any ref but refs/heads/release<br/><i>— including every land on main</i>"| SK["skipped: not-deploy-ref<br/><i>this is why a land is free</i>"]
-    W -->|"refs/heads/release"| PF["<b>reso-deploy</b> runner (Fly, iad)<br/>flyctl deploy — both regions in parallel<br/>drift-assert after each"]
-    PF --> LAX["reso-lax"]
-    PF --> SIN["reso-sin"]
-    LAX --> T["<b>8 production tenants</b><br/>ONE build per BATCH of lands"]
-    SIN --> T
-    AO --> T
-    classDef trunk fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
-    classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
-    classDef safe fill:#12261a,stroke:#3fb950,color:#e6edf3
-    classDef hold fill:#161b22,stroke:#6e7681,color:#e6edf3
-    class M,R trunk
-    class V,ST,D,W gate
-    class T,LAX,SIN safe
-    class P,SK hold
-```
-
-<sup><a href="../../assets/diagrams/land-to-production-dark.svg?raw=true">full-screen dark</a> · <a href="../../assets/diagrams/land-to-production-light.svg?raw=true">light</a> · <a href="../../assets/diagrams/land-to-production.mmd">source</a></sup>
-
-</details>
 
 `/ship` used to be **one atomic act that meant two different things**: *integrate my work
 with everyone else's* (cheap, should be constant, is a durability act) and *update
@@ -94,43 +59,6 @@ After: production advances only to a sha a singleton verifier stamped green, fai
 ---
 
 ## §2 The invariant has N triggers — assert all of them
-
-<!-- Diagram source: assets/diagrams/two-trigger-invariant.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../assets/diagrams/two-trigger-invariant-dark.svg">
-  <img src="../../assets/diagrams/two-trigger-invariant-light.svg" alt="The invariant 'a push to main builds nothing' depends on two independent triggers. Trigger 1 is Amplify auto-build, a console checkbox: OFF means no build, but flipped back ON means every land bills a build. Trigger 2 is the Path F runner's ref filter, a deployed environment default: watching refs/heads/release means no release, but still watching refs/heads/main means every land ships LAX and SIN. land-status.sh asserts both from the live APIs on every readout, and if either is unreadable it reports UNKNOWN rather than assuming safe.">
-</picture>
-
-<details>
-<summary>Interactive Diagram</summary>
-
-<!-- mermaid-fence: assets/diagrams/two-trigger-invariant.mmd (auto-synced by `npm run diagrams`) -->
-```mermaid
-flowchart TB
-    Push["the invariant:<br/><b>a push to main builds nothing</b>"] --> T1["trigger 1 · Amplify auto-build<br/><i>a console checkbox</i>"]
-    Push --> T2["trigger 2 · Path F ref filter<br/><i>a deployed env default</i>"]
-    T1 -->|"OFF"| G1["no build"]
-    T2 -->|"watches refs/heads/release"| G2["no release"]
-    T1 -.->|"flipped back ON"| B1["every land bills a build"]
-    T2 -.->|"still watching refs/heads/main"| B2["every land ships LAX + SIN"]
-    G1 --> A["land-status.sh<br/>asserts BOTH from the LIVE APIs,<br/>every readout"]
-    G2 --> A
-    B1 --> A
-    B2 --> A
-    A -->|"either one unreadable"| U["UNKNOWN — never assumed safe"]
-    classDef claim fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
-    classDef trig fill:#2b2410,stroke:#d4af37,color:#e6edf3
-    classDef ok fill:#12261a,stroke:#3fb950,color:#e6edf3
-    classDef bad fill:#2b1618,stroke:#f85149,color:#e6edf3
-    class Push claim
-    class T1,T2,A trig
-    class G1,G2 ok
-    class B1,B2,U bad
-```
-
-<sup><a href="../../assets/diagrams/two-trigger-invariant-dark.svg?raw=true">full-screen dark</a> · <a href="../../assets/diagrams/two-trigger-invariant-light.svg?raw=true">light</a> · <a href="../../assets/diagrams/two-trigger-invariant.mmd">source</a></sup>
-
-</details>
 
 **The expensive failure is the half-cutover, and it is quiet.** reso cut Amplify over and
 not Fly. The Amplify assertion went green, the docs asserted the finished state — and
@@ -161,40 +89,6 @@ An alarm never seen to fire is not evidence of health.
 ---
 
 ## §3 A scheduling decision is a timeout decision
-
-<!-- Diagram source: assets/diagrams/verdict-vocabulary.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../assets/diagrams/verdict-vocabulary-dark.svg">
-  <img src="../../assets/diagrams/verdict-vocabulary-light.svg" alt="The verifier runs a suite under nice -n 19 and taskpolicy -c background, then classifies by exit code. Exit 0 is GREEN and the deploy may advance. Exit 124 or 137, meaning our own bound fired, is HUNG — a non-verdict that convicts nobody. Exit 126 or 127, unrunnable, is CUT — also a non-verdict. Anything else is RED: the tree is guilty and the deploy is pinned shut. The trap is that the test runner also exits 1 for a wall-clock timeout, and CI retries all lose the same race, producing a FALSE RED of 12 files with 11 hook-timeouts and 1 test-timeout but zero assertion failures. The discriminator is failure text rather than count: 'timed out in N milliseconds' plus zero assertions means the gate could not run. The fix is that the caller choosing the QoS band also chooses the budget, via a widen-only timeout multiplier.">
-</picture>
-
-<details>
-<summary>Interactive Diagram</summary>
-
-<!-- mermaid-fence: assets/diagrams/verdict-vocabulary.mmd (auto-synced by `npm run diagrams`) -->
-```mermaid
-flowchart TB
-    Run["verifier runs a suite<br/>nice -n 19 · taskpolicy -c background"] --> RC{"exit code"}
-    RC -->|"0"| G["<b>GREEN</b><br/>deploy may advance"]
-    RC -->|"124 / 137 — our OWN bound fired"| H["<b>HUNG</b><br/>non-verdict · convicts nobody"]
-    RC -->|"126 / 127 — unrunnable"| C["<b>CUT</b><br/>non-verdict · convicts nobody"]
-    RC -->|"anything else"| R["<b>RED</b><br/>the tree is guilty · deploy pinned shut"]
-    R -.->|"THE TRAP — the runner exits 1 for a<br/>WALL-CLOCK timeout too, and CI retries<br/>all lose the same race"| F["<b>FALSE RED</b><br/>12 files · 11 hook-timeouts<br/>+ 1 test-timeout<br/><b>ZERO assertion failures</b>"]
-    F --> D["discriminator is failure TEXT, not count:<br/>'timed out in Nms' + zero assertions<br/>⇒ the gate could not RUN"]
-    D --> FX["fix: the caller that chooses the QoS band<br/>also chooses the budget<br/>(widen-only timeout multiplier)"]
-    classDef ok fill:#12261a,stroke:#3fb950,color:#e6edf3
-    classDef non fill:#161b22,stroke:#6e7681,color:#e6edf3
-    classDef bad fill:#2b1618,stroke:#f85149,color:#e6edf3
-    classDef fix fill:#2b2410,stroke:#d4af37,color:#e6edf3
-    class G ok
-    class H,C non
-    class R,F bad
-    class D,FX fix
-```
-
-<sup><a href="../../assets/diagrams/verdict-vocabulary-dark.svg?raw=true">full-screen dark</a> · <a href="../../assets/diagrams/verdict-vocabulary-light.svg?raw=true">light</a> · <a href="../../assets/diagrams/verdict-vocabulary.mmd">source</a></sup>
-
-</details>
 
 `LAND_PIPELINE_V2.md` R7 says *a non-verdict is never a RED*. reso implemented it against
 **exit codes** — and it walked straight back in through the **scheduler**.
