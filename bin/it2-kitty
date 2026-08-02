@@ -63,16 +63,80 @@
 
 set -uo pipefail
 
-KITTY_BIN="${CC_TERM_KITTY:-kitty}"
 TIMEOUT_S="${IT2_KITTY_TIMEOUT_S:-15}"
 
 err(){ printf 'it2-kitty: %s\n' "$*" >&2; }
 
+# ── RESOLVE THE KITTY BINARY BY ABSOLUTE PATH, NOT BY NAME ───────────────────────────────────────
+# `KITTY_BIN="${CC_TERM_KITTY:-kitty}"` — a bare name — was the whole line here until 2026-08-01, and
+# it made EVERY AUTOMATED pane close a no-op on kitty while every interactive one worked.
+#
+# Hooks and launchd jobs run with a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes
+# Homebrew, so `kitty` does not exist for them. Measured: a `session close` run under that PATH exits
+# `it2-kitty: line 76: kitty: command not found`, rc=1, pane survives — while the identical command
+# from an operator's shell closes the pane, rc=0. So the closers that MATTER (teammate-auto-shutdown,
+# cc-teardown, cc-reaper, handoff-fire) were the exact set that could not close anything, and the one
+# caller that could was the human who never needs to.
+#
+# ⚠ This is the SAME defect bin/it2-wrapper's `_resolve_timeout()` already documents in the file that
+# EXECS this one — "PATH alone is NOT enough: the hooks and launchd jobs that fork this wrapper run
+# with a minimal PATH that excludes Homebrew". iTerm2 was immune only because `REAL_IT2` there is a
+# hardcoded absolute path; kitty arrived with a bare name and inherited the failure the neighbouring
+# comment warns about. A PATH-resolved dependency in a file whose callers are daemons is a latent
+# outage, not a style choice — and its polarity is the worst kind: green where a human tests it, dead
+# where it runs.
+#
+# CC_TERM_KITTY is an EXPLICIT operator choice and is NOT a candidate in the search — it either wins
+# verbatim or fails loudly. Folding it into the fallback list looks equivalent and is not: a
+# CC_TERM_KITTY naming a path that is missing or non-executable would then be silently SKIPPED and an
+# auto-detected kitty driven instead, i.e. the operator pins a binary and the shim quietly uses a
+# different one. Caught by this file's own control on 2026-08-01 (CC_TERM_KITTY=/nonexistent/kitty
+# closed a pane through the real kitty and reported success). An override that can be overridden is
+# not an override.
+if [[ -n "${CC_TERM_KITTY:-}" ]]; then
+  KITTY_BIN="$CC_TERM_KITTY"
+  [[ -x "$KITTY_BIN" ]] || { err "CC_TERM_KITTY=$KITTY_BIN is not executable — refusing to silently use a different kitty"; exit 5; }
+else
+  _resolve_kitty() {
+    local c
+    for c in "$(command -v kitty 2>/dev/null || true)" \
+             /opt/homebrew/bin/kitty /usr/local/bin/kitty \
+             /Applications/kitty.app/Contents/MacOS/kitty \
+             "$HOME/Applications/kitty.app/Contents/MacOS/kitty"; do
+      [[ -n "$c" && -x "$c" ]] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+  }
+  KITTY_BIN="$(_resolve_kitty)" || {
+    # Fail LOUD and non-zero: Claude Code reads that as a real pane failure and degrades visibly to
+    # in-process teammates, which is correct. A silent no-op here is what stranded live teammate panes.
+    err "cannot resolve a kitty binary (tried PATH, /opt/homebrew/bin, /usr/local/bin,"
+    err "/Applications/kitty.app/Contents/MacOS/kitty, ~/Applications/...). PATH=$PATH"
+    err "If kitty IS installed, this is a minimal-PATH caller (hook/launchd) — set CC_TERM_KITTY."
+    exit 5
+  }
+fi
+
 # Bound every call. kitty's unix socket has no serializing queue (unlike iTerm2's Python API, whose
 # unbounded probes deadlocked this fleet on 2026-07-25), but an unbounded call in a spawn path that
 # Claude Code awaits would hang teammate creation with no diagnostic.
+#
+# timeout(1) is resolved the same way and for the same reason — coreutils installs it under Homebrew,
+# so a PATH-only lookup left exactly the automated callers unbounded. Unresolvable ⇒ run UNBOUNDED
+# rather than refuse: a missing bound degrades this call, a refusal breaks teardown outright.
+_resolve_timeout() {
+  local c
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [[ -n "$c" && -x "$c" ]] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+TIMEOUT_BIN="$(_resolve_timeout || true)"
+
 kt() {
-  if command -v timeout >/dev/null 2>&1; then timeout "$TIMEOUT_S" "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
+  if [[ -n "$TIMEOUT_BIN" ]]; then "$TIMEOUT_BIN" "$TIMEOUT_S" "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
   else "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
   fi
 }
@@ -197,7 +261,17 @@ case "$verb" in
     # pipe — which makes Claude Code's own `!stdout.includes(fullSessionId)` liveness test always
     # read "dead" and prune teammates on no evidence (plan §4.3). Printing full ids is deliberately
     # BETTER than the incumbent, not merely equal to it.
-    kt ls 2>/dev/null | JSON="$JSON" python3 -c '
+    # kitty's stderr is CAPTURED, not discarded. `kt ls 2>/dev/null` was the whole reason the
+    # bare-name `kitty` defect above was invisible for its entire life: the one line that named the
+    # cause — `it2-kitty: line 76: kitty: command not found` — was written to the fd this redirect
+    # threw away, and every caller saw only the generic `kitty ls failed`. A diagnostic that
+    # discards the diagnosis leaves an operator staring at a healthy-looking terminal and a pane
+    # that will not close. It stays off STDOUT (the id list is a parsed contract) but must be
+    # RENDERED on failure.
+    # mktemp with TRAILING Xs — BSD mktemp only substitutes a trailing run, so an embedded template
+    # mints a CONSTANT filename shared by every concurrent caller (memory: prescribed-remedy-worse).
+    _kt_err="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-stderr.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-stderr.%s' "$$")"
+    kt ls 2>"$_kt_err" | JSON="$JSON" python3 -c '
 import json,os,sys
 try: d=json.load(sys.stdin)
 except Exception: sys.exit(1)
@@ -207,7 +281,13 @@ if os.environ.get("JSON")=="1":
                 "cwd": w.get("cwd",""), "pid": w.get("pid")} for w in rows], sys.stdout)
     sys.stdout.write("\n")
 else:
-    for w in rows: print(w["id"])' || { err "kitty ls failed"; exit 1; }
+    for w in rows: print(w["id"])' || {
+      err "kitty ls failed (binary: $KITTY_BIN)"
+      [ -s "$_kt_err" ] && while IFS= read -r _l; do err "  kitty: $_l"; done < "$_kt_err"
+      rm -f "$_kt_err" 2>/dev/null
+      exit 1
+    }
+    rm -f "$_kt_err" 2>/dev/null
     ;;
 
   send)

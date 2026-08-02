@@ -22,6 +22,10 @@
 # independently re-measured in this repo as plan §7.8 learning 1).
 
 setup() {
+  # handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core and this box lives well
+  # above that, so an unpinned suite goes red-by-LOAD rather than by its subject. Named by
+  # test-hermeticity-lint, which blocks the land on it.
+  export CC_FIRE_CAPACITY_GATE=off
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   K="$REPO/bin/it2-kitty"
@@ -164,4 +168,62 @@ SH
   chmod +x "$CC_TERM_KITTY"
   run env CC_PANE_IT2="$K" "$REPO/bin/cc-pane" list
   [ "$status" -eq 2 ]
+}
+
+# ── BINARY RESOLUTION (added 2026-08-01) ─────────────────────────────────────────────────────────
+# WHY THESE EXIST. `KITTY_BIN="${CC_TERM_KITTY:-kitty}"` — a bare name — meant every AUTOMATED pane
+# close was a silent no-op on kitty while every interactive one worked. Hooks and launchd jobs run
+# with PATH=/usr/bin:/bin:/usr/sbin:/sbin (no Homebrew), so `kitty` did not exist for exactly the
+# callers that close panes: teammate-auto-shutdown, cc-teardown, cc-reaper, handoff-fire. Measured
+# live: rc=1 `kitty: command not found`, teammate pane survived 3h09m with its 653 MB claude.exe
+# still resident. The one caller that COULD close was the operator's own shell.
+#
+# The suite above cannot catch this — its setup() pins CC_TERM_KITTY to a fixture, which is the one
+# configuration where the bare name is never reached. So these drop the fixture on purpose.
+setup_nofixture() {
+  # handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core and this box lives well
+  # above that, so an unpinned suite goes red-by-LOAD rather than by its subject. Named by
+  # test-hermeticity-lint, which blocks the land on it.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  K="$REPO/bin/it2-kitty"
+  export CC_TERM_KITTY_TO="unix:$BATS_TEST_TMPDIR/sock"   # bypasses the ancestry guard
+  unset CC_TERM_KITTY
+}
+
+@test "REGRESSION: auto-resolves kitty under a launchd-style minimal PATH (no Homebrew)" {
+  setup_nofixture
+  # THE leg that regressed, and the only one that can prove the fix. CC_TERM_KITTY is UNSET here on
+  # purpose: with it set, the pre-fix `${CC_TERM_KITTY:-kitty}` used it verbatim too, so a fixtured
+  # version of this test passes against the BUG and proves nothing (it did, until this comment).
+  #
+  # Assertion is on the FAILURE MODE, not on success: with a bogus socket the call must still fail,
+  # but it must fail at the SOCKET (resolution happened) and never at `kitty: command not found`
+  # (resolution did not). That distinction is the whole defect.
+  command -v /opt/homebrew/bin/kitty >/dev/null 2>&1 || [ -x /opt/homebrew/bin/kitty ] \
+    || [ -x /usr/local/bin/kitty ] || [ -x /Applications/kitty.app/Contents/MacOS/kitty ] \
+    || skip "no kitty installed at any absolute fallback — nothing to resolve"
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin \
+      CC_TERM_KITTY_TO="unix:$BATS_TEST_TMPDIR/definitely-not-a-socket" "$K" session list
+  [ "$status" -ne 0 ] || false
+  # Assert the RESOLUTION POSITIVELY, via the binary the failure path names. An earlier draft
+  # asserted the ABSENCE of "command not found" and was vacuous twice over: absence is satisfied by
+  # any other error, and this file's own stderr-capture fix changed the wording to "failed to run
+  # command 'kitty'" so the literal never appeared at all. A negative assertion is only as good as
+  # your list of spellings; `binary: /` is one fact with one meaning — an ABSOLUTE path was resolved.
+  # Under the pre-fix bare name the same line reads `binary: kitty`, so this fails exactly there.
+  echo "$output" | grep -q "binary: /" || { echo "$output"; false; }
+}
+
+@test "REGRESSION: a bad CC_TERM_KITTY refuses — an override must not be overridable" {
+  setup_nofixture
+  # Folding CC_TERM_KITTY into the fallback list looks equivalent and is not: a non-executable
+  # override would be SKIPPED and an auto-detected kitty driven instead. Caught by this file's own
+  # control during the fix — CC_TERM_KITTY=/nonexistent/kitty closed a pane through the real kitty
+  # and reported success. The operator pins a binary; the shim must use it or refuse.
+  run env -i HOME="$HOME" PATH=/usr/bin:/bin CC_TERM_KITTY=/nonexistent/kitty \
+      CC_TERM_KITTY_TO="$CC_TERM_KITTY_TO" "$K" session close -f -s 15
+  [ "$status" -eq 5 ] || false
+  echo "$output" | grep -q "is not executable" || false
 }
