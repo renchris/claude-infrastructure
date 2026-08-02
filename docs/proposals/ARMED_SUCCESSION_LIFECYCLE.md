@@ -425,6 +425,42 @@ operator-visible sentinel file at all.**
 > both `ship.md` frontmatters · `KILL_RE` in `session-continue.sh` · `clear_fired_marker` in
 > `cc-reaper`. Anything not in that list is single-source and marked where it matters.
 
+## 7.5 · Are the three signals one defect? — one principle, two classes, three different fixes
+
+The brief asks whether the armed recycle (A), the vanished peer (B), and the
+`anti-deference`/`completion-assert` firings (C) are one defect wearing three masks. **Nearly — and
+the difference is what stops you building the wrong thing.**
+
+**One principle, violated three times.** `SESSION_LIFECYCLE_V2.md` states it exactly:
+*"row 2 throws away the evidence only row 2 can produce, then re-derives it from state it does not
+own."* Each signal is a case of a fact the infrastructure is uniquely positioned to hold being
+re-derived by someone else — a hook, an operator — from proxies that do not carry it.
+
+**But two distinct classes, and they cost very different amounts:**
+
+| | The fact | Held? | Read? | Class | Fix |
+|---|---|---|---|---|---|
+| **A** armed recycle | "a relaunch is pending on this pane" | **no** | — | **missing state** | write a record (Part I §4A) |
+| **B** fired peer | "this peer finished / delivered / died" | **yes** (`closedAt`) | **no** | **missing reader** | read it (§10.1) |
+| **C** ship policy | "may the model land in this repo?" | **partly** (reso's frontmatter only) | **no** | **missing reader + under-specified source** | read it, and state the default (§14.2) |
+
+Treating all three as one defect predicts a single fix — *"build lifecycle state"* — and for **B and
+C that fix is already built.** You would add a second store beside a correct one nobody reads, which
+is how a system ends up with two sources of truth and the same silence. The honest framing:
+
+> **A is a state problem. B and C are reader problems. Only A needs something written that is not
+> already there.**
+
+**And the reader problems are the more dangerous half**, which is the counter-intuitive part.
+Missing state produces *acknowledged ignorance* — nobody claims to know. An unread record produces a
+*confident false conclusion*: in B the operator concluded "died producing nothing" about a session
+that had delivered and landed; in C two hooks concluded "drivable" about an act the harness forbids.
+Both were wrong in the direction of *acting*, and both had the correct answer on disk at the time.
+
+The shared corollary for §10–§12: **prefer a reader over a writer, and prefer a field on an existing
+write over a new store.** Every recommendation in Part II is one of those two, except the one place
+(A) where nothing is written at all.
+
 ## 8 · Incident B was a misdiagnosis — and the misdiagnosis is the finding
 
 The peer did not vanish. Chain of custody, every link un-fakeable:
