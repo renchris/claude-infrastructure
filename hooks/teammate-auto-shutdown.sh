@@ -642,7 +642,16 @@ if [[ -n "$WORKTREE" ]]; then
   fi
 fi
 
-if $TREE_DIRTY && (( DEFER_COUNT < MAX_DEFERS )); then
+# ⚠ `DEFER_COUNT + 1`, NOT `DEFER_COUNT` — the cap must be reachable BY THE EVENT THAT HITS IT.
+# `(( DEFER_COUNT < MAX_DEFERS ))` deferred on the MAX_DEFERSth event too and left the follow-through
+# to an event N+1 that never comes: once the lead marks a member `isActive:false`, the harness STOPS
+# emitting TeammateIdle, so the only actuator this hook has is gone. Measured 2026-08-01 —
+# vt-tests@session-a338777c logged `defer (1/3)`, `(2/3)`, `(3/3)` and then silence, while its pane
+# and its 653 MB claude.exe stayed up for 3h09m. Disk census the same day: 73 of 188 defer counters
+# sat pinned at 3, untouched for over an hour — i.e. the backstop reached its cap 73 times and
+# followed through zero times. A backstop that needs one more event than it is given is not a
+# backstop. Now: events 1..N-1 defer, event N ACTS in the same invocation.
+if $TREE_DIRTY && (( DEFER_COUNT + 1 < MAX_DEFERS )); then
   DEFER_COUNT=$((DEFER_COUNT + 1))
   echo "$DEFER_COUNT" > "$DEFER_COUNTER"
   log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): dirty tree"
@@ -701,7 +710,9 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
     # close path; it only converts a permanent silence into one page. Birth-grace and
     # operator-adoption keep their unbounded defer — both are self-resolving, this one is not.
     if ! $WORKTREE_OWNED; then
-      if (( DEFER_COUNT < MAX_DEFERS )); then
+      # Same off-by-one as rule 3 above — see the note there. The SURFACE arm below is the
+      # follow-through, and it too was one unreachable event away.
+      if (( DEFER_COUNT + 1 < MAX_DEFERS )); then
         DEFER_COUNT=$((DEFER_COUNT + 1))
         echo "$DEFER_COUNT" > "$DEFER_COUNTER"
         log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER on a SHARED cwd ($WORKTREE) — gates evaluated the wrong tree"
@@ -734,7 +745,8 @@ fi
 # counter (same MAX_DEFERS), and after the last defer SURFACE (loud log + best-effort desk page)
 # rather than ever closing ungated. A close with zero gates evaluated must be impossible.
 if [[ -z "$WORKTREE" ]]; then
-  if (( DEFER_COUNT < MAX_DEFERS )); then
+  # Same off-by-one as rule 3 above — see the note there.
+  if (( DEFER_COUNT + 1 < MAX_DEFERS )); then
     DEFER_COUNT=$((DEFER_COUNT + 1))
     echo "$DEFER_COUNT" > "$DEFER_COUNTER"
     log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): WORKTREE unresolved — no safety gate could run, refusing ungated close"
