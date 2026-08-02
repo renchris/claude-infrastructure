@@ -581,6 +581,32 @@ itself on its own landing. Land latency at target on first production use.
 
 ## Learnings (accumulate; never delete)
 
+- 2026-08-02: **this design was implemented a second time, in `reso-management-app`, and
+  the second run found two defects in ITS OWN copy of our requirements — both worth
+  auditing here.** Record + diagrams: `docs/plans/DEPLOY_DECOUPLING_V2.md`; full build log:
+  `reso-management-app/docs/plans/LAND_SHIP_V2.md`.
+  1. **R7 re-entered through the SCHEDULER.** reso implemented "a non-verdict is never a
+     RED" against exit codes, then ran the suite under `nice -n 19` + `taskpolicy -c
+     background` — and vitest's per-test/per-hook budgets are *wall clock*. Its first real
+     verifier run stamped the trunk RED with 12 failed files, 11 hook-timeouts + 1
+     test-timeout and **zero assertion failures**, on a tree green at normal priority.
+     Neither the exit-code map (`124/137 → hung`) nor CI retries catch it: the runner exits
+     1 for a timeout and a regression alike, and all attempts lose the same race.
+     **⚠️ Our exposure, measured 2026-08-02 rather than assumed:** this verifier runs the
+     same band (`postland-verify.sh:185-193`), but our suites are **bats, which has no
+     per-test deadline** — so the framework-level version of the bug cannot occur here.
+     What *can*: **16 of 269 `tests/*.bats` files hardcode a `timeout N`, the shortest at
+     2-3s.** A 2s budget inside a background-clamped, loaded box is a scheduling race, not
+     a correctness check. Not yet observed failing here, so this is recorded rather than
+     pre-emptively rewritten (Fix Observed Problems) — but it is where to look first if a
+     verifier RED ever lands with no assertion failure in its output.
+     The rule: deprioritising a process implicitly re-specifies every timeout inside it,
+     so the caller choosing the band must choose the budget (widen-only multiplier).
+  2. **A fail-closed verdict that discards its evidence is a wedge, not a verdict.** reso's
+     verifier sent suite output to `/dev/null`, so a RED that pinned the deploy shut had no
+     recoverable reason — diagnosis meant re-creating the cell by hand. No-verdict says
+     "unknown"; evidence-free-RED says "guilty" and destroys the appeal. Worth checking
+     every stamp emitter here for the same discard.
 - 2026-07-28: v1's own evolution had already built every v2 component (scoped selector,
   postland net, green-cursor deploy) but kept the verdict on the land path, so each component
   waited on the others' liveness and none could go live — an architecture problem is not
