@@ -267,7 +267,7 @@ cc-do land-the-mcp-wiring
 
 Then everything is in place.")" "$w" "a2-d2"
   [ "$status" -eq 0 ]; fired "$output"
-  printf '%s' "$output" | grep -q 'bash-tagged fence'
+  printf '%s' "$output" | grep -q 'inline-code span'
   grep -q '"arm":"fence"' "$COMPLETION_IDL"
 }
 
@@ -307,7 +307,7 @@ cc-do land-the-mcp-wiring
 cc-do land-the-mcp-wiring
 \`\`\`")" "$w" "a2-d2-bare"
   [ "$status" -eq 0 ]; fired "$output"
-  printf '%s' "$output" | grep -q 'bash-tagged fence'
+  printf '%s' "$output" | grep -q 'inline-code span'
 }
 
 # ── FALSE-POSITIVE GUARD: naming a command in inline backticks is legitimate prose ⇒ ABSTAIN.
@@ -352,7 +352,7 @@ Two things remain yours before this is fully wired up.
 cc-do land-the-mcp-wiring")" "$w" "a2-both"
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'cc-backlog needs'
-  printf '%s' "$output" | grep -q 'bash-tagged fence'
+  printf '%s' "$output" | grep -q 'inline-code span'
   grep -q '"arm":"handoff+fence"' "$COMPLETION_IDL"
   [ "$(grep -c . "$COMPLETION_IDL")" -eq 1 ]   # one IDL line per invocation
 }
@@ -364,7 +364,7 @@ cc-do land-the-mcp-wiring")" "$w" "a2-both"
   [ "$status" -eq 0 ]; fired "$output"
   grep -q '"arm":"ledger"' "$COMPLETION_IDL"
   printf '%s' "$output" | grep -qi 'the LIVE ledger contradicts it'
-  ! printf '%s' "$output" | grep -q 'bash-tagged fence'
+  ! printf '%s' "$output" | grep -q 'inline-code span'
 }
 
 # ── D3 — HEDGED GOVERNING LINE (addendum 1). Line 1 must be ONE unhedged rung. "Yes — with one
@@ -549,4 +549,68 @@ Run this:
 
 cc-do')" "$w" "a2-d2-barectl"
   [ "$status" -ne 0 ] || [ -n "$output" ]
+}
+
+# ── D5: a command handed over for copy-paste that still contains a PLACEHOLDER ─────────────────
+# Found the only way it gets found: the operator pasted one and their shell said
+# `(eval):1: no such file or directory: checkout`. Every other arm passed it — D2 sees code
+# styling and abstains, and nothing else looks INSIDE the command. "One thing to select and
+# paste" is the contract; a template is homework.
+@test "D5 a run-marked command containing <placeholder> ⇒ FIRE" {
+  local w; w="$(mkrepo_landed a2d5)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Reconcile and retry:
+
+`git -C <checkout> pull --rebase origin main && <checkout>/install.sh`')" "$w" "a2-d5"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'placeholder'
+}
+
+@test "D5 fires on the PASTE_ / YOUR_ literals too" {
+  local w; w="$(mkrepo_landed a2d5lit)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Run this:
+
+`claude-latest mcp add -e TOKEN=PASTE_TOKEN_HERE --scope user motion-local`')" "$w" "a2-d5-lit"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+# ---- false-positive guards: each pins a lane a blanket placeholder-hunt would have broken -----
+
+@test "FP GUARD: a placeholder in a MID-SENTENCE mention is documentation, not a handover" {
+  local w; w="$(mkrepo_landed a2d5doc)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk. The refusal prints `git -C <path> pull --rebase origin main` with the real path substituted when it fires, so nothing needs filling in.')" "$w" "a2-d5-doc"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "FP GUARD: \$VAR / ~ / \$(cmd) are RESOLVED by the shell — not placeholders" {
+  local w; w="$(mkrepo_landed a2d5var)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Run this:
+
+`cd "$HOME/Development/claude-infrastructure" && bash install.sh`')" "$w" "a2-d5-var"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "FP GUARD: a shell redirect and a heredoc are not angle-bracket placeholders" {
+  local w; w="$(mkrepo_landed a2d5redir)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Run this:
+
+`sort < input.txt > output.txt`')" "$w" "a2-d5-redir"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "CONTROL: the SAME command fully substituted abstains — D5 reads the value, not the shape" {
+  local w; w="$(mkrepo_landed a2d5ok)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk.
+
+▶ Reconcile and retry:
+
+`git -C /Users/chrisren/Development/claude-infrastructure pull --rebase origin main`')" "$w" "a2-d5-ok"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }
