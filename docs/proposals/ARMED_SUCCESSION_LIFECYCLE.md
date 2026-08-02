@@ -504,7 +504,7 @@ The reason this went unnoticed is written in the code that created the field.
 **The identical defect was diagnosed in July, the record was built to fix it, and the reader was
 never built.** Incident B is that same sentence one level up: a perfect *delivery* nobody could see.
 
-### 9.2b The reader was not merely forgotten — it was the ratified architecture
+### 9.3 The reader was not merely forgotten — it was the ratified architecture
 
 `docs/plans/SESSION_LIFECYCLE_V2.md` §5, the plan that specified this record, states the intent in a
 bolded clause of its own:
@@ -537,7 +537,7 @@ grepping for it, like the problem is solved.
 The corollary for §10: the reader is not a new feature. It is the unbuilt half of a design already
 ratified, and building it is what makes the landed half worth anything.
 
-### 9.2c `--terminal` is the close mode with no legibility at all — and 158 used it
+### 9.4 `--terminal` is the close mode with no legibility at all — and 158 used it
 
 The July fix is real, but it is **half a fix, and the uncovered half is the one Incident B took.**
 Memory `handoff-succession-legibility` states the rule it installed:
@@ -578,7 +578,7 @@ survivor carries the news. For `--terminal` only the record can, which is why §
 > (`cc-notify` to the firing desk) that §10.2 argues should be a field on a write that already
 > happens.
 
-### 9.3 There IS a rich reader — for the living only
+### 9.5 There IS a rich reader — for the living only
 
 `bin/cc-classify` is a 12-cause idle classifier (`active`, `rate-limited`, `owned-wait`,
 `coordination-hang`, `coordination-abandoned`, `handed-off-lead`, `finished-teammate`, `finished`,
@@ -602,7 +602,7 @@ So: **the fleet has a first-class reader for sessions that still exist, and none
 no longer do.** The cc-fired record is the only artifact that outlives the session, and it is
 exactly the one nothing consults.
 
-### 9.4 The lifecycle, stated
+### 9.6 The lifecycle, stated
 
 | State | Set by | Where observable **today** | Where it must be |
 |---|---|---|---|
@@ -625,7 +625,7 @@ the reason the fired half already does.**
 ### 10.1 (a) Make a silent peer death loud — a READER, no new state
 
 Everything needed already exists on disk for all 28 dark peers. Required: something that reads
-`cc-fired × cc-sessions` and reports the four derived outcomes of §9.4. Two placements, both small:
+`cc-fired × cc-sessions` and reports the four derived outcomes of §9.6. Two placements, both small:
 
 - extend `cc-classify` with a **departed-peer domain** (its `--all` currently enumerates live
   sessions only), or add a sibling that reuses its evidence discipline; and
