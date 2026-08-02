@@ -28,7 +28,11 @@
 
 GRAY='\033[38;5;245m'
 MUTED_RED='\033[38;5;167m'
-NEXT_ACCENT='\033[38;5;75m'
+# Instance chip: the accent (256-colour 75) as the BACKGROUND, near-black digits knocked
+# out of it. 235 rather than the terminal default-bg via SGR 7 (reverse), so contrast is
+# guaranteed on light and dark themes. Replaces the fg-only NEXT_ACCENT this line used to
+# hold — the chip is the accent's only consumer, so an fg-only variant is now dead code.
+NEXT_CHIP='\033[48;5;75m\033[38;5;235m'
 RESET='\033[0m'
 
 # Reserved-space tokens converted to an offset % against the LIVE window size in the
@@ -262,31 +266,36 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             */.claude-denary)     NIDX=10 ;;
         esac
     fi
-    # n -> NEGATIVE-circled glyph (filled disc, knocked-out numeral). Two ranges, NOT
-    # one contiguous block: 1-10 = U+278A..U+2793 (dingbat negative circled sans-serif),
-    # 11-20 = U+24EB..U+24F4 (negative circled 11..20). Do NOT "tidy" this back to the
-    # contiguous outline set ①..⑳ (U+2460..U+2473) — that was the original and it is
-    # unreadable in kitty. Measured 2026-08-02 with kitty's own renderer
-    # (`kitty +launch`, kitty_tests.fonts.render_string, Monaco 14pt @144dpi, cell 17x37px):
-    #   Monaco has no U+2460 range, so CoreText substitutes a FULL-WIDTH CJK face
-    #   (PingFang SC, advance 14.0pt vs Monaco's 8.4pt cell). U+2460's East Asian Width
-    #   is Ambiguous => kitty allots ONE cell and downsamples the glyph ~0.62x to fit.
-    #   The ring collapses to a 1px hairline and the numeral inside it to ~4 logical px.
-    #   iTerm2 does not do that squeeze — it draws fallback glyphs at natural size and
-    #   lets them overflow — which is why this only became unreadable on the kitty move.
-    #   Ink measured: ①..⑳ height 18px @ density 0.29-0.49 (hairline ring, low ink);
-    #                 ➊..⓴ height 17-18px @ density 0.67-0.72 (solid disc).
-    # The fix is the GLYPH, not terminal config: the downsample is inherent to kitty and
-    # no installed font has a narrow (1-cell-advance) circled digit, so a kitty
-    # `symbol_map` cannot rescue the outline set. Putting the ink in the DISC and knocking
-    # the numeral out survives the downsample — it reads at any size, in both terminals.
+    # n -> a COLOR-CELL CHIP: the plain ASCII digits of n, drawn in the terminal's OWN
+    # font at full cell height, knocked out of an accent-colored background run.
+    #
+    # 🚨 Do NOT "restore the nice circled glyph". Both Unicode circled sets have been
+    # tried on this box and BOTH were rejected at the operator's eyes on kitty:
+    #   ①..⑳  U+2460..U+2473 (outline ring)  — the original; illegible
+    #   ➊..⓴  U+278A.., U+24EB.. (filled disc) — the first fix; ALSO illegible
+    # Cause, measured 2026-08-02 with kitty's own renderer (`kitty +launch`,
+    # kitty_tests.fonts.render_string, Monaco 14pt @144dpi, cell 17x37px): Monaco carries
+    # neither range, so CoreText substitutes a FULL-WIDTH face (PingFang SC, advance
+    # 14.0pt against Monaco's 8.4pt cell). Both ranges are East-Asian-Width Ambiguous, so
+    # kitty allots ONE cell and downsamples ~0.62x to fit. iTerm2 never squeezed them — it
+    # draws fallback glyphs at natural size and lets them overflow — which is why this only
+    # broke on the kitty move, and why zooming never helped (the ratio is scale-invariant).
+    #   ink height @ ink density:  ①..⑳ 18px @ 0.29-0.49   ➊..⓴ 17-18px @ 0.67-0.72
+    # Higher density is NOT legibility: the disc's numeral is formed by hairline background
+    # gaps, and those close up under the same downsample that thinned the ring. Whatever is
+    # carrying the NUMBER — ring stroke or knockout gap — is sub-pixel after the squeeze.
+    #
+    # So the number must not live inside a fallback glyph at all. An ASCII digit is in the
+    # primary font, never substituted, never downsampled: full cell height, full stroke
+    # weight, legible at every font size and in every terminal — with zero dependence on
+    # which fonts happen to be installed. The "badge" reads from the color run, not a glyph.
     if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
-        GLYPHS=(➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓ ⓫ ⓬ ⓭ ⓮ ⓯ ⓰ ⓱ ⓲ ⓳ ⓴)
-        if [ "$NIDX" -le 20 ]; then NGLYPH="${GLYPHS[$((NIDX-1))]}"; else NGLYPH="($NIDX)"; fi
-        # Accent the instance and pin it to the LEFT edge (prepended at the final
-        # echo). RESET after the glyph so the following segment keeps its own color
-        # (default in the no-context path, or the GRAY the context-% block prepends).
-        GLYPH_PREFIX="${NEXT_ACCENT}${NGLYPH}${RESET}  "
+        # Pinned to the LEFT edge (prepended at the final echo) so a narrow terminal's
+        # ellipsis never eats it. RESET after the chip so the following segment keeps its
+        # own color (default in the no-context path, or the GRAY the context-% block adds).
+        # Explicit fg+bg rather than SGR 7 (reverse): reverse depends on the terminal's
+        # default-background, which the statusline does not control and cannot verify.
+        GLYPH_PREFIX="${NEXT_CHIP} ${NIDX} ${RESET} "
     fi
 fi
 
