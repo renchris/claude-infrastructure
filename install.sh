@@ -287,7 +287,11 @@ done
 echo ""
 echo "Shell libs → $CONFIG_DIR/lib/"
 ensure_real_dir "$CONFIG_DIR/lib"
-for zlib in "$REPO_DIR"/lib/*.zsh; do
+# Both extensions: .zsh for zsh-only libs (config-mirror, desk), .sh for the ones written
+# bash/zsh-portable so a bats suite can source them under bash (cc-resume-shell.sh). Globbing
+# only *.zsh silently skipped every .sh lib — a lib the launcher sources but install never
+# deploys is dead on any machine but the one it was written on.
+for zlib in "$REPO_DIR"/lib/*.zsh "$REPO_DIR"/lib/*.sh; do
   [[ -f "$zlib" ]] || continue
   link_file "$zlib" "$CONFIG_DIR/lib/$(basename "$zlib")"
 done
