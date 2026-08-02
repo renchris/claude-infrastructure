@@ -641,3 +641,59 @@ There is one manual step for you to run: re-authenticate the MCP server.')" "$w"
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'cc-backlog needs'
 }
+
+# ── ATTRIBUTION (2026-08-02): convict only for work THIS SESSION wrote ────────────────
+# Reproduces the live false-conviction: the only unlanded commit touched config/kitty.conf,
+# a file the session never opened, and the hook demanded "/ship it" — an action the project
+# CLAUDE.md forbids from the shared checkout. The controls matter more than the fix here:
+# a session that DID write the unlanded file must still be convicted, or this just blinds
+# the guard.
+
+_ca_repo() { # $1=tag → echoes a repo with origin/main and one unlanded commit touching $2
+  local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
+  git init -q --bare "$o"; git clone -q "$o" "$w" 2>/dev/null
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+    echo base > base.txt; git add -A; git commit -q -m base; git push -q -u origin main
+    mkdir -p config; echo 'x' > "$2"; git add -A; git commit -q -m "sibling work" ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+_ca_tr() { # $1=out $2..=paths the session wrote
+  local out="$1"; shift
+  python3 - "$out" "$@" <<'PY'
+import json, sys
+out, paths = sys.argv[1], sys.argv[2:]
+rows = [{"type":"user","message":{"content":"go"}}]
+for p in paths:
+    rows.append({"type":"assistant","message":{"content":[
+        {"type":"tool_use","name":"Edit","input":{"file_path":p}}]}})
+rows.append({"type":"assistant","message":{"content":[{"type":"text","text":"✅ Complete — all done."}]}})
+open(out,"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
+PY
+  printf '%s' "$out"
+}
+
+@test "attribution: an unlanded commit this session did NOT write must not convict" {
+  w="$(_ca_repo att1 config/kitty.conf)"
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/a1.jsonl" "$w/some/other/file.ts")"
+  run bash -c "printf '{\"session_id\":\"S1\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  # must NOT block; and the IDL must say WHY (exonerated), not merely 'clean'
+  ! printf '%s' "$output" | grep -q '"decision":"block"' || false
+  grep -q 'exonerated' "$COMPLETION_IDL"
+}
+
+@test "attribution CONTROL: an unlanded commit this session DID write still convicts" {
+  w="$(_ca_repo att2 config/kitty.conf)"
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/a2.jsonl" "$w/config/kitty.conf")"
+  run bash -c "printf '{\"session_id\":\"S2\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
+}
+
+@test "attribution: cannot-tell (no transcript) stays as strict as before — still convicts" {
+  w="$(_ca_repo att3 config/kitty.conf)"
+  run bash -c "printf '{\"session_id\":\"S3\",\"cwd\":\"$w\",\"transcript_path\":\"/nonexistent.jsonl\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  # no transcript => no close-tell either; the point is it must never EXONERATE on ignorance
+  ! grep -q 'exonerated' "$COMPLETION_IDL"
+}
