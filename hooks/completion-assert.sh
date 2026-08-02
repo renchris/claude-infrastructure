@@ -260,7 +260,19 @@ MSG_UNQ="$(printf '%s' "$MSG" | sed -E 's/`[^`]*`//g; s/"[^"]*"//g; s/“[^“�
 #   `cc-backlog needs "<step>"` lands a blocked item carrying `.session`, and THAT is what
 #   operator-readout.sh can render. Any failure to read ⇒ cannot tell ⇒ d1 stays 0 (fail-open).
 CA_HANDOFF='remains? yours|are yours|is yours|on your (end|side)|you.?ll need to|you will need to|requires your|needs your|still needs (a|the|your|to be)|left (to|for) you|for you to (run|do)|keep an eye on|worth (watching|keeping)|i.?d recommend you|up to you|your call to|manual step'
-if printf '%s' "$MSG_UNQ" | grep -iqE "$CA_HANDOFF"; then
+#   NEGATED HANDOFFS ARE THE OPPOSITE OF A HANDOFF (FP #3 of this family, 2026-08-01). The close
+#   "✅ … nothing for you to run" was BLOCKED: `for you to run` matched, and the matcher cannot see
+#   the `nothing` two words to its left. The sentence asserts there is nothing to hand over — the
+#   exact state the arm wants — so convicting it inverts the guard. Same shape as the quoted-span
+#   FP and the placeholder FP before it: a phrase matcher reading a fragment, blind to the
+#   operator that governs it.
+#   Negated occurrences are DELETED before the match, the technique D4 already uses on its offer
+#   lines. Lowercased first because BSD sed has no case-insensitive flag, and the test is a
+#   boolean so the fold costs nothing.
+CA_NEG='(nothing|none|no|not|never|zero)[[:space:]]+([a-z]{1,10}[[:space:]]+){0,2}('"$CA_HANDOFF"')'
+CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]' | sed -E "s/$CA_NEG//g" 2>/dev/null || true)"
+[ -n "$CA_D1SRC" ] || CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]')"
+if printf '%s' "$CA_D1SRC" | grep -iqE "$CA_HANDOFF"; then
   CCB="${CC_BACKLOG_BIN:-}"
   if [ -z "$CCB" ]; then
     for cand in "$(dirname "$0")/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
