@@ -197,9 +197,101 @@ UNLANDED="$(lfield UNLANDED)"; case "$UNLANDED" in ''|*[!0-9]*) UNLANDED=0 ;; es
 AHEAD="$(lfield AHEAD)";     case "$AHEAD" in ''|*[!0-9]*) AHEAD=0 ;; esac
 REMAINDER="$(lfield REMAINDER)"; case "$REMAINDER" in ''|*[!0-9]*) REMAINDER=0 ;; esac
 
-contra=0; facts=""
-[ "$DIRTY" -eq 1 ]      && { contra=1; facts="${facts}dirty tree (${DIRTY_N} file(s)); "; }
-[ "$UNLANDED" -eq 1 ]   && { contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "; }
+# ── ATTRIBUTION: convict only for work THIS SESSION actually wrote (2026-08-02) ──
+# THE DEFECT, observed live: this hook fired twice at a session whose only unlanded commit
+# was `175eeb7d feat(kitty): cmd+click …` touching config/kitty.conf — a file that session
+# never opened. `~/Development/claude-infrastructure` is the SHARED checkout (it is the
+# ~/.claude symlink source), so a sibling's commit sits on its local `main` and every other
+# session is convicted for it. Worse, the instruction it hands back ("/ship it") is one the
+# project CLAUDE.md explicitly FORBIDS — landing from the shared checkout risks landing onto
+# a branch you did not create (incident 2026-07-11). So the hook demanded a rule violation.
+#
+# The ledger reads FACTS, not authorship — correctly; that is what makes it un-fakeable. The
+# fix is not to weaken the ledger but to ask a second, independent question before convicting:
+# is any of this MINE? hooks/lib/session-writes.sh answers it from the transcript's own edit
+# records (the same oracle session-continue.sh already uses for its mechanical 🔧 arm — this
+# hook was simply never wired to it, which is the gap this closes).
+#
+# THREE STATES, and the asymmetry is deliberate. rc 0/1 (a definite answer) may EXONERATE.
+# rc 2 (cannot tell — no jq, no transcript, unreadable) must NOT: this is a false-DONE guard,
+# so an unreadable transcript has to leave it exactly as strict as before. A miss here lets a
+# real false-done through; that is the expensive direction (MEMORY.md lookup-miss-is-not-absence).
+_ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell
+  local lib rc out
+  lib="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
+  [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+    lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$lib" ] || lib="$CFG/hooks/lib/session-writes.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/session-writes.sh"
+  [ -f "$lib" ] || return 2
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 2
+  # A session that recorded NO writes at all is NOT evidence of innocence. The transcript may
+  # predate the commits, or the work may have gone through Bash (`sed -i`, a heredoc), which the
+  # oracle cannot see by construction. Exonerating on that would gut the guard: the pre-existing
+  # suite's fixtures are exactly this shape — unlanded commits + a close message with no tool_use
+  # — and treating them as "not mine" silently disabled 9 of them.
+  # So EXONERATE ONLY ON POSITIVE EVIDENCE: the session demonstrably wrote things, and none of
+  # them is this. No writes recorded ⇒ cannot tell ⇒ stay as strict as before.
+  session_writes_paths "$TP" >/dev/null 2>&1
+  case $? in 1|2) return 2 ;; esac
+  case "$1" in
+    dirty)
+      session_dirty_mine "$TP" "$CWD" >/dev/null 2>&1; return $? ;;
+    unlanded)
+      # Do the unlanded commits touch anything this session wrote? Compare ABSOLUTE paths:
+      # git name-only is repo-relative, the transcript is absolute (see the lib's note).
+      out="$(session_writes_paths "$TP" 2>/dev/null)"; rc=$?
+      [ "$rc" -eq 2 ] && return 2
+      [ "$rc" -eq 1 ] && return 1
+      # CANONICALISE BOTH SIDES. `git rev-parse --show-toplevel` answers with the PHYSICAL
+      # path; the transcript records the path as the tool was given it (LOGICAL). On macOS
+      # /tmp -> /private/tmp and /var -> /private/var, and this repo's live layer is symlinks,
+      # so the two spellings of one file never compare equal and the intersection reads empty
+      # FOREVER — i.e. it would exonerate everything and silently disable the guard.
+      # This is the identical trap session_dirty_mine already documents; hand-rolling the
+      # comparison here re-introduced it, and only the CONTROL test ("a commit this session
+      # DID write must still convict") caught it. Fail-green defects need a control, not a check.
+      local top; top="$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 2
+      [ -n "$top" ] || return 2
+      top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$top")"
+      local _p _d _b _phys canon=""
+      while IFS= read -r _p; do
+        [ -n "$_p" ] || continue
+        _d="$(dirname "$_p")"; _b="$(basename "$_p")"
+        _phys="$(cd "$_d" 2>/dev/null && pwd -P 2>/dev/null)"
+        canon="${canon}${_phys:-$_d}/${_b}
+"
+      done <<CANON
+$out
+CANON
+      out="$canon"
+      local trunk; trunk="$(lfield TRUNK)"
+      case "$trunk" in ''|none) return 2 ;; esac
+      local f
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        printf '%s\n' "$out" | grep -qxF "$top/$f" && return 0
+      done <<EOF
+$( cd "$top" 2>/dev/null && git diff --name-only "$trunk"..HEAD 2>/dev/null )
+EOF
+      return 1 ;;
+  esac
+  return 2
+}
+
+contra=0; facts=""; _ca_exon=""
+if [ "$DIRTY" -eq 1 ]; then
+  _ca_mine dirty; _ca_d=$?
+  if [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
+  else contra=1; facts="${facts}dirty tree (${DIRTY_N} file(s)); "; fi
+fi
+if [ "$UNLANDED" -eq 1 ]; then
+  _ca_mine unlanded; _ca_u=$?
+  if [ "$_ca_u" -eq 1 ]; then _ca_exon="${_ca_exon}unlanded-not-mine "
+  else contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "; fi
+fi
 [ "$REMAINDER" -gt 0 ]  && { contra=1; facts="${facts}${REMAINDER} frozen-DoD item(s) remain; "; }
 
 # ── ARM 2 (operator surface) — see the contract block above. MUST precede the ledger-clean
@@ -356,8 +448,11 @@ while IFS= read -r ca_l; do
   ca_prev="$ca_t"
 done <<< "$MSG"
 
+# An exoneration is a REAL decision, not a non-event: it is the difference between "the ledger
+# was clean" and "the ledger was dirty but none of it was mine". Distinguish them in the IDL or
+# the next person debugging a missed conviction cannot tell which happened.
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
-  || [ "$d5" -eq 1 ] || abstain "ledger-clean"
+  || [ "$d5" -eq 1 ] || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
 
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
