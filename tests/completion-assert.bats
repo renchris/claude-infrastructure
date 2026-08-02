@@ -614,3 +614,30 @@ cc-do')" "$w" "a2-d2-barectl"
 `git -C /Users/chrisren/Development/claude-infrastructure pull --rebase origin main`')" "$w" "a2-d5-ok"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+
+# ── NEGATED HANDOFFS: "nothing for you to run" is the OPPOSITE of a handoff ────────────────────
+# FP #3 of this family, found by the hook blocking a correct close. `for you to run` matched and
+# the matcher could not see the `nothing` two words left of it. Paired with a bare control so a
+# strip that is too greedy (kills the real fire) or too timid (keeps the FP) fails exactly one.
+@test "D1 abstains on a NEGATED handoff (nothing for you to run)" {
+  local w; w="$(mkrepo_landed a2neg)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — 11 commits landed and deployed; nothing for you to run.
+
+The checkout is 0 ahead, 0 behind, clean.')" "$w" "a2-neg"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "D1 abstains on other negated forms (no manual step / never left to you)" {
+  local w; w="$(mkrepo_landed a2neg2)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk. There is no manual step here, and nothing is left for you to do.')" "$w" "a2-neg2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "CONTROL: the SAME phrase UNNEGATED still fires D1 — the strip did not defang the arm" {
+  local w; w="$(mkrepo_landed a2negctl)"
+  run run_ca "$(mkfix '✅ Complete & live on trunk — landed and deployed.
+
+There is one manual step for you to run: re-authenticate the MCP server.')" "$w" "a2-neg-ctl"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'cc-backlog needs'
+}
