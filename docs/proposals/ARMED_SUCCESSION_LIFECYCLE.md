@@ -411,6 +411,19 @@ operator-visible sentinel file at all.**
 >
 > Working notes with the full measurement:
 > `docs/research/succession-observability-2026-08-01/{00-inventory,01-analysis}.md`.
+>
+> **Verification level of Part II, stated so it is not over-trusted** (the `cc-await-ping` habit of
+> explaining your own designed outcome, applied to a document). Provenance: 6 mapping lenses + 6
+> adversarial verifiers; **2 verifier passes had returned when this landed**, and their verdicts on
+> everything they touched were *"substance CONFIRMED, precision errors"* — one REFUTED item concerned
+> a claim not used here. Independently of the fan-out, the **load-bearing facts below were each
+> re-checked at source by the lead**, and only those are asserted flatly:
+> the 158 forensic chain · the 17.1 % census (reproduced by a second agent via a different
+> classification route: 301 records → 141 closed, 35 null → 2 alive / 5 dead-pid / 28 no-row) ·
+> the zero-reader grep across the repo **and** the deployed `~/.claude` tree · the husk log ·
+> `DELIVERABLE`'s four files and 3-of-290 payloads · the slug-vs-registry-name namespace mismatch ·
+> both `ship.md` frontmatters · `KILL_RE` in `session-continue.sh` · `clear_fired_marker` in
+> `cc-reaper`. Anything not in that list is single-source and marked where it matters.
 
 ## 8 · Incident B was a misdiagnosis — and the misdiagnosis is the finding
 
