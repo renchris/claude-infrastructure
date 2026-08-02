@@ -59,6 +59,21 @@ _cc_sync_config_mirror() {
   for e in "$src"/*(ND); do
     name="${e:t}"
     [[ -n "$keep[$name]" ]] && continue                                   # isolated → leave dst's own
+    # NEVER share a runtime lock/pid/socket. These are TRANSIENT: the mirror can catch one during
+    # the instant it exists in ~/.claude, and once the real file is released every account dir is
+    # left holding a DANGLING symlink. A dangling lock is not inert — proper-lockfile reads
+    # mkdir=EEXIST + stat=ENOENT as ELOCKED, i.e. "held, forever", so the operation it guards can
+    # never run again. That is exactly what disabled the in-session OAuth token refresh on all four
+    # accounts: symlinks born 2026-07-31 14:58-16:36, first forced /login 70 minutes later, then an
+    # 8-hourly logout-while-working for two days (heal() kept the fleet alive only because it
+    # bypasses the lock — and only fires when an account has ZERO live sessions).
+    # Pattern-matched, not enumerated: the per-dir isolate lists already carried session-index.lock
+    # and STILL missed .oauth_refresh.lock when the vendor added it. The next new lock must be safe
+    # without anyone editing this file.
+    if [[ "$name" == *.lock || "$name" == *.lock.d || "$name" == *.pid || "$name" == *.sock ]]; then
+      [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; print -u2 "config-mirror: un-shared transient '$name' in ${dst:t}"; }
+      continue
+    fi
     [[ -L "$dst/$name" && "$(readlink "$dst/$name")" == "$e" ]] && continue  # already the right symlink
     if [[ -e "$dst/$name" && ! -L "$dst/$name" ]]; then                   # a forked real file/dir
       (( convert )) || continue                                           # safe mode: don't touch it
@@ -69,6 +84,21 @@ _cc_sync_config_mirror() {
   # Heal: an isolated entry that got wrongly symlinked to ~/.claude (the account-state leak).
   for k in ${(k)keep}; do
     [[ -L "$dst/$k" ]] && { rm -f "$dst/$k"; print -u2 "config-mirror: un-shared isolated '$k' in ${dst:t}"; }
+  done
+  # Reap symlinks into ~/.claude whose target has since DISAPPEARED. The share loop above walks
+  # `$src/*`, so it can only ever see names that still exist there — a link whose source was
+  # deleted is unreachable by it, and the transient-name skip cannot fire either. Without this,
+  # a captured-then-released file leaves a permanent dangling link. Scoped to targets under $src
+  # so an operator's own symlink in a config dir is never touched, and it only removes links that
+  # already resolve to nothing, so it can destroy no data.
+  # (N@D): N=no-match-ok, @=symlinks only, D=INCLUDE DOTFILES. The D is load-bearing and its
+  # absence is silent — every name this reaper exists for (.oauth_refresh.lock, .credentials.json)
+  # begins with a dot, so without D the loop is a no-op that still looks correct.
+  local l
+  for l in "$dst"/*(N@D); do
+    [[ "$(readlink "$l")" == "$src"/* ]] || continue     # not ours — leave it alone
+    [[ -e "$l" ]] && continue                            # target still resolves — healthy
+    rm -f "$l"; print -u2 "config-mirror: reaped dangling '${l:t}' in ${dst:t}"
   done
   # Seed .claude.json ONLY for SAME-account dirs (e.g. ~/.claude-next — intentionally shares
   # account 1's identity). CROSS-account dirs (isolate-set keeps .credentials.json) must start

@@ -1,5 +1,10 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031,SC2329
+# shellcheck disable=SC2030,SC2031,SC2329,SC2317
+# SC2317 ("command appears unreachable") is the same bats false-positive as SC2329 beside it:
+# the linter cannot see that `@test` bodies are invoked by the bats runner, so each one reads as
+# dead code. File-level, because it is a property of the harness rather than of any single line.
+# (NB: no comment line here may BEGIN with the linter's own name — it would be parsed as a
+# directive, SC1073/SC1072, and abort the scan of this entire file.)
 # config-mirror.zsh — which state each account config dir SHARES with ~/.claude vs isolates.
 #
 # This file exists because the isolate-set is a one-word-per-entry list with very large blast radius:
@@ -84,4 +89,68 @@ setup() {
   run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\""
   [ "$status" -eq 0 ]
   [ ! -e "$HOME/.claude-secondary/.credentials.json" ]
+}
+
+# --- transient lock/pid artifacts must never be shared (2026-08-02) -----------------------------
+# A dangling lock symlink is not inert: proper-lockfile reads mkdir=EEXIST + stat=ENOENT as
+# ELOCKED, i.e. "held forever", so the guarded operation can never run. Live instance: the mirror
+# captured ~/.claude/.oauth_refresh.lock on 2026-07-31 (14:58-16:36) into all four account dirs;
+# the real lock was then released, and from 70 minutes later every in-session OAuth token refresh
+# on every account failed at lock acquisition — an 8-hourly forced /login for two days.
+
+@test "EFFECT: a transient lock in ~/.claude is NOT symlinked into an account dir" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-lock"
+  mkdir -p "$HOME/.claude" "$HOME/.claude-secondary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  : > "$HOME/.claude/.oauth_refresh.lock"
+  : > "$HOME/.claude/history.jsonl.lock"
+  mkdir -p "$HOME/.claude/session-index.lock.d"
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  for n in .oauth_refresh.lock history.jsonl.lock session-index.lock.d; do
+    if [ -L "$HOME/.claude-secondary/$n" ]; then
+      echo "REGRESSION: transient '$n' was shared into the account dir" >&2; return 1
+    fi
+  done
+  return 0
+}
+
+@test "EFFECT: an ALREADY-dangling link into ~/.claude is reaped (source since deleted)" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-dangle"
+  mkdir -p "$HOME/.claude" "$HOME/.claude-secondary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  # exactly the production shape: target never existed / was released
+  ln -s "$HOME/.claude/.oauth_refresh.lock" "$HOME/.claude-secondary/.oauth_refresh.lock"
+  [ -L "$HOME/.claude-secondary/.oauth_refresh.lock" ]
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  if [ -L "$HOME/.claude-secondary/.oauth_refresh.lock" ]; then
+    echo "REGRESSION: dangling lock link survived the sync — refresh stays permanently ELOCKED" >&2
+    return 1
+  fi
+  return 0
+}
+
+@test "EFFECT: the reaper is scoped — a dangling link NOT into ~/.claude is untouched" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-scope"
+  mkdir -p "$HOME/.claude" "$HOME/.claude-secondary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  ln -s "$D/somewhere-else/gone" "$HOME/.claude-secondary/operator-link"
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/operator-link" ]
+}
+
+@test "EFFECT: a HEALTHY shared link survives the reaper (it is not over-broad)" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-healthy"
+  mkdir -p "$HOME/.claude/tasks" "$HOME/.claude-secondary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/tasks" ]
+  [ -e "$HOME/.claude-secondary/tasks" ]
 }
