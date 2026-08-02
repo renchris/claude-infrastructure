@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# cc-resume-resolve — resolve a Claude Code session id to the ONE (config dir, cwd) pair
+# that can actually resume it, so plain `claude --resume <id>` works from anywhere.
+#
+# THE DEFECT THIS CLOSES. Claude Code looks a `--resume <id>` up in exactly one place:
+#   $CLAUDE_CONFIG_DIR/projects/<cwd-with-non-alnum-replaced-by-dashes>/<id>.jsonl
+# Both halves of that path are ambient. This machine runs 4 accounts, each with its own
+# config dir, and every session is worktree-isolated into its own project dir. So the
+# hint Claude itself prints —
+#     Resume this session with: claude --resume <id>
+# — is only true if you happen to be standing in the same cwd, on the same account. Measured
+# 2026-08-02 with a purpose-built probe session (control = right cwd + right config dir ⇒
+# resumes; wrong cwd ⇒ "No conversation found"; wrong config dir ⇒ "No conversation found"):
+# BOTH dimensions fail independently and produce the identical, undiagnostic error message.
+#
+# This resolver searches every account store, finds the transcript, reads the cwd the session
+# actually recorded, and reports both. `_cc_resume_pin` in lib/cc-resume-shell.sh consumes it
+# and makes the launchers obey it. Fail-open by contract: an unresolvable id exits non-zero
+# with EMPTY stdout, and the caller launches unchanged so Claude prints its own error.
+#
+# Usage:
+#   cc-resume-resolve <session-id|prefix>     KEY=value lines on stdout (machine-readable)
+#   cc-resume-resolve --print <id|prefix>     one human line on stdout
+#   cc-resume-resolve -h
+#
+# Stdout contract (KEY=value, one per line, values NOT quoted — read with IFS== read):
+#   sid=<full 36-char session id>       (always the FULL id, even when a prefix was given)
+#   account=<next|next2|next3|next4|?>  ? = a store not in the account map (e.g. legacy ~/.claude)
+#   config_dir=<abs path>               what CLAUDE_CONFIG_DIR must be
+#   project_dir=<abs path>              the transcript's directory
+#   transcript=<abs path>
+#   cwd=<abs path>                      the cwd the session recorded (empty if unreadable)
+#   cwd_exists=0|1                      0 ⇒ the worktree was reaped; caller must recreate the path
+#
+# Exit codes (a new code must be added to every consumer's case arm — see memory
+# [[new-enum-member-falls-into-fail-closed-default]]):
+#   0  resolved
+#   2  usage error
+#   3  not found in any store
+#   4  ambiguous prefix (candidate sids on stderr, stdout empty)
+#
+# Env overrides (tests): CC_RESUME_STORES (colon-separated config dirs, bypasses the account
+# map), CC_ACCOUNT_MAP (path to account-map.generated.sh), HOME.
+set -uo pipefail
+
+usage() { sed -n '/^# Usage:/,/^#   cc-resume-resolve -h/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+PRINT=0
+SID_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --print)   PRINT=1 ;;
+    -h|--help) usage; exit 0 ;;
+    -*)        echo "cc-resume-resolve: unknown option '$1'" >&2; usage >&2; exit 2 ;;
+    *)         [ -n "$SID_ARG" ] && { echo "cc-resume-resolve: one session id at a time" >&2; exit 2; }
+               SID_ARG="$1" ;;
+  esac
+  shift
+done
+[ -n "$SID_ARG" ] || { usage >&2; exit 2; }
+
+# A session id is a lowercase UUID. Accept a full id or a >=8-char prefix of one; reject
+# anything else outright rather than globbing the stores with operator-supplied metacharacters.
+case "$SID_ARG" in
+  *[!0-9a-fA-F-]*) echo "cc-resume-resolve: '$SID_ARG' is not a session id or id prefix" >&2; exit 2 ;;
+esac
+[ "${#SID_ARG}" -ge 8 ] || { echo "cc-resume-resolve: id prefix must be >=8 chars (got ${#SID_ARG})" >&2; exit 2; }
+SID_ARG="$(printf '%s' "$SID_ARG" | tr 'A-F' 'a-f')"
+
+# ── the stores to search ──────────────────────────────────────────────────────────────────
+# Driven by the accounts.json-generated map (any N accounts, not a hardcoded 4) — see
+# lib/account-map.generated.sh. ~/.claude is appended as the legacy/stable store: it is the
+# SAME account as ~/.claude-next (whose projects/ is a symlink to it), which the realpath
+# dedupe below collapses, but it is also the store every pre-consolidation session lives in.
+# shellcheck source=/dev/null
+for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+done
+
+STORES=()
+if [ -n "${CC_RESUME_STORES:-}" ]; then
+  IFS=: read -r -a STORES <<< "$CC_RESUME_STORES"
+else
+  for _n in ${CC_ACCT_NAMES:-}; do
+    cc_acct_dir_for_name "$_n" 2>/dev/null && [ -n "${CC_ACCT_DIR:-}" ] && STORES+=("$CC_ACCT_DIR")
+  done
+  STORES+=("$HOME/.claude")
+fi
+
+# ── search ────────────────────────────────────────────────────────────────────────────────
+# One glob per store: projects/*/<sid>*.jsonl. Measured 2026-08-02 at 19ms across 5 stores /
+# 1381 project dirs, so this is cheap enough to sit in the launcher's hot path unconditionally.
+# `projects/<dir>/` only — never a deeper level: subagent journals and wf_* workflow internals
+# live in subdirectories and are not resumable sessions.
+shopt -s nullglob 2>/dev/null || true
+declare -a HITS=() SEEN_REAL=()
+for store in "${STORES[@]}"; do
+  [ -d "$store/projects" ] || continue
+  # Skip stores that are the same tree under two names (~/.claude-next/projects is a symlink to
+  # ~/.claude/projects — one account, two names). This is a WORK saver, not a correctness
+  # mechanism: the per-sid dedupe below already collapses a doubly-reachable transcript, and
+  # first-store-wins already makes config_dir deterministic. It earns its place because that
+  # aliasing is universal in this fleet, so it removes one of five store scans on every call.
+  real="$(cd "$store/projects" 2>/dev/null && pwd -P)" || continue
+  dup=0
+  for s in ${SEEN_REAL[@]+"${SEEN_REAL[@]}"}; do [ "$s" = "$real" ] && { dup=1; break; }; done
+  [ "$dup" = 1 ] && continue
+  SEEN_REAL+=("$real")
+  for f in "$store"/projects/*/"$SID_ARG"*.jsonl; do
+    base="${f##*/}"; base="${base%.jsonl}"
+    # A PREFIX search globs `<prefix>*.jsonl`, which also catches anything sharing that prefix —
+    # `<sid>-copy.jsonl`, a hand-made `<sid>-backup.jsonl`. Require the basename to BE a session
+    # id: the pattern below is a literal 8-4-4-4-12 hex mask with NO wildcard, so it is exact in
+    # length as well as shape. (An earlier version ended `-*-*-*-*`, which a longer name still
+    # matched — a guard that admits exactly what it was written to reject.)
+    case "$base" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) continue ;;
+    esac
+    HITS+=("$store|$f")
+  done
+done
+
+# Distinct session ids among the hits — the SAME sid reachable through two store paths is one
+# session (already collapsed above), but two DIFFERENT sids sharing a prefix is real ambiguity.
+declare -a SIDS=()
+for h in ${HITS[@]+"${HITS[@]}"}; do
+  b="${h##*/}"; b="${b%.jsonl}"
+  dup=0; for s in ${SIDS[@]+"${SIDS[@]}"}; do [ "$s" = "$b" ] && { dup=1; break; }; done
+  [ "$dup" = 0 ] && SIDS+=("$b")
+done
+
+if [ "${#SIDS[@]}" -eq 0 ]; then
+  echo "cc-resume-resolve: no session '$SID_ARG' in any account store" >&2
+  exit 3
+fi
+if [ "${#SIDS[@]}" -gt 1 ]; then
+  { echo "cc-resume-resolve: '$SID_ARG' is ambiguous — ${#SIDS[@]} sessions share that prefix:"
+    printf '  %s\n' "${SIDS[@]}"; } >&2
+  exit 4
+fi
+
+STORE="${HITS[0]%%|*}"
+TRANSCRIPT="${HITS[0]#*|}"
+SID="${SIDS[0]}"
+PROJECT_DIR="${TRANSCRIPT%/*}"
+
+ACCOUNT="$(cc_acct_name_for_dir_basename "${STORE##*/}" 2>/dev/null)"
+[ -n "$ACCOUNT" ] || ACCOUNT="?"
+
+# ── the recorded cwd ──────────────────────────────────────────────────────────────────────
+# Every transcript line carries `cwd`. Read it from the file rather than un-hashing the project
+# dir name: the hash is lossy (both `/` and `.` become `-`, so `.worktrees` and a real `worktrees`
+# directory are indistinguishable) and would silently produce a WRONG path that resumes nothing.
+# Scan a few lines, not just the first — a leading summary/meta line has no cwd.
+CWD=""
+if command -v jq >/dev/null 2>&1; then
+  CWD="$(head -20 "$TRANSCRIPT" 2>/dev/null | jq -r 'select(type=="object") | .cwd // empty' 2>/dev/null | head -1)"
+fi
+CWD_EXISTS=0
+[ -n "$CWD" ] && [ -d "$CWD" ] && CWD_EXISTS=1
+
+if [ "$PRINT" = 1 ]; then
+  loc="$CWD"; [ -n "$loc" ] || loc="(cwd not recorded)"
+  [ "$CWD_EXISTS" = 0 ] && [ -n "$CWD" ] && loc="$loc  [MISSING — worktree reaped]"
+  printf '%s  account=%s  config=%s  cwd=%s\n' "$SID" "$ACCOUNT" "$STORE" "$loc"
+  exit 0
+fi
+
+printf 'sid=%s\n'         "$SID"
+printf 'account=%s\n'     "$ACCOUNT"
+printf 'config_dir=%s\n'  "$STORE"
+printf 'project_dir=%s\n' "$PROJECT_DIR"
+printf 'transcript=%s\n'  "$TRANSCRIPT"
+printf 'cwd=%s\n'         "$CWD"
+printf 'cwd_exists=%s\n'  "$CWD_EXISTS"
