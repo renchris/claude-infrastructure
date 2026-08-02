@@ -295,6 +295,24 @@ blocks a false-done against the live ledger; `operator-readout.sh` renders the o
 manual-steps close block from disk truth — pure `systemMessage`, never a block).
 The agent runs the git/gate reads itself, so the ledger reports facts, not self-report.
 
+**Two of those Stop arms make this SELF-CERTIFYING, so the operator never has to ask "are we good
+to close?"** (operator crux 2026-08-01 — they were re-asking at every close, because a negative
+gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
+
+- **The close certificate.** On a WRITE turn whose ledger is `✅`, `operator-readout.sh` renders
+  **`✅ SAFE TO CLOSE — nothing of mine is open`** as the governing line, verdict FIRST, ahead of
+  the standing pile (labelled *standing, not blocking this close* — it is not a close-gate, per the
+  `👤` rule below). Computed from live git reads, never from prose, so it is the one line in a close
+  the model cannot fake. Read-only turns, and any state it cannot verify, stay silent — a
+  certificate that fired at every close would carry no information at all.
+- **Mechanical 🔧.** `session-continue.sh` no longer waits to be armed. If a turn ends with files
+  **this session wrote** still uncommitted, it blocks the stop itself and feeds the work back —
+  attribution via `hooks/lib/session-writes.sh` (the transcript's own edit records), so a sibling's
+  dirt in a shared checkout can never convict you. Bounded by `CC_MECH_MAX × CLAUDE_CONTINUE_MAX`;
+  `session-continue.sh clear` spends that budget outright when the dirt is deliberately parked.
+  This is what makes 🔧 "not the case in the first place" — reaching idle on your own loose end is
+  now a mechanism failure, not a discipline failure.
+
 **Freeze the DoD at intake.** The first time a task will write tracked files, restate the user's
 ask as one line — **`Scope (frozen): …`** (in the plan, else inline). Close-time completeness is
 then a *diff against that contract*, never a fresh re-judgment — the brake on scope-metastasis.
