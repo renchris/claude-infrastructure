@@ -660,7 +660,30 @@ Everything needed already exists on disk for all 28 dark peers. Required: someth
   *"no live session, AND no fired record"* vs *"no live session, but a fired record exists: engaged
   <t>, never closed"*. Today both collapse to `rc=0`.
 
-**Identity discipline (non-negotiable).** Pane ids in this fleet are of two kinds — iTerm2 integers
+**The join key rots — the constraint that decides the reader's shape.** Independent re-measurement
+decomposed the 35 records with `closedAt: null` as: **2 alive · 5 with a registry row whose pid is
+dead · 28 with no registry row at all.** The reason for the 28 is retention: `cc-fired` is
+**permanent**, while `cc-registry` — the liveness store it must be joined against — expires on a
+`RETAIN_S` window of about a day. So a reader built naively on `cc-fired × cc-registry` is correct
+for ~24 h and thereafter reports **everything** as dark, including every clean retirement.
+
+Two consequences, both structural:
+
+1. **The record must carry its own liveness-independent terminal state.** "Dark" must be derivable
+   from the record plus a bounded-age liveness read, never from the *absence* of a registry row —
+   absence past the retention window means *forgotten*, not *dead*. This is the same
+   absence-is-unreadable trap as the reaper's silent `clear_fired_marker` delete.
+2. **The reader must age out its own verdicts.** Beyond the join's validity window it reports
+   `unknown`, not `dark` — the `registry_indeterminate` fail-closed idiom, applied to time rather
+   than to a read error.
+
+**Identity discipline (non-negotiable) — and it is already written, just not here.** The
+`(pid, start-time)` pin this needs **exists in the reap/act path** and should be reused verbatim, not
+reinvented: `bin/cc-classify`'s `pid_lstart()` (*"→ normalized ps lstart string (identity pin,
+a17 S-4)"*) and `bin/cc-teardown`'s `--expect-lstart`, which refuses with *"pane recycled between
+classify and act … refusing to kill the successor."* The discipline is strong wherever the fleet
+**acts** on a pane and absent wherever it merely **reports** on a peer — which is precisely the half
+this design adds. Pane ids in this fleet are of two kinds — iTerm2 integers
 (`133`, `157`, `170`) and full UUIDs — and **integers recycle across terminal restarts**. A reader
 that infers "alive" from a bare id match will attribute a new pane's life to a dead peer's record:
 the same family as the `land-lock.sh` pid-recycling bug that `ps -o lstart=` exists to defeat, and
