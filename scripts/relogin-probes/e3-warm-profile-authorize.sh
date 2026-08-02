@@ -43,9 +43,15 @@ sys.exit(0 if any(x["name"]==sys.argv[2] for x in d["accounts"]) else "no such a
 PROFILE="$PROFILE_ROOT/$ACCT"; ART="$ART_DIR/relogin-probe-e3-$ACCT.json"
 emit() { python3 -c 'import json,sys
 print(json.dumps(dict(z.split("=",1) for z in sys.argv[1:]), indent=2))' "$@"; }
-row() { python3 -c 'import json,sys; d=json.load(sys.stdin)
-r=next((x for x in d.get("rows",[]) if x.get("name")==sys.argv[1]),{})
-v=r.get(sys.argv[2]); print("" if v is None else v)' "$ACCT" "$1" <<<"$2"; }
+# The row key is `acct` — claude-accounts --json has never emitted `name`. See the same fix in
+# e1: a wrong-keyed lookup can only miss, and a miss silently became "" for every field read.
+row() { local _v
+        _v="$(python3 -c 'import json,sys; d=json.load(sys.stdin)
+r=next((x for x in d.get("rows",[]) if x.get("acct")==sys.argv[1]),None)
+if r is None: sys.exit(3)
+v=r.get(sys.argv[2]); print("" if v is None else v)' "$ACCT" "$1" <<<"$2")" \
+          || die "no claude-accounts --json row for '$ACCT' (reading field '$1') — refusing to read live state as empty"
+        printf '%s' "$_v"; }
 teardown() { cat <<EOF
 TEARDOWN — E3 creates no durable artifact of its own; it spends a real renewal:
   $AUTHBROWSER_BIN $ACCT --stop    # belt-and-braces: cc-relogin already stops it in a finally

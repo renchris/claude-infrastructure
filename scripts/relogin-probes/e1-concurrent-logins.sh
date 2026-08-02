@@ -57,9 +57,17 @@ IFS=$'\t' read -r PRIMARY_DIR EMAIL KC_ACCT CLAUDE_BIN <<<"$IDENT"
 kc_svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"; }
 kc_has() { /usr/bin/security find-generic-password -s "$1" -a "$KC_ACCT" >/dev/null 2>&1 \
            && echo present || echo absent; }   # metadata probe only — never reads the secret
-row()    { python3 -c 'import json,sys; d=json.load(sys.stdin)
-r=next((x for x in d.get("rows",[]) if x.get("name")==sys.argv[1]),{})
-print(r.get(sys.argv[2],""))' "$ACCT" "$1" <<<"$2"; }
+# The row key is `acct` — claude-accounts --json has never emitted `name`. Keying on the wrong
+# field could only ever MISS, and a miss returned "" for every field: the k==0 gate refused with
+# a blank count, and both verdict reads (after_auth_no_heal / after_auth_healed) would have
+# recorded an empty string as an observation. So a missing row must be fatal, never "".
+row()    { local _v
+           _v="$(python3 -c 'import json,sys; d=json.load(sys.stdin)
+r=next((x for x in d.get("rows",[]) if x.get("acct")==sys.argv[1]),None)
+if r is None: sys.exit(3)
+v=r.get(sys.argv[2]); print("" if v is None else v)' "$ACCT" "$1" <<<"$2")" \
+             || die "no claude-accounts --json row for '$ACCT' (reading field '$1') — refusing to read live state as empty"
+           printf '%s' "$_v"; }
 emit()   { python3 -c 'import json,sys
 print(json.dumps(dict(z.split("=",1) for z in sys.argv[1:]), indent=2))' "$@"; }
 SLOT_DIR="${PRIMARY_DIR}-e1probe"; ART="$ART_DIR/relogin-probe-e1-$ACCT.json"
@@ -85,15 +93,19 @@ probe slot store  $SLOT_DIR   keychain: $SLOT_SVC      <- BOTH created by this e
 verdict artifact  $ART                                 <- created by this experiment
 login binary      $CLAUDE_BIN
 WILL DO  1. assert k==0 and snapshot the primary's auth state
-         2. hand you the exact 'auth login' for the PRIMARY store (logged out today;
-            restoring it is wanted regardless of the verdict)
+         2. hand you the exact 'auth login' for the PRIMARY store (re-anchors its ~30-day
+            deadline, which is wanted regardless of the verdict)
          3. hand you the exact 'auth login' for the PROBE SLOT store
          4. re-read the primary and record COEXIST / INVALIDATED
 WON'T DO sign in for you · /logout · POST a refresh token · widen oauth_scopes ·
          touch any account other than $ACCT
-COST IF IT GOES WRONG  the worst case IS the verdict: the primary login is invalidated by the
-         second. $ACCT is already logged out, so nothing is lost that is not already lost, and
-         recovery is one more 'auth login' into $PRIMARY_DIR.
+COST IF IT GOES WRONG  the worst case IS the verdict: an INVALIDATED result means the primary
+         login was killed by the second, and $ACCT then needs one interactive 'auth login' into
+         $PRIMARY_DIR to come back. Step 2 signs the primary in first, so the exposure is the
+         window between the two logins — not a lost account. Check the live cost before you
+         commit: this block is printed WITHOUT reading anything, so it cannot tell you whether
+         $ACCT is currently logged in; \`claude-accounts\` can, and the run prints the real
+         'before: auth=... k=...' line once you pass CONFIRM=1.
 EOF
 teardown
 if [[ "${CONFIRM:-}" != "1" ]]; then
