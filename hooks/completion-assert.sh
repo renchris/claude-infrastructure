@@ -216,6 +216,38 @@ REMAINDER="$(lfield REMAINDER)"; case "$REMAINDER" in ''|*[!0-9]*) REMAINDER=0 ;
 # rc 2 (cannot tell — no jq, no transcript, unreadable) must NOT: this is a false-DONE guard,
 # so an unreadable transcript has to leave it exactly as strict as before. A miss here lets a
 # real false-done through; that is the expensive direction (MEMORY.md lookup-miss-is-not-absence).
+# Is THIS session a confirmed Agent-Teams assignee (a background subagent)? rc 0 = yes.
+# The trichotomy is read exactly as session-continue's wake floor reads it — CONFIRMED (0) and
+# UNKNOWN-config (2) both count, REFUTED (1) does not — because one discriminator with two
+# different policies is the same defect as two discriminators (MEMORY.md
+# sibling-auditors-must-share-the-state-model). Any failure to resolve ⇒ NOT an assignee ⇒ the
+# caller stays strict, so this can only ever narrow a conviction on positive evidence.
+_ca_assignee() {
+  local lib aid
+  # AGENT_IDENTITY_LIB, when set, is a HARD override — it is deliberately NOT the head of the
+  # fallback chain. An override folded into a fallback list stops being an override (MEMORY.md
+  # path-resolved-dependency-in-daemon-code): pointing it at a missing file would silently resolve
+  # the real lib from $0's directory, so the "no lib ⇒ stay strict" path could never be exercised,
+  # and an untestable failure path is an untested one. Caught by its own test, which passed for the
+  # wrong reason until this became an override.
+  if [ -n "${AGENT_IDENTITY_LIB:-}" ]; then
+    lib="$AGENT_IDENTITY_LIB"
+  else
+    lib="$_cascd/lib/agent-identity.sh"
+    [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+      lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+    [ -f "$lib" ] || lib="$CFG/hooks/lib/agent-identity.sh"
+    [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+  fi
+  [ -f "$lib" ] || return 1
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 1
+  aid="$(agent_assignee_argv)" || return 1
+  [ -n "$aid" ] || return 1
+  agent_team_member_confirms "$aid"; case $? in 0|2) return 0 ;; *) return 1 ;; esac
+}
+
 _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell
   local lib rc out
   lib="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
@@ -227,15 +259,44 @@ _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot 
   # shellcheck source=lib/session-writes.sh
   # shellcheck disable=SC1091
   . "$lib" 2>/dev/null || return 2
-  # A session that recorded NO writes at all is NOT evidence of innocence. The transcript may
-  # predate the commits, or the work may have gone through Bash (`sed -i`, a heredoc), which the
-  # oracle cannot see by construction. Exonerating on that would gut the guard: the pre-existing
-  # suite's fixtures are exactly this shape — unlanded commits + a close message with no tool_use
-  # — and treating them as "not mine" silently disabled 9 of them.
+  # A session that recorded NO writes at all is NOT evidence of innocence — IN GENERAL. The
+  # transcript may predate the commits, or the work may have gone through Bash (`sed -i`, a
+  # heredoc), which the oracle cannot see by construction. Exonerating on that would gut the guard:
+  # the pre-existing suite's fixtures are exactly this shape — unlanded commits + a close message
+  # with no tool_use — and treating them as "not mine" silently disabled 9 of them.
   # So EXONERATE ONLY ON POSITIVE EVIDENCE: the session demonstrably wrote things, and none of
   # them is this. No writes recorded ⇒ cannot tell ⇒ stay as strict as before.
+  #
+  # ── THE ONE EXCEPTION, and why it is not a hole (2026-08-02, SUBAGENT_STOP_HOOK_LOOP.md R1) ──
+  # That rule, applied unconditionally, permanently convicts the one session that is write-free BY
+  # CONSTRUCTION: a read-only research subagent. Measured — a background/named subagent is a REAL
+  # child session (`claude.exe --agent-id … --agent-name … --team-name …`) and so runs this whole
+  # main-session Stop chain, in the LEAD's worktree, reading the LEAD's dirty + unlanded ledger.
+  # It cannot commit (read-only brief) and must not land, so it can never satisfy the assert: every
+  # stop is blocked and it re-enters. Three such agents delivered ZERO findings on 2026-08-02.
+  #
+  # The fix is NOT "detect a subagent and skip the hook" — that suppresses the guard for a session
+  # that genuinely can leave uncommitted work (R3). Agent-ness is used for something narrower and
+  # sound: it VALIDATES THE TRANSCRIPT, it does not excuse the session. Both objections above are
+  # objections about the transcript's completeness, and neither survives here — an assignee's
+  # transcript is created when the harness spawns it, so it CANNOT predate the lead's commits, and
+  # it is the assignee's own file, not one shared with whoever made them. So for a confirmed
+  # assignee, "no writes recorded" really is what it says.
+  #
+  # R3 STILL BINDS, and its controls are the proof: an assignee that DID write is exonerated by
+  # nothing here — it takes the normal intersection path below and is still convicted. What changes
+  # is only the verdict on a PROVABLY write-free one.
+  # R2 IS UNTOUCHED: a main session is never an assignee, so it can never reach this branch and the
+  # 9 fixtures above stay exactly as strict as they were.
+  # Detection is the SSOT in hooks/lib/agent-identity.sh — the same ancestry + team-config oracle
+  # session-continue's wake floor abstains on, so the two cannot disagree about who is an assignee.
   session_writes_paths "$TP" >/dev/null 2>&1
-  case $? in 1|2) return 2 ;; esac
+  rc=$?
+  [ "$rc" -eq 2 ] && return 2
+  if [ "$rc" -eq 1 ]; then
+    _ca_assignee || return 2
+    return 1                       # provably write-free AND a confirmed assignee ⇒ not mine
+  fi
   case "$1" in
     dirty)
       session_dirty_mine "$TP" "$CWD" >/dev/null 2>&1; return $? ;;
