@@ -10,7 +10,10 @@ status: closed
 blocking Stop hooks written for a main session's commit ledger must not fire on them. Fix, RED-prove
 with a positive control, land.
 
-Status: **OPEN — observed 2026-08-02, session c786f80f (reso `wt-cc-234200-24894`), not yet fixed**
+Status: **CLOSED 2026-08-02** — observed in session c786f80f (reso `wt-cc-234200-24894`); R1 fixed in
+`57b67f10`, R2/R3 proved unweakened by five controls, RED-proved against pristine `2cc71a7b`.
+See § R1 CLOSED. The *observation* and *hypothesis* sections below are kept verbatim as written —
+several of their stated facts were later measured wrong, and that correction is the record.
 
 ## The observation (primary, not inferred)
 
