@@ -262,9 +262,26 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             */.claude-denary)     NIDX=10 ;;
         esac
     fi
-    # n -> circled glyph (①..⑳ are contiguous U+2460..U+2473); plain (n) beyond.
+    # n -> NEGATIVE-circled glyph (filled disc, knocked-out numeral). Two ranges, NOT
+    # one contiguous block: 1-10 = U+278A..U+2793 (dingbat negative circled sans-serif),
+    # 11-20 = U+24EB..U+24F4 (negative circled 11..20). Do NOT "tidy" this back to the
+    # contiguous outline set ①..⑳ (U+2460..U+2473) — that was the original and it is
+    # unreadable in kitty. Measured 2026-08-02 with kitty's own renderer
+    # (`kitty +launch`, kitty_tests.fonts.render_string, Monaco 14pt @144dpi, cell 17x37px):
+    #   Monaco has no U+2460 range, so CoreText substitutes a FULL-WIDTH CJK face
+    #   (PingFang SC, advance 14.0pt vs Monaco's 8.4pt cell). U+2460's East Asian Width
+    #   is Ambiguous => kitty allots ONE cell and downsamples the glyph ~0.62x to fit.
+    #   The ring collapses to a 1px hairline and the numeral inside it to ~4 logical px.
+    #   iTerm2 does not do that squeeze — it draws fallback glyphs at natural size and
+    #   lets them overflow — which is why this only became unreadable on the kitty move.
+    #   Ink measured: ①..⑳ height 18px @ density 0.29-0.49 (hairline ring, low ink);
+    #                 ➊..⓴ height 17-18px @ density 0.67-0.72 (solid disc).
+    # The fix is the GLYPH, not terminal config: the downsample is inherent to kitty and
+    # no installed font has a narrow (1-cell-advance) circled digit, so a kitty
+    # `symbol_map` cannot rescue the outline set. Putting the ink in the DISC and knocking
+    # the numeral out survives the downsample — it reads at any size, in both terminals.
     if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
-        GLYPHS=(① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ ⑪ ⑫ ⑬ ⑭ ⑮ ⑯ ⑰ ⑱ ⑲ ⑳)
+        GLYPHS=(➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓ ⓫ ⓬ ⓭ ⓮ ⓯ ⓰ ⓱ ⓲ ⓳ ⓴)
         if [ "$NIDX" -le 20 ]; then NGLYPH="${GLYPHS[$((NIDX-1))]}"; else NGLYPH="($NIDX)"; fi
         # Accent the instance and pin it to the LEFT edge (prepended at the final
         # echo). RESET after the glyph so the following segment keeps its own color
