@@ -107,8 +107,13 @@ case "${1:-}" in
   clear)
     f=$(sentinel_for "$PWD")
     rm -f "$f" "${f}.count" "${f}.sid" 2>/dev/null
-    echo "cleared"
+    # `clear` means "this dirt is deliberate — stop asking", which is exactly what the mechanical
+    # arm's own block message instructs. So SPEND its budget rather than deleting it: deleting would
+    # let the next Stop re-arm and re-block, making clear/re-arm a two-cycle the operator cannot
+    # exit. Marking it spent is the difference between an off switch and a snooze button.
     SC_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-?}}"
+    printf '%s %s' "$SC_SID" "${CC_MECH_MAX:-3}" > "${f}.mech" 2>/dev/null || true
+    echo "cleared"
     log_idl cleared "cli-clear" "$(jq -cn --arg c "$PWD" '{cwd:$c}' 2>/dev/null)"
     exit 0 ;;
   status)
@@ -513,16 +518,149 @@ ${reason}"
   return 1
 }
 
+# ── MECHANICAL 🔧 — loose ends must not need the model to REMEMBER (operator crux 2026-08-01) ─────
+# THE DEFECT: this loop was armed by the model and only by the model. Measured over the live IDL —
+# 393 `armed/cli-set` against 902 completion-assert Stop invocations — so on most closes no sentinel
+# existed, and a session that had edited files could go idle with them uncommitted while every Stop
+# arm waved it through. completion-assert cannot cover it either: it fires only on a done-ASSERTION,
+# and its single largest disposition is `no-close-tell` (503/902 = 56%) — a turn that simply ends
+# without claiming anything never reaches the ledger at all. The operator's words: "loose-ends and
+# remaining tasks are supposed to continue the agent session without a return to idle, so those
+# shouldn't be the case in the first place." A discipline the model can forget is not a mechanism.
+#
+# WHY THIS IS NOT THE BANNED SCOPE-BLIND STOP HOOK (this file's own header, :3-8). That ban was
+# written when nothing could tell in-scope dirt from anyone else's; scripts/wrap-ledger.sh now
+# computes the rung from live facts, and lib/session-writes.sh attributes each dirty path to the
+# session that actually wrote it. Scope judgment is still not being guessed — it is being READ.
+#
+# THE PREDICATE IS DELIBERATELY NARROW: dirty tree ∧ ≥1 dirty path written BY THIS SESSION. The two
+# rejected candidates matter more than the accepted one:
+#   · GATE STALE — structurally permanent here. CLAUDE.md § Session Close says so outright: the
+#     `gate-green` marker the land path cannot advance "has been red since long before your diff".
+#     Looping on it is the infinite-loop-wearing-diligence's-clothes case, by name.
+#   · DoD REMAINDER — the durable DoD accumulates frozen scopes across weeks BY DESIGN (it is
+#     INTEGRATE-only), so a remainder is the steady state, not a loose end. Firing on it would block
+#     every close in this worktree forever.
+# Both stay with completion-assert's ledger arm, which acts only against a done-ASSERTION and so
+# cannot loop. What is left — "I edited files and am about to go idle without committing them" — is
+# the one 🔧 that is unambiguously this turn's, unambiguously losable, and SELF-CLEARING: the moment
+# the model commits, the tree is clean and this cannot fire again. Bounded from both ends.
+#
+# COMPOSITION: this only ARMS the sentinel and falls through into the ordinary armed path below, so
+# it inherits every existing safety property rather than duplicating one — kill-switch, SID-BIND,
+# the CLAUDE_CONTINUE_MAX cap and its named re-arm lever, and the IDL record. A second loop with its
+# own bound is how two caps that must agree drift apart.
+# Seams: CC_MECH_CONTINUE (0 disables) · WRAP_LEDGER_BIN · SESSION_WRITES_LIB
+TP_MECH="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = did not arm
+  [ "${CC_MECH_CONTINUE:-1}" = "0" ] && return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  # The operator asked to stop → never manufacture a continuation. Checked HERE as well as in the
+  # armed path so a kill-switch turn does not churn a sentinel into existence just to delete it.
+  kill_switch_active && return 1
+
+  local swlib
+  swlib="${SESSION_WRITES_LIB:-$_scd/lib/session-writes.sh}"
+  # A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, and when
+  # this hook runs from ~/.claude/hooks/ every tier below resolves to that same missing path — so
+  # the mechanical arm would land INERT and silently never fire. Resolve $0's own symlink into the
+  # checkout first (same fix, same reason, as hooks/completion-assert.sh:99-105).
+  [ -f "$swlib" ] || { local _swt="$0"; [ -L "$_swt" ] && _swt="$(readlink "$_swt")"
+    swlib="$(cd "$(dirname "$_swt")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$swlib" ] || swlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
+  [ -f "$swlib" ] || swlib="$HOME/.claude/hooks/lib/session-writes.sh"
+  [ -f "$swlib" ] || return 1
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1091
+  . "$swlib" 2>/dev/null || return 1
+
+  # Ledger first: it is the cheap read, and a non-🔧 rung ends this immediately. 📦 must NOT fire —
+  # committed-but-unlanded is operator-readout's surface and the ship policy's business, not a loop.
+  local wrap led rung
+  wrap="${WRAP_LEDGER_BIN:-}"
+  if [ -z "$wrap" ]; then
+    for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+      [ -f "$wrap" ] && break
+    done
+  fi
+  [ -n "$wrap" ] && [ -f "$wrap" ] || return 1
+  led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+  [ -n "$led" ] || return 1
+  rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
+  [ "$rung" = "🔧" ] || return 1
+
+  # Attribution. rc 2 (cannot tell) must NOT arm: a Stop hook may never block a turn on its own
+  # inability to read something.
+  local mineout mrc n_files shown
+  mineout="$(session_dirty_mine "$TP_MECH" "$cwd")"; mrc=$?
+  [ "$mrc" -eq 0 ] || return 1
+  [ -n "$mineout" ] || return 1
+
+  n_files="$(printf '%s\n' "$mineout" | grep -c . 2>/dev/null || echo 0)"
+  case "$n_files" in ''|*[!0-9]*) n_files=0 ;; esac
+  [ "$n_files" -gt 0 ] || return 1
+  shown="$(printf '%s\n' "$mineout" | head -8 | tr '\n' ' ' | sed 's/ *$//')"
+  [ "$n_files" -gt 8 ] && shown="$shown … (+$(( n_files - 8 )) more)"
+
+  # ── THE BUDGET THAT SURVIVES THE CAP (defect caught by its own bats case, 2026-08-01) ──────────
+  # First cut did `rm -f "${f}.count"` here, mirroring the CLI `set`. That made the loop UNBOUNDED:
+  # the armed path hits CLAUDE_CONTINUE_MAX, clears the sentinel and allows the stop — and the very
+  # next Stop finds no sentinel, re-enters this function, and re-arms with a zeroed counter. The cap
+  # was reset by the thing it was supposed to bound. That is exactly MEMORY.md
+  # bounded-gate-unbounded-by-compliance ("a budget the demanded action RESETS never binds"), and
+  # the model would have been re-blocked forever on dirt it may have had a good reason to leave.
+  #
+  # So the mechanical arm carries its OWN budget in `${f}.mech`, keyed by session id, and that file
+  # is deliberately NOT removed when the sentinel is cleared. It bounds mechanical arms per session,
+  # independently of how many continuations each arm then drives. A DIFFERENT session id resets it
+  # (a successor deserves its own budget); the same session does not get a second wind.
+  # The counter never has to be cleared on success, because success IS the tree going clean, and a
+  # clean tree cannot reach this line at all.
+  # THE BOUND IS A PRODUCT, NOT A SUM — state it, because it is the number that actually binds:
+  # each mechanical arm starts a FRESH continuation chain (the cap path deletes `.count` when it
+  # fires), so the worst case is CC_MECH_MAX × CLAUDE_CONTINUE_MAX forced turns, not CC_MECH_MAX.
+  # At the old default of 3 that was 24 consecutive blocks — bounded, but far past the point where
+  # a session that cannot commit is being helped rather than harassed. 2 keeps the escape hatch
+  # meaningful (`clear` spends the budget outright) while still catching the second lapse.
+  local mfile mline msid mcnt mmax
+  mfile="${f}.mech"; mmax="${CC_MECH_MAX:-2}"
+  mcnt=0
+  if [ -f "$mfile" ]; then
+    mline="$(cat "$mfile" 2>/dev/null || true)"
+    msid="${mline%% *}"; mcnt="${mline##* }"
+    case "$mcnt" in ''|*[!0-9]*) mcnt=0 ;; esac
+    # A stale budget from another session must not bind this one.
+    [ "$msid" = "${cur_sid:-?}" ] || mcnt=0
+  fi
+  if [ "$mcnt" -ge "$mmax" ]; then
+    printf 'session-continue: mechanical 🔧 budget spent (%s/%s) — allowing stop.\n' "$mcnt" "$mmax" >&2
+    log_idl cleared "mechanical-budget" "$(jq -cn --argjson n "$mcnt" --argjson m "$mmax" \
+      '{count:$n,max:$m}' 2>/dev/null)"
+    return 1
+  fi
+  printf '%s %s' "${cur_sid:-?}" "$(( mcnt + 1 ))" > "$mfile" 2>/dev/null || true
+
+  printf '%s' "You are about to go idle with ${n_files} file(s) you edited THIS TURN still uncommitted: ${shown}. Finish the in-scope work, run the repo's gate, and commit with explicit paths (then land per the repo's ship policy). If this dirt is deliberately parked, or is not yours to commit, run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
+  [ -n "$cur_sid" ] && printf '%s' "$cur_sid" > "${f}.sid" 2>/dev/null
+  log_idl armed "mechanical-dirty" "$(jq -cn --arg c "$cwd" --argjson n "${n_files:-0}" \
+    '{cwd:$c,files:$n,source:"session-writes"}' 2>/dev/null)"
+  return 0
+}
+
 # No sentinel → the agent did NOT request continuation → the session is going IDLE. This is the one
 # transition the wake floor guards; a sentinel-blocked stop is not idle, so it needs no floor.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" 2>/dev/null
-  if ! _wf_json="$(wake_floor)"; then
-    printf '%s' "$_wf_json"
-    exit 0        # decision:block travels in the JSON; the hook itself always exits 0
+  if ! mechanical_arm; then
+    if ! _wf_json="$(wake_floor)"; then
+      printf '%s' "$_wf_json"
+      exit 0      # decision:block travels in the JSON; the hook itself always exits 0
+    fi
+    [ -n "${_wf_json:-}" ] && printf '%s' "$_wf_json"
+    exit 0
   fi
-  [ -n "${_wf_json:-}" ] && printf '%s' "$_wf_json"
-  exit 0
+  # Armed mechanically → fall through into the armed path below, which applies the kill-switch,
+  # SID-BIND and cap checks and emits the block. No second code path, no second bound.
 fi
 
 # ── (a) KILL-SWITCH — operator stop ALWAYS wins over a stale sentinel (I-2 / D-8) ──

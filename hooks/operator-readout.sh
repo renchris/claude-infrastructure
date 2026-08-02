@@ -202,6 +202,9 @@ epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 #    caller — so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell
 #    loses them).
 RUNG="?"; TOTAL=0; Q_N=0
+# Write-turn oracle, three-state (0 wrote · 1 read-only · 2 cannot tell). Default 2 so the pull
+# surface (`--render`, /wrap, bats), which has no transcript to read, never claims a write turn.
+CERT_WROTE=2
 render_block() {
   local cwd="$1"
   local steps_file; steps_file="$(mktemp "${TMPDIR:-/tmp}/opreadout.XXXXXX")" || return 0
@@ -414,7 +417,15 @@ render_block() {
         [ "$gate" = "stale" ] && parts="${parts:+$parts · }gate stale on HEAD"
         [ "${remainder:-0}" != "0" ] && parts="${parts:+$parts · }${remainder} DoD item(s) open"
         state="🔧 in progress — ${parts:-loose ends}" ;;
-      "✅") state="✅ live on trunk" ;;
+      "✅")
+        # WRITE TURN + ✅ ⇒ say SAFE TO CLOSE, in those words. "✅ live on trunk" is a fact about
+        # the repo; the operator's standing question is a fact about THEM — "is there anything left
+        # that needs me?" — and they had to ask it every single close because no line answered it.
+        # CERT_WROTE is the three-state write-turn oracle (0 wrote · 1 read-only · 2 cannot tell);
+        # only an affirmative 0 earns the stronger claim, so a `--render` pull (no transcript) and
+        # an unreadable one both keep the original wording rather than over-claiming.
+        if [ "${CERT_WROTE:-2}" = "0" ]; then state="✅ SAFE TO CLOSE — nothing of mine is open"
+        else state="✅ live on trunk"; fi ;;
     esac
   fi
 
@@ -533,6 +544,16 @@ render_block() {
     # the same two items as if they were four.
     if [ -n "$_y" ]; then _lead="${_y}${_lead:+ · $_lead}"; else _lead="${_lead:-${total} manual step(s)}"; fi
     hdr="OPERATOR ▸ ${_lead}${state:+ · $state}"
+    # ANSWER FIRST when the answer is "yes, close" (Minto: line 1 carries the idea, not the pile).
+    # This machine standingly holds ~200 judgment items, so the default ordering renders
+    # "11 runnable now, 211 need your call · ✅ SAFE TO CLOSE" — leading with a number that is NOT
+    # this session's and burying the one clause the operator opened the close to find. CLAUDE.md is
+    # explicit that the standing pile is not a close-gate (the 👤 rung counts only steps THIS
+    # SESSION filed; the pile has its own counted ◆ line), so it is demoted here and labelled for
+    # what it is. Only the certified case reorders — every other rung keeps the existing shape.
+    if [ "$RUNG" = "✅" ] && [ "${CERT_WROTE:-2}" = "0" ]; then
+      hdr="OPERATOR ▸ ${state} · ${_lead} (standing, not blocking this close)"
+    fi
   elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
   elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
@@ -717,6 +738,32 @@ input="$(cat 2>/dev/null || printf '{}')"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+
+# ── WRITE-TURN ORACLE (feeds both the certified governing line and the standalone certificate) ────
+# Resolved ONCE, here, before render_block — two independent reads of one value is how they drift
+# (this file's own kill_switch/SC_SID note, :131-134). Any failure leaves CERT_WROTE=2 (cannot tell),
+# which downgrades every claim below rather than blocking anything.
+if [ "${CC_CLOSE_CERT:-1}" != "0" ]; then
+  _swlib="${SESSION_WRITES_LIB:-$SCRIPT_DIR/lib/session-writes.sh}"
+  # A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
+  # this hook executes from ~/.claude/hooks/, SCRIPT_DIR and both tiers below resolve to that SAME
+  # missing path, so the certificate would land INERT on the live layer and nothing would say so.
+  # Resolve $0's own symlink into the checkout first: the live hook IS a symlink to the repo, so
+  # this finds the lib on the same fast-forward that delivers this hook. (Identical reasoning and
+  # shape to hooks/completion-assert.sh:99-105 — the precedent that made this failure mode known.)
+  [ -f "$_swlib" ] || { _swt="$0"; [ -L "$_swt" ] && _swt="$(readlink "$_swt")"
+    _swlib="$(cd "$(dirname "$_swt")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$_swlib" ] || _swlib="$CFG/hooks/lib/session-writes.sh"
+  [ -f "$_swlib" ] || _swlib="$HOME/.claude/hooks/lib/session-writes.sh"
+  if [ -f "$_swlib" ]; then
+    # shellcheck source=lib/session-writes.sh
+    # shellcheck disable=SC1091
+    if . "$_swlib" 2>/dev/null; then
+      session_wrote_files "$TP"; CERT_WROTE=$?
+    fi
+  fi
+fi
 
 # Compose-guard: while session-continue's 🔧 loop is armed the session is mid-drive — the close
 # the operator reads comes later; yield (matches boundary-handoff's guard, same sentinel SSOT).
@@ -797,7 +844,74 @@ fi
 TMPB="$(mktemp "${TMPDIR:-/tmp}/opreadout-blk.XXXXXX" 2>/dev/null)" || abstain "no-mktemp"
 render_block "${CWD:-}" > "$TMPB" 2>/dev/null
 BLOCK="$(cat "$TMPB" 2>/dev/null || true)"; rm -f "$TMPB"
-[ -n "$BLOCK" ] || abstain "nothing-to-surface"
+
+# ── CLOSE CERTIFICATE — say "safe to close" BY CONSTRUCTION, so the operator stops asking ─────────
+# THE DEFECT (operator crux 2026-08-01): this hook's fire predicate was steps>0 ∨ 📦 ∨ queue>0 and
+# SILENT otherwise — "✅/read-only needs no block". But silence is not an answer; it is
+# indistinguishable from "the hook didn't run", "the model forgot", and "nobody looked". So on the
+# one close where everything really is finished, the only thing the operator saw was model PROSE —
+# exactly the self-report they cannot audit, and exactly why they had to keep asking "are we good to
+# close with no remaining tasks, loose-ends, or manual steps?" every single time. The negative gates
+# around this one (completion-assert) can only ever REFUTE a false done; nothing ever AFFIRMED a
+# true one. This is that affirmation, computed from the same wrap-ledger facts, never from prose.
+#
+# GATED ON A WRITE TURN, and that gate is what keeps it worth reading. A certificate that fired on
+# every close — including the hundreds of read-only turns — would carry exactly as many bits as one
+# that never fires (MEMORY.md alarm-polarity-and-attention-budget), and the protocol already says
+# to suppress the readout on read-only turns (E0). lib/session-writes.sh answers "did THIS session
+# write files" from the transcript, in three states; only an affirmative rc 0 certifies. rc 1
+# (read-only) and rc 2 (cannot tell) both stay silent — never assert safe-to-close on an unknown.
+#
+# ONLY ✅ REACHES HERE. 👤/📦/queue all produce a non-empty $BLOCK above and return early with their
+# own governing line, and 🔧 is deliberately uncertified: it is not safe to close, and it belongs to
+# session-continue's loop. So this arm cannot contradict the block renderer — it speaks only where
+# the renderer had nothing to say.
+# Seams: CC_CLOSE_CERT (0 disables) · SESSION_WRITES_LIB
+if [ -z "$BLOCK" ]; then
+  [ "${CC_CLOSE_CERT:-1}" = "0" ] && abstain "nothing-to-surface"
+  [ "$RUNG" = "✅" ] || abstain "nothing-to-surface"
+
+  # NOT a write turn ⇒ this is exactly the pre-existing empty-block state, so it abstains with the
+  # pre-existing REASON. The token is a telemetry contract (tests and cc-audit key on it); a new arm
+  # that declines to fire must be byte-identical to the world before it existed, or it silently
+  # rewrites the forensics of a case it did not change. Only genuinely NEW paths get new tokens.
+  [ "${CERT_WROTE:-2}" = "0" ] || abstain "nothing-to-surface"
+
+  # Re-read the ledger for the facts the line cites. render_block's copy is function-local, and
+  # quoting a remembered value is precisely the self-report this arm exists to replace.
+  _cwrap="${WRAP_LEDGER_BIN:-}"
+  if [ -z "$_cwrap" ]; then
+    for _c in "$SCRIPT_DIR/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+      [ -f "$_c" ] && { _cwrap="$_c"; break; }
+    done
+  fi
+  [ -n "$_cwrap" ] && [ -f "$_cwrap" ] || abstain "nothing-to-surface"
+  _cled="$( cd "${CWD:-}" 2>/dev/null && bash "$_cwrap" --machine 2>/dev/null || true )"
+  [ -n "$_cled" ] || abstain "nothing-to-surface"
+  _clf() { printf '%s' "$_cled" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
+  # Re-confirm the rung from THIS read: between render_block and here a sibling could have landed or
+  # dirtied the tree, and a certificate is the one output that must never be stale.
+  [ "$(_clf RUNG)" = "✅" ] || abstain "cert-rung-moved"
+  _ctrunk="$(_clf TRUNK)"; _cdod="$(_clf DOD)"; _crem="$(_clf REMAINDER)"
+  case "$_crem" in ''|*[!0-9]*) _crem=0 ;; esac
+
+  # The DoD-absent case is reported, never smoothed over: wrap-ledger already refuses to call an
+  # unverifiable scope complete, and the certificate must inherit that honesty rather than launder it.
+  if [ "$_cdod" = "present" ] && [ "$_crem" -eq 0 ]; then
+    _cscope="frozen-DoD remainder 0"
+  else
+    _cscope="scope UNVERIFIED (no durable DoD)"
+  fi
+  _cert="✅ SAFE TO CLOSE — nothing is left on this side.
+   tree clean · landed on ${_ctrunk:-?} (nothing parked) · ${_cscope} · no manual step is yours.
+   Verified from live git reads at this close, not from memory."
+
+  log_idl fired "close-certificate" \
+    "$(jq -cn --arg rung "$RUNG" --arg trunk "${_ctrunk:-?}" --arg dod "${_cdod:-?}" \
+        '{rung:$rung,trunk:$trunk,dod:$dod}' 2>/dev/null || echo '{}')"
+  jq -nc --arg m "$_cert" '{systemMessage:$m}' 2>/dev/null || true
+  exit 0
+fi
 
 # Damping latch: change → render now; unchanged → re-assert only after TTL.
 # (STATE_DIR/SKEY/LATCH are established by the pre-render stamp gate above — not recomputed here.)
