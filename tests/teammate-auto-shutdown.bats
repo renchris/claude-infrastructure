@@ -80,7 +80,16 @@ worktreetsv() { mkdir -p "$HOME/.claude/teams/$1"; printf '%s\t%s\n' "$2" "$3" >
 wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ -e "$1" ]; }
 
 # (i) unresolved WORKTREE → DEFER (no close), then SURFACE + page after MAX_DEFERS — never an ungated close
-@test "unresolved WORKTREE → defers (no close/page), then SURFACEs + pages after MAX_DEFERS (never ungated close)" {
+# ⚠ THE Nth EVENT ACTS — it does not defer an Nth time and wait for an (N+1)th.
+# This test asserted the opposite until 2026-08-01 (MAX_DEFERS=2 ⇒ it expected the page on fire 3),
+# and that expectation was the bug pinned as correct. An (N+1)th TeammateIdle is not guaranteed to
+# exist: once the lead marks a member `isActive:false` the harness stops emitting the event, so a
+# backstop that needs one more event than it is given never fires. Measured: 73 of 188 defer counters
+# sat pinned at the cap, untouched >1h, with 0 follow-throughs — and vt-tests@session-a338777c held
+# its pane and 653 MB for 3h09m after logging `defer (3/3)`. The header also says TeammateIdle fires
+# "3-4x per teammate", so a cap of 3 needing a 4th fire is a coin flip by construction — which is
+# exactly why some teammates closed cleanly and others never did.
+@test "unresolved WORKTREE → defers, then the MAX_DEFERSth event itself SURFACEs + pages (never ungated close)" {
   export TEAMMATE_MAX_DEFERS=2
   local sid=sidU team=teamU member=wkrUnresolved
   tx "$sid" 9000                                    # idle transcript; NO worktree mapping ⇒ WORKTREE=""
@@ -88,14 +97,10 @@ wait_for() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i
   [ "$status" -eq 0 ]
   [[ "$output" != *'"continue": false'* ]] || false
   [ ! -e "$D/notify-calls.log" ]
-  run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 2 → defer (2/2)
+  run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 2 = MAX_DEFERS → SURFACE (page) NOW
   [ "$status" -eq 0 ]
   [[ "$output" != *'"continue": false'* ]] || false
-  [ ! -e "$D/notify-calls.log" ]
-  run hookrun "$member" "$team" "$sid" /nonexistent-cwd   # fire 3 → SURFACE (page), still no close
-  [ "$status" -eq 0 ]
-  [[ "$output" != *'"continue": false'* ]] || false
-  [ -e "$D/notify-calls.log" ]                      # desk paged
+  [ -e "$D/notify-calls.log" ]                      # desk paged — on the capping event, not the next
   grep -q "SURFACE" "$LOGF"
   [ ! -e "$D/tmux-calls.log" ]                       # and no pane was ever closed
 }
