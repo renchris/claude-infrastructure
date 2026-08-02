@@ -436,6 +436,23 @@ sanctioned path. **Part I of this document is the artifact the operator was told
    worktree without reference to the repo the brief names, so commits-in-worktree can never detect
    delivery for a cross-repo fire.
 2. **"absent from `cc-sessions`."** That is exactly what a *clean retirement* looks like.
+3. **The pane itself — which lied in the opposite direction.** Found in the second round:
+   `/tmp/handoff-selfclose-158-1785634005.log` ends
+
+   ```
+   ⚠ it2 session close attempt 1..4/4 failed for 158 — retrying in 2s
+   !! PANE CLOSE FAILED after 4 attempts — pane 158 is a HUSK (claude exited, pane still open).
+      Close it by hand; the session is already gone.
+   ```
+
+   So 158's **pane never closed**. The operator was very likely looking at an open, empty pane —
+   which reads as *stalled*, the one appearance that is neither "finished" nor "gone". Three
+   proxies, three different wrong answers, and the record was right the whole time.
+
+   **This also demotes `closedAt` from proof to assertion.** It is stamped *before* the `/exit`
+   chain and never rolled back, so it records the *intent* to close, not the fact of it. A reader
+   must treat `closedAt` as "the session ended its work and asked to be closed" — and must
+   corroborate the pane's actual fate separately, or it will report clean terminations for husks.
 
 **A peer that finished and one that died are identical in every operator-visible surface.** They
 differ in one place — `closedAt` in the cc-fired record — and that place has no reader (§9.2).
@@ -458,6 +475,16 @@ yields acknowledged ignorance; an unread record yields a confident false negativ
 
 Roughly nine a day. Incident B is the second-most-common outcome of a fire. (Unrestricted the split
 is 141/301, but 129 records predate schema 2 and never had the field — 17.1 % is the honest figure.)
+
+**The denominator is biased, and in the flattering direction.** `bin/cc-reaper`'s
+`clear_fired_marker()` (`:436`, called at the successful-teardown branch `:956`) **deletes the whole
+record** on a successful auto-reap, with no tombstone. So every cleanly-reaped peer has left the
+population entirely, and "reaped cleanly" is on disk as the same thing as "never was a fired peer":
+absence. The true dark rate is therefore **≥ 17.1 %** — the census can only see the peers the reaper
+did *not* tidy away. This is Incident B's epistemics one layer down: **the most successful outcome
+erases its own evidence.** Any fix needs an append-only close *event* (the `handoffs.jsonl` shape)
+that survives marker GC; bounding directory growth by deletion is fine, bounding it by *forgetting*
+is not.
 
 **What the predicate proves, precisely:** `closedAt == null AND pane gone` proves *no terminal record
 was written* — **not** death. The operator may have closed the pane; a reaper may have taken it.
@@ -662,6 +689,32 @@ smallest possible change — no new store, no ceremony, no stay-open term. It al
 cross-repo blindness of §8, because the receipt names the repo the work landed in rather than
 leaving the operator to guess from the worktree.
 
+**And the un-fakeable source is already named by the record itself.** `mark_fired_peer` writes a
+`transcript:` pointer into `cc-fired/<pane>.json`, and a transcript's `toolUseResult` records are
+**harness-written — the model cannot author them** (158's carries a literal
+`gitOperation:{"push":{"branch":"main"}}`). `record_close_succession` runs at the exact instant the
+transcript is complete, with that path already in the object it is editing, in a function whose own
+header calls it additive-only and best-effort-never-blocking. So the ranked shortlist is:
+
+| # | Receipt | Fakeable by the model? | Cost |
+|---|---|---|---|
+| **1** | close-time `delivery` block derived from the pointed-at transcript's `toolUseResult` git records | **no** | one jq pass, one already-named file |
+| 2 | one-way-vs-notify-back recorded as a field on the existing fire event | no | one field |
+| 3 | a pane uuid on `cc-backlog`'s claim row | no | one field |
+| 4 | the `--notify-back` ping | yes (model-authored prose) | a stay-open obligation — keep as a *latency* signal only |
+
+**Anti-signal, to be scored below "no signal":** commits in the fired worktree. `cc-classify`'s
+`work_landed()` is `status --porcelain` clean **AND** `rev-list --count $TRUNK..HEAD == 0` — which a
+**do-nothing** peer in a fresh pool worktree satisfies *trivially*. It therefore returns **LANDED for
+the peer that did nothing** and **not-landed for the cross-repo peer that succeeded**: a coin that
+lands wrong on both faces. It must not be promoted into a delivery oracle.
+
+**One root cause under four symptoms:** `work_landed`, `self-close`'s dirty-tree gate, `dod-persist`
+(keyed on `git rev-parse --show-toplevel`, hashed), and the operator's own commits-in-worktree check
+**all key on the cwd**. A cross-repo fire — the fire path provisions a worktree without reference to
+the repo the brief names — defeats **all four at once**. That is why Incident B's every proxy failed
+together rather than independently.
+
 ### 10.3 The delivery receipt is already parsed — and has no producer
 
 `handoff-disposition.sh` parses `DELIVERABLE: <path>` from `--payload` and reports
@@ -740,10 +793,41 @@ contains two axes that are exactly this concern:
 - `deliverables_missing` — declared outputs absent or zero-length, added precisely because
   *"fired_peers_alive=[] would green-light a close over incomplete work."*
 
-Together those two already express *"the peer is gone AND its deliverable is not there"* — the dark
-state — and they legitimately flip the exit. **Nothing needs adding to the consumer.** The reason
-they never fire is upstream: `fired_peers_alive` needs slugs the caller must pass, and
-`deliverables_missing` needs a `DELIVERABLE:` line nothing produces (§10.3).
+Together those two express *"the peer is gone AND its deliverable is not there"* — the dark state —
+and they legitimately flip the exit.
+
+> **CORRECTION to an earlier draft of this section.** It read *"nothing needs adding to the
+> consumer; the reason they never fire is purely upstream."* That is **wrong**, and the second round
+> found why. `fired_peers_alive` is not merely unpopulated — it is **structurally incapable of
+> populating**. It matches handoff **slugs** against session-registry **names**, and the two are
+> different namespaces: a slug is the prompt-file basename (`handoff-fire.sh`, grep `NB_SLUG=`) —
+> e.g. `reso-parked-threads-resume` — while a registry name is `basename "$cwd"-<short>` from
+> `hooks/session-register.sh` (`CC_SESSION_NAME` is set by nothing in the repo or the deployed tree).
+> Live registry names are `claude-infrastructure-103`, `wt-pool-9-158`. They intersect only by
+> coincidence.
+>
+> So the one mechanical peer axis is a **silent no-op that fails toward CLOSE**. In Incident B it
+> would have printed `fired_peers_alive: []` at 18:10 while 158 was demonstrably alive and mid-
+> workflow — *the same `[]`* it printed after 158 closed. Peer enumeration must not go through slugs
+> at all; it should key on the `cc-fired` records themselves, which carry the pane uuid the registry
+> also keys on.
+>
+> The suite does not catch this because its `cc-sessions` stubs fabricate slug-shaped names that
+> `session-register.sh` cannot produce — a fixture asserting a namespace the system never emits.
+
+**And fixing the enumeration alone would create a contract violation.** `commands/handoff.md` binds
+exit 1 to a MANDATORY clause drawn from a **closed** taxonomy (*"No other reason exists… a candidate
+6th reason is a PROPOSAL in the plan's status log, never a silent addition"*), and the only clause
+covering a peer is **R-PING — which is armed solely by `--notify-back`**. A default one-way fire with
+a live peer would therefore drive exit 1 while every legal clause is false. Today that is masked
+precisely *because* the axis never populates. **So the enumeration fix and the taxonomy amendment
+must land together**, or the first converts a silent no-op into an unsatisfiable contract on its
+first live peer. The amendment is small and is the natural reading of the existing rows: R-PING's
+scope widens from *"awaiting a ping I armed"* to *"a fired peer of mine is unaccounted for"*, with
+the ping remaining its discharge only when one was armed.
+
+The other axis is upstream as stated: `deliverables_missing` needs a `DELIVERABLE:` line nothing
+produces (§10.3).
 
 So the recommendation splits by case:
 
@@ -780,4 +864,60 @@ Part I §7's items stand. Additional, and deliberately ordered cheapest-first:
       land it with the rest.**
 - [ ] **A test for the dark state.** The fixture set already exists in the live store: 157
       (open-alive), 158 (closed-clean), any of the 28 (dark). No suite asserts any of them.
+- [ ] **§12's paired change** — peer enumeration off `cc-fired` records **and** the R-PING scope
+      amendment, landed together. Either alone is worse than neither.
+
+## 14 · Corrections to Part I — two factual errors, each re-checked at source
+
+Part I was written by the predecessor session and is otherwise sound; these two claims are not, and
+both were verified first-hand here rather than taken from a report.
+
+### 14.1 D-8 is CLOSED — Part I §7's closing line is false at HEAD
+
+Part I ends: *"It was found, formally recorded as escaping, and never closed. The recycle arm is D-8
+with a 600-second fuse."* The first half is no longer true. `hooks/session-continue.sh` now carries
+
+```sh
+KILL_RE='(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|…'   # :140
+kill_switch_active() { … grep -iqE "$KILL_RE" }                                            # :157
+if kill_switch_active; then …                                                              # :492
+```
+
+with the actuation branch commented *"KILL-SWITCH — operator stop ALWAYS wins over a stale sentinel
+(I-2 / D-8)"*.
+
+**The correction strengthens Part I's own argument rather than weakening it.** D-8 is not an open
+wound to point at — it is a **worked example of this exact fix, already landed in this repo**: an
+armed detached actuator taught to re-derive its validity against a NAMED invalidating predicate,
+hoisted so more than one branch can see it, and pinned by tests. That is precisely what §4A asks of
+the recycle arm. Part I should cite it as the template, not as the unclosed precedent.
+
+### 14.2 The ship-policy bit is real but under-determined, and it locks the wrong thing
+
+Part I §5 claims the policy *"is written down, in machine-readable form, in the one place the harness
+enforces it, and it is already exactly correct."* Verified verbatim:
+
+| File | line 1 | `disable-model-invocation` |
+|---|---|---|
+| `reso-management-app/.claude/commands/ship.md` | `---` (YAML frontmatter) | **present, `true`** |
+| `claude-infrastructure/commands/ship.md` | `Land the current work onto the remote trunk, safely.` | **no frontmatter block at all** |
+
+So reso **declares**; infra **does not declare anything**. Part I reads infra's silence as an encoded
+`auto`, but there is no frontmatter to omit the field *from* — absence here encodes nothing. A
+`SHIP_POLICY` reader keyed on this bit yields exactly one repo saying `ask` and every other repo
+(including infra, which genuinely *is* auto-land) indistinguishable from *unset*. **The bit is a
+sound source for `ask`; it cannot be the source for `auto`** — that must come from an explicit
+default, stated once, not inferred from a missing block.
+
+**Second, and more serious: it is a channel lock, not an act lock.** `disable-model-invocation: true`
+stops the model *typing `/ship`*. It does not stop `bash scripts/ship-reconcile.sh`, which exists and
+is directly invocable; no hook in `hooks/validate-bash.sh` or `hooks/smart-bash-allowlist.sh` guards
+it, and repo-wide **nothing reads `disable-model-invocation`** outside the command files' own
+frontmatter. So a model squeezed by `anti-deference` for parking has an **unguarded route to spend
+the operator's Amplify + Fly budget**. If §5's `SHIP_POLICY` lands, its enforcement point belongs on
+the **act** (a Bash-layer guard on the ship scripts), not only on the slash-command channel.
+
+*(Part I §5(d) — "the false-positive rate is unmeasurable as built" — is also overstated: `sid` is a
+working join key in the IDL records and the rate was measured in the second round. The missing `cwd`
+still makes it awkward, not impossible.)*
 
