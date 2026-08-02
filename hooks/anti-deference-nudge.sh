@@ -10,8 +10,13 @@
 # detects the tell, and blocks the stop with a corrective nudge — DRIVE it, don't defer.
 #
 # ── FIRE PREDICATE + THE GENUINE CARVE-OUT (P0-4 triple fix) ──
-#   Fire = ( deference_tell  OR  (done_assertion AND live-ledger-contradiction) )
+#   Fire = ( deference_tell  OR  (done_assertion AND live-ledger-contradiction)
+#            OR category_not_idea )
 #          AND NOT hard_genuine  AND NOT (ship_hold AND NOT drivable).
+#   The third arm (2026-08-02) is LEDGER-INDEPENDENT and LAST in the chain: handing work over by
+#   COUNT ("one item is yours") instead of by CONTENT is a phrasing defect regardless of what the
+#   ledger says. It sits after the honest-done arm precisely so a message that is BOTH an honest
+#   done-assertion AND a count-only handover still gets caught — the real-world shape that exposed it.
 #   The hook must NEVER fire on a LEGITIMATE surface. Genuine, pre-authorized-to-STOP asks (⛔ /
 #   G2-G3): (1) external-info only the operator has (credentials, which-account, no-access);
 #   (2) an unsettled value-fork (which-do-you-prefer; a bare "your call" with NO ship verb);
@@ -24,7 +29,7 @@
 #   so an HONEST completion stays silent (a blanket done-matcher would nag every clean close).
 #   Bias stays toward FALSE-NEGATIVE (miss a soft defer) over FALSE-POSITIVE (nag a real blocker):
 #   a nagging hook trains the model to route around it. Corpus-validated in
-#   tests/anti-deference-nudge.bats (31 assertions: every listed tell fires; clean answers,
+#   tests/anti-deference-nudge.bats (40 assertions: every listed tell fires; clean answers,
 #   genuine-STOP-ASK-with-tell, non-drivable ship-holds, honest completes, and the substring traps
 #   "should i download"/"want to"/"otherwise the code…" stay silent).
 #
@@ -145,9 +150,23 @@ TELLS='say the word|on your word|want me to|shall i|should i (proceed|do|go)([^a
 #    the live ledger contradicts the claim, so an HONEST completion stays silent (G-P11-3 / a19 D-1). ──
 DONE_TELLS='nothing (left|more|else)?[a-z ]{0,12}to do|everything [a-z ]{0,20}(is|was) done|everything (requested|else|you asked)[a-z ,]{0,20}(is|was)? ?done|complete[ ,—–-]+nothing|(we.?re|we are|all)[ ,]*done[ ,.—–-]+nothing|that.?s everything'
 
+# ── (2026-08-02) CATEGORY-NOT-IDEA: a close that hands work over by COUNT instead of by CONTENT.
+#    CLAUDE.md § Session Close already forbids this in prose, citing Minto Ch 7 p. 94 ("'There are
+#    three problems' tells the kind, not the idea") — and the model violated it in two CONSECUTIVE
+#    closes anyway ("one item is yours.", "one item still needs your call."), while demonstrably
+#    KNOWING the content: it wrote four paragraphs of the idea the moment the operator asked "huh?
+#    what is it?". So the rule is not under-specified, it is UNENFORCED — the same prose-has-no-
+#    chokepoint generator this hook exists to answer. Bar for silence is LOW and deliberate: name
+#    the thing after a ':' or a dash and it never fires.
+#    NARROW by construction — a count-noun must be joined to a HANDOVER phrase (is/are yours ·
+#    needs your call/attention/decision · is for you), so ordinary prose ("I fixed one thing.")
+#    stays silent, and a ':'/'—' before the sentence end means the idea IS present → silent.
+CATEGORY_TELLS='(^|[^a-z])(one|two|three|four|a few|some|several|[0-9]{1,3}) (item|thing|step|task|decision)s?[^.!?:—–-]{0,30}((is|are) yours|needs? your (call|attention|decision|input|sign.?off)|(is|are) for you|remains? yours)[^.!?:—–-]{0,20}([.!?]|$)'
+
 has_tell=0; printf '%s' "$MSG" | grep -iqE "$TELLS"      && has_tell=1
 has_done=0; printf '%s' "$MSG" | grep -iqE "$DONE_TELLS" && has_done=1
-{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ]; } || abstain "no-tell"
+has_cat=0;  printf '%s' "$MSG" | grep -iqE "$CATEGORY_TELLS" && has_cat=1
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ]; } || abstain "no-tell"
 
 # ── (P0-4b) Genuine carve-out, SPLIT so ship/land is CONDITIONAL, not blanket (G-P11-2 / I-3:
 #    a blanket push/land carve-out trains the model to bolt a genuine-marker on to silence the hook).
@@ -221,9 +240,19 @@ FIRE_KIND=""
 if [ "$has_tell" -eq 1 ]; then
   { [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 0 ]; } && abstain "genuine-ship-hold"
   FIRE_KIND="deference"
-elif [ "$has_done" -eq 1 ]; then
-  [ "$contradiction" -eq 1 ] || abstain "done-ledger-clean"
+elif [ "$has_done" -eq 1 ] && [ "$contradiction" -eq 1 ]; then
   FIRE_KIND="false-done"
+elif [ "$has_cat" -eq 1 ]; then
+  # LAST in the chain by design: the two established kinds keep precedence, so this can only fire
+  # on a message nothing else caught. Ledger-INDEPENDENT — handing work over by count is a
+  # phrasing defect whether or not the ledger agrees. The HARD_CORE genuine carve-out above still
+  # suppresses it (bias stays toward false-negative: never nag a real blocker).
+  FIRE_KIND="category-not-idea"
+elif [ "$has_done" -eq 1 ]; then
+  # An HONEST done-assertion over a clean ledger, carrying no category handover → still silent
+  # (unchanged behaviour; this arm exists so the has_cat check above is REACHABLE for a message
+  # that is BOTH a done-assertion and a count-only handover — the real-world shape that exposed it).
+  abstain "done-ledger-clean"
 fi
 [ -n "$FIRE_KIND" ] || abstain "no-fire"
 
@@ -250,6 +279,8 @@ N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;
 printf '%s\n' "$HASH" >> "$FIRED" 2>/dev/null || true
 if [ "$FIRE_KIND" = "false-done" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+elif [ "$FIRE_KIND" = "category-not-idea" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 else
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 fi
@@ -257,10 +288,14 @@ log_idl fired "$FIRE_KIND" \
   "$(jq -cn --arg tell "$TRIGGER" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{tell:$tell,count:$count,max:$max}')"
 
-detail=""
-{ [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 1 ]; } && detail=" Ship/land of clean committed work is DRIVABLE — /ship it, don't park it."
-[ "$FIRE_KIND" = "false-done" ] && detail=" The LIVE ledger contradicts 'done' (uncommitted / unlanded / DoD-remainder) — it is NOT done."
-reason="Anti-deference: you presented drivable / complete-looking work as a question / hold / false-done (matched: \"${TRIGGER}\").${detail} If it's drivable + pre-authorized, DRIVE it now — only surface the genuine three (external-info the operator alone has / an unsettled value-fork / a C10 you can't self-execute like sudo·credential·destructive-migration; push·land·deploy of verified work is NOT one). Re-answer by DOING it, or by naming the ONE specific irreducible blocker. (anti-deference nudge $((N+1))/${MAX})"
+if [ "$FIRE_KIND" = "category-not-idea" ]; then
+  reason="Category-not-idea: you handed work over by COUNT, not by CONTENT (matched: \"${TRIGGER}\"). That is the blank assertion CLAUDE.md § Session Close bans, citing Minto Ch 7 p. 94 — \"'There are three problems' tells the kind, not the idea\". The operator cannot act on a count; they have to spend a round-trip asking \"which one?\". You almost certainly already know the answer — say it. Re-close with line 1 naming the THING: not \"one item is yours\" but \"the Fly deploy trigger still points at main, so every /ship deploys\". Name it after a ':' or a dash and this never fires. (category-not-idea nudge $((N+1))/${MAX})"
+else
+  detail=""
+  { [ "$ship_hold" -eq 1 ] && [ "$drivable" -eq 1 ]; } && detail=" Ship/land of clean committed work is DRIVABLE — /ship it, don't park it."
+  [ "$FIRE_KIND" = "false-done" ] && detail=" The LIVE ledger contradicts 'done' (uncommitted / unlanded / DoD-remainder) — it is NOT done."
+  reason="Anti-deference: you presented drivable / complete-looking work as a question / hold / false-done (matched: \"${TRIGGER}\").${detail} If it's drivable + pre-authorized, DRIVE it now — only surface the genuine three (external-info the operator alone has / an unsettled value-fork / a C10 you can't self-execute like sudo·credential·destructive-migration; push·land·deploy of verified work is NOT one). Re-answer by DOING it, or by naming the ONE specific irreducible blocker. (anti-deference nudge $((N+1))/${MAX})"
+fi
 
 jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
 exit 0

@@ -307,3 +307,75 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   [ "$status" -eq 0 ]
   jq -e 'select(.sid=="s\"q\\z")' "$ANTIDEF_IDL" >/dev/null
 }
+
+# ── (2026-08-02) CATEGORY-NOT-IDEA: handing work over by COUNT instead of by CONTENT.
+#    Provenance: the model shipped BOTH offending lines below in two CONSECUTIVE real closes while
+#    knowing the content (it wrote four paragraphs of it the moment the operator asked "what is
+#    it?"). CLAUDE.md § Session Close already bans this in prose (Minto Ch 7 p. 94); prose did not
+#    bind. RED-proof: these FAIL on the pre-2026-08-02 hook (no CATEGORY_TELLS ⇒ abstain no-tell).
+@test "category-not-idea: fires on a count-only handover" {
+  local msgs=(
+    "Everything of mine is done and landed. One item is yours."
+    "Repo is clean, three commits landed. One item still needs your call."
+    "My side is complete — 2 things need your attention."
+    "All green. A few items are yours."
+    "Wrapped up; some decisions need your decision."
+    "Done. Three steps are for you."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+  done
+}
+
+# The whole point of the bar: NAME the thing and the hook goes away. A ':' or a dash before the
+# sentence end means the idea is present.
+@test "category-not-idea: SILENT once the item is actually named" {
+  local msgs=(
+    "Everything landed. One item is yours: the Fly deploy trigger still points at main, so every /ship deploys."
+    "Done. One item still needs your call — repointing server.ts:284 to refs/heads/release."
+    "Clean. Two things are yours: the Amplify branch binding, and the release-ref seed."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then echo "FIRED (should have been silent): $m" >&2; false; fi
+  done
+}
+
+# Ordinary prose that merely CONTAINS a count-noun must stay silent — the tell requires the
+# count-noun to be joined to a handover phrase.
+@test "category-not-idea: SILENT on ordinary prose containing a count-noun" {
+  local msgs=(
+    "I fixed one thing in the reconcile path and re-ran the suite."
+    "There are three tests covering the fast-path predicate."
+    "Two items were already on the backlog, so I deduped them."
+    "12 runnable now, 195 need your call."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook "$tx"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then echo "FIRED (should have been silent): $m" >&2; false; fi
+  done
+}
+
+@test "category-not-idea: the block reason carries the Minto corrective, not the deference one" {
+  run runhook "$(mkfix "All landed. One item is yours.")"
+  [ "$status" -eq 0 ]
+  fired "$output"
+  printf '%s' "$output" | grep -q 'Category-not-idea'
+  printf '%s' "$output" | grep -q 'tells the kind, not the idea'
+  if printf '%s' "$output" | grep -q 'Anti-deference:'; then
+    echo "wrong corrective — got the deference message" >&2; false
+  fi
+}
+
+@test "category-not-idea: logs its own FIRE_KIND to the IDL" {
+  run runhook "$(mkfix "Complete. One item is yours.")" "sid-catkind"
+  [ "$status" -eq 0 ]
+  jq -e 'select(.reason=="category-not-idea")' "$ANTIDEF_IDL" >/dev/null
+}
