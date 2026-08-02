@@ -1,0 +1,23 @@
+flowchart TB
+    subgraph before["BEFORE · land = deploy"]
+        direction TB
+        BS["30+ concurrent worktree sessions"] --> BM[("origin/main")]
+        BM -->|"EVERY push — even a docs-only commit"| BP["Amplify Oregon build<br/>+ Fly LAX + Fly SIN"]
+        BP --> BT["8 production tenants"]
+    end
+    subgraph after["AFTER · land ≠ deploy"]
+        direction TB
+        AS["30+ concurrent worktree sessions"] --> AM[("origin/main<br/><i>free integration trunk</i>")]
+        AM -->|"lands continuously · bills nothing"| AV["postland verifier<br/>ONE singleton · background band<br/>full suite, blocking nobody"]
+        AV -->|"GREEN stamp only · fail-closed"| AD(["<b>/deploy</b> — the operator's explicit act"])
+        AD -->|"fast-forward to a stamped sha"| AR[("origin/release")]
+        AR -->|"ONE build per BATCH of lands"| AT["8 production tenants"]
+    end
+    classDef trunk fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef cost fill:@red-bg,stroke:@red-fg,color:@text
+    classDef gate fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef safe fill:@green-bg,stroke:@green-fg,color:@text
+    class BM,AM,AR trunk
+    class BP cost
+    class AV,AD gate
+    class AT safe

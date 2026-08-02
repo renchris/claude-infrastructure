@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024.635 916.3610000000001" width="1024.635" height="916.3610000000001" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Run" data-to="RC" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="462.3,93.80000000000001 462.3,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RC" data-to="G" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="0" points="426.7317,224.7927 426.7317,272.361 120.996,272.361 120.99600000000001,364.661" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RC" data-to="H" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="124 / 137 — our OWN bound fired" points="450.4439,248.50489999999996 450.4439,296.361 339.146,296.361 339.146,364.661" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RC" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="126 / 127 — unrunnable" points="474.1561,248.50490000000002 474.1561,296.361 585.454,296.361 585.454,364.661" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RC" data-to="R" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="anything else" points="497.86830000000003,224.7927 497.86830000000003,272.361 849.1754999999998,272.361 849.1755,364.661" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R" data-to="F" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="THE TRAP — the runner exits 1 for a
+WALL-CLOCK timeout too, and CI retries
+all lose the same race" points="849.1755,418.461 849.1755,551.361" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="D" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="849.1755,638.961 849.1754999999998,686.961" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="FX" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="849.1754999999998,757.6610000000001 849.1754999999998,805.6610000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="RC" data-to="G" data-label="0">
+  <rect x="108.996" y="279.361" width="23.59" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="120.791" y="294.51099999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">0</text>
+</g>
+<g class="edge-label" data-from="RC" data-to="H" data-label="124 / 137 — our OWN bound fired">
+  <rect x="259.646" y="303.361" width="158.428" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="338.86" y="318.51099999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">124 / 137 — our OWN bound fired</text>
+</g>
+<g class="edge-label" data-from="RC" data-to="C" data-label="126 / 127 — unrunnable">
+  <rect x="526.954" y="303.361" width="116.84800000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="585.3779999999999" y="318.51099999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">126 / 127 — unrunnable</text>
+</g>
+<g class="edge-label" data-from="RC" data-to="R" data-label="anything else">
+  <rect x="808.6754999999998" y="279.361" width="80.02000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="848.6854999999998" y="294.51099999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">anything else</text>
+</g>
+<g class="edge-label" data-from="R" data-to="F" data-label="THE TRAP — the runner exits 1 for a
+WALL-CLOCK timeout too, and CI retries
+all lose the same race">
+  <rect x="747.1754999999998" y="449.461" width="203.572" height="58.900000000000006" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="848.9614999999999" y="478.911" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="848.9614999999999" dy="-10.450000000000001">THE TRAP — the runner exits 1 for a</tspan><tspan x="848.9614999999999" dy="14.3">WALL-CLOCK timeout too, and CI retries</tspan><tspan x="848.9614999999999" dy="14.3">all lose the same race</tspan></text>
+</g>
+<g class="node" data-id="Run" data-label="verifier runs a suite
+nice -n 19 · taskpolicy -c background" data-shape="rectangle">
+  <rect x="335.362" y="40" width="253.876" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="462.3" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="462.3" dy="-3.9000000000000012">verifier runs a suite</tspan><tspan x="462.3" dy="16.900000000000002">nice -n 19 · taskpolicy -c background</tspan></text>
+</g>
+<g class="node" data-id="RC" data-label="exit code" data-shape="diamond">
+  <polygon points="462.3,141.8 521.5805,201.08050000000003 462.3,260.36100000000005 403.0195,201.08050000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="462.3" y="201.08050000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">exit code</text>
+</g>
+<g class="node" data-id="G" data-label="&lt;b&gt;GREEN&lt;/b&gt;
+deploy may advance" data-shape="rectangle">
+  <rect x="40" y="364.661" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="120.99600000000001" y="391.561" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="120.99600000000001" dy="-3.9000000000000012"><tspan font-weight="bold">GREEN</tspan></tspan><tspan x="120.99600000000001" dy="16.900000000000002">deploy may advance</tspan></text>
+</g>
+<g class="node" data-id="H" data-label="&lt;b&gt;HUNG&lt;/b&gt;
+non-verdict · convicts nobody" data-shape="rectangle">
+  <rect x="229.99200000000002" y="364.661" width="218.308" height="53.800000000000004" rx="0" ry="0" fill="#f6f8fa" stroke="#59636e" stroke-width="0.75" />
+  <text x="339.146" y="391.561" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="339.146" dy="-3.9000000000000012"><tspan font-weight="bold">HUNG</tspan></tspan><tspan x="339.146" dy="16.900000000000002">non-verdict · convicts nobody</tspan></text>
+</g>
+<g class="node" data-id="C" data-label="&lt;b&gt;CUT&lt;/b&gt;
+non-verdict · convicts nobody" data-shape="rectangle">
+  <rect x="476.3" y="364.661" width="218.308" height="53.800000000000004" rx="0" ry="0" fill="#f6f8fa" stroke="#59636e" stroke-width="0.75" />
+  <text x="585.454" y="391.561" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="585.454" dy="-3.9000000000000012"><tspan font-weight="bold">CUT</tspan></tspan><tspan x="585.454" dy="16.900000000000002">non-verdict · convicts nobody</tspan></text>
+</g>
+<g class="node" data-id="R" data-label="&lt;b&gt;RED&lt;/b&gt;
+the tree is guilty · deploy pinned shut" data-shape="rectangle">
+  <rect x="722.608" y="364.661" width="253.13499999999996" height="53.800000000000004" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="849.1754999999999" y="391.561" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="849.1754999999999" dy="-3.9000000000000012"><tspan font-weight="bold">RED</tspan></tspan><tspan x="849.1754999999999" dy="16.900000000000002">the tree is guilty · deploy pinned shut</tspan></text>
+</g>
+<g class="node" data-id="F" data-label="&lt;b&gt;FALSE RED&lt;/b&gt;
+12 files · 11 hook-timeouts
++ 1 test-timeout
+&lt;b&gt;ZERO assertion failures&lt;/b&gt;" data-shape="rectangle">
+  <rect x="757.8054999999999" y="551.361" width="182.74" height="87.60000000000001" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="849.1754999999999" y="595.161" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="849.1754999999999" dy="-20.8"><tspan font-weight="bold">FALSE RED</tspan></tspan><tspan x="849.1754999999999" dy="16.900000000000002">12 files · 11 hook-timeouts</tspan><tspan x="849.1754999999999" dy="16.900000000000002">+ 1 test-timeout</tspan><tspan x="849.1754999999999" dy="16.900000000000002"><tspan font-weight="bold">ZERO assertion failures</tspan></tspan></text>
+</g>
+<g class="node" data-id="D" data-label="discriminator is failure TEXT, not count:
+'timed out in Nms' + zero assertions
+⇒ the gate could not RUN" data-shape="rectangle">
+  <rect x="714.4569999999999" y="686.961" width="269.43699999999995" height="70.7" rx="0" ry="0" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="849.1754999999998" y="722.311" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="849.1754999999998" dy="-12.350000000000001">discriminator is failure TEXT, not count:</tspan><tspan x="849.1754999999998" dy="16.900000000000002">&#39;timed out in Nms&#39; + zero assertions</tspan><tspan x="849.1754999999998" dy="16.900000000000002">⇒ the gate could not RUN</tspan></text>
+</g>
+<g class="node" data-id="FX" data-label="fix: the caller that chooses the QoS band
+also chooses the budget
+(widen-only timeout multiplier)" data-shape="rectangle">
+  <rect x="713.7159999999999" y="805.6610000000001" width="270.919" height="70.7" rx="0" ry="0" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="849.1754999999998" y="841.0110000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="849.1754999999998" dy="-12.350000000000001">fix: the caller that chooses the QoS band</tspan><tspan x="849.1754999999998" dy="16.900000000000002">also chooses the budget</tspan><tspan x="849.1754999999998" dy="16.900000000000002">(widen-only timeout multiplier)</tspan></text>
+</g>
+</svg>

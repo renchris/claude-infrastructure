@@ -1,0 +1,20 @@
+flowchart TB
+    Push["the invariant:<br/><b>a push to main builds nothing</b>"] --> T1["trigger 1 · Amplify auto-build<br/><i>a console checkbox</i>"]
+    Push --> T2["trigger 2 · Path F ref filter<br/><i>a deployed env default</i>"]
+    T1 -->|"OFF"| G1["no build"]
+    T2 -->|"watches refs/heads/release"| G2["no release"]
+    T1 -.->|"flipped back ON"| B1["every land bills a build"]
+    T2 -.->|"still watching refs/heads/main"| B2["every land ships LAX + SIN"]
+    G1 --> A["land-status.sh<br/>asserts BOTH from the LIVE APIs,<br/>every readout"]
+    G2 --> A
+    B1 --> A
+    B2 --> A
+    A -->|"either one unreadable"| U["UNKNOWN — never assumed safe"]
+    classDef claim fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef trig fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef ok fill:@green-bg,stroke:@green-fg,color:@text
+    classDef bad fill:@red-bg,stroke:@red-fg,color:@text
+    class Push claim
+    class T1,T2,A trig
+    class G1,G2 ok
+    class B1,B2,U bad

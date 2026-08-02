@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 728.2349999999999 660.6999999999999" width="728.2349999999999" height="660.6999999999999" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Push" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="336.63874999999996,93.80000000000001 336.63874999999996,117.80000000000001 162.08425000000003,117.80000000000001 162.08425000000003,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Push" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="336.63874999999996,93.80000000000001 336.63874999999996,117.80000000000001 497.05249999999995,117.80000000000001 497.05249999999995,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="G1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="OFF" points="128.78708333333338,195.60000000000002 128.78708333333338,255.60000000000002 83.57550000000003,255.60000000000002 83.57550000000003,323.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2" data-to="G2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="watches refs/heads/release" points="465.85483333333326,195.60000000000002 465.85483333333326,231.60000000000002 406.50249999999994,231.60000000000002 406.5025,323.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="B1" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="flipped back ON" points="195.38141666666667,195.60000000000002 195.38141666666667,231.60000000000002 240.59300000000002,231.60000000000002 240.59300000000002,323.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2" data-to="B2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="still watching refs/heads/main" points="528.2501666666666,195.60000000000002 528.2501666666666,255.60000000000002 587.6025,255.60000000000002 587.6025,323.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G1" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="83.5755,360.80000000000007 83.5755,378.80000000000007 323.54775,378.80000000000007 323.54775,396.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G2" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.50249999999994,360.80000000000007 406.50249999999994,378.80000000000007 323.54775,378.80000000000007 323.54775,396.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B1" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="240.59300000000002,360.80000000000007 240.59300000000002,378.80000000000007 323.54775,378.80000000000007 323.54775,396.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B2" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="587.6025,360.80000000000007 587.6025,378.80000000000007 323.54775,378.80000000000007 323.54775,396.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A" data-to="U" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="either one unreadable" points="323.54775,467.5 323.54775,583.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="T1" data-to="G1" data-label="OFF">
+  <rect x="63.575500000000034" y="262.6" width="39.03399999999999" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="83.09250000000003" y="277.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">OFF</text>
+</g>
+<g class="edge-label" data-from="T2" data-to="G2" data-label="watches refs/heads/release">
+  <rect x="331.00249999999994" y="238.60000000000002" width="150.11200000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="406.0585" y="253.75000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">watches refs/heads/release</text>
+</g>
+<g class="edge-label" data-from="T1" data-to="B1" data-label="flipped back ON">
+  <rect x="195.09300000000002" y="238.60000000000002" width="90.11800000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="240.15200000000002" y="253.75000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">flipped back ON</text>
+</g>
+<g class="edge-label" data-from="T2" data-to="B2" data-label="still watching refs/heads/main">
+  <rect x="510.10249999999996" y="262.6" width="154.27" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="587.2375" y="277.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">still watching refs/heads/main</text>
+</g>
+<g class="edge-label" data-from="A" data-to="U" data-label="either one unreadable">
+  <rect x="262.54775" y="510.5" width="121.006" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="323.05075" y="525.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">either one unreadable</text>
+</g>
+<g class="node" data-id="Push" data-label="the invariant:
+&lt;b&gt;a push to main builds nothing&lt;/b&gt;" data-shape="rectangle">
+  <rect x="233.78325" y="40" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="336.63874999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="336.63874999999996" dy="-3.9000000000000012">the invariant:</tspan><tspan x="336.63874999999996" dy="16.900000000000002"><tspan font-weight="bold">a push to main builds nothing</tspan></tspan></text>
+</g>
+<g class="node" data-id="T1" data-label="trigger 1 · Amplify auto-build
+&lt;i&gt;a console checkbox&lt;/i&gt;" data-shape="rectangle">
+  <rect x="62.192750000000046" y="141.8" width="199.78299999999996" height="53.800000000000004" rx="0" ry="0" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="162.08425000000003" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="162.08425000000003" dy="-3.9000000000000012">trigger 1 · Amplify auto-build</tspan><tspan x="162.08425000000003" dy="16.900000000000002"><tspan font-style="italic">a console checkbox</tspan></tspan></text>
+</g>
+<g class="node" data-id="T2" data-label="trigger 2 · Path F ref filter
+&lt;i&gt;a deployed env default&lt;/i&gt;" data-shape="rectangle">
+  <rect x="403.4595" y="141.8" width="187.18599999999992" height="53.800000000000004" rx="0" ry="0" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="497.05249999999995" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="497.05249999999995" dy="-3.9000000000000012">trigger 2 · Path F ref filter</tspan><tspan x="497.05249999999995" dy="16.900000000000002"><tspan font-style="italic">a deployed env default</tspan></tspan></text>
+</g>
+<g class="node" data-id="G1" data-label="no build" data-shape="rectangle">
+  <rect x="40" y="323.90000000000003" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="83.5755" y="342.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55">no build</text>
+</g>
+<g class="node" data-id="G2" data-label="no release" data-shape="rectangle">
+  <rect x="354.03499999999997" y="323.90000000000003" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="406.50249999999994" y="342.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55">no release</text>
+</g>
+<g class="node" data-id="B1" data-label="every land bills a build" data-shape="rectangle">
+  <rect x="155.151" y="323.90000000000003" width="170.884" height="36.900000000000006" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="240.59300000000002" y="342.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55">every land bills a build</text>
+</g>
+<g class="node" data-id="B2" data-label="every land ships LAX + SIN" data-shape="rectangle">
+  <rect x="486.96999999999997" y="323.90000000000003" width="201.265" height="36.900000000000006" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="587.6025" y="342.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55">every land ships LAX + SIN</text>
+</g>
+<g class="node" data-id="A" data-label="land-status.sh
+asserts BOTH from the LIVE APIs,
+every readout" data-shape="rectangle">
+  <rect x="204.39025000000004" y="396.8" width="238.31499999999994" height="70.7" rx="0" ry="0" fill="#fff8c5" stroke="#9a6700" stroke-width="0.75" />
+  <text x="323.54775" y="432.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="323.54775" dy="-12.350000000000001">land-status.sh</tspan><tspan x="323.54775" dy="16.900000000000002">asserts BOTH from the LIVE APIs,</tspan><tspan x="323.54775" dy="16.900000000000002">every readout</tspan></text>
+</g>
+<g class="node" data-id="U" data-label="UNKNOWN — never assumed safe" data-shape="rectangle">
+  <rect x="205.13125" y="583.8" width="236.833" height="36.900000000000006" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="323.54775" y="602.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55">UNKNOWN — never assumed safe</text>
+</g>
+</svg>
