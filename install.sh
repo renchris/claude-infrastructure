@@ -106,6 +106,76 @@ if $IS_LINKED_WORKTREE; then
   echo "  ⚠ installing from a linked worktree ($REPO_DIR) — links into $CONFIG_DIR will dangle if it is removed" >&2
 fi
 
+# --- REFUSE a global install from a STALE checkout ---------------------------------------------
+#
+# THE DEFECT (observed 2026-08-01, and it reported SUCCESS while doing it): a sibling session left
+# a local commit on main in the shared checkout. `git merge-base --is-ancestor origin/main HEAD`
+# was therefore false — trunk held a commit this tree did not. install.sh has never been trunk-
+# aware, so it happily deployed that tree: it printed "✓ CLAUDE.md (554 lines)" and exit 0 while
+# copying a version WITHOUT the change that had just landed, and every hooks/ symlink kept
+# resolving to the stale content. The land was verified, the deploy was verified, and the live
+# layer was still wrong — the failure is invisible precisely because both halves report green.
+#
+# THE PREDICATE is containment, not equality: `origin/main` must be an ANCESTOR of HEAD. Being
+# AHEAD of trunk is normal and allowed (that is every pre-land state); being BEHIND is what
+# silently deploys yesterday's tree. A detached HEAD or a feature branch missing trunk content
+# fails the same test, correctly — deploying either drops landed fixes out of the live layer.
+#
+# FRESHNESS OF THE REF ITSELF: `origin/main` is a local ref, so an unfetched repo can pass this
+# check vacuously. We attempt one BOUNDED fetch first and say plainly which answer we have — a
+# guard that cannot distinguish "verified current" from "could not check" is the same class of
+# lie it exists to catch. No network ⇒ we still compare, and we SAY the comparison may be stale.
+#
+# SCOPE: a global install (the live ~/.claude layer) is REFUSED. A --config-dir install WARNS
+# loudly instead — same reasoning as the worktree guard directly above: automated callers use that
+# path, and bricking them costs more than the staleness does. CC_INSTALL_ALLOW_STALE=1 overrides
+# both. --dry-run is NOT exempt: previewing a stale tree previews the wrong tree.
+if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  STALE_NOTE=""
+  if git -C "$REPO_DIR" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 15 git -C "$REPO_DIR" fetch --quiet origin main >/dev/null 2>&1 \
+        && STALE_NOTE="origin/main re-fetched just now" \
+        || STALE_NOTE="could NOT reach origin — compared against the last-known origin/main, which may itself be behind"
+    else
+      STALE_NOTE="no timeout(1) — did not fetch; compared against the last-known origin/main, which may itself be behind"
+    fi
+
+    if ! git -C "$REPO_DIR" merge-base --is-ancestor origin/main HEAD >/dev/null 2>&1; then
+      BEHIND_N="$(git -C "$REPO_DIR" rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
+      if [[ "${CC_INSTALL_ALLOW_STALE:-}" == "1" ]]; then
+        echo "  ⚠ STALE checkout ($BEHIND_N commit(s) on origin/main are absent here) — proceeding: CC_INSTALL_ALLOW_STALE=1" >&2
+      elif $IS_GLOBAL; then
+        {
+          echo "✗ install.sh: REFUSING a global install from a STALE checkout."
+          echo "    checkout   : $REPO_DIR"
+          echo "    behind     : $BEHIND_N commit(s) on origin/main are NOT in this tree"
+          echo "    ref state  : $STALE_NOTE"
+          echo "    config dir : $CONFIG_DIR"
+          echo ""
+          echo "  Deploying now would copy pre-trunk content into $CONFIG_DIR and leave every"
+          echo "  hooks/ bin/ scripts/ symlink resolving to it — while printing success. That is"
+          echo "  the 2026-08-01 failure this guard exists to make impossible."
+          echo ""
+          echo "  Reconcile first, then re-run:"
+          echo "      git -C $REPO_DIR pull --rebase origin main"
+          echo "      $REPO_DIR/install.sh${ORIG_ARGS:+ $ORIG_ARGS}"
+          echo ""
+          echo "  (A local commit of your own is fine — rebase preserves it. CC_INSTALL_ALLOW_STALE=1"
+          echo "   overrides this refusal; --config-dir installs warn instead of refusing.)"
+        } >&2
+        exit 1
+      else
+        echo "  ⚠ STALE checkout — $BEHIND_N commit(s) on origin/main are absent here; $CONFIG_DIR gets pre-trunk content ($STALE_NOTE)" >&2
+      fi
+    fi
+  else
+    # No origin/main to compare against (fresh clone, no remote, a fork). CANNOT TELL is reported,
+    # never silently treated as current — an absent oracle is a third state, not a pass.
+    echo "  ⚠ no origin/main ref — cannot verify this checkout is current; deploying unchecked" >&2
+  fi
+fi
+
 installed=0
 skipped=0
 # Hoisted from the settings-hooks section (was initialised just above it) so the LaunchAgents block
