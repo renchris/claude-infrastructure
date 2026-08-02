@@ -27,43 +27,46 @@ what makes axis 1 *reachable* in a repo where a push bills real money.
 
 ## §1 The inversion
 
-<!-- Diagram source: assets/diagrams/deploy-trigger-decoupling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<!-- Diagram source: assets/diagrams/land-to-production.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../assets/diagrams/deploy-trigger-decoupling-dark.svg">
-  <img src="../../assets/diagrams/deploy-trigger-decoupling-light.svg" alt="Before and after the decoupling. BEFORE: 30+ concurrent worktree sessions push to origin/main, and every push — even a docs-only commit — fires an Amplify Oregon build plus Fly LAX and Fly SIN releases, reaching 8 production tenants. AFTER: the same sessions land continuously on origin/main, which is now a free integration trunk that bills nothing; a single postland verifier running in the background band proves each tip and emits a GREEN stamp; the operator's explicit /deploy fast-forwards origin/release to a stamped sha, and only that produces one build per batch of lands, reaching the 8 production tenants.">
+  <source media="(prefers-color-scheme: dark)" srcset="../../assets/diagrams/land-to-production-dark.svg">
+  <img src="../../assets/diagrams/land-to-production-light.svg" alt="How a commit reaches production. 30+ concurrent sessions, each in its own worktree and account, commit atomically with explicit paths. /ship runs ship-land.sh, which costs nothing: an escalation scan for DROP TABLE or COLUMN, auth, navigation and DB-timeout surfaces parks a decision packet first; ship-reconcile.sh runs in full on every compare-and-swap round so migrations are never dropped; only O(diff) statics run — eslint on changed files, tsc, migrate:lint; then a CAS push retried on non-fast-forward and verified by content rather than commit count. That reaches origin/main, the integration trunk, which builds nothing and deploys nothing so it can be landed on all day. Each land kicks postland-verify.sh, with a launchd backstop: one singleton in a fresh worktree, running under nice -n 19 and taskpolicy -c background so it blocks nobody, executing typecheck, test:unit, build and design:gate with VITEST_TIMEOUT_FACTOR set to 12 so the scheduling band and the timeout budget are chosen together. It writes a tree-keyed stamp. RED means a real regression with evidence kept in ~/.reso/verify-logs; CUT or HUNG mean the gate could not run and convict nobody; both leave production pinned to the last green sha. Only GREEN unlocks /deploy, which runs deploy-release.sh — fail-closed, refusing without a green stamp, showing the commit range and migrations in the batch and re-asserting the DROP stop-ask across the whole range. It does two things: pushes the green sha to origin/release, and calls aws amplify start-job with that commit id. The release push hits a deploy-ref filter: any ref but refs/heads/release, including every land on main, is skipped as not-deploy-ref, which is why a land is free; refs/heads/release reaches the reso-deploy runner on Fly in iad, which runs flyctl deploy against both regions in parallel with a drift assertion after each, producing reso-lax and reso-sin. Amplify Oregon, whose auto-build on main is off, runs pnpm migrate canary-first then pnpm build. All three paths converge on 8 production tenants, one build per batch of lands.">
 </picture>
 
 <details>
 <summary>Interactive Diagram</summary>
 
-<!-- mermaid-fence: assets/diagrams/deploy-trigger-decoupling.mmd (auto-synced by `npm run diagrams`) -->
+<!-- mermaid-fence: assets/diagrams/land-to-production.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    subgraph before["BEFORE · land = deploy"]
-        direction TB
-        BS["30+ concurrent worktree sessions"] --> BM[("origin/main")]
-        BM -->|"EVERY push — even a docs-only commit"| BP["Amplify Oregon build<br/>+ Fly LAX + Fly SIN"]
-        BP --> BT["8 production tenants"]
-    end
-    subgraph after["AFTER · land ≠ deploy"]
-        direction TB
-        AS["30+ concurrent worktree sessions"] --> AM[("origin/main<br/><i>free integration trunk</i>")]
-        AM -->|"lands continuously · bills nothing"| AV["postland verifier<br/>ONE singleton · background band<br/>full suite, blocking nobody"]
-        AV -->|"GREEN stamp only · fail-closed"| AD(["<b>/deploy</b> — the operator's explicit act"])
-        AD -->|"fast-forward to a stamped sha"| AR[("origin/release")]
-        AR -->|"ONE build per BATCH of lands"| AT["8 production tenants"]
-    end
+    S["<b>30+ concurrent sessions</b><br/>each: own worktree · own account"] -->|"commit — atomic, explicit paths"| L["<b>/ship</b> → ship-land.sh · costs nothing<br/>esc-scan FIRST: DROP TABLE/COLUMN · auth · nav · DB-timeout → PARK<br/>ship-reconcile.sh in full on every CAS round (migration-safe)<br/>O(diff) statics only: eslint(changed) · tsc · migrate:lint<br/>CAS push, retry on non-ff → verify by CONTENT, never by count"]
+    L --> M[("<b>origin/main</b> — THE INTEGRATION TRUNK<br/>builds nothing · deploys nothing · land all day")]
+    M -->|"kicked per land + launchd backstop · blocks nobody"| V["<b>postland-verify.sh</b> — ONE singleton, fresh worktree per run<br/>nice -n 19 + taskpolicy -c background<br/>typecheck · test:unit · build · design:gate<br/><i>VITEST_TIMEOUT_FACTOR=12 — band and budget chosen together</i>"]
+    V --> ST{"tree-keyed<br/>stamp"}
+    ST -->|"<b>RED</b> — real regression<br/>evidence in ~/.reso/verify-logs/"| P["production stays pinned<br/>to the last GREEN sha"]
+    ST -->|"<b>CUT</b> / <b>HUNG</b> — the gate could not RUN<br/>non-verdicts: convict nobody"| P
+    ST -->|"<b>GREEN</b>"| D(["<b>/deploy</b> → deploy-release.sh — THE ONLY STEP THAT SPENDS<br/>fail-closed: refuses without a green stamp<br/>shows the commit range + migrations in the batch<br/>re-asserts the DROP STOP-ASK across the whole range"])
+    D -->|"git push &lt;green-sha&gt;:release"| R[("origin/release")]
+    D -->|"aws amplify start-job --commit-id &lt;green-sha&gt;"| AO["<b>Amplify Oregon</b> — auto-build on main is OFF<br/>pnpm migrate (canary first) → pnpm build"]
+    R --> W{"deploy-ref<br/>filter"}
+    W -->|"any ref but refs/heads/release<br/><i>— including every land on main</i>"| SK["skipped: not-deploy-ref<br/><i>this is why a land is free</i>"]
+    W -->|"refs/heads/release"| PF["<b>reso-deploy</b> runner (Fly, iad)<br/>flyctl deploy — both regions in parallel<br/>drift-assert after each"]
+    PF --> LAX["reso-lax"]
+    PF --> SIN["reso-sin"]
+    LAX --> T["<b>8 production tenants</b><br/>ONE build per BATCH of lands"]
+    SIN --> T
+    AO --> T
     classDef trunk fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
-    classDef cost fill:#2b1618,stroke:#f85149,color:#e6edf3
     classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef safe fill:#12261a,stroke:#3fb950,color:#e6edf3
-    class BM,AM,AR trunk
-    class BP cost
-    class AV,AD gate
-    class AT safe
+    classDef hold fill:#161b22,stroke:#6e7681,color:#e6edf3
+    class M,R trunk
+    class V,ST,D,W gate
+    class T,LAX,SIN safe
+    class P,SK hold
 ```
 
-<sup><a href="../../assets/diagrams/deploy-trigger-decoupling-dark.svg?raw=true">full-screen dark</a> · <a href="../../assets/diagrams/deploy-trigger-decoupling-light.svg?raw=true">light</a> · <a href="../../assets/diagrams/deploy-trigger-decoupling.mmd">source</a></sup>
+<sup><a href="../../assets/diagrams/land-to-production-dark.svg?raw=true">full-screen dark</a> · <a href="../../assets/diagrams/land-to-production-light.svg?raw=true">light</a> · <a href="../../assets/diagrams/land-to-production.mmd">source</a></sup>
 
 </details>
 

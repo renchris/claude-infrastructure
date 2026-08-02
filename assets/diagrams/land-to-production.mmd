@@ -1,0 +1,26 @@
+flowchart TB
+    S["<b>30+ concurrent sessions</b><br/>each: own worktree · own account"] -->|"commit — atomic, explicit paths"| L["<b>/ship</b> → ship-land.sh · costs nothing<br/>esc-scan FIRST: DROP TABLE/COLUMN · auth · nav · DB-timeout → PARK<br/>ship-reconcile.sh in full on every CAS round (migration-safe)<br/>O(diff) statics only: eslint(changed) · tsc · migrate:lint<br/>CAS push, retry on non-ff → verify by CONTENT, never by count"]
+    L --> M[("<b>origin/main</b> — THE INTEGRATION TRUNK<br/>builds nothing · deploys nothing · land all day")]
+    M -->|"kicked per land + launchd backstop · blocks nobody"| V["<b>postland-verify.sh</b> — ONE singleton, fresh worktree per run<br/>nice -n 19 + taskpolicy -c background<br/>typecheck · test:unit · build · design:gate<br/><i>VITEST_TIMEOUT_FACTOR=12 — band and budget chosen together</i>"]
+    V --> ST{"tree-keyed<br/>stamp"}
+    ST -->|"<b>RED</b> — real regression<br/>evidence in ~/.reso/verify-logs/"| P["production stays pinned<br/>to the last GREEN sha"]
+    ST -->|"<b>CUT</b> / <b>HUNG</b> — the gate could not RUN<br/>non-verdicts: convict nobody"| P
+    ST -->|"<b>GREEN</b>"| D(["<b>/deploy</b> → deploy-release.sh — THE ONLY STEP THAT SPENDS<br/>fail-closed: refuses without a green stamp<br/>shows the commit range + migrations in the batch<br/>re-asserts the DROP STOP-ASK across the whole range"])
+    D -->|"git push &lt;green-sha&gt;:release"| R[("origin/release")]
+    D -->|"aws amplify start-job --commit-id &lt;green-sha&gt;"| AO["<b>Amplify Oregon</b> — auto-build on main is OFF<br/>pnpm migrate (canary first) → pnpm build"]
+    R --> W{"deploy-ref<br/>filter"}
+    W -->|"any ref but refs/heads/release<br/><i>— including every land on main</i>"| SK["skipped: not-deploy-ref<br/><i>this is why a land is free</i>"]
+    W -->|"refs/heads/release"| PF["<b>reso-deploy</b> runner (Fly, iad)<br/>flyctl deploy — both regions in parallel<br/>drift-assert after each"]
+    PF --> LAX["reso-lax"]
+    PF --> SIN["reso-sin"]
+    LAX --> T["<b>8 production tenants</b><br/>ONE build per BATCH of lands"]
+    SIN --> T
+    AO --> T
+    classDef trunk fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef gate fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef safe fill:@green-bg,stroke:@green-fg,color:@text
+    classDef hold fill:@gray-bg,stroke:@gray-fg,color:@text
+    class M,R trunk
+    class V,ST,D,W gate
+    class T,LAX,SIN safe
+    class P,SK hold
