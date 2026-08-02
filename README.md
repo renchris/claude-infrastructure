@@ -174,6 +174,61 @@ Three traps make naive automation fail. Each is defeated by a mechanism, not by 
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
 
+### The second half: when landing costs money, landing stops happening
+
+**Everything above assumes landing is free. In an app repo it wasn't — and that one fact produced every symptom people blame on git.** `reso-management-app` runs the same architecture, where a push to trunk fired an AWS Amplify build *and* a two-region Fly release. So `/ship` was one atomic act meaning two different things: *integrate my work* (cheap, should be constant) and *update production for paying users* (expensive, deliberate). Gating the second gated the first.
+
+<!-- Diagram source: assets/diagrams/deploy-trigger-decoupling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-trigger-decoupling-dark.svg">
+  <img src="assets/diagrams/deploy-trigger-decoupling-light.svg" alt="Before and after the decoupling. BEFORE: 30+ concurrent worktree sessions push to origin/main, and every push — even a docs-only commit — fires an Amplify Oregon build plus Fly LAX and Fly SIN releases, reaching 8 production tenants. AFTER: the same sessions land continuously on origin/main, which is now a free integration trunk that bills nothing; a single postland verifier running in the background band proves each tip and emits a GREEN stamp; the operator's explicit /deploy fast-forwards origin/release to a stamped sha, and only that produces one build per batch of lands, reaching the 8 production tenants.">
+</picture>
+
+<details>
+<summary>Interactive Diagram</summary>
+
+<!-- mermaid-fence: assets/diagrams/deploy-trigger-decoupling.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart TB
+    subgraph before["BEFORE · land = deploy"]
+        direction TB
+        BS["30+ concurrent worktree sessions"] --> BM[("origin/main")]
+        BM -->|"EVERY push — even a docs-only commit"| BP["Amplify Oregon build<br/>+ Fly LAX + Fly SIN"]
+        BP --> BT["8 production tenants"]
+    end
+    subgraph after["AFTER · land ≠ deploy"]
+        direction TB
+        AS["30+ concurrent worktree sessions"] --> AM[("origin/main<br/><i>free integration trunk</i>")]
+        AM -->|"lands continuously · bills nothing"| AV["postland verifier<br/>ONE singleton · background band<br/>full suite, blocking nobody"]
+        AV -->|"GREEN stamp only · fail-closed"| AD(["<b>/deploy</b> — the operator's explicit act"])
+        AD -->|"fast-forward to a stamped sha"| AR[("origin/release")]
+        AR -->|"ONE build per BATCH of lands"| AT["8 production tenants"]
+    end
+    classDef trunk fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
+    classDef cost fill:#2b1618,stroke:#f85149,color:#e6edf3
+    classDef gate fill:#2b2410,stroke:#d4af37,color:#e6edf3
+    classDef safe fill:#12261a,stroke:#3fb950,color:#e6edf3
+    class BM,AM,AR trunk
+    class BP cost
+    class AV,AD gate
+    class AT safe
+```
+
+<sup><a href="assets/diagrams/deploy-trigger-decoupling-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/deploy-trigger-decoupling-light.svg?raw=true">light</a> · <a href="assets/diagrams/deploy-trigger-decoupling.mmd">source</a></sup>
+
+</details>
+
+The measured cost of the coupling, before the cutover: **1,811 commits across 168 branches that existed on exactly one Mac's disk**, 176 branches diverged from trunk, and a **50.2% first-attempt land success rate** over 277 attempts. None of that is a merge problem — merge-conflict probability is a function of *divergence time*, and divergence time was being set by a billing gate that has nothing to do with merging. So the fix is not a better merge strategy:
+
+> Landing stops costing money ⇒ the reason to gate `/ship` evaporates ⇒ agents land continuously ⇒ branches stay 0–3 commits from trunk ⇒ **the conflict class collapses on its own.**
+
+**And production safety goes up, not down.** Before, production received whatever was pushed, gated only by a local pre-push hook that could be flaky, skipped, or SIGPIPE'd. After, it advances only to a sha the singleton verifier stamped green — fail-closed, and a guarantee that repo had never had. Proven end to end on 2026-08-02: a commit landed to trunk and moved **zero** Amplify jobs and **zero** Fly releases, while the tenants kept serving the previously-deployed sha.
+
+Two findings from that second implementation are **not** repo-specific, and both are worth auditing wherever this architecture runs — full write-up in [`docs/plans/DEPLOY_DECOUPLING_V2.md`](docs/plans/DEPLOY_DECOUPLING_V2.md):
+
+- **An invariant with N triggers needs N assertions.** "A push to trunk builds nothing" rested on two independent mechanisms — a console checkbox and a deployed service's ref filter. Only one was asserted, so the cutover *reported success at half done* while the other half shipped 13 production releases in 24 hours, the last four off documentation-only commits. Neither half is visible from the other, which makes one ✓ actively misleading rather than merely incomplete. Both are now read from the live APIs on every readout, and unreadable reports **UNKNOWN**, never "assumed safe".
+- **A scheduling decision is a timeout decision.** The verifier runs in the background band so it can never block a colleague — but its test runner's per-test budgets are *wall clock*, and deprioritising a process whose deadlines are wall-clock doesn't slow it gracefully, it **fails** it. Its first real run stamped the trunk RED with twelve failed files, **zero** assertion failures, on a tree that was green at normal priority. This repo's exposure is genuinely smaller — bats has no per-test deadline — but 16 of its 269 `tests/*.bats` hardcode a `timeout N`, the shortest 2–3s, which is the same race.
+
 ### Why 30+ panes freezes iTerm2 — and why the GPU can't fix it
 
 **It isn't a memory leak — it's windows that don't die.** iTerm2 has an open, unfixed upstream bug (#12097, #12645, #12905): closing a tab to zero panes should destroy its `NSWindow`; on iTerm2 it doesn't. One session left 98 "closed" windows alive, and each still costs the compositor real objects: a **window** costs ~28–34 MB of backing store + ~4.9 Mach ports to WindowServer; a **pane** inside an existing window costs almost nothing (~3 IOSurfaces, ~0 net bytes). Spreading 30 sessions across 30 windows costs WindowServer **2.35× more CPU than the same 30 panes gathered into one window** — while iTerm2 itself measured **0.0% CPU** and WindowServer sat at 92–99.9%. The window is the expensive unit; the app's own memory was never the culprit.
