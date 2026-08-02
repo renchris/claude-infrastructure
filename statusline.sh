@@ -264,7 +264,8 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             */.claude-denary)     NIDX=10 ;;
         esac
     fi
-    # n -> a PARENTHESIS RING around the plain ASCII digits of n: `(3)`. Both characters
+    # n -> PER TERMINAL: the circled glyph ①..⑳ under iTerm2 (where it renders at natural
+    # size, ~27px, and looks right), an ASCII paren ring `(3)` everywhere else. Both
     # come from the terminal's OWN font, so nothing is substituted or rescaled.
     #
     # 🚨 Do NOT "restore the nice circled glyph", and do not go looking for a better FONT
@@ -298,10 +299,25 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     # reverse-video chip ` 3 ` (legible, but a heavy block).
     if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
         # Pinned to the LEFT edge (prepended at the final echo) so a narrow terminal's
-        # ellipsis never eats it. RESET after the ring so the following segment keeps its
-        # own color (default in the no-context path, or the GRAY the context-% block adds).
-        # Ring muted, digit bright: the number is what gets read, the ring only frames it.
-        GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}${NIDX}${NEXT_RING})${RESET} "
+        # ellipsis never eats it. RESET after it so the following segment keeps its own
+        # color (default in the no-context path, or the GRAY the context-% block adds).
+        #
+        # PER-TERMINAL, and the gate is a POSITIVE iTerm2 check, never "not kitty".
+        # "Draw the fallback glyph at natural size and let it overflow the cell" is an
+        # iTerm2 behaviour, not a universal one — it is exactly what makes ① legible there
+        # (~27px, i.e. BIGGER than the 23px text) and it is the thing kitty declines to do.
+        # A `!= xterm-kitty` gate would hand the glyph to every OTHER terminal too, and any
+        # of them that squeezes like kitty (or worse, has no CJK fallback at all) silently
+        # gets back the unreadable 18px ring this whole block exists to prevent. So: iTerm2
+        # opts IN by name; everything else — kitty, Terminal.app, Ghostty, WezTerm, tmux,
+        # a pipe — takes the ASCII ring, which is 28px and correct everywhere.
+        GLYPHS=(① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ ⑪ ⑫ ⑬ ⑭ ⑮ ⑯ ⑰ ⑱ ⑲ ⑳)
+        if [ "$NIDX" -le 20 ] && { [ "${TERM_PROGRAM:-}" = "iTerm.app" ] || [ -n "${ITERM_SESSION_ID:-}" ]; }; then
+            GLYPH_PREFIX="${NEXT_NUM}${GLYPHS[$((NIDX-1))]}${RESET}  "
+        else
+            # Ring muted, digit bright: the number is what gets read, the ring only frames it.
+            GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}${NIDX}${NEXT_RING})${RESET} "
+        fi
     fi
 fi
 
