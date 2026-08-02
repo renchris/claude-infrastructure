@@ -40,7 +40,65 @@ lead noticed and re-derived them; the next wave hits the same wall.
 | …in `anti-deference-nudge.sh` | **1** | same |
 | …in `session-continue.sh` | **10** | same |
 
-## Why it loops (hypothesis to CONFIRM, not assume)
+## MEASURED 2026-08-02 (supersedes the hypothesis below on the mechanism and the blocker list)
+
+Raw hook payloads captured by registering a dump-only hook on `Stop` / `SubagentStop` /
+`TeammateIdle` / `TaskCompleted` in a scoped project `settings.local.json`, then spawning real
+subagents. **There are two subagent shapes with OPPOSITE exposure, and the plan below conflates
+them.**
+
+| | Foreground subagent (`run_in_background:false`) | Background / named subagent |
+|---|---|---|
+| Event fired | **`SubagentStop`** (`hook_event_name:"SubagentStop"`) | **`Stop`** — the full main-session chain |
+| Hooks registered for it | **0** | **11** (3 can block) |
+| Process | in-process; no own session | a **real child session**: `claude.exe --agent-id <n>@session-<t> --agent-name <n> --team-name <t> --parent-session-id <p>` |
+| Own transcript | `agent_transcript_path`, `isSidechain` records | its own top-level `.jsonl`, `isSidechain:false` |
+| Can it be blocked? | **No** | **Yes — reproduced** |
+
+So **approach 1 is refuted**: for the foreground shape there is nothing to fix (zero `SubagentStop`
+hooks), and for the background shape "detect a subagent and no-op" would suppress the guard for a
+real session that can genuinely leave uncommitted work — an R3 violation. **Approach 2 (attribution)
+is the answer.**
+
+### Blocker census — it is ONE hook, not three
+
+Every block-capable Stop hook run against the measured background-agent payload, in a repo carrying
+a *lead's* dirty + unlanded state, with a read-only research close:
+
+| Hook | Verdict | Why |
+|---|---|---|
+| `completion-assert.sh` | **BLOCK** | convicts on the ledger regardless of authorship — **the defect** |
+| `session-continue.sh` | allow | `wf_assignee_argv` (:270) already abstains for team assignees — verified against the *real* measured argv, and correctly refuses a main-session argv |
+| `anti-deference-nudge.sh` | allow | needs a deference phrase |
+| `dispatch-assert.sh` · `boundary-handoff.sh` · `operator-readout.sh` | allow | no naming tell / below threshold / advisory only |
+
+The plan's "three blocking hooks in the loop" is wrong: `anti-deference-nudge.sh` does not fire, and
+`session-continue.sh` was already fixed (`7c059992`). Also **the loop is bounded, not
+non-terminating** — `completion-assert` caps at `COMPLETION_MAX` (3) with a per-message latch. The
+cost is real (a wave that delivers nothing) but the "burns the whole agent budget" framing overstates
+it; R4's unbounded-loop premise does not hold.
+
+### What this session fixed, and what it did not
+
+The remaining conviction lives in `hooks/completion-assert.sh`, and a **concurrent session on
+`fix/completion-assert-attribution` was actively editing that file** during this investigation, so it
+was left to that owner rather than same-hunk-collided.
+
+What this session did fix is the thing that fix rests on: `hooks/lib/session-writes.sh`, the SSOT
+attribution oracle, **had no test coverage at all**, and pinning it found a live R3 false-green —
+`git status --porcelain` collapses a wholly untracked directory to one record (`?? src/`), so a
+session's own new file inside a **new directory** matched nothing and was reported as *"nothing of
+mine is dirty"*. That EXONERATES a session that really did leave uncommitted work — i.e. exactly the
+difference between the attribution fix working and it being indistinguishable from a disabled guard.
+Fixed with `-uall`; RED-proved against the pristine tree via `git archive` (5 tests fail before, 16/16
+after, all 124 consumer tests green).
+
+A second suspected defect was **measured and dismissed rather than fixed**: a transcript with an
+unparseable line makes `jq` exit non-zero, so the whole read becomes cannot-tell ⇒ convict. Rate on
+live data: **0 of 400 fleet transcripts**. And the conservative direction is correct anyway — a
+*partial* parse could omit a write and falsely exonerate. Pinned as the intended contract.
+
+## Why it loops (hypothesis to CONFIRM, not assume — SUPERSEDED, see MEASURED above)
 
 `completion-assert.sh` blocks a stop when the live git ledger shows committed-but-unlanded work, and
 `anti-deference-nudge.sh` blocks when the close "reads as done" without driving. A **read-only research
@@ -103,3 +161,13 @@ not proof of the subagent path specifically.
   Mechanism hypothesised (ledger-conviction of a session that cannot commit), NOT yet confirmed
   against hook source. Next: empirically capture the raw hook payload for a subagent stop to settle
   approach 1 vs 2 before writing any fix.
+- 2026-08-02 — **Payload captured; premise half-refuted; approach 2 selected.** See § MEASURED.
+  Foreground subagents fire `SubagentStop` (0 hooks registered) and cannot be blocked; background /
+  named subagents are real child sessions that run the full `Stop` chain and CAN be — reproduced.
+  Blocker census narrowed 3 → 1 (`completion-assert.sh` only). Loop is bounded (cap 3), not
+  non-terminating. `session-continue.sh` already correct via `wf_assignee_argv`.
+  **Fixed here:** `hooks/lib/session-writes.sh` untracked-directory collapse — an R3 false-green that
+  silently exonerated a session's own new-directory writes — plus `tests/session-writes.bats`, first
+  coverage for the SSOT attribution oracle (16 tests, RED-proved via `git archive`).
+  **Left to its owner:** the `completion-assert.sh` exoneration wiring, in flight on
+  `fix/completion-assert-attribution` during this session; not same-hunk collided.
