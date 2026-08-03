@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""cc-url-open — kitty's open_url_with handler: send a claude.ai link to the Dia
+Space (Chromium profile) belonging to the Claude account that owns the pane you
+clicked in, instead of whichever Space Dia happens to have in front.
+
+THE DEFECT THIS CLOSES. Every pane routes through one `open -b company.thebrowser.dia`,
+and LaunchServices has no profile knob — so an artifact published by the account-3
+session opens in the account-1 Space and renders "Page not found". The link is not
+broken; it is being handed to a browser identity that cannot see it.
+
+WHY CDP AND NOT A FLAG (both alternatives measured 2026-08-03, do not re-try them):
+  · `Dia --profile-directory="Profile 15" URL` does NOT work, and neither does the same
+    launch WITHOUT the flag: Dia's binary will not forward a URL to a running instance
+    at all. Both probes sat alive for 60s+ and opened nothing. Only LaunchServices
+    reaches the live app, and it takes no profile.
+  · `Target.createTarget({url, browserContextId})` — the path skills/dia-agent/SKILL.md
+    prescribes — is REFUSED across profiles: "Failed to find browser context with id".
+    It works for contexts DevTools itself created, not for a sibling profile's Space.
+  What does work: attach to a tab already living in the target Space and have that page
+  open the link itself. The tab inherits its opener's profile by construction.
+
+OPPORTUNISTIC BY DESIGN (operator decision 2026-08-03). Dia's remote-debugging port is
+unauthenticated and exposes every Space's cookie store, so this NEVER turns it on and
+never asks you to. Port down, no registry row, ambiguous profile, CDP error, deadline
+blown — every one of those falls through to exactly today's behaviour. The worst case
+is the behaviour you already have, which is why this is safe to put in the click path.
+"""
+
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = os.path.expanduser("~")
+DIA_BUNDLE = "company.thebrowser.dia"
+DIA_UD = os.environ.get(
+    "CC_URL_OPEN_USER_DATA", f"{HOME}/Library/Application Support/Dia/User Data"
+)
+REGISTRY = os.environ.get("CC_URL_OPEN_REGISTRY", f"{HOME}/.claude/cc-registry")
+ACCOUNTS = os.environ.get("CC_URL_OPEN_ACCOUNTS", f"{HOME}/.claude/accounts.json")
+CACHE = os.environ.get("CC_URL_OPEN_CACHE", "/tmp/cc-url-open-ctx.json")
+
+# The click path is interactive: a link that takes 4s to open reads as broken. Every
+# phase is bounded and the whole route shares one deadline — blowing it is a fallback,
+# never a hang. A bound sized from the fast path would only ever convict, so this is
+# sized from the slow one (cold History correlation across 4 profiles).
+DEADLINE_S = float(os.environ.get("CC_URL_OPEN_DEADLINE", "6"))
+ROUTED_HOSTS = ("claude.ai", "www.claude.ai", "claude.com", "www.claude.com")
+
+
+def log(msg):
+    if os.environ.get("CC_URL_OPEN_DEBUG"):
+        sys.stderr.write(f"cc-url-open: {msg}\n")
+
+
+def fallback(urls):
+    """Today's behaviour, unchanged. The one exit that must never itself fail."""
+    for u in urls:
+        try:
+            subprocess.run(["open", "-b", DIA_BUNDLE, u], timeout=10, check=False)
+        except Exception as e:  # noqa: BLE001 — a dead fallback is worse than a slow one
+            log(f"fallback failed for {u}: {e}")
+
+
+def is_routed(url):
+    m = re.match(r"^https?://([^/:?#]+)", url or "", re.I)
+    return bool(m) and m.group(1).lower() in ROUTED_HOSTS
+
+
+# ── pane → account ────────────────────────────────────────────────────────────────────
+def kitty_sockets():
+    """kitty's own env is NOT ours: open_url_with children are spawned by kitty itself,
+    so KITTY_LISTEN_ON may be absent. Enumerating the socket files is the durable read —
+    /tmp/kitty-* also holds ordinary files (screenshots, conf backups), hence the mode
+    test rather than a glob-and-hope."""
+    to = os.environ.get("CC_URL_OPEN_KITTY_TO") or os.environ.get("KITTY_LISTEN_ON")
+    if to:
+        return [to]
+    out = []
+    for name in sorted(os.listdir("/tmp")):
+        if not name.startswith("kitty-"):
+            continue
+        p = f"/tmp/{name}"
+        try:
+            import stat
+
+            if stat.S_ISSOCK(os.stat(p).st_mode):
+                out.append(f"unix:{p}")
+        except OSError:
+            continue
+    return out
+
+
+def focused_window_id():
+    fixture = os.environ.get("CC_URL_OPEN_KITTY_LS")
+    socks = ["fixture"] if fixture else kitty_sockets()
+    for sock in socks:
+        try:
+            if fixture:
+                raw = open(fixture).read()
+            else:
+                raw = subprocess.run(
+                    ["kitty", "@", "--to", sock, "ls"],
+                    capture_output=True, text=True, timeout=3, check=False,
+                ).stdout
+            data = json.loads(raw or "[]")
+        except Exception as e:  # noqa: BLE001
+            log(f"kitty ls failed on {sock}: {e}")
+            continue
+        for osw in data:
+            if not osw.get("is_focused", True):
+                continue
+            for tab in osw.get("tabs", []):
+                if not tab.get("is_focused", True):
+                    continue
+                for w in tab.get("windows", []):
+                    if w.get("is_focused"):
+                        return str(w.get("id"))
+    return None
+
+
+def account_for_window(win_id):
+    """cc-registry already records the account per pane — the same row cc-notify and
+    cc-sessions read. Reusing it means this handler cannot drift from the fleet's own
+    idea of who owns a pane."""
+    if not win_id:
+        return None
+    try:
+        with open(os.path.join(REGISTRY, f"{win_id}.json")) as fh:
+            return (json.load(fh) or {}).get("account") or None
+    except Exception as e:  # noqa: BLE001
+        log(f"no registry row for window {win_id}: {e}")
+        return None
+
+
+def profile_dir_for_account(account):
+    """account ('claude-tertiary') → accounts.json dia_profile ('Claude3') → the on-disk
+    profile directory ('Profile 15'). Both hops are SSOT reads: accounts.json owns the
+    identity map, Dia's Local State owns the display-name→directory mapping. Neither is
+    hardcoded here, so adding a 5th account needs no edit to this file."""
+    try:
+        accounts = json.load(open(ACCOUNTS)).get("accounts", [])
+    except Exception as e:  # noqa: BLE001
+        log(f"accounts.json unreadable: {e}")
+        return None
+    want = None
+    for a in accounts:
+        cfg = os.path.basename(os.path.expanduser(a.get("config_dir", ""))).lstrip(".")
+        if cfg == str(account).lstrip("."):
+            want = a.get("dia_profile")
+            break
+    if not want:
+        log(f"no dia_profile for account {account}")
+        return None
+    try:
+        cache = json.load(open(os.path.join(DIA_UD, "Local State")))
+        info = cache.get("profile", {}).get("info_cache", {})
+    except Exception as e:  # noqa: BLE001
+        log(f"Local State unreadable: {e}")
+        return None
+    for directory, meta in info.items():
+        if (meta or {}).get("name") == want:
+            return directory
+    log(f"no Dia profile directory named {want}")
+    return None
+
+
+# ── profile ↔ Space (browserContextId) ────────────────────────────────────────────────
+def cdp_connect():
+    try:
+        import websocket  # websocket-client
+    except ImportError:
+        log("websocket-client not installed")
+        return None
+    try:
+        port, path = open(os.path.join(DIA_UD, "DevToolsActivePort")).read().split("\n")[:2]
+    except Exception as e:  # noqa: BLE001
+        log(f"no DevToolsActivePort (debugging off): {e}")
+        return None
+    try:
+        # suppress_origin is load-bearing: Dia rejects any Origin header with 403 unless
+        # it was launched --remote-allow-origins=*. Sending an EMPTY Origin is still
+        # sending one, and is rejected identically.
+        return websocket.create_connection(
+            f"ws://127.0.0.1:{port.strip()}{path.strip()}", timeout=4, suppress_origin=True
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"CDP connect failed (port down?): {e}")
+        return None
+
+
+class Cdp:
+    def __init__(self, ws):
+        self.ws, self.n = ws, 0
+
+    def call(self, method, params=None, session=None, deadline=None):
+        self.n += 1
+        msg = {"id": self.n, "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        self.ws.send(json.dumps(msg))
+        while True:
+            if deadline and time.time() > deadline:
+                raise TimeoutError(method)
+            r = json.loads(self.ws.recv())
+            if r.get("id") == self.n:
+                if "error" in r:
+                    raise RuntimeError(f"{method}: {r['error']}")
+                return r.get("result", {})
+
+
+def profile_urls(directory):
+    """Read one profile's visited URLs. Copies rather than opening in place — the
+    operator's live browser holds this DB, and a reader that interferes with their
+    browsing to fix a link is a bad trade."""
+    src = os.path.join(DIA_UD, directory, "History")
+    if not os.path.exists(src):
+        return set()
+    tmp = tempfile.mkdtemp(prefix="cc-url-open-")
+    dst = os.path.join(tmp, "History")
+    try:
+        shutil.copy(src, dst)
+        for ext in ("-wal", "-shm"):
+            if os.path.exists(src + ext):
+                shutil.copy(src + ext, dst + ext)
+        con = sqlite3.connect(dst)
+        try:
+            return {u for (u,) in con.execute("SELECT url FROM urls")}
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        log(f"history read failed for {directory}: {e}")
+        return set()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def context_for_profile(cdp, directory, deadline):
+    """Dia exposes no profile name on a CDP context — the browserContextId is a runtime
+    hex that changes every launch. So the mapping is INFERRED: a Space's open tabs were
+    visited by exactly one profile, so a URL present in only ONE profile's history
+    identifies its owner. Shared URLs (claude.ai/new, a localhost preview opened in two
+    Spaces) identify nothing and are discarded rather than voted on — an ambiguous
+    answer here would open your work in someone else's Space, so no-answer is the only
+    safe reading of a tie.
+
+    Cached per Dia PID: contexts are stable for the life of the browser process, and the
+    correlation costs four History copies."""
+    pid = dia_pid()
+    try:
+        cached = json.load(open(CACHE))
+        if cached.get("pid") == pid and directory in cached.get("map", {}):
+            ctx = cached["map"][directory]
+            log(f"cache hit {directory} -> {ctx}")
+            return ctx
+    except Exception:  # noqa: BLE001 — a cold/corrupt cache is just a miss
+        cached = {}
+
+    infos = cdp.call("Target.getTargets", deadline=deadline).get("targetInfos", [])
+    by_ctx = {}
+    for t in infos:
+        if t.get("type") == "page" and (t.get("url") or "").startswith(("http", "file")):
+            by_ctx.setdefault(t["browserContextId"], set()).add(t["url"])
+    if not by_ctx:
+        return None
+
+    try:
+        dirs = list(json.load(open(os.path.join(DIA_UD, "Local State")))
+                    .get("profile", {}).get("info_cache", {}).keys())
+    except Exception:  # noqa: BLE001
+        return None
+    hist = {d: profile_urls(d) for d in dirs}
+    if directory not in hist:
+        return None
+
+    winner = None
+    for ctx, urls in by_ctx.items():
+        # Keep only URLs that exactly one profile has ever visited.
+        unique = [u for u in urls if sum(1 for d in dirs if u in hist[d]) == 1]
+        owners = {d for u in unique for d in dirs if u in hist[d]}
+        if owners == {directory}:
+            if winner and winner != ctx:
+                log(f"two contexts claim {directory} — refusing to guess")
+                return None
+            winner = ctx
+    if winner:
+        cached = {"pid": pid, "map": {**cached.get("map", {}), directory: winner}} \
+            if cached.get("pid") == pid else {"pid": pid, "map": {directory: winner}}
+        try:
+            with open(CACHE, "w") as fh:
+                json.dump(cached, fh)
+        except OSError as e:
+            log(f"cache write failed: {e}")
+    return winner
+
+
+def dia_pid():
+    try:
+        out = subprocess.run(["pgrep", "-f", "Dia.app/Contents/MacOS/Dia$"],
+                             capture_output=True, text=True, timeout=3, check=False).stdout
+        return int(out.split()[0]) if out.split() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# ── the route ─────────────────────────────────────────────────────────────────────────
+def route(url, deadline, explain=False):
+    """True iff the URL was opened in the account's own Space. False means the caller
+    must fall back — this function never opens anything on the fallback path, so the two
+    can't double-open."""
+    win = focused_window_id()
+    account = account_for_window(win)
+    directory = profile_dir_for_account(account) if account else None
+    if explain:
+        print(f"window={win} account={account} profile_dir={directory}")
+    if not directory or os.environ.get("CC_URL_OPEN_NO_CDP"):
+        return False
+
+    ws = cdp_connect()
+    if ws is None:
+        return False
+    try:
+        cdp = Cdp(ws)
+        ctx = context_for_profile(cdp, directory, deadline)
+        if explain:
+            print(f"browserContextId={ctx}")
+        if not ctx:
+            return False
+        host = None
+        for t in cdp.call("Target.getTargets", deadline=deadline).get("targetInfos", []):
+            if (t.get("browserContextId") == ctx and t.get("type") == "page"
+                    and (t.get("url") or "").startswith("http")):
+                host = t
+                break
+        if not host:
+            log(f"Space {ctx} has no http tab to open from")
+            return False
+        if explain:
+            print(f"host_tab={host.get('url','')[:60]}")
+            return True
+        sid = cdp.call("Target.attachToTarget",
+                       {"targetId": host["targetId"], "flatten": True},
+                       deadline=deadline).get("sessionId")
+        cdp.call("Runtime.evaluate",
+                 {"expression": f"window.open({json.dumps(url)}, '_blank')",
+                  "userGesture": True},
+                 session=sid, deadline=deadline)
+        # Bring the new tab (and so its Space) to the front, then Dia itself: routing a
+        # link into a Space you cannot see is only half an answer.
+        time.sleep(0.4)
+        for t in cdp.call("Target.getTargets", deadline=deadline).get("targetInfos", []):
+            if t.get("browserContextId") == ctx and t.get("url") == url:
+                try:
+                    cdp.call("Target.activateTarget", {"targetId": t["targetId"]},
+                             deadline=deadline)
+                except Exception as e:  # noqa: BLE001 — the tab exists; focus is a bonus
+                    log(f"activateTarget failed: {e}")
+                break
+        subprocess.run(["open", "-b", DIA_BUNDLE], timeout=5, check=False)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log(f"route failed: {e}")
+        return False
+    finally:
+        try:
+            ws.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def main(argv):
+    explain = "--explain" in argv
+    urls = [a for a in argv if not a.startswith("--")]
+    if not urls:
+        sys.stderr.write("usage: cc-url-open [--explain] <url>...\n")
+        return 2
+    deadline = time.time() + DEADLINE_S
+    for url in urls:
+        routed = False
+        if is_routed(url):
+            routed = route(url, deadline, explain=explain)
+        if explain:
+            print(f"routed={routed} url={url}")
+            continue
+        if not routed:
+            fallback([url])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

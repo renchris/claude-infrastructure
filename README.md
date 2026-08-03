@@ -786,6 +786,28 @@ loader — so a rename in a future kitty fails there rather than under your fing
   `tab_bar_min_tabs 1`, which is deliberately off here: a permanently visible tab bar costs one
   text row in every OS window, and at 30 panes that row is screen space this repo will not spend.
 
+**Clicking a claude.ai link opens it as the account that owns the pane.** Every pane used to share
+one `open_url_with open -b company.thebrowser.dia`, and LaunchServices has no profile argument — so
+an artifact published by the account-3 session opened in the account-1 Dia Space and rendered *Page
+not found*. The link was never broken; it was handed to a browser identity that could not see it.
+[`bin/cc-url-open`](bin/cc-url-open) closes that: it reads the **focused kitty window**, looks that
+pane's account up in `cc-registry` (the same row `cc-notify` reads), maps it through `accounts.json`
+→ Dia's `Local State` to that account's Space, and opens the link *there*. Nothing else changes —
+non-`claude.ai` URLs, a pane with no registry row, an unknown account and every error take the
+`open -b` path this used to be, so the worst case is exactly the old behaviour.
+
+The transport is the interesting part, and two obvious routes are dead ends worth naming: Dia's
+binary **will not forward a URL to a running Dia at all** (with *or* without `--profile-directory` —
+both launches sit alive and open nothing), and `Target.createTarget({browserContextId})` is
+**refused across profiles** even though `Target.getTargets` reports the id. What works is attaching
+to a page that already lives in the target Space and having *it* `window.open` the link — the new
+tab inherits its opener's profile by construction. That needs Dia's remote-debugging port, which is
+unauthenticated and exposes every Space, so this **never enables it** and never asks you to: port
+down (or a consent dialog pending) is just another fallback. Pinned by
+[`tests/cc-url-open.bats`](tests/cc-url-open.bats), where every unhappy path asserts the same thing
+— the URL still reaches `open`. A handler that can swallow a click is worse than one that routes it
+wrong.
+
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
 **Re-recording the demos.** `assets/demo/handoff-real.webp` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape`, then `gif2webp -m 6 -min_size` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.webp` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it, and it is encoded `img2webp -near_lossless 40`. The two routes differ because the content does: flat terminal output converts losslessly (`gif2webp`, 10.6 % smaller), while a live screen recording must be **near-lossless** — ordinary lossy WebP encodes each frame as a partial update rectangle, and the flat grey of an unfocused pane re-quantizes differently inside that rectangle than outside, leaving a visible vertical seam. Measurements in the `demo-recording` skill.
