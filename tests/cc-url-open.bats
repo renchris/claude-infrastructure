@@ -129,6 +129,34 @@ EOF
   [[ "$output" == *"window=None"* ]]
 }
 
+@test "kitty not frontmost (nothing is_focused) still resolves via is_active" {
+  # The live shape when any other app holds focus — including the Dia window this handler
+  # itself raises. A resolver that only reads is_focused returns None here and the link
+  # quietly stops being routed, which is invisible: it just opens in the wrong Space again.
+  cat >"$D/kitty-ls.json" <<'EOF'
+[{"is_focused": false, "is_active": true, "tabs": [{"is_focused": false, "is_active": true,
+  "windows": [{"id": 361, "is_focused": false, "is_active": false},
+              {"id": 362, "is_focused": false, "is_active": true}]}]},
+ {"is_focused": false, "is_active": false, "tabs": [{"is_focused": false, "is_active": true,
+  "windows": [{"id": 999, "is_focused": false, "is_active": true}]}]}]
+EOF
+  run "$C" --explain "$ART"
+  [[ "$output" == *"window=362"* ]] || false
+  [[ "$output" == *"account=claude-tertiary"* ]]
+}
+
+@test "is_focused WINS over is_active when both are present" {
+  # Ordering matters: at a real click the focused pane is the one clicked in, and it is not
+  # always the active pane of the active tab (a click can focus a different window first).
+  cat >"$D/kitty-ls.json" <<'EOF'
+[{"is_focused": true, "is_active": true, "tabs": [{"is_focused": true, "is_active": true,
+  "windows": [{"id": 362, "is_focused": true, "is_active": false},
+              {"id": 999, "is_focused": false, "is_active": true}]}]}]
+EOF
+  run "$C" --explain "$ART"
+  [[ "$output" == *"window=362"* ]]
+}
+
 @test "several URLs in one invocation each reach open" {
   run "$C" "$ART" "https://example.com/x"
   [ "$status" -eq 0 ]
