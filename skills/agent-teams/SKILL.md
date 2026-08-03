@@ -1,7 +1,7 @@
 ---
 name: agent-teams
 description: >-
-  Full Agent-Teams orchestration + teammate-lifecycle discipline for spawning TEAMMATES that write code — Agent calls WITH team_name, worktree-isolated, persisting until shutdown. Load this BEFORE spawning any teammate/assignee and BEFORE planning implementation with 2+ code-writing tasks. Provides runtime detection (classic TeamCreate/TeamDelete on stable 2.1.114 vs the implicit-team Agent({team_name}) model on 2.1.178+), the task-type decision rule, the 5 mandatory brief-discipline rules (≤150-line briefs, pre-grep line ranges, visual-verify deferral, verbatim stop-on-issue clause, phase checkpoints), the 6-box pre-spawn checklist, sizing guardrails, per-teammate effort + non-session model-pinning mechanism (assignee honors model:, bare subagent ignores it), full lifecycle + graceful-shutdown/checkpoint/pane-close protocol, pull-based liveness detection, and crash recovery. Triggers: "spawn a teammate/assignee", "use agent teams", TeamCreate, Phase 0 orchestration, any implementation task touching 2+ files. NOT for fire-and-forget research/exploration subagents (use research-subagents).
+  Full Agent-Teams orchestration + teammate-lifecycle discipline for spawning TEAMMATES that write code — Agent calls WITH name: (NOT team_name, which does not exist on 2.1.220), persisting until shutdown. Load this BEFORE spawning any teammate/assignee and BEFORE planning implementation with 2+ code-writing tasks. Provides runtime detection (classic TeamCreate/TeamDelete on stable 2.1.114 vs the implicit-team Agent({name}) model on 2.1.178+), the task-type decision rule, the 5 mandatory brief-discipline rules (≤150-line briefs, pre-grep line ranges, visual-verify deferral, verbatim stop-on-issue clause, phase checkpoints), the 6-box pre-spawn checklist, sizing guardrails, per-teammate effort + non-session model-pinning mechanism (assignee honors model:; a bare subagent also READS model: but both fall back on allowlist rejection), full lifecycle + graceful-shutdown/checkpoint/pane-close protocol, pull-based liveness detection, and crash recovery. Triggers: "spawn a teammate/assignee", "use agent teams", TeamCreate, Phase 0 orchestration, any implementation task touching 2+ files. NOT for fire-and-forget research/exploration subagents (use research-subagents).
 ---
 
 # Agent Teams: Cross-Project Orchestration Rules
@@ -17,7 +17,7 @@ Loaded by `~/.claude/CLAUDE.md` Agent Teams section. Applies to **every project*
 - **Eval** (`claude` / `cc` → CC **2.1.219**, the `~/.claude-219` binary; `claude-next` and
   `claude-opus5` are back-compat shims onto the same body): on **2.1.178+**, which
   **removed `TeamCreate` / `TeamDelete`** for an **implicit-team model** — you spawn teammates by
-  calling the **`Agent` tool with `team_name`** (the runtime forms the team implicitly; the
+  calling the **`Agent` tool with `name:`** (the runtime forms the team implicitly at STARTUP; the
   `TeamCreate`/`TeamDelete` *tools* simply don't exist). Agent Teams are ENABLED here
   (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) and **validated working on 2.1.183** (verified
   2026-06-20). The earlier "183 is deliberately not a teams runtime / needs doc-migration first"
@@ -38,7 +38,7 @@ absent ⟹ implicit-team model ⟹ 2.1.178+). **Absence of `TeamCreate` means US
 model — NOT "teams are unavailable, build solo."** (That wrong inference cost a session 2026-06-20.)
 
 **When on the eval track:** read every `TeamCreate` / `TeamDelete` example below as the *2.1.114*
-surface — do the equivalent via `Agent({ name, team_name, model, … })` to spawn + `shutdown_request`
+surface — do the equivalent via `Agent({ name, model, … })` to spawn + `shutdown_request`
 to each teammate to tear down (there is no `TeamDelete` call). The teammate `model` MUST be on the
 Max auto-mode allowlist (`claude-opus-4-8` / `claude-fable-5`); a bare background subagent is
 hard-blocked from writing code, and `sonnet` silent-demotes to acceptEdits + breaks parallelism
@@ -46,6 +46,38 @@ hard-blocked from writing code, and `sonnet` silent-demotes to acceptEdits + bre
 worktree-isolated build (query/round-trip optimization), 2026-06-21. Stable hold recorded in
 `~/.claude-versions/MANIFEST.jsonl` (`2.1.183 → skip`, eval-only — a launcher-nag silencer, not a
 teams verdict).
+
+🚨 **`team_name` DOES NOT EXIST on 2.1.220 — `name:` ALONE is the gate** (binary-extracted
+2026-08-03; this section said `team_name` for weeks and that argument was inert). The Agent tool's
+own destructure is `{prompt, subagent_type, description, model, run_in_background, name, isolation,
+cwd}`. The team is synthesised **at startup**, not at spawn — hence the binary's own error string
+*"session team not initialized. This should have happened at startup when agent swarms are
+enabled"* — and it is named `session-<parent-sid8>`, which is why that value shows up in a
+teammate's argv though nobody passed it. The spawn branch is
+`if (teamContext && name && !fork && !isolation && !cwd)`. Three live consequences:
+
+- **`isolation:"worktree"` or `cwd` passed ALONGSIDE `name` SILENTLY DEMOTES the spawn** to an
+  in-process subagent — no pane, no child process, no mailbox, and **no error**. Since this skill
+  elsewhere says teammates are worktree-isolated, that is a loaded gun: give the teammate a
+  worktree PATH in its brief; never pass `isolation` next to `name`.
+- **`run_in_background` is dead input on the named path** — the branch returns before reading it.
+  So a "background research subagent" that passed `name` IS a teammate: real child process, own
+  session, own pane, mailbox-only return. That is why `TaskStop` reported
+  `task_type: in_process_teammate` for spawns believed to be bare subagents (memory
+  `shutdown-request-is-not-an-actuator.md`).
+- **Named + no pane backend is a THIRD state** — `is_splitpane:false`,
+  `tmux_pane_id:"in-process"`: mailbox-addressable, but no pane and no child process.
+
+**A genuinely nameless `Agent({prompt})` is still fully in-process** — same PID, `sessionId` equal
+to the parent's, transcript at `<parent-sid>/subagents/agent-<id>.jsonl`, `isSidechain:true`. It has
+never had a pane. Nothing converged; the trigger just became easy to hit by accident once
+`team_name` stopped existing.
+
+⚠️ **A named teammate's result reaches you ONLY via `SendMessage`.** The Agent call already returned
+`{status:"teammate_spawned", …}` at spawn time — there is no second return, and the child's final
+text goes to its own transcript and pane and nowhere else. Measured 2026-08-03: 3 of 4 named agents
+finished, went idle, and delivered nothing until explicitly asked. **State in every teammate brief
+that findings go out via `SendMessage`**, or the work completes and stays invisible.
 
 ## Decision Rule
 
@@ -167,20 +199,36 @@ Run it during Setup (after worktree creation, BEFORE spawn). Defaults per SSOT
 (Fable) members → `xhigh`. Without an override, panes resolve the user-settings floor
 (xhigh). `max` is settings-inexpressible (schema cap) — the script rejects it.
 
-This does NOT apply to in-process subagents (Agent tool, no `team_name`): they inherit
+This does NOT apply to in-process subagents (Agent tool, no `name:`): they inherit
 the lead's live effort with no override surface (GH #25591/#25669/#31536/#65598 open).
 
 ## Model Pinning (2026-07-16 — corrects a latent SSOT contradiction)
 
 Same mechanism as effort, one axis over: a **non-session model** (Fable while the lead
-is Opus, etc.) requires an Agent-Team **assignee** — `Agent({ name, team_name, model })`
-with `team_name` SET. Assignees honor `model` (allowlist: `claude-opus-4-8` /
-`claude-fable-5`). **Bare / in-process subagents inherit the session model, and a
-call-time `model:` override is silently ignored** — no error, it just runs on the
-session model. Observed 2026-07-16 (CC 2.1.207, `.claude-secondary`): a `deep-research`
-subagent spawned `model: "fable"` ran as **Opus 4.8** and hung ~35 min in "Hatching"
-with zero output; re-spawning the identical brief as a teammate (`team_name` +
-`model: "fable"`) is the fix.
+is Opus, etc.) requires an Agent-Team **assignee** — `Agent({ name, model })` with
+`name` SET (NOT `team_name`, which does not exist on 2.1.220 — see the spawn-API block
+above). Assignees honor `model` (allowlist: `claude-opus-4-8` / `claude-fable-5`).
+Observed 2026-07-16 (CC 2.1.207, `.claude-secondary`): a `deep-research` subagent
+spawned `model: "fable"` ran as **Opus 4.8** and hung ~35 min in "Hatching" with zero
+output; re-spawning the identical brief as a named teammate is the fix.
+
+⚠️ **The ADVICE above stands; its stated MECHANISM was wrong** (binary-extracted
+2026-08-03). This section used to say a bare subagent's `model:` is *"silently ignored"*.
+It is not ignored — **both shapes read the call-time model**, and both fall back to the
+inherited model when the resolved id fails the `availableModels` allowlist, warning only
+(telemetry `subagent_model_resolve` / `override_dropped`). So the 2026-07-16 observation
+is real but was mis-explained: what dropped `fable` was an **allowlist rejection**, not a
+parameter the subagent path never reads.
+
+Why the distinction is load-bearing rather than pedantic: under the old explanation, a
+newly-allowlisted model would still be assumed dead on the bare path and needlessly
+routed through a teammate; under the real one, allowlist membership is the thing to
+check, and it is **account/settings-derived and can change without a CC upgrade**. Treat
+a silent model downgrade as "check the allowlist", not "the parameter is inert".
+
+Effort is the genuinely inert axis, and it is inert on BOTH shapes: an assignee gets
+`--effort <lead's value>` on argv (2.1.220; 2.1.114 emits none at all) — inherited, never
+per-call. There is no effort field on the Agent tool in either version.
 
 ⚠️ This **corrects** the **research-subagents** skill (`~/.claude/skills/research-subagents/SKILL.md`; the old `~/.claude/rules/` location no longer exists), which reads as if
 `model: "fable"` on a bare `deep-research` subagent runs on Fable. That holds (if ever)
@@ -266,8 +314,8 @@ NEVER existed; ghost pointer removed 2026-07-18):
   resume from the checkpoint before starting new work.
 
 **Subagents vs Teammates (Agent Teams = Default):**
-- **Teammates** (`team_name` set): **DEFAULT for all implementation.** Persist until shutdown. Max **6 concurrent**. Use for ANY task that writes code.
-- **Subagents** (no `team_name`): Research/exploration ONLY. Safe at ~50 parallel. Never for code changes.
+- **Teammates** (`name:` set): **DEFAULT for all implementation.** Persist until shutdown. Max **6 concurrent**. Use for ANY task that writes code.
+- **Subagents** (NO `name:`): Research/exploration ONLY. Safe at ~50 parallel. Never for code changes.
 
 🚨 **`name:` SILENTLY MAKES IT A TEAMMATE — the auto-terminate you are counting on does not happen.**
 Observed 2026-08-01 on CC 2.1.219: three `Explore` agents spawned with `name:` and **no `team_name`**
