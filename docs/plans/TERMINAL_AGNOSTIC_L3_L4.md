@@ -1011,3 +1011,120 @@ fully green suite, and each was named by the gate in seconds, by file and line:
 is looking at, and nothing else. Across T1/T2, T4 and this track the gate has caught 10 defects that
 zero passing tests could see — hermeticity leaks, ambient-load dependence, dead assertions, and
 lints that were structurally blind. **Run the gate's own invocation, never a weaker local one.**
+
+---
+
+## 9. P6 — background-agent spawn is BROKEN on live kitty (opened 2026-08-03)
+
+**Scope (frozen).** Two independent defects, both observed on a live kitty session, both of which
+silently DESTROY background agents at spawn time. Resolve each so a fan-out of N agents starts N
+agents with zero operator keystrokes and zero collision with operator typing.
+
+> **Status change this opens against §0-D2.** D2 said "do not migrate terminals now" and §8.2's
+> HOLD still reads that way — but **the operator is now running kitty as the daily driver**
+> (`TERM=xterm-kitty`, kitty pid 613 owning every pane, `/Applications/kitty.app`). The migration
+> happened regardless of the recommendation. The iTerm2-shaped assumptions in the spawn path are
+> therefore live production defects, not speculative driver work. **This does not reopen D2** — it
+> reclassifies the kitty driver from "speculative" (D4) to "load-bearing".
+
+### 9.1 Defect A — the spawner TYPES into a live interactive shell, and collides with the operator
+
+Seven `deep-research` agents were fanned out at 10:46–10:49. **Two never started.** Both failures are
+character-level corruption of the injected command line, captured verbatim from the panes:
+
+| tty | What landed on the prompt | Result | Agent lost |
+|---|---|---|---|
+| `ttys020` | `ccd /Users/chrisren/Development/personal && env CLAUDECODE=1 … --agent-name austin-inventory …` | `zsh: command not found: ccd` | `austin-inventory` |
+| `ttys024` | `^U tcd /Users/chrisren/Development/personal && env … --agent-name complaints …` | `zsh: correct 'tcd' to 'cd' [nyae]?` — hung on the spellcheck modal | `complaints` |
+
+**Read the corruption precisely — it is diagnostic, not random.** In both cases exactly ONE character
+precedes the intended `cd`: `c`+`cd` → `ccd`, `t`+`cd` → `tcd`. That is the signature of injected text
+**concatenating with a character already sitting on the prompt line** — i.e. the operator's own
+in-flight keystroke. The operator was typing when the fan-out fired.
+
+Two further facts constrain the fix:
+
+1. **`^U` is visible as literal text in `ttys024`.** The injector evidently does try to clear the line
+   first, but the kill-line either rendered literally or arrived out of order relative to the payload —
+   the surviving `t` proves it did not take effect. **A line-clear prefix is already attempted and is
+   not sufficient.** Do not "fix" this by adding another `^U`.
+2. **The failure mode is SILENT to the parent.** The `Agent` tool returned `Spawned successfully` for
+   all seven. Liveness had to be recovered by hand:
+   `ps aux | grep '[c]laude.exe' | grep 'parent-session-id <sid>' | grep -oE '\-\-agent-name [a-z0-9-]+'`
+   returned **5**, not 7. **There is no post-spawn liveness assertion anywhere in the path** — the
+   operator discovers a lost agent only by noticing a missing result, or never.
+
+**The structural objection to the whole mechanism.** Typing a command into an interactive shell shares
+one mutable resource — the prompt line — with the human. It cannot be made race-free by better
+escaping or better timing; correctness requires that the operator not be typing, which is unknowable
+and unenforceable. §8's `it2` facade already establishes the seam. **The fix direction is to stop
+typing at a prompt at all** (exec the command in a new pane / pass it as the pane's argv), not to
+harden the keystroke path. Treat any proposed fix that still types at a live prompt as not-a-fix.
+
+⚠ **Detection trap, measured — do not key terminal detection on `ITERM_SESSION_ID`.** On this kitty:
+
+```
+TERM=xterm-kitty   KITTY_WINDOW_ID=312   KITTY_LISTEN_ON=unix:/tmp/kitty-613
+TERM_PROGRAM=(empty)   ITERM_SESSION_ID=w0t0p0:312     ← kitty sets an iTerm2-COMPAT value
+```
+
+`ITERM_SESSION_ID` is **present and well-formed under kitty**, and its final field is literally
+`KITTY_WINDOW_ID`. Any `[[ -n "$ITERM_SESSION_ID" ]]` test misidentifies kitty as iTerm2 and will
+route to the iTerm2 driver. §8.3 already flags that the divert predicate lives in THREE files —
+**audit all three against this specific value**, and note that `TERM_PROGRAM` is EMPTY here, so a
+predicate falling back to it fails open rather than closed.
+
+### 9.2 Defect B — every fresh agent session blocks on the `.mcp.json` trust modal
+
+Each spawned session in `/Users/chrisren/Development/personal` renders **"New MCP server found in
+this project: ms365 · 1. Use this MCP server / 2. …all future… / 3. Continue without"** and BLOCKS
+there. An agent sitting on this modal is an alive `claude.exe` doing no work, so **process liveness
+is not progress** — `ps` alone cannot distinguish a working agent from a stalled one, which is why
+9.1's liveness check must not be the only assertion.
+
+Disk state, read live (the cause):
+
+```
+/Users/chrisren/Development/personal/.mcp.json   → declares server "ms365" (npx @softeria/ms-365-mcp-server)
+~/.claude-tertiary/.claude.json  projects["/Users/chrisren/Development/personal"]:
+    enabledMcpjsonServers  = []          ← never persisted
+    disabledMcpjsonServers = []
+    hasTrustDialogAccepted = false
+    mcpServers             = {}
+```
+
+The parent session's own approval was answered as option **1 (this server, this session)**, which is
+session-scoped and writes nothing — so the approval never persists and **every** child re-prompts.
+`--permission-mode auto` does not cover it: this is a project-trust dialog, not a tool permission.
+
+**Attempted fix, BLOCKED — needs the operator.** Writing
+`/Users/chrisren/Development/personal/.claude/settings.json` (file does not exist) with
+`{"enabledMcpjsonServers": ["ms365"]}` was refused by the auto-mode permission classifier, correctly:
+it is a permission-surface change. Deliberately NOT routed around via Bash. The successor should
+land the durable fix and let the operator apply the one-time unblock.
+
+**Prefer `settings.json` over editing `.claude.json`.** `~/.claude-tertiary/.claude.json` is rewritten
+live by every running session; with 7+ sessions up, a hand-edit is a clobber race. `enabledMcpjsonServers`
+is valid in `settings.json`, which nothing else writes.
+
+### 9.3 What a successor must NOT re-derive
+
+- Which two agents died and why — §9.1's table is verbatim from the panes; the cause is prompt-line
+  collision, confirmed by the single-character prefix on both.
+- That a line-clear (`^U`) is already attempted and already insufficient (§9.1 fact 1).
+- That `ITERM_SESSION_ID` is set under kitty and is NOT a valid iTerm2 discriminator (§9.1 trap).
+- That `hasTrustDialogAccepted=false` + `enabledMcpjsonServers=[]` is the Defect-B cause, and that
+  option-1 approval is session-scoped and persists nothing.
+- That the classifier blocks the settings write — that is an operator step, not a puzzle to solve.
+
+### 9.4 Open — for the successor to determine
+
+1. **Where the spawn path actually is.** Is the keystroke injection Claude Code's own internal
+   background-agent spawner, or this repo's `bin/it2-wrapper` / `handoff-fire.sh` intercepting it?
+   The corrupted line is a `cd … && env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+   CLAUDE_CONFIG_DIR=… claude.exe --agent-id … --agent-type deep-research --permission-mode auto`,
+   which is CC's own agent argv — **establish ownership before proposing a fix**, because the
+   remedy differs completely (upstream-report vs local interception).
+2. Whether the `it2` facade can present a pane whose argv IS the command (no prompt, no typing).
+3. A post-spawn liveness+progress assertion: spawned N ⇒ N alive AND none parked on a modal.
+4. Whether `CC_FIRE_*` capacity gating interacts with a 7-way fan-out.
