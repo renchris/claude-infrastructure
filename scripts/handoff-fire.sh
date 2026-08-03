@@ -4024,7 +4024,23 @@ resolve_headless_anchor() {
 # gone or iTerm2 errors — the caller retries-then-fails-loud, and NEVER drifts to another window.
 it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new session id | returns 1
   local vflag=""; [ "$2" = vertically ] && vflag="-v"
-  local out; out="$(hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
+  # CC_KITTY_ARGV_SPAWN=0 — HANDOFF OPTS OUT OF ARGV DELIVERY, and it must (plan §9.1, 2026-08-03).
+  # bin/it2-kitty now ARMS a split pane by launching bin/cc-pane-runner instead of an interactive
+  # shell, so that Claude Code's teammate command can be handed over as a file rather than typed at a
+  # prompt the operator shares. That transport delivers exactly ONE command, via `session run`.
+  # Handoff does not work that way: it types SEVERAL accepted lines into the new pane with
+  # `session send` (the `unsetopt correct` disarm line, then the bracketed-paste CMD, then the CR),
+  # and gates the destructive Enter on an echo-verify that READS the line back off the pane. Against
+  # an armed pane there is no prompt to echo and no reader for the keystrokes, so every one of those
+  # sends would vanish into a tty buffer and the fire would hang with no diagnostic.
+  # This is not handoff declining a fix it needs: it already carries the three defenses §9.1 asks for
+  # (nocorrect/unsetopt disarm, echo-verify before submit, and a post-spawn engagement assertion that
+  # re-sends once and then reports FIRE FAILED). Those are what argv delivery gives Claude Code's
+  # spawner for free — handoff paid for them by hand.
+  # Exported INSIDE the command substitution's own subshell, never as a `VAR=v func` prefix: with a
+  # shell FUNCTION on the right-hand side that form's persistence is shell- and POSIX-mode-dependent,
+  # and a value that leaked past this call would silently un-arm every later split in the process.
+  local out; out="$(export CC_KITTY_ARGV_SPAWN=0; hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
   case "$out" in
     "Created new pane: "*) printf '%s' "${out#Created new pane: }"; return 0 ;;
     *) return 1 ;;

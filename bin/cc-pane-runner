@@ -1,0 +1,115 @@
+#!/bin/bash
+# cc-pane-runner — the argv of a freshly-split agent pane, so the pane's COMMAND never has to be
+# TYPED at an interactive prompt.
+#
+# ── WHY THIS FILE EXISTS (plan §9.1, measured 2026-08-03) ────────────────────────────────────────
+# Claude Code's ITermBackend delivers a teammate's launch command by TYPING it:
+#
+#   sendCommandToPane(paneId, cmd)  →  it2 session send -s <id> $'\x15'   (Ctrl-U, clear the line)
+#                                      it2 session run  -s <id> <cmd>     (the text, then Enter)
+#
+# Those are TWO separate process spawns against ONE mutable resource — the pane's prompt line, which
+# the human also owns. On 2026-08-03 a 7-way fan-out lost two agents to exactly that race: the
+# operator's own in-flight keystroke landed BETWEEN the Ctrl-U and the payload, concatenating into
+# `ccd …` (command not found) and `tcd …` (parked forever on zsh's `correct 'tcd' to 'cd' [nyae]?`).
+# Both single-character corruptions; both silent to the parent, which reported "Spawned successfully".
+#
+# It cannot be fixed by better escaping or better timing. Correctness would require that the operator
+# not be typing, which is neither knowable nor enforceable. Note that Claude Code's OWN tmux backend
+# already does the right thing —
+#
+#   TmuxBackend.sendCommandToPane → tmux respawn-pane -k -t <pane> -- <cmd>   ← the pane's argv IS
+#                                                                              the command
+#
+# — so the defect is confined to the iTerm2 backend, and the remedy is to give kitty the same shape.
+#
+# ── THE ONE-HOP DEFERRAL, AND WHY IT IS NEEDED ───────────────────────────────────────────────────
+# kitty CAN launch a window whose argv is a command, but Claude Code's protocol does not hand us the
+# command at split time — it splits first and sends the text afterwards. So `split` launches THIS
+# file instead of an interactive shell, and `run` DROPS THE COMMAND AS A FILE which this file is
+# already blocked waiting on. No prompt line is ever involved: there is no line to collide with, no
+# ZLE to race, no spell-correction to trigger, and the operator's keystrokes cannot become argv.
+#
+# ── ENV PARITY IS LOAD-BEARING, AND IT IS WHY THE LAUNCH ARGV IS `zsh -l -i -c` ──────────────────
+# The pane a teammate runs in is not a bare process host: ~/.zprofile puts ~/.claude/shims on PATH
+# (the login-PATH race, plan §8.4) and ~/.zshrc synthesizes ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID"
+# (the pane identity every hook, cc-notify address and two-way-comms registration is keyed on). A
+# runner exec'd from a NON-login, NON-interactive shell would silently produce agents with no PATH
+# and no addressable pane identity — alive and unreachable, which is worse than dead.
+#
+#   bin/it2-kitty launches:  <shell> -l -i -c 'exec "$CC_PANE_RUNNER"'
+#
+# `-l` reads .zprofile, `-i` reads .zshrc, and both run BEFORE this file, so everything they export is
+# inherited here. Measured on kitty 0.48.2 / zsh, pane 331: ITERM_SESSION_ID=w0t0p0:331 (the NEW
+# pane's own id, not the leader's), shims on PATH, --env values present.
+#
+# ── AFTER THE COMMAND, THE PANE BECOMES AN ORDINARY SHELL ────────────────────────────────────────
+# Exact parity with the pane this replaced: today's split yields an interactive shell that runs the
+# command and returns to a prompt. So do we — `exec` an interactive login shell when the command
+# returns. That also keeps every LATER `it2 session run/send` against this pane behaving as it always
+# did (there is a real prompt to type at again), which is what makes this change safe for the
+# multi-send callers that legitimately type.
+#
+# Env contract (all set by bin/it2-kitty split):
+#   CC_PANE_CMD_DIR   directory holding <pane-id>.armed / <pane-id>.cmd
+#   KITTY_WINDOW_ID   set by kitty in the new window; THIS pane's id, and the key for both files
+#   CC_PANE_CMD_WAIT_S  how long to wait for a command before giving up (default 300)
+
+set -u
+
+_dir="${CC_PANE_CMD_DIR:-}"
+_id="${KITTY_WINDOW_ID:-}"
+_wait="${CC_PANE_CMD_WAIT_S:-300}"
+
+# The fallback is an ORDINARY SHELL, never an exit. A pane that vanishes because a variable was unset
+# takes its diagnostic with it; a pane sitting at a prompt can be read by the operator and by the
+# `session list` liveness probe, and Claude Code's dead-pane pruning will not mistake it for gone.
+_fallback() {
+  [ -n "${1:-}" ] && printf 'cc-pane-runner: %s — this pane is an ordinary shell.\n' "$1" >&2
+  exec "${SHELL:-/bin/zsh}" -l -i
+}
+
+[ -n "$_dir" ] || _fallback "CC_PANE_CMD_DIR is unset"
+[ -n "$_id" ]  || _fallback "KITTY_WINDOW_ID is unset (not a kitty window?)"
+
+_cmdfile="$_dir/$_id.cmd"
+_armed="$_dir/$_id.armed"
+
+# Poll rather than block on a FIFO. A FIFO would make the ORDER of open() load-bearing between two
+# processes that are started by different parents with no synchronisation between them — the writer
+# (`it2 session run`) can legitimately arrive before this loop is reached, and a FIFO opened for
+# write with no reader blocks the writer, i.e. it would hang Claude Code's spawn call. A regular file
+# written atomically (tmp + mv) has no ordering requirement at all: the command either is there or is
+# not, and arriving early is indistinguishable from arriving on time.
+_deadline=$(( $(date +%s) + _wait ))
+while [ ! -f "$_cmdfile" ]; do
+  [ "$(date +%s)" -ge "$_deadline" ] && _fallback "no command arrived within ${_wait}s"
+  # 50ms: fast enough that spawn latency is invisible next to a shell start-up, slow enough that a
+  # pane idling for the full 300s costs ~6k wakeups rather than a busy core.
+  sleep 0.05
+done
+
+_cmd="$(cat "$_cmdfile" 2>/dev/null)"
+
+# Consume BOTH markers before running. Removing `.armed` is what returns this pane to the legacy
+# typing transport for any SUBSEQUENT send/run — after the exec below there is a real program (and
+# later a real prompt) here, so a second command must reach it the way it always did. Leaving the
+# marker would silently swallow every later command into a file nobody reads.
+rm -f "$_cmdfile" "$_armed" 2>/dev/null
+
+[ -n "$_cmd" ] || _fallback "the delivered command was empty"
+
+# Echo it first: the operator watching this pane sees the same line they would have seen typed, and a
+# `kitty @ get-text` progress probe has something to anchor on. Then run it in THIS shell (not a
+# subshell) so `exec …` inside the command still replaces this process, exactly as it would have at a
+# prompt.
+printf '%s\n' "$_cmd"
+
+# `set +u` FIRST — and it is parity, not laxity. The command this file runs used to be typed at an
+# interactive zsh where nounset is off; inheriting THIS file's `set -u` into it would abort any
+# command that reads an unset variable, i.e. this file would change the meaning of commands it is
+# only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
+set +u
+eval "$_cmd"
+
+_fallback ""
