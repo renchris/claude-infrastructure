@@ -112,15 +112,23 @@ def focused_window_id():
         except Exception as e:  # noqa: BLE001
             log(f"kitty ls failed on {sock}: {e}")
             continue
-        for osw in data:
-            if not osw.get("is_focused", True):
-                continue
-            for tab in osw.get("tabs", []):
-                if not tab.get("is_focused", True):
+        # Two passes, and the second one is not optional. `is_focused` is true only while
+        # kitty is the FRONTMOST app — true at a real click, false the moment anything
+        # else takes focus (including the Dia window this handler just raised). With one
+        # pass the resolver returns None exactly when something raced the click, and the
+        # link silently takes the unrouted path. `is_active` is the durable field: kitty
+        # keeps marking the last-active OS window, tab and pane while unfocused, which is
+        # the pane whose link is being opened.
+        for key in ("is_focused", "is_active"):
+            for osw in data:
+                if not osw.get(key, False):
                     continue
-                for w in tab.get("windows", []):
-                    if w.get("is_focused"):
-                        return str(w.get("id"))
+                for tab in osw.get("tabs", []):
+                    if not tab.get(key, False):
+                        continue
+                    for w in tab.get("windows", []):
+                        if w.get(key):
+                            return str(w.get("id"))
     return None
 
 
