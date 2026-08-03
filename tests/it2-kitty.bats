@@ -227,3 +227,52 @@ setup_nofixture() {
   [ "$status" -eq 5 ] || false
   echo "$output" | grep -q "is not executable" || false
 }
+
+# ── SPAWN MUST NOT STEAL FOCUS ───────────────────────────────────────────────────────────────────
+# kitty focuses a newly-launched window BY DEFAULT; iTerm2 does not. `launch` starts a bare
+# interactive zsh, and the backend's contract is split → send Ctrl-U → run <text>, so between the
+# line-clear and the command a FOCUSED pane owns the keyboard for ~50-150ms. Whatever the operator
+# is typing elsewhere lands in that line buffer: measured 2026-08-03, one stray `a` turned a
+# teammate launch into `acd …` and, via `setopt CORRECT`, into an interactive `[nyae]` HANG that no
+# caller can tell apart from a working agent. `focus_follows_mouse` is `no`, so the theft is STICKY.
+#
+# These pin the FLAG, not the observed focus: a hermetic suite has no compositor. The live A/B that
+# justifies them (focus HELD vs STOLEN, both arms positive-controlled on pane count) is recorded in
+# the commit. Recording kitty's argv is what makes "did not pass the flag" observable at all.
+
+# A stand-in kitty that RECORDS its argv, so an assertion can read what launch was actually asked
+# for. Prints a plausible new-window id, because split() rejects a non-numeric result before we get
+# to inspect anything.
+fake_kitty_recording() {
+  ARGV_LOG="$BATS_TEST_TMPDIR/kitty-argv"
+  cat > "$CC_TERM_KITTY" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ARGV_LOG"
+case "\$*" in *launch*) printf '77\n' ;; esac
+exit 0
+SH
+  chmod +x "$CC_TERM_KITTY"
+}
+
+@test "session split passes --keep-focus (anchored) — a spawn must not take the keyboard" {
+  fake_kitty_recording
+  run "$K" session split -s 15
+  [ "$status" -eq 0 ] || false
+  # Positive control FIRST: without this, a split that never reached `launch` would satisfy the
+  # grep-for-absence trivially and the test would pass vacuously.
+  grep -q -- 'launch' "$ARGV_LOG" || false
+  grep -q -- '--next-to id:15' "$ARGV_LOG" || false
+  grep -q -- '--keep-focus' "$ARGV_LOG" || false
+  # The backend parses this line; losing it strands the operator watching an empty window.
+  echo "$output" | grep -q '^Created new pane: 77$' || false
+}
+
+@test "session split passes --keep-focus (anchorless) — the unanchored path lands on the ACTIVE tab" {
+  fake_kitty_recording
+  # No -s: kitty puts the window in whatever tab is active, i.e. the one the operator is looking
+  # at. That makes the flag MORE load-bearing here, not less.
+  run "$K" session split
+  [ "$status" -eq 0 ] || false
+  grep -q -- 'launch' "$ARGV_LOG" || false
+  grep -q -- '--keep-focus' "$ARGV_LOG" || false
+}

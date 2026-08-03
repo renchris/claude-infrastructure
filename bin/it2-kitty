@@ -229,15 +229,36 @@ case "$verb" in
   split)
     # -v ⇒ RIGHT (iTerm2 "Split Vertically"), default ⇒ BELOW. See contract above.
     if [ "$VERTICAL" = 1 ]; then loc=vsplit; else loc=hsplit; fi
+    # --keep-focus is LOAD-BEARING, not cosmetic. kitty focuses a newly-launched window by
+    # default; iTerm2 does not (its `it2 session split` never calls async_activate, so the pane
+    # arrives as a HANDLE and focus is an opt-in nobody opts into). That default difference is the
+    # whole reason spawns corrupt under kitty and never did under iTerm2 — not latency, which runs
+    # the other way (it2's websocket client is slower per call than kitty's ~50ms).
+    #
+    # The failure it closes: the backend's contract is split → send Ctrl-U → run <text> (see the
+    # header). `launch` starts a bare interactive zsh with no program, so between the line-clear and
+    # the command there is a ~50-150ms window in which a FOCUSED pane owns the keyboard. Anything
+    # the operator is typing into another pane lands in that window's line buffer — measured
+    # 2026-08-03, a single stray `a` turned the teammate launch into `acd …` and, via
+    # `setopt CORRECT` (~/.zshrc:53), into an interactive `correct 'acd' to 'cd' [nyae]?` HANG that
+    # no caller can distinguish from a working agent. Correct addressing cannot help: the operator's
+    # keystrokes and our send-text write to the SAME pty, and a pty has no notion of who typed.
+    # `focus_follows_mouse` is unset (kitty default `no`), so the stolen focus is STICKY — it never
+    # drifts back, which turns a 100ms race into an open-ended keystroke leak.
+    #
+    # A/B measured on kitty 0.48.2 at this exact call shape: with the flag, focus HELD at the
+    # spawning window while the pane count moved 9→10 (positive control: the window really was
+    # created); without it, focus MOVED to the new window. handoff-fire.sh:3739 already carries this
+    # flag for the same reason — this path simply never got it.
     if [ -n "$SESSION" ]; then
       valid_id "$SESSION" || reject_id "$SESSION" split
       # --match window_id: is NOT redundant with --next-to. kitty's launch.py drops --next-to when
       # the target tab does not contain it, and the target tab defaults to the ACTIVE tab — so
       # without --match the anchor is silently discarded and the pane lands somewhere else.
-      new=$(kt launch --type=window --location="$loc" \
+      new=$(kt launch --type=window --location="$loc" --keep-focus \
                 --match "window_id:$SESSION" --next-to "id:$SESSION" --cwd=current 2>&1)
     else
-      new=$(kt launch --type=window --location="$loc" --cwd=current 2>&1)
+      new=$(kt launch --type=window --location="$loc" --keep-focus --cwd=current 2>&1)
     fi
     rc=$?
     if [ $rc -ne 0 ] || ! valid_id "$new"; then
