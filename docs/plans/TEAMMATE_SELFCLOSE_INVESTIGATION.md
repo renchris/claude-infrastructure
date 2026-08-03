@@ -213,16 +213,28 @@ had *no* teammate guard, the exact false negative
 - **D2 has no code fix yet.** A prose acknowledgement still leaves a teammate running; the idle-reap
   path is its only backstop, which is precisely why `ba6fb12f` matters. The harness-side option
   (F3a — treat idle-after-`shutdown_request` as approved) is vendor behaviour we do not control.
-- **D1/F1 (per-file ownership) is still unimplemented.** `hooks/lib/session-writes.sh` exposes
-  `session_dirty_mine <transcript> [repo_dir]` (rc 0 mine-dirty / 1 none / 2 cannot-tell) and the
-  gate site already has `_find_transcript "$SESSION_ID"` in scope, so the plumbing exists. Worth
-  doing — it makes the shared-cwd case *answerable* rather than merely bounded.
+- ~~**D1/F1 (per-file ownership) is still unimplemented.**~~ **DONE — landed `78f89d73`.** On a
+  shared cwd the dirty-tree gate now asks `session_dirty_mine <transcript> <worktree>` (rc 0
+  mine-dirty / 1 none / 2 cannot-tell) instead of `git status` on the whole tree, reusing the one
+  attribution path rather than a second one that could disagree with it. Only rc 1 clears the flag;
+  rc 2 and an OWNED worktree are untouched. Three of the four tests are the over-reach controls and
+  pass on BOTH trees.
 - **The escalation ladder can still be starved.** `DEFER_COUNT` only advances on a `TeammateIdle`
   event, and the harness stops emitting those once the lead sets `isActive:false`. Both survivors
   froze at `2/3` and never reached the SURFACE rung. The `+1` off-by-one fix at `:645-653` reduced
   the requirement from N+1 events to N — it did not remove the dependency on an event supply that
   the terminal condition itself extinguishes.
 - **D3/F5** — no truthful lead-side teardown check has been folded into the agent-teams skill yet.
+- **`scripts/bats-assert-liveness-fix.py` corrupts line-continued assertions** (found while landing
+  F1; filed to backlog). The gate directs you to it verbatim — *"Use the fixer, not a hand-edit"* —
+  but it appends its ` || false` to the LINE rather than the logical statement, so
+  `! grep … "$LOGF" \` + a continued `|| { … }` becomes `! grep … "$LOGF" \ || false` followed by an
+  orphaned `|| { … }`. That is not valid bash: the suite went from 30 ok to **0 ok**. A prescribed
+  remedy has to be RUN and CHECKED, not trusted because the gate named it
+  ([[prescribed-remedy-worse-than-the-bug]]). The durable form for a negated bats assertion is
+  `if cond; then …; false; fi` — no `!` for the shell to exempt from errexit — and it should be
+  proven live by MUTATION (invert the guard, watch the test go `not ok`), because "it passes" is
+  exactly what a dead assertion also does.
 
 ## Status log
 
