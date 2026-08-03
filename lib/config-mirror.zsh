@@ -159,11 +159,64 @@ PY
   done
 }
 
+# ── Per-account long-lived OAuth token (`claude setup-token`, 1 year) ───────────────────────────
+# CLAUDE_CODE_OAUTH_TOKEN is read from the environment by every Claude Code binary, and it is a
+# GLOBAL: one export aims every LATER launch in that shell at whichever account minted it. The
+# launchers are shell FUNCTIONS, not subshells, so `claude3` then `claude-prev2` runs both in one
+# long-lived interactive shell — an export left behind by the first silently bearers account 3's
+# token for account 2's session. So this is SET-OR-UNSET on every launch, never set-only: the
+# unset arm is the entire mechanism, and the set arm alone would be worse than not doing this.
+#
+# Deliberately NOT the one-liner `[[ -r $f ]] && export X="$(<$f)" || unset X`: under
+# `A && B || C` the C arm fires when B fails too, so the two branches stop being exclusive.
+# Explicit if/else, so each branch is reachable only for its own reason.
+#
+# Fail-CLOSED on anything unexpected — config dir not one of the four accounts, file missing,
+# unreadable, or empty/whitespace-only ⇒ UNSET. A truncated token file must never become a bogus
+# bearer token: absent falls back to the Keychain credential, which is the working default.
+#
+# This does NOT touch, and cannot blind, the quota spine. The Keychain credential is a SEPARATE
+# store — bin/claude-accounts bearers creds['accessToken'] read from the Keychain, never this env
+# var — so minting year tokens leaves /accounts, cc-wave-plan, cc-value and cc-board intact.
+typeset -gA _CC_OAUTH_TOKEN_ACCT
+_CC_OAUTH_TOKEN_ACCT[$HOME/.claude-next]='next'
+_CC_OAUTH_TOKEN_ACCT[$HOME/.claude-secondary]='next2'
+_CC_OAUTH_TOKEN_ACCT[$HOME/.claude-tertiary]='next3'
+_CC_OAUTH_TOKEN_ACCT[$HOME/.claude-quaternary]='next4'
+
+_cc_oauth_token_env() {
+  local acct tokf tok
+  acct="${_CC_OAUTH_TOKEN_ACCT[${1:-}]:-}"
+  if [[ -n "$acct" ]]; then
+    tokf="$HOME/.claude/oauth-tokens/$acct.token"
+    if [[ -r "$tokf" ]]; then
+      tok="$(<"$tokf")"
+      # Trim only leading/trailing whitespace — a hand-pasted secret often carries a stray space
+      # or a wrapped newline. Plain ${..%%..}/${..##..} form, so this stays correct under `zsh -f`
+      # (the assert hook's shell) without depending on extendedglob being set.
+      tok="${tok#"${tok%%[![:space:]]*}"}"
+      tok="${tok%"${tok##*[![:space:]]}"}"
+      if [[ -n "$tok" ]]; then
+        export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+        return 0
+      fi
+    fi
+  fi
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  return 0
+}
+
 # Combined per-account sync: knowledge-layer config + per-slug project memory.
 _cc_sync_account() {
   local dst conv=0
   [[ "$1" == --convert ]] && { conv=1; shift; }
   dst="${1:?}"
+  # FIRST, and unconditionally — before the early `return 1` below. The token has to be re-aimed
+  # on EVERY launch, including the ones where the mirror fails: a sync failure that skipped this
+  # would leave the PREVIOUS launcher's token exported, which is the cross-account misfire this
+  # exists to prevent. Always returns 0, so _cc_sync_account's own exit status is unchanged (the
+  # `claude` launcher branches on it to print its "config may be stale" warning).
+  _cc_oauth_token_env "$dst"
   if (( conv )); then
     _cc_sync_config_mirror --convert "$dst" || return 1
     _cc_sync_memory_mirror --convert "$dst"
