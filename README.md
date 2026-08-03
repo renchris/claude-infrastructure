@@ -39,13 +39,13 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
 
-Those five are what the system *has*. [**§6 is what it is still blocked by**](#6-the-ceiling-is-the-interface-not-the-machine) — measured, and it is not the machine.
+[**§6 is the measured ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) — and it is not the machine.
 
 ---
 
 ## 1. Sessions run each other
 
-**A session is not a terminal you babysit — it is an addressable process that can open, message, and retire its peers.** The recording above is the whole loop; the mechanics are four commands.
+**A session is not a terminal you babysit — it is an addressable process that can open, message, and retire its peers.** The mechanics are four commands.
 
 | Touchpoint | Command | What happens |
 |---|---|---|
@@ -54,9 +54,9 @@ Those five are what the system *has*. [**§6 is what it is still blocked by**](#
 | **Self-close** | `handoff-fire.sh self-close --successor <uuid>` | Retires the pane once the work is away. The successor must be **verified engaged** — resolvable, `claude` on its tty, *and* a real assistant turn in its transcript — before `/exit` is typed and again at the close instant. Focus lands on the survivor. |
 | **Two-way** | [`cc-notify`](bin/cc-notify) · `--notify-back` · [`cc-await-ping`](bin/cc-await-ping) | Peers exchange messages, so a fired session can report completion, a decision gate, or a blocker back to the session that fired it. |
 
-> **Why `/exit` and not `/clear` + a queued payload.** Claude Code's queue is type-asymmetric: a built-in slash command holds until the calling turn ends, but *plain text* is steered into the still-running turn at the next tool-result boundary — which the firing script's own Bash call guarantees. A queued payload therefore ran inline in the **old** context while `/clear` stayed armed behind it. Exit-and-relaunch has no such race.
+> **Why `/exit` and not `/clear` + a queued payload.** Claude Code's queue is type-asymmetric: a built-in slash command holds until the calling turn ends, but *plain text* is steered into the still-running turn at the next tool-result boundary — which the firing script's own Bash call guarantees. A queued payload therefore ran inline in the **old** context while `/clear` stayed armed behind it.
 
-The same three touchpoints at the command line — every line below is real output from the scripts in this repo:
+The same touchpoints at the command line:
 
 <img src="assets/demo/handoff-real.webp" width="900" alt="Terminal recording in three scenes. Scene 1, self-open: handoff-fire.sh --dry-run ranks all four accounts by live quota headroom, resolves the split anchor to the firing pane's own session id, and prints the exact composed launch command. Scene 2, two-way: cc-notify --self prints the pane uuid, cc-notify writes a message that appears as one timestamped line in the mailbox file, mailbox-drain.sh emits it as UserPromptSubmit additionalContext, and a second drain returns zero bytes because the seen cursor already consumed it. Scene 3, self-close: a bare self-close is refused for having no succession statement, and self-close --terminal is refused because an origin session was never fired by an originator.">
 
@@ -64,7 +64,7 @@ The same three touchpoints at the command line — every line below is real outp
 
 ### A message is a file, not a keystroke
 
-`cc-notify` never types into a live input line. It appends one line to the target's inbox; the target drains it at a boundary where nothing can be corrupted, and acks it exactly once.
+`cc-notify` appends one line to the target's inbox; the target drains it at a boundary where nothing can be corrupted, and acks it exactly once.
 
 <!-- Diagram source: assets/diagrams/session-comms.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
@@ -101,15 +101,15 @@ flowchart TB
 
 </details>
 
-Three failures shaped that design, and each is now structural rather than remembered:
+Each failure below is now structural rather than remembered:
 
-- **A pane UUID is a stale address the moment that pane recycles.** Forensics found 570 pages looping into one dead former-desk inbox for three days. Automated senders now address a **role**, re-resolved at send time; a `.forward` chain follows successions; an undeliverable line is still recorded *and* tee'd to the desk, which is where triage happens.
-- **An enqueue to a dead inbox is not a delivery.** Liveness decides the verdict, and a reroute never upgrades it — `cc-notify` reports "mailbox only" honestly, and [`cc-inbox-guard`](bin/cc-inbox-guard) fails loud on mail nothing will ever drain.
+- **A pane UUID is a stale address the moment that pane recycles.** Forensics found 570 pages looping into one dead former-desk inbox for three days. Automated senders now address a **role**, re-resolved at send time; a `.forward` chain follows successions; an undeliverable line is still recorded *and* tee'd to the desk.
+- **An enqueue to a dead inbox is not a delivery.** Liveness decides the verdict, and a reroute never upgrades it — `cc-notify` reports "mailbox only", and [`cc-inbox-guard`](bin/cc-inbox-guard) fails loud on mail nothing will ever drain.
 - **A drain is not a read.** The `.seen` cursor advances on delivery, but `.acked` only at the Stop *after* a turn provably carried the mail. Dup-biased by design: a crash mid-turn re-surfaces the message instead of silently losing it.
 
 ### It pages you only when a human must decide
 
-The same addressing runs outward. Operator-owned steps are rendered as **runnable commands from disk truth**, never prose — a `▶ <exact command>` block at every turn close ([`operator-readout.sh`](hooks/operator-readout.sh)), a one-glance board of everything blocking on you ([`cc-blockers`](bin/cc-blockers)), durable decision packets that survive a recycle ([`cc-decide`](bin/cc-decide)), a daily digest with phone push ([`cc-digest`](bin/cc-digest)), and sound + desktop alerts ([`notify.sh`](hooks/notify.sh)).
+The same addressing runs outward. Operator-owned steps are rendered as **runnable commands from disk truth**, never prose — a `▶ <exact command>` block at every turn close ([`operator-readout.sh`](hooks/operator-readout.sh)), a board of everything blocking on you ([`cc-blockers`](bin/cc-blockers)), durable decision packets that survive a recycle ([`cc-decide`](bin/cc-decide)), a daily digest with phone push ([`cc-digest`](bin/cc-digest)), and sound + desktop alerts ([`notify.sh`](hooks/notify.sh)).
 
 <details>
 <summary><b>The standing desk — what runs the machine between check-ins</b></summary>
@@ -119,7 +119,7 @@ The same addressing runs outward. Operator-owned steps are rendered as **runnabl
 A standing **desk** session orchestrates; launchd daemons dispatch and watch.
 
 - **Work ledger → dispatch.** [`cc-backlog`](bin/cc-backlog) is an append-only JSONL ledger with event-keyed idempotent ids and claim/reap/thrash guards. It feeds [`cc-dispatch`](bin/cc-dispatch), which plans quota-aware waves via [`cc-wave-plan`](bin/cc-wave-plan) and [`claude-accounts`](bin/claude-accounts) ranking across the four accounts.
-- **Lifecycle.** Every session self-registers ([`session-register.sh`](hooks/session-register.sh)) with [`cc-reconcile`](bin/cc-reconcile) backfill healing. [`cc-reaper`](bin/cc-reaper) classifies idle sessions against a cause taxonomy with never-reap defaults; only identity-pinned, landed, clean panes are closed, via [`cc-teardown`](bin/cc-teardown).
+- **Lifecycle.** Every session self-registers ([`session-register.sh`](hooks/session-register.sh)), with [`cc-reconcile`](bin/cc-reconcile) backfilling misses. [`cc-reaper`](bin/cc-reaper) classifies idle sessions against a cause taxonomy with never-reap defaults; only identity-pinned, landed, clean panes are closed, via [`cc-teardown`](bin/cc-teardown).
 - **Crash supervision.** [`lead-crash-watchdog.sh`](hooks/lead-crash-watchdog.sh) classifies per-session death (including binary-version telemetry); [`lead-supervisor.sh`](scripts/lead-supervisor.sh) pages on stalls, permission prompts, and past-threshold runs; [`cc-crash-report`](bin/cc-crash-report) keeps the ledger and dashboard.
 - **Agent Teams.** The `TeammateIdle` hook exits code 2 on idle, forcing immediate shutdown so no pane is orphaned; [`bin/it2-wrapper`](bin/it2-wrapper) injects the teammate profile on split and forces modal-free closes.
 
@@ -131,7 +131,7 @@ This layer is audited adversarially — most recently a 15-agent verified audit:
 
 ## 2. Parallel work cannot collide
 
-**Concurrent sessions share one git index and one trunk — so isolation is not a convenience, it is the precondition for everything above.** Every writer gets its own worktree and account; every landing passes through exactly one machine-wide lock.
+**Concurrent sessions share one git index and one trunk.** Every writer gets its own worktree and account; every landing passes through exactly one machine-wide lock.
 
 <!-- Diagram source: assets/diagrams/parallel-lanes.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
@@ -167,23 +167,23 @@ flowchart LR
 
 </details>
 
-Three traps make naive automation fail. Each is defeated by a mechanism, not by discipline:
+Each trap below is defeated by a mechanism, not by discipline:
 
 - **A shared index means a bare `git commit` sweeps another session's staged files** — plus ref-lock races and shared-file clobber. Every writer therefore gets its **own worktree**, handed out warm (`node_modules`, codegen, `.env.local`, seeded DB already built) in about three seconds.
-- **The launchers are zsh functions**, carrying per-account isolation, so no script can `exec` them. `handoff-fire.sh` **types** the launch command into a fresh surface with echo-verified keystrokes — anchored to the firing agent's own window, so the split lands where you are looking. The surface is a real iTerm2 pane or a real kitty pane depending on where you are sitting ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)); the anchoring and the echo-verification are the same either way.
+- **The launchers are zsh functions**, carrying per-account isolation, so no script can `exec` them. `handoff-fire.sh` **types** the launch command into a fresh surface with echo-verified keystrokes, anchored to the firing agent's own window. The surface is a real iTerm2 pane or a real kitty pane depending on where you are sitting ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)); the anchoring and the echo-verification are the same either way.
 - **A hot trunk means N landers race — and a per-land test corpus means they starve each other.** A week of measurement proved the frame, not the tree, was the blocker: full-corpus-per-land collapsed P(green) to ~2.3% under fleet load (one branch died 37 straight times on a tree that was never red). So the verdict is **inverted** ([`docs/plans/LAND_PIPELINE_V2.md`](docs/plans/LAND_PIPELINE_V2.md)): [`ship-land.sh`](scripts/ship-land.sh) lands in seconds-to-minutes with only O(diff) statics, ratchets and a ≤120s direct-suite smoke that *skips* under load — nothing heavy can enter [`land-lock.sh`](scripts/land-lock.sh), which holds for seconds around the CAS push window. The full-suite claim belongs to one background verifier ([`postland-verify.sh`](scripts/postland-verify.sh) — fresh cell per run, [`host-suites.manifest`](scripts/host-suites.manifest) partition, progress-keyed stall bound, auto-revert of bisected culprits), and the live layer only ever advances to its green stamp ([`deploy-live.sh`](scripts/deploy-live.sh) on a launchd tick). Landing is still verified **by content** ([`land-verify.sh`](scripts/land-verify.sh)) — a commit-count check reads "landed" for work that was silently dropped, which is exactly how a 5-file commit went missing on 2026-07-11.
 
 > **Portable vs project-specific.** `handoff-fire.sh`, the isolation policy, [`docs/WORKTREE_WORKFLOW.md`](docs/WORKTREE_WORKFLOW.md), and this repo's fail-closed landing rail are the **portable** half and live here. App repos keep their own warm pool and migration-aware `/ship` variants. Account, model and effort routing reads `~/.claude/model-config.yaml`, which is per-machine and deliberately not synced.
 
 ### Why 30+ panes freezes iTerm2 — and why the GPU can't fix it
 
-**It isn't a memory leak — it's windows that don't die.** iTerm2 has an open, unfixed upstream bug (#12097, #12645, #12905): closing a tab to zero panes should destroy its `NSWindow`; on iTerm2 it doesn't. One session left 98 "closed" windows alive, and each still costs the compositor real objects: a **window** costs ~28–34 MB of backing store + ~4.9 Mach ports to WindowServer; a **pane** inside an existing window costs almost nothing (~3 IOSurfaces, ~0 net bytes). Spreading 30 sessions across 30 windows costs WindowServer **2.35× more CPU than the same 30 panes gathered into one window** — while iTerm2 itself measured **0.0% CPU** and WindowServer sat at 92–99.9%. The window is the expensive unit; the app's own memory was never the culprit.
+**It isn't a memory leak — it's windows that don't die.** iTerm2 has an unfixed upstream bug (#12097, #12645, #12905): closing a tab to zero panes should destroy its `NSWindow`; on iTerm2 it doesn't. One session left 98 "closed" windows alive, and each still costs the compositor real objects: a **window** costs ~28–34 MB of backing store + ~4.9 Mach ports to WindowServer; a **pane** inside an existing window costs almost nothing (~3 IOSurfaces, ~0 net bytes). Spreading 30 sessions across 30 windows costs WindowServer **2.35× more CPU than the same 30 panes gathered into one window** — while iTerm2 itself measured **0.0% CPU** and WindowServer sat at 92–99.9%. The window is the expensive unit.
 
-**The instinct to fix it by pushing rendering onto the idle GPU makes it worse.** That reasoning assumes more panes → more CPU work → the CPU maxes out → move the work to the underused silicon. But the bottleneck was never a CPU/GPU balance inside one app — it's compositor *objects* — and GPU rendering **adds** objects, it doesn't remove them. iTerm2's Metal path allocates a `CAMetalLayer` plus several dispatch queues *per pane*, on top of the window cost above, and it's capped at 5 GPU panes per tab (foreground tab only) — so lighting up 30 sessions on Metal forces **six separate windows**, multiplying the exact axis that already froze the machine. Every iTerm2 layout pays one of the two costs; none escapes both.
+**The instinct to fix it by pushing rendering onto the idle GPU makes it worse.** That reasoning assumes more panes → more CPU work → the CPU maxes out → move the work to the underused silicon. But the bottleneck was never a CPU/GPU balance inside one app — it's compositor *objects* — and GPU rendering **adds** objects, it doesn't remove them. iTerm2's Metal path allocates a `CAMetalLayer` plus several dispatch queues *per pane*, on top of the window cost above, and it's capped at 5 GPU panes per tab (foreground tab only) — so lighting up 30 sessions on Metal forces **six separate windows**, multiplying the exact axis that already froze the machine. Every iTerm2 layout pays one of the two costs.
 
-Ghostty proves the same point the other way: it has **no CPU renderer at all** — every pane is Metal, unconditionally. If "more GPU" were the fix, Ghostty should be the cheapest terminal under load. Measured instead, byte-matched at 18 panes / 10 fps: Ghostty burns **27.3% app CPU against kitty's 9.5%** (2.9×), and its thread count **scales linearly, 4.00 threads/pane, with no ceiling** — because submitting frames to a GPU is itself CPU work (encoding commands, servicing a dispatch queue), paid on *every* pane. kitty wins not by avoiding the GPU but by putting **all** panes in **one** window and sharing one small thread pool no matter how many panes it holds — the one thing that actually is free (macOS itself has headroom: 30 panes repainting in one window cost only ~10 percentage-points of a single core).
+Ghostty is the counter-test: it has **no CPU renderer at all** — every pane is Metal, unconditionally. If "more GPU" were the fix, Ghostty should be the cheapest terminal under load. Measured instead, byte-matched at 18 panes / 10 fps: Ghostty burns **27.3% app CPU against kitty's 9.5%** (2.9×), and its thread count **scales linearly, 4.00 threads/pane, with no ceiling** — because submitting frames to a GPU is itself CPU work (encoding commands, servicing a dispatch queue), paid on *every* pane. kitty wins not by avoiding the GPU but by putting **all** panes in **one** window and sharing one small thread pool no matter how many panes it holds — the one free axis (macOS itself has headroom: 30 panes repainting in one window cost only ~10 percentage-points of a single core).
 
-Full evidence, the hypotheses that got killed along the way, and the migration plan: [`docs/research/terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md).
+Full evidence and the migration plan: [`docs/research/terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md).
 
 ---
 
@@ -290,7 +290,7 @@ Teammate models must be on the account's auto-mode allowlist, or the spawn silen
 
 ## 4. Nothing a session did dies with it
 
-**Panes are disposable; their output is not.** Four independent layers outlive the session that produced them.
+**Panes are disposable; their output is not.**
 
 | What survives | How | Recover it with |
 |---|---|---|
@@ -311,7 +311,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 
 ## 5. The whole system deploys from git
 
-**The repo is the source of truth; your `~/.claude` is its deployment.** The primary config dir is *symlinked*, so editing a live hook edits this repo and nothing can silently drift out of version control.
+**The repo is the source of truth; your `~/.claude` is its deployment.** The primary config dir is *symlinked*, so editing a live hook edits this repo.
 
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
@@ -344,7 +344,7 @@ The symlink rule came from a failure: on 2026-07-03 a *copied* `handoff-fire.sh`
 **Landed is not live — the gap is closed by proof, not by hand.** Because the primary dir symlinks into the checkout, a trunk commit only reaches running sessions when the checkout advances — and it advances *autonomously and fail-closed*: a launchd verifier ([`postland-verify.sh`](scripts/postland-verify.sh), every 5 min) proves each trunk tree with the full corpus in a fresh cell and stamps it; a deploy autopilot ([`deploy-live.sh`](scripts/deploy-live.sh)` --auto`, every 10 min) fast-forwards the checkout **only to a green-stamped tree**, re-runs `install.sh` (so brand-new files get their symlinks), and then runs the [host suites](scripts/host-suites.manifest) against the live layer — the one place suites that assert the deployed world can honestly run. A red trunk auto-reverts its bisected culprit; a dead verifier or a lagging deploy is surfaced by fact-bound alarms in [`cc-blockers`](bin/cc-blockers) rather than assumed healthy.
 
 <details>
-<summary><b>What actually lives in <code>~/.claude/</code></b></summary>
+<summary><b>What lives in <code>~/.claude/</code></b></summary>
 
 <br>
 
@@ -376,12 +376,12 @@ git clone <your fork's URL> claude-infrastructure
 cd claude-infrastructure
 cp accounts.json.example accounts.json   # then edit it: your email(s), one entry per Max account
 ./install.sh --dry-run   # preview
-./install.sh             # idempotent — safe to re-run
+./install.sh             # idempotent
 ```
 
 It symlinks hooks, commands and scripts into `~/.claude`; copies `bin/` tools, `statusline.sh` and the LaunchAgents; loads the daemons; and validates `settings.json`. For an alternate account: `./install.sh --config-dir ~/.claude-secondary`. Re-run it after every trunk fast-forward — it links **brand-new** files, which per-file symlink directories otherwise never pick up. `--wire-hooks` additively merges the template hook roster into a live `settings.json`, with backup and validation.
 
-**However many Claude accounts you have (1-N, not just the 4 this repo was built against):** `accounts.json`'s `accounts[]` array is the single source of truth — every account-aware tool (`claude-accounts`, `cc-board`, `handoff-fire.sh`, `lr-*`, …) reads through `scripts/gen-account-map.sh`'s generated map or the array itself, never a hardcoded account list. One entry is enough to start; add more later by appending to the array (`install.sh` regenerates the map automatically). `accounts.json` is gitignored on a fresh clone — it holds real email addresses — so it's yours to edit freely without it showing up in `git status`.
+**However many Claude accounts you have (1-N, not just the 4 this repo was built against):** `accounts.json`'s `accounts[]` array is the single source of truth — every account-aware tool (`claude-accounts`, `cc-board`, `handoff-fire.sh`, `lr-*`, …) reads through `scripts/gen-account-map.sh`'s generated map or the array itself, never a hardcoded account list. One entry is enough to start; add more later by appending to the array (`install.sh` regenerates the map automatically). `accounts.json` is gitignored on a fresh clone — it holds real email addresses — so it never shows up in `git status`.
 
 **Terminal: iTerm2 or kitty.** `install.sh` runs [`scripts/kitty-setup.sh`](scripts/kitty-setup.sh) automatically whenever kitty is present; run it by hand to wire or inspect kitty on its own:
 
@@ -390,7 +390,7 @@ scripts/kitty-setup.sh --check   # report only — exits 1 if anything is missin
 scripts/kitty-setup.sh           # apply (idempotent) · --undo reverts
 ```
 
-It reports **live** state separately from on-disk state, because config present is not config loaded: `allow_remote_control` and `listen_on` are the only two options kitty refuses to reload, so a kitty older than its config is **INERT** and `--check` exits 1 rather than reporting green. It never clobbers a hand-written `kitty.conf`, and `install.sh` does not propagate its exit status — non-zero means *restart kitty*, not *the install failed*. What it wires, and why each piece is load-bearing, is in [§6](#so-the-question-stopped-being-which-one--it-runs-on-both).
+It reports **live** state separately from on-disk state, because config present is not config loaded: `allow_remote_control` and `listen_on` are the only two options kitty refuses to reload, so a kitty older than its config is **INERT** and `--check` exits 1 rather than reporting green. It never clobbers a hand-written `kitty.conf`, and `install.sh` does not propagate its exit status — non-zero means *restart kitty*, not *the install failed*. What it wires is in [§6](#so-the-question-stopped-being-which-one--it-runs-on-both).
 
 ```bash
 ./sync.sh          # pull hand-edits of COPIED surfaces back into the repo
@@ -408,7 +408,7 @@ npm overwrites Claude's binary in place, which throws `ENOTEMPTY` when live sess
 └── current -> 2.1.114 # atomic symlink — rename(2), NOT ln -sfn
 ```
 
-`ln -sfn` is wrong because it is two syscalls (`unlink` + `symlink`) with an ENOENT window between them. The correct swap is atomic:
+`ln -sfn` is wrong because it is two syscalls (`unlink` + `symlink`) with an ENOENT window between them. The atomic swap:
 
 ```bash
 ln -s "$new_version" "${current}.tmp_$$"
@@ -435,7 +435,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 Everything above runs ~30 sessions unattended. At that concurrency this box lags and freezes — and every pane must stay visible, because a blocked permission prompt is found *by eye*. On [Boris Cherny's adoption ladder](https://claude.ai/code/artifact/bfdfaef9-bc62-4dfe-ba9e-c58a26c9accf) that puts this system at **Step 3 in mechanism and Step 2 in human loop**: worktrees, subagents, dynamic workflows, `/loop`, `/batch`, `/goal`, Skills and launchd routines are all here, but the operator is still a *poller*.
 
-**Running 30 sessions is not what lags this box — displaying them is.** Measured 2026-07-31; full evidence in [`docs/research/l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md).
+**Running 30 sessions is not what lags this box — displaying them is.** And the fix is not a faster renderer: the notifier that would replace the grid is already wired ([`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh)) and simply has no face. Measured 2026-07-31; full evidence in [`docs/research/l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md).
 
 <!-- Diagram source: assets/diagrams/interface-ceiling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
@@ -478,7 +478,7 @@ flowchart TB
 
 ### The machine is not the constraint
 
-The intuitive diagnosis — heaps grow, memory exhausts, the box swaps — is refuted three separate ways on this hardware:
+The intuitive diagnosis — heaps grow, memory exhausts, the box swaps — is refuted four ways on this hardware:
 
 | Evidence | Reading |
 |---|---|
@@ -487,7 +487,7 @@ The intuitive diagnosis — heaps grow, memory exhausts, the box swaps — is re
 | **Panic 2026-07-30** | VM-compressor **segment** exhaustion with **~20 GB free**, `swap_low:0` — structural, not a load threshold |
 | **Panic 2026-07-31** | kernel **spinlock timeout** from a research probe's own **8,368-thread** ladder; compressor 0% pages / 7% segments, **OK** — self-inflicted by the instrument, not by the workload |
 
-The whole 15-session fleet costs **≈0.75 cores**. Agent count is not the expensive axis.
+The whole 15-session fleet costs **≈0.75 cores**.
 
 ### The interface is
 
@@ -498,7 +498,7 @@ The whole 15-session fleet costs **≈0.75 cores**. Agent count is not the expen
 | **Tuning headroom** | [`iterm2-perf-parity.sh`](scripts/iterm2-perf-parity.sh) → `match=9 drift=0`, and it still burns 1.2 cores at *half* load ⇒ **configuration is exhausted** |
 | **The unit that costs** | the same 30 panes cost **+22.6 pp** of a core across 30 windows vs **+11.2 pp** in one — **windows are 2.35×; panes are nearly free** |
 
-This inverts the obvious remedy **on iTerm2**. It disables Metal for any tab holding ≥6 sessions *and* for every background tab, so its only all-GPU layout for 30 sessions is **6 windows** — which forces you into the expensive unit. On *that* architecture, "more GPU" and "more compositor objects" are the same request, because iTerm2 allocates one `CAMetalLayer` **per pane**. **The cap is protecting you.**
+This inverts the obvious remedy **on iTerm2**. It disables Metal for any tab holding ≥6 sessions *and* for every background tab, so its only all-GPU layout for 30 sessions is **6 windows** — which forces you into the expensive unit. On *that* architecture, "more GPU" and "more compositor objects" are the same request, because iTerm2 allocates one `CAMetalLayer` **per pane** — so the cap is protecting you.
 
 But the axis is not the graphics API — it is **cadence, then windows, then surfaces**, fitted from four compositor arms at identical geometry and pixels/second:
 
@@ -509,7 +509,7 @@ But the axis is not the graphics API — it is **cadence, then windows, then sur
 | Surface count *within* a window | 0.0552 pp/surface | 1.60pp ceiling — 8.1× cheaper per unit than a window |
 | **Metal vs OpenGL vs CPU** | **—** | **not a term** |
 
-**Ghostty is the falsifier** — and the reason an earlier version of this section, *"maximising the GPU is backwards,"* was wrong as stated. Ghostty is **Metal-native *and* per-pane**, and measures **24 panes in one window at 0.0% idle CPU / 351 MB**. If the API were the cost axis, that reading is impossible. What survives is **surfaces per window**, not *GPU or not* — so the cheapest lever is the one nobody files under "renderer": **drop the 120 Hz display to 60 Hz.** One reversible click, and a text UI gains nothing from 120 Hz.
+**Ghostty is the falsifier.** It is **Metal-native *and* per-pane**, and measures **24 panes in one window at 0.0% idle CPU / 351 MB**. If the API were the cost axis, that reading is impossible. What survives is **surfaces per window**, not *GPU or not* — so the cheapest lever is the one nobody files under "renderer": **drop the 120 Hz display to 60 Hz.** One reversible click, and a text UI gains nothing from 120 Hz.
 
 ### Therefore: stop rendering what you do not read
 
@@ -523,21 +523,21 @@ Measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/te
 | Ghostty | 27.3% — highest, and 3 processes per loaded pane | **4.00, linear** | **1** | **none on macOS** (`performIpc` false; AppleScript only) | — |
 | cmux | *not run under load* | **5.18, linear** (`5.18×panes + 10.6`) | 1 | **`CMUX_SURFACE_ID` + full socket API** | **built in** — sidebar row per pane, blue ring on attention, notifications panel, `notify` CLI |
 
-**kitty wins among the challengers by 2.6–2.9× on loaded CPU — not on threads.** The thread-count rationale this section used to lead with is **retired**: WezTerm measured **4.00** threads/pane, not the ~7.0 previously published, and the falsification test written to kill the thread finding **fired** — 87 WezTerm threads produced *fewer* context switches than kitty's 10. Threads were a proxy; loaded CPU is the thing being proxied.
+**kitty wins among the challengers by 2.6–2.9× on loaded CPU — not on threads.** The thread-count rationale is **retired**: WezTerm measured **4.00** threads/pane, not the ~7.0 previously published, and the falsification test written to kill the thread finding **fired** — 87 WezTerm threads produced *fewer* context switches than kitty's 10.
 
-**And the migration is on HOLD, because the incumbent has not been beaten.** The one iTerm2 datapoint taken in the *cheap* layout — one window, 20 panes, CPU renderer — read **10.5% against kitty's 9.5%**: within ~10% on CPU and within one thread. Every other iTerm2 figure above comes from the *expensive* layout it is normally run in, which is a statement about how it is configured, not about what it can do. Two cheaper rungs are live and unmeasured: the eight render knobs have never been benchmarked since passing their own gate, and the dismissal of plain `tmux` rested on a premise since verified **false**. Switching terminals is the expensive move and it is **not yet justified** — see [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §9.
+**And the migration is on HOLD, because the incumbent has not been beaten.** The one iTerm2 datapoint taken in the *cheap* layout — one window, 20 panes, CPU renderer — read **10.5% against kitty's 9.5%**: within ~10% on CPU and within one thread. Every other iTerm2 figure above comes from the *expensive* layout it is normally run in, which is a statement about how it is configured, not about what it can do. Two cheaper rungs are live and unmeasured: the eight render knobs have never been benchmarked since passing their own gate, and the dismissal of plain `tmux` rested on a premise since verified **false**. See [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §9.
 
 **cmux does not dominate kitty either**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and has not been run under load at all.
 
 #### So the question stopped being "which one" — it runs on both
 
-A HOLD is only tolerable if it is not also a blocker. It stopped being one: **iTerm2 and kitty are both first-class**, and the same session machinery — Agent Teams, handoff, recycling, two-way comms, teardown — runs on either. One command wires the second one:
+**iTerm2 and kitty are both first-class**, and the same session machinery — Agent Teams, handoff, recycling, two-way comms, teardown — runs on either. One command wires the second one:
 
 ```bash
 scripts/kitty-setup.sh          # idempotent · --check reports · --undo reverts
 ```
 
-**The lock was never the renderer — it was a process boundary this repo already owned.** Claude Code's Agent-Teams pane backend is not linked against iTerm2 and never handshakes with it. Decompiled from the live 2.1.219 binary, its gate is an **env check plus a PATH lookup** — `TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID`, then `$SHELL -lc "command -v it2"` — after which it drives panes through exactly five subcommands of whatever `it2` it resolved. So a program answering those five commands against `kitty @` gets **native kitty split panes** for assignee sessions. That is [`bin/it2-kitty`](bin/it2-kitty), and [`bin/it2-wrapper`](bin/it2-wrapper) execs it when `KITTY_WINDOW_ID` is set. No fork of either terminal — which is just as well, since iTerm2 is GPL-2.0-only and kitty is GPL-3.0, i.e. legally uncombinable.
+**The lock was never the renderer — it was a process boundary this repo already owned.** Claude Code's Agent-Teams pane backend is not linked against iTerm2 and never handshakes with it. Decompiled from the live 2.1.219 binary, its gate is an **env check plus a PATH lookup** — `TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID`, then `$SHELL -lc "command -v it2"` — after which it drives panes through exactly five subcommands of whatever `it2` it resolved. So a program answering those five commands against `kitty @` gets **native kitty split panes** for assignee sessions. That is [`bin/it2-kitty`](bin/it2-kitty), and [`bin/it2-wrapper`](bin/it2-wrapper) execs it when `KITTY_WINDOW_ID` is set. No fork of either terminal — which would be legally impossible anyway: iTerm2 is GPL-2.0-only, kitty GPL-3.0.
 
 Four seams carry the rest, and each was a measured defect before it was a design:
 
@@ -548,9 +548,9 @@ Four seams carry the rest, and each was a measured defect before it was a design
 | the divert predicate, written once | decides "am I in kitty" identically everywhere | `handoff-fire.sh` and `cc-pane` deliberately resolve the *raw* it2 to inherit a pane's profile. Inside kitty there is no profile to inherit, so that bypass is pure loss — it resolves an iTerm2 client with no iTerm2 to talk to |
 | [`bin/cc-kitty-bin`](bin/cc-kitty-bin) — the kitty binary by **absolute path** | one resolver, so the seventh caller cannot reintroduce the bare name | `${CC_TERM_KITTY:-kitty}` appeared in six files, and hooks/launchd run with a PATH that excludes Homebrew — so `kitty` did not exist for exactly the callers that close panes. Measured: a teammate pane close from a hook exited `kitty: command not found`, rc 1, and the pane survived **3h09m** with its 653 MB `claude.exe` resident; the same command from the operator's shell closed it, rc 0. The worst polarity — **green where a human tests it, dead where it runs** |
 
-That last row is the one that bites, and it is why the predicate is pinned by a test rather than trusted: a handoff that **splits the pane with one binary and addresses it with another** fails in a way no single-file test can see.
+Which is why the divert predicate is pinned by a test rather than trusted: a handoff that **splits the pane with one binary and addresses it with another** fails in a way no single-file test can see.
 
-**What is verified, and on which terminal.** Every ✅ below names the evidence that earned it; none of them is an inference from reading source:
+**What is verified, and on which terminal.** Every ✅ names the evidence that earned it:
 
 | Surface | iTerm2 | kitty | Evidence |
 |---|---|---|---|
@@ -562,21 +562,21 @@ That last row is the one that bites, and it is why the predicate is pinned by a 
 | Handoff — tty / tab / background-tab helpers | ✅ | ✅ | pane→`pid`→`ps -o tty=` for the tty kitty does not expose; `--keep-focus` on the background tab. The **two exit states** are the contract — a failed query and an absent pane must not be confused, or a live successor reads dead — and inverting them is one of the 10 mutations the suite convicts |
 | Limit-recovery · boot-resume · pane census | ✅ | ✅ | AppleScript pane-open → `kitty @ launch`. The census was *worse than inert* on kitty: it truthfully reported **0 iTerm2 panes** on a box with a dozen live ones, zeroing the operator's only load-shed lever. Every kitty failure mode now lands on **null**, never `0` |
 
-**The Agent-Teams row is self-demonstrating.** Part of this section's own work was done by two assignee sessions spawned from a kitty pane, and the census taken across that spawn is the evidence: 19 panes before, **21 after**, the two new ones being kitty windows `30` and `31` whose foreground process is `claude.exe --agent-id k2-handoff@…` and `--agent-id k3-recovery@…`. That is the entire chain exercised end to end — Claude Code's pane backend → the login-PATH-resolved `it2` → the wrapper → the divert → `kitty @ launch` — with no stub anywhere in it.
+**The Agent-Teams row is self-demonstrating.** Part of this section's own work was done by two assignee sessions spawned from a kitty pane: 19 panes before, **21 after**, the two new ones being kitty windows `30` and `31` running `claude.exe --agent-id k2-handoff@…` and `--agent-id k3-recovery@…` — the whole chain exercised with no stub in it.
 
-**Two-way comms was already portable and nobody had noticed** — which is the useful lesson. Because a message is a file that hooks read, none of it was ever terminal-coupled; the *only* terminal call in the path was asking "is that pane still alive". When that oracle broke on kitty it returned **unknown** rather than **dead**, so nothing was mis-delivered and nothing went red. **A safe degradation is still a defect** — it was invisible precisely because it failed correctly.
+**Two-way comms was already portable and nobody had noticed.** Because a message is a file that hooks read, none of it was ever terminal-coupled; the *only* terminal call in the path was asking "is that pane still alive". When that oracle broke on kitty it returned **unknown** rather than **dead**, so nothing was mis-delivered and nothing went red — invisible precisely because it failed correctly.
 
-#### The instrument, running — not a table read off somebody's source tree
+#### The instrument, running
 
 <div align="center">
 
 <img src="assets/demo/terminal-bench.webp" width="900" alt="Terminal recording of scripts/terminal-bench.sh measuring the live terminals on this machine in five scenes. Scene 1 greps the READ-ONLY contract out of the script's own source. Scene 2 censuses which terminals are actually running, matching on the ps comm basename. Scene 3 runs a full drift row against kitty and prints verdict=OK. Scene 4 runs against the live iTerm2 and prints a GPU to CPU frame ratio below one, showing it renders mostly on the CPU, ending in verdict=PARTIAL. Scene 5 runs against WezTerm, which is not installed, and prints verdict=NO-DATA with exit 3.">
 
-<sub><b>Every number in this README's terminal section came out of this instrument, on this machine.</b> Recorded with <a href="https://github.com/charmbracelet/vhs">VHS</a> from <a href="assets/demo/terminal-bench.tape"><code>assets/demo/terminal-bench.tape</code></a> — re-runnable, so it cannot drift from the script it documents. No <code>--dry-run</code>, no mock-up: <a href="scripts/terminal-bench.sh"><code>terminal-bench.sh</code></a> is <b>read-only by construction</b> (creates no panes, closes none, writes no preference), which is the only reason it is safe to aim at a live fleet mid-session. <a href="assets/demo/terminal-bench.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b>, an unedited <code>screencapture</code> of the same sequence at display refresh. The inline image is the VHS render; the two take different routes for a measured reason, in <a href="assets/demo/terminal-bench.tape">the tape header</a>.</sub>
+<sub><b>Every number in this README's terminal section came out of this instrument, on this machine.</b> Recorded with <a href="https://github.com/charmbracelet/vhs">VHS</a> from <a href="assets/demo/terminal-bench.tape"><code>assets/demo/terminal-bench.tape</code></a> — re-runnable, so it cannot drift from the script it documents. <a href="scripts/terminal-bench.sh"><code>terminal-bench.sh</code></a> is <b>read-only by construction</b> (creates no panes, closes none, writes no preference), which is the only reason it is safe to aim at a live fleet mid-session. <a href="assets/demo/terminal-bench.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b>, an unedited <code>screencapture</code> of the same sequence at display refresh.</sub>
 
 </div>
 
-**Why three different verdicts are on camera.** An instrument that cannot say *"I did not measure this"* is worthless, because a reader then cannot tell a measured zero from a run that never happened. So `verdict=` has three terminal states and the clip shows all three: `OK` (both readings + GPU profile resolved), `PARTIAL` (**every number real, but one reading cannot support a leak verdict** — so the OK token is refused rather than overclaimed), and `NO-DATA` at exit 3 (the app is not running).
+**Why three different verdicts are on camera.** `verdict=` has three terminal states, so a reader can always tell a measured zero from a run that never happened: `OK` (both readings + GPU profile resolved), `PARTIAL` (**every number real, but one reading cannot support a leak verdict** — the OK token is refused rather than overclaimed), and `NO-DATA` at exit 3 (the app is not running).
 
 **The readings behind the table**, verbatim from that run, 2026-07-31, against this machine's own live fleet of 13 Claude Code sessions:
 
@@ -588,34 +588,30 @@ That last row is the one that bites, and it is why the predicate is pinned by a 
 | WezTerm | — | — | — | — | — | `NO-DATA` (not installed **at the time of that run**) |
 | cmux | — | — | — | — | — | **not driveable by this instrument** — see below |
 
-**WezTerm is no longer NO-DATA — it was measured under the films** (2026-08-01), and the two
-instruments agree: **27.2% app CPU, 82 threads (4.56/pane), 177 MB, GPU:CPU 107.5 : 1** at 18 panes
-of the same load, against the candidate table's independently-derived 24.4% and 4.00 threads/pane.
-Those columns are not the same experiment as the idle row above it — the rows above are the LIVE
-fleet at rest, these are 18 panes under load — so they are reported here rather than merged into a
-table that would then be mixing two regimes. The same run puts kitty at **10.4% / 10 threads** and
-Ghostty at **31.7% / 139 threads**, each with the row committed beside its film.
+**WezTerm was measured under the films** (2026-08-01), and the two instruments agree:
+**27.2% app CPU, 82 threads (4.56/pane), 177 MB, GPU:CPU 107.5 : 1** at 18 panes of the same load,
+against the candidate table's independently-derived 24.4% and 4.00 threads/pane. The same run puts
+kitty at **10.4% / 10 threads** and Ghostty at **31.7% / 139 threads**, each with the row committed
+beside its film. These are 18 panes under load, not the idle fleet in the table above — two regimes,
+kept in two tables.
 
-**cmux is absent because this instrument cannot drive it, and that is a property of cmux, not an
-omission.** Two independent blockers, both measured 2026-08-01: its control socket refuses processes
-that did not start inside cmux (`Access denied - only processes started inside cmux can connect`,
-with `socketPassword` empty in `~/.config/cmux/cmux.json`), and `cmux new-split` accepts no
-`--command`, so even an authorised caller cannot put the load into the panes it creates — only
-`workspace create` takes one, which yields a single loaded pane and seventeen idle shells. Filming
-it would mean writing the operator's cmux settings to mint a socket password AND reverse-engineering
-the `--layout` JSON schema, which is a disproportionate change to a running app for a screen
-recording. Its **thread cost is still in the candidate table above** (5.18/pane, linear), measured
-by the earlier structural pass that did not need per-pane commands.
+**cmux is absent because this instrument cannot drive it** — a property of cmux, measured
+2026-08-01. Its control socket refuses processes that did not start inside cmux (`Access denied -
+only processes started inside cmux can connect`, with `socketPassword` empty in
+`~/.config/cmux/cmux.json`), and `cmux new-split` accepts no `--command`, so even an authorised
+caller cannot put the load into the panes it creates — only `workspace create` takes one, which
+yields a single loaded pane and seventeen idle shells. Its only measured column is therefore the
+structural one above (5.18 threads/pane, linear).
 
-That `0.53 : 1` is the finding the whole section rests on, and it is **measured by profile, not read off a flag** — `sample` symbol counts, because a loaded GPU driver and a warm shader cache can only ever refute *"absent"*, never establish *"used"*. iTerm2 ships a Metal renderer and was still resolving 235 CPU frames to 125 GPU frames while burning a full core.
+That `0.53 : 1` is **measured by profile, not read off a flag** — `sample` symbol counts, because a loaded GPU driver and a warm shader cache can only ever refute *"absent"*, never establish *"used"*. iTerm2 ships a Metal renderer and was still resolving 235 CPU frames to 125 GPU frames while burning a full core.
 
 **The leak axis — where the evidence genuinely runs out.** iTerm2 was measured at **+76 mach ports/hour** at frozen layout. kitty over the same instrument read **+0 ports, +0 windows, +0 offscreen** — but read that with its resolution attached: a 45-second window cannot resolve a rate finer than ~80 ports/hr, so it **cannot exclude iTerm2's +76/hr**. It is a real reading and a weak bound.
 
-A 30-minute run was taken to get a sharp one (at 1800 s, one port is 2/hr) and **it did not deliver a clean bound either** — the window census fell 36 → 19 while it held, so the layout was not constant and its `+5 ports` cannot be separated into leaked-versus-released. Recorded as still-open in [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §6.1 rather than quoted as a bound it is not. What that run *does* show is churn: **the window population fell by 17 and offscreen fell by 18** (−17 total, −18 offscreen ⇒ onscreen actually *rose* by 1 — the drift row's `windows` column is the on+off total, so this read "−17 onscreen" until 2026-07-31) for +5 ports and +20 MB — kitty gave the windows back, where iTerm2 had **98 windows survive `close()`** ([upstream #12097](https://gitlab.com/gnachman/iterm2/-/issues/12097), open since 2025-01-01).
+A 30-minute run was taken to get a sharp one (at 1800 s, one port is 2/hr) and **it did not deliver a clean bound either** — the window census fell 36 → 19 while it held, so the layout was not constant and its `+5 ports` cannot be separated into leaked-versus-released. Recorded as still-open in [`terminal-for-30-panes-2026-07-31.md`](docs/research/terminal-for-30-panes-2026-07-31.md) §6.1 rather than quoted as a bound it is not. What that run *does* show is churn: **the window population fell by 17 and offscreen fell by 18** for +5 ports and +20 MB — kitty gave the windows back, where iTerm2 had **98 windows survive `close()`** ([upstream #12097](https://gitlab.com/gnachman/iterm2/-/issues/12097), open since 2025-01-01).
 
-**So the sustained-runtime question is open, and it is the largest gap in the terminal case** — stated here rather than papered over. It compounds with the HOLD above rather than being offset by it: the challenger is ahead of its rivals on loaded CPU, level with the incumbent in the incumbent's cheap layout, and unproven over hours. **That is exactly why the move below is a seam and not a migration** — a `CC_PANE_ID` abstraction costs the same whichever terminal eventually wins, and stops the question from having to be answered before anything else can proceed.
+**The sustained-runtime question is open, and it is the largest gap in the terminal case** — the challenger is ahead of its rivals on loaded CPU, level with the incumbent in the incumbent's cheap layout, and unproven over hours. **Which is why the move below is a seam and not a migration:** a `CC_PANE_ID` abstraction costs the same whichever terminal eventually wins, so the question need not be answered before anything else can proceed.
 
-**Reproduce any row yourself** — it is one read-only command per terminal, and it will refuse to invent a number:
+**Reproduce any row yourself** — one read-only command per terminal:
 
 ```bash
 scripts/terminal-bench.sh --app kitty  --interval 1800   # full row + drift  → verdict=OK
@@ -623,7 +619,7 @@ scripts/terminal-bench.sh --app iTerm2 --interval 0      # single reading    →
 scripts/terminal-bench.sh --app wezterm --interval 0     # not running       → verdict=NO-DATA, exit 3
 ```
 
-The first command is the one that failed above, and **it can no longer fail that way quietly**. `verdict=OK` never certified the constant-layout precondition — it attested that two readings and a GPU profile were obtained, and nothing about whether panes opened underneath the run — so the instrument now measures the precondition itself, re-checks it every `--watch` seconds, and **aborts with `verdict=LAYOUT-DRIFT` (exit 4) instead of printing a confounded row**. The gate keys on the *onscreen* count, and on offscreen only when offscreen **falls**: a *rising* offscreen count is the leak being measured, so a gate keyed on the `windows` total would make a leaking terminal abort its own measurement and become structurally unable to report the leak.
+The first command is the one that failed above, and **it can no longer fail that way quietly**. `verdict=OK` never certified the constant-layout precondition, so the instrument now measures that precondition itself, re-checks it every `--watch` seconds, and **aborts with `verdict=LAYOUT-DRIFT` (exit 4) instead of printing a confounded row**. The gate keys on the *onscreen* count, and on offscreen only when offscreen **falls**: a *rising* offscreen count is the leak being measured, so a gate keyed on the `windows` total would make a leaking terminal abort its own measurement and become structurally unable to report the leak.
 
 **The raw transcripts are committed**, so every number above is auditable against the run that produced it rather than against this table: [`bench-live-3way-2026-07-31.txt`](docs/research/data/bench-live-3way-2026-07-31.txt) (the kitty/Ghostty/cmux readings) and [`kitty-drift-30min-2026-07-31.txt`](docs/research/data/kitty-drift-30min-2026-07-31.txt) (the 30-minute run, including the window census that invalidates it as a drift bound).
 
@@ -631,7 +627,7 @@ Full method, per-candidate rows and the falsification plan: [`terminal-for-30-pa
 
 #### And the renderers themselves, under the load — one film per terminal
 
-The section above films the *instrument*. This films the *subject*: 18 panes of the identical
+This films the *subject*: 18 panes of the identical
 Ink-shaped load ([`tui-load.sh`](scripts/tui-load.sh) — alternate screen, 24-bit colour, full-frame
 repaint at 10 fps) repainting in each candidate, recorded at **1920×1080, 60 fps**, with that
 terminal's [`terminal-bench.sh`](scripts/terminal-bench.sh) row taken **during the same take** so the
@@ -641,53 +637,43 @@ film and the numbers describe one event rather than two.
 
 <img src="assets/demo/renderer-grid.webp" width="900" alt="An animated clip, four terminals in a 2x2 grid, each showing an 18-pane window repainting under the same synthetic load. Colour ramps shift row by row in every pane. kitty's panes form an even grid; WezTerm's, Ghostty's and iTerm2's form uneven binary split trees. Each pane header shows its own measured column-by-row geometry.">
 
-<sub><b>The films themselves, playing — 18 panes, one window, the same load, this machine.</b> 3 s of each take at 10 fps, 900 px per tile; the panes are repainting at 10 fps, so this is the real cadence, not a slideshow. <b>Full 1080p60 masters</b> (1920×1080, 60/1, ~15 s): <a href="assets/demo/renderer-kitty.mp4">kitty</a> · <a href="assets/demo/renderer-wezterm.mp4">WezTerm</a> · <a href="assets/demo/renderer-ghostty.mp4">Ghostty</a> · <a href="assets/demo/renderer-itermbench.mp4">iTerm2</a> — GitHub strips <code>&lt;video&gt;</code>, so an inline image is the only thing that can move here and the masters are links by necessity. Measurement row taken during each take: <a href="assets/demo/renderer-kitty.txt">kitty</a> · <a href="assets/demo/renderer-wezterm.txt">WezTerm</a> · <a href="assets/demo/renderer-ghostty.txt">Ghostty</a> · <a href="assets/demo/renderer-itermbench.txt">iTerm2</a>. Reproduce: <a href="assets/demo/renderer-film.sh"><code>renderer-film.sh --app kitty</code></a>, then <a href="assets/demo/renderer-grid.sh"><code>renderer-grid.sh</code></a>.</sub>
+<sub><b>The films themselves, playing — 18 panes, one window, the same load, this machine.</b> 3 s of each take at 10 fps, 900 px per tile. <b>Full 1080p60 masters</b> (1920×1080, 60/1, ~15 s): <a href="assets/demo/renderer-kitty.mp4">kitty</a> · <a href="assets/demo/renderer-wezterm.mp4">WezTerm</a> · <a href="assets/demo/renderer-ghostty.mp4">Ghostty</a> · <a href="assets/demo/renderer-itermbench.mp4">iTerm2</a> Measurement row taken during each take: <a href="assets/demo/renderer-kitty.txt">kitty</a> · <a href="assets/demo/renderer-wezterm.txt">WezTerm</a> · <a href="assets/demo/renderer-ghostty.txt">Ghostty</a> · <a href="assets/demo/renderer-itermbench.txt">iTerm2</a>. Reproduce: <a href="assets/demo/renderer-film.sh"><code>renderer-film.sh --app kitty</code></a>, then <a href="assets/demo/renderer-grid.sh"><code>renderer-grid.sh</code></a>.</sub>
 
-<sub>Two things in the frame are the terminals being themselves rather than defects, and both were checked rather than assumed. <b>Ghostty's tile is lighter than kitty's</b> because Ghostty's default background is <code>#282c34</code> and kitty's is true black — not because that window was unfocused. Ghostty does dim unfocused splits (<code>unfocused-split-opacity = 0.7</code>, and 17 of these 18 panes are unfocused), so the reading is a fair one, but it is not what happened here: measured over the published frame the background sits at 42–44 across all 48 spatial blocks, and per-split dimming would have left the one focused pane visibly apart. It dims <i>toward</i> <code>unfocused-split-fill</code>, which is that same background colour, so on a uniform background it is a no-op. <b>iTerm2 is the isolated clone</b> built by <a href="scripts/iterm-metal-bench-app.sh"><code>iterm-metal-bench-app.sh</code></a>, never the real one: launching iTerm2 proper restores the operator's windows and the 18 splits land in <i>their</i> live sessions. Ghostty's "Enable Automatic Updates?" prompt is app chrome that was on screen during its take, left in rather than cropped out.</sub>
+<sub><b>Ghostty's tile is lighter than kitty's</b> because its default background is <code>#282c34</code> against kitty's true black — not because that window was unfocused (checked: the background sits at 42–44 across all 48 spatial blocks). <b>iTerm2 is the isolated clone</b> built by <a href="scripts/iterm-metal-bench-app.sh"><code>iterm-metal-bench-app.sh</code></a>, never the real one.</sub>
 
 </div>
 
-**What the films are evidence of, and what they are not.** They show that the load really ran, in
-that terminal, on this box — not that one terminal beat another on looks. Three things a reader
-should know before drawing anything from them:
+**The films show that the load really ran, in that terminal, on this box** — not that one terminal
+beat another on looks. Three caveats:
 
 - **The pane geometry differs because the terminals differ.** kitty is run with its `grid` layout,
   which is what an 18-pane kitty user would actually use; WezTerm and Ghostty have no grid layout, so
-  they get their own binary split trees and their cells come out uneven. That asymmetry is a property
-  of the candidates, and it is disclosed rather than equalised away.
-- **Each pane's header shows its own measured geometry** (`62x19`, `94x22`, `79x40`…) — and that is
-  there because it was wrong. `tui-load.sh` sized itself with `tput cols`, which inside a command
-  substitution reports the terminfo default **80×24** instead of the pane, so every WezTerm pane
-  painted a fixed small frame while kitty painted full-size ones. The generator whose entire purpose
-  is an *identical* load across candidates was not delivering one, and nothing said so — 80×24 is a
-  plausible size, not an error. Fixed to read `stty size`; the geometry and which probe answered are
-  now recorded per pane.
+  they get their own binary split trees and their cells come out uneven.
+- **Each pane's header shows its own measured geometry** (`62x19`, `94x22`, `79x40`…), because it
+  was once wrong: `tui-load.sh` sized itself with `tput cols`, which inside a command substitution
+  reports the terminfo default **80×24** instead of the pane, so WezTerm panes painted a small fixed
+  frame while kitty painted full-size ones — an *identical*-load generator silently not delivering
+  one. Fixed to read `stty size`; geometry and the answering probe are now recorded per pane.
 - **Ghostty's row is app-wide, not per-pane.** Ghostty is a single shared process that was already
   running the operator's own surfaces, so its totals include panes these films did not create. The
   row says so; the per-pane division there is an upper bound.
 
-**The incumbent is missing, and the reason is worth more than the film would have been.** iTerm2 is
-the terminal this whole section argues about, and it is the one not filmed. The guard was "film it
-only when iTerm2 is not running" — no live sessions present, none disturbed — and that guard passed.
-**Launching iTerm2 restored the operator's windows anyway.** Window restoration reopened three
-windows that had not existed a second earlier, the driver's `current window` resolved to one of
-*theirs*, and 18 splits landed in restored sessions before the take was aborted and the app returned
-to not-running. The resurrection happens **at launch**, before any check can run — so
-[`renderer-film.sh`](assets/demo/renderer-film.sh) still refuses `--app iterm2` outright — but it no
-longer merely points elsewhere. It now *implements* the isolated route itself as `--app itermbench`,
-driving [`iterm-metal-bench-app.sh`](scripts/iterm-metal-bench-app.sh), which clones iTerm2 under its
-own bundle id and defaults domain and is the only route that restores nothing.
+**The incumbent is not filmed, because launching it is already destructive.** A "film it only when
+iTerm2 is not running" guard passes and is still not enough: window restoration fires **at launch**,
+before any check can run, and it reopened three of the operator's windows and landed 18 splits in
+*their* live sessions. So [`renderer-film.sh`](assets/demo/renderer-film.sh) refuses `--app iterm2`
+outright and implements the isolated route itself as `--app itermbench`, driving
+[`iterm-metal-bench-app.sh`](scripts/iterm-metal-bench-app.sh), which clones iTerm2 under its own
+bundle id and defaults domain — the only route that restores nothing.
 
 **Stalls are measured at the source, and every candidate has none.** ScreenCaptureKit emits a frame
 only when the window's content changes, so the gap between delivered frames *is* how long that window
 sat unchanged: kitty, WezTerm and Ghostty each recorded **0 gaps over 1.5 s**, with longest gaps of
-**0.07 s, 0.06 s and 0.04 s**. An earlier pixel-based reading off ffmpeg `freezedetect` said otherwise
-and was **withdrawn** — it averages over the whole frame, so on sparse coloured text it called an
-entire 20-second film "frozen from t=0" while 808 distinct frames sat in it, and its verdict moved
-with how much letterboxing each window's shape happened to need, which made it non-comparable across
-the very candidates being compared.
+**0.07 s, 0.06 s and 0.04 s**. A pixel-based `freezedetect` reading is not usable here — it averages
+over the whole frame, so on sparse coloured text it called a 20-second film containing 808 distinct
+frames "frozen from t=0".
 
-But the renderer is the *second*-order fix. A 30-pane grid is a **polling** interface — its cost scales with agent count, which is precisely the cost saturating the compositor. Exception routing does not scale with agent count at all. And the notifier that replaces it **already exists**: [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) is wired on `PermissionRequest` and writes every blocked session to `/tmp/cc-permission-pending/`. **It simply has no face** — nothing renders that queue as the operator's primary surface, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
+But the renderer is the *second*-order fix, because a 30-pane grid is a **polling** interface: its cost scales with agent count, which is the cost saturating the compositor. Exception routing does not. [`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh) already writes every blocked session to `/tmp/cc-permission-pending/` on `PermissionRequest`; nothing renders that queue, so the grid stands in for it. Caught live while this section was written: two sessions blocked at once under full three-monitor visibility, one unattended for **6.6 minutes**.
 
 Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compound**, so a `Bash(prefix:*)` list caps at ~2.4% coverage regardless of rule count — already at `defaultMode: auto` with **350 allow / 6 ask / 41 deny**. The residue is the guardrail working. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
 
@@ -697,7 +683,7 @@ Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compou
 
 <img src="assets/demo/kitty-panes.webp" width="900" alt="Screen recording of a single kitty window running the pane-management sequence. A narration pane on the left prints each chord as it fires; the window splits right, then below, into three coloured panes. A pane then swaps places with its neighbour, another is thrown to the top edge, per-pane title bars appear across the tops of the panes, and finally one pane leaves the split entirely and a tab bar appears at the bottom of the window holding it.">
 
-<sub><b>One kitty window, one sequence, every chord below.</b> The narration pane prints each chord as it fires, so the frame that shows a change already names the action that caused it. Nothing is simulated: each beat is the mappable action the chord is bound to, driven over that window's own remote-control socket — <b>keystrokes are deliberately not synthesised</b>, because macOS sends them to the frontmost process and on this box that is usually one of ~30 live agent panes. <a href="assets/demo/kitty-panes.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b> (the window-scoped capture delivered <b>41.7 fps</b> of distinct frames; the container is 60). Reproduce with <a href="assets/demo/kitty-panes-capture.sh"><code>assets/demo/kitty-panes-capture.sh</code></a>.</sub>
+<sub><b>One kitty window, one sequence, every chord below.</b> The narration pane prints each chord as it fires, so the frame that shows a change already names the action that caused it. Each beat is the mappable action the chord is bound to, driven over that window's own remote-control socket — <b>keystrokes are deliberately not synthesised</b>, because macOS sends them to the frontmost process and on this box that is usually one of ~30 live agent panes. <a href="assets/demo/kitty-panes.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b> (the window-scoped capture delivered <b>41.7 fps</b> of distinct frames; the container is 60). Reproduce with <a href="assets/demo/kitty-panes-capture.sh"><code>assets/demo/kitty-panes-capture.sh</code></a>.</sub>
 
 </div>
 
@@ -721,7 +707,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | **Mouse** | drag a divider | resize | needs `window_drag_tolerance` above kitty's 2 pt |
 | | ⌘⇧B, then drag a title bar | re-order | ⌘⇧B is what *draws* the handle |
 
-**Three things that are not guessable, and cost the time this section exists to save.**
+**Three that are not guessable.**
 
 - **`move_window` is a swap, and a silent no-op with no neighbour.** In a two-pane side-by-side
   tab, ⌘⇧↑ and ⌘⇧↓ are correctly dead — no beep, no message, nothing — which is indistinguishable
@@ -741,7 +727,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | When | Move | Why it is sized this way |
 |---|---|---|
 | **Now** | Do **not** cap V8 heaps; stop the automation minting **windows**; add a window-count rung to `capacity-alarm.sh` (warn 25 / page 60, measured as *drift*) | free, reversible, and windows are the 2.35× unit |
-| ~~**Next**~~ **Done** | ~~Migrate the renderer to **kitty**~~ → **support both**, behind one seam ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)) | the migration framing was wrong: a seam costs the same and does not require winning the argument first. `scripts/kitty-setup.sh` wires it in one command |
+| **Done** | Support **both** terminals, behind one seam ([§6](#so-the-question-stopped-being-which-one--it-runs-on-both)) | a seam costs the same as a migration and does not require winning the argument first; `scripts/kitty-setup.sh` wires it in one command |
 | **Then** | Give the beacon a face — **a console, not a terminal**: one row per session, a queue fed by the beacon, zoom-to-full-screen on demand, a dispatch composer | implements no VT at all; rendering then scales with sessions *blocked* (0–3), not sessions *running* (30+) |
 
 **Writing a terminal from scratch was considered and rejected.** WindowServer is the ceiling and it is Apple's — 30 panes in one window cost ~+11.2 pp of a core inside the compositor, the floor for *any* application, and kitty already sits on it. A from-scratch emulator's best case is matching something already installed, while owning VT correctness under Ink's alternate-screen/resize/wide-char usage forever.
@@ -799,15 +785,15 @@ Which binary any of that actually runs is resolved by **one** reader, [`bin/cc-c
 
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
-**Re-recording the demos.** `assets/demo/handoff-real.webp` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape`, then `gif2webp -m 6 -min_size` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.webp` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it, and it is encoded `img2webp -near_lossless 40`. Both are WebP but by different routes, and the reason matters: the VHS clip is flat terminal output, so `gif2webp` converts it losslessly and 10.6 % smaller, whereas the live recording must be **near-lossless** — an ordinary lossy WebP encodes each frame as a partial update rectangle, and the flat grey of an unfocused pane re-quantizes differently inside that rectangle than outside, leaving a visible vertical seam at its edge. Near-lossless costs 21 % more than the GIF it replaced and buys ~3× better colour fidelity. Measurements in the `demo-recording` skill.
+**Re-recording the demos.** `assets/demo/handoff-real.webp` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape`, then `gif2webp -m 6 -min_size` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.webp` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it, and it is encoded `img2webp -near_lossless 40`. The two routes differ because the content does: flat terminal output converts losslessly (`gif2webp`, 10.6 % smaller), while a live screen recording must be **near-lossless** — ordinary lossy WebP encodes each frame as a partial update rectangle, and the flat grey of an unfocused pane re-quantizes differently inside that rectangle than outside, leaving a visible vertical seam. Measurements in the `demo-recording` skill.
 
 `assets/demo/terminal-bench.*` is the third, and it is the only one needing **two** routes. The inline WebP takes the VHS path like the first — `vhs assets/demo/terminal-bench.tape`, then `gif2webp -m 6 -min_size -mt`. The linked MP4 **cannot**: VHS 0.11 ignores `Set Framerate` for its mp4 muxer and emits 25 fps whatever the tape asks — probed directly, since a tool's documented option silently not applying is exactly the kind of thing that ships as a false caption. So the 1080p60 master is a real `screencapture` of [`terminal-bench-capture.sh`](assets/demo/terminal-bench-capture.sh) at display refresh, and the tape deliberately emits no mp4 that could overwrite it. GitHub's sanitizer strips `<video>`, so the MP4 is only ever a link beside the image.
 
-**That capture route can film the operator's screen, and three separate leaks were caught by the mandatory contact sheet — none by any encoder error.** `screencapture -l<window-id>` does *not* scope **video** to that window (it recorded the whole display, Dock and other windows — use `-R x,y,w,h` with your own window covering the rect); a macOS notification banner carrying live session ids landed in the top-right (banners are right-aligned — keep the rect's right edge clear of them); and the window closed before the `-V` budget expired, so the tail filmed the desktop. Scan **every** second for that last one rather than sampling — mean luma separates the states unambiguously (terminal ≈ 6.4k, wallpaper ≈ 22.8k of 65535). Rect geometry and the full recipe are in the tape header.
+**That capture route can film the operator's screen: three separate leaks were caught by the mandatory contact sheet.** `screencapture -l<window-id>` does *not* scope **video** to that window (it recorded the whole display, Dock and other windows — use `-R x,y,w,h` with your own window covering the rect); a macOS notification banner carrying live session ids landed in the top-right (banners are right-aligned — keep the rect's right edge clear of them); and the window closed before the `-V` budget expired, so the tail filmed the desktop. Scan **every** second for that last one rather than sampling — mean luma separates the states unambiguously (terminal ≈ 6.4k, wallpaper ≈ 22.8k of 65535). Rect geometry and the full recipe are in the tape header.
 
 Unlike the other two, this clip has a **live dependency it does not control**: it measures whatever terminals are running when it is recorded, so a re-record on another day legitimately produces different numbers, and the `verdict=NO-DATA` scene stays honest only while WezTerm is genuinely absent. Re-check the scene comments against reality first. And note `pgrep -x iTerm2` **cannot see iTerm2 on macOS** — its accounting name is the first 16 chars of its full path — which is why the script and the tape both match on the `ps` comm basename.
 
-`assets/demo/kitty-panes.*` is the fourth, and it settles the capture problem the one above only worked around. It is filmed **window-scoped** — `tools/terminal-bench/window-film.swift` (ScreenCaptureKit, compiled with `swiftc`; interpreted, the same call aborts inside swift-frontend), resolved by title through `window-rect.swift`, exactly as [`renderer-film.sh`](assets/demo/renderer-film.sh) does. That is a **safety property, not a convenience**: a `-R` rect films whatever is on top of it, and the first attempt at this very demo recorded the operator's browser — their tabs, their mail, their home address — because the demo window was behind it. That take was deleted unused. Positioning the window to fix the rect is not available either: it needs Accessibility, and `osascript` here answers *"not allowed assistive access"* (-1719). The window-scoped filter composites the window's own content, so occlusion, the Dock and notification banners become **impossible** to film rather than something a contact sheet has to catch — and it works while the window is on no visible Space at all, which is where a freshly launched window on this four-display box actually lands.
+`assets/demo/kitty-panes.*` is the fourth, and it settles the capture problem the one above only worked around. It is filmed **window-scoped** — `tools/terminal-bench/window-film.swift` (ScreenCaptureKit, compiled with `swiftc`; interpreted, the same call aborts inside swift-frontend), resolved by title through `window-rect.swift`, exactly as [`renderer-film.sh`](assets/demo/renderer-film.sh) does. That is a **safety property, not a convenience**: a `-R` rect films whatever is on top of it — the first attempt at this demo recorded the operator's browser, because the demo window was behind it. Positioning the window to fix the rect is not available either: it needs Accessibility, and `osascript` here answers *"not allowed assistive access"* (-1719). The window-scoped filter composites the window's own content, so occlusion, the Dock and notification banners become **impossible** to film rather than something a contact sheet has to catch — and it works while the window is on no visible Space at all, which is where a freshly launched window on this four-display box actually lands.
 
 It also takes **two routes for one sequence**, for a measured reason. The linked 1080p60 master is filmed with the panes running [`tui-load.sh`](scripts/tui-load.sh) at 60 Hz, because ScreenCaptureKit is **change-driven**: with still panes the same take delivered **26 frames in 38 s (0.68 fps)** while the container could still be muxed at 60, which would have made "1080p60" true of the file and false of the pixels. With the panes repainting it delivers **41.7 fps**, and the caption states that number beside the container's. The inline WebP is built from a **still-pane** take (`CC_PANES_STATIC=1`) because that same 60 Hz churn is close to incompressible — the animated WebP of the moving take came out **38 MB**, against **167 KB** for the still one, whose 144 sampled frames the encoder merges into **11** stored frames with no loss of anything the image exists to show: the pane moves are discrete state changes, not motion.
 
