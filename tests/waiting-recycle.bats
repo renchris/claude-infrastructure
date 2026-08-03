@@ -151,6 +151,31 @@ mk_contract() { # $1=id $2=waitee $3=deadline-epoch $4=waiter_pid $5=status
   run drive s5h1234 "$(mk_tx 5 "$WAIT")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+# The hold must protect a TEAMMATE, never the session itself. A team dir is minted with a single
+# `team-lead` member the moment a session spawns anything, and that lead IS this session — so a
+# bare-existence predicate made every such session hold itself for the rest of its life. Measured
+# 2026-08-03: 40 of 46 live team dirs contained ONLY the lead, and sid 7868b45e logged 17 consecutive
+# live-team-hold abstains at used_pct=43 with no teammate in its config. Production shape (agentType
+# AND name both present) — the fixture above pins the `name`-only shape, so the two together pin both.
+@test "S5 lead-only team (production shape) → NO hold: a team of just me is not a team" {
+  mkdir -p "$CLAUDE_CONFIG_DIR/teams/session-s5i1234"
+  echo '{"members":[{"agentType":"team-lead","name":"team-lead"}]}' \
+    > "$CLAUDE_CONFIG_DIR/teams/session-s5i1234/config.json"
+  mk_tel s5i1234 70
+  run drive s5i1234 "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; fired "$output"
+  ! grep -q 'live-team-hold' "$CC_WR_IDL"
+}
+# Fail-closed: an unparsable config is treated as a LIVE team. A recycle is unrecoverable, so the
+# unknown case must hold rather than fire.
+@test "S5 unparsable team config → HOLD (fail-closed, never fire on unknown)" {
+  mkdir -p "$CLAUDE_CONFIG_DIR/teams/session-s5j1234"
+  printf 'not json at all' > "$CLAUDE_CONFIG_DIR/teams/session-s5j1234/config.json"
+  mk_tel s5j1234 70
+  run drive s5j1234 "$(mk_tx 5 "$WAIT")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'live-team-hold:unparsable' "$CC_WR_IDL"
+}
 
 # ── (6) STAGE 2 — deterministic fire (advisory → K=1 escalation), shadow-default ──────────────────
 # GRACE_S=0 ⇒ poll 1 sets the grace clock (advisory), poll 2 escalates to Stage 2.

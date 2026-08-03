@@ -848,10 +848,34 @@ mbx_active() { # $1=mailbox file → 0 if touched within QUIET_S
   [ "$(( now_s - mt ))" -lt "$QUIET_S" ]
 }
 # S5 — live context-bound TEAMMATES (HARD HOLD — teammate/TaskOutput results route to THIS SID; a recycle
-# or /compact kills them unrecoverably). Signal: a team dir created BY this session (existence ⇒ HOLD).
+# or /compact kills them unrecoverably). Signal: a team dir created BY this session that records at least
+# one member OTHER THAN THE LEAD.
+#
+# WHY THE MEMBER TEST, NOT BARE EXISTENCE (2026-08-03): the dir is minted with a single `team-lead` member
+# the moment a session spawns anything, and the lead is THIS session — so bare existence made every such
+# session hold ITSELF, permanently, for the rest of its life. Measured on the live fleet: 40 of 46 team
+# dirs contain ONLY the lead, i.e. 87% of the holds protected no teammate at all. The dir is cleaned at
+# session end, so the hold released exactly when releasing it no longer mattered. Ground truth: sid
+# 7868b45e sat at used_pct=43 (over T_IDLE=35, armed, --live, no cooldown, cap unused) and logged 17
+# consecutive `live-team-hold` abstains, 19:19:44Z-19:51:40Z, with no teammate in its config.
+#
+# The guard is UNCHANGED where it was designed to work — a genuine multi-member team still hard-holds.
+# Deliberately NOT an age/mtime liveness proxy: output age goes false during exactly the long runs that
+# matter. A config we cannot parse FAILS CLOSED (hold) — the recycle is what is unrecoverable, so an
+# unreadable team is treated as a live one. jq is guaranteed present here: :480 abstains no-jq first.
 if [ "$SAFE" = 1 ]; then
   for td in "$CFG"/teams/session-"${SID:0:8}"*; do
-    { [ -d "$td" ] && [ -f "$td/config.json" ]; } && { hold hard "live-team-hold"; break; }
+    { [ -d "$td" ] && [ -f "$td/config.json" ]; } || continue
+    # A member is the LEAD if EITHER key says so — live configs carry both `agentType` and `name`,
+    # while the existing fixtures carry only `name`. Keying on one alone silently reclassifies the
+    # other shape, so both are tested and anything else counts as a peer (fail-closed).
+    _n_peer="$(jq -r '[.members[]? | select(.agentType != "team-lead" and .name != "team-lead")] | length' \
+                "$td/config.json" 2>/dev/null)"
+    case "$_n_peer" in
+      ''|*[!0-9]*) hold hard "live-team-hold:unparsable"; break ;;
+      0)           : ;;                       # lead-only team ⇒ nothing to protect; do NOT hold
+      *)           hold hard "live-team-hold"; break ;;
+    esac
   done
 fi
 # S3 — a peer is contract-BLOCKED on this desk: OPEN wait-contract, waitee names me, deadline future,
