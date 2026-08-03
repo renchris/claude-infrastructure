@@ -1128,3 +1128,143 @@ is valid in `settings.json`, which nothing else writes.
 2. Whether the `it2` facade can present a pane whose argv IS the command (no prompt, no typing).
 3. A post-spawn liveness+progress assertion: spawned N ⇒ N alive AND none parked on a modal.
 4. Whether `CC_FIRE_*` capacity gating interacts with a 7-way fan-out.
+
+### 9.5 RESOLVED 2026-08-03 (branch `docs/p6-kitty-agent-spawn`) — §9.4 items 1-3 closed
+
+**Ownership (§9.4 item 1) — settled by reading the 2.1.220 binary, not by inference. The typing is
+Claude Code's, and CC's OWN tmux backend already does it correctly.** The two backends, side by side:
+
+```js
+ITermBackend.sendCommandToPane(id, cmd)          TmuxBackend.sendCommandToPane(id, cmd)
+  await it2 ["session","send","-s",id,"\x15"]      await tmux ["set-option","-p","-t",id,
+  const o = await it2 ["session","run","-s",id,           "remain-on-exit","failed"]
+                       cmd]                        await tmux ["respawn-pane","-k","-t",id,
+  if (o.code !== 0) throw …                                "--", cmd]      ← argv IS the command
+```
+
+⇒ **This repo intercepts nothing.** `bin/it2-kitty` faithfully implements the contract its own header
+already documented at lines 46-47; the *decision* to type belongs to `ITermBackend`. So the remedy is
+neither "fix our interception" nor "wait for upstream" — the defect is confined to one of two
+upstream backends, and the other one already contains the fix, which is exactly the shape kitty was
+given. **`sendCommandToPane` is also where the silence comes from**: it checks `o.code`, i.e. that the
+KEYSTROKES were accepted. Nothing in the path ever asks whether a process exists.
+
+**§9.4 item 2 — yes, with a one-hop deferral, because CC splits BEFORE it has the command.**
+`da3e7173`. A split pane now launches `bin/cc-pane-runner` instead of an interactive shell and is
+marked ARMED; `run` writes the command to a file the runner is already blocked on; `send`'s `^U` is a
+no-op because an armed pane has no line to clear. No prompt line is involved at any point, so the
+operator's keystrokes cannot become argv. The runner consumes its own marker, so the pane returns to
+the legacy typing transport for every LATER send/run — which is what keeps the change safe.
+
+- **`-l -i` on the launch argv is load-bearing, not decoration.** `.zprofile` puts `~/.claude/shims`
+  on PATH (§8.4's login-PATH race) and `.zshrc` synthesizes
+  `ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID"` — the pane identity every hook, cc-notify address and
+  comms registration is keyed on. Measured on pane 331: the NEW pane's own id, shims present. A
+  runner exec'd from a non-login non-interactive shell would have produced agents that are alive and
+  **unaddressable**, which is worse than dead.
+- **A FIFO would have been the wrong primitive** and the reason generalises: it makes the ORDER of
+  `open()` load-bearing between two processes with no synchronisation, and a FIFO opened for write
+  with no reader blocks — i.e. it would hang CC's spawn call whenever `run` won the race. An
+  atomically-written regular file has no ordering requirement at all.
+
+**A THIRD defect, found while fixing the first — and a CONCURRENT SESSION found and landed it first.**
+`kitty @ launch` focuses the new window by default and `it2-kitty split` never said otherwise, so
+every split moved the operator's keyboard into a pane they did not ask for — *that is the mechanism*
+by which an in-flight keystroke reached an agent's prompt line at all. Session `7868b45e` reached the
+identical conclusion independently and landed `0999c8bb` (`--keep-focus`, with an A/B measurement:
+focus HELD while the pane count moved 9→10) while this work was in flight. **This branch adopted the
+landed flag and deleted its own duplicate** — the arming path carries `--keep-focus` too, because a
+transport-specific fix would have left the legacy (opted-out) path unprotected.
+
+⚠ **The two fixes are complements, and reading either as sufficient is the trap.** `0999c8bb`'s own
+comment states the residue exactly: *"`launch` starts a bare interactive zsh with no program, so
+between the line-clear and the command there is a ~50-150ms window"*. Un-focusing removes the
+operator's keystrokes as a **source**; it does not remove the **window**, which is a property of
+typing a command at a prompt at all. Anything else reaching that pty — a stray `session send`, a
+paste, a `focus_follows_mouse` flip, a caller that legitimately focuses the pane — still lands in the
+same line buffer. Arming removes the buffer. §9.1's standing instruction ("treat any proposed fix
+that still types at a live prompt as not-a-fix") is what says which of the two closes the defect.
+
+**§9.4 item 3 — the LIVENESS half landed here; the PROGRESS half is deliberately NOT a second tool.**
+
+The inline assertion is in `it2-kitty run` and is what §9.1 fact 2 was missing: the runner deleting
+the command file is the ack, so a non-zero exit means the command provably never started, and Claude
+Code turns that into a real `Failed to send command to iTerm2 pane <id>` throw instead of a silent
+"Spawned successfully". It sits on CC's blocking spawn path, so it is liveness-only by design —
+measured 0.18s end-to-end in the healthy case, and both negative controls (never consumed / pane
+vanished) fail loud with named diagnostics.
+
+**The aggregate half was BUILT, TESTED, and then NOT LANDED — because session `7868b45e` landed
+`bin/cc-spawn-verify` (`17842e77`) for the same question while it was in flight.** Shipping a rival
+would recreate `sibling-auditors-must-share-the-state-model` on purpose: two checks over one
+population, with different oracles and different exit vocabularies. Theirs is the better instrument
+for the half they cover, and their reasoning indicts mine specifically — they key on the **process
+table** (the harness stamps `--agent-name` into the child's argv, so a match is proof) and explicitly
+reject `foreground_processes`, which is what mine enumerated, as *"the foreground process GROUP,
+sampled"* — measured showing `caffeinate`, `tee`, and MCP servers alongside the binary. It
+over-reports rather than under-reports (29/29 live panes did contain `claude`), so mine was not
+wrong; it was keyed on a weaker oracle for no gain.
+
+**What their tool does NOT cover, and what therefore remains open.** `cc-spawn-verify` resolves
+0 RUNNING / 1 ABSENT / 2 PARKED, where PARKED means *no process AND a pane showing a dead launch* —
+i.e. **never started**. §9.2's failure is the opposite shape: the process EXISTS and is inert on a
+modal. That is a FOURTH state in a three-state vocabulary their header says is shared verbatim with
+`handoff-fire.sh:verify_engagement` — so adding it is a change to someone else's just-landed contract
+with a second consumer, not a local edit (`new-enum-member-falls-into-fail-closed-default` is exactly
+what a careless fourth member does). **Filed as a follow-on for that file's owner rather than forced
+through here.** With §9.2 closed, it has no live trigger today.
+
+**Two defects the LIVE FLEET caught in the unlanded tool that its fixtures could not.** Both are
+recorded because the LESSONS outlive the code, and both were found by running it against 27 real
+panes rather than a fixture:
+
+1. **It reported the LEAD's own pane as an agent.** It joined each process's argv into a string and
+   tested `"--agent-id" in cl`. The lead's argv carries its whole prompt, and that prompt quoted
+   `--agent-id` *while describing this very defect*. A flag NAMED in prose is indistinguishable from
+   a flag PASSED once you have flattened the list that told them apart (memory:
+   `pgrep-f-matches-agent-briefs`, re-committed by someone who had read it).
+2. **It reported a healthy agent as BLOCKED.** Pane 329 was grepping this repo and had `[nyae]` —
+   quoted inside `handoff-fire.sh`'s own comment — on screen. **A pane can DISPLAY a modal's text
+   without BEING at one**, and in a fleet whose agents read the plan documenting these modals that is
+   not a rare case. Any future progress-oracle must anchor shell states to column 0, require the TUI
+   modal's header AND an option, and stay a REPORTER — a false BLOCKED costs a glance, a false OK
+   costs an agent.
+
+Both are why the fourth state is worth doing carefully rather than quickly.
+
+**§9.1's `ITERM_SESSION_ID` trap — audited, and there was nothing to fix.** All FOUR divert spellings
+(`it2-wrapper:90`, `cc-pane:111`, `handoff-fire.sh:464` **and** `:3652` — §8.3 says three FILES, but
+handoff-fire carries two) key on `KITTY_WINDOW_ID` + `IT2_WRAPPER_NO_KITTY`. **`TERM_PROGRAM` is
+never read in code anywhere in the repo**, so the "fails open" concern has no site. Every
+`ITERM_SESSION_ID` read in the fleet is PANE IDENTITY, which is correct under kitty precisely because
+`.zshrc` synthesizes it. A clean audit is still worth a test, so the measured values are now a
+regression anchor in `tests/kitty-divert-real-it2.bats` — with its own iTerm2-shaped control, because
+a predicate keyed on the session id would return the SAME answer to both and one of them would be
+wrong.
+
+**§9.2 (Defect B) — CLOSED, and it closed itself mid-session.** At 11:05 on 2026-08-03
+`/Users/chrisren/Development/personal/.claude/settings.json` appeared containing exactly
+`{"enabledMcpjsonServers": ["ms365"]}` — the durable fix §9.2 specified, applied while this work was
+in flight. **Verified rather than assumed** (memory: `parked-blocker-obsoleted-by-later-fix`): a fresh
+`claude` launched into that project under `CLAUDE_CONFIG_DIR=~/.claude-tertiary` — the exact config
+whose `enabledMcpjsonServers` was `[]` — now starts straight to its prompt with no MCP modal. That run
+went through the new argv path, so it doubles as the end-to-end proof of the §9.1 fix with a real
+agent binary in the real project. **No operator step remains for §9.2.**
+
+**§9.4 item 4 — NOT investigated, and named rather than silently dropped.** `CC_FIRE_*` capacity
+gating lives in `handoff-fire.sh`, which is not on Claude Code's Agent-Teams spawn path at all
+(CC calls `it2` directly), so it cannot have gated the 7-way fan-out. That is an argument, not a
+measurement, and the item stays open on that basis.
+
+**Verification.** 13 tests in `tests/it2-kitty-argv-spawn.bats`, 2 added to
+`tests/kitty-divert-real-it2.bats`; the sibling's `tests/it2-kitty.bats` additions pass unchanged
+against the merged file, and 105 neighbouring kitty assertions are unaffected. Every
+central claim red-proofed against a mutant that makes it false (drop `--dont-take-focus`; always-pass
+liveness; never arm; substring matching; header-only modal) — each convicted the intended test and
+only it. Live on real panes: armed spawn 0.18s with focus unmoved, and both negative controls (never
+consumed / pane vanished) failing loud with named diagnostics.
+
+**One defect the red-proof caught in the HARNESS.** The "liveness assertion passes" test used an
+unbounded background consumer, so the mutant that broke arming *hung* the suite instead of failing it
+— two minutes of a red-proof run spent proving nothing. A harness whose failure mode is a hang cannot
+report the thing it exists to report. Bounded, then the mutant convicted three tests cleanly.
