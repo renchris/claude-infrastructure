@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# cc-spawn-verify — did the session I just spawned actually START?
+#
+# THE GAP THIS CLOSES. A spawn is fire-and-forget: the Agent tool returns "Spawned successfully"
+# the moment the pane is requested, not when the agent is running. Everything between those two
+# facts is invisible to the caller, and the failures there are SILENT — the pane exists, so nothing
+# looks broken, and the lead waits forever on an agent that never started. Measured 2026-08-03: two
+# of four subagents in one wave died at the shell (`zsh: command not found: acd`, and the same
+# corruption escalated by `setopt CORRECT` into an interactive `correct 'acd' to 'cd' [nyae]?`
+# prompt that hangs indefinitely). Both panes stayed alive and idle. Nothing reported anything.
+#
+# 0999c8bb closes the dominant CAUSE of that (kitty was stealing focus mid-launch, so operator
+# keystrokes landed in the launch command line). This file closes the DETECTION half, which is
+# disjoint: a spawn can still fail to start for reasons that have nothing to do with typing — a
+# logged-out account, a usage-limit refusal at first token, a reaped cwd, a binary that moved.
+#
+# THREE OUTCOMES, NOT TWO — and the third is the whole point (same contract as
+# handoff-fire.sh:verify_engagement, deliberately, so consumers learn ONE exit-code vocabulary):
+#
+#   0  RUNNING  — the agent process exists. It started.
+#   1  ABSENT   — no such process, and no evidence of why. Died, or never launched.
+#   2  PARKED   — no such process AND a pane is sitting at a shell prompt showing a launch that
+#                 died. This is knowable in SECONDS and names its own remedy; folding it into 1
+#                 loses the diagnosis. Callers MUST branch on 2 explicitly.
+#
+# WHY PROCESS-FIRST, NOT PANE-FIRST. The process table is the authority on "is it running": the
+# harness stamps `--agent-name <n>` into the child's argv, so the agent is directly addressable and
+# a match is proof. Pane state is only consulted to EXPLAIN an absence, never to establish presence
+# — a pane oracle can be blind (kitty not running, remote control off, iTerm2 instead) and a blind
+# oracle must never be able to convict a healthy agent.
+#
+# WHY NOT `foreground_processes`. It is the foreground process GROUP, sampled: on this fleet live
+# claude panes variously showed `caffeinate`, `tee`, `chrome-devtools-mcp` and an MCP server
+# alongside the binary. It over-reports rather than under-reports (29/29 live panes did contain
+# `claude`), so it is not WRONG — but it is a sample with no stability guarantee, and it is the
+# wrong thing to key on when the process table answers the same question exactly.
+# `in_alternate_screen` is a terminal-STATE fact (the TUI switched buffers), not a process sample,
+# and it separates the states we care about cleanly — measured across 29 live panes plus a bare-zsh
+# control plus a replay of the `[nyae]` hang:
+#     running a TUI : in_alternate_screen=True   at_prompt=False
+#     bare prompt   : in_alternate_screen=False  at_prompt=True
+#     [nyae] hang   : in_alternate_screen=False  at_prompt=True
+# It answers "is a full-screen TUI running", not "is claude running" — vim would read True too.
+# That is sufficient here because it is only ever used to explain an ALREADY-ESTABLISHED absence.
+#
+# Usage:  cc-spawn-verify <agent-name> [--timeout N] [--quiet]
+#         cc-spawn-verify --all <name>...      → verifies each, exits non-zero if ANY is not RUNNING
+set -euo pipefail
+
+TIMEOUT="${CC_SPAWN_VERIFY_TIMEOUT:-25}"
+INTERVAL="${CC_SPAWN_VERIFY_INTERVAL:-1}"
+QUIET=0
+ALL=0
+NAMES=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout) TIMEOUT="${2:-25}"; shift 2 ;;
+    --interval) INTERVAL="${2:-1}"; shift 2 ;;
+    --quiet|-q) QUIET=1; shift ;;
+    --all) ALL=1; shift ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -*) printf 'cc-spawn-verify: unknown option %s\n' "$1" >&2; exit 64 ;;
+    *) NAMES+=("$1"); shift ;;
+  esac
+done
+[ ${#NAMES[@]} -gt 0 ] || { printf 'usage: cc-spawn-verify <agent-name> [--timeout N] [--quiet]\n' >&2; exit 64; }
+
+say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+
+# ── IS THE AGENT PROCESS RUNNING? ────────────────────────────────────────────────────────────────
+# TWO conditions, and BOTH are load-bearing — this took a false RUNNING to get right.
+#
+#   1. `--agent-name <n>` as an ARGV PAIR, never the bare name anywhere in the line. A plain
+#      `pgrep -f <n>` counts every process whose argv merely MENTIONS the name, and briefs are
+#      passed as argv, so a lead that wrote the name into a brief matches ITSELF.
+#   2. The EXECUTABLE (argv[0], the field right after the pid) must be a claude binary.
+#
+# Condition 1 alone is NOT enough, which is the counter-intuitive part: the pair `--agent-name <n>`
+# also appears verbatim in every command line that merely QUOTES the launch — the spawning shell,
+# a `kitten @ send-text` carrying the launch text, the operator's own grep. Measured while testing
+# this file: a pane was visibly hung on `correct 'acd' to 'cd' [nyae]?` with no agent running, and
+# this function reported `RUNNING (pid 54740)` — pid 54740 being the test harness whose own argv
+# contained the flags. A verifier that can be satisfied by the sentence describing the spawn is
+# worse than no verifier: it returns green in exactly the case it exists to catch.
+#
+# So the discriminator is argv POSITION, not text presence. The real agent EXECUTES claude; every
+# impostor merely mentions it.
+agent_pid() { # $1=name → echoes pid(s) of genuine agent processes, empty if none
+  ps -Ao pid=,command= 2>/dev/null \
+    | awk -v n="$1" '
+        $2 !~ /claude/ { next }                 # argv[0] must BE claude, not quote it
+        {
+          for (i = 3; i < NF; i++)
+            if ($i == "--agent-name" && $(i+1) == n) { print $1; break }
+        }'
+}
+
+# ── WHY IS IT ABSENT? (diagnosis only — never used to prove presence) ────────────────────────────
+# Fails OPEN in every direction: no kitty, no socket, unreadable JSON, python missing ⇒ "no
+# evidence", i.e. exit 1. A diagnostic that could itself report PARKED on its own blindness would
+# be worse than no diagnostic at all.
+#
+# SPECIFICITY IS THE WHOLE DESIGN HERE. "A pane is at a shell prompt" is NOT evidence of a dead
+# spawn — the operator legitimately keeps shell panes open, so keying on that alone would report
+# PARKED for every ABSENT and the verdict would carry zero bits. A pane only counts as evidence if
+# its own screen NAMES THIS AGENT: the corrupted line still contains `--agent-name <n>`, because
+# what died is the launch command itself. That makes the diagnosis specific to the spawn we asked
+# about and immune to unrelated shells.
+parked_evidence() { # $1=agent-name → echoes a reason and returns 0 if THIS agent's launch died
+  local name="$1" kb sock out
+  kb="$(command -v kitten 2>/dev/null || command -v kitty 2>/dev/null || true)"
+  [ -n "$kb" ] || return 1
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  if [ -n "$sock" ]; then out="$("$kb" @ --to "$sock" ls 2>/dev/null || true)"
+  else out="$("$kb" @ ls 2>/dev/null || true)"; fi
+  [ -n "$out" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  # Candidate panes: at a shell prompt (not in the alternate screen). Narrowed below by content.
+  local cands
+  cands="$(printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for w in d:
+    for t in w.get("tabs", []):
+        for win in t.get("windows", []):
+            if win.get("in_alternate_screen") is False and win.get("at_prompt") is True:
+                print(win.get("id"))
+' 2>/dev/null || true)"
+  [ -n "$cands" ] || return 1
+
+  local id text found=""
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    text="$("$kb" @ ${sock:+--to "$sock"} get-text --match "id:$id" 2>/dev/null || true)"
+    [ -n "$text" ] || continue
+    # Must name THIS agent — the dead launch line still carries `--agent-name <n>`.
+    printf '%s' "$text" | grep -qF -- "--agent-name $name" || continue
+    # Line-ANCHORED shell-error match. Unanchored would match our own prose: this very file quotes
+    # `correct 'acd' to 'cd' [nyae]?`, and a pane showing this source would read as a wedge.
+    # Both shells' orderings are carried — zsh says `zsh: command not found: X`, bash says
+    # `bash: X: command not found`; one pattern silently covers only zsh.
+    # `.*` not `[^\n]*` — grep is already line-oriented, and spelling the negated class out with a
+    # literal newline inside the brackets makes grep read the pattern as two, which it rejects with
+    # "brackets ([ ]) not balanced". That failure is SILENT here (stderr, `|| true`), and it
+    # degraded the verdict from a named cause to a generic one while still exiting 2 — caught only
+    # because the probe printed the real screen alongside the diagnosis.
+    local why
+    why="$(printf '%s' "$text" | grep -oE '^((zsh|bash): (correct |command not found|no such file or directory|no matches found).*|bash: [^:]*: (command not found|no such file or directory))' | tail -1 || true)"
+    if [ -n "$why" ]; then found="pane id=$id — $why"; else found="pane id=$id — launch line present, never executed"; fi
+    break
+  done <<< "$cands"
+
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+  return 0
+}
+
+verify_one() { # $1=name → 0 running / 1 absent / 2 parked
+  local name="$1" waited=0 pids
+  while :; do
+    pids="$(agent_pid "$name" || true)"
+    if [ -n "$pids" ]; then
+      say "✓ RUNNING  $name (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ $//'))"
+      return 0
+    fi
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep "$INTERVAL"; waited=$((waited + INTERVAL))
+  done
+  local why
+  if why="$(parked_evidence "$name")"; then
+    say "✗ PARKED   $name — no agent process after ${TIMEOUT}s; a pane is sitting at a shell:"
+    say "$(printf '%s' "$why" | sed 's/^/             /')"
+    say "           the launch line died before claude started (corrupted command, bad cwd, or a"
+    say "           launcher that exited). The pane is ALIVE, which is why nothing else reports it."
+    return 2
+  fi
+  say "✗ ABSENT   $name — no agent process after ${TIMEOUT}s, and no parked pane to explain it."
+  return 1
+}
+
+# Worst-verdict wins, so a wave is only green when EVERY member is running. PARKED (2) outranks
+# ABSENT (1) because it is the more specific diagnosis, not because it is more severe.
+#
+# `rc=0; verify_one … || rc=$?` — NOT `verify_one … || rc=$?` on one line, and never a trailing
+# `[ … ] && worst=…` as the last statement of the loop body: under `set -e` a false test there
+# makes the body's exit status non-zero. Both are the shapes that quietly invert a guard.
+worst=0
+for n in "${NAMES[@]}"; do
+  rc=0
+  verify_one "$n" || rc=$?
+  if [ "$rc" -gt "$worst" ]; then worst="$rc"; fi
+  if [ "$ALL" != 1 ]; then break; fi
+done
+exit "$worst"
