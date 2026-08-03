@@ -32,7 +32,6 @@ under bats.
 import argparse
 import json
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -274,15 +273,8 @@ def port_listening(port: int) -> bool:
 def port_listener_pids(port: int) -> List[int]:
     """Pids holding <port> in LISTEN. Empty on any failure -- callers fail CLOSED, so an
     unreadable listener is treated as foreign and is never adopted or killed."""
-    # lsof is /usr/sbin/lsof, and /usr/sbin is NOT on the PATH a LaunchAgent or a hook is handed --
-    # so the bare name resolves in an operator's shell and raises FileNotFoundError off-session,
-    # landing in the except below and returning []. The docstring's "fail CLOSED" is then honoured in
-    # letter and defeated in spirit: we do not adopt a foreign browser, but we also never recognise
-    # OUR OWN, so --start relaunches on every call. Resolve absolutely (2026-08-02; same class as
-    # memory `path-resolved-dependency-in-daemon-code`).
-    lsof = shutil.which("lsof") or "/usr/sbin/lsof"
     try:
-        out = subprocess.run([lsof, "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+        out = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
                              capture_output=True, text=True, timeout=proc_timeout_s())
     except (OSError, subprocess.SubprocessError):
         return []
