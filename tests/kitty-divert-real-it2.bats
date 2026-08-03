@@ -119,3 +119,36 @@ load_cp_fn()    { eval "$(sed -n '/^it2_bin() {/,/^}/p' "$CP")"; eval "$(sed -n 
   [ "$w" = "$h" ]
   [ "$w" = "$c" ]
 }
+
+# ── the ITERM_SESSION_ID trap, pinned in the direction that would break it (plan §9.1) ────────────
+#
+# MEASURED on the live kitty, 2026-08-03 — these are not hypothetical values:
+#
+#   TERM=xterm-kitty   KITTY_WINDOW_ID=312   KITTY_LISTEN_ON=unix:/tmp/kitty-613
+#   TERM_PROGRAM=(empty)   ITERM_SESSION_ID=w0t0p0:312     ← well-formed, and kitty's own
+#
+# ITERM_SESSION_ID is PRESENT and correctly shaped inside kitty — .zshrc synthesizes it deliberately,
+# because Claude Code's backend gate reads it and the colon is required. So it is the one variable
+# that looks like an iTerm2 discriminator and is not: any `[[ -n "$ITERM_SESSION_ID" ]]` terminal test
+# routes a kitty box to the iTerm2 driver. TERM_PROGRAM is EMPTY here, so a predicate falling back to
+# it fails OPEN rather than closed.
+#
+# The audit behind this test found nothing to fix — all four spellings key on KITTY_WINDOW_ID, and
+# TERM_PROGRAM is never read in code anywhere in the repo. This pins that result so the next author
+# reaching for the "obvious" iTerm2 check has to fail a test to do it.
+
+@test "REGRESSION ANCHOR: kitty's own ITERM_SESSION_ID must not flip any predicate to iTerm2" {
+  export KITTY_WINDOW_ID=312 ITERM_SESSION_ID="w0t0p0:312" TERM=xterm-kitty TERM_PROGRAM=""
+  unset IT2_WRAPPER_NO_KITTY
+  load_hf_block; [ "$REAL_IT2" = "$SHIM" ]
+  load_cp_fn;    [ "$(it2_real_bin)" = "$SHIM" ]
+}
+
+@test "REGRESSION ANCHOR: a real iTerm2 pane is still iTerm2 — the anchor above is not vacuous" {
+  # Same shape of ITERM_SESSION_ID, no KITTY_WINDOW_ID. If a predicate ever keyed on the session id
+  # this and the test above would return the SAME answer, and one of them would be wrong.
+  unset KITTY_WINDOW_ID IT2_WRAPPER_NO_KITTY
+  export ITERM_SESSION_ID="w0t0p0:E5D77446-0000-0000-0000-000000000000" TERM_PROGRAM="iTerm.app"
+  load_hf_block; [ "$REAL_IT2" = "$FAKE_REAL" ]
+  load_cp_fn;    [ "$(it2_real_bin)" = "$FAKE_REAL" ]
+}
