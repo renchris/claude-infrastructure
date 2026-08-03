@@ -686,10 +686,39 @@ fi
 # reaps who-blind) — DEFER, do not shut down. --session-id lets reap-guard read WHO drove the last turn.
 REAP_GUARD="${CC_REAP_GUARD_BIN:-$HOME/.claude/scripts/reap-guard.sh}"
 if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
-  # spawn-time = registry startedAt (epoch-MILLISECONDS) / 1000; unresolvable → now → DEFER (fail-safe)
-  _started_ms="$(cc-sessions --json 2>/dev/null \
-     | jq -r --arg s "$SESSION_ID" '.[] | select((.session_id // .sessionId)==$s) | .startedAt // empty' 2>/dev/null | head -1)"
-  if [[ "$_started_ms" =~ ^[0-9]+$ ]]; then _spawn_s=$(( _started_ms / 1000 )); else _spawn_s="$(date +%s)"; fi
+  # ── spawn-time: ASK THE REGISTRY THAT KNOWS TEAMMATES FIRST (2026-08-03) ───────────────────────
+  # `cc-sessions` indexes LAUNCHER-started sessions. A teammate is spawned by the HARNESS, so it is
+  # never in that registry — measured: 14/14 registry entries carry `startedAt`, and 0/2 live
+  # teammate sids resolve in it. The old fallback then substituted `date +%s`, i.e. NOW, which feeds
+  # reap-guard an age of 0 and puts every teammate permanently inside the 300s birth grace. That is
+  # not an edge case: 310 of 373 reap-guard decision records on this box (83%) read
+  # "age 0s < birth grace 300s — just-born, not finished", and the last `✓ closed pane` in
+  # teammate-lifecycle.log is 2026-07-25 — nine days of zero automatic reaps. A lookup miss became a
+  # VALUE, and the value it became is the one that defers forever (MEMORY.md lookup-miss-is-not-absence).
+  #
+  # The team config this hook has ALREADY opened records `joinedAt` (epoch-ms) per member — 360/360
+  # members across every team config on this box carry it. That is the authoritative spawn instant
+  # for a teammate, so it goes first; cc-sessions stays as the fallback for any member the config
+  # cannot answer for.
+  _spawn_s=""
+  if [[ -n "$TEAM_CONFIG" ]]; then
+    for m in "${MEMBER_CANDIDATES[@]}"; do
+      _joined_ms=$(jq -r --arg m "$m" '.members[]? | select(.name==$m) | .joinedAt // empty' "$TEAM_CONFIG" 2>/dev/null | head -1)
+      [[ "$_joined_ms" =~ ^[0-9]+$ ]] && { _spawn_s=$(( _joined_ms / 1000 )); break; }
+    done
+  fi
+  if [[ -z "$_spawn_s" ]]; then
+    _started_ms="$(cc-sessions --json 2>/dev/null \
+       | jq -r --arg s "$SESSION_ID" '.[] | select((.session_id // .sessionId)==$s) | .startedAt // empty' 2>/dev/null | head -1)"
+    [[ "$_started_ms" =~ ^[0-9]+$ ]] && _spawn_s=$(( _started_ms / 1000 ))
+  fi
+  # THIRD STATE, not a silent `now`. Unresolvable spawn-time means the birth-grace leg cannot be
+  # evaluated at all; keep deferring (never an ungated close) but say so, so a permanent defer is
+  # visible in the log instead of masquerading as a just-born teammate forever.
+  if [[ -z "$_spawn_s" ]]; then
+    log "  WARN: $TEAMMATE_NAME — spawn-time UNRESOLVED (no joinedAt in team config, not in cc-sessions); birth-grace cannot be evaluated, deferring as fail-safe"
+    _spawn_s="$(date +%s)"
+  fi
   if ! "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" >/dev/null 2>&1; then
     # A DEFER here is only INFORMATIVE when $WORKTREE is actually this member's tree. When the path
     # came from the shared team-config cwd (WORKTREE_OWNED=false), reap-guard just evaluated the
