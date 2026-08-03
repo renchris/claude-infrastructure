@@ -40,6 +40,14 @@ setup() {
   # CC_TERM is the seam under test — a value inherited from the developer's shell would make
   # pin_term_verdict_for_watcher's "never overwrite" branch fire in every test.
   unset CC_TERM
+  # PIN THE LOAD GATES (M11). handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core
+  # and headroom_gate() refuses on its own ceiling; this box lives above both, so an unpinned
+  # fire-executing suite goes red as a function of what ELSE the operator is running rather than of
+  # its subject. tests/handoff-fire-capacity-gate.bats test 25 is the ratchet that derives this
+  # requirement over every fire-executing suite — it has been RED on trunk since this file landed
+  # (acbaba85), which blocks every lander, not just the one who notices.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
 
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
