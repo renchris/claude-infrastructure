@@ -439,11 +439,19 @@ if [ "$term_rc" = 0 ]; then
   #
   # So the probe REPLAYS THE CALLER'S ENVIRONMENT rather than the operator's: same binary, same verb,
   # PATH stripped to what launchd actually hands a job. Checking that files exist is what stayed green.
+  #
+  # cc-pane-id-lint:allow — the `${ITERM_SESSION_ID:-}` below is NOT the bare pane-id read that
+  # tests/cc-pane.bats forbids. That ratchet exists to stop code ADDRESSING a pane by reading its own
+  # ITERM_SESSION_ID without the CC_PANE_ID fallback. Here the value is being PROPAGATED into an
+  # `env -i` child, and propagating it verbatim is the entire point: the probe's contract (three lines
+  # up) is to replay the caller's environment exactly. Substituting CC_PANE_ID would make the probe
+  # test an environment no caller ever has — the precise defect it was written to catch. Marked rather
+  # than rewritten, because the ratchet is right about the pattern and wrong only about this instance.
   if [ ! -x "$BIN_DIR/it2" ]; then
     :   # already reported above
   elif dp_out="$(env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
         KITTY_WINDOW_ID="${KITTY_WINDOW_ID:-}" KITTY_PID="${KITTY_PID:-}" \
-        KITTY_LISTEN_ON="${KITTY_LISTEN_ON:-}" ITERM_SESSION_ID="${ITERM_SESSION_ID:-}" \
+        KITTY_LISTEN_ON="${KITTY_LISTEN_ON:-}" ITERM_SESSION_ID="${ITERM_SESSION_ID:-}" `# cc-pane-id-lint:allow — propagation, not a pane-id read; see the block above` \
         "$BIN_DIR/it2" session list 2>&1)"; then
     ok "daemon-PATH probe: 'session list' works with no Homebrew on PATH ($(printf '%s' "$dp_out" | grep -c .) panes) — hooks and launchd can drive kitty"
   else
