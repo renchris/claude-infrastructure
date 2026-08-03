@@ -107,9 +107,20 @@ SH
 # a fake HOME with it2 + cc-notify stubs that RECORD their args (for the watcher tests).
 mk_home() { # $1=dir
   local h="$1"; mkdir -p "$h/.claude/bin" "$h/.claude/cc-roles"
+  # `session list` must ENUMERATE the panes this fixture models. The __selfclose watcher now proves
+  # the pane is reachable over the real transport before it acts on it (handoff-fire.sh pane_proof,
+  # 2026-08-02 — a detached watcher that could not reach its pane closed the predecessor anyway).
+  # Every test below models a HEALTHY close, i.e. a pane the watcher CAN reach, so a stub answering
+  # the empty list would assert the opposite of the scenario it is set up for. $PANE_LIST lets an
+  # individual test override the set; unset means "predecessor and successor both present".
   cat > "$h/.claude/bin/it2" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+if [ "${1:-}" = session ] && [ "${2:-}" = list ]; then
+  if [ -n "${PANE_LIST:-}" ] && [ -f "$PANE_LIST" ]; then cat "$PANE_LIST"
+  else printf '%s\n' PRED-PANE SUCC-PANE PREDSID SUCC-B; fi
+  exit 0
+fi
 exit 0
 SH
   cat > "$h/.claude/bin/cc-notify" <<'SH'
@@ -169,7 +180,11 @@ SH
   [ "$status" -ne 0 ]
   [[ "$output" == *"ABORTED at close-instant"* ]] || false
   [[ "$output" == *"NO LONGER ALIVE"* ]] || false
-  [ ! -f "$H/it2-calls.log" ]                          # it2 close NEVER invoked → predecessor alive
+  # The invariant is "no CLOSE", not "no it2 call at all". Since 2026-08-02 the watcher's second act
+  # is a READ-ONLY `session list` reachability probe, so the log now exists on every path — asserting
+  # its absence would test the probe's existence rather than the predecessor's survival, and would go
+  # red for a change that makes the close strictly safer.
+  ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false # predecessor alive
   grep -q "HANDOFF-STRAND-RISK" "$H/ccnotify-calls.log"  # desk paged (best-effort)
 }
 
