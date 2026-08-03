@@ -52,8 +52,47 @@ full-scope login token* (Remote Control, claude.ai-hosted MCP connectors, file u
 inference sessions + full-scope login only where required). This is the single operator
 call surfaced by this research (see §7).
 
-> ## ⛔ MEASURED 2026-08-03 — METHOD A IS DEAD. Do not re-run this experiment.
+> ## ⚠️ CORRECTION 2026-08-03 (later, same day) — "METHOD A IS DEAD" OVERSTATES IT. READ THIS FIRST.
 >
+> The 403 below is real and the "does not remove the monthly login" conclusion stands. But the
+> heading was wrong and so was the implied cost: **adopting Method A does NOT blind the quota
+> spine, because the quota spine never reads the env token.** `bin/claude-accounts:652` bearers
+> the credential it read from the **keychain**:
+>
+> ```python
+> creds, kstate = read_creds(acct["config_dir"], kc)
+> token = (creds or {}).get("accessToken")
+> status, u = fetch_usage(cfg, token) if token else (None, None)
+> ```
+>
+> `CLAUDE_CODE_OAUTH_TOKEN` (env, in-memory, 1 year, inference-only) and the keychain credential
+> (full 5 scopes, ~30-day cliff) are **separate stores that never touch**. Minting year tokens
+> breaks nothing that works today.
+>
+> **So Method A is ADDITIVE, not substitutive.** Correctly stated:
+> * it CANNOT deliver "yearly instead of monthly" — the keychain credential is the only quota
+>   source and it still has the cliff, so the monthly interactive login survives;
+> * but it CAN make sessions immune to auth failure for a year, at **no cost to quota or routing**;
+> * and it changes the failure mode of a missed login from *work stops* to *that account drops out
+>   of routing while its sessions keep running* (`score_general` is fail-closed on absent quota —
+>   `bin/claude-accounts:892`, "missing data is NOT headroom").
+>
+> **Unverified before any fleet-wide adoption — the real gate now:** `user:file_upload` is one of
+> the four scopes an inference-only token drops. Whether pasting an image into a session routes
+> through it is UNTESTED. `user:profile` (identity in `/status`) is the same category. Test on ONE
+> account before minting four. The MCP servers in use (motion-plus, uidotsh) authenticate directly
+> with their own OAuth rather than as claude.ai-hosted connectors, so `user:mcp_servers` is
+> *probably* not a loss — also untested. Remote Control is not a loss for this operator at all: the
+> iOS app is tied to a single login and cannot be pointed at the right account.
+>
+> Everything below this box is the original, more pessimistic reading. Kept for the evidence; the
+> conclusion above supersedes its heading.
+>
+> ---
+>
+> ## ⛔ MEASURED 2026-08-03 — the 403, and the original (overstated) verdict
+>
+
 > The gating curl was finally run against a real minted token (canary on `next2`,
 > `chris.swe+claude@outlook.com`), with a full-scope keychain bearer alongside it as a positive
 > control so the result is attributable rather than ambiguous:
