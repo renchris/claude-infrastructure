@@ -174,7 +174,11 @@ print("%.2f %.2f %.2f %.2f" % (head,comp,act,wired))
 }
 
 MEM="$(read_mem || true)"
-SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
+# sysctl is /usr/sbin/sysctl, and /usr/sbin is NOT on the PATH a LaunchAgent gets. Resolved once
+# here and reused below: this alarm runs under launchd, so a bare name is blind exactly where the
+# alarm has to work. (2026-08-02; class = memory `path-resolved-dependency-in-daemon-code`.)
+SYSCTL="$(command -v sysctl 2>/dev/null || echo /usr/sbin/sysctl)"
+SWAP_MB="$("$SYSCTL" -n vm.swapusage 2>/dev/null \
             | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
 
 # ── compressor SEGMENT saturation — the term that killed the box on 2026-07-30 ────────────────────
@@ -211,7 +215,12 @@ read_segments() { # → "<inuse> <limit>", or nothing when unreadable (never a f
   [ -n "$row" ] || return 1
   inuse="$(printf '%s\n' "$row" | awk '{print $7}')"
   case "$inuse" in ''|*[!0-9]*) return 1 ;; esac
-  limit="$(sysctl -n vm.compressor_segment_limit 2>/dev/null)"
+  # Resolved INSIDE the function, not read from the file-level $SYSCTL: this function is extracted and
+  # called on its own by tests/capacity-alarm-segments.bats, so a dependency on a global set elsewhere
+  # in the file would make it behave differently under test than in production. /usr/sbin is off the
+  # launchd PATH, so the bare name returned empty and the whole reading was discarded as unreadable —
+  # the alarm went silent under exactly the daemon it ships for.
+  limit="$("$(command -v sysctl 2>/dev/null || echo /usr/sbin/sysctl)" -n vm.compressor_segment_limit 2>/dev/null)"
   case "$limit" in ''|*[!0-9]*) return 1 ;; esac
   [ "$limit" -gt 0 ] || return 1
   printf '%s %s' "$inuse" "$limit"
