@@ -516,8 +516,13 @@ load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, senso
   max="${CC_GATE_MAX_LOAD:-8}"
   [[ "$max" = "0" || "$max" = "off" ]] && return 1            # kill switch: never shed
   case "$max" in ''|*[!0-9.]*) return 1 ;; esac               # non-numeric ceiling ⇒ fail OPEN
-  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
-  case "${load:-}" in ''|*[!0-9.]*) return 1 ;; esac          # unreadable sensor ⇒ fail OPEN
+  # sysctl lives in /usr/sbin, which is absent from the PATH a LaunchAgent is handed — so a bare
+  # `sysctl` reads the load fine in a session and does not exist for the verifier or any other daemon
+  # caller. That routed straight into the fail-OPEN arm below: the shed never fired, and the gate ran
+  # its smoke on exactly the loaded box it had been told to shed from. A fail-open sensor that is only
+  # ever blind off-session is the worst polarity — invisible where it is exercised most.
+  load="$("$(command -v sysctl 2>/dev/null || echo /usr/sbin/sysctl)" -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  case "${load:-}" in ''|*[!0-9.]*) return 1 ;; esac          # genuinely unreadable sensor ⇒ fail OPEN
   awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 >= m+0)}'
 }
 

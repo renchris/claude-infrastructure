@@ -250,10 +250,15 @@ touch_transcript() { # $1=sid $2=epoch mtime
 # ── C12 — read-only ──────────────────────────────────────────────────────────────────────────────
 
 @test "C12: a full render mutates NOTHING under any source dir" {
+  # `md5` is /sbin/md5, and /sbin is NOT on the PATH the postland verifier is handed — so this test
+  # died with "md5: command not found" (status 127) under launchd while passing in any session, and
+  # the retry ladder convicted it as a hard RED forever because it re-runs at a different QoS band
+  # but never a different PATH. shasum is /usr/bin/shasum: present in both. The assertion is
+  # digest-agnostic — it only compares a before/after — so nothing but availability changes.
   beacon sid-b 999700 Bash '{"command":"x"}'; telem sid-w 4242; touch_transcript sid-w 999990
-  before="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | md5)"
+  before="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | shasum)"
   run "$Q" --no-color
-  after="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | md5)"
+  after="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | shasum)"
   [ "$before" = "$after" ]
 }
 
