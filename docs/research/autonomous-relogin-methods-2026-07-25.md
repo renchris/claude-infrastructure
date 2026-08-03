@@ -52,6 +52,47 @@ full-scope login token* (Remote Control, claude.ai-hosted MCP connectors, file u
 inference sessions + full-scope login only where required). This is the single operator
 call surfaced by this research (see §7).
 
+> ## ⛔ MEASURED 2026-08-03 — METHOD A IS DEAD. Do not re-run this experiment.
+>
+> The gating curl was finally run against a real minted token (canary on `next2`,
+> `chris.swe+claude@outlook.com`), with a full-scope keychain bearer alongside it as a positive
+> control so the result is attributable rather than ambiguous:
+>
+> ```
+> setup-token (user:inference only)  -> HTTP 403
+> keychain    (full 5 scopes)        -> HTTP 200   <- positive control
+> ```
+>
+> `https://api.anthropic.com/api/oauth/usage` **rejects the inference-only scope.** The control
+> proves the endpoint is healthy, so the scope is the cause and nothing else. Adopting Method A
+> fleet-wide blinds the whole quota spine — `/accounts`, the router, `limit-recover`, the desk.
+>
+> **The split does NOT rescue it.** Method A for inference + full-scope login where required still
+> needs a live full-scope keychain login per account for quota reads, and that login still carries
+> the ~30-day `refreshTokenExpiresAt` cliff. The monthly interactive `/login` survives either way,
+> while every token session gives up four scopes. The 1-year token buys nothing that was actually
+> being bought.
+>
+> **Two of this document's own premises, corrected by measurement:**
+> * §4A.1's "IT STORES NOTHING" is **false**. The mint wrote a keychain credential — the
+>   *unsuffixed* `Claude Code-credentials` item's access AND refresh tokens both rotated at
+>   00:47:14Z, the exact minute it ran. `mint()` calls the raw binary, bypassing the `claude()`
+>   shell function that is the only thing exporting `CLAUDE_CONFIG_DIR`; the keychain suffix is
+>   gated on that var being *set*, so an unset var writes the unsuffixed item.
+> * The premise that made Method A look necessary — "the concurrent-session logout race is the
+>   *likely* cause of today's frequent logouts" — is **refuted**. The real cause was a dangling
+>   `.oauth_refresh.lock` symlink this repo's own `config-mirror.zsh` created, making every
+>   in-session refresh read as permanently ELOCKED. Fixed in `1677218f`; evidence in
+>   `docs/research/forced-relogin-rootcause-2026-08-02.md`. With that fixed the residual is the
+>   ordinary ~30-day cliff, which Method A cannot remove anyway.
+>
+> **Standing recommendation: keep the full-scope keychain logins.** Method B's single-flight refresh
+> coordinator is also moot for the observed failure — 2.1.220 already ships CAS + a single-flight
+> lock + sibling adoption. Refresh-token ROTATION is now confirmed by direct observation (`next` rt
+> `0023ef9690b1 → a9f8aadf29eb`, `next2` `26fc87c99eba → 87163b4d1b78` across one grant), so C2 is
+> real in principle — but the mitigation worth doing is collapsing account `next` from its FOUR
+> credential stores to one, not adopting setup-token.
+
 ---
 
 ## 1. What changed vs the problem statement (verified, then extended)
