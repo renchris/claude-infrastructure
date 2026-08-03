@@ -75,6 +75,29 @@ abstain() { log_idl abstained "$1"; exit 0; }
 [ "${DISPATCH_ASSERT_DISABLE:-0}" = "1" ] && abstain "disabled"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
+# ── FLEET DISPATCH IS NOT A TEAMMATE'S SURFACE (2026-08-02) ──────────────────────────────────────
+# This hook's remedies are `cc-backlog add` (which cc-dispatch auto-drains — it can SPAWN A PANE),
+# `cc-backlog block --needs "<exact operator step>"`, and `cc-decide open`. All three write the
+# machine-wide fleet stores. A background team assignee is scoped to one brief inside its lead's
+# work; letting it file fleet items would dispatch panes for work the lead already owns, and the
+# blocked-item remedy is literally "an operator step" it has no channel to reach. Placed before the
+# SID/transcript parse — and critically before the pending-obligation branch (:~156), which
+# re-blocks WITHOUT re-consulting the naming tell, so a guard sited at the fire path alone would
+# leave an already-armed obligation firing at a teammate.
+_da_lib="${AGENT_IDENTITY_LIB:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/agent-identity.sh}"
+[ -f "$_da_lib" ] || { _da_t="$0"; [ -L "$_da_t" ] && _da_t="$(readlink "$_da_t")"
+  _da_lib="$(cd "$(dirname "$_da_t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+[ -f "$_da_lib" ] || _da_lib="$CFG/hooks/lib/agent-identity.sh"
+[ -f "$_da_lib" ] || _da_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+if [ -f "$_da_lib" ]; then
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if . "$_da_lib" 2>/dev/null; then
+    _da_aid="$(agent_is_assignee 2>/dev/null || true)"
+    [ -n "$_da_aid" ] && abstain "team-assignee:${_da_aid}"
+  fi
+fi
+
 SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"

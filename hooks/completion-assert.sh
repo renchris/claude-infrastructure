@@ -223,7 +223,7 @@ REMAINDER="$(lfield REMAINDER)"; case "$REMAINDER" in ''|*[!0-9]*) REMAINDER=0 ;
 # sibling-auditors-must-share-the-state-model). Any failure to resolve ⇒ NOT an assignee ⇒ the
 # caller stays strict, so this can only ever narrow a conviction on positive evidence.
 _ca_assignee() {
-  local lib aid
+  local lib
   # AGENT_IDENTITY_LIB, when set, is a HARD override — it is deliberately NOT the head of the
   # fallback chain. An override folded into a fallback list stops being an override (MEMORY.md
   # path-resolved-dependency-in-daemon-code): pointing it at a missing file would silently resolve
@@ -243,9 +243,12 @@ _ca_assignee() {
   # shellcheck source=lib/agent-identity.sh
   # shellcheck disable=SC1091
   . "$lib" 2>/dev/null || return 1
-  aid="$(agent_assignee_argv)" || return 1
-  [ -n "$aid" ] || return 1
-  agent_team_member_confirms "$aid"; case $? in 0|2) return 0 ;; *) return 1 ;; esac
+  # The 0|2 rule and the id-grammar gate now live in the lib as agent_is_assignee (2026-08-02) —
+  # five hooks ask this question and an inline copy each is how the policy rots apart. Delegating
+  # also picks up the SHAPE GATE, which is strictly safer here: an argv match that yields a garbage
+  # id used to reach agent_team_member_confirms, return 2 = UNKNOWN, and be TRUSTED as an assignee,
+  # which is the one direction this guard must never fail (ignorance never exonerates).
+  agent_is_assignee >/dev/null 2>&1
 }
 
 _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell

@@ -155,6 +155,27 @@ idl_init "$IDL" "boundary-handoff" "sid" "SIZE_JSON"
 command -v jq >/dev/null 2>&1 || { log_idl abstained "no-jq"; exit 0; }
 [ -n "$sid" ] || abstain "no-session-id"
 
+# NO OPERATOR, NO HANDOFF ADVICE (2026-08-02). This hook's whole remedy is "run the /handoff rails
+# to preserve state into a successor" — a PANE operation. A background team assignee owns no pane,
+# has no session-registry row (lead-crash-watchdog.sh:596, 134/134) and cannot run handoff-fire at
+# all, so the advice is undeliverable and its block is pure context burn. Any incidental suppression
+# today is an ACCIDENT of the assignee having no telemetry row, and telemetry appears the moment a
+# statusline renders — so it is not something to rely on. Placed before the telemetry read so the
+# abstain is recorded whether or not that row exists.
+_bh_lib="${AGENT_IDENTITY_LIB:-$_bscd/lib/agent-identity.sh}"
+[ -f "$_bh_lib" ] || { _bh_t="$0"; [ -L "$_bh_t" ] && _bh_t="$(readlink "$_bh_t")"
+  _bh_lib="$(cd "$(dirname "$_bh_t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+[ -f "$_bh_lib" ] || _bh_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
+[ -f "$_bh_lib" ] || _bh_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+if [ -f "$_bh_lib" ]; then
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if . "$_bh_lib" 2>/dev/null; then
+    _bh_aid="$(agent_is_assignee 2>/dev/null || true)"
+    [ -n "$_bh_aid" ] && abstain "team-assignee:${_bh_aid}"
+  fi
+fi
+
 tel="$TEL_DIR/$sid.json"
 [ -f "$tel" ] || abstain "no-telemetry"
 
