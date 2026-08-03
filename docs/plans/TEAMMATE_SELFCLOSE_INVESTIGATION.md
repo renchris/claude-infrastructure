@@ -133,9 +133,109 @@ are `it2 session list` (pane alive?) and the team `config.json` `members[]` (sti
 
 ---
 
+---
+
+## RESOLVED 2026-08-03 — the dominant cause was none of D1/D2/D3
+
+The hypotheses above were tested against disk truth. **H3 is refuted, D1 is real but secondary, and
+the actual cause was a fourth defect none of the three named.** Recorded here in full because the
+wrong diagnosis was defensible from the evidence that was available, and the correction is the
+reusable part.
+
+### The real root cause — spawn-time resolved from a registry that never holds teammates
+
+`reap-guard`'s decision records (`~/.claude/reap-guard/`, R-c writes one per verdict) name the
+deferring rule outright. For both survivors:
+
+```json
+{"member":"act-cage","decision":"DEFER",
+ "reason":"age 0s < birth grace 300s — just-born, not finished","age_s":0}
+```
+
+`age_s: 0` — **62 minutes after spawn.** The hook fed reap-guard a spawn instant from
+`cc-sessions`, which indexes LAUNCHER-started sessions; a teammate is spawned by the HARNESS and is
+never in it. On the miss it substituted `date +%s`, i.e. NOW, so age was always 0 and every teammate
+sat permanently inside the 300 s birth grace.
+
+Measured with a positive control: **14/14 registry entries carry `startedAt`, and 0/2 live teammate
+sids resolve in it.** Blast radius, box-wide: **310 of 373 reap-guard decision records (83 %)** read
+`age 0s < birth grace 300s`, and the last `✓ closed pane` in `teammate-lifecycle.log` is
+**2026-07-25 — nine days with zero automatic teammate reaps.**
+
+*A lookup MISS had become a VALUE, and the value it became was the one that defers forever.*
+
+**Fixed and landed: `ba6fb12f`.** Spawn-time now comes from the team config's `joinedAt` (epoch-ms,
+present on **360/360** members of every team config on this box — and the hook had already opened
+that file), with `cc-sessions` kept as the fallback and an unresolvable spawn-time promoted to a
+loud THIRD STATE instead of a silent `now`. Tests RED-proven against the pristine tree via
+`git archive`; the cc-sessions fallback carries a positive control that passes on both trees, so
+"joinedAt-first" cannot silently kill the old path.
+
+### Verdicts on the original hypotheses
+
+| # | Verdict | Evidence |
+|---|---|---|
+| **H1** | *Not tested as framed; superseded.* The shared-cwd gate is real but is **not** what held these two — reap-guard never reached its products leg, it deferred at birth-grace first. | decision records above |
+| **H2** | **Refuted as stated.** The backstop is not "unable to discharge" — at `MAX_DEFERS` it deliberately **SURFACEs + pages** and never reaps (`:721-723`; pinned by `tests/teammate-auto-shutdown.bats:92` and `:521`). It has fired **151** times. Making it reap would break an explicit *never-ungated-close* guard. | log + tests |
+| **H3** | **Refuted as a hang cause.** Across all five teammate transcripts, Stop-block counts are equal in the closed and still-alive groups (act-list **closed** with 3 blocks; act-cage **alive** with 1). The only discriminator is whether the teammate emitted a structured `shutdown_response` — i.e. D2. | 5 transcripts |
+| **D2** | **Confirmed as the proximate cause of 294/295.** All three that closed made a real `SendMessage` tool call with `{"type":"shutdown_response","approve":true}`; both survivors replied in prose only. | transcripts |
+| **D3** | **Confirmed.** Stands as written. | — |
+
+### The H3 symptom was real — but it is a DEPLOYMENT failure, not a code failure
+
+The operator readout genuinely did render inside act-cage's pane. That leak was **already fixed in
+code** by `cf31205e` ("the operator close surface was rendering into teammate sessions",
+2026-08-02 21:01), which added the `agent_is_assignee` guard to seven hooks — **two hours before
+the run that leaked.**
+
+It leaked anyway because `~/.claude/hooks/*` are per-file symlinks into
+`~/Development/claude-infrastructure`, and that checkout's `main` is **9 commits behind
+`origin/main`**. `grep -c agent_is_assignee` on the *live* hook returns **0** while the landed one
+has the guard. **14 live files are stale**, including `scripts/ship-land.sh` and 7 hooks.
+
+Timeline: `20:25` checkout last current → `20:49` origin advances, checkout does not → `21:01`
+`cf31205e` lands but is not live → `23:44` team spawns → `01:07` the leak → `01:21` the plan doc is
+committed **onto the stale main**, diverging it so no future fast-forward can self-heal it.
+
+Two independent blockers keep it stale, and neither is inside this diff:
+1. `deploy-live.sh --auto` is fail-closed on a green postland stamp, and `cc-blockers` reports
+   `trunk-red PERSISTENT-RED — newest 5 all red, 1 green of 65 ever`.
+2. Even a green stamp would not help: deploy advances by **fast-forward**, and a diverged `main`
+   cannot fast-forward.
+
+**A landed fix is not a live fix.** This is why `cf31205e` had to be rediscovered from a stale
+grep — the first pass of this investigation read the stale checkout and concluded operator-readout
+had *no* teammate guard, the exact false negative
+[[scan-revision-predates-the-fix]] describes.
+
+### Residue — named, not silently absorbed
+
+- **D2 has no code fix yet.** A prose acknowledgement still leaves a teammate running; the idle-reap
+  path is its only backstop, which is precisely why `ba6fb12f` matters. The harness-side option
+  (F3a — treat idle-after-`shutdown_request` as approved) is vendor behaviour we do not control.
+- **D1/F1 (per-file ownership) is still unimplemented.** `hooks/lib/session-writes.sh` exposes
+  `session_dirty_mine <transcript> [repo_dir]` (rc 0 mine-dirty / 1 none / 2 cannot-tell) and the
+  gate site already has `_find_transcript "$SESSION_ID"` in scope, so the plumbing exists. Worth
+  doing — it makes the shared-cwd case *answerable* rather than merely bounded.
+- **The escalation ladder can still be starved.** `DEFER_COUNT` only advances on a `TeammateIdle`
+  event, and the harness stops emitting those once the lead sets `isActive:false`. Both survivors
+  froze at `2/3` and never reached the SURFACE rung. The `+1` off-by-one fix at `:645-653` reduced
+  the requirement from N+1 events to N — it did not remove the dependency on an event supply that
+  the terminal condition itself extinguishes.
+- **D3/F5** — no truthful lead-side teardown check has been folded into the agent-teams skill yet.
+
 ## Status log
 
 - **2026-08-03** — opened. Root cause identified from `teammate-lifecycle.log` (D1 shared-cwd gate,
   D2 prose-not-protocol, D3 the lead's false liveness check). Nothing fixed yet; panes 294/295 left
   alive as the live reproduction. Hypotheses H1–H3 untested; H3 (teammate inheriting the lead's
   blocking Stop hooks) is the one that would generalise past this team.
+- **2026-08-03 (same day, later)** — investigated. H3 **refuted** as a hang cause, H2 refuted as
+  stated, D2 confirmed as the proximate cause of 294/295, and a fourth defect found that dominates
+  all of them: spawn-time read from a registry that never contains teammates, so reap-guard's
+  birth-grace gate could never open (83 % of all defers; 9 days of zero reaps). **Fixed + landed +
+  content-verified: `ba6fb12f`.** The H3 *symptom* traced to a 9-commit-stale live symlink layer,
+  blocked by a persistently-red postland verifier and a diverged `main` — surfaced to the operator,
+  not driven (it is neither in this diff nor safely self-healable: the unstick is a `reset --hard`
+  on a shared checkout). Panes 294/295 reaped and **pid-verified** dead with a positive control.
+  Residue above.
