@@ -404,7 +404,8 @@ npm overwrites Claude's binary in place, which throws `ENOTEMPTY` when live sess
 ```
 ~/.claude-versions/
 ├── 2.1.113/           # rollback target
-├── 2.1.114/           # current
+├── 2.1.114/           # current — the pinned stable track
+├── 2.1.183/           # kept, not current
 └── current -> 2.1.114 # atomic symlink — rename(2), NOT ln -sfn
 ```
 
@@ -536,6 +537,8 @@ Measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/te
 ```bash
 scripts/kitty-setup.sh          # idempotent · --check reports · --undo reverts
 ```
+
+Every pane chord it gives you — split, focus, swap, and the detach that is the only route to another monitor — is in the **Reference** block at the foot of this file.
 
 **The lock was never the renderer — it was a process boundary this repo already owned.** Claude Code's Agent-Teams pane backend is not linked against iTerm2 and never handshakes with it. Decompiled from the live 2.1.219 binary, its gate is an **env check plus a PATH lookup** — `TERM_PROGRAM==="iTerm.app" || !!ITERM_SESSION_ID`, then `$SHELL -lc "command -v it2"` — after which it drives panes through exactly five subcommands of whatever `it2` it resolved. So a program answering those five commands against `kitty @` gets **native kitty split panes** for assignee sessions. That is [`bin/it2-kitty`](bin/it2-kitty), and [`bin/it2-wrapper`](bin/it2-wrapper) execs it when `KITTY_WINDOW_ID` is set. No fork of either terminal — which would be legally impossible anyway: iTerm2 is GPL-2.0-only, kitty GPL-3.0.
 
@@ -677,51 +680,6 @@ But the renderer is the *second*-order fix, because a 30-pane grid is a **pollin
 
 Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compound**, so a `Bash(prefix:*)` list caps at ~2.4% coverage regardless of rule count — already at `defaultMode: auto` with **350 allow / 6 ask / 41 deny**. The residue is the guardrail working. The defect is not that it blocks; it is that *discovering* the block costs a full-screen poll.
 
-#### Driving it: every pane gesture, and the two the keyboard cannot reach
-
-<div align="center">
-
-<img src="assets/demo/kitty-panes.webp" width="900" alt="Screen recording of a single kitty window running the pane-management sequence. A narration pane on the left prints each chord as it fires; the window splits right, then below, into three coloured panes. A pane then swaps places with its neighbour, another is thrown to the top edge, per-pane title bars appear across the tops of the panes, and finally one pane leaves the split entirely and a tab bar appears at the bottom of the window holding it.">
-
-<sub><b>One kitty window, one sequence, every chord below.</b> The narration pane prints each chord as it fires, so the frame that shows a change already names the action that caused it. Each beat is the mappable action the chord is bound to, driven over that window's own remote-control socket — <b>keystrokes are deliberately not synthesised</b>, because macOS sends them to the frontmost process and on this box that is usually one of ~30 live agent panes. <a href="assets/demo/kitty-panes.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b> (the window-scoped capture delivered <b>41.7 fps</b> of distinct frames; the container is 60). Reproduce with <a href="assets/demo/kitty-panes-capture.sh"><code>assets/demo/kitty-panes-capture.sh</code></a>.</sub>
-
-</div>
-
-**The chords.** All of them live in [`config/kitty.conf`](config/kitty.conf) and are pinned by
-[`tests/kitty-conf-bindings.bats`](tests/kitty-conf-bindings.bats) against kitty's *own* config
-loader — so a rename in a future kitty fails there rather than under your fingers. After editing,
-`kitten @ load-config` applies everything except `allow_remote_control` and `listen_on`.
-
-| | Chord | Action | Note |
-|---|---|---|---|
-| **Split** | ⌘D · ⌘⇧D | `launch --location=vsplit\|hsplit` | right · below, inheriting the cwd |
-| | ⌘W | `close_window` | last pane closes the tab, then the window |
-| | ⌘⇧↩ | `toggle_layout stack` | zoom one pane to fill the tab |
-| **Focus** | ⌘⌥←→↑↓ | `neighboring_window` | split-aware; ⌘] ⌘[ cycle |
-| **Move the pane** | ⌘⇧←→↑↓ | `move_window` | a **swap** with the neighbouring slot |
-| | ⌘⌃←→↑↓ | `layout_action move_to_screen_edge` | the placement a swap cannot express |
-| | ⌘⌃R · ⌘⌃E | `layout_action rotate` · `equalize` | flip a split's axis · even them out |
-| | ⌘R | `start_resizing_window` | arrows, then Esc |
-| **Leave the tab** | ⌘⇧O | `detach_window ask` | chooser — **this is the cross-monitor move** |
-| | ⌘⌥O · ⌘⌃O | `detach_window` · `detach_tab ask` | into a new OS window · move the whole tab |
-| **Mouse** | drag a divider | resize | needs `window_drag_tolerance` above kitty's 2 pt |
-| | ⌘⇧B, then drag a title bar | re-order | ⌘⇧B is what *draws* the handle |
-
-**Three that are not guessable.**
-
-- **`move_window` is a swap, and a silent no-op with no neighbour.** In a two-pane side-by-side
-  tab, ⌘⇧↑ and ⌘⇧↓ are correctly dead — no beep, no message, nothing — which is indistinguishable
-  from a binding that failed to load. `move_to_screen_edge` is the action for "put it *there*".
-- **kitty has no action that sends a window to a display.** A pane's monitor is simply wherever its
-  OS window sits, so the route to the other screen is to *detach into a window that is already
-  there* — ⌘⇧O, pick the tab. Measured on kitty 0.48.2: window id and child pid are **unchanged**
-  across a detach into a new OS window and then into an existing tab, so a running Claude Code
-  session moves with its pty, scrollback and process intact.
-- **The mouse can drag a pane only by a title bar kitty does not draw** — hence ⌘⇧B — and only
-  **tabs**, never panes, can be dragged *between* OS windows. That gesture also needs
-  `tab_bar_min_tabs 1`, which is deliberately off here: a permanently visible tab bar costs one
-  text row in every OS window, and at 30 panes that row is screen space this repo will not spend.
-
 ### Roadmap
 
 | When | Move | Why it is sized this way |
@@ -783,6 +741,51 @@ Which binary any of that actually runs is resolved by **one** reader, [`bin/cc-c
 
 **19 commands** (`commands/`) — `/handoff`, `/ship`, `/wrap`, `/desk`, `/accounts`, `/limit-recover`, `/research`, `/review`, `/commit`, `/harvest-skill` and more. **15 skills** (`skills/`) — agent-teams, research-subagents, frontier-routing, coding-standards, plan-conventions, cc-upgrade-gate and others. **4 agents** (`agents/`) — `deep-research` (frontier/adversarial research), `deep-research-sonnet` (bulk-fan-out worker, currently benched), `frontier-derivation` (baseline-blind derivation panelist for `/frontier-run`), `research-decomposition-critic` (pre-spawn decomposition critic). Symlinked into `~/.claude/agents/` like the skills beside them, so editing the repo file edits the live agent.
 
+**Driving kitty's panes — every gesture, and the two the keyboard cannot reach.**
+
+<div align="center">
+
+<img src="assets/demo/kitty-panes.webp" width="900" alt="Screen recording of a single kitty window running the pane-management sequence. A narration pane on the left prints each chord as it fires; the window splits right, then below, into three coloured panes. A pane then swaps places with its neighbour, another is thrown to the top edge, per-pane title bars appear across the tops of the panes, and finally one pane leaves the split entirely and a tab bar appears at the bottom of the window holding it.">
+
+<sub><b>One kitty window, one sequence, every chord below.</b> The narration pane prints each chord as it fires, so the frame that shows a change already names the action that caused it. Each beat is the mappable action the chord is bound to, driven over that window's own remote-control socket — <b>keystrokes are deliberately not synthesised</b>, because macOS sends them to the frontmost process and on this box that is usually one of ~30 live agent panes. <a href="assets/demo/kitty-panes.mp4">Full-resolution video</a> — <b>1920×1080, 60 fps</b> (the window-scoped capture delivered <b>41.7 fps</b> of distinct frames; the container is 60). Reproduce with <a href="assets/demo/kitty-panes-capture.sh"><code>assets/demo/kitty-panes-capture.sh</code></a>.</sub>
+
+</div>
+
+**The chords.** All of them live in [`config/kitty.conf`](config/kitty.conf) and are pinned by
+[`tests/kitty-conf-bindings.bats`](tests/kitty-conf-bindings.bats) against kitty's *own* config
+loader — so a rename in a future kitty fails there rather than under your fingers. After editing,
+`kitten @ load-config` applies everything except `allow_remote_control` and `listen_on`.
+
+| | Chord | Action | Note |
+|---|---|---|---|
+| **Split** | ⌘D · ⌘⇧D | `launch --location=vsplit\|hsplit` | right · below, inheriting the cwd |
+| | ⌘W | `close_window` | last pane closes the tab, then the window |
+| | ⌘⇧↩ | `toggle_layout stack` | zoom one pane to fill the tab |
+| **Focus** | ⌘⌥←→↑↓ | `neighboring_window` | split-aware; ⌘] ⌘[ cycle |
+| **Move the pane** | ⌘⇧←→↑↓ | `move_window` | a **swap** with the neighbouring slot |
+| | ⌘⌃←→↑↓ | `layout_action move_to_screen_edge` | the placement a swap cannot express |
+| | ⌘⌃R · ⌘⌃E | `layout_action rotate` · `equalize` | flip a split's axis · even them out |
+| | ⌘R | `start_resizing_window` | arrows, then Esc |
+| **Leave the tab** | ⌘⇧O | `detach_window ask` | chooser — **this is the cross-monitor move** |
+| | ⌘⌥O · ⌘⌃O | `detach_window` · `detach_tab ask` | into a new OS window · move the whole tab |
+| **Mouse** | drag a divider | resize | needs `window_drag_tolerance` above kitty's 2 pt |
+| | ⌘⇧B, then drag a title bar | re-order | ⌘⇧B is what *draws* the handle |
+
+**Three that are not guessable.**
+
+- **`move_window` is a swap, and a silent no-op with no neighbour.** In a two-pane side-by-side
+  tab, ⌘⇧↑ and ⌘⇧↓ are correctly dead — no beep, no message, nothing — which is indistinguishable
+  from a binding that failed to load. `move_to_screen_edge` is the action for "put it *there*".
+- **kitty has no action that sends a window to a display.** A pane's monitor is simply wherever its
+  OS window sits, so the route to the other screen is to *detach into a window that is already
+  there* — ⌘⇧O, pick the tab. Measured on kitty 0.48.2: window id and child pid are **unchanged**
+  across a detach into a new OS window and then into an existing tab, so a running Claude Code
+  session moves with its pty, scrollback and process intact.
+- **The mouse can drag a pane only by a title bar kitty does not draw** — hence ⌘⇧B — and only
+  **tabs**, never panes, can be dragged *between* OS windows. That gesture also needs
+  `tab_bar_min_tabs 1`, which is deliberately off here: a permanently visible tab bar costs one
+  text row in every OS window, and at 30 panes that row is screen space this repo will not spend.
+
 **Editing the diagrams.** Sources live in `assets/diagrams/*.mmd` and render through [beautiful-mermaid](https://www.npmjs.com/package/beautiful-mermaid) — the ELK-based engine behind Cursor's agent panel — into per-mode SVGs, because GitHub cannot swap its own dagre renderer. Edit the `.mmd`, run `npm run diagrams`, commit the regenerated SVGs.
 
 **Re-recording the demos.** `assets/demo/handoff-real.webp` regenerates from its committed tape — `vhs assets/demo/handoff-real.tape`, then `gif2webp -m 6 -min_size` — so the command output in the README can never drift from the scripts. `assets/demo/handoff-live.webp` is a screen recording of an actual `/handoff`; it is captured by hand (`screencapture -v`, cropped to the iTerm2 window with `ffmpeg`) because it depends on a live fleet, so there is no script for it, and it is encoded `img2webp -near_lossless 40`. The two routes differ because the content does: flat terminal output converts losslessly (`gif2webp`, 10.6 % smaller), while a live screen recording must be **near-lossless** — ordinary lossy WebP encodes each frame as a partial update rectangle, and the flat grey of an unfocused pane re-quantizes differently inside that rectangle than outside, leaving a visible vertical seam. Measurements in the `demo-recording` skill.
@@ -797,7 +800,7 @@ Unlike the other two, this clip has a **live dependency it does not control**: i
 
 It also takes **two routes for one sequence**, for a measured reason. The linked 1080p60 master is filmed with the panes running [`tui-load.sh`](scripts/tui-load.sh) at 60 Hz, because ScreenCaptureKit is **change-driven**: with still panes the same take delivered **26 frames in 38 s (0.68 fps)** while the container could still be muxed at 60, which would have made "1080p60" true of the file and false of the pixels. With the panes repainting it delivers **41.7 fps**, and the caption states that number beside the container's. The inline WebP is built from a **still-pane** take (`CC_PANES_STATIC=1`) because that same 60 Hz churn is close to incompressible — the animated WebP of the moving take came out **38 MB**, against **167 KB** for the still one, whose 144 sampled frames the encoder merges into **11** stored frames with no loss of anything the image exists to show: the pane moves are discrete state changes, not motion.
 
-**Rebuilding the banner.** It is generated, never hand-drawn: `python3 tools/banner/gen.py --out assets/banner`. The generator refuses to emit rather than ship a subtly wrong asset — periods that do not divide the master loop, a loop whose first and last frame differ, a stride that drifts out of lock with the ground it walks on. Verify one with `scripts/banner-verify.sh <asset> --period <P>` (six checks, all able to fail; the hero loop is `--period 240`), and prove every beat is actually VISIBLE with `scripts/banner-beat-ink.py assets/banner/v6*.svg` — it renders each beat whole and again with that beat suppressed, and requires a real pixel difference at the README's own 838 px width. That gate exists because every other one is structural: a meteor trail once shipped painting **zero pixels** — a horizontal path's bounding box has no height, so the gradient filling it was never drawn — and the markup parsed, the animation was singular and the loop still sealed shut. Sabotage every gate at once with `scripts/banner-gate-redproof.py` (34 cases, each required to fire on its own message). **The animated SVG is the deliverable, not a fallback** — GitHub serves it through camo as an image, and CSS animations inside an SVG loaded as an image do run, which is why the inline asset is vector.
+**Rebuilding the banner.** It is generated, never hand-drawn: `python3 tools/banner/gen.py --out assets/banner`. The generator refuses to emit rather than ship a subtly wrong asset — periods that do not divide the master loop, a loop whose first and last frame differ, a stride that drifts out of lock with the ground it walks on. Verify one with `scripts/banner-verify.sh <asset> --period <P>` (six checks, all able to fail; the hero loop is `--period 240`), and prove every beat is actually VISIBLE with `scripts/banner-beat-ink.py assets/banner/v6*.svg` — it renders each beat whole and again with that beat suppressed, and requires a real pixel difference at the README's own 838 px width. That gate exists because every other one is structural: a meteor trail once shipped painting **zero pixels** — a horizontal path's bounding box has no height, so the gradient filling it was never drawn — and the markup parsed, the animation was singular and the loop still sealed shut. Sabotage every gate at once with `scripts/banner-gate-redproof.py` (37 cases, each required to fire on its own message). **The animated SVG is the deliverable, not a fallback** — GitHub serves it through camo as an image, and CSS animations inside an SVG loaded as an image do run, which is why the inline asset is vector.
 
 </details>
 
