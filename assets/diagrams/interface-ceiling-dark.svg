@@ -29,8 +29,8 @@
 <polyline class="edge" data-from="Block" data-to="Poll" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="TODAY — found by EYE" points="284.53433333333334,325.4258333333333 284.53433333333334,394.77099999999996 167.30849999999998,394.77099999999996 167.3085,475.07099999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Block" data-to="Beacon" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="ALREADY BUILT" points="351.2246666666666,325.42583333333334 351.2246666666666,394.77099999999996 468.4504999999999,394.77099999999996 468.4505,475.07099999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Poll" data-to="Cost" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.3085,528.871 167.30849999999998,585.3209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Cost" data-to="Leak" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.30849999999998,639.1209999999999 167.3085,687.1209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Leak" data-to="ScaleN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.3085,740.9209999999998 167.30849999999998,780.4709999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Cost" data-to="Leak" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.30849999999998,639.1209999999999 167.30849999999998,687.1209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Leak" data-to="ScaleN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.30849999999998,740.9209999999998 167.30849999999998,780.4709999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Beacon" data-to="Face" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4505,545.771 468.4504999999999,585.3209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Face" data-to="Console" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4504999999999,639.1209999999999 468.4504999999999,687.1209999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Console" data-to="ScaleB" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="468.4504999999999,757.8209999999999 468.4504999999999,814.271" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
@@ -42,11 +42,11 @@
   <rect x="417.9504999999999" y="401.77099999999996" width="100.216" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
   <text x="468.0584999999999" y="416.92099999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">ALREADY BUILT</text>
 </g>
-<g class="node" data-id="Fleet" data-label="30 sessions RUNNING
-≈0.75 cores · ~215 MB each
-93% memory free · Pageouts 0" data-shape="rectangle">
-  <rect x="209.096" y="40" width="217.56699999999998" height="70.7" rx="0" ry="0" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
-  <text x="317.8795" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="317.8795" dy="-12.350000000000001">30 sessions RUNNING</tspan><tspan x="317.8795" dy="16.900000000000002">≈0.75 cores · ~215 MB each</tspan><tspan x="317.8795" dy="16.900000000000002">93% memory free · Pageouts 0</tspan></text>
+<g class="node" data-id="Fleet" data-label="the FLEET is cheap
+15 live sessions ≈0.75 cores · ~215 MB each
+at 31 sessions: 93% memory free · Pageouts 0" data-shape="rectangle">
+  <rect x="166.48850000000002" y="40" width="302.7819999999999" height="70.7" rx="0" ry="0" fill="#2b2410" stroke="#d4af37" stroke-width="0.75" />
+  <text x="317.8795" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="317.8795" dy="-12.350000000000001">the FLEET is cheap</tspan><tspan x="317.8795" dy="16.900000000000002">15 live sessions ≈0.75 cores · ~215 MB each</tspan><tspan x="317.8795" dy="16.900000000000002">at 31 sessions: 93% memory free · Pageouts 0</tspan></text>
 </g>
 <g class="node" data-id="Block" data-label="a session BLOCKS
 on a permission prompt" data-shape="diamond">
@@ -71,8 +71,8 @@ PermissionRequest →
 </g>
 <g class="node" data-id="Leak" data-label="+76 mach ports/hr at FROZEN layout
 tuning exhausted — match=9 drift=0" data-shape="rectangle">
-  <rect x="40.370500000000035" y="687.1209999999999" width="253.87599999999995" height="53.800000000000004" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
-  <text x="167.3085" y="714.0209999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="167.3085" dy="-3.9000000000000012">+76 mach ports/hr at FROZEN layout</tspan><tspan x="167.3085" dy="16.900000000000002">tuning exhausted — match=9 drift=0</tspan></text>
+  <rect x="40.37050000000002" y="687.1209999999999" width="253.87599999999995" height="53.800000000000004" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />
+  <text x="167.30849999999998" y="714.0209999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#e6edf3"><tspan x="167.30849999999998" dy="-3.9000000000000012">+76 mach ports/hr at FROZEN layout</tspan><tspan x="167.30849999999998" dy="16.900000000000002">tuning exhausted — match=9 drift=0</tspan></text>
 </g>
 <g class="node" data-id="ScaleN" data-label="cost scales with sessions RUNNING" data-shape="rectangle">
   <rect x="42.59350000000001" y="780.4709999999999" width="249.42999999999995" height="36.900000000000006" rx="0" ry="0" fill="#0d1d2e" stroke="#58a6ff" stroke-width="0.75" />

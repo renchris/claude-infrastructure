@@ -4,9 +4,9 @@
 
 ### `~/.claude` becomes a system you deploy — and the sessions become the schedulers.
 
-[![sessions](https://img.shields.io/badge/sessions-6%2C908-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
-[![hooks](https://img.shields.io/badge/hooks-77%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
-[![tests](https://img.shields.io/badge/bats%20tests-4%2C564-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
+[![sessions](https://img.shields.io/badge/sessions-7%2C472-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
+[![hooks](https://img.shields.io/badge/hooks-78%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
+[![tests](https://img.shields.io/badge/bats%20tests-4%2C802-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
 [**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**6 · The next ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) · [**Install**](#install)
@@ -19,8 +19,9 @@ the two share one git index, one binary, and one operator's attention. **So how 
 once, safely, unattended?**
 
 Make `~/.claude` a *deployment* of a git repo — and make the sessions themselves the schedulers.
-That is this repo: **1,134 files, ~269,000 lines**, held to ground truth by a **4,564-test** bats suite
-and exercised across **~6,900 sessions**.
+That is this repo: **1,174 tracked files, ~256,000 lines** of first-party code (vendored code and
+generated assets excluded), held to ground truth by a **4,802-test** bats suite and exercised across
+**7,472 sessions**.
 
 <div align="center">
 
@@ -34,7 +35,7 @@ and exercised across **~6,900 sessions**.
 |---|---|---|
 | **1** | [**Sessions run each other**](#1-sessions-run-each-other) | You are no longer the scheduler. Sessions open, message, and retire one another — and page you only when a human must decide. |
 | **2** | [**Parallel work cannot collide**](#2-parallel-work-cannot-collide) | A worktree per writer, an account per lane, and exactly one machine-wide lock on landing. |
-| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 77 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
+| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 78 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
 
@@ -135,7 +136,7 @@ This layer is audited adversarially — most recently a 15-agent verified audit:
 <!-- Diagram source: assets/diagrams/parallel-lanes.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/parallel-lanes-dark.svg">
-  <img src="assets/diagrams/parallel-lanes-light.svg" alt="Sessions A, B and C each work in their own worktree on their own account. All three run an unlocked fast gate — statics, ratchets and a bounded smoke that sheds by skipping under load, never a test corpus — then funnel into a single machine-wide land-lock held for seconds, covering only the compare-and-swap push window. The push is verified by content rather than by commit count before the work reaches origin/main. Behind the trunk, one background verifier runs the full corpus in a fresh cell with host suites partitioned out, and its green stamp is the only thing that lets the deploy autopilot advance the live ~/.claude layer.">
+  <img src="assets/diagrams/parallel-lanes-light.svg" alt="Sessions A, B and C each work in their own worktree on their own account. All three run an unlocked fast gate — statics, ratchets and a bounded smoke that sheds by skipping under load, never a test corpus — then funnel into a single machine-wide land-lock held 5 to 15 seconds, covering only the compare-and-swap push window. The push is verified by content rather than by commit count before the work reaches origin/main. Behind the trunk, one background verifier runs the full corpus in a fresh cell with host suites partitioned out, and its green stamp is the only thing that lets the deploy autopilot advance the live ~/.claude layer.">
 </picture>
 
 <details>
@@ -148,7 +149,7 @@ flowchart LR
     B["session B<br/>own worktree · acct 2"] --> G
     C["session C<br/>own worktree · acct 3"] --> G
     G["fast gate — UNLOCKED, seconds<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
-    G --> Lock{"land-lock<br/>held seconds-to-minutes:<br/>the CAS push window only"}
+    G --> Lock{"land-lock<br/>held 5-15s:<br/>the CAS push window only"}
     Lock --> Push["push → verify by CONTENT,<br/>not commit count"]
     Push --> Trunk[("origin/main")]
     Trunk --> V["verifier — ONE, background band<br/>full corpus, fresh cell,<br/>host suites partitioned out"]
@@ -188,12 +189,12 @@ Full evidence, the hypotheses that got killed along the way, and the migration p
 
 ## 3. Autonomy is bounded
 
-**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 82 hook scripts; the live config wires **77 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
+**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 82 hook scripts; the live config wires **78 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
 
 <!-- Diagram source: assets/diagrams/guardrail-pipeline.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/guardrail-pipeline-dark.svg">
-  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then ten PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
+  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then eleven PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
 </picture>
 
 <details>
@@ -207,7 +208,7 @@ flowchart TB
     M --> Pre{"PreToolUse<br/>14 hooks"}
     Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
-    Tool --> Post["PostToolUse — 10 hooks<br/>plan version · bash log · context watch"]
+    Tool --> Post["PostToolUse — 11 hooks<br/>plan version · bash log · context watch"]
     Post --> M
     M --> Stop{"Stop<br/>11 hooks"}
     Stop -->|"the live git ledger disagrees"| M
@@ -248,8 +249,9 @@ PreToolUse (14)       validate-bash · backup-before-write (OVERWRITE GUARD) · 
                       rm-safe-allowlist · check-edit-boundary · plan-agent-teams-default · frontier-spawn-gate ·
                       cc-unattended-ask-guard · keychain-guard · curl-gate · enforce-email-formatting ·
                       ship-rail-push-allow · qos-rewrite
-PostToolUse (10)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
-                      log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle · cc-permission-beacon
+PostToolUse (11)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
+                      log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle · relay-verbatim ·
+                      cc-permission-beacon
 Stop (11)             completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
                       anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify ·
                       session-beat · cc-permission-beacon
@@ -276,7 +278,7 @@ WorktreeCreate (1)    worktree-setup                                  TaskComple
 | `ask` rules | 6 | Classifier decides instead of prompting (collapsed from 45 as autonomy moved routine calls behind classifier + hook rails) |
 | `allow` rules | 350 | Auto-approved: read-only commands, WebFetch domains, Edit/Write, MCP tools |
 | PreToolUse hooks | 14 | Always fire — a hook deny is an absolute block |
-| PostToolUse hooks | 10 | Always fire — logging, plan versioning, task indexing |
+| PostToolUse hooks | 11 | Always fire — logging, plan versioning, task indexing |
 
 Key deny rules, enforced even in auto mode: `git push --force`, `sudo`/`su`, `eval`/`exec`, `git clean`, `wget`, `dd`, and reads of `.env*` / `*.key` / `*.pem`.
 
@@ -295,7 +297,7 @@ Teammate models must be on the account's auto-mode allowlist, or the spawn silen
 | **Every file version** | [`backup-before-write.sh`](hooks/backup-before-write.sh) stamps a backup before every Write/Edit — nanosecond+PID names (parallel-agent-safe), sidecar `.path` files for basename collisions, atomic `mktemp`+`mv` restore, capped at 10/file — but only **3** for `*.sh`, the file type this repo is mostly made of — with a 30-day TTL by [`prune-backups.sh`](scripts/prune-backups.sh) | [`restore-file`](scripts/restore-file.sh) `<path>` · `--diff` · `--pick N` · `--recent 10` |
 | **Every plan revision** | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) writes two layers: an append-only `MANIFEST.jsonl` (timestamp, session, SHA256, line count) and full snapshots in a separate git repo | `cd ~/.claude/plan-history && git log` |
 | **Every task list** | Claude Code uses UUID task dirs and ignores `CLAUDE_CODE_TASK_LIST_ID`; [`setup-task-symlinks.sh`](hooks/setup-task-symlinks.sh) detects the active list at SessionStart, symlinks it to `.claude-tasks/_current/`, and generates a readable `TASKS.md` beside it | `.claude-tasks/TASKS.md` |
-| **Every conversation** | SQLite FTS5 index over all ~6,900 sessions, kept self-maintaining by three hooks — a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses | `claude-search "<query>"` · `--fzf` · `--stats` |
+| **Every conversation** | SQLite FTS5 index — 2,198 sessions, kept self-maintaining by three hooks: a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses. Retention drops rows whose transcript Claude Code has since deleted, so a hit is always openable | `claude-search "<query>"` · `--fzf` · `--stats` |
 
 ```bash
 restore-file path/to/file --diff     # unified diff against the latest backup
@@ -314,7 +316,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-model-dark.svg">
-  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,134 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
+  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,174 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
 </picture>
 
 <details>
@@ -323,10 +325,10 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- mermaid-fence: assets/diagrams/deploy-model.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    Repo["claude-infrastructure<br/>1,134 files · one reviewable history"]
+    Repo["claude-infrastructure<br/>1,174 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · code SYMLINKED<br/>auth + settings per-account"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
-    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>49 tools · 20 daemons · statusline"]
+    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>52 tools · 21 daemons · statusline"]
     classDef src fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef dep fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
     class Repo src
@@ -337,7 +339,7 @@ flowchart TB
 
 </details>
 
-The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `handoff-fire.sh` had drifted +198 lines in the deployment and was one `install.sh` away from being clobbered. The four account dirs stay **copies** so a rate-limited account cannot perturb another; global surfaces are copies too, and `sync.sh` pulls hand-edits of those back.
+The symlink rule came from a failure: on 2026-07-03 a *copied* `handoff-fire.sh` had drifted +198 lines in the deployment and was one `install.sh` away from being clobbered. The four account dirs isolate **auth and settings, not code** — as deployed, their `hooks/`, `commands/` and `scripts/` symlink into this checkout too, so one landing moves every account. Global surfaces stay copies, and `sync.sh` pulls hand-edits of those back.
 
 **Landed is not live — the gap is closed by proof, not by hand.** Because the primary dir symlinks into the checkout, a trunk commit only reaches running sessions when the checkout advances — and it advances *autonomously and fail-closed*: a launchd verifier ([`postland-verify.sh`](scripts/postland-verify.sh), every 5 min) proves each trunk tree with the full corpus in a fresh cell and stamps it; a deploy autopilot ([`deploy-live.sh`](scripts/deploy-live.sh)` --auto`, every 10 min) fast-forwards the checkout **only to a green-stamped tree**, re-runs `install.sh` (so brand-new files get their symlinks), and then runs the [host suites](scripts/host-suites.manifest) against the live layer — the one place suites that assert the deployed world can honestly run. A red trunk auto-reverts its bisected culprit; a dead verifier or a lagging deploy is surfaced by fact-bound alarms in [`cc-blockers`](bin/cc-blockers) rather than assumed healthy.
 
@@ -361,8 +363,8 @@ The symlink rule was bought with a real failure: on 2026-07-03 a *copied* `hando
 └── projects/                    # per-project memory + transcripts
 
 ~/.claude-versions/   current -> 2.1.114      # atomically-symlinked installs
-~/bin/                claude-latest · claude-update · claude-versions   (the 49 cc-* fleet tools live in ~/.claude/bin)
-~/Library/LaunchAgents/   24 daemons — dispatcher · discovery · reapers · regression · search · …
+~/bin/                claude-latest · claude-update · claude-versions   (the 52 cc-* fleet tools live in ~/.claude/bin)
+~/Library/LaunchAgents/   25 daemons — dispatcher · discovery · reapers · regression · search · …
 ```
 
 </details>
@@ -425,7 +427,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ### Held to ground truth
 
-**4,564 bats tests across 262 files (68,005 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim). A nightly full-suite regression daemon is declared but **staged, not loaded** — `com.claude.nightly-regression` is absent from `launchctl list`, and `launchd/fleet.manifest` marks it `staged`. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
+**4,802 bats tests across 273 files (71,622 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim). A nightly full-suite regression daemon is declared but **staged, not loaded** — `com.claude.nightly-regression` is absent from `launchctl list`, and `launchd/fleet.manifest` marks it `staged`. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
 
 ---
 
@@ -438,7 +440,7 @@ Everything above runs ~30 sessions unattended. At that concurrency this box lags
 <!-- Diagram source: assets/diagrams/interface-ceiling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/interface-ceiling-dark.svg">
-  <img src="assets/diagrams/interface-ceiling-light.svg" alt="Thirty sessions running cost about 0.75 cores at roughly 215 MB each, with 93 percent of memory free and zero pageouts — so the fleet is not the expensive part. When a session blocks on a permission prompt the path forks. Today it is found by eye, which requires thirty panes kept visible: a polling interface. That costs iTerm2 122.1 percent plus WindowServer 49.0 percent, about 1.7 cores, which is 2.3 times the fleet it displays, and it leaks 76 mach ports per hour at frozen layout with tuning already exhausted at match 9 drift 0 — so cost scales with sessions running. The other fork already exists: cc-permission-beacon.sh fires on PermissionRequest and writes each blocked session to /tmp/cc-permission-pending/. What is missing is that nothing renders that queue, so the grid stands in for it. The fix is a console rather than a terminal — one row per session, zoom on demand, no VT implementation, driving kitty underneath — after which cost scales with sessions blocked, zero to three.">
+  <img src="assets/diagrams/interface-ceiling-light.svg" alt="Fifteen live sessions cost about 0.75 cores at roughly 215 MB each, and at thirty-one sessions 93 percent of memory is free with zero pageouts — so the fleet is not the expensive part. When a session blocks on a permission prompt the path forks. Today it is found by eye, which requires thirty panes kept visible: a polling interface. That costs iTerm2 122.1 percent plus WindowServer 49.0 percent, about 1.7 cores, which is 2.3 times the fleet it displays, and it leaks 76 mach ports per hour at frozen layout with tuning already exhausted at match 9 drift 0 — so cost scales with sessions running. The other fork already exists: cc-permission-beacon.sh fires on PermissionRequest and writes each blocked session to /tmp/cc-permission-pending/. What is missing is that nothing renders that queue, so the grid stands in for it. The fix is a console rather than a terminal — one row per session, zoom on demand, no VT implementation, driving kitty underneath — after which cost scales with sessions blocked, zero to three.">
 </picture>
 
 <details>
@@ -447,7 +449,7 @@ Everything above runs ~30 sessions unattended. At that concurrency this box lags
 <!-- mermaid-fence: assets/diagrams/interface-ceiling.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    Fleet["30 sessions RUNNING<br/>≈0.75 cores · ~215 MB each<br/>93% memory free · Pageouts 0"]
+    Fleet["the FLEET is cheap<br/>15 live sessions ≈0.75 cores · ~215 MB each<br/>at 31 sessions: 93% memory free · Pageouts 0"]
     Block{"a session BLOCKS<br/>on a permission prompt"}
     Fleet --> Block
 
@@ -751,7 +753,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 
 <br>
 
-**20 launchd daemons** (`launchd/`, all low-priority; `install.sh` copies and loads them):
+**21 launchd daemons** (`launchd/`, all low-priority; `install.sh` copies and loads them):
 
 | Plist | Schedule | Purpose |
 |---|---|---|
@@ -772,6 +774,7 @@ loader — so a rename in a future kitty fails there rather than under your fing
 | `com.claude.lead-supervisor` | KeepAlive | watch the leads; reap stranded panes and beacons |
 | `com.claude.capacity-alarm` | 60 s | fail-loud when the box runs out of headroom |
 | `com.claude.qos-census` | 10 min | census the fleet's QoS bands (the PRI-4 ratchet is one-way) |
+| `com.claude.worktree-gc-infra` | 4:15 am | reap merged and stale worktrees of this repo |
 | `com.chrisren.cc-reaper` | 5 min | reap dead sessions the registry still lists |
 | `com.chrisren.screenshot-clipboard` | WatchPaths | put new screenshots on the clipboard |
 | `com.chrisren.watch-claude-code-2118-hold` | 9:12 am | hold the CC 2.1.18 pin until the upgrade gate clears it |
