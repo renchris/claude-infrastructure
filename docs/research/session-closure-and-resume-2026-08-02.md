@@ -125,20 +125,77 @@ the setup-token v2 thread, backlog `170a3b38f8c9`, with its full recycle payload
 is on trunk by content; all four `.oauth_refresh.lock` paths are absent, so the dangling-lock fix is
 intact.
 
+## Live proof — the orphan repro, and the two ways it can lie to you
+
+Run on the deployed layer after the deploy below. It reproduces the exact failure and then shows the
+fix closing it, using the **real** function out of the live script rather than a paraphrase:
+
+```bash
+eval "$(sed -n '/^pin_term_verdict_for_watcher() {/,/^}/p' ~/.claude/scripts/handoff-fire.sh)"
+pin_term_verdict_for_watcher            # foreground: ancestry walk valid → CC_TERM=kitty
+# then spawn a child with start_new_session=True, let the spawner EXIT, and have the child
+# sleep before probing (see /tmp/probe3.sh in the session that wrote this)
+```
+
+| condition | `ppid` | `cc-in-kitty` | `it2 session list` | pane reachable |
+|---|---|---|---|---|
+| orphan, no `CC_TERM` (**the bug**) | 1 | rc 1 — *"INHERITED, not ours"* | iTerm2 error, 0 lines | **no** |
+| orphan, `CC_TERM` pinned (**the fix**) | 1 | rc 0 — *"explicit override"* | kitty, pane present | **yes** |
+
+**Two traps, both of which produced a false result before the true one.** They are the reason this
+section exists at all:
+
+1. **A no-delay repro proves nothing.** The first attempt used `Popen(...).communicate()`, which keeps
+   the spawner alive — so the child's parent was still a kitty descendant and the ancestry walk
+   *succeeded*. It reported "reachable" for both arms, i.e. it failed to reproduce a bug that is
+   sitting right there in four production logs. The child must outlive its spawner before it is an
+   orphan at all.
+2. **A hand-rolled control can be the broken thing.** The second attempt built its own environment in
+   Python and did not actually propagate `CC_TERM` to the child, so the fixed arm looked *inert* —
+   momentarily indicting a fix that was fine. Replaying the **real** artifact (`sed`-extract the live
+   function, run it, inherit its env) is what separated the two. A control that cannot fail the same
+   way the subject fails is not a control.
+
 ## Landed ≠ live (read this before assuming the fix is in effect)
 
 `~/.claude/scripts/handoff-fire.sh` is a symlink into the **shared checkout's working tree**, not into
-trunk. A land therefore does nothing for running sessions until the live layer advances, and
-`deploy-live.sh --auto` — the only sanctioned advance — is fail-closed on a green postland stamp.
-`cc-blockers` reports that gate as `trunk-red PERSISTENT-RED, newest 5 all red, 1 green of 63 ever`.
+trunk. A land therefore does nothing for running sessions until the live layer advances.
 
-Attribution, so this is not mistaken for a consequence of the fix: none of the twelve suites in the red
-stamps touches anything in `6a67dfe2`, and one of them (`tests/desk-recycle-durable.bats`) ran **green**
-directly at trunk this session. The red predates the diff and excludes it.
+**The deploy lane was deadlocked, and the cause was not the gate.** `deploy-live.sh --force` — which
+skips the green-stamp walk entirely — still refused:
+
+```
+deploy-live: REFUSED — target dd88bc68d030 is not a descendant of live HEAD 0824716f65e7
+             — this would ROLL BACK the live layer
+```
+
+The shared checkout's `main` carried **`0824716f`** (`perf(kitty): throttle redraws at high pane
+count`, `config/kitty.conf` +25), committed straight onto it at 13:06 on 2026-08-02 and never landed.
+Trunk and the live layer had **diverged**, so every advance in either lane read as a rollback. That is
+why the gated lane looked like a stamp problem for days: a green stamp would not have helped either.
+
+**Resolution.** Cherry-pick the stranded commit onto trunk (`dec053fb`, `-x`), confirm `git cherry
+origin/main HEAD` reports `-` (upstream by patch-id, so the checkout's copy is a pure duplicate), then
+reset the checkout to trunk and deploy. Both discarded objects were verified already-on-trunk first —
+`0824716f` (`git diff dec053fb` = 0 lines) and the dirty `lib/config-mirror.zsh` (`git diff
+origin/main` = 0 lines). Live is now byte-identical to trunk, `0 ahead / 0 behind`, clean.
+
+**The generalisable lesson:** a *single* unlanded commit in the shared checkout silently disables the
+deploy lane for the whole machine. It does not announce itself as a divergence — it announces itself
+as a rollback refusal, and (in the gated lane) as a missing green stamp. `git cherry origin/main HEAD`
+is the one-line diagnostic; a `+` there means the live layer cannot advance no matter what the
+verifier says.
+
+The persistent trunk-red is a **separate, still-open** condition — `cc-blockers` reports
+`newest 5 all red, 1 green of 63 ever`. None of the twelve suites in those stamps touches anything in
+`acbaba85`/`6a67dfe2`, and one (`tests/desk-recycle-durable.bats`) ran **green** directly at trunk this
+session, so the red predates this diff and excludes it. Until it converges, the deploy lane needs
+`--force` on every advance.
 
 ```
 # what the deploy lane is waiting on
 cc-blockers
+git -C ~/Development/claude-infrastructure cherry origin/main HEAD    # '+' ⇒ divergence, lane dead
 jq -r --arg v red 'select(.verdict==$v).failing[]?' ~/.claude/autonomy/postland/stamps/*.json \
   | sort | uniq -c | sort -rn
 ```
