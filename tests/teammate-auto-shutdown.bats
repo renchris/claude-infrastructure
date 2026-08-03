@@ -542,3 +542,68 @@ denying_guard() {
   ! grep -q "SURFACE $member" "$LOGF" || { echo "a dedicated-cwd defer was surfaced — fix over-reaches:"; cat "$LOGF"; false; }
   [ ! -s "$D/it2-calls.log" ] || { echo "pane closed despite reap-guard DEFER"; false; }
 }
+
+# ── SPAWN-TIME RESOLUTION (2026-08-03) ───────────────────────────────────────────────────────────
+# reap-guard's birth-grace leg (R-a) is only as good as the spawn instant it is handed. The hook used
+# to read that instant from `cc-sessions` alone and, on a miss, substitute `date +%s` — i.e. NOW.
+# `cc-sessions` indexes LAUNCHER-started sessions; a teammate is spawned by the HARNESS and is never
+# in it. Measured 2026-08-03: 14/14 registry entries carried `startedAt` and 0/2 live teammate sids
+# resolved, so every teammate was handed age=0 and pinned inside the 300s grace forever — 310 of 373
+# reap-guard decision records on the box read "age 0s < birth grace 300s", and the last
+# `✓ closed pane` in teammate-lifecycle.log was 2026-07-25. A lookup MISS had become a VALUE, and the
+# value it became was the one that defers forever.
+# These three pin the resolution ORDER and, crucially, that the fallback stays alive and the
+# unresolved case stays LOUD — a fix that reached "always trust joinedAt" would be just as blind.
+
+# reap-guard stub that RECORDS the argv it was handed, then DEFERs (exit 10) so nothing is closed.
+# Recording is the whole point: the assertion is about the value passed IN, not the decision out.
+recording_guard() {
+  export CC_REAP_GUARD_BIN="$D/bin/reap-guard-rec"
+  cat > "$CC_REAP_GUARD_BIN" <<EOF
+#!/bin/bash
+echo "\$*" >> "$D/guard-argv.log"
+exit 10
+EOF
+  chmod +x "$CC_REAP_GUARD_BIN"
+}
+# team config carrying joinedAt (epoch-MILLISECONDS), as every real team config on this box does
+teamcfg_joined() { mkdir -p "$HOME/.claude/teams/$1"
+  printf '{"members":[{"name":"%s","tmuxPaneId":"%s","joinedAt":%s}]}' "$2" "$3" "$4" \
+    > "$HOME/.claude/teams/$1/config.json"; }
+
+@test "spawn-time: a teammate ABSENT from cc-sessions still gets its real age from the config's joinedAt" {
+  local team=tjoin member=mjoin pane=%97 wt="$D/wt_join" joined_s=$((NOW-3600))
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"
+  teamcfg_joined "$team" "$member" "$pane" "$((joined_s*1000))"
+  printf '[]' > "$D/sessions.json"     # the MEASURED reality: teammates are not in the launcher registry
+  recording_guard
+  hookrun "$member" "$team" sidjoin "$wt" >/dev/null 2>&1 || true
+  grep -q -- "--spawn-time $joined_s" "$D/guard-argv.log" \
+    || { echo "spawn-time was not taken from joinedAt (pre-fix this was 'now', so age was always 0):";
+         cat "$D/guard-argv.log" 2>/dev/null; false; }
+}
+
+@test "POSITIVE CONTROL: with no joinedAt, spawn-time still falls back to the cc-sessions registry" {
+  # Without this the fix could 'pass' by ignoring cc-sessions entirely — a dead fallback that nothing
+  # would report. Pins that the OLD source is still consulted when the new one cannot answer.
+  local team=treg member=mreg pane=%96 wt="$D/wt_reg" spawn_ago=7200
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg sidreg "$pane" "$wt" "$spawn_ago"
+  recording_guard
+  hookrun "$member" "$team" sidreg "$wt" >/dev/null 2>&1 || true
+  grep -q -- "--spawn-time $((NOW-spawn_ago))" "$D/guard-argv.log" \
+    || { echo "cc-sessions fallback is DEAD — joinedAt-first broke the old path:";
+         cat "$D/guard-argv.log" 2>/dev/null; false; }
+}
+
+@test "spawn-time: neither source resolves → logged as UNRESOLVED, never a silent 'now'" {
+  # The third state. Deferring is still correct here (never an ungated close), but a permanent defer
+  # must be VISIBLE in the log rather than masquerading as a perpetually just-born teammate.
+  local team=tnone member=mnone pane=%95 wt="$D/wt_none"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  printf '[]' > "$D/sessions.json"
+  recording_guard
+  hookrun "$member" "$team" sidnone "$wt" >/dev/null 2>&1 || true
+  grep -q "spawn-time UNRESOLVED" "$LOGF" \
+    || { echo "an unresolvable spawn-time was silently replaced by now:"; cat "$LOGF"; false; }
+}
