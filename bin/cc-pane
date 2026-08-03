@@ -132,11 +132,21 @@ drv_iterm2_spawn() {
     return "$RC_NO"
   }
   if [ "$inherit" = 1 ]; then bin="$(it2_real_bin)"; else bin="$(it2_bin)"; fi
-  # shellcheck disable=SC2086  # $vflag is a controlled empty-or-"-v" token, never user text
+  # CC_KITTY_ARGV_SPAWN=0 — cc-pane's spawn OPTS OUT of the kitty argv-delivery transport (§9.1).
+  # `spawn` here means "give me a sibling pane"; its companion verb is `send` (drv_iterm2_send), which
+  # types arbitrary text and may be called any number of times. An armed pane accepts exactly ONE
+  # command and only via `run`, so arming would swallow every `cc-pane send` into a tty nobody reads.
+  # Exported inside each substitution's own subshell so the value cannot outlive the call.
+  # SC2030/SC2031: the subshell-locality ShellCheck warns about is precisely the property being
+  # bought here — a value that outlived this call would un-arm every later split in the process. The
+  # directive is per-LINE and duplicated deliberately: a single one above the `if` does NOT cover
+  # both arms, because SC2031 is reported at the second occurrence, which is its own command.
+  # shellcheck disable=SC2086,SC2030,SC2031  # $vflag is a controlled empty-or-"-v" token, never user text
   if [ -n "$profile" ]; then
-    out="$("$bin" session split -s "$anchor" $vflag -p "$profile" 2>&1)" || return "$RC_NO"
+    out="$(export CC_KITTY_ARGV_SPAWN=0; "$bin" session split -s "$anchor" $vflag -p "$profile" 2>&1)" || return "$RC_NO"
   else
-    out="$("$bin" session split -s "$anchor" $vflag 2>&1)" || return "$RC_NO"
+    # shellcheck disable=SC2086,SC2030,SC2031
+    out="$(export CC_KITTY_ARGV_SPAWN=0; "$bin" session split -s "$anchor" $vflag 2>&1)" || return "$RC_NO"
   fi
   # it2 0.2.3 prints exactly "Created new pane: <UUID>" and offers no --json for split, so this
   # prefix IS the contract. Anything else is a failure, never a silently-empty success.
