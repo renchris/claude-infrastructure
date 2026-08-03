@@ -21,9 +21,22 @@ CLAUDE_DEFAULT_EFFORT="${CLAUDE_DEFAULT_EFFORT:-max}"
 # shellcheck source=/dev/null
 [[ -f "$HOME/.claude/lib/cc-resume-shell.sh" ]] && source "$HOME/.claude/lib/cc-resume-shell.sh"
 
+# …and re-source at USE time, because the line above is a file-existence test that runs ONCE. A lib
+# installed into ~/.claude/lib AFTER a shell started is invisible to that shell forever, and the
+# guard inside claude() is fail-OPEN — so the capability does not fail, it silently degrades.
+# Measured 2026-08-02: the lib was symlinked 13 minutes after one pane's shell started, and when that
+# session ended and printed Claude's own `claude --resume <id>` hint, the pin never ran and Claude
+# answered "No conversation found" about a live 8.6 MB transcript sitting on another account. The
+# lib is pure definitions, so re-sourcing is free, idempotent, and also repairs a STALE BODY.
+# shellcheck source=/dev/null
+_cc_lib() {  # _cc_lib <func> <libfile> → 0 if <func> is defined AND current in this shell
+    [[ -f "$HOME/.claude/lib/$2" ]] && source "$HOME/.claude/lib/$2"
+    typeset -f "$1" >/dev/null 2>&1
+}
+
 claude() {
     local _cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" _wt=""
-    if typeset -f _cc_resume_pin >/dev/null 2>&1; then
+    if _cc_lib _cc_resume_pin cc-resume-shell.sh; then
         _cc_resume_pin "$_cfg" "$@"
         set -- "${CC_RESUME_ARGS[@]}"
         [[ -n "$CC_RESUME_CFG" ]] && _cfg="$CC_RESUME_CFG"
