@@ -152,7 +152,7 @@ readout_run() { printf '{"session_id":"s1","cwd":"%s"}' "$RWD" | "$REPO/hooks/op
   readout_env; lead_ancestry; team_cfg t1 tm
   run readout_run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"systemMessage"* ]]
+  [[ "$output" == *"systemMessage"* ]] || false
   [[ "$output" == *"OPERATOR"* ]]
 }
 
