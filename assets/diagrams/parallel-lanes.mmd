@@ -3,7 +3,7 @@ flowchart LR
     B["session B<br/>own worktree · acct 2"] --> G
     C["session C<br/>own worktree · acct 3"] --> G
     G["fast gate — UNLOCKED, seconds<br/>statics + ratchets + bounded smoke<br/>(sheds by SKIPPING under load; no corpus, ever)"]
-    G --> Lock{"land-lock<br/>held seconds-to-minutes:<br/>the CAS push window only"}
+    G --> Lock{"land-lock<br/>held 5-15s:<br/>the CAS push window only"}
     Lock --> Push["push → verify by CONTENT,<br/>not commit count"]
     Push --> Trunk[("origin/main")]
     Trunk --> V["verifier — ONE, background band<br/>full corpus, fresh cell,<br/>host suites partitioned out"]

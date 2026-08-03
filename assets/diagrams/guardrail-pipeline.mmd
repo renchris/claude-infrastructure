@@ -4,7 +4,7 @@ flowchart TB
     M --> Pre{"PreToolUse<br/>14 hooks"}
     Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
-    Tool --> Post["PostToolUse — 10 hooks<br/>plan version · bash log · context watch"]
+    Tool --> Post["PostToolUse — 11 hooks<br/>plan version · bash log · context watch"]
     Post --> M
     M --> Stop{"Stop<br/>11 hooks"}
     Stop -->|"the live git ledger disagrees"| M
