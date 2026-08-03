@@ -168,6 +168,28 @@ has_done=0; printf '%s' "$MSG" | grep -iqE "$DONE_TELLS" && has_done=1
 has_cat=0;  printf '%s' "$MSG" | grep -iqE "$CATEGORY_TELLS" && has_cat=1
 { [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ]; } || abstain "no-tell"
 
+# ── DEFERRING TO A LEAD IS NOT THE DEFERENCE DEFECT (2026-08-02) ────────────────────────────────
+# This hook's premise is one session ↔ one human: its reason text says "the operator cannot act on
+# a count", and its prescribed discharge is to DRIVE the work or surface the genuine three TO THE
+# OPERATOR. A background team assignee can do neither — its only channel is two-way with its lead.
+# Worse, the hook fires on the assignee's MANDATED protocol: skills/agent-teams requires a teammate
+# to report to its lead and "AWAIT explicit go-ahead", and `awaiting your` is a TELLS match verbatim.
+# So the guard would block a teammate up to its cap for obeying its own brief, with a remedy it
+# cannot execute. Placed after `no-tell` so only messages that would actually fire pay the `ps`.
+_ad_lib="${AGENT_IDENTITY_LIB:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/agent-identity.sh}"
+[ -f "$_ad_lib" ] || { _ad_t="$0"; [ -L "$_ad_t" ] && _ad_t="$(readlink "$_ad_t")"
+  _ad_lib="$(cd "$(dirname "$_ad_t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+[ -f "$_ad_lib" ] || _ad_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
+[ -f "$_ad_lib" ] || _ad_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+if [ -f "$_ad_lib" ]; then
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if . "$_ad_lib" 2>/dev/null; then
+    _ad_aid="$(agent_is_assignee 2>/dev/null || true)"
+    [ -n "$_ad_aid" ] && abstain "team-assignee:${_ad_aid}"
+  fi
+fi
+
 # ── (P0-4b) Genuine carve-out, SPLIT so ship/land is CONDITIONAL, not blanket (G-P11-2 / I-3:
 #    a blanket push/land carve-out trains the model to bolt a genuine-marker on to silence the hook).
 #   HARD_CORE : credential/sudo/destructive-migration/external-info/value-fork — ALWAYS genuine.

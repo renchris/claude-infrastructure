@@ -736,6 +736,31 @@ fi
 input="$(cat 2>/dev/null || printf '{}')"
 [ "${CC_OPREADOUT_DISABLE:-0}" = "1" ] && abstain "disabled"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
+
+# ── NO OPERATOR, NO OPERATOR BLOCK (2026-08-02) ──────────────────────────────────────────────────
+# Observed: a teammate pane (@preview-index-fix, spawned Agent({name,team_name})) rendered
+# `OPERATOR ▸ ✅ SAFE TO CLOSE … 12 runnable now, 253 need your call` into its OWN transcript. A
+# background assignee is a REAL child session and so runs this whole main-session Stop chain — but
+# it has no human entrypoint at all, so every line of that block is undeliverable: nobody reads it,
+# it reports the MACHINE's standing pile rather than the teammate's brief, it burns the one resource
+# the brief discipline exists to protect, and "253 need your call" invites it to act on
+# operator-owned items that are categorically not its work.
+# Placed HERE — after the two free gates, before render_block's ~2711 ms / ~100 forks — so an
+# assignee pays one `ps` and nothing else. `--render` is deliberately NOT guarded: that surface is
+# the pull path (/wrap, tests, humans) and is invoked BY the operator, so it has one by definition.
+_op_lib="${AGENT_IDENTITY_LIB:-$SCRIPT_DIR/lib/agent-identity.sh}"
+[ -f "$_op_lib" ] || { _op_t="$0"; [ -L "$_op_t" ] && _op_t="$(readlink "$_op_t")"
+  _op_lib="$(cd "$(dirname "$_op_t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+[ -f "$_op_lib" ] || _op_lib="$CFG/hooks/lib/agent-identity.sh"
+[ -f "$_op_lib" ] || _op_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+if [ -f "$_op_lib" ]; then
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091
+  if . "$_op_lib" 2>/dev/null; then
+    _op_aid="$(agent_is_assignee 2>/dev/null || true)"
+    [ -n "$_op_aid" ] && abstain "team-assignee:${_op_aid}"
+  fi
+fi
 SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"

@@ -30,6 +30,29 @@ nty_osa() {
 
 
 EVENT_TYPE="${1:-complete}"
+
+# ── DON'T CHIME FOR A SESSION THE OPERATOR ISN'T WATCHING (2026-08-02) ───────────────────────────
+# The debounce lock is per-SESSION by deliberate design, so N background team assignees going idle
+# play N × Purr.aiff with nothing for the operator to act on — the alarm-polarity failure exactly
+# (MEMORY.md alarm-polarity-and-attention-budget): a chime that fires for work the human cannot see
+# or act on spends attention and carries no bits.
+# SCOPED TO `complete` ON PURPOSE. permission / question / elicitation / plan are pages the operator
+# genuinely must answer — a teammate blocked on a permission prompt is precisely when they need to
+# know — so those keep chiming. Gating on the event first also keeps the `ps` walk off every other
+# notify path. Fails OPEN: no lib ⇒ chimes as today.
+if [ "$EVENT_TYPE" = "complete" ]; then
+  _nt_lib="${AGENT_IDENTITY_LIB:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/agent-identity.sh}"
+  [ -f "$_nt_lib" ] || _nt_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
+  [ -f "$_nt_lib" ] || _nt_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+  if [ -f "$_nt_lib" ]; then
+    # shellcheck source=lib/agent-identity.sh
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    if . "$_nt_lib" 2>/dev/null; then
+      agent_is_assignee >/dev/null 2>&1 && exit 0
+    fi
+  fi
+fi
+
 SOUNDS_DIR="/System/Library/Sounds"
 SCREENREADER_SOUNDS="/System/Library/PrivateFrameworks/ScreenReader.framework/Versions/A/Resources/Sounds"
 # ── ARTIFACT DIR: private by construction, never a fixed name in world-writable /tmp ─────────────

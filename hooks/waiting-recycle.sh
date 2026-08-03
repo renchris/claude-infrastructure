@@ -534,6 +534,31 @@ elif is_monitoring_desk;        then armed_by="desk-role"
 fi
 [ -n "$armed_by" ] || abstain "not-armed"
 
+# ── AN ASSIGNEE IS NEVER THE DESK (2026-08-02) ───────────────────────────────────────────────────
+# Both arms above can arm a background team assignee by accident, so "it is probably not armed" is
+# not a defence: `is_monitoring_desk` matches on the iTerm pane UUID taken from ITERM_SESSION_ID /
+# CC_PANE_ID, and a child CC session INHERITS that env from the desk that spawned it (verified
+# 2026-08-02 — a live teammate's env carried the desk's ITERM_SESSION_ID verbatim). Once armed as
+# `desk-role` it also shares the desk's role-keyed live-/brief- state, which puts it on the Stage-2
+# deterministic `handoff-fire.sh --recycle` exec path — i.e. the leak here is not just an unread
+# page, it is a teammate being recycled out from under its lead. This hook additionally PAGES a
+# human (osascript + Pushover), which an assignee can never justify.
+# Sited immediately after the arm gate so only already-armed sessions pay the `ps` walk — this hook
+# rides PostToolUse:Bash (~19x the Stop chain's rate) under an explicit fork budget.
+_wr_lib="${AGENT_IDENTITY_LIB:-$_wrd/lib/agent-identity.sh}"
+[ -f "$_wr_lib" ] || { _wr_t="$0"; [ -L "$_wr_t" ] && _wr_t="$(readlink "$_wr_t")"
+  _wr_lib="$(cd "$(dirname "$_wr_t")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+[ -f "$_wr_lib" ] || _wr_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
+[ -f "$_wr_lib" ] || _wr_lib="$HOME/.claude/hooks/lib/agent-identity.sh"
+if [ -f "$_wr_lib" ]; then
+  # shellcheck source=lib/agent-identity.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if . "$_wr_lib" 2>/dev/null; then
+    _wr_aid="$(agent_is_assignee 2>/dev/null || true)"
+    [ -n "$_wr_aid" ] && abstain "team-assignee:${_wr_aid}"
+  fi
+fi
+
 # GUARD: never advise-recycle off the recycle/handoff machinery's OWN Bash calls (defense-in-depth;
 # the cooldown set at fire-time also covers this, but an explicit guard removes any ordering risk).
 CMD="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
