@@ -737,6 +737,8 @@ input="$(cat 2>/dev/null || printf '{}')"
 [ "${CC_OPREADOUT_DISABLE:-0}" = "1" ] && abstain "disabled"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
+SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
+
 # ── NO OPERATOR, NO OPERATOR BLOCK (2026-08-02) ──────────────────────────────────────────────────
 # Observed: a teammate pane (@preview-index-fix, spawned Agent({name,team_name})) rendered
 # `OPERATOR ▸ ✅ SAFE TO CLOSE … 12 runnable now, 253 need your call` into its OWN transcript. A
@@ -761,7 +763,9 @@ if [ -f "$_op_lib" ]; then
     [ -n "$_op_aid" ] && abstain "team-assignee:${_op_aid}"
   fi
 fi
-SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
+# SID is parsed above, before the assignee guard, so that guard's abstain is ATTRIBUTABLE — an IDL
+# row reading sid "?" cannot be traced to the session it silenced, and this is the one hook whose
+# silence an operator may need to explain later.
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
