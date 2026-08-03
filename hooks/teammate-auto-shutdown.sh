@@ -642,6 +642,44 @@ if [[ -n "$WORKTREE" ]]; then
   fi
 fi
 
+# ── OWNERSHIP, NOT THE WORKTREE, WHEN THE TREE IS SHARED (F1, 2026-08-03) ────────────────────────
+# The cleanliness question above is asked of the whole worktree. That is the right question only
+# when the member OWNS it. A lead may deliberately put N teammates in ONE worktree — they owned
+# disjoint FILES, and parallel automated worktree creation has a known `.git/config.lock` race and
+# a data-loss bug (GH #34645, #48927) — and then each member sees its SIBLINGS' in-flight edits and
+# defers as if the dirt were its own. Observed: all five members of session-ba3d4b59 deferred on
+# "dirty tree" simultaneously, none of them dirty on anything it had written.
+#
+# So on a SHARED cwd, re-ask the question on the right axis: is this member dirty on the files IT
+# wrote? hooks/lib/session-writes.sh already answers exactly that for session-continue (it reads the
+# session's own transcript edit records), so this reuses that ONE attribution path rather than
+# inventing a second one that could disagree with it.
+#
+# FAIL DIRECTION IS DELIBERATE AND NARROW. Only rc 1 — "the transcript read cleanly and NOTHING this
+# member wrote is dirty" — may clear the flag. rc 2 (cannot-tell: no jq, no transcript, read error)
+# keeps TREE_DIRTY exactly as the whole-tree read left it, so ignorance can never license a close
+# (MEMORY.md lookup-miss-is-not-absence). An OWNED worktree is untouched by construction: there the
+# whole-tree answer IS this member's answer, and weakening it would let one member's reap ignore
+# work it really did leave behind.
+if $TREE_DIRTY && ! $WORKTREE_OWNED; then
+  _sw_lib="${SESSION_WRITES_LIB:-$HOOK_DIR/lib/session-writes.sh}"
+  [[ -f "$_sw_lib" ]] || _sw_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
+  [[ -f "$_sw_lib" ]] || _sw_lib="$HOME/.claude/hooks/lib/session-writes.sh"
+  if [[ -f "$_sw_lib" ]] && _sw_tj="$(_find_transcript "$SESSION_ID")"; then
+    # shellcheck source=lib/session-writes.sh
+    # shellcheck disable=SC1091
+    if . "$_sw_lib" 2>/dev/null; then
+      session_dirty_mine "$_sw_tj" "$WORKTREE" >/dev/null 2>&1; _sw_rc=$?
+      if (( _sw_rc == 1 )); then
+        TREE_DIRTY=false
+        log "  ↳ $TEAMMATE_NAME: shared cwd is dirty, but NOTHING this member wrote is — a sibling's dirt is not its own (per-file attribution)"
+      elif (( _sw_rc == 0 )); then
+        log "  ↳ $TEAMMATE_NAME: shared cwd dirty AND this member's own files are among the dirty ones — defer stands"
+      fi
+    fi
+  fi
+fi
+
 # ⚠ `DEFER_COUNT + 1`, NOT `DEFER_COUNT` — the cap must be reachable BY THE EVENT THAT HITS IT.
 # `(( DEFER_COUNT < MAX_DEFERS ))` deferred on the MAX_DEFERSth event too and left the follow-through
 # to an event N+1 that never comes: once the lead marks a member `isActive:false`, the harness STOPS

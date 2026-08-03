@@ -607,3 +607,86 @@ teamcfg_joined() { mkdir -p "$HOME/.claude/teams/$1"
   grep -q "spawn-time UNRESOLVED" "$LOGF" \
     || { echo "an unresolvable spawn-time was silently replaced by now:"; cat "$LOGF"; false; }
 }
+
+# ── F1: OWNERSHIP, NOT THE WORKTREE, WHEN THE TREE IS SHARED (2026-08-03) ────────────────────────
+# A lead may deliberately put N teammates in ONE worktree (disjoint FILES; automated worktree
+# creation has a .git/config.lock race + data-loss bug). Each member then saw its SIBLINGS' edits
+# via `git status` on the shared cwd and deferred as if the dirt were its own — all five members of
+# session-ba3d4b59 deferred on "dirty tree" at once, none dirty on anything it had written.
+# These four pin the fix AND its two must-not-change directions; without the latter, "ignore the
+# dirty tree" would quietly become "reap a member that really did leave work behind".
+
+# a real git repo at <dir> with one committed file, then <n> dirty files owned by "a sibling"
+shared_repo() {
+  git init -q "$1" 2>/dev/null
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  echo base > "$1/base.txt"; git -C "$1" add base.txt; git -C "$1" commit -qm base
+}
+# transcript for <sid> recording a Write tool_use of <path> (what session-writes.sh attributes on)
+tx_wrote() {
+  printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"%s"}}]}}\n' \
+    "$(iso 60)" "$2" > "$D/proj/slug/$1.jsonl"
+}
+
+@test "F1: shared cwd dirty ONLY with a sibling's files → this member is not deferred for it" {
+  local team=tf1 member=mf1 pane=%94 shared="$D/f1repo"
+  shared_repo "$shared"; echo sib > "$shared/sibling.txt"      # dirt this member never wrote
+  teamcfg_shared "$team" "$member" "$pane" "$shared"
+  tx_wrote sidf1 "$shared/mine.txt"                             # member wrote mine.txt — and COMMITTED nothing dirty
+  recording_guard                                               # stop before any close; we assert the DEFER REASON
+  hookrun "$member" "$team" sidf1 "$shared" >/dev/null 2>&1 || true
+  grep -q "NOTHING this member wrote is" "$LOGF" \
+    || { echo "a sibling's dirt still convicted this member:"; cat "$LOGF"; false; }
+  # `if grep …; then … false; fi`, never `! grep … || { … }`: a `!`-prefixed statement is EXEMPT from
+  # errexit, so the negated form asserts nothing bats can act on (scripts/bats-assert-liveness.py
+  # flags it DEAD). Here `false` is the last command of a reachable branch, so the test really fails.
+  if grep -q "defer $member (1/3): dirty tree" "$LOGF"; then
+    echo "still deferred on the whole-tree dirty read:"; cat "$LOGF"; false
+  fi
+}
+
+@test "F1 POSITIVE CONTROL: the member's OWN dirty file still defers it (relaxation is narrow)" {
+  # The direction that proves the fix did not become "shared cwd ⇒ never dirty". Same shared tree,
+  # but the dirty path is one this member's transcript records writing.
+  local team=tf2 member=mf2 pane=%93 shared="$D/f2repo"
+  shared_repo "$shared"; echo mine > "$shared/mine.txt"
+  teamcfg_shared "$team" "$member" "$pane" "$shared"
+  tx_wrote sidf2 "$shared/mine.txt"
+  recording_guard
+  hookrun "$member" "$team" sidf2 "$shared" >/dev/null 2>&1 || true
+  # Asserts BEHAVIOUR only, never the new log line — that is what makes this a real control: it must
+  # pass on the pristine PRE-F1 tree as well as the fixed one. A control that keys on a string the
+  # fix introduces can only ever fail before and pass after, which is a second copy of the RED proof
+  # wearing a control's clothes and proves nothing about over-reach.
+  grep -q "defer $member (1/3): dirty tree" "$LOGF" \
+    || { echo "own-dirt no longer produces the dirty-tree defer — the relaxation over-reached:";
+         cat "$LOGF"; false; }
+}
+
+@test "F1 POSITIVE CONTROL: cannot-tell (no transcript) keeps the whole-tree defer — ignorance never licenses a close" {
+  local team=tf3 member=mf3 pane=%92 shared="$D/f3repo"
+  shared_repo "$shared"; echo sib > "$shared/sibling.txt"
+  teamcfg_shared "$team" "$member" "$pane" "$shared"
+  rm -f "$D/proj/slug/sidf3.jsonl"                              # no transcript ⇒ session-writes rc 2
+  recording_guard
+  hookrun "$member" "$team" sidf3 "$shared" >/dev/null 2>&1 || true
+  grep -q "defer $member (1/3): dirty tree" "$LOGF" \
+    || { echo "an UNREADABLE attribution cleared the dirty flag — fail-open:"; cat "$LOGF"; false; }
+}
+
+@test "F1 POSITIVE CONTROL: an OWNED worktree is untouched — the whole-tree read still governs" {
+  # On a dedicated tree the whole-tree answer IS this member's answer. If the new branch ran here it
+  # could clear a real dirty flag using a transcript that simply has no Write records.
+  local team=tf4 member=mf4 pane=%91 wt="$D/f4repo"
+  shared_repo "$wt"; echo dirt > "$wt/anything.txt"
+  worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  tx_wrote sidf4 "$wt/unrelated.txt"                            # member wrote something else entirely
+  recording_guard
+  hookrun "$member" "$team" sidf4 "$wt" >/dev/null 2>&1 || true
+  grep -q "defer $member (1/3): dirty tree" "$LOGF" \
+    || { echo "an OWNED worktree's dirty defer was weakened by per-file attribution:"; cat "$LOGF"; false; }
+  # Same reason as above — an errexit-reachable branch, not a `!` the shell exempts.
+  if grep -q "NOTHING this member wrote is" "$LOGF"; then
+    echo "the shared-cwd branch ran on an OWNED worktree:"; cat "$LOGF"; false
+  fi
+}
