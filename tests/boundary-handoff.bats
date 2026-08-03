@@ -14,6 +14,12 @@ setup() {
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_BOUNDARY_LATCH_DIR="$BATS_TEST_TMPDIR/latch"
   export CC_CONTINUE_SENTINEL="$BATS_TEST_TMPDIR/no-such-sentinel"   # compose-guard bypass (not armed)
+  # The ✅-ledger FREE-WIN arm is OFF by default here so each threshold/size case below stays a
+  # function of the axis it names. The fixture repo is clean + landed — RUNG=✅ — so leaving the arm
+  # live would make every ≥35% case fire on the LEDGER and silently re-label the size-axis reason:
+  # the suite would still look green but would no longer test what its names claim. The arm has its
+  # own tests, which enable it explicitly and assert the reason.
+  export CC_BOUNDARY_T_FREEWIN=0
   mkdir -p "$CC_TELEMETRY_DIR"
   # a committed repo standing in for the session's cwd, marked gate-green at HEAD
   WD="$BATS_TEST_TMPDIR/wd"; mkdir -p "$WD"
@@ -205,4 +211,41 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   # silence alone is also what a hook with no size axis produces — assert it was EVALUATED-and-disabled
   tail -1 "$CC_IDL" | jq -e 'select(.disposition=="abstained")
       | .size_mb_t==0 and .rss_mb_t==0 and .tx_mb>=1' >/dev/null
+}
+
+# ── ✅-LEDGER FREE-WIN ARM ────────────────────────────────────────────────────────────────────────
+# CLAUDE.md § Context Stewardship: "Idle at ≥~35% fill is a FREE WIN: recycle now." Nothing
+# implemented it. waiting-recycle.sh owns T_IDLE=35 but runs on PostToolUse:Bash — an idle pane
+# issues no Bash, so the hook with the right threshold never executes in the state it exists for.
+# This hook runs at Stop, the moment a session is about to go quiet, but its threshold was 73: on the
+# session the operator watched sit idle it abstained below-threshold:41<73, 42<73, 43<73. The arm
+# fires here only when the LEDGER says ✅ — clean · landed · no DoD remainder · no filed operator
+# step — which is the mechanical form of "everything of value is already on disk".
+@test "free-win: 43% with a ✅ ledger → FIRES (the idle case that abstained 41/42/43 < 73)" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw1 43
+  run drive fw1
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "free-win: 34% is below the floor → still abstains (the floor is real)" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw2 34
+  run drive fw2
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+# The guard that makes this safe: work in hand must never be cut. A dirty tree yields RUNG=🔧, so
+# the arm stays silent even well above the floor.
+@test "free-win: 43% but a DIRTY tree (RUNG=🔧) → SILENT, never cuts work in hand" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  echo uncommitted > "$WD/dirty.txt"
+  mk_btel fw3 43
+  run drive fw3
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+@test "free-win: the arm is off by default at 0 → legacy below-threshold behaviour preserved" {
+  export CC_BOUNDARY_T_FREEWIN=0
+  mk_btel fw4 43
+  run drive fw4
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'below-threshold:43<73' "$CC_IDL"
 }

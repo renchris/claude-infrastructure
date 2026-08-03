@@ -221,6 +221,47 @@ _bsj="$(jq -cn --argjson tx "$tx_mb" --argjson rss "$rss_mb" --argjson st "$SIZE
 # shellcheck disable=SC2034  # consumed by indirection in hooks/lib/idl-log.sh (idl_init merge-var slot)
 if [ -n "$_bsj" ] && printf '%s' "$_bsj" | jq -e 'type=="object"' >/dev/null 2>&1; then SIZE_JSON="$_bsj"; else SIZE_JSON='{}'; fi
 
+# ── FREE-WIN ARM (2026-08-03) — the ✅-ledger recycle, so a quiet session drains ITSELF ───────────
+#
+# THE GAP THIS CLOSES. CLAUDE.md § Context Stewardship: "Idle at ≥~35% fill is a FREE WIN: recycle
+# now." Nothing implemented that. waiting-recycle.sh owns T_IDLE=35 but runs on PostToolUse:Bash —
+# an idle pane issues no Bash, so the hook that has the right threshold NEVER EXECUTES in the state
+# it exists for. This hook runs at Stop (every turn end) but its threshold is 73, so it abstained
+# `below-threshold:41<73`, `42<73`, `43<73` on the very session the operator watched sit idle. Third
+# observer, lead-supervisor.sh:90, is also 73 and can only PAGE. Net: 1503 waiting-recycle
+# evaluations, 0 fires ever; 12 live sessions at or above 35% at the time of measurement.
+#
+# WHY STOP IS THE RIGHT OBSERVATION POINT. Idleness cannot be sampled by a mid-turn hook — a session
+# running tools is BY DEFINITION not idle. A Stop is the moment the session is about to go quiet, so
+# it is the only place "idle" is observable at all without a new daemon.
+#
+# WHY THE ✅ LEDGER IS THE RIGHT PREDICATE, not a fill number alone. CLAUDE.md's Recycle test is
+# "everything of value is already on disk — the context holds no judgment a successor could not
+# re-derive." RUNG=✅ IS that test, mechanically: clean tree · landed · no DoD remainder · no filed
+# operator step. Anything unfinished yields 🔧/📦/👤/⛔ and this arm stays silent, so a session with
+# work in hand is never cut. That is also why this could not be built before today — ✅ was
+# unreachable while the trunk-wide gate marker decided the rung.
+#
+# COST: the ledger read is gated behind the fill floor, so a low-fill session pays nothing.
+# SAFETY: advisory only — it sets `early`, and every downstream guard (conversation-in-flight,
+# re-arm damping, latch) still applies. Fails silent on any unknown: no cwd, no ledger, non-✅.
+T_FREEWIN="${CC_BOUNDARY_T_FREEWIN:-35}"   # 0 disables the arm
+free_win_now() {
+  [ "${T_FREEWIN:-0}" -gt 0 ] 2>/dev/null || return 1
+  [ "$used" -ge "$T_FREEWIN" ] 2>/dev/null || return 1
+  local c w r
+  c="$(jq -r '.cwd // empty' "$tel" 2>/dev/null || true)"
+  { [ -n "$c" ] && [ -d "$c" ]; } || return 1
+  # `_bscd` is this hook's own resolved dir (:103). Deliberately NOT a bare $SCRIPT_DIR — that name
+  # does not exist in this script, and under `set -u` referencing it would abort the hook.
+  for w in "${_bscd:-}/../scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+    [ -f "$w" ] && break || w=""
+  done
+  [ -n "$w" ] || return 1
+  r="$( cd "$c" 2>/dev/null && bash "$w" --machine 2>/dev/null | grep -E '^RUNG=' | head -1 | cut -d= -f2- )"
+  [ "$r" = "✅" ]
+}
+
 early=0
 if [ "$used" -lt "$T" ]; then
   if [ "$used" -ge "$T_MIN" ] && [ "$forecast_min" -ge 0 ] && [ "$forecast_min" -le "$LEAD_MIN" ]; then
@@ -228,6 +269,8 @@ if [ "$used" -lt "$T" ]; then
   elif [ "$over_size" = 1 ] || [ "$over_rss" = 1 ]; then
     :   # the SIZE axis carries the fire on its own — no fill floor applies, because fill is the metric
         # that is blind here (a compacted giant sits at low used_pct BY CONSTRUCTION).
+  elif free_win_now; then
+    early=1   # see free_win_now() — the ✅-ledger free-win arm
   else
     abstain "below-threshold:${used}<${T}"
   fi
