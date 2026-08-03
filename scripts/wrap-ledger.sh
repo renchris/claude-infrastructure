@@ -171,11 +171,31 @@ count_operator_steps() {
 }
 
 # ── Compute the worst-open FACT rung + its readout ──
+#
+# GATE IS REPORTED, NEVER THE RUNG (2026-08-03). `gate-green` is a TRUNK-WIDE marker advanced only by
+# the singleton postland verifier — the land path structurally cannot move it (ship-land.sh self-noops
+# and says so). So a session's own close state was being decided by a fact about the whole repo that
+# no session can act on. Measured: the marker had been pinned at 34e725d6 since Jul 29 — a sha that is
+# not even an ancestor of HEAD (it lives on fix/accounts-eval-bin-resolver + 4 wt-* branches, never
+# main) — while postland's all-time tally is 1 green / 63 red / 2 cut / 1 hung. With everything else
+# ✅-eligible (DIRTY_N=0 AHEAD=0 UNLANDED=0 REMAINDER=0) the rung still read 🔧, so RUNG=✅ — and with
+# it the whole ✅ SAFE TO CLOSE certificate — was UNREACHABLE in this repo for five days. The operator
+# had to ask "are we good to close?" at every single close, which is the exact defect the certificate
+# was built to remove.
+#
+# This restores the documented contract rather than inventing one. CLAUDE.md § Session Close Protocol:
+# "Where a background verifier owns the full-suite claim (claude-infrastructure v2), YOUR DIFF GREEN +
+# CONTENT-VERIFIED LAND is the standard — waiting on a trunk-wide stamp you do not control is not
+# diligence, it is a hang." And: a 🔧 you did not CAUSE is not your loose end — "name it in ONE line,
+# surface it, and close on YOUR state."
+#
+# So the marker still SURFACES (GATE= is emitted below, and operator-readout appends "gate stale on
+# HEAD" to a 🔧 raised by a real cause), but it no longer manufactures a 🔧 on an otherwise-clean
+# close. Nothing here weakens a rung the session can actually act on: dirty tree, DoD remainder and
+# unlanded commits are unchanged and still outrank ✅.
 RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing to do."
 if [ "$DIRTY" -eq 1 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${DIRTY_N} uncommitted change(s) in the tree; continuing."
-elif [ "$GATE" = "stale" ]; then
-  RUNG="🔧"; READOUT="🔧 Loose ends — gate not green on HEAD (re-run the gate); continuing."
 elif [ "$REMAINDER" -gt 0 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${REMAINDER} frozen-DoD item(s) remain; continuing."
 elif [ "$UNLANDED" -eq 1 ]; then

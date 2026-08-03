@@ -101,10 +101,27 @@ field() { printf '%s' "$1" | grep -E "^$2=" | head -1 | cut -d= -f2-; }
   printf '%s' "$output" | grep -qi "no durable dod"
 }
 
-# ── 🔧: gate marker present but stale (points to an older commit than HEAD) ──
-@test "gate marker stale (≠ HEAD) ⇒ RUNG=🔧, GATE=stale" {
+# ── GATE is REPORTED, never the rung ──
+# `gate-green` is a TRUNK-WIDE marker only the singleton postland verifier advances; the land path
+# structurally cannot move it. Deciding a SESSION's close state on it made ✅ — and the whole
+# "✅ SAFE TO CLOSE" certificate — unreachable in this repo for five days (marker pinned at 34e725d6
+# since Jul 29, a sha not even an ancestor of HEAD), so the operator had to ask "are we good to
+# close?" at every close. Contract per CLAUDE.md § Session Close Protocol: "your diff green +
+# content-verified land is the standard — waiting on a trunk-wide stamp you do not control is not
+# diligence, it is a hang." The marker must still be VISIBLE in the machine output.
+@test "gate marker stale (≠ HEAD) ⇒ GATE=stale is REPORTED but the rung stays ✅" {
   git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green"
   echo next > next.txt; git add next.txt; git commit -q -m advance; git push -q origin main  # HEAD moves past marker, still landed
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" GATE)" = "stale" ]     # still surfaced — never silently dropped
+  [ "$(field "$output" RUNG)" != "🔧" ]        # but it no longer manufactures a loose end
+}
+# A rung the session CAN act on still outranks ✅ — the change must not weaken a real 🔧.
+@test "gate stale + a REAL loose end ⇒ still 🔧 (dirty tree outranks, gate change is scoped)" {
+  git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green"
+  echo next > next.txt; git add next.txt; git commit -q -m advance; git push -q origin main
+  echo dirty > uncommitted.txt                 # a loose end the session owns
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
   [ "$(field "$output" GATE)" = "stale" ]
