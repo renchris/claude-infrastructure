@@ -162,6 +162,11 @@ readout_run() { printf '{"session_id":"s1","cwd":"%s"}' "$RWD" | "$REPO/hooks/op
   [ "$status" -eq 0 ]
   [ -z "$output" ]
   grep -q '"reason":"team-assignee:tm@session-t1"' "$CC_IDL"
+  # ATTRIBUTABLE: the abstain must name the session it silenced. The guard sits before most of the
+  # hook, so the session id has to be parsed ahead of it — a row reading sid "?" cannot be traced
+  # back, and this is the one hook whose silence an operator may later need explained.
+  run jq -rs 'map(select(.hook=="operator-readout" and (.reason|startswith("team-assignee"))))|last|.sid' "$CC_IDL"
+  [ "$output" = "s1" ]
 }
 
 @test "S1 operator-readout: the --render PULL surface is NOT guarded (the operator invoked it)" {
