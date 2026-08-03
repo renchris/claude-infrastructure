@@ -678,6 +678,85 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
   return 1
 }
 
+# PANE-REACHABILITY handshake — the second half of the arm, and the half that was missing.
+# `→ armed:` proves only that the watcher can write its own LOG. The write that decides whether the
+# session survives — into the PANE, through the it2 shim — was not exercised until AFTER /exit had
+# already killed the predecessor. So a watcher with no route to the pane still read as armed, and the
+# failure surfaced to the operator as a pane that simply vanished with the work stranded. Measured
+# 2026-08-02: 4 of 4 recycles since the kitty migration ended in "it2 relaunch write failed twice",
+# every one of them post-kill (panes 176, 2, 173, 218 — accounts next4, next2, next4, next3).
+# The watcher now probes the pane over the REAL transport and records a verdict; nothing is killed
+# until that verdict is affirmative. Timeout and explicit-unreachable share a disposition (do NOT
+# kill) but not a log line, because they have different fixes.
+await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 unreachable-or-timeout
+  local n=0
+  while [ "$n" -lt 60 ]; do
+    grep -q '^→ pane-reachable:'    "$1" 2>/dev/null && return 0
+    grep -q '^!! pane-UNREACHABLE:' "$1" 2>/dev/null && return 1
+    /bin/sleep 0.2; n=$((n+1))
+  done
+  return 1
+}
+
+# Hand the FOREGROUND-verified terminal verdict down to the detached watcher.
+#
+# THE DEFECT THIS CLOSES: detach() spawns the watcher with start_new_session=True, so it reparents to
+# launchd BY CONSTRUCTION. bin/cc-in-kitty — correctly — discriminates on ANCESTRY rather than on the
+# KITTY_* env vars, because those inherit transitively into iTerm2 and would make the divert fire in
+# the wrong terminal. But an orphan has no kitty ancestor to find, so for the watcher that walk can
+# only ever answer "not kitty": every pane write it makes is routed to the real iTerm2 CLI and dies
+# against a kitty pane id. The watcher is not misconfigured — it is structurally unable to re-derive
+# a fact this process can still see.
+#
+# So resolve it HERE, where the walk is valid, and pass it through cc-in-kitty's own documented seam.
+# This is NOT the rc-block export that file's header forbids: that one caches a verdict into every
+# process on the box forever, which is the inheritance defect cc-in-kitty exists to fix. This hands a
+# just-measured verdict to ONE short-lived child whose lineage we deliberately destroyed. Only a
+# DEFINITIVE verdict is pinned — cc-in-kitty's exit 2 (KITTY_* present but UNVERIFIABLE) is left
+# unpinned so the watcher keeps today's fail-closed behaviour instead of inheriting a guess.
+pin_term_verdict_for_watcher() {
+  [ -n "${CC_TERM:-}" ] && return 0        # explicit operator/test override already in force — never overwrite
+  local cik="$HOME/.claude/bin/cc-in-kitty"
+  [ -x "$cik" ] || return 0
+  # `set -euo pipefail` is in force. A bare `"$cik"` here would abort handoff-fire outright on the
+  # iTerm2 path, because cc-in-kitty's NORMAL answer for "not kitty" is exit 1 — a probe whose
+  # honest negative verdict kills its caller. Capture the code instead; `|| rc=$?` is exempt.
+  local rc=0
+  "$cik" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) export CC_TERM=kitty  ;;
+    1) export CC_TERM=iterm2 ;;            # pin both directions: an unpinned watcher is free to drift
+    *) : ;;                                # 2 = UNVERIFIABLE, 64 = usage — pin nothing
+  esac
+  return 0
+}
+
+# The probe itself, run BY the watcher as its second act (the foreground consumes its verdict via
+# await_pane_proof). Read-only, and over the REAL transport: `session list` goes through the same
+# shim the relaunch/close write will take, so it cannot be right about a route the write resolves
+# differently. A probe that re-implemented the routing decision would only ever agree with itself —
+# the thing to test is the actuator, not a model of it.
+# Two log lines, never one. The affirmative is what releases the kill; the negative is what an
+# operator reads when a pane did not come back, so it names the pane, the shim and the verdict that
+# produced the routing — the three facts the 2026-08-02 strand cost an hour for lack of.
+pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachable (both logged)
+  local it2="$1" pane="$2" label="$3" out=""
+  if [ ! -x "$it2" ]; then
+    echo "!! pane-UNREACHABLE: $label cannot probe pane $pane — no executable it2 shim at $it2"
+    return 1
+  fi
+  # Bounded twice, deliberately: hf_bounded caps a wedged terminal API here, and await_pane_proof's
+  # own timeout caps the case where this function never returns at all. Both resolve to "do not
+  # kill", which is the only safe direction for a probe that gates an irreversible act.
+  out="$(hf_bounded "$it2" session list 2>/dev/null || true)"
+  if printf '%s\n' "$out" | grep -qxF "$pane"; then
+    echo "→ pane-reachable: $pane enumerated by '$it2 session list' (CC_TERM=${CC_TERM:-unset})"
+    return 0
+  fi
+  echo "!! pane-UNREACHABLE: $label — pane $pane is NOT in '$it2 session list' (CC_TERM=${CC_TERM:-unset}). Every write to it would fail, so the predecessor is NOT being killed."
+  return 1
+}
+
 # ---- reliable launch-command injection (INC ttys018, 2026-07-19) ------------------------------
 # Typing a launch command into an interactive zsh as a raw async_send_text CHAR-STREAM races the
 # target shell's ZLE: zsh-autosuggestions + zsh-syntax-highlighting recompute per keystroke and
@@ -1950,6 +2029,11 @@ if [ "${1:-}" = "__selfclose" ]; then
                                                    # (positional-last + optional, so a deployed-copy
                                                    # skew mid-land simply ignores it)
   echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none} successor_tty=${SUCCESSOR_TTY:-none} successor_pin=${SUCCESSOR_PIN:-none}"
+  # Same proof as __recycle, same reason: every close/CR/focus this watcher performs goes through the
+  # it2 shim, and an unreachable pane turns a close into the HUSK-PANE branch below — /exit typed, CC
+  # gone, pane left at a shell prompt, which reads to the operator as exactly the crash this path
+  # exists to avoid. Refusing before the foreground types /exit keeps the session alive instead.
+  pane_proof "$HOME/.claude/bin/it2" "$SID" __selfclose || exit 1
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
@@ -2044,6 +2128,7 @@ if [ "${1:-}" = "__recycle" ]; then
   CMDFILE="${4:?__recycle needs the command file}"
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
+  pane_proof "$IT2" "$RSID" __recycle || exit 1
   cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
   waited=0
   while [ "$waited" -lt 600 ] && cc_alive; do
@@ -2735,12 +2820,20 @@ MSG
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
     # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
     echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
+    pin_term_verdict_for_watcher
     detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
+    pin_term_verdict_for_watcher
     SC_WATCHER="$(detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN")"
     if ! await_armed "$SC_LOG"; then
       kill "$SC_WATCHER" 2>/dev/null || true
       echo "!! self-close ABORTED: watcher heartbeat never appeared ($SC_LOG) — /exit NOT typed, session stays alive" >&2
+      exit 1
+    fi
+    # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
+    if ! await_pane_proof "$SC_LOG"; then
+      kill "$SC_WATCHER" 2>/dev/null || true
+      echo "!! self-close ABORTED: the watcher cannot write pane $SC_SID (see $SC_LOG) — /exit NOT typed, session stays alive" >&2
       exit 1
     fi
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
@@ -4268,10 +4361,17 @@ recycle_fire() {
   # runs, the row may already have been rewritten by the relaunched session, which would make the
   # ROW-CHANGE signal compare a value against itself and never witness a change).
   rcy_old_sid="$(cc_sid_for_pane "$SID")"
+  pin_term_verdict_for_watcher
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$PWD" "$rcy_old_sid" "$RECYCLE_MARKER")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
+    exit 1
+  fi
+  # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
+  if ! await_pane_proof "$log"; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+    echo "!! recycle ABORTED: the watcher cannot write pane $SID (see $log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     exit 1
   fi
   echo "→ recycle armed for $SID: watcher pid $WATCHER_PID (session-detached, heartbeat verified) relaunches $LAUNCHER once claude exits (log: $log)"
