@@ -285,7 +285,19 @@ def concurrency(cfg):
         if not toks:
             continue
         t0 = toks[0]
-        if not (t0 == "claude" or t0.endswith("/claude") or "cli.js" in t0):
+        # `claude.exe` is NOT a third spelling to be thorough about — it is the argv[0] of every
+        # session this repo's own dispatcher creates. Interactive launches exec the `.bin/claude`
+        # SYMLINK (path ends in /claude, matched), while cc-pane-runner-dispatched workers,
+        # teammates and research subagents exec the RESOLVED native binary. Measured on this
+        # machine 2026-08-04: next2 counted 2 live sessions against a truth of 10 — the 8 missing
+        # were all claude.exe. That matters here more than anywhere else, because this count is
+        # the rotation-safety gate below (`k_live > 0`): a heal that reads 0 redeems a refresh
+        # token concurrently with N sessions that rotate it, and the loser of that race holds a
+        # token the server has retired — a 400 invalid_grant with the calendar cliff still weeks
+        # away. Six sibling tools already match both spellings (cc-reaper, cc-reconcile,
+        # cc-teardown, cc-wait, statusline.sh, session-register.sh); this was one of the last two.
+        if not (t0 == "claude" or t0.endswith("/claude") or t0.endswith("claude.exe")
+                or "cli.js" in t0):
             continue
         # Headless one-shot flags sit in the first few argv slots (`claude -p "…"`); scanning
         # the whole line would false-match a '-p' or '--print' inside a PROMPT argument.
@@ -508,6 +520,104 @@ def set_credits(row, is_enabled, used_credits):
     row["credits_used_usd"] = row["credits_used"] / 100.0
 
 
+def _rejected_path():
+    """Sibling of the last-good ledger, DERIVED AT CALL TIME rather than bound at import.
+
+    Not a style choice: every caller that isolates this module — the bats corpus, any scratch
+    SSOT — redirects it by assigning `ca.LASTGOOD_PATH`. A module-level constant computed from
+    the import-time value would keep pointing at the REAL ledger through all of that, so a test
+    asserting on rejection state would read and write the live fleet's file and leak state
+    between cases. Deriving here makes one override redirect both stores, which is the property
+    the existing harness already assumes.
+
+    Derived by EXTENSION, never by substring. The obvious spelling —
+    `LASTGOOD_PATH.replace("-lastgood", "-rejected")` — is a silent no-op for any ledger whose
+    basename lacks that exact hyphenated token, and the bats corpus uses
+    `$BATS_TEST_TMPDIR/lastgood.json` (a slash, not a hyphen). The two stores then resolve to
+    ONE file and the rejection ledger overwrites the quota ledger. Splitting the extension
+    cannot collide for any input."""
+    stem, ext = os.path.splitext(LASTGOOD_PATH)
+    return f"{stem}-rejected{ext or '.json'}"
+
+
+def _rt_fingerprint(refresh_token):
+    """A refresh token identified WITHOUT being stored. sha256 prefix only — this file is
+    world-readable-ish plain JSON in the logs dir, so it must never be able to leak a grant."""
+    if not refresh_token:
+        return None
+    return sha256(refresh_token.encode()).hexdigest()[:16]
+
+
+def _load_rejected():
+    """-> {acct: {"rt": <fingerprint>, "ts": <iso>, "detail": <str>}}.
+
+    WHY THIS FILE EXISTS. `_heal_rejected()` already decides correctly that a 400 is terminal —
+    only an interactive /login recovers it — but that verdict lived in two keys on an in-memory
+    row behind a 90-second cache and then evaporated. Two consequences, both measured on next2
+    2026-08-03:
+
+      * Nothing suppressed the retry. Every later sweep recomputed `stale` from expiresAt, found
+        no memory of the rejection, and burned another 90s `auth login` against a token already
+        proven dead — 20 identical 400s in 95 minutes.
+      * Nothing could ESCALATE it. The recovery tool (`cc-relogin`) measures with `--no-heal` on
+        purpose, so `heal()` never runs for it, so `_heal_rejected()` is never reached, so the
+        row reads `auth="stale"` — benign — and `need_relogin()` answered *"healthy (auth=stale,
+        login_expires_h=674.6)"* and refused to act, twice, while the account was unusable. The
+        trigger and its own remedy were asking different questions about the same account.
+
+    Keying on the refresh token's FINGERPRINT is what keeps this self-clearing rather than
+    sticky. The record means "THIS grant was rejected", not "this account is broken": the moment
+    the keychain holds a different refresh token — an operator /login, a successful heal, or a
+    live session's own rotation — the fingerprint stops matching and the record is inert. A
+    plain boolean flag would have needed someone to remember to clear it, and would have pinned
+    a false `login-required` on an account that had already fixed itself (next2 did exactly that
+    at 01:20:28Z, in-session, with no human)."""
+    try:
+        with open(_rejected_path()) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_rejected(ledger):
+    """Atomic replace; best-effort — a failed persist must never break a sweep."""
+    try:
+        path = _rejected_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(ledger, f, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _mark_rejected(acct_name, refresh_token, detail):
+    led = _load_rejected()
+    led[acct_name] = {"rt": _rt_fingerprint(refresh_token), "detail": detail,
+                      "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    _save_rejected(led)
+
+
+def _clear_rejected(acct_name):
+    led = _load_rejected()
+    if acct_name in led:
+        del led[acct_name]
+        _save_rejected(led)
+
+
+def _rejected_for(acct_name, refresh_token):
+    """The live record for THIS credential, or None. Returns None (and does not clear) when the
+    fingerprint has moved on — the read side treats a superseded record as absent, and the next
+    successful sweep removes it."""
+    rec = _load_rejected().get(acct_name)
+    if not rec:
+        return None
+    fp = _rt_fingerprint(refresh_token)
+    return rec if (fp and rec.get("rt") == fp) else None
+
+
 def load_lastgood():
     """-> {acct: {quota fields + quota_as_of}}. Never raises (missing/corrupt ⇒ {})."""
     try:
@@ -623,6 +733,21 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         row["login_expires_at"] = rt_iso
         row["login_expires_h"] = hrs_until(rt_iso)
         row["login_expired"] = bool(_expired_ms(creds.get("refreshTokenExpiresAt")))
+    # A grant can be dead LONG BEFORE its calendar cliff. The cliff guard below is a prediction;
+    # this is an observation, and on 2026-08-03 the observation was the true one — next2's grant
+    # answered 400 for 95 minutes with `login_expires_h` reading 674.6. Consulted BEFORE the
+    # cliff branch and before the heal so that (a) a proven-dead grant is never re-redeemed on a
+    # timer, and (b) the verdict is visible to `--no-heal` readers, which is every caller in the
+    # relogin recovery path. Not a new alarm state: it reuses `login-required`, which
+    # cc-relogin's need_relogin() has always treated as actionable — the state was simply
+    # unreachable from the only code path that tool runs.
+    rejected = _rejected_for(acct["name"], creds.get("refreshToken"))
+    if rejected and not row.get("login_expired"):
+        row["auth"] = "login-required"
+        row["error"] = ("refresh REJECTED — run /login "
+                        f"({rejected.get('detail')}; first seen {rejected.get('ts')})")
+        inherit_lastgood(row, ledger, prev)
+        return row, None
     if row.get("login_expired"):
         # Past the cliff every refresh grant answers invalid_grant, so a heal cannot succeed
         # by construction — skipping it saves a guaranteed-futile 90s subprocess and, more
@@ -633,12 +758,36 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         row["auth"] = "login-required"
         row["error"] = "login EXPIRED — run /login (refresh token past expiry)"
     elif stale and not no_heal:
-        ok, detail = heal(cfg, acct, creds.get("refreshToken"), k_live)
+        rt_before = creds.get("refreshToken")
+        ok, detail = heal(cfg, acct, rt_before, k_live)
         if ok:
             creds, kstate = read_creds(acct["config_dir"], kc)
             token = (creds or {}).get("accessToken")
-            row["auth"] = "healed"
+            # PROOF, NOT REPORT. `heal()` reads success as rc==0 plus "Login successful" on
+            # stdout, and the 2.1.220 binary emits both even when the credential was never
+            # stored: its persist helper returns {success:false} on a keychain write failure,
+            # the caller discards that verdict, and `auth login` still exits 0. Worse, that
+            # path WIPES the stored credential before writing the replacement — so a failed
+            # write leaves nothing on disk while the server has already retired the old token.
+            # A false OK here would clear the rejection record and re-arm the retry loop this
+            # change exists to stop, so the claim is checked against the store: the grant moved
+            # only if the refresh token actually changed.
+            healed_rt = (creds or {}).get("refreshToken")
+            if healed_rt and _rt_fingerprint(healed_rt) != _rt_fingerprint(rt_before):
+                row["auth"] = "healed"
+                _clear_rejected(acct["name"])
+            else:
+                ok = False
+                detail = ("reported success but the stored refresh token did not change"
+                          if healed_rt else
+                          "reported success but no refresh token is stored (write lost)")
+                log_event(f"heal {acct['name']}: UNPROVEN — {detail}")
+                row["heal_note"] = detail
+                row["auth"] = "stale"
         elif _heal_rejected(detail):
+            # Persist BEFORE returning: this is the only moment the fleet ever learns that the
+            # grant is dead, and until 2026-08-04 that knowledge died with the process.
+            _mark_rejected(acct["name"], rt_before, detail)
             row["auth"] = "login-required"
             row["error"] = f"refresh REJECTED — run /login ({detail})"
             inherit_lastgood(row, ledger, prev)
