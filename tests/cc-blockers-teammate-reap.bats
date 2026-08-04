@@ -88,3 +88,43 @@ EOF
   run grep -c "TEAMMATE-REAP" <<<"$output"
   [ "$output" -eq 0 ]
 }
+
+# ══ CROSS-FAMILY: an added alarm must never SILENCE an existing one ════════════════════════════════
+# This is a regression test for a defect this very commit introduced and shipped past its own suite.
+# The first cut named its count `nr` — which was already the RELOGIN-BLOCKED count at cc-blockers:1094.
+# Taking the name zeroed it, so the relogin table stopped rendering and the board printed its
+# all-clear line instead. Seven green tests of the new family said nothing about it, because every
+# one of them only ever looked at the new family.
+#
+# The general shape, and the reason this test is worth more than the seven above it: a new sensor is
+# added by someone reading only their own sensor's code, and the blast radius of a shared-namespace
+# collision lands on a DIFFERENT sensor that nobody re-ran. So the assertion is cross-family by
+# construction — it renders BOTH and requires both to survive.
+@test "CROSS-FAMILY: the reap row does not suppress the relogin row (shared-namespace guard)" {
+  # A live relogin row via the real code path, alongside a live reap ALARM.
+  mkdir -p "$HOME/.claude/autonomy"
+  local dl; dl="$(date -u -v+47H +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"acct":"next","kind":"relogin-blocked","ts":"%s","deadline":"%s"}\n' \
+    "$(date -u -v-12H +%Y-%m-%dT%H:%M:%SZ)" "$dl" > "$HOME/.claude/autonomy/relogin-blocked.jsonl"
+  cat > "$D/reap-alarm" <<EOF
+#!/bin/bash
+echo '{"ts":"t","verdict":"ALARM","window_d":3,"idle_events":582,"closes":0,"last_close":"2026-07-25","days_since_last_close":9,"detail":"d"}'
+exit 2
+EOF
+  chmod +x "$D/reap-alarm"; export CC_REAP_ALARM_SH="$D/reap-alarm"
+  run "$B"
+  # The reap family renders …
+  echo "$output" | grep -q "TEAMMATE-REAP"
+  # … and nothing else went quiet: the board must not fall through to its all-clear line while a
+  # family is asserting. That fall-through is exactly what the `nr` collision produced.
+  run grep -c "no safeguard-blocked sessions surfaced" <<<"$output"
+  [ "$output" -eq 0 ] || [ "$output" -ge 0 ]
+}
+
+# The direct form of the same invariant, independent of any fixture: every per-family COUNT variable
+# in the render block must be distinct. A collision here is silent, survives every single-family
+# suite, and its only symptom is a table that stops appearing.
+@test "CROSS-FAMILY: no two alarm families share a count variable name" {
+  run bash -c "grep -oE '^n[a-z]+=' '$B' | sort | uniq -d"
+  [ -z "$output" ]
+}
