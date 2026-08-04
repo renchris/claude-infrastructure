@@ -445,3 +445,187 @@ when the CLI erases one. This is the only measure that makes an erase *recoverab
 is terminal. It would have turned every event in §6 into a self-healing blip. I have not built
 it because duplicating credentials is an auth-surface decision that belongs to you.
 
+
+---
+
+# UPDATE 3 — 2026-08-04: the second mechanism, found and fixed
+
+Session brief: *"the symptom survived the lock fix, so a second mechanism is live."* It was,
+and it is not the one the questions anticipated. Everything below is measured on this machine
+between 2026-08-04T01:27Z and 05:10Z unless marked INFERRED.
+
+## The answer to Q1, plainly: **(b), caused by (c). Not (a), not (d).**
+
+**(a) — the login cliff — is REFUTED, and this is the load-bearing measurement.** On
+2026-08-03 next2's refresh grant answered `400` twenty times between 14:04:57Z and 15:40:05Z.
+Its own `refreshTokenExpiresAt` at that moment read **674.6 hours away — 28 days**. A grant
+can be dead long before its calendar cliff, so the cliff cannot be the thing biting. The
+`/login` is not expected, and re-anchoring on a schedule would not have prevented it.
+
+**(d) — a genuinely revoked grant — is refuted by recovery.** next2 came back **without a
+human**: a live session refreshed it successfully at 01:20:28Z on 2026-08-04, and the
+transcript record shows the session emitting one auth error at 01:00:18Z and resuming normal
+work at 01:20:33Z with no typed `/login`. A revoked grant does not do that.
+
+**(b) is the shape of the failure and (c) is why it keeps happening here.** The store holds a
+refresh token the server has already retired, so every later attempt replays a corpse. The
+2.1.220 binary makes that reachable by construction, and our own tooling makes it likely.
+
+## Why the cliff looks unextendable, settled by measurement rather than citation
+
+Two oracles disagreed, and both turned out to be right. The binary computes
+`refreshTokenExpiresAt` **client-side on every refresh** —
+`ano(e,t){ if(typeof e==="number") return Date.now()+e*1000; ... }`, fed by the token
+response's `refresh_token_expires_in` — so the source says a plain refresh *does* rewrite the
+field, refuting "only an interactive login re-anchors it" as a statement about mechanism.
+
+But the instrument caught two live rotations and measured what the rewrite actually does:
+
+| account | rotation | live sessions | cliff moved by |
+|---|---|---|---|
+| next3 | 2026-08-04T03:11:41Z | 19 | **+115 ms** |
+| next4 | 2026-08-04T03:40:30Z | 0 | **−10 ms** |
+
+The server returns the **remaining** life of the same underlying grant, so the recomputed
+value lands on the same absolute instant to within sub-second rounding. **A refresh rewrites
+the cliff and cannot move it.** The operational rule in memory was right; its stated mechanism
+was wrong, and the distinction matters because it means no amount of successful refreshing
+buys calendar — but also that a cliff observed weeks out is real, which is what refutes (a).
+
+Corroboration across a 30-hour window: next / next3 / next4 held their cliffs to the second
+(`Aug 30 15:03:18` / `17:19:43` / `15:36:28`) across multiple rotations. next2 alone moved
+(+5h24m, to `Aug 31 22:33:45Z`) — a jump no refresh can produce, so next2 received a **new
+grant** on Aug 3. No `/login` appears in any transcript that day, and the transcript
+instrument only sees `/login` typed *inside* a session, so an out-of-session re-auth is the
+consistent explanation. [INFERRED — the anchor time is derived from the cliff, not observed.]
+
+## Q4 — YES. In-session refresh works now the lock is gone.
+
+This is the control the prior investigation could not fire, and it fired three times. The
+discriminator is the prior doc's own: a credential change with **no adjacent
+`claude-accounts.log` heal line** is an in-session refresh; one within seconds of a
+`heal <acct>: OK` is not.
+
+| account | token minted | heal line? | verdict |
+|---|---|---|---|
+| next | 2026-08-03T22:35:33Z | `heal next: OK` at 22:35:35Z | heal |
+| next2 | 2026-08-04T01:20:28Z | none since 15:40:05Z (−9h40m) | **in-session ✓** |
+| next3 | 2026-08-04T03:11:41Z | none on 2026-08-04 before it | **in-session ✓, 19 live sessions** |
+| next4 | 2026-08-04T03:40:30Z | `heal next4: OK` at 03:40:31Z | heal |
+
+**`1677218f` is confirmed by effect.** The mechanism it unblocked is now demonstrably firing,
+including on an account with 19 concurrent sessions. It was never the whole cure, because it
+was never the only mechanism.
+
+## Q2 — heal retried a terminal 400 forever because the verdict had nowhere to live
+
+`_heal_rejected()` classified the very first 400 correctly. The verdict was then written to
+two keys on an in-memory row behind a 90-second cache and discarded. Nothing persisted it, so
+every later sweep recomputed `stale` from `expiresAt`, found no memory of the rejection, and
+burned another 90-second `auth login` against a token already proven dead — **20 times in 95
+minutes**, with no backoff, no counter, and no circuit breaker.
+
+**Q3 — one account, not a rotating victim.** Every one of the 20 failures was next2. The
+historical bursts have the same single-account shape (next2 ×11 on Jul 19; next3 ×24 on
+Jul 24–25).
+
+## The defect that actually explains "it just comes up daily, with no warning"
+
+The escalation path exists, fired correctly, and was **refused by its own remedy**:
+
+```
+14:34:26Z  cc-relogin-poll  ESCALATED next2 … recover=cc-relogin next2
+14:34:33Z  cc-relogin       next2 refused exit=2 phase=gate ::
+                            no re-auth needed — healthy (auth=stale, login_expires_h=674.6)
+15:34:55Z  … the identical pair again, one hour later
+```
+
+`cc-relogin` measures with `--no-heal` **on purpose** — a heal inside a measurement is not a
+measurement. But `--no-heal` skips the only branch that calls `_heal_rejected()`, so the row
+reads `auth="stale"`, whose documented meaning is *benign*, and `need_relogin()` answers
+"healthy" and exits 2. **The trigger and its own remedy were asking different questions about
+the same account at the same instant** — one asked "is this account working?", the other "is
+the calendar cliff near?". Automation gave up; the operator became the fallback. Daily.
+
+Note the second-order damage: the poller escalated with a **fabricated `T-0h` deadline**
+(`dl=$NOW` for a row carrying no deadline columns) while the true cliff was 674h out, so the
+board told the operator the wrong thing about the wrong failure mode.
+
+## What landed
+
+| commit | change |
+|---|---|
+| `f8178bfe` | the mechanism fix — three defects below, six red-proved tests |
+| `31e76310` | the suite was appending to the production log (found by this work, see below) |
+| `7954996f` | `auth-timeseries.sh` records the keychain write time |
+
+**1. The rejection is now durable**, keyed on the refresh token's **fingerprint** (sha256
+prefix — never a token value). The record means "THIS grant was rejected", so it self-clears
+the moment the store holds a different token. A boolean would have pinned a false
+`login-required` on an account that fixed itself, which is precisely what next2 did.
+
+This one change closes both halves: the read side sits *before* the heal, so a proven-dead
+grant is never re-redeemed on a timer (Q2), and because the state is now visible to
+`--no-heal` readers, `cc-relogin` sees `auth=login-required` — already in its
+`LOGIN_FIXABLE` set — and acts instead of refusing. **`cc-relogin` needed no change at all**;
+the state it had always been willing to act on was simply unreachable from the only code path
+it runs.
+
+**2. `heal()` now verifies by effect.** Success was `rc==0` plus `"Login successful"` on
+stdout, and 2.1.220 emits both when the credential was never stored — its persist helper
+returns `{success:false}` on a keychain write failure and the caller discards that verdict
+(`return await Wer(f),wq(),"refreshed"` — a comma expression). Worse, that path **wipes the
+stored credential before writing the replacement**, so a lost write leaves nothing on disk
+while the server has already retired the old token. A false OK would have cleared the record
+above and re-armed the retry loop, so the claim is now checked against the store.
+
+**3. The rotation-safety gate can finally see the sessions it protects.** `concurrency()`
+matched `claude` and `*/claude` but not `claude.exe` — argv[0] for every `cc-pane-runner`
+worker, teammate and research subagent. Measured while writing this:
+
+```
+.claude-secondary   counted  2   actual 10     ← 8 invisible
+.claude-tertiary    counted 10   actual 13
+.claude-next        counted  1   actual  3
+```
+
+That count *is* the `k_live > 0` refusal, so a heal read a busy account as idle and redeemed
+its refresh token alongside eight invisible sessions that rotate the same credential. This is
+the (c) that produces the (b): the loser of that race holds a retired token. Six sibling tools
+already matched both spellings; this was one of the last two.
+
+## Two corrections to earlier work in this document
+
+* **"The cliff anchors to the last interactive login and no refresh extends it"** — right
+  about the outcome, wrong about the mechanism. The field is rewritten on *every* refresh and
+  lands on the same instant (±115 ms, measured).
+* **The `mdat` anomaly is not a writer race.** Keychain items were written hours after their
+  access token was minted, which looks like a second writer. The item is CC's **entire**
+  secure-storage blob — `mcpOAuth`, `pluginSecrets`, `gatewayTrust` and more — so an MCP token
+  refresh rewrites it and moves `mdat` while `claudeAiOauth` is untouched. Control: next4 and
+  the unsuffixed item, both with zero live sessions, went 6h and 14h with no write while 25
+  writes landed on the three accounts that had sessions.
+
+## Known-open, filed rather than fixed
+
+* **The write-loss window is upstream and we cannot close it.** Between the token POST
+  returning and the keychain write completing, the new refresh token exists only in process
+  memory; the write is a `security(1)` subprocess with a **2-second timeout**, and a timeout is
+  classified `transient:true`, which *skips* the plaintext fallback entirely. Both the
+  in-session and `auth login` paths report success regardless. Our fixes reduce exposure (fewer
+  concurrent grants) and make the outcome detectable and escalatable — they cannot make the
+  vendor's write atomic.
+* **The fabricated `T-0h` deadline** in `cc-relogin-poll` (defect D5) — the escalation fires,
+  but names a calendar deadline that is not the reason.
+* `~/.claude` remains logged out with `claude-prev` still pointing at it; `next` still carries
+  multiple grants. Both unchanged from UPDATE 2.
+
+## Three fabricated log entries, disclosed
+
+`heal next3: UNPROVEN — reported success but the stored refresh token did not change` appears
+in `~/.claude/logs/claude-accounts.log` at **04:58:58Z, 04:59:45Z and 05:00:54Z on
+2026-08-04**. These are **not** fleet events. They are this session's own test suite: the new
+log line sits outside the stubbed `heal()`, and `LOG_PATH` resolved from `$HOME`, so three
+test cases wrote to the production log. Fixed in `31e76310` (control: the log's line count is
+identical across a full 87-test run). Left in place rather than edited out, and recorded here
+so a future investigator is not misled by them.
