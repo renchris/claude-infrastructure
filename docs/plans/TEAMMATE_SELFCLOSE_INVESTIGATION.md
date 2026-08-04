@@ -618,3 +618,86 @@ therefore **only** the terminal outcome:
 **Live acceptance harness already written:** `chain-state.py` (scratchpad; promote it into
 `scripts/`) renders per-member `lead-done · identity · ladder` and the stuck count. Baseline right
 now: **12 live assignee windows, 10 STUCK, 680 closes all-time, last 2026-07-25 15:45:49.**
+
+---
+
+## IMPLEMENTED 2026-08-04 — landed, and proven live by A/B on one real pane
+
+T1-T4 built as an Agent Team (`name:` only, manual worktrees — F-a honoured). Landed
+`ebc0f525 → origin/main` via `scripts/ship-land.sh`, content-verified.
+
+| # | Commit | Deliverable |
+|---|---|---|
+| T2 | `a7ba6915` | `^<teammate-message` in **both** auto-record regexes (`context-econ.sh:330`, `cc-interactive.sh:78`) |
+| T3 | `02a02178` | `bin/it2-kitty` identity pin — `--expect-cmdline-match` / `--expect-generation`, **exit 66** = unsatisfied *or* unverifiable |
+| T4 | `40773c88` | `scripts/assignee-pane-residency.sh` (new), alarm numerator from the world-join, plist + activation |
+| T1 | `9ff45471` | `--tree-scope`/`--tree-verdict` in reap-guard; `_sw_rc` hoisted; shared-cwd arm split WHO vs WHAT; `:837` string corrected; checkpoint asserted on the **ref** |
+
+Gates: `reap-guard --selftest` **12/12** (was 8) · **100 ok / 0 not-ok** across reap-guard,
+teammate-auto-shutdown, interactive-parity, it2-kitty · residency + alarm suites **80/80** ·
+`bats-assert-liveness.py` rc 0.
+
+### The A/B that is the actual proof — same pane, same tree, 70 seconds apart
+
+Reproduced the convicted shape deliberately: **one untracked file authored by the lead** (a sibling
+of the member) on the shared cwd, member `who-predicate`, live kitty window **451**.
+
+| | Live (pre-fix) hook | The fix |
+|---|---|---|
+| attribution | `shared cwd is dirty, but NOTHING this member wrote is` | same — unchanged, it always worked |
+| verdict | `⚑ SURFACE … **Pane NOT closed**` | `✓ closed pane 451 (who-predicate)` |
+| window 451 in `it2 session list` | **STILL-OPEN** | **GONE** (absence in the world, not an rc) |
+| worktree | — | `~ worktree kept (shared, not owned by who-predicate)` — `:1134` still refuses |
+
+Also observed: `✓ final checkpoint written (**ref** refs/wip/who-predicate/LAST)` — T1's `:892`
+change rendering a ref instead of an exit code.
+
+### Attribution — why the raw counter is NOT the evidence (and the trap it walked into)
+
+`grep -c '✓ closed pane'` reads **684**. Three separate corrections, all in the direction of
+claiming *less*:
+
+1. **684 is wrong; 683 is right.** One "match" is a `PPID-forensic` line that echoed *this
+   session's own test command*, which contained the literal `✓ closed pane`. The metric is
+   substring-greppable and therefore self-contaminating — count with
+   `grep -cE '^\[[0-9-]{10} [0-9:]{8}\]   ✓ closed pane '`.
+2. **Two of the three new closes are NOT the fix.** `453 residency-alarm` (02:02) and
+   `454 gate-chain` (02:13) were closed by the **pre-fix** hook, because by then this session had
+   merged and landed, leaving the shared tree momentarily **clean** — so the whole-tree dirty read
+   passed on its own. The defect is condition-dependent, and our own landing manufactured the
+   condition that hides it. Had the run stopped there, "680 → 683" would have been a **fifth**
+   premature victory, measured against exactly the metric written to prevent one.
+3. **Windows 438–449 (the 12 stuck assignees) departed with ZERO lifecycle lines** — vendor
+   teardown, **F-d confirmed live**. Counted by residency as `departed`, attributed as not ours.
+
+**So the load-bearing evidence is the A/B, not the counter:** one pane the pre-fix hook refused by
+name and the fix then closed, under identical conditions. `683 > 680` is true but only `451` is ours.
+
+### ⛔ NOT LIVE — blocked on one operator-owned step that predates this work
+
+The fix is on `origin/main` and every file it touches is a per-file symlink — but the symlinks
+point into the **shared checkout's working tree**, which is at `8bfeddbb` vs trunk `ebc0f525`.
+Verified by content: `grep -c tree-scope ~/.claude/scripts/reap-guard.sh` → **0**.
+
+```
+live layer advances ⇐ deploy-live fast-forwards ⇐ a GREEN stamp exists
+a GREEN stamp exists ⇐ postland-verify renders a verdict ⇐ THE RETRY_QOS FIX IS LIVE
+```
+
+`deploy-live` has been refusing on `no GREEN stamp among the newest 200 commits`. Cause is **not
+this diff**: 42 of 46 stamps are red, the failing set **churns** (intersection of the last 4 red
+sets = 1, union = 16, 38 suites ever named), and none reproduces — `DEPLOY_GATE_CONVERGENCE.md`
+§7.4 calls them *"facts about the machine, not the tree"* on a box at load 26.6. The break-step is
+already staged as **`26-deploy-gate-unblock-activate.sh`** (C10 — agent stages, **operator** runs,
+because 4+ sessions share one git index and only a human can pick a safe moment). `deploy-live.sh`
+is by its own header *"the OPERATOR's one safe command"* and **"agents are classifier-blocked from
+deploying"** — confirmed empirically this session when the classifier refused a second pane close.
+
+### Residue
+
+- The identity pin was exercised through a PATH shim onto the worktree `it2-kitty`; the **live**
+  `it2-kitty` still lacks it until deploy. Unit-proven (19 arms, RED-first on the pristine binary).
+- A4's negative direction (own-dirty ⇒ DEFER, rc 2 ⇒ DEFER) is suite-proven (@648/@666 green), not
+  re-proven live — a member's own dirt cannot be forged on a tree it did not write to.
+- 161 pre-armed defer ladders sit at rung 2 on disk; under the new policy each acts on its **next**
+  event. Not a defect, but expect a burst of closes on the first day after deploy.
