@@ -34,6 +34,10 @@ mk_text()  { printf '{"parentUuid":"p","userType":"external","cwd":"/x","session
 mk_image() { printf '{"userType":"external","type":"user","isMeta":null,"message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]},"timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
 mk_stop()  { printf '{"type":"user","isMeta":true,"userType":"external","message":{"role":"user","content":"Stop hook feedback:\\n[keep going]"},"timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
 mk_tool()  { printf '{"type":"user","userType":"external","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"ok"}]},"timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
+# a lead's shutdown_request as the TEAMMATE's transcript actually records it: a user-role record whose
+# text is the wrapper the harness injected. Same user/external/isMeta:null shape as a typed prompt —
+# the SHAPE cannot discriminate it, only the leading token can.
+mk_tmsg()  { printf '{"parentUuid":"p","userType":"external","cwd":"/x","sessionId":"s","type":"user","isMeta":null,"message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">{\\"type\\":\\"shutdown_request\\"}</teammate-message>"},"uuid":"u","timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
 mk_pad()   { local n="$1" i=0; while [ "$i" -lt "$n" ]; do printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]},"timestamp":"%s"}\n' "$(head -c 200 /dev/zero | tr '\0' 'z')" "$(iso "$NOW")" >> "$TX"; i=$((i+1)); done; }
 
 # ── the two adoption predicates, normalized to a boolean ──────────────────────────────────────────
@@ -101,6 +105,24 @@ agree() { # <path> <expected: yes|no>
   # an image INSIDE a tool_result array is a tool-returned image, not an operator ⌘V
   printf '{"type":"user","userType":"external","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"x"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}}]},"timestamp":"%s"}\n' "$(iso "$(( NOW - 30 ))")" >> "$TX"
   agree "$TX" no
+}
+
+# ── 4b. a LEAD's <teammate-message> is the SYSTEM asking the member to leave, not a human adopting it ─
+# The harness records a lead's shutdown_request in the teammate's transcript as a user-role record
+# whose text opens `<teammate-message teammate_id="…">`. Counted as operator presence it re-arms a
+# 6-hour adoption hold against the very close the lead just requested — the pane then outlives its own
+# teardown. The record's SHAPE is identical to a typed prompt (user/external/isMeta:null/string), so the
+# leading token is the only discriminator, and it belongs in the auto-traffic regex of BOTH predicates.
+@test "parity: a lead's <teammate-message> shutdown_request ⇒ NEITHER adopts (and a typed turn still does)" {
+  TX="$T/tmsg.jsonl"; : > "$TX"
+  mk_tmsg "$(( NOW - 45 ))"
+  agree "$TX" no
+  # POSITIVE CONTROL, in this same arm so it cannot drift away from what it controls: the discriminator
+  # must be the leading token, not "user records stopped counting". A genuine typed prompt of the same
+  # shape is still adopted by both — without this, the assertion above passes for the wrong reason.
+  TX="$T/tmsg-control.jsonl"; : > "$TX"
+  mk_text "$(( NOW - 45 ))" "a human really did type this"
+  agree "$TX" yes
 }
 
 # ── 5. the SAFE-DIRECTION invariant: ce_ may never see LESS than ci_ ───────────────────────────────
