@@ -1,4 +1,8 @@
-#!/usr/bin/env /Users/chrisren/.claude/bin/cc-bats
+#!/usr/bin/env bats
+# shellcheck shell=bash
+#   bats files are bash with @test sugar and shellcheck has no bats mode, so the shell is declared
+#   explicitly (SC1008). Without it shellcheck ABORTS on the file and reports zero findings — a lint
+#   that cannot parse its subject is SILENT, not clean (memory: lint-blindness-composes).
 # cc-blockers × teammate-reap — the OUTCOME row for the idle-close path.
 #
 # The row exists because the close path already had a pager and it did not work: `⚑ SURFACE` fired
@@ -12,7 +16,7 @@
 # many bits as one that never fires (memory: alarm-polarity-and-attention-budget), and NO-DATA in
 # particular must not read as a blocker — an unreadable log is a gap in evidence, not a verdict.
 #
-# Assertion style: `[ ]` throughout — a non-final `[[ ]]` is errexit-EXEMPT under /Users/chrisren/.claude/bin/cc-bats and therefore
+# Assertion style: `[ ]` throughout — a non-final `[[ ]]` is errexit-EXEMPT under bats and therefore
 # a DEAD assertion.
 
 setup() {
