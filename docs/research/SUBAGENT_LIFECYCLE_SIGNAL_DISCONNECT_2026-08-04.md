@@ -147,10 +147,24 @@ function JSb(e){ let t=["Agent idle"];
   return t.join(" · ") }
 ```
 
-**2. The completion channel has zero producers.** Across the whole binary, `completedTaskId:`
-occurs exactly **twice** — in the `cdr` factory (pass-through from its argument) and in the schema.
-No call site ever passes it, and no emit site passes a spread object that could smuggle it in.
-`completedStatus:` occurs three times — factory, schema, and **one** real producer:
+**2. The completion channel has zero producers.** This is *"it does not exist"*, not *"I could not
+find it"*. `completedTaskId` and `completedStatus` are **property names**, which esbuild does not
+mangle, so any producer would have to contain the literal token. Every occurrence in the 38.5 MB
+blob is enumerated and accounted for — 6 each:
+
+| offsets | what |
+|---|---|
+| 7247025 / 7247041 | the binary's constant/string table (not code) |
+| 19357699 · 19357718 / 19357734 · 19357753 | inside `cdr`, the sole constructor — key + pass-through read |
+| 19362765 / 19362803 | the zod schema |
+| **21162702** | **the one and only assignment**: `completedStatus:"failed"` |
+| 27230175 · 27230246 / 27230200 | inside `JSb`, the sole reader |
+
+⇒ **`completedTaskId` is assigned nowhere in the binary.** `type:"idle_notification"` occurs
+exactly once (19357588), so `cdr` is the only thing that can mint the frame; it has four call sites
+(21160979 normal turn-end, 21162646 agent-loop-crash, 29615492 the teammate Stop hook, 29616014 the
+pane-teammate failure path) and **all four pass object literals — no spread can smuggle the field
+in**. The single `completedStatus` write is the crash path:
 
 ```js
 // agent_loop_failed — the crash path
@@ -184,17 +198,35 @@ walks the turn's messages backwards for a `SendMessage` tool_use — but only co
 
 ⇒ A teammate that reports *to the lead* — the normal case — gets `summary: undefined`.
 
-**5. What the lead literally sees.** `Mda` → `JSb` renders the notification, wrapped by `ldr`:
+**5. What the lead literally sees — and it is worse than "no information".** The TUI does *not*
+render these frames through `JSb`. The mailbox renderer `$Eb` routes an `idle_notification` to the
+panel component `xwr`, which destructures **only** `{displayName, inkColor, idleReason,
+failureReason}` and maps them (offset 27237697):
+
+```js
+Jqp = Awr==="failed" ? "error"  : Awr==="interrupted" ? "warning"         : "success"
+Xqp = Awr==="failed" ? "failed" : Awr==="interrupted" ? "was interrupted" : "finished"
+```
+
+⇒ `idleReason:"available"` is rendered to the lead, in **success green**, as:
 
 ```
-<teammate_message teammate_id="G1-decode" color="...">
-Agent idle
-</teammate_message>
+✓ Teammate @G1-decode finished
 ```
 
-Two words. `completedTaskId` absent ⇒ no task clause. `summary` absent ⇒ no DM clause. **This is
-the entire information content of the event the lead has been using to decide whether to tear an
-agent down.**
+**The string "available" never appears in the UI. The word the lead is shown is `finished`.** It is
+shown at *every turn boundary*. `A1-knee` told the lead it had "finished" eight times over fifty
+minutes without ever producing anything; `G1-decode` said "finished" four times while mid-analysis.
+
+This reframes the operator's whole experience: **the lead was never misreading an ambiguous
+signal — it was being told, in green, that the agent had finished.** Acting on that is correct
+behaviour on false input, which is why no amount of lead-side discipline or prose ever fixed it.
+
+⚠️ *Correction to an earlier draft of this section, which stated the lead sees the string
+`Agent idle` via `Mda`→`JSb`. That is wrong: `$Eb` returns the `xwr` panel before `Mda` is reached
+(and when a `summary` is present it returns the raw JSON text instead). `JSb` — the only reader of
+`completedTaskId` — is unreachable for idle frames, so the completion channel is dead **twice
+over**: no producer, and no reachable renderer even if one existed.*
 
 ## Why this explains all five modes, exactly
 
@@ -217,8 +249,22 @@ lossily collapsed before it is sent**".
   probe, or idle threshold. All of them consume channel A. Confirmed independently at the *start*
   of the lifecycle by `reference-spawn-dispatch-ack-is-not-a-start-ack`; this is the same closure
   at the *end*.
-- **Rules out**: waiting for the completion channel to be filled upstream. `completedTaskId` is
-  unreachable from anything an agent can do — no tool call populates it.
+- **Rules out**: filling the *existing* completion channel ourselves. It is unreachable from any
+  supported agent-side action, and verified adversarially:
+  - `SendMessage`'s structured form is a **closed 3-member discriminated union** (`shutdown_request`,
+    `shutdown_response`, `plan_approval_response`) — `idle_notification` is not constructible
+    through it.
+  - `SendMessage`'s plain-string form **explicitly refuses** hand-crafted lifecycle frames:
+    *"message text must not be a teammate lifecycle/task frame … send plain text instead"*
+    (errorCode 9), with `idle_notification` named in the blacklist.
+  - No tool wraps `cdr`, and it is never reached by property access.
+  - Even out-of-band inbox injection buys nothing, because `JSb` is unreachable for idle frames.
+- **Rules out**: `task_completed`, the obvious alternative. It has **zero producers too** —
+  `type:"task_completed"` occurs zero times; only the schema and a SendMessage blacklist entry
+  exist. And the task-status enum is `["pending","in_progress","completed"]`, so `completedStatus`'s
+  success values `resolved`/`blocked` have **no source vocabulary anywhere in the model**. Marking a
+  task complete fires a local `TaskCompleted` hook and writes a tool result into the agent's own
+  transcript; **nothing reaches the lead as a structured completion event.**
 - **Rules in**: the lead must obtain completion from a channel **we** produce. And per mode 5 it
   cannot be a bare assertion — an agent that *believes* it delivered is exactly the failure that
   cost the wave its most consequential finding. **Completion must be assertion ∧ artifact**,
@@ -254,3 +300,306 @@ fully intact.
 Corollary for the completion contract: "task complete" must mean **deliverable handed over**, not
 "turn ended" and not "agent believes it is done". A contract the agent asserts, with nothing
 delivered, is the same failure wearing a new name.
+
+---
+
+# The consumer side — and why the existing reaper made it worse
+
+The protocol finding above is only half the story. `~/.claude/hooks/teammate-auto-shutdown.sh`
+(wired live on the `TeammateIdle` event) is the mechanism that has been "fixed numerous times". It
+ran during the specimen wave. **Its own log refutes it**, and the refutation is the mode-1-vs-mode-2
+discriminator test in observable form.
+
+## What it keys on
+
+Its gate is a **dirty-tree proxy for busy-ness**, refined over many iterations into per-file
+attribution:
+
+```
+3. DEFER on dirty tree — if git status shows uncommitted work, skip the reap this cycle.
+   TeammateIdle fires 3-4× per teammate; we wait until the teammate actually quiesces
+   (this IS the final-idle gate). Max defers: 3 (backstop).
+4. COOPERATIVE MARKER — if <worktree>/.teammate-busy exists, defer unconditionally.
+```
+
+Both halves consume channel A. The defer counter is a **threshold on an event that carries no
+completion information**, and `.teammate-busy` is an *inverted* contract — the agent asserts BUSY,
+so forgetting to write it is silently fatal.
+
+## What actually happened, from `~/.claude/logs/teammate-lifecycle.log`
+
+Specimen wave = `team: session-039b0ae2`. The reaper's verdicts:
+
+**`G1-decode` — mode 1, actively working, about to deliver the report that refuted the wave's
+central premise.** Cleared for shutdown **five times while working** (03:07:49, 03:11:07, 03:11:15,
+03:17:45, 03:17:54):
+
+```
+↳ G1-decode: shared cwd is dirty, but NOTHING this member wrote is — a sibling's dirt is not its own
+Auto-shutdown idle teammate: G1-decode (team: session-039b0ae2)
+```
+
+⇒ **The gate's verdict was wrong five times on the agent that mattered most.** Precisely what the
+log does and does not show, because the distinction matters:
+
+- In the 03:07–03:17 working window the reaper reached its `Auto-shutdown idle teammate` decision
+  five times and **no `✓ closed pane` line followed** — so something downstream held the actuation,
+  and nothing in the log names what. The pane survived.
+- The only close of pane 476 came at **04:15:28**, after G1-decode had delivered. That one is
+  defensible on timing.
+
+So the correct claim is about the **decision, not the outcome**: a working agent holding the wave's
+premise-refuting finding was cleared for shutdown five times, and its survival depended on an
+unlogged downstream hold rather than on the gate. A guard whose verdict is wrong and whose actuation
+silently disagrees with it is not a guard that happened to work — it is two defects cancelling.
+
+**`A1-knee` — mode 2, permanently stuck, never delivered anything.** Protected indefinitely:
+
+```
+↳ A1-knee: shared cwd dirty AND this member's own files are among the dirty ones — defer stands
+defer A1-knee (1/3): dirty tree
+defer A1-knee (2/3): dirty tree
+⚑ SURFACE A1-knee ... Pane NOT closed. ... A shared cwd is NORMAL ... there is no spawn-side fix
+~ page suppressed (damped) [SHARED-CWD-NEVER-REAPS:session-039b0ae2:A1-knee]
+```
+
+⇒ The dead agent was held open, its alarm fired to exhaustion, and was then **damped to silence**.
+
+## The polarity is exactly inverted, and the reason is structural
+
+| | wrote files? | reaper verdict | truth |
+|---|---|---|---|
+| `G1-decode` | no (reports went out as messages) | **REAP** (5×) | working, held the wave's key finding |
+| `A1-knee` | yes (scratch files, then died) | **PROTECT** (forever) | dead |
+
+A research agent's work product is a *report*, not a tracked file. So "did this member write files"
+is not merely a weak proxy for completion — **for the entire research-agent population it is
+anti-correlated with it.** The agent that finishes cleanly and hands off leaves no dirt and looks
+reapable; the agent that dies mid-scratch looks busy forever.
+
+This is the frame at the consumer end. Every iteration of this hook — per-file attribution, shared-
+cwd detection, defer counting, own-footprint holds — has been a **more sophisticated way of guessing
+busy-ness**. The fact it needed (did this agent finish and hand over its deliverable?) was never in
+its input, because, per the protocol finding, nothing emits it.
+
+Two corroborating measurements from the same log:
+- `Auto-shutdown idle teammate: agent-a-agg` appears **4707 times**. The hook re-fires forever;
+  `MAX_DEFERS` bounds the defer *counter*, not re-entry. An alarm that always fires carries the
+  same zero bits as one that never does.
+- The mode-4 agents are **still alive as of this writing** — `C-effort` and `E-chroma` at
+  **8h13m** uptime, ~8 hours past delivery. `ps -eo pid,etime,command | grep -- --agent-name`.
+
+## Why nothing self-closes (read from the binary)
+
+⚠️ **Two teammate shapes exist and they must not be conflated.** `--teammate-mode` accepts
+`tmux | iterm2 | in-process | auto`. **This fleet runs `teammateMode: "iterm2"`** (kitty panes) —
+each named teammate is a *separate `claude.exe` process* with its own session id and transcript,
+verified by process ancestry. So:
+
+- **Modes 1/2/3 are fully explained by our shape.** The producers on the out-of-process path are
+  the TeammateInit `Stop` hook (29615492, hardcoded `"available"`) and `M7f` (29616014, the
+  `"failed"` path). Those are exactly the frames the specimen wave emitted.
+- **The bullets below about `evictAfter`, `idle_timeout` and `Qsn` describe the `in-process`
+  runner**, which we do **not** run. They are recorded because they show the design intent has no
+  terminal state *either* way — but the mechanism that keeps *our* agents alive is simply that a
+  pane teammate's process outlives its turn and only the pane reaper can end it.
+
+- **There is no idle timeout.** `{type:"idle_timeout"}` is **never constructed anywhere in the
+  binary** — only a `case "idle_timeout":` label exists, and its body is unreachable. The poll loop
+  computes a last-activity timestamp `c` and compares it to nothing.
+- **`evictAfter` never kills anything.** For a live idle teammate the 1 Hz sweeper only sets
+  `evictAfter: 0`, which is a **UI list filter**. An agent vanishing from the task list is not an
+  agent stopping. And while *any* sibling is still working, every idle teammate's `evictAfter` is
+  pushed forward `+30s` each tick — so a wave stays listed indefinitely by design.
+- **`shutdown_request` is advisory.** It is injected into the teammate as an ordinary user message;
+  the dispatcher case has no loop-exit flag (compare `case "aborted": B=!0`). It is a prompt, not
+  an actuator — confirming memory `shutdown-request-is-not-an-actuator` at the code level.
+- **The only actuator is the teammate's own model** calling `SendMessage {type:"shutdown_response",
+  approve:true}` → `oJ_` → `abortController.abort()`. If the model ignores or misformats it,
+  **nothing happens at all** — no timeout, no escalation, no reaper.
+- A lead receiving `shutdown_approved` from an *in-process* teammate does **nothing mechanical**:
+  the handler branches on `paneId`, which in-process teammates do not have.
+
+⇒ Self-close is possible, but it is **entirely voluntary and model-mediated**, with no backstop.
+
+---
+
+# THE FIX — produce the channel that has no producer
+
+The fix is not a better inference and not a better proxy. It is to **emit the completion fact
+ourselves**, as an artifact that is falsifiable from disk, and to move every consumer off idleness
+and onto it.
+
+## The one rule that makes this not-another-detector
+
+> **Idleness may be a TRIGGER. It may never be a PREMISE.**
+
+`TeammateIdle` is still a fine moment to *wake up and look*. It is never evidence of anything. Every
+decision — reap / don't reap, done / not done, replace / don't replace — reads the receipt, never the
+event that woke it. That is what keeps this out of the class that is closed under adding detectors:
+the mechanism has no opinion about idleness, and cannot be wrong in either direction, because it
+never renders a verdict on liveness at all. It only ever validates a claim the agent itself made.
+
+## The completion receipt
+
+Per wave, a receipt directory. Each agent, as its **last act**, writes two things:
+
+```
+<wave>/<agent>.md               the deliverable itself
+<wave>/<agent>.receipt.json     {"agent","status":"resolved|blocked|failed","artifact","summary","ts"}
+```
+
+Three properties, and all three are load-bearing:
+
+1. **Asserted, not inferred.** The agent states its own terminal status. Nothing guesses.
+2. **Falsifiable.** The receipt names an artifact; the artifact either exists and is non-empty or
+   it does not. A receipt whose artifact is missing is a *failed* receipt, not a completion. This is
+   what stops the fix from being mode 5 in new clothes — the doc's own corollary demanded it.
+3. **Absence is never interpreted.** No receipt ⇒ the mechanism says nothing and does nothing. It
+   does not mean "still working" and it does not mean "dead". It means *not yet asserted*, which is
+   the truth, and it is resolved at the wave level by the ledger, not per-agent by a threshold.
+
+## Where each consumer moves to
+
+| Consumer | today (channel A) | after |
+|---|---|---|
+| "is the wave done?" | lead reads every artifact and judges | `ls <wave>/*.receipt.json` — a count, not a judgment |
+| "which axis is stalled?" | unanswerable until the lead sweeps by hand | spawn-set minus receipt-set, **by name** |
+| reaper gate | dirty-tree proxy → inverted for research agents | verified receipt present, else **fail-closed (defer)** |
+| replace a failed agent | `idleReason:"failed"` → duplicate spawn (mode 3) | receipt absent past an explicit deadline |
+| self-close | never happens | on receipt, lead sends `shutdown_request`; agent approves → aborts; `ps`-verify |
+
+## Verification against the specimen's five modes
+
+This is the acceptance test the brief demanded — a fix that cannot separate mode 1 from mode 2 has
+fixed nothing.
+
+| Mode | Specimen behaviour | Under the receipt |
+|---|---|---|
+| **1** `G1-decode` working, emitted "available" 4× | **cleared for shutdown 5× while working**; survived on an unlogged downstream hold, not on the gate's verdict | no receipt ⇒ **reaper defers, fail-closed**. Protected *because* it had not asserted, not because it looked busy — and the protection is in the verdict, not in a hold nobody can see. |
+| **2** `A1-knee` stuck, "available" 8× over 50 min | protected forever, alarm damped to silence | no receipt ⇒ also not reaped — **but the ledger lists axis A as OPEN, by name, from minute one.** The lead's hand-reconstruction happens immediately and deliberately instead of 50 minutes later by accident. |
+| **1 vs 2 — the discriminator** | identical event, no bit to separate them | **mode 1 eventually produces a receipt; mode 2 never does.** Separated by a *different bit*, not a better threshold. The reaper does not distinguish them at all — the ledger does, at wave level, at a deadline. |
+| **3** `F2-precision` "failed" 4×, then recovered | replacement spawned on a false terminal ⇒ duplicated work | `failed` is not a receipt. Replacement gates on **receipt-absence past a deadline**, so a transient error cannot trigger it. F2 recovers and files its receipt; no duplicate. |
+| **4** four agents alive at 1h23m (now 8h13m) | nothing self-closes; no timeout exists in the binary | receipt present ⇒ lead sends `shutdown_request` ⇒ agent approves ⇒ `abortController.abort()`. Voluntary, so **`ps`-verify and escalate** — never trust the ack (memory `shutdown-request-is-not-an-actuator`). |
+| **5** `H-failures` report written, never delivered | 70 min late, found only by a manual sweep | the **artifact file is the delivery**. Prose in a turn cannot satisfy a receipt, and a receipt naming a file that does not exist fails validation at the moment it is written. |
+
+## Live evidence that the contract half works
+
+Every subagent spawned by *this* session was given the artifact clause verbatim — *"writing the file
+is MANDATORY — a report that exists only as prose in your turn is invisible to me"*. `T1-terminal`
+honoured it: it wrote `report-T1-terminal.md` (17 KB) and its process then exited on its own. The
+lead knew it was done by the **file existing**, having never once consulted an idle signal. That is
+the whole mechanism in miniature — and it is the direct countermeasure to mode 5, which is the mode
+that cost the specimen wave its most consequential finding.
+
+Sharper still: **all four subagents delivered their file; zero of their `SendMessage`s ever reached
+the lead's context.** Every report in this investigation was collected by polling the filesystem.
+The disk half of the contract scored 4/4; the message half scored 0/4. That is a one-wave sample,
+but it points the same way as `lr-audit.py:15`'s recorded premise — *"the ONLY dependable source is
+disk"* — and it is why field 7 names a **path**, not a recipient.
+
+---
+
+# What already exists — this is a ROUTING problem, not a build problem
+
+The prior-art census (`T2`) changes the fix materially, and searching the graveyard first was the
+right call: **the completion classifier we would have built already exists, landed and tested.**
+
+`scripts/limit-recover/lr-audit.py` (1,478 LOC) classifies every subagent / workflow slot / team
+assignee **from disk truth** as `COMPLETE · COMPLETE_UNDELIVERED · COMPLETE_SALVAGED ·
+VACUOUS_SUSPECT · TAINTED_COMPLETE`, with an explicit `delivered_to_lead` boolean (`:418`,
+`:511-513`).
+
+> **`COMPLETE_UNDELIVERED` *is* mode 5 — already named, already computed, already correct.**
+
+Its only invocation path is the `limit-recover` skill: it runs *after a usage-limit crash* and never
+routinely. It is the **one signal class in the whole repo that can distinguish *delivered* from
+*finished-but-silent*, and it is the only one nothing runs on a cadence.**
+
+That is the shape of the whole domain, and it is the honest answer to "fixed numerous times, never
+held". Three independent instances, all found in this census:
+
+| | Sensor | State |
+|---|---|---|
+| `lr-audit.py` | the completion taxonomy | LIVE code, trigger fires only after a crash |
+| `teammate-reap-alarm` + `assignee-pane-residency.sh` | "does the close path still close anything?" | selftests, symlinked live, **plist never bootstrapped** — its activation script is REPO-ONLY, so it never entered the operator's queue and *cannot* be paged for |
+| `hooks/subagent-stop.sh` | per-subagent completion record | **`SubagentStop` is not registered in settings at all** — a green test suite exercising a hook nothing invokes |
+| `assignee-chain-state.py` | per-member lead-done / identity / ladder state | zero callers |
+
+**The sensor exists; the cadence does not.** Every past fix built another way of *knowing*, and the
+decision kept being made from the one signal that arrives by itself — the turn-boundary event that
+renders as `✓ finished`. That is the frame restated at the consumer end, and it is why the remedy is
+to route what exists rather than to add a fifth sensor.
+
+One more inventory correction worth recording, because designing off the stale doc would re-fix a
+fixed thing: `docs/plans/TEAMMATE_SELFCLOSE_INVESTIGATION.md:681-699` still carries a `⛔ NOT LIVE`
+section for the reap-guard tree-scope work. **It is live** — content-verified, and 21 panes closed
+today. (Memory: `parked-blocker-obsoleted-by-later-fix`.)
+
+---
+
+# The lever we actually control (verified, not assumed)
+
+Measured on this fleet's shape (out-of-process kitty-pane teammates), with a self-evidencing
+positive control:
+
+| Hook event | Fires inside a named teammate? | Consequence for the fix |
+|---|---|---|
+| `Stop` | **YES** — the settings chain runs in full, in the teammate's own child session | a hook can **validate a completion assertion at the moment it is made**, and `decision:block` works (observed 8× in one teammate) — so it can refuse to let an agent stop on an undelivered report |
+| `PreToolUse` | **YES**, and the deny verdict is *enforced* | proven first-hand: `keychain-guard` denied a tool call inside a teammate mid-report |
+| `PostToolUse` / `SessionStart` | YES | — |
+| `SessionEnd` | **YES — at TERMINATION, not turn end** | a genuine terminal event we own. Clean negative control: 22/26 past teammates have the row; the 2 live ones have `SessionStart` and **zero** `SessionEnd` |
+| `TeammateIdle` | **NO — fires in the LEAD** | it is the lead's *trigger*, exactly as the rule requires; the teammate never sees it |
+| `SubagentStop` | not registered in settings at all | nothing fires; `hooks/subagent-stop.sh` is inert |
+
+⇒ Both halves of the receipt design are reachable: **assert-and-validate** in the teammate's `Stop`,
+**terminal fact** at its `SessionEnd`. Neither reads `idleReason`. (Indeed *nothing in the repo
+reads `idleReason` — grep returns one comment* — so the "no more detectors on that field"
+constraint is satisfied by construction, with nothing to remove.)
+
+---
+
+# Landed this session · and what remains, with the reason
+
+**Landed.**
+
+1. **The doc.** Root cause from the code + the restored specimen body (lost in revert `3725e543`;
+   the four modes survived only inside `b3f72885`'s commit message).
+2. **`skills/research-subagents/SKILL.md` — the canonical brief goes 6-field → 7-field**, adding a
+   mandatory **Delivery** field. This is the direct mode-5 countermeasure and it closes a measured
+   hole: `grep -c SendMessage skills/research-subagents/SKILL.md` was **0**, while the sibling
+   `agent-teams` skill has carried the delivery rule all along. *The skill that governed the wave
+   which produced mode 5 was the one skill without the rule.*
+3. **Both spawn-time chokepoints updated to match** — `hooks/research-precognition-nudge.sh`
+   (UserPromptSubmit, fires *before* the count is chosen) and `hooks/agent-teams-enforce.sh`
+   (PreToolUse on every `Agent` spawn). Enforcement lives at the chokepoint, not only in a skill
+   someone may not load. `tests/agent-teams-enforce.bats` 8/8, rc 0.
+
+**Not landed, and why.**
+
+- **Routing `lr-audit.py` to a cadence** — the highest-value remaining item, and deliberately not
+  done blind. It is a 1,478-LOC classifier whose only current caller is a crash-recovery skill;
+  giving it a timer means choosing a trigger, a scope, and a damping policy, and this domain has
+  three separate alarms already firing into a void (`Auto-shutdown idle teammate: agent-a-agg`
+  appears **4707** times). Adding a fourth un-damped one would repeat the exact defect. Wiring it
+  wants its own session with the alarm-polarity question answered first.
+- **Flipping the reaper's gate from dirty-tree to receipt** — correct, but it must not ship before
+  receipts exist, or *every* agent becomes unreapable (mode 4 for the whole fleet). The safe
+  sequence is: contract ships (done) → receipts appear in practice → the gate flips behind a
+  "receipts in use for this team" condition. Shipping the flip today would trade an inverted gate
+  for a stuck one.
+- **`teammate-reap-alarm` activation** — its activation script is REPO-ONLY, so it is an
+  operator-queue parity item, not an agent edit; it is already surfaced by the machine's own
+  activation renderer.
+
+**Residual defect found in passing** (not fixed, recorded): all **12** `✗ identity pin REFUSED`
+lines in the lifecycle log occur in the same second as a *successful* `✓ closed pane N` for the
+same pane — the pin is correctly refusing a **second** close of an already-removed window. Correct
+behaviour that renders as a red line, and it will poison any metric that counts refusals.
+
+**Open question this raises, deliberately left open rather than guessed:** in G1-decode's 03:07–03:17
+window the reaper logged its shutdown decision five times and produced **no close and no checkpoint
+line**. Whatever held the actuation is not recorded at that log level. That gap is worth closing on
+its own terms — a decision layer and an actuation layer that silently disagree mean neither the
+`✓ closed pane` count (701) nor the `Auto-shutdown idle teammate` count (4707) measures what its
+name suggests, and both have been cited as evidence in this domain before.
