@@ -690,3 +690,148 @@ tx_wrote() {
     echo "the shared-cwd branch ran on an OWNED worktree:"; cat "$LOGF"; false
   fi
 }
+
+# ══ THE DETACHED-CLOSE TERMINAL VERDICT (2026-08-03) ═══════════════════════════════════════════════
+# Why these exist: no teammate pane closed on this box between 2026-07-25 and 2026-08-03, and the
+# LAST link in the chain was this one. The close runs in a detached subshell, so it is reparented to
+# launchd; bin/cc-in-kitty answers "which terminal am I in?" by walking $PPID to $KITTY_PID, and an
+# orphan's walk reaches pid 1 first. It returns "DEFINITIVE no", bin/it2 routes to iTerm2 — which is
+# not running — and the close dies rc=1. All three closes that survived every gate since the kitty
+# migration failed exactly there (lc-accounts, lc-shell, photo-score).
+#
+# The env vars survive reparenting; only the LINEAGE is destroyed. So the verdict is resolved in the
+# hook body, while still attached, and handed down through cc-in-kitty's own CC_TERM seam.
+# scripts/handoff-fire.sh:715-731 fixed this for its own watcher on 2026-08-01 and the remedy was
+# never generalised — these tests are what stops that happening again.
+
+# A shim that records the CC_TERM it was invoked with, so the pin is observed at the CONSUMER rather
+# than asserted at the producer. A test that only checked "the function exported it" would pass even
+# if the detached subshell never inherited it — which is the entire failure being fixed.
+_term_probe_it2() {
+  cat > "$D/bin/it2" <<EOF
+#!/bin/bash
+echo "CC_TERM=\${CC_TERM:-<unset>} args=\$*" >> "$D/it2-env.log"
+exit 0
+EOF
+  chmod +x "$D/bin/it2"
+}
+_cik() { # $1 = exit code the stubbed cc-in-kitty should return
+  cat > "$D/bin/cc-in-kitty-stub" <<EOF
+#!/bin/bash
+exit $1
+EOF
+  chmod +x "$D/bin/cc-in-kitty-stub"
+  export CC_IN_KITTY_BIN="$D/bin/cc-in-kitty-stub"
+}
+_close_run() { # drive one full close; $1=pane
+  local sid=sidT team=teamT member=wkrTerm wt="$D/wtT"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$1"
+  reg "$sid" PANE-T "$wt" 3600
+  tx "$sid" 9000
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+}
+
+@test "TERM PIN: attached-and-kitty pins CC_TERM=kitty into the detached close" {
+  _term_probe_it2; _cik 0
+  _close_run PANE-K
+  wait_for "$D/it2-env.log"
+  grep -q "CC_TERM=kitty" "$D/it2-env.log"
+}
+
+@test "TERM PIN: a not-kitty verdict pins iterm2 — both directions, so nothing drifts" {
+  _term_probe_it2; _cik 1
+  _close_run PANE-I
+  wait_for "$D/it2-env.log"
+  grep -q "CC_TERM=iterm2" "$D/it2-env.log"
+}
+
+# UNVERIFIABLE (exit 2) must pin NOTHING. Pinning a guess here would be worse than the bug: it would
+# route a close to a terminal nobody established, and the fail-closed behaviour is the safe default.
+@test "TERM PIN POSITIVE CONTROL: an UNVERIFIABLE verdict pins nothing" {
+  _term_probe_it2; _cik 2
+  _close_run PANE-U
+  wait_for "$D/it2-env.log"
+  grep -q "CC_TERM=<unset>" "$D/it2-env.log"
+}
+
+@test "TERM PIN POSITIVE CONTROL: an explicit CC_TERM is never overwritten" {
+  _term_probe_it2; _cik 0
+  export CC_TERM=iterm2                      # operator/test override must win over the probe
+  _close_run PANE-O
+  wait_for "$D/it2-env.log"
+  grep -q "CC_TERM=iterm2" "$D/it2-env.log"
+}
+
+# ══ ✓ MEANS GONE, NOT rc=0 ════════════════════════════════════════════════════════════════════════
+# `✓ closed pane` is the subsystem's only outcome signal and scripts/teammate-reap-alarm.sh now reads
+# it as the health metric, so it has to mean what it says. rc is a claim about the CALL; these pin it
+# to a claim about the WORLD.
+
+_it2_says() { # $1 = what `session list` prints, $2 = exit code for `session close`
+  cat > "$D/bin/it2" <<EOF
+#!/bin/bash
+if [ "\$1" = session ] && [ "\$2" = list ]; then printf '%s\n' "$1"; exit 0; fi
+if [ "\$1" = session ] && [ "\$2" = close ]; then echo "close-attempted" >> "$D/it2-calls.log"; exit $2; fi
+exit 0
+EOF
+  chmod +x "$D/bin/it2"
+}
+
+@test "a close that returns rc=0 while the pane SURVIVES is logged as a failure, not a ✓" {
+  _cik 0; _it2_says "PANE-Z" 0                # enumerator still lists it after a 'successful' close
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "STILL PRESENT" "$LOGF"
+  run grep -c "✓ closed pane" "$LOGF"
+  [ "$output" -eq 0 ]
+}
+
+@test "a survived close RETRACTS its teardown marker — a false 'closed on purpose' corrupts crash triage" {
+  _cik 0; _it2_says "PANE-Z" 0
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+  [ ! -e "$HOME/.claude/watchdog/teardown/sidT.json" ]
+}
+
+@test "a hard-failed close also retracts its marker" {
+  _cik 0; _it2_says "PANE-Z" 1                # close returns rc 1 (the live iTerm2-connect failure)
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "pane close FAILED" "$LOGF"
+  [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+}
+
+@test "POSITIVE CONTROL: a VERIFIED-absent close still logs ✓ and KEEPS its marker" {
+  _cik 0; _it2_says "SOME-OTHER-PANE" 0       # enumerator readable, our pane genuinely gone
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane PANE-Z" "$LOGF"
+  [ -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+}
+
+# memory: lookup-miss-is-not-absence. A NAME searched in a list can only ever MISS, so an UNREADABLE
+# enumerator must not be allowed to manufacture either verdict. It keeps the ✓ (fail-safe in the
+# direction that does not invent a failure the alarm would then have to explain) — but it must reach
+# that ✓ through the cannot-tell branch, not by accident.
+@test "POSITIVE CONTROL: an UNREADABLE enumerator keeps the ✓ rather than inventing a failure" {
+  _cik 0
+  cat > "$D/bin/it2" <<EOF
+#!/bin/bash
+if [ "\$1" = session ] && [ "\$2" = list ]; then exit 3; fi     # enumerator broken
+if [ "\$1" = session ] && [ "\$2" = close ]; then echo c >> "$D/it2-calls.log"; exit 0; fi
+exit 0
+EOF
+  chmod +x "$D/bin/it2"
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane PANE-Z" "$LOGF"
+  run grep -c "STILL PRESENT" "$LOGF"
+  [ "$output" -eq 0 ]
+}

@@ -176,6 +176,37 @@ write_teardown_marker() { # $1=pane-uuid  $2=sid ("" / "unknown" ⇒ pane-key on
   return 0
 }
 
+# Is the pane still there?  rc 0 = PRESENT · 1 = ABSENT · 2 = CANNOT TELL (treated as absent by the
+# only caller, deliberately — see the three-state note in close_and_log). Kept separate from
+# close_pane so the verdict comes from a different question than the one that just failed.
+pane_present() {
+  local pane="$1" out
+  [[ -n "$pane" ]] || return 2
+  out=$(tas_bounded "$(_it2_bin)" session list 2>/dev/null) || return 2
+  [[ -n "$out" ]] || return 2               # empty enumeration is unreadable, NOT an empty terminal
+  grep -qx -F -- "$pane" <<<"$out" && return 0
+  return 1
+}
+
+# Retract a teardown marker whose premise turned out to be false.
+#
+# write_teardown_marker's contract says writers never delete — the reader GCs them — and that is
+# right for a marker that recorded something TRUE. This is the other case. The marker asserts "this
+# session was closed on purpose, do not classify its death as a crash", and it is written BEFORE the
+# close on the stated premise that "the close is inevitable". That premise was false for every close
+# since 2026-08-01: the close failed, the pane stayed live, and the marker remained — so
+# lead-crash-watchdog would classify a LATER genuine crash of that same teammate as an intentional
+# teardown, and the corruption grew by one record per retry. A writer retracting its own false claim
+# is not the reader's GC job; nobody else knows the claim was false.
+retract_teardown_marker() { # $1=pane-uuid  $2=sid
+  local _rm_pane="${1:-}" _rm_sid="${2:-}" _rm_dir
+  _rm_dir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+  [[ "$_rm_sid" == "unknown" ]] && _rm_sid=""
+  [[ -n "$_rm_sid" ]] && rm -f "$_rm_dir/$_rm_sid.json" 2>/dev/null || true
+  [[ -n "$_rm_pane" ]] && rm -f "$_rm_dir/$_rm_pane.json" 2>/dev/null || true
+  return 0
+}
+
 # Close + log one pane (shared by the config-resolved AND implicit-team paths).
 close_and_log() {
   local pane="$1" who="$2"
@@ -188,11 +219,29 @@ close_and_log() {
   local rc=$?
   local err="${CLOSE_ERR//$'\n'/ ; }"
   if (( rc == 0 )); then
-    log "  ✓ closed pane $pane ($who)"
+    # ── ✓ MEANS THE PANE IS GONE, NOT THAT THE ACTUATOR RETURNED 0 ──────────────────────────────
+    # `✓ closed pane` is the ONLY outcome signal this subsystem emits, and scripts/teammate-reap-
+    # alarm.sh now reads it as the health metric — so it has to mean the thing it says. An rc from
+    # a close RPC is a claim about the call, not about the world; the two came apart the moment the
+    # backend started being chosen wrongly. Verify by ABSENCE and the line becomes era-blind: it
+    # cannot be satisfied by a gate change, a backend swap, or a rerouted actuator.
+    #
+    # Three states, never two (memory: lookup-miss-is-not-absence). A NAME searched in a pane-id
+    # list can only ever MISS, so an unreadable enumerator must not read as "gone" — that is
+    # precisely how a close path ships `exit 0 already gone` over a live pid. Only a POSITIVE
+    # sighting of the pane downgrades the verdict; cannot-tell keeps the ✓ rather than
+    # manufacturing a failure the alarm would then have to explain.
+    if pane_present "$pane"; then
+      log "  ✗ close reported rc=0 but pane $pane ($who) is STILL PRESENT — actuator lied"
+      retract_teardown_marker "$pane" "${SESSION_ID:-}"
+    else
+      log "  ✓ closed pane $pane ($who)"
+    fi
   elif [[ "$err" == *"not found"* || "$err" == *"find pane"* ]]; then
     log "  ~ pane $pane ($who) already gone (${err:-not found})"
   else
     log "  ✗ pane close FAILED (rc=$rc) for $pane ($who): ${err:-<no stderr>}"
+    retract_teardown_marker "$pane" "${SESSION_ID:-}"
   fi
 }
 
@@ -1007,6 +1056,54 @@ log "  PPID-forensic: \$PPID=$PPID cmd=[$(ps -p "$PPID" -o command= 2>/dev/null 
 
 # Stop the teammate's current turn — JSON on stdout with exit 0.
 echo '{"continue": false, "stopReason": "Idle teammate auto-shutdown (work preserved in refs/wip/LAST + /tmp/*.patch; pane closed via it2/tmux)"}'
+
+# ── PIN THE TERMINAL VERDICT WHILE WE ARE STILL ATTACHED ────────────────────────────────────────
+# This single line is why no teammate pane has closed on this box since 2026-07-25.
+#
+# `bin/it2` decides which terminal backend to use by asking `bin/cc-in-kitty`, which answers by
+# walking $PPID up the process tree looking for $KITTY_PID. The close below runs in a DETACHED
+# subshell (`) &` + `exit 0`), so by the time it executes it has been reparented to launchd — its
+# ppid walk reaches pid 1 without ever meeting kitty and returns exit 1, "DEFINITIVE no". `it2`
+# then routes the close to iTerm2, which is not running on this box, and the close dies with
+# `rc=1 There was a problem connecting to iTerm2`. Every close that survived all five gates since
+# the kitty migration failed exactly here: lc-accounts + lc-shell (08-01 13:15) and photo-score
+# (08-03 10:46) — three for three.
+#
+# ENV SURVIVES REPARENTING; LINEAGE DOES NOT. KITTY_WINDOW_ID and KITTY_PID are still perfectly
+# intact in the detached subshell's environment — cc-in-kitty sees them and correctly refuses to
+# trust them, because inherited env cannot distinguish "I am in kitty" from "my grandparent was".
+# The ancestry check is right; it is simply being asked in the one context where it must be wrong.
+# Measured both ways here today: attached ⇒ rc 0 "kitty[613] is an ancestor"; the same command
+# double-forked to ppid 1 ⇒ rc 1 "INHERITED, not ours". Deterministic, not a race.
+#
+# So resolve the question HERE, in the hook body, where the ancestry is still true, and hand the
+# ANSWER down. `CC_TERM` is cc-in-kitty's own documented override seam (`bin/cc-in-kitty:67-69`,
+# honored verbatim ahead of every check), so this adds no new mechanism.
+#
+# scripts/handoff-fire.sh:715-731 already found and fixed this exact defect for its own detached
+# watcher (`pin_term_verdict_for_watcher`) on 2026-08-01, and its comment states the diagnosis in
+# full — but the remedy was never generalised: before this commit, `grep -rn 'CC_TERM=' bin hooks
+# scripts` returned exactly two setter lines, both inside that one function. A fix that stays local
+# to the caller that discovered it leaves every sibling caller broken.
+#
+# Both directions are pinned deliberately. An UNVERIFIABLE verdict (exit 2) pins nothing, so the
+# detached block keeps today's fail-closed behaviour rather than inheriting a guess.
+pin_term_verdict() {
+  [[ -n "${CC_TERM:-}" ]] && return 0        # explicit operator/test override already in force
+  local _cik="${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}"
+  [[ -x "$_cik" ]] || return 0
+  # cc-in-kitty's honest answer for "not kitty" is exit 1, so a bare call would abort this hook
+  # under errexit — capture the code instead.
+  local _rc=0
+  "$_cik" >/dev/null 2>&1 || _rc=$?
+  case "$_rc" in
+    0) export CC_TERM=kitty  ;;
+    1) export CC_TERM=iterm2 ;;
+    *) : ;;                                  # 2 = UNVERIFIABLE, 64 = usage — pin nothing
+  esac
+  return 0
+}
+pin_term_verdict
 
 # Detached close so the hook itself returns within its 5s timeout. Ordering:
 #   brief grace for CC to flush the {"continue":false} response → close the EXACT
