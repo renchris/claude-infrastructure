@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""kitty-confirm-close — a NATIVE macOS close confirmation for kitty.
+
+WHY THIS EXISTS
+    kitty's own guards (`close_window_with_confirmation`, `confirm_os_window_close`) are drawn
+    INSIDE the terminal: a full-pane takeover that blanks the pane you are trying to protect and
+    renders "Yes / No" as terminal text. There is no kitty option to make it a real dialog — the
+    confirmation is an `ask` kitten, and kittens are terminal programs by construction.
+
+    iTerm2's equivalent is a real NSAlert ("Close session ...? This session is running the
+    following jobs: ..."), which is what the operator actually wants: it floats above the work,
+    it names what is at stake, and it does not destroy the view of the thing being closed.
+
+    So the guard is moved out of kitty: ⌘W / ⌃⇧W / ⌘⇧W are bound to this script (launched with
+    `--type=background`, so kitty itself never blocks), it puts up an AppleScript dialog, and it
+    performs the close over the kitty remote-control socket only if the operator confirms.
+    Remote-control closes deliberately BYPASS kitty's own confirmation — verified 2026-08-04 by
+    closing a window running `sleep 120` with `kitty @ close-window` and getting no prompt — so
+    there is no double-prompt to suppress.
+
+SCOPE ARGUMENT
+    window      close the focused pane          (⌘W, ⌃⇧W — iTerm2's "close session")
+    os-window   close the focused OS window     (⌘⇧W)
+
+WHAT IS DELIBERATELY *NOT* HANDLED HERE
+    The red traffic-light button and the OS-level close shortcut are not key bindings, so kitty
+    never offers them to a mapping and this script cannot intercept them. `confirm_os_window_close`
+    stays set in kitty.conf as the backstop for exactly those paths — its in-terminal takeover is
+    ugly, but an ugly guard beats no guard on a path nothing else can reach.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
+
+# AppleScript takes its strings through argv rather than string interpolation. Quoting a window
+# title into an -e statement is a quoting bug waiting to happen — a pane title containing a double
+# quote would produce a syntax error, i.e. no dialog at all, i.e. a SILENT close, which is the
+# exact failure this script exists to prevent.
+DIALOG = """
+on run argv
+  tell me to activate
+  set r to display dialog (item 1 of argv) ¬
+    with title (item 2 of argv) ¬
+    buttons {"Cancel", "Close"} ¬
+    default button "Cancel" ¬
+    cancel button "Cancel" ¬
+    with icon POSIX file (item 3 of argv)
+  return button returned of r
+end run
+"""
+
+
+def socket_address() -> str | None:
+    """Find the remote-control socket. This is the load-bearing plumbing of the whole script.
+
+    A `launch --type=background` child does NOT inherit KITTY_LISTEN_ON — measured, and it is the
+    difference between this script working and every `kitty @` call failing silently. Adding
+    `--allow-remote-control` to the launch *does* set it, but to an `fd:35` channel, and Python's
+    subprocess closes fds above 2 by default, so the address would be dead by the time we used it.
+
+    PPID is the reliable answer instead: the background child is a direct child of the kitty
+    process (verified: PPID 613, `ps -o comm=` -> kitty), and kitty.conf sets
+    `listen_on unix:/tmp/kitty-{kitty_pid}`, so the socket path falls straight out of it.
+    """
+    env = os.environ.get("KITTY_LISTEN_ON", "")
+    if env and not env.startswith("fd:"):
+        return env
+
+    def sock(path: str) -> str | None:
+        try:
+            import stat
+
+            if stat.S_ISSOCK(os.stat(path).st_mode):
+                return f"unix:{path}"
+        except OSError:
+            pass
+        return None
+
+    found = sock(f"/tmp/kitty-{os.getppid()}")
+    if found:
+        return found
+
+    # Last resort: exactly one kitty socket on the box is unambiguous. More than one means
+    # concurrent kitty instances, and guessing which fleet to talk to is not a guess worth making.
+    import glob
+
+    candidates = [
+        p for p in glob.glob("/tmp/kitty-*") if p.rsplit("-", 1)[-1].isdigit() and sock(p)
+    ]
+    return sock(candidates[0]) if len(candidates) == 1 else None
+
+
+ADDRESS = socket_address()
+
+
+def kitty(*args: str) -> subprocess.CompletedProcess:
+    cmd = ["kitty", "@", *args]
+    if ADDRESS:
+        cmd += ["--to", ADDRESS]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def load(*match: str) -> list:
+    r = kitty("ls", *match)
+    if r.returncode != 0 or not r.stdout.strip():
+        return []
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def focused_window_id(tree: list) -> int | None:
+    """The pane the operator pressed the key in.
+
+    `recent:0` is kitty's own name for the currently focused window and is the authoritative
+    answer. The is_focused/is_active fallback matters because is_focused is an OS-level fact: when
+    kitty is not the frontmost application NO window reports is_focused (measured — a `kitty @ ls`
+    sweep from a Claude Code Bash call found zero focused windows across 14 panes). That cannot
+    happen on a real keypress, but it makes the naive scan unreliable to develop against.
+    """
+    for src in (load("--match", "recent:0"), tree):
+        for osw in src:
+            for tab in osw.get("tabs", []):
+                for w in tab.get("windows", []):
+                    if w.get("is_focused"):
+                        return w["id"]
+        for osw in src:
+            if src is tree and not osw.get("is_active"):
+                continue
+            for tab in osw.get("tabs", []):
+                for w in tab.get("windows", []):
+                    if w.get("is_active"):
+                        return w["id"]
+    return None
+
+
+def owning_os_window(tree: list, wid: int) -> dict | None:
+    for osw in tree:
+        for tab in osw.get("tabs", []):
+            for w in tab.get("windows", []):
+                if w["id"] == wid:
+                    return osw
+    return None
+
+
+def windows_of(osw: dict) -> list[dict]:
+    return [w for tab in osw.get("tabs", []) for w in tab.get("windows", [])]
+
+
+def is_busy(w: dict) -> bool:
+    """True when something is actually RUNNING in the pane, as opposed to a bare shell prompt.
+
+    This is the `ignore-shell` semantic: a pane at a prompt holds nothing, so asking about it is
+    pure friction. `at_prompt` comes from kitty's shell integration; when it is absent (integration
+    off, or a program that never reports) we fail SAFE and treat the pane as busy. A guard that
+    goes quiet when its signal disappears is worse than no guard, because it looks like it is on.
+    """
+    return w.get("at_prompt") is not True
+
+
+# Interpreters and wrappers are never the answer to "what is running here?" — they are the thing
+# standing in front of the answer. `bash …/cc-close-attrib …/claude --effort high` is a Claude
+# session; reporting it as "bash" tells the operator nothing at the one moment it matters.
+_PASSTHROUGH = {
+    "bash", "sh", "zsh", "env", "exec", "sudo", "nohup", "time",
+    "node", "npm", "npx", "pnpm", "yarn", "python", "python3", "uv", "uvx",
+    "run", "-c", "-i", "-l",
+}
+
+
+def jobs_in(w: dict) -> list[str]:
+    names: list[str] = []
+    for proc in w.get("foreground_processes", []):
+        cmd = proc.get("cmdline") or []
+        # kitty sometimes hands back ONE argv element holding a whole command line
+        # (`['npm exec chrome-devtools-mcp@latest --isolated', '', '', '']`). Taking basename() of
+        # that yields the entire string as a "program name" — measured, and it made the dialog
+        # unreadable. Flatten on whitespace before anything else.
+        tokens = [t for element in cmd for t in str(element).split()]
+        name = ""
+        for tok in tokens:
+            if tok.startswith("-"):
+                continue
+            base = os.path.basename(tok)
+            base = base.split("@", 1)[0] or base  # chrome-devtools-mcp@latest -> …-mcp
+            if not base or base in _PASSTHROUGH or base.startswith("cc-"):
+                continue
+            name = base
+            break
+        if name and name not in names:
+            names.append(name)
+    # The stake goes first: whatever else is in the pane, "claude" is the word that decides whether
+    # the operator clicks Cancel, and a truncated list must never be what drops it.
+    names.sort(key=lambda n: 0 if "claude" in n.lower() else 1)
+    return names
+
+
+def describe(targets: list[dict], scope: str) -> tuple[str, str]:
+    busy = [w for w in targets if is_busy(w)]
+    jobs: list[str] = []
+    for w in busy:
+        for j in jobs_in(w):
+            if j not in jobs:
+                jobs.append(j)
+
+    claude = any("claude" in j.lower() for j in jobs)
+    noun = "pane" if scope == "window" else "window"
+    plural = len(busy) > 1
+
+    title = "kitty"
+    head = (
+        f"Close this {noun}?"
+        if not plural
+        else f"Close this window and its {len(busy)} running panes?"
+    )
+
+    shown = jobs[:8]
+    tail = "" if len(jobs) <= 8 else f", and {len(jobs) - 8} more"
+    running = ", ".join(shown) + tail if shown else "an unknown program"
+
+    lines = [head, ""]
+    if claude:
+        # The whole reason the operator asked for this. Name the stake before the job list, because
+        # the job list is where the eye stops reading.
+        lines.append(
+            f"A Claude Code session is running here. Closing {'these panes' if plural else 'this pane'} "
+            "ends it — the transcript survives but the live context does not."
+        )
+        lines.append("")
+    lines.append(
+        f"{'These panes are' if plural else 'This ' + noun + ' is'} running: {running}."
+    )
+    return "\n".join(lines), title
+
+
+def confirm(message: str, title: str) -> bool:
+    r = subprocess.run(
+        ["osascript", "-", message, title, KITTY_ICON],
+        input=DIALOG,
+        capture_output=True,
+        text=True,
+    )
+    # Cancel exits non-zero with "User canceled." Any other failure (osascript missing, dialog
+    # refused) also lands here, and refusing to close is the safe reading of an unusable guard.
+    return r.returncode == 0 and "Close" in r.stdout
+
+
+def close(ids: list[int]) -> None:
+    for wid in ids:
+        kitty("close-window", "--match", f"id:{wid}")
+
+
+def main() -> int:
+    scope = sys.argv[1] if len(sys.argv) > 1 else "window"
+    tree = load()
+    wid = focused_window_id(tree)
+    if wid is None:
+        return 0  # nothing focused: refuse to guess which pane to kill
+
+    if scope == "os-window":
+        osw = owning_os_window(tree, wid)
+        targets = windows_of(osw) if osw else []
+    else:
+        targets = [
+            w
+            for o in tree
+            for t in o.get("tabs", [])
+            for w in t.get("windows", [])
+            if w["id"] == wid
+        ]
+
+    if not targets:
+        return 0
+
+    ids = [w["id"] for w in targets]
+
+    if not any(is_busy(w) for w in targets):
+        close(ids)  # bare shell prompt(s) — close silently, as `ignore-shell` would
+        return 0
+
+    message, title = describe(targets, scope)
+    if confirm(message, title):
+        close(ids)
+
+    # The dialog stole application focus to guarantee it came to the front; give it back either
+    # way, or a cancel leaves the operator typing into no terminal at all.
+    subprocess.run(
+        ["osascript", "-e", 'tell application "kitty" to activate'],
+        capture_output=True,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
