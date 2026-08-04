@@ -1,7 +1,7 @@
 ---
 name: research-subagents
 description: >-
-  Full anti-under-spawn discipline for fanning out RESEARCH SUBAGENTS — parallel fire-and-forget Agent calls with no team_name, for exploration/decomposition/discovery. Load this BEFORE spawning any research/exploration subagent wave, and the MOMENT you consider how many subagents to spawn. Provides the mandatory pre-spawn decomposition artifact, default N=10 (anchor band 8-12), question-type classification + named-entity audit, the 6-field canonical brief, adversarial-sampling floor (15-20%), per-subagent depth/cost calibration, OASIS stop criterion, synthesis-bottleneck + partial-failure protocols, and the banned-phrase / trigger-phrase tables. Triggers: "research X", "explore the design space of Y", "all angles on Z", "investigate/audit broadly", "fan out subagents", deep-research, or ANY decision about research-subagent count. (The /research command already applies this skill — load it standalone when free-hand spawning research subagents.) NOT for spawning code-writing teammates (use agent-teams) or depth-first single-subsystem root-cause debugging (single agent wins).
+  Full anti-under-spawn discipline for fanning out RESEARCH SUBAGENTS — parallel fire-and-forget Agent calls with no team_name, for exploration/decomposition/discovery. Load this BEFORE spawning any research/exploration subagent wave, and the MOMENT you consider how many subagents to spawn. Provides the mandatory pre-spawn decomposition artifact, default N=10 (anchor band 8-12), question-type classification + named-entity audit, the 7-field canonical brief (field 7 = the mandatory Delivery contract: name the absolute artifact path each subagent writes, because a subagent's prose is invisible and only a file is delivered), adversarial-sampling floor (15-20%), per-subagent depth/cost calibration, OASIS stop criterion, synthesis-bottleneck + partial-failure protocols, and the banned-phrase / trigger-phrase tables. Triggers: "research X", "explore the design space of Y", "all angles on Z", "investigate/audit broadly", "fan out subagents", deep-research, or ANY decision about research-subagent count. (The /research command already applies this skill — load it standalone when free-hand spawning research subagents.) NOT for spawning code-writing teammates (use agent-teams) or depth-first single-subsystem root-cause debugging (single agent wins).
 ---
 
 # Research Subagent Fan-Out — Anti-Budgeting Discipline
@@ -197,10 +197,11 @@ does not (Springer 2025 / arxiv 2505.15392 establish anchoring exists in LLM
 decisions; the same papers note reasoning offers partial mitigation, so the
 decomposition step IS the mitigation, not its bypass).
 
-## Brief Structure (6-Field Canonical)
+## Brief Structure (7-Field Canonical)
 
-Each subagent brief MUST contain these 6 fields, in this order (Anthropic
-cookbook `research_lead_agent.md:107-114` canonical):
+Each subagent brief MUST contain these 7 fields, in this order (fields 1-6 are
+Anthropic cookbook `research_lead_agent.md:107-114` canonical; field 7 is
+mandatory here — see § Delivery Contract):
 
 1. **Objective** — the sub-question, in one sentence
 2. **Output format** — bullets, table, structured manifest, or freeform
@@ -209,6 +210,47 @@ cookbook `research_lead_agent.md:107-114` canonical):
 5. **Tools / sources** — preferred starting points (files, URLs, paper anchors)
 6. **Boundaries** — adversarial-pass requirement, banned content, depth budget
    (inlined per § Cost Asymmetry), stop condition
+7. **Delivery** — the absolute path the findings get WRITTEN to (§ Delivery Contract)
+
+### Delivery Contract (mandatory — field 7)
+
+🚨 **A subagent's prose is invisible. Only a file is delivered.** Every brief
+names an absolute artifact path and states that writing it is the deliverable:
+
+```
+7. Delivery: write your findings to /abs/path/report-<agent>.md — writing the
+   file is MANDATORY and is what "done" means. A report that exists only as
+   prose in your turn is invisible to the lead.
+```
+
+**Why this is a field and not advice.** In the 2026-08-04 12-agent wave
+(`docs/research/SUBAGENT_LIFECYCLE_SIGNAL_DISCONNECT_2026-08-04.md`), agent
+`H-failures` finished its axis at 03:11 and its report reached the lead at
+11:15 — **70 minutes late, found only by a manual sweep** — because it emitted
+its findings as plain text in its own turn. That report carried the wave's
+single most consequential finding (a **paid** regen would have made the defect
+worse), so a silently-undelivered report was not a lost status update, it was
+a lost money decision.
+
+**Why a file and not a message.** Reading the lead's inbox is not something the
+lead can rely on: `scripts/limit-recover/lr-audit.py:15` records the measured
+premise — *"SendMessage isn't available in this subagent context … the ONLY
+dependable source is disk"* — and its taxonomy already names this exact state
+`COMPLETE_UNDELIVERED`. A message may fail to send; a file either exists or it
+does not. Ask for the SendMessage too when the subagent has it, and treat the
+**file** as the contract.
+
+**Why the lead cannot compensate for a missing field 7.** The lead has no
+signal that would tell it. `idleReason:"available"` is emitted at *every* turn
+boundary and renders in the lead's UI, in success green, as
+`✓ Teammate @<name> finished` — identically for an agent mid-analysis and one
+that will never produce anything. Collecting reports by polling the filesystem
+is therefore the lead's only reliable move, and field 7 is what makes that
+polling well-defined.
+
+**Lead-side corollary.** State the expected artifact set before the wave runs.
+"Is the wave done?" is then `ls` over that set, and a stalled axis is named by
+set difference — never a judgment call over idle events.
 
 **Length**: 150-400 tokens (≈ 80-250 words). Briefs above 400 tokens suffer
 lost-in-middle exposure (TACL 2024 Liu et al. — middle-position instructions
