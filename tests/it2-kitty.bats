@@ -276,3 +276,131 @@ SH
   grep -q -- 'launch' "$ARGV_LOG" || false
   grep -q -- '--keep-focus' "$ARGV_LOG" || false
 }
+
+# ── CLOSE-TARGET IDENTITY PIN (added 2026-08-04) ─────────────────────────────────────────────────
+# WHY THESE EXIST. `session close` guarded its target with `valid_id` alone — a DIGITS-ONLY shape
+# check. That is sound for the iTerm2 session UUIDs this shim impersonates, which are never
+# recycled, so a stale id can only ever no-op. It is FALSE for kitty: a window id is a per-process
+# counter that restarts at 1 with every kitty, so an id recorded before a restart survives as a
+# perfectly valid id naming a completely unrelated LIVE window. A positive control closed a
+# non-claude window exactly this way.
+#
+# The pins are OPTIONAL and caller-supplied, which splits this suite in two and both halves matter:
+# the flagged arms prove the check refuses/permits on evidence, and the LAST arm proves that a
+# caller who supplies neither flag reaches kitty on the old path with no `ls` probe at all — because
+# a pin that quietly became mandatory would turn one mis-wired caller into a self-close OUTAGE.
+#
+# Every assertion is `[ ]` or `… || false`, and every negative is an `if grep -q … then fail` block:
+# `! grep` is errexit-EXEMPT in bats (silently dead off a body's last line) and is blocked at the
+# land by scripts/bats-assert-liveness.py.
+
+# A kitty that RECORDS every invocation and answers `ls` from a payload file the test writes. The
+# recording is what makes "the close call was NOT emitted" and "the ls probe WAS made" observable —
+# an exit code alone cannot distinguish a refusal from a close that happened and then failed.
+fake_kitty_identity() {
+  CALLS="$BATS_TEST_TMPDIR/kitty-calls"
+  LSPAYLOAD="$BATS_TEST_TMPDIR/ls.json"
+  : > "$CALLS"
+  cat > "$CC_TERM_KITTY" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$CALLS"
+for a in "\$@"; do
+  [ "\$a" = ls ] || continue
+  cat "$LSPAYLOAD"
+  exit 0
+done
+exit 0
+SH
+  chmod +x "$CC_TERM_KITTY"
+}
+
+# \$1 = window id · \$2 = the window's env.KITTY_PID · \$3 = a JSON array literal for the FOREGROUND
+# process cmdline. The window's own `cmdline` is deliberately a bare shell in every fixture, so a
+# match can only come from the foreground process — i.e. the half of the union that a narrower
+# implementation would have skipped. A caffeinate row rides along because live panes really do carry
+# one (bin/cc-spawn-verify:32), so a haystack that only read the FIRST process would fail here.
+id_payload() {
+  cat > "$LSPAYLOAD" <<JSON
+[{"id":1,"tabs":[{"id":1,"windows":[
+  {"id":$1,"title":"t","cwd":"/tmp","pid":9,
+   "env":{"KITTY_PID":"$2","KITTY_WINDOW_ID":"$1"},
+   "foreground_processes":[{"cmdline":["/usr/bin/caffeinate","-i"]},{"cmdline":$3}],
+   "cmdline":["/bin/zsh"]}]}]}]
+JSON
+}
+
+@test "close --expect-cmdline-match REFUSES a window whose cmdline lacks the pin (id was recycled)" {
+  fake_kitty_identity
+  # Window 15 exists and is perfectly healthy — it just belongs to somebody else. This is the live
+  # failure: post-restart, id 15 resolves, `valid_id` passes, and the pre-fix close destroys it.
+  id_payload 15 4242 '["claude","--agent-name","someone-else"]'
+  run "$K" session close -f -s 15 --expect-cmdline-match '--agent-name m'
+  [ "$status" -eq 66 ] || { echo "$output"; false; }
+  # Positive control FIRST: the probe really ran, so the refusal is a VERDICT and not an accident of
+  # some earlier arg-parsing failure that never reached kitty at all.
+  grep -q -- 'ls --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "unexpected close call" >&2; false; fi
+}
+
+@test "close --expect-cmdline-match CLOSES when the foreground cmdline carries the pin" {
+  fake_kitty_identity
+  # The paired positive. Without it the refusal above is satisfied by a check that refuses ALWAYS,
+  # which would be a self-close outage wearing a passing test.
+  id_payload 15 4242 '["claude","--agent-name","m","--effort","high"]'
+  run "$K" session close -f -s 15 --expect-cmdline-match '--agent-name m'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "close --expect-generation REFUSES when env.KITTY_PID is a different kitty" {
+  fake_kitty_identity
+  # The generation IS the recycling hazard stated directly: same id, different kitty process.
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  run "$K" session close -f -s 15 --expect-generation 9999
+  [ "$status" -eq 66 ] || { echo "$output"; false; }
+  grep -q -- 'ls --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "unexpected close call" >&2; false; fi
+}
+
+@test "close --expect-generation CLOSES when env.KITTY_PID is the pinned kitty" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  run "$K" session close -f -s 15 --expect-generation 4242
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "close REFUSES when the ls payload is unreadable — a blind probe must not authorise a close" {
+  fake_kitty_identity
+  # Tri-state, the same discipline pane_present carries: an unreadable oracle is INDETERMINATE, and
+  # indeterminate must never resolve to 'go ahead'. Absence of evidence is not evidence of target.
+  printf 'not json at all\n' > "$LSPAYLOAD"
+  run "$K" session close -f -s 15 --expect-cmdline-match '--agent-name m'
+  [ "$status" -eq 66 ] || { echo "$output"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "unexpected close call" >&2; false; fi
+}
+
+@test "close REFUSES when ZERO windows carry the id — a vanished target is not a free close" {
+  fake_kitty_identity
+  # Well-formed payload, no such window. Distinct from the unreadable case above: here kitty is
+  # perfectly healthy and simply does not have the window, which pre-fix reached close-window and
+  # let kitty decide — the exact path by which a recycled id gets acted on.
+  id_payload 260 4242 '["claude","--agent-name","m"]'
+  run "$K" session close -f -s 15 --expect-cmdline-match '--agent-name m'
+  [ "$status" -eq 66 ] || { echo "$output"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "unexpected close call" >&2; false; fi
+}
+
+@test "close with NEITHER flag closes on the old path and makes NO ls probe (self-close untouched)" {
+  fake_kitty_identity
+  # THE regression pin for handoff-fire's self-close, cc-pane, and every operator close. The pin is
+  # caller-supplied precisely so a mispinned check can never become an outage — which is only true
+  # while the unflagged path never consults the oracle at all. A verification that crept in here
+  # would make every unpinned caller depend on `kt ls` succeeding. The payload deliberately names
+  # the WRONG agent, so a check that ran unconditionally would refuse and this would go red.
+  id_payload 15 4242 '["claude","--agent-name","someone-else"]'
+  run "$K" session close -f -s 15
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+  if grep -q -- ' ls ' "$CALLS"; then echo "unexpected ls probe on the unpinned path" >&2; false; fi
+}

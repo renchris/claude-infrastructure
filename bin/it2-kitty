@@ -59,6 +59,33 @@
 # which is the correct, visible degradation. A silent success with no pane created would strand the
 # operator watching an empty window, so every path here either creates the pane or exits non-zero.
 #
+# ── CLOSE-TARGET IDENTITY PIN (2026-08-04) ───────────────────────────────────────────────────────
+# A kitty window id is a PER-PROCESS COUNTER that restarts at 1 with every kitty. The iTerm2 session
+# UUIDs this shim impersonates are never recycled, which is why every caller in the fleet was
+# written as though a stale id could only no-op. Under kitty it cannot: a recorded id survives a
+# kitty restart as a perfectly VALID id pointing at a completely unrelated window, and `valid_id` —
+# a digits-only SHAPE check — cannot tell the two apart. A positive control closed a non-claude
+# window this way.
+#
+# So `session close` accepts two OPTIONAL pins and verifies them with ONE `kt ls` (measured 0.036 s)
+# before closing:
+#   --expect-cmdline-match <substring>   the target window's foreground/launch cmdline must contain
+#                                        this (callers pass the harness's own `--agent-name <n>`)
+#   --expect-generation <pid>            the target window's env.KITTY_PID must equal this
+#
+# Tri-state, mirroring pane_present's discipline: an unreadable payload, a failed `ls`, or zero
+# windows matched ⇒ REFUSE (exit 66), never close. Absence of evidence is not evidence of the right
+# target — the whole defect is that the id LOOKS fine.
+#
+# The pin is CALLER-SUPPLIED and both flags default off. With neither present the close path is
+# today's, byte for byte: handoff-fire's self-close, cc-pane and every operator close are untouched,
+# so a mispinned or mis-wired check can never become a self-close OUTAGE. Only a caller that knows
+# what it expects to be closing can ask to be checked.
+#
+# Exit codes: 1 kitty failed · 3 not inside kitty · 4 no control socket · 5 pinned binary unusable ·
+#             64 unsupported command/verb · 65 bad or missing window id · 66 identity pin
+#             unsatisfied or unverifiable (above).
+#
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
 
 set -uo pipefail
@@ -178,6 +205,8 @@ shift
 verb="${1:-}"; shift 2>/dev/null || true
 
 SESSION=""; VERTICAL=0; JSON=0
+# The close-target identity pins. Empty = not supplied = today's unchecked close (see the header).
+EXPECT_CMDLINE=""; EXPECT_GENERATION=""
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -193,6 +222,12 @@ while [ $# -gt 0 ]; do
     # Both degraded SAFELY, and both were non-functional. Parsed as a flag so it can never reach the
     # send/run text either.
     --json)       JSON=1; shift ;;
+    # Close-target identity pins — see § CLOSE-TARGET IDENTITY PIN. Parsed in the SHARED loop, not
+    # in the close arm, for the same reason --json is: an unparsed flag falls through to `*)` and
+    # lands in ARGS, which for send/run is the TEXT TYPED AT THE PANE. A pin that silently became
+    # keystrokes would be worse than no pin.
+    --expect-cmdline-match) EXPECT_CMDLINE="${2:-}"; shift 2 ;;
+    --expect-generation)    EXPECT_GENERATION="${2:-}"; shift 2 ;;
     # -f is ACCEPTED AND DISCARDED, deliberately — not stored, because nothing downstream can use
     # it: kitty has no running-job confirmation modal, which is the entire reason the iTerm2 wrapper
     # needed a force=True interception. Claude Code always passes it on close, so it must parse
@@ -310,6 +345,68 @@ reject_id(){
       ;;
   esac
   exit 65
+}
+
+# ── IS THIS WINDOW THE ONE THE CALLER MEANT? ─────────────────────────────────────────────────────
+# One `kt ls --match id:<id>` (0.036 s), then every supplied pin must hold. Returns 0 only when the
+# evidence AFFIRMS the target; every other outcome — kitty failed, payload unparseable, no window,
+# more than one window, a pin unmet, env.KITTY_PID absent — returns 1 and the caller refuses.
+#
+# The id is re-filtered HERE rather than trusted to kitty's --match, so "exactly one window matched"
+# means literally "one window carries this id". A kitty that ignored --match would otherwise hand
+# back the whole fleet and the count test would read it as ambiguity by luck rather than by check.
+#
+# The cmdline haystack is the UNION of every foreground process's cmdline AND the window's own
+# launch cmdline — the same union scripts/assignee-chain-state.py:43-48 already reads. Neither half
+# alone is sufficient: `foreground_processes` is a SAMPLED process GROUP (bin/cc-spawn-verify:32 —
+# live panes have shown caffeinate/tee/an MCP server alongside the binary), and the window cmdline
+# is the LAUNCH argv, which for an argv-spawned pane names cc-pane-runner rather than what it
+# exec'd. Widening the haystack can only cause a false MATCH on a window that genuinely carries the
+# caller's own `--agent-name <member>` string — i.e. the right pane — while narrowing it would cause
+# false REFUSALS, and a refusal here means a teammate pane is never reaped.
+identity_ok(){
+  local id="$1" _err rc _l
+  # mktemp with TRAILING Xs — BSD mktemp only substitutes a trailing run (memory: prescribed-remedy-worse).
+  _err="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-idpin.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-idpin.%s' "$$")"
+  kt ls --match "id:$id" 2>"$_err" | \
+    WANT_ID="$id" WANT_CMDLINE="$EXPECT_CMDLINE" WANT_GEN="$EXPECT_GENERATION" python3 -c '
+import json, os, sys
+want_id = os.environ["WANT_ID"]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write("payload from kitty ls is unreadable\n"); sys.exit(1)
+try:
+    rows = [w for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])
+            if str(w.get("id")) == want_id]
+except Exception:
+    sys.stderr.write("payload from kitty ls has an unexpected shape\n"); sys.exit(1)
+if len(rows) != 1:
+    sys.stderr.write("expected exactly 1 window with id %s, kitty reported %d\n" % (want_id, len(rows)))
+    sys.exit(1)
+w = rows[0]
+gen = os.environ.get("WANT_GEN", "")
+if gen:
+    live = str((w.get("env") or {}).get("KITTY_PID", ""))
+    if live != gen:
+        sys.stderr.write("generation mismatch: window %s belongs to kitty pid %r, caller pinned %r\n"
+                         % (want_id, live or "<absent>", gen))
+        sys.exit(1)
+want = os.environ.get("WANT_CMDLINE", "")
+if want:
+    hay = [" ".join(p.get("cmdline") or []) for p in (w.get("foreground_processes") or [])]
+    hay.append(" ".join(w.get("cmdline") or []))
+    if not any(want in h for h in hay):
+        sys.stderr.write("cmdline mismatch: window %s runs %r, caller pinned %r\n"
+                         % (want_id, " | ".join(h for h in hay if h), want))
+        sys.exit(1)
+sys.exit(0)' 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
+  rc="${PIPESTATUS[1]}"
+  # kitty's own stderr is RENDERED, never discarded — `kt ls 2>/dev/null` is exactly what hid the
+  # bare-name binary defect for its entire life (see the `list` arm).
+  if [ -s "$_err" ]; then while IFS= read -r _l; do err "  kitty: $_l"; done < "$_err"; fi
+  rm -f "$_err" 2>/dev/null
+  [ "${rc:-1}" = 0 ]
 }
 
 case "$verb" in
@@ -474,6 +571,17 @@ else:
     # it disappears.
     [ -n "$SESSION" ] || { err "close requires -s <id>"; exit 65; }
     valid_id "$SESSION" || reject_id "$SESSION" close
+    # A window id is a per-process counter, so `valid_id` proves only that the SHAPE is right. When
+    # the caller supplied a pin, prove the TARGET before destroying it. Neither flag ⇒ this whole
+    # branch is skipped and the close below is byte-for-byte today's.
+    if [ -n "$EXPECT_CMDLINE" ] || [ -n "$EXPECT_GENERATION" ]; then
+      identity_ok "$SESSION" || {
+        err "refusing to close window $SESSION — it is not the window the caller pinned."
+        err "A kitty window id restarts at 1 with every kitty, so a stale id can name a LIVE"
+        err "unrelated window. Refusing is the only safe answer; re-derive the id and retry."
+        exit 66
+      }
+    fi
     kt close-window --match "id:$SESSION" || exit 1
     ;;
 
