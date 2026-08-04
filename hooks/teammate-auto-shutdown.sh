@@ -127,19 +127,57 @@ tas_bounded() {
   "$TAS_TIMEOUT_BIN" -k 3 "$TAS_TIMEOUT_S" "$@"
 }
 
+# The live kitty generation — its pid — for the close-target identity pin below.
+#
+# $KITTY_PID is inherited env, and this hook deliberately does NOT trust inherited env to answer
+# "am I in kitty?" (see pin_term_verdict: inheritance cannot distinguish "I am" from "my grandparent
+# was"). Here the question is different and narrower: "which kitty is running RIGHT NOW?" — so the
+# value is VERIFIED against the process table rather than trusted. That direction matters: a stale
+# pid handed to --expect-generation makes the shim REFUSE every close (exit 66), i.e. it would
+# manufacture the very outage the pin exists to prevent. Unverifiable ⇒ empty ⇒ the caller omits the
+# flag and keeps the cmdline pin, which the shim accepts independently.
+_kitty_generation() {
+  local pid="${KITTY_PID:-}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -qi 'kitty' || return 1
+  printf '%s\n' "$pid"
+}
+
 # Close one teammate pane by its recorded id. Idempotent: closing an
 # already-gone pane fails with "not found" (the caller logs it as such).
-# iTerm2 session UUIDs are never recycled, so a stale id can only no-op — it
-# can never hit the wrong pane. Stderr is captured into CLOSE_ERR so the
-# caller can tell "already gone" from a real failure (RPC error, timeout).
+# Stderr is captured into CLOSE_ERR so the caller can tell "already gone" from
+# a real failure (RPC error, timeout, identity-pin refusal).
+#
+# ── THE STALE-ID ASSUMPTION IS FALSE UNDER KITTY (2026-08-04) ────────────────────────────────────
+# This function used to carry "iTerm2 session UUIDs are never recycled, so a stale id can only
+# no-op — it can never hit the wrong pane". True of iTerm2, and the premise every closer in the
+# fleet was written against. A kitty window id is a PER-PROCESS COUNTER that restarts at 1 with
+# every kitty, so an id recorded before a restart survives as a perfectly VALID id naming an
+# unrelated LIVE window — bin/it2-kitty's `valid_id` is a digits-only SHAPE check and cannot tell
+# the two apart. A positive control closed a non-claude window exactly this way.
+#
+# So on the kitty backend the close carries T3's two OPTIONAL identity pins. Both are independent
+# and both default off; with neither flag the shim's close path is byte-identical, so handoff-fire,
+# cc-pane and every operator close are untouched. exit 66 = "pin unsatisfied OR unverifiable" and is
+# a REFUSAL, never a close (handled in close_and_log).
+#
+# Gated on CC_TERM=kitty because an iTerm2 close routes to the real `it2` CLI, which would reject
+# flags it has never heard of — the pin must not become a close FAILURE on the other backend.
 CLOSE_ERR=""
 close_pane() {
-  local pane="$1"
+  local pane="$1" who="${2:-}"
   [[ -n "$pane" ]] || return 1
   if [[ "$pane" =~ ^%[0-9]+$ ]]; then
     CLOSE_ERR=$(tmux kill-pane -t "$pane" 2>&1 >/dev/null)   # tmux backend: synchronous, no prompt
   else
-    CLOSE_ERR=$(tas_bounded "$(_it2_bin)" session close -f -s "$pane" 2>&1 >/dev/null)  # shim → python force=True
+    local _pin=() _gen
+    if [[ "${CC_TERM:-}" == kitty && -n "$who" ]]; then
+      _pin+=(--expect-cmdline-match "--agent-name $who")     # the harness's own argv for this member
+      _gen="$(_kitty_generation || true)"
+      [[ -n "$_gen" ]] && _pin+=(--expect-generation "$_gen")
+    fi
+    # bash 3.2 + `set -u`: an EMPTY array must not be expanded bare.
+    CLOSE_ERR=$(tas_bounded "$(_it2_bin)" session close -f -s "$pane" ${_pin[@]+"${_pin[@]}"} 2>&1 >/dev/null)
   fi
 }
 
@@ -215,9 +253,20 @@ close_and_log() {
   # already passed and the close is inevitable. A marker written at any earlier decision point would
   # mask a genuine crash of a teammate we then chose to KEEP for the reader's whole freshness window.
   write_teardown_marker "$pane" "${SESSION_ID:-}" teammate-idle
-  close_pane "$pane"
+  close_pane "$pane" "$who"
   local rc=$?
   local err="${CLOSE_ERR//$'\n'/ ; }"
+  # ── 66 = IDENTITY PIN UNSATISFIED OR UNVERIFIABLE (bin/it2-kitty) ─────────────────────────────
+  # Handled ahead of every other outcome because it is the one rc that means "I did NOT act". The
+  # generic failure arm below would also refuse to log a ✓, but it would file this under "close
+  # FAILED" — and a refusal to close the WRONG window is the pin working, not the actuator breaking.
+  # Naming it separately is what keeps that distinction readable in teammate-lifecycle.log, and the
+  # marker must be retracted either way: we asserted an intentional teardown that did not happen.
+  if (( rc == 66 )); then
+    log "  ✗ identity pin REFUSED the close of pane $pane ($who) — wrong window, wrong kitty generation, or unverifiable: ${err:-<no stderr>}"
+    retract_teardown_marker "$pane" "${SESSION_ID:-}"
+    return 0
+  fi
   if (( rc == 0 )); then
     # ── ✓ MEANS THE PANE IS GONE, NOT THAT THE ACTUATOR RETURNED 0 ──────────────────────────────
     # `✓ closed pane` is the ONLY outcome signal this subsystem emits, and scripts/teammate-reap-
@@ -710,20 +759,35 @@ fi
 # (MEMORY.md lookup-miss-is-not-absence). An OWNED worktree is untouched by construction: there the
 # whole-tree answer IS this member's answer, and weakening it would let one member's reap ignore
 # work it really did leave behind.
-if $TREE_DIRTY && ! $WORKTREE_OWNED; then
-  _sw_lib="${SESSION_WRITES_LIB:-$HOOK_DIR/lib/session-writes.sh}"
-  [[ -f "$_sw_lib" ]] || _sw_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
-  [[ -f "$_sw_lib" ]] || _sw_lib="$HOME/.claude/hooks/lib/session-writes.sh"
-  if [[ -f "$_sw_lib" ]] && _sw_tj="$(_find_transcript "$SESSION_ID")"; then
-    # shellcheck source=lib/session-writes.sh
-    # shellcheck disable=SC1091
-    if . "$_sw_lib" 2>/dev/null; then
-      session_dirty_mine "$_sw_tj" "$WORKTREE" >/dev/null 2>&1; _sw_rc=$?
-      if (( _sw_rc == 1 )); then
-        TREE_DIRTY=false
-        log "  ↳ $TEAMMATE_NAME: shared cwd is dirty, but NOTHING this member wrote is — a sibling's dirt is not its own (per-file attribution)"
-      elif (( _sw_rc == 0 )); then
-        log "  ↳ $TEAMMATE_NAME: shared cwd dirty AND this member's own files are among the dirty ones — defer stands"
+#
+# ⚠ THE VERDICT IS COMPUTED FOR EVERY SHARED TREE, NOT ONLY A DIRTY ONE (2026-08-04). It is now also
+# handed to reap-guard as --tree-verdict, and reap-guard fails CLOSED on `unknown`. Leaving this
+# inside the `$TREE_DIRTY &&` guard would report `unknown` for a CLEAN shared tree — the one case
+# that needs no attribution at all — and the fix would defer forever on its easiest input. A clean
+# whole tree is `clean` by definition and needs neither the lib nor the transcript to say so.
+TREE_VERDICT=unknown
+if ! $WORKTREE_OWNED && [[ -n "$WORKTREE" ]]; then
+  if ! $TREE_DIRTY; then
+    TREE_VERDICT=clean
+  else
+    _sw_lib="${SESSION_WRITES_LIB:-$HOOK_DIR/lib/session-writes.sh}"
+    [[ -f "$_sw_lib" ]] || _sw_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
+    [[ -f "$_sw_lib" ]] || _sw_lib="$HOME/.claude/hooks/lib/session-writes.sh"
+    if [[ -f "$_sw_lib" ]] && _sw_tj="$(_find_transcript "$SESSION_ID")"; then
+      # shellcheck source=lib/session-writes.sh
+      # shellcheck disable=SC1091
+      if . "$_sw_lib" 2>/dev/null; then
+        session_dirty_mine "$_sw_tj" "$WORKTREE" >/dev/null 2>&1; _sw_rc=$?
+        if (( _sw_rc == 1 )); then
+          TREE_DIRTY=false
+          TREE_VERDICT=clean
+          log "  ↳ $TEAMMATE_NAME: shared cwd is dirty, but NOTHING this member wrote is — a sibling's dirt is not its own (per-file attribution)"
+        elif (( _sw_rc == 0 )); then
+          TREE_VERDICT=dirty-mine
+          log "  ↳ $TEAMMATE_NAME: shared cwd dirty AND this member's own files are among the dirty ones — defer stands"
+        fi
+        # rc 2 leaves TREE_VERDICT=unknown — an absent lib or transcript never reaches here at all,
+        # and both worlds mean the same thing to reap-guard: cannot attribute ⇒ hold.
       fi
     fi
   fi
@@ -806,37 +870,54 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
     log "  WARN: $TEAMMATE_NAME — spawn-time UNRESOLVED (no joinedAt in team config, not in cc-sessions); birth-grace cannot be evaluated, deferring as fail-safe"
     _spawn_s="$(date +%s)"
   fi
-  if ! "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" >/dev/null 2>&1; then
-    # A DEFER here is only INFORMATIVE when $WORKTREE is actually this member's tree. When the path
-    # came from the shared team-config cwd (WORKTREE_OWNED=false), reap-guard just evaluated the
-    # WRONG TREE: it looked for work products in the lead's checkout, where a teammate that did all
-    # its work in a dedicated worktree has produced exactly none. "no-products" is then guaranteed,
-    # not measured — so this leg deferred every sweep, forever, and the teammate was never reaped.
-    #
-    # Measured 2026-08-01 (team session-01d229a2): all four members recorded
-    # cwd=/Users/chrisren/Development/claude-infrastructure because teammates inherit the LEAD's cwd
-    # at spawn — a `cd` instruction in the brief does not change what the harness records. That one
-    # wrong value defeats BOTH gates at once: the ownership test (occupants==1 can never hold, so
-    # removal is refused) and this one. Three teammates sat idle-but-alive with no terminal state
-    # and no alarm; a guard that always defers carries the same zero bits as one that cannot fire.
-    #
-    # So: keep deferring (never close ungated — the tree we could gate on is the SHARED checkout,
-    # which must never be reaped), but make it TERMINATE. Charge the shared-cwd case against the
-    # same MAX_DEFERS as the unresolved-worktree leg below and SURFACE at the end. This adds no
-    # close path; it only converts a permanent silence into one page. Birth-grace and
-    # operator-adoption keep their unbounded defer — both are self-resolving, this one is not.
+  # ── HAND DOWN THE ANSWER THIS PROCESS ALREADY HAS (2026-08-04) ─────────────────────────────────
+  # reap-guard re-reads `git status` on the whole worktree in a SEPARATE process, with no channel to
+  # receive the per-file attribution computed above — so on a shared cwd it re-convicted the member
+  # on the lead's dirt one gate after this hook had exonerated it. Measured: 10/10 members logged
+  # "NOTHING this member wrote is" and every one of them then died on reap-guard's whole-tree read.
+  # The scope + verdict close that channel; the whole-tree question is not weakened on an OWNED tree,
+  # where it remains this member's own answer.
+  _tree_scope=owned; $WORKTREE_OWNED || _tree_scope=shared
+  _rg_rc=0
+  "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" \
+      --tree-scope "$_tree_scope" --tree-verdict "$TREE_VERDICT" >/dev/null 2>&1 || _rg_rc=$?
+  if (( _rg_rc != 0 )); then
+    # ── A REFUSAL ON A SHARED CWD NOW HAS A CAUSE, AND THE CAUSES ARE NOT ALIKE ──────────────────
+    # Until 2026-08-04 this arm swallowed EVERY non-zero into one bounded defer whose SURFACE said
+    # "no gate can ever read its real tree" — true of the old whole-tree read, and now false: the
+    # wrong-tree refusal cannot occur on `shared` at all (the whole-tree cleanliness question is
+    # deleted there, and the vacuous commit clause with it). What CAN still refuse splits in two,
+    # and only reap-guard's exit code can tell them apart:
+    #   11 — the OWN-FOOTPRINT hold. This member's own files are dirty, or attribution was
+    #        unreadable. A real answer about this member; the close is correctly held.
+    #   10 — a WHO/WHEN hold: birth grace, the cooperative busy marker, operator adoption, or an
+    #        unprovable adoption. Self-resolving in principle, but on a shared cwd an adoption hold
+    #        that never clears would otherwise sit silent forever — so it keeps the bounded defer.
+    #    2 — a USAGE error. reap-guard rejected our own argv. That is a WIRING fault, not a
+    #        decision, and it must never read as a routine defer: with `if ! decide` it did.
     if ! $WORKTREE_OWNED; then
+      case "$_rg_rc" in
+        11) _sc_cause="own-footprint hold — this member's OWN files are dirty, or attribution was unreadable" ;;
+        2)  _sc_cause="reap-guard USAGE ERROR (rc 2) — it rejected this hook's argv; the gate did not run" ;;
+        *)  _sc_cause="WHO/WHEN hold (birth-grace / busy marker / operator-adopted / adoption unprovable)" ;;
+      esac
       # Same off-by-one as rule 3 above — see the note there. The SURFACE arm below is the
       # follow-through, and it too was one unreachable event away.
       if (( DEFER_COUNT + 1 < MAX_DEFERS )); then
         DEFER_COUNT=$((DEFER_COUNT + 1))
         echo "$DEFER_COUNT" > "$DEFER_COUNTER"
-        log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER on a SHARED cwd ($WORKTREE) — gates evaluated the wrong tree"
+        log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER (rc $_rg_rc) on a SHARED cwd ($WORKTREE) — $_sc_cause"
         exit 0
       fi
-      log "⚑ SURFACE $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard has deferred $MAX_DEFERS times on a SHARED cwd ($WORKTREE) — this member records the lead's cwd, so no gate can ever read its real tree and it will never self-reap. Pane NOT closed. Fix at spawn (give the member its own cwd) or close manually (session=$SESSION_ID)"
+      # ⚠ THE REMEDY LINE IS LOAD-BEARING AND IT USED TO BE FALSE. It read "Fix at spawn (give the
+      # member its own cwd)", which is not a thing an operator can do on CC 2.1.220: measured
+      # 2026-08-04, `Agent({name, isolation:"worktree"})` silently DEMOTES to a paneless in-process
+      # subagent — no child process, no pane, no error — so following that instruction produces a
+      # non-teammate rather than an isolated one. There is no spawn-side remedy; a shared cwd is the
+      # normal shape, which is exactly why the close is gated on the member's own footprint instead.
+      log "⚑ SURFACE $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard has deferred $MAX_DEFERS times on a SHARED cwd ($WORKTREE) — $_sc_cause. Pane NOT closed. A shared cwd is NORMAL (teammates inherit the lead's cwd and isolation:\"worktree\" demotes to a paneless subagent — there is no spawn-side fix), so resolve the CAUSE: commit or discard this member's own uncommitted files, or close the pane manually (session=$SESSION_ID)"
       _page_desk_damped "SHARED-CWD-NEVER-REAPS:$TEAM_NAME:$TEAMMATE_NAME" \
-        "teammate-auto-shutdown SURFACE: $TEAMMATE_NAME (team $TEAM_NAME) records the LEAD's cwd, so reap-guard evaluates the wrong tree and defers forever — teammate will never self-reap. Pane left open deliberately; confirm-close manually."
+        "teammate-auto-shutdown SURFACE: $TEAMMATE_NAME (team $TEAM_NAME) held $MAX_DEFERS times on a shared cwd — $_sc_cause. Pane left open deliberately; commit/discard its own dirt or confirm-close manually."
       exit 0
     fi
     log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products / operator-adopted)"
@@ -889,11 +970,19 @@ log "Auto-shutdown idle teammate: $TEAMMATE_NAME (team: $TEAM_NAME)"
 # This must happen BEFORE git worktree remove.
 CHECKPOINT_OK=false
 if [[ -n "$WORKTREE" ]]; then
-  if "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" 2>/dev/null; then
+  "$HOOK_DIR/teammate-checkpoint.sh" <<<"{\"hook_event_name\":\"TeammateIdle\",\"session_id\":\"$SESSION_ID\",\"cwd\":\"$WORKTREE\",\"team_name\":\"$TEAM_NAME\",\"teammate_name\":\"$TEAMMATE_NAME\"}" \
+    2>/dev/null || true
+  # ── ASSERT ON THE ARTIFACT, NOT THE EXIT CODE (2026-08-04) ─────────────────────────────────────
+  # teammate-checkpoint.sh exits 0 on BOTH of its no-op paths — :140-143 "tree clean" and :201-204
+  # "tree matches HEAD" — so its rc cannot answer the only question asked here: was this member's
+  # work preserved? `CHECKPOINT_OK=true` was therefore true whenever the script merely ran, and on a
+  # SHARED cwd (where the tree usually does match HEAD, because the member committed) it asserted a
+  # checkpoint that does not exist. The ref either exists or it does not; read the ref.
+  if git -C "$WORKTREE" for-each-ref --format='%(refname)' "refs/wip/$TEAMMATE_NAME/LAST" 2>/dev/null | grep -q .; then
     CHECKPOINT_OK=true
-    log "  ✓ final checkpoint written for $WORKTREE"
+    log "  ✓ final checkpoint written (ref refs/wip/$TEAMMATE_NAME/LAST) for $WORKTREE"
   else
-    log "  ✗ checkpoint failed for $WORKTREE — writing fallback patch"
+    log "  ~ nothing to checkpoint (tree matches HEAD, or the member wrote nothing) for $WORKTREE"
   fi
 
   # Regardless of checkpoint success, also emit a patch if tree is dirty
@@ -905,7 +994,7 @@ if [[ -n "$WORKTREE" ]]; then
       echo "# Team: $TEAM_NAME  Member: $TEAMMATE_NAME"
       echo "# Worktree: $WORKTREE"
       echo "# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      echo "# Checkpoint status: $($CHECKPOINT_OK && echo 'written' || echo 'failed — rely on this patch')"
+      echo "# Checkpoint status: $($CHECKPOINT_OK && echo 'ref written' || echo 'NO ref — rely on this patch')"
       echo "# --- status ---"
       git -C "$WORKTREE" status --porcelain 2>/dev/null || true
       echo "# --- diff HEAD (tracked changes only) ---"

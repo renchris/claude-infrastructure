@@ -511,24 +511,54 @@ teamcfg_shared() {  # <team> <member> <pane> <shared-cwd> — member AND lead bo
   printf '{"members":[{"name":"team-lead","cwd":"%s"},{"name":"%s","tmuxPaneId":"%s","cwd":"%s"}]}' \
     "$4" "$2" "$3" "$4" > "$HOME/.claude/teams/$1/config.json"
 }
-# a reap-guard that always DEFERS — which is exactly what the real one does on a shared cwd,
-# because it is reading a tree the member never wrote to.
-denying_guard() {
+# a reap-guard that always DEFERS. It used to `exit 1` — an unclassifiable code, which was fine
+# while the hook read EVERY non-zero as one undifferentiated DEFER. It no longer does: 10 is a
+# WHO/WHEN hold and 11 is an own-footprint hold, and the SURFACE text differs by cause. So the stub
+# now speaks the contract, and the arm below is explicitly the WHO/WHEN one.
+denying_guard() { # [<exit-code>] — default 10, the WHO/WHEN hold
   export CC_REAP_GUARD_BIN="$D/bin/reap-guard-deny"
-  printf '#!/bin/bash\nexit 1\n' > "$CC_REAP_GUARD_BIN"; chmod +x "$CC_REAP_GUARD_BIN"
+  printf '#!/bin/bash\nexit %s\n' "${1:-10}" > "$CC_REAP_GUARD_BIN"; chmod +x "$CC_REAP_GUARD_BIN"
+}
+# a reap-guard that PERMITS — impossible to reach on a shared cwd before 2026-08-04, because the
+# guard re-read the whole tree in its own process and the lead's dirt was always there.
+permitting_guard() {
+  export CC_REAP_GUARD_BIN="$D/bin/reap-guard-ok"
+  printf '#!/bin/bash\nexit 0\n' > "$CC_REAP_GUARD_BIN"; chmod +x "$CC_REAP_GUARD_BIN"
 }
 
-@test "shared cwd: reap-guard DEFER is bounded and SURFACES instead of deferring forever" {
+# ⚠ REWRITTEN 2026-08-04, NOT DELETED. Its premise — "a close here would be the ungated-close defect
+# wearing a fix's clothes" — conflated GATING with REMOVING. The close still runs the busy marker,
+# rule 3, tool-in-flight, the checkpoint and the adoption belt; what a shared tree forbids is the
+# `git worktree remove --force` below it, and that guard is untouched. What this arm still pins, and
+# what nothing else in the corpus pins, is the refusal: a WHO/WHEN hold on a shared cwd must
+# terminate in a SURFACE and must NOT close. The permitting twin below is the other direction.
+@test "shared cwd: a WHO/WHEN reap-guard hold is bounded, SURFACEs, and never closes the pane" {
   local team=tshared member=mshared pane=%99 shared="$D/sharedco"
   mkdir -p "$shared"; teamcfg_shared "$team" "$member" "$pane" "$shared"
-  denying_guard
+  denying_guard 10
   # Four sweeps: MAX_DEFERS is 3, so the 4th must surface rather than defer a 4th time.
   for _ in 1 2 3 4; do hookrun "$member" "$team" sidshared "$shared" >/dev/null 2>&1 || true; done
   grep -q "SURFACE $member" "$LOGF" || { echo "never terminated — still deferring:"; cat "$LOGF"; false; }
   grep -q "SHARED cwd" "$LOGF"      || { echo "surfaced, but not for the shared-cwd reason"; false; }
-  # The pane must NOT have been closed: a shared checkout can never be gated on, so a close here
-  # would be the ungated-close defect wearing a fix's clothes.
-  [ ! -s "$D/it2-calls.log" ] || { echo "pane was CLOSED on a shared cwd:"; cat "$D/it2-calls.log"; false; }
+  grep -q "WHO/WHEN hold" "$LOGF"   || { echo "surfaced without naming the CAUSE — the old text claimed"; \
+                                         echo "'no gate can ever read its real tree', which is now false"; false; }
+  [ ! -s "$D/it2-calls.log" ] || { echo "pane was CLOSED despite a WHO/WHEN hold:"; cat "$D/it2-calls.log"; false; }
+}
+
+@test "shared cwd: once reap-guard PERMITS, the pane closes and the shared tree is KEPT, not removed" {
+  # The direction @521 could not express while every non-zero was one DEFER. It is the whole policy
+  # in one arm: the close and the removal are different acts, and only the removal is forbidden here.
+  local team=tsharedok member=msharedok pane=PANE-SOK shared="$D/sharedok"
+  mkdir -p "$shared"; teamcfg_shared "$team" "$member" "$pane" "$shared"
+  permitting_guard
+  tx sidsharedok 9000
+  run hookrun "$member" "$team" sidsharedok "$shared"
+  [ "$status" -eq 0 ]
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane $pane" "$LOGF"
+  grep -q "worktree kept (shared, not owned by $member)" "$LOGF"
+  [ -d "$shared" ]
 }
 
 @test "RED-PROOF: a DEDICATED cwd keeps the unbounded defer (the fix must not reap young teammates)" {
@@ -813,6 +843,248 @@ EOF
   sleep 0.3
   grep -q "✓ closed pane PANE-Z" "$LOGF"
   [ -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+}
+
+# ══ THE SHARED-CWD CLOSE: GATE ON THE MEMBER'S OWN FOOTPRINT (2026-08-04) ═════════════════════════
+# The hook already computed the right answer and then threw it away. On a shared cwd it logs
+# "shared cwd is dirty, but NOTHING this member wrote is" — 10/10 members did, live — and then hands
+# reap-guard a worktree path with no channel for that verdict, so reap-guard re-reads the WHOLE tree
+# in its own process and re-convicts the member on the LEAD's dirt one gate later. The refusal became
+# `⚑ SURFACE … Pane NOT closed`: 231 firings across 80 (team,member) pairs, 0 panes closed.
+#
+# These arms run the REAL scripts/reap-guard.sh. That matters: 30 of the tests above never reach it
+# at all (the fixture HOME contains no scripts/reap-guard.sh, so the hook logs "not executable" and
+# skips the belt) and the other 9 stub it to a single exit code — so no test in this file could tell
+# a WHO-refusal from a WHAT-on-the-wrong-tree refusal, which is the whole discrimination.
+
+# The REAL guard, wired the way the live hook wires it.
+real_guard() {
+  export CC_REAP_GUARD_BIN="$REPO/scripts/reap-guard.sh"
+  export CC_REAP_RECORDS_DIR="$D/reap-records"
+  export CC_REAP_PROJECT_ROOTS="$D/proj"      # reap-guard R-d resolves the member's transcript here
+}
+# reap-guard reads the REAL clock — CC_CLASSIFY_NOW governs the hook's own belts and nothing else —
+# so anything the guard must date has to be real-epoch based, or every member sits inside the 300s
+# birth grace forever and the suite proves nothing.
+rnow()  { date +%s; }
+riso()  { date -u -v-"${1}"S +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$(( $(rnow) - $1 ))" +%Y-%m-%dT%H:%M:%S; }
+
+# A REAL linked worktree (git worktree add), shared by a lead + 2 siblings + the member, dirty ONLY
+# from a file a SIBLING wrote. This is the measured live shape, not a simplification of it: on
+# 2026-08-04 the shared checkout's single piece of dirt was one untracked file authored by the lead.
+shared_linked_worktree() { # <team> <member> <pane> → echoes the shared worktree path
+  local team="$1" member="$2" pane="$3" repo="$D/slw-repo" wt="$D/slw-shared" joined
+  git init -q "$repo" 2>/dev/null
+  git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
+  echo base > "$repo/base.txt"; git -C "$repo" add base.txt; git -C "$repo" commit -qm base
+  git -C "$repo" worktree add -q -b slw-branch "$wt" >/dev/null 2>&1
+  echo "the lead wrote this" > "$wt/sibling.txt"        # the ONLY dirt, and it is a sibling's
+  joined=$(( ( $(rnow) - 3600 ) * 1000 ))               # past the birth grace on the guard's clock
+  mkdir -p "$HOME/.claude/teams/$team"
+  printf '{"members":[{"name":"team-lead","cwd":"%s","joinedAt":%s},{"name":"sib-two","cwd":"%s","joinedAt":%s},{"name":"%s","tmuxPaneId":"%s","cwd":"%s","joinedAt":%s}]}' \
+    "$wt" "$joined" "$wt" "$joined" "$member" "$pane" "$wt" "$joined" \
+    > "$HOME/.claude/teams/$team/config.json"
+  printf '%s' "$wt"
+}
+# The lead's shutdown_request as the harness actually records it in the member's transcript: a
+# user-role record whose text opens `<teammate-message teammate_id="team-lead">`. Byte-for-byte the
+# shape of a typed prompt — which is why both WHO-predicates counted it as operator presence and
+# re-armed a 6-hour adoption hold against the very close the lead had just asked for.
+tx_leadmail() { # <sid> <ago-seconds-REAL>
+  printf '{"type":"user","isMeta":null,"timestamp":"%s.000Z","message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">Please wrap up. shutdown_request: finish your commit and go idle.</teammate-message>"}}\n' \
+    "$(riso "$2")" >> "$D/proj/slug/$1.jsonl"
+}
+# A GENUINE operator prompt on the same clock — the control that keeps the 2026-07-24 incident class
+# closed. Real-epoch stamped so BOTH belts see it: reap-guard R-d dates it against the real clock,
+# and the hook's own belt (CC_CLASSIFY_NOW) reads it as newer than spawn either way.
+tx_operator() { # <sid> <ago-seconds-REAL>
+  printf '{"type":"user","isMeta":null,"timestamp":"%s.000Z","message":{"role":"user","content":"actually hold on, let me look at this"}}\n' \
+    "$(riso "$2")" >> "$D/proj/slug/$1.jsonl"
+}
+# tx_wrote + the matching tool_result. tx_wrote alone leaves a tool_use with no result, which is a
+# TOOL IN FLIGHT — an unbounded, correct hold that lands BEFORE reap-guard, so a fixture using it
+# never reaches the gate under test. The F1 arms above never noticed: they stub reap-guard and
+# assert the defer REASON, so they stop short of this leg by construction.
+tx_wrote_done() { # <sid> <written-path>
+  tx_wrote "$1" "$2"
+  txtoolresult "$1" 60 t1
+}
+
+@test "shared cwd + a SIBLING's dirt: the close is gated on own footprint, so the pane CLOSES" {
+  local team=tsc1 member=mscclean pane=PANE-SC1 sid=sidsc1 wt
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  git -C "$wt" update-ref "refs/wip/$member/LAST" HEAD          # this member produced durable work
+  tx_wrote_done "$sid" "$wt/mine.txt"                           # it wrote mine.txt — and left it CLEAN
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"continue": false'* ]] || false             # the turn-stop that precedes the close
+  grep -q "NOTHING this member wrote is" "$LOGF"
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "session close" "$D/it2-calls.log"
+  grep -q "✓ closed pane $pane" "$LOGF"
+  # PRISTINE-TREE PROOF: before this commit reap-guard's own record for this decision was a DEFER on
+  # the whole-tree read. Assert the record, not just the outcome — it is what distinguishes "the leg
+  # was skipped" from "the leg ran and happened to pass".
+  rec="$(find "$D/reap-records" -name "reap-$member-*.json" | head -1)"
+  [ "$(jq -r '.decision' "$rec")" = "REAP" ]
+}
+
+@test "POSITIVE CONTROL: the same tree dirty from THIS member's OWN file never closes" {
+  # The direction that proves the relaxation is narrow. Identical fixture, identical sibling file —
+  # the ONLY change is that the member's transcript records writing the dirty path. Four sweeps, so
+  # rule 3's bounded defer is exhausted and reap-guard's own-footprint leg (exit 11) is the thing
+  # actually refusing by the end. If this closes, "ignore the shared tree" became "ignore the dirt".
+  local team=tsc2 member=mscmine pane=PANE-SC2 sid=sidsc2 wt
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  git -C "$wt" update-ref "refs/wip/$member/LAST" HEAD
+  tx_wrote_done "$sid" "$wt/sibling.txt"                        # the dirty file IS this member's
+  for _ in 1 2 3 4; do hookrun "$member" "$team" "$sid" "$wt" >/dev/null 2>&1 || true; done
+  sleep 0.3
+  grep -q "own files are among the dirty ones" "$LOGF"
+  # BEHAVIOUR ONLY — deliberately NO assertion on `dirty-tree-mine`, the reason_kind this commit
+  # introduces. A control that keys on a string the fix invents can only fail before and pass after,
+  # which is a second copy of the RED proof wearing a control's clothes (see the F1 control above).
+  # It has to pass on the PRISTINE tree as well, and it does. The exit-11 contract is pinned at the
+  # CLI level in tests/reap-guard.bats, where asserting the new code IS the point.
+  if [ -s "$D/it2-calls.log" ]; then
+    echo "a member's OWN dirt was closed over:"; cat "$D/it2-calls.log"; cat "$LOGF"; false
+  fi
+}
+
+@test "shared cwd + UNATTRIBUTABLE dirt (no transcript) fails CLOSED — ignorance never closes a pane" {
+  local team=tsc3 member=mscunk pane=PANE-SC3 sid=sidsc3 wt
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  git -C "$wt" update-ref "refs/wip/$member/LAST" HEAD
+  rm -f "$D/proj/slug/$sid.jsonl"                               # session_dirty_mine rc 2 ⇒ unknown
+  for _ in 1 2 3 4; do hookrun "$member" "$team" "$sid" "$wt" >/dev/null 2>&1 || true; done
+  sleep 0.3
+  if [ -s "$D/it2-calls.log" ]; then
+    echo "an UNATTRIBUTABLE tree licensed a close:"; cat "$D/it2-calls.log"; false
+  fi
+  rec="$(find "$D/reap-records" -name "reap-$member-*.json" | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "dirty-tree-unattributable" ]
+}
+
+@test "R-b on a shared cwd: a READ-ONLY member has no ref by construction → REAP, not a forever-defer" {
+  # teammate-checkpoint.sh:201-204 exits 0 WITHOUT writing a ref when the tree matches HEAD, so a
+  # member that only read files can never satisfy the per-member-ref clause. The whole-tree commit
+  # clause it used to fall back on is vacuous on a shared tree (the lead's commits are newer than
+  # every member's spawn), so R-b there is either this or a permanent defer.
+  local team=tsc4 member=mscnoref pane=PANE-SC4 sid=sidsc4 wt before
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  tx "$sid" 9000                                                # read-only: no Write records, no refs
+  before="$(git -C "$wt" status --porcelain)"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane $pane" "$LOGF"
+  rec="$(find "$D/reap-records" -name "reap-$member-*.json" | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "shared-no-refs" ]
+  # POSITIVE CONTROL — the pane close and the worktree removal are DIFFERENT ACTS. The removal is
+  # still gated on ownership + whole-tree cleanliness, so a shared tree must survive the close with
+  # not one byte of its state touched. This is the only reason relaxing the close gate is safe.
+  [ -d "$wt" ]
+  [ -f "$wt/sibling.txt" ]
+  [ "$(git -C "$wt" status --porcelain)" = "$before" ]
+  grep -q "worktree kept (shared, not owned by $member)" "$LOGF"
+}
+
+@test "a lead's <teammate-message> is not adoption — the requested close still happens" {
+  local team=tsc5 member=mscmail pane=PANE-SC5 sid=sidsc5 wt
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  tx "$sid" 9000
+  tx_leadmail "$sid" 120                                        # the lead asked it to leave, 2min ago
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "✓ closed pane $pane" "$LOGF"
+  # Pristine-tree behaviour was the inverse: the shutdown_request re-armed a 6h adoption hold against
+  # the very close it requested. Assert the hold did NOT fire, on both belts.
+  if grep -q "operator-adopted" "$LOGF"; then
+    echo "the lead's own shutdown_request was read as operator adoption:"; cat "$LOGF"; false
+  fi
+}
+
+@test "POSITIVE CONTROL: a GENUINE operator prompt on the same tree still HOLDS the pane open" {
+  # The 2026-07-24 incident class. Same fixture, same clock, same everything — the only difference is
+  # that a human typed. If this closes, the shared-cwd relaxation has reopened the incident.
+  local team=tsc6 member=mscadopt pane=PANE-SC6 sid=sidsc6 wt
+  wt="$(shared_linked_worktree "$team" "$member" "$pane")"
+  real_guard
+  reg "$sid" "$pane" "$wt" 3600                                 # spawn 1h ago on the hook's clock
+  tx "$sid" 9000
+  tx_operator "$sid" 120                                        # a human typed 2 minutes ago
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  sleep 0.3
+  if [ -s "$D/it2-calls.log" ]; then
+    echo "an ADOPTED pane was closed:"; cat "$D/it2-calls.log"; cat "$LOGF"; false
+  fi
+}
+
+# ══ THE CLOSE-TARGET IDENTITY PIN (2026-08-04) ════════════════════════════════════════════════════
+# A kitty window id is a per-process counter restarting at 1 with every kitty, so a recorded id
+# survives a restart as a VALID id naming an unrelated LIVE window — the premise "a stale id can only
+# no-op" this hook carried in a comment is an iTerm2 fact, not a kitty one. bin/it2-kitty grew two
+# optional pins; these assert this hook actually passes them, and only on the backend that has them.
+
+@test "IDENTITY PIN: on the kitty backend the close carries the member's --agent-name cmdline pin" {
+  _term_probe_it2; _cik 0                                       # cc-in-kitty says kitty ⇒ CC_TERM=kitty
+  _close_run PANE-K
+  wait_for "$D/it2-env.log"
+  grep -q -- "--expect-cmdline-match --agent-name wkrTerm" "$D/it2-env.log"
+}
+
+@test "IDENTITY PIN POSITIVE CONTROL: a NON-kitty backend passes no pin at all (byte-identical close)" {
+  # The real `it2` CLI has never heard of these flags. Passing them to iTerm2 would turn every close
+  # into an argument error — a pin that becomes an outage is worse than no pin.
+  _term_probe_it2; _cik 1
+  _close_run PANE-I
+  wait_for "$D/it2-env.log"
+  if grep -q -- "--expect-" "$D/it2-env.log"; then
+    echo "a kitty-only identity pin was sent to the iTerm2 backend:"; cat "$D/it2-env.log"; false
+  fi
+}
+
+@test "IDENTITY PIN: an unresolvable kitty generation OMITS that flag and keeps the cmdline pin" {
+  # The two flags are independent by design. $KITTY_PID is inherited env and can be STALE; a stale
+  # generation handed to the shim makes it refuse every close (exit 66), i.e. it would manufacture
+  # the outage the pin exists to prevent. Verify-or-omit, never trust-and-refuse.
+  _term_probe_it2; _cik 0
+  export KITTY_PID=999999                                        # a pid that is not a live kitty
+  _close_run PANE-K
+  wait_for "$D/it2-env.log"
+  grep -q -- "--expect-cmdline-match --agent-name wkrTerm" "$D/it2-env.log"
+  if grep -q -- "--expect-generation" "$D/it2-env.log"; then
+    echo "an unverifiable KITTY_PID was pinned anyway:"; cat "$D/it2-env.log"; false
+  fi
+}
+
+@test "IDENTITY PIN: exit 66 is a REFUSAL — never a ✓, and it retracts its teardown marker" {
+  _cik 0
+  cat > "$D/bin/it2" <<EOF
+#!/bin/bash
+if [ "\$1" = session ] && [ "\$2" = list ]; then printf 'PANE-Z\n'; exit 0; fi
+if [ "\$1" = session ] && [ "\$2" = close ]; then echo "close-attempted" >> "$D/it2-calls.log"; exit 66; fi
+exit 0
+EOF
+  chmod +x "$D/bin/it2"
+  _close_run PANE-Z
+  wait_for "$D/it2-calls.log"
+  sleep 0.3
+  grep -q "identity pin REFUSED" "$LOGF"
+  [ ! -e "$HOME/.claude/watchdog/teardown/PANE-Z.json" ]
+  run grep -c "✓ closed pane" "$LOGF"
+  [ "$output" -eq 0 ]
 }
 
 # memory: lookup-miss-is-not-absence. A NAME searched in a list can only ever MISS, so an UNREADABLE
