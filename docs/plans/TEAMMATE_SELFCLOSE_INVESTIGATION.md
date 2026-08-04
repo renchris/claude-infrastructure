@@ -251,3 +251,113 @@ had *no* teammate guard, the exact false negative
   not driven (it is neither in this diff nor safely self-healable: the unstick is a `reset --hard`
   on a shared checkout). Panes 294/295 reaped and **pid-verified** dead with a positive control.
   Residue above.
+
+---
+
+## REOPENED 2026-08-03 (evening) — the outcome metric had never moved, and nobody was reading it
+
+The operator reopened this: *"we've attempted a few times to resolve this, and considered this
+resolved, over the past few days, but evidently it is not."* They are right, and the reason every
+prior pass looked complete is that each one measured a **mechanism** and none measured the
+**outcome**.
+
+### The outcome metric, stated once so it cannot be argued with
+
+`~/.claude/logs/teammate-lifecycle.log`, `✓ closed pane` lines per day:
+
+```text
+2026-07-21   28        2026-07-24   17
+2026-07-22   23        2026-07-25   37   ← last one at 15:45:49
+2026-07-23   26        2026-07-26 … 2026-08-03   0
+```
+
+**680 automatic closes all-time; 0 since 2026-07-25 15:45:49.** The log writer is NOT dead — it
+wrote 193 lines today. The closer is.
+
+### The discontinuity is a single commit, and it is twelve minutes wide
+
+```text
+[2026-07-25 15:45:49]   ✓ closed pane 3190E3C1-… (r8-async-net)          ← the last close, ever
+[2026-07-25 15:58:01] defer r4-runtime-profile (1/3): WORKTREE unresolved —
+                        no safety gate could run, refusing ungated close  ← the first refusal
+```
+
+That refusal string is introduced by **`f9f2ed06` (2026-07-24 16:31) — "fail-closed on unresolved
+worktree + operator-adoption hold"**. Its own commit message states the pre-existing condition
+exactly:
+
+> *"Every safety gate (busy-marker, dirty-defer, reap-guard, checkpoint) is conditioned on
+> `-n "$WORKTREE"` — when worktree resolution misses, ALL of them no-op and the close proceeds
+> **ungated** with no checkpoint."*
+
+### The finding that reframes every prior pass: worktree resolution was ALREADY broken
+
+The pre-cliff log proves it. A successful close in the working era reads, in full:
+
+```text
+Auto-shutdown idle teammate: r8-async-net (team: session-a3f68174)
+  PPID-forensic: $PPID=93203 cmd=[… --agent-name r8-async-net …] pane=[3190E3C1-…]
+  ✓ closed pane 3190E3C1-… (r8-async-net)
+```
+
+**No gate line at all.** Across 2026-07-20 → 07-25, the word `worktree` appears in **3 of 635**
+lines. The 680 historical closes were not gated closes that later regressed — they were
+**ungated closes**, produced by the very fail-open no-op `f9f2ed06` was written to forbid.
+
+So the causal chain is:
+
+1. Teammate worktree resolution has **never worked** on this box.
+2. Until 2026-07-24 that defect was **masked** by fail-open: unresolved ⇒ every gate no-ops ⇒
+   close proceeds. The system looked perfect and closed 680 panes.
+3. `f9f2ed06` correctly converted fail-open to fail-closed. It did not introduce a bug; it
+   **removed the mask**, and the pre-existing resolution defect became a 100 % refusal that day.
+4. Nobody fixed resolution. **`f9f2ed06` is therefore not the thing to revert** — reverting it
+   restores silent ungated closes, i.e. it re-hides the defect and re-arms the data-loss risk the
+   commit exists to prevent.
+
+### Why four subsequent fixes each looked correct and moved nothing
+
+Every defer reason since the cliff, censused:
+
+| n | Reason | Attacked by |
+|---|---|---|
+| 203 | `dirty tree` | `78f89d73` (per-file attribution) |
+| 128 | `WORKTREE unresolved — no safety gate could run, refusing ungated close` | *nothing* |
+| 112 | `reap-guard DEFER on a SHARED cwd — gates evaluated the wrong tree` | `1cd4e23b`, `ac15bf8d` |
+
+All three are the same question — *"is this member's tree clean?"* — and it is **unanswerable**,
+because the member has no resolvable tree of its own. Each fix correctly cleared one reason and the
+next reason took over, so the log kept changing while the outcome stayed at zero. `ba6fb12f`
+(birth-grace) is the clearest case: it genuinely worked — defers now advance *past* birth-grace —
+and it bought exactly nothing, because they die one gate later.
+
+**The generalisable lesson:** *a fix verified against the reason it was written for, in a chain of
+fail-closed gates over one unanswerable question, cannot be distinguished from no fix at all. Only
+the terminal outcome distinguishes them.* Nothing on this box watched `✓ closed pane`, so nine days
+of total failure passed unremarked — and each pass could honestly report the defect it had named
+was gone.
+
+### What this makes the actual fix
+
+Not another gate repair. Either:
+
+- **give the member a resolvable tree of its own** (per-member cwd at spawn — backlog item #140,
+  still open, and the SURFACE message itself now prescribes it verbatim: *"Fix at spawn (give the
+  member its own cwd)"*); or
+- **stop conditioning the close on a tree question the member cannot answer** — gate on what IS
+  attributable (the member's own transcript writes, which `hooks/lib/session-writes.sh` already
+  resolves) and let an unresolvable tree be a *checkpoint-then-close*, not a permanent refusal.
+
+Plus, independently of which: **an outcome-level alarm.** "Zero `✓ closed pane` in N days while
+TeammateIdle events are still arriving" is a one-line check that would have refuted all four
+premature victories on the day each was declared.
+
+### Status log
+
+- **2026-08-03 (evening)** — reopened by the operator. Outcome metric established (0 closes in 9
+  days, 680 before). Cliff pinned to a 12-minute window on 2026-07-25 and attributed to `f9f2ed06`
+  un-masking a pre-existing worktree-resolution defect. Defer-reason census taken. Eight-agent
+  research wave dispatched on the remaining axes (reap-guard reachability · cwd-at-spawn truth ·
+  kitty actuator under a daemon PATH · subagent-vs-teammate close shapes · never-reap backstop
+  policy · prose-vs-protocol base rate · fix archaeology · baseline-blind derivation). Findings
+  integrate below as they land.
