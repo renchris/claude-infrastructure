@@ -37,6 +37,9 @@ setup() {
   # operator's live fleet. A residency verdict that changes with what the box happens to be running
   # is not a test result.
   export HOME="$D/home"; mkdir -p "$HOME/.claude/logs"
+  # handoff-fire's capacity_gate() refuses a net-new fire above 2.0/core and this box lives well
+  # above that, so an unpinned suite would go red-by-LOAD rather than by its subject.
+  export CC_FIRE_CAPACITY_GATE=off
   export CC_RESIDENCY_STATE_DIR="$D/state"
   export CC_RESIDENCY_TEAM_GLOB="$D/teams/*/config.json"
   export TEAMMATE_LIFECYCLE_LOG="$D/lifecycle.log"
