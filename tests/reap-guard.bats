@@ -16,11 +16,11 @@ mkgit() { # <dir> [<committer-epoch>]
   else git -C "$1" commit -qm seed; fi
 }
 
-@test "selftest passes and runs all 8 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 12 checks (a zero-check suite must not 'pass')" {
   run "$G" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 8 ]
+  [ "$n_ok" -eq 12 ]
 }
 
 @test "R-a: a just-born teammate (clean tree, within grace) → DEFER (exit 10), not reaped" {
@@ -120,6 +120,72 @@ utx() { # <transcript> <ago-seconds> — append a real operator user prompt <ago
   run "$G" decide --worktree "$BATS_TEST_TMPDIR/nocid" --member nocid --spawn-time "$((NOW-1000))" --grace-s 60
   [ "$status" -eq 0 ]
   [ "$output" = "REAP" ]
+}
+
+# ── TREE SCOPE (2026-08-04): the exit-code CONTRACT, at the CLI level ────────────────────────────
+# The hook's call site reads codes, not prose — `if ! decide` collapses every non-zero into one
+# DEFER, so an own-footprint hold that came back as a bare 10 would be indistinguishable from a
+# birth-grace hold and would keep the SURFACE text lying about the cause. These pin the split.
+
+@test "scope=shared + verdict=clean: a SIBLING's dirt no longer DEFERs (exit 0)" {
+  mkgit "$BATS_TEST_TMPDIR/shc"; echo sib > "$BATS_TEST_TMPDIR/shc/sibling.txt"
+  git -C "$BATS_TEST_TMPDIR/shc" update-ref refs/wip/shc/LAST HEAD
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/shc" --member shc --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope shared --tree-verdict clean
+  [ "$status" -eq 0 ]
+  [ "$output" = "REAP" ]
+}
+
+@test "scope=shared + verdict=dirty-mine → DEFER with the DISTINCT exit 11 (not the generic 10)" {
+  mkgit "$BATS_TEST_TMPDIR/shm"; echo sib > "$BATS_TEST_TMPDIR/shm/sibling.txt"
+  git -C "$BATS_TEST_TMPDIR/shm" update-ref refs/wip/shm/LAST HEAD
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/shm" --member shm --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope shared --tree-verdict dirty-mine
+  [ "$status" -eq 11 ]
+  rec="$(find "$CC_REAP_RECORDS_DIR" -name 'reap-shm-*.json' | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "dirty-tree-mine" ]
+}
+
+@test "scope=shared + verdict=unknown → DEFER 11, fail-closed (ignorance never licenses a close)" {
+  mkgit "$BATS_TEST_TMPDIR/shu"; echo sib > "$BATS_TEST_TMPDIR/shu/sibling.txt"
+  git -C "$BATS_TEST_TMPDIR/shu" update-ref refs/wip/shu/LAST HEAD
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/shu" --member shu --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope shared
+  [ "$status" -eq 11 ]                                # --tree-verdict omitted ⇒ unknown is the DEFAULT
+  rec="$(find "$CC_REAP_RECORDS_DIR" -name 'reap-shu-*.json' | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "dirty-tree-unattributable" ]
+}
+
+@test "POSITIVE CONTROL: scope=owned is byte-identical — a dirty tree still DEFERs with exit 10" {
+  # The relaxation must reach ONLY the shared case. Same fixture, same verdict, owned scope: the old
+  # code, the old reason. Without this, `--tree-verdict clean` could quietly disarm every dedicated
+  # worktree's dirty-tree defer and nothing would report it.
+  mkgit "$BATS_TEST_TMPDIR/own"; echo sib > "$BATS_TEST_TMPDIR/own/sibling.txt"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/own" --member own --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope owned --tree-verdict clean
+  [ "$status" -eq 10 ]
+  rec="$(find "$CC_REAP_RECORDS_DIR" -name 'reap-own-*.json' | head -1)"
+  [ "$(jq -r '.reason_kind' "$rec")" = "dirty-tree" ]
+}
+
+@test "an unknown --tree-scope VALUE is a usage error (exit 2), never a silent fallback to owned" {
+  # A typo'd scope defaulting to `owned` would restore the whole-tree read on a shared cwd — the
+  # exact defect the flag removes — while every log line claimed the new policy was in force.
+  mkgit "$BATS_TEST_TMPDIR/bad"
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/bad" --member bad --spawn-time "$((NOW-1000))" --grace-s 60 \
+      --tree-scope Shared
+  [ "$status" -eq 2 ]
+}
+
+@test "wiring: teammate-auto-shutdown.sh passes --tree-scope AND --tree-verdict (a default is not a decision)" {
+  # Both flags default to the fail-closed answer, so a hook that stopped passing them would not go
+  # red anywhere — it would just quietly defer forever again, which is the pre-fix behaviour.
+  # Anchored to the `decide` invocation itself (which spans two lines), never to a bare occurrence
+  # of the flag — a match anywhere in the file would also be satisfied by a comment or dead code.
+  run bash -c "grep -A2 -F '\"\$REAP_GUARD\" decide ' '$REPO/hooks/teammate-auto-shutdown.sh'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'--tree-scope "$_tree_scope"'* ]] || false
+  [[ "$output" == *'--tree-verdict "$TREE_VERDICT"'* ]] || false
 }
 
 @test "wiring: teammate-auto-shutdown.sh passes --session-id to reap-guard (R-d cannot be bypassed by the hook)" {
