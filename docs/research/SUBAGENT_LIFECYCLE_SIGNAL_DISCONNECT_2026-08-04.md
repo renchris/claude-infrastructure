@@ -603,3 +603,29 @@ line**. Whatever held the actuation is not recorded at that log level. That gap 
 its own terms — a decision layer and an actuation layer that silently disagree mean neither the
 `✓ closed pane` count (701) nor the `Auto-shutdown idle teammate` count (4707) measures what its
 name suggests, and both have been cited as evidence in this domain before.
+
+### Corollary (lead-side) — the RECOVERY sweep has the same blind spot as the signal
+
+Worth recording alongside the Delivery-contract fix, because it is the argument for why that fix
+had to be a *manifest* rather than a lead-side habit.
+
+The obvious workaround for a non-delivered report is *"don't wait; go read the agent's artifacts
+on disk."* It worked twice in this wave — it recovered `H-failures`' 4k-cohort finding and
+`C-effort`'s q88 effort grid, both of which had been produced and never transmitted.
+
+**But it fails the same silent way.** The lead searched for `E-chroma`'s output with
+`scripts/.e-*.jsonl`, got nothing, and **told the operator — twice — that the agent had produced
+nothing at all.** It had a nine-file `.de*` series plus `.e-chroma{,2}.ts` holding the complete
+ΔE analysis that closed the wave's last open axis. The glob was too narrow; **an empty search
+result was read as absence.**
+
+So the recovery path is not a second layer of safety — it is a second detector with a second
+blind spot, failing in the **same direction** as the signal it compensates for (both report
+"nothing here" when there is something). Two blind spots that both read as *absence* do not
+compose into coverage; they compound into confident wrongness.
+
+**This is precisely why the Delivery contract must name the artifact PATH.** A lead checking a
+declared path performs a lookup; a lead guessing a filename pattern performs a search — and a
+search that returns empty is indistinguishable from an agent that produced nothing. "Go look on
+disk" is the prose-duty fix constraint 2 bans, and this is the concrete reason: it requires the
+searcher to already know what they are looking for.
