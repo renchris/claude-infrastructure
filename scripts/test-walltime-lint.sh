@@ -60,11 +60,13 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 #   cc-relogin.bats         real absolute seeds (2026-08-01 / 2026-09-01 / 2027-01-01) in the
 #                           hottest file on the board (~10 in-flight relogin branches) — left to its
 #                           owner to convert rather than collide mid-flight.
-#   claude-accounts-core.bats  frontier-window parser fixtures (`end: "2026-07-31"`); the window date
-#                           is the SUBJECT of the test, so a relative seed would test nothing.
+#   (claude-accounts-core.bats was grandfathered here for frontier-window parser fixtures seeded
+#    `end: "2026-07-31"`. That date ELAPSED on 2026-08-01 and the suite's remaining absolute dates
+#    are all 2099 sentinels, so the ratchet reported it fixed-but-grandfathered and this line was
+#    deleted 2026-08-04. Note the shape: nobody edited the file — the calendar retired the
+#    exemption, which is exactly the rot the ratchet exists to force someone to look at.)
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 cc-relogin.bats
-claude-accounts-core.bats
 ALLOW
 )"
 
