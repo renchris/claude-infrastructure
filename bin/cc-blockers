@@ -1113,7 +1113,10 @@ nf="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $FLEET_SEL] | length" 2>/dev/null 
 # "is the daemon in its declared state" — and the whole lesson of the nine-day outage is that those
 # are different questions. Every mechanism in this path was in its declared state throughout.
 REAP_SEL='select(.kind=="teammate-reap")'
-nr="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $REAP_SEL] | length" 2>/dev/null || echo 0)"
+# NOT `nr` — that name is already the RELOGIN-BLOCKED count at :1094, and taking it here
+# silently emptied the relogin table and flipped the board to its all-clear line. An added
+# alarm that suppresses an existing one is the worst possible version of this change.
+ntr="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $REAP_SEL] | length" 2>/dev/null || echo 0)"
 # ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
 # Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
 # exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
@@ -1188,7 +1191,7 @@ fi
 # many closes happened, never which gate refused: reasons rotate (dirty-tree -> WORKTREE-unresolved
 # -> shared-cwd) while the outcome stays at zero, and reading them is what let four fixes ship
 # against an unmoved metric. The subject owns the thresholds; this only relays.
-if [ "${nr:-0}" != 0 ]; then
+if [ "${ntr:-0}" != 0 ]; then
   { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ]; } && echo
   echo "TEAMMATE-REAP — the idle-close path is not closing panes (run the command to see why):"
   alarm_table "$REAP_SEL" "$ALARMS_JSON" 34
