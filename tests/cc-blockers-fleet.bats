@@ -51,6 +51,18 @@ setup() {
   # The deterministically SILENT baseline tests/cc-blockers.bats established: a stamps dir that
   # EXISTS but is empty, no land.log, no deploy checkout, no launchctl. Every row in this suite is
   # therefore switched on deliberately, one test at a time.
+  # …and the permission-beacon dir, the ONE input in that baseline that does not live under $HOME.
+  # cc-blockers:159 defaults it to /tmp/cc-permission-pending — a fixed absolute path shared by
+  # every session on the box — so fixturing HOME does not reach it. Any live session with a pending
+  # permission prompt then puts a `permission-pending` row on the board and the "baseline is SILENT"
+  # assertion below fails, taking 12 of this suite's tests with it.
+  #
+  # That is not hypothetical and it was not this suite's own bug alone: ship-land's smoke gate
+  # isolates HOME but cannot isolate /tmp, so it inherited the same red and REFUSED EVERY LAND on
+  # this repo whenever the operator had a prompt outstanding. Verified 2026-08-03 against pristine
+  # origin/main — 12 identical failures with no diff applied, and the polluting row named the live
+  # session id. tests/cc-blockers.bats:42 already fixtures this; this suite was never given the line.
+  export CC_PERMPEND_DIR="$D/permpend"
   export CC_REAPER_IDL="$D/idl.jsonl"
   export CC_POSTLAND_DIR="$D/postland"; mkdir -p "$CC_POSTLAND_DIR/stamps"
   export CC_LAND_LOG="$D/absent-land.log"
