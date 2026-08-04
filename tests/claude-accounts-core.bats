@@ -868,7 +868,7 @@ ca.heal = lambda *a, **k: (False, "heal timed out")
 r = ca.collect(cfg)[0]
 assert r["auth"] == "stale", r
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 # ---- the rejection record: a dead grant must OUTLIVE the process that discovered it ----------
@@ -889,7 +889,7 @@ for p in ("/t/lastgood.json", "/t/claude-accounts-lastgood.json", "/t/led", "/t/
     ca.LASTGOOD_PATH = p
     assert ca._rejected_path() != p, p
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "rejection record: survives the sweep and is visible to a --no-heal reader" {
@@ -970,7 +970,7 @@ n = ca.concurrency(cfg2)["next3"]
 # what stops a heal redeeming a refresh token alongside live sessions that rotate it.
 assert n == 3, n
 print("OK")'
-  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
 @test "collect: an EXPIRED refresh token skips the futile heal and keeps quota readable" {
