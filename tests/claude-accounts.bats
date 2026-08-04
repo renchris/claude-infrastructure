@@ -52,6 +52,12 @@ from datetime import datetime, timezone, timedelta
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 
 future = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat()
 # weekly=20% is well under any cutoff — a LIVE account would route; the stale row must NOT.
@@ -85,6 +91,12 @@ import importlib.machinery, importlib.util, os
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 
 prev = {"ts": 1752918000.0, "rows": {"next3": {"session_pct": 5, "weekly_pct": 22, "fable_pct": 10}}}
 row = {"acct": "next3", "poll_throttled": True, "error": "poll throttled"}
@@ -105,6 +117,12 @@ import importlib.machinery, importlib.util, os
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 
 row = {"acct": "next3", "error": "logged-out"}
 assert ca.inherit_lastgood(row, {}, None) is False
@@ -126,6 +144,12 @@ from datetime import datetime, timezone, timedelta
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
 
 cfg = json.load(open(os.environ["CA_CFG"]))
@@ -168,6 +192,12 @@ from datetime import datetime, timezone, timedelta
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
 
 cfg = json.load(open(os.environ["CA_CFG"]))
@@ -256,6 +286,12 @@ import importlib.machinery, importlib.util, os
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 
 r = {}
 ca.set_credits(r, False, 17691)          # the live 2026-07-26 reading
@@ -278,6 +314,12 @@ import importlib.machinery, importlib.util, os, json
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 cfg = json.load(open(os.environ["CA_CFG"]))
 
 def row(acct, on, cents, stale=False):
