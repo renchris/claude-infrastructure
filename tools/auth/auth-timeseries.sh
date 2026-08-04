@@ -49,12 +49,24 @@ for line in sys.stdin:
     if (m[-1].rstrip("/") if m else os.path.expanduser("~/.claude"))==d: n+=1
 print(n)')
     else n=0; fi
+    # mdat = the keychain item's WRITE time. Distinct from a token change, and the
+    # discriminator the token hashes alone cannot give: a write that leaves the hashes
+    # identical is a re-write (a second writer replaying what it already held), while a
+    # changed hash with no new mdat is impossible. Without it, "who wrote this" is
+    # unanswerable and a stale-writer race is indistinguishable from a quiet credential.
+    # The attribute dump goes to STDOUT (same stream as -w's payload); the only thing on
+    # stderr is the not-found message. Do NOT "fix" this to `2>&1 >/dev/null` — that reads
+    # correct and yields an empty mdat on EVERY row under bash. It appears to work only if
+    # you test it in zsh, whose MULTIOS tees stdout to both the pipe and /dev/null; the
+    # control then passes in a shell the subject never runs in.
+    md=$(/usr/bin/security find-generic-password -s "$s" -a "$KC_ACCT" 2>/dev/null \
+         | sed -n 's/.*"mdat"<timedate>=0x[0-9A-F]*  *"\([0-9]*\)Z.*/\1/p' | head -1)
     /usr/bin/security find-generic-password -s "$s" -a "$KC_ACCT" -w 2>/dev/null \
-    | TS="$TS" ACCT="$name" SVC="$s" NLIVE="$n" python3 -c '
+    | TS="$TS" ACCT="$name" SVC="$s" NLIVE="$n" MDAT="${md:-}" python3 -c '
 import sys,json,os,hashlib
 raw=sys.stdin.read().strip()
 rec={"ts":os.environ["TS"],"acct":os.environ["ACCT"],"svc":os.environ["SVC"],
-     "n_live":int(os.environ["NLIVE"])}
+     "n_live":int(os.environ["NLIVE"]),"mdat":os.environ.get("MDAT") or None}
 if not raw:
     rec["state"]="NO_ITEM"
 else:
