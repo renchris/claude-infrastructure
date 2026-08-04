@@ -17,6 +17,13 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
   TODAY=$(date +%Y-%m-%d)
   LOG="$BATS_TEST_TMPDIR/lifecycle.log"
+  # This suite never fires anything. It is in the hermeticity ratchet's scope only TEXTUALLY: the
+  # last test greps the subject for `handoff-fire` to assert the subject does NOT call it, and
+  # references_fire() (scripts/test-hermeticity-lint.sh:432) is a literal grep over the whole file,
+  # so a mention that asserts ABSENCE reads identically to one that exercises it. The ratchet is
+  # deliberately coarse and fail-safe toward flagging, which is the right default — so pin the gate
+  # rather than weaken the lint. Costs nothing here and keeps the suite honest if it ever does fire.
+  export CC_FIRE_CAPACITY_GATE=off
 }
 
 # refusals <n>  — a refusal in the REAL log's shape: a bare `defer` line with NO
