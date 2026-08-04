@@ -53,6 +53,12 @@ import importlib.machinery, importlib.util, os, json
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 cfg = json.load(open(os.environ["CA_CFG"]))
 R = cfg["router"]
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
@@ -500,6 +506,12 @@ import json, os, time, importlib.machinery, importlib.util
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 cfg = json.load(open(os.environ["CA_CFG"]))
 json.dump({"ts": time.time(), "cfg_key": ca._cfg_key(cfg), "no_heal": False,
            "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
@@ -522,6 +534,12 @@ import json, os, time, importlib.machinery, importlib.util
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+# HERMETICITY: LOG_PATH resolves at import from $HOME, so any case reaching a log_event() call
+# appends to the REAL ~/.claude/logs/claude-accounts.log. That stayed invisible only because
+# every case stubbed ca.heal, which was the sole log_event caller on these paths; the moment a
+# log line was added OUTSIDE that stub, three fabricated "heal next3: UNPROVEN" entries landed
+# in the production log and read there as genuine fleet events. Redirect once, for every case.
+ca.LOG_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts.log")
 cfg = json.load(open(os.environ["CA_CFG"]))
 def r(n, wk, **kw):
     d = {"acct": n, "auth": "ok", "k": 0, "session_pct": 10, "session_reset_h": 3.0,
@@ -841,10 +859,116 @@ r = ca.collect(cfg)[0]
 assert r["auth"] == "login-required", r
 assert "/login" in r["error"], r                            # names the ONE action that works
 assert r["auth_actionable"] is True and r["login_fixable"] is True, r
-# a heal that merely did not happen stays stale — the distinction is the whole point
+# a heal that merely did not happen stays stale — the distinction is the whole point.
+# The rejection above is now DURABLE, so this second scenario must start from a clean
+# ledger: without the reset it short-circuits on the recorded 400 and never reaches the
+# timeout branch at all. Two independent scenarios, not a sequence.
+for _a in ("next", "next2", "next3", "next4"): ca._clear_rejected(_a)
 ca.heal = lambda *a, **k: (False, "heal timed out")
 r = ca.collect(cfg)[0]
 assert r["auth"] == "stale", r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+# ---- the rejection record: a dead grant must OUTLIVE the process that discovered it ----------
+#
+# 2026-08-03, next2: the refresh grant answered 400 for 95 minutes while the calendar cliff read
+# 674h away, and `heal` re-attempted it 20 times. `_heal_rejected` had classified it correctly on
+# the first try — the verdict just had nowhere to live. It went onto an in-memory row behind a 90s
+# cache and died there, so (1) nothing suppressed the retry and (2) `cc-relogin`, which measures
+# with --no-heal ON PURPOSE, never ran the code path that produces the verdict and therefore read
+# the account as "healthy (auth=stale)" and refused to act. Twice, in the live log.
+
+@test "_rejected_path: never collides with the ledger it is derived from" {
+  run python3 -c "$LOAD"'
+# The obvious derivation — LASTGOOD_PATH.replace("-lastgood","-rejected") — is a silent no-op
+# for any basename without that hyphenated token, and the harness ledger is "lastgood.json".
+# Both stores then resolve to ONE file and the rejection ledger overwrites the quota ledger.
+for p in ("/t/lastgood.json", "/t/claude-accounts-lastgood.json", "/t/led", "/t/a.b/x.json"):
+    ca.LASTGOOD_PATH = p
+    assert ca._rejected_path() != p, p
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "rejection record: survives the sweep and is visible to a --no-heal reader" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "r", "expiresAt": 1000},
+                              "present")
+ca.fetch_usage = lambda *a, **k: (401, {})
+ca.heal = lambda *a, **k: (False, "Login failed: Request failed with status code 400")
+ca.collect(cfg)                                   # the sweep that DISCOVERS the dead grant
+# A later reader that never heals — this is cc-relogin, cc-relogin-poll and cc-blockers.
+tripped = []
+ca.heal = lambda *a, **k: (tripped.append(1), (False, "x"))[1]
+r = ca.collect(cfg, no_heal=True)[0]
+assert not tripped, "a proven-dead grant was re-redeemed on a timer"
+assert r["auth"] == "login-required", r            # NOT the benign "stale" that refused recovery
+assert r["login_fixable"] is True, r               # ⇒ cc-relogin need_relogin() now acts
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "rejection record: self-clears when the grant is replaced, and does not pin a healthy account" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.fetch_usage = lambda *a, **k: (401, {})
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "DEAD", "expiresAt": 1000},
+                              "present")
+ca.heal = lambda *a, **k: (False, "Login failed: Request failed with status code 400")
+ca.collect(cfg)
+assert ca._rejected_for("next3", "DEAD"), "the dead grant was not recorded"
+# A NEW grant arrives — operator /login, or a live session rotating it. The record is keyed on
+# the token fingerprint, so it goes inert on its own. A plain boolean would have pinned a false
+# login-required on an account that had already fixed itself (next2 did exactly that, in-session).
+assert ca._rejected_for("next3", "FRESH") is None, "the record survived its own credential"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "heal: a reported success that did not move the token is UNPROVEN, never healed" {
+  run python3 -c "$LOAD"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+ca.concurrency = lambda c: {"next3": 0}
+ca.fetch_usage = lambda *a, **k: (401, {})
+ca.read_creds = lambda d, k: ({"accessToken": "t", "refreshToken": "SAME", "expiresAt": 1000},
+                              "present")
+# 2.1.220 prints "Login successful." and exits 0 even when the keychain write was lost: its
+# persist helper returns {success:false}, the caller discards that verdict, and the auth-login
+# path WIPES the stored credential before writing the replacement. Trusting the report would
+# clear the rejection record and re-arm the retry loop this whole change exists to stop.
+ca.heal = lambda *a, **k: (True, "Login successful.")
+r = ca.collect(cfg)[0]
+assert r["auth"] != "healed", r
+assert "did not change" in (r.get("heal_note") or ""), r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+@test "concurrency: counts the claude.exe spelling the rotation-safety gate was blind to" {
+  run python3 -c "$LOAD"'
+ps_out = (
+  "/Users/c/.claude-220/node_modules/.bin/claude --model x CLAUDE_CONFIG_DIR=/Users/c/.claude-tertiary\n"
+  "/Users/c/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@s "
+  "CLAUDE_CONFIG_DIR=/Users/c/.claude-tertiary\n"
+  "/Users/c/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id v@s "
+  "CLAUDE_CONFIG_DIR=/Users/c/.claude-tertiary\n"
+  "node /some/mcp/server.js CLAUDE_CONFIG_DIR=/Users/c/.claude-tertiary\n")
+import subprocess, collections
+ca.subprocess = type("S", (), {
+    "run": staticmethod(lambda *a, **k: type("P", (), {"stdout": ps_out})()),
+    "TimeoutExpired": subprocess.TimeoutExpired})
+ca.HOME = "/Users/c"
+cfg2 = {"accounts": [{"name": "next3", "config_dir": "/Users/c/.claude-tertiary"},
+                     {"name": "next", "config_dir": "/Users/c/.claude-next"}]}
+n = ca.concurrency(cfg2)["next3"]
+# 1 symlink-spelled + 2 claude.exe workers. The old matcher scored 1 and the k_live>0 gate is
+# what stops a heal redeeming a refresh token alongside live sessions that rotate it.
+assert n == 3, n
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
 }
