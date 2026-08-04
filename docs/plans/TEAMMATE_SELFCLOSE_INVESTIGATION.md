@@ -631,7 +631,12 @@ T1-T4 built as an Agent Team (`name:` only, manual worktrees — F-a honoured). 
 | T2 | `a7ba6915` | `^<teammate-message` in **both** auto-record regexes (`context-econ.sh:330`, `cc-interactive.sh:78`) |
 | T3 | `02a02178` | `bin/it2-kitty` identity pin — `--expect-cmdline-match` / `--expect-generation`, **exit 66** = unsatisfied *or* unverifiable |
 | T4 | `40773c88` | `scripts/assignee-pane-residency.sh` (new), alarm numerator from the world-join, plist + activation |
-| T1 | `9ff45471` | `--tree-scope`/`--tree-verdict` in reap-guard; `_sw_rc` hoisted; shared-cwd arm split WHO vs WHAT; `:837` string corrected; checkpoint asserted on the **ref** |
+| T1 | `9ff45471` | `--tree-scope`/`--tree-verdict` in reap-guard; `_sw_rc` hoisted; shared-cwd arm split WHO vs WHAT via **exit 11** (own-footprint hold: `dirty-tree-mine` or, fail-closed, `dirty-tree-unattributable`; 10 keeps WHO/WHEN, `die`'s 2 stays distinct); `:837` string corrected; checkpoint asserted on the **ref** |
+
+One deliberate deviation from the T1 brief, and it is the right call: R-b's shared ref-miss does
+**not** return `REAP` at the leg — that would have skipped R-d (operator adoption) entirely. It sets
+the reason and falls through, so the final emit still records `decision=REAP,
+reason_kind=shared-no-refs` with the adoption gate intact. Same record, same exit, one more gate.
 
 Gates: `reap-guard --selftest` **12/12** (was 8) · **100 ok / 0 not-ok** across reap-guard,
 teammate-auto-shutdown, interactive-parity, it2-kitty · residency + alarm suites **80/80** ·
@@ -699,5 +704,25 @@ deploying"** — confirmed empirically this session when the classifier refused 
   `it2-kitty` still lacks it until deploy. Unit-proven (19 arms, RED-first on the pristine binary).
 - A4's negative direction (own-dirty ⇒ DEFER, rc 2 ⇒ DEFER) is suite-proven (@648/@666 green), not
   re-proven live — a member's own dirt cannot be forged on a tree it did not write to.
-- 161 pre-armed defer ladders sit at rung 2 on disk; under the new policy each acts on its **next**
-  event. Not a defect, but expect a burst of closes on the first day after deploy.
+- 🚨 **The pre-armed-ladder burst is bigger than the research doc briefed, and part of it is
+  immediate.** Re-counted off disk at implementation time: **177 counters at rung 2 · 88 at rung 1 ·
+  75 already AT THE CAP** (the doc said 161 at rung 2). Under the new policy the 75 at cap act on
+  their **first** qualifying event — i.e. essentially at deploy — and the 177 one event later. The
+  SURFACE population has grown to **257 firings / 87 distinct (team,member) pairs** (was 231/80).
+  Not a defect, but the operator should expect a visible burst of pane closes when the live layer
+  finally advances, not a trickle.
+- **A second operator step exists and is filed:** the residency alarm's plist is committed but
+  deliberately **not loaded** (`cc-fleet --plist-parity` reports `REPO-ONLY … (committed, never
+  installed)` — the intended staged state). Turn it on *after* deploy with
+  `CONFIRM=1 bash ~/.claude/autonomy/pending-activation/30-teammate-reap-alarm-activate.sh`, then
+  flip its `launchd/fleet.manifest` row `staged` → `run`. Until then nothing samples residency on a
+  timer, which is the exact blindness §5 was written to end.
+- **The alarm honestly reads `NOT-EXERCISED` right now**, not `ALARM`: the live fleet's 15 declared
+  members all joined <4 h ago, so none is stale past `CC_RESIDENCY_STALE_H` (default 4). Three of
+  them carry *"NO lifecycle decision ever — the close path has never looked at it"*. A first sample
+  also reports `NOT-EXERCISED` by construction, because departures are UNKNOWN rather than zero —
+  which is the distinction that kept "the fix worked" and "no teams ran" from rendering identically.
+- Two vacuous-control traps fired *during* T4's build and were caught by asserting counts rather
+  than the verdict: `RSTART+14` for a 14-**character** prefix that is 16 **bytes** (BSD awk indexes
+  bytes), and `seq 0 -1` counting *downward* and emitting two values where a C-style loop runs zero
+  times. Both cost a control its teeth while the verdict still read green.
