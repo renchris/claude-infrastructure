@@ -129,7 +129,7 @@ esac
 # Discriminator is the EXPLICIT marker, not the topic.
 RESEARCH_MARKERS='READ[- ]ONLY RESEARCH|RESEARCH[- ]ONLY|NO (FILES|CODE)( WILL BE)? (WRITTEN|MODIFIED|CREATED)|WRITES? NOTHING (TO|ON) DISK|Tool budget:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])+|Tool use limited to:[[:space:]]*(Read|Glob|Grep|WebFetch|WebSearch|,|[[:space:]])'
 if echo "$PROMPT" | grep -qEi "$RESEARCH_MARKERS"; then
-  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: fanning out research subagents. If composing a WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, question-type + named-entity gates, 6-field briefs, adversarial-sampling floor, OASIS stop). The resident CLAUDE.md invariant carries the core."
+  emit_allow_ctx "RESEARCH-SUBAGENTS SKILL: fanning out research subagents. If composing a WAVE, invoke the research-subagents skill for the decomposition discipline (decompose before counting, default N=10, question-type + named-entity gates, 7-field briefs INCLUDING the mandatory field 7 Delivery — name the absolute artifact path each subagent WRITES, because a subagent's prose is invisible and only a file is delivered, adversarial-sampling floor, OASIS stop). The resident CLAUDE.md invariant carries the core."
   exit 0
 fi
 
