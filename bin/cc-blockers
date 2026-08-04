@@ -158,6 +158,7 @@ LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subco
 # by machine (memory hermetic-suite-leaks-caller-identity).
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hooks/cc-permission-beacon.sh + lead-supervisor.sh
 BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
+REAP_ALARM_SH="${CC_REAP_ALARM_SH:-$HOME/.claude/scripts/teammate-reap-alarm.sh}"
 # The cross-session comms registry, keyed by paneUUID and carrying `session_id` — the join that lets
 # a pending beacon name an ACTUAL iTerm2 pane instead of an opaque uuid. Same file cc-sessions reads.
 CC_REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
@@ -708,6 +709,40 @@ beacon_alarm_rows() { # → one JSON object per line (possibly none)
     "$PERMPEND_DIR" "'{\\\"session_id\\\":\\\"smoke-1\\\"}'" "$BEACON_HOOK" "$PERMPEND_DIR" "$now"
 }
 
+# (h) TEAMMATE-REAP OUTCOME — the close path's own health, read from its OUTCOME and nothing else.
+#
+# WHY THIS ROW EXISTS AT ALL. Between 2026-07-25 and 2026-08-03 not one teammate pane self-closed,
+# and nobody noticed for nine days while four investigations each found a real defect, fixed it, and
+# honestly reported the class resolved. Reading REASONS could not tell four fixes from no fix: the
+# close path is a chain of fail-closed gates over one question the member usually cannot answer, so
+# clearing any gate's reason just hands the refusal to the next one and the log CHANGES while the
+# outcome stays at zero. Only `✓ closed pane` separates them.
+#
+# WHY HERE AND NOT THE MAILBOX. The subsystem already pages: `⚑ SURFACE` fired 156 times and was
+# read ZERO times — the desk role was repointed on 2026-07-26 and nothing has drained the new box
+# since, so 156 pages produced 0 manual closes. A 157th unread line is not a backstop. cc-blockers
+# is PULL-rendered from disk truth at close time and needs no live consumer to exist, which is the
+# whole difference (memory: alarm-polarity-and-attention-budget).
+#
+# The subject owns its own thresholds, denominator and NOT-EXERCISED abstain; this row only relays
+# its verdict. Two readers of one metric would drift, and the drift would be invisible.
+teammate_reap_rows() { # → one JSON object per line (possibly none)
+  local now v out
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ -x "$REAP_ALARM_SH" ] || return 0                                 # not deployed ⇒ no premise
+  out="$("$REAP_ALARM_SH" --json 2>/dev/null || true)"
+  [ -n "$out" ] || return 0
+  v="$(printf '%s' "$out" | jq -r '.verdict // empty' 2>/dev/null || true)"
+  # OK and NOT-EXERCISED are silence by design; NO-DATA asserts nothing and must not read as a
+  # blocker either — an unreadable log is a gap in evidence, not a verdict about the fleet.
+  case "$v" in ALARM|WARN) : ;; *) return 0 ;; esac
+  printf '{"kind":"teammate-reap","state":"%s","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
+    "$v" \
+    "$(printf '%s' "$out" | jq -r '"\(.closes) close(s) in \(.idle_events) decisions over \(.window_d)d; last close \(.last_close)"' 2>/dev/null)" \
+    "$REAP_ALARM_SH" "$REAP_ALARM_SH" "$now"
+}
+
 # (f) PERMISSION-PENDING — the READING half of the beacon, and the reason this exists is that it was
 # missing. `beacon-inert` above only ever asked "is the beacon WIRED", answering with the presence of
 # the directory: `[ -d "$PERMPEND_DIR" ] && return 0`. That was the ONLY consumption of PERMPEND_DIR
@@ -958,7 +993,7 @@ fi
 # this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
 # `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
 # fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1073,6 +1108,12 @@ nd="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $DISP_SEL] | length" 2>/dev/null |
 np="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $APPR_SEL] | length" 2>/dev/null || echo 0)"
 FLEET_SEL='select(.kind=="fleet-inert")'
 nf="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $FLEET_SEL] | length" 2>/dev/null || echo 0)"
+# Its own family: the teammate close path's OUTCOME, kept apart from every other kind on purpose.
+# Folding it into FLEET or DISPATCH would put a "did the work actually happen" signal in with
+# "is the daemon in its declared state" — and the whole lesson of the nine-day outage is that those
+# are different questions. Every mechanism in this path was in its declared state throughout.
+REAP_SEL='select(.kind=="teammate-reap")'
+nr="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $REAP_SEL] | length" 2>/dev/null || echo 0)"
 # ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
 # Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
 # exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
@@ -1141,6 +1182,16 @@ if [ "${nf:-0}" != 0 ]; then
   # 34 = the longest label the manifest declares today (com.claude.session-search-backfill). A label
   # is pasted verbatim into launchctl, so it is shown WHOLE rather than prefix-stripped or elided.
   alarm_table "$FLEET_SEL" "$ALARMS_JSON" 34
+fi
+
+# TEAMMATE-REAP — panes that finished and were never reaped. This is an OUTCOME row, so it says how
+# many closes happened, never which gate refused: reasons rotate (dirty-tree -> WORKTREE-unresolved
+# -> shared-cwd) while the outcome stays at zero, and reading them is what let four fixes ship
+# against an unmoved metric. The subject owns the thresholds; this only relays.
+if [ "${nr:-0}" != 0 ]; then
+  { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ]; } && echo
+  echo "TEAMMATE-REAP — the idle-close path is not closing panes (run the command to see why):"
+  alarm_table "$REAP_SEL" "$ALARMS_JSON" 34
 fi
 
 if [ "${n:-0}" != 0 ]; then
