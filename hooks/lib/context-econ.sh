@@ -308,8 +308,10 @@ ce_transcript_visible() {
 #   two independent axes, so an auto-driven desk still reads as NON-interactive (load-bearing: a
 #   conversation-hold that counted its own auto-drive would deadlock every free-win recycle).
 #   Operator slash-commands (<command-name>) COUNT (the operator is present); their paired
-#   <local-command-stdout> echo, task-notifications, interrupt markers, and our own ⟳/⚑/⚠ hook
-#   advisories do not. A tool_result inside a user record is tool traffic, never a prompt.
+#   <local-command-stdout> echo, task-notifications, interrupt markers, <teammate-message> wrappers
+#   (a LEAD's shutdown_request is the system asking the member to leave, not a human adopting the
+#   pane), and our own ⟳/⚑/⚠ hook advisories do not. A tool_result inside a user record is tool
+#   traffic, never a prompt.
 #
 # PARITY (2026-07-25): this predicate is the BACKSTOP for cc-classify §4.7's
 # ci_last_interactive_epoch (hooks/lib/cc-interactive.sh) — the reaper's Gap-2 leg, reap-guard R-d and
@@ -327,7 +329,7 @@ ce_last_interactive_age() {
   # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
   { [ -n "$tp" ] && [ -f "$tp" ] && [ -r "$tp" ]; } || { printf 'unreadable'; return 2; }
   command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
-  rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+  rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
   # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file — held in
   # lockstep with cc-interactive.sh's ci_last_interactive_epoch by tests/interactive-parity.bats.
   # fromjson? drops the (possibly partial) first tailed line; `objects`/`strings` guard scalar lines so

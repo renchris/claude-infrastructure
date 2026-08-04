@@ -17,7 +17,9 @@
 #     • an array with NO tool_result carrying an image block — an image-only paste (⌘V of a
 #       screenshot) is operator PRESENCE even with no text (added 2026-07-24),
 #   AND the text does not match the auto-traffic regex (task-notifications, <local-command-stdout>,
-#   Stop-hook feedback, interrupt markers, our own ⟳/⚑/⚠ hook advisories). Operator slash-commands
+#   <teammate-message> wrappers — a LEAD's shutdown_request is the system asking the member to leave,
+#   not a human adopting the pane — Stop-hook feedback, interrupt markers, our own ⟳/⚑/⚠ hook
+#   advisories). Operator slash-commands
 #   COUNT (the operator is present). isMeta + "Stop hook feedback:" auto-drive re-prompts are excluded
 #   on two independent axes, so a self-driving desk still reads NON-interactive (load-bearing: a
 #   conversation-hold that counted its own auto-drive would deadlock every recycle). A tool_result
@@ -75,7 +77,7 @@ ci_last_interactive_epoch() { # <jsonl> → see the THREE-VALUED contract above
   # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
   { [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ]; } || { printf 'unreadable'; return 2; }
   command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
-  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
   # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file. fromjson? drops
   # the possibly-partial first tailed line; objects/strings guard scalar lines so one odd line can never
   # abort the scan (jq runtime errors are per-program, not per-line). $ntr/$nimg gate the array cases:
