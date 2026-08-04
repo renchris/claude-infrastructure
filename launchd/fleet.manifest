@@ -215,6 +215,25 @@ com.claude.qos-census             | staged | 600  | ~/.claude/logs/qos-census.js
 # preserved. None is a designed refusal in deploy-live's sense.
 com.claude.worktree-gc-infra      | run    | 0    | ~/.claude/logs/worktree-gc-infra.log | 11 | 27-worktree-gc-infra-activate.sh
 
+# ── com.claude.teammate-reap-alarm (row 4) — the alarm that existed and was never asked ────────────
+# scripts/teammate-reap-alarm.sh has watched the assignee close path since it was written, and its
+# ONLY caller was bin/cc-blockers:161 — a board rendered on PULL, when an agent happens to run
+# /ship. The label was in no launchctl list at all. So the close path produced zero closes for ten
+# days with twelve assignee panes resident, and the instrument built to say so was simply never
+# invoked. Declared here in the SAME commit as the plist, so this file never goes RED on the lander
+# who comes after (capacity-alarm and scratchpad-reaper each cost that).
+# `staged` from DISK TRUTH, read not assumed: absent from ~/Library/LaunchAgents, and
+# `launchctl print gui/501/com.claude.teammate-reap-alarm` → not found. Loading it is a C10 operator
+# decision, and ONE UNDECIDED row is exactly what "declared, decision pending" means.
+# ok_exits 0,1,2,3 — every one of those is a DESIGNED verdict (OK/NOT-EXERCISED 0 · WARN 1 · ALARM 2
+# · NO-DATA 3), and a job correctly reporting an unhealthy fleet must not read as a broken job. Key
+# S4 on `exit != 0` here and cc-fleet would file a permanent, unfixable daemon-fault row for exactly
+# as long as the outage it is reporting lasts — the alarm-fatigue failure this file exists to end.
+# evidence `auto` is honest here: the job prints its full report to StandardOutPath on EVERY tick
+# (no --quiet), so the artifact's mtime really does prove execution — unlike lead-supervisor and
+# worktree-gc-infra, whose runners route their output elsewhere and leave stdout at 0 bytes.
+com.claude.teammate-reap-alarm    | staged | 600  | auto | 4  | 30-teammate-reap-alarm-activate.sh | 0,1,2,3
+
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).
 # All six are enabled-by-default (ABSENT from the override db — never disabled, which is a THIRD
