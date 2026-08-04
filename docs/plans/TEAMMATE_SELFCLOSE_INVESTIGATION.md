@@ -522,3 +522,99 @@ retracts its own marker.
    `832e286c`). The wake-floor abstain at `:377-382` was not carried over. H3 was refuted as a
    per-member discriminator but a **common-mode** hold would be invisible to that test — unresolved.
 6. **Nothing stamps a teammate `cc-fired`**, so `cc-reaper`'s finished-teammate class is unreachable.
+
+---
+
+## RECONVICTED 2026-08-04 — chain measured end to end; four findings change the fix
+
+Operator reopened it again (*"after numerous attempts over the past few days"*), scoped to kitty.
+A 14-agent wave (10 disjoint evidence axes + 3 adversarial lenses + synthesis; 2.39M tokens, 0
+errors) plus four lead-side experiments. **Full design: `docs/research/kitty-selfclose-chain-2026-08-04.md`**
+(that file leads with the four corrections; read them before its §3).
+
+**Scope (frozen):** make a finished assignee's kitty pane close itself, deployed live, for all
+future sessions — without another N+1th attempt.
+
+### The corrected diagnosis, in one paragraph
+
+The hook's per-member attribution **works** — 10/10 tonight logged *"shared cwd is dirty, but
+NOTHING this member wrote is"*, so rule 3 at `:741` is correctly skipped. The close then dies one
+gate later: `scripts/reap-guard.sh:118` re-reads the **whole** tree in a separate process with no
+channel to receive that verdict, and `:828-841` converts its refusal into `⚑ SURFACE … Pane NOT
+closed` — an explicit never-close, fired 231 times, 80 distinct (team,member) pairs, **0 ever
+closed**. So the earlier framing in this doc — *"members are permanently dirty by design"* — is
+**wrong**: the tree is transiently dirty from a **sibling** (tonight: one untracked file authored
+by the lead), and attribution already exonerates the member. The blocker is a gate that re-asks a
+question already answered, on a tree the member does not own, to protect a removal that `:1134`
+has **already refused**.
+
+### Four findings that change the fix
+
+- **F-a · There is NO spawn-side remedy on this runtime — measured, not assumed.** `Agent({name,
+  isolation:"worktree"})` on 2.1.220 **silently demotes to an in-process subagent**: probe
+  `wtprobe` (01:18) produced no `--agent-id` child process (confirmed from inside the agent too),
+  no new kitty window (21 before, 21 after), no `config.json` membership, no error. ⇒ every
+  downstream change below is **necessary**, closing the wave's own "necessity unproven" bound.
+- **F-b · The hook prescribes exactly what F-a disproves.** `:837` SURFACEs *"Fix at spawn (give
+  the member its own cwd)"*, and backlog #140 repeats it. Following it yields a non-teammate,
+  silently. **Correct the string in the same commit** — and close #140 as unachievable, not open.
+- **F-c · A pane cannot close by the member exiting — our own runner forbids it.**
+  `bin/cc-pane-runner:115` `exec`s an interactive login shell when the agent command returns
+  (probe window 417 dropped to `➜ ~`). So even a perfect vendor `approve:true` leaves an open
+  window. **External `close-window` is mandatory**; `kitty @ close-window --match id:N` → rc 0, no
+  confirmation prompt.
+- **F-d · The "third close path" is vendor teardown with the lead ALIVE.** Team `session-57342265`:
+  6 members closed and de-registered from `config.json`, **zero** lifecycle lines, lead (pid 47878)
+  still running in the same worktree. It is real but not a substitute — `session-cf2eaa02`'s 12
+  assignees have a live lead, 10 `isActive:false`, unreaped for over an hour. **Consequence:** the
+  new alarm's first `departed` may be the vendor's. Attribute before claiming the fix worked.
+
+### The policy (one sentence a reviewer can argue with)
+
+*The pane close and the worktree removal are different acts; gate the removal on ownership + whole-tree
+cleanliness exactly as today (`:1134`, unchanged — the only destructive verb), and gate the close on
+five things only: birth-grace, tool-in-flight, **own-footprint** dirt (`session_dirty_mine`, rc 2 ⇒
+dirty), operator adoption (where a `<teammate-message>` from the lead is **not** a human), and target
+identity (the window's foreground process carries this member's `--agent-name`).* Every other
+tree-cleanliness question is deleted on a shared cwd, because there it can only answer about the
+lead's checkout.
+
+---
+
+## Phase 0 — Agent Team Orchestration (MANDATORY)
+
+🚨 **Spawn discipline, proven this session: pass `name:` ONLY. Never pass `isolation:` or `cwd:`
+alongside it (F-a) — it silently demotes to a paneless in-process subagent.** Create each worktree
+**manually** and give the teammate its PATH in the brief. Also: a named teammate's result reaches
+the lead **only** via `SendMessage` — say so in every brief.
+
+| # | Teammate | Owns (single owner per file) | blockedBy |
+|---|---|---|---|
+| **T2** | `who-predicate` | `hooks/lib/context-econ.sh:330`, `hooks/lib/cc-interactive.sh:78`, `tests/interactive-parity.bats` | — |
+| **T1** | `gate-chain` | `scripts/reap-guard.sh`, `hooks/teammate-auto-shutdown.sh` (incl. the `:837` string, F-b), `tests/reap-guard.bats`, `tests/teammate-auto-shutdown.bats` | **T2** |
+| **T3** | `identity-pin` | `bin/it2-kitty` (close arm `:476-477`) + its suite | — |
+| **T4** | `residency-alarm` | `scripts/assignee-pane-residency.sh` (new), `scripts/teammate-reap-alarm.sh:114`, plist, suites | — |
+
+**Wave order:** T2, T3, T4 spawn together; T1 spawns on T2's merge (T1's `<teammate-message>`
+adoption test is RED until T2 lands). **T5 sweepers are a SECOND PR**, gated on T4 existing first.
+
+**Why T1 is one teammate and not two:** fixing `reap-guard` alone leaves `:828-841` converting the
+next refusal into the same SURFACE; fixing `:828-841` alone opens an ungated close. Measured: the
+dirty-half-only variant left `ok 22` green and `it2-calls.log` still empty. They must land together.
+
+### Acceptance — outcome, not mechanism
+
+The four prior passes each fixed the reason they named and moved the outcome zero. Acceptance is
+therefore **only** the terminal outcome:
+
+| # | Criterion | Proof |
+|---|---|---|
+| A1 | A finished assignee on a SHARED cwd self-closes | `grep -c '✓ closed pane' ~/.claude/logs/teammate-lifecycle.log` **> 680** |
+| A2 | The window is really gone | absence in `kitty @ ls`, not an actuator rc (`pane_present`, `:182-189`) |
+| A3 | The close hit the right window | identity assertion refuses a window lacking `--agent-name <m>` |
+| A4 | Over-reach did not happen | own-dirty member and cannot-tell (rc 2) still DEFER; a genuine operator prompt still HOLDS |
+| A5 | Someone is watching | residency alarm reports non-zero `departed`, attributed (F-d) |
+
+**Live acceptance harness already written:** `chain-state.py` (scratchpad; promote it into
+`scripts/`) renders per-member `lead-done · identity · ladder` and the stuck count. Baseline right
+now: **12 live assignee windows, 10 STUCK, 680 closes all-time, last 2026-07-25 15:45:49.**
