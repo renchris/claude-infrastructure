@@ -156,6 +156,7 @@ members() { # <outfile> → echoes the status word
   for cfg in $TEAM_GLOB; do
     [ -r "$cfg" ] || continue
     team="$(basename "$(dirname "$cfg")")"
+    # shellcheck disable=SC2016  # $t is a jq variable bound by --arg — single quotes are REQUIRED
     out="$("$JQ_BIN" -r --arg t "$team" '
       .members[]?
       | select(((.tmuxPaneId // "") | tostring) | test("^[0-9]+$"))
