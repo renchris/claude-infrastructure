@@ -257,12 +257,31 @@ def close(ids: list[int]) -> None:
         kitty("close-window", "--match", f"id:{wid}")
 
 
+USAGE = "usage: kitty-confirm-close {window|os-window} [--check]"
+
+
 def main() -> int:
-    scope = sys.argv[1] if len(sys.argv) > 1 else "window"
+    # A typo'd scope used to fall through to `window` and act on a live pane. Nothing was lost
+    # finding that out, but "unrecognised argument silently means close something" is not a
+    # default worth keeping in a script whose entire job is to not close things by surprise.
+    args = [a for a in sys.argv[1:] if a != "--check"]
+    check = "--check" in sys.argv[1:]
+    scope = args[0] if args else "window"
+    if len(args) > 1 or scope not in ("window", "os-window"):
+        print(USAGE, file=sys.stderr)
+        return 2
+
     tree = load()
+    if not tree:
+        # No socket, or kitty did not answer. Do nothing and SAY so — a silent success here would
+        # be indistinguishable from a working guard that simply had nothing to close.
+        print(f"kitty-confirm-close: no reply from kitty (address={ADDRESS})", file=sys.stderr)
+        return 3
+
     wid = focused_window_id(tree)
     if wid is None:
-        return 0  # nothing focused: refuse to guess which pane to kill
+        print("kitty-confirm-close: no focused window — refusing to guess", file=sys.stderr)
+        return 0
 
     if scope == "os-window":
         osw = owning_os_window(tree, wid)
@@ -277,11 +296,26 @@ def main() -> int:
         ]
 
     if not targets:
+        print(f"kitty-confirm-close: window {wid} not found in tree", file=sys.stderr)
         return 0
 
     ids = [w["id"] for w in targets]
+    busy = [w for w in targets if is_busy(w)]
 
-    if not any(is_busy(w) for w in targets):
+    # --check is the only safe way to inspect this on a REAL pane: it reports exactly what the
+    # keypress would do and touches nothing. Without it there is no way to test the decision
+    # without also testing the close.
+    if check:
+        print(f"address : {ADDRESS}")
+        print(f"scope   : {scope}")
+        print(f"targets : {ids}")
+        print(f"busy    : {[w['id'] for w in busy]}")
+        print(f"action  : {'DIALOG' if busy else 'close silently (all at a shell prompt)'}")
+        if busy:
+            print("---\n" + describe(targets, scope)[0])
+        return 0
+
+    if not busy:
         close(ids)  # bare shell prompt(s) — close silently, as `ignore-shell` would
         return 0
 
