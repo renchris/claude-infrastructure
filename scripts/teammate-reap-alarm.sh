@@ -41,6 +41,31 @@
 # marker present`, `tool in flight`). Deferring a busy teammate is the system working, not a
 # refusal to close a finished one, and counting it would let a healthy fleet drift toward ALARM.
 #
+# ── AND ALL OF THAT IS STILL A LOG GREP, WHICH IS WHY THE COUNTS MOVED (2026-08-04) ──────────────
+# Everything above counts OUR OWN CLAIMS. `✓ closed pane`, `defer` and `⚑ SURFACE` are lines this
+# subsystem writes about itself, so the metric is satisfiable without a single pane going away — a
+# gate change, a terminal-backend swap, or a close rerouted through another path all move it while
+# the world stands still. Two blind spots, both measured on this box, not hypothesised:
+#
+#   1. Team session-57342265 had SIX members closed and de-registered from config.json with ZERO
+#      `✓ closed pane` lines anywhere. Six real closes this instrument could not see.
+#   2. The log's own last two lines assert `Pane NOT closed` for panes that were ALREADY GONE. The
+#      denominator was counting refusals against members that had already left.
+#
+# So EVENTS and CLOSES now come from scripts/assignee-pane-residency.sh — a three-source join over
+# the terminal's live window ids, every team config's integer (kitty) panes, and the process table.
+# EVENTS = members resident past the staleness threshold + departures since the last sample.
+# CLOSES = only those departures ATTRIBUTED to us by a `✓ closed pane <pane> (<name>)` line naming
+# both the pane and the member. A departure nobody can attribute is a vendor close and never
+# satisfies the OK arm — otherwise the first departure this alarm ever saw would read as proof the
+# fix worked, which is the original error wearing a new coat.
+#
+# The log-grep pair is still computed and still PRINTED, one line under the world figures. It is no
+# longer the verdict; it is the second opinion, and the GAP between the two is itself the finding.
+# Where the join can see no world at all (no team ever recorded an integer pane, or every source is
+# blind) the verdict falls back to the log arithmetic and SAYS so — a degraded reading, labelled,
+# beats an instrument that goes quiet.
+#
 # FOUR VERDICTS, NEVER A BOOLEAN — "could not measure" must not render as "fine":
 #   OK             the path ran and closed things.                        exit 0
 #   NOT-EXERCISED  too few idle events in the window to assert anything.  exit 0
@@ -48,9 +73,11 @@
 #   ALARM          the path ran >=MIN_EVENTS times and closed NOTHING.    exit 2
 #   NO-DATA        the log is absent or unreadable — nothing is asserted. exit 3
 #
-# Only /usr/bin + /bin tools (date, grep, awk, sed) — no jq, no Homebrew. This runs from launchd
-# under PATH=/usr/bin:/bin:/usr/sbin:/sbin, where a bare Homebrew name does not exist at all
-# (memory: path-resolved-dependency-in-daemon-code).
+# This file itself uses only /usr/bin + /bin tools (date, grep, awk, sed) — no jq, no Homebrew — so
+# a launchd PATH of /usr/bin:/bin:/usr/sbin:/sbin cannot break it (memory:
+# path-resolved-dependency-in-daemon-code). The residency join it calls DOES need jq and it2; each
+# of those is a NAMED degraded source in the token it returns, never a silent zero, and the plist
+# that fires this job exports a PATH that carries both.
 #
 # Self-test: `teammate-reap-alarm.sh --selftest` drives synthetic logs through every verdict,
 # including the two that matter most — a healthy fleet must read OK and a dead path must read
@@ -59,6 +86,10 @@
 set -uo pipefail
 
 LOG="${TEAMMATE_LIFECYCLE_LOG:-$HOME/.claude/logs/teammate-lifecycle.log}"
+# The world-facing numerator. Defaults to the sibling beside this file so a deployed copy and a
+# repo copy each find their own; CC_RESIDENCY_SH points it elsewhere (or at nothing, which forces
+# the labelled log-grep fallback — that is how the self-test drives both sources).
+RESIDENCY_SH="${CC_RESIDENCY_SH:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/assignee-pane-residency.sh}"
 WINDOW_D="${REAP_ALARM_WINDOW_D:-3}"
 MIN_EVENTS="${REAP_ALARM_MIN_EVENTS:-10}"
 WARN_RATE_PCT="${REAP_ALARM_WARN_RATE_PCT:-10}"
@@ -85,10 +116,12 @@ done
 measure() {
   local log="$1" window_d="$2"
 
+  SOURCE="log"; RESIDENT_N=0; STALE_N=0; DEPARTED_N=0; OURS_N=0; VENDOR_N=0; RES_VERDICT="absent"
+
   if [ ! -r "$log" ]; then
     VERDICT="NO-DATA"; RC=3
     DETAIL="log not readable: $log"
-    EVENTS=0; CLOSES=0; SINCE_LAST=""; TOP_REASONS=""
+    EVENTS=0; CLOSES=0; LOG_EVENTS=0; LOG_CLOSES=0; SINCE_LAST=""; TOP_REASONS=""
     return
   fi
 
@@ -98,7 +131,7 @@ measure() {
   if ! cutoff=$(date -v-"${window_d}"d +%Y-%m-%d 2>/dev/null) || [ -z "$cutoff" ]; then
     VERDICT="NO-DATA"; RC=3
     DETAIL="could not compute a ${window_d}d cutoff (date -v unavailable)"
-    EVENTS=0; CLOSES=0; SINCE_LAST=""; TOP_REASONS=""
+    EVENTS=0; CLOSES=0; LOG_EVENTS=0; LOG_CLOSES=0; SINCE_LAST=""; TOP_REASONS=""
     return
   fi
 
@@ -111,15 +144,57 @@ measure() {
       if (d >= cut) print
     }' "$log" 2>/dev/null)
 
-  CLOSES=$(printf '%s\n' "$win" | grep -c "✓ closed pane" 2>/dev/null || true)
+  # ── the SECOND OPINION: the old log-grep pair, kept and printed, no longer the verdict ──────────
+  LOG_CLOSES=$(printf '%s\n' "$win" | grep -c "✓ closed pane" 2>/dev/null || true)
   # A refusal = the hook decided NOT to close a teammate it was asked about. The two exclusions are
   # not refusals at all: they mean the teammate is still working, and the hook is correct to leave
   # it alone. See the header — counting them would bias a healthy fleet toward ALARM.
   REFUSALS=$(printf '%s\n' "$win" \
     | grep -E "\] defer |⚑ SURFACE " 2>/dev/null \
     | grep -vcE "\.teammate-busy marker present|tool in flight" 2>/dev/null || true)
-  CLOSES=${CLOSES:-0}; REFUSALS=${REFUSALS:-0}
-  EVENTS=$(( CLOSES + REFUSALS ))
+  LOG_CLOSES=${LOG_CLOSES:-0}; REFUSALS=${REFUSALS:-0}
+  LOG_EVENTS=$(( LOG_CLOSES + REFUSALS ))
+
+  # ── the NUMERATOR: the world, via the residency join ────────────────────────────────────────────
+  # `--no-state` is load-bearing. The periodic sampler owns the departure cursor; if this call
+  # advanced it too, each of the two would only ever see the departures the other left behind, and
+  # the alarm would consume the very evidence it exists to report.
+  #
+  # The `|| true` below cannot launder anything, and that is by construction on the OTHER side: the
+  # residency script prints its verdict as a TOKEN on stdout, so the verdict survives an exit status
+  # this call throws away (memory: claimed-outcome-vs-checked-outcome). Suppressing the rc here is
+  # deliberate — ALARM exits 2, and a bare call would abort the read of its own finding.
+  local rtok=""
+  if [ -x "$RESIDENCY_SH" ]; then
+    rtok="$("$RESIDENCY_SH" --quiet --no-state --log "$log" 2>/dev/null || true)"
+  fi
+  RES_VERDICT="$(printf '%s\n' "$rtok" | sed -n 's/.*verdict=\([A-Z-][A-Z-]*\).*/\1/p' | tail -1)"
+  RES_VERDICT="${RES_VERDICT:-absent}"
+  rfield() { printf '%s\n' "$rtok" | sed -n "s/.*[ ]$1=\([0-9][0-9]*\).*/\1/p" | tail -1; }
+  RESIDENT_N="$(rfield resident)"; RESIDENT_N="${RESIDENT_N:-0}"
+  STALE_N="$(rfield stale)";       STALE_N="${STALE_N:-0}"
+  DEPARTED_N="$(rfield departed)"; DEPARTED_N="${DEPARTED_N:-0}"
+  OURS_N="$(rfield ours)";         OURS_N="${OURS_N:-0}"
+  VENDOR_N="$(rfield vendor)";     VENDOR_N="${VENDOR_N:-0}"
+
+  case "$RES_VERDICT" in
+    OK|WARN|ALARM)
+      # The join saw a world AND had a previous sample to difference against. World figures rule.
+      SOURCE="world"
+      EVENTS=$(( STALE_N + DEPARTED_N ))
+      CLOSES="$OURS_N"
+      ;;
+    *)
+      # NOT-EXERCISED (no integer panes declared, or a first sample), NO-DATA (every source blind),
+      # or the join is not deployed. There is no world reading to have — fall back to the log
+      # arithmetic and LABEL it, because a degraded reading that says so is worth more than an
+      # instrument that goes quiet. The label is what stops a reader trusting these two numbers as
+      # if they were outcomes.
+      SOURCE="log(no-world:$RES_VERDICT)"
+      EVENTS="$LOG_EVENTS"
+      CLOSES="$LOG_CLOSES"
+      ;;
+  esac
 
   # Days since the last close ANYWHERE in the log — the number an operator actually wants, and it
   # must look past the window or a long outage would report "0 in 3 days" forever with no scale.
@@ -147,9 +222,14 @@ measure() {
     | sort | uniq -c | sort -rn | head -3 \
     | awk '{ n=$1; $1=""; sub(/^ /,""); printf "%s× %s\n", n, $0 }')
 
+  # ── the verdict. ONE predicate over (EVENTS, CLOSES), whichever source supplied them, so the two
+  # sources can never drift into two different definitions of "the close path is working".
+  # The decision-line literals below are UNCHANGED — cc-blockers and tests/cc-blockers-teammate-
+  # reap.bats read these verdict words, and a rewrite here would be a silent consumer break.
   if [ "$EVENTS" -lt "$MIN_EVENTS" ]; then
     VERDICT="NOT-EXERCISED"; RC=0
     DETAIL="only $EVENTS decision(s) in ${window_d}d (need >=$MIN_EVENTS to assert) — nothing claimed"
+    qualify_detail
     return
   fi
 
@@ -163,6 +243,18 @@ measure() {
   else
     VERDICT="OK"; RC=0
     DETAIL="$CLOSES close(s) in $EVENTS attempts (${rate}%)"
+  fi
+  qualify_detail
+}
+
+# The source is APPENDED, never substituted into the literals above. A reader must be able to tell a
+# world-measured verdict from a log-measured one at a glance — a number whose provenance is implicit
+# is how "the fix worked" and "our log stopped being written" came to look identical.
+qualify_detail() {
+  if [ "$SOURCE" = "world" ]; then
+    DETAIL="$DETAIL — measured against the WORLD ($STALE_N stale resident + $DEPARTED_N departed; $OURS_N ours, $VENDOR_N unattributed)"
+  else
+    DETAIL="$DETAIL — log-grep only, no world reading ($RES_VERDICT)"
   fi
 }
 
@@ -191,14 +283,25 @@ if [ "${SELFTEST:-0}" = 1 ]; then
       echo "[$today 12:00:01]   ✓ closed pane U$i (c$i)" >> "$f"
     done
   }
-  check() { # check <label> <file> <want_verdict> <want_rc>
+  check() { # check <label> <file> <want_verdict> <want_rc> [want_source]
     measure "$2" "$WINDOW_D"
-    if [ "$VERDICT" = "$3" ] && [ "$RC" = "$4" ]; then
-      echo "ok   $1 → $VERDICT ($RC)"
-    else
-      echo "FAIL $1 → got $VERDICT ($RC), want $3 ($4)"; fail=1
-    fi
+    local ok=1
+    [ "$VERDICT" = "$3" ] && [ "$RC" = "$4" ] || ok=0
+    [ -n "${5:-}" ] && { case "$SOURCE" in ("$5"*) ;; (*) ok=0 ;; esac; }
+    if [ "$ok" = 1 ]; then echo "ok   $1 → $VERDICT ($RC) via $SOURCE"
+    else echo "FAIL $1 → got $VERDICT ($RC) via $SOURCE, want $3 ($4) via ${5:-*}"; fail=1; fi
   }
+
+  # The residency join is STUBBED for the log-source arms below, and pointed at nothing at all for
+  # most of them. Two reasons, and the second is the important one: (a) the embedded self-test runs
+  # under the operator's REAL $HOME, so an unstubbed join would read the live fleet and this control
+  # would report a different verdict on a Tuesday than on a Friday; (b) these arms exist to pin the
+  # LOG arithmetic, and an arm whose input is the live world is not pinning anything.
+  stub_res() { # stub_res <token-tail…>  → a residency script emitting exactly that token
+    printf '#!/bin/bash\necho "verdict=%s"\nexit 0\n' "$*" > "$tmp/res.sh"
+    chmod +x "$tmp/res.sh"; RESIDENCY_SH="$tmp/res.sh"
+  }
+  RESIDENCY_SH="$tmp/definitely-not-deployed"
 
   emit "$tmp/dead.log"    20 0   ; check "dead path, exercised"      "$tmp/dead.log"    ALARM         2
   emit "$tmp/healthy.log" 20 18  ; check "healthy path"              "$tmp/healthy.log" OK            0
@@ -233,6 +336,43 @@ if [ "${SELFTEST:-0}" = 1 ]; then
   done
   check "busy teammates are not refusals" "$tmp/busy.log" NOT-EXERCISED 0
 
+  # ══ THE NUMERATOR SWAP — the arms that make this file worth re-landing ═══════════════════════════
+  # A log stuffed with 18 `✓ closed pane` lines out of 20 attempts is the healthiest log this
+  # instrument can be handed; on the old arithmetic it read OK, full stop. If the WORLD says twelve
+  # members are sitting resident past the threshold and nothing has departed, the log is wrong and
+  # the verdict must be ALARM. This is the exact shape the two proven blind spots produce — a close
+  # rerouted so it stops writing our line, or a refusal logged against a pane that already left.
+  stub_res "ALARM members=15 resident=12 stale=12 departed=0 ours=0 vendor=0"
+  check "a healthy-looking LOG cannot launder a dead WORLD" "$tmp/healthy.log" ALARM 2 world
+
+  # POSITIVE CONTROL, and the twin that makes the arm above mean something: the SAME healthy log,
+  # the SAME stale pile — but now the world shows departures we can attribute. It must read OK off
+  # the same parser. If these two ever agree, the world source is not being read at all.
+  stub_res "OK members=15 resident=3 stale=3 departed=12 ours=12 vendor=0"
+  check "the same log with a LIVE world reads OK"           "$tmp/healthy.log" OK    0 world
+
+  # The mirror of the first arm: a log full of refusals and zero closes, where the world says the
+  # panes actually left. A log-grep alarm would fire; the world says the close path is working, and
+  # the world wins. (This is blind spot #1 — six real closes with zero `✓ closed pane` lines.)
+  stub_res "OK members=8 resident=1 stale=1 departed=6 ours=6 vendor=0"
+  check "a dead-looking LOG does not fire against a live WORLD" "$tmp/dead.log" NOT-EXERCISED 0 world
+
+  # ATTRIBUTION carries all the way up. Six departures, none of them ours — that is the vendor
+  # closing panes, not our chain working, so it must NOT reach OK. `ours` is the numerator, not
+  # `departed`; if the wrong field were read this arm would go green.
+  stub_res "WARN members=20 resident=14 stale=14 departed=6 ours=0 vendor=6"
+  check "unattributed departures never satisfy OK"          "$tmp/dead.log"    ALARM 2 world
+
+  # And a join that cannot see a world must fall back to the log arithmetic — LABELLED, never
+  # silently. NOT-EXERCISED from the join is "no assignee panes exist", which is not evidence about
+  # the close path at all.
+  stub_res "NOT-EXERCISED members=0 resident=0 stale=0 departed=0 ours=0 vendor=0"
+  check "no world ⇒ labelled log fallback"                  "$tmp/dead.log"    ALARM 2 "log(no-world"
+  case "$DETAIL" in
+    (*"log-grep only, no world reading"*) echo "ok   the fallback SAYS it is degraded" ;;
+    (*) echo "FAIL the fallback did not label itself: $DETAIL"; fail=1 ;;
+  esac
+
   [ "$fail" = 0 ] && echo "selftest: all pass" || echo "selftest: FAILURES"
   exit "$fail"
 fi
@@ -242,13 +382,24 @@ measure "$LOG" "$WINDOW_D"
 TS=$(date +%Y-%m-%dT%H:%M:%S)
 
 if [ "$WANT_JSON" = 1 ]; then
-  printf '{"ts":"%s","verdict":"%s","window_d":%s,"idle_events":%s,"closes":%s,"last_close":"%s","days_since_last_close":%s,"detail":"%s"}\n' \
-    "$TS" "$VERDICT" "$WINDOW_D" "${EVENTS:-0}" "${CLOSES:-0}" "${LAST_CLOSE:-never}" "${SINCE_LAST:-null}" "$DETAIL"
+  # The original eight keys are unchanged and keep their meaning — cc-blockers:734 and
+  # tests/cc-blockers-teammate-reap.bats read them. The world figures are ADDED, never substituted.
+  printf '{"ts":"%s","verdict":"%s","window_d":%s,"idle_events":%s,"closes":%s,"last_close":"%s","days_since_last_close":%s,"detail":"%s","source":"%s","residency":"%s","resident":%s,"stale":%s,"departed":%s,"ours":%s,"vendor":%s,"log_events":%s,"log_closes":%s}\n' \
+    "$TS" "$VERDICT" "$WINDOW_D" "${EVENTS:-0}" "${CLOSES:-0}" "${LAST_CLOSE:-never}" "${SINCE_LAST:-null}" "$DETAIL" \
+    "${SOURCE:-log}" "${RES_VERDICT:-absent}" "${RESIDENT_N:-0}" "${STALE_N:-0}" "${DEPARTED_N:-0}" \
+    "${OURS_N:-0}" "${VENDOR_N:-0}" "${LOG_EVENTS:-0}" "${LOG_CLOSES:-0}"
 elif [ "$QUIET" != 1 ]; then
   echo "teammate-reap-alarm — $TS"
   echo "  window:              last ${WINDOW_D}d   (assert only at >=${MIN_EVENTS} decisions)"
+  echo "  measured from:       ${SOURCE:-log}   (residency join: ${RES_VERDICT:-absent})"
   echo "  close path ran:      ${EVENTS:-0} time(s)"
   echo "  panes closed:        ${CLOSES:-0}"
+  if [ "${SOURCE:-log}" = "world" ]; then
+    echo "    · world:           ${RESIDENT_N:-0} resident (${STALE_N:-0} stale) · ${DEPARTED_N:-0} departed = ${OURS_N:-0} ours + ${VENDOR_N:-0} unattributed"
+    # The second opinion, printed BESIDE the verdict rather than under it. Where these two disagree,
+    # the gap IS the finding — that is what six closes with zero log lines looks like from here.
+    echo "    · log-grep says:   ${LOG_CLOSES:-0} close(s) in ${LOG_EVENTS:-0} attempt(s)   ← claims, not outcomes"
+  fi
   echo "  last close:          ${LAST_CLOSE:-never}${SINCE_LAST:+   (${SINCE_LAST}d ago)}"
   if [ -n "${TOP_REASONS:-}" ]; then
     echo "  it refused because:"

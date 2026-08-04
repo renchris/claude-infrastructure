@@ -113,3 +113,155 @@ closes()   { local i; for i in $(seq 1 "$1"); do
   run grep -nE "it2 session close|kill -9|handoff-fire|exit 1;.*refus" "$S"
   [ "$status" -ne 0 ]
 }
+
+# ══ THE NUMERATOR SWAP (2026-08-04) ═══════════════════════════════════════════════════════════════
+# Every test above drives the LOG arithmetic, and every one of them still passes — that arithmetic is
+# unchanged and is still printed. What changed is which numbers reach the verdict. The old pair
+# counted `✓ closed pane` and `defer`/`⚑ SURFACE`: lines this subsystem writes ABOUT ITSELF, so the
+# metric is satisfiable without a pane going away. Two blind spots, both measured on this box:
+#   1. six members of team session-57342265 were closed and de-registered with ZERO `✓ closed pane`
+#      lines — six real closes the instrument could not see;
+#   2. the log's last two lines assert `Pane NOT closed` for panes that were already gone — refusals
+#      counted against members that had already left.
+# So EVENTS/CLOSES now come from the residency join. These arms pin that the WORLD wins, that the
+# attribution survives the trip up, and that a missing join degrades LOUDLY rather than silently.
+#
+# The join is STUBBED here on purpose. The suite owns the WIRING; tests/assignee-pane-residency.bats
+# owns the verdict logic. Two implementations of one predicate would be two answers.
+stub_world() { # stub_world <token-tail…>
+  printf '#!/bin/bash\necho "verdict=%s"\nexit 0\n' "$*" > "$BATS_TEST_TMPDIR/res.sh"
+  chmod +x "$BATS_TEST_TMPDIR/res.sh"
+  export CC_RESIDENCY_SH="$BATS_TEST_TMPDIR/res.sh"
+}
+
+@test "a healthy-looking LOG cannot launder a dead WORLD" {
+  refusals 2; closes 20            # 20 closes in 22 attempts — the healthiest log there is
+  stub_world "ALARM members=15 resident=12 stale=12 departed=0 ours=0 vendor=0"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "ALARM"
+  echo "$output" | grep -q "measured against the WORLD"
+  # And the log figures are still shown — the GAP between the two is the finding, not a thing to hide.
+  echo "$output" | grep -q "log-grep says:"
+}
+
+# THE TWIN, and the reason the arm above means something: the SAME log, a world where panes actually
+# left. One parser, opposite verdicts. If these ever agree, the world source is not being read.
+@test "the same healthy log with a LIVE world reads OK" {
+  refusals 2; closes 20
+  stub_world "OK members=15 resident=3 stale=3 departed=12 ours=12 vendor=0"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "VERDICT:             OK"
+}
+
+# The mirror: a log of nothing but refusals, where the world says the panes did leave. This is blind
+# spot #1 exactly — six real closes with no log line — and a log-grep alarm would fire on it.
+@test "a dead-looking LOG does not fire against a live WORLD" {
+  refusals 30
+  stub_world "OK members=8 resident=1 stale=1 departed=6 ours=6 vendor=0"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 0 ]
+}
+
+# Attribution carries all the way up: `ours` is the numerator, never `departed`. Six panes gone with
+# nothing claiming them is the VENDOR closing panes, not our chain working.
+@test "unattributed departures never satisfy the OK arm" {
+  refusals 2; closes 20
+  stub_world "WARN members=20 resident=14 stale=14 departed=6 ours=0 vendor=6"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "6 unattributed"
+}
+
+# A join that cannot see a world falls back to the log — and SAYS so. A degraded reading that
+# labels itself is worth more than an instrument that goes quiet, but an unlabelled one is worse
+# than both: a reader would take claims for outcomes.
+@test "no world reading ⇒ the log fallback labels itself as degraded" {
+  refusals 30
+  stub_world "NOT-EXERCISED members=0 resident=0 stale=0 departed=0 ours=0 vendor=0"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "log-grep only, no world reading"
+  if printf '%s\n' "$output" | grep -q "measured against the WORLD"; then
+    echo "the fallback claimed a world reading it does not have" >&2; false
+  fi
+}
+
+@test "an undeployed join degrades — it never crashes the alarm" {
+  refusals 30
+  export CC_RESIDENCY_SH="$BATS_TEST_TMPDIR/definitely-not-deployed"
+  run "$S" --log "$LOG"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "no world reading (absent)"
+}
+
+@test "json carries the source and the world figures alongside the original keys" {
+  refusals 2; closes 20
+  stub_world "ALARM members=15 resident=12 stale=12 departed=0 ours=0 vendor=0"
+  run "$S" --log "$LOG" --json
+  [ "$status" -eq 2 ]
+  # The original keys keep their meaning — cc-blockers:734 reads these.
+  echo "$output" | grep -q '"verdict":"ALARM"'
+  echo "$output" | grep -q '"closes":0'
+  # …and the provenance is now legible, including the log figures the verdict did NOT use.
+  echo "$output" | grep -q '"source":"world"'
+  echo "$output" | grep -q '"stale":12'
+  echo "$output" | grep -q '"log_closes":20'
+}
+
+# ══ THE CADENCE ═══════════════════════════════════════════════════════════════════════════════════
+# The defect this commit exists to fix is not in the alarm's logic — it is that nothing ever RAN it.
+# Its only caller was bin/cc-blockers:161, a board rendered on PULL when an agent happens to invoke
+# /ship, and the label was in no launchctl list at all. So the plist is part of the deliverable, and
+# so is its DECLARATION: an undeclared plist makes launchd/fleet.manifest go red on whoever lands
+# next (capacity-alarm and scratchpad-reaper each cost that), and install.sh refuses to activate what
+# the manifest does not declare.
+@test "the plist exists and is well-formed" {
+  [ -f "$REPO/launchd/com.claude.teammate-reap-alarm.plist" ]
+  run plutil -lint "$REPO/launchd/com.claude.teammate-reap-alarm.plist"
+  [ "$status" -eq 0 ]
+}
+
+# The two commands must run in this order: the alarm reads the cursor left by the PREVIOUS tick,
+# THEN the sampler advances it. Reversed, every tick differences against a set written moments
+# earlier by itself, `departed` is 0 by construction forever, and a healthy fleet reports a dead
+# close path. This is invisible in any single run, so it is pinned textually.
+@test "the plist runs the alarm BEFORE the sampler advances the cursor" {
+  local args; args="$(sed -n '/<string>export PATH/p' "$REPO/launchd/com.claude.teammate-reap-alarm.plist")"
+  local a s
+  a="$(printf '%s' "$args" | grep -o 'teammate-reap-alarm.sh' | head -1)"
+  [ -n "$a" ]
+  # The alarm's offset must be smaller than the sampler's.
+  run bash -c "printf '%s' '$args' | awk '{ print index(\$0, \"teammate-reap-alarm.sh\"), index(\$0, \"assignee-pane-residency.sh\") }'"
+  s="$output"
+  [ "${s%% *}" -lt "${s##* }" ]
+}
+
+@test "the plist is DECLARED in the fleet manifest, staged, with its verdict exits" {
+  run grep -E "^com\.claude\.teammate-reap-alarm[[:space:]]*\|" "$REPO/launchd/fleet.manifest"
+  [ "$status" -eq 0 ]
+  # staged, not run: loading a launchd job is a C10 operator decision, and this commit does not make
+  # it. `staged` renders as exactly ONE UNDECIDED row — "declared, decision pending", never silent.
+  echo "$output" | grep -qE "\|[[:space:]]*staged[[:space:]]*\|"
+  # ok_exits must cover every DESIGNED verdict. Without it cc-fleet files a permanent, unfixable
+  # daemon-fault row for as long as the outage the alarm is correctly reporting lasts.
+  echo "$output" | grep -qE "\|[[:space:]]*0,1,2,3[[:space:]]*$"
+}
+
+@test "the activation script exists and its dry run refuses to act without CONFIRM" {
+  local A="$REPO/docs/activation/pending-activation/30-teammate-reap-alarm-activate.sh"
+  [ -f "$A" ]
+  run bash -n "$A"
+  [ "$status" -eq 0 ]
+  run env CC_REPO="$REPO" bash "$A"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "dry run"
+  # A dry run must not have loaded anything (memory: dry-run-cannot-preview-what-it-gates — side
+  # effects inside an `if ! $DRY_RUN` are invisible BY CONSTRUCTION, so assert the EFFECT's absence).
+  if printf '%s\n' "$output" | grep -q "bootstrap failed\|Load failed"; then
+    echo "the dry run touched launchctl" >&2; false
+  fi
+  run /bin/launchctl print "gui/$(id -u)/com.claude.teammate-reap-alarm"
+  [ "$status" -ne 0 ]
+}

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.teammate-reap-alarm — row 4. Every 10 min: are assignee panes actually LEAVING?
+
+  WHY A JOB AT ALL, AND WHY THIS IS THE WHOLE POINT OF THE COMMIT. The alarm already existed and
+  already worked. Its only caller was bin/cc-blockers:161 — a PULL-rendered board that runs when an
+  agent happens to invoke /ship — and the label appeared in no launchctl list at all. So for ten
+  days the close path produced zero closes, twelve assignee panes sat resident, and the instrument
+  built to say so was never asked. A sensor with no cadence is not a sensor; it is a function
+  somebody could call. cc-blockers keeps its pull row unchanged — this adds the push.
+
+  ⚠ THE ORDER OF THE TWO COMMANDS IS LOAD-BEARING, NOT COSMETIC. The alarm runs FIRST, reading the
+  residency cursor left by the PREVIOUS tick, so `departed` covers one interval of wall clock. The
+  sampler then advances the cursor to now. Swap them and every tick reads a cursor written moments
+  earlier by itself, `departed` is 0 by construction forever, and the job reports a permanently
+  dead close path on a perfectly healthy fleet. (The alarm passes --no-state precisely so that it —
+  and every /ship-time cc-blockers pull — can read the cursor without consuming it. Two writers to
+  one cursor means each sees only what the other left behind.)
+
+  The alarm's own exit is what launchd records; the sampler's is discarded, since it is being run
+  here for its cursor write and not for its verdict.
+
+  VERDICTS ARE THE EXIT CODES, and non-zero is a DESIGNED outcome, not a failure to be "fixed"
+  (memory: daemon-fleet-v2). OK/NOT-EXERCISED 0 · WARN 1 · ALARM 2 · NO-DATA 3 — declared as
+  ok_exits in launchd/fleet.manifest so cc-fleet never files a permanent S4 row against a healthy
+  job that is correctly reporting an unhealthy fleet.
+
+  IT NEVER REFUSES ANYTHING. Both scripts are read-only by construction: no pane close, no team
+  config write, no worktree touch. The only file either one writes is the residency cursor.
+
+  PATH prepends ~/.claude/bin AND /opt/homebrew/bin via bash -c so $HOME expands at runtime. Both
+  are required and neither is optional: the join needs `it2` (~/.claude/bin) and `jq` (Homebrew),
+  and a bare Homebrew name does not exist under a launchd PATH (memory:
+  path-resolved-dependency-in-daemon-code). Each missing tool degrades to a NAMED source in the
+  verdict token — `src_win=unreachable`, `src_mem=no-jq` — never to a silent zero.
+
+  RunAtLoad false — a login must not fire an it2 probe. C10: the OPERATOR loads it; see
+  docs/activation/pending-activation/30-teammate-reap-alarm-activate.sh.
+  Kill switch after load: launchctl bootout gui/$UID/com.claude.teammate-reap-alarm.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.teammate-reap-alarm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; "$HOME/.claude/scripts/teammate-reap-alarm.sh"; rc=$?; "$HOME/.claude/scripts/assignee-pane-residency.sh" --quiet >/dev/null 2>&amp;1 || true; exit $rc</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>      <string>Background</string>
+    <key>LowPriorityIO</key>    <true/>
+    <key>Nice</key>             <integer>10</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/teammate-reap-alarm.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/teammate-reap-alarm.err.log</string>
+</dict>
+</plist>
