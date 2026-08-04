@@ -30,9 +30,9 @@ setup() {
 # `Auto-shutdown idle teammate` header above it. That asymmetry is the whole point: the header is
 # written only on the success path (teammate-auto-shutdown.sh:837, after every gate), so a fixture
 # that supplies one for every refusal cannot reproduce the outage.
-refusals() { local i; for ((i=0;i<$1;i++)); do
+refusals() { local i; for i in $(seq 1 "$1"); do
   echo "[$TODAY 09:00:00] defer m$i (1/3): dirty tree" >> "$LOG"; done; }
-closes()   { local i; for ((i=0;i<$1;i++)); do
+closes()   { local i; for i in $(seq 1 "$1"); do
   echo "[$TODAY 09:00:01] Auto-shutdown idle teammate: c$i (team: t)" >> "$LOG"
   echo "[$TODAY 09:00:01]   ✓ closed pane U$i (c$i)" >> "$LOG"; done; }
 
@@ -84,7 +84,7 @@ closes()   { local i; for ((i=0;i<$1;i++)); do
 # Deferring a BUSY teammate is the system working, not a refusal to close a finished one. If these
 # counted, a healthy fleet under load would drift toward ALARM and the alarm would lose its meaning.
 @test "busy-marker and tool-in-flight defers are not refusals" {
-  local i; for ((i=0;i<30;i++)); do
+  local i; for i in $(seq 1 30); do
     echo "[$TODAY 09:00:00] defer m$i (team=t): .teammate-busy marker present" >> "$LOG"
     echo "[$TODAY 09:00:01] defer m$i (team=t): tool in flight — teammate is live, not idle" >> "$LOG"
   done
@@ -95,7 +95,7 @@ closes()   { local i; for ((i=0;i<$1;i++)); do
 
 @test "the window bounds: old closes cannot rescue a dead window" {
   local old i; old=$(date -v-30d +%Y-%m-%d)
-  for ((i=0;i<20;i++)); do echo "[$old 09:00:01]   ✓ closed pane U$i (c$i)" >> "$LOG"; done
+  for i in $(seq 1 20); do echo "[$old 09:00:01]   ✓ closed pane U$i (c$i)" >> "$LOG"; done
   refusals 30
   run "$S" --log "$LOG"
   [ "$status" -eq 2 ]
