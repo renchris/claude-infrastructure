@@ -125,6 +125,48 @@ in a dense memory: 2026-07-29 *every* candidate (both `hermetic-*`, the two desk
 was cross-linked, and only **4 of 91** entries were honestly archivable. Plan the reduction as
 **rewrite + a little archiving**; a plan leaning on merges under-delivers and tempts dishonest ones.
 
+## THE TWO-TIER HOT/COLD SPLIT — the lever to reach for once rewriting cannot reach the target
+
+🚨 **When hooks are already ~one-governing-rule and nothing is archivable, NO rewrite can hit the
+target — the binding constraint is CARDINALITY, not entry size.** Measured 2026-07-30 at 149
+entries: filenames alone are **5,518 B (19%) and immutable** (link target + graph key), and with
+syntax+header the floor is ~7,061 B; the `17.1 KB` the PostToolUse nudge demands works out to
+**~67 B/entry — below one sentence**. Grinding hooks past that only severs rules while leaving
+lines that still read as prose. The answer is **fewer indexed entries, not smaller ones.**
+
+**The procedure** (operator-approved 2026-07-30; the lever every subsequent pass has used —
+07-30 149→111 @ 22.4 KB, then 07-31, 08-01, 08-05 105→92 @ 22.7 KB):
+
+1. Move whole entries **VERBATIM** into `archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md`. Nothing is
+   deleted, no line is rewritten, every topic file stays on disk untouched. **Restore = paste the
+   line back into `MEMORY.md` and delete it there.** This is reversible, so it is not the lossy
+   PROPOSE-ONLY class — but it does remove live rules from the auto-loaded surface, so it is
+   authorized by the byte budget, never by ritual.
+2. **Selection rule.** HOT keeps: every `feedback` operator-directive, every `reference` tooling
+   entrypoint, all live-pending state, and every **graph hub (>=4 inbound `[[links]]`)**. COLD takes
+   `project`-type entries with **<=3 inbound links**, oldest first.
+   ⚠️ **Recency alone is the WRONG rule** — it sent `effect-read-predicate-red-proof` (7-8 inbound),
+   `reference-landing-safety-tooling` and the `/accounts` entrypoint cold. Rank *within* the
+   eligible set, never across it.
+3. **Cut on a stated boundary, not a byte count.** Prefer "the COMPLETE oldest eligible tier"
+   (a date boundary) and, if that is short, extend into the next date taking only **zero-inbound**
+   entries — least load-bearing in the graph. Write the boundary into the COLD file so the next
+   pass can see what rule produced the split rather than guessing.
+4. **Define done as HEADROOM.** Target ~2.5 KB under the limit, not the limit itself: the index
+   re-inflates ~1 KB/11.6 h at burst and ~470 B/day at the lifetime average, so landing *at* the
+   limit means the next sibling append silently drops entries again. Report headroom + rate.
+
+🚨 **Name the cold file `archive/MEMORY_ARCHIVE_*-COLD.md`.** SAFE-AUTO step 4 builds its
+orphan-exclusion set by globbing `archive/MEMORY_ARCHIVE_*.md`. A file named `MEMORY_COLD.md` falls
+outside that glob, so the next orphan sweep sees every cold topic file as decayed memory and
+**re-indexes all of them**, silently undoing the split. The filename prefix is load-bearing — same
+inverse-operations trap as the archive/orphan pair in SAFE-AUTO.
+
+**A cold move and a decayed orphan look identical from the index.** Both are topic files with no
+index line. Distinguish them by the COLD/archive record, and when a genuine orphan turns up during a
+split, record it in COLD with a note saying it was *never indexed* rather than moved — otherwise the
+next reader reads it as a deliberate demotion.
+
 ## CONCURRENCY — the index is written by other sessions while you work
 
 `MEMORY.md` is appended to by sibling sessions mid-task. 2026-07-29 two arrived during one
