@@ -107,6 +107,8 @@ cmd_prepare() {
     printf '## GO / RULING (spawn-boundary delivery — the only channel proven to work)\n%s\n\n' "$go"
     printf '## CONTINUITY (recover BEFORE new work)\n'
     printf -- '- Worktree: %s\n- Branch: %s\n- Checkpoint ref: %s (also refs/wip/%s/LAST)\n' "$worktree" "$branch" "$ref" "$member"
+    # shellcheck disable=SC2016  # the backticks are MARKDOWN code spans in the emitted brief, not
+    # command substitution — every real value arrives through a %s argument.
     printf -- '- Recover: `git -C %s diff HEAD %s` to inspect; `git -C %s cherry-pick -n %s` or `git -C %s checkout %s -- <paths>` to restore WIP.\n' "$worktree" "$commit" "$worktree" "$commit" "$worktree" "$commit"
     printf -- '- Predecessor checkpointed at %s; its uncommitted work lives ONLY in the ref above.\n\n' "$ts"
     if [ -n "$desk" ]; then
@@ -140,6 +142,10 @@ cmd_verify_stopped() {
   done
   if [ -n "$member" ] && [ -z "$pid" ]; then
     # the memory-verified discovery method: the teammate pane's claude process carries --agent-name.
+    # shellcheck disable=SC2009  # NOT interchangeable with pgrep here: `pgrep -f` matches the whole
+    # argv, so it also counts any session whose BRIEF merely mentions this member name (memory
+    # pgrep-f-matches-agent-briefs — that read 50 where the truth was 1). Matching the literal
+    # `--agent-name <member>` flag in ps output is the discriminator.
     pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
     if [ -z "$pid" ]; then
       record verify-stopped stop-verified "$member" "no --agent-name $member process found"
@@ -176,6 +182,8 @@ cmd_verify_spawned() {
   done
   [ -n "$member" ] || die "verify-spawned needs --member <name>"
   local pid
+  # shellcheck disable=SC2009  # see the note on the sibling call above: `pgrep -f` would also match
+  # any session whose BRIEF mentions this member name; the literal --agent-name flag is the discriminator.
   pid="$(ps -eo pid=,command= | grep -F -- "--agent-name $member" | grep -v grep | awk '{print $1; exit}')"
   if [ -n "$pid" ]; then
     record verify-spawned spawn-verified "$member" "pid $pid"
