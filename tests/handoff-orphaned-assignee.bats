@@ -35,6 +35,11 @@ setup() {
   # tests/handoff-fire-kitty.bats. Unset the real var AND pin the kill switch — both spellings.
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
+  # The env pins the DIVERT decision; identity (kitty_identity) reads CC_TERM first, and self-close
+  # resolves that from the ancestry walk at entry — so run from kitty this suite would take the kitty
+  # branch and never consult its osascript stub. 5 tests here go red under `CC_TERM=kitty`, on trunk
+  # too. Same "PIN THE TERMINAL" intent as the two lines above, in the place that governs identity.
+  export CC_TERM=iterm2
   hf_bounded() { "$@"; }          # the timeout(1) wrapper is out of scope for extracted units
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"

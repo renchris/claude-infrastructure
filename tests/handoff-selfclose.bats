@@ -34,6 +34,16 @@ setup() {
   # tests/handoff-fire-kitty.bats. Unset the real var AND pin the kill switch — both spellings.
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
+  # …AND PIN THE SEAM THE ENV PIN CANNOT REACH. The two lines above pin the DIVERT decision; identity
+  # (kitty_identity) reads CC_TERM FIRST and only then falls back to them, and self-close resolves
+  # that verdict at entry from the ancestry walk. So a developer running this suite from inside kitty
+  # gets CC_TERM=kitty pinned under it, as_tty takes the kitty branch, and the osascript stub these
+  # tests are built on is never consulted. Measured 2026-08-05 by simulating the resolved verdict
+  # (`CC_TERM=kitty bats …`): 4 red here, 6 in handoff-selfclose-session-pin, 5 in
+  # handoff-orphaned-assignee — on TRUNK as well as with the entry pin, i.e. pre-existing and purely
+  # a function of which terminal the developer sits in. This is the same "PIN THE TERMINAL" intent as
+  # above, spelled in the one place that actually governs identity.
+  export CC_TERM=iterm2
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
@@ -173,6 +183,75 @@ SH
   run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC" --successor-assume-engaged
   [ "$status" -eq 3 ]
   [[ "$output" == *"no live claude on successor"* ]]   # liveness half is NOT skipped by the flag
+}
+
+# ── 1b. TERMINAL IDENTITY AT THE SUCCESSOR GATE (item ec1bf0a497ba, 2026-08-05) ──────────────────
+#
+# e9cabc46 fixed `tty=none` by making identity honour the ANCESTRY verdict (kitty_identity) and
+# pinning it before the pane→tty query at the /exit arm. But self-close asks as_tty THREE times and
+# that pin sat at the LAST one, so on a KITTY_*-polluted iTerm2 box the two earlier queries kept the
+# pre-fix behaviour. The successor-liveness gate is one of them — it runs ~160 lines earlier — so
+# `--successor` still hard-aborted `exit 3 "successor pane … not found in iTerm2"` while the
+# `--terminal` mode that skips this gate was the one verified working. A fired peer could retire
+# only by declaring nothing continued its work; a genuine succession could not close at all.
+#
+# The remedy is the pin at self-close ENTRY: identity is a property of the PROCESS, so resolving it
+# per-query is a fix that must be re-applied at every future call site, and an entry pin cannot be
+# missed by one. It landed as d6fee16b (item 12f2524f8b83).
+#
+# COMPLEMENTARY, NOT DUPLICATE COVERAGE. tests/handoff-selfclose-terminal-pin-order.bats guards that
+# fix STRUCTURALLY — the pin's line number precedes the first as_tty's — plus the identity predicate
+# at function level. That is the sharper failure message, and it is blind to exactly one thing: a
+# window it does not span. It anchors SC_SID → SUC_TTY, so a FOURTH as_tty added before the pin, or
+# an identity correctly resolved and then defeated downstream, both keep it green. The two tests
+# below close that by driving the real binary end to end — `bash "$HF" self-close --dry-run
+# --successor` through the actual gate — and asserting on the user-visible verdict rather than on
+# the arrangement of two lines. Both were verified RED against the pre-fix subject.
+
+@test "gate: KITTY_* INHERITED into an iTerm2 pane — the successor gate still resolves its tty" {
+  # THE 56A3C488 SHAPE, reproduced: a genuine iTerm2 pane whose env carries KITTY_WINDOW_ID/KITTY_PID
+  # inherited from an iTerm2.app that was once launched out of a kitty pane, and a cc-in-kitty that
+  # correctly reports "not ours" (exit 1). CC_TERM is UNSET on purpose — undoing setup's pin is what
+  # makes this test about the subject resolving identity rather than the harness handing it over.
+  local h="$BATS_TEST_TMPDIR/polluted-home"; mk_home "$h"; export HOME="$h"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$h/.claude/bin/cc-in-kitty"
+  chmod +x "$h/.claude/bin/cc-in-kitty"
+  export KITTY_WINDOW_ID=2 KITTY_PID=567
+  unset IT2_WRAPPER_NO_KITTY CC_TERM
+  # Hermetic kitty transport: an explicit non-executable CC_TERM_KITTY makes cc-kitty-bin REFUSE
+  # (it never substitutes a different kitty), so the kitty branch fails deterministically instead of
+  # querying the operator's live kitty and making this suite a function of their real windows.
+  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/no-such-kitty"
+  export HANDOFF_TTY_RETRIES=1        # the kitty branch's miss is immediate; no need to wait it out
+
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"go"}}' \
+    '{"type":"assistant","message":{"content":"on it — starting the task"}}' > "$PROJDIR/$SUCC_SESS.jsonl"
+  run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
+
+  # DECISIVE ASSERTION LAST (the ordering lesson this repo already paid for): the abort string is
+  # what the pre-fix subject emits, and the status is what it exits.
+  [[ "$output" != *"not found in iTerm2"* ]] || false
+  [[ "$output" == *"successor engagement verified"* ]] || false
+  [ "$status" -eq 0 ]
+}
+
+@test "gate: a genuine kitty pane is NOT diverted to iTerm2 by the entry pin" {
+  # Non-vacuity for the test above. If the entry pin resolved "iterm2" unconditionally it would
+  # satisfy that assertion and silently break every real kitty box — the mirror of the 2026-07-31
+  # outage. cc-in-kitty exit 0 = kitty IS our ancestor, so identity must stay kitty, the osascript
+  # stub must NOT be consulted, and the gate must fail on the unreachable kitty transport.
+  local h="$BATS_TEST_TMPDIR/kitty-home"; mk_home "$h"; export HOME="$h"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$h/.claude/bin/cc-in-kitty"
+  chmod +x "$h/.claude/bin/cc-in-kitty"
+  export KITTY_WINDOW_ID=2 KITTY_PID=567
+  unset IT2_WRAPPER_NO_KITTY CC_TERM
+  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/no-such-kitty"
+  export HANDOFF_TTY_RETRIES=1
+
+  run bash "$HF" self-close --dry-run --session-id "$PRED" --successor "$SUCC"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"not found in iTerm2"* ]]
 }
 
 # ── 2. CLOSE-INSTANT RE-VERIFY (the __selfclose watcher) ─────────────────────────────────────────
