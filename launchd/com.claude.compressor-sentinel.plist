@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.compressor-sentinel — the guard for the axis that has killed this box three times in six
+  days (docs/research/panic-compressor-2026-08-05.md). VM-compressor SEGMENT exhaustion: the kernel
+  reads `"compressor_exhausted": 1` while 20 GB is free, swap is idle and pressure is normal, so every
+  level-based sensor on this machine reports a healthy box at the moment of death.
+
+  THERE IS NO ProcessType KEY, AND ITS ABSENCE IS THE MOST LOAD-BEARING LINE IN THIS FILE.
+  It must be neither Background nor Adaptive, and this is measured, not theorised:
+    · Background: com.claude.capacity-alarm ran at ProcessType Background through the 2026-07-30
+      panic-reboot and then emitted NOTHING FOR 6 HOURS 24 MINUTES — a 23,749 s inter-sample gap
+      against a configured 600 s — because the box came up under a Spotlight reindex at load 140 and
+      Darwin defers the Background band aggressively under exactly that load. A sensor that stops
+      sampling when the machine is busy is inert precisely when it is needed.
+    · Adaptive: capacity-alarm's fix, and correct FOR CAPACITY REPORTING. It is not enough here.
+      §6 discriminator 4 of the research is that the background-band sampler's own DEATH — the
+      absence of its row — was the earliest machine-readable distress signal in all three events,
+      firing ~3 minutes before the wedge. That makes "which band does the sentinel live in" a
+      correctness question, not a politeness one: the guard for an event must not be in a band the
+      event is known to starve.
+    · Omitting the key entirely leaves the job in the DEFAULT (Standard) band — the same treatment an
+      interactive process gets. That is the point. Nice and LowPriorityIO are omitted for the same
+      reason: every one of those keys is a request to be deprioritised, and this is the one job on
+      the box that must not be.
+
+  WHY THAT IS AFFORDABLE. Measured on this 10-core box, 5 trials each, INCLUDING bash startup (which
+  the daemon pays once, not per tick — so these are upper bounds):
+        no-census tick   0.05 s
+        census tick      0.09 s   (one extra `ps -axwwo`, every 6th tick)
+  At the 10 s cadence that is (5 x 0.05 + 0.09) / 60 = 0.57% of ONE core, i.e. ~0.06% of the box.
+  Nothing in the tick shells out to anything expensive, and zprint — the only instrument that can
+  read the descriptor count directly — is BANNED from the tick, because it hangs under the very storm
+  it measures (the 00:14 run was still TH_WAIT at panic). §7.7's cheap-sysctl recipe replaces it.
+
+  KeepAlive true / RunAtLoad true / NO StartInterval — because the CADENCE LIVES IN THE SCRIPT.
+  This is an internal-loop daemon, not a periodic job: launchd's entire responsibility here is to
+  start it at load and restart it if it ever dies. A StartInterval job re-pays process startup on
+  every sample and, more importantly, cannot hold the previous sample — and every trip term in this
+  sentinel is a RATE, which needs a baseline that survives between reads. KeepAlive is what makes the
+  guard's own death self-healing; RunAtLoad is what makes it present after the panic reboot, which is
+  the exact moment the next burst tends to arrive.
+
+  THE PATH MUST CARRY /usr/sbin, AND THIS IS NOT A STYLE DETAIL. launchd hands a job
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin, but the wrapper below OVERWRITES it. `sysctl` lives in
+  /usr/sbin; `vm_stat` in /usr/bin; `ps`, `date`, `sleep` in /bin. capacity-alarm.sh shipped this
+  wrapper with /usr/sbin omitted and silently lost THREE rungs in every scheduled run (never in a
+  hand-run from an interactive shell, which is why it survived review). Here the consequence would be
+  different and louder rather than silent — an unreadable sysctl SKIPS the tick and logs to stderr
+  rather than rendering as 0 — but the sentinel would still be totally blind.
+
+  THE ACTUATOR IS DISARMED IN THIS PLIST. CC_SENTINEL_ACT is not set, so the job runs detection-only
+  and writes ~/.claude/autonomy/pages/compressor-sentinel.page on a trip. Arming it (SIGSTOP of the
+  burst cohort, §7.2) is an operator decision, made by adding CC_SENTINEL_ACT=stop to the wrapper —
+  deliberately not a maintenance edit, because it is the first thing on this box that acts on live
+  processes without being asked.
+
+  Kill switches after load: CC_SENTINEL=off in the wrapper, or
+  `launchctl bootout gui/$UID/com.claude.compressor-sentinel`.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.compressor-sentinel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/compressor-sentinel.sh"</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- NO ProcessType. NO Nice. NO LowPriorityIO. See the header — the background band starves
+         first, and this is the job that must survive the storm it exists to report. -->
+
+    <key>StandardOutPath</key>  <string>/tmp/claude-compressor-sentinel.stdout.log</string>
+    <key>StandardErrorPath</key><string>/tmp/claude-compressor-sentinel.stderr.log</string>
+</dict>
+</plist>
