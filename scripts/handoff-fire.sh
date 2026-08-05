@@ -4008,7 +4008,14 @@ restore_focus_or_fail() {
 resolve_headless_anchor() {
   [ "${CC_FIRE_HEADLESS_ANCHOR:-on}" != off ] || return 2
   local desk=""
-  desk="$(tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" 2>/dev/null || true)"
+  # `2>/dev/null` LEADS the redirection list, and that ordering is the whole point: redirections are
+  # applied left to right, so with it trailing the INPUT redirect it is not yet in effect when the
+  # shell fails to open a missing desk-role file — and the resulting "No such file or directory" is
+  # emitted by the SHELL, not by tr, so tr's own suppressed stderr never covered it. Harmless to the
+  # rc (`|| true` already absorbed that) and not harmless to the reader: this function's stderr is
+  # deliberately NOT discarded by its caller, so on any box with no desk role every headless fire
+  # printed a file-not-found immediately above its anchor decision.
+  desk="$(2>/dev/null tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" || true)"
   local out rc=0
   out="$(it2py anchor "$desk" "${CC_FIRE_MAX_PANES:-5}" 2>/dev/null)" || rc=$?
   [ "$rc" = 0 ] || { echo "   anchor probe FAILED (it2py anchor rc=$rc) — inconclusive, not empty." >&2; return 2; }
