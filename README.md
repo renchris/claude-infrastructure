@@ -438,8 +438,6 @@ Everything above runs ~30 sessions unattended. At that concurrency this box lags
 
 **Running 30 sessions is not what lags this box — displaying them is.** And the fix is not a faster renderer: the notifier that would replace the grid is already wired ([`cc-permission-beacon.sh`](hooks/cc-permission-beacon.sh)) and simply has no face. Measured 2026-07-31; full evidence in [`docs/research/l3-l4-terminal-and-workflow-2026-07-31.md`](docs/research/l3-l4-terminal-and-workflow-2026-07-31.md).
 
-**The one failure that is the machine, not the interface: macOS itself can panic under agent-fleet memory bursts.** Three kernel panics in six days traced to an undocumented weakness that applies to *any* Mac running heavy multi-agent workloads, in any terminal: the VM compressor's *segment table* is provisioned assuming 4:1-compressible data, counts swapped-out segments against its limit, and — because macOS ships with jetsam compiled out — has **no kill path** that can reach a fleet of medium processes; a multi-GB burst of poorly-compressible memory (node worker pools, cold `next dev` compiles, browser chains) exhausts it in minutes and the box live-locks into a watchdog reboot with 20 GB still "free". The terminal is exonerated (kitty's process stayed ~1.4 GB through all three), and no single stock Claude Code session can trip it — it took fleet scale. Every conventional signal (free RAM, swap, memory pressure) reads healthy to the end, so this repo ships the guard that can see it: [`scripts/compressor-sentinel.sh`](scripts/compressor-sentinel.sh), a 10 s rate-keyed daemon on cheap sysctls that snapshots full argv on ramp and can (opt-in) freeze the burst cohort reversibly. Full forensics: [`docs/research/panic-compressor-2026-08-05.md`](docs/research/panic-compressor-2026-08-05.md).
-
 <!-- Diagram source: assets/diagrams/interface-ceiling.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/interface-ceiling-dark.svg">
@@ -489,8 +487,54 @@ The intuitive diagnosis — heaps grow, memory exhausts, the box swaps — is re
 | **Per-session footprint** | **~215 MB** (211–295 MB across the live fleet), so 30 sessions project to ~6.5 GB — not the ~45 GB the memory theory requires |
 | **Panic 2026-07-30** | VM-compressor **segment** exhaustion with **~20 GB free**, `swap_low:0` — structural, not a load threshold |
 | **Panic 2026-07-31** | kernel **spinlock timeout** from a research probe's own **8,368-thread** ladder; compressor 0% pages / 7% segments, **OK** — self-inflicted by the instrument, not by the workload |
+| **Panic 2026-08-05** | the segment-exhaustion class **resolved**: a **670-process node worker burst** into a cold swapper — fleet-scale bursts only, terminal exonerated; guard shipped (below) |
 
 The whole 15-session fleet costs **≈0.75 cores**.
+
+**The one failure that is the machine, not the interface: macOS itself can panic under agent-fleet memory bursts.** Three kernel panics in six days traced to an undocumented weakness that applies to *any* Mac running heavy multi-agent workloads, in any terminal: the VM compressor's *segment table* is provisioned assuming 4:1-compressible data, counts swapped-out segments against its limit, and — because macOS ships with jetsam compiled out — has **no kill path** that can reach a fleet of medium processes; a multi-GB burst of poorly-compressible memory (node worker pools, cold `next dev` compiles, browser chains) exhausts it in minutes and the box live-locks into a watchdog reboot with 20 GB still "free". The terminal is exonerated (kitty's process stayed ~1.4 GB through all three), and no single stock Claude Code session can trip it — it took fleet scale. Every conventional signal (free RAM, swap, memory pressure) reads healthy to the end, so this repo ships the guard that can see it: [`scripts/compressor-sentinel.sh`](scripts/compressor-sentinel.sh), a 10 s rate-keyed daemon on cheap sysctls that snapshots full argv on ramp and can (opt-in) freeze the burst cohort reversibly. Full forensics: [`docs/research/panic-compressor-2026-08-05.md`](docs/research/panic-compressor-2026-08-05.md).
+
+<!-- Diagram source: assets/diagrams/compressor-panic.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/compressor-panic-dark.svg">
+  <img src="assets/diagrams/compressor-panic-light.svg" alt="An agent-fleet burst — worker pools, cold next dev compiles, browser chains — dirties multi-GB of poorly-compressible memory in minutes on any Mac in any terminal. It lands in the macOS VM compressor, whose 1.63 million segment slots are provisioned for 4-to-1-compressible data, count swapped-out segments against the limit, and free a slot only when it is completely empty. Raw-stored pages pack four to five of sixteen per slot, so the segment table hits 100 percent at only 31 percent of the page limit while free RAM, swap space, and memory pressure all still read healthy. A cold swapper — zero swapouts for 21 hours, 68 swapfiles created mid-storm — loses the drain race. macOS has no kernel defense: jetsam is compiled out and the one kill arm requires a single process holding more than half the whole pool. Pageout can then only re-activate what it cannot compress, free memory drains to 14.8 megabytes, the box live-locks, watchdogd starves for 94 seconds, and the kernel watchdog reboots the machine. The compressor-sentinel shipped in this repo trips on rate from cheap sysctls minutes early — where the kernel's own 98 percent edge leaves 7.6 seconds — capturing full argv on the ramp, with an opt-in reversible SIGSTOP actuator.">
+</picture>
+
+<details>
+<summary>Interactive Diagram</summary>
+
+<!-- mermaid-fence: assets/diagrams/compressor-panic.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart TB
+    Burst["an agent-fleet BURST — any Mac, any terminal<br/>worker pools · cold <i>next dev</i> compiles · browser chains<br/>multi-GB of poorly-compressible memory in minutes"]
+    Comp["macOS VM compressor — 1.63M segment slots<br/>provisioned for 4:1-compressible data<br/>swapped-out segments STILL COUNT · a slot frees only when EMPTY"]
+    Cold["COLD swapper<br/>zero swapouts for 21 h — 68 swapfiles<br/>created mid-storm lose the drain race"]
+    Full["segment table 100% at 31% of the page limit<br/>free RAM, swap space and pressure ALL still read healthy"]
+    NoKill["NO kernel defense on macOS:<br/>jetsam is compiled out · the one kill arm needs<br/>a single process holding >50% of the whole pool"]
+    Wedge["pageout can only RE-ACTIVATE what it cannot compress<br/>free memory drains to 14.8 MiB — live-lock"]
+    Panic["watchdogd starved 94 s<br/>kernel watchdog REBOOTS the box"]
+    Sent["compressor-sentinel (this repo)<br/>10 s rate trip on cheap sysctls — minutes of warning<br/>argv snapshot on ramp · opt-in reversible SIGSTOP"]
+
+    Burst --> Comp
+    Comp -->|"raw-stored pages pack 4-5 of 16 per slot"| Full
+    Cold -.-> Full
+    Sent -.->|"trips HERE — the kernel's own<br/>98% edge leaves 7.6 seconds"| Full
+    Full --> Wedge
+    NoKill -.-> Wedge
+    Wedge --> Panic
+
+    classDef k fill:#2b2410,stroke:#d4af37,color:#e6edf3
+    classDef r fill:#2b1618,stroke:#f85149,color:#e6edf3
+    classDef b fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
+    classDef g fill:#12261a,stroke:#3fb950,color:#e6edf3
+    class Burst,Comp k
+    class Cold,NoKill b
+    class Full,Wedge,Panic r
+    class Sent g
+```
+
+<sup><a href="assets/diagrams/compressor-panic-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/compressor-panic-light.svg?raw=true">light</a> · <a href="assets/diagrams/compressor-panic.mmd">source</a></sup>
+
+</details>
 
 ### The interface is
 

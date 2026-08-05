@@ -1,0 +1,26 @@
+flowchart TB
+    Burst["an agent-fleet BURST — any Mac, any terminal<br/>worker pools · cold <i>next dev</i> compiles · browser chains<br/>multi-GB of poorly-compressible memory in minutes"]
+    Comp["macOS VM compressor — 1.63M segment slots<br/>provisioned for 4:1-compressible data<br/>swapped-out segments STILL COUNT · a slot frees only when EMPTY"]
+    Cold["COLD swapper<br/>zero swapouts for 21 h — 68 swapfiles<br/>created mid-storm lose the drain race"]
+    Full["segment table 100% at 31% of the page limit<br/>free RAM, swap space and pressure ALL still read healthy"]
+    NoKill["NO kernel defense on macOS:<br/>jetsam is compiled out · the one kill arm needs<br/>a single process holding >50% of the whole pool"]
+    Wedge["pageout can only RE-ACTIVATE what it cannot compress<br/>free memory drains to 14.8 MiB — live-lock"]
+    Panic["watchdogd starved 94 s<br/>kernel watchdog REBOOTS the box"]
+    Sent["compressor-sentinel (this repo)<br/>10 s rate trip on cheap sysctls — minutes of warning<br/>argv snapshot on ramp · opt-in reversible SIGSTOP"]
+
+    Burst --> Comp
+    Comp -->|"raw-stored pages pack 4-5 of 16 per slot"| Full
+    Cold -.-> Full
+    Sent -.->|"trips HERE — the kernel's own<br/>98% edge leaves 7.6 seconds"| Full
+    Full --> Wedge
+    NoKill -.-> Wedge
+    Wedge --> Panic
+
+    classDef k fill:@gold-bg,stroke:@gold-fg,color:@text
+    classDef r fill:@red-bg,stroke:@red-fg,color:@text
+    classDef b fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef g fill:@green-bg,stroke:@green-fg,color:@text
+    class Burst,Comp k
+    class Cold,NoKill b
+    class Full,Wedge,Panic r
+    class Sent g
