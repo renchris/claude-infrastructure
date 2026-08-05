@@ -41,14 +41,71 @@ minus the autonomous fork.
    index line, and every index link must resolve to a file on disk. A topic file with no index
    line is INVISIBLE at session load — silently decayed memory. Re-index it (write a hook from its
    `description:`) and report it; a dangling link is reported, never auto-removed.
-   🚨 **Subtract the archive's own entry set FIRST — steps 2-4 are otherwise exact inverses.**
-   Archiving deliberately leaves a topic file on disk with no index line, so a naive orphan sweep
-   re-indexes precisely what the previous run archived, and the index re-inflates by that much on
-   every subsequent run. Build the exclusion set from the links already recorded in
-   `archive/MEMORY_ARCHIVE_*.md` (that file, not a guess, is the record of intent) and treat those
-   files as CORRECTLY unindexed. Verified 2026-07-29: 4 of the 4 apparent "orphans" were the 4
-   entries the same-day pass had archived — re-indexing them would have undone it and added ~750 B.
-   A genuine orphan is a topic file that is in NEITHER the index NOR any archive file.
+
+   🚨 **A file is an orphan only after subtracting THREE exclusion sets — E1 the index, E2 the
+   demotion record, E3 the always-loaded instruction files.** Each is a *different reason* a topic
+   file is CORRECTLY unindexed, and each was found by a measurement in which the naive sweep was
+   wrong about EVERY file it flagged. "No index line ⇒ invisible at session load" is the premise of
+   this step and it is false for E2 and E3; run the sweep without them and it re-indexes the exact
+   files a previous pass deliberately demoted, re-inflating the index on every subsequent run.
+
+   **E2 — the demotion record. Steps 2-4 are otherwise exact inverses.** Archiving deliberately
+   leaves a topic file on disk with no index line. Verified 2026-07-29 (claude-infrastructure): 4 of
+   the 4 apparent "orphans" were the 4 entries the same-day pass had archived — re-indexing them
+   would have undone it and added ~750 B.
+   🚨 **DISCOVER that record by CONTENT; never key on a filename.** Measured 2026-08-05 on reso, the
+   glob this rule used to prescribe (`archive/MEMORY_ARCHIVE_*.md`) matched **0 of the 577** demoted
+   links: reso keeps its cold record at the memory dir's TOP level as `MEMORY-ARCHIVE.md`, and its
+   `archive/MEMORY_ARCHIVE_2026-H1.md` holds none. A glob-only E2 therefore read **590** orphans
+   where there were **13**, and would have re-indexed 577 entries a standing rotation rule had
+   demoted. So build E2 from **every `.md` under the memory dir and its `archive/` except `MEMORY.md`
+   itself that carries `](….md)` links** — those are the demotion records, whatever they are called.
+   ⚠️ **A whole-index SNAPSHOT is not a demotion record** (`MEMORY_INDEX_SNAPSHOT_*`,
+   `MEMORY_INDEX_PRE-COMPACT_*`, `MEMORY_PRECOMPACT_*`, `MEMORY.md.bak-*` — 10 such files in
+   claude-infrastructure's `archive/`). It records what was indexed at a moment, so trusting it as
+   E2 silently excuses a decay that happened afterwards. Report a file whose ONLY citation is a
+   snapshot; do not silently trust it either way.
+
+   **E3 — cited by explicit path from an always-loaded instruction file** (project `CLAUDE.md`,
+   `.claude/CLAUDE.md`, `.claude/rules/**`). Such a file is already reaching every session through
+   the citing instruction file, so re-indexing buys **zero visibility** and spends index bytes —
+   the scarcest resource this command manages. Measured 2026-08-05 on reso: after E1+E2, **13 of 13**
+   remaining "genuine orphans" were cited this way (`Reference: `memory/x.md``, `See memory: `x.md``,
+   `Memory: `x.md``) — a 100% false-positive rate for the whole residual pool. Re-indexing them
+   would have added ~13 lines / ~2-3 KB to a 19.7 KB index, pushing it back over reso's own ~20 KB
+   rotate threshold and re-triggering the rotation that had just been done. reso's
+   `MEMORY-ARCHIVE.md` had already recorded this rule and this count on 2026-07-27; the finding never
+   reached this command, which is why the sweep kept re-deriving it. E3 is project-shaped, not
+   universal — claude-infrastructure has 2 instruction files and 0 orphans, so E3 legitimately
+   measures 0 there. Report E3 hits as *correctly unindexed, reachable via `<citing file>`*, never as
+   decay.
+
+   A genuine orphan is a topic file in NONE of the three: not in the index, not in any demotion
+   record, not cited from an always-loaded instruction file. **Run it, do not eyeball it** — every
+   miss above came from applying an exclusion rule by hand:
+
+   ```bash
+   # bash, NOT zsh — needs nullglob, or a non-matching archive/ glob aborts the substitution.
+   M=<memory-dir> P=<project-dir>; shopt -s nullglob
+   recs=(); for f in "$M"/*.md "$M"/archive/*.md; do          # E2 by CONTENT, never by filename
+     b=${f##*/}; [[ $b == MEMORY.md || $b == *SNAPSHOT* || $b == *PRE-COMPACT* || $b == *PRECOMPACT* ]] && continue
+     grep -qE '\]\([A-Za-z0-9._-]+\.md\)' "$f" && recs+=("$f")
+   done
+   lines() { grep -ohE '\]\([A-Za-z0-9._-]+\.md\)' "$@" 2>/dev/null | tr -d ']()'; }
+   comm -23 <(printf '%s\n' "$M"/*.md | xargs -n1 basename | sort -u) \
+            <( { printf 'MEMORY.md\n'; printf '%s\n' "${recs[@]##*/}"
+                 lines "$M/MEMORY.md" "${recs[@]}"; } | sort -u ) |     # minus E1 + E2
+   while read -r f; do                                                  # minus E3
+     grep -rqF "${f%.md}" "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" 2>/dev/null \
+       || echo "ORPHAN $f"
+   done
+   ```
+
+   Verified 2026-08-05: **0 orphans on both** reso (13 residual, all E3) and claude-infrastructure
+   (229 topic files) — and a **positive control** proves that zero is not vacuous. On a fixture whose
+   only demotion record is a non-conventionally-named `MEMORY-ARCHIVE.md`, it prints exactly the
+   never-indexed file and the snapshot-only file, while the same fixture makes the old
+   glob-only-plus-no-E3 sweep report 3 false positives.
 5. Report: N archived, N re-indexed, lines/bytes reclaimed, new `MEMORY.md` line count.
    > Reality check: in a dense, active memory most "resolved" entries carry a tail, so SAFE-AUTO
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
@@ -156,14 +213,17 @@ lines that still read as prose. The answer is **fewer indexed entries, not small
    re-inflates ~1 KB/11.6 h at burst and ~470 B/day at the lifetime average, so landing *at* the
    limit means the next sibling append silently drops entries again. Report headroom + rate.
 
-🚨 **Name the cold file `archive/MEMORY_ARCHIVE_*-COLD.md`.** SAFE-AUTO step 4 builds its
-orphan-exclusion set by globbing `archive/MEMORY_ARCHIVE_*.md`. A file named `MEMORY_COLD.md` falls
-outside that glob, so the next orphan sweep sees every cold topic file as decayed memory and
-**re-indexes all of them**, silently undoing the split. The filename prefix is load-bearing — same
-inverse-operations trap as the archive/orphan pair in SAFE-AUTO.
+**Name the cold file `archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md`** so the record is
+self-describing and sorts beside its warm sibling. This used to be load-bearing — step 4 globbed
+`archive/MEMORY_ARCHIVE_*.md`, so a file named `MEMORY_COLD.md` fell outside it and the next sweep
+re-indexed every cold entry, silently undoing the split. **Step 4's E2 no longer depends on the
+name** (it discovers demotion records by content), because the prescription was measurably not
+followed: reso's live cold record is a top-level `MEMORY-ARCHIVE.md` holding 577 links, and the glob
+matched 0 of them. Follow the convention anyway; do not rely on anyone else having followed it.
 
 **A cold move and a decayed orphan look identical from the index.** Both are topic files with no
-index line. Distinguish them by the COLD/archive record, and when a genuine orphan turns up during a
+index line — as is a file cited only from an always-loaded instruction file (step 4 E3). Distinguish
+them by the COLD/archive record and by that citation, and when a genuine orphan turns up during a
 split, record it in COLD with a note saying it was *never indexed* rather than moved — otherwise the
 next reader reads it as a deliberate demotion.
 
