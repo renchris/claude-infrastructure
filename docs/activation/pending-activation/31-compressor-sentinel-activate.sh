@@ -97,8 +97,13 @@ echo "[2a] checking for a foreign writer on $LIVE_LOG"
 # shellcheck disable=SC2009  # pgrep cannot do this: the ARGV is what discriminates our own daemon
 # from a foreign one, and macOS pgrep -f matches a TRUNCATED argv (capacity-alarm.sh:231 measured it
 # returning 0 against a real 8) — so the path prefixes excluded below would never match.
+# …and exclude THIS script's own process tree: its filename contains the match string, so without
+# the exclusion the check refuses on itself, every run, forever (measured 2026-08-05 first
+# activation attempt — the only matches were the activation's own pid and subshell; the pgrep-f/argv
+# family of trap, one instrument over).
 FOREIGN="$(ps -Awwo pid=,args= 2>/dev/null | grep -i 'compressor-sentinel' \
-           | grep -v -e 'grep' -e "$SENTINEL" -e "$HOME/.claude/scripts/compressor-sentinel.sh" || true)"
+           | grep -v -e 'grep' -e "$SENTINEL" -e "$HOME/.claude/scripts/compressor-sentinel.sh" \
+                     -e '31-compressor-sentinel-activate' || true)"
 if [ -n "$FOREIGN" ]; then
   echo "✗ another compressor-sentinel is already running and writing that log:" >&2
   printf '    %s\n' "$FOREIGN" >&2
