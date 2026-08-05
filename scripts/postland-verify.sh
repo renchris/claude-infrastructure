@@ -187,6 +187,26 @@ BISECT_TO="${POSTLAND_BISECT_TIMEOUT_S:-900}"  # WHOLE-BISECT wall bound — see
 # undecidable"), never a false conviction: the callers fall back to the landed sha and page, exactly
 # as they already do when the bisect cannot decide. Losing culprit REFINEMENT is a bad afternoon;
 # an unbounded runaway corrupting the shared repo for half a day is the incident.
+BISECT_MAX_STEPS="${POSTLAND_BISECT_MAX_STEPS:-24}"  # STEP-COUNT cap — the OTHER bound; see below
+# TWO bounds, because the wall above does not address the measured CAUSE. The 12h41m walk was not
+# made of slow steps — every step was fast. The RANGE GREW: the bisected suite committed into
+# $WORKTREE on each invocation, so new revisions kept entering the interval and the walk had no
+# fixed point. A wall bound caps that damage without ever explaining it; a per-step bound would
+# never have fired at all. Only a STEP COUNT names a walk that is not converging.
+#
+#   sizing — a healthy bisect is ceil(log2(range)) steps and postland's range is the landing
+#   window, single digits. 24 allows 16M commits of slack and still makes an infinite walk
+#   impossible, so it cannot cut a legitimate bisect short.
+#
+# THE TWO DO NOT SHARE A FAILURE MODE, which is the entire point of keeping both. `bounded`
+# degrades to running UNBOUNDED when no timeout(1) resolves (see its definition), so on such a box
+# BISECT_TO is INERT — while the step cap is plain bash inside the runner and still fires. The
+# bound that answers the measured cause is the one that does not depend on an external binary.
+#
+# Safe to err SMALL, unlike every other bound in this file, and the reason is worth stating so
+# nobody "fixes" it upward later: do_bisect runs AFTER the verdict is already RED. Cutting it loses
+# the culprit NAME, never a verdict, so it cannot manufacture the permanent non-verdict that an
+# undersized SUITE_TO/RETRY_TO would.
 # ── BACKGROUND QoS — the singleton must make progress at ANY load (§4.2.3) ───────────────────────
 # v1 admission control (gate_admit, DELETED) waited for load < ceiling before the suite and before
 # every retry: ~2h of sleeping per run (backlog 60ec4c2d86d4), and with 5 concurrent gates each
@@ -818,11 +838,12 @@ EOF
 # one's corpus being the load the others were waiting out.
 
 do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when undecidable)
-  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0
+  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
   prepare_worktree "$bad" || return 1
   runner="$(mktemp "$TMPBASE/postland-bisect.XXXXXX")" || return 1
+  counter="$runner.steps"; : > "$counter"
   # UNWIND STRUCTURALLY, not positionally. A CUT bisect leaves the cell parked on a probe commit
   # with BISECT_* state in .git — the next `bisect start` there fails and the cell's git state is a
   # lie. The reset used to sit inline after the `if`, which happened to cover the two exits that
@@ -833,10 +854,20 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
   # pointing at a $runner that no longer exists. Inert today only because functrace is off; one
   # `set -T` anywhere later and every subsequent function return would run a `rm -f` on an unbound
   # variable under `set -u`. Disarming costs nothing and removes the whole class.
-  trap 'git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true; rm -f "$runner"; trap - RETURN' RETURN
+  trap 'git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true; rm -f "$runner" "$counter"; trap - RETURN' RETURN
   qos="$(printf '%q ' "${QOS[@]}")"     # every bats invocation runs in the background band, incl. this one
   {                                     # 125 = SKIP: file absent, or bats ERRORED (rc>1) — not a red
     printf '#!/bin/bash\n'
+    # STEP CAP (see BISECT_MAX_STEPS). Counted in the RUNNER because only the runner is guaranteed
+    # to execute exactly once per step — `git bisect run` exposes no step hook. Exiting >=128 makes
+    # git abort the run itself, so the bisect unwinds cleanly instead of being left parked mid-walk;
+    # verified against this git: a 129 gives `bisect run failed: exit code 129 ... is < 0 or >= 128`
+    # and NO "is the first bad commit" line. Note it is git that reports rc 127 for that abort, not
+    # 129 — which is why the cut below is detected from the COUNTER, never from rc.
+    # shellcheck disable=SC2016  # authoring a script: $n and the $( ) must NOT expand here
+    printf 'n=$(( $(cat "%s" 2>/dev/null || echo 0) + 1 )); printf %%s "$n" > "%s"\n' "$counter" "$counter"
+    # shellcheck disable=SC2016  # ditto — $n is read by the RUNNER, not by us
+    printf '[ "$n" -le %s ] || exit 129\n' "$BISECT_MAX_STEPS"
     printf '[ -f "%s" ] || exit 125\n' "$file"
     printf '%s"%s" "%s" >/dev/null 2>&1\n' "$qos" "$BATS_BIN" "$file"
     # shellcheck disable=SC2016  # authoring a script: $rc must NOT expand here
@@ -849,14 +880,23 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
     # missing tool must not silently become a different behaviour, and the operator needs to know
     # which of the two shapes a 12-hour process was.
     [ -n "$TIMEOUT_BIN" ] && [ -x "$TIMEOUT_BIN" ] \
-      || log "bisect UNBOUNDED — no timeout(1) resolved; running without the ${BISECT_TO}s wall"
+      || log "bisect UNBOUNDED — no timeout(1) resolved; the ${BISECT_TO}s wall is INERT this run — only the ${BISECT_MAX_STEPS}-step cap bounds it"
     out="$(bounded "$BISECT_TO" git -C "$WORKTREE" bisect run "$runner" 2>/dev/null)"; rc=$?
-    # 124 = OUR bound fired ⇒ NON-VERDICT, and the parse is SKIPPED rather than merely expected to
+    steps="$(cat "$counter" 2>/dev/null || echo 0)"
+    # EITHER bound firing ⇒ NON-VERDICT, and the parse is SKIPPED rather than merely expected to
     # come back empty: `bisect run` prints its running log to stdout, so a cut mid-report could in
     # principle carry the "is the first bad commit" line for a commit it had not finished proving.
     # An innocent sha named as the culprit is what C20 then REVERTS. Undecidable is the safe read.
+    #
+    # The cap is detected from the COUNTER, not from rc: git reports its abort as rc 127, which is
+    # indistinguishable from a runner that could not be executed. `-gt` and not `-ge` — the runner
+    # refuses only on the step AFTER the cap, so the counter exceeds BISECT_MAX_STEPS iff the cap
+    # actually fired. A healthy bisect that finishes in exactly the cap's worth of steps still gets
+    # its culprit named (pinned by B8).
     if [ "$rc" -eq 124 ]; then
       log "bisect CUT at ${BISECT_TO}s (POSTLAND_BISECT_TIMEOUT_S) — undecidable, no culprit named"
+    elif [ "${steps:-0}" -gt "$BISECT_MAX_STEPS" ]; then
+      log "bisect CUT at the ${BISECT_MAX_STEPS}-step cap (POSTLAND_BISECT_MAX_STEPS) — the range is NOT SHRINKING (a suite that commits into \$WORKTREE does exactly this); undecidable, no culprit named"
     else
       culprit="$(printf '%s\n' "$out" | sed -n 's/^\([0-9a-f]\{7,40\}\) is the first bad commit.*/\1/p' | head -1)"
     fi

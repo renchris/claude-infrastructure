@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# postland-verify.sh — THE BISECT WALL BOUND.
+# postland-verify.sh — THE BISECT BOUNDS: a wall (B1-B5) and a STEP-COUNT cap (B6-B9).
 #
 # WHY THIS FILE EXISTS. 2026-08-05: `postland-verify.sh --run-if-needed` (pid 57191) started at
 # 00:51:28, was orphaned to PPID 1, and was still alive 12h53m later stuck inside a runaway
@@ -19,6 +19,8 @@
 #                 must not silently become a different behaviour.
 #   B5 control    with a bound that fits, the bisect still names the first bad commit. This is the
 #                 negative control for B1/B2: a bound wired to fire always would turn it red.
+#   B6-B9         the STEP-COUNT cap — the second, DISJOINT bound. Its own contract block sits with
+#                 those tests below; B7 is the clause a wall-only implementation cannot satisfy.
 #
 # POSITIVE CONTROL: B1/B2/B3 drive a fixture bats stub that sleeps far past a 3s bound, so the
 # bound is SEEN to fire. A bound that has never been observed firing is not shipped.
@@ -109,11 +111,11 @@ stub_bats_marker() {
   # B2 — undecidable: exit 1 (verb_bisect's undecidable arm), and NOT 0. A cut must not be readable
   # as success, and it must not be readable as a reproducible red that names a commit.
   [ "$status" -eq 1 ]
-  [[ "$output" == *"bisect undecidable"* ]]
+  [[ "$output" == *"bisect undecidable"* ]] || false
   # ...and NO sha anywhere on the output. This is the clause that matters: C20 reverts what a
   # bisect names, so a cut naming an innocent commit is worse than no bisect at all.
-  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]]
-  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]]
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
 
   # B1 — the bound actually FIRED: 3s bound + 10s SIGKILL grace, against a 120s-per-step runner.
   # Without the bound this is 120s+ (and the incident's shape was 12h53m).
@@ -145,7 +147,9 @@ stub_bats_marker() {
 @test "B4: with no timeout(1) the bisect runs UNBOUNDED and SAYS SO — a missing tool is not a silent skip" {
   mk_history 5
   stub_bats_marker                       # fast + decidable, so unbounded is safe to run here
-  # Set-but-EMPTY disables bounding verbatim (the file's documented seam).
+  # Set-but-EMPTY disables bounding verbatim (the file's documented seam). The empty value IS the
+  # signal, so the `VAR= cmd` form is deliberate — a quoted '' would test a different seam.
+  # shellcheck disable=SC1007
   TMPDIR="$SUTTMP" CC_POSTLAND_TIMEOUT_BIN= run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
 
   grep -q "bisect UNBOUNDED — no timeout(1) resolved" "$RUNLOG"
@@ -160,7 +164,128 @@ stub_bats_marker() {
   TMPDIR="$SUTTMP" POSTLAND_BISECT_TIMEOUT_S=300 run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
 
   # If the bound were wired to fire unconditionally, B1/B2 would still pass and only THIS goes red.
+  # It is the control for BOTH bounds: the step cap's cut message also begins "bisect CUT at".
   [ "$status" -eq 0 ]
-  [[ "$output" == "$FIRSTBAD" ]]
+  [[ "$output" == "$FIRSTBAD" ]] || false
   ! grep -q "bisect CUT at" "$RUNLOG"
+}
+
+# ── THE STEP-COUNT CAP (B6-B9) ────────────────────────────────────────────────────────────────────
+# WHY A SECOND BOUND, when the wall above already stops a runaway. Because the wall caps the DAMAGE
+# without addressing the measured CAUSE. The 12h41m walk was not made of slow steps — every step was
+# fast and the RANGE GREW: the bisected suite committed into the cell on every invocation, so new
+# revisions kept entering the interval and the walk had no fixed point. A per-step bound would never
+# have fired at all, and a wall bound cannot tell that shape apart from one slow suite.
+#
+# This block REPRODUCES that mechanism rather than describing it — stub_bats_committing drives the
+# identical shape, and it is the positive control for the cap: a 5-commit range that converges in 2
+# steps was measured running 41+ steps under it (2026-08-05, this git).
+#
+#   B6 cap        a NON-CONVERGING bisect is cut by POSTLAND_BISECT_MAX_STEPS: undecidable, no sha.
+#   B7 disjoint   the two bounds share NO failure mode. With no timeout(1) the WALL IS INERT — and
+#                 the cap, being plain bash inside the runner, still fires. This is the clause a
+#                 wall-only implementation structurally cannot satisfy, and the reason the cap is
+#                 not redundant with the wall.
+#   B8 off-by-one a bisect finishing in exactly the cap's worth of steps STILL names its culprit.
+#                 Pins `-gt` over `-ge`: the runner refuses only on the step AFTER the cap, so the
+#                 counter exceeds it iff the cap actually fired. Self-calibrating — it MEASURES the
+#                 real step count first, so it cannot rot if the fixture's range changes.
+#   B9 unwind     the step-counter tempfile is removed too — the other half of B3's trap line.
+
+# A bats stub that COMMITS into its cwd (= the bisect cell) every invocation and reports bad. This
+# is the incident's exact shape: new revisions keep entering the interval and the walk never reaches
+# a fixed point. Identity comes from the fixture repo's LOCAL config, never --global.
+stub_bats_committing() {
+  cat > "$STUB/bats-stub" <<'EOS'
+#!/bin/bash
+case "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac
+date +%s%N >> grew.txt
+git add -A >/dev/null 2>&1
+git commit -qm "suite-commit" >/dev/null 2>&1
+exit 1
+EOS
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+
+# The marker stub plus a step counter THE TEST owns. The SUT deletes its own counter on unwind, so
+# B8 cannot read it — and a control that measured the subject's bookkeeping instead of the real
+# invocation count would decay with the implementation.
+stub_bats_marker_counting() {
+  STEPLOG="$BATS_TEST_TMPDIR/steps.$1"
+  printf '#!/bin/bash\ncase "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac\nprintf x >> "%s"\n[ -f BAD ] && exit 1\nexit 0\n' \
+    "$STEPLOG" > "$STUB/bats-stub"
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+
+@test "B6: a bisect whose RANGE GROWS is cut by the step cap — undecidable, never a sha" {
+  mk_history 5
+  stub_bats_committing            # converges in 2 steps normally; runs away under this stub
+
+  TMPDIR="$SUTTMP" POSTLAND_BISECT_MAX_STEPS=6 run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  # C20 REVERTS whatever a bisect names, so a cut must name nothing at all.
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  # ...and it is the CAP that fired, named with its own knob and its own diagnosis.
+  grep -q "bisect CUT at the 6-step cap (POSTLAND_BISECT_MAX_STEPS)" "$RUNLOG"
+  grep -q "range is NOT SHRINKING" "$RUNLOG"
+}
+
+@test "B7: with NO timeout(1) the wall is INERT and the cap still fires — the bounds are disjoint" {
+  mk_history 5
+  stub_bats_committing
+  # Set-but-EMPTY disables bounding verbatim (the file's documented seam), so BISECT_TO CANNOT fire:
+  # whatever stops this run is the step cap alone. This is the box the 12h41m runaway ran on, and a
+  # wall-only implementation has nothing to stop it here.
+  # shellcheck disable=SC1007  # set-but-EMPTY is the seam being tested; a quoted '' is not it
+  TMPDIR="$SUTTMP" CC_POSTLAND_TIMEOUT_BIN= POSTLAND_BISECT_MAX_STEPS=6 \
+    run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  # the degradation is ANNOUNCED, and it names which bound survived
+  grep -q "wall is INERT this run" "$RUNLOG"
+  grep -q "only the 6-step cap bounds it" "$RUNLOG"
+  # the cap did the stopping; the wall demonstrably did not
+  grep -q "bisect CUT at the 6-step cap" "$RUNLOG"
+  ! grep -q "bisect CUT at 900s" "$RUNLOG"
+}
+
+@test "B8: a bisect finishing in exactly the cap's worth of steps still names its culprit (-gt, not -ge)" {
+  mk_history 5
+
+  # (1) MEASURE the real step count, with a cap far too large to interfere.
+  stub_bats_marker_counting a
+  TMPDIR="$SUTTMP" POSTLAND_BISECT_MAX_STEPS=99 run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  local n; n="$(wc -c < "$BATS_TEST_TMPDIR/steps.a" | tr -d ' ')"
+  [ "$n" -ge 1 ]
+
+  # (2) re-run with the cap set to EXACTLY that count. The runner refuses only on the step AFTER the
+  # cap, so this must still DECIDE. Under `-ge` the culprit is suppressed and this test goes red —
+  # which is the whole point: an off-by-one here silently converts good bisects into non-verdicts.
+  stub_bats_marker_counting b
+  TMPDIR="$SUTTMP" POSTLAND_BISECT_MAX_STEPS="$n" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  ! grep -q "step cap" "$RUNLOG"
+}
+
+@test "B9: the cap's cut path unwinds too — no runner and no step-counter tempfile survive" {
+  mk_history 5
+  stub_bats_committing
+  TMPDIR="$SUTTMP" POSTLAND_BISECT_MAX_STEPS=6 run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 1 ]
+
+  # the glob covers BOTH halves — postland-bisect.XXXXXX and its .steps sidecar
+  run bash -c "ls -1 '$SUTTMP'/postland-bisect.* 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+  # and the cell is not left parked mid-bisect
+  run bash -c "find '$R/.git/worktrees' -name 'BISECT_*' 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
 }
