@@ -89,15 +89,33 @@ REPO="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)"
 BRANCH="${NAME:-cc-$(date +%H%M%S)-$$}"
 BRANCH="$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
 
+# WARM-POOL FAST PATH — the repo's OWN allocator only, and never load-bearing.
+#
+# NO CROSS-REPO FALLBACK. This used to fall back to $HOME/.reso/bin/worktree-pool.sh whenever
+# $REPO shipped no allocator of its own ("installed trunk copy, local main lags"). That path is a
+# machine-GLOBAL one with no repo test in it, so for any repo but reso it claimed a slot out of
+# RESO's pool: the slots live at a shared $WTROOT under generic wt-pool-N names, and `claim` ran
+# `git switch -C <our-branch>` inside one of them and printed it back as though it were ours. The
+# caller then worked in the wrong repo entirely — observed 2026-08-05, this hook took wt-pool-9.
+# reso closed it at the allocator chokepoint (99753cf31: a foreign caller is refused, exit 3), so
+# the claim now fails loudly instead of silently succeeding — but a refusal we treat as fatal is
+# still a broken `claude -w`. Both halves are fixed here: the fallback is gone (nothing foreign is
+# ever asked), and a failed claim FALLS THROUGH rather than exiting.
+#
+# FALL THROUGH, NEVER exit 1. A pool is an OPTIMISATION — a warm slot instead of a ~30s cold
+# build. The cold rungs below need nothing from it, so any claim failure (refusal, empty pool,
+# allocator bug) must degrade to them; exiting turned a slow launch into no launch at all. This
+# mirrors scripts/handoff-fire.sh's pool gate, which already refuses a foreign slot and cold-builds.
 POOL_SH="$REPO/scripts/worktree-pool.sh"
-[ -f "$POOL_SH" ] || POOL_SH="$HOME/.reso/bin/worktree-pool.sh"   # installed trunk copy (local main lags)
 if [ -f "$POOL_SH" ] && [ -f "$REPO/scripts/new-worktree.sh" ]; then
   WT="$(cd "$REPO" && bash "$POOL_SH" claim "$BRANCH" 2>>"$LOG_FILE")"
-  [ -n "$WT" ] && [ -d "$WT" ] || { log "pool claim failed for $BRANCH"; exit 1; }
-  link_memory "$WT"
-  log "claimed pool worktree: $WT (branch $BRANCH)"
-  printf '%s\n' "$WT"
-  exit 0
+  if [ -n "$WT" ] && [ -d "$WT" ]; then
+    link_memory "$WT"
+    log "claimed pool worktree: $WT (branch $BRANCH)"
+    printf '%s\n' "$WT"
+    exit 0
+  fi
+  log "pool claim failed for $BRANCH — falling through to the cold path"
 fi
 
 if [ -f "$REPO/scripts/new-worktree.sh" ]; then
