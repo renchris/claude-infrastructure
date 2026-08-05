@@ -1,9 +1,11 @@
 {
   "_comment": "Reproducible Claude Code config template \u2014 the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset \u2014 that is the whole point of this capture.",
+  "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off — and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire — that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
   "env": {
     "MCP_TIMEOUT": "30000",
     "MCP_TOOL_TIMEOUT": "60000",
     "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "true",
+    "CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "true",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "includeCoAuthoredBy": false,
