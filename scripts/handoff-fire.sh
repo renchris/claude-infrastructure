@@ -2749,6 +2749,23 @@ if [ "${1:-}" = "self-close" ]; then
   ITSID="${ITERM_SESSION_ID:-}"
   SC_SID="${SC_SID:-${ITSID##*:}}"
   [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  # Resolve the terminal verdict HERE — at mode entry, before the FIRST pane→tty query — not just
+  # before the watcher detach at :3016. That hoist (item 191d1fc4143c stage 1) fixed SC_TTY, but two
+  # as_tty calls run ~160 lines EARLIER and were left unpinned, so on a box where KITTY_* was
+  # inherited into iTerm2 they still ask kitty's numeric id space for an iTerm2 UUID and get the
+  # "pane absent" answer. Neither degrades quietly — both are HARD ABORTS on a false negative:
+  #
+  #   :2853 SUC_TTY  → "successor pane <uuid> not found in iTerm2", exit 3, for a successor that is
+  #                    alive and enumerable. `self-close --successor` is a primary close form, so the
+  #                    polluted box could not take it at all.
+  #   :2762 SC_SC_TTY → agent_id_on_tty(none) ⇒ no originator ⇒ "pane is NOT an Agent-Team assignee",
+  #                    exit 2, for a pane that demonstrably is one.
+  #
+  # Measured 2026-08-05 on this box against a live pane, KITTY_WINDOW_ID=2 inherited into iTerm2:
+  # unpinned ⇒ identity=kitty, tty=[]; after the pin ⇒ identity=iterm2, tty=/dev/ttys039.
+  # Idempotent (it early-returns once CC_TERM is set), so the later calls stay exactly as they are —
+  # this only moves the FIRST resolution ahead of the first consumer. (item 12f2524f8b83)
+  pin_term_verdict_for_watcher
   # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
   # a close with no declared continuation read as "the handoff killed our session" — twice a real
   # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
