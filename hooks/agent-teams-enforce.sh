@@ -116,6 +116,31 @@ if [ -n "$TEAM_NAME" ]; then
   exit 0
 fi
 
+# === DELIVERY-CONTRACT NEGATION GUARD ===
+# Fires BEFORE the read-only-type skip and both research branches, because the defect is
+# orthogonal to which branch would allow the spawn.
+#
+# WHY: research-subagents field 7 (the Delivery contract) mandates that every brief name an
+# absolute artifact PATH, because a subagent's prose is invisible and only a file is delivered.
+# Nothing stopped a lead from ALSO writing "Write NO files" in the same brief — which is meant
+# as "do not mutate the repo under investigation" but reads to the subagent as "your delivery
+# channel is closed". The two clauses contradict, and the contradiction is silent: the agent
+# investigates correctly, reports in prose, goes idle, and the report is stranded in its
+# transcript. Observed 2026-08-05: 4 of 5 agents in one wave lost their reports this way; the
+# 1 that delivered was the 1 whose brief did not carry the suppression clause.
+#
+# The suppression clause is legitimate — it is the repo-safety half. The DEFECT is suppression
+# with no named delivery path. So the guard fires only on that conjunction, and is advisory.
+if [ -n "$PROMPT" ]; then
+  WRITE_SUPPRESS='[Ww]rite NO files|write no files|do not write (any )?files|don'"'"'t write (any )?files|writes? nothing to disk|NO (FILES|CODE)( WILL BE)? (WRITTEN|MODIFIED|CREATED)'
+  # An absolute path with a report-ish extension = a named delivery channel.
+  DELIVERY_PATH='(/[A-Za-z0-9._-]+){2,}\.(md|json|jsonl|txt|csv)'
+  if echo "$PROMPT" | grep -qE "$WRITE_SUPPRESS" && ! echo "$PROMPT" | grep -qE "$DELIVERY_PATH"; then
+    emit_allow_ctx "🚨 DELIVERY-CONTRACT NEGATION: this brief suppresses file writes but names NO absolute delivery path, so the subagent has no way to reach you. Its prose is invisible — it will investigate correctly, report into its own transcript, and go idle with the findings stranded (observed 2026-08-05: 4 of 5 agents in one wave lost their reports exactly this way). A write-suppression clause scopes to the SUBJECT under investigation; it must never close the delivery channel. FIX THE BRIEF BEFORE RELYING ON THIS AGENT: keep the suppression but scope it ('do not modify the repo under investigation'), and add research-subagents field 7 verbatim — 'Delivery: write your findings to /abs/path/report-<agent>.md — writing the file is MANDATORY and is what done means.' Recovery for an already-stranded report: its findings are in the agent's session JSONL under the project transcript dir; extract the last long assistant text block."
+    exit 0
+  fi
+fi
+
 # If this is a known read-only subagent type, allow silently
 case "$SUBAGENT_TYPE" in
   Explore|Plan|claude-code-guide|research-decomposition-critic) exit 0 ;;
