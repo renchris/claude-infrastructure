@@ -67,7 +67,7 @@ fi
 args=(launch --type=window --location="$location" --match "window_id:$anchor" --next-to "id:$anchor")
 [ -n "$cwd" ] && args+=(--cwd "$cwd")
 [ -n "$title" ] && args+=(--title "$title")
-args+=("${keep_focus[@]}")
+[ "${#keep_focus[@]}" -gt 0 ] && args+=("${keep_focus[@]}")
 args+=(-- "$@")
 
 exec kitty @ "${args[@]}"
