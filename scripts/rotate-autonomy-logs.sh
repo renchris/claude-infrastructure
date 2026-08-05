@@ -336,12 +336,17 @@ $HOME/.claude/logs/teammate-lifecycle.log
 $HOME/.claude/logs/team-reaper.log
 $HOME/.claude/autonomy/postland/flakes.jsonl
 $HOME/.claude/autonomy/postland/runner.log
-$HOME/.claude/logs/capacity-alarm.jsonl"
+$HOME/.claude/logs/capacity-alarm.jsonl
+$HOME/.claude/logs/compressor-sentinel.jsonl
+$HOME/.claude/logs/compressor-sentinel-snap.log"
 
 # capacity-alarm.jsonl joined 2026-07-31, in the SAME commit that took its sampler from 600 s to
 # 60 s. It had never been a target because at 144 rows/day it was not going anywhere; at 1,440
 # rows/day (~640 KB/day) it is. Adding the rate without adding the rotation is how idl.jsonl
 # reached 183 MB — a cadence and its exhaust are one change, and this list is the other half of it.
+# compressor-sentinel.jsonl joined 2026-08-05 in the SAME commit that created its 10 s daemon
+# (~8,640 rows/day ≈ 2.6 MB/day) — same rule: a cadence and its exhaust are one change. The snap log
+# only grows on trips, but a trip writes 13 snapshots, so it rides along.
 
 # cc-relogin*.log joined 2026-07-25: the autonomous relogin loop (cc-relogin-poll on an hourly
 # LaunchAgent + the cc-relogin executor it invokes) appends per run and caps nothing, and the

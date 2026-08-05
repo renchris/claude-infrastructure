@@ -128,6 +128,11 @@ com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activat
 # appending to their real artifact every 600s. A liveness proxy must not be the one stream the
 # subject is deliberately told not to write. cc-fleet now REFUSES this combination outright.
 com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alarm.jsonl | 13 | 19-capacity-alarm-activate.sh
+# ── com.claude.compressor-sentinel (2026-08-05, panic-compressor-2026-08-05.md §7.1) ───────────────
+# The un-starvable guard for the axis that panicked the box 3x in 6 days. KeepAlive internal-loop
+# daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which
+# it writes every 10 s by design (never --quiet). `staged` until 31-compressor-sentinel-activate.sh.
+com.claude.compressor-sentinel    | staged | 10   | ~/.claude/logs/compressor-sentinel.jsonl | — | 31-compressor-sentinel-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
