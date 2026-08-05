@@ -50,8 +50,8 @@ setup() {
   # sibling clone: the shim lands its commits directly onto origin/main (a concurrent
   # lander winning the race mid-gate, distilled to its trunk-moving effect).
   git clone -q "$ORIGIN" "$SIB"
-  git -C "$SIB" config user.email sib@example.com
-  git -C "$SIB" config user.name sib
+  git -C "${SIB:?repo path required}" config user.email sib@example.com
+  git -C "${SIB:?repo path required}" config user.name sib
 
   export LAND_LOG="$BATS_TEST_TMPDIR/land.log"
   export LAND_LOCK_DIR="$BATS_TEST_TMPDIR/lock"
@@ -301,8 +301,8 @@ LOCKED" ]
   make_gate_shim 2
   WORKB="$BATS_TEST_TMPDIR/workB"
   git clone -q "$ORIGIN" "$WORKB"
-  git -C "$WORKB" config user.email b@example.com
-  git -C "$WORKB" config user.name b
+  git -C "${WORKB:?repo path required}" config user.email b@example.com
+  git -C "${WORKB:?repo path required}" config user.name b
 
   our_branch feat/racer-a a.sh                 # in $WORK
   git -C "$WORKB" checkout -q -b feat/racer-b main

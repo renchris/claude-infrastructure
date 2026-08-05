@@ -18,12 +18,12 @@ setup() {
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
   # real git repos: clean+shipped (landed) and dirty (not landed)
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
-  mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "${r:?repo path required}" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
              echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
              git -C "$r" update-ref refs/remotes/origin/main HEAD; }
   # squash-landed: clean tree, HEAD 1 ahead by COUNT, but content already on origin/main (different sha)
   mksquashland() { local r="${1:?mksquashland: repo path required}"; mkdir -p "$r"; git -C "$r" init -q
-             git -C "$r" config user.email t@t; git -C "$r" config user.name t
+             git -C "${r:?repo path required}" config user.email t@t; git -C "$r" config user.name t
              echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
              echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed
              git -C "$r" update-ref refs/remotes/origin/main HEAD
@@ -512,7 +512,7 @@ EOF
 
 mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.worktrees/* path
   local m="$1" w="$2"
-  mkdir -p "$m"; git -C "$m" init -q; git -C "$m" config user.email t@t; git -C "$m" config user.name t
+  mkdir -p "$m"; git -C "${m:?repo path required}" init -q; git -C "$m" config user.email t@t; git -C "$m" config user.name t
   echo a > "$m/f"; git -C "$m" add f; git -C "$m" commit -qm c1
   git -C "$m" update-ref refs/remotes/origin/main HEAD
   mkdir -p "$(dirname "$w")"

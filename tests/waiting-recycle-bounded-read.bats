@@ -44,7 +44,7 @@ setup() {
   export CC_WR_NOTIFY="$BATS_TEST_TMPDIR/notify-noop.sh"; printf '#!/bin/bash\nexit 0\n' > "$CC_WR_NOTIFY"; chmod +x "$CC_WR_NOTIFY"
   DESK="$BATS_TEST_TMPDIR/desk"; mkdir -p "$DESK"
   git -C "$DESK" init -q
-  git -C "$DESK" config user.email t@t; git -C "$DESK" config user.name t
+  git -C "${DESK:?repo path required}" config user.email t@t; git -C "$DESK" config user.name t
   echo seed > "$DESK/f.txt"; git -C "$DESK" add -A; git -C "$DESK" commit -qm init
   ( cd "$DESK" && bash "$HOOK" arm >/dev/null )
 }

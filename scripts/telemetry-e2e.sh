@@ -139,7 +139,7 @@ if bash ./bin/cc-value selftest >/dev/null 2>&1; then ok "cc-value selftest (15 
 # throwaway cache with TTL 0 forces a fresh compute, and CC_VALUE_REPOS pins the scan to the fixture
 # (never the real fleet). Empty telemetry ⇒ cc-board prints header + footer only (fully determinate).
 V8=$(mktemp -d); VLREPO="$V8/repo"
-git init -q "$VLREPO"; git -C "$VLREPO" config user.email t@t; git -C "$VLREPO" config user.name t
+git init -q "$VLREPO"; git -C "${VLREPO:?repo path required}" config user.email t@t; git -C "$VLREPO" config user.name t
 GIT_AUTHOR_DATE="@$((now-200000))" GIT_COMMITTER_DATE="@$((now-200000))" git -C "$VLREPO" commit -q --allow-empty -m ancient
 GIT_AUTHOR_DATE="@$((now-600))" GIT_COMMITTER_DATE="@$((now-600))" git -C "$VLREPO" commit -q --allow-empty -m recent
 git -C "$VLREPO" update-ref refs/remotes/origin/main "$(git -C "$VLREPO" rev-parse HEAD)"
@@ -164,7 +164,7 @@ C8=$(mktemp -d); sleep 300 & CPID=$!
 jq -nc --arg ts "$now" --arg pid "$CPID" \
   '{ts:($ts|tonumber),session_id:"churnsess",cwd:"/wv",config_dir:"/Users/chrisren/.claude-next",used_pct:20,pid:($pid|tonumber)}' \
   > "$C8/churnsess.json"
-EMPTYR="$V8/empty"; git init -q "$EMPTYR"; git -C "$EMPTYR" config user.email t@t; git -C "$EMPTYR" config user.name t
+EMPTYR="$V8/empty"; git init -q "$EMPTYR"; git -C "${EMPTYR:?repo path required}" config user.email t@t; git -C "$EMPTYR" config user.name t
 GIT_AUTHOR_DATE="@$((now-200000))" GIT_COMMITTER_DATE="@$((now-200000))" git -C "$EMPTYR" commit -q --allow-empty -m ancient
 git -C "$EMPTYR" update-ref refs/remotes/origin/main "$(git -C "$EMPTYR" rev-parse HEAD)"
 cb=$(PATH="$QS8:$PATH" CC_TELEMETRY_DIR="$C8" CC_VALUE_REPOS="$EMPTYR" CC_BACKLOG_FILE="$V8/none" \

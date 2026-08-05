@@ -52,7 +52,7 @@ setup() {
 
 @test "L1-b: capture checkpoints orphaned WIP into a ref WITHOUT touching the worktree" {
   wt="$BATS_TEST_TMPDIR/wt"; mkdir -p "$wt"
-  git -C "$wt" init -q; git -C "$wt" config user.email t@t; git -C "$wt" config user.name t
+  git -C "${wt:?repo path required}" init -q; git -C "$wt" config user.email t@t; git -C "$wt" config user.name t
   echo committed > "$wt/a.txt"; git -C "$wt" add a.txt; git -C "$wt" commit -qm seed
   echo "tracked-change" >> "$wt/a.txt"          # a tracked modification (orphaned WIP)
   echo "UNTRACKED-WIP" > "$wt/b.txt"            # an untracked file (orphaned WIP)

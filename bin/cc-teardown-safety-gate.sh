@@ -125,7 +125,7 @@ selftest() {
 
   mkrepo() { # <dir> — clean shipped repo: origin/main == HEAD, origin/HEAD → origin/main (no network)
     local r="$1"; mkdir -p "$r"
-    git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+    git -C "${r:?repo path required}" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
     echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
     git -C "$r" update-ref refs/remotes/origin/main HEAD
     git -C "$r" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main

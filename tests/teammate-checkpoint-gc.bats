@@ -25,7 +25,7 @@ setup() {
   WT="$BATS_TEST_TMPDIR/wt-team-alice"
   mkdir -p "$WT"
   git -C "$WT" init -q
-  git -C "$WT" config user.email t@t; git -C "$WT" config user.name t
+  git -C "${WT:?repo path required}" config user.email t@t; git -C "$WT" config user.name t
   printf 'seed\n' > "$WT/seed.txt"
   git -C "$WT" add -A >/dev/null; git -C "$WT" commit -qm seed
   BASE="$(git -C "$WT" rev-parse HEAD)"
