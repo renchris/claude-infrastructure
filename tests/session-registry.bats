@@ -34,10 +34,17 @@ SH
 }
 
 # helper: write a registry entry file directly
-mkentry() { # $1=uuid $2=name $3=pid
+mkentry() { # $1=uuid $2=name $3=pid [$4=session_id]
   mkdir -p "$CC_REGISTRY_DIR"
-  printf '{"paneUUID":"%s","name":"%s","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
-    "$1" "$2" "$3" > "$CC_REGISTRY_DIR/$1.json"
+  if [ -n "${4:-}" ]; then
+    printf '{"paneUUID":"%s","name":"%s","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"%s"}' \
+      "$1" "$2" "$3" "$4" > "$CC_REGISTRY_DIR/$1.json"
+  else
+    # No $4 ⇒ the sid-less shape: a provisional row (handoff-fire ensure_registration) or a
+    # register() run whose hook input carried no session_id.
+    printf '{"paneUUID":"%s","name":"%s","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' \
+      "$1" "$2" "$3" > "$CC_REGISTRY_DIR/$1.json"
+  fi
 }
 
 # helper: a definitely-dead pid
@@ -168,14 +175,54 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ "$output" = "[]" ]
 }
 
-@test "deregister: removes the entry" {
-  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "bye" "$$"
-  printf '{"reason":"exit"}' | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+@test "deregister: removes the entry when the ending session OWNS the row" {
+  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "bye" "$$" "SID-OWNER"
+  printf '{"reason":"exit","session_id":"SID-OWNER"}' \
+    | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
   [ ! -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
 }
 
 @test "deregister: skips on reason=clear (pane persists, re-registers next)" {
-  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "keep" "$$"
-  printf '{"reason":"clear"}' | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+  # Sid MATCHES deliberately: reason=clear must be the only thing keeping this row, or the test
+  # passes on the tenancy gate and stops covering the clear-skip at all.
+  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "keep" "$$" "SID-OWNER"
+  printf '{"reason":"clear","session_id":"SID-OWNER"}' \
+    | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+  [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+}
+
+# ── TENANCY: the `claude mcp list` phantom (2026-08-05) ───────────────────────────────────────
+# hooks/session-start.sh:63 runs `claude mcp list` on every SessionStart; that subprocess emits a
+# SessionEnd of its own — reason "other", a fresh session_id, NO matching SessionStart — carrying
+# the live pane's inherited CC_PANE_ID/ITERM_SESSION_ID. Verbatim event shape, captured from a
+# real run against the deployed hook. Pre-fix this deleted the row the pane had just written.
+@test "deregister: refuses to remove a row owned by a DIFFERENT session (mcp-list phantom)" {
+  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "live" "$$" "SID-OWNER"
+  printf '{"session_id":"17b8b21f-ce62-4233-ae6f-a11db5cb5d16","cwd":"/private/tmp","hook_event_name":"SessionEnd","reason":"other"}' \
+    | CC_PANE_ID="AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+  [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json"
+  [ "$output" = "SID-OWNER" ]
+}
+
+@test "deregister: refuses when the ending session carries no session_id" {
+  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "live" "$$" "SID-OWNER"
+  printf '{"reason":"other"}' | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+  [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+}
+
+@test "deregister: refuses on a sid-less provisional row (tenancy unprovable)" {
+  mkentry "AAAAAAAA-1111-2222-3333-444444444444" "prov" "$$"
+  printf '{"reason":"other","session_id":"SID-ANY"}' \
+    | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
+  [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+}
+
+@test "deregister: a null session_id in the row is unprovable, not a match" {
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"AAAAAAAA-1111-2222-3333-444444444444","name":"n","pid":1,"session_id":null}' \
+    > "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json"
+  printf '{"reason":"other","session_id":"SID-ANY"}' \
+    | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
   [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
 }
