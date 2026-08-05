@@ -46,6 +46,19 @@ setup() {
   export CC_REGISTRY_DIR="$D/registry"
   export CC_TEAM_ROOTS="$D/absent-teams"
   export CC_WATCHDOG_DIR="$D/watchdog"; mkdir -p "$CC_WATCHDOG_DIR"
+  # The same law a FOURTH time (33c3a6de, the teammate-reap family). This one defaults to a REAL
+  # DEPLOYED SCRIPT at $HOME/.claude/scripts/teammate-reap-alarm.sh, so unfixtured the suite does not
+  # merely read a stale file — it EXECUTES the operator's live alarm, once per test, and adopts its
+  # verdict. Measured 2026-08-05: it stood at WARN, injecting a phantom teammate-reap row into every
+  # test, and 30 of 80 went red — the all-clear path never runs when a row exists, so tests asserting
+  # the "none" message, `--json == []`, and the M8 roster all fail with their wording still correct.
+  # It cost two mis-diagnoses: the row was read as a cross-suite state leak, then as all-clear wording
+  # drift. Neither is possible once this line exists. The premise is `[ -x ]` against the DEPLOYED
+  # layer, which is why the author's own sibling check was honestly green: 33c3a6de was authored at
+  # 18:52 and that symlink was created at 22:17 the SAME DAY, so the premise was still false when
+  # "siblings unaffected (109 green)" was measured. The land created it, and the suite went red with
+  # nothing committed — no bisect can find this, because the state change was not in git.
+  export CC_REAP_ALARM_SH="$D/absent-reap-alarm.sh"
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
     jq -nc --arg ts "$1" --arg p "$2" --arg n "$3" --arg m "$4" --arg r "$5" --arg cmd "$6" \
       '{ts:$ts,actor:"cc-reaper",kind:"safeguard-blocked",pane:$p,name:$n,account:"claude-quaternary",blocked_model:$m,refusal:$r,firedBy:"ORIG",recover_cmd:$cmd}' >> "$BOARD"; }
@@ -153,6 +166,36 @@ kinds() { ccb --json | jq -r '.[].kind' | sort | tr '\n' ' '; }
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq 'length')" = 0 ]
+}
+
+@test "HOME-INDEPENDENCE: an unfixtured sensor cannot hide — the baseline is identical on a void \$HOME" {
+  # THE GUARD FOR THE WHOLE FIXTURE BLOCK IN setup(), and the reason it is keyed on $HOME rather than
+  # on a list of variable names: all three recurrences of this defect (land-pipeline 6 red, approval
+  # 8 red, teammate-reap 30 red) were a NEW sensor whose default is $HOME-rooted, so a name list would
+  # have to be extended by exactly the person who already forgot to fixture it. This asserts the
+  # PROPERTY instead — this suite's verdict must not depend on whose machine it runs on — so a sensor
+  # added tomorrow trips it with no edit here, and a sensor reading MORE of $HOME makes the control
+  # stronger rather than staler.
+  #
+  # The test above ("the fixtured baseline is SILENT") cannot do this job: it already failed on all 30,
+  # and a reader who sees only "0 rows expected, 1 found" learns nothing about WHERE the row came from.
+  # Two triagers read that same red as a cross-suite state leak and as all-clear wording drift. This
+  # one can only fail for one reason and says so.
+  local void real_out void_out
+  void="$D/void-home"; mkdir -p "$void"
+  # `ts` is dropped so a legitimately-rowed baseline could never flake this on a second boundary; the
+  # phantom rows this catches differ by kind and subject, never only by clock.
+  real_out="$(/bin/bash "$C" --json | jq -S 'map(del(.ts))')"
+  void_out="$(HOME="$void" /bin/bash "$C" --json | jq -S 'map(del(.ts))')"
+  if [ "$real_out" != "$void_out" ]; then
+    echo "BASELINE DEPENDS ON \$HOME — a sensor defaulting under \$HOME is unfixtured in setup()," >&2
+    echo "so this suite is reading (or executing) the operator's live machine:" >&2
+    echo "  with the real \$HOME: $real_out" >&2
+    echo "  with a void \$HOME:   $void_out" >&2
+    echo "FIX: grep bin/cc-blockers for the kind above, find its \${CC_*:-\$HOME/...} default," >&2
+    echo "and export an absent path for it in setup(), as every other sensor there does." >&2
+    false
+  fi
 }
 
 @test "alarm NEVER-ACTIVATED stays SILENT in a void (no land.log, no deploy repo)" {
