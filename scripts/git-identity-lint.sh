@@ -89,8 +89,16 @@ EMBEDDED_ALLOWLIST=""
 ALLOW="${CC_GITID_ALLOWLIST-$EMBEDDED_ALLOWLIST}"
 
 # Files whose CONTENT is fixtures of the very shape being linted (see SELF-EXCLUSION above).
+#
+# git-identity-write-guard.bats is the AGENT-TYPED half of this same class — a PreToolUse deny that
+# a source lint is structurally blind to, since reso was poisoned by a one-liner that never landed
+# in a file. Its DENY cases are the leaky shapes passed to run_hook AS TEST INPUT, so scanning it
+# convicts a suite whose whole purpose is to refuse them. It landed on trunk from a sibling session
+# while this lint was in flight, which is exactly how a self-exclusion list acquires its entries:
+# not by foresight, but by a green tree going red on the next file that carries fixtures.
 SELF_EXCLUDE="git-identity-lint.sh
-git-identity-lint.bats"
+git-identity-lint.bats
+git-identity-write-guard.bats"
 
 # ── the scanner. One awk pass per file, emitting "<lineno><TAB><RULE><TAB><excerpt>" per violation.
 #
