@@ -1565,6 +1565,89 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   return 0
 }
 
+# ---- STAMP TENANCY (2026-08-05, item aba6bcbff6de) ---------------------------------------------
+# The origin gate below used to ask ONE question of the stamp: is the file non-empty. cc-classify —
+# which the gate's own comment names as its model — has never been satisfied with that: its
+# fired_peer() requires the stamp to be TENANCY-VALID, because "the stamp is pane-keyed and never
+# expired, so a later session reusing a previously-fired pane inherited the stale self-retiring
+# contract" (bin/cc-classify:378, rule 2, 2026-07-24). Two sibling auditors over one state with two
+# state models: the reaper refuses to reap a pane the self-killer will happily close.
+#
+# WHY IT BECAME REACHABLE. Under iTerm2 the id is a 128-bit UUID and collision is not a thing, so
+# the weaker predicate was safe by accident, not by design. Kitty ids are SMALL INTEGERS AND KITTY
+# REUSES THEM: measured 2026-08-05, ~/.claude/cc-fired held numeric stamps at 33…497 while the
+# live kitty instance was handing out ids 2–37 — the counter had reset past a range already carrying
+# open stamps, and id 33 was simultaneously a live window and an open stamp. That is a stale stamp
+# authorising a live pane's suicide, which is the FALSE POSITIVE polarity: the item that filed this
+# named it as the more dangerous one, and it is — refusing to close costs an idle pane the operator
+# closes by hand, while closing wrongly is a watched pane vanishing (memory
+# handoff-succession-legibility). The repo's own test proved the gap before this change: a stamp
+# dated ten days earlier, for cwd /tmp, passed the gate from an unrelated directory.
+#
+# THE ORACLE IS cwd, NOT startedAt. cc-classify compares the registry row's startedAt against
+# firedAt+boot-max; self-close cannot, because the registry row a fire writes is PROVISIONAL and
+# carries no startedAt until the session promotes it (measured on this pane: the row was
+# {provisional:true} with no startedAt for the first ~40s of its life). cwd is better here on every
+# axis that matters: the SAME writer records it (mark_fired_peer, above), the closing pane knows its
+# own with certainty and without asking iTerm2, the registry or the process table — and it is
+# INDEPENDENT of the id namespace that is the entire defect. It also happens to be the field that
+# survives the mirror failure: an id CHANGE (resume, crash-recreate, kitty restart) moves the pane
+# and keeps the cwd, while an id REUSE keeps the number and changes the cwd.
+#
+# CALIBRATED TO ABSTAIN. Only a POSITIVE REFUTATION — both paths resolve, and they differ — returns
+# `stale`. Everything unresolvable (no jq, no cwd field, a worktree since removed) returns `unknown`,
+# which the gate treats exactly as it treated every stamp before this change. So this can only ever
+# REFUSE a close that used to be allowed in the one case it can actually prove, and it never invents
+# a new refusal on a path it merely cannot see. CC_SELFCLOSE_TENANCY=0 disables it outright (R8).
+fired_stamp_tenancy() { # $1=stamp-path $2=this-pane-cwd → echoes absent|valid|stale|unknown
+  local stamp="${1:-}" here="${2:-}" want got
+  [ -n "$stamp" ] && [ -s "$stamp" ] || { printf 'absent'; return 0; }
+  [ "${CC_SELFCLOSE_TENANCY:-1}" != 0 ] || { printf 'unknown'; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  want="$(jq -r '.cwd // ""' "$stamp" 2>/dev/null || true)"
+  [ -n "$want" ] || { printf 'unknown'; return 0; }
+  # Resolve BOTH sides the same way. macOS hands out /tmp and /private/tmp for one directory, and a
+  # worktree path can be reached through a symlink, so a raw string compare would manufacture a
+  # mismatch and refuse a genuine peer. An unresolvable side is `unknown`, never `stale`.
+  want="$(cd "$want" 2>/dev/null && pwd -P)" || true
+  got="$(cd "${here:-.}" 2>/dev/null && pwd -P)" || true
+  [ -n "$want" ] && [ -n "$got" ] || { printf 'unknown'; return 0; }
+  if [ "$want" = "$got" ]; then printf 'valid'; else printf 'stale'; fi
+}
+
+# find_open_stamp_for_cwd — the DIAGNOSTIC half, and deliberately not an authorisation path.
+# When no stamp exists under this pane's id, the id may have CHANGED under a session that really was
+# fired as a peer (a resume or a crash-recreate re-creates the pane under a new id — memory
+# panic-recreates-pane-orphans-fired-stamp records exactly this for iTerm2, and kitty's renumbering
+# on restart is the same failure with a smaller id space). The stamp is then orphaned, not missing.
+# This finds it so the refusal can SAY so, naming the id it was written under.
+# It does NOT widen the gate. Two panes can share one cwd — a peer and an operator pane opened in the
+# same worktree — so a cwd match alone cannot distinguish which of them is the fired one, and
+# admitting it would trade the false positive this change closes for a new one. The operator gets
+# evidence and the documented override; the gate keeps refusing on its own.
+find_open_stamp_for_cwd() { # $1=fired-dir $2=cwd $3=self-pane → echoes "<paneUUID>" of an OPEN match
+  local dir="${1:-}" here="${2:-}" self="${3:-}" f pane scwd n=0
+  [ -d "$dir" ] && [ -n "$here" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  here="$(cd "$here" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$here" ] || return 0
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    n=$((n+1)); [ "$n" -le "${CC_SELFCLOSE_SCAN_MAX:-2000}" ] || break
+    pane="$(basename "$f" .json)"
+    [ "$pane" != "$self" ] || continue
+    # OPEN only: record_close_succession stamps closedAt at close, so a closed peer's stamp is spent
+    # and must never be offered as evidence for a different pane in the same reused worktree.
+    [ "$(jq -r '.closedAt // "null"' "$f" 2>/dev/null || echo x)" = null ] || continue
+    scwd="$(jq -r '.cwd // ""' "$f" 2>/dev/null || true)"
+    [ -n "$scwd" ] || continue
+    scwd="$(cd "$scwd" 2>/dev/null && pwd -P)" || continue
+    [ "$scwd" = "$here" ] || continue
+    printf '%s' "$pane"; return 0
+  done
+  return 0
+}
+
 # ---- P0-15 role indirection (SO-1 ping-to-dead-pane break) ------------------------------------
 # A role file names the CURRENT pane for a logical role (e.g. "operator"); role-addressed pings
 # follow it, so a recycle/self-close that moves the desk to a new pane never strands a pending
@@ -2855,7 +2938,35 @@ USAGE
     echo "→ orphaned-assignee close AUTHORIZED: $SC_ASSIGNEE_ID · lead ${SC_ORIGINATOR:0:8} confirmed DEAD (registry row present, pid gone)" >&2
     echo "→ its work survives the close: worktree $(pwd) · transcript recoverable by agentName '${SC_ASSIGNEE_ID%%@*}' (transcripts outlive pane close)" >&2
   fi
-  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ ! -s "$SC_FIRED_STAMP" ]; then
+  # THREE states, not two (see fired_stamp_tenancy above). `absent` and `stale` both refuse, but they
+  # are different facts and the pre-existing message could only state one of them: a live pane that
+  # inherited a REUSED kitty id would have been told it is "an ORIGIN session", which is a
+  # misdiagnosis pointing at the wrong remedy. `unknown` is byte-for-byte the old behaviour.
+  SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
+    SC_STAMP_CWD="$(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
+    SC_STAMP_AT="$(jq -r '.firedAt // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
+    cat >&2 <<USAGE
+!! self-close REFUSED: the fired-peer stamp for pane $SC_SID belongs to a DIFFERENT session.
+!!   stamp $SC_FIRED_STAMP
+!!     fired at $SC_STAMP_AT into  $SC_STAMP_CWD
+!!   but this pane is running in   $PWD
+!!   A pane id is not a tenancy. Kitty numbers its windows with small integers and REUSES them
+!!   across restarts, so an id can outlive the session that was stamped under it and a later,
+!!   unrelated tenant inherits a self-retiring contract it was never granted. Closing on that
+!!   stamp is a watched pane vanishing (memory: handoff-succession-legibility).
+!!   If this session really was fired as a peer, its own stamp is missing, not this one —
+!!   re-fire it through handoff-fire.sh (which stamps), or close this pane by hand.
+!! Override (deliberate, loud, almost never right):  --allow-origin-close
+USAGE
+    exit 2
+  fi
+  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
+    # An id CHANGE orphans a real peer's stamp under its old id (resume / crash-recreate / kitty
+    # renumber). Name it when we can find it: the refusal stands either way, but "no stamp anywhere"
+    # and "your stamp is at 28.json" send the operator to completely different remedies, and only one
+    # of those two sentences was previously sayable.
+    SC_ORPHAN_STAMP="$(find_open_stamp_for_cwd "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}" "$PWD" "$SC_SID")"
     cat >&2 <<USAGE
 !! self-close REFUSED: this is an ORIGIN session, not a fired peer.
 !!   pane $SC_SID has no fired-peer stamp at:
@@ -2864,6 +2975,18 @@ USAGE
 !!   originator, then closes. An operator's main session and an Agent-Team LEAD have no
 !!   originator to hand back to, so they NEVER self-close: not in progress, not when done.
 !!   A finished origin session STAYS UP and reports; the operator closes it.
+USAGE
+    if [ -n "$SC_ORPHAN_STAMP" ]; then
+      cat >&2 <<USAGE
+!!   BUT an OPEN fired-peer stamp for THIS EXACT cwd exists under a different pane id:
+!!     ${CC_FIRED_DIR:-$HOME/.claude/cc-fired}/$SC_ORPHAN_STAMP.json  (cwd $PWD)
+!!   so a peer WAS fired here and its pane id changed underneath it — a resume, a crash-recreate,
+!!   or a kitty restart renumbering its windows. The stamp is orphaned, not missing. This gate
+!!   still refuses (a cwd is not exclusive — an operator pane opened in the same worktree would
+!!   match it too), but that stamp is the evidence a human needs to close this pane knowingly.
+USAGE
+    fi
+    cat >&2 <<USAGE
 !! If work remains, hand it forward instead:  handoff-fire.sh --recycle   (continue in place)
 !! Override (deliberate, loud, almost never right):  --allow-origin-close
 USAGE
