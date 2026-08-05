@@ -35,9 +35,46 @@ the session that owned the row.
   provisional/backfilled ones on the other three) is a **confound for spawn mode**, not a property
   of the account: the desk fires peers on accounts 2/3/4 and runs its own sessions on claude-next.
 
-## The remaining question — WHO removes it
+## WHO removes it — RESOLVED 2026-08-05 (`0d675779`, `64b655be`)
 
-Unproven. Do not guess; the previous two rounds of guessing both cost a landed claim.
+**`claude mcp list`, fired by `hooks/session-start.sh:63` on every SessionStart, emits a SessionEnd
+of its own.** Reason `"other"`, a fresh random `session_id`, and **no matching SessionStart** — while
+inheriting the live pane's `CC_PANE_ID`/`ITERM_SESSION_ID` from the hook's environment.
+`session-deregister.sh` then removed that pane's row, which by construction can never be the
+phantom's own. It is 3 phantoms per start, not 1, whenever no MCP server reports `Connected` — the
+retry loop runs the probe `MAX_ATTEMPTS` times.
+
+Three independent measurements, none of them inference:
+
+1. **The event exists.** A throwaway `CLAUDE_CONFIG_DIR` wiring nothing but a tracer on SessionEnd,
+   then `claude mcp list`: one `SessionEnd` record, `reason:"other"`, sid `17b8b21f…`, `$PPID`'s
+   command literally `claude mcp list`, `CC_PANE_ID` = the inherited pane. Zero SessionStart records.
+2. **It removes a live row.** Same probe against the **deployed** `~/.claude/hooks/session-deregister.sh`
+   with `CC_REGISTRY_DIR` fixtured and a row owned by `OWNER-SID-1111`: the row is gone after
+   `claude mcp list` returns.
+3. **The population agrees.** `session-start.sh` logs `Session started` then `MCP Status (attempt 1)`
+   around the probe; `session-end.sh` logs `Session ended`. In `~/.claude/logs/sessions.log`,
+   **5360 of 6208** `MCP Status (attempt 1)` lines are *immediately preceded* by a `Session ended`
+   line — including at `14:54:05`, the second the pane-99 row vanished, with only ONE `Session
+   started` in that cycle.
+
+This also explains the repro note below: the trigger "lives in the chain" because the chain is what
+contains the `claude` invocation — `session-start.sh:63` is the only one in any hook. A single-hook
+harness has no phantom to see.
+
+Fixed on both sides. `0d675779` — `session-deregister.sh` removes only on a proven tenancy match
+(both sids present and equal); every unprovable case keeps the row, because a wrongly-kept row is a
+dead row that `cc-sessions`/`cc-reconcile` already sweep on `kill -0`, while a wrongly-removed row
+erases a live pane from the fleet's only addressing table. `64b655be` — `session-start.sh` runs the
+probe under `env -u CC_PANE_ID -u ITERM_SESSION_ID`, so the phantom still fires but arrives
+**paneless** and every pane-keyed SessionEnd consumer no-ops at its own gate, including ones not
+written yet. `tests/session-registry.bats` carries the phantom's verbatim event shape; that test and
+three sibling tenancy cases are RED against the pre-fix hook.
+
+### The reasoning that was open before the measurement
+
+Kept as written — it named the right suspect for the right reason, and the "not a defendant" caveat
+was correct: the mechanism that fires the SessionEnd was still missing.
 
 The only unconditional remover in the tree is `hooks/session-deregister.sh:25`:
 
