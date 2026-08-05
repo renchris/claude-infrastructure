@@ -217,7 +217,8 @@ selftest() {
   local d PASS=0 FAIL=0
   # NOTE: the cleanup path must reference a GLOBAL — an EXIT trap runs after the function frame is
   # gone, so a `local` d is unbound there and `set -u` turns cleanup into a spurious error exit.
-  d="$(mktemp -d)"; _DRI_TMP="$d"; trap 'rm -rf "${_DRI_TMP:-}"' EXIT
+  # an empty $d would make every downstream `git -C "$d/..."` a cwd-repo write, not an error
+  d="$(mktemp -d)" || { echo mktemp>&2; exit 2; }; _DRI_TMP="$d"; trap 'rm -rf "${_DRI_TMP:-}"' EXIT
   okp()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
   badp() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 

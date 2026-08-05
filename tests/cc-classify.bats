@@ -74,7 +74,8 @@ stamp_by() { local pane="$1" by="$2" ago="${3:-200}"; mkdir -p "$D/fired"; local
                '(.[]|select(.paneUUID==$p)|.startedAt)|=$s' "$D/sessions.json" > "$D/sessions.json.t" 2>/dev/null \
                && mv "$D/sessions.json.t" "$D/sessions.json"; return 0; }
 # a real git repo whose HEAD == origin/main (work LANDED). `dirty` arg (any value) leaves the tree dirty.
-mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
+# `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
+mkrepo() { local r="${1:?mkrepo: repo path required}" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
            git -C "$r" config user.email t@t; git -C "$r" config user.name t
            echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
            git -C "$r" update-ref refs/remotes/origin/main HEAD
@@ -82,7 +83,7 @@ mkrepo() { local r="$1" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
 # a squash-landed repo: clean tree, HEAD 1 commit AHEAD of origin/main by COUNT, but its content is
 # ALREADY on trunk under a DIFFERENT sha (the squash/cherry-pick land). rev-list count says "ahead"
 # while the work is durably landed — the L-10 permanent-DEFER trap.
-mksquashland() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q
+mksquashland() { local r="${1:?mksquashland: repo path required}"; mkdir -p "$r"; git -C "$r" init -q
            git -C "$r" config user.email t@t; git -C "$r" config user.name t
            echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
            echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed-on-trunk

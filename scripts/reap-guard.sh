@@ -247,7 +247,8 @@ selftest() {
   now="$(date +%s)"
   export CC_REAP_RECORDS_DIR="$d/records"
   mkgit() { # <dir> — a clean git repo with a seed commit; committer date via $1 arg 2 (epoch) if given
-    local repo="$1" when="${2:-}"
+    # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
+    local repo="${1:?mkgit: repo path required}" when="${2:-}"
     mkdir -p "$repo"; git -C "$repo" init -q; git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
     echo seed > "$repo/a.txt"; git -C "$repo" add a.txt
     if [ -n "$when" ]; then GIT_AUTHOR_DATE="@$when" GIT_COMMITTER_DATE="@$when" git -C "$repo" commit -qm seed

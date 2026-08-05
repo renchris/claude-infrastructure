@@ -55,7 +55,8 @@ reset(){ : > "$CC_IDL"; rm -f "$CC_SUPERVISOR_PAGEDIR"/*.page 2>/dev/null; }
 paged(){ [ -f "$CC_SUPERVISOR_PAGEDIR/$1.page" ]; }
 tel_exists(){ [ -f "$CC_TELEMETRY_DIR/$1.json" ]; }              # T11-T13: a clean-completion reap drops the row
 mkrepo_landed(){ # $1=dir — a shipped+clean repo: clean tree, HEAD == origin/main (0 ahead, no network)
-  local r="$1"; rm -rf "$r"; mkdir -p "$r"
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  local r="${1:?mkrepo_landed: repo path required}"; rm -rf "$r"; mkdir -p "$r"
   git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
   echo x > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm init
   git -C "$r" update-ref refs/remotes/origin/main HEAD          # fabricate the landed trunk (no remote)

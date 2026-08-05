@@ -90,6 +90,8 @@ mkb() { printf '#!/usr/bin/env bats\n%s\n' "$2" > "$D/$1.bats"; }
 # mkrepo builds the smallest tree that can tell the two apart: a suite carrying INHERITED debt on
 # trunk, and a second suite added after it. A correct bare run blames only the second.
 mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, and origin/main
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  : "${1:?mkrepo: repo path required}"
   mkdir -p "$1/scripts" "$1/tests"
   cp "$L" "$1/scripts/lint.sh"; chmod +x "$1/scripts/lint.sh"
   git -C "$1" init -q >/dev/null 2>&1

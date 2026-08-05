@@ -40,7 +40,8 @@ drive() { printf '{"tool_input":{"file_path":"%s"}}' "$1" | bash "$HOOK" 2>&1; }
 }
 
 @test "pre-existing (git-tracked) plan lacking status → WARNS, exit 0 (no retro-break)" {
-  repo="$BATS_TEST_TMPDIR/tracked"; mkdir -p "$repo/docs/plans"
+  # `git -C ""` is a NO-OP, not an error — an unset tmpdir would write this identity into the cwd repo.
+  repo="${BATS_TEST_TMPDIR:?}/tracked"; mkdir -p "$repo/docs/plans"
   git -C "$repo" init -q; git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
   f="$repo/docs/plans/legacy.md"; printf '# Legacy Plan\nbody\n' > "$f"
   git -C "$repo" add -A; git -C "$repo" commit -qm init
