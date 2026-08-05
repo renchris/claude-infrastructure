@@ -130,8 +130,11 @@ SH
 
   # self-close is available only to a session a peer FIRED (origin gate) — stamp the predecessor.
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
-  printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
-    "$PRED" > "$CC_FIRED_DIR/$PRED.json"
+  # cwd is THIS PANE's cwd, not a hardcoded "/tmp": the origin gate tenancy-binds the stamp on cwd
+  # (item aba6bcbff6de), so a placeholder path makes $PRED a stale tenant and the tests below refuse
+  # at the ORIGIN gate before reaching the session-pin gate they are about.
+  printf '{"paneUUID":"%s","cwd":"%s","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    "$PRED" "$PWD" > "$CC_FIRED_DIR/$PRED.json"
 }
 
 # registry row for the successor pane. $1=pid ("" ⇒ no pid field ⇒ UNPINNABLE)

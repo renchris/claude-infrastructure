@@ -44,6 +44,15 @@ exit 0
 SH
   chmod +x "$SHIM/ps"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/sleep"; chmod +x "$SHIM/sleep"
+  # Re-point $PANE's fired-peer stamp at the CURRENT cwd. The origin gate tenancy-binds the stamp on
+  # cwd (item aba6bcbff6de), so the several tests below that deliberately `cd` to a NON-GIT directory
+  # (to reach the dirty-tree contract) must re-stamp after moving, or they are refused at the origin
+  # gate and never reach the teammate gate they exist to test. Called once in setup for the tests
+  # that stay put, and again after each `cd`.
+  stamp_pane_here() {
+    printf '{"paneUUID":"%s","cwd":"%s","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+      "$PANE" "$PWD" > "$CC_FIRED_DIR/$PANE.json"
+  }
   export BATS_SAVED_PATH="$PATH"     # G7 drops the shim to hit the REAL process table
   export PATH="$SHIM:$PATH"
 
@@ -60,8 +69,10 @@ SH
   # assert. (An unstamped LEAD is exactly what the origin gate is meant to stop; that is covered
   # in tests/handoff-selfclose.bats.)
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
-  printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
-    "$PANE" > "$CC_FIRED_DIR/$PANE.json"
+  # cwd is THIS PANE's cwd, not a hardcoded "/tmp": the origin gate tenancy-binds the stamp on cwd
+  # (item aba6bcbff6de), so a placeholder path makes $PANE a stale tenant and the tests below refuse
+  # at the ORIGIN gate before reaching the teammate gate they are about.
+  stamp_pane_here
 
   # sed-extract the two helpers so the units are testable without running the whole script.
   HELPERS="$BATS_TEST_TMPDIR/helpers.sh"
@@ -119,7 +130,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
 # and the bats worktree itself is dirty — that refusal is a different (pre-existing) contract.
 @test "G5: --allow-live-teammates proceeds but announces the deliberate orphaning" {
   seed_teammate t2-shipland 5375 a3f68174
-  cd "$BATS_TEST_TMPDIR"
+  cd "$BATS_TEST_TMPDIR"; stamp_pane_here
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run --allow-live-teammates
   [ "$status" -eq 0 ]
   [[ "$output" == *"ORPHANED deliberately"* ]]
@@ -127,7 +138,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
 
 # ── G6: no team ⇒ the gate is invisible (no behaviour change for solo sessions) ────────────
 @test "G6: a session with no live teammates self-closes exactly as before" {
-  cd "$BATS_TEST_TMPDIR"
+  cd "$BATS_TEST_TMPDIR"; stamp_pane_here
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" != *"REFUSED"* ]] || false
@@ -161,7 +172,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
 @test "G8: a missing registry row WARNS that the teammate check could not run (fail-open, never silent)" {
   rm -f "$CC_REGISTRY_DIR/$PANE.json"
   seed_teammate t2-shipland 5375 a3f68174        # a team IS live, but unresolvable from the pane
-  cd "$BATS_TEST_TMPDIR"
+  cd "$BATS_TEST_TMPDIR"; stamp_pane_here
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 0 ]                             # fail-OPEN: the close proceeds
   [[ "$output" == *"live-teammate check SKIPPED"* ]] || false # …but never silently
@@ -169,7 +180,7 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
 }
 
 @test "G8b: with a registry row present, no skip-warning is emitted (no false noise)" {
-  cd "$BATS_TEST_TMPDIR"
+  cd "$BATS_TEST_TMPDIR"; stamp_pane_here
   run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" != *"SKIPPED"* ]]

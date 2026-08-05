@@ -100,8 +100,13 @@ SH
   # so stamp $PRED as one. This was previously implicit; the gate makes it explicit.
   # The gate's own behaviour (refuse/allow/override) is covered by the tests at the end of this file.
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
-  printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
-    "$PRED" > "$CC_FIRED_DIR/$PRED.json"
+  # cwd is THIS PANE's cwd, not the hardcoded "/tmp" this fixture carried while nothing read the
+  # field. The origin gate now tenancy-binds the stamp on cwd (item aba6bcbff6de), so a placeholder
+  # path makes $PRED a stale tenant and every test below refuses at the ORIGIN gate before reaching
+  # the successor gate it is actually about. $PWD is correct by construction: setup() and the `run`
+  # it prepares share one cwd.
+  printf '{"paneUUID":"%s","cwd":"%s","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    "$PRED" "$PWD" > "$CC_FIRED_DIR/$PRED.json"
 }
 
 # a fake HOME with it2 + cc-notify stubs that RECORD their args (for the watcher tests).
@@ -256,14 +261,130 @@ SH
 
 @test "origin gate: a FIRED PEER (stamp present) passes the origin gate" {
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-yes"; mkdir -p "$CC_FIRED_DIR"
-  printf '{"paneUUID":"PEER-3333","cwd":"/tmp","firedBy":"ORIGIN-1111","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
-    > "$CC_FIRED_DIR/PEER-3333.json"
+  # The fixture's cwd is THIS PANE's cwd, and that is load-bearing rather than cosmetic. It used to
+  # be a hardcoded "/tmp" and a firedAt ten days in the past, which is precisely the stale-tenancy
+  # stamp the gate now refuses (item aba6bcbff6de) — so on the fixed subject this test kept passing
+  # for the WRONG REASON: the new refusal does not contain the literal "ORIGIN session", so the
+  # grep below could not see it and a refused close read as a pass. Pinning the fixture to the real
+  # cwd restores what the test's own name claims it asserts.
+  PEERWT="$BATS_TEST_TMPDIR/peer-wt"; mkdir -p "$PEERWT"; cd "$PEERWT"
+  printf '{"paneUUID":"PEER-3333","cwd":"%s","firedBy":"ORIGIN-1111","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+    "$PEERWT" > "$CC_FIRED_DIR/PEER-3333.json"
   run bash "$HF" self-close --terminal --session-id "PEER-3333" --dry-run
   # It may still stop at a LATER gate (dirty tree, registry) — it must NOT stop at the origin gate.
   # `[ ]` form, not `&& false`: a non-final `A && B` is errexit-EXEMPT, so the original could never
   # fail. `[ ]` is live in ANY position, which is what the liveness ratchet is asking for.
-  [ "$(echo "$output" | grep -ci "ORIGIN session")" -eq 0 ]
-  [ "$status" -ne 2 ] || echo "$output" | grep -qvi "ORIGIN session" || false
+  # Both refusal spellings are matched, so a future third one cannot make this vacuous again.
+  [ "$(echo "$output" | grep -ciE "ORIGIN session|DIFFERENT session")" -eq 0 ]
+  [ "$status" -ne 2 ] || echo "$output" | grep -qviE "ORIGIN session|DIFFERENT session" || false
+}
+
+# ── STAMP TENANCY (2026-08-05, item aba6bcbff6de) ────────────────────────────────────────────────
+# The gate above asked one question of the stamp — is the file non-empty — while cc-classify, which
+# the gate names as its model, has required TENANCY since 2026-07-24 (bin/cc-classify:378). Two
+# sibling auditors, one state, two state models: the reaper refuses to reap what the self-killer
+# will close. Under iTerm2's 128-bit UUIDs that was safe by accident; kitty numbers windows with
+# small integers and REUSES them, so a stale stamp can authorise a live, unrelated pane's suicide.
+# Measured 2026-08-05: cc-fired held numeric stamps at 33…497 while the live kitty was issuing ids
+# 2–37, with id 33 simultaneously a live window and an open stamp.
+#
+# RED-PROOF, stated so a later reader does not mistake green for coverage. Against a pristine
+# `git archive HEAD` tree only TWO of the seven below go red — "a stamp for a DIFFERENT cwd" and
+# "an OPEN stamp … is NAMED". They are the ones asserting NEW behaviour. The other five are
+# CONTRACT-PRESERVATION tests and are green on both trees BY DESIGN: they assert that the tenancy
+# check ABSTAINS everywhere it cannot prove staleness, which is the property that stops this fix
+# becoming the false negative it was written to cure. A green-on-both test here is the point, not a
+# gap — but only because these two red ones exist beside it.
+
+@test "tenancy: a stamp for a DIFFERENT cwd is a stale tenant → REFUSED (kitty id reuse)" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-stale"; mkdir -p "$CC_FIRED_DIR"
+  OTHER="$BATS_TEST_TMPDIR/some-other-worktree"; mkdir -p "$OTHER"
+  HERE="$BATS_TEST_TMPDIR/this-pane"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"28","cwd":"%s","firedBy":"2","firedAt":"2026-08-01T10:00:00Z","selfRetire":true,"closedAt":null}\n' \
+    "$OTHER" > "$CC_FIRED_DIR/28.json"
+  run bash "$HF" self-close --terminal --session-id "28" --dry-run
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "DIFFERENT session" || false
+  # The refusal must name BOTH sides — a mismatch the operator cannot see is not a diagnosis.
+  echo "$output" | grep -qF "$OTHER" || false
+  echo "$output" | grep -qF "$HERE" || false
+  # …and must NOT misdiagnose it as an origin session, which points at the wrong remedy.
+  [ "$(echo "$output" | grep -ci "this is an ORIGIN session")" -eq 0 ]
+}
+
+@test "tenancy: ABSTAINS when the stamp has no cwd — unknown keeps the pre-change behaviour" {
+  # The calibration control. This change may only refuse what it can PROVE stale; everything
+  # unresolvable must behave exactly as it did before, or it has invented a new false negative —
+  # the mirror of the bug it fixes. A stamp with no cwd field is unknown, and unknown passes.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-nocwd"; mkdir -p "$CC_FIRED_DIR"
+  HERE="$BATS_TEST_TMPDIR/pane-nocwd"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"41","firedBy":"2","firedAt":"2026-08-01T10:00:00Z","selfRetire":true}\n' \
+    > "$CC_FIRED_DIR/41.json"
+  run bash "$HF" self-close --terminal --session-id "41" --dry-run
+  [ "$(echo "$output" | grep -ciE "ORIGIN session|DIFFERENT session")" -eq 0 ]
+}
+
+@test "tenancy: a stamp whose cwd no longer EXISTS is unknown, not stale (worktree GC'd)" {
+  # Same calibration, the other unresolvable shape: a peer whose worktree was removed after it was
+  # fired must still be able to retire. Only a POSITIVE refutation — both paths resolve and differ —
+  # may refuse.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-gonewt"; mkdir -p "$CC_FIRED_DIR"
+  HERE="$BATS_TEST_TMPDIR/pane-gonewt"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"42","cwd":"%s/removed-worktree","firedBy":"2","firedAt":"2026-08-01T10:00:00Z","selfRetire":true}\n' \
+    "$BATS_TEST_TMPDIR" > "$CC_FIRED_DIR/42.json"
+  run bash "$HF" self-close --terminal --session-id "42" --dry-run
+  [ "$(echo "$output" | grep -ciE "ORIGIN session|DIFFERENT session")" -eq 0 ]
+}
+
+@test "tenancy: /tmp vs /private/tmp is the SAME directory, not a mismatch" {
+  # macOS reaches one directory by two paths. A raw string compare would manufacture a stale verdict
+  # and refuse a genuine peer, so both sides are resolved before they are compared.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-symlink"; mkdir -p "$CC_FIRED_DIR"
+  [ -d /private/tmp ] || skip "no /private/tmp on this platform"
+  cd /tmp
+  printf '{"paneUUID":"43","cwd":"/private/tmp","firedBy":"2","firedAt":"2026-08-01T10:00:00Z","selfRetire":true}\n' \
+    > "$CC_FIRED_DIR/43.json"
+  run bash "$HF" self-close --terminal --session-id "43" --dry-run
+  [ "$(echo "$output" | grep -ciE "ORIGIN session|DIFFERENT session")" -eq 0 ]
+}
+
+@test "tenancy: CC_SELFCLOSE_TENANCY=0 reverts to bare presence (R8 kill switch)" {
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-killswitch"; mkdir -p "$CC_FIRED_DIR"
+  OTHER="$BATS_TEST_TMPDIR/elsewhere"; mkdir -p "$OTHER"
+  HERE="$BATS_TEST_TMPDIR/pane-ks"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"44","cwd":"%s","firedBy":"2","firedAt":"2026-08-01T10:00:00Z","selfRetire":true}\n' \
+    "$OTHER" > "$CC_FIRED_DIR/44.json"
+  CC_SELFCLOSE_TENANCY=0 run bash "$HF" self-close --terminal --session-id "44" --dry-run
+  [ "$(echo "$output" | grep -ciE "ORIGIN session|DIFFERENT session")" -eq 0 ]
+}
+
+@test "orphan diagnostic: an OPEN stamp for this cwd under another id is NAMED (still refused)" {
+  # The mirror failure. A resume, a crash-recreate or a kitty restart re-numbers the pane, orphaning
+  # a real peer's stamp under its OLD id. The gate still refuses — a cwd is not exclusive — but
+  # "no stamp anywhere" and "your stamp is at 28.json" send the operator to different remedies.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-orphan"; mkdir -p "$CC_FIRED_DIR"
+  HERE="$BATS_TEST_TMPDIR/orphan-wt"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"28","cwd":"%s","firedBy":"2","firedAt":"2026-08-05T10:00:00Z","selfRetire":true,"closedAt":null}\n' \
+    "$HERE" > "$CC_FIRED_DIR/28.json"
+  run bash "$HF" self-close --terminal --session-id "31" --dry-run   # renumbered: 28 → 31
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "ORIGIN session" || false
+  echo "$output" | grep -qF "28.json" || false
+  echo "$output" | grep -qi "orphaned, not missing" || false
+}
+
+@test "orphan diagnostic: a CLOSED stamp is spent and is never offered as evidence" {
+  # The control that stops the diagnostic becoming a second false positive: a peer that already
+  # retired leaves a closedAt-stamped record behind, and a LATER pane reusing that worktree must not
+  # be told a peer was fired for it.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired-closed"; mkdir -p "$CC_FIRED_DIR"
+  HERE="$BATS_TEST_TMPDIR/reused-wt"; mkdir -p "$HERE"; cd "$HERE"
+  printf '{"paneUUID":"28","cwd":"%s","firedBy":"2","firedAt":"2026-08-05T10:00:00Z","selfRetire":true,"closedAt":"2026-08-05T11:00:00Z"}\n' \
+    "$HERE" > "$CC_FIRED_DIR/28.json"
+  run bash "$HF" self-close --terminal --session-id "31" --dry-run
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qi "ORIGIN session" || false
+  [ "$(echo "$output" | grep -c "28.json")" -eq 0 ]
 }
 
 @test "origin gate: an EMPTY stamp file is treated as absent (fail-safe, refuse)" {

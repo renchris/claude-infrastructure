@@ -29,8 +29,10 @@ setup() {
   # Without this the origin gate refuses first (exit 2) and no push side effect is ever reached.
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
   for _p in fake:AAAA-1111 fake:BBBB-2222 fake:CCCC-3333 fake:DDDD-4444 fake:EEEE-5555 fake:FFFF-5150; do
-    printf '{"paneUUID":"%s","cwd":"/tmp","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
-      "$_p" > "$CC_FIRED_DIR/$_p.json"
+    # cwd is THIS PANE's cwd, not a hardcoded "/tmp": the origin gate tenancy-binds the stamp on cwd
+    # (item aba6bcbff6de), and a placeholder path would make every pane here a stale tenant.
+    printf '{"paneUUID":"%s","cwd":"%s","firedBy":"ORIGINATOR","firedAt":"2026-07-26T18:00:00Z","selfRetire":true}\n' \
+      "$_p" "$PWD" > "$CC_FIRED_DIR/$_p.json"
   done
 }
 
