@@ -289,6 +289,109 @@ if echo "$CMD" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*
   deny "git commit -n blocked — short form of --no-verify, bypasses pre-commit hooks. See CLAUDE.md critical rule #2."
 fi
 
+# ── git identity write that can collapse into the CURRENT repo ────────
+# 2026-08-05 incident: `git -C "" config user.email t@t` is a DOCUMENTED NO-OP on the -C — it
+# does NOT change directory (verified live on git 2.54.0), so the write lands in whatever repo
+# is cwd. claude-infrastructure is one bare repo with ~100 linked worktrees that SHARE a single
+# .git/config, so one such line re-authors every session on the box: 9 mis-attributed commits
+# here, 214 on reso. Local scope beats global and `t@t` matches no GitHub account, so the only
+# true repair is rewrite+force-push across 213 live worktrees — i.e. unrepairable after the fact.
+# Prevention is the whole game. Evidence: docs/research/git-identity-leak-2026-08-05.md §D.
+#
+# Why THIS hook: the corpus half of the leak is a tree-wide lint over source. Reso has no leaky
+# source at all — it was poisoned by an agent hand-typing the same line in an adversarial repro
+# (the advV/advJ rows approved into its settings.local.json:470-476). A source lint is
+# structurally blind to that. A PreToolUse hook is the only thing that sees it.
+#
+# Why the SHAPE and not the spelling: this hook reads the command BEFORE expansion, so
+# `-C "$SOMEDIR"` is statically undecidable — it is empty exactly when the accident happens, and
+# never when you test it. Matching a literal `-C ""` would be a denylist of one spelling that
+# misses every real occurrence (memory: denylist-enumerates-spellings-not-the-class). So the rule
+# is the research doc's lint rule 2 applied to argv: an identity WRITE must name its target with
+# something that CANNOT expand to nothing. `-C /tmp/x`, `-C "$tmp/repo"` and `-C "${r:?}"` pass;
+# `-C "$1"`, `-C "$REPO"`, `-C ""`, `-C "$(mktemp -d)"` and a bare no-`-C` write do not.
+#
+# `cd <target> &&` counts as naming the target, but is held to the SAME test — and that is a
+# correction to the research doc's own §Fixes table, measured here: **`cd "" ` SUCCEEDS** (rc 0,
+# cwd unchanged). So the prescribed `cd "$repo" || exit 1` idiom guards a *nonexistent* path and
+# not an *empty* one — against the empty variable it is inert, and `&&` short-circuiting never
+# fires. Both collapse paths therefore need the identical literal-remainder test.
+#
+# NOT matched, by construction: reads (`--get*`, `--list`, `-l`), the `--unset*` repair this
+# incident actually needed (a guard that denies its own fix is the -rf lesson), explicitly-scoped
+# writes (`--global`/`--system`/`--file`/`--blob` name their own target — no cwd to collapse
+# into), and the transient `git -c user.email=… commit` form, which is lowercase `-c`, is not a
+# `config` subcommand, and cannot persist at all — it is the recommended shape.
+
+# Every `$…` below is a LITERAL to be matched, never an expansion to be performed — that is the
+# whole point of a guard that reads commands before the shell does. Single quotes are load-bearing.
+# shellcheck disable=SC2016
+# _gid_literal_survives <token> — 0 when the token cannot expand to nothing.
+# Delete-then-match, never widen: strip quotes, delete every expansion, and ask whether any
+# LITERAL text is left. `"$tmp/repo"` leaves `/repo` (safe); `"$1"` and `""` leave nothing.
+_gid_literal_survives() {
+  local t="$1"
+  # `${v:?}` / `${v:?msg}` aborts on empty rather than expanding to it — the doc's own
+  # prescribed helper guard. Treat it as naming a target even though it is all-expansion.
+  case "$t" in *':?'*) return 0 ;; esac
+  t="$(printf '%s' "$t" | tr -d "\"'")"
+  # A command substitution containing whitespace is TORN APART by the positional walk, so the
+  # target arrives as the fragment `$(mktemp` and the balanced-form deletion below can never
+  # match it — it would survive as literal text and pass. Any substitution marker at all means
+  # the value is computed at runtime and can come back empty: `$(mktemp -d)` on a full disk is
+  # precisely the unchecked-mktemp leak site the research doc lists.
+  case "$t" in *'$('*|*'`'*) return 1 ;; esac
+  t="$(printf '%s' "$t" | sed -E 's/\$\([^)]*\)//g; s/`[^`]*`//g; s/\$\{[^}]*\}//g; s/\$[A-Za-z_][A-Za-z0-9_]*//g; s/\$[0-9@*#?-]//g')"
+  [ -n "$t" ]
+}
+
+# _gid_target_of <clause> — prints the token that NAMES the write target, empty if none.
+# Positional walk, not a regex: only argv position can tell a real `-C` from the same two
+# characters inside a quoted value. `-C` wins over `--git-dir=`, which wins over a governing `cd`.
+_gid_target_of() {
+  local tok prev="" c="" g="" d=""
+  set -f  # a command containing `*` must not glob against the cwd during the walk
+  for tok in $1; do
+    case "$prev" in
+      -C) [ -n "$c" ] || c="$tok" ;;
+      cd) [ -n "$d" ] || d="$tok" ;;
+    esac
+    case "$tok" in --git-dir=*) [ -n "$g" ] || g="${tok#--git-dir=}" ;; esac
+    prev="$tok"
+  done
+  set +f
+  printf '%s' "${c:-${g:-$d}}"
+}
+
+# Fast pass-through, BUILTIN and fork-free. This hook runs on every Bash tool call in the fleet
+# and the clause scan below costs one fork per clause, so the common case (no identity key
+# anywhere in the command) must not reach it at all — the same measured concern that replaced
+# `$(cat)` with `read -d ''` at the top of this file (~6 ms per fork, ~18% of a 163 ms chain).
+if [[ "$CMD" == *user.email* || "$CMD" == *user.name* ]]; then
+# Split on `;` and `|` so a compound command cannot be exonerated by a sibling clause (the
+# per-target lesson the rm scan below already learned) — but NEVER on `&&`, which is what
+# GOVERNS the fragment: splitting there would hide the `cd … &&` and convict a guarded write.
+# `tr` pads the replacement set with its last char, so one `\n` maps BOTH delimiters — spelling it
+# '\n\n' is the same operation with a duplicate shellcheck rightly flags (SC2020).
+GID_CLAUSES="$(printf '%s' "$CMD" | tr ';|' '\n')"
+while IFS= read -r gid_clause; do
+  printf '%s' "$gid_clause" | grep -qE 'git\b.*\bconfig\b.*\buser\.(email|name)\b' || continue
+  # Reads, the repair, and explicitly-scoped writes are never blocked.
+  printf '%s' "$gid_clause" | grep -qE '\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b' && continue
+  printf '%s' "$gid_clause" | grep -qE '[[:space:]]-(l|e)([[:space:]]|$)' && continue
+  # A bare `git config user.email` READS. Only a key FOLLOWED BY A VALUE writes.
+  printf '%s' "$gid_clause" | grep -qE '\buser\.(email|name)[[:space:]]+[^[:space:]]' || continue
+
+  gid_target="$(_gid_target_of "$gid_clause")"
+  if [ -z "$gid_target" ]; then
+    deny "git identity write with no target blocked — 'git config user.email/name <value>' writes to whatever repo is CURRENT. claude-infrastructure is one bare repo whose ~100 linked worktrees SHARE a single .git/config, so this re-authors every session on the machine (2026-08-05: 9 mis-attributed commits here, 214 on reso; unrepairable without a rewrite+force-push across 213 live worktrees). Use the transient form, which cannot persist: git -c user.email=you@example.com -c user.name='Your Name' commit … — or name the repo with a literal path: git -C /tmp/your-fixture config user.email … . To read, --get; to clean up, --unset-all; to set your real global identity, --global."
+  fi
+  if ! _gid_literal_survives "$gid_target"; then
+    deny "git identity write to an all-expansion target blocked: -C '$gid_target'. That argument is entirely a variable/substitution, so it is EMPTY exactly when the accident happens — and 'git -C \"\"' is a documented NO-OP that does not change directory, dropping the write into the CURRENT repo instead (verified live, git 2.54.0). That is the 2026-08-05 leak: ~100 linked worktrees share one .git/config, so one such line re-authored 9 commits here and 214 on reso. 'cd \"\"' does NOT save you either — it exits 0 and stays put, so '&&' never short-circuits. Give the target a literal segment that cannot vanish (git -C \"\$tmp/repo\" config … ), assert it first (git -C \"\${dir:?repo path required}\" config … ), or best, use the transient form that cannot persist at all: git -c user.email=… -c user.name=… commit … ."
+  fi
+done <<<"$GID_CLAUSES"
+fi
+
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 
 # git reset --hard — can destroy uncommitted work
