@@ -2811,6 +2811,53 @@ if [ "${1:-}" = "land" ]; then
   exec "$HF_DIR/desk-land.sh" "$@"
 fi
 
+# stamp-peer — write the fired-peer lifecycle record for a pane THIS script did not spawn.
+#
+# WHY THIS EXISTS (item aba6bcbff6de). mark_fired_peer is reachable only from handoff-fire's own
+# fire path, so a peer dispatched by any OTHER launcher gets no stamp — and with no stamp it can
+# never retire, because the origin gate above (correctly) refuses a pane that cannot prove it was
+# fired. Measured 2026-08-05: pane 28 was opened by bin/kitty-split-launch.sh, which has no
+# stamping path at all, and the session was left unable to self-close after landing its work
+# (4353c85f) with no registry row and no stamp — invisible to cc-reaper and to the board, exactly
+# the unreapable leak the FIRE-FAILED cleanup block was written to prevent for the fire path.
+#
+# A SUBCOMMAND, NOT A COPIED WRITER. The obvious fix — teach the other launcher to write the JSON —
+# mints a SECOND writer of a format whose only consumer contract is "additive-only, cc-reaper keys
+# auto-reap on presence + selfRetire". Two writers of one format drift, and the drift is silent
+# until a reaper decision goes wrong. So the format keeps exactly one author (mark_fired_peer) and
+# other launchers call it through here.
+#
+# THIS GRANTS A SELF-RETIRE LICENCE, so it stays opt-in at the CALL SITE and is never implied by
+# spawning a pane. mark_fired_peer's own header states the constraint: "It must NEVER be written for
+# an ordinary fire — the file's presence is what licenses cc-reaper to auto-reap, so stamping every
+# fire would license the reaper against operator sessions." A launcher that opens an ad-hoc split
+# for a human must not stamp it; one dispatching a peer says so explicitly.
+if [ "${1:-}" = "stamp-peer" ]; then
+  shift
+  SP_PANE="" SP_CWD="" SP_BY="" SP_PROMPT=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --pane)        SP_PANE="${2:?--pane needs a pane id}"; shift 2 ;;
+    --cwd)         SP_CWD="${2:?--cwd needs a directory}"; shift 2 ;;
+    --by)          SP_BY="${2:?--by needs the firing pane id}"; shift 2 ;;
+    --prompt-file) SP_PROMPT="${2:?--prompt-file needs a path}"; shift 2 ;;
+    *) echo "!! unknown stamp-peer arg: $1" >&2; exit 1 ;;
+  esac; done
+  [ -n "$SP_PANE" ] || { echo "!! stamp-peer needs --pane" >&2; exit 1; }
+  # --cwd is REQUIRED, and that is the tenancy fix's other half. The stamp's cwd is now the oracle
+  # the origin gate binds on, so a stamp written without one is a stamp that can never be validated
+  # — it would land in `unknown` forever and re-create, one launcher at a time, exactly the
+  # unvalidatable stamp this change set exists to remove.
+  [ -n "$SP_CWD" ] || { echo "!! stamp-peer needs --cwd (it is the tenancy oracle the origin gate binds on)" >&2; exit 1; }
+  [ -d "$SP_CWD" ] || { echo "!! stamp-peer: --cwd is not a directory: $SP_CWD" >&2; exit 1; }
+  mark_fired_peer "$FIRED_DIR" "$SP_PANE" "$SP_CWD" "$SP_BY" "$SP_PROMPT"
+  # mark_fired_peer is best-effort by contract (it returns 0 even when jq is missing or the write
+  # fails) because a fire must never die on its own bookkeeping. A caller that ASKED for a stamp is
+  # in the opposite position: it needs to know, so verify the artifact and fail loudly if absent.
+  [ -s "$FIRED_DIR/$SP_PANE.json" ] || { echo "!! stamp-peer: no stamp written at $FIRED_DIR/$SP_PANE.json (jq missing, or the directory is unwritable)" >&2; exit 1; }
+  echo "→ fired-peer stamp written: $FIRED_DIR/$SP_PANE.json (cwd $SP_CWD)" >&2
+  exit 0
+fi
+
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
