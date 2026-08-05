@@ -59,6 +59,16 @@ EOS
   chmod +x "$REPO/scripts/new-worktree.sh"
 }
 
+# The REAL scripts/new-worktree.sh from this checkout as the cold builder, for the tests that must
+# exercise the actual argv contract rather than a stub's. install_cold above accepts ANY argv[1] and
+# honours argv[2], so every test using it was structurally BLIND to the 2026-08-05 defect: the real
+# script refused any argv[1] containing '/' (exit 2) and ignored argv[2] entirely. A stub that is
+# more permissive than production cannot fail the way production fails.
+install_cold_real() {
+  cp "$BATS_TEST_DIRNAME/../scripts/new-worktree.sh" "$REPO/scripts/new-worktree.sh"
+  chmod +x "$REPO/scripts/new-worktree.sh"
+}
+
 # The reso allocator as INSTALLED on this box: present, and refusing a foreign caller (99753cf31).
 install_foreign_refusing() {
   mkdir -p "$HOME/.reso/bin"
@@ -177,6 +187,32 @@ EOS
   [ "${#lines[@]}" -eq 1 ]
   case "$output" in /*) ;; *) false ;; esac
   [ -d "$output" ]
+}
+
+@test "8. END-TO-END, REAL cold builder: a SLASHED -w name builds and the paths AGREE" {
+  # RED PROOF (measured 2026-08-05 against HEAD~: rc 1, empty stdout, log "must be a bare name").
+  # The hook keeps '/' in $BRANCH — its sanitiser's tr allows it — but derives WT from the SLUGGED
+  # name, so this pins the two things that were in conflict: the build SUCCEEDS, and the path the
+  # hook prints is the path that actually got created.
+  install_cold_real
+  run_hook feat/slashed
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$HOME/Development/.worktrees/wt-feat-slashed" ]
+  [ -d "$output" ]
+  # ...and the branch keeps its '/' — the reso-parity half (slugging argv[1] would rename feat/x).
+  [ "$(git -C "$output" branch --show-current)" = "feat/slashed" ]
+}
+
+@test "9. END-TO-END, REAL cold builder: a bare -w name is byte-identical to before" {
+  # The no-regression side: the ~/.zshrc gate only ever passes a bare cc-<HHMMSS>-<pid>, so the
+  # derived-path guarantee it depends on must be untouched by the widening.
+  install_cold_real
+  run_hook demo
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$COLD" ]
+  [ "$(git -C "$output" branch --show-current)" = "demo" ]
 }
 
 @test "7. the pre-created shape (worktree_path in stdin) still echoes the path back" {

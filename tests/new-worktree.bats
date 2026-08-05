@@ -70,6 +70,45 @@ setup() {
   [ ! -L "$dst" ]   # a symlink would make every worktree mutate the shared file
 }
 
+@test "a SLASHED branch name is accepted: dir slugged, branch VERBATIM" {
+  # The 2026-08-05 defect: the old `*/*` refusal made `claude -w feat/x` die "must be a bare name"
+  # on the cold path. Both halves are asserted, because the cheap fix (slug argv[1]) satisfies the
+  # first and silently breaks the second — and reso's new-worktree.sh takes argv[1] as its branch
+  # too, so slugging there would rename reso's branches feat/x → feat-x.
+  run bash -c "cd '$REPO' && ./new-worktree.sh feat/slashed"
+  [ "$status" -eq 0 ]
+  wt="$HOME/Development/.worktrees/wt-feat-slashed"     # '/'→'-', matching the hook's own formula
+  [ -d "$wt" ]
+  [ "$(git -C "$wt" branch --show-current)" = "feat/slashed" ]
+}
+
+@test "a git-ILLEGAL slashed form is still refused — widening did not open traversal" {
+  # The pattern that used to refuse ALL slashes is now git check-ref-format, so this is the
+  # discriminating case: '/' alone must no longer refuse, but a traversal component still must.
+  run bash -c "cd '$REPO' && ./new-worktree.sh feat/.."
+  [ "$status" -eq 2 ]
+  run bash -c "cd '$REPO' && ./new-worktree.sh 'a//b'"
+  [ "$status" -eq 2 ]
+}
+
+@test "a leading '-' is refused — git would parse it as an option" {
+  # check-ref-format answers rc 0 for '-dash', so this is guarded separately from it.
+  run bash -c "cd '$REPO' && ./new-worktree.sh -dash"
+  [ "$status" -eq 2 ]
+  [ ! -e "$HOME/Development/.worktrees/wt--dash" ]
+}
+
+@test "argv[2] overrides the derived path, so the caller's path IS the one created" {
+  # hooks/worktree-setup.sh derives its own path and passes it as argv[2]; ignoring it left the
+  # hook's answer and the real destination as two derivations that only happened to agree.
+  alt="$BATS_TEST_TMPDIR/elsewhere/custom-wt"
+  run bash -c "cd '$REPO' && ./new-worktree.sh explicit '$alt'"
+  [ "$status" -eq 0 ]
+  [ -d "$alt" ]                                          # created, parent mkdir -p'd
+  [ -f "$alt/seed.txt" ]
+  [ ! -e "$HOME/Development/.worktrees/wt-explicit" ]     # and the default was NOT used
+}
+
 @test "branches off origin/main, not a stale local main" {
   # Advance origin BEHIND the local ref's back, then assert the new worktree has the origin commit.
   clone="$BATS_TEST_TMPDIR/clone"

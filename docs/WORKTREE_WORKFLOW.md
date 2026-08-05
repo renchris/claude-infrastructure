@@ -183,7 +183,7 @@ stale teammate checkpoint refs (self-debounced ≤ 1×/day, pool slots skipped).
 | Isolation rule (SSOT) | `CLAUDE.md` § Concurrent Sessions — Worktree Isolation (this repo, synced) |
 | Per-account launchers | `~/.zshrc` (`claude-next*`, `claude-fable*`; not synced — contains account wiring) |
 | Model/effort/window SSOT | `~/.claude/model-config.yaml` (not synced) |
-| Per-repo worktree setup | `<repo>/scripts/new-worktree.sh` (repo-specific, e.g. reso) |
+| Per-repo worktree setup | `<repo>/scripts/new-worktree.sh` — per-repo body, SHARED argv contract `<branch-name> [worktree-path]` (reso and this repo both). Slashes are legal in the branch and are slugged for the DIRECTORY only (`feat/x` → `wt-feat-x`, branch stays `feat/x` — same mapping as `wt-tm-gates` ↔ `tm/gates`); argv[2] wins over the derived path, which is how `hooks/worktree-setup.sh` passes one call shape to every repo |
 | Warm worktree pool (fast path) | `<repo>/scripts/worktree-pool.sh` — `claim <branch>` prints a provisioned path (repo-specific, reso) |
 | Trunk landing (`/ship`) | `<repo>/.claude/commands/ship.md` + `scripts/ship-reconcile.sh` + `scripts/land-lock.sh` (repo-specific, reso) |
 | Landing serializer log | `~/.reso/landing.lock.d` (machine-wide mutex) · `~/.reso/land.log` (per-landing JSON) |
