@@ -23,8 +23,9 @@ Primary stack + language/style/file-naming conventions — Next.js 15/16 (App Ro
 
 **Commit proactively — one atomic commit per completed logical task, as you go,
 without waiting to be asked.** Landing goes through `/ship` on the same terms — fired
-by you everywhere except `reso-management-app` (see Git Safety → § Session Close
-Protocol's ship policy). Each commit follows these rules:
+by you by default, and held back only where the TARGET repo's own `CLAUDE.md` says landing
+spends money (see Git Safety → § Session Close Protocol's ship policy). Each commit follows
+these rules:
 
 1. **One commit per logical task.** Each task/phase/fix gets its own atomic commit.
    Never bundle unrelated changes. Never commit pre-existing unstaged changes from
@@ -46,7 +47,7 @@ Protocol's ship policy). Each commit follows these rules:
 - **Never use `--no-verify` to bypass pre-commit hooks.** If a hook blocks your commit,
   it caught a real issue. Fix the underlying problem instead of bypassing the safeguard.
 - Never force push to main/master
-- **Landing goes through `/ship`, per § Session Close Protocol's ship policy** — auto in every repo except `reso-management-app` (where each land bills an Amplify + Fly deploy, so it stays the user's explicit call). A bare `git push` is still never the move: `/ship` is the sanctioned rail (gates, land-lock, reconcile). *(Revised 2026-07-31 from "push only on explicit user request" — accumulating verified commits locally was losing work to crashes and forgotten branches.)*
+- **Landing goes through `/ship`, per § Session Close Protocol's ship policy** — auto by default; the user's explicit call ONLY where the target repo's own `CLAUDE.md` states that landing spends money (never assumed from this file — that fact perishes; see the ship-policy table). A bare `git push` is still never the move: `/ship` is the sanctioned rail (gates, land-lock, reconcile). *(Revised 2026-07-31 from "push only on explicit user request" — accumulating verified commits locally was losing work to crashes and forgotten branches.)*
 - Never run destructive commands (hard reset, force push) without explicit user request
 - Never run interactive git commands (rebase -i, add -i) - they require terminal interaction
 - **Never run `git clean` with `-x` or `-X` flags** — these delete gitignored files which may include paid assets (AI-generated images, API outputs) that cost real money and have cooldown periods to regenerate. `git clean -f -d` (without -x) is safer but still confirm with user first.
@@ -325,7 +326,7 @@ Unreconstructable scope is itself a STOP-ASK, never a guess.
 | Read-only / advisory / research (no tracked writes) | **No ledger, no auto-continue.** Answer and yield. |
 | In-scope: unwritten / unverified / uncommitted | **Auto-continue:** finish → run gate → commit (atomic, explicit paths). ≥2 code tasks → Agent Teams. |
 | In-scope: gate ran **red** | **Auto-debug** the root cause (cap ~2 cycles → commit partial + report). Never blind-retry, never bypass the hook. |
-| Committed, **not pushed/landed** | **Ship policy by repo (below).** Default: **auto-`/ship`** — a land is the last step of the work, not a favour. `reso-management-app` ONLY: **terminal-valid**, offer `/ship` as the user's call. |
+| Committed, **not pushed/landed** | **Ship policy by repo (below).** Default: **auto-`/ship`** — a land is the last step of the work, not a favour. **Terminal-valid, offer instead of firing, ONLY where the target repo's own `CLAUDE.md` says landing spends money.** |
 | Needs a **decision** (destructive migration / auth / nav pattern / timeout) or **info** | **STOP-ASK** (overrides auto-continue); commit in-progress work first. |
 | Out-of-scope discovery | **Triage via the Follow-On Gate (F1-F4 below)**: PASS → **pursue now, no re-ask** (append `Scope (grown): +<item>` where the DoD lives — growth is auditable, never silent); any FAIL → name + backlog. Security / data-integrity → **stop-surface now**. |
 | Genuinely complete | **Assert plainly, no hedge.** |
@@ -346,8 +347,27 @@ machine can see it — one crash, stale worktree, or forgotten branch from being
 
 | Repo | On `📦`, gates green | Why |
 |---|---|---|
-| **`reso-management-app`** | **STOP — offer `/ship`, never fire it.** `📦` is terminal-valid here; hand back with the command ready to paste. | Every land bills a real Amplify (Oregon) + Fly (LAX/SIN) deploy. Spending the operator's compute is their call. |
-| **every other repo** (incl. `claude-infrastructure`) | **Auto-`/ship`** as the closing act, then re-read the ledger and report the landed state. | No per-land billing; unlanded ⇒ pure loss risk. |
+| **every repo, by default** | **Auto-`/ship`** as the closing act, then re-read the ledger and report the landed state. | Unlanded ⇒ pure loss risk. |
+| **a repo whose OWN `CLAUDE.md` says landing spends money** | **STOP — offer the land, never fire it.** `📦` is terminal-valid there; hand back with the command ready to paste. | Spending the operator's compute is their call — but the *cost* is the repo's fact to state, never this file's. |
+
+🚨 **This table names NO repo, deliberately. Landing cost is a PERISHABLE FACT about live
+infrastructure, and a fact restated in always-resident global policy has no path to learn it changed.**
+Before landing in a repo you are not cwd'd into, read **that repo's own `CLAUDE.md`** and run **its
+status tool** if it ships one. A live measurement outranks any remembered verdict — including this
+paragraph. ⚠️ **A project `CLAUDE.md` loads ONLY when the session cwd is that project**, so working
+*on* repo X *from* a session in repo Y means X's policy is structurally invisible to you: go read it.
+
+*(Rewritten 2026-08-05. The prior version hardcoded "`reso-management-app` — every land bills a real
+Amplify (Oregon) + Fly (LAX/SIN) deploy." True when written 2026-07-31; FALSE two days later. reso cut
+over to LAND_SHIP_V2 on 2026-08-02 (`fb76c35bb`) — Amplify `autoBuild:False` on `main`, Path F filtering
+`refs/heads/release` — so `/ship` became free and `/deploy` became the only money-spender. reso's own
+`CLAUDE.md` was updated the SAME DAY and says so at line 420; this file was not, and nothing connected
+the two. Consequence: on 2026-08-05 a `claude-infrastructure` session refused to land a docs-only commit
+in reso, and handed the operator a manual step, for a reason that had been false for three days. reso
+already ships the right primitive — `scripts/land-status.sh` asserts both settings from the live APIs
+every readout and reports UNKNOWN rather than assuming safe — and its own doc says "never trust this
+paragraph, read the tool." That is the pattern this row now follows, matching how per-project gate names
+and the trunk already delegate to the project `CLAUDE.md`.)*
 
 Both paths still require G1/G2/G4 and green gates — `/ship` never launders a red gate or a dirty
 tree, and a `/ship` that *refuses* to auto-land (landing-range escalation, land-lock contention) is
@@ -567,7 +587,8 @@ DoD) — the hook is a dumb actuator. This is the *cross-turn* arm of auto-conti
 just keep working (don't stop on 🔧 in the first place).
 
 The single `→ Next` verb may be **auto-fired** for continue / commit / run-gate / handoff — and, per
-the ship policy above, for **`/ship` in every repo except `reso-management-app`**, where it stays an
+the ship policy above, for **`/ship` by default in every repo** — held back to an offer only where the
+target repo's own `CLAUDE.md` says landing spends money, where it stays an
 offer. Per-project gate names, escalation greps, and the trunk live in the project `CLAUDE.md`
 "Session Close" section; `/wrap` computes the ledger from live git/gate reads.
 
