@@ -5,9 +5,17 @@ WHY THIS EXISTS
     iTerm2's session right-click menu offers "Move Session to Split Pane" / "Move Session to
     Window" — point-and-click relocation, no drag required. kitty has no built-in equivalent:
     its own right-click is a single fixed action (paste_from_selection), and there is no config
-    option that turns it into a menu. So the menu is built the same way kitty-confirm-close builds
-    its dialog — outside kitty entirely, as a native macOS "choose from list" driven over the
-    remote-control socket — bound in place of the default right-click.
+    option that turns it into a menu. So the menu is built outside kitty entirely, driven over the
+    remote-control socket, bound in place of the default right-click.
+
+TWO TIERS, cursor-anchored NSMenu first, centered dialog as the fallback
+    kitty-pane-menu-native (compiled from the sibling .swift file by kitty-setup.sh) pops a REAL
+    NSMenu at the cursor — the actual iTerm2-style dropdown. Whether that renders when launched
+    via kitty's `launch --type=background` was unverified when written (see the .swift header),
+    so `choose_native()` below only trusts it if the round trip took long enough for a human to
+    have actually seen and dismissed it — see NATIVE_MIN_MS. Missing/crashed/suspiciously-instant
+    falls back to `choose()`, the AppleScript "choose from list" centered dialog (same technique
+    as kitty-confirm-close's), which is guaranteed to work but is not the shape being asked for.
 
 WHY cmd+right, NOT PLAIN right-click
     Most panes on this box run Claude Code, which enables mouse reporting — kitty's default
@@ -52,9 +60,28 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
+
+# The compiled Swift helper (bin/kitty-pane-menu-native.swift, built by kitty-setup.sh) pops a
+# REAL NSMenu at the cursor — the actual iTerm2-style dropdown, not this file's AppleScript
+# "choose from list" centered dialog. Whether it renders at all when spawned via kitty's
+# `launch --type=background` (as opposed to a synthetic test invocation) was UNVERIFIED at write
+# time — see the .swift file's header for why. _NATIVE_UNAVAILABLE is the sentinel for "couldn't
+# even try it, or good reason to believe it silently failed" — distinct from `None`, which means
+# the native menu genuinely DID show and the user dismissed it without picking (a legitimate
+# no-op, not a reason to fall back to the dialog).
+_NATIVE_UNAVAILABLE = object()
+NATIVE_BIN = os.path.join(HERE, "kitty-pane-menu-native")
+# A human cannot see a menu, decide, and click (or hit Escape) in under this many milliseconds —
+# so a faster round trip means the menu never actually rendered, not that it was dismissed
+# instantly. This is the ONLY signal available from outside the process: NSMenu.popUp's own
+# return value is NO for both "dismissed without a pick" and "never shown", so it cannot
+# discriminate the two cases itself (see the .swift file's `shown=` diagnostic, which is
+# informational only for the same reason).
+NATIVE_MIN_MS = 150
 
 
 def socket_address() -> str | None:
@@ -170,6 +197,23 @@ def other_targets(tree: list, self_osw_id: int) -> list[tuple[int, str]]:
     return out
 
 
+def choose_native(items: list[str]):
+    """Try the real NSMenu popup. Returns a picked title, None (shown + genuinely dismissed),
+    or _NATIVE_UNAVAILABLE (missing/crashed/suspiciously-instant — caller should fall back)."""
+    if not (os.path.isfile(NATIVE_BIN) and os.access(NATIVE_BIN, os.X_OK)):
+        return _NATIVE_UNAVAILABLE
+    start = time.monotonic()
+    try:
+        r = subprocess.run([NATIVE_BIN, *items], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return _NATIVE_UNAVAILABLE
+    elapsed_ms = (time.monotonic() - start) * 1000
+    if r.returncode != 0 or elapsed_ms < NATIVE_MIN_MS:
+        return _NATIVE_UNAVAILABLE
+    out = r.stdout.strip()
+    return out or None
+
+
 def choose(items: list[str]) -> str | None:
     applescript_list = ", ".join(
         '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"' for s in items
@@ -205,9 +249,11 @@ def main() -> int:
     targets = other_targets(tree, self_osw) if self_osw is not None else []
 
     items = ["Paste", "Move to New Window"] + [label for _, label in targets] + ["Close Pane"]
-    choice = choose(items)
+    choice = choose_native(items)
+    if choice is _NATIVE_UNAVAILABLE:
+        choice = choose(items)
     if not choice:
-        return 0  # cancelled
+        return 0  # cancelled (native: genuinely dismissed; dialog: Cancel/Escape)
 
     if choice == "Paste":
         kitty("action", "--match", f"id:{wid}", "paste_from_selection")

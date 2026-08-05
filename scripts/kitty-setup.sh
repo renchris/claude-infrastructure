@@ -115,6 +115,9 @@ if [ "$MODE" = undo ]; then
   for f in it2-kitty cc-term kitty-split-cwd.sh cc-in-kitty kitty-confirm-close kitty-pane-menu kitty-split-launch.sh; do
     [ -L "$BIN_DIR/$f" ] && { rm -f "$BIN_DIR/$f"; ok "removed $BIN_DIR/$f"; }
   done
+  # kitty-pane-menu-native is a COMPILED file, not a symlink — the -L check above would never
+  # match it, silently leaving a stale binary behind after undo.
+  [ -f "$BIN_DIR/kitty-pane-menu-native" ] && { rm -f "$BIN_DIR/kitty-pane-menu-native"; ok "removed $BIN_DIR/kitty-pane-menu-native"; }
   if grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
     cp "$SHELL_RC" "$SHELL_RC.bak-kitty-undo"
     # Delete the whole keyed block, inclusive of its markers.
@@ -183,6 +186,18 @@ if [ "$MODE" = apply ]; then
   ln -sfn "$REPO/bin/kitty-confirm-close" "$BIN_DIR/kitty-confirm-close"
   ln -sfn "$REPO/bin/kitty-pane-menu" "$BIN_DIR/kitty-pane-menu"
   ln -sfn "$REPO/bin/kitty-split-launch.sh" "$BIN_DIR/kitty-split-launch.sh"
+  # kitty-pane-menu-native is a COMPILED binary, not source — it cannot be symlinked, and the repo
+  # does not commit build artifacts. Compile fresh on every apply so it always matches the
+  # checked-in .swift; kitty-pane-menu's own choose_native() already degrades to the AppleScript
+  # dialog if this binary is absent or stale, so a missing swiftc (no Xcode CLT) is a silent
+  # feature loss here, never a broken install.
+  if command -v swiftc >/dev/null 2>&1; then
+    if swiftc -O "$REPO/bin/kitty-pane-menu-native.swift" -o "$BIN_DIR/kitty-pane-menu-native" 2>/tmp/kitty-pane-menu-native.compile.log; then
+      chmod +x "$BIN_DIR/kitty-pane-menu-native"
+    else
+      printf 'kitty-setup: kitty-pane-menu-native failed to compile — see /tmp/kitty-pane-menu-native.compile.log; falling back to the AppleScript dialog\n' >&2
+    fi
+  fi
 fi
 grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
@@ -195,6 +210,8 @@ grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
                                        || no "kitty-confirm-close missing at $BIN_DIR — cmd+W kills panes with no prompt"
 [ -x "$BIN_DIR/kitty-pane-menu" ] && ok "kitty-pane-menu deployed (cmd+right = Move Session to…)" \
                                    || no "kitty-pane-menu missing at $BIN_DIR — cmd+right cannot open the move menu"
+[ -x "$BIN_DIR/kitty-pane-menu-native" ] && ok "kitty-pane-menu-native compiled (cursor-anchored NSMenu, not just the dialog)" \
+                                          || info "kitty-pane-menu-native not built — cmd+right still works via the AppleScript dialog"
 [ -x "$BIN_DIR/kitty-split-launch.sh" ] && ok "kitty-split-launch.sh deployed (anchored splits for resume/handoff)" \
                                          || no "kitty-split-launch.sh missing at $BIN_DIR"
 # The wrapper is a COPY (refreshed only by this script or install.sh) while it2-kitty is a SYMLINK
