@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""cc-1p-events — read Claude Code's FIRST-PARTY analytics events locally.
+
+WHY THIS EXISTS
+───────────────
+`tengu_*` events (the `M(name, meta)` bus) never reach the operator. They go to a private OTel
+LoggerProvider built in `ino()` and out through Anthropic's own exporter. The documented
+`CLAUDE_CODE_ENABLE_TELEMETRY=1` pipeline is a SEPARATE provider carrying a disjoint, curated
+`claude_code.*` set — measured on 2.1.220: 5,979 console-exporter lines, zero `tengu_*`. So the
+`reason` attribute of `tengu_prompt_suggestion` — the only readout of the 12-rule content filter —
+has no supported path to the operator.
+
+It has an UNsupported one, and it needs nothing installed: the exporter is a durable queue. When a
+batch fails to POST, `eJi.saveEventsToFile` spills it to
+
+    <CLAUDE_CONFIG_DIR>/telemetry/1p_failed_events.<session>.<uuid>.json
+
+as JSONL, in the clear — `reason` is not redacted, hashed, or truncated (`Te`/`fe` are identity
+brand-markers; the bundle's real redactor `GIt` is never applied to it). `spool` reads that store.
+It is retrospective and needs no config change, no proxy, and no running process.
+
+ITS YIELD IS LOW AND THAT IS STRUCTURAL, not a bug in this file: a batch only lands there when an
+export FAILS, and it is deleted once one succeeds. Measured 2026-08-05 across all six config roots:
+56 distinct files, 2,841 events, of which exactly **2** were `tengu_prompt_suggestion`. Enough to
+prove the field is recoverable and to validate the decoder against real bytes; not enough to
+quantify anything. Do not report a distribution off `spool` alone without printing its n.
+
+For volume there is `serve` — a local sink plus the one config line that points the exporter at it.
+That diverts first-party telemetry to this machine while installed, so it is an OPERATOR decision
+and this file never installs it: `activation` prints the exact apply and rollback. See
+docs/research/prompt-suggestion-filter-2026-08-05.md §4.
+
+EXIT CONTRACT
+  0  output produced        2  usage error
+  3  NO DATA — no spool, or no matching events. Explicitly NOT a failure.
+
+Kill switch: CC_1P_EVENTS=off => exit 0, silent.
+Env seams (tests): CC_1P_EVENTS · CC_1P_SPOOL_GLOB · CC_1P_PORT
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import collections
+import glob
+import json
+import os
+import sys
+
+EXIT_OK, EXIT_USAGE, EXIT_NODATA = 0, 2, 3
+
+DEFAULT_SPOOL_GLOB = os.path.expanduser("~/.claude*/telemetry/*.json")
+
+#: The exporter's on-the-wire record. `event_data.additional_metadata` is base64 of a JSON bag
+#: holding every field without a first-class column — which is where `reason` lives.
+EVENT_TYPE = "ClaudeCodeInternalEvent"
+
+#: The one config line that redirects the first-party exporter. `eJi`'s constructor takes
+#: `e.baseUrl` verbatim with no validation, and `skipAuth` drops the bearer token, so a plain local
+#: HTTP server is a valid endpoint. `path` must stay the default the server also listens on.
+REDIRECT_KEY = "tengu_1p_event_batch_config"
+DEFAULT_PATH = "/api/event_logging/v2/batch"
+
+
+def spool_files(pattern: str) -> list[str]:
+    """Distinct spool files. Deduped by realpath — ~/.claude-next/telemetry is a symlink to
+    ~/.claude/telemetry, so a naive glob counts every event in it twice."""
+    seen, out = set(), []
+    for f in sorted(glob.glob(pattern)):
+        rp = os.path.realpath(f)
+        if rp not in seen:
+            seen.add(rp)
+            out.append(rp)
+    return out
+
+
+def decode_record(rec: dict) -> dict | None:
+    """Flatten one spool record into {event_name, session_id, ts, version, **metadata}."""
+    if rec.get("event_type") != EVENT_TYPE:
+        return None
+    data = rec.get("event_data") or {}
+    meta = {}
+    blob = data.get("additional_metadata")
+    if blob:
+        try:
+            meta = json.loads(base64.b64decode(blob))
+        except (ValueError, TypeError):
+            meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return {
+        "event_name": data.get("event_name"),
+        "session_id": data.get("session_id"),
+        "ts": data.get("client_timestamp"),
+        "version": (data.get("env") or {}).get("version"),
+        **meta,
+    }
+
+
+def read_spool(pattern: str, name: str | None) -> list[dict]:
+    """Every distinct event in the spool, optionally filtered to one event_name.
+
+    Deduped on (event_name, ts, session, metadata-blob): a batch that failed repeatedly can be
+    rewritten, and the same event then appears in more than one file. `event_id` is minted per emit
+    and is NOT in the spool payload, so the tuple is the only available identity.
+    """
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for path in spool_files(pattern):
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line[0] != "{":
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                data = rec.get("event_data") or {}
+                key = (
+                    data.get("event_name"),
+                    data.get("client_timestamp"),
+                    data.get("session_id"),
+                    data.get("additional_metadata"),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                row = decode_record(rec)
+                if row is None:
+                    continue
+                if name and row["event_name"] != name:
+                    continue
+                out.append(row)
+    return out
+
+
+def cmd_spool(args: argparse.Namespace) -> int:
+    rows = read_spool(args.glob, args.event)
+    if not rows:
+        print("cc-1p-events: no matching events in the spool", file=sys.stderr)
+        return EXIT_NODATA
+    for row in rows:
+        print(json.dumps(row, ensure_ascii=False, sort_keys=True))
+    return EXIT_OK
+
+
+def cmd_suggest(args: argparse.Namespace) -> int:
+    rows = read_spool(args.glob, "tengu_prompt_suggestion")
+    if not rows:
+        print("cc-1p-events: no tengu_prompt_suggestion events in the spool", file=sys.stderr)
+        return EXIT_NODATA
+
+    outcomes = collections.Counter(r.get("outcome") for r in rows)
+    reasons = collections.Counter(
+        r.get("reason") for r in rows if r.get("outcome") == "suppressed"
+    )
+    sessions = len({r.get("session_id") for r in rows})
+
+    if args.json:
+        print(json.dumps(
+            {"events": len(rows), "sessions": sessions,
+             "outcomes": dict(outcomes), "reasons": dict(reasons)},
+            sort_keys=True))
+        return EXIT_OK
+
+    # n FIRST, always. A spool-derived distribution is small by construction and a table printed
+    # without its n reads exactly like a fleet-wide measurement (memory: census-reported-as-verdict).
+    # The provenance clause is conditional: it is TRUE of the failed-export spool and FALSE of a
+    # `serve` sink, and a caveat that fires on both would be false half the time it printed.
+    origin = ("SPOOL (failed exports only; not a fleet census)"
+              if args.glob == DEFAULT_SPOOL_GLOB else f"store: {args.glob}")
+    print(f"n = {len(rows)} events across {sessions} session(s) — {origin}")
+    print(f"outcomes: {dict(outcomes)}")
+    total = sum(reasons.values())
+    if not total:
+        return EXIT_OK
+    print()
+    print(f"{'reason':<22} {'n':>5}  {'%':>6}")
+    print("-" * 36)
+    for reason, n in reasons.most_common():
+        print(f"{reason or '(none)':<22} {n:>5}  {n / total * 100:5.1f}%")
+    return EXIT_OK
+
+
+def cmd_activation(args: argparse.Namespace) -> int:
+    port = args.port
+    cfg = os.path.expanduser("~/.claude.json")
+    print(f"""\
+# Redirect Claude Code's first-party analytics to a local sink.
+#
+# EFFECT WHILE INSTALLED: every tengu_* event from sessions using this config root goes to
+# 127.0.0.1:{port} INSTEAD of Anthropic. Nothing else changes — the API, auth, and the documented
+# CLAUDE_CODE_ENABLE_TELEMETRY pipeline are untouched (the analytics exporter is a separate client).
+#
+# IT IS SELF-EXPIRING. A successful GrowthBook refresh REPLACES cachedGrowthBookFeatures wholesale
+# (TTL 6h), so the redirect reverts on its own. Re-apply to keep collecting; that is also why this
+# is safe to try — the failure mode is "collection stops", never "config stuck".
+#
+# Sessions must be RESTARTED to pick it up: the exporter is constructed once at startup.
+
+# 1. start the sink (leave it running)
+cc-1p-events serve --port {port}
+
+# 2. apply the redirect  (edits {cfg}; a .bak is written beside it)
+cc-1p-events activation --apply --port {port}
+
+# 3. restart the sessions you want to observe, then read the result
+cc-1p-events suggest --glob '<sink-dir>/*.json'
+
+# rollback (also happens by itself within 6h)
+cc-1p-events activation --revert""")
+    if not (args.apply or args.revert):
+        return EXIT_OK
+
+    try:
+        with open(cfg, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(f"cc-1p-events: cannot read {cfg}: {exc}", file=sys.stderr)
+        return EXIT_NODATA
+
+    features = doc.get("cachedGrowthBookFeatures")
+    if not isinstance(features, dict):
+        print(f"cc-1p-events: {cfg} has no cachedGrowthBookFeatures", file=sys.stderr)
+        return EXIT_NODATA
+
+    if args.revert:
+        features.pop(REDIRECT_KEY, None)
+    else:
+        features[REDIRECT_KEY] = {
+            "baseUrl": f"http://127.0.0.1:{port}",
+            "path": DEFAULT_PATH,
+            "skipAuth": True,
+            "scheduledDelayMillis": 2000,
+        }
+    # Back up the ORIGINAL bytes (not the edited doc — a backup of the new state restores nothing),
+    # then swap atomically. ~/.claude.json is live config that every session reads.
+    with open(cfg, "rb") as src, open(cfg + ".bak", "wb") as dst:
+        dst.write(src.read())
+    tmp = cfg + ".cc1p.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+    os.replace(tmp, cfg)
+    print(f"\n{'reverted' if args.revert else 'applied'}: {cfg} (backup at {cfg}.bak)")
+    return EXIT_OK
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Accept the exporter's POSTs and append each event, one JSON object per line.
+
+    The sink writes the SAME record shape the spool uses, so `spool`/`suggest` read either store
+    with no second decoder — one format, one reader, nothing to drift.
+    """
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    out_path = args.out
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 — stdlib interface
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            n = 0
+            try:
+                payload = json.loads(body)
+                events = payload.get("events", []) if isinstance(payload, dict) else []
+                with open(out_path, "a", encoding="utf-8") as fh:
+                    for ev in events:
+                        fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
+                        n += 1
+            except (ValueError, OSError) as exc:
+                print(f"sink: unusable batch: {exc}", file=sys.stderr)
+            # 200 unconditionally: a non-2xx makes the exporter RETRY and re-spool, which would
+            # duplicate every event and eventually drop it after maxAttempts.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+            print(f"sink: {n} event(s) -> {out_path}", file=sys.stderr)
+
+        def log_message(self, *a):  # silence the default access log
+            return
+
+    srv = HTTPServer(("127.0.0.1", args.port), Handler)
+    print(f"cc-1p-events: sink on http://127.0.0.1:{args.port}{DEFAULT_PATH} -> {out_path}",
+          file=sys.stderr)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return EXIT_OK
+
+
+def main(argv: list[str]) -> int:
+    if os.environ.get("CC_1P_EVENTS", "on") == "off":
+        return EXIT_OK
+
+    default_glob = os.environ.get("CC_1P_SPOOL_GLOB", DEFAULT_SPOOL_GLOB)
+    default_port = int(os.environ.get("CC_1P_PORT", "8787"))
+
+    ap = argparse.ArgumentParser(
+        prog="cc-1p-events",
+        description="Read Claude Code first-party analytics events locally.",
+    )
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("spool", help="decode the on-disk failed-export spool to JSONL")
+    p.add_argument("--glob", default=default_glob)
+    p.add_argument("--event", default=None, help="only this event_name")
+    p.set_defaults(fn=cmd_spool)
+
+    p = sub.add_parser("suggest", help="tengu_prompt_suggestion outcome/reason distribution")
+    p.add_argument("--glob", default=default_glob)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_suggest)
+
+    p = sub.add_parser("serve", help="run the local sink the redirect points at")
+    p.add_argument("--port", type=int, default=default_port)
+    p.add_argument("--out", default=os.path.expanduser("~/.claude/telemetry/1p_local_sink.json"))
+    p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("activation", help="print (or apply/revert) the redirect")
+    p.add_argument("--port", type=int, default=default_port)
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--revert", action="store_true")
+    p.set_defaults(fn=cmd_activation)
+
+    args = ap.parse_args(argv)
+    if not getattr(args, "fn", None):
+        ap.print_help()
+        return EXIT_USAGE
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(EXIT_OK)
+    except KeyboardInterrupt:
+        sys.exit(EXIT_USAGE)
