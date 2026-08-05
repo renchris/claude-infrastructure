@@ -26,6 +26,12 @@
 #      and then cc-in-kitty's ANCESTRY check, which a launchd caller fails by construction.
 #   6. THE ANCHOR VERB. Without a kitty `anchor`, detection succeeds and the fire then REFUSES —
 #      resolve_headless_anchor reads the iTerm2 driver's failure as INCONCLUSIVE.
+#   7. THE ADDRESS COMES FROM kitty.conf (item c9eb57be5815). `listen_on` is the SSOT for where the
+#      socket is; a hardcoded `<dir>/kitty-<pid>` agrees with the shipped conf and goes silently
+#      wrong the moment it is retuned. The failure is invisible by construction — no candidate ⇒
+#      no kitty ⇒ iTerm2, indistinguishable from "kitty is not running" — so it is pinned
+#      BEHAVIOURALLY (retune the fixture conf, assert the probe follows it) rather than by grep.
+#      setup() therefore drives the SSOT path prod takes; the no-conf default has its own case.
 #
 # NOTHING HERE EXECUTES scripts/handoff-fire.sh — it FIRES REAL SESSIONS. Functions are EXTRACTED
 # with sed, the established pattern (tests/handoff-fire-kitty.bats:124). kitty and ps are stubbed;
@@ -34,6 +40,20 @@
 # Every assertion is `[ ]`, `run`+status, or `… || false`. `[[ ]]` and `(( ))` are errexit-EXEMPT in
 # bats and are silently DEAD anywhere but a body's last line — that has burned this repo twice.
 
+# A REAL AF_UNIX socket, asserted. sun_path is capped at 104 bytes on Darwin, so a path too long
+# must go RED right here — never quietly leave the fixture absent and every case vacuous.
+mksock() {
+  /usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$1"
+  [ -S "$1" ]
+}
+
+# The fixture kitty.conf, at the DEFAULT location kitty_socket_template resolves with no seam set —
+# so the suite proves the default resolution too, not just that CC_KITTY_CONF is honoured.
+write_kconf() {
+  mkdir -p "$HOME/.config/kitty"
+  printf '%s\n' "$@" > "$HOME/.config/kitty/kitty.conf"
+}
+
 setup() {
   # Pin the fire capacity gate OFF — this file names handoff-fire, so test-hermeticity-lint rule 2
   # requires it, and it was right: an unpinned suite goes red-by-LOAD rather than by its subject.
@@ -41,6 +61,9 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"   # hermeticity ratchet: never live ~/
+  # …and the conf seam with it. kitty_socket_template defaults to $HOME/.config/kitty/kitty.conf, so
+  # a stray CC_KITTY_CONF in the developer's env would silently point the whole suite at a real file.
+  unset CC_KITTY_CONF
 
   # hf_bounded passthrough — same rationale as the sibling suites: these tests extract INDIVIDUAL
   # functions, so the real helper is not in scope. Its own semantics live in handoff-fire-it2-bound.
@@ -55,9 +78,13 @@ setup() {
   # ASSERTED rather than assumed: a path too long must go RED here, never quietly skip the fixture.
   SOCKDIR="$BATS_TEST_TMPDIR/sock"; mkdir -p "$SOCKDIR"
   export CC_FIRE_KITTY_SOCK_DIR="$SOCKDIR"
-  /usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' \
-    "$SOCKDIR/kitty-4242"
-  [ -S "$SOCKDIR/kitty-4242" ]
+  mksock "$SOCKDIR/kitty-4242"
+
+  # THE CONF IS THE FIXTURE, because it is the SSOT prod reads. Writing it here means every case in
+  # this file drives the same derivation the live box does; a suite that only ever exercised the
+  # no-conf DEFAULT would be testing a branch prod never takes. Same address as before, so nothing
+  # below had to change: the point is WHERE it now comes from.
+  write_kconf "listen_on unix:$SOCKDIR/kitty-{kitty_pid}"
 
   # fake kitty: logs argv, then answers `@ --to <sock> ls`. KFAKE_KITTY_RC forces a refusal (the
   # stale-socket control); KFAKE_LS names the JSON fixture `ls` prints.
@@ -106,11 +133,12 @@ JSON
   x_kt="$(sed -n '/^kt() {/p' "$HF")";                                [ -n "$x_kt" ]
   x_head="$(sed -n '/^kitty_headless() {/,/^}/p' "$HF")";             [ -n "$x_head" ]
   x_socks="$(sed -n '/^kitty_sockets() {/,/^}/p' "$HF")";             [ -n "$x_socks" ]
+  x_tmpl="$(sed -n '/^kitty_socket_template() {/,/^}/p' "$HF")";      [ -n "$x_tmpl" ]
   x_ans="$(sed -n '/^kitty_socket_answers() {/,/^}/p' "$HF")";        [ -n "$x_ans" ]
   x_field="$(sed -n '/^kt_window_field() {/,/^}/p' "$HF")";           [ -n "$x_field" ]
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF")";                        [ -n "$x_py" ]
   x_res="$(sed -n '/^resolve_headless_anchor() {/,/^}/p' "$HF")";     [ -n "$x_res" ]
-  eval "$x_kitty"; eval "$x_kt"; eval "$x_head"; eval "$x_socks"; eval "$x_ans"
+  eval "$x_kitty"; eval "$x_kt"; eval "$x_head"; eval "$x_socks"; eval "$x_tmpl"; eval "$x_ans"
   eval "$x_field"; eval "$x_py"; eval "$x_res"
 
   pin_daemon
@@ -205,6 +233,105 @@ pin_kitty()  { pin_daemon; export KITTY_WINDOW_ID=28; }
   [ "$(grep -c . "$KLOG")" = "$first" ]
 }
 
+# ── the address comes from kitty.conf, not from a hardcoded name (item c9eb57be5815) ─────────────
+#
+# The defect these pin is INVISIBLE by construction, which is why every case here is behavioural.
+# A hardcoded `<dir>/kitty-<pid>` agrees with the shipped conf, so nothing is wrong today; retune
+# `listen_on` and the probe finds no candidate, kitty_headless returns 1, and every daemon fire
+# reverts to iTerm2 — byte-identical to "kitty is not running", the same wrong-terminal class the
+# probe itself was filed to end. So each case RETUNES the conf and asserts the probe followed it.
+
+@test "the socket NAME comes from listen_on — and the hardcoded-shaped socket is NOT chosen" {
+  # The discriminator is the second socket. $SOCKDIR/kitty-4242 from setup() is still there and
+  # still ANSWERS, so a derivation that ignored the conf would resolve happily and look correct;
+  # only reading the conf can pick ctl-4242 over it.
+  pin_daemon
+  mksock "$SOCKDIR/ctl-4242"
+  write_kconf "listen_on unix:$SOCKDIR/ctl-{kitty_pid}"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/ctl-4242" ]
+}
+
+@test "a retuned DIRECTORY is followed — the conf beats CC_FIRE_KITTY_SOCK_DIR, which is the SSOT rule" {
+  # Precedence, pinned because a reader could plausibly get it backwards: CC_FIRE_KITTY_SOCK_DIR
+  # parameterises the DEFAULT (so the no-conf case stays testable off the real /tmp) and must not
+  # retarget a conf that named its own directory — that would re-create the hardcoded-path defect
+  # one layer up. Here the seam still points at $SOCKDIR, whose socket answers.
+  pin_daemon
+  local alt="$BATS_TEST_TMPDIR/alt"; mkdir -p "$alt"
+  mksock "$alt/kitty-4242"
+  write_kconf "listen_on unix:$alt/kitty-{kitty_pid}"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$alt/kitty-4242" ]
+}
+
+@test "a name with NO {kitty_pid} is ONE address, probed ONCE — not once per live kitty" {
+  # listen_on need not carry the placeholder, and then every live kitty resolves to the SAME
+  # address. The cost only shows on the path where it does NOT answer (a resolving candidate
+  # short-circuits at the first hit), so the fixture forces a refusal: two kitty pids, one address.
+  pin_daemon
+  mksock "$SOCKDIR/onlykitty"
+  write_kconf "listen_on unix:$SOCKDIR/onlykitty"
+  export KFAKE_PS="  4242 /Applications/kitty.app/Contents/MacOS/kitty
+  5150 /Applications/kitty.app/Contents/MacOS/kitty
+   755 /usr/bin/login"
+  export KFAKE_KITTY_RC=1
+  run in_kitty; [ "$status" -ne 0 ]
+  run grep -c . "$KLOG"
+  [ "$output" = "1" ]
+  # …and with kitty answering, that one address is what the caller gets.
+  pin_daemon; unset KFAKE_KITTY_RC
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/onlykitty" ]
+}
+
+@test "an ABSENT or UNREADABLE conf falls back to the shipped default — never to nothing" {
+  # The fallback direction is the whole safety argument: a conf we cannot parse must leave the probe
+  # exactly as capable as it was before this function read confs at all.
+  pin_daemon
+  rm -f "$HOME/.config/kitty/kitty.conf"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  # Unreadable is the other half, and it is NOT the same code path: the file exists, sed fails.
+  pin_daemon
+  write_kconf "listen_on unix:$BATS_TEST_TMPDIR/nowhere/kitty-{kitty_pid}"
+  chmod 000 "$HOME/.config/kitty/kitty.conf"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  chmod 644 "$HOME/.config/kitty/kitty.conf"
+}
+
+@test "a COMMENTED-OUT listen_on is not a value" {
+  # kitty ignores it, so must we. A parse anchored loosely enough to match `# listen_on …` would
+  # send the probe at a path no kitty is listening on, i.e. straight back to the silent revert.
+  pin_daemon
+  write_kconf "# listen_on unix:$BATS_TEST_TMPDIR/nowhere/kitty-{kitty_pid}"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+}
+
+@test "the LAST listen_on wins, and a trailing comment is stripped off the value" {
+  # kitty's own option semantics are later-overrides-earlier, so a conf with two must resolve the
+  # way kitty itself resolved it. The inline comment rides along: it is on the winning line, and a
+  # value carrying ` #note` addresses nothing.
+  pin_daemon
+  mksock "$SOCKDIR/ctl2-4242"
+  write_kconf "listen_on unix:$BATS_TEST_TMPDIR/nowhere/first-{kitty_pid}" \
+              "listen_on unix:$SOCKDIR/ctl2-{kitty_pid}   # the one that wins"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/ctl2-4242" ]
+}
+
+@test "a tcp: listener has NO socket FILE, and the file test must not drop it" {
+  # `[ -S ]` is a filesystem question and is STRUCTURALLY BLIND to a tcp listener (and to a Linux
+  # abstract unix:@name): the file never exists, so a file-gated enumeration rejects a LIVE address
+  # and reverts to iTerm2 for the same invisible reason. The actuator is the arbiter instead.
+  pin_daemon
+  write_kconf "listen_on tcp:localhost:45678"
+  in_kitty || false
+  [ "$CC_TERM_KITTY_TO" = "tcp:localhost:45678" ]
+}
+
 # ── the pgrep regression anchor ──────────────────────────────────────────────────────────────────
 
 @test "REGRESSION ANCHOR: the probe must not use pgrep — macOS pgrep hides the caller's ANCESTORS" {
@@ -218,7 +345,7 @@ pin_kitty()  { pin_daemon; export KITTY_WINDOW_ID=28; }
   # the comment above kitty_headless, which names pgrep on purpose to say why it is wrong, and an
   # unrelated self-close WARNING that hands the operator a `pgrep -fl` to run in their own shell.
   # An anchor that fires on the explanation of the bug is one somebody deletes.
-  printf '%s\n%s\n%s\n' "$x_head" "$x_socks" "$x_ans" > "$BATS_TEST_TMPDIR/probe.txt"
+  printf '%s\n%s\n%s\n%s\n' "$x_head" "$x_socks" "$x_tmpl" "$x_ans" > "$BATS_TEST_TMPDIR/probe.txt"
   run grep -c 'pgrep' "$BATS_TEST_TMPDIR/probe.txt"
   [ "$output" = "0" ]
   # …and the replacement is actually present, so this cannot pass by the probe having no lookup at
