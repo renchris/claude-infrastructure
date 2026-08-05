@@ -101,8 +101,31 @@ function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); ret
 
   # REGION RESET — a new @test/function opener, or a closing brace/paren at the head of a line, ends
   # whatever region an unguarded cd was recorded in. See the ACCEPTED FLOOR note in the header.
-  if (line ~ /^[[:space:]]*(@test|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))/) cdline = 0
-  if (line ~ /^[[:space:]]*[})]/) cdline = 0
+  if (line ~ /^[[:space:]]*(@test|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))/) { cdline = 0; split("", proven) }
+  if (line ~ /^[[:space:]]*[})]/) { cdline = 0; split("", proven) }
+
+  # ── PROOF TRACKING (rule 1) ───────────────────────────────────────────────────────────────────
+  # A variable the shell has already proven non-empty is NOT a bare expansion: `${x:?…}` aborts
+  # before any git call when x is empty, so a later `git -C "$x"` can never degrade to the no-op.
+  # Without this, the lint convicts the very remedy its own message prescribes — the fix belongs on
+  # the BINDING (once, where the path enters) and demanding it at each use site is noise, not safety.
+  #
+  # Keyed by VARIABLE NAME and cleared at every region boundary above. Deliberately NOT "does this
+  # file contain a ${…:?} anywhere": that file-level shape would clean a file whose guard governs a
+  # DIFFERENT variable, which is the vacuous-pass trap the header already records for rules 2-4.
+  # `split("", proven)` rather than `delete proven` — this box's awk is BWK, not gawk.
+  if (match(line, /^[[:space:]]*:[[:space:]]+"?\$\{[A-Za-z0-9_]+:\?/)) {         # : "${1:?msg}"
+    seg = substr(line, RSTART, RLENGTH); gsub(/^.*\$\{|:\?$/, "", seg); if (seg != "") proven[seg] = 1
+  }
+  if (match(line, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="?\$\{[A-Za-z0-9_]+:\?/)) {
+    seg = substr(line, RSTART, RLENGTH)                                           # local r="${1:?msg}"
+    lhs = seg; sub(/^local[[:space:]]+/, "", lhs); sub(/=.*$/, "", lhs); if (lhs != "") proven[lhs] = 1
+    rhs = seg; gsub(/^.*\$\{|:\?$/, "", rhs);                          if (rhs != "") proven[rhs] = 1
+  }
+  if (match(line, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="\$\{?[A-Za-z0-9_]+\}?\/[^"]+"/)) {
+    seg = substr(line, RSTART, RLENGTH)                                           # repo="$d/repo"
+    lhs = seg; sub(/^local[[:space:]]+/, "", lhs); sub(/=.*$/, "", lhs); if (lhs != "") proven[lhs] = 1
+  }
 
   # An UNGUARDED cd to an expansion: no ||-chain, no &&-chain, so its failure is discarded.
   if (line ~ /(^|[[:space:];&|(])cd[[:space:]]+(--[[:space:]]+)?"?\$/ && line !~ /\|\|/ && line !~ /&&/)
@@ -118,8 +141,10 @@ function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); ret
     gsub(/^["']|["']$/, "", arg)
     # BARE = the whole argument is one expansion, or the empty string. Nothing in it can make the
     # argument non-empty, so `git -C` degrades to a no-op and the write lands in the caller's cwd.
-    if (arg == "" || arg ~ /^\$[0-9]+$/ || arg ~ /^\$[A-Za-z_][A-Za-z0-9_]*$/ ||
-        arg ~ /^\$\{[0-9]+\}$/ || arg ~ /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/)
+    name = arg; gsub(/^\$\{?|\}$/, "", name)     # $1 / ${1} / $r / ${r} → the bare variable name
+    if ((arg == "" || arg ~ /^\$[0-9]+$/ || arg ~ /^\$[A-Za-z_][A-Za-z0-9_]*$/ ||
+         arg ~ /^\$\{[0-9]+\}$/ || arg ~ /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/) &&
+        !(name in proven))
       printf "%d\tBARE-C\t%s\n", NR, trim(line)
   } else if (cdline > 0) {
     printf "%d\tAFTER-CD\t%s\n", NR, trim(line)
@@ -300,6 +325,38 @@ F
   git -C "$d/repo" config user.email t@t
 }
 F
+  # ── RULE 1 SCOPE-AWARENESS + its three mutants. The guard belongs on the BINDING, so a use site
+  # under a proven variable must go GREEN — but each mutant below breaks exactly one leg of that
+  # proof and must go RED. Without them, "scope-aware" is indistinguishable from a file-level
+  # wildcard that reads clean on files it never really checked.
+  mk bound_guarded <<'F'
+mkgit() {
+  : "${1:?mkgit: repo path required}"
+  git -C "$1" config user.email t@t
+}
+mkrepo() { local r="${1:?mkrepo: repo path required}"
+  git -C "$r" config user.email t@t
+}
+F
+  mk bound_no_guard <<'F'
+mkgit() {
+  git -C "$1" config user.email t@t
+}
+F
+  mk bound_other_var <<'F'
+mkgit() {
+  : "${a:?a required}"
+  git -C "$b" config user.email t@t
+}
+F
+  mk bound_other_region <<'F'
+one() {
+  : "${r:?r required}"
+}
+two() {
+  git -C "$r" config user.email t@t
+}
+F
   mk literal <<'F'
 @test "x" {
   git -C fixture-repo config user.email t@t
@@ -347,6 +404,12 @@ F
   # (b) GREEN on each accepted shape — the fixes the RED prescribes actually clear it.
   lint_tree "$d/guarded"  "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a \${1:?}-guarded -C did not go GREEN"; fails=1; }
   lint_tree "$d/suffixed" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an expansion with a literal suffix did not go GREEN"; fails=1; }
+
+  # scope-awareness: GREEN when the binding is proven, RED when any leg of that proof is broken
+  lint_tree "$d/bound_guarded" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a use site under a \${1:?}-proven BINDING did not go GREEN — the lint is convicting its own prescribed fix"; fails=1; }
+  lint_tree "$d/bound_no_guard"    "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: MUTANT (guard line deleted) did not go RED — proof tracking is vacuous"; fails=1; }
+  lint_tree "$d/bound_other_var"   "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: MUTANT (guard proves \$a, write uses \$b) did not go RED — proof is not keyed on the VARIABLE"; fails=1; }
+  lint_tree "$d/bound_other_region" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: MUTANT (guard in a DIFFERENT function) did not go RED — proof is leaking across regions, i.e. a file-level wildcard"; fails=1; }
   lint_tree "$d/literal"  "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a literal path under -C did not go GREEN"; fails=1; }
   # (c) the PROSE-MATCH regression control.
   lint_tree "$d/prose" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a COMMENT naming the leaky shape counted as a write — the scan is matching prose"; fails=1; }
@@ -398,7 +461,7 @@ F
   ( CC_GITID_ALLOWLIST="" CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/bare_var" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_GITID_OWN naming the file did not block at the entrypoint"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "git-identity-lint --selftest: 22/22 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd, on an &&-chained cd, and on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (path form accepted); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
+    echo "git-identity-lint --selftest: 26/26 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd, on an &&-chained cd, and on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (path form accepted); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
     exit 0
   fi
   echo "git-identity-lint --selftest: FAILED — the ratchet does not discriminate."
