@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+"""cc-suggest-filter — the local instrument for Claude Code's prompt-suggestion content filter.
+
+WHY THIS EXISTS
+───────────────
+Claude Code generates a ghost-text prompt suggestion after most assistant turns, then runs the
+generated string through a 12-rule rejection ladder (`TM_` in the bundle). Any hit and NOTHING is
+shown. A 2026-08-05 investigation established that this ladder — not the gates, not `cache_cold` —
+is the likely dominant reason suggestions stay rare, but could not quantify it, because the only
+readout is the `reason` attribute of the `tengu_prompt_suggestion` telemetry event.
+
+THAT EVENT IS NOT COLLECTABLE LOCALLY, and this file exists because of that. The chain is
+  M(name, meta) -> the single analytics sink (`SEi`, single-attach, installed at startup by `fMt`)
+  -> `cv_` -> `Per` -> `nJi(ERe, ...)` -> `ERe.emit(...)`
+where `ERe` is an OTel logger built in `ino()` over Anthropic's own first-party exporter. The
+operator-configurable OTEL pipeline (`CLAUDE_CODE_ENABLE_TELEMETRY=1`) is a SEPARATE LoggerProvider
+carrying a disjoint, curated `claude_code.*` event set. Measured, not inferred: a live 2.1.220 run
+with `OTEL_LOGS_EXPORTER=console OTEL_METRICS_EXPORTER=console` emitted 5,979 lines and **zero**
+`tengu_*` events (docs/research/prompt-suggestion-filter-2026-08-05.md §2). So there is no
+supported path by which the operator ever sees `reason`.
+
+The ladder itself, however, is a PURE FUNCTION OF THE SUGGESTION STRING. So it can be run here, on
+strings we do have. That converts an unobservable into a measurable — and the measurement this tool
+was built for is a floor argument that needs no model calls at all:
+
+    Run the ladder over what users ACTUALLY TYPED next (fleet transcripts). A perfect predictor's
+    output IS that string. The rejection rate over that corpus is therefore a LOWER BOUND on the
+    filter's suppression rate — it is what the filter would throw away even if the model were
+    perfect. A high floor indicts the filter no matter how good the generator is.
+
+Real model output is expected to be rejected MORE (verbose, Claude-voice, multi-sentence), so the
+bound is conservative in the useful direction. It is a bound, never an estimate of the live rate —
+see the LIMITS section of the research doc before quoting a number from it.
+
+THE PORT IS NOT TRUSTED ON ITS OWN (memory: control-must-replay-the-real-artifact). `ladder-source`
+extracts the REAL `TM_` from the installed binary; tests/suggest-filter.bats executes that extracted
+JS in node over the same corpus and asserts verdict-for-verdict equality, and asserts the extracted
+source still matches the pinned copy so an upstream ladder change goes RED instead of silently
+making this tool wrong. JS->Python regex is not a transliteration: JS `$` is end-of-input while
+Python `$` also matches before a trailing newline (`\Z` here), and JS `\w` is ASCII while Python's
+is Unicode (`[A-Za-z0-9_]` here). Both were found BY that control, not by reading.
+
+EXIT CONTRACT (a non-verdict is a third state, never a red — memory: claimed-outcome-vs-checked)
+  0  a verdict / output was produced
+  2  usage error
+  3  NO DATA — no binary to extract from, or an empty corpus. Explicitly NOT a failure.
+  4  self-test mismatch (the port disagrees with its own fixtures)
+
+Kill switch: CC_SUGGEST_FILTER=off => exit 0, silent.
+Env seams (tests): CC_SUGGEST_FILTER · CC_CLAUDE_BIN · CC_SUGGEST_ROOTS
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+EXIT_OK, EXIT_USAGE, EXIT_NODATA, EXIT_SELFTEST = 0, 2, 3, 4
+
+# ── The ladder ────────────────────────────────────────────────────────────────────────────────
+# Ported rule-for-rule, in order, from `TM_` in Claude Code 2.1.220. The names are the literal
+# `reason` values the suppression event would have carried. FIRST HIT WINS and the rest are never
+# evaluated — so a distribution over these names is a distribution over FIRST causes, exactly as
+# the telemetry would have reported it, not over "rules that would have matched".
+
+_MULTI_SENTENCE = re.compile(r"[.!?]\s+[A-Z]")
+_HAS_FORMATTING = re.compile(r"[\n*]|\*\*")
+# NO re.S. JS `.` never matches a newline and `$` without /m is end-of-input, so a MULTI-LINE
+# parenthesised string cannot match `^\(.*\)$` in JS at all — it falls through to a later rung.
+# Adding DOTALL here mis-classified exactly one prompt in a 4,968-prompt corpus as `meta_wrapped`
+# where the real ladder says `too_many_words`. Found by the node differential control, not by the
+# fixtures: this is the whole reason that control exists.
+_META_WRAPPED = re.compile(r"\A\(.*\)\Z|\A\[.*\]\Z")
+_PREFIXED_LABEL = re.compile(r"\A[A-Za-z0-9_]+:\s")  # JS \w is ASCII-only; Python's is not.
+_SILENCE_A = re.compile(r"\bsilence is\b|\bstay(s|ing)? silent\b")
+_SILENCE_B = re.compile(r"\A[^A-Za-z0-9_]*silence[^A-Za-z0-9_]*\Z")  # ASCII \W, as in JS
+_EVALUATIVE = re.compile(
+    r"thanks|thank you|looks good|sounds good|that works|that worked|that's all|"
+    r"nice|great|perfect|makes sense|awesome|excellent"
+)
+_CLAUDE_VOICE = re.compile(
+    r"\A(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|"
+    r"that's|this is|this will|you can|you should|you could|sure,|of course|certainly)",
+    re.I,
+)
+_ERROR_PREFIXES = (
+    "api error:",
+    "prompt is too long",
+    "request timed out",
+    "invalid api key",
+    "image was too large",
+)
+_SHORT_OK = {
+    "yes", "yeah", "yep", "yea", "yup", "sure", "ok", "okay", "push", "commit",
+    "deploy", "stop", "continue", "check", "exit", "quit", "no",
+}
+
+#: Every value the content filter can put in `reason`, in ladder order. "empty" is the pre-ladder
+#: guard inside the same function, so it belongs to this vocabulary too.
+LADDER_REASONS = [
+    "empty",
+    "done",
+    "meta_text",
+    "meta_wrapped",
+    "error_message",
+    "prefixed_label",
+    "too_few_words",
+    "too_many_words",
+    "too_long",
+    "multiple_sentences",
+    "has_formatting",
+    "evaluative",
+    "claude_voice",
+]
+
+#: Reasons emitted by the OTHER layers (entry guard, pre-generation guards). Not produced here —
+#: listed so a reader of a report knows this instrument measures the content filter ONLY, and that
+#: a live `reason` distribution would also contain these.
+NON_LADDER_REASONS = [
+    "unfocused", "bg_unattached", "aborted", "early_conversation", "last_response_error",
+    "cache_cold", "disabled", "pending_permission", "elicitation_active", "plan_mode",
+    "rate_limit",
+]
+
+
+def classify(text: str) -> str | None:
+    """Return the first ladder reason that rejects `text`, or None if it would be SHOWN.
+
+    Mirrors `TM_(e, t)`: `e` is the trimmed suggestion as `SM_` returns it.
+    """
+    if not text:
+        return "empty"
+    low = text.lower()
+    # JS: e.trim().split(/\s+/).length — a whitespace-only string yields [""] i.e. 1, not 0.
+    n = len(re.split(r"\s+", text.strip()))
+
+    if low == "done":
+        return "done"
+    if (
+        low in ("nothing found", "nothing found.")
+        or low.startswith("nothing to suggest")
+        or low.startswith("no suggestion")
+        or _SILENCE_A.search(low)
+        or _SILENCE_B.search(low)
+    ):
+        return "meta_text"
+    if _META_WRAPPED.search(text):
+        return "meta_wrapped"
+    if any(low.startswith(p) for p in _ERROR_PREFIXES):
+        return "error_message"
+    if _PREFIXED_LABEL.search(text):
+        return "prefixed_label"
+    if n < 2 and not text.startswith("/") and low not in _SHORT_OK:
+        return "too_few_words"
+    if n > 12:
+        return "too_many_words"
+    if len(text) >= 100:
+        return "too_long"
+    if _MULTI_SENTENCE.search(text):
+        return "multiple_sentences"
+    if _HAS_FORMATTING.search(text):
+        return "has_formatting"
+    if _EVALUATIVE.search(low):
+        return "evaluative"
+    if _CLAUDE_VOICE.search(text):
+        return "claude_voice"
+    return None
+
+
+# ── Ladder-source extraction (the control's subject) ──────────────────────────────────────────
+# The compiled binary embeds its JS as printable bytes. `TM_` is located by its literal opening and
+# closed at the next function definition. Anchored on the SOURCE, so a rename of the minified
+# identifier is a NO-MATCH (exit 3, "cannot see it") rather than a wrong answer.
+
+_LADDER_START = b"function TM_(e,t){if(!e)return HY("
+_LADDER_END = b"function lcd("
+
+
+def resolve_binary() -> Path | None:
+    """The claude binary whose ladder we validate against — the one sessions actually run."""
+    override = os.environ.get("CC_CLAUDE_BIN")
+    if override:
+        p = Path(override)
+        return p.resolve() if p.exists() else None
+    here = Path(__file__).resolve().parent / "cc-claude-bin"
+    if here.exists():
+        try:
+            out = subprocess.run(
+                [str(here)], capture_output=True, text=True, timeout=20
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out and Path(out).exists():
+            return Path(out).resolve()
+    return None
+
+
+def extract_ladder(binary: Path) -> str | None:
+    """Return the verbatim `TM_` source from `binary`, or None if it is not present."""
+    data = binary.read_bytes()
+    i = data.find(_LADDER_START)
+    if i < 0:
+        return None
+    j = data.find(_LADDER_END, i)
+    if j < 0:
+        return None
+    return data[i:j].decode("utf-8", "replace")
+
+
+# ── Corpus: what users actually typed ─────────────────────────────────────────────────────────
+# The population is TYPED PROMPTS, because that is what a perfect suggestion would have equalled.
+# Everything the harness injects into the user role — slash-command envelopes, local-command
+# stdout, tool results, hook feedback, task notifications, system reminders — is NOT something a
+# user typed and would inflate the corpus with text no suggester ever competes with.
+
+# Every entry is a shape the HARNESS writes into the user role — measured in this fleet, not
+# imagined. `[Image:` is CC's own placeholder for a pasted screenshot; "Another Claude session sent
+# a message:" is its peer-message envelope; `[desk-sweep]` is a notification injection. Leaving them
+# in put 574 rows in `meta_wrapped` (11.6% of the corpus) that no human ever typed.
+#
+# NOT on this list, deliberately: long multi-paragraph prompts, and prompts an automation SUBMITTED
+# through the input box ("Continue autonomously with your goal: …"). The first are genuinely typed
+# and their length is the finding, not noise. The second are indistinguishable from typing in the
+# transcript — no field records who pressed enter (`entrypoint` is "cli" for both, measured over
+# 47,502 user records) — so they are counted, and the `--dedupe` sensitivity check exists to bound
+# what they do to the result rather than to hand-wave them away.
+_INJECTED_PREFIXES = (
+    "Caveat:",
+    "Stop hook feedback:",
+    "[Request interrupted",
+    "[Image:",
+    "[desk-sweep]",
+    "Another Claude session sent a message:",
+    "A session-scoped Stop hook is now active",
+    "API Error:",
+    "This session is being continued from a previous conversation",
+)
+_SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+# `[\s>]`, not `>`: the peer-message envelope is `<teammate-message teammate_id="…">`, so a pattern
+# demanding an immediate `>` matched none of them and left 199-to-1125-word agent briefs in the
+# corpus as "typed prompts". Found by hand-auditing a random 30, not by reading the regex.
+_XML_ENVELOPE = re.compile(r"\A<[a-z][a-z0-9-]*[\s>]")
+
+DEFAULT_ROOTS = [
+    Path.home() / ".claude" / "projects",
+    Path.home() / ".claude-tertiary" / "projects",
+    Path.home() / ".claude-quaternary" / "projects",
+]
+
+
+def _roots() -> list[Path]:
+    env = os.environ.get("CC_SUGGEST_ROOTS")
+    raw = [Path(x) for x in env.split("\n") if x.strip()] if env else DEFAULT_ROOTS
+    seen, out = set(), []
+    for p in raw:
+        if not p.is_dir():
+            continue
+        # ~/.claude-next/projects is a symlink to ~/.claude/projects — dedupe by realpath or every
+        # session in it is counted twice (memory: token-usage-from-transcripts).
+        r = p.resolve()
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def typed_prompt(record: dict) -> str | None:
+    """Return the user-typed text of a transcript record, or None if it was not typed by a human."""
+    if record.get("type") != "user" or record.get("isSidechain"):
+        return None
+    if record.get("userType") not in (None, "external"):
+        return None
+    content = record.get("message", {}).get("content")
+    if isinstance(content, list):
+        # A list content block is a tool_result or an expanded slash command — never typing.
+        return None
+    if not isinstance(content, str):
+        return None
+    text = _SYSTEM_REMINDER.sub("", content).strip()
+    if not text:
+        return None
+    if _XML_ENVELOPE.match(text):
+        return None
+    if any(text.startswith(p) for p in _INJECTED_PREFIXES):
+        return None
+    return text
+
+
+def harvest(roots: list[Path], limit: int | None, dedupe: bool = False) -> list[dict]:
+    """Collect typed prompts. `dedupe` keeps the FIRST occurrence of each exact text.
+
+    Dedupe is the sensitivity check on automation, not a cleanup: a script that re-submits a prompt
+    repeats it byte-for-byte ("(Checking in)" appears 153 times, "Reply with exactly: ok" 136), a
+    human almost never does. Reporting the distribution both ways bounds the automation tail's
+    influence without hand-labelling rows on an unfalsifiable "did a human press enter" judgment.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for root in roots:
+        for path in sorted(root.rglob("*.jsonl")):
+            try:
+                with path.open(encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line[0] != "{":
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except ValueError:
+                            continue
+                        text = typed_prompt(rec)
+                        if text is None:
+                            continue
+                        if dedupe:
+                            if text in seen:
+                                continue
+                            seen.add(text)
+                        rows.append(
+                            {
+                                "text": text,
+                                "session": rec.get("sessionId"),
+                                "ts": rec.get("timestamp"),
+                            }
+                        )
+                        if limit is not None and len(rows) >= limit:
+                            return rows
+            except OSError:
+                continue
+    return rows
+
+
+# ── Subcommands ───────────────────────────────────────────────────────────────────────────────
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    n = 0
+    for line in sys.stdin:
+        if args.jsonl:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            text = row.get(args.field, "")
+            row["reason"] = classify(text) or "pass"
+            print(json.dumps(row, ensure_ascii=False))
+        else:
+            text = line.rstrip("\n")
+            print(f"{classify(text) or 'pass'}\t{text}")
+        n += 1
+    return EXIT_OK if n else EXIT_NODATA
+
+
+def cmd_corpus(args: argparse.Namespace) -> int:
+    roots = _roots()
+    if not roots:
+        print("cc-suggest-filter: no transcript roots found", file=sys.stderr)
+        return EXIT_NODATA
+    rows = harvest(roots, args.limit, args.dedupe)
+    if not rows:
+        return EXIT_NODATA
+    for row in rows:
+        print(json.dumps(row, ensure_ascii=False))
+    return EXIT_OK
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    counts: dict[str, int] = {}
+    total = 0
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("{"):
+            try:
+                reason = json.loads(line).get("reason", "pass")
+            except ValueError:
+                continue
+        else:
+            reason = line.split("\t", 1)[0]
+        counts[reason] = counts.get(reason, 0) + 1
+        total += 1
+    if not total:
+        return EXIT_NODATA
+
+    if args.json:
+        print(json.dumps({"total": total, "counts": counts}, sort_keys=True))
+        return EXIT_OK
+
+    shown = counts.get("pass", 0)
+    print(f"population: {total} typed prompts")
+    print(f"would be SHOWN (survives the ladder): {shown}  ({shown / total * 100:.1f}%)")
+    print(f"would be SUPPRESSED:                  {total - shown}  "
+          f"({(total - shown) / total * 100:.1f}%)")
+    print()
+    print(f"{'reason':<20} {'n':>8} {'% of all':>9} {'% of rejects':>13}")
+    print("-" * 54)
+    rejects = total - shown
+    for reason in LADDER_REASONS:
+        n = counts.get(reason, 0)
+        if not n:
+            continue
+        pct_rej = f"{n / rejects * 100:9.1f}" if rejects else "        -"
+        print(f"{reason:<20} {n:>8} {n / total * 100:8.1f}% {pct_rej}%")
+    unknown = sorted(set(counts) - set(LADDER_REASONS) - {"pass"})
+    for reason in unknown:
+        print(f"{reason:<20} {counts[reason]:>8}   (not a ladder reason)")
+    return EXIT_OK
+
+
+def cmd_ladder_source(args: argparse.Namespace) -> int:
+    binary = resolve_binary()
+    if binary is None:
+        print("cc-suggest-filter: no claude binary resolved", file=sys.stderr)
+        return EXIT_NODATA
+    src = extract_ladder(binary)
+    if src is None:
+        print(f"cc-suggest-filter: ladder not found in {binary}", file=sys.stderr)
+        return EXIT_NODATA
+    if args.path:
+        print(binary)
+    else:
+        sys.stdout.write(src)
+        sys.stdout.write("\n")
+    return EXIT_OK
+
+
+#: (input, expected reason). One case per ladder rung, each chosen so it reaches ITS rung — an
+#: earlier rung firing first would make the case vacuous, which is the failure mode a fixture list
+#: has (memory: sibling-guard-makes-the-fixture-vacuous).
+FIXTURES = [
+    ("", "empty"),
+    ("done", "done"),
+    ("nothing to suggest here", "meta_text"),
+    ("silence is golden here", "meta_text"),
+    ("(run the tests)", "meta_wrapped"),
+    ("[run the tests]", "meta_wrapped"),
+    ("api error: something broke", "error_message"),
+    ("Suggestion: run the tests", "prefixed_label"),
+    ("wat", "too_few_words"),
+    ("run the tests and then commit and then push and then deploy it now", "too_many_words"),
+    # >=100 chars in <=12 words, or `too_many_words` fires first and the case proves nothing.
+    ("reconfigure the authentication-middleware integration-test harness against "
+     "staging-environment credentials immediately", "too_long"),
+    ("run the tests. Then commit", "multiple_sentences"),
+    ("run the tests\nand commit", "has_formatting"),
+    ("that works for me", "evaluative"),
+    ("let me run the tests", "claude_voice"),
+    # Survivors — the negative control. Without these a classifier that returns a reason for
+    # everything would pass the whole fixture list.
+    ("run the tests", None),
+    ("commit this", None),
+    ("/ship", None),
+    ("ok", None),
+    ("push it", None),
+]
+
+
+def cmd_self_test(args: argparse.Namespace) -> int:
+    bad = []
+    for text, want in FIXTURES:
+        got = classify(text)
+        if got != want:
+            bad.append((text, want, got))
+    for text, want, got in bad:
+        print(f"MISMATCH {text!r}: want {want!r}, got {got!r}", file=sys.stderr)
+    print(f"self-test: {len(FIXTURES) - len(bad)}/{len(FIXTURES)} fixtures agree")
+    return EXIT_SELFTEST if bad else EXIT_OK
+
+
+def main(argv: list[str]) -> int:
+    if os.environ.get("CC_SUGGEST_FILTER", "on") == "off":
+        return EXIT_OK
+
+    ap = argparse.ArgumentParser(
+        prog="cc-suggest-filter",
+        description="Quantify Claude Code's prompt-suggestion content filter locally.",
+    )
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("classify", help="stdin -> first rejecting reason (or 'pass')")
+    p.add_argument("--jsonl", action="store_true", help="read/write JSONL instead of raw lines")
+    p.add_argument("--field", default="text", help="JSONL field holding the text (default: text)")
+    p.set_defaults(fn=cmd_classify)
+
+    p = sub.add_parser("corpus", help="harvest typed user prompts from fleet transcripts (JSONL)")
+    p.add_argument("--limit", type=int, default=None, help="stop after N prompts")
+    p.add_argument("--dedupe", action="store_true",
+                   help="keep only the first occurrence of each exact text (automation check)")
+    p.set_defaults(fn=cmd_corpus)
+
+    p = sub.add_parser("report", help="fold classify output into a reason distribution")
+    p.add_argument("--json", action="store_true", help="machine-readable counts")
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("ladder-source", help="print the real TM_ source from the installed binary")
+    p.add_argument("--path", action="store_true", help="print the binary path instead")
+    p.set_defaults(fn=cmd_ladder_source)
+
+    p = sub.add_parser("self-test", help="run the built-in fixtures")
+    p.set_defaults(fn=cmd_self_test)
+
+    args = ap.parse_args(argv)
+    if not getattr(args, "fn", None):
+        ap.print_help()
+        return EXIT_USAGE
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(EXIT_OK)
+    except KeyboardInterrupt:
+        sys.exit(EXIT_USAGE)

@@ -1,0 +1,27 @@
+{
+  "_why": "The 67% human-typed rejection rate in docs/research/prompt-suggestion-filter-2026-08-05.md rests on a hand-labelled sample. No transcript field distinguishes a human pressing enter from an automation submitting a prompt (entrypoint is 'cli' for both, across 47,502 user records), so the split is a judgment call. It is recorded here so the call is auditable and the number reproducible, rather than asserted in prose.",
+  "_reproduce": [
+    "cc-suggest-filter corpus --dedupe > corpus.jsonl",
+    "python3 -c \"import json,random; rows=[json.loads(l) for l in open('corpus.jsonl')]; random.seed(7); print('\\n'.join(r['text'][:100] for r in random.sample(rows,100)))\"",
+    "rows at the indices below were labelled MACHINE; the rest HUMAN"
+  ],
+  "corpus": "cc-suggest-filter corpus --dedupe",
+  "corpus_n": 3206,
+  "sample_seed": 7,
+  "sample_n": 100,
+  "labelled_by": "agent, session 0268fc29, 2026-08-05",
+  "machine_indices": [0, 7, 13, 15, 18, 30, 33, 38, 39, 44, 47, 52, 57, 62, 65, 74, 75, 76, 77, 78, 79, 80, 82, 86, 87, 88, 93, 94, 97, 98],
+  "machine_shapes": [
+    "ORCHESTRATOR -> / R-PING / HANDOFF-PING  (desk peer messages)",
+    "WARN SUPERVISOR PAGE / COMPLETION (program-terminal) / wait-contract  (desk alarms)",
+    "TASK -- ...  (cc-dispatch worker briefs)",
+    "'You are the ORCHESTRATOR DESK' / 'Continue as the CONTROL-TOWER'  (handoff-brief pastes)",
+    "'Use the Bash tool to run exactly: echo ...'  (gate probes)",
+    "'Goal set: ...' / '## Context Usage'  (slash-command echoes)"
+  ],
+  "result": {
+    "human_n": 70, "human_shown": 23, "human_suppressed": 47,
+    "human_top_reason": "too_many_words", "human_top_reason_n": 41,
+    "machine_n": 30, "machine_shown": 0, "machine_suppressed": 30
+  }
+}
