@@ -115,8 +115,8 @@ setup() {
   git init -q --bare "$ORIGIN"
   git clone -q "$ORIGIN" "$R" 2>/dev/null
   git -C "$R" symbolic-ref HEAD refs/heads/main
-  git -C "$R" config user.email tester@example.com
-  git -C "$R" config user.name tester
+  git -C "${R:?repo path required}" config user.email tester@example.com
+  git -C "${R:?repo path required}" config user.name tester
   mkdir -p "$R/tests"
   printf '@test "p" { true; }\n' > "$R/tests/ok.bats"   # a passing suite => green
   printf '#!/bin/bash\nexit 0\n' > "$R/foo.sh"; chmod +x "$R/foo.sh"
