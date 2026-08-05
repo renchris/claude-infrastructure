@@ -27,7 +27,11 @@ setup() {
   # failed; from the same shell with the divert pinned off, 14/14 green; baseline HEAD also green.
   # The dependency predates the divert (KITTY_WINDOW_ID was simply never read); the divert only made
   # it observable. Unsetting the real var AND pinning the kill switch covers both spellings.
-  unset KITTY_WINDOW_ID
+  # CC_TERM is the THIRD spelling (2026-08-05): the gate grew a second arm honouring cc-in-kitty's
+  # documented override, so an ambient CC_TERM=kitty would divert even with KITTY_WINDOW_ID unset —
+  # and "outside kitty the divert is inert" below is the test it would silently turn red, in exactly
+  # the environment-dependent way this block exists to stop. Tests that want it set export it.
+  unset KITTY_WINDOW_ID CC_TERM
   export IT2_WRAPPER_NO_KITTY=1
 }
 
@@ -288,4 +292,90 @@ fake_kitty_translator() {
   [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
   [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
   echo "$output" | grep -q 'cannot verify the terminal' || { echo "$output"; false; }
+}
+
+# ── the CC_TERM seam: the caller that has NO terminal env at all (2026-08-05) ─────────────────────
+# bin/cc-in-kitty:51 documents CC_TERM as "honored verbatim ahead of every check", and the callers
+# that set it are exactly the ones with nothing to infer from — a launchd job, the desk dispatcher,
+# a detached watcher or Stop hook resolve the verdict where the ancestry walk is still valid and
+# hand the ANSWER down (handoff-fire.sh's pin_term_verdict_for_watcher, teammate-auto-shutdown.sh's
+# pin_term_verdict). None of them carries a KITTY_* var, so the gate's first clause short-circuited
+# ABOVE the line that consults cc-in-kitty and silently vetoed the documented seam: measured on one
+# env 2026-08-05, the verifier answered rc 0 "CC_TERM=kitty — explicit override" while the shim
+# forwarded to the iTerm2 CLI. handoff-fire.sh:3861 routes AROUND this shim for that very reason.
+#
+# THE VERIFIER IS THE REAL bin/cc-in-kitty here, not a stand-in. What is under test is whether the
+# wrapper ASKS it, and a stand-in returning a fixed code cannot show that. Hermetic regardless: with
+# CC_TERM set, cc-in-kitty short-circuits at its own line 67 and never walks the process tree.
+real_kitty_verifier() {
+  fake_kitty_translator none                       # translator + wrapper copy, no stand-in verifier
+  cp "$REPO/bin/cc-in-kitty" "$KDIR/cc-in-kitty"
+  chmod +x "$KDIR/cc-in-kitty"
+}
+
+@test "CC_TERM=kitty with NO KITTY_* diverts — the documented seam, honoured end to end" {
+  real_kitty_verifier
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID KITTY_PID
+  export CC_TERM=kitty
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  # Pre-fix this was ITERM2PATH — the whole defect in one line.
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: the GATE discriminates on '== kitty', not on 'CC_TERM is set'" {
+  # The mutant this kills is `-n \"\${CC_TERM:-}\"`, which would divert on ANY non-empty value.
+  # It has to be caught AT THE GATE, so the verifier here is a stand-in that says kitty
+  # UNCONDITIONALLY: against the real cc-in-kitty this mutant is invisible, because cc-in-kitty's
+  # own CC_TERM check refuses second and the observable behaviour is identical. Stripping that
+  # second line of defence is what makes the control able to FAIL.
+  fake_kitty_translator 0                          # "yes, kitty" no matter what it is asked
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID KITTY_PID
+  export CC_TERM=iterm2
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL, end to end: CC_TERM=iterm2 with no KITTY_* still reaches the iTerm2 CLI" {
+  # Same claim through the REAL verifier — the production shape. The test above pins the gate; this
+  # one pins that gate and verifier agree, so neither can be quietly carrying the other.
+  real_kitty_verifier
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID KITTY_PID
+  export CC_TERM=iterm2
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
+}
+
+@test "the A/B kill switch governs the CC_TERM arm too — it is repeated on it, not hoisted" {
+  # IT2_WRAPPER_NO_KITTY=1 must restore the iTerm2 path from EVERY arm. The kill switch is repeated
+  # rather than factored out of both because two suites pin the first clause as normalised text
+  # (tests/kitty-divert-real-it2.bats, tests/handoff-fire-kitty.bats); this asserts the duplicated
+  # copy actually works, so the reason for the duplication cannot outlive its effect.
+  real_kitty_verifier
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset KITTY_WINDOW_ID KITTY_PID
+  export CC_TERM=kitty IT2_WRAPPER_NO_KITTY=1
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'KITTYPATH')" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
+}
+
+@test "no CC_TERM and no KITTY_* is UNCHANGED — the new arm adds no default divert" {
+  # The blast-radius pin. Differencing a 48-row env matrix pre/post fix changed exactly 3 rows, all
+  # of them CC_TERM=kitty with the switch off; this holds the untouched majority to that.
+  real_kitty_verifier
+  fake 'printf "ITERM2PATH:%s\n" "$*"; exit 0'
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID KITTY_PID CC_TERM
+  run "$KDIR/it2-wrapper" session list
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'ITERM2PATH')" -eq 1 ] || { echo "$output"; false; }
 }
