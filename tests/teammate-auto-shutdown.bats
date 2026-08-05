@@ -348,6 +348,8 @@ _lib_absent_fixture() {  # <sid> <team> <member> <pane> → adopted-looking team
 
 # a real git repo with one commit (git worktree remove needs a real repo, not a bare dir)
 mkrepo() {
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  : "${1:?mkrepo: repo path required}"
   mkdir -p "$1"; git -C "$1" init -q
   git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
@@ -648,6 +650,8 @@ teamcfg_joined() { mkdir -p "$HOME/.claude/teams/$1"
 
 # a real git repo at <dir> with one committed file, then <n> dirty files owned by "a sibling"
 shared_repo() {
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  : "${1:?shared_repo: repo path required}"
   git init -q "$1" 2>/dev/null
   git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo base > "$1/base.txt"; git -C "$1" add base.txt; git -C "$1" commit -qm base
@@ -873,7 +877,8 @@ riso()  { date -u -v-"${1}"S +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$(( 
 # from a file a SIBLING wrote. This is the measured live shape, not a simplification of it: on
 # 2026-08-04 the shared checkout's single piece of dirt was one untracked file authored by the lead.
 shared_linked_worktree() { # <team> <member> <pane> → echoes the shared worktree path
-  local team="$1" member="$2" pane="$3" repo="$D/slw-repo" wt="$D/slw-shared" joined
+  # `git -C ""` is a NO-OP, not an error — an unset $D would write this identity into the cwd repo.
+  local team="$1" member="$2" pane="$3" repo="${D:?}/slw-repo" wt="${D:?}/slw-shared" joined
   git init -q "$repo" 2>/dev/null
   git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
   echo base > "$repo/base.txt"; git -C "$repo" add base.txt; git -C "$repo" commit -qm base

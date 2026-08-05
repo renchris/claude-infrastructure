@@ -84,6 +84,8 @@ teardown() {
 
 # Put a git repo at $1 onto branch $2 (created, so the name is whatever we say).
 mkrepo() {
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  : "${1:?mkrepo: repo path required}"
   git init -q "$1"
   git -C "$1" config user.email t@t.t
   git -C "$1" config user.name t

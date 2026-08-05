@@ -17,11 +17,12 @@ setup() {
   # $HOME does not test the program, it tests the box.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
   # real git repos: clean+shipped (landed) and dirty (not landed)
-  mkrepo() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
+  mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
              echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
              git -C "$r" update-ref refs/remotes/origin/main HEAD; }
   # squash-landed: clean tree, HEAD 1 ahead by COUNT, but content already on origin/main (different sha)
-  mksquashland() { local r="$1"; mkdir -p "$r"; git -C "$r" init -q
+  mksquashland() { local r="${1:?mksquashland: repo path required}"; mkdir -p "$r"; git -C "$r" init -q
              git -C "$r" config user.email t@t; git -C "$r" config user.name t
              echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
              echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed

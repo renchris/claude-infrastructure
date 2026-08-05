@@ -284,7 +284,8 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "bats-shellcheck-lint --selftest: ⛔ shellcheck not installed — cannot self-verify" >&2
     exit 2
   }
-  d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
+  # an empty $d would make every downstream `git -C "$d/..."` a cwd-repo write, not an error
+  d="$(mktemp -d)" || { echo mktemp>&2; exit 2; }; trap 'rm -rf "$d"' EXIT
   fails=0
   # Fixtures written with printf, never a heredoc: bats' preprocessor strips `@test` inside one,
   # which yields a vacuously green fixture (the fixture-shape-parity scar).

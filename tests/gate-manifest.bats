@@ -223,7 +223,8 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 
 # ── P6 backstop — surfaces auto-stamped ratifications in a range, never blocks ──
 @test "backstop surfaces a commit carrying a stamped 'pre-signed class' trailer" {
-  repo="$BATS_TEST_TMPDIR/repo"; mkdir -p "$repo"; cd "$repo"
+  # a failed cd would leave the `git config user.email t@t` below running in the REPO ROOT
+  repo="$BATS_TEST_TMPDIR/repo"; mkdir -p "$repo"; cd "$repo" || return 1
   git init -q; git config user.email t@t; git config user.name t
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"
@@ -239,7 +240,7 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 }
 
 @test "backstop is silent (but still exit 0) when the range has no stamped rulings" {
-  repo="$BATS_TEST_TMPDIR/repo2"; mkdir -p "$repo"; cd "$repo"
+  repo="$BATS_TEST_TMPDIR/repo2"; mkdir -p "$repo"; cd "$repo" || return 1
   git init -q; git config user.email t@t; git config user.name t
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"
@@ -256,7 +257,7 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 }
 
 @test "backstop ignores a PROSE mention of 'pre-signed class' with no class digit (trailer-precise)" {
-  repo="$BATS_TEST_TMPDIR/repo3"; mkdir -p "$repo"; cd "$repo"
+  repo="$BATS_TEST_TMPDIR/repo3"; mkdir -p "$repo"; cd "$repo" || return 1
   git init -q; git config user.email t@t; git config user.name t
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"

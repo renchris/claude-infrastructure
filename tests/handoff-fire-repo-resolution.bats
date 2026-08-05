@@ -64,6 +64,8 @@ setup() {
 
 # mkfixture <dir> — a real git repo with a commit and an origin/main, the shape --worktree needs.
 mkfixture() {
+  # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
+  : "${1:?mkfixture: repo path required}"
   mkdir -p "$1"
   git -C "$1" init -q -b main
   git -C "$1" config user.email f@x; git -C "$1" config user.name f
