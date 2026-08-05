@@ -364,6 +364,27 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 [ -n "$BANNER" ] && say "!!!!! $BANNER !!!!!"
+# ⚠️ THE FILE UNDER THIS PROCESS CHANGES ON THE NEXT LINE. The merge rewrites the working tree and
+# THIS script is in it, so from here on the code executing is the copy bash parsed BEFORE the merge,
+# never the copy now on disk. Every function called below was defined above this line (host_checks()
+# at 151, called at 391) and is therefore the PRE-merge definition.
+#
+# Consequence, and it presents exactly as a fix that did not work: a change to any post-merge code
+# path is INERT for the very deploy that delivers it, and takes effect one deploy late. Measured
+# 2026-08-05 — 8035ea63 took the sha OUT of the host-RED backlog title at 08:35Z; the checkout sat at
+# c400e36e (pre-fix) until the 20:19Z advance, so that run parsed the OLD host_checks, fast-forwarded
+# to e9cabc46 (which CONTAINS the fix), and at 20:28Z filed "…deploy-parity-live.bats(1) @
+# e9cabc46698d" — sha-keyed, out of a tree whose own source can no longer emit one. That is item
+# 27ac5a5b258f, and against the current source it reads as "the fix never landed". It had landed; it
+# could not yet run. Never diagnose a post-merge behaviour against the CURRENT file: resolve what the
+# checkout was on when the run STARTED (git reflog) and read THAT revision.
+#
+# Closing the gap for real means re-exec'ing self after the ff. Deliberately NOT done, and NOT filed
+# either: the ledger already carries 24 symptom items for this one condition plus a generator item
+# (07e6e3888e9c), so a 25th buys less than this comment does. The trap is low-frequency by
+# construction — it can only bite a change to deploy-live.sh itself — and the cost it actually
+# imposes is diagnostic, which is what these lines remove. Re-open the question if a post-merge fix
+# ever needs to be correct on the FIRST deploy rather than the second.
 g merge --ff-only "$TARGET" >/dev/null 2>&1 || die "git merge --ff-only ${TARGET:0:12} FAILED (dirty tree? diverged?) in $DEPLOY_REPO"
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"
 
