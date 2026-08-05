@@ -54,7 +54,45 @@
 # against operator sessions"), so a blanket stamp here would hand every ad-hoc split — including
 # ones a human is sitting in — to the reaper. The caller that dispatched a peer is the only party
 # that knows it dispatched a peer, so it is the party that says so.
+#
+# ── WHY THE kitty BINARY IS RESOLVED ABSOLUTELY (item eafe3e78a852, 2026-08-05) ──────────────────
+# This script used to invoke a BARE `kitty`. Hooks and launchd jobs run with
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin, which excludes Homebrew — so `kitty` did not exist for exactly
+# the AUTOMATED callers this script was written to serve (resume flows, handoff, dispatch), while
+# working perfectly from the operator's own shell. Worst possible polarity: green where a human
+# tests it, dead where it runs. That is the identical defect that left a teammate pane open for
+# 3h09m with its 653 MB claude.exe resident on 2026-08-01; bin/cc-kitty-bin exists as the ONE
+# resolver for it, and its header already says "so the seventh file cannot reintroduce it". This
+# file was the eighth, written after the resolver landed and never wired to it.
+#
+# Both call sites below take the resolved path — the `exec` AND the --self-retire capture. Fixing
+# only the first would leave every stamped dispatch (the shape the item that created --self-retire
+# was about) still dead under a minimal PATH.
 set -euo pipefail
+
+# Self-path resolved ONCE, up here, because two separate things below need it: the kitty resolver
+# and handoff-fire lookup. ~/.claude/bin/kitty-split-launch.sh is a SYMLINK into this checkout
+# (scripts/kitty-setup.sh), so the resolved sibling is the repo's own bin/ — which holds
+# cc-kitty-bin whether or not install.sh has run since. Unresolved $0 is kept as the second
+# candidate for the case where the deployed layer is the only one present.
+_ks="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+
+# Falling back to the previous spelling on any resolver miss keeps a partial deploy degraded rather
+# than broken — cc-kitty-bin is a side-car and must never fail wider than itself.
+#
+# ${HOME:-} DELIBERATELY, and it is not defensive noise — measured. Bash expands the ENTIRE for-list
+# before the loop body runs, so a bare $HOME under `set -u` aborts the whole script on the third
+# candidate even when the FIRST one exists and would have resolved. That would make this resolver
+# fail wider than the thing it is resolving: before this change the default path never read $HOME at
+# all (only the opt-in --self-retire tail did), so a bare spelling here would have converted a
+# working HOME-less launch into `HOME: unbound variable`. With :- the candidate degrades to a
+# nonexistent path, `[ -x ]` rejects it, and the loop moves on.
+CC_KITTY_BIN="${CC_TERM_KITTY:-kitty}"
+for _CC_KB in "$(dirname "$_ks")/cc-kitty-bin" "$(dirname "$0")/cc-kitty-bin" "${HOME:-}/.claude/bin/cc-kitty-bin"; do
+  [ -x "$_CC_KB" ] || continue
+  _CC_KR="$("$_CC_KB" 2>/dev/null)" && [ -n "$_CC_KR" ] && { CC_KITTY_BIN="$_CC_KR"; break; }
+done
+KITTY="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}"
 
 anchor="${KITTY_WINDOW_ID:-}"
 location="vsplit"
@@ -101,11 +139,11 @@ args+=(-- "$@")
 
 # The no-stamp path keeps the `exec` verbatim: same stdout, same exit status, same process. Only
 # --self-retire needs this script to outlive the launch, so only it pays for a subshell.
-[ "$self_retire" = 1 ] || exec kitty @ "${args[@]}"
+[ "$self_retire" = 1 ] || exec "$KITTY" @ "${args[@]}"
 
 # kitty @ launch prints the new window id, and it is the ONLY place that id exists — the caller
 # needs it on stdout exactly as before, so capture, stamp, then re-emit verbatim.
-new_id="$(kitty @ "${args[@]}")"
+new_id="$("$KITTY" @ "${args[@]}")"
 printf '%s\n' "$new_id"
 
 case "$new_id" in
@@ -118,9 +156,8 @@ esac
 
 # ONE writer for the stamp format: handoff-fire.sh owns mark_fired_peer, and `stamp-peer` is its
 # sanctioned entry point for panes handoff-fire did not spawn itself. Resolve it the way the rest of
-# this repo does — the symlink-resolved sibling first, so the fix is live the moment the file is,
-# then the deployed layer.
-_ks="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+# this repo does — the symlink-resolved sibling first (via the $_ks computed at the top), so the fix
+# is live the moment the file is, then the deployed layer.
 hf=""
 for cand in "$(dirname "$_ks")/../scripts/handoff-fire.sh" "$HOME/.claude/scripts/handoff-fire.sh"; do
   [ -x "$cand" ] && { hf="$cand"; break; }
