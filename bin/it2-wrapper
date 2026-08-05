@@ -87,7 +87,29 @@ TIMEOUT_S="${IT2_WRAPPER_TIMEOUT_S:-30}"
 #
 # bin/cc-in-kitty replaces the env check with an ancestry check (kitty must be one of our parents,
 # which inheritance cannot fake) and is fail-closed: 1 = no, 2 = unverifiable, both mean iTerm2.
-if [[ -n "${KITTY_WINDOW_ID:-}" && -z "${IT2_WRAPPER_NO_KITTY:-}" ]]; then
+#
+# ⚠ THE CHEAP REJECT MUST NOT SWALLOW THE OVERRIDE (second arm, 2026-08-05). cc-in-kitty documents
+# CC_TERM as "honored verbatim ahead of every check" (bin/cc-in-kitty:51, 67-69) — but it is only
+# ever consulted from INSIDE this gate, so a first clause keyed solely on the env var silently
+# VETOED that contract. The callers that set CC_TERM are precisely the ones with no terminal env to
+# key on: a launchd job, the desk dispatcher, a detached watcher or Stop hook resolve the verdict
+# where the ancestry walk is still valid and hand the ANSWER down (handoff-fire.sh's
+# pin_term_verdict_for_watcher, teammate-auto-shutdown.sh's pin_term_verdict). None of them carries
+# a KITTY_* var, so the short-circuit sent them to the iTerm2 CLI while cc-in-kitty, had it been
+# asked, answered kitty — measured 2026-08-05: rc 0 "CC_TERM=kitty — explicit override" from the
+# verifier, and ITERM2PATH out of the shim, on one env. It is also why handoff-fire.sh:3861 had to
+# route AROUND this shim straight at bin/it2-kitty rather than through it; its comment says so.
+#
+# The kill switch is REPEATED on the arm rather than hoisted out of both. Hoisting is the tidier
+# spelling and is wrong here: four files carry this predicate and two suites pin the FIRST clause as
+# normalised text (tests/kitty-divert-real-it2.bats, tests/handoff-fire-kitty.bats), so
+# restructuring it reads as drift in files this change does not touch.
+#
+# The arm only OPENS the gate — cc-in-kitty below still decides, and it honors CC_TERM ahead of its
+# own walk, so a non-kitty CC_TERM can never divert. Pinned by a mutant control in
+# tests/it2-wrapper.bats: without it, `== kitty` could rot into "any non-empty CC_TERM" unnoticed.
+if [[ -n "${KITTY_WINDOW_ID:-}" && -z "${IT2_WRAPPER_NO_KITTY:-}" ]] \
+   || [[ "${CC_TERM:-}" == kitty && -z "${IT2_WRAPPER_NO_KITTY:-}" ]]; then
   _it2_bin="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")"
   _it2_kitty="$_it2_bin/it2-kitty"
   _cc_in_kitty="$_it2_bin/cc-in-kitty"
