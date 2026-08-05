@@ -37,7 +37,7 @@ REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.."
 KCONF_DIR="${CC_KITTY_CONFIG_DIR:-$HOME/.config/kitty}"
 BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 
-# ── EPHEMERAL-TREE GUARD ─────────────────────────────────────────────────────────────────────────
+# ── NON-CANONICAL-TREE GUARD ─────────────────────────────────────────────────────────────────────
 # REPO above is derived from $0, so this script links the live layer at WHATEVER TREE IT WAS RUN
 # FROM. postland-verify runs the corpus (and install.sh, which calls this script) inside a
 # throwaway worktree at ~/.claude/autonomy/postland/wt-run-$$ — so a verification run silently
@@ -49,7 +49,29 @@ BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 # the live layer read a stale 11,776-byte copy. Once that worktree is reaped the links DANGLE and
 # kitty starts with no config at all.
 #
-# The guard is scoped to the dangerous EFFECT (writing the operator's REAL live layer), NOT to
+# 2026-08-05 — THE DENYLIST WAS THE BUG. The guard this replaces enumerated the two ephemeral
+# SPELLINGS then known (postland/wt-run-*, postland/wt-revert-*) instead of the CLASS it meant to
+# exclude, so an ORDINARY session worktree walked straight past it. Found pinned into
+# ~/Development/.worktrees/wt-a19ab0fcf13a (and before it wt-832a27a69b64): all six kitty
+# pane-lifecycle tools in ~/.claude/bin — it2-kitty, kitty-split-launch.sh, kitty-pane-menu,
+# kitty-split-cwd.sh, kitty-confirm-close, cc-in-kitty. deploy-live.sh fast-forwards the CHECKOUT;
+# it cannot move a link that does not point at the checkout, so a trunk land could never deploy any
+# of the six, and worktree-gc reaping that tree dangles all six at once. Identical failure to the
+# 08-01 note above, reached by a path that patch did not cover — which is the argument for asking
+# the question by CLASS rather than adding a third pattern to a list.
+#
+# THE PREDICATE IS NOW "AM I A LINKED WORKTREE?", asked of git: a linked worktree's --git-dir is
+# <common>/worktrees/<name> while its --git-common-dir is <canonical>/.git, so the two differ
+# there and are equal in the canonical tree. That is exactly the dangerous class, it needs no
+# hardcoded home path, and a worktree spelling nobody has invented yet cannot slip past. It is
+# also strictly better than comparing REPO against dirname(--git-common-dir): a --separate-git-dir
+# install is NOT a linked worktree and must not be refused, but its path arithmetic would not match.
+# UNRESOLVABLE (no git on PATH, or a tarball/vendored install that is not a repo at all) leaves the
+# guard INERT rather than refusing — such a tree genuinely IS canonical for that install, and a
+# guard that bricks a legitimate install is worse than the drift it prevents. "Cannot resolve" is a
+# third state, not a synonym for either answer.
+#
+# The guard stays scoped to the dangerous EFFECT (writing the operator's REAL live layer), NOT to
 # "am I running from an unusual directory" — a location-keyed refusal would fire on the verifier
 # corpus itself, which runs from a throwaway worktree BY CONSTRUCTION and is perfectly legitimate
 # so long as it has fixtured its seams. REAL_HOME comes from the passwd DB via ~user expansion, not
@@ -58,18 +80,31 @@ BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 # live layer (--undo would delete the operator's links), so both are guarded.
 REAL_HOME="$(eval printf '%s' "~$(id -un)" 2>/dev/null || printf '%s' "$HOME")"
 [ "${1:-}" = "--check" ] && REPO_GUARD_SKIP=1 || REPO_GUARD_SKIP=0
-[ "$REPO_GUARD_SKIP" = 1 ] || case "$REPO" in
-  "$REAL_HOME"/.claude/autonomy/postland/wt-run-*|"$REAL_HOME"/.claude/autonomy/postland/wt-revert-*)
-    case "$KCONF_DIR/|$BIN_DIR/" in
-      *"$REAL_HOME"/*)
-        printf 'kitty-setup: REFUSING to link the live layer from an ephemeral verifier worktree\n' >&2
-        printf '  repo   : %s\n' "$REPO" >&2
-        printf '  target : %s , %s\n' "$KCONF_DIR" "$BIN_DIR" >&2
-        printf '  why    : this tree is deleted after the run; the links would dangle.\n' >&2
-        printf '  fix    : deploy from the canonical checkout, or fixture CC_KITTY_CONFIG_DIR\n' >&2
-        printf '           and CC_KITTY_BIN_DIR if this is a test.\n' >&2
-        exit 3 ;;
-    esac ;;
+
+# REPO_IS_LINKED_WT: 1 linked worktree · 0 canonical · "" unresolvable (⇒ guard inert, see above).
+# `git -C ""` is never issued: an empty -C silently targets the CURRENT repo instead of the intended
+# one, which is how a fixture once wrote its identity into the live checkout.
+REPO_IS_LINKED_WT=""; CANON_REPO=""
+if [ -n "$REPO" ] && command -v git >/dev/null 2>&1; then
+  _gdir="$(git -C "$REPO" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || _gdir=""
+  _gcommon="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || _gcommon=""
+  if [ -n "$_gdir" ] && [ -n "$_gcommon" ]; then
+    [ "$_gdir" = "$_gcommon" ] && REPO_IS_LINKED_WT=0 || REPO_IS_LINKED_WT=1
+    CANON_REPO="$(cd "$_gcommon/.." 2>/dev/null && pwd -P)" || CANON_REPO=""
+  fi
+fi
+
+[ "$REPO_GUARD_SKIP" = 1 ] || [ "${REPO_IS_LINKED_WT:-0}" != 1 ] || case "$KCONF_DIR/|$BIN_DIR/" in
+  *"$REAL_HOME"/*)
+    printf 'kitty-setup: REFUSING to link the live layer from a NON-CANONICAL tree\n' >&2
+    printf '  repo      : %s (a linked git worktree)\n' "$REPO" >&2
+    printf '  canonical : %s\n' "${CANON_REPO:-<unresolved>}" >&2
+    printf '  target    : %s , %s\n' "$KCONF_DIR" "$BIN_DIR" >&2
+    printf '  why       : deploy fast-forwards the CHECKOUT, so a link into any other tree can\n' >&2
+    printf '              never be moved by a land — and dangles once that tree is reaped.\n' >&2
+    printf '  fix       : run it from the canonical checkout (install.sh does exactly that),\n' >&2
+    printf '              or fixture CC_KITTY_CONFIG_DIR and CC_KITTY_BIN_DIR if this is a test.\n' >&2
+    exit 3 ;;
 esac
 SHELL_RC="${CC_KITTY_SHELL_RC:-$HOME/.zshrc}"
 BLOCK_ID="cc-kitty-agent-teams"
