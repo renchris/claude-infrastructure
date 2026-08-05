@@ -196,9 +196,20 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     printf 'NOT a rollback trigger: rolling the live layer back is an operator decision.\n'
   } > "$pf" 2>/dev/null || true
   say "host RED —$red · paged $pf (live layer NOT rolled back)"
+  # BACKLOG KEY = the FAILING SET, never the sha. cc-backlog mints its event key from
+  # project+title+source (bin/cc-backlog mk_id), so a sha in the title made every deploy a NEW item
+  # for the SAME unresolved finding and the ledger's own idempotency never engaged — measured
+  # 2026-08-05 at 5 items for `tests/deploy-parity-live.bats(1)` across 5 shas, 2 of them already
+  # auto-blocked as "persistent thrash — the worker cannot land". The sha was STALE ON ARRIVAL
+  # besides: the live layer advances again before a worker claims, so the item named a tree that was
+  # no longer deployed (item f271cd880295 read @7ded71b8 with 3e423b76 already live).
+  # The two channels key differently ON PURPOSE — the PAGE is per-deploy (sha-keyed, overwritten, so
+  # it always shows the CURRENT tree), the BACKLOG is per-finding (one unresolved finding, one item).
+  # stderr is NOT swallowed: cc-backlog's DONE-GUARD announces a re-file of an already-closed key
+  # there and deliberately does not reopen it, so hiding it would turn a regression into silence.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-    --title "post-deploy HOST RED:$red @ $(printf '%.12s' "$sha")" \
-    --project claude-infrastructure --source deploy-live >/dev/null 2>&1
+    --title "post-deploy HOST RED:$red" \
+    --project claude-infrastructure --source deploy-live >/dev/null
   return 0
 }
 

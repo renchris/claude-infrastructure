@@ -363,6 +363,36 @@ tests/absent.bats'
   grep -q 'host-red.bats' "$CC_BACKLOG_LOG"
 }
 
+# The two channels key DIFFERENTLY on purpose: the page is per-deploy (sha), the backlog is
+# per-finding (failing set). cc-backlog's event key is project+title+source, so a sha in the title
+# mints a fresh item every deploy for one unresolved finding — measured at 5 items for
+# tests/deploy-parity-live.bats(1), 2 of them auto-blocked as "the worker cannot land". This pins
+# both halves at once, and it FAILS against the pre-fix title (two distinct lines, not one).
+@test "host RED backlog is keyed on the FAILING SET, not the sha (page stays per-sha)" {
+  auto_setup
+  seed_host_suites 'tests/host-red.bats'
+  stamp origin/main
+  first="$(git -C "$SHARED" rev-parse origin/main)"
+  run dla
+  [ "$status" -eq 0 ]
+
+  advance_origin later                                  # a second deployable commit ⇒ a NEW sha
+  stamp origin/main
+  second="$(git -C "$SHARED" rev-parse origin/main)"
+  [ "$first" != "$second" ]
+  run dla
+  [ "$status" -eq 0 ]
+
+  # per-deploy channel keeps its granularity: one page per deployed sha
+  [ -f "$PAGES/deploy-host-red-$(printf '%.12s' "$first").page" ]
+  [ -f "$PAGES/deploy-host-red-$(printf '%.12s' "$second").page" ]
+
+  # per-finding channel collapses: ONE distinct backlog call across both deploys, naming no sha
+  [ "$(sort -u "$CC_BACKLOG_LOG" | wc -l | tr -d ' ')" -eq 1 ]
+  grep -q 'post-deploy HOST RED: tests/host-red.bats(2)' "$CC_BACKLOG_LOG"
+  ! grep -qE "${first:0:12}|${second:0:12}" "$CC_BACKLOG_LOG"
+}
+
 @test "host CUT is a NON-VERDICT (R6): named 0 tests ⇒ no page, no backlog, deploy still 0" {
   auto_setup
   seed_host_suites 'tests/host-cut.bats'
