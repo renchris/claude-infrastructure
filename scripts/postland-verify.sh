@@ -176,6 +176,17 @@ RETRY_TO="${POSTLAND_RETRY_TIMEOUT_S:-5400}"   # WHOLE-FILE retry bound — only
 # `exit 124 / notok=0` for that very file at load 6.61, and the land gate filed the same signal
 # correctly as `cut-not-red`. The heaviest suites are exactly the ones the stamps convicted
 # (waiting-recycle 98 tests, cc-reaper 80, ship-land 74, cc-backlog 61, postland-verify 51).
+BISECT_TO="${POSTLAND_BISECT_TIMEOUT_S:-900}"  # WHOLE-BISECT wall bound — see do_bisect for the WHY
+# 900s and not larger, deliberately. 2026-08-05: `--run-if-needed` (pid 57191) started 00:51:28, was
+# orphaned to PPID 1, and was still alive 12h53m later inside a runaway `git bisect run` — every
+# step rewriting the shared .git/config and committing fixture blobs into the real object store, so
+# a sibling session's 13:06:23 repair of that config was undone seconds later and read as "the fix
+# did not hold". Nothing bounded it: `bisect run` was the one unbounded call left in this file.
+# The cost of the bound is that a bisect over a heavy suite (C23's ~50-min files) will not FINISH —
+# and that is fine, because a cut bisect is a NON-VERDICT here (do_bisect's documented "empty when
+# undecidable"), never a false conviction: the callers fall back to the landed sha and page, exactly
+# as they already do when the bisect cannot decide. Losing culprit REFINEMENT is a bad afternoon;
+# an unbounded runaway corrupting the shared repo for half a day is the incident.
 # ── BACKGROUND QoS — the singleton must make progress at ANY load (§4.2.3) ───────────────────────
 # v1 admission control (gate_admit, DELETED) waited for load < ceiling before the suite and before
 # every retry: ~2h of sleeping per run (backlog 60ec4c2d86d4), and with 5 concurrent gates each
@@ -807,11 +818,22 @@ EOF
 # one's corpus being the load the others were waiting out.
 
 do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when undecidable)
-  local file="$1" good="$2" bad="$3" runner out culprit qos
+  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
   prepare_worktree "$bad" || return 1
   runner="$(mktemp "$TMPBASE/postland-bisect.XXXXXX")" || return 1
+  # UNWIND STRUCTURALLY, not positionally. A CUT bisect leaves the cell parked on a probe commit
+  # with BISECT_* state in .git — the next `bisect start` there fails and the cell's git state is a
+  # lie. The reset used to sit inline after the `if`, which happened to cover the two exits that
+  # existed then; the bound below adds a third, so make it a RETURN trap that no later exit path can
+  # miss. Verified on bash 3.2 (macOS): the trap fires on every return and still sees $runner.
+  # It DISARMS ITSELF (`trap - RETURN` in the handler) because bash's trap table is GLOBAL, not
+  # function-scoped — measured, not assumed: `trap -p RETURN` after the return still shows it armed,
+  # pointing at a $runner that no longer exists. Inert today only because functrace is off; one
+  # `set -T` anywhere later and every subsequent function return would run a `rm -f` on an unbound
+  # variable under `set -u`. Disarming costs nothing and removes the whole class.
+  trap 'git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true; rm -f "$runner"; trap - RETURN' RETURN
   qos="$(printf '%q ' "${QOS[@]}")"     # every bats invocation runs in the background band, incl. this one
   {                                     # 125 = SKIP: file absent, or bats ERRORED (rc>1) — not a red
     printf '#!/bin/bash\n'
@@ -822,11 +844,23 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
   } > "$runner"
   chmod +x "$runner"
   if git -C "$WORKTREE" bisect start "$bad" "$good" >/dev/null 2>&1; then
-    out="$(git -C "$WORKTREE" bisect run "$runner" 2>/dev/null)"
-    culprit="$(printf '%s\n' "$out" | sed -n 's/^\([0-9a-f]\{7,40\}\) is the first bad commit.*/\1/p' | head -1)"
+    # THE BOUND (2026-08-05, 12h53m runaway — see BISECT_TO). `bounded` degrades to running
+    # unbounded when no timeout(1) resolves, so log that state rather than skip the bisect: a
+    # missing tool must not silently become a different behaviour, and the operator needs to know
+    # which of the two shapes a 12-hour process was.
+    [ -n "$TIMEOUT_BIN" ] && [ -x "$TIMEOUT_BIN" ] \
+      || log "bisect UNBOUNDED — no timeout(1) resolved; running without the ${BISECT_TO}s wall"
+    out="$(bounded "$BISECT_TO" git -C "$WORKTREE" bisect run "$runner" 2>/dev/null)"; rc=$?
+    # 124 = OUR bound fired ⇒ NON-VERDICT, and the parse is SKIPPED rather than merely expected to
+    # come back empty: `bisect run` prints its running log to stdout, so a cut mid-report could in
+    # principle carry the "is the first bad commit" line for a commit it had not finished proving.
+    # An innocent sha named as the culprit is what C20 then REVERTS. Undecidable is the safe read.
+    if [ "$rc" -eq 124 ]; then
+      log "bisect CUT at ${BISECT_TO}s (POSTLAND_BISECT_TIMEOUT_S) — undecidable, no culprit named"
+    else
+      culprit="$(printf '%s\n' "$out" | sed -n 's/^\([0-9a-f]\{7,40\}\) is the first bad commit.*/\1/p' | head -1)"
+    fi
   fi
-  git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true
-  rm -f "$runner"
   [ -n "${culprit:-}" ] || return 1
   printf '%s\n' "$culprit"
 }
