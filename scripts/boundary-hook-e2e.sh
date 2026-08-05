@@ -98,8 +98,10 @@ mktel s7 80 0; run_hook s7 >/dev/null  # latched abstain
                                       || no "IDL lines != 3 (got $(idl_count))"
 
 echo "T9 fail-open — a Stop hook must NEVER cost a session"
-printf 'garbage-not-json' | bash "$HOOK" >/dev/null 2>&1; [ $? -eq 0 ] && ok "garbage stdin → exit 0"       || no "garbage stdin nonzero"
-printf '{"session_id":"ghost"}' | bash "$HOOK" >/dev/null 2>&1; [ $? -eq 0 ] && ok "missing telemetry → exit 0" || no "missing telemetry nonzero"
+# `if cmd; then` rather than `cmd; [ $? -eq 0 ]` — the indirect form reads the exit code of whatever
+# ran last, which is a live trap in a file where these lines get copied and extended (SC2181).
+if printf 'garbage-not-json'       | bash "$HOOK" >/dev/null 2>&1; then ok "garbage stdin → exit 0";        else no "garbage stdin nonzero";        fi
+if printf '{"session_id":"ghost"}' | bash "$HOOK" >/dev/null 2>&1; then ok "missing telemetry → exit 0";    else no "missing telemetry nonzero";    fi
 
 rm -rf "$SBX"
 echo ""
