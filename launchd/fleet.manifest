@@ -132,7 +132,7 @@ com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alar
 # The un-starvable guard for the axis that panicked the box 3x in 6 days. KeepAlive internal-loop
 # daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which
 # it writes every 10 s by design (never --quiet). `staged` until 31-compressor-sentinel-activate.sh.
-com.claude.compressor-sentinel    | staged | 10   | ~/.claude/logs/compressor-sentinel.jsonl | — | 31-compressor-sentinel-activate.sh
+com.claude.compressor-sentinel    | run    | 10   | ~/.claude/logs/compressor-sentinel.jsonl | — | 31-compressor-sentinel-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
