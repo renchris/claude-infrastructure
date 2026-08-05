@@ -206,7 +206,7 @@ selftest() {
 
   # fixture worktree with uncommitted WIP
   local wt="$tmp/wt"
-  mkdir -p "$wt"; git -C "$wt" init -q; git -C "$wt" config user.email t@t; git -C "$wt" config user.name t
+  mkdir -p "$wt"; git -C "${wt:?repo path required}" init -q; git -C "$wt" config user.email t@t; git -C "$wt" config user.name t
   echo seed > "$wt/a.txt"; git -C "$wt" add a.txt; git -C "$wt" commit -qm seed
   echo "UNCOMMITTED-WIP-SENTINEL" > "$wt/wip.txt"
 

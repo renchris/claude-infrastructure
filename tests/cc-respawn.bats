@@ -11,7 +11,7 @@ setup() {
 mkwt() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?mkwt: repo path required}"
-  mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  mkdir -p "$1"; git -C "${1:?repo path required}" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo seed > "$1/a.txt"; git -C "$1" add a.txt; git -C "$1" commit -qm seed
 }
 

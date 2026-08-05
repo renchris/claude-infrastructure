@@ -36,7 +36,7 @@ setup() {
   # -b main is load-bearing: `git init --bare` leaves HEAD on refs/heads/master, so a bare
   # `git clone` of a main-only repo checks out NOTHING and install.sh is absent (exit 127).
   git clone -q -b main "$ORIGIN" "$CLONE"
-  git -C "$CLONE" config user.email t@t; git -C "$CLONE" config user.name t
+  git -C "${CLONE:?repo path required}" config user.email t@t; git -C "$CLONE" config user.name t
 
   STUB="$TDIR/stub"; mkdir -p "$STUB"
   printf '#!/bin/sh\nexit 0\n' > "$STUB/launchctl"

@@ -10,7 +10,7 @@ setup() {
 mkrepo() { # <dir> — clean shipped repo: origin/main == HEAD, origin/HEAD → origin/main (no network)
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   : "${1:?mkrepo: repo path required}"
-  mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  mkdir -p "$1"; git -C "${1:?repo path required}" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo a > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm c1
   git -C "$1" update-ref refs/remotes/origin/main HEAD
   git -C "$1" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main

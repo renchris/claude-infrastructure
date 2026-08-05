@@ -19,8 +19,8 @@ setup() {
   git init --quiet --bare -b main "$ORIGIN"
   REPO="$BATS_TEST_TMPDIR/repo"
   git init --quiet -b main "$REPO"
-  git -C "$REPO" config user.email t@t.t
-  git -C "$REPO" config user.name t
+  git -C "${REPO:?repo path required}" config user.email t@t.t
+  git -C "${REPO:?repo path required}" config user.name t
   echo seed > "$REPO/seed.txt"
   git -C "$REPO" add seed.txt
   git -C "$REPO" commit --quiet -m seed
@@ -113,8 +113,8 @@ setup() {
   # Advance origin BEHIND the local ref's back, then assert the new worktree has the origin commit.
   clone="$BATS_TEST_TMPDIR/clone"
   git clone --quiet "$ORIGIN" "$clone"
-  git -C "$clone" config user.email t@t.t
-  git -C "$clone" config user.name t
+  git -C "${clone:?repo path required}" config user.email t@t.t
+  git -C "${clone:?repo path required}" config user.name t
   echo newer > "$clone/newer.txt"
   git -C "$clone" add newer.txt
   git -C "$clone" commit --quiet -m newer

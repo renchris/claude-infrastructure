@@ -58,8 +58,8 @@ sibling_lands() { # <file> <content>
   local d="$BATS_TEST_TMPDIR/peer"
   rm -rf "$d"
   git clone -q -b main "$ORIGIN" "$d"    # -b explicitly: never depend on the origin's HEAD symref
-  git -C "$d" config user.email peer@example.com
-  git -C "$d" config user.name peer
+  git -C "${d:?repo path required}" config user.email peer@example.com
+  git -C "${d:?repo path required}" config user.name peer
   printf '%s\n' "$2" > "$d/$1"
   git -C "$d" add "$1"
   git -C "$d" commit -q -m "peer $1"

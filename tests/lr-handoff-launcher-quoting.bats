@@ -87,8 +87,8 @@ mkrepo() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?mkrepo: repo path required}"
   git init -q "$1"
-  git -C "$1" config user.email t@t.t
-  git -C "$1" config user.name t
+  git -C "${1:?repo path required}" config user.email t@t.t
+  git -C "${1:?repo path required}" config user.name t
   git -C "$1" commit -q --allow-empty -m init
   git -C "$1" switch -q -C "$2"
 }

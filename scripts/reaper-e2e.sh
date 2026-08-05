@@ -57,7 +57,7 @@ echo "reaper-e2e — REAL orphan reproduction + reap (throwaway window; fixtured
 
 # ── fixtures: a clean+shipped git repo (the lead's cwd) ─────────────────────────────────────────
 REPO="$D/repo"; mkdir -p "$REPO"
-git -C "$REPO" init -q; git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
+git -C "${REPO:?repo path required}" init -q; git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
 echo a > "$REPO/f"; git -C "$REPO" add f; git -C "$REPO" commit -qm c1
 git -C "$REPO" update-ref refs/remotes/origin/main HEAD
 git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main

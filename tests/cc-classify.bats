@@ -76,7 +76,7 @@ stamp_by() { local pane="$1" by="$2" ago="${3:-200}"; mkdir -p "$D/fired"; local
 # a real git repo whose HEAD == origin/main (work LANDED). `dirty` arg (any value) leaves the tree dirty.
 # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
 mkrepo() { local r="${1:?mkrepo: repo path required}" dirty="${2:-}"; mkdir -p "$r"; git -C "$r" init -q
-           git -C "$r" config user.email t@t; git -C "$r" config user.name t
+           git -C "${r:?repo path required}" config user.email t@t; git -C "$r" config user.name t
            echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
            git -C "$r" update-ref refs/remotes/origin/main HEAD
            [ -n "$dirty" ] && echo change >> "$r/f"; return 0; }
@@ -84,7 +84,7 @@ mkrepo() { local r="${1:?mkrepo: repo path required}" dirty="${2:-}"; mkdir -p "
 # ALREADY on trunk under a DIFFERENT sha (the squash/cherry-pick land). rev-list count says "ahead"
 # while the work is durably landed — the L-10 permanent-DEFER trap.
 mksquashland() { local r="${1:?mksquashland: repo path required}"; mkdir -p "$r"; git -C "$r" init -q
-           git -C "$r" config user.email t@t; git -C "$r" config user.name t
+           git -C "${r:?repo path required}" config user.email t@t; git -C "$r" config user.name t
            echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm base
            echo feature >> "$r/f"; git -C "$r" add f; git -C "$r" commit -qm landed-on-trunk
            git -C "$r" update-ref refs/remotes/origin/main HEAD    # trunk = base+feature (commit L)

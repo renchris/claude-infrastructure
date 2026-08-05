@@ -41,7 +41,7 @@ trap cleanup EXIT
 sleep 600 & ALIVE=$!            # a genuinely-alive pid for the live-session fixtures
 
 REPO="$SBX/repo"; mkdir -p "$REPO"
-git -C "$REPO" init -q; git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
+git -C "${REPO:?repo path required}" init -q; git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
 echo x > "$REPO/f"; git -C "$REPO" add f; git -C "$REPO" commit -qm init
 
 mktel(){ # $1=sid $2=used $3=age_s $4=pid $5=cwd [$6=config_dir]
@@ -57,7 +57,7 @@ tel_exists(){ [ -f "$CC_TELEMETRY_DIR/$1.json" ]; }              # T11-T13: a cl
 mkrepo_landed(){ # $1=dir — a shipped+clean repo: clean tree, HEAD == origin/main (0 ahead, no network)
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   local r="${1:?mkrepo_landed: repo path required}"; rm -rf "$r"; mkdir -p "$r"
-  git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  git -C "${r:?repo path required}" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
   echo x > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm init
   git -C "$r" update-ref refs/remotes/origin/main HEAD          # fabricate the landed trunk (no remote)
 }

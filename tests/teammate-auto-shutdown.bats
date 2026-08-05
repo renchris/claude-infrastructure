@@ -351,7 +351,7 @@ mkrepo() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?mkrepo: repo path required}"
   mkdir -p "$1"; git -C "$1" init -q
-  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
   echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
 }
 # a real LINKED worktree of <repo> at <path> on a new branch
@@ -653,7 +653,7 @@ shared_repo() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?shared_repo: repo path required}"
   git init -q "$1" 2>/dev/null
-  git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
   echo base > "$1/base.txt"; git -C "$1" add base.txt; git -C "$1" commit -qm base
 }
 # transcript for <sid> recording a Write tool_use of <path> (what session-writes.sh attributes on)
@@ -880,7 +880,7 @@ shared_linked_worktree() { # <team> <member> <pane> → echoes the shared worktr
   # `git -C ""` is a NO-OP, not an error — an unset $D would write this identity into the cwd repo.
   local team="$1" member="$2" pane="$3" repo="${D:?}/slw-repo" wt="${D:?}/slw-shared" joined
   git init -q "$repo" 2>/dev/null
-  git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
+  git -C "${repo:?repo path required}" config user.email t@t; git -C "$repo" config user.name t
   echo base > "$repo/base.txt"; git -C "$repo" add base.txt; git -C "$repo" commit -qm base
   git -C "$repo" worktree add -q -b slw-branch "$wt" >/dev/null 2>&1
   echo "the lead wrote this" > "$wt/sibling.txt"        # the ONLY dirt, and it is a sibling's

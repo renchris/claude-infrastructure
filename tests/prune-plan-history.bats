@@ -123,7 +123,7 @@ for_plan() { jq -r --arg n "$1" 'select(.name==$n) | .ts' "$CC_PLAN_MANIFEST" | 
 # ── Layer 2: the git repo is COMPACTED, never truncated ────────────────────────────────────────
 @test "git gc runs on the plan-history repo and every commit survives" {
   git init -q "$CC_PLAN_HISTORY_REPO"
-  git -C "$CC_PLAN_HISTORY_REPO" config user.email t@t; git -C "$CC_PLAN_HISTORY_REPO" config user.name t
+  git -C "${CC_PLAN_HISTORY_REPO:?repo path required}" config user.email t@t; git -C "$CC_PLAN_HISTORY_REPO" config user.name t
   mkdir -p "$CC_PLAN_HISTORY_REPO/plans"
   local i
   for i in 1 2 3; do
