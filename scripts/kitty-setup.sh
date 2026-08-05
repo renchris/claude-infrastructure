@@ -550,6 +550,24 @@ else
   info "not running inside kitty — cannot judge live state from here"
 fi
 
+# ── 6. Accessibility permission — optional, for the move-menu's physical-position labels ──────────
+# kitty-pane-menu's "Move to Window N" items are plain text (title + cwd) — no visual cue for WHICH
+# physical window that is on screen. bin/kitty-pane-menu-native can add a relative position label
+# ("leftmost" / "rightmost" of the offered candidates, from real window coordinates via System
+# Events), but System Events refuses `position of window` for kitty until the OPERATOR grants
+# Accessibility access — a GUI-only grant (System Settings → Privacy & Security → Accessibility →
+# add kitty), which nothing here can do for the user; a fresh git-clone install has zero reason to
+# have it, so this surfaces the gap at SETUP time instead of the first time someone squints at an
+# unlabeled "Move to Window 4" and can't tell which monitor that is (operator report, 2026-08-05).
+# Advisory only (`info`, never `no`): the menu is fully functional without this, just less legible.
+hdr "6. Accessibility permission (optional — physical window-position labels in the move menu)"
+if osascript -e 'tell application "System Events" to tell process "kitty" to get position of window 1' >/dev/null 2>&1; then
+  ok "Accessibility granted — move-menu items show which physical window/display each is on"
+else
+  info "not granted — move-menu items work, just without a position label"
+  info "  to enable: System Settings -> Privacy & Security -> Accessibility -> add kitty"
+fi
+
 printf '\n\033[1m%d ok, %d missing\033[0m\n' "$pass" "$miss"
 if [ "$miss" -gt 0 ]; then
   cat <<'EOF'

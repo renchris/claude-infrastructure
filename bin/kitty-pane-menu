@@ -178,9 +178,74 @@ def describe_window(w: dict) -> str:
     return f"{base} ({tag})" if tag else base
 
 
+def window_screen_positions() -> dict[str, tuple[float, float]]:
+    """title -> (x, y) on-screen, for every kitty OS window, via System Events (JXA — the ObjC
+    bridge that `choose_native`'s ancestor NSMenu attempt needed is NOT required here; plain
+    Application()/System Events access works fine). {} on ANY failure, most commonly the
+    Accessibility permission not being granted (kitty-setup.sh step 6, optional, GUI-only to
+    grant) — this must degrade silently, never block the menu over a cosmetic feature."""
+    script = (
+        'var se = Application("System Events");\n'
+        'var wins = se.processes["kitty"].windows();\n'
+        'var out = [];\n'
+        'for (var i = 0; i < wins.length; i++) {\n'
+        '  try {\n'
+        '    var w = wins[i];\n'
+        '    var pos = w.position();\n'
+        '    out.push(w.name() + "\\t" + pos[0] + "\\t" + pos[1]);\n'
+        '  } catch (e) {}\n'
+        '}\n'
+        'out.join("\\n");\n'
+    )
+    try:
+        r = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        title, x, y = parts
+        try:
+            out[title] = (float(x), float(y))
+        except ValueError:
+            continue
+    return out
+
+
+def _ordinal(n: int) -> str:
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+
+
+def position_labels(candidates: list[tuple[int, str]]) -> dict[int, str]:
+    """candidates: [(window_id, title), ...] -> {window_id: "2nd from left"}, using each
+    window's REAL on-screen coordinates so the label answers "which physical window is this"
+    without the operator memorizing abstract titles. Sorts along whichever axis (x or y) has
+    the wider spread among the CANDIDATES ACTUALLY OFFERED — a vertical monitor stack gets
+    top/bottom, a horizontal one gets left/right, and a 2-D grid picks whichever axis dominates
+    rather than guessing. Returns {} (no labels) with fewer than 2 positioned candidates, or
+    when window_screen_positions() itself came back empty (permission not granted)."""
+    positions = window_screen_positions()
+    pts = [(wid, positions[title]) for wid, title in candidates if title in positions]
+    if len(pts) < 2:
+        return {}
+    xs = [p[1][0] for p in pts]
+    ys = [p[1][1] for p in pts]
+    horizontal = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+    axis, low_word = (0, "left") if horizontal else (1, "top")
+    ordered = sorted(pts, key=lambda p: p[1][axis])
+    return {wid: f"{_ordinal(i + 1)} from {low_word}" for i, (wid, _pt) in enumerate(ordered)}
+
+
 def other_targets(tree: list, self_osw_id: int) -> list[tuple[int, str]]:
     """One entry per OTHER os-window, naming a representative window id in its active tab."""
-    out: list[tuple[int, str]] = []
+    raw: list[tuple[int, dict, int]] = []  # (osw_id, repr_window, extra_pane_count)
     for osw in tree:
         if osw["id"] == self_osw_id:
             continue
@@ -190,10 +255,17 @@ def other_targets(tree: list, self_osw_id: int) -> list[tuple[int, str]]:
             continue
         wins = tab["windows"]
         repr_w = next((w for w in wins if w.get("is_focused") or w.get("is_active")), wins[0])
+        raw.append((osw["id"], repr_w, len(wins) - 1))
+
+    pos = position_labels([(osw_id, repr_w.get("title") or "") for osw_id, repr_w, _extra in raw])
+
+    out: list[tuple[int, str]] = []
+    for osw_id, repr_w, extra in raw:
         label = describe_window(repr_w)
-        if len(wins) > 1:
-            label += f" +{len(wins) - 1}"
-        out.append((repr_w["id"], f"Move to Window {osw['id']} — {label}"))
+        if extra > 0:
+            label += f" +{extra}"
+        where = f" ({pos[osw_id]})" if osw_id in pos else ""
+        out.append((repr_w["id"], f"Move to Window {osw_id}{where} — {label}"))
     return out
 
 
