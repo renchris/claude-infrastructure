@@ -535,10 +535,10 @@ done
 # caller and returns empty in every hand-check and every test run from the operator's own kitty
 # window. ps has no such exclusion and is already this repo's idiom (bin/cc-in-kitty's walk).
 #
-# The SOCKET is the liveness proof, not the pid. kitty.conf's `listen_on unix:/tmp/kitty-{kitty_pid}`
-# names the path, but a socket file outlives a SIGKILLed kitty, so the probe finishes by making a
-# real `kitty @ --to <sock> ls` — the same call every later kt() makes. Only a socket that ANSWERS
-# counts (verified 2026-08-05: rc 0 live, rc 1 on /tmp/kitty-99999).
+# The SOCKET is the liveness proof, not the pid. kitty.conf's `listen_on` names the path and is READ
+# rather than assumed (kitty_socket_template), but a socket file outlives a SIGKILLed kitty, so the
+# probe finishes by making a real `kitty @ --to <sock> ls` — the same call every later kt() makes.
+# Only a socket that ANSWERS counts (verified 2026-08-05: rc 0 live, rc 1 on /tmp/kitty-99999).
 #
 # EXPORTING CC_TERM_KITTY_TO is load-bearing, not bookkeeping. `kitty @` with no --to reads
 # KITTY_LISTEN_ON from the environment, which is precisely what this caller does not have: from a
@@ -574,15 +574,56 @@ EOF
   return 1
 }
 
+# The address TEMPLATE, read from the SSOT that actually decides it: the operator's own kitty.conf
+# `listen_on`. This file used to hardcode `<dir>/kitty-<pid>`, which AGREES with the shipped conf
+# (config/kitty.conf:67) and is silently wrong the moment listen_on is retuned — a different
+# directory, or a name with no {kitty_pid} in it. The hazard is not the wrong path, it is the
+# SHAPE OF THE FAILURE: no candidate ⇒ kitty_headless returns 1 ⇒ every daemon fire reverts to
+# iTerm2, which is byte-identical to "kitty is not running" and is the same invisible
+# wrong-terminal class this whole probe was filed to end.
+#
+# Last value wins, matching kitty's own later-overrides-earlier option semantics. `[^#]*` drops a
+# trailing comment; tr strips the whitespace an aligned conf leaves behind.
+#
+# KNOWN LIMITS, all of which degrade to TODAY'S behaviour and never worse: an `include`d conf is
+# not followed, and $KITTY_CONFIG_DIRECTORY / $XDG_CONFIG_HOME are not consulted — a daemon caller
+# has neither in its environment by construction, which is the premise of this whole probe. Any
+# miss lands on the default below, i.e. exactly the string this function shipped with.
+kitty_socket_template() {
+  local tmpl
+  tmpl="$(sed -n 's/^[[:space:]]*listen_on[[:space:]][[:space:]]*\([^#]*\).*/\1/p' \
+            "${CC_KITTY_CONF:-$HOME/.config/kitty/kitty.conf}" 2>/dev/null \
+          | tail -1 | tr -d '[:space:]')"
+  # PRECEDENCE, stated because it is the one thing a reader could get backwards: the conf WINS.
+  # CC_FIRE_KITTY_SOCK_DIR parameterises the DEFAULT — it is the seam that keeps the no-conf case
+  # testable off the real /tmp — and does not retarget a conf that named its own directory. A conf
+  # is the operator's statement of where the socket IS; overriding it here would re-create the
+  # hardcoded-path defect one layer up.
+  [ -n "$tmpl" ] || tmpl="unix:${CC_FIRE_KITTY_SOCK_DIR:-/tmp}/kitty-{kitty_pid}"
+  printf '%s\n' "$tmpl"
+}
+
 # Candidate control sockets, one per LIVE kitty process. comm is matched on its BASENAME so the
 # kitten helpers (`kitten __watch_conf__`, `kitten run-shell`) — which are numerous and own no
 # socket — cannot be mistaken for the instance. A pid with no socket file is skipped silently: that
 # is a kitty started without `listen_on`, which we genuinely cannot drive.
 kitty_sockets() {
-  local dir="${CC_FIRE_KITTY_SOCK_DIR:-/tmp}" pid comm
+  local tmpl addr seen=" " pid comm
+  tmpl="$(kitty_socket_template)"
   while read -r pid comm; do
     case "${comm##*/}" in kitty) ;; *) continue ;; esac
-    [ -S "$dir/kitty-$pid" ] && printf 'unix:%s/kitty-%s\n' "$dir" "$pid"
+    addr="${tmpl//\{kitty_pid\}/$pid}"
+    # A template with no {kitty_pid} resolves EVERY live kitty to the SAME address, and each
+    # duplicate costs one BOUNDED `kitty @ ls` on the path where none of them answer. Emit once.
+    case "$seen" in *" $addr "*) continue ;; esac
+    seen="$seen$addr "
+    # `[ -S ]` is a cheap reject, not the verdict — kitty_socket_answers is the arbiter, because a
+    # socket FILE outlives a SIGKILLed kitty. It is also a FILESYSTEM question, so it can only
+    # answer for `unix:/absolute/path`; a `tcp:` listener and a Linux abstract `unix:@name` have no
+    # file at all, and rejecting them here would drop a LIVE address for the same invisible revert
+    # this function exists to prevent. Those go straight to the actuator.
+    case "$addr" in unix:/*) [ -S "${addr#unix:}" ] || continue ;; esac
+    printf '%s\n' "$addr"
   done <<EOF
 $(ps -Ao pid=,comm= 2>/dev/null || true)
 EOF
