@@ -200,7 +200,26 @@ scheduled corpus runner that provably had a cell open at 03:21.**
 | Site class | Fix |
 |---|---|
 | `git -C "$1" config user.…` helpers (§B row 1) | `local r="${1:?mkrepo: path required}"` as the helper's first line. Under bats (no `set -u`) `${1:?}` still aborts the test — that is the point: a missing path must be **loud**, never a cwd write. |
-| Unguarded `cd "$x"` before an identity write (§B row 2, incl. `gate-manifest.bats:226/242/259`) | `cd "$repo" \|\| return 1` (bats) / `\|\| exit 1` (scripts). Two files already do it right — `operator-surface-scope.bats:144` and `self-certifying-close.bats:46` use `cd "$w" \|\| exit 1`; copy that. |
+| Unguarded `cd "$x"` before an identity write (§B row 2, incl. `gate-manifest.bats:226/242/259`) | `cd "$repo" \|\| return 1` (bats) / `\|\| exit 1` (scripts). Two files already do it right — `operator-surface-scope.bats:144` and `self-certifying-close.bats:46` use `cd "$w" \|\| exit 1`; copy that. **⚠️ NECESSARY BUT NOT SUFFICIENT — see the correction below.** |
+
+> **Correction (2026-08-05, measured while building the agent-typed guard — `e91a371a`).** The
+> `cd "$repo" || exit 1` remedy prescribed in the row above is **inert against the exact failure
+> this document is about.** `cd ""` **succeeds**: rc 0, cwd unchanged (probed directly, this box,
+> same git/bash as the incident). So `||` never fires and `&&` never short-circuits — the guard
+> catches a *nonexistent* path and lets an *empty* one through, into the current repo, silently.
+> It is still worth applying (it does catch the typo/stale-path class), but **it does not close
+> the empty-variable hole and must not be recorded as having closed it.**
+>
+> The test that actually discriminates is the same one the tree-wide lint's rule 2 already
+> states, applied to the `cd` argument as well as to `-C`: *after deleting every expansion, does
+> any literal text survive?* `"$tmp/repo"` → `/repo` survives (safe). `"$x"` and `""` → nothing
+> survives (refuse). `"${x:?}"` is safe by a different route — it aborts on empty rather than
+> expanding to it. Any `$(…)`/backtick target is refused outright: it is computed at runtime and
+> can come back empty, which is precisely the unchecked-`mktemp -d` row two lines down.
+>
+> **Consequence for the lint yet to be built:** rules 1–3 as written scan for the *presence* of a
+> `cd … ||` guard. That predicate would mark every empty-variable site GREEN. Score the argument,
+> not the guard.
 | No-`cd`, no-`-C` writes (§B row 3) | Convert to `git -C "$fixture"` with a literal path segment, or better to the transient `-c user.email=… -c user.name=…` form (§B row 4), which cannot persist at all. |
 | Unchecked `mktemp -d` (`telemetry-e2e.sh:141/166`, `reaper-e2e.sh`) | `V8=$(mktemp -d) \|\| exit 1` — matches the `\|\| die "mktemp"` idiom already used in `cc-bind`, `cc-teardown`, `reap-guard.sh`, `postland-verify.sh`. |
 | **The amplifier — `postland-verify.sh`** | Before minting the cell, set the shared config's identity **explicitly and harmlessly for the run**, or better: export `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` and add a **post-run assertion** that `git -C "$REPO" config --local --get user.email` is still absent/unchanged, aborting the run RED if a suite mutated it. A one-line `git -C "$REPO" config --local --unset-all user.email` in the exit trap would *paper over* the leak; the assertion is what converts a silent corruption into a visible RED. |
