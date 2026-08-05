@@ -461,7 +461,13 @@ hf_bounded() {
 # third time at the REAL_IT2= block (:3397 area) and a fourth in bin/cc-pane it2_real_bin(). They
 # MUST NOT drift: a divert that fired in one and not another would create the pane with one backend
 # and address it with the other. tests/kitty-divert-real-it2.bats pins the agreement textually.
-in_kitty() { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; }
+#
+# The `command -v` guard on the second clause is the EXTRACTION contract, not defensive noise: this
+# one-liner is pulled out on its own by tests/handoff-fire-kitty.bats (`sed -n '/^in_kitty() {/p'`),
+# where kitty_headless does not exist. Guarding it keeps an extracted in_kitty answering exactly what
+# it answered before this clause was added, instead of emitting a command-not-found onto a stderr
+# some sibling suite asserts on.
+in_kitty() { { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; } || { command -v kitty_headless >/dev/null 2>&1 && kitty_headless; }; }
 
 # Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
 # Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
@@ -484,6 +490,91 @@ done
 # 2026-08-01, it turned `it2py bgtab` red. Each call site therefore re-states the pre-resolution
 # spelling as its own default: production gets the absolute path from the block above, an extracted
 # function degrades to exactly the behaviour it had before this change.
+
+# bin/it2-kitty, resolved the same way and for the same reason — it is the DAEMON's it2, see
+# kitty_headless below. Empty when unresolvable, and every consumer tests for that before using it.
+KITTY_IT2=""
+for _CC_KI in "$(dirname "$_CC_KS")/../bin/it2-kitty" "$(dirname "$0")/../bin/it2-kitty" "$HOME/.claude/bin/it2-kitty"; do
+  [ -x "$_CC_KI" ] && { KITTY_IT2="$_CC_KI"; break; }
+done
+
+# ── DAEMON / HEADLESS KITTY (2026-08-05, item b0b4ec40d63a) ──────────────────────────────────────
+# in_kitty()'s first clause reads the FIRING PROCESS's OWN env. That is right for an interactive
+# caller and BLIND for the callers this file exists to serve: a launchd job, the desk dispatcher, a
+# Stop hook inherit neither KITTY_WINDOW_ID nor ITERM_SESSION_ID. That state is not "iTerm2" — it is
+# NO TERMINAL AT ALL, and spawn() already names it as its own case (ANCHOR_INTENT=0). Until now every
+# such caller took the iTerm2 branch BY DEFAULT and fired an iTerm2 surface on a box whose only live
+# terminal is kitty. So when there is no terminal env at all, ask the BOX instead of the environment.
+#
+# ⚠ NOT pgrep — and this is the whole trap. `pgrep -f /Applications/kitty.app/Contents/MacOS/kitty`
+# returns NOTHING from inside a kitty pane, because macOS pgrep excludes the calling process AND ALL
+# ITS ANCESTORS unless -a is passed (pgrep(1): "the current pgrep or pkill process and all of its
+# ancestors are excluded"), and kitty is by construction an ancestor of everything in its own pane.
+# Measured 2026-08-05: pgrep saw 912 of 919 processes and kitty(567) was among the 7 it did not,
+# while `ps -Ao pid=,comm=` listed it exactly and `pgrep -a` found it immediately; the control —
+# Dock(700)/Finder(704), hardened apps that are NOT ancestors — matched fine, so this is ancestry,
+# not hardening or entitlements. The polarity is the nasty one: a pgrep probe WORKS for the launchd
+# caller and returns empty in every hand-check and every test run from the operator's own kitty
+# window. ps has no such exclusion and is already this repo's idiom (bin/cc-in-kitty's walk).
+#
+# The SOCKET is the liveness proof, not the pid. kitty.conf's `listen_on unix:/tmp/kitty-{kitty_pid}`
+# names the path, but a socket file outlives a SIGKILLed kitty, so the probe finishes by making a
+# real `kitty @ --to <sock> ls` — the same call every later kt() makes. Only a socket that ANSWERS
+# counts (verified 2026-08-05: rc 0 live, rc 1 on /tmp/kitty-99999).
+#
+# EXPORTING CC_TERM_KITTY_TO is load-bearing, not bookkeeping. `kitty @` with no --to reads
+# KITTY_LISTEN_ON from the environment, which is precisely what this caller does not have: from a
+# scrubbed env `kitty @ ls` exits 1 while `kitty @ --to unix:/tmp/kitty-567 ls` exits 0. Detecting
+# kitty without addressing it would swap one silent failure for another.
+kitty_headless() { # → 0 a live kitty answers AND this caller has no terminal of its own / 1 otherwise
+  # Memoized: in_kitty is called on nearly every terminal primitive, and the probe forks ps + kitty.
+  case "${_HF_KITTY_HEADLESS:-}" in 0) return 0 ;; 1) return 1 ;; esac
+  _HF_KITTY_HEADLESS=1                    # fail-closed default; only a socket that answers flips it
+  [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]      || return 1   # the shared A/B kill switch still governs
+  [ "${CC_FIRE_KITTY_PROBE:-on}" != off ] || return 1   # …and this probe has its own
+  # ONLY the no-terminal-env case. A pane that named itself was already answered by in_kitty's first
+  # clause; a live $ITERM_SESSION_ID with no KITTY_WINDOW_ID is a GENUINE iTerm2 pane, and diverting
+  # that to kitty is the exact mirror of the 2026-07-31 outage — refused here, pinned by test.
+  [ -z "${KITTY_WINDOW_ID:-}" ]  || return 1
+  [ -z "${ITERM_SESSION_ID:-}" ] || return 1
+  local bin sock
+  bin="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}"
+  # An operator-named socket is an explicit choice and bypasses discovery — same contract as
+  # bin/it2-kitty:185 — but it is still VERIFIED, so a stale export cannot divert us onto a dead one.
+  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then
+    kitty_socket_answers "$bin" "$CC_TERM_KITTY_TO" || return 1
+    _HF_KITTY_HEADLESS=0; return 0
+  fi
+  while IFS= read -r sock; do
+    [ -n "$sock" ] || continue
+    kitty_socket_answers "$bin" "$sock" || continue
+    CC_TERM_KITTY_TO="$sock"; export CC_TERM_KITTY_TO   # ← the addressing half; see the header
+    _HF_KITTY_HEADLESS=0; return 0
+  done <<EOF
+$(kitty_sockets)
+EOF
+  return 1
+}
+
+# Candidate control sockets, one per LIVE kitty process. comm is matched on its BASENAME so the
+# kitten helpers (`kitten __watch_conf__`, `kitten run-shell`) — which are numerous and own no
+# socket — cannot be mistaken for the instance. A pid with no socket file is skipped silently: that
+# is a kitty started without `listen_on`, which we genuinely cannot drive.
+kitty_sockets() {
+  local dir="${CC_FIRE_KITTY_SOCK_DIR:-/tmp}" pid comm
+  while read -r pid comm; do
+    case "${comm##*/}" in kitty) ;; *) continue ;; esac
+    [ -S "$dir/kitty-$pid" ] && printf 'unix:%s/kitty-%s\n' "$dir" "$pid"
+  done <<EOF
+$(ps -Ao pid=,comm= 2>/dev/null || true)
+EOF
+}
+
+# Does this socket ANSWER? Bounded like every other terminal-reaching call here (hf_bounded's 124 on
+# expiry is a non-zero, i.e. "does not answer" — the safe direction).
+kitty_socket_answers() { # $1=kitty binary  $2=socket (unix:/path)
+  hf_bounded "$1" @ --to "$2" ls >/dev/null 2>&1
+}
 
 # kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
 # unix socket has no serializing queue, but an unbounded call inside a spawn path still hangs the
@@ -3651,6 +3742,18 @@ IT2_SHIM="$HOME/.claude/bin/it2"
 # with one binary and address it with another.
 if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
   REAL_IT2="$IT2_SHIM"
+elif [ -n "${KITTY_IT2:-}" ] && kitty_headless; then
+  # DAEMON KITTY (:465 area) — and here the SHIM IS THE WRONG ANSWER, which is why this is a third
+  # branch rather than a widening of the first. bin/it2-wrapper diverts on the same env we do not
+  # have, and then on bin/cc-in-kitty's ANCESTRY check, which a launchd caller fails by construction
+  # (kitty is not its parent). So the shim would forward us to the real it2 — an iTerm2 Python-API
+  # client with no iTerm2 to talk to, exit 2. Address the translator directly: kitty_headless has
+  # already exported CC_TERM_KITTY_TO, and naming a socket is exactly the statement bin/it2-kitty:185
+  # accepts in place of ancestry ("Set CC_TERM_KITTY_TO=<socket> if you meant this").
+  # The [ -n "${KITTY_IT2:-}" ] guard leads deliberately: it short-circuits before kitty_headless in
+  # the extracted-block tests (tests/kitty-divert-real-it2.bats evals this block alone, where neither
+  # name exists), so those six assertions keep resolving exactly what they resolved before.
+  REAL_IT2="$KITTY_IT2"
 else
   REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
   [ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
@@ -3712,6 +3815,55 @@ it2py() {
         # focused / query failed) is the same "unreadable focus" the iTerm2 path emits, and every
         # caller already treats it as "nothing to assert" (restore_focus_or_fail:3712 area).
         kt_window_field "" id
+        return $?
+        ;;
+      anchor)
+        # HEADLESS ANCHOR, kitty side. Without this verb the daemon fix above would be self-
+        # defeating: kitty_headless flips in_kitty TRUE, `anchor` then falls through to the iTerm2
+        # Python driver at the foot of this function, that driver cannot connect, and
+        # resolve_headless_anchor reads the non-zero as INCONCLUSIVE and REFUSES. Detecting the right
+        # terminal and then declining to fire is a worse outcome than the bug it replaced.
+        #
+        # THE CONTRACT IS THE iTerm2 VERB'S, byte for byte, because one caller parses both:
+        #   stdout "<window-id> <windows-in-its-tab>" rc 0 · "NO-LIVE-SESSION" rc 0 (a VERDICT — the
+        #   box really has no window) · rc≠0 (the QUERY failed — never "empty"). Collapsing the last
+        #   two is what leaked ~12 iTerm2 windows/hour on 2026-07-30.
+        # Preference order is also the iTerm2 verb's: the desk pane → the focused window → any
+        # window, each gated on its tab having ROOM (< cap), then the same list again ignoring room
+        # so a genuinely full box still gets an anchor and its true count, and the caller spills.
+        local adesk="${2:-}"; adesk="${adesk##*:}"
+        kt ls 2>/dev/null | ADESK="$adesk" ACAP="${3:-5}" /usr/bin/python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)          # drains stdin BEFORE the walk: no SIGPIPE onto kitty @ ls,
+except Exception:                     # which pipefail would promote into a fake 141 failure
+    sys.exit(1)                       # QUERY FAILED — never "determined empty"
+try:
+    cap = int(os.environ.get("ACAP") or 5)
+except ValueError:
+    cap = 5
+desk = os.environ.get("ADESK") or ""
+tabs = [t.get("windows") or [] for ow in d for t in ow.get("tabs", [])]
+by_id = {str(w.get("id")): ws for ws in tabs for w in ws}
+focused = [str(w.get("id")) for ws in tabs for w in ws if w.get("is_focused")]
+
+def pick(room):
+    for wid in ([desk] if desk else []) + focused:
+        ws = by_id.get(wid)
+        if ws and (not room or len(ws) < cap):
+            return wid, len(ws)
+    for ws in tabs:
+        if ws and (not room or len(ws) < cap):
+            return str(ws[0].get("id")), len(ws)
+    return None
+
+hit = pick(True) or pick(False)
+if hit is None:
+    print("Error: no live kitty window to anchor to", file=sys.stderr)
+    print("NO-LIVE-SESSION")          # a VERDICT, on stdout, rc 0
+else:
+    print("%s %d" % hit)
+'
         return $?
         ;;
       restore)
@@ -4022,6 +4174,12 @@ resolve_headless_anchor() {
   case "$out" in
     NO-LIVE-SESSION) return 1 ;;
     ????????-*\ [0-9]*) printf '%s' "$out"; return 0 ;;
+    # kitty ids are small INTEGERS, not UUIDs, so the pattern above can only ever reject them — and a
+    # rejection here reads as "unparseable ⇒ inconclusive ⇒ refuse", i.e. a daemon on a kitty box
+    # would detect the right terminal, resolve a perfectly good anchor, and then decline to fire.
+    # Both shapes are accepted with the same laxness; the id is echoed verbatim and every consumer
+    # already strips a `w0t0p0:`-style prefix with ${x##*:}.
+    [0-9]*\ [0-9]*) printf '%s' "$out"; return 0 ;;
     *) echo "   anchor probe returned unparseable output — inconclusive, not empty." >&2; return 2 ;;
   esac
 }

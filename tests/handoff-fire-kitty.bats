@@ -439,13 +439,19 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ -s "$PLOG" ]
 }
 
-@test "it2py anchor is UNCHANGED in kitty too — headless anchoring was not ported" {
-  # Pinned so a later reader does not assume the kitty arm covers every verb: resolve_headless_anchor
-  # degrades to its documented rc-2 "inconclusive, refuse" state under kitty, which is the safe one.
+@test "it2py anchor is ANSWERED in kitty — the Python driver is never consulted" {
+  # This test previously pinned the OPPOSITE ("headless anchoring was not ported"), and that pin was
+  # correct until the anchor verb had a kitty arm. It could not stay: once the daemon probe made
+  # in_kitty true for a launchd caller, an un-ported `anchor` meant resolve_headless_anchor read the
+  # iTerm2 driver's connection failure as rc-2 INCONCLUSIVE and REFUSED — i.e. handoff would detect
+  # the right terminal and then decline to fire. Its full behaviour (preference order, room
+  # awareness, the three return states) lives in tests/handoff-fire-kitty-daemon.bats; what is
+  # pinned HERE is the same property every other verb in this file pins — kitty means kitty.
   pin_kitty
   run it2py anchor "" 5
-  [ -s "$PLOG" ]
-  [ ! -s "$KLOG" ]
+  [ "$status" -eq 0 ]
+  [ ! -s "$PLOG" ]
+  [ -s "$KLOG" ]
 }
 
 @test "every it2py verb on iTerm2 still reaches the Python driver — kitty is never consulted" {
