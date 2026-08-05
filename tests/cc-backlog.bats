@@ -1546,3 +1546,124 @@ pd_pristine() {
   [ "$status" -eq 0 ]
   [ "$(jq -r 'select(.event=="add")|.project' "$CC_BACKLOG_FILE" | tail -1)" = "/repo/a" ]
 }
+
+# ── THE CLAIM IS A LEASE (backlog 1cb7724b2ed9) ───────────────────────────────────────────────────
+# `reopen` could not yank a live claim, but `claim` could OVERWRITE one: cmd_transition appended the
+# event from any status, so a second claim on a held item just advanced `by`. The fold then named
+# worker B while worker A was still running — the ledger did not merely fail to refuse the duplicate,
+# it FORGOT the incumbent, which is why `list` read "one worker" through the whole overlap. Item
+# b0b4ec40d63a was worked to completion TWICE (claim 08:35:12 → dispatch self-release 08:46:16 →
+# second claim 09:04:29 → ~10 h of duplicate work against a fix that landed at 12:34).
+#
+# The two liveness cases below are each other's controls: identical trail, identical clock, opposite
+# verdicts, with the holder's liveness as the only delta. The pre-change binary is recovered from a
+# pinned immutable ancestor, never a hand-typed approximation (memory:
+# control-must-replay-the-real-artifact) — a fixture that cannot FAIL pre-fix proves nothing.
+LEASE_BASE_SHA="19ebab43"
+
+lease_pristine() {
+  local d="$BATS_TEST_TMPDIR/lease-pristine"
+  mkdir -p "$d"
+  git -C "$REPO" archive "$LEASE_BASE_SHA" bin/cc-backlog 2>/dev/null | tar -x -C "$d"
+  [ -s "$d/bin/cc-backlog" ] || { echo "cannot recover pristine cc-backlog @ $LEASE_BASE_SHA" >&2; return 1; }
+  printf '%s' "$d/bin/cc-backlog"
+}
+
+@test "lease: a second claim on a LIVE-held item is REFUSED, and the fold still names the incumbent" {
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  rec '{"id":"lease00000a1","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L1"}'
+  rec "{\"id\":\"lease00000a1\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+
+  run bash "$CB" claim lease00000a1 --by "second-worker"
+  [ "$status" -eq 4 ]                                   # rc 4 = the same refusal code as the reopen guards
+  printf '%s' "$output" | grep -q 'REFUSED'
+  printf '%s' "$output" | grep -q 'which is LIVE'
+  printf '%s' "$output" | grep -q -- '--force'          # the refusal must name its own escape
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="lease00000a1")|.by')" = "$HOST-$$" ]
+
+  # RED: the pre-change binary takes the SAME trail and hands the work to the second worker — the
+  # incumbent is overwritten in the fold with no refusal and no trace. That is the incident.
+  local old; old="$(lease_pristine)"
+  run bash "$old" claim lease00000a1 --by "second-worker"
+  [ "$status" -eq 0 ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="lease00000a1")|.by')" = "second-worker" ]
+}
+
+@test "lease: the SAME trail with a PROVEN-DEAD holder IS claimed — liveness is the only delta" {
+  # The control for the test above. A dead holder must still be displaceable, or a crashed worker
+  # would strand its item forever and `reap`'s whole dead-worker path would be unreachable.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  rec '{"id":"lease00000a2","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L2"}'
+  rec "{\"id\":\"lease00000a2\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" claim lease00000a2 --by "second-worker"
+  [ "$status" -eq 0 ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="lease00000a2")|.by')" = "second-worker" ]
+}
+
+@test "lease: UNRESOLVED liveness REFUSES — the predicate is INVERTED vs the reopen guard" {
+  # claimer_live is THREE-valued. The reopen guard refuses only on rc 0 (proven LIVE) and proceeds on
+  # rc 2, because THERE the action is the safe default. Here the action MINTS A SECOND WORKER, so an
+  # unresolvable probe must leave the incumbent alone: abstain, never convict. A future reader who
+  # "fixes" this to match reopen's `&& claimer_live` restores the defect, so it is pinned.
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/no-such-cc-sessions"
+  rec '{"id":"lease00000a3","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L3"}'
+  rec '{"id":"lease00000a3","ts":"2026-01-01T00:00:00Z","event":"claim","by":"4f9aee4a-16dd-0000-8a10-8d1d7bca8000"}'
+
+  run bash "$CB" claim lease00000a3 --by "second-worker"
+  [ "$status" -eq 4 ]
+  printf '%s' "$output" | grep -q 'UNRESOLVED'
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="lease00000a3")|.by')" = "4f9aee4a-16dd-0000-8a10-8d1d7bca8000" ]
+}
+
+@test "lease: the holder re-claiming its OWN item is idempotent — a retry is not contention" {
+  # cc-dispatch's rollback path releases and may re-take its own claim; a lease that refused the
+  # holder itself would deadlock the dispatcher against work nobody else is doing.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  rec '{"id":"lease00000a4","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L4"}'
+  rec "{\"id\":\"lease00000a4\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+
+  run bash "$CB" claim lease00000a4 --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  [ "$(status_of lease00000a4)" = claimed ]
+}
+
+@test "lease: --force overrides the refusal and records force:true in the trail" {
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  rec '{"id":"lease00000a5","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L5"}'
+  rec "{\"id\":\"lease00000a5\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+
+  run bash "$CB" claim lease00000a5 --by "second-worker" --force
+  [ "$status" -eq 0 ]
+  run tail -1 "$CC_BACKLOG_FILE"
+  printf '%s' "$output" | jq -e '.event == "claim" and .by == "second-worker" and .force == true'
+}
+
+@test "lease: a REFUSAL appends NOTHING — no record, so no thrash cycle is minted" {
+  # reap Rule B blocks an item on >=MAX_THRASH fast claim→reopen cycles. A refusal that still wrote
+  # its claim record would manufacture that signature out of contention alone and block healthy work.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  rec '{"id":"lease00000a6","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L6"}'
+  rec "{\"id\":\"lease00000a6\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-$$\"}"
+  local before; before="$(wc -l < "$CC_BACKLOG_FILE")"
+
+  run bash "$CB" claim lease00000a6 --by "second-worker"
+  [ "$status" -eq 4 ]
+  [ "$(wc -l < "$CC_BACKLOG_FILE")" -eq "$before" ]
+}
+
+@test "lease: an OPEN item still claims normally — the guard must not become an off switch" {
+  rec '{"id":"lease00000a7","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L7"}'
+  run bash "$CB" claim lease00000a7 --by "first-worker"
+  [ "$status" -eq 0 ]
+  [ "$(status_of lease00000a7)" = claimed ]
+}
+
+@test "lease: --force is still rejected on every verb but reopen and claim" {
+  rec '{"id":"lease00000a8","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L8"}'
+  # `done` is quoted for the same reason cc-backlog's own dispatch table quotes it: unquoted, it
+  # parses as the loop keyword and shellcheck aborts on the construct (SC1010).
+  run bash "$CB" "done" lease00000a8 --evidence sha --force
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'force applies only to reopen and claim'
+}

@@ -14,7 +14,7 @@
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
-#   claim   <id> --by <sid>
+#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
@@ -46,6 +46,48 @@
 #       Deliberately NOT refused: a claimer releasing its OWN claim (pass `--by <its sid>` — this
 #       is cc-dispatch's spawn-fail rollback), and a claim whose owner is dead or unattributable
 #       (that is `reap`'s dead-worker path — stranding the work is the worse failure).
+#
+# THE CLAIM IS A LEASE (2026-08-05, backlog 1cb7724b2ed9) — the SYMMETRIC half of guard (2) above.
+# `reopen` could not yank a live claim, but `claim` could OVERWRITE one: cmd_transition appended the
+# event from any status, so a second `claim` on a held item simply advanced `by` to the new claimer.
+# The fold then named worker B while worker A was still running — the ledger did not merely fail to
+# refuse the duplicate, it FORGOT the incumbent, which is why `list` reads "open work, one worker"
+# through the entire overlap. Guarding `reopen` alone was never enough: `reopen` is the release
+# path, `claim` is the ACQUIRE path, and only the acquire path can be raced by two dispatchers.
+#
+# THE INCIDENT (item b0b4ec40d63a, verified from this ledger + the IDL). 08:35:12 cc-dispatch claims
+# and spawns; 08:46:16 the spawn returns rc=1 and dispatch SELF-RELEASES (`reopen --by $SID`, exempt
+# above and correctly so); a worker was meanwhile running in `.worktrees/wt-handoff-kitty-daemon` —
+# a hand-named worktree, so session-register's reclaim gate (which requires `wt-<12-hex>`) abstained
+# and it held NO claim at all; 09:04:29 a second claim `--by wt-b0b4ec40d63a` succeeded against the
+# now-open item and a second worker ran ~10 h on work the first landed at 12:34. Cost: one worker
+# slot, and a near-miss worse than the cost — B was ~30 min from landing a WEAKER duplicate fix on
+# top of A's. The lease cannot un-cause an unclaimed worker, but it is what makes the second
+# acquisition REFUSABLE, whatever spawned it: dispatcher, desk, or a worker claiming by hand.
+#
+# THE PREDICATE IS INVERTED vs guard (2), deliberately — do not "fix" it to match. Both call the
+# same three-valued `claimer_live`, but the dangerous act is on opposite sides: `reopen`'s action is
+# the safe default and only a PROVEN-LIVE claimer (rc 0) stops it, whereas `claim`'s action is the
+# one that mints a duplicate worker, so only a PROVEN-DEAD claimer (rc 1) may be displaced. rc 2 —
+# UNRESOLVED — therefore REFUSES here and PROCEEDS there, and that is the same rule ("abstain, never
+# convict") read through each verb's own risk: abstaining from a claim means leaving the incumbent
+# alone. Our own unresolvable probe must never mint the evidence that hands live work to a second
+# worker (memory: claimed-outcome-vs-checked-outcome). The cost is bounded and in the direction this
+# file already chose everywhere else — a claim refused on a non-verdict strands the item VISIBLY
+# until `reap`'s abstention ceiling blocks it out to a human; double-dispatch is neither visible
+# nor bounded.
+#
+# WHAT IT IS NOT. Not a lock: nothing is held, nothing must be released, and no path can wedge on
+# it. The lease IS the fold — a CAS against the item's current `(status, by)` at append time — so it
+# inherits the store's append-only concurrency properties unchanged and adds no new resolution
+# surface (the `kill -0` branch is the one `reap` already runs). The EXPIRY half needs no new
+# mechanism either: `reap` Rule A already reopens a dead-worker claim past STALE_CLAIM_S, bounded by
+# MAX_ATTEMPTS — a lease whose worker died is exactly the case it was built for.
+#
+# WHERE THE REFUSAL LANDS. cc-dispatch already branches on the claim's exit code (`claim failed` →
+# no spawn, next item), so the actuator needed no new predicate of its own and none was added — the
+# gate is enforced where the write happens, never re-implemented by a caller that could drift from
+# it (memory: make-the-actuator-the-arbiter).
 #
 # The DONE latch also survives the fold as `wasDone`, which cc-dispatch reads to keep completed
 # work out of the wave even if something re-opened it by hand. `--force` is what clears it.
@@ -416,9 +458,10 @@ cmd_transition() {
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
   fi
-  # --force is the reopen-guard override and nothing else — never silently ignored elsewhere.
-  if [ "$force" -eq 1 ] && [ "$event" != reopen ]; then
-    printf 'cc-backlog %s: --force applies only to reopen\n' "$event" >&2; return 2
+  # --force overrides the reopen guards and the claim LEASE, and nothing else — never silently
+  # ignored elsewhere.
+  if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != claim ]; then
+    printf 'cc-backlog %s: --force applies only to reopen and claim\n' "$event" >&2; return 2
   fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
@@ -451,6 +494,39 @@ cmd_transition() {
         printf '  To override deliberately:  cc-backlog reopen %s --force\n' "$id"
       } >&2
       return 4
+    fi
+  fi
+  # CLAIM LEASE (see THE CLAIM IS A LEASE in the header) — the acquire-side mirror of guard (2).
+  # Same oracle, same rc 4, same self/dead exemptions; the PREDICATE IS INVERTED on purpose.
+  if [ "$event" = claim ] && [ "$force" -eq 0 ]; then
+    local lcur lstatus lby lrc
+    lcur="$(item_json "$id")"
+    lstatus="$(printf '%s' "$lcur" | jq -r '.status // ""' 2>/dev/null)"
+    lby="$(    printf '%s' "$lcur" | jq -r '.by     // ""' 2>/dev/null)"
+    # `[ "$lby" != "$by" ]` keeps a re-claim by the SAME holder idempotent — a dispatcher retrying
+    # its own claim is not contention, and cc-dispatch's rollback path depends on being able to
+    # re-take what it released. An EMPTY `by` cannot be the incumbent (nothing to be live).
+    if [ "$lstatus" = claimed ] && [ -n "$lby" ] && [ "$lby" != "$by" ]; then
+      claimer_live "$lby"; lrc=$?
+      # ONLY rc 1 (PROVEN not-live) may be displaced. Do NOT rewrite this as the reopen guard's
+      # `&& claimer_live` (rc 0 only) — that inverts it into fail-open and restores the defect.
+      if [ "$lrc" -ne 1 ]; then
+        { if [ "$lrc" -eq 0 ]; then
+            printf 'cc-backlog claim: REFUSED — %s is already claimed by %s, which is LIVE\n' "$id" "$lby"
+          else
+            printf 'cc-backlog claim: REFUSED — %s is already claimed by %s, whose liveness is UNRESOLVED\n' "$id" "$lby"
+            printf '  An unanswered probe is not proof the holder is gone, and this verb HANDS OUT the\n'
+            printf '  work: abstaining means leaving the incumbent alone, never minting a second worker.\n'
+          fi
+          printf '  Claiming it anyway overwrites the incumbent in the fold: "list" would name the new\n'
+          printf '  claimer while the first worker is still running, which is how one item was worked\n'
+          printf '  twice to completion for ~10 h (b0b4ec40d63a, 2026-08-05).\n'
+          printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
+          printf '  The holder releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$lby"
+          printf '  To override deliberately:  cc-backlog claim %s --by %s --force\n' "$id" "${by:-<sid>}"
+        } >&2
+        return 4
+      fi
     fi
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
