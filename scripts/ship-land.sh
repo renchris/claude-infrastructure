@@ -1132,6 +1132,53 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── git-identity escape ratchet (2026-08-05) ──────────────────────────────────────────────────
+  # Same own-scope contract as the two ratchets above, for a blocker class whose blast radius is the
+  # widest of the three: `git -C ""` is a documented NO-OP, so a fixture doing
+  # `git -C "$dir" config user.email t@t` with `$dir` empty writes the TEST identity into whatever
+  # repo the process is standing in. This checkout is ~100 linked worktrees over ONE .git/config, so
+  # a single such call re-authors every session on the box — 9 commits on this trunk and 214 on
+  # reso-management-app are authored `t <t@t>` (docs/research/git-identity-leak-2026-08-05.md).
+  #
+  # It belongs HERE for the reason the hermeticity ratchet documents: enforced only by its own suite
+  # it is post-hoc DETECTION, and gate-select maps that suite from exactly one edge — the lint —
+  # so ADDING a fixture never selects it and the author's own land cannot see the breach it creates
+  # (memory: enforcement-must-live-at-the-chokepoint). Sub-second, scope-independent, and it names
+  # file and line to the session that wrote them.
+  #
+  # Deterministic and it names a file, so like its siblings it is a REAL verdict — exit 6, never a
+  # retryable 9; exit 2 is its NON-VERDICT and must not be dressed up as a claim about the tree.
+  GITID_LINT="${SHIP_LAND_GITID_LINT:-scripts/git-identity-lint.sh}"
+  if [[ -x "$GITID_LINT" ]]; then
+    local gown=""
+    if [[ "${SHIP_LAND_GITID_OWN_SCOPE:-on}" != "off" ]]; then
+      # The pathspec must list every population the lint judges, or a land that adds an escaping
+      # write to bin/ produces an own-set without it, the lint reports it `identity?` — advisory —
+      # and the land goes through: the rule would be detection, never a gate. Same widening the
+      # hermeticity block took when rule 4 landed. A docs-only land still yields an EMPTY own-set
+      # and still blocks on nothing.
+      gown="$(git diff --name-only "$range" -- 'tests/*.bats' 'scripts/*.sh' 'bin/*' 2>/dev/null || true)"
+      [[ -n "$gown" ]] && echo "→ gate: git-identity own-scope — blocking on $(printf '%s\n' "$gown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: git-identity escape ratchet (a fixture identity that can land in the caller's repo)" >&2
+    local gitid_rc=0
+    CC_GITID_OWN="$gown" "$GITID_LINT" >&2 || gitid_rc=$?
+    if (( gitid_rc == 2 )); then
+      echo "⛔ gate: git-identity-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      echo "  Nothing is wrong with the files named above (if any). Re-run /ship when the box is quieter." >&2
+      GATE_KILLED=1
+      return 1
+    fi
+    if (( gitid_rc != 0 )); then
+      echo "✗ gate: git-identity RED — a file THIS LAND CHANGES can write its test identity into the" >&2
+      echo "  caller's repo. ~100 worktrees here share ONE .git/config, so that re-authors every" >&2
+      echo "  session on the box. Guard the path (\"\${1:?}\" or a literal suffix), or chain the cd." >&2
+      echo "  The file and line are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── UTC timestamp-contract ratchet (a15/M4) ───────────────────────────────────────────────────
   # Third deterministic blocker class, same own-scope contract as the two ratchets above. A stamp
   # whose format ends in a literal `Z` ASSERTS UTC; if its `date` call has no -u it carries local
