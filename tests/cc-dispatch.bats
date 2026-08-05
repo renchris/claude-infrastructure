@@ -70,11 +70,19 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 142 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 156 checks (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 142 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  [ "$n_ok" -eq 156 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 142 → 156: the ACTUATOR-ARBITER branch (5a) — (m2) 7 + (m2b) 4 + (m3) 3.
+                        # The done latch is now enforced by `cc-backlog claim` itself, because step
+                        # 1b's filter is pull-time and the landing can arrive during the wave-plan +
+                        # admission tail (backlog dadc3c2410aa, measured on 5690b9d11bee). rc 4 has
+                        # TWO causes since the lease landed, so (m2) and (m2b) are each other's
+                        # control at the SAME rc: done-latch ⇒ skip, lease ⇒ failed. Without the
+                        # pair, a bare `[ "$crc" -eq 4 ]` would stay green while reclassifying every
+                        # lease refusal. (m3) holds the line on ordinary claim failures.
                         # 121 → 142: the STALE-PREMISE guard (1d) — 18 cases (v1-v6) covering the
                         # retraction, its positive control, the source-scope control that keeps a
                         # human-filed item citing a finished plan dispatchable, both fail-OPEN paths

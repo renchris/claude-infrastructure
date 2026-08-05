@@ -14,7 +14,8 @@
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
-#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live
+#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live,
+#                                                                  or if the item is done-latched
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
@@ -87,10 +88,52 @@
 # WHERE THE REFUSAL LANDS. cc-dispatch already branches on the claim's exit code (`claim failed` →
 # no spawn, next item), so the actuator needed no new predicate of its own and none was added — the
 # gate is enforced where the write happens, never re-implemented by a caller that could drift from
-# it (memory: make-the-actuator-the-arbiter).
+# it (memory: make-the-actuator-the-arbiter). [AMENDED 2026-08-05, backlog dadc3c2410aa: rc 4 gained
+# a SECOND cause (the done latch below) whose correct journalling is the opposite — skip, not fail —
+# so cc-dispatch now reads the `verdict=` token this file emits on line 1. That is still not a
+# predicate of its own: it consumes THIS verb's verdict rather than re-deriving one, so there is
+# nothing to drift. A lease refusal carries no token and keeps its `failed` classification exactly.]
 #
 # The DONE latch also survives the fold as `wasDone`, which cc-dispatch reads to keep completed
 # work out of the wave even if something re-opened it by hand. `--force` is what clears it.
+#
+# CLAIM DONE-GUARD (2026-08-05, backlog dadc3c2410aa) — the residual race in guard (1)'s remedy, and
+# the THIRD `claim`-side refusal alongside the lease above. The two are complementary, not variants:
+# the lease answers "is someone else ALREADY ON this?" (status `claimed`), this answers "is this
+# work already FINISHED?" (the `wasDone` latch). A done-latched item folds `done` or `open`, never
+# `claimed`, so the lease cannot see it — and it landed hours apart from this, on a separate item.
+# cc-dispatch's `wasDone` filter is PULL-TIME ONLY: it reads a snapshot at step 1 and claims at
+# step 5, and the gap between them is the documented 7-45 s wave-plan PLUS the admission tail
+# (warm_worktree + handoff-fire). A `done` landing anywhere inside that gap is invisible to the
+# snapshot, so the claim fires against stale truth. MEASURED live: item 5690b9d11bee recorded
+# `event:"done"` at 20:20:52Z and `event:"claim"` at 20:26:15Z — 5 m 23 s later, on the same id —
+# and the spawned worker burned a whole session re-verifying work that had already landed.
+#
+#   (3) DONE LATCH — `claim` of an item whose fold carries `wasDone == true` is REFUSED (rc 4),
+#       showing the prior evidence and naming the override. `--force` claims it anyway and is
+#       recorded as `force:true` (it does NOT clear the latch — only `reopen --force` does, so a
+#       forced claim cannot silently make landed work permanently re-dispatchable).
+#
+# THE ACTUATOR IS THE ARBITER, which is why this lives here and not as a second pull-time re-check
+# in cc-dispatch. A re-read before the claim would only NARROW the window — the read and the append
+# are still two steps — and it would leave every OTHER caller of `claim` unguarded. Folding the
+# predicate into the transition that actually takes the claim means no caller can race it beyond
+# the fold→append instant. cc-dispatch still keeps its step-1b filter: that one is the cheap fence
+# that stops a done-latched item consuming a wave-plan slot and a quota placement at all; this one
+# is the backstop for what lands DURING the tail.
+#
+# RC 4 NOW HAS TWO CAUSES, and its consumer must tell them apart, so this refusal states
+# `verdict=done-latched` on LINE 1 (the only line `cc-dispatch`'s head-biased `claim_excerpt`
+# keeps). cc-dispatch records a done-latch refusal as `skipped` — a raced landing is not a
+# dispatcher fault and nothing needs a human — while a LEASE refusal keeps its existing `failed`
+# classification untouched. Parsed as a token, never prose-matched, and POSITIVE on the skip-worthy
+# cause: were the token ever lost, a done-latch refusal would degrade to the lease's `failed` path,
+# i.e. to the incumbent behaviour rather than to a new hole.
+#
+# DELIBERATELY NOT guarded: `reclaim`, which only re-KEYS an already-`claimed` item to the worker
+# actually doing the work and can never create a claim on an open one (it refuses any other status
+# — verdict `noop-status`). Guarding it would strand a live claim under the wrong identity, which
+# is strictly worse and buys nothing.
 #
 # BLOCKED-ON-OPERATOR: an item whose DoD needs an operator-only step (a key, a
 # `launchctl bootout`, any human action) is `block`ed with the pending step in
@@ -458,8 +501,9 @@ cmd_transition() {
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
   fi
-  # --force overrides the reopen guards and the claim LEASE, and nothing else — never silently
-  # ignored elsewhere.
+  # --force overrides the reopen guards, the claim LEASE and the claim DONE-GUARD, and nothing else
+  # — on any other event it is an ERROR, never silently ignored (a flag that no-ops reads as though
+  # it worked).
   if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != claim ]; then
     printf 'cc-backlog %s: --force applies only to reopen and claim\n' "$event" >&2; return 2
   fi
@@ -496,13 +540,59 @@ cmd_transition() {
       return 4
     fi
   fi
-  # CLAIM LEASE (see THE CLAIM IS A LEASE in the header) — the acquire-side mirror of guard (2).
-  # Same oracle, same rc 4, same self/dead exemptions; the PREDICATE IS INVERTED on purpose.
+  # CLAIM GUARDS — the DONE LATCH (3) then the LEASE (4). Both are `claim`-side, both rc 4, and they
+  # share ONE `item_json` fold deliberately: the fold is a `valid_records | jq -s` pass over the whole
+  # ledger, so two blocks each taking their own would double the cost of every claim for nothing.
+  #
+  # THE DONE LATCH GOES FIRST because the two predicates are disjoint on the common paths (a
+  # done-latched item folds `done` or `open`, never `claimed`) but OVERLAP on one: an item that was
+  # force-claimed after landing folds `claimed` AND `wasDone`. There "this already landed" is the
+  # more fundamental fact and the more useful refusal — the lease would send the reader chasing an
+  # incumbent worker for work that is finished.
   if [ "$event" = claim ] && [ "$force" -eq 0 ]; then
-    local lcur lstatus lby lrc
+    local lcur lstatus lby lrc ldone lev lts
     lcur="$(item_json "$id")"
-    lstatus="$(printf '%s' "$lcur" | jq -r '.status // ""' 2>/dev/null)"
-    lby="$(    printf '%s' "$lcur" | jq -r '.by     // ""' 2>/dev/null)"
+    lstatus="$(printf '%s' "$lcur" | jq -r '.status  // ""'    2>/dev/null)"
+    lby="$(    printf '%s' "$lcur" | jq -r '.by      // ""'    2>/dev/null)"
+    ldone="$(  printf '%s' "$lcur" | jq -r '.wasDone // false' 2>/dev/null)"
+    # (3) DONE LATCH (see CLAIM DONE-GUARD in the header) — the ACTUATOR arbitrates the latch, so no
+    # caller can race it with a stale snapshot. Read here, one step before the append, rather than by
+    # any puller: cc-dispatch's step-1b filter samples ~7-45 s + an admission tail before this point.
+    #
+    # Keyed on `wasDone`, not on `status == "done"`, and that is strictly stronger: the latch is set
+    # by every `done` and cleared ONLY by `reopen --force`, which also sets status back to "open" —
+    # so `status == done` implies `wasDone == true`, while the converse catches the hand-reopened
+    # item that folds to "open" and is exactly cc-dispatch's fire predicate.
+    #
+    # An unreadable fold cannot fail-open here: `has_id` above already ran the same `valid_records`
+    # read and returned rc 3 if the ledger or jq were broken, so reaching this line means the ledger
+    # IS readable — an empty `item_json` for an id `has_id` just confirmed is not a state the fold
+    # can produce (both reduce over the same records).
+    #
+    # `verdict=done-latched` rides LINE 1 because rc 4 now has two causes and its consumer must tell
+    # them apart: cc-dispatch treats a raced landing as a SKIP and healthy lease contention as a
+    # FAILURE, and it can only see this refusal through `claim_excerpt` (head -1, 200 chars). A
+    # parseable token, never prose-matching — the same shape `reclaim` already emits. The
+    # discriminator is POSITIVE on the skip-worthy cause on purpose: if the token ever went missing,
+    # a done-latch refusal would read as the lease's FAILED path — the incumbent behaviour, not a
+    # new hole.
+    if [ "$ldone" = true ]; then
+      lev="$(printf '%s' "$lcur" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end' 2>/dev/null)"
+      lts="$(printf '%s' "$lcur" | jq -r '.lastTs // "?"' 2>/dev/null)"
+      { printf 'cc-backlog claim: REFUSED verdict=done-latched — %s is DONE (last transition %s)\n' "$id" "$lts"
+        printf '  evidence: %s\n' "$lev"
+        printf '  Claiming completed work spawns a worker onto what already landed. A pull-time\n'
+        printf '  filter cannot prevent this: the landing can happen AFTER the snapshot and BEFORE\n'
+        printf '  the claim (measured 2026-08-05, item 5690b9d11bee — done 20:20:52Z, claimed\n'
+        printf '  20:26:15Z, one burned worker session).\n'
+        printf '  If the work genuinely regressed, re-open it deliberately — that clears the latch:\n'
+        printf '      cc-backlog reopen %s --force\n' "$id"
+        printf '  To take the claim WITHOUT clearing the latch:  cc-backlog claim %s --force\n' "$id"
+      } >&2
+      return 4
+    fi
+    # (4) LEASE (see THE CLAIM IS A LEASE in the header) — the acquire-side mirror of guard (2).
+    # Same oracle, same rc 4, same self/dead exemptions; the PREDICATE IS INVERTED on purpose.
     # `[ "$lby" != "$by" ]` keeps a re-claim by the SAME holder idempotent — a dispatcher retrying
     # its own claim is not contention, and cc-dispatch's rollback path depends on being able to
     # re-take what it released. An EMPTY `by` cannot be the incumbent (nothing to be live).

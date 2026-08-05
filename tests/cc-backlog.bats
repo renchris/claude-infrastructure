@@ -198,12 +198,96 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$(st_of "$id2")" = open ]
 }
 
-@test "--force is rejected on any event other than reopen (never silently ignored)" {
+@test "--force is rejected on any event other than reopen/claim (never silently ignored)" {
   guard_env
   id=$(bash "$CB" add --project /r --title T --source S)
   run bash "$CB" done "$id" --evidence ref:1 --force
   [ "$status" -eq 2 ]
   echo "$output" | grep -q -- '--force'
+  run bash "$CB" block "$id" --needs "operator: x" --force
+  [ "$status" -eq 2 ]
+}
+
+# ── claim done-guard: THE ACTUATOR IS THE ARBITER (backlog dadc3c2410aa, measured 2026-08-05) ────
+# cc-dispatch's `wasDone` filter is PULL-TIME: it snapshots at step 1 and claims at step 5, with a
+# 7-45 s wave-plan plus an admission tail in between. A `done` landing inside that gap is invisible
+# to the snapshot, so the claim fires against stale truth — item 5690b9d11bee recorded done at
+# 20:20:52Z and claim at 20:26:15Z on the SAME id, and the spawned worker burned a whole session
+# re-doing landed work. A second pull-time re-check would only narrow the window; folding the
+# predicate into the transition that TAKES the claim is what closes it for every caller.
+
+@test "claim of a DONE-LATCHED item is REFUSED (rc 4), appends NOTHING, leaves the item alone" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence "e9cabc46 the fix" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" claim "$id" --by "$HOST-$$"
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'done-latched'
+  echo "$output" | grep -q 'e9cabc46'          # the refusal SHOWS what already landed
+  echo "$output" | grep -q -- '--force'        # …and names the deliberate override
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # append-only ledger untouched
+  [ "$(st_of "$id")" = "done" ]                  # NOT flipped to claimed — the 2026-08-05 bug
+}
+
+@test "the guard keys on the LATCH, not on status: a hand-reopened done item folds OPEN and is still refused" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence ref:1 >/dev/null
+  # a hand-appended UNFORCED reopen (bypassing the CLI guard) — status goes back to "open", which is
+  # cc-dispatch's exact fire predicate, while the latch stays set. A `status == "done"` check would
+  # wave this straight through; `wasDone` is what catches it.
+  printf '{"id":"%s","ts":"2026-08-05T09:00:00Z","event":"reopen"}\n' "$id" >> "$CC_BACKLOG_FILE"
+  [ "$(st_of "$id")" = open ]
+  run bash "$CB" claim "$id" --by "$HOST-$$"
+  [ "$status" -eq 4 ]
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "claim --force DOES claim a done-latched item, is auditable, and does NOT clear the latch" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence ref:1 >/dev/null
+  run bash "$CB" claim "$id" --by "$HOST-$$" --force
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = claimed ]
+  tail -1 "$CC_BACKLOG_FILE" | jq -e '.event=="claim" and .force==true'   # the override is auditable
+  # a forced CLAIM must not become a back door that re-opens the dispatch wave for landed work:
+  # only `reopen --force` clears the latch, so the item is still guarded everywhere else.
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|.wasDone==true'
+}
+
+@test "a forced reopen clears the latch, so the claim is allowed again (the documented recovery)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence ref:1 >/dev/null
+  bash "$CB" reopen "$id" --force >/dev/null
+  run bash "$CB" claim "$id" --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = claimed ]
+}
+
+@test "claim of an ordinary open item is untouched by the guard (the non-vacuity control)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" claim "$id" --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = claimed ]
+  # …and the SAME holder re-claiming is still idempotent — the lease's self-claim exemption, which
+  # cc-dispatch's rollback path depends on. The done-guard runs BEFORE the lease and must not have
+  # shadowed it: a not-latched item has to reach the lease's predicate untouched.
+  run bash "$CB" claim "$id" --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+}
+
+@test "the done-guard does not shadow the LEASE: a live foreign re-claim is still refused as a lease" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null          # $$ is alive
+  run bash "$CB" claim "$id" --by "$HOST-1"                  # foreign claimer, incumbent LIVE
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'already claimed'                # the LEASE's words, not the latch's
+  refute_imatch "$output" 'done-latched'                     # …and the two verdicts stay distinct
 }
 
 @test "add on a DONE event-key WARNS loud but still echoes the id with rc 0 (cc-discover contract)" {

@@ -644,6 +644,15 @@ dispatch() { # <dry|run|decide>
   # repo could not be resolved, which under a bare launchd PATH/cwd is the common case, not the
   # rare one; fail-silent-open is precisely what this spine forbids. The prior `evidence` rides the
   # skip record instead, so a human content-verifies from the surfaced sha.
+  #
+  # THIS FILTER IS PULL-TIME, AND PULL-TIME IS NOT ENOUGH ON ITS OWN. It reads a snapshot here and
+  # the claim is taken at step 5a, 7-45 s of wave-plan plus an admission tail later; a `done` that
+  # lands inside that gap is invisible to this jq and the claim fires against stale truth (measured
+  # 2026-08-05 on item 5690b9d11bee — claimed 5 m 23 s after its own `done`). The window is closed
+  # at the ACTUATOR: `cc-backlog claim` refuses a `wasDone` item outright (rc 4), which step 5a
+  # branches on. This filter stays because it is the CHEAP fence — it keeps a done-latched item out
+  # of the wave-plan call and out of a quota placement entirely, which the actuator guard, firing
+  # after both, cannot do.
   guarded="$(     printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone == true) ]')"
   dispatchable="$(printf '%s' "$open_items" | jq -c '[ .[] | select(.wasDone != true) ]')"
   gcount="$(printf '%s' "$guarded"      | jq 'length' 2>/dev/null || echo 0)"
@@ -933,10 +942,22 @@ dispatch() { # <dry|run|decide>
       FAILED=$((FAILED + 1)); idl failed "$id: empty/invalid fire_line"; continue
     fi
 
-    # a. claim — THE LEASE. A refusal here (rc 4) is the system WORKING: another worker already
-    # holds this item and cc-backlog declined to mint a second one onto it. That must be
-    # distinguishable in the journal from a broken ledger or an unknown id, else healthy contention
-    # reads as breakage — the same un-evidenced-verdict defect the spawn capture below exists to fix.
+    # a. claim — THE ACTUATOR IS THE ARBITER, for two distinct predicates it owns and this caller
+    # must not re-implement. A refusal (rc 4) is the system WORKING, never a malfunction, but the
+    # two causes need OPPOSITE journalling, so the verdict token on line 1 discriminates them:
+    #
+    #   verdict=done-latched — the item LANDED between step 1b's snapshot and this claim, inside the
+    #     7-45 s wave-plan plus the admission tail. A race the puller cannot win: a second pull-time
+    #     re-check would only shrink the read→append gap, never close it (backlog dadc3c2410aa;
+    #     measured on 5690b9d11bee, claimed 5 m 23 s after its own `done`, one burned worker
+    #     session). Recorded as a SKIP — the work is finished, the guard held, no human is needed,
+    #     and counting it `failed` would feed thrash_map a fault record for a correct refusal.
+    #   anything else — THE LEASE: another worker already holds this item and cc-backlog declined to
+    #     mint a second onto it. Kept as a FAILURE with its excerpt, as landed: that must stay
+    #     distinguishable from a broken ledger or an unknown id, else healthy contention reads as
+    #     breakage — the same un-evidenced-verdict defect the spawn capture below exists to fix.
+    #
+    # Neither path rolls back: a REFUSED claim appends nothing, so the item is exactly as it was.
     local cerrf crc cexc
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
     if [ -n "$cerrf" ]; then "$backlog" claim "$id" --by "$SID" >/dev/null 2>"$cerrf"; crc=$?
@@ -944,6 +965,12 @@ dispatch() { # <dry|run|decide>
     fi
     cexc="$(claim_excerpt "$cerrf")"
     [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
+    if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=done-latched}" != "$cexc" ]; then
+      echo "cc-dispatch: skipped $id — landed during this pass's admission tail (claim refused)" >&2
+      SKIPPED=$((SKIPPED + 1))
+      idl skipped "$id: already done — claim REFUSED at the actuator (landed after the step-1 snapshot)${cexc:+ — $cexc} — re-dispatch needs \`cc-backlog reopen $id --force\`"
+      continue
+    fi
     if [ "$crc" -ne 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
     fi
@@ -1053,7 +1080,16 @@ case "\$1" in
         else jq -cn --argjson n "\${STUB_LIVE:-0}" '[range(\$n) | {id:"c\(.)", status:"claimed"}]'; fi ;;
       *)  cat "$tmp/items.json" ;;
     esac ;;
-  claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
+  claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2"
+         # REFUSAL seam. \$STUB_CLAIM_RC is the exit code; \$STUB_CLAIM_VERDICT is the LINE-1 stderr
+         # the dispatcher discriminates on, because rc 4 has two causes with opposite journalling
+         # (done-latch ⇒ skip, lease ⇒ failed). Emitted in the real verb's shape — verdict token
+         # first, prose after — so the cases exercise the parse and not just the rc. The attempt is
+         # logged either way, so a case can tell "tried and was refused" from "never asked".
+         [ -n "\${STUB_CLAIM_VERDICT:-}" ] && \\
+           printf 'cc-backlog claim: REFUSED %s — \$2 stub refusal\\n  second line, must not be read\\n' \\
+             "\$STUB_CLAIM_VERDICT" >&2
+         exit "\${STUB_CLAIM_RC:-0}" ;;
   reopen)printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
   done)  printf 'done %s %s\n' "\$2" "\$4" >> "$tmp/backlog.log"; echo "\$2" ;;
 esac
@@ -1094,7 +1130,7 @@ STUB
   CC_DISPATCH_FINDPLAN_BIN="$(cd "$(dirname "$SELF")/../scripts" 2>/dev/null && pwd)/find-plan.sh"
   export CC_DISPATCH_PREMISE_GATE=on CC_DISPATCH_FINDPLAN_BIN
   seed_plandoc() { printf -- '---\nstatus: %s\nrow: 99\n---\n# fixture\n' "$2" > "$tmp/$1"; }
-  unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_LIST_ALL_RC
+  unset STUB_WP_RC STUB_SPAWN_RC STUB_LIVE STUB_LIST_ALL_RC STUB_CLAIM_RC
 
   # wave.json is removed too: its ABSENCE is the observable for "made zero wave-plan calls", and a
   # leftover from the previous case would make that assertion vacuously false (or vacuously true).
@@ -1157,6 +1193,55 @@ STUB
   t "(m) mixed wave → the un-done item IS claimed"     grep -qx 'claim i2' "$tmp/backlog.log"
   t "(m) mixed wave → the done-latched item is NOT claimed" not grep -qx 'claim i1' "$tmp/backlog.log"
   t "(m) mixed wave → exactly 1 spawn"                 test "$(grep -c . "$tmp/spawn.log")" -eq 1
+
+  # (m2) THE ACTUATOR IS THE ARBITER (backlog dadc3c2410aa). The item is clean at step 1b — no
+  # `wasDone` in the snapshot — so it passes the pull-time filter, reaches the planner and gets a
+  # placement. It lands DURING the admission tail, which the pull cannot see, and `cc-backlog claim`
+  # refuses it with rc 4. This is the ONE fixture the step-1b filter cannot produce: (l) and (m)
+  # both seed `wasDone:true` and never reach the claim at all, so neither says anything about what
+  # the dispatcher does with a refusal. Discriminating observable = the VERDICT: skipped, never
+  # failed, and no spawn. RED-proof: delete the rc-4 done-latch branch and the `crc -ne 0` arm takes
+  # it → failed:1 / skipped:0.
+  reset; unset STUB_CLAIM_RC STUB_CLAIM_VERDICT
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  STUB_CLAIM_RC=4 STUB_CLAIM_VERDICT=verdict=done-latched "$SELF" --once >/dev/null 2>&1
+  t "(m2) claim REFUSED done-latched → ZERO spawn (no burned session)" test ! -s "$tmp/spawn.log"
+  t "(m2) claim REFUSED done-latched → the claim WAS attempted"        grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(m2) claim REFUSED done-latched → counted SKIPPED, not failed"    test "$(last '.skipped')" = 1
+  t "(m2) claim REFUSED done-latched → failed stays 0"                 test "$(last '.failed')" = 0
+  t "(m2) claim REFUSED done-latched → IDL skipped names the override" grep -q 'reopen i1 --force' "$tmp/idl.jsonl"
+  t "(m2) claim REFUSED done-latched → and carries the refusal's own line 1" \
+      grep -q 'verdict=done-latched' "$tmp/idl.jsonl"
+  t "(m2) claim REFUSED done-latched → NO rollback reopen (nothing was appended to roll back)" \
+      not grep -qx 'reopen i1' "$tmp/backlog.log"
+
+  # (m2b) THE DISCRIMINATOR, not the rc. rc 4 has TWO causes and they journal OPPOSITELY: a LEASE
+  # refusal (another live worker holds the item) keeps its landed FAILED classification, because
+  # that must stay distinguishable from a broken ledger. Same exit code as (m2), different line 1 —
+  # so this pair is what proves the branch reads the VERDICT and not merely `crc -eq 4`. Without it,
+  # rewriting the condition to a bare `[ "$crc" -eq 4 ]` would stay fully green while silently
+  # reclassifying every lease refusal on the box.
+  reset; unset STUB_CLAIM_RC STUB_CLAIM_VERDICT
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  STUB_CLAIM_RC=4 STUB_CLAIM_VERDICT="— i1 is already claimed by peer-9, which is LIVE" \
+    "$SELF" --once >/dev/null 2>&1
+  t "(m2b) LEASE refusal (same rc 4) → still FAILED, not skipped" test "$(last '.failed')" = 1
+  t "(m2b) LEASE refusal → skipped stays 0"                       test "$(last '.skipped')" = 0
+  t "(m2b) LEASE refusal → the record names rc + the excerpt"     grep -q 'claim rc=4 — .*already claimed by peer-9' "$tmp/idl.jsonl"
+  t "(m2b) LEASE refusal → ZERO spawn"                            test ! -s "$tmp/spawn.log"
+
+  # (m3) …and the new branch did not swallow ORDINARY claim failures: any non-4 rc is still a
+  # FAILURE, with the rc named in the record (§1(c)/R3 — a verdict must name its cause).
+  reset; unset STUB_CLAIM_RC STUB_CLAIM_VERDICT
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  STUB_CLAIM_RC=1 "$SELF" --once >/dev/null 2>&1
+  t "(m3) claim rc 1 → still FAILED, not skipped"  test "$(last '.failed')" = 1
+  t "(m3) claim rc 1 → skipped stays 0"            test "$(last '.skipped')" = 0
+  t "(m3) claim rc 1 → the record names the rc"    grep -q 'claim rc=1' "$tmp/idl.jsonl"
+  unset STUB_CLAIM_RC STUB_CLAIM_VERDICT
 
   # (v) STALE-PREMISE GUARD. A `plan-open` item is a SNAPSHOT of "this plan was open at discovery";
   # when the plan lands, nothing re-reads it and the wave burns a worker re-deriving finished work
