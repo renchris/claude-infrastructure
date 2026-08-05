@@ -97,6 +97,30 @@ pane — that's YOUR tab (off-by-one); always create a fresh window. Protect you
 `${ITERM_SESSION_ID##*:}` before any bulk pane-close (`~/.claude/bin/it2 session close -f -s <id>` is the
 modal-free close, but it does NOT reap the process — `kill` surviving `claude … --resume` PIDs too).
 
+**Layout on kitty — split panes anchored to the CALLING pane, never "wherever kitty is focused".**
+A bare `kitty @ launch --location=vsplit` places the new pane relative to kitty's INSTANCE-WIDE
+active tab (whichever tab was focused most recently, across every OS window) — not the tab
+containing the pane that issued the command. Measured 2026-08-05: three crash-recovery resumes,
+launched from a Bash tool call whose own pane was the intended anchor, landed in an unrelated OS
+window instead, twice over (once from misidentifying the caller's own window id, once from
+trusting kitty's active-tab default at all) — each needed a manual `kitty @ detach-window
+--target-tab` to relocate. **Use `bin/kitty-split-launch.sh` instead of a raw `kitty @ launch`** —
+it anchors the split to `$KITTY_WINDOW_ID` (the calling pane) by default via
+`--match "window_id:<anchor>" --next-to "id:<anchor>"` (the same pattern `bin/it2-kitty` already
+uses for Agent Teams teammate panes, which is why that path never hit this bug), and accepts
+`--anchor <window-id>` to direct a resume at a DIFFERENT pane/window on request — "direct them to
+other windows as needed" is the explicit override, not a restriction the default creates. Chain
+further splits by passing the previous call's printed window id as the next `--anchor`, which is
+how several resumed sessions stack into one column beside you. To relocate an ALREADY-RUNNING
+pane after the fact (not at launch time), `kitty @ detach-window --match id:<id> --target-tab
+id:<any-window-in-target-tab>` moves it live without killing the process — or right-click
+(cmd+right) the pane for the same menu, point-and-click (`bin/kitty-pane-menu`, config/kitty.conf
+§6c — iTerm2-parity "Move Session to…").
+Verify your OWN window id from `$KITTY_WINDOW_ID` directly — do NOT infer "which pane is me" from
+`kitty @ ls`'s `is_focused` flag, which tracks kitty's UI focus and can point at an unrelated pane
+someone last clicked, not the pane actually running your shell (this is exactly the
+misidentification bug above).
+
 ## Phase 3 — Un-stick after /compact (the #1 symptom)
 
 Resume-from-summary runs `/compact`, then leaves each session **idle** (empty box, or `^[[<35;…M` /

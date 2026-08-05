@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""kitty-pane-menu — iTerm2-parity "Move Session to…" via right-click, for kitty.
+
+WHY THIS EXISTS
+    iTerm2's session right-click menu offers "Move Session to Split Pane" / "Move Session to
+    Window" — point-and-click relocation, no drag required. kitty has no built-in equivalent:
+    its own right-click is a single fixed action (paste_from_selection), and there is no config
+    option that turns it into a menu. So the menu is built the same way kitty-confirm-close builds
+    its dialog — outside kitty entirely, as a native macOS "choose from list" driven over the
+    remote-control socket — bound in place of the default right-click.
+
+WHY cmd+right, NOT PLAIN right-click
+    Most panes on this box run Claude Code, which enables mouse reporting — kitty's default
+    right-click mapping is `ungrabbed`-only, so inside a live session the click is delivered to
+    the app, never to kitty (same root cause as the cmd+left link fix in kitty.conf §6b: "DOES
+    NOTHING" is the grabbed-mouse case, not a broken handler). cmd+right is bound
+    `grabbed,ungrabbed` so it fires everywhere, mirrors the already-verified-free cmd+left, and
+    leaves kitty's own plain-right-click paste intact for the panes where it still works.
+
+WHAT THE MENU OFFERS (and where it routes)
+    Paste                       kitty @ action paste_from_selection  — parity with the binding
+                                 this replaces, so nothing is lost by adding the rest.
+    Move to New Window           kitty @ detach-window (no --target-tab -> new OS window; this is
+                                 kitty's own documented behaviour for an unspecified target).
+    Move to Window N — desc     kitty @ detach-window --target-tab id:<repr-window-of-that-tab>
+                                 for every OTHER os-window's active tab. --match on `id:` falls
+                                 back from tab to the window's OWNING tab (kitty docs), so a
+                                 representative window id is enough to name the tab.
+    Close Pane                   shells out to kitty-confirm-close (same busy-check + native
+                                 dialog as ⌘W — this menu must not open a SECOND, weaker close
+                                 path next to the one that already protects live Claude sessions).
+
+    Split Right / Split Below are deliberately NOT offered here: cmd+d / cmd+shift+d already do
+    this in one keystroke, and duplicating them in the menu is a second place for that binding to
+    drift out of sync with the real one.
+
+SOCKET PLUMBING is copied verbatim from kitty-confirm-close: a `--type=background` launch does
+    not inherit KITTY_LISTEN_ON (measured), so the socket is re-derived from PPID instead.
+
+WHY --self IS NOT ENOUGH FOR "MOVE TO WINDOW N"
+    `kitty @ launch --self` anchors a NEW split to the calling pane's TAB — proven fix for the
+    2026-08-05 crash-recovery bug (resumed sessions landing in kitty's globally-active tab instead
+    of the caller's). `detach-window --target-tab` solves the DIFFERENT problem this menu exists
+    for: relocating an EXISTING pane to an ARBITRARY other tab, which --self cannot express (it
+    only ever means "my own tab"). Two different anchors for two different operations — see
+    bin/kitty-split-launch.sh for the --self-based one.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
+
+
+def socket_address() -> str | None:
+    env = os.environ.get("KITTY_LISTEN_ON", "")
+    if env and not env.startswith("fd:"):
+        return env
+
+    def sock(path: str) -> str | None:
+        try:
+            import stat
+
+            if stat.S_ISSOCK(os.stat(path).st_mode):
+                return f"unix:{path}"
+        except OSError:
+            pass
+        return None
+
+    found = sock(f"/tmp/kitty-{os.getppid()}")
+    if found:
+        return found
+
+    import glob
+
+    candidates = [
+        p for p in glob.glob("/tmp/kitty-*") if p.rsplit("-", 1)[-1].isdigit() and sock(p)
+    ]
+    return sock(candidates[0]) if len(candidates) == 1 else None
+
+
+ADDRESS = socket_address()
+
+
+def kitty(*args: str) -> subprocess.CompletedProcess:
+    cmd = ["kitty", "@", *args]
+    if ADDRESS:
+        cmd += ["--to", ADDRESS]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def load(*match: str) -> list:
+    r = kitty("ls", *match)
+    if r.returncode != 0 or not r.stdout.strip():
+        return []
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def focused_window_id(tree: list) -> int | None:
+    # Same two-pass fallback as kitty-confirm-close: `recent:0` is kitty's own answer for "the
+    # window that was just focused" (the click focuses its window before the mapping runs), the
+    # full-tree is_focused/is_active scan is the backstop when kitty is not the frontmost app.
+    for src in (load("--match", "recent:0"), tree):
+        for osw in src:
+            for tab in osw.get("tabs", []):
+                for w in tab.get("windows", []):
+                    if w.get("is_focused"):
+                        return w["id"]
+        for osw in src:
+            if src is tree and not osw.get("is_active"):
+                continue
+            for tab in osw.get("tabs", []):
+                for w in tab.get("windows", []):
+                    if w.get("is_active"):
+                        return w["id"]
+    return None
+
+
+def owning_os_window_id(tree: list, wid: int) -> int | None:
+    for osw in tree:
+        for tab in osw.get("tabs", []):
+            for w in tab.get("windows", []):
+                if w["id"] == wid:
+                    return osw["id"]
+    return None
+
+
+def describe_window(w: dict) -> str:
+    cwd = w.get("cwd") or ""
+    base = os.path.basename(cwd.rstrip("/")) or cwd
+    procs = []
+    for p in w.get("foreground_processes", []):
+        cmd = p.get("cmdline") or []
+        tokens = [t for el in cmd for t in str(el).split()]
+        for tok in tokens:
+            if tok.startswith("-"):
+                continue
+            nm = os.path.basename(tok)
+            if nm and nm not in ("bash", "sh", "zsh", "env", "tee") and not nm.startswith("cc-"):
+                procs.append(nm)
+                break
+    tag = procs[-1] if procs else ""
+    return f"{base} ({tag})" if tag else base
+
+
+def other_targets(tree: list, self_osw_id: int) -> list[tuple[int, str]]:
+    """One entry per OTHER os-window, naming a representative window id in its active tab."""
+    out: list[tuple[int, str]] = []
+    for osw in tree:
+        if osw["id"] == self_osw_id:
+            continue
+        tabs = osw.get("tabs", [])
+        tab = next((t for t in tabs if t.get("is_focused")), tabs[0] if tabs else None)
+        if not tab or not tab.get("windows"):
+            continue
+        wins = tab["windows"]
+        repr_w = next((w for w in wins if w.get("is_focused") or w.get("is_active")), wins[0])
+        label = describe_window(repr_w)
+        if len(wins) > 1:
+            label += f" +{len(wins) - 1}"
+        out.append((repr_w["id"], f"Move to Window {osw['id']} — {label}"))
+    return out
+
+
+def choose(items: list[str]) -> str | None:
+    applescript_list = ", ".join(
+        '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"' for s in items
+    )
+    script = (
+        'tell application "kitty" to activate\n'
+        f'set r to (choose from list {{{applescript_list}}} '
+        'with title "kitty" with prompt "Move pane to…")\n'
+        'if r is false then return ""\n'
+        "return item 1 of r"
+    )
+    r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    out = r.stdout.strip()
+    return out or None
+
+
+def refocus() -> None:
+    subprocess.run(["osascript", "-e", 'tell application "kitty" to activate'], capture_output=True)
+
+
+def main() -> int:
+    tree = load()
+    if not tree:
+        print(f"kitty-pane-menu: no reply from kitty (address={ADDRESS})", file=sys.stderr)
+        return 3
+
+    wid = focused_window_id(tree)
+    if wid is None:
+        print("kitty-pane-menu: no focused window — refusing to guess", file=sys.stderr)
+        return 0
+
+    self_osw = owning_os_window_id(tree, wid)
+    targets = other_targets(tree, self_osw) if self_osw is not None else []
+
+    items = ["Paste", "Move to New Window"] + [label for _, label in targets] + ["Close Pane"]
+    choice = choose(items)
+    if not choice:
+        return 0  # cancelled
+
+    if choice == "Paste":
+        kitty("action", "--match", f"id:{wid}", "paste_from_selection")
+    elif choice == "Move to New Window":
+        kitty("detach-window", "--match", f"id:{wid}")
+    elif choice == "Close Pane":
+        subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window"])
+    else:
+        for target_wid, label in targets:
+            if label == choice:
+                kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_wid}")
+                break
+
+    refocus()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -112,7 +112,7 @@ fi
 if [ "$MODE" = undo ]; then
   hdr "reverting"
   [ -L "$KCONF_DIR/kitty.conf" ] && { rm -f "$KCONF_DIR/kitty.conf"; ok "removed kitty.conf symlink"; }
-  for f in it2-kitty cc-term kitty-split-cwd.sh; do
+  for f in it2-kitty cc-term kitty-split-cwd.sh cc-in-kitty kitty-confirm-close kitty-pane-menu kitty-split-launch.sh; do
     [ -L "$BIN_DIR/$f" ] && { rm -f "$BIN_DIR/$f"; ok "removed $BIN_DIR/$f"; }
   done
   if grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
@@ -174,6 +174,15 @@ if [ "$MODE" = apply ]; then
   # seam and install.sh already deploys it; because its iterm2 driver shells out to
   # $HOME/.claude/bin/it2, the divert above makes cc-pane work on kitty with no kitty driver.
   # An earlier draft linked a second adapter here and would have dangled on a fresh clone.
+  #
+  # kitty.conf's ⌘W / ⌃⇧W / ⌘⇧W and cmd+right bindings name these three as the programs they
+  # launch — same "missing link = the binding cannot fire at all" stakes as kitty-split-cwd.sh
+  # above. kitty-confirm-close predates this list (added 2026-08-04, wired by hand — never added
+  # here, so a fresh `--undo` then `--apply` cycle would have silently dropped ⌘W's guard); folded
+  # in now rather than left as a second undocumented gap next to the two new files.
+  ln -sfn "$REPO/bin/kitty-confirm-close" "$BIN_DIR/kitty-confirm-close"
+  ln -sfn "$REPO/bin/kitty-pane-menu" "$BIN_DIR/kitty-pane-menu"
+  ln -sfn "$REPO/bin/kitty-split-launch.sh" "$BIN_DIR/kitty-split-launch.sh"
 fi
 grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
   && ok "$BIN_DIR/it2 carries the kitty divert" || no "$BIN_DIR/it2 has no kitty divert"
@@ -182,6 +191,12 @@ grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
 # cmd+D breaks. Reported here rather than under step 1 because the link, not the conf, is the artifact.
 [ -x "$BIN_DIR/kitty-split-cwd.sh" ] && ok "kitty-split-cwd.sh deployed (cmd+D lands in the main checkout)" \
                                      || no "kitty-split-cwd.sh missing at $BIN_DIR — cmd+D cannot open a split"
+[ -x "$BIN_DIR/kitty-confirm-close" ] && ok "kitty-confirm-close deployed (cmd+W guards live sessions)" \
+                                       || no "kitty-confirm-close missing at $BIN_DIR — cmd+W kills panes with no prompt"
+[ -x "$BIN_DIR/kitty-pane-menu" ] && ok "kitty-pane-menu deployed (cmd+right = Move Session to…)" \
+                                   || no "kitty-pane-menu missing at $BIN_DIR — cmd+right cannot open the move menu"
+[ -x "$BIN_DIR/kitty-split-launch.sh" ] && ok "kitty-split-launch.sh deployed (anchored splits for resume/handoff)" \
+                                         || no "kitty-split-launch.sh missing at $BIN_DIR"
 # The wrapper is a COPY (refreshed only by this script or install.sh) while it2-kitty is a SYMLINK
 # that tracks the repo live, so the two halves CAN skew. Assert the copy is a version that verifies
 # the terminal before diverting — a stale copy still diverts on $KITTY_WINDOW_ID alone, which is
