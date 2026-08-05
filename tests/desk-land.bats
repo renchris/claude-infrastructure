@@ -16,7 +16,7 @@ setup() {
   git init -q --bare "$ORIGIN"
   git clone -q "$ORIGIN" "$MAIN"
   (
-    cd "$MAIN"
+    cd "$MAIN" || exit 1
     git config user.email t@e.com; git config user.name tester
     git checkout -q -b main
     mkdir -p scripts
