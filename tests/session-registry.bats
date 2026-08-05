@@ -7,6 +7,12 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # Rule-2 pin (scripts/test-hermeticity-lint.sh). This suite drives no fire — it is in scope only
+  # because `references_fire()` greps the whole file for the literal `handoff-fire`, and a comment
+  # below names it as the writer of provisional rows. Pinning is the lint's prescribed fix and is
+  # inert here; rewording the comment to fall out of scope would be evading the ratchet, and it
+  # would leave the suite unpinned if it ever does reach the fire.
+  export CC_FIRE_CAPACITY_GATE=off
   REG="$REPO/hooks/session-register.sh"
   DEREG="$REPO/hooks/session-deregister.sh"
   CCS="$REPO/bin/cc-sessions"
