@@ -469,6 +469,24 @@ hf_bounded() {
 # some sibling suite asserts on.
 in_kitty() { { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; } || { command -v kitty_headless >/dev/null 2>&1 && kitty_headless; }; }
 
+# IDENTITY vs DIVERT — two questions that only look like one, and conflating them cost stage 1 of
+# item 191d1fc4143c. in_kitty() above mirrors the DIVERT decision and is textually pinned across four
+# files (tests/handoff-fire-kitty.bats, tests/kitty-divert-real-it2.bats); it must not change shape.
+# But "which backend do I address this pane through" and "which terminal actually OWNS this pane"
+# are different questions, and the env var answers only the first. KITTY_* inherits transitively and
+# permanently (bin/cc-in-kitty's header), so on a box where an iTerm2.app was ever launched from a
+# kitty pane, in_kitty() is TRUE inside genuine iTerm2 panes — measured on this box 2026-08-05:
+# KITTY_WINDOW_ID=2 / KITTY_PID=567 inherited, no kitty anywhere in the ancestry. _as_tty_query then
+# took the kitty branch, asked kitty's NUMERIC id space for an iTerm2 UUID, matched nothing, and
+# returned "pane genuinely absent" — which is `tty=none` on self-close and an outright
+# "session not found in iTerm2" abort on --recycle.
+#
+# So identity honours the ANCESTRY verdict when one has been resolved, through cc-in-kitty's own
+# documented CC_TERM seam — the same seam pin_term_verdict_for_watcher already hands to the detached
+# watcher, and for the same reason: resolve it where the walk is valid, then pass it down. Unpinned,
+# this is in_kitty() exactly, so every caller that never pins keeps today's behaviour byte-for-byte.
+kitty_identity() { case "${CC_TERM:-}" in kitty) return 0 ;; ?*) return 1 ;; esac; in_kitty; }
+
 # Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
 # Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
 # green where a human tests it, dead where it runs. That is what left a teammate pane open for 3h09m
@@ -703,7 +721,9 @@ _as_tty_query() { # $1=session-uuid → tty on stdout; non-zero when the query i
       return 1
     fi
   fi
-  if in_kitty; then
+  if kitty_identity; then
+    # IDENTITY, not divert (see kitty_identity's header): this branch decides which id SPACE the
+    # pane lives in, and a stale inherited KITTY_WINDOW_ID must not be allowed to choose it.
     # kitty exposes no tty for a window, only the pid of the process it launched — so resolve
     # id → pid via `kitty @ ls`, then pid → tty via ps, and re-attach the /dev prefix that iTerm2's
     # `tty of s` already carries (callers `basename` it: :917, :2597).
@@ -779,14 +799,27 @@ await_armed() { # $1=logfile → 0 once armed, 1 on timeout
 # The watcher now probes the pane over the REAL transport and records a verdict; nothing is killed
 # until that verdict is affirmative. Timeout and explicit-unreachable share a disposition (do NOT
 # kill) but not a log line, because they have different fixes.
-await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 unreachable-or-timeout
-  local n=0
-  while [ "$n" -lt 60 ]; do
+#
+# THREE outcomes, not two (item 191d1fc4143c). This used to fold "the watcher says the pane is
+# unreachable" and "the watcher has not answered yet" into one rc, and that is precisely why the
+# defect below was misdiagnosed twice: a FAILED probe and a SLOW probe were the same silent
+# timeout with no proof line, so every investigation started from the wrong half. They share a
+# disposition (do NOT kill) but not a diagnosis, so they no longer share an exit code.
+#
+# And the window is DERIVED from the watcher's own bound rather than guessed. The old fixed 60
+# ticks = 12s while the watcher's probe is bounded at HF_TIMEOUT_S (10s) plus timeout(1)'s -k 3
+# kill grace = 13s worst case: an honest-but-slow probe was GUARANTEED to be read as failure,
+# with the verdict landing in the log ~1s after the foreground had already given up on it. A
+# bound that cannot fit what it bounds can only ever convict (memory: exoneration-bound-must-fit).
+await_pane_proof() { # $1=logfile → 0 pane-reachable, 1 explicitly unreachable, 2 NO verdict yet
+  local n=0 max
+  max="${HANDOFF_PANE_PROOF_TICKS:-$(( ( ${HF_TIMEOUT_S:-10} + 3 + 5 ) * 5 ))}"   # bound + kill-grace + slack
+  while [ "$n" -lt "$max" ]; do
     grep -q '^→ pane-reachable:'    "$1" 2>/dev/null && return 0
     grep -q '^!! pane-UNREACHABLE:' "$1" 2>/dev/null && return 1
     /bin/sleep 0.2; n=$((n+1))
   done
-  return 1
+  return 2
 }
 
 # Hand the FOREGROUND-verified terminal verdict down to the detached watcher.
@@ -830,21 +863,81 @@ pin_term_verdict_for_watcher() {
 # Two log lines, never one. The affirmative is what releases the kill; the negative is what an
 # operator reads when a pane did not come back, so it names the pane, the shim and the verdict that
 # produced the routing — the three facts the 2026-08-02 strand cost an hour for lack of.
+#
+# ── THE ORACLE MUST READ A MACHINE FORMAT (item 191d1fc4143c, measured 2026-08-05) ───────────────
+# This probe used to `grep -qxF "$pane"` the output of a bare `session list`. On the kitty transport
+# that is exactly right — bin/it2-kitty emits bare, FULL ids one per line, deliberately. On the
+# iTerm2 transport it can never be right at any terminal width: the real it2 renders that listing
+# through `rich`, as a box-drawn table whose Session ID column is ELLIPSIS-TRUNCATED to the 80
+# columns it assumes when stdout is a pipe (`208ADD40-B603-4690-8…`). bin/it2-kitty:512 already
+# documents this — the same truncation makes Claude Code's own `stdout.includes(<id>)` liveness test
+# read "dead" — but this probe, written later, string-matched the human table anyway. So a
+# whole-line match against a 36-char UUID could not succeed even against a pane that was RIGHT
+# THERE in the listing, and every self-close and every --recycle on iTerm2 refused permanently:
+#
+#   measured, detached, this box: rc=0, 3644 bytes, the pane's own id present as a substring,
+#   `grep -qxF` → NO MATCH → "!! pane-UNREACHABLE" → refuse. Every time, forever.
+#
+# One probe, two transports, and a fixture (bare integer ids) that matched only the transport that
+# worked — so the suite stayed green while the shipped path could not pass. The listing is now read
+# as `--json` (this repo's own contract: bin/cc-pane and bin/cc-notify both parse it that way, and
+# bin/it2-kitty implements it), ids are extracted exactly, and the BARE shape stays supported so the
+# kitty transport and every existing stub keep working. A rendered table is now NAMED as such rather
+# than silently returning "absent", because "no id matched" and "the output was never id-shaped" are
+# different failures with different fixes — the distinction this defect existed for lack of.
+#
+# The probe still goes over the REAL transport, unchanged in that respect: `session list` takes the
+# same shim the close/relaunch write will take, so it cannot be right about a route the write
+# resolves differently. Only the PARSE of its answer changed.
 pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachable (both logged)
-  local it2="$1" pane="$2" label="$3" out=""
+  local it2="$1" pane="$2" label="$3" out="" ids="" shape="" rc=0 n=0 err="" t0=0 dt=0
   if [ ! -x "$it2" ]; then
     echo "!! pane-UNREACHABLE: $label cannot probe pane $pane — no executable it2 shim at $it2"
     return 1
   fi
+  # TRANSPORT, logged BEFORE the call. The watcher is an orphan by construction (detach() sets
+  # start_new_session=True) and cannot re-derive its own terminal, so which backend it selected is
+  # exactly the fact an investigator needs and the one nothing recorded. This line is also how the
+  # foreground's pinned verdict is ASSERTED to have arrived: CC_TERM here is what the watcher got.
+  echo "→ pane-probe: $label pane=$pane it2=$it2 CC_TERM=${CC_TERM:-unset} KITTY_WINDOW_ID=${KITTY_WINDOW_ID:-unset} identity=$(kitty_identity && printf kitty || printf iterm2) bound=${HF_TIMEOUT_S:-unset}s"
+  # mktemp with TRAILING Xs only — BSD mktemp substitutes a trailing run, so an embedded template
+  # mints a CONSTANT name shared by every concurrent caller (memory: prescribed-remedy-worse).
+  err="$(mktemp "${TMPDIR:-/tmp}/handoff-pane-probe-err.XXXXXX" 2>/dev/null || printf '/tmp/handoff-pane-probe-err.%s' "$$")"
   # Bounded twice, deliberately: hf_bounded caps a wedged terminal API here, and await_pane_proof's
-  # own timeout caps the case where this function never returns at all. Both resolve to "do not
+  # own window caps the case where this function never returns at all. Both resolve to "do not
   # kill", which is the only safe direction for a probe that gates an irreversible act.
-  out="$(hf_bounded "$it2" session list 2>/dev/null || true)"
-  if printf '%s\n' "$out" | grep -qxF "$pane"; then
-    echo "→ pane-reachable: $pane enumerated by '$it2 session list' (CC_TERM=${CC_TERM:-unset})"
+  t0="$(date +%s)"
+  out="$(hf_bounded "$it2" session list --json 2>"$err")" || rc=$?
+  dt=$(( $(date +%s) - t0 ))
+  # JSON first; anything that yields no ids falls back to the bare shape. A rendered table yields
+  # neither, and is called by name — it is the failure that cost this item two misdiagnoses.
+  # `grep -o`, not `sed -n s///p`: sed's `.*` is greedy and matches to the LAST `"id"` ON THE LINE,
+  # so a COMPACT (single-line) array yields exactly one id — the last — and every other pane reads
+  # as absent. The real it2 pretty-prints, which is why that shape passed while a compact producer
+  # silently lost every id but one. grep -o takes all non-overlapping matches per line.
+  ids="$(printf '%s\n' "$out" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+  if [ -n "$ids" ]; then
+    shape=json
+  else
+    ids="$out"; shape=bare
+    case "$out" in *'│'*|*'┃'*|*'…'*) shape=RENDERED-TABLE ;; esac
+  fi
+  n="$(printf '%s\n' "$ids" | grep -c '[^[:space:]]' || true)"
+  echo "→ pane-probe: $label listing rc=$rc in ${dt}s shape=$shape ids=$n"
+  # The ACTUAL error, never discarded. `2>/dev/null` here is what made a failed transport and a slow
+  # one indistinguishable; a diagnostic that throws away the diagnosis leaves an operator staring at
+  # a healthy-looking terminal and a pane that will not close (bin/it2-kitty's own lesson, :517).
+  [ -s "$err" ] && echo "   ↳ probe stderr: $(tr '\n' ' ' < "$err" | cut -c1-400)"
+  rm -f "$err"
+  # No pipeline: `printf … | grep -q` lets grep exit on the match, SIGPIPEs the producer, and
+  # pipefail then promotes 141 — so the probe reads FALSE precisely WHEN IT MATCHES (memory:
+  # pipefail-inverts-early-exit-probe). A here-string has no producer to kill.
+  if grep -qxF -e "$pane" <<<"$ids"; then
+    echo "→ pane-reachable: $pane enumerated by '$it2 session list --json' (shape=$shape, CC_TERM=${CC_TERM:-unset})"
     return 0
   fi
-  echo "!! pane-UNREACHABLE: $label — pane $pane is NOT in '$it2 session list' (CC_TERM=${CC_TERM:-unset}). Every write to it would fail, so the predecessor is NOT being killed."
+  echo "!! pane-UNREACHABLE: $label — pane $pane is NOT among the $n id(s) '$it2 session list --json' enumerated (rc=$rc shape=$shape CC_TERM=${CC_TERM:-unset}). Every write to it would fail, so the predecessor is NOT being killed."
+  [ "$shape" = RENDERED-TABLE ] && echo "   ↳ the listing came back as a RENDERED TABLE, whose Session ID column is ellipsis-truncated — NO id can match it at any width, so this verdict is an artefact of the FORMAT, not evidence about the pane. '$it2' did not honour --json."
   return 1
 }
 
@@ -2120,6 +2213,14 @@ if [ "${1:-}" = "__selfclose" ]; then
                                                    # (positional-last + optional, so a deployed-copy
                                                    # skew mid-land simply ignores it)
   echo "→ armed: __selfclose pid=$$ sid=$SID tty=${TTY_PATH:-none} successor=${SUCCESSOR:-none} successor_tty=${SUCCESSOR_TTY:-none} successor_pin=${SUCCESSOR_PIN:-none}"
+  # THE PINNED VERDICT, ASSERTED ON ARRIVAL (item 191d1fc4143c). This watcher is an orphan by
+  # construction and cannot re-derive its own terminal — pin_term_verdict_for_watcher resolves that
+  # in the foreground and hands it down through the environment. Whether it actually ARRIVED was
+  # unobservable until now: a watcher running unpinned looks exactly like a watcher running pinned
+  # right up to the moment its pane writes go to the wrong backend. Record what we got, and say so
+  # when we got nothing (which is cc-in-kitty's exit 2, deliberately left unpinned — fail-closed,
+  # not a bug, but it must be legible rather than inferred).
+  echo "→ transport: __selfclose CC_TERM=${CC_TERM:-UNPINNED} KITTY_WINDOW_ID=${KITTY_WINDOW_ID:-unset} IT2_WRAPPER_NO_KITTY=${IT2_WRAPPER_NO_KITTY:-unset} identity=$(kitty_identity && printf kitty || printf iterm2) it2=$HOME/.claude/bin/it2"
   # Same proof as __recycle, same reason: every close/CR/focus this watcher performs goes through the
   # it2 shim, and an unreachable pane turns a close into the HUSK-PANE branch below — /exit typed, CC
   # gone, pane left at a shell prompt, which reads to the operator as exactly the crash this path
@@ -2906,6 +3007,13 @@ MSG
   # ORDER IS LOAD-BEARING: watcher FIRST, /exit LAST — a typed /exit INTERRUPTS the in-flight
   # turn and exits within seconds (E2E 2026-07-03; it does NOT enqueue-to-turn-end like /clear),
   # so in own-pane use the interrupt can kill this Bash tool at /exit+ε. Arm before typing.
+  # Resolve the terminal verdict BEFORE any pane→tty query, not just before the detach. as_tty
+  # branches on kitty_identity, which honours this pin — and on a box where KITTY_* was inherited
+  # into iTerm2 an unpinned query asks kitty's numeric id space for an iTerm2 UUID and reports the
+  # pane ABSENT (`tty=none`, and an outright abort on --recycle). Idempotent and already called
+  # again below; calling it here is what makes the ancestry walk govern identity too, not only the
+  # watcher's routing. (stage 1 of item 191d1fc4143c)
+  pin_term_verdict_for_watcher
   SC_TTY="$(as_tty "$SC_SID")"
   if [ -n "$SC_TTY" ] && ! ps -o comm= -t "$(basename "$SC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
     # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
@@ -2922,9 +3030,17 @@ MSG
       exit 1
     fi
     # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
-    if ! await_pane_proof "$SC_LOG"; then
+    # Both non-zero outcomes refuse; they do NOT share a message. "The probe answered NO" and "the
+    # probe has not answered" send an investigator to different places, and folding them is what
+    # made this failure unreadable twice (item 191d1fc4143c).
+    SC_PP=0; await_pane_proof "$SC_LOG" || SC_PP=$?
+    if [ "$SC_PP" != 0 ]; then
       kill "$SC_WATCHER" 2>/dev/null || true
-      echo "!! self-close ABORTED: the watcher cannot write pane $SC_SID (see $SC_LOG) — /exit NOT typed, session stays alive" >&2
+      if [ "$SC_PP" = 2 ]; then
+        echo "!! self-close ABORTED: the watcher returned NO pane verdict for $SC_SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $SC_LOG names the transport it selected. /exit NOT typed, session stays alive" >&2
+      else
+        echo "!! self-close ABORTED: the watcher cannot write pane $SC_SID (see $SC_LOG) — /exit NOT typed, session stays alive" >&2
+      fi
       exit 1
     fi
     echo "→ self-close armed for $SC_SID: watcher pid $SC_WATCHER session-detached, heartbeat verified (log: $SC_LOG)"
@@ -4516,6 +4632,10 @@ recycle_fire() {
     || { echo "!! recycle: could not mint a watcher log in a secure temp dir" >&2; exit 1; }
   mv "$log" "$log.log" && log="$log.log"
   printf '%s\n' "$CMD" > "$cmdfile"
+  # Same reason as the self-close arm: pin the ANCESTRY verdict before the pane→tty query, or a
+  # stale inherited KITTY_WINDOW_ID sends an iTerm2 UUID into kitty's numeric id space and this
+  # very next line aborts the recycle on a pane that is perfectly alive. (stage 1 of 191d1fc4143c)
+  pin_term_verdict_for_watcher
   tty="$(as_tty "$SID")"
   [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
   if ! ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE 'node|claude'; then
@@ -4550,9 +4670,15 @@ recycle_fire() {
     exit 1
   fi
   # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
-  if ! await_pane_proof "$log"; then
+  # Refused vs stalled are different diagnoses (see the self-close arm) and get different lines.
+  RCY_PP=0; await_pane_proof "$log" || RCY_PP=$?
+  if [ "$RCY_PP" != 0 ]; then
     kill "$WATCHER_PID" 2>/dev/null || true
-    echo "!! recycle ABORTED: the watcher cannot write pane $SID (see $log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
+    if [ "$RCY_PP" = 2 ]; then
+      echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
+    else
+      echo "!! recycle ABORTED: the watcher cannot write pane $SID (see $log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
+    fi
     exit 1
   fi
   echo "→ recycle armed for $SID: watcher pid $WATCHER_PID (session-detached, heartbeat verified) relaunches $LAUNCHER once claude exits (log: $log)"

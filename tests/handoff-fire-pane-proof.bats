@@ -81,6 +81,36 @@ if [ "${1:-}" = session ] && [ "${2:-}" = list ]; then cat "$PANE_LIST"; exit 0;
 exit 0
 SH
   chmod +x "$HOMEDIR/.claude/bin/it2"
+
+  # pane_proof now records the TRANSPORT it selected, which reads kitty_identity → in_kitty. Both
+  # are one-liners; extracting them here keeps every `xf pane_proof` test self-contained. With
+  # KITTY_WINDOW_ID unset and CC_TERM unset (pinned above), identity is deterministically iterm2.
+  xf1 kitty_identity; xf1 in_kitty
+}
+
+# The listing shape the REAL it2 emits: `rich` box-drawing with the Session ID column
+# ELLIPSIS-TRUNCATED to 80 columns when stdout is a pipe. Reproduced from a live capture on this
+# box, 2026-08-05. The old fixture used bare integer ids — the KITTY transport's shape — which is
+# why a suite that was green all along could not see that the iTerm2 path never worked.
+rendered_table() { # $1… = full ids to render (truncated, exactly as rich does it)
+  { printf '                                iTerm2 Sessions                                 \n'
+    printf '┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓\n'
+    printf '┃ Session ID            ┃ Name                  ┃ TTY   ┃\n'
+    printf '┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩\n'
+    local id; for id in "$@"; do printf '│ %s… │ Default (-zsh)        │ ttys0 │\n' "${id:0:20}"; done
+    printf '└───────────────────────┴───────────────────────┴───────┘\n'
+  } > "$PANE_LIST"
+}
+
+# The `--json` shape both transports implement (bin/it2-kitty:503 and the real it2's `--json`).
+json_listing() { # $1… = full ids
+  { printf '[\n'; local id first=1
+    for id in "$@"; do
+      [ "$first" = 1 ] || printf ',\n'; first=0
+      printf '  {\n    "id": "%s",\n    "name": "Default (-zsh)",\n    "tty": "/dev/ttys016"\n  }' "$id"
+    done
+    printf '\n]\n'
+  } > "$PANE_LIST"
 }
 
 # cc-in-kitty stub with a caller-chosen exit code. Absent by default so tests opt in.
@@ -100,6 +130,11 @@ xf() {
   local pat; pat='/^'"$1"'() {/,/^}/p'
   eval "$(sed -n "$pat" "$HF")"
 }
+
+# ONE-LINER extraction. in_kitty and kitty_identity have no `^}` of their own, so the range form
+# above would swallow the next function whole. Guarded: an empty eval is a vacuous pass, which is
+# the failure mode this suite exists to prevent.
+xf1() { local l; l="$(sed -n '/^'"$1"'() {/p' "$HF")"; [ -n "$l" ] || return 1; eval "$l"; }
 
 # ── pane_proof ───────────────────────────────────────────────────────────────────────────────────
 
@@ -131,6 +166,120 @@ xf() {
   [[ "$output" == *"!! pane-UNREACHABLE:"* ]]
 }
 
+# ── THE PRODUCTION SHAPE (item 191d1fc4143c, 2026-08-05) ─────────────────────────────────────────
+# Everything above this line runs against BARE ids — the kitty transport's shape, and the only one
+# the old oracle could match. The iTerm2 transport renders a rich table with ellipsis-truncated
+# UUIDs, so `grep -qxF` against a 36-char id could not match at ANY width: self-close and --recycle
+# refused permanently on every iTerm2 pane while this suite stayed green. One probe, two transports,
+# a fixture that only ever exercised the one that worked.
+
+@test "pane_proof: the REAL --json listing → reachable (the shape the shipped path actually gets)" {
+  # RED before the fix: the old probe whole-line-matched the raw bytes, and no line of a JSON
+  # document equals a bare UUID. This is the assertion the incumbent fixture could not make.
+  xf pane_proof
+  json_listing D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC 208ADD40-B603-4690-803A-B9BC61F2B785
+  run pane_proof "$HOMEDIR/.claude/bin/it2" D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC __selfclose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"→ pane-reachable: D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC"* ]] || false
+  [[ "$output" == *"shape=json"* ]]
+}
+
+@test "pane_proof: --json still refuses a pane that is genuinely absent (fail-closed intact)" {
+  # The fix must not buy reachability by loosening the refusal — that refusal is CORRECT, and
+  # typing /exit into an unverified pane could hit a sibling.
+  xf pane_proof
+  json_listing 208ADD40-B603-4690-803A-B9BC61F2B785
+  run pane_proof "$HOMEDIR/.claude/bin/it2" D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC __selfclose
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"!! pane-UNREACHABLE:"* ]] || false
+  [[ "$output" == *"is NOT among the 1 id(s)"* ]]
+}
+
+@test "pane_proof: a RENDERED table is named as a format artefact, not reported as an absent pane" {
+  # The exact production failure, pinned. The pane IS in the listing; the format makes it unmatchable.
+  # Still rc 1 (fail-closed is correct — an unparsed listing is not evidence of a reachable pane),
+  # but the log must say WHY, because "no id matched" and "the output was never id-shaped" send an
+  # investigator to different places. This one cost two misdiagnoses for lack of that sentence.
+  xf pane_proof
+  rendered_table D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC 208ADD40-B603-4690-803A-B9BC61F2B785
+  run pane_proof "$HOMEDIR/.claude/bin/it2" D2AD56B8-7C0A-46E5-AA22-4C46ECF7ABCC __selfclose
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"shape=RENDERED-TABLE"* ]] || false
+  [[ "$output" == *"ellipsis-truncated"* ]] || false
+  [[ "$output" == *"artefact of the FORMAT"* ]]
+}
+
+@test "pane_proof: a COMPACT single-line array enumerates EVERY id, not just the last" {
+  # Caught by a sibling suite's stub, which emits the array on one line. A greedy `.*"id"` matches
+  # to the LAST occurrence ON THE LINE, so every pane but the final one read as absent — a parser
+  # that agreed with the pretty-printed fixture it was written against and with nothing else.
+  printf '[{"id": "PREDSID", "tty": "/dev/ttys999"}, {"id": "SUCC-B", "tty": "/dev/ttys998"}]\n' > "$PANE_LIST"
+  xf pane_proof
+  run pane_proof "$HOMEDIR/.claude/bin/it2" PREDSID __selfclose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ids=2"* ]] || false
+  [[ "$output" == *"→ pane-reachable: PREDSID"* ]]
+}
+
+@test "pane_proof: the probe ASKS for --json — the machine format is the contract, not a fallback" {
+  xf pane_proof
+  json_listing 218
+  run pane_proof "$HOMEDIR/.claude/bin/it2" 218 __selfclose
+  [ "$status" -eq 0 ]
+  run grep -qxF 'session list --json' "$IT2_CALLS"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_proof: logs the TRANSPORT it selected, including the verdict handed down to it" {
+  # The watcher is an orphan by construction and cannot re-derive its own terminal. Which backend
+  # it selected — and whether the foreground's pinned verdict actually ARRIVED — was unobservable,
+  # so a failed route and a slow one produced identical evidence: none.
+  xf pane_proof
+  json_listing 218
+  CC_TERM=iterm2 run pane_proof "$HOMEDIR/.claude/bin/it2" 218 __selfclose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"→ pane-probe: __selfclose pane=218"* ]] || false
+  [[ "$output" == *"CC_TERM=iterm2"* ]] || false
+  [[ "$output" == *"identity=iterm2"* ]] || false
+  [[ "$output" == *"listing rc=0"* ]]
+}
+
+@test "pane_proof: the probe's own stderr is RENDERED, never discarded" {
+  # `2>/dev/null` on the listing is what made a failed transport indistinguishable from a slow one.
+  # A diagnostic that throws away the diagnosis leaves an operator staring at a healthy-looking
+  # terminal and a pane that will not close (bin/it2-kitty's own lesson, :517).
+  xf pane_proof
+  cat > "$HOMEDIR/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$IT2_CALLS"
+echo "it2: There was a problem connecting to iTerm2" >&2
+exit 3
+SH
+  chmod +x "$HOMEDIR/.claude/bin/it2"
+  run pane_proof "$HOMEDIR/.claude/bin/it2" 218 __selfclose
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"problem connecting to iTerm2"* ]] || false
+  [[ "$output" == *"listing rc=3"* ]]
+}
+
+# ── kitty_identity — stage 1: identity is not the divert predicate ───────────────────────────────
+
+@test "kitty_identity: an ancestry-resolved verdict governs in BOTH directions; unpinned is in_kitty" {
+  # A stale inherited KITTY_WINDOW_ID made a genuine iTerm2 pane resolve its tty through kitty's
+  # NUMERIC id space, which cannot hold a UUID — so the pane read as absent (`tty=none` on
+  # self-close, an outright abort on --recycle) while it sat right there in the it2 listing.
+  xf1 kitty_identity; xf1 in_kitty
+
+  export KITTY_WINDOW_ID=2; unset IT2_WRAPPER_NO_KITTY   # the polluted-env case, measured on this box
+  CC_TERM=iterm2 run kitty_identity; [ "$status" -ne 0 ] # ancestry says iTerm2 → iTerm2 wins
+  CC_TERM=kitty  run kitty_identity; [ "$status" -eq 0 ] # and the converse, so it is a verdict not a veto
+
+  unset CC_TERM                                          # unpinned ⇒ byte-identical to in_kitty
+  run kitty_identity; [ "$status" -eq 0 ]
+  unset KITTY_WINDOW_ID
+  run kitty_identity; [ "$status" -ne 0 ]
+}
+
 @test "pane_proof: no executable it2 shim → rc 1, and says so rather than guessing" {
   xf pane_proof
   run pane_proof "$BATS_TEST_TMPDIR/nope/it2" 218 __recycle
@@ -140,7 +289,7 @@ xf() {
 
 # ── await_pane_proof ─────────────────────────────────────────────────────────────────────────────
 
-@test "await_pane_proof: affirmative line → 0; negative line → 1; neither → 1" {
+@test "await_pane_proof: affirmative → 0; negative → 1; SILENCE → 2, a distinct outcome" {
   xf await_pane_proof
   local log="$BATS_TEST_TMPDIR/w.log"
 
@@ -150,10 +299,34 @@ xf() {
   printf '→ armed: x\n!! pane-UNREACHABLE: 218 nope\n' > "$log"
   run await_pane_proof "$log"; [ "$status" -eq 1 ]
 
-  # Silence is NOT consent. A watcher that armed and then said nothing about the pane must read as
-  # unreachable — the whole defect was an affirmative inferred from an absent signal.
+  # Silence is NOT consent — it still refuses. But it is no longer the SAME refusal: "the probe
+  # answered no" and "the probe has not answered" have the same disposition and different fixes,
+  # and folding them into one rc is what made item 191d1fc4143c unreadable through two
+  # investigations. rc 2 is the stall; every non-zero still means DO NOT KILL.
   printf '→ armed: x\n' > "$log"
-  run await_pane_proof "$log"; [ "$status" -eq 1 ]
+  run env HANDOFF_PANE_PROOF_TICKS=3 bash -c 'set -euo pipefail
+    '"$(sed -n '/^await_pane_proof() {/,/^}/p' "$HF")"'
+    await_pane_proof "$1"' _ "$log"
+  [ "$status" -eq 2 ]
+}
+
+@test "await_pane_proof: the window is DERIVED from the watcher's own bound, never guessed" {
+  # THE BOUND MUST FIT WHAT IT BOUNDS. The old window was a fixed 60 ticks = 12.0s while the
+  # watcher's probe is bounded at HF_TIMEOUT_S plus timeout(1)'s -k 3 kill grace = 13s worst case:
+  # an honest-but-slow probe was GUARANTEED to be read as failure, its verdict landing in the log
+  # about a second after the foreground gave up. A bound shorter than its subject can only convict.
+  xf await_pane_proof
+  local log="$BATS_TEST_TMPDIR/slow.log"; printf '→ armed: x\n' > "$log"
+
+  # Drive the derivation with a large bound and assert the window covers bound + kill-grace, by
+  # measuring how long the silent case actually waits. 0.2s per tick.
+  local t0 t1
+  t0="$(date +%s)"
+  HF_TIMEOUT_S=10 run await_pane_proof "$log"
+  t1="$(date +%s)"
+  [ "$status" -eq 2 ]
+  # 10 + 3 (kill grace) = 13s is the floor the watcher can legitimately take.
+  [ "$(( t1 - t0 ))" -ge 13 ]
 }
 
 # ── pin_term_verdict_for_watcher ─────────────────────────────────────────────────────────────────
@@ -221,4 +394,32 @@ xf() {
   # the "positive control" could not fail and proved nothing. The decisive assertion goes LAST.
   [[ "$output" != *"pane-UNREACHABLE"* ]] || false
   [[ "$output" == *"→ pane-reachable: 218"* ]]
+}
+
+@test "__selfclose watcher: logs the transport, and says UNPINNED when no verdict was handed down" {
+  # The item's literal spec. pin_term_verdict_for_watcher resolves the terminal in the foreground —
+  # where the ancestry walk is valid — and hands it down through the environment; whether it
+  # ARRIVED was invisible right up to the moment the watcher's pane writes went to the wrong
+  # backend. cc-in-kitty's exit 2 is deliberately left unpinned (fail-closed), which is correct and
+  # must therefore be LEGIBLE rather than inferred from a silence.
+  json_listing 218
+  unset CC_TERM
+  run env HOME="$HOMEDIR" timeout 8 bash "$HF" __selfclose 218 /dev/ttys999
+  [[ "$output" == *"→ transport: __selfclose CC_TERM=UNPINNED"* ]] || false
+  [[ "$output" == *"identity="* ]] || false
+
+  run env HOME="$HOMEDIR" CC_TERM=iterm2 timeout 8 bash "$HF" __selfclose 218 /dev/ttys999
+  [[ "$output" == *"→ transport: __selfclose CC_TERM=iterm2"* ]]
+}
+
+@test "__selfclose watcher: a reachable pane is CLOSED — the positive control for the whole path" {
+  # "A pane that is closable must emit pane-reachable and actually close" (item 191d1fc4143c).
+  # Without this, every refusal assertion above is satisfied by a probe that always refuses — which
+  # is exactly the shipped defect: a permanent, self-consistent, wrong NO.
+  json_listing 218 219
+  run env HOME="$HOMEDIR" timeout 8 bash "$HF" __selfclose 218 /dev/ttys999
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"→ pane-reachable: 218"* ]] || false
+  run grep -qxF 'session close -f -s 218' "$IT2_CALLS"
+  [ "$status" -eq 0 ]
 }
