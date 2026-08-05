@@ -151,14 +151,32 @@ exit 0
 SH
   chmod +x "$SHIM/ps" "$SHIM/osascript"
 
+  # PIN THE TERMINAL. handoff-fire's primitives branch on the terminal, so run from inside kitty — or
+  # from an iTerm2 pane that merely INHERITED KITTY_* — this suite's verdict becomes a function of the
+  # developer's environment rather than of its subject. Same pin, same reason, as
+  # tests/handoff-selfclose.bats and tests/handoff-selfclose-teammate-gate.bats.
+  unset KITTY_WINDOW_ID; export IT2_WRAPPER_NO_KITTY=1; unset CC_TERM
+  export STUB_PANE="$PANE"     # the listing must enumerate the pane these tests model
   # it2_type_verified TYPES then re-READS the screen and only submits when it finds the command
   # echoed back. This stub models that: a substantial `session send` becomes the screen contents that
   # the next `session read` returns — otherwise the relaunch typing fails 4/4 and the watcher exits
   # before ever reaching the engagement check under test.
+  #
+  # `session list` must ENUMERATE the pane too. Every test here drives the __recycle WATCHER, which
+  # since the reachability handshake landed (2026-08-02) proves the pane reachable before it acts —
+  # so a stub answering the empty list refuses at the probe and never reaches the engagement check
+  # under test. That is why tests 7/8/10/11 have been RED on trunk; e9cabc46 repaired this same
+  # fixture class in seven suites and did not reach this one. Answers BOTH shapes the real transports
+  # emit (`--json` and bare ids), so the fixture cannot silently model only the transport that
+  # happened to work — the exact blindness that let the iTerm2 path stay broken under a green suite.
   cat > "$H/.claude/bin/it2" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/it2-calls.log"
 case "$1 $2" in
+  "session list")
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-RECY-PANE}"
+    else printf '%s\n' "${STUB_PANE:-RECY-PANE}"; fi
+    exit 0 ;;
   "session send") txt="${!#}"; [ "${#txt}" -gt 3 ] && printf '%s' "$txt" > "$HOME/it2-screen" ;;
   "session read") cat "$HOME/it2-screen" 2>/dev/null ;;
 esac
