@@ -31,7 +31,7 @@
 #
 # SIX RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
 # evaluated — so a new term can only ever raise the verdict, never mask an existing one:
-#   1. swap in use            > 0 MB           ⇒ ALARM   (the hard, LAGGING signal)
+#   1. swap GROWTH  >= SWAP_DELTA_MB in SWAP_WINDOW_S ⇒ ALARM   (a LEVEL latches; a DELTA cannot)
 #   2. reclaimable headroom   < ALARM_GB/WARN_GB
 #   3. kernel pressure level  >= 4 / >= 2      ⇒ ALARM / WARN   (the kernel's own LEADING indicator)
 #   4. per-proc phys outlier  > PROC_WARN_GB   ⇒ WARN    (the leak term; report always, gate softly)
@@ -77,11 +77,48 @@
 # it to NO-DATA would destroy a working alarm to report the absence of a bonus. So a missing level is
 # skipped (and logged as null), while a missing headroom is still NO-DATA.
 #
+# ══ THE 2026-08-05 SENSOR POSTMORTEM — three measured defects, fixed below ═══════════════════════
+# (docs/research/panic-compressor-2026-08-05.md §5 + §7.5/§7.7. All three are defects of the
+# INSTRUMENT, not of the thresholds: the box died while this sampler was running, reporting, and
+# paging — and every bit it emitted in the 59 hours before the panic was already known.)
+#
+# D1 — A LEVEL LATCHES; ONLY A DELTA CARRIES INFORMATION. Rung 1 was `swap_used > 0 ⇒ ALARM`, and
+# macOS `vm.swapusage used` decays ~8 MB per 5.5 h and only truly resets at REBOOT. One Aug-2 event
+# put 407 MB in the swap file and the rung then read ALARM for 59 hours — 2,961 consecutive ALARM
+# rows carrying exactly ONE notification (the first). Three genuinely new signals (max_proc 40 GB,
+# segments 53.5%, pressure 2) arrived INSIDE that latch and were invisible, because already-ALARM
+# means no state change means no page. So rung 1 now asks whether swap GREW: ALARM iff swap-used
+# rose by >= CC_CAP_SWAP_DELTA_MB inside CC_CAP_SWAP_WINDOW_S, measured against this script's OWN
+# jsonl log (the log is the state; there is no sidecar to go stale). A large STATIC swap file is
+# OK — it is history, not news. Unknown history (no log, rotated log, unparseable rows, a gap
+# longer than the window) ⇒ the RUNG reads OK and the row emits `swap_delta_mb:null`: fail-quiet on
+# one rung, never on the row, because a delta we cannot compute is not evidence of growth.
+#
+# D2 — THE PROBE MUST NOT BLOCK ON THE RESOURCE IT MEASURES. rung 5 read the in-use segment count
+# from `zprint`, which walks the kernel zone map under the very lock a compressor storm contends.
+# The 00:14 sample never returned: it was still TH_WAIT at the panic, so the one row that would
+# have shown the ramp is the row the storm ate. No interval fixes that. The primary source is now
+# the CHEAP ESTIMATE from §7.7 — in-core segments from vm_stat's compressor pages, swapped-out
+# segments from vm.swapusage (swap is written in 64 KiB compressed chunks, so both terms are
+# 64 KiB/segment) — three counter reads, no zone walk, nothing to block on. zprint survives only
+# behind CC_CAP_SEG_SOURCE=zprint and only wrapped in timeout(1).
+#
+# D3 — PER-RUNG PAGES, because a NEW crossing inside a standing alarm is the signal that matters.
+# One fixed slug damped by construction (below) also damped every subsequent rung: once ANY rung
+# held the verdict at ALARM there was no state change to page on, so the segment and per-proc
+# crossings in the final hour wrote nothing. Each rung now owns capacity-alarm-<rung>.page and
+# writes it on ITS OWN transition. The combined fixed-slug page stays exactly as it was — this is
+# additive, so nothing that reads the old path breaks.
+#
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
 #        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
 #        CC_CAP_COAL_WARN (default 500) · CC_CAP_COAL_ALARM (default 700) ·
-#        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk)
+#        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk) ·
+#        CC_CAP_SWAP_DELTA_MB (default 256) · CC_CAP_SWAP_WINDOW_S (default 600) ·
+#        CC_CAP_PRIOR_ROWS (default 15, tail depth of the log's own history) ·
+#        CC_CAP_SEG_SOURCE (est | zprint — default est) ·
+#        CC_CAP_TIMEOUT (timeout(1) binary, for stubbing the zprint slow lane)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -123,6 +160,13 @@ SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
 # a design change, not a maintenance edit. Backlogged; do not tune these in the meantime.
 COAL_WARN="${CC_CAP_COAL_WARN:-500}"
 COAL_ALARM="${CC_CAP_COAL_ALARM:-700}"
+# Rung 1 is a DELTA (D1 above). 256 MB is a QUARTER of the smallest swap file macOS creates (1 GB)
+# and ~32x the ~8 MB/5.5 h decay rate, so decay can never reach it and a real swap-out burst clears
+# it in one sample. The window is 10 minutes = 10 samples at the 60 s cadence; the tail depth (15)
+# covers it with slack for a missed tick or two without ever re-reading the whole file.
+SWAP_DELTA_MB="${CC_CAP_SWAP_DELTA_MB:-256}"
+SWAP_WINDOW_S="${CC_CAP_SWAP_WINDOW_S:-600}"
+PRIOR_ROWS="${CC_CAP_PRIOR_ROWS:-15}"
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
 APPEND=1; WANT_JSON=0; QUIET=0
 
@@ -177,6 +221,87 @@ MEM="$(read_mem || true)"
 SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
             | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
 
+# ── the log's own recent history — the state D1 and D3 need, with no sidecar to go stale ─────────
+# THE LOG IS THE STATE. A delta needs a baseline and a per-rung transition needs a previous rung
+# state; both could have lived in a sidecar file, and a sidecar is one more thing that can be
+# missing, stale, or out of sync with the row it claims to describe. The jsonl already records every
+# input to every rung, once per minute, durably — so the previous state is READ BACK from it, and
+# the row a reader sees is by construction the row the alarm reasoned from.
+#
+# One awk pass over the tail returns two different things:
+#   · the swap BASELINE — the MINIMUM swap_used_mb over rows inside the window. Minimum, not oldest:
+#     swap-used decays downward between events, so a trough mid-window followed by growth is exactly
+#     the burst rung 1 must catch, and an oldest-row baseline would subtract the decay from the
+#     growth and hide it.
+#   · the PREVIOUS ROW's rung inputs — re-classified below to recover its per-rung states. No new
+#     "rung state" field is invented for this: every input already ships in the row, so a state can
+#     always be recomputed, and recomputing means today's thresholds are what a transition is judged
+#     against rather than whatever was configured when the old row was written.
+#
+# ts is converted with days-from-civil arithmetic rather than `date -j -f`, which would be one
+# subprocess per row per tick and would put a BSD/GNU flag difference on the hot path. The rows this
+# script writes are always `%Y-%m-%dT%H:%M:%SZ`; anything else fails the shape check and is skipped.
+NOW_EPOCH="$(date -u +%s 2>/dev/null || echo 0)"
+read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions|decompressions"
+  [ -f "$LOG" ] || return 1
+  tail -n "$PRIOR_ROWS" "$LOG" 2>/dev/null | awk -v now="$NOW_EPOCH" -v win="$SWAP_WINDOW_S" '
+    function jnum(s, key,   v) {
+      if (!match(s, "\"" key "\":-?[0-9][0-9.]*")) return ""
+      v = substr(s, RSTART, RLENGTH); sub(/^.*":/, "", v); return v
+    }
+    function jts(s,   v) {
+      if (!match(s, "\"ts\":\"[^\"]*\"")) return ""
+      v = substr(s, RSTART, RLENGTH); sub(/^"ts":"/, "", v); sub(/"$/, "", v); return v
+    }
+    function ep(t,   y,mo,d,h,mi,se,yy,era,yoe,doy,doe,days) {
+      if (length(t) != 20) return -1
+      if (substr(t,5,1) != "-" || substr(t,11,1) != "T" || substr(t,20,1) != "Z") return -1
+      y = substr(t,1,4)+0; mo = substr(t,6,2)+0;  d  = substr(t,9,2)+0
+      h = substr(t,12,2)+0; mi = substr(t,15,2)+0; se = substr(t,18,2)+0
+      if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31) return -1
+      yy  = (mo <= 2) ? y - 1 : y
+      era = int(yy / 400); yoe = yy - era * 400
+      doy = int((153 * (mo + ((mo > 2) ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      days = era * 146097 + doe - 719468
+      return days * 86400 + h * 3600 + mi * 60 + se
+    }
+    {
+      ts = jts($0); sw = jnum($0, "swap_used_mb")
+      if (ts != "" && sw != "") {
+        e = ep(ts)
+        # A row from the future is clock skew, not data; 5 s of slack absorbs rounding only.
+        if (e >= 0 && e <= now + 5 && now - e <= win) {
+          if (base == "" || sw + 0 < base + 0) base = sw
+        }
+      }
+      last = $0; n++
+    }
+    END {
+      if (n == 0) exit 1
+      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s\n", base, \
+        jnum(last, "headroom_gb"), jnum(last, "swap_delta_mb"), jnum(last, "pressure_level"), \
+        jnum(last, "max_proc_gb"), jnum(last, "seg_pct"), jnum(last, "coal_procs"), \
+        jnum(last, "compressions"), jnum(last, "decompressions")
+    }'
+}
+
+SWAP_BASE=""; P_HEAD=""; P_SWAP_DELTA=""; P_PRESSURE=""; P_MAX_PROC=""; P_SEG=""; P_COAL=""
+P_COMPRESSIONS=""; P_DECOMPRESSIONS=""
+PRIOR="$(read_prior || true)"
+if [ -n "$PRIOR" ]; then
+  IFS='|' read -r SWAP_BASE P_HEAD P_SWAP_DELTA P_PRESSURE P_MAX_PROC P_SEG P_COAL \
+                  P_COMPRESSIONS P_DECOMPRESSIONS <<< "$PRIOR"
+fi
+
+# The delta itself. Empty when EITHER end is unknown — an unreadable sysctl must not be differenced
+# against a real baseline (that is how `${SWAP_MB:-0}` would manufacture a 407 MB "growth" out of a
+# PATH regression), and no in-window baseline means no trajectory to report.
+SWAP_DELTA=""
+if [ -n "$SWAP_MB" ] && [ -n "$SWAP_BASE" ]; then
+  SWAP_DELTA="$(awk -v a="$SWAP_MB" -v b="$SWAP_BASE" 'BEGIN{printf "%.2f", a-b}')"
+fi
+
 # ── compressor SEGMENT saturation — the term that killed the box on 2026-07-30 ────────────────────
 # The 02:18:05 panic printed `watchdog timeout: no checkins from watchdogd in 92 seconds`, but the
 # cause is one line further down the same panic log:
@@ -201,27 +326,127 @@ SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
 # This rung is therefore a CANARY, not a predictor: it may lead by seconds rather than minutes. It
 # ships anyway because it is the only instrument that can see this failure mode at all.
 #
-# zprint is the ONLY live source for the in-use descriptor count — no sysctl exposes it. Column 7 is
-# `cur inuse`, validated 2026-07-30 against zones with known-nonzero counts; the `cur size`/`#elts`
-# columns read 0 on this build, so position 7 (not a size column) is the one to parse.
-read_segments() { # → "<inuse> <limit>", or nothing when unreadable (never a fabricated 0)
-  local row inuse limit
-  command -v "${CC_CAP_ZPRINT:-zprint}" >/dev/null 2>&1 || return 1
-  row="$("${CC_CAP_ZPRINT:-zprint}" 2>/dev/null | awk '$1=="compressor_segment"{print; exit}')"
-  [ -n "$row" ] || return 1
-  inuse="$(printf '%s\n' "$row" | awk '{print $7}')"
-  case "$inuse" in ''|*[!0-9]*) return 1 ;; esac
+# HOW THE COUNT IS READ — and why it is no longer zprint by default (D2 in the header).
+#
+# zprint's `compressor_segment` row IS the exact in-use descriptor count, root-free, and no sysctl
+# exposes that number directly. It is also 89% of this script's wall time and it walks the kernel
+# zone map under the lock a compressor storm contends: the 2026-08-05 sample taken 4 minutes before
+# the panic entered zprint and never came out (still TH_WAIT at the panic), so the ONE row that
+# would have shown the final ramp is the row the storm ate. A probe that blocks on the resource it
+# measures is not a sensor, and no cadence change repairs that.
+#
+# So the primary source is the estimate from panic-compressor-2026-08-05.md §7.7, built from three
+# counters that cannot block:
+#     in-core segments  = vm_stat "Pages occupied by compressor" x page_size / 65536
+#     swapped segments  = vm.swapusage used bytes / 65536
+#     seg_est           = in-core + swapped
+# Both terms are 64 KiB per segment: swap is written in 64 KiB compressed chunks (exact), and a
+# 16 KiB-page box holds four pages per in-core segment — which is why §7.7 states the first term as
+# "compressor pages / 4". The page size is read from vm_stat's OWN header rather than assumed, for
+# the reason read_mem argues above: assuming 4096 understates an Apple-silicon box 4x.
+#
+# THE ESTIMATE DELIBERATELY INCLUDES SWAPPED-OUT SEGMENTS. That is not double-counting — it is the
+# kernel's own accounting. A segment that has been swapped out still holds its descriptor against
+# vm.compressor_segment_limit, which is precisely the ceiling the 2026-07-30 panic hit ("100% of
+# segments limit (BAD)") while only 33% of the compressed-PAGES limit was in use. Counting only
+# resident segments would under-read exactly the state this rung exists to see.
+#
+# Column 7 of the zprint row is `cur inuse`, validated 2026-07-30 against zones with known-nonzero
+# counts; the `cur size`/`#elts` columns read 0 on this build, so position 7 is the one to parse.
+read_segments() { # → "<inuse> <limit> <source>", or nothing when unreadable (never a fabricated 0)
+  local to row inuse limit pgsz pages swap_mb
   limit="$(sysctl -n vm.compressor_segment_limit 2>/dev/null)"
   case "$limit" in ''|*[!0-9]*) return 1 ;; esac
   [ "$limit" -gt 0 ] || return 1
-  printf '%s %s' "$inuse" "$limit"
+
+  # SLOW LANE, opt-in only. timeout(1) is REQUIRED, not optional: an unwrapped zprint is the exact
+  # hang this fix exists to remove, so an absent timeout means the slow lane is skipped entirely
+  # rather than run bare. -k also sends KILL, because a TERM-ignoring child keeps the pipe open and
+  # the command substitution would wait on it anyway. (A task wedged in an UNINTERRUPTIBLE kernel
+  # wait cannot be rescued by any userspace timeout — which is the whole reason this lane is opt-in
+  # and the estimate below is the default.) Any failure falls through to the estimate: a slow lane
+  # that deletes the rung when it stalls would be strictly worse than not having it.
+  if [ "${CC_CAP_SEG_SOURCE:-est}" = "zprint" ]; then
+    to="${CC_CAP_TIMEOUT:-timeout}"
+    if command -v "$to" >/dev/null 2>&1 && command -v "${CC_CAP_ZPRINT:-zprint}" >/dev/null 2>&1; then
+      row="$("$to" -k 1 3 "${CC_CAP_ZPRINT:-zprint}" 2>/dev/null \
+              | awk '$1=="compressor_segment"{print; exit}')"
+      inuse="$(printf '%s\n' "$row" | awk '{print $7}')"
+      case "$inuse" in
+        ''|*[!0-9]*) : ;;
+        *) printf '%s %s zprint' "$inuse" "$limit"; return 0 ;;
+      esac
+    fi
+  fi
+
+  # FAST LANE (default). Three counter reads, no zone walk, nothing to block on.
+  row="$(vm_stat 2>/dev/null | awk '
+    NR == 1 { if (match($0, /page size of [0-9]+ bytes/)) {
+                s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); pg = s + 0 } }
+    /^Pages occupied by compressor:/ { c = $NF + 0; seen = 1 }
+    END { if (pg > 0 && seen) printf "%d %d\n", pg, c }')"
+  [ -n "$row" ] || return 1
+  pgsz="${row%% *}"; pages="${row##* }"
+  case "$pgsz" in ''|*[!0-9]*) return 1 ;; esac
+  case "$pages" in ''|*[!0-9]*) return 1 ;; esac
+  swap_mb="$(sysctl -n vm.swapusage 2>/dev/null \
+              | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
+  case "$swap_mb" in ''|*[!0-9.]*) return 1 ;; esac
+  inuse="$(awk -v p="$pages" -v z="$pgsz" -v s="$swap_mb" \
+            'BEGIN{printf "%d", (p*z)/65536 + (s*1048576)/65536}')"
+  printf '%s %s est' "$inuse" "$limit"
+}
+
+# vm_stat's cumulative compression counters. Levels are useless here (a lifetime ratio says nothing
+# about now) — they exist so the NEXT row can difference them, which is why they are emitted.
+read_vm_counters() { # → "<compressions> <decompressions>", or nothing when unreadable
+  vm_stat 2>/dev/null | awk '
+    /^Compressions:/   { c = $NF + 0; hc = 1 }
+    /^Decompressions:/ { d = $NF + 0; hd = 1 }
+    END { if (hc && hd) printf "%d %d\n", c, d }'
 }
 
 # Unreadable ⇒ SEG_PCT stays empty ⇒ rung 5 is SKIPPED, never a fabricated healthy 0 (see rung 3's
 # identical policy in the header: absent instrument is SKIPPED, only headroom can produce NO-DATA).
-SEG_PCT=""
-if SEG_RAW="$(read_segments)"; then
-  SEG_PCT="$(awk -v a="${SEG_RAW% *}" -v b="${SEG_RAW#* }" 'BEGIN{printf "%.1f", 100*a/b}')"
+SEG_PCT=""; SEG_EST=""; SEG_SOURCE=""
+SEG_RAW="$(read_segments || true)"
+if [ -n "$SEG_RAW" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the 3-field read_segments output
+  set -- $SEG_RAW
+  SEG_EST="$1"; SEG_SOURCE="$3"
+  SEG_PCT="$(awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", 100*a/b}')"
+fi
+
+# ── the two §6 discriminators that separated fatal from survived across all three deaths ──────────
+# Neither gates a rung: they are ORDERINGS from one fatal sample each, not calibrated thresholds,
+# and inventing a floor for them would be the made-up number in a verdict this file's header bans.
+# They are emitted on every row so the threshold can be DERIVED from real history later.
+#
+# occupancy_pct — pages actually packed per segment, against the 16 a segment can hold. The
+# 2026-07-30 panic exhausted every descriptor at 5.3/16 = 33% packing: exhaustion is reachable only
+# through UNDER-packing (the pool is provisioned for 124.3 GiB on a 64 GiB box), so a falling
+# occupancy while seg_pct climbs is the fragmentation signature.
+OCCUPANCY_PCT=""
+SEG_PAGES="$(sysctl -n vm.compressor_segment_pages_compressed 2>/dev/null | tr -dc '0-9')"
+if [ -n "$SEG_PAGES" ] && [ -n "$SEG_EST" ] && [ "$SEG_EST" -gt 0 ]; then
+  OCCUPANCY_PCT="$(awk -v p="$SEG_PAGES" -v s="$SEG_EST" 'BEGIN{printf "%.1f", 100*p/(16*s)}')"
+fi
+
+# thrash_cd_ratio — decompressions per compression since the previous row. The measured fatal
+# signature is ~0.60 with ~0% net retention (491 MiB/s in, almost all of it coming straight back
+# out); no benign counterpart was observed in 102 h. Null on the first row, on a counter reset
+# (reboot), and on an idle interval with no compressions — all three are "no ratio exists", never 0.
+COMPRESSIONS=""; DECOMPRESSIONS=""; THRASH_CD_RATIO=""
+VM_COUNTERS="$(read_vm_counters || true)"
+if [ -n "$VM_COUNTERS" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the 2-field counter output
+  set -- $VM_COUNTERS
+  COMPRESSIONS="$1"; DECOMPRESSIONS="$2"
+  if [ -n "$P_COMPRESSIONS" ] && [ -n "$P_DECOMPRESSIONS" ]; then
+    THRASH_CD_RATIO="$(awk -v c="$COMPRESSIONS" -v d="$DECOMPRESSIONS" \
+                           -v pc="$P_COMPRESSIONS" -v pd="$P_DECOMPRESSIONS" \
+      'BEGIN{ dc = c - pc; dd = d - pd; if (dc > 0 && dd >= 0) printf "%.2f", dd/dc }')"
+  fi
 fi
 
 # ── session census — BOTH pid families, counted as TREES, matched at the COMMAND POSITION ─────────
@@ -397,37 +622,60 @@ fi
 # MAX-COMBINED, not first-match. The rungs are evaluated into a severity level and the WORST wins, so
 # adding a rung can only raise a verdict. The incumbent returned on first match, which would have let
 # a later-added rung be shadowed — and worse, would have made rung ORDER a silent policy decision.
-classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] [coal_procs] → verdict
-  local h="$1" s="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" v=0 si=0
+#
+# PER-RUNG DETAIL is a MODE of this same function, never a second implementation. D3 needs each
+# rung's own state to page on its own transition, and the one thing that must never happen is a
+# threshold living in two places and drifting: the verdict would then disagree with the page it
+# writes. With CC_CAP_RUNG_DETAIL=1 the output becomes
+#     "<VERDICT> swap=<S> headroom=<S> pressure=<S> maxproc=<S> segments=<S> coalition=<S>"
+# where <S> is OK | WARN | ALARM | SKIPPED. Unset, the output is byte-identical to what every
+# existing caller and control already expects.
+classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] [coal_procs] → verdict
+  local h="$1" sd="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" v=0
+  local r1=SKIPPED r2=SKIPPED r3=SKIPPED r4=SKIPPED r5=SKIPPED r6=SKIPPED
   # headroom is the ONE instrument the verdict cannot exist without (see header).
-  if [ -z "$h" ]; then printf 'NO-DATA'; return 0; fi
-
-  # rung 1 — swap in use: the hard signal, and the LAGGING one (by now it is already happening).
-  if [ -n "$s" ]; then
-    si="$(printf '%s\n' "$s" | cut -d. -f1)"
-    case "$si" in ''|*[!0-9]*) si=0 ;; esac
-    if [ "$si" -gt 0 ]; then v=2; fi
+  if [ -z "$h" ]; then
+    printf 'NO-DATA'
+    [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s' \
+      SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED
+    return 0
   fi
+
+  # rung 1 — swap GROWTH inside the window (D1). A LEVEL is history and latches for days; only the
+  # delta is news. Unknown delta ⇒ SKIPPED, never a fabricated OK-because-zero: the leading `-` is
+  # stripped before the numeric shape test so a DECAYING swap file reads as the non-event it is.
+  case "${sd#-}" in
+    ''|*[!0-9.]*) : ;;
+    *) if awk -v a="$sd" -v b="$SWAP_DELTA_MB" 'BEGIN{exit !(a+0 >= b+0)}'; then r1=ALARM; v=2
+       else r1=OK; fi ;;
+  esac
 
   # rung 2 — reclaimable headroom: what actually decides whether the box swaps.
   if awk -v a="$h" -v b="$ALARM_GB" 'BEGIN{exit !(a+0 < b+0)}'; then
-    v=2
+    r2=ALARM; v=2
   elif awk -v a="$h" -v b="$WARN_GB" 'BEGIN{exit !(a+0 < b+0)}'; then
-    if [ "$v" -lt 1 ]; then v=1; fi
+    r2=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+  else
+    r2=OK
   fi
 
   # rung 3 — kernel pressure level (M9-ext). Absent ⇒ SKIPPED, never NO-DATA (header).
   case "$pl" in
     ''|*[!0-9]*) : ;;
-    *) if [ "$pl" -ge 4 ]; then v=2
-       elif [ "$pl" -ge 2 ]; then if [ "$v" -lt 1 ]; then v=1; fi
+    *) if [ "$pl" -ge 4 ]; then r3=ALARM; v=2
+       elif [ "$pl" -ge 2 ]; then r3=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+       else r3=OK
        fi ;;
   esac
 
   # rung 4 — per-proc footprint outlier (M9b). WARN ceiling by design: one big process is a lead to
   # follow, not grounds to declare the box in trouble.
-  if [ -n "$mp" ] && awk -v a="$mp" -v b="$PROC_WARN_GB" 'BEGIN{exit !(a+0 > b+0)}'; then
-    if [ "$v" -lt 1 ]; then v=1; fi
+  if [ -n "$mp" ]; then
+    if awk -v a="$mp" -v b="$PROC_WARN_GB" 'BEGIN{exit !(a+0 > b+0)}'; then
+      r4=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+    else
+      r4=OK
+    fi
   fi
 
   # rung 5 — compressor SEGMENT saturation (2026-07-30 panic). Reaches ALARM, unlike rung 4: this is
@@ -435,9 +683,10 @@ classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] 
   # Absent instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK.
   case "$sg" in
     ''|*[!0-9.]*) : ;;
-    *) if awk -v a="$sg" -v b="$SEG_ALARM_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then v=2
+    *) if awk -v a="$sg" -v b="$SEG_ALARM_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then r5=ALARM; v=2
        elif awk -v a="$sg" -v b="$SEG_WARN_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then
-         if [ "$v" -lt 1 ]; then v=1; fi
+         r5=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+       else r5=OK
        fi ;;
   esac
 
@@ -446,20 +695,30 @@ classify() { # <headroom_gb> <swap_mb> [pressure_level] [max_proc_gb] [seg_pct] 
   # Absent instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK.
   case "$cp" in
     ''|*[!0-9]*) : ;;
-    *) if [ "$cp" -ge "$COAL_ALARM" ]; then v=2
-       elif [ "$cp" -ge "$COAL_WARN" ]; then if [ "$v" -lt 1 ]; then v=1; fi
+    *) if [ "$cp" -ge "$COAL_ALARM" ]; then r6=ALARM; v=2
+       elif [ "$cp" -ge "$COAL_WARN" ]; then r6=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+       else r6=OK
        fi ;;
   esac
 
   case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
+  [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s' \
+    "$r1" "$r2" "$r3" "$r4" "$r5" "$r6"
+  return 0
 }
 
 if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   fails=0
   # Every rung, in both directions, plus the three cases that are POLICY rather than arithmetic:
   # max-combine (a WARN rung must not downgrade an ALARM), an unreadable pressure level staying OK,
-  # and the outlier rung being unable to reach ALARM. probe = headroom:swap:pressure:maxproc:want
-  # probe = headroom:swap:pressure:maxproc:seg:coalprocs:want
+  # and the outlier rung being unable to reach ALARM.
+  # probe = headroom:swapDELTA:pressure:maxproc:seg:coalprocs:want
+  #
+  # The rung-1 rows encode the 59-hour latch directly (D1). Field 2 is now a DELTA, so `99:0:...:OK`
+  # IS the 407 MB static swap file that held this alarm at ALARM for 2,961 consecutive rows: no
+  # growth, no news. `99:-8:...` is the measured decay rate (~8 MB / 5.5 h) — a swap file draining
+  # must never page. `99:255` / `99:256` pin the floor from both sides, and `1:?:...:ALARM` proves an
+  # unknown delta SKIPS its own rung without masking a breach found by another.
   # The rung-5 rows encode the 2026-07-30 panic directly: `99:0:1:0:100::ALARM` is the machine's
   # actual dying state — abundant headroom, zero swap, normal pressure, no outlier process, and
   # segments at 100%. Every pre-existing rung called that box HEALTHY, which is the whole point.
@@ -476,7 +735,9 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
       "99:0:1:0:0::OK"      "99:0:1:0:?::OK"     "1:0:1:0:0::ALARM"  "99:0:1:9:100::ALARM" \
       "99:0:1:0::1002:ALARM" "99:0:1:0::700:ALARM" "99:0:1:0::699:WARN" "99:0:1:0::500:WARN" \
       "99:0:1:0::499:OK"     "99:0:1:0::353:OK"    "99:0:1:0::?:OK"     "1:0:1:0::353:ALARM" \
-      "99:0:1:0:100:1002:ALARM"; do
+      "99:0:1:0:100:1002:ALARM" \
+      "99:256:1:0:::ALARM"   "99:255:1:0:::OK"     "99:-8:1:0:::OK"     "99:?:1:0:::OK" \
+      "1:?:1:0:::ALARM"; do
     h="${probe%%:*}";  r="${probe#*:}"
     s="${r%%:*}";      r="${r#*:}"
     pl="${r%%:*}";     r="${r#*:}"
@@ -485,9 +746,9 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
     cp="${r%%:*}";     want="${r#*:}"
     got="$(classify "$h" "$s" "$pl" "$mp" "$sg" "$cp")"
     if [ "$got" = "$want" ]; then
-      echo "  control OK   headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got"
+      echo "  control OK   headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got"
     else
-      echo "  control FAIL headroom='$h' swap='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got (want $want)"
+      echo "  control FAIL headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got (want $want)"
       fails=$((fails+1))
     fi
   done
@@ -530,7 +791,29 @@ if [ -n "$MEM" ]; then
   HEAD="${1:-}"; COMP="${2:-}"; ACT="${3:-}"; WIRED="${4:-}"
 fi
 
-VERDICT="$(classify "$HEAD" "${SWAP_MB:-0}" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS")"
+# The verdict AND the six rung states from ONE call (see classify's DETAIL note) — a second
+# evaluation could disagree with the first, and a page that contradicts the verdict beside it is
+# worse than no page.
+CLASSIFY_OUT="$(CC_CAP_RUNG_DETAIL=1 classify "$HEAD" "$SWAP_DELTA" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS")"
+VERDICT="${CLASSIFY_OUT%% *}"
+RUNG_STATES="${CLASSIFY_OUT#* }"
+
+# The PREVIOUS row's rung states, recomputed from the inputs it recorded. Empty when there is no
+# previous row — and "unknown" must not read as "OK", or the very first WARN after a restart would
+# be treated as unchanged and never page.
+PREV_STATES=""
+if [ -n "$PRIOR" ]; then
+  PREV_STATES="$(CC_CAP_RUNG_DETAIL=1 classify "$P_HEAD" "$P_SWAP_DELTA" "$P_PRESSURE" "$P_MAX_PROC" "$P_SEG" "$P_COAL")"
+  PREV_STATES="${PREV_STATES#* }"
+fi
+
+rung_state() { # <states-string> <rung> → OK|WARN|ALARM|SKIPPED, or empty when unknown
+  local t
+  case " $1 " in *" $2="*) : ;; *) return 0 ;; esac
+  t="${1#*"$2"=}"
+  printf '%s' "${t%% *}"
+}
+
 case "$VERDICT" in
   OK)      RC=0 ;;
   WARN)    RC=1 ;;
@@ -578,13 +861,26 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # change stays parseable. `sessions` keeps its name and gains its correct VALUE (trees across both
 # families); the two per-family counts are added beside it so a future census regression is visible in
 # the log itself rather than only in an aggregate that looks plausible either way.
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s}' \
+# `swap_used_mb` becomes null — NOT 0 — when the sysctl is unreadable. That was the shape the
+# launchd-PATH regression exposed (`${SWAP_MB:-0}` renders a dead instrument as the HEALTHY value),
+# and under D1 it is no longer merely misleading: a fabricated 0 lands in the log, becomes the next
+# tick's in-window MINIMUM, and manufactures a 407 MB "growth" out of a PATH bug. The key is
+# unchanged and still present on every row; only the lie is gone.
+#
+# `compressions`/`decompressions` are emitted because thrash_cd_ratio is a DIFFERENCE: the ratio on
+# this row can only be computed from the counters on the last one, so the row has to carry them or
+# the discriminator cannot exist. Same reason as swap's baseline — the log is the state.
+SEG_SOURCE_JSON='null'
+[ -n "$SEG_SOURCE" ] && SEG_SOURCE_JSON="\"$SEG_SOURCE\""
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
-  "${SWAP_MB:-0}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
+  "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
   "${SEG_PCT:-null}" "$SEG_WARN_PCT" "$SEG_ALARM_PCT" \
   "${COAL_PROCS:-null}" "${COAL_APP:-}" "$COAL_WARN" "$COAL_ALARM" \
-  "$TOP_JSON")"
+  "$TOP_JSON" "$SEG_SOURCE_JSON" "${SWAP_DELTA:-null}" "$SWAP_DELTA_MB" "$SWAP_WINDOW_S" \
+  "${OCCUPANCY_PCT:-null}" "${THRASH_CD_RATIO:-null}" \
+  "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -641,6 +937,53 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
     # condition we can no longer see.
     rm -f "$PAGE" "$PAGE.notified" 2>/dev/null || true
   fi
+
+  # ── PER-RUNG SLUGS (D3) ─────────────────────────────────────────────────────────────────────
+  # The combined page above is damped by the verdict, and the verdict is a MAX: once any rung holds
+  # it at ALARM, no later rung crossing can change it, so no later rung crossing pages. That is how
+  # max_proc 40 GB, segments 53.5% and pressure 2 all arrived unannounced inside a 59-hour swap
+  # latch. Each rung now owns its own slug and fires on ITS OWN transition, so a new signal is
+  # audible inside a standing alarm.
+  #
+  # WRITTEN ON CHANGE, NOT ON STATE. A rung that stays ALARM for hours writes once, at the
+  # crossing — the file's epoch then means "when this started", which is the question an operator
+  # actually has, and 60-second re-writes would reset that clock every tick. The cost is that a
+  # hand-deleted page is not recreated while the rung holds; the combined page (rewritten every
+  # tick) covers that, and the jsonl covers everything.
+  #
+  # OK / SKIPPED / NO-DATA all RETRACT, for the same reason the combined page self-clears: a page
+  # whose condition has passed is misinformation, and a rung whose instrument just went blind is
+  # not asserting anything either.
+  for _rung in swap headroom pressure maxproc segments coalition; do
+    _now_state="$(rung_state "$RUNG_STATES" "$_rung")"
+    _prev_state="$(rung_state "$PREV_STATES" "$_rung")"
+    _rung_page="$PAGES_DIR/capacity-alarm-$_rung.page"
+    case "$_now_state" in
+      WARN|ALARM)
+        [ "$_now_state" = "$_prev_state" ] && continue
+        mkdir -p "$PAGES_DIR" 2>/dev/null || true
+        case "$_rung" in
+          swap)      _detail="swap grew ${SWAP_DELTA:-?} MB in ${SWAP_WINDOW_S}s (floor ${SWAP_DELTA_MB} MB) — now ${SWAP_MB:-?} MB in use" ;;
+          headroom)  _detail="reclaimable headroom ${HEAD:-?} GB (warn <${WARN_GB} · alarm <${ALARM_GB}) with ${SESSIONS} live sessions" ;;
+          pressure)  _detail="kernel memorystatus pressure level ${PRESSURE:-?} (>=2 WARN · >=4 ALARM)" ;;
+          maxproc)   _detail="largest process footprint ${MAX_PROC_GB:-?} GB > ${PROC_WARN_GB} GB floor" ;;
+          segments)  _detail="compressor segments ${SEG_PCT:-?}% of limit (warn ${SEG_WARN_PCT}% · alarm ${SEG_ALARM_PCT}%) · source ${SEG_SOURCE:-?} · occupancy ${OCCUPANCY_PCT:-?}% of 16 pages/segment" ;;
+          coalition) _detail="${COAL_PROCS:-?} procs in the ${COAL_APP:-?} coalition (warn >=${COAL_WARN} · alarm >=${COAL_ALARM})" ;;
+          *)         _detail="" ;;
+        esac
+        {
+          date +%s 2>/dev/null || echo 0
+          printf 'capacity rung %s: %s (was %s)\n' "$_rung" "$_now_state" "${_prev_state:-unknown}"
+          printf '%s\n' "$_detail"
+          printf 'combined verdict this sample: %s  ·  thrash d/c %s\n' \
+            "$VERDICT" "${THRASH_CD_RATIO:-n/a}"
+          printf 'shed by CLOSING idle sessions (/handoff them). This alarm never refuses a spawn.\n'
+          printf 're-run:  %s\n' "$0"
+        } > "$_rung_page" 2>/dev/null || true ;;
+      *)
+        rm -f "$_rung_page" "$_rung_page.notified" 2>/dev/null || true ;;
+    esac
+  done
 fi
 
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
@@ -648,8 +991,10 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  live sessions:          ${SESSIONS} trees   (${SESSIONS_EXE} claude.exe + ${SESSIONS_BIN} .bin/claude)"
   echo "  reclaimable headroom:   ${HEAD:-?} GB   (warn <${WARN_GB} · alarm <${ALARM_GB})"
   echo "  compressor / active:    ${COMP:-?} GB / ${ACT:-?} GB"
-  # SKIPPED, not "0%" — an unreadable zprint must never render as a healthy reading (2026-07-30).
-  echo "  compressor segments:    ${SEG_PCT:-SKIPPED (zprint unreadable)}${SEG_PCT:+% of limit  (warn ${SEG_WARN_PCT}% / alarm ${SEG_ALARM_PCT}%)}"
+  # SKIPPED, not "0%" — an unreadable instrument must never render as a healthy reading (2026-07-30).
+  echo "  compressor segments:    ${SEG_PCT:-SKIPPED (segment estimate unreadable)}${SEG_PCT:+% of limit  (warn ${SEG_WARN_PCT}% / alarm ${SEG_ALARM_PCT}%, source ${SEG_SOURCE})}"
+  echo "  segment occupancy:      ${OCCUPANCY_PCT:-?}% of 16 pages/segment   (low + rising seg% = fragmentation, the 2026-07-30 shape)"
+  echo "  thrash (decomp/comp):   ${THRASH_CD_RATIO:-n/a}   (~0.60 sustained with ~0% retention is the fatal signature)"
   echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=2 ⇒ WARN · >=4 ⇒ ALARM · absent ⇒ rung skipped)"
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
   # SKIPPED, not "0" — an unreadable ps must never render as an empty, healthy-looking coalition.
@@ -658,7 +1003,8 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
   fi
-  echo "  swap used:              ${SWAP_MB:-0} MB   (>0 ⇒ ALARM, the lagging indicator)"
+  echo "  swap used:              ${SWAP_MB:-unreadable} MB   (a LEVEL never alarms — it latches for days)"
+  echo "  swap growth:            ${SWAP_DELTA:-unknown} MB in the last ${SWAP_WINDOW_S}s   (>=${SWAP_DELTA_MB} ⇒ ALARM)"
   echo "  est. room for:          >=${ROOM} more sessions (FLOOR: ~${PER_MB} MB/session is an rss-derived UPPER bound, so this under-promises)"
   echo "  VERDICT:                ${VERDICT}"
   if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then

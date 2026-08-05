@@ -438,16 +438,36 @@ SC
   [ ! -f "$page" ] || false
 }
 
-@test "(xv) the page slug is FIXED — a repeated alarm overwrites, never accumulates" {
-  # The unslugged channel has 490 files on disk. A job on a 10-minute interval must not add to that,
-  # so damping is by construction (one path) rather than by a separate damper.
+@test "(xv) page slugs are BOUNDED — repeated alarms overwrite/hold, never accumulate" {
+  # The unslugged channel has 490 files on disk. A job on a 60 s interval must not add to that, so
+  # damping is by construction: ONE combined slug (rewritten each tick) + ONE slug per rung that has
+  # crossed (written on ITS transition, held while the state stands — D3). Three identical WARN runs
+  # therefore produce exactly TWO files — combined + headroom — and the count must not grow.
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages2"
   for _ in 1 2 3; do
     run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
     [ "$status" -eq 1 ] || false
+    n="$(find "$CC_PAGES_DIR" -name '*.page' | wc -l | tr -d ' ')"
+    [ "$n" -eq 2 ] || false
   done
-  n="$(find "$CC_PAGES_DIR" -name '*.page' | wc -l | tr -d ' ')"
-  [ "$n" -eq 1 ] || false
+  [ -f "$CC_PAGES_DIR/capacity-alarm.page" ] || false
+  [ -f "$CC_PAGES_DIR/capacity-alarm-headroom.page" ] || false
+}
+
+@test "(xv-b) a per-rung page is written on the TRANSITION only — a standing state never resets its clock" {
+  # The file's epoch answers "when did this start"; a 60 s rewrite would reset that answer every
+  # tick. Run 1 crosses OK→WARN and writes; run 2 holds WARN and must leave the file untouched.
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages-trans"
+  run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 1 ] || false
+  page="$CC_PAGES_DIR/capacity-alarm-headroom.page"
+  [ -f "$page" ] || false
+  m1="$(stat -f %m "$page")"
+  sleep 1
+  run env CC_CAP_WARN_GB=999999 /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 1 ] || false
+  m2="$(stat -f %m "$page")"
+  [ "$m1" = "$m2" ] || false
 }
 
 @test "(xvi) NO-DATA also retracts a stale page — never assert a condition we cannot see" {

@@ -32,6 +32,7 @@ run_classify() { # <script> <args...>
   local script="$1"; shift
   bash -c '
     WARN_GB=8; ALARM_GB=3; PROC_WARN_GB=3; SEG_WARN_PCT=45; SEG_ALARM_PCT=70
+    SWAP_DELTA_MB=256; SWAP_WINDOW_S=600; COAL_WARN=500; COAL_ALARM=700
     '"$(sed -n '/^classify() {/,/^}/p' "$script")"'
     classify "$@"
   ' _ "$@"
@@ -80,36 +81,98 @@ run_classify() { # <script> <args...>
   [ "$output" = "ALARM" ]
 }
 
-@test "read_segments refuses to invent a number when zprint is unreadable" {
-  # Three distinct unreadable shapes, each of which must fail (non-zero) rather than print a 0 that
-  # would render as a healthy 0.0%.
-  local stub="$D/bin"; mkdir -p "$stub"
-  printf '#!/bin/bash\necho "zone name a b c d e f g h"\n' > "$stub/zprint"   # row absent
-  chmod +x "$stub/zprint"
-  run bash -c 'CC_CAP_ZPRINT='"$stub"'/zprint; '"$(sed -n '/^read_segments() {/,/^}/p' "$A")"'
+# ── read_segments under the 2026-08-05 D2 contract: est lane is PRIMARY, zprint is opt-in ─────────
+# The extraction runs with a stub-only PATH so neither lane can touch the live machine — the old
+# suite stubbed zprint alone, which was hermetic only while zprint was the only source.
+
+mk_seg_stubs() { # <dir> [swap_used] — writes stub vm_stat + sysctl; caller may add zprint/timeout
+  mkdir -p "$1"
+  printf '#!/bin/bash\necho "Mach Virtual Memory Statistics: (page size of 16384 bytes)"\necho "Pages occupied by compressor:                       400."\n' > "$1/vm_stat"
+  printf '#!/bin/bash\ncase "$2" in\n  vm.compressor_segment_limit) echo 1629615 ;;\n  vm.swapusage) echo "vm.swapusage: total = 4096.00M  used = %s  free = 4032.00M  (encrypted)" ;;\n  *) exit 1 ;;\nesac\n' "${2:-64.00M}" > "$1/sysctl"
+  chmod +x "$1/vm_stat" "$1/sysctl"
+}
+
+run_read_segments() { # <script> <stubdir> [env...]
+  local script="$1" stub="$2"; shift 2
+  run env PATH="$stub:/usr/bin:/bin" "$@" bash -c "$(sed -n '/^read_segments() {/,/^}/p' "$script")"'
                read_segments'
+}
+
+@test "read_segments refuses to invent a number when BOTH lanes are unreadable" {
+  # Broken sysctl kills the limit read; broken vm_stat kills the est lane. Each must fail (non-zero,
+  # no output) rather than print a value that would render as a healthy 0.0%.
+  local stub="$D/bin"; mkdir -p "$stub"
+  printf '#!/bin/bash\nexit 1\n' > "$stub/sysctl"; chmod +x "$stub/sysctl"
+  printf '#!/bin/bash\nexit 1\n' > "$stub/vm_stat"; chmod +x "$stub/vm_stat"
+  run_read_segments "$A" "$stub"
   [ "$status" -ne 0 ]
   [ -z "$output" ]
 
-  printf '#!/bin/bash\necho "compressor_segment 184 0K 0K 0 0 BOGUS 0K 0"\n' > "$stub/zprint"
-  chmod +x "$stub/zprint"
-  run bash -c 'CC_CAP_ZPRINT='"$stub"'/zprint; '"$(sed -n '/^read_segments() {/,/^}/p' "$A")"'
-               read_segments'
+  # Limit readable, vm_stat broken — the est lane must still refuse.
+  mk_seg_stubs "$stub"
+  printf '#!/bin/bash\nexit 1\n' > "$stub/vm_stat"; chmod +x "$stub/vm_stat"
+  run_read_segments "$A" "$stub"
   [ "$status" -ne 0 ]
 
-  run bash -c 'CC_CAP_ZPRINT=/nonexistent/zprint; '"$(sed -n '/^read_segments() {/,/^}/p' "$A")"'
-               read_segments'
+  # vm_stat readable, swapusage unparsable — half an estimate is not an estimate.
+  mk_seg_stubs "$stub"
+  printf '#!/bin/bash\ncase "$2" in\n  vm.compressor_segment_limit) echo 1629615 ;;\n  *) echo "garbage" ;;\nesac\n' > "$stub/sysctl"
+  chmod +x "$stub/sysctl"
+  run_read_segments "$A" "$stub"
   [ "$status" -ne 0 ]
 }
 
-@test "read_segments parses a well-formed row: inuse is column 7" {
-  local stub="$D/bin2"; mkdir -p "$stub"
-  printf '#!/bin/bash\necho "compressor_segment 184 0K 0K 0 0 814807 0K 0"\n' > "$stub/zprint"
-  chmod +x "$stub/zprint"
-  run bash -c 'CC_CAP_ZPRINT='"$stub"'/zprint; '"$(sed -n '/^read_segments() {/,/^}/p' "$A")"'
-               read_segments'
+@test "read_segments est lane: in-core (pages×pgsz/64KiB) + swapped (used/64KiB), source tagged est" {
+  # 400 pages × 16384 B = 100 in-core segments; 64.00M used = 1024 swapped segments; sum 1124.
+  # The swapped term is why the estimate matches the kernel's own accounting — the segment limit
+  # counts swapped-out descriptors too (xnu vm_compressor.c:595, panic-compressor-2026-08-05.md §4a).
+  local stub="$D/bin2"; mk_seg_stubs "$stub"
+  run_read_segments "$A" "$stub"
   [ "$status" -eq 0 ]
-  [[ "$output" == 814807\ * ]] || false
+  [ "$output" = "1124 1629615 est" ]
+}
+
+@test "read_segments zprint lane is opt-in, timeout-wrapped, and falls through to est on failure" {
+  # Opt-in + healthy: column 7 through a stub timeout that must be present (an unwrapped zprint is
+  # the exact hang D2 removes).
+  local stub="$D/bin3"; mk_seg_stubs "$stub"
+  printf '#!/bin/bash\necho "compressor_segment 184 0K 0K 0 0 814807 0K 0"\n' > "$stub/zprint"
+  printf '#!/bin/bash\nshift 3; exec "$@"\n' > "$stub/timeout"   # swallows -k 1 3
+  chmod +x "$stub/zprint" "$stub/timeout"
+  run_read_segments "$A" "$stub" CC_CAP_SEG_SOURCE=zprint
+  [ "$status" -eq 0 ]
+  [ "$output" = "814807 1629615 zprint" ]
+
+  # Opt-in + broken zprint: falls THROUGH to the estimate rather than deleting the rung — a slow
+  # lane that takes the rung down when it stalls would be strictly worse than not having it.
+  printf '#!/bin/bash\necho "zone name a b c d e f g h"\n' > "$stub/zprint"; chmod +x "$stub/zprint"
+  run_read_segments "$A" "$stub" CC_CAP_SEG_SOURCE=zprint
+  [ "$status" -eq 0 ]
+  [ "$output" = "1124 1629615 est" ]
+
+  # Opt-in with NO timeout binary: the slow lane is skipped entirely, never run bare.
+  rm -f "$stub/timeout"
+  run_read_segments "$A" "$stub" CC_CAP_SEG_SOURCE=zprint CC_CAP_TIMEOUT=/nonexistent/timeout
+  [ "$status" -eq 0 ]
+  [ "$output" = "1124 1629615 est" ]
+}
+
+@test "read_prior swap baseline is the WINDOW MINIMUM, not the oldest row (decay must not hide growth)" {
+  # Rows: outside-window trough (50) must be excluded; in-window 300 then trough 100 — the baseline
+  # is 100, so growth measured from the trough catches a burst that an oldest-row (300) baseline
+  # would subtract away. D1, docs/research/panic-compressor-2026-08-05.md §5.
+  local log="$D/prior.jsonl" now
+  now="$(date -u +%s)"
+  ts() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+  printf '{"ts":"%s","swap_used_mb":50}\n'  "$(ts $((now-900)))"  > "$log"
+  printf '{"ts":"%s","swap_used_mb":300}\n' "$(ts $((now-500)))" >> "$log"
+  printf '{"ts":"%s","swap_used_mb":100}\n' "$(ts $((now-200)))" >> "$log"
+  run bash -c '
+    LOG='"$log"'; PRIOR_ROWS=15; SWAP_WINDOW_S=600; NOW_EPOCH='"$now"'
+    '"$(sed -n '/^read_prior() {/,/^}/p' "$A")"'
+    read_prior'
+  [ "$status" -eq 0 ]
+  [[ "$output" == 100\|* ]] || false
 }
 
 @test "the in-script selftest is GREEN and reports 6 rungs" {
