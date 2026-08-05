@@ -95,12 +95,17 @@
 # 7-45 s ever creeps, the IDL's size is the first place to look, not the item count.
 #
 # WHY NOT the two obvious alternatives, both of which look smaller and are wrong:
-#   (a) "release the lock before the spawn tail, keep the pull inside." UNSAFE TWICE OVER.
-#       `cc-backlog claim` has NO already-claimed guard (cmd_transition appends the event from any
-#       status — deliberately, see its own header), so two passes whose pulls straddle a claim BOTH
-#       claim the same id: the 2026-07-20 double-worker incident exactly. And `warm_worktree` runs
-#       `git -C <repo> worktree add`, which races on .git/config.lock when two tails run
-#       concurrently (GH #34645/#48927). The tail genuinely needs serialising.
+#   (a) "release the lock before the spawn tail, keep the pull inside." UNSAFE TWICE OVER when this
+#       was written; ONE of the two reasons has since been closed, and the conclusion still holds on
+#       the other. Reason 1 (RETIRED 2026-08-05, backlog 1cb7724b2ed9): `cc-backlog claim` had NO
+#       already-claimed guard, so two passes whose pulls straddled a claim BOTH claimed the same id —
+#       the 2026-07-20 double-worker incident exactly. `claim` is now a LEASE: a claim against an
+#       item whose holder is not PROVEN dead is refused rc 4 (see THE CLAIM IS A LEASE in
+#       cc-backlog's header), and a pass still inside its own tail is live by `kill -0`, so the
+#       second pass is refused rather than duplicated. Reason 2 STILL BINDS and is why this stays as
+#       it is: `warm_worktree` runs `git -C <repo> worktree add`, which races on .git/config.lock
+#       when two tails run concurrently (GH #34645/#48927). The tail genuinely needs serialising —
+#       the lease is a second line of defence BEHIND this lock, never a replacement for it.
 #   (b) "a second, separate admission lock." Buys nothing here: the loser of an admission lock would
 #       still have to decide lock-free to fix A2, and once it does, the FIRST lock has no remaining
 #       job. One lock, acquired at the same instant as before, is strictly less mechanism.
@@ -418,6 +423,15 @@ live_workers() { # <backlog-bin> → count of workers dispatch has OUT, or "" fo
 fire_excerpt() {
   { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
   tr '\n\t' '  ' < "$1" 2>/dev/null | tr -cd '\40-\176' | tail -c 200
+}
+
+# claim_excerpt <file> → a claim refusal's HEADLINE (first line, sanitized, bounded).
+# HEAD-biased on purpose, unlike fire_excerpt: a lease refusal states its verdict in line 1 and
+# spends the rest naming the escape hatches, so a tail-200 excerpt (right for a spawn log, whose
+# error is at the END) would journal the boilerplate and drop the one line that says WHY.
+claim_excerpt() {
+  { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
+  head -1 "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
 }
 
 # ── S7: fair ordering ─────────────────────────────────────────────────────────────────────────────
@@ -919,9 +933,19 @@ dispatch() { # <dry|run|decide>
       FAILED=$((FAILED + 1)); idl failed "$id: empty/invalid fire_line"; continue
     fi
 
-    # a. claim
-    if ! "$backlog" claim "$id" --by "$SID" >/dev/null 2>&1; then
-      FAILED=$((FAILED + 1)); idl failed "$id: claim failed"; continue
+    # a. claim — THE LEASE. A refusal here (rc 4) is the system WORKING: another worker already
+    # holds this item and cc-backlog declined to mint a second one onto it. That must be
+    # distinguishable in the journal from a broken ledger or an unknown id, else healthy contention
+    # reads as breakage — the same un-evidenced-verdict defect the spawn capture below exists to fix.
+    local cerrf crc cexc
+    cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
+    if [ -n "$cerrf" ]; then "$backlog" claim "$id" --by "$SID" >/dev/null 2>"$cerrf"; crc=$?
+    else                     "$backlog" claim "$id" --by "$SID" >/dev/null 2>&1;       crc=$?
+    fi
+    cexc="$(claim_excerpt "$cerrf")"
+    [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
+    if [ "$crc" -ne 0 ]; then
+      FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
     fi
     # a2. compose the BRIEF the fire_line references. wave-plan (a pure planner) only emits the
     # path; the actuator writes the content — with nothing writing it, every spawn died on the
