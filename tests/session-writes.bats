@@ -70,7 +70,10 @@ PY
 
 # A repo with a clean origin/main plus whatever dirt the test asks for.
 repo() { # $1=dir
-  local w="$1" o="$1.git"
+  # `${1:?}` covers the half `|| exit 1` below CANNOT: `cd ""` RETURNS 0 (measured 2026-08-05), so
+  # on an empty $w the guard never fires and every command in that subshell runs in the TEST's cwd
+  # — this repo — exactly the outcome the comment there says it is preventing.
+  local w="${1:?repo: dir required}" o="$1.git"
   git init -q --bare "$o"
   git clone -q "$o" "$w" 2>/dev/null
   # `|| exit 1` is load-bearing, not ceremony: without it a failed cd runs every command below in

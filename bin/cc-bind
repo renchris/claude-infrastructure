@@ -142,7 +142,9 @@ cmd_selftest() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/cc-bind-selftest.XXXXXX")" || die "cannot mktemp"
   trap 'rm -rf "${tmp:-}"' EXIT
   (
-    cd "$tmp" || exit 1
+    # `${tmp:?}`, not a bare "$tmp": `cd ""` RETURNS 0 (measured 2026-08-05), so `|| exit 1` alone
+    # would let the identity write below land in the CALLER's repo if mktemp ever yielded empty.
+    cd "${tmp:?cc-bind selftest: scratch dir required}" || exit 1
     git init -q .; git config user.email t@t; git config user.name t
     echo seed > seed.txt; git add seed.txt; git commit -qm "seed"
   ) || die "selftest: could not build the throwaway repo"

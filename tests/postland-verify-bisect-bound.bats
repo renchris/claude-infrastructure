@@ -53,7 +53,7 @@ setup() {
   export PATH="$STUB:$PATH"
 
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
-  R="$CC_POSTLAND_REPO"
+  R="${CC_POSTLAND_REPO:?bisect-bound: fixture repo required}"
   git init -q --bare "$ORIGIN"
   git clone -q "$ORIGIN" "$R" 2>/dev/null
   git -C "$R" symbolic-ref HEAD refs/heads/main
