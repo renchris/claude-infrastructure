@@ -21,14 +21,25 @@
 # suffix (`"$d/repo"` — the suffix alone makes the argument non-empty, so the worst case is a write
 # to `/repo`, not to the caller's cwd).
 #
-# RULE 2 (the implicit cwd): an identity write with NO `-C` at all, preceded in the same region by
-# an UNGUARDED `cd` to an expansion. Same failure with the seam moved — the fixture's own `cd` is
-# what was supposed to put the write inside the fixture repo, so a `cd` that silently did not happen
-# leaves the write pointed at the caller's cwd. Guarded means the `cd` is `||`-chained (`|| exit`,
-# `|| return`) or `&&`-chained to the work that follows; anything else is a `cd` whose failure is
-# discarded. A write with no `-C` and no preceding `cd` is OUT OF SCOPE and never flagged — that
-# scoping is what stops rule 2 firing on every `git config` in the tree, which would pass every RED
-# assertion while proving nothing.
+# RULE 2 (the implicit cwd): an identity write with NO `-C` at all, preceded in the same region by a
+# `cd` that could leave the process in the caller's repo. Same failure with the seam moved — the
+# fixture's own `cd` is what was supposed to put the write inside the fixture repo, so a `cd` that
+# silently did not happen leaves the write pointed at the caller's cwd.
+#
+# A `cd` is SAFE only when BOTH legs hold, and the second is the one that is easy to get wrong:
+#   * GUARDED — `||`-chained (`|| exit`, `|| return`) or `&&`-chained to the work that follows, so a
+#     cd to a NONEXISTENT path cannot be discarded.
+#   * NON-EMPTIABLE ARGUMENT — because **`cd ""` RETURNS 0** (measured 2026-08-05: rc=0, cwd
+#     unchanged). A `cd "$x" || return 1` is therefore INERT against an empty `$x`: the `||` never
+#     fires and the `&&` never short-circuits, so the write still lands in the caller's repo. Scoring
+#     the PRESENCE of a guard would mark every empty-variable site green — the exact
+#     "denylist enumerates spellings, not the class" trap this tree has hit before. The
+#     discriminating test is the ARGUMENT: a literal suffix (`"$d/repo"`), a `${x:?}` that aborts
+#     rather than expanding to empty, or a variable PROVEN non-empty earlier in the region.
+#
+# A write with no `-C` and no preceding `cd` is OUT OF SCOPE and never flagged — that scoping is what
+# stops rule 2 firing on every `git config` in the tree, which would pass every RED assertion while
+# proving nothing.
 #
 # ACCEPTED FLOOR, stated rather than hidden. The scan is TEXTUAL and per-line, and the region rule 2
 # tracks is delimited heuristically — a `@test` / function opener or a closing `}`/`)` at the start
@@ -94,6 +105,13 @@ git-identity-lint.bats"
 # `|| true`: read returns 1 when it hits EOF without finding the NUL delimiter, which is every time.
 IFS= read -r -d '' GITID_AWK <<'AWK' || true
 function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+# BARE = the whole argument is one expansion, or the empty string: nothing in it can make the
+# argument non-empty. VNAME pulls the variable out of $1 / ${1} / $r / ${r}.
+function bare(a) { return (a == "" || a ~ /^\$[0-9]+$/ || a ~ /^\$[A-Za-z_][A-Za-z0-9_]*$/ ||
+                           a ~ /^\$\{[0-9]+\}$/ || a ~ /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/) }
+function vname(a) { gsub(/^\$\{?|\}$/, "", a); return a }
+function emptiable(a) { return bare(a) && !(vname(a) in proven) }
+function unquote(a) { gsub(/^["']|["']$/, "", a); return a }
 {
   line = $0
   sub(/[[:space:]]+#.*$/, "", line)          # trailing comment
@@ -114,22 +132,43 @@ function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); ret
   # file contain a ${…:?} anywhere": that file-level shape would clean a file whose guard governs a
   # DIFFERENT variable, which is the vacuous-pass trap the header already records for rules 2-4.
   # `split("", proven)` rather than `delete proven` — this box's awk is BWK, not gawk.
+  # EVERY assignment on the line, not just the first: `local o="$T/o" w="$T/w"` and
+  # `o="$T/o"; w="$T/w"` are both single lines that bind TWO paths, and matching once proved `o`
+  # while leaving `w` convicted — which is how 13 correct sites survived the first pass here.
   if (match(line, /^[[:space:]]*:[[:space:]]+"?\$\{[A-Za-z0-9_]+:\?/)) {         # : "${1:?msg}"
     seg = substr(line, RSTART, RLENGTH); gsub(/^.*\$\{|:\?$/, "", seg); if (seg != "") proven[seg] = 1
   }
-  if (match(line, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="?\$\{[A-Za-z0-9_]+:\?/)) {
-    seg = substr(line, RSTART, RLENGTH)                                           # local r="${1:?msg}"
+  rest = line                                                                     # local r="${1:?msg}"
+  while (match(rest, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="?\$\{[A-Za-z0-9_]+:\?/)) {
+    seg = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
     lhs = seg; sub(/^local[[:space:]]+/, "", lhs); sub(/=.*$/, "", lhs); if (lhs != "") proven[lhs] = 1
     rhs = seg; gsub(/^.*\$\{|:\?$/, "", rhs);                          if (rhs != "") proven[rhs] = 1
   }
-  if (match(line, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="\$\{?[A-Za-z0-9_]+\}?\/[^"]+"/)) {
-    seg = substr(line, RSTART, RLENGTH)                                           # repo="$d/repo"
+  rest = line                                                                     # repo="$d/repo"
+  while (match(rest, /(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="\$\{?[A-Za-z0-9_]+\}?\/[^"]*"/)) {
+    seg = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
     lhs = seg; sub(/^local[[:space:]]+/, "", lhs); sub(/=.*$/, "", lhs); if (lhs != "") proven[lhs] = 1
   }
 
-  # An UNGUARDED cd to an expansion: no ||-chain, no &&-chain, so its failure is discarded.
-  if (line ~ /(^|[[:space:];&|(])cd[[:space:]]+(--[[:space:]]+)?"?\$/ && line !~ /\|\|/ && line !~ /&&/)
-    cdline = NR
+  # A cd whose failure OR whose emptiness can leave the process in the caller's repo. BOTH legs
+  # are required, and the second is the one that is easy to get wrong:
+  #
+  #   * UNGUARDED (no ||, no &&) — a cd to a NONEXISTENT path fails and the write lands in cwd.
+  #   * EMPTIABLE argument — `cd ""` RETURNS 0 (measured 2026-08-05, bash 3.2/5.x: rc=0, cwd
+  #     unchanged). So `cd "$x" || return 1` is INERT against an empty $x: the guard never fires,
+  #     and the write still lands in the caller's repo. Scoring the PRESENCE of a `||` would mark
+  #     every empty-variable site green — the same "denylist enumerates spellings, not the class"
+  #     trap the repo has hit before. The discriminating test is the ARGUMENT, not the guard.
+  #
+  # So: safe only when the argument cannot be empty (a literal suffix like "$d/repo", a `${x:?}`
+  # which aborts rather than expanding to empty, or a variable PROVEN in this region) AND the cd
+  # is guarded against a nonexistent path.
+  if (match(line, /(^|[[:space:];&|(])cd[[:space:]]+(--[[:space:]]+)?[^[:space:];&|)]+/)) {
+    cdarg = substr(line, RSTART, RLENGTH)
+    sub(/^[^c]*cd[[:space:]]+/, "", cdarg); sub(/^--[[:space:]]+/, "", cdarg)
+    cdarg = unquote(cdarg)
+    if (emptiable(cdarg) || (line !~ /\|\|/ && line !~ /&&/)) cdline = NR
+  }
 
   if (line !~ /git[[:space:]]/) next
   if (line !~ /config/) next
@@ -141,10 +180,7 @@ function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); ret
     gsub(/^["']|["']$/, "", arg)
     # BARE = the whole argument is one expansion, or the empty string. Nothing in it can make the
     # argument non-empty, so `git -C` degrades to a no-op and the write lands in the caller's cwd.
-    name = arg; gsub(/^\$\{?|\}$/, "", name)     # $1 / ${1} / $r / ${r} → the bare variable name
-    if ((arg == "" || arg ~ /^\$[0-9]+$/ || arg ~ /^\$[A-Za-z_][A-Za-z0-9_]*$/ ||
-         arg ~ /^\$\{[0-9]+\}$/ || arg ~ /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/) &&
-        !(name in proven))
+    if (emptiable(arg))
       printf "%d\tBARE-C\t%s\n", NR, trim(line)
   } else if (cdline > 0) {
     printf "%d\tAFTER-CD\t%s\n", NR, trim(line)
@@ -380,15 +416,38 @@ F
   git config user.email t@t
 }
 F
-  mk cd_guarded <<'F'
+  # THE INERT GUARD. `cd ""` returns 0, so a ||-chain on a bare expansion never fires. This fixture
+  # is the whole reason rule 2 keys on the ARGUMENT and not on the presence of a guard — it looks
+  # exactly like the remedy and protects against nothing when the variable is empty.
+  mk cd_guarded_bare <<'F'
 @test "x" {
   cd "$dir" || return 1
   git config user.email t@t
 }
 F
-  mk cd_chained <<'F'
+  mk cd_chained_bare <<'F'
 @test "x" {
   cd "$dir" && git config user.email t@t
+}
+F
+  # Genuinely safe: the argument cannot BE empty (literal suffix / proven binding) AND the cd is
+  # guarded against a nonexistent path. Both legs, or it is not a fix.
+  mk cd_guarded <<'F'
+@test "x" {
+  cd "$d/repo" || return 1
+  git config user.email t@t
+}
+F
+  mk cd_chained <<'F'
+@test "x" {
+  cd "$d/repo" && git config user.email t@t
+}
+F
+  mk cd_guarded_proven <<'F'
+@test "x" {
+  repo="$BATS_TEST_TMPDIR/repo"
+  cd "$repo" || return 1
+  git config user.email t@t
 }
 F
   mk nocd <<'F'
@@ -415,8 +474,12 @@ F
   lint_tree "$d/prose" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a COMMENT naming the leaky shape counted as a write — the scan is matching prose"; fails=1; }
   # (d) RULE 2, with its scope control and both guard forms.
   lint_tree "$d/cd_bare" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an identity write after an UNGUARDED cd did not go RED"; fails=1; }
-  lint_tree "$d/cd_guarded" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a ||-guarded cd did not go GREEN"; fails=1; }
-  lint_tree "$d/cd_chained" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an &&-chained cd did not go GREEN"; fails=1; }
+  lint_tree "$d/cd_guarded" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a ||-guarded cd to a NON-EMPTIABLE path did not go GREEN"; fails=1; }
+  lint_tree "$d/cd_chained" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an &&-chained cd to a NON-EMPTIABLE path did not go GREEN"; fails=1; }
+  lint_tree "$d/cd_guarded_proven" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a ||-guarded cd to a PROVEN variable did not go GREEN"; fails=1; }
+  # THE INERT GUARD — `cd ""` returns 0, so these protect against nothing when the variable is empty
+  lint_tree "$d/cd_guarded_bare" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a ||-guarded cd to a BARE expansion did not go RED — \`cd \"\"\` returns 0, so the guard is INERT and rule 2 is scoring the guard instead of the argument"; fails=1; }
+  lint_tree "$d/cd_chained_bare" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an &&-chained cd to a BARE expansion did not go RED — the && never short-circuits on an empty path"; fails=1; }
   lint_tree "$d/nocd" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an identity write with NO -C and NO cd was flagged — rule 2 is not scoping"; fails=1; }
   # (e) the report NAMES file and line. A ratchet whose message cannot be acted on is detection.
   ( out="$(lint_tree "$d/bare_var" "" 2>&1)"
@@ -461,7 +524,7 @@ F
   ( CC_GITID_ALLOWLIST="" CC_GITID_OWN="tests/zz-fixture.bats" "$SELF" "$d/bare_var" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_GITID_OWN naming the file did not block at the entrypoint"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "git-identity-lint --selftest: 26/26 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd, on an &&-chained cd, and on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (path form accepted); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
+    echo "git-identity-lint --selftest: 29/29 — RULE 1 (bare -C): RED on a bare variable, a bare positional and the empty literal; GREEN on a \${1:?} guard, on an expansion with a literal suffix, and on a literal path; GREEN on a COMMENT naming the shape (the prose-match regression). RULE 1 SCOPE: GREEN on a use site under a \${1:?}-PROVEN binding (the guard belongs on the binding, so demanding it per use site would convict the prescribed fix), and RED on all three mutants of that proof — guard deleted, guard proving a DIFFERENT variable, guard in a DIFFERENT region — which is what separates scope-awareness from a file-level wildcard. RULE 2 (implicit cwd): RED on a write after an UNGUARDED cd; GREEN on a ||-guarded cd, on an &&-chained cd, and on a write with no cd at all (the scope control). Report names file:line; the ratchet is consulted BOTH ways (grandfathered ⇒ green, fixed-but-listed ⇒ red); own-scope blocks INSIDE the diff and advises OUTSIDE it (path form accepted); a NON-VERDICT (exit 2) on an unrunnable scan with no fabricated line, on a missing root, and on a root with nothing to judge; self-exclusion proved by name; and both env seams (CC_GITID_ALLOWLIST, CC_GITID_OWN incl. its set-but-empty state) proved at the entrypoint."
     exit 0
   fi
   echo "git-identity-lint --selftest: FAILED — the ratchet does not discriminate."
