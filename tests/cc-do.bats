@@ -265,7 +265,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
   o="$BATS_TEST_TMPDIR/o.git"; w="$BATS_TEST_TMPDIR/w"
   git init -q --bare "$o"
   git clone -q "$o" "$w"
-  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     echo base > base.txt; git add base.txt; git commit -q -m base; git push -q -u origin main
     echo more > more.txt; git add more.txt; git commit -q -m ahead; git push -q origin main
     git reset -q --hard HEAD~1 ) >/dev/null 2>&1

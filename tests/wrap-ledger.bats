@@ -14,7 +14,7 @@ setup() {
   WORK="$BATS_TEST_TMPDIR/work"
   git init -q --bare "$ORIGIN"
   git clone -q "$ORIGIN" "$WORK"
-  cd "$WORK"
+  cd "$WORK" || return 1
   git config user.email tester@example.com
   git config user.name tester
   git checkout -q -b main

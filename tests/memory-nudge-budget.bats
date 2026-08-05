@@ -183,7 +183,7 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
 @test "index is resolved through the git COMMON dir, not the linked worktree path" {
   main="$BATS_TEST_TMPDIR/proj"; mkdir -p "$main"
   git init -q "$main"
-  ( cd "$main"; git config user.email t@e.com; git config user.name t
+  ( cd "$main" || exit 1; git config user.email t@e.com; git config user.name t
     echo x > a.txt; git add a.txt; git commit -q -m base ) >/dev/null 2>&1
   wt="$BATS_TEST_TMPDIR/wt-linked"
   ( cd "$main"; git worktree add -q -b wtb "$wt" ) >/dev/null 2>&1

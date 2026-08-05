@@ -17,7 +17,7 @@ setup() {
 mkinfra() {  # a fresh git repo whose basename is claude-infrastructure → infra detection fires
   local w="$BATS_TEST_TMPDIR/claude-infrastructure"
   rm -rf "$w"; git init -q "$w"
-  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     echo base > README.md; git add README.md; git commit -qm base ) >/dev/null 2>&1
   printf '%s' "$w"
 }
@@ -96,7 +96,7 @@ run_tqg() {  # $1=worktree  $2=team_name
 
 @test "non-infra repo without node_modules → falls through, exit 0 (tsc path skips, unchanged)" {
   local w="$BATS_TEST_TMPDIR/some-app"; rm -rf "$w"; git init -q "$w"
-  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     echo x > a.txt; git add a.txt; git commit -qm base; echo y > b.txt ) >/dev/null 2>&1
   run run_tqg "$w" "team-x"
   [ "$status" -eq 0 ]

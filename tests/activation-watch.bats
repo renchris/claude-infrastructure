@@ -222,7 +222,7 @@ stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q
 mkmirror() { # → a checkout whose docs/activation/pending-activation is the repo-side mirror
   local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
   git init -q --bare "$o"; git clone -q "$o" "$w" 2>/dev/null
-  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     mkdir -p docs/activation/pending-activation
     printf '#!/bin/bash\n# committed\n' > docs/activation/pending-activation/landed-activate.sh
     git add -A; git commit -q -m base; git push -q -u origin main ) >/dev/null 2>&1

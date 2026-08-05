@@ -24,7 +24,7 @@ setup() {
 mkrepo_landed() {   # clean, HEAD == origin/main (nothing to drive)
   local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
   git init -q --bare "$o"; git clone -q "$o" "$w"
-  ( cd "$w"; git config user.email t@e.com; git config user.name t; git checkout -q -b main
+  ( cd "$w" || exit 1; git config user.email t@e.com; git config user.name t; git checkout -q -b main
     echo base > base.txt; git add base.txt; git commit -q -m base; git push -q -u origin main ) >/dev/null 2>&1
   printf '%s' "$w"
 }
