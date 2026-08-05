@@ -38,6 +38,7 @@ setup() {
 case "$*" in
   *"-Ao"*) cat "${PSTAB:-/dev/null}" ;;
   *"-t"*)  [ "${PS_CC_ALIVE:-0}" = 1 ] && echo claude ;;
+  *"eww"*) printf '%s\n' "${PS_ENV_BLOB:-}" ;;   # G3b: cc_sid_for_pane's pane→pid env probe
   *)       : ;;
 esac
 exit 0
@@ -110,6 +111,45 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
   run cc_sid_for_pane "$PANE"
   [ "$status" -eq 0 ]
   [ "$output" = "$CCSID" ]
+}
+
+# ── G3b: a PROVISIONAL row must not silently disarm the gate ──────────────────────────────
+# RED before the fix. ensure_registration (P0-12) writes {paneUUID,name,cwd,cmd,provisional} with
+# NO session_id when no SessionStart row lands inside FIRE_REG_TIMEOUT — the steady state for a
+# fired peer (measured 2026-08-05: 10 of 19 live rows provisional-or-backfilled). cc_sid_for_pane
+# returned EMPTY, so the gate took its "missing row" branch, WARNed to a stderr no retiring peer
+# reads, and live_teammates_of "" returned nothing — a PASS. The sid was recoverable the whole
+# time from CC's own per-pid registry, which is what this locks.
+@test "G3b: cc_sid_for_pane falls back to CC's own session file when the row is provisional" {
+  printf '{"paneUUID":"%s","name":"peer","cwd":"/tmp","cmd":"claude","provisional":true}\n' \
+    "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
+  run cc_sid_for_pane "$PANE"                      # control: the row alone cannot answer
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+
+  export CC_SESSIONS_DIRS="$BATS_TEST_TMPDIR/sessions"; mkdir -p "$CC_SESSIONS_DIRS"
+  printf '{"pid":%s,"sessionId":"%s","kind":"interactive"}\n' "$$" "$CCSID" \
+    > "$CC_SESSIONS_DIRS/$$.json"                  # $$ is live, so kill -0 passes
+  export PS_ENV_BLOB="ITERM_SESSION_ID=w0t0p0:$PANE"
+  run cc_sid_for_pane "$PANE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$CCSID" ]
+}
+
+# ── G3c: the fallback must never resurrect a DEAD session's sid ───────────────────────────
+# A pane id is not a tenancy (7c049231): kitty reuses ids, so a session file naming a dead pid must
+# not authorise anything on the pane that inherited its number. kill -0 is the guard.
+@test "G3c: cc_sid_for_pane ignores a session file whose pid is dead" {
+  printf '{"paneUUID":"%s","name":"peer","cwd":"/tmp","cmd":"claude","provisional":true}\n' \
+    "$PANE" > "$CC_REGISTRY_DIR/$PANE.json"
+  export CC_SESSIONS_DIRS="$BATS_TEST_TMPDIR/sessions"; mkdir -p "$CC_SESSIONS_DIRS"
+  # pid 2^31-1: reserved-high, never live on darwin — a dead-pid row by construction
+  printf '{"pid":2147483647,"sessionId":"%s","kind":"interactive"}\n' "$CCSID" \
+    > "$CC_SESSIONS_DIRS/dead.json"
+  export PS_ENV_BLOB="ITERM_SESSION_ID=w0t0p0:$PANE"
+  run cc_sid_for_pane "$PANE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 # ── G4: THE GATE — self-close REFUSES while assignees live, and names them ────────────────

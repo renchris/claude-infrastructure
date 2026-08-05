@@ -1702,9 +1702,46 @@ write_forward_for() { # $1=old-pane $2=new-pane
 cc_sid_for_pane() { # $1=pane-uuid -> echoes the CC session id, or nothing
   local _pane="${1:-}"
   [ -n "$_pane" ] || return 0
-  grep -oE '"session_id":[[:space:]]*"[^"]+"' \
+  local _sid _f _p _env
+  _sid=$(grep -oE '"session_id":[[:space:]]*"[^"]+"' \
     "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$_pane.json" 2>/dev/null \
-    | head -1 | sed -E 's/.*"([^"]+)"$/\1/' || true
+    | head -1 | sed -E 's/.*"([^"]+)"$/\1/') || true
+  if [ -n "$_sid" ]; then printf '%s' "$_sid"; return 0; fi
+  # SECOND SOURCE — CC's own per-pid registry. ensure_registration (P0-12) writes a PROVISIONAL row
+  # — {paneUUID,name,cwd,cmd,provisional} — when no SessionStart row appears within
+  # FIRE_REG_TIMEOUT, and that schema deliberately carries NO session_id. For a fired peer that is
+  # the steady state (measured 2026-08-05: 10 of 19 live rows provisional-or-backfilled), so the
+  # grep above returned empty, the live-teammate gate below took its "missing row" branch, WARNed
+  # to a stderr no retiring peer reads, and live_teammates_of "" returned nothing — a PASS. The gate
+  # was disarmed by a row that was PRESENT, just sid-less.
+  #
+  # The recovery is the SAME derivation cc-reconcile uses to heal these rows (bin/cc-reconcile:190-199):
+  # $CLAUDE_CONFIG_DIR/sessions/<pid>.json carries {pid,sessionId} for every session and is written
+  # by Claude Code itself, independently of our hooks. Pane→pid comes from the process env
+  # (ITERM_SESSION_ID), the field session-register.sh already keys on. Reached ONLY when the row
+  # misses, so the hot path is untouched; bounded by the session-file count (~4/account).
+  #
+  # SELF-CONTAINED BY REQUIREMENT: four suites sed-extract this function as an ISOLATED unit
+  # (`sed -n '/^cc_sid_for_pane() {/,/^}/p'`), so a helper call here would be a 127 under `set -e` —
+  # the trap this file has already paid for once (V2 §11, defect 1). CC_SESSIONS_DIRS is the test
+  # seam: a fixtured $HOME would otherwise route every case into this branch's empty glob, leaving
+  # it permanently unexercised (memory: hermetic-home-routes-tests-into-the-fallback).
+  # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard that
+  # must expand across the per-account config dirs; quoting it would make the glob a literal path.
+  for _f in ${CC_SESSIONS_DIRS:-$HOME/.claude*/sessions}/*.json; do
+    [ -f "$_f" ] || continue
+    _p=$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$_f" 2>/dev/null | head -1)
+    [ -n "$_p" ] || continue
+    kill -0 "$_p" 2>/dev/null || continue          # a dead pid's sid must never authorise a close
+    _env=$(ps eww -p "$_p" 2>/dev/null | tr ' ' '\n' | grep -m1 '^ITERM_SESSION_ID=') || true
+    case "$_env" in
+      *:"$_pane") ;;                               # pane matches this LIVE session — take its sid
+      *) continue ;;
+    esac
+    _sid=$(sed -n 's/.*"sessionId":[[:space:]]*"\([^"]*\)".*/\1/p' "$_f" 2>/dev/null | head -1)
+    [ -n "$_sid" ] && { printf '%s' "$_sid"; return 0; }
+  done
+  return 0
 }
 
 # LIVE TEAMMATES of a lead session — the argv oracle. Every Agent-Team assignee is exec'd with
