@@ -274,3 +274,78 @@ agent-typed one-liners — a corpus lint can never see those.
   worktree** (`.git/worktrees/wt-run-57191` present, `BISECT_RUN`/`BISECT_EXPECTED_REV` parked). It
   is excluded from `worktree-gc` by design. It is holding a stale bisect and should be pruned —
   filed here, not acted on, because this was a read-only pass.
+
+---
+
+## Reconciliation of the concurrent fixes (2026-08-05 16:30, backlog `c2e571188ad2`)
+
+Five branches attacked this class within ~90 minutes. **Two of them must never land**, and the
+reason is not visible from their subjects — hence this section rather than a lint rule.
+
+### Verdict
+
+| Branch | Verdict | Basis |
+|---|---|---|
+| `wt-ae2ce4298dac` (`5f1d0757`) | **LAND — strongest shape** | 21 `${1:?fn: path required}` guards at the BINDING + 17 guarded `cd`. Guards where the defect lives: helper functions that take `$1` and never checked it. |
+| `fix/gi-corpus` (`159c7748`) | **DO NOT LAND AS-IS** | Real but small unique coverage; the bulk is inert-by-construction (below). |
+| `fix/gi-bisect` (`2f159a7b`) | **RETIRE — landing it REGRESSES trunk** | Subsumed entirely by trunk. |
+| `fix/gi-lint` (`b7f0f8bd`) | **HOLD — duplicate** | Second implementation of a lint that `wt-ae2ce4298dac` also carries (untracked `scripts/git-identity-lint.sh`). One must win; neither is landed. |
+| `integ/git-identity` (`5f505ff4`) | **RETIRE — stale merge, actively misleading** | Contains **1 of `fix/gi-corpus`'s 3 commits** (`36d55cf2`; `63d83926` and `159c7748` are absent). Anyone landing it believing it is "the reconciled branch" gets the pre-fix shape. |
+
+### Why `fix/gi-bisect` would regress trunk
+
+Trunk's `do_bisect` (`scripts/postland-verify.sh`, via `7c32cc6f` + `0c16d12f`) already carries
+everything that branch offers — the `RETURN` trap (and trunk's *self-disarms*, which the branch's
+does not), the `bisect UNBOUNDED` log when no `timeout(1)` resolves, and the rc-124 culprit-parse
+skip — **plus** `BISECT_MAX_STEPS`, which the branch lacks. The step cap is the bound that answers
+the measured cause: the 12h41m walk was not slow steps, it was a **growing range**, and a wall bound
+cannot see that. Backlog `4368b1ac7548` filed exactly this worry ("if gi-bisect lands its wall-only
+version and mine is rebased away, re-add the step cap") — it is resolved in trunk's favour, so the
+branch is now pure downside. All five branches are 12–21 commits behind trunk; a two-dot merge of
+this one deletes 1,815 lines.
+
+### Why `fix/gi-corpus` is not the weaker shape the backlog item describes — and still should not land
+
+The item characterises it as guarding "at the first `-C` USE … leaving the following
+`config user.email` on the bare variable". **That was true of `36d55cf2` only.** Its later two
+commits added binding guards in colon form, so `mkrepo` now reads:
+
+```bash
+: "${1:?mkrepo: repo path required}"          # binding guard, first statement
+mkdir -p "$1"; git -C "$1" init -q
+git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
+```
+
+Measured over the 59 files both branches touch: `fix/gi-corpus` = 20 binding + 16 use-site;
+`5f1d0757` = 25 binding + 0 use-site; trunk = 5 + 1. So the **downgrade risk the item flagged did
+not materialise** — a conflict resolution cannot silently demote binding guards to use-site guards,
+because gi-corpus guards at the binding too.
+
+What disqualifies it is the *other* half of the item's read, which is exactly right: it is *wider*
+than the census. In its 21 non-overlapping files the guarded variables **cannot be empty** —
+
+```bash
+R="$BATS_TEST_TMPDIR/main"                    # trailing literal segment
+git -C "${R:?repo path required}" config user.email t@t
+```
+
+`$R` is at minimum `/main`; `${R:?}` can never fire. This is the same class the census already
+acquitted (`git -C "$D/repo"`, Loose ends above). Landing ~18 such guards adds churn, protects
+nothing, and — worse — teaches the shape by example while leaving the *following* `config user.name`
+on the bare variable in the same line. Its genuine delta over `5f1d0757` is ~6 sites; those are
+worth cherry-picking onto the binding-guard commit, not landing wholesale.
+
+### Note on measurement
+
+Three successive greps here returned **0 for every ref including the commit that provably has 21
+guards**. The pattern missed the quote (`local r="${1:?…}"`), then missed the colon form
+(`: "${1:?…}"`) — and each null read as "absent" rather than "instrument blind". Every count above
+is positive-controlled (files-present + known-hit assertions). A guard census keyed on one spelling
+of the guard measures the spelling, not the guard.
+
+### `git-identity-lint.sh` cannot adjudicate any of this
+
+It convicts the *absence* of a guard, not its *placement*, its *reachability*, or whether the
+variable it guards can ever be empty. On the evidence above it would pass `integ/git-identity`
+(stale), pass `fix/gi-bisect` (which regresses an unrelated bound), and reward the inert guards.
+This section is the gate.
