@@ -223,6 +223,29 @@ names an absolute artifact path and states that writing it is the deliverable:
    prose in your turn is invisible to the lead.
 ```
 
+🚨 **Field 6 must never negate field 7 — scope the suppression, never the channel.**
+A read-only brief legitimately says "do not write files"; that clause means *do not
+mutate the subject under investigation*. Written bare, the subagent reads it as *your
+delivery channel is closed*, and field 7 is silently cancelled by the brief that also
+contains it. Say **"do not modify the repo under investigation"**, never a bare
+"Write NO files" — and keep the field-7 path in the same brief.
+
+**This failure is silent and total.** 2026-08-05, a 5-agent wave on the Next.js 16.3 /
+Replicache question: 4 briefs carried a bare "Write NO files." with no field 7. All four
+agents investigated correctly, reported in prose, and went idle with their findings
+stranded in their own transcripts — `idleReason: "available"` reads identically to a
+clean completion, so nothing surfaced the loss. The 1 agent that delivered was the 1
+whose brief omitted the suppression clause; it wrote to `/tmp/` and cited "this repo's
+own Delivery contract" for doing so. **The contract worked exactly where the lead did
+not override it.** Enforced at the spawn chokepoint by
+`hooks/agent-teams-enforce.sh` § DELIVERY-CONTRACT NEGATION GUARD (advisory; fires only
+on suppression-clause **AND** no-absolute-path).
+
+**Recovering an already-stranded report** — the findings are not lost, only unrouted.
+The agent's session JSONL lives in the project transcript dir
+(`~/.claude*/projects/<slug>/<session-id>.jsonl`); identify it by its opening
+`<teammate-message>` brief and extract the last long assistant `text` block.
+
 **Why this is a field and not advice.** In the 2026-08-04 12-agent wave
 (`docs/research/SUBAGENT_LIFECYCLE_SIGNAL_DISCONNECT_2026-08-04.md`), agent
 `H-failures` finished its axis at 03:11 and its report reached the lead at
