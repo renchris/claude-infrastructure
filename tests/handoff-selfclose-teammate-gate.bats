@@ -178,13 +178,29 @@ seed_teammate() { # $1=agent-name $2=pid $3=team-sid8
 # ── H1-H3: the husk-pane retry ────────────────────────────────────────────────────────────
 _arm_watcher_home() { # builds a $HOME with recording it2 + cc-notify stubs
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/bin"
+  # PIN THE TERMINAL. handoff-fire's primitives branch on the terminal, so run from inside kitty —
+  # or from an iTerm2 pane that merely INHERITED KITTY_* — this suite's verdict becomes a function
+  # of the developer's environment rather than of its subject. Same pin, same reason, as
+  # tests/handoff-selfclose.bats and tests/handoff-fire-pane-proof.bats.
+  unset KITTY_WINDOW_ID; export IT2_WRAPPER_NO_KITTY=1; unset CC_TERM
+  export STUB_PANE="$PANE"     # the listing must enumerate the pane these tests model
   export IT2_LOG="$BATS_TEST_TMPDIR/it2.log";     : > "$IT2_LOG"
   export NOTIFY_LOG="$BATS_TEST_TMPDIR/notify.log"; : > "$NOTIFY_LOG"
   # it2 stub: fails the first $IT2_FAIL_N `session close` calls, then succeeds.
+  # `session list` must ENUMERATE the pane these tests model. H1-H3 are about what the CLOSE does
+  # when it2 flakes — a stage the watcher only reaches once pane_proof has proven the pane
+  # reachable. A stub answering the empty list refuses at the probe and never runs the retry loop
+  # under test, which is why all three have been RED on trunk since the reachability handshake
+  # landed (2026-08-02). Answers both shapes the real transports emit (`--json` and bare ids), so
+  # the fixture cannot silently model only the transport that happened to work.
   cat > "$HOME/.claude/bin/it2" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${IT2_LOG:?}"
 case "$*" in
+  "session list"*)
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-PANE-A}"
+    else printf '%s\n' "${STUB_PANE:-PANE-A}"; fi
+    exit 0 ;;
   *"session close"*)
     n=$(grep -c "session close" "$IT2_LOG")
     if [ "$n" -le "${IT2_FAIL_N:-0}" ]; then

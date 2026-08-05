@@ -125,6 +125,10 @@ FAKE
   # next function. Extract them by their single line, and GUARD every extraction: an empty eval is
   # a vacuous pass, which is the failure mode this whole suite is supposed to prevent.
   x_kitty="$(sed -n '/^in_kitty() {/p' "$HF")";                    [ -n "$x_kitty" ]
+  # _as_tty_query branches on kitty_identity (IDENTITY), not on in_kitty (DIVERT) — a stale
+  # inherited KITTY_WINDOW_ID must not choose which id space a pane is looked up in. Also a
+  # one-liner, so extract it by its single line. Unpinned (CC_TERM unset, as here) it IS in_kitty.
+  x_kid="$(sed -n '/^kitty_identity() {/p' "$HF")";                [ -n "$x_kid" ]
   x_kt="$(sed -n '/^kt() {/p' "$HF")";                             [ -n "$x_kt" ]
   x_field="$(sed -n '/^kt_window_field() {/,/^}/p' "$HF")";        [ -n "$x_field" ]
   x_write="$(sed -n '/^as_write() {/,/^}/p' "$HF")";               [ -n "$x_write" ]
@@ -132,7 +136,7 @@ FAKE
   x_tab="$(sed -n '/^as_tab() {/,/^}/p' "$HF")";                   [ -n "$x_tab" ]
   x_sfm="$(sed -n '/^spawn_frontmost() {/,/^}/p' "$HF")";          [ -n "$x_sfm" ]
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF")";                     [ -n "$x_py" ]
-  eval "$x_kitty"; eval "$x_kt"; eval "$x_field"
+  eval "$x_kitty"; eval "$x_kid"; eval "$x_kt"; eval "$x_field"
   eval "$x_write"; eval "$x_ttyq"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"
 
   pin_iterm2

@@ -153,9 +153,29 @@ live_pid() {
 
 mk_home() { # $1=dir — it2 + cc-notify stubs that RECORD their args (watcher tests)
   local h="$1"; mkdir -p "$h/.claude/bin" "$h/.claude/cc-roles"
+  # `session list` must ENUMERATE the panes this fixture models. Every T-0 test below models a pane
+  # the watcher CAN reach — the scenario under test is what happens at the CLOSE INSTANT, which the
+  # watcher only reaches once pane_proof has passed. A stub answering the empty list asserts the
+  # opposite of its own setup, and did: these four tests have been RED on trunk since the
+  # reachability handshake landed (2026-08-02), refusing at the probe and never reaching the pin
+  # logic they exist to cover. The sibling tests/handoff-selfclose.bats mk_home was updated then;
+  # this one was missed. It answers BOTH shapes the real transports emit — `--json` (the real it2
+  # and bin/it2-kitty) and bare ids — because a fixture that only models the shape that happened to
+  # work is exactly how item 191d1fc4143c stayed invisible to a green suite.
   cat > "$h/.claude/bin/it2" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+if [ "${1:-}" = session ] && [ "${2:-}" = list ]; then
+  panes="${STUB_PANES:-PREDSID SUCC-B}"
+  if [ "${3:-}" = --json ]; then
+    sep=""; printf '['
+    for p in $panes; do printf '%s{"id": "%s", "tty": "/dev/ttys999"}' "$sep" "$p"; sep=", "; done
+    printf ']\n'
+  else
+    printf '%s\n' $panes
+  fi
+  exit 0
+fi
 exit 0
 SH
   cat > "$h/.claude/bin/cc-notify" <<'SH'
@@ -239,7 +259,10 @@ SH
   [ "$status" -ne 0 ]
   [[ "$output" == *"close-instant pin check FAILED"* ]] || false
   [[ "$output" == *"ABORTED at close-instant"* ]] || false
-  [ ! -f "$H/it2-calls.log" ]                    # it2 close NEVER invoked → predecessor left alive
+  # The invariant is "no CLOSE", not "no it2 call at all": the watcher's second act is a READ-ONLY
+  # `session list` reachability probe, so the log exists on every path. Same correction the sibling
+  # tests/handoff-selfclose.bats already carries.
+  ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false  # predecessor left alive
   grep -q "HANDOFF-STRAND-RISK" "$H/ccnotify-calls.log"
 }
 
@@ -263,7 +286,7 @@ SH
   run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B
   [ "$status" -ne 0 ]
   [[ "$output" == *"ABORTED at close-instant"* ]] || false
-  [ ! -f "$H/it2-calls.log" ]
+  ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false  # predecessor left alive
 }
 
 @test "watcher T-0: pin is NOT re-derived from the registry row (a NEW session cannot satisfy it)" {
@@ -276,7 +299,7 @@ SH
   run env HOME="$H" bash "$HF" __selfclose PREDSID TTY-A SUCC-B TTY-B "succ-sess-0 4242"
   [ "$status" -ne 0 ]                            # …but pid 4242 — the one we verified — is gone
   [[ "$output" == *"close-instant pin check FAILED"* ]] || false
-  [ ! -f "$H/it2-calls.log" ]
+  ! grep -q "session close" "$H/it2-calls.log" 2>/dev/null || false  # predecessor left alive
 }
 
 # ── 3. pid_is_cc — the CONVICTING predicate, against the REAL ps ─────────────────────────────────
