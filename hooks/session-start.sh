@@ -60,7 +60,18 @@ CONNECTED_COUNT=0
 
 if command -v claude &> /dev/null; then
   while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    if MCP_OUTPUT=$(claude mcp list 2>&1); then
+    # The pane identity is deliberately NOT inherited by this child. `claude mcp list` emits a
+    # SessionEnd hook event of its own — reason "other", a fresh session_id, and NO matching
+    # SessionStart — so every pane-keyed SessionEnd consumer reads it as THIS pane's session
+    # ending, one second into that session's life. That is how every session start came to delete
+    # its own cc-registry row (2026-08-05; hooks/session-deregister.sh header carries the
+    # measurement). That consumer now proves tenancy before acting, but the phantom event is the
+    # source and it fires for every consumer, including ones not written yet: blanking both vars
+    # makes it PANELESS, so a pane-keyed hook no-ops at its own pane gate instead of acting on a
+    # live pane's state. `claude mcp list` reads neither var for anything of its own. `env -u`
+    # (not a `VAR= ` prefix) so they are genuinely ABSENT, which is what the consumers' `${VAR:-}`
+    # gates read — and it costs one fork on a path that is already spawning a whole CLI.
+    if MCP_OUTPUT=$(env -u CC_PANE_ID -u ITERM_SESSION_ID claude mcp list 2>&1); then
       CONNECTED_COUNT=$(echo "$MCP_OUTPUT" | grep -c "Connected" || true)
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] MCP Status (attempt $((ATTEMPT+1))):" >> "$LOG_FILE"
       echo "$MCP_OUTPUT" >> "$LOG_FILE"
