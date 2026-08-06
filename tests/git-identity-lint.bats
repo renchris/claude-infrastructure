@@ -147,16 +147,36 @@ F
   printf '%s' "$output" | grep -q 'UNGUARDED cd' || { echo "fired, but not for rule 2's reason: $output"; false; }
 }
 
-@test "10: GREEN once that cd is ||-guarded" {
-  root="$(fixture cdguard <<'F'
+@test "10: RED once that cd is ||-guarded but its ARGUMENT is bare; GREEN once the argument cannot be empty" {
+  # This test asserted the ||-guarded form was GREEN and was left at its creating commit while the
+  # lint moved on: a92314e2 rekeyed rule 2 onto the ARGUMENT precisely because **`cd ""` RETURNS 0**
+  # (rc=0, cwd unchanged). A `|| return 1` on a bare expansion therefore never fires — the guard is
+  # INERT and the write still lands in the caller's repo — so scoring the PRESENCE of a guard would
+  # green-light every empty-variable site. The lint's own selftest pins the same pair (fixtures
+  # cd_guarded_bare / cd_guarded); the suite was stale, not the lint.
+  #
+  # BOTH directions in one test, deliberately: the RED half alone cannot distinguish "rule 2 keys on
+  # the argument" from "rule 2 fires on any cd-preceded write", and test 11's no-cd control does not
+  # separate those either — it only proves the rule needs A cd, not WHICH cd.
+  inert="$(fixture cdguardbare <<'F'
 @test "x" {
   cd "$w" || return 1
   git config user.email t@e.com
 }
 F
 )"
-  run bash "$LINT" "$root"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run bash "$LINT" "$inert"
+  [ "$status" -eq 1 ] || { echo "the INERT guard passed — rule 2 is scoring the guard, not the argument: $output"; false; }
+
+  safe="$(fixture cdguardsuffix <<'F'
+@test "x" {
+  cd "$w/repo" || return 1
+  git config user.email t@e.com
+}
+F
+)"
+  run bash "$LINT" "$safe"
+  [ "$status" -eq 0 ] || { echo "a guarded cd to a NON-EMPTIABLE path was flagged — rule 2 fires on every cd: $output"; false; }
 }
 
 @test "11: SCOPE CONTROL — an identity write with no -C and NO cd is never flagged" {
