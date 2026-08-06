@@ -7,6 +7,20 @@
 
 set -uo pipefail
 
+# PATH hardening — scripts/unattended-path-lint.sh governs this line.
+# A hook inherits the PATH of the Claude Code process that fired it, and that PATH is a function of
+# how the SESSION was started — not of anything this file or settings.json declares (settings.json
+# sets no PATH at all). An operator-launched session carries Homebrew; a spawned one may not. This
+# gate calls shellcheck, bats and npx by bare name and never checks for 127, so on a session without
+# Homebrew each returns "command not found", rc=1, and the gate REJECTS the task with a bogus body —
+# a blocking hook failing loudly for a reason that has nothing to do with the code it is judging.
+#
+# APPEND, never prepend: a session that already reaches these tools keeps its own resolution order
+# untouched, so this can only ever ADD reach. ~/.claude/bin leads the appended segment so `bats`
+# still lands on the cc-bats QoS chokepoint rather than the raw Homebrew binary behind it.
+PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+
 command -v jq &>/dev/null || exit 0
 
 INPUT=$(cat)

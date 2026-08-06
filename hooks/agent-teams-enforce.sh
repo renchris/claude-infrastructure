@@ -8,6 +8,16 @@
 
 set -uo pipefail
 
+# PATH hardening — scripts/unattended-path-lint.sh governs this line.
+# The allowlist read below resolves `yq` by bare name, and yq is Homebrew-only. A hook inherits its
+# Claude Code process's PATH, which for a spawned session need not carry Homebrew, so that read can
+# silently return nothing and fall through to the hardcoded default on the next line. That default
+# is a MODEL ID: the SSOT exists precisely so the allowlist tracks model-config.yaml, and a fallback
+# firing in production means the anti-drift read never happened and the value freezes at whatever
+# was hardcoded. APPEND, never prepend — this can only add reach, never change resolution order.
+PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+
 command -v jq &>/dev/null || exit 0
 
 INPUT=$(cat)

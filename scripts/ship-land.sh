@@ -1346,6 +1346,50 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── Unattended-PATH ratchet (bare-name binaries on launchd + hook paths, 2026-08-06) ──────────
+  # A bare command name resolves against whatever PATH the caller has. In the operator's shell that
+  # is a rich PATH with Homebrew on it, so the code always looks right; on a launchd job or a hook
+  # fired inside a spawned session the name may not exist, and the 127 is usually unchecked. Worst
+  # available polarity: GREEN where a human tests it, DEAD where it runs. It recurred five times as
+  # instances (e6de2e15's four sites, the bare-kitty fix behind bin/cc-kitty-bin) before anyone
+  # asserted the invariant — fixing instances is O(n) forever, asserting it is O(1).
+  #
+  # It belongs at the gate rather than only in its own suite for the reason the ratchets above
+  # document: gate-select picks suites by the files a land touches, so a land ADDING a hook would
+  # never select tests/unattended-path-lint.bats (memory: enforcement-must-live-at-the-chokepoint).
+  # ~6s, scope-independent, and it names the file to the session that wrote it — while the
+  # alternative is a no-op actuator or a fabricated instrument reading that shows up only in
+  # production, on the scheduled path, to someone who did not write it.
+  #
+  # The 16 sites carrying the shape today are grandfathered BY FILE+BINARY, so the rule binds only on
+  # new code; own-scope keeps one author's omission from becoming every author's outage.
+  UNATTENDED_LINT="${SHIP_LAND_UNATTENDED_LINT:-scripts/unattended-path-lint.sh}"
+  if [[ -x "$UNATTENDED_LINT" ]] && { [[ -d hooks ]] || [[ -d launchd ]]; }; then
+    local upown=""
+    if [[ "${SHIP_LAND_UNATTENDED_OWN_SCOPE:-on}" != "off" ]]; then
+      # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
+      # component strip. The pathspec must list every population the lint judges, or a land that adds
+      # a bare-name call to one of them produces an own-set without it and the finding degrades to
+      # advisory.
+      upown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 2>/dev/null || true)"
+      [[ -n "$upown" ]] && echo "→ gate: unattended-path own-scope — blocking on $(printf '%s\n' "$upown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: bare-name binaries on unattended paths (launchd jobs + settings.json hooks)" >&2
+    if ! "$UNATTENDED_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so" >&2
+      echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_UNATTENDED_OWN="$upown" "$UNATTENDED_LINT" >&2; then
+      echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
+      echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
+      echo "  PATH at the top of the file; the file, line and binary are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── Chromium-bundle ratchet (operator-reported Dock strobe, 2026-07-30) ───────────────────────
   # The full playwright Chromium.app bundle checks in with LaunchServices on EVERY launch even
   # under --headless, so the Dock paints a launching-app tile for the ~1.3s each process lives. A
