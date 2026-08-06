@@ -3514,9 +3514,22 @@ SID=""
 if [ "$RECYCLE" = 1 ]; then
   [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
   [ "$SURFACE_EXPLICIT" = 1 ] && { echo "!! --recycle excludes surface flags (same pane by definition)" >&2; exit 1; }
-  ITSID="${ITERM_SESSION_ID:-}"
-  SID="${SESSION_ID:-${ITSID##*:}}"
-  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
+  # SAME SELF-IDENTITY QUESTION AS self-close, same answer (item 4e074b938da7). Measured 2026-08-05:
+  # `--recycle` on a kitty pane with no $ITERM_SESSION_ID exited 1 here, so the in-place continuation
+  # the close protocol reaches for first — ♻️ Recycle, the cheapest and most common context
+  # disposition — was unavailable on a kitty box. self_pane_id's precedence and its ancestry gate are
+  # documented at its definition; pin_term_verdict_for_watcher is idempotent and the recycle path
+  # already calls it twice further down (before each pane→tty query), so this only moves the FIRST
+  # resolution ahead of its new first consumer.
+  #
+  # STRICTLY WIDENING, which is what makes it safe on an actuator that types /exit into a pane: the
+  # new branch is reachable ONLY when cc-in-kitty CONFIRMS kitty is our ancestor, and in that state
+  # today's code either refuses outright (no $ITERM_SESSION_ID) or resolves the SAME value from the
+  # synthetic one kitty-setup.sh:255 exports. There is no input for which this targets a pane the old
+  # code targeted differently — only inputs for which the old code targeted nothing at all.
+  pin_term_verdict_for_watcher
+  SID="${SESSION_ID:-$(self_pane_id)}"
+  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
   IN_PLACE=1                                     # relaunch stays in this pane's dir by definition
   if [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
     ACCOUNT="$(env_account)" \
