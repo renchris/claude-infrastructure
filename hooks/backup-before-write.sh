@@ -29,6 +29,55 @@ FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 BASENAME=$(basename "$FILE")
 LINES=$(wc -l < "$FILE" | tr -d ' ')
 
+# === MEMORY INDEX BUDGET (2026-08-06, backlog 07b0cbf4905a) ===
+# The one branch of this hook that can refuse a write. Everything else here ends `exit 0` with an
+# advisory `additionalContext` — it backs up and it warns. That is exactly the shape that has failed
+# for the MEMORY.md read limit twelve times: `hooks/memory-nudge.sh` measures the budget correctly
+# and only ADVISES, so the index was compacted twelve times between 07-25 and 08-06 and went back
+# over every time, and the ledger opened four items for one condition. A rule enforced anywhere but
+# where the act happens is detection, not a gate (MEMORY.md enforcement-must-live-at-the-chokepoint).
+#
+# It lives HERE, in a hook already wired into the PreToolUse Write|Edit|MultiEdit chain and already
+# symlinked into ~/.claude/hooks/, so it needs no settings.json edit (C10) and cannot become a
+# pending-activation that never gets run — eleven of those are currently rotting, which is the
+# measured cost of the alternative.
+#
+# THE LIB PATH IS DEREFED FIRST, and that is load-bearing rather than tidy. Invoked live this file
+# IS ~/.claude/hooks/backup-before-write.sh — a symlink into the checkout — while ~/.claude/hooks/lib/
+# holds PER-FILE symlinks, so a NEW lib has no mirror there until a deploy creates one. An underefed
+# `dirname "$BASH_SOURCE"` would miss the lib and fail open SILENTLY: the gate would read as landed
+# while being inert, the exact shape of MEMORY.md self-deploying-fix-inert-for-its-own-deploy.
+# Dereferencing lands us in the checkout, where the lib exists the moment the trunk fast-forwards.
+_mib_deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+MIB_LIB="$(dirname "$(_mib_deref "${BASH_SOURCE[0]}")")/lib/memory-index-budget.sh"
+[ -r "$MIB_LIB" ] || MIB_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/memory-index-budget.sh"
+[ -r "$MIB_LIB" ] || MIB_LIB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/memory-index-budget.sh"
+if [ -r "$MIB_LIB" ]; then
+  # shellcheck source=lib/memory-index-budget.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$MIB_LIB"
+  MIB_TI=$(echo "$INPUT" | jq -c '.tool_input // {}')
+  if MIB_REASON="$(mib_verdict "$TOOL" "$FILE" "$MIB_TI")"; then
+    jq -nc --arg r "$MIB_REASON" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: $r
+      }
+    }'
+    exit 0
+  fi
+fi
+
 # === PLAN FILE DETECTION ===
 # 5-pattern hybrid: personal plans, project symlinks, project docs (absolute + relative), master plan
 IS_PLAN=false
