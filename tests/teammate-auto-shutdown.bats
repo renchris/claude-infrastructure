@@ -878,9 +878,9 @@ riso()  { date -u -v-"${1}"S +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$(( 
 # 2026-08-04 the shared checkout's single piece of dirt was one untracked file authored by the lead.
 shared_linked_worktree() { # <team> <member> <pane> → echoes the shared worktree path
   # `git -C ""` is a NO-OP, not an error — an unset $D would write this identity into the cwd repo.
-  local team="$1" member="$2" pane="$3" repo="${D:?}/slw-repo" wt="${D:?}/slw-shared" joined
+  local team="${1:?shared_linked_worktree: team required}" member="$2" pane="$3" repo="${D:?}/slw-repo" wt="${D:?}/slw-shared" joined
   git init -q "$repo" 2>/dev/null
-  git -C "${repo:?repo path required}" config user.email t@t; git -C "$repo" config user.name t
+  git -C "$repo" config user.email t@t; git -C "$repo" config user.name t
   echo base > "$repo/base.txt"; git -C "$repo" add base.txt; git -C "$repo" commit -qm base
   git -C "$repo" worktree add -q -b slw-branch "$wt" >/dev/null 2>&1
   echo "the lead wrote this" > "$wt/sibling.txt"        # the ONLY dirt, and it is a sibling's

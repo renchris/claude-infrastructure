@@ -511,8 +511,8 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.worktrees/* path
-  local m="$1" w="$2"
-  mkdir -p "$m"; git -C "${m:?repo path required}" init -q; git -C "$m" config user.email t@t; git -C "$m" config user.name t
+  local m="${1:?mkworktree: main-repo path required}" w="$2"
+  mkdir -p "$m"; git -C "$m" init -q; git -C "$m" config user.email t@t; git -C "$m" config user.name t
   echo a > "$m/f"; git -C "$m" add f; git -C "$m" commit -qm c1
   git -C "$m" update-ref refs/remotes/origin/main HEAD
   mkdir -p "$(dirname "$w")"
