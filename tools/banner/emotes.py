@@ -166,6 +166,18 @@ class Emote:
     exit: str  # act 3 — how it leaves
     window: tuple[float, float]  # when the story runs inside the 12 s loop
     tie: str = ""  # the claude-infrastructure behaviour it evokes, if any. A BONUS, never forced.
+    # An UNRESOLVED reservation its own author holds against this candidate, in plain words, for the
+    # reader who has to rule on it. Empty for all but a couple of candidates and meant to stay that
+    # way: this is not a notes field, it is the place a "should this be cut?" question waits.
+    #
+    # It exists because a reservation kept anywhere else cannot reach the person who settles it. The
+    # cut question for THE UNSWITCHED and THE HEAVY THING YIELDS was raised on 2026-07-31, defaulted
+    # to KEEP when its veto window expired on 2026-08-06, and explicitly deferred to a look at the
+    # artwork — "the operator sees every candidate animated at README size before ruling". That
+    # ruling happens on the review page, so the question has to be ON the review page. It was not:
+    # it lived in an autonomy decision record, which is not a thing anybody reads while looking at
+    # pictures, so the page showed twenty-seven panels and no indication which two were in question.
+    review: str = ""
     cls: str = (
         "BEAT"  # BEAT | VISITOR | STATE — the taxonomy the banner grammar already uses
     )

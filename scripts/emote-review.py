@@ -162,6 +162,23 @@ figcaption{padding:14px 16px 16px}
      font-size:12.5px;color:var(--dim)}
 .tie b{color:var(--dim);font-weight:600;letter-spacing:.05em;font-size:10px;
        text-transform:uppercase;display:block;margin-bottom:2px}
+
+/* A candidate carrying an unresolved reservation. Deliberately the loudest thing in the panel,
+   because the defect this closes is that the question was invisible on the one page where it gets
+   settled — the reservation lived in an autonomy decision record, and nobody reads a JSON store
+   while looking at artwork. Accent-tinted rather than red: this is an open question, not a fault. */
+figure.flagged{border-color:color-mix(in srgb,var(--accent) 55%,var(--edge))}
+.flag{margin-top:11px;padding:10px 12px;border-radius:9px;font-size:12.5px;
+      background:color-mix(in srgb,var(--accent) 12%,transparent);
+      border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
+.flag b{color:var(--accent);font-weight:650;letter-spacing:.06em;font-size:10px;
+        text-transform:uppercase;display:block;margin-bottom:3px}
+.chip.q{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 55%,var(--edge))}
+/* The filter is OPT-IN and starts off, because the ruling being deferred to this page was
+   explicitly "see every candidate before cutting" — a page that opened pre-filtered to the two
+   under question would decide by framing what it was built to let the eye decide. */
+body.onlyq figure:not(.flagged){display:none}
+body.onlyq section:not(:has(figure.flagged)){display:none}
 footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--edge);
        color:var(--dim);font-size:13px}
 code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--chip);
@@ -172,11 +189,13 @@ code{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--ch
 JS = """
 const root=document.documentElement, body=document.body;
 const bScheme=document.getElementById('t-scheme'), bBig=document.getElementById('t-big');
+const bQ=document.getElementById('t-q');
 function scheme(v){root.dataset.scheme=v;bScheme.setAttribute('aria-pressed',v==='light');
   bScheme.textContent=v==='light'?'Light':'Dark';}
 scheme(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
 bScheme.onclick=()=>scheme(root.dataset.scheme==='light'?'dark':'light');
 bBig.onclick=()=>{const on=body.classList.toggle('big');bBig.setAttribute('aria-pressed',on);};
+if(bQ)bQ.onclick=()=>{const on=body.classList.toggle('onlyq');bQ.setAttribute('aria-pressed',on);};
 """
 
 
@@ -207,8 +226,13 @@ def build_page(out: Path, svg_dir: Path) -> Path:
                 if e.tie
                 else ""
             )
+            flag = (
+                f'<div class="flag"><b>open question — cut or keep?</b>{esc(e.review)}</div>'
+                if e.review
+                else ""
+            )
             cards.append(
-                f"<figure id={e.key!r}>"
+                f'<figure id={e.key!r} class="{"flagged" if e.review else ""}">'
                 f'<img class="dark" src="{d}" alt="{esc(e.title)}: {esc(e.showcase)}" '
                 f'width="{emotes.STAGE_W}" height="{emotes.STAGE_H}" loading="lazy">'
                 f'<img class="light" src="{lt}" alt="" aria-hidden="true" '
@@ -216,20 +240,44 @@ def build_page(out: Path, svg_dir: Path) -> Path:
                 f"<figcaption>"
                 f'<div class="hd"><b>{esc(e.title)}</b>'
                 f'<span class="chip">{esc(e.cls)}</span>'
-                f'<span class="chip">{e.dur:.1f}s</span></div>'
+                f'<span class="chip">{e.dur:.1f}s</span>'
+                # The reservation itself sits at the foot of the caption, which is the right place
+                # to READ it and the wrong place to FIND it — a reader scrolling twenty-seven
+                # panels never gets to the bottom of one. The chip is the scan affordance.
+                + ('<span class="chip q">open question</span>' if e.review else "")
+                + "</div>"
                 f'<dl class="acts">'
                 f"<dt>entry</dt><dd>{esc(e.entry)}</dd>"
                 f"<dt>show</dt><dd>{esc(e.showcase)}</dd>"
                 f"<dt>exit</dt><dd>{esc(e.exit)}</dd>"
-                f"</dl>{tie}</figcaption></figure>"
+                f"</dl>{tie}{flag}</figcaption></figure>"
             )
         sections.append(
-            f"<h2>{esc(cat)}</h2>"
+            "<section>"
+            + f"<h2>{esc(cat)}</h2>"
             + (f"<p>{esc(blurb)}</p>" if blurb else "")
             + f'<div class="grid">{"".join(cards)}</div>'
+            + "</section>"
         )
 
     n = len(emotes.EMOTES)
+    flagged = [e for e in emotes.EMOTES if e.review]
+    nq = len(flagged)
+    # Named in the header rather than left to be discovered by scrolling. A reservation the reader
+    # has to find is one they can finish the page without ever meeting.
+    qline = (
+        "<p><b>{} candidate{} carry an open cut-or-keep question</b> — {}. Each is outlined, "
+        "chipped <i>open question</i>, and carries its author's reservation at the foot of its "
+        "caption. They are shown here, unfiltered and in place, deliberately: the ruling was "
+        "deferred to this page precisely so it could be made against every candidate rather than "
+        "against the two in isolation.</p>".format(
+            nq,
+            "" if nq == 1 else "s",
+            ", ".join(esc(e.title) for e in flagged),
+        )
+        if nq
+        else ""
+    )
     page = (
         "<!doctype html><html lang='en' data-scheme='dark'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -241,11 +289,17 @@ def build_page(out: Path, svg_dir: Path) -> Path:
         f"period, so they are all at the same moment of their own story.</p>"
         "<p>Panels render at <b>332&nbsp;px</b> — the width that puts the creature at exactly the "
         "size it has in the README banner. Magnify to inspect, but judge at this size.</p>"
-        "</header>"
+        + qline
+        + "</header>"
         "<div class='bar'>"
         "<button id='t-scheme' aria-pressed='false'>Dark</button>"
         "<button id='t-big' aria-pressed='false'>Magnify</button>"
-        f"<span class='count'>{n} candidates &middot; regenerate with "
+        + (
+            f"<button id='t-q' aria-pressed='false'>Open questions ({nq})</button>"
+            if nq
+            else ""
+        )
+        + f"<span class='count'>{n} candidates &middot; regenerate with "
         f"<code>scripts/emote-review.py</code></span>"
         "</div>"
         '<div class="rule"></div>'
