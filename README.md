@@ -762,7 +762,7 @@ Nor can the allow-list close the gap: **88.3% of prompting Bash calls are compou
 | `com.claude.session-search-backfill` | Sun 3 am | full backfill of all sessions |
 | `com.claude.deploy-live` | 10 min | advance the live `~/.claude` layer once the green stamp allows it |
 | `com.claude.lead-supervisor` | KeepAlive | watch the leads; reap stranded panes and beacons |
-| `com.claude.capacity-alarm` | 60 s | fail-loud when the box runs out of headroom |
+| `com.claude.capacity-alarm` | 60 s | fail-loud when the box runs out of headroom — or out of scheduler |
 | `com.claude.qos-census` | 10 min | census the fleet's QoS bands (the PRI-4 ratchet is one-way) |
 | `com.claude.worktree-gc-infra` | 4:15 am | reap merged and stale worktrees of this repo |
 | `com.chrisren.cc-reaper` | 5 min | reap dead sessions the registry still lists |

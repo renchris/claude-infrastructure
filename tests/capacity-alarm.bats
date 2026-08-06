@@ -18,10 +18,41 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
   export CC_CAP_LOG="$BATS_TEST_TMPDIR/cap.jsonl"
+  # RUNG 7 IS PINNED NEUTRAL FOR EVERY TEST THAT DOES NOT OWN IT — a hermeticity fix, not a way to
+  # hide the rung. Load is the only input in this file that is a property of the RUNNING BOX rather
+  # than of a fixture, and a dozen tests below assert an exact verdict or rc. Unpinned, they would
+  # flip WARN/ALARM exactly when the box is busiest — i.e. during a full-corpus run, which is the one
+  # moment this suite has to be trustworthy, and is precisely the window §8.5.7 measured at
+  # 2.92-5.98 load/core for 13 consecutive samples. The rung-7 tests set their own floors explicitly.
+  export CC_CAP_LOAD_WARN_PER_CORE=9999 CC_CAP_LOAD_ALARM_PER_CORE=9999
 }
 
-@test "(i) selftest GREEN — all four rungs + NO-DATA are reachable (positive control, R6)" {
-  run /bin/bash "$ALARM" --selftest
+# sysctl stub for rung 7. It is reached through CC_CAP_SYSCTL, not through PATH, because rung 7
+# resolves /usr/sbin/sysctl by absolute path on purpose (D4) — so a PATH stub, which is how every
+# other instrument in this suite is faked, would silently fail to intercept it and the test would
+# pass against the live box's real load without ever noticing.
+mk_sysctl_stub() { # $1 = 1-minute load, $2 = ncpu
+  STUBS="${STUBS:-$BATS_TEST_TMPDIR/stubs}"
+  mkdir -p "$STUBS"
+  cat > "$STUBS/sysctl-load" <<SC
+#!/bin/bash
+case "\$*" in
+  *hw.ncpu*)    echo '$2' ;;
+  *vm.loadavg*) echo '{ $1 $1 $1 }' ;;   # braces included — the real output shape, see read_load
+  *)            exec /usr/sbin/sysctl "\$@" ;;
+esac
+SC
+  chmod +x "$STUBS/sysctl-load"
+}
+
+@test "(i) selftest GREEN — every rung + NO-DATA is reachable (positive control, R6)" {
+  # THE PINS FROM setup() ARE CLEARED HERE, and must be. The selftest's probes hard-code their
+  # expected verdicts, so they are only true at the SHIPPED defaults — a property it already had for
+  # all six incumbent rungs (`5:0:1:0::::WARN` assumes WARN_GB=8 just as firmly). Deriving the
+  # expectations from the live thresholds instead would make the control tautological, which is the
+  # exact defect the census note below documents. So the control runs at the defaults, and the
+  # ambient neutral-load pin — correct for every OTHER test in this file — is removed for this one.
+  run env -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE /bin/bash "$ALARM" --selftest
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ "selftest GREEN" ]] || false
   # each rung must be named, so a silently-unreachable rung cannot hide behind an aggregate pass
@@ -316,12 +347,20 @@ SC
 @test "(xxvi) the selftest names the NEW rungs too — census, pressure and outlier all controlled" {
   # (i) guards the four verdicts; this guards that the rungs ADDED here are equally positive-
   # controlled, so a future edit cannot make one unreachable behind an aggregate GREEN.
-  run /bin/bash "$ALARM" --selftest
+  # Pins cleared for the reason (i) states: the probes are only true at the shipped defaults.
+  run env -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE /bin/bash "$ALARM" --selftest
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ pressure=\'2\' ]] || false
   [[ "$output" =~ pressure=\'4\' ]] || false
   [[ "$output" =~ maxproc=\'9\' ]] || false
   [[ "$output" =~ "disjoint-family sum" ]] || false
+  # rung 7, and specifically the two probes that are NAMED EVENTS rather than round numbers: the
+  # 2026-08-05 fatal sample, and the survived reading that is a known false ALARM. The false-positive
+  # population is part of this rung's specification (D4), so a re-derivation has to move a control
+  # rather than edit a comment.
+  [[ "$output" =~ load=\'2.53\' ]] || false
+  [[ "$output" =~ load=\'5.98\' ]] || false
+  [[ "$output" =~ "PATH-INDEPENDENT" ]] || false
 }
 
 @test "(xxvii) the row PARSES as JSON in EVERY verdict state — including NO-DATA" {
@@ -359,6 +398,114 @@ SC
   parse "$output" || false
 }
 
+# ── rung 7: the scheduler axis (D4, 2026-08-05) ──────────────────────────────────────────────────
+#
+# The commissioning directive states the acceptance test itself: "Positive control REQUIRED (a
+# synthetic load must turn it red) or the dimension is vacuous." A rung can be vacuous in two
+# INDEPENDENT ways and one control cannot cover both, so there are two here:
+#   · the ARITHMETIC can be wrong — covered by (xxviii): load injected at the instrument, so parse,
+#     ncpu normalisation, classify, rc, row and page are all the real code path.
+#   · the WIRE can be dead — covered by (xxxii): the real sysctl, the real box, no stub anywhere.
+#     This is the failure that stubs are structurally blind to, and this repo has already shipped it
+#     once: the launchd-PATH regression left three rungs reading SKIPPED in every scheduled run while
+#     every hand-run and every stubbed test stayed green.
+# (xxviii-b) is the negative half of the pair — without it, (xxviii) would pass on a live box that
+# happened to be red on some OTHER rung, which is the same vacuity wearing a passing grade.
+
+@test "(xxviii) THE POSITIVE CONTROL — a synthetic load turns the verdict RED (rc 2)" {
+  # 25.3 on 10 cores = 2.53/core is not a round number: it is the 2026-08-05 fatal sample, the one
+  # this sampler reported OK through because it emitted no CPU field at all.
+  mk_sysctl_stub 25.3 10
+  run env CC_CAP_SYSCTL="$STUBS/sysctl-load" \
+          CC_CAP_LOAD_WARN_PER_CORE=1.5 CC_CAP_LOAD_ALARM_PER_CORE=2.5 \
+          /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 2 ] || false
+  [[ "$output" =~ \"verdict\":\"ALARM\" ]] || false
+  [[ "$output" =~ \"load_1m\":25.3 ]] || false
+  [[ "$output" =~ \"ncpu\":10 ]] || false
+  [[ "$output" =~ \"load_per_core\":2.53 ]] || false
+  # and the row is still a parseable document with the new fields on it (the est_room_sessions
+  # lesson: a regex match never requires the surrounding JSON to be valid)
+  printf '%s' "$output" | python3 -c 'import sys,json; json.loads(sys.stdin.read())' || false
+}
+
+@test "(xxviii-b) NEGATIVE CONTROL for (xxviii) — the same path with a healthy load stays OK" {
+  # Without this, (xxviii) proves nothing on a box that was already ALARM for another reason.
+  # 4.2 on 10 cores = 0.42/core is this box's measured reading while rung 7 was written.
+  mk_sysctl_stub 4.2 10
+  run env CC_CAP_SYSCTL="$STUBS/sysctl-load" \
+          CC_CAP_LOAD_WARN_PER_CORE=1.5 CC_CAP_LOAD_ALARM_PER_CORE=2.5 \
+          /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"verdict\":\"OK\" ]] || false
+  [[ "$output" =~ \"load_per_core\":0.42 ]] || false
+}
+
+@test "(xxix) rung 7 floors, pinned from BOTH sides — 2.5 ALARM / 1.5 WARN / 1.49 OK" {
+  # Each floor from below as well as above, so a one-sided edit (raise the alarm, forget the warn)
+  # cannot pass. The pair 1.49/1.5 and 2.49/2.5 is the whole threshold, executable.
+  for probe in "24.9:1" "25.0:2" "14.9:0" "15.0:1"; do
+    mk_sysctl_stub "${probe%%:*}" 10
+    run env CC_CAP_SYSCTL="$STUBS/sysctl-load" \
+            CC_CAP_LOAD_WARN_PER_CORE=1.5 CC_CAP_LOAD_ALARM_PER_CORE=2.5 \
+            /bin/bash "$ALARM" --quiet --no-append
+    [ "$status" -eq "${probe#*:}" ] || { echo "load ${probe%%:*} → rc $status, want ${probe#*:}"; false; }
+  done
+}
+
+@test "(xxx) an unreadable load instrument is SKIPPED — never NO-DATA, never a fabricated idle 0" {
+  # Two failure shapes, and the second is the dangerous one. NO-DATA belongs to the single instrument
+  # the verdict cannot exist without (vm_stat headroom); demoting a valid memory verdict because a
+  # supplementary sysctl died would destroy a working alarm. And a dead sysctl rendering as
+  # `load_per_core: 0` would be the launchd-PATH regression exactly — a corpse reporting the
+  # healthiest possible value, on the one rung in this file whose sensor is a daemon-context read.
+  run env CC_CAP_SYSCTL=/nonexistent/sysctl CC_CAP_LOAD_WARN_PER_CORE=1.5 \
+          CC_CAP_LOAD_ALARM_PER_CORE=2.5 /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false
+  ! [[ "$output" =~ \"verdict\":\"NO-DATA\" ]] || false
+  [[ "$output" =~ \"load_per_core\":null ]] || false
+  [[ "$output" =~ \"load_1m\":null ]] || false
+  [[ "$output" =~ \"ncpu\":null ]] || false
+  ! [[ "$output" =~ \"load_per_core\":0 ]] || false
+  # ...and a skipped rung must not MASK a breach another rung found
+  run env CC_CAP_SYSCTL=/nonexistent/sysctl CC_CAP_ALARM_GB=999999 CC_CAP_WARN_GB=999999 \
+          /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 2 ] || false
+}
+
+@test "(xxxi) the load rung owns its own page, and the page NAMES the survived counter-example" {
+  # D3: per-rung slugs exist so a NEW crossing is audible inside a standing alarm. And this rung's
+  # page carries its own counter-evidence, because its floors are not calibrated — an operator who
+  # reads "ALARM" without knowing the box has lived above this number for 42 h will shed sessions
+  # that did not need shedding. A page that causes the wrong action is not better than no page.
+  mk_sysctl_stub 25.3 10
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages-load"
+  run env CC_CAP_SYSCTL="$STUBS/sysctl-load" \
+          CC_CAP_LOAD_WARN_PER_CORE=1.5 CC_CAP_LOAD_ALARM_PER_CORE=2.5 \
+          CC_CAP_LOG="$BATS_TEST_TMPDIR/load.jsonl" /bin/bash "$ALARM" --quiet
+  [ "$status" -eq 2 ] || false
+  page="$CC_PAGES_DIR/capacity-alarm-load.page"
+  [ -f "$page" ] || false
+  grep -q '2.53/core' "$page" || false
+  grep -q 'UNCALIBRATED' "$page" || false
+  grep -q '5.98/core survived' "$page" || false
+}
+
+@test "(xxxii) LIVE non-vacuity — the REAL sysctl on the REAL box crosses a floor set beneath it" {
+  # (xxviii) proves the arithmetic through a stub; this proves the WIRE, which no stub can. A dead
+  # reader passes every stubbed test ever written for it and then reads SKIPPED forever in
+  # production. Asserted as a PAIR against the same live reading, so the redness is attributable to
+  # the floor crossing rather than to whatever else the box happens to be doing.
+  run env CC_CAP_LOAD_WARN_PER_CORE=9999 CC_CAP_LOAD_ALARM_PER_CORE=9999 \
+          /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 0 ] || false                              # baseline: nothing else is red
+  ! [[ "$output" =~ \"load_per_core\":null ]] || false      # and the instrument really did read
+  run env CC_CAP_LOAD_WARN_PER_CORE=0 CC_CAP_LOAD_ALARM_PER_CORE=9999 \
+          /bin/bash "$ALARM" --json --no-append
+  [ "$status" -eq 1 ] || false                              # same box, floor lowered ⇒ WARN
+  [[ "$output" =~ \"verdict\":\"WARN\" ]] || false
+}
+
 @test "(viii) R1 — never sleeps, polls, or waits on load (EXECUTABLE lines only)" {
   # TWO defects the first version of this test had, both caught by running it:
   #  1. It matched the script's OWN PROSE — the header says "NEVER refuses, blocks, queues, sleeps,
@@ -367,12 +514,22 @@ SC
   #     are therefore stripped before matching.
   #  2. It passed VACUOUSLY against a tree with no capacity-alarm.sh at all, because grep on a
   #     missing file also returns non-zero. Hence the existence guard.
+  #
+  # THE `loadavg` ALTERNATIVE WAS REMOVED 2026-08-05, and why is the whole point of this note. R1
+  # bans WAITING — "a shedder that waits amplifies". The guard listed `loadavg` beside the wait
+  # patterns because the file's header ALSO claimed never to read load at all. Those are two
+  # different invariants that happened to share one regex, and enumerating a spelling instead of the
+  # class is exactly how a guard outlives the claim it was smuggled into (memory
+  # denylist-enumerates-spellings-not-the-class). The claim is now superseded by measurement — four
+  # consecutive panics on the scheduler axis — and rung 7 READS vm.loadavg on every tick. R1 itself
+  # is untouched: no sleep, no block, no queue, no poll-until-clear, and this guard still proves it.
+  # (ix) is what stops the narrowing from having quietly deleted the invariant too.
   [ -f "$ALARM" ] || false
-  run bash -c "sed 's/#.*//' '$ALARM' | grep -nE '\\bsleep\\b|while.*load|until.*load|loadavg'"
+  run bash -c "sed 's/#.*//' '$ALARM' | grep -nE '\\bsleep\\b|while.*load|until.*load'"
   [ "$status" -ne 0 ] || false
 }
 
-@test "(ix) POSITIVE CONTROL for (viii): the comment-stripped grep still catches a real sleep" {
+@test "(ix) POSITIVE CONTROL for (viii): the narrowed grep still catches a sleep AND a wait-on-load" {
   # Proves the stripping did not defang the guard: a genuine executable sleep must still be found,
   # while the same word inside a comment must not.
   printf '# we never sleep here\nsleep 5\n' > "$BATS_TEST_TMPDIR/bait.sh"
@@ -380,6 +537,22 @@ SC
   [ "$status" -eq 0 ] || false
   printf '# we never sleep here\n:\n' > "$BATS_TEST_TMPDIR/clean.sh"
   run bash -c "sed 's/#.*//' '$BATS_TEST_TMPDIR/clean.sh' | grep -nE '\\bsleep\\b'"
+  [ "$status" -ne 0 ] || false
+
+  # THE PAIR THAT MAKES THE NARROWING SAFE — the discriminator R1 actually cares about. Dropping the
+  # `loadavg` term could have taken the wait-on-load invariant with it, and the suite would have gone
+  # green either way; a control that cannot fail the same way is not a control. So: a loop that WAITS
+  # for load must still be caught, and a bare READ of load — the thing rung 7 now legitimately does —
+  # must not be.
+  local re='\bsleep\b|while.*load|until.*load'
+  printf 'while [ "$load" -gt 20 ]; do :; done\n' > "$BATS_TEST_TMPDIR/waitbait.sh"
+  run bash -c "sed 's/#.*//' '$BATS_TEST_TMPDIR/waitbait.sh' | grep -nE '$re'"
+  [ "$status" -eq 0 ] || false
+  printf 'until load_below_ceiling; do :; done\n' > "$BATS_TEST_TMPDIR/untilbait.sh"
+  run bash -c "sed 's/#.*//' '$BATS_TEST_TMPDIR/untilbait.sh' | grep -nE '$re'"
+  [ "$status" -eq 0 ] || false
+  printf 'L="$(/usr/sbin/sysctl -n vm.loadavg)"\n' > "$BATS_TEST_TMPDIR/readbait.sh"
+  run bash -c "sed 's/#.*//' '$BATS_TEST_TMPDIR/readbait.sh' | grep -nE '$re'"
   [ "$status" -ne 0 ] || false
 }
 
