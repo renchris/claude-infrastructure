@@ -416,6 +416,43 @@ lint is fully compatible with 5 unlanded binding guards, because the lint convic
 four of the five sites are not absent — they are weaker. The closing section of the reconciliation
 was right in principle; this is the instance.
 
+#### RESOLVED 2026-08-06 — `57aac659` (backlog `e406879ce6ff`)
+
+All four promoted; the fifth (`tests/cc-tlid.bats`) stays out of scope for the reason above.
+Content-verified on `origin/main`: the four paths present, `git diff 57aac659 origin/main` empty
+over them, and each guard read back off the trunk blob.
+
+**The lint was not merely blind to placement — on these lines it was VACUOUS, and that is
+measurable.** `scripts/git-identity-lint.sh` gates a line on `git` + `config` + `user.(email|name)`,
+then reads the argument of the **first** `-C` via a single awk `match()`. In the trunk shape that
+first `-C` belongs to `init` — *not an identity write at all* — and it carried the guard, so the
+scan returned clean having never examined the `-C "$r"` the identity write actually uses. Three
+runs of the same scanner over `bin/cc-teardown`:
+
+| | shape | rc |
+|---|---|---|
+| A | binding guard removed, use-site removed | **1** — `IDENTITY bin/cc-teardown:866` |
+| B | trunk's shape (use-site guard on `init`) | **0** — clean |
+| C | landed shape (guard on the binding) | **0** — clean |
+
+**B is the finding**: the fragile shape reads green. C's green is a real verdict rather than B's
+masked one — A proves the scanner *can* fail this line, and C passes only because the lint's
+proof-tracking sees `local r="${1:?…}"` and marks `r` non-empty for the region. Which means the
+right generalisation is narrower and sharper than "the lint convicts absence, never placement": a
+guard parked on an *earlier, unrelated* call in the same line silently becomes the thing the
+scanner reads, so the check it was meant to strengthen stops running.
+
+**Residual, filed as `81d6b958adc5`:** the same masking survives wherever a use-site guard still
+sits on a non-identity call. Whole-tree census on `origin/main` at this commit — **28 binding vs 49
+use-site** across 28 files (`bin/cc-value` 3, `tests/deploy-parity` 4, `tests/land-gate-cas` 4,
+`tests/land-lock` 4, `tests/new-worktree` 4, +23 more). Those sites are *protected* (their bindings
+are guarded) but their lint lines are vacuous. Sweep them **per site, never in bulk**: dropping a
+use-site guard is safe only where proof-tracking already proves that variable in-region — a
+`local x="${1:?…}"` / `: "${1:?…}"` binding, or a literal-suffix assignment like `repo="$D/repo"`.
+Drop one whose binding is unguarded and the line goes RED, which is exactly row A.
+`tests/git-identity-lint.bats` and `tests/git-identity-write-guard.bats` are excluded — they carry
+the leaky shapes as fixtures by construction, and the lint self-excludes them by basename.
+
 ### What has since ROTTED
 
 **`git-identity-lint.sh` is no longer absent from trunk.** The correction's `git ls-tree origin/main
@@ -467,6 +504,14 @@ Unlike the `gi-corpus` reconcile this is mechanical — 4 files, one line each, 
 the `-C` use-site to the `local` binding, no behaviour change when `$1` is non-empty — but it is
 still someone else's un-landed branch content in a class whose whole failure mode is careless
 resolution, so it is filed rather than swept in here.
+
+> **CLOSED 2026-08-06 — `57aac659`** (backlog `e406879ce6ff`). The four were cherry-picked as
+> content rather than by landing `wt-ae2ce4298dac`, so that branch stays `+` on `git cherry` and
+> its remaining delta (including the out-of-scope `tests/cc-tlid.bats` guard) is untouched. See
+> § *The guards half* → *RESOLVED* for the content-verify and for the measured reason a clean lint
+> could never have caught this. Successor item `81d6b958adc5` carries the 49 residual use-site
+> guards. **`fix/gi-corpus` above is still open and is NOT covered by this** — it remains a human
+> read.
 
 ---
 
