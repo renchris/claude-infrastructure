@@ -559,8 +559,18 @@ STUB
   # on this box hardcodes the reso repo). Second bump of the qos-census shape: plist and manifest row
   # landed in ONE commit, so this count is the only thing that had to move, and it moves WITH the
   # addition rather than the addition waiting to red someone else's land.
-  if [ "$n" != 25 ]; then
-    echo "manifest declares $n labels, expected 25 — if a plist was legitimately added or retired,"
+  # 27 since 2026-08-06: com.claude.teammate-reap-alarm (f863034f, `staged`) and
+  # com.claude.compressor-sentinel (13bfa557, `run`). Both are the qos-census shape done RIGHT —
+  # plist and manifest row in one commit — and both still reddened trunk, which is worth stating
+  # plainly because it is now the RULE and not the exception: the smoke is the land's only test
+  # work, and on this box it mostly reads `smoke:"skipped"` (R7 load-shed at 1-min load >= 8), so
+  # a hand-copied count is structurally a POST-land finding. cc-fleet.bats IS a `--direct` suite of
+  # both diffs — `gate-select.sh --direct f863034f^..f863034f` names it — so selection was never the
+  # gap and no selector edge would have closed it. The net caught both exactly where it is designed
+  # to: postland-verify -> backlog. Do NOT "fix" that by deriving `n` from the plists on disk; the
+  # paragraph above already ruled on it, and the shed is a deliberate non-verdict, not a leak.
+  if [ "$n" != 27 ]; then
+    echo "manifest declares $n labels, expected 27 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
