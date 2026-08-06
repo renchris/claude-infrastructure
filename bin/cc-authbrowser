@@ -32,6 +32,7 @@ under bats.
 import argparse
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -91,6 +92,33 @@ EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_BROWSER = 0, 1, 2, 4
 def warn(msg: str) -> None:
     """Human/diagnostic output. stdout stays clean JSON for machine consumers."""
     sys.stderr.write("cc-authbrowser: %s\n" % msg)
+
+
+def tool_path(name: str) -> str:
+    """<name> resolved by ABSOLUTE PATH as well as PATH, canonical system dirs first.
+
+    lsof(8) lives in /usr/sbin, which is NOT on every caller's PATH -- and specifically not on
+    the one the post-land verifier hands the corpus: com.claude.postland-verify's plist exports
+    PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin". A bare-name lookup
+    raises FileNotFoundError there, port_listener_pids() catches it as "unreadable", and
+    do_start reports the browser it JUST LAUNCHED as "held by a foreign process
+    (pids=unknown)" -- i.e. `--start` is not idempotent under that PATH. Deterministic, not a
+    flake: the retry ladder re-runs a red file twice more and convicts, which is why this
+    landed as a HARD red with no flakes.jsonl entry to acquit it.
+
+    scripts/postland-verify.sh declines to normalize PATH ON PURPOSE (:119) precisely so this
+    class stays visible, and names the remedy at :140 -- the artifact resolves its tools "by
+    ABSOLUTE PATH as well as PATH". bin/cc-backlog:1088 already does exactly this for its own
+    lsof probe; this is that pattern, not a new convention.
+
+    Falls back to the bare name, so an unusual install still reaches PATH resolution and a
+    genuinely absent tool keeps the existing fail-closed behaviour instead of raising here.
+    """
+    for d in ("/usr/sbin", "/sbin", "/usr/bin", "/bin"):
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return shutil.which(name) or name
 
 
 def chrome_bin() -> str:
@@ -225,7 +253,7 @@ def clear_state(acct: str) -> None:
 def pid_cmdline(pid: int) -> Optional[str]:
     """Live command line of <pid>, or None if the pid is gone. `-ww` defeats truncation."""
     try:
-        out = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
+        out = subprocess.run([tool_path("ps"), "-ww", "-o", "command=", "-p", str(pid)],
                              capture_output=True, text=True, timeout=proc_timeout_s())
     except (OSError, subprocess.SubprocessError):
         return None
@@ -274,8 +302,16 @@ def port_listener_pids(port: int) -> List[int]:
     """Pids holding <port> in LISTEN. Empty on any failure -- callers fail CLOSED, so an
     unreadable listener is treated as foreign and is never adopted or killed."""
     try:
-        out = subprocess.run(["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+        out = subprocess.run([tool_path("lsof"), "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
                              capture_output=True, text=True, timeout=proc_timeout_s())
+    except FileNotFoundError:
+        # Categorically different from a timeout, and the caller's "pids=unknown" cannot say
+        # which: a missing lsof means the probe can NEVER answer, so every later verdict that
+        # reads as "no listeners" is UNRESOLVED, not empty. Name it, or the next reader spends
+        # the investigation on load and port leases the way this one nearly did.
+        warn("lsof(8) not found on PATH=%s -- cannot identify the listener on port %d"
+             % (os.environ.get("PATH", ""), port))
+        return []
     except (OSError, subprocess.SubprocessError):
         return []
     return [int(tok) for tok in out.stdout.split() if tok.isdigit()]
