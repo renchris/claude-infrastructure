@@ -38,7 +38,13 @@ echo "session-lifecycle-safety-gate — autonomous reap un-hold bar (CL classifi
 CLASSIFY=bin/cc-classify
 REAPER=bin/cc-reaper
 TEARDOWN=bin/cc-teardown
-bats_green(){ command -v bats >/dev/null 2>&1 && bats "$1" >/dev/null 2>&1; }
+# `</dev/null`: bats INHERITS stdin into every test, and a suite stubbing a stdin-consuming binary
+# with an unconditional `cat` hangs forever on a stdin that never EOFs (5e460544 measured that at
+# rc 124; ce13bd08 fixed the landing runners). This gate is run by hand and by the desk, and a
+# Claude Code session's fd 0 is a unix socket a child can read forever without EOF (measured
+# 2026-08-06) — so this, not launchd, is the exposed path. One redirect in the helper covers both
+# call sites below. This gate reads no stdin of its own, so nothing loses an input it was using.
+bats_green(){ command -v bats >/dev/null 2>&1 && bats "$1" </dev/null >/dev/null 2>&1; }
 
 # ── CL — the classifier ─────────────────────────────────────────────────────────────────────────────────
 if [ ! -x "$CLASSIFY" ]; then

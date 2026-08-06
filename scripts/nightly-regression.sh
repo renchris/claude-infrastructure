@@ -321,8 +321,25 @@ regress() {
   echo "nightly-regression @ $(now_iso) — repo=$REPO"
 
   # 1. bats suite
+  #
+  # `</dev/null` — bats does not read stdin itself but INHERITS it into every test, and a suite that
+  # stubs a stdin-consuming binary with an unconditional `cat` then waits forever for an EOF that is
+  # not coming (5e460544; ce13bd08 fixed the landing runners). MEASURED 2026-08-06, and it corrects
+  # the premise those commits shipped with: launchd hands its child /dev/null on fd 0 already (probe:
+  # a RunAtLoad job read `lsof -d 0` → /dev/null), so the 04:00 run is NOT the exposed path. The
+  # exposed path is the one this script is run on by hand and by the desk — a Claude Code session's
+  # fd 0 is a unix SOCKET, and a child reading it never sees EOF (measured: rc 124). That is the
+  # inverted polarity that makes this worth a redirect: a hung nightly is indistinguishable from a
+  # slow one and nothing alarms.
+  #
+  # ON `run_check` AND NOT INSIDE IT: the redirect rides this ONE invocation (a redirect on a
+  # function call applies to its whole body, so the `"$@"` inside gets it). run_check also runs
+  # plutil, never-stuck-gate and the step-4 gates; the screen that licenses /dev/null covers the
+  # bats tree only, so it stays per call site — same reasoning that kept it out of postland-verify's
+  # `bounded` helper. Step 4's gates need nothing here: each carries the redirect at its own bats
+  # site, so the whole chain is immune at the leaf.
   if command -v bats >/dev/null 2>&1; then
-    run_check "bats:$(basename "$BATS_DIR")" bats "$BATS_DIR"
+    run_check "bats:$(basename "$BATS_DIR")" bats "$BATS_DIR" </dev/null
   else
     SKIPS+=("bats:not-installed"); printf '  skip bats (not installed)\n'
   fi

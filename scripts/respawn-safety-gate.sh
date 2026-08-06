@@ -45,7 +45,12 @@ if [ ! -f "$TOOL" ]; then
 else
   "$TOOL" selftest >/dev/null 2>&1 && ok "RS" "cc-respawn selftest GREEN — RS-a GO-in-brief fail-closed, RS-b checkpoint-before-stop, RS-c effect-verified stop ({pid,start} identity, live→5/dead→0/recycled→0), RS-d continuity fields, RS-e outcome records on every path, RS-f effect-verified spawn all fire RED-provably" || bad "RS" "cc-respawn selftest not green — an RS-a..f RED-proof does not fire"
   if [ -f tests/cc-respawn.bats ] && command -v bats >/dev/null 2>&1; then
-    bats tests/cc-respawn.bats >/dev/null 2>&1 && ok "RS-cli" "tests/cc-respawn.bats GREEN — CLI exit-code contract (0 ok · 2 refuse · 5 verify-fail) regression-pinned" || bad "RS-cli" "tests/cc-respawn.bats RED"
+    # `</dev/null`: bats INHERITS stdin into every test, so a suite stubbing a stdin-consuming binary
+    # with an unconditional `cat` hangs forever when stdin never EOFs (5e460544 measured rc 124;
+    # ce13bd08 fixed the landing runners). MEASURED 2026-08-06: launchd already hands /dev/null, so
+    # the exposed path is the one this gate actually runs on — a session/desk invocation, whose fd 0
+    # is a unix socket a child reads without ever seeing EOF. This gate reads no stdin of its own.
+    bats tests/cc-respawn.bats </dev/null >/dev/null 2>&1 && ok "RS-cli" "tests/cc-respawn.bats GREEN — CLI exit-code contract (0 ok · 2 refuse · 5 verify-fail) regression-pinned" || bad "RS-cli" "tests/cc-respawn.bats RED"
   else
     todo "RS-cli" "NOT BUILT — bats CLI-contract regression (tests/cc-respawn.bats)"
   fi

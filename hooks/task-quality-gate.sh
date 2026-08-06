@@ -198,10 +198,26 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     while IFS= read -r p; do [ -n "$p" ] && [ -f "$p" ] && runbats+=("$p"); done <<< "$uniq"
     if [ "${#runbats[@]}" -gt 0 ]; then
       log "infra gate: bats on ${#runbats[@]} test file(s)"
+      # `</dev/null` — DEFENCE IN DEPTH HERE, NOT A HANG FIX, and the difference was MEASURED rather
+      # than assumed (2026-08-06). The class is real: bats INHERITS stdin into every test, so a suite
+      # stubbing a stdin-consuming binary with an unconditional `cat` waits forever for an EOF that
+      # never comes (5e460544; ce13bd08 fixed the landing runners). But THIS caller is the one
+      # exception in that sweep, because `INPUT=$(cat)` at the top of the file already consumes fd 0
+      # to EOF. Both branches measured:
+      #   · writer closes (how the harness invokes a hook) → the drain returns and fd 0 stays at EOF,
+      #     so a second reader gets rc 0 immediately. bats would inherit a benign already-EOF fd.
+      #   · writer never closes → the hook wedges at `INPUT=$(cat)` on line 12 and NEVER REACHES HERE
+      #     (whole-hook rc 124). The hang exists, but it is upstream of bats; a redirect at this site
+      #     could not have prevented it, and moving fd 0 here cannot disturb line 12 either.
+      # It is still worth the token: it makes the property UNCONDITIONAL instead of contingent on a
+      # drain thirty lines away that a refactor may move or make conditional, and it closes the one
+      # shape the drain does not — a TTY stdin, which EOFs on Ctrl-D and then happily yields more,
+      # so a stub `cat` blocks on the terminal. Recorded explicitly so the next reader does not
+      # "harden" the wrong line: if this hook ever hangs on stdin, look at line 12, not at bats.
       if command -v timeout >/dev/null 2>&1; then
-        out="$(timeout 120 bats "${runbats[@]}" 2>&1)"; bexit=$?
+        out="$(timeout 120 bats "${runbats[@]}" </dev/null 2>&1)"; bexit=$?
       else
-        out="$(bats "${runbats[@]}" 2>&1)"; bexit=$?
+        out="$(bats "${runbats[@]}" </dev/null 2>&1)"; bexit=$?
       fi
       if [ "$bexit" -eq 124 ]; then
         log "infra gate: bats timed out (120s) — not blocking on timeout (mirrors the tsc timeout policy)"
