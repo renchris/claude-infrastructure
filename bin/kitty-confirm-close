@@ -31,8 +31,11 @@ WHAT IS DELIBERATELY *NOT* HANDLED HERE
 
 from __future__ import annotations
 
+import glob
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 
@@ -56,6 +59,68 @@ end run
 """
 
 
+# ── the control-socket address ───────────────────────────────────────────────────────────────────
+#
+# THE TEMPLATE COMES FROM kitty.conf, not from this file. `listen_on` is the SSOT for where the
+# socket is; a hardcoded `/tmp/kitty-<pid>` AGREES with the shipped conf (config/kitty.conf:67) and
+# is silently wrong the moment listen_on is retuned to another directory, or to a name with no
+# {kitty_pid} in it. Ported from scripts/handoff-fire.sh's kitty_socket_template (commit 7265b1ee,
+# item c9eb57be5815) — same parse, same known limits, same fallback direction.
+#
+# DELIBERATELY DUPLICATED across kitty-confirm-close, kitty-pane-menu and cc-url-open rather than
+# imported from a shared module: bin/ is deployed as PER-FILE symlinks into the checkout, and a
+# brand-new file is the one class observed to rot out of the live layer (deploy-link-parity.sh
+# exists because of it). An ImportError here would disable ⌘W/⌃⇧W/⌘⇧W outright — strictly worse
+# than the defect this replaces. The copies are held in agreement BEHAVIOURALLY instead:
+# tests/kitty-socket-address.bats drives all three through one table of confs.
+KITTY_PID = "{kitty_pid}"
+DEFAULT_LISTEN_ON = "unix:/tmp/kitty-{kitty_pid}"
+_LISTEN_ON = re.compile(r"[ \t]*listen_on[ \t]+([^#]*)")
+
+
+def kitty_conf() -> str:
+    return os.environ.get("CC_KITTY_CONF") or os.path.expanduser("~/.config/kitty/kitty.conf")
+
+
+def listen_on_template() -> str:
+    """kitty.conf's `listen_on` value — or, failing that, exactly the string this file used to hard-
+    code, so a conf we cannot read leaves the script no less capable than before it read confs.
+
+    Last value wins, matching kitty's own later-overrides-earlier option semantics. `[^#]*` drops a
+    trailing comment and the whitespace strip handles an aligned conf. A commented-out `listen_on`
+    is not a value: kitty ignores it, so must we — a parse loose enough to match `# listen_on …`
+    would aim every call at a path nothing is listening on.
+
+    KNOWN LIMITS, all of which degrade to that same default and never worse: an `include`d conf is
+    not followed, and $KITTY_CONFIG_DIRECTORY / $XDG_CONFIG_HOME are not consulted — a
+    `--type=background` child has neither in its environment by construction, which is the premise
+    of this whole function.
+    """
+    tmpl = ""
+    try:
+        with open(kitty_conf(), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = _LISTEN_ON.match(line)
+                if m:
+                    value = "".join(m.group(1).split())
+                    if value:
+                        tmpl = value
+    except OSError:
+        pass
+    return tmpl or DEFAULT_LISTEN_ON
+
+
+def _socket(path: str) -> str | None:
+    """`unix:<path>` iff <path> really is a socket. The mode test is what keeps /tmp's ordinary
+    kitty-* files out — `/tmp/kitty-pane-menu-native.compile.log` is one, live, today."""
+    try:
+        if stat.S_ISSOCK(os.stat(path).st_mode):
+            return f"unix:{path}"
+    except OSError:
+        pass
+    return None
+
+
 def socket_address() -> str | None:
     """Find the remote-control socket. This is the load-bearing plumbing of the whole script.
 
@@ -63,37 +128,56 @@ def socket_address() -> str | None:
     difference between this script working and every `kitty @` call failing silently. Adding
     `--allow-remote-control` to the launch *does* set it, but to an `fd:35` channel, and Python's
     subprocess closes fds above 2 by default, so the address would be dead by the time we used it.
+    So the env read below is dead by construction on the path kitty.conf actually binds; it stays
+    because it is still the right precedence for a hand-run invocation, not because it ever fires.
 
-    PPID is the reliable answer instead: the background child is a direct child of the kitty
-    process (verified: PPID 613, `ps -o comm=` -> kitty), and kitty.conf sets
-    `listen_on unix:/tmp/kitty-{kitty_pid}`, so the socket path falls straight out of it.
+    PPID supplies the {kitty_pid} the conf asks for: the background child is a direct child of the
+    kitty process (verified: PPID 613, `ps -o comm=` -> kitty). What the conf supplies is everything
+    else — the directory and the name — which is the half that used to be guessed here.
+
+    FAILURE SHAPE, which is why this is worth reading a file for: no address means a bare `kitty @`
+    from an env-less child, which fails, which means an empty tree, which means main() prints one
+    line to a stderr no one is looking at and returns 3. ⌘W then does nothing at all — and
+    config/kitty.conf:164-176 has already taken that key away from kitty's native close_window, so
+    the guard fails into looking like it is still on.
     """
     env = os.environ.get("KITTY_LISTEN_ON", "")
     if env and not env.startswith("fd:"):
         return env
 
-    def sock(path: str) -> str | None:
-        try:
-            import stat
+    tmpl = listen_on_template()
 
-            if stat.S_ISSOCK(os.stat(path).st_mode):
-                return f"unix:{path}"
-        except OSError:
-            pass
-        return None
+    # A `tcp:` listener — and a Linux abstract `unix:@name` — has NO socket FILE, so the mode test
+    # is STRUCTURALLY BLIND to it and would reject a LIVE address. Hand those straight to `kitty @`,
+    # which is the real arbiter. Same rule, same reason, as handoff-fire.sh's kitty_sockets.
+    if not tmpl.startswith("unix:/"):
+        return tmpl
 
-    found = sock(f"/tmp/kitty-{os.getppid()}")
+    path = tmpl[len("unix:") :]
+    found = _socket(path.replace(KITTY_PID, str(os.getppid())))
     if found:
         return found
 
-    # Last resort: exactly one kitty socket on the box is unambiguous. More than one means
-    # concurrent kitty instances, and guessing which fleet to talk to is not a guess worth making.
-    import glob
+    # A template with no {kitty_pid} names exactly one path, and it was just tried — there is
+    # nothing left to search, and globbing a literal would only re-find the same miss.
+    if KITTY_PID not in path:
+        return None
 
-    candidates = [
-        p for p in glob.glob("/tmp/kitty-*") if p.rsplit("-", 1)[-1].isdigit() and sock(p)
+    # Last resort: exactly one socket of the conf's OWN shape is unambiguous. More than one means
+    # concurrent kitty instances, and guessing which fleet to talk to is not a guess worth making.
+    # The `\d+` is the conf-derived form of the old `.isdigit()` suffix gate: {kitty_pid} is a pid,
+    # so anything else sitting at that position is not a control socket whatever its mode says.
+    shape = re.compile(re.escape(path).replace(re.escape(KITTY_PID), r"\d+"))
+    addrs = [
+        addr
+        for addr in (
+            _socket(p)
+            for p in sorted(glob.glob(path.replace(KITTY_PID, "*")))
+            if shape.fullmatch(p)
+        )
+        if addr
     ]
-    return sock(candidates[0]) if len(candidates) == 1 else None
+    return addrs[0] if len(addrs) == 1 else None
 
 
 ADDRESS = socket_address()
@@ -271,6 +355,14 @@ def main() -> int:
         print(USAGE, file=sys.stderr)
         return 2
 
+    # Printed BEFORE the call that depends on it, so a --check against a retuned or unreadable conf
+    # explains itself: without this the address diagnostics sat below the early return and were
+    # unreachable in exactly the case worth diagnosing.
+    if check:
+        print(f"conf      : {kitty_conf()}")
+        print(f"listen_on : {listen_on_template()}")
+        print(f"address   : {ADDRESS}")
+
     tree = load()
     if not tree:
         # No socket, or kitty did not answer. Do nothing and SAY so — a silent success here would
@@ -306,11 +398,10 @@ def main() -> int:
     # keypress would do and touches nothing. Without it there is no way to test the decision
     # without also testing the close.
     if check:
-        print(f"address : {ADDRESS}")
-        print(f"scope   : {scope}")
-        print(f"targets : {ids}")
-        print(f"busy    : {[w['id'] for w in busy]}")
-        print(f"action  : {'DIALOG' if busy else 'close silently (all at a shell prompt)'}")
+        print(f"scope     : {scope}")
+        print(f"targets   : {ids}")
+        print(f"busy      : {[w['id'] for w in busy]}")
+        print(f"action    : {'DIALOG' if busy else 'close silently (all at a shell prompt)'}")
         if busy:
             print("---\n" + describe(targets, scope)[0])
         return 0

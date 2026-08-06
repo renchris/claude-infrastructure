@@ -73,24 +73,76 @@ def is_routed(url):
 
 
 # ── pane → account ────────────────────────────────────────────────────────────────────
+# The socket TEMPLATE comes from kitty.conf's `listen_on` — the SSOT for where the socket
+# actually is. The enumeration below used to hardcode `/tmp` and the `kitty-` prefix, which
+# AGREE with the shipped conf (config/kitty.conf:67) and go silently wrong the moment
+# listen_on names another directory: no candidate, no CDP leg, and every click reverts to
+# the wrong-Space `open -b dia` this file exists to close. Same contract as the sibling
+# derivations in bin/kitty-confirm-close and scripts/handoff-fire.sh; the three copies are
+# held in agreement behaviourally by tests/kitty-socket-address.bats.
+KITTY_PID = "{kitty_pid}"
+DEFAULT_LISTEN_ON = "unix:/tmp/kitty-{kitty_pid}"
+_LISTEN_ON = re.compile(r"[ \t]*listen_on[ \t]+([^#]*)")
+
+
+def kitty_conf():
+    return os.environ.get("CC_KITTY_CONF") or f"{HOME}/.config/kitty/kitty.conf"
+
+
+def listen_on_template():
+    """kitty.conf's `listen_on`, last value winning (kitty's own option semantics), trailing
+    comment dropped, whitespace stripped — or the string this file used to hardcode, so an
+    absent or unreadable conf leaves the handler no less capable than before."""
+    tmpl = ""
+    try:
+        with open(kitty_conf(), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = _LISTEN_ON.match(line)
+                if m:
+                    value = "".join(m.group(1).split())
+                    if value:
+                        tmpl = value
+    except OSError:
+        pass
+    return tmpl or DEFAULT_LISTEN_ON
+
+
 def kitty_sockets():
     """kitty's own env is NOT ours: open_url_with children are spawned by kitty itself,
-    so KITTY_LISTEN_ON may be absent. Enumerating the socket files is the durable read —
-    /tmp/kitty-* also holds ordinary files (screenshots, conf backups), hence the mode
-    test rather than a glob-and-hope."""
+    so KITTY_LISTEN_ON may be absent — whether it ever arrives here is UNMEASURED, which is
+    why the enumeration below is the load-bearing path and not a fallback. It enumerates
+    sockets of the shape the CONF names; /tmp also holds ordinary kitty-* files (screenshots,
+    conf backups, kitty-pane-menu-native.compile.log), hence the mode test as well."""
     to = os.environ.get("CC_URL_OPEN_KITTY_TO") or os.environ.get("KITTY_LISTEN_ON")
     if to:
         return [to]
+
+    tmpl = listen_on_template()
+    # `tcp:` and a Linux abstract `unix:@name` own no socket FILE, so the mode test is blind
+    # to them and dropping them here would discard a LIVE address. `kitty @` is the arbiter.
+    if not tmpl.startswith("unix:/"):
+        return [tmpl]
+
+    path = tmpl[len("unix:") :]
+    # The handler is spawned by kitty, so PPID is the best guess at {kitty_pid} and goes first;
+    # the shape scan behind it is what keeps this working when that assumption does not hold.
+    ordered = [path.replace(KITTY_PID, str(os.getppid()))]
+    if KITTY_PID in path:
+        import glob
+
+        shape = re.compile(re.escape(path).replace(re.escape(KITTY_PID), r"\d+"))
+        ordered += [p for p in sorted(glob.glob(path.replace(KITTY_PID, "*"))) if shape.fullmatch(p)]
+
     out = []
-    for name in sorted(os.listdir("/tmp")):
-        if not name.startswith("kitty-"):
+    for p in ordered:
+        addr = f"unix:{p}"
+        if addr in out:
             continue
-        p = f"/tmp/{name}"
         try:
             import stat
 
             if stat.S_ISSOCK(os.stat(p).st_mode):
-                out.append(f"unix:{p}")
+                out.append(addr)
         except OSError:
             continue
     return out
