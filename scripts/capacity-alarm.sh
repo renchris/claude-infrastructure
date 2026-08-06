@@ -12,8 +12,12 @@
 # Deployed, it would be a permanent dispatch outage. So this file:
 #   · NEVER refuses, blocks, queues, sleeps, or polls-until-clear. It reports and exits (R1: a
 #     shedder that WAITS amplifies).
-#   · keys on MEMORY, which is genuinely sheddable and genuinely attributable to sessions — never on
-#     loadavg, which swung 2.05x (29.15 -> 59.80) at a CONSTANT 31-32 sessions.
+#   · SHEDS on MEMORY, which is genuinely sheddable and genuinely attributable to sessions. Load is
+#     not a shedding quantity: it swung 2.05x (29.15 -> 59.80) at a CONSTANT 31-32 sessions, so no
+#     spawn refusal moves it. That argument is about a GATE and it stands unchanged — but it was
+#     never an argument for not LOOKING, and this file read it as one for six rungs. Rung 7 (D4
+#     below) REPORTS the scheduler axis, because four panics in a row arrived on it while every
+#     memory rung read healthy. Watch it; never gate on it.
 #
 # THE INSTRUMENT, chosen because the obvious ones lie:
 #   · `ps rss` summed over sessions OVERCOUNTS ~2.34x (it double-counts shared pages) — do not use
@@ -29,7 +33,7 @@
 #   ALARM    any rung at its alarm floor.                             exit 2
 #   NO-DATA  vm_stat unreadable — nothing is asserted.                exit 3
 #
-# SIX RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
+# SEVEN RUNGS, MAX-COMBINED (M9/M9-ext, §11.3). The verdict is the WORST rung, never the last one
 # evaluated — so a new term can only ever raise the verdict, never mask an existing one:
 #   1. swap GROWTH  >= SWAP_DELTA_MB in SWAP_WINDOW_S ⇒ ALARM   (a LEVEL latches; a DELTA cannot)
 #   2. reclaimable headroom   < ALARM_GB/WARN_GB
@@ -37,6 +41,7 @@
 #   4. per-proc phys outlier  > PROC_WARN_GB   ⇒ WARN    (the leak term; report always, gate softly)
 #   5. compressor SEGMENTS    >= 70% / >= 45%  ⇒ ALARM / WARN   (the 2026-07-30 panic axis)
 #   6. terminal-coalition procs >= 700 / >= 500 ⇒ ALARM / WARN  (the 2026-07-31 panic axis)
+#   7. load-average PER CORE  >= 2.5 / >= 1.5   ⇒ ALARM / WARN  (the scheduler axis, D4 below)
 #
 # WHY RUNG 6 IS NOT PART OF RUNG 4. They count different nouns, and 2026-07-31 proved the
 # difference is fatal. That box died with the iTerm2 coalition at 139.5 GiB — 89.6% of all process
@@ -110,6 +115,73 @@
 # writes it on ITS OWN transition. The combined fixed-slug page stays exactly as it was — this is
 # additive, so nothing that reads the old path breaks.
 #
+# ══ D4 — THE SCHEDULER AXIS WAS NOT INSTRUMENTED AT ALL (rung 7, added 2026-08-05) ════════════════
+# The fourth panic — 2026-08-05 00:18:22, `watchdog timeout: no checkins from watchdogd in 94
+# seconds`, bug_type 210, panicFlags 0x802 — makes the panic/saturation correlation 4-for-4
+# (07-30, 07-31 x2, 08-05). This sampler reported OK through it at load 25.3 on a 10-core box,
+# and it was not wrong about anything it measured: it emitted memory and coalition fields and
+# NOTHING ELSE. No load average, no run-queue depth, no CPU term of any kind. Six rungs cannot
+# outvote a seventh that does not exist.
+#
+# The axis is real and it is not memory. The panic is a watchdogd starvation, and the same event
+# resampled 8,429 of 9,338 threads with truncated backtraces across 1,317 pids — 9,338 threads on
+# 10 cores IS the measurement. (Contrast the three EMPTY stackshots §9 of reso's
+# NODE_SEGFAULT_ABRUPT_SESSION_CLOSE_2026-08-02.md reasons from: this one sampled. That doc's
+# "42h at load 25 with no panic" hedge is superseded as a reason not to look — see below for what
+# it is still evidence OF.)
+#
+# THE INSTRUMENT: `vm.loadavg` field 1 (the 1-minute average) divided by `hw.ncpu`. The 1-minute
+# average, not the 5- or 15-, for two reasons: the watchdog window is 94 s, and a 60 s sampler
+# differencing a 15-minute EWMA is reading yesterday. All three are EMITTED, because burst-vs-
+# plateau is exactly what the 1-minute number alone cannot tell you, and no historical load series
+# for this box exists to calibrate against — the log has to become that series first.
+#
+# ⚠️ THESE TWO THRESHOLDS ARE NOT CALIBRATED, AND THE COUNTER-EVIDENCE IS SPECIFIC. Same status as
+# rung 6's, and stated here so no reader mistakes an ALARM on this rung for "the box is dying":
+#   (1) THE SURVIVED POPULATION CONTAINS THE FATAL VALUE. Fatal 2026-08-05: 25.3 on 10 cores =
+#       2.53/core. Survived: MACHINE_CAPACITY_V2 §8.5.7 records 13 consecutive samples at a
+#       CONSTANT 31-32 sessions spanning 29.15-59.80, i.e. 2.92-5.98/core — every one of them
+#       ABOVE the fatal reading, all 13 on a box that lived. reso adds 42 h at load 25 (2.5/core)
+#       with no panic. So load-per-core does not separate fatal from survived, and no setting of
+#       these two numbers can make it. 13/13 of that window would read ALARM at the 2.5 floor.
+#   (2) IT DOES NOT MEASURE THE WEDGE, ONLY THE BURST THAT PRECEDES IT. A thread blocked on a
+#       page-in is not on a run queue, and at death 90.3% of backtraces were truncated because
+#       userspace was paged out. What lifted load to 25.3 was the allocator — 670 node processes
+#       spawned in 720 s, all runnable. That is the leading edge and it is worth seeing; the
+#       terminal starvation itself is invisible to this rung by construction.
+# It ships anyway, at the commissioned floors (1.5 / 2.5 per core), for rung 5's reason: it is the
+# only instrument that can see this axis AT ALL, and a rung that is uncalibrated is still strictly
+# more than a rung that is absent. Both floors are seams (CC_CAP_LOAD_WARN_PER_CORE /
+# CC_CAP_LOAD_ALARM_PER_CORE) so tuning never needs a code edit, and the false-positive population
+# above is EXECUTABLE in the selftest — 5.98/core is pinned as a known false ALARM, so a future
+# re-derivation has to argue with a control rather than with this paragraph.
+#
+# THE RUNG WAS PROVEN AGAINST A REAL LOAD, not only against probes. Measured 2026-08-06 on this box
+# with 16 background-band (PRI 4) spinners — the band still counts toward loadavg, because loadavg
+# counts RUNNABLE threads and not priority:
+#     before  load1 4.16  = 0.42/core → OK    rc 0
+#     during  load1 15.17 = 1.52/core → WARN  rc 1   swap=OK headroom=OK pressure=OK maxproc=OK load=WARN
+# The rung-state line is the part that matters: the verdict moved and every OTHER rung stayed OK, so
+# the red is attributable to rung 7 alone rather than to a coincidence on a busy box. That is the
+# one claim a stubbed control can never make, and its absence is how a rung wired to nothing passes
+# every unit test ever written for it (tests/capacity-alarm.bats (xxviii)/(xxxii) keep both halves).
+#
+# WHY A FALSE ALARM HERE IS AFFORDABLE, precisely: this file never refuses anything (ALARM-NOT-GATE),
+# per-rung pages fire on the TRANSITION only (D3), so 42 h above the floor writes ONE page, not
+# 2,520 — and the combined page is one fixed self-clearing slug. The cost of being wrong is one
+# page; the cost of the blindness it replaces was measured four times.
+#
+# ABSOLUTE-PATH sysctl, unlike every incumbent rung in this file. This job runs under launchd with
+# a PATH the wrapper EXPORTS, and the bare-name class has already cost this repo three silently
+# dead rungs (see the plist's own /usr/sbin paragraph) — and is costing it one right now: every
+# capacity-gate row in handoffs.jsonl reads `hw.ncpu unreadable ('') — load term not evaluated`,
+# which is this exact sysctl, resolved by bare name, from a daemon context. So rung 7 resolves
+# /usr/sbin/sysctl directly and only falls back to the bare name when that file is absent. The
+# incumbent bare-`sysctl` sites are deliberately NOT converted in this change: they are pinned by
+# tests/capacity-alarm-launchd-path.bats against the plist's own PATH string, and that suite's RED
+# CONTROL requires read_segments to stay PATH-sensitive. Converting them is an edit to a landed
+# guard, not a maintenance edit — backlogged, not forgotten.
+#
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
 #        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
@@ -118,7 +190,9 @@
 #        CC_CAP_SWAP_DELTA_MB (default 256) · CC_CAP_SWAP_WINDOW_S (default 600) ·
 #        CC_CAP_PRIOR_ROWS (default 15, tail depth of the log's own history) ·
 #        CC_CAP_SEG_SOURCE (est | zprint — default est) ·
-#        CC_CAP_TIMEOUT (timeout(1) binary, for stubbing the zprint slow lane)
+#        CC_CAP_TIMEOUT (timeout(1) binary, for stubbing the zprint slow lane) ·
+#        CC_CAP_LOAD_WARN_PER_CORE (default 1.5) · CC_CAP_LOAD_ALARM_PER_CORE (default 2.5) ·
+#        CC_CAP_SYSCTL (sysctl(1) binary for rung 7 ONLY — absolute by default, see D4)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -167,6 +241,16 @@ COAL_ALARM="${CC_CAP_COAL_ALARM:-700}"
 SWAP_DELTA_MB="${CC_CAP_SWAP_DELTA_MB:-256}"
 SWAP_WINDOW_S="${CC_CAP_SWAP_WINDOW_S:-600}"
 PRIOR_ROWS="${CC_CAP_PRIOR_ROWS:-15}"
+# Scheduler saturation (rung 7, D4). Commissioned values, NOT derived ones — read D4 before touching
+# them, and read the selftest's 5.98 probe before believing an ALARM here means the box is dying.
+LOAD_WARN_PER_CORE="${CC_CAP_LOAD_WARN_PER_CORE:-1.5}"
+LOAD_ALARM_PER_CORE="${CC_CAP_LOAD_ALARM_PER_CORE:-2.5}"
+# An EXPLICIT override is honoured verbatim; only the DEFAULT falls back. Folding the override into
+# the fallback list is how an override stops being one (memory path-resolved-dependency-in-daemon-code).
+SYSCTL="${CC_CAP_SYSCTL:-}"
+if [ -z "$SYSCTL" ]; then
+  if [ -x /usr/sbin/sysctl ]; then SYSCTL=/usr/sbin/sysctl; else SYSCTL=sysctl; fi
+fi
 LOG="${CC_CAP_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
 APPEND=1; WANT_JSON=0; QUIET=0
 
@@ -242,7 +326,7 @@ SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
 # subprocess per row per tick and would put a BSD/GNU flag difference on the hot path. The rows this
 # script writes are always `%Y-%m-%dT%H:%M:%SZ`; anything else fails the shape check and is skipped.
 NOW_EPOCH="$(date -u +%s 2>/dev/null || echo 0)"
-read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions|decompressions"
+read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions|decompressions|loadpercore"
   [ -f "$LOG" ] || return 1
   tail -n "$PRIOR_ROWS" "$LOG" 2>/dev/null | awk -v now="$NOW_EPOCH" -v win="$SWAP_WINDOW_S" '
     function jnum(s, key,   v) {
@@ -279,19 +363,19 @@ read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions
     }
     END {
       if (n == 0) exit 1
-      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s\n", base, \
+      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", base, \
         jnum(last, "headroom_gb"), jnum(last, "swap_delta_mb"), jnum(last, "pressure_level"), \
         jnum(last, "max_proc_gb"), jnum(last, "seg_pct"), jnum(last, "coal_procs"), \
-        jnum(last, "compressions"), jnum(last, "decompressions")
+        jnum(last, "compressions"), jnum(last, "decompressions"), jnum(last, "load_per_core")
     }'
 }
 
 SWAP_BASE=""; P_HEAD=""; P_SWAP_DELTA=""; P_PRESSURE=""; P_MAX_PROC=""; P_SEG=""; P_COAL=""
-P_COMPRESSIONS=""; P_DECOMPRESSIONS=""
+P_COMPRESSIONS=""; P_DECOMPRESSIONS=""; P_LOAD=""
 PRIOR="$(read_prior || true)"
 if [ -n "$PRIOR" ]; then
   IFS='|' read -r SWAP_BASE P_HEAD P_SWAP_DELTA P_PRESSURE P_MAX_PROC P_SEG P_COAL \
-                  P_COMPRESSIONS P_DECOMPRESSIONS <<< "$PRIOR"
+                  P_COMPRESSIONS P_DECOMPRESSIONS P_LOAD <<< "$PRIOR"
 fi
 
 # The delta itself. Empty when EITHER end is unknown — an unreadable sysctl must not be differenced
@@ -615,6 +699,45 @@ if [ -n "$COAL_ROW" ]; then
   COAL_APP="${COAL_ROW#* }"
 fi
 
+# ── scheduler saturation (rung 7) — the axis four panics arrived on, previously not instrumented ──
+# Two counter reads, no walk, nothing to block on — the D2 property rung 5 had to be rebuilt to get.
+#
+# THE BRACES ARE PART OF THE OUTPUT: `vm.loadavg` prints `{ 6.22 6.31 8.23 }`, so the three averages
+# are fields 2-4 of the raw line. They are stripped instead of indexed around, because a build that
+# omits them would silently shift every index by one and hand rung 7 the 5-minute average while
+# still looking correct. After the gsub the fields are the numbers on BOTH shapes, and each is
+# shape-checked: a non-numeric field means the format changed, which is an unreadable instrument
+# (rung SKIPPED), never a value to divide.
+#
+# hw.ncpu is the denominator the spec names. Note what it flattens on Apple silicon: P- and E-cores
+# count alike, so N/ncpu treats an E-core as a full core and UNDER-states saturation on an
+# efficiency-heavy mix. Wrong in the quiet direction, which is the wrong direction for an alarm —
+# recorded here rather than corrected, because a correction factor nobody measured is the made-up
+# number in a verdict this header bans.
+read_load() { # → "<load1> <load5> <load15> <ncpu>", or nothing when unreadable
+  local n row
+  n="$("$SYSCTL" -n hw.ncpu 2>/dev/null | tr -dc '0-9')"
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$n" -gt 0 ] || return 1
+  row="$("$SYSCTL" -n vm.loadavg 2>/dev/null | awk '
+    NR == 1 {
+      gsub(/[{}]/, "")            # assigning $0 re-splits: fields become the three averages
+      if (NF >= 3 && $1 ~ /^[0-9]+(\.[0-9]+)?$/ && $2 ~ /^[0-9]+(\.[0-9]+)?$/ \
+                  && $3 ~ /^[0-9]+(\.[0-9]+)?$/) printf "%s %s %s\n", $1, $2, $3
+    }')"
+  [ -n "$row" ] || return 1
+  printf '%s %s' "$row" "$n"
+}
+
+LOAD_1M=""; LOAD_5M=""; LOAD_15M=""; NCPU=""; LOAD_PER_CORE=""
+LOAD_RAW="$(read_load || true)"
+if [ -n "$LOAD_RAW" ]; then
+  # shellcheck disable=SC2086  # deliberate word-split of the 4-field read_load output
+  set -- $LOAD_RAW
+  LOAD_1M="$1"; LOAD_5M="$2"; LOAD_15M="$3"; NCPU="$4"
+  LOAD_PER_CORE="$(awk -v l="$LOAD_1M" -v n="$NCPU" 'BEGIN{printf "%.2f", l/n}')"
+fi
+
 # ── positive control (R6) — prove the ladder can reach every rung ─────────────────────────────────
 # Without this, "OK" is indistinguishable from "the thresholds are unreachable". Runs the SAME
 # classify function against synthetic inputs, so it tests the real code path, not a description.
@@ -627,17 +750,17 @@ fi
 # rung's own state to page on its own transition, and the one thing that must never happen is a
 # threshold living in two places and drifting: the verdict would then disagree with the page it
 # writes. With CC_CAP_RUNG_DETAIL=1 the output becomes
-#     "<VERDICT> swap=<S> headroom=<S> pressure=<S> maxproc=<S> segments=<S> coalition=<S>"
+#     "<VERDICT> swap=<S> headroom=<S> pressure=<S> maxproc=<S> segments=<S> coalition=<S> load=<S>"
 # where <S> is OK | WARN | ALARM | SKIPPED. Unset, the output is byte-identical to what every
 # existing caller and control already expects.
-classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] [coal_procs] → verdict
-  local h="$1" sd="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" v=0
-  local r1=SKIPPED r2=SKIPPED r3=SKIPPED r4=SKIPPED r5=SKIPPED r6=SKIPPED
+classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] [coal_procs] [load_per_core] → verdict
+  local h="$1" sd="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" lp="${7:-}" v=0
+  local r1=SKIPPED r2=SKIPPED r3=SKIPPED r4=SKIPPED r5=SKIPPED r6=SKIPPED r7=SKIPPED
   # headroom is the ONE instrument the verdict cannot exist without (see header).
   if [ -z "$h" ]; then
     printf 'NO-DATA'
-    [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s' \
-      SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED
+    [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s' \
+      SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED
     return 0
   fi
 
@@ -701,9 +824,22 @@ classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] 
        fi ;;
   esac
 
+  # rung 7 — scheduler saturation (D4). Reaches ALARM: this is the axis all four panics arrived on,
+  # and on 2026-08-05 it stood at 2.53/core while every rung above it read healthy. Absent
+  # instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK — a dead sysctl reading as load 0
+  # would be the launchd-PATH failure shape exactly, on the one rung whose sensor is a daemon read.
+  case "$lp" in
+    ''|*[!0-9.]*) : ;;
+    *) if awk -v a="$lp" -v b="$LOAD_ALARM_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then r7=ALARM; v=2
+       elif awk -v a="$lp" -v b="$LOAD_WARN_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then
+         r7=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+       else r7=OK
+       fi ;;
+  esac
+
   case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
-  [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s' \
-    "$r1" "$r2" "$r3" "$r4" "$r5" "$r6"
+  [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s' \
+    "$r1" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"
   return 0
 }
 
@@ -727,28 +863,42 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
   # state, and `99:0:1:0::353:OK` is the highest reading of the 38 healthy samples it was derived
   # from — that row is the no-false-positive claim, executable. If a future threshold edit makes
   # 353 fire, this control goes RED rather than the fleet learning it the expensive way.
+  #
+  # The rung-7 rows carry the load axis in BOTH directions, and two of them are named events rather
+  # than round numbers. `2.53` is the 2026-08-05 fatal sample itself (load 25.3 on 10 cores) — the
+  # executable form of "this rung would have fired on the panic it was commissioned for", where the
+  # shipped sampler emitted no CPU field at all. `5.98` is the opposite claim and it is deliberately
+  # pinned as an ALARM the box SURVIVED (MACHINE_CAPACITY_V2 §8.5.7's highest of 13 consecutive
+  # samples at a constant 31-32 sessions): the false-positive population is part of this rung's
+  # specification, not a defect discovered later, and anyone re-deriving these floors has to move
+  # that row rather than a comment. `0` proves a genuinely idle box is a READING, not a skip.
   for probe in \
-      "99:0:1:0:::OK"      "5:0:1:0:::WARN"   "1:0:1:0:::ALARM" "99:512:1:0:::ALARM" ":0:1:0:::NO-DATA" \
-      "99:0:2:0:::WARN"    "99:0:4:0:::ALARM" "99:0:1:9:::WARN" "5:0:4:0:::ALARM"    "1:0:1:9:::ALARM" \
-      "99:0::0:::OK"       "99:0:1::::OK" \
-      "99:0:1:0:100::ALARM" "99:0:1:0:70::ALARM" "99:0:1:0:45::WARN" "99:0:1:0:44::OK" \
-      "99:0:1:0:0::OK"      "99:0:1:0:?::OK"     "1:0:1:0:0::ALARM"  "99:0:1:9:100::ALARM" \
-      "99:0:1:0::1002:ALARM" "99:0:1:0::700:ALARM" "99:0:1:0::699:WARN" "99:0:1:0::500:WARN" \
-      "99:0:1:0::499:OK"     "99:0:1:0::353:OK"    "99:0:1:0::?:OK"     "1:0:1:0::353:ALARM" \
-      "99:0:1:0:100:1002:ALARM" \
-      "99:256:1:0:::ALARM"   "99:255:1:0:::OK"     "99:-8:1:0:::OK"     "99:?:1:0:::OK" \
-      "1:?:1:0:::ALARM"; do
+      "99:0:1:0::::OK"      "5:0:1:0::::WARN"   "1:0:1:0::::ALARM" "99:512:1:0::::ALARM" ":0:1:0::::NO-DATA" \
+      "99:0:2:0::::WARN"    "99:0:4:0::::ALARM" "99:0:1:9::::WARN" "5:0:4:0::::ALARM"    "1:0:1:9::::ALARM" \
+      "99:0::0::::OK"       "99:0:1:::::OK" \
+      "99:0:1:0:100:::ALARM" "99:0:1:0:70:::ALARM" "99:0:1:0:45:::WARN" "99:0:1:0:44:::OK" \
+      "99:0:1:0:0:::OK"      "99:0:1:0:?:::OK"     "1:0:1:0:0:::ALARM"  "99:0:1:9:100:::ALARM" \
+      "99:0:1:0::1002::ALARM" "99:0:1:0::700::ALARM" "99:0:1:0::699::WARN" "99:0:1:0::500::WARN" \
+      "99:0:1:0::499::OK"     "99:0:1:0::353::OK"    "99:0:1:0::?::OK"     "1:0:1:0::353::ALARM" \
+      "99:0:1:0:100:1002::ALARM" \
+      "99:256:1:0::::ALARM"   "99:255:1:0::::OK"     "99:-8:1:0::::OK"     "99:?:1:0::::OK" \
+      "1:?:1:0::::ALARM" \
+      "99:0:1:0:::0:OK"       "99:0:1:0:::0.62:OK"   "99:0:1:0:::1.49:OK"  "99:0:1:0:::1.5:WARN" \
+      "99:0:1:0:::2.49:WARN"  "99:0:1:0:::2.5:ALARM" "99:0:1:0:::2.53:ALARM" \
+      "99:0:1:0:::5.98:ALARM" "99:0:1:0:::?:OK"      "1:0:1:0:::?:ALARM" \
+      "99:0:1:0:100::2.53:ALARM"; do
     h="${probe%%:*}";  r="${probe#*:}"
     s="${r%%:*}";      r="${r#*:}"
     pl="${r%%:*}";     r="${r#*:}"
     mp="${r%%:*}";     r="${r#*:}"
     sg="${r%%:*}";     r="${r#*:}"
-    cp="${r%%:*}";     want="${r#*:}"
-    got="$(classify "$h" "$s" "$pl" "$mp" "$sg" "$cp")"
+    cp="${r%%:*}";     r="${r#*:}"
+    lp="${r%%:*}";     want="${r#*:}"
+    got="$(classify "$h" "$s" "$pl" "$mp" "$sg" "$cp" "$lp")"
     if [ "$got" = "$want" ]; then
-      echo "  control OK   headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got"
+      echo "  control OK   headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' load='$lp' → $got"
     else
-      echo "  control FAIL headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' → $got (want $want)"
+      echo "  control FAIL headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' load='$lp' → $got (want $want)"
       fails=$((fails+1))
     fi
   done
@@ -780,7 +930,37 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
       fails=$((fails+1))
     fi
   fi
-  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (6 rungs + no-data + census + coalition reachable)"; exit 0; }
+  # Rung 7's instrument is the only one in this file whose sensor is a DAEMON-context sysctl read,
+  # and the bare-name class is not hypothetical here — it is LIVE: every capacity-gate row in
+  # handoffs.jsonl reads `hw.ncpu unreadable ('') — load term not evaluated`, which is this exact
+  # sysctl resolved by bare name from a hook context. So the control is not "does it return a
+  # number", it is "does it return one with /usr/sbin OFF the PATH" — the launchd shape exactly. A
+  # rung that only answers from an interactive shell is the 2026-07-30 defect under a new name, and
+  # it would present as a permanently-SKIPPED rung nobody notices.
+  lr="$(read_load || true)"
+  lr_nopath="$( PATH=/usr/bin:/bin; read_load 2>/dev/null || true )"
+  if [ -z "$lr" ]; then
+    echo "  control FAIL load — read_load returned nothing; rung 7 would be permanently SKIPPED"
+    fails=$((fails+1))
+  else
+    # shellcheck disable=SC2086  # deliberate word-split of the 4-field read_load output
+    set -- $lr
+    if [ "$#" -eq 4 ] && [ "${4:-0}" -ge 1 ] 2>/dev/null \
+       && awk -v l="${1:-}" 'BEGIN{exit !(l+0 >= 0)}'; then
+      echo "  control OK   load ${1} (1-min) on ${4} cores = $(awk -v l="$1" -v n="$4" \
+        'BEGIN{printf "%.2f", l/n}')/core   (warn ${LOAD_WARN_PER_CORE} · alarm ${LOAD_ALARM_PER_CORE})"
+    else
+      echo "  control FAIL load — read_load gave '$lr', not '<l1> <l5> <l15> <ncpu>' with ncpu>=1"
+      fails=$((fails+1))
+    fi
+  fi
+  if [ -n "$lr_nopath" ]; then
+    echo "  control OK   load instrument is PATH-INDEPENDENT — reads with /usr/sbin off the PATH"
+  else
+    echo "  control FAIL load instrument needs /usr/sbin on PATH — it goes SKIPPED under launchd"
+    fails=$((fails+1))
+  fi
+  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (7 rungs + no-data + census + coalition + load reachable)"; exit 0; }
   echo "capacity-alarm: selftest RED ($fails)" >&2; exit 70
 fi
 
@@ -794,7 +974,7 @@ fi
 # The verdict AND the six rung states from ONE call (see classify's DETAIL note) — a second
 # evaluation could disagree with the first, and a page that contradicts the verdict beside it is
 # worse than no page.
-CLASSIFY_OUT="$(CC_CAP_RUNG_DETAIL=1 classify "$HEAD" "$SWAP_DELTA" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS")"
+CLASSIFY_OUT="$(CC_CAP_RUNG_DETAIL=1 classify "$HEAD" "$SWAP_DELTA" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS" "$LOAD_PER_CORE")"
 VERDICT="${CLASSIFY_OUT%% *}"
 RUNG_STATES="${CLASSIFY_OUT#* }"
 
@@ -803,7 +983,7 @@ RUNG_STATES="${CLASSIFY_OUT#* }"
 # be treated as unchanged and never page.
 PREV_STATES=""
 if [ -n "$PRIOR" ]; then
-  PREV_STATES="$(CC_CAP_RUNG_DETAIL=1 classify "$P_HEAD" "$P_SWAP_DELTA" "$P_PRESSURE" "$P_MAX_PROC" "$P_SEG" "$P_COAL")"
+  PREV_STATES="$(CC_CAP_RUNG_DETAIL=1 classify "$P_HEAD" "$P_SWAP_DELTA" "$P_PRESSURE" "$P_MAX_PROC" "$P_SEG" "$P_COAL" "$P_LOAD")"
   PREV_STATES="${PREV_STATES#* }"
 fi
 
@@ -872,7 +1052,14 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # the discriminator cannot exist. Same reason as swap's baseline — the log is the state.
 SEG_SOURCE_JSON='null'
 [ -n "$SEG_SOURCE" ] && SEG_SOURCE_JSON="\"$SEG_SOURCE\""
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s}' \
+#
+# `load_1m` gates the rung; `load_5m`/`load_15m` are emitted because a single 1-minute number cannot
+# distinguish a burst from a plateau, and D4's whole calibration problem is that no historical load
+# series for this box exists. The log has to BECOME that series before these floors can be re-derived
+# from anything better than two panics and thirteen survived samples. `ncpu` ships beside them so a
+# row stays interpretable if it is ever read on another machine — a per-core figure whose denominator
+# is not in the row is not a measurement, it is a number.
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -880,7 +1067,9 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "${COAL_PROCS:-null}" "${COAL_APP:-}" "$COAL_WARN" "$COAL_ALARM" \
   "$TOP_JSON" "$SEG_SOURCE_JSON" "${SWAP_DELTA:-null}" "$SWAP_DELTA_MB" "$SWAP_WINDOW_S" \
   "${OCCUPANCY_PCT:-null}" "${THRASH_CD_RATIO:-null}" \
-  "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}")"
+  "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
+  "${LOAD_1M:-null}" "${LOAD_5M:-null}" "${LOAD_15M:-null}" "${NCPU:-null}" \
+  "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -915,6 +1104,9 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
         "${SWAP_MB:-0}" "${COMP:-?}" "${ROOM:-?}"
       printf 'sessions: %s trees (%s claude.exe + %s .bin/claude)  ·  kernel pressure level: %s\n' \
         "$SESSIONS" "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-unreadable}"
+      printf 'load: %s/%s/%s on %s cores = %s/core (warn %s · alarm %s — UNCALIBRATED, see D4)\n' \
+        "${LOAD_1M:-?}" "${LOAD_5M:-?}" "${LOAD_15M:-?}" "${NCPU:-?}" "${LOAD_PER_CORE:-unreadable}" \
+        "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE"
       # NAME the outlier. A page that says "a process is large" sends the operator hunting; the whole
       # value of the rung is arriving with the pid already identified.
       if [ -n "$MAX_PROC_GB" ] \
@@ -954,7 +1146,7 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
   # OK / SKIPPED / NO-DATA all RETRACT, for the same reason the combined page self-clears: a page
   # whose condition has passed is misinformation, and a rung whose instrument just went blind is
   # not asserting anything either.
-  for _rung in swap headroom pressure maxproc segments coalition; do
+  for _rung in swap headroom pressure maxproc segments coalition load; do
     _now_state="$(rung_state "$RUNG_STATES" "$_rung")"
     _prev_state="$(rung_state "$PREV_STATES" "$_rung")"
     _rung_page="$PAGES_DIR/capacity-alarm-$_rung.page"
@@ -969,6 +1161,10 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           maxproc)   _detail="largest process footprint ${MAX_PROC_GB:-?} GB > ${PROC_WARN_GB} GB floor" ;;
           segments)  _detail="compressor segments ${SEG_PCT:-?}% of limit (warn ${SEG_WARN_PCT}% · alarm ${SEG_ALARM_PCT}%) · source ${SEG_SOURCE:-?} · occupancy ${OCCUPANCY_PCT:-?}% of 16 pages/segment" ;;
           coalition) _detail="${COAL_PROCS:-?} procs in the ${COAL_APP:-?} coalition (warn >=${COAL_WARN} · alarm >=${COAL_ALARM})" ;;
+          # NAME the survived counter-example in the page itself. This rung's floors are not
+          # calibrated (D4), and an operator who reads "ALARM" without knowing the box has lived
+          # above this number for 42 h will shed sessions it did not need to shed.
+          load)      _detail="load ${LOAD_1M:-?} (1-min) on ${NCPU:-?} cores = ${LOAD_PER_CORE:-?}/core (warn >=${LOAD_WARN_PER_CORE} · alarm >=${LOAD_ALARM_PER_CORE}) · 5/15-min ${LOAD_5M:-?}/${LOAD_15M:-?} · UNCALIBRATED: 2.53/core was fatal 2026-08-05, 5.98/core survived" ;;
           *)         _detail="" ;;
         esac
         {
@@ -999,6 +1195,10 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
   # SKIPPED, not "0" — an unreadable ps must never render as an empty, healthy-looking coalition.
   echo "  terminal coalition:     ${COAL_PROCS:-SKIPPED (ps unreadable)}${COAL_PROCS:+ procs in ${COAL_APP}  (warn >=${COAL_WARN} / alarm >=${COAL_ALARM})}"
+  # SKIPPED, not "0.00" — a dead sysctl must never render as a perfectly idle box (that is exactly
+  # the shape the launchd-PATH regression put on three other rungs).
+  echo "  load per core:          ${LOAD_PER_CORE:-SKIPPED (sysctl unreadable)}${LOAD_PER_CORE:+/core   (${LOAD_1M} 1-min on ${NCPU} cores · warn >=${LOAD_WARN_PER_CORE} / alarm >=${LOAD_ALARM_PER_CORE})}"
+  echo "  load 1/5/15-min:        ${LOAD_1M:-?} / ${LOAD_5M:-?} / ${LOAD_15M:-?}   (1-min gates; the other two say burst-vs-plateau — UNCALIBRATED, see D4)"
   if [ -n "$TOP_PROCS" ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'

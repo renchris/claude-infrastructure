@@ -33,6 +33,7 @@ run_classify() { # <script> <args...>
   bash -c '
     WARN_GB=8; ALARM_GB=3; PROC_WARN_GB=3; SEG_WARN_PCT=45; SEG_ALARM_PCT=70
     SWAP_DELTA_MB=256; SWAP_WINDOW_S=600; COAL_WARN=500; COAL_ALARM=700
+    LOAD_WARN_PER_CORE=1.5; LOAD_ALARM_PER_CORE=2.5
     '"$(sed -n '/^classify() {/,/^}/p' "$script")"'
     classify "$@"
   ' _ "$@"
@@ -175,10 +176,13 @@ run_read_segments() { # <script> <stubdir> [env...]
   [[ "$output" == 100\|* ]] || false
 }
 
-@test "the in-script selftest is GREEN and reports 6 rungs" {
+@test "the in-script selftest is GREEN and reports 7 rungs" {
+  # The count is asserted ON PURPOSE and is meant to go red when a rung is added: the number in the
+  # GREEN line is a CLAIM about coverage, and a claim that updates itself proves nothing. 6 → 7 on
+  # 2026-08-05 when rung 7 (scheduler saturation, D4) landed.
   run env CC_CAP_SELFTEST=1 bash "$A"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"selftest GREEN (6 rungs"* ]] || false
+  [[ "$output" == *"selftest GREEN (7 rungs"* ]] || false
   [[ "$output" != *"control FAIL"* ]] || false
 }
 
@@ -188,11 +192,17 @@ run_read_segments() { # <script> <stubdir> [env...]
 # 38-sample series the threshold was derived from (353) must stay OK. That second row IS the
 # no-false-positive claim, executable — it goes RED if anyone retunes COAL_WARN down without
 # re-deriving the denominator. See docs/research/panic-iterm2-coalition-2026-07-31.md §7.
+#
+# MATCHED LINE-WISE, not with `[[ $output == *…*…* ]]`. In a `[[ ]]` glob the `*` spans NEWLINES, so
+# `*"coal='1002'"*"→ ALARM"*` would happily match the coal on one probe line and the verdict on a
+# LATER one — a match that agrees only with its own fixture (memory lookup-miss-is-not-absence).
+# grep anchors the whole claim inside ONE line, and it also survives a rung 8 appending a field,
+# which is what broke these three assertions when rung 7 appended `load='…'` after `coal='…'`.
 @test "rung 6: the fatal 1002-proc coalition ALARMs, the healthy 353 max stays OK" {
   run env CC_CAP_SELFTEST=1 bash "$A"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"coal='1002' → ALARM"* ]] || false
-  [[ "$output" == *"coal='353' → OK"* ]]     || false
+  printf '%s\n' "$output" | grep -qE "coal='1002'.* → ALARM$" || false
+  printf '%s\n' "$output" | grep -qE "coal='353'.* → OK$"     || false
 }
 
 # An unreadable process table must SKIP rung 6, never report a healthy 0 — rung 3's standing policy,
@@ -200,7 +210,7 @@ run_read_segments() { # <script> <stubdir> [env...]
 @test "rung 6: an unreadable coalition count is SKIPPED, never a fabricated healthy 0" {
   run env CC_CAP_SELFTEST=1 bash "$A"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"coal='?' → OK"* ]] || false
+  printf '%s\n' "$output" | grep -qE "coal='\?'.* → OK$" || false
   run env CC_CAP_PS=/nonexistent/ps bash "$A" --no-append
   [[ "$output" == *"SKIPPED (ps unreadable)"* ]] || false
   [[ "$output" != *"0 procs in"* ]] || false

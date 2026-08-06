@@ -8,11 +8,18 @@
   inert, which is the failure this repo names as feature-durability-mechanism-not-memory. This is the
   thing that fires it.
 
-  WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST (this row is about NOT adding load): one vm_stat +
-  one sysctl + one ps + one python3 + one top, measured 0.71-0.77 s per tick (median 0.73 s, 5
-  trials, 2026-07-31 — the older "~100-200 ms" figure predated rungs 4-6). At 60 s that is a duty
-  cycle of ~1.2% of ONE core, i.e. ~0.12% of this 10-core box. It stays cheap via Nice +
-  LowPriorityIO, which yield to interactive sessions.
+  WHY IT IS CHEAP ENOUGH TO BE ALLOWED TO EXIST (this row is about NOT adding load): a handful of
+  vm_stat / sysctl / ps / python3 / top reads, RE-MEASURED 0.56-0.58 s per tick (median 0.57 s, 5
+  trials, 2026-08-06, with rung 7 live). At 60 s that is a duty cycle of ~0.95% of ONE core, i.e.
+  ~0.095% of this 10-core box. It stays cheap via Nice + LowPriorityIO, which yield to interactive
+  sessions.
+
+  Note the direction, because "we added a rung and it got FASTER" reads like a bad measurement:
+  rung 7 costs two more sysctl forks (~ms), while the previous commit moved rung 5's segment count
+  off zprint — a kernel zone walk that was 89% of this job's wall time — onto three counter reads.
+  The net is dominated by the removal. Prior figures on this line: 0.71-0.77 s (2026-07-31, rungs
+  1-6 with the zprint lane), and a "~100-200 ms" figure that predated rungs 4-6. Each is dated
+  because the number decays with the instrument it measured, and this line has now been wrong twice.
 
   THE INTERVAL IS 60 s, NOT 600 s, AND THAT IS THE WHOLE POINT OF THIS ROW.
   At 600 s this sensor could not resolve the event it exists to catch. On 2026-07-31 the box went

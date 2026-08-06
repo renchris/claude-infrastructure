@@ -40,7 +40,10 @@ plist_path() {
   local missing=""
   # HOME is expanded by the wrapper's shell at runtime; expand it here the same way.
   p="${p//\$HOME/$HOME}"
-  for bin in sysctl zprint vm_stat ps python3 top awk sed; do
+  # `tr` joined 2026-08-05 with rung 7 — it was already invoked (the pressure and segment-page reads
+  # pipe through it) and already absent from this list, which is the drift an ENUMERATED list always
+  # accumulates while its docstring claims to extract what the script "actually calls".
+  for bin in sysctl zprint vm_stat ps python3 top awk sed tr; do
     if ! env -i PATH="$p" HOME="$HOME" bash -c "command -v $bin" >/dev/null 2>&1; then
       missing="$missing $bin"
     fi
@@ -93,4 +96,42 @@ plist_path() {
 # number is a lie in whichever file kept it.
 @test "cadence: the script header and the plist agree on 60s" {
   grep -qE 'interval is now 60 s' "$REPO/scripts/capacity-alarm.sh"
+}
+
+# ── RUNG 7 IS PATH-INDEPENDENT BY CONSTRUCTION (D4, 2026-08-05) ──────────────────────────────────
+# Everything above proves one thing several ways: the plist's PATH string currently carries
+# /usr/sbin, so the bare-name `sysctl` sites resolve. That is a property of a STRING IN ANOTHER FILE,
+# it has already been false once, and three rungs died silently for the whole time it was. Rung 7
+# does not depend on it — it resolves /usr/sbin/sysctl directly. These tests are the difference
+# between "the plist happens to be right today" and "this rung cannot be broken by editing it".
+#
+# The class is neither hypothetical nor historical. It is failing RIGHT NOW one file over: every
+# capacity-gate row in ~/.claude/logs/handoffs.jsonl reads `hw.ncpu unreadable ('') — load term not
+# evaluated`, which is this exact sysctl, resolved by bare name, from a hook context.
+@test "rung 7: an ABSOLUTE sysctl reads load with /usr/sbin off the PATH — the launchd shape" {
+  run env -i PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
+    '"$(sed -n '/^read_load() {/,/^}/p' "$SCRIPT")"'
+    SYSCTL=/usr/sbin/sysctl
+    read_load >/dev/null && echo OK || echo REFUSED'
+  [ "$output" = "OK" ]
+}
+
+@test "RED CONTROL: the SAME read by BARE NAME really does fail on that PATH" {
+  # If this ever passes, /usr/sbin joined the minimal PATH and the test above proves nothing — a
+  # control that cannot fail is not a control (the pre-fix-PATH control above is the same idea).
+  run env -i PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
+    '"$(sed -n '/^read_load() {/,/^}/p' "$SCRIPT")"'
+    SYSCTL=sysctl
+    read_load >/dev/null && echo OK || echo REFUSED'
+  [ "$output" = "REFUSED" ]
+}
+
+@test "rung 7: the SHIPPED script fills load_per_core with /usr/sbin off the PATH (end-to-end)" {
+  # The two above pin the mechanism; this pins that the script actually CHOOSES it. An absolute-path
+  # default is only worth having if the shipped code path takes it — and a rung that silently reads
+  # SKIPPED in every scheduled run is indistinguishable from a rung that was never added.
+  run env -i PATH="/usr/bin:/bin" HOME="$HOME" /bin/bash "$SCRIPT" --json --no-append
+  [[ "$output" == *'"load_per_core":'* ]] || false
+  [[ "$output" != *'"load_per_core":null'* ]] || false
+  [[ "$output" != *'"ncpu":null'* ]]
 }
