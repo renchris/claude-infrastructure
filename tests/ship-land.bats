@@ -741,7 +741,16 @@ case "\$(cat "$KILL_MODE" 2>/dev/null)" in
              fi ;;
   cut-then-red) if [ ! -f "$BATS_TEST_TMPDIR/cut-once" ]; then
                : > "$BATS_TEST_TMPDIR/cut-once"; echo "1..3"; echo "ok 1 alpha"; exit 137
-             else echo "1..1"; echo "not ok 1 boom"; exit 1; fi ;;
+             else echo "1..3"; echo "ok 1 alpha"; echo "not ok 2 boom"; exit 1; fi ;;
+             # THE RE-RUN'S PLAN IS 3, NOT 1 (corrected 2026-08-06). It read \`1..1\` — a plan of one
+             # for the same 3-test file — which is NOT what real bats emits and so broke this
+             # fixture's own byte-wise contract above. bats prints the plan from the GATHER, i.e.
+             # from the file, so re-running it cannot shrink it (measured: a SIGTERMed 88-test
+             # suite still prints \`1..88\`). The only \`1..1\` bats can produce for a bigger file is
+             # bats-gather-tests:285's collector abort — the artifact the discriminator now
+             # discards — so the old line was writing a NON-VERDICT while asserting it be read as a
+             # verdict. The property under test is untouched: a real failure surfacing on the
+             # re-run must outrank the first run's cut.
 esac
 f="\$(cat "$FLAKE_ONCE" 2>/dev/null)"
 if [ -n "\$f" ] && [ "\$1" = "\$f" ]; then
@@ -1080,6 +1089,27 @@ case "\$(cat "$CUT_MODE" 2>/dev/null)" in
       : > "$BATS_TEST_TMPDIR/red-once-done"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
     fi
     echo "1..1"; echo "ok 1 green on the re-run"; exit 0 ;;
+  gather-artifact)                        # cut with NO plan, then bats' COLLECTOR aborting.
+    if [ ! -f "$BATS_TEST_TMPDIR/ga-done" ]; then                   # leg B is inert (no plan to
+      : > "$BATS_TEST_TMPDIR/ga-done"; exit 1                       # compare against) ⇒ leg A alone
+    fi
+    echo "1..1"; echo "not ok 1 bats-gather-tests"; exit 1 ;;       # the exact upstream literal
+  gather-artifact-first)                  # the artifact in the FIRST run, then green — the DIRECT
+    if [ ! -f "$BATS_TEST_TMPDIR/gaf-done" ]; then                  # carve-out's path, not the
+      : > "$BATS_TEST_TMPDIR/gaf-done"                              # failed-twice one
+      echo "1..1"; echo "not ok 1 bats-gather-tests"; exit 1
+    fi
+    echo "1..88"; echo "ok 1 green on the re-run"; exit 0 ;;
+  short-plan)                             # cut mid-RUN (honest plan), then a gather truncated
+    if [ ! -f "$BATS_TEST_TMPDIR/sp-done" ]; then                   # under a DIFFERENT name ⇒ leg A
+      : > "$BATS_TEST_TMPDIR/sp-done"; echo "1..88"; exit 1         # is inert, leg B alone
+    fi
+    echo "1..3"; echo "not ok 1 a truncated harness"; exit 1 ;;
+  equal-plan)                             # LEG B'S CONTROL: same shape as short-plan, one
+    if [ ! -f "$BATS_TEST_TMPDIR/ep-done" ]; then                   # dimension changed — the
+      : > "$BATS_TEST_TMPDIR/ep-done"; echo "1..88"; exit 1         # re-run's plan is TRUTHFUL, so
+    fi                                                              # its not-ok is a real verdict
+    echo "1..88"; echo "not ok 3 a genuine failure"; exit 1 ;;
 esac
 if [ ! -f "$BATS_TEST_TMPDIR/cut-done" ]; then
   : > "$BATS_TEST_TMPDIR/cut-done"; exit 1                    # cut ONCE, then green on the re-run
@@ -1171,6 +1201,106 @@ EOF
   grep -q '"smoke":"red"' "$LAND_LOG"
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- red.sh)" ]           # fail-closed: nothing landed
+}
+
+# ──── A HARNESS ARTIFACT IS NOT A VERDICT ────────────────────────────────────────────────────
+# The hole in c605a2e's discriminator, reproduced 2026-08-06 landing 81d6b958adc5. "Non-zero with
+# ZERO 'not ok' ⇒ CUT" is right in principle and a truncated bats run DEFEATS IT BY EMITTING A
+# `not ok`: bats-gather-tests:285 prints a fixed `1..1 / not ok 1 bats-gather-tests` from its EXIT
+# trap on ANY non-zero gather exit. The name is bats' own internal command, the plan is a constant.
+# Ground truth for the instance: tests/cc-reaper.bats is GREEN on that tree (88 ok / 0 not ok, rc 0,
+# 132s standalone) — the land was refused with "a VERDICT about your diff" for a suite that passes.
+# The two legs are pinned SEPARATELY, each in a fixture where the other cannot fire, or a one-leg
+# regression would sail past a doubly-proven site.
+@test "smoke ARTIFACT LEG A: a re-run whose COLLECTOR aborts is a CUT — 'bats-gather-tests' is not a test" {
+  # Leg A alone: the first run is cut with NO plan, so there is no known count and leg B is inert.
+  # Unfixed, this is exactly the 81d6b958adc5 refusal — exit 6 on a tree nothing had failed on.
+  cut_fixture
+  echo gather-artifact > "$CUT_MODE"
+  landable feat/artifact ga.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # a manufactured not-ok must not block
+  echo "$output" | grep -q "names bats' own collector"     # …and the discard is never silent
+  echo "$output" | grep -q "smoke PARTIAL"
+  [ "$(echo "$output" | grep -c "smoke RED")" -eq 0 ]
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  grep -q '"outcome":"cut-not-red"' "$POSTLAND_DIR/flakes.jsonl"   # recorded as what it is
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- ga.sh)" ]
+}
+
+@test "smoke ARTIFACT LEG A (carve-out path): the artifact in the FIRST run never convicts a DIRECT suite" {
+  # The other path the artifact reaches: as `notok1` it satisfies "a NAMED failure in the first
+  # run", so the DIRECT carve-out fires ("intermittence in changed code is a finding") and a suite
+  # that is GREEN on the re-run is landed as RED. Every smoke suite is direct, so this path is
+  # reachable by every land — and it is the one the wall budget does NOT generate, so it survives
+  # the structural fix.
+  cut_fixture
+  echo gather-artifact-first > "$CUT_MODE"
+  landable feat/artifact-first gaf.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c "finding, not a flake")" -eq 0 ]   # the carve-out must NOT fire
+  echo "$output" | grep -q "EXONERATED"
+  grep -q '"smoke":"green"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- gaf.sh)" ]
+}
+
+@test "smoke ARTIFACT LEG B: a re-run planning FEWER tests than the file holds is a CUT" {
+  # Leg B alone: the truncated run names its failure something leg A does not match, so only "this
+  # run planned 3 for a file just proven to hold 88" can save it. Version-independent — it still
+  # holds if upstream renames the literal leg A keys on.
+  cut_fixture
+  echo short-plan > "$CUT_MODE"
+  landable feat/short-plan sp.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "planned 3 test(s) for a file just proven to hold 88"
+  echo "$output" | grep -q "smoke PARTIAL"
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- sp.sh)" ]
+}
+
+@test "smoke ARTIFACT CONTROL: a TRUTHFUL plan keeps its 'not ok' — leg B softens nothing" {
+  # Without this, leg B is indistinguishable from "stop believing re-runs". One dimension differs
+  # from the test above — the re-run's plan is 88, the size the first run proved — so its `not ok`
+  # is a verdict and must still block. If this ever lands green the discriminator has been widened
+  # into a hole of its own, which is the failure direction the whole split exists to prevent.
+  cut_fixture
+  echo equal-plan > "$CUT_MODE"
+  landable feat/equal-plan ep.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                     # a real verdict, unsoftened
+  echo "$output" | grep -q "smoke RED"
+  [ "$(echo "$output" | grep -c "discarding")" -eq 0 ]    # nothing was discarded
+  grep -q '"smoke":"red"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- ep.sh)" ]            # fail-closed: nothing landed
+}
+
+@test "smoke: a suite cut with the budget SPENT gets no re-run — the 1s floor cannot earn a verdict" {
+  # THE GENERATOR, closed structurally. gate_bats floors an already-passed deadline at a 1s bound,
+  # so the exoneration re-run the budget-kill triggers is a guaranteed second cut — and per leg A a
+  # cut that can manufacture a `not ok`. One bats call, not two: there is no budget left to earn a
+  # verdict with. (The 132s tests/cc-reaper.bats under a 120s TOTAL budget hits this every land.)
+  cut_fixture
+  echo hang > "$CUT_MODE"                                 # killed by the bound ⇒ deadline spent
+  landable feat/spent sp2.sh
+
+  run env SHIP_LAND_SMOKE_BUDGET_S=3 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 1 ]     # ONE call — the pointless re-run is gone
+  echo "$output" | grep -q "budget SPENT"
+  echo "$output" | grep -q "smoke PARTIAL"
+  grep -q '"outcome":"cut-not-red"' "$POSTLAND_DIR/flakes.jsonl"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- sp2.sh)" ]
 }
 
 @test "smoke: the wall BUDGET kills a hanging suite and the land PROCEEDS as partial" {

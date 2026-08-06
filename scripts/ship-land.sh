@@ -922,6 +922,59 @@ record_gate_cut() {  # $1=rc $2=logfile [$3=file — default the whole corpus] �
     >> "$fdir/flakes.jsonl" 2>/dev/null || true
 }
 
+tap_plan() {  # $1=log → the TAP plan count bats printed (`1..N`), or "" if it never printed one.
+  # bats prints the plan only AFTER gathering the file's tests, so a plan is evidence about how
+  # many tests this file was found to hold — which is exactly what a truncated harness gets wrong.
+  sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1
+}
+
+tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=suite file (for the
+                        # message) → the `not ok` lines that are VERDICTS ABOUT THE SUITE, with
+                        # bats' own harness artifacts discarded.
+  # THE HOLE THIS CLOSES (2026-08-06, reproduced landing 81d6b958adc5). c605a2e's discriminator —
+  # "exited non-zero with ZERO 'not ok' ⇒ CUT, not RED" — is right in principle, and a truncated
+  # bats run DEFEATS IT BY EMITTING A `not ok`. bats-core's collector aborts with a fixed literal:
+  #
+  #     bats-gather-tests:285   printf "1..1\nnot ok 1 bats-gather-tests\n"        (>&2)
+  #
+  # fired from its EXIT trap on ANY non-zero gather exit — a signal mid-gather, a vanished
+  # $BATS_RUN_TMPDIR trace file. `bats-gather-tests` is bats' own internal command, never a test in
+  # any suite, and that `1..1` is a constant with nothing to do with how many tests the file holds.
+  # Measured instance: the 120s budget killed tests/cc-reaper.bats (88 tests, 132s standalone,
+  # GREEN on that tree), the exoneration re-run's gather was cut, and the manufactured `not ok` was
+  # read as "the re-run named a failure" ⇒ exit 6, "a VERDICT about your diff: fix it, do not retry
+  # unchanged". Nothing about the diff had failed. It is the same 6-vs-9 conflation LAND_PIPELINE_V2
+  # was built to remove (f8e40b4c577d / 9c5d0ba74e79) in a narrower form: not a cut with NO signal,
+  # but a cut that MANUFACTURES one — which is worse, because the zero-not-ok rule cannot see it.
+  #
+  # TWO LEGS, and they are cut separately so neither can hide the other's regression:
+  local log="$1" known="${2:-0}" f="${3:-the suite}" n plan
+  n="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; n="${n:-0}"
+  [[ "$n" -eq 0 ]] && { printf '0\n'; return 0; }
+  # LEG A — THE COLLECTOR NAMING ITSELF. Exact upstream literal, and gated on being the SOLE
+  # `not ok`: the gather aborts before any test runs, so this line can never legitimately share a
+  # run with real per-test verdicts. Anything alongside it stays a verdict (the safe direction).
+  if [[ "$n" -eq 1 ]] && grep -qE '^not ok [0-9]+ bats-gather-tests[[:space:]]*$' "$log" 2>/dev/null; then
+    echo "⚠ gate: $f — discarding 1 'not ok': it names bats' own collector (bats-gather-tests), not a test in this suite. The gather was cut before it could enumerate the file; that line is a HARNESS ARTIFACT, not a verdict." >&2
+    printf '0\n'; return 0
+  fi
+  # LEG B — THE PLAN CONTRADICTS THE FILE'S OWN SIZE. A run claiming this file holds fewer tests
+  # than another run of the SAME file just proved it holds never gathered them, so no per-test line
+  # in it can be trusted. Version-independent, so it still holds if upstream renames leg A's literal.
+  # THE COUNT COMES FROM AN OBSERVED PLAN, NEVER A STATIC PARSE OF THE .bats SOURCE — measured, not
+  # assumed: `grep -c '^@test'` OVER-counts on 3 of this corpus's 299 suites (git-identity-lint 30
+  # vs 17, bats-shellcheck-lint 28 vs 24, qos-chokepoint 43 vs 40), because those suites write
+  # FIXTURE .bats files in heredocs with `@test` at column 0 and bats does not count those. An
+  # over-count fires this leg on a HEALTHY plan and demotes a real RED to a cut — the one direction
+  # this split must never fail in. Two plans for one file cannot disagree unless a run is broken.
+  plan="$(tap_plan "$log")"
+  if [[ -n "$plan" && "$known" -gt 0 && "$plan" -lt "$known" ]]; then
+    echo "⚠ gate: $f — discarding $n 'not ok': this run planned $plan test(s) for a file just proven to hold $known. A plan that contradicts the file's own size proves the harness never gathered it; nothing it printed is a verdict." >&2
+    printf '0\n'; return 0
+  fi
+  printf '%s\n' "$n"
+}
+
 run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
                       # → 0 green · 1 RED (a named failure) · 2 KILLED (cut twice — NO verdict)
   # FLAKE EXONERATION: a suite that fails and then passes on ONE re-run in a fresh TMPDIR was
@@ -942,7 +995,7 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   # PRECEDENCE: a named `not ok` in EITHER run outranks a cut in the other — a verdict always
   # beats a non-verdict, and softening a real failure into "retry when quieter" is the one
   # direction this split must never fail in.
-  local f="$1" direct="$2" td rc1 rc2 fdir log sig notok1 notok2
+  local f="$1" direct="$2" td rc1 rc2 fdir log sig notok1 notok2 plan1 plan2 known
   # tee (not capture-then-print): the failing run stays LIVE on stderr while its output is kept,
   # so the ledger can record WHAT failed — a bare "it flaked" line is unactionable.
   log="$(mktemp)"
@@ -950,11 +1003,26 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   if [[ "$rc1" -eq 0 ]]; then rm -f "$log"; return 0; fi
   sig="$(grep -m1 -aE '^not ok|Terminated|Killed|signal|timed? ?out' "$log" 2>/dev/null | sed 's/["\]//g' | cut -c1-160)"
   [[ -z "$sig" ]] && sig="exit $rc1"
-  notok1="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok1="${notok1:-0}"
-  rm -f "$log"
+  plan1="$(tap_plan "$log")"
+  notok1="$(tap_named_failures "$log" "" "$f")"     # leg B is inert here: nothing to compare to yet
   if [[ "$notok1" -gt 0 ]]; then
+    rm -f "$log"
     echo "↻ gate: $f RED — $notok1 failing test(s); one exoneration re-run in a fresh TMPDIR…" >&2
+  elif [[ -n "${SMOKE_DEADLINE:-}" && "$(date +%s)" -ge "$SMOKE_DEADLINE" ]]; then
+    # THE BUDGET IS ALREADY SPENT ⇒ DO NOT RE-RUN AT ALL, and this is the structural half of the
+    # fix above. gate_bats floors an already-passed deadline at a 1s bound (deliberately: nothing
+    # may start unbounded). A 1s bats is not an exoneration attempt — it is a GUARANTEED second
+    # cut, and, per leg A, a cut that can manufacture a `not ok` out of its own truncated gather.
+    # That is the generator: the smoke budget kills a suite, and the re-run it triggers is the
+    # thing that mints the false verdict. There is no budget left to earn a verdict with, so say
+    # that instead of spending a fork to learn it. Strictly better than what it replaces — the old
+    # path reached this same rc 2 in the good case and exit 6 in the bad one.
+    record_gate_cut "$rc1" "$log" "$f"
+    rm -f "$log"
+    echo "⛔ gate: GATE-KILLED: $f — cut by the smoke budget (exit $rc1, ZERO 'not ok') with the budget SPENT: an exoneration re-run gets gate_bats' 1s floor bound, which cannot earn a verdict and can manufacture one. It is NOT a red and NOT evidence about your tree. Override: SHIP_LAND_SMOKE_BUDGET_S." >&2
+    return 2
   else
+    rm -f "$log"
     echo "↻ gate: $f exited $rc1 with ZERO 'not ok' — CUT, not RED. One re-run in a fresh TMPDIR…" >&2
   fi
   # NO SHED-BEFORE-RETRY. v1 slept here until load fell below a ceiling, on the theory that a
@@ -970,7 +1038,11 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   TMPDIR="$td" gate_bats "$f" 2>&1 | tee "$log" >&2; rc2="${PIPESTATUS[0]}"
   rm -rf "$td" 2>/dev/null || true
   if [[ "$rc2" -ne 0 ]]; then
-    notok2="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; notok2="${notok2:-0}"
+    # THE KNOWN COUNT IS THE LARGER OF THE TWO PLANS — the only run that can be wrong about a
+    # file's size is one that failed to gather it, and gathering cannot invent tests.
+    plan2="$(tap_plan "$log")"
+    known="${plan1:-0}"; [[ "${plan2:-0}" -gt "$known" ]] && known="$plan2"
+    notok2="$(tap_named_failures "$log" "$known" "$f")"
     if [[ "$notok1" -eq 0 && "$notok2" -gt 0 ]]; then
       rm -f "$log"
       echo "✗ gate: bats RED: $f — $notok2 failing test(s) on the re-run (the first run was cut)" >&2
