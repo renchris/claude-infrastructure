@@ -333,7 +333,7 @@ if [ -n "${CC_POSTLAND_PRELINTS+set}" ]; then
   # shellcheck disable=SC2206  # deliberate word-splitting: the seam is a space-separated list
   PRELINTS=($CC_POSTLAND_PRELINTS)
 else
-  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh)
+  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh)
 fi
 # 600s, raised from 60s (2026-07-30): a bound must fit what it BOUNDS, in the band it actually runs
 # in. 60s was sized for a foreground ~3s lint and left no room for the band the launchd job imposes,
@@ -523,8 +523,17 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     # `${LINT_QOS[@]+"${LINT_QOS[@]}"}` — NOT a bare "${LINT_QOS[@]}": this is bash 3.2 under `set -u`,
     # where expanding an EMPTY array unguarded is an unbound-variable death (the taskpolicy-absent
     # path). QOS above needs no such guard because it is never empty.
+    # NO POSITIONAL ARG — each lint resolves its OWN scan root from its own $0. This used to pass a
+    # literal `tests`, which was correct only because both lints then in the list happen to default to
+    # `${1:-$ROOT/tests}`, i.e. the argument re-stated their default. git-identity-lint does not scan a
+    # corpus dir — it defaults to `${1:-$ROOT}` and walks tests/ + scripts/ + bin/, because bin/ and
+    # scripts/ carry real identity writes. Handing IT `tests` makes it look for tests/tests, tests/scripts
+    # and tests/bin, find nothing, and exit 2 = NON-VERDICT — which prelint_check below turns into
+    # PRELINT_UNPROVEN, so EVERY run would become a CUT and no tree could ever be stamped green again.
+    # Measured before wiring: `git-identity-lint.sh tests` → exit 2 "nothing to scan"; no arg → exit 0,
+    # 490 files, clean. The other two are unchanged by this: verified exit 0 both with and without it.
     ( cd "$WORKTREE" && unset CC_HERM_OWN CC_WALLTIME_OWN SHIP_LAND_HERM_OWN_SCOPE
-      bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$s" tests ) > "$out" 2>&1
+      bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$s" ) > "$out" 2>&1
     rc=$?
     [ "$rc" -eq 0 ] && { log "prelint: $s clean (whole-tree strict)"; continue; }
     # THE VERDICT / NON-VERDICT SPLIT — exit 1 is the ONLY code that says anything about the tree.
@@ -559,6 +568,45 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     log "prelint RED: $s exit $rc — ${first:-（no output)}"
   done
   [ "${#FAILING[@]}" -eq 0 ]
+}
+# ── SHARED-CONFIG INTEGRITY ──────────────────────────────────────────────────────────────────────
+# The DYNAMIC half of the git-identity fix; scripts/git-identity-lint.sh is the static half, and this
+# exists because that one cannot be complete. The lint reads SOURCE, so it is blind to any identity
+# write that arrives by a route it does not scan — a suite landing between prelint and corpus, a
+# helper reached through a variable, a fixture generated at runtime, or the agent-typed one-liner the
+# lint's own header disclaims. This reads the actual config, so it convicts on EFFECT rather than on
+# shape, and the two together are what make the class closed.
+#
+# It ASSERTS rather than merely cleaning, and that is the whole design. A bare `config --unset-all` in
+# the exit trap would have kept the operator's repo tidy through all 12h41m of the 2026-08-05 runaway
+# and reported NOTHING — the corruption was silent precisely because every consumer only ever read the
+# current value. Restoring as well is strictly better than either alone: the repo comes back AND the
+# run goes red, so the cause still gets found.
+#
+# Side-car discipline (memory: addon-failure-exceeds-its-blast-radius): this may never fail wider than
+# itself. Every git call is best-effort, an unreadable snapshot means "cannot judge" and stays silent
+# rather than fabricating a red, and only a genuine non-empty DIFFERENCE convicts.
+identity_snapshot() { git -C "$REPO" config --local --get-regexp '^user\.' 2>/dev/null | sort || true; }
+identity_assert() {  # compare against $IDENTITY_SNAP, restore it, and convict on any change
+  local now line k v
+  [ -n "${IDENTITY_SNAP+set}" ] || return 0        # never snapshotted ⇒ nothing to compare against
+  now="$(identity_snapshot)"
+  [ "$now" = "$IDENTITY_SNAP" ] && return 0
+  log "IDENTITY LEAK: the corpus mutated $REPO local [user] during this run — was [${IDENTITY_SNAP:-absent}] now [${now:-absent}]"
+  git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    k="${line%% *}"; v="${line#* }"
+    git -C "$REPO" config --local "$k" "$v" >/dev/null 2>&1 || true
+  done <<EOF
+$IDENTITY_SNAP
+EOF
+  [ "$(identity_snapshot)" = "$IDENTITY_SNAP" ] \
+    && log "IDENTITY LEAK: $REPO local [user] restored to its run-start value" \
+    || log "IDENTITY LEAK: restore did NOT converge — $REPO local [user] needs a human"
+  FAILING+=("shared-config-identity")
+  [ -n "$FAILTEST" ] || FAILTEST="a suite wrote git user.* into $REPO (empty -C, or an unguarded cd)"
+  return 0
 }
 sc_count() { # whole-tree lint finding count — ADVISORY, never verdict-affecting
   command -v shellcheck >/dev/null 2>&1 || { printf '0\n'; return 0; }
@@ -1158,6 +1206,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   CUR_SHA="$sha"
   tree="$(tree_of "$sha")"
   [ -n "$tree" ] || { log "cannot resolve tree for $sha"; return 1; }
+  IDENTITY_SNAP="$(identity_snapshot)"   # BEFORE the cell exists — the widest window we can watch
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/postland-run.XXXXXX")" || return 1
@@ -1241,6 +1290,7 @@ EOF
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
   [ "${#SYNTAX_BAD[@]}" -eq 0 ] || FAILING+=("${SYNTAX_BAD[@]}")
+  identity_assert            # did anything we just ran write a git identity into the shared config?
   # A meta-lint whose own bound fired proves nothing — so an otherwise-clean run may NOT be stamped
   # green off the back of a check that never returned. Downgrade to the cut path: honest, retried
   # next sweep, and cool-off/paged by the existing CUT_MAX ladder if the tree keeps doing it.
@@ -1561,6 +1611,55 @@ selftest() {
     || okp "qos: no admission control anywhere in the runner"
   grep -qE 'nice -n 19' "$SELF" \
     && okp "qos: the corpus runs in the background band" || badp "qos: no background-band prefix"
+
+  # ── SHARED-CONFIG IDENTITY — behavioural, through the real corpus path ───────────────────────────
+  # The leak suite writes its identity exactly the way the incident did: a bare `git config
+  # user.email` with NO -C and NO cd, which lands in whatever repo owns the cwd — and the corpus's
+  # cwd is $WORKTREE, a linked worktree of $CC_POSTLAND_REPO, so it really hits the fixture repo's
+  # shared config. Nothing is simulated here.
+  #
+  # That shape is also the one git-identity-lint deliberately does NOT convict (rule 2 needs a
+  # preceding unguarded cd; with no cd there is no evidence to key on), which is what keeps this
+  # test non-vacuous in two directions at once: the prelint cannot pre-empt the write, so the corpus
+  # really runs it — and the case therefore proves the dynamic assertion catches precisely what the
+  # static lint declines to. If someone later widens that rule, this test goes red by design,
+  # because the fixture will stop reaching the corpus. That is the correct alarm, not a nuisance.
+  printf '#!/usr/bin/env bats\n@test "leak" { git config user.email leak@leak.local; git config user.name leaker; }\n' \
+    > "$d/src/tests/leak.bats"
+  fixture_land "a suite that writes an identity into the shared config"
+  run_fixture --run-if-needed >/dev/null 2>&1
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  grep -q '"verdict":"red"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "identity: a corpus write to the shared config is a RED verdict" \
+    || badp "identity: the shared config was mutated and the run still claimed a verdict"
+  grep -q 'shared-config-identity' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "identity: the stamp NAMES the leak, not just 'some suite failed'" \
+    || badp "identity: stamp does not name shared-config-identity"
+  [ "$(git -C "$d/src" config --local --get user.email 2>/dev/null)" = "pv@selftest.local" ] \
+    && okp "identity: the repo config was RESTORED to its run-start value" \
+    || badp "identity: repo config left poisoned ($(git -C "$d/src" config --local --get user.email 2>/dev/null))"
+  # POSITIVE CONTROL — remove the leak suite and the same tree must go back to GREEN, so none of the
+  # three above can be passing because the fixture was red for some unrelated reason.
+  rm -f "$d/src/tests/leak.bats"
+  fixture_land "the leak suite removed"
+  run_fixture --run-if-needed >/dev/null 2>&1
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "identity: a clean corpus is unaffected by the assertion (control)" \
+    || badp "identity: the assertion reds a clean corpus — it convicts on something else"
+
+  # ── the prelint wiring, and the argument contract that makes it safe ─────────────────────────────
+  grep -qE 'PRELINTS=\(.*git-identity-lint\.sh' "$SELF" \
+    && okp "prelint: git-identity-lint is in the blocking pre-corpus slot" \
+    || badp "prelint: git-identity-lint NOT wired into PRELINTS"
+  # The wiring is only safe because the slot stopped passing a positional. git-identity-lint scans a
+  # repo ROOT, not a corpus dir; handed `tests` it exits 2, and prelint_check turns a 2 into
+  # PRELINT_UNPROVEN — so every run would CUT and no tree could be stamped green again. Assert the
+  # absence of that argument, because its presence is silent and fleet-fatal.
+  # shellcheck disable=SC2016  # a literal search pattern: the $s must NOT expand here
+  grep -qE '"\./\$s" \)' "$SELF" \
+    && okp "prelint: lints are invoked with NO positional — each resolves its own scan root" \
+    || badp "prelint: a positional is still passed — a root-scanning lint would exit 2 and CUT every run"
 
   echo "postland-verify selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
