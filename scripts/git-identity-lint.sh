@@ -318,11 +318,14 @@ EOF
 
   if [ "$bad" -gt 0 ]; then
     echo "git-identity-lint: ⛔ $bad escaping git-identity write(s) above."
-    echo "  WHY: \`git -C \"\"\` is a NO-OP, so an empty path writes user.email/user.name into whatever repo"
-    echo "       the process is standing in — and ~100 worktrees here share ONE .git/config, so one such"
-    echo "       call re-authors every session on the box (9 commits on trunk, 214 on reso)."
-    echo "  Fix: guard the path — \`git -C \"\${1:?repo path required}\" config …\` — or give it a literal"
-    echo "       suffix (\"\$d/repo\"). For the no-\`-C\` shape, chain the cd: \`cd \"\$d\" || return 1\`."
+    echo "  WHY: \`git -C \"\"\` is a NO-OP and \`cd \"\"\` RETURNS 0, so an empty path writes user.email/"
+    echo "       user.name into whatever repo the process is standing in — and ~100 worktrees here share"
+    echo "       ONE .git/config, so one such call re-authors every session on the box (9 commits on"
+    echo "       trunk, 214 on reso). A \`||\`-chain does not rescue the cd shape: on an empty path the cd"
+    echo "       SUCCEEDS, so the guard never fires and the write still lands in the caller's repo."
+    echo "  Fix: guard the ARGUMENT — \`git -C \"\${1:?repo path required}\" config …\` — or give it a"
+    echo "       literal suffix (\"\$d/repo\"). Same for the no-\`-C\` shape, chain included:"
+    echo "       \`cd \"\${d:?repo path required}\" || return 1\`."
     echo "       Do NOT add to the allowlist — it ships empty and is meant to stay that way."
   fi
   if [ "$stuck" -gt 0 ]; then

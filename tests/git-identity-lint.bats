@@ -261,3 +261,51 @@ F
 @test "17: the lint is executable (a non-executable gate is a silently skipped gate)" {
   [ -x "$LINT" ] || { echo "scripts/git-identity-lint.sh is not executable — ship-land's [[ -x ]] guard would step over it"; false; }
 }
+
+# ── the remedy the ratchet PRINTS ─────────────────────────────────────────────────────────────────
+
+@test "18: every fix the RED message prescribes is a shape the lint ACCEPTS" {
+  # A rule and the message that explains it rot INDEPENDENTLY. a92314e2 made a ||-guarded cd to a
+  # bare expansion RED and left the message prescribing exactly `cd "$d" || return 1` — so a caller
+  # who did precisely what the ratchet told them got the same RED back, quoting the same advice. A
+  # remedy the gate rejects is not a weaker gate, it is an unexitable one. This closes the loop by
+  # feeding the message's own prescriptions back through the lint.
+  root="$(fixture msg <<'F'
+@test "x" {
+  git -C "$dir" config user.email t@t
+}
+F
+)"
+  run bash "$LINT" "$root"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+
+  # Scoped to the `Fix:` block, NOT the whole message: the WHY block quotes `git -C ""` — the BUG —
+  # by construction, and linting a deliberate statement of the bug would fail for the one reason
+  # that proves nothing. `…` is the message's elision for the rest of a git call; a line carrying no
+  # user.email/user.name is never scanned, so leaving it in would make that half pass vacuously.
+  spans="$(printf '%s\n' "$output" | awk -F'`' '
+      /^[[:space:]]*Fix:/      { infix = 1 }
+      infix && /^[^[:space:]]/ { infix = 0 }
+      infix { for (i = 2; i <= NF; i += 2) if ($i ~ /^(cd|git) /) print $i }' | sed 's/…/user.email t@t/')"
+  [ -n "$spans" ] || { echo "no prescription found in the RED message — this test would pass vacuously: $output"; false; }
+
+  n=0
+  while IFS= read -r span; do
+    [ -n "$span" ] || continue
+    n=$((n + 1))
+    case "$span" in
+      # a bare `cd` is invisible to rule 2 until an identity write follows it — that pairing IS the
+      # rule, so the prescription has to be judged in it.
+      cd\ *) probe="$(printf '@test "x" {\n  %s\n  git config user.email t@t\n}\n' "$span")" ;;
+      *)     probe="$(printf '@test "x" {\n  %s\n}\n' "$span")" ;;
+    esac
+    printf '%s' "$probe" | grep -q 'user\.email\|user\.name' || {
+      echo "prescription $n is not scannable at all — the lint ignores it, so a GREEN proves nothing: $span"; false; }
+    p="$(printf '%s' "$probe" | fixture "rx$n")"
+    run bash "$LINT" "$p"
+    [ "$status" -eq 0 ] || { echo "the ratchet prescribes a fix it REJECTS — following it returns the same RED: $span"; false; }
+  done <<EOF
+$spans
+EOF
+  [ "$n" -ge 2 ] || { echo "expected both prescriptions (the -C guard and the cd chain); found $n — the extraction, not the message, is what changed"; false; }
+}
