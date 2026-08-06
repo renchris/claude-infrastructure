@@ -111,7 +111,9 @@
 #                       stays resumable via --resume. Account defaults to THIS session's
 #                       (CLAUDE_CONFIG_DIR-derived); --account/--launcher/--model/--effort/
 #                       --extra/--probe all compose. Excludes --worktree/--cwd/surface flags.
-#   --session-id UUID   Recycle/self-close target pane (default: $ITERM_SESSION_ID's UUID).
+#   --session-id UUID   Recycle/self-close target pane. Default = this pane's own id: on iTerm2
+#                       $ITERM_SESSION_ID's UUID, and on a kitty pane whose ancestry cc-in-kitty
+#                       CONFIRMS, $KITTY_WINDOW_ID (self-close only — see self_pane_id).
 #   --notify-back [UUID] Two-way sugar: append a back-channel trailer to a COPY of the prompt
 #                       (never the caller's file) telling the fired session to ping the
 #                       ORIGINATOR via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"` on
@@ -894,6 +896,44 @@ pin_term_verdict_for_watcher() {
     *) : ;;                                # 2 = UNVERIFIABLE, 64 = usage — pin nothing
   esac
   return 0
+}
+
+# WHICH WINDOW AM I — the SELF-IDENTITY question, and it is not the one in_kitty()/kitty_identity()
+# answer (item 4e074b938da7).
+#
+# "Which terminal do I DRIVE" is answerable from OUTSIDE the process: b0b4ec40d63a's kitty_headless
+# enumerates live kitty processes and keeps a socket that ANSWERS. "Which window am I" has no such
+# probe and structurally cannot have one — `kitty @ ls`'s is_focused is UI focus, not identity
+# (memory: kitty-split-anchors-active-tab-not-caller), so a fired peer sitting in a background window
+# would resolve to whichever window the operator happened to be looking at. The only thing that knows
+# is kitty itself, and it says so exactly once: $KITTY_WINDOW_ID, in the pane's own environment.
+#
+# …but a bare env read is NOT a terminal test — that is the whole of bin/cc-in-kitty's header and the
+# 2026-07-31 pollution outage, where an iTerm2.app launched from a kitty pane carried KITTY_WINDOW_ID
+# into EVERY one of its panes. So the var is admitted ONLY behind the ANCESTRY verdict, reached
+# through the CC_TERM seam pin_term_verdict_for_watcher already resolves (cc-in-kitty exit 0 = kitty
+# is genuinely one of our ancestors). A caller MUST run that pin first; unpinned, CC_TERM is empty and
+# this degrades to the pre-existing $ITERM_SESSION_ID read, byte-for-byte.
+#
+# PRECEDENCE IS DELIBERATE, and it is not "whichever happens to be set". Inside an ancestry-confirmed
+# kitty pane an $ITERM_SESSION_ID is one of exactly two things, and KITTY_WINDOW_ID is right for both:
+#   * SYNTHETIC — scripts/kitty-setup.sh's rc block exports w0t0p0:$KITTY_WINDOW_ID UNCONDITIONALLY
+#     inside kitty (kitty-setup.sh:255, for Claude Code's own env-var-only iTerm2 gate), so ${x##*:}
+#     is ALREADY $KITTY_WINDOW_ID. Same value either way — this is why the defect is intermittent
+#     rather than total, and why it is invisible from any pane whose rc block has run.
+#   * STALE — inherited from an iTerm2 ancestor. kitty-setup.sh:437 names that state exactly ("does
+#     NOT map to kitty window N … open a NEW shell"). Taking it feeds an iTerm2 UUID into kitty's
+#     numeric id space, where every downstream lookup misses — the tty=none abort of 191d1fc4143c
+#     stage 1, reached from the identity side instead of the transport side.
+# The mirror case — a genuine iTerm2 pane carrying a polluted KITTY_WINDOW_ID — pins CC_TERM=iterm2
+# and never reaches the first branch. UNVERIFIABLE (cc-in-kitty exit 2) pins nothing and also falls
+# through: fail-closed and unchanged, per the pin's own contract.
+self_pane_id() { # → this pane's id IN ITS OWN id space, or empty when the caller has no pane at all
+  if [ "${CC_TERM:-}" = kitty ] && [ -n "${KITTY_WINDOW_ID:-}" ]; then
+    printf '%s' "$KITTY_WINDOW_ID"; return 0
+  fi
+  local v="${ITERM_SESSION_ID:-}"
+  printf '%s' "${v##*:}"
 }
 
 # The probe itself, run BY the watcher as its second act (the foreground consumes its verdict via
@@ -2913,14 +2953,11 @@ if [ "${1:-}" = "self-close" ]; then
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
-  ITSID="${ITERM_SESSION_ID:-}"
-  SC_SID="${SC_SID:-${ITSID##*:}}"
-  [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID or --session-id" >&2; exit 1; }
-  # Resolve the terminal verdict HERE — at mode entry, before the FIRST pane→tty query — not just
-  # before the watcher detach at :3016. That hoist (item 191d1fc4143c stage 1) fixed SC_TTY, but two
-  # as_tty calls run ~160 lines EARLIER and were left unpinned, so on a box where KITTY_* was
-  # inherited into iTerm2 they still ask kitty's numeric id space for an iTerm2 UUID and get the
-  # "pane absent" answer. Neither degrades quietly — both are HARD ABORTS on a false negative:
+  # Resolve the terminal verdict HERE — at mode entry, ahead of the FIRST consumer — not just before
+  # the watcher detach at :3016. That hoist (item 191d1fc4143c stage 1) fixed SC_TTY, but two as_tty
+  # calls run ~160 lines EARLIER and were left unpinned, so on a box where KITTY_* was inherited into
+  # iTerm2 they still ask kitty's numeric id space for an iTerm2 UUID and get the "pane absent"
+  # answer. Neither degrades quietly — both are HARD ABORTS on a false negative:
   #
   #   :2853 SUC_TTY  → "successor pane <uuid> not found in iTerm2", exit 3, for a successor that is
   #                    alive and enumerable. `self-close --successor` is a primary close form, so the
@@ -2932,7 +2969,17 @@ if [ "${1:-}" = "self-close" ]; then
   # unpinned ⇒ identity=kitty, tty=[]; after the pin ⇒ identity=iterm2, tty=/dev/ttys039.
   # Idempotent (it early-returns once CC_TERM is set), so the later calls stay exactly as they are —
   # this only moves the FIRST resolution ahead of the first consumer. (item 12f2524f8b83)
+  #
+  # AND THE FIRST CONSUMER IS NOW THE IDENTITY DEFAULT ITSELF (item 4e074b938da7), which is why this
+  # sits one gate higher than 12f2524f8b83 left it. self_pane_id CONSUMES the ancestry verdict: in a
+  # genuine kitty pane this session's own id is $KITTY_WINDOW_ID, and admitting that var — rather
+  # than trusting a bare env read, the 2026-07-31 outage — is exactly what the verdict authorises.
+  # Until this hoist the gate below accepted $ITERM_SESSION_ID and nothing else, so a fired peer on a
+  # kitty box exited 1 having done nothing and could never obey its own self-retire instruction; its
+  # pane and worktree leaked until an operator reaped them.
   pin_term_verdict_for_watcher
+  SC_SID="${SC_SID:-$(self_pane_id)}"
+  [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
   # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
   # a close with no declared continuation read as "the handoff killed our session" — twice a real
   # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
