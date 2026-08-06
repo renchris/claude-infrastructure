@@ -109,7 +109,18 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
       [ "$LINE_BUDGET" -lt 0 ] && LINE_BUDGET=0
       SLOTS=$(( MAXN - N ))
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom, ~${SLOTS} entry slots left before the ~${MAXN}-entry ceiling. A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently."
+      # RUNWAY vs CEILING. MAXN/SLOTS derive from HOOK_TARGET, so they answer
+      # "how many entries WOULD fit if every one were rewritten to target" — a
+      # rewrite, not room to add. The number a session actually needs is what
+      # fits at the density this index is ALREADY written at. Measured
+      # 2026-08-06 the two read 37 vs 11 (3.4x), and the inflated one had
+      # already propagated into a backlog item's premise as "37 free
+      # cardinality slots", framing a cardinality-bound index as length-bound.
+      # Lead with the observed-density figure; keep the ceiling, marked conditional.
+      LINE_COST=$(( PFX_AVG + HOOK_AVG + 1 ))
+      [ "$LINE_COST" -gt 0 ] || LINE_COST=1
+      FITS=$(( HEADROOM / LINE_COST ))
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently."
     fi
   fi
 fi
