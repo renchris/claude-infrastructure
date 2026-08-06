@@ -1193,8 +1193,9 @@ run_gate() {  # $1=range → 0 green / 1 red
     if (( gitid_rc != 0 )); then
       echo "✗ gate: git-identity RED — a file THIS LAND CHANGES can write its test identity into the" >&2
       echo "  caller's repo. ~100 worktrees here share ONE .git/config, so that re-authors every" >&2
-      echo "  session on the box. Guard the path (\"\${1:?}\" or a literal suffix), or chain the cd." >&2
-      echo "  The file and line are named above." >&2
+      echo "  session on the box. Guard the ARGUMENT (\"\${1:?}\" or a literal suffix) — for the no-\`-C\`" >&2
+      echo "  shape a \`||\`-chain alone is inert, because an empty path makes the cd SUCCEED." >&2
+      echo "  The file, the line, and the accepted forms are named above." >&2
       GATE_RED=1
       return 1
     fi
