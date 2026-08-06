@@ -65,6 +65,19 @@ minus the autonomous fork.
    claude-infrastructure's `archive/`). It records what was indexed at a moment, so trusting it as
    E2 silently excuses a decay that happened afterwards. Report a file whose ONLY citation is a
    snapshot; do not silently trust it either way.
+   🚨 **Harvest E2 links with an ANCHORED `^- \[` scan — a bare `](….md)` match over-excludes, and
+   both of its false positives are live in this repo.** Measured 2026-08-06: the unanchored form
+   pulled **15** links out of `MEMORY_ARCHIVE_2026-H2.md` where only **4** are archived — the other
+   11 are the block that file explicitly **RETRACTS** as a false record, whose own stated mitigation
+   is *"struck through so a `^- \[` link-scan cannot read them as archived."* The mitigation assumed
+   an anchor the sweep did not have, so the strike-through protected nothing: any of those 11 later
+   dropped from both the index and COLD would read as *correctly demoted* forever. The same
+   unanchored match also promoted `memory-index-compaction-economics.md` to a demotion record purely
+   because its prose quotes `](file.md)` as an example — a record set built by content is not
+   self-limiting, so anchor it to the bullet form a record actually uses. Anchoring is free: it
+   harvests **139/139** links from the COLD record and **95/95** from the index, drops exactly the
+   11 struck bullets and the one prose match, and a fixture control confirms it still reports both a
+   never-indexed file and a struck-retracted one as orphans.
 
    **E3 — cited by explicit path from an always-loaded instruction file** (project `CLAUDE.md`,
    `.claude/CLAUDE.md`, `.claude/rules/**`). Such a file is already reaching every session through
@@ -89,9 +102,9 @@ minus the autonomous fork.
    M=<memory-dir> P=<project-dir>; shopt -s nullglob
    recs=(); for f in "$M"/*.md "$M"/archive/*.md; do          # E2 by CONTENT, never by filename
      b=${f##*/}; [[ $b == MEMORY.md || $b == *SNAPSHOT* || $b == *PRE-COMPACT* || $b == *PRECOMPACT* ]] && continue
-     grep -qE '\]\([A-Za-z0-9._-]+\.md\)' "$f" && recs+=("$f")
+     grep -qE '^- \[[^]]*\]\([A-Za-z0-9._-]+\.md\)' "$f" && recs+=("$f")   # ANCHORED: skips ~~struck~~ + prose
    done
-   lines() { grep -ohE '\]\([A-Za-z0-9._-]+\.md\)' "$@" 2>/dev/null | tr -d ']()'; }
+   lines() { grep -ohE '^- \[[^]]*\]\([A-Za-z0-9._-]+\.md\)' "$@" 2>/dev/null | sed -E 's/.*\(([^)]*)\)/\1/'; }
    comm -23 <(printf '%s\n' "$M"/*.md | xargs -n1 basename | sort -u) \
             <( { printf 'MEMORY.md\n'; printf '%s\n' "${recs[@]##*/}"
                  lines "$M/MEMORY.md" "${recs[@]}"; } | sort -u ) |     # minus E1 + E2
@@ -106,6 +119,11 @@ minus the autonomous fork.
    only demotion record is a non-conventionally-named `MEMORY-ARCHIVE.md`, it prints exactly the
    never-indexed file and the snapshot-only file, while the same fixture makes the old
    glob-only-plus-no-E3 sweep report 3 false positives.
+   Re-verified 2026-08-06 with the anchored harvest: **0 orphans** on claude-infrastructure (239
+   topic files, 2 demotion records), and an extended control — a fixture carrying an indexed file, a
+   properly-cold file, a never-indexed file and a `~~struck~~` retracted one — reports exactly the
+   last two. Both control arms matter: the sweep must still FIND a struck-bullet orphan, which is
+   precisely what the unanchored version could not do.
 5. Report: N archived, N re-indexed, lines/bytes reclaimed, new `MEMORY.md` line count.
    > Reality check: in a dense, active memory most "resolved" entries carry a tail, so SAFE-AUTO
    > alone rarely clears the warning. That is by design — say so; the real lever is PROPOSE-ONLY.
@@ -171,6 +189,37 @@ That number decides *which job you are doing*: ~180 B/hook is a tightening pass 
 line), ~115 B is a **one-governing-rule** pass. They are different jobs and mixing them wastes a
 full rewrite — discovering this only after the first pass left it 1,105 B short cost a second pass.
 
+🚨 **`115` is the OUTPUT of that formula on one day's file — never an input. Re-derive it, or you
+will manufacture a binding lever that does not exist.** Measured 2026-08-06 (backlog `004502cf59ab`,
+22,157 B / 95 entries): `hook_excess = Σ max(0, hook − 115)` came to **3,607 B across 80 of 95
+lines**, which reads as a lever demanding a full rewrite — while the budget derived from *the same
+file* was **154.9 B** against a 151.4 B actual average, i.e. every line was already **3.4 B inside
+its allowance and the file needed 0 B**. The 115 everything had been quoting was derived at
+**N=149 against a 17.1 KB demand**; at N=95 against the real 24,985 B limit it is simply a different
+number. Trusting it would have spent this command's only irreversible half hand-cutting ~3.6 KB of
+live rules out of a healthy index.
+
+**So run the three-state check before choosing any lever, and compute BOTH terms from the live
+file:**
+
+```
+headroom  = limit − bytes                                   # done-target is ~2.5 KB (see RE-INFLATION)
+budget    = (limit − headroom_target − header − Σprefix − N) / N     # the per-hook allowance, DERIVED
+slack     = limit / (avg_prefix + budget + 1) − N            # entry slots left at that allowance
+```
+
+| | Condition | Lever | Action |
+|---|---|---|---|
+| **HEADROOM-OK** | `headroom ≥ headroom_target` | neither | **no-op close.** Report headroom + rate. Do not cut. |
+| **LENGTH** | `avg_hook > budget`, `slack > 0` | hook length | PROPOSE-ONLY rewrite, after the index-only-fact audit |
+| **CARDINALITY** | `avg_hook ≤ budget`, `slack ≤ 0` | entry count | the hot/cold split below |
+
+Two states were known before this check existed — 2026-07-30 concluded cardinality binds, 2026-08-06
+concluded length binds, and **five consecutive passes inherited the first verdict while the other
+lever was the live one**. Both assumed *something* binds. The third state is that nothing does, and
+it is the one a compaction pass is most likely to misread, because an excess figure computed against
+a stale constant is never zero.
+
 **Titles are the near-lossless lever.** The *filename* carries identity (link target + graph key);
 the title is only a human label. Retitling 49 entries via an explicit **hand-authored map**
 (`"Land pipeline v2: verdict inversion"` → `"Land pipeline v2"`) freed ~800 B that no hook-cutting
@@ -231,6 +280,13 @@ entries: filenames alone are **5,518 B (19%) and immutable** (link target + grap
 syntax+header the floor is ~7,061 B; the `17.1 KB` the PostToolUse nudge demands works out to
 **~67 B/entry — below one sentence**. Grinding hooks past that only severs rules while leaving
 lines that still read as prose. The answer is **fewer indexed entries, not smaller ones.**
+
+⚠️ **That is a CONDITIONAL, not a standing verdict — reach for this lever only on a `slack ≤ 0`
+reading from the three-state check above.** The condition held on 2026-07-30 and the paragraph was
+written as though it always would; five passes then pulled this lever by inheritance while hook
+length was the live constraint, and a sixth would have moved live rules off the auto-loaded surface
+with 6 KB of pure slack sitting untouched in the hooks. The measurement is what authorizes the
+split, on the pass you are running.
 
 **The procedure** (operator-approved 2026-07-30; the lever every subsequent pass has used —
 07-30 149→111 @ 22.4 KB, then 07-31, 08-01, 08-05 105→92 @ 22.7 KB):
@@ -297,7 +353,18 @@ Consequences for how you run this command:
 - **Verify the trigger before you curate.** A backlog item quoting a size is a *timestamped
   observation*, not the current state — a sibling pass may already have cleared it. Re-measure first;
   2026-07-29 the item said 24.1 KB and the index was 18.2 KB, already 6.5 KB under. Curating anyway
-  would have spent an irreversible lossy pass on headroom that already existed.
+  would have spent an irreversible lossy pass on headroom that already existed. 2026-08-06 the item
+  quoted **20.5 KB against a 24.4 KB limit** — a size that was 4.4 KB under its own trigger and had
+  never crossed it.
+- ⚠️ **The `17.1 KB` demand is product-side, and it is not this project's budget.** A PostToolUse
+  reminder fires *"approaching the 24.4KB read limit — compact to under 17.1KB now"*; no operator
+  hook or config emits it (`settings*.json` wires only `memory-nudge.sh`, on UserPromptSubmit).
+  17.1 KB works out to ~67 B/entry — below one sentence — i.e. unreachable by construction. Its size
+  figure is also not a live read: it reported `20.9KB` on a file `wc -c` put at 22,232 B, and
+  **repeated `20.9KB` unchanged across two edits that each changed the file's size**. **Measure the
+  index directly and budget against the real 24,985 B limit; do not let that reminder authorize a
+  lossy pass** — same precedence as the product-side "don't spawn unless asked" line the global
+  CLAUDE.md overrides.
 - **A no-op close is a legitimate outcome** when SAFE-AUTO is clean and the index sits under trigger.
   Do not manufacture lossy work to look productive — the byte budget, not the ritual, authorizes a
   shortening. Report the headroom and the rate.
