@@ -84,6 +84,9 @@ SH
   # The unit under test, extracted on its own — the established pattern here
   # (tests/handoff-fire-kitty.bats:124). It depends on no top-level variable, only on env.
   eval "$(sed -n '/^self_pane_id() {/,/^}/p' "$HF")"
+
+  # --recycle refuses without one, and it must be a real file, not a name.
+  PF="$BATS_TEST_TMPDIR/prompt.txt"; printf 'probe\n' > "$PF"
 }
 
 # Drive the real script's self-close arm in $WORK with a controlled terminal environment.
@@ -192,7 +195,43 @@ sc() { # $1=cc-in-kitty rc  $2=KITTY_WINDOW_ID ("" to unset)  $3=ITERM_SESSION_I
   printf '%s\n' "$output" | grep -qF 'pane 7 has no fired-peer stamp' || false
 }
 
-# ── 3. THE UNIT, extracted — the precedence table on its own ─────────────────────────────────────
+# ── 3. --recycle shares the default, so it shares the fix ────────────────────────────────────────
+# The in-place continuation the close protocol reaches for FIRST (♻️ Recycle — the cheapest and most
+# common context disposition) resolved its pane through the same $ITERM_SESSION_ID-only default and
+# died at the same gate. --dry-run stops before any side effect and echoes the resolved pane, so
+# these assert the identity WITHOUT arming a watcher or typing /exit into anything.
+
+rc() { # $1=cc-in-kitty rc  $2=KITTY_WINDOW_ID ("" to unset)  $3=ITERM_SESSION_ID ("" to unset)
+  local cik="$1" kw="$2" it="$3"
+  run env -u ITERM_SESSION_ID -u CC_TERM -u KITTY_WINDOW_ID \
+      FAKE_CIK_RC="$cik" \
+      ${kw:+KITTY_WINDOW_ID="$kw"} ${it:+ITERM_SESSION_ID="$it"} \
+      /bin/bash -c 'cd "$1" || exit 99; exec /bin/bash "$2" --recycle --prompt-file "$3" --dry-run' \
+      _ "$WORK" "$HF" "$PF"
+}
+
+@test "--recycle on a kitty pane resolves the kitty window id instead of refusing" {
+  rc 0 4242 ""
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF 'recycle — this pane: 4242' || false
+}
+
+@test "--recycle NEGATIVE CONTROL: ancestry says not-kitty and there is no UUID — still REFUSES" {
+  rc 1 4242 ""
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -qF -- '--recycle needs' || false
+}
+
+@test "--recycle on a genuine iTerm2 pane with a polluted KITTY_WINDOW_ID keeps its UUID" {
+  # The direction that must not flip, asserted on this arm too: it types /exit into whatever it
+  # resolves, so a wrong pane here is materially worse than self-close's fail-closed refusal.
+  rc 1 4242 "w0t0p0:C0FFEE00-1111-2222-3333-444455556666"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF 'recycle — this pane: C0FFEE00-1111-2222-3333-444455556666' || false
+  ! printf '%s\n' "$output" | grep -qF 'this pane: 4242' || false
+}
+
+# ── 4. THE UNIT, extracted — the precedence table on its own ─────────────────────────────────────
 
 @test "self_pane_id: CC_TERM=kitty + KITTY_WINDOW_ID → the kitty window id" {
   CC_TERM=kitty KITTY_WINDOW_ID=28 ITERM_SESSION_ID=w0t0p0:STALE-UUID run self_pane_id
