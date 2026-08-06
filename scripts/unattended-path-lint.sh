@@ -110,15 +110,30 @@ PY="/usr/bin/python3"
 #   · claude / agent-browser / npx / ruff — these live only in fnm and framework directories whose
 #     names carry a pid, so no fixed prefix can reach them and PATH hardening cannot fix them.
 #     bin/cc-claude-bin is the right resolver for `claude`, and the right separate change.
-#   · THE THREE THAT ARE REAL DEFECTS AND ARE FILED, NOT DISMISSED — postland-verify.sh:sysctl,
-#     qos-census.sh:sysctl, team-orphan-reaper.sh:lsof. sysctl and lsof live in /usr/sbin and those
-#     plists' PATHs stop at /usr/bin:/bin; both sysctl sites feed a `${x:-0}` default, so a scheduled
-#     run records loadavg 0 rather than failing. An unreadable instrument rendering as the HEALTHY
-#     value is the exact shape that produced this lint's ancestor, and lsof is the exact site class
-#     e6de2e15 fixed. They are not fixed HERE because the fix is a PLIST edit and
-#     launchd-parity-lint asserts live `plutil -p` == repo SSOT: editing the repo plist without the
-#     operator's launchctl reload would turn that gate RED for every session in the fleet until they
-#     acted. Filed so the repo edit and the reload land together.
+#   · sysctl (postland-verify, qos-census) — ALREADY REMEDIED, 4c58eaf5, by a sibling session working
+#     the same class in parallel. sysctl lives in /usr/sbin and both plists' PATHs stop at
+#     /usr/bin:/bin, so a scheduled run fed `${x:-0}` and recorded loadavg 0 — an unreadable
+#     instrument rendering as the HEALTHY value, the exact shape that produced this lint's ancestor.
+#     That session measured the consequence harder than this one did: 859 of 867 qos-census rows
+#     carried a blank loadavg. Both sites now resolve /usr/sbin/sysctl absolutely and keep the bare
+#     name only as a fallback, so they still appear here as `guarded` — correctly, since the name IS
+#     still tried — and their entries stay.
+#   · lsof (team-orphan-reaper) — NOT a defect, and the earlier revision of this comment was wrong to
+#     call it one. procs_cwd_under() already does `bin=/usr/sbin/lsof` first and only falls back to
+#     `command -v lsof`, then returns 2 (UNRESOLVED, never "nobody there") when neither resolves.
+#     That is the e6de2e15 remedy already applied, not the defect. It is listed because the bare name
+#     is still reachable as a fallback rung — which is what this lint reports, not what it condemns.
+#
+#     A note on how those two rows got mis-stated together: they were filed as one backlog item on a
+#     SOURCE reading, before the call sites around them were read. The sysctl half was real, the lsof
+#     half was already fixed, and only reading procs_cwd_under() separated them. Grandfathering by
+#     CLASS is what makes that survivable — the entries are correct either way; only the rationale
+#     needed the correction.
+#
+#     Neither is fixed by a PLIST edit here, and that constraint still stands for anything that would
+#     be: launchd-parity-lint asserts live `plutil -p` == repo SSOT, so editing a repo plist without
+#     the operator's launchctl reload turns that gate RED for every session in the fleet until they
+#     act. A plist change and its reload have to land together.
 #   · it2 (teammate-auto-shutdown) — `command -v it2 || echo "$HOME/.claude/bin/it2"`. It is not
 #     repo-provided (a real file in ~/.claude/bin, not a symlink into bin/), and the guard already
 #     carries the ABSOLUTE fallback this lint asks for. Listed because the name is still tried
