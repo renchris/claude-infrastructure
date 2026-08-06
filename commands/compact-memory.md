@@ -382,6 +382,19 @@ Consequences for how you run this command:
   would have spent an irreversible lossy pass on headroom that already existed. 2026-08-06 the item
   quoted **20.5 KB against a 24.4 KB limit** — a size that was 4.4 KB under its own trigger and had
   never crossed it.
+- 🚨 **This is ONE standing condition, so it gets ONE item — file it with
+  `cc-backlog add --condition memory-index-over-budget`, never a fresh title carrying today's size.**
+  A cc-backlog id is `hash(project + title + source)`, so a size in the title re-keys the item at
+  every measurement: **21 items** were minted for this one condition between 2026-07-25 and
+  2026-08-06 (15 claude-infrastructure, 6 reso-management-app) at 21.2 / 22.1 / 23.3 / 24.1 / 22.5 /
+  20.5 / 20.6 KB. The ledger's own done-guard could not catch it either — a re-file only reads as a
+  re-file when it lands on the same key — so `004502cf59ab` closed at 21:28:01Z and its twin
+  `0fc2ae0d0140` was **claimed at 21:34:01Z, six minutes later**, same condition, no code change
+  between, and a worker was spent on it. `--condition` keys the id on project+condition and drops
+  title and source from the hash; the measurement stays in `--title`, where you read it, and stops
+  being identity. Same defect class as `deploy-live`'s sha-keyed host-RED item (`8035ea63`, memory
+  `per-event-key-defeats-per-finding-dedupe`). Landed in `bin/cc-backlog` 2026-08-06 (backlog
+  `0b3a8b19d4d4`); `hooks/memory-nudge.sh` and the append-time gate now hand you the exact form.
 - ⚠️ **The `17.1 KB` demand is product-side, and it is not this project's budget.** A PostToolUse
   reminder fires *"approaching the 24.4KB read limit — compact to under 17.1KB now"*; no operator
   hook or config emits it (`settings*.json` wires only `memory-nudge.sh`, on UserPromptSubmit).

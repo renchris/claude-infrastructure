@@ -10,9 +10,11 @@
 #
 # Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl}
 # IDs are event-keyed (hash of project+title+source) → re-`add` is idempotent.
+# `--condition <slug>` re-keys that hash to project+condition instead (see CONDITION KEY below),
+# for work whose trigger is a recurring STATE rather than a one-off event.
 #
 # Verbs:
-#   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
+#   add     --title T [--project P] [--dod-ref R] [--source S] [--condition SLUG]  → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
@@ -25,6 +27,39 @@
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
+#
+# ── CONDITION KEY (2026-08-06, backlog 0b3a8b19d4d4) ────────────────────────────────────────────
+# The event key is project+title+source, so a title carrying a LIVE MEASUREMENT re-keys itself every
+# time it is measured. One standing condition — "this project's memory index is over its loader
+# budget" — therefore minted 21 separate items between 2026-07-25 and 2026-08-06 (15 for
+# claude-infrastructure, 6 for reso-management-app) instead of deduping to one: `…21.2KB…`,
+# `…22.1KB…`, `…23.3KB…`, `…24.1KB…`, `…20.5KB…`, `…20.6KB…`, each a different hash of the same fact.
+# The ledger did not merely fail to dedupe them — its own DONE-GUARD could not fire either, because a
+# re-file of finished work only reads as a re-file when it lands on the SAME key: 004502cf59ab was
+# closed at 21:28:01Z and 0fc2ae0d0140 was CLAIMED at 21:34:01Z, six minutes later, same condition,
+# no code change in between, and the ledger reported two pieces of work. This is `deploy-live`'s
+# sha-keyed host-RED item (fixed in 8035ea63, MEMORY.md per-event-key-defeats-per-finding-dedupe)
+# arriving through a title instead of a sha.
+#
+# `--condition <slug>` keys the id on project+condition and DROPS title and source from the hash.
+# The measurement stays in the --title, which is where a human reads it; it simply stops being
+# identity. One condition, one item — whichever session observes it, and whatever it measured.
+#
+# THE SLUG MAY NOT CONTAIN A DIGIT, and that is the guard, not a style rule. A flag that accepted
+# `--condition memory-index-over-budget-20.5KB` would reproduce one layer down the exact defect it
+# exists to kill. The rule is written against the CLASS, not a list of spellings (MEMORY.md
+# denylist-enumerates-spellings-not-the-class): every measurement — a size, a count, a percentage, a
+# timestamp, a sha — is a number, and a condition is a STATE, which needs none. The cost of the
+# over-strictness is spelling a numeral (`opus-five-routing-drift`); the refusal names that, and
+# names --title as where the number belongs.
+#
+# OPT-IN, NEVER INFERRED. Most work IS per-event and MUST re-key: `postland-verify` puts the culprit
+# sha in its title on purpose ("sha defeats wasDone" — a new RED at a new commit is new work), and
+# collapsing distinct items onto one key would silently destroy one of them. Nothing here reads the
+# title to guess, because the same ledger holds SIX more MEMORY.md-titled items that are different
+# work (index a topic file · capture a lesson · fix the nudge hook's cardinality blindness · fix
+# compact-memory.md's orphan sweep), and no pattern separates those from the 21 above. The caller
+# knows which channel it is in; a regex does not.
 #
 # KICK ON WRITE (S5): a successful `add` fires ONE debounced, detached `cc-dispatch --decide` pass
 # so new work gets a decision in seconds instead of waiting out the launchd interval. Strictly
@@ -280,6 +315,36 @@ cutoff_iso() {
 # mk_id <project> <title> <source> → 12-hex event key (US-separated, collision-safe).
 mk_id() { printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 | cut -c1-12; }
 
+# mk_cond_id <project> <condition> → 12-hex CONDITION key (see CONDITION KEY in the header).
+#
+# FOUR \037-separated fields against mk_id's THREE, and that field count is the domain separation —
+# not the `cc-backlog-condition` tag, which by itself separates nothing. Both --title and --source
+# are free-form, so a literal tag placed in any of mk_id's three slots is simply a string a caller
+# can also type: the first cut of this function put `condition` in the third slot, and
+# `add --project P --title memory-index-over-budget --source condition` hashed to the identical
+# bytes. A three-field input can now only reproduce a four-field one by CONTAINING a literal US
+# byte, which no shell caller produces by accident. tests/cc-backlog-condition.bats pins the
+# non-collision against exactly the add that used to hit it.
+mk_cond_id() {
+  printf '%s\037%s\037%s\037%s' 'cc-backlog' 'condition-v1' "$1" "$2" | shasum -a 256 | cut -c1-12
+}
+
+# valid_condition <slug> → 0 when the slug can serve as a STABLE key, 1 otherwise.
+# Lowercase letters and hyphens, starting and ending on a letter, at most 64 chars. The digit ban is
+# the substantive rule and the header explains it; the rest is just keeping the key legible in a
+# `list` table and in a shell argument.
+valid_condition() {
+  local c="$1"
+  [ -n "$c" ] || return 1
+  [ "${#c}" -le 64 ] || return 1
+  case "$c" in
+    *[!a-z-]*) return 1 ;;        # anything but lowercase + hyphen — digits land here
+    -*|*-)     return 1 ;;
+    *--*)      return 1 ;;
+  esac
+  return 0
+}
+
 ensure_file() {
   mkdir -p "$(dirname "$BACKLOG")" 2>/dev/null || true
   [ -f "$BACKLOG" ] || : > "$BACKLOG"
@@ -386,6 +451,11 @@ fold() {
         title:    ($r.title    // $p.title    // ""),
         dodRef:   ($r.dodRef   // $p.dodRef   // ""),
         source:   ($r.source   // $p.source   // ""),
+        # The CONDITION this item is keyed on, "" for an ordinary event-keyed item. Named here for
+        # the same reason `run`/`session` are: this fold is a WHITELIST, so an un-named field is
+        # dropped on the way to `list --json` — and a consumer that cannot see the key an item was
+        # deduped on cannot tell a recurring state from a one-off event.
+        condition: ($r.condition // $p.condition // ""),
         by:       ($r.by       // $p.by       // ""),
         evidence: ($r.evidence // $p.evidence // ""),
         needs:    ($r.needs    // $p.needs    // ""),
@@ -460,24 +530,41 @@ project_default() {
 }
 
 cmd_add() {
-  local project="" title="" dod="" source=""
+  local project="" title="" dod="" source="" condition=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
-      --project) project="${1:-}"; [ $# -gt 0 ] && shift ;;
-      --title)   title="${1:-}";   [ $# -gt 0 ] && shift ;;
-      --dod-ref) dod="${1:-}";     [ $# -gt 0 ] && shift ;;
-      --source)  source="${1:-}";  [ $# -gt 0 ] && shift ;;
+      --project)   project="${1:-}";   [ $# -gt 0 ] && shift ;;
+      --title)     title="${1:-}";     [ $# -gt 0 ] && shift ;;
+      --dod-ref)   dod="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --source)    source="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --condition) condition="${1:-}"; [ $# -gt 0 ] && shift ;;
       *) printf 'cc-backlog add: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
   [ -n "$title" ] || { echo "cc-backlog add: --title is required" >&2; return 2; }
+  # A malformed condition REFUSES the whole add rather than degrading to a title key. Falling back
+  # would hand the caller the very per-event id it asked not to have, silently — and a caller that
+  # passed --condition is one whose retry loop mints a fresh item every pass.
+  if [ -n "$condition" ] && ! valid_condition "$condition"; then
+    { printf 'cc-backlog add: --condition "%s" is not a stable key.\n' "$condition"
+      printf '  A condition names a recurring STATE, so it must hold still: lowercase letters and\n'
+      printf '  hyphens only (<=64, no leading/trailing/doubled hyphen), and NO DIGITS — a size, a\n'
+      printf '  count, a percentage, a timestamp and a sha are all numbers, and any of them in the\n'
+      printf '  key re-mints one item per measurement. That is the bug --condition exists to fix.\n'
+      printf '  Put the measurement in --title (it is displayed, it just stops being identity);\n'
+      printf '  spell out a numeral a condition genuinely needs (opus-five-routing-drift).\n'
+    } >&2
+    return 2
+  fi
   if [ -z "$project" ]; then
     project="$(project_default)" \
       || { echo "cc-backlog add: cannot resolve a project from $(pwd) — pass --project <name>" >&2; return 2; }
   fi
   ensure_file
-  local id; id=$(mk_id "$project" "$title" "$source")
+  local id
+  if [ -n "$condition" ]; then id=$(mk_cond_id "$project" "$condition")
+  else                         id=$(mk_id "$project" "$title" "$source"); fi
   if has_id "$id"; then                            # idempotent: no duplicate add
     # DONE-GUARD (add side): the event key (project+title+source) resolves to an item that is
     # already TERMINAL — this `add` is a re-file of completed work. The id is still echoed with
@@ -489,15 +576,27 @@ cmd_add() {
       { printf 'cc-backlog add: WARNING — this event-key is already DONE; NOT re-opened.\n'
         printf '  id %s · done %s\n' "$id" "$(printf '%s' "$ex" | jq -r '.lastTs // "?"')"
         printf '  evidence: %s\n' "$(printf '%s' "$ex" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end')"
-        printf '  Genuinely new work needs a distinct title/source (the id is a hash of\n'
-        printf '  project+title+source). If THIS work regressed:  cc-backlog reopen %s --force\n' "$id"
+        # A condition key reaching a done item means the STATE came back, which is a different fact
+        # from a stale re-file of an event — and telling the caller to "use a distinct title" there
+        # would be advice to re-create the 21-item defect. Both paths still refuse to auto-reopen:
+        # a state that re-enters minutes after its own close (004502cf59ab → 0fc2ae0d0140, six
+        # minutes) is thrash, and only a deliberate --force should put a worker back on it.
+        if [ -n "$condition" ]; then
+          printf '  This is a CONDITION key (%s), so the state RECURRED rather than being re-filed.\n' "$condition"
+          printf '  Do NOT vary the condition to get a new id — that is the defect it prevents.\n'
+          printf '  If it genuinely holds again:  cc-backlog reopen %s --force\n' "$id"
+        else
+          printf '  Genuinely new work needs a distinct title/source (the id is a hash of\n'
+          printf '  project+title+source). If THIS work regressed:  cc-backlog reopen %s --force\n' "$id"
+        fi
       } >&2
     fi
     echo "$id"; return 0
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
-     --arg title "$title" --arg dod "$dod" --arg source "$source" \
-     '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}' \
+     --arg title "$title" --arg dod "$dod" --arg source "$source" --arg condition "$condition" \
+     '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}
+      + (if $condition == "" then {} else {condition:$condition} end)' \
      >> "$BACKLOG"
   echo "$id"
 }
@@ -880,7 +979,11 @@ cmd_list() {
   # as "". The fold carries them ""-defaulted like every sibling field, but a renderer must
   # be able to distinguish "this step has no runnable command" from "its command is the
   # empty string" — an empty `run` handed to cc-do would be a blank line the operator is
-  # invited to paste. Deleted here, at the one place machine consumers read.
+  # invited to paste. Deleted here, at the one place machine consumers read. `condition`
+  # follows the same rule for the same reason: `has("condition")` is then the exact test for
+  # "this item is keyed on a recurring state", with no empty-string special case to get wrong.
+  # The TABLE branch is deliberately untouched — the condition is identity, not status, and a
+  # new column would change every row for every reader to say what the id already encodes.
   if [ "$fmt" = json ]; then
     fold | jq -c --arg mode "$mode" --arg proj "$projfilter" '
       def keep: if $mode=="all" then true elif $mode=="blocked" then .status=="blocked" else .status!="done" end;
@@ -888,7 +991,8 @@ cmd_list() {
       | map( select(keep)
            | select($proj == "" or .project == $proj)
            | (if (.run     // "") == "" then del(.run)     else . end)
-           | (if (.session // "") == "" then del(.session) else . end) )'
+           | (if (.session // "") == "" then del(.session) else . end)
+           | (if (.condition // "") == "" then del(.condition) else . end) )'
     return 0
   fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" --arg pad "$TSV_PAD" "$CELL"'

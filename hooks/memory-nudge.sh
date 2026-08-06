@@ -90,6 +90,14 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
     HOOK_AVG=$(( (ENTRY_B - PFX) / N ))
     # Cardinality ceiling: what the limit affords at a disciplined hook length.
     MAXN=$(( LIMIT / (PFX_AVG + HOOK_TARGET) ))
+    # FILING FORM (2026-08-06, backlog 0b3a8b19d4d4). Sessions reading this advisory file the
+    # condition as backlog work, and they put the live size in the TITLE — which is the cc-backlog
+    # event key (project+title+source), so one standing condition minted 21 items instead of one
+    # and the ledger's own done-guard never fired (004502cf59ab closed 21:28:01Z, its twin
+    # 0fc2ae0d0140 claimed 21:34:01Z). Hand over the condition-keyed form in BOTH branches: those
+    # mints happened at 20.5 KB and 22.5 KB — under this limit, off the harness's own product-side
+    # "approaching the limit" reminder — so a form that only spoke when breached would miss most.
+    FILING="FILING: if you file this as work it is ONE standing condition, not a new item per measurement — \`cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\"\`. The size belongs in the title; putting it in the key is what minted 21 items for this one condition."
     if [ "$TOTAL" -ge "$LIMIT" ]; then
       OVER=$(( TOTAL - LIMIT ))
       DROPPED=$(( (OVER / (PFX_AVG + HOOK_AVG)) + 1 ))
@@ -103,7 +111,7 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       else
         LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${HOOK_TARGET} B target), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B). The loader drops the TAIL silently, so roughly the NEWEST ${DROPPED} entries did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one."
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B). The loader drops the TAIL silently, so roughly the NEWEST ${DROPPED} entries did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
@@ -120,7 +128,7 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       LINE_COST=$(( PFX_AVG + HOOK_AVG + 1 ))
       [ "$LINE_COST" -gt 0 ] || LINE_COST=1
       FITS=$(( HEADROOM / LINE_COST ))
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently."
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently. ${FILING}"
     fi
   fi
 fi
