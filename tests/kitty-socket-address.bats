@@ -32,10 +32,18 @@
 # Every assertion is `[ ]`, `run`+status, or `… || false`. `[[ ]]` and `(( ))` are errexit-EXEMPT in
 # bats and are silently DEAD anywhere but a body's last line — that has burned this repo twice.
 
-# A REAL AF_UNIX socket, asserted. sun_path is capped at 104 bytes on Darwin, so a path too long
-# must go RED right here — never quietly leave the fixture absent and every case vacuous.
+# A REAL AF_UNIX socket, asserted — a plain file would make every case here vacuous.
+#
+# THE BIND IS RELATIVE, AND THAT IS THE WHOLE POINT (postland RED 2026-08-06, item e1d43f93da19).
+# Darwin caps sun_path at 104 bytes, and the cap applies to THE STRING HANDED TO bind(2) — not to
+# the file's absolute location. Binding the absolute path charged the whole $BATS_TEST_TMPDIR prefix
+# against a 104-byte budget the fixture does not control, so this suite read 12/12 green in every
+# hand-check and went 7/12 red inside postland-verify, whose corpus TMPDIR is 21 bytes longer
+# ($TMPDIR/postland-run.XXXXXX — scripts/postland-verify.sh:1050,1104). chdir + bind the basename
+# spends 10 bytes instead of ~100 and changes nothing else: the socket file still lands at the same
+# absolute path, and `[ -S ]` still asserts it there. The >104 case is pinned as a control below.
 mksock() {
-  /usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$1"
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$1"
   [ -S "$1" ]
 }
 
@@ -121,7 +129,10 @@ FAKE
   cat > "$STUB/as-kitty-child" <<'SHIM'
 #!/bin/bash
 sock="${KSOCK_DIR}/${KSOCK_PREFIX}$$"
-/usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$sock" || exit 90
+# Relative bind, for the same 104-byte sun_path reason as mksock above — this one is a SEPARATE
+# script, so it does not inherit that fix and had to be corrected in its own right. Pre-fix it left
+# exit 90 inside a stub, which reads as "the subject refused" rather than "the fixture never built".
+/usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$sock" || exit 90
 [ -S "$sock" ] || exit 91
 printf '%s\n' "$sock" > "$KSOCK_ECHO"
 "$@"
@@ -142,6 +153,21 @@ SHIM
 }
 
 # ── the derivation the conf decides ──────────────────────────────────────────────────────────────
+
+@test "POSITIVE CONTROL: the fixture binds a socket whose ABSOLUTE path is OVER the 104-byte cap" {
+  # The mutation proof for mksock's relative bind, and the only case here that can see it: setup()'s
+  # own sockets sit under the cap on a session TMPDIR, so an absolute bind passes all eleven other
+  # tests and fails ONLY inside postland. Pre-fix this is `OSError: AF_UNIX path too long`.
+  #
+  # The pad is COMPUTED off the live prefix rather than fixed at some depth, so this stays a genuine
+  # >104-byte path on any box and a LONGER $BATS_TEST_TMPDIR strengthens it instead of voiding it.
+  local deep="$SOCKDIR"
+  while [ "${#deep}" -lt 100 ]; do deep="$deep/pad"; done
+  mkdir -p "$deep"
+  local s="$deep/kitty-4242"
+  [ "${#s}" -gt 104 ]        # the control proves nothing unless it is genuinely over the cap
+  mksock "$s"                # …and mksock already asserts the socket EXISTS at that absolute path
+}
 
 @test "PPID supplies {kitty_pid}; the CONF supplies the directory and the name — all three binaries" {
   run as-kitty-child "$CLOSE" window --check
