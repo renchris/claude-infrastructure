@@ -362,6 +362,37 @@ CUTS="$STATE/cuts"                                     # "<tree> <consecutive-n>
 CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one tree before paging
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
 
+# ── PATH-INDEPENDENT sysctl(8) (item ff544977e4ea, 2026-08-06) ───────────────────────────────────
+# sysctl lives in /usr/sbin, and this job's plist wrapper EXPORTS a PATH ending /usr/bin:/bin — no
+# /usr/sbin. So a bare `sysctl` resolved fine from a terminal and did not exist in any SCHEDULED
+# run, which is exactly why it survived review. Measured on this machine's own stamps: 34 of 80
+# carried "load":"0" — the load was never read, and `${l:-0}` rendered the unreadable instrument as
+# an IDLE machine. Same shape as the swap rung in tests/capacity-alarm-launchd-path.bats.
+#
+# Fixed SCRIPT-SIDE rather than by adding /usr/sbin to the plist, following the precedent this
+# repo already set for the identical class (e6de2e15 cc-authbrowser/git-worktree-guard, 752024be
+# handoff-fire, 9ac045cb team-orphan-reaper's lsof): a plist-only edit would break
+# launchd-parity-lint assertion (c) — live `plutil -p` vs repo SSOT — for every session in the
+# fleet, staying red pending an operator reload, and it would still leave every NON-launchd caller
+# (the nightly, a hand-run, the disposable verify worktree) reading a bare name.
+#
+# ABSOLUTE FIRST, bare name only as the fallback: this must not depend on the caller's PATH at all.
+# Seam: CC_POSTLAND_SYSCTL_BIN — set-but-EMPTY is honored verbatim (i.e. no sysctl), because a seam
+# that cannot turn the probe OFF cannot test the unreadable direction. The override is NOT folded
+# into the fallback list, which is how an override stops being one (memory
+# path-resolved-dependency-in-daemon-code).
+if [ -n "${CC_POSTLAND_SYSCTL_BIN+set}" ]; then
+  SYSCTL_BIN="$CC_POSTLAND_SYSCTL_BIN"
+elif [ -x /usr/sbin/sysctl ]; then
+  SYSCTL_BIN=/usr/sbin/sysctl
+else
+  SYSCTL_BIN="$(command -v sysctl 2>/dev/null || true)"
+fi
+load1() { # 1-min loadavg on stdout, or EMPTY when the instrument cannot be read at all
+  [ -n "$SYSCTL_BIN" ] && [ -x "$SYSCTL_BIN" ] || return 0
+  "$SYSCTL_BIN" -n vm.loadavg 2>/dev/null | awk '{print $2}'
+}
+
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
 # Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
 # where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
@@ -401,8 +432,10 @@ env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tr
   local b c l                                # constantly), so a stale-env green stamp stays diagnosable
   b="$("$BATS_BIN" --version </dev/null 2>/dev/null | awk '{print $2}')"
   c="${CLAUDE_CODE_EXECPATH:-}"; [ -n "$c" ] && c="$(basename "$c")" || c=unknown
-  l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"                 # 1-min, at run start
-  ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s"}' "${b:-unknown}" "${c:-unknown}" "${l:-0}")"
+  l="$(load1)"                                                               # 1-min, at run start
+  # `?`, never `0`: an unread instrument must not render as a value the reader would call healthy.
+  # qos-census's loadavg1 column already answers this way; the stamp now agrees with it.
+  ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s"}' "${b:-unknown}" "${c:-unknown}" "${l:-?}")"
 }
 
 # ════ mutex — shape copied from land-lock.sh (a LIVE holder is never reaped; dead pid → instant) ═══
@@ -615,9 +648,13 @@ sc_count() { # whole-tree lint finding count — ADVISORY, never verdict-affecti
 record_flake() { # <file> <test> <rc>
   local sig load
   if [ "$3" -gt 128 ]; then sig="sig:$(( $3 - 128 ))"; else sig="exit:$3"; fi
-  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  # The SECOND site of the same bare-name defect, and the one that matters most: this column is how
+  # a flake is later adjudicated as machine-pressure vs a real red (see the median-loadavg reasoning
+  # at the HUNG/cut notes below). Recorded `0` it reads as "flaked on an idle box" — the opposite
+  # conclusion. `?` says the load is unknown, which is the truth when sysctl cannot be reached.
+  load="$(load1)"
   printf '{"ts":"%s","file":"%s","test":"%s","sha":"%s","phase":"postland","outcome":"1-of-3","signal":"%s","loadavg":"%s"}\n' \
-    "$(now_iso)" "$1" "$2" "${CUR_SHA:-}" "$sig" "${load:-0}" >> "$FLAKES" 2>/dev/null || true
+    "$(now_iso)" "$1" "$2" "${CUR_SHA:-}" "$sig" "${load:-?}" >> "$FLAKES" 2>/dev/null || true
   NFLAKE=$((NFLAKE+1))
 }
 # ════ HUNG — the one state a CUT cannot express ═══════════════════════════════════════════════════
