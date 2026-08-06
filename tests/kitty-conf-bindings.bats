@@ -16,6 +16,13 @@
 # pane and starts CLOSING it. That is a destructive inversion with no error message, so it gets a
 # test with a mutant control that proves the test can actually catch it.
 #
+# THE CLOSE CHORDS (⌘W / ⌃⇧W / ⌘⇧W) CARRY THE SAME HAZARD, and it has already fired once for real:
+# each sits on a chord kitty ALREADY binds to a silent, unconditional close, and on 2026-08-04 one
+# ⌘W killed a live Claude Code session with no prompt. The conf now routes all three through a
+# confirm helper — so, exactly as with ⌘⇧D, what these tests pin is WHICH definition is last, with
+# its own mutant control. An assertion here that reads `close_window` is not merely stale; it is
+# asserting the destructive state the config exists to prevent.
+#
 # Assertions are `[ ]` / `|| false`. `[[ ]]` and `(( ))` are errexit-EXEMPT in bats and would be
 # silently DEAD anywhere but a body's last line (memory: bats-dead-assertions-errexit-exemptions).
 
@@ -54,11 +61,15 @@ def main():
     print("drag_tolerance=%s" % o.window_drag_tolerance)
     print("drag_threshold=%s" % o.drag_threshold)
     print("layouts=%s" % ",".join(o.enabled_layouts))
-    # mods: 8=cmd, 9=cmd+shift, 10=cmd+alt, 12=cmd+ctrl.
+    # mods bits: 1=shift, 2=alt, 4=ctrl, 8=cmd -- so 5=ctrl+shift, 9=cmd+shift, 10=cmd+opt,
+    # 11=cmd+opt+shift. These were read off the parse below, NOT off the GLFW header, where the
+    # CONTROL and ALT bits are the other way round. Guessing there probes an EMPTY chord, and an
+    # empty chord fails every assertion for a reason that has nothing to do with the config.
     # keys: 100=d, 98=b, 119=w, 111=o, 57350=left.  Arrows are not ASCII, hence the 5-digit code.
-    for label, mods, key in (("cmd_d",8,100), ("cmd_shift_d",9,100), ("cmd_shift_b",9,98), ("cmd_w",8,119),
-                             ("cmd_shift_o",9,111), ("cmd_opt_o",10,111), ("cmd_ctrl_o",12,111),
-                             ("cmd_ctrl_left",12,57350)):
+    for label, mods, key in (("cmd_d",8,100), ("cmd_shift_d",9,100), ("cmd_shift_b",9,98),
+                             ("cmd_w",8,119), ("ctrl_shift_w",5,119), ("cmd_shift_w",9,119),
+                             ("cmd_shift_o",9,111), ("cmd_opt_o",10,111), ("cmd_opt_shift_o",11,111),
+                             ("cmd_opt_shift_left",11,57350)):
         b = binds(mods, key)
         print("%s_n=%d" % (label, len(b)))
         print("%s_last=%s" % (label, b[-1] if b else ""))
@@ -71,7 +82,15 @@ main()
 @test "cmd+d splits vertically (pane to the RIGHT, iTerm2 Split Vertically)" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_d_last=launch --location=vsplit --cwd=current' || { echo "$output"; false; }
+  # The trailing kitty-split-cwd.sh is part of the assertion, not incidental. --cwd=current alone
+  # lands the split in the POOL WORKTREE the source pane is running from, not the main checkout
+  # (config/kitty.conf §3 measured all four --cwd special values agreeing on the worktree), so the
+  # helper does the redirect that no kitty option can. Dropping it re-opens that bug silently.
+  #
+  # -F, not a regex: the expected definition carries a literal ${HOME}. kitty stores the launch
+  # definition VERBATIM and expands it only at launch time, so this stays independent of the
+  # fixtured HOME — but it must be matched as text, and the single quotes stop the shell too.
+  echo "$output" | grep -qxF 'cmd_d_last=launch --location=vsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh' || { echo "$output"; false; }
 }
 
 @test "cmd+shift+d splits horizontally and NOT close_window — the last-wins inversion guard" {
@@ -82,7 +101,8 @@ main()
   # An exact whole-line match already excludes close_window, so a separate negative assertion here
   # would be redundant — and the destructive case is proven positively by the MUTANT CONTROL below,
   # which is stronger evidence than a negative that can pass for the wrong reason.
-  echo "$output" | grep -qx 'cmd_shift_d_last=launch --location=hsplit --cwd=current' || { echo "$output"; false; }
+  # The helper tail and the -F are load-bearing for the same reasons given on ⌘D above.
+  echo "$output" | grep -qxF 'cmd_shift_d_last=launch --location=hsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh' || { echo "$output"; false; }
 }
 
 @test "MUTANT CONTROL: dropping our cmd+shift+d line lets close_window win, and the guard sees it" {
@@ -152,25 +172,57 @@ main()
   echo "$output" | grep -qx 'cmd_shift_o_n=1' || { echo "chord is contested — see the ⌘⇧D hazard"; echo "$output"; false; }
 }
 
-@test "cmd+opt+o detaches to a new OS window and cmd+ctrl+o moves the whole tab" {
+@test "cmd+opt+o detaches to a new OS window and cmd+opt+shift+o moves the whole tab" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # detach_tab is on ⌘⌥⇧O, not ⌘⌃O: the ⌘⌃ chords were retired wholesale (1d507193) to keep the
+  # arrow-family shape ⌘⌥ = neighbour, ⌘⇧ = move, ⌘⌥⇧ = move to edge. Probing the retired chord
+  # reads n=0 and an empty definition, which fails as a missing binding rather than a moved one.
   echo "$output" | grep -qx 'cmd_opt_o_last=detach_window' || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_ctrl_o_last=detach_tab ask' || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_opt_shift_o_last=detach_tab ask' || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_opt_o_n=1' || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_ctrl_o_n=1' || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_opt_shift_o_n=1' || { echo "$output"; false; }
 }
 
 @test "move_to_screen_edge is bound — move_window cannot place a pane with no neighbour to swap" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_ctrl_left_last=layout_action move_to_screen_edge left' || { echo "$output"; false; }
+  # ⌘⌥⇧← for the same reason as detach_tab above — ⌘⌃ retired in 1d507193.
+  echo "$output" | grep -qx 'cmd_opt_shift_left_last=layout_action move_to_screen_edge left' || { echo "$output"; false; }
 }
 
-# ── the close binding, which shares the ⌘⇧D hazard ───────────────────────────────────
+# ── the close bindings, which share the ⌘⇧D hazard ───────────────────────────────────
+#
+# All three close chords route through kitty-confirm-close instead of kitty's own close action,
+# because a bare close is unconditional and silent and once cost a live session (header, above).
+# kitty ALREADY binds a close to each of the three — a DIFFERENT one per chord, which is why each
+# is named separately below rather than matched by a shared pattern:
+#     ⌘W  -> close_tab      ⌃⇧W -> close_window      ⌘⇧W -> close_os_window
+# So each is a last-wins pair exactly like ⌘⇧D, and n=2 is the healthy reading. The count is
+# deliberately NOT asserted: kitty dropping one of its own defaults would take a chord to n=1 with
+# our helper still last and the behaviour unchanged, and a test that went red on that would be
+# reporting a benign upstream change as a regression.
 
-@test "cmd+w closes the focused pane" {
+@test "the close chords ask first — the confirm helper wins over kitty's silent close" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_w_last=close_window' || { echo "$output"; false; }
+  # -F for the same reason as the split bindings: the definition carries a literal ${HOME}.
+  echo "$output" | grep -qxF 'cmd_w_last=launch --type=background ${HOME}/.claude/bin/kitty-confirm-close window' || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'ctrl_shift_w_last=launch --type=background ${HOME}/.claude/bin/kitty-confirm-close window' || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'cmd_shift_w_last=launch --type=background ${HOME}/.claude/bin/kitty-confirm-close os-window' || { echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: dropping the confirm helper lets the silent close win, and the guard sees it" {
+  # Without this the guard above is vacuous in the same way the ⌘⇧D one would be: it would pass on
+  # any config that merely fails to bind a close at all. Strip our three helper lines and prove the
+  # unprompted kill actually reappears as the WINNING definition on all three chords.
+  MUT="$BATS_TEST_TMPDIR/mutant-close.conf"
+  grep -v 'kitty-confirm-close' "$CONF" > "$MUT"
+  ! grep -q 'kitty-confirm-close' "$MUT" || { echo "mutation did not apply"; false; }
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_w_last=close_tab' || {
+    echo "CONTROL FAILED — the guard cannot distinguish the silent-close config:"; echo "$output"; false; }
+  echo "$output" | grep -qx 'ctrl_shift_w_last=close_window' || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_shift_w_last=close_os_window' || { echo "$output"; false; }
 }
