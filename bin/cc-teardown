@@ -82,6 +82,36 @@ cct_bounded() {
   "$CCT_TIMEOUT_BIN" -k 3 "$CCT_TIMEOUT_S" "$@"
 }
 
+# lsof(8) is resolved by ABSOLUTE PATH as well as PATH, for the same reason timeout(1) is above — but
+# the failure is sharper: an unresolved timeout means "run unbounded", an unresolved lsof means a
+# WRONG READ. lsof lives in /usr/sbin, and the cause is NOT launchd — launchd's own default PATH
+# carries /usr/sbin. It is our OWN wrapper overrides that drop it, so the omission tracks how a
+# process was STARTED, which is why it is invisible to every hand-run. Read off disk 2026-08-06:
+#   dispatcher · boot-resume · desk-invariant  export "$HOME/.claude/bin:/opt/homebrew/bin:…/bin"
+#   postland-verify (:21) — the runner of THIS corpus — and team-orphan-reaper (:30), likewise
+# none of which contain /usr/sbin. The dispatcher is the one that matters here: it launches the
+# worker sessions whose SessionStart hook spawns lead-crash-watchdog, which is this leg's only
+# autonomous caller. So on the production path — every autonomously started session — the bare name
+# could not resolve; only an operator's hand-launched session had it. Measured under a PATH built by
+# DELETING every lsof-holding dir: bare-name yields an EMPTY cwd, absolute-first the real one, off
+# the identical process.
+#
+# This repo has now paid for the same class four times, and it is worth naming as a class: sysctl in
+# capacity-alarm.plist:55 and compressor-sentinel.plist:44 ("THREE RUNGS WERE SILENTLY DEAD"), lsof
+# in worktree-gc-infra.plist:19, lsof in bin/cc-authbrowser (dcc1ccb7, where it made --start report
+# the browser it had JUST LAUNCHED as foreign). bin/cc-backlog:1088 resolves its own lsof probe this
+# way already. Existing pattern, not a new convention.
+#
+# Seam: CC_TEARDOWN_LSOF_BIN — UNSET ⇒ resolve one. SET, including set to EMPTY ⇒ honored verbatim,
+# so `CC_TEARDOWN_LSOF_BIN=` genuinely disables the probe. `${VAR:-}` cannot tell unset from
+# set-empty, and a seam that cannot turn a thing OFF is not a seam.
+if [ -n "${CC_TEARDOWN_LSOF_BIN+set}" ]; then
+  CCT_LSOF_BIN="$CC_TEARDOWN_LSOF_BIN"
+else
+  CCT_LSOF_BIN=/usr/sbin/lsof
+  [ -x "$CCT_LSOF_BIN" ] || CCT_LSOF_BIN="$(command -v lsof 2>/dev/null || true)"
+fi
+
 
 # Resolve $0 THROUGH symlinks (no readlink -f on macOS) so a `~/.claude/bin/cc-teardown` symlink still finds
 # its cc-teardown-safety-gate.sh + cc-sessions siblings in the repo bin/ — deploy only this one file.
@@ -445,15 +475,22 @@ resolve_assignee() {
     case "$agid" in *[!A-Za-z0-9_.@-]*) continue ;; esac   # a shaped id, never a prose fragment
     paneUUID="$uuid"; pid="$rpid"
     sname="$agid"
-    # cwd feeds the work-safety gate (dirty / committed-not-pushed). BOUNDED via cct_bounded, NOT a
-    # bare `timeout`: hooks and launchd run with a minimal PATH excluding Homebrew (where coreutils
-    # puts timeout), and this leg's only autonomous caller IS a hook-spawned watchdog — a PATH-only
-    # lookup would leave exactly that caller broken, returning an empty cwd forever and re-inerting
-    # the leg through the gate's fail-closed die. cct_bounded resolves by absolute path and runs
-    # UNBOUNDED rather than breaking the call.
-    # An unresolved cwd is still SAFE: the gate `die`s on an empty --cwd, so we REFUSE rather than
-    # tear down a worktree whose dirty/unpushed state was never checked.
-    cwd="$(cct_bounded lsof -a -d cwd -w -p "$rpid" -F n 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    # cwd feeds the work-safety gate (dirty / committed-not-pushed). BOTH halves of this call resolve
+    # by absolute path; until 2026-08-06 only one did. The comment that stood here had the diagnosis
+    # exactly right — "hooks and launchd run with a minimal PATH …, and this leg's only autonomous
+    # caller IS a hook-spawned watchdog — a PATH-only lookup would leave exactly that caller broken,
+    # returning an empty cwd forever and re-inerting the leg through the gate's fail-closed die" —
+    # and then credited cct_bounded with fixing it. cct_bounded resolves TIMEOUT(1) by absolute path.
+    # It says nothing about what the bounded fork EXECS, and that was the bare name `lsof`. So the
+    # predicted breakage happened, one level down, to the caller the comment named: /usr/sbin is on
+    # no hook's or plist's PATH, so this leg was inert for its only autonomous caller from the day it
+    # shipped. A hazard you have written down is not a hazard you have closed.
+    # An unresolved cwd is still SAFE, and stays so: no probe ⇒ empty cwd ⇒ the gate `die`s on an
+    # empty --cwd, so we REFUSE rather than tear down a worktree whose state was never checked.
+    cwd=""
+    if [ -n "$CCT_LSOF_BIN" ] && [ -x "$CCT_LSOF_BIN" ]; then
+      cwd="$(cct_bounded "$CCT_LSOF_BIN" -a -d cwd -w -p "$rpid" -F n 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    fi
     sess_id="$ASSIGNEE_SID"
     started_ms=""
     return 0
