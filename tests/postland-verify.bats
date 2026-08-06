@@ -1318,7 +1318,12 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
       bash "$SUT" --run-if-needed
   [ "$status" -eq 0 ]
   [ -f "$REC/lintenv.txt" ]
-  [ "$(cat "$REC/lintenv.txt")" = "own= herm= scope= argv=tests" ]   # all three arrived UNSET
+  # All three arrived UNSET — that is this test's claim. `argv=` is incidental to it but pinned
+  # deliberately: fc2dae62 stopped passing the literal `tests` positional (git-identity-lint resolves
+  # its own scan root from $0 and exits 2 "nothing to scan" when handed `tests`, which would turn
+  # EVERY run into a CUT). That commit updated the runner, tests/git-identity-lint.bats and the
+  # --selftest's "invoked with NO positional" check, but not this line, so trunk went red here.
+  [ "$(cat "$REC/lintenv.txt")" = "own= herm= scope= argv=" ]
 }
 
 @test "C22: the prelints run in the UTILITY band — a background-clamped parent cannot drag them to PRI 4" {
