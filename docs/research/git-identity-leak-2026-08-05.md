@@ -375,6 +375,47 @@ recommendation:** `5f1d0757` ("LAND — strongest shape") is held by `wt-ae2ce42
 `wip/ae2ce4298dac/LAST` and `checkpoints/ae2ce4298dac/*` — and `git cherry` reports it `+`, i.e.
 **still unlanded**. A verdict of "LAND" is not a landing.
 
+### The guards half: 16 of 21 landed, and the 5 that did not are the downgrade
+
+`c2e571188ad2` says `wt-ae2ce4298dac` "LANDED the guards at the BINDING"; backlog `ae2ce4298dac`
+closed on "85 corpus sites guarded … whole-tree lint reads clean — 485 files, 0 escaping identity
+writes". Both are *nearly* right, and the gap is the thing this section exists to catch.
+
+Census over the 30 files `5f1d0757` touches, classifier positive-controlled against a hand-read file
+(`bin/cc-teardown`) before being trusted — binding = `local r="${1:?…}"` / `: "${1:?…}"`, use-site =
+`git -C "${r:?…}"`:
+
+| | binding | use-site |
+|---|---|---|
+| `5f1d0757` | 21 | 0 |
+| `origin/main` | 16 | 24 |
+
+**Five binding guards never landed.** In four of those files trunk carries the use-site shape
+instead — `bin/cc-teardown`, `bin/cc-teardown-safety-gate.sh`, `tests/cc-reaper.bats`,
+`tests/teammate-auto-shutdown.bats`, all reading:
+
+```bash
+local r="$1"; mkdir -p "$r"                                    # ← trunk: binding UNGUARDED
+git -C "${r:?repo path required}" init -q; git -C "$r" config user.email t@t
+```
+
+That is verbatim the fragile shape `c2e571188ad2` described: protection depends on the guarded
+statement running *first*, and the following `config user.email` sits on the bare variable. The
+section above concluded "the downgrade risk the item flagged did not materialise" — **true of
+`fix/gi-corpus`, false of trunk.** It did materialise, by the other route: the binding-shape commit
+simply never landed, so nothing had to be mis-resolved.
+
+The fifth (`tests/cc-tlid.bats`) has no guard in that helper, but it is **not** a leak — it uses
+transient `git -C "$1" -c user.email=t@t commit`, not `git config user.email`, so it cannot persist
+an identity into a shared `.git/config`. The lint's "0 escaping identity writes" is correct here.
+Its residual risk under an empty `$1` is a junk empty commit in the caller's repo (the
+`git -C "" ` no-op class), not an identity write.
+
+**And this is exactly why "whole-tree lint reads clean" could not have caught any of it.** A clean
+lint is fully compatible with 5 unlanded binding guards, because the lint convicts *absence* and
+four of the five sites are not absent — they are weaker. The closing section of the reconciliation
+was right in principle; this is the instance.
+
 ### What has since ROTTED
 
 **`git-identity-lint.sh` is no longer absent from trunk.** The correction's `git ls-tree origin/main
@@ -419,5 +460,10 @@ opposite direction, and only `git cherry` gets both right.
 ### Still open — unchanged by any of this
 
 The `fix/gi-corpus` binding-vs-use-site guard-placement reconcile. `c2e571188ad2` is right that it
-needs a human read and not a gate, and the lint landing does not change that. Now joined by: the
-branch this section recommends landing has not landed.
+needs a human read and not a gate, and the lint landing does not change that.
+
+Now joined by a smaller, sharper one: **promote the 5 unlanded binding guards** listed above.
+Unlike the `gi-corpus` reconcile this is mechanical — 4 files, one line each, moving `${1:?}` from
+the `-C` use-site to the `local` binding, no behaviour change when `$1` is non-empty — but it is
+still someone else's un-landed branch content in a class whose whole failure mode is careless
+resolution, so it is filed rather than swept in here.
