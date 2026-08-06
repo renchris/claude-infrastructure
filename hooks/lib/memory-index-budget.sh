@@ -130,6 +130,8 @@ APPLY ONE-IN-ONE-OUT — make room in the SAME edit:
 
 Run /compact-memory for the full procedure; its lossy half (shortening, dedupe) is PROPOSE-ONLY and stays human-gated.
 
+If you file this as backlog work instead of fixing it here, it is ONE standing condition, not a new item per measurement: cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\". The size belongs in the title; putting it in the key is what minted 21 items for this one condition.
+
 Any write that SHRINKS or does not grow this file is always allowed, including while it is over the limit — so compaction, archiving and repair are never blocked by this gate."
   return 0
 }
