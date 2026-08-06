@@ -351,7 +351,7 @@ mkrepo() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?mkrepo: repo path required}"
   mkdir -p "$1"; git -C "$1" init -q
-  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
 }
 # a real LINKED worktree of <repo> at <path> on a new branch
@@ -653,7 +653,7 @@ shared_repo() {
   # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
   : "${1:?shared_repo: repo path required}"
   git init -q "$1" 2>/dev/null
-  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo base > "$1/base.txt"; git -C "$1" add base.txt; git -C "$1" commit -qm base
 }
 # transcript for <sid> recording a Write tool_use of <path> (what session-writes.sh attributes on)

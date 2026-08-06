@@ -31,7 +31,7 @@ setup() {
   # A CLEAN git repo standing in for the desk's monitoring cwd.
   DESK="$BATS_TEST_TMPDIR/desk"; mkdir -p "$DESK"
   git -C "$DESK" init -q
-  git -C "${DESK:?repo path required}" config user.email t@t; git -C "$DESK" config user.name t
+  git -C "$DESK" config user.email t@t; git -C "$DESK" config user.name t
   echo seed > "$DESK/f.txt"; git -C "$DESK" add -A; git -C "$DESK" commit -qm init
   ( cd "$DESK" && bash "$HOOK" arm >/dev/null )    # opt this desk IN (default is off)
 }
@@ -942,9 +942,14 @@ _wr_role_desk() { printf 'DESK-UUID-0001\n' > "$CC_WR_COORD_DIR/cc-roles/desk"; 
 _wr_key_cwd()  { printf '%s|%s'      "$CLAUDE_CONFIG_DIR" "$1" | shasum | cut -c1-16; }
 _wr_key_role() { printf '%s|role:%s' "$CLAUDE_CONFIG_DIR" desk | shasum | cut -c1-16; }
 # `git -C ""` is a NO-OP, not an error — an empty $1 would write this identity into the cwd repo.
-_wr_repo() { : "${1:?_wr_repo: repo path required}"
-             mkdir -p "$1"; git -C "${1:?repo path required}" init -q; git -C "$1" config user.email t@t
-             git -C "${1:?repo path required}" config user.name t; echo s > "$1/f"; git -C "$1" add -A; git -C "$1" commit -qm init; }
+# The guard sits on its OWN line, not folded onto the `_wr_repo() {` opener: git-identity-lint's
+# proof-tracking resets its region ON that opener and only reads a `: "${x:?…}"` anchored at the
+# start of a line, so the folded form left every use site below unproven and the lint could only
+# read the use-site guards — the shape this promotion exists to remove.
+_wr_repo() {
+             : "${1:?_wr_repo: repo path required}"
+             mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t@t
+             git -C "$1" config user.name t; echo s > "$1/f"; git -C "$1" add -A; git -C "$1" commit -qm init; }
 
 @test "role-keyed: a desk that MOVES cwd keeps its --live opt-in (was a silent SHADOW fallback)" {
   rm -f "$CC_WR_STATE_DIR"/*                      # drop setup()'s cwd-keyed arm — start from clean state

@@ -95,7 +95,7 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   mkdir -p "$1/scripts" "$1/tests"
   cp "$L" "$1/scripts/lint.sh"; chmod +x "$1/scripts/lint.sh"
   git -C "$1" init -q >/dev/null 2>&1
-  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
   printf '#!/usr/bin/env bats\n@test "inherited" {\n  old= debt\n}\n' > "$1/tests/inherited.bats"
   git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -qm base >/dev/null 2>&1
   # A remote-tracking ref without a remote — the trunk ladder reads refs, not network.

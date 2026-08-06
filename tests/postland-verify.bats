@@ -111,12 +111,14 @@ setup() {
   export PATH="$STUB:$PATH"
 
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
-  R="$CC_POSTLAND_REPO"
+  # Guarded at the BINDING: `git -C ""` is a NO-OP, so an empty $CC_POSTLAND_REPO would write this
+  # fixture identity into the caller's repo. Guarding here proves $R for every use site below.
+  R="${CC_POSTLAND_REPO:?postland fixture: repo path required}"
   git init -q --bare "$ORIGIN"
   git clone -q "$ORIGIN" "$R" 2>/dev/null
   git -C "$R" symbolic-ref HEAD refs/heads/main
-  git -C "${R:?repo path required}" config user.email tester@example.com
-  git -C "${R:?repo path required}" config user.name tester
+  git -C "$R" config user.email tester@example.com
+  git -C "$R" config user.name tester
   mkdir -p "$R/tests"
   printf '@test "p" { true; }\n' > "$R/tests/ok.bats"   # a passing suite => green
   printf '#!/bin/bash\nexit 0\n' > "$R/foo.sh"; chmod +x "$R/foo.sh"

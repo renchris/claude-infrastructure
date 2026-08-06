@@ -12,7 +12,7 @@ setup() {
 mkgit() { # <dir> [<committer-epoch>]
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   : "${1:?mkgit: repo path required}"
-  mkdir -p "$1"; git -C "${1:?repo path required}" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
+  mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo seed > "$1/a.txt"; git -C "$1" add a.txt
   if [ -n "${2:-}" ]; then GIT_AUTHOR_DATE="@$2" GIT_COMMITTER_DATE="@$2" git -C "$1" commit -qm seed
   else git -C "$1" commit -qm seed; fi

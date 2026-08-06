@@ -13,7 +13,7 @@ setup() {
   HOOK="$REPO/hooks/dod-persist.sh"
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
-  git -C "${CWD:?repo path required}" init -q; git -C "$CWD" config user.email t@t; git -C "$CWD" config user.name t
+  git -C "$CWD" init -q; git -C "$CWD" config user.email t@t; git -C "$CWD" config user.name t
   echo x > "$CWD/f"; git -C "$CWD" add f; git -C "$CWD" commit -qm init
 }
 

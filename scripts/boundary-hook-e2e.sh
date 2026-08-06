@@ -25,7 +25,7 @@ export CC_BOUNDARY_REARM_DELTA=10
 
 REPO="$SBX/repo"; mkdir -p "$REPO"
 git -C "$REPO" init -q
-git -C "${REPO:?repo path required}" config user.email t@t; git -C "$REPO" config user.name t
+git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
 echo x > "$REPO/f"; git -C "$REPO" add f; git -C "$REPO" commit -qm init
 HEAD=$(git -C "$REPO" rev-parse HEAD)
 GITDIR=$(git -C "$REPO" rev-parse --git-common-dir); case "$GITDIR" in /*) ;; *) GITDIR="$REPO/$GITDIR";; esac

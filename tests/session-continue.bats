@@ -197,7 +197,7 @@ mkuser_tx_string() {
 @test "(G-P6-6b) an armed session-continue sentinel SUPPRESSES boundary-handoff (double-inject killed)" {
   local BHOOK="$REPO/hooks/boundary-handoff.sh"
   local BWT="$BATS_TEST_TMPDIR/brepo"; mkdir -p "$BWT"
-  git -C "${BWT:?repo path required}" init -q; git -C "$BWT" config user.email t@t; git -C "$BWT" config user.name t
+  git -C "$BWT" init -q; git -C "$BWT" config user.email t@t; git -C "$BWT" config user.name t
   echo x > "$BWT/f"; git -C "$BWT" add f; git -C "$BWT" commit -qm init
   local HEAD GITDIR; HEAD="$(git -C "$BWT" rev-parse HEAD)"
   GITDIR="$(git -C "$BWT" rev-parse --git-common-dir)"; case "$GITDIR" in /*) ;; *) GITDIR="$BWT/$GITDIR";; esac
