@@ -98,6 +98,92 @@
 #   of the three shapes breaking while another still matches — is caught where it belongs, by the
 #   per-shape fixtures in --selftest, which is also calibration-free.
 #
+# RULE 5 (the non-$HOME seam) — rule 1's failure with the seam moved, and the one rule 1 is blind to
+# BY CONSTRUCTION. Rule 1 asks a single question: does setup() fixture $HOME? A suite can answer YES
+# from the day it was written and STILL run against the operator's live machine, because a subject's
+# state does not have to resolve under ~. Two shapes do not, and both are measured, not supposed:
+#
+#   5a  an ABSOLUTE /tmp-family default.  bin/cc-blockers has PERMPEND_DIR="${CC_PERMPEND_DIR:-
+#       /tmp/cc-permission-pending}". A fixtured $HOME does not redirect that one character.
+#   5b  a BARE NAME resolved on PATH, in command position.  bin/cc-blockers has
+#       ACCOUNTS_BIN="${CC_BLOCKERS_ACCOUNTS_BIN:-claude-accounts}" and then runs "$ACCOUNTS_BIN" —
+#       so the suite EXECUTES the operator's DEPLOYED tool (memory
+#       unfixtured-sensor-executes-the-deployed-subject).
+#
+# THE INCIDENT THAT GENERATED IT (a514d3b0, 2026-08-06): tests/cc-relogin-status.bats fixtured $HOME
+# in setup() from birth. It nonetheless counted the operator's LIVE pending approvals — every
+# session waiting on a permission prompt added a `permission-pending` row to the same --json array
+# tests 21/22/23 asserted `length == 2` on, and a board with rows has no all-clear path, which is
+# 27. Four tests red on trunk, reproduced on a pristine detached origin/main with no local diff. The
+# same setup() had a second, latent breach of shape 5b: it EXECUTED the deployed claude-accounts
+# once per test. THIS LINT REPORTED THAT SUITE CLEAN BEFORE AND AFTER THE FIX — rule 1 asks about
+# $HOME and nothing else, so neither seam was inside anything it could see.
+#
+# WHY THE REMEDY IS ALWAYS SAFE, which is what makes an imprecise rule affordable here. Rules 2-4
+# demand a specific position because a wrong one changes what the suite tests. Rule 5's remedy is to
+# point a seam at a scratch path under $BATS_TEST_TMPDIR, and that is never WRONG — at worst it
+# pins a seam the suite would not have reached. a514d3b0's second seam is the argument in one line:
+# it was latent that day (the fixtures wrote `login_expires_at` while the gate read `.deadline`, so
+# it failed open) and one field away from deciding the suite's verdict by live login state. A pin
+# costs one line and converts "latent" into "cannot".
+#
+# MEASURED BEFORE IT WAS ARMED — the backlog item that filed this rule made that a precondition,
+# citing b59eb997d035, where ONE over-broad hermeticity assertion kept 14 consecutive green stamps
+# red and fail-closed deploy-live. Against trunk, 299 suites — every figure below read back out of
+# THIS file's own extractor, not out of the survey script that proposed the rule (they disagreed:
+# the survey missed the anchor seam and predated 14 commits of trunk):
+#   * the seam table is 19 seams of shape 5a and 7 of shape 5b, over 18 tools;
+#   * 61 suites violate — 39 of which are $HOME-hermetic today, i.e. exactly the blind spot;
+#   * ONE tool dominates: scripts/handoff-fire.sh accounts for 126 of the 154 (suite,seam) pairs.
+# That last figure was checked rather than accepted, because a rule that is 82% one tool is usually
+# measuring the tool and not the class. It is not: handoff-fire.sh:2842-2849 READS
+# ACCOUNT_SWEEP_STAMP (default /tmp/handoff-account-sweep.json) and, when it is younger than the
+# 60s throttle, REUSES the operator's live sweep instead of running its own. So which branch 44
+# suites take depends on whether the operator happened to fire a handoff in the last minute. That is
+# rule 1's non-determinism precisely, on a path reached by default (only HANDOFF_ACCOUNT_SWEEP=off
+# skips it).
+#
+# CORRECTION TO THE FILING, recorded because the ledger should not keep a wrong citation: the item
+# also offered fe21305312ec (tests/cc-inbox-guard.bats forking the real it2) as this class. It is
+# not. bin/cc-inbox-guard:45 reads IT2="${CC_INBOX_GUARD_IT2:-$HOME/.claude/bin/it2}" — a $HOME
+# default, so a fixtured $HOME already absents it. That suite forks the real it2 because it is
+# grandfathered under RULE 1, and rule 1 is the rule that fixes it.
+#
+#   SCOPE, and it is deliberately the WEAKER of the two available tests. A suite is in scope for
+#   tool T iff its COMMENT-STRIPPED text names T's path (`/bin/T`, `/scripts/T.sh`, `/hooks/T.sh`);
+#   it is then required to assign each of T's 5a/5b seams in setup()/setup_file(). Textual, exactly
+#   like references_fire() — no reachability analysis, so the rule OVER-fires where a seam sits
+#   behind a precondition the suite has already fixtured. That is not a hypothetical: this rule
+#   reports tests/cc-relogin-status.bats — the suite a514d3b0 FIXED — still violating, on
+#   CC_DISPATCH_LOG, which bin/cc-blockers reaches only via a `cc-dispatch` actor row the suite's
+#   already-fixtured CC_REAPER_IDL cannot contain. It is grandfathered below as the KNOWN over-fire
+#   and named here so the floor is a stated property and not a surprise.
+#   Comment-stripping is the one place scope is TIGHTENED relative to rule 2, and it is free: a
+#   suite that only NAMES a tool in prose executes nothing.
+#   Per-test assignment does NOT count, for rule 1's reason verbatim — it leaves every other test in
+#   the file pointed at live state.
+#
+#   THE SEAM TABLE IS TREE-DERIVED AND THE EXTRACTOR NEVER READS THE MACHINE. No `command -v`, no
+#   PATH resolution, no stat of an absolute default: shape 5b is recognised by the default matching
+#   a tool THIS REPO SHIPS (bin/<d>, scripts/<d>[.sh], hooks/<d>[.sh]). A lint that resolved the
+#   operator's PATH to reach a verdict would be committing the defect it exists to catch — and it
+#   would also be wrong, since `timeout` is /usr/bin on one box and Homebrew coreutils on the next.
+#   The HOLDER matters, not just the seam: cc-blockers assigns the seam to ACCOUNTS_BIN and runs
+#   "$ACCOUNTS_BIN", so 5b requires the ASSIGNMENT TARGET to appear in command position. Without
+#   that test, `STRICT_TOOLS="${CC_PARITY_STRICT:-claude-accounts}"` (a LIST of tool names) and
+#   `PAGE_KEY="${CC_NIGHTLY_PAGE_KEY:-nightly-regression}"` (a string) both read as executions —
+#   measured, they were 9 of the 16 shape-5b candidates before the holder test was added.
+#
+#   THE EXTRACTOR IS ANCHORED, not counted — rule 4's argument, and its wording, apply unchanged.
+#   THIS script carries CC_HERM_SEAM_SELFPROBE below, a real shape-5a seam that exists for no other
+#   purpose, so wherever this file sits inside the scanned seam root the extractor must find it. If
+#   it cannot see its own, it is broken and the run is a LOUD non-verdict instead of a vacuous
+#   green. A floor (`seams < 20`) could not say that without making every smaller tree unlandable.
+#
+#   Rule 5's grandfather list (EMBEDDED_SEAM_ALLOWLIST) ships with the 61 measured above, under the
+#   same contract as rules 1-2 — ONLY EVER DELETE LINES; pinning a suite's seams without deleting
+#   its line is a RED. 61 of 299 is a fifth of the tree, against rule 1's 109 of 118 when it landed.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
@@ -109,6 +195,12 @@
 #   CC_HERM_SELFTEST_ALLOWLIST overrides rule 4's embedded allowlist (same set-but-empty semantics)
 #   CC_HERM_SELFTEST_RULE=off  kill switch — disables rule 4 entirely, leaving rules 1-3 untouched
 #   CC_HERM_SELFTEST_ROOT      overrides the repo root rule 4 scans (default: this script's ROOT)
+#   CC_HERM_SEAM_ALLOWLIST     overrides rule 5's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_SEAM_RULE=off      kill switch — disables rule 5 entirely, leaving rules 1-4 untouched
+#   CC_HERM_SEAM_ROOT          overrides the repo root rule 5 derives its SEAM TABLE from
+#                              (default: this script's ROOT). The scan dir stays lint_dir's
+#                              positional argument — the table's population and the suites' are
+#                              different sets, exactly as for rule 4.
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -349,6 +441,181 @@ SELFTEST_CONST_RE='(^|[[:space:];&|(])((>>?[[:space:]]*"?|(mkdir|touch|tee|insta
 # collide with a concurrent copy of itself, so demanding `mktemp` of it would be a rule firing on
 # everything — which passes every RED assertion while proving nothing.
 SELFTEST_CREATES_RE='(^|[[:space:];&|(])(>>?[[:space:]]|mkdir([[:space:]]|$)|touch([[:space:]]|$)|tee([[:space:]]|$))'
+
+# ── RULE 5's ratchet: suites naming a tool that carries a non-$HOME seam, without assigning it in
+# setup(). ONLY EVER DELETE LINES FROM THIS LIST. Derived AGAINST TRUNK at the last possible moment,
+# for the reason rules 2-4 record — a list read earlier ships stale, i.e. RED on its first run.
+# A THIRD list rather than a merge, for rule 2's reason verbatim: the rules are independent (a suite
+# can be $HOME-hermetic and seam-exposed, or the reverse), and one shared list could only shrink
+# when every rule was satisfied at once — a ratchet that ratchets a quarter as often.
+# tests/cc-relogin-status.bats is the KNOWN OVER-FIRE, kept deliberately and named in RULE 5's
+# header: a514d3b0 fixed it, and it is listed here only because CC_DISPATCH_LOG sits behind a
+# precondition its already-fixtured CC_REAPER_IDL cannot satisfy. A rule with a stated floor needs
+# its false positive PINNED as a control, not quietly excluded (memory
+# threshold-must-separate-fatal-from-survived).
+EMBEDDED_SEAM_ALLOWLIST="$(cat <<'SEAMALLOW'
+cc-backlog.bats
+cc-blockers-fleet.bats
+cc-blockers-teammate-reap.bats
+cc-blockers.bats
+cc-classify.bats
+cc-relogin-status.bats
+claude-accounts-core.bats
+ctx-recycle-record.bats
+desk-arm-live.bats
+desk-invariant.bats
+desk-land.bats
+desk-recycle-durable.bats
+dispatch-cadence.bats
+fire-autonomy.bats
+fire-engagement.bats
+handoff-anchor-third-state.bats
+handoff-close-mail-guard.bats
+handoff-engage-scan-window.bats
+handoff-fire-capacity-gate.bats
+handoff-fire-completion-push.bats
+handoff-fire-failed-cleanup.bats
+handoff-fire-focus.bats
+handoff-fire-inject.bats
+handoff-fire-it2-bound.bats
+handoff-fire-kitty-daemon.bats
+handoff-fire-kitty.bats
+handoff-fire-pane-parked.bats
+handoff-fire-pane-proof.bats
+handoff-fire-payload-lint.bats
+handoff-fire-repo-resolution.bats
+handoff-fire-stamp-daemon-path.bats
+handoff-fire-tab-window-typing.bats
+handoff-fire-typed-cmd-correctable.bats
+handoff-fire-validate.bats
+handoff-lifecycle-record.bats
+handoff-orphaned-assignee.bats
+handoff-payload-gates.bats
+handoff-recycle-durable-cwd.bats
+handoff-recycle-engagement.bats
+handoff-selfclose-kitty-identity.bats
+handoff-selfclose-session-pin.bats
+handoff-selfclose-teammate-gate.bats
+handoff-selfclose-terminal-pin-order.bats
+handoff-selfclose.bats
+handoff-splitright.bats
+handoff-teardown-marker.bats
+it2-kitty-argv-spawn.bats
+it2-wrapper.bats
+kitty-divert-real-it2.bats
+kitty-split-launch-stamp.bats
+launcher-temp-hardening.bats
+lead-supervisor-page-verdict.bats
+lead-supervisor.bats
+notify-back.bats
+operator-surface-scope.bats
+session-continue.bats
+settings-dedup-stop.bats
+settings-drift.bats
+settings-hook-timeouts.bats
+ship-land.bats
+tsv-field-collapse.bats
+SEAMALLOW
+)"
+
+# Rule 5's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim —
+# lint_dir's ARITY is load-bearing on the own-scope seam. `-` not `:-`, so set-but-EMPTY means
+# "grandfather nothing".
+SEAM_ALLOW="${CC_HERM_SEAM_ALLOWLIST-$EMBEDDED_SEAM_ALLOWLIST}"
+SEAM_RULE="${CC_HERM_SEAM_RULE:-on}"
+SEAM_ROOT="${CC_HERM_SEAM_ROOT:-$ROOT}"
+
+# THE EXTRACTOR'S ANCHOR — a real shape-5a seam this script carries BY CONSTRUCTION, so that
+# whenever this file sits inside the scanned seam root the extractor must find it. It is read by
+# nothing: its whole job is to be found (rule 4's anchor argument, applied to rule 5's extractor).
+# A count could not do this work — see RULE 5's header and rule 4's THE EXTRACTOR CONTROL.
+# shellcheck disable=SC2034  # deliberately inert — the extractor's positive control, not a setting
+SEAM_SELF_ANCHOR="${CC_HERM_SEAM_SELFPROBE:-/tmp/cc-herm-seam-anchor}"
+SEAM_ANCHOR_VAR="CC_HERM_SEAM_SELFPROBE"
+
+# An assignment that opens a seam: HOLDER="${SEAM:-DEFAULT}" at the head of a line, `export`
+# tolerated. Anchored at ^ because a seam that decides a tool's state is a top-level assignment;
+# a `${VAR:-x}` used inline as an argument is a fallback, not a configured state root.
+SEAM_ASSIGN_RE='^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*="?\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]*\}'
+
+SEAM_TABLE=""          # tool <TAB> seam-var <TAB> 5a|5b <TAB> default — built once per ROOT
+SEAM_TABLE_ROOT=""     # the root the cached table was built FROM. Keying the cache on the root and
+                       # not on a bare built-flag is what stops a second lint_dir call, against a
+                       # different SEAM_ROOT, from silently reusing the first one's table — which is
+                       # exactly what --selftest does (fixture root, then the real one).
+SEAM_TOOLS=""          # the DISTINCT repo-relative tool paths in the table, space-separated
+SEAM_TOOLS_RE=""       # those same paths as ONE anchored alternation, for the per-suite pre-filter
+SEAM_ANCHOR_SEEN=0
+
+# Build the seam table from <root>'s tool dirs. TREE-DERIVED ONLY — no `command -v`, no PATH read,
+# no stat of a default: see RULE 5's header for why a lint that resolves the operator's PATH is
+# committing the defect it lints. Sets SEAM_ANCHOR_SEEN when it finds its own anchor.
+build_seam_table() {
+  local root="$1" f holder rest n d line rel contributed
+  SEAM_TABLE=""; SEAM_TOOLS=""; SEAM_TOOLS_RE=""; SEAM_ANCHOR_SEEN=0; SEAM_TABLE_ROOT="$root"
+  for f in "$root"/bin/* "$root"/scripts/*.sh "$root"/hooks/*.sh; do
+    [ -f "$f" ] || continue
+    contributed=0
+    # A heredoc-fed `while` is NOT a subshell, so `contributed` (and SEAM_TABLE) survive the loop.
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      line="${line#"${line%%[![:space:]]*}"}"; line="${line#export }"
+      holder="${line%%=*}"
+      rest="${line#*=}"; rest="${rest#\"}"; rest="${rest#\$\{}"; rest="${rest%\}}"
+      n="${rest%%:-*}"; d="${rest#*:-}"
+      [ "$n" = "$SEAM_ANCHOR_VAR" ] && SEAM_ANCHOR_SEEN=1
+      # shellcheck disable=SC2016  # the patterns match the LITERAL strings $HOME / ~/ ; expansion would break them
+      case "$d" in
+        # A $HOME-rooted default is RULE 1's business and must never be claimed by rule 5 —
+        # double-reporting one breach under two rules teaches nobody anything and inflates two
+        # ratchets at once.
+        *'$HOME'*|*'~/'*) continue ;;
+        /private/tmp/*|/tmp/*|/var/tmp/*)
+          SEAM_TABLE="$SEAM_TABLE${SEAM_TABLE:+
+}$f	$n	5a	$d"; contributed=1 ;;
+        # Absolute-but-not-/tmp (/bin/launchctl, /usr/bin/python3) is a SYSTEM tool on a read-only
+        # volume, not live operator state; a default reached through another variable is that
+        # variable's seam, judged where IT is assigned.
+        /*|*'$'*|'') continue ;;
+        */*) continue ;;
+        *[!a-zA-Z0-9._-]*) continue ;;
+        *)
+          # shape 5b: the default names a tool THIS REPO SHIPS, and the HOLDER is used in command
+          # position. Both halves are required — see RULE 5's header on STRICT_TOOLS/PAGE_KEY.
+          { [ -f "$root/bin/$d" ] || [ -f "$root/scripts/$d" ] || [ -f "$root/scripts/$d.sh" ] ||
+            [ -f "$root/hooks/$d" ] || [ -f "$root/hooks/$d.sh" ]; } || continue
+          # shellcheck disable=SC2016  # the quoted halves are a LITERAL pattern; only $holder interpolates
+          grep -qE '(^|[[:space:];&|(]|\$\()[[:space:]]*"\$(\{)?'"$holder"'(\})?"?[[:space:]]' "$f" 2>/dev/null || continue
+          SEAM_TABLE="$SEAM_TABLE${SEAM_TABLE:+
+}$f	$n	5b	$d"; contributed=1 ;;
+      esac
+    done <<EOF
+$(grep -oE "$SEAM_ASSIGN_RE" "$f" 2>/dev/null | sort -u)
+EOF
+    # Record the tool only if it CONTRIBUTED a row — SEAM_TOOLS is the pre-filter's population, so
+    # a seamless tool must not appear in it or the filter stops filtering anything.
+    if [ "$contributed" = 1 ]; then
+      rel="${f#"$root/"}"
+      SEAM_TOOLS="$SEAM_TOOLS $rel"
+      SEAM_TOOLS_RE="$SEAM_TOOLS_RE${SEAM_TOOLS_RE:+|}$(printf '%s' "$rel" | sed 's/\./\\./g')"
+    fi
+  done
+  SEAM_TOOLS="${SEAM_TOOLS# }"
+  # One alternation over every seam-bearing tool, and DELIBERATELY WITHOUT the trailing boundary
+  # class the exact scope test applies. A cost gate must be STRICTLY WEAKER than the test it gates,
+  # on every axis, or it stops being a filter and starts being the answer. Two ways that bit here,
+  # both measured on the first version, which did carry the boundary:
+  #   * CORRECTNESS — grep matches within a line and the line excludes its newline, so `[^A-Za-z0-9_-]`
+  #     had nothing to match for a suite naming a tool at END OF LINE, and the suite was skipped
+  #     entirely. The exact test does not have that problem (it appends a newline to the whole text).
+  #   * PROVABILITY — carrying the same rule made the gate equal-strength on that axis, so it
+  #     SHADOWED the exact test: deleting the boundary from seam_names_tool changed no verdict and
+  #     the name-boundary control passed against a mutant it was written to kill.
+  # `.` is still escaped, so `handoff-fire.sh` cannot match `handoff-fireXsh` — that is not a
+  # narrowing, just an escape.
+  [ -n "$SEAM_TOOLS_RE" ] && SEAM_TOOLS_RE="/($SEAM_TOOLS_RE)"
+  return 0
+}
 
 # The body of a tool's EMBEDDED selftest, comments stripped. Three shapes, matching what the tree
 # actually uses: a `selftest()` / `cmd_selftest()` function terminated by a bare `}` at column 0
@@ -628,6 +895,55 @@ selftest_state_unconfined() {
   return 1                        # fail-SAFE: 'confined' cannot fabricate a COLLISION
 }
 
+# RULE 5's SCOPE MATCH, factored out so the pre-filter and the real test cannot drift apart —
+# a superset filter that used a DIFFERENT boundary rule from the thing it filters for would drop
+# suites the rule was meant to judge, silently and only for whichever names disagreed.
+# 0 = $1 names $2 (a repo-relative tool path) · 1 = it does not. Pure bash: no fork, so no failure
+# mode, so no third state — which is why rule 5 needs only ONE retrying predicate, not two.
+# The trailing class-exclusion is what stops `bin/cc-context` matching `bin/cc-context-extra`; the
+# appended newline is what lets the same pattern also match at end-of-line.
+seam_names_tool() {
+  case "$1
+" in
+    *"/$2"[!A-Za-z0-9_-]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Is this suite in scope for rule 5 AT ALL? 0 = it names some seam-bearing tool · 1 = it does not.
+# Purely a COST GATE in front of the per-suite comment strip and setup extraction: it is a strict
+# SUPERSET of the exact scope test (stripping comments only ever REMOVES text), so skipping on a
+# miss cannot hide a violation. One grep over the raw file beats matching ~16 bash globs against a
+# 20-60KB string per suite — measured, the bash form made a full run SLOWER than no filter at all.
+# Fail-SAFE = 0 (in scope): an unreadable scope check must leave the suite to the exact predicates
+# below rather than silently excusing it, and CHECK_FAILED still forces exit 2.
+seam_referenced() {
+  local rc
+  for _ in 1 2 3; do
+    grep -qE "$SEAM_TOOLS_RE" "$1" 2>/dev/null; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ seam scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0
+}
+
+# Does the setup() text in $1 assign seam variable $2? 0 = yes · 1 = no.
+#
+# NOTE the asymmetry with rules 2-4's position predicates, which is deliberate: this one takes the
+# already-extracted setup TEXT rather than a filename, and matches it with bash's own `=~`. It forks
+# nothing, so it cannot fail, so it needs no retry and no third state — strictly better than a retry
+# loop. That is affordable only because the caller hoists the extraction: a suite is judged on
+# several seams, and re-running awk+sed once per seam (rather than once per suite) was the rule's
+# largest cost by a wide margin.
+is_seam_assigned() {
+  [[ "$1" =~ (^|[[:space:]\;\&])(export[[:space:]]+)?"$2"= ]]
+}
+
 # 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
 in_allowlist() {
   local rc
@@ -683,9 +999,25 @@ lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base new_leak=0 stuck=0 seen=0 other=0
   local fire_allow="$FIRE_ALLOW" fire_leak=0 fire_stuck=0
   local orphan_allow="$ORPHAN_ALLOW" orphan_leak=0 orphan_stuck=0
+  local seam_allow="$SEAM_ALLOW" seam_leak=0 seam_stuck=0
+  local seam_text="" seam_setup="" seam_why="" s_tool s_var s_cls s_def
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
+  # RULE 5's seam table, built ONCE per run off SEAM_ROOT — not off "$dir". The two populations are
+  # different sets (tools vs suites), the same split rule 4's own pass exists to keep.
+  if [ "$SEAM_RULE" = on ] && [ "$SEAM_TABLE_ROOT" != "$SEAM_ROOT" ]; then
+    build_seam_table "$SEAM_ROOT"
+    # THE EXTRACTOR CONTROL, and deliberately NOT a count — rule 4's argument verbatim. This script
+    # carries SEAM_SELF_ANCHOR by construction, so if it is inside the scanned root the extractor
+    # must have found it. Absent the anchor, an empty table is the honest answer for a small tree.
+    if [ -f "$SEAM_ROOT/scripts/$(basename "$SELF")" ] && [ "$SEAM_ANCHOR_SEEN" -eq 0 ]; then
+      echo "test-hermeticity-lint: ⛔ the seam extractor did not detect its OWN anchor ($SEAM_ANCHOR_VAR) in $SEAM_ROOT/scripts/$(basename "$SELF")" >&2
+      echo "  That file carries a shape-5a seam by construction, so this is the EXTRACTOR failing, not a clean tree." >&2
+      echo "  Every rule-5 verdict in this run is therefore void; do not read it as a clean bill." >&2
+      return 2
+    fi
+  fi
   for f in "$dir"/*.bats; do
     [ -e "$f" ] || continue
     seen=$((seen + 1)); base="$(basename "$f")"
@@ -758,6 +1090,60 @@ lint_dir() {
         fi
       fi
     fi
+    # ── RULE 5, applied INDEPENDENTLY of rules 1-3 (a suite can violate any, all, or none) and ONLY
+    # to suites naming a tool that HAS a non-$HOME seam. A suite naming no such tool is out of scope
+    # and must never appear here — that scoping is the whole reason the seam table is consulted
+    # per-tool rather than the rule simply demanding a pin of everyone.
+    if [ "$SEAM_RULE" = on ] && [ -n "$SEAM_TABLE" ]; then
+      seam_why=""
+      # The pre-filter runs FIRST and everything below it is hoisted behind it: ~4 of every 5 suites
+      # name no seam-bearing tool, and those now cost one grep instead of a comment strip plus a
+      # setup extraction. Both of the remaining extractions are done ONCE per suite, not once per
+      # seam — a suite is judged on several seams, and re-running awk+sed for each was the rule's
+      # dominant cost.
+      if seam_referenced "$f"; then
+      # Comment-stripped through the SHARED code_lines(), never a private sed. A suite that only
+      # NAMES a tool in prose executes nothing — the lesson b00a5010 landed for rules 2 and 3's
+      # scope halves after their pin halves had been hardened alone, and the reason that fix
+      # introduced one filter for every predicate to call: the halves of a rule must not be able to
+      # disagree about what counts as evidence, and neither must the rules.
+      seam_text="$(code_lines "$f" 2>/dev/null)"
+      seam_setup="$(setup_statements "$f")"
+      while IFS='	' read -r s_tool s_var s_cls s_def; do
+        [ -n "$s_tool" ] || continue
+        seam_names_tool "$seam_text" "${s_tool#"$SEAM_ROOT/"}" || continue
+        is_seam_assigned "$seam_setup" "$s_var" && continue
+        # BRACED deliberately: a bare `$s_cls→` makes bash read the arrow's first UTF-8 byte as part
+        # of the NAME, and under `set -u` that is an unbound-variable abort which kills this loop
+        # mid-suite — silently, because the rule's only output is the line it never reaches.
+        seam_why="$seam_why${seam_why:+, }${s_var} (${s_cls}→${s_def})"
+      done <<EOF
+$SEAM_TABLE
+EOF
+      fi
+      if [ -z "$seam_why" ]; then
+        if in_allowlist "$base" "$seam_allow"; then
+          if in_own "$base" "$own" "$own_scoped"; then
+            # shellcheck disable=SC2016  # "$HOME" is prose here — the message names the variable, not its value
+            printf '  RATCHET-SEAM %s pins its non-$HOME seams now — delete its SEAM allowlist line\n' "$base"
+            seam_stuck=$((seam_stuck + 1))
+          else
+            printf '  ratchet-seam? %s pins its seams but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$seam_allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          # shellcheck disable=SC2016  # ditto — prose naming the variable, not an expansion
+          printf '  SEAM     %s: setup() leaves a non-$HOME seam unpinned — %s\n' "$base" "$seam_why"
+          seam_leak=$((seam_leak + 1))
+        else
+          # shellcheck disable=SC2016  # ditto
+          printf '  seam?    %s leaves a non-$HOME seam unpinned (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
   done
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
@@ -801,7 +1187,23 @@ lint_dir() {
     echo "test-hermeticity-lint: ⛔ $orphan_stuck suite(s) above pin LCW_ORPHAN_CLOSE but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ORPHAN_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck)) -eq 0 ] || return 1
+  if [ "$seam_leak" -gt 0 ]; then
+    # shellcheck disable=SC2016  # "$HOME" is prose here — the message names the variable, not its value
+    echo "test-hermeticity-lint: ⛔ $seam_leak suite(s) above name a tool whose state does NOT resolve under \$HOME."
+    # shellcheck disable=SC2016
+    echo "  WHY: fixturing \$HOME does not redirect an ABSOLUTE /tmp default (5a) or a BARE NAME the"
+    echo "       subject then EXECUTES off the operator's PATH (5b). tests/cc-relogin-status.bats"
+    echo "       fixtured \$HOME from birth and still counted the operator's live pending approvals"
+    echo "       and ran their deployed claude-accounts once per test (a514d3b0)."
+    echo "  Fix: in setup(), \`export <SEAM>=\"\$BATS_TEST_TMPDIR/<name>\"\` for each seam named above —"
+    echo "       an ABSENT path is usually right, since these sensors fail open on one. Do NOT add to"
+    echo "       the seam allowlist."
+  fi
+  if [ "$seam_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $seam_stuck suite(s) above pin their non-\$HOME seams but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_SEAM_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
   local fire_note orphan_note
@@ -815,7 +1217,13 @@ lint_dir() {
   else
     orphan_note="orphan-close rule OFF (CC_HERM_ORPHAN_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, 0 new leaks."
+  local seam_note
+  if [ "$SEAM_RULE" = on ]; then
+    seam_note="$(printf '%s\n' "$seam_allow" | grep -c .) grandfathered (non-\$HOME seam)"
+  else
+    seam_note="non-\$HOME seam rule OFF (CC_HERM_SEAM_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, 0 new leaks."
   return 0
 }
 
@@ -1170,6 +1578,152 @@ selftest() {
 }
 F
   done
+  # ── RULE 5 fixtures: a fixture SEAM ROOT (tools) plus suite dirs that name into it. Two
+  # populations again, so both are fixtured — a rule-5 assertion must never be answerable by the
+  # real checkout, which is what would happen if the seam table were left pointing at $ROOT.
+  #
+  # THE SELF-REFERENCE TRAP, rule 4's verbatim and one rule later: this block is inside the region
+  # whose lines the SEAM extractor reads, so a heredoc line spelling `NAME="${SEAM:-/tmp/…}"` would
+  # be harvested as a REAL seam of THIS script — permanently, and it would then oblige every suite
+  # naming this script to pin a variable that exists only as a fixture. seam_line() keeps the holder
+  # and the default from ever being adjacent here; the fixture on disk is the exact shape under test.
+  # shellcheck disable=SC2059  # the format string IS the payload — see constant_line() above
+  seam_line() { printf "$1" "$2" "$3" "$4"; }
+  mkdir -p "$d/r5root/bin" "$d/r5root/scripts" "$d/r5root/hooks" \
+           "$d/r5leak" "$d/r5execleak" "$d/r5pin" "$d/r5scope" "$d/r5pertest" \
+           "$d/r5comment" "$d/r5prefix" "$d/r5holder"
+  # Every non-seam line comes from a QUOTED heredoc, exactly as rule 4's fixtures do: it cannot
+  # expand, it cannot lie, and — unlike the equivalent `echo '…$x…'` — it does not trip SC2016,
+  # which this repo does not waive and ship-land's gate enforces at `info`.
+  # shape 5a: an ABSOLUTE /tmp default nothing about $HOME can redirect.
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # the format string IS the payload — see seam_line() above
+    seam_line '%s="${%s:-%s/zz-seam-state}"\n' DIR ZZ_SEAM_DIR /tmp
+    cat <<'F'
+echo "$DIR"
+F
+  } >"$d/r5root/bin/zz-seamtool"
+  # shape 5b: a BARE NAME the fixture root SHIPS (bin/zz-seamtool, above), with the HOLDER in
+  # command position. Both halves are required, and the holder half is what the r5holder control
+  # below isolates.
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # the format string IS the payload — see seam_line() above
+    seam_line '%s="${%s:-%s}"\n' BIN ZZ_SEAM_BIN zz-seamtool
+    cat <<'F'
+"$BIN" --probe
+F
+  } >"$d/r5root/bin/zz-exectool"
+  # THE HOLDER CONTROL: same bare name, same shipped tool — but the holder is only ever PRINTED, so
+  # nothing is executed and rule 5 must not reach it. Without this, the holder test could be inert
+  # and every 5b RED above would still pass (`STRICT_TOOLS`/`PAGE_KEY` in the real tree, measured).
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # the format string IS the payload — see seam_line() above
+    seam_line '%s="${%s:-%s}"\n' LABEL ZZ_SEAM_LABEL zz-seamtool
+    cat <<'F'
+printf '%s\n' "$LABEL"
+F
+  } >"$d/r5root/bin/zz-labeltool"
+  # THE SCOPE CONTROL: a tool with NO seam at all. A suite naming only this must stay GREEN, without
+  # which "r5leak went red" proves nothing about scoping.
+  cat >"$d/r5root/bin/zz-noseam" <<'F'
+#!/bin/bash
+echo no-seam
+F
+  # Every rule-5 suite fixture is $HOME-hermetic, fire-free and close-leg-free on purpose, so a
+  # rule-5 verdict can never be rules 1-3 leaking through: the only axis that varies is which tool
+  # the suite names and where the seam is assigned.
+  cat >"$d/r5leak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-seamtool"
+}
+@test "x" { run bash "$T"; }
+F
+  cat >"$d/r5execleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-exectool"
+}
+@test "x" { run bash "$T"; }
+F
+  cat >"$d/r5pin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export ZZ_SEAM_DIR="$BATS_TEST_TMPDIR/seam"
+  T="$REPO/bin/zz-seamtool"
+}
+@test "x" { run bash "$T"; }
+F
+  cat >"$d/r5scope/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-noseam"
+}
+@test "x" { run bash "$T"; }
+F
+  # Per-test assignment does NOT count — rule 1's reason verbatim: it leaves every OTHER test in the
+  # file pointed at live state.
+  cat >"$d/r5pertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-seamtool"
+}
+@test "a" { ZZ_SEAM_DIR="$BATS_TEST_TMPDIR/seam" run bash "$T"; }
+@test "b" { run bash "$T"; }
+F
+  # THE COMMENT-STRIP CONTROL. Rule 5 strips comments before the SCOPE test — a suite that only
+  # NAMES a tool in prose executes nothing — so this must be GREEN. It is the mirror of rule 2's and
+  # rule 4's prose-match regressions: there a comment must not satisfy a POSITION test, here a
+  # comment must not trigger a SCOPE test.
+  cat >"$d/r5comment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # unrelated: the roster this suite asserts on is also read by $REPO/bin/zz-seamtool
+  T="$REPO/bin/zz-noseam"
+}
+@test "x" { run bash "$T"; }
+F
+  cat >"$d/r5holder/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-labeltool"
+}
+@test "x" { run bash "$T"; }
+F
+  # THE NAME-BOUNDARY CONTROL: `zz-seamtool-extra` must not be matched by `zz-seamtool`'s seams.
+  # Without the trailing class-exclusion in the scope pattern, every tool whose name PREFIXES
+  # another would drag the other's suites into scope.
+  cat >"$d/r5prefix/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-seamtool-extra"
+}
+@test "x" { run bash "$T"; }
+F
+  # RULE 5's ANCHOR fixtures, rule 4's pair verbatim: r5anchor carries a file at this script's own
+  # path that does NOT declare the anchor seam — which is what a broken extractor looks like from
+  # the inside (the anchor is present and undetected) — and r5anchor_ok carries a REAL copy, so the
+  # two differ only in whether the extractor can see it.
+  mkdir -p "$d/r5anchor/bin" "$d/r5anchor/scripts" "$d/r5anchor_ok/bin" "$d/r5anchor_ok/scripts"
+  cat >"$d/r5anchor/scripts/$(basename "$SELF")" <<'F'
+#!/bin/bash
+echo "a lint that declares no seam anchor at all"
+F
+  cp "$SELF" "$d/r5anchor_ok/scripts/$(basename "$SELF")"
   fails=0
   # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
   # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
@@ -1184,6 +1738,21 @@ F
   # Rule 4's knobs, pinned for that same reason.
   SELFTEST_RULE=on
   SELFTEST_ALLOW=""
+  # NOTE the matching `CC_HERM_SEAM_RULE=off` on every rules-1-4 ENTRYPOINT assertion below. Pinning
+  # the in-process global is not enough: those cases re-exec "$SELF" as a child, which re-reads the
+  # env and defaults rule 5 back ON against the REAL $ROOT. Measured while writing this — three
+  # rule-1/2 assertions went RED because their fixtures name handoff-fire.sh, whose three non-$HOME
+  # seams they of course do not pin. A rule-5 verdict was answering a rule-2 question, through the
+  # one door the in-process pin does not cover.
+  #
+  # Rule 5's knobs are pinned the OTHER way — OFF — and that asymmetry is load-bearing. Rules 1-4's
+  # fixtures name real tools (handoff-fire.sh, lead-crash-watchdog.sh), and handoff-fire.sh carries
+  # three non-$HOME seams, so an ON rule 5 would convict those fixtures and every rule-1/2/3 GREEN
+  # assertion below would go RED for a reason that is not its subject — this file's own §RULE 4
+  # warning about a rule-4 verdict answering a rule-1 question, one rule later. Each rule-5
+  # assertion turns it on IN A SUBSHELL, against the FIXTURE seam root, so nothing leaks either way.
+  SEAM_RULE=off
+  SEAM_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -1195,9 +1764,11 @@ F
   # Both embedded allowlists are judged here, so a stale entry in EITHER ratchet is caught by (e).
   FIRE_ALLOW="$EMBEDDED_FIRE_ALLOWLIST"
   ORPHAN_ALLOW="$EMBEDDED_ORPHAN_ALLOWLIST"
+  SEAM_RULE=on; SEAM_ALLOW="$EMBEDDED_SEAM_ALLOWLIST"; SEAM_ROOT="$ROOT"
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
   FIRE_ALLOW=""
   ORPHAN_ALLOW=""
+  SEAM_RULE=off; SEAM_ALLOW=""
   case "$rc_real" in
     0) ;;
     2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
@@ -1245,7 +1816,7 @@ F
   # rule-4 verdict about the checkout would silently become this rule-1/2 assertion's answer.
   # Rule 4 gets its own entrypoint parity pair at (a4)-(m4), where it is pinned ON.
   ( unset CC_HERM_OWN; CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_OWN="" CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_OWN="" CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
   # (n) COULD-NOT-CHECK is a non-verdict, not a leak — and own-scope must not paper over it.
   # Simulates the real incident: a `grep` that cannot RUN (rc>1). Shadowing grep in a subshell
   # reproduces exactly what fork exhaustion / a reaped child does to these predicates. Before the
@@ -1317,10 +1888,10 @@ F
   #     variable. Rule 1's allowlist is emptied in both so only rule 2 can produce the verdict.
   #     CC_HERM_FIRE_RULE=on is passed explicitly so an ambient kill switch in the CALLER's
   #     environment cannot neuter the child and turn (y)'s RED half into an unexplained failure.
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   # (z) the kill switch turns rule 2 off — and ONLY rule 2 (rule 1 still judges the same tree).
-  ( CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
 
   # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
   # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
@@ -1402,12 +1973,55 @@ F
   # (m4) entrypoint parity for rule 4's two seams, and the kill switch with its positive control.
   #      The scan dir is the hermetic fixture with rule 1's allowlist emptied, so rule 1 contributes
   #      0 and only rule 4 can produce the verdict.
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="zz-tool" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="zz-tool" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
+
+  # ── RULE 5's assertions. Every one runs in a SUBSHELL that turns the rule on against the FIXTURE
+  # seam root: the globals stay off outside, so a rule-5 verdict can never answer a rule-1/2/3
+  # question and the real checkout can never answer a rule-5 one.
+  r5() { ( SEAM_RULE=on; SEAM_ROOT="$d/r5root"; SEAM_TABLE_ROOT=""; SEAM_ALLOW="$2"
+           lint_dir "$d/$1" "" >/dev/null 2>&1 ) }
+  # (a5) RED: a suite naming a tool with an ABSOLUTE /tmp seam, unpinned — a514d3b0's shape 5a.
+  r5 r5leak ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an unpinned shape-5a seam did not go RED"; fails=1; }
+  # (b5) RED: shape 5b — the subject EXECUTES a bare name off the operator's PATH.
+  r5 r5execleak ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an unpinned shape-5b seam did not go RED"; fails=1; }
+  # (c5) GREEN: the seam is assigned in setup().
+  r5 r5pin "" || { echo "SELFTEST FAIL: a suite pinning its seam did not go GREEN"; fails=1; }
+  # (d5) RED: per-test assignment leaves every OTHER test pointed at live state (rule 1's law).
+  r5 r5pertest ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PER-TEST seam assignment was accepted as a pin"; fails=1; }
+  # (e5) THE SCOPE CONTROL: a suite naming only a seamless tool. Without this, every RED above could
+  #      be a rule that simply fires on everything.
+  r5 r5scope "" || { echo "SELFTEST FAIL: a suite naming a tool with NO seam was dragged into scope"; fails=1; }
+  # (f5) THE COMMENT-STRIP CONTROL: a tool named only in PROSE executes nothing (rule 2's and rule
+  #      4's prose-match regressions, applied here to the SCOPE test).
+  r5 r5comment "" || { echo "SELFTEST FAIL: a tool named only in a COMMENT pulled the suite into scope"; fails=1; }
+  # (g5) THE NAME-BOUNDARY CONTROL: zz-seamtool's seams must not reach zz-seamtool-extra.
+  r5 r5prefix "" || { echo "SELFTEST FAIL: a tool name matched as a PREFIX of a different tool"; fails=1; }
+  # (g5b) THE HOLDER CONTROL: same bare name, same shipped tool, but the holder is only PRINTED. If
+  #       this goes red the holder test is inert and every shape-5b RED above is proving nothing —
+  #       the STRICT_TOOLS/PAGE_KEY false positives measured in the real tree.
+  r5 r5holder "" || { echo "SELFTEST FAIL: a bare-name seam whose holder is never EXECUTED was flagged as shape 5b"; fails=1; }
+  # (h5) GREEN when grandfathered, and (i5) RED when grandfathered AFTER being fixed — the two
+  #      halves of the ratchet contract, the second being what stops it decaying into an exemption list.
+  r5 r5leak "zz-fixture.bats" || { echo "SELFTEST FAIL: a grandfathered seam leak did not go GREEN"; fails=1; }
+  r5 r5pin "zz-fixture.bats"; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-allowlisted suite did not go RED (seam ratchet not shrinking)"; fails=1; }
+  # (j5) THE ANCHOR CONTROL, calibration-free: a seam root carrying this script's own path WITHOUT
+  #      the anchor seam is an EXTRACTOR failure, so the run is a NON-VERDICT (exit 2), never a
+  #      clean bill. (k5) is its paired GREEN — a real copy, whose anchor must be found.
+  ( SEAM_RULE=on; SEAM_ROOT="$d/r5anchor"; SEAM_TABLE_ROOT=""; SEAM_ALLOW=""
+    lint_dir "$d/herm" "" >/dev/null 2>&1 ); [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: a seam extractor blind to its OWN anchor did not produce a NON-VERDICT"; fails=1; }
+  ( SEAM_RULE=on; SEAM_ROOT="$d/r5anchor_ok"; SEAM_TABLE_ROOT=""; SEAM_ALLOW=""
+    lint_dir "$d/herm" "" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: a WORKING seam anchor (this script itself) was not detected"; fails=1; }
+  # (l5) entrypoint parity for all three of rule 5's env seams, with the kill switch's positive
+  #      control. The scan dir is the hermetic fixture with rule 1's allowlist emptied, so rule 1
+  #      contributes 0 and only rule 5 can produce the verdict.
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=on "$SELF" "$d/r5leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="zz-fixture.bats" CC_HERM_SEAM_RULE=on "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=off "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_RULE=off did not disable rule 5"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 56/56 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 80/80 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
