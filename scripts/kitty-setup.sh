@@ -37,6 +37,21 @@ REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.."
 KCONF_DIR="${CC_KITTY_CONFIG_DIR:-$HOME/.config/kitty}"
 BIN_DIR="${CC_KITTY_BIN_DIR:-$HOME/.claude/bin}"
 
+# ── BOUNDED osascript ────────────────────────────────────────────────────────────────────────────
+# §6's Accessibility probe is an AppleEvent into System Events, and an AppleEvent has no timeout of
+# its own (the full argument is in hooks/lib/osa.sh). That probe's target is the worst case for it:
+# an UNGRANTED System Events is exactly the process that can sit on TCC's own permission modal
+# rather than return, and --check is run unattended by install.sh and by the postland corpus, where
+# a hang is not a slow answer but a stuck gate. The probe is advisory (`info`, never `no`), so a CUT
+# costs one optional label line — the asymmetry that makes bounding it obviously right. $REPO above
+# already followed $0's symlink chain, which is what keeps the lib reachable when this script is
+# invoked through a per-file symlink.
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if   [ -r "$REPO/hooks/lib/osa.sh" ];         then . "$REPO/hooks/lib/osa.sh"
+elif [ -r "$HOME/.claude/hooks/lib/osa.sh" ]; then . "$HOME/.claude/hooks/lib/osa.sh"
+else osa_bounded() { timeout "${CC_OSA_TIMEOUT_S:-10}" "$@"; }
+fi
+
 # ── NON-CANONICAL-TREE GUARD ─────────────────────────────────────────────────────────────────────
 # REPO above is derived from $0, so this script links the live layer at WHATEVER TREE IT WAS RUN
 # FROM. postland-verify runs the corpus (and install.sh, which calls this script) inside a
@@ -561,7 +576,7 @@ fi
 # unlabeled "Move to Window 4" and can't tell which monitor that is (operator report, 2026-08-05).
 # Advisory only (`info`, never `no`): the menu is fully functional without this, just less legible.
 hdr "6. Accessibility permission (optional — physical window-position labels in the move menu)"
-if osascript -e 'tell application "System Events" to tell process "kitty" to get position of window 1' >/dev/null 2>&1; then
+if osa_bounded osascript -e 'tell application "System Events" to tell process "kitty" to get position of window 1' >/dev/null 2>&1; then
   ok "Accessibility granted — move-menu items show which physical window/display each is on"
 else
   info "not granted — move-menu items work, just without a position label"
