@@ -35,10 +35,28 @@
 # printed by its own tree test, and has a positive control proving a real call on an echo line is
 # still caught.
 #
+# EXEMPTION 3, the same class as the scan's own `^[^#]*` guard, in the other spelling: a line-leading
+# `//` COMMENT. `#` is one language's comment introducer, not the class "a comment cannot execute" —
+# enumerating spellings instead of the class is the defect this repo already carries a scar from, and
+# it convicted a healthy line on 2026-08-06 (bin/kitty-pane-menu-native.swift:5, a Swift comment
+# explaining why JXA was rejected, whose markdown backticks around `osascript -l JavaScript` read to
+# a SHELL-shaped scanner as command substitution). Rewording that prose would have satisfied the
+# grep and fixed nothing: a check that fires on healthy lines is one people learn to route around.
+# Stated in full at COMMENT_RE below. Two restrictions carry it, and neither is negotiable —
+# LINE-LEADING, because `//` mid-line is shell parameter expansion (`${p//a/b}`) or a URL scheme, and
+# exempting those would launder a real call sharing the line; and scoped BY EXTENSION to languages
+# where `//` runs to end of line, because in shell it does not comment at all — `// x; osascript -e …`
+# is a failed command followed by a REAL call. Both shapes have positive controls below. Widening
+# the language list is a deliberate act; omitting a language only leaves the scan strict, which is
+# the safe direction to be wrong in.
+#
 # RED-PROOF: fails against the pristine pre-change tree, where hooks/lib/osa.sh does not exist and
 # bin/screenshot-to-clipboard.sh:18 + bin/dia-cdp-launch.sh:322 are bare calls:
 #   t=$(mktemp -d); git archive eaa0cdeb | tar -x -C "$t"
 #   CC_OSA_SUBJECT_ROOT="$t" bats tests/osa-bounds.bats
+# Re-proved the same way for exemption 3 (2026-08-06): against the tree BEFORE scripts/kitty-setup.sh
+# was converted, this suite is red on the tree assertion ONLY, naming exactly that site — so the
+# exemption did not launder the real bug it landed alongside.
 #
 # DEAD-ASSERTION DISCIPLINE: bats bodies run under `set -eET`, and bash exempts `[[ ]]`, `(( ))` and
 # `! cmd` from errexit — a non-final occurrence of those is a DEAD assertion that always passes
@@ -86,8 +104,35 @@ ac22_scan_raw() { # <path>… → rows before the mention-exemption (see MENTION
 # Anchored past grep's own `path:line:` prefix so the restriction covers the whole source line.
 MENTION_RE='^[^:]*:[0-9]+:[[:space:]]*(echo|printf)[[:space:]]([^;&|`$]|\$[^(])*$'
 
+# EXEMPTION 3, stated rather than hidden: a line whose first non-blank characters are `//`, in a file
+# whose extension makes `//` a to-end-of-line comment. Nothing after it is code, so no process is
+# spawned and "bounding" it would edit documentation and fix nothing.
+#
+# THE RULE IS NOT "the line contains //". In shell that is `${p//a/b}` or `http://`, and honouring it
+# mid-line would exempt a real call sharing the line. It is not "the line starts with //" either: in
+# shell `//` is not a comment introducer but a failed command, so `// prose; osascript -e '…'` runs
+# the call — which is why the extension scope is load-bearing rather than decorative, and why both
+# shapes are pinned by positive controls below. Anchored past grep's own `path:line:` prefix.
+COMMENT_RE='^[^:]*\.(swift|js|mjs|cjs|jsx|ts|tsx):[0-9]+:[[:space:]]*//'
+
 ac22_scan() { # <path>… → hazardous "file:line:text" rows
-  ac22_scan_raw "$@" | "$G" -vE "$MENTION_RE"
+  ac22_scan_raw "$@" | "$G" -vE "$MENTION_RE" | "$G" -vE "$COMMENT_RE"
+}
+comment_exempt() { # <path>… → the rows exemption 3 removed (reported, never silently dropped)
+  ac22_scan_raw "$@" | "$G" -E "$COMMENT_RE" || true
+}
+# The counterpart, and the reason exemption 3 is safe to have at all — an INDEPENDENT property, not a
+# restatement of COMMENT_RE: that regex trusts an EXTENSION to mean "`//` comments to end of line",
+# and the way that claim goes wrong is a file whose extension lies about its language. So ask a
+# different question of the file itself — does it open with a SHELL shebang? A `.js`/`.swift` that
+# does is a shell script wearing the wrong suffix, where a `//` line is a failed command that can be
+# followed by a live one, and the exemption must not cover it.
+comment_launder(){ # <path>… → comment-exempt rows from files that are actually SHELL (empty = clean)
+  comment_exempt "$@" | cut -d: -f1 | sort -u | while IFS= read -r f; do
+    [ -r "$f" ] || continue
+    first="$(head -1 "$f" 2>/dev/null || true)"
+    case "$first" in '#!'*sh*) printf '%s\n' "$f" ;; esac
+  done
 }
 mention_exempt() { # <path>… → the rows exemption 2 removed (reported, never silently dropped)
   ac22_scan_raw "$@" | "$G" -E "$MENTION_RE" || true
@@ -266,6 +311,76 @@ delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty 
   [ "$n" -eq 0 ] || { echo "a printed teardown hint was flagged as a call site:"; ac22_scan "$D/mention2"; false; }
   m="$(mention_exempt "$D/mention2" | "$G" -c . || true)"
   [ "$m" -eq 1 ] || { echo "the hint was dropped by some OTHER filter (m=$m) — this control is vacuous"; false; }
+}
+
+@test "AC22: the comment-exemption is reported, never silently dropped" {
+  # Same discipline as the two exemptions above: an exemption nobody can see is indistinguishable
+  # from a hole. If this list ever grows a row from a file that is not really a //-comment language,
+  # the launder check below names the file in the gate output.
+  ex="$(comment_exempt "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts")"
+  echo "comment-exempt sites (osascript NAMED in a line-leading // comment — nothing after it is code):"
+  printf '%s\n' "$ex"
+  bad="$(comment_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts" | "$G" -c . || true)"
+  [ "$bad" -eq 0 ] || { echo "a SHELL script wearing a //-comment extension was exempted — // is not a comment there:"; comment_launder "$ROOT/hooks" "$ROOT/bin" "$ROOT/scripts"; false; }
+}
+
+@test "AC22 control (+): a mid-line // does NOT launder a real call" {
+  # The first of the two restrictions on exemption 3, pinned where it is actually load-bearing —
+  # INSIDE a //-comment language, because the extension scope already excludes everything else. A URL
+  # scheme puts `//` mid-line in a .mjs that shells out through a template literal, and that shell
+  # string can carry a genuinely unbounded call; `${p//a/b}` is the same shape in shell. An exemption
+  # that looked for the digraph anywhere on the line would exempt both.
+  #
+  # WITHOUT the .mjs row this control is VACUOUS, and measurably so: a mutant widening COMMENT_RE
+  # from `[[:space:]]*//` to `.*//` SURVIVED the .sh-only version of this test, because a .sh is
+  # already excluded by the extension scope — so it re-proved that restriction and said nothing
+  # about this one.
+  mkdir -p "$D/cmt"
+  printf 'execSync(`open http://x && osascript -e %s`)\n' "'tell application \"Finder\" to activate'" > "$D/cmt/mid.mjs"
+  printf '#!/bin/bash\np="${x//a/b}"; osascript -e %s\n' "'tell application \"Finder\" to activate'" > "$D/cmt/mid.sh"
+  n="$(ac22_scan "$D/cmt" | "$G" -c . || true)"
+  [ "$n" -eq 2 ] || { echo "a mid-line // laundered a real call (n=$n, expected 2):"; ac22_scan_raw "$D/cmt"; echo "-- exempted:"; comment_exempt "$D/cmt"; false; }
+}
+
+@test "AC22 control (+): a shell line beginning with // is not a comment, so its call is still caught" {
+  # The second restriction, and the reason exemption 3 is scoped by EXTENSION rather than by line
+  # shape alone. In shell `//` introduces nothing — it is a command that fails (it names a
+  # directory) — so a separator after it starts a genuinely unbounded call. A line-shape-only rule
+  # would exempt exactly this.
+  mkdir -p "$D/cmt2"
+  printf '#!/bin/bash\n// not a comment in shell; osascript -e %s\n' "'tell application \"Finder\" to activate'" > "$D/cmt2/sh.sh"
+  n="$(ac22_scan "$D/cmt2" | "$G" -c . || true)"
+  [ "$n" -eq 1 ] || { echo "a //-prefixed SHELL line laundered its call (n=$n):"; ac22_scan_raw "$D/cmt2"; echo "-- exempted:"; comment_exempt "$D/cmt2"; false; }
+}
+
+@test "AC22 control (+): a SHELL script wearing a .js extension is caught by the launder guard" {
+  # comment_launder's whole job, exercised — without this it could sit permanently vacuous. COMMENT_RE
+  # trusts the extension to mean "// comments to end of line"; this is the file where that trust is
+  # misplaced, and `//` is a failed command whose `;` starts a live call. ac22_scan cannot see it —
+  # the exemption is line-scoped and the extension says comment — which is the precondition the
+  # independent shebang question exists to cover.
+  mkdir -p "$D/cmt4"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf '// not a comment here; osascript -e %s\n' "'tell application \"Finder\" to activate'"
+  } > "$D/cmt4/x.js"
+  s="$(ac22_scan "$D/cmt4" | "$G" -c . || true)"
+  [ "$s" -eq 0 ] || { echo "precondition changed: ac22_scan now catches this unaided, so this guard's premise needs re-deriving"; false; }
+  n="$(comment_launder "$D/cmt4" | "$G" -c . || true)"
+  [ "$n" -eq 1 ] || { echo "the launder guard did not fire (n=$n) — the extension scope is unguarded"; false; }
+}
+
+@test "AC22 control (-): a // comment naming osascript is NOT flagged" {
+  # The line the exemption exists for, reproduced as a fixture so the rule is pinned in BOTH
+  # directions — a later tightening that re-convicts a source comment fails here rather than in
+  # review. The markdown backticks are the shape that made this a false positive at all: to a
+  # shell-syntax scanner they read as command substitution.
+  mkdir -p "$D/cmt3"
+  printf '// WHY A COMPILED BINARY, NOT JXA. The bridge (`osascript -l JavaScript`) is unreliable.\n' > "$D/cmt3/x.swift"
+  n="$(ac22_scan "$D/cmt3" | "$G" -c . || true)"
+  [ "$n" -eq 0 ] || { echo "a source comment was flagged as a call site:"; ac22_scan "$D/cmt3"; false; }
+  m="$(comment_exempt "$D/cmt3" | "$G" -c . || true)"
+  [ "$m" -eq 1 ] || { echo "the comment was dropped by some OTHER filter (m=$m) — this control is vacuous"; false; }
 }
 
 # ── the shared lib ──────────────────────────────────────────────────────────────────────────────
