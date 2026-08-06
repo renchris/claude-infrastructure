@@ -24,6 +24,8 @@
 #   B10-B11       the ENDPOINT CONFIRMATION — a THIRD, disjoint clause, and not a bound at all: it
 #                 constrains what a bisect that FINISHES inside both bounds is allowed to name. Its
 #                 own contract block sits with those tests below.
+#   B13-B16       the same clause for the OTHER endpoint, the FLOOR. B10-B12 cover `bad`; a walk that
+#                 converges on the first commit after `good` measured that end no better. Own block.
 #
 # POSITIVE CONTROL: B1/B2/B3 drive a fixture bats stub that sleeps far past a 3s bound, so the
 # bound is SEEN to fire. A bound that has never been observed firing is not shipped.
@@ -68,17 +70,23 @@ setup() {
   printf '@test "p" { true; }\n' > "$R/tests/ok.bats"
 }
 
-# <n> — n linear commits on main; sets GOOD (first) and BAD (last). A file named BAD appears at
-# commit 3 so a bisect over the range has a real, KNOWN first-bad commit to find (B5).
+# <n> [bad_at=3] [late_file] — n linear commits on main; sets GOOD (first) and BAD (last). A file
+# named BAD appears at commit <bad_at> so a bisect over the range has a real, KNOWN first-bad commit
+# to find (B5). bad_at is a parameter because WHERE the first-bad sits relative to GOOD is the axis
+# B13-B16 turn on: at the default 3 the walk earns a green probe of its own (c2), at 2 it earns none.
+# <late_file>, when given, is BORN at that same commit — a suite that does not exist at the floor,
+# which is the shape B16 pins.
 mk_history() {
-  local n="$1" i
+  local n="$1" bad_at="${2:-3}" late="${3:-}" i
   for i in $(seq 1 "$n"); do
     printf '%s\n' "$i" > "$R/seq.txt"
-    [ "$i" -ge 3 ] && printf 'bad\n' > "$R/BAD"
+    [ "$i" -ge "$bad_at" ] && [ -n "$late" ] && printf '@test "late" { false; }\n' > "$R/$late"
+    [ "$i" -ge "$bad_at" ] && printf 'bad\n' > "$R/BAD"
     git -C "$R" add -A >/dev/null
     git -C "$R" commit -qm "c$i" >/dev/null
     [ "$i" = 1 ] && GOOD="$(git -C "$R" rev-parse HEAD)"
-    [ "$i" = 3 ] && FIRSTBAD="$(git -C "$R" rev-parse HEAD)"
+    [ "$i" = 2 ] && SECOND="$(git -C "$R" rev-parse HEAD)"
+    [ "$i" = "$bad_at" ] && FIRSTBAD="$(git -C "$R" rev-parse HEAD)"
   done
   BAD="$(git -C "$R" rev-parse HEAD)"
   git -C "$R" push -q origin main
@@ -386,4 +394,120 @@ stub_bats_green() {
   [ "$output" = "0" ]
   run bash -c "find '$R/.git/worktrees' -name 'BISECT_*' 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
+}
+
+# ── B13-B16 — THE FLOOR ENDPOINT ──────────────────────────────────────────────────────────────────
+# The mirror of B10-B12. Same premise — `git bisect` probes INTERIOR commits only, so both endpoints
+# are asserted — applied to `good` (= $LASTGREEN) instead of `bad`. When the suite is ALREADY red at
+# that floor every interior probe answers BAD, the walk converges on the FIRST COMMIT AFTER good, and
+# names a commit innocent of everything: merely the earliest sha git was allowed to consider. C20
+# reverts it. Measured against this git: an all-bad 4-commit range probes c3 then c2 and names c2,
+# never once running at c1. The floor is real distance — the 2026-08-06 mis-revert's own last-green
+# (29313ae4c35a) sat two days and ~130 commits below the tip.
+#
+#   B13 refuse    a suite already red AT the floor ⇒ UNDECIDABLE, and specifically NOT the first
+#                 child of good. Pre-guard this named c2. The probe is SEEN to run, at good.
+#   B14 scope     when the culprit is NOT the first child, the walk earned a green of its own below
+#                 it, so the floor is never probed. This is what keeps the cost at one whole-file run
+#                 on the one path with no evidence, and why B8's step accounting is untouched.
+#   B15 control   a first-child culprit over a GENUINELY green floor is still NAMED. Negative control
+#                 for B13, exactly as B11 is for B10: "abstain whenever the guard fires" passes B13
+#                 and only this goes red.
+#   B16 absence   the THIRD answer. A file that does not EXIST at the floor cannot have been red
+#                 there, so the culprit that introduced it stands convicted and no run is spent.
+#                 Without it the rule retires auto-revert for every newly-added red suite — which is
+#                 postland's own C20 fixture, so it is the commonest shape, not an edge.
+#
+# B13/B15 are discriminated by ONE fact — whether the floor is really green — with the same stub, the
+# same range and the same verb, so nothing but the confirmation itself can separate them.
+
+# <marker|red> — logs the commit it ran AT (cwd is the bisect cell), then answers. WHERE a probe ran
+# is the observable these need: a count cannot tell an extra floor probe from an extra walk step.
+stub_bats_at_head() {
+  HEADLOG="$BATS_TEST_TMPDIR/heads.log"; : > "$HEADLOG"
+  { printf '#!/bin/bash\ncase "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac\n'
+    printf 'git rev-parse HEAD >> "%s"\n' "$HEADLOG"
+    case "$1" in
+      red) printf 'exit 1\n' ;;                      # red EVERYWHERE, floor included
+      *)   printf '[ -f BAD ] && exit 1\nexit 0\n' ;;
+    esac
+  } > "$STUB/bats-stub"
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+
+@test "B13: a suite ALREADY RED at the last-green floor is undecidable — the first child of good is not a culprit" {
+  mk_history 5
+  stub_bats_at_head red
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  # The walk itself DID converge — on c2, the earliest sha it was allowed to consider. Unguarded that
+  # sha is printed, and C20 reverts whatever a bisect names.
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  ! [[ "$output" == *"$SECOND"* ]] || false
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  # the floor was actually PROBED, and at the floor — the guard refuses on a measurement, not on a
+  # topology check it could have made without running anything.
+  /usr/bin/grep -q "$GOOD" "$HEADLOG"
+  grep -q "bisect FLOOR NOT GREEN" "$RUNLOG"
+  # ...and it is the FLOOR that decided, not a bound and not the tip confirmation
+  ! grep -q "bisect CUT" "$RUNLOG" || false
+  ! grep -q "bisect UNCONFIRMED" "$RUNLOG" || false
+  # a further exit path out of do_bisect — the RETURN trap must cover it too (cf. B3/B9/B12)
+  run bash -c "ls -1 '$SUTTMP'/postland-bisect.* 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+  run bash -c "find '$R/.git/worktrees' -name 'BISECT_*' 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+}
+
+@test "B14: when the culprit is NOT the first child of good, the floor is never probed (the cost is scoped)" {
+  mk_history 5                     # first-bad at c3 ⇒ the walk probes c2 and earns its own GREEN
+  stub_bats_at_head marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  # never checked out, never run: the extra whole-file run is spent ONLY where the evidence is zero.
+  ! /usr/bin/grep -q "$GOOD" "$HEADLOG" || false
+  ! grep -qi "floor" "$RUNLOG" || false
+}
+
+@test "B15: CONTROL — a first-child culprit over a MEASURED-green floor is still named" {
+  mk_history 5 2                   # first-bad IS c2 ⇒ zero green probes, so the guard must fire...
+  stub_bats_at_head marker         # ...and the floor (c1, no BAD file) is genuinely green
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  [[ "$output" == "$SECOND" ]] || false            # fixture shape: culprit and first child are one sha
+  /usr/bin/grep -q "$GOOD" "$HEADLOG"              # the probe ran...
+  grep -q "bisect floor CONFIRMED green" "$RUNLOG" # ...and CONFIRMED, so it convicts
+}
+
+@test "B16: a file that does not EXIST at the floor still convicts — absence is evidence, not a non-verdict" {
+  # THE COMMONEST REAL SHAPE, and what makes this a three-way rule rather than "green or abstain": a
+  # commit that ADDS a red suite. postland's own C20 fixture is exactly it — green baseline, then one
+  # commit carrying a new failing file — so a rule that abstained on anything but rc 0 would silently
+  # retire auto-revert for every newly-added red test. Verified, not predicted: with that rule the
+  # six C20 tests in tests/postland-verify.bats go red, and with this one they pass.
+  #
+  # The floor is not merely unmeasured here, it is INAPPLICABLE: the suite cannot have been red at a
+  # commit where the file does not exist, so the assumption B13 guards has nothing to be wrong about.
+  # Settled by `git cat-file -e`, so it costs no run at all. (The runner's rc could not decide it: it
+  # returns 125 for an absent file AND for a /Users/chrisren/.claude/bin/cc-bats that errored, and those must not share a verdict.)
+  mk_history 5 2 tests/late.bats   # the failing FILE is born at c2, the culprit — absent at GOOD
+  stub_bats_at_head marker
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/late.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$FIRSTBAD" ]] || false
+  grep -q "bisect floor N/A" "$RUNLOG"
+  # ...and it did NOT pay for a probe that could not have taught it anything
+  ! /usr/bin/grep -q "$GOOD" "$HEADLOG" || false
 }

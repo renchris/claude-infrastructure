@@ -974,6 +974,65 @@ EOF
 # measurement to beat is: 5 concurrent gates at load 16-18 against their own ceiling of 8, each
 # one's corpus being the load the others were waiting out.
 
+# ════ THE FLOOR IS THE OTHER UNMEASURED ENDPOINT (2026-08-06) ═════════════════════════════════════
+# The tip confirmation inside do_bisect closes one half of "git takes BOTH endpoints on trust"; this
+# closes the other, and the two are mirror images. When the suite is ALREADY red at `good`
+# (= $LASTGREEN), every interior probe answers BAD, the walk converges on the FIRST COMMIT AFTER
+# good, and that commit is innocent of everything — it is merely the earliest sha git was allowed to
+# consider. Measured against this git, not reasoned: an all-bad 4-commit range probes c3 then c2 and
+# names c2, never once running at c1. The floor is not a hypothetical either — the 2026-08-06
+# mis-revert's own last-green (29313ae4c35a) sat two days and ~130 commits below the tip.
+#
+# SCOPED THE SAME WAY THE TIP GUARD IS, and for the same reason. If the culprit is NOT the first
+# commit after good, the walk necessarily observed a GREEN probe below it — a green probe becomes the
+# new floor and the culprit must descend from it — so there is a real measured differential and
+# nothing is owed. `rev-list --count good..culprit` = 1 is that predicate, and it survives merges: a
+# count of 1 means every parent of the culprit is reachable from good, so no interior commit sits
+# below it. One whole-file run, on the one path where the evidence is otherwise zero.
+#
+# THREE ANSWERS, NOT TWO. Ask FIRST whether the floor is even applicable: a suite that does not EXIST
+# at good cannot have been red there, so the culprit is simply where the file was born, git probed it
+# BAD, and that conviction stands. `cat-file -e` settles it for free. Collapsing this into "not green
+# ⇒ abstain" is not merely conservative — it retires auto-revert for EVERY newly-added red suite,
+# which is postland's own C20 fixture, i.e. the commonest shape rather than an edge (B16). The
+# runner's rc could never have decided it: 125 means "file absent" OR "bats errored", and those two
+# must not share a verdict. Otherwise, as with the tip, anything but a definite verdict — here rc 1
+# (the failure predates the window), 125, or our own 124 — is UNDECIDABLE.
+bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor green, or not load-bearing
+  local good="$1" culprit="$2" runner="$3" counter="$4" file="$5" below want got rc=0
+  below="$(git -C "$WORKTREE" rev-list --count "$good..$culprit" 2>/dev/null || true)"
+  case "$below" in ''|*[!0-9]*) below=1 ;; esac   # unreadable ⇒ assume load-bearing ⇒ PROBE (safe way)
+  [ "$below" -gt 1 ] && return 0                  # the walk measured its own GREEN below the culprit
+  # Resolve the floor FIRST and key everything below on the resolved sha: `cat-file -e` fails both
+  # for an absent PATH and for an unresolvable REV, and only the first of those may convict.
+  want="$(git -C "$WORKTREE" rev-parse --verify "$good^{commit}" 2>/dev/null || true)"
+  [ -n "$want" ] || {
+    log "bisect FLOOR UNPROVEN: cannot resolve the last-green $(sha12 "$good") in the cell, and $(sha12 "$culprit") is the first commit after it — undecidable, no culprit named"
+    return 1; }
+  git -C "$WORKTREE" cat-file -e "$want:$file" 2>/dev/null || {
+    log "bisect floor N/A: $file does not exist at the last-green $(sha12 "$good"), so the floor cannot be the red — $(sha12 "$culprit") is where the file appeared and the walk probed it BAD; culprit stands"
+    return 0; }
+  : > "$counter"          # a confirmation is not a bisect STEP — leave the cap's budget alone
+  git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true      # ...so the checkout below can run
+  if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$want" >/dev/null 2>&1; then
+    log "bisect FLOOR UNPROVEN: cannot check out the last-green $(sha12 "$good") to confirm it — undecidable, no culprit named"
+    return 1
+  fi
+  # CONFIRM WHERE WE ARE, never assume the checkout took: this probe's entire meaning is the commit
+  # it ran at, and any way of failing to reach the floor leaves HEAD somewhere a GREEN would be
+  # misread as the floor's. Belt-and-braces, and stated as such — no fixture in B13-B16 can make that
+  # checkout fail, so deleting this line turns nothing red. It is kept for the failure it catches.
+  got="$(git -C "$WORKTREE" rev-parse --verify HEAD 2>/dev/null || true)"
+  [ "$want" = "$got" ] || {
+    log "bisect FLOOR UNPROVEN: the cell did not land on the last-green $(sha12 "$good") — undecidable, no culprit named"
+    return 1; }
+  bounded "$RETRY_TO" "$runner"; rc=$?      # the walk's own step, re-run — same script, same band
+  [ "$rc" -eq 0 ] && {
+    log "bisect floor CONFIRMED green at $(sha12 "$good") — $(sha12 "$culprit") is its first child, so the walk itself had no green to stand on"
+    return 0; }
+  log "bisect FLOOR NOT GREEN: the walk named $(sha12 "$culprit") only because it is the first commit after an ASSUMED-green floor, and $file is not green at $(sha12 "$good") either (runner rc=$rc) — undecidable, no culprit named"
+  return 1
+}
 do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
   # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
   local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps
@@ -1091,6 +1150,10 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
           fi
         fi
       fi
+      # ...and the FLOOR is the same class, in mirror image (see bisect_floor_ok). Both can fire on a
+      # single-candidate range, and should: that is the walk with the least evidence of any, so it is
+      # the one worth measuring from both ends before C20 acts on it.
+      [ -n "${culprit:-}" ] && { bisect_floor_ok "$good" "$culprit" "$runner" "$counter" "$file" || culprit=""; }
     fi
   fi
   [ -n "${culprit:-}" ] || return 1
