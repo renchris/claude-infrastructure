@@ -23,6 +23,20 @@ setup() {
   # `lint tests` still gets its selftests judged. Left ambient, a rule-4 verdict about the checkout
   # would silently become the answer to a rule-1 or rule-2 assertion about a two-file fixture.
   export CC_HERM_SELFTEST_RULE=off
+  # Dogfood RULE 5, the same way this file dogfoods rules 1 and 2 above. It names handoff-fire.sh
+  # (rule 2's scope control) and the lint itself, and both carry non-$HOME seams — so without these
+  # four pins this suite would have to be GRANDFATHERED under the very rule it proves. A lint's own
+  # suite sitting on its own exemption list is the rot this repo is killing.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/absent-heal-"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HERM_SEAM_SELFPROBE="$BATS_TEST_TMPDIR/absent-seam-anchor"
+  # Rule 5 OFF by default here, for rule 4's reason verbatim: its seam table is derived from the
+  # REPO's tool dirs, not from the two-file fixture each case below passes as its scan dir, so left
+  # ambient a rule-5 verdict about the checkout would silently become the answer to a rule-1 or
+  # rule-2 assertion about a fixture. The rule-5 cases switch it back on BY NAME, against a fixture
+  # seam root of their own.
+  export CC_HERM_SEAM_RULE=off
   FIX="$BATS_TEST_TMPDIR/fix"; mkdir -p "$FIX"
   # A neutral, rule-1-clean bats dir for the rule-4 cases. They still have to pass a scan dir (the
   # two passes compose, and 2 dominates 1), so it must be one lint_dir returns 0 on — otherwise the
@@ -416,4 +430,104 @@ mk_suite() {
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'COLLIDES' || false
   [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false      # rule 1 is satisfied; only rule 4 fired
+}
+
+# ── RULE 5 (the non-$HOME seam). EVERY case below is FIXTURE-based — a fixture seam root of tools
+# plus a fixture scan dir of suites — and NONE asserts a property of the real checkout. That is
+# deliberate and it is the standing lesson of backlog b59eb997d035: the one assertion in this file
+# that lints the WHOLE TREE mid-suite passes standalone and fails in-suite, and it alone kept 14
+# consecutive green stamps red with deploy-live fail-closed. Rule 5's real-tree guarantee (its
+# embedded allowlist matches HEAD) is proved where it costs nothing — case (e) of the lint's own
+# --selftest — not by widening the assertion that already causes that.
+#
+# mk_seam_tool <root> <name> <seam-line> — a fixture TOOL carrying one seam. Safe to spell the
+# literal `${VAR:-/tmp/…}` here, unlike in the lint itself: rule 5's extractor scans bin/, scripts/
+# and hooks/, never tests/, so this file can never be harvested as its own subject.
+mk_seam_tool() {
+  mkdir -p "$FIX/$1/bin"
+  { echo '#!/bin/bash'; printf '%s\n' "$3"; } > "$FIX/$1/bin/$2"
+}
+
+@test "RULE 5 RED (5a): an ABSOLUTE /tmp default is not redirected by a fixtured \$HOME" {
+  # a514d3b0's shape: tests/cc-relogin-status.bats fixtured $HOME from birth and still counted the
+  # operator's live /tmp/cc-permission-pending rows. Rule 1 reported it clean throughout.
+  mk_seam_tool r5a zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"
+echo "$DIR"'
+  mk_suite r5a_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-seamtool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5a" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5a_s"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'SEAM ' || false
+  echo "$output" | grep -q 'ZZ_SEAM_DIR (5a' || false
+  echo "$output" | grep -q 'Do NOT add to' || false
+}
+
+@test "RULE 5 RED (5b): a BARE NAME the subject EXECUTES runs the operator's DEPLOYED tool" {
+  mk_seam_tool r5b zz-seamtool 'echo target'
+  mk_seam_tool r5b zz-exectool 'BIN="${ZZ_SEAM_BIN:-zz-seamtool}"
+"$BIN" --probe'
+  mk_suite r5b_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-exectool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5b" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5b_s"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'ZZ_SEAM_BIN (5b' || false
+}
+
+@test "RULE 5 GREEN: assigning the seam in setup() clears it — the prescribed fix actually works" {
+  mk_seam_tool r5ok zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"
+echo "$DIR"'
+  mk_suite r5ok_s 'export HOME="$BATS_TEST_TMPDIR/home"; export ZZ_SEAM_DIR="$BATS_TEST_TMPDIR/seam"; T="$REPO/bin/zz-seamtool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5ok" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5ok_s"
+  [ "$status" -eq 0 ] || false
+  [ "$(echo "$output" | grep -c 'SEAM ')" -eq 0 ] || false
+}
+
+@test "RULE 5 SCOPE CONTROL: a suite naming only a SEAMLESS tool is never flagged" {
+  # Without this the RED cases prove nothing about scoping — a rule that fires on every suite
+  # satisfies every RED assertion above while carrying no information at all.
+  mk_seam_tool r5sc zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"'
+  mk_seam_tool r5sc zz-noseam 'echo no-seam'
+  mk_suite r5sc_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-noseam"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5sc" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5sc_s"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 5 SCOPE: a tool named only in a COMMENT executes nothing, so it does not pull scope" {
+  # The mirror of rules 2's and 4's prose-match regressions: there a comment must not satisfy a
+  # POSITION test; here a comment must not trigger a SCOPE test.
+  mk_seam_tool r5cm zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"'
+  mkdir -p "$FIX/r5cm_s"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'
+    echo '  export HOME="$BATS_TEST_TMPDIR/home"'
+    echo '  # the roster this suite asserts on is also read by $REPO/bin/zz-seamtool'
+    echo '}'; echo '@test "x" { true; }'; } > "$FIX/r5cm_s/zz-fixture.bats"
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5cm" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5cm_s"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 5 kill switch: CC_HERM_SEAM_RULE=off disables it — with the RED as positive control" {
+  mk_seam_tool r5ks zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"'
+  mk_suite r5ks_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-seamtool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5ks" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5ks_s"
+  [ "$status" -eq 1 ] || false                       # the control: it DOES fire when armed
+  CC_HERM_SEAM_RULE=off CC_HERM_SEAM_ROOT="$FIX/r5ks" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5ks_s"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 5 is INDEPENDENT of rules 1-4 — a \$HOME-hermetic suite is still judged on its seams" {
+  # The whole point of the rule: rule 1 answers YES for this suite and it is still reading the
+  # operator's machine. A shared allowlist could only shrink when BOTH rules were satisfied, which
+  # is why rule 5 carries its own.
+  mk_seam_tool r5ind zz-seamtool 'DIR="${ZZ_SEAM_DIR:-/tmp/zz-seam-state}"'
+  mk_suite r5ind_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-seamtool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r5ind" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r5ind_s"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'SEAM ' || false
+  [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false      # rule 1 is satisfied; only rule 5 fired
 }
