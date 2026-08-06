@@ -223,6 +223,23 @@ BISECT_TO="${POSTLAND_BISECT_TIMEOUT_S:-900}"  # WHOLE-BISECT wall bound — see
 # as they already do when the bisect cannot decide. Losing culprit REFINEMENT is a bad afternoon;
 # an unbounded runaway corrupting the shared repo for half a day is the incident.
 BISECT_MAX_STEPS="${POSTLAND_BISECT_MAX_STEPS:-24}"  # STEP-COUNT cap — the OTHER bound; see below
+# do_bisect's OUT-PARAMETER, and the reason it is not a stdout capture (2026-08-06) ────────────────
+# `do_bisect` mints a worktree cell (via prepare_worktree) whose ONLY durable record is the global
+# WT_MINTED, which the EXIT trap consults to tear the cell down. Both callers used to read the
+# culprit as `$(do_bisect …)`, so that assignment landed in the command-substitution CHILD: it is
+# neither exported back nor covered by the parent's trap, and cleanup_exit saw the pre-call value
+# and removed NOTHING. A cell leaked on every invocation including SUCCESS, collected only by the
+# 8h age reaper. Nothing failed and nothing alarmed — the run was green.
+#
+# Returning through a global removes the subshell, so the shell that RECORDS the mint is the shell
+# that RUNS the trap, by construction. The tempting patch — have the caller set WT_MINTED itself —
+# re-implements the minter's bookkeeping outside it and goes stale the moment the mint path changes.
+#
+# do_bisect deliberately no longer PRINTS the culprit: while it still did, `$(do_bisect …)` kept
+# working and the next caller written that way would silently re-introduce the leak. Now that shape
+# yields an empty string, which fails loudly at the caller instead of quietly on disk.
+# Enforced by scripts/subshell-cleanup-lint.sh, whose positive control is this file's pre-fix blob.
+BISECT_CULPRIT=""
 # TWO bounds, because the wall above does not address the measured CAUSE. The 12h41m walk was not
 # made of slow steps — every step was fast. The RANGE GREW: the bisected suite committed into
 # $WORKTREE on each invocation, so new revisions kept entering the interval and the walk had no
@@ -333,7 +350,7 @@ if [ -n "${CC_POSTLAND_PRELINTS+set}" ]; then
   # shellcheck disable=SC2206  # deliberate word-splitting: the seam is a space-separated list
   PRELINTS=($CC_POSTLAND_PRELINTS)
 else
-  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh)
+  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh scripts/subshell-cleanup-lint.sh)
 fi
 # 600s, raised from 60s (2026-07-30): a bound must fit what it BOUNDS, in the band it actually runs
 # in. 60s was sized for a foreground ~3s lint and left no room for the band the launchd job imposes,
@@ -957,8 +974,10 @@ EOF
 # measurement to beat is: 5 concurrent gates at load 16-18 against their own ceiling of 8, each
 # one's corpus being the load the others were waiting out.
 
-do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when undecidable)
+do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
+  # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
   local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps
+  BISECT_CULPRIT=""
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
   prepare_worktree "$bad" || return 1
@@ -1026,7 +1045,7 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
     fi
   fi
   [ -n "${culprit:-}" ] || return 1
-  printf '%s\n' "$culprit"
+  BISECT_CULPRIT="$culprit"
 }
 write_stamp() { # <tree> <commit> <verdict> <run_s> <retries> <adv> [failing…]
   local tree="$1" commit="$2" verdict="$3" run_s="$4" retries="$5" adv="$6" gcd; shift 6
@@ -1181,7 +1200,8 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   ftest="${FAILTEST:-?}"; ftest="${ftest//[$'\n\r']/ }"; ftest="${ftest:0:120}"
   [ -n "$ftest" ] || ftest='?'
   good="$(cat "$LASTGREEN" 2>/dev/null || true)"
-  bisected="$(do_bisect "$file" "$good" "$sha" 2>/dev/null || true)"
+  do_bisect "$file" "$good" "$sha" 2>/dev/null || true      # NOT `$( )` — see BISECT_CULPRIT
+  bisected="$BISECT_CULPRIT"
   culprit="$bisected"
   [ -n "$culprit" ] || culprit="$sha"
   c12="$(sha12 "$culprit")"
@@ -1420,7 +1440,8 @@ do_run_one() { # <sha>
 verb_bisect() { # <file> <good> <bad>
   local c
   [ "$#" -eq 3 ] || { echo "usage: postland-verify.sh bisect <file> <good> <bad>" >&2; idl abstained bad-args; return 2; }
-  c="$(do_bisect "$1" "$2" "$3")"; idl fired "bisect:$1"
+  do_bisect "$1" "$2" "$3" || true; c="$BISECT_CULPRIT"      # NOT `$( )` — see BISECT_CULPRIT
+  idl fired "bisect:$1"
   [ -n "$c" ] || { echo "postland-verify: bisect undecidable" >&2; return 1; }
   echo "$c"
 }
@@ -1697,6 +1718,19 @@ selftest() {
   grep -qE '"\./\$s" \)' "$SELF" \
     && okp "prelint: lints are invoked with NO positional — each resolves its own scan root" \
     || badp "prelint: a positional is still passed — a root-scanning lint would exit 2 and CUT every run"
+  grep -qE 'PRELINTS=\(.*subshell-cleanup-lint\.sh' "$SELF" \
+    && okp "prelint: subshell-cleanup-lint is in the blocking pre-corpus slot" \
+    || badp "prelint: subshell-cleanup-lint NOT wired into PRELINTS"
+  # THIS file was the class's only live instance (see BISECT_CULPRIT), so the lint that closes the
+  # class has to be reachable from the gate rather than only from its own suite. It is also the one
+  # prelint whose cost was measured against the BAND: ~3.6s foreground over 356 files, ~300s at the
+  # measured 84x tax, inside LINT_TO's 600s. A future change that makes it slow does not fail — it
+  # CUTS, silently, on every run.
+  # Resolved from $SELF, NOT from $WORKTREE: during a selftest the check cell has not been minted,
+  # so a $WORKTREE-relative path is absent and this would fail for the wrong reason.
+  [ -x "$(dirname "$SELF")/subshell-cleanup-lint.sh" ] \
+    && okp "prelint: subshell-cleanup-lint is executable (prelint_check gates on -x)" \
+    || badp "prelint: subshell-cleanup-lint is NOT executable — the slot would skip it silently"
 
   echo "postland-verify selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
