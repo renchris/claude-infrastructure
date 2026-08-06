@@ -177,7 +177,15 @@ unresolved_self_paths() {  # <file> → "line:text" per violation; rc 0 = ran, n
       return (s ~ /\/\.\./)
     }
     function has_config_anchor(s) {
-      return (s ~ /\$HOME\/\.claude/ || s ~ /CLAUDE_CONFIG_DIR/)
+      # The brace spellings are NOT cosmetic variants to be tolerated grudgingly — ${HOME:-} is the
+      # STRICTER form. A ladder is one for-list, and bash expands the WHOLE list before the loop body
+      # runs, so a bare $HOME rung under `set -u` aborts the script on the third candidate even when
+      # the first one resolves — the fallback kills the caller instead of degrading (d5f97f9a, and
+      # the 5 sibling copies). Keying this predicate on the literal `$HOME/` spelling made the safest
+      # rung read as NO anchor at all, so hardening a ladder turned it into a fresh violation: the
+      # guard penalised its own fix. Match the CLASS (a HOME-anchored config rung), never one
+      # spelling of it (memory: denylist-enumerates-spellings-not-the-class).
+      return (s ~ /\$\{?HOME(:-[^}]*)?\}?\/\.claude/ || s ~ /CLAUDE_CONFIG_DIR/)
     }
     END {
       for (i = 1; i <= n; i++) {
@@ -429,6 +437,17 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"'
         "$HOME/.claude/hooks/lib/page-damp.sh"; do
   [ -f "$c" ] && { . "$c"; break; }
 done'
+  # (g2) the SAME ladder with the set -u-safe `${HOME:-}` rung — the cc-kitty-bin resolver shape in
+  #      handoff-fire.sh / boot-resume-launch.sh / render-census.sh / lr-handoff.sh /
+  #      lr-reset-poller.sh. It must be AT LEAST as tolerated as (g): a bare $HOME rung aborts the
+  #      whole script under set -u before the loop body ever runs, so this is the hardened form. Held
+  #      as its own case because (g) can never fail on it — (g) carries a bare $HOME rung of its own,
+  #      which would satisfy the predicate no matter how the brace spelling is treated (memory:
+  #      sibling-guard-makes-the-fixture-vacuous).
+  mk ladder_braced probe.sh 'for c in "$(dirname "$0")/../bin/cc-kitty-bin" \
+        "${HOME:-}/.claude/bin/cc-kitty-bin"; do
+  [ -x "$c" ] && break
+done'
   # (h) same-variable config-dir reassignment on the NEXT line — cc-crash-report:29.
   mk nextline probe.sh 'HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/hooks/w.sh"
 [[ -f "$HOOK" ]] || HOOK="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/w.sh"'
@@ -488,6 +507,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"'
   green selfexec    "" "a self re-exec (no '..') was flagged"
   green sibling     "" "an own-directory sibling (Class-1, out of scope) was flagged"
   green ladder      "" "a tolerant fallback ladder was flagged"
+  green ladder_braced "" "a fallback ladder whose config rung is the set -u-safe \${HOME:-} spelling was flagged — the predicate is keying on the literal \$HOME spelling, so hardening a ladder mints a violation"
   green nextline    "" "a same-variable config-dir fallback on the next line was flagged"
   green ifelse      "" "an if/elif/else guarded-candidate resolver was flagged"
   red   unguarded   "" "an UNCONDITIONAL self-derived root with unrelated \$HOME/.claude lines nearby went GREEN — tolerance is keying on a nearby anchor instead of on an existence test"

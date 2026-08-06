@@ -499,8 +499,11 @@ CC_KITTY_BIN="${CC_TERM_KITTY:-kitty}"
 # into this checkout, so `dirname "$0"/../bin` alone points at ~/.claude/bin — which only holds
 # cc-kitty-bin AFTER install.sh runs. Resolving the link first finds the repo's own bin/ and makes
 # the fix live the moment the file does, instead of waiting on a deploy it cannot trigger.
+# ${HOME:-} DELIBERATELY: bash expands the ENTIRE for-list before the loop body runs, so a bare
+# $HOME under `set -u` aborts this whole script on the third candidate even when the FIRST one
+# resolves. With :- it degrades to a nonexistent path `[ -x ]` rejects. See bin/kitty-split-launch.sh.
 _CC_KS="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
-for _CC_KB in "$(dirname "$_CC_KS")/../bin/cc-kitty-bin" "$(dirname "$0")/../bin/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+for _CC_KB in "$(dirname "$_CC_KS")/../bin/cc-kitty-bin" "$(dirname "$0")/../bin/cc-kitty-bin" "${HOME:-}/.claude/bin/cc-kitty-bin"; do
   [ -x "$_CC_KB" ] || continue
   _CC_KR="$("$_CC_KB" 2>/dev/null)" && [ -n "$_CC_KR" ] && { CC_KITTY_BIN="$_CC_KR"; break; }
 done
