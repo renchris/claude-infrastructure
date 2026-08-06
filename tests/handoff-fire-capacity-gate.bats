@@ -11,9 +11,11 @@
 # it; the desk, the ground-up coordinator and manual fires all call it), so the hardware term binds
 # here or nowhere.
 #
-# sysctl is STUBBED on PATH so load/core count are inputs, not ambient facts — otherwise every
-# assertion below would flip with the mood of the machine running the suite. Each case runs
-# --dry-run so an ADMIT verdict never actually fires a session.
+# sysctl is STUBBED VIA CC_FIRE_SYSCTL so load/core count are inputs, not ambient facts — otherwise
+# every assertion below would flip with the mood of the machine running the suite. Each case runs
+# --dry-run so an ADMIT verdict never actually fires a session. (It was stubbed on PATH until item
+# 02ae8ae886a1; the gate now resolves sysctl absolutely, so a PATH-only stub would be stepped over
+# and these cases would quietly start reading the real box. See setup() and the P-series below.)
 #
 # RED-PROOF (recorded 2026-07-29): case 1 was replayed against the pristine pre-change
 # scripts/handoff-fire.sh recovered via `git archive origin/main` (2595 lines, 0 occurrences of
@@ -43,6 +45,13 @@ EOF
   PAYLOAD="$BATS_TEST_TMPDIR/p.txt"
   echo "TASK — capacity gate fixture payload." > "$PAYLOAD"
   export PATH="$BIN:$PATH"
+  # The stub is reached through the SEAM, not through PATH order (item 02ae8ae886a1). The gate now
+  # resolves /usr/sbin/sysctl absolutely, so a PATH-only stub would be stepped over and every case
+  # below would silently start reading the REAL box — the exact shape of a control that decays into
+  # a no-op while staying green (memory control-calibrated-to-implementation-decays). Pointing
+  # CC_FIRE_SYSCTL at the same file keeps the stub authoritative and makes the suite independent of
+  # PATH ordering. `export PATH` above stays for vm_stat, which is stubbed on PATH by vmstub().
+  export CC_FIRE_SYSCTL="$BIN/sysctl"
   # M10: the gate grew a SECOND term (memory headroom). Pin it to a comfortably-admitting synthetic
   # value here so cases 1–9 keep asserting the LOAD term alone and never flip with the free-memory
   # mood of the machine — the same ambient-dependence M11 removes from the rest of the corpus. The
@@ -620,4 +629,137 @@ _fires() {
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac
   done <<< "$(grep -oE 'emit_fire_refusal [a-z-]+' "$REPO/scripts/handoff-fire.sh" | awk '{print $2}' | sort -u)"
+}
+
+# ── THE LOAD TERM IS PATH-INDEPENDENT BY CONSTRUCTION (item 02ae8ae886a1, 2026-08-06) ────────────
+# Everything above proves the gate REASONS correctly once it has numbers. None of it could see that
+# in production it never got any. Measured in ~/.claude/logs/handoffs.jsonl over 2026-08-03..06: of
+# the 239 rows written with the gate ON, 222 read `hw.ncpu unreadable ('') — load term not
+# evaluated` and 17 carried numbers. The whole suite was green throughout, because setup() put a
+# `sysctl` stub on PATH and thereby answered the one question production was failing.
+#
+# That is the trap this section closes: a fixture that supplies the very thing whose ABSENCE is the
+# bug can only ever pass (memory hermetic-home-routes-tests-into-the-fallback). These cases run with
+# NO stub and NO CC_FIRE_SYSCTL, on a PATH with /usr/sbin removed — the production shape — so they
+# exercise the DEFAULT resolution rather than the seam.
+#
+# Each pair is a test plus its RED CONTROL. The control is not decoration: if /usr/sbin ever joins
+# the minimal PATH, the positive case would pass for a reason that has nothing to do with the fix,
+# and only a control that FAILS can tell us so (memory control-must-replay-the-real-artifact).
+
+# The exact PATH shape from the repro: /usr/bin and /bin present, /usr/sbin absent.
+NOSBIN_PATH="/usr/local/bin:/usr/bin:/bin"
+
+# Extract the resolver + reads straight out of the shipping function, so this tests the real code
+# rather than a restatement of it that can agree with itself while production disagrees.
+gate_reads() {
+  awk '/^capacity_gate\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$REPO/scripts/handoff-fire.sh" \
+    | sed -n '/sysctl_bin="\${CC_FIRE_SYSCTL/,/^  ceiling=/p' \
+    | grep -v '^  ceiling='
+}
+
+@test "P1 the resolver is extractable — the three cases below test code, not a paraphrase" {
+  # If this drifts, P2/P3/P4 would silently test an empty string and pass vacuously.
+  run gate_reads
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'CC_FIRE_SYSCTL' || { echo "no override read in the extract"; false; }
+  echo "$output" | grep -q '/usr/sbin/sysctl' || { echo "no absolute default in the extract"; false; }
+  echo "$output" | grep -q 'hw.ncpu' || { echo "no ncpu read in the extract"; false; }
+}
+
+@test "P2 hw.ncpu reads a REAL core count with /usr/sbin off the PATH — the production shape" {
+  run env -i PATH="$NOSBIN_PATH" HOME="$BATS_TEST_TMPDIR/home" bash -c '
+    '"$(gate_reads)"'
+    echo "ncpu=[$ncpu] load=[$load]"'
+  [ "$status" -eq 0 ]
+  # A number, not the empty string that 222 production rows recorded.
+  echo "$output" | grep -qE 'ncpu=\[[0-9]+\]' || { echo "got: $output"; false; }
+  # Negated form, NOT `A && { …; false; }`: under errexit the `&&` shape passes on both branches
+  # once anything absorbs it, which is precisely the dead-assertion class the bats-assert-liveness
+  # ratchet exists to catch — and it caught this line, in a suite written to catch a dead gate.
+  ! echo "$output" | grep -q 'ncpu=\[\]' || { echo "STILL EMPTY — the bug is not fixed: $output"; false; }
+}
+
+@test "P3 RED CONTROL: the SAME reads by BARE NAME really do come back empty on that PATH" {
+  # This is the pre-fix code, verbatim, on the same PATH. If it ever passes, /usr/sbin joined the
+  # minimal PATH and P2 proves nothing — a control that cannot fail is not a control.
+  run env -i PATH="$NOSBIN_PATH" HOME="$BATS_TEST_TMPDIR/home" bash -c '
+    ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+    echo "ncpu=[$ncpu]"'
+  [ "$output" = "ncpu=[]" ] || {
+    echo "the bare-name read RESOLVED on a /usr/sbin-less PATH: $output"
+    echo "PATH=$NOSBIN_PATH — if /usr/sbin is now reachable here, P2 is vacuous."; false; }
+}
+
+@test "P4 vm.loadavg is PATH-independent too — one binary, both reads, one resolver" {
+  # hw.ncpu is the row that surfaced in the ledger only because it is checked FIRST; vm.loadavg is
+  # the same sysctl and was equally dead. Fixing one and not the other would move the fail-open
+  # string rather than remove it.
+  run env -i PATH="$NOSBIN_PATH" HOME="$BATS_TEST_TMPDIR/home" bash -c '
+    '"$(gate_reads)"'
+    echo "load=[$load]"'
+  echo "$output" | grep -qE 'load=\[[0-9]+\.[0-9]+\]' || { echo "got: $output"; false; }
+}
+
+@test "P5 an EXPLICIT CC_FIRE_SYSCTL is honoured VERBATIM, never folded into the fallback" {
+  # The override must win even when /usr/sbin/sysctl exists and is perfectly good — that is what
+  # makes it an override rather than one more entry in a preference list, and it is what keeps this
+  # suite's own stub authoritative (memory path-resolved-dependency-in-daemon-code).
+  cat > "$BIN/sysctl-explicit" <<'EOF'
+#!/bin/bash
+case "$*" in *hw.ncpu*) echo 777 ;; *) echo "{ 1.00 1.00 1.00 }" ;; esac
+EOF
+  chmod +x "$BIN/sysctl-explicit"
+  run env -i PATH="$NOSBIN_PATH" HOME="$BATS_TEST_TMPDIR/home" \
+      CC_FIRE_SYSCTL="$BIN/sysctl-explicit" bash -c '
+    '"$(gate_reads)"'
+    echo "ncpu=[$ncpu]"'
+  [ "$output" = "ncpu=[777]" ] || { echo "override not honoured verbatim: $output"; false; }
+}
+
+@test "P6 the fallback still exists — an absent /usr/sbin/sysctl degrades to the bare name" {
+  # The default must not become a hard dependency on one absolute path: a box without
+  # /usr/sbin/sysctl should still try, not die. Proven by pointing the -x test at a path that is
+  # absent by construction and checking the resolver lands on the bare name.
+  #
+  # `env -u CC_FIRE_SYSCTL` is load-bearing: setup() exports the seam, and an inherited override
+  # short-circuits the resolver before the fallback is ever reached — this case asserted nothing
+  # until it was unset (it failed loudly, which is the only reason the hole was visible at all).
+  run env -u CC_FIRE_SYSCTL bash -c '
+    sysctl_bin="${CC_FIRE_SYSCTL:-}"
+    if [ -z "$sysctl_bin" ]; then
+      if [ -x /nonexistent/sysctl ]; then sysctl_bin=/nonexistent/sysctl; else sysctl_bin=sysctl; fi
+    fi
+    echo "$sysctl_bin"'
+  [ "$output" = "sysctl" ]
+  # ...and the same resolver with the REAL path present picks the absolute one, so P6 proves the
+  # fallback is a fallback rather than the branch that always runs.
+  run env -u CC_FIRE_SYSCTL bash -c '
+    sysctl_bin="${CC_FIRE_SYSCTL:-}"
+    if [ -z "$sysctl_bin" ]; then
+      if [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl; else sysctl_bin=sysctl; fi
+    fi
+    echo "$sysctl_bin"'
+  [ "$output" = "/usr/sbin/sysctl" ]
+}
+
+@test "P7 vm_stat's bare name is DELIBERATE — /usr/bin is reachable where /usr/sbin is not" {
+  # The header claims vm_stat is safe on its bare name because it lives in /usr/bin. That is a
+  # claim about the environment, so it is checked here rather than remembered — this is the test
+  # that would go red if the headroom term ever needed the same fix as the load term.
+  run env -i PATH="$NOSBIN_PATH" bash -c 'command -v vm_stat'
+  [ "$status" -eq 0 ]
+  # ...and the asymmetry it rests on: the SAME PATH cannot reach sysctl. One assertion without the
+  # other would not establish that /usr/sbin-vs-/usr/bin is the discriminator.
+  run env -i PATH="$NOSBIN_PATH" bash -c 'command -v sysctl'
+  [ "$status" -ne 0 ]
+}
+
+@test "P8 no bare-name sysctl survives in handoff-fire.sh — the class, not just the two sites" {
+  # An inventory, not a spot-check: a third read added later by bare name would reintroduce exactly
+  # this bug and every case above would still pass (memory inventory-before-building).
+  local hits
+  hits="$(grep -nE '(^|[^/[:alnum:]_-])sysctl[[:space:]]+-n' "$REPO/scripts/handoff-fire.sh" \
+            | grep -v '^\s*[0-9]*:\s*#' | grep -v 'sysctl_bin' || true)"
+  [ -z "$hits" ] || { echo "BARE-NAME sysctl read(s) still present:"; echo "$hits"; false; }
 }

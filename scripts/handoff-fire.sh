@@ -2236,6 +2236,47 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 # READ when non-empty. They exist so the bats corpus can pin synthetic inputs (M11: a test's
 # environment is pinned, not ambient). NEVER set them in production: an override silences the
 # instrument it replaces, and a gate reading a constant is a deleted gate.
+#
+# ---- PATH-INDEPENDENT sysctl (item 02ae8ae886a1, 2026-08-06) ------------------------------------
+# The load term above shipped reading `sysctl` by BARE NAME, and it had never once evaluated in
+# production. Measured in ~/.claude/logs/handoffs.jsonl over 2026-08-03..06: of the 239 rows this
+# gate wrote with itself switched ON, 222 (93%) read
+#     hw.ncpu unreadable ('') — load term not evaluated
+# and only 17 carried numbers. `sysctl` lives in /usr/sbin, which is NOT on a minimal PATH —
+# `env -i /bin/sh` resolves /usr/gnu/bin:/usr/local/bin:/bin:/usr/bin:. and `command -v sysctl`
+# fails there. So from any caller whose PATH lacks /usr/sbin the read returned '', the `case`
+# arm below fired, and the gate admitted WITHOUT MEASURING. This is the shape the header two
+# paragraphs up warned about in the abstract — "a broken sysctl manufactures a 100%-admit
+# population indistinguishable from a quiet box" — arriving as the gate's actual steady state.
+#
+# CAUSE, measured rather than inferred (the fail-open string alone cannot tell PATH-miss from
+# exec-deny from garbage output — `2>/dev/null || true` swallows 126, 127 and a bad parse alike):
+#     env -i PATH=/usr/local/bin:/bin:/usr/bin sh -c 'sysctl -n hw.ncpu'            -> ''   ← repro
+#     env -i PATH=/usr/local/bin:/bin:/usr/bin sh -c '/usr/sbin/sysctl -n hw.ncpu'  -> '10'
+# Same box, same second. Two further facts rule out the box itself: the 17 `measured` rows prove
+# sysctl runs fine from SOME callers here, and `vm_stat` — same kind of binary, same kind of
+# caller, but in /usr/bin — never failed. An exec-deny would not respect that /usr/sbin-vs-/usr/bin
+# split; a PATH miss is exactly that split.
+#
+# END-TO-END, this script under `env -i PATH=/usr/local/bin:/usr/bin:/bin` with a fixtured HOME:
+#   pre-fix   basis=fail-open  hw.ncpu unreadable ('') — load term not evaluated   ← the ledger
+#                                                                                    string, exact
+#   post-fix  basis=measured   load 10.09 on 10 cores = 1.01/core · reclaimable 33.89GB
+# The pre-fix half is the load-bearing one: it reproduces the production row VERBATIM, so the
+# repair is demonstrated against the artifact that was actually failing rather than against a
+# hand-built approximation of it (memory control-must-replay-the-real-artifact).
+#
+# Resolved ABSOLUTELY, the shape proven by capacity-alarm.sh rung 7 (6eb2e289): an EXPLICIT
+# override is honoured verbatim and only the DEFAULT falls back, because folding the override into
+# the fallback list is how an override stops being one (memory path-resolved-dependency-in-daemon-
+# code). Seam: CC_FIRE_SYSCTL — this file's own CC_FIRE_* namespace, deliberately NOT rung 7's
+# CC_CAP_SYSCTL: that prefix is capacity-alarm.sh's, and sharing one variable would let a stub
+# aimed at one subject silently redirect the other.
+#
+# vm_stat below is left on its bare name ON PURPOSE, and this is a measurement, not an oversight:
+# it lives in /usr/bin, which is the floor of every PATH including the minimal one above, so it is
+# reachable where sysctl is not. tests/handoff-fire-capacity-gate.bats pins that reachability so
+# the claim is checked rather than remembered.
 capacity_gate() {
   # EVERY `return 0` below is preceded by an emit_gate_admit — the admit record cannot acquire a
   # silent branch, and the ADMIT-COVERAGE test in tests/handoff-fire-capacity-gate.bats greps this
@@ -2245,21 +2286,31 @@ capacity_gate() {
     # a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
     emit_gate_admit capacity gate-off "CC_FIRE_CAPACITY_GATE=off — no term evaluated"; return 0
   fi
-  local ncpu load ceiling verdict lpc floor head_gb vms
-  ncpu="$(sysctl -n hw.ncpu 2>/dev/null || true)"
-  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
+  local ncpu load ceiling verdict lpc floor head_gb vms sysctl_bin
+  sysctl_bin="${CC_FIRE_SYSCTL:-}"
+  if [ -z "$sysctl_bin" ]; then
+    if [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl; else sysctl_bin=sysctl; fi
+  fi
+  ncpu="$("$sysctl_bin" -n hw.ncpu 2>/dev/null || true)"
+  load="$("$sysctl_bin" -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
   if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
   ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"
   # Each fail-open below is an admit the gate did NOT measure. Filed as basis "fail-open" with the
   # dead probe named, because a broken sysctl otherwise manufactures a 100%-admit population that is
   # indistinguishable from a quiet box — the gate deleted, reading as the gate healthy.
+  #
+  # The RESOLVED BINARY is named in the row, not just the failing key. Before this, all 222 dead
+  # rows carried one identical string, so the ledger could not say whether the next one was the
+  # same PATH miss or a NEW cause (an exec-deny, a sandbox, a sysctl that stopped answering) —
+  # states that read alike but have different fixes. `via /usr/sbin/sysctl` in a future row means
+  # the PATH class is NOT the explanation and something else needs finding.
   case "$ncpu" in ''|*[!0-9]*)
-    echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') -> ADMIT (fail-open)" >&2
-    emit_gate_admit capacity fail-open "hw.ncpu unreadable ('$ncpu') — load term not evaluated"; return 0 ;;
+    echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') via $sysctl_bin -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "hw.ncpu unreadable ('$ncpu') via $sysctl_bin — load term not evaluated"; return 0 ;;
   esac
   case "$load" in ''|*[!0-9.]*)
-    echo "-- capacity gate: vm.loadavg unreadable ('$load') -> ADMIT (fail-open)" >&2
-    emit_gate_admit capacity fail-open "vm.loadavg unreadable ('$load') — load term not evaluated"; return 0 ;;
+    echo "-- capacity gate: vm.loadavg unreadable ('$load') via $sysctl_bin -> ADMIT (fail-open)" >&2
+    emit_gate_admit capacity fail-open "vm.loadavg unreadable ('$load') via $sysctl_bin — load term not evaluated"; return 0 ;;
   esac
   case "$ceiling" in ''|*[!0-9.]*)
     echo "-- capacity gate: bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)" >&2
