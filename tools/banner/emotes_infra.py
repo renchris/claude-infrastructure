@@ -450,6 +450,14 @@ def _staged() -> Emote:
         cls="BEAT",
         tie="docs/activation/pending-activation/ — finished, declared, and deliberately not "
         "switched on until the operator says so",
+        review="Hard to notice, and it is the one candidate whose subject fights back: a viewer "
+        "is likely to miss the point rather than misread it. It renders correctly and it is not "
+        "confusing. Measured 0.94% frame movement at its peak — the lowest of all 27 candidates, "
+        "and 0.14 points above the floor that convicts a panel of being a still. Read that as "
+        "corroboration of the eye, not as the verdict: movement% is a static-panel tripwire and "
+        "was measured NOT to track legibility (see scripts/emote-verify.py). Cutting it costs the "
+        "one true statement here that nothing else in the pack makes — that things get built and "
+        "then deliberately left switched off.",
     )
     a, b = e.window
     xs = [140.0, 204.0, 268.0, 332.0, 396.0]
@@ -526,6 +534,14 @@ def _standaside() -> Emote:
         cls="STATE",
         tie="bin/cc-bats + scripts/qos-census.sh — the heavy job demotes ITSELF to the background "
         "band, so it can never be the reason you are waiting",
+        review="Flagged alongside THE UNSWITCHED as hard to notice — but this half of that verdict "
+        "may already be spent, and the page cannot tell you, so the dates are here instead. The "
+        "'too subtle' defect was diagnosed and fixed in c5ed9c6c, which raised the fast segment "
+        "from 110 px to 190 px (3x baseline to 5.6x). That commit landed at 05:31:07Z on "
+        "2026-07-31; the reservation was recorded at 05:45:26Z the same morning, fourteen minutes "
+        "later. Whether the author re-watched it after the fix is not recoverable — the session "
+        "transcript is gone. What IS measurable now: 4.90% frame movement, 13th of 27 and five "
+        "times THE UNSWITCHED's. Judge it fresh rather than inheriting the flag.",
     )
 
     def props() -> str:

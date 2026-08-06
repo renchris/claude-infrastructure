@@ -176,7 +176,15 @@ PY
 # ── the shipping corpus ──────────────────────────────────────────────────────────────────────────
 
 @test "every shipping candidate passes the gate" {
+  # The count is read from the module rather than written here as `27`. That literal was a booby
+  # trap: decision 47b392d6e9eb defaults to "keep all eight on the review page and decide by eye",
+  # which explicitly leaves the operator free to CUT a candidate after looking at the artwork — and
+  # this test would have gone red for them doing precisely the thing it was deferred to them to do.
+  # A test that convicts the right action is worse than no test. Self-consistency still catches the
+  # real defect: a build that emits fewer candidates than the corpus holds.
+  n="$(python3 -c "import sys;sys.path.insert(0,'$BANNER');import emotes;emotes.load_packs();print(len(emotes.EMOTES))")"
+  [ "$n" -gt 0 ] || false
   run python3 "$BANNER/emotes.py" --out "$BATS_TEST_TMPDIR/out"
   [ "$status" -eq 0 ] || false
-  [[ "$output" == *"27 candidate(s)"* ]]
+  [[ "$output" == *"$n candidate(s)"* ]]
 }
