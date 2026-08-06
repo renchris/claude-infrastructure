@@ -467,3 +467,70 @@ Unlike the `gi-corpus` reconcile this is mechanical — 4 files, one line each, 
 the `-C` use-site to the `local` binding, no behaviour change when `$1` is non-empty — but it is
 still someone else's un-landed branch content in a class whose whole failure mode is careless
 resolution, so it is filed rather than swept in here.
+
+---
+
+## EXECUTED — the two RETIRE verdicts are now branch deletions (2026-08-06 05:16Z, backlog `836828a990d7`)
+
+Two sections above adjudicated `fix/gi-bisect` and `integ/git-identity` as **RETIRE**. A verdict is
+not a retirement — the same gap the Erratum names for `5f1d0757` ("a verdict of LAND is not a
+landing"). Both refs are now **deleted**, so the misland they warned about is no longer reachable by
+a future session reading only a branch name:
+
+| Branch | Sha at deletion | Deleted with | Content oracle | Recoverable from |
+|---|---|---|---|---|
+| `integ/git-identity` | `a25ed2e4` | `git branch -d` (rc 0) | `git cherry` **empty** — nothing unique | ancestor of `origin/main` |
+| `fix/gi-bisect` | `2f159a7b` | `git branch -D` (`-d` refused, rc 1) | `git cherry` `- 2f159a7b` | `refs/heads/ship/backup-da2a6943`; content = `7c32cc6f` |
+
+**`git branch -d` is the actuator, and it split exactly where the Erratum predicted.** It deleted
+`integ/git-identity` unprompted and *refused* `fix/gi-bisect` as "not fully merged" — because a
+cherry-picked sha is not an ancestor, which is the count over-report restated by a second instrument.
+`-d` was run first on both deliberately: letting git arbitrate turns "I believe this is subsumed"
+into a machine verdict, and the one case where its answer is structurally wrong is the one the
+Erratum had already isolated and `git cherry` already settled. `-D` there is not a bypass of a
+safety check; it is the documented exception, taken with the recovery ref named above.
+
+### Both retirement rationales had rotted — verdicts survived, reasons did not
+
+Neither branch was still the thing its filed rationale described. Recorded because the *verdict*
+being right twice, for reasons that were wrong twice, is the trap this doc keeps re-teaching:
+
+- **`integ/git-identity` was no longer the stale merge.** The item retired it as "contains 1 of
+  `fix/gi-corpus`'s 3 commits — the pre-fix weak shape wearing the name 'reconciled'". By deletion
+  time it had been rebased onto `3b454188` and **landed**; its tip `a25ed2e4` is a shellcheck
+  cleanup that is an ancestor of trunk. It held nothing. The hazard that remained was purely the
+  *name*: "the reconciled branch" is an invitation, and an empty branch answers it as readily as a
+  stale one.
+- **`fix/gi-bisect`'s blast radius grew while it sat.** The item measured a two-dot merge at 1,815
+  deletions; at deletion the same merge measured **98 files, 4,753 deletions**, because the branch
+  fell to 31 commits behind. Direction unchanged, magnitude 2.6×. A staleness cost quoted from a
+  filing is a lower bound on the staleness cost at execution.
+
+The step-cap regression claim held on re-measurement: `BISECT_MAX_STEPS` appears **0** times on
+`fix/gi-bisect` and **7** on trunk (`scripts/postland-verify.sh:190`).
+
+### The `gi-corpus` reconcile above was decided by LANDING, not by the human read it asked for
+
+Not this backlog item's scope and not acted on — recorded because the "Still open" line directly
+above is now overtaken by content. All **four** `fix/gi-corpus` commits read `-` under
+`git cherry origin/main fix/gi-corpus` (equivalents landed as `a465554e`, `8898af70` et al), and
+that includes the shape the reconcile flagged as inert — `git -C "${R:?repo path required}"` where
+`R` has a trailing literal segment and can never be empty — now live on trunk at
+`tests/postland-verify.bats:118-119` and `tests/worktree-gc.bats:25-26`, across 29 test files.
+
+So the open question is no longer "should this land"; it is "should ~18 inert guards now on trunk be
+reverted, and does teaching the shape by example cost more than the churn". That is still a human
+read and still not a gate — but it is now a question about **trunk**, not about a branch.
+
+This composes with the guards-half census above rather than competing with it: that section measures
+`5f1d0757`'s 30 files and finds trunk at 16 binding / **24 use-site**; this one measures where a
+chunk of those use-site guards came from and why they are hard to argue about — a use-site guard is
+not uniformly a downgrade. In the 4 files that section names it *is* one, because the binding is
+genuinely unguarded and the following `config user.email` rides a bare variable. In the `gi-corpus`
+files it is merely **inert**, because the variable it guards has a trailing literal segment and can
+never be empty. Same spelling, two different verdicts, and no lint keyed on the spelling can tell
+them apart — which is the reconciliation section's own closing point, now with a second instance.
+
+Filed, not fired: retiring `fix/gi-corpus` (its content is fully landed, so the ref holds nothing)
+or reverting the inert guards is a separate destructive call on a peer's branch, outside this item's
+frozen scope.
