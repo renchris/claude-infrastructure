@@ -78,7 +78,12 @@ elif [ ! -f "$SUITE" ]; then
   todo "LR-v" "NOT PROVEN — SSOT PAIR (plist ↔ header): the committed com.reso.lr-reset-poller.plist and the poller's own SHIPPED-POSTURE header marker declare the SAME autofire value, and the plist ACTIVELY sets it. RED-provable: re-commenting the EnvironmentVariables block (the pre-4b0efff2 shape) reads as absent via plistlib and fails. Why registered: launchd-parity-lint.sh chains live == plist but is blind to PROSE in siblings, which is how the header kept saying 'OFF by default' for 12 days after autofire went live."
 else
   if command -v bats >/dev/null 2>&1; then
-    if bats "$SUITE" >/dev/null 2>&1; then
+    # `</dev/null`: bats INHERITS stdin into every test, so a suite stubbing a stdin-consuming binary
+    # with an unconditional `cat` hangs forever when stdin never EOFs (5e460544 measured rc 124;
+    # ce13bd08 fixed the landing runners). MEASURED 2026-08-06: launchd already hands /dev/null, so
+    # the exposed path is the one this gate actually runs on — a session/desk invocation, whose fd 0
+    # is a unix socket a child reads without ever seeing EOF. This gate reads no stdin of its own.
+    if bats "$SUITE" </dev/null >/dev/null 2>&1; then
       ok "LR-a..v" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p), and the 2026-07-30 injection triad — parked-record fields read as DATA not code (LR-q), fail-closed on a malformed record (LR-r), %q-quoted launcher argv (LR-s), plus the posture-honesty trio â hint-matches-reason (LR-t), positional-independent --dry-run + unknown-arg refusal (LR-u, which fixed a silent REAL run), and the SSOT-pair ratchet (LR-v: plist â header cannot drift) â all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
       bad "LR-a..v" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"

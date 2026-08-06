@@ -169,7 +169,19 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   for s in "${SUITES[@]}"; do
     if [ ! -f "$DEPLOY_REPO/$s" ]; then say "  skip $s (absent in the deployed tree)"; continue; fi
     n=$((n + 1))
-    tap="$( cd "$DEPLOY_REPO" && bounded "$HOST_TIMEOUT_S" nice -n 19 "$BATS_BIN" "$s" 2>&1 )"; rc=$?
+    # `</dev/null` — THE $BATS_BIN INVOCATION SITE (the resolution at the top of this file is not
+    # one). bats does not read stdin itself but INHERITS it into every test, so a manifest suite that
+    # stubs a stdin-consuming binary with an unconditional `cat` waits forever for an EOF that never
+    # comes (5e460544 measured rc 124; ce13bd08 fixed the landing runners).
+    # MEASURED 2026-08-06, correcting the premise those commits shipped with: launchd hands its child
+    # /dev/null on fd 0 already, so `com.claude.deploy-live --auto` is NOT the exposed path. The
+    # exposed path is an agent- or desk-fired deploy, where fd 0 is a unix SOCKET whose reader never
+    # sees EOF. That hang would be especially quiet here: host_checks never blocks and never changes
+    # the exit code, so a wedged suite is not even a red — it is a deploy that simply never returns.
+    # `bounded` DOES cover it (rc 124 → CUT), which contains the failure; this removes its cause.
+    # Nothing pipes into this script and its four while-read loops are all fed from files, so no
+    # stdin in use is lost.
+    tap="$( cd "$DEPLOY_REPO" && bounded "$HOST_TIMEOUT_S" nice -n 19 "$BATS_BIN" "$s" </dev/null 2>&1 )"; rc=$?
     notok="$(printf '%s\n' "$tap" | grep -c '^not ok' 2>/dev/null || true)"
     case "$notok" in ''|*[!0-9]*) notok=0 ;; esac
     # R6: a NAMED failure is the only red. rc alone is blind — bats masks a load-kill behind its

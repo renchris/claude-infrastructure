@@ -45,7 +45,12 @@ if [ ! -f "$TOOL" ]; then
 else
   "$TOOL" selftest >/dev/null 2>&1 && ok "RT" "cc-route selftest GREEN — slot plans, frontier-edge fallback (reason-carrying, fable-id-free), quota-cliff stop (exit 4 + limit-recover, no plan), cliff→kimi offer gated on 'claude-kimi wired' (RT-g: still exit 4, OFFER not auto-route), data-unavailable stop, SSOT parse fail-loud, outcome records all fire RED-provably" || bad "RT" "cc-route selftest not green — an RT-a..g RED-proof does not fire"
   if [ -f tests/cc-route.bats ] && command -v bats >/dev/null 2>&1; then
-    bats tests/cc-route.bats >/dev/null 2>&1 && ok "RT-cli" "tests/cc-route.bats GREEN — CLI exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) regression-pinned" || bad "RT-cli" "tests/cc-route.bats RED"
+    # `</dev/null`: bats INHERITS stdin into every test, so a suite stubbing a stdin-consuming binary
+    # with an unconditional `cat` hangs forever when stdin never EOFs (5e460544 measured rc 124;
+    # ce13bd08 fixed the landing runners). MEASURED 2026-08-06: launchd already hands /dev/null, so
+    # the exposed path is the one this gate actually runs on — a session/desk invocation, whose fd 0
+    # is a unix socket a child reads without ever seeing EOF. This gate reads no stdin of its own.
+    bats tests/cc-route.bats </dev/null >/dev/null 2>&1 && ok "RT-cli" "tests/cc-route.bats GREEN — CLI exit-code contract (0 plan · 2 usage · 3 blind/no-data · 4 cliff) regression-pinned" || bad "RT-cli" "tests/cc-route.bats RED"
   else
     todo "RT-cli" "NOT BUILT — bats CLI-contract regression (tests/cc-route.bats)"
   fi
