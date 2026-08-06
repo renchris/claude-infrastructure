@@ -73,6 +73,61 @@ setup() {
   [ "$launchd_n" -gt 10 ] || { echo "launchd population is $launchd_n — implausibly small"; false; }
 }
 
+@test "the bats corpus is a NON-EMPTY population — 'scans 0 test files' is the bug, restated" {
+  # This lint judged ZERO of tests/*.bats until 2026-08-06, and the corpus is what the two scheduled
+  # runners actually execute. A zero here is not a clean corpus, it is the original defect returning,
+  # and it would show up as a green gate — so it is asserted by COUNT, from --list's own census.
+  run "$LINT" --list
+  [ "$status" -eq 0 ]
+  local corpus_n
+  corpus_n="$(printf '%s\n' "$output" | sed -n 's/^BATS-CORPUS POPULATION (\([0-9]*\) file(s)).*/\1/p')"
+  [ -n "$corpus_n" ] || { echo "--list printed no corpus census at all:"; echo "$output"; false; }
+  [ "$corpus_n" -gt 100 ] || { echo "bats corpus population is $corpus_n — implausibly small"; false; }
+}
+
+@test "every plist in CORPUS_RUNNERS exists — a renamed runner must not silently empty the corpus" {
+  # The runners are NAMED rather than inferred (both inferences were measured and rejected; see the
+  # lint's header). A name is the one thing that can rot without anyone noticing, so it is checked
+  # from the other end: --list resolves each runner to a PATH, and a runner that has gone missing
+  # resolves to nothing. The lint's own answer to this is exit 2 on the real tree, which case 19 of
+  # --selftest would catch; this asserts the census a reader actually looks at.
+  run "$LINT" --list
+  [ "$status" -eq 0 ]
+  local runners_n
+  runners_n="$(printf '%s\n' "$output" | grep -c '^  via com\.')"
+  [ "$runners_n" -ge 2 ] || {
+    echo "only $runners_n corpus runner(s) resolved — CORPUS_RUNNERS names a plist the tree no longer has:"
+    printf '%s\n' "$output" | sed -n '/^BATS-CORPUS/,$p'
+    false
+  }
+}
+
+@test "the bats half is NOT vacuous: an emptied allowlist names a tests/ file against a runner PATH" {
+  # The third positive control, matching the one each older half already has. Without it the corpus
+  # could be scanned, judged, and report nothing for a reason nobody would ever see — which is the
+  # state this whole half was added to end, and which looked exactly like a clean gate for months.
+  run env -u CC_UNATTENDED_OWN CC_UNATTENDED_ALLOWLIST="" "$LINT" "$REPO"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tests/"* ]] || { echo "bats half found nothing:"; echo "$output"; false; }
+}
+
+@test "the corpus runners' PATH really does omit /sbin — the premise this half rests on" {
+  # If a runner's PATH ever gains /usr/sbin:/sbin, the /sbin-only class stops being reachable-by-
+  # accident and this half quietly stops reporting it — a fine outcome, but one that must be a
+  # DECISION rather than a drift nobody noticed. Assert the premise so widening the PATH shows up
+  # here as a failing test with this comment attached, not as a silently narrower lint.
+  run "$LINT" --list
+  [ "$status" -eq 0 ]
+  local n
+  n="$(printf '%s\n' "$output" | grep '^  via com\.' | grep -c '/sbin' || true)"
+  [ "$n" -eq 0 ] || {
+    echo "$n corpus runner(s) now carry /sbin on PATH — the md5 class is no longer detectable there."
+    echo "That may be correct. If it is, retire this test deliberately; do not delete it in passing."
+    printf '%s\n' "$output" | grep '^  via com\.'
+    false
+  }
+}
+
 @test "the launchd census parses INLINE export PATH, not just the EnvironmentVariables key" {
   # (A) of the generating item: only ONE plist in this corpus uses the EnvironmentVariables dict, so
   # a lint reading that key alone judges 1 of 23 and calls the rest clean. If this regresses, every
