@@ -689,6 +689,22 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   # (run_scoped_suite alone calls this twice per suite). A deadline already passed still yields a
   # 1s bound rather than an unbounded child: the caller's loop stops starting suites, and anything
   # already inside dies fast and honestly as a CUT.
+  #
+  # STDIN IS /dev/null, AND THIS IS THE ONE PLACE THAT DECIDES IT (2026-08-06). A land can be fired
+  # by launchd or the desk, so this process's stdin is routinely a pipe with no writer that never
+  # EOFs. bats does not read stdin, but it INHERITS it into every test, and a suite that stubs a
+  # stdin-consuming binary with an unconditional `cat` then waits for an EOF that is not coming.
+  # 5e460544 is that defect measured: tests/handoff-fire-kitty.bats' osascript stub drained
+  # unconditionally — correct for `osascript - …` (script ON stdin), a forever-hang for
+  # `osascript -e …` (script in ARGV, stdin merely inherited). stdin=/dev/null → 34/34 in <1s;
+  # stdin=an open pipe with a live writer → rc 124, wedged.
+  # The polarity is why it must be fixed HERE: a hand-run gets a stdin that EOFs, so it is green by
+  # hand and hangs only on the automated path, and a hung gate looks exactly like a slow one.
+  # 5e460544 fixed three stubs; this covers the CLASS — all 290 suites were screened under a no-EOF
+  # stdin and none depends on inherited stdin, so every suite written later is immunised too.
+  # Being THE chokepoint is what makes one redirect enough: the smoke runner, the v1 corpus runner
+  # and every exoneration re-run reach bats only through here. No caller pipes into gate_bats
+  # (they pipe its OUTPUT — run_scoped_suite tees), so nothing loses a stdin it was using.
   local homeenv=() pre=() rem
   [[ -n "${GATE_HOME:-}" ]] && homeenv=(HOME="$GATE_HOME")
   if [[ -n "${SMOKE_DEADLINE:-}" ]]; then
@@ -705,7 +721,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   env -u SHIP_LAND_GATE_ROUNDS -u SHIP_LAND_VERIFY_RETRIES -u SHIP_LAND_GATE_SCOPE \
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
-      CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@"
+      CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
 }
 
 run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one process per suite.

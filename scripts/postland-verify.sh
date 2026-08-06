@@ -116,6 +116,33 @@ NOTIFY_CMD="${CC_POSTLAND_NOTIFY:-}"                                   # empty �
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 LANDLOG="${CC_POSTLAND_LANDLOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 BATS_BIN="${CC_POSTLAND_BATS:-bats}"
+# ── EVERY $BATS_BIN CALL SITE REDIRECTS STDIN FROM /dev/null (2026-08-06) ────────────────────────
+# STATED HERE ONCE; the sites carry only a `</dev/null` and no repeated rationale.
+#
+# WHY. This runner is launched by launchd/the desk, so its stdin is whatever the daemon handed it —
+# routinely a pipe with no writer that will never EOF. bats does not read stdin itself, but it
+# INHERITS it all the way down into every test, and a suite that stubs a stdin-consuming binary
+# with an unconditional `cat` then blocks forever waiting for an EOF that is not coming. That is
+# 5e460544 exactly: tests/handoff-fire-kitty.bats stubbed osascript with a bare `cat >/dev/null`,
+# which is correct for `osascript - …` (script ON stdin) and a forever-hang for `osascript -e …`
+# (script in ARGV, stdin merely inherited). Measured there: stdin=/dev/null → 34/34 green in <1s;
+# stdin=an open pipe with a live writer → rc 124, wedged at the first `-e` caller.
+#
+# WHY HERE AND NOT ONLY IN THE SUITE. 5e460544 fixed the three stubs of that shape; this fixes the
+# CLASS. All 290 suites were screened under a no-EOF stdin and none depends on inherited stdin, so
+# /dev/null is a strictly safer stdin than the one a daemon supplies — and one redirect per call
+# site immunises every suite that exists today and every one written later, including any stub
+# whose drain is correct for its own subject. The polarity is what makes it worth doing at the
+# runner: a hand-run gets a stdin that EOFs and is green, so the hang is invisible to the only
+# person who could see it, and a hung gate is indistinguishable from a slow one — nothing alarms.
+#
+# WORST EXPOSURE, and the reason this is not cosmetic: do_bisect's generated runner (see there)
+# redirected stdout+stderr but not stdin, so a wedged suite inside `git bisect run` hangs a step
+# that nothing else bounds by content. 7c32cc6f WALLED that runaway (a 900s bound + a step cap)
+# but did not DE-CAUSE it. This does.
+#
+# NOT via `bounded`: that helper also runs `git bisect run` and other non-bats children, and the
+# screen that licenses /dev/null covers the bats tree only. Per call site, deliberately.
 # ── THIS SCRIPT DELIBERATELY DOES NOT NORMALIZE PATH (settled 2026-07-29) ────────────────────────
 # Do not re-add a PATH prepend here. It was here (5abe5934, 2026-07-26) and was removed on purpose;
 # the reasoning below is what stops it coming back the next time a red stamp looks PATH-shaped.
@@ -364,7 +391,7 @@ sha12() { printf '%s' "$1" | cut -c1-12; }
 tree_of() { git -C "$REPO" rev-parse "$1^{tree}" 2>/dev/null; }
 env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tree (tool bumps happen
   local b c l                                # constantly), so a stale-env green stamp stays diagnosable
-  b="$("$BATS_BIN" --version 2>/dev/null | awk '{print $2}')"
+  b="$("$BATS_BIN" --version </dev/null 2>/dev/null | awk '{print $2}')"
   c="${CLAUDE_CODE_EXECPATH:-}"; [ -n "$c" ] && c="$(basename "$c")" || c=unknown
   l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"                 # 1-min, at run start
   ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s"}' "${b:-unknown}" "${c:-unknown}" "${l:-0}")"
@@ -623,7 +650,7 @@ suite_file_at() { # <1-based test index> → tests/<file>.bats (empty when unmap
   case "$want" in ''|*[!0-9]*) return 1 ;; esac
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    n="$(int_or_zero "$( (cd "$WORKTREE" && bounded 20 "$BATS_BIN" --count "$f") 2>/dev/null | tr -d '\n')")"  # parses, never executes
+    n="$(int_or_zero "$( (cd "$WORKTREE" && bounded 20 "$BATS_BIN" --count "$f") </dev/null 2>/dev/null | tr -d '\n')")"  # parses, never executes
     acc=$(( acc + n ))
     if [ "$want" -le "$acc" ]; then printf '%s\n' "$f"; return 0; fi
   done <<EOF
@@ -637,7 +664,7 @@ confirm_hang() { # <suspect-file> — THE clean discriminator: the file, ALONE, 
   local rc=0
   # `bounded` is a FUNCTION, so it must be the outer call — the QoS prefix execs a binary and could
   # never run it. timeout-then-QoS also keeps the bound owning the process group.
-  ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$FILE_TO" "${QOS[@]}" "$BATS_BIN" "$1" ) >/dev/null 2>&1 || rc=$?
+  ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$FILE_TO" "${QOS[@]}" "$BATS_BIN" "$1" ) </dev/null >/dev/null 2>&1 || rc=$?
   RETRIES=$((RETRIES+1))
   [ "$rc" -eq 124 ]
 }
@@ -684,14 +711,14 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
     # `bats -f` takes a REGEX: escape every metachar in the TAP-reported name, then anchor it.
     filt="$(printf '%s' "$t" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
     ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${RETRY_QOS[@]}" \
-        "$BATS_BIN" -f "^${filt}\$" "$f" ) > "$out" 2>&1 || rc=$?
+        "$BATS_BIN" -f "^${filt}\$" "$f" ) </dev/null > "$out" 2>&1 || rc=$?
     # A filter that matched NOTHING exits 0 with `1..0` — a NON-VERDICT that would exonerate the file
     # for free. Only trust this run if it actually PLANNED a test; otherwise fall through to the file.
     [ "$(tap_plan "$out")" -gt 0 ] && { rm -f "$out"; return "$rc"; }
     rm -f "$out"; rc=0
   fi
   # FALLBACK: the whole file, under the bound sized for a whole file.
-  ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${RETRY_QOS[@]}" "$BATS_BIN" "$f" ) >/dev/null 2>&1 || rc=$?
+  ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${RETRY_QOS[@]}" "$BATS_BIN" "$f" ) </dev/null >/dev/null 2>&1 || rc=$?
   return "$rc"
 }
 classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
@@ -869,7 +896,11 @@ do_bisect() { # <file> <good> <bad> → prints the first-bad sha (empty when und
     # shellcheck disable=SC2016  # ditto — $n is read by the RUNNER, not by us
     printf '[ "$n" -le %s ] || exit 129\n' "$BISECT_MAX_STEPS"
     printf '[ -f "%s" ] || exit 125\n' "$file"
-    printf '%s"%s" "%s" >/dev/null 2>&1\n' "$qos" "$BATS_BIN" "$file"
+    # `</dev/null` is THE worst-exposure site of the class documented at BATS_BIN. This runner is
+    # `git bisect run`'s child, so its stdin is the daemon's — and a step that wedges on it is a
+    # hang nothing decides by content. 7c32cc6f's wall + step cap CONTAIN that runaway; this is
+    # what removes its cause.
+    printf '%s"%s" "%s" </dev/null >/dev/null 2>&1\n' "$qos" "$BATS_BIN" "$file"
     # shellcheck disable=SC2016  # authoring a script: $rc must NOT expand here
     printf 'rc=$?\n[ "$rc" -le 1 ] || exit 125\nexit "$rc"\n'
   } > "$runner"
@@ -1175,9 +1206,13 @@ EOF
     stall="${POSTLAND_STALL_S:-900}"; poll="${POSTLAND_STALL_POLL_S:-60}"
     case "$stall$poll" in *[!0-9]*) stall=900; poll=60 ;; esac
     if [ "$stall" -eq 0 ] || [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then
-      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) > "$tap" 2>&1; rc=$?
+      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) </dev/null > "$tap" 2>&1; rc=$?
     else
-      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" exec "$TIMEOUT_BIN" -k 10 "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) > "$tap" 2>&1 &
+      # EXPLICIT on the async branch too. bash redirects an asynchronous command's stdin from
+      # /dev/null only when job control is OFF — true for this script today, and exactly the kind
+      # of ambient property that stops being true (one `set -m`, one interactive re-entry). The
+      # whole corpus is behind it; it does not get to depend on a default.
+      ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" exec "$TIMEOUT_BIN" -k 10 "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) </dev/null > "$tap" 2>&1 &
       cpid=$!; last=0; still=0
       while kill -0 "$cpid" 2>/dev/null; do
         sleep "$poll"
