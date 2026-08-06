@@ -37,10 +37,21 @@ setup() {
 
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
   OLOG="$BATS_TEST_TMPDIR/osascript.log"; : > "$OLOG"; export OLOG
+  # THE DRAIN IS CONDITIONAL — drain ONLY a script-on-stdin invocation (`osascript - …`, which is the
+  # shape _as_tty_query uses at handoff-fire.sh:785, where the heredoc guarantees the EOF that ends
+  # it). An UNCONDITIONAL `cat` also reads stdin on the `osascript -e …` shape, where the real binary
+  # never would — and there stdin is whatever the RUNNER inherited, so on a launchd / nightly /
+  # background runner (stdin = a pipe nobody closes) the suite hangs forever. That is not theoretical:
+  # it cost tests/handoff-fire-kitty.bats a 12h+ landing gate that never returned a verdict. This
+  # suite reaches only the `-` shape today, so the guard is LATENT here — kept in lockstep so the
+  # first `-e` assertion added to it does not silently re-arm the trap. Full rationale:
+  # tests/handoff-fire-kitty.bats, the osascript stub in setup().
   cat > "$STUB/osascript" <<'FAKE'
 #!/bin/bash
 printf 'osascript %s\n' "$*" >> "$OLOG"
-cat >/dev/null 2>&1 || true
+for a in "$@"; do
+  if [ "$a" = "-" ]; then cat >/dev/null 2>&1 || true; break; fi
+done
 printf '%s\n' "$TTY_ANSWER"
 FAKE
   chmod +x "$STUB/osascript"
