@@ -357,6 +357,44 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   [ ! -d "$cell2" ]
 }
 
+# ── C7 lifecycle, the OTHER minter: the standalone `bisect` verb ────────────────
+# do_bisect mints a cell exactly like a `--run` does, but its two callers reach it from opposite
+# sides of a SUBSHELL. red_actions runs on a tree the run already minted for, so the parent's
+# WT_MINTED already names the cell and the EXIT trap removes it. verb_bisect is the first thing in
+# the process to mint — and while it called do_bisect through command substitution, that subshell's
+# assignment to WT_MINTED could not reach the parent that runs the trap. teardown_worktrees saw an
+# EMPTY WT_MINTED and removed nothing, so the verb leaked its cell on EVERY path, success included,
+# while the `--run-if-needed` test above tore its own down. That test could never see it: it drives
+# a verb whose mint happens in the parent shell.
+#
+# The runner fix (do_bisect returning through BISECT_CULPRIT) landed without a regression test, so
+# nothing held the property it established. This is that test. It is written against the CONTRACT —
+# "after the verb, no cell survives" — not against the return mechanism, so a later refactor that
+# keeps the property passes and one that reintroduces a subshell anywhere in the mint's call tree
+# fails, whichever way the culprit is returned.
+@test "C7: the standalone bisect verb tears its cell down too — on success AND on undecidable" {
+  printf '@test "subj" { true; }\n' > "$R/tests/subj.bats"; push_commit "subj green"
+  good="$(origin_head)"
+  printf '@test "subj" { false; }\n' > "$R/tests/subj.bats"; push_commit "the culprit"
+  culprit="$(origin_head)"
+  echo unrelated >> "$R/foo.sh"; push_commit "innocent tip"
+  bad="$(origin_head)"
+
+  run bash "$SUT" bisect subj.bats "$good" "$bad"
+  [ "$status" -eq 0 ]
+  # POSITIVE CONTROL, and it is what stops "0 cells" passing vacuously: naming the CULPRIT rather
+  # than the tip proves the runner really executed inside a minted, bisecting cell. A verb that
+  # minted nothing (and so had nothing to leak) could not have produced this sha.
+  [ "$output" = "$culprit" ]
+  [ "$(cells_n)" = "0" ]
+
+  # ...and the undecidable path mints just the same: the subject file is absent at every step, so
+  # every runner invocation SKIPs and no culprit is decided. The cell is still owed a teardown.
+  run bash "$SUT" bisect nosuch.bats "$good" "$bad"
+  [ "$status" -ne 0 ]
+  [ "$(cells_n)" = "0" ]
+}
+
 # ── C5 tree-keying ──────────────────────────────────────────────────────────────
 @test "stamps key on TREE: an amended commit (same tree, new sha) abstains" {
   run bash "$SUT" --run-if-needed
