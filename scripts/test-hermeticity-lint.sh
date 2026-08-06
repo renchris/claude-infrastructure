@@ -425,14 +425,35 @@ is_hermetic() {
 # fabricate a violation naming a good suite (the 2026-07-26 incident this file's PREDICATE RETRY
 # block documents). CHECK_FAILED still forces exit 2, so fail-safe never becomes a silent green.
 
+# strip_comments — the ONE comment-stripping sed, as a stdin filter. Every predicate that must key
+# on what a file DOES rather than what it SAYS calls this, so the halves of a rule cannot drift.
+strip_comments() { sed 's/[[:space:]]#.*$//; s/^#.*$//'; }
+
+# code_lines <file> — the whole file with comments stripped. The SCOPE predicates' analogue of
+# setup_statements(): same sed, whole file rather than the setup() bodies.
+code_lines() { strip_comments < "$1"; }
+
 # Is this suite in scope for rule 2 at all? 0 = it references handoff-fire · 1 = it does not.
 # Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
 # Textual by design — a suite that reaches the fire only through some other wrapper is not matched,
 # which is a known and accepted floor: the ratchet binds where the evidence is unambiguous.
+#
+# COMMENT-STRIPPED, and the asymmetry it fixes is the point. This pair's PIN half was hardened for
+# exactly this reason ("a predicate must key on what the suite DOES, never on what it says about
+# itself") and the SCOPE half was left matching raw prose — so the two halves of one rule disagreed
+# about what counts as evidence. It failed in the direction a scope check must never fail: a suite
+# that merely NAMES handoff-fire in a comment was pulled INTO the rule and then convicted for not
+# pinning a lever it never reads. Measured across tests/ at the time of the fix: 71 suites matched
+# the raw grep, 15 of them in prose ONLY, and 9 of those were latent blockers — advisory until
+# someone touched the file, then a hard land-block prescribing a meaningless `export` (which, once
+# added, would make the suite look permanently in-scope-and-compliant and dilute a real finding).
+# One of the 9 was tests/bats-assert-liveness.bats, whose only sin was a comment citing the suite
+# that motivated it. A rule that fires on prose is the same defect as one that cannot fire.
 references_fire() {
-  local rc
+  local rc code
+  code="$(code_lines "$1" 2>/dev/null)"
   for _ in 1 2 3; do
-    grep -qF 'handoff-fire' "$1" 2>/dev/null; rc=$?
+    grep -qF 'handoff-fire' <<<"$code"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -474,10 +495,15 @@ is_fire_pinned() {
 
 # Is this suite in scope for rule 3? 0 = it invokes the close leg · 1 = it does not.
 # Fail-SAFE = 1 (out of scope): an unreadable scope check must not pull a suite INTO the rule.
+# COMMENT-STRIPPED for references_fire()'s reason. Rule 3 had ZERO prose-only matches in tests/ when
+# that was measured, so this changes no verdict today — it is fixed anyway because the two rules are
+# deliberately the same shape, and a hole patched in one twin and left in the other is how the fire
+# half came to be hardened on its pin side alone.
 references_close_leg() {
-  local rc
+  local rc code
+  code="$(code_lines "$1" 2>/dev/null)"
   for _ in 1 2 3; do
-    grep -qF -- '--close-panes' "$1" 2>/dev/null; rc=$?
+    grep -qF -- '--close-panes' <<<"$code"; rc=$?
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
@@ -500,7 +526,7 @@ references_close_leg() {
 # control-must-replay-the-real-artifact). Same `${line%%#*}` shape scripts/test-walltime-lint.sh
 # already uses; a '#' inside a string is over-stripped, which can only ever cost a MENTION, never a
 # statement, so the fail direction stays safe.
-setup_statements() { setup_bodies "$1" | sed 's/[[:space:]]#.*$//; s/^#.*$//'; }
+setup_statements() { setup_bodies "$1" | strip_comments; }
 
 # 0 = takes a deterministic position on LCW_ORPHAN_CLOSE in setup() · 1 = inherits the operator's.
 # Any position counts (see RULE 3's ASYMMETRY note) — the violation is inheriting one, not choosing
@@ -939,6 +965,32 @@ setup() {
 }
 @test "x" { run bash "$SUBJECT" --dry-run; }
 F
+  # SCOPE-side prose control, the twin of firecomment's PIN-side one. This suite drives some other
+  # tool and only MENTIONS handoff-fire in a comment, so rule 2's premise — "its fires read live
+  # machine load" — is false for it and it must be OUT of scope. Byte-identical to nofire except
+  # for that comment, which is the only axis under test.
+  mkdir -p "$d/firementiononly"
+  cat >"$d/firementiononly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+# NOTE: the regression this pins was first seen in tests/handoff-fire-capacity-gate.bats.
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  # The same control for rule 3's scope predicate — no verdict rides on it today, but the twins are
+  # asserted together so a future hardening cannot land on one side only again.
+  mkdir -p "$d/closementiononly"
+  cat >"$d/closementiononly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+# NOTE: unlike the watchdog, this suite never passes --close-panes.
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
   cat >"$d/firepertest/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
 setup() {
@@ -1241,6 +1293,12 @@ F
   #     still on ambient load. Four suites in the tree are grandfathered for exactly this shape.
   lint_dir "$d/firepertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a per-TEST CC_FIRE_CAPACITY_GATE counted as pinned"; fails=1; }
   lint_dir "$d/firecomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming CC_FIRE_CAPACITY_GATE=off counted as pinned — rule 2 is matching prose"; fails=1; }
+  # (v2) the SCOPE half of the same prose discipline, and the direction the pair was asymmetric in:
+  #      a suite that merely MENTIONS handoff-fire in a comment must be OUT of scope, not convicted
+  #      for failing to pin a lever it never reads. Pairs with (r): (r) shows an unrelated suite is
+  #      not flagged, this shows that naming the subject in prose does not make it related.
+  lint_dir "$d/firementiononly" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite mentioning handoff-fire only in a COMMENT was pulled into rule 2 — the scope predicate is matching prose"; fails=1; }
+  lint_dir "$d/closementiononly" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite mentioning --close-panes only in a COMMENT was pulled into rule 3 — the scope predicate is matching prose"; fails=1; }
   # (w) own-scope governs rule 2 as well: advisory OUTSIDE the lander's diff, blocking INSIDE it.
   lint_dir "$d/fireleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: an AMBIENT violation OUTSIDE the own-set blocked"; fails=1; }
   lint_dir "$d/fireleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an AMBIENT violation INSIDE the own-set did not block"; fails=1; }
@@ -1349,7 +1407,7 @@ F
   ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 56/56 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 56/56 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
