@@ -218,7 +218,33 @@ Two states were known before this check existed — 2026-07-30 concluded cardina
 concluded length binds, and **five consecutive passes inherited the first verdict while the other
 lever was the live one**. Both assumed *something* binds. The third state is that nothing does, and
 it is the one a compaction pass is most likely to misread, because an excess figure computed against
-a stale constant is never zero.
+a stale constant is never zero. **2026-08-06 alone ran all three** — length at 02:06, neither at
+12:51, cardinality at 15:10 (backlog `0fc2ae0d0140`). A verdict has an expected life of hours here.
+
+🚨 **`headroom_target` is NOT 17.1 KB — that demand is PRODUCT-SIDE and no honest pass can reach
+it.** The harness itself emits *"The memory index at … is 21.1KB, approaching the 24.4KB read limit.
+Compact it to under 17.1KB now"*. It appears in **no `settings.json` and no repo hook** — `grep -a`
+finds the template inside the Claude Code binary — and it is a flat **0.7 × the limit**, constant
+regardless of index size (verified unchanged at 21.1 KB and at 20.9 KB, 2026-08-06). At this
+project's entry count it demands **~67 B/entry, below one sentence**. At least six backlog items
+have copied it in verbatim as *"target <17.1KB"*, and each one hands the next pass an unreachable
+goal that argues for grinding live rules. **The contract is the 24,985 B limit with ~2.5 KB of
+headroom as done**; trace a demand to a config file before obeying it (same provenance shape as the
+product-side "don't spawn subagents unless asked" line).
+
+⚠️ **`slack` above answers "how many WOULD fit if I rewrote everything" — that is not runway.** When
+what you need is *how many entries can still be ADDED*, divide by what a line actually costs today:
+
+```
+runway_now = headroom / (avg_prefix + avg_hook + 1)     # what you can ADD, at today's density
+```
+
+Measured 2026-08-06 the two read **37 vs 11** on the same index (hooks written at 157 B against a
+115 B target). The inflated figure had already propagated into a backlog item's premise as *"37 free
+cardinality slots"*, framing an index whose real runway was **7 entries** as one with room to spare.
+Report `runway_now`; quote a target-based ceiling only as the conditional it is. Fixed at the write
+surface in `hooks/memory-nudge.sh` (`1676a681`, red-on-mutation test) — same defect class as the
+`115` one above, on the other lever.
 
 **Titles are the near-lossless lever.** The *filename* carries identity (link target + graph key);
 the title is only a human label. Retitling 49 entries via an explicit **hand-authored map**
