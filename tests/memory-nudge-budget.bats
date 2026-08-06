@@ -132,6 +132,23 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   has "$(printf '%s' "$out" | ctx)" 'hard cap this append:'
 }
 
+@test "runway is counted at the OBSERVED density, not the target-length ceiling" {
+  # 40 entries x 250 B hooks: healthy (10820 B), but written 2.2x longer than the
+  # 115 B target. The target-based ceiling leaves 145 slots; only 52 lines of the
+  # length this index is actually written at fit in the headroom. Leading with 145
+  # tells a caller it has 2.8x the room it has. Measured live 2026-08-06 as 37 vs
+  # 11, and that inflated figure had already reached a backlog item's premise as
+  # "37 free cardinality slots" — framing a cardinality-bound index as length-bound.
+  idx="$(mkindex 40 250)"; out=""
+  [ "$(wc -c <"$idx")" -lt "$LIMIT" ]            # fixture is healthy, not over
+  for _ in $(seq 1 12); do out="$(fire s-runway "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" '~52 entry slots left'           # observed 271 B/line
+  has "$ctxout" 'ACTUALLY written at'
+  has "$ctxout" '(145 only if'                   # ceiling kept, marked conditional
+  hasnt "$ctxout" '~145 entry slots left'        # the pre-fix wording this pins
+}
+
 # ── fail-safe: a side-car must fail no wider than itself ──────────────────────
 
 @test "missing index still emits the plain nudge at the periodic slot" {
