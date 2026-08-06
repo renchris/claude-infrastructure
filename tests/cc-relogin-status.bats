@@ -48,6 +48,35 @@ setup() {
   export CLAUDE_ACCOUNTS_LASTGOOD="$D/lastgood.json"
   export CC_RELOGIN_POLL_LOG="$D/cc-relogin-poll.log"
   export CC_REAPER_IDL="$D/idl.jsonl"
+  # ── the two cc-blockers seams a hermetic $HOME does NOT cover ─────────────────────────────────
+  # Every other sensor in bin/cc-blockers keys off $HOME (beacon hook, reap alarm, team roots,
+  # watchdog, land log, postland, DEPLOY_REPO→cc-fleet) or off $CC_REAPER_IDL (dispatch-inert has
+  # no premise without a `cc-dispatch` actor row), so the two exports above already silence them.
+  # These two do NOT resolve through $HOME, which is exactly why they were missed:
+  #
+  #   CC_PERMPEND_DIR    defaults to the ABSOLUTE /tmp/cc-permission-pending — the operator's live
+  #                      beacon dir. Every pending approval on this machine became an extra
+  #                      `permission-pending` row in the SAME --json array these tests count, so
+  #                      `jq 'length' = 2` read 2 + (however many sessions happen to be waiting)
+  #                      and the all-clear message never rendered (a board with rows has no
+  #                      all-clear path). That is the whole of the 4-test failure: three --json
+  #                      length assertions and the empty-board message.
+  #   CC_BLOCKERS_ACCOUNTS_BIN  defaults to bare `claude-accounts`, resolved on PATH. Every test
+  #                      here seeds a relogin-blocked row, which is precisely the condition
+  #                      drop_stale_relogin asks about — so unfixtured this suite EXECUTES the
+  #                      operator's deployed claude-accounts once per test and lets their live
+  #                      login state decide which rows survive. Latent today only because the
+  #                      fixtures carry `login_expires_at` while the gate reads `.deadline`, so it
+  #                      fails open; a fixture that ever gains a deadline field would flip the
+  #                      verdict by machine (memory unfixtured-sensor-executes-the-deployed-subject).
+  #
+  # Both point at paths that do NOT exist: the alarm and the drop gate each fail open on an absent
+  # input, which is the deterministically-silent baseline the sibling tests/cc-blockers.bats also
+  # chooses. This suite fixtures $HOME and STILL was not hermetic — scripts/test-hermeticity-lint.sh
+  # RULE 1 only asks whether $HOME is fixtured, so it is blind to an absolute or PATH-resolved seam
+  # by construction and reported this file clean throughout.
+  export CC_PERMPEND_DIR="$D/permpend"
+  export CC_BLOCKERS_ACCOUNTS_BIN="$D/absent-claude-accounts"
   # scratch SSOT — dead endpoints + a config_dir with no keychain item, so a sweep (if one ever
   # happened) would be offline and deterministic. Three accounts so state precedence is testable.
   python3 - "$CA_CFG" "$CACHE" <<'PY'
