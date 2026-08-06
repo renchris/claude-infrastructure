@@ -21,6 +21,9 @@
 #                 negative control for B1/B2: a bound wired to fire always would turn it red.
 #   B6-B9         the STEP-COUNT cap — the second, DISJOINT bound. Its own contract block sits with
 #                 those tests below; B7 is the clause a wall-only implementation cannot satisfy.
+#   B10-B11       the ENDPOINT CONFIRMATION — a THIRD, disjoint clause, and not a bound at all: it
+#                 constrains what a bisect that FINISHES inside both bounds is allowed to name. Its
+#                 own contract block sits with those tests below.
 #
 # POSITIVE CONTROL: B1/B2/B3 drive a fixture bats stub that sleeps far past a 3s bound, so the
 # bound is SEEN to fire. A bound that has never been observed firing is not shipped.
@@ -286,6 +289,101 @@ stub_bats_marker_counting() {
   run bash -c "ls -1 '$SUTTMP'/postland-bisect.* 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
   # and the cell is not left parked mid-bisect
+  run bash -c "find '$R/.git/worktrees' -name 'BISECT_*' 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+}
+
+# ── B10-B11 — THE ENDPOINT CONFIRMATION ───────────────────────────────────────────────────────────
+# Not a bound. B1-B9 constrain how LONG a bisect may run; this constrains what a bisect that finished
+# well inside both bounds is allowed to NAME.
+#
+# `git bisect` takes BOTH endpoints on trust and probes only until ONE candidate remains, which it
+# then DECLARES without running. So when every interior probe returns GOOD the walk narrows onto the
+# tip and reports it as "the first bad commit" having never executed one step there — a verdict of the
+# ASSUMPTION about the single commit it did not measure. C20 REVERTS whatever a bisect names, so that
+# verdict lands a revert on trunk with zero evidence behind it. (B10's 5-commit range is that shape;
+# a range holding a single candidate probes it instead, which is why the guard keys on the VERDICT
+# being the tip rather than on how the walk arrived there.)
+#
+#   B10 confirm   a walk that names the TIP must CONFIRM the tip reproduces red ALONE. Not red there
+#                 ⇒ undecidable, no sha. This is the 2026-08-06 incident: a red that does not
+#                 reproduce in isolation (tests/handoff-fire-kitty-daemon.bats, already red for 12h
+#                 before the land) probed green through the interior and convicted e80c85aa2e47,
+#                 whose entire diff is a DIFFERENT test file. Revert f323b427 re-opened the very red
+#                 e80c85aa had just fixed.
+#   B11 control   ...and a GENUINE tip regression is still named and still revertable. This is the
+#                 clause an implementation that simply suppressed every tip verdict would fail, and
+#                 without it B10 is satisfiable by never naming a tip at all — which would silently
+#                 retire auto-revert for the commonest regression shape there is (the last commit
+#                 broke it, the interior is clean).
+#
+# The pair is discriminated by ONE fact — whether the tip is really red — with the same stub, the same
+# range length and the same verb, so nothing but the confirmation itself can separate them.
+
+# <n> — n linear commits where the BAD marker appears ONLY at the LAST one, so the true first-bad
+# commit IS the tip. mk_history puts it at commit 3 (interior) and cannot express this shape.
+mk_history_tip_bad() {
+  local n="$1" i
+  for i in $(seq 1 "$n"); do
+    printf '%s\n' "$i" > "$R/seq.txt"
+    [ "$i" -eq "$n" ] && printf 'bad\n' > "$R/BAD"
+    git -C "$R" add -A >/dev/null
+    git -C "$R" commit -qm "c$i" >/dev/null
+    [ "$i" = 1 ] && GOOD="$(git -C "$R" rev-parse HEAD)"
+  done
+  BAD="$(git -C "$R" rev-parse HEAD)"
+  git -C "$R" push -q origin main
+}
+
+# A bats stub that PASSES everywhere — the faithful model of a corpus red that does not reproduce in
+# isolation. Every interior probe says GOOD, which is precisely what walks a bisect onto the tip.
+stub_bats_green() {
+  printf '#!/bin/bash\ncase "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac\nexit 0\n' \
+    > "$STUB/bats-stub"
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+
+@test "B10: a walk that lands on the TIP must CONFIRM it — green there ⇒ undecidable, never a sha" {
+  mk_history 5
+  stub_bats_green                 # nothing is red anywhere ⇒ the interior probes green ⇒ tip named
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  # THE clause: C20 reverts what a bisect names, and this walk measured nothing about the tip.
+  ! [[ "$output" =~ [0-9a-f]{7,40}\ is\ the\ first\ bad\ commit ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  [[ "$output" != *"$BAD"* ]] || false
+  # ...and the abstention came from the CONFIRMATION, not from a bound or a parse that happened to
+  # come back empty. Without this the test passes for the wrong reason on any future cut.
+  grep -q "bisect UNCONFIRMED" "$RUNLOG"
+  grep -q "without ever running it" "$RUNLOG"
+  ! grep -q "bisect CUT" "$RUNLOG"
+}
+
+@test "B11: CONTROL — a GENUINE tip regression is still named (the confirmation confirms, not suppresses)" {
+  mk_history_tip_bad 5            # the true first-bad commit IS the tip this time...
+  stub_bats_marker                # ...and it reproduces ALONE, which is the whole difference
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$BAD" ]] || false
+  ! grep -q "bisect UNCONFIRMED" "$RUNLOG"
+}
+
+@test "B12: the confirmation path unwinds too — no cell parked mid-bisect, no tempfile survives" {
+  # B3/B9 pin the unwind for the two CUT paths; the confirmation adds a third exit (and it is the one
+  # that runs `bisect reset` itself, before checking the tip out, so it must not leave a half-reset cell).
+  mk_history 5
+  stub_bats_green
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 1 ]
+
+  run bash -c "ls -1 '$SUTTMP'/postland-bisect.* 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
   run bash -c "find '$R/.git/worktrees' -name 'BISECT_*' 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
 }

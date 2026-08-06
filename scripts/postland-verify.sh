@@ -1007,6 +1007,9 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
     printf 'n=$(( $(cat "%s" 2>/dev/null || echo 0) + 1 )); printf %%s "$n" > "%s"\n' "$counter" "$counter"
     # shellcheck disable=SC2016  # ditto — $n is read by the RUNNER, not by us
     printf '[ "$n" -le %s ] || exit 129\n' "$BISECT_MAX_STEPS"
+    # cd EXPLICITLY. `git bisect run` already invokes this with the cell as cwd, but the TIP
+    # CONFIRMATION below calls the runner directly, and the relative `tests/…` needs the cell there too.
+    printf 'cd %q || exit 125\n' "$WORKTREE"
     printf '[ -f "%s" ] || exit 125\n' "$file"
     # `</dev/null` is THE worst-exposure site of the class documented at BATS_BIN. This runner is
     # `git bisect run`'s child, so its stdin is the daemon's — and a step that wedges on it is a
@@ -1042,6 +1045,52 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
       log "bisect CUT at the ${BISECT_MAX_STEPS}-step cap (POSTLAND_BISECT_MAX_STEPS) — the range is NOT SHRINKING (a suite that commits into \$WORKTREE does exactly this); undecidable, no culprit named"
     else
       culprit="$(printf '%s\n' "$out" | sed -n 's/^\([0-9a-f]\{7,40\}\) is the first bad commit.*/\1/p' | head -1)"
+      # ── A BISECT CAN NAME A COMMIT IT NEVER RAN ──────────────────────────────────────────────────
+      # `git bisect` takes BOTH endpoints on trust and probes only until ONE candidate remains, which
+      # it then DECLARES without running. So whenever the walk narrows onto the tip — every interior
+      # probe returning GOOD — it names `bad` having never executed a step there. That verdict is
+      # produced by the ASSUMPTION, not by a measurement, and it is the one input auto_revert trusts
+      # enough to mutate trunk with.
+      #
+      # Both halves measured, not reasoned: over a 6-commit range a runner that always exits 0 probes
+      # the 2 interior commits and then names the bad tip, never having run it. The degenerate case
+      # proves the rule rather than breaking it — when the range holds a SINGLE candidate that
+      # candidate is bisect's first checkout, so it does get probed (verified: 1 probe, tip named).
+      # The confirmation below is therefore redundant on that path and wrong on none, which is why it
+      # is keyed on the verdict (`culprit = bad`) and not on a guess about how the walk got there.
+      #
+      # Which is exactly how revert f323b427 reached trunk on 2026-08-06. The corpus convicted
+      # tests/handoff-fire-kitty-daemon.bats — a suite already red in EVERY postland run that day from
+      # 00:04, 12h BEFORE the land, and filed as a pre-existing trunk red in backlog 043c2e5fcc7e /
+      # d4fcb1f5eb53. It does not reproduce in isolation, so the interior probed green and the bisect
+      # named the tip e80c85aa2e47, whose ENTIRE diff is tests/cc-queue.bats — a file bats runs in a
+      # different process, which therefore cannot reach the convicted suite at all. Reverting it
+      # re-opened the /sbin-PATH red e80c85aa had just fixed, so the auto-heal left trunk strictly
+      # worse than it found it.
+      #
+      # So CONFIRM the tip before naming it. Scoped to `culprit = bad` deliberately: an INTERIOR
+      # culprit was genuinely executed and returned BAD while its parent returned GOOD — a real
+      # measured differential that needs nothing added — so the common single-commit regression keeps
+      # its auto-revert and the existing step-cap controls keep counting only real walk steps. The
+      # confirmation costs one whole-file run, on the one path where the evidence is otherwise zero.
+      #
+      # Anything but a definite red — green, 125, or our own 124 bound — is UNDECIDABLE, and
+      # red_actions already spends that correctly: it pages and backlogs the RED and reverts nothing.
+      # Abstaining costs a page; not abstaining cost a correct fix.
+      if [ -n "${culprit:-}" ] && [ "$culprit" = "$bad" ]; then
+        : > "$counter"          # a confirmation is not a bisect STEP — leave the cap's budget alone
+        git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true      # ...so the checkout below can run
+        if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$bad" >/dev/null 2>&1; then
+          log "bisect UNCONFIRMED: cannot check out the tip $(sha12 "$bad") to confirm it — undecidable, no culprit named"
+          culprit=""
+        else
+          rc=0; bounded "$RETRY_TO" "$runner" || rc=$?
+          if [ "$rc" -ne 1 ]; then
+            log "bisect UNCONFIRMED: the walk named the TIP $(sha12 "$bad") without ever running it, and $file is NOT reproducibly red there ALONE (runner rc=$rc) — undecidable, no culprit named"
+            culprit=""
+          fi
+        fi
+      fi
     fi
   fi
   [ -n "${culprit:-}" ] || return 1
