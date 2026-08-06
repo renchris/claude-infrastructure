@@ -55,6 +55,13 @@
 # edge scan, closures cached per root. Keep it that way — `time` it before landing a change here,
 # and read one foreground second as ~84 taxed.
 #
+# HOW ITS CLEAN VERDICT STAYS WORTH SOMETHING. `--selftest` proves the SHAPES discriminate, both
+# directions, on fixtures. `--mutants` proves it is not blind on the SHIPPED CORPUS: per file that
+# installs a named trap handler, that file's own trap-consulted global is injected into a function
+# the file already substitutes, and the lint must catch it. Fixtures alone cannot retire the
+# complaint that produced this lint — the previous detector passed its author's cases and still could
+# not see the instance in hand.
+#
 # LIMITS, STATED SO A CLEAN RESULT MEANS SOMETHING. Call detection is textual and deliberately
 # OVER-inclusive: any identifier token matching a defined function name is an edge, because
 # under-inclusion is what made the previous detector blind. `case` patterns inside a `$( )` can
@@ -64,20 +71,22 @@ set -uo pipefail
 
 usage() {
   cat <<'USAGE'
-usage: subshell-cleanup-lint.sh [--json] [--loose] [--shapes cmdsub|all] [--list] [--selftest] [FILE...]
+usage: subshell-cleanup-lint.sh [--json] [--loose] [--shapes cmdsub|all] [--list] [--selftest] [--mutants] [FILE...]
 
   no FILE       sweep every tracked shell file in the repo
   --json        one JSON object per finding
   --loose       drop the destructive-use filter on trap-consulted globals
   --shapes all  also report pipeline components, not just $( )
   --list        print the files that would be scanned, then exit 0
-  --selftest    prove the detector discriminates, both directions, then exit
+  --selftest    prove the detector discriminates on SHAPES, both directions, then exit
+  --mutants     prove it is not blind on the REAL corpus: per trap-handler file, inject that file's
+                own trap-consulted global into a function the file already substitutes, then exit
 
 exit: 0 clean · 1 findings · 2 usage / unusable scan (LOUD, never silent-green)
 USAGE
 }
 
-JSON=0; LOOSE=0; SHAPES=cmdsub; LIST=0; SELFTEST=0; FILES=()
+JSON=0; LOOSE=0; SHAPES=cmdsub; LIST=0; SELFTEST=0; MUTANTS=0; FILES=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --json)     JSON=1 ;;
@@ -86,6 +95,7 @@ while [ "$#" -gt 0 ]; do
                 case "$SHAPES" in cmdsub|all) ;; *) echo "subshell-cleanup-lint: --shapes takes cmdsub|all" >&2; exit 2 ;; esac ;;
     --list)     LIST=1 ;;
     --selftest) SELFTEST=1 ;;
+    --mutants)  MUTANTS=1 ;;
     -h|--help)  usage; exit 0 ;;
     --) shift; while [ "$#" -gt 0 ]; do FILES+=("$1"); shift; done; break ;;
     -*) echo "subshell-cleanup-lint: unknown flag $1" >&2; usage >&2; exit 2 ;;
@@ -683,6 +693,80 @@ r="$(mint)"'
 
   if [ "$fails" = 0 ]; then echo "subshell-cleanup-lint: --selftest PASS"; exit 0; fi
   echo "subshell-cleanup-lint: --selftest FAILED ($fails)" >&2; exit 1
+fi
+
+# ── --mutants: proof of NON-BLINDNESS on the real corpus, not on fixtures ─────────────────────────
+# The complaint that produced this lint was not that the old one was wrong — it was that its CLEAN
+# result was a NON-VERDICT, because it could not find the instance already in hand. Fixtures cannot
+# retire that complaint: they test the shapes the author thought of, on files the author wrote. This
+# does it on the shipped corpus. For every file that installs a NAMED trap handler, it injects THAT
+# FILE'S OWN trap-consulted global into a function THAT FILE ALREADY calls through `$( )`, and
+# requires the lint to catch it. A file whose real form is clean but whose mutant is missed is BLIND,
+# and that is the only outcome here that is a defect in the lint.
+#
+# Nothing is hand-listed — both the global and the target function are derived per file. The first
+# version of this harness DID hand-list them, and "found" blindness in reaper-e2e.sh by injecting
+# LOCK_DIR, a name that file never uses: a wrong control reads exactly like a blind detector, so the
+# control must be derived from the same file it judges.
+if [ "$MUTANTS" = 1 ]; then
+  md="$(mktemp -d)" || exit 2
+  trap 'rm -rf "$md"' EXIT
+  ok=0; blind=0; live=0; skip=0
+  printf '%-44s %-20s %-18s %s\n' FILE GLOBAL 'VIA $( )' VERDICT
+  while IFS= read -r sf; do
+    [ -f "$sf" ] || continue
+    LC_ALL=C /usr/bin/grep -qE '^[ \t]*trap[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+(EXIT|INT|TERM|ERR|HUP)' "$sf" || continue
+    rel="${sf#"$ROOT"/}"
+    # the global a named handler consults on a line that destroys something
+    g="$(LC_ALL=C awk '
+      /^[ \t]*trap[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+(EXIT|INT|TERM|ERR|HUP)/ {
+        h=$0; sub(/^[ \t]*trap[ \t]+/,"",h); sub(/[ \t].*$/,"",h); H[h]=1; next }
+      { L[NR]=$0 }
+      END { for (h in H) { inb=0
+          for (i=1;i<=NR;i++) {
+            if (L[i] ~ ("^[ \t]*" h "[ \t]*\\(\\)[ \t]*\\{")) inb=1
+            else if (inb && L[i] ~ /^[ \t]*\}/) inb=0
+            if (!inb || L[i] !~ /(rm[ \t]+-|rmdir|kill|worktree[ \t]+remove|close-window|bootout)/) continue
+            t=L[i]
+            while (match(t, /\$\{?[A-Za-z_][A-Za-z0-9_]*/)) {
+              v=substr(t,RSTART,RLENGTH); sub(/^\$\{?/,"",v)
+              if (v !~ /^([0-9]|HOME|PWD|IFS|[a-z])$/) { print v; exit }
+              t=substr(t,RSTART+RLENGTH) } } } }' "$sf")"
+    # a MULTI-LINE function this file already calls through a substitution
+    fn="$(LC_ALL=C awk '
+      /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)[ \t]*\{[ \t]*$/ {
+        n=$0; sub(/^[ \t]*/,"",n); sub(/[ \t]*\(\).*$/,"",n); ML[n]=1; next }
+      { line=$0
+        while (match(line, /\$\([ \t]*[A-Za-z_][A-Za-z0-9_]*/)) {
+          t=substr(line,RSTART,RLENGTH); sub(/^\$\([ \t]*/,"",t)
+          if (t in ML) { print t; exit }
+          line=substr(line,RSTART+RLENGTH) } }' "$sf")"
+    if [ -z "$g" ] || [ -z "$fn" ]; then
+      printf '%-44s %-20s %-18s %s\n' "$rel" "${g:--}" "${fn:--}" "not testable"
+      skip=$((skip + 1)); continue
+    fi
+    bash "$_self" "$sf" >/dev/null 2>&1 || { printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "LIVE FINDING"; live=$((live + 1)); continue; }
+    mf="$md/$(basename "$sf").mutant"
+    LC_ALL=C awk -v fn="$fn" -v g="$g" '
+      !d && $0 ~ ("^[ \t]*" fn "[ \t]*\\(\\)[ \t]*\\{[ \t]*$") { print; printf "  %s=\"/tmp/mutant\"\n", g; d=1; next }
+      { print }' "$sf" > "$mf"
+    if bash "$_self" "$mf" >/dev/null 2>&1; then
+      printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "BLIND — mutant NOT caught"
+      blind=$((blind + 1))
+    else
+      printf '%-44s %-20s %-18s %s\n' "$rel" "$g" "$fn" "ok"
+      ok=$((ok + 1))
+    fi
+  done <<EOF
+$(enumerate)
+EOF
+  printf '\nsubshell-cleanup-lint --mutants: ok=%s blind=%s live=%s not-testable=%s\n' "$ok" "$blind" "$live" "$skip"
+  # A floor on the TESTABLE count, not just blind=0: as the corpus changes, files can drift out of
+  # testability, and a guard that quietly ends up proving nothing is the failure this whole lint
+  # exists to prevent. Zero blind AND enough files actually exercised, or this is not a pass.
+  [ "$blind" = 0 ] && [ "$live" = 0 ] && [ "$ok" -ge 5 ] && exit 0
+  echo "subshell-cleanup-lint: --mutants FAILED (blind=$blind live=$live testable=$ok, floor 5)" >&2
+  exit 1
 fi
 
 if [ "${#FILES[@]}" -eq 0 ]; then

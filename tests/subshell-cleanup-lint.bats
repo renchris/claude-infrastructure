@@ -185,3 +185,17 @@ setup() {
   [ "$status" -eq 0 ]
   [ $((end - start)) -lt 8 ]
 }
+
+@test "--mutants: not blind on the REAL corpus, and enough files actually exercised" {
+  # The complaint that produced this lint was that a CLEAN sweep is a non-verdict unless the detector
+  # can be shown to find the instance already in hand. Fixtures cannot retire that — they test the
+  # shapes the author thought of. This injects each trap-handler file's OWN trap-consulted global into
+  # a function that file ALREADY substitutes, and requires a catch. The floor on testable files is
+  # part of the assertion: a guard that quietly drifts to proving nothing is the exact failure mode
+  # this lint exists to prevent.
+  run bash "$LINT" --mutants
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"BLIND"* ]]
+  [[ "$output" != *"LIVE FINDING"* ]]
+  [[ "$output" == *"blind=0"* ]]
+}
