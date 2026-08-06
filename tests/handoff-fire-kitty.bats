@@ -77,10 +77,32 @@ FAKE
   # osascript: the iTerm2-branch sentinel. Its OUTPUT is irrelevant to these tests — its INVOCATION
   # is the assertion (the iTerm2 path was taken), and stubbing it is also what keeps a pinned-iTerm2
   # test from reaching the operator's real iTerm2.
+  #
+  # THE DRAIN IS CONDITIONAL, AND THAT IS THE WHOLE POINT (2026-08-05). It used to be an
+  # unconditional `cat >/dev/null`, which HUNG THIS SUITE FOREVER whenever the runner's stdin was a
+  # pipe nobody closes. osascript takes its script from ONE of two places and the stub must drain
+  # only the first:
+  #   `osascript - "$1" <<'AS'`  (handoff-fire.sh:708, 785, 4639) — script ON STDIN. The caller is
+  #       mid-write when we start, so NOT reading it is how the caller takes SIGPIPE. Drain, and the
+  #       heredoc's EOF ends it.
+  #   `osascript -e '…'`         (handoff-fire.sh:4189, 4701, 4708) — script in ARGV. stdin is never
+  #       read by the real binary; it is simply INHERITED from whoever launched the suite. A `cat`
+  #       here reads the RUNNER's stdin, waiting for an EOF that is not coming.
+  # Two-sided, measured: stdin=/dev/null → 34/34 green in <1s; stdin=an open pipe with a live writer
+  # → rc 124, wedged in this stub at test 22 (`spawn_frontmost on iTerm2 …`, the first `-e` caller).
+  # WORST POLARITY, which is why it survived: a developer's hand-run gets a stdin that EOFs, so it is
+  # green by hand and an infinite hang on every launchd / nightly / background-runner path — and a
+  # hung gate is indistinguishable from a slow one, so nothing alarms. Two orphaned bats-exec-test
+  # processes at 11:46 and 37:07 elapsed, both stuck here, are what made a landing gate never return.
+  # Discriminate POSITIVELY on `-` (never negatively on "no -e"): a file argument does not read stdin
+  # either, and the two mistakes are not symmetric — draining when we should not is a silent
+  # forever-hang, not draining when we could is an unread pipe nobody notices.
   cat > "$STUB/osascript" <<'FAKE'
 #!/bin/sh
 printf 'osascript %s\n' "$*" >> "$OLOG"
-cat >/dev/null 2>&1 || true
+for a in "$@"; do
+  if [ "$a" = "-" ]; then cat >/dev/null 2>&1 || true; break; fi
+done
 printf '%s\n' "${KFAKE_OSA_OUT:-}"
 FAKE
   chmod +x "$STUB/osascript"
@@ -106,11 +128,17 @@ FAKE
   REAL_IT2="$SHIM"
 
   # it2py's fallthrough interpreter (the `frontapp` verb must still reach it, unchanged).
+  # Same conditional drain, same reason as the osascript stub above — the real call is
+  # `"$PYTHON_BIN" - "$@" <<'PY'` (handoff-fire.sh:4280), so `-` is present on every shape that
+  # actually feeds us a script, and an unconditional `cat` would read the runner's stdin on any
+  # shape that does not.
   PYTHON_BIN="$STUB/pybin"
   cat > "$PYTHON_BIN" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$PLOG"
-cat >/dev/null 2>&1 || true
+for a in "$@"; do
+  if [ "$a" = "-" ]; then cat >/dev/null 2>&1 || true; break; fi
+done
 printf 'PyPath\n'
 FAKE
   chmod +x "$PYTHON_BIN"
