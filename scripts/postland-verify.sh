@@ -119,8 +119,16 @@ BATS_BIN="${CC_POSTLAND_BATS:-bats}"
 # ── EVERY $BATS_BIN CALL SITE REDIRECTS STDIN FROM /dev/null (2026-08-06) ────────────────────────
 # STATED HERE ONCE; the sites carry only a `</dev/null` and no repeated rationale.
 #
-# WHY. This runner is launched by launchd/the desk, so its stdin is whatever the daemon handed it —
-# routinely a pipe with no writer that will never EOF. bats does not read stdin itself, but it
+# WHY. This runner is launched by launchd/the desk, so its stdin is whatever the caller handed it.
+# CORRECTED 2026-08-06 — the original wording here said "whatever the DAEMON handed it, routinely a
+# pipe with no writer that will never EOF", and the daemon half of that is measurably FALSE: a
+# throwaway RunAtLoad job reading its own `lsof -d 0` reports /dev/null, so launchd already hands its
+# children a stdin that EOFs. The real exposure is the DESK/AGENT half, and it is worse than the
+# original claim: a Claude Code session's fd 0 is a unix SOCKET whose reader never sees EOF
+# (measured, rc 124), and that is the path these runners are invoked on constantly. The redirect and
+# every argument below are unchanged — only the named source of the bad stdin was wrong. Full
+# measurement in the commit that fixed the other seven runners (a6bbd8e46e60). bats does not read
+# stdin itself, but it
 # INHERITS it all the way down into every test, and a suite that stubs a stdin-consuming binary
 # with an unconditional `cat` then blocks forever waiting for an EOF that is not coming. That is
 # 5e460544 exactly: tests/handoff-fire-kitty.bats stubbed osascript with a bare `cat >/dev/null`,
