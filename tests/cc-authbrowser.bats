@@ -699,6 +699,51 @@ EOF
   [ "$(echo "$output" | jq -r '.pid')" = "$PID" ]
 }
 
+# THE PATH WAS A GLOBAL TOO — and it is the one that convicted the test above (backlog
+# f4614d85ec2c, RED @ b3f728858a6f). The header's two isolation seams cover the port and the
+# wall clock; neither covers WHICH BINARIES THE CALLER CAN RESOLVE. lsof(8) lives in /usr/sbin,
+# and com.claude.postland-verify's plist exports
+# PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" — no /usr/sbin. A
+# bare-name `lsof` therefore raised FileNotFoundError under the verifier and NOWHERE ELSE:
+# port_listener_pids() caught it as "unreadable", and the SECOND --start reported the browser it
+# had just launched as "held by a foreign process (pids=unknown)". The test above is the ONLY one
+# in this file that needs a NON-EMPTY lsof result, which is exactly why it convicted alone while
+# 296/296 passed under an interactive PATH — and why the failure is DETERMINISTIC, so the retry
+# ladder wrote it as a hard red with no flakes.jsonl entry to acquit it.
+#
+# scripts/postland-verify.sh refuses to normalize PATH ON PURPOSE (:119) so this class stays
+# detectable, and names the remedy at :140: the artifact resolves its tools by ABSOLUTE PATH as
+# well as PATH. This test is the RED-prover for that fix in bin/cc-authbrowser (tool_path()).
+@test "PATH-INDEPENDENT: --start stays idempotent when the caller's PATH cannot resolve lsof" {
+  # Build the hostile PATH by DELETION, never as a literal: /opt/homebrew/bin ships an lsof on
+  # some boxes, and a hardcoded list would then silently stop hiding it and pass vacuously.
+  MINPATH=""
+  for d in /usr/bin /bin /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$d" ] || continue
+    [ -x "$d/lsof" ] && continue
+    MINPATH="${MINPATH:+$MINPATH:}$d"
+  done
+
+  # Two controls, both load-bearing. (1) the fixture really does hide lsof — else this test
+  # asserts nothing. (2) it does NOT hide python3 or ps: the subject's shebang needs the first
+  # and its pid-recycle guard the second, so without this a red here could mean "we broke the
+  # shebang", and the test would go on "RED-proving" a fix it never exercised.
+  run env PATH="$MINPATH" sh -c 'command -v lsof'
+  [ "$status" -ne 0 ]
+  run env PATH="$MINPATH" sh -c 'command -v python3 && command -v ps'
+  [ "$status" -eq 0 ]
+
+  run env PATH="$MINPATH" "$B" next --start
+  [ "$status" -eq 0 ]
+  PID="$(echo "$output" | jq -r '.pid')"
+
+  # The load-bearing pair: exit 0 rules out the "foreign process" refusal (its only other exit
+  # is 4), and the pid equality rules out the other way to reach 0 — a silent RELAUNCH.
+  run env PATH="$MINPATH" "$B" next --start
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.pid')" = "$PID" ]
+}
+
 # ------------------------------------------------------------------------ TTL watchdog
 
 @test "--start arms a DETACHED watchdog that outlives the caller" {
