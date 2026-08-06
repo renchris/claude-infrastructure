@@ -74,27 +74,108 @@ FAKE
 
 # ── the ordering pin — the assertion that actually binds ─────────────────────────────────────────
 
-@test "self-close pins the terminal verdict BEFORE its first as_tty, not after" {
-  # Window: self-close mode entry (SC_SID finalised) → the successor gate's as_tty. Both anchors are
-  # load-bearing lines, so a rename breaks this loudly rather than silently widening the window.
-  #
-  # ANCHORED TO COLUMN 0-PLUS-INDENT, never a bare substring: this file DOCUMENTS its own call sites
-  # in prose, and `SUC_TTY="$(as_tty …)"` appears inside a comment ~2100 lines above the code it
-  # describes. An unanchored `head -1` picked that comment and compared the wrong pair of numbers —
-  # the first draft of this very test failed that way, which is the whole argument for `^ *`.
-  local start end win
-  start="$(grep -n '^ *SC_SID="${SC_SID:-' "$HF" | head -1 | cut -d: -f1)";  [ -n "$start" ]
-  end="$(grep -n '^ *SUC_TTY="\$(as_tty' "$HF" | head -1 | cut -d: -f1)";    [ -n "$end" ]
-  [ "$start" -lt "$end" ]
-  win="$(sed -n "${start},${end}p" "$HF")"
+# THE WINDOW OPENS AT MODE ENTRY, NOT AT THE SC_SID LINE — and the widening is a STRENGTHENING.
+# It used to open at `SC_SID="${SC_SID:-…}"`, the identity default. 255b3f66 then hoisted the pin ONE
+# LINE ABOVE that ("a kitty peer could not name itself"): self_pane_id CONSUMES the ancestry verdict,
+# so an unpinned peer on a kitty box exited 1 having done nothing, could never obey its own
+# self-retire instruction, and leaked its pane and worktree until an operator reaped them. The
+# property this test asserts became MORE true — the pin moved EARLIER relative to every as_tty — and
+# the test went red anyway, because its window now opened one line BELOW the pin it was looking for.
+# A position-keyed control that convicts its subject for improving is decayed, not vigilant.
+#
+# So the identity default stops being the window boundary and becomes an ASSERTED CONSUMER instead:
+# the pin must precede BOTH self_pane_id (255b3f66 / item 4e074b938da7) and the first as_tty (item
+# 12f2524f8b83). That is strictly more than the old window could see — re-anchoring alone would have
+# licensed a pin sitting between SC_SID and the as_tty, i.e. the exact arrangement 255b3f66 fixed.
+# The red-proof below mutates the REAL script into each of those three arrangements and requires a
+# distinct conviction for each.
+#
+# ANCHORED TO COLUMN 0-PLUS-INDENT, never a bare substring: this file DOCUMENTS its own call sites
+# in prose, and `SUC_TTY="$(as_tty …)"` appears inside a comment ~2100 lines above the code it
+# describes. An unanchored `head -1` picked that comment and compared the wrong pair of numbers —
+# the first draft of this very test failed that way, which is the whole argument for `^ *`. The new
+# start anchor is safe on the same axis: the span it ADDS (mode entry → the pin) contains one prose
+# mention of as_tty and no `as_tty "`, so the tty offset is unchanged by the widening.
+#
+# The verdict is computed over an ARBITRARY copy of the script so the IDENTICAL judge can be pointed
+# at a mutant. Exit codes are distinct on purpose: a red-proof that goes red because an ANCHOR rotted
+# rather than because the ordering broke is a vacuous control, and 10-14 say so out loud.
+#   1  no pin in the window          2  pin below the first as_tty     3  pin below self_pane_id
+#   10-14  an anchor failed to resolve — the subject drifted out from under this file
+pin_order_verdict() {   # $1 = a handoff-fire.sh (real or mutant); prints the three in-window offsets
+  local f="$1" start end win pin_at use_at tty_at
+  start="$(grep -n '^if \[ "\${1:-}" = "self-close" \]' "$f" | head -1 | cut -d: -f1)"
+  end="$(grep -n '^ *SUC_TTY="\$(as_tty' "$f" | head -1 | cut -d: -f1)"
+  [ -n "$start" ] || return 10
+  [ -n "$end" ]   || return 11
+  [ "$start" -lt "$end" ] || return 12
+  win="$(sed -n "${start},${end}p" "$f")"
+  pin_at="$(printf '%s\n' "$win" | grep -n '^ *pin_term_verdict_for_watcher *$'  | head -1 | cut -d: -f1)"
+  use_at="$(printf '%s\n' "$win" | grep -n '^ *SC_SID="\${SC_SID:-'              | head -1 | cut -d: -f1)"
+  tty_at="$(printf '%s\n' "$win" | grep -n 'as_tty "'                            | head -1 | cut -d: -f1)"
+  [ -n "$use_at" ] || return 13
+  [ -n "$tty_at" ] || return 14
+  printf 'window=%s..%s pin=%s use=%s tty=%s\n' "$start" "$end" "${pin_at:-NONE}" "$use_at" "$tty_at"
+  [ -n "$pin_at" ] || return 1
+  [ "$pin_at" -lt "$tty_at" ] || return 2
+  [ "$pin_at" -lt "$use_at" ] || return 3
+}
 
-  # the pin must appear, and must appear BEFORE the first as_tty in that window
-  local pin_at tty_at
-  pin_at="$(printf '%s\n' "$win" | grep -n '^ *pin_term_verdict_for_watcher *$' | head -1 | cut -d: -f1)"
-  tty_at="$(printf '%s\n' "$win" | grep -n 'as_tty "' | head -1 | cut -d: -f1)"
-  [ -n "$pin_at" ]
-  [ -n "$tty_at" ]
-  [ "$pin_at" -lt "$tty_at" ]
+# Relocate the pin to sit immediately AFTER a named line of the REAL script, on stdout. It MOVES
+# rather than rewrites — the mutant differs from the subject in position only, and inherits the
+# destination's indentation — because a hand-authored approximation can pass for reasons the real
+# artifact never had. The caller asserts the transform changed the file and preserved the pin count.
+move_pin() {   # $1 = the pin's current line  $2 = the line to move it after  $3 = source file
+  awk -v pin="$1" -v dest="$2" '
+    NR == pin  { next }
+    { print }
+    NR == dest { match($0, /^[[:space:]]*/); print substr($0, 1, RLENGTH) "pin_term_verdict_for_watcher" }
+  ' "$3"
+}
+
+@test "self-close pins the terminal verdict BEFORE its first as_tty, not after" {
+  run pin_order_verdict "$HF"
+  echo "verdict rc=$status :: $output" >&2      # bats surfaces this only when the assertion below fails
+  [ "$status" -eq 0 ]
+}
+
+@test "RED-PROOF — the same judge convicts a pin moved below EITHER consumer, or deleted" {
+  local entry pin_line sc_line tty_line pins m
+  entry="$(grep -n '^if \[ "\${1:-}" = "self-close" \]' "$HF" | head -1 | cut -d: -f1)"; [ -n "$entry" ]
+  pin_line="$(awk -v s="$entry" 'NR>=s && /^[[:space:]]*pin_term_verdict_for_watcher[[:space:]]*$/ {print NR; exit}' "$HF")"
+  sc_line="$(grep -n '^ *SC_SID="\${SC_SID:-' "$HF" | head -1 | cut -d: -f1)"
+  tty_line="$(awk -v s="$entry" 'NR>=s && /as_tty "/ {print NR; exit}' "$HF")"
+  [ -n "$pin_line" ]; [ -n "$sc_line" ]; [ -n "$tty_line" ]
+  echo "entry=$entry pin=$pin_line sc=$sc_line tty=$tty_line" >&2
+  pins="$(grep -c '^ *pin_term_verdict_for_watcher *$' "$HF")"
+
+  # MUTANT 1 — the pin back where 255b3f66 hoisted it FROM: below the identity default, still above
+  # every as_tty. This is the arrangement a window that OPENED at SC_SID was structurally unable to
+  # convict, so this case is the proof that re-anchoring strengthened the test instead of widening it.
+  m="$BATS_TEST_TMPDIR/pin-below-sid.sh"
+  move_pin "$pin_line" "$sc_line" "$HF" > "$m"
+  run cmp -s "$HF" "$m"; [ "$status" -ne 0 ]                                     # the transform DID something
+  [ "$(grep -c '^ *pin_term_verdict_for_watcher *$' "$m")" = "$pins" ]           # moved, never dropped
+  run pin_order_verdict "$m"
+  echo "mutant-1 rc=$status :: $output" >&2
+  [ "$status" -eq 3 ]
+
+  # MUTANT 2 — the pin below the FIRST as_tty (SC_SC_TTY's), the regression this file was written for.
+  m="$BATS_TEST_TMPDIR/pin-below-astty.sh"
+  move_pin "$pin_line" "$tty_line" "$HF" > "$m"
+  [ "$(grep -c '^ *pin_term_verdict_for_watcher *$' "$m")" = "$pins" ]
+  run pin_order_verdict "$m"
+  echo "mutant-2 rc=$status :: $output" >&2
+  [ "$status" -eq 2 ]
+
+  # MUTANT 3 — no pin at all in the window: the shape a rotted anchor also produces, which is why the
+  # code for it is distinct from both orderings above.
+  m="$BATS_TEST_TMPDIR/pin-deleted.sh"
+  awk -v pin="$pin_line" 'NR != pin' "$HF" > "$m"
+  [ "$(grep -c '^ *pin_term_verdict_for_watcher *$' "$m")" -eq $((pins - 1)) ]
+  run pin_order_verdict "$m"
+  echo "mutant-3 rc=$status :: $output" >&2
+  [ "$status" -eq 1 ]
 }
 
 # ── the mechanism the ordering protects ──────────────────────────────────────────────────────────
