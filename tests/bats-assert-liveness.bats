@@ -283,3 +283,95 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   [ "$status" -ne 0 ]                                                    # still fails AFTER
   [ "$(findings "$D/t.bats")" -eq 0 ]
 }
+
+# ── the same family, brace-group spelling: `A && { …; false; }` ────────────────────────────────
+# The bare `A && false` above is the RARE spelling. The one this corpus actually writes carries
+# the author's diagnostic — 534 `|| { …; false; }` sites in tests/ against 2 bare `|| false` — and
+# the classifier knew only the bare one, so every brace-group member fell through to the uniform
+# append. That append is not a weaker repair, it is a destructive one: `A && { …; false; } || false`
+# fails on BOTH branches, because A-matches and A-does-not-match now reach the same trailing
+# `false`. It cost a real land — P2 of tests/handoff-fire-capacity-gate.bats went red against a
+# WORKING fix (752024be) — and the fixer still printed "analyzer now reports 0 dead assertions",
+# a false all-clear over a file it had just corrupted.
+#
+# BOTH directions are pinned for the same reason the bare pair is: against an already-false
+# condition, "correctly revived" and "always fails" are the same observation.
+
+@test "fixer: 'A && { …; false; }' with a NON-matching condition still PASSES after the rewrite" {
+  mkblock "$D/t.bats" 'echo clean | grep -q NOPE && { echo DIAG; false; }' nonfinal
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                                    # correct BEFORE
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '! echo clean | grep -q NOPE || { echo DIAG; false; }' "$D/t.bats"
+  [ "$(grep -cF '} || false' "$D/t.bats")" -eq 0 ]                       # the destructive form
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                                    # STILL correct AFTER
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+}
+
+@test "fixer: 'A && { …; false; }' with a MATCHING condition still FAILS after the rewrite" {
+  mkblock "$D/t.bats" 'echo hit | grep -q hit && { echo DIAG; false; }' nonfinal
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]                                                    # already live BEFORE
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '! echo hit | grep -q hit || { echo DIAG; false; }' "$D/t.bats"
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]                                                    # still fails AFTER
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+}
+
+# The RHS is classified STRUCTURALLY, not by spelling — a spelling list is a list of the shapes
+# you already got wrong. These three are the same family in three other clothes, and each one
+# would have fallen through to the destructive append under a `&& false`-shaped regex.
+@test "fixer: the never-succeeds RHS is recognised past its spelling" {
+  local stmt
+  for stmt in 'echo clean | grep -q NOPE && { echo DIAG; false; } || true' \
+              'echo clean | grep -q NOPE && { echo DIAG; return 1; }' \
+              'echo clean | grep -q NOPE && ( echo DIAG; false )'; do
+    mkblock "$D/t.bats" "$stmt" nonfinal
+    run bats_passes "$D/t.bats"
+    [ "$status" -eq 0 ] || { echo "not green BEFORE: $stmt"; false; }
+    run python3 "$FIX" "$D/t.bats"
+    [ "$status" -eq 0 ] || { echo "fixer rc=$status on: $stmt"; false; }
+    grep -qF '! echo clean | grep -q NOPE ||' "$D/t.bats" || { echo "not negated: $(sed -n 2p "$D/t.bats")"; false; }
+    run bats_passes "$D/t.bats"
+    [ "$status" -eq 0 ] || { echo "went RED after the rewrite: $stmt"; false; }
+    [ "$(findings "$D/t.bats")" -eq 0 ] || { echo "still dead: $stmt"; false; }
+  done
+}
+
+# The `;` before `}` is MANDATORY in bash, so a group's final segment is EMPTY. Reading that
+# terminator as the group's last STATEMENT made every real-world member unclassifiable — the
+# fixer declined instead of repairing. This case catches that where the two above cannot: it
+# also plants a decoy `false` in a non-final statement, which a "contains the word" classifier
+# would swallow and a structural one must ignore.
+@test "fixer: a brace group's status is its last statement, not its terminator" {
+  mkblock "$D/t.bats" 'echo clean | grep -q NOPE && { echo false-ish; echo DIAG; false; }' nonfinal
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '! echo clean | grep -q NOPE || { echo false-ish; echo DIAG; false; }' "$D/t.bats"
+}
+
+@test "fixer DECLINES a shape it cannot prove, rather than emitting a wrong repair" {
+  # `!` negates ONE pipeline, so `! (X || Y)` is not `! X || Y`. There is no correct one-line
+  # rewrite here, and the append is the destructive one — so the only safe answer is neither.
+  mkblock "$D/t.bats" 'echo a | grep -q a || echo b | grep -q b && { echo DIAG; false; }' nonfinal
+  before="$(cat "$D/t.bats")"
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 2 ]                                    # loud, not a silent skip
+  [ "$before" = "$(cat "$D/t.bats")" ]                   # and it wrote NOTHING
+  echo "$output" | grep -q 'DECLINED' || false
+}
+
+# The scanner must not read a construct's INNER `&&` as a list separator: splitting there would
+# rewrite `[[ 1 -eq 1 && 1 -eq 2 ]]` into something that asserts a different thing entirely.
+@test "fixer: '&&' inside [[ ]] is not a list separator" {
+  mkblock "$D/t.bats" '[[ 1 -eq 1 && 1 -eq 2 ]]' nonfinal
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  grep -qF '[[ 1 -eq 1 && 1 -eq 2 ]] || false' "$D/t.bats"
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]                                    # live after
+}

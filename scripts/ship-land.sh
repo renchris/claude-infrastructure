@@ -1286,7 +1286,11 @@ run_gate() {  # $1=range → 0 green / 1 red
         echo "✗ gate: dead-assertion RED — a test THIS LAND CHANGES asserts something errexit cannot reach." >&2
         echo "  Revive it:  python3 scripts/bats-assert-liveness-fix.py <file>" >&2
         echo "  Use the fixer, not a hand-edit: the right form is PER CLASS. A uniform ' || false' is" >&2
-        echo "  WRONG for 'A && false' (that fails on BOTH branches); the fixer emits '! A || false'." >&2
+        echo "  WRONG for the whole 'A && <never-succeeds>' family — 'A && false' and its far commoner" >&2
+        echo "  brace spelling 'A && { echo diag; false; }' — where BOTH branches then reach the" >&2
+        echo "  appended false. The fixer rewrites those to '! A || <same RHS>', and DECLINES (exit 2," >&2
+        echo "  line named, file untouched) rather than guess at a shape it cannot prove. A decline is" >&2
+        echo "  YOUR hand-edit: verify it in BOTH directions with a mutant, never by the analyzer alone." >&2
         GATE_RED=1
         return 1
       fi

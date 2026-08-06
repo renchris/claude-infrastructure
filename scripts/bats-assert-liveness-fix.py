@@ -22,11 +22,16 @@ one-token diff. Correctness of the revival, for a non-final statement S:
   S fails           → `false` runs as the list's LAST element, un-negated, so errexit
                       applies                        → the test now fails, as intended
 
+That derivation has ONE precondition — S must be ABLE to succeed — and the negative-assertion
+family violates it. See revive() for the family, the rewrite it gets instead, and why a shape
+this cannot prove is DECLINED rather than repaired on a guess.
+
 Usage:
   bats-assert-liveness-fix.py [--dry-run] [PATH ...]
 
-Idempotent: a statement already ending in `|| false` is never reported by the analyzer and
-so is never touched. Exit 0 on success, 2 if the analyzer still reports findings afterwards.
+Idempotent: an already-revived statement is recognised STRUCTURALLY, not by spelling, and is
+never touched. Exit 0 on success, 2 if any line was DECLINED or the analyzer still reports
+findings afterwards.
 """
 
 from __future__ import annotations
@@ -78,61 +83,283 @@ def split_trailing_comment(line: str) -> tuple[str, str]:
         i += 1
     return line.rstrip(), ""
 
-    # `A && false`, with or without a trailing always-true handler
 
+# ── shell structure: what is TOP LEVEL and what is merely nested ────────────────────────────────
 
-# The trailing `|| true` / `|| :` is OPTIONAL. Both shapes mean "A must not match", and for BOTH
-# the ` || false` append is wrong — see revive().
-RE_SWALLOWED = re.compile(
-    r"^(?P<indent>\s*)(?P<a>.+?)\s*&&\s*false\s*(?:\|\|\s*(?:true|:)\s*)?$"
+RE_NEG = re.compile(r"^!\s")
+RE_ALWAYS_FAILS = re.compile(r"^(?:false|return\s+[1-9][0-9]*|exit\s+[1-9][0-9]*)$")
+RE_ALWAYS_TRUE = re.compile(r"^(?:true|:)$")
+# A failure token in COMMAND position, matched on a quote-blanked copy so that `grep -q "false"`
+# — string data, not structure — can never trip it.
+RE_FAIL_WORD = re.compile(
+    r"(?:^|[;&|(){}])\s*(?:false|return\s+[1-9][0-9]*|exit\s+[1-9][0-9]*)\s*(?=$|[;&|)}])"
 )
+
+NEVER = "never"  # provably cannot exit 0
+CAN_SUCCEED = "can-succeed"  # not structurally always-failing
+UNKNOWN = "unknown"  # neither proven — a DECLINE, never a default
+
+
+def blank_quoted(s: str) -> str:
+    """Blank the CONTENTS of quoted spans, preserving length. Structure, not string data."""
+    out = list(s)
+    quote = None
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                out[i] = out[i + 1] = " " if i + 1 < len(s) else " "
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            else:
+                out[i] = " "
+        elif c in "'\"":
+            quote = c
+        i += 1
+    return "".join(out)
+
+
+def top_level_seps(code: str) -> list[tuple[int, str]] | None:
+    """Offsets of TOP-LEVEL list separators (`&&`, `||`, `;`, `&`), or None if it does not scan.
+
+    Nesting inside quotes, `[[ ]]`, `(( ))`, `( )`, `${ }` and `{ ; }` is NOT top level:
+    `[[ 1 -eq 1 && 1 -eq 2 ]]` is ONE operand, and reading its inner `&&` as a list separator
+    would let a rewrite silently change what the test asserts. A plain `|` is inside a single
+    pipeline, not a separator. None — unbalanced, a line continuation, a heredoc — is a DECLINE.
+    """
+    seps: list[tuple[int, str]] = []
+    quote: str | None = None
+    paren = brace = brack = 0
+    i, n = 0, len(code)
+    while i < n:
+        c = code[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        if code.startswith("[[", i):
+            brack += 1
+            i += 2
+            continue
+        if code.startswith("]]", i) and brack:
+            brack -= 1
+            i += 2
+            continue
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren -= 1
+        elif c == "{":
+            brace += 1
+        elif c == "}":
+            brace -= 1
+        elif paren == brace == brack == 0:
+            if code.startswith("&&", i) or code.startswith("||", i):
+                seps.append((i, code[i : i + 2]))
+                i += 2
+                continue
+            if c in ";&":
+                seps.append((i, c))
+        i += 1
+    if quote or paren or brace or brack:
+        return None
+    return seps
+
+
+def split_and_or(code: str) -> list[tuple[str, str]] | None:
+    """`[(operator, operand), …]` for the top-level AND-OR list; the first operator is "".
+
+    None when the line does not scan, or when a top-level `;`/`&` makes it more than one list —
+    the negation rewrite below is only valid across a SINGLE AND-OR list.
+    """
+    seps = top_level_seps(code)
+    if seps is None or any(t in (";", "&") for _, t in seps):
+        return None
+    parts: list[tuple[str, str]] = []
+    prev_op, prev_end = "", 0
+    for pos, tok in seps:
+        parts.append((prev_op, code[prev_end:pos].strip()))
+        prev_op, prev_end = tok, pos + len(tok)
+    parts.append((prev_op, code[prev_end:].strip()))
+    return parts
+
+
+def can_succeed(code: str, depth: int = 0) -> str:
+    """Can `code` ever exit 0? Three-valued — and UNKNOWN is a decline, not a lenient default.
+
+    Only NEVER earns the negation rewrite and only CAN_SUCCEED earns the ` || false` append.
+    Anything unproven is reported to a human instead of guessed at: a fixer that emits a wrong
+    repair is worse than one that admits it does not know (the prescription this file IS was
+    itself the counter-example — see revive()).
+    """
+    s = code.strip().rstrip(";").strip()
+    if depth > 3 or not s:
+        return UNKNOWN
+    if RE_ALWAYS_FAILS.match(s):
+        return NEVER
+    if RE_ALWAYS_TRUE.match(s):
+        return CAN_SUCCEED
+    if (s.startswith("{") and s.endswith("}")) or (
+        s.startswith("(") and s.endswith(")")
+    ):
+        # A group's status is its LAST statement's. Split on `;`/`&` only — `&&`/`||` bind
+        # tighter and belong to that last statement, not to the group. The `;` before `}` is
+        # MANDATORY in bash, so the final segment is routinely empty: that is a terminator, not
+        # a statement, and reading it as one made every `{ …; false; }` unclassifiable.
+        body = s[1:-1].strip()
+        seps = top_level_seps(body)
+        if seps is None:
+            return UNKNOWN
+        segs: list[tuple[str, str]] = []
+        prev = 0
+        for pos, tok in seps:
+            if tok in (";", "&"):
+                segs.append((body[prev:pos].strip(), tok))
+                prev = pos + 1
+        segs.append((body[prev:].strip(), ""))
+        while len(segs) > 1 and not segs[-1][0]:
+            segs.pop()
+        text, term = segs[-1]
+        if term == "&":
+            return CAN_SUCCEED  # a backgrounded last command leaves the group at the shell's 0
+        return can_succeed(text, depth + 1)
+    parts = split_and_or(s)
+    if parts is None:
+        return UNKNOWN
+    if len(parts) > 1:
+        acc = can_succeed(parts[0][1], depth + 1)
+        for op, operand in parts[1:]:
+            nxt = can_succeed(operand, depth + 1)
+            if op == "&&":  # exits 0 only if BOTH do
+                acc = NEVER if NEVER in (acc, nxt) else (acc if acc == nxt else UNKNOWN)
+            else:  # `||` exits 0 if EITHER does
+                acc = (
+                    CAN_SUCCEED
+                    if CAN_SUCCEED in (acc, nxt)
+                    else (acc if acc == nxt else UNKNOWN)
+                )
+        return acc
+    # A single pipeline. A failure token we did not structurally place is unproven, not benign.
+    if RE_FAIL_WORD.search(blank_quoted(s)):
+        return UNKNOWN
+    return CAN_SUCCEED
+
+
+class Undecidable(Exception):
+    """This line's correct repair is not derivable here — report it, never guess at it."""
 
 
 def revive(code: str) -> str | None:
-    """Rewrite `code` so its failure reaches the test's exit status, or None if unfixable.
+    """Rewrite `code` so its failure reaches the test's exit status, or None if already live.
 
-    The default transform APPENDS ` || false`: the statement's failure then lands in the
-    list's last, un-negated element, where errexit applies.
+    The default transform APPENDS ` || false`: the statement's failure then lands in the list's
+    last, un-negated element, where errexit applies. That is sound for exactly one reason — the
+    statement can still succeed — and the NEGATIVE-ASSERTION FAMILY breaks it:
 
-    That append is WRONG for the negative-assertion family `A && false` ("A must not match"),
-    with or without a trailing always-true handler. Both members are rewritten, not appended to.
+        A && <something that can never exit 0>          "fail the test if A matches"
 
-      * `A && false || true` — the trailing handler already pins the status to 0, so appending
-        yields `A && false || true || false`, still 0 on every path. The append is a NO-OP and
-        the assertion stays dead. Verified:
+    Appending there is not a weaker repair, it is a destructive one. A-matches (the intended
+    FAILURE path) and A-does-not-match (the intended PASS path) BOTH land on the appended
+    `false`, so a passing test becomes permanently red. Measured, non-final position:
 
-            bash -ec 'echo hit | grep -q hit && false || true || false'   → status 0
+        bash -ec 'echo clean | grep -q NOPE && { echo m; false; }          ; echo TAIL'  → 0
+        bash -ec 'echo clean | grep -q NOPE && { echo m; false; } || false ; echo TAIL'  → 1
+        bash -ec '! echo clean | grep -q NOPE || { echo m; false; }        ; echo TAIL'  → 0
 
-      * `A && false` (bare) — worse than a no-op. `S = A && false` can NEVER succeed: if A
-        succeeds `false` runs, and if A fails the `&&` list is already non-zero. So both paths
-        reach the appended `|| false` and the assertion fails UNCONDITIONALLY, turning a passing
-        test into a permanently failing one. This shape blocked a real land on 2026-07-26 (the
-        ratchet now runs inside run_gate), and the append had gone unnoticed because the fixer's
-        own revival test used an already-FALSE condition (`[[ 1 -eq 2 ]]`), under which "correctly
-        live" and "always fails" are indistinguishable. A revival test needs a TRUE condition.
+    The family is therefore REWRITTEN as the negation the author meant — `! A || <same RHS>` —
+    which fails exactly when A matches, keeps the author's diagnostic body, preserves `$output`,
+    and is correct in FINAL position too, where the original returns A's status instead.
 
-    Both become the negation the author meant: `! A || false` — same intent, failure reachable,
-    and it still PASSES when A does not match.
+    The RHS is classified STRUCTURALLY (can_succeed), not by spelling, because a spelling list is
+    a list of the shapes you already got wrong. The first version recognised only bare `false`,
+    so the far more common `A && { echo "diag"; false; }` fell through to the append and cost a
+    real land: P2 of tests/handoff-fire-capacity-gate.bats went red against a WORKING fix
+    (752024be), while this script printed "analyzer now reports 0 dead assertions" — a false
+    all-clear over a file it had just corrupted.
+
+    A trailing `|| true` / `|| :` is dropped rather than appended to: it pins the status to 0,
+    so `A && false || true || false` is still 0 on every path and the assertion stays dead.
+
+    Raises Undecidable for a shape whose repair is not derivable — a compound left side (`! X`
+    binds to one pipeline, so `! (X || Y)` is not `! X || Y`), an already-negated left side
+    (`! ! cmd` is a bash syntax error), or an RHS that cannot be classified either way.
     """
-    if re.search(r"\|\|\s*false$", code):
-        return None  # already revived
-    m = RE_SWALLOWED.match(code)
-    if m:
+    parts = split_and_or(code)
+    if parts is None:
+        raise Undecidable("not a single scannable AND-OR list")
+
+    # Drop trailing always-true handlers before judging the real last element.
+    while (
+        len(parts) > 1 and parts[-1][0] == "||" and RE_ALWAYS_TRUE.match(parts[-1][1])
+    ):
+        parts = parts[:-1]
+
+    op, last = parts[-1]
+    verdict = can_succeed(last)
+
+    if verdict == NEVER:
+        if op == "||":
+            return None  # `A || false`, `A || { …; false; }` — already the live form
+        head = parts[:-1]
+        if len(head) != 1 or head[0][0] != "":
+            raise Undecidable(
+                "`A && <never-succeeds>` with a compound left side: `!` negates one pipeline, "
+                "so the negation rewrite would change what is asserted"
+            )
+        a = head[0][1]
+        if RE_NEG.match(a):
+            raise Undecidable(
+                "left side is already negated — `! ! cmd` is a bash syntax error"
+            )
         # Indentation is re-applied explicitly: the block's shape is how these
         # assertion runs are read, and a de-indented line reviews as unrelated.
-        return f"{m.group('indent')}! {m.group('a').strip()}{SUFFIX}"
-    return code + SUFFIX
+        indent = code[: len(code) - len(code.lstrip())]
+        return f"{indent}! {a} || {last}"
+
+    if verdict == CAN_SUCCEED:
+        return code.rstrip() + SUFFIX
+
+    raise Undecidable(
+        f"cannot prove the last element ({last!r}) can succeed; appending ` || false` to a "
+        "statement that never succeeds fails on BOTH branches"
+    )
 
 
-def fix_file(path: str, lines_to_fix: list[int], dry_run: bool) -> int:
+def fix_file(
+    path: str, lines_to_fix: list[int], dry_run: bool
+) -> tuple[int, list[tuple[int, str, str]]]:
+    """Rewrite the named lines in place. Returns (count, declined) — see revive().
+
+    A DECLINED line is left byte-identical. That is the whole point: the alternative to a
+    repair this script cannot derive is a hand-edit, not a plausible-looking guess.
+    """
     src = Path(path).read_text(encoding="utf-8")
     lines = src.split("\n")
     changed = 0
+    declined: list[tuple[int, str, str]] = []
     for ln in sorted(lines_to_fix):
         idx = ln - 1
         original = lines[idx]
         code, comment = split_trailing_comment(original)
-        new_code = revive(code)
+        try:
+            new_code = revive(code)
+        except Undecidable as exc:
+            declined.append((ln, original.strip(), str(exc)))
+            continue
         if new_code is None:
             continue  # already revived
         if comment:
@@ -148,7 +375,7 @@ def fix_file(path: str, lines_to_fix: list[int], dry_run: bool) -> int:
         changed += 1
     if changed and not dry_run:
         Path(path).write_text("\n".join(lines), encoding="utf-8")
-    return changed
+    return changed, declined
 
 
 def main(argv: list[str]) -> int:
@@ -167,13 +394,31 @@ def main(argv: list[str]) -> int:
         by_file.setdefault(p, []).append(ln)
 
     total = 0
+    declines: list[tuple[str, int, str, str]] = []
     for p in sorted(by_file):
-        n = fix_file(p, by_file[p], args.dry_run)
+        n, declined = fix_file(p, by_file[p], args.dry_run)
         total += n
+        declines += [(p, ln, src, why) for ln, src, why in declined]
         print(f"{'would fix' if args.dry_run else 'fixed'} {n:>3}  {p}")
 
     verb = "would revive" if args.dry_run else "revived"
     print(f"── {verb} {total} assertion(s) across {len(by_file)} file(s)")
+
+    if declines:
+        # Loud and non-zero. A decline is the one outcome that still needs a human, so it must
+        # never read like the quiet "already revived" skip it would otherwise be mistaken for.
+        print(
+            f"\n!! DECLINED {len(declines)} line(s) — no repair emitted, files left untouched.",
+            file=sys.stderr,
+        )
+        for p, ln, src, why in declines:
+            print(f"   {p}:{ln}\n     {src}\n     ↳ {why}", file=sys.stderr)
+        print(
+            "   Hand-edit these, and verify BOTH directions with a mutant: a negative assertion\n"
+            "   whose condition is already false cannot distinguish 'revived' from 'always fails'.",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.dry_run:
         return 0
