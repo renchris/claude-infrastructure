@@ -1676,7 +1676,14 @@ lease_pristine() {
 @test "lease: the SAME trail with a PROVEN-DEAD holder IS claimed — liveness is the only delta" {
   # The control for the test above. A dead holder must still be displaceable, or a crashed worker
   # would strand its item forever and `reap`'s whole dead-worker path would be unreachable.
+  #
+  # `lease_env` became REQUIRED here on 2026-08-06 (backlog 9887dbe5ef5c): a proven-dead holder now
+  # falls through to oracle 2, so unfixtured this test asks the OPERATOR's real ~/Development/.worktrees
+  # whether `wt-lease00000a2` is occupied. It passed only because that path happens not to exist on
+  # this machine — an ambient verdict, and one that inverts to REFUSE (rc 2, unresolved root) on any
+  # box without the root at all. The seam makes the delta liveness, as the title claims.
   local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
   rec '{"id":"lease00000a2","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L2"}'
   rec "{\"id\":\"lease00000a2\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
 
@@ -1750,4 +1757,143 @@ lease_pristine() {
   run bash "$CB" "done" lease00000a8 --evidence sha --force
   [ "$status" -eq 2 ]
   printf '%s' "$output" | grep -q 'force applies only to reopen and claim'
+}
+
+# ── THE LEASE'S SECOND ORACLE (backlog 9887dbe5ef5c) ──────────────────────────────────────────────
+# The lease above was right about the DIRECTION and wrong about the EVIDENCE: it displaced an
+# incumbent on a single proven-dead verdict from `claimer_live`, and a `<host>-<pid>` claim names a
+# SHELL. Shells rotate; the work does not. Item e1ce92772859 was claimed 08:03:52Z by
+# `Chriss-MacBook-Pro-3-33510`; by 09:01:47Z that pid was gone while the worker was running `cc-bats`
+# on the item's own suite inside `.worktrees/wt-e1ce92772859`. The lease GRANTED (rc 0), a second
+# session duplicated ~20 min of work, and the incumbent landed the better fix (66871b9b) six minutes
+# later — the duplicate commit was discarded. `reap` never had this hole: it re-verifies a dead
+# claimer against the worktree (`owned_wait`) before any dead-worker path. The two verbs disagreed
+# about what "live" means and the WEAKER predicate was on the acquire path, the only one that can
+# mint a duplicate. `claim` now requires the same conjunction `reap` requires.
+#
+# S1b IS THE LOAD-BEARING SIGNAL, so every occupancy fixture here is `cwd_wait_fixture` (cwd-only,
+# argv does NOT name the worktree) — the dispatched-worker shape. Measured against a live dispatch
+# worktree 2026-08-06: `pgrep -f <wt>` read 0 processes while cwd occupancy read 13. A fixture whose
+# argv named the path would be absolved by S1 and could never discriminate the signal that actually
+# saw the incumbent (memory: fixture-shape-parity-with-real-producer).
+LEASE_WT_BASE_SHA="e8eec9f7"
+
+lease_wt_pristine() {
+  local d="$BATS_TEST_TMPDIR/lease-wt-pristine"
+  mkdir -p "$d"
+  git -C "$REPO" archive "$LEASE_WT_BASE_SHA" bin/cc-backlog 2>/dev/null | tar -x -C "$d"
+  [ -s "$d/bin/cc-backlog" ] || { echo "cannot recover pristine cc-backlog @ $LEASE_WT_BASE_SHA" >&2; return 1; }
+  printf '%s' "$d/bin/cc-backlog"
+}
+
+# lease_env — HERMETIC oracle environment for every lease test that reaches oracle 2, which is now
+# any test whose holder is PROVEN-DEAD. Same two reasons `reap_env` fixtures these seams and they
+# bind here for the first time: an unfixtured CC_BACKLOG_WT_ROOT points the claim path at the REAL
+# ~/Development/.worktrees (a live dispatch worktree there would decide a unit test's verdict), and
+# an unfixtured probe makes "the probe answered and found nobody" load-coupled — a full-system lsof
+# over the 10s cap flips the verdict from CLAIM to REFUSE purely from ambient load. The stub emits
+# the producer's own `-F pn` format naming paths outside every worktree: the probe RAN, nobody is
+# there. `cwd_wait_fixture` restores the real binary for the tests whose subject is real occupancy.
+lease_env() {
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/leasewtroot"; mkdir -p "$CC_BACKLOG_WT_ROOT"
+  printf '#!/bin/bash\nprintf "p1\\nn/\\np2\\nn/usr\\n"\n' > "$BATS_TEST_TMPDIR/leasestublsof"
+  chmod +x "$BATS_TEST_TMPDIR/leasestublsof"
+  export CC_BACKLOG_LSOF_BIN="$BATS_TEST_TMPDIR/leasestublsof"
+}
+
+@test "lease: a PROVEN-DEAD holder whose WORKTREE IS OCCUPIED is REFUSED — the shell rotated, the work did not" {
+  local HOST before; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  cwd_wait_fixture leasewt00001
+  rec '{"id":"leasewt00001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"LW1"}'
+  rec "{\"id\":\"leasewt00001\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  before="$(wc -l < "$CC_BACKLOG_FILE")"
+
+  run bash "$CB" claim leasewt00001 --by "second-worker"
+  owned_wait_cleanup
+  [ "$status" -eq 4 ]                                    # the lease's own refusal code, not a new one
+  printf '%s' "$output" | grep -q 'WORKTREE IS LIVE'
+  printf '%s' "$output" | grep -q 'live process cwd'     # via S1b specifically — S1 is blind to this shape
+  printf '%s' "$output" | grep -q 'reclaim leasewt00001' # names the verb a worker re-keying itself must use
+  printf '%s' "$output" | grep -q -- '--force'           # …and its own escape
+  # A refusal appends NOTHING: a written claim record would mint a fake claim→reopen cycle for reap
+  # Rule B to block a healthy item on.
+  [ "$(wc -l < "$CC_BACKLOG_FILE")" -eq "$before" ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="leasewt00001")|.by')" = "$HOST-2147483647" ]
+}
+
+@test "lease: RED — the pre-change binary GRANTS that same claim, which is the e1ce92772859 incident" {
+  # The control, replayed from the real pre-change artifact rather than a hand-typed approximation
+  # (memory: control-must-replay-the-real-artifact). Nothing else in the file can refuse this trail:
+  # the item is not done-latched, and oracle 1 is genuinely correct that pid 2147483647 is dead — so
+  # a green here would mean the fixture, not the guard, is doing the work.
+  local HOST old; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  cwd_wait_fixture leasewt00002
+  rec '{"id":"leasewt00002","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"LW2"}'
+  rec "{\"id\":\"leasewt00002\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  old="$(lease_wt_pristine)"
+  run bash "$old" claim leasewt00002 --by "second-worker"
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]                                    # granted — a second worker onto live work
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="leasewt00002")|.by')" = "second-worker" ]
+}
+
+@test "lease: the SAME trail with an EMPTY worktree IS claimed — occupancy is the only delta" {
+  # The non-vacuity control. A genuinely dead worker must stay displaceable, or a crash would strand
+  # its item forever and the guard would be an off switch on the whole dead-worker path. The worktree
+  # EXISTS here and the probe ANSWERS that nobody is in it — a real rc-1 verdict, not an absent dir.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-leasewt00003"
+  rec '{"id":"leasewt00003","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"LW3"}'
+  rec "{\"id\":\"leasewt00003\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" claim leasewt00003 --by "second-worker"
+  [ "$status" -eq 0 ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="leasewt00003")|.by')" = "second-worker" ]
+}
+
+@test "lease: UNRESOLVED worktree occupancy REFUSES — a probe that never ran is not proof of death" {
+  # The mirror of the UNRESOLVED-claimer test above, one oracle down, and it must fail the same way:
+  # this verb HANDS OUT the work, so an unanswerable probe leaves the incumbent alone. Folding rc 2
+  # into rc 1 here would make a starved lsof — likeliest under exactly the load that has the most
+  # claims in flight — hand live work to a second worker, the amplifier owned_wait's rc contract
+  # exists to stop.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-leasewt00004"
+  export CC_BACKLOG_LSOF_BIN=                            # AFTER lease_env: the seam genuinely OFF
+  rec '{"id":"leasewt00004","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"LW4"}'
+  rec "{\"id\":\"leasewt00004\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" claim leasewt00004 --by "second-worker"
+  [ "$status" -eq 4 ]
+  printf '%s' "$output" | grep -q 'UNRESOLVED'
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="leasewt00004")|.by')" = "$HOST-2147483647" ]
+}
+
+@test "lease: ONE ORACLE GOVERNS BOTH — the trail reap KEEPs as an owned wait, claim REFUSES" {
+  # The item's actual defect, stated as the two verbs' agreement rather than as either verb alone.
+  # Pre-change this SAME trail produced opposite verdicts from one ledger: `reap` said KEEP (owned
+  # wait — it asks the worktree) while `claim` said rc 0 (it asked only the claimer). A future change
+  # that re-derives either predicate instead of calling `owned_wait` re-opens that gap silently, so
+  # the agreement is pinned here and not left as a property of two separately-tested verbs.
+  reap_env                                               # supplies the clock (claim at 00:00Z is 7200s > STALE) + HOST
+  cwd_wait_fixture leasewt00005
+  rec '{"id":"leasewt00005","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"LW5"}'
+  rec "{\"id\":\"leasewt00005\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" reap --dry-run
+  local reaprc="$status" reapout="$output"
+  run bash "$CB" claim leasewt00005 --by "second-worker"
+  owned_wait_cleanup
+
+  [ "$reaprc" -eq 0 ]
+  printf '%s' "$reapout" | grep -q 'KEEP leasewt00005'
+  printf '%s' "$reapout" | grep -q 'owned wait'
+  [ "$status" -eq 4 ]
+  printf '%s' "$output" | grep -q 'WORKTREE IS LIVE'
+  [ "$(status_of leasewt00005)" = claimed ]              # and the incumbent still holds it
 }
