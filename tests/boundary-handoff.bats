@@ -24,7 +24,7 @@ setup() {
   # a committed repo standing in for the session's cwd, marked gate-green at HEAD
   WD="$BATS_TEST_TMPDIR/wd"; mkdir -p "$WD"
   git -C "$WD" init -q
-  git -C "${WD:?repo path required}" config user.email t@t; git -C "$WD" config user.name t
+  git -C "$WD" config user.email t@t; git -C "$WD" config user.name t
   echo seed > "$WD/f.txt"; git -C "$WD" add -A; git -C "$WD" commit -qm init
   HEAD="$(git -C "$WD" rev-parse HEAD)"
   printf '%s' "$HEAD" > "$WD/.git/gate-green"

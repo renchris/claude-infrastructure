@@ -181,12 +181,15 @@ setup() {
 # Still fully hermetic: a throwaway git checkout + a fake live root under BATS_TEST_TMPDIR.
 
 _livefix() {   # real checkout + empty live root; ~/bin legs made to PASS so exit code isolates this leg
+  # `git -C ""` is a NO-OP, not an error — an empty $CC_PARITY_REPO would write this identity into
+  # the caller's repo. Guarded at the BINDING (once, here) so every use site below reads bare.
+  : "${CC_PARITY_REPO:?_livefix: repo path required}"
   ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
   cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
   export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
   git -C "$CC_PARITY_REPO" init -q
-  git -C "${CC_PARITY_REPO:?repo path required}" config user.email t@t
-  git -C "${CC_PARITY_REPO:?repo path required}" config user.name t
+  git -C "$CC_PARITY_REPO" config user.email t@t
+  git -C "$CC_PARITY_REPO" config user.name t
 }
 _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads the INDEX; no commit needed
 
@@ -490,6 +493,9 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
 # below declares its own repo, live root and stamps dir under $BATS_TEST_TMPDIR.
 
 _provfix() {   # ~/bin legs made to PASS so the exit code isolates this leg; provenance forced ON
+  # Guarded at the BINDING — see _livefix. `git -C ""` is a NO-OP, so an empty path would land the
+  # fixture identity in the caller's repo.
+  : "${CC_PARITY_REPO:?_provfix: repo path required}"
   ln -sfn "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"
   cp "$CC_PARITY_REPO/bin/toolB" "$CC_PARITY_BINDIR/toolB"
   export CC_PARITY_LIVE="$BATS_TEST_TMPDIR/live"; mkdir -p "$CC_PARITY_LIVE"
@@ -498,8 +504,8 @@ _provfix() {   # ~/bin legs made to PASS so the exit code isolates this leg; pro
   # mechanism cases measuring one thing. mkdir'd only where the verification fact is the subject.
   export CC_PARITY_STAMPS="$BATS_TEST_TMPDIR/stamps"
   git -C "$CC_PARITY_REPO" init -q
-  git -C "${CC_PARITY_REPO:?repo path required}" config user.email t@t
-  git -C "${CC_PARITY_REPO:?repo path required}" config user.name t
+  git -C "$CC_PARITY_REPO" config user.email t@t
+  git -C "$CC_PARITY_REPO" config user.name t
   git -C "$CC_PARITY_REPO" config core.logAllRefUpdates true   # the reflog IS the subject here
   git -C "$CC_PARITY_REPO" commit -q --allow-empty -m base
   _BASE="$(git -C "$CC_PARITY_REPO" rev-parse HEAD)"

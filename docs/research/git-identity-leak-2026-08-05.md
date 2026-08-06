@@ -453,6 +453,58 @@ Drop one whose binding is unguarded and the line goes RED, which is exactly row 
 `tests/git-identity-lint.bats` and `tests/git-identity-write-guard.bats` are excluded — they carry
 the leaky shapes as fixtures by construction, and the lint self-excludes them by basename.
 
+#### RESOLVED 2026-08-06 — item `81d6b958adc5`
+
+All use-site guards promoted; the whole-tree count of `-C "${V:?…}"` on an identity-write line is
+now **0** outside the two self-excluded fixture suites. 34 files, +76/−61.
+
+**The census above had already decayed by the time it was worked.** It reads 49 sites / 28 files on
+`b7e9a91c`; re-derived on `df83a52e` it was **59 / 34**. Ten sites and six files arrived in the
+intervening day from ordinary sibling landings, because nothing stops a new fixture being written in
+the use-site shape — the lint accepts it. A filed census is a perishable figure, so this promotion
+re-derived it rather than working the list; the same re-derivation is what any successor should do.
+
+**The 9 sites the lint could not already prove split into TWO causes, and only one was the expected
+one.** Seven (`deploy-parity` ×4, `postland-verify` ×2, `prune-plan-history` ×1) had no in-region
+binding at all and took one — a `: "${VAR:?…}"` at the head of the region, or a guarded assignment.
+
+The other two are the finding. `tests/waiting-recycle.bats`'s `_wr_repo` **already carried a correct
+binding guard** — and it was invisible to the lint, because it was folded onto the function-opener
+line:
+
+```bash
+_wr_repo() { : "${1:?_wr_repo: repo path required}"      # runtime-correct, lint-invisible
+```
+
+Proof-tracking **resets its region on that same opener** and its colon-guard rule is anchored at the
+start of a line, so the guard was discarded in the same pass that created the region it belonged to.
+The site was fully protected at runtime and unproven to the scanner, which is why it still needed
+its use-site guards to read green. Moving the guard onto its own line fixed it with no behaviour
+change. So this is the *mirror* of the finding above: there, a guard on an earlier call **masked**
+the write from the scanner; here, a guard in the right place was **unseen** by it. Both end in a
+green line the scanner never really judged, and neither is visible from the verdict alone.
+
+**Every green was verified by mutation, not by the clean verdict** — the clean verdict is precisely
+what row B proved can be vacuous. For each of the 48 distinct proof-source lines: control (as
+promoted) must be GREEN, and that one proof line broken must be RED. **48/48.**
+
+⚠️ **The first mutant harness scored 46/48, and both "failures" were the harness, not the tree.** The
+two sites are `repo="${D:?}/slw-repo"` and `repo="${BATS_TEST_TMPDIR:?}/tracked"` — proven *twice
+over*, by the guard **and** independently by the literal-suffix rule. Stripping only the `:?` leaves
+`repo="${D}/slw-repo"`, which the suffix rule still proves, so the mutant read green having broken
+nothing. A mutant must break **every** leg that proves the thing, or it is not a control: with both
+legs cut (`repo="$D"`) the two sites go RED like the rest.
+
+Gates on this diff's own subjects: `git-identity-lint.sh .` clean (492 files, 0 escaping writes) ·
+its `--selftest` 29/29 · 27 bats suites green · `bin/cc-value selftest`, `bin/cc-respawn selftest`,
+`telemetry-e2e.sh` (21/21) green · shellcheck clean on the 7 non-bats subjects. A tripwire on the
+shared `.git/config` across every e2e run measured **zero** identity drift — the leak this whole
+document is about, asserted rather than assumed. Pre-existing trunk reds, unrelated and NOT from
+this diff (each confirmed by running the unmodified `origin/main` file to the same verdict):
+`boundary-hook-e2e.sh` 14/2 (T2 threshold logic), `reaper-e2e.sh` FATAL (cannot create a terminal
+window — environmental), and `tests/git-identity-lint.bats`'s own two stale assertions, filed as
+`e1ce92772859`.
+
 ### What has since ROTTED
 
 **`git-identity-lint.sh` is no longer absent from trunk.** The correction's `git ls-tree origin/main
@@ -512,6 +564,11 @@ resolution, so it is filed rather than swept in here.
 > could never have caught this. Successor item `81d6b958adc5` carries the 49 residual use-site
 > guards. **`fix/gi-corpus` above is still open and is NOT covered by this** — it remains a human
 > read.
+>
+> **`81d6b958adc5` is itself now CLOSED (2026-08-06)** — 59 sites across 34 files, not the 49/28
+> filed here, because the census decayed in the day between. See § *The guards half* → *RESOLVED
+> 2026-08-06* for the re-derivation, the per-site mutation proof, and the runtime-correct binding
+> guard that the lint could not see. **`fix/gi-corpus` is still NOT covered.**
 
 ---
 

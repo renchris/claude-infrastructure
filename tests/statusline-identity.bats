@@ -150,7 +150,7 @@ mk_repo() { # <dir> <branch>
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   : "${1:?mk_repo: repo path required}"
   mkdir -p "$1"; git init -q "$1"
-  git -C "${1:?repo path required}" config user.email t@t; git -C "$1" config user.name t
+  git -C "$1" config user.email t@t; git -C "$1" config user.name t
   printf 'x\n' > "$1/f"; git -C "$1" add -A; git -C "$1" commit -qm init
   [ -n "${2:-}" ] && git -C "$1" checkout -q -b "$2"
   return 0

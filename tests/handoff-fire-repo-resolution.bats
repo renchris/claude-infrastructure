@@ -68,7 +68,7 @@ mkfixture() {
   : "${1:?mkfixture: repo path required}"
   mkdir -p "$1"
   git -C "$1" init -q -b main
-  git -C "${1:?repo path required}" config user.email f@x; git -C "$1" config user.name f
+  git -C "$1" config user.email f@x; git -C "$1" config user.name f
   echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
   # origin/main as a local ref: the pool-eligibility test is `BASE = origin/main`, a string compare,
   # but `git worktree add` in a non-dry case would need the ref to exist.

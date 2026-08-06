@@ -22,8 +22,8 @@ setup() {
   ANCIENT="$(( $(date +%s) - 864000 ))"    # 10 d ago — comfortably past the 72 h abandon horizon
 
   git init -q -b main "$R"
-  git -C "${R:?repo path required}" config user.email t@t
-  git -C "${R:?repo path required}" config user.name t
+  git -C "$R" config user.email t@t
+  git -C "$R" config user.name t
   echo a > "$R/f"
   git -C "$R" add f
   GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" git -C "$R" commit -qm c1

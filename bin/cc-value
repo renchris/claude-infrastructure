@@ -346,7 +346,7 @@ run_selftest() {
   # `--since` fast-prune + exact `%ct >= since` filter is correct for them. Keep OUT committed first.
   local REPO="$tmp/repo"
   git init -q "$REPO"
-  git -C "${REPO:?repo path required}" config user.email t@t; git -C "$REPO" config user.name t
+  git -C "$REPO" config user.email t@t; git -C "$REPO" config user.name t
   GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$REPO" commit -q --allow-empty \
     -m "OUT-of-window"
   GIT_AUTHOR_DATE="@$IN" GIT_COMMITTER_DATE="@$IN" git -C "$REPO" commit -q --allow-empty \
@@ -401,7 +401,7 @@ run_selftest() {
 
   # churn RED-proof: wipe all value (no commits, no tasks) but keep active spend → fleet churn fires.
   local EMPTY="$tmp/emptyrepo"; git init -q "$EMPTY"
-  git -C "${EMPTY:?repo path required}" config user.email t@t; git -C "$EMPTY" config user.name t
+  git -C "$EMPTY" config user.email t@t; git -C "$EMPTY" config user.name t
   GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$EMPTY" commit -q --allow-empty -m old
   git -C "$EMPTY" update-ref refs/remotes/origin/main "$(git -C "$EMPTY" rev-parse HEAD)"
   local JC
@@ -424,7 +424,7 @@ run_selftest() {
   # false-positive here — byacct is empty because the commit carries no joinable trailer, yet the
   # fleet plainly produced a commit. Gating on fleet.value==0 is the only honest predicate.
   local UNATTR="$tmp/unattr"; git init -q "$UNATTR"
-  git -C "${UNATTR:?repo path required}" config user.email t@t; git -C "$UNATTR" config user.name t
+  git -C "$UNATTR" config user.email t@t; git -C "$UNATTR" config user.name t
   GIT_AUTHOR_DATE="@$OUT" GIT_COMMITTER_DATE="@$OUT" git -C "$UNATTR" commit -q --allow-empty -m old
   GIT_AUTHOR_DATE="@$IN"  GIT_COMMITTER_DATE="@$IN"  git -C "$UNATTR" commit -q --allow-empty -m "in-window trailerless"
   git -C "$UNATTR" update-ref refs/remotes/origin/main "$(git -C "$UNATTR" rev-parse HEAD)"

@@ -139,8 +139,8 @@ PROBE
 
   scratch="$BATS_TEST_TMPDIR/scratch"
   git init -q "$scratch"
-  git -C "${scratch:?repo path required}" config user.email t@e.com
-  git -C "${scratch:?repo path required}" config user.name t
+  git -C "$scratch" config user.email t@e.com
+  git -C "$scratch" config user.name t
   echo base > "$scratch/base.txt"
   git -C "$scratch" add base.txt
   git -C "$scratch" commit -q -m base
@@ -161,8 +161,8 @@ PROBE
   # Fresh scratch repo → its /tmp/land-lock-<hash> cannot pre-exist from a real land.
   scratch="$BATS_TEST_TMPDIR/pureread"
   git init -q "$scratch"
-  git -C "${scratch:?repo path required}" config user.email t@e.com
-  git -C "${scratch:?repo path required}" config user.name t
+  git -C "$scratch" config user.email t@e.com
+  git -C "$scratch" config user.name t
   echo base > "$scratch/base.txt"
   git -C "$scratch" add base.txt
   git -C "$scratch" commit -q -m base
