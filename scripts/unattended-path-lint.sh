@@ -51,6 +51,45 @@
 # lint therefore asserts the FLOOR (the stock macOS PATH) rather than the lucky case, for the same
 # reason cc-kitty-bin exists: the population you cannot see is the one that breaks.
 #
+# ── WHY THE bats CORPUS IS A THIRD POPULATION ────────────────────────────────────────────────────
+# Measured 2026-08-06: this lint scanned ZERO test files, and tests/*.bats is an unattended
+# population by exactly the definition above. com.claude.nightly-regression and
+# com.claude.postland-verify both exec a script whose whole job is to run the corpus, under an inline
+# `export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"`.
+#
+# THAT PATH IS NOT A SUPERSET OF THE STOCK FLOOR. It ADDS Homebrew and DROPS /usr/sbin and /sbin. So
+# the corpus fell in a gap no other half covers: the hook half judges against the stock floor (which
+# HAS /sbin), and the launchd half follows a plist only as far as the ONE script it names —
+# plist_target_scripts() matches `/(scripts|bin|hooks)/` — so a .bats file was in neither population.
+#
+# What shipped through the gap: tests/cc-queue.bats C12 ("a full render mutates NOTHING") hashed the
+# tree before and after through a bare `md5`, and md5 on macOS exists ONLY at /sbin/md5. On the two
+# scheduled runners that name is a 127, and under bats' errexit a failed command substitution in an
+# assignment kills the test — so C12 was a HARD, reproducible RED on com.claude.postland-verify from
+# 2026-08-01 to 2026-08-06 while reading green in every session shell, which carries /sbin. A sibling
+# session fixed the instance in parallel (12549d8b — `find | sort` + `cksum`, POSIX and in /usr/bin)
+# and measured the consequence harder than this one did; the comment at tests/cc-queue.bats:250 is
+# the reference account, including the second, independent defect it also closed: `find | md5` hashed
+# the path LIST, so it was structurally blind to the MODIFY verb C12's own clause freezes.
+#
+# BOTH POLARITIES ARE LIVE, and it is worth being exact about which, because the first draft of this
+# comment asserted the wrong one. Inside bats the shape is a loud red. In a plain shell without
+# errexit — a hook, a wrapper, any `$( )` whose status nobody reads — the identical line yields "" on
+# both sides and `[ "" = "" ]` passes: an instrument reading HEALTHY when dead, the sysctl-loadavg
+# shape below that produced this lint's ancestor. What is invariant across both, and all this lint
+# asserts, is that the verdict depends on the PATH the runner happens to have and the code cannot
+# tell which it got.
+#
+# The runners are NAMED (CORPUS_RUNNERS) rather than inferred, because both inferences were tried and
+# neither is honest. A word-grep for `bats` selects 9 of 22 plist targets, 7 of which only mention it
+# in prose; judging the corpus against those PATHs too collapses the effective floor to /usr/bin:/bin
+# and reports 25 findings, mostly Homebrew tools the real runners resolve perfectly. COMMAND-position
+# detection fails the other way: it sees nightly-regression's `command -v bats` but misses
+# postland-verify entirely, whose every call site spells the binary `"$BATS_BIN"`. So the runners are
+# listed, and the listing is self-policing in both directions — their PATHs are read from their own
+# plists at scan time (widen a runner's PATH and this half stops reporting, with no edit here), and a
+# tree that HAS a corpus but none of the named runners exits 2, a NON-VERDICT, never a clean bill.
+#
 # ── THE RULE ─────────────────────────────────────────────────────────────────────────────────────
 # A file on an unattended path may not invoke, at COMMAND POSITION and by BARE NAME, a binary that
 # is unreachable on that path's own PATH. Two kinds are reported, deliberately distinguished:
@@ -104,9 +143,17 @@ PY="/usr/bin/python3"
 #     an ELSE that runs the same command unbounded. The bound degrades; the verdict does not change.
 #     Both names are listed per site because the guard tries them in turn and either can be the one
 #     that resolves.
-#   · ~/.claude/bin siblings — cc-backlog, cc-dispatch, cc-decide, cc-do, cc-blockers, cc-notify,
-#     cc-teardown. These sit behind resolver ladders that already prefer an absolute path, so the
-#     bare name is the ladder's LAST rung rather than its only one.
+#   · ~/.claude/bin siblings — cc-backlog, cc-decide, cc-do, cc-blockers, cc-notify, cc-teardown.
+#     These sit behind resolver ladders that already prefer an absolute path, so the bare name is the
+#     ladder's LAST rung rather than its only one.
+#     TWO ROWS WERE DELETED FROM THIS CLASS as scanner artifacts, not as fixes —
+#     hooks/completion-assert.sh:cc-backlog and hooks/dispatch-assert.sh:cc-dispatch. Neither file
+#     ever invoked those names: every occurrence is a comment, the single-quoted CA_CMD_RE, an
+#     absolute-path resolver ladder, or the body of a double-quoted operator message. They were
+#     reported because both files build a JSON payload as `"$(jq -cn … --argjson n "$((N+1))" …)"`,
+#     and the arithmetic-expansion bug fixed in scan() let those `))` close the ENCLOSING `$(` — so
+#     the prose that followed was read as code. Deleting them is the ratchet doing its job: an entry
+#     that stops being reported must be removed, whichever end of the detector changed.
 #   · claude / agent-browser / npx / ruff — these live only in fnm and framework directories whose
 #     names carry a pid, so no fixed prefix can reach them and PATH hardening cannot fix them.
 #     bin/cc-claude-bin is the right resolver for `claude`, and the right separate change.
@@ -140,6 +187,15 @@ PY="/usr/bin/python3"
 #     first, not because the site is wrong — it is the exemplar of the correct shape.
 #   · bun / cargo (cc-dispatch) — a project-type ladder wrapped in `|| true`, explicitly best-effort
 #     ("install failure does NOT fail provisioning"). Genuinely benign.
+#   · lsof (tests/cc-teardown-assignee-adopt.bats) — the ONE corpus entry, and it is the exemplar
+#     rather than a defect. That suite is the regression guard for the bare-`lsof` class itself: it
+#     builds a hostile PATH with every lsof-holding dir removed BY PROBING (path_without_lsof(), so a
+#     box that ships lsof in Homebrew is still covered), and the flagged occurrence is its CONTROL
+#     asserting `command -v lsof` finds nothing under that PATH. Every place the suite needs the real
+#     binary already spells it /usr/sbin/lsof absolutely. It is listed because the bare name is
+#     reachable at command position — which is what this lint reports, not what it condemns.
+#     (Read the call sites before writing a rationale here: d2300b1b had to correct two of the rows
+#     above that were filed from a SOURCE reading, one already fixed in parallel and one never broken.)
 # The launchd half's entries are grandfathered for a REASON OF BLAST RADIUS, not of severity. The
 # two `sysctl` sites are the same defect that produced this lint's ancestor: sysctl lives in
 # /usr/sbin, those two plists' PATHs stop at /usr/bin:/bin, and both call sites feed a `${x:-0}` /
@@ -154,9 +210,7 @@ bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
 bin/screenshot-to-clipboard.sh:timeout
 hooks/anti-deference-nudge.sh:cc-decide
-hooks/completion-assert.sh:cc-backlog
 hooks/completion-assert.sh:timeout
-hooks/dispatch-assert.sh:cc-dispatch
 hooks/lead-crash-watchdog.sh:cc-teardown
 hooks/lead-crash-watchdog.sh:gtimeout
 hooks/lead-crash-watchdog.sh:timeout
@@ -188,8 +242,16 @@ scripts/watch-claude-code-2118-hold.sh:gh
 scripts/watch-claude-code-2118-hold.sh:gtimeout
 scripts/watch-claude-code-2118-hold.sh:timeout
 scripts/worktree-gc-infra-run.sh:timeout
+tests/cc-teardown-assignee-adopt.bats:lsof
 ALLOW
 )"
+
+# ── The bats corpus and the jobs that run it ─────────────────────────────────────────────────────
+# One launchd plist basename per line. See "WHY THE bats CORPUS IS A THIRD POPULATION" above for why
+# this is a list and not a detector. Only their PATHS matter here; both are read live from the plist,
+# so this list pins WHO runs the corpus, never WHAT PATH they run it with.
+CORPUS_RUNNERS="com.claude.nightly-regression.plist
+com.claude.postland-verify.plist"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -224,8 +286,15 @@ KEYWORDS = {
 # here and not in KEYWORDS-that-close: `if command -v claude` is a COMMAND after `if`, and treating
 # `if` as closing the position meant every `if command -v <tool>` guard in the corpus went unseen —
 # 19 further real sites, including the entire guarded class this lint claims to report.
+# `run` is bats' own wrapper and the corpus's dominant idiom — 1,385 `run bash`, 471 `run env`, 164
+# `run jq` in tests/*.bats today. Without it here the bats half would be blind to the ONE spelling
+# most of its population uses to invoke anything, which is most of the way back to scanning nothing.
+# It changes no verdict on the corpus as it stands (measured both ways, 2026-08-06) — it is here so a
+# LATER `run <bare-binary>` cannot land unseen. Outside bats the word is rare and harmless: the only
+# non-test sites are self-test blocks in bats-shellcheck-lint.sh and cc-announce, where the following
+# word is a keyword, a locally-defined function, or a bare word no box installs — all already dropped.
 TRANSPARENT = {"then", "else", "do", "elif", "if", "while", "until", "!", "time", "exec",
-               "command", "xargs", "builtin", "nohup", "env"}
+               "command", "xargs", "builtin", "nohup", "env", "run"}
 
 
 def scan(text):
@@ -284,9 +353,28 @@ def scan(text):
 
         # command substitution re-opens command position even inside double quotes
         if c == "$" and i + 1 < n and text[i + 1] == "(":
-            # $(( arithmetic )) is NOT a command substitution
+            # $(( arithmetic )) is NOT a command substitution, and it must be consumed WHOLE — to the
+            # matching `))`, counting nesting. Merely stepping over the opening `$((` (the first
+            # spelling) left its two closing parens to be read as ordinary `)`, and a `)` POPS
+            # sub_stack: so an arithmetic expansion nested inside a command substitution — e.g.
+            # `ts="$(date -u -r "$((NOW - age))" ...)"` at tests/cc-inbox-guard.bats:42 — closed the
+            # ENCLOSING `$(` early and left dq_depth stuck at 1 for the rest of the file.
+            # The damage runs in BOTH directions, which is why it was invisible: while dq_depth is
+            # stuck the scanner sees no command positions at all (silent blindness, the vacuous
+            # direction), and when a later quote flips it back it reports PROSE as invocations — it
+            # named `it2` inside a comment on line 287 and inside a @test title on line 335. A
+            # tokenizer that can be desynced by one line is not a corpus this lint can stand on.
             if i + 2 < n and text[i + 2] == "(":
-                i += 3
+                j, depth = i + 3, 2
+                while j < n and depth > 0:
+                    if text[j] == "(":
+                        depth += 1
+                    elif text[j] == ")":
+                        depth -= 1
+                    elif text[j] == "\n":
+                        line += 1
+                    j += 1
+                i = j
                 continue
             sub_stack.append(dq_depth)
             dq_depth = 0
@@ -409,9 +497,18 @@ for path in sys.argv[1:]:
     except OSError:
         continue
     local_funcs = set(FUNCDEF.findall(text))
+    # One line per (file, word), at its FIRST occurrence. Everything downstream — reachability, the
+    # guard scan, installability, the report itself — is a function of (file, word) alone, so a
+    # repeat can only re-derive the verdict the first one already produced; the shell loop was
+    # already collapsing them, just after paying for them. The bats corpus emits 31,594 words that
+    # reduce to 3,912 distinct pairs (hooks: 4,296 → 1,196), and that 8x was most of a 19s run
+    # against sibling ratchets that are sub-second. Deduping here rather than in bash keeps the work
+    # in the process that already holds the text, and needs no cache in a shell without hashes.
+    emitted = set()
     for lineno, word in scan(text):
-        if word in local_funcs:
+        if word in local_funcs or word in emitted:
             continue
+        emitted.add(word)
         print("%s\t%d\t%s" % (path, lineno, word))
 PY
 }
@@ -590,6 +687,31 @@ hook_population() { # $1=root
   ( cd "$1" 2>/dev/null && ls hooks/*.sh 2>/dev/null )
 }
 
+# ── The bats-corpus half ─────────────────────────────────────────────────────────────────────────
+# The population is every tests/*.bats in the scanned tree — the same whole-directory rule the hook
+# half uses, and for the same reason: the alternative is a manifest, and a file a manifest forgets is
+# still executed by `bats tests/`. Both runners take the DIRECTORY, not a file list.
+bats_population() { # $1=root
+  ( cd "$1" 2>/dev/null && ls tests/*.bats 2>/dev/null )
+}
+
+# The PATHs the corpus actually runs under: one "<plist>\t<expanded PATH>" line per runner PRESENT in
+# the tree. A runner that is missing contributes nothing; the caller decides whether "no runner at
+# all" is a skip or a non-verdict, since only it knows whether a corpus exists to judge.
+corpus_runner_paths() { # $1=root
+  local root="$1" name pl p
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    pl="$root/launchd/$name"
+    [ -f "$pl" ] || continue
+    p="$(plist_effective_path "$pl")"
+    # A login-shell runner inherits the operator's ~/.zprofile PATH, which is not assertable from the
+    # plist — same conservative skip the launchd half makes, for the same reason.
+    [ "$p" = "LOGIN_SHELL" ] && continue
+    printf '%s\t%s\n' "$name" "$(expand_path_string "$p" "$root")"
+  done <<< "$CORPUS_RUNNERS"
+}
+
 # ── The scan ─────────────────────────────────────────────────────────────────────────────────────
 # $1=root  $2=allowlist  $3=own-set (optional; presence carried by arity, see the entrypoint)
 lint_tree() {
@@ -695,6 +817,50 @@ lint_tree() {
     done
   fi
 
+  # -- the bats corpus, judged against the PATHs of the jobs that run it --
+  local bats_list; bats_list="$(bats_population "$root")"
+  if [ -n "$bats_list" ]; then
+    local runners; runners="$(corpus_runner_paths "$root")"
+    if [ -z "$runners" ]; then
+      # A corpus with no readable runner is the one state that must NOT read as clean: it is exactly
+      # the "scans 0 test files" condition this half was added to end, wearing a green badge.
+      echo "unattended-path-lint: '$root' ships tests/*.bats but none of its corpus-runner plists" >&2
+      printf '%s\n' "$CORPUS_RUNNERS" | sed 's/^/    /' >&2
+      echo "  is present, so the PATH the corpus runs under cannot be read. NON-VERDICT (exit 2)." >&2
+      echo "  Fix: update CORPUS_RUNNERS in $SELF to the plists that run the suite today." >&2
+      return 2
+    fi
+    local bfiles=()
+    while IFS= read -r f; do [ -n "$f" ] && bfiles+=("$root/$f"); done <<< "$bats_list"
+    if [ "${#bfiles[@]}" -gt 0 ]; then
+      local out; out="$(scan_shell "${bfiles[@]}")" || return 2
+      local seen=""
+      while IFS=$'\t' read -r f l w; do
+        [ -n "$w" ] || continue
+        plausible_binary "$w" || continue
+        local rel="${f#"$root"/}"
+        has_line "$seen" "$rel:$w" && continue
+        # Unreachable on ANY runner's PATH is a finding. A test cannot tell which job fired it, so it
+        # has to hold for all of them — the same "MAY run stock and cannot tell" logic as the hook
+        # half, applied to a floor that is narrower than stock in the /sbin dimension and wider in
+        # the Homebrew one.
+        local rname="" rpath="" hit=""
+        while IFS=$'\t' read -r rname rpath; do
+          [ -n "$rname" ] || continue
+          reachable_on "$rpath" "$w" && continue
+          hit="$rname"; break
+        done <<< "$runners"
+        [ -n "$hit" ] || continue
+        seen="$seen$rel:$w"$'\n'
+        # Same ordering rule as both halves above — allowlist before installability.
+        if has_line "$allow" "$rel:$w"; then used_allow="$used_allow$rel:$w"$'\n'; continue; fi
+        installed_somewhere "$w" || continue
+        local kind="bare"; file_guards "$f" "$w" && kind="guarded"
+        emit "$rel" "$l" "$w" "$kind" "$hit's own PATH"
+      done <<< "$out"
+    fi
+  fi
+
   # -- stuck ratchet entries: a site fixed but never de-listed --
   local stuck=""
   while IFS= read -r key; do
@@ -722,13 +888,26 @@ lint_tree() {
 # ── --list ───────────────────────────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--list" ]; then
   [ -n "$ROOT" ] || die2 "cannot resolve repo root"
-  echo "HOOK POPULATION (settings.json-invoked), judged against: $STOCK_PATH"
+  # "the whole hooks/ directory", not "settings.json-invoked" — hook_population() stopped
+  # intersecting with the live settings.json deliberately (see its comment); this label had not
+  # caught up, and a label naming a narrower population than the code scans is the kind of thing a
+  # later reader trusts over the code.
+  echo "HOOK POPULATION (every hooks/*.sh in the tree), judged against: $STOCK_PATH"
   hook_population "$ROOT" | sed 's/^/  /'
   echo
   echo "LAUNCHD POPULATION (per-plist effective PATH):"
   for pl in "$ROOT"/launchd/*.plist; do
     [ -f "$pl" ] || continue
     printf '  %-46s %s\n' "$(basename "$pl")" "$(plist_effective_path "$pl")"
+  done
+  echo
+  # Printed with its runner PATHs because that is the pair a reader has to see together: the corpus
+  # is only as unattended as the jobs that run it, and it was the per-plist PATH line in this very
+  # listing that exposed the near-vacuous BSD-sed bug in the launchd half.
+  echo "BATS-CORPUS POPULATION ($(bats_population "$ROOT" | grep -c . ) file(s)), judged against:"
+  corpus_runner_paths "$ROOT" | while IFS=$'\t' read -r rname rpath; do
+    [ -n "$rname" ] || continue
+    printf '  via %-42s %s\n' "$rname" "$rpath"
   done
   exit 0
 fi
@@ -853,14 +1032,75 @@ PLIST
   ( CC_UNATTENDED_OWN="" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 0 "$?" 'own-scope set-but-empty blocked'
   ( unset CC_UNATTENDED_OWN; CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t13" >/dev/null 2>&1 ); expect 1 "$?" 'own-scope UNSET did not block'
 
-  # 14. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
+  # A runner plist for the bats-corpus half. The NAME must be one of CORPUS_RUNNERS, and that
+  # coupling is deliberate: rename the real plist without updating the list and case 18's real-tree
+  # run goes NON-VERDICT rather than quietly green.
+  mkrunner() { # $1=dir-under-d $2=PATH string
+    cat > "$d/$1/launchd/com.claude.nightly-regression.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude.nightly-regression</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>-c</string>
+    <string>export PATH="$2"; exec "\$HOME/scripts/nightly-regression.sh" --run</string>
+  </array>
+</dict></plist>
+PLIST
+  }
+
+  # 14. RED CONTROL on the BATS-CORPUS half — the exact shape that shipped. A bare /sbin-only binary
+  #     in a test, under a runner whose inline PATH stops at /bin. Before this half existed the lint
+  #     scanned ZERO test files and called this tree clean, which is how tests/cc-queue.bats C12
+  #     hashed with a `md5` that resolves nowhere on either scheduled runner.
+  newtree t14; mkrunner t14 "/usr/bin:/bin"
+  mk t14 tests/a.bats 'before="$(find . | sort | md5)"'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t14" >/dev/null 2>&1 ); expect 1 "$?" 'the bats-corpus half did not fire on a bare /sbin-only binary'
+
+  # 15. GREEN on the same half — the identical corpus file under a runner whose PATH DOES carry
+  #     /sbin. Proves the half discriminates on the runner's PATH and not merely on the population,
+  #     which an always-red control could not tell apart.
+  newtree t15; mkrunner t15 "/usr/bin:/bin:/usr/sbin:/sbin"
+  mk t15 tests/a.bats 'before="$(find . | sort | md5)"'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t15" >/dev/null 2>&1 ); expect 0 "$?" 'a corpus binary reachable on the runner PATH was still reported'
+
+  # 16. LOUD — a corpus with no runner plist present is a NON-VERDICT, never a clean bill. Without
+  #     this, deleting or renaming a runner silently restores the scans-nothing state with a green
+  #     badge on it: the failure this whole half exists to end.
+  newtree t16
+  mk t16 tests/a.bats 'before="$(find . | sort | md5)"'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t16" >/dev/null 2>&1 ); expect 2 "$?" 'a corpus with no runner plist did not exit 2'
+
+  # 17. RED through bats' own `run` wrapper — the corpus's dominant idiom (1,385 `run bash` alone).
+  #     Without "run" in TRANSPARENT the scanner reports `run` itself, which no box installs so it is
+  #     dropped, and the binary after it is never seen — leaving the half blind to the spelling most
+  #     of its population uses. This case fails on that revision and passes on this one.
+  newtree t17; mkrunner t17 "/usr/bin:/bin"
+  mk t17 tests/a.bats 'run md5 -q "$f"'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17" >/dev/null 2>&1 ); expect 1 "$?" 'the bats `run` wrapper hid a bare binary from the scanner'
+
+  # 18. GREEN — prose AFTER an arithmetic expansion nested in a command substitution. This replays
+  #     hooks/dispatch-assert.sh:222-225 in two lines: `$((` used to be stepped over without a push,
+  #     so its `))` closed the enclosing `$(`, dq_depth stuck at 1, and the operator message below it
+  #     was read as code. It is a GREEN case because the visible symptom was a FALSE POSITIVE — it
+  #     reported `cc-dispatch` and `cc-backlog` out of prose, and two allowlist rows were minted to
+  #     silence them. The silent half was worse: while dq_depth is stuck the scanner sees no command
+  #     positions at all. VERIFIED TO DISCRIMINATE — on the pre-fix scanner this fixture reports
+  #     `tmux` from inside the message; the `(` before it is what re-opens command position, which is
+  #     why a fixture without one passes on both revisions and proves nothing.
+  newtree t18
+  mk t18 hooks/a.sh 'payload="$(jq -cn --argjson n "$((N+1))" x)"
+reason="see \`x\` (tmux kill-pane) now"'
+  ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t18" >/dev/null 2>&1 ); expect 0 "$?" 'prose after a nested $(( )) was reported as an invocation (the quote machine desynced)'
+
+  # 19. GREEN on the real tree with the shipped allowlist — the ratchet must be satisfiable today,
   #     or it cannot be wired into the gate at all.
   if [ -n "$ROOT" ] && [ -d "$ROOT/hooks" ]; then
     ( unset CC_UNATTENDED_OWN; "$SELF" "$ROOT" >/dev/null 2>&1 ); expect 0 "$?" 'the real tree is not clean under the shipped allowlist'
   fi
 
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, and on a plist whose INLINE export PATH cannot reach the binary; GREEN on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, and a plist whose inline PATH does reach; LOUD on a missing root and a root with no governed layers; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on the real tree."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, and on that binary reached through bats' own \`run\` wrapper; GREEN on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on the real tree."
     exit 0
   fi
   echo "unattended-path-lint --selftest: FAILED ($fails of $checks) — the detector does not discriminate."

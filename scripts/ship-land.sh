@@ -1443,10 +1443,15 @@ run_gate() {  # $1=range → 0 green / 1 red
       # component strip. The pathspec must list every population the lint judges, or a land that adds
       # a bare-name call to one of them produces an own-set without it and the finding degrades to
       # advisory.
-      upown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 2>/dev/null || true)"
+      # 'tests/*' is here because the lint gained a THIRD population — the bats corpus the two
+      # scheduled runners execute. Omitting it would be the exact degradation the paragraph above
+      # warns of: a land adding a bare /sbin-only binary to a .bats file would build an own-set
+      # without that file, the finding would drop to advisory, and it would land — which is how the
+      # bare `md5` in cc-queue.bats C12 passed vacuously on every scheduled run.
+      upown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'launchd/*' 'tests/*' 2>/dev/null || true)"
       [[ -n "$upown" ]] && echo "→ gate: unattended-path own-scope — blocking on $(printf '%s\n' "$upown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
-    echo "→ gate: bare-name binaries on unattended paths (launchd jobs + settings.json hooks)" >&2
+    echo "→ gate: bare-name binaries on unattended paths (launchd jobs + hooks + the bats corpus)" >&2
     if ! "$UNATTENDED_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
