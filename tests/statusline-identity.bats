@@ -6,15 +6,47 @@
 # `git diff --quiet` index walks). 109 ms -> ~25-30 ms per render, at 0.15-0.37 renders/s per
 # pane. A perf refactor of a thing every pane displays is only safe if the bytes do not move.
 #
-# So this suite does not assert what the output "should" look like — it diffs the CURRENT script
+# So this suite does not assert what the output "should" look like — it diffs the slim script
 # against the LAST COMMITTED PRE-SLIM version, byte for byte, over a matrix of payloads x repo
-# states. The baseline is extracted from git, not hand-copied, so it cannot drift.
+# states. BOTH sides are extracted from git, not hand-copied, so neither can drift.
 #
 # Harness laws: L1 the baseline is the real prior script from git history; L2 the matrix covers
 # the branches that actually differ (feature branch vs main vs detached vs non-repo, clean vs
 # dirty, 1M vs 200k window, used_percentage present vs absent); L3 `[ ]` / `diff` only; L4 the
 # harness self-checks that the baseline really is the old implementation, so a bad extraction
 # cannot make every case pass vacuously.
+#
+# ── WHY THE SLIM SIDE IS PINNED TO ITS COMMIT, NOT TO HEAD (2026-08-05) ───────────────────────
+# This suite originally diffed the pre-slim baseline against the WORKING-TREE statusline.sh. That
+# was right while the refactor was in flight, and it is wrong now: it silently promotes "the perf
+# refactor moved no bytes" into "statusline.sh may NEVER change its output again". Nobody agreed
+# to the second rule, and later commits deliberately broke it — the session-count marker was
+# redesigned four times, each for a stated readability reason:
+#     f6b0f8a3  negative-circled glyphs — the outline set is unreadable in kitty
+#     6a8686a4  instance chip in ASCII — both circled glyph sets failed at the eyes
+#     c0970351  paren ring — a one-cell circle is capped by GEOMETRY, not fonts
+#     fbbbbef2  per-terminal instance marker — glyph on iTerm2, ASCII ring elsewhere
+#     7ab0acb5  gate on TERM_PROGRAM only — ITERM_SESSION_ID is spoofed inside kitty
+# So tests 2-9 reddened the tree for every lander, blaming a perf commit for a design decision.
+#
+# The perf commit is INNOCENT, and that is measured, not argued: pre-slim (93720eb8) vs the slim
+# commit as landed (df6b328f) is byte-identical on all 16 matrix cases, and df6b328f renders
+# byte-identically to BOTH its parent and its child. The first divergence in this script's whole
+# history is f6b0f8a3, one commit later. Attribution came from rendering every historical revision
+# — the commit SUBJECT would have misled here, since df6b328f's subject IS the byte-identity claim
+# and reading it as the suspect inverts the verdict.
+#
+# Hence the pin: the matrix compares pre-slim vs the slim commit, both resolved from git BY
+# CONTENT (never by hardcoded sha, so a rebase cannot silently repoint them). It certifies exactly
+# the claim it was written to certify, and it can no longer convict later design work.
+#
+# ⚠️ READ THIS BEFORE CALLING TESTS 2-9 VACUOUS: they are a FROZEN PROOF, not a live guard, and
+# that is deliberate. A live byte-identity guard is not available at any price — the marker is
+# INTENTIONALLY volatile, so any live baseline either freezes the design or needs a hand-maintained
+# exclusion list that rots. What stays LIVE against the working tree is what can still actually
+# regress: the process-count assertions (last test) and untracked-is-not-dirty (test 5). Do NOT
+# "fix" a future red here by regenerating the baseline from HEAD — that compares the script to
+# itself and passes vacuously forever.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -37,6 +69,21 @@ setup() {
           done)
   [ -n "$sha" ] || skip "no pre-slim baseline found in history"
   (cd "$REPO" && git show "$sha:statusline.sh") > "$OLD"
+  # The slim side of the diff — statusline.sh as the perf refactor LANDED it, i.e. the OLDEST
+  # commit that has the porcelain=v2 rewrite. Resolved by content and by AGE (--reverse), so it
+  # names the refactor itself rather than any later commit that inherited it, and so no hardcoded
+  # sha can be silently repointed by a rebase. Pinned rather than read from the working tree: see
+  # the header — the marker is intentionally volatile, and diffing HEAD convicts design work.
+  SLIM="$BATS_TEST_TMPDIR/statusline-slim.sh"
+  local slim_sha
+  slim_sha=$(cd "$REPO" && git log --reverse --format=%H -- statusline.sh \
+        | while read -r c; do
+            if git show "$c:statusline.sh" 2>/dev/null | grep -q 'porcelain=v2'; then
+              echo "$c"; break
+            fi
+          done)
+  [ -n "$slim_sha" ] || skip "no slim commit found in history"
+  (cd "$REPO" && git show "$slim_sha:statusline.sh") > "$SLIM"
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/telemetry"
   mkdir -p "$CC_TELEMETRY_DIR"
   WORK="$BATS_TEST_TMPDIR/work"
@@ -56,7 +103,14 @@ setup() {
   ! grep -q 'porcelain=v2' "$OLD" || false
   # ...and the new one is not
   grep -q 'porcelain=v2' "$NEW"
-  ! grep -q "jq -r '.context_window.used_percentage" "$NEW"
+  ! grep -q "jq -r '.context_window.used_percentage" "$NEW" || false
+  # The SLIM side needs the same two-way check, and for the same reason: it is the other half of
+  # every diff below, so an extraction that silently returned the pre-slim blob (or HEAD) would
+  # make the whole matrix pass for free. Assert it is post-slim AND that it is not merely a copy
+  # of the baseline. `|| false` on the negative for the errexit-exemption reason above.
+  grep -q 'porcelain=v2' "$SLIM"
+  ! grep -q "jq -r '.context_window.used_percentage" "$SLIM" || false
+  ! cmp -s "$OLD" "$SLIM" || false
 }
 
 # fixture payloads --------------------------------------------------------------------------
@@ -85,9 +139,9 @@ identical() { # <payload-producer> <dir>
   local p a b
   p=$("$1")
   a=$(cd "$2" && printf '%s' "$p" | bash "$OLD" 2>/dev/null | cat -v)
-  b=$(cd "$2" && printf '%s' "$p" | bash "$NEW" 2>/dev/null | cat -v)
+  b=$(cd "$2" && printf '%s' "$p" | bash "$SLIM" 2>/dev/null | cat -v)
   [ "$a" = "$b" ] || {
-    printf 'OLD: %s\nNEW: %s\n' "$a" "$b" >&2
+    printf 'PRE-SLIM: %s\nSLIM:     %s\n' "$a" "$b" >&2
     return 1
   }
 }
@@ -129,7 +183,10 @@ mk_repo() { # <dir> <branch>
   mk_repo "$WORK/untracked" feature-u
   printf 'new\n' > "$WORK/untracked/brand-new-file"
   identical payload_full "$WORK/untracked"
-  # and prove the shared verdict is "clean" (a * here would be a real behaviour change)
+  # and prove the shared verdict is "clean" (a * here would be a real behaviour change).
+  # DELIBERATELY against $NEW, the WORKING TREE script, not the pinned $SLIM: this one asserts a
+  # behaviour rather than a byte sequence, so unlike the diff above it stays a live regression
+  # guard and is unaffected by the marker redesigns. Keep it on $NEW.
   run bash -c "cd '$WORK/untracked' && payload='$(payload_full)'; printf '%s' \"\$payload\" | bash '$NEW'"
   ! echo "$output" | grep -q '\*'
 }
@@ -159,10 +216,10 @@ mk_repo() { # <dir> <branch>
   mk_repo "$WORK/edge" feature-e
   local a b
   a=$(cd "$WORK/edge" && printf '' | bash "$OLD" 2>/dev/null | cat -v)
-  b=$(cd "$WORK/edge" && printf '' | bash "$NEW" 2>/dev/null | cat -v)
+  b=$(cd "$WORK/edge" && printf '' | bash "$SLIM" 2>/dev/null | cat -v)
   [ "$a" = "$b" ]
   a=$(cd "$WORK/edge" && printf '{not json' | bash "$OLD" 2>/dev/null | cat -v)
-  b=$(cd "$WORK/edge" && printf '{not json' | bash "$NEW" 2>/dev/null | cat -v)
+  b=$(cd "$WORK/edge" && printf '{not json' | bash "$SLIM" 2>/dev/null | cat -v)
   [ "$a" = "$b" ]
 }
 
