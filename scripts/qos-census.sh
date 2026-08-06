@@ -76,6 +76,23 @@ LOG="${QOS_CENSUS_LOG:-$HOME/.claude/logs/qos-census.jsonl}"
 PATTERN="${QOS_CENSUS_PATTERN:-bats}"
 NO_CONTROL="${QOS_CENSUS_NO_CONTROL:-0}"      # tests only; production must keep the control on
 
+# ── PATH-INDEPENDENT sysctl(8) (item ff544977e4ea, 2026-08-06) ───────────────────────────────────
+# sysctl lives in /usr/sbin; this job's plist wrapper exports a PATH that ends /usr/bin:/bin. So the
+# bare name below resolved in a terminal and not in any SCHEDULED run — measured on this machine's
+# own log, 859 of 867 census rows carry loadavg1 "?". That is the blind column in the instrument
+# whose entire purpose is to measure contention: every row taken by the daemon that runs it.
+# `taskpolicy` above already resolves /usr/sbin absolutely; this is the one call that did not.
+# Fixed script-side, not by editing the plist — a plist-only edit fails launchd-parity-lint
+# assertion (c) fleet-wide, and stays red pending an operator reload (see postland-verify.sh's note).
+# Seam: QOS_CENSUS_SYSCTL — set-but-EMPTY honored verbatim, so the unreadable path stays testable.
+if [ -n "${QOS_CENSUS_SYSCTL+set}" ]; then
+  SYSCTL="$QOS_CENSUS_SYSCTL"
+elif [ -x /usr/sbin/sysctl ]; then
+  SYSCTL=/usr/sbin/sysctl
+else
+  SYSCTL="$(command -v sysctl 2>/dev/null || true)"
+fi
+
 usage() {
   cat <<'EOF'
 qos-census.sh — census the QoS band against live gate processes.
@@ -316,7 +333,11 @@ else
 fi
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-LOAD1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
+if [ -n "$SYSCTL" ] && [ -x "$SYSCTL" ]; then
+  LOAD1=$("$SYSCTL" -n vm.loadavg 2>/dev/null | awk '{print $2}')
+else
+  LOAD1=""                                    # rendered "?" below — unknown, never a number
+fi
 # APPEND-ONLY schema discipline: the M1-rev fields go at the END and no existing key is renamed or
 # re-typed, so every consumer of a historical row keeps parsing (the tier fields simply read as
 # absent on pre-M1-rev rows, which is the truthful answer for a row taken before the split existed).
