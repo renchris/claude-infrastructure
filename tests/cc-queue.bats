@@ -248,13 +248,54 @@ touch_transcript() { # $1=sid $2=epoch mtime
 }
 
 # ── C12 — read-only ──────────────────────────────────────────────────────────────────────────────
+# THE DETECTOR is `find | sort` + `find -exec cksum` — the pattern tests/bats-shim-parity-lint.bats:344
+# already uses. It replaced a `find | sort | md5` for two INDEPENDENT reasons, either one sufficient:
+#
+#   (a) PATH. `md5` exists ONLY as /sbin/md5, and the com.claude.postland-verify launchd job exports
+#       PATH=$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin — no /sbin, no /usr/sbin.
+#       So under the ONE gate that judges this tree the `before=` assignment died `md5: command not
+#       found` → 127 → errexit, and C12 was a HARD reproducible RED (the retry ladder re-runs and
+#       convicts at 2-of-3, so an env-dependent failure is never even filed as a flake) on every run
+#       from 2026-08-01 to 2026-08-06 — while reading 35/35 green in any session shell, because an
+#       interactive PATH carries /sbin. postland-verify.sh:119-143 is explicit that the fix belongs
+#       HERE and not in the gate's environment: it deliberately does NOT normalize PATH, because a
+#       synthesised PATH deletes the ability to discover this class of defect at all — "the suites own
+#       their own hermeticity … an artifact that genuinely depends on ambient PATH is a BUG to fix, not
+#       an environment to fake." `cksum` is /usr/bin/cksum: POSIX, and inside that PATH.
+#
+#   (b) COVERAGE. `find | md5` hashed the path LIST only. It could see a create and a remove and was
+#       structurally BLIND to the third verb this test's own clause freezes — "never creates/removes/
+#       MODIFIES anything under any source dir" — so a rewrite-in-place passed. cksum hashes CONTENT,
+#       which closes that leg. Content and NOT atime, deliberately: cc-queue reads every source file it
+#       enriches from, so any atime-bearing hash would go red on a correct read.
+#
+# The status assertion is load-bearing for the same reason bats-shim-parity-lint.bats:347 carries one:
+# a subject that never RAN also never wrote, so "mutated nothing" is vacuous without proof of a render.
 
 @test "C12: a full render mutates NOTHING under any source dir" {
   beacon sid-b 999700 Bash '{"command":"x"}'; telem sid-w 4242; touch_transcript sid-w 999990
-  before="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | md5)"
+  local before after
+  before="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort
+            find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" -type f -exec cksum {} + | sort)"
   run "$Q" --no-color
-  after="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort | md5)"
+  [ "$status" -eq 0 ]                  # it RENDERED (a 127 would make "wrote nothing" meaningless)
+  after="$(find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" | sort
+           find "$CC_PERMPEND_DIR" "$CC_TELEMETRY_DIR" "$CC_REGISTRY_DIR" -type f -exec cksum {} + | sort)"
   [ "$before" = "$after" ]
+}
+
+@test "C12: POSITIVE CONTROL — the find/cksum detector can SEE both a create and a modify" {
+  # Without this, swapping the detector could silently install one that can never fail, and C12 would
+  # read green for the same reason the md5 version read green in a session shell: nothing was proven.
+  local before mid after
+  beacon sid-b 999700 Bash '{"command":"x"}'
+  before="$(find "$CC_PERMPEND_DIR" -type f | sort; find "$CC_PERMPEND_DIR" -type f -exec cksum {} + | sort)"
+  : > "$CC_PERMPEND_DIR/canary.json"                    # a NEW file must be visible
+  mid="$(find "$CC_PERMPEND_DIR" -type f | sort; find "$CC_PERMPEND_DIR" -type f -exec cksum {} + | sort)"
+  [ "$before" != "$mid" ]
+  beacon sid-b 999701 Bash '{"command":"y"}'            # …and so must a CONTENT change at a STABLE path
+  after="$(find "$CC_PERMPEND_DIR" -type f | sort; find "$CC_PERMPEND_DIR" -type f -exec cksum {} + | sort)"
+  [ "$mid" != "$after" ]
 }
 
 # ── C1 — surface: grouping is how 1000 rows stays readable ───────────────────────────────────────
