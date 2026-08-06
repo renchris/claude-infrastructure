@@ -297,3 +297,181 @@ ev() { echo "test: lead $LEAD DEAD; report harvested"; }
   # …and the exit code the token advertises is the one the caller actually gets
   [ "$status" -eq 0 ] || false
 }
+
+# ── THE CWD PROBE: /usr/sbin IS NOT ON THE ONLY CALLER'S PATH, tests 16-19 ────────────────────────
+# Everything above stops at RESOLUTION. Past it, resolve_assignee reads the assignee's cwd with
+# lsof(8) and hands it to the work-safety gate — and until 2026-08-06 it did so by BARE NAME. lsof
+# lives in /usr/sbin, which our own launchd wrapper overrides drop (launchd's default PATH has it;
+# com.claude.dispatcher, boot-resume, desk-invariant, postland-verify:21 and team-orphan-reaper:30
+# all export a PATH without it). The dispatcher is the load-bearing one: it starts the worker
+# sessions whose SessionStart hook spawns lead-crash-watchdog, this leg's ONLY autonomous caller.
+# Empty cwd ⇒ the gate `die`s on `--cwd ""` ⇒ REFUSE, always: fail-SAFE and inert on exactly the
+# production path. Nothing above could see it, because every test up there asserts a refusal and the
+# leg refuses correctly for the wrong reason — and a hand-run has /usr/sbin, so it never reproduced.
+#
+# The trap that made it survive review: the comment AT that line already named this exact hazard and
+# this exact caller, and then credited cct_bounded with closing it. cct_bounded resolves timeout(1)
+# by absolute path — it says nothing about what the bounded fork execs. Bounding a call is not
+# resolving it. Same defect, same week, same remedy as bin/cc-authbrowser (dcc1ccb7).
+#
+# 16 is the control, 17 the RED proof, and 18-19 are the pair the fix's REAL risk demands: resolving
+# the cwd flips this gate from "always refuse" to "evaluate, and possibly tear a worktree down".
+# 18 proves the newly-live gate still protects dirty work; 19 proves TEARDOWN is reachable at all —
+# without it every assertion in this file is satisfied by a subject that refuses unconditionally.
+
+# PATH with every lsof-holding dir DELETED, found by PROBING rather than by name: /opt/homebrew/bin
+# ships lsof on some boxes, and a hardcoded "drop /usr/sbin" would quietly stop hiding it and pass
+# vacuously ever after. Same construction, same reason, as tests/cc-authbrowser.bats.
+path_without_lsof() {
+  local d out="" parts
+  IFS=: read -ra parts <<< "$PATH"
+  for d in "${parts[@]}"; do [ -x "$d/lsof" ] || out="${out:+$out:}$d"; done
+  printf '%s' "$out"
+}
+
+# <dir> → a real git repo that is clean AND shipped (origin/main == HEAD, origin/HEAD resolvable),
+# built with no network. Shape lifted from cc-teardown-safety-gate.sh's own selftest so the fixture
+# cannot drift from what the gate actually accepts. Identity is set with an explicit non-empty -C:
+# `git -C "" config` writes into the CURRENT repo instead (memory: git-dash-c-empty-is-a-noop).
+mkrepo() {
+  local r="${1:?repo path required}"; mkdir -p "$r"
+  git -C "$r" init -q
+  git -C "$r" config user.email t@t
+  git -C "$r" config user.name t
+  echo a > "$r/f"; git -C "$r" add f; git -C "$r" commit -qm c1
+  git -C "$r" update-ref refs/remotes/origin/main HEAD
+  git -C "$r" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+}
+
+# <dir> → pid of a live process whose cwd IS that dir, recorded for teardown(). A REAL process, so
+# the probe under test runs the real lsof against a real /dev/fd — a stubbed lsof would test the
+# stub. $! and never pgrep: pgrep -n matched a SIBLING SESSION's sleep while this was being written.
+#
+# ALL THREE STREAMS DETACHED, and that is not hygiene — it is the difference between a suite and a
+# hang. bats collects a test's output through a pipe and reads it to EOF; a background child that
+# inherits stdout holds that pipe open, so bats blocks for the child's full lifetime. Measured here:
+# the first run of these tests wedged past 120s on `sleep 60` rather than failing.
+probe_in() {
+  local d="${1:?dir required}" p
+  rm -f "$D/probe.ready"
+  ( cd "$d" && : > "$D/probe.ready" && exec sleep 60 ) >/dev/null 2>&1 </dev/null & p=$!
+  echo "$p" > "$D/probe.pid"
+  # Sync on the CD, not on the pid. `$!` is live the instant the subshell forks — which is BEFORE it
+  # has changed directory — so a `kill -0` wait proves nothing about cwd, and a probe read inside
+  # that window returns the RUNNER's cwd and passes for the wrong reason. The flag is written after
+  # the cd and outside the fixture repo, so it cannot appear as worktree state to the gate.
+  for _ in $(seq 1 200); do [ -f "$D/probe.ready" ] && break; sleep 0.02; done
+  echo "$p"
+}
+
+teardown() {
+  [ -n "${D:-}" ] && [ -f "$D/probe.pid" ] && kill -9 "$(cat "$D/probe.pid")" 2>/dev/null
+  return 0
+}
+
+@test "(16) CONTROL: the hostile PATH hides lsof and hides NOTHING ELSE the subject needs" {
+  [ -x /usr/sbin/lsof ] || skip "no /usr/sbin/lsof on this box — the defect cannot exist here"
+  local hp; hp="$(path_without_lsof)"
+  [ -z "$( PATH="$hp"; command -v lsof )" ] || false   # it really is hidden…
+  # …and everything the subject and the real gate still need survives, so a RED in 17-19 can only
+  # mean the cwd probe. Without this the fixture could be breaking jq and the tests would go on
+  # RED-proving a fix they never ran (the lesson dcc1ccb7 paid for).
+  [ -n "$( PATH="$hp"; command -v jq )"   ] || false
+  [ -n "$( PATH="$hp"; command -v sed )"  ] || false
+  [ -n "$( PATH="$hp"; command -v head )" ] || false
+  [ -n "$( PATH="$hp"; command -v git )"  ] || false
+  [ -n "$( PATH="$hp"; command -v bash )" ] || false
+}
+
+@test "(17) RED PROOF: under the hook/launchd PATH the adopted assignee's REAL cwd reaches the gate" {
+  [ -x /usr/sbin/lsof ] || skip "no /usr/sbin/lsof on this box — the defect cannot exist here"
+  local hp probe want got p; hp="$(path_without_lsof)"
+  probe="$D/probe-cwd"; mkdir -p "$probe"
+  # COMPARE RESOLVED: $BATS_TEST_TMPDIR lives under /var, which is a symlink to /private/var, and
+  # lsof reports the resolved path. A raw comparison would fail for a reason that is not the subject.
+  want="$(cd "$probe" && pwd -P)"
+  p="$(probe_in "$probe")"
+
+  # A gate that RECORDS its argv and still REFUSEs: the observation point is what cc-teardown HANDS
+  # the gate, and nothing may actually be torn down to learn it.
+  cat > "$D/bin/gate-rec" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$GATE_ARGV_OUT"
+echo '{"decision":"REFUSE","reason_kind":"test-gate","reason":"argv recorded","git_state":"x"}'
+exit 2
+EOF
+  chmod +x "$D/bin/gate-rec"
+
+  run env PATH="$hp" GATE_ARGV_OUT="$D/gate-argv" CC_TEARDOWN_GATE_BIN="$D/bin/gate-rec" \
+      IT2_JSON="$IT2_PRESENT" \
+      PS_TABLE="$p /x/claude-code/bin/claude.exe --agent-id gu5-decide@session-$LEAD" \
+      bash "$TD" "$PANE" --done-evidence "$(ev)" --assignee-of "$LEAD"
+
+  [[ "$output" == *"adopted UNREGISTERED assignee pane $PANE"* ]] || false   # resolution got that far
+  [ -f "$D/gate-argv" ] || false                                             # …and the gate ran
+  got="$(awk '/^--cwd$/{getline; print; exit}' "$D/gate-argv")"
+  # THE assertion. Pre-fix this is the empty string under this PATH and the real cwd under an
+  # interactive one — which is why the defect was invisible to every hand-run.
+  [ "$got" = "$want" ] || false
+}
+
+@test "(18) THE FLIP IS SAFE: a resolved cwd with dirty tracked work DEFERs on its own merits" {
+  [ -x /usr/sbin/lsof ] || skip "no /usr/sbin/lsof on this box — the defect cannot exist here"
+  local hp p; hp="$(path_without_lsof)"
+  mkrepo "$D/wt"; echo changed > "$D/wt/f"          # tracked, uncommitted — the state a close strands
+  p="$(probe_in "$D/wt")"
+
+  run env PATH="$hp" CC_TEARDOWN_GATE_BIN="$REPO/bin/cc-teardown-safety-gate.sh" \
+      IT2_JSON="$IT2_PRESENT" \
+      PS_TABLE="$p /x/claude-code/bin/claude.exe --agent-id gu5-decide@session-$LEAD" \
+      bash "$TD" "$PANE" --done-evidence "$(ev)" --assignee-of "$LEAD"
+
+  # DEFER on the dirty tree — not the pre-fix REFUSE on a missing --cwd. Both refuse; only one of
+  # them read the worktree. The distinction IS the fix: an inert gate protects nothing on purpose.
+  [ "$status" -eq 10 ] || false
+  [[ "$output" == *"verdict=DEFER reason_kind=dirty-tree exit=10"* ]] || false
+  kill -0 "$p" 2>/dev/null || false                 # and the target was never touched
+}
+
+@test "(19) NOT INERT: a resolved cwd that is clean AND shipped reaches TEARDOWN and acts" {
+  [ -x /usr/sbin/lsof ] || skip "no /usr/sbin/lsof on this box — the defect cannot exist here"
+  local hp p; hp="$(path_without_lsof)"
+  mkrepo "$D/wt"                                     # clean, 0 ahead of origin/main — closeable
+  p="$(probe_in "$D/wt")"
+
+  # it2 keyed on the TARGET's liveness, not on a call count: the pane leaves app.windows because its
+  # process died, so the mock reproduces the causal order instead of guessing how many lists happen.
+  cat > "$D/bin/it2-live" <<'EOF'
+#!/bin/bash
+if [ "$1" = session ] && [ "$2" = list ]; then
+  if kill -0 "$PROBE_PID" 2>/dev/null; then printf '%s' "$IT2_JSON"; else printf '%s' "$IT2_JSON_AFTER"; fi
+  exit 0
+fi
+exit 0
+EOF
+  # tty served as a FIXED value: the real one is `??` whenever the corpus runs from a daemon (which
+  # is how postland-verify runs it) and `??` makes tty_foreign fail closed. Keying a verdict on the
+  # runner's controlling terminal would make this test pass at the desk and DEFER in the gate.
+  cat > "$D/bin/ps-tty" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"-o tty="*) echo " ttys011" ;;
+  *"-E "*)     printf '%s\n' "${PS_ENV:-}" ;;
+  *"-t "*)     printf '%s\n' "${PS_TABLE:-}" ;;
+  *)           exec /bin/ps "$@" ;;
+esac
+EOF
+  chmod +x "$D/bin/it2-live" "$D/bin/ps-tty"
+
+  run env PATH="$hp" CC_TEARDOWN_GATE_BIN="$REPO/bin/cc-teardown-safety-gate.sh" \
+      IT2_BIN="$D/bin/it2-live" CC_TEARDOWN_PS_BIN="$D/bin/ps-tty" PROBE_PID="$p" \
+      IT2_JSON="$IT2_PRESENT" IT2_JSON_AFTER="$IT2_ABSENT" \
+      PS_TABLE="$p /x/claude-code/bin/claude.exe --agent-id gu5-decide@session-$LEAD" \
+      bash "$TD" "$PANE" --done-evidence "$(ev)" --assignee-of "$LEAD"
+
+  # THE POSITIVE CONTROL for this whole file. Pre-fix the gate never saw a cwd, so this path was
+  # unreachable and every refusal above passed vacuously. Effect-verified, not claimed.
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"verdict=TEARDOWN"* ]] || false
+  ! kill -0 "$p" 2>/dev/null || false                # the process is genuinely gone
+}
