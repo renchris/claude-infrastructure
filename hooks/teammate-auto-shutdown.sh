@@ -44,6 +44,17 @@
 
 set -uo pipefail
 
+# PATH hardening — scripts/unattended-path-lint.sh governs this line.
+# This file already learned this lesson on ONE of its two pane backends: the kitty leg routes through
+# bin/cc-kitty-bin and _it2_bin() carries an absolute fallback, both added after a bare `kitty` from a
+# hook exited 127 and left a teammate pane alive for 3h09m with its claude.exe resident. The tmux leg
+# (`tmux kill-pane`) got neither, and tmux is Homebrew-only — so on a session whose PATH lacks
+# Homebrew the close is a silent no-op in exactly the way the kitty fix exists to prevent. `yq` in
+# resolve_from_manifest() and `cc-sessions` are the same class in the same file.
+# APPEND, never prepend: a session that already reaches these keeps its own resolution order.
+PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+
 if [[ "${TEAMMATE_SHUTDOWN_DISABLED:-0}" == "1" ]]; then
   exit 0
 fi
