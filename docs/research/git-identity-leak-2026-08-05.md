@@ -349,3 +349,75 @@ It convicts the *absence* of a guard, not its *placement*, its *reachability*, o
 variable it guards can ever be empty. On the evidence above it would pass `integ/git-identity`
 (stale), pass `fix/gi-bisect` (which regresses an unrelated bound), and reward the inert guards.
 This section is the gate.
+
+---
+
+## Erratum — the section above drifted within 90 minutes (2026-08-06 00:30Z, backlog `80ae77910cd0`)
+
+Backlog `80ae77910cd0` filed a correction against `c2e571188ad2` at **23:20Z**, and `c2e571188ad2`
+was closed at **23:30Z** by the section above. Both were accurate when written; **four of their
+statements are no longer true**, and the way each went stale is the reusable part.
+
+Everything below is re-derived by CONTENT against `origin/main` at `7ff68f1a`. **Branch refs are
+mutable and three of them moved inside this window — re-derive, do not quote this table.**
+
+### What the correction got RIGHT (upheld)
+
+**`c2e571188ad2` was wrong that `wt-ae2ce4298dac` landed "bisect bounds".** At `7c32cc6f~1`,
+`scripts/postland-verify.sh:825` read a bare `git -C "$WORKTREE" bisect run "$runner"` — no wall,
+no step cap, nothing. Trunk carries both only since today: `BISECT_TO` (line 179, via `7c32cc6f`)
+and `BISECT_MAX_STEPS` (line 190, via `0c16d12f`).
+
+The step-cap work existed **only inside auto-checkpoint commits** (`5373cc71` et al, reachable via
+`git log --all -S BISECT_MAX_STEPS`), never on a real branch — so every branch-level search read 0
+and `git rev-list` agreed. **The same trap is live right now for this section's own top
+recommendation:** `5f1d0757` ("LAND — strongest shape") is held by `wt-ae2ce4298dac`,
+`wip/ae2ce4298dac/LAST` and `checkpoints/ae2ce4298dac/*` — and `git cherry` reports it `+`, i.e.
+**still unlanded**. A verdict of "LAND" is not a landing.
+
+### What has since ROTTED
+
+**`git-identity-lint.sh` is no longer absent from trunk.** The correction's `git ls-tree origin/main
+-- scripts/git-identity-lint.sh` was genuinely empty at 23:20Z. `9313ded5` (author 21:57Z, **commit
+23:43Z**) first entered `origin/main` at **23:47:58Z** — 28 minutes *after* the correction was
+filed. Author date would have dated this wrong by 1h50m; the honest oracle is the `origin/main`
+reflog entry that first contains the sha.
+
+**But the half that mattered survives, sharper than "absent": the lint is wired at the wrong
+chokepoint for the claim `c2e571188ad2` made.** It is a blocking **land** gate —
+`scripts/ship-land.sh:1151`, `SHIP_LAND_GITID_LINT` — and it is *not* in postland's prelint band
+(`scripts/postland-verify.sh:301` = `test-walltime-lint.sh` + `test-hermeticity-lint.sh` only). So
+"`git-identity-lint.sh` in postland's blocking prelint slot" names a slot that still does not exist.
+
+This makes the preceding section **more** load-bearing, not less: a reconciler landing `gi-corpus`
+will now watch that lint run and PASS, and a pass is easy to misread as adjudication. It still
+convicts only the *absence* of a guard — never its placement.
+
+### What is RESOLVED (the `gi-bisect` third of `c2e571188ad2`)
+
+`2f159a7b` was cherry-picked `-x` and landed as `7c32cc6f` (trailer verified in the commit body),
+and the step cap landed as `0c16d12f`. The overlapping hunk with backlog `4368b1ac7548` no longer
+exists; `fix/gi-bisect` needs no separate land.
+
+⚠️ **The count over-reports here.** `git rev-list --count origin/main..fix/gi-bisect` = **1**, which
+reads as one unlanded commit, while `git cherry origin/main fix/gi-bisect` = `- 2f159a7b` — content
+fully in trunk. This repo's standing rule is "verify by CONTENT, never by count" because a count
+under-reports after a sibling rebase; a cherry-pick makes the same count *over*-report. Same rule,
+opposite direction, and only `git cherry` gets both right.
+
+### Live branch state (`origin/main` = `7ff68f1a`, 2026-08-06 00:30Z)
+
+| Branch | Live sha | vs trunk | Section above said |
+|---|---|---|---|
+| `wt-ae2ce4298dac` | `5f1d0757` | **UNLANDED** (`git cherry` `+`) | "LAND — strongest shape" — still true, still not done |
+| `fix/gi-corpus` | `129b16b1` | ahead 4 | `159c7748` — **sha drifted** |
+| `fix/gi-bisect` | `2f159a7b` | contained (count says 1) | "RETIRE" — correct |
+| `fix/gi-lint` | `b7f0f8bd` | ahead 1 | "neither is landed" — **stale, one landed** |
+| `fix/gi-selfexclude` | `01b52124` | ahead 0 — landed | not listed (did not exist yet) |
+| `integ/git-identity` | `a25ed2e4` | ahead 0 — contained | `5f505ff4` — **stale**; that sha is a lint-hardening commit, not the stale merge described |
+
+### Still open — unchanged by any of this
+
+The `fix/gi-corpus` binding-vs-use-site guard-placement reconcile. `c2e571188ad2` is right that it
+needs a human read and not a gate, and the lint landing does not change that. Now joined by: the
+branch this section recommends landing has not landed.
