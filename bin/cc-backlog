@@ -14,8 +14,9 @@
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S]   → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
-#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live,
-#                                                                  or if the item is done-latched
+#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live
+#                                                                  (claimer OR its worktree), or if
+#                                                                  the item is done-latched
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
@@ -78,10 +79,33 @@
 # until `reap`'s abstention ceiling blocks it out to a human; double-dispatch is neither visible
 # nor bounded.
 #
+# …AND ONE ORACLE IS NOT ENOUGH TO DISPLACE (2026-08-06, backlog 9887dbe5ef5c). The paragraph above
+# is right about the DIRECTION and was wrong about the EVIDENCE: it let a single proven-dead verdict
+# from `claimer_live` displace an incumbent, and a `<host>-<pid>` claim names a SHELL, not the work.
+# Shells rotate; the work does not. Item e1ce92772859 was claimed 08:03:52Z by
+# `Chriss-MacBook-Pro-3-33510`, that pid was gone by 09:01:47Z while the worker ran `cc-bats` on the
+# item's own suite in `.worktrees/wt-e1ce92772859`, the lease GRANTED (rc 0), and a second session
+# duplicated ~20 min of work before spotting the live sibling by lsof — the incumbent landed the
+# better fix (66871b9b) six minutes later and the duplicate commit was discarded. So a duplicate was
+# the DEFAULT outcome for any worker whose shell pid rotated, which is precisely what `reclaim`
+# existing as a MANUAL repair had been admitting all along.
+#
+# `reap` never had this hole: since 2026-07-26 it RE-VERIFIES a dead claimer against the item's
+# worktree (`owned_wait`) before any dead-worker path, because a dispatched claim's `by` is a spent
+# pid that cannot see the worker. The two verbs therefore disagreed about what "live" means, and the
+# verb with the weaker predicate was the one that mints a duplicate. `claim` now asks the SAME
+# oracle, called and not restated (memory: sibling-auditors-must-share-the-state-model,
+# make-the-actuator-the-arbiter) — displacement requires oracle 1 AND oracle 2 to say not-live, the
+# exact conjunction `reap` requires to reopen. The stored `by` is deliberately left a pid: the
+# durable identity that fixes this is the WORKTREE (memory: argv-is-sampling-cwd-is-durable), and
+# keying the PREDICATE on it costs one call where re-keying every writer's identity would be a schema
+# change across every claim producer for no additional safety. Full rationale at guard (5) below.
+#
 # WHAT IT IS NOT. Not a lock: nothing is held, nothing must be released, and no path can wedge on
 # it. The lease IS the fold — a CAS against the item's current `(status, by)` at append time — so it
 # inherits the store's append-only concurrency properties unchanged and adds no new resolution
-# surface (the `kill -0` branch is the one `reap` already runs). The EXPIRY half needs no new
+# surface (its `kill -0` and worktree-occupancy branches are the two `reap` already runs — that
+# sameness is the point of guard (5), not a coincidence). The EXPIRY half needs no new
 # mechanism either: `reap` Rule A already reopens a dead-worker claim past STALE_CLAIM_S, bounded by
 # MAX_ATTEMPTS — a lease whose worker died is exactly the case it was built for.
 #
@@ -550,7 +574,7 @@ cmd_transition() {
   # more fundamental fact and the more useful refusal — the lease would send the reader chasing an
   # incumbent worker for work that is finished.
   if [ "$event" = claim ] && [ "$force" -eq 0 ]; then
-    local lcur lstatus lby lrc ldone lev lts
+    local lcur lstatus lby lrc ldone lev lts lowned lowrc
     lcur="$(item_json "$id")"
     lstatus="$(printf '%s' "$lcur" | jq -r '.status  // ""'    2>/dev/null)"
     lby="$(    printf '%s' "$lcur" | jq -r '.by      // ""'    2>/dev/null)"
@@ -613,6 +637,69 @@ cmd_transition() {
           printf '  twice to completion for ~10 h (b0b4ec40d63a, 2026-08-05).\n'
           printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
           printf '  The holder releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$lby"
+          printf '  To override deliberately:  cc-backlog claim %s --by %s --force\n' "$id" "${by:-<sid>}"
+        } >&2
+        return 4
+      fi
+      # (5) SECOND ORACLE — the item's WORKTREE, asked exactly as `reap` asks it. Oracle 1 has just
+      # returned a REAL not-live verdict, but for a `<host>-<pid>` claim that verdict is about a
+      # SHELL, and shells rotate while the work does not. MEASURED 2026-08-06 on item e1ce92772859:
+      # claimed 08:03:52Z by `Chriss-MacBook-Pro-3-33510`; by 09:01:47Z that pid was gone while the
+      # worker was running `cc-bats` on the item's own suite inside .worktrees/wt-e1ce92772859.
+      # `kill -0` said dead, this lease GRANTED (rc 0), a second session duplicated ~20 min of work,
+      # and the incumbent landed the better fix (66871b9b) six minutes later — the duplicate commit
+      # was thrown away. `reclaim` existing as the manual repair was the standing admission that
+      # nothing re-keys automatically, i.e. that a duplicate is the DEFAULT outcome of a rotated pid.
+      #
+      # THE TWO VERBS DISAGREED ABOUT WHAT "LIVE" MEANS, and the weaker one was the dangerous one.
+      # `reap` has required BOTH oracles to convict since 2026-07-26 — it re-verifies a dead claimer
+      # against the worktree before any dead-worker path, precisely because a dispatched claim's `by`
+      # cannot see the worker (see owned_wait). This verb asked oracle 1 alone, so the ACQUIRE path —
+      # the only one that can MINT a duplicate — convicted on strictly weaker evidence than the
+      # release path. One oracle now governs both, and it is `owned_wait` CALLED, never restated
+      # (memory: sibling-auditors-must-share-the-state-model, make-the-actuator-the-arbiter).
+      #
+      # Keying liveness on the WORKTREE rather than re-keying every writer's stored `by` is the fix
+      # that fits: the worktree is the durable handle that outlives the shell (memory:
+      # argv-is-sampling-cwd-is-durable) and `reap` already trusts it, whereas a stored-identity
+      # schema change would touch every claim writer for no extra safety. Within owned_wait it is S1b
+      # (cwd occupancy) that carries this, not S1: measured the same day against a live dispatch
+      # worktree, `pgrep -f <wt>` read 0 processes while cwd occupancy read 13 — the launcher's argv
+      # is spent and only the cwd survives, exactly as owned_wait's own header predicts.
+      #
+      # rc 1 ONLY may proceed, mirroring oracle 1 above and for the same asymmetry: rc 0 is positive
+      # evidence of life and rc 2 means a probe that COULD have seen the worker never ran. Abstaining
+      # leaves the incumbent alone; convicting on a non-verdict hands live work to a second worker.
+      # No ceiling here on purpose — a wedged-but-occupied worktree is `reap`'s to escalate at
+      # OWNED_WAIT_MAX_S, and a second ceiling on the acquire path would be one policy in two places,
+      # free to drift apart exactly as these two liveness predicates already did.
+      #
+      # COST is gated by position, not by a flag: reached only for an item already `claimed`, by
+      # somebody else, whose claimer probe returned PROVEN-DEAD — i.e. only when we are about to take
+      # work off a holder. An ordinary open-item claim never reaches it, and `owned_wait`
+      # short-circuits on an absent wt-<id> before it forks lsof at all. No `verdict=` token is
+      # emitted: rc 4's only machine consumer discriminates POSITIVELY on `verdict=done-latched`
+      # (cc-dispatch:968) and correctly reads every other rc 4 as the lease — which this is, reached
+      # by a second oracle (memory: new-enum-member-falls-into-fail-closed-default).
+      lowned="$(owned_wait "$id")"; lowrc=$?
+      if [ "$lowrc" -ne 1 ]; then
+        { if [ "$lowrc" -eq 0 ]; then
+            printf 'cc-backlog claim: REFUSED — %s is claimed by %s, whose process is gone but whose WORKTREE IS LIVE\n' "$id" "$lby"
+            printf '  evidence: %s\n' "$lowned"
+          else
+            printf 'cc-backlog claim: REFUSED — %s is claimed by %s, and its worktree occupancy is UNRESOLVED\n' "$id" "$lby"
+            printf '  %s\n' "$lowned"
+            printf '  The claimer probe answered "not live", but that answers for a SHELL; the only oracle that\n'
+            printf '  can see the WORKER never ran. No oracle has spoken about the worker, and this verb HANDS\n'
+            printf '  OUT the work — abstaining leaves the incumbent alone, never mints a second one.\n'
+          fi
+          printf '  A <host>-<pid> claim names a shell, and shells rotate while the work does not: on\n'
+          printf '  e1ce92772859 (2026-08-06) the pid was dead, the worker was mid-suite in its own worktree,\n'
+          printf '  and the granted claim cost ~20 min of duplicated work. reap re-verifies a dead claimer\n'
+          printf '  against the worktree before it will reopen; claim asks that same oracle, so the two\n'
+          printf '  verbs cannot disagree about what "live" means.\n'
+          printf '  If YOU are that worker and only need the claim re-keyed to your own identity:\n'
+          printf '      cc-backlog reclaim %s --by %s\n' "$id" "${by:-<worker-identity>}"
           printf '  To override deliberately:  cc-backlog claim %s --by %s --force\n' "$id" "${by:-<sid>}"
         } >&2
         return 4
