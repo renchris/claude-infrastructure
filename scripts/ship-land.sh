@@ -691,8 +691,13 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   # already inside dies fast and honestly as a CUT.
   #
   # STDIN IS /dev/null, AND THIS IS THE ONE PLACE THAT DECIDES IT (2026-08-06). A land can be fired
-  # by launchd or the desk, so this process's stdin is routinely a pipe with no writer that never
-  # EOFs. bats does not read stdin, but it INHERITS it into every test, and a suite that stubs a
+  # by launchd or the desk, so this process's stdin is whatever the caller handed it.
+  # CORRECTED same day: this said "routinely a pipe with no writer that never EOFs" and blamed
+  # launchd. MEASURED — launchd hands its children /dev/null already (a RunAtLoad probe read its own
+  # `lsof -d 0`). The exposure is the DESK/AGENT path instead, and it is the larger one: a Claude
+  # Code session's fd 0 is a unix SOCKET whose reader never sees EOF (rc 124, measured). Nothing
+  # below changes — only the named source of the bad stdin was wrong.
+  # bats does not read stdin, but it INHERITS it into every test, and a suite that stubs a
   # stdin-consuming binary with an unconditional `cat` then waits for an EOF that is not coming.
   # 5e460544 is that defect measured: tests/handoff-fire-kitty.bats' osascript stub drained
   # unconditionally — correct for `osascript - …` (script ON stdin), a forever-hang for
