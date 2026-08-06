@@ -182,10 +182,51 @@ in a dense memory: 2026-07-29 *every* candidate (both `hermetic-*`, the two desk
 was cross-linked, and only **4 of 91** entries were honestly archivable. Plan the reduction as
 **rewrite + a little archiving**; a plan leaning on merges under-delivers and tempts dishonest ones.
 
+## WHICH LEVER BINDS — measure it EVERY pass; it alternates
+
+🚨 **The 2026-07-30 "cardinality binds" verdict below was conditional on that day's shape, and it
+INVERTED within a week.** Length and cardinality are two live levers that trade off against each
+other; a pass that inherits the last pass's answer pulls the SPENT lever and leaves the loaded one
+untouched. Compute both before choosing — three lines, and they decide the whole job:
+
+```
+hook_excess = Σ max(0, hook_bytes - 115)     # what SHORTENING can still reclaim
+ceiling     = limit / (avg_prefix + 115)     # entries the limit affords at a disciplined hook
+slack       = ceiling - N                    # > 0 ⇒ cardinality is NOT the binding constraint
+```
+
+Measured **2026-08-06 at 93 entries**: hooks averaged **176 B** against the 115 B target, holding
+**6,135 B of excess across 78 lines**, while N=93 sat **37 UNDER** a 130-entry ceiling. Cardinality
+had slack; LENGTH was binding — the exact inverse of 07-30, one week later.
+
+**The five passes from 07-30 to 08-05 all pulled the cardinality lever** (145→92 entries moved cold)
+**while the hook average climbed 127→176 B and the file returned to ~25 KB every time.** An
+unchanged verdict after a fix indicts the DIMENSION, not the magnitude
+([[repeat-verdict-indicts-the-diagnosis]]): five passes on one lever with the symptom recurring was
+itself the signal that the other lever was the live one. Cold-splitting on top of that would have
+moved live rules off the auto-loaded surface while 6 KB of pure slack sat in the hooks.
+
+Why length re-inflates *invisibly*: growth is not only new entries. Sessions **append correcting
+clauses to EXISTING lines** (~89 B/day measured 07-29), so a compacted line drifts back over budget
+with no new entry in sight — and cardinality accounting cannot see that movement at all.
+
+**An index-only fact is itself a defect — write it back, THEN cut.** Shortening is non-lossy only
+where the topic file already carries the clause. Audited 2026-08-06, **49 of 78** over-target lines
+stated at least one fact absent from their topic file (a command spelling, a named constant, a
+measured figure) — those facts were living ONLY on the surface that truncates. So the step order is
+`Edit` the fact into the topic file (unconstrained, never truncated), *then* shorten the index line;
+that is strictly better than either leaving it exposed or cutting it away. ⚠️ Detector discipline:
+hard tokens (backticks / shas / numbers / ALL-CAPS) are load-bearing, but content-word misses are
+mostly inflection (`fixing` vs `fixed`, `counts` vs `count`) — stem them, or the audit drowns in
+false positives and you stop trusting it. Multi-word backticked SPANS also over-flag: verify a
+flagged span token-by-token before treating it as absent.
+
 ## THE TWO-TIER HOT/COLD SPLIT — the lever to reach for once rewriting cannot reach the target
 
 🚨 **When hooks are already ~one-governing-rule and nothing is archivable, NO rewrite can hit the
-target — the binding constraint is CARDINALITY, not entry size.** Measured 2026-07-30 at 149
+target — the binding constraint is CARDINALITY, not entry size.** ⚠️ Re-read the section above
+before acting on this paragraph: it states the 07-30 shape, not a permanent truth, and on 2026-08-06
+it was false. Measured 2026-07-30 at 149
 entries: filenames alone are **5,518 B (19%) and immutable** (link target + graph key), and with
 syntax+header the floor is ~7,061 B; the `17.1 KB` the PostToolUse nudge demands works out to
 **~67 B/entry — below one sentence**. Grinding hooks past that only severs rules while leaving
