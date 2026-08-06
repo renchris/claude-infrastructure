@@ -1532,10 +1532,23 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
 # so a session cannot earn the marker by behaving like a worker.
 mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] → best-effort, always 0
   local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" tmp
-  [ -n "$dir" ] && [ -n "$pane" ] || return 0
-  case "$pane" in *[!0-9A-Fa-f-]*) return 0 ;; esac    # UUID-shaped only — never a path fragment
-  command -v jq >/dev/null 2>&1 || return 0
-  mkdir -p "$dir" 2>/dev/null || return 0
+  # MFP_SKIP_REASON — why this function declined, for a caller that needs to know.
+  #
+  # WHY AN OUT-PARAM RATHER THAN A RETURN CODE. The "always 0" contract stays exactly as it is: a
+  # FIRE must never die on its own bookkeeping, and both fire-path call sites depend on that. But
+  # `stamp-peer` ASKED for a stamp and has to report a cause, and the only other way to give it one
+  # is to re-derive these four predicates at the call site — a second copy of a guard, which drifts
+  # from this one silently. So the ARBITER reports and the caller relays; nothing re-implements.
+  # Deliberately NOT `local`: it is read by the caller after this returns.
+  MFP_SKIP_REASON=""
+  [ -n "$dir" ]  || { MFP_SKIP_REASON="no fired-dir was given"; return 0; }
+  [ -n "$pane" ] || { MFP_SKIP_REASON="no pane id was given"; return 0; }
+  case "$pane" in *[!0-9A-Fa-f-]*)                    # UUID-shaped only — never a path fragment
+    MFP_SKIP_REASON="pane id '$pane' is not UUID/hex-shaped, so it was refused as a possible path fragment"
+    return 0 ;;
+  esac
+  command -v jq >/dev/null 2>&1 || { MFP_SKIP_REASON="jq is not on PATH ($PATH)"; return 0; }
+  mkdir -p "$dir" 2>/dev/null || { MFP_SKIP_REASON="the fired-dir $dir does not exist and could not be created"; return 0; }
   tmp="$dir/.$pane.$$"
   # ---- V2 schema 2: the LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5.1) ------------------------
   # ADDITIVE-ONLY, and that is a hard constraint rather than a convenience: bin/cc-reaper consumes
@@ -1566,8 +1579,10 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
           --arg firedAt "$(_iso_now)" \
           '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}' \
           > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-      mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+      mv -f "$tmp" "$dir/$pane.json" 2>/dev/null \
+        || { MFP_SKIP_REASON="the schema-1 stamp was built but could not be moved into $dir"; rm -f "$tmp" 2>/dev/null; }
     else
+      MFP_SKIP_REASON="jq wrote no schema-1 stamp into $dir (the directory is most likely unwritable)"
       rm -f "$tmp" 2>/dev/null
     fi
     return 0
@@ -1589,8 +1604,10 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
          + {engageLatencyS:  (if $latency     == "" then null else ($latency|tonumber) end)}
          + {closedAt:null, succession:null}' \
         > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-    mv -f "$tmp" "$dir/$pane.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    mv -f "$tmp" "$dir/$pane.json" 2>/dev/null \
+      || { MFP_SKIP_REASON="the stamp was built but could not be moved into $dir"; rm -f "$tmp" 2>/dev/null; }
   else
+    MFP_SKIP_REASON="jq wrote no stamp into $dir (the directory is most likely unwritable)"
     rm -f "$tmp" 2>/dev/null
   fi
   # Persist the FINAL fired prompt (post-trailers) beside the marker as the ROBUST brief source for
@@ -2930,10 +2947,30 @@ if [ "${1:-}" = "stamp-peer" ]; then
   [ -n "$SP_CWD" ] || { echo "!! stamp-peer needs --cwd (it is the tenancy oracle the origin gate binds on)" >&2; exit 1; }
   [ -d "$SP_CWD" ] || { echo "!! stamp-peer: --cwd is not a directory: $SP_CWD" >&2; exit 1; }
   mark_fired_peer "$FIRED_DIR" "$SP_PANE" "$SP_CWD" "$SP_BY" "$SP_PROMPT"
-  # mark_fired_peer is best-effort by contract (it returns 0 even when jq is missing or the write
-  # fails) because a fire must never die on its own bookkeeping. A caller that ASKED for a stamp is
-  # in the opposite position: it needs to know, so verify the artifact and fail loudly if absent.
-  [ -s "$FIRED_DIR/$SP_PANE.json" ] || { echo "!! stamp-peer: no stamp written at $FIRED_DIR/$SP_PANE.json (jq missing, or the directory is unwritable)" >&2; exit 1; }
+  # mark_fired_peer is best-effort by contract (it returns 0 even when the write fails) because a
+  # fire must never die on its own bookkeeping. A caller that ASKED for a stamp is in the opposite
+  # position: it needs to know, so verify the artifact and fail loudly if absent.
+  #
+  # NAME THE CAUSE THAT WAS MEASURED, never a list of candidates (item 890cd862b965). This line used
+  # to read "(jq missing, or the directory is unwritable)" — a guess with three defects, in rising
+  # order of cost:
+  #   1. It could not be right about its FIRST candidate on this platform. macOS 15 ships
+  #      /usr/bin/jq (jq-1.7.1-apple), so jq IS present under the PATH=/usr/bin:/bin:/usr/sbin:/sbin
+  #      that hooks and launchd jobs run with. Unlike `kitty`, jq is not Homebrew-only, and the
+  #      bare-name defect fixed for kitty in 86588cbf has no jq analogue to fix.
+  #   2. It omitted the cause a caller most easily trips — a pane id the UUID-shape guard in
+  #      mark_fired_peer refuses. `stamp-peer --pane %3` (a tmux-style id) reported "jq missing"
+  #      with jq present and the directory writable.
+  #   3. A failure message IS a diagnosis and gets read as one. This one was: backlog item
+  #      890cd862b965 was filed to route 60 jq call sites through a `cc-jq-bin` resolver — a
+  #      sibling of bin/cc-kitty-bin — against a cause that does not exist on this platform. The
+  #      remedy would have been dead code; the message is what made it look necessary.
+  # So the reason now comes from the writer that actually declined (MFP_SKIP_REASON) rather than
+  # from a guess re-derived here. tests/handoff-fire-stamp-daemon-path.bats pins both halves.
+  if [ ! -s "$FIRED_DIR/$SP_PANE.json" ]; then
+    echo "!! stamp-peer: no stamp written at $FIRED_DIR/$SP_PANE.json — ${MFP_SKIP_REASON:-cause unknown (the writer reported no reason)}" >&2
+    exit 1
+  fi
   echo "→ fired-peer stamp written: $FIRED_DIR/$SP_PANE.json (cwd $SP_CWD)" >&2
   exit 0
 fi
