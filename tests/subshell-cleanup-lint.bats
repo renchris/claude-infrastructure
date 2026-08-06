@@ -33,8 +33,8 @@ setup() {
 
   run bash "$LINT" "$old"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"WT_MINTED"* ]]
-  [[ "$output" == *"do_bisect → prepare_worktree"* ]]   # the TRANSITIVE chain, not just a hit
+  [[ "$output" == *"WT_MINTED"* ]] || false
+  [[ "$output" == *"do_bisect → prepare_worktree"* ]] || false # the TRANSITIVE chain, not just a hit
   [[ "$output" == *"teardown_worktrees reads WT_MINTED"* ]]
 }
 
@@ -48,7 +48,7 @@ setup() {
   # :1219 is verb_bisect — the site that actually leaked. :986 is red_actions, immune BY ACCIDENT
   # because the parent had already minted at the same path. A collector that keeps one site per
   # callee reports only :986 and hides the live defect; that regression is what this pins.
-  [[ "$output" == *":1219:"* ]]
+  [[ "$output" == *":1219:"* ]] || false
   [[ "$output" == *":986:"* ]]
 }
 
@@ -83,7 +83,7 @@ setup() {
   # the way — so pin the out-parameter contract itself, not just the current call sites.
   run /usr/bin/grep -A3 '^do_bisect()' "$REPO/scripts/postland-verify.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BISECT_CULPRIT"* ]]
+  [[ "$output" == *"BISECT_CULPRIT"* ]] || false
   [[ "$output" != *"prints the first-bad sha"* ]]
 }
 
@@ -92,7 +92,7 @@ setup() {
 @test "--selftest passes: 12 shape cases, each proving a RED fires or a GREEN does not" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ]
-  [[ "$output" == *"--selftest PASS"* ]]
+  [[ "$output" == *"--selftest PASS"* ]] || false
   [[ "$output" != *"FAIL"* ]]
 }
 
@@ -155,9 +155,9 @@ setup() {
   (cd "$REPO" && git show "$PREFIX_SHA:scripts/postland-verify.sh") > "$old"
   run bash "$LINT" --json "$old"
   [ "$status" -eq 1 ]
-  [[ "${lines[0]}" == "{"*"}" ]]
-  [[ "${lines[0]}" == *'"var":"WT_MINTED"'* ]]
-  [[ "${lines[0]}" == *'"shape":"cmdsub"'* ]]
+  [[ "${lines[0]}" == "{"*"}" ]] || false
+  [[ "${lines[0]}" == *'"var":"WT_MINTED"'* ]] || false
+  [[ "${lines[0]}" == *'"shape":"cmdsub"'* ]] || false
   echo "$output" | while IFS= read -r l; do [ -n "$l" ] && printf '%s' "$l" | python3 -c 'import json,sys; json.loads(sys.stdin.read())'; done
 }
 
@@ -195,7 +195,7 @@ setup() {
   # this lint exists to prevent.
   run bash "$LINT" --mutants
   [ "$status" -eq 0 ]
-  [[ "$output" != *"BLIND"* ]]
-  [[ "$output" != *"LIVE FINDING"* ]]
+  [[ "$output" != *"BLIND"* ]] || false
+  [[ "$output" != *"LIVE FINDING"* ]] || false
   [[ "$output" == *"blind=0"* ]]
 }
