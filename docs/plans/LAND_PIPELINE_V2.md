@@ -581,6 +581,42 @@ itself on its own landing. Land latency at target on first production use.
 
 ## Learnings (accumulate; never delete)
 
+- 2026-08-06: **refusing to convict and reaching the right verdict are two different fixes, and
+  the bisect needed both.** §4.2.4's innocent-tip protection (line 73) was defeated without ever
+  being violated: the guard asks only *"did a bisect name this?"*, and the walk named the tip as a
+  genuine culprit. Three commits closed it, from two independent sessions that did not know about
+  each other:
+  - `937c6fc5` — a walk that lands on the TIP must re-run it and CONFIRM; green there ⇒ undecidable.
+  - `4348ddc2` — when the culprit is the first child of `good`, prove the FLOOR is actually green;
+    a red floor convicts its first child.
+  - **this commit** — the probe runs under the TMPDIR the CORPUS measured under. `git bisect run`
+    had been inheriting the launchd `TMPDIR` while the corpus measured under `TMPDIR=$RUN_TMP`
+    (`…/postland-run.XXXXXX`, **+20 bytes**), and a `tests/kitty-*.bats` fixture bound an AF_UNIX
+    socket at its absolute path against Darwin's 104-byte `sun_path` cap — 87 under a session
+    prefix, 107 under the corpus's. The red existed *only* at the longer prefix. Cost: `e80c85aa`
+    (a correct, unrelated cc-queue fix) reverted as `f323b427`, restoring a permanent red it had
+    just fixed; re-landed by `12549d8b`. N=2 with the `2026-08-01T21:00:00Z` flakes.jsonl row.
+
+  **Why the first two do not subsume the third.** They make the walk *refuse* — the safety half.
+  But a probe that cannot reproduce still names nobody, so an env-dependent red would stay
+  permanently **unattributed**: safe, never diagnosed, and re-derived by hand every cycle. The env
+  fix is the *attribution* half. It also lands at one site for three: both new guards re-run the
+  same `$runner`, so they had been confirming and floor-checking at the wrong prefix too.
+
+  **The general rule** (memory `adjudicator-env-must-match-the-measurement`): before trusting any
+  adjudicating run — bisect, retry ladder, re-run, control — diff its environment against the run
+  it is adjudicating. If they differ on an axis the failure depends on, its verdict is an artifact
+  of the difference. And ask both directions: *can this instrument return each verdict at all?*
+  A bound under what it re-runs can only CONVICT; a probe that cannot reproduce can only EXONERATE,
+  which here meant convicting the endpoint by default.
+
+  **Method note — a control caught a vacuous test before it landed.** The first fixture for
+  "an all-GOOD walk convicts nothing" used a ONE-commit range and *passed against the unfixed
+  script*, proving nothing. Measured against git 2.54.0: at range 1 git probes the asserted-bad
+  **tip itself**, so an all-GOOD walk there already errored `was both good and bad` and named
+  nobody; only from range ≥2 does git probe strictly inside the range, never test the tip, and
+  converge on it unexamined. A RED-proof that is skipped can encode the wrong regime entirely and
+  still look like evidence.
 - 2026-08-02: **this design was implemented a second time, in `reso-management-app`, and
   the second run found two defects in ITS OWN copy of our requirements — both worth
   auditing here.** Record + diagrams: `docs/plans/DEPLOY_DECOUPLING_V2.md`; full build log:

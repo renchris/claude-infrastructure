@@ -40,6 +40,13 @@
 #               C is itself a revert · $CC_POSTLAND_DIR/reverts/<C> exists (never twice) ·
 #               POSTLAND_MAX_REVERTS attempts already made this run · no land lane present.
 #               An UNDECIDABLE bisect pages + backlogs and attempts ZERO reverts.
+#   C25 adjudic the bisect PROBE runs under the TMPDIR the CORPUS measured under — the same string
+#               when red_actions is the caller, the same template (hence the same LENGTH) when the
+#               `bisect` verb mints its own. Without it a red that exists only at the corpus's longer
+#               prefix cannot reproduce at any probe, and the walk is left with nothing to convict.
+#               B10/B13 (postland-verify-bisect-bound.bats) make that walk REFUSE rather than name the
+#               tip; this clause is the ATTRIBUTION half — it lets the walk find the real culprit
+#               instead of leaving an env-dependent red permanently unattributed.
 #   C21 green   a green stamp also writes <git-common-dir>/gate-green = the COMMIT sha —
 #               in v2 the verifier is the only party that can make the full-suite claim
 #   C22 prelint the whole-tree meta-lints run STANDALONE before the corpus, own-set seams
@@ -1229,6 +1236,83 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
   push_commit "the control culprit"
   run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
   [ -s "$REC/ship.argv" ]                                      # decidable ⇒ a revert IS attempted
+}
+
+# ── C25 the adjudicator's env ───────────────────────────────────────────────────
+@test "C25: the bisect PROBE runs under the very TMPDIR the corpus measured under" {
+  # THE 2026-08-06 FALSE ATTRIBUTION at its mechanism. do_bisect ran `git bisect run` under the
+  # INHERITED launchd TMPDIR while the corpus ran under TMPDIR=$RUN_TMP (…/postland-run.XXXXXX,
+  # +20 bytes), so a red that exists only at the longer prefix — a kitty fixture against Darwin's
+  # 104-byte sun_path cap — could not reproduce at any probe. Recorded PER INVOCATION, so the
+  # assertion is about the string the probe actually received, not about the line that sets it.
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true          # a green floor ⇒ a bisect range exists
+  printf '@test "rec" { printf "%%s\\n" "$TMPDIR" >> "%s/tmpdirs.txt"; false; }\n' "$REC" \
+    > "$R/tests/bad.bats"
+  push_commit "the culprit"
+  run bash "$SUT" --run-if-needed
+  [ -s "$REC/tmpdirs.txt" ]
+  [ "$(wc -l < "$REC/tmpdirs.txt" | tr -d ' ')" -ge 2 ]         # corpus, then ladder, then the probe
+  corpus="$(head -1 "$REC/tmpdirs.txt")"                        # invocation 1 IS the corpus run
+  probe="$(tail -1 "$REC/tmpdirs.txt")"                         # the LAST is do_bisect's (auto-revert
+                                                                # is off by default, so nothing runs
+                                                                # bats after it)
+  case "$corpus" in */postland-run.??????) ;; *) false ;; esac   # control: the corpus really is $RUN_TMP
+  [ "$probe" = "$corpus" ]                                      # THE CLAIM (C25)
+}
+
+@test "C25: an env-dependent RED reverts the commit that CAUSED it, never the innocent tip" {
+  # The incident end-to-end, minimised. e80c85aa — a correct, unrelated cc-queue fix — was reverted
+  # as f323b427 purely for being the newest commit when a kitty fixture blew the 104-byte sun_path
+  # budget under the corpus's longer TMPDIR; re-landed by 12549d8b. Here the failure is
+  # length-dependent in exactly that way (it passes at the daemon's prefix, fails at the corpus's)
+  # and the tip is INNOCENT.
+  #
+  # WHAT THIS ADDS OVER B10/B13, which already stop the wrong revert: without the env fix the walk
+  # cannot reproduce the red anywhere, so it names NOBODY and the red stays permanently
+  # unattributed — safe, but never diagnosed. This asserts the walk reaches the RIGHT commit.
+  ship_stub
+  export TMPDIR="$BATS_TEST_TMPDIR"                             # a KNOWN prefix to derive from
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
+  [ -f "$CC_POSTLAND_DIR/last-green" ]
+  # $RUN_TMP adds exactly 20 bytes ("/postland-run." + 6), so a threshold of +5 sits strictly between
+  # the two prefixes. DERIVED from the live string — a hardcoded byte count is how a threshold
+  # silently stops separating the two things it was chosen to separate.
+  printf '@test "len" { [ "${#TMPDIR}" -le %s ]; }\n' "$(( ${#TMPDIR} + 5 ))" > "$R/tests/bad.bats"
+  push_commit "THE CULPRIT — fails only at the corpus prefix"
+  culprit="$(origin_head)"
+  printf 'unrelated\n' > "$R/innocent.txt"
+  push_commit "the innocent tip"
+  tip="$(origin_head)"
+  [ "$culprit" != "$tip" ]                                      # precondition of the entire test
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                       # something WAS reverted...
+  [ "$(ship_field branch)" = "postland-revert-${culprit:0:12}" ] # ...and it was the CULPRIT...
+  [ "$(ship_field branch)" != "postland-revert-${tip:0:12}" ]    # ...never the innocent tip
+}
+
+@test "C25: the bisect VERB mints its own probe TMPDIR from the corpus template, and leaks neither" {
+  # The `bisect` verb (C1) runs with NO corpus, so $RUN_TMP is empty and do_bisect takes its other
+  # branch: mint a probe dir from the SHARED template and own the teardown. That branch is reachable
+  # only through this verb, so without this test it ships unexercised — and a minted-but-unremoved
+  # dir is the leak class this file has already paid for once (the `$( )` worktree-cell leak
+  # recorded at BISECT_CULPRIT, which leaked on every call including success and alarmed nothing).
+  export TMPDIR="$BATS_TEST_TMPDIR/tb"; mkdir -p "$TMPDIR"
+  good="$(origin_head)"
+  printf '@test "rec" { printf "%%s\\n" "$TMPDIR" >> "%s/verbtmp.txt"; false; }\n' "$REC" \
+    > "$R/tests/bad.bats"
+  push_commit "the culprit"
+  bad="$(origin_head)"
+  rm -rf "${TMPDIR:?}"/*                                        # everything below here is the VERB's
+  run bash "$SUT" bisect tests/bad.bats "$good" "$bad"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | tail -1)" = "$bad" ]           # range 1 ⇒ git probes the tip, it
+                                                                # reproduces, so a culprit IS named
+  probe="$(tail -1 "$REC/verbtmp.txt")"
+  case "$probe" in */postland-run.??????) ;; *) false ;; esac    # the corpus's template, not the
+  [ "$probe" != "$TMPDIR" ]                                     # bare inherited prefix
+  [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'postland-run.*' 2>/dev/null)" ]      # probe dir removed
+  [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'postland-bisect.*' 2>/dev/null)" ]   # runner + records too
+  [ "$(cells_n)" = "0" ]                                        # ...and the verb's worktree cell
 }
 
 # ── C22 pre-corpus whole-tree meta-lints ────────────────────────────────────────
