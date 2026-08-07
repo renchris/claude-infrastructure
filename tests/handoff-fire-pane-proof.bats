@@ -386,8 +386,12 @@ SH
   local cmdfile="$BATS_TEST_TMPDIR/cmd.sh"; printf 'echo relaunch\n' > "$cmdfile"
   local log="$BATS_TEST_TMPDIR/happy.log"
 
-  # /dev/ttys999 has no processes, so cc_alive is false and the watcher moves straight past the
-  # exit-wait. Bounded: we assert on the LOG, not on the watcher running to completion.
+  # /dev/ttys999 has no processes. Since the fail-safe pane probe landed (2026-08-06) that reads
+  # `unknown`, NOT "shell-only" — the watcher waits rather than type onto a pane whose state it
+  # cannot positively confirm — so this run no longer races past the exit-wait and the `timeout`
+  # is what ends it. That does not weaken the assertion: `pane-reachable` is emitted by the probe
+  # under test BEFORE the wait loop is entered, and this file's subject is the probe, not the wait.
+  # Bounded: we assert on the LOG, not on the watcher running to completion.
   run env HOME="$HOMEDIR" timeout 8 bash "$HF" __recycle 218 /dev/ttys999 "$cmdfile"
   # ORDER IS LOAD-BEARING, and it was wrong first time round. Written with the affirmative FIRST and
   # the negative last, this test passed against the PRE-FIX subject — which emits neither line — so

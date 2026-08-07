@@ -134,15 +134,39 @@ watcher_setup() {
   # "dead" makes the watcher give up before the relaunch. So: the tty liveness probe reports dead for
   # the first PS_DEAD_CALLS reads and alive after — while `-o pgid=` (the armed banner) is answered
   # separately, so it can never consume a slot in that count.
+  #
+  # 2026-08-06 — THE "GONE" PHASE NOW MODELS A BARE SHELL PANE, NOT AN EMPTY tty, and the shim
+  # answers the process-TREE query forms. Both follow from the fail-safe probe (pane_cc_state): the
+  # watcher no longer types on the ABSENCE of a claude match, because that absence is ALSO what a CC
+  # launched under `expect` looks like (its nested pty hides claude from the pane's tty) — acting on
+  # it typed a shell command into a live composer on 2026-08-06. Typing now requires a POSITIVELY
+  # confirmed shell prompt, so an empty tty is `unknown` and is refused forever; that is what hung
+  # this suite. The FIXTURE was the thing that was wrong: a pane whose typed /exit has landed sits at
+  # a zsh prompt, never at a tty with no processes at all. Every assertion below is unchanged.
+  # Only the ROOT query (`-o pid= -t`) advances the phase — every other form must describe the SAME
+  # instant, or one state read would be answered out of two different process tables.
   export PS_COUNT_FILE="$BATS_TEST_TMPDIR/ps-count"; rm -f "$PS_COUNT_FILE"
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
-case "$*" in *pgid*) printf '%s\n' "4242"; exit 0 ;; esac
+args="$*"
+case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac   # armed banner — never a phase read
 c="${PS_COUNT_FILE:?}"
-n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 ))
-printf '%s' "$n" > "$c"
-[ "$n" -le "${PS_DEAD_CALLS:-2}" ] && exit 0          # no process line → CC gone
-printf '%s\n' "claude"
+if [ "${args#*-o pid= -t}" != "$args" ]; then
+  n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$c"
+else
+  n=$(cat "$c" 2>/dev/null || echo 0)
+fi
+phase=alive; [ "$n" -le "${PS_DEAD_CALLS:-2}" ] && phase=shell
+# 100 = the pane's zsh (and the foreground pgroup leader) · 200 = claude under it, only when alive
+case "$args" in
+  *"-o pid= -t"*)   printf '100\n'; [ "$phase" = alive ] && printf '200\n' ;;
+  *"-o tpgid= -t"*) printf '100\n'; [ "$phase" = alive ] && printf '100\n' ;;
+  *"-o comm= -t"*)  if [ "$phase" = alive ]; then printf 'claude\n'; else printf -- '-zsh\n'; fi ;;
+  *pid=,ppid=*)     printf '100 1\n'; [ "$phase" = alive ] && printf '200 100\n' ;;
+  *"pid=,comm= -g"*) printf '100 /bin/zsh\n' ;;
+  *"-p 200"*)       printf '/Users/chrisren/.claude-220/node_modules/.bin/claude\n' ;;
+  *"-p 100"*)       printf '/bin/zsh\n' ;;
+esac
 exit 0
 SH
   cat > "$SHIM/osascript" <<'SH'
