@@ -16,7 +16,7 @@
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S] [--condition SLUG]  → echoes the id
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
-#   claim   <id> --by <sid> [--force]                            → LEASE: refused if held & live
+#   claim   <id> --by <sid> [--venue local|cloud] [--force]      → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
 #                                                                  the item is done-latched
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
@@ -27,6 +27,43 @@
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
+#
+# ── VENUE (2026-08-07, backlog 191d4d056c98) ────────────────────────────────────────────────────
+# A claim may carry `--venue local|cloud`. It names WHERE the worker runs, and it exists for exactly
+# one reason: it decides WHICH ORACLES ARE ENTITLED TO A VERDICT about that claim.
+#
+# Both liveness oracles read host-local state — `kill -0` against this kernel's pid table plus the
+# cc-sessions pane registry (claimer_live), and `lsof -d cwd` / `pgrep -f` over a local worktree
+# (owned_wait). A worker in an Anthropic-managed VM is in none of those populations. The failure
+# that follows is NOT the missing-instrument case rc 2 was designed for: the local instruments are
+# all perfectly healthy, they simply have no cloud rows, so they ANSWER — and the answer is
+# "absent", which the code reads as rc 1, PROVEN NOT-LIVE. A confident wrong verdict clears every
+# rc-2 safety net and reaches `reopen`, which is cc-dispatch's fire predicate.
+#
+# Measured 2026-08-07, hermetic store, claim aged past the stale gate, `reap --dry-run`:
+#     claimer "cloudvm-4242"                        → WOULD-REOPEN [dead-worker]
+#     claimer "6c135981-cacf-4527-acd2-0000...0000" → WOULD-REOPEN [dead-worker]
+#     claimer "<this-host>-<live-pid>"              → WOULD-BLOCK  [wedged live worker]   ← control
+# Every cloud claim shape convicts; no spelling abstains. The third line is the positive control
+# that makes the first two a fact about the VENUE and not about the probe.
+#
+# The rule, then: an oracle that cannot SEE a population must not RETURN A VERDICT about it. On a
+# non-local venue both oracles return rc 2 (UNRESOLVED). No new machinery follows — `reap` already
+# abstains on rc 2 and the lease already refuses to displace on anything but rc 1 — so an
+# unobservable cloud worker STRANDS VISIBLY (bounded by CC_BACKLOG_UNRESOLVED_MAX_S, then BLOCKs to
+# a human) instead of being silently double-dispatched. That is the asymmetry the whole stack is
+# built on: stranding is visible and recoverable, double-dispatch is neither.
+#
+# Three properties keep this from blunting local detection:
+#   · EXPLICIT, never inferred. An absent field folds to "local", so all pre-existing records and
+#     every local claim behave exactly as before. Inferring the venue from "the registry didn't
+#     list it" would BE the bug — that is how a dead local worker is correctly detected.
+#   · CLOSED-SET. `--venue clod` is rc 2 at the door, not free text that falls back to local.
+#   · RESET ON CLAIM, carried by `reclaim`. The venue keys to the record that names the holder.
+#
+# Cloud liveness cannot be read from this box's process table at all; it is read from the repo side
+# and the control plane. The observable set, the channel taxonomy and the producer contract a cloud
+# dispatch must satisfy before it is fired: docs/research/cloud-observability-2026-08-07.md.
 #
 # ── CONDITION KEY (2026-08-06, backlog 0b3a8b19d4d4) ────────────────────────────────────────────
 # The event key is project+title+source, so a title carrying a LIVE MEASUREMENT re-keys itself every
@@ -466,6 +503,19 @@ fold() {
         # consumer can still tell "no command" from "an empty command".
         run:      ($r.run      // $p.run      // ""),
         session:  ($r.session  // $p.session  // ""),
+        # VENUE — where the CURRENT holder runs, which decides which liveness oracles can see it
+        # (see VENUE in the header). Note the shape: unlike every sibling above, a `claim` RESETS
+        # it rather than carrying forward. `$r.venue // $p.venue` would be wrong in a way that
+        # only ever fails CLOSED-then-STUCK: a cloud claim, a reopen, then a plain local re-claim
+        # writes no venue field, so the carry-forward would keep "cloud" while `by` correctly
+        # became the local worker — and that worker would then be permanently unobservable to
+        # oracles that can see it perfectly well. Reset-on-claim keys the venue to the same record
+        # that names the holder, which is exactly what the reap fold does.
+        #
+        # (No apostrophes in this block: the whole fold is a single-quoted shell string, so one
+        # would close it and the next brace reads as bash. That failed loudly here — `bash -n`
+        # pointed at this very line — but a quote landing inside a jq STRING would not.)
+        venue: (if $r.event == "claim" then ($r.venue // "local") else ($p.venue // "local") end),
         status: (
           if   $r.event == "done"    then "done"
           elif $r.event == "block"   then "blocked"
@@ -604,13 +654,16 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence="" needs="" run="" session="" force=0
+  local by="" evidence="" needs="" run="" session="" venue="" force=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
       --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
+      # --venue names WHERE the worker runs, which decides WHICH ORACLES CAN SEE IT (see VENUE in
+      # the header). Claim-only: on any other event it is an error, never silently ignored.
+      --venue)    venue="${1:-}";    [ $# -gt 0 ] && shift ;;
       # `run` + `session` ride a `block` record (see the `needs` verb in the header). Accepted
       # here rather than in a third writer so the ONE transition writer stays the ONE writer.
       --run)      run="${1:-}";      [ $# -gt 0 ] && shift ;;
@@ -629,6 +682,22 @@ cmd_transition() {
   # it worked).
   if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != claim ]; then
     printf 'cc-backlog %s: --force applies only to reopen and claim\n' "$event" >&2; return 2
+  fi
+  # --venue is claim-only and CLOSED-SET. Both halves matter. Claim-only, because the venue is a
+  # property of the worker that took the item, and the only record naming a worker is the claim.
+  # Closed-set, because this string SELECTS WHICH ORACLES MAY CONVICT: a typo'd `--venue clod`
+  # accepted as free text would fall through every venue test back onto the local oracles and
+  # re-arm the exact false-dead this exists to stop — a mislabel that reads as a verdict (memory:
+  # default-path-hardening-is-blind-to-the-explicit-argument). Unknown venue is rc 2, never a
+  # silent local default.
+  if [ -n "$venue" ]; then
+    if [ "$event" != claim ]; then
+      printf 'cc-backlog %s: --venue applies only to claim\n' "$event" >&2; return 2
+    fi
+    case "$venue" in
+      local|cloud) ;;
+      *) printf 'cc-backlog claim: unknown --venue %s (expected: local, cloud)\n' "$venue" >&2; return 2 ;;
+    esac
   fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
@@ -651,7 +720,8 @@ cmd_transition() {
       } >&2
       return 4
     fi
-    if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] && claimer_live "$cby"; then
+    local cvenue; cvenue="$(printf '%s' "$cur" | jq -r '.venue // "local"' 2>/dev/null)"
+    if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] && claimer_live "$cby" "${cvenue:-local}"; then
       { printf 'cc-backlog reopen: REFUSED — %s is claimed by %s, which is still LIVE\n' "$id" "$cby"
         printf '  A live claim returned to "open" is re-dispatchable: the next cc-dispatch tick\n'
         printf '  claims it and spawns a SECOND worker onto work already in progress. That is the\n'
@@ -720,7 +790,12 @@ cmd_transition() {
     # its own claim is not contention, and cc-dispatch's rollback path depends on being able to
     # re-take what it released. An EMPTY `by` cannot be the incumbent (nothing to be live).
     if [ "$lstatus" = claimed ] && [ -n "$lby" ] && [ "$lby" != "$by" ]; then
-      claimer_live "$lby"; lrc=$?
+      # The INCUMBENT's venue, not the caller's — this asks "can I see the holder?", and the caller
+      # claiming `--venue local` says nothing about where the holder runs. Without it a cloud
+      # incumbent reads rc 1 (proven dead) and this lease GRANTS: the same false-dead as the reap
+      # path, on the acquire side, where the consequence is immediate rather than deferred.
+      local lvenue; lvenue="$(printf '%s' "$lcur" | jq -r '.venue // "local"' 2>/dev/null)"
+      claimer_live "$lby" "${lvenue:-local}"; lrc=$?
       # ONLY rc 1 (PROVEN not-live) may be displaced. Do NOT rewrite this as the reopen guard's
       # `&& claimer_live` (rc 0 only) — that inverts it into fail-open and restores the defect.
       if [ "$lrc" -ne 1 ]; then
@@ -780,7 +855,7 @@ cmd_transition() {
       # emitted: rc 4's only machine consumer discriminates POSITIVELY on `verdict=done-latched`
       # (cc-dispatch:968) and correctly reads every other rc 4 as the lease — which this is, reached
       # by a second oracle (memory: new-enum-member-falls-into-fail-closed-default).
-      lowned="$(owned_wait "$id")"; lowrc=$?
+      lowned="$(owned_wait "$id" "${lvenue:-local}")"; lowrc=$?
       if [ "$lowrc" -ne 1 ]; then
         { if [ "$lowrc" -eq 0 ]; then
             printf 'cc-backlog claim: REFUSED — %s is claimed by %s, whose process is gone but whose WORKTREE IS LIVE\n' "$id" "$lby"
@@ -807,13 +882,14 @@ cmd_transition() {
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
-     --arg run "$run" --arg session "$session" --argjson force "$force" \
+     --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
       + (if $needs != ""    then {needs:$needs}       else {} end)
       + (if $run != ""      then {run:$run}           else {} end)
       + (if $session != ""  then {session:$session}   else {} end)
+      + (if $venue != ""    then {venue:$venue}       else {} end)
       + (if $force == 1     then {force:true}         else {} end)' \
      >> "$BACKLOG"
   echo "$id"
@@ -945,12 +1021,22 @@ cmd_reclaim() {
   # UNRESOLVED incumbent (rc 2 — no registry answer) proceeds deliberately: refusing there would make
   # worker-keying inert exactly when the registry is wedged, and occupancy of the item's own worktree
   # is the better evidence of who is doing the work.
-  if [ -n "$cby" ] && claimer_live "$cby"; then
+  # The incumbent's venue governs both the anti-steal probe AND the record written below. A reclaim
+  # is a re-KEY, never a re-VENUE: the worker is naming itself, not moving hosts. The fold RESETS
+  # venue on every `claim` record (see fold()), and a reclaim IS one — so omitting it here would
+  # silently demote a cloud worker to "local" the instant it re-keyed, handing the local oracles
+  # back a population they cannot see and re-arming the false-dead this whole change removes. The
+  # value is carried forward explicitly rather than left to a default (memory:
+  # default-path-hardening-is-blind-to-the-explicit-argument).
+  local rvenue; rvenue="$(printf '%s' "$cur" | jq -r '.venue // "local"' 2>/dev/null)"
+  [ -n "$rvenue" ] || rvenue=local
+  if [ -n "$cby" ] && claimer_live "$cby" "$rvenue"; then
     printf 'cc-backlog reclaim: verdict=noop-live-claimer %s is held by %s, which is LIVE\n' "$id" "$cby"
     return 0
   fi
-  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg by "$by" \
-     '{id:$id, ts:$ts, event:"claim", by:$by, reclaim:true}' >> "$BACKLOG"
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg by "$by" --arg venue "$rvenue" \
+     '{id:$id, ts:$ts, event:"claim", by:$by, reclaim:true}
+      + (if $venue != "local" then {venue:$venue} else {} end)' >> "$BACKLOG"
   printf 'cc-backlog reclaim: verdict=reclaimed %s by %s (was %s)\n' "$id" "$by" "${cby:-<none>}"
 }
 
@@ -1183,8 +1269,40 @@ _resolve_sessions_bin() {
 # it SPAWNS A SECOND WORKER onto work that may well be live. Stranding is visible, bounded and
 # recoverable (the abstention ceiling below blocks it out to a human); double-dispatch is neither.
 claimer_live() {
-  local by="$1"
+  local by="$1" venue="${2:-local}"
   [ -n "$by" ] && [ "$by" != cc-backlog-reap ] || return 1
+  # VENUE GATE — an oracle that cannot SEE a population must not RETURN A VERDICT about it.
+  #
+  # Both oracles below read host-local state: `kill -0` against this kernel's pid table, and the
+  # cc-sessions registry, which is a list of iTerm2/kitty panes ON THIS BOX. A worker in an
+  # Anthropic-managed VM appears in neither — not because it is dead, but because neither
+  # instrument's population includes it. Without this gate the registry branch ANSWERS (it is
+  # perfectly healthy; it simply has no cloud rows) and jq's `any(...)` returns false ⇒ rc 1 =
+  # PROVEN NOT-LIVE. That is the worst of the three outcomes: not the abstention rc 2 was built
+  # for, but a CONFIDENT WRONG VERDICT, which sails past every rc-2 safety net downstream and
+  # reaches `reopen` — cc-dispatch's fire predicate — i.e. a second worker onto live work.
+  #
+  # MEASURED, not reasoned (2026-08-07, backlog 191d4d056c98). Against a hermetic store with the
+  # claim aged past the stale gate, `reap --dry-run` said:
+  #     claimer "cloudvm-4242"                        → WOULD-REOPEN [dead-worker]
+  #     claimer "6c135981-cacf-4527-acd2-0000...0000" → WOULD-REOPEN [dead-worker]
+  #     claimer "<this-host>-<live-pid>"              → WOULD-BLOCK  [wedged live worker]
+  # The third line is the positive control: the harness CAN tell live from dead, so the first two
+  # are a property of the venue and not of the probe (memory: positive-control-the-denominator).
+  # Every cloud claim shape lands on "dead" — there is no spelling that abstains.
+  #
+  # rc 2 and not rc 1 is the whole change, and it needs no new machinery: `reap` already abstains
+  # on rc 2, bounded by CC_BACKLOG_UNRESOLVED_MAX_S, past which it BLOCKS out to a human rather
+  # than reopening. So an unobservable cloud worker strands VISIBLY instead of being double-
+  # dispatched silently — the asymmetry this whole oracle stack is built around.
+  #
+  # This does NOT blunt local dead-worker detection: the venue is EXPLICIT (an absent field folds
+  # to "local", so all 4,837 pre-existing records and every local claim behave exactly as before).
+  # Inferring the venue from "the registry didn't list it" would have been the bug — that is the
+  # normal, correct way a dead local worker is detected.
+  if [ "$venue" != local ]; then
+    return 2
+  fi
   local host; host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
   local pid="${by##*-}"
   if [ "$by" = "$host-$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]]; then
@@ -1375,7 +1493,21 @@ procs_cwd_under() {
 # `return 1`s would have needed the same three-valued decision repeated, which is how the two states
 # got collapsed in the first place.
 owned_wait() {
-  local id="$1" wt; wt="$(item_worktree "$id")"
+  local id="$1" venue="${2:-local}" wt; wt="$(item_worktree "$id")"
+
+  # VENUE GATE — the same rule as claimer_live's, applied to the OTHER oracle, and it must be here
+  # too or the pair disagrees about what the population is (memory:
+  # sibling-auditors-must-share-the-state-model — two checks over one population diverged because
+  # only ONE of them modelled "absent BY DESIGN", and the other convicted the subject for obeying
+  # the design). A cloud worker has no local worktree BY CONSTRUCTION, so `[ -d "$wt" ] || return 1`
+  # below would report the ordinary, truthful-for-local answer "no worktree, nobody home" — a real
+  # rc 1 verdict — about an item whose worker was never going to have one. Distinct from the
+  # missing-ROOT case immediately below, which is starvation of a convention that SHOULD be there;
+  # here the convention correctly does not apply at all.
+  if [ "$venue" != local ]; then
+    printf 'worker runs off-box (venue %s) — the worktree occupancy oracle does not cover that venue' "$venue"
+    return 2
+  fi
 
   # ABSENCE vs STARVATION, at the root. A missing wt-<id> UNDER AN EXISTING ROOT is a real answer
   # (the item is worked in place, or its worktree was torn down) and stays rc 1 — that is what keeps
@@ -1592,6 +1724,10 @@ cmd_reap() {
             status: st($last.event),
             claimBy: ([$g[] | select(.event=="claim")] | last | .by // ""),
             claimTs: ([$g[] | select(.event=="claim")] | last | .ts // ""),
+            # VENUE rides the LAST claim, exactly like claimBy/claimTs — it is a property of the
+            # worker that currently holds the item, so a `reclaim` re-key carries it too. Absent ⇒
+            # "local", which is what makes this change inert for every pre-existing record.
+            venue: ([$g[] | select(.event=="claim")] | last | .venue // "local"),
             # totalClaims counts DISPATCH ATTEMPTS — how many times a worker was fired at this item —
             # so a worker re-keying its own claim (reclaim:true) must not increment it. Counting them
             # would halve the MAX_ATTEMPTS bound the moment worker-keying went live: one dispatch
@@ -1609,7 +1745,7 @@ cmd_reap() {
       )
     | .[]
     | select(.status != "done" and .status != "blocked")
-    | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring)]
+    | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring), .venue]
     | join("\u001f")
   ')"
 
@@ -1617,9 +1753,13 @@ cmd_reap() {
   # `read` COALESCES consecutive whitespace-IFS chars (tab included) — two adjacent tabs would drop
   # the empty field and shift every later column left (fast → empty → "integer expression" error).
   # A non-whitespace IFS preserves empty fields positionally.
-  local reopened=0 blocked=0 scanned=0 journal_fail=0 id status by ageS claims fast clrc=0
-  while IFS=$'\037' read -r id status by ageS claims fast; do
+  # `venue` is APPENDED, never inserted: a new column in the middle would shift every later field
+  # and silently re-point the numeric ones. Absent (a pre-venue producer) ⇒ the read leaves it empty
+  # ⇒ normalised to "local" in the body, which is the same default the jq fold already applies.
+  local reopened=0 blocked=0 scanned=0 journal_fail=0 id status by ageS claims fast venue clrc=0
+  while IFS=$'\037' read -r id status by ageS claims fast venue; do
     [ -n "$id" ] || continue
+    [ -n "$venue" ] || venue=local
     scanned=$((scanned + 1))
     # Rule B (priority): persistent thrash → block (out of the wave, surfaced to the desk).
     if [ "$fast" -ge "$maxthrash" ]; then
@@ -1640,7 +1780,7 @@ cmd_reap() {
     if [ "$status" = claimed ] && [ "$ageS" -gt "$stale" ]; then
       # rc is THREE-valued (see claimer_live): 0 LIVE, 1 proven NOT-LIVE, 2 UNRESOLVED (non-verdict).
       # Captured, not tested inline, because only rc 1 may ever reach the reopen path.
-      claimer_live "$by"; clrc=$?
+      claimer_live "$by" "$venue"; clrc=$?
       if [ "$clrc" -eq 0 ] && [ "$ageS" -le "$liveclaimmax" ]; then
         # Printed in BOTH modes, like the owned-wait and UNRESOLVED keeps below and for the same
         # reason — it used to be dry-run-only, which was defensible while this branch was ~unreachable
@@ -1685,7 +1825,7 @@ cmd_reap() {
       # `starved` is kept SEPARATE from `owned` so every existing `-n "$owned"` test below keeps
       # meaning "positive evidence of life" exactly as before.
       local owned owrc starved=""
-      owned="$(owned_wait "$id")"; owrc=$?
+      owned="$(owned_wait "$id" "$venue")"; owrc=$?
       if [ "$owrc" -eq 2 ]; then starved="$owned"; owned=""; fi
       if [ -n "$owned" ] && [ "$ageS" -le "$ownedmax" ]; then
         printf 'cc-backlog reap: KEEP %s [owned wait — %s; claimed %ss]\n' "$id" "$owned" "$ageS"
