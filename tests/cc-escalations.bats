@@ -162,17 +162,31 @@ swept() { tail -1 "$T/idl.jsonl" | jq -r "$1"; }   # <jq-filter> over the sweep'
   [ "$(swept .disposition)" = "abstained" ]
 }
 
-@test "cross-convention: the literal .seen marker ALONE does not damp the sweep (why ack writes both)" {
-  # Disk truth behind the two-marker design: the frozen interface names $SEEN_DIR/<basename>.seen,
-  # but the live sweep keys on sha256(record PATH) (autonomy-sweep.sh:89-91) — 1,193 such files in
-  # ~/.claude/autonomy/sweep-seen. Writing only the literal form would leave the 300 s sweep
-  # re-surfacing a record the operator had just acked, forever. This pins that fact so a future
-  # "simplification" to one marker fails HERE with the reason attached.
-  : > "$CC_PAGES_DIR/literal.page"
-  : > "$CC_SWEEP_SEEN_DIR/literal.page.seen"                 # the frozen-interface marker, alone
+@test "cross-convention: EITHER marker form damps the v2 sweep; dual-write is for LEGACY markers" {
+  # RE-ORACLED at integration (this suite's original form pinned the PRE-D2 sweep: literal-only ⇒
+  # still collected, which justified ack's dual write. D2's is_new() now honours either key, so the
+  # old oracle inverted the moment the sweep landed — the stale-assertion class, resolved for the
+  # design side.) What still holds, and is pinned here: (a) a literal-only .seen damps the v2 sweep
+  # — an operator ack in EITHER convention silences re-surfacing; (b) the HASH key alone also damps
+  # — the 1,193 pre-D2 markers on live disk stay valid, which is why ack keeps writing BOTH rather
+  # than "simplifying" to the literal form; (c) an unmarked record is collected (positive control,
+  # so neither suppression can pass vacuously).
+  : > "$CC_PAGES_DIR/unmarked.page"
   run_sweep
-  [ "$(swept .new_pages)" -eq 1 ]                            # …the sweep collects it anyway
-  run "$BIN" ack literal.page                                # positive control: a full ack DOES damp it
+  [ "$(swept .new_pages)" -eq 1 ]                            # (c) collected when nothing marks it
+  : > "$CC_PAGES_DIR/literal.page"
+  : > "$CC_SWEEP_SEEN_DIR/literal.page.seen"                 # (a) the literal form, alone
+  run_sweep
+  [ "$(swept .new_pages)" -eq 1 ]                            # unmarked still counted…
+  run bash -c "'$BIN' list | grep 'literal\.page'"
+  [[ "$output" == *yes* ]] || false                          # …and literal.page reads SEEN to list
+  [[ "$output" != *$'\n'* ]] || false                        # row-scoped: exactly one line matched
+  : > "$CC_PAGES_DIR/hashed.page"
+  printf '%s' "$CC_PAGES_DIR/hashed.page" | shasum -a 256 | cut -c1-32 | while read -r k; do
+    : > "$CC_SWEEP_SEEN_DIR/$k"; done                        # (b) the legacy hash form, alone
+  run_sweep
+  [ "$(swept .new_pages)" -eq 1 ]                            # still just unmarked.page
+  run "$BIN" ack unmarked.page                               # full ack damps the last one
   run_sweep
   [ "$(swept .new_pages)" -eq 0 ]
 }
