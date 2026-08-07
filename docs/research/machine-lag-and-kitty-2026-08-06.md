@@ -335,6 +335,91 @@ NEVER-RAN          com.chrisren.restic-claude-archive  loaded, runs=0, no eviden
 `com.chrisren.autonomy-sweep` is the notable one: **463 hours stale against a 15-minute bound** — dead
 for 19 days while reporting as loaded.
 
+## 7-bis. Finding F — the commit-gate mutex is the WRONG REMEDY for an UNPROVEN cause (2026-08-07)
+
+Backlog item `d961db369ef9` was filed against this document, extrapolating §4-bis "one layer up":
+
+> Nothing serialises per-worktree COMMIT GATES: 4 concurrent ~2GB tsc/eslint runs (wt-n16-prefetch,
+> wt-n16-conn-module, wt-n16-instr, wt-n16-errors) + a 3.3GB next-server drove load 100 and the
+> compressor to 19.9% of segment limit with 56MB free on 2026-08-07.
+
+**Both halves fail.** The remedy is forbidden by this repo's own measured doctrine, and the cause is
+not something the cited instrument can establish. Neither claim is in *this* document — the item is
+an extrapolation from §4-bis, not a finding it recorded.
+
+### (a) The remedy is a REJECTED ALTERNATIVE, lint-enforced
+
+`docs/plans/MACHINE_CAPACITY_V2.md` §6 rejects this exact mechanism by name, under a heading that
+reads *"do not relitigate"*:
+
+> | Serialize all gate runs behind one global lock | Turns wall-time into unbounded deploy latency,
+> and the landing lock already serializes the *land* path — the burst is from *pre-commit* gates,
+> **which must stay parallel**. Demotion gives contention relief without a queue. |
+
+The adjacent constraint **R1** forbids the load-gated form on *measured* grounds — `gate_admit` was
+built, measured at "~2 h sleeping/run; 5 gates self-starving at load 16–18 vs their own ceiling of
+8", and deleted (§4 M2). Its absence is a standing acceptance criterion (**AC5**) enforced by a lint
+at `scripts/postland-verify.sh:1245-1247`. `hooks/qos-rewrite.sh:25` and `bin/cc-bats:39` both carry
+the constraint verbatim: *"NOT admission control. Nothing here waits, sleeps, queues, or polls load
+— demotion only (R1)."* Building this item's mutex would trip a lint that exists to stop it.
+
+### (b) The cited instrument CANNOT attribute the memory — in either direction
+
+`compressor-sentinel.sh` fired **18 trips** across 2026-08-06T11:20:40Z → 2026-08-07T07:31:00Z,
+segments climbing 3.90% → 31.16%. Its snapshot has two independent blindnesses, so *no* count of
+`tsc` — zero or four — can be read off it:
+
+| Section | Defect | Consequence |
+|---|---|---|
+| `--- argv (…head -80) ---` | truncated at exactly 80 lines in **16 of 18** trips | a miss is a lookup miss, never an absence |
+| `--- top by memory (head -30) ---` | prints **COMM only**, so every Node workload reads as `node` | `tsc`, `next-server` and an MCP chain are indistinguishable |
+
+Joining the two by PID leaves **1–8 of the largest `node` rows UNIDENTIFIED at every trip**. Two
+successive analyses of this log produced a confident "tsc = 0" that was an artifact — first of the
+truncation, then of the COMM column. The honest verdict is *unknown*, and an instrument that fires
+18 times during an incident while being unable to name what consumed the memory is the reason a
+cause could be filed that nothing verified.
+
+**What the argv sections do establish** (sound as a FLOOR, since truncation only undercounts):
+`tsc --noEmit` ran in the n16 worktrees at **1.48 GB** (pid 43687, `wt-n16-gates`) and **1.24 GB**
+(pid 1149, `wt-n16-errors`) — real, concurrent, and roughly *half* the claimed ~2 GB. The item's
+"3.3GB next-server" is corroborated exactly (pid 24847 at 3,432,416 kB), and that same process was
+also observed at **4.63 GB**.
+
+### (c) The larger unserialised per-worktree term is the DEV SERVER, not the gate
+
+Measured live while writing this, 2026-08-07T07:5x: **6 concurrent `next-server` processes totalling
+~7.1 GB**, one of them (pid 24847) at **5.82 GB after 38 minutes and still growing** — a single
+resident allocation about 4× the entire concurrent-`tsc` term the item blames. `grep -rl
+'next-server|pnpm dev|next dev' scripts/ bin/ hooks/` returns **nothing**: no reaper, no cap, no
+census. A commit gate is transient and self-terminating; a dev server is a permanent per-worktree
+allocation that nobody collects. R1 does not bind here at all — reaping an idle server is not
+admission control, and a dev server is not a gate.
+
+### (d) The standing memory backstop is DISARMED
+
+Two `compressor-sentinel.sh` instances are live (command-position–anchored, *not* `pgrep -f` — the
+argv of the bats corpus contains the string and inflates the count):
+
+```
+52180  ppid 1  up 1-12:14:52  /bin/bash …/compressor-sentinel.sh   ← launchd, com.claude.compressor-sentinel
+86050  ppid 1  up      38:50  bash      …/compressor-sentinel.sh   ← orphan
+```
+
+`com.claude.compressor-sentinel.plist` sets **only `PATH`** — no `CC_SENTINEL_ACT` — and the script
+defaults `ACT="${CC_SENTINEL_ACT:-off}"` (`:70`). So the durable, launchd-managed sentinel runs
+**detection-only**, and the armed `SIGSTOP` actuator seen in the log belongs to the 38-minute-old
+orphan that will die with whatever session started it. This is why the snap log interleaves
+`actuator: SIGSTOPped 1 process(es)` and `actuator: DISARMED (CC_SENTINEL_ACT=off)` seconds apart:
+two instances, two policies, one log. Against four kernel panics from compressor-segment exhaustion
+(`panic-compressor-2026-08-05.md` §1), the standing protection being detection-only is the finding
+that outranks the mutex this item asked for.
+
+**Disposition:** `d961db369ef9` closed as **refuted** — not built. This section is written here, in
+the document the item cites, so the same extrapolation cannot be re-filed from §4-bis. §4-bis itself
+(the corpus mutex, `22b9f2b5a660`) is untouched by this and remains valid: `bin/cc-bats` still takes
+no lock, and `run.lock.d` still lives only at `scripts/postland-verify.sh:379`.
+
 ## 8. Recommendations, ordered by leverage
 
 1. **Break the deploy-live deadlock (§5).** Nothing else in this document compounds the way this
@@ -383,6 +468,21 @@ for 19 days while reporting as loaded.
     different chains (PreToolUse 14 vs 13, Stop 11 vs 10, SessionStart 14 vs 13). Live panes run
     `~/.claude-220` with `~/.claude-next` snapshots, so per-event accounting from `~/.claude` alone
     is wrong for some of them.
+
+**Added after the 2026-08-07 follow-up (§7-bis), in leverage order:**
+
+14. **Arm the launchd compressor sentinel.** `com.claude.compressor-sentinel.plist` sets no
+    `CC_SENTINEL_ACT`, so the durable instance is detection-only while four panics stand on this
+    exact mechanism; the armed actuator belongs to an orphan that dies with its session. Operator
+    step (plist edit — C10).
+15. **Reap idle `next-server` dev servers.** 6 concurrent / ~7.1 GB measured live, one at 5.82 GB
+    and still growing after 38 minutes; no reaper, cap, or census exists anywhere in `scripts/`,
+    `bin/` or `hooks/`. Larger and far more durable than the commit-gate term §7-bis was filed about.
+16. **Make the sentinel snapshot attributable.** `head -80` on argv plus a COMM-only top-30 means
+    the forensic record cannot say what consumed the memory — the defect that let §7-bis's item name
+    an unverified cause. Print argv for the top-N *by RSS* rather than truncating a separate list.
+17. **Not recommended: serializing per-worktree commit gates.** Rejected on measured grounds
+    (`MACHINE_CAPACITY_V2.md` §6 + R1/AC5); see §7-bis.
 
 ## 10. The per-event hook layer — measured (was "open" in §9)
 
