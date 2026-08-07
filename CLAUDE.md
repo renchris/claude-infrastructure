@@ -398,7 +398,7 @@ DROP X"), never "probably fine".
 
 **The readout** — emit at every write-turn close; **suppress on read-only turns**. Default = **ONE
 line**: the governing state (Pyramid, answer-first), from live reads not memory. Pick the worst-open
-rung (priority **⛔ > 📤 > 🔧 > 📦 > 👤 > ✅**); each is exactly one disposition row above (the map stays MECE):
+rung (priority **⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅**); each is exactly one disposition row above (the map stays MECE):
 
 | State | = disposition row | One-line readout |
 |---|---|---|
@@ -406,11 +406,25 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > 👤 > ✅**); each is exactly one d
 | 📤 **Handoff** | context/budget exhausted, work remains | `📤 Out of context — recycling / handing off.` (three dispositions below) |
 | 🔧 **Loose ends** | unwritten / unverified / uncommitted, or a gate ran **red** | `🔧 Loose ends — continuing.` |
 | 📦 **Parked** | committed, **not pushed/landed** (`trunk..HEAD > 0`) | `📦 Done, on a branch only — /ship to land it (else lost).` |
+| 🚀 **Landed, not live** | landed on trunk, but the **enforcing store** does not carry it — live layer past its converge budget, or a migration could not reach it | `🚀 Landed but NOT live — the machine is not running this yet.` |
 | 👤 **Yours** | agent side complete AND landed, but operator-only step(s) THIS SESSION filed are unrun | `👤 My side is done & landed — N step(s) need you; see the OPERATOR block.` |
 | ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — safe to close, nothing unsaved.` |
 | _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield |
 
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
+`🚀` vs `✅` is the third (*landed ≠ live*), added 2026-08-07 — face 4 of the inertness generator
+(`docs/research/inertness-generator-2026-08-07.md` §3, §10). **Trunk is not an enforcing store.** A
+close reading `✅ Complete & live on trunk` asserted a fact about a git ref while the live layer —
+the thing hooks and scripts are actually executed from — still ran older bytes, and could go on
+doing so for weeks: measured 104 commits behind, across eight correct analyses that landed and
+changed nothing. `🚀` is **budgeted, not absolute**: lag inside the converge budget is a normal ✅
+carrying a note, so this rung cannot fire at every close; only a breach (or a failed migration) is
+news. It names ONE drivable action — `bash <repo>/scripts/deploy-live.sh` — and **the agent runs
+it**, so unlike the `gate-green` rung it replaces it cannot become an unreachable ✅. If the
+converger refuses, that refusal is an event with a culprit: file it (`cc-backlog needs`) and the
+rung resolves to `👤`. Computed by `scripts/wrap-ledger.sh` (`LIVE`, `LIVE_SRC`, `LIVE_LAG`,
+`MIG_FAILED`); a repo that is not the live layer's source reports `LIVE_SRC=n-a` and nothing about
+its close changes.
 `👤` vs `✅` is the second one (*mine done ≠ yours done*), added 2026-08-01 after a close read
 `✅ Complete & live on trunk` at line 1 and revealed "two things remain yours" in its second-to-last
 paragraph. The operator had already decided to close at line 1. **`👤` counts only steps THIS SESSION
@@ -434,6 +448,10 @@ Mixed turn → show the worst-open rung only.
   it, and close on *your* state. The converse binds equally — never launder someone else's red into
   a ✅; say whose it is.
 - **📦 outside reso auto-`/ship`s**, then re-reads the ledger — the turn closes on the *landed* state.
+- **🚀 auto-converges**, then re-reads the ledger — the turn closes on the *live* state. One command:
+  `bash <repo>/scripts/deploy-live.sh`. Landing is the second-to-last step, not the last: a land that
+  never deploys moved a git ref and nothing else. Do **not** sit on 🚀 and do **not** launder it into
+  ✅ — if the converger refuses, file it (`cc-backlog needs`) and close on `👤`.
 - **Context is a CLOSE-TIME decision, not a background worry** (operator directive 2026-08-01).
   Judge the context exactly as you judge the work, and **never idle waiting on the user because you
   are low** — that spends context without banking anything. § Context Stewardship owns the fill
@@ -454,8 +472,10 @@ Mixed turn → show the worst-open rung only.
 - **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
-  remainder 0 · no operator step this session created left unrun. Any one unknown ⇒ not ✅; say
-  which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
+  remainder 0 · no operator step this session created left unrun · and — in the repo that IS the
+  live layer's source — the landed sha **observable in the enforcing store**, not merely on trunk
+  (`wrap-ledger.sh` computes `🚀` instead of `✅` for you when the live layer has breached its
+  converge budget). Any one unknown ⇒ not ✅; say which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
   diff green + content-verified land* is the standard — waiting on a trunk-wide stamp you do not
   control is not diligence, it is a hang. The "no operator step left unrun" clause is no longer
   prose discipline: file each one (below) and `wrap-ledger.sh` computes `👤` instead of `✅` for you.
