@@ -40,6 +40,21 @@ setup() {
   export CC_TERM_KITTY="$BATS_TEST_TMPDIR/fake-kitty"
   export CC_PANE_CMD_DIR="$BATS_TEST_TMPDIR/cmd"
   export CC_PANE_RUNNER_BIN="$RUNNER"
+  # …and the four the SUBJECT ITSELF puts on a pane. This suite goes red exactly when it is run from
+  # inside a pane THIS FEATURE created — the shape a feature's own suite can least afford (item
+  # 4c5eddc16c2d, measured 2026-08-07). `--env CC_PANE_CMD_INTERACTIVE=1` is set on the launch, so it
+  # is inherited by every descendant of a fired pane, including bats; the tests below unset
+  # CC_PANE_CMD_DIR but never this, so `cc-pane-runner` took the `$SHELL -l -i -c` branch in the two
+  # cases that exist to prove it does NOT. Both failures then read as a genuine trunk red — one of
+  # them the negative CONTROL "the SAME launcher DIES under the eval path", i.e. the assertion whose
+  # whole job is to show that branch is not decoration. Green with these four unset, red with
+  # CC_PANE_CMD_INTERACTIVE alone restored, identically on a pristine `git archive origin/main` tree.
+  #
+  # Pinned in setup, not per-test: a per-test unset leaves every other test in the file pointed at
+  # live state, which is rule 1's argument in scripts/test-hermeticity-lint.sh verbatim. That lint
+  # cannot catch this class today — its seam table only recognises a `${VAR:-default}` whose default
+  # NAMES a repo-shipped tool, and this one defaults to `0`.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_WAIT_S CC_PANE_RUNNER
   KLOG="$BATS_TEST_TMPDIR/kitty.log"
   fake_kitty
 }
