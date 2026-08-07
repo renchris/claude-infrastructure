@@ -73,6 +73,56 @@ cannot land" / "persistent thrash". One documents its gate SIGTERM-killed on all
 **zero test failures across ~1,700 green executions**. That conflation is what converts a transient
 load spike into permanent queue rot, and no amount of unjamming helps while it stands.
 
+### 0.1 · The engine, named — and it is NOT the landing gate (backlog `98e0e325b3ed`, 2026-08-07)
+
+The diagnosis above is right about the SHAPE and wrong about the SUBJECT, and the correction matters
+because it moves the fix off S2's critical path entirely. Measured on the live store the same day:
+
+| | |
+| --- | --- |
+| items blocked `persistent thrash — … the worker cannot land` | **228** (64% of all blocked) |
+| …whose every counted claim→reopen pair was authored by ONE identity on both sides | **228 / 228** |
+| …that never held a claim for even the 90 s thrash window — **no worker ever ran** | **182 / 228** |
+| fast claim→reopen pairs across the WHOLE ledger: same-author / different-author | **691 / 14** |
+| `cc-dispatch` verdicts in one live 2 h window: `spawn rc=9 (reopened)` vs `fired` | **36 vs 5** |
+
+**No land was involved.** `cc-dispatch` claims an item BEFORE it fires and rolls its own claim back on
+every failure path — `bin/cc-dispatch` compose-fail, worktree-fail, spawn rc≠0. That writes
+`claim → reopen` seconds apart, which is byte-for-byte the shape `cc-backlog reap` rule B reads as
+*"a worker keeps bouncing off this item"*. Two of them and the item is `blocked` — the OPERATOR-ONLY
+state, which `cc-dispatch` excludes from the wave by construction. rc 9 is the **fire capacity gate**,
+whose own refusal text is *"Shed load first (close finished panes / let the wave drain), then
+re-fire"*: a condition its producer explicitly asks the caller to retry.
+
+So the real cycle is one step shorter and one layer lower than §0 draws it:
+
+```text
+many concurrent sessions  →  fire CAPACITY GATE refuses the spawn (rc 9, "shed load, then re-fire")
+  →  cc-dispatch self-releases its own uncommenced claim  (claim → reopen, seconds apart)
+    →  2 of those ⇒ reap rule B ⇒ `blocked` + "the worker cannot land" — a sentence about a worker
+       that was never fired
+      →  the item leaves the autonomous queue PERMANENTLY (8 open vs 356 blocked, and climbing)
+        →  the work moves back into interactive sessions  ⟲
+```
+
+**Why it went unseen for a week.** Rule B is the only rule in `reap` that fires on TRAIL SHAPE ALONE
+— its own comment says so (*"Both oracles are `-` (never asked)"*) — while every other rule in the
+same file is three-valued and abstains on a non-verdict. And the verdict it writes is prose that
+READS like a finding: an operator scanning 228 rows saying "the worker cannot land" sees a landing
+problem, which is exactly the conclusion §0 drew. A true metric (the gate really was being killed by
+contention, elsewhere) beside a wrong cause manufactures corroboration.
+
+**Fixed** — `cc-backlog reopen --self-release spawn-fail|compose-fail|worktree-fail`, asserted by
+`cc-dispatch` on all three rollback paths, and excluded from rule B's `fastFail` fold. The flag is
+closed-set and claimer-authenticated because it SUPPRESSES a guard; the exclusion is positive
+evidence only (a same-author heuristic is what found the bug and is deliberately not the predicate);
+and the suppressed count is PRINTED every sweep, because it is real news about the machine even
+though it is not news about the item. Retroactive repair of the 228:
+`scripts/thrash-block-recover.sh` (dry-run by default, re-derives per item, never a hardcoded list).
+
+⚠️ **This does not retire S2.** Gate contention is real and still unfixed; what changed is that it is
+no longer the thing jamming the QUEUE. S2 governs throughput once items are dispatchable again.
+
 ---
 
 ## 1 · The critical path, in dependency order
