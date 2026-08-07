@@ -154,6 +154,19 @@ git rev-parse --verify -q "$TRUNK" >/dev/null 2>&1 || TRUNK=""   # unresolvable 
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 
 # ── Dirty tree ──
+# `git status --porcelain` IS THE RIGHT READ — do not "optimise" it to plumbing (2026-08-07,
+# backlog 1162f51b1cf3, which claimed this line reads the stat bit and inflates the count).
+# It does not. status REFRESHES: on a stat-mismatched entry git re-hashes the file and compares
+# the OID, so byte-identical-but-touched files report CLEAN. Measured on git 2.54.0 with a
+# positive control — `git diff-index` saw 10 files at the instant this saw 0, and that held under
+# a stale index.lock and a read-only .git. Two rejected "fixes", both worse than the non-bug:
+#   · `git update-index --refresh` — a strict NO-OP; status already refreshes and writes the index
+#     back, so this only adds a fork to every Stop hook.
+#   · `git diff --quiet` / `git diff --name-only` — a REGRESSION; both compare worktree against
+#     index and are blind to UNTRACKED and STAGED-but-uncommitted files, i.e. they would report a
+#     clean tree over unsaved work. That is the false ✅ this ledger exists to prevent.
+# Pinned by tests/wrap-ledger.bats § "DIRTY IS CONTENT-TRUTHFUL, NOT THE STAT BIT" (3 cases, each
+# mutation-verified to go red against exactly these two substitutions).
 PORC="$(git status --porcelain 2>/dev/null || true)"
 DIRTY_N="$(printf '%s' "$PORC" | grep -c . 2>/dev/null || echo 0)"; case "$DIRTY_N" in ''|*[!0-9]*) DIRTY_N=0 ;; esac
 DIRTY=0; [ "$DIRTY_N" -gt 0 ] && DIRTY=1
