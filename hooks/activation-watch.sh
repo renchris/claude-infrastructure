@@ -12,7 +12,14 @@
 # never blocks; fail-open. It reads NO session state and mutates nothing.
 #
 # Convention: an activation `foo-activate.sh` is marked run by an adjacent `foo-activate.sh.done`
-# marker (the operator `touch`es it after running). Selftest: `--selftest`.
+# marker (the operator `touch`es it after running). Selftest: `--selftest`. Full list: `--queue`.
+#
+# ⚠ THIS QUEUE IS NO LONGER WHERE NEW WIRING GOES (face 3, inertness-generator-2026-08-07 §3). A
+# registration / plist / settings change now lands as a MIGRATION in the same diff as its subject and
+# is run by the converger (migrations/README.md, scripts/deploy-migrations.sh) — a `c10`-class
+# migration files its operator step once into cc-backlog instead of joining this pile. What survives
+# here is the pre-existing residue, and the two mechanical parity classes below are now the
+# converger's to fix rather than the operator's.
 #
 # ── Axis 2: SSOT PARITY (live queue vs repo mirror) ──────────────────────────────────────────
 # Axis 1 only ever asks "was it RUN?" — never "does it still EXIST in the SSOT?". The live
@@ -47,6 +54,40 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 
 MIRROR_REL="docs/activation/pending-activation"   # the repo-side SSOT, relative to a checkout root
 FALLBACK_REPO="${CC_ACTIVATION_REPO:-$HOME/Development/claude-infrastructure}"
+
+# ── PAGE-ONCE (face 3, inertness-generator-2026-08-07 §3/§4.4) ────────────────────────────────────
+# The itemized banner fired at EVERY SessionStart, naming all 38 items every time. An alarm that
+# always fires carries exactly as many bits as one that cannot (MEMORY.md alarm-polarity), and this
+# one had trained the operator to skip past a 38-line wall for weeks. Face 3's contract is that the
+# hand-queue survives only for genuinely operator-owned steps, "each blocking its own item and paged
+# ONCE". So the itemized page is now an EDGE — it renders when the un-run SET changes (or the window
+# elapses) — and the steady state collapses to one counted line, which is what CLAUDE.md already does
+# for the standing pile via the `◆` line. Absence stays loud (the count always asserts); only the
+# repetition is deleted.
+#
+# Fingerprint = the sorted un-run set, never a timestamp or a count: a fingerprint that moves every
+# sweep silently disables damping while looking wired, and a bare COUNT would hide a swap (one item
+# run, one staged, same total). Window defaults to 24h, matching CC_DEPLOY_DAMP_S — this store moves
+# on the scale of days, so page-damp's 30-minute default would still fire at nearly every session.
+DAMP_WINDOW_S="${CC_ACTIVATION_DAMP_S:-86400}"
+DAMP_FILE="${CC_ACTIVATION_DAMP_FILE:-$DIR/.queue-page.damp}"
+case "$DAMP_WINDOW_S" in ''|*[!0-9]*) DAMP_WINDOW_S=86400 ;; esac
+
+queue_damp_ok() { # <fingerprint> → 0 = render the full page (new set / window elapsed) · 1 = suppress
+  local fp="$1" prev_fp="" prev_ts=0 now
+  [ "$DAMP_WINDOW_S" -eq 0 ] && return 0                  # 0 ⇒ damping off (the documented spelling)
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac             # no clock ⇒ fail OPEN, never lose the page
+  if [ -f "$DAMP_FILE" ]; then
+    prev_ts="$(sed -n '1p' "$DAMP_FILE" 2>/dev/null | tr -dc '0-9')"
+    prev_fp="$(sed -n '2p' "$DAMP_FILE" 2>/dev/null)"
+    case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac
+    # A CHANGED set re-pages immediately: change is signal, repetition is noise.
+    if [ "$prev_fp" = "$fp" ] && [ "$(( now - prev_ts ))" -lt "$DAMP_WINDOW_S" ]; then return 1; fi
+  fi
+  printf '%s\n%s\n' "$now" "$fp" > "$DAMP_FILE" 2>/dev/null || true   # unwritable ⇒ page every time
+  return 0
+}
 
 deref() { # <path> → the real file behind any symlink chain (readlink -f, BSD-safe fallback)
   local p="$1" t n=0
@@ -111,9 +152,25 @@ age_axis() { # → the QUEUE finding (axis 1), empty only when the queue is genu
     return 0
   fi
   n=$(( ${#stale[@]} + ${#fresh[@]} ))
-  [ "$n" -eq 0 ] && return 0
+  [ "$n" -eq 0 ] && { rm -f "$DAMP_FILE" 2>/dev/null; return 0; }   # drained ⇒ re-arm, so a refill is loud
+  # The un-run SET, order-independent. Sorted so a re-listing in a different order is not a "change",
+  # and hashed so the marker stays one short line whatever the queue size.
+  # `${arr[@]+"${arr[@]}"}`, not `"${arr[@]}"`: under `set -u` bash 3.2 treats an EMPTY array
+  # expansion as an unbound variable and aborts the substitution. That does not fail loudly here —
+  # it yields an EMPTY fingerprint, so every set hashes identically and the damp can never re-page on
+  # a change, i.e. the mute button with no escape. Caught by the change/swap fixtures below, which is
+  # why they exist rather than only the "unchanged is quiet" half.
+  local fp
+  fp="$(printf '%s\n' ${stale[@]+"${stale[@]}"} ${fresh[@]+"${fresh[@]}"} 2>/dev/null | sort | cksum | tr -d ' \n')"
+  [ -n "$fp" ] || fp="unhashable-$n"   # a hash we could not take must not read as "same as last time"
+  if ! queue_damp_ok "$fp"; then
+    # STEADY STATE — one counted line, per class. Absence is still loud; the 38-line wall is not.
+    printf 'ACTIVATION QUEUE: %s un-run (%s rotting >%sh) — unchanged since the last page, so the list is suppressed. Full list: `bash %s --queue`. New wiring should land as a `c10` migration (migrations/README.md), not here.\n' \
+      "$n" "${#stale[@]}" "$MAX_AGE_H" "$SELF"
+    return 0
+  fi
   local out
-  out="$(printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) NOT run. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring.' "$n" "$DIR" "$DIR")"
+  out="$(printf 'ACTIVATION QUEUE (absence-is-loud, D-v): %s pending-activation script(s) NOT run. These are C10 operator hand-steps (agent stages, operator runs): review + run %s/<name>, then `touch %s/<name>.done`. An un-run activation is silently-incomplete wiring. This full listing renders on a CHANGE of the un-run set (or every %sh); in between you get one counted line.' "$n" "$DIR" "$DIR" "$(( DAMP_WINDOW_S / 3600 ))")"
   # ROTTING first — age is the escalation signal, so it leads. But the count above is the QUEUE.
   if [ "${#stale[@]}" -gt 0 ]; then
     out="$out"$'\n'"  ROTTING (>${MAX_AGE_H}h, ${#stale[@]}): $(join_names "${stale[@]}")"
@@ -252,13 +309,22 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
     out="$out"$'\n'"  LIVE-ONLY — never committed, one \`rm\` from unrecoverable: $(join_names "${lonly[@]}")"
     out="$out"$'\n'"    ▶ cp $DIR/<name> $mirror/<name>   # then commit it; or \`touch $DIR/<name>.local\` if intentionally live-only"
   fi
+  # REPO-ONLY and CONTENT-DRIFT are now CONVERGER-OWNED, and that changes both the remedy and what
+  # the finding MEANS. scripts/deploy-migrations.sh materialises the live queue from the repo SSOT on
+  # every converge (face 3), so neither class can persist across one — the repo side is authoritative
+  # by construction and there is no longer a "which side wins" question to hand the operator. Seeing
+  # either here therefore reports a CONVERGE THAT HAS NOT RUN, not a drift to reconcile by hand. The
+  # old `cp`/`diff` platters are deleted deliberately: a hand-sync races the next converge and, in the
+  # REPO-ONLY direction, invited exactly the repo-side write that creates a local diff the next
+  # fast-forward must conflict on.
   if [ "${#ronly[@]}" -gt 0 ]; then
-    out="$out"$'\n'"  REPO-ONLY — committed but never deployed, so it never enters the operator's queue: $(join_names "${ronly[@]}")"
-    out="$out"$'\n'"    ▶ cp $mirror/<name> $DIR/<name>"
+    out="$out"$'\n'"  REPO-ONLY — committed but not yet materialised into the live queue: $(join_names "${ronly[@]}")"
   fi
   if [ "${#cdrift[@]}" -gt 0 ]; then
-    out="$out"$'\n'"  CONTENT-DRIFT — the copy the operator runs differs from the committed SSOT: $(join_names "${cdrift[@]}")"
-    out="$out"$'\n'"    ▶ diff $mirror/<name> $DIR/<name>   # decide which side is authoritative, then sync"
+    out="$out"$'\n'"  CONTENT-DRIFT — the copy the operator runs is behind the committed SSOT: $(join_names "${cdrift[@]}")"
+  fi
+  if [ "$(( ${#ronly[@]} + ${#cdrift[@]} ))" -gt 0 ]; then
+    out="$out"$'\n'"    ▶ bash $root/scripts/deploy-live.sh   # the converger derives the live queue from the repo SSOT (deploy-migrations.sh --materialise); both classes above are unrepresentable once it runs. Do NOT hand-sync — the repo side is authoritative and a cp live->repo creates a local diff the next ff must conflict on"
   fi
   printf '%s\n' "$out"
 }
@@ -303,7 +369,7 @@ selftest() {
   printf '#!/bin/bash\n' > "$d/q/done-activate.sh";   touch -t "$old" "$d/q/done-activate.sh"; : > "$d/q/done-activate.sh.done"
 
   # mirror := the queue itself ⇒ axis 2 is trivially in parity, so axis 1 is measured alone
-  out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_MAX_AGE_H=24 "$SELF")"
+  out="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_MAX_AGE_H=24 CC_ACTIVATION_DAMP_S=0 "$SELF")"
   printf '%s' "$out" | grep -q 'stale-activate.sh' && okp "stale un-run script is named" || badp "stale un-run NOT named"
   # CHANGED 2026-07-29 (row 10, §4 F7): axis 1 PARTITIONS instead of FILTERING, so a fresh un-run
   # script is now NAMED — under a FRESH heading, not a rotting one. The old assertion pinned the
@@ -312,7 +378,7 @@ selftest() {
   printf '%s' "$out" | grep -q 'ROTTING' && okp "rotting partition labelled" || badp "no ROTTING partition"
   printf '%s' "$out" | grep -q 'FRESH'   && okp "fresh partition labelled"   || badp "no FRESH partition"
   printf '%s' "$out" | grep -q '2 pending-activation script(s) NOT run' && okp "the count is the QUEUE (2), not a filtered subset (1)" || badp "count is not the queue"
-  out2="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_AGE_FILTER=on "$SELF")"
+  out2="$(CC_ACTIVATION_DIR="$d/q" CC_ACTIVATION_MIRROR_DIR="$d/q" CC_ACTIVATION_AGE_FILTER=on CC_ACTIVATION_DAMP_S=0 "$SELF")"
   printf '%s' "$out2" | grep -q 'fresh-activate.sh' && badp "kill switch did not restore the filter" || okp "CC_ACTIVATION_AGE_FILTER=on restores the >24h filter"
   printf '%s' "$out" | grep -q 'done-activate.sh'  && badp ".done-marked script wrongly named" || okp ".done-marked script NOT named"
   printf '%s' "$out" | grep -q 'ACTIVATION QUEUE'  && okp "emits the absence-is-loud line" || badp "no activation-queue line"
@@ -320,6 +386,40 @@ selftest() {
     printf '%s' "$out" | "$JQ" -e '.hookSpecificOutput.hookEventName=="SessionStart"' >/dev/null 2>&1 \
       && okp "output is valid SessionStart additionalContext JSON" || badp "output not valid SessionStart JSON"
   else okp "jq absent — plain-stdout fallback (skipped JSON check)"; fi
+
+  # ══ PAGE-ONCE (face 3) — the itemized page is an EDGE, the steady state is one counted line ══════
+  # Its OWN dir, so the marker cannot leak into the cases above and silence one of them (every case
+  # above runs with damping off precisely because a second invocation over the same set would
+  # otherwise go quiet and its assertion would pass vacuously — memory:
+  # sibling-guard-makes-the-fixture-vacuous).
+  mkdir -p "$d/dampq"
+  printf '#!/bin/bash\n' > "$d/dampq/one-activate.sh";  touch -t "$old" "$d/dampq/one-activate.sh"
+  dq() { CC_ACTIVATION_DIR="$d/dampq" CC_ACTIVATION_MIRROR_DIR="$d/dampq" "$SELF" "$@"; }
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'one-activate.sh' && okp "first page of a new set is ITEMIZED" || badp "first page was not itemized"
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'one-activate.sh' && badp "the SAME un-run set re-listed every session (the always-fires alarm survives)" || okp "an unchanged set is damped — the 38-line wall is gone"
+  printf '%s' "$out" | grep -q '1 un-run' && okp "…but absence stays LOUD: one counted line still asserts" || badp "damping went fully silent — absence-is-loud lost"
+  # A CHANGED set re-pages IMMEDIATELY. Without this the damp is just a mute button.
+  printf '#!/bin/bash\n' > "$d/dampq/two-activate.sh"; touch -t "$old" "$d/dampq/two-activate.sh"
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'two-activate.sh' && okp "a CHANGED set re-pages immediately (change is signal)" || badp "a newly staged activation was swallowed by the damp window"
+  # A SWAP keeps the count identical — the case a count-keyed fingerprint would miss.
+  : > "$d/dampq/two-activate.sh.done"
+  printf '#!/bin/bash\n' > "$d/dampq/three-activate.sh"; touch -t "$old" "$d/dampq/three-activate.sh"
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'three-activate.sh' && okp "a SWAP at equal count re-pages (fingerprint is the SET, not the count)" || badp "an equal-count swap was damped — the fingerprint is keying on the count"
+  # `--queue` is the escape hatch the damped line points at, and looking must not re-arm the window.
+  out="$(dq --queue)"
+  printf '%s' "$out" | grep -q 'three-activate.sh' && okp "--queue prints the full list on demand" || badp "--queue did not print the list"
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'three-activate.sh' && badp "--queue re-armed the damp marker — a look must not consume the next genuine change" || okp "--queue did not disturb the damp state"
+  # DRAINED ⇒ the marker is cleared, so a REFILL is loud again rather than inheriting the old window.
+  for _m in one two three; do : > "$d/dampq/$_m-activate.sh.done"; done
+  dq >/dev/null 2>&1
+  printf '#!/bin/bash\n' > "$d/dampq/four-activate.sh"; touch -t "$old" "$d/dampq/four-activate.sh"
+  out="$(dq)"
+  printf '%s' "$out" | grep -q 'four-activate.sh' && okp "a queue that drained and refilled pages LOUD (marker re-armed on empty)" || badp "a refill after a drain stayed damped"
 
   # a genuinely EMPTY queue → NO output, exit 0. `.done`-marked, not merely fresh: since axis 1
   # partitions, "nothing pending" is the only silent state, which is the honest definition of clean.
@@ -346,7 +446,7 @@ selftest() {
   printf '#!/bin/bash\n'         > "$d/p/live/intentional-activate.sh"; : > "$d/p/live/intentional-activate.sh.local"
   for _f in "$d/p/live"/*.sh "$d/p/repo"/*.sh; do : > "$_f.done"; done      # axis-1 silence, by marker
 
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/repo" "$SELF")"
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/repo" CC_ACTIVATION_DAMP_S=0 "$SELF")"
   printf '%s' "$out" | grep -q 'liveonly-activate.sh'    && okp "LIVE-ONLY named (the unrecoverable class)"   || badp "LIVE-ONLY drift NOT named"
   printf '%s' "$out" | grep -q 'repoonly-activate.sh'    && okp "REPO-ONLY named (committed, never deployed)" || badp "REPO-ONLY drift NOT named"
   printf '%s' "$out" | grep -q 'drifted-activate.sh'     && okp "CONTENT-DRIFT named (live ≠ committed SSOT)" || badp "CONTENT-DRIFT NOT named"
@@ -354,20 +454,25 @@ selftest() {
   printf '%s' "$out" | grep -q 'same-activate.sh'        && badp "in-parity file wrongly named"               || okp "in-parity file NOT named (no false drift)"
 
   # positive control: the SAME code path must go quiet when the two copies agree
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/live" "$SELF")"; rc=$?
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/p/live" CC_ACTIVATION_DAMP_S=0 "$SELF")"; rc=$?
   { [ -z "$out" ] && [ "$rc" -eq 0 ]; } && okp "identical live+repo → silent (positive control)" || badp "false drift on identical dirs"
 
   # an unrunnable check must be LOUD — the vacuous-pass failure mode this axis exists to prevent
-  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/nope" "$SELF")"
+  out="$(CC_ACTIVATION_DIR="$d/p/live" CC_ACTIVATION_MIRROR_DIR="$d/nope" CC_ACTIVATION_DAMP_S=0 "$SELF")"
   printf '%s' "$out" | grep -q 'DID NOT RUN' && okp "unresolvable mirror is REPORTED, not a vacuous pass" || badp "unresolvable mirror silently skipped"
 
   echo "activation-watch --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "activation-watch --selftest: GREEN — axis 1 stale/fresh/done/absent + axis 2 live-only/repo-only/content-drift/.local-exempt/in-parity-quiet/unresolved-loud."
+  echo "activation-watch --selftest: GREEN — axis 1 stale/fresh/done/absent; PAGE-ONCE itemizes a new set, damps an unchanged one to a counted line, re-pages on a change AND on an equal-count swap, is inspectable via --queue without re-arming, and re-arms on drain; axis 2 live-only/repo-only/content-drift/.local-exempt/in-parity-quiet/unresolved-loud."
 }
 
 case "${1:-}" in
   --selftest) selftest ;;
+  --queue)    # the full itemized listing on demand — the escape hatch the damped line points at.
+              # It must NOT re-arm the damp marker: a human asking to see the list is not the machine
+              # deciding the set changed, and letting a look reset the window would mean the next
+              # genuine change went unpaged.
+              CC_ACTIVATION_DAMP_S=0 DAMP_WINDOW_S=0 DAMP_FILE=/dev/null age_axis ;;
   --parity)   # standalone/gate entry: rc 1 on ANY drift (incl. an unresolvable mirror), rc 0 only in parity
     if [ ! -d "$DIR" ]; then echo "activation SSOT parity: live queue $DIR absent — nothing to compare."; exit 0; fi
     PAR="$(parity_axis)"
