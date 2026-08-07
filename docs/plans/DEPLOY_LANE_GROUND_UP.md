@@ -237,8 +237,48 @@ design that treats *"the corpus goes green"* as an available event is refuted at
 
 ### 1.6 Violation enumeration against the implementation
 
-PENDING — `scripts/deploy-live.sh` is read only after this section. Each violation will be recorded
-as `file:line → clause`.
+Read after §1.1-1.5 were committed (`6b0579c9`). `scripts/deploy-live.sh` is 418 lines.
+
+| V | Site | Violation | Clause |
+|---|---|---|---|
+| **V1** | `deploy-live.sh:322-330` | `TARGET` is chosen by walking `origin/main` newest-first for the first commit whose **tree** carries a green stamp. Selection is a function of the *evidence corpus*, so the target is bounded above by the newest green and therefore lags by (verify duration) + (1/green rate) = 2h28m median + a 2.4% hit rate. The target is a structurally **lagging** pointer. | C2 |
+| **V2** | `deploy-live.sh:357-358` | `git merge-base --is-ancestor "$HEAD_SHA" "$TARGET" \|\| die`. Correct in isolation. Conjoined with V1 it has an **absorbing state**: once `HEAD` passes the newest green — reachable by *any* ungated writer — no future event restores satisfiability, because V1 cannot propose a target above the newest green and the producer cannot outrun trunk. | A1∧A3 |
+| **V3** | `:331-345` **vs** `:357-358` | **Escalation polarity is inverted, at file:line.** The *transient* no-green refusal gets `damp_ok` + a `.page` + `die` (`:334`, `:336-342`). The *permanent* anti-rollback refusal gets a bare `die` (`:358`) — no damp key, no page, no backlog. Measured: 6 pages for 6 no-green; **0 pages for 534 anti-rollback**. The lane is loud about the recoverable failure and silent about the terminal one. | C3 |
+| **V4** | `:216-227` (the comment) | The design **knows** about the second path and *accepts* it: *"content advances by a SECOND path: ~/.claude is per-file symlinks into this checkout, so every land moves the live layer for free."* That acceptance converts an ungoverned writer into a **load-bearing liveness dependency that nothing schedules, monitors, or owns.** | C1 |
+| **V5** | `:224-227` (the premise) | The justification for V4 — *"The content stayed fresh throughout — only files that did not exist at the last successful advance rotted"* — **has since gone false.** Measured 2026-08-07: the last write of *any* kind to the live layer's HEAD was 2026-08-05 15:40:37 -0700, i.e. **33h17m of zero writes by any writer**, at 87 commits of lag. The 2026-07-30 fix (hoisting `link_refresh` above the guard) was correct *given its premise* and repaired the *namespace*; the premise it left standing was the *content*. | — |
+| **V6** | `:367-369` + 59 log lines | The script states it rewrites itself mid-run. The launchd job (`plist` `ProgramArguments`) invokes `$HOME/.claude/scripts/deploy-live.sh` — a symlink created by `link_refresh`, *inside this script*. When the link is absent the job cannot start at all: **59 × `No such file or directory`**. | C4 |
+| **V7** | header `:11-12` | Stamps are **tree**-keyed by deliberate design (so a rebase preserving the tree keeps its verdict), while `autonomy/postland/last-green` holds a **commit** sha. Consequence, measured: target `3725e543` (a `Revert`) inherits green from verified commit `29313ae4` — both carry tree `cd17174f48fb`. This is the *only* mechanism that has ever moved the target forward without a fresh green, and it is incidental rather than designed-for. | A2 |
+| **V8** | header `:2-9` **vs** `:19-30` | **The generator.** The fail-closed policy was written for *"the OPERATOR's one safe command"* — a rare, deliberate human act, where refusing is a safe null. `--auto` then reused that same policy for an unattended **144×/day** job, where refusing is not null: it is a continuous accumulation of staleness. **Fail-closed is correct for a rare deliberate act and catastrophic for a continuous process**, because for a continuous process *not moving is itself a failure mode* — the fleet currently executes 87-commit-old hooks. The incumbent prices staleness at zero. | A3 |
+
+**V8 is the class.** V1-V3 are its mechanism, V4-V5 are how it stayed invisible, V6-V7 are adjacent
+hazards. A sixth patch to V1 or V2 leaves V8 intact, which is why five filings did not close it.
+
+### 1.7 Step 0 correction — there are TWO independent blockers, not one
+
+The filing describes the dirty sibling file as an obstacle *to the unwedge*. It is more than that: it
+is the reason the **second path stopped too**, and it means curing the stamp gate alone would still
+not deploy.
+
+| | Blocker | Effect | Cures the other? |
+|---|---|---|---|
+| **A** | Stamp gate + anti-rollback (V1∧V2) — target `3725e543` is an ancestor of live HEAD | The *gated* writer refuses, 534 × silently | no |
+| **B** | `hooks/backup-before-write.sh` is modified in the working tree **and** changed on trunk by `16dfe3b5` | `git merge --ff-only` refuses for **every** writer, gated and ungated alike — which is exactly why the reflog shows zero HEAD moves for 33h17m | no |
+
+Verified 2026-08-07: `git merge-tree --write-tree HEAD origin/main` → **rc=0**, so the trees merge
+cleanly. The refusal is purely the dirty working file. The untracked
+`hooks/lib/read-before-write-parity.sh` is *not* added by trunk, so it is harmless to the
+fast-forward and needs only to be left alone.
+
+**Consequence for Step 0:** curing A without B still dies at `deploy-live.sh:388`
+(`merge --ff-only … FAILED (dirty tree? diverged?)`). Both must be handled, B first.
+
+**And a correction on which command to hand the operator.** Once B is parked, a bare
+`git merge --ff-only origin/main` in the shared checkout *would* advance the layer — that is the
+ungated second path, and it needs no green stamp because it was never gated. **It must not be
+presented as the safer option.** It deploys exactly the same unverified trunk tip that `--force`
+does, while skipping the banner (`:366`), `install.sh`, the post-deploy host checks (`:32-38`), and
+the log line. `--force` is the strictly better instrument for the same content advance: it is the
+same act, announced. Both remain the operator's call under the frozen scope — surfaced, never fired.
 
 ## Hard constraints
 
