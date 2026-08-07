@@ -358,6 +358,37 @@ if [ "$UNLANDED" -eq 1 ]; then
 fi
 [ "$REMAINDER" -gt 0 ]  && { contra=1; facts="${facts}${REMAINDER} frozen-DoD item(s) remain; "; }
 
+# ── LANDED ≠ LIVE — the 🚀 rung this guard could not see (2026-08-07) ────────────────────────────
+# Face 4 landed the rung in scripts/wrap-ledger.sh, but this hook was never taught it, and every
+# term above reads a fact about a GIT REF. So a close saying "✅ Complete & live on trunk" passed
+# cleanly with DIRTY=0, UNLANDED=0, REMAINDER=0 while the live layer — the store behaviour is
+# actually taken from — was past its converge budget and still running the old bytes. That is the
+# generator's own §2.1 partition missing a member: this hook enforces nothing about the machine, but
+# it decides what a session may CALL done, so a conclusion could reach the ledger and still not
+# reach the guard. Eight correct analyses each closed green through exactly that gap.
+#
+# CONSUME THE LEDGER'S VERDICT, DO NOT RE-DERIVE IT. Breach is a function of the converge budget
+# (WRAP_LIVE_BUDGET_COMMITS / _MIN) and of MIG_FAILED, and wrap-ledger already owns that predicate.
+# Re-implementing it here would give two auditors over one population with no shared state model —
+# the shape that lets this class of bug survive (MEMORY.md make-the-actuator-the-arbiter,
+# sibling-auditors-must-share-the-state-model). RUNG=🚀 IS the verdict; nothing else infers it.
+# In particular LIVE_SRC=behind is NOT sufficient — inside the budget that is the normal, expected
+# state for the first minutes after a land, and convicting on it would fire at nearly every close.
+#
+# Bounded, so it cannot become a standing gate: this hook's own per-session cap (MAX, default 3)
+# already converts a converger that genuinely cannot advance into an event — file it, close on 👤 —
+# rather than an unbounded refusal. That is §9's narrowed law applied to the guard itself.
+if [ "$RUNG" = "🚀" ]; then
+  _ca_miglost="$(lfield MIG_FAILED)"; case "$_ca_miglost" in ''|*[!0-9]*) _ca_miglost=0 ;; esac
+  _ca_livelag="$(lfield LIVE_LAG)";   case "$_ca_livelag" in ''|*[!0-9]*) _ca_livelag="?" ;; esac
+  contra=1
+  if [ "$_ca_miglost" -gt 0 ]; then
+    facts="${facts}LANDED BUT NOT LIVE — ${_ca_miglost} migration(s) could not reach the enforcing store, so the machine is not running this yet; "
+  else
+    facts="${facts}LANDED BUT NOT LIVE — the live layer is ${_ca_livelag} commit(s) behind and PAST its converge budget, so the machine still runs the old bytes (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
+  fi
+fi
+
 # ── ARM 2 (operator surface) — see the contract block above. MUST precede the ledger-clean
 #    abstain: the whole point is the close that is ledger-CLEAN yet still unactionable. ──
 d1=0; d2=0; d3=0; d4=0
@@ -550,7 +581,7 @@ log_idl fired "false-done" \
 
 # Reason = one sentence-group per firing arm, in arm order. The ledger group is byte-unchanged.
 reason=""
-[ "$contra" -eq 1 ] && reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker). Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has)."
+[ "$contra" -eq 1 ] && reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker), and so is converging the live layer. Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; 🚀 landed-but-not-live ⇒ run the converger named above, then re-read; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has)."
 [ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
