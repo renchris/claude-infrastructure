@@ -79,6 +79,80 @@ field() { printf '%s' "$1" | grep -E "^$2=" | head -1 | cut -d= -f2-; }
   [ "$(field "$output" DIRTY)" = "1" ]
 }
 
+# ── DIRTY IS CONTENT-TRUTHFUL, NOT THE STAT BIT (2026-08-07, backlog 1162f51b1cf3) ───────────────
+# THE FILED CLAIM: "completion-assert inflates 'dirty tree' — 10 of 17 files were STAT-dirty only
+# (byte-identical, touched at one instant); `git update-index --refresh` drops 17→7 ⇒ refresh, or
+# use `git diff --quiet`, not the stat bit." It is REFUTED, and pinned here so that nobody
+# implements it later and turns a non-bug into a real one.
+#
+# The premise names an instrument that is not in this path. `git status --porcelain` — the ONLY
+# dirty read this ledger makes (wrap-ledger.sh's "Dirty tree" block) — REFRESHES the index: on a
+# stat-mismatched entry git re-hashes the file and compares the OID, so byte-identical-but-touched
+# files are reported CLEAN. Measured on git 2.54.0 with a positive control: `git diff-index` (the
+# plumbing read that DOES trust the stat bit) saw 10 files at the same instant `git status
+# --porcelain` saw 0 — and the same held with a stale `index.lock` and a read-only `.git`. A
+# repo-wide census found ZERO `git diff-index` / `git diff-files` consumers, so the stat-bit reader
+# the item describes exists nowhere in the close path.
+#
+# Both prescribed remedies are worse than the bug:
+#   · `git update-index --refresh` is a strict NO-OP here — `git status` already refreshes AND
+#     writes the index back (measured: the index hash changes across one `status`, and a following
+#     `diff-index` drops to 0). It would add a fork to every Stop hook and change no verdict.
+#   · `git diff --quiet` is a REGRESSION — it compares worktree against index, so it is blind to
+#     untracked AND staged-but-uncommitted files. Those are not corner cases in this repo: eight
+#     staged orphan assets blocked every /ship in wt-149789b69fc4 (2026-07-31) and the same shape
+#     was still sitting in wt-1162f51b1cf3 when this was written. Swapping to it would report a
+#     clean tree over unsaved work — the false ✅ this whole ledger exists to prevent.
+#
+# One test pins the refutation; two pin what `git diff --quiet` would lose.
+@test "stat-only dirt (byte-identical, mtime bumped) ⇒ DIRTY=0, never a phantom 🔧" {
+  local dod="$BATS_TEST_TMPDIR/dod-done.md"
+  printf -- '- [x] item one\n' > "$dod"
+  export WRAP_DOD_FILE="$dod"
+  echo a > a.txt; echo b > b.txt; echo c > c.txt
+  git add a.txt b.txt c.txt; git commit -q -m "three files"; git push -q origin main
+  touch -t 202601011200 a.txt b.txt c.txt      # stat now differs; bytes are identical
+
+  # POSITIVE CONTROL — without it this fixture passes VACUOUSLY whenever the files are not
+  # actually stat-dirty (any earlier `git status` silently refreshes them clean, which is exactly
+  # how the first hand-run of this probe "passed" while measuring nothing). `diff-index` is the
+  # plumbing read that trusts the stat bit, so it must see all three before the assertion means
+  # anything. It is also a pure read — it does not write the index — so it cannot launder the
+  # fixture it is checking.
+  [ "$(git diff-index HEAD --name-only | grep -c .)" -eq 3 ]
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DIRTY)" = "0" ]
+  [ "$(field "$output" DIRTY_N)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+@test "staged-but-uncommitted ⇒ DIRTY=1, where 'git diff --quiet' reports clean" {
+  echo staged > staged.txt; git add staged.txt        # in the index, never committed
+
+  # The prescribed remedy's blind spot, asserted as a measured fact rather than an argument.
+  run git diff --quiet
+  [ "$status" -eq 0 ]                                 # ← "clean tree" per the prescription
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DIRTY)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+}
+
+@test "untracked file ⇒ DIRTY=1, where 'git diff --quiet' reports clean" {
+  echo orphan > orphan.txt                            # the worktree-orphan shape, verbatim
+
+  run git diff --quiet
+  [ "$status" -eq 0 ]
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DIRTY)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+}
+
 # ── 🔧: DoD remainder (clean + landed but scope items remain) ──
 @test "clean+landed with unchecked DoD items ⇒ RUNG=🔧, REMAINDER>0" {
   local dod="$BATS_TEST_TMPDIR/dod-remainder.md"
