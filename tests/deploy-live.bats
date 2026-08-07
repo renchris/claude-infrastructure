@@ -58,6 +58,37 @@ advance_origin() { # <name...>
   echo "$output" | grep -q "2 un-stamped commit"
 }
 
+@test "at trunk tip with NO green anywhere: exit 0 silently, never a refusal" {
+  # L10 (lead-added, from the first live v2 evaluation 2026-08-07). The layer sits exactly on
+  # origin/main and NO stamp exists at or above it, so every tier's candidate set is empty and the
+  # ladder used to fall through to T3's die — reporting "nothing is safe to deploy" about a set that
+  # was simply EMPTY, and exiting 1. At the healthy steady state that is 144 refusals/day and
+  # launchctl pinned at exit 1, which is the signal that hid the original 33h freeze.
+  # No stamp at all here, deliberately: it proves the exit is keyed on TIP, not on stamp state.
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dl
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q "at trunk tip" || false
+  echo "$output" | grep -qv "REFUSED" || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+}
+
+@test "at trunk tip while the newest green is BEHIND: still exit 0, not a rollback refusal" {
+  # L10b. The exact live shape on 2026-08-07: HEAD == tip, and the only green tree is an ancestor.
+  # The old ladder reached the anti-rollback guard and refused; there is nothing above the layer, so
+  # the correct verdict is completion. Distinct from L10 because a stamp EXISTS here — if the at-tip
+  # exit were ever keyed on "no green found" instead of on TIP, this case would regress and L10 would
+  # not catch it.
+  stamp HEAD                                   # green on the tree we are already on
+  advance_origin c                             # trunk moves...
+  git -C "$SHARED" merge -q --ff-only origin/main   # ...and the layer follows it to the tip
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dl
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q "at trunk tip" || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+}
+
 @test "already deployed: HEAD is the newest green — exit 0, no merge" {
   advance_origin b
   stamp HEAD                                   # the commit we are already on
@@ -461,11 +492,21 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   miss hooks/brand-new.sh
   stamp HEAD                                     # the newest green is the commit already live...
   commit_push b; git -C "$SHARED" push -q origin main   # ...and both HEAD and origin move past it
+  # FIXTURE CORRECTED 2026-08-07. This used to stop above, at lag 0, and its own comment read "this
+  # stays a refusal forever" — which pinned a DEFECT as intended behaviour. At lag 0 the candidate
+  # set is empty, so refusing is wrong: there is nothing to deploy, safe or otherwise, and `die`
+  # exiting 1 every 600s is what made launchctl read exit 1 forever and hid the original freeze.
+  # The layer now exits 0 "at trunk tip" there (covered by its own two tests above).
+  # This test's SUBJECT was never the exit code — it is the 2026-07-30 regression that link_refresh
+  # was dead code below the advance, asserted by [ -L "$DEST" ]. So keep that intact and put the
+  # fixture back on the path it means to exercise: trunk one commit ahead, green behind live HEAD,
+  # inside the T2 budget ⇒ a genuine, still-correct refusal.
+  advance_origin c                               # trunk moves again; the layer stays ⇒ lag 1
   run dlp
   [ "$status" -eq 1 ]
   # The refusal is unchanged in POLARITY — still fail-closed — but no longer claims a rollback:
-  # the target is an ancestor, so `--ff-only` would exit 0 without moving anything (§1.7). Lag here
-  # is 0 commits, so the T2 budget cannot authorise a degrade and this stays a refusal forever.
+  # the target is an ancestor, so `--ff-only` would exit 0 without moving anything (§1.7). Lag is 1
+  # commit, far inside the 25-commit budget, so T2 cannot authorise a degrade and this is a refusal.
   echo "$output" | grep -q "DESCENDANT of live HEAD"
   [ -L "$DEST" ]                                 # ...yet the link now exists anyway
   [ "$(readlink "$DEST")" = "$SHARED/hooks/brand-new.sh" ]

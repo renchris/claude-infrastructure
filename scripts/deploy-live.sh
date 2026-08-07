@@ -443,6 +443,32 @@ $(g rev-list "origin/main" -n "$SCAN_N" 2>/dev/null)
 EOF
 
   if [ -z "$TARGET" ]; then
+    # ── AT-TIP IS A STATE, NOT A REFUSAL (added 2026-08-07 from the first LIVE v2 evaluation) ──────
+    # T1 missed AND there is nothing above the layer, so the candidate set is EMPTY and no tier can
+    # ever match. Without this the ladder falls through to T3's `die`. Observed on the first v2
+    # dry-run, with the layer sitting exactly on origin/main:
+    #   REFUSED — no GREEN tree is a DESCENDANT of live HEAD 5b6c7e3e (the newest one, 3725e543, is
+    #   BEHIND it …) — nothing is safe to deploy
+    # Every clause is true and the verdict is still wrong: there was nothing to deploy, safe or not.
+    # "Nothing is safe to deploy" about an EMPTY set reports a hazard where there is only completion.
+    #
+    # NOT COSMETIC. `die` exits 1, so at the healthy steady state the lane emits a refusal every 600s
+    # (144/day) and pins `launchctl … last exit code = 1` forever — the exact signal that hid the
+    # original 33h freeze. Once the lane always says 1, the next REAL refusal is indistinguishable
+    # from the noise; an alarm that fires when nothing is wrong carries the same zero bits as one
+    # that cannot fire. §2.2's table named T1/T2/T3 and had no row for "already at the tip".
+    #
+    # PLACED HERE, not before the ladder. Keying it on TIP up front also swallowed the "already
+    # deployed" exit (TARGET == HEAD, a green ON the live commit with unstamped commits above), which
+    # is a genuinely different and more informative state — measured: it reddened two tests that were
+    # right. The empty-candidate-set condition is only meaningful AFTER T1 has missed, so it belongs
+    # inside this branch. LAG_COMMITS is the same precondition T2 already relies on 15 lines below.
+    if [ "$LAG_COMMITS" -eq 0 ]; then
+      [ "$AUTO" -eq 1 ] && damp_clear
+      asay "at trunk tip ${HEAD_SHA:0:12} — nothing above the live layer to deploy"
+      exit 0
+    fi
+
     # T1 missed, in one of two states. WHICH one is a diagnosis for the page and the operator; the
     # policy below is identical either way, so the tier logic never branches on it again.
     RSTEM="deploy-blocked"
