@@ -463,6 +463,34 @@ claim_excerpt() {
   head -1 "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
 }
 
+# self_release <id> <token> → releases the claim we took but never started work on, and ECHOES the
+# journal marker that is actually TRUE of the release (", self-release" or nothing).
+#
+# WHY IT EXISTS. This dispatcher claims BEFORE it fires and rolls the claim back on every failure
+# path, so a refused fire writes `claim → reopen` seconds apart — the identical ledger shape a worker
+# bouncing off an item twice would write. cc-backlog's reap rule B blocked 228 items on that
+# collision, each with the sentence "the worker cannot land" attached to an item no worker had ever
+# been fired at (bin/cc-backlog § SELF-RELEASE). `--self-release` is how the ledger tells them apart.
+#
+# WHY IT ECHOES INSTEAD OF JUST RUNNING. The flag is newer than this caller, and cc-backlog resolves
+# through a symlink into a checkout that lands on its own schedule — so an older binary rejecting the
+# unknown arg (rc 2) is a real, expected state, not a hypothetical. Two properties follow, and the
+# second is the one that needs the helper:
+#   · The claim must be released either way. A failed rollback strands the item `claimed` until reap
+#     ages it out, which is strictly worse than the bug being fixed — hence the bare-reopen fallback.
+#   · The journal must not CLAIM a self-release that was not recorded. Printing ", self-release"
+#     unconditionally would make the verdict describe the attempt rather than the outcome, which is
+#     the same un-evidenced-verdict defect §1(c) forbids, one layer up (memory:
+#     claimed-outcome-vs-checked-outcome). So the marker is the RETURN VALUE of what succeeded.
+self_release() {
+  local id="$1" token="$2"
+  if "$backlog" reopen "$id" --by "$SID" --self-release "$token" >/dev/null 2>&1; then
+    printf ', self-release'
+  else
+    "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true
+  fi
+}
+
 # ── S7: fair ordering ─────────────────────────────────────────────────────────────────────────────
 # thrash_map → {"<id>": <count of this id's `failed` records>} over the IDL, {} when unreadable.
 # An item that keeps failing to spawn must SINK: at the head of a FIFO slice it re-burns the same
@@ -1069,8 +1097,8 @@ dispatch() { # <dry|run|decide>
         # live-claim reopen guard refuses a FOREIGN reopen of a live claim (and $SID — our own
         # still-running pid — is maximally live), so the rollback must identify itself as the
         # claimer or it would be refused and the item would strand as claimed until reap.
-        "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true
-        FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened)"; continue
+        local csr; csr="$(self_release "$id" compose-fail)"
+        FAILED=$((FAILED + 1)); idl failed "$id: brief compose failed (reopened${csr})"; continue
       fi
     fi
     # a3. provision the worker's OWN worktree WARM (item b87573077f11). wave-plan is a pure planner:
@@ -1084,8 +1112,8 @@ dispatch() { # <dry|run|decide>
       [ "${fire_args[$wj]}" = "--cwd" ] && { wcwd="${fire_args[$((wj+1))]}"; break; }
     done
     if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd" "$iproj"; then
-      "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
-      FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened)"; continue
+      local wsr; wsr="$(self_release "$id" worktree-fail)"
+      FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened${wsr})"; continue
     fi
 
     # b. spawn → on non-zero, reopen the claim (leave it for the next run).
@@ -1127,9 +1155,13 @@ dispatch() { # <dry|run|decide>
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct${fanch:+ — $fanch}"
       [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
     else
-      "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
+      # THE HIGH-VOLUME ONE. rc 9 here is the fire CAPACITY GATE, whose refusal text is literally
+      # "Shed load first … then re-fire" — a retryable machine state, measured at 36 refusals against
+      # 5 fires in one 2 h window. Unflagged it wrote the same ledger shape as a worker bouncing off
+      # the item, and reap's rule B blocked 228 items on it. See SELF-RELEASE in bin/cc-backlog.
+      local fsr; fsr="$(self_release "$id" spawn-fail)"
       fexc="$(fire_excerpt "$ferrf")"
-      FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened)${fexc:+ — $fexc}"
+      FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened${fsr})${fexc:+ — $fexc}"
       [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
     fi
     [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
@@ -1173,7 +1205,22 @@ case "\$1" in
            printf 'cc-backlog claim: REFUSED %s — \$2 stub refusal\\n  second line, must not be read\\n' \\
              "\$STUB_CLAIM_VERDICT" >&2
          exit "\${STUB_CLAIM_RC:-0}" ;;
-  reopen)printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
+  # SELF-RELEASE seam. The real cc-backlog rejects an unknown arg with rc 2, and a cc-backlog older
+  # than the flag is a REAL state (the bin resolves through a symlink into a checkout that lands on
+  # its own schedule). A stub that swallowed every flag would grade the capable path only, and the
+  # fallback — the branch that keeps a failed rollback from STRANDING the item as claimed — would
+  # ship having never executed.
+  #
+  # A flagged reopen logs its OWN line shape and the bare one keeps the original verbatim, so the
+  # two are distinguishable AND every pre-existing assertion on 'reopen <id>' keeps the exact
+  # meaning it had. Appending the flags to the shared line instead would have silently weakened the
+  # negative ones — 'not grep -qx "reopen i1"' would go true for a reopen that really happened
+  # (memory: stale-assertion-becomes-an-inverted-guard).
+  reopen)case "\$* " in
+           *--self-release*) printf 'reopen-selfrel %s\n' "\$2" >> "$tmp/backlog.log"
+                             exit "\${STUB_REOPEN_SELFREL_RC:-0}" ;;
+         esac
+         printf 'reopen %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2" ;;
   done)  printf 'done %s %s\n' "\$2" "\$4" >> "$tmp/backlog.log"; echo "\$2" ;;
 esac
 exit 0
@@ -1296,8 +1343,11 @@ STUB
   t "(m2) claim REFUSED done-latched → IDL skipped names the override" grep -q 'reopen i1 --force' "$tmp/idl.jsonl"
   t "(m2) claim REFUSED done-latched → and carries the refusal's own line 1" \
       grep -q 'verdict=done-latched' "$tmp/idl.jsonl"
+  # BOTH reopen shapes, deliberately. Since the rollback learned --self-release there are two ways to
+  # reopen, and an assertion naming only the bare one would go green for a rollback that really
+  # happened — the negative test quietly retired by a change elsewhere in the same file.
   t "(m2) claim REFUSED done-latched → NO rollback reopen (nothing was appended to roll back)" \
-      not grep -qx 'reopen i1' "$tmp/backlog.log"
+      not grep -qE '^reopen(-selfrel)? i1$' "$tmp/backlog.log"
 
   # (m2b) THE DISCRIMINATOR, not the rc. rc 4 has TWO causes and they journal OPPOSITELY: a LEASE
   # refusal (another live worker holds the item) keeps its landed FAILED classification, because
@@ -1473,7 +1523,7 @@ STUB
   seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt","--cwd","'"$tmp"'/wt-nope"]}]'
   CC_DISPATCH_REPO="$tmp/not-a-repo" "$SELF" --once >/dev/null 2>&1
   t "(c4) unprovisionable worktree → ZERO spawn"  test ! -s "$tmp/spawn.log"
-  t "(c4) unprovisionable worktree → reopened"    grep -q 'reopen i1' "$tmp/backlog.log"
+  t "(c4) unprovisionable worktree → reopened"    grep -qx 'reopen-selfrel i1' "$tmp/backlog.log"
   t "(c4) unprovisionable worktree → IDL failed"  grep -q '"action":"failed"' "$tmp/idl.jsonl"
 
   # (c5) an EXISTING --cwd is reused as-is (idempotent re-dispatch, no clobber of live work).
@@ -1488,12 +1538,33 @@ STUB
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
   seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
   STUB_SPAWN_RC=7 "$SELF" --once >/dev/null 2>&1
-  t "(d) spawn-fail → item reopened"        grep -qx 'reopen i1' "$tmp/backlog.log"
+  t "(d) spawn-fail → item reopened"        grep -qx 'reopen-selfrel i1' "$tmp/backlog.log"
+  t "(d) spawn-fail → and the BARE reopen was not needed" not grep -qx 'reopen i1' "$tmp/backlog.log"
   t "(d) spawn-fail → IDL failed"           grep -q '"action":"failed"' "$tmp/idl.jsonl"
   # The verdict must NAME ITS CAUSE (§1(c)/R3): rc + the fire's own stderr, with the id-colon
   # prefix intact so thrash_map's split(":") still recovers the id for S7 ordering.
-  t "(d) spawn-fail → the record names the rc"        grep -q '"detail":"i1: spawn rc=7 (reopened)' "$tmp/idl.jsonl"
+  # …and it must name the rollback as a SELF-RELEASE. Without that word the journal reads identically
+  # before and after the rule-B fix, so nothing in it could confirm the pair was excluded from the
+  # thrash count — the inert-mechanism-is-invisible failure this file guards against everywhere else.
+  t "(d) spawn-fail → the record names the rc"        grep -q '"detail":"i1: spawn rc=7 (reopened, self-release)' "$tmp/idl.jsonl"
   t "(d) spawn-fail → and carries the fire's own why" grep -q 'no pane anchor resolved' "$tmp/idl.jsonl"
+
+  # (d2) THE FALLBACK, and it is not hypothetical: cc-backlog resolves through a symlink into a
+  # checkout that lands on its own schedule, so a binary predating the flag rejects it with rc 2.
+  # Two things must hold together, and only one of them is obvious. The claim must STILL be released
+  # — stranding it `claimed` until reap ages it out is strictly worse than the bug the flag fixes —
+  # and the journal must then NOT say "self-release", because none was recorded. A marker printed
+  # unconditionally would describe the attempt instead of the outcome (memory:
+  # claimed-outcome-vs-checked-outcome), and that is exactly the un-evidenced verdict (d) exists for.
+  reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  STUB_SPAWN_RC=7 STUB_REOPEN_SELFREL_RC=2 "$SELF" --once >/dev/null 2>&1
+  t "(d2) flag REFUSED → the flag WAS attempted"       grep -qx 'reopen-selfrel i1' "$tmp/backlog.log"
+  t "(d2) flag REFUSED → the claim is still released"  grep -qx 'reopen i1' "$tmp/backlog.log"
+  t "(d2) flag REFUSED → the journal does NOT claim one" \
+      test "$(grep -c 'self-release' "$tmp/idl.jsonl")" -eq 0
+  t "(d2) flag REFUSED → the failure is still journalled with its rc" \
+      grep -q '"detail":"i1: spawn rc=7 (reopened)' "$tmp/idl.jsonl"
 
   # (e) --dry-run → plan printed, backlog UNCHANGED, spawn NOT called, no page.
   reset; seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'

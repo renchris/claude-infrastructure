@@ -70,11 +70,23 @@ add_item()   { "$BACKLOG" add --title "$1" --project proj --source bats; }   # e
 status_of()  { "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)|.status'; }
 idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
 
-@test "selftest passes and runs all 156 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs its full check set (a zero-check suite must not 'pass')" {
   run "$DISP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 156 ]   # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+  # FLOOR + TALLY, not `-eq N`. The exact-count form this replaces could only ever red on the
+  # SUITE'S OWN GROWTH — it fired on 156 → 161 when the self-release rollback added its cases, and
+  # over its whole history it caught zero regressions while costing an edit at every real
+  # improvement (memory: exact-count-assertion-tripwires-its-own-subject). The two halves cover what
+  # the count was reaching for and the count could not: the FLOOR kills a suite that silently stopped
+  # running its checks, and the TALLY — the selftest's own summary line, with failures pinned at
+  # zero — kills a suite that ran them and let some fail. Neither degrades as the suite grows.
+  [ "$n_ok" -ge 156 ]
+  [[ "$output" == *"$n_ok passed, 0 failed"* ]] || false
+                        # 49 pre-v2 + the decision/admission split (S1,S2,S6,S7 + kill switches).
+                        # 156 → 161: the SELF-RELEASE rollback (backlog 98e0e325b3ed) — (d) 2 for the
+                        # flagged shape, (d2) 3 for the refused-flag fallback that must still release
+                        # the claim without letting the journal claim a self-release it never made.
                         # 142 → 156: the ACTUATOR-ARBITER branch (5a) — (m2) 7 + (m2b) 4 + (m3) 3.
                         # The done latch is now enforced by `cc-backlog claim` itself, because step
                         # 1b's filter is pull-time and the landing can arrive during the wave-plan +
@@ -166,7 +178,12 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   # …and the verdict NAMES ITS CAUSE (§1(c)/R3). The rc and the fire's own diagnostic both ride on
   # the record; without them "spawn non-zero" is exactly the un-evidenced verdict this rebuild
   # exists to remove, and 112 of them accrued in a single 10 h window saying nothing.
-  grep -q '"detail":"'"$id"': spawn rc=7 (reopened)' "$C/idl.jsonl"
+  grep -q '"detail":"'"$id"': spawn rc=7 (reopened, self-release)' "$C/idl.jsonl"
+  # SELF-RELEASE is asserted, not incidental. The rollback reopens with --self-release, so reap's
+  # rule B will not count this pair as thrash (bin/cc-backlog § SELF-RELEASE) — 228 items were
+  # permanently blocked as "the worker cannot land" by exactly this shape before the flag existed.
+  # The journal is the only surface where an operator can see that the exclusion happened.
+  [ "$(jq -rs '[.[]|select(.action=="failed")]|last|.detail|test("self-release")' "$C/idl.jsonl")" = true ]
   grep -q 'no pane anchor resolved' "$C/idl.jsonl"
   # the id prefix survives verbatim — thrash_map recovers the id by splitting detail on the FIRST
   # colon, so an excerpt appended after it must not disturb S7 ordering
