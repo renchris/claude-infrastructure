@@ -1467,6 +1467,61 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── Permission-gate ratchet (UNBOUNDED gates on the actuation paths, 2026-08-07) ──────────────
+  # A gate that refuses is a STANDING STATE, and a standing state generates no event, so nobody is
+  # told. deploy-live's green-stamp gate — `no GREEN stamp in the newest N commits ⇒ die` — was a
+  # sound predicate that, once the verifier stopped stamping, emitted 545 IDENTICAL refusals and
+  # froze the live layer for days while every one of them read as normal. The fix (dcf2f11a) did not
+  # loosen the predicate; it gave it a CLOCK.
+  #
+  # The class reproduces because the blame is asymmetric (inertness-generator-2026-08-07 §2.3): an
+  # advance that breaks something has an author — the gate that let it through — while a refusal
+  # that strands 104 commits has none, so every individual author is correct to add one more
+  # "proceed only if X holds". §6 F3 predicts it keeps happening "unless a land-chokepoint lint
+  # forbids new affirmative-permission predicates on actuation paths"; §9 narrowed the law after the
+  # deploy lane's reply, because some gates must exist: no gate may be UNBOUNDED, and every
+  # affirmative-permission predicate must carry a finite budget whose expiry converts the standing
+  # state into an EVENT (advance+page, escalate, or revert).
+  #
+  # It belongs at the gate rather than only in its own suite for the reason the ratchets above
+  # document: gate-select picks suites by the files a land touches, so a land ADDING a gate to a
+  # brand-new scripts/deploy-*.sh would never select tests/permission-gate-lint.bats (memory:
+  # enforcement-must-live-at-the-chokepoint). Membership is by GLOB for the same reason — the
+  # reproduction is NEW gates in NEW files, and a hand-maintained list would have to be edited by
+  # the very person adding one.
+  #
+  # The ratchet is a PER-FILE COUNT, not a path allowlist: a path allowlist would exempt this file
+  # wholesale, and with it every new gate leg anyone adds to it — including this one. Own-scope
+  # keeps one author's undeclared gate from becoming every author's hard stop.
+  PERMGATE_LINT="${SHIP_LAND_PERMGATE_LINT:-scripts/permission-gate-lint.sh}"
+  if [[ -x "$PERMGATE_LINT" ]]; then
+    local pgown=""
+    if [[ "${SHIP_LAND_PERMGATE_OWN_SCOPE:-on}" != "off" ]]; then
+      # This lint scans from the repo ROOT and reports repo-relative paths, so the diff needs no
+      # component strip. The pathspec must cover every population the lint judges (its actuation
+      # globs today are install.sh and scripts/*) — a land that adds a gate to a file this pathspec
+      # misses would build an own-set without it, the finding would drop to advisory, and it would
+      # land. If CC_PERMGATE_SET ever reaches another directory, widen this line in the same diff.
+      pgown="$(git diff --name-only "$range" -- 'install.sh' 'scripts/*' 2>/dev/null || true)"
+      [[ -n "$pgown" ]] && echo "→ gate: permission-gate own-scope — blocking on $(printf '%s\n' "$pgown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: unbounded permission gates on the actuation paths (install · deploy · land)" >&2
+    if ! "$PERMGATE_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: permission-gate-lint --selftest FAILED — the detector no longer discriminates, so" >&2
+      echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    if ! CC_PERMGATE_OWN="$pgown" "$PERMGATE_LINT" >&2; then
+      echo "✗ gate: permission-gate RED — a file THIS LAND CHANGES gained a guard-refusal on an" >&2
+      echo "  actuation path with no declared bound (or its ratchet line is stale). Give the gate a" >&2
+      echo "  budget whose expiry converts the standing state into an EVENT, then declare it with a" >&2
+      echo "  \`gate_bounded: <what expires, and into what>\` marker; the lines are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── Chromium-bundle ratchet (operator-reported Dock strobe, 2026-07-30) ───────────────────────
   # The full playwright Chromium.app bundle checks in with LaunchServices on EVERY launch even
   # under --headless, so the Dock paints a launching-app tile for the ~1.3s each process lives. A
