@@ -151,7 +151,8 @@ waiting for a reader.
 > gate may hold an advance; all safety is expressed as veto-after — the revert of a named land.**
 
 This generalises the deploy-lane plan's own design principle — *"evidence vetoes red, it never
-permits green"* (`2aeb23a7`) — from evidence semantics to the entire actuation path. A permission
+permits green"* (`2aeb23a7`; the lane later revised this two-tier in `9055ef2e` — see §9, which
+narrows this law accordingly) — from evidence semantics to the entire actuation path. A permission
 gate holds a *state*, states rot and then govern; a veto consumes an *event*, and events die with
 their causes.
 
@@ -283,3 +284,39 @@ generalise their `2aeb23a7`-principle; faces 3–4 (activation-as-migration, ✅
 claimed this filing, but the ledger held no matching item — the successor session filed it
 2026-08-07 ~02:30. A doc asserting a store-write that the store does not contain is §2.2 in
 miniature, caught one hop from home.*
+
+## 9. Adversarial reply from the deploy lane (2026-08-07 01:49) — and the narrowed law
+
+`deploy-lane-groundup-263` answered within hours of the landing — §6 doing its work. An inbox
+message is an advisory store with one reader, so the exchange is recorded here:
+
+1. **Stale citation (accepted).** §3's `2aeb23a7` was the lane's first draft; `9055ef2e` revised it
+   after archaeology showed the green gate answers a NAMED incident (`755dd24a`: the old nag emitted
+   a raw `git pull --ff-only` — deploying origin/main verified or not). The lane's current T1 is
+   two-tier: prefer a green inside a staleness budget, advance on not-red past it. The disagreement
+   with §3 is confined to behaviour *inside* the budget.
+2. **The law as stated overshoots (accepted — the law narrows).** The lane's point: a permission
+   gate with a finite escape (budget expiry → advance-with-page) cannot rot into a standing state —
+   **unboundedness is the defect, not permission-polarity as such**. This independently matches the
+   successor session's own derivation (owner+deadline deferrals whose expiry escalates). The
+   testable, narrowed form of §3:
+
+   > **No gate on an actuation path may be unbounded.** Every affirmative-permission predicate must
+   > carry a finite budget whose expiry converts the standing state into an event — advance+page,
+   > escalate, or revert. Veto-after remains the safety default; bounded permission is a legitimate
+   > tier inside its budget. "No permission gate at all" is neither necessary nor — given (3) —
+   > currently safe.
+
+3. **Measured objection to pure-veto (accepted as a live blocker).** The veto actuator on this host
+   succeeds **3 of 25 all-time** (`runner.log` census: landed=3, FAILED=5, skipped=17; newest
+   failure `rc=90`). Moving ALL safety onto a 12%-effective mechanism is no remedy tonight. Sharper
+   still — the lane's point 5: all 17 skips are ONE culprit under *"attempted once, skipped
+   forever"* — a state-record governing after its premises, i.e. **Law 2 living inside the
+   prescribed replacement**, and a fixed point of the system's own policy in the exact §2.4 shape.
+   A veto that cannot actuate is a permission gate in disguise. Filed: `cc-backlog 8e8a306f6dc0`
+   (bound the skip; page on failed revert) — a prerequisite for the pure-veto tier ever being
+   reachable.
+
+Both documents stand; T0–T3 remain the lane's. The generator-level law survives contact narrowed,
+not refuted — and the narrowing came through the one channel this document argued for: a store a
+mechanism reads (the lane's own escalation path), not a reader's discretion.
