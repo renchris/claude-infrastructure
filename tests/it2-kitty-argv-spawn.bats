@@ -177,14 +177,30 @@ arm() { mkdir -p "$CC_PANE_CMD_DIR"; : > "$CC_PANE_CMD_DIR/$1.armed"; }
   printf '%s\n' "$output" | grep -q -- '-l -i' || false
 }
 
-# ── the opt-out is a CONTRACT with two named callers ─────────────────────────────────────────────
+# ── the opt-out is a CONTRACT, and as of 2026-08-07 it has ONE wholesale caller, not two ─────────
 
-@test "the two in-repo callers that TYPE into a fresh pane opt out of arming" {
-  # Both split a pane and then send SEVERAL lines at it (handoff-fire's disarm + bracketed paste +
-  # CR; cc-pane's spawn/send pair). Arming either would leave their keystrokes in a tty nobody reads,
-  # so this pins the opt-out rather than trusting a comment to survive.
-  grep -q 'CC_KITTY_ARGV_SPAWN=0' "$REPO/scripts/handoff-fire.sh" || false
+@test "cc-pane's spawn opts out of arming — it types into a fresh pane" {
+  # It splits a pane and then sends SEVERAL lines at it (the spawn/send pair). Arming it would leave
+  # those keystrokes in a tty nobody reads, so this pins the opt-out rather than trusting a comment.
   grep -q 'CC_KITTY_ARGV_SPAWN=0' "$REPO/bin/cc-pane" || false
-  # …and specifically inside it2_split, not merely somewhere in a 4000-line file.
-  sed -n '/^it2_split() {/,/^}/p' "$REPO/scripts/handoff-fire.sh" | grep -q 'CC_KITTY_ARGV_SPAWN=0' || false
+}
+
+@test "handoff-fire no longer opts out WHOLESALE — it pre-delivers, and types only as a fallback" {
+  # REWRITTEN (item 2f074ef14947). This test used to pin handoff as the second unconditional opt-out,
+  # on the rationale that it types several accepted lines an armed pane could not service. That was
+  # true of the typed transport and is now moot in the way that matters: the disarm line, `nocorrect`
+  # and the echo-verify all exist ONLY to make typing survivable, so a command that is never typed
+  # has nothing left for them to defend. handoff now hands $CMD over on the LAUNCH (CC_PANE_CMD),
+  # which is strictly stronger than arming — there is no later delivery to race at all.
+  #
+  # Left as a passing-but-stale assertion this would have become an inverted guard: it would still go
+  # green on the `CC_KITTY_ARGV_SPAWN=0` that survives in the fallback branch, while asserting a
+  # contract the subject had deliberately stopped honouring.
+  local split; split="$(sed -n '/^it2_split() {/,/^}/p' "$REPO/scripts/handoff-fire.sh")"
+  [ -n "$split" ]
+  # The argv branch is the DEFAULT and pre-delivers through the shim's environment…
+  grep -q 'export CC_PANE_CMD="\$CMD"' <<<"$split" || false
+  # …and the opt-out survives ONLY as the else-branch, for iTerm2 and for a box where the runner
+  # cannot be resolved. Both branches must be present: one alone is either a regression or a cliff.
+  grep -q 'CC_KITTY_ARGV_SPAWN=0' <<<"$split" || false
 }

@@ -613,8 +613,29 @@ case "$verb" in
     # BEFORE the runner and export into it. Measured on kitty 0.48.2, pane 331: the new pane's own id,
     # not the leader's, and shims present. `exec "$CC_PANE_RUNNER"` is expanded by the PANE's shell
     # from the --env below, so no path ever has to survive a round of shell quoting.
+    # PRE-DELIVERED COMMAND (CC_PANE_CMD non-empty in THIS shim's environment). A caller that already
+    # knows the command at split time — scripts/handoff-fire.sh builds its launch line and only then
+    # creates the surface — hands it over on the launch itself. That is strictly stronger than arming:
+    # there is no later `run`, so no delivery to ack, no id-keyed file, and no interval at all in which
+    # the command could be raced. The pane is therefore NOT marked `.armed`: nothing further will be
+    # delivered to it, and a stale marker would silently swallow the next legitimate `run`/`send` into
+    # a file no one reads (the same single-shot reasoning as the runner consuming its own marker).
+    # Env, not a flag, for the same reason CC_KITTY_ARGV_SPAWN is: it rides through hf_bounded and the
+    # `it2` shim chain untouched, where a new positional would have to survive every wrapper in between.
+    predelivered=0
+    if [ -n "${CC_PANE_CMD:-}" ] && [ "$ARGV_SPAWN" = 1 ] && [ -x "$RUNNER" ]; then
+      predelivered=1
+      # shellcheck disable=SC2016
+      launch_args+=(--env "CC_PANE_CMD=$CC_PANE_CMD"
+                    --env "CC_PANE_CMD_INTERACTIVE=${CC_PANE_CMD_INTERACTIVE:-0}"
+                    --env "CC_PANE_RUNNER=$RUNNER"
+                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+    elif [ -n "${CC_PANE_CMD:-}" ]; then
+      err "runner '$RUNNER' is missing or not executable — CC_PANE_CMD cannot be delivered as argv"
+    fi
+
     arm=0
-    if [ "$ARGV_SPAWN" = 1 ] && [ -x "$RUNNER" ]; then
+    if [ "$predelivered" = 0 ] && [ "$ARGV_SPAWN" = 1 ] && [ -x "$RUNNER" ]; then
       # Created BEFORE the launch: the runner may reach its wait loop before this shell resumes.
       mkdir -p "$CMD_DIR" 2>/dev/null && chmod 700 "$CMD_DIR" 2>/dev/null
       if [ -d "$CMD_DIR" ] && [ -w "$CMD_DIR" ]; then
@@ -630,7 +651,7 @@ case "$verb" in
         # and fall through to the legacy shell, which is at least the behaviour that was measured.
         err "cannot use command dir '$CMD_DIR' — falling back to a typed spawn (the §9.1 race is live)"
       fi
-    elif [ "$ARGV_SPAWN" = 1 ]; then
+    elif [ "$predelivered" = 0 ] && [ "$ARGV_SPAWN" = 1 ]; then
       err "runner '$RUNNER' is missing or not executable — falling back to a typed spawn (the §9.1 race is live)"
     fi
 
