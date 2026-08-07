@@ -39,6 +39,13 @@
 #                           For a VERDICT ask "is it red?"; for an ALARM ask "is it green?".
 #                           Kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores `red == seen`.
 #   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
+#   kind=="deploy-stale"    NOT-ADVANCING — the live layer is behind trunk past
+#                           CC_DEPLOY_MAX_LAG_COMMITS (25) or CC_DEPLOY_MAX_LAG_HOURS (6) and has
+#                           not moved within that window. Keyed on the LAG ITSELF, never on which
+#                           refusal fired, and — alone among the deploy rows — on nothing the stamp
+#                           cursor does. deploy-lag and never-green cover the two ENDPOINTS of the
+#                           cursor axis (a green AHEAD of live HEAD; no green EVER) and the state
+#                           between them was covered by nothing: see deploy_stale_rows().
 #   kind=="never-green"     NEVER-CERTIFIED — the BACKSTOP. The verifier runs and returns verdicts,
 #                           but not one has EVER been green, so `last-green` was never written and
 #                           deploy has no cursor at all. None of the three above can see this state
@@ -127,6 +134,15 @@ LANDLOG="${CC_LAND_LOG:-${LAND_LOG:-$HOME/.claude/land.log}}"
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 ALARM_H="${CC_POSTLAND_ALARM_H:-3}"            # stamp staleness budget (hours)
 DEPLOY_LAG_MIN="${CC_DEPLOY_LAG_MIN:-60}"      # green-cursor → deployed-HEAD lag budget (minutes)
+# ── DEPLOY-STALE budget (DEPLOY_LANE_GROUND_UP §2.3 D2). SAME NAMES AND SAME DEFAULTS as
+# scripts/deploy-live.sh, deliberately: two numbers for one policy would let the lane sit refusing
+# inside a window the board still calls healthy, which is a slower version of the silence being fixed.
+# A non-numeric override falls back to the default rather than crashing the sensor — a garbage budget
+# must not be able to take an alarm down (R5), and a `[ n -le abc ]` under -u would do exactly that.
+DEPLOY_MAX_LAG_COMMITS="${CC_DEPLOY_MAX_LAG_COMMITS:-25}"
+DEPLOY_MAX_LAG_HOURS="${CC_DEPLOY_MAX_LAG_HOURS:-6}"
+case "$DEPLOY_MAX_LAG_COMMITS" in ''|*[!0-9]*) DEPLOY_MAX_LAG_COMMITS=25 ;; esac
+case "$DEPLOY_MAX_LAG_HOURS"   in ''|*[!0-9]*) DEPLOY_MAX_LAG_HOURS=6 ;; esac
 REDRUN_N="${CC_POSTLAND_REDRUN_N:-5}"          # how many newest verdicts an all-red run must span
 # ALARM POLARITY (§4 M1). `notgreen` = the alarm's own question ("is it green?"); `legacy` = the
 # pre-fix `red == seen` equality against one named failure. A kill switch, never a revert plan.
@@ -426,6 +442,84 @@ EOF
   [ "$((now - green_ts))" -gt "$((DEPLOY_LAG_MIN * 60))" ] || return 0
   printf '{"kind":"deploy-lag","state":"LAGGING","detail":"green %.12s unshipped for %sh","subject":"%s","recover_cmd":"bash %s/.claude/scripts/deploy-live.sh ; tail -20 %s/deploy.log","ts":%s}\n' \
     "$gcommit" "$(hrs "$((now - green_ts))")" "$DEPLOY_REPO" "$HOME" "$POSTLAND_DIR" "$now"
+}
+
+# ── DEPLOY-STALE (DEPLOY_LANE_GROUND_UP §2.3 D2) ─────────────────────────────────────────────────
+# NOT-ADVANCING: the live layer is behind trunk past the budget and has not moved within it.
+#
+# THE GAP THIS CLOSES. Every deploy alarm above is conditioned on where the STAMP CURSOR sits, and
+# the cursor's position is precisely what broke. Measured 2026-08-07: the live layer was 91 commits
+# and 33h stale, scripts/deploy-live.sh had emitted 534 identical refusals, and `cc-blockers`
+# rendered ZERO deploy rows —
+#   deploy-lag  (above) needs the newest green to be a DESCENDANT of the deployed HEAD, under its own
+#               comment "a green stamp BEHIND the deployed HEAD is history, not lag". Ours was
+#               behind, so the ancestor test returned SILENTLY.
+#   never-green (above) needs NO green to have EVER existed. Two existed.
+# Those are the two ENDPOINTS of one axis, and the state between them — a green exists but none is a
+# descendant of live HEAD — was covered by nothing. never-green's own comment already conceded the
+# shape ("deploy-lag structurally cannot cover it (it needs a green in order to call one late)");
+# it was written about the no-green endpoint, and the mirror case fell into the identical hole.
+#
+# WHY A SEPARATE FUNCTION, NOT A FIFTH BRANCH OF alarm_rows(). Inside it this would inherit the very
+# axis it exists to escape: three `return 0`s above are taken on stamp state alone (no stamps dir; no
+# green cursor), so its independence from $gcommit would be a property of statement ORDER — one
+# refactor away from being false, and silently. Composed as its own row source at the ALARMS_JSON
+# line, it CANNOT read the cursor, which is the whole claim rather than a convention.
+#
+# REASON-AGNOSTIC BY CONSTRUCTION. The predicate is the LAG ITSELF, never which refusal fired.
+# deploy-live.sh pages the TRANSIENT no-green refusal and pages nothing for the PERMANENT
+# anti-rollback one, so the failure that lasts is the silent one (measured: 0 pages across 534
+# refusals). An alarm keyed on a refusal string also goes quiet the moment the diagnosis changes
+# shape while the freeze continues — a change of message read as a recovery is how the last filing
+# of this class was closed.
+#
+# DELIBERATELY DOES NOT DEFER to deploy-lag, unlike never-green's `emitted` gate. Those two answer
+# ONE question ("why is deploy not certified") and must not both answer it; this one answers a
+# different question ("is the layer moving at all"), and it is true both where deploy-lag is false
+# AND where it is true. Two rows there is two facts, not one fault twice.
+#
+# Same fail-OPEN law as every sensor in this file (R5): no checkout, no origin/main, an unreadable
+# count or an unreadable commit date all yield NO row. A board that invents blockers is ignored
+# exactly like one that hides them.
+deploy_stale_rows() { # → one JSON object per line (possibly none)
+  local now behind head_ts age_s over_h=0 dtl cmd dlog
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                     # no clock ⇒ no alarms
+  [ -d "$DEPLOY_REPO" ] || return 0                                    # not a checkout ⇒ fail open
+  # origin/main, NOT `@{u}`: it is the same ref scripts/deploy-live.sh walks to choose its target, and
+  # a second oracle here would let the board and the lane disagree about how far behind the layer is
+  # (the law at RUN_LOCK_PID above, applied to the deploy side).
+  behind="$(git -C "$DEPLOY_REPO" rev-list --count HEAD..origin/main 2>/dev/null || true)"
+  case "${behind:-}" in ''|*[!0-9]*) return 0 ;; esac                  # unreadable ⇒ no row
+  [ "$behind" -gt 0 ] || return 0                                      # current ⇒ nothing to be late for
+  # HOURS is the age of the LIVE HEAD COMMIT, and it is gated on behind>0 above for a reason: on a
+  # quiet trunk a perfectly-deployed layer has an old HEAD too, and firing there would be an alarm
+  # that cannot tell "frozen" from "nothing to do". Unreadable ⇒ the hours leg simply cannot fire;
+  # degrading a sensor may only make this quieter, never louder.
+  head_ts="$(git -C "$DEPLOY_REPO" log -1 --format=%ct HEAD 2>/dev/null || true)"
+  case "${head_ts:-}" in ''|*[!0-9]*) head_ts="" ;; esac
+  age_s=""
+  if [ -n "$head_ts" ] && [ "$now" -ge "$head_ts" ]; then age_s="$((now - head_ts))"; fi
+  [ -n "$age_s" ] && [ "$age_s" -gt "$((DEPLOY_MAX_LAG_HOURS * 3600))" ] && over_h=1
+  # EITHER leg is sufficient: commits and hours measure the same freeze through different windows,
+  # and a burst-then-stop trips the first while a slow permanent stall trips the second.
+  [ "$behind" -gt "$DEPLOY_MAX_LAG_COMMITS" ] || [ "$over_h" -eq 1 ] || return 0
+  # ASCII-only and MAGNITUDE-carrying (§4 F4): both numbers ship regardless of which leg fired, because
+  # the pair is what sizes the exposure. printf pads by BYTES, so one em-dash would shift the column.
+  if [ -n "$age_s" ]; then dtl="$(printf 'live layer %s behind, HEAD %sh old' "$behind" "$(hrs "$age_s")")"
+  else                     dtl="$(printf 'live layer %s behind, HEAD age unreadable' "$behind")"; fi
+  # I11 — EXISTENCE-CHECK THE PLATTER (hooks/operator-readout.sh:238-246). deploy-lag platters
+  # `bash ~/.claude/scripts/deploy-live.sh`, and in THIS state that exact command is what has refused
+  # 534 consecutive times — a board offering a fix its own gate rejects teaches the operator that the
+  # board lies. So the platter here is the DIAGNOSTIC that shows why, and every clause is proven
+  # runnable at emit time: the git half by the rev-list that just succeeded against these same two
+  # refs in this same repo, the tail half by the `-e` below. Advancing the layer is the operator's
+  # call and stays off the platter.
+  cmd="$(printf 'git -C %s log --oneline -5 HEAD..origin/main' "$DEPLOY_REPO")"
+  dlog="$POSTLAND_DIR/deploy.log"
+  [ -e "$dlog" ] && cmd="$(printf 'tail -20 %s ; %s' "$dlog" "$cmd")"
+  printf '{"kind":"deploy-stale","state":"NOT-ADVANCING","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
+    "$dtl" "$DEPLOY_REPO" "$cmd" "$now"
 }
 
 # ── DISPATCH alarm (AUTONOMY_DISPATCH_V2 §3 S8) ──────────────────────────────────────────────────
@@ -993,7 +1087,7 @@ fi
 # this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
 # `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
 # fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
-ALARMS_JSON="$({ alarm_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1097,7 +1191,10 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # the families have different owners and different recovery paths, and a dispatch row printed under a
 # "the landing net is degraded" heading sends the operator to the wrong subsystem. One renderer
 # (alarm_table), N selectors — never a second renderer.
-LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="never-green")'
+# A kind absent from this selector is EMITTED and then silently dropped from the table — it rides the
+# --json array and vanishes from the one surface the operator reads. That is not hypothetical: the
+# mirror bug has bitten this file before, which is why every kind here carries a render test.
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-stale" or .kind=="never-green")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —
