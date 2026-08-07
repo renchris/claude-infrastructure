@@ -218,39 +218,78 @@ STUB
 # that fixes a real engagement miss would paste the brief into a shell that EXECUTES it. The fire
 # must say so specifically, and must say it in seconds rather than after the 8-15min disk-poll
 # window that let the live 2026-07-26 wedge die before any verdict was written.
-@test "E2E: a PARKED pane (zsh [nyae]) fails loud as parked, not as 'never engaged'" {
-  # Stub models the real sequence: the echo-verify BEFORE the CR must still see the command (else
-  # typing fails first and the engagement gate is never reached), and only AFTER the CR does the
-  # screen show the shell's refusal — which is exactly when the wedge becomes observable.
-  local BIN2="$BATS_TEST_TMPDIR/bin2"; mkdir -p "$BIN2"
-  cat > "$BIN2/it2" <<STUB
+#
+# ── TWO ARMS, BECAUSE THE TRANSPORT CHANGED UNDERNEATH THIS TEST (item 4c5eddc16c2d) ────────────
+# This was ONE test, and it went RED on trunk for a reason that indicts the FIXTURE, not the
+# subject. fda70147 (item 2f074ef14947, the same day) made a kitty pane's command its ARGV: on a
+# kitty box hf_argv_launch sets HF_ARGV_ACTIVE=1 and it2_land returns EARLY — the launch command is
+# never typed, so there is no bracketed paste, no echo-verify and NO CR. The old stub keyed "the
+# command was submitted" on seeing that CR, so it never flipped to the parked screen,
+# pane_parked_reason correctly reported not-parked, and the fire fell through to the INC-4 verdict.
+# The detector was healthy the whole time; the fixture was asserting through a retired transport.
+#
+# It could rot silently because the suite never PINNED the transport (M11: a test's environment is
+# PINNED, not ambient). in_kitty() reads the FIRING process's own KITTY_WINDOW_ID, so this same
+# file was green on an iTerm2 box and red on a kitty one — the host terminal, not the code, decided
+# the verdict. Both transports are live and the parked verdict must reach the caller on either, so
+# each gets its own arm with the transport pinned by its documented seam, and each carries the
+# positive control that keeps it from silently degrading into the other:
+#   TYPED (FIRE_ARGV_LAUNCH=0) — a `session send` MUST have happened.
+#   ARGV  (kitty + a runner)   — NOTHING may have been typed, and $CC_PANE_CMD must have ridden the
+#                                split. Without that pair, an arm that fell back to typing would
+#                                pass just as well as one exercising the branch it names.
+#
+# The stub is keyed on the MECHANISM both share — "the command has been DELIVERED, by whatever
+# transport delivered it" — not on the keystroke one of them happens to use, which is the property
+# whose absence made the old one decay (memory: control-calibrated-to-implementation-decays).
+# Delivery is the launch under argv and the CR under typing; only after it does the screen show the
+# shell's refusal, which is exactly when the wedge becomes observable. Ordering matters on the
+# typed arm: the echo-verify BEFORE the CR must still see the command, else typing fails first and
+# the engagement gate is never reached.
+parked_it2_stub() { # $1=path → an it2 stub that parks the pane once $CMD has been delivered
+  cat > "$1" <<STUB
 #!/bin/bash
 LAST="$BATS_TEST_TMPDIR/it2-last-send2"
-CRSEEN="$BATS_TEST_TMPDIR/cr-seen"
+DELIVERED="$BATS_TEST_TMPDIR/cmd-delivered"
+SENDS="$BATS_TEST_TMPDIR/it2-sends"
 case "\$1 \$2" in
+  # ARGV transport: delivery IS the launch — it2_split exports \$CC_PANE_CMD across this one call.
+  "session split") [ -n "\${CC_PANE_CMD:-}" ] && : > "\$DELIVERED" ;;
+  # TYPED transport: every send is recorded (the control), and the CR is the submit.
   "session send"|"session run")
-    txt="\${!#}"
-    if [ "\$txt" = \$'\r' ]; then : > "\$CRSEEN"; else printf '%s' "\$txt" > "\$LAST"; fi ;;
+    txt="\${!#}"; printf 'SEND\n' >> "\$SENDS"
+    if [ "\$txt" = \$'\r' ]; then : > "\$DELIVERED"; else printf '%s' "\$txt" > "\$LAST"; fi ;;
 esac
 case "\$*" in
   *"session split"*) echo "Created new pane: $PANE" ;;
   *"session read"*)
-    if [ -f "\$CRSEEN" ]; then printf "zsh: correct 'go' to 'god' [nyae]? \n"
+    if [ -f "\$DELIVERED" ]; then printf "zsh: correct 'go' to 'god' [nyae]? \n"
     else cat "\$LAST" 2>/dev/null; fi ;;
   *) : ;;
 esac
 STUB
-  chmod +x "$BIN2/it2"
-  cp "$BIN2/it2" "$HOMEDIR/.claude/bin/it2"
-  # FIRE_NOCORRECT=0 — 0e03861c landed independently while this was in flight and now types a
-  # separate `unsetopt correct correct_all` disarm line, with its own CR, BEFORE the launch command.
-  # This stub keys "the command was submitted" on seeing a CR, so the disarm line's CR would flip it
-  # to the parked screen before the real command is ever typed — the echo-verify would then fail and
-  # the fire would die on a different path, testing nothing. Pinning the disarm off keeps this test
-  # about the parked-pane verdict. (That disarm and this detector are complementary: it removes the
-  # cause, this reports the state when anything else still produces it — including its own documented
+  chmod +x "$1"
+  cp "$1" "$HOMEDIR/.claude/bin/it2"
+  : > "$BATS_TEST_TMPDIR/it2-sends"      # so the control reads 0, not "file not found"
+}
+
+# `env -u CC_PANE_CMD` on BOTH arms is load-bearing, not tidiness. cc-pane-runner's variable is
+# INHERITED by every descendant of an argv-launched pane (measured: a session fired this way has
+# $CC_PANE_CMD set to its own launch line, and it reaches this suite's stub), so an ambient value
+# would mark the command "delivered" at the split on the TYPED arm too — flipping the screen to the
+# refusal before the echo-verify ever runs, and killing the fire on a path that tests nothing.
+@test "E2E: a PARKED pane (zsh [nyae]) fails loud as parked, not as 'never engaged' [TYPED]" {
+  local BIN2="$BATS_TEST_TMPDIR/bin2"; mkdir -p "$BIN2"
+  parked_it2_stub "$BIN2/it2"
+  # FIRE_NOCORRECT=0 — 0e03861c types a separate `unsetopt correct correct_all` disarm line, with
+  # its own CR, BEFORE the launch command. The stub keys the typed arm on a CR, so the disarm's CR
+  # would flip it to the parked screen before the real command is ever typed — the echo-verify would
+  # then fail and the fire would die on a different path. Pinning the disarm off keeps this arm about
+  # the parked-pane verdict. (That disarm and this detector are complementary: it removes the cause,
+  # this reports the state when anything else still produces it — including its own documented
   # failure mode, where it warns and PROCEEDS unprotected.)
-  run env HOME="$HOMEDIR" IT2_BIN="$BIN2/it2" TMPDIR="$BATS_TEST_TMPDIR" FIRE_NOCORRECT=0 \
+  run env -u CC_PANE_CMD HOME="$HOMEDIR" IT2_BIN="$BIN2/it2" TMPDIR="$BATS_TEST_TMPDIR" \
+    FIRE_NOCORRECT=0 FIRE_ARGV_LAUNCH=0 \
     FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_RETRY=5 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
     FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
@@ -261,6 +300,37 @@ STUB
   # must NOT be misreported as the INC-4 shape, whose printed remedy is wrong here
   ! printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged' || false
   ! printf '%s\n' "$output" | grep -q '→ fired' || false
+  # CONTROL: this arm really did TYPE. Without it the arm passes identically on the argv path, and
+  # the transport-blindness that made this test rot is back.
+  [ -s "$BATS_TEST_TMPDIR/it2-sends" ]
+  grep -q 'claude-test' "$BATS_TEST_TMPDIR/it2-last-send2"
+}
+
+# The SAME verdict on the transport that is now the default wherever kitty runs. Nothing is typed
+# here at all, so a parked pane can only be caught by reading the pane — which is the whole point of
+# the oracle, and the half the suite was blind to. in_kitty()'s env clause is forced (rather than
+# inherited) so this arm is the argv path on an iTerm2 box too; CC_PANE_RUNNER_BIN points at the real
+# runner because hf_argv_launch REFUSES to activate without an executable one (it degrades to typing,
+# which the control below would catch).
+@test "E2E: a PARKED pane fails loud as parked on the ARGV transport too (nothing typed) [ARGV]" {
+  local BIN2="$BATS_TEST_TMPDIR/bin3"; mkdir -p "$BIN2"
+  parked_it2_stub "$BIN2/it2"
+  run env -u CC_PANE_CMD -u IT2_WRAPPER_NO_KITTY HOME="$HOMEDIR" IT2_BIN="$BIN2/it2" \
+    TMPDIR="$BATS_TEST_TMPDIR" KITTY_WINDOW_ID=1 FIRE_ARGV_LAUNCH=1 \
+    CC_PANE_RUNNER_BIN="$REPO/bin/cc-pane-runner" \
+    FIRE_ENGAGE_TIMEOUT=5 FIRE_ENGAGE_RETRY=5 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'pane PARKED, launcher never ran'
+  printf '%s\n' "$output" | grep -q "correct 'go' to 'god'"
+  ! printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged' || false
+  ! printf '%s\n' "$output" | grep -q '→ fired' || false
+  # CONTROL, both halves: the command rode the SPLIT (so this is the argv branch), and NOTHING was
+  # typed (so it did not quietly degrade to the typed arm above and prove that instead).
+  [ -f "$BATS_TEST_TMPDIR/cmd-delivered" ]
+  [ ! -s "$BATS_TEST_TMPDIR/it2-sends" ]
 }
 
 @test "E2E: an engaged fire (marker in a transcript) prints '→ fired' exit 0" {
