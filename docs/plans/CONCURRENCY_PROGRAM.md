@@ -328,6 +328,78 @@ write gate makes that *safe* without making it *visible*: it catches every spawn
 unidentified one, which is exactly why it was chosen over gating any named path. Closing the
 visibility gap needs one log line per pane-spawn carrying the caller's pid and ppid.
 
+#### S4.2 · The residual, closed — CLOSED (backlog `1467ea1dad4f`, 2026-08-07)
+
+**Built (1) — `scripts/lib/pane-spawn-log.sh`**, one row per surface created, into
+`~/.claude/logs/pane-spawns.jsonl`. **Twenty spawn sites across nine files**, instrumented so that
+ONE inference becomes sound: *a pane that exists with no row was spawned by something outside this
+tree.* That is the sentence the two surviving hypotheses turn on, and it is worth exactly its
+coverage — so `scripts/pane-spawn-coverage-lint.sh` (14/14 selftest, wired into `ship-land.sh`'s
+always-run gate phase) blocks a land that adds a spawner without a row.
+
+Three fields carry the identity, because the pid the item asked for names nothing months later —
+it has been recycled and the process is gone:
+
+| field | answers | discriminates |
+|---|---|---|
+| `pid` · `ppid` · `ppid_comm` | the literal ask | — |
+| `chain` | which of OUR scripts delegated down to the primitive (`cc-dispatch>handoff-fire.sh>it2-kitty`), relayed through the environment | **hypothesis (a)**, an unlogged caller: a chain whose head is unexpected names it outright |
+| `ancestry` | the real `pid:comm` walk from `$$` upward, ONE `ps` fork | **hypothesis (b)**, a detached child: re-parenting to pid 1, or a `launchd` top where `chain` claims an interactive origin |
+
+`ancestry` reads `comm`, never `args` — argv on this box carries whole agent briefs, and a
+table-wide `args=` read is the instrument that has already lied here (`pgrep-f-matches-agent-briefs`
+counted 50 sessions that merely MENTIONED a string where the truth was 1).
+
+**Built (2) — the fired-peer stamp gained a DURABLE KEY.** `mark_fired_peer` now also writes
+`cc-fired/by-cwd/<sha>.json`, a pointer holding a pane id, and self-close's `absent` path can
+**adopt** an orphaned record instead of refusing it. cwd is the INDEX; the fire MARKER is the PROOF.
+
+Four decisions worth not re-litigating:
+
+1. **The RECORD stays pane-keyed; only the LOOKUP gained a key.** Thirteen readers and twenty-plus
+   test files construct `$FIRED_DIR/<pane>.json`, and `mark_fired_peer`'s own header declares the
+   record ADDITIVE-ONLY because `cc-reaper` keys auto-reap on that exact path. Re-keying the store
+   is a contract rebuild this item had no mandate for.
+2. **A SUBDIRECTORY, not a sibling file.** Three readers enumerate with `"$FIRED_DIR"/*.json` and
+   treat the FILENAME as a pane id — `cc-classify:406`, `selfclose_inventory_warn`, and
+   `desk-invariant.sh:288`, which feeds max-mtime straight to `heal_role`. A second `.json` beside
+   the records would have repointed the desk role at a hash. A glob does not recurse.
+3. **A POINTER, not a copy.** `record_close_succession` writes `closedAt` to one path; a twin would
+   keep `closedAt:null` forever and every liveness test reading it would see a spent stamp as OPEN.
+4. **The marker is what makes adoption safe.** `find_open_stamp_for_cwd` could always FIND the
+   orphan and deliberately refused to act, for a reason that is still correct: *"a cwd is not
+   exclusive — an operator pane opened in the same worktree would match it too."* This does not
+   overrule that; it adds the missing discriminator. `FIRE_MARKER` appears in exactly one session's
+   transcript — the one that ingested that prompt — and an operator pane can never acquire one.
+   Adoption requires the whole positive chain (orphan exists · OPEN · carries a marker · this pane's
+   registry row resolves a sid · that sid's own transcript contains the marker); any link
+   unresolvable ⇒ refuse exactly as before. `CC_SELFCLOSE_ADOPT=0` disables it (R8).
+
+**The trap this change walked into, and the ratchet that now encodes it.** The first version put a
+one-line `_spawn_log()` shim at the top of each file. **41 tests went red.** `as_tab`,
+`spawn_frontmost`, `it2py`, `mark_fired_peer` and `lr-reset-poller`'s `spawn_gui` are all
+sed-EXTRACTED as isolated units by their suites, which `eval` a function body with none of its
+file's top-level definitions — so a shim call is `command not found` inside the unit under test.
+`handoff-fire.sh` had already written the warning down (*"a new collaborator would be a 127 under
+`set -e` — the trap this file has already paid for once"*) and it was read and walked into anyway.
+The only accepted call form is now an inline `command -v` guard around the library function, and the
+coverage lint **RED-cases a shim spelling** so it cannot come back.
+
+Tests: 20 (`pane-spawn-log`) + 20 (`handoff-fired-cwd-index`) + a 14-case lint selftest.
+Two further defects the work surfaced and fixed in-diff: a bare `$HOME` in the loader aborted
+`kitty-split-launch.sh` under `set -u` (`addon-failure-exceeds-its-blast-radius` — the add-on must
+fail no wider than itself), and a selftest probe read FALSE **on a match** because `… | grep -q`
+under `pipefail` SIGPIPEs the producer and promotes 141 (`pipefail-inverts-early-exit-probe`).
+
+⚠ **The coverage rule has a stated limit, not a hidden one.** It blocks on a primitive in a file with
+NO logger call anywhere (no false positives by construction) and only NOTICES a primitive whose file
+IS instrumented but whose occurrence is beyond the proximity window — because five of the twenty
+sites are *declarations*, not invocations (`KARGS=(launch --type=os-window)` builds an argv issued 70
+lines later; `set newTab to (create tab …)` sits inside a heredoc whose `osascript` call is above
+it). Closing that would need heredoc- and array-aware parsing in bash, whose own failure mode is
+silent. So: a SECOND uninstrumented spawn added to an ALREADY-instrumented file is a notice, not a
+block. The notice names the file and line.
+
 ### S5 · Scale beyond this box — the only route to ~100
 
 **100 local sessions is arithmetically unreachable**: 511 MB/session × 100 = **51.1 GB of 64 GB**,
