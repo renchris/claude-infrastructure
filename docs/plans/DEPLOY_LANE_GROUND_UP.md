@@ -101,6 +101,145 @@ actually current in `~/.claude` (`git ls-tree` + an `md5` of the symlink target)
 3. **Land, then verify the live layer actually moved.** A landed fix that does not deploy is the
    current failure mode; the acceptance test is a *deployed* layer, not a green gate.
 
+## Step 1 — THE DERIVED INVARIANT (written 2026-08-07, before opening the implementation)
+
+**Provenance discipline.** Everything in this section is derived from *state and behavior only*:
+the launchd declaration (`com.claude.deploy-live.plist`), `autonomy/postland/deploy.log`,
+`autonomy/postland/stamps/*.json`, git ancestry, and the shared checkout's **reflog**.
+`scripts/deploy-live.sh` was NOT read until §1.6 — the violation enumeration — so the invariant is
+derived from the problem, not inherited from the incumbent's frame.
+
+### 1.1 Measured constants, re-derived 2026-08-07
+
+The 2026-08-06 filing was re-measured rather than inherited. Six of its numbers moved and **four
+load-bearing facts were missing from it entirely**.
+
+| Constant | Filed 2026-08-06 | **Measured 2026-08-07** | Command |
+|---|---|---|---|
+| live layer HEAD | `a9060c18` | `a9060c18` (2026-08-05 15:37) — unchanged | `git rev-parse HEAD` in shared checkout |
+| trunk tip | `d0209925` | **`754c41e0`** (2026-08-07 00:40) | `git rev-parse origin/main` |
+| gap (trunk ahead) | 85 | **87** | `git rev-list --left-right --count origin/main...HEAD` → `87  0` |
+| anti-rollback refusals | 536 | **534** (log is subject to `com.claude.log-rotation`; read as ≥534) | `grep -c 'would ROLL BACK'` |
+| launchd runs / last exit | 269 / 1 | **276 / 1** | `launchctl print gui/501/com.claude.deploy-live` |
+| green stamps | "2 in 85 runs" | **exactly 2** — 85 stamps: 80 `red`, 2 `green`, 2 `cut`, 1 `hung` | census of `stamps/*.json` |
+| live symlink share | "42 of 50 changed files" | **284 of 291** entries across `hooks/ scripts/ bin/ commands/` | `find -maxdepth 1 -type l` per dir |
+| **verifier duration** | *absent* | **median 8852 s = 2h28m**; p90 11886 s; max 13248 s (3h41m) | `run_s` across 85 stamps |
+| **third failure mode** | *absent* | **59 ×** `` /bin/bash: …/.claude/scripts/deploy-live.sh: No such file or directory `` — the deploy script is itself absent from the layer it deploys | `uniq -c` on `deploy.log` |
+| **escalation coverage** | *absent* | 6 pages written for 6 stamp-starvation refusals; **0 pages for 534 anti-rollback refusals** | `grep -c 'wrote page'`; `ls autonomy/pages/` — newest `deploy-blocked-*` is 2026-08-03 |
+| **target ↔ live ancestry** | "live HEAD is NOT an ancestor of target" | same, and its **converse holds**: target `3725e543` **IS** an ancestor of live HEAD (`rc=0`) — live is **43 commits ahead of its own target** | `git merge-base --is-ancestor` |
+| **stamp key type** | *absent* | stamps are keyed on **TREE** sha; target `3725e543` (a `Revert`) inherits green from verified commit `29313ae4` because both carry tree `cd17174f48fb` | stamp filename vs `git rev-parse X^{tree}` |
+
+Two derived rates, which together decide the whole design:
+
+- **Land rate** — 87 commits between 2026-08-05 15:37 and 2026-08-07 00:40 (33h03m) = **≈63 commits/day**.
+- **Evidence rate** — 85 verdicts over 2026-07-26T02:16Z → 2026-08-07T03:37Z (12.06 d) = **≈7.0 verdicts/day**, of which **≈0.17 greens/day**.
+
+### 1.2 The decisive fact the filing does not contain: the live layer has SEVERAL writers
+
+The filing reads the deadlock as *"the guard is correct; the state it guards is unreachable."* The
+reflog refutes the implied cause. Live HEAD `a9060c18` was **not** set by a stamped deploy:
+
+```
+a9060c18 HEAD@{2026-08-05 15:40:37 -0700}: merge origin/main: Fast-forward
+```
+
+`deploy-live.sh` fast-forwards to a *specific stamped sha* (`merge <sha>: Fast-forward`, 6
+occurrences — one of them the lane's single success, `merge 3725e5432bfc…` on 2026-08-04 10:40).
+A fast-forward to **`origin/main`** is a different writer. Reflog census of the live layer's HEAD:
+
+| Reflog action | Count | Writer | Gated by the stamp? |
+|---|---|---|---|
+| `merge origin/main: Fast-forward` | 13 | a session / `/ship` syncing the checkout | **no** |
+| `reset: moving to origin/main` | 11 | a session resetting to trunk | **no** |
+| `pull -q --rebase origin main` | 3 | a session pulling | **no** |
+| `rebase (start): checkout origin/main` | 5 | a session rebasing | **no** |
+| `commit:` | several | a session committing in the shared checkout | **no** |
+| `merge <sha>: Fast-forward` | 6 | **`deploy-live.sh`** | **yes** |
+
+The live layer is *the developer checkout's working tree*. Every ordinary git operation any session
+performs there is a deploy to the entire fleet, because 284 of 291 entries under
+`hooks/ scripts/ bin/ commands/` are symlinks into it. **The stamp gate governs ~6 of ~38 observed
+writes.**
+
+**The causal chain, measured end to end:**
+
+1. 2026-08-04 10:40 — `deploy-live.sh` deploys, gated and green, to `3725e543`. (The one success in 705 log lines.)
+2. 2026-08-05 15:40 — an **ungated** `merge origin/main: Fast-forward` moves the checkout to `a9060c18`, **43 commits past the stamped target**.
+3. From that instant the lane's target is permanently *behind* live HEAD, so anti-rollback refuses — correctly, and **534 times in silence**, because the escalation path is wired to the *other* refusal class.
+4. The only exit is a green stamp at or above `a9060c18`. At 0.17 greens/day against 63 commits/day, it does not arrive.
+
+**So the failure is not an over-strict guard. It is a verification gate installed on a path that is
+not the only path.** The ungated writers are strictly faster than the gated one; they overtake it;
+and the moment they do, the gated writer's own safety property converts "I am behind" into "I refuse
+forever." A gate on a non-exclusive path does not gate — it only deadlocks itself.
+
+### 1.3 The invariant
+
+State the system abstractly. `L` = the live layer's commit (what every session executes). `T` =
+trunk tip. `E` = the evidence corpus. `W` = the set of writers that can move `L`.
+
+> **THE ADVANCE INVARIANT.** At every instant `L` must simultaneously satisfy
+>
+> - **A1 · MONOTONE** — `L` never loses content it already had: every previous value of `L` is an ancestor of `L`.
+> - **A2 · COVERED** — `L`'s content is not known-unsafe: no verdict in `E` marks any state at or below `L` as red without that red having been dispositioned.
+> - **A3 · FRESH** — `L` is within a *declared, finite* staleness budget of `T`, in both commits and wall-clock.
+>
+> …and the conjunction **A1 ∧ A2 ∧ A3 must be reachable from every state the system can enter, for
+> every writer in `W`.**
+
+The last clause is the whole content of this rebuild. Stated as the derivation rule it enforces:
+
+> 🚨 **A conjunction of safety guards is admissible only if the set of states satisfying all of them
+> is reachable from every state the system can enter. Otherwise it is not a policy, it is a trap.**
+> Safety properties compose freely; safety and liveness do not. Two individually-correct guards
+> (`A1` monotone, `A2` covered) with no liveness obligation produced an absorbing state in 12 days.
+
+Four corollaries follow, and each is a requirement on the rebuild:
+
+- **C1 · EXCLUSIVITY.** Either every writer in `W` is subject to the invariant, or the invariant is
+  decorative. A gate that governs 6 of 38 writes is decorative.
+- **C2 · PRODUCER ADEQUACY, or DECOUPLING.** If advancing *requires* fresh evidence per target, then
+  the evidence rate must dominate the land rate. Measured: 7.0/day (0.17 green/day) vs 63/day —
+  **short by 9× at 100% green and by 375× as it actually runs.** Since the producer cannot be made
+  ~400× faster, `A2` must be **decoupled from the advance**: evidence becomes a *veto on known-red*,
+  not a *permit requiring green*. Absence of a verdict cannot mean "blocked", because absence is the
+  overwhelmingly common case and is *structurally guaranteed* to be, forever.
+- **C3 · NO SILENT NON-PROGRESS.** A lane that has not advanced within its `A3` budget must escalate,
+  and the escalation must be keyed on **not-advancing**, not on any particular refusal reason. 534
+  identical silent refusals is the measured cost of keying the alarm on a reason.
+- **C4 · SELF-HOSTING IS A SEPARATE HAZARD.** The lane deploys the script that runs the lane, over
+  live symlinks, with no staging and no atomicity — measured 59 times as *the deploy job's own
+  executable missing from the layer it deploys*. Any design must be able to advance the layer while
+  the layer contains a broken copy of the advancer.
+
+### 1.4 Failure-mode table — every observed mode gets a structural answer
+
+A mode without an answer is an unfinished design.
+
+| # | Observed mode (with its measurement) | Which clause it violates | Structural answer required |
+|---|---|---|---|
+| F1 | Target permanently behind live HEAD; 534 identical refusals | A3 unreachable given A1∧A2 | Target selection must be a function of `T`, not of the evidence corpus; evidence vetoes, never selects |
+| F2 | Evidence producer cannot keep up: 0.17 green/day vs 63 commits/day | C2 | Decouple: advance on *absence of red*, not *presence of green* |
+| F3 | Ungated writers move `L` past its evidence (13 + 11 + 3 reflog entries) | C1 | Either give the live layer its own checkout (exclusive `W`), or make the invariant hold for the ordinary git path too |
+| F4 | 534 refusals produce 0 pages; alarm keyed on the *other* refusal class | C3 | Alarm on **not-advancing for > budget**, reason-agnostic |
+| F5 | Deploy script absent from the live layer, 59 × — the job cannot run at all | C4 | The advancer must not be self-hosted on the layer it advances, or must have a bootstrap that does not require itself |
+| F6 | One dirty sibling file (`hooks/backup-before-write.sh`, now + untracked `hooks/lib/read-before-write-parity.sh`) blocks `--ff-only` regardless of the stamp | A3 vs the working-tree realization | The live layer must not be a surface anyone edits in place; if it stays one, dirty-file handling is part of the lane, not a manual step |
+| F7 | Stamp is TREE-keyed while `last-green` holds a COMMIT sha; a `Revert` silently inherits a green | A2 (evidence identity) | Decide and document the key type; a verdict must name what it verified in the same key space it is looked up by |
+| F8 | Making the gate *exclusive* without fixing F2 would freeze the fleet **totally** rather than partially | — | Recorded as a rejected alternative, not a fix: C1 alone is a worse system than today |
+
+### 1.5 What this keeps and discards from the 2026-07-28 landing rebuild
+
+The `/ground-up` methodology came from that rebuild — the same subsystem family — and it did not
+close this class. Which of its premises survive is being derived from `LAND_PIPELINE_V2.md` by the
+archaeology researcher; **this subsection is PENDING that read** and will be integrated before any
+implementer is spawned. The one premise already contradicted by measurement is recorded now: a
+design that treats *"the corpus goes green"* as an available event is refuted at 2/85.
+
+### 1.6 Violation enumeration against the implementation
+
+PENDING — `scripts/deploy-live.sh` is read only after this section. Each violation will be recorded
+as `file:line → clause`.
+
 ## Hard constraints
 
 - **Never commit or land in the shared checkout** (`.claude/CLAUDE.md`) — dedicated worktree, own
