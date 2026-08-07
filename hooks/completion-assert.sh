@@ -12,7 +12,10 @@
 #
 # ── FIRE PREDICATE (P11 FM1 signature) ──
 #   (done_assertion ∨ deference_tell) ∧ ledger-contradiction ∧ ¬genuine
-#     ledger-contradiction := dirty ∨ unlanded-content ∨ DoD-remainder>0   (via wrap-ledger.sh)
+#     ledger-contradiction := dirty ∨ unlanded-content ∨ DoD-remainder>0
+#                           ∨ RUNG=🚀 (landed-but-not-live) ∨ RUNG=⛔ (blocked on the operator)
+#                           (all via wrap-ledger.sh — the two RUNG terms CONSUME its verdict and
+#                            never re-derive it; see the blocks at the 🚀/⛔ terms below)
 #     genuine := credential/sudo/destructive-migration/external-info/value-fork ONLY.
 #       ship/land of clean committed work is NOT genuine (2026-07-17 strengthening) → a
 #       "park-and-ask-to-ship" close FIRES; the desk drives the land, it does not hold for it.
@@ -387,6 +390,34 @@ if [ "$RUNG" = "🚀" ]; then
   else
     facts="${facts}LANDED BUT NOT LIVE — the live layer is ${_ca_livelag} commit(s) behind and PAST its converge budget, so the machine still runs the old bytes (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
   fi
+fi
+
+# ── BLOCKED ON THE OPERATOR — the ⛔ rung this guard could not see (2026-08-07) ───────────────────
+# A close rendered "✅ SAFE TO CLOSE — nothing of mine is open" — TRUE over every git fact — while
+# the model was holding a blocking operator decision it had buried in paragraph 4 of its own prose.
+# Every arm abstained, and each for a structural reason, not an accident: D1 enumerates handoff
+# SPELLINGS and the sentence was "G-A is the one thing I need from you", which is not one of them
+# (MEMORY.md denylist-enumerates-spellings); D3 is FIRST-LINE-scoped by design and the retraction
+# had moved to ¶4; D4 needs an offer phrase and there was none; and the ledger arm was right — the
+# tree really was clean and landed.
+#
+# CONSUME THE LEDGER'S VERDICT, DO NOT RE-DERIVE IT — the same law the 🚀 term above states, and
+# for the same reason. The tempting fix here is another prose matcher ("I need from you", a
+# question mark, a decision-shaped sentence), and that is EXACTLY the D1 failure mode repeated one
+# denylist later. The open class-C decision packets are a STORE, wrap-ledger already owns the
+# predicate over them, and RUNG=⛔ IS the verdict; nothing else infers it and this hook never reads
+# the cc-decide store itself (MEMORY.md make-the-actuator-the-arbiter,
+# sibling-auditors-must-share-the-state-model).
+#
+# This cannot become a standing gate on the CORRECT close: a close whose line 1 actually IS the ⛔
+# rung carries no done-assertion, so it abstains at the close-tell gate above and never reaches
+# here — and one that names an irreducible operator-only blocker abstains earlier still at GENUINE.
+# What is left is precisely the target: a close asserting done while a decision it filed is open.
+# Bounded by this hook's own per-session cap (MAX), like every other term.
+if [ "$RUNG" = "⛔" ]; then
+  _ca_blocked="$(lfield BLOCKED)"; case "$_ca_blocked" in ''|*[!0-9]*) _ca_blocked="?" ;; esac
+  contra=1
+  facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open and only you can settle them; the close asserted done while holding them (cc-decide list --open); "
 fi
 
 # ── ARM 2 (operator surface) — see the contract block above. MUST precede the ledger-clean

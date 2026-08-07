@@ -35,6 +35,14 @@ setup() {
   export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/no-live-layer"
   export CC_MIGRATIONS_STATE="$BATS_TEST_TMPDIR/migrations"
   unset WRAP_LIVE_BUDGET_COMMITS WRAP_LIVE_BUDGET_MIN
+  # ⛔ rung: the same hermetic discipline, and it matters MORE here — ⛔ is computed
+  # UNCONDITIONALLY (it outranks every rung, so it cannot ride the ✅-eligible path), and this
+  # machine standingly carries ~21 open decision packets, several of them class-C. An unresolvable
+  # cc-decide reads BLOCKED_SRC=error and leaves the rung exactly as it was, so every pre-existing
+  # case above is provably unaffected and none of them forks the operator's REAL store.
+  export CC_DECIDE_BIN="$BATS_TEST_TMPDIR/absent-cc-decide"
+  export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
 }
 
 # read a KEY=value field from --machine output
@@ -557,6 +565,243 @@ mk_failed_migration() {
   printf '%s' "$output" | grep -q "within budget"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# ⛔ — an open class-C decision THIS SESSION filed (2026-08-07).
+# The HIGHEST-priority rung was the ONLY one with no sensor: "the model overlays it" is not a
+# mechanism, it is the absence of one. A close rendered "✅ SAFE TO CLOSE — nothing of mine is open"
+# — true over every git fact — while the model held a blocking operator decision it had demoted to
+# paragraph 4 of its own prose. Two properties are load-bearing and each gets BOTH directions:
+#   (1) SESSION-SCOPED — ~21 open decisions stand on this machine. A top rung counting those would
+#       fire at every close forever and carry zero bits (MEMORY.md alarm-polarity). The "another
+#       session" case below is the important negative, and it is proved LIVE before it is asserted.
+#   (2) CLASS C ONLY — a class-B packet's default FIRES at its deadline if nobody vetoes, so it
+#       resolves itself and is not a blocker. C is human-gated and waits.
+# cc-decide is the REAL binary here, against a per-test CC_DECISIONS_DIR: the predicate under test
+# is precisely the producer/consumer contract between the two files, so stubbing the producer would
+# test a hand-written approximation of the thing that ships (MEMORY.md control-must-replay-the-real-artifact).
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# point the ledger at the real cc-decide, whose store is this test's temp dir
+use_real_decide() { CC_DECIDE_BIN="$REPO/bin/cc-decide"; export CC_DECIDE_BIN; }
+
+# open a class-C decision owned by session $1, with prose $2. Echoes the packet id.
+open_blocking() { bash "$REPO/bin/cc-decide" open --class C --session-sid "$1" --what "$2"; }
+
+# ── 1. a class-C decision filed by THIS session ⇒ ⛔, and it names the decision ──
+@test "open class-C decision from THIS session ⇒ RUNG=⛔, BLOCKED=1, named in one line" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  open_blocking "$SID" "drop the legacy sessions table" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "WRAP_SESSION_ID" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=✅" || false
+  run bash "$LEDGER"                    # the default readout is ONE line that names the decision
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -q "⛔"
+  printf '%s' "$output" | grep -q "need your call: drop the legacy sessions table"
+}
+
+# ── 2. N>1 collapses to the command that lists them, never one fork's prose ──
+@test "two open class-C decisions ⇒ RUNG=⛔, BLOCKED=2, readout points at cc-decide list" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  open_blocking "$SID" "first fork"  >/dev/null
+  open_blocking "$SID" "second fork" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" BLOCKED)" = "2" ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  run bash "$LEDGER"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -q "2 decision(s) need your call"
+  printf '%s' "$output" | grep -q "cc-decide list --open"
+  ! printf '%s' "$output" | grep -q "first fork" || false   # never one fork's prose for many
+}
+
+# ── 3. NEGATIVE: class B is not a blocker — its default fires itself ──
+@test "open class-B from THIS session ⇒ NOT ⛔ (a B resolves itself at its deadline)" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  bash "$REPO/bin/cc-decide" open --class B --session-sid "$SID" --what "which account to continue on" \
+    --default "continue on next2" --deadline "2099-01-01T00:00:00Z" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  # PROVE THE FIXTURE CAN FIRE: same session, same store, only the CLASS differs.
+  open_blocking "$SID" "the human-gated one" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]      # the B is still not counted
+}
+
+# ── 4. NEGATIVE: a RESOLVED packet is not a blocker (the rung is not sticky) ──
+@test "a vetoed/actioned class-C ⇒ NOT ⛔ (status is the arbiter's, and it moved)" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  local id; id="$(open_blocking "$SID" "settle this one")"
+  run bash "$LEDGER" --machine                 # live first — the fixture provably fires
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  bash "$REPO/bin/cc-decide" veto "$id" --by operator >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  local id2; id2="$(open_blocking "$SID" "and this one")"
+  bash "$REPO/bin/cc-decide" action "$id2" --evidence "commit:abc" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+}
+
+# ── 5. THE always-fires guard, and the most important negative: ANOTHER session's decision ──
+@test "class-C filed by a DIFFERENT session ⇒ RUNG=✅, BLOCKED=0 (never the standing pile)" {
+  ok_state
+  use_real_decide
+  open_blocking "sess-someone-else" "a decision that is not mine" >/dev/null
+
+  # PROVE IT CAN FIRE FIRST — flip ONLY the session identity and nothing else. Without this the
+  # negative below passes vacuously for any reason at all (a broken binary, an empty store, a
+  # mis-resolved seam) and would keep passing after the session filter was deleted.
+  run bash "$LEDGER" --machine --session "sess-someone-else"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+
+  # ...now the assertion: same store, same packet, THIS session's id.
+  run bash "$LEDGER" --machine --session "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "flag" ]     # counted for real, not "could not tell"
+  ! printf '%s' "$output" | grep -q "^RUNG=⛔" || false
+}
+
+# ── 6. ⛔ OUTRANKS EVERYTHING — including a dirty tree, the rung it must beat ──
+@test "dirty tree + a blocking decision ⇒ RUNG=⛔ (⛔ outranks 🔧)" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  echo dirt >> base.txt                        # a real 🔧 the session owns
+  open_blocking "$SID" "authorise the destructive migration" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" DIRTY)" = "1" ]         # the loose end is real and still reported…
+  [ "$(field "$output" RUNG)" = "⛔" ]          # …and ⛔ still governs
+  # the CONTROL on the same fixture: remove only the decision and 🔧 comes back
+  rm -f "$CC_DECISIONS_DIR"/*.json
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "🔧" ]
+}
+
+@test "unlanded commit + a blocking decision ⇒ RUNG=⛔ (⛔ outranks 📦)" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  echo more > more.txt; git add more.txt; git commit -q -m "unlanded work"
+  open_blocking "$SID" "pick the rollback strategy" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" UNLANDED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+}
+
+# ── 7. an unreadable/absent cc-decide leaves the rung EXACTLY where it was (fail-OPEN) ──
+@test "absent cc-decide ⇒ BLOCKED_SRC=error, never ⛔, readout byte-identical to no-sensor" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  # (a) the seam pointed at a path that does not exist
+  export CC_DECIDE_BIN="$BATS_TEST_TMPDIR/no-such-cc-decide"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "error" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  local a; a="$(bash "$LEDGER")"
+
+  # (b) a binary that exists but exits non-zero — the other failure shape
+  local broken="$BATS_TEST_TMPDIR/cc-decide-broken"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$broken"; chmod +x "$broken"
+  export CC_DECIDE_BIN="$broken"
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" BLOCKED_SRC)" = "error" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  local b; b="$(bash "$LEDGER")"
+
+  # (c) a binary that returns a well-formed EMPTY board — the "read fine, zero rows" control
+  local empty="$BATS_TEST_TMPDIR/cc-decide-empty"
+  printf '#!/usr/bin/env bash\nprintf "[]\\n"\n' > "$empty"; chmod +x "$empty"
+  export CC_DECIDE_BIN="$empty"
+  local c; c="$(bash "$LEDGER")"
+
+  # An unreadable sensor must produce the SAME close as a sensor that read zero rows — that is what
+  # "never manufactures a rung" means from the operator's side, not just in a machine field.
+  [ "$a" = "$b" ]
+  [ "$b" = "$c" ]
+  ! printf '%s' "$b" | grep -q "⛔" || false
+}
+
+@test "cc-decide emitting UNPARSEABLE output ⇒ BLOCKED_SRC=error, never ⛔" {
+  ok_state
+  export WRAP_SESSION_ID="$SID"
+  local junk="$BATS_TEST_TMPDIR/cc-decide-junk"
+  printf '#!/usr/bin/env bash\nprintf "not json at all\\n"\n' > "$junk"; chmod +x "$junk"
+  export CC_DECIDE_BIN="$junk"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "error" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+}
+
+# ── 8. an unresolvable session NEVER manufactures a ⛔ (the YOURS_SRC=none law) ──
+@test "unresolvable session id ⇒ RUNG=✅, BLOCKED=0, BLOCKED_SRC=none (never a manufactured ⛔)" {
+  ok_state
+  use_real_decide
+  open_blocking "$SID" "a decision nobody can attribute" >/dev/null
+  run bash "$LEDGER" --machine                 # no --session, no WRAP_SESSION_ID/CLAUDE_SESSION_ID
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "none" ]
+  run bash "$LEDGER" --machine --session "$SID"   # the flag resolves it ⇒ the same state is ⛔
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED_SRC)" = "flag" ]
+}
+
+# ── 9. the --full ledger carries the Blocked row and a STOP-ASK next-verb ──
+@test "--full on ⛔ shows the Blocked row and a next-verb that is not 'continue'" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  open_blocking "$SID" "authorise the DROP" >/dev/null
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^Blocked on you:"
+  printf '%s' "$output" | grep -q "authorise the DROP"
+  printf '%s' "$output" | grep -q "⛔"
+  printf '%s' "$output" | grep -qi "STOP-ASK"
+  ! printf '%s' "$output" | grep -qi "Next:.*continue" || false
+}
+
+@test "--full with no decision of mine says so positively (not 'could not tell')" {
+  ok_state
+  use_real_decide
+  export WRAP_SESSION_ID="$SID"
+  open_blocking "sess-someone-else" "not mine" >/dev/null
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^Blocked on you:.*none — no decision of mine is open"
+}
+
 # ── 10. LADDER PARITY — a rung the producer can EMIT must reach the docs that ROUTE it ──────────
 #
 # THE DEFECT THIS PINS (backlog 804e832f4283; docs/plans/INERTNESS_FACES_3_4_DELTA.md). Adding the
@@ -599,8 +844,8 @@ missing_from_ladder() {
   # every parity test below pass while asserting exactly nothing, so pin the SET, not just a count.
   run rungs_emitted
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | grep -c .)" -eq 5 ]
-  local r; for r in '✅' '🔧' '📦' '🚀' '👤'; do
+  [ "$(printf '%s' "$output" | grep -c .)" -eq 6 ]
+  local r; for r in '✅' '🔧' '📦' '🚀' '👤' '⛔'; do
     printf '%s' "$output" | grep -q "$r" || { echo "extractor lost rung $r"; false; }
   done
 }

@@ -28,7 +28,9 @@
 #             Echoes the id.
 #   veto   <id> [--by who]                 open → vetoed   (operator killed the default)
 #   action <id> [--evidence ref]           open → actioned (the decision was carried out)
-#   list   [--open | --all | --class X | --expiring]     (default --open)
+#   list   [--open | --all | --class X | --expiring] [--json]     (default --open)
+#          --json emits the FULL matching packets as ONE JSON array (never the table), so a
+#          consumer can filter on fields the table does not carry — `session_sid` above all.
 #   expire-sweep    class-B past veto_deadline & open ⇒ expired-actioned, and REPORT the fired
 #                   default line to stdout for the CALLER to act on:
 #                     "fired\t<id>\t<subject_project|->\t<change|no-change>\t<default>"
@@ -223,29 +225,65 @@ cmd_transition() {
   echo "$id"
 }
 
+# ── the ONE select predicate `list` owns ───────────────────────────────────────────────────────
+# Written once and shared by BOTH renderings (table and --json). cc-decide is the arbiter of what
+# "open"/"expiring" MEAN for a packet (memory: make-the-actuator-the-arbiter), so a second copy of
+# this jq — in the --json leg, or worse in a consumer — would be a second, independently-rotting
+# definition of the board. `--json` exists precisely so a consumer never has to write one.
+# shellcheck disable=SC2016  # $classf/$mode are JQ variables bound by --arg, not shell expansions;
+# single quotes are exactly right here and double-quoting would let the shell eat them.
+LIST_SELECT='select($classf == "" or .class == $classf)
+      | select(
+          $mode == "all"
+          or ($mode == "open"     and sopen == "open")
+          or ($mode == "expiring" and sopen == "open" and .class == "B" and (.veto_deadline // "") != "")
+        )'
+
 cmd_list() {
-  local mode="open" classf=""
+  local mode="open" classf="" as_json=0 f
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --open)     mode="open" ;;
       --all)      mode="all" ;;
       --expiring) mode="expiring" ;;
+      --json)     as_json=1 ;;
       --class)    classf="${1:-}"; [ $# -gt 0 ] && shift ;;
       *) printf 'cc-decide list: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
+
+  # ── --json: the FULL packets, as ONE array ───────────────────────────────────────────────────
+  # A consumer reads this to answer questions the table cannot even express — "is an open class-C
+  # packet MINE?" needs `session_sid`, which the five table columns drop. The array is emitted even
+  # when EMPTY: `[]` says "read fine, zero rows", and silence says "the read failed". Those are
+  # different facts, and a consumer that cannot tell them apart will either manufacture a verdict
+  # from a failure or swallow one (MEMORY.md lookup-miss-is-not-absence). `jq -s` is what
+  # guarantees it — on empty stdin it prints `[]`, so the zero-row path needs no special case.
+  # `.status` is FOLDED to the same value the table's status column shows: an absent/empty status
+  # is a legacy `shipland-esc-*` packet the SFOLD prelude already resolves to "open", and shipping
+  # a view in which that field reads null would hand every consumer the exact `select` bug the fold
+  # exists to fix. The file on disk is untouched — inv7 governs the PACKET, not the view of it.
+  if [ "$as_json" -eq 1 ]; then
+    local rows
+    if [ -d "$DECISIONS_DIR" ]; then
+      rows="$(
+        for f in "$DECISIONS_DIR"/*.json; do
+          [ -e "$f" ] || continue
+          jq -c --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD$LIST_SELECT"'
+            | .status = sopen' "$f" 2>/dev/null
+        done | jq -s '.' 2>/dev/null
+      )"
+    fi
+    [ -n "${rows:-}" ] || rows="[]"
+    printf '%s\n' "$rows"
+    return 0
+  fi
+
   [ -d "$DECISIONS_DIR" ] || return 0
-  local f
   for f in "$DECISIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
-    jq -r --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD"'
-      select($classf == "" or .class == $classf)
-      | select(
-          $mode == "all"
-          or ($mode == "open"     and sopen == "open")
-          or ($mode == "expiring" and sopen == "open" and .class == "B" and (.veto_deadline // "") != "")
-        )
+    jq -r --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD$LIST_SELECT"'
       | [ (sopen | cell("?")), (.class | cell("?")), (.id | cell("?")),
           (.veto_deadline | cell("-")), (.what_plain | cell("?")) ] | @tsv
     ' "$f" 2>/dev/null

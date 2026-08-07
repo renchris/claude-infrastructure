@@ -21,6 +21,18 @@ setup() {
   # $CLAUDE_SESSION_ID. An ambient value from the running session would give it a second way to
   # resolve a sid, so the flag under test would no longer be the only path.
   unset CLAUDE_SESSION_ID WRAP_SESSION_ID
+  # HERMETIC #2 — THE SUITE MUST NOT BE A FUNCTION OF WHO RUNS IT (found 2026-08-07: 9 of these
+  # tests went RED, and ONLY when the suite was run from inside an Agent-Teams assignee session).
+  # The attribution guard's `_ca_assignee` reads the RUNNING PROCESS's ancestry, so an assignee
+  # executing bats is itself "a confirmed assignee" — and every fixture here is write-free by
+  # construction (mkfix records no tool_use), which is exactly the pair the hook exonerates. The
+  # fixture transcript is a fixture; the ancestry it should be judged against is the fixture's, not
+  # the harness's. So pin the axis OFF via the documented hard override (a missing file ⇒ "no lib"
+  # ⇒ not an assignee ⇒ stay strict), which is the disposition every one of these cases was written
+  # against. Same class as MEMORY.md guard-refusal-fires-on-its-own-harness.
+  # The three `attribution:` tests below are UNAFFECTED — they record real writes, so they take the
+  # normal intersection path and never reach this branch.
+  export AGENT_IDENTITY_LIB="$BATS_TEST_TMPDIR/no-such-agent-identity.sh"
   # ARM 2 / D1 disk oracle — ALWAYS a stub, never the real bin/cc-backlog: the real one reads the
   # live backlog ledger (and is edited by other sessions), which would make this suite a function
   # of someone else's state. CC_BACKLOG_STUB_JSON / _RC drive it per-test; the default is the
@@ -743,4 +755,99 @@ PY
   run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
   [ "$status" -eq 0 ]
   if printf '%s' "$output" | /usr/bin/grep -q '"decision":"block"'; then return 1; fi
+}
+
+# ── ⛔ BLOCKED ON THE OPERATOR: the rung the guard was never taught (2026-08-07) ────────────────
+# A close read "✅ SAFE TO CLOSE — nothing of mine is open" — true over every git fact — while a
+# blocking operator decision sat in paragraph 4 of its own prose. The term CONSUMES wrap-ledger's
+# RUNG verdict (it never re-derives it and never reads the cc-decide store), so the fixture is a
+# STUB LEDGER through the hook's WRAP_LEDGER_BIN seam: the ledger's own suite proves it can compute
+# ⛔, and what is untested here is whether the hook honours it.
+#
+# NOTE (contradicts the brief): the pre-existing suite does NOT stub WRAP_LEDGER_BIN — every case
+# above drives the REAL scripts/wrap-ledger.sh over a throwaway git fixture. This stub is new, and
+# is deliberately confined to the cases below so no existing case changes oracle.
+mkledger() { # $1=tag  $2..=KEY=VAL lines → echoes a stub wrap-ledger path (caller EXPORTs it; an
+             # export inside the `$( )` this is called from dies with the subshell)
+  local p="$BATS_TEST_TMPDIR/wl-$1.sh" f; shift
+  { printf '%s\n' '#!/usr/bin/env bash'
+    for f in "$@"; do printf 'printf "%%s\\n" %s\n' "'$f'"; done
+  } > "$p"
+  printf '%s' "$p"
+}
+CA_BLOCKED_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin/main BLOCKED=1 RUNG=⛔)
+
+@test "⛔: a confident done-assertion while the ledger says BLOCKED ⇒ FIRE" {
+  WRAP_LEDGER_BIN="$(mkledger blk1 "${CA_BLOCKED_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'BLOCKED ON YOU'
+  printf '%s' "$output" | /usr/bin/grep -q '1 decision(s) filed this session are open'
+  printf '%s' "$output" | /usr/bin/grep -q 'cc-decide list --open'
+  /usr/bin/grep -q '"arm":"ledger"' "$COMPLETION_IDL"
+  /usr/bin/grep -q '"rung":"⛔"' "$COMPLETION_IDL"
+}
+
+# The fixture must be able to go BOTH ways, or the positive above is vacuous: the SAME close over a
+# ✅ ledger is the legitimate close this guard must never touch.
+@test "⛔ CONTROL: the SAME close over a ✅ ledger ⇒ ABSTAIN (ledger-clean)" {
+  WRAP_LEDGER_BIN="$(mkledger blk2 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}
+
+# The close-tell gate (hooks/completion-assert.sh, the CLOSE / CA_SETTLED test) still governs: a
+# ⛔ ledger alone is not a fire — this hook judges a CLOSE, not a session.
+@test "⛔: a message that is not a close ⇒ ABSTAIN no-close-tell even over a ⛔ ledger" {
+  WRAP_LEDGER_BIN="$(mkledger blk3 "${CA_BLOCKED_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "Investigating the auth flow; the grep returned four call sites.")" \
+             "$BATS_TEST_TMPDIR" "blk-3"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"no-close-tell"' "$COMPLETION_IDL"
+}
+
+# A ledger that cannot compute its rung abstains BEFORE any term reads it — unchanged by this term.
+@test "⛔: an uncomputable rung (RUNG=?) ⇒ ABSTAIN ledger-uncomputable, unchanged" {
+  WRAP_LEDGER_BIN="$(mkledger blk4 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=1 'RUNG=?')"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-4"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-uncomputable"' "$COMPLETION_IDL"
+}
+
+# A non-numeric / absent BLOCKED must not break the term or emit a garbage count — it degrades to
+# the `?` sentinel, exactly as LIVE_LAG does in the 🚀 term.
+@test "⛔: a BLOCKED field that is absent degrades to '?' and still fires" {
+  WRAP_LEDGER_BIN="$(mkledger blk5 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main RUNG=⛔)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-5"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q '? decision(s) filed this session are open'
+}
+
+# The one-shot latch bounds the new term exactly as it bounds the others.
+@test "⛔ LATCH: the identical close fires once, then silent" {
+  WRAP_LEDGER_BIN="$(mkledger blk6 "${CA_BLOCKED_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  local tx; tx="$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")"
+  run run_ca "$tx" "$BATS_TEST_TMPDIR" "blk-latch"; [ "$status" -eq 0 ]; fired "$output"
+  run run_ca "$tx" "$BATS_TEST_TMPDIR" "blk-latch"; [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"latched-already-fired"' "$COMPLETION_IDL"
+}
+
+# …and so does COMPLETION_MAX, on DISTINCT closes (which the latch cannot bound).
+@test "⛔ CAP: distinct ⛔ closes fire to COMPLETION_MAX then go silent" {
+  export COMPLETION_MAX=1
+  WRAP_LEDGER_BIN="$(mkledger blk7 "${CA_BLOCKED_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-cap"
+  [ "$status" -eq 0 ]; fired "$output"
+  run run_ca "$(mkfix "All complete — nothing to do.")" "$BATS_TEST_TMPDIR" "blk-cap"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"capped:1>=1"' "$COMPLETION_IDL"
 }
