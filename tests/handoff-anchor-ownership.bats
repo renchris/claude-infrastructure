@@ -263,3 +263,41 @@ PY
   run bash -c "sed -n '/^resolve_headless_anchor()/,/^}/p' '$FIRE' | grep -q 'it2py anchor .*2>/dev/null'"
   [ "$status" -ne 0 ]
 }
+
+# ── (h) the desk ARM is ownership-gated too (D7, 2026-08-07) ──────────────────────────
+# Peer finding, verified: pick()'s desk arm returned the hint unconditionally — agent_owned()
+# gated only the fallback walk — so any live operator window written into cc-roles/desk re-armed
+# the theft class through a valid-digit id the isdigit guard cannot catch (it checks ID SPACE,
+# not ownership). The remedy demotes, loudly, and ONLY for anchoring: the role's receiver use
+# (cc-notify) is untouched by the picker and must stay valid at any ownership.
+
+@test "a desk role naming a live NON-agent-owned window is demoted to the walk (loud), never taken" {
+  own 300
+  # 200 is live, listed, and named by the desk role — but carries NO fired-peer marker: an
+  # operator's own window. The pre-D7 picker returned it unconditionally (the trapdoor).
+  run bash -c "$(declare -f ls_json); ls_json 200:true 300:false | \
+    ADESK=200 ACAP=5 ACC_HOME='$HOME/.claude' /usr/bin/python3 '$PICKER' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "${output%% *}" = "300" ] || false
+  # and LOUDLY: the demotion is named on stderr, and names the receiver/anchor split
+  run bash -c "$(declare -f ls_json); ls_json 200:true 300:false | \
+    ADESK=200 ACAP=5 ACC_HOME='$HOME/.claude' /usr/bin/python3 '$PICKER' 2>&1 >/dev/null"
+  echo "$output" | grep -q 'demoted for ANCHORING'
+  echo "$output" | grep -q 'notify target'
+}
+
+@test "CONTROL: an agent-owned desk window is still taken by the desk arm" {
+  own 200
+  own 300
+  # 300 is enumerated FIRST and also owned, so a walk-take would return 300 — output 200 proves
+  # the DESK ARM took it, not the walk (the discrimination the previous test's oracle needs).
+  run bash -c "$(declare -f ls_json); ls_json 300:false 200:false | \
+    ADESK=200 ACAP=5 ACC_HOME='$HOME/.claude' /usr/bin/python3 '$PICKER'"
+  [ "$status" -eq 0 ]
+  [ "${output%% *}" = "200" ] || false
+  # no demotion line for a provably-owned desk (positive control beside the absence assertion)
+  run bash -c "$(declare -f ls_json); ls_json 300:false 200:false | \
+    ADESK=200 ACAP=5 ACC_HOME='$HOME/.claude' /usr/bin/python3 '$PICKER' 2>&1 >/dev/null"
+  { ! echo "$output" | grep -q 'demoted for ANCHORING'; } || false
+  echo "$output" | grep -vq 'Warning' || [ -z "$output" ]
+}
