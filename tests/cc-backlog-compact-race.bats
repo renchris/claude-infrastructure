@@ -140,8 +140,26 @@ SH
   printf '{"id":"cccccccccccc","ts":"%s","event":"add","project":"p","title":"keep","dodRef":"","source":"s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_BACKLOG_FILE"
   mkdir -p "$CC_BACKLOG_LOCK_DIR"
-  sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true
-  printf '%s\n' "$p" > "$CC_BACKLOG_LOCK_DIR/owner"     # dead holder
+  # A DEAD HOLDER THAT CANNOT COME BACK TO LIFE. This fixture used to mint one by reaping a real
+  # child (`sleep 1 &` → kill → wait), which is dead only until the kernel WRAPS the pid space and
+  # hands that number to something else — and then compact's `kill -0` reads the holder as LIVE,
+  # correctly refuses (rc 5), and this test fails for a reason that is about the box, not the code.
+  # Measured on this box 2026-08-07: ~322 pids/s against Darwin's 99999-wide space is a full wrap
+  # every ~310 s, versus a 0.2-1 s window (several seconds in the corpus's background band) between
+  # the fixture and the probe. A per-run reuse chance of a few percent is enough, because the
+  # post-land ladder pre-seeds fails=1 from the corpus run and convicts at 2/3 — so ONE reuse
+  # promotes an occasional race straight to a permanent hard RED. It did: flakes.jsonl records this
+  # test 1-of-3 on 2026-08-01 and 2026-08-02, then `RED 7113e96da80c` on 2026-08-07, while the same
+  # test runs green 250/250 standalone. Backlog 2a8cbc4a5d8f names this file and prescribes exactly
+  # this: harden the racy test so it is load-independent.
+  #
+  # Darwin caps pids at PID_MAX (99999) and exposes no sysctl to read it, so the bound is ASSERTED
+  # here rather than trusted — a fixture that quietly stopped being dead is the defect being removed,
+  # so it has to be able to notice. `kill -0` on an unallocatable pid is ESRCH, same as on a reaped
+  # one, so the branch under test (`case` → numeric token → `kill -0` → steal) is unchanged.
+  local dead=100001
+  while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+  printf '%s\n' "$dead" > "$CC_BACKLOG_LOCK_DIR/owner"     # dead holder, unreusable by construction
   run bash "$CB" compact --older-than-days 1
   [ "$status" -eq 0 ] || { echo "a dead holder's lock blocked compact: $output"; false; }
   [ ! -d "$CC_BACKLOG_LOCK_DIR" ] || { echo "compact did not release its lock"; false; }
