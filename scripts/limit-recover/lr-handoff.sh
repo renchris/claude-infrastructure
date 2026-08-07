@@ -277,6 +277,25 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   FIRED=""
   IN_KITTY=0
   if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+  # An explicit socket is explicit intent (bin/it2-kitty:197) — honor it even with no kitty env.
+  if [ "$IN_KITTY" = 0 ] && [ -n "${CC_TERM_KITTY_TO:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+  # DAEMON-CONTEXT DISPATCH (2026-08-07). This file's caller of record is lr-reset-poller — a
+  # launchd job with NO kitty env — so the env test above reads iTerm2 for a fleet that lives in
+  # kitty, and the fallback chain below drives AppleScript at an app the operator abandoned.
+  # bin/cc-kitty-socket verifies a LIVE kitty by its control socket; with IN_KITTY=1 and no
+  # invoking pane (OWN_PANE empty under launchd), the existing `elif IN_KITTY` arm below already
+  # fires the right intent: a new kitty os-window through lrh_kitty/CC_TERM_KITTY_TO. Env still
+  # wins when present; the resolver decides only the ABSENT case.
+  if [ "$IN_KITTY" = 0 ] && [ -z "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
+    _lrh_sock=""
+    for _lrh_ksb in "$(dirname "$_CC_KS")/../../bin/cc-kitty-socket" \
+                    "$(dirname "$0")/../../bin/cc-kitty-socket" \
+                    "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/bin/cc-kitty-socket" \
+                    "${HOME:-}/.claude/bin/cc-kitty-socket"; do
+      [ -x "$_lrh_ksb" ] && { _lrh_sock="$(lrh_bounded "$_lrh_ksb" 2>/dev/null)" || _lrh_sock=""; break; }
+    done
+    if [ -n "$_lrh_sock" ]; then CC_TERM_KITTY_TO="$_lrh_sock"; export CC_TERM_KITTY_TO; IN_KITTY=1; fi
+  fi
   if [[ -n "${ITERM_SESSION_ID:-}" && $IN_KITTY -eq 1 ]]; then
     # A kitty window id is always an integer. A non-integer means the id came from a real-iTerm2
     # run; refuse the split rather than let --match fall through to the operator's ACTIVE window.
