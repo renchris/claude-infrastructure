@@ -7,6 +7,10 @@
 #   cc-reaper sweep            DRY-RUN — classify + show what WOULD be reaped/paged (default; writes nothing)
 #   cc-reaper sweep --reap     ACT — checkpoint → re-verify → cc-teardown safe candidates; PAGE the desk on
 #                              never-reap-but-surface causes; run the enumerated≈live-panes self-check
+#   cc-reaper garbage          DRY-RUN the garbage arm alone — the residue of DEAD sessions (orphaned
+#                              ps/tools/shells, stuck cc-close-attrib wrappers, dead-lead watchdog
+#                              daemons). `--reap` to act. Never a claude binary, never a live
+#                              session's subtree, never a whitelisted daemon. Off: CC_REAPER_GARBAGE=0
 #   cc-reaper watchdog-census  CENSUS ONLY — classify the lead-crash-watchdog daemon population from
 #                              the PROCESS TABLE {tracked-live | tracked-orphan | UNTRACKED-orphan |
 #                              stale-file}, reconcile against the daemon's own log, PRINT the reap
@@ -270,6 +274,117 @@ _rp_bounded() { # <secs> <cmd...> — run bounded; rc 124 = the bound fired
   local s="${1:-60}"; shift
   if [ -z "$_RP_TIMEOUT_BIN" ] || [ ! -x "$_RP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
   "$_RP_TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+
+# ── GARBAGE ARM (2026-08-07, the load-781 incident). The meltdown was not sessions — it was the
+# residue of DEAD ones, which no sweep owned: 3,599 processes of which 1,146 were `ps` (959
+# orphaned to launchd, ~288% CPU in aggregate), 299 orphaned interactive zsh, 43 cc-close-attrib
+# wrappers outliving their dead binary (their >(tee) never EOFs — the session's own orphans hold
+# the fd2 write-end), and lead-crash-watchdog daemons polling for leads that died hours earlier.
+# Each orphan `ps` walk slows every other, so the pile is self-amplifying — and it starves THIS
+# sweep's own bounds (reconcile 60s, classify 90s), which is why the reaper read "NO candidates
+# (fail-closed)" at precisely the moment reaping mattered most. The arm therefore runs FIRST and
+# is deliberately cheap: two /bin/ps forks + one awk, then explicit per-pid kills.
+#
+# KILL DISCIPLINE (hard rules): explicit pids from ONE snapshot · per-pid ucomm re-verification at
+# kill time (a recycled pid whose comm changed is skipped) · TERM then KILL · NEVER a pattern-kill
+# · NEVER a claude binary, kitty, iTerm2, tmux, or any pid whose SUBTREE holds a live claude ·
+# NEVER a whitelisted daemon. Fail-open everywhere: any error skips that pid and the sweep goes on.
+# DRY-RUN (no --reap) prints candidates and kills nothing. Kill switch: CC_REAPER_GARBAGE=0.
+# Seams (tests): CC_REAPER_GARBAGE_PS_A/_PS_B fixture files replace the live snapshots;
+# CC_REAPER_GARBAGE_KILL replaces kill(1) with a collector; CC_REAPER_WATCHDOG_DIR relocates the
+# watchdog pid-file store.
+_gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> — re-verify comm, then signal. rc 0 = signalled
+  local pid="$1" re="$2" sig="$3" c
+  if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig"; return $?; fi
+  c="$(/bin/ps -p "$pid" -o ucomm= 2>/dev/null | sed 's/^ *//;s/ *$//')"
+  [ -n "$c" ] || return 1
+  printf '%s\n' "$c" | /usr/bin/grep -qE "$re" || return 1
+  kill "-$sig" "$pid" 2>/dev/null
+}
+garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block comment above
+  [ "${CC_REAPER_GARBAGE:-1}" = 1 ] || { log "garbage: disabled (CC_REAPER_GARBAGE=0)"; return 0; }
+  local reap="${1:-0}" snapA snapB list cls pid re age desc
+  local nA=0 nkill=0 termed=""
+  if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] && [ -n "${CC_REAPER_GARBAGE_PS_B:-}" ]; then
+    snapA="$(cat "$CC_REAPER_GARBAGE_PS_A" 2>/dev/null)" || snapA=""
+    snapB="$(cat "$CC_REAPER_GARBAGE_PS_B" 2>/dev/null)" || snapB=""
+  else
+    snapA="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,ppid=,etime=,ucomm= 2>/dev/null)" || snapA=""
+    snapB="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,args= 2>/dev/null)" || snapB=""
+  fi
+  [ -n "$snapA" ] || { log "garbage: snapshot unavailable — arm skipped (fail-open)"; return 0; }
+  # One awk, both snapshots: emits `class<TAB>pid<TAB>ucomm-ERE<TAB>age<TAB>desc` per candidate.
+  list="$(printf '%s\n===CUT===\n%s\n' "$snapA" "$snapB" | awk '
+    function esec(e,  d,a,n,hms) { d=0; if (index(e,"-")>0) { split(e,a,"-"); d=a[1]; e=a[2] }
+      n=split(e,hms,":");
+      if(n==3) return d*86400+hms[1]*3600+hms[2]*60+hms[3];
+      if(n==2) return d*86400+hms[1]*60+hms[2];
+      return d*86400+hms[1] }
+    /^===CUT===$/ { part=2; next }
+    part!=2 { if ($1 !~ /^[0-9]+$/) next
+      pid=$1; nm=$4; for(i=5;i<=NF;i++) nm=nm" "$i
+      parent[pid]=$2; secs[pid]=esec($3); comm[pid]=nm; next }
+    { if ($1 !~ /^[0-9]+$/) next
+      a=$2; for(i=3;i<=NF;i++) a=a" "$i; args[$1]=a }
+    END {
+      # mark every ANCESTOR of a live claude binary: nothing above a live session is touchable
+      for (p in comm) if (comm[p]=="claude.exe" || args[p] ~ /node_modules\/\.bin\/claude/) cl[p]=1
+      for (p in cl) { q=parent[p]; while (q!="" && q>1 && !(q in above)) { above[q]=1; q=parent[q] } }
+      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|kitty|tmux|iTerm|launchd"
+      for (p in comm) {
+        if (p in above) continue
+        if (comm[p]=="claude.exe") continue
+        if (parent[p]==1) {
+          if (comm[p]=="ps" && secs[p]>=60)                    { printf "orphan-ps\t%s\t^ps$\t%s\t-\n", p, secs[p]; continue }
+          if (comm[p] ~ /^(awk|grep|egrep|tee|sed|cat|tail|wc|jq|sleep|gtimeout|timeout)$/ && secs[p]>=120) { printf "orphan-tool\t%s\t^%s$\t%s\t-\n", p, comm[p], secs[p]; continue }
+          if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t-\n", p, secs[p]; continue }
+          if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\n", p, secs[p], substr(args[p],1,80); continue }
+        }
+        if (comm[p]=="bash" && args[p] ~ /cc-close-attrib/ && secs[p]>=1800) printf "stuck-wrapper\t%s\t^bash$\t%s\t-\n", p, secs[p]
+      }
+    }')"
+  # lead-crash-watchdog daemons whose lead is DEAD — file-driven (the .pid file holds the lead pid,
+  # the .daemon file its own), so a live session's watchdog can never match.
+  local wdir="${CC_REAPER_WATCHDOG_DIR:-$HOME/.claude/watchdog}" df sid dpid lpid dargs
+  for df in "$wdir"/*.daemon; do
+    [ -f "$df" ] || continue
+    sid="$(basename "$df" .daemon)"
+    dpid="$(cat "$df" 2>/dev/null)"; lpid="$(cat "$wdir/$sid.pid" 2>/dev/null)"
+    case "$dpid" in ''|*[!0-9]*) continue ;; esac
+    case "$lpid" in ''|*[!0-9]*) continue ;; esac
+    if ! kill -0 "$lpid" 2>/dev/null && kill -0 "$dpid" 2>/dev/null; then
+      if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then
+        list="$(printf '%s\n%s\t%s\t%s\t%s\t%s' "$list" "dead-lead-watchdog" "$dpid" "^bash$" "-" "sid:$sid")"
+      else
+        dargs="$(/bin/ps -p "$dpid" -o args= 2>/dev/null)"
+        case "$dargs" in *lead-crash-watchdog*) list="$(printf '%s\n%s\t%s\t%s\t%s\t%s' "$list" "dead-lead-watchdog" "$dpid" "^bash$" "-" "sid:$sid")" ;; esac
+      fi
+    fi
+  done
+  [ -n "$list" ] || { log "garbage: 0 candidates"; return 0; }
+  while IFS="$(printf '\t')" read -r cls pid re age desc; do
+    [ -n "$pid" ] || continue
+    case "$pid" in *[!0-9]*) continue ;; esac
+    nA=$((nA+1))
+    if [ "$reap" = 1 ]; then
+      _gs_verify_kill "$pid" "$re" TERM && { nkill=$((nkill+1)); termed="$termed $pid:$re"; }
+    else
+      say "  garbage (would reap): $cls pid=$pid age=${age}s $desc"
+    fi
+  done <<EOF_GS
+$list
+EOF_GS
+  if [ "$reap" = 1 ] && [ -n "$termed" ]; then
+    [ -n "${CC_REAPER_GARBAGE_KILL:-}" ] || sleep 3
+    local pair
+    for pair in $termed; do
+      kill -0 "${pair%%:*}" 2>/dev/null && _gs_verify_kill "${pair%%:*}" "${pair#*:}" KILL
+    done
+  fi
+  log "garbage: $nA candidates, $nkill TERMed ($([ "$reap" = 1 ] && echo REAP || echo DRY-RUN))"
+  say "garbage arm: $nA candidates, $nkill reaped"
+  return 0
 }
 
 utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null; }
@@ -687,6 +802,11 @@ sweep() {
   sweep_t0="$(reaper_now)"; case "$sweep_t0" in ''|*[!0-9]*) sweep_t0="$(date +%s)" ;; esac
   last_beat="$(cat "$BEAT_FILE" 2>/dev/null || echo 0)"; case "$last_beat" in ''|*[!0-9]*) last_beat=0 ;; esac
   inter_gap=0; [ "$last_beat" -gt 0 ] && inter_gap=$(( sweep_t0 - last_beat ))
+  # Garbage FIRST — before reconcile and classify, because the garbage is what starves their
+  # bounds: on 2026-08-07 (load 781) every sweep read "bound-fired classify … NO candidates
+  # (fail-closed)" while 959 orphaned `ps` chewed ~288% CPU. Reaping the residue is cheap and
+  # makes the expensive phases fit their bands again. Same reap/dry-run gate as everything else.
+  garbage_sweep "$reap" || true
   # Self-heal the registry BEFORE enumerating, so a pane that missed SessionStart is backfilled and
   # ENUMERATED this same sweep (delta closes) rather than only surfaced. Additive + idempotent; gated on
   # --reap so a DRY-RUN sweep still writes nothing (its self-check then reports the true pre-heal delta).
@@ -708,10 +828,20 @@ sweep() {
   local cj crc classify_t0
   cj="$(_rp_bounded "${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}" "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
   if [ "$crc" = 124 ]; then
-    # The evidence producer itself wedged. There is no verdict this sweep, so there is nothing to act
-    # on — a bounded classify must yield an EMPTY candidate set, never a partial one a reap could ride.
-    say "cc-classify exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — no verdict this sweep; reaping nothing"
-    log "bound-fired classify: exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — sweep yields NO candidates (fail-closed)"
+    # BOUND-FIT-THE-BAND (2026-08-07): 90s was sized on a healthy box. Under exactly the overload
+    # a sweep exists to relieve, a fixed bound is a PERMANENT non-verdict — every sweep of the
+    # load-781 incident logged this line while 153 panes accumulated, so the mechanism designed to
+    # relieve pressure was disabled BY the pressure. One retry at 3× keeps the fail-closed
+    # contract (still never a partial verdict) while giving the producer a band-fitted budget.
+    log "bound-fired classify: exceeded ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90}s — retrying once at 3x"
+    cj="$(_rp_bounded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 )) "$CLASSIFY_BIN" --all --json 2>/dev/null)"; crc=$?
+  fi
+  if [ "$crc" = 124 ]; then
+    # The evidence producer itself wedged, twice. There is no verdict this sweep, so there is nothing
+    # to act on — a bounded classify must yield an EMPTY candidate set, never a partial one a reap
+    # could ride.
+    say "cc-classify exceeded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 ))s even on retry — no verdict this sweep; reaping nothing"
+    log "bound-fired classify: retry exceeded $(( ${CC_REAPER_CLASSIFY_TIMEOUT_S:-90} * 3 ))s — sweep yields NO candidates (fail-closed)"
     cj='[]'
   fi
   case "$cj" in '') cj='[]' ;; esac
@@ -1352,9 +1482,15 @@ case "${1:-}" in
   # CENSUS ONLY and therefore unlocked: it kills nothing and writes nothing, so it has no state to
   # race a sweep on, and it must stay available during exactly the long sweep that made someone ask.
   watchdog-census|--watchdog-census) watchdog_census "${2:-}" ;;
+  # The garbage arm standalone — DRY-RUN by default, --reap to act. Unlocked like the census: its
+  # candidate set (orphans of DEAD parents, stuck wrappers, dead-lead watchdogs) is disjoint from
+  # what a concurrent sweep classifies, its kills are per-pid re-verified, and it is exactly the
+  # command an operator wants DURING the overload a locked sweep is stuck in.
+  garbage)      if [ "${2:-}" = "--reap" ]; then garbage_sweep 1; else garbage_sweep 0; fi ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
-  # 2,25 not 2,20: the watchdog-census entry above added 5 header lines, and a fixed window would
-  # have silently pushed that much of the existing help off the end.
-  -h|--help|"") sed -n '2,25p' "$0"; exit 0 ;;
-  *)            echo "cc-reaper: unknown command '$1' (sweep | watchdog-census | selftest)" >&2; exit 2 ;;
+  # 2,30 not 2,25: the garbage entry above added 5 header lines, and a fixed window would
+  # have silently pushed that much of the existing help off the end (same bump the
+  # watchdog-census entry forced before it).
+  -h|--help|"") sed -n '2,30p' "$0"; exit 0 ;;
+  *)            echo "cc-reaper: unknown command '$1' (sweep | garbage | watchdog-census | selftest)" >&2; exit 2 ;;
 esac

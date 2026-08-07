@@ -1212,3 +1212,125 @@ hold_lock() { mkdir -p "$CC_REAPER_LOCKDIR"; printf '%s\n' "$1" > "$CC_REAPER_LO
   echo "$output" | grep -q 'classified'
   [ -d "$CC_REAPER_LOCKDIR" ]                          # and it left the holder's lock untouched
 }
+
+# ── GARBAGE ARM (2026-08-07, the load-781 incident) — fully fixture-driven: PS_A/PS_B replace
+# the live process table, CC_REAPER_GARBAGE_KILL collects instead of killing, and the watchdog
+# store is relocated. The fixture is a CLOSED world, so the exact-set assertion is the right
+# one here (nothing outside the table can appear).
+
+mk_garbage_fixtures() {
+  GA="$D/gs_ps_a.txt"; GB="$D/gs_ps_b.txt"; KLOG="$D/gs_kills.log"
+  cat > "$D/gs-killer" <<'EOF'
+#!/bin/bash
+printf '%s %s %s\n' "$3" "$1" "$2" >> "$KILL_LOG"
+EOF
+  chmod +x "$D/gs-killer"
+  mkdir -p "$D/gs-wd"
+  export CC_REAPER_GARBAGE_PS_A="$GA" CC_REAPER_GARBAGE_PS_B="$GB" \
+         CC_REAPER_GARBAGE_KILL="$D/gs-killer" KILL_LOG="$KLOG" \
+         CC_REAPER_WATCHDOG_DIR="$D/gs-wd"
+  : > "$KLOG"
+  # pid ppid etime ucomm — the closed world. 9xxxx pids never exist on the host, so the KILL
+  # escalation pass (which does a REAL kill -0 existence check) skips them by construction.
+  cat > "$GA" <<'EOF'
+90001 1 25:00 ps
+90002 1 00:30 ps
+90003 1 45:00 zsh
+90004 1 45:00 zsh
+90014 90004 20:00 claude.exe
+90005 1 45:00 bash
+90006 1 45:00 bash
+90007 555 40:00 bash
+90008 556 40:00 bash
+90018 90008 39:00 claude.exe
+90013 1 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90001 ps -A -o pid= -o ppid=
+90002 ps -A -o pid= -o ppid=
+90003 -zsh
+90004 -zsh
+90014 /Users/x/.claude-220/node_modules/.bin/claude --model m
+90005 bash /Users/x/Development/claude-infrastructure/scripts/lead-supervisor.sh --daemon
+90006 bash /Users/x/.claude/hooks/session-register.sh
+90007 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+90008 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/.claude-220/node_modules/.bin/claude --model m
+90018 /Users/x/.claude-220/node_modules/.bin/claude --model m
+90013 bash /Users/x/.claude/hooks/lead-crash-watchdog.sh
+EOF
+}
+
+@test "garbage --reap: exactly the residue dies — orphan ps/zsh/bash + stuck wrapper; nothing protected" {
+  mk_garbage_fixtures
+  # dead-lead watchdog: lead 999999 is dead by construction; the daemon pid must be LIVE for the
+  # arm to bother, so use OUR OWN pid (fixture-kill mode skips the args identity check).
+  printf '%s' "$$" > "$D/gs-wd/sid-a.daemon"; printf '999999' > "$D/gs-wd/sid-a.pid"
+  # a watchdog whose daemon is ALREADY dead must be ignored (nothing to reap)
+  printf '999998' > "$D/gs-wd/sid-b.daemon"; printf '999997' > "$D/gs-wd/sid-b.pid"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  # exact TERM set over the closed world:
+  #   90001 orphan-ps (25:00 ≥ 60s) · 90003 orphan-zsh (no claude below) ·
+  #   90006 orphan-bash (not whitelisted) · 90007 stuck-wrapper (no live claude child) · $$ dead-lead watchdog
+  # and the protections each have a twin candidate that must NOT appear:
+  #   90002 too-young ps · 90004 zsh WITH a live claude child · 90005 whitelisted daemon ·
+  #   90008 wrapper WITH a live claude child · 90013 the watchdog class is file-driven, never argv-driven
+  got_terms="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  want_terms="$(printf '%s\n' 90001 90003 90006 90007 "$$" | sort -n | tr '\n' ' ')"
+  [ "$got_terms" = "$want_terms" ]
+  # the KILL escalation reached only the one pid that truly exists (ours)
+  ! awk '$1=="KILL"{print $2}' "$KLOG" | grep -qvx "$$"
+}
+
+@test "garbage DRY-RUN: prints the would-reap set, kills nothing" {
+  mk_garbage_fixtures
+  run "$R" garbage
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'would reap.*orphan-ps pid=90001'
+  echo "$output" | grep -q 'would reap.*stuck-wrapper pid=90007'
+  [ ! -s "$KLOG" ]                                     # the collector was never invoked
+}
+
+@test "garbage: CC_REAPER_GARBAGE=0 kill switch disables the arm" {
+  mk_garbage_fixtures
+  CC_REAPER_GARBAGE=0 run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  [ ! -s "$KLOG" ]
+}
+
+@test "garbage: unavailable snapshot fails OPEN (arm skipped, rc 0, nothing killed)" {
+  mk_garbage_fixtures
+  rm -f "$GA" "$GB"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  [ ! -s "$KLOG" ]
+}
+
+@test "sweep runs the garbage arm FIRST (before classify), same reap gate" {
+  mk_garbage_fixtures
+  mock_classify active "$D/clean" 10 no PANE-1
+  run "$R" sweep                                       # DRY-RUN sweep
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'garbage arm:'              # the arm reported inside the sweep
+  [ ! -s "$KLOG" ]                                     # and a DRY-RUN sweep killed nothing
+}
+
+@test "classify bound-fire retries ONCE at 3x — the bound must fit the band, not the bench" {
+  # first call sleeps past the 1s bound (rc 124); the retry answers instantly. Pre-fix the sweep
+  # failed closed on the FIRST 124 — every load-781 sweep read "NO candidates" at exactly the
+  # moment reaping mattered most.
+  cnt="$D/cls-count"; : > "$cnt"
+  cat > "$D/cls" <<EOF
+#!/bin/bash
+echo x >> "$cnt"
+if [ "\$(wc -l < "$cnt" | tr -d ' ')" -eq 1 ]; then sleep 2; fi
+echo '[]'
+EOF
+  chmod +x "$D/cls"
+  export CC_REAPER_CLASSIFY_BIN="$D/cls" CC_REAPER_CLASSIFY_TIMEOUT_S=1
+  export CC_REAPER_GARBAGE_PS_A=/dev/null CC_REAPER_GARBAGE_PS_B=/dev/null   # pin the arm cheap
+  run "$R" sweep
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$cnt" | tr -d ' ')" -eq 2 ]            # bound fired once, the retry actually ran
+  echo "$output" | grep -q 'classified'                # and the sweep completed on the retry's verdict
+}
