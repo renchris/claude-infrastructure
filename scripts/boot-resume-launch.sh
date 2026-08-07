@@ -153,6 +153,55 @@ if [ ! -x "$RESUME_ONE" ]; then
   exit 3
 fi
 
+# ── MACHINE-CAPACITY ADMISSION — the reso-resume-one seam (MACHINE_CAPACITY_V2 §12.1/§12.4). ───
+# §12.1's bypass table lists `~/.reso/bin/reso-resume-one` as an ungated spawn path. That file is
+# NOT IN ANY GIT REPOSITORY — `git -C ~/.reso rev-parse` fails, it is an untracked 2026-07-05 file
+# on disk — so it cannot be gated in its own body by anything this repo can land or verify. Its
+# every in-repo invocation goes through THIS line, so this is where the term can bind and stay
+# landed. Direct hand-invocations of `reso-resume-one` remain uncovered by construction; that
+# residue is stated in §12.1 rather than papered over here.
+#
+# PLACEMENT. After the `--dry-run` return above (a dry run prints a command and spawns nothing —
+# gating it would refuse an inspection) and after the RESUME_ONE executability check (a resume with
+# a missing binary must fail on THAT, with that message, not on a load reading). Before every
+# terminal arm below, so kitty and osascript are covered by one evaluation rather than two.
+#
+# BOUNDED, and here that is the load-bearing property, not a nicety. §12.2 proved an unbounded
+# loadavg gate refuses every recovery path on a healthy box and can never recover — refusing spawns
+# does not lower the number it reads (iTerm2 + WindowServer + XProtect are ~2.4 UNSHEDDABLE cores).
+# A reboot-recovery path is exactly where a permanent refusal is least acceptable: it would convert
+# "the box crashed" into "the box never comes back". So after CC_ADMIT_BUDGET consecutive refusals
+# the gate admits and pages rather than standing.
+#
+# EXIT 9 IS ITS OWN CODE, distinct from 2 (usage), 3 (missing dep) and 4 (terminal launch failed).
+# boot-resume.sh reads it as `shed` and reports it separately from `failed` — same count, opposite
+# operator action: a failure needs fixing, a shed needs the box to settle.
+#
+# ABSENT LIBRARY IS LOUD (§12.2's rule for capacity_gate, verbatim: inertness must be LOUD rather
+# than a silent admit) and deliberately NOT fatal: refusing to recover a reboot because a telemetry
+# library is missing would be the gate causing the outage it exists to prevent.
+_BRL_CA=""
+for _brl_d in "$(dirname "$_CC_KS")/lib/capacity-admit.sh" \
+              "$(dirname "$0")/lib/capacity-admit.sh" \
+              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+              "${HOME:-}/.claude/scripts/lib/capacity-admit.sh"; do
+  [ -f "$_brl_d" ] && { _BRL_CA="$_brl_d"; break; }
+done
+if [ -n "$_BRL_CA" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_BRL_CA" 2>/dev/null || _BRL_CA=""
+fi
+if [ -n "$_BRL_CA" ]; then
+  if ! cc_capacity_admit boot-resume-launch "resume ${sid} on ${acct}"; then
+    echo "boot-resume-launch: $(cc_capacity_admit_reason)" >&2
+    echo "  Session $sid is DEFERRED, not lost — re-run /resume-sessions once the box settles." >&2
+    exit 9
+  fi
+  echo "boot-resume-launch: $(cc_capacity_admit_reason)" >&2
+else
+  echo "boot-resume-launch: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — launching UNGATED" >&2
+fi
+
 if [ "$IN_KITTY" = 1 ]; then
   command -v "$KITTY" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty unavailable" >&2; exit 3; }
   # No `open -a kitty` counterpart on purpose: we are RUNNING inside kitty (that is the predicate),

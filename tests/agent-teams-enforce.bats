@@ -12,6 +12,19 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/agent-teams-enforce.sh"
+  # HERMETICITY (scripts/test-hermeticity-lint.sh RULE 1). The hook now carries a machine-capacity
+  # admission term whose every evaluation appends a row to the IDL; unfixtured, this suite would
+  # write test rows into the OPERATOR'S live decision ledger — the one §9.5.1 requires be
+  # trustworthy enough to compute an admit/refuse ratio from.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # DETERMINISM: the capacity term reads the REAL box (it resolves its library script-relative, so
+  # it is live here). Left on, every assertion below would depend on the load and free memory of
+  # whatever machine runs the suite — a deny could come from capacity rather than from the policy
+  # under test, and the case would still "pass" for the wrong reason. Capacity has its own suites
+  # (capacity-admit.bats, capacity-admit-coverage.bats); this one pins the POLICY behaviour.
+  export CC_ADMIT_GATE=off
 }
 
 brief() { yes "brief content line" | head -n "$1"; }   # emit an N-line brief

@@ -79,6 +79,40 @@ if [[ -z "$BIN" || ! -x "$BIN" ]]; then
   exit 1
 fi
 
+# ── machine-capacity admission (MACHINE_CAPACITY_V2 §12.1: this path BYPASSED the only hardware
+#    term in the tree). Placed HERE, immediately before the `exec expect` that actually spawns the
+#    TUI, and AFTER every cheap validation above: a resume rejected for an unknown account or an
+#    unresolvable binary must fail on THAT, with that message, not on a load reading.
+#
+#    Bounded by construction (scripts/lib/capacity-admit.sh) — §12.2 measured that the unbounded
+#    gate would refuse every recovery path on a healthy box and could never recover, so a limit-
+#    recovery resume must be delayable but never permanently blockable. CC_ADMIT_BUDGET consecutive
+#    refusals and the next one admits + pages.
+#
+#    ABSENT LIBRARY IS LOUD, NOT FATAL: this is a hand-run recovery tool, and refusing to recover
+#    because a telemetry library is missing would be the gate causing the outage it exists to
+#    prevent. Say so on stderr and proceed ungated — the one thing it must never do is proceed
+#    SILENTLY (§12.2: "inertness must be LOUD rather than a silent admit").
+_LR_CA=""
+for _d in "$_LR_DIR/../lib/capacity-admit.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+          "$HOME/.claude/scripts/lib/capacity-admit.sh"; do
+  [ -f "$_d" ] && { _LR_CA="$_d"; break; }
+done
+if [ -n "$_LR_CA" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_LR_CA"
+  if ! cc_capacity_admit lr-fire-resume "resume $SID on $ACCT"; then
+    echo "✗ $(cc_capacity_admit_reason)" >&2
+    echo "  Shed load first (close finished panes / let the wave drain), then re-run this exact command." >&2
+    echo "  Override for one resume: CC_ADMIT_GATE=off ; raise the bar: CC_ADMIT_MAX_LOAD_PER_CORE=<n>" >&2
+    exit 9
+  fi
+  echo "-- $(cc_capacity_admit_reason)" >&2
+else
+  echo "!! lr-fire-resume: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — spawning UNGATED" >&2
+fi
+
 # Single-line prompt only — the composer submits on CR; newlines are unsafe here.
 PROMPT=${PROMPT//$'\n'/ }
 

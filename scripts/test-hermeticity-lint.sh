@@ -229,7 +229,6 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 # is still an addition, and additions are still forbidden.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 activation-watch.bats
-agent-teams-enforce.bats
 anti-deference-nudge.bats
 autonomy-sweep.bats
 boot-resume-launch.bats
