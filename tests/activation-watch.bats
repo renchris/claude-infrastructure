@@ -16,10 +16,36 @@ setup() {
 }
 stage() { printf '#!/bin/bash\n' > "$Q/$1"; [ -n "${2:-}" ] && touch -t "$2" "$Q/$1"; return 0; }
 
-@test "selftest passes and runs all 18 checks (a zero-check suite must not 'pass')" {
+# CHANGED 2026-08-07 — this asserted `-eq 18` and had ALREADY been bumped 7 → 14 → 18 by three
+# commits that did nothing but ADD selftest checks; a7cba56d added 8 more (→ 26) and reddened it a
+# fourth time. An exact count is a tripwire on the growth of the very suite it guards: every
+# legitimate new check fails it, so the number, not the defect, is what gets "fixed". Worse, it never
+# asserted the premise its own name claims — `-eq 18` conflates "non-vacuous" with "exactly this
+# many", and at 18 it would have passed a reporter that counted 36 while rendering 18.
+# What survives is that premise, as the two independent things that make a suite non-vacuous:
+#   FLOOR — a DOWNWARD ratchet. Growth passes freely; a DELETED check reds, and lowering the floor
+#           has to be a deliberate edit (memory: downward-ratchet-catches-the-over-scoped-marker).
+#   TALLY — the summary's own `N passed` must equal the `  ok ` lines it actually rendered. A
+#           reporter that claims GREEN while emitting nothing is exactly the vacuous pass this test
+#           exists to catch (memory: claimed-outcome-vs-checked-outcome).
+# The count is environment-stable: every check emits exactly one okp/badp, and the sole conditional
+# (jq present vs absent, hooks/activation-watch.sh:385-388) emits one either way.
+@test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
+  floor=26                        # raise when checks are added; LOWERING it is a deliberate act
   run "$H" --selftest
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 18 ]
+  # `|| true` normalizes grep's rc-1-on-zero-matches, which would otherwise abort the test HERE with
+  # a cryptic "grep -c failed" and never reach the floor. It swallows no verdict — the count is data,
+  # and the assertions below are the verdict (contrast memory: claimed-outcome-vs-checked-outcome).
+  ok_lines="$(printf '%s' "$output" | grep -c '^  ok ' || true)"
+  claimed="$(printf '%s' "$output" | sed -n 's/^activation-watch --selftest: \([0-9][0-9]*\) passed,.*/\1/p')"
+  [ "$ok_lines" -ge "$floor" ]
+  # Two lines, never `[ -n "$claimed" ] && [ ... ]`: in an `&&` list only the command after the FINAL
+  # `&&` is seen by set -e, so a short-circuit on the left half is ABSORBED — an unparseable summary
+  # would have passed this test vacuously, the very class it exists to catch. (tests/bats-assert-
+  # liveness.bats classifies that shape `and-absorbed`; it caught this exact line.)
+  [ -n "$claimed" ]
+  [ "$claimed" = "$ok_lines" ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
