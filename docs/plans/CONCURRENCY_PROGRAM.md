@@ -120,6 +120,23 @@ and the suppressed count is PRINTED every sweep, because it is real news about t
 though it is not news about the item. Retroactive repair of the 228:
 `scripts/thrash-block-recover.sh` (dry-run by default, re-derives per item, never a hardcoded list).
 
+🚦 **The repair is SEQUENCED behind the live layer, and running it early is worse than not running
+it.** `~/.claude/bin/cc-backlog` symlinks into `~/Development/claude-infrastructure`, so the reap
+that actually sweeps is the LIVE checkout's copy — not trunk's. Measured at land time: the fix is on
+trunk, the live checkout is **13 commits behind**, and `cc-backlog-reap` had run **90 seconds
+earlier**. Unblocking 233 items against a live binary that still carries the old rule B does not fix
+them; it appends 233 `unblock` records to an append-only ledger and hands them straight back to the
+next sweep, which re-blocks them. So the order is **land → converge → apply**, and the dry run
+(`scripts/thrash-block-recover.sh`, no flags) is the safe thing to run at any time.
+
+⛔ Convergence is currently **refused, by a cause outside this work**: `deploy-live.sh` is
+fail-closed on a GREEN post-land stamp and `cc-blockers` reports `trunk-red PERSISTENT-RED — newest
+5 all red, 2 green of 88 ever`, last green **2026-08-04**. None of the five newest red stamps names
+any subject in this diff; the three suites here that appear anywhere in the historical red set were
+last red 3-8 days ago and all ran green this session. Queued as backlog `f06c9bb61933`, whose premise
+is a live re-read (`grep -c selfRelease "$(readlink -f ~/.claude/bin/cc-backlog)"`) rather than a
+date — so it becomes actionable the moment the live layer advances, and refuses itself if it has not.
+
 ⚠️ **This does not retire S2.** Gate contention is real and still unfixed; what changed is that it is
 no longer the thing jamming the QUEUE. S2 governs throughput once items are dispatchable again.
 
