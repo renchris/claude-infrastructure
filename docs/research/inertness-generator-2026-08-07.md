@@ -310,12 +310,30 @@ message is an advisory store with one reader, so the exchange is recorded here:
 3. **Measured objection to pure-veto (accepted as a live blocker).** The veto actuator on this host
    succeeds **3 of 25 all-time** (`runner.log` census: landed=3, FAILED=5, skipped=17; newest
    failure `rc=90`). Moving ALL safety onto a 12%-effective mechanism is no remedy tonight. Sharper
-   still — the lane's point 5: all 17 skips are ONE culprit under *"attempted once, skipped
+   still — the lane's point 5: the skips run under *"attempted once, skipped
    forever"* — a state-record governing after its premises, i.e. **Law 2 living inside the
    prescribed replacement**, and a fixed point of the system's own policy in the exact §2.4 shape.
    A veto that cannot actuate is a permission gate in disguise. Filed: `cc-backlog 8e8a306f6dc0`
    (bound the skip; page on failed revert) — a prerequisite for the pure-veto tier ever being
    reachable.
+
+   **CLOSED 2026-08-07** (`scripts/postland-verify.sh`, C26 in `tests/postland-verify.bats`). Two
+   findings from re-running the census before fixing it. First, a correction: the counts hold, but
+   the 17 skips are **four** culprits, not one — `a1743ffebd35` ×3, `47a5350498ee` ×3,
+   `57e162494c10` ×3, `b3f728858a6f` ×8. That strengthens the objection rather than weakening it;
+   the fixed point is the marker's *shape*, reproduced independently four times, not one unlucky
+   sha. Second, and the reason the fix is not simply "expire the marker": the four are two different
+   facts wearing one reason token. `b3f728858a6f`'s revert **landed** (`3725e5432bfc`) — its 8 skips
+   are the *correct* refusal to revert a commit already out of trunk, and bounding them would have
+   built the revert war guard 2 exists to prevent. The other three never landed, and were disarmed
+   by a fact about a single trunk tip (`rc 90` = the revert conflicted off *that* tip). So the bound
+   is asymmetric by outcome: a landed revert stays permanent, a failed one re-arms on new evidence
+   (moved tip) or decay, bounded by `POSTLAND_REVERT_RETRY_MAX`. Both terminal arms now page and
+   file a backlog item — under the old code the mechanism declined on 17 of 25 encounters and told
+   nobody, which is the half of "a veto that cannot actuate" that made it *invisible* as well as
+   inert. **This is §3 face 2 applied to itself**: the veto's own disarm was an unbounded standing
+   state, and §9's narrowed law — every permission predicate carries a finite budget whose expiry
+   converts the state into an event — is what it was fixed with.
 
 Both documents stand; T0–T3 remain the lane's. The generator-level law survives contact narrowed,
 not refuted — and the narrowing came through the one channel this document argued for: a store a

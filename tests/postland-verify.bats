@@ -37,7 +37,10 @@
 #   C19 qos     no admission control anywhere: the singleton must progress at ANY load
 #   C20 revert  on a reproducible RED with a BISECTED culprit C, and only then: revert C on
 #               its own branch and land it via the land lane. Refused if POSTLAND_AUTOREVERT=off ·
-#               C is itself a revert · $CC_POSTLAND_DIR/reverts/<C> exists (never twice) ·
+#               C is itself a revert · $CC_POSTLAND_DIR/reverts/<C> says the revert already LANDED
+#               (never twice — permanent, and now PAGED rather than silent) or its bounded retry
+#               budget is spent (POSTLAND_REVERT_RETRY_MAX, default 3); a marker whose revert never
+#               landed RE-ARMS on a moved trunk tip or POSTLAND_REVERT_RETRY_DECAY_S — C26 ·
 #               POSTLAND_MAX_REVERTS attempts already made this run · no land lane present.
 #               An UNDECIDABLE bisect pages + backlogs and attempts ZERO reverts.
 #   C25 adjudic the bisect PROBE runs under the TMPDIR the CORPUS measured under — the same string
@@ -1412,6 +1415,140 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
   push_commit "the control culprit"
   run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
   [ -s "$REC/ship.argv" ]                                      # decidable ⇒ a revert IS attempted
+}
+
+# ── C26 the never-twice marker is BOUNDED (item 8e8a306f6dc0) ────────────────────
+# Census of the live host's runner.log, all-time to 2026-08-07: 25 AUTOREVERT encounters — landed=3,
+# FAILED=5, skipped=17, and all 17 skips read `reason=already-attempted`. 12% effective. The skips
+# were four culprits (a1743ffebd35 ×3, 47a5350498ee ×3, 57e162494c10 ×3, b3f728858a6f ×8), not one
+# as first filed — but the shape is identical in each: "attempted once" is a STATE, it outlives the
+# premise that produced it, and it then governs forever from INSIDE the safety mechanism. That is
+# Law 2 of docs/research/inertness-generator-2026-08-07.md living in the very thing §3 prescribes as
+# its replacement, and §9 files it as the blocker on the pure-veto tier: a veto that cannot actuate
+# is a permission gate in disguise.
+#
+# The fix is asymmetric because the two markers record different facts, and these four tests pin
+# both arms plus both re-arm triggers. Every one carries the control that stops it passing on a dead
+# actuator — the failure mode being guarded here is precisely "the mechanism silently does nothing".
+inert_pages_n() { find "$CC_PAGES_DIR" -name 'postland-revert-inert-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
+
+@test "C26: a revert that never LANDED re-arms at a new trunk tip and this time actuates" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS from the real producer: the first attempt failed at the revert STEP, so nothing
+  # reached the land lane. Asserted, never assumed — had it landed, the re-arm below would be
+  # exercising the permanent arm instead and this test would prove the opposite of its title.
+  [ "$(mk_get "$culprit" land_exit)" = "90" ]
+  [ "$(mk_get "$culprit" attempts)" = "1" ]
+  [ ! -f "$REC/ship.argv" ]
+  [ "$(inert_pages_n)" = "0" ]                           # a bounded skip is not yet terminal
+  # NEW EVIDENCE: trunk moves back to the culprit itself, so the follow-on commit whose edit to the
+  # culprit's own file caused rc 90 is no longer in the way. Nothing about the marker changed; the
+  # only new fact is the tip — which is exactly the fact the old guard could not read.
+  git -C "$R" push -qf origin "$culprit:main"
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                # THE CLAIM: the veto ACTUATED on retry
+  [ "$(mk_get "$culprit" attempts)" = "2" ]
+  [ "$(mk_get "$culprit" land_exit)" = "0" ]
+  run grep -c 'AUTOREVERT rearm .* why=new-tip' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
+}
+
+@test "C26: a LANDED revert is still never twice — but the skip PAGES instead of going silent" {
+  ship_stub
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ "$(mk_get "$culprit" land_exit)" = "0" ]             # control: it really did land
+  [ "$(inert_pages_n)" = "0" ]                           # ...and one attempt is not yet inert
+  : > "$REC/ship.argv"
+  # Convicted AGAIN — and deliberately at a tip that is NOT the recorded one, so every input the
+  # bounded arm reads says "re-arm" and only the outcome arm says otherwise. Without the innocuous
+  # follow-on the tip would be restored to the culprit itself, i.e. identical to the recorded tip,
+  # and the test would pass just as well against a fix that had merely forgotten to check outcome.
+  git -C "$R" push -qf origin "$culprit:main"
+  git -C "$R" fetch -q origin && git -C "$R" reset -q --hard origin/main
+  printf '#!/bin/bash\nexit 0\n' > "$R/innocuous.sh"
+  push_commit "an innocuous follow-on — the trunk tip now differs from the recorded one"
+  [ "$(origin_head)" != "$(mk_get "$culprit" tip)" ]     # the control, asserted not assumed
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ ! -s "$REC/ship.argv" ]                              # SAFETY UNCHANGED: never a second revert
+  [ "$(inert_pages_n)" = "1" ]                           # THE CLAIM: it is no longer silent
+  # ...and DURABLY so — a page dies on the next green, a backlog item does not — with the damper
+  # stated as an INVARIANT and never as an absolute count: one item per fresh EDGE, never one per
+  # encounter. b3f728858a6f was convicted 8 times in 2.5 days, and 8 items would be exactly the
+  # always-fires alarm this class exists to avoid (memory: alarm-polarity).
+  #
+  # WHY AN INVARIANT AND NOT `= 1`. How many terminal encounters ONE sweep reaches is not fixed:
+  # `do_run_if_needed` self-requeues when the trunk tip moves under it, so `red_actions` can run more
+  # than once per invocation. Two runs of this exact fixture disagreed (1, then 2) — an absolute
+  # count is a load-dependent tripwire, which is the same defect as the mechanism under test. The
+  # equality holds for any number of encounters; `edges >= 1` keeps it from holding vacuously at
+  # 0 == 0 on a sweep that never convicted.
+  #
+  # Deliberately NOT pinning a `fresh=0` control here: forcing a re-encounter needs a third full
+  # sweep, and each sweep carries its own `git bisect run`. Measured on this box, that third sweep
+  # sat 13m+ inside the bisect's own 900s bound under load 20 — a test that expensive is flaky by
+  # construction in a load-shed corpus, and the damping it would pin is a refinement, not the item's
+  # claim. The two claims above are what 8e8a306f6dc0 asked for.
+  edges="$(grep -c 'terminal=1 fresh=1' "$CC_POSTLAND_DIR/runner.log" || true)"
+  items="$(grep -c 'AUTO-REVERT INERT (already-reverted)' "$REC/cc-backlog.argv" || true)"
+  [ "$edges" -ge 1 ]                                     # control: it filed at all (never vacuous)
+  [ "$items" = "$edges" ]                                # one item per EDGE, not per encounter
+  run grep -c 'reason=already-reverted .*terminal=1' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" -ge 1 ]
+}
+
+@test "C26: the retry budget is FINITE — spent, the skip is terminal and pages" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=1 bash "$SUT" --run-if-needed
+  [ "$(mk_get "$culprit" attempts)" = "1" ]              # control: attempt 1 of a budget of 1...
+  [ ! -f "$REC/ship.argv" ]                              # ...which failed at the revert step
+  git -C "$R" push -qf origin "$culprit:main"            # new evidence — enough to re-arm, if budget
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json                 # remained. It does not.
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=1 bash "$SUT" --run-if-needed
+  [ ! -f "$REC/ship.argv" ]                              # budget spent ⇒ no attempt
+  [ "$(mk_get "$culprit" attempts)" = "1" ]              # ...and the marker is untouched
+  [ "$(inert_pages_n)" = "1" ]                           # ...and it PAGED rather than skipping mute
+  run grep -c 'reason=retry-budget-spent' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
+  # BOUNDARY CONTROL at the other side: the identical state with one more unit of budget ATTEMPTS.
+  # Without this the test would pass just as well against an actuator that never retries at all.
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=2 bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]
+  [ "$(mk_get "$culprit" attempts)" = "2" ]
+}
+
+@test "C26: an UNMOVED tip inside the decay window skips quietly; the decay alone re-arms it" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ "$(mk_get "$culprit" land_exit)" = "90" ]            # control: a FAILED marker, so the bounded
+  [ "$(mk_get "$culprit" attempts)" = "1" ]              # arm is the one under test
+  # SAME tip, re-presented: no new evidence exists, so re-arming would be a retry loop on a fact
+  # that cannot have changed. This is the only non-terminal skip and it stays log-only — a page
+  # here would fire every sweep and train the operator to ignore the class (memory: alarm-polarity).
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  : > "$CC_POSTLAND_DIR/runner.log"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ ! -f "$REC/ship.argv" ]
+  [ "$(mk_get "$culprit" attempts)" = "1" ]              # untouched — no attempt was spent
+  [ "$(inert_pages_n)" = "0" ]                           # NOT terminal, so NOT paged
+  run grep -c 'reason=failed-at-this-tip' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
+  # THE SECOND RE-ARM TRIGGER, isolated: same tip, same marker, nothing moved — only the decay
+  # window collapses. It must attempt, which also proves the skip above was the DECAY and not some
+  # other refusal silently standing in for it.
+  rm -f "$CC_POSTLAND_DIR/stamps"/*.json
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_DECAY_S=0 bash "$SUT" --run-if-needed
+  [ "$(mk_get "$culprit" attempts)" = "2" ]
+  run grep -c 'AUTOREVERT rearm .* why=decay-' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
 }
 
 # ── C25 the adjudicator's env ───────────────────────────────────────────────────

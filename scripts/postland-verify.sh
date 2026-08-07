@@ -380,6 +380,29 @@ REPO_SHIP="${CC_POSTLAND_SHIP_BIN:-$REPO/scripts/ship-land.sh}"   # the land lan
 SHIP_TO="${CC_POSTLAND_SHIP_TIMEOUT_S:-900}"            # bound on the revert land
 REVERTS="$STATE/reverts"                                # <sha> marker ⇒ never reverted twice
 REVERTS_THIS_RUN=0
+# ── THE NEVER-TWICE MARKER IS BOUNDED (item 8e8a306f6dc0) ────────────────────────────────────────
+# Census of this host's own runner.log, all-time to 2026-08-07: 25 encounters — landed=3, FAILED=5,
+# skipped=17, and every one of the 17 skips read `reason=already-attempted`. The actuator therefore
+# actuated on 12% of the occasions it was asked to. The skips are four culprits, not one as first
+# filed: a1743ffebd35 ×3, 47a5350498ee ×3, 57e162494c10 ×3, b3f728858a6f ×8 (2026-08-04 → 08-07).
+# The shape is the same in every case and it is Law 2 of the inertness generator living INSIDE the
+# safety mechanism: "attempted once" is a STATE, states outlive their premises, and this one then
+# governs forever. A veto that cannot actuate is a permission gate in disguise — §9 of
+# docs/research/inertness-generator-2026-08-07.md, which narrows the pure-veto law to "no gate on an
+# actuation path may be unbounded; every permission predicate carries a finite budget whose expiry
+# converts the standing state into an EVENT". These two knobs are that budget.
+#
+# The bound is ASYMMETRIC BY OUTCOME, because the two markers record different facts:
+#   land_exit=0  — the revert LANDED. The culprit's content is out of trunk and a second revert
+#                  would re-apply the bad change. That premise does not rot; the skip stays
+#                  permanent. It is no longer SILENT (see revert_rearm) — b3f728858a6f skipped
+#                  eight times across 2.5 red days and told nobody.
+#   land_exit!=0 — the revert did NOT land. That is a fact about ONE trunk tip (rc 90 = the revert
+#                  conflicted off THAT tip; rc 6 = the land lane refused THAT attempt), and the next
+#                  tip is new evidence. Re-arm on a moved tip or on decay, RETRY_MAX attempts total.
+REVERT_RETRY_MAX="${POSTLAND_REVERT_RETRY_MAX:-3}"      # attempts per culprit before the skip is terminal
+REVERT_RETRY_DECAY_S="${POSTLAND_REVERT_RETRY_DECAY_S:-21600}"   # 6h — an UNMOVED tip re-arms on time alone
+ATTEMPT_N=1                                             # which attempt this is, for the marker
 STAMPS="$STATE/stamps"
 LOCK="$STATE/run.lock.d"
 LOG="$STATE/runner.log"
@@ -1279,23 +1302,103 @@ author_sid() { # <sha> — the sid that LANDED it, from land.log. The attested l
 #   1. POSTLAND_AUTOREVERT=off ⇒ skip. A kill switch must be env, not a revert — a revert needs the
 #      pipeline that is on fire (§6.4).
 #   2. C is itself a revert ⇒ skip. Reverting a revert re-lands the red; that is the war.
-#   3. marker $REVERTS/<C> exists ⇒ skip. NEVER twice for one culprit, and it survives the process.
+#   3. marker $REVERTS/<C> exists ⇒ revert_rearm decides: never twice for a LANDED revert (permanent,
+#      and now paged rather than silent), a BOUNDED retry for one that never landed.
 #   4. MAX_REVERTS markers written THIS run ⇒ skip. A cascade means the TREE is wrong, not one
 #      commit — an operator finding, and continuing would be the fail-closed-amplifier (R7).
 #   5. no executable land lane ⇒ skip. This function never pushes anything itself; the ONLY writer
 #      to origin stays ship-land.sh, with its esc-scan, CAS, content-verify and land-lock intact
 #      (a parked revert is a feature, R8).
-# The marker records EVERY attempt past the guards, landed or not: "attempted" is the thing that
-# must never repeat unattended, and a failed attempt is a human's call, not a retry loop's.
+# The marker records EVERY attempt past the guards, landed or not, and the never-twice it enforces is
+# now BOUNDED — see the REVERT_RETRY_MAX block above for the census that forced that. What must never
+# repeat unattended is a revert that SUCCEEDED; an attempt that landed nothing repeated nothing, and
+# refusing to try it again at a tip where it might work is how a veto becomes a permission gate.
+mk_field() { printf '%s' "$(sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1)"; }
+# A TERMINAL skip is the event the budget's expiry converts the standing state into. It gets the two
+# surfaces a FAILED attempt already gets — a state-keyed page (retracted by the next green along with
+# its postland-revert-* siblings, because on a green the concern is moot) and a DURABLE backlog item
+# (the sha in the title defeats wasDone). The page is the loud half; the backlog item is the half
+# that survives a green, which is what "page on FAILED revert" has to mean here: the page a FAILED
+# attempt already wrote is deletable, while the disarm it announced was not.
+revert_inert() { # <culprit> <c12> <reason> <detail>
+  local c="$1" c12="$2" reason="$3" detail="$4" pf="$PAGES/postland-revert-inert-$2.page" fresh=1
+  # DAMPED ON THE PAGE FILE. A terminal skip is re-reached on EVERY later sweep that convicts the
+  # same culprit — b3f728858a6f would have filed 8 items in 2.5 days — and an alarm that fires every
+  # sweep carries the same zero bits as one that cannot fire at all (memory: alarm-polarity). The
+  # page is the state; the backlog item and the OS notification are the EDGE into it. A green
+  # retracts the page, so a fresh red episode is a fresh event and does re-fire — which is right.
+  [ -f "$pf" ] && fresh=0
+  { now_epoch
+    printf 'post-land AUTO-REVERT is INERT for this culprit @ %s\n' "$(now_iso)"
+    printf 'culprit: %s\n' "$c12"
+    printf 'reason:  %s — %s\n' "$reason" "$detail"
+    printf 'the veto did NOT actuate; trunk keeps whatever verdict it has and deploy stays pinned.\n'
+    printf 'do:      %s status ; sed -n 1,20p %s/%s\n' "$SELF" "$REVERTS" "$c"
+    printf 'env:     %s\n' "$ENV_FP"
+  } > "$pf" 2>/dev/null || true
+  if [ "$fresh" -eq 1 ]; then
+    [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
+      --title "post-land AUTO-REVERT INERT ($reason): culprit $c12 — the veto cannot actuate, $detail" \
+      --project claude-infrastructure --source postland-verify >/dev/null 2>&1
+    notify "Claude post-land AUTO-REVERT INERT" "$c12 — $reason; see $pf"
+  fi
+  log "AUTOREVERT verdict=skipped reason=$reason culprit=$c12 terminal=1 fresh=$fresh ($detail)"
+}
+# 0 = re-arm (ATTEMPT_N set to this attempt's number) · 1 = skip (this function logs/pages its own).
+revert_rearm() { # <marker> <culprit> <c12>
+  local mk="$1" c="$2" c12="$3" prev_exit prev_tip prev_epoch n age tip_now moved=0
+  prev_exit="$(mk_field "$mk" land_exit)"
+  prev_tip="$(mk_field "$mk" tip)"
+  prev_epoch="$(mk_field "$mk" epoch)"
+  n="$(mk_field "$mk" attempts)"
+  # Pre-bound markers carry none of these fields. attempts ⇒ 1 (the attempt that wrote it); epoch and
+  # tip ⇒ absent, which reads as decayed-and-moved, so a stranded FAILED marker re-arms ONCE on the
+  # first encounter after this lands. That one-time migration is the point, not a side effect.
+  case "$n" in ''|*[!0-9]*) n=1 ;; esac
+  case "$prev_epoch" in ''|*[!0-9]*) prev_epoch=0 ;; esac
+  # UNREADABLE land_exit ⇒ treat as LANDED, i.e. skip. The default decides which way this fails, and
+  # the two directions are not symmetric: a wrong "failed" re-reverts a commit already out of trunk
+  # and re-lands the bad change (the revert war guard 2 exists to stop), while a wrong "landed"
+  # leaves the veto inert — the status quo, and now a paged one.
+  case "$prev_exit" in ''|*[!0-9]*) prev_exit=0 ;; esac
+  if [ "$prev_exit" -eq 0 ]; then
+    # Convicted AGAIN after its own revert landed: the culprit's content is already out of trunk, so
+    # the bisect is naming a commit that has been handled and the surviving red has another cause.
+    # Nothing here can fix that, and a human must look — which is exactly what eight silent skips of
+    # b3f728858a6f did not cause to happen.
+    revert_inert "$c" "$c12" already-reverted \
+      "its revert LANDED and it is convicted again — the surviving red has another cause"
+    return 1
+  fi
+  if [ "$n" -ge "$REVERT_RETRY_MAX" ]; then
+    revert_inert "$c" "$c12" retry-budget-spent \
+      "$n of $REVERT_RETRY_MAX attempts, none landed (last exit $prev_exit)"
+    return 1
+  fi
+  tip_now="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
+  [ -n "$tip_now" ] && [ "$tip_now" != "$prev_tip" ] && moved=1
+  age=$(( $(now_epoch) - prev_epoch ))
+  if [ "$moved" -eq 0 ] && [ "$age" -lt "$REVERT_RETRY_DECAY_S" ]; then
+    # Same tip, inside the decay window: nothing has happened that could change the answer. This is
+    # the ONLY non-terminal skip, so it stays log-only — paging on it would train the operator to
+    # ignore the class, and the terminal skip above is the one that carries information.
+    log "AUTOREVERT verdict=skipped reason=failed-at-this-tip culprit=$c12 attempt=$n/$REVERT_RETRY_MAX age=${age}s tip=$(sha12 "${prev_tip:-none}")"
+    return 1
+  fi
+  ATTEMPT_N=$((n+1))
+  log "AUTOREVERT rearm culprit=$c12 attempt=$ATTEMPT_N/$REVERT_RETRY_MAX prev_exit=$prev_exit why=$( [ "$moved" -eq 1 ] && echo new-tip || echo "decay-${age}s" )"
+  return 0
+}
 auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1 = skipped
-  local c="$1" file="${2:-tests/}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid
+  local c="$1" file="${2:-tests/}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid tip=""
   c12="$(sha12 "$c")"
   [ "$AUTOREVERT" = "off" ] && { log "AUTOREVERT verdict=skipped reason=kill-switch culprit=$c12"; return 1; }
   git -C "$REPO" log -1 --format=%s "$c" 2>/dev/null | grep -q '^Revert' \
     && { log "AUTOREVERT verdict=skipped reason=culprit-is-itself-a-revert culprit=$c12"; return 1; }
   mkdir -p "$REVERTS" 2>/dev/null || true
   mk="$REVERTS/$c"
-  [ -f "$mk" ] && { log "AUTOREVERT verdict=skipped reason=already-attempted culprit=$c12"; return 1; }
+  ATTEMPT_N=1
+  [ -f "$mk" ] && { revert_rearm "$mk" "$c" "$c12" || return 1; }
   case "$MAX_REVERTS" in ''|*[!0-9]*) MAX_REVERTS=2 ;; esac
   [ "$REVERTS_THIS_RUN" -ge "$MAX_REVERTS" ] \
     && { log "AUTOREVERT verdict=skipped reason=cap-$MAX_REVERTS-this-run culprit=$c12"; return 1; }
@@ -1304,6 +1407,16 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
 
   REVERTS_THIS_RUN=$((REVERTS_THIS_RUN+1))               # counted at ATTEMPT, so the cap bounds attempts
   bounded 120 git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
+  tip="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
+  # PROVISIONAL marker, written BEFORE the work and rewritten after it. The retry budget must count
+  # attempts STARTED, exactly as REVERTS_THIS_RUN does one line above: this path spends up to
+  # 120s+120s+SHIP_TO under a launchd job that really does get pkill'd (that is what a CUT is), and a
+  # budget that only shrank on completion would let a reliably-killed attempt re-arm forever — the
+  # unbounded gate this whole change removes, inverted. land_exit=99 is the in-flight/killed
+  # sentinel: non-zero, so it reads as FAILED (accurate — nothing landed) and stays inside the
+  # bounded-retry arm rather than falling into the permanent already-reverted one.
+  { printf 'ts=%s\nepoch=%s\nculprit=%s\nattempts=%s\ntip=%s\nfailing=%s\nstep=in-flight\nland_exit=99\n' \
+      "$(now_iso)" "$(now_epoch)" "$c" "$ATTEMPT_N" "${tip:-none}" "$file"; } > "$mk" 2>/dev/null || true
   br="postland-revert-$c12"
   git -C "$REPO" show-ref --verify --quiet "refs/heads/$br" && br="$br-$$"
   wt="$WT_ROOT/wt-revert-$$"
@@ -1328,7 +1441,10 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   [ "$rc" -eq 0 ] && outcome=landed || outcome="FAILED(step=$step rc=$rc)"
 
   { printf 'ts=%s\n' "$(now_iso)"
+    printf 'epoch=%s\n' "$(now_epoch)"
     printf 'culprit=%s\n' "$c"
+    printf 'attempts=%s\n' "$ATTEMPT_N"
+    printf 'tip=%s\n' "${tip:-none}"
     printf 'revert=%s\n' "${rev:-none}"
     printf 'branch=%s\n' "$br"
     printf 'failing=%s\n' "$file"
@@ -1359,7 +1475,7 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
     } > "$pf" 2>/dev/null || true
     notify "Claude post-land AUTO-REVERT FAILED" "$c12 — trunk still red, see $pf"
   fi
-  log "AUTOREVERT verdict=$outcome culprit=$c12 revert=$(sha12 "${rev:-none}") branch=$br step=$step rc=$rc"
+  log "AUTOREVERT verdict=$outcome culprit=$c12 attempt=$ATTEMPT_N/$REVERT_RETRY_MAX revert=$(sha12 "${rev:-none}") branch=$br step=$step rc=$rc"
   wt_remove "$wt"; WT_REVERT=""
   # A LANDED revert's branch is now in trunk and carries nothing else — drop it. A FAILED one is the
   # only copy of the revert commit, so it stays for the operator (the page names it).
@@ -1799,12 +1915,33 @@ render_lastgreen() {
     printf '%s → stamp %s.json present but NOT green' "$(sha12 "$sha")" "$(sha12 "$tree")"
   fi
 }
+# `inert` is the count that matters: culprits the veto will never attempt again (its revert landed, or
+# the retry budget is spent). A bare total hid exactly that — 8 of this host's own markers, 5 of them
+# never landed, and nothing anywhere said the actuator had gone quiet on them.
+#
+# A FUNCTION, not a `$( … )` body, because this loop needs `case` for its numeric guards and a `case`
+# inside a command substitution is the bash 3.2 trap this suite's own `norm()` helper carries a memory
+# note about. It is not even the silent no-op there: /bin/bash 3.2 raises `syntax error near
+# unexpected token 'newline'` and then trips `set -u` on the half-parsed body — which is how this got
+# caught, by running `status` against the LIVE marker store instead of only through the fixture.
+reverts_inert_n() {
+  local f e a n=0
+  for f in "$REVERTS"/*; do
+    [ -f "$f" ] || continue
+    e="$(mk_field "$f" land_exit)"; a="$(mk_field "$f" attempts)"
+    case "$e" in ''|*[!0-9]*) e=0 ;; esac
+    case "$a" in ''|*[!0-9]*) a=1 ;; esac
+    { [ "$e" -eq 0 ] || [ "$a" -ge "$REVERT_RETRY_MAX" ]; } && n=$((n+1))
+  done
+  printf '%s' "$n"
+}
 verb_status() {
   # `worktree` is the cell this invocation WOULD mint — cells are per-run and torn down, so between
   # runs there is deliberately nothing there to look at (§4.2.1). `reverts` is the never-twice ledger.
   printf 'postland-verify status\n  state      : %s\n  worktree   : %s (minted per run)\n  last-green : %s\n' \
     "$STATE" "$WORKTREE" "$(render_lastgreen)"
-  printf '  reverts    : %s\n' "$(find "$REVERTS" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  printf '  reverts    : %s total · %s INERT (landed-or-budget-spent)\n' \
+    "$(find "$REVERTS" -type f 2>/dev/null | wc -l | tr -d ' ')" "$(reverts_inert_n)"
   printf '  stamps     : %s\n  queue      : %s\n  lock       : %s\n  flakes     : %s\n  pages      : %s\n  last run   : %s\n' \
     "$(find "$STAMPS" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" \
     "$(cat "$QUEUE" 2>/dev/null || echo '(empty)')" \
@@ -2003,6 +2140,7 @@ selftest() {
 usage() {
   echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | --selftest]"
   echo "  kill switches: POSTLAND_VERIFY=off (inert) · POSTLAND_AUTOREVERT=off (verify+page, never push)"
+  echo "  revert retry : POSTLAND_REVERT_RETRY_MAX=$REVERT_RETRY_MAX · POSTLAND_REVERT_RETRY_DECAY_S=$REVERT_RETRY_DECAY_S (a revert that never landed re-arms; one that landed never does)"
   echo "  state: $STATE   ·   host partition: $MANIFEST_REL   ·   header comment = full design notes"
 }
 
