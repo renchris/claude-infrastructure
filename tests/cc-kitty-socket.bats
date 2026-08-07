@@ -11,6 +11,9 @@ setup() {
   # must not inherit the developer's — a fast-path hit on a live socket would decide every test
   # by which terminal the developer is sitting in.
   unset KITTY_LISTEN_ON KITTY_WINDOW_ID CC_TERM_KITTY_TO
+  # Fixture $HOME (hermeticity ratchet): the subject reads nothing under ~, but a suite that
+  # inherits the live $HOME is one refactor away from doing so silently.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   BIN="$REPO/bin/cc-kitty-socket"
   T="$BATS_TEST_TMPDIR"
