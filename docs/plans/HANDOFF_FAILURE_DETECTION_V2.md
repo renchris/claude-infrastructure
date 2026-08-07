@@ -24,6 +24,16 @@ status: in-progress
 | 9259ea3a | **D3** escalation-watch + readout ◆ line + activation 33 (t3; 87/87; surfaced 52 live undrained records on first run) |
 | d9c54dc6 | plan: as-built corrections (cc-notify push; sweep-liveness on sweep's own idl rows) |
 
+**Integration finding (lead, pre-T2-final):** `tests/cc-escalations.bats` case 9 ("the literal
+.seen marker ALONE does not damp the sweep — why ack writes both") went RED in the lead's
+15-suite integration slice the moment T2's dual-READ sweep entered the working tree. Expected
+conflict, my own making: the case pinned the PRE-amendment sweep (literal-only ⇒ still collected)
+as justification for dual-write; the amendment makes literal-only DAMP. Design side wins
+(stale-assertion-inverts: the side with the design intent). Resolution at integration, after T2's
+final shape: re-oracle case 9 to assert literal-only DOES damp the v2 sweep, keep dual-write
+justified by legacy-marker compatibility (1,193 live hash markers) instead, and add the mutation
+control (hash-write deletion) T4 already built. Owner: lead (T4 terminated).
+
 **Pending:** D2+D4 (t2-sweep — code done, statically green; bats gate queued behind a full-corpus
 postland run under the capacity mutex, correctly not overridden). T2's live pre-measurement:
 1,019 teardown markers (1,013 past deadline), close-attrib.jsonl = 1 row, `it2 session list`
