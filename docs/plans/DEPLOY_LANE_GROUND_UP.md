@@ -519,6 +519,30 @@ itself classifies C10 precisely because 4+ live sessions share one index and a s
 meets the dirty `hooks/backup-before-write.sh`. D6 makes that a named, paged state instead of a
 generic death — but the file itself must still be parked by its owner or by the operator.
 
+### 2.6d Recorded disagreement — the pure-veto law, and why this design stops short of it
+
+A peer session landed `docs/research/inertness-generator-2026-08-07.md` (`ad847c01`), deriving the
+generator this lane is one instance of. Its §3 law, verbatim:
+
+> *"Reverse the polarity of every edge on the conclusion→behaviour path: no affirmative-permission
+> gate may hold an advance; all safety is expressed as veto-after — the revert of a named land."*
+
+It cites this plan's `2aeb23a7` as its seed. **That citation is one commit stale** — `2aeb23a7` was
+D1's first draft (*"evidence vetoes red, it never permits green"*), and `9055ef2e` revised it to the
+two-tier form after the archaeology found the green gate answers a named incident (§1.7). Surfaced to
+the peer 2026-08-07; recorded here so the divergence is durable rather than living in an inbox.
+
+**Where we agree:** past the staleness budget, exactly — advance on not-red. **Where we differ:**
+inside the budget, where T1 prefers a green when one exists.
+
+**Two objections, both measured, offered as narrowing rather than refutation:**
+
+1. **Unboundedness is the defect, not permission-polarity as such.** Their Law 2 indicts a permission gate because it *"fails as a STATE: standing, unowned, unbounded"*. Agreed, and that is precisely this wedge. But a gate with a finite escape — T2 fires past budget with banner + page — cannot rot into a standing state. The narrowed law *"no permission gate may be **unbounded**"* is also checkable in a way the absolute form is not.
+2. **Pure-veto moves all safety onto a mechanism measured failing.** The law makes veto-after the sole safeguard. Census of `~/.claude/autonomy/postland/runner.log`, all time: **AUTOREVERT `landed`=3, `FAILED`=5, `skipped`=17 — 12% success across 25 attempts.** Newest: `2026-08-07T03:40:57Z verdict=FAILED(step=revert rc=90) culprit=13bfa557db3a`. And the 17 skips are **one** culprit (`b3f728858a6f`) — attempted once, skipped forever after under `reason=already-attempted`, which is itself a fixed point of the system's own policy, i.e. the peer's own Law 3 shape sitting *inside* the remedy their §3 prescribes.
+
+This does not block either document; both are landed and `T0`-`T3` remain this session's. It is
+recorded because a design that stops short of a cleaner-sounding law owes a reason.
+
 ### 2.7 REJECTED ALTERNATIVES
 
 Recorded so they are not relitigated.
