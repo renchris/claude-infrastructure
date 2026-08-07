@@ -637,3 +637,34 @@ Per §1.9 this session may not close on a forecast, so each criterion is buckete
 
 The gap between PROVEN and ACCRUING is exactly one operator step, and it is the ceiling this session
 can reach: **acceptance is a deployed layer, and the agent cannot deploy it.**
+
+### 2026-08-07 — ACCEPTANCE READ, taken after the fact (not forecast)
+
+The operator ran `27-deploy-lane-v2-activate.sh` and it reported **both files already live** — a
+sibling had already delivered them via `reset: moving to origin/main` at 02:28:28. **The ungated path
+deployed the fix for the gated lane**, which is §1.2's thesis demonstrated on this rebuild's own diff.
+
+| # | Criterion | Read | Verdict |
+|---|---|---|---|
+| A-1 | layer advances | `rev-list --count HEAD..origin/main`: **107 → 0** | ✅ (by an ungated writer, stated honestly) |
+| A-2 | verified by content | `md5` of each live symlink target == `git show origin/main:<path>` — `deploy-live.sh` and `cc-blockers` both identical; markers 5 / 3 hits | ✅ |
+| A-3 | refusals stop | old-style `would ROLL BACK`: **542, frozen** (no longer emitted). New-style: **1**, damped to one per 24h window | ✅ |
+| A-4 | non-advance is loud | that single refusal **wrote a page** (`deploy-blocked-5b6c7e3e53dd.page`) — against **0 pages across 534** old refusals | ✅ V3/C3 closed, live |
+| A-4b | no false positive | `deploy-stale` rows at low lag: **0** | ✅ the control holds live |
+
+**A defect the live run exposed, fixed and landed (`12e55d69`).** The first live v2 evaluation, with
+the layer exactly on `origin/main`, emitted *"REFUSED — no GREEN tree is a DESCENDANT … nothing is
+safe to deploy"*. Every clause true, verdict wrong: at `LAG_COMMITS=0` the candidate set is **empty**,
+so no tier can match and the ladder fell through to T3's `die`. Reporting a hazard where there is only
+completion — and `die` exits 1, so the healthy steady state would pin `launchctl … last exit code = 1`
+forever, the exact signal that hid the original freeze. §2.2's tier table had no row for *"already at
+the tip"*; it does now.
+
+Two second-order findings from that fix, both worth keeping:
+
+- **Placement was itself a finding.** Keying the exit on TIP *before* the ladder also swallowed the `already deployed` state (a green **on** the live commit with unstamped commits above), which is genuinely more informative. It reddened two tests **that were right** — so the check belongs *inside* the T1-missed branch, on the same `LAG_COMMITS` precondition T2 already uses.
+- **`tests/deploy-live.bats:28` had pinned the defect as intended behaviour** — its own comment read *"Lag here is 0 commits … this stays a refusal forever."* Its **subject** was never the exit code but the 2026-07-30 regression that `link_refresh` was dead code below the advance (`[ -L "$DEST" ]`). That assertion is untouched; only the fixture moved back onto the path it means to exercise. The rule that decided it: the side with the incident wins, and both sides had one.
+
+**Residual, measured not assumed:** within budget with no green descendant the lane still refuses and
+exits 1. That is **not** the deadlock class — it is bounded (T2 fires past the budget), damped (1 per
+24h), and now **paged**. Recorded so a later reader does not mistake a bounded wait for the freeze.
