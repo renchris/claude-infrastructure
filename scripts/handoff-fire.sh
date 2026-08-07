@@ -926,7 +926,7 @@ as_write() { # $1=session-uuid $2=text
     hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session run -s "${1##*:}" "$2"
     return $?
   fi
-  hf_bounded osascript - "$1" "$2" <<'AS'
+  if hf_bounded osascript - "$1" "$2" <<'AS'
 on run argv
   if not (application id "com.googlecode.iterm2" is running) then
     error "iTerm2 is not running"
@@ -946,6 +946,31 @@ on run argv
   error "session not found: " & (item 1 of argv)
 end run
 AS
+  then return 0; fi
+  # SECOND TRANSPORT, not a retry (item 03682fdd378c). Above this line the iTerm2 branch had exactly
+  # ONE way to reach a pane, and BOTH callers treat its failure as terminal: the self-close (:4097)
+  # and recycle (:5910) loops call as_write 3x and then KILL their own armed watcher (:4104, :5916).
+  # So one transport's bad minute retires nothing — measured twice back-to-back 2026-07-31T06:16/06:17
+  # on pane 7BA549DA (`could not type /exit … watcher disarmed`), leaving a FINISHED peer holding a
+  # pane and a worker slot, which is the exact failure the self-retire contract exists to prevent.
+  #
+  # AppleEvents and the it2 python API are NOT one failure surface. The external-bound header (:422)
+  # says all three funnel into the same serialized API, but that is about a WEDGE — and a wedge fails
+  # await_pane_proof's `session list` FIRST, so it aborts upstream with its own message and never
+  # reaches this line. Reaching here therefore means the shim answered seconds ago while osascript
+  # did not. The watcher header (:3052) documents the same asymmetry from the other side: AppleEvents
+  # "fail unreliably from detached/orphaned contexts (3 detached runs, 3 silent write/lookup
+  # failures)" whereas the python websocket API is "proven reliable detached".
+  #
+  # ONE SEAM, still: this is the verb the kitty branch above already writes with, and the semantics
+  # are identical rather than merely similar — AppleScript `write text` appends the newline, and
+  # `it2 session run` is `async_send_text(command + "\r")` (it2 0.2.3 commands/session.py:44). Using
+  # `session send` instead would type /exit and never submit it.
+  #
+  # A false-negative osascript (hf_bounded rc 124 is "no verdict", not "did not land") can type /exit
+  # twice; the second hits the shell of a pane that is being closed anyway. That is strictly better
+  # than the stranded pane it replaces, and it is the only new behaviour on the success path.
+  hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session run -s "${1##*:}" "$2"
 }
 
 as_tty() { # $1=session-uuid → the pane's tty path (empty when the session is gone)
@@ -4072,8 +4097,11 @@ MSG
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
       osascript -e 'delay 2' >/dev/null 2>&1
     done
-    # /exit untypeable → un-arm: otherwise the watcher force-closes a healthy session at 180s.
-    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — watcher disarmed" >&2; exit 1; }
+    # /exit untypeable → un-arm: otherwise the watcher force-closes a healthy session at 180s. Since
+    # as_write grew its second transport (:973) this is no longer "AppleEvents had a bad minute" — it
+    # is BOTH transports refusing 3x each, so the message must not send the next reader hunting the
+    # one that is merely listed first (the class f59d4ff3 fixed for the PARKED verdict).
+    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — BOTH transports failed 3x (osascript AppleEvents and the it2 shim's session run); watcher disarmed, session stays alive" >&2; exit 1; }
     # Anti-strand best-effort (may not run if the interrupt kills us first — the watcher's CR
     # nudge at 60s covers a stranded /exit).
     osascript -e 'delay 1.5' >/dev/null 2>&1
@@ -5883,8 +5911,9 @@ recycle_fire() {
     osascript -e 'delay 2' >/dev/null 2>&1
   done
   # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
-  # running CC session's composer.
-  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — watcher disarmed" >&2; exit 1; }
+  # running CC session's composer. Same correction as the self-close twin (:4104): as_write now
+  # exhausts BOTH transports before returning non-zero, so this is a pane neither can reach.
+  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — BOTH transports failed 3x (osascript AppleEvents and the it2 shim's session run); watcher disarmed, session stays alive" >&2; exit 1; }
   # Anti-strand best-effort: may never run if the interrupt kills us first — the watcher's CR
   # nudges (@60/150/300s) cover a stranded /exit either way.
   osascript -e 'delay 1.5' >/dev/null 2>&1
