@@ -127,13 +127,18 @@ advance_origin() { # <name...>
   [ ! -f "$INSTALL_LOG" ]
 }
 
-@test "refuses to roll back: newest green is BEHIND the live HEAD" {
-  stamp HEAD                                    # the commit that is already live
-  commit_push b; git -C "$SHARED" push -q origin main   # HEAD and origin both move past it
+# NARROWED 2026-08-07, deliberately NOT deleted. As written this test pinned the LIVE DEADLOCK as
+# correct behaviour: "newest green is behind live HEAD ⇒ refuse", with no budget in the fixture and
+# so no way for the refusal ever to end. Left as-is it would have become a guard on the bug the
+# two-tier rebuild exists to remove. It now pins the half that IS still correct — inside the staleness
+# budget the lane still refuses — and its PAST-BUDGET sibling (L2, at the foot of this file) pins the
+# other half against the identical fixture, so the pair is a clean A/B on exactly one variable.
+@test "WITHIN BUDGET: newest green is BEHIND the live HEAD ⇒ still refuses, tree unmoved" {
+  deadlock                                      # green behind live HEAD; trunk 2 ahead
   before="$(git -C "$SHARED" rev-parse HEAD)"
-  run dl
+  run dl                                        # default budget 25 commits / 6h — 2 commits is inside it
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "ROLL BACK"
+  echo "$output" | grep -q "DESCENDANT of live HEAD"
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
 }
 
@@ -451,14 +456,17 @@ pending() { # <repo-relative> — unlinked BY DESIGN; the assert reports it, nob
 dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
             CC_PAGES_DIR="$PAGES" CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" "$@"; }
 
-@test "refresh runs on the ROLLBACK REFUSAL — the exit that made it dead code (2026-07-30)" {
+@test "refresh runs on the GREEN-BEHIND REFUSAL — the exit that made it dead code (2026-07-30)" {
   seed_parity 1
   miss hooks/brand-new.sh
   stamp HEAD                                     # the newest green is the commit already live...
   commit_push b; git -C "$SHARED" push -q origin main   # ...and both HEAD and origin move past it
   run dlp
   [ "$status" -eq 1 ]
-  echo "$output" | grep -q "ROLL BACK"           # the refusal is UNCHANGED — still fail-closed
+  # The refusal is unchanged in POLARITY — still fail-closed — but no longer claims a rollback:
+  # the target is an ancestor, so `--ff-only` would exit 0 without moving anything (§1.7). Lag here
+  # is 0 commits, so the T2 budget cannot authorise a degrade and this stays a refusal forever.
+  echo "$output" | grep -q "DESCENDANT of live HEAD"
   [ -L "$DEST" ]                                 # ...yet the link now exists anyway
   [ "$(readlink "$DEST")" = "$SHARED/hooks/brand-new.sh" ]
 }
@@ -584,6 +592,137 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   [ -L "$DEST" ]
 }
 
+# ── TWO-TIER TARGET SELECTION: T1 verified · T2 degraded · T3 blocked (§2.2) ─────────────────────
+# The defect these pin: a single green-only tier is an ABSORBING state. The verifier emits 0.17
+# greens/day and trunk moves ~63/day, so the green pointer permanently lags; once any other writer
+# moves live HEAD past it the target is history and the advance refuses forever — 534 identical
+# refusals, launchd runs=276 all exit 1, live layer 91 commits stale, zero pages.
+# Every `[[ ]]` below carries `|| false` for the reason stated in the --auto block above.
+dlb() { # <max-lag-commits> <max-lag-hours> [args…] — dl with the degrade budget PINNED, so no test
+        # here rides on whatever the defaults happen to be
+  local mc="$1" mh="$2"; shift 2
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_MAX_LAG_COMMITS="$mc" CC_DEPLOY_MAX_LAG_HOURS="$mh" /bin/bash "$DL" "$@"
+}
+
+aged_push() { # <name> <seconds-ago> — commit at a BACKDATED author/committer date, then push.
+              # Seeded RELATIVE to now, never a literal date, so the calendar cannot rot this suite.
+  local ts; ts="$(( $(date +%s) - $2 ))"
+  echo "$1" > "$SHARED/$1.txt"; git -C "$SHARED" add -A
+  GIT_AUTHOR_DATE="$ts +0000" GIT_COMMITTER_DATE="$ts +0000" git -C "$SHARED" commit -q -m "$1"
+  git -C "$SHARED" push -q origin main
+}
+
+deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and trunk is 2 ahead.
+             # Shared by the within-budget refusal above and its past-budget sibling L2 below, so
+             # the two differ in the BUDGET and in nothing else.
+  stamp HEAD
+  commit_push b; git -C "$SHARED" push -q origin main
+  advance_origin c d
+}
+
+@test "L1 T1 VERIFIED wins even with the budget blown — the green DESCENDANT, not the newest not-red" {
+  advance_origin b c
+  stamp "origin/main~1"                          # b is green AND a descendant of live HEAD
+  want="$(git -C "$SHARED" rev-parse "origin/main~1")"
+  run dlb 0 0                                    # budget wide open: T2 fires if T1 ever cedes to it
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]      # b — NOT the tip c that T2 would take
+  [[ "$output" != *"DEGRADED"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-degraded-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "L2 T2 DEGRADED past the COMMIT budget: banner + page, and the live layer ADVANCES" {
+  deadlock
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 1 999                                  # 2 > 1 commits; the hours clock is pinned OUT
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [ "$want" != "$before" ]                       # it MOVED — the deadlock is the thing being killed
+  [[ "$output" == *"DEGRADED deploy"* ]] || false
+  [[ "$output" == *"2 commit(s) behind trunk"* ]] || false  # the banner names what authorised it
+  pf="$PAGES/deploy-degraded-$(printf '%.12s' "$want").page"
+  [ -f "$pf" ]
+  head -1 "$pf" | grep -qE '^[0-9]+$'            # epoch-headed like every page in this lane
+  grep -q 'authorised by' "$pf"
+}
+
+@test "L3 T2 DEGRADED on the HOURS budget alone (commit lag nowhere near its own budget)" {
+  aged_push old 36000                            # live HEAD is 10h old and IS origin/main
+  advance_origin b                               # trunk +1 — one commit, deep inside 25
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 25 6
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [[ "$output" == *"h since the live commit was authored"* ]] || false
+  [[ "$output" != *"commit(s) behind trunk"* ]] || false    # the COMMIT clock did not authorise it
+}
+
+@test "L4 T2 walks BACK past a RED-stamped commit and takes the one below it" {
+  advance_origin b c
+  stamp origin/main red                          # the tip is RED — ineligible
+  want="$(git -C "$SHARED" rev-parse "origin/main~1")"
+  run dlb 1 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]        # b — NOT the red tip
+  [[ "$output" == *"DEGRADED deploy"* ]] || false
+  grep -q 'walked back past 1 RED' "$PAGES/deploy-degraded-$(printf '%.12s' "$want").page"
+}
+
+@test "L5 T2 ACCEPTS a cut/hung stamp — a NON-VERDICT is not a red (R6)" {
+  advance_origin b c
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  tip="$(git -C "$SHARED" rev-parse origin/main)"
+  stamp origin/main cut
+  run dlb 1 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$tip" ]         # the CUT tip IS deployable
+  git -C "$SHARED" reset -q --hard "$before"                # …and again for `hung`, from the SAME
+  stamp origin/main hung                                    # start, so neither rides on the other
+  run dlb 1 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$tip" ]
+  # The DISCRIMINATOR: an eligibility test that accepted everything would pass both halves above.
+  # The same fixture with a real RED verdict must NOT take the tip.
+  git -C "$SHARED" reset -q --hard "$before"
+  stamp origin/main red
+  run dlb 1 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" != "$tip" ]
+}
+
+@test "L6 CC_DEPLOY_DEGRADE=off restores today's refusal exactly (a switch that cannot kill is not one)" {
+  deadlock
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_MAX_LAG_COMMITS=1 CC_DEPLOY_MAX_LAG_HOURS=0 CC_DEPLOY_DEGRADE=off \
+          /bin/bash "$DL"
+  [ "$status" -eq 1 ]                            # the budget is BLOWN on both clocks and it still refuses
+  [[ "$output" == *"DESCENDANT of live HEAD"* ]] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  [ "$(find "$PAGES" -name 'deploy-degraded-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  # positive control: SAME state, SAME blown budget, switch ON ⇒ it degrades and advances. Without
+  # this the test would also pass against a T2 that never fires at all.
+  run dlb 1 0
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$(git -C "$SHARED" rev-parse origin/main)" ]
+}
+
+@test "L7 T3 BLOCKED: every commit above live HEAD is RED ⇒ refuse + page, tree unmoved" {
+  advance_origin b c
+  stamp origin/main red; stamp "origin/main~1" red
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 1 999
+  [ "$status" -eq 1 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  [[ "$output" == *"red all the way down"* ]] || false
+  tip="$(git -C "$SHARED" rev-parse origin/main | cut -c1-12)"
+  [ -f "$PAGES/deploy-trunk-red-$tip.page" ]      # its OWN class, not the generic blocked page
+  head -1 "$PAGES/deploy-trunk-red-$tip.page" | grep -qE '^[0-9]+$'
+  grep -q '2 commit(s) above live HEAD' "$PAGES/deploy-trunk-red-$tip.page"
+}
+
 @test "L8 a DIRTY tracked file blocks BY NAME — tree unmoved, file untouched, never stashed" {
   echo v1 > "$SHARED/shared.txt"; git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m base
   git -C "$SHARED" push -q origin main
@@ -591,7 +730,7 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   echo v2 > "$SHARED/shared.txt"; git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m bump
   git -C "$SHARED" push -q origin main
   git -C "$SHARED" reset -q --hard "$base"       # trunk is 1 ahead and that commit rewrites shared.txt
-  stamp origin/main                              # a green descendant exists — this is NOT a tier test
+  stamp origin/main                              # T1 has a green descendant — this is NOT a tier test
   printf 'peer session work\n' > "$SHARED/shared.txt"      # a peer's UNCOMMITTED edit to that path
   run dl
   [ "$status" -eq 1 ]
