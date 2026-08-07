@@ -22,6 +22,9 @@
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
+#           [--self-release spawn-fail|compose-fail|worktree-fail]  → the CLAIMER releasing a claim
+#                                                                  it never started work on; NOT
+#                                                                  counted as thrash (see SELF-RELEASE)
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
 #   unblock <id>                                                 → back to "open"
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
@@ -64,6 +67,49 @@
 # Cloud liveness cannot be read from this box's process table at all; it is read from the repo side
 # and the control plane. The observable set, the channel taxonomy and the producer contract a cloud
 # dispatch must satisfy before it is fired: docs/research/cloud-observability-2026-08-07.md.
+#
+# ── SELF-RELEASE (2026-08-07, backlog 98e0e325b3ed) ─────────────────────────────────────────────
+# `reopen --self-release <token>` marks a reopen the CLAIMER issued because it could not START the
+# work: cc-dispatch rolling back its own uncommenced claim after the fire was refused, the brief
+# failed to compose, or the worktree could not be provisioned. It exists for exactly one reason:
+# REAP'S RULE B MUST NOT COUNT IT.
+#
+# Rule B blocks an item after MAX_THRASH fast claim→reopen pairs, and it is the only rule in `reap`
+# that fires on TRAIL SHAPE ALONE — no oracle, no abstention. That was survivable while the shape
+# meant "a worker keeps bouncing off this item". It does not. cc-dispatch takes the claim BEFORE it
+# fires and self-releases on every failure path, so a refused fire writes the identical shape while
+# no worker has been anywhere near the item.
+#
+# Measured 2026-08-07 over the live store, with the control that makes it a fact about the mechanism
+# and not about the probe:
+#     items blocked "persistent thrash — the worker cannot land"            228
+#       …of those, every counted pair authored by ONE identity on both sides 228   (self-release)
+#       …of those, that would STILL block once self-releases are excluded      0
+#       …that never held a claim for even the 90 s window (no worker ran)    182
+#     fast claim→reopen pairs across the WHOLE ledger: same-author 691 / different-author 14
+#     cc-dispatch verdicts in one 2 h window: `spawn rc=9 (reopened)` 36  vs  `fired` 5
+# rc 9 is the FIRE CAPACITY GATE, whose own refusal text is "Shed load first … then re-fire" — a
+# condition the producer explicitly asks the caller to retry. Rule B converted two of those, 90 s
+# apart, into `blocked`: the OPERATOR-ONLY state, which cc-dispatch excludes from the wave by
+# construction. So a transient load spike permanently removed work from the autonomous queue, and
+# 64% of everything blocked in this store got there that way.
+#
+# That is CONCURRENCY_PROGRAM.md §0's bootstrap cycle with its engine finally named — and the engine
+# is not the landing gate the plan blamed. No land was involved in 182 of the 228; there was no
+# worker to land anything.
+#
+# Three properties, each the same doctrine the rest of this file already follows:
+#   · POSITIVE EVIDENCE, never inference. Only a reopen that ASSERTS `selfRelease` is skipped. The
+#     authorship correlation above is what made the diagnosis; it is deliberately NOT the predicate,
+#     because `by` is ambiguous (a bare `cc-backlog reopen` writes none) and a predicate that guesses
+#     would suppress the one shape rule B exists to see.
+#   · CLOSED-SET + CLAIMER-AUTHENTICATED. This flag SUPPRESSES a guard, so a typo must be rc 2 at the
+#     door, and only the identity the ledger folds as the current claimer may assert it (rc 4).
+#   · REPORTED, NEVER ACTED ON. A large self-release count says nothing about any item and a great
+#     deal about the machine, so `reap` prints it every sweep instead of blocking on it.
+#
+# The historical rows carry no flag — the recovery of items already blocked this way is
+# scripts/thrash-block-recover.sh, which re-derives the verdict per item and never hardcodes a list.
 #
 # ── CONDITION KEY (2026-08-06, backlog 0b3a8b19d4d4) ────────────────────────────────────────────
 # The event key is project+title+source, so a title carrying a LIVE MEASUREMENT re-keys itself every
@@ -654,13 +700,16 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence="" needs="" run="" session="" venue="" force=0
+  local by="" evidence="" needs="" run="" session="" venue="" force=0 selfrel=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
       --evidence) evidence="${1:-}"; [ $# -gt 0 ] && shift ;;
       --needs)    needs="${1:-}";    [ $# -gt 0 ] && shift ;;
+      # --self-release names a reopen the CLAIMER issued because it could not START the work (see
+      # SELF-RELEASE in the header). Reopen-only, closed-set, and only the claimer may assert it.
+      --self-release) selfrel="${1:-}"; [ $# -gt 0 ] && shift ;;
       # --venue names WHERE the worker runs, which decides WHICH ORACLES CAN SEE IT (see VENUE in
       # the header). Claim-only: on any other event it is an error, never silently ignored.
       --venue)    venue="${1:-}";    [ $# -gt 0 ] && shift ;;
@@ -699,8 +748,49 @@ cmd_transition() {
       *) printf 'cc-backlog claim: unknown --venue %s (expected: local, cloud)\n' "$venue" >&2; return 2 ;;
     esac
   fi
+  # --self-release is REOPEN-ONLY and CLOSED-SET, for the same two reasons --venue is, sharpened by
+  # what this flag does: it SUPPRESSES a guard (reap's rule B), so a typo accepted as free text would
+  # be a silent un-suppression that reads as though it worked. Unknown token is rc 2, never a silent
+  # pass-through (memory: default-path-hardening-is-blind-to-the-explicit-argument).
+  if [ -n "$selfrel" ]; then
+    if [ "$event" != reopen ]; then
+      printf 'cc-backlog %s: --self-release applies only to reopen\n' "$event" >&2; return 2
+    fi
+    case "$selfrel" in
+      spawn-fail|compose-fail|worktree-fail) ;;
+      *) printf 'cc-backlog reopen: unknown --self-release %s (expected: spawn-fail, compose-fail, worktree-fail)\n' \
+           "$selfrel" >&2; return 2 ;;
+    esac
+    # REQUIRES --by, because the whole claim of the flag is "the CLAIMER released its own claim".
+    # An anonymous self-release is unattributable, and an unattributable suppression of a guard is
+    # exactly the assertion a third party could make about somebody else's work.
+    if [ -z "$by" ]; then
+      printf 'cc-backlog reopen: --self-release requires --by <the claimer that is releasing>\n' >&2; return 2
+    fi
+  fi
   ensure_file
   has_id "$id" || { printf 'cc-backlog %s: unknown id %s\n' "$event" "$id" >&2; return 3; }
+  # The claimer check runs OUTSIDE the reopen-guard block below, and therefore also under --force:
+  # --force exists to override the reopen guards, and this is not one of them. It is the flag's own
+  # authenticity condition — without it any caller could stamp `selfRelease` onto a reopen of work a
+  # real worker was doing, and reap would then decline to count the one trail shape it exists to see.
+  if [ -n "$selfrel" ]; then
+    local sr_cur sr_status sr_by
+    sr_cur="$(item_json "$id")"
+    sr_status="$(printf '%s' "$sr_cur" | jq -r '.status // ""' 2>/dev/null)"
+    sr_by="$(    printf '%s' "$sr_cur" | jq -r '.by     // ""' 2>/dev/null)"
+    if [ "$sr_status" != claimed ] || [ "$sr_by" != "$by" ]; then
+      { printf 'cc-backlog reopen: REFUSED — --self-release %s claims to release %s'"'"'s own claim on %s,\n' \
+          "$selfrel" "$by" "$id"
+        printf '  but the ledger folds status=%s claimer=%s. Only the live claimer may self-release:\n' \
+          "${sr_status:-<none>}" "${sr_by:-<none>}"
+        printf '  a self-release SUPPRESSES reap'"'"'s thrash counter, so asserting one over another\n'
+        printf '  worker'"'"'s claim would hide the exact trail shape that counter exists to see.\n'
+        printf '  Reopen it without the flag:  cc-backlog reopen %s --by %s\n' "$id" "$by"
+      } >&2
+      return 4
+    fi
+  fi
   # REOPEN GUARDS (see the header block) — refuse a resurrection of terminal work and a yank of a
   # live claim. Both are rc 4 and both name the exact `--force` escape in the refusal.
   if [ "$event" = reopen ] && [ "$force" -eq 0 ]; then
@@ -939,6 +1029,7 @@ cmd_transition() {
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
+     --arg selfrel "$selfrel" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
@@ -946,7 +1037,8 @@ cmd_transition() {
       + (if $run != ""      then {run:$run}           else {} end)
       + (if $session != ""  then {session:$session}   else {} end)
       + (if $venue != ""    then {venue:$venue}       else {} end)
-      + (if $force == 1     then {force:true}         else {} end)' \
+      + (if $force == 1     then {force:true}         else {} end)
+      + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
   echo "$id"
 }
@@ -1792,16 +1884,53 @@ cmd_reap() {
             # deliberately DO take the re-key — that is the whole point: the latest claim names the
             # live worker, and the age clock starts when the worker actually took the work.
             totalClaims: ([$g[] | select(.event=="claim" and (.reclaim // false) != true)] | length),
+            # A SELF-RELEASE IS NOT A THRASH CYCLE. selfRelease marks a reopen the CLAIMER issued
+            # because it could not START the work — cc-dispatch rolling back its own uncommenced
+            # claim after the fire was refused (capacity gate rc 9), the brief failed to compose, or
+            # the worktree could not be provisioned. Those are facts about THE MACHINE AT THAT
+            # INSTANT, and every one of them is a condition whose producer explicitly asks the caller
+            # to retry ("Shed load first … then re-fire"). Counting them convicts the ITEM of a
+            # failure no worker was ever present for, and the rule-B verdict is DURABLE: blocked is
+            # the operator-only state, which cc-dispatch excludes from the wave by construction, so
+            # one transient load spike permanently removes work from the autonomous queue.
+            #
+            # Measured 2026-08-07 before the flag existed: 228 items sat blocked as "persistent
+            # thrash — the worker cannot land"; 475 counted pairs, EVERY one authored by the same
+            # identity on both sides (the dispatcher self-releasing), and 182 of the 228 had never
+            # held a claim for even the 90 s window — no worker had run at all. In the same 2 h the
+            # live journal carried 36 spawn-rc-9 reopens against 5 successful fires. That is the
+            # section-0 bootstrap cycle with its engine named, and it never touched the landing gate.
+            #
+            # Excluded rather than counted-and-forgiven so the exclusion is EVIDENCE-BASED: only a
+            # reopen that positively asserts selfRelease (closed-set, claimer-authenticated at the
+            # CLI) is skipped. An unflagged fast pair still counts, so a genuine thrash — a worker
+            # that really does take the item and bounce off it — still blocks exactly as before.
+            #
+            # NOTE FOR EDITORS: this comment lives INSIDE a single-quoted jq program. An apostrophe
+            # here silently ends the quote and hands the rest of the program to the shell (caught in
+            # development: the first draft wrote "rule B-apostrophe-s" and the fold collapsed to a
+            # jq compile error whose reap then scanned 5 items and blocked none — a green-looking
+            # no-op). Keep this block apostrophe-free and backtick-free.
             fastFail: ([ range(0; ($g|length)-1) as $i
                 | select($i > $cut
                          and $g[$i].event=="claim" and $g[$i+1].event=="reopen"
+                         and (($g[$i+1].selfRelease // false) != true)
+                         and (($g[$i+1].ts|fromdateiso8601) - ($g[$i].ts|fromdateiso8601)) <= $window) ]
+              | length),
+            # Counted for the JOURNAL only — never a block predicate. A self-release says nothing
+            # about the item, but a large count says a great deal about the machine, and a number
+            # nobody can see is a number nobody acts on.
+            selfRel: ([ range(0; ($g|length)-1) as $i
+                | select($i > $cut
+                         and $g[$i].event=="claim" and $g[$i+1].event=="reopen"
+                         and (($g[$i+1].selfRelease // false) == true)
                          and (($g[$i+1].ts|fromdateiso8601) - ($g[$i].ts|fromdateiso8601)) <= $window) ]
               | length) }
         | .claimAgeS = (if .claimTs=="" then -1 else ($now - (.claimTs|fromdateiso8601)) end)
       )
     | .[]
     | select(.status != "done" and .status != "blocked")
-    | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring), .venue]
+    | [.id, .status, .claimBy, (.claimAgeS|floor|tostring), (.totalClaims|tostring), (.fastFail|tostring), .venue, (.selfRel|tostring)]
     | join("\u001f")
   ')"
 
@@ -1812,11 +1941,19 @@ cmd_reap() {
   # `venue` is APPENDED, never inserted: a new column in the middle would shift every later field
   # and silently re-point the numeric ones. Absent (a pre-venue producer) ⇒ the read leaves it empty
   # ⇒ normalised to "local" in the body, which is the same default the jq fold already applies.
-  local reopened=0 blocked=0 scanned=0 journal_fail=0 id status by ageS claims fast venue clrc=0
-  while IFS=$'\037' read -r id status by ageS claims fast venue; do
+  local reopened=0 blocked=0 scanned=0 journal_fail=0 id status by ageS claims fast venue selfrel clrc=0
+  local selfrel_total=0 selfrel_items=0
+  while IFS=$'\037' read -r id status by ageS claims fast venue selfrel; do
     [ -n "$id" ] || continue
     [ -n "$venue" ] || venue=local
+    # APPENDED column ⇒ a pre-selfRel producer leaves it empty; normalise exactly as venue does, so
+    # the arithmetic below can never see "" (memory: negative-array-slice-empties-the-diagnostic —
+    # a field that expands to nothing must be given its value, not left to an implicit one).
+    [ -n "$selfrel" ] || selfrel=0
     scanned=$((scanned + 1))
+    if [ "$selfrel" -gt 0 ]; then
+      selfrel_total=$((selfrel_total + selfrel)); selfrel_items=$((selfrel_items + 1))
+    fi
     # Rule B (priority): persistent thrash → block (out of the wave, surfaced to the desk).
     if [ "$fast" -ge "$maxthrash" ]; then
       local bmsg="persistent thrash — ${fast} fast claim→reopen cycle(s) (spawn-fail / land-conflict rebase-exit-5); the worker cannot land. Investigate the root cause, then \`cc-backlog unblock ${id}\`."
@@ -1967,6 +2104,16 @@ cmd_reap() {
     fi
   done <<< "$analysis"
 
+  # SELF-RELEASES ARE REPORTED, NEVER ACTED ON. They are excluded from the block predicate because
+  # they are evidence about the machine and not about the item — but a number nobody can see is a
+  # number nobody acts on, and the machine-side condition they measure (a fire the capacity gate
+  # keeps refusing) is real work for the desk even though it is not this item's fault. Printed in
+  # BOTH modes for the same reason every abstention above is: a silent exclusion is indistinguishable
+  # from an inert one (memory: feature-durability-mechanism-not-memory).
+  if [ "$selfrel_total" -gt 0 ]; then
+    printf 'cc-backlog reap: %s self-release(s) across %s item(s) NOT counted as thrash — the dispatcher could not FIRE them (capacity/compose/worktree); that is a machine condition, not the items\n' \
+      "$selfrel_total" "$selfrel_items"
+  fi
   if [ "$dry" = 1 ]; then
     printf 'cc-backlog reap (dry-run): %s non-terminal item(s) scanned — no writes\n' "$scanned"
   else
