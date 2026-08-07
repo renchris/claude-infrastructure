@@ -246,6 +246,17 @@ run_cleanup() { # $1=output file
   eval "$(sed -n '/^ensure_registration() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^mark_fired_peer() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^fire_cleanup() {/,/^}/p' "$HF")"
+  # 2026-08-07: fire_cleanup no longer calls the it2 shim directly — every pane close in this script
+  # now goes through hf_close_pane, which guards the target and writes a durable attribution row
+  # (docs/plans/PANE_THEFT_2026-08-07.md). This test's SUBJECT is unchanged — "never by default,
+  # opt-in closes" — so it must eval the new helpers rather than pin the old transport shape, or it
+  # would go green by calling nothing at all (memory: stale-assertion-becomes-an-inverted-guard).
+  eval "$(sed -n '/^hf_pane_agent_owned() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_close_pane() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_close_attrib() {/,/^}/p' "$HF")"
+  in_kitty() { return 1; }
+  kt_window_field() { return 0; }
+  export CC_CLOSE_ATTRIB_LOG="$BATS_TEST_TMPDIR/close-attrib.jsonl"
   local h="$BATS_TEST_TMPDIR/home-kill"; mkdir -p "$h/.claude/bin"
   cat > "$h/.claude/bin/it2" <<'SH'
 #!/usr/bin/env bash

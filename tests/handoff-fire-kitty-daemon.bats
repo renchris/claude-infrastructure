@@ -136,6 +136,22 @@ FAKE
  {"id":2,"tabs":[{"windows":[{"id":9,"pid":6000,"is_focused":false}]}]}]
 JSON
 
+  # OWNERSHIP FIXTURE (2026-08-07). The anchor picker now resolves only onto a pane the machine
+  # provably created — a live ~/.claude/cc-fired/<id>.json paired with a live registry pid — because
+  # its old fallbacks (`focused`, then the first window of the first roomy tab) were operator-owned
+  # by construction and took the operator's pane on 2026-08-07
+  # (docs/plans/PANE_THEFT_2026-08-07.md). Without this, every resolution test in this file would
+  # assert against a REFUSAL and the parse/room/three-state arms below would never be reached.
+  # Windows 28 and 9 are marked; 31 is deliberately left unmarked so "some panes are the
+  # operator's" stays representable. The registry pid is this process — genuinely alive, not a
+  # fabricated number that would silently exercise the dead-pid branch instead.
+  mkdir -p "$HOME/.claude/cc-fired" "$HOME/.claude/cc-registry"
+  for _w in 28 9; do
+    printf '{"paneUUID":"%s","closedAt":null,"originClass":"fired-peer"}' "$_w" \
+      > "$HOME/.claude/cc-fired/$_w.json"
+    printf '{"paneUUID":"%s","pid":%s}' "$_w" "$$" > "$HOME/.claude/cc-registry/$_w.json"
+  done
+
   # ── extract the subject ────────────────────────────────────────────────────────────────────────
   # in_kitty and kt are ONE-LINERS with no `^}` of their own, so a /,/^}/ range would swallow the
   # next function. GUARD every extraction: an empty eval is a vacuous pass, the failure mode this

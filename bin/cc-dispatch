@@ -425,6 +425,35 @@ fire_excerpt() {
   tr '\n\t' '  ' < "$1" 2>/dev/null | tr -cd '\40-\176' | tail -c 200
 }
 
+# fire_log_keep <id> <account> <rc> <file> — persist a fire's OWN output, success included.
+#
+# The excerpt functions above feed the IDL, which is a verdict journal: 200 bounded characters, one
+# line, built to be greppable. That is the wrong shape for the thing an incident actually needs — the
+# fire's narration of which pane it anchored to, whether focus came back, and what it closed. So the
+# full stream is appended here instead, in its own file, and the IDL keeps its one-line verdict.
+#
+# Bounded three ways so a log cannot become the next outage: tail -c per fire, 0600, and a size-
+# triggered single-generation rotation. Fail-open at every step — a dispatcher must never die because
+# a log could not be written (memory: addon-failure-exceeds-its-blast-radius; a side-car must fail no
+# wider than itself). Seam CC_DISPATCH_FIRE_LOG for the tests.
+fire_log_keep() { # $1=item id $2=account $3=rc $4=captured-output file
+  local _lf="${CC_DISPATCH_FIRE_LOG:-$HOME/.claude/logs/dispatch-fires.log}" _max=4194304
+  { [ -n "${4:-}" ] && [ -s "$4" ]; } || return 0
+  mkdir -p "$(dirname "$_lf")" 2>/dev/null || return 0
+  # Single-generation rotation: one `.1`, never an unbounded chain.
+  local _sz
+  _sz="$(/usr/bin/stat -f %z "$_lf" 2>/dev/null || echo 0)"
+  case "$_sz" in ''|*[!0-9]*) _sz=0 ;; esac
+  [ "$_sz" -gt "$_max" ] && mv -f "$_lf" "$_lf.1" 2>/dev/null
+  {
+    printf '\n===== %s item=%s account=%s rc=%s pid=%s =====\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "${1:-?}" "${2:-?}" "${3:-?}" "$$"
+    tail -c 8192 "$4" 2>/dev/null
+  } >> "$_lf" 2>/dev/null || true
+  chmod 600 "$_lf" 2>/dev/null || true
+  return 0
+}
+
 # claim_excerpt <file> → a claim refusal's HEADLINE (first line, sanitized, bounded).
 # HEAD-biased on purpose, unlike fire_excerpt: a lease refusal states its verdict in line 1 and
 # spends the rest naming the escape hatches, so a tail-200 excerpt (right for a spawn log, whose
@@ -1042,12 +1071,38 @@ dispatch() { # <dry|run|decide>
     if [ -n "$ferrf" ]; then "$spawn" "${fire_args[@]}" >"$ferrf" 2>&1; frc=$?
     else                     "$spawn" "${fire_args[@]}" >/dev/null 2>&1; frc=$?
     fi
+    # …BUT ONLY THE FAILURES WERE EVER READ, AND THAT IS ITS OWN BLIND SPOT (2026-08-07).
+    # The paragraph above fixed "a failure verdict with no evidence" and left the mirror image
+    # standing: on rc 0 `$ferrf` was `rm`'d UNREAD. handoff-fire narrates its whole anchor decision
+    # on stderr — `→ headless fire: … anchored to live pane X (N pane(s) in its tab)`,
+    # `!! FOCUS-STOLEN …`, `Closed the untyped pane N`, every `→ fire-cleanup: …` — and that stream
+    # existed nowhere else, so the ONE path that succeeds was the ONE path whose evidence was
+    # destroyed. A fire that misbehaves and still returns 0 was therefore unfalsifiable after the
+    # fact, by construction.
+    #
+    # It stopped being hypothetical on 2026-08-07: two headless fires anchored on the operator's own
+    # panes, one of which was destroyed with unsent composer text in it, and the forensic answer to
+    # "which call did that?" was unrecoverable — /tmp/claude-dispatcher.stderr.log contains ZERO
+    # occurrences of `headless fire`, `anchor`, `FOCUS-STOLEN` or `fire-cleanup` across its entire
+    # history, because every one of them was written to a mktemp and deleted seconds later.
+    # (Same shape as memory gate-silence-population-and-suppression: never-LOOKED-AT and
+    # told-to-IGNORE render as the same green.)
+    #
+    # A success excerpt is kept — bounded by the same fire_excerpt the failure arm uses, so this
+    # cannot become a log-volume problem — and the ANCHOR DECISION is promoted to its own idl field,
+    # because "which pane did an autonomous fire attach itself to" is the question that took an
+    # incident to ask and had no answer. Silence here reads as "no anchor line was emitted", which
+    # is itself diagnostic rather than ambiguous.
     if [ "$frc" -eq 0 ]; then
-      FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct"
+      local fanch=""
+      [ -n "$ferrf" ] && fanch="$(/usr/bin/grep -m1 -o 'anchored to live pane [^ ]*' "$ferrf" 2>/dev/null || true)"
+      FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct${fanch:+ — $fanch}"
+      [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
     else
       "$backlog" reopen "$id" --by "$SID" >/dev/null 2>&1 || true   # self-release (see above)
       fexc="$(fire_excerpt "$ferrf")"
       FAILED=$((FAILED + 1)); idl failed "$id: spawn rc=$frc (reopened)${fexc:+ — $fexc}"
+      [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
     fi
     [ -n "$ferrf" ] && rm -f "$ferrf" 2>/dev/null || true
   done

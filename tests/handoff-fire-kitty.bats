@@ -479,11 +479,31 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   # the right terminal and then decline to fire. Its full behaviour (preference order, room
   # awareness, the three return states) lives in tests/handoff-fire-kitty-daemon.bats; what is
   # pinned HERE is the same property every other verb in this file pins — kitty means kitty.
+  #
+  # 2026-08-07: the rc-0 assertion that used to sit here was INCIDENTAL to that property, and it is
+  # now wrong. The kitty picker gained an ownership rule — a headless fire may anchor only on a pane
+  # the machine provably created (docs/plans/PANE_THEFT_2026-08-07.md) — and this suite's ls fixture
+  # (windows 25 and 31) has no fired-peer marker behind either, so the correct answer for it is a
+  # REFUSAL. Both routes are pinned below, because a transport claim that only ever exercised the
+  # refusal would go green without proving the resolving path reaches kitty either.
   pin_kitty
+  export HOME="$BATS_TEST_TMPDIR/anchor-home"
+  mkdir -p "$HOME/.claude/cc-fired" "$HOME/.claude/cc-registry"
+
+  # (a) nothing agent-owned ⇒ kitty answers, and its answer is "refuse"
+  run it2py anchor "" 5
+  [ "$status" -eq 4 ]
+  [ ! -s "$PLOG" ]      # the iterm2 driver was never consulted — this is the property under test
+  [ -s "$KLOG" ]        # …and the kitty socket was
+
+  # (b) make window 31 agent-owned ⇒ the same kitty arm resolves, still without the driver
+  printf '{"paneUUID":"31","closedAt":null}' > "$HOME/.claude/cc-fired/31.json"
+  printf '{"paneUUID":"31","pid":%s}' "$$" > "$HOME/.claude/cc-registry/31.json"
+  : > "$PLOG"
   run it2py anchor "" 5
   [ "$status" -eq 0 ]
+  [ "${output%% *}" = "31" ]
   [ ! -s "$PLOG" ]
-  [ -s "$KLOG" ]
 }
 
 @test "every it2py verb on iTerm2 still reaches the Python driver — kitty is never consulted" {

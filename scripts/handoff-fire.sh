@@ -675,6 +675,144 @@ for ow in d:
 sys.exit(0)'
 }
 
+# hf_pane_agent_owned ID — true iff the machine created this pane AND it is still live. Disk truth,
+# the same predicate the kitty anchor picker uses (:4500 area): a fired-peer marker with closedAt
+# null, PAIRED with a live registry pid. The pairing is not belt-and-braces — a kitty window id is a
+# per-kitty-process counter that restarts at 1, so a marker left by a previous kitty can name a live
+# unrelated window (bin/it2-kitty:574 documents the same trap for `close`), and a bare registry row
+# proves nothing because operator panes are registered too.
+hf_pane_agent_owned() { # $1=pane id → 0 agent-owned / 1 not (or unprovable)
+  local _i="${1##*:}"
+  [ -n "$_i" ] || return 1
+  ACC_HOME="$HOME/.claude" APID="$_i" /usr/bin/python3 -c '
+import json, os, sys
+home, wid = os.environ.get("ACC_HOME") or "", os.environ.get("APID") or ""
+try:
+    with open(os.path.join(home, "cc-fired", wid + ".json")) as f:
+        marker = json.load(f)
+except Exception:
+    sys.exit(1)
+if marker.get("closedAt") is not None:
+    sys.exit(1)
+try:
+    with open(os.path.join(home, "cc-registry", wid + ".json")) as f:
+        row = json.load(f)
+except Exception:
+    sys.exit(1)
+pid = row.get("pid")
+if not isinstance(pid, int) or pid <= 0:
+    sys.exit(1)
+try:
+    os.kill(pid, 0)
+except ProcessLookupError:
+    sys.exit(1)
+except PermissionError:
+    pass
+except Exception:
+    sys.exit(1)
+sys.exit(0)' 2>/dev/null
+}
+
+# hf_close_pane ID SITE [MODE] — THE ONE WAY THIS SCRIPT DESTROYS A PANE.
+#
+# Built 2026-08-07 for the pane-theft incident (docs/plans/PANE_THEFT_2026-08-07.md). Two separate
+# holes closed at once, and the SECOND is the one that made the first un-diagnosable:
+#
+#   1. NO SITE ASSERTED WHAT IT WAS ABOUT TO DESTROY. Three call sites each ran a bare
+#      `it2 session close -f -s "$x"`. On kitty a *malformed* id is already safe — bin/it2-kitty
+#      exits 65 on an empty or non-numeric id, and `kitty @ close-window --match id:<absent>` is a
+#      hard rc-1 that closes nothing (measured). The reachable harm is the opposite shape: a
+#      perfectly well-formed id that names the OPERATOR'S pane, which is exactly what the old
+#      headless anchor picker handed out. The invariant that actually bites is therefore
+#      `id != the pane we anchored on` — a fire must never destroy its own anchor — and it holds
+#      even when ownership is unprovable, which is why it is checked first and unconditionally.
+#
+#   2. NO SITE RECORDED WHAT IT DESTROYED. `handoffs.jsonl` carries firing_sid and target_pane and
+#      nothing else, and the fire's stderr — the only place the close sites ever spoke — is written
+#      to a mktemp by cc-dispatch and `rm`'d UNREAD on rc 0 (bin/cc-dispatch, success arm). So the
+#      one path that succeeds is the one path whose evidence is destroyed, and a fire that
+#      misbehaves while returning 0 is unfalsifiable after the fact. Every close now lands a durable
+#      row in ~/.claude/logs/close-attrib.jsonl BEFORE and AFTER the attempt, with the requested id,
+#      the VERIFIED post-state, the site, the caller pid and the ownership verdict.
+#
+# NOT to be confused with bin/cc-close-attrib, whose name collides but whose subject does not: that
+# wrapper attributes the death of a CLAUDE PROCESS (exit code + stderr tail, keyed by pid, consumed
+# by lead-crash-watchdog). Nothing in this repo attributed the death of a PANE. This does.
+#
+# MODE picks which guards apply — three states, because collapsing them retires the common case:
+#   spawn  the pane was created by THIS run moments ago (restore_focus_or_fail, fire-cleanup). It
+#          cannot carry a fired-peer marker yet, so the ownership test would refuse a legitimate
+#          self-clean. Anchor-identity still binds.
+#   self   the pane IS the caller (the self-close watcher). A session retiring itself is always
+#          authorized; an operator pane has no marker and must still be able to close itself.
+#   peer   (default) closing SOMEONE ELSE's pane. Full guard: refuse unless provably agent-owned.
+hf_close_pane() { # $1=pane id  $2=site label  $3=spawn|self|peer  → 0 closed / 1 close failed / 2 REFUSED
+  local _id="${1##*:}" _site="${2:-unknown}" _mode="${3:-peer}"
+  local _term _owner _verdict _rc=0 _still _shim
+  _shim="${IT2_SHIM:-$HOME/.claude/bin/it2}"
+  _term=$(in_kitty && echo kitty || echo iterm2)
+  hf_pane_agent_owned "$_id" && _owner=agent || _owner=operator-or-unknown
+
+  if [ -z "$_id" ]; then
+    hf_close_attrib "" "$_site" "$_mode" "$_term" "$_owner" refused-empty-id
+    echo "!! close REFUSED ($_site): empty pane id." >&2
+    return 2
+  fi
+  # THE ANCHOR INVARIANT. A background fire that destroys the pane it anchored on is the incident,
+  # and it is destructive in the one direction that cannot be undone — the operator's unsent
+  # composer text is not on disk anywhere (docs/plans/PANE_THEFT_2026-08-07.md §5.4).
+  if [ -n "${FIRING_SID:-}" ] && [ "$_id" = "${FIRING_SID##*:}" ]; then
+    hf_close_attrib "$_id" "$_site" "$_mode" "$_term" "$_owner" refused-is-anchor
+    echo "!! close REFUSED ($_site): pane $_id is this fire's own ANCHOR — never destroy what you fired from." >&2
+    return 2
+  fi
+  if [ "$_mode" = peer ] && [ "$_owner" != agent ]; then
+    hf_close_attrib "$_id" "$_site" "$_mode" "$_term" "$_owner" refused-not-agent-owned
+    echo "!! close REFUSED ($_site): pane $_id is not provably agent-owned (no live fired-peer marker)." >&2
+    echo "   An autonomous close may only destroy panes the machine created." >&2
+    return 2
+  fi
+
+  hf_bounded "$_shim" session close -f -s "$_id" >/dev/null 2>&1 || _rc=$?
+  # VERIFY, do not assume. `close` returning 0 is a claim; the pane being gone is the outcome, and
+  # the two came apart before (memory: claimed-outcome-vs-checked-outcome). An empty field read is
+  # "absent"; a FAILED query is not, so an unreadable terminal is recorded as unknown, never as gone.
+  if [ "$_term" = kitty ]; then
+    _still="$(kt_window_field "$_id" id 2>/dev/null)" || _still="?"
+  else
+    _still="?"
+  fi
+  case "$_still" in
+    "")  _verdict=closed ;;
+    "?") _verdict=unverified ;;
+    *)   _verdict=STILL-PRESENT ;;
+  esac
+  [ "$_rc" = 0 ] || _verdict="${_verdict}-rc$_rc"
+  hf_close_attrib "$_id" "$_site" "$_mode" "$_term" "$_owner" "$_verdict"
+  # AN UNVERIFIED CLOSE IS NOT A FAILED ONE. `unverified` is what an iTerm2 pane (no cheap
+  # post-read) or an unreadable kitty socket produces, and it is a NON-VERDICT — convicting on it
+  # would make the self-close retry loop burn all 4 attempts and page a HUSK on every iTerm2 close
+  # that in fact worked. So the rc follows the transport when observation is impossible, and only a
+  # POSITIVE observation of survival, or a non-zero transport, reports failure.
+  case "$_verdict" in
+    closed)     return 0 ;;
+    unverified) return 0 ;;   # shim said 0 and nothing contradicted it
+    *)          return 1 ;;   # STILL-PRESENT, or any *-rc<n> suffix
+  esac
+}
+
+# hf_close_attrib — one durable JSONL row per close ATTEMPT (including refusals; a refusal is the
+# most interesting row there is). Append-only and fail-open: attribution must never be able to break
+# a teardown, so every step is guarded and the worst case is a missing row.
+hf_close_attrib() { # $1=id $2=site $3=mode $4=terminal $5=owner $6=verdict
+  local _f="${CC_CLOSE_ATTRIB_LOG:-$HOME/.claude/logs/close-attrib.jsonl}"
+  mkdir -p "$(dirname "$_f")" 2>/dev/null || return 0
+  printf '{"ts":"%s","site":"%s","mode":"%s","terminal":"%s","id_requested":"%s","owner":"%s","verdict":"%s","caller_pid":%s,"firing_sid":"%s","script":"handoff-fire.sh"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$2" "$3" "$4" "$1" "$5" "$6" "$$" "${FIRING_SID:-}" \
+    >> "$_f" 2>/dev/null || true
+  return 0
+}
+
 # iTerm2 IS ADDRESSED BY BUNDLE ID, AND NEVER LAUNCHED IMPLICITLY (2026-07-31).
 # Two separate defects, one line apart:
 #   1. Addressing it by the bare name (tell application + "iTerm2") is a NAME lookup, and the
@@ -2665,7 +2803,11 @@ if [ "${1:-}" = "__selfclose" ]; then
   # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + desk page, never a silent husk.
   _close_ok=0
   for _try in 1 2 3 4; do
-    if hf_bounded "$HOME/.claude/bin/it2" session close -f -s "$SID" 2>&1; then _close_ok=1; break; fi
+    # mode=self: the pane IS the caller. The ownership guard is deliberately NOT applied — a
+    # session retiring itself is always authorized, and an operator's own pane carries no
+    # fired-peer marker, so guarding here would retire the common case rather than the hazard.
+    # The attribution row is written either way, which is the half that was missing.
+    if hf_close_pane "$SID" self-close self; then _close_ok=1; break; fi
     echo "⚠ it2 session close attempt $_try/4 failed for $SID — retrying in 2s" >&2
     sleep 2
   done
@@ -4181,7 +4323,10 @@ fire_cleanup() {
     fi
     if [ "${FIRE_FAILED_CLOSE_PANE:-0}" = 1 ]; then
       echo "→ fire-cleanup: FIRE_FAILED_CLOSE_PANE=1 — closing the task-less pane $SPAWNED_PANE" >&2
-      hf_bounded "$HOME/.claude/bin/it2" session close -f -s "$SPAWNED_PANE" >/dev/null 2>&1 || true
+      # mode=spawn: this pane was created by THIS run seconds ago, so it cannot carry a fired-peer
+      # marker yet and the ownership test would refuse a legitimate self-clean. The anchor
+      # invariant still binds — fire-cleanup must never close the pane the fire anchored on.
+      hf_close_pane "$SPAWNED_PANE" fire-cleanup spawn || true
     fi
   fi
   return 0
@@ -4493,11 +4638,34 @@ it2py() {
         #   stdout "<window-id> <windows-in-its-tab>" rc 0 · "NO-LIVE-SESSION" rc 0 (a VERDICT — the
         #   box really has no window) · rc≠0 (the QUERY failed — never "empty"). Collapsing the last
         #   two is what leaked ~12 iTerm2 windows/hour on 2026-07-30.
-        # Preference order is also the iTerm2 verb's: the desk pane → the focused window → any
-        # window, each gated on its tab having ROOM (< cap), then the same list again ignoring room
-        # so a genuinely full box still gets an anchor and its true count, and the caller spills.
+        # Preference order (REWRITTEN 2026-08-07 after the pane-theft incident, plan
+        # docs/plans/PANE_THEFT_2026-08-07.md): the desk pane → an AGENT-OWNED pane → REFUSE.
+        # Each gated on its tab having ROOM (< cap), then the same list again ignoring room so a
+        # genuinely full box still gets an anchor and its true count, and the caller spills.
+        #
+        # WHAT WAS HERE BEFORE, AND WHY IT TOOK THE OPERATOR'S PANE. The order used to be
+        # desk → `focused` → `tabs[0][0]`, and BOTH fallbacks are operator-owned by construction:
+        #   · `desk` holds an iTerm2 session UUID (~/.claude/cc-roles/desk) while by_id is keyed by
+        #     kitty INTEGER ids, so by_id.get(desk) was unconditionally None — the desk preference
+        #     has been dead code on every kitty box since the fleet moved off iTerm2.
+        #   · `focused` is not the safety net it reads as. Measured 2026-08-07: `kitty @ ls` reports
+        #     is_focused FALSE for every window whenever kitty is not the frontmost APP — which is
+        #     exactly when a launchd/cron fire runs. So `focused` is usually EMPTY and the walk fell
+        #     to the third clause: the first window of the first tab with room. An ARBITRARY
+        #     operator pane, picked by kitty enumeration order.
+        # That is how a 06:41Z headless fire split off, and a later call destroyed, a pane the
+        # operator was composing into. Reordering desk-before-focused would not have helped; the
+        # picker had no notion of pane OWNERSHIP at all, and that is what is added here.
+        #
+        # OWNERSHIP is disk truth, not a heuristic: a pane the machine created carries a fired-peer
+        # marker ~/.claude/cc-fired/<id>.json (mark_fired_peer, :4172) with closedAt null. In the
+        # incident the two fire children (246, 248) both had one and the operator's own pane (247)
+        # did not — the discriminator was already on disk and nothing consulted it. The marker is
+        # paired with a LIVE registry pid because a kitty window id is a per-kitty-process counter
+        # that restarts at 1, so a marker left by a previous kitty could otherwise name a live
+        # unrelated window (the same id-recycling trap bin/it2-kitty:574 documents for `close`).
         local adesk="${2:-}"; adesk="${adesk##*:}"
-        kt ls 2>/dev/null | ADESK="$adesk" ACAP="${3:-5}" /usr/bin/python3 -c '
+        kt ls 2>/dev/null | ADESK="$adesk" ACAP="${3:-5}" ACC_HOME="$HOME/.claude" /usr/bin/python3 -c '
 import json, os, sys
 try:
     d = json.load(sys.stdin)          # drains stdin BEFORE the walk: no SIGPIPE onto kitty @ ls,
@@ -4508,26 +4676,77 @@ try:
 except ValueError:
     cap = 5
 desk = os.environ.get("ADESK") or ""
+home = os.environ.get("ACC_HOME") or ""
+
+# TERMINAL-IDENTITY GUARD. A desk hint that cannot exist in this terminal id space is a BROKEN
+# INVARIANT, not a miss — silently ignoring it is precisely what converted a stale role file into
+# "target the operator". kitty window ids are decimal integers; anything else (an iTerm2 UUID, a
+# w0t0p0: address) means the role files describe a different terminal than the one we are driving.
+# Refuse, and name the repair, rather than fall through to a guess.
+if desk and not desk.isdigit():
+    sys.stderr.write("Error: desk role is not a kitty window id: " + desk + "\n")
+    sys.stderr.write("       ~/.claude/cc-roles/* describe a DIFFERENT terminal than the live one.\n")
+    sys.stderr.write("       Refusing to guess an anchor. Repair: ~/.claude/autonomy/pending-activation/31-cc-roles-kitty-normalise-activate.sh\n")
+    sys.exit(3)                       # TERMINAL-IDENTITY MISMATCH — caller must treat as inconclusive
+
 tabs = [t.get("windows") or [] for ow in d for t in ow.get("tabs", [])]
 by_id = {str(w.get("id")): ws for ws in tabs for w in ws}
-focused = [str(w.get("id")) for ws in tabs for w in ws if w.get("is_focused")]
+
+def agent_owned(wid):
+    # Machine-created AND still live. Both halves are load-bearing: the marker alone survives the
+    # pane, and a bare registry row exists for operator panes too (the operator is registered).
+    try:
+        with open(os.path.join(home, "cc-fired", wid + ".json")) as f:
+            marker = json.load(f)
+    except Exception:
+        return False
+    if marker.get("closedAt") is not None:
+        return False
+    try:
+        with open(os.path.join(home, "cc-registry", wid + ".json")) as f:
+            row = json.load(f)
+    except Exception:
+        return False
+    pid = row.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)               # EPERM means it EXISTS and is not ours — still alive
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except Exception:
+        return False
+    return True
 
 def pick(room):
-    for wid in ([desk] if desk else []) + focused:
-        ws = by_id.get(wid)
+    if desk:
+        ws = by_id.get(desk)
         if ws and (not room or len(ws) < cap):
-            return wid, len(ws)
+            return desk, len(ws)
     for ws in tabs:
-        if ws and (not room or len(ws) < cap):
-            return str(ws[0].get("id")), len(ws)
+        if room and len(ws) >= cap:
+            continue
+        for w in ws:
+            wid = str(w.get("id"))
+            if agent_owned(wid):
+                return wid, len(ws)
     return None
 
 hit = pick(True) or pick(False)
 if hit is None:
-    print("Error: no live kitty window to anchor to", file=sys.stderr)
-    print("NO-LIVE-SESSION")          # a VERDICT, on stdout, rc 0
-else:
-    print("%s %d" % hit)
+    if not by_id:
+        sys.stderr.write("Error: no live kitty window to anchor to\n")
+        print("NO-LIVE-SESSION")      # a VERDICT, on stdout, rc 0
+        sys.exit(0)
+    # Windows exist but none is provably ours. The old code took one anyway; that IS the incident.
+    sys.stderr.write("Error: " + str(len(by_id)) + " live kitty window(s), NONE agent-owned "
+                     "(no ~/.claude/cc-fired/<id>.json with a live registry pid).\n")
+    sys.stderr.write("       Every candidate is operator-owned. Refusing to anchor a headless fire "
+                     "on a pane the operator is using.\n")
+    sys.exit(4)                       # NO-SAFE-ANCHOR — refuse, never "determined empty"
+print("%s %d" % hit)
 '
         return $?
         ;;
@@ -4800,7 +5019,11 @@ restore_focus_or_fail() {
   local before="$1" front="$2" newid="$3" label="$4"
   [ -n "$before" ] || return 0
   it2py restore "$before" "$front" >/dev/null 2>&1 && return 0
-  hf_bounded "$IT2_SHIM" session close -f -s "$newid" >/dev/null 2>&1 || true
+  # mode=spawn — $newid is the child this function just created and is now un-creating. The anchor
+  # invariant is what matters here: `before` (the operator's focus) and `newid` must never be the
+  # same pane, and if a future refactor ever lets them converge, hf_close_pane refuses instead of
+  # destroying the very pane whose focus it failed to restore.
+  hf_close_pane "$newid" restore-focus-or-fail spawn || true
   echo "!! FOCUS-STOLEN ($label): could not restore the operator's focus ($before) after the fire." >&2
   echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
   echo "   Pass --follow to intentionally land your view on the continuation, else re-fire." >&2
@@ -4834,8 +5057,24 @@ resolve_headless_anchor() {
   # printed a file-not-found immediately above its anchor decision.
   desk="$(2>/dev/null tr -d '[:space:]' < "$HOME/.claude/cc-roles/desk" || true)"
   local out rc=0
-  out="$(it2py anchor "$desk" "${CC_FIRE_MAX_PANES:-5}" 2>/dev/null)" || rc=$?
-  [ "$rc" = 0 ] || { echo "   anchor probe FAILED (it2py anchor rc=$rc) — inconclusive, not empty." >&2; return 2; }
+  # `2>/dev/null` REMOVED 2026-08-07. It contradicted this function's own header ("stderr is
+  # deliberately NO LONGER discarded — a silent probe failure is unfalsifiable after the fact") by
+  # swallowing the probe's stderr one line below the paragraph that says not to, so the kitty
+  # picker's terminal-identity and no-safe-anchor diagnostics could never reach a reader. Only
+  # STDOUT is captured; the probe's own explanation of WHY it refused now flows to the caller.
+  out="$(it2py anchor "$desk" "${CC_FIRE_MAX_PANES:-5}")" || rc=$?
+  case "$rc" in
+    0) ;;
+    # Distinct causes, one disposition: all are INCONCLUSIVE (2), never "determined empty" (1) —
+    # minting a fresh window on an unknown is the 2026-07-30 ~12-windows/hour leak.
+    3) echo "!! anchor probe REFUSED: the desk role is in another terminal's id space (rc=3)." >&2
+       echo "   Headless fires are HELD until ~/.claude/cc-roles/* names a live kitty window." >&2
+       return 2 ;;
+    4) echo "!! anchor probe REFUSED: live windows exist but none is agent-owned (rc=4)." >&2
+       echo "   Anchoring here would put a background fire on a pane the operator is using." >&2
+       return 2 ;;
+    *) echo "   anchor probe FAILED (it2py anchor rc=$rc) — inconclusive, not empty." >&2; return 2 ;;
+  esac
   case "$out" in
     NO-LIVE-SESSION) return 1 ;;
     ????????-*\ [0-9]*) printf '%s' "$out"; return 0 ;;
