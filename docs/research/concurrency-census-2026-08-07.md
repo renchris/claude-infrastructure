@@ -190,3 +190,73 @@ for pid in $(pgrep -f "next-server|next/dist/bin/next"); do             # dev se
 done
 ps -Ao pcpu,rss,comm -r | head -13                                      # top consumers
 ```
+
+---
+
+## 8 · The overnight queue exists, runs, and is JAMMED BY THIS SAME PROBLEM
+
+Measured the same session, after asking "do we have a system that fires queued work overnight when
+load drops?" **Yes — and that is the finding, not the reassurance.**
+
+| | |
+| --- | --- |
+| dispatcher | `com.claude.dispatcher` (launchd), **`StartInterval` 300 s**, runs `cc-dispatch --once` |
+| ceiling | `CC_DISPATCH_CEILING` default **6** — fleet concurrency cap |
+| admission | `free_slots = max(0, CEILING − live_workers)`; the rest DEFER with a queue position |
+| scope | **`CC_DISPATCH_PROJECT="claude-infrastructure"`** |
+
+### Backlog state — 97% blocked
+
+| state | count |
+| --- | --- |
+| **blocked** | **323** |
+| open | **8** |
+| claimed | 2 |
+
+By project: claude-infrastructure **253** · reso-management-app **56** · doc_classifier **23** · reso 1.
+
+🚨 **205 of 333 items (62%) cite land-failure** — "persistent thrash — N fast claim→reopen cycle(s)
+(spawn-fail / land-conflict rebase-exit-5); the worker cannot land."
+
+Item `02ba4e52389a` states the mechanism in its own words: branch complete, clean, rebased on
+origin/main, 8 atomic commits, shellcheck clean — and `scripts/ship-land.sh`'s full-suite gate
+(1,834 /Users/chrisren/.claude/bin/cc-bats tests) was **SIGTERM-killed mid-run on all four attempts** (at tests 253/352/353/357)
+while **8+ sibling worktrees ran their own full gates concurrently at load 16–26**. **Zero test
+failures in ~1,700 cumulative green executions.** Its own remedy: *"when the machine is quiet
+(`pgrep -f bats-exec-file` returns few/none), run ship-land.sh."*
+
+### The self-reinforcing loop — this is the system-level defect
+
+```text
+many concurrent sessions
+  → concurrent full-suite landing gates
+    → gates SIGTERM-killed by contention (never by a real failure)
+      → land fails → item flips to `blocked` (needs a MANUAL `cc-backlog unblock`)
+        → the queue never drains
+          → more sessions are opened to compensate
+            → worse contention  ⟲
+```
+
+**Consequences that reorder every other priority in this document:**
+
+1. **The overnight autonomy already exists and is starved, not missing.** The dispatcher would drain
+   happily; it has 8 open items against 323 blocked. Building a new queue would be building the
+   second one.
+2. **Making the landing gate survive concurrency is the highest-leverage action in the system** —
+   higher than tmux (§5, ~2%), higher than the oxlint tier (§4), higher than cloud routing. It
+   converts 205 blocked items into dispatchable work. The §3 finding (N worktrees × cold full-tree
+   lints) is a component of the same contention and is therefore worth far more than its size.
+3. **`blocked` is a one-way door without a human.** Contention-blocked items require a manual
+   `cc-backlog unblock`, so a transient load spike is recorded as a durable defect. A land that
+   failed with **zero assertion failures** is a *contention* signal, not a defect signal, and the two
+   should not share a state. (Same discrimination as the `nice`/timeout trap in §6: read the failure
+   TEXT — `timed out` / SIGTERM with no assertion failures means the gate could not RUN.)
+4. **reso is not dispatched at all.** `CC_DISPATCH_PROJECT` pins the dispatcher to
+   claude-infrastructure, so the 56 reso items and 23 doc_classifier items have no overnight path.
+
+### Do not rebuild what exists
+
+- `com.claude.devserver-gc` (→ `devserver-gc-run.sh`) **already reaps dev servers.** Before writing
+  anything for the 9.6 GB in §1, find out why five survived it.
+- `cc-backlog` / `cc-queue` / `cc-dispatch` are the sanctioned store, queue and dispatcher. File work
+  there rather than into prose; a session's chat is invisible to the dispatcher.
