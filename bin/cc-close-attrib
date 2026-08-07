@@ -183,9 +183,20 @@ if mkdir -p "$STDERR_DIR" 2>/dev/null; then
 fi
 
 code=0
-# a trapped signal makes `wait` return early → loop until the child is truly gone.
-while kill -0 "$child" 2>/dev/null; do
+# WAIT FIRST, THEN TEST LIVENESS — never the reverse. bash reaps a background child as soon as it
+# handles SIGCHLD, and a reaped pid is gone from the process table, so `kill -0` reads FALSE for a
+# child that has already exited. As the loop's GUARD that skipped the body entirely on any fast
+# exit, leaving `code` at its initial 0: measured 8/60 runs of an `exit 1` child exiting 0, and
+# 5/5 once the window is widened. Nothing was ever lost — bash holds a background job's status
+# until it is waited for (verified: `kill -0` GONE, `wait` still rc=1) — the ORDER was the whole
+# bug. Live impact, not merely a red suite: this wrapper carries every eval-track session's exit
+# code, so a crash that lost the race was written "exit_code":0 and attributed clean-exit — the
+# one misattribution the wrapper exists to prevent.
+# The loop still has to exist: a trapped signal makes `wait` return early, so keep waiting while
+# the child is genuinely still alive.
+while :; do
   wait "$child"; code=$?
+  kill -0 "$child" 2>/dev/null || break
 done
 trap - INT TERM HUP
 
