@@ -217,6 +217,19 @@ MODEL_CONFIG="$HOME/.claude/model-config.yaml"
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 CC_ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 FIRED_DIR="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"   # T-P3-4 fired-peer markers (read by bin/cc-reaper)
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# One row per surface this script creates, naming the caller's pid/ppid/chain. handoffs.jsonl counts
+# fires that entered the FRONT DOOR; this counts panes that were actually MADE. §S4.1's residual is
+# exactly that gap — nine panes, one composed prompt, and no way to tell an unlogged caller from a
+# detached child. ABSENT LIBRARY ⇒ the calls below are no-ops (`command -v` guarded at each site),
+# never an error: a fire must not die on its bookkeeping.
+for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
 # Projects dirs searched to resolve a SUCCESSOR pane's transcript for the self-close engagement gate.
 # The successor's ACCOUNT is unknown at self-close time and the session_id is a globally-unique UUID,
 # so we try every account's projects dir. Space-separated, env-overridable for tests. Mirrors
@@ -1825,6 +1838,78 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
 # auto-reaped. An operator's shell launch, `claude -w`, a --recycle continuation and a
 # --no-self-retire fire all leave no marker, and nothing anywhere infers one from session state —
 # so a session cannot earn the marker by behaving like a worker.
+# ---- THE cwd INDEX (item 1467ea1dad4f) --------------------------------------------------------
+# THE DEFECT. The stamp store is keyed on the pane id, and the pane id is VOLATILE: a resume, a
+# crash-recreate or a kitty restart renumbers the pane and orphans its stamp under the old id.
+# Measured 2026-08-07: pane 353 was found holding pane 351's orphaned stamp, and the lookup a
+# self-closing session makes — `$FIRED_DIR/$my_pane.json` — simply MISSES. A miss is then read as
+# "this session was never fired", which is the strongest possible wrong answer: it is the origin
+# gate's REFUSE verdict, and the pane that earned the right to retire is told it never had it.
+#
+# THE DURABLE KEY IS cwd, for the reasons fired_stamp_tenancy already states in its own header — the
+# same writer records it, the closing pane knows its own with certainty without asking iTerm2 or the
+# process table, and it is INDEPENDENT of the id namespace that is the entire defect. An id CHANGE
+# moves the pane and keeps the cwd; an id REUSE keeps the number and changes the cwd.
+#
+# WHY AN INDEX AND NOT A RE-KEY OF THE STORE. Twenty-plus test files and thirteen readers construct
+# `$FIRED_DIR/<pane>.json` directly, and mark_fired_peer's own header declares the record
+# ADDITIVE-ONLY because bin/cc-reaper keys auto-reap on that exact path. Renaming the file would be
+# a rebuild of a contract this item has no mandate to touch. So the RECORD stays pane-keyed and
+# single, and only the LOOKUP gains a durable key — one pointer per cwd, holding a pane id.
+#
+# WHY A SUBDIRECTORY, AND WHY THAT IS LOAD-BEARING. Three readers enumerate this store with
+# `for f in "$FIRED_DIR"/*.json` and treat the FILENAME as a pane id: bin/cc-classify:406,
+# selfclose_inventory_warn below, and scripts/desk-invariant.sh:288 (which takes max-mtime and feeds
+# the winner to heal_role as a pane). A second .json beside the records would be picked up by all
+# three — desk-invariant would repoint the desk role at a hash. A glob does not recurse, so
+# `by-cwd/` is invisible to every one of them by construction rather than by their cooperation.
+#
+# WHY A POINTER AND NOT A COPY. A copy is a second copy of mutable state, and record_close_succession
+# writes `closedAt` to exactly one path — so the twin would keep `closedAt:null` forever and every
+# liveness test that reads it (hf_pane_agent_owned, the kitty anchor picker, find_open_stamp_for_cwd)
+# would read a spent stamp as OPEN. The pointer holds no state that can diverge.
+_fired_cwd_key() { # $1=cwd → echoes a stable filesystem-safe key, or nothing
+  local d="${1:-}" r
+  [ -n "$d" ] || return 0
+  # Resolve first: macOS hands out /tmp and /private/tmp for one directory and a worktree can be
+  # reached through a symlink, so an unresolved path would mint two keys for one cwd — the same
+  # normalisation fired_stamp_tenancy applies before comparing.
+  r="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$r" ] || return 0
+  printf '%s' "$r" | shasum -a 256 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+}
+
+write_fired_cwd_index() { # $1=fired-dir $2=pane $3=cwd → best-effort, always 0
+  local dir="${1:-}" pane="${2:-}" cwd="${3:-}" key idx tmp
+  [ -n "$dir" ] && [ -n "$pane" ] && [ -n "$cwd" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  key="$(_fired_cwd_key "$cwd")"; [ -n "$key" ] || return 0
+  idx="$dir/by-cwd"
+  mkdir -p "$idx" 2>/dev/null || return 0
+  tmp="$idx/.$key.$$"
+  # LAST WRITER WINS, deliberately. Two peers in one cwd is the collision this cannot resolve, and
+  # the index is not the authority — every consumer re-validates against the pane-keyed RECORD and
+  # falls back to the directory scan when the pointer does not check out. So a wrong pointer costs a
+  # scan, never a wrong verdict (make-the-actuator-the-arbiter: the record is the arbiter).
+  if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg at "$(_iso_now)" \
+        '{paneUUID:$paneUUID, cwd:$cwd, indexedAt:$at}' > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv -f "$tmp" "$idx/$key.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+read_fired_cwd_index() { # $1=fired-dir $2=cwd → echoes the pane id, or nothing
+  local dir="${1:-}" cwd="${2:-}" key f
+  [ -n "$dir" ] && [ -n "$cwd" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  key="$(_fired_cwd_key "$cwd")"; [ -n "$key" ] || return 0
+  f="$dir/by-cwd/$key.json"
+  [ -s "$f" ] || return 0
+  jq -r '.paneUUID // ""' "$f" 2>/dev/null || true
+}
+
 mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] → best-effort, always 0
   local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" tmp
   # MFP_SKIP_REASON — why this function declined, for a caller that needs to know.
@@ -1917,6 +2002,9 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
       rm -f "$ptmp" 2>/dev/null
     fi
   fi
+  # The durable-key index, written by the SAME writer as the record so the two cannot be minted by
+  # different parties with different notions of the cwd. Best-effort like everything else here.
+  command -v write_fired_cwd_index >/dev/null 2>&1 && write_fired_cwd_index "$dir" "$pane" "$cwd"
   return 0
 }
 
@@ -1986,6 +2074,26 @@ find_open_stamp_for_cwd() { # $1=fired-dir $2=cwd $3=self-pane → echoes "<pane
   command -v jq >/dev/null 2>&1 || return 0
   here="$(cd "$here" 2>/dev/null && pwd -P)" || return 0
   [ -n "$here" ] || return 0
+  # ---- INDEX FIRST, SCAN SECOND (item 1467ea1dad4f) --------------------------------------------
+  # The scan below is capped at CC_SELFCLOSE_SCAN_MAX (2000) and this store has NO age backstop
+  # (scripts/growth-coverage.conf:94 says so in as many words) — so as it grows the scan acquires a
+  # silent horizon, and the miss it starts returning is indistinguishable from "never fired". The
+  # index answers in one stat.
+  #
+  # It is a HINT, never an authority: the pointer is re-validated against the pane-keyed RECORD on
+  # exactly the two predicates the scan applies (OPEN, and a cwd that resolves equal), and a pointer
+  # that fails either one falls through to the scan rather than returning anything. A stale index
+  # can therefore cost a scan; it cannot produce a verdict the scan would not have produced.
+  pane="$(read_fired_cwd_index "$dir" "$here")"
+  if [ -n "$pane" ] && [ "$pane" != "$self" ] && [ -s "$dir/$pane.json" ]; then
+    if [ "$(jq -r '.closedAt // "null"' "$dir/$pane.json" 2>/dev/null || echo x)" = null ]; then
+      scwd="$(jq -r '.cwd // ""' "$dir/$pane.json" 2>/dev/null || true)"
+      if [ -n "$scwd" ] && scwd="$(cd "$scwd" 2>/dev/null && pwd -P)" && [ "$scwd" = "$here" ]; then
+        printf '%s' "$pane"; return 0
+      fi
+    fi
+  fi
+  pane=""
   for f in "$dir"/*.json; do
     [ -f "$f" ] || continue
     n=$((n+1)); [ "$n" -le "${CC_SELFCLOSE_SCAN_MAX:-2000}" ] || break
@@ -2000,6 +2108,87 @@ find_open_stamp_for_cwd() { # $1=fired-dir $2=cwd $3=self-pane → echoes "<pane
     [ "$scwd" = "$here" ] || continue
     printf '%s' "$pane"; return 0
   done
+  return 0
+}
+
+# ---- ADOPTION: turning the durable key into a VERDICT, not just a better diagnostic -----------
+# find_open_stamp_for_cwd above has always been able to FIND an orphaned stamp. It deliberately
+# refused to act on it, and its own comment says exactly why:
+#
+#   > Two panes can share one cwd — a peer and an operator pane opened in the same worktree — so a
+#   > cwd match alone cannot distinguish which of them is the fired one.
+#
+# That objection is correct and this does not overrule it. It ADDS the missing discriminator. cwd is
+# the INDEX (it finds the candidate); the MARKER is the PROOF (it establishes identity).
+#
+# WHY THE MARKER IS DECISIVE. `FIRE_MARKER` is minted per fire as `HANDOFF-ENGAGE-$$-<ts>-<rand>`,
+# appended to the composed prompt, and recorded in the stamp's `marker` field by the same writer. It
+# therefore appears in exactly one session's transcript: the one that ingested that prompt. An
+# operator pane opened in the same worktree has no such token in its stream and can never acquire
+# one — which is precisely the pane the objection above is about. And a RESUME, the commonest way an
+# id changes underneath a live peer, writes into the ORIGINAL sid's transcript, so the marker is
+# still there (the same property V2 §5.2 relies on to make a resumed successor provable).
+#
+# CALIBRATED TO ABSTAIN, in the same direction as fired_stamp_tenancy. Adoption requires a POSITIVE
+# chain: an orphan exists · it is OPEN · it carries a marker · this pane's registry row resolves a
+# session id · that session's own transcript contains the marker. Any link unresolvable ⇒ return 1
+# ⇒ the caller refuses exactly as it did before this existed. So this can only ever ADMIT a close
+# that used to be refused in the one case it can actually prove, and it never invents an admission
+# on a path it merely cannot see. CC_SELFCLOSE_ADOPT=0 disables it outright (R8).
+fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not proven
+  local marker="${1:-}" pane="${2:-}" mysid pdir
+  [ -n "$marker" ] && [ -n "$pane" ] || return 1
+  # The registry row is the only thing that maps THIS pane to a CC session id. A provisional row
+  # carries none (measured: 10 of 19 live rows), and cc_sid_for_pane's second source heals exactly
+  # that case — but when both come up empty there is no transcript to check and no proof to be had.
+  mysid="$(cc_sid_for_pane "$pane")"
+  [ -n "$mysid" ] || return 1
+  # Direct file test, not a tree-wide content grep: the sid names the transcript, so this is one
+  # open per account instead of a find+grep over CC_PROJECTS_DIRS (5 dirs / 4.6 GB measured, ~40s
+  # unscoped — the cost engagement_seen had to add an mtime window to survive).
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -f "$pdir/$mysid.jsonl" ] || continue
+    grep -qF -- "$marker" "$pdir/$mysid.jsonl" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# adopt_orphan_stamp — re-key an orphaned record onto THIS pane, so everything downstream keeps
+# working unchanged. record_close_succession, cc-reaper's auto-reap and cc-classify are all
+# pane-id-keyed; handing them a re-keyed record is what makes this a two-function change instead of
+# a store migration. The orphan is CLOSED rather than deleted — the trail survives, and a closed
+# stamp is skipped by find_open_stamp_for_cwd, so one orphan can never be adopted twice.
+adopt_orphan_stamp() { # $1=fired-dir $2=cwd $3=self-pane → 0 adopted (echoes the old pane id) / 1 not
+  local dir="${1:-}" here="${2:-}" self="${3:-}" orphan marker tmp
+  [ "${CC_SELFCLOSE_ADOPT:-1}" != 0 ] || return 1
+  [ -d "$dir" ] && [ -n "$here" ] && [ -n "$self" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  orphan="$(find_open_stamp_for_cwd "$dir" "$here" "$self")"
+  [ -n "$orphan" ] && [ -s "$dir/$orphan.json" ] || return 1
+  marker="$(jq -r '.marker // ""' "$dir/$orphan.json" 2>/dev/null || true)"
+  [ -n "$marker" ] || return 1                      # schema-1 / unmeasured marker ⇒ ABSTAIN
+  fired_marker_is_mine "$marker" "$self" || return 1
+  tmp="$dir/.$self.adopt.$$"
+  # adoptedFrom/adoptedAt are ADDITIVE, like every other v2 field — cc-reaper reads presence +
+  # selfRetire and is untouched by keys it does not know (V2 §7 A9).
+  if jq --arg pane "$self" --arg from "$orphan" --arg at "$(_iso_now)" \
+       '. + {paneUUID:$pane, adoptedFrom:$from, adoptedAt:$at}' "$dir/$orphan.json" > "$tmp" 2>/dev/null \
+     && [ -s "$tmp" ] && mv -f "$tmp" "$dir/$self.json" 2>/dev/null; then
+    :
+  else
+    rm -f "$tmp" 2>/dev/null; return 1
+  fi
+  # Spend the orphan, then repoint the index. Order matters: if the process dies between them the
+  # index still names a pane whose record is closed, which every consumer re-validates and rejects —
+  # a fallback to the scan, not a wrong verdict.
+  record_close_succession "$dir" "$orphan" adopted "$self" none
+  write_fired_cwd_index "$dir" "$self" "$here"
+  # Carry the prompt sidecar across too, or cc-recover-safeguard loses this peer's brief the moment
+  # its pane id changes — the same orphaning defect one file over.
+  [ -f "$dir/$orphan.prompt" ] && [ ! -e "$dir/$self.prompt" ] && \
+    cp "$dir/$orphan.prompt" "$dir/$self.prompt" 2>/dev/null
+  printf '%s' "$orphan"
   return 0
 }
 
@@ -3565,6 +3754,25 @@ USAGE
   # inherited a REUSED kitty id would have been told it is "an ORIGIN session", which is a
   # misdiagnosis pointing at the wrong remedy. `unknown` is byte-for-byte the old behaviour.
   SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+  # ---- ADOPTION (item 1467ea1dad4f): a stamp MISS is not evidence of "never fired" ---------------
+  # The pane id is volatile — a resume, a crash-recreate or a kitty restart renumbers the pane and
+  # orphans its stamp under the old id (measured 2026-08-07: pane 353 holding pane 351's stamp). The
+  # lookup above then MISSES, `absent` is returned, and the refusal below tells a genuine fired peer
+  # it is an origin session. Recover the record through the DURABLE key before believing that.
+  #
+  # Only on `absent`, deliberately. `stale` means a stamp for THIS id exists and names a different
+  # cwd — a live id-reuse tenant, the false positive the tenancy check was built for — and reaching
+  # past it to adopt a second record would hand one pane two contradictory contracts.
+  if [ "$SC_STAMP_STATE" = absent ] && [ "$SC_ORIGIN_CLASS" != "assignee" ]; then
+    SC_ADOPTED_FROM="$(adopt_orphan_stamp "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}" "$PWD" "$SC_SID")" || SC_ADOPTED_FROM=""
+    if [ -n "$SC_ADOPTED_FROM" ]; then
+      # LEGIBILITY (R10), same standard the orphaned-assignee path holds itself to: a pane that
+      # changes its own authorisation must say so, to stderr AND the close log, never only in-pane.
+      echo "→ fired-peer stamp ADOPTED: the record for this worktree was written under pane $SC_ADOPTED_FROM; this pane is $SC_SID." >&2
+      echo "   The pane id changed underneath a live peer (resume / crash-recreate / kitty renumber). Identity PROVEN by the fire marker in this session's own transcript — a cwd match alone was never enough, and still is not." >&2
+      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+    fi
+  fi
   if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
     SC_STAMP_CWD="$(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
     SC_STAMP_AT="$(jq -r '.firedAt // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
@@ -4918,6 +5126,7 @@ print("%s %d" % hit)
         # extracted-function test sees, so this line's old behaviour is preserved there verbatim.
         bnew="$(kt launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || return 1
         case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
+        command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn bg-tab kitty "$bnew" "${LAUNCH_DIR:-$PWD}" "it2py bgtab --match id:$bsid"
         # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
         printf 'Created new pane: %s\n' "$bnew"
         return 0
@@ -5322,9 +5531,15 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
     local tnew
     # Same pre-delivery as the bg-tab and split surfaces; unset/empty ⇒ nothing, and the caller types.
     tnew="$(kt launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || tnew=""
-    case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) printf 'OK %s\n' "$tnew" ;; esac
+    case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn tab kitty "$tnew" "${LAUNCH_DIR:-$PWD}" "as_tab --match id:${1##*:}"; printf 'OK %s\n' "$tnew" ;; esac
     return 0
   fi
+  # LOGGED BEFORE THE LAUNCH, with pane ABSENT — deliberately. This branch's osascript stdout IS the
+  # function's return contract ("OK <id>" | "NOTFOUND", rc load-bearing at the caller), so capturing
+  # it to name the pane would put a rc/stdout rewrite on a path this item has no business touching.
+  # pane:null is honest (unknown at issue time) and the row still carries what the item asked for —
+  # the caller's pid, ppid and chain. R9: unmeasured reads ABSENT, never a fabricated id.
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn tab iterm2 "" "${LAUNCH_DIR:-$PWD}" "as_tab osascript create-tab anchor:$1"
   hf_bounded osascript - "$1" <<'AS'
 on run argv
   set sid to item 1 of argv
@@ -5384,9 +5599,12 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     wnew="$(kt launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails
     # loud on it — never print a non-id, which would be landed into as a pane.
-    case "$wnew" in ''|*[!0-9]*) return 0 ;; *) printf '%s\n' "$wnew" ;; esac
+    case "$wnew" in ''|*[!0-9]*) return 0 ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$wnew" "${LAUNCH_DIR:-$PWD}" "spawn_frontmost --type=os-window follow:${FOLLOW:-0}"; printf '%s\n' "$wnew" ;; esac
     return 0
   fi
+  # Same reason as as_tab's osascript branch: stdout IS the id contract here, so the row is written
+  # at issue time with pane ABSENT rather than rewriting this function's output handling.
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${LAUNCH_DIR:-$PWD}" "spawn_frontmost osascript create-window follow:${FOLLOW:-0}"
   if [ "$FOLLOW" = 1 ]; then
     hf_bounded osascript -e 'if not (application id "com.googlecode.iterm2" is running) then return ""' \
               -e 'tell application id "com.googlecode.iterm2"' \

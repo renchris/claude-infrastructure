@@ -41,6 +41,20 @@
 #   verdict=NO-DATA   the layout could not be built, or kitty is not reachable  (exit 3)
 set -uo pipefail
 
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# A BENCH tool, instrumented anyway and deliberately. The log's whole value is the inference "a pane
+# with no row was spawned outside this tree"; a bench that makes THIRTY unlogged panes would
+# manufacture exactly the false conviction the log exists to prevent. Coverage is the property, not
+# production-ness (memory `positive-control-the-denominator` — control the population, not the
+# classifier).
+for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
+
 HOURS=6; PANES=30; SOCKET="unix:/tmp/kitty-axis"; EVERY=900
 TEARDOWN=1; TEARDOWN_ONLY=0; OUT=""; NO_LAYOUT=0
 while [ $# -gt 0 ]; do
@@ -139,11 +153,15 @@ if [ "$NO_LAYOUT" = 0 ]; then
             --cwd "${TMPDIR:-/tmp}" /bin/sh -c "$HEARTBEAT" 2>&1)"
   case "$FIRST" in ''|*[!0-9]*) echo "kitty-drift-run: could not create OS window: $FIRST" >&2
                                 echo "verdict=NO-DATA"; exit 3 ;; esac
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$FIRST" "${TMPDIR:-/tmp}" "kitty-drift-run layout root ${TITLE_PREFIX}-001"
   k goto-layout grid >/dev/null 2>&1
   made=1
   for i in $(seq 2 "$PANES"); do
     if k launch --type=window --title "$(printf '%s-%03d' "$TITLE_PREFIX" "$i")" \
-         --cwd "${TMPDIR:-/tmp}" /bin/sh -c "$HEARTBEAT" >/dev/null 2>&1; then made=$((made+1)); fi
+         --cwd "${TMPDIR:-/tmp}" /bin/sh -c "$HEARTBEAT" >/dev/null 2>&1; then
+      made=$((made+1))
+      command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "" "${TMPDIR:-/tmp}" "kitty-drift-run layout pane $i/$PANES"
+    fi
   done
   # Name the window for what it is. The 2026-07-31 run lost its subject at t+90m to what was almost
   # certainly a human closing an unexplained 30-pane grid — a reasonable thing to do to a window that

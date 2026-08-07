@@ -39,6 +39,18 @@
 # Usage: lr-reset-poller.sh [--dry-run] [--once]   (launchd runs it bare every ~10 min)
 set -uo pipefail
 
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# A launchd job that spawns GUI windows autonomously every ~10 min is the textbook shape of a pane
+# nobody can attribute after the fact — the row's `ancestry` will show the launchd parent, which is
+# exactly how the "undocumented detached child" hypothesis gets confirmed or killed.
+for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../../scripts/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
+
 # Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
 # 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
 # piled up). spawn_gui drives iTerm2 directly and this poller is a launchd job, so an unbounded AppleEvent
@@ -253,6 +265,7 @@ spawn_gui() {
   if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
     command -v "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" >/dev/null 2>&1 || return 1
     lrp_kitty launch --type=os-window -- /bin/bash "$1" >/dev/null 2>&1 || return 1
+    command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-reset-poller spawn_gui launcher:$(basename -- "$1")"
     return 0
   fi
   command -v osascript >/dev/null 2>&1 || return 1
@@ -266,6 +279,7 @@ spawn_gui() {
   # `auto` mechanism falls back to spawn_tmux, which is exactly what LR-m pins ("GUI unavailable →
   # falls back to tmux rather than stranding the resume"). Launching iTerm2 instead would resurrect
   # the app behind the operator on a fleet that deliberately left it.
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-reset-poller spawn_gui create-window launcher:$(basename -- "$1")"
   lrp_bounded osascript >/dev/null 2>&1 \
     -e 'if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"' \
     -e 'tell application id "com.googlecode.iterm2"' \

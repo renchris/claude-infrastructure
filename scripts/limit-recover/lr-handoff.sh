@@ -12,6 +12,18 @@
 # Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error.
 set -euo pipefail
 
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# Four spawn sites below (kitty split / iTerm2 split / kitty os-window / iTerm2 window), each on a
+# recovery path that runs when a session has ALREADY died — i.e. precisely when nobody is watching
+# and an unattributed pane is hardest to explain later. Absent library ⇒ silent no-op.
+for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../../scripts/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
+
 # Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
 # 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
 # piled up). Both call sites `tell application id "com.googlecode.iterm2"` — the exact wedged surface; each already has a
@@ -272,9 +284,11 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
       ''|*[!0-9]*) FIRED="" ;;
       *) lrh_kitty launch --type=window --location=vsplit \
            --match "window_id:$OWN_PANE" --next-to "id:$OWN_PANE" --cwd=current \
-           -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 && FIRED="split" ;;
+           -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 \
+           && { FIRED="split"; command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$OWN_PANE"; } ;;
     esac
   elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
+    command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split iterm2 "" "${PWD:-}" "lr-handoff osascript split-vertically anchor:$OWN_PANE"
     FIRED=$(lrh_bounded osascript 2>/dev/null <<OSA || true
 if not (application id "com.googlecode.iterm2" is running) then return ""
 tell application id "com.googlecode.iterm2"
@@ -299,10 +313,12 @@ OSA
   if [[ "$FIRED" == "split" ]]; then
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   elif [[ $IN_KITTY -eq 1 ]]; then
+    command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-handoff fallback os-window"
     lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 \
       || { echo "lr-handoff: kitty launch failed — run manually: $LAUNCHER" >&2; }
     echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
+    command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-handoff fallback create-window"
     lrh_bounded osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
 if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"
 tell application id "com.googlecode.iterm2"

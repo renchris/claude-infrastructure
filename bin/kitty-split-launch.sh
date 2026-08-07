@@ -77,6 +77,18 @@ set -euo pipefail
 # candidate for the case where the deployed layer is the only one present.
 _ks="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# This script has NO in-tree caller (config/kitty.conf binds ⌘D to kitty-split-cwd.sh instead), so
+# every pane it makes is issued by something the tree cannot see — exactly the class of spawn §S4.1
+# could not name. It is therefore among the most valuable sites to instrument, not the least.
+for _psl in "$(dirname "$_ks")/../scripts/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
+
 # Falling back to the previous spelling on any resolver miss keeps a partial deploy degraded rather
 # than broken — cc-kitty-bin is a side-car and must never fail wider than itself.
 #
@@ -139,12 +151,18 @@ args+=(-- "$@")
 
 # The no-stamp path keeps the `exec` verbatim: same stdout, same exit status, same process. Only
 # --self-retire needs this script to outlive the launch, so only it pays for a subshell.
-[ "$self_retire" = 1 ] || exec "$KITTY" @ "${args[@]}"
+# The row goes BEFORE the exec — after it this process no longer exists — so pane reads ABSENT on
+# this arm; the --self-retire arm below captures the id and logs it.
+if [ "$self_retire" != 1 ]; then
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn "$location" kitty "" "${cwd:-$PWD}" "kitty-split-launch exec --match window_id:$anchor"
+  exec "$KITTY" @ "${args[@]}"
+fi
 
 # kitty @ launch prints the new window id, and it is the ONLY place that id exists — the caller
 # needs it on stdout exactly as before, so capture, stamp, then re-emit verbatim.
 new_id="$("$KITTY" @ "${args[@]}")"
 printf '%s\n' "$new_id"
+command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn "$location" kitty "$new_id" "${cwd:-$PWD}" "kitty-split-launch --self-retire --match window_id:$anchor"
 
 case "$new_id" in
   ''|*[!0-9]*)
