@@ -63,6 +63,60 @@ fi
 
 # ── Hook mode (PreToolUse, reads JSON from stdin) ─────────────────────
 
+# stdin is drained ONCE, HERE, before any early exit. The duplicate-worker gate below needs `.cwd`,
+# and the freeze/focus boundary is inactive most of the time — so a `[ ! -f "$STATE_FILE" ] && exit`
+# ahead of it would disarm the gate in exactly the state the box is normally in.
+INPUT=$(cat)
+
+# ── DUPLICATE-WORKER GATE (backlog 18323346082a) ──────────────────────────────────────────────
+# A claim REFUSED with `verdict=noop-live-claimer` used to reach a journal and nothing else: on
+# 2026-08-07 seven sessions were each told "incumbent live" for item 191d4d056c98 and each did the
+# whole item anyway, in one shared worktree. `hooks/session-register.sh` DETECTS that at
+# SessionStart but structurally cannot act on it — SessionStart has no blocking field on 2.1.114 —
+# and a mailbox stand-down needs a turn boundary a session deep in a tool loop never reaches
+# (GROUND_UP_DISPATCH.md:615-628, measured). The write is where the same incident log says the
+# collision becomes real, so the refusal binds here, mechanically.
+#
+# IT RUNS BEFORE EVERY EARLY EXIT ABOVE THE BOUNDARY LOGIC — the `24b` lesson from
+# tests/capacity-admit-coverage.bats: a gate placed after an early return is a gate the common case
+# escapes. Pinned by tests/worker-claim-gate-coverage.bats.
+#
+# RESOLUTION ORDER — symlink-resolved sibling FIRST. ~/.claude/hooks/*.sh are symlinks into the
+# checkout, so resolving $0's link reaches the repo's own scripts/lib/ and the gate goes live the
+# moment the file does. A $CLAUDE_CONFIG_DIR-first lookup would find nothing until install.sh
+# re-globs on the next deploy — the deployed-layer-bootstrap-circle, verified live in 64a7d1fa.
+#
+# ABSENT LIBRARY, OR ADMIT ⇒ FALL THROUGH, never exit: a missing gate must not silently disarm the
+# freeze/focus boundary this hook already enforces.
+_ceb_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _wcg in "$(dirname "$_ceb_self")/../scripts/lib/worker-claim-gate.sh" \
+            "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/worker-claim-gate.sh" \
+            "${HOME:-}/.claude/scripts/lib/worker-claim-gate.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_wcg" ] && . "$_wcg" 2>/dev/null && break
+done
+if command -v cc_worker_claim_admit >/dev/null 2>&1; then
+  _ceb_cwd=""
+  if command -v jq >/dev/null 2>&1; then
+    _ceb_cwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+  fi
+  [ -n "$_ceb_cwd" ] || _ceb_cwd="$PWD"
+  _ceb_tool="$(printf '%s' "$INPUT" | jq -r '.tool_name // "write"' 2>/dev/null || echo write)"
+  CC_WCLAIM_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')" \
+    cc_worker_claim_admit edit-boundary "$_ceb_cwd" "$_ceb_tool" || {
+      jq -n --arg r "$(cc_worker_claim_reason)" \
+            --arg i "$(cc_worker_claim_item)" \
+            --arg h "$(cc_worker_claim_holder)" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: ("DUPLICATE WORKER — this session does not hold the lease on item \($i). \($r). Another LIVE session (\($h)) holds it and is doing this work right now; two sessions writing one worktree is how item 191d4d056c98 produced duplicate tools, duplicate suites and three rewrites of one doc on 2026-08-07. DO NOT retry, and DO NOT work around this by writing elsewhere — you are the duplicate, and the refusal is a FACT about a live lease, not a transient throttle. STAND DOWN: stop work, and retire this pane with `$HOME/.claude/scripts/handoff-fire.sh self-close --terminal` (it refuses a dirty tree, which is the intended safety). If you believe the incumbent is DEAD, do not force it — the lease self-releases the moment its claimer dies or `cc-backlog reap` ages it out, and the next write is then admitted automatically. Override for this session only: CC_WCLAIM_GATE=off. Rule: backlog 18323346082a, docs/plans/CONCURRENCY_PROGRAM.md#s4.")
+        }
+      }'
+      exit 0
+    }
+fi
+
 # No state file = no boundary active, allow everything
 [ ! -f "$STATE_FILE" ] && exit 0
 
@@ -71,7 +125,6 @@ if ! command -v jq &>/dev/null; then
   exit 0
 fi
 
-INPUT=$(cat)
 STATE=$(cat "$STATE_FILE")
 
 MODE=$(printf '%s' "$STATE" | jq -r '.mode // empty')
