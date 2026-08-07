@@ -69,6 +69,46 @@ _fallback() {
   exec "${SHELL:-/bin/zsh}" -l -i
 }
 
+# ── RUNNING THE COMMAND: two eval shells, because two callers name things differently ────────────
+# eval (default) — Claude Code hands over an ABSOLUTE PATH to a binary. Running it in THIS shell is
+#   what lets an `exec …` inside the command replace this process, exactly as it would at a prompt.
+# `$SHELL -l -i -c` (CC_PANE_CMD_INTERACTIVE=1) — scripts/handoff-fire.sh hands over a SHELL COMMAND
+#   LINE whose verb is a launcher (`claude4`, `nocorrect claude4 …`). Measured on this box: those
+#   launchers are zsh FUNCTIONS defined only in the operator's INTERACTIVE rc —
+#     zsh -l -i -c 'whence -w claude4'  → claude4: function      ← resolves
+#     zsh -l -c    'whence -w claude4'  → not found              ← -i is load-bearing, not -l
+#     bash -lc     'type -t claude4'    → not found              ← this file's own shebang
+#   so an `eval` here (bash) would print the command and die on `command not found`, i.e. delivering
+#   handoff's command as argv would be WORSE than typing it. This branch is what makes the argv
+#   transport usable by handoff at all; it is not a stylistic alternative to eval.
+# `nocorrect` survives it (a zsh reserved word, verified under -l -i -c), so the shared $CMD shapes —
+# which tests/handoff-fire-typed-cmd-correctable.bats pins — need no argv-specific variant.
+_launch() { # $1=command — never returns
+  printf '%s\n' "$1"
+  # `set +u` FIRST — and it is parity, not laxity. The command this file runs used to be typed at an
+  # interactive zsh where nounset is off; inheriting THIS file's `set -u` into it would abort any
+  # command that reads an unset variable, i.e. this file would change the meaning of commands it is
+  # only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
+  set +u
+  if [ "${CC_PANE_CMD_INTERACTIVE:-0}" = 1 ]; then
+    "${SHELL:-/bin/zsh}" -l -i -c "$1"
+  else
+    eval "$1"
+  fi
+  _fallback ""
+}
+
+# ── TWO DELIVERY MODES, because the two callers learn the command at different times ─────────────
+# ENV (CC_PANE_CMD non-empty) — the command was known BEFORE this pane existed, so it rode in on the
+#   launch itself: there is nothing to wait for, no id-keyed file, and NO WINDOW IN WHICH ANYTHING
+#   COULD RACE IT. scripts/handoff-fire.sh works this way — it BUILDS the launch line and only then
+#   creates the surface, so it can hand the command over as argv+env in one atomic act.
+# FILE (CC_PANE_CMD unset) — Claude Code's protocol splits first and sends the command afterwards, so
+#   the command can only arrive later and must be polled for. The original mode, unchanged below.
+# Checked before CC_PANE_CMD_DIR/KITTY_WINDOW_ID because env mode needs NEITHER: requiring them would
+# make a perfectly deliverable command fall back to a bare shell over a variable it never reads.
+[ -n "${CC_PANE_CMD:-}" ] && _launch "$CC_PANE_CMD"
+
 [ -n "$_dir" ] || _fallback "CC_PANE_CMD_DIR is unset"
 [ -n "$_id" ]  || _fallback "KITTY_WINDOW_ID is unset (not a kitty window?)"
 
@@ -99,17 +139,7 @@ rm -f "$_cmdfile" "$_armed" 2>/dev/null
 
 [ -n "$_cmd" ] || _fallback "the delivered command was empty"
 
-# Echo it first: the operator watching this pane sees the same line they would have seen typed, and a
-# `kitty @ get-text` progress probe has something to anchor on. Then run it in THIS shell (not a
-# subshell) so `exec …` inside the command still replaces this process, exactly as it would have at a
-# prompt.
-printf '%s\n' "$_cmd"
-
-# `set +u` FIRST — and it is parity, not laxity. The command this file runs used to be typed at an
-# interactive zsh where nounset is off; inheriting THIS file's `set -u` into it would abort any
-# command that reads an unset variable, i.e. this file would change the meaning of commands it is
-# only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
-set +u
-eval "$_cmd"
-
-_fallback ""
+# _launch echoes the command first: the operator watching this pane sees the same line they would
+# have seen typed, and a `kitty @ get-text` progress probe has something to anchor on. It never
+# returns — it ends in a shell either way.
+_launch "$_cmd"

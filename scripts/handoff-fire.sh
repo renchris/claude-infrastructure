@@ -521,6 +521,71 @@ for _CC_KI in "$(dirname "$_CC_KS")/../bin/it2-kitty" "$(dirname "$0")/../bin/it
   [ -x "$_CC_KI" ] && { KITTY_IT2="$_CC_KI"; break; }
 done
 
+# bin/cc-pane-runner, resolved identically — the argv transport below cannot work without it, and an
+# unresolvable runner must DEGRADE TO TYPING rather than launch a pane whose argv is a missing file.
+CC_RUNNER_BIN="${CC_PANE_RUNNER_BIN:-}"
+if [ -z "$CC_RUNNER_BIN" ]; then
+  for _CC_PR in "$(dirname "$_CC_KS")/../bin/cc-pane-runner" "$(dirname "$0")/../bin/cc-pane-runner" "$HOME/.claude/bin/cc-pane-runner"; do
+    [ -x "$_CC_PR" ] && { CC_RUNNER_BIN="$_CC_PR"; break; }
+  done
+fi
+
+# ── THE FIRED PANE'S COMMAND IS ITS ARGV, NEVER KEYSTROKES (item 2f074ef14947, 2026-08-07) ───────
+# Until now every kitty surface below CREATED a pane and then TYPED $CMD at its prompt. That prompt
+# is a resource the OPERATOR also owns, and typing at it races two things at once:
+#   · the operator's hands — observed 2026-08-07, `--follow` raised the new pane mid-typing and an
+#     in-flight keystroke concatenated onto the disarm line: `…|| true` arrived as `truem`, zsh
+#     prompted `correct 'truem' to 'true' [nyae]?`, the answer 'e' left a shell parked at `execute:`
+#     in an unrelated project. One character, silent, a whole dispatched work item lost.
+#   · the shell's readiness — a fresh zsh that has not attached its tty yet drops the paste entirely,
+#     which is one way a pane ends up running claude with no brief (a task-less pane).
+# Neither is closable by better escaping or better timing, and the echo-verify cannot close it either:
+# it READS the line back and then sends CR as a SEPARATE act, so a keystroke landing between the read
+# and the CR is verified-then-corrupted. Verification samples; the Enter is what acts. bin/cc-pane-runner
+# already says the same thing for Claude Code's spawner — "correctness would require that the operator
+# not be typing" — and gives kitty the shape tmux always had (`respawn-pane -k -- <cmd>`: the pane's
+# ARGV is the command). This is handoff adopting it.
+#
+# WHY HANDOFF COULD NOT SIMPLY REUSE THAT TRANSPORT, and what had to change first. cc-pane-runner is
+# `#!/bin/bash` and ran the delivered command with `eval`. handoff's $CMD names a LAUNCHER — `claude4`,
+# `nocorrect claude4 …` — which is a zsh FUNCTION defined only in the operator's INTERACTIVE rc.
+# Measured on this box: `bash -lc 'type -t claude4'` → not found; `zsh -l -c` → not found; only
+# `zsh -l -i -c` resolves it. So handing $CMD to the old runner would have printed it and died on
+# `command not found` — WORSE than typing, which is very likely why the previous opt-out read as
+# forced. The runner now takes CC_PANE_CMD_INTERACTIVE=1 and runs the command under `$SHELL -l -i -c`;
+# that, not the flag flip, is what makes this path usable at all.
+#
+# DEGRADES TO TYPING, never to a broken pane: an unresolvable runner leaves HF_ARGV empty and every
+# call site falls through to exactly the behaviour it had before. Seam: FIRE_ARGV_LAUNCH=0.
+# TWO variables, and the SCALAR is the one every consumer branches on. Under `set -euo pipefail` on
+# bash 3.2 (this box), `"${HF_ARGV[@]}"` on an EMPTY array is a fatal `unbound variable`, and the
+# suites that exercise these functions `sed`-extract them one at a time, so the array is frequently
+# not merely empty but UNSET. Call sites therefore expand `${HF_ARGV[@]+"${HF_ARGV[@]}"}` (nothing at
+# all when unset) and test `${HF_ARGV_ACTIVE:-0}` — a scalar, which `:-` makes safe unconditionally.
+# That keeps an extracted function's behaviour byte-identical to what it was before this change,
+# which is the same convention the pre-resolved binary paths above already follow.
+HF_ARGV=()
+HF_ARGV_ACTIVE=0
+hf_argv_launch() { # → populates HF_ARGV[] + HF_ARGV_ACTIVE (0 ⇒ this fire types, as it always did)
+  HF_ARGV=(); HF_ARGV_ACTIVE=0
+  [ "${FIRE_ARGV_LAUNCH:-1}" = 1 ] || return 0
+  in_kitty || return 0                       # iTerm2 has no equivalent; that branch is untouched
+  [ -n "${CMD:-}" ] || return 0              # nothing to pre-deliver ⇒ nothing to gain
+  [ -n "${CC_RUNNER_BIN:-}" ] && [ -x "${CC_RUNNER_BIN:-}" ] || return 0
+  # Single quotes are the POINT: $CC_PANE_RUNNER must survive THIS shell untouched and be expanded by
+  # the PANE's shell from the --env, so no path has to survive a round of kitty's own quoting. `-l -i`
+  # is load-bearing for the same reasons bin/it2-kitty documents (login PATH + the .zshrc-synthesized
+  # ITERM_SESSION_ID that every hook and cc-notify address is keyed on) AND for the launcher-function
+  # resolution above. Verified end-to-end on kitty 0.48.2: a $CMD carrying `&&`, quotes and a
+  # `"$(cat …)"` substitution round-trips through --env byte-identical.
+  # shellcheck disable=SC2016
+  HF_ARGV=(--env "CC_PANE_CMD=$CMD" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$CC_RUNNER_BIN"
+           -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+  HF_ARGV_ACTIVE=1
+  return 0
+}
+
+
 # ── DAEMON / HEADLESS KITTY (2026-08-05, item b0b4ec40d63a) ──────────────────────────────────────
 # in_kitty()'s first clause reads the FIRING PROCESS's OWN env. That is right for an interactive
 # caller and BLIND for the callers this file exists to serve: a launchd job, the desk dispatcher, a
@@ -4491,6 +4556,14 @@ else
   CMD="cd $(printf %q "$REPO") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 fi
 
+# $CMD IS FINAL HERE — so this is the one place the argv transport can be resolved, and it is
+# resolved ONCE for the whole fire rather than per surface. Every kitty surface below then either
+# carries it (HF_ARGV_ACTIVE=1 ⇒ the command is the pane's argv, nothing is typed) or does not
+# (⇒ the pre-2026-08-07 typed path, unchanged). Deliberately NOT called from inside spawn(): the
+# recycle path never reaches spawn and must keep typing — it re-uses the CURRENT pane, so there is
+# no launch to put an argv on, and that is the one surface this change cannot help.
+hf_argv_launch
+
 # The dir the fired session lands in — pre-trusted below so it never stalls at the trust dialog.
 # Recycle reuses the CURRENT pane's dir (already trusted — the running session proves it), so it
 # needs no pre-trust and is excluded from the spawn path.
@@ -4772,7 +4845,10 @@ print("%s %d" % hit)
         # the ACTIVE tab (same trap bin/it2-kitty documents for --next-to on split).
         local bsid="${2:-}"; bsid="${bsid##*:}"
         local bnew
-        bnew="$(kt launch --type=tab --keep-focus --cwd=current --match "id:$bsid" 2>/dev/null | tr -d '[:space:]')" || return 1
+        # ${HF_ARGV[@]+…} pre-delivers $CMD as this tab's ARGV (see hf_argv_launch). Unset/empty ⇒
+        # expands to NOTHING and the caller types, exactly as before — which is also what an
+        # extracted-function test sees, so this line's old behaviour is preserved there verbatim.
+        bnew="$(kt launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || return 1
         case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
         # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
         printf 'Created new pane: %s\n' "$bnew"
@@ -5093,23 +5169,31 @@ resolve_headless_anchor() {
 # gone or iTerm2 errors — the caller retries-then-fails-loud, and NEVER drifts to another window.
 it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new session id | returns 1
   local vflag=""; [ "$2" = vertically ] && vflag="-v"
-  # CC_KITTY_ARGV_SPAWN=0 — HANDOFF OPTS OUT OF ARGV DELIVERY, and it must (plan §9.1, 2026-08-03).
-  # bin/it2-kitty now ARMS a split pane by launching bin/cc-pane-runner instead of an interactive
-  # shell, so that Claude Code's teammate command can be handed over as a file rather than typed at a
-  # prompt the operator shares. That transport delivers exactly ONE command, via `session run`.
-  # Handoff does not work that way: it types SEVERAL accepted lines into the new pane with
-  # `session send` (the `unsetopt correct` disarm line, then the bracketed-paste CMD, then the CR),
-  # and gates the destructive Enter on an echo-verify that READS the line back off the pane. Against
-  # an armed pane there is no prompt to echo and no reader for the keystrokes, so every one of those
-  # sends would vanish into a tty buffer and the fire would hang with no diagnostic.
-  # This is not handoff declining a fix it needs: it already carries the three defenses §9.1 asks for
-  # (nocorrect/unsetopt disarm, echo-verify before submit, and a post-spawn engagement assertion that
-  # re-sends once and then reports FIRE FAILED). Those are what argv delivery gives Claude Code's
-  # spawner for free — handoff paid for them by hand.
+  # THE SPLIT SURFACE PRE-DELIVERS $CMD (see the block above). It cannot append to kitty's launch argv
+  # directly the way the tab/window surfaces do — it delegates to `it2 session split`, whose --match /
+  # --next-to / --source-window pinning is load-bearing and must not be re-implemented here — so it
+  # hands the command over through the shim's ENVIRONMENT instead, and bin/it2-kitty puts it on the
+  # launch. The shim then skips its own `.armed` marker: nothing further will be delivered to this
+  # pane, and a stale marker would swallow the next legitimate run/send into a file nobody reads.
+  #
+  # This REPLACES a CC_KITTY_ARGV_SPAWN=0 opt-out whose stated reason was that handoff types several
+  # accepted lines (the `unsetopt correct` disarm, then the bracketed-paste CMD, then the CR) which an
+  # armed, prompt-less pane could not service. That was true of the typed transport and is now moot in
+  # the only way that matters: all three of those lines exist ONLY to make typing survivable — the
+  # disarm and `nocorrect` defeat a spell-correction prompt that ZLE raises while READING a typed
+  # line, and the echo-verify proves a typed line arrived intact. An argv command is never read by
+  # ZLE and never has to arrive, so the defenses have nothing left to defend. The one assertion that
+  # was NOT about typing — the post-spawn engagement check (verify_engagement) — is untouched and
+  # still the oracle for "did the session actually start".
   # Exported INSIDE the command substitution's own subshell, never as a `VAR=v func` prefix: with a
   # shell FUNCTION on the right-hand side that form's persistence is shell- and POSIX-mode-dependent,
-  # and a value that leaked past this call would silently un-arm every later split in the process.
-  local out; out="$(export CC_KITTY_ARGV_SPAWN=0; hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
+  # and a value that leaked past this call would silently re-deliver $CMD into every later split.
+  local out
+  if [ "${HF_ARGV_ACTIVE:-0}" = 1 ]; then
+    out="$(export CC_PANE_CMD="$CMD" CC_PANE_CMD_INTERACTIVE=1; hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
+  else
+    out="$(export CC_KITTY_ARGV_SPAWN=0; hf_bounded "$REAL_IT2" session split -s "$1" $vflag 2>&1)" || return 1
+  fi
   case "$out" in
     "Created new pane: "*) printf '%s' "${out#Created new pane: }"; return 0 ;;
     *) return 1 ;;
@@ -5123,13 +5207,26 @@ it2_split() { # $1=firing-uuid  $2=vertically|horizontally  → echoes new sessi
 # (`session focus` → async_activate(order_window_front=True)) is the OLD unconditional focus-steal —
 # now gated on --follow: only a manual /handoff (operator watching) lands their view on the pane; an
 # autonomous fire (FOLLOW=0) never raises (C1, the ttys018 mis-inject fix).
-it2_land() { # $1=new-session-id  → 0 on typed, 1 (loud) if the pane exists but typing failed
+it2_land() { # $1=new-session-id  → 0 on landed, 1 (loud) if the pane exists but typing failed
   local id="$1" ok=0
-  /bin/sleep 0.4
-  for _ in 1 2; do
-    if it2_type_verified "$REAL_IT2" "$id" "$CMD"; then ok=1; break; fi
-    /bin/sleep 0.6
-  done
+  # ARGV-LAUNCHED PANE: the command rode in on the launch, so there is nothing to land and nothing to
+  # verify — the pane has been running $CMD since before it drew its first row. Deliberately still the
+  # single funnel every surface returns through (the dispatcher wiring that routes --tab and --window
+  # here is pinned by tests/handoff-fire-tab-window-typing.bats), so this is a branch, not a bypass.
+  # Note what is NOT claimed here: this proves the command was DELIVERED, never that the session
+  # ENGAGED. verify_engagement remains the oracle for that, unchanged and now strictly more likely to
+  # pass — a mangled or dropped launch line was one of the ways a pane ended up task-less.
+  # The --follow raise below is now unconditionally safe: with no prompt to type at, a raise can no
+  # longer interleave the operator's keystrokes into a command line, which was the 2026-08-07 defect.
+  if [ "${HF_ARGV_ACTIVE:-0}" = 1 ]; then
+    ok=1
+  else
+    /bin/sleep 0.4
+    for _ in 1 2; do
+      if it2_type_verified "$REAL_IT2" "$id" "$CMD"; then ok=1; break; fi
+      /bin/sleep 0.6
+    done
+  fi
   [ "$ok" = 1 ] || { echo "!! pane $id created but typing the launch command failed (2×) — run manually in it: $CMD" >&2; return 1; }
   if [ "$FOLLOW" = 1 ]; then
     hf_bounded "$REAL_IT2" session focus "$id" >/dev/null 2>&1 || true   # --follow: land the operator's view on the continuation
@@ -5155,7 +5252,8 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
     # iTerm2 branch's foundWin walk exists to prevent. A dead anchor makes launch exit non-zero,
     # which is what NOTFOUND means.
     local tnew
-    tnew="$(kt launch --type=tab --cwd=current --match "id:${1##*:}" 2>/dev/null | tr -d '[:space:]')" || tnew=""
+    # Same pre-delivery as the bg-tab and split surfaces; unset/empty ⇒ nothing, and the caller types.
+    tnew="$(kt launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || tnew=""
     case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) printf 'OK %s\n' "$tnew" ;; esac
     return 0
   fi
@@ -5214,7 +5312,8 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     local wnew kfocus=""
     [ "${FOLLOW:-0}" = 1 ] || kfocus="--keep-focus"
     # shellcheck disable=SC2086
-    wnew="$(kt launch --type=os-window --cwd=current $kfocus 2>/dev/null | tr -d '[:space:]')" || wnew=""
+    # Same pre-delivery as the other three surfaces; unset/empty ⇒ nothing, and the caller types.
+    wnew="$(kt launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"} 2>/dev/null | tr -d '[:space:]')" || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails
     # loud on it — never print a non-id, which would be landed into as a pane.
     case "$wnew" in ''|*[!0-9]*) return 0 ;; *) printf '%s\n' "$wnew" ;; esac
