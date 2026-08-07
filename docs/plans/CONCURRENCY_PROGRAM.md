@@ -297,6 +297,46 @@ key means *entitlement* or merely *an environment record exists* is unverified, 
 error path). `--cloud` is a real hidden flag on v2.1.220 and refuses without a TTY. This is the
 prerequisite that must exist *before* cloud execution is used; it is not evidence that cloud
 execution is available. Latency is push/pull, not poll: nothing arrives until someone syncs.
+#### S5.1 · Cloud observability — DONE (backlog `191d4d056c98`, 2026-08-07)
+
+**→ `docs/plans/CLOUD_OBSERVABILITY.md`** (design + measurements, with the command for each so they
+can be re-measured rather than believed) and `docs/research/cloud-observability-2026-08-07.md`.
+Built: `bin/cc-cloud` (fire-time capture) · `bin/cc-cloud-watch` (`ls-remote` observer).
+
+Three results that change how S5 is sequenced:
+
+1. **The local instruments do not go quiet off-box — they answer, wrongly.** ~80 of ~85 probes are
+   structurally blind to a VM, and two *actuate* on the false reading: `cc-backlog`'s liveness
+   oracles convicted a cloud claim as PROVEN-DEAD → `reopen` → `cc-dispatch`'s fire predicate → a
+   second worker onto live work (fixed here: `--venue`, `0d173af4`); and
+   `scripts/lead-supervisor.sh:437` returns `dark` for any cwd absent locally, so **every cloud
+   session fired today would be paged as hung, forever** (measured with controls, fix filed
+   separately — it touches a live daemon's escalation path).
+2. **O1–O3 — session id, branch, deadline — exist only at the moment of the fire.** Nothing local
+   records a cloud session, so un-captured they are gone and the session is unobservable *in
+   principle*. This is the item's whole point, and it cannot be retrofitted onto sessions in flight.
+3. **Silence is never death.** `ls-remote` separates absent (rc 0) from unreachable (rc 128), so the
+   observer's own network failure cannot forge a death verdict. A repo-side channel may prove life;
+   it may never prove death.
+
+**Composes with S5a, and depends on it.** S5a's bus is how a cloud worker *participates*; this is how
+it is *observed*. The split is deliberate on both sides: the bus carries messages and work
+transitions (low-frequency, the trail IS the audit), `refs/cc/*` carries liveness (high-frequency,
+must never enter history). S5a's "the claim stays local" is exactly this doc's local-proxy shape —
+and it is the safer of the two answers to the `--venue` problem, because it never mints a cloud claim
+at all.
+
+⚠️ Still open and operator-gated: **entitlement**. `bin/claude-accounts` has no cloud concept, so
+S5's "check `/accounts`, never assume" points at a surface with no such field.
+
+🚧 **Correction to an earlier draft of this section** (kept, because the error is the reusable part):
+it claimed *"neither installed binary exposes a `--cloud` verb"*, measured by
+`claude --help | grep -ci cloud`. **False — `--cloud` is a real HIDDEN flag on 2.1.220**, so `--help`
+is structurally incapable of seeing it, exactly as S5a reports. Re-measured with the control that
+should have been there from the start: `--cloud` returns *"requires an interactive terminal"* while a
+fabricated flag returns *"unknown option"* — the binary distinguishes them, so absence from `--help`
+was never evidence of absence (memory: `lookup-miss-is-not-absence`). A `--help` scrape is a weak
+oracle for a CLI that hides flags; probe the behaviour, and pair it with a known-absent control.
 
 ---
 
