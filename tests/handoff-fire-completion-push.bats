@@ -49,6 +49,15 @@ setup() {
   # pushing completion back to whoever fired it — so stamp every pane id this suite drives.
   # Without this the origin gate refuses first (exit 2) and no push side effect is ever reached.
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
+  # HERMETICITY (measured leak, 2026-08-07): this suite drives the REAL self-close paths, whose
+  # alarm sites call the live $HOME/.claude/bin/cc-notify — which honours these env seams. Without
+  # them this suite wrote its fake-pane husk alarms into the OPERATOR'S live stores: 370 of 395
+  # HANDOFF-HUSK-PANE lines in ~/.claude/mailbox (93.7% of all husk traffic) were this suite's
+  # litter, drowning the 25 real alarms. Same law as the cc-notify.bats CC_COMMS_ALARM_DIR leak
+  # (backlog 817faf3a4968): the seam belongs in setup(), per-test does not count.
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
+  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
+  export CC_HANDOFF_ALARM_DIR="$BATS_TEST_TMPDIR/handoff-alarms"
   for _p in fake:AAAA-1111 fake:BBBB-2222 fake:CCCC-3333 fake:DDDD-4444 fake:EEEE-5555 fake:FFFF-5150; do
     # cwd is THIS PANE's cwd, not a hardcoded "/tmp": the origin gate tenancy-binds the stamp on cwd
     # (item aba6bcbff6de), and a placeholder path would make every pane here a stale tenant.
