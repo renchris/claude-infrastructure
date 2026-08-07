@@ -12,6 +12,15 @@
   expands neither ~ nor $HOME inside ProgramArguments, and its PATH has no Homebrew — where git,
   bats and timeout(1) actually live. Standard*Path CANNOT take $HOME at all, hence the literal.
 
+  THE EXEC TARGET FALLS BACK TO THE REPO COPY, AND THAT IS LOAD-BEARING (I11 — existence-check the
+  platter; the same fix hooks/operator-readout.sh:238-246 carries). ~/.claude/scripts/deploy-live.sh
+  is a SYMLINK that deploy-live.sh itself creates, via link_refresh → install.sh, so the advancer was
+  undeployable by its own outage: with the link absent the job could not start AT ALL. Measured on
+  this host: 59 × `cannot execute: No such file or directory`, and the link only appeared at 10:32 on
+  2026-07-29, four minutes after the newest failure line — i.e. by luck, not by design. The repo path
+  is what the symlink points AT, so this is correct in both states and prefers the live layer when it
+  exists. It is $HOME-relative and matches deploy-live.sh's own DEPLOY_REPO default.
+
   RunAtLoad true: a login/boot is exactly when the live layer is most likely to be stale, and one
   tick is cheap (an already-deployed tick is a fetch + a rev-parse). C10: OPERATOR loads it, via
   docs/activation/pending-activation/14-land-pipeline-v2-activate.sh.
@@ -26,7 +35,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; exec "$HOME/.claude/scripts/deploy-live.sh" --auto</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; D="$HOME/.claude/scripts/deploy-live.sh"; [ -x "$D" ] || D="$HOME/Development/claude-infrastructure/scripts/deploy-live.sh"; exec "$D" --auto</string>
     </array>
 
     <key>StartInterval</key>
