@@ -1443,6 +1443,41 @@ than no claim, because it stops the next reader from checking.
 > Extracting `capacity_gate()` into the shared library is the no-drift end state, but its 765-line
 > suite greps the function body in-place, so the extraction is a change with its own RED-proof — not
 > a rider on this one. Parity is enforced by test until then.
+>
+> **⟶ RESIDUE CLOSED 2026-08-07 (item `a27a4d9485da`).** The hardware terms are now ONE
+> implementation — `cc_hw_*` in `scripts/lib/capacity-admit.sh`: the sysctl resolver, both probes,
+> the load/core awk, the vm_stat page-size parser, the headroom awk, the numeric validators, and the
+> two default numbers (`CC_HW_DEFAULT_MAX_LOAD_PER_CORE` / `CC_HW_DEFAULT_MIN_HEADROOM_GB`), which
+> both gates now expand. The paragraph above is therefore superseded on one word: parity is no
+> longer *enforced by test*, it is **structural**, and case 26 became a ratchet (one literal per
+> term; neither gate may re-acquire its own; mutation-controlled) joined by 26b/26c asserting the
+> vm_stat parser and the load verdict each exist exactly ONCE in the shell tree. That widening is
+> the point — the old case compared two literals and was blind to the ~25 other duplicated lines,
+> where a page-size fix landing on one side only is invisible and wrong by 4x.
+>
+> **What did NOT change, and §12.2 still stands unamended:** this is an extraction, not the
+> universalisation §12.2 forbids. `capacity_gate()` remains UNBOUNDED with `--recycle` exempt;
+> `cc_capacity_admit()` remains BUDGET-BOUNDED; the namespaces and the two recorders stay split.
+> `scripts/capacity-alarm.sh` is deliberately NOT folded in and case 26b asserts why — it is a
+> different instrument (compressor/active/wired at 1.5/2.5 rungs), and sharing a parser between a
+> gate and an alarm makes one subject's tuning the other's regression.
+>
+> **The extraction's own new failure mode, closed in the same diff.** `capacity_gate()` acquired a
+> dependency it can lose, and its call site turns any non-zero status into rc 9 — so an undefined
+> `cc_hw_*` would have made one missing file refuse EVERY fire on the box: fail-CLOSED, the §12.2
+> amplifier arriving through the back door of a refactor. It now checks `cc_hw_ready` first and, on
+> absence, ADMITS with basis **`absent`** and says so on stderr — §12.2's loud-inertness rule applied
+> to a 4th gated path (fire-suite case 32 executes it; coverage case 28 pins the source-level half).
+> `absent` is recorded in §9.5.1's vocabulary as the seventh basis and the only one no gate emits for
+> itself. Two findings worth keeping: the library-resolution loop must be `if/fi` and never
+> `[ … ] && …`, because that block is TOP LEVEL under `set -euo pipefail` and a missing candidate —
+> the ordinary case — would abort the whole script; and fire-suite case 9's grep was unanchored, so
+> the new header explaining the call site made it match twice (anchored to non-comment position, the
+> same citation-vs-claim split case 20 already uses).
+>
+> RED-proof: replayed against the pristine tree from `git archive 07f9707c`, run from that tree's own
+> root — 8/43 RED in `handoff-fire-capacity-gate.bats`, 5/14 in `capacity-admit-coverage.bats`, 0
+> skips either side.
 
 ### 12.2 ⛔ DO NOT "just bind `capacity_gate()` everywhere" — §8.5.2 already discarded that architecture
 

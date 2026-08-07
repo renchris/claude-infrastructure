@@ -2587,10 +2587,56 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 # CC_CAP_SYSCTL: that prefix is capacity-alarm.sh's, and sharing one variable would let a stub
 # aimed at one subject silently redirect the other.
 #
-# vm_stat below is left on its bare name ON PURPOSE, and this is a measurement, not an oversight:
-# it lives in /usr/bin, which is the floor of every PATH including the minimal one above, so it is
-# reachable where sysctl is not. tests/handoff-fire-capacity-gate.bats pins that reachability so
-# the claim is checked rather than remembered.
+# ── THE TERMS THEMSELVES LIVE IN scripts/lib/capacity-admit.sh (2026-08-07) ─────────────────────
+# The resolver above, both probes, both verdict awks and the two default numbers were duplicated
+# verbatim between this function and `cc_capacity_admit()`, and the only thing holding the copies
+# together was tests/capacity-admit-coverage.bats case 26 comparing the two literals. That detects
+# a drifted ceiling; it cannot prevent one, and it was blind to the other ~25 shared lines — the
+# vm_stat page-size parser most of all, where a fix landing on one side only is invisible and wrong
+# by 4x. They are now ONE implementation (`cc_hw_*`), and case 26 is a ratchet on that structure.
+#
+# WHAT DID NOT MOVE, deliberately: the POLICY. This gate is UNBOUNDED — a human is at the keyboard
+# to read the refusal and shed load, and `--recycle` is exempt at the call site because a
+# replacement fire is net-zero panes. `cc_capacity_admit()` is BUDGET-BOUNDED because its callers
+# are unattended (boot storm, limit-recovery, the Agent tool) where a standing refusal becomes the
+# §12.2 outage. Both are right for their callers; ONE gate for both would re-commit the fix that
+# §8.5.2 and §12.2 already refuted. The CC_FIRE_* namespace, the operator-facing stderr guidance
+# and the handoffs.jsonl emitters stay here too — this file's records are its own.
+#
+# vm_stat is left on its bare name ON PURPOSE (now in the library, same reasoning): it lives in
+# /usr/bin, the floor of every PATH including the minimal one above, so it is reachable where
+# sysctl is not. tests/handoff-fire-capacity-gate.bats P7 pins that reachability so the claim is
+# checked rather than remembered.
+#
+# SOURCED HERE rather than at the top of the file, next to its only consumer. Script-relative FIRST
+# (`readlink -f` through the ~/.claude symlink into the checkout), because the config-dir copy does
+# not exist until a deploy and deploy-first would ship this ABSENT on every fire — the
+# deployed-layer-bootstrap-circle, exactly as hooks/agent-teams-enforce.sh documents. An EXPLICIT
+# CC_FIRE_CAPACITY_LIB is honoured VERBATIM and never folded into the fallback list, the same rule
+# CC_FIRE_SYSCTL follows above; it is how the absence case below is testable at all.
+#
+# EVERY test below is `if/fi`, never `[ … ] && …`. This file runs under `set -euo pipefail` and
+# this block is at TOP LEVEL: an `&&` whose left side is false is a failed compound command, so a
+# missing candidate — the ordinary case for three of the four, and for ALL of them on a box without
+# the library — would abort the script outright. That is the fail-CLOSED direction, and it would
+# take out every fire on the box rather than the one gate. The sibling callers use the `&&` form
+# safely only because theirs sit inside a loop body whose failure the loop absorbs.
+_CC_CA=""
+if [ -n "${CC_FIRE_CAPACITY_LIB:-}" ]; then
+  if [ -f "${CC_FIRE_CAPACITY_LIB}" ]; then _CC_CA="${CC_FIRE_CAPACITY_LIB}"; fi
+else
+  for _CC_CAD in "$(dirname "$_CC_KS")/lib/capacity-admit.sh" \
+                 "$(dirname "$0")/lib/capacity-admit.sh" \
+                 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+                 "${HOME:-}/.claude/scripts/lib/capacity-admit.sh"; do
+    if [ -f "$_CC_CAD" ]; then _CC_CA="$_CC_CAD"; break; fi
+  done
+fi
+if [ -n "$_CC_CA" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_CA" 2>/dev/null || _CC_CA=""
+fi
+
 capacity_gate() {
   # EVERY `return 0` below is preceded by an emit_gate_admit — the admit record cannot acquire a
   # silent branch, and the ADMIT-COVERAGE test in tests/handoff-fire-capacity-gate.bats greps this
@@ -2600,15 +2646,28 @@ capacity_gate() {
     # a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
     emit_gate_admit capacity gate-off "CC_FIRE_CAPACITY_GATE=off — no term evaluated"; return 0
   fi
-  local ncpu load ceiling verdict lpc floor head_gb vms sysctl_bin
-  sysctl_bin="${CC_FIRE_SYSCTL:-}"
-  if [ -z "$sysctl_bin" ]; then
-    if [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl; else sysctl_bin=sysctl; fi
+  # ABSENT LIBRARY IS LOUD AND FAILS OPEN — the one branch that MUST come before any term. This is
+  # the universal spawn chokepoint and the call site turns ANY non-zero status into rc 9, so an
+  # undefined `cc_hw_*` would make a missing file refuse EVERY fire on the box: fail-CLOSED, the
+  # §12.2 amplifier this whole design exists to avoid. Recorded as basis `absent` (§12.2's rule for
+  # the other three gated paths, verbatim: "inertness must be LOUD rather than a silent admit"), so
+  # an ungated window can never be counted later as evidence the gate was healthy.
+  # Placed AFTER the kill switch above: an operator who turned the gate off gets silence, not a
+  # complaint about a library the gate was never going to use.
+  if ! command -v cc_hw_ready >/dev/null 2>&1 || ! cc_hw_ready; then
+    echo "!! capacity gate: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — firing UNGATED" >&2
+    emit_gate_admit capacity absent \
+      "scripts/lib/capacity-admit.sh unreachable — no hardware term evaluated"
+    return 0
   fi
-  ncpu="$("$sysctl_bin" -n hw.ncpu 2>/dev/null || true)"
-  load="$("$sysctl_bin" -n vm.loadavg 2>/dev/null | awk '{print $2}' || true)"
+  local ncpu load ceiling verdict lpc floor head_gb sysctl_bin
+  # The resolver, both probes, both verdicts and both default numbers are the SHARED TERMS — see
+  # the header above. Everything this function does with them is its own.
+  sysctl_bin="$(cc_hw_resolve_sysctl "${CC_FIRE_SYSCTL:-}")"
+  ncpu="$(cc_hw_ncpu "$sysctl_bin")"
+  load="$(cc_hw_load1 "$sysctl_bin")"
   if [ -n "${CC_FIRE_LOADAVG_OVERRIDE:-}" ]; then load="$CC_FIRE_LOADAVG_OVERRIDE"; fi
-  ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"
+  ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-$CC_HW_DEFAULT_MAX_LOAD_PER_CORE}"
   # Each fail-open below is an admit the gate did NOT measure. Filed as basis "fail-open" with the
   # dead probe named, because a broken sysctl otherwise manufactures a 100%-admit population that is
   # indistinguishable from a quiet box — the gate deleted, reading as the gate healthy.
@@ -2618,22 +2677,21 @@ capacity_gate() {
   # same PATH miss or a NEW cause (an exec-deny, a sandbox, a sysctl that stopped answering) —
   # states that read alike but have different fixes. `via /usr/sbin/sysctl` in a future row means
   # the PATH class is NOT the explanation and something else needs finding.
-  case "$ncpu" in ''|*[!0-9]*)
+  if ! cc_hw_is_int "$ncpu"; then
     echo "-- capacity gate: hw.ncpu unreadable ('$ncpu') via $sysctl_bin -> ADMIT (fail-open)" >&2
-    emit_gate_admit capacity fail-open "hw.ncpu unreadable ('$ncpu') via $sysctl_bin — load term not evaluated"; return 0 ;;
-  esac
-  case "$load" in ''|*[!0-9.]*)
+    emit_gate_admit capacity fail-open "hw.ncpu unreadable ('$ncpu') via $sysctl_bin — load term not evaluated"; return 0
+  fi
+  if ! cc_hw_is_num "$load"; then
     echo "-- capacity gate: vm.loadavg unreadable ('$load') via $sysctl_bin -> ADMIT (fail-open)" >&2
-    emit_gate_admit capacity fail-open "vm.loadavg unreadable ('$load') via $sysctl_bin — load term not evaluated"; return 0 ;;
-  esac
-  case "$ceiling" in ''|*[!0-9.]*)
+    emit_gate_admit capacity fail-open "vm.loadavg unreadable ('$load') via $sysctl_bin — load term not evaluated"; return 0
+  fi
+  if ! cc_hw_is_num "$ceiling"; then
     echo "-- capacity gate: bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') -> ADMIT (fail-open)" >&2
-    emit_gate_admit capacity fail-open "bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') — load term not evaluated"; return 0 ;;
-  esac
+    emit_gate_admit capacity fail-open "bad CC_FIRE_MAX_LOAD_PER_CORE ('$ceiling') — load term not evaluated"; return 0
+  fi
   [ "$ncpu" -gt 0 ] || { echo "-- capacity gate: hw.ncpu=0 -> ADMIT (fail-open)" >&2
     emit_gate_admit capacity fail-open "hw.ncpu=0 — load term not evaluated"; return 0; }
-  verdict="$(awk -v l="$load" -v n="$ncpu" -v c="$ceiling" \
-    'BEGIN { lpc = l / n; printf "%s %.2f", (lpc > c ? "REFUSE" : "ADMIT"), lpc }')"
+  verdict="$(cc_hw_load_verdict "$load" "$ncpu" "$ceiling")"
   lpc="${verdict#* }"; verdict="${verdict%% *}"
   if [ "$verdict" = REFUSE ]; then
     echo "!! capacity gate: REFUSING a net-new fire — load ${load} on ${ncpu} cores = ${lpc}/core > ceiling ${ceiling}/core." >&2
@@ -2657,32 +2715,23 @@ capacity_gate() {
       "load ${load} on ${ncpu} cores = ${lpc}/core (ceiling ${ceiling}/core) · headroom term off"
     return 0
   fi
-  floor="${CC_FIRE_MIN_HEADROOM_GB:-4}"
+  floor="${CC_FIRE_MIN_HEADROOM_GB:-$CC_HW_DEFAULT_MIN_HEADROOM_GB}"
   if [ -n "${CC_FIRE_HEADROOM_OVERRIDE:-}" ]; then
     head_gb="$CC_FIRE_HEADROOM_OVERRIDE"
   else
-    vms="$(vm_stat 2>/dev/null || true)"
-    head_gb="$(printf '%s\n' "$vms" | awk '
-      function n(s,   t) { t = s; gsub(/[^0-9]/, "", t); return t + 0 }
-      /page size of/        { ps = n($0) }
-      /^Pages free:/        { p += n($0); k++ }
-      /^Pages speculative:/ { p += n($0); k++ }
-      /^Pages inactive:/    { p += n($0); k++ }
-      /^Pages purgeable:/   { p += n($0); k++ }
-      END { if (ps <= 0 || k < 4) exit 1; printf "%.2f", p * ps / 1073741824 }
-    ')" || head_gb=""
+    head_gb="$(cc_hw_headroom_gb)" || head_gb=""
   fi
-  case "$floor" in ''|*[!0-9.]*)
+  if ! cc_hw_is_num "$floor"; then
     echo "-- capacity gate: bad CC_FIRE_MIN_HEADROOM_GB ('$floor') -> ADMIT (fail-open)" >&2
     emit_gate_admit capacity fail-open "bad CC_FIRE_MIN_HEADROOM_GB ('$floor') — headroom term not evaluated"
-    return 0 ;;
-  esac
-  case "$head_gb" in ''|*[!0-9.]*)
+    return 0
+  fi
+  if ! cc_hw_is_num "$head_gb"; then
     echo "-- capacity gate: reclaimable headroom unreadable ('$head_gb') -> ADMIT (fail-open)" >&2
     emit_gate_admit capacity fail-open "reclaimable headroom unreadable ('$head_gb') — headroom term not evaluated"
-    return 0 ;;
-  esac
-  verdict="$(awk -v h="$head_gb" -v f="$floor" 'BEGIN { print (h < f ? "REFUSE" : "ADMIT") }')"
+    return 0
+  fi
+  verdict="$(cc_hw_headroom_verdict "$head_gb" "$floor")"
   if [ "$verdict" = REFUSE ]; then
     echo "!! capacity gate: REFUSING a net-new fire — reclaimable memory headroom ${head_gb}GB < floor ${floor}GB." >&2
     echo "   free+speculative+inactive+purgeable is what a new session can take WITHOUT swapping; below the floor it swaps." >&2

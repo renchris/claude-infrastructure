@@ -19,6 +19,19 @@
 # census keyed on the wrong token read "zero callers" for a hook that was live). Every case here
 # greps for a real `cc_capacity_admit` CALL, and each is paired with a check that the call is
 # reachable rather than parked behind a dead branch.
+#
+# RED-PROOF for the 2026-08-07 extraction (item a27a4d9485da, re-runnable): this file was replayed
+# against the pristine pre-change tree recovered via `git archive 07f9707c` (0 occurrences of
+# `CC_HW_DEFAULT` in the library), run from that tree's OWN root so REPO/HF/LIB resolve pre-change.
+# 5 of 14 went RED there, 0 skips either side:
+#   26   no shared constant exists — the two gates still carry a literal each.
+#   26b  the vm_stat headroom parser is found in TWO files, not one.
+#   26c  the load-per-core verdict awk is found in TWO files, not one.
+#   27   `absent` is not in capacity_gate's vocabulary — it had no library to lose.
+#   28   handoff-fire.sh carries no loud-inertness message, for the same reason.
+# The other 9 are pre-existing coverage assertions and stay GREEN on both trees BY DESIGN: the
+# extraction moved terms between two files and must not have changed which spawn paths are gated.
+# A case among 20–25 going red here would mean it did.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -167,35 +180,101 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   grep -q 'NOT IN ANY GIT REPOSITORY' "$REPO/scripts/boot-resume-launch.sh"
 }
 
-@test "26 TERM PARITY — the two implementations' ceilings cannot drift silently" {
+@test "26 TERM PARITY — ONE literal per term, so the ceilings CANNOT drift (not merely 'do not')" {
   # capacity-admit.sh deliberately uses its OWN CC_ADMIT_* namespace rather than reusing
   # CC_FIRE_*: handoff-fire.sh reasoned that out for CC_FIRE_SYSCTL vs capacity-alarm's
   # CC_CAP_SYSCTL — sharing one variable between two subjects lets a stub aimed at ONE silently
-  # redirect the OTHER. Separate names are correct; separate DEFAULTS would be drift. This is the
-  # gate that keeps the first without the second.
-  # `cut -d- -f2`, NOT -f3. `CC_FIRE_MAX_LOAD_PER_CORE:-2.0` has exactly ONE `-`, so the value is
-  # field 2 and field 3 is EMPTY. This case shipped with -f3 and PASSED — because the two
-  # emptiness guards below were dead assertions (mid-test `[ ] && [ ]`, which errexit cannot reach
-  # in bats), so it compared "" to "" and called that parity. It would have gone on passing through
-  # any ceiling change on either side. The land gate's dead-assertion ratchet is what surfaced it;
-  # keeping the guards LIVE is what stops it recurring, so they are the real subject here.
-  fire_load="$(grep -oE 'CC_FIRE_MAX_LOAD_PER_CORE:-[0-9.]+' "$HF" | head -1 | cut -d- -f2)"
-  adm_load="$(grep -oE 'CC_ADMIT_MAX_LOAD_PER_CORE:-[0-9.]+' "$LIB" | head -1 | cut -d- -f2)"
-  [ -n "$fire_load" ] || false
-  [ -n "$adm_load" ] || false
-  [ "$fire_load" = "$adm_load" ]
-  fire_head="$(grep -oE 'CC_FIRE_MIN_HEADROOM_GB:-[0-9.]+' "$HF" | head -1 | cut -d- -f2)"
-  adm_head="$(grep -oE 'CC_ADMIT_MIN_HEADROOM_GB:-[0-9.]+' "$LIB" | head -1 | cut -d- -f2)"
-  [ -n "$fire_head" ] || false
-  [ -n "$adm_head" ] || false
-  [ "$fire_head" = "$adm_head" ]
+  # redirect the OTHER. Separate names are correct; separate DEFAULTS would be drift.
+  #
+  # UNTIL 2026-08-07 THIS CASE COMPARED TWO LITERALS, and that is a detector, not a gate: it could
+  # only report drift after someone had written it, and it was blind to the ~25 OTHER lines the two
+  # gates duplicated — the vm_stat page-size parser most of all, where a fix on one side only is
+  # invisible here and wrong by 4x (cases 17/18 of handoff-fire-capacity-gate.bats are that pair).
+  # Item a27a4d9485da made the terms one implementation, so this case now asserts the STRUCTURE:
+  # there is one literal for each term, in the library, and NEITHER gate carries a number of its own.
+  #
+  # (The old form is also why this file's dead-assertion history matters: it shipped with
+  # `cut -d- -f3` — `CC_FIRE_MAX_LOAD_PER_CORE:-2.0` has ONE `-`, so field 3 is EMPTY — and PASSED,
+  # because its emptiness guards were mid-test `[ ] && [ ]` that errexit cannot reach in bats. It
+  # compared "" to "" and called that parity. Every guard below is a separate live assertion.)
+  local shared_load shared_head
+  shared_load="$(grep -oE '^CC_HW_DEFAULT_MAX_LOAD_PER_CORE=[0-9.]+' "$LIB" | head -1 | cut -d= -f2)"
+  shared_head="$(grep -oE '^CC_HW_DEFAULT_MIN_HEADROOM_GB=[0-9.]+' "$LIB" | head -1 | cut -d= -f2)"
+  [ -n "$shared_load" ] || { echo "no shared load ceiling in $LIB"; false; }
+  [ -n "$shared_head" ] || { echo "no shared headroom floor in $LIB"; false; }
+
+  # BOTH gates must expand it. A constant nothing reads is not a shared term, it is a comment.
+  grep -q 'CC_FIRE_MAX_LOAD_PER_CORE:-\$CC_HW_DEFAULT_MAX_LOAD_PER_CORE' "$HF" \
+    || { echo "capacity_gate does not expand the shared load ceiling"; false; }
+  grep -q 'CC_FIRE_MIN_HEADROOM_GB:-\$CC_HW_DEFAULT_MIN_HEADROOM_GB' "$HF" \
+    || { echo "capacity_gate does not expand the shared headroom floor"; false; }
+  grep -q 'CC_ADMIT_MAX_LOAD_PER_CORE:-\$CC_HW_DEFAULT_MAX_LOAD_PER_CORE' "$LIB" \
+    || { echo "cc_capacity_admit does not expand the shared load ceiling"; false; }
+  grep -q 'CC_ADMIT_MIN_HEADROOM_GB:-\$CC_HW_DEFAULT_MIN_HEADROOM_GB' "$LIB" \
+    || { echo "cc_capacity_admit does not expand the shared headroom floor"; false; }
+
+  # THE RATCHET: no second literal anywhere. A gate that re-acquires its own `:-2.0` has silently
+  # left the shared term, and would do so while every assertion above still passed.
+  local stray
+  stray="$(grep -nE 'CC_(FIRE|ADMIT)_(MAX_LOAD_PER_CORE|MIN_HEADROOM_GB):-[0-9]' "$HF" "$LIB" || true)"
+  [ -z "$stray" ] || { echo "a gate re-acquired its own literal default:"; echo "$stray"; false; }
+
+  # MUTATION CONTROL — the ratchet must be able to FAIL, or the emptiness above is all it proves.
+  # Same predicate, run over the exact string it exists to reject.
+  printf 'ceiling="${CC_FIRE_MAX_LOAD_PER_CORE:-2.0}"\n' > "$BATS_TEST_TMPDIR/drifted.sh"
+  grep -qE 'CC_(FIRE|ADMIT)_(MAX_LOAD_PER_CORE|MIN_HEADROOM_GB):-[0-9]' "$BATS_TEST_TMPDIR/drifted.sh" \
+    || { echo "the stray-literal predicate cannot match a drifted default — it proves nothing"; false; }
+}
+
+@test "26b ONE PARSER — the vm_stat headroom sum exists exactly once in the shell tree" {
+  # The ceilings were never the expensive half. This is: a 10-line awk that reads the page size from
+  # vm_stat's OWN header and sums exactly free+speculative+inactive+purgeable. Case 26's literal
+  # comparison could not see it at all, so a page-size fix landing on one copy only would have been
+  # invisible AND wrong by 4x on an Apple-silicon box.
+  local owners
+  owners="$(grep -rlE '^[[:space:]]*/\^Pages speculative:/' "$REPO/scripts" "$REPO/hooks" \
+              --include='*.sh' 2>/dev/null | sed "s#^$REPO/##" | sort | tr '\n' ' ')"
+  [ "$owners" = "scripts/lib/capacity-admit.sh " ] \
+    || { echo "the headroom parser must exist exactly once, in the library; found: [$owners]"; false; }
+
+  # scripts/capacity-alarm.sh reads the same vm_stat and is DELIBERATELY not folded in — it is a
+  # different INSTRUMENT (a monitor with warn/alarm rungs at 1.5/2.5 per core) that also sums the
+  # compressor, active and wired populations these gates exclude. The exemption is ASSERTED, not
+  # assumed: if it ever became a bare copy of the four-population sum, that is a duplicate and the
+  # `owners` check above would have to catch it.
+  grep -q 'Pages occupied by compressor' "$REPO/scripts/capacity-alarm.sh" \
+    || { echo "capacity-alarm no longer sums a wider population — re-check whether it is now a duplicate"; false; }
+}
+
+@test "26c ONE VERDICT — the load-per-core awk exists once, and both gates call it" {
+  # Same class as 26b for the other term. `lpc > c ? "REFUSE" : "ADMIT"` was written out twice.
+  local owners
+  owners="$(grep -rlF 'lpc > c ? "REFUSE" : "ADMIT"' "$REPO/scripts" "$REPO/hooks" \
+              --include='*.sh' 2>/dev/null | sed "s#^$REPO/##" | sort | tr '\n' ' ')"
+  [ "$owners" = "scripts/lib/capacity-admit.sh " ] \
+    || { echo "the load verdict must exist exactly once, in the library; found: [$owners]"; false; }
+  grep -q 'cc_hw_load_verdict' "$HF"  || { echo "capacity_gate does not call the shared verdict"; false; }
+  grep -q 'cc_hw_load_verdict' "$LIB" || { echo "cc_capacity_admit does not call the shared verdict"; false; }
+  # ...and the same for the resolver and the headroom read, so "one implementation" is the whole
+  # term rather than the one line this case happens to name (memory `inventory-before-building`).
+  local fn
+  for fn in cc_hw_resolve_sysctl cc_hw_ncpu cc_hw_load1 cc_hw_headroom_gb cc_hw_headroom_verdict; do
+    grep -qE "^$fn\(\)" "$LIB" || { echo "$fn is not defined in the library"; false; }
+    grep -q "$fn" "$HF"  || { echo "capacity_gate does not use $fn"; false; }
+    grep -q "$fn" "$LIB" || { echo "cc_capacity_admit does not use $fn"; false; }
+  done
 }
 
 @test "27 BASIS PARITY — capacity_gate's vocabulary is a subset of capacity-admit's" {
   # §9.5.1: "split on `basis` before believing any ratio computed here." That instruction only
   # works if one split spans both gates. capacity-admit adds `headroom-only` and `budget-expired`;
   # it may never DROP one of the originals, or a cross-gate query silently loses a population.
-  for b in measured load-only fail-open gate-off; do
+  #
+  # `absent` joined the list on 2026-08-07 and is the one no gate can emit for itself — it means the
+  # LIBRARY was unreachable, so a caller writes it (this hook, and capacity_gate since the terms
+  # moved there). It has to be in the shared vocabulary for the same reason as the rest: an ungated
+  # window that reads back as a plain admit is the §9.5.1 population defect exactly.
+  for b in measured load-only fail-open gate-off absent; do
     grep -q "emit_gate_admit capacity $b" "$HF" || grep -q "$b" "$HF"
     grep -q "$b" "$LIB" || { echo "basis '$b' exists in capacity_gate but NOT in capacity-admit"; false; }
   done
@@ -214,7 +293,13 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   # bits as one that cannot) AND it lands in the hook's own output stream, where it corrupts the
   # JSON contract (measured: it broke 6 cases in agent-teams-enforce.bats with a jq parse error,
   # because bats' `run` merges stderr into $output). Its channel is the ledger.
-  for f in scripts/boot-resume-launch.sh scripts/limit-recover/lr-fire-resume.sh; do
+  #
+  # handoff-fire.sh JOINED THIS LIST on 2026-08-07. Until then it needed no library and so had no
+  # absence to be loud about; the extraction gave it one, and it is the highest-stakes of the four —
+  # its call site turns any non-zero status into rc 9, so a missing file that reached the terms
+  # would refuse every fire on the box. tests/handoff-fire-capacity-gate.bats case 32 EXECUTES that
+  # path; this is the source-level half, so a caller that loses the signal goes red in both places.
+  for f in scripts/boot-resume-launch.sh scripts/limit-recover/lr-fire-resume.sh scripts/handoff-fire.sh; do
     grep -q 'capacity-admit: ABSENT' "$REPO/$f" || { echo "$f: no loud-inertness message"; false; }
   done
   grep -q 'basis:"absent"' "$REPO/hooks/agent-teams-enforce.sh"
