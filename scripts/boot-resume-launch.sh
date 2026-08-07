@@ -17,6 +17,18 @@
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
+# ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
+# Runs at BOOT under launchd, always creating a NEW window — so at machine start a batch of panes
+# appears with no interactive caller at all. Without a row each, that batch is indistinguishable
+# from the unattributed storm §S4.1 could not explain.
+for _psl in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/lib/pane-spawn-log.sh" \
+            "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/scripts/lib/pane-spawn-log.sh" \
+            "${HOME:-}/.claude/scripts/lib/pane-spawn-log.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_psl" ] && . "$_psl" 2>/dev/null && break
+done
+unset _psl
+
 # Bound every call that reaches the iTerm2 / AppleEvent surface (machine-wide API wedge,
 # 2026-07-26: a bare `it2 session list --json` returned rc 124 with zero output while blocked forks
 # piled up). This runs at BOOT to drive iTerm2; unbounded, a wedged API strands the whole resume with no
@@ -208,6 +220,7 @@ if [ "$IN_KITTY" = 1 ]; then
   # so the app is up by construction, and the control socket — not the app — is the thing that can
   # be missing. If it is, the launch fails and rc 4 reports the cut exactly as osascript's does.
   brl_kitty "${KARGS[@]}" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4; }
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
   exit 0
 fi
 
@@ -216,4 +229,5 @@ command -v "${OSASCRIPT%% *}" >/dev/null 2>&1 || { echo "boot-resume-launch: osa
 # ensure iTerm2 is up (post-login it may not be running yet), then drive it.
 open -a iTerm 2>/dev/null || true
 printf '%s' "$OSA" | brl_bounded "$OSASCRIPT" - >/dev/null 2>&1 || { echo "boot-resume-launch: osascript failed for $sid" >&2; exit 4; }
+command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
 exit 0

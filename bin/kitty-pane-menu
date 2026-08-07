@@ -70,6 +70,38 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
 
+
+def log_pane_spawn(surface: str, backend: str, pane: str, detail: str) -> None:
+    """One row per pane this menu CREATES (item 1467ea1dad4f).
+
+    Shells out to scripts/lib/pane-spawn-log.sh's CLI mode rather than re-implementing the row
+    here: the log has exactly one writer, so a schema change cannot land on the bash sites and
+    miss this one. CC_SPAWN_CALLER attributes the row to this file, not to the logger.
+
+    Best-effort and bounded: a menu action must never fail on its own bookkeeping, and this runs
+    under kitty's `launch --type=background` where a hang would be invisible.
+    """
+    for cand in (
+        os.path.join(HERE, "..", "scripts", "lib", "pane-spawn-log.sh"),
+        os.path.join(
+            os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
+            "scripts", "lib", "pane-spawn-log.sh",
+        ),
+        os.path.expanduser("~/.claude/scripts/lib/pane-spawn-log.sh"),
+    ):
+        if not os.path.isfile(cand):
+            continue
+        env = dict(os.environ, CC_SPAWN_CALLER="kitty-pane-menu")
+        try:
+            subprocess.run(
+                ["/bin/bash", cand, "log", surface, backend, pane, os.getcwd(), detail],
+                env=env, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            )
+        except Exception:
+            pass
+        return
+
 # The compiled Swift helper (bin/kitty-pane-menu-native.swift, built by kitty-setup.sh) pops a
 # REAL NSMenu at the cursor — the actual iTerm2-style dropdown, not this file's AppleScript
 # "choose from list" centered dialog. Whether it renders at all when spawned via kitty's
@@ -413,6 +445,10 @@ def main() -> int:
     if choice == "Paste":
         kitty("action", "--match", f"id:{wid}", "paste_from_selection")
     elif choice == "Move to New Window":
+        # `detach-window` with NO --target-tab CREATES an OS window, so this is a pane-spawn and it
+        # gets a row like every other one (item 1467ea1dad4f). The --target-tab branch below only
+        # RE-HOMES an existing window and deliberately does not log: one row per surface CREATED.
+        log_pane_spawn("os-window", "kitty", str(wid), "kitty-pane-menu detach-window (new window)")
         kitty("detach-window", "--match", f"id:{wid}")
     elif choice == "Close Pane":
         subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window"])

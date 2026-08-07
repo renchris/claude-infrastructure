@@ -1418,6 +1418,52 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── pane-spawn coverage ratchet (2026-08-07, item 1467ea1dad4f) ───────────────────────────────
+  # ~/.claude/logs/pane-spawns.jsonl exists to make ONE inference sound: a pane with no row was
+  # spawned outside this tree. That is what separates §S4.1's two surviving hypotheses (an unlogged
+  # caller vs an undocumented detached child), and it is worth exactly as much as its COVERAGE — a
+  # single uninstrumented spawner turns "outside the tree" into "outside the tree, or that one
+  # site", which is the ambiguity the item was filed to close.
+  #
+  # OWN-SCOPE, same contract as the three ratchets above — and it took the permission-gate lint to
+  # get here. This block first shipped with own-scope deliberately OMITTED, reasoned as "an
+  # own-scope filter would let an UNRELATED land introduce the exact spawner that re-opens the
+  # ambiguity." That reasoning is FALSE and the lint's refusal is what exposed it: introducing a
+  # spawner INTO a file IS changing that file, so it is inside the diff by construction and
+  # own-scope cannot miss it. What the unscoped form did add was a real freeze mode — any
+  # uninstrumented spawner anywhere blocks EVERY land by EVERYONE, with no event and no author to
+  # act on it, which is precisely the 545-refusal standing state inertness-generator §2.3 records.
+  PSPAWN_LINT="${SHIP_LAND_PSPAWN_LINT:-scripts/pane-spawn-coverage-lint.sh}"
+  if [[ -x "$PSPAWN_LINT" ]]; then
+    local psown=""
+    if [[ "${SHIP_LAND_PSPAWN_OWN_SCOPE:-on}" != "off" ]]; then
+      # Repo-relative, which is how this lint reports paths (it scans from the repo ROOT).
+      psown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'commands/*' 2>/dev/null || true)"
+      [[ -n "$psown" ]] && echo "→ gate: pane-spawn own-scope — blocking on $(printf '%s\n' "$psown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: pane-spawn coverage ratchet (a spawn site that leaves no row)" >&2
+    # gate_bounded: THE AUTHOR'S OWN DIFF — own-scope above means this can only refuse over a file
+    # THIS land changes, so the refusal cannot outlive the diff that caused it and there is always
+    # a named party who can clear it in one line. That is the budget: it expires when the diff does.
+    # Set SHIP_LAND_PSPAWN_OWN_SCOPE=off and it reverts to the unbounded form, which is why the
+    # scope is the declaration rather than a comment about intent.
+    if ! "$PSPAWN_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: pane-spawn-coverage-lint --selftest FAILED — the detector no longer" >&2
+      echo "  discriminates, so its clean verdict would mean nothing. Fix the lint before landing." >&2
+      GATE_RED=1
+      return 1
+    fi
+    # gate_bounded: THE AUTHOR'S OWN DIFF — see the marker above; CC_PSC_OWN carries the same
+    # per-land scope into the lint, so an advisory finding outside the diff prints and never blocks.
+    if ! CC_PSC_OWN="$psown" "$PSPAWN_LINT" >&2; then
+      echo "✗ gate: pane-spawn coverage RED — a file THIS LAND CHANGES creates a terminal surface" >&2
+      echo "  and never calls cc_log_pane_spawn (scripts/lib/pane-spawn-log.sh). Add the row, or the" >&2
+      echo "  log's 'no row ⇒ not from this tree' inference is false; the lines are named above." >&2
+      GATE_RED=1
+      return 1
+    fi
+  fi
+
   # ── Unattended-PATH ratchet (bare-name binaries on launchd + hook paths, 2026-08-06) ──────────
   # A bare command name resolves against whatever PATH the caller has. In the operator's shell that
   # is a rich PATH with Homebrew on it, so the code always looks right; on a launchd job or a hook

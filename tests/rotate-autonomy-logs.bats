@@ -192,7 +192,10 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/team-reaper.log
 .claude/autonomy/postland/flakes.jsonl
 .claude/autonomy/postland/runner.log
-.claude/logs/capacity-alarm.jsonl'
+.claude/logs/capacity-alarm.jsonl
+.claude/logs/compressor-sentinel.jsonl
+.claude/logs/compressor-sentinel-snap.log
+.claude/logs/pane-spawns.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -202,6 +205,15 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
   # postland/ too: DEFAULT_TARGETS is the UNION of this audit's 13 and the 2 post-land verifier
   # logs that landed on trunk separately. A target with no fixture file counts as SKIPPED, not
   # rotated, so omitting them here broke both the rotated count and the "skipped":0 assertion.
+  #
+  # 17th/18th (compressor-sentinel.jsonl, compressor-sentinel-snap.log) and 19th
+  # (pane-spawns.jsonl) — reconciled 2026-08-07 (item 1467ea1dad4f). The first two had been added
+  # to DEFAULT_TARGETS without a fixture here, so this test was asserting 16 against a shipped 18
+  # and had been RED since. Two oracles disagreeing means one is stale and the SHIPPING side wins
+  # (memory spec-named-mechanism-may-be-prose-only), so the fixture list moved to match the script,
+  # not the other way round. pane-spawns.jsonl is the new one: an append-only row per pane-spawn,
+  # and a log that nothing rotates is the surface growth-coverage.conf's `logs` row only CLAIMS is
+  # reaped — that row is true of the listed files and of nothing else.
   mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs" "$HOME/.claude/autonomy/postland"
   local rel n=0
   while IFS= read -r rel; do
@@ -209,7 +221,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 16 ]
+  [ "$n" -eq 19 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -217,7 +229,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":16' "$CC_IDL"
+  grep -q '"rotated":19' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 
