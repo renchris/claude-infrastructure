@@ -269,3 +269,37 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   # the run's OWN log is one of the survivors (it is the newest)
   grep -rqs "new-diag" "$SD"
 }
+
+# ── (viii) the exit code survives a child REAPED before the wrapper reaches its wait ─────────
+# The wrapper's whole contract is the exit code, and it used to test `kill -0 "$child"` as the
+# GUARD of its wait loop. A reaped pid is gone from the process table, so that read is FALSE for
+# a child that already exited: the body never ran, `code` kept its initial 0, and a session that
+# died fast was recorded exit 0 / clean-exit. It presented as a minority-of-runs flake in THIS
+# file (5 rows in postland's flakes.jsonl; a 2-of-3 retry ladder eventually called it a
+# reproducible trunk RED, whose bisect then convicted an unrelated commit and fired an
+# auto-revert at it — backlog d86f584455a7).
+@test "exit code survives a child reaped before the wrapper reaches its wait" {
+  local stub="$BATS_TEST_TMPDIR/stub" shim="$BATS_TEST_TMPDIR/shim"
+  mk_stub "$stub" 'exit 1'
+  # Widen the race to certainty. `ln` (the durable-log hard link) is the wrapper's last step
+  # between forking the child and waiting on it, so delaying it guarantees the child is dead AND
+  # reaped by the time the wait is reached — the exact state in which `kill -0` reads FALSE.
+  # Without this the defect is a minority-of-runs race and a single-run assertion passes
+  # vacuously most of the time (measured pre-fix: 8/60 bare, 5/5 with the delay).
+  mkdir -p "$shim"
+  { printf '#!/bin/bash\n'
+    printf 'touch %s\n' "$BATS_TEST_TMPDIR/ln-fired"
+    printf 'sleep 0.4\n'
+    printf 'exec /bin/ln "$@"\n'
+  } > "$shim/ln"
+  chmod +x "$shim/ln"
+  export PATH="$shim:$PATH"
+
+  run bash "$WRAP" "$stub"
+  # THE CONTROL MUST BE ABLE TO FAIL. If the wrapper ever stops calling `ln` on this path the
+  # delay never fires, the race closes, and the assertion below would pass for a reason that has
+  # nothing to do with the bug — so prove the injection actually happened before trusting it.
+  [ -f "$BATS_TEST_TMPDIR/ln-fired" ]
+  [ "$status" -eq 1 ]
+  grep -q '"exit_code":1,' "$(rec)"          # ...and the record carries the TRUE code, not 0
+}
