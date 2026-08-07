@@ -36,7 +36,16 @@
 # PRI 4 · maintenance → PRI 4 · nice-19-alone → PRI 31 · plain → PRI 31. The pre-M1-rev background
 # calibration stays in the plan as history; this file states what it does NOW.
 #
-# NOT admission control. Nothing here waits, sleeps, queues, or polls load. Demotion only (R1).
+# TWO mechanisms now, not one — DEMOTION (above) and an ADMISSION BOUND (item 22b9f2b5a660,
+# 2026-08-06; full derivation at the ADMISSION block below). The line this file shipped with —
+# *"NOT admission control. Nothing here waits, sleeps, queues, or polls load. Demotion only (R1)"* —
+# is AMENDED rather than deleted, because only its first clause stopped being true: demotion alone
+# is ceiling-agnostic BY DESIGN (MACHINE_CAPACITY_V2 §row-13 vs row-5), and on 2026-08-06 three
+# concurrent corpus runs took 1-min load to 66.19 on a 10-core box with every one of them correctly
+# demoted. Yielding politely does not help when the contended resource is the FORK RATE. What
+# survives verbatim is the R1 half, and it still binds every line below: nothing here waits, sleeps,
+# queues, retries, or polls in a loop. The bound REFUSES AND REPORTS, which MACHINE_CAPACITY_V2
+# §8.5.1 records as shedding rather than waiting — `gate_admit` failed because it SLEPT.
 #
 # Seams — ALL this file actually reads, each with its empty-value discipline stated. Two kinds:
 #   VALUE seams hand the script something it then USES (a path, a band). These take `${VAR+set}`,
@@ -47,7 +56,10 @@
 #     used and carries no discipline claim either way.
 #
 #   CC_BATS_QOS=off          → [toggle] exec the real bats verbatim, no demotion at all (kill
-#                              switch, R8). Empty ≡ unset ≡ on.
+#                              switch, R8). Empty ≡ unset ≡ on. Since 2026-08-06 it also bypasses
+#                              the ADMISSION bound below — deliberately: this seam is the whole-shim
+#                              escape hatch, and an escape hatch that does not fully escape is worse
+#                              than none. `CC_BATS_MAX_ROOTS=0` is the admission-only switch.
 #   CC_BATS_QUIET=1          → [toggle] suppress the degradation notice on stderr (CI noise control
 #                              only; can NEVER suppress the QoS-not-applied notice).
 #   CC_BATS_REAL=<path>      → [value] pin the real bats (tests use this; never guesses in
@@ -60,6 +72,28 @@
 #   CC_BATS_BAND=<clamp>     → [value] pin the QoS clamp (utility|background|maintenance), default
 #                              utility (M1-rev: background is a measured ~84-89x tax on long batch —
 #                              MACHINE_CAPACITY_V2.md §11.9). SET-BUT-EMPTY ⇒ mode NONE, loudly.
+#
+#   ── admission bound (all four fail OPEN: an unusable seam ADMITS, it never refuses) ──
+#   CC_BATS_MAX_ROOTS=<K>    → [value] concurrent bats EXECUTION roots allowed before the load term
+#                              is even consulted, default 2. `0`, `off`, EMPTY or any non-integer
+#                              disables the bound outright (kill switch) — a malformed ceiling must
+#                              not become a refusal nobody can explain.
+#   CC_BATS_MAX_LOAD_PER_CORE=<f>
+#                            → [value] the second term, default 2.0 (the same constant the landed
+#                              `capacity_gate()` chose). `0` makes the load term unconditionally
+#                              true, which is how a test exercises the refusal without loading the
+#                              box; malformed ⇒ term FALSE ⇒ admit.
+#   CC_BATS_ROOTS_DIR=<dir>  → [value] pin the live-roots registry. SET-BUT-EMPTY honoured verbatim
+#                              ⇒ the bound is disabled. Tests pin it to control the population
+#                              exactly (an ambient registry would make the count depend on whatever
+#                              else the box is running — memory positive-control-the-denominator).
+#   CC_BATS_SYSCTL_BIN=<p>   → [value] pin sysctl(8) (load + hw.ncpu). SET-BUT-EMPTY ⇒ the load
+#                              term is UNREADABLE ⇒ admit, which is how a test asserts that an
+#                              unread instrument never renders as a refusal.
+#   CC_BATS_PS_BIN=<p>       → [value] pin ps(1), used ONLY on the refusal path to walk PPIDs.
+#                              SET-BUT-EMPTY ⇒ ancestry UNKNOWABLE ⇒ admit, LOUDLY (R4: the one
+#                              path on which this bound is inert says so, rather than reading as a
+#                              quiet admit indistinguishable from a healthy one).
 #
 # NOT a seam — an INTERNAL flag, do not set it by hand:
 #   CC_BATS_ACTIVE=1         → the re-entrancy marker this script exports for its OWN nested
@@ -262,6 +296,212 @@ if [ "${CC_BATS_ACTIVE:-0}" = "1" ]; then
   exec "$REAL_BATS" "$@"
 fi
 export CC_BATS_ACTIVE=1
+
+# ══ ADMISSION — bound the CONCURRENT bats execution roots (item 22b9f2b5a660, 2026-08-06) ═══════
+#
+# WHY. scripts/postland-verify.sh takes a singleton mutex (`run.lock.d`) INSIDE ITSELF, so it
+# serialises its own instances and nothing else. `bats` is the primitive; the mutex guards a
+# SCRIPT. On 2026-08-06 three corpus-scale runs therefore ran at once — the scheduled
+# `--run-if-needed` holding that mutex, plus TWO suites fired from one agent session — and 1-min
+# load reached 66.19 on a 10-core box (docs/research/machine-lag-and-kitty-2026-08-06.md §4-bis).
+# That is R2 restated: a rule enforced inside one caller is detection, not a gate. The gate belongs
+# HERE, at the invocation chokepoint every caller already passes through.
+#
+# WHY NOT THE FILED REMEDY — *"take run.lock.d in the wrapper"*. MEASURED before building, from the
+# verifier's own runner.log: consecutive scheduled corpus runs held that mutex for 6257 s, 11412 s
+# and 11560 s, started back-to-back (19:18→21:02, 21:11→00:20, 00:27→03:37 UTC 2026-08-06/07) — a
+# duty cycle near 90%. A wrapper taking the SAME lock, whose loser refused, would refuse virtually
+# every agent `bats tests/…` on this machine, permanently. That is precisely the cautionary case
+# this repo already paid for: the landed `capacity_gate()` REFUSED 10/10 against real samples and
+# became a permanent dispatch outage (MACHINE_CAPACITY_V2 §9.3). A filed remedy is a HYPOTHESIS,
+# not a spec (memory work-item-remedy-can-become-forbidden, lock-scope-gates-not-protects); §4-bis
+# is amended with this measurement rather than left prescribing it.
+#
+# WHAT IS BUILT INSTEAD is the predicate MACHINE_CAPACITY_V2 §8.5.1 already specified for exactly
+# this population: *admit if load/core < ceiling AND live bats roots < K, else DEFER with the exact
+# re-run command (never kill, never queue-then-run-anyway)* — recorded there and at :414 as
+# SHEDDING, not waiting, and therefore R1-clean. Nothing below sleeps, queues, retries or polls in
+# a loop; it decides once, on two facts, and either execs or exits.
+#
+# THE CONJUNCTION IS THE WHOLE DESIGN. Roots-alone would fire ~90% of the time (above). Load-alone
+# would refuse a lone gate run on a box busy for unrelated reasons. Both terms must be affirmatively
+# TRUE, and **every unknown ADMITS** — unreadable load, unwritable registry, unresolvable ancestry,
+# malformed seam. The failure direction is deliberate and asymmetric: a wrong admit costs contention
+# that provably decays on its own (the 66.19 spike drained to 6.43 unaided, §4-bis), while a wrong
+# refusal blocks the gate CLAUDE.md instructs every session to run before committing — and, inside
+# the corpus, would present as a test failure in a repo that AUTO-REVERTS on red
+# (memory gate-default-decides-failure-direction).
+#
+# THE REGISTRY IS pid-KEYED AND exec-PRESERVED. `exec` keeps the pid, so the entry minted as `$$`
+# names the process that IS about to become bats — no resident wrapper process, no EXIT trap, and
+# nothing to leak when a run is killed -9. Liveness (`kill -0`) is the only cleanup, with a TTL
+# backstop against pid recycling. Same shape as run.lock.d, which is proven here.
+ADMIT_RC=75                                    # EX_TEMPFAIL: "temporary failure; please retry"
+if [ -n "${CC_BATS_ROOTS_DIR+set}" ]; then ROOTS_DIR="$CC_BATS_ROOTS_DIR"
+else ROOTS_DIR="$HOME/.claude/state/bats-roots.d"; fi   # a MACHINE fact ⇒ $HOME/.claude, never
+                                               # CLAUDE_CONFIG_DIR (same reasoning as the seed above:
+                                               # four config dirs run sessions on this box, and a
+                                               # per-config registry would count a quarter of them).
+MAX_ROOTS="${CC_BATS_MAX_ROOTS:-2}"
+MAX_LPC="${CC_BATS_MAX_LOAD_PER_CORE:-2.0}"
+ROOT_TTL="${CC_BATS_ROOT_TTL:-21600}"          # 6 h — 2x the verifier's own 3 h SUITE_TO backstop
+case "$ROOT_TTL" in ''|*[!0-9]*) ROOT_TTL=21600 ;; esac
+
+# ── why this invocation may not even be a candidate ────────────────────────────────────────────
+ADMIT_SKIP=""
+case "$MAX_ROOTS" in ''|0|off|*[!0-9]*) ADMIT_SKIP="disabled" ;; esac
+[ -n "$ADMIT_SKIP" ] || [ -n "$ROOTS_DIR" ] || ADMIT_SKIP="disabled"
+# Invocations that EXECUTE NOTHING are not the population. `--count`/`-c` only parses (the verifier
+# calls it once per suite while building its corpus), and `--version`/`--help` fork nothing at all;
+# counting them would let a metadata call consume a slot a real run then loses.
+if [ -z "$ADMIT_SKIP" ]; then
+  [ "$#" -eq 0 ] && ADMIT_SKIP="no-args"
+  for _a in "$@"; do
+    case "$_a" in --version|-v|--help|-h|--count|-c) ADMIT_SKIP="non-executing"; break ;; esac
+  done
+fi
+# INSIDE a bats test ⇒ a fixture run, never an independent root. This is the SECOND of three
+# nesting guards, and they are layered because each one's blind spot is the next one's job:
+#   1. CC_BATS_ACTIVE=1 (above, execs before we ever get here) — the shim exports it, so every
+#      descendant of an admitted run short-circuits. Covers the ordinary case, costs nothing.
+#   2. THIS — keyed on BATS_* and NOT on CC_BATS_*, because a suite that scrubs the whole CC_BATS_
+#      family (tests/qos-chokepoint.bats does exactly that, deliberately, and says why) defeats
+#      guard 1 while being unable to scrub BATS_TEST_NAME without breaking bats itself.
+#   3. ancestor_registered() on the refusal path — the backstop for a run that lost BOTH.
+# Load-bearing, not defensive: a refusal raised inside the corpus surfaces as a failing test, and
+# red here reaches auto_revert.
+[ -z "$ADMIT_SKIP" ] && [ -n "${BATS_TEST_NAME:-}" ] && ADMIT_SKIP="in-test"
+
+# ── the instruments, absolute-first (hooks and launchd jobs run with a PATH that has neither
+#    /usr/sbin nor Homebrew — the lesson postland-verify.sh records for its own sysctl, and memory
+#    path-resolved-dependency-in-daemon-code records for a bare `kitty`) ─────────────────────────
+_abs_tool() { # <absolute-candidate> <bare-name> → resolved path, or EMPTY
+  local c
+  [ -x "$1" ] && { printf '%s' "$1"; return 0; }
+  c="$(command -v "$2" 2>/dev/null || true)"
+  [ -n "$c" ] && [ -x "$c" ] && printf '%s' "$c"
+  return 0
+}
+SYSCTL_BIN=""; PS_BIN=""; AWK_BIN=""; DATE_BIN=""; STAT_BIN=""
+resolve_admission_tools() {
+  # Deliberately NOT at file scope. `--count` is a skip case and the verifier calls it once per
+  # suite (~300 times per corpus run); resolving five tools there would add forks to the very path
+  # this file exists to keep cheap. Resolution happens only where a decision is actually taken.
+  if [ -n "${CC_BATS_SYSCTL_BIN+set}" ]; then SYSCTL_BIN="$CC_BATS_SYSCTL_BIN"
+  else SYSCTL_BIN="$(_abs_tool /usr/sbin/sysctl sysctl)"; fi
+  if [ -n "${CC_BATS_PS_BIN+set}" ]; then PS_BIN="$CC_BATS_PS_BIN"
+  else PS_BIN="$(_abs_tool /bin/ps ps)"; fi
+  AWK_BIN="$(_abs_tool /usr/bin/awk awk)"
+  DATE_BIN="$(_abs_tool /bin/date date)"
+  STAT_BIN="$(_abs_tool /usr/bin/stat stat)"
+}
+
+roots_live() { # → count of live registered roots on stdout; reaps dead and expired entries
+  local n=0 e pid now age mt
+  now="$("$DATE_BIN" +%s 2>/dev/null || echo 0)"
+  for e in "$ROOTS_DIR"/*; do
+    [ -e "$e" ] || continue                                   # unmatched glob, not a file
+    pid="${e##*/}"
+    case "$pid" in ''|*[!0-9]*) rm -f "$e" 2>/dev/null; continue ;; esac
+    if kill -0 "$pid" 2>/dev/null; then
+      # TTL backstop. A root killed -9 leaves its entry behind, and once the kernel RECYCLES that
+      # pid the entry reads LIVE again and inflates the count for good. No sanctioned run outlives
+      # ROOT_TTL, so age is the discriminator liveness alone cannot supply.
+      mt="$("$STAT_BIN" -f %m "$e" 2>/dev/null || echo 0)"
+      case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+      age=$(( now - mt ))
+      if [ "$mt" -gt 0 ] && [ "$age" -gt "$ROOT_TTL" ]; then rm -f "$e" 2>/dev/null; continue; fi
+      n=$(( n + 1 ))
+    else
+      rm -f "$e" 2>/dev/null
+    fi
+  done
+  printf '%s' "$n"
+}
+
+load_term_true() { # 0 = load/core >= ceiling. 1 = below it OR UNREADABLE — the unknown ADMITS.
+  local l n
+  [ -n "$SYSCTL_BIN" ] && [ -x "$SYSCTL_BIN" ] || return 1
+  [ -n "$AWK_BIN" ] && [ -x "$AWK_BIN" ] || return 1
+  case "$MAX_LPC" in ''|*[!0-9.]*) return 1 ;; esac      # malformed ceiling ⇒ term FALSE, never true
+  # `{ 9.23 9.53 11.21 }` → the 1-min figure. Same instrument and same field as postland-verify's
+  # load1() and qos-census's loadavg1 column, so the three cannot disagree about what "load" means.
+  # shellcheck disable=SC2016  # `$1` is awk's first FIELD; shell-expanding it is the actual bug
+  l="$("$SYSCTL_BIN" -n vm.loadavg 2>/dev/null | tr -d '{}' | "$AWK_BIN" '{print $1}')"
+  n="$("$SYSCTL_BIN" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"
+  case "$l" in ''|*[!0-9.]*) return 1 ;; esac
+  case "$n" in ''|0|*[!0-9]*) return 1 ;; esac
+  "$AWK_BIN" -v l="$l" -v n="$n" -v c="$MAX_LPC" 'BEGIN{ exit ((l/n) >= c) ? 0 : 1 }'
+}
+
+ancestor_registered() { # 0 = an ancestor already holds a slot ⇒ I am nested, not a new root
+  # Consulted ONLY on the refusal path, which is why its PPID walk costs nothing in the common case.
+  # It is the backstop behind the BATS_TEST_NAME guard: an exotic nested run (a test that re-execs
+  # through `env -i`, a helper that drops the bats environment) must not be convicted as independent.
+  local p="${PPID:-0}" i=0
+  [ -n "$PS_BIN" ] && [ -x "$PS_BIN" ] || return 2          # 2 = UNKNOWABLE, distinct from "no"
+  while [ "$i" -lt 24 ]; do
+    case "$p" in ''|0|1|*[!0-9]*) break ;; esac
+    [ -e "$ROOTS_DIR/$p" ] && return 0
+    p="$("$PS_BIN" -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')"
+    i=$(( i + 1 ))
+  done
+  return 1
+}
+
+if [ -z "$ADMIT_SKIP" ]; then
+  resolve_admission_tools
+  mkdir -p "$ROOTS_DIR" 2>/dev/null || true
+  if [ -d "$ROOTS_DIR" ] && [ -w "$ROOTS_DIR" ]; then
+    N_ROOTS="$(roots_live)"
+    REFUSE=0
+    MINT=1
+    if [ "$N_ROOTS" -ge "$MAX_ROOTS" ] && load_term_true; then
+      ancestor_registered; ANC=$?
+      # PROVEN nested ⇒ admit AND take no slot. Only reachable here, because the PPID walk is priced
+      # onto the refusal path alone; below the ceiling a nested run does mint, which makes the count
+      # conservative (it can refuse one invocation early) but never permissive. Erring toward the
+      # conservative side of a bound whose every UNKNOWN admits is the deliberate balance.
+      [ "$ANC" = "0" ] && MINT=0
+      if [ "$ANC" = "2" ]; then
+        # R4 — the one path on which this bound is inert must SAY so. Never CC_BATS_QUIET-able,
+        # for the same reason the QoS-not-applied notice is not: a mechanism that looks applied and
+        # is not is the entire defect class this file exists to close.
+        echo "cc-bats: NOTICE — $N_ROOTS live bats root(s) at or above CC_BATS_MAX_ROOTS=$MAX_ROOTS and load/core over $MAX_LPC, but ps(1) is unavailable so nesting cannot be ruled out; ADMITTING rather than risk refusing a nested run. Admission bound INERT for this invocation." >&2
+      elif [ "$ANC" = "1" ]; then
+        REFUSE=1
+      fi
+    fi
+    if [ "$REFUSE" = "1" ]; then
+      # DEFER, with the exact re-run command. Never a silent exit 0: a wrapper that returned success
+      # for a suite it never ran would manufacture a green (memory claimed-outcome-vs-checked-outcome),
+      # and rc 75 is distinguishable from bats' own 0/1 and from this file's 127.
+      _cmd="bats"
+      for _a in "$@"; do _cmd="$_cmd $(printf '%q' "$_a")"; done
+      echo "cc-bats: REFUSED — $N_ROOTS concurrent bats execution root(s) (ceiling CC_BATS_MAX_ROOTS=$MAX_ROOTS) AND 1-min load/core at or above CC_BATS_MAX_LOAD_PER_CORE=$MAX_LPC." >&2
+      echo "cc-bats: nothing ran, nothing was verified — this is a DEFERRAL, not a test result. Re-run when a slot frees:" >&2
+      if [ "${#_cmd}" -le 2000 ]; then
+        echo "cc-bats:   $_cmd" >&2
+      else
+        echo "cc-bats:   (the same command — $# args, too long to echo without flooding a TAP capture)" >&2
+      fi
+      echo "cc-bats: holders:" >&2
+      for _e in "$ROOTS_DIR"/*; do
+        [ -e "$_e" ] || continue
+        echo "cc-bats:   pid ${_e##*/}  $(head -1 "$_e" 2>/dev/null)" >&2
+      done
+      echo "cc-bats: override for this run: CC_BATS_MAX_ROOTS=0 $_cmd" >&2
+      exit "$ADMIT_RC"
+    fi
+    # ADMIT — mint the slot as $$, which `exec` below carries into the bats process itself.
+    if [ "$MINT" = "1" ]; then
+      printf 'started=%s cwd=%s argv1=%s\n' \
+        "$("$DATE_BIN" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$PWD" "${1:-}" \
+        > "$ROOTS_DIR/$$" 2>/dev/null || true
+    fi
+  fi
+fi
+export CC_BATS_ADMIT_SKIP="${ADMIT_SKIP:-admitted}"
 
 # ── resolve taskpolicy(8) ─────────────────────────────────────────────────────────────────────
 # Hooks and launchd jobs run WITHOUT Homebrew on PATH, so absolute paths are tried as well as PATH

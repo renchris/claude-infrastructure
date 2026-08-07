@@ -146,6 +146,31 @@ its own: the suites drained.
 **Fix shape:** make the lock reachable from outside the script — a `cc-bats` wrapper that takes
 `LOCK` before any corpus-scale invocation, or make `--run-if-needed` the only sanctioned entrypoint.
 
+> **AMENDED 2026-08-07 (item `22b9f2b5a660`, implementing this).** The diagnosis above is confirmed
+> and the chokepoint is right; **the prescribed remedy is refuted by measurement and was not built.**
+> Taking `run.lock.d` itself in the wrapper would be a fleet-wide outage, not a serialization. From
+> the verifier's own `runner.log`, consecutive scheduled corpus runs held that mutex for **6257 s,
+> 11412 s and 11560 s, started back-to-back** (19:18→21:02, 21:11→00:20, 00:27→03:37 UTC
+> 2026-08-06/07) — a duty cycle near **90%**. A wrapper sharing that lock whose loser refused would
+> refuse virtually every agent `bats tests/…` on this machine, permanently; whose loser *waited*
+> would violate R1 and block for up to three hours. This is the shape `MACHINE_CAPACITY_V2` §9.3
+> already records as the cautionary case — the landed `capacity_gate()` REFUSED 10/10 against real
+> samples and became a permanent dispatch outage.
+>
+> **Built instead:** the predicate `MACHINE_CAPACITY_V2` §8.5.1 had already specified for exactly
+> this population — *admit if load/core < ceiling AND live bats roots < K, else DEFER with the exact
+> re-run command* — enforced in `bin/cc-bats` over a pid-keyed live-roots registry, defaults K=2 and
+> 2.0 load/core, exit **75** (`EX_TEMPFAIL`), never a silent 0 and never a 1. The conjunction is what
+> keeps it from becoming the outage above: with the corpus holding a slot ~90% of the time, a
+> roots-only bound would fire almost always. Under the incident's own numbers (3 roots, load 66.19 on
+> 10 cores = 6.6/core) the third run is refused. Every unknown — unreadable load, unwritable
+> registry, unresolvable ancestry, malformed seam — **admits**, because a wrong refusal inside the
+> corpus surfaces as a failing test and red here reaches `auto_revert`. Tests:
+> `tests/cc-bats-admission.bats` (24 green; 11 RED against the pre-change tree).
+>
+> Recorded rather than rewritten, per `lock-scope-gates-not-protects`: a filed remedy is a
+> hypothesis, and verifying its *reasons* rather than only its diagnosis is what caught this.
+
 **One unconfirmed observation, recorded because it inverts the intended priority.** Suite 1's process
 tree (1321, 1393, …) read **PRI 20 / NI 20** — ordinary timeshare — *despite its own argv containing
 `nice -n 19 /usr/sbin/taskpolicy -c background`*. daemon-audit A/B'd that exact chain in isolation and
@@ -450,9 +475,13 @@ no lock, and `run.lock.d` still lives only at `scripts/postland-verify.sh:379`.
 
 **Added after the axis reports (§4-bis, §6a-bis, §10), in leverage order:**
 
-8. **Serialize the corpus (§4-bis).** Three concurrent runs caused the spike. Put the `run.lock.d`
-   mutex behind a wrapper any caller must use, so an agent typing `bats tests/…` cannot bypass it.
-   This is the fix for the lag *event*, as §5 is the fix for the durable state.
+8. ~~**Serialize the corpus (§4-bis).** Three concurrent runs caused the spike. Put the `run.lock.d`
+   mutex behind a wrapper any caller must use, so an agent typing `bats tests/…` cannot bypass it.~~
+   **DONE 2026-08-07, with the remedy re-derived** — sharing `run.lock.d` was measured to be a ~90%
+   duty-cycle outage, so `bin/cc-bats` enforces a two-term admission bound instead (live roots ≥ K
+   **and** load/core ≥ ceiling ⇒ defer with the exact re-run command, exit 75). See the amendment
+   box in §4-bis for the measurement and the reasoning. This is the fix for the lag *event*, as §5
+   is the fix for the durable state.
 9. **Run `26-curl-gate-scope-activate.sh` (§10).** Free −30.4 ms on every Bash call, already built,
    tested and symlinked; only `settings.json:435` still points at the unscoped hook.
 10. **Scope `teammate-checkpoint.sh` to worktrees (§10)** — drop the `*)` arm at `:67-75` so the

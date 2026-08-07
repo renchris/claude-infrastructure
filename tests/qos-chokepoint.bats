@@ -43,6 +43,9 @@ setup() {
   # unaffected by this).
   unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET \
         CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY
+  # Used by (xiii)/(xiv). A here-doc-free one-liner so this helper cannot itself contain the tokens
+  # the guard greps for.
+  strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
   # A tiny bats corpus whose single test lives long enough to be observed by ps.
   mkdir -p "$TMP/t"
   cat > "$TMP/t/slow.bats" <<'EOF'
@@ -217,7 +220,7 @@ EOF
 
 # ── R1 guard: admission control must stay deleted ─────────────────────────────────────────────
 
-@test "(xiii) neither new artifact polls load or sleeps on it (R1)" {
+@test "(xiii) neither new artifact WAITS on load (R1)" {
   # A shedder that WAITS amplifies. gate_admit cost ~2h sleeping/run and 5 gates self-starved.
   # This is the chokepoint version of row 1's own lint at postland-verify.sh:1154.
   #
@@ -225,20 +228,63 @@ EOF
   # non-zero, so this asserted "clean" against a tree containing neither artifact. An absence
   # assertion whose subject may not exist is not an assertion (memory
   # absence-alarm-needs-existence-evidence).
+  #
+  # AMENDED 2026-08-07 (item 22b9f2b5a660) — DELIBERATELY, never quietly, per this plan's own rule
+  # for a test encoding a superseded premise (MACHINE_CAPACITY_V2 §9.2). The shim clause used to
+  # forbid the substring `loadavg` ANYWHERE in bin/cc-bats. That was a sound proxy while the shim
+  # had no reason to read load at all, but it is not the invariant, and it was wrong in BOTH
+  # directions at once:
+  #   · TOO STRICT — it forbade the plan's own remedy. §8.5.1 specifies this very shim's admission
+  #     bound as *"admit if load/core < ceiling AND live bats roots < K, else DEFER with the exact
+  #     re-run command (never kill, never queue-then-run-anyway)"* and records in terms that
+  #     refusing-and-reporting is SHEDDING, not an R1 violation — `gate_admit` failed because it
+  #     SLEPT. bin/cc-bats now reads vm.loadavg exactly once, branches, and either execs or exits 75.
+  #   · TOO WEAK — it passed any shim that slept, queued or retried, so long as it never wrote the
+  #     word "loadavg". The thing R1 actually forbids was not covered at all.
+  # So the rule is now stated as the invariant and applied to BOTH artifacts: read the instrument if
+  # you must, never wait on it. The census keeps its bare `/bin/sleep` (a measurement DWELL for its
+  # own control probe, not a load wait), which is exactly why the sleep ban is scoped to the shim —
+  # a blanket substring ban would have convicted a legitimate use.
+  #
+  # Comments are STRIPPED before matching. Both files discuss sleeping and queueing at length in
+  # their headers, and a matcher that convicts the DOCUMENTATION of the property it checks is a
+  # defect this plan has already shipped once (§9.3 point 3, memory
+  # detector-matching-its-own-skill-description).
   [ -f "$SHIM" ] || false
   [ -f "$CENSUS" ] || false
-  run grep -nE 'loadavg|load average|gate_admit' "$SHIM"
+  strip_comments "$SHIM"   > "$TMP/shim.stripped"
+  strip_comments "$CENSUS" > "$TMP/census.stripped"
+  # Neither may WAIT on load, and neither may resurrect gate_admit.
+  run grep -nE 'while.*load|until.*load|gate_admit' "$TMP/shim.stripped"
   [ "$status" -ne 0 ] || false
-  # the census may READ loadavg for the record, but must never sleep in a wait loop on it
-  run grep -nE 'while.*load|until.*load' "$CENSUS"
+  run grep -nE 'while.*load|until.*load|gate_admit' "$TMP/census.stripped"
+  [ "$status" -ne 0 ] || false
+  # The shim additionally may not sleep AT ALL: it sits on every bats invocation on the box, so it
+  # has no legitimate dwell, and sleeping there is precisely the gate_admit failure.
+  run grep -nE '(^|[^[:alnum:]_])sleep([^[:alnum:]_]|$)' "$TMP/shim.stripped"
   [ "$status" -ne 0 ] || false
 }
 
-@test "(xiv) POSITIVE CONTROL for (xiii): the guard's grep is live" {
-  # A check whose own grep is broken reports clean forever. Prove the pattern matches when present.
-  printf 'gate_admit() { :; }\n' > "$TMP/bait.sh"
-  run grep -nE 'loadavg|load average|gate_admit' "$TMP/bait.sh"
+@test "(xiv) POSITIVE CONTROL for (xiii): every clause of the guard is live" {
+  # A check whose own grep is broken reports clean forever. Prove each pattern matches when present,
+  # and — the clause the amendment added — that comment-stripping has not defanged the matcher.
+  printf 'gate_admit() { :; }\n' > "$TMP/bait1.sh"
+  run grep -nE 'while.*load|until.*load|gate_admit' "$TMP/bait1.sh"
   [ "$status" -eq 0 ] || false
+  printf 'while [ "$load" -gt 8 ]; do :; done\n' > "$TMP/bait2.sh"
+  run grep -nE 'while.*load|until.*load|gate_admit' "$TMP/bait2.sh"
+  [ "$status" -eq 0 ] || false
+  printf 'sleep 30\n' > "$TMP/bait3.sh"
+  run grep -nE '(^|[^[:alnum:]_])sleep([^[:alnum:]_]|$)' "$TMP/bait3.sh"
+  [ "$status" -eq 0 ] || false
+  # strip_comments must remove a comment and KEEP the code beside it — a stripper that ate the whole
+  # file would make (xiii) vacuous, and a stripper that ate nothing would re-create the §9.3 defect.
+  printf 'real_code_here   # sleep gate_admit\n' > "$TMP/bait4.sh"
+  strip_comments "$TMP/bait4.sh" > "$TMP/bait4.stripped"
+  run grep -c 'real_code_here' "$TMP/bait4.stripped"
+  [ "$output" -eq 1 ] || false
+  run grep -nE 'gate_admit' "$TMP/bait4.stripped"
+  [ "$status" -ne 0 ] || false
 }
 
 # ── M1-rev: the band flip, and the tier that died with it ─────────────────────────────────────
