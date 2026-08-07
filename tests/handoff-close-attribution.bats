@@ -20,6 +20,14 @@
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/cc-fired" "$HOME/.claude/cc-registry" "$HOME/.claude/logs"
+  # HERMETICITY (the repo's test-hermeticity ratchet). $HOME alone does not cover it: handoff-fire
+  # refuses a net-new fire above 2.0/core and this box lives above that (red-by-LOAD, not by subject),
+  # and three seams resolve to an ABSOLUTE /tmp default or a BARE NAME run off the operator's PATH.
+  # An absent path is the right fixture — these sensors fail open on one.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   FIRE="$REPO/scripts/handoff-fire.sh"
   [ -f "$FIRE" ] || skip "handoff-fire.sh not found at $FIRE"
