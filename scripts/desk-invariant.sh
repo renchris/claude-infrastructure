@@ -22,8 +22,11 @@
 #                    (incl. 'monthly spend limit' + 'cannot determine the safety') → OS page
 #                    (osascript + push-critical if armed) + ONE re-prompt keystroke (dedup sid+state)
 #   stale            pid alive + stale + no cap text → ONE re-prompt keystroke to re-engage (FM2)
-#   no-desk          role file stale/empty · no registry row · dead pid → page + budgeted replacement fire
+#   no-desk          role file stale · no registry row · dead pid → page + budgeted replacement fire
 #   budget-exhausted no-desk but ≥MAX fires in the window → page only, NEVER a respawn loop
+#   not-opted-in     role file ABSENT/EMPTY and CC_DESK_OPTIN unset → abstain, zero side effects
+#                    (D6: a desk that was never wired is a deliberate state, not a fault; a desk
+#                    wired-THEN-broken still takes the no-desk path above — see handle_no_desk)
 #
 # Selftest: `desk-invariant.sh --selftest` — stubbed it2/registry/transcript/wait dirs, RED-proven.
 # Launchd: launchd/com.claude.desk-invariant.plist (300s StartInterval, PATH incl ~/.claude/bin).
@@ -395,6 +398,32 @@ handle_stale() { # <idle_s>
 
 handle_no_desk() { # <reason>
   local reason="$1"
+  # ── OPT-IN GATE (D6, 2026-08-07): a desk that was NEVER WIRED is not a fault ────────────────────
+  # This script was written when a desk was assumed. Under the deskless model an ABSENT role file is
+  # the operator's DELIBERATE state, not a broken one — so enforcing against it means this launchd
+  # job pages every 5 minutes and fires a budgeted replacement desk at a machine that asked for none.
+  # (It is unloaded on this box today, which is the only reason that has not happened; it is a
+  # loaded-later landmine, and "currently inert" is not a design.) Enforcement is therefore for those
+  # who opted IN: export CC_DESK_OPTIN=1 to assert "a desk must exist here" and get every branch below.
+  #
+  # THE DISTINCTION IS THE DESIGN POINT, and it is why the gate keys on the ROLE FILE and not on the
+  # caller's $reason string:
+  #   ABSENT or EMPTY role file  → never wired → not opted in → abstain (this branch).
+  #   PRESENT but stale/dead     → wired THEN BROKEN → an opted-in fault → the legacy path below,
+  #                                unchanged (page + budgeted replacement fire). Someone registered a
+  #                                desk here; its pointer rotting is exactly the incident this organ
+  #                                exists for, and swallowing it would be a silent loss.
+  # Resolved with evaluate()'s own idiom (head -1 | tr -d space) rather than trusting $PANE, so a
+  # direct caller of this function gets the same verdict as one that came through evaluate().
+  # Returns BEFORE the dedup marker, the page, the respawn budget and the fire — an abstention must
+  # leave no state behind, or the first opted-in run would inherit a consumed budget it never spent.
+  local role_file="$ROLES_DIR/$ROLE" role_holder=""
+  [ -f "$role_file" ] && role_holder="$(head -1 "$role_file" 2>/dev/null | tr -d '[:space:]')"
+  if [ -z "$role_holder" ] && [ "${CC_DESK_OPTIN:-0}" != 1 ]; then
+    idl not-opted-in abstained \
+      "verdict=not-opted-in — no desk role at $role_file and CC_DESK_OPTIN unset; desk enforcement is opt-in (${reason})"
+    return 0
+  fi
   # PAGE DEDUP: no-desk is a RECURRING 5-min poll, so an unpaced page here is a storm — the stunned/
   # stale branches already dedup (dedup_fresh/dedup_write) and this one did not. SID is empty in the
   # no-desk branch (no registry row to read one from), so the marker keys on the PANE — the only stable
@@ -622,9 +651,33 @@ selftest() {
     && okp "no-desk: role healed alongside the mail pointer" \
     || badp "no-desk: role=$(cat "$d/succ/roles/desk" 2>/dev/null) (mail write must not cost the heal)"
 
+  # 8. NOT-OPTED-IN (D6) — NO role file at all + CC_DESK_OPTIN unset → abstain with ZERO side effects.
+  # Distinct from case 5 by exactly one thing: case 5's role file EXISTS and holds a dead pane (wired
+  # then broken = an opted-in fault), this one was never wired. The opt-in control below re-runs the
+  # SAME fixture with the switch on, so the absence assertions here cannot pass vacuously.
+  ( setup_case "$d/optout"
+    unset CC_DESK_OPTIN
+    "$SELF" )
+  [ "$(disp_of "$d/optout")" = not-opted-in ] && okp "not-opted-in: idl disposition=not-opted-in" \
+    || badp "not-opted-in: disposition=$(disp_of "$d/optout")"
+  [ ! -f "$d/optout/stubs/fire.log" ] && [ ! -f "$d/optout/stubs/push.log" ] \
+    && okp "not-opted-in: NO page and NO fire (zero side effects)" \
+    || badp "not-opted-in: paged/fired at a machine that never wired a desk"
+  ls "$d/optout/state"/respawn-*.marker >/dev/null 2>&1 \
+    && badp "not-opted-in: consumed respawn budget on an abstention" \
+    || okp "not-opted-in: respawn budget NOT consumed"
+
+  # 9. OPT-IN CONTROL — same never-wired fixture, CC_DESK_OPTIN=1 ⇒ every legacy branch is back.
+  ( setup_case "$d/optin"
+    export CC_DESK_OPTIN=1
+    "$SELF" )
+  [ "$(disp_of "$d/optin")" = no-desk ] && [ -f "$d/optin/stubs/fire.log" ] \
+    && okp "opt-in: CC_DESK_OPTIN=1 restores the legacy no-desk fire" \
+    || badp "opt-in: disposition=$(disp_of "$d/optin") fire=$([ -f "$d/optin/stubs/fire.log" ] && echo yes || echo no)"
+
   echo "desk-invariant --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "desk-invariant --selftest: GREEN — healthy/stunned/stale/owned-wait/no-desk/budget-exhausted/succession all RED-proven."
+  echo "desk-invariant --selftest: GREEN — healthy/stunned/stale/owned-wait/no-desk/budget-exhausted/succession/not-opted-in all RED-proven."
 }
 
 # ── companion check: the desk self-recycle ARMEDNESS invariant ────────────────────────────────────
