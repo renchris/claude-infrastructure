@@ -368,6 +368,11 @@ fi
 LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-600}"
 PRELINT_UNPROVEN=0     # a lint whose own bound fired: nothing proven ⇒ never a red, never a green
 LADDER_UNPROVEN=0      # a RETRY whose own bound fired: same rule — a cut, never a red (C23)
+# Most backlog items ONE red run may file (red_actions files every failing entry, not just the
+# first). 25 is ~2.5x the worst run observed across 69 REDs in runner.log (10 entries), so it is a
+# runaway backstop for a catastrophically-red tree rather than a routine limit — and when it does
+# bite it LOGS the dropped names, because a silent cap is the same defect as filing FAILING[0] only.
+BACKLOG_MAX="${CC_POSTLAND_BACKLOG_MAX:-25}"
 # ── AUTO-REVERT (§4.2.4) ─────────────────────────────────────────────────────────────────────────
 AUTOREVERT="${POSTLAND_AUTOREVERT:-on}"                 # kill switch: POSTLAND_AUTOREVERT=off
 MAX_REVERTS="${POSTLAND_MAX_REVERTS:-2}"                # markers written THIS run before we stop
@@ -417,6 +422,12 @@ load1() { # 1-min loadavg on stdout, or EMPTY when the instrument cannot be read
 }
 
 FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DONE=0; ENV_FP='{}'; CUT=0
+# INDEX-ALIGNED with FAILING: the failing TEST name for FAILING[i], so every filed item is
+# actionable and not just the first. FAILTEST (one name, the first) is unchanged and still what the
+# page/notify render; this is the per-file version red_actions needs to file the whole list. Every
+# push site appends to BOTH — but red_actions still reads it as `${FAILNAME[i]:-}`, because
+# SYNTAX_BAD is spliced onto FAILING wholesale after the fact and pads nothing.
+FAILNAME=()
 # Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
 # where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
 CORPUS_N=0
@@ -450,6 +461,30 @@ notify() { # <title> <msg> — OS-level, API-independent
 }
 json_array() { local out="" i; for i in "$@"; do out="$out,\"$i\""; done; printf '[%s]' "${out#,}"; }
 sha12() { printf '%s' "$1" | cut -c1-12; }
+# cond_slug <failing-entry> → a cc-backlog `--condition` key naming the RECURRING STATE
+# "this suite is red on trunk", so re-filing it next sweep is idempotent instead of minting a
+# second item. cc-backlog's valid_condition() accepts LOWERCASE LETTERS AND HYPHENS ONLY — no
+# digits, no leading/trailing/doubled hyphen, <=64 — and REFUSES the whole add (rc 2) otherwise.
+# That refusal is why the digits are SPELLED OUT rather than stripped: this call site is
+# `|| true`'d best-effort, so a rejected add is silent, and stripping would have made the filing
+# structurally blind to exactly the 10 of 305 suites whose names carry a digit (it2-kitty,
+# iterm2-appname-lint, cc-dispatch-v2, subagent-stop-r1, …) — i.e. it would have re-created THIS
+# bug's own invisibility for a different subset. Spelling keeps them distinct and filable.
+# Verified over all 305 tests/*.bats plus the PRELINTS and the `shared-config-identity` literal:
+# 0 rejected, 0 collisions, longest key 49 chars. `tests/` (the branch-(b) sentinel, which has no
+# basename) folds to `unattributed` rather than the empty string valid_condition would reject.
+cond_slug() {
+  local s="${1##*/}"
+  s="${s%.bats}"
+  s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]' \
+        | sed -e 's/0/-zero-/g'  -e 's/1/-one-/g'   -e 's/2/-two-/g' \
+              -e 's/3/-three-/g' -e 's/4/-four-/g'  -e 's/5/-five-/g' \
+              -e 's/6/-six-/g'   -e 's/7/-seven-/g' -e 's/8/-eight-/g' \
+              -e 's/9/-nine-/g'  -e 's/[^a-z-]/-/g' \
+        | sed -e ':a' -e 's/--/-/g' -e 'ta' -e 's/^-//' -e 's/-$//')"
+  [ -n "$s" ] || s=unattributed
+  printf 'postland-red-%s' "${s:0:50}"      # 13 + 50 = 63, inside valid_condition's 64
+}
 tree_of() { git -C "$REPO" rev-parse "$1^{tree}" 2>/dev/null; }
 env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tree (tool bumps happen
   local b c l                                # constantly), so a stale-env green stamp stays diagnosable
@@ -621,6 +656,7 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     first="$(grep -aE '^[[:space:]]*(RATCHET|LEAK|⛔|✗)' "$out" 2>/dev/null | head -1 | cut -c1-120)"
     [ -n "$first" ] || first="$(sed -n '1p' "$out" 2>/dev/null | cut -c1-120)"
     [ -n "$FAILTEST" ] || FAILTEST="${first:-whole-tree lint exit $rc}"
+    FAILNAME+=("${first:-whole-tree lint exit $rc}")     # index-aligned with the push above
     log "prelint RED: $s exit $rc — ${first:-（no output)}"
   done
   [ "${#FAILING[@]}" -eq 0 ]
@@ -661,6 +697,7 @@ EOF
     && log "IDENTITY LEAK: $REPO local [user] restored to its run-start value" \
     || log "IDENTITY LEAK: restore did NOT converge — $REPO local [user] needs a human"
   FAILING+=("shared-config-identity")
+  FAILNAME+=("a suite wrote git user.* into $REPO (empty -C, or an unguarded cd)")
   [ -n "$FAILTEST" ] || FAILTEST="a suite wrote git user.* into $REPO (empty -C, or an unguarded cd)"
   return 0
 }
@@ -895,6 +932,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
     FAILING=("tests/")
     FAILTEST="$(sed -n 's/^not ok [0-9]* //p' "$1" 2>/dev/null | head -1 | cut -c1-120)"
     [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
+    FAILNAME=("$FAILTEST")
     return 0
   fi
   while IFS="$(printf '\t')" read -r f t; do
@@ -952,7 +990,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       esac
       [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
-    if [ "$fails" -ge 2 ]; then FAILING+=("$f"); [ -n "$FAILTEST" ] || FAILTEST="$t"
+    if [ "$fails" -ge 2 ]; then FAILING+=("$f"); FAILNAME+=("$t"); [ -n "$FAILTEST" ] || FAILTEST="$t"
     elif [ "$abstain" = 1 ]; then
       # Not a red (nothing was proven) and not a flake (nothing was cleared) ⇒ the cut path, which
       # says exactly that and retries next sweep. FAILTEST carries the name so the cut is diagnosable.
@@ -1370,8 +1408,72 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
       "$REPO" "$c12" "$file"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
-  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add --title "post-land RED: $file::$ftest @ $c12" \
-    --project claude-infrastructure --source postland-verify >/dev/null 2>&1  # sha defeats wasDone
+  # ── FILE EVERY FAILING ENTRY, ONE CONDITION-KEYED ITEM EACH (2026-08-07) ──────────────────────
+  # Was: ONE `add` for $file — i.e. FAILING[0] — keyed on project+title+source with the sha IN THE
+  # TITLE, so "sha defeats wasDone" and each run minted a fresh item for whatever happened to sort
+  # first. Both halves were wrong, in opposite directions, and they hid each other:
+  #   · per-EVENT key ⇒ 69 RED runs minted 69 items for the SAME standing reds (the defect memory
+  #     per-event-key-defeats-per-finding-dedupe names: page per-EVENT, backlog per-FINDING);
+  #   · FAILING[0] only ⇒ 472 failing-suite observations across those runs produced 69 filings, and
+  #     38 of the 58 distinct suites were filed ZERO times — invisible not by accident but BY
+  #     CONSTRUCTION, since FAILING is TAP/corpus-ordered and a suite that never sorts first can
+  #     never be reached. tests/gate-home-isolation.bats is the worst case: 28 appearances, 0
+  #     filings, because a 'c'-named suite outsorts a 'g' every time. It has zero rows in
+  #     flakes.jsonl, so it was never a flake being correctly withheld — just never looked at.
+  # Now: one item per entry, keyed on the CONDITION (cond_slug — "this suite is red on trunk"),
+  # which is stable across runs, so the second and subsequent sweeps are idempotent `has_id` no-ops
+  # rather than new items. The sha stays in the TITLE, where it is DISPLAYED but is not identity —
+  # exactly what cc-backlog's own --condition refusal message prescribes.
+  # The PAGE is untouched and stays per-EVENT (state-keyed by culprit sha, cleared on green): the
+  # two artifacts are supposed to have different lifetimes, and only the backlog is durable.
+  if [ -x "$BACKLOG_BIN" ]; then
+    local i n fentry fname ftitle berr brc nfiled=0 refused=0 skipped=0
+    n="${#FAILING[@]}"
+    for ((i = 0; i < n; i++)); do            # builtin, not `seq` — this path runs starved
+      # A pathological all-red tree must not fork one `cc-backlog` per suite on a path that runs
+      # starved by definition. The cap is far above anything observed (worst run: 10 entries) and,
+      # when it DOES bite, the dropped names are logged rather than silently swallowed — a silent
+      # cap is the same class of bug as the FAILING[0] one this replaces.
+      # Keyed on ATTEMPTS ($i), not on $nfiled: the cap exists to bound the number of FORKS on a
+      # starved path, and a run where every add is refused increments nfiled zero times — so a
+      # success-keyed cap would not bound anything in exactly the degenerate case it is for.
+      if [ "$i" -ge "$BACKLOG_MAX" ]; then
+        skipped=$((n - i))
+        log "backlog CAP $BACKLOG_MAX reached — NOT filed (${skipped} entries): ${FAILING[*]:$i}"
+        break
+      fi
+      fentry="${FAILING[$i]}"
+      # `${FAILNAME[i]:-}` deliberately, not an aligned read: SYNTAX_BAD is spliced onto FAILING
+      # wholesale by the caller and pads no name, so the tail is legitimately unnamed.
+      fname="${FAILNAME[$i]:-}"; fname="${fname//[$'\n\r']/ }"; fname="${fname:0:120}"
+      [ -n "$fname" ] || fname='?'
+      ftitle="post-land RED: $fentry::$fname @ $c12"
+      # stderr is CAPTURED, not discarded: a --condition add against an item already marked done
+      # warns and deliberately does NOT re-open (cc-backlog's DONE-GUARD). Swallowing that would
+      # make a RECURRENCE invisible — the exact failure mode being fixed — so it goes to runner.log.
+      berr="$("$BACKLOG_BIN" add --title "$ftitle" --condition "$(cond_slug "$fentry")" \
+                --project claude-infrastructure --source postland-verify 2>&1 >/dev/null)"; brc=$?
+      # COUNT THE CHECKED OUTCOME, NOT THE ATTEMPT. The obvious shape here is `… || true` followed
+      # by an unconditional `nfiled++`, and it logs "filed=3" for three adds that were all REFUSED —
+      # a fake success, and on the one path whose entire purpose is to stop failures going unseen
+      # (memory claimed-outcome-vs-checked-outcome). rc 2 is exactly what cc-backlog returns for a
+      # condition key it will not accept, so this is the live case, not a hypothetical one.
+      if [ "$brc" -ne 0 ]; then
+        refused=$((refused + 1))
+        log "backlog REFUSED rc=$brc for $fentry — NOT filed: ${berr//$'\n'/ }"
+      else
+        nfiled=$((nfiled + 1))
+        case "$berr" in
+          # A recurrence of a CLOSED condition is deliberately not re-opened by cc-backlog's
+          # DONE-GUARD. Discarding its stderr would make that recurrence invisible — the exact
+          # failure mode this whole change exists to fix — so it lands in runner.log instead.
+          *'already DONE'*) log "backlog RECURRED (closed item, NOT re-opened — needs \`reopen --force\`): $fentry" ;;
+          ?*)               log "backlog add noise for $fentry: ${berr//$'\n'/ }" ;;
+        esac
+      fi
+    done
+    log "backlog verdict=filed n=$nfiled refused=$refused skipped=$skipped of=$n (condition-keyed, idempotent across sweeps)"
+  fi
   notify "Claude post-land RED" "$file fails at $c12 — see $pf"
   sid="$(author_sid "$culprit")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
@@ -1419,7 +1521,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
-  FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
+  FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check

@@ -804,6 +804,115 @@ printf '1..1\nok 1 p\n'")"
   grep -q 'failing: tests/::boom' "$CC_PAGES_DIR"/postland-red-*.page
 }
 
+# ── C13e–C13g: EVERY reproducible failure is filed, ONCE (backlog fa58a8151140) ──────────────────
+# C13d above pinned that the ONE item carries a NAME. It could not see the two defects around it,
+# because a single-failure fixture cannot distinguish "files the failures" from "files the FIRST
+# failure", and a single-run fixture cannot distinguish "one item" from "one item PER RUN":
+#   · red_actions filed FAILING[0] and nothing else. FAILING is corpus/TAP-ordered, so a suite that
+#     never sorts first was unfilable BY CONSTRUCTION. Measured over runner.log at the time of the
+#     fix: 69 RED runs, 472 failing-suite observations, 69 items, and 38 of 58 distinct suites filed
+#     ZERO times. tests/gate-home-isolation.bats was the extreme — 28 appearances, 0 filings, 0 rows
+#     in flakes.jsonl (so never a flake correctly withheld, just never looked at).
+#   · the title carried the sha and the key was project+title+source, so every sweep minted a NEW
+#     item for the same standing red — memory per-event-key-defeats-per-finding-dedupe.
+# These three pin the fix from both sides: everything gets filed, and re-filing is idempotent.
+# The fixture emits a THREE-file TAP and the failing files are deliberately NOT in the order that
+# would let a FAILING[0]-only implementation pass by luck.
+multi_red_bats() {  # → $BATS_TEST_TMPDIR/bats-multi: 3 attributed failures; retries convict too
+  local f="$BATS_TEST_TMPDIR/bats-multi"
+  cat > "$f" <<'STUB'
+#!/bin/bash
+[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }
+# The retry ladder re-runs ONE test (`-f <regex> <file>`). It must PLAN >0 and exit 1, or the
+# ladder reads a non-verdict and the file is never convicted at all.
+[ "$1" = "-f" ] && { echo "1..1"; echo "not ok 1 replay"; exit 1; }
+echo "1..3"
+echo "not ok 1 alpha"
+echo "# (in test file tests/aaa-sorts-first.bats, line 3)"
+echo "not ok 2 bravo"
+echo "# (in test file tests/gate-home-isolation.bats, line 4)"
+echo "not ok 3 charlie"
+echo "# (in test file tests/it2-kitty.bats, line 5)"
+exit 1
+STUB
+  chmod +x "$f"; printf '%s' "$f"
+}
+
+@test "C13e: EVERY failing suite is filed, not just the one that sorts first" {
+  fake="$(multi_red_bats)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  [ -f "$REC/cc-backlog.argv" ]
+  # The one the old code DID file — the control. If this fails the fixture never reached red_actions.
+  grep -q 'post-land RED: tests/aaa-sorts-first.bats::alpha @' "$REC/cc-backlog.argv"
+  # THE regression: these two never sort first, so FAILING[0]-only filing dropped them silently.
+  grep -q 'post-land RED: tests/gate-home-isolation.bats::bravo @' "$REC/cc-backlog.argv"
+  grep -q 'post-land RED: tests/it2-kitty.bats::charlie @' "$REC/cc-backlog.argv"
+  # ...and each carries its OWN test name, which is why FAILNAME exists: a shared FAILTEST would
+  # have labelled all three "alpha" and made items 2 and 3 point at the wrong test.
+  [ "$(grep -c 'post-land RED:' "$REC/cc-backlog.argv")" = "3" ]
+}
+
+# The digit trap, pinned as its own case because it fails SILENTLY and selectively. cc-backlog's
+# valid_condition() rejects any key containing a digit and REFUSES the whole add (rc 2) — and this
+# call site is best-effort, so the refusal prints nowhere. A cond_slug that stripped or passed
+# digits through would therefore file 295 of 305 suites and drop exactly the 10 whose names carry
+# one (it2-*, iterm2-*, cc-dispatch-v2, subagent-stop-r1, …) — re-creating this bug's own
+# invisibility for a different subset. The fixture's third file is one of them ON PURPOSE.
+@test "C13f: a digit-bearing suite name still yields a VALID condition key (the silent-drop trap)" {
+  fake="$(multi_red_bats)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  # Digits are SPELLED OUT, not stripped — so it stays distinct from a hypothetical `it-kitty`.
+  grep -q -- '--condition postland-red-it-two-kitty' "$REC/cc-backlog.argv"
+  # Every condition passed must satisfy the REAL predicate, read from cc-backlog itself rather than
+  # restated here — a copy of the rule could drift from the rule and the test would still pass.
+  eval "$(sed -n '/^valid_condition() {/,/^}/p' "$REPO/bin/cc-backlog")"
+  # Process substitution, NOT `... | while read`: a piped loop runs in a SUBSHELL, so `n` would be
+  # incremented in a child and read back as 0 in the parent — the count assertion below would then
+  # fail even on a correct run (memory subshell-erases-the-cleanup-record, same mechanism).
+  local k n=0
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    valid_condition "$k" || { echo "cc-backlog would REFUSE: $k"; false; }
+    n=$((n + 1))
+  done < <(grep -o -- '--condition [a-z0-9-]*' "$REC/cc-backlog.argv" | awk '{print $2}')
+  [ "$n" = "3" ]                                   # all three, not just the ones that happen to pass
+}
+
+# The dedupe half, driven through the REAL cc-backlog rather than the recording stub: the flag being
+# PRESENT proves nothing about whether a second sweep mints a second item. Two runs, two different
+# shas, same standing failures — the shape that minted 69 items for the same reds.
+@test "C13g: a second RED sweep re-files the SAME items, it does not mint new ones" {
+  fake="$(multi_red_bats)"
+  export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"        # the real one — the stub cannot dedupe
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+  # MANDATORY with the real binary: `cc-backlog add` fires dispatch_kick, which backgrounds
+  # `cc-dispatch --decide` — and kick_bin resolves via `command -v`, i.e. the OPERATOR's real
+  # dispatcher, which spawns real worker sessions. The sandboxed $HOME does not save us: it only
+  # moves the debounce marker, so the kick is never debounced and fires EVERY time. A test that
+  # spawns live agents is not a test.
+  export CC_BACKLOG_KICK=off
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  [ -f "$CC_BACKLOG_FILE" ]
+  local after1; after1="$(jq -r 'select(.event=="add").id' "$CC_BACKLOG_FILE" | sort -u | wc -l | tr -d ' ')"
+  [ "$after1" = "3" ]                                 # one per failing suite, not one per run
+  # A real tree change is REQUIRED, not decoration: push_commit runs `git commit` with no --allow-empty,
+  # so an unchanged fixture exits 1 ("nothing to commit") and the test dies here having proved only
+  # the first sweep. The second sweep is the whole point — a new sha AND a new tree, so the stamp
+  # gate does not short-circuit on `already-stamped`.
+  echo second > "$R/second-fixture"
+  push_commit second                                  # a NEW sha ⇒ a new run over the same red set
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  local after2; after2="$(jq -r 'select(.event=="add").id' "$CC_BACKLOG_FILE" | sort -u | wc -l | tr -d ' ')"
+  [ "$after2" = "3" ]                                 # THE regression: was 6 (a fresh item per sweep)
+  # And the reason it holds: identity is the CONDITION, which carries no sha/count/timestamp.
+  run jq -r 'select(.event=="add").condition' "$CC_BACKLOG_FILE"
+  [ -n "$output" ]
+  # `! grep -q`, NOT `grep -qv`: with -v a MULTI-LINE input passes as long as ONE line is clean, so
+  # it would have green-lit a set where two keys were fine and the third carried a sha. Measured,
+  # not assumed — `printf 'aa\nbb2\n' | grep -qv '[0-9]'` exits 0.
+  ! printf '%s' "$output" | grep -q '[0-9]' || { echo "a condition key carries a digit: $output"; false; }
+}
+
 # ── NO PATH NORMALIZATION: the corpus runs in the environment being gated (settled 2026-07-29) ──
 # The inverse of what these tests used to assert. A prepend lived in the SUT (5abe5934) and turned
 # a minimal-PATH red green — by running the corpus in an environment that never occurs. This gate's
