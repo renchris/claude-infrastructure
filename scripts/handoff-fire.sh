@@ -1430,6 +1430,96 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   printf '%s' "$a0" | grep -qE 'node|claude'
 }
 
+# ---- PANE PROCESS STATE — THREE-VALUED, and the shell verdict is POSITIVE (2026-08-06) ----------
+# THE INCIDENT THIS EXISTS TO PREVENT: `--recycle` typed a shell command into a LIVE Claude Code
+# composer (2026-08-06, memory reference-recycle-probe-types-into-live-composer). The probe it
+# replaces was ONE negated line — `ps -o comm= -t <pane-tty> | grep -qE 'node|claude'` — and two
+# independent defects rode it:
+#
+#   1. DETECTION. The standard resume path (bin/lr-fire-resume.sh) launches CC under `expect`, and
+#      expect's spawn() gives its child ITS OWN pty. claude's controlling tty is therefore NOT the
+#      pane's, and `ps -t <pane-tty>` reports `expect` alone. Measured live on this box 2026-08-06,
+#      three panes at that instant — every one of them "no CC" to the old probe:
+#        ttys007  expect(40661) → claude(40677) on ttys008
+#        ttys009  expect(9568)  → claude(9570)  on ttys010
+#        ttys011  expect(9573)  → claude(9588)  on ttys012
+#      Not exotic, and NOT kitty-specific: kitty is only where it was noticed, because `kitty @ ls`
+#      exposes foreground_processes. Any wrapper that allocates a pty — script(1), tmux, a debugger
+#      — reproduces it.
+#   2. FAIL-DANGEROUS DEFAULT, and this is the one that matters. "I could not find CC" and "there is
+#      definitely a bare shell here" were the SAME branch, and only the second is safe to type into.
+#      Fixing (1) alone leaves the CLASS open — the next unmodelled wrapper reproduces the incident
+#      exactly. So the negative is no longer an answer: callers must act on an AFFIRMATIVE.
+#
+# THREE states, and `unknown` is NOT `shell`:
+#   cc      — a live CC process is somewhere in the pane's process tree. NEVER type.
+#   shell   — POSITIVELY confirmed at a prompt: no CC anywhere in the tree AND the tty's foreground
+#             process group is nothing but shells. Safe to type.
+#   unknown — the probe could not decide (no processes on the tty, unreadable ps, an unmodelled
+#             foreground process). REFUSE — print the manual command, never type.
+#
+# TWO INDEPENDENT LEGS, deliberately not one:
+#   (a) THE TREE, not the tty. Roots = every process whose CONTROLLING TTY is the pane's; the
+#       closure is every descendant of those, from ONE `ps -axo pid=,ppid=` snapshot. That is what
+#       crosses the nested-pty boundary — claude's tty is not the pane's, but its parent (expect) is
+#       on the pane's tty and the ppid chain is unbroken. Membership is decided by pid_is_cc (comm
+#       OR argv[0], never the full argv — a fired session's argv carries its whole brief and
+#       routinely contains the word "claude": memory pgrep-f-matches-agent-briefs).
+#       kitty's `foreground_processes` needs no separate query: each entry is a descendant of the
+#       window's own shell pid, which the tty roots already contain, so it is a strict SUBSET.
+#   (b) THE FOREGROUND PROCESS GROUP owns the terminal, so it decides "at a prompt". `tpgid` names
+#       it and `ps -g <pgid>` enumerates it. Measured on the same box: an idle prompt's group is
+#       {zsh} alone (gitstatusd sits in a BACKGROUND group, so it does not spoil the verdict — the
+#       wedged-pane shape tests/handoff-fire-inject.bats:351 records), while a live CC pane's group
+#       is {bash, claude, bash, tee}. Leg (b) alone would be unsafe — the leader of a CC pane IS a
+#       shell (the launcher bash) — which is exactly why it is subordinate to (a) and never
+#       consulted until (a) has cleared the tree.
+pane_cc_state() { # $1=pane tty (path or basename) → prints cc|shell|unknown · ALWAYS exits 0
+  local ptty="${1:-}" roots fg closure group pid comm shells=0
+  [ -n "$ptty" ] || { printf 'unknown'; return 0; }
+  ptty="${ptty##*/}"
+  # ONE query for both roots and the foreground pgid — they must describe the same instant.
+  # SPACE-separated, never newline-separated: `awk -v x="$roots"` on BSD awk dies with
+  # "newline in string" on an embedded newline, and it dies SILENTLY into stderr while the
+  # substitution still succeeds — measured 2026-08-06, it turned every multi-process pane into
+  # `unknown` (fail-safe, so no alarm) while single-process panes kept answering correctly.
+  roots="$(ps -o pid= -t "$ptty" 2>/dev/null | tr -d ' ' | tr '\n' ' ' || true)"
+  fg="$(ps -o tpgid= -t "$ptty" 2>/dev/null | awk 'NF { gsub(/ /, "", $0); print; exit }' || true)"
+  # A tty with NO processes is not an empty prompt — it is a tty we cannot read (a pane that is
+  # gone, a stub, a bridge hiccup). Believing it "shell-only" is the fail-dangerous default itself.
+  [ -n "$roots" ] || { printf 'unknown'; return 0; }
+  # Leg (a): the descendant closure, to a fixpoint. Terminates — each pass either adds a pid or stops.
+  closure="$(ps -axo pid=,ppid= 2>/dev/null | awk -v roots="$roots" '
+    BEGIN { n = split(roots, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") sel[a[i]] = 1 }
+          { p[NR] = $1; pp[NR] = $2; N = NR }
+    END   { changed = 1
+            while (changed) { changed = 0
+              for (i = 1; i <= N; i++)
+                if (!(p[i] in sel) && (pp[i] in sel)) { sel[p[i]] = 1; changed = 1 } }
+            for (k in sel) print k }' || true)"
+  [ -n "$closure" ] || { printf 'unknown'; return 0; }
+  # shellcheck disable=SC2086  # $closure is a newline-separated pid list; word-splitting is intended
+  for pid in $closure; do
+    if pid_is_cc "$pid"; then printf 'cc'; return 0; fi
+  done
+  # Leg (b): the foreground process group must be shells and nothing else.
+  case "$fg" in ''|*[!0-9]*|0) printf 'unknown'; return 0 ;; esac
+  group="$(ps -o pid=,comm= -g "$fg" 2>/dev/null || true)"
+  [ -n "$group" ] || { printf 'unknown'; return 0; }
+  while read -r pid comm; do
+    [ -n "$comm" ] || continue
+    comm="${comm##*/}"; comm="${comm#-}"          # /bin/zsh and -zsh are both zsh
+    case "$comm" in
+      zsh|bash|sh|dash|ksh|fish|tcsh|csh|login) shells=$((shells + 1)) ;;
+      *) printf 'unknown'; return 0 ;;
+    esac
+  done <<EOF
+$group
+EOF
+  [ "$shells" -gt 0 ] || { printf 'unknown'; return 0; }
+  printf 'shell'
+}
+
 # ---- RECYCLE-path ENGAGEMENT (audit row: birth ≠ engagement, still live on --recycle) -----------
 # ef11307 taught the FIRE path that a transcript's existence is not engagement — it must show a real
 # assistant turn. That fix never reached the recycle watcher: `ENGAGE_VERIFY=1` is set only for
@@ -2593,17 +2683,28 @@ if [ "${1:-}" = "__recycle" ]; then
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
-  cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
+  # THE SECOND SITE OF THE SAME DEFECT, and the reason fixing the foreground alone is not a fix.
+  # This watcher's whole job is to type a command into the pane once CC is gone, and it decided that
+  # with the identical tty-only grep — so with the foreground repaired (expect-wrapped CC now
+  # correctly reads `cc`, arming the watcher instead of typing immediately), the watcher would have
+  # inherited the incident verbatim: blind to claude on the nested pty, it would read "exited after
+  # 0s" and type into the live composer the foreground had just refused to touch.
+  #
+  # TWO predicates, because "is CC up" and "is it safe to type" are different questions and sharing
+  # one is what made the negative fail-dangerous. Typing requires the AFFIRMATIVE shell verdict;
+  # `unknown` keeps waiting and then gives up LOUDLY with the manual command.
+  cc_alive() { [ "$(pane_cc_state "$TTY_PATH")" = cc ]; }
+  at_shell() { [ "$(pane_cc_state "$TTY_PATH")" = shell ]; }
   waited=0
-  while [ "$waited" -lt 600 ] && cc_alive; do
+  while [ "$waited" -lt 600 ] && ! at_shell; do
     sleep 3; waited=$((waited+3))
     case "$waited" in 60|150|300) "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;; esac
   done
-  if cc_alive; then
-    echo "!! CC still alive after ${waited}s — giving up. Relaunch manually: $(cat "$CMDFILE")" >&2
+  if ! at_shell; then
+    echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $(pane_cc_state "$TTY_PATH")) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
     exit 1
   fi
-  echo "→ claude exited after ${waited}s — typing relaunch"
+  echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
   # THE 2026-07-29 STRAND, made self-diagnosing. A session-owned worktree is reaped BY the exit this
   # watcher just observed, so the relaunch's cd target can disappear between arming and typing. The
   # command already carries a fallback (see the RECYCLE_FALLBACK chain), so this is pure evidence —
@@ -2631,9 +2732,14 @@ if [ "${1:-}" = "__recycle" ]; then
   # (skipped if claude appeared meanwhile — a late first launch must not get a second prompt
   # typed into its composer), then scream INTO THE PANE via it2 (the one write path proven
   # reliable detached) so a human at the pane sees the fallback even without the log.
+  #
+  # The retype gate is `at_shell`, NOT `! cc_alive`, for the same reason as the first type: a
+  # slow-launching CC under a pty wrapper is not-yet-`cc` for several seconds, and the negative
+  # would put a second launcher line into the composer it was just given. Only a pane still
+  # positively at a prompt is one the launch demonstrably failed to leave.
   up=0
   for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
-  if [ "$up" = 0 ] && ! cc_alive; then
+  if [ "$up" = 0 ] && at_shell; then
     echo "⚠ no claude on $TTY_PATH 45s after relaunch — retyping once"
     it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")" || true
     for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
@@ -5031,7 +5137,7 @@ spawn() {
 # turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
 # watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
 recycle_fire() {
-  local tty cmdfile log ts wrote
+  local tty cmdfile log ts wrote rcy_state
   ts="$(date +%s)"
   # Per-uid 0700 temp dir, not the mode-1777 /tmp (CWE-377/CWE-59). $cmdfile is never executed as a
   # program, but the detached watcher `cat`s it and TYPES the contents into a live shell for up to
@@ -5054,13 +5160,31 @@ recycle_fire() {
   pin_term_verdict_for_watcher
   tty="$(as_tty "$SID")"
   [ -n "$tty" ] || { echo "!! recycle: session $SID not found in iTerm2" >&2; exit 1; }
-  if ! ps -o comm= -t "$(basename "$tty")" 2>/dev/null | grep -qE 'node|claude'; then
-    # No CC on the pane (shell-only): nothing to /exit — type the relaunch right now.
-    it2_type_verified "$HOME/.claude/bin/it2" "$SID" "$CMD" \
-      || { echo "!! recycle: it2 verified-type into $SID failed — run manually: $CMD" >&2; exit 1; }
-    echo "→ recycled (no CC was running): typed relaunch into $SID"
-    return 0
-  fi
+  # THE 2026-08-06 INCIDENT'S OWN LINE. This was `! ps -o comm= -t <tty> | grep -qE 'node|claude'`,
+  # and it TYPED on that negative — so a CC launched under `expect` (the standard resume path, whose
+  # nested pty hides claude from the pane's tty) read as "no CC" and the relaunch command went into
+  # a LIVE composer. pane_cc_state's header carries the measurement and the two defects; here the
+  # only rule is that the branches are no longer two but THREE, and typing needs the affirmative.
+  rcy_state="$(pane_cc_state "$tty")"
+  case "$rcy_state" in
+    cc)
+      : ;;                                       # a live session — fall through to watcher + /exit
+    shell)
+      # POSITIVELY confirmed at a shell prompt: nothing to /exit — type the relaunch right now.
+      it2_type_verified "$HOME/.claude/bin/it2" "$SID" "$CMD" \
+        || { echo "!! recycle: it2 verified-type into $SID failed — run manually: $CMD" >&2; exit 1; }
+      echo "→ recycled (pane CONFIRMED shell-only — no CC to exit): typed relaunch into $SID"
+      return 0 ;;
+    *)
+      # UNKNOWN ≠ shell. Refuse and hand the command back — never type on an unconfirmed pane.
+      # The two outcomes MUST stay distinguishable in the output: on 2026-08-06 this path printed
+      # "→ recycled (no CC was running)" while the operator was demonstrably working in that pane,
+      # so the mis-fire was reported as a SUCCESS and nothing in the log contradicted it.
+      echo "!! recycle REFUSED: could not positively confirm what is running in pane $SID (tty $tty) — probe verdict: $rcy_state." >&2
+      echo "!!   Nothing was typed. Typing on an unconfirmed pane is exactly what put a shell command into a live Claude composer on 2026-08-06." >&2
+      echo "!!   If a session is running there, /exit it yourself and re-run --recycle. If the pane is at a shell prompt, run: $CMD" >&2
+      exit 1 ;;
+  esac
   # ORDER IS LOAD-BEARING: watcher FIRST (heartbeat-verified), /exit LAST. A typed /exit
   # INTERRUPTS the in-flight turn and exits within seconds (E2E 2026-07-03 — twice: the busy
   # turn died with no output persisted; /exit does NOT enqueue-to-turn-end the way /clear does).
