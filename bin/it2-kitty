@@ -347,6 +347,27 @@ reject_id(){
   exit 65
 }
 
+# unaddressed VERB — refuse a send/run that names no window (2026-08-07, pane-theft incident).
+#
+# `close` has always refused an empty -s (":572", exit 65). `send` and `run` did the opposite: they
+# fell through to a bare `kt send-text -- "$text"`, and kitty with no --match writes to the ACTIVE
+# window. So the two verbs that TYPE — the ones that can submit a composer, answer a [nyae] prompt,
+# or run a command — degraded on a lost id into a keystroke injector aimed at whatever the operator
+# happened to be using, while the merely destructive verb was already guarded. That asymmetry is
+# backwards: an unaddressed close destroys a pane the operator can reopen, an unaddressed send
+# destroys text that exists nowhere on disk.
+#
+# There is no legitimate unaddressed caller — every in-tree call site passes -s (audited 2026-08-07;
+# the only two greps that match without one are prose in a comment and a retired code path in
+# scripts/desk-invariant.sh:194). Exit 65 matches reject_id, so callers that already treat a
+# non-zero shim exit as "delivery failed, escalate" need no change.
+unaddressed(){
+  err "session ${1:-?} requires -s <id>: refusing to type into the ACTIVE window."
+  err "kitty send-text with no --match writes wherever focus happens to be — which is the"
+  err "operator's pane whenever a headless caller has lost its anchor. Re-derive the id and retry."
+  exit 65
+}
+
 # ── IS THIS WINDOW THE ONE THE CALLER MEANT? ─────────────────────────────────────────────────────
 # One `kt ls --match id:<id>` (0.036 s), then every supplied pin must hold. Returns 0 only when the
 # evidence AFFIRMS the target; every other outcome — kitty failed, payload unparseable, no window,
@@ -451,7 +472,20 @@ case "$verb" in
       # --match window_id: is NOT redundant with --next-to. kitty's launch.py drops --next-to when
       # the target tab does not contain it, and the target tab defaults to the ACTIVE tab — so
       # without --match the anchor is silently discarded and the pane lands somewhere else.
-      launch_args+=(--match "window_id:$SESSION" --next-to "id:$SESSION")
+      # --source-window is the THIRD pin, and without it the other two are only half an anchor.
+      # `--cwd=current` above is defined by kitty as "the working directory of the --source-window",
+      # and `kitty @ launch --help` says: "When not specified the currently active window is used."
+      # Over the control socket there IS no invoking window, so an unpinned source silently resolves
+      # to whatever the OPERATOR is sitting in — the pane is placed correctly next to the anchor and
+      # then inherits a stranger's cwd. Measured on the 2026-08-07 pane-theft incident: kitty
+      # windows 246 and 248, both fired peers whose sessions run in wt-22b9f2b5a660 and
+      # wt-700269d9c450, BOTH report cwd=/Users/chrisren/Development/lakehouse-lecture — the
+      # operator's project, which neither fire had any relationship to. Fire 1's logged anchor was
+      # window 7, whose cwd is a third worktree, so the placement pin held and only the cwd drifted.
+      # Corollary worth keeping: a pane's cwd is therefore NOT evidence of where a split anchored
+      # (it named the operator's active window, not the anchor) — this line is what makes them agree.
+      # title / colors / env are copied from the source window too, so the pin fixes those as well.
+      launch_args+=(--match "window_id:$SESSION" --next-to "id:$SESSION" --source-window "id:$SESSION")
     fi
 
     # ARM the pane: launch the runner instead of an interactive shell, so `run` can hand the command
@@ -553,7 +587,7 @@ else:
       # but the honest answer is that the requested effect (an empty input line) already holds.
       armed "$SESSION" && exit 0
       kt send-text --match "id:$SESSION" -- "$text" || exit 1
-    else kt send-text -- "$text" || exit 1; fi
+    else unaddressed send; fi
     ;;
 
   run)
@@ -562,7 +596,7 @@ else:
     if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" run
       if armed "$SESSION"; then deliver_argv "$SESSION" "$text" || exit 1; exit 0; fi
       kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
-    else kt send-text -- "$text"$'\r' || exit 1; fi
+    else unaddressed run; fi
     ;;
 
   close)
