@@ -12,6 +12,17 @@
 # detection entirely and read as a green board (memory: control-must-replay-the-real-artifact,
 # positive-control-the-denominator). So every venue assertion below is paired with a local one that
 # must still CONVICT, and the pre-existing-record case is asserted directly.
+#
+# WHAT THIS SUITE PINS, MEASURED per-site 2026-08-07 (memory: per-site-mutation-attributes-coverage —
+# one mutant per SITE, because a blanket mutant over redundant siblings under-reports):
+#   remove claimer_live's venue gate ONLY  → 0 red   (survives)
+#   remove owned_wait's  venue gate ONLY   → 0 red   (survives)
+#   remove BOTH                            → 5 red   (tests 1,2,3,8,12)
+# So the suite pins the PAIR, not either gate. That is not a hole to plug by asserting on internals:
+# the redundancy is the design (siblings over one population must share the state model, or the one
+# left behind re-opens the defect), and these tests assert BEHAVIOUR. But do not read a green board
+# as "both gates are covered" — deleting either one alone is invisible here. A refactor that removes
+# one must be judged by the argument in bin/cc-backlog's VENUE header, not by this suite going green.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -73,7 +84,7 @@ reap_mid() {
   run reap_aged "$id"
   [ "$status" -eq 0 ]
   # The pre-venue behaviour, verbatim from the 2026-08-07 measurement, was WOULD-REOPEN.
-  [[ "$output" != *"WOULD-REOPEN"* ]]
+  [[ "$output" != *"WOULD-REOPEN"* ]] || false
   [[ "$output" == *"$id"* ]]
 }
 
@@ -81,8 +92,8 @@ reap_mid() {
   local id; id="$(add_and_claim cloud-keep "cloudvm-4242" --venue cloud)"
   run reap_mid "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"KEEP $id"* ]]
-  [[ "$output" == *"UNRESOLVED"* ]]
+  [[ "$output" == *"KEEP $id"* ]] || false
+  [[ "$output" == *"UNRESOLVED"* ]] || false
   [[ "$output" == *"not proof of death"* ]]
 }
 
@@ -90,7 +101,7 @@ reap_mid() {
   local id; id="$(add_and_claim cloud-block "cloudvm-4242" --venue cloud)"
   run reap_aged "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WOULD-BLOCK"* ]]
+  [[ "$output" == *"WOULD-BLOCK"* ]] || false
   [[ "$output" != *"WOULD-REOPEN"* ]]
 }
 
@@ -100,7 +111,7 @@ reap_mid() {
   local id; id="$(add_and_claim venue-not-name "cloudvm-4242" --venue local)"
   run reap_aged "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WOULD-REOPEN"* ]]
+  [[ "$output" == *"WOULD-REOPEN"* ]] || false
   [[ "$output" == *"dead-worker"* ]]
 }
 
@@ -113,7 +124,7 @@ reap_mid() {
   run reap_aged "$id"
   [ "$status" -eq 0 ]
   # This is the assertion the whole change is measured against: local detection must be UNCHANGED.
-  [[ "$output" == *"WOULD-REOPEN"* ]]
+  [[ "$output" == *"WOULD-REOPEN"* ]] || false
   [[ "$output" == *"dead-worker"* ]]
 }
 
@@ -121,7 +132,7 @@ reap_mid() {
   local id; id="$(add_and_claim local-live "$(hostname -s)-$$")"
   run reap_aged "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"WOULD-REOPEN"* ]]
+  [[ "$output" != *"WOULD-REOPEN"* ]] || false
   # Past LIVE_CLAIM_MAX_S a live claimer is a wedge, which BLOCKS rather than reopens.
   [[ "$output" == *"WOULD-BLOCK"* ]]
 }
@@ -135,7 +146,7 @@ reap_mid() {
     > "$CC_BACKLOG_FILE"
   run reap_aged "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"WOULD-REOPEN"* ]]
+  [[ "$output" == *"WOULD-REOPEN"* ]] || false
   [[ "$output" == *"dead-worker"* ]]
 }
 
@@ -161,7 +172,7 @@ reap_mid() {
   local id; id="$("$CB" add --title "venue typo" --project probe --source venue-typo)"
   run "$CB" claim "$id" --by "cloudvm-1" --venue clod
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown --venue"* ]]
+  [[ "$output" == *"unknown --venue"* ]] || false
   # And nothing was written: a refused claim must not leave the item claimed.
   run "$CB" list --json
   [[ "$output" != *'"status":"claimed"'* ]]
@@ -170,7 +181,9 @@ reap_mid() {
 @test "--venue is claim-only" {
   local id; id="$("$CB" add --title "venue on done" --project probe --source venue-scope)"
   "$CB" claim "$id" --by "$(hostname -s)-$$" >/dev/null
-  run "$CB" done "$id" --evidence deadbeef --venue cloud
+  # `done` is QUOTED: unquoted, shellcheck parses the bare word as the loop keyword and reports
+  # SC1010 ("use a semicolon or linefeed before done"). It is a verb here, not a terminator.
+  run "$CB" "done" "$id" --evidence deadbeef --venue cloud
   [ "$status" -eq 2 ]
   [[ "$output" == *"applies only to claim"* ]]
 }
@@ -182,7 +195,7 @@ reap_mid() {
   run "$CB" reclaim "$id" --by "cloud-worker-abc"
   [ "$status" -eq 0 ]
   run "$CB" list --json
-  [[ "$output" == *'"venue":"cloud"'* ]]
+  [[ "$output" == *'"venue":"cloud"'* ]] || false
   # …and the re-keyed claim is still unobservable rather than dead.
   run reap_aged "$id"
   [[ "$output" != *"WOULD-REOPEN"* ]]
@@ -194,7 +207,7 @@ reap_mid() {
   local dead; dead="$(bash -c 'echo $$')"
   "$CB" claim "$id" --by "$(hostname -s)-$dead" >/dev/null
   run "$CB" list --json
-  [[ "$output" == *'"venue":"local"'* ]]
+  [[ "$output" == *'"venue":"local"'* ]] || false
   # The reset is load-bearing: a carried-forward "cloud" would make this dead local worker
   # permanently unobservable to oracles that can see it perfectly well.
   run reap_aged "$id"
