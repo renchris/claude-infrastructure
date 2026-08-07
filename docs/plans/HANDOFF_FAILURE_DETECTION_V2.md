@@ -182,6 +182,25 @@ instructions). Live-measured today: `proof=marker latency=16s`. Recycle path has
 self-close has T-0 pin re-verify. **Verification-at-fire-time exists on all three paths; the broken
 half is exclusively WHERE THE FAILURE VERDICT GOES.**
 
+### Phase 1 closure notes (lead, 2026-08-07)
+
+- **Researchers:** all three processes died on the loaded box (0 procs; no completion events). R2
+  finished its analysis first — full report recovered from its transcript (extracted to scratchpad,
+  constants integrated above). R1/R3 died early; their residual (the cc-roles consumer census) was
+  closed by the lead directly.
+- **cc-roles consumer census (R1's Q2, closed):** 26 files reference roles. Classes: the desk
+  OPT-IN bundle itself (desk-register, desk-arm-live, desk-recycle-invariant, desk-brief-inject,
+  commands/desk.md, desk-invariant) · role-aware comms (cc-notify, cc-announce, completion-push,
+  cc-await-ping, mailbox-pending) · desk-as-receiver consumers (cc-reaper, lead-supervisor,
+  autonomy-sweep, cc-dispatch, cc-digest, cc-classify, boot-resume, waiting-recycle,
+  session-continue, teammate-auto-shutdown, team-orphan-reaper, supervisor-e2e, delivery-verify,
+  payload-lint). Verdict basis: the REACHED/RECORDED/REFUSED three-state degradation ALREADY
+  exists in cc-reaper (**landed on main** — the graveyard branch fix/no-desk-reaper is obsolete,
+  its content arrived via another path; re-sweep-at-land-time law), lead-supervisor (efb12c6e,
+  the pattern origin), cc-announce, completion-push; autonomy-sweep and desk-invariant are being
+  completed by T2/T4. Non-critical hook consumers degrade as advisory pushes; spot-verify at
+  integration where cheap.
+
 ## Phase 2 — INVARIANTS vs ARCHITECTURE
 
 **INVARIANTS (any design must keep; numbered):**
