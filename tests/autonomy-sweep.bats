@@ -7,7 +7,11 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  SWEEP="$REPO/scripts/autonomy-sweep.sh"
+  # CC_TEST_SWEEP is the RED-PROOF seam and nothing else: the D2/D4 cases below are re-run against a
+  # PRISTINE tree (`git archive HEAD scripts/ | tar -x`) to prove each one FAILS without the change.
+  # It has to be the real extracted artifact — a hand-edited approximation of the old script proves
+  # nothing (memory: control-must-replay-the-real-artifact).
+  SWEEP="${CC_TEST_SWEEP:-$REPO/scripts/autonomy-sweep.sh}"
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"
   export CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/alarms"
   export CC_COMPLETION_RECORDS_DIR="$BATS_TEST_TMPDIR/completion"
@@ -27,9 +31,17 @@ setup() {
   export CC_TEARDOWN_RECORDS_DIR="$BATS_TEST_TMPDIR/cc-teardown"
   export CC_INBOX_GUARD_STATE_DIR="$BATS_TEST_TMPDIR/inbox-guard"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
+  # D2/D4 stores. CC_HANDOFF_ALARM_DIR is REAPED by the sweep, so the warning above applies to it in
+  # full; CC_EXPIRED_LEDGER is APPENDED to, and an unexported one would grow the operator's real
+  # ledger from a test run.
+  export CC_HANDOFF_ALARM_DIR="$BATS_TEST_TMPDIR/handoff-alarms"
+  export CC_EXPIRED_LEDGER="$BATS_TEST_TMPDIR/expired-unread.jsonl"
+  export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/watchdog-teardown"
+  export CC_CLOSE_ATTRIB_LOG="$BATS_TEST_TMPDIR/close-attrib.jsonl"
   mkdir -p "$CC_PAGES_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
            "$CC_DECISIONS_DIR" "$CC_ROLES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" \
-           "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR"
+           "$CC_TEARDOWN_RECORDS_DIR" "$CC_INBOX_GUARD_STATE_DIR" "$CC_MAILBOX_DIR" \
+           "$CC_HANDOFF_ALARM_DIR" "$CC_TEARDOWN_DIR"
   # stub cc-notify: log every call to <stub>.log, and emit a cc-notify-SHAPED verdict token on
   # STDERR — the real binary does, and the exit code alone is NOT the outcome (measured against a
   # dead pane: `verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997` at rc=0). A stub
@@ -60,8 +72,21 @@ SH
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   export CC_SWEEP_OS_CHANNEL=off
   echo "desk-pane-uuid-current" > "$CC_ROLES_DIR/desk"
+  # HERMETIC it2: the D4 world probe defaults to the operator's REAL ~/.claude/bin/it2 against the
+  # LIVE terminal. A suite that forgot this seam would probe (and be answered by) the operator's own
+  # session list — the same class of destructive default as the unexported teardown dir above.
+  # CC_STUB_IT2_OUT is the listing; CC_STUB_IT2_RC forces a REFUSAL (124 = cut at the bound).
+  export CC_IT2_BIN="$BATS_TEST_TMPDIR/stub-it2"
+  cat > "$CC_IT2_BIN" <<'SH'
+#!/bin/bash
+echo "$@" >> "$0.log"
+[ -n "${CC_STUB_IT2_RC:-}" ] && exit "$CC_STUB_IT2_RC"
+printf '%s\n' "${CC_STUB_IT2_OUT:-}"
+SH
+  chmod +x "$CC_IT2_BIN"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
+osa_count()    { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
 # `.seen` (forgotten) and `.bannered` (posted once) share SEEN_DIR — deliberately, so the existing
 # 7-day age-compaction reaps both with no second reaper. That makes `ls -A "$CC_SWEEP_SEEN_DIR"` a
 # WIDER span than the subject every data-loss assertion here is about, so those assertions count the
@@ -76,11 +101,13 @@ notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | t
 # glob form has no such edge: the `[ -e ]` guard absorbs a non-matching pattern and the count is a
 # plain arithmetic variable. (memory: prescribed-remedy-worse-than-the-bug — a lint's one-liner is a
 # suggestion about style, not a proof about behaviour; run it where it executes before adopting it.)
-seen_count() {   # `.seen` keys are bare 32-char hashes; banner markers end in `.bannered`
+# D4 adds a THIRD suffixed store (`.orphan-checked`), so the class filter names both: a seen key is
+# a bare hash, and every suffixed marker is something other than a proven read.
+seen_count() {   # `.seen` keys are bare 32-char hashes; the suffixed stores are not read receipts
   local f n=0
   for f in "$CC_SWEEP_SEEN_DIR"/*; do
-    [ -e "$f" ] || continue
-    case "$f" in *.bannered) continue ;; esac
+    [ -f "$f" ] || continue
+    case "$f" in *.bannered|*.orphan-checked) continue ;; esac
     n=$((n + 1))
   done
   printf '%s' "$n"
@@ -97,6 +124,12 @@ osa_posts() {
   local n=0
   [ -f "$OSA_LOG" ] && n=$(wc -l < "$OSA_LOG" | tr -d ' ')
   printf '%s' "$n"
+}
+ha_count()       { local f n=0; for f in "$CC_HANDOFF_ALARM_DIR"/*.json; do [ -f "$f" ] && n=$((n + 1)); done; printf '%s' "$n"; }
+mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900 s join deadline)
+  printf '{"key_kind":"pane","pane":"%s","sid":"S-1","mode":"%s","ts":"2026-08-07T00:00:00Z"}\n' \
+    "$2" "$3" > "$CC_TEARDOWN_DIR/$1"
+  [ "${4:-}" = young ] || touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/$1"
 }
 
 # ── nothing-new → abstain, no notify ───────────────────────────────────────────
@@ -565,4 +598,316 @@ SH
   # reporting only the total would read as "1 item queued" on a sweep that queued none
   grep -q "no-change: surfaced, NOT dispatched" "$CC_NOTIFY_BIN.log"
   ! grep -q "fired→backlog" "$CC_NOTIFY_BIN.log" || false
+}
+
+# ══ THE SEEN KEY IS DUAL (lead interface correction 2026-08-07) ═══════════════════════════════════
+# The sweep's own key is a hash of the record's full path — collision-proof, but no other tool can
+# write or grep it, so nothing outside this file could ever ack a record. D3's render and D5's
+# `cc-escalations` name records by BASENAME. Both keys are therefore written, and EITHER suppresses.
+
+@test "seen markers are written under BOTH keys, and EITHER one alone suppresses re-surfacing" {
+  export CC_STUB_VERDICT=delivered
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 1 ]
+  [ -f "$CC_SWEEP_SEEN_DIR/a1.json.seen" ]   # the literal key the render/CLI side can grep and write
+  [ "$(seen_count)" -eq 2 ]                  # …and the legacy hash key beside it, still valid
+  # the HASH key alone still damps (every marker written before today looks like this)
+  rm -f "$CC_SWEEP_SEEN_DIR/a1.json.seen"
+  run bash "$SWEEP"
+  [ "$(notify_count)" -eq 1 ]
+  # the LITERAL key alone still damps (this is exactly what `cc-escalations ack` leaves behind)
+  rm -f "$CC_SWEEP_SEEN_DIR"/*
+  : > "$CC_SWEEP_SEEN_DIR/a1.json.seen"
+  run bash "$SWEEP"
+  [ "$(notify_count)" -eq 1 ]
+  # POSITIVE CONTROL: with NEITHER key the same record surfaces again — the gate is not just off
+  rm -f "$CC_SWEEP_SEEN_DIR"/*
+  run bash "$SWEEP"
+  [ "$(notify_count)" -eq 2 ]
+}
+
+# ══ D2 — THE LADDER UN-NESTED (plan §D2, acceptance A2) ═══════════════════════════════════════════
+# The defect is STRUCTURAL: the OS banner — the only channel here with no liveness dependency — sat
+# INSIDE the `[ -n "$DESK_TARGET" ]` arm. With cc-roles/ empty (the operator's deliberate state as
+# of 2026-08-07) that arm never runs, so the no-role branch logged one IDL row, retried forever, and
+# never bannered; every record then aged out at CC_EVENT_TTL_DAYS having been read by nobody. A
+# fallback that only fires when a DIFFERENT rung's precondition holds is the same single point of
+# failure spelled twice.
+
+@test "rung 2 · roles EMPTY: the banner fires anyway, .bannered is written, .seen is NOT" {
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto          # resolves the stub osascript on PATH (hermetic)
+  printf '{"kind":"handoff-alarm","class":"husk-pane","pane":"289","sid":"S-1","successor":"","detail":"pane close failed 4/4","ts":"2026-08-07T09:00:00Z"}\n' \
+    > "$CC_HANDOFF_ALARM_DIR/alarm-1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]              # no role ⇒ rung 1 does not run at all…
+  [ "$(osa_count)" -eq 1 ]                 # …and the operator is reached regardless. The whole fix.
+  [ "$(bannered_count)" -eq 1 ]
+  [ "$(seen_count)" -eq 0 ]                # a toast carries no read receipt
+  grep -q '"channel":"notification-center-advisory"' "$CC_IDL"
+  grep -q '"delivered":false' "$CC_IDL"
+  # DAMPED: the record re-surfaces every tick (it is not .seen), and must never banner twice
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_count)" -eq 1 ]
+  [ "$(seen_count)" -eq 0 ]
+}
+
+@test "CONTROL: the LEGACY ladder in the same fixture never reaches the banner at all" {
+  # The kill switch must restore the OLD behaviour, defect included — otherwise it is not a kill
+  # switch but a second implementation. This is also the A2 control: it proves the case above is
+  # testing the ladder change and not merely the presence of an osascript stub.
+  export CC_SWEEP_LADDER=legacy
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  printf '{"kind":"handoff-alarm","class":"husk-pane","pane":"289","detail":"d","ts":"t"}\n' \
+    > "$CC_HANDOFF_ALARM_DIR/alarm-1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_count)" -eq 0 ]                 # nested inside the desk arm ⇒ structurally unreachable
+  [ "$(seen_count)" -eq 0 ]
+  grep -q 'no-desk-role' "$CC_IDL"
+}
+
+@test "rung 2 · a REFUSED transport still banners — once — and still marks nothing seen" {
+  # The old code refused to post on this path for a real reason: no damping store existed, so a
+  # permanently refusing transport would post every 300 s forever. `.bannered` IS that store, so the
+  # trade is no longer forced — the record is surfaced once and the storm is impossible.
+  export CC_STUB_RC=3
+  export CC_STUB_VERDICT=unresolvable
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_count)" -eq 1 ]
+  [ "$(seen_count)" -eq 0 ]
+  echo "$output" | grep -q 'UNDELIVERED'   # rung 3 is still loud (a17 S-4)
+  run bash "$SWEEP"
+  [ "$(osa_count)" -eq 1 ]                 # …and damped
+}
+
+@test "POSITIVE CONTROL: rung 1 REACHED short-circuits — no banner, records seen" {
+  # Without this, a ladder that simply bannered on every sweep would pass every case above.
+  export CC_STUB_VERDICT=delivered
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(seen_count)" -gt 0 ]
+  [ "$(osa_count)" -eq 0 ]
+  [ "$(bannered_count)" -eq 0 ]
+}
+
+# ══ D2 — handoff-alarm records are collected, classed, and reaped like every other event dir ══════
+
+@test "collect · handoff-alarm records surface, and the summary carries their CLASS" {
+  for c in husk-pane husk-pane recycle-dead; do
+    printf '{"kind":"handoff-alarm","class":"%s","pane":"p","sid":"s","detail":"d","ts":"t"}\n' "$c" \
+      > "$CC_HANDOFF_ALARM_DIR/alarm-$c-$RANDOM.json"
+  done
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 1 ]
+  grep -q '3 handoff-alarm(s)' "$CC_NOTIFY_BIN.log"
+  # the class is the idea; "3 handoff-alarm(s)" alone names the kind and says nothing
+  grep -q '2 husk-pane' "$CC_NOTIFY_BIN.log"
+  grep -q '1 recycle-dead' "$CC_NOTIFY_BIN.log"
+  grep -q '"new_handoff_alarms":3' "$CC_IDL"
+}
+
+@test "collect · an aged handoff-alarm record is TTL-compacted, a young one is kept" {
+  mk_old   "$CC_HANDOFF_ALARM_DIR/old.json"
+  mk_young "$CC_HANDOFF_ALARM_DIR/new.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_HANDOFF_ALARM_DIR/old.json" ]
+  [ -f "$CC_HANDOFF_ALARM_DIR/new.json" ]
+}
+
+# ══ D2 rung 4 — LOUD EXPIRY (acceptance A4) ═══════════════════════════════════════════════════════
+
+@test "expiry · a record aging out UNREAD is counted out loud, never quietly unlinked" {
+  mk_old "$CC_PAGES_DIR/old.page"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"store":"pages"' "$CC_EXPIRED_LEDGER"
+  grep -q '"kind":"expired-unread"' "$CC_IDL"
+  grep -q '"n":1' "$CC_IDL"
+  [ ! -f "$CC_PAGES_DIR/old.page" ]        # the horizon itself is unchanged — it just says so now
+}
+
+@test "CONTROL: a record aging out that WAS read expires silently" {
+  # The failure-distinct half. A ledger line on every drained record would be the alarm that always
+  # fires, and it would carry exactly as many bits as one that never fires.
+  export CC_STUB_VERDICT=delivered
+  mk_young "$CC_PAGES_DIR/p.page"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(seen_count)" -gt 0 ]                # PROVEN delivered ⇒ it carries a .seen marker
+  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_PAGES_DIR/p.page" ]          # reaped…
+  [ ! -s "$CC_EXPIRED_LEDGER" ]            # …silently
+  ! grep -q 'expired-unread' "$CC_IDL" || false
+}
+
+@test "expiry · a record acked via the LITERAL key alone (cc-escalations) expires silently" {
+  # The D5 integration point. `cc-escalations ack` can only name a record by BASENAME, so the ack it
+  # leaves is the literal key with no hash beside it. If the expiry scan read only the hash, every
+  # explicitly-acked record would age out reported as never-read — the nag would come back louder
+  # for exactly the records the operator had already dealt with.
+  mkdir -p "$CC_SWEEP_SEEN_DIR"
+  mk_old "$CC_PAGES_DIR/old.page"
+  : > "$CC_SWEEP_SEEN_DIR/old.page.seen"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_PAGES_DIR/old.page" ]        # still reaped on the horizon…
+  [ ! -s "$CC_EXPIRED_LEDGER" ]            # …and silently, because it WAS read
+  ! grep -q 'expired-unread' "$CC_IDL" || false
+}
+
+@test "expiry · a record that was only BANNERED still counts as unread" {
+  # banner ≠ read is the whole reason .bannered is a separate store from .seen. If the expiry scan
+  # accepted either marker, the D2 revision would have re-created the silent loss it removed.
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  mk_young "$CC_PAGES_DIR/p.page"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(bannered_count)" -eq 1 ]
+  [ "$(seen_count)" -eq 0 ]
+  touch -t "$(date -v-9d +%Y%m%d%H%M)" "$CC_PAGES_DIR/p.page"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  grep -q '"kind":"expired-unread"' "$CC_IDL"
+}
+
+# ══ D4 — AUTHOR-DEATH JOIN (plan §D4, acceptance A5) ══════════════════════════════════════════════
+# INTENT (teardown marker) + no OUTCOME (close-attrib row) + WORLD (pane still listed) ⇒ the watcher
+# itself died. Every other combination is benign and must stay silent.
+
+@test "D4 · aged marker + no close outcome + pane STILL PRESENT ⇒ exactly one orphan record" {
+  mk_marker m1.json 289 terminal
+  export CC_STUB_IT2_OUT="240
+289
+7"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 1 ]
+  grep -q '"class":"handoff-orphan"' "$CC_HANDOFF_ALARM_DIR"/*.json
+  grep -q '"pane":"289"' "$CC_HANDOFF_ALARM_DIR"/*.json
+  grep -q 'teardown mode=terminal armed' "$CC_HANDOFF_ALARM_DIR"/*.json
+  grep -q 'no close outcome; pane still open' "$CC_HANDOFF_ALARM_DIR"/*.json
+  [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  grep -q '"join":"orphan"' "$CC_IDL"
+  # the record is a first-class escalation: surfaced in the SAME sweep that raised it
+  grep -q '1 handoff-alarm(s) (1 handoff-orphan)' "$CC_NOTIFY_BIN.log"
+  # IDEMPOTENT — a marker is adjudicated once, ever
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 1 ]
+}
+
+@test "D4 · a marker younger than the deadline is not yet due" {
+  mk_marker m1.json 289 terminal young
+  export CC_STUB_IT2_OUT="289"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  # POSITIVE CONTROL: the same marker, aged past the deadline, DOES alarm
+  touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
+  run bash "$SWEEP"
+  [ "$(ha_count)" -eq 1 ]
+}
+
+@test "D4 · a close OUTCOME row for the same id is benign — no alarm" {
+  mk_marker m1.json 289 terminal
+  export CC_STUB_IT2_OUT="289"
+  printf '{"ts":"2026-08-07T09:00:00Z","site":"self-close","mode":"self","terminal":"kitty","id_requested":"289","owner":"operator-or-unknown","verdict":"closed"}\n' \
+    > "$CC_CLOSE_ATTRIB_LOG"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  grep -q '"closed":1' "$CC_IDL"
+  # POSITIVE CONTROL beside the absence: same fixture, outcome row removed, marker re-armed
+  : > "$CC_CLOSE_ATTRIB_LOG"
+  rm -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked"
+  run bash "$SWEEP"
+  [ "$(ha_count)" -eq 1 ]
+}
+
+@test "D4 · a BLIND world probe (rc 124) never alarms AND never acquits — it retries" {
+  mk_marker m1.json 289 terminal
+  export CC_STUB_IT2_RC=124                # cut at the bound: we learned nothing about the world
+  export CC_STUB_IT2_OUT="289"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]   # withholding the marker IS the retry
+  grep -q '"no_data":1' "$CC_IDL"
+  # POSITIVE CONTROL: the retry is real — the next tick, with a probe that answers, alarms
+  unset CC_STUB_IT2_RC
+  run bash "$SWEEP"
+  [ "$(ha_count)" -eq 1 ]
+}
+
+@test "D4 · pane ABSENT from the listing is benign (vendor close / fail-open attrib)" {
+  mk_marker m1.json 289 terminal
+  export CC_STUB_IT2_OUT="240
+7"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  grep -q '"benign_gone":1' "$CC_IDL"
+}
+
+@test "D4 · the pane id is matched as a WHOLE TOKEN, never as a substring" {
+  # Measured against the live fleet 2026-08-07: `it2 session list` returns SHORT NUMERIC ids on this
+  # box (kitty-normalised — `240 7 263 261 …`), so a substring predicate matched 40 of the 1,013
+  # aged teardown markers, every one a false orphan. Exact-token matched 0. A blob match counts the
+  # wrong thing (memory: pgrep-f-matches-agent-briefs).
+  mk_marker m1.json 4 terminal             # `4` is a substring of `240` and of nothing that is live
+  export CC_STUB_IT2_OUT="240
+263"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  # POSITIVE CONTROL: the very same id, now genuinely in the listing, DOES alarm
+  rm -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked"
+  export CC_STUB_IT2_OUT="240
+4"
+  run bash "$SWEEP"
+  [ "$(ha_count)" -eq 1 ]
+}
+
+@test "D4 · a marker with no pane key is closed out, and the world is never probed for it" {
+  printf '{"key_kind":"sid","pane":"","sid":"S-1","mode":"recycle","ts":"2026-08-07T00:00:00Z"}\n' \
+    > "$CC_TEARDOWN_DIR/m1.json"
+  touch -t "$(date -v-1H +%Y%m%d%H%M)" "$CC_TEARDOWN_DIR/m1.json"
+  export CC_STUB_IT2_OUT="240"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  grep -q '"no_pane_key":1' "$CC_IDL"
+  [ ! -f "$CC_IT2_BIN.log" ]               # the bounded probe is not even forked
+}
+
+@test "D4 · the kill switch (CC_HANDOFF_JOIN=0) suppresses the join entirely" {
+  mk_marker m1.json 289 terminal
+  export CC_STUB_IT2_OUT="289"
+  CC_HANDOFF_JOIN=0 run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(ha_count)" -eq 0 ]
+  [ ! -f "$CC_SWEEP_SEEN_DIR/m1.json.orphan-checked" ]
+  # POSITIVE CONTROL: without the switch, the identical fixture alarms
+  run bash "$SWEEP"
+  [ "$(ha_count)" -eq 1 ]
 }
