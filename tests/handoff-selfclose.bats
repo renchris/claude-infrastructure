@@ -77,14 +77,81 @@ printf '%s' "TTY-$uuid"
 exit 0
 SH
 
-  # liveness probe: `ps -o comm= -t <tty>` → print "claude" unless a dead-marker exists for <tty>.
+  # liveness probe. pane_cc_state (handoff-fire.sh) reads a pane in THREE queries — the tty's root
+  # pids, the descendant CLOSURE of those, and the tty's FOREGROUND process group — so a stub that
+  # answers every `-t` with the word "claude" leaves the pid/closure forms unanswered and every pane
+  # reads `unknown`, which is fail-safe and therefore refuses every gate below. Modelled per tty:
+  #   shell   pid=P    ppid=1  comm=zsh
+  #   claude  pid=P+1  ppid=P  comm=claude   — a DESCENDANT, never a root: this is exactly the
+  #                                            `expect` shape (claude on a nested pty) that the
+  #                                            closure leg exists to see.
+  # A dead-marked tty ($PS_DEAD_DIR/<tty>) keeps its shell and loses the CC child ⇒ `shell` — the
+  # real state of a pane whose CC exited, and still `!= cc`, so every dead-path test decides as
+  # before. P is assigned per tty from a registry file so all forms agree across invocations.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
-tty=""
-while [ $# -gt 0 ]; do case "$1" in -t) tty="${2:-}"; shift 2 ;; *) shift ;; esac; done
+reg="${PS_TTY_REG:-/nonexistent}"
+root_pid() {                     # $1=tty → that pane's root pid, stable across invocations
+  local t="$1" n
+  n="$(grep -nxF -- "$t" "$reg" 2>/dev/null | head -1 | cut -d: -f1)"
+  if [ -z "$n" ]; then printf '%s\n' "$t" >> "$reg"; n="$(wc -l < "$reg" | tr -d ' ')"; fi
+  printf '%s' "$(( 700000 + n * 10 ))"
+}
+tty_live() { [ -z "${PS_DEAD_DIR:-}" ] || [ ! -e "$PS_DEAD_DIR/$1" ]; }
+
+fmt="" tty="" pid="" pgid="" all=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -axo|-Ao) fmt="$2"; all=1; shift 2 ;;
+    -o)       fmt="$fmt${2:-}"; shift 2 ;;
+    -t)       tty="${2##*/}"; shift 2 ;;
+    -p)       pid="${2:-}"; shift 2 ;;
+    -g)       pgid="${2:-}"; shift 2 ;;
+    *)        shift ;;
+  esac
+done
+
+if [ "$all" = 1 ]; then                    # the closure: every registered pane, so any root resolves
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"; printf '%s 1\n' "$p"
+    tty_live "$t" && printf '%s %s\n' "$((p + 1))" "$p"
+  done < "$reg"
+  exit 0
+fi
+if [ -n "$pid" ]; then                     # per-pid identity, for pid_is_cc over the closure
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"
+    if   [ "$pid" = "$p" ];                              then c=zsh;    a=-zsh
+    elif [ "$pid" = "$((p + 1))" ] && tty_live "$t";     then c=claude; a=/opt/cc/bin/claude
+    else continue; fi
+    case "$fmt" in *comm*) printf '%s\n' "$c" ;; *tty*) printf '%s\n' "$t" ;; *args*) printf '%s\n' "$a" ;; esac
+    exit 0
+  done < "$reg"
+  exit 0                                   # unknown pid → no line, as ps does for a reaped one
+fi
+if [ -n "$pgid" ]; then                    # the foreground group: shells only (claude is on its pty)
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"; [ "$pgid" = "$p" ] || continue
+    case "$fmt" in *comm*) printf '%s zsh\n' "$p" ;; *) printf '%s\n' "$p" ;; esac
+    exit 0
+  done < "$reg"
+  exit 0
+fi
 [ -n "$tty" ] || exit 0
-[ -n "${PS_DEAD_DIR:-}" ] && [ -e "$PS_DEAD_DIR/$tty" ] && exit 0     # no process line → "dead"
-printf '%s\n' "claude"
+p="$(root_pid "$tty")"
+case "$fmt" in                             # tpgid BEFORE pid — "tpgid" contains "pid"
+  *tpgid*) printf '%s\n' "$p" ;;
+  *pid*)   printf '%s\n' "$p" ;;
+  # The pane is EXPECT-WRAPPED, so the pre-pane_cc_state probe (`-o comm= -t | grep node|claude`)
+  # sees only `expect` and calls a LIVE pane dead. No caller reads this form any more; modelling it
+  # honestly is what makes these tests DISCRIMINATING — a regression to the old one-line probe reads
+  # every pane here as dead and turns the suite red, instead of passing on a stub that says "claude".
+  *comm*)  tty_live "$tty" && printf '%s\n' "expect" ;;
+  *)       printf '%s\n' "$p" ;;
+esac
 exit 0
 SH
 
@@ -97,6 +164,7 @@ exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/ps" "$SHIM/git"
   export PATH="$SHIM:$PATH"
+  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; : > "$PS_TTY_REG"
 
   REGDIR="$BATS_TEST_TMPDIR/reg";  mkdir -p "$REGDIR"
   PROJDIR="$BATS_TEST_TMPDIR/proj"; mkdir -p "$PROJDIR"
@@ -305,6 +373,25 @@ SH
   run selfclose_inventory_warn "MYSID" ""
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 peer(s) fired by this session"* ]]
+}
+
+# RED-PROOF for the orphan probe itself. The test above resolves the pane to "" and so takes the
+# orphan branch WITHOUT ever reaching the liveness read — which is why the pre-pane_cc_state probe
+# survived here unnoticed. This is the case that separates them: a peer that IS alive, with its CC
+# behind `expect`'s nested pty, so the pane's own tty carries only `expect`. The old one-line probe
+# reads that live peer as DEAD and warns the operator its work is stranded; pane_cc_state crosses
+# the nested pty via the descendant closure and stays silent.
+@test "inventory: a LIVE peer behind expect's nested pty is NOT counted as an orphan" {
+  eval "$(sed -n '/^selfclose_inventory_warn() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^pane_cc_state() {/,/^}/p' "$HF")"
+  mailbox_pending_count() { echo 0; }                  # no unread → (a) silent
+  as_tty() { echo "TTY-LIVEPEER"; }                    # resolves, and that pane HAS a live CC
+  FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$FIRED_DIR"
+  printf '{"paneUUID":"LIVEPEER","firedBy":"MYSID"}\n' > "$FIRED_DIR/LIVEPEER.json"
+  run selfclose_inventory_warn "MYSID" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"fired by this session"* ]]
 }
 
 @test "inventory: silent when nothing is pending" {

@@ -79,37 +79,94 @@ printf '%s' "TTY-$uuid"
 exit 0
 SH
 
-  # ps shim — TWO query forms, mirroring what the real ps answers:
-  #   -t <tty>          the OLD tty-wide check: prints "claude" unless a dead-marker exists.
-  #                     THIS IS THE DEFECT'S SURFACE: it stays satisfiable in the pinned-dead tests,
-  #                     which is what proves the pin (not the tty) is doing the deciding.
+  # ps shim — the PIN's query form, plus the PANE-STATE forms pane_cc_state reads:
   #   -o <f> -p <pid>   the PIN's check, driven by a per-pid fixture file $PS_PID_DIR/<pid>:
   #                     line 1 = comm, line 2 = tty, line 3 = argv. Absent file ⇒ no output ⇒ dead,
-  #                     exactly as real ps behaves for a reaped pid.
+  #                     exactly as real ps behaves for a reaped pid. This fixture WINS over the pane
+  #                     model below, so every pinned-dead test still drives the pin exactly as before.
+  #   -t <tty> / -axo pid=,ppid= / -g <pgid>
+  #                     the UNPINNED fallback's check. pane_cc_state reads a pane in three queries —
+  #                     root pids, their descendant CLOSURE, and the foreground process group — so
+  #                     answering only `-o comm= -t` leaves it `unknown` (fail-safe ⇒ refuses). The
+  #                     pane is modelled as  shell pid=P ppid=1 comm=zsh  +  claude pid=P+1 ppid=P,
+  #                     claude a DESCENDANT and never a root: the `expect` nested-pty shape the
+  #                     closure leg exists to see. A dead-marked tty keeps its shell and loses the CC
+  #                     child ⇒ `shell`, still `!= cc`.
+  #                     THIS REMAINS THE DEFECT'S SURFACE: it stays satisfiable in the pinned-dead
+  #                     tests, which is what proves the pin (not the pane) is doing the deciding.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
-tty="" pid="" want=""
+reg="${PS_TTY_REG:-/nonexistent}"
+root_pid() {                     # $1=tty → that pane's root pid, stable across invocations
+  local t="$1" n
+  n="$(grep -nxF -- "$t" "$reg" 2>/dev/null | head -1 | cut -d: -f1)"
+  if [ -z "$n" ]; then printf '%s\n' "$t" >> "$reg"; n="$(wc -l < "$reg" | tr -d ' ')"; fi
+  printf '%s' "$(( 700000 + n * 10 ))"
+}
+tty_live() { [ -z "${PS_DEAD_DIR:-}" ] || [ ! -e "$PS_DEAD_DIR/$1" ]; }
+
+want="" tty="" pid="" pgid="" all=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    -o) want="$want${2:-}"; shift 2 ;;
-    -t) tty="${2:-}"; shift 2 ;;
-    -p) pid="${2:-}"; shift 2 ;;
-    *)  shift ;;
+    -axo|-Ao) want="$2"; all=1; shift 2 ;;
+    -o)       want="$want${2:-}"; shift 2 ;;
+    -t)       tty="${2##*/}"; shift 2 ;;
+    -p)       pid="${2:-}"; shift 2 ;;
+    -g)       pgid="${2:-}"; shift 2 ;;
+    *)        shift ;;
   esac
 done
+
+if [ "$all" = 1 ]; then                    # the closure: every registered pane, so any root resolves
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"; printf '%s 1\n' "$p"
+    tty_live "$t" && printf '%s %s\n' "$((p + 1))" "$p"
+  done < "$reg"
+  exit 0
+fi
 if [ -n "$pid" ]; then
   f="${PS_PID_DIR:-/nonexistent}/$pid"
-  [ -f "$f" ] || exit 0                       # reaped pid → no line at all
-  case "$want" in
-    *comm*) sed -n 1p "$f" ;;
-    *tty*)  sed -n 2p "$f" ;;
-    *args*) sed -n 3p "$f" ;;
-  esac
+  if [ -f "$f" ]; then                     # the PIN's fixture wins
+    case "$want" in
+      *comm*) sed -n 1p "$f" ;;
+      *tty*)  sed -n 2p "$f" ;;
+      *args*) sed -n 3p "$f" ;;
+    esac
+    exit 0
+  fi
+  while IFS= read -r t; do                 # else a synthetic pane pid, for pid_is_cc over the closure
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"
+    if   [ "$pid" = "$p" ];                          then c=zsh;    a=-zsh
+    elif [ "$pid" = "$((p + 1))" ] && tty_live "$t"; then c=claude; a=/opt/cc/bin/claude
+    else continue; fi
+    case "$want" in *comm*) printf '%s\n' "$c" ;; *tty*) printf '%s\n' "$t" ;; *args*) printf '%s\n' "$a" ;; esac
+    exit 0
+  done < "$reg"
+  exit 0                                   # reaped pid → no line at all
+fi
+if [ -n "$pgid" ]; then                    # the foreground group: shells only (claude is on its pty)
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    p="$(root_pid "$t")"; [ "$pgid" = "$p" ] || continue
+    case "$want" in *comm*) printf '%s zsh\n' "$p" ;; *) printf '%s\n' "$p" ;; esac
+    exit 0
+  done < "$reg"
   exit 0
 fi
 [ -n "$tty" ] || exit 0
-[ -n "${PS_DEAD_DIR:-}" ] && [ -e "$PS_DEAD_DIR/$tty" ] && exit 0
-printf '%s\n' "claude"
+p="$(root_pid "$tty")"
+case "$want" in                            # tpgid BEFORE pid — "tpgid" contains "pid"
+  *tpgid*) printf '%s\n' "$p" ;;
+  *pid*)   printf '%s\n' "$p" ;;
+  # The pane is EXPECT-WRAPPED, so the pre-pane_cc_state probe (`-o comm= -t | grep node|claude`)
+  # sees only `expect` and calls a LIVE pane dead. No caller reads this form any more; modelling it
+  # honestly is what makes these tests DISCRIMINATING — a regression to the old one-line probe reads
+  # every pane here as dead and turns the suite red, instead of passing on a stub that says "claude".
+  *comm*)  tty_live "$tty" && printf '%s\n' "expect" ;;
+  *)       printf '%s\n' "$p" ;;
+esac
 exit 0
 SH
 
@@ -121,6 +178,7 @@ exit 0
 SH
   chmod +x "$SHIM/osascript" "$SHIM/ps" "$SHIM/git"
   export PATH="$SHIM:$PATH"
+  export PS_TTY_REG="$BATS_TEST_TMPDIR/ps-tty-reg"; : > "$PS_TTY_REG"
 
   REGDIR="$BATS_TEST_TMPDIR/reg";   mkdir -p "$REGDIR"
   PROJDIR="$BATS_TEST_TMPDIR/proj"; mkdir -p "$PROJDIR"

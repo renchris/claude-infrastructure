@@ -2039,13 +2039,11 @@ selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
       fb="$(jq -r '.firedBy // empty' "$f" 2>/dev/null)"; [ "$fb" = "$sid" ] || continue
       fp="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$fp" ] || continue
       ftty="$(as_tty "$fp" 2>/dev/null || true)"
-      # KNOWN-BLIND, left as-is deliberately (2026-08-06). This tty-only read cannot see a peer
-      # whose CC sits behind `expect`'s nested pty, so it over-counts orphans — but its only act is
-      # an advisory WARN, and converting it to pane_cc_state would need a fixture upgrade in four
-      # self-close suites for no change in behaviour. Backlogged with its two siblings at :2639 and
-      # :3391; all three fail SAFE (they warn or refuse), unlike the two acting sites this commit
-      # converts. Do not "fix" one of the three alone — they share a fixture problem, not a bug.
-      if [ -z "$ftty" ] || ! ps -o comm= -t "$(basename "$ftty")" 2>/dev/null | grep -qE 'node|claude'; then
+      # ORPHAN = "not affirmatively alive", so the test is `!= cc` and NOT `= shell`: an unreadable
+      # pane must still warn. That keeps the fail-safe polarity the tty-only read had, while
+      # pane_cc_state removes its blindness to a peer whose CC sits behind `expect`'s nested pty —
+      # which made every such live peer read as an orphan and inflated this count.
+      if [ -z "$ftty" ] || [ "$(pane_cc_state "$ftty")" != cc ]; then
         fired_orphans=$((fired_orphans + 1))
       fi
     done
@@ -2643,9 +2641,10 @@ if [ "${1:-}" = "__selfclose" ]; then
       echo "!! close-instant pin check FAILED: session ${SUCCESSOR_PIN%% *} (pid ${SUCCESSOR_PIN##* }) is gone or no longer on ${SUCCESSOR_TTY:-?}" >&2
     fi
   elif [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_TTY" ] && \
-     ! ps -o comm= -t "$(basename "$SUCCESSOR_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
-    # KNOWN-BLIND to a successor behind `expect`'s nested pty — see the note at :2042. Fails SAFE
-    # (a miss ABORTS the close and leaves both panes alive), so it is backlogged, not fixed here.
+     [ "$(pane_cc_state "$SUCCESSOR_TTY")" != cc ]; then
+    # `!= cc` keeps the fail-SAFE polarity (a miss ABORTS the close and leaves both panes alive)
+    # while removing the blindness that made an expect-wrapped successor read as DEAD at T-0 — a
+    # false strand-risk abort on a perfectly live continuation, which is how this path fails.
     _t0_dead=1
   fi
   if [ "$_t0_dead" = 1 ]; then
@@ -3394,18 +3393,18 @@ USAGE
       1) echo "!! self-close ABORTED: successor pane $SC_SUCCESSOR resolves to session ${SUC_PIN%% *} (pid ${SUC_PIN##* }) and THAT process is gone — or no longer owns tty $SUC_TTY. A node/claude merely sharing the pane's tty is NOT proof the continuation is running; refusing to close." >&2
          echo "!!   recover: re-fire the successor, or point --successor at the pane that is actually continuing the work (--terminal if truly nothing continues)." >&2
          exit 3 ;;
-      *) # UNPINNABLE — no registry row / no session_id / no pid. Fall back to the tty-only check
+      *) # UNPINNABLE — no registry row / no session_id / no pid. Fall back to the PANE-STATE check
          # the pin replaces, but say so: an adopted operator pane legitimately has no row, and
-         # refusing every such close would be worse than the weaker proof. KNOWN-BLIND to a
-         # successor behind `expect`'s nested pty — see the note at :2042. Fails SAFE (refuses),
-         # so it is backlogged rather than converted here.
-         if ! ps -o comm= -t "$(basename "$SUC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+         # refusing every such close would be worse than the weaker proof. Still weaker than a pin
+         # (ANY CC in the pane's process tree satisfies it, not the specific continuation), but no
+         # longer BLIND to one behind `expect`'s nested pty — which refused these closes outright.
+         if [ "$(pane_cc_state "$SUC_TTY")" != cc ]; then
            echo "!! self-close ABORTED: no live claude on successor pane $SC_SUCCESSOR ($SUC_TTY) — refusing to close a session whose continuation is not running" >&2
            exit 3
          fi
          SUC_PIN=""
-         echo "⚠ successor $SC_SUCCESSOR is NOT session-pinnable (no session_id+pid in $REG_DIR/$SC_SUCCESSOR.json) — falling back to the tty-only liveness check, which ANY node process on $SUC_TTY satisfies" >&2
-         echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY · tty-only, UNPINNED)" ;;
+         echo "⚠ successor $SC_SUCCESSOR is NOT session-pinnable (no session_id+pid in $REG_DIR/$SC_SUCCESSOR.json) — falling back to the pane-state check, which ANY live CC in $SUC_TTY's process tree satisfies" >&2
+         echo "→ successor verified alive: $SC_SUCCESSOR (tty $SUC_TTY · pane-state, UNPINNED)" ;;
     esac
     # ENGAGEMENT gate (BIRTH IS NOT ENGAGEMENT, item ff2d6609a33e — the same lesson the spawn path
     # learned). Process-alive proves the pane BOOTED, not that it INGESTED work: a cold-fire whose
