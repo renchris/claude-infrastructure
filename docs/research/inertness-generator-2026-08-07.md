@@ -320,3 +320,68 @@ message is an advisory store with one reader, so the exchange is recorded here:
 Both documents stand; T0–T3 remain the lane's. The generator-level law survives contact narrowed,
 not refuted — and the narrowing came through the one channel this document argued for: a store a
 mechanism reads (the lane's own escalation path), not a reader's discretion.
+
+## 10. Faces 3–4 and the F3 lint, as built (2026-08-07, `cc-backlog 6078392359ac`)
+
+Pre-req confirmed before starting: the lane's T2 advance-by-default is on trunk, and the wedge §1
+item 2 measured has drained — **live-layer lag 104 → 8 commits**. F2's prediction held.
+
+| Face | Landed | What it is |
+|---|---|---|
+| 3 · activations become migrations | `6c695187` | `migrations/` + `scripts/deploy-migrations.sh`, run by the converger. |
+| 4 · ✅ moves one store right | `55ee2b8a` | `wrap-ledger` rung 🚀 between 📦 and 👤; `operator-readout` arm. |
+| §6 F3 · reproduction lint | `8582749a` | `scripts/permission-gate-lint.sh`, blocking leg of `run_gate`. |
+
+**Face 3.** Two phases at every converge. *Materialise* makes the live pending-activation queue a
+derived view of `docs/activation/pending-activation/`, so REPO-ONLY and CONTENT-DRIFT cannot survive
+one cycle; a dry run against the live box reproduced all 7 of that morning's drifts and would clear
+them in one pass. LIVE-ONLY deliberately remains a finding — the converger never writes repo-side,
+because a `cp live -> repo` recreates a committed file as a local diff the next ff must conflict on.
+*Migrate* runs un-applied `migrations/*.sh` once, ledgered, with failure as an **event**: it stops
+the ordered run, retries with a climbing attempt count, and clears on recovery.
+
+**The C10 boundary was NOT crossed, and that is the load-bearing design decision.** §3 says the
+rescope — *operator runs* → *operator can revert* — is the one clause a human must ratify once. It
+has not been ratified, so the runner does not self-authorize it: every migration declares its class,
+`mechanical` runs at converge, `c10` is **staged and never executed** — filed once into `cc-backlog`,
+whose event-keyed ids make "paged once" a property of the store rather than of a damping window. An
+undeclared class is a hard error rather than a default, because *both* defaults are wrong: mechanical
+would run a settings-touching migration unattended, and c10 would silently rejoin the hand-queue this
+mechanism exists to abolish. Promoting a migration the day the rescope is ratified is a one-word diff.
+
+**Face 4** is bounded, and the bound is the whole design. The converger ticks every 600 s, so a
+session that lands and closes immediately *always* sees live < HEAD; a rung that fired there would
+fire at every write-close and carry exactly as many bits as one that cannot fire at all. So inside
+the budget the fact is attached to ✅, and only a lag **past** budget mints 🚀. This is §9's narrowed
+law applied to the close protocol rather than to an actuation path.
+
+**The F3 lint implements §9's narrowed law, not §3's absolute** — a guard-refusal on an actuation
+path must carry a *declared* finite escape. Whether a gate is bounded is not decidable from bash, and
+the 07-30 panel's finding was precisely that the expectation is never a durable machine-readable
+declaration; so the lint requires the declaration rather than inferring it. Its controls are the real
+artifacts recovered from git: RED on `0c393936`'s unbounded stamps-dir gate (the 545-refusal scar),
+GREEN on `dcf2f11a`'s fix carrying the same predicate and the same `die` with its bound declared.
+Same shape, opposite verdicts. The ratchet is a per-file **count**, since a path allowlist would
+exempt `ship-land.sh` wholesale and every new gate leg added to it.
+
+### What this does NOT close
+
+- **The C10 ratification** is still the one human decision, and it now has a mechanism waiting for it
+  rather than a design document. Filed as an operator step.
+- **The 38 legacy queue entries** are not reclassified. Which are still needed is per-item judgment,
+  not a mechanical sweep; new wiring goes through `migrations/` instead.
+- **F1 remains unrun by construction** — it needs *the next* correct analysis, landed through this
+  path. This section is the instrument, not the result.
+
+### The scar this section exists to record
+
+Two sessions built this simultaneously. `cc-backlog` held **two claimed items for one condition** —
+`6078392359ac` (this one) and `97f16b6709fa` — because its event key is project+title+source, so two
+wordings of one condition hash differently. Both worktrees independently produced a declaration-based
+migration runner with a mechanical/operator class split, a new bounded rung between 📦 and 👤 for
+landed-but-not-live, fail-open on an unresolvable sensor, and a content-hash escape on the retry
+latch. The convergence is real evidence the design is forced; the duplication is pure waste, and it
+is the *same defect one level up* — the ledger's dedupe is a permission-style predicate on a
+**state record** (a title hash) that rots the moment the same condition is described differently.
+A dispatch that leased the CONDITION rather than the row would have caught it. Filed rather than
+fixed here: it is the dispatcher's edge, not this document's.
