@@ -609,6 +609,114 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$(status_of onecyc00bb01)" = open ]
 }
 
+# ── SELF-RELEASE (backlog 98e0e325b3ed) ──────────────────────────────────────────────────────────
+# Rule B is the only rule in reap that fires on TRAIL SHAPE ALONE, and cc-dispatch writes that exact
+# shape whenever it CANNOT FIRE — it claims before spawning and rolls its own claim back on a refused
+# fire (capacity gate rc 9), a failed brief compose, or a failed worktree provision. Measured on the
+# live store 2026-08-07: 228 items blocked "persistent thrash — the worker cannot land", every
+# counted pair same-author, 182 of them with no claim that ever survived the 90 s window — i.e. no
+# worker had run at all. `blocked` is the operator-only state that cc-dispatch excludes from the
+# wave, so each one left the autonomous queue permanently.
+#
+# The pair of tests below is the whole contract, and NEITHER is meaningful alone: the first proves
+# the exclusion happens, the second proves the rule can still convict. A fix that only had the first
+# would be indistinguishable from deleting rule B.
+
+@test "reap: self-released fast cycles are NOT thrash — the dispatcher could not FIRE, no worker ran" {
+  reap_env
+  rec '{"id":"selfrel00001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"SelfRel"}'
+  rec '{"id":"selfrel00001","ts":"2026-01-01T00:00:10Z","event":"claim","by":"d-1"}'
+  rec '{"id":"selfrel00001","ts":"2026-01-01T00:00:14Z","event":"reopen","by":"d-1","selfRelease":true,"releaseReason":"spawn-fail"}'
+  rec '{"id":"selfrel00001","ts":"2026-01-01T00:00:20Z","event":"claim","by":"d-2"}'
+  rec '{"id":"selfrel00001","ts":"2026-01-01T00:00:24Z","event":"reopen","by":"d-2","selfRelease":true,"releaseReason":"spawn-fail"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of selfrel00001)" = open ]           # pre-fix: blocked (RED)
+  # …and the exclusion is LOUD. A silent one is indistinguishable from an inert one, and the count it
+  # suppresses is real news about the machine even though it is not news about the item.
+  [[ "$output" == *"self-release"* ]] || false
+}
+
+@test "reap: an UNFLAGGED fast cycle still blocks — the positive control for the self-release fix" {
+  reap_env
+  rec '{"id":"thrashreal01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RealThrash"}'
+  rec '{"id":"thrashreal01","ts":"2026-01-01T00:00:10Z","event":"claim","by":"w-1"}'
+  rec '{"id":"thrashreal01","ts":"2026-01-01T00:00:14Z","event":"reopen"}'
+  rec '{"id":"thrashreal01","ts":"2026-01-01T00:00:20Z","event":"claim","by":"w-2"}'
+  rec '{"id":"thrashreal01","ts":"2026-01-01T00:00:24Z","event":"reopen"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of thrashreal01)" = blocked ]
+}
+
+@test "reap: a self-release does NOT launder a real thrash — mixed trail still blocks" {
+  # The exclusion is per-PAIR, not per-item. An item that genuinely bounces a worker off twice blocks
+  # even if a refused fire happens to sit in the same trail; otherwise one lucky capacity refusal
+  # would buy an unlimited thrash budget.
+  reap_env
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Mixed"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:10Z","event":"claim","by":"d-1"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:14Z","event":"reopen","by":"d-1","selfRelease":true,"releaseReason":"spawn-fail"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:20Z","event":"claim","by":"w-1"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:24Z","event":"reopen"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:30Z","event":"claim","by":"w-2"}'
+  rec '{"id":"mixedthr0001","ts":"2026-01-01T00:00:34Z","event":"reopen"}'
+  run bash "$CB" reap
+  [ "$status" -eq 0 ]
+  [ "$(status_of mixedthr0001)" = blocked ]
+}
+
+@test "reopen --self-release writes selfRelease:true + the reason token" {
+  local id; id="$(bash "$CB" add --project /r --title 'self-release record')"
+  bash "$CB" claim "$id" --by w-1 >/dev/null
+  run bash "$CB" reopen "$id" --by w-1 --self-release spawn-fail
+  [ "$status" -eq 0 ]
+  run tail -1 "$CC_BACKLOG_FILE"
+  echo "$output" | jq -e '.event=="reopen" and .selfRelease==true and .releaseReason=="spawn-fail"'
+}
+
+@test "reopen --self-release is CLOSED-SET — a typo is rc 2 at the door, never free text" {
+  # This flag SUPPRESSES a guard. A near-miss spelling accepted as free text would be a silent
+  # un-suppression that reads as though it worked (memory: default-path-hardening-is-blind-to-the-
+  # explicit-argument). The near-miss is deliberate: `spwan-fail` differs from a valid token by a
+  # transposition, so a substring/prefix match would let it through.
+  local id; id="$(bash "$CB" add --project /r --title 'closed set')"
+  bash "$CB" claim "$id" --by w-1 >/dev/null
+  run bash "$CB" reopen "$id" --by w-1 --self-release spwan-fail
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown --self-release"* ]] || false
+  [ "$(status_of "$id")" = claimed ]                       # nothing was written
+  run bash "$CB" reopen "$id" --by w-1 --self-release worktree-fail   # control: a REAL token passes
+  [ "$status" -eq 0 ]
+}
+
+@test "reopen --self-release requires --by, and ONLY the folded claimer may assert it" {
+  local id; id="$(bash "$CB" add --project /r --title 'claimer authenticated')"
+  bash "$CB" claim "$id" --by w-1 >/dev/null
+  run bash "$CB" reopen "$id" --self-release spawn-fail                # anonymous ⇒ unattributable
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"requires --by"* ]] || false
+  run bash "$CB" reopen "$id" --by w-9 --self-release spawn-fail       # a THIRD party asserting it
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"Only the live claimer may self-release"* ]] || false
+  [ "$(status_of "$id")" = claimed ]                                   # still held, nothing written
+  run bash "$CB" reopen "$id" --by w-1 --self-release spawn-fail       # control: the claimer itself
+  [ "$status" -eq 0 ]
+}
+
+@test "reopen --self-release survives --force, and --self-release is reopen-only" {
+  # --force overrides the REOPEN GUARDS. The claimer check is not one of them — it is the flag's own
+  # authenticity condition — so it must still refuse under --force, or --force becomes the way to
+  # stamp a self-release onto somebody else's live claim.
+  local id; id="$(bash "$CB" add --project /r --title 'force does not launder')"
+  bash "$CB" claim "$id" --by w-1 >/dev/null
+  run bash "$CB" reopen "$id" --by w-9 --self-release spawn-fail --force
+  [ "$status" -eq 4 ]
+  run bash "$CB" block "$id" --needs 'a step' --self-release spawn-fail
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"applies only to reopen"* ]] || false
+}
+
 @test "reap: a slow claim→reopen (gap > THRASH_WINDOW_S) is NOT a fast-fail cycle" {
   reap_env
   rec '{"id":"slowcyc0cc01","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"Slow"}'
