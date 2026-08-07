@@ -507,9 +507,21 @@ no lock, and `run.lock.d` still lives only at `scripts/postland-verify.sh:379`.
 15. **Reap idle `next-server` dev servers.** 6 concurrent / ~7.1 GB measured live, one at 5.82 GB
     and still growing after 38 minutes; no reaper, cap, or census exists anywhere in `scripts/`,
     `bin/` or `hooks/`. Larger and far more durable than the commit-gate term §7-bis was filed about.
-16. **Make the sentinel snapshot attributable.** `head -80` on argv plus a COMM-only top-30 means
-    the forensic record cannot say what consumed the memory — the defect that let §7-bis's item name
-    an unverified cause. Print argv for the top-N *by RSS* rather than truncating a separate list.
+16. ~~**Make the sentinel snapshot attributable.**~~ **DONE 2026-08-07** — `head -80` on argv plus a
+    COMM-only top-30 meant the forensic record could not say what consumed the memory, which is the
+    defect that let §7-bis's item name an unverified cause. `scripts/compressor-sentinel.sh` now
+    inverts the composition: `top_by_rss` ranks by RSS and prints the **full argv** of the rows that
+    ranked, so the section's bound is a *rank* in the quantity the incident is about rather than a
+    line cut over an unranked, name-filtered list. `rss_by_exe` keeps the one thing the old list
+    caught by accident — a swarm of small identical workers — as an explicitly coarse total. The
+    twelve follow-up samples render the same thing (they were the blindest part of the record: a
+    process born after the trip appeared in no section at all). Seams `CC_SENTINEL_SNAP_TOPN` (30) ·
+    `_TOPN_FUP` (10) · `_ARGV_MAX` (400, and the cut stamps how much it dropped) · `_AGG_N` (15),
+    each refused at startup if non-numeric, because awk turns `-v n=abc` into 0 and an n of 0 renders
+    a header with nothing under it — a typo would silently restore this exact blindness.
+    Live verification on the same box: the 2.6 GB `node` row that this document could only call
+    `node` now reads `…/wt-n16-conn-consumers/…/eslint.js src/ lib/ replicache/ --cache`.
+    11 tests in `tests/compressor-sentinel.bats` §7, all red against the pre-fix script.
 17. **Not recommended: serializing per-worktree commit gates.** Rejected on measured grounds
     (`MACHINE_CAPACITY_V2.md` §6 + R1/AC5); see §7-bis.
 
