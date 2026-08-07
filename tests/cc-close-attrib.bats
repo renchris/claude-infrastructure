@@ -303,3 +303,26 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   [ "$status" -eq 1 ]
   grep -q '"exit_code":1,' "$(rec)"          # ...and the record carries the TRUE code, not 0
 }
+
+# ── (viii) the fd2-holder leak (2026-08-07 load-781 incident). The >(tee) procsub's stdin is the
+# session's fd2, and every process the session ever backgrounded inherits that fd — so a binary
+# that dies leaving even ONE orphan keeps tee EOF-less, and bash waits for the procsub at exit:
+# the wrapper lingered beside its dead session (measured: 43 of 59 wrappers, S+ up to 10h, each
+# pinning a tee and its pipeline's zombies). The fix reaps the wrapper's OWN tee after the record
+# is written. This test IS the incident in miniature: the stub leaves a 25s orphan holding fd2;
+# pre-fix the wrapper exits only when that orphan dies (~25s), post-fix promptly.
+
+@test "(viii) an orphan holding the session's fd2 cannot pin the wrapper past its record" {
+  # >/dev/null is load-bearing: the orphan must hold ONLY fd2 (the procsub pipe). Left on fd1 it
+  # would hold the wrapper's REAL stdout — the bats capture pipe — and this test would measure
+  # the orphan's lifetime on either side of the fix, discriminating nothing.
+  mk_stub "$BATS_TEST_TMPDIR/bin-claude" \
+    '( sleep 25 >/dev/null & )' \
+    'exit 7'
+  t0=$(date +%s)
+  run bash "$WRAP" "$BATS_TEST_TMPDIR/bin-claude"
+  t1=$(date +%s)
+  [ "$status" -eq 7 ]                        # the child's code survives the reap path
+  [ $((t1 - t0)) -lt 15 ]                    # pre-fix this is ~25s (the orphan's lifetime)
+  grep -q '"exit_code":7,' "$(rec)"          # and the record was written BEFORE the tee reap
+}
