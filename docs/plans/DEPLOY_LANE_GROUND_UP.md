@@ -584,3 +584,56 @@ layer, not a green gate.**
 
 - **2026-08-06** — Diagnosed and handed off. Live layer 85 behind, 536 refusals, 2 greens in 85 runs.
   Evidence landed as `955a8d2b` + `d0209925`. This plan created for the `/ground-up` successor.
+
+- **2026-08-07 — T1/T2/T3 built, verified and LANDED (`dcf2f11a`).** Six paths content-verified on
+  trunk (`git ls-tree` present + `git diff` empty on each; the original shas are not ancestors because
+  `ship-land` rebases, which is exactly why this repo verifies by content).
+
+  | Suite / gate | Verdict, re-run on the MERGED tree |
+  |---|---|
+  | `tests/deploy-live.bats` | rc=0, plan `1..47`, 47 ok (baseline 37 → **+10**) |
+  | `tests/cc-blockers.bats` | rc=0, plan `1..88`, 88 ok (baseline 81, +6 t3, +1 lead) |
+  | shellcheck / `bash -n` | clean on `deploy-live.sh`, `cc-blockers`, and the activation script |
+  | budget env agreement | **verified** across both files, not inherited from the brief |
+
+  **A non-verdict was correctly not read as a red.** The first `deploy-live.bats` run returned
+  **rc 75** — `cc-bats: REFUSED — 2 concurrent bats execution root(s) … AND load/core ≥ 2.0` — with
+  `ok=0 notok=0`. Lead-caused (two suites in parallel), zero tests executed, so it is a non-verdict per
+  R6 and was re-run alone. Recorded because scoring it red would have convicted a healthy tree.
+
+  **Both teammates policed their own vacuous controls**, which §2.8 A-6 demands and which is the
+  failure mode this repo has been bitten by: t3 marked its silence test *partly vacuous* (its negative
+  half passes on the pristine tree by construction) and forced each budget leg to 0 in turn instead of
+  counting a free pass; t2 found L1 passes pre-change by construction and attributed it with a mutant
+  that lets T2 preempt T1. t3 also attributed its render test with a **one-site `LAND_SEL` mutant that
+  reddens that test and nothing else.**
+
+  **Lead-fixed defect t3 flagged against itself** (`c50685b0`): `hrs()` rounds to nearest, so a 5h45m
+  layer rendered *"HEAD 6h old"* beside a 6h budget while the row had fired on the **commits** leg —
+  telling the operator the wrong leg tripped. Floored at that site only (`hrs()` has three other
+  callers where rounding is right); RED-proven at exactly `[ "$age" -lt 6 ]`.
+
+### 2026-08-07 — the state moved mid-session, and it CONFIRMS §1.2 rather than dating it
+
+At 01:56:38 a **sibling session** fast-forwarded the shared checkout `a9060c18 → 13672c26`
+(`merge <sha>: Fast-forward`). `ship-land.sh` does **not** sync the shared checkout — grepped, no
+ff-sync exists — so this was an ungated writer, precisely the second path §1.2 names.
+
+- **Blocker B resolved itself.** The sibling's `hooks/backup-before-write.sh` landed, the tree went clean, and the ungated path resumed **immediately** — which is the confirming experiment for §1.7's claim that the dirty file, not the stamp gate, was what stopped *every* writer for 33h. `merge-tree --write-tree` now rc=0. Filed operator step `8fdefffaabf7` retired as stale (`work-item-remedy-can-become-forbidden`: a park keyed on a mechanism fact that a later fix silently obsoletes).
+- **Blocker A is untouched and now demonstrably HEAD-independent.** `deploy.log` refuses with the *same* target against the *new* live HEAD: `target 3725e5432bfc is not a descendant of live HEAD 13672c26e4bb`. The deadlock followed the layer forward, which is what an absorbing state does.
+- **v2 is landed and NOT live** — the layer sits 7 commits below `dcf2f11a`, and the live copies carry **0** hits for `CC_DEPLOY_DEGRADE` and **0** for `deploy-stale`. This is §2.6c's predicted circle, observed rather than argued.
+
+### Acceptance status against §2.8 — three buckets, no predictions
+
+Per §1.9 this session may not close on a forecast, so each criterion is bucketed by what disk says now.
+
+| | Criterion | Bucket |
+|---|---|---|
+| A-5 / A-6 | one RED-control per guard leg, vacuous controls named | **PROVEN** — verdicts above, each control RED against a `git archive` pristine tree |
+| — | v2 lands on trunk, content-verified | **PROVEN** — `dcf2f11a`, six paths |
+| A-1 / A-2 | the lane advances, verified by content | **ACCRUING** — gated on the activation below; read via `rev-list --count HEAD..origin/main` falling twice ≥1 tick apart, plus the symlink-target hash |
+| A-3 | refusals stop increasing | **ACCRUING** — `grep -c 'would ROLL BACK' deploy.log` across ≥2 launchd ticks (`runs=` advancing) |
+| A-4 | non-advance becomes loud | **ACCRUING** — a `deploy-stale` row on `cc-blockers` once the alarm is live |
+
+The gap between PROVEN and ACCRUING is exactly one operator step, and it is the ceiling this session
+can reach: **acceptance is a deployed layer, and the agent cannot deploy it.**
