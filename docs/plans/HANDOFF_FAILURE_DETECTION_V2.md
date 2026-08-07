@@ -4,7 +4,32 @@ status: in-progress
 
 # HANDOFF_FAILURE_DETECTION_V2 — deskless failure detection, ground-up
 
-**Status:** Phase 1 (measurement) · started 2026-08-07 · branch `deskless` · worktree `.worktrees/deskless`
+**Status:** Phase 4/5 (T2 gate queued behind corpus mutex; all other slices landed on branch) · started 2026-08-07 · branch `deskless` · worktree `.worktrees/deskless`
+
+## Landed ledger (branch `deskless`, in order)
+
+| Commit | What |
+|---|---|
+| e30f6560 | plan: frame, invariants, design |
+| 88c69114 | plan: scope grown — D7 trapdoor (247's finding, verified :4724) + D8 |
+| 5afe8429 | **D8** cc-notify resolves kitty numeric pane ids (RED-proven, 64/64) |
+| fda6d324 | plan: R2 telemetry (desk 0/389 over 19d; HUSK 25 real / 22 unread; p95 41min) |
+| 76b28668 | plan: Phase 1 closed (researchers died; census by lead; reaper fix already landed) |
+| 39b1e25b | **D9** completion-push suite hermeticity (was 93.7% of live husk traffic) |
+| e9283b66 | **D1** hf_alarm capture-before-notify at all 3 sites (t1; 15/15 + built-in pristine RED; per-site mutants) |
+| e5300a6a | **D7** picker desk-arm ownership demotion (lead; 29/29 anchor suites; RED='200 2') |
+| a698bec9 | **D5+D6** cc-escalations CLI + desk-invariant opt-in gate (t4; 11/11+35/35; dual seen-key discovery) |
+| ce0c52a9 | plan: frozen interface corrected (dual seen-keys) |
+| d727c035 | docs: map row 14 |
+| 9259ea3a | **D3** escalation-watch + readout ◆ line + activation 33 (t3; 87/87; surfaced 52 live undrained records on first run) |
+| d9c54dc6 | plan: as-built corrections (cc-notify push; sweep-liveness on sweep's own idl rows) |
+
+**Pending:** D2+D4 (t2-sweep — code done, statically green; bats gate queued behind a full-corpus
+postland run under the capacity mutex, correctly not overridden). T2's live pre-measurement:
+1,019 teardown markers (1,013 past deadline), close-attrib.jsonl = 1 row, `it2 session list`
+returns SHORT NUMERIC ids ⇒ bare substring pane-match would mint ~40 false orphans on tick one —
+exact-token matching + one hoisted probe per sweep + a per-tick adjudication cap are its three
+deviations (all in the right direction; detail in its final report).
 **Dispatch:** fired by session 247 (lakehouse) · brief `/tmp/deskless-brief.md` (disposable — its durable facts are carried HERE)
 **Map seam:** no dedicated GROUND_UP_REBUILD_MAP row — this sits on the seam of row 2 (lifecycle, DONE 2026-07-29), row 3 (cross-session comms), row 10 (operator surface).
 
