@@ -269,8 +269,14 @@ New helper `hf_alarm <class> <detail>` replacing the raw pushes at :2790 (STRAND
    capture can never fail wider than itself; add-on blast-radius law) into
    `~/.claude/handoff-alarms/alarm-<utc>-<pid>-<rand>.json`:
    `{kind:"handoff-alarm", class, pane, sid, successor, detail, ts}`.
-2. **Push second**, best-effort accelerator: `cc-announce` (bounded), rc + `verdict=` token CAPTURED
-   and echoed to the watcher log — the `>/dev/null 2>&1 || true` idiom is banned at these sites.
+2. **Push second**, best-effort accelerator — **as built: `cc-notify` directly** (bounded, rc +
+   `verdict=` token captured; the original prose here said cc-announce, but its retry+alarm-record
+   layer is redundant once WE record first — one record per event, not two). The
+   `>/dev/null 2>&1 || true` idiom is banned at these sites. Two as-built notes that are
+   load-bearing: the `HANDOFF-<CLASS>:` message prefix is kept VERBATIM (five consumers grep those
+   exact tokens — cc-mail NOISE list, mailbox-drain, three selfclose suites; pinned by a test), and
+   the old `[ -x cc-notify ]` wrapper is gone, so a box with no cc-notify now writes a
+   `refused-rc127` record instead of nothing (absence becomes visible — the intended polarity).
 3. **Verdict sidecar** `<record>.verdict` written after the push (`reached|recorded|refused-rcN`);
    a record with no sidecar reads as refused (fail-closed, I12) — crash-safe at every instant.
 Kill switch: `CC_HF_ALARM_RECORDS=0` → legacy push-only.
@@ -296,8 +302,14 @@ Kill switch: `CC_SWEEP_LADDER=legacy`.
 un-`.seen` escalation records (handoff-alarms/ · cc-announce-alarms/ · completion-push non-verified
 · pages/) as counts-per-class + first-lines (bounded), once per session, fail-open, reads-only.
 Plus ONE counted line in `operator-readout.sh`'s standing block (additive).
-Includes sweep-liveness: "sweep last ran Nm ago" goes red > 15 min (the watcher-of-the-watcher, I5 —
-reads idl.jsonl tail, no new store).
+Includes sweep-liveness: "sweep last ran Nm ago" goes red > 15 min (the watcher-of-the-watcher, I5).
+**As built:** keyed on the sweep's OWN rows (`"tool":"autonomy-sweep"`), NOT newest-ts-in-file —
+idl.jsonl is a shared ledger (waiting-recycle alone 9,733 rows) where file-tail measures "did ANY
+hook run" and can never go stale while a session is open; the naive form was the exact
+proxy-independence failure F7 exists to close (t3 deviation, mutation-controlled). The
+operator-readout ◆ line is a SUPPLEMENT riding an already-firing close block, never the fire
+predicate — escalation-watch at SessionStart is the guarantee (widening the readout predicate would
+be behavioral, deliberately not done in this land).
 Registered via staged activation (I11). Kill switch: `CC_ESCALATION_WATCH=0`.
 
 ### D4 — author-death join (autonomy-sweep.sh, same owner as D2)
