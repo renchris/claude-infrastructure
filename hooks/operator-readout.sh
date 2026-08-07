@@ -247,8 +247,31 @@ render_block() {
       # green-stamp-gated deploy (never a raw pull — that ships whatever is on origin, verified or not)
       # Field 4 = the STEM: a short human name for this step, used by the collapse line so it can
       # say WHICH runnable steps cc-do covers without pasting three full command lines.
-      [ "$behind" -gt 0 ] && printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\tdeploy-live\n' \
-        "$(tildify "$dscript")" "$behind" "$sbr" >> "$steps_file"
+      #
+      # ── AND RUNNABILITY-CHECKED, not merely existence-checked (DEPLOY_LANE_GROUND_UP §2.6 D5) ──
+      # I11 above stops this line naming a path that does not exist. It did NOT stop it plattering a
+      # command that exists and cannot succeed: for 534 consecutive refusals this row said `▶ bash
+      # …/deploy-live.sh` about a lane that was structurally unable to advance. Both teach the same
+      # lesson — the board lies. Ask the lane itself (`--offline`: its own T1/T2/T3 verdict, decided
+      # against the already-fetched origin/main, so the probe neither hits the network nor can
+      # manufacture the refusal it reports), and on a refusal downgrade the row to class `held`.
+      # `held` draws no runnable slot and cc-do never executes it — the two surfaces agree because
+      # they ask the same arbiter, not because they carry the same copy of its ladder.
+      if [ "$behind" -gt 0 ]; then
+        local dout drc
+        dout="$(DEPLOY_REPO="$SHARED" bash "$dscript" --dry-run --offline 2>&1)"; drc=$?
+        if [ "$drc" -eq 0 ]; then
+          printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\tdeploy-live\n' \
+            "$(tildify "$dscript")" "$behind" "$sbr" >> "$steps_file"
+        else
+          local dwhy
+          dwhy="$(printf '%s\n' "$dout" | tail -1 | tr -d '\t')"
+          dwhy="${dwhy#deploy-live: }"; dwhy="${dwhy#REFUSED — }"
+          [ "${#dwhy}" -gt 96 ] && dwhy="$(printf '%.93s...' "$dwhy")"
+          printf 'held\t⊘\tdeploy HELD: live layer %s behind origin/%s — the lane refuses: %s\tdeploy-live\n' \
+            "$behind" "$sbr" "${dwhy:-exit $drc}" >> "$steps_file"
+        fi
+      fi
     fi
   fi
 
@@ -488,7 +511,7 @@ render_block() {
   # class = MAX + 4 lines worst case. MAX's meaning narrows from "total lines" to "itemized lines".
   # Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer exactly.
   local total=0 cls mark text stem
-  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0 c_yours=0
+  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0 c_yours=0 c_held=0
   # PASS 1 — count per class. Fork-free: a `< file` redirect is not a fork, and this REPLACES the
   # `grep -c .` that used to compute the total, so the class budget costs one fork LESS than the
   # flat renderer it supersedes (C19: no new fork may enter render_block).
@@ -503,6 +526,10 @@ render_block() {
       # `yours` counts toward the TOTAL (so it can fire the block on its own) but into its own
       # counter — which is precisely what keeps it out of c_backlog and out of the allocation below.
       yours)      c_yours=$((c_yours + 1)) ;;
+      # `held` follows `yours`'s shape for the same reason and one more: it is a runnable class the
+      # ACTUATOR has refused, so counting it into c_deploy would let a command the lane rejects draw
+      # a slot in the collapse line and be named as runnable — the exact defect §2.6 D5 closes.
+      held)       c_held=$((c_held + 1)) ;;
     esac
   done < "$steps_file"
   TOTAL="$total"
@@ -560,6 +587,10 @@ render_block() {
     local _run=$(( c_deploy + c_activation )) _jud=$(( c_decision + c_backlog )) _lead=""
     [ "$_run" -gt 0 ] && _lead="${_run} runnable now"
     [ "$_jud" -gt 0 ] && _lead="${_lead:+$_lead, }${_jud} need your call"
+    # `held` is its own leg or the partition stops summing to `total` — and, with a held row as the
+    # ONLY item, without this clause the fallback below would call it a "manual step", which is the
+    # one thing it is not. It is nobody's action: the lane refused, and the lane will retry.
+    [ "$c_held" -gt 0 ] && _lead="${_lead:+$_lead, }${c_held} held"
     # `yours`-only ⇒ the fallback must NOT fire: "2 step(s) are yours · 2 manual step(s)" restates
     # the same two items as if they were four.
     if [ -n "$_y" ]; then _lead="${_y}${_lead:+ · $_lead}"; else _lead="${_lead:-${total} manual step(s)}"; fi
@@ -603,6 +634,18 @@ render_block() {
       else                     printf ' ↳ cc-backlog list --blocked   [+%s more yours]\n'    "$(( c_yours - y_shown ))"; fi
     fi
     shown="$y_shown"
+  fi
+
+  # ── ⊘ HELD — rendered in BOTH modes, because it lives above the collapse/itemise fork ────────────
+  # A runnable step whose own actuator says it would refuse right now. Never numbered into anything
+  # pasteable and never collapsed into `▶ cc-do`'s runnable count: the operator must not read it as
+  # a step they can take. It is still SHOWN, because the state it reports (a stale live layer) is
+  # real, and a row that silently disappears on refusal is how 534 refusals passed for normal.
+  if [ "$c_held" -gt 0 ]; then
+    while IFS="$TABC" read -r cls mark text stem; do
+      [ "$cls" = held ] || continue
+      printf ' %s %s\n' "$mark" "$text"
+    done < "$steps_file"
   fi
 
   # ── COLLAPSE (default) ───────────────────────────────────────────────────────────────────────
@@ -701,6 +744,10 @@ render_block() {
     # stream, and letting them through here would make close_class see backlog→yours→backlog and
     # emit that class's rollup twice.
     [ "$cls" = yours ] && continue
+    # `held` likewise: already rendered above the fork, and it must not open a class run here (it has
+    # no allocation and close_class has no arm for it, so letting it through would emit a bare row
+    # outside the budget the other classes are held to).
+    [ "$cls" = held ] && continue
     if [ "$cls" != "$last_cls" ]; then
       [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
       last_cls="$cls"; pc=0

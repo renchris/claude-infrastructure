@@ -22,6 +22,13 @@
 #   the wall we are removing, not a list to reprint); `--list`/`--json` still itemize every one, so
 #   nothing is lost, it is only moved one keystroke away.
 #
+# ── ⊘ HELD ── a THIRD state, and it is neither of the above: a runnable class whose own actuator
+#   says it would refuse right now. `deploy` is the case (§2.6 D5): this board platterd
+#   `bash ~/.claude/scripts/deploy-live.sh` as RUN 1 while that command had refused 534 consecutive
+#   times. A held row is NAMED with the actuator's own reason and never numbered, never counted into
+#   NRUN, never executed — but never dropped either, because the underlying lag is real information.
+#   It is not JUDGMENT: nothing is being asked of the operator, the state clears itself.
+#
 # ── ORDER IS IRREVERSIBILITY ── deploy first (an activation run against a stale checkout is an
 #   activation run against the wrong code), then CONFIRM-gated activations (effect-bearing: cp, lint,
 #   bootstrap), then plain ones (they print instructions). Execution STOPS at the first failure and
@@ -106,8 +113,40 @@ collect() {
       # to the repo copy — which is what the symlink points AT — so the platter runs in both states.
       dscript="$DEPLOY_SCRIPT"
       [ -e "$dscript" ] || dscript="$SHARED/scripts/deploy-live.sh"
-      [ "$behind" -gt 0 ] && emit deploy '▶' "$(basename "${dscript%.sh}")" \
-        "bash $(tildify "$dscript")" "live layer $behind behind origin/$sbr" "$dscript"
+      if [ "$behind" -gt 0 ]; then
+        # ── RUNNABILITY-CHECK IT TOO (DEPLOY_LANE_GROUND_UP §2.6 D5 / V9) ─────────────────────────
+        # Existence was only half of I11. This row platterd `bash ~/.claude/scripts/deploy-live.sh`
+        # as RUN 1 while that exact command had refused 534 consecutive times — a command that
+        # EXISTS and cannot SUCCEED teaches the operator the board lies just as effectively as one
+        # that is missing. "The platter must either carry a command that can succeed under the
+        # current state, or name the blocker instead of offering a fix its own gate rejects."
+        #
+        # ASK THE LANE; never re-derive its ladder here. deploy-live.sh's T1/T2/T3 tier logic is the
+        # arbiter of whether an advance is possible, and a second copy of that predicate living in a
+        # renderer would drift from it silently (memory make-the-actuator-the-arbiter). `--offline`
+        # exists for exactly this call: same decision, no network, so the probe cannot manufacture
+        # the refusal it reports. DEPLOY_REPO is pinned to $SHARED so the probe and the `behind`
+        # count above are answering about the SAME checkout.
+        #
+        # Gated on `behind > 0`, i.e. only when there is something to deploy at all. Measured cost
+        # 0.86s against a 2.19s `cc-do --list` baseline.
+        dout="$(DEPLOY_REPO="$SHARED" bash "$dscript" --dry-run --offline 2>&1)"; drc=$?
+        if [ "$drc" -eq 0 ]; then
+          emit deploy '▶' "$(basename "${dscript%.sh}")" \
+            "bash $(tildify "$dscript")" "live layer $behind behind origin/$sbr" "$dscript"
+        else
+          # NAMED, NOT DROPPED. The lag is real information even when the fix is not runnable —
+          # silently omitting the row would hide a stale fleet, which is the failure one level up.
+          # The mark is ⊘, so NRUN does not count it and run_steps never executes it: every gate in
+          # this script keys on ▶.
+          dwhy="$(printf '%s\n' "$dout" | tail -1 | tr -d '\t')"
+          dwhy="${dwhy#deploy-live: }"; dwhy="${dwhy#REFUSED — }"
+          [ "${#dwhy}" -gt 110 ] && dwhy="$(printf '%.107s...' "$dwhy")"
+          emit deploy '⊘' "$(basename "${dscript%.sh}")" \
+            "bash $(tildify "$dscript")" \
+            "live layer $behind behind origin/$sbr — the lane REFUSES: ${dwhy:-exit $drc}" "$dscript"
+        fi
+      fi
     fi
   fi
 
@@ -182,13 +221,20 @@ itemize_class() {
 
 render() { # $1 = "list" → also itemize judgment classes and show each runnable's exact command
   local itemize="${1:-}" cls mark name cmd label path i=0
-  if [ "$((NRUN + NJUDG))" -eq 0 ]; then printf 'cc-do — nothing outstanding.\n'; return 0; fi
+  if [ "$((NRUN + NJUDG + NHELD))" -eq 0 ]; then printf 'cc-do — nothing outstanding.\n'; return 0; fi
   printf 'cc-do — %d runnable · %d judgment\n' "$NRUN" "$NJUDG"
   while IFS="$TABC" read -r cls mark name cmd label path; do
     [ "$mark" = '▶' ] || continue
     i=$((i + 1))
     printf '  RUN  %d. %-22s [%s]\n' "$i" "$name" "$label"
     [ "$itemize" = list ] && printf '         %s\n' "$cmd"
+  done < "$STEPS"
+  # ⊘ HELD — present, named, and deliberately NOT numbered: the numbers are what the operator pastes
+  # after, and a held row has nothing to paste. It carries the actuator's own refusal so the board
+  # states WHY rather than offering a command the lane will reject (§2.6 D5).
+  while IFS="$TABC" read -r cls mark name cmd label path; do
+    [ "$mark" = '⊘' ] || continue
+    printf '  HELD    %-22s [%s]\n' "$name" "$label"
   done < "$STEPS"
   # count + text share the RUN lines' name column, so the two kinds of row align at 10 chars in
   [ "$NDEC" -gt 0 ] && printf '  YOURS   %-22s %s\n' "$NDEC open decision(s)" 'cc-decide list --open'
@@ -282,8 +328,13 @@ if [ -n "$STEM" ]; then run_stem "$STEM"; exit $?; fi
 
 collect
 NRUN="$(grep -c "${TABC}▶${TABC}" "$STEPS" 2>/dev/null || true)"
+# HELD rows are neither runnable nor judgment: they are a machine state that clears itself. Counted
+# separately so they can keep the board from printing "nothing outstanding" over a stale fleet,
+# without inflating NRUN (which run_steps and the prompt both key on).
+NHELD="$(grep -c "${TABC}⊘${TABC}" "$STEPS" 2>/dev/null || true)"
 NDEC="$(cls_count decision)"; NBLG="$(cls_count backlog)"
-case "$NRUN" in ''|*[!0-9]*) NRUN=0 ;; esac
+case "$NRUN"  in ''|*[!0-9]*) NRUN=0 ;; esac
+case "$NHELD" in ''|*[!0-9]*) NHELD=0 ;; esac
 case "$NDEC" in ''|*[!0-9]*) NDEC=0 ;; esac
 case "$NBLG" in ''|*[!0-9]*) NBLG=0 ;; esac
 NJUDG=$((NDEC + NBLG))

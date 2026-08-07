@@ -834,3 +834,106 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   run grep -n "MISSING: ln -sf " "$REPO/scripts/deploy-live.sh"
   [ "$status" -eq 0 ]
 }
+
+# ── --offline · the DECISION-ONLY probe the operator platter asks for a verdict (§2.6 D5 / V9) ────
+# bin/cc-do and hooks/operator-readout.sh used to platter `bash …/deploy-live.sh` as the operator's
+# RUN 1 while that exact command had refused 534 consecutive times. They now ask THIS script whether
+# an advance is possible rather than re-deriving its tier ladder in a renderer — one arbiter, so the
+# two surfaces cannot drift from the policy or from each other. They ask with `--offline`, and three
+# of its properties are load-bearing. One leg each, below.
+
+@test "--offline reaches the SAME verdict as a fetching run (T1 green target)" {
+  advance_origin b c
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dl --dry-run --offline
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would fast-forward .* → ${want:0:12}" || false
+  # …and the fetching spelling agrees, which is what makes --offline a COST change and not a POLICY
+  # change. A probe that answered differently from the run it predicts would be its own defect.
+  run dl --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would fast-forward .* → ${want:0:12}" || false
+}
+
+@test "--offline decides with the remote UNREACHABLE — the absence of the fetch, not a lucky answer" {
+  # The strong form of "it does not touch the network": break the remote and require the RIGHT
+  # verdict anyway. This matters twice. operator-readout.sh is a Stop hook, so a fetching probe puts
+  # a network round-trip on every turn close; and decisively, a FAILED fetch `die`s rc 1, which the
+  # caller reads as "the lane refuses" — a renderer reporting a deploy blocker THAT IT CAUSED.
+  advance_origin b
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  git -C "$SHARED" remote set-url origin "$BATS_TEST_TMPDIR/no-such-origin.git"
+  run dl --dry-run --offline
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "would fast-forward .* → ${want:0:12}" || false
+}
+
+@test "CONTROL: the same state WITHOUT --offline dies on the fetch (so the leg above proves absence)" {
+  # Without this pair the test above passes on a box whose broken remote is never contacted for some
+  # unrelated reason — an absence assertion needs a positive control that CAN fail the same way.
+  advance_origin b
+  stamp origin/main
+  git -C "$SHARED" remote set-url origin "$BATS_TEST_TMPDIR/no-such-origin.git"
+  run dl --dry-run
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q 'git fetch origin main FAILED' || false
+}
+
+@test "--offline with NO already-fetched origin/main REFUSES — unknown is never assumed safe" {
+  # The fail direction is the whole design: a caller that cannot learn the tip must be told so, not
+  # handed a pass. Deleting the remote-tracking ref is the reachable spelling of a checkout that has
+  # never fetched — and the guard must fire BEFORE the generic "cannot resolve" death, or its own
+  # message never reaches the renderer that has to explain the state.
+  advance_origin b
+  stamp origin/main
+  git -C "$SHARED" update-ref -d refs/remotes/origin/main
+  run dl --dry-run --offline
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -q 'no already-fetched origin/main' || false
+}
+
+@test "the T1/T2 ladders read sha+tree from ONE process, not a rev-parse fork per commit" {
+  # A performance change to the SELECTION path is a correctness risk, so this pins the mechanism the
+  # behaviour tests above exercise: 200 x `rev-parse <sha>^{tree}` measured 2.233s against 0.011s
+  # for `git log --format`, and that 200x IS the whole cost of an evaluation — the lane runs 144x/day
+  # and the platter probe has to be cheap enough for a Stop hook. `git log --format` is the
+  # header-free spelling of `rev-list --format`; the sha lists were verified identical.
+  # ANCHORED TO CODE, NOT PROSE (`^[^#]*` — nothing but non-# before the match). The first spelling
+  # of this test counted the old pattern anywhere in the file and went red on deploy-live.sh's OWN
+  # comment explaining the removal: a guard that forbids NAMING the defect you fixed also deletes
+  # its provenance, and a text guard that cannot tell code from a comment fails in both directions.
+  run grep -c "^[^#]*log --format='%H %T'" "$DL"
+  [ "$status" -eq 0 ]
+  [ "$output" -eq 2 ]                                   # exactly the two ladders, T1 and T2
+  run grep -c '^[^#]*rev-parse "\$sha^{tree}"' "$DL"
+  [ "$output" -eq 0 ]                                   # and the per-commit fork is gone from the code
+}
+
+@test "--offline ALONE never mutates — decision-only, even without --dry-run" {
+  # A no-network mode that could still really merge would deploy an arbitrarily stale tip without
+  # ever saying it had not looked. It is also what takes this mode OFF the actuation path, which is
+  # what lets its missing-ref refusal above declare `gate_bounded:` honestly: a gate that cannot
+  # withhold an advance can only decline to answer. Asserted on the TREE, not on the banner.
+  advance_origin b
+  stamp origin/main
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dl --offline
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]      # the layer did not move
+  [ ! -f "$INSTALL_LOG" ]                                   # and install.sh was never invoked
+  echo "$output" | grep -q 'DRY RUN' || false
+}
+
+@test "CONTROL: the same call WITH a fetch and no --offline DOES deploy (so the leg above is not vacuous)" {
+  # Without this, "--offline does not mutate" is satisfied by a fixture in which nothing would have
+  # deployed anyway — the vacuous-control shape §2.8 A-6 names. Same state, one flag removed.
+  advance_origin b
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dl
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [ -f "$INSTALL_LOG" ]
+}

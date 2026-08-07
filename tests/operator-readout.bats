@@ -883,3 +883,57 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   printf '%s' "$output" | grep -q '2 migration' || { echo "the failed migrations were not named: $output"; false; }
   printf '%s' "$output" | grep -q 'deploy-migrations.sh' || { echo "wrong remedy — a failed migration is not fixed by a redeploy: $output"; false; }
 }
+
+# ── the close block must not platter a deploy the lane rejects (DEPLOY_LANE_GROUND_UP §2.6 D5) ────
+# The I11 pair above proves this row names a path that EXISTS. That was half the rule: for 534
+# consecutive refusals it also named a command that could not SUCCEED, and both teach the operator
+# the same thing — the board lies. The hook now asks the lane itself (`--dry-run --offline`, its own
+# tier verdict with no network so the probe cannot manufacture the refusal it reports) and renders
+# ⊘ HELD instead. bin/cc-do asks the SAME arbiter, which is what keeps the two surfaces agreeing
+# about policy rather than merely carrying the same copy of it.
+
+@test "deploy-lag: a lane that REFUSES renders ⊘ HELD and draws no runnable slot" {
+  w="$(mkrepo_landed dheld)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/refusing-deploy.sh"
+  printf '#!/bin/bash\necho "deploy-live: REFUSED — no GREEN tree is a DESCENDANT of live HEAD" >&2\nexit 1\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '⊘ deploy HELD: live layer 1 behind origin/main' || false
+  echo "$output" | grep -q 'the lane refuses: no GREEN tree is a DESCENDANT' || false
+  ! echo "$output" | grep -qF "▶ bash $live" || false     # never offered as a step
+  echo "$output" | grep -q '1 held' || false              # named in the governing partition
+}
+
+@test "POSITIVE CONTROL: a lane that would ADVANCE still renders the ▶ deploy step" {
+  # Pairs with the leg above: without it, "refusing lanes are held" is satisfied by holding every
+  # lane, and the row would silently never be runnable again. Same fixture, exit code flipped.
+  w="$(mkrepo_landed dadv)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/advancing-deploy.sh"; printf '#!/bin/bash\nexit 0\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -qF "bash $live" || false
+  ! echo "$output" | grep -q 'HELD' || false
+  ! echo "$output" | grep -q 'held' || false
+}
+
+@test "held is asked of the lane with --offline, so a Stop hook never fetches to render a board" {
+  # The mechanism, pinned where it is load-bearing rather than incidental: this hook runs at EVERY
+  # turn close. A probe that fetched would put a network round-trip on each one, and a fetch that
+  # FAILED would die rc 1 — which this renderer would read as a deploy blocker it had itself caused.
+  # The stub records its own argv, so this is the real invocation and not a text grep over the hook.
+  w="$(mkrepo_landed dargv)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/argv-deploy.sh"; argv="$BATS_TEST_TMPDIR/argv.seen"
+  printf '#!/bin/bash\necho "$*" > "%s"\nexit 1\n' "$argv" > "$live"
+  CC_DEPLOY_SCRIPT="$live" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ -f "$argv" ]
+  grep -q -- '--offline' "$argv" || false
+  grep -q -- '--dry-run' "$argv" || false
+}
