@@ -193,6 +193,12 @@ BATS_BIN="${CC_POSTLAND_BATS:-bats}"
 # Normalize ONCE here so no consumer has to: strip the trailing slash, but never yield the empty
 # string (TMPDIR=/ is legal and must stay "/").
 TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"; [ -n "$TMPBASE" ] || TMPBASE=/
+# ONE TEMPLATE, TWO CONSUMERS — run_target mints the corpus's TMPDIR from it, and do_bisect mints the
+# PROBE's from the same string whenever it has no live corpus dir to reuse. What must hold is that the
+# adjudicator's TMPDIR is as LONG as the measurement's (see do_bisect's ADJUDICATOR ENV block for the
+# 104-byte incident); a literal repeated at two call sites is exactly how a length delta comes back
+# silently, so both sites share this name and cannot drift apart.
+RUN_TMPL="postland-run.XXXXXX"
 LOCK_TTL="${CC_POSTLAND_LOCK_TTL:-3600}"
 SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the primary bound is the TAP
 # progress stall (POSTLAND_STALL_S, see run_target). 10800 (was 5400, was 2700): the background band
@@ -1036,6 +1042,7 @@ bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor g
 do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
   # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
   local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps
+  local probe_tmp="" probe_own=0
   BISECT_CULPRIT=""
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
@@ -1052,7 +1059,37 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
   # pointing at a $runner that no longer exists. Inert today only because functrace is off; one
   # `set -T` anywhere later and every subsequent function return would run a `rm -f` on an unbound
   # variable under `set -u`. Disarming costs nothing and removes the whole class.
-  trap 'git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true; rm -f "$runner" "$counter"; trap - RETURN' RETURN
+  trap 'git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true; rm -f "$runner" "$counter"; [ "$probe_own" = 1 ] && rm -rf "$probe_tmp"; trap - RETURN' RETURN
+  # ── ADJUDICATOR ENV: the probe runs where the MEASUREMENT ran (2026-08-06) ───────────────────────
+  # An adjudicator that cannot reproduce the failure has a predetermined verdict. This runner used to
+  # inherit the launchd TMPDIR while the corpus measured under TMPDIR=$RUN_TMP
+  # (`…/postland-run.XXXXXX`, +20 bytes) — and a `tests/kitty-*.bats` fixture bound an AF_UNIX socket
+  # at its ABSOLUTE path against Darwin's 104-byte sun_path cap: 87 bytes under a session prefix
+  # (green), 107 under the corpus's (red). The red therefore existed ONLY at the longer prefix, no
+  # probe could reproduce it, and the walk converged on the asserted-bad tip — auto_revert landed a
+  # revert of e80c85aa (a correct, unrelated cc-queue fix) as f323b427, restoring a permanent red that
+  # commit had just fixed. Re-landed by 12549d8b; the 2026-08-01T21:00:00Z flakes.jsonl row is N=2.
+  #
+  # 937c6fc5 (tip confirmation) and 4348ddc2 (floor proof) made that walk REFUSE to convict, which is
+  # the safety half. This is the ATTRIBUTION half, and the two are not substitutes: a probe that
+  # cannot reproduce still names nobody, so an env-dependent red stays permanently unattributed. Both
+  # of those guards re-run THIS SAME `$runner`, so setting the env here fixes all three probe sites —
+  # the walk, the tip confirmation, and the floor check — at one site.
+  #
+  # $RUN_TMP is the corpus's OWN dir, the exact string it measured under, and it outlives this call by
+  # construction: run_target deletes it only after red_actions returns. The `bisect` verb has no
+  # corpus, so it mints its own from the SHARED template — same length, which is what the reproduction
+  # depends on. Minted AFTER the trap is armed so no later exit path can leak it, and torn down ONLY
+  # when we own it: deleting the corpus's dir here would pull the ground from under run_target.
+  #
+  # Why $RUN_TMP and not the retry ladder's (longer) dir: the ladder only ever runs on a file the
+  # CORPUS already failed, so the corpus prefix is where the failure was first observed and the floor
+  # every ladder confirmation sits above. Matching it is necessary and sufficient.
+  probe_tmp="$RUN_TMP"
+  if [ -z "$probe_tmp" ] || [ ! -d "$probe_tmp" ]; then
+    probe_tmp="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1
+    probe_own=1
+  fi
   qos="$(printf '%q ' "${QOS[@]}")"     # every bats invocation runs in the background band, incl. this one
   {                                     # 125 = SKIP: file absent, or bats ERRORED (rc>1) — not a red
     printf '#!/bin/bash\n'
@@ -1074,7 +1111,10 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
     # `git bisect run`'s child, so its stdin is the daemon's — and a step that wedges on it is a
     # hang nothing decides by content. 7c32cc6f's wall + step cap CONTAIN that runaway; this is
     # what removes its cause.
-    printf '%s"%s" "%s" </dev/null >/dev/null 2>&1\n' "$qos" "$BATS_BIN" "$file"
+    # TMPDIR= is the ADJUDICATOR ENV invariant at its one load-bearing site: without it this probe
+    # runs at the daemon's prefix while the corpus measured at a longer one, and a length-dependent
+    # red is exonerated by construction. %q, not "%s", because this is being written INTO a script.
+    printf 'TMPDIR=%q %s"%s" "%s" </dev/null >/dev/null 2>&1\n' "$probe_tmp" "$qos" "$BATS_BIN" "$file"
     # shellcheck disable=SC2016  # authoring a script: $rc must NOT expand here
     printf 'rc=$?\n[ "$rc" -le 1 ] || exit 125\nexit "$rc"\n'
   } > "$runner"
@@ -1378,7 +1418,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   IDENTITY_SNAP="$(identity_snapshot)"   # BEFORE the cell exists — the widest window we can watch
   prepare_worktree "$sha" || { log "worktree prepare FAILED for $(sha12 "$sha")"; return 1; }
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
-  RUN_TMP="$(mktemp -d "$TMPBASE/postland-run.XXXXXX")" || return 1
+  RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
   FAILING=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
