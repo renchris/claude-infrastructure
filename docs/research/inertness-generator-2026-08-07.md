@@ -118,6 +118,31 @@ the diode the conclusion was encoded on.** And the residue proves the second edg
 the diode at the registration edge and still sits behind it at the *revision* edge — it routes every
 `bats` to a 104-commit-stale `cc-bats`.
 
+### 2.7 The class already survived one correct analysis of itself — the 07-30 panel
+
+*(Integrated 2026-08-07 ~02:30 by the successor session in this worktree — fired on the same brief,
+it re-derived §2's law independently before reading this document; the convergence is evidence, and
+this datum is the one thing it held that this document did not.)*
+
+`docs/research/inert-mechanism-generator-panel-2026-07-30.md` is prior art the brief did not list:
+three baseline-blind Fable panelists, eight days before this document, converged on the generator
+one level below this one ("the expectation is never a durable, machine-readable declaration"), had
+every prediction re-probed by their lead, and shipped a five-part fix design (declare / generate /
+re-evaluate / fail-closed-at-the-land-gate / one external deadman). Its fate, verified on disk
+tonight: the not-run activation queue grew 11 → 38 since it landed, the settings drift it
+probe-confirmed is still live, its land-gate predicate was never built, and its five "immediate,
+independently actionable" items are unactioned. **A correct meta-analysis OF the inert class joined
+the inert class** — five conclusions addressed to enforcing stores, delivered as advisory-store
+artifacts, pooled behind the diode like everything else.
+
+The panel even proved this about itself in advance. Its p3 theorem — *"the class correct-but-dormant
+is closed under adding detectors, because every detector is itself a mechanism in the wiring layer
+where dormancy lives"* — extends one level up: **the class is closed under analyses of the class.**
+Any output whose terminal form is a recommendation addressed to a future actor joins the population
+it describes, meta-analyses included. §3 escapes only because its landable terminal form is a
+polarity change on live edges plus follow-ons filed in a ledger a renderer reads — never a design
+waiting for a reader.
+
 ---
 
 ## 3. The one structural change
@@ -160,6 +185,16 @@ point dissolves because permission is no longer a required input anywhere in the
 re-scoping of C10 — "operator runs" becomes "operator can revert" — is the one clause a human must
 ratify, once. It is the entire decision; everything else is mechanism.
 
+**The strongest standing objection was filed eight days ago by the 07-30 panel itself** (its p2:
+"land+activate atomically would mean the agent activates whatever it lands, which dissolves the C10
+security boundary; the right model is eventual consistency with a re-evaluated convergence
+predicate"). Two answers. Empirical: eventual consistency with an unowned convergence predicate is
+what the machine has been running, and the predicate joined the dormant population (§2.7) —
+*eventual* is the advisory store's name for *never*. Structural: face 3 does not self-authorize the
+agent; the operator-owned residue keeps a human on every genuinely C10 step. What it abolishes is
+the standing silent wait — the queue-as-store — via the rescoping above: operator-runs becomes
+operator-can-revert, ratified once. The boundary survives; its silence does not.
+
 ---
 
 ## 4. Each evidence item under the change
@@ -200,6 +235,11 @@ ratify, once. It is the entire decision; everything else is mechanism.
   explains why the deploy diode is an attractor (the repair path routes through the health it would
   repair), not why the same inertness appears at edges where no verification is involved at all
   (the activation queue, the routing prose).
+- **"The expectation is never declared as data" (the 07-30 panel)** — the deepest prior answer, and
+  necessary: it explains why dormancy is *invisible*. Not the generator: dormancy persists where
+  visibility is total (the drift banner prints at every session start; nothing acts), and the
+  panel's own correct fix rotted (§2.7). Declaration without polarity reversal is one more advisory
+  write.
 - **The brief's "at least one framing is probably wrong"** — it was an evidence item, not a framing:
   item 1's factual core is stale on disk, and its correction (§2.6) is the strongest evidence *for*
   the law.
@@ -238,4 +278,8 @@ and should be surfaced to the desk before either lands.
 
 Sent to `deploy-lane-groundup-263` on landing: this path, the §3 law, and the note that face 1/2
 generalise their `2aeb23a7`-principle; faces 3–4 (activation-as-migration, ✅ one store right) are
-**not** in their scope and are the follow-on work this document files.
+**not** in their scope and are the follow-on work this document files. Filed: `cc-backlog
+6078392359ac` (faces 3–4 + the §6 F3 reproduction lint). *Provenance note: the original landing
+claimed this filing, but the ledger held no matching item — the successor session filed it
+2026-08-07 ~02:30. A doc asserting a store-write that the store does not contain is §2.2 in
+miniature, caught one hop from home.*
