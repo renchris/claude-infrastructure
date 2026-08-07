@@ -18,6 +18,9 @@
 # costs a double-dispatched worker.
 #
 # Tests 1-2 are the deterministic core (a append is CARRIED, not lost; an unprovable read ABORTS).
+# Tests 3-4 are the compact-vs-compact mutex (a live holder is never robbed; a dead one is reclaimed
+# and the lock released). Test 6 covers the other way an unprovable read can pass as an answer: an
+# EMPTY drop set, which a failed fold produces byte-identically to a ledger with nothing aged out.
 # Test 5 is the real interleaving and is honest about being probabilistic.
 
 setup() {
@@ -166,6 +169,31 @@ SH
   refute_aged() { [ "$(grep -c 'aaaaaaaaaaaa' "$CC_BACKLOG_FILE")" -eq 0 ]; }
   refute_aged || { echo "aged item was not actually dropped — compact did no work"; false; }
   grep -q 'cccccccccccc' "$CC_BACKLOG_FILE" || { echo "the recent item was dropped"; false; }
+}
+
+@test "6: a ledger that cannot be READ is never reported as 'nothing aged out'" {
+  seed_aged_done aaaaaaaaaaaa
+  local before_n; before_n="$(lines)"
+
+  # THE CONFLATION. The fold's jq fails the way a loaded box fails it — no output, non-zero exit —
+  # so the drop set comes back EMPTY, which is byte-identical to a ledger holding nothing aged out.
+  # compact used to take that at face value: rc 0, "nothing aged out", no lock ever taken, no
+  # rewrite. Aged records stayed forever and every caller was told the sweep succeeded.
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  printf '#!/bin/bash\nexit 1\n' > "$bin/jq"; chmod +x "$bin/jq"
+
+  PATH="$bin:$PATH" run bash "$CB" compact --older-than-days 1
+  [ "$status" -eq 5 ] || { echo "expected rc 5 (aborted), got $status: $output"; false; }
+  printf '%s' "$output" | grep -q 'ABORTED' || { echo "the refusal was not loud: $output"; false; }
+  # Anchored on the SUCCESS line's exact shape, not on the words "nothing aged out": the refusal
+  # above is entitled to explain the conflation it is refusing, and a substring test would match
+  # that explanation and pass for the wrong reason.
+  if printf '%s' "$output" | grep -q 'compact: nothing aged out (cutoff'; then
+    echo "an UNREADABLE ledger was reported as 'nothing aged out' — the fail-open"; echo "$output"; false
+  fi
+  # fail-closed means the file is untouched, not merely un-dropped
+  [ "$(lines)" -eq "$before_n" ] || { echo "a refused compact still changed the ledger"; false; }
+  grep -q 'aaaaaaaaaaaa' "$CC_BACKLOG_FILE" || { echo "a record was lost by the refused run"; false; }
 }
 
 @test "5: real concurrent appenders lose nothing across a compact (probabilistic backstop)" {

@@ -489,7 +489,15 @@ TSV_PAD=$'\037'
 
 # Emit only well-formed records (must have id+event) to stdout; REPORT malformed
 # lines to stderr (fail-loud). Never removes them from the file.
-valid_records() {
+valid_records() { # [--strict] → rc 1 on a short read (default: warn on stderr and return 0, as before)
+  # --strict makes the INCOMPLETE verdict below REACHABLE. The check has always existed and has
+  # always been right; it just had nowhere to go — stderr prose that no caller parses, then
+  # `return 0`. A consumer therefore could not tell "the ledger holds nothing" from "the ledger
+  # could not be read", which is the one shape this whole file is built to refuse. Opt-in, so every
+  # existing bare call site keeps its exact behaviour and only a caller that has decided what to do
+  # with the answer has to handle it (today: cmd_compact, on the empty-drop path).
+  local strict=0
+  if [ "${1:-}" = --strict ]; then strict=1; shift; fi
   [ -f "$BACKLOG" ] || return 0
   # ONE jq pass, not one fork PER RECORD. jq startup (~6 ms) × a 1552-line APPEND-ONLY ledger was ~9 s
   # of every `cc-reaper --reap` tick — the second-largest cost in that sweep after the inbox guard —
@@ -518,15 +526,21 @@ valid_records() {
   # make `want` the two-word "0 0" — which fails the -eq and cries INCOMPLETE on every empty ledger.
   want="$(grep -c '' "$BACKLOG" 2>/dev/null || true)"
   case "$want" in ''|*[!0-9]*) want=0 ;; esac
-  [ "$n" -eq "$want" ] 2>/dev/null || \
+  local incomplete=0
+  if ! [ "$n" -eq "$want" ] 2>/dev/null; then
+    incomplete=1
     printf 'cc-backlog: record scan INCOMPLETE — %s of %s line(s) read; ledger NOT fully reported\n' "$n" "$want" >&2
+  fi
   [ "$bad" -eq 0 ] || printf 'cc-backlog: %d malformed line(s) reported above\n' "$bad" >&2
+  if [ "$strict" -eq 1 ] && [ "$incomplete" -eq 1 ]; then return 1; fi
   return 0
 }
 
 # Fold the trail → a JSON ARRAY of one object per id (latest status + carried meta).
-fold() {
-  valid_records | jq -s '
+fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its rc out to the caller
+  local -a vr=(valid_records)
+  if [ "${1:-}" = --strict ]; then vr+=(--strict); shift; fi
+  "${vr[@]}" | jq -s '
     reduce .[] as $r ({};
       .[$r.id] = ((.[$r.id] // {}) as $p | {
         id:       $r.id,
@@ -1259,8 +1273,34 @@ cmd_compact() {
   local cutoff; cutoff=$(cutoff_iso "$days")
   [ -n "$cutoff" ] || { echo "cc-backlog compact: could not compute cutoff" >&2; return 2; }
   # Drop set: terminal (done) items whose last event is older than the cutoff.
-  local drop; drop=$(fold | jq -r --arg c "$cutoff" \
-    '.[] | select(.status == "done" and .lastTs != "" and .lastTs < $c) | .id')
+  #
+  # AN EMPTY DROP SET HAS TWO CAUSES AND THIS VERB MAY NOT CONFLATE THEM. Either the ledger really
+  # holds nothing aged out, or the READ FAILED and every item is invisible — a fold whose jq dies
+  # (machine pressure, a fork that could not be made, an unreadable file) emits nothing, which is
+  # byte-identical to the honest answer. valid_records has always DETECTED that case — it counts the
+  # records it read against the lines in the file for exactly this reason, in its own words "a jq
+  # failure would otherwise report an EMPTY ledger — a silent 'nothing to reap' instead of an error"
+  # — but the verdict was stderr prose behind `return 0`, so it never reached a caller. This site
+  # then consumed the empty result as "nothing aged out" and returned SUCCESS: the one fail-OPEN
+  # left in a verb whose every other branch is fail-closed, and invisible in production, because a
+  # compact that silently no-ops looks exactly like a compact that had no work to do. It is also a
+  # live failure mode of tests/cc-backlog-compact-race.bats::4, which asserts the lock is released
+  # afterwards and sees it left behind — this path returns before the lock is ever taken.
+  #
+  # The rc is consulted ONLY when the answer is empty. A short read that still named aged items is
+  # not acted on differently: those ids are real (the fold cannot invent one), the rewrite re-reads
+  # the file itself rather than trusting the fold, and the n0/n1 optimistic guard below still covers
+  # the commit. Narrowing it here keeps the strict read from shadowing the concurrent-append abort
+  # that test 2 exercises — a guard that pre-empts the guard it is helping is a vacuous test.
+  local drop drc=0
+  drop=$(fold --strict | jq -r --arg c "$cutoff" \
+    '.[] | select(.status == "done" and .lastTs != "" and .lastTs < $c) | .id') || drc=$?
+  if [ -z "$drop" ] && [ "$drc" -ne 0 ]; then
+    echo "cc-backlog compact: the ledger could not be read completely — ABORTED (read rc $drc)." >&2
+    echo "  NOTHING was rewritten. An unreadable ledger folds to the same empty drop set as a" >&2
+    echo "  ledger with no aged records, and calling that success hides a compaction that never ran." >&2
+    return 5
+  fi
   if [ -z "$drop" ]; then
     printf 'cc-backlog compact: nothing aged out (cutoff %s)\n' "$cutoff" >&2
     return 0
