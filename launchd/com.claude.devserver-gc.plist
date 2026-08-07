@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.devserver-gc — the SCHEDULED idle-reaper for per-worktree `next dev` servers.
+
+  Measured 2026-08-07: 4 concurrent next-server processes holding 6.2 GB, with no reaper, cap or
+  census anywhere in scripts/ bin/ hooks/. A commit gate is transient and self-terminating; a dev
+  server is a permanent per-worktree allocation nobody collects.
+
+  HOURLY, not daily. Unlike worktree-gc (whose subject is a directory that costs nothing to leave
+  lying around overnight), the subject here is RESIDENT MEMORY on a box that has taken four kernel
+  panics from compressor-segment exhaustion. A daily sweep would let a whole day's abandoned servers
+  accumulate. The 30-minute birth grace inside devserver-census.sh is what keeps an hourly cadence
+  from ever meeting a young server.
+
+  :40 past the hour — off both worktree-gc (04:15) and reso's reaper (03:15), so no sweep is reading
+  a process table another sweep is actively changing.
+
+  OBSERVE-ONLY BY DEFAULT. There is deliberately no DEVGC_ACT in this plist, so the runner takes its
+  `--dry-run` branch: it logs exactly which servers it WOULD reap and kills nothing. Turning that
+  into a real reaper is a one-line edit the operator makes after reading a few days of the log —
+  arming an unattended process that kills their running dev servers is their decision, not an
+  agent's. (Same split as com.claude.compressor-sentinel, whose CC_SENTINEL_ACT is likewise absent.)
+
+  `bash -c` (not a bare ProgramArguments path) because launchd expands neither ~ nor $HOME inside
+  ProgramArguments. Standard*Path cannot take $HOME at all, hence the literals. The runner hardens
+  its own PATH on line 1 — including /usr/sbin, where lsof lives and whose omission made reso's
+  reaper blind to live sessions and reap one (2026-06-19).
+
+  RunAtLoad false: a login is exactly when dev servers are most likely to be about to be used.
+
+  C10: the OPERATOR loads this, via docs/activation/pending-activation/33-devserver-gc-activate.sh.
+  Kill switch (no unload needed): touch ~/.claude/autonomy/devserver-gc.disabled
+  Full stop:                      launchctl bootout gui/$(id -u)/com.claude.devserver-gc
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.devserver-gc</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "$HOME/.claude/scripts/devserver-gc-run.sh"</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>40</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/logs/devserver-gc.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/logs/devserver-gc.out.log</string>
+</dict>
+</plist>
