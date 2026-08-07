@@ -488,17 +488,35 @@ if [ "$ungated" -ne 0 ] || [ "$unverified" -ne 0 ]; then
   if [ "$unverified" -ne 0 ]; then
     printf '  The tree now LIVE never earned a green post-land stamp — nothing vouches for what is running.\n' >&2
     printf '  While live HEAD sits ABOVE the newest green-stamped commit, deploy-live.sh refuses every\n' >&2
-    printf '  tick ("would ROLL BACK the live layer"): the sanctioned lane is deadlocked, not merely idle.\n' >&2
+    printf '  tick (the target "is not a descendant of live HEAD"): the sanctioned lane is not merely idle.\n' >&2
   fi
   printf '  Ask the gate itself (read-only, mutates nothing):  bash %s/scripts/deploy-live.sh --dry-run\n' "$REPO" >&2
-  # DO NOT SAY "it clears when a green stamp lands". It was measured on 2026-07-31 that the gate is
-  # structurally unsatisfiable at this fleet's commit rate — a verify cycle is bounded at 3 h while
-  # trunk advances every ~7 min, so the verifier's target is stale ~25x over before it can finish
-  # (docs/plans/DEPLOY_GATE_CONVERGENCE.md). Naming a cure the fleet has already proven unreachable
-  # is how an alarm becomes furniture: the reader waits for a stamp that cannot arrive, concludes
-  # the check is noise, and the next raw ff goes unremarked. Point at the real blocker instead.
-  printf '  This does NOT clear on its own: the green gate is structurally unsatisfiable at the current\n' >&2
-  printf '  commit rate (3h verify vs ~7min between commits) — see docs/plans/DEPLOY_GATE_CONVERGENCE.md.\n' >&2
+  # QUOTE NO EXACT REFUSAL STRING BEYOND THE STABLE CLAUSE ABOVE. This block used to quote
+  # "would ROLL BACK the live layer" verbatim as what the reader would find in deploy.log. That
+  # message was reworded on 2026-08-07 (deploy-live.sh now names the real hazard — `--ff-only` exits 0
+  # without moving the tree, so the lane would report a deploy that never happened), and this printf
+  # went stale the moment it landed: it sent the operator looking for a string that no longer exists.
+  # An operator-facing diagnostic that quotes another file's output is a cross-file coupling with no
+  # test holding it — so quote only the durable predicate clause, never the whole sentence.
+  #
+  # THE PROGNOSIS BELOW ALSO CHANGED. Until 2026-08-07 this said the condition "does NOT clear on its
+  # own" because the green gate was structurally unsatisfiable at the fleet's commit rate (3h verify
+  # vs ~7min between commits — DEPLOY_GATE_CONVERGENCE.md), and naming an unreachable cure is how an
+  # alarm becomes furniture. That was correct for the single-tier gate. DEPLOY_LANE_GROUND_UP.md §2.2
+  # replaced it with a two-tier target: past CC_DEPLOY_MAX_LAG_COMMITS / _HOURS the lane degrades to
+  # the newest not-RED commit under a banner, so the state IS now self-clearing — but only once the
+  # v2 advancer is actually LIVE, which is its own step (§2.6c). Both halves are stated, because
+  # promising a self-clear that the deployed copy cannot yet perform is the same furniture defect
+  # pointing the other way.
+  # BOTH doc references are load-bearing and tests/deploy-parity.bats:614 pins the second one.
+  # DEPLOY_GATE_CONVERGENCE.md is why the single-tier gate could not clear; DEPLOY_LANE_GROUND_UP.md
+  # is the two-tier remedy. Dropping the former would have reddened that test — which is the correct
+  # outcome for a pointer the operator still needs, not a stale assertion to update away.
+  printf '  Whether this clears on its own depends on which advancer is LIVE: the two-tier lane\n' >&2
+  printf '  (DEPLOY_LANE_GROUND_UP.md §2.2) degrades past its staleness budget and clears; the older\n' >&2
+  printf '  single-tier gate does not — it is structurally unsatisfiable at this commit rate\n' >&2
+  printf '  (3h verify vs ~7min between commits — docs/plans/DEPLOY_GATE_CONVERGENCE.md).\n' >&2
+  printf '  Check which is live:  grep -c CC_DEPLOY_DEGRADE %s/scripts/deploy-live.sh\n' "$HOME/.claude" >&2
   printf '  Fixing the GATE is the open work; a raw ff is not a workaround for it, it is this finding.\n' >&2
 fi
 
