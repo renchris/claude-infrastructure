@@ -39,6 +39,26 @@ mkrepo_landed() {
     echo base > base.txt; git add base.txt; git commit -q -m base; git push -q -u origin main ) >/dev/null 2>&1
   printf '%s' "$w"
 }
+# landed + clean, but the LIVE LAYER is behind PAST its converge budget (⇒ RUNG=🚀).
+# The live checkout must share the fixture's `remote.origin.url` byte-for-byte — that is
+# wrap-ledger's applicability gate — so it is a CLONE OF THE SAME ORIGIN, not an unrelated repo.
+# The caller sets WRAP_LIVE_REPO + WRAP_LIVE_BUDGET_COMMITS: an export in here would die with the
+# `$( )` subshell this helper is invoked from.
+mkrepo_landed_not_live() { # <tag> → echoes the session repo; live clone at $BATS_TEST_TMPDIR/live-<tag>
+  local w; w="$(mkrepo_landed "$1")"
+  ( cd "$w" || exit 1; echo y > y.txt; git add y.txt; git commit -q -m "landed work"; git push -q origin main ) >/dev/null 2>&1
+  # CLONE AFTER THE PUSH, then step HEAD back. Order is load-bearing: wrap-ledger deliberately does
+  # NOT fetch (its law is pure-read), so it measures lag against the live repo's LAST-FETCHED trunk
+  # ref. Cloning first leaves that ref stale, LIVE_LAG reads 0, no breach — the first draft of this
+  # fixture did exactly that and the FIRE case failed while the subject was correct.
+  git clone -q "$BATS_TEST_TMPDIR/o-$1.git" "$BATS_TEST_TMPDIR/live-$1" >/dev/null 2>&1
+  # --detach origin/main~1, NOT `reset --hard HEAD~1`: the bare origin's default branch is master
+  # while the fixture pushes main, so the clone lands with an UNBORN HEAD and the reset fails
+  # silently under 2>/dev/null — leaving LIVE_LAG=0 and no breach.
+  git -C "$BATS_TEST_TMPDIR/live-$1" checkout -q --detach origin/main~1 >/dev/null 2>&1
+  printf '%s' "$w"
+}
+
 # clean tree, one commit ahead of origin/main (committed-but-unlanded ⇒ ledger contradiction)
 mkrepo_unlanded() {
   local w; w="$(mkrepo_landed "$1")"
@@ -696,4 +716,31 @@ PY
   [ "$status" -eq 0 ]
   # no transcript => no close-tell either; the point is it must never EXONERATE on ignorance
   ! grep -q 'exonerated' "$COMPLETION_IDL"
+}
+
+# ── LANDED ≠ LIVE: the 🚀 rung the guard was never taught (face 4) ──
+@test "🚀: '✅ Complete & live on trunk' while the live layer is PAST its converge budget ⇒ FIRE" {
+  local w; w="$(mkrepo_landed_not_live bl1)"
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/live-bl1" WRAP_LIVE_BUDGET_COMMITS=0
+  run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'LANDED BUT NOT LIVE'
+}
+
+@test "🚀 CONTROL: the SAME close, live layer AT the landed sha ⇒ ABSTAIN (not a blanket alarm)" {
+  local w; w="$(mkrepo_landed_not_live bl2)"
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/live-bl2" WRAP_LIVE_BUDGET_COMMITS=0
+  git -C "$WRAP_LIVE_REPO" checkout -q --detach origin/main 2>/dev/null
+  run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | /usr/bin/grep -q '"decision":"block"'; then return 1; fi
+}
+
+@test "🚀 CONTROL: an unrelated live repo (different origin) must NOT convict — fail-open" {
+  local w; w="$(mkrepo_landed_not_live bl3)"
+  local other; other="$(mkrepo_landed other3)"
+  export WRAP_LIVE_REPO="$other" WRAP_LIVE_BUDGET_COMMITS=0
+  run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | /usr/bin/grep -q '"decision":"block"'; then return 1; fi
 }
