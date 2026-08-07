@@ -584,6 +584,33 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   [ -L "$DEST" ]
 }
 
+@test "L9 the launchd job execs even when the ~/.claude symlink is ABSENT (59 exec failures)" {
+  P="$REPO/launchd/com.claude.deploy-live.plist"
+  run plutil -lint "$P"
+  [ "$status" -eq 0 ]
+  # Run the plist's OWN command string, not a copy of it — a hand-retyped approximation would pass
+  # vacuously the moment the two drift.
+  cmd="$(plutil -extract ProgramArguments.2 raw -o - "$P")"
+  fake="$BATS_TEST_TMPDIR/fakehome"
+  mkdir -p "$fake/Development/claude-infrastructure/scripts"
+  printf '#!/bin/bash\nprintf "REACHED %%s\\n" "$*"\n' \
+    > "$fake/Development/claude-infrastructure/scripts/deploy-live.sh"
+  chmod +x "$fake/Development/claude-infrastructure/scripts/deploy-live.sh"
+  # the repo copy exists; the symlink the job used to exec unconditionally does NOT — exactly the
+  # state in which it logged 59 × "cannot execute: No such file or directory" and never started.
+  run env HOME="$fake" /bin/bash -c "$cmd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"REACHED --auto"* ]] || false
+  # …and the LIVE layer still wins when it is there: a fallback that shadowed the deploy would make
+  # every future advance of this script inert.
+  mkdir -p "$fake/.claude/scripts"
+  printf '#!/bin/bash\nprintf "LIVE %%s\\n" "$*"\n' > "$fake/.claude/scripts/deploy-live.sh"
+  chmod +x "$fake/.claude/scripts/deploy-live.sh"
+  run env HOME="$fake" /bin/bash -c "$cmd"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LIVE --auto"* ]] || false
+}
+
 @test "the real assert emits the MISSING contract this refresh parses (the stub is not the spec)" {
   # Guards the seam between the two files: if deploy-parity-assert.sh ever renames the prefix or
   # reorders the fields, every test above keeps passing against the stub while production goes inert.
