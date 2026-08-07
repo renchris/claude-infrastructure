@@ -410,6 +410,22 @@ render_block() {
       "📦")
         ahead="$(lf AHEAD)"; shas="$(lf SHAS)"
         state="📦 parked — ${ahead} commit(s) on ${branch} unlanded (${shas:-?}) → /ship" ;;
+      "🚀")
+        # Face 4 of the inertness generator: landed on trunk, but the LIVE LAYER — the store
+        # behaviour actually reads — is behind PAST its converge budget, or a migration carrying a
+        # conclusion into settings.json / a plist / PATH has FAILED. Either way the work is landed
+        # and the machine is still running the old bytes.
+        #
+        # It gets its own arm rather than riding the default for the reason MEMORY.md
+        # new-enum-member-falls-into-fail-closed-default names: an unhandled rung leaves `state`
+        # EMPTY, so the block would render a header with no state — the ledger would have computed
+        # the one fact the operator needs and the renderer would have silently dropped it.
+        lag="$(lf LIVE_LAG)"; migf="$(lf MIG_FAILED)"
+        if [ "${migf:-0}" != "0" ]; then
+          state="🚀 landed, NOT live — ${migf} migration(s) FAILED; the enforcing store never took this → bash scripts/deploy-migrations.sh --status"
+        else
+          state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget → bash scripts/deploy-live.sh"
+        fi ;;
       "🔧")
         dirty_n="$(lf DIRTY_N)"; gate="$(lf GATE)"; remainder="$(lf REMAINDER)"
         parts=""
@@ -490,7 +506,11 @@ render_block() {
     esac
   done < "$steps_file"
   TOTAL="$total"
-  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
+  # 🚀 joins 📦 in the fire predicate. Both are "the value is not where it needs to be" states with a
+  # runnable next step, and 🚀 is bounded BY CONSTRUCTION — it cannot fire inside the converge budget
+  # — so it stays rare rather than becoming another always-fires alarm. A 🚀 that did not fire the
+  # block would be the whole face-4 measurement computed and then not shown to anyone.
+  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
@@ -555,7 +575,7 @@ render_block() {
       hdr="OPERATOR ▸ ${state} · ${_lead} (standing, not blocking this close)"
     fi
   elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
-  elif [ "$RUNG" = "📦" ]; then hdr="OPERATOR ▸ ${state}"
+  elif [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ]; then hdr="OPERATOR ▸ ${state}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
@@ -713,7 +733,7 @@ render_block() {
   fi
   [ -n "$b_line" ] && foot="${foot:+$foot · }${b_line}"
   # queue rides the footer whenever it is not already the header (steps or 📦 govern the headline).
-  if [ -n "$q_line" ] && { [ "$total" -gt 0 ] || [ "$RUNG" = "📦" ]; }; then
+  if [ -n "$q_line" ] && { [ "$total" -gt 0 ] || [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ]; }; then
     foot="${foot:+$foot · }${q_line}"
   fi
   if [ "$total" -gt 0 ]; then

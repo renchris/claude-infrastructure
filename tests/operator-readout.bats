@@ -831,3 +831,55 @@ hookrun_sid() { # $1=session_id $2=cwd
   ref="$("$HOOK" --render --cwd "$w" --sid live-sid-123)"
   [ "$msg" = "$ref" ]
 }
+
+# ── 🚀 (face 4 of the inertness generator) ────────────────────────────────────────────────────────
+# wrap-ledger grew a rung between 📦 and 👤: landed on trunk, but the LIVE LAYER — the store
+# behaviour actually reads — is behind past its converge budget, or a migration carrying the
+# conclusion into settings.json / a plist / PATH FAILED. This renderer decides by `case "$RUNG"`, and
+# an unhandled member leaves `state` EMPTY (MEMORY.md new-enum-member-falls-into-fail-closed-default)
+# — the ledger would compute the one fact the operator needs and the renderer would drop it silently.
+# A STUB ledger is the right instrument here: it isolates the renderer's dispatch from the (separately
+# tested) question of when the real ledger decides to emit 🚀.
+stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
+  local rung="$1"; shift
+  local f="$BATS_TEST_TMPDIR/stub-ledger-$BATS_TEST_NUMBER.sh"
+  { printf '#!/bin/bash\n'
+    printf 'case "${1:-}" in --machine) ;; *) printf "stub\\n"; exit 0 ;; esac\n'
+    printf 'printf "RUNG=%s\\n"\n' "$rung"
+    printf 'printf "AHEAD=0\\nSHAS=\\nDIRTY_N=0\\nGATE=green\\nREMAINDER=0\\nUNLANDED=0\\n"\n'
+    local kv; for kv in "$@"; do printf 'printf "%s\\n"\n' "$kv"; done
+  } > "$f"
+  chmod +x "$f"; printf '%s' "$f"
+}
+
+@test "🚀: a lagging live layer renders its own state and a runnable step, never an empty header" {
+  w="$(mkrepo_landed rocket)"
+  run env - \
+    HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" \
+    WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=41" "MIG_FAILED=0")" \
+    bash "$HOOK" --render "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '🚀' || { echo "no 🚀 in the block: $output"; false; }
+  printf '%s' "$output" | grep -q '41 commit' || { echo "the lag was not named: $output"; false; }
+  printf '%s' "$output" | grep -q 'deploy-live.sh' || { echo "no runnable step: $output"; false; }
+  # The defect this case exists for: an unhandled rung renders a header with an EMPTY state.
+  printf '%s' "$output" | grep -qE 'OPERATOR ▸[[:space:]]*$' \
+    && { echo "empty state — the rung fell into the default arm: $output"; false; }
+  true
+}
+
+@test "🚀: a FAILED migration is reported as the cause instead of the lag" {
+  w="$(mkrepo_landed rocketmig)"
+  run env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" \
+    WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=0" "MIG_FAILED=2")" \
+    bash "$HOOK" --render "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '2 migration' || { echo "the failed migrations were not named: $output"; false; }
+  printf '%s' "$output" | grep -q 'deploy-migrations.sh' || { echo "wrong remedy — a failed migration is not fixed by a redeploy: $output"; false; }
+}

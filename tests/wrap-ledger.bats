@@ -28,6 +28,13 @@ setup() {
   unset WRAP_SESSION_ID CLAUDE_SESSION_ID
   export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/absent-cc-backlog"
   SID="sess-11111111-2222-3333-4444-555555555555"   # the 👤 cases' fixture session id
+  # 🚀 rung: same hermetic discipline. An ABSENT live repo reads LIVE_SRC=unknown, which leaves the
+  # rung exactly as it was — so every pre-existing case above is provably unaffected, and no test
+  # forks git against the operator's REAL live checkout (a converger advances it on a 600s tick, so
+  # a real-repo dependency would make this suite a function of that tick).
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/no-live-layer"
+  export CC_MIGRATIONS_STATE="$BATS_TEST_TMPDIR/migrations"
+  unset WRAP_LIVE_BUDGET_COMMITS WRAP_LIVE_BUDGET_MIN
 }
 
 # read a KEY=value field from --machine output
@@ -298,4 +305,254 @@ ok_state() {
   printf '%s' "$output" | grep -q "👤"
   printf '%s' "$output" | grep -qi "OPERATOR"
   ! printf '%s' "$output" | grep -qi "Next:.*continue" || false
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# 🚀 — the LIVE LAYER: the enforcing store, one edge past trunk ("✅ moves one store right").
+# ✅ used to terminate at TRUNK, but ~/.claude is a tree of per-file SYMLINKS into the live
+# checkout, so what the machine EXECUTES is that checkout's tree — not origin/main. A session could
+# close "✅ Complete & live on trunk" while the box ran code from 91 commits ago (measured
+# 2026-08-07): landed and INERT. Two properties are load-bearing and each gets both directions:
+#   (1) BOUNDED — the converger runs on a 600s tick, so a session that lands and closes at once
+#       ALWAYS sees live < HEAD. Within budget that must stay ✅, or the rung fires at every close
+#       and carries zero bits (MEMORY.md alarm-polarity). Past budget it must fire.
+#   (2) INAPPLICABLE ELSEWHERE — this ledger runs in every repo. A different origin, or a live repo
+#       that cannot be read, must leave the rung EXACTLY as it was and never manufacture a 🚀.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# a live-layer fixture: a SECOND clone of the SAME origin, so the applicability gate opens. `-b main`
+# is required — the bare origin's HEAD may still name refs/heads/master, and a clone landing on an
+# unborn branch has no HEAD to compare, so the fixture would read `unknown` and prove nothing.
+mk_live() {
+  local dir="$BATS_TEST_TMPDIR/live"
+  git clone -q -b main "$ORIGIN" "$dir"
+  printf '%s' "$dir"
+}
+
+# advance trunk by $1 commits (committed AND pushed, so the session itself stays ✅-eligible), then
+# let the live clone SEE them without moving its own HEAD — exactly the deploy lag this rung reads.
+# The fetch is the fixture's job: the ledger is pure-read and never fetches.
+advance_trunk() {
+  local n="$1" i=1
+  while [ "$i" -le "$n" ]; do
+    echo "adv$i" > "adv$i.txt"; git add "adv$i.txt"; git commit -q -m "advance $i"
+    i=$((i + 1))
+  done
+  git push -q origin main
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+}
+
+# commit + push with a COMMITTER date $1 seconds in the past — the TIME-budget lever, isolated from
+# the commit-count lever (one commit of lag is far under the 25-commit default).
+commit_aged() {
+  local age="$1" ts
+  ts=$(( $(date +%s) - age ))
+  echo aged > aged.txt; git add aged.txt
+  GIT_AUTHOR_DATE="$ts +0000" GIT_COMMITTER_DATE="$ts +0000" git commit -q -m "aged work"
+  git push -q origin main
+}
+
+# a failed-migration record: the converger reporting it could NOT put a landed conclusion into its
+# enforcing store (settings.json, a plist, PATH).
+mk_failed_migration() {
+  mkdir -p "$CC_MIGRATIONS_STATE/failed"
+  printf '{"id":"M-1","verdict":"failed","store":"settings.json"}\n' > "$CC_MIGRATIONS_STATE/failed/m-1.json"
+}
+
+# ── 1. POSITIVE CONTROL: the live layer is at/above HEAD ⇒ ✅ is still reachable ──
+@test "live layer at/above HEAD ⇒ LIVE=1, LIVE_SRC=ok, RUNG=✅" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" LIVE)" = "1" ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]
+  [ "$(field "$output" LIVE_SHA)" = "$(git rev-parse HEAD)" ]
+}
+
+# ── 2. behind but WITHIN budget ⇒ still ✅, with the fact attached (the alarm-polarity bound) ──
+@test "live behind but within the converge budget ⇒ RUNG=✅ + converging note, never 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" LIVE)" = "0" ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]
+  run bash "$LEDGER"                       # the one line says it out loud, and is still ONE line
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -qi "converging"
+  ! printf '%s' "$output" | grep -q "🚀" || false
+}
+
+# ── 3. past the COMMIT budget ⇒ 🚀, and the next-verb points at the converger ──
+@test "live behind PAST the commit budget ⇒ RUNG=🚀 (landed but not live)" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=2
+  advance_trunk 3                          # 3 > 2, while the commits are seconds old (time lever off)
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]
+  run bash "$LEDGER"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -q "🚀"
+  printf '%s' "$output" | grep -qi "not live"
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -q "PAST budget"
+  printf '%s' "$output" | grep -qi "deploy-live"      # the next verb is the converger, not /ship
+}
+
+# ── 4. past the TIME budget with lag UNDER the commit budget ⇒ 🚀 (whichever trips FIRST, not AND) ──
+@test "live behind PAST the time budget, lag under the commit budget ⇒ RUNG=🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  commit_aged 7200                          # HEAD committed 2h ago; the default budget is 60 min
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]   # 1 ≤ 25 — the commit budget is NOT what tripped
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ── 5. a FAILED migration is independent of lag: live AT HEAD and it still fires ──
+@test "failed migration with the live layer at HEAD ⇒ RUNG=🚀, MIG_FAILED=1" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  mk_failed_migration
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "ok" ]   # nothing is behind…
+  [ "$(field "$output" MIG_FAILED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]       # …and it fires anyway: no tick clears a failed migration
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "migration"
+}
+
+# ── 6. THE no-op guarantee for every other repo: a different origin URL ⇒ n-a, rung UNCHANGED ──
+# The fixture is deliberately set to 🚀 twice over — HEAD is 2h old AND a migration has failed — so
+# a gate that failed to hold would be caught here rather than passing vacuously.
+@test "live repo with a DIFFERENT origin URL ⇒ LIVE_SRC=n-a, RUNG unchanged, MIG not even counted" {
+  ok_state
+  local foreign_origin="$BATS_TEST_TMPDIR/foreign.git" foreign="$BATS_TEST_TMPDIR/foreign-live"
+  git init -q --bare "$foreign_origin"
+  git clone -q "$foreign_origin" "$foreign"
+  git -C "$foreign" config user.email tester@example.com
+  git -C "$foreign" config user.name tester
+  git -C "$foreign" checkout -q -b main
+  echo other > "$foreign/other.txt"; git -C "$foreign" add other.txt; git -C "$foreign" commit -q -m other
+  export WRAP_LIVE_REPO="$foreign"
+  mk_failed_migration
+  commit_aged 7200
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "n-a" ]
+  [ "$(field "$output" MIG_FAILED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=🚀" || false
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -qi "not the live layer"
+}
+
+# ── 7. an unreadable live repo is `unknown`, never `n-a` and never a manufactured rung ──
+@test "WRAP_LIVE_REPO pointing at a non-repo ⇒ LIVE_SRC=unknown, RUNG unchanged, never 🚀" {
+  ok_state
+  mkdir -p "$BATS_TEST_TMPDIR/not-a-repo"
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/not-a-repo"
+  mk_failed_migration
+  commit_aged 7200
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "unknown" ]
+  [ "$(field "$output" MIG_FAILED)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=🚀" || false
+}
+
+# ── 8. worse rungs are unaffected: the live read is neither PAID FOR nor APPLIED on 🔧/📦 ──
+@test "dirty tree with a past-budget live layer ⇒ RUNG=🔧 and LIVE_SRC=skip" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=0
+  advance_trunk 3                            # past budget — and it must still not decide this rung
+  echo dirt >> base.txt
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" LIVE_SRC)" = "skip" ]
+}
+
+@test "unlanded commit with a past-budget live layer ⇒ RUNG=📦 and LIVE_SRC=skip (📦 outranks 🚀)" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=0
+  advance_trunk 3
+  echo parked > parked.txt; git add parked.txt; git commit -q -m "unlanded work"   # NOT pushed
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "📦" ]
+  [ "$(field "$output" LIVE_SRC)" = "skip" ]
+}
+
+# ── 10. THE NO-OP GUARANTEE, PINNED FROM THE OUTSIDE ──
+# #6 asserts the FIELDS a foreign repo produces. This asserts what an operator in a foreign repo
+# actually SEES: the readout must be BYTE-IDENTICAL whether the live-layer seam is unset, pointed at
+# a repo with a different origin, or pointed at something unreadable. Those three are every state a
+# non-live-layer repo can be in, and if any of them moved the one line, the rung would be reachable
+# from a normal close in another repo — the property the whole change lives or dies on.
+# The fixture is LOADED FOR 🚀 — HEAD committed 2h ago (time budget blown) AND a migration has
+# FAILED — so a gate that leaked in any of the three states moves at least one of these readouts.
+@test "foreign repo: readout is BYTE-IDENTICAL with and without WRAP_LIVE_REPO (🚀 unreachable)" {
+  ok_state
+  mk_failed_migration
+  commit_aged 7200
+  local a b c
+
+  # (a) the seam UNSET — the REAL default path. This is the control on purpose: it is the exact
+  # code path a session in any other repo takes, and it must be inert there. Read-only (one
+  # `git config --get`), and its verdict is stable by construction — a local bare-repo fixture
+  # origin can never equal the live layer's remote URL.
+  unset WRAP_LIVE_REPO
+  a="$(bash "$LEDGER")"
+
+  # (b) the seam pointed at a real repo with a DIFFERENT origin URL ⇒ n-a
+  local foreign_origin="$BATS_TEST_TMPDIR/foreign2.git" foreign="$BATS_TEST_TMPDIR/foreign2-live"
+  git init -q --bare "$foreign_origin"
+  git clone -q "$foreign_origin" "$foreign"
+  git -C "$foreign" config user.email tester@example.com
+  git -C "$foreign" config user.name tester
+  git -C "$foreign" checkout -q -b main
+  echo other > "$foreign/other.txt"; git -C "$foreign" add other.txt; git -C "$foreign" commit -q -m other
+  export WRAP_LIVE_REPO="$foreign"
+  b="$(bash "$LEDGER")"
+
+  # (c) the seam pointed at something unreadable ⇒ unknown
+  mkdir -p "$BATS_TEST_TMPDIR/not-a-repo-2"
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/not-a-repo-2"
+  c="$(bash "$LEDGER")"
+
+  [ "$a" = "$b" ]
+  [ "$b" = "$c" ]
+  # …and what they agree ON is a close that never mentions the live layer at all.
+  ! printf '%s' "$b" | grep -q "🚀" || false
+  ! printf '%s' "$b" | grep -qi "live layer" || false
+  ! printf '%s' "$b" | grep -qi "converging" || false
+}
+
+# ── 9. the --full block carries the Live layer row between Unlanded and Yours ──
+@test "--full carries the Live layer row with its budget verdict" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk 1
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "^Live layer:"
+  printf '%s' "$output" | grep -q "BEHIND"
+  printf '%s' "$output" | grep -q "within budget"
 }
