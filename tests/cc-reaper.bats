@@ -16,6 +16,9 @@ setup() {
   # trunk, all of them `td_called`, with no defect in the subject at all. A suite that reads live
   # $HOME does not test the program, it tests the box.
   export HOME="$D/home"; mkdir -p "$HOME/.claude"
+  # non-$HOME seams (hermeticity ratchet): these default to ABSOLUTE /tmp paths, which a
+  # fixtured $HOME cannot redirect — an absent path is right, the sensors fail open on it.
+  export CC_PERMPEND_DIR="$D/permpend" CC_TELEMETRY_DIR="$D/telemetry"
   # real git repos: clean+shipped (landed) and dirty (not landed)
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
