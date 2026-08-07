@@ -5,11 +5,14 @@
 # a desk WAKE. launchd-runnable (a 300s tick) and supervisor-callable.
 #
 # Each run:
+#   0. D4 author-death JOIN: teardown INTENT markers with no close OUTCOME whose pane is still
+#      present become synthetic `handoff-orphan` records (see § D4 below).
 #   1. Collect NEW records (deduped by a per-record .seen marker) from:
 #        pages/                  supervisor page stamps
 #        cc-announce-alarms/     announce-layer alarms
 #        completion-push/        terminal-completion pushes whose verdict != "verified" (stuck)
 #        decisions/*.json        OPEN class-B/C packets awaiting operator early-veto
+#        handoff-alarms/         handoff-fire alarm records (D1) + this sweep's own D4 orphans
 #   2. Run `cc-decide expire-sweep` — the sweep is the class-B default ACTUATOR: for each fired
 #      default it appends a cc-backlog item (bounded + auditable), NEVER acting inline. A default
 #      the PRODUCER declared `no-change` actuates nothing, so it is counted + summarised but gets
@@ -30,7 +33,9 @@
 #           UNSEEN, so the next sweep re-surfaces them until something proves a reader.
 #      `CC_SWEEP_LADDER=legacy` restores the pre-D2 nested logic byte-for-byte (the kill switch).
 #   4. Write ONE {fired|abstained} IDL record (B-3: didn't-fire ≠ never-ran).
-#   5. Age-compact: the .seen markers AND the six write-only event dirs (see below).
+#   5. Age-compact: the .seen markers AND the seven write-only event dirs (see below). A record that
+#      ages out with NO .seen marker is counted into an `expired-unread` IDL row + a ledger line
+#      first — an unread escalation must never leave by a quiet unlink (D2 rung 4).
 #
 # EVIDENCE law (inv7), amended 2026-07-25 (audit 03 §1b/§1c, fix 5): source records used to be
 # NEVER deleted. That made every event dir unbounded — `comms-alarms/` had *zero* rm sites of any
@@ -44,12 +49,15 @@
 # would re-fire the escalation it damps); it reaps only when its mailbox subject is also gone.
 #
 # Env (tests): CC_PAGES_DIR · CC_ANNOUNCE_ALARM_DIR · CC_COMPLETION_RECORDS_DIR · CC_DECISIONS_DIR
-#   · CC_ROLES_DIR · CC_IDL · CC_SWEEP_SEEN_DIR · CC_SWEEP_SEEN_TTL_DAYS (default 7)
+#   · CC_ROLES_DIR · CC_IDL · CC_SWEEP_SEEN_DIR (dual-keyed: hash + `<basename>.seen`)
+#   · CC_SWEEP_SEEN_TTL_DAYS (default 7)
 #   · CC_COMMS_ALARM_DIR · CC_PUSH_RECORDS_DIR · CC_TEARDOWN_RECORDS_DIR
 #   · CC_INBOX_GUARD_STATE_DIR · CC_MAILBOX_DIR · CC_EVENT_TTL_DAYS (default 7)
 #   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN
 #   · CC_SWEEP_OS_CHANNEL (auto|on|off) · CC_SWEEP_NOTIFY_TIMEOUT_S (default 25)
 #   · CC_SWEEP_LADDER (v2|legacy, default v2 — `legacy` is the D2 kill switch)
+#   D4: CC_HANDOFF_ALARM_DIR · CC_EXPIRED_LEDGER · CC_HANDOFF_JOIN (1|0)
+#   · CC_HANDOFF_JOIN_DEADLINE_S (default 900) · CC_TEARDOWN_DIR · CC_CLOSE_ATTRIB_LOG · CC_IT2_BIN
 #   BSD+GNU portable, no eval, fail-loud.
 set -uo pipefail
 
@@ -70,6 +78,18 @@ TEARDOWN_DIR="${CC_TEARDOWN_RECORDS_DIR:-$HOME/.claude/cc-teardown}"
 INBOX_GUARD_DIR="${CC_INBOX_GUARD_STATE_DIR:-$HOME/.claude/autonomy/inbox-guard}"
 MAILBOX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
 EVENT_TTL="${CC_EVENT_TTL_DAYS:-7}"
+# D1 alarm records (handoff-fire) + this sweep's own D4 orphans — a SEVENTH event dir, collected
+# like the others and reaped on the same horizon.
+HANDOFF_ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
+EXPIRED_LEDGER="${CC_EXPIRED_LEDGER:-$HOME/.claude/autonomy/expired-unread.jsonl}"
+LADDER="${CC_SWEEP_LADDER:-v2}"
+# D4 join inputs. JOIN_MARKER_DIR is deliberately NOT the TEARDOWN_DIR above: that one is
+# `cc-teardown/` (push RECORDS, reaped); this is `watchdog/teardown/` (teardown INTENT markers,
+# read-only here). Their env names match each PRODUCER's own, per the convention above.
+JOIN_MARKER_DIR="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
+CLOSE_ATTRIB_LOG="${CC_CLOSE_ATTRIB_LOG:-$HOME/.claude/logs/close-attrib.jsonl}"
+IT2_BIN="${CC_IT2_BIN:-$HOME/.claude/bin/it2}"
+JOIN_DEADLINE_S="${CC_HANDOFF_JOIN_DEADLINE_S:-900}"
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
@@ -97,9 +117,26 @@ BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
 
 mkdir -p "$SEEN_DIR" 2>/dev/null || true
 
+# ── THE SEEN KEY IS DUAL (2026-08-07) ────────────────────────────────────────────────────────────
+# This sweep's original key is a HASH of the record's full PATH — collision-proof across dirs, but
+# unreadable and ungreppable from anywhere else, so no other tool could ever ack a record or ask
+# whether one had been read. D3's render and D5's `cc-escalations` both need that, and they can only
+# name a record by its BASENAME. So every .seen decision is now written TWICE:
+#   · the hash key  — unchanged, so the ~1,193 markers already on disk stay valid;
+#   · `<record-basename>.seen` — the literal form the render/CLI side writes on ack and greps.
+# The READ side takes EITHER (a record acked by the CLI carries only the literal key; one drained by
+# this sweep before today carries only the hash). Caveat worth stating rather than hiding: the
+# literal key is basename-scoped, so two records sharing a basename across two dirs share it. Live
+# names are uuids, decision ids and alarm-<utc>-<pid>-<rand>, so the set is collision-free today —
+# and the failure direction is a record read as ALREADY-SEEN, which the loud-expiry pass would then
+# report as drained rather than lost.
+# The two NEW marker kinds below (.bannered, .orphan-checked) have no legacy on disk, so they are
+# single literal keys only — a second spelling of a key nobody has ever written buys nothing.
 seen_key()  { printf '%s' "$1" | shasum -a 256 | cut -c1-32; }
-is_new()    { [ ! -f "$SEEN_DIR/$(seen_key "$1")" ]; }
-mark_seen() { : > "$SEEN_DIR/$(seen_key "$1")" 2>/dev/null || true; }
+seen_lit()  { printf '%s.seen' "$(basename "$1")"; }
+is_new()    { [ ! -f "$SEEN_DIR/$(seen_key "$1")" ] && [ ! -f "$SEEN_DIR/$(seen_lit "$1")" ]; }
+mark_seen() { : > "$SEEN_DIR/$(seen_key "$1")" 2>/dev/null || true
+              : > "$SEEN_DIR/$(seen_lit "$1")" 2>/dev/null || true; }
 
 # Accumulator of surfaced record paths (newline-separated; marked .seen only after a delivery).
 SURFACED=""
@@ -107,6 +144,167 @@ add_surfaced() { SURFACED="${SURFACED}$1
 "; }
 
 new_pages=0 new_alarms=0 new_pushfailed=0 open_decisions=0 fired_defaults=0 fired_nochange=0
+new_handoff_alarms=0 expired_unread=0
+ha_classes=""   # newline-separated `class` values of the handoff-alarm records surfaced this run
+
+# BOUNDED: every external call this sweep makes reaches the iTerm2/AppleEvent path, the proven
+# machine-wide wedge class (2026-07-26: a bare `it2 session list --json` returned rc 124 with
+# blocked forks piling up across ~110 sessions) — cc-notify below, and the D4 world probe. This runs
+# from launchd on a 300 s tick; an unbounded call would wedge the sweep INSIDE the one act it exists
+# to perform. rc 124 needs no branch of its own at the notify site — it is non-zero, so it takes the
+# REFUSED path, records stay unseen, and the next sweep retries. That is exactly right for a cut
+# send: we never learned whether it was enqueued, so re-surfacing is the safe error. (The D4 probe
+# treats it as NO-DATA for the same reason — see § D4.)
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+sweep_bounded() { # <seconds> <cmd…> — rc 124 on a cut (timeout(1)'s contract)
+  local s="$1"; shift
+  if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$TIMEOUT_BIN" -k 5 "$s" "$@"
+}
+NOTIFY_TIMEOUT_S="${CC_SWEEP_NOTIFY_TIMEOUT_S:-25}"
+
+log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; default {})>
+  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
+  local extra="${2:-}"; [ -n "$extra" ] || extra='{}'
+  # jq-encode EVERY field (numerics via --argjson, strings via --arg): a value carrying a " /
+  # backslash / newline then can NEVER emit a malformed IDL line — one malformed line aborts the
+  # cc-audit four-zeros `jq -rs` slurp (reads as "no records" ⇒ silent D9/alarm false-GREEN).
+  jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
+    --argjson np "$new_pages" --argjson na "$new_alarms" --argjson npf "$new_pushfailed" \
+    --argjson od "$open_decisions" --argjson fd "$fired_defaults" \
+    --argjson fnc "$fired_nochange" --argjson nha "$new_handoff_alarms" --argjson extra "$extra" \
+    '{ts:$ts,tool:"autonomy-sweep",disposition:$disp,new_pages:$np,new_alarms:$na,
+      new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd,
+      fired_nochange:$fnc,new_handoff_alarms:$nha} + $extra' \
+    >> "$IDL" 2>/dev/null || true
+}
+
+# Read one STRING field out of a single-line JSON record WITHOUT jq. The producers of these records
+# are deliberately dependency-free (printf-JSON — D1's hf_alarm, write_teardown_marker), so a
+# truncated or half-written record must degrade to "" here rather than abort the sweep.
+json_field() { # <file> <key> → value | ""
+  grep -o "\"$2\":\"[^\"]*\"" "$1" 2>/dev/null | head -1 | cut -d'"' -f4
+}
+file_mtime() { # <file> → epoch seconds | 0   (BSD `stat -f`, GNU `stat -c` — never-stuck-gate idiom)
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+# ── 0. D4 — AUTHOR-DEATH JOIN ─────────────────────────────────────────────────────────────────────
+# The one class no push and no watcher covers: the detached watcher ITSELF dies (reboot, box kill —
+# detach() survives a group SIGKILL but not the machine). Nothing then closes the pane and nothing
+# reports that nothing did. Joined here, at sweep cadence, from three independent readings:
+#   INTENT  a teardown marker in watchdog/teardown/ (written pre-exit by the fire/shutdown paths)
+#   OUTCOME a close-attrib row for the same id with a verdict starting `closed`
+#   WORLD   the pane still present in a BOUNDED terminal listing
+# Marker past the deadline + no outcome + pane STILL THERE ⇒ ONE synthetic `handoff-orphan` record.
+# Pane gone + no row ⇒ benign (vendor close, or the fail-open attrib path) — NO alarm: an alarm that
+# fires on the ordinary case carries the same zero bits as one that cannot fire (alarm-polarity law).
+#
+# THREE bounds, each measured against the live population (1,019 markers, 1,013 past the deadline,
+# 2026-08-07) rather than assumed:
+#  · ONE probe per SWEEP, cached — not one per marker. Per-marker probing would have been 1,013
+#    calls × a 10 s bound inside a 300 s tick.
+#  · EXACT-TOKEN match against the listing, never a substring. `it2 session list` returns short
+#    numeric ids on this box (kitty-normalised: `240 7 263 …`), so a marker for pane `4` substring-
+#    matches `240`. Measured on the live set: substring ⇒ 40 orphan records, all false;
+#    exact-token ⇒ 0 (memory: pgrep-f-matches-agent-briefs — a blob match counts the wrong thing).
+#  · JOIN_MAX_PER_TICK caps the work a single tick can take on, and the remainder is COUNTED into
+#    the pass row (never a silent cap). The `.orphan-checked` marker makes each verdict once-ever,
+#    so a backlog drains over ticks instead of spiking one.
+# COVERAGE, stated honestly: the world probe adjudicates only the id space its listing returns. A
+# marker from another terminal reads as ABSENT ⇒ benign ⇒ never alarms. That is fail-quiet by
+# choice — a probe that cannot see a pane must not claim it is orphaned (probe-acting-on-absence).
+JOIN_MAX_PER_TICK=100
+join_world_out=""
+join_world_rc=-1        # -1 = not probed yet this sweep
+join_world_probe() {
+  [ "$join_world_rc" -ne -1 ] && return 0
+  join_world_out="$(sweep_bounded 10 "$IT2_BIN" session list 2>/dev/null)"
+  join_world_rc=$?      # rc on its OWN line: `local x="$(…)"` would swallow it
+  return 0
+}
+join_world_has() { # <pane> → 0 present · 1 absent. EXACT token equality, never a substring.
+  local p="$1" line tok rc=1
+  # `set -f` for the split: the tokens must come from the LISTING, and an unquoted `$line` also
+  # PATHNAME-EXPANDS, so a listing carrying a `*` would invent tokens out of the filesystem. Restored
+  # below — `break 2` rather than an early `return` is what guarantees the restore is reached.
+  set -f
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086  # word-splitting the line into tokens is the point
+    for tok in $line; do [ "$tok" = "$p" ] && { rc=0; break 2; }; done
+  done <<EOF
+$join_world_out
+EOF
+  set +f
+  return "$rc"
+}
+join_closed() { # <pane> → 0 iff a close OUTCOME row exists for this id
+  [ -f "$CLOSE_ATTRIB_LOG" ] || return 1
+  local rows
+  # NO PIPE into grep -q here: under `set -o pipefail` an early-exiting grep SIGPIPEs its producer
+  # and the pipeline reads 141 — i.e. FALSE on a match, inverting the probe (memory:
+  # pipefail-inverts-early-exit-probe). Capture first, test the blob second.
+  rows="$(grep -F "\"id_requested\":\"$1\"" "$CLOSE_ATTRIB_LOG" 2>/dev/null || true)"
+  case "$rows" in *'"verdict":"closed'*) return 0 ;; esac
+  return 1
+}
+run_handoff_join() {
+  [ "${CC_HANDOFF_JOIN:-1}" = 1 ] || return 0
+  [ -d "$JOIN_MARKER_DIR" ] || return 0
+  local m base pane sid mode age rec nowe
+  local examined=0 deferred=0 n_closed=0 n_nopane=0 n_gone=0 n_nodata=0 n_orphan=0
+  nowe="$(date -u +%s)"
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    base="$(basename "$m")"
+    # once-ever guard: a verdict is reached at most one time per marker (except NO-DATA, which
+    # deliberately leaves no marker so a blind tick retries rather than acquitting).
+    [ -f "$SEEN_DIR/$base.orphan-checked" ] && continue
+    age=$(( nowe - $(file_mtime "$m") ))
+    [ "$age" -ge "$JOIN_DEADLINE_S" ] || continue      # not yet due — re-examined next tick
+    if [ "$examined" -ge "$JOIN_MAX_PER_TICK" ]; then deferred=$((deferred + 1)); continue; fi
+    examined=$((examined + 1))
+    pane="$(json_field "$m" pane)"; sid="$(json_field "$m" sid)"; mode="$(json_field "$m" mode)"
+    if [ -z "$pane" ]; then
+      n_nopane=$((n_nopane + 1)); : > "$SEEN_DIR/$base.orphan-checked" 2>/dev/null || true; continue
+    fi
+    if join_closed "$pane"; then
+      n_closed=$((n_closed + 1)); : > "$SEEN_DIR/$base.orphan-checked" 2>/dev/null || true; continue
+    fi
+    join_world_probe
+    if [ "$join_world_rc" -ne 0 ]; then
+      # NO-DATA (rc 124 cut, no binary, terminal not running): we learned NOTHING about the world.
+      # Do NOT mark checked — a blind probe may neither alarm nor acquit.
+      n_nodata=$((n_nodata + 1)); continue
+    fi
+    if join_world_has "$pane"; then
+      mkdir -p "$HANDOFF_ALARM_DIR" 2>/dev/null || true
+      rec="$HANDOFF_ALARM_DIR/alarm-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}.json"
+      # FROZEN record shape, printf-JSON (no jq): the field values come from json_field, whose
+      # pattern cannot return a `"`, so this cannot emit a malformed record.
+      printf '{"kind":"handoff-alarm","class":"handoff-orphan","pane":"%s","sid":"%s","successor":"","detail":"teardown mode=%s armed %ss ago; no close outcome; pane still open","ts":"%s"}\n' \
+        "$pane" "$sid" "$mode" "$age" "$(now_iso)" > "$rec" 2>/dev/null || true
+      n_orphan=$((n_orphan + 1))
+      log_idl join "$(jq -cn --arg marker "$base" --arg pane "$pane" --arg sid "$sid" \
+        --arg mode "$mode" --argjson age "$age" --arg record "$rec" \
+        '{join:"orphan",marker:$marker,pane:$pane,sid:$sid,mode:$mode,age_s:$age,record:$record}')"
+    else
+      n_gone=$((n_gone + 1))
+    fi
+    : > "$SEEN_DIR/$base.orphan-checked" 2>/dev/null || true
+  done < <(find "$JOIN_MARKER_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null)
+  # ONE pass row, not one row per marker: the first tick against the live fleet adjudicates ~1,000
+  # historical markers, and a row apiece would put 1,000 lines into the IDL that cc-audit slurps.
+  # The ALARM keeps its own per-record row above; the benign verdicts are counted (alarm-polarity).
+  if [ "$examined" -gt 0 ] || [ "$deferred" -gt 0 ]; then
+    log_idl join "$(jq -cn --argjson ex "$examined" --argjson df "$deferred" \
+      --argjson cl "$n_closed" --argjson np "$n_nopane" --argjson gn "$n_gone" \
+      --argjson nd "$n_nodata" --argjson orp "$n_orphan" \
+      '{join:"pass",examined:$ex,deferred:$df,closed:$cl,no_pane_key:$np,benign_gone:$gn,
+        no_data:$nd,orphan:$orp}')"
+  fi
+}
+run_handoff_join
 
 # ── 1. collect NEW pages / alarms ──────────────────────────────────────────────
 for f in "$PAGES_DIR"/*.page; do
@@ -124,6 +322,17 @@ for f in "$COMPLETION_DIR"/*; do
   v="$(jq -r '.verdict // ""' "$f" 2>/dev/null || echo "")"
   case "$v" in verified) continue ;; esac
   new_pushfailed=$((new_pushfailed + 1)); add_surfaced "$f"
+done
+# handoff-alarms: D1's capture-before-notify records, plus the D4 orphans raised above. Their CLASS
+# is read with grep, not jq — these are written by a dependency-free producer in a detached watcher,
+# so a half-written record must cost a class label, never the whole sweep.
+for f in "$HANDOFF_ALARM_DIR"/*.json; do
+  [ -f "$f" ] || continue
+  is_new "$f" || continue
+  new_handoff_alarms=$((new_handoff_alarms + 1)); add_surfaced "$f"
+  hacls="$(json_field "$f" class)"
+  ha_classes="${ha_classes}${hacls:-unknown}
+"
 done
 
 # ── 2. expire-sweep = the class-B default ACTUATOR (append to backlog, never act inline) ──
@@ -186,13 +395,54 @@ for f in "$DECISIONS_DIR"/*.json; do
   open_decisions=$((open_decisions + 1)); add_surfaced "$f"
 done
 
-total_new=$((new_pages + new_alarms + new_pushfailed + open_decisions + fired_defaults))
+total_new=$((new_pages + new_alarms + new_pushfailed + open_decisions + fired_defaults + new_handoff_alarms))
+
+# ── LOUD EXPIRY (D2 rung 4) — an unread escalation may not leave by a quiet unlink ────────────────
+# EVIDENCE law says a record ages out at CC_EVENT_TTL_DAYS once it can no longer be read as live.
+# For a record that was NEVER read that is a silent loss, and silent loss is the entire class this
+# sweep exists to end. Each source record past the horizon with NO .seen marker gets one ledger line
+# + is counted into ONE `expired-unread` IDL row before the reaper touches it.
+#
+# ORDERING IS LOAD-BEARING: this runs BEFORE the .seen compaction below. The markers age out on the
+# same horizon as the records they describe, so compacting first would delete the very evidence that
+# a record HAD been read, and every properly-drained record would then be reported as expired-unread.
+#
+# Scanned dirs = the ones this sweep both SURFACES and REAPS. A dir that is reaped but never
+# surfaced (comms-alarms/, push-records/, cc-teardown/) would report every record as unread forever,
+# which is an alarm that cannot distinguish anything. completion-push/ is filtered by the same
+# verdict predicate the collector uses — a `verified` record was never stuck, so it is not unread.
+expire_scan() { # <dir> <store-label> [verdict-filtered:1]
+  [ -d "$1" ] || return 0
+  local rec cls v
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    if [ "${3:-0}" = 1 ]; then
+      v="$(jq -r '.verdict // ""' "$rec" 2>/dev/null || echo "")"
+      case "$v" in verified) continue ;; esac
+    fi
+    is_new "$rec" || continue          # HAS a .seen marker ⇒ it was read ⇒ silent, as today
+    expired_unread=$((expired_unread + 1))
+    cls="$(json_field "$rec" class)"
+    mkdir -p "$(dirname "$EXPIRED_LEDGER")" 2>/dev/null || true
+    printf '{"ts":"%s","record":"%s","class":"%s","store":"%s"}\n' \
+      "$(now_iso)" "$rec" "${cls:-unknown}" "$2" >> "$EXPIRED_LEDGER" 2>/dev/null || true
+  done < <(find "$1" -maxdepth 1 -type f -mtime +"$EVENT_TTL" 2>/dev/null)
+}
+expire_scan "$HANDOFF_ALARM_DIR" handoff-alarms
+expire_scan "$PAGES_DIR"         pages
+expire_scan "$COMPLETION_DIR"    completion-push 1
+# Emitted ONLY when it is non-zero: a row asserting "0 records were lost" on every 300 s tick would
+# be the alarm that always fires, and reading one would tell the operator nothing (alarm-polarity).
+[ "$expired_unread" -gt 0 ] && log_idl expired-unread \
+  "$(jq -cn --argjson n "$expired_unread" --arg ledger "$EXPIRED_LEDGER" \
+     '{kind:"expired-unread",n:$n,ledger:$ledger,
+       why:"records aged past CC_EVENT_TTL_DAYS with no .seen marker — nobody ever read them"}')"
 
 # ── age-compact the .seen markers ──
 find "$SEEN_DIR" -type f -mtime +"$SEEN_TTL" -delete 2>/dev/null || true
 
-# ── age-reap the six write-only EVENT dirs (audit 03 fix 5; see the EVIDENCE law above) ──
-# One horizon, six paths, `-maxdepth 1 -type f` so a nested subdir is never walked into. Each dir
+# ── age-reap the write-only EVENT dirs (audit 03 fix 5; see the EVIDENCE law above) ──
+# One horizon, seven paths, `-maxdepth 1 -type f` so a nested subdir is never walked into. Each dir
 # is drained by THIS sweep on a 300 s tick, so a 7-day-old record has been surfaced ~2,000 times.
 reap_event_dir() { # <dir>
   [ -d "$1" ] || return 0
@@ -203,6 +453,7 @@ reap_event_dir "$COMMS_ALARM_DIR"    # comms safety gate       (395 files, ZERO 
 reap_event_dir "$PUSH_RECORDS_DIR"   # push-send verdicts      (318 files)
 reap_event_dir "$COMPLETION_DIR"     # completion-push records (77 files)
 reap_event_dir "$TEARDOWN_DIR"       # cc-teardown records     (154 files)
+reap_event_dir "$HANDOFF_ALARM_DIR"  # D1 alarm records + D4 orphans (counted out loud above first)
 # inbox-guard is DAMPING state, not an event log: `<key>.escalated` suppresses a repeat escalation
 # for mailbox <key>. Age alone must not clear it — that would re-fire the very page it damps (the
 # 216-page storm lesson). Reap only when the marker is BOTH past the horizon AND its mailbox
@@ -215,22 +466,6 @@ if [ -d "$INBOX_GUARD_DIR" ]; then
     rm -f "$mk" 2>/dev/null || true
   done < <(find "$INBOX_GUARD_DIR" -maxdepth 1 -type f -name '*.escalated' -mtime +"$EVENT_TTL" 2>/dev/null)
 fi
-
-log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; default {})>
-  mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  local extra="${2:-}"; [ -n "$extra" ] || extra='{}'
-  # jq-encode EVERY field (numerics via --argjson, strings via --arg): a value carrying a " /
-  # backslash / newline then can NEVER emit a malformed IDL line — one malformed line aborts the
-  # cc-audit four-zeros `jq -rs` slurp (reads as "no records" ⇒ silent D9/alarm false-GREEN).
-  jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
-    --argjson np "$new_pages" --argjson na "$new_alarms" --argjson npf "$new_pushfailed" \
-    --argjson od "$open_decisions" --argjson fd "$fired_defaults" \
-    --argjson fnc "$fired_nochange" --argjson extra "$extra" \
-    '{ts:$ts,tool:"autonomy-sweep",disposition:$disp,new_pages:$np,new_alarms:$na,
-      new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd,
-      fired_nochange:$fnc} + $extra' \
-    >> "$IDL" 2>/dev/null || true
-}
 
 # ── 2b. BACKLOG HEALTH — measured EVERY sweep, deliberately ABOVE the nothing-new early exit ──────
 # The two backlog-health tools landed inert: a7bf7068 gave items a falsifier and 596b39a7 gave the
@@ -286,6 +521,19 @@ summary="[desk-sweep] NEW:"
 [ "$new_alarms"     -gt 0 ] && summary="$summary ${new_alarms} alarm(s),"
 [ "$new_pushfailed" -gt 0 ] && summary="$summary ${new_pushfailed} push-failed,"
 [ "$open_decisions" -gt 0 ] && summary="$summary ${open_decisions} open decision(s),"
+# handoff alarms carry a CLASS (strand-risk · husk-pane · recycle-dead · handoff-orphan) and the
+# class is the whole point of the line — "3 handoff-alarm(s)" tells the kind, not the idea.
+if [ "$new_handoff_alarms" -gt 0 ]; then
+  ha_note=""
+  while IFS= read -r ln; do
+    [ -n "$ln" ] || continue
+    ha_note="${ha_note}${ln}, "
+  done < <(printf '%s' "$ha_classes" | sort | uniq -c | sed 's/^ *//')
+  ha_note="${ha_note%, }"
+  summary="$summary ${new_handoff_alarms} handoff-alarm(s)"
+  [ -n "$ha_note" ] && summary="${summary} (${ha_note})"
+  summary="${summary},"
+fi
 # fired defaults split two ways: the ones that queued work, and the no-change ones that are
 # SURFACED here but deliberately never dispatched. Reporting only the total would read as "N items
 # queued" on a sweep that queued none of them.
@@ -329,20 +577,6 @@ summary="${summary%,}"
 # memory: claimed-outcome-vs-checked-outcome — the structured verdict token existed all along;
 # nobody parsed it.
 
-# BOUNDED: cc-notify reaches the iTerm2/AppleEvent path, the proven machine-wide wedge class
-# (2026-07-26: a bare `it2 session list --json` returned rc 124 with blocked forks piling up across
-# ~110 sessions). This runs from launchd on a 300 s tick; an unbounded send would wedge the sweep
-# INSIDE the one act it exists to perform. rc 124 needs no branch of its own — it is non-zero, so it
-# takes the REFUSED path, records stay unseen, and the next sweep retries. That is exactly right for
-# a cut send: we never learned whether it was enqueued, so re-surfacing is the safe error.
-TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
-sweep_bounded() { # <seconds> <cmd…> — rc 124 on a cut (timeout(1)'s contract)
-  local s="$1"; shift
-  if [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then "$@"; return $?; fi
-  "$TIMEOUT_BIN" -k 5 "$s" "$@"
-}
-NOTIFY_TIMEOUT_S="${CC_SWEEP_NOTIFY_TIMEOUT_S:-25}"
-
 # Is a liveness-free operator surface available AT ALL? Notification Center needs no live pane and
 # no role file, so it cannot rot the way cc-roles/desk did. Where it is absent there is no desk-less
 # delivery path at all, and RECORDED must stay a hard non-delivery that retries — the pre-fix
@@ -384,6 +618,27 @@ OSA
 
 mark_surfaced_seen() { # forget the records — ONLY ever called on a proven delivery
   printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
+}
+# The BANNER damping store (D2). Deliberately NOT .seen: a banner is a transient toast with no read
+# receipt, so the record stays visible to the session render / cc-escalations until something
+# actually proves a read. This is what un-forces the 2026-08-01 trade (banner ⇒ seen), which was
+# only ever made because no damping store existed — with one, storm-avoidance no longer costs the
+# record. Keyed by record BASENAME per the frozen interface.
+mark_surfaced_bannered() {
+  printf '%s' "$SURFACED" | while IFS= read -r rec; do
+    [ -n "$rec" ] && { : > "$SEEN_DIR/$(basename "$rec").bannered" 2>/dev/null || true; }
+  done
+}
+count_unbannered() { # → how many surfaced records have never been on a banner
+  local rec n=0
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    [ -f "$SEEN_DIR/$(basename "$rec").bannered" ] && continue
+    n=$((n + 1))
+  done <<EOF
+$SURFACED
+EOF
+  printf '%s' "$n"
 }
 
 # ── r2 damping (D2) ───────────────────────────────────────────────────────────────────────────────
@@ -484,6 +739,12 @@ ladder_v2() {
   # configuration here, never an error and never a fault to repair. ──
   if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
     notified_as="role:desk"
+    # Address the ROLE, never the uuid read above: cc-notify re-reads cc-roles/desk at SEND time and
+    # follows the `.forward` chain, so a desk recycled since this sweep started still gets the wake
+    # (a18 SO-1). DESK_TARGET gates on "is a channel wired at all", which is exactly why it can
+    # never be the delivery evidence. CAPTURE stderr — the `verdict=` token lives there, and the
+    # exit code alone is NOT the outcome (measured 2026-07-31 against a dead pane:
+    # `verdict=mailbox-only enqueued=1 reason=target-not-live unacked=997` at rc 0).
     notify_out="$(CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk "$summary" 2>&1)"
     notify_rc=$?
     notify_verdict="$(printf '%s' "$notify_out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
