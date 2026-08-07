@@ -545,34 +545,52 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]   # never advances on a non-verdict
 }
 
+# NO GREEN BASELINE IN THE TWO GRANULARITY TESTS, DELIBERATELY — it is what keeps their count about
+# the LADDER. With no last-green, red_actions hands do_bisect an empty `good` and it returns at its
+# own first guard, having minted nothing and RUN nothing, so the witness counts the corpus run and
+# the retries and nothing else. Bisect probe counts are B10-B16's, in postland-verify-bisect-bound.bats.
+#
+# WHY THIS IS A DECOUPLING AND NOT A TIDY-UP. The original fixture DID run a green baseline, and its
+# accounting — "2 = corpus (1) + C20's bisect re-running the whole file (1)" — was measured and
+# correct when it landed (833dcf35, 2026-07-29). It went FALSE eight days later with neither side
+# changing: 937c6fc5 added a TIP CONFIRMATION that re-runs the failing file whenever the walk names
+# `bad`, which is exactly this fixture's shape (a one-commit range, so the walk's only candidate IS
+# the tip and the confirmation is its deliberately-redundant second run), and 4348ddc2 added a floor
+# probe on the same path (N/A here — the file does not exist at the floor, so it costs no run).
+# Measured against that pair: 3 where the test said 2, and 5 where it said 4. Both C23 tests went
+# reproducibly red for a change in a mechanism they do not test and cannot see. The count no longer
+# spans it, so a third endpoint guard can land tomorrow and these two stay green.
 @test "C23: the re-run is the failing TEST, not its whole file (what makes the bound fit)" {
-  run bash "$SUT" --run-if-needed
-  [ "$status" -eq 0 ]
   # ONE file, TWO tests: one fails every time, one records every execution of itself.
   wit="$BATS_TEST_TMPDIR/witness"
   printf '@test "boom" { false; }\n@test "wit" { echo x >> "%s"; }\n' "$wit" > "$R/tests/pair.bats"
   push_commit "one failing test beside a witness"
   tree="$(origin_tree)"
   run bash "$SUT" --run-if-needed
-  # WITNESS ACCOUNTING (measured, so nobody has to re-derive it): 2 = the corpus run (1) + C20's
-  # bisect, which legitimately re-runs the whole FILE to locate the culprit (1). The two RETRIES
-  # contribute ZERO, because each re-ran only the named test. The paired file-granularity test below
-  # is the control: same fixture, same bisect, 4 — and that delta of exactly 2 IS the retries.
-  [ "$(wc -l < "$wit" | tr -d ' ')" = "2" ]
+  # The PREMISE of the count, asserted rather than assumed: no last-green ⇒ no bisect ⇒ nothing but
+  # the ladder can move the number below. Restore a baseline run above and this fails HERE, at the
+  # reason, instead of leaving the count to drift by whatever the bisect happens to cost that month.
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]
+  # WITNESS ACCOUNTING (measured, so nobody has to re-derive it): 1 = the corpus run, alone. The two
+  # RETRIES contribute ZERO, because each re-ran only the named test. The paired file-granularity
+  # test below is the control: same fixture, 3 — and that delta of exactly 2 IS the retries.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "1" ]
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "red" ]                            # C8 still convicts: "boom" failed 3/3
 }
 
 @test "C23: POSTLAND_RETRY_GRANULARITY=file restores the whole-file re-run" {
-  run bash "$SUT" --run-if-needed
-  [ "$status" -eq 0 ]
   wit="$BATS_TEST_TMPDIR/witness2"
   printf '@test "boom" { false; }\n@test "wit" { echo x >> "%s"; }\n' "$wit" > "$R/tests/pair2.bats"
   push_commit "the granularity seam"
+  tree="$(origin_tree)"
   POSTLAND_RETRY_GRANULARITY=file run bash "$SUT" --run-if-needed
-  # 4 = corpus (1) + TWO WHOLE-FILE retries (2) + the bisect's whole-file run (1). Against the
-  # test-granular default the same fixture yields 2 — the seam is what moves those two executions.
-  [ "$(wc -l < "$wit" | tr -d ' ')" = "4" ]
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]           # same premise: no bisect inside this number
+  # 3 = corpus (1) + TWO WHOLE-FILE retries (2). Against the test-granular default the same fixture
+  # yields 1 — the seam is what moves those two executions, and now the ONLY thing that can.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "3" ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                            # the seam changes HOW the ladder re-runs, never WHAT it decides
 }
 
 # ── C13 CUT ≠ RED ────────────────────────────────────────────────────────────────────────────
