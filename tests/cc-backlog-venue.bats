@@ -16,6 +16,20 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CB="$REPO/bin/cc-backlog"
+  # OWN $HOME before anything else. The three seams that actually reach live state are fixtured
+  # explicitly below, and were from the start — but that is a per-seam defence, and it only covers
+  # the seams that exist TODAY. Any future default that resolves under $HOME (the subject already
+  # has several: the IDL, the sessions-bin resolver, the worktree root) would silently start writing
+  # to the operator's real ~/ with no test change to mark it. Owning $HOME makes the leak structural
+  # rather than a thing each new seam has to remember, which is what the hermeticity ratchet asks for.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The registry probe is the one thing the subject reads under $HOME that these tests DEPEND on
+  # answering: claimer_live's local branch needs an oracle that ANSWERS "not listed" (rc 1) for the
+  # dead-local controls. With $HOME owned there is no ~/.claude/bin/cc-sessions to resolve, which
+  # would make it UNRESOLVED (rc 2) and let the local controls abstain — passing vacuously for a
+  # reason that has nothing to do with venue. Stub it to an empty-but-valid registry.
+  printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   # The reap verdict journal defaults under $HOME; fixture it in setup() (never per-test) so no test
   # in this file can append to the operator's live ~/.claude/autonomy/idl.jsonl.
