@@ -215,6 +215,21 @@ def panes(tree: list) -> list[dict]:
                         "cols": w.get("columns", 0),
                         "on_screen": drawn,
                         "hidden_by": hidden_by,
+                        # tab_active = "this is the pane the tab shows, or would show the
+                        # moment you switch to it". THE marker to render.
+                        #
+                        # NOT is_focused. is_focused is only meaningful while kitty is the
+                        # frontmost application, and this tool runs from a Bash call inside a
+                        # Claude Code pane, which frequently is not that moment. Measured on
+                        # one live tree: 2 of 24 panes reported is_focused — impossible as a
+                        # global truth, since at most one window on the desktop is focused —
+                        # while is_active came back at exactly one per tab, 5 across 5 tabs.
+                        # (bin/cc-url-open:117-122 records the same conclusion for link
+                        # provenance: is_active is the durable field, kitty keeps marking the
+                        # last-active OS window, tab and pane while unfocused.)
+                        # is_focused is kept in --json for callers that want it; nothing in
+                        # the human output depends on it.
+                        "tab_active": top_of_stack,
                         "focused": bool(w.get("is_focused")),
                     }
                 )
@@ -266,7 +281,7 @@ def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> in
         print(f"   tab {tab:<4} {mark} {C['meta']}{g0['tab_panes']} panes{C['reset']}{zoom}")
         for r in group:
             col, _ = _state(r)
-            star = "*" if r["focused"] else " "
+            star = "▸" if r["tab_active"] else " "
             why = f"  {C['off']}[hidden by {r['hidden_by']}]{C['reset']}" if r["hidden_by"] else ""
             print(
                 f"     {star} {col}{r['cols']:>4}c{C['reset']} "
@@ -335,8 +350,10 @@ USAGE = """cc-where — locate a Claude Code session on your physical screens
   cc-where --go <regex>    focus that pane (raises its window, switches to its tab)
   cc-where --json          machine-readable census
 
-  A pane is OFF SCREEN when its tab is not the active tab of its kitty window:
-  live, healthy, and drawing zero pixels."""
+  A pane is OFF SCREEN when its tab is not the active tab of its kitty window,
+  or when the tab is ZOOMED (stack) and this is not the pane on top: live,
+  healthy, and drawing zero pixels either way.
+  ▸ marks the pane its tab shows — the one you land on when you switch to it."""
 
 
 def main(argv: list[str]) -> int:
