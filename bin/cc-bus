@@ -1,0 +1,867 @@
+#!/bin/bash
+# cc-bus — the 2-way comms bus for sessions that are NOT on this box.
+#
+# WHY THIS EXISTS
+# ---------------
+# The entire local comms stack is local-filesystem-only, and a sandboxed cloud session can
+# reach none of it: `cc-notify` appends to ~/.claude/mailbox/, `cc-registry` is a directory
+# of local pane-keyed JSON, `cc-backlog` is a JSONL under ~/.claude/autonomy/, and
+# `cc-await-ping` polls a local path. None of them has a network transport. A cloud worker
+# therefore cannot see work, claim it, report it, or talk to a peer — which is why
+# "route repo-only work off-box" (CONCURRENCY_PROGRAM.md S5) is blocked on this file.
+#
+# Git is the one channel a sandbox is built to reach. So the bus IS the repo: a cloud
+# session clones it and gets both the transport AND this CLI in the same operation. That is
+# not a convenience — it is forced. A cloud VM has NO ~/.claude at all (only the repo's own
+# .claude/ arrives, because it is part of the clone), so anything living under ~/.claude/bin
+# is unreachable there by construction. GitHub Issues was the other candidate carrier and is
+# not viable either: `gh` is not preinstalled and GITHUB_TOKEN reads as the literal
+# placeholder `proxy-injected`.
+#
+# THE ASYMMETRY (verified against Anthropic's cloud-environments docs + the shipped
+# sdk-tools.d.ts, 2026-08-07 — do not assume this channel is symmetric)
+# --------------------------------------------------------------------
+# Cloud→here is NOT the mirror of here→cloud:
+#   here → cloud   full git remote. The VM clones from the PUSHED remote, not your disk,
+#                  and cloning/fetching are unrestricted.
+#   cloud → here   a ONE-BRANCH pipe. The GitHub proxy's push protection allows `git push`
+#                  only against that session's own working branch.
+# So an off-box worker's records CANNOT arrive on trunk by its own action. They sit on its
+# branch. `sync --gather` + `fold --refs` is how the local side reads them; see fold_raw().
+# (This is also why a heartbeat belongs nowhere near this file — a `refs/cc/*` beat ref is
+# precisely what push protection blocks.)
+#
+# THE ONE-WRITER LAW (this is the whole design)
+# ---------------------------------------------
+# Every file under bus/actors/ has EXACTLY ONE writer — the actor it is named for. Nothing
+# ever edits another actor's file, and nothing edits a record once written.
+#
+# That is not a style rule, it is what makes git usable as a bus. Measured, with a positive
+# control, before this file was written (scratchpad conflict probe, 2026-08-07):
+#
+#     two actors appending to ONE shared file  → `git pull --rebase` rc=1, CONFLICT
+#     two actors appending to their OWN files  → rc=0, clean merge, push OK, fold intact
+#
+# The control fires, so the probe can see a conflict; the subject is clean. A shared
+# append-only file jams the bus on the second concurrent writer. Per-actor shards cannot.
+#
+# State is the FOLD over every shard, ordered by timestamp — the same semantics cc-backlog
+# already uses ("the current status of an item is the FOLD of its record trail"). This is
+# therefore a change of WHERE records live and HOW they are partitioned, not of what a
+# record means.
+#
+# PUBLIC BY CONSTRUCTION
+# ----------------------
+# The default bus is this repo, and this repo is PUBLIC. Everything emitted here is
+# published irreversibly — git history is not retractable. Two consequences, both enforced
+# below rather than documented and hoped for:
+#   * `emit` SCRUBS on the write path: $HOME is rewritten to `~`, and a record whose body
+#     matches a secret-shaped pattern is REFUSED, not silently redacted (a silent redaction
+#     teaches the caller the channel is safe for secrets).
+#   * No history is migrated onto the bus. The 1500+ existing local mailbox entries have no
+#     cloud consumer, and bulk-publishing the operator's back-traffic to a public repo is
+#     not a transport change. The bus carries NEW cross-box traffic only.
+# Point CC_BUS_DIR at a checkout of a private repo to change the publication surface; no
+# other part of the design moves.
+#
+# VERBS
+#   emit <kind> [--to A] [--item I] [--evidence E] [--ref R] [--body TEXT]
+#                                   → append ONE record to this actor's own shard
+#   post <to> <text>                → sugar for `emit msg --to <to> --body <text>`
+#   inbox [--actor A] [--since TS] [--all]
+#                                   → messages addressed to A (default: me; unacked only)
+#   ack <msg-id>                    → mark a message handled (msg-id is `<actor>:<seq>`)
+#   claim <item> / done <item> --evidence E / release <item>
+#                                   → work records, folded by `work`
+#   work [--json]                   → current fold: item → status, holder, evidence
+#   hello [--note N]                → announce this actor (identity + liveness)
+#   actors [--json]                 → every actor that has ever emitted, with last-seen
+#   fold [--kind K] [--actor A] [--json] [--refs]
+#                                   → the raw ordered record stream (the substrate).
+#                                     --refs also reads shards out of remote branches.
+#   sync [--push] [--gather]        → git pull --rebase, optionally commit + push mine;
+#                                     --gather fetches all branches first (see ASYMMETRY)
+#   offer <backlog-id>              → publish ONE local cc-backlog item onto the bus
+#   drain [--apply] [--to ROLE]     → fold bus results back into the LOCAL stores
+#                                     (DRY-RUN by default; --apply mutates)
+#   whoami                          → this actor's stable id
+#   --selftest                      → self-evidencing check suite (see bottom)
+#
+# ACTOR ID: $CC_BUS_ACTOR, else `<short-host>-<checkout-basename>` (e.g.
+# `mymac-wt-5341a9e5fc4d`), else `<short-host>-<pid>` when there is no checkout. Keyed on the
+# CHECKOUT so it is stable for the life of the work — see actor_id() for why a process-keyed
+# id silently breaks everything. A cloud worker's launch brief SHOULD set CC_BUS_ACTOR
+# explicitly: two VMs cloning the same repo would otherwise derive the same id, and while
+# that collides loudly (a git conflict on one shard) rather than silently, it is avoidable.
+#
+# bash 3.2-safe (macOS /bin/bash): no associative arrays, no mapfile, no ${x,,}.
+set -uo pipefail
+
+VERSION=1
+
+die() { printf 'cc-bus: %s\n' "$1" >&2; exit 2; }
+
+# ── self-path ───────────────────────────────────────────────────────────────────────────
+# $0 must be resolved through its symlinks BEFORE any `..` traversal off it. This file gets
+# symlinked into ~/.claude/bin/, where an unresolved `dirname "$0"/..` is ~/.claude — no
+# tests/, no docs/, no .git — so the fallback below would silently pick the WRONG TREE, and
+# only on the live path, which is invisible from a worktree. Canonical loop lifted from
+# scripts/ship-land.sh `_resolve_self` (no `readlink -f`: GNU-only, this box is BSD).
+_resolve_self() {  # <path> → absolute path, every symlink hop resolved (bash 3.2 safe)
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF_PATH="$(_resolve_self "${BASH_SOURCE[0]:-$0}")"
+SELF_DIR="$(dirname "$SELF_PATH")"
+
+# ── location ────────────────────────────────────────────────────────────────────────────
+# The bus lives in the repo. Resolve from CC_BUS_DIR, else the git toplevel of cwd, else
+# the directory this script was invoked from (a cloud clone runs bin/cc-bus in-tree).
+resolve_bus_dir() {
+  if [ -n "${CC_BUS_DIR:-}" ]; then printf '%s\n' "$CC_BUS_DIR"; return 0; fi
+  local top
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+    printf '%s/bus\n' "$top"; return 0
+  fi
+  printf '%s/bus\n' "$(cd "$SELF_DIR/.." && pwd)"
+}
+BUS_DIR="$(resolve_bus_dir)"
+ACTORS_DIR="$BUS_DIR/actors"
+BUS_FOLD_REFS=""   # set by --refs; empty = worktree-only fold (the cheap default)
+
+now_ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# ── actor identity ──────────────────────────────────────────────────────────────────────
+# STABILITY IS THE CONTRACT, and it is easy to get wrong: an id that changes between two
+# invocations mints a new shard every emit, restarts `seq` at 1 forever, makes `inbox` and
+# `ack` address a stranger, and defeats drain's own-record skip so the bridge loops against
+# itself. The first cut derived the suffix from `$$` when CLAUDE_SESSION_ID was unset — two
+# consecutive `whoami` calls returned different ids, and the selftest could not see it
+# because every check pinned CC_BUS_ACTOR. Checks (0a/0b) below exist for that.
+#
+# So the identity is keyed on the CHECKOUT, not the process: a worktree (or a cloud clone)
+# IS the unit of off-box work, it is stable for the life of that work, and it is already how
+# this repo names work units (`wt-<item-id>`).
+actor_id() {
+  if [ -n "${CC_BUS_ACTOR:-}" ]; then printf '%s\n' "$CC_BUS_ACTOR"; return 0; fi
+  local host unit top
+  host="$(hostname -s 2>/dev/null || echo box)"
+  # Lowercase + strip anything that is not [a-z0-9-]; a shard filename must be portable.
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+    unit="$(basename "$top")"
+  else
+    # No checkout to key on — but there can still be a real bus here (CC_BUS_DIR may point
+    # anywhere), so falling back to $$ would reintroduce the very instability above. An
+    # earlier draft excused it with "no bus here to be inconsistent with"; that was simply
+    # false, and check (0a) caught it. Key on the bus location: always available, stable for
+    # as long as the bus is, and distinct per bus.
+    unit="$(printf '%s' "$BUS_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
+    [ -n "$unit" ] || unit="$$"
+  fi
+  unit="$(printf '%s' "$unit" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+  printf '%s-%s\n' "${host:-box}" "${unit:-0}"
+}
+
+shard_for() { printf '%s/%s.jsonl\n' "$ACTORS_DIR" "$1"; }
+
+# ── the scrub (write path, fail-closed) ─────────────────────────────────────────────────
+# A record is REFUSED, never quietly rewritten, when it looks like it carries a credential.
+# Home-path rewriting is the one silent transform, and it is lossless in meaning: an
+# absolute /Users/<name>/... path means nothing on another box anyway.
+SECRET_RE='(sk-ant-[A-Za-z0-9_-]{8})|(ghp_[A-Za-z0-9]{20})|(github_pat_[A-Za-z0-9_]{20})|(AKIA[0-9A-Z]{12})|(-----BEGIN [A-Z ]*PRIVATE KEY-----)|(xox[baprs]-[A-Za-z0-9-]{10})'
+
+scrub() {
+  # stdin → stdout, with $HOME collapsed to ~. Refuses (exit 3) on a secret-shaped match.
+  local text; text="$(cat)"
+  if printf '%s' "$text" | grep -qE "$SECRET_RE"; then
+    printf 'cc-bus: REFUSED — the record matches a secret-shaped pattern.\n' >&2
+    printf '  The bus is a PUBLIC, append-only git history: a push cannot be taken back.\n' >&2
+    printf '  Remove the credential from the message. Nothing was written.\n' >&2
+    return 3
+  fi
+  printf '%s' "$text" | sed "s|$HOME|~|g"
+}
+
+json_escape() {
+  # bash 3.2-safe JSON string escaping for arbitrary text on stdin.
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' \
+    | awk 'BEGIN{ORS=""} {if(NR>1) print "\\n"; print}'
+}
+
+next_seq() {
+  # One more than the highest seq this actor has already written. The shard is the only
+  # source — no counter file to drift out of step with the records it counts.
+  local shard="$1"
+  [ -f "$shard" ] || { printf '1\n'; return 0; }
+  awk -F'"seq":' 'NF>1{split($2,a,/[,}]/); n=a[1]+0; if(n>m) m=n} END{print m+1}' "$shard"
+}
+
+# ── emit: the ONE write path ────────────────────────────────────────────────────────────
+cmd_emit() {
+  local kind="${1:-}"; shift || true
+  [ -n "$kind" ] || die "emit needs a <kind> (msg|claim|done|release|hello|ack|note)"
+  case "$kind" in
+    *[!a-z]*) die "kind must be lowercase letters only (got '$kind')" ;;
+  esac
+
+  local to="" item="" evidence="" ref="" body="" note=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)       to="${2:-}"; shift 2 ;;
+      --item)     item="${2:-}"; shift 2 ;;
+      --evidence) evidence="${2:-}"; shift 2 ;;
+      --ref)      ref="${2:-}"; shift 2 ;;
+      --body)     body="${2:-}"; shift 2 ;;
+      --note)     note="${2:-}"; shift 2 ;;
+      *) die "emit: unknown flag '$1'" ;;
+    esac
+  done
+
+  local actor shard seq ts scrubbed
+  actor="$(actor_id)"; shard="$(shard_for "$actor")"
+  mkdir -p "$ACTORS_DIR" || die "cannot create $ACTORS_DIR"
+
+  # Scrub every free-text field. A refusal here writes NOTHING.
+  if [ -n "$body" ]; then
+    scrubbed="$(printf '%s' "$body" | scrub)" || exit 3
+    body="$scrubbed"
+  fi
+  if [ -n "$note" ]; then
+    scrubbed="$(printf '%s' "$note" | scrub)" || exit 3
+    note="$scrubbed"
+  fi
+  if [ -n "$evidence" ]; then
+    scrubbed="$(printf '%s' "$evidence" | scrub)" || exit 3
+    evidence="$scrubbed"
+  fi
+
+  seq="$(next_seq "$shard")"; ts="$(now_ts)"
+
+  local line
+  line="{\"v\":$VERSION,\"ts\":\"$ts\",\"actor\":\"$actor\",\"seq\":$seq,\"kind\":\"$kind\""
+  [ -n "$to" ]       && line="$line,\"to\":\"$(printf '%s' "$to" | json_escape)\""
+  [ -n "$item" ]     && line="$line,\"item\":\"$(printf '%s' "$item" | json_escape)\""
+  [ -n "$evidence" ] && line="$line,\"evidence\":\"$(printf '%s' "$evidence" | json_escape)\""
+  [ -n "$ref" ]      && line="$line,\"ref\":\"$(printf '%s' "$ref" | json_escape)\""
+  [ -n "$note" ]     && line="$line,\"note\":\"$(printf '%s' "$note" | json_escape)\""
+  [ -n "$body" ]     && line="$line,\"body\":\"$(printf '%s' "$body" | json_escape)\""
+  line="$line}"
+
+  printf '%s\n' "$line" >> "$shard" || die "cannot append to $shard"
+  printf '%s:%s\n' "$actor" "$seq"
+}
+
+# ── fold: read every shard, ordered ─────────────────────────────────────────────────────
+fold_raw() {
+  # stdout: every record from every shard. Missing bus = empty, never an error: a fresh
+  # clone has nothing to fold and that is a legitimate state.
+  local f
+  if [ -d "$ACTORS_DIR" ]; then
+    for f in "$ACTORS_DIR"/*.jsonl; do
+      [ -e "$f" ] || continue
+      grep -v '^[[:space:]]*$' "$f" 2>/dev/null
+    done
+  fi
+  # THE ASYMMETRY. Anthropic's cloud sandbox routes git through a proxy whose push
+  # protection allows `git push` ONLY against that session's own working branch — cloning
+  # and fetching are unrestricted. So an off-box worker's records can never arrive on trunk
+  # by its own action; they sit on its branch until someone merges. Reading the bus
+  # therefore means reading across REFS, not just the working tree.
+  #
+  # Off by default (the worktree path is the common, cheap one). `--refs` opts in, and
+  # `sync --gather` fetches first. Records are read out of the ref, never copied into the
+  # tree: copying another actor's shard into a branch you also write would be exactly the
+  # cross-write the one-writer law forbids.
+  [ -n "${BUS_FOLD_REFS:-}" ] || return 0
+  local top ref path
+  top="$(git -C "$BUS_DIR" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  local prefix; prefix="${ACTORS_DIR#"$top"/}"
+  for ref in $(git -C "$top" for-each-ref --format='%(refname)' "$BUS_FOLD_REFS" 2>/dev/null); do
+    for path in $(git -C "$top" ls-tree --name-only "$ref" "$prefix/" 2>/dev/null); do
+      case "$path" in
+        *.jsonl) git -C "$top" show "$ref:$path" 2>/dev/null | grep -v '^[[:space:]]*$' ;;
+      esac
+    done
+  done
+}
+
+dedupe_records() {
+  # Folding across refs sees the same record on every branch that contains it. Records are
+  # immutable and <actor>:<seq> is unique, so identity dedupe is exact — not a heuristic.
+  awk '!seen[$0]++'
+}
+
+fold_sorted() {
+  # Sort key: ts first, then actor, then zero-padded seq — so one actor's records never
+  # interleave out of emission order even when two land in the same second.
+  fold_raw | dedupe_records | awk '
+    { ts=""; ac=""; sq=0
+      if (match($0, /"ts":"[^"]*"/))    { ts = substr($0, RSTART+6, RLENGTH-7) }
+      if (match($0, /"actor":"[^"]*"/)) { ac = substr($0, RSTART+9, RLENGTH-10) }
+      if (match($0, /"seq":[0-9]+/))    { sq = substr($0, RSTART+6, RLENGTH-6)+0 }
+      printf "%s\t%s\t%012d\t%s\n", ts, ac, sq, $0 }' \
+    | sort -t"$(printf '\t')" -k1,1 -k2,2 -k3,3n \
+    | cut -f4-
+}
+
+json_field() {
+  # json_field <line> <key> → value, or empty. Strings only; adequate for this schema
+  # because every field cc-bus writes is a string except v/seq.
+  printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+cmd_fold() {
+  local kind="" actor="" as_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kind)  kind="${2:-}"; shift 2 ;;
+      --actor) actor="${2:-}"; shift 2 ;;
+      --json)  as_json=1; shift ;;
+      --refs)  BUS_FOLD_REFS="${CC_BUS_REF_GLOB:-refs/remotes/*}"; shift ;;
+      *) die "fold: unknown flag '$1'" ;;
+    esac
+  done
+  local line k a
+  fold_sorted | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -n "$kind" ];  then k="$(json_field "$line" kind)";  [ "$k" = "$kind" ]   || continue; fi
+    if [ -n "$actor" ]; then a="$(json_field "$line" actor)"; [ "$a" = "$actor" ] || continue; fi
+    if [ "$as_json" = 1 ]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s  %-22s %-8s %s\n' \
+        "$(json_field "$line" ts)" "$(json_field "$line" actor)" \
+        "$(json_field "$line" kind)" \
+        "$(json_field "$line" body)$(json_field "$line" item)"
+    fi
+  done
+}
+
+# ── messaging ───────────────────────────────────────────────────────────────────────────
+cmd_post() {
+  local to="${1:-}" ; shift || true
+  local text="$*"
+  [ -n "$to" ]   || die "post needs a recipient (an actor id, or '*' for broadcast)"
+  [ -n "$text" ] || die "post needs a message body"
+  cmd_emit msg --to "$to" --body "$text"
+}
+
+cmd_inbox() {
+  local me all=0 since=""
+  me="$(actor_id)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --actor) me="${2:-}"; shift 2 ;;
+      --since) since="${2:-}"; shift 2 ;;
+      --all)   all=1; shift ;;
+      *) die "inbox: unknown flag '$1'" ;;
+    esac
+  done
+
+  # Acked ids, gathered across ALL shards: an ack is a record like any other, so a peer
+  # acking on another box is visible here after a sync.
+  local acked; acked="$(fold_sorted | awk '/"kind":"ack"/' \
+      | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p' | sort -u)"
+
+  local line to id n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    to="$(json_field "$line" to)"
+    [ "$to" = "$me" ] || [ "$to" = "*" ] || continue
+    id="$(json_field "$line" actor):$(printf '%s' "$line" | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')"
+    if [ "$all" = 0 ] && printf '%s\n' "$acked" | grep -qxF "$id"; then continue; fi
+    if [ -n "$since" ] && [ "$(json_field "$line" ts)" \< "$since" ]; then continue; fi
+    n=$((n+1))
+    printf '%s  [%s]  from %s\n    %s\n' \
+      "$(json_field "$line" ts)" "$id" "$(json_field "$line" actor)" "$(json_field "$line" body)"
+  done <<EOF
+$(fold_sorted | awk '/"kind":"msg"/')
+EOF
+  [ "$n" -gt 0 ] || printf 'cc-bus: inbox empty for %s%s\n' "$me" \
+    "$([ "$all" = 0 ] && printf ' (unacked only; --all for everything)')"
+}
+
+cmd_ack() {
+  local ref="${1:-}"
+  [ -n "$ref" ] || die "ack needs a message id (<actor>:<seq>, as shown by inbox)"
+  case "$ref" in *:*) : ;; *) die "message id must look like <actor>:<seq> (got '$ref')" ;; esac
+  cmd_emit ack --ref "$ref"
+}
+
+# ── work ledger ─────────────────────────────────────────────────────────────────────────
+cmd_claim()   { [ -n "${1:-}" ] || die "claim needs an item id";   cmd_emit claim   --item "$1"; }
+cmd_release() { [ -n "${1:-}" ] || die "release needs an item id"; cmd_emit release --item "$1"; }
+cmd_done() {
+  local item="${1:-}"; shift || true
+  [ -n "$item" ] || die "done needs an item id"
+  local ev=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --evidence) ev="${2:-}"; shift 2 ;;
+      *) die "done: unknown flag '$1'" ;;
+    esac
+  done
+  [ -n "$ev" ] || die "done needs --evidence <ref> (a landed sha, a path, a URL)"
+  cmd_emit "done" --item "$item" --evidence "$ev"
+}
+
+cmd_work() {
+  local as_json=0
+  [ "${1:-}" = "--json" ] && as_json=1
+  # Fold: last transition wins, exactly as cc-backlog defines it.
+  fold_sorted | awk -v json="$as_json" '
+    function f(line, key,   r) { r=""
+      if (match(line, "\"" key "\":\"[^\"]*\"")) {
+        r = substr(line, RSTART + length(key) + 4, RLENGTH - length(key) - 5) }
+      return r }
+    {
+      k = f($0,"kind"); if (k != "claim" && k != "done" && k != "release") next
+      it = f($0,"item"); if (it == "") next
+      status[it] = k; holder[it] = f($0,"actor"); ts[it] = f($0,"ts")
+      if (k == "done") ev[it] = f($0,"evidence")
+      order[it] = order[it] ? order[it] : ++n
+    }
+    END {
+      if (n == 0) { print "cc-bus: no work records on the bus yet" > "/dev/stderr"; exit 0 }
+      for (it in status) {
+        st = status[it]; st = (st == "claim" ? "claimed" : (st == "done" ? "done" : "open"))
+        if (json)
+          printf "{\"item\":\"%s\",\"status\":\"%s\",\"actor\":\"%s\",\"ts\":\"%s\",\"evidence\":\"%s\"}\n",
+                 it, st, holder[it], ts[it], ev[it]
+        else
+          printf "%-14s %-8s %-22s %s %s\n", it, st, holder[it], ts[it], ev[it]
+      }
+    }' | sort
+}
+
+# ── presence ────────────────────────────────────────────────────────────────────────────
+cmd_hello() {
+  local note=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --note) note="${2:-}"; shift 2 ;; *) die "hello: unknown flag '$1'" ;; esac
+  done
+  local where; where="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -n "$note" ] || note="at $where"
+  cmd_emit hello --note "$note"
+}
+
+cmd_actors() {
+  local as_json=0
+  [ "${1:-}" = "--json" ] && as_json=1
+  fold_sorted | awk -v json="$as_json" '
+    function f(line, key,   r) { r=""
+      if (match(line, "\"" key "\":\"[^\"]*\"")) {
+        r = substr(line, RSTART + length(key) + 4, RLENGTH - length(key) - 5) }
+      return r }
+    { a = f($0,"actor"); if (a=="") next
+      last[a] = f($0,"ts"); cnt[a]++
+      if (f($0,"kind") == "hello") note[a] = f($0,"note") }
+    END {
+      if (length(last) == 0) { print "cc-bus: no actors on the bus yet" > "/dev/stderr"; exit 0 }
+      for (a in last)
+        if (json) printf "{\"actor\":\"%s\",\"lastSeen\":\"%s\",\"records\":%d,\"note\":\"%s\"}\n", a, last[a], cnt[a], note[a]
+        else      printf "%-22s last-seen %s  records %-4d %s\n", a, last[a], cnt[a], note[a]
+    }' | sort
+}
+
+# ── sync ────────────────────────────────────────────────────────────────────────────────
+# Pull peers' records in, optionally publish mine. Only ever commits THIS actor's own
+# shard — a sync can never sweep an unrelated working-tree change into the bus commit.
+cmd_sync() {
+  local push=0 gather=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --push)   push=1; shift ;;
+      --gather) gather=1; shift ;;
+      *) die "sync: unknown flag '$1'" ;;
+    esac
+  done
+  local top; top="$(git -C "$BUS_DIR" rev-parse --show-toplevel 2>/dev/null)" \
+    || die "bus dir is not inside a git repo: $BUS_DIR"
+
+  # --gather: pull down every branch, so an off-box worker's records — which push
+  # protection pins to that worker's OWN branch — become readable via `fold --refs`.
+  if [ "$gather" = 1 ]; then
+    git -C "$top" fetch -q --all --prune 2>/dev/null \
+      || printf 'cc-bus: fetch --all did not complete; folding what is already local.\n' >&2
+  fi
+
+  local actor shard rel
+  actor="$(actor_id)"; shard="$(shard_for "$actor")"
+  rel="${shard#"$top"/}"
+
+  if [ "$push" = 1 ] && [ -f "$shard" ] && ! git -C "$top" diff --quiet -- "$rel" 2>/dev/null; then
+    git -C "$top" add -- "$rel" || die "git add failed for $rel"
+    git -C "$top" commit -q -m "chore(bus): $actor records" -- "$rel" \
+      || die "git commit failed for $rel"
+  elif [ "$push" = 1 ] && [ -f "$shard" ] && [ -n "$(git -C "$top" ls-files --others --exclude-standard -- "$rel")" ]; then
+    git -C "$top" add -- "$rel" || die "git add failed for $rel"
+    git -C "$top" commit -q -m "chore(bus): $actor records" -- "$rel" \
+      || die "git commit failed for $rel"
+  fi
+
+  git -C "$top" pull --rebase -q 2>/dev/null || {
+    printf 'cc-bus: pull --rebase did not complete cleanly.\n' >&2
+    printf '  The one-writer law means a bus shard CANNOT conflict; a conflict here is in\n' >&2
+    printf '  other repo content. Resolve it as an ordinary rebase — the bus is unaffected.\n' >&2
+    return 1
+  }
+  if [ "$push" = 1 ]; then
+    git -C "$top" push -q || { printf 'cc-bus: push failed (no remote, or no write access).\n' >&2; return 1; }
+  fi
+  printf 'cc-bus: synced (%s)%s\n' "$actor" "$([ "$push" = 1 ] && printf ' + published')"
+}
+
+cmd_init() {
+  mkdir -p "$ACTORS_DIR" || die "cannot create $ACTORS_DIR"
+  [ -f "$ACTORS_DIR/.gitkeep" ] || : > "$ACTORS_DIR/.gitkeep"
+  printf 'cc-bus: bus at %s\n' "$BUS_DIR"
+}
+
+# ── the bridge: local stores ⇄ bus ──────────────────────────────────────────────────────
+# SELECTIVE BY DESIGN, in both directions.
+#
+# Wholesale migration was the stated shape of this work ("move backlog + messages + session
+# registry into the repo"), and it is the wrong shape on two independent counts:
+#
+#   * PUBLICATION. The local ledger is 4,836 records and the mailbox is 1,500+ messages of
+#     the operator's back-traffic. The default bus is a PUBLIC repo and git history is not
+#     retractable. Publishing all of it is not a transport change.
+#   * RELEVANCE. A cloud worker needs the ONE item it was sent to do. The other 4,835
+#     records are local history it will never read, and the registry is pane-uuid and pid
+#     keyed — `kill -0` on another box's pid is meaningless, so those rows cannot mean
+#     anything off-box even if they were copied.
+#
+# So: an item crosses when someone offers it, and a result crosses when a worker reports
+# it. Nothing crosses implicitly.
+
+resolve_helper() {
+  # $1 = env override, $2 = tool name. Repo sibling first (a cloud clone has no ~/.claude),
+  # then the live layer, then PATH.
+  local override="$1" name="$2" c
+  [ -n "$override" ] && { printf '%s\n' "$override"; return 0; }
+  for c in "$SELF_DIR/$name" "$HOME/.claude/bin/$name"; do
+    [ -x "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
+  command -v "$name" 2>/dev/null || return 1
+}
+
+cmd_offer() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "offer needs a cc-backlog item id"
+  local backlog; backlog="$(resolve_helper "${CC_BUS_BACKLOG_BIN:-}" cc-backlog)" \
+    || die "offer needs cc-backlog, which is local-only — run it on the box that holds the ledger"
+
+  local row
+  row="$("$backlog" list --all --json 2>/dev/null \
+        | tr -d '\n' | sed 's/},{/}\n{/g' | grep -F "\"id\":\"$id\"" | head -1)"
+  [ -n "$row" ] || die "no such item in the local ledger: $id"
+
+  local title dod
+  title="$(json_field "$row" title)"; dod="$(json_field "$row" dodRef)"
+  [ -n "$title" ] || die "item $id has no title — refusing to offer an unreadable work unit"
+
+  cmd_emit offer --item "$id" --body "$title" --ref "$dod"
+}
+
+cmd_drain() {
+  # Bus → local. DRY-RUN unless --apply: a bridge that mutates local stores on a bare
+  # invocation is a footgun, and every comparable tool in this repo defaults to showing.
+  local apply=0 to_role="${CC_BUS_DRAIN_ROLE:-desk}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1; shift ;;
+      --to)    to_role="${2:-}"; shift 2 ;;
+      *) die "drain: unknown flag '$1'" ;;
+    esac
+  done
+
+  local me applied_file
+  me="$(actor_id)"
+  applied_file="${CC_BUS_APPLIED_FILE:-$HOME/.claude/autonomy/bus-applied}"
+  mkdir -p "$(dirname "$applied_file")" 2>/dev/null || true
+  [ -f "$applied_file" ] || : > "$applied_file"
+
+  local backlog notify
+  backlog="$(resolve_helper "${CC_BUS_BACKLOG_BIN:-}" cc-backlog)" || backlog=""
+  notify="$(resolve_helper "${CC_BUS_NOTIFY_BIN:-}" cc-notify)"   || notify=""
+
+  local line kind actor seq rid item ev body n=0 skipped=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    actor="$(json_field "$line" actor)"
+    # Never re-apply my own emissions: they came FROM local state in the first place.
+    [ "$actor" = "$me" ] && continue
+    seq="$(printf '%s' "$line" | sed -n 's/.*"seq":\([0-9]*\).*/\1/p')"
+    rid="$actor:$seq"
+    grep -qxF "$rid" "$applied_file" && { skipped=$((skipped+1)); continue; }
+
+    kind="$(json_field "$line" kind)"
+    item="$(json_field "$line" item)"
+    ev="$(json_field "$line" evidence)"
+    body="$(json_field "$line" body)"
+
+    case "$kind" in
+      done)
+        [ -n "$item" ] && [ -n "$ev" ] || continue
+        n=$((n+1))
+        if [ "$apply" = 1 ]; then
+          [ -n "$backlog" ] || die "drain --apply needs cc-backlog to close $item"
+          if "$backlog" "done" "$item" --evidence "$ev (off-box: $rid)" >/dev/null 2>&1; then
+            printf 'APPLIED  backlog done %s ← %s  evidence=%s\n' "$item" "$actor" "$ev"
+            printf '%s\n' "$rid" >> "$applied_file"
+          else
+            printf 'FAILED   backlog done %s ← %s (ledger refused; left unapplied)\n' "$item" "$actor"
+          fi
+        else
+          printf 'would    backlog done %s ← %s  evidence=%s\n' "$item" "$actor" "$ev"
+        fi
+        ;;
+      msg)
+        local to; to="$(json_field "$line" to)"
+        [ "$to" = "$me" ] || [ "$to" = "*" ] || continue
+        n=$((n+1))
+        if [ "$apply" = 1 ]; then
+          [ -n "$notify" ] || die "drain --apply needs cc-notify to deliver $rid"
+          local out rc
+          out="$("$notify" --from "bus:$actor" --role "$to_role" "$body" 2>&1)"; rc=$?
+          # Relay cc-notify's own verdict token rather than inventing a success claim.
+          printf '%s  notify --role %s ← %s :: %s\n' \
+            "$([ "$rc" = 0 ] && printf 'APPLIED ' || printf 'FAILED  ')" "$to_role" "$actor" \
+            "$(printf '%s' "$out" | sed -n 's/.*\(verdict=[^ ]*\).*/\1/p' | head -1)"
+          [ "$rc" = 0 ] && printf '%s\n' "$rid" >> "$applied_file"
+        else
+          printf 'would    notify --role %s ← %s  "%s"\n' "$to_role" "$actor" "$body"
+        fi
+        ;;
+      *) continue ;;
+    esac
+  done <<EOF
+$(fold_sorted)
+EOF
+
+  if [ "$n" = 0 ]; then
+    printf 'cc-bus: nothing to drain (%d already applied)\n' "$skipped"
+  elif [ "$apply" = 0 ]; then
+    printf 'cc-bus: %d record(s) would apply — DRY RUN. Re-run with --apply.\n' "$n"
+  fi
+}
+
+# ── selftest ────────────────────────────────────────────────────────────────────────────
+PASS=0; FAIL=0
+okp()  { printf '  ok   %s\n' "$1"; PASS=$((PASS+1)); }
+badp() { printf '  FAIL %s\n' "$1"; FAIL=$((FAIL+1)); }
+
+selftest() {
+  local d SELF r a b out
+  d="$(mktemp -d "${TMPDIR:-/tmp}/cc-bus-selftest.XXXXXX")" || die "mktemp"
+  trap 'rm -rf "$d"' EXIT
+  SELF="$SELF_PATH"
+
+  echo "cc-bus --selftest — the bus must survive two writers and refuse a secret:"
+
+  # (0a) IDENTITY STABILITY, checked with CC_BUS_ACTOR UNSET — the one condition every other
+  #      check suppresses by pinning it. A per-invocation id mints a shard per emit, restarts
+  #      seq forever, and makes inbox/ack/drain address a stranger. The first cut of this file
+  #      failed exactly here and 12/12 stayed green.
+  a="$(cd "$d" && env -u CC_BUS_ACTOR "$SELF" whoami)"
+  b="$(cd "$d" && env -u CC_BUS_ACTOR "$SELF" whoami)"
+  [ -n "$a" ] && [ "$a" = "$b" ] \
+    && okp "derived actor id is STABLE across invocations ($a)" \
+    || badp "derived actor id CHANGED between calls ($a vs $b)"
+
+  # (0b) …and it is filename-safe, since it becomes a shard basename.
+  case "$a" in
+    */*|.*|"") badp "derived actor id is not filename-safe ('$a')" ;;
+    *)         okp "derived actor id is filename-safe" ;;
+  esac
+
+  # (1) emit writes to the emitting actor's OWN shard and nowhere else.
+  r="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" emit note --body "hello")"
+  [ "$r" = "alpha:1" ] && [ -f "$d/bus/actors/alpha.jsonl" ] \
+    && okp "emit → own shard, id alpha:1" || badp "emit gave '$r' / shard missing"
+
+  # (2) seq increments from the shard itself (no counter file to drift).
+  r="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" emit note --body "again")"
+  [ "$r" = "alpha:2" ] && okp "seq derives from the shard (alpha:2)" || badp "seq gave '$r', wanted alpha:2"
+
+  # (3) A SECOND actor never touches the first's file — the one-writer law, checked as a
+  #     file fact rather than trusted from the code path.
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta "$SELF" emit note --body "beta here" >/dev/null
+  a="$(wc -l < "$d/bus/actors/alpha.jsonl" | tr -d ' ')"
+  b="$(wc -l < "$d/bus/actors/beta.jsonl"  | tr -d ' ')"
+  [ "$a" = 2 ] && [ "$b" = 1 ] \
+    && okp "one-writer law: alpha=2 records, beta=1, neither file cross-written" \
+    || badp "cross-write (alpha=$a beta=$b)"
+
+  # (4) fold sees BOTH actors — the bus state is the union, not one shard.
+  r="$(CC_BUS_DIR="$d/bus" "$SELF" fold --json | wc -l | tr -d ' ')"
+  [ "$r" = 3 ] && okp "fold unions every shard (3 records)" || badp "fold saw $r records, wanted 3"
+
+  # (5) SECRET REFUSAL, with the refusal proven to be a refusal: nothing is appended.
+  a="$(wc -l < "$d/bus/actors/alpha.jsonl" | tr -d ' ')"
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" post beta \
+           "token sk-ant-api03-DEADBEEF please" 2>&1)"; r=$?
+  b="$(wc -l < "$d/bus/actors/alpha.jsonl" | tr -d ' ')"
+  [ "$r" = 3 ] && [ "$a" = "$b" ] && printf '%s' "$out" | grep -q REFUSED \
+    && okp "secret-shaped body REFUSED (exit 3) and NOTHING written" \
+    || badp "secret not refused (rc=$r, lines ${a} -> ${b})"
+
+  # (6) DISCRIMINATION: the same post WITHOUT the secret goes through. A guard that refused
+  #     everything would pass check (5) while making the bus useless.
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" post beta "ordinary message" 2>&1)"; r=$?
+  [ "$r" = 0 ] && printf '%s' "$out" | grep -q '^alpha:' \
+    && okp "DISCRIMINATES: an ordinary body posts fine (guard is not a blanket refusal)" \
+    || badp "clean post rejected (rc=$r out=$out)"
+
+  # (7) $HOME is collapsed to ~ on the write path.
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" post beta "see $HOME/secret-place/x" >/dev/null
+  grep -q 'see ~/secret-place/x' "$d/bus/actors/alpha.jsonl" \
+    && ! grep -q "$HOME/secret-place" "$d/bus/actors/alpha.jsonl" \
+    && okp "\$HOME collapsed to ~ on the write path" || badp "home path not scrubbed"
+
+  # (8) inbox is addressed: beta sees alpha's messages, alpha does not see its own.
+  a="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta  "$SELF" inbox | grep -c 'ordinary message')"
+  b="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" inbox | grep -c 'ordinary message')"
+  [ "$a" = 1 ] && [ "$b" = 0 ] \
+    && okp "inbox is addressed (beta sees it, alpha does not)" || badp "addressing wrong (beta=$a alpha=$b)"
+
+  # (9) ack removes a message from the unacked inbox but NOT from --all (append-only:
+  #     an ack adds a record, it never deletes one).
+  r="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta "$SELF" inbox | sed -n 's/.*\[\([^]]*\)\].*/\1/p' | head -1)"
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta "$SELF" ack "$r" >/dev/null
+  a="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta "$SELF" inbox       | grep -c "\[$r\]")"
+  b="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta "$SELF" inbox --all | grep -c "\[$r\]")"
+  [ "$a" = 0 ] && [ "$b" = 1 ] \
+    && okp "ack hides from inbox but the record survives in --all (append-only)" \
+    || badp "ack semantics wrong (unacked=$a all=$b)"
+
+  # (10) work fold: last transition wins, ACROSS actors.
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" claim W-1 >/dev/null
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=beta  "$SELF" claim W-2 >/dev/null
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha "$SELF" "done"  W-1 --evidence abc1234 >/dev/null
+  out="$(CC_BUS_DIR="$d/bus" "$SELF" work)"
+  printf '%s' "$out" | grep -q 'W-1 *done .*abc1234' \
+    && printf '%s' "$out" | grep -q 'W-2 *claimed *beta' \
+    && okp "work fold: last transition wins across actors (W-1 done, W-2 claimed by beta)" \
+    || badp "work fold wrong: $out"
+
+  # (11) actors: presence is folded from the same log, no separate registry to rot.
+  r="$(CC_BUS_DIR="$d/bus" "$SELF" actors | wc -l | tr -d ' ')"
+  [ "$r" = 2 ] && okp "actors folded from the record log (alpha, beta)" || badp "actors saw $r, wanted 2"
+
+  # (12) A FRESH clone with no bus is empty, not an error — the state a cloud session
+  #      starts in must not look like a failure.
+  CC_BUS_DIR="$d/empty" "$SELF" fold --json >/dev/null 2>&1; r=$?
+  [ "$r" = 0 ] && okp "an absent bus folds to empty, exit 0 (a fresh clone is not an error)" \
+    || badp "empty bus exited $r"
+
+  # ── the bridge (bus → local). Stubbed cc-backlog/cc-notify so the suite can never touch
+  #    the operator's real ledger or mailbox — the hermeticity rule this repo learned the
+  #    hard way when a test suite wrote 510 records into the live alarm store.
+  mkdir -p "$d/stub"
+  cat > "$d/stub/cc-backlog" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$CC_BUS_SELFTEST_CALLS"
+[ "${1:-}" = "list" ] && printf '[{"id":"ITEM1","title":"a local work item","dodRef":"docs/x.md","status":"open"}]\n'
+exit 0
+STUB
+  cat > "$d/stub/cc-notify" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$CC_BUS_SELFTEST_CALLS"
+echo "cc-notify: verdict=delivered enqueued=1" >&2
+exit 0
+STUB
+  chmod +x "$d/stub/cc-backlog" "$d/stub/cc-notify"
+  export CC_BUS_SELFTEST_CALLS="$d/calls.log"; : > "$CC_BUS_SELFTEST_CALLS"
+
+  # A remote worker finishes W-2 and sends a message home.
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=cloud-1 "$SELF" "done" W-2 --evidence deadbee >/dev/null
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=cloud-1 "$SELF" post alpha "off-box worker reporting in" >/dev/null
+
+  # (13) drain DEFAULTS TO DRY-RUN: it reports, and mutates nothing.
+  : > "$d/applied"
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+         CC_BUS_NOTIFY_BIN="$d/stub/cc-notify" CC_BUS_APPLIED_FILE="$d/applied" "$SELF" drain 2>&1)"
+  a="$(wc -c < "$CC_BUS_SELFTEST_CALLS" | tr -d ' ')"
+  printf '%s' "$out" | grep -q '^would ' && [ "$a" = 0 ] \
+    && okp "drain is DRY-RUN by default (reports, calls nothing)" \
+    || badp "drain dry-run leaked calls (bytes=$a) or printed nothing"
+
+  # (14) drain --apply actually drives the local tools, with the right arguments.
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+         CC_BUS_NOTIFY_BIN="$d/stub/cc-notify" CC_BUS_APPLIED_FILE="$d/applied" "$SELF" drain --apply 2>&1)"
+  grep -q 'done W-2 --evidence deadbee' "$CC_BUS_SELFTEST_CALLS" \
+    && grep -q 'off-box worker reporting in' "$CC_BUS_SELFTEST_CALLS" \
+    && okp "drain --apply drives cc-backlog done AND cc-notify with the bus payload" \
+    || badp "drain --apply did not call through: $(cat "$CC_BUS_SELFTEST_CALLS")"
+
+  # (15) IDEMPOTENCE — the property that makes a poll loop safe. A second drain must be a
+  #      no-op; without the applied-cursor this double-closes an item on every sync.
+  : > "$CC_BUS_SELFTEST_CALLS"
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+         CC_BUS_NOTIFY_BIN="$d/stub/cc-notify" CC_BUS_APPLIED_FILE="$d/applied" "$SELF" drain --apply 2>&1)"
+  a="$(wc -c < "$CC_BUS_SELFTEST_CALLS" | tr -d ' ')"
+  [ "$a" = 0 ] && printf '%s' "$out" | grep -q 'nothing to drain' \
+    && okp "drain --apply is IDEMPOTENT (second pass calls nothing)" \
+    || badp "second drain re-applied (bytes=$a)"
+
+  # (16) A drain never re-applies the draining actor's OWN records — they originated locally,
+  #      so feeding them back would loop the bridge against itself.
+  : > "$CC_BUS_SELFTEST_CALLS"; : > "$d/applied"
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=selfy "$SELF" "done" W-9 --evidence mine >/dev/null
+  CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=selfy CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+    CC_BUS_NOTIFY_BIN="$d/stub/cc-notify" CC_BUS_APPLIED_FILE="$d/applied" "$SELF" drain --apply >/dev/null 2>&1
+  grep -q 'W-9' "$CC_BUS_SELFTEST_CALLS" \
+    && badp "drain fed the actor's OWN record back into local state (loop)" \
+    || okp "drain skips the draining actor's own records (no self-loop)"
+
+  # (17) offer refuses an id the local ledger does not hold, rather than publishing a stub.
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+         "$SELF" offer NOPE 2>&1)"; r=$?
+  [ "$r" = 2 ] && printf '%s' "$out" | grep -q 'no such item' \
+    && okp "offer refuses an unknown item id (exit 2)" || badp "offer accepted a bogus id (rc=$r)"
+
+  # (18) offer publishes the LEDGER's title, not a caller-supplied one.
+  out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
+         "$SELF" offer ITEM1 2>&1)"; r=$?
+  [ "$r" = 0 ] && grep -q '"kind":"offer".*"item":"ITEM1".*a local work item' "$d/bus/actors/alpha.jsonl" \
+    && okp "offer publishes the ledger's own title for the item" || badp "offer wrong (rc=$r out=$out)"
+
+  echo "cc-bus --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-bus --selftest: GREEN — one-writer sharding holds, secrets refused (and only secrets), addressing + ack + work-fold correct, bridge is dry-run-default + idempotent + loop-free."
+  exit 0
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────────────────
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; }
+
+case "${1:---help}" in
+  emit)       shift; cmd_emit "$@" ;;
+  post)       shift; cmd_post "$@" ;;
+  inbox)      shift; cmd_inbox "$@" ;;
+  ack)        shift; cmd_ack "$@" ;;
+  claim)      shift; cmd_claim "$@" ;;
+  done)       shift; cmd_done "$@" ;;
+  release)    shift; cmd_release "$@" ;;
+  work)       shift; cmd_work "$@" ;;
+  hello)      shift; cmd_hello "$@" ;;
+  actors)     shift; cmd_actors "$@" ;;
+  fold)       shift; cmd_fold "$@" ;;
+  sync)       shift; cmd_sync "$@" ;;
+  offer)      shift; cmd_offer "$@" ;;
+  drain)      shift; cmd_drain "$@" ;;
+  init)       shift; cmd_init "$@" ;;
+  whoami)     actor_id ;;
+  where)      printf '%s\n' "$BUS_DIR" ;;
+  --selftest) selftest ;;
+  -h|--help|help) usage ;;
+  *) die "unknown verb '$1' (try --help)" ;;
+esac

@@ -213,6 +213,91 @@ design ❌ (needs the local browser + dev server) · anything about this box ❌
 Cheap local wins meanwhile: **consolidate to one terminal emulator** (kitty *and* iTerm2 are both
 running — 27% of a core), and stop dev servers when idle (1.9 GB each, five up).
 
+#### S5a · The comms prerequisite — LANDED (backlog `5341a9e5fc4d`, 2026-08-07)
+
+"Route repo-only work off-box" was blocked on something the census did not price: **the entire 2-way
+comms stack is local-filesystem-only, and a sandbox can reach none of it.** Not "is awkward from" —
+*cannot reach*. `cc-notify` appends to `~/.claude/mailbox/<pane-uuid>.md`; the session registry is
+`~/.claude/cc-registry/<pane>.json` whose liveness signal is `kill -0` on a **local pid**;
+`cc-backlog` is one untracked local JSONL; `cc-dispatch` spawns an **iTerm2 pane** via
+`handoff-fire.sh`. None of them has a network transport of any kind. A cloud worker could not see
+work, claim it, report it, or talk to a peer.
+
+**Built: `bin/cc-bus` + `bus/`** — git as the bus, because it is the one channel a sandbox is
+designed to reach, and because cloning the repo delivers the transport *and* the CLI in one
+operation (nothing to install, no endpoint to authenticate beyond the remote it already has).
+
+The load-bearing design property is the **one-writer law**: every file under `bus/actors/` has
+exactly one writer, so shards cannot conflict. Measured with a positive control before the tool was
+written, and pinned in `tests/cc-bus.bats`:
+
+```text
+two actors appending to ONE shared file  →  git pull --rebase  rc=1, CONFLICT
+two actors appending to their OWN files  →  rc=0, clean merge, push OK, fold intact
+```
+
+State is the FOLD over all shards, last-transition-wins — the semantics `cc-backlog` already uses,
+so this changes *where* records live and *how* they are partitioned, not what a record means.
+
+**Two decisions worth not re-litigating:**
+
+- **No wholesale migration.** The item said "move backlog + messages + session registry into the
+  repo". Rejected on two independent counts. (1) *Publication* — the default bus is this repo, this
+  repo is PUBLIC, and git history is not retractable; dumping 4,836 ledger records and 1,500+
+  mailbox messages of the operator's back-traffic into it is not a transport change. (2)
+  *Relevance* — a cloud worker needs the one item it was sent to do, and the registry is pane-uuid
+  and pid keyed, so those rows cannot mean anything off-box even if copied. An item crosses when
+  someone `offer`s it; a result crosses when a worker reports it; nothing crosses implicitly.
+  `emit` enforces the publication rule on the write path: `$HOME` → `~`, and a secret-shaped record
+  is **refused** (exit 3, nothing written), never silently redacted.
+- **The claim stays local.** Complementary work under this same DoD ref
+  (`docs/research/cloud-observability-2026-08-07.md`, backlog `191d4d056c98`) establishes that both
+  local liveness oracles return *confident, wrong* verdicts about an off-box worker — so a cloud
+  worker holding a **local** claim gets its item reopened and handed to a second worker. The bus
+  avoids this by construction: a cloud worker claims on the **bus**; the local session that offered
+  keeps the local claim. That is the "local proxy is the ledger participant" shape that doc
+  prescribes, so the two designs compose rather than collide.
+
+**Boundary with `refs/cc/*`:** that sibling design carries *liveness* (heartbeat/progress) over a
+ref namespace — high-frequency, and it must NOT enter history. This bus carries *messages and work
+transitions* — low-frequency, and the record trail IS the audit. The bus therefore has no heartbeat
+kind, deliberately, so it never becomes a second and worse liveness oracle.
+
+**The cloud environment, verified — three facts that FORCED the shape** (Anthropic's
+cloud-environments docs + the shipped `sdk-tools.d.ts` + the changelog, 2026-08-07):
+
+1. **A cloud VM has no `~/.claude`.** Only the repo's own `.claude/` arrives, since it is part of the
+   clone; user-scope CLAUDE.md, skills, agents, commands and MCP servers do not carry over. So
+   shipping the CLI *in the repo* is not tidiness — anything under `~/.claude/bin` is unreachable
+   there by construction.
+2. **GitHub Issues — the item's own alternative carrier — is refuted.** `gh` is not preinstalled and
+   `GITHUB_TOKEN` reads as the literal placeholder `proxy-injected`. Recorded so it is not
+   re-proposed.
+3. **The channel is ASYMMETRIC.** here→cloud is a full git remote (clone/fetch unrestricted, and the
+   VM clones from the *pushed* remote, not local disk — `sdk-tools.d.ts` L3764). cloud→here is a
+   **one-branch pipe**: the GitHub proxy's push protection allows `git push` only against that
+   session's own working branch. An off-box worker's records therefore cannot reach trunk by its own
+   action, which is why reading the bus is `sync --gather` + `fold --refs` (read *out of* refs, never
+   copied into the tree — copying another actor's shard would be the cross-write the one-writer law
+   forbids).
+
+⚠️ **This lands on the `refs/cc/*` heartbeat design and is the next experiment to run.** Whether push
+protection is enforced per-*branch* (leaving `git push origin HEAD:refs/cc/…` a loophole) or
+per-*refspec* (blocking it outright) is settled by no doc, changelog entry, or binary string. If
+per-refspec, `refs/cc/*` cannot be written from a cloud VM at all and O1 must become a working-branch
+commit — the shape that design rejected — or leave git. One `--cloud` session and one attempted ref
+push decides it. This bus does not depend on the answer; that design does.
+
+**What this does NOT establish.** Cloud entitlement is per-account and remains unverified — the same
+limit §7 of the sibling doc records. Measured on this box: `hasRemoteEnvironment: true` appears in
+`~/.claude-quaternary/.claude.json` (**account 4 only**; absent for accounts 1–3), and
+`remote.defaultEnvironmentId` is absent everywhere, so `/remote-env` has never been run. Whether that
+key means *entitlement* or merely *an environment record exists* is unverified, as is the org's
+`allow_remote_sessions` policy (the binary carries `allow_remote_sessions policy denied` as a live
+error path). `--cloud` is a real hidden flag on v2.1.220 and refuses without a TTY. This is the
+prerequisite that must exist *before* cloud execution is used; it is not evidence that cloud
+execution is available. Latency is push/pull, not poll: nothing arrives until someone syncs.
+
 ---
 
 ## 2 · What is NOT on this path
