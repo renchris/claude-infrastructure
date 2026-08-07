@@ -46,7 +46,8 @@ Arguments: `$ARGUMENTS`
 - On success delete the backup branch; on failure keep it and print recovery steps.
 
 ## 8. Report (Session-Close readout)
-- Emit the governing one-liner: `✅ Complete & live on trunk` when `origin/<trunk>..HEAD == 0` after the push (the 📦 → ✅ transition). Include: landed SHA, gate results, and any deploy/CI a trunk push triggers if the project documents one. **Confirm the landing by CONTENT (per step 7 — `git ls-tree` present + `git diff` empty on your changed paths), not by the count alone** — a sibling rebase can zero the count while your files never reached trunk.
+- **Re-read the ledger and emit the rung IT computes — never mint the one-liner from a count.** `scripts/wrap-ledger.sh` is the arbiter; a land changes the facts, so re-run it after the push rather than asserting the 📦 → ✅ transition from `origin/<trunk>..HEAD == 0`. Include: landed SHA, gate results, and any deploy/CI a trunk push triggers if the project documents one. **Confirm the landing by CONTENT (per step 7 — `git ls-tree` present + `git diff` empty on your changed paths), not by the count alone** — a sibling rebase can zero the count while your files never reached trunk.
+- A zeroed count is **not** `✅`. In a repo that is the LIVE layer's source, the rung after a land is `🚀 Landed but NOT live` until the enforcing store carries the bytes — `✅ Complete & live on trunk` asserted straight off the push is the exact false done the 🚀 rung exists to catch. Where the ledger says `🚀`, converge (`bash <repo>/scripts/deploy-live.sh`) and re-read; where it says `👤`, surface the `OPERATOR ▸` block. Elsewhere `LIVE_SRC=n-a` and the land legitimately settles to `✅`.
 
 ## Solo single-branch vs. multi-agent
 - **Solo single-branch (default, most projects):** work on trunk → commit → fetch → rebase → gate → `push origin HEAD:main`. Done.

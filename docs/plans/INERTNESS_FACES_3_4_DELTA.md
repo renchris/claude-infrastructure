@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Inertness faces 3–4 — the delta after a duplicate dispatch
@@ -62,6 +62,43 @@ and nothing was written there:
 - Faces 1–2 remain the deploy lane's (`docs/plans/DEPLOY_LANE_GROUND_UP.md` T0–T3).
 - The C10 rescope §3 calls *"the one clause a human must ratify"* is still unratified, and the
   sibling's runner honors that: a `c10`-class migration is staged and filed, never executed.
+
+## The second delta — the rung reached the ledger's RENDERERS but not its ROUTERS (2026-08-07)
+
+Re-ran the check this file's own lesson prescribes (`git ls-tree origin/main` for the named
+artifacts, **at land time**) before writing anything: both items above are on trunk, and
+`~/.claude/CLAUDE.md` (a real file, not a symlink) carries them too. The gap was one store further
+out. `wrap-ledger.sh` can emit five rungs; the docs that tell a session what to **do** with one had
+drifted from the script that produces it:
+
+| Store | State found | Why it was load-bearing |
+|---|---|---|
+| `commands/wrap.md` | ladder read `⛔ > 📤 > 🔧 > 📦 > ✅`, and "if the ledger says 🔧 or 📦, the work is not done" | the **pull-path renderer** — the surface an agent runs *on purpose* to check itself. `🚀` matched neither term, so it fell through as done: **fail-OPEN**. Verified empirically that `🚀` *is* computed on this path (it needs the live checkout's git state + the migrations ledger, no session id — unlike `👤`, which the file already documents as unreachable here) |
+| `commands/ship.md` §8 | "emit `✅ Complete & live on trunk` when `origin/<trunk>..HEAD == 0`" | minted the governing line from a **count**, bypassing the only thing that computes `🚀` |
+| `.claude/commands/ship.md` | "`📦 → ✅` is earned at the land" | correct *inside* the budget — deliberately so, nobody should hang on the 600s converger — but silent on the breach, in the one repo where landed and running diverge |
+
+### The guard, so the next rung cannot drift
+
+Adding `🚀` was one edit to the producer and five to its consumers, made by hand, a session apart —
+which is exactly why four landed and one did not. `tests/wrap-ledger.bats` §10 now derives the rung
+set from `RUNG="…"` **in the producer itself** (never a hand-kept list) and asserts every emitted
+rung reaches both ladders.
+
+It lives in the *producer's* suite deliberately: `gate-select.sh`'s `naming()` maps a changed
+`scripts/X.sh` to `tests/X.bats`, so the guard is **guaranteed selected by the only edit that can
+create this drift**. A standalone `tests/rung-ladder-parity.bats` would have ridden clause (e)'s
+token match instead and been inert exactly when it mattered. The other direction is covered too —
+`CLAUDE.md` and `commands/*.md` are index files (`gate-select.sh:174`) ⇒ FULL.
+
+Three properties keep it from being decoration: the extractor is pinned to the **set** (5 rungs by
+name), so a silently-empty extraction cannot pass vacuously; the ladder anchor must match **exactly
+one** line per doc, so it cannot go green about the wrong subject; and both mutation controls —
+dropping `🚀` from a **copy of the real doc**, not an approximation — go red. The assertion is
+emitted ⊆ documented, not equality: `⛔`/`📤` are model-state overlays the script never emits.
+
+**Status flipped to `complete` here for a reason.** `find-plan.sh:53` treats `in-progress` as OPEN,
+so this doc left as-is would have re-emitted the item and bought a **third** dispatch of the very
+work whose duplicate dispatch it exists to record.
 
 ## The generalisable lesson
 

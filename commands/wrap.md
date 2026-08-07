@@ -41,13 +41,19 @@ governing line + ≤3 supporting facts + that one command block.
 
 ## Read the rung, then act on it
 
-The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > ✅):
+The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅):
 
 | Rung | Fact that produced it | Your next verb |
 |---|---|---|
 | 🔧 | dirty tree ∨ gate stale on HEAD ∨ frozen-DoD remainder > 0 | **continue** — finish · run-gate · commit (explicit paths) |
 | 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — and per §Session Close's ship policy you FIRE it yourself in every repo except `reso-management-app`, where each land bills an Amplify + Fly deploy so it stays the operator's call |
+| 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or HEAD older than `WRAP_LIVE_BUDGET_MIN`), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
+| 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block — **not computed on this pull path**, see above |
 | ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
+
+`🚀` **is** fully computed on this pull path, unlike `👤`: it reads the live checkout's git state plus
+the migrations ledger, needing no session id. It is BUDGETED — lag *inside* the converge budget is a
+normal `✅` carrying a converging note, so the rung fires on a breach, not at every close after a land.
 
 Two rungs the ledger CANNOT derive from git — they are model-state you overlay when true, and
 they dominate the fact rung:
@@ -56,10 +62,13 @@ they dominate the fact rung:
   info only the operator has. Surface it: `⛔ Blocked — need your call: <decision>.`
 - **📤 Handoff** — out of context with work remaining: `📤 Out of context — /handoff.`
 
-**Never emit ✅ from memory.** If the ledger says 🔧 or 📦, the work is not done — drive it (📦 ⇒
-`/ship`; ship/land of verified work is the desk's job, not a hold). If it reports **no durable
-DoD**, completeness is unverifiable — freeze one (`~/.claude/autonomy/dod/<hash>.md`) rather than
-asserting a bare ✅. `--full` prints the dense per-field SESSION LEDGER block.
+**Never emit ✅ from memory.** If the ledger says 🔧, 📦 or 🚀, the work is not done — drive it (📦 ⇒
+`/ship`; 🚀 ⇒ run the converger, then re-read; ship/land of verified work is the desk's job, not a
+hold). Enumerate the rung you actually got: a rung missing from this list must NOT fall through as
+"done" — that is the fail-OPEN direction, and it is how a close asserted `✅ Complete & live on
+trunk` while the machine ran older bytes. If it reports **no durable DoD**, completeness is
+unverifiable — freeze one (`~/.claude/autonomy/dod/<hash>.md`) rather than asserting a bare ✅.
+`--full` prints the dense per-field SESSION LEDGER block.
 
 Machine consumers (Stop hooks) call `scripts/wrap-ledger.sh --machine` and parse the
 `RUNG=` / `DIRTY=` / `UNLANDED=` / `REMAINDER=` / `DOD=` lines.

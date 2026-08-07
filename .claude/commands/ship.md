@@ -34,6 +34,14 @@ a tuning problem, so the verdict moved off the land path instead.
 - **green ≠ deployed.** Your land is on trunk in seconds; the live layer advances on the
   next verifier+deploy cycle. `📦 → ✅` is earned at the land; deployment is observable
   separately (below), not something to wait on.
+- **…but that transition is BUDGETED, and the ledger owns the verdict — not this line.** Inside
+  the converge budget the land is a `✅` carrying a converging note, which is why you never wait
+  on the 600s cycle. Past it — `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, HEAD older than
+  `WRAP_LIVE_BUDGET_MIN`, or a FAILED migration — `wrap-ledger.sh` computes **`🚀 Landed but NOT
+  live`**, and that is the rung to emit: converge with `bash scripts/deploy-live.sh`, then re-read.
+  This repo IS the live layer's source, so it is the one repo where "landed" and "running" can
+  diverge for weeks (measured: 104 commits, eight correct analyses that changed nothing). Re-read
+  the ledger after the land rather than asserting `✅ Complete & live on trunk` from the push.
 
 **Where to look when something feels stuck** — all disk truth, no narration:
 ```
