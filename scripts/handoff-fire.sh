@@ -1396,9 +1396,11 @@ it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 
 # ---- PANE-PARKED oracle: the pane is still a SHELL, and it is STUCK (item 7146aab37a9a) -------
 # The engagement oracle below is disk-only (a transcript with an assistant turn). That makes it
 # blind, BY CONSTRUCTION, to the difference between "claude booted and never ingested the brief"
-# (recover with a re-send) and "claude never started at all because the typed line parked the shell
-# on an interactive prompt no automation can answer" (a re-send makes it WORSE). Both look like
-# silence on disk. Only the PANE carries the evidence, and reading it costs one bounded call.
+# (recover with a re-send) and "claude never started at all because the launch command parked the
+# shell on a prompt no automation can answer, or was refused outright" (a re-send makes it WORSE).
+# Both reach here on BOTH transports — a typed line is refused by the ZLE that read it, an argv
+# command by the `$SHELL -l -i -c` that ran it — and on disk both are silence, indistinguishable
+# from each other. Only the PANE carries the evidence, and reading it costs one bounded call.
 #
 # The live shape (2026-07-26T13:14): `zsh: correct 'go' to 'god' [nyae]?`. zsh's spell prompt is a
 # single-key `read -k`, NOT ZLE — so it answers nothing, times out never, and the fire's own
@@ -5907,11 +5909,17 @@ else
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
     elif [ "$ENGAGE_RC" = 2 ]; then
       # The launcher NEVER RAN: the pane is still a shell and that shell refused or is blocking on
-      # the typed line. Distinct message because the remedy is distinct — there is no session to
+      # the launch command. Distinct message because the remedy is distinct — there is no session to
       # recover, and the re-send that recovers an INC-4 miss would execute the brief as a script
       # here. Naming the shell's own line makes the cause auditable instead of inferred.
-      echo "!! FIRE FAILED — pane PARKED, launcher never ran: ${SPAWNED_PANE:-<pane?>} is still a shell and refused/blocked on the typed line — $ENGAGE_PARKED" >&2
-      echo "   The typed command was: $CMD" >&2
+      #
+      # "launch command", never "typed line" (item 4c5eddc16c2d). Since fda70147 a kitty pane's
+      # command is its ARGV — it2_land types NOTHING there — so on the transport that is now the
+      # default wherever kitty runs, a verdict naming a typed line sends the operator hunting for a
+      # keystroke bug that cannot exist. The pane parked either way; how the command arrived is not
+      # what this message is for, and it is the one part of it that is transport-dependent.
+      echo "!! FIRE FAILED — pane PARKED, launcher never ran: ${SPAWNED_PANE:-<pane?>} is still a shell and refused/blocked on the launch command — $ENGAGE_PARKED" >&2
+      echo "   The launch command was: $CMD" >&2
       echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
       emit_handoff_telemetry 0 || true
       exit 1
