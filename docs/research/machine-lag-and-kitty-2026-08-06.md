@@ -3,13 +3,31 @@
 **Answer: the box is oversubscribed by its own fleet, and the fleet is running 82-commit-old code
 because `deploy-live` has been dead-locked for two days.** A 10-core M1 Max is carrying 17 Claude
 Code sessions, ~9.5 GB of idle browser-automation infrastructure, and a 297-suite test corpus at a
-50% duty cycle. **kitty is the cheapest large thing running** (294 MB, ~6% CPU, 15 panes) and is
-exonerated — no kitty-side change is warranted. The one claude-infrastructure defect that matters is
-§5: a green-stamp/anti-rollback deadlock that has frozen the live `~/.claude` layer at 42 stale
-symlinked files and refused 346 times.
+50% duty cycle. **kitty is exonerated as a lag driver** (~6% CPU; its 1,637 MB footprint is 75% GPU
+backing store scaled to *display area × OS-window count*, not to pane count — §6a-bis corrects the
+"294 MB" this line first claimed, and names the one real kitty-side lever: 3 OS windows → 1). The
+claude-infrastructure defect that matters is §5: a green-stamp/anti-rollback deadlock that has frozen
+the live `~/.claude` layer at 42 stale symlinked files and refused 346 times.
 
 Machine: MacBookPro18,2 · M1 Max (8P+2E = **10 cores**) · 64 GiB · Darwin 24.6.0 · uptime 1d 22h.
 Measured 2026-08-06 23:06–23:40 PDT.
+
+> ## ⚠ UPDATE 2026-08-06 23:34 — the lag was an EVENT, not a state; two claims above are corrected
+>
+> Four read-only axis agents (kitty · daemons · hooks · leaks) reported after the first pass. Each
+> claim below was re-verified independently here before being adopted. Net effect:
+>
+> - **The spike self-resolved while it was being investigated.** 1-min load went **66.19 → 6.43**
+>   between 23:06 and 23:34 with no intervention (`23:34 up 1 day, 23:15, load averages: 6.43 8.28
+>   13.56`). All three non-kitty axes observed the same decay independently. §1 is therefore the
+>   peak of a transient, not a steady state — **the durable finding is §5, which does not decay.**
+> - **The answer line's "kitty … 294 MB" is wrong by ~6×, and there IS a kitty-side lever.** `ps`
+>   RSS undercounts GPU backing store badly. See **§6a-bis**.
+> - **§4's corpus finding gains its mechanism**: three concurrent corpus runs at once, because the
+>   mutex guards only one entrypoint. See **§4-bis**.
+>
+> New material the first pass did not measure at all: **§10, the per-event hook layer** — 392 ms per
+> Bash call, and a free −30 ms sitting built-but-unwired.
 
 ---
 
@@ -108,6 +126,35 @@ The per-run failing *set* changes every round, supporting task #117's read that 
 flakes rather than one regression. Note `kitty-conf-bindings.bats` at 23 — see §6b, where it turns
 out to be already fixed on trunk and stale only in the frozen live layer.
 
+### §4-bis — the mechanism: the corpus mutex guards a script, not the corpus
+
+The load spike was **three bats corpus runs at once** (daemon-audit, verified against my own process
+census, which had recorded the same PIDs without chasing them):
+
+1. pid 1317/1321 — `postland-verify.sh --run-if-needed` from worktree `wt-9de59b36023d`, PPID 1,
+   under `timeout -k 10 10800` (a 3 h budget), full ~300-file corpus, 41 min in.
+2. pid 31887 — agent session 38700, `bats -f 'C23:|C13:'`, 8 min in.
+3. pid 97812 — **the same agent session 38700**, `tests/postland-verify.bats`, 1 h 27 m in.
+
+`com.claude.postland-verify` fires `--run-if-needed` every 300 s, and the mutex
+(`postland-verify.sh:290,342-359`, `LOCK=run.lock.d`, TTL 3600) is taken **inside that script**. An
+agent that invokes `bats` directly never sees it. So one agent session ran two suites concurrently
+while the scheduled corpus ran a third — ~1,900 tests × 3–6 bash forks each, ×3. That is the
+fork-storm signature in §1's `sys 32% > user 35%` split, and it is why the load decayed to 6.43 on
+its own: the suites drained.
+
+**Fix shape:** make the lock reachable from outside the script — a `cc-bats` wrapper that takes
+`LOCK` before any corpus-scale invocation, or make `--run-if-needed` the only sanctioned entrypoint.
+
+**One unconfirmed observation, recorded because it inverts the intended priority.** Suite 1's process
+tree (1321, 1393, …) read **PRI 20 / NI 20** — ordinary timeshare — *despite its own argv containing
+`nice -n 19 /usr/sbin/taskpolicy -c background`*. daemon-audit A/B'd that exact chain in isolation and
+it reached PRI 4 in every variant, so the deployed invocation is not getting the band it names. Suites
+2 and 3 (the interactive ones) *were* at PRI 4. If real, the **unattended** corpus competes with
+foreground work while the **interactive** ones politely do not — exactly backwards. Not reproduced
+here; needs a post-spawn `ps -o pri= -p <child>` assertion to become a verdict rather than an
+observation.
+
 ## 5. Finding C — THE HEADLINE: deploy-live is dead-locked, and the fleet runs 82-commit-old code
 
 `~/.claude` is not a copy of this repo; it is **symlinked directly into the shared checkout's working
@@ -187,6 +234,44 @@ WindowServer was 20.9–45.6% of one core, but with 15 kitty panes plus Chrome, 
 all compositing, that is not attributable to kitty. **No kitty-side configuration change is
 warranted.** Task #90 ("multi-hour kitty drift at constant layout") finds no support in tonight's
 numbers.
+
+### §6a-bis — correction: `ps` RSS undercounts kitty ~6×, and the lever is OS-WINDOW count
+
+The "294 MB" above is `ps` RSS, and for a GPU-compositing app it is the wrong instrument. Measured
+directly:
+
+```
+$ ps -o rss= -p 567          →  269 MB
+$ footprint -p 567
+kitty [567]: 64-bit    Footprint: 1637 MB (16384 bytes per page)
+1069 MB   24 regions   IOSurface
+ 152 MB  198 regions   IOAccelerator (graphics)
+    phys_footprint: 1637 MB   phys_footprint_peak: 2251 MB
+```
+
+**1,221 MB of the 1,637 MB (75%) is GPU backing store**, and it scales with **display area per OS
+window**, not with pane count. This box drives four displays — `3456×2234` XDR plus **3× `5120×2880`
+5K @ 60 Hz** (`system_profiler SPDisplaysDataType`) — and kitty holds **3 OS windows**. `top`'s MEM
+column had reported 1621M and was right; I discarded it in favour of `ps` and was wrong to.
+
+So the corrected comparison is: kitty **1,637 MB** vs iTerm2 **128 MB** — kitty is *not* the cheapest
+large thing running, though ~75% of its cost is a display-area tax any GPU terminal would pay for the
+same window count.
+
+**The lever this creates, which §6a said did not exist: consolidate 3 OS windows → 1** (tabs, not
+windows). IOSurface is allocated per OS window at that window's 5K backing store, so merging drops
+roughly two-thirds of the 1,069 MB and removes two clients from WindowServer's composite tree. It is
+a layout change, needs no config edit, and `config/kitty.conf:324-330` already records the underlying
+measurement from the prior investigation ("21 panes across 4 OS windows on 3×5K + 1 XDR: WindowServer
+71% CPU, kitty 10%") — the finding was in the repo and this document initially missed it.
+
+Pane count is confirmed *not* to be the driver: kitty renders only the active tab of each OS window,
+and only 5 of the tabs' panes are in active tabs. **Pane counts in this document are unstable and
+should not be quoted** — 15 at 23:14, 12 at 23:34, and kitty-audit reported 21 with a per-tab
+breakdown that sums to 16. The stable facts are **3 OS windows and 5 tabs**.
+
+The §6a conclusion survives with one word changed: no kitty **config** change is warranted; a kitty
+**layout** change is the single biggest kitty-side win available.
 
 ### 6b. `tests/kitty-conf-bindings.bats` — a false alarm that diagnosed §5
 
@@ -273,14 +358,80 @@ for 19 days while reporting as loaded.
    `com.chrisren.watch-claude-code-2118-hold` (exit 1).
 6. **Land the task-#124 ratchet eventually** — 57 unpinned suites, not the 0 currently assumed. Not
    urgent; it is not what is red.
-7. **Not recommended: any kitty configuration change.** kitty is 294 MB and ~6% CPU for 15 panes.
-   Nothing measured supports touching it.
+7. **Not recommended: any kitty *configuration* change.** `repaint_delay 16`, `input_delay 5`,
+   `scrollback_lines 2000`, `background_opacity` unset, `cursor_blink_interval 0` are already the
+   right values — `dec053fb perf(kitty): throttle redraws at high pane count` landed exactly this
+   tuning. Lowering `repaint_delay` further would *raise* cost.
+
+**Added after the axis reports (§4-bis, §6a-bis, §10), in leverage order:**
+
+8. **Serialize the corpus (§4-bis).** Three concurrent runs caused the spike. Put the `run.lock.d`
+   mutex behind a wrapper any caller must use, so an agent typing `bats tests/…` cannot bypass it.
+   This is the fix for the lag *event*, as §5 is the fix for the durable state.
+9. **Run `26-curl-gate-scope-activate.sh` (§10).** Free −30.4 ms on every Bash call, already built,
+   tested and symlinked; only `settings.json:435` still points at the unscoped hook.
+10. **Scope `teammate-checkpoint.sh` to worktrees (§10)** — drop the `*)` arm at `:67-75` so the
+    human-owned repo root stops being checkpointed, and tighten the machine-wide GC damper at
+    `:91-115`. Standing cost today: 6,097 refs, 599 KB `packed-refs`, paid by every `git` call in
+    every hook.
+11. **Consolidate kitty's 3 OS windows into 1 (§6a-bis)** — the only kitty-side win, ~700 MB of
+    IOSurface plus two fewer WindowServer composite clients. Layout change, no config edit.
+12. **Add `"timeout": 10` to `waiting-recycle.sh`** — the only unbounded hook on the hottest event
+    (PostToolUse/Bash), 1,214 lines, reads transcripts, runs `osascript`, and can `exec
+    handoff-fire.sh --recycle`.
+13. **Reconcile `~/.claude/settings.json` vs `~/.claude-next/settings.json`** — they register
+    different chains (PreToolUse 14 vs 13, Stop 11 vs 10, SessionStart 14 vs 13). Live panes run
+    `~/.claude-220` with `~/.claude-next` snapshots, so per-event accounting from `~/.claude` alone
+    is wrong for some of them.
+
+## 10. The per-event hook layer — measured (was "open" in §9)
+
+§9 listed per-tool-call hook cost as not measured. It now is (hook-audit; the PreToolUse subtotal
+independently corroborates this repo's own `docs/plans/HOOK_CHAIN_COST.md` §2.3 within 3.5%, and I
+re-verified the two actionable findings directly).
+
+**~392 ms of CPU and ~55 process creations per Bash tool call**, across a 12-hook hot chain (7
+PreToolUse + 5 PostToolUse — two of the PostToolUse entries match `""`, i.e. *every* tool). At the
+measured live rate of 780–844 Bash calls/hour across 17 sessions, that is **0.086 cores = 0.9% of
+this 10-core box**. The statusline adds 0.025 cores (measured 0.66 renders/s fleet-wide × 37.6 ms —
+it renders on activity, not a timer). **The hook layer is not a lag driver**, and per `HOOK_CHAIN_COST.md`
+§3 the obvious remedy is already refuted: `hooks/hook-chain.sh` was built in `5c88633f` and measured
+*negative* (174 ms serial vs ~180 ms dispatched). Do not rebuild it.
+
+Worst offenders: `validate-bash.sh` 78.4 ms / 18 externals · `qos-rewrite.sh` 49.7 ms ·
+`curl-gate.py` 37.7 ms · `git-worktree-guard.sh` 18.6 ms.
+
+Two findings here are worth acting on regardless of the lag, and both were verified here:
+
+1. **`curl-gate-scope.sh` landed inert — a free −30.4 ms/Bash call (7.7% of the chain).** It is
+   built, has 14 bats cases, is symlinked live
+   (`~/.claude/hooks/curl-gate-scope.sh -> …/hooks/curl-gate-scope.sh`), and ships an activation
+   script (`docs/activation/pending-activation/26-curl-gate-scope-activate.sh`) — but
+   `~/.claude/settings.json:435` still registers `~/.claude/hooks/curl-gate.py` directly, so every
+   Bash call pays 37.7 ms of Python startup for a hook that no-ops outside reso. Verified by reading
+   line 435 and resolving the symlink.
+2. **`teammate-checkpoint.sh` is checkpointing the shared repo root**, not just teammate worktrees:
+   its `*)` arm (`:67-75`) accepts any dir passing `git rev-parse --git-common-dir`, which the root
+   does. The root tree is dirty, so `:140`'s `git status --porcelain | grep -q .` is always true and
+   every 5th tool call runs `read-tree` + `add -A` + `write-tree` + `commit-tree` over 1,214 tracked
+   files. Its GC damper is one **machine-wide** stamp (`:91-115`), so ~20 sessions share one sweep
+   per day against a 24 refs/hour production rate. Verified standing state: **6,097 refs under
+   `refs/checkpoints/`, `.git/packed-refs` at 599 KB** — a cost every `git` call in every hook pays.
 
 ## 9. Method note
 
-Four read-only axis subagents (kitty / daemons / hooks / leaks) were spawned and **all four
-terminated without writing their deliverable files**. Nothing here derives from them — every number
-is a direct measurement from this session, with the command that produced it named inline.
+Four read-only axis subagents (kitty / daemons / hooks / leaks) were spawned. **All four delivered,
+but none could write its deliverable file — the briefing was at fault**: they were `Explore` agents,
+which have no Write/Edit tool, and I gave them a delivery contract requiring one. Each returned its
+report inline instead. *A delivery contract must be satisfiable by the agent type you spawn* — check
+the tool list before writing the contract.
+
+Every axis claim adopted above was re-verified here before adoption, and two were **not** adopted:
+kitty-audit's "21 panes" (its own per-tab breakdown sums to 16, and I measure 12–15 at different
+moments), and the various session counts, which disagree across axes (14 leads by my count of the
+node binary, 19 by daemon-audit, 39 by leak-audit, 97 procs by hook-audit) because each counted a
+different population. Where the axes and I disagreed, the disagreement is stated rather than
+averaged.
 
 The §6b correction is the methodological point worth keeping: the first conclusion ("the kitty test
 is stale, fix five assertions") was well-evidenced, internally consistent, and **wrong**, because
