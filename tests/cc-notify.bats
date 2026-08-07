@@ -1143,3 +1143,24 @@ write_accounts() {
   run "$REPO/bin/cc-cloud" list --json
   echo "$output" | grep -q '"account":"owner"' || false
 }
+
+# ── kitty numeric pane ids (id-space law: registry keys on a kitty box are decimal ints) ────────
+
+@test "kitty numeric pane id resolves via its registry row and enqueues" {
+  # A kitty-keyed registry row: filename IS the pane id, no uuid shape anywhere.
+  printf '{"paneUUID":"247","name":"lakehouse-lecture-247","cwd":"/tmp","account":"next","pid":%s,"startedAt":1}' "$$" \
+    > "$CC_REGISTRY_DIR/247.json"
+  run "$NOTIFY" 247 "numeric id ping"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"enqueued=1"* ]] || false
+  grep -q '\] numeric id ping' "$CC_MAILBOX_DIR/247.md"
+  [ "$(sent_count)" -eq 0 ]     # the anti-keystroke invariant holds on this path too
+}
+
+@test "numeric token with NO registry row stays UNKNOWN (control — numerics never blind-passthrough)" {
+  run "$NOTIFY" 999 "to nobody"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"verdict=unresolvable"* ]] || false
+  [ ! -e "$CC_MAILBOX_DIR/999.md" ]
+  [[ "$output" == *"enqueued=0"* ]] || false   # positive control beside the absence assertion
+}

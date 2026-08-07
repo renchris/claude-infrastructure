@@ -647,6 +647,16 @@ resolve() {
   # 1. exact friendly-name match — read STRAIGHT from the registry (no it2 IPC, so no hang).
   u="$(registry_name_to_uuid "$t")"; rc=$?
   [ "$rc" = 0 ] && [ -n "$u" ] && { echo "$u"; return 0; }
+  # 1b. kitty integer pane id. Registry rows are keyed by pane id, and on a kitty box those are
+  #     decimal integers — a shape every uuid gate below structurally rejects (id-space law: iTerm2
+  #     UUIDs and kitty ints share the code path but not the id space). A numeric token resolves
+  #     IFF its registry row file exists — same dead-row semantics as the full-uuid passthrough
+  #     below (the liveness verdict downstream stays the honest half), and name-match above still
+  #     wins for a session actually NAMED with digits. Measured 2026-08-07: `cc-notify 247`
+  #     returned no-such-target while `--list` printed pane 247 live in its UUID column.
+  if [[ "$t" =~ ^[0-9]+$ ]] && [ -f "$REG_DIR/$t.json" ]; then
+    echo "$t"; return 0
+  fi
   # 2. raw full UUID passthrough — needs no registry at all, so it works even when the registry does
   #    not. Tried BEFORE surfacing any resolver-unavailable verdict.
   if [[ "$t" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
