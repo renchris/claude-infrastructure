@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Deploy lane — ground-up rebuild of the advance invariant
@@ -669,3 +669,117 @@ Two second-order findings from that fix, both worth keeping:
 **Residual, measured not assumed:** within budget with no green descendant the lane still refuses and
 exits 1. That is **not** the deadlock class — it is bounded (T2 fires past the budget), damped (1 per
 24h), and now **paged**. Recorded so a later reader does not mistake a bounded wait for the freeze.
+
+### 2026-08-07 (later) — D5 and D4 closed; the two deferrals were BOTH false
+
+Both remaining deliverables had been left on a prediction, and disk refuted both. This is the §1.9
+trap firing on the rebuild's own tail rather than on its subject.
+
+**D5 — the deferral's premise was false.** Phase 0 left D5 unassigned with a reason: *"it is downstream
+of T2, so once the lane can advance the platter becomes runnable on its own. Re-verify after the merge
+rather than fixing it twice."* Re-verified. Measured state: live layer **21 behind, 1h old** — both
+**inside** the T2 budget (25 / 6h) — and no green descendant, so the ladder reaches T3 and dies. The
+platter's RUN 1 could not succeed, by the lane's own verdict:
+
+```
+$ deploy-live.sh --dry-run
+REFUSED — no GREEN tree is a DESCENDANT of live HEAD fda70147faaf … nothing is safe to deploy
+$ cc-do --list
+  RUN  1. deploy-live            [live layer 19 behind origin/main]
+         bash ~/.claude/scripts/deploy-live.sh
+```
+
+The premise assumed the *degraded* path is the only way the lane declines; the **within-budget** state
+is a third one, and it is the steady state, not an edge. Fixed in `e9ea14d6`: both renderers now **ask
+the lane** (`--dry-run --offline`) and downgrade a refusing deploy to `⊘ HELD` carrying its reason —
+named and counted, never numbered, never run. The predicate stays in the actuator; a second copy in a
+renderer is what drifts.
+
+`--offline` is new and exists for this call. Not plain `--dry-run`, for two reasons, and the second is
+the load-bearing one: `operator-readout.sh` is a **Stop hook**, so a fetching probe is a network
+round-trip at every turn close; and a *failed* fetch `die`s rc 1, which the caller reads as *"the lane
+refuses"* — **a renderer reporting a deploy blocker that it caused itself.** It decides against the
+already-fetched `origin/main`, the identical ref both renderers already use for `behind`.
+
+**The enabling measurement.** The probe was 3.06s, too slow for a Stop hook. The cost was not the
+fetch — it was the ladder forking `git rev-parse "$sha^{tree}"` per candidate, up to `SCAN_N`=200 per
+evaluation: **2.233s vs 0.011s** for one `git log --format` process. Batched, byte-identical verdict,
+probe now 0.86s — and ~28,800 forks/day removed from a job that runs 144×/day. It was slowest in
+exactly the state that mattered, because T1 `break`s early only when it *finds* a green descendant.
+
+**D4 — landed in a committed file, never reached launchd.** §2.5's fallback landed in `601908fe`. The
+enforcing store never saw it:
+
+| | ProgramArguments |
+|---|---|
+| repo `launchd/com.claude.deploy-live.plist` | `D="$HOME/.claude/…"; [ -x "$D" ] \|\| D="$HOME/Development/…"; exec "$D"` |
+| **LIVE** `~/Library/LaunchAgents/…` (a COPY, mtime 07-30) | `exec "$HOME/.claude/scripts/deploy-live.sh"` |
+| **LOADED** job (`launchctl print`) | the same pre-fix form |
+
+`27-deploy-lane-v2-activate.sh` deployed the two *scripts* and says so in its own banner — *"Neither
+launchd job was modified. No plist was touched (C10 intact)."* Correct and deliberate; the consequence
+is that half of one change reached a commit and no enforcing store. Staged as
+`34-deploy-plist-fallback-activate.sh` (`5802fecf`) — C10, operator-run. It asserts its own
+precondition (a checkout behind `601908fe` would install a plist *without* the fallback and report
+success), verifies **by content** out of `launchctl print` rather than trusting bootstrap's rc, and
+its dry run prints the currently-loaded exec target so the operator sees the pre-fix form themselves.
+
+**RED-controls (§2.8 A-5/A-6)** — each red against a `git archive 07f9707c` pristine subject carrying
+these same tests. Suites: `deploy-live` 54/54 (was 49) · `cc-do` 28/28 (was 25) · `operator-readout`
+63/63 (was 60).
+
+| Leg | Pristine | Now |
+|---|---|---|
+| `--offline` agrees with a fetching run · decides with the remote unreachable · refuses with no fetched ref · one-process ladder | **RED** ×4 | ok |
+| a refusing lane is HELD not RUN · a HELD deploy is never executed | **RED** ×2 | ok |
+| `⊘ HELD` row draws no runnable slot · the probe is asked with `--offline` | **RED** ×2 | ok |
+
+**Three controls pass on BOTH trees by design, and are declared rather than hidden** — A-6 asks for
+exactly this. `deploy-live 52` (the *fetching* path dies on a broken remote) exists so leg 51's
+absence-assertion has a control that *can* fail the same way. `cc-do 27` and `readout 62` are the
+positive controls against the gate degenerating into always-hold: pre-change every deploy was RUN, so
+they *must* pass on the pristine tree.
+
+**And one existing test was retargeted rather than left to pass vacuously.** `cc-do` *"a REFUSING
+deploy step does NOT halt the run"* used `mklag 1`, which post-change is HELD and never runs — so *"it
+did not halt the run"* would have been true **because nothing ran**: a control passing because a
+sibling mechanism already fixed what it tests. Its fixture is now probe-passes/run-fails, which is the
+residual risk the skip genuinely exists for — the probe is taken when the board is **rendered** and the
+run happens seconds later. The skip path is kept for that reason and is now the only thing testing it.
+
+**A guard that indicted its own provenance.** The first spelling of the one-process test counted the
+old pattern anywhere in the file and went red on `deploy-live.sh`'s **own comment explaining the
+removal**. Anchored to `^[^#]*`: a text guard that cannot tell code from a comment forbids naming the
+defect you fixed.
+
+**This plan's own scar caught this plan's own diff, and that is the closing evidence.** The land gate
+ran `permission-gate-lint` — built from `docs/research/inertness-generator-2026-08-07.md` §2.3 and
+citing *this rebuild's* `dcf2f11a` as its worked example — and it went RED on `deploy-live.sh:444`,
+the `--offline` missing-ref guard. Correctly: *"no already-fetched `origin/main` ⇒ die"* is an
+affirmative-permission predicate on an actuation path with no clock, i.e. exactly the shape whose
+un-clocked ancestor emitted 545 refusals. Attribution was measured, not assumed — the selftest passes
+**29/29 on pristine trunk** and failed only on this branch.
+
+The fix was not a declaration. It was noticing the guard had a **real** defect underneath: `--offline`
+skips the fetch, so it decides against a possibly-arbitrarily-stale tip — and it could still **really
+merge**. A no-network mode that deploys old trunk without ever saying it had not looked is a footgun
+independent of any lint. `--offline` now forces `DRY_RUN` at parse time, which removes the mode from
+the actuation path altogether, and *that* is what makes the `gate_bounded:` declaration true rather
+than convenient: a gate that cannot withhold an advance can only decline to answer a question.
+
+**And the first declaration was itself laundering — the lint caught that too.** Placed on the
+enclosing `if`, the marker was accepted (the lint lets a multi-line gate declare its bound once) and
+the count dropped from 10 to **9**: it had silently exempted the `git fetch … || die` on the *else*
+branch, a pre-existing gate that **is** on the actuation path and is what the 144×/day launchd lane
+hits. The marker's own text was false of that leg. Moved inside the branch, the count returns to 10
+and the fetch gate stays counted. The ratchet's downward half — *"the count going DOWN is ALSO a
+finding"* — is what surfaced it; without that half a marker can buy exemptions for its neighbours.
+
+**Two REVISIT triggers §1.5 re-opened are now FILED**, not left in prose — `b4f93c9fa73c` (off-box CI
+for the hermetic subset, a green producer the design lacks) and `343d7cc392b6` (second verification
+host; the doc's own ~2h criterion is exceeded at p50 ≈ 3.2h). A completed plan's prose is where an
+un-filed item goes to die.
+
+**Remaining, and it is the operator's:** run `34-deploy-plist-fallback-activate.sh`. Nothing else in
+this plan is open — `status:` flips to complete on that basis, with D4's activation surfaced through
+the pending-activation queue where the platter renders it by construction.
