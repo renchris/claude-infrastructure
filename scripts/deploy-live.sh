@@ -294,6 +294,28 @@ EOF
   return 0
 }
 
+# ── which tracked path is about to block the fast-forward (§2.6b) ────────────────────────────────
+# `--ff-only` refuses when the advance would overwrite a locally-modified tracked file — and ONLY
+# for files the advance actually touches, so the answer is the INTERSECTION of two sets, not either
+# one alone. Emitted one path per line; empty ⇒ nothing in the advance's own path set is dirty.
+# Iterating the DIRTY set (typically 0-3 entries) and asking git about each is deliberate: the
+# changed set can be thousands of paths across 91 commits of lag, and git's own pathspec is a
+# sounder membership test than any string matching we would write here.
+merge_blockers() { # <from-sha> <to-sha>
+  local from="$1" to="$2" line path
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in '??'*) continue ;; esac        # untracked cannot block a --ff-only
+    path="${line#???}"                             # porcelain v1: exactly 2 status chars + a space
+    case "$path" in *' -> '*) path="${path##* -> }" ;; esac   # rename ⇒ the DESTINATION is on disk
+    [ -n "$path" ] || continue
+    [ -n "$(g diff --name-only "$from" "$to" -- "$path" 2>/dev/null)" ] && printf '%s\n' "$path"
+  done <<EOF
+$(g status --porcelain 2>/dev/null)
+EOF
+  return 0
+}
+
 g rev-parse --git-dir >/dev/null 2>&1 || die "DEPLOY_REPO is not a git checkout: $DEPLOY_REPO"
 
 # UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
@@ -376,6 +398,34 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 [ -n "$BANNER" ] && say "!!!!! $BANNER !!!!!"
+
+# ── the blocking state is NAMED BEFORE the merge, never guessed after it (§2.6b) ─────────────────
+# This used to be `die "…FAILED (dirty tree? diverged?)"` — a guess offering two alternatives at the
+# moment the operator can least afford to test both. Both are knowable exactly, and one of the two
+# is not even reachable here (the anti-rollback guard above already excludes divergence), so the
+# guess was wrong half the time by construction.
+#
+# 🚨 NEVER auto-stash, auto-checkout or auto-discard the blocking file. The live checkout is shared:
+# an uncommitted tracked change in it is a PEER SESSION's work in progress (measured cause:
+# hooks/backup-before-write.sh). The repo's own 26-deploy-gate-unblock refuses exactly this, in
+# exactly these words — "That is very likely a peer session's uncommitted work. REFUSING to
+# overwrite it… this script never discards local work." Detect, name, page, stop.
+BLOCKERS="$(merge_blockers "$HEAD_SHA" "$TARGET")"
+if [ -n "$BLOCKERS" ]; then
+  BLOCKER_LIST="$(printf '%s\n' "$BLOCKERS" | tr '\n' ' ')"
+  if [ "$AUTO" -eq 1 ] && ! damp_ok "dirty-tree:$BLOCKER_LIST"; then exit 1; fi
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  { date +%s
+    printf 'deploy-live BLOCKED: DIRTY TREE — the advance %.12s → %.12s rewrites tracked path(s) that\n' "$HEAD_SHA" "$TARGET"
+    printf 'carry UNCOMMITTED local changes in the shared checkout %s:\n' "$DEPLOY_REPO"
+    printf '%s\n' "$BLOCKERS" | sed 's/^/  /'
+    printf "That is very likely a PEER SESSION's uncommitted work. This lane never stashes, checks out\n"
+    printf 'or discards it — commit or stash it in that checkout and the next tick advances.\n'
+    printf 'inspect: git -C %s status --porcelain\n' "$DEPLOY_REPO"
+  } > "$PAGES_DIR/deploy-dirty-tree.page" 2>/dev/null || true
+  die "DIRTY TREE — the advance to ${TARGET:0:12} rewrites tracked path(s) carrying UNCOMMITTED local changes: $BLOCKER_LIST(very likely a peer session's work — this lane never stashes or discards it; commit or stash it yourself, then re-run)"
+fi
+
 # ⚠️ THE FILE UNDER THIS PROCESS CHANGES ON THE NEXT LINE. The merge rewrites the working tree and
 # THIS script is in it, so from here on the code executing is the copy bash parsed BEFORE the merge,
 # never the copy now on disk. Every function called below was defined above this line (host_checks()
@@ -397,7 +447,17 @@ fi
 # construction — it can only bite a change to deploy-live.sh itself — and the cost it actually
 # imposes is diagnostic, which is what these lines remove. Re-open the question if a post-merge fix
 # ever needs to be correct on the FIRST deploy rather than the second.
-g merge --ff-only "$TARGET" >/dev/null 2>&1 || die "git merge --ff-only ${TARGET:0:12} FAILED (dirty tree? diverged?) in $DEPLOY_REPO"
+if ! g merge --ff-only "$TARGET" >/dev/null 2>&1; then
+  # The dirty-tree pre-flight above ruled out the first of the old message's two guesses. Rule out
+  # the second by MEASURING it rather than offering it: divergence is `origin/main..HEAD` non-empty.
+  # It should be structurally unreachable — the anti-rollback guard passed, so live HEAD is an
+  # ancestor of a commit on origin/main — so reaching this arm means that premise broke, which is
+  # worth saying out loud instead of hiding inside a shrug.
+  AHEAD="$(g rev-list --count "origin/main..$HEAD_SHA" 2>/dev/null || echo 0)"
+  case "$AHEAD" in ''|*[!0-9]*) AHEAD=0 ;; esac
+  [ "$AHEAD" -gt 0 ] && die "DIVERGED — the live checkout carries $AHEAD commit(s) that are not on origin/main, so it cannot fast-forward to ${TARGET:0:12}. This lane never rebases or resets a shared checkout; land or drop those commits by hand."
+  die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with BOTH named causes RULED OUT (no dirty tracked path inside the advance's own path set; HEAD carries no commit missing from trunk) — read \`git -C $DEPLOY_REPO status\` by hand"
+fi
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"
 
 if [ -x "$DEPLOY_REPO/install.sh" ]; then
