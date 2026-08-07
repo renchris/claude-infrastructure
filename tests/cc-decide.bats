@@ -369,3 +369,84 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   IFS=$'\t' read -r f1 f2 f3 f4 f5 <<< "$line"
   [ "$f3" = "pj" ]; [ "$f4" = "no-change" ]
 }
+
+# ══ list --json — the FULL packets, so a consumer can filter on what the table drops ════════════
+# The table's five columns carry status/class/id/deadline/what_plain and NOTHING else, so no
+# consumer could ask the one question a session-scoped rung has to ask: is this open decision MINE?
+# `session_sid` was in the packet the whole time (bin/cc-decide:185-188) and unreachable through the
+# only reading verb. --json exposes the packet, behind cc-decide's OWN select predicate — so the
+# arbiter of "open" stays here and a consumer never mints a second definition of the board.
+
+@test "list --json emits a parseable ARRAY carrying session_sid (the field the table drops)" {
+  bash "$CD" open --class C --what "activate the plist" --session-sid SID-A >/dev/null
+  run bash "$CD" list --open --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e 'type == "array" and length == 1' >/dev/null
+  run bash -c "bash '$CD' list --open --json | jq -r '.[0].session_sid'"
+  [ "$output" = "SID-A" ]
+  # ...and the table for the same query still cannot answer it — the reason --json exists.
+  run bash "$CD" list --open
+  ! echo "$output" | grep -q "SID-A" || false
+}
+
+@test "list --json with ZERO rows emits [] — 'read fine, zero rows' ≠ 'the read failed'" {
+  # A consumer that cannot distinguish these will either manufacture a verdict from a failure or
+  # swallow one (MEMORY.md lookup-miss-is-not-absence). Both empty shapes must be a valid array.
+  run bash "$CD" list --open --json                 # store dir does not exist yet at all
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+  bash "$CD" open --class C --what "only packet" >/dev/null   # store now exists, but 0 match
+  run bash "$CD" list --open --class B --json
+  [ "$status" -eq 0 ]
+  [ "$output" = "[]" ]
+  echo "$output" | jq -e 'type == "array" and length == 0' >/dev/null
+}
+
+@test "list --json honours --open/--all/--class — the SAME predicate as the table" {
+  ida=$(bash "$CD" open --class A --what "a-item")
+  idc=$(bash "$CD" open --class C --what "c-item")
+  bash "$CD" action "$ida" >/dev/null                # A is now terminal
+  ids_json() { bash "$CD" list "$@" --json | jq -r '.[].id' | sort | tr '\n' ' '; }
+  [ "$(ids_json --open)"          = "$idc " ]        # the actioned A is gone
+  [ "$(ids_json --all)"           = "$(printf '%s\n%s\n' "$ida" "$idc" | sort | tr '\n' ' ')" ]
+  [ "$(ids_json --open --class C)" = "$idc " ]
+  [ "$(ids_json --open --class A)" = "" ]
+  [ "$(ids_json --all  --class A)" = "$ida " ]
+}
+
+@test "list --json --expiring matches the table's expiring predicate exactly" {
+  idb=$(bash "$CD" open --class B --what "expires" --default d --deadline "2099-01-01T00:00:00Z")
+  bash "$CD" open --class C --what "waits forever" >/dev/null      # C has no deadline ⇒ never expiring
+  run bash -c "bash '$CD' list --expiring --json | jq -r '.[].id'"
+  [ "$output" = "$idb" ]
+}
+
+@test "list --json FOLDS an absent .status to open, exactly as the table's column does" {
+  # A legacy shipland-esc-* packet carries no .status. The predicate already folds it (that is what
+  # puts it on the board), so a JSON view leaving the field null would hand every consumer the exact
+  # `select(.status == "open")` bug the fold exists to fix.
+  _raw_pkt legacy-json C
+  run bash -c "bash '$CD' list --open --json | jq -r '.[] | select(.id==\"legacy-json\") | .status'"
+  [ "$output" = "open" ]
+  # the fold does not over-reach in the JSON view either
+  _raw_pkt legacy-json-done C '{status:"actioned"}'
+  run bash -c "bash '$CD' list --open --json | jq -r '.[].id'"
+  ! echo "$output" | grep -q "legacy-json-done" || false
+}
+
+@test "list --json does NOT change the non-JSON output (byte-identical without the flag)" {
+  # The flag is additive. This is the control that keeps it so: every consumer of the table — and
+  # operator-readout, cc-digest and the autonomy sweep all parse this shape — must be unaffected.
+  bash "$CD" open --class C --what "c-item" --session-sid SID-A >/dev/null
+  bash "$CD" open --class B --what "b-item" --default d --deadline "2099-01-01T00:00:00Z" >/dev/null
+  _raw_pkt legacy-tbl C
+  local mode
+  for mode in --open --all --expiring; do
+    run bash "$CD" list "$mode"
+    [ "$status" -eq 0 ]
+    ! echo "$output" | grep -q '[{]' || false        # never JSON on the table path
+    echo "$output" | grep -q ' | '                   # still the pipe-separated table
+  done
+  run bash "$CD" list --open
+  echo "$output" | grep -q '^open .* | C | .* | c-item$'
+}

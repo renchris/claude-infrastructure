@@ -13,9 +13,10 @@
 #   wrap-ledger.sh --full     → the dense SESSION LEDGER block (per CLAUDE.md §Session Close)
 #
 # ── RUNG (worst-open, priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅) ──
-#   This ledger computes the five FACT-derivable rungs {🔧, 📦, 🚀, 👤, ✅}. ⛔ (needs-a-decision) and
-#   📤 (out-of-context) are model-state, NOT derivable from git — the model overlays them; when
-#   present they dominate. Derivation:
+#   This ledger computes SIX rungs {⛔, 🔧, 📦, 🚀, 👤, ✅}. Only 📤 (out-of-context) remains
+#   model-state — nothing on disk knows how full a context window is — so only 📤 is overlaid by the
+#   model; when present it dominates everything below it. Derivation:
+#     ⛔  an open class-C decision packet THIS SESSION filed — a human-gated fork, unresolved
 #     🔧  dirty tree ∨ gate ran-but-stale-on-HEAD ∨ DoD remainder > 0   (loose ends / unverified)
 #     📦  clean ∧ verified-or-n/a ∧ committed-but-unlanded (ahead>0 ∨ git-cherry '+')  (parked)
 #     🚀  landed, but the LIVE LAYER (the store behaviour actually reads) is behind PAST its
@@ -26,6 +27,32 @@
 #   committed-but-unlanded is ALWAYS 📦, NEVER a silent ✅ — the FM1 park-and-call-it-done hazard.
 #   A DoD file that is ABSENT is reported out loud ("no durable DoD"); a ✅-eligible git state with
 #   no DoD is NOT silently upgraded to a clean ✅ (completeness is unverifiable without the DoD).
+#
+#   ⛔ (2026-08-07): the HIGHEST-priority rung was the ONLY one with no sensor, and "the model
+#   overlays it" is not a mechanism — it is the absence of one. Measured: a close rendered
+#   "✅ SAFE TO CLOSE — nothing of mine is open", TRUE over every git fact this script reads, while
+#   the model was holding a blocking operator decision, which it then demoted to paragraph 4 of its
+#   own prose; the operator had to spend a round-trip asking what the decision even was. A rung that
+#   outranks every other one cannot be left to the same prose the rung exists to discipline.
+#   The store already existed: `cc-decide` writes one packet per decision carrying `session_sid`, so
+#   ⛔ is derived exactly the way 👤 is — `cc-decide list --open --class C --json`, counting ONLY
+#   rows whose `.session_sid` equals THIS session's id. cc-decide stays the arbiter of what "open"
+#   means (the predicate is its jq, never re-implemented here — MEMORY.md
+#   make-the-actuator-the-arbiter).
+#   CLASS C ONLY. A class-B packet carries a default that FIRES at its deadline if nobody vetoes, so
+#   it resolves itself and is not a blocker; C is human-gated and waits forever (hooks/
+#   operator-readout.sh:53 draws the same line). SESSION-SCOPED for the 👤 reason, at greater force:
+#   this machine standingly carries ~21 open decisions, and a top-priority rung counting those would
+#   fire at EVERY close forever — an alarm that always fires carries exactly as many bits as one
+#   that cannot (MEMORY.md alarm-polarity). Unresolvable session ⇒ BLOCKED=0 + BLOCKED_SRC=none;
+#   unreadable store ⇒ BLOCKED=0 + BLOCKED_SRC=error. An unresolvable sensor NEVER manufactures a
+#   rung — the same law as YOURS_SRC=none and LIVE_SRC=unknown.
+#   ITS COST IS PAID AT EVERY CLOSE, deliberately. 👤 and 🚀 are computed only on the ✅-eligible
+#   path, because a worse rung already governs there and the read cannot change the answer. ⛔
+#   outranks 🔧, so that trick is unavailable to it: the answer is unknown until it is asked. One
+#   bounded fork (`WRAP_DECIDE_TIMEOUT_S`, default 5s) per turn close is the price of a rung that
+#   outranks everything — which is why it is ONE fork and not two, and why BLOCKED_SRC=skip is
+#   unreachable here by construction.
 #
 #   👤 (G-CS-1): ✅ claims "safe to close, nothing unsaved", and CLAUDE.md's own ✅ definition
 #   already requires "no operator step this session created left unrun" — but nothing COMPUTED
@@ -74,8 +101,9 @@
 #   why the live-layer read never fetches (see compute_live_layer).
 #
 # Env seams (tests): WRAP_TRUNK · WRAP_DOD_DIR · WRAP_DOD_FILE · WRAP_GATE_GREEN ·
-#                    WRAP_SESSION_ID · CC_BACKLOG_BIN · WRAP_LIVE_REPO ·
-#                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE
+#                    WRAP_SESSION_ID · CC_BACKLOG_BIN · CC_DECIDE_BIN · WRAP_LIVE_REPO ·
+#                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
+#                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S
 set -uo pipefail
 
 MODE="readout"
@@ -206,6 +234,59 @@ count_operator_steps() {
   YOURS="$n"; YOURS_SRC="$SID_SRC"
 }
 
+# ── ⛔ — open class-C decisions THIS SESSION filed (see the header) ──
+# cc-decide resolution mirrors _resolve_backlog_bin exactly: env seam first (test stub), then the
+# sibling search order. Same shape on purpose — two sensors reading two operator stores through two
+# different resolution models is how one of them silently stops resolving.
+_resolve_decide_bin() {
+  if [ -n "${CC_DECIDE_BIN:-}" ]; then printf '%s' "$CC_DECIDE_BIN"; return 0; fi
+  local c
+  for c in "$(dirname "$0")/../bin/cc-decide" "$HOME/.claude/bin/cc-decide" \
+           "$(command -v cc-decide 2>/dev/null || true)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# BLOCKED = open class-C decision packets whose .session_sid == $SID. ANY failure (no binary, no jq,
+# non-zero exit, timeout, unparseable json) ⇒ BLOCKED=0 + BLOCKED_SRC=error. Fail-OPEN: a decision
+# store we cannot read must leave the rung EXACTLY where it was, never invent the top rung.
+# The open/class predicate is cc-decide's (`list --open --class C --json`), not ours — this asks the
+# ONE question the packet cannot answer for itself: is it MINE?
+BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""
+count_blocking_decisions() {
+  if [ -z "$SID" ]; then BLOCKED=0; BLOCKED_SRC="none"; return 0; fi
+  local bin json line n what
+  bin="$(_resolve_decide_bin)" || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
+  command -v jq >/dev/null 2>&1 || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
+  json="$(_bounded "${WRAP_DECIDE_TIMEOUT_S:-5}" "$bin" list --open --class C --json 2>/dev/null)" \
+    || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
+  # ONE jq: the count AND (when there is exactly one) the prose the readout names it by. A second
+  # invocation to fetch what_plain would double this rung's cost at every close for one string.
+  # Count FIRST, free text LAST — nothing an operator typed into a decision can shift the field the
+  # rung branches on (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md), and the gsub keeps a prose
+  # newline from turning the one-line readout into two.
+  line="$(printf '%s' "$json" | jq -r --arg sid "$SID" '
+      [ .[] | select((.session_sid // "") == $sid) ] as $mine
+      | [ ($mine | length | tostring),
+          (if ($mine | length) == 1
+           then ($mine[0].what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " "))
+           else "" end) ] | @tsv' 2>/dev/null)" \
+    || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
+  IFS=$'\t' read -r n what <<< "$line"
+  case "${n:-}" in ''|*[!0-9]*) BLOCKED=0; BLOCKED_SRC="error"; return 0 ;; esac
+  BLOCKED="$n"; BLOCKED_SRC="$SID_SRC"
+  # BLOCKED_WHAT is set ONLY in the single-decision case — that is the only case where naming one
+  # decision is the right answer; N>1 gets the command that lists them, and a stale "what" leaking
+  # into that line would name one fork while claiming to describe several. A hand-written packet can
+  # lack what_plain, so the one-decision line still falls back to something the operator can act on.
+  if [ "$n" -eq 1 ]; then
+    what="${what%.}"
+    [ -n "$what" ] || what="an open class-C decision — see cc-decide list --open --class C"
+    BLOCKED_WHAT="$what"
+  fi
+}
+
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
 LIVE_REPO="${WRAP_LIVE_REPO:-$HOME/Development/claude-infrastructure}"
 LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
@@ -331,7 +412,19 @@ compute_live_layer() {
 # close. Nothing here weakens a rung the session can actually act on: dirty tree, DoD remainder and
 # unlanded commits are unchanged and still outrank ✅.
 RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing to do."
-if [ "$DIRTY" -eq 1 ]; then
+# ⛔ IS CHECKED FIRST AND UNCONDITIONALLY — it outranks every rung below, so unlike 👤 and 🚀 it
+# cannot ride the ✅-eligible path where a worse rung has already decided the answer. That costs ONE
+# bounded fork on every turn close (this is a Stop-hook path) and it is the price of a rung that
+# outranks: an operator decision left open is worse than a dirty tree, and nothing else can see it.
+count_blocking_decisions
+if [ "$BLOCKED" -gt 0 ]; then
+  RUNG="⛔"
+  if [ "$BLOCKED" -eq 1 ]; then
+    READOUT="⛔ Blocked — need your call: ${BLOCKED_WHAT}."
+  else
+    READOUT="⛔ Blocked — ${BLOCKED} decision(s) need your call: cc-decide list --open"
+  fi
+elif [ "$DIRTY" -eq 1 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${DIRTY_N} uncommitted change(s) in the tree; continuing."
 elif [ "$REMAINDER" -gt 0 ]; then
   RUNG="🔧"; READOUT="🔧 Loose ends — ${REMAINDER} frozen-DoD item(s) remain; continuing."
@@ -390,6 +483,8 @@ emit_machine() {
   printf 'REMAINDER=%s\n' "$REMAINDER"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
+  printf 'BLOCKED=%s\n' "$BLOCKED"
+  printf 'BLOCKED_SRC=%s\n' "$BLOCKED_SRC"
   printf 'TRUNK=%s\n' "${TRUNK:-none}"
   printf 'SHAS=%s\n' "$SHAS"
 }
@@ -428,18 +523,30 @@ emit_full() {
     *)     yours_disp="$( [ "$YOURS" -gt 0 ] && printf '%s operator-only step(s) filed this session, UNRUN — see the OPERATOR block' "$YOURS" || printf 'none filed this session' )" ;;
   esac
   printf 'Yours (operator): %s\n' "$yours_disp"
+  # The top rung's own row. `skip` is unreachable here by construction (⛔ outranks everything, so
+  # it is always computed) — the arm stays so an unreadable store can never render as "none open".
+  local blocked_disp; case "$BLOCKED_SRC" in
+    none)  blocked_disp="unknown — session id unresolvable (not counted)" ;;
+    error) blocked_disp="unknown — decision store unreadable (not counted)" ;;
+    skip)  blocked_disp="not counted (a worse rung governs)" ;;
+    *)     if   [ "$BLOCKED" -gt 1 ]; then blocked_disp="${BLOCKED} open class-C decision(s) filed this session, UNRESOLVED — cc-decide list --open --class C"
+           elif [ "$BLOCKED" -eq 1 ]; then blocked_disp="1 open class-C decision filed this session, UNRESOLVED — ${BLOCKED_WHAT}"
+           else                            blocked_disp="none — no decision of mine is open"; fi ;;
+  esac
+  printf 'Blocked on you: %s\n' "$blocked_disp"
   printf 'Rung:           %s\n' "$RUNG"
   printf 'Next:           %s\n' "$(rung_next)"
 }
 
 rung_next() {
   case "$RUNG" in
+    "⛔") printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)' ;;
     "🔧") printf 'continue → finish · run-gate · commit (explicit paths)' ;;
     "📦") printf '/ship to land (verified net-positive work is drivable — not a hold)' ;;
     "🚀") printf 'bash scripts/deploy-live.sh — the converger is behind its budget; the conclusion is landed but inert' ;;
     "👤") printf 'surface the OPERATOR block — %s step(s) are the operator'"'"'s (my side is done)' "$YOURS" ;;
     "✅") printf 'complete — nothing to do' ;;
-    *)    printf 'model-state (⛔/📤) overrides — surface it' ;;
+    *)    printf 'model-state (📤) overrides — surface it' ;;
   esac
 }
 
