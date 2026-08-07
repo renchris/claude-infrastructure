@@ -418,8 +418,16 @@ stages the live activation copy (cp repo→live pending-activation, per the SSOT
   `{"kind":"handoff-alarm","class":"<strand-risk|husk-pane|recycle-dead|handoff-orphan>","pane":"<uuid|kittyid>","sid":"<sid|>","successor":"<uuid|>","detail":"<text>","ts":"<utc>"}`
 - Verdict sidecar: `<record>.verdict` containing one token: `reached|recorded|refused-rc<N>`
   (absent sidecar ⇒ treated as refused — fail-closed).
-- Seen marker (sweep-owned): `$SEEN_DIR/<record-basename>.seen` (existing sweep convention).
-- Banner damp marker (sweep-owned): `$SEEN_DIR/<record-basename>.bannered`.
+- Seen marker — **CORRECTED 2026-08-07 during build** (t4-cliguard found the frozen line below was
+  WRONG: the live sweep's actual key is a HASH of the record's full path — `shasum -a 256 | cut
+  -c1-32`, no extension, autonomy-sweep.sh:89-91, 1,193 live markers). Contract as built: WRITE
+  side marks BOTH keys (hash — keeps every legacy marker valid — and the literal
+  `$SEEN_DIR/<record-basename>.seen`); READ side treats a record as seen IFF EITHER exists.
+  cc-escalations dual-writes on ack and proves hash-parity by running the REAL sweep in its tests
+  (actuator-is-the-arbiter). ~~`$SEEN_DIR/<record-basename>.seen` (existing sweep convention)~~ —
+  the original line, preserved struck-through because two teammates were briefed on it.
+- Banner damp marker (sweep-owned): `$SEEN_DIR/<record-basename>.bannered` (new marker kind, no
+  legacy — literal single key). Same for `.orphan-checked`.
 - D4 inputs: `~/.claude/watchdog/teardown/{<sid>.json,<pane>.json}` (`{key_kind,pane,sid,mode,ts}`),
   `~/.claude/logs/close-attrib.jsonl` (`{ts,site,mode,terminal,id_requested,owner,verdict,…}`).
 - Kill switches: `CC_HF_ALARM_RECORDS=0` · `CC_SWEEP_LADDER=legacy` · `CC_ESCALATION_WATCH=0` ·
