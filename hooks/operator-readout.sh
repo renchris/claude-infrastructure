@@ -159,6 +159,15 @@ blg_list_cached() {  # $1 = cc-backlog binary · $2.. = `list` args; stdout = it
 }
 
 SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
+# ── escalation dead-letter stores (D3) — the standing `◆` count below. SEAMS, for the same reason
+# DEPLOY_SCRIPT is one: unseamed, this leg would read the OPERATOR's live ~/.claude stores from
+# inside the suite and the count would flip by machine (borrowed hermeticity). hooks/escalation-watch.sh
+# is the session-facing renderer and owns the full class breakdown; this is one counted line.
+ESC_ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
+ESC_ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
+ESC_COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
+ESC_PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+ESC_SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 # A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
 # states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
 # by machine — borrowed hermeticity, and the flip case is exactly the one the check exists for.
@@ -229,6 +238,43 @@ idl_init "$IDL" "operator-readout"
 tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~
 epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                  || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
+
+# ── escalation dead-letter records that nothing has drained (D3) → ONE counted `◆` line ───────────
+# UNSEEN is the sweep's own predicate, and it is NOT the one the design doc describes: the frozen
+# interface calls the marker `<basename>.seen`, while scripts/autonomy-sweep.sh:89-91 actually keys
+# on `sha256(FULL PATH) | cut -c1-32` with no suffix (live: 1191 markers, none suffixed). Honouring
+# only the documented form would count every already-drained record, so BOTH are accepted — an extra
+# recognised form can only lower the count, never inflate it.
+# Hashing is BATCHED through ONE perl (Digest::SHA, core; the bin/cc-idl:38 idiom): per-record
+# `shasum` forks measured 10 ms each, which at live volume is ~24 s inside a Stop hook. perl absent
+# ⇒ the count is 0 and the line is simply absent — this leg is a supplement to escalation-watch.sh
+# (the SessionStart guarantee), never the guarantee itself, so degrading quiet is correct here.
+# NOTE: these stores are deliberately NOT in cheap_stamp() — same as the queue line, a change here
+# is reported at the next render within the latch TTL, which is the staleness bound documented there.
+escalation_unseen_count() {
+  command -v perl >/dev/null 2>&1 || { printf 0; return 0; }
+  local f n
+  n="$( { for f in "$ESC_ALARM_DIR"/*.json;                 do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
+          for f in "$ESC_ANNOUNCE_DIR"/announce-alarm-*.json;   do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
+          for f in "$ESC_ANNOUNCE_DIR"/announce-degrade-*.json; do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
+          for f in "$ESC_COMPLETION_DIR"/*.json;            do [ -f "$f" ] && printf 'c\t%s\n' "$f"; done
+          for f in "$ESC_PAGES_DIR"/*.page;                 do [ -f "$f" ] && printf 'a\t%s\n' "$f"; done
+          return 0; } \
+        | SEEN_DIR="$ESC_SEEN_DIR" perl -MDigest::SHA=sha256_hex -ne '
+            chomp; my ($k, $p) = split /\t/, $_, 2;
+            next unless defined $p && length $p;
+            my $s = $ENV{SEEN_DIR};
+            (my $b = $p) =~ s{.*/}{};
+            next if -e "$s/" . substr(sha256_hex($p), 0, 32) || -e "$s/$b.seen";
+            if ($k eq "c") {   # completion-push: only a NON-verified verdict is stuck
+              open(my $fh, "<", $p) or next; local $/; my $body = <$fh>; close $fh;
+              next if defined $body && $body =~ /"verdict"\s*:\s*"verified"/;
+            }
+            $n++;
+            END { print $n + 0, "\n" }' 2>/dev/null || printf 0; )"
+  case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
 
 # ── the ONE renderer: prints the block (or nothing) for cwd=$1. Sets RUNG + TOTAL + Q_N for the
 #    caller — so hook mode must invoke it via redirection in THIS shell, never `$(…)` (subshell
@@ -444,6 +490,11 @@ render_block() {
     # cc-blockers` (appended below) already reaches them.
     [ "$Q_N" -gt 0 ] && q_line="queue: ${Q_N} open (${q_proj}) — cc-dispatch auto-drains"
   fi
+
+  # 6 · escalation dead-letter records nothing has drained (D3). ONE counted line, never itemized —
+  #     the per-class breakdown is hooks/escalation-watch.sh's job at SessionStart; this is the
+  #     standing reminder on the close surface for a session that has been open a long time.
+  local esc_n; esc_n="$(escalation_unseen_count)"
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
   local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts
@@ -819,6 +870,13 @@ render_block() {
   [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
   rm -f "$steps_file"
   fi   # ── end CBUDGET collapse / itemise branch ──
+
+  # ── escalation records (D3) — ONE counted line, outside both mode branches so it reads the same in
+  # collapse, itemised and legacy. Deliberately UNNUMBERED: `NSTEPS` counts `^ [0-9]+ (▶|◆)`, and
+  # these are not operator STEPS — they are records a machine should have drained. `◆` because there
+  # is no single command that clears them (ack is per-record, and acking an undelivered escalation is
+  # a judgment, not a chore).
+  [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations list\n' "$esc_n"
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
