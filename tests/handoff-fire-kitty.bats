@@ -272,8 +272,7 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   run as_write "ABC-DEF" "/exit"
   [ "$status" -eq 0 ]
   grep -q 'session run ' "$ILOG"
-  grep -q 'session send ' "$ILOG" && false
-  true
+  ! grep -q 'session send ' "$ILOG" || false
 }
 
 @test "as_write returns non-zero when BOTH transports fail — the watcher disarm is preserved" {
