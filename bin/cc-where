@@ -34,6 +34,7 @@ DESIGN RULE — a lookup miss is not absence
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -65,10 +66,75 @@ def _kitty() -> str:
 
 
 def ls_tree() -> list:
+    # CC_WHERE_KITTY_LS — hermetic seam for the bats suite, same shape as cc-url-open's
+    # CC_URL_OPEN_KITTY_LS. Never set in production; a census that shelled out to the live
+    # kitty could not be tested against a fixture tree at all.
+    fixture = os.environ.get("CC_WHERE_KITTY_LS")
+    if fixture:
+        with open(fixture, encoding="utf-8") as fh:
+            return json.load(fh)
     r = subprocess.run([_kitty(), "@", "ls"], capture_output=True, text=True, timeout=15)
     if r.returncode != 0:
         sys.exit(f"cc-where: kitty @ ls failed ({r.returncode}): {r.stderr.strip()}")
     return json.loads(r.stdout)
+
+
+def overlay_map(tab: dict, windows: list | None = None) -> tuple[dict[int, int], dict[int, int]]:
+    """(covered_by, overlay_of) for one tab, from kitty's window GROUPS.
+
+    A kitty window group is a base window plus the overlay windows stacked on it:
+    `{"id": 570, "windows": [472, 471]}` means one of those two is drawn over the other and
+    the covered one renders zero pixels. Overlays are how kitty runs its kittens —
+    `open_url_with_hints` (⌘E, kitty.conf §6), `unicode_input`, `kitten ask` — so any of them
+    can bury a live session.
+
+    🚨 THE ORDER OF `windows` IS NOT THE STACKING ORDER, AND IS NOT EVEN STABLE. The obvious
+    reading — first element is the topmost overlay — was taken from one measured overlay and
+    is WRONG. Re-measured on kitty 0.48.2 with three identical launches (os-window base, then
+    an overlay launch on it — kitty @ launch with `--type=overlay --keep-focus`):
+        run1 [480, 481]   run2 [483, 482]   run3 [485, 484]      base = 480 / 482 / 484
+    Same script, and the base landed first once and last twice. A positional reading is a coin
+    flip that names the WRONG pane as the one to press ESC in — worse than saying nothing,
+    because the operator acts on it. Caught only because an end-to-end run against a real
+    overlay disagreed with the fixture the positional version was built from.
+
+    THE DISCRIMINATOR IS `created_at`: within a group the base is the OLDEST window. That is
+    true by construction rather than by convention — an overlay is mounted on a window that
+    already exists, so it can never predate it. Verified 3/3 on the runs above, and it also
+    re-derives the incident correctly (base 390 created 05:33:21, kitten 467 at 13:51:50).
+
+    Fails OPEN — returns no coverage — when a group member has no `created_at`. Reporting
+    nothing degrades to the pre-overlay census; guessing would re-introduce the inversion.
+
+    THE INCIDENT THIS CLOSES (2026-08-07). A ⌘E mis-hit mounted a "Choose URL" hints kitten
+    on a working session's pane. The kitten re-renders the pane's text PLAIN — no colour —
+    and takes the keyboard, so the pane read as all-white and swallowed every keystroke: an
+    exact visual match for a hung client. The session was never hung; its main thread was
+    parked in kevent64 the whole time and it answered `kitty @ send-text` instantly, because
+    the API addresses the base window directly and bypasses the overlay. Diagnosing it took a
+    sample(1) and a hand-read of the `ls` tree. This census is where that answer belongs.
+
+    Returns ({}, {}) when `groups` is absent — kitty < 0.42, or a fixture without it — so an
+    older kitty degrades to the pre-overlay census rather than losing the whole tab.
+    """
+    born = {
+        w["id"]: w.get("created_at")
+        for w in (windows if windows is not None else tab.get("windows") or [])
+    }
+    covered: dict[int, int] = {}
+    overlay_of: dict[int, int] = {}
+    for g in tab.get("groups") or []:
+        stack = [wid for wid in (g.get("windows") or []) if wid in born]
+        if len(stack) < 2:
+            continue
+        if any(born[wid] is None for wid in stack):
+            continue                                   # fail open, never guess
+        ordered = sorted(stack, key=lambda wid: born[wid])
+        base, top = ordered[0], ordered[-1]
+        for wid in ordered[:-1]:                       # base + any middle overlays
+            covered[wid] = top
+        overlay_of[top] = base
+    return covered, overlay_of
 
 
 def screen_positions() -> dict[str, tuple[float, float, float, float]]:
@@ -176,7 +242,7 @@ def location_labels(tree: list) -> dict[int, str]:
 def panes(tree: list) -> list[dict]:
     """Flatten the tree, deciding for each pane whether it is actually DRAWN.
 
-    TWO independent ways a live pane renders zero pixels, and a census that models only the
+    THREE independent ways a live pane renders zero pixels, and a census that models only the
     first is exactly as useless as no census — it reports the lost session as visible:
 
       1. TAB OCCLUSION — its tab is not the active tab of its OS window.
@@ -187,26 +253,47 @@ def panes(tree: list) -> list[dict]:
          the Claude Code composer. One mis-keystroke zooms one pane and every other session in
          that tab disappears. kitty reports every stacked pane at FULL width, so width alone
          cannot distinguish "wide and visible" from "wide and buried".
+      3. OVERLAY COVERAGE — a kitten (hints/⌘E, unicode_input, ask) is mounted on the pane,
+         drawn over it full-size and holding the keyboard. See overlay_map(). This one is
+         WORSE than 1 and 2 for the operator, because the other two leave the pane plainly
+         missing, whereas an overlay leaves something pane-shaped on screen that does not
+         respond — which reads as a crashed client, not as a UI mode.
+
+    An overlay window is not a session, so it does not inflate the tab's pane count: the
+    truthful count is the number of GROUPS, and only the count is derived that way (rows are
+    still emitted per window, with the overlay flagged, so `--json` can still see it).
     """
     rows = []
     for osw in tree:
         for tab in osw["tabs"]:
             tab_visible = bool(tab.get("is_active"))
             stacked = tab.get("layout") == "stack"
+            covered, overlay_of = overlay_map(tab, tab["windows"])
+            titles = {w["id"]: w.get("title", "") for w in tab["windows"]}
+            n_panes = len(tab["groups"]) if tab.get("groups") else len(tab["windows"])
             for w in tab["windows"]:
                 top_of_stack = bool(w.get("is_active"))
-                drawn = tab_visible and (top_of_stack if stacked else True)
+                covered_by = covered.get(w["id"])
+                drawn = tab_visible and (top_of_stack if stacked else True) and not covered_by
                 if not tab_visible:
                     hidden_by = "tab"
                 elif stacked and not top_of_stack:
                     hidden_by = "stack"
+                elif covered_by:
+                    hidden_by = "overlay"
                 else:
                     hidden_by = ""
                 rows.append(
                     {
                         "oswin": osw["id"],
                         "tab": tab["id"],
-                        "tab_panes": len(tab["windows"]),
+                        "tab_panes": n_panes,
+                        # An overlay is a kitten mounted on `covers`, not a session of its
+                        # own; `covered_by` is the reverse edge, naming what buried this pane.
+                        "is_overlay": w["id"] in overlay_of,
+                        "covers": overlay_of.get(w["id"]),
+                        "covered_by": covered_by,
+                        "covered_by_title": titles.get(covered_by, "") if covered_by else "",
                         "tab_layout": tab.get("layout", ""),
                         "win": w["id"],
                         "pid": w.get("pid"),
@@ -248,13 +335,22 @@ def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> in
     labels = location_labels(tree)
     shown = subset if subset is not None else rows
 
-    n_off = sum(1 for r in rows if not r["on_screen"])
-    n_narrow = sum(1 for r in rows if r["on_screen"] and r["cols"] < READABLE_COLS)
+    sessions = [r for r in rows if not r["is_overlay"]]
+    n_off = sum(1 for r in sessions if not r["on_screen"])
+    n_narrow = sum(1 for r in sessions if r["on_screen"] and r["cols"] < READABLE_COLS)
+    n_cov = sum(1 for r in sessions if r["covered_by"])
     print(
-        f"{C['bold']}{len(rows)} panes{C['reset']} · "
+        f"{C['bold']}{len(sessions)} panes{C['reset']} · "
         f"{C['off']}{n_off} off-screen{C['reset']} · "
         f"{C['narrow']}{n_narrow} squeezed under {READABLE_COLS} cols{C['reset']}"
     )
+    # Answer-first: a covered pane is the one state that LOOKS like a crashed client, so it
+    # gets its own line above the tree rather than waiting to be found inside it.
+    if n_cov:
+        print(
+            f"{C['off']}{C['bold']}{n_cov} pane(s) BURIED UNDER A KITTEN OVERLAY{C['reset']} — "
+            f"live, but the overlay holds the keyboard. Click the pane and press ESC."
+        )
     print()
 
     if not shown:
@@ -282,7 +378,25 @@ def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> in
         for r in group:
             col, _ = _state(r)
             star = "▸" if r["tab_active"] else " "
-            why = f"  {C['off']}[hidden by {r['hidden_by']}]{C['reset']}" if r["hidden_by"] else ""
+            if r["is_overlay"]:
+                # Render the kitten as what it is — a lid on another pane, not a peer session.
+                # Listing it flat as "Choose URL" beside the sessions is what let it read as
+                # just another pane during the incident.
+                print(
+                    f"     {star} {C['off']}  ovl{C['reset']} "
+                    f"{C['meta']}win {r['win']:<5}{C['reset']} {r['title'][:44]} "
+                    f"{C['off']}◀ OVERLAY covering win {r['covers']}{C['reset']}"
+                )
+                continue
+            if r["covered_by"]:
+                why = (
+                    f"  {C['off']}[covered by win {r['covered_by']} "
+                    f"\"{r['covered_by_title'][:28]}\" — press ESC]{C['reset']}"
+                )
+            elif r["hidden_by"]:
+                why = f"  {C['off']}[hidden by {r['hidden_by']}]{C['reset']}"
+            else:
+                why = ""
             print(
                 f"     {star} {col}{r['cols']:>4}c{C['reset']} "
                 f"{C['meta']}win {r['win']:<5}{C['reset']} {r['title'][:64]}{why}"
@@ -300,7 +414,9 @@ def go(rows: list[dict], query: str) -> int:
     except re.error as e:
         print(f"cc-where: bad pattern {query!r}: {e}", file=sys.stderr)
         return 64
-    hits = [r for r in rows if pat.search(r["title"])]
+    # Overlays are excluded from --go targets: a kitten is not somewhere the operator wants
+    # to be sent, and matching one would make `--go` refuse-on-ambiguity against a lid.
+    hits = [r for r in rows if not r["is_overlay"] and pat.search(r["title"])]
     if not hits:
         print(f"cc-where: nothing matches {query!r}. Run `cc-where` for the census.", file=sys.stderr)
         return 1
@@ -325,6 +441,18 @@ def go(rows: list[dict], query: str) -> int:
     after = next((p for p in panes(tree) if p["win"] == target["win"]), None)
     if after is None:
         print(f"cc-where: win {target['win']} vanished between match and focus", file=sys.stderr)
+        return 4
+    if after["covered_by"]:
+        # Reached, but not usable — and this is the one failure whose remedy the operator can
+        # act on in one keystroke, so it must not be reported as the generic off-screen miss.
+        # cc-where does NOT dismiss it: a kitten is an operator UI mode that may be mid-use,
+        # and closing one from a locate command would be acting on the operator's behalf.
+        print(
+            f"cc-where: win {after['win']} is raised but BURIED — kitten overlay win "
+            f"{after['covered_by']} (\"{after['covered_by_title']}\") is drawn over it and "
+            f"holds the keyboard. Press ESC in that pane; the session underneath is unharmed.",
+            file=sys.stderr,
+        )
         return 4
     if not after["on_screen"]:
         print(
@@ -351,9 +479,15 @@ USAGE = """cc-where — locate a Claude Code session on your physical screens
   cc-where --json          machine-readable census
 
   A pane is OFF SCREEN when its tab is not the active tab of its kitty window,
-  or when the tab is ZOOMED (stack) and this is not the pane on top: live,
-  healthy, and drawing zero pixels either way.
-  ▸ marks the pane its tab shows — the one you land on when you switch to it."""
+  when the tab is ZOOMED (stack) and this is not the pane on top, or when a
+  kitten OVERLAY is mounted on it: live, healthy, and drawing zero pixels in
+  all three cases.
+  ▸ marks the pane its tab shows — the one you land on when you switch to it.
+
+  A COVERED pane is the one that looks broken rather than absent — the overlay
+  (⌘E "Choose URL", unicode input, a kitten prompt) is drawn over the session
+  full-size and holds the keyboard, so the pane goes colourless and ignores
+  every keystroke. Nothing is wrong with the session. Press ESC in that pane."""
 
 
 def main(argv: list[str]) -> int:
