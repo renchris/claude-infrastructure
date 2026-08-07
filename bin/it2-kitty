@@ -430,6 +430,124 @@ sys.exit(0)' 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
   [ "${rc:-1}" = 0 ]
 }
 
+# ── THE COMPOSER GUARD ───────────────────────────────────────────────────────────────────────────
+# A composer buffer exists ONLY in process memory. It is written to disk NOWHERE, ever: history.jsonl
+# is submit-keyed by construction, `queue-operation` is Enter-keyed by construction, and a session's
+# transcript is not born until its FIRST submit — measured 85 s after session start
+# (docs/research/pane-theft-composer-guard.md §1). So closing a pane whose composer holds text
+# destroys it irrecoverably, and no recovery path exists afterwards. This is the guard for that.
+#
+# It keys on `get-text` — the screen buffer — and NOT on the two proxies the obvious rule would use.
+# Both were measured WRONG, not merely weak: "0 messages" is the normal state of every session's
+# first ~85 s (§1.3), and process liveness has a false-DEAD case (an expect-wrapped CC is a spawned
+# grandchild, absent from kitty's foreground_processes, §2 S6). get-text reads the thing itself.
+#
+# ⚠ THREE STATES, NOT TWO — and this is the correction that makes the guard shippable. The research
+# doc's §3.3 pseudocode refuses on any non-EMPTY verdict, "no rule pair" included. That would refuse
+# EVERY self-close: handoff-fire.sh types /exit, ps-polls until CC is GONE, and only then closes
+# (scripts/handoff-fire.sh:2795 "The /exit half has already landed (CC is gone)") — so the pane it
+# hands us is sitting at a SHELL PROMPT, which has no rule pair. A blanket refusal there converts the
+# fleet's single most common autonomous close into a 4-retry HUSK-PANE desk page. That is exactly the
+# failure class memory:abstain-rule-can-retire-the-common-case names: a two-state abstain rule
+# deleting the main path of a three-state question. So the "no composer region" case is SPLIT:
+#
+#   in_alternate_screen=False ⇒ NO-TUI  — no full-screen TUI is painting, so there is no composer to
+#                                          lose. POSITIVE proof of absence, and it is what keeps
+#                                          self-close and the kitty-setup probe pane working.
+#   in_alternate_screen=True  ⇒ UNKNOWN — a TUI is up but its composer is unreadable (a permission
+#                                          modal occludes it). Text may exist behind it ⇒ REFUSE.
+#
+# Measured live across 27 windows: 22 resolve (19 EMPTY / NO-TUI, 3 NON-EMPTY), 4 refuse as UNKNOWN.
+# All 3 NON-EMPTY were true positives — two multi-paragraph operator drafts and one two-character
+# half-typed word. Zero false positives.
+#
+# ⚠ DIM IS NOT CONTENT. CC renders composer PLACEHOLDERS ("Press up to edit queued messages", a
+# queued prompt's preview) inside the same rule pair as real text, so a plain-text read calls them
+# NON-EMPTY: 4 of the 27 windows above, every one of them a pane it is safe to close. Matching those
+# strings by name would be a denylist enumerating spellings rather than the class
+# (memory:denylist-enumerates-spellings-not-the-class) and would rot on CC's next wording change. The
+# RENDERING carries the distinction instead — placeholders arrive as SGR 2 (faint), real input never
+# does — so `--ansi` is requested and dim runs are not counted as content. This degrades in the safe
+# direction: were CC to stop dimming placeholders, they would read NON-EMPTY and the guard would
+# REFUSE, which is a stuck pane, not a lost draft.
+#
+# Socket discovery is deliberately NOT ported from bin/kitty-confirm-close:58-96 as §3.3 suggests.
+# That function exists because kitty-confirm-close runs as a `--type=background` child with no
+# KITTY_LISTEN_ON in its environment; this file always has CC_TERM_KITTY_TO or an inherited
+# KITTY_LISTEN_ON, and `kt()` already resolves both. Reading the pane through a DIFFERENT channel
+# than the one the close travels is the hazard memory:make-the-actuator-the-arbiter names — the
+# guard could clear pane X while `close-window` destroys pane Y. Same kt(), same socket, or neither.
+#
+# CC_CLOSE_COMPOSER_GUARD=off is for the drift/e2e harnesses only. `-f` does NOT bypass it: every
+# automated caller passes -f, so an -f exemption would be a guard that never runs.
+composer_state() {                       # -> NON-EMPTY | EMPTY | NO-TUI | UNKNOWN (stdout, always 0)
+  local id="$1" meta cols alt txt
+  meta="$(kt ls --match "id:$id" 2>/dev/null | WANT_ID="$id" python3 -c '
+import json, os, sys
+want = os.environ["WANT_ID"]
+try:
+    d = json.load(sys.stdin)
+    rows = [w for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])
+            if str(w.get("id")) == want]
+except Exception:
+    sys.exit(1)
+if len(rows) != 1:
+    sys.exit(1)
+# An identity test against False, NOT a truthiness test: a payload MISSING in_alternate_screen
+# must read as "a TUI may be up" (⇒ UNKNOWN ⇒ refuse), never as "no TUI" (⇒ allow). Only kitty
+# explicitly saying False buys the permissive branch.
+print("%s %s" % (rows[0].get("columns") or 0, rows[0].get("in_alternate_screen") is not False))' 2>/dev/null)" \
+    || { printf 'UNKNOWN'; return 0; }
+  [ -n "$meta" ] || { printf 'UNKNOWN'; return 0; }     # pane gone, RPC failed, or ambiguous match
+  cols="${meta%% *}"; alt="${meta##* }"
+  txt="$(kt get-text --match "id:$id" --ansi 2>/dev/null)" || { printf 'UNKNOWN'; return 0; }
+  [ -n "$txt" ] || { printf 'UNKNOWN'; return 0; }      # a blank read proves nothing
+  printf '%s' "$txt" | COLS="$cols" ALT="$alt" python3 -c '
+import os, re, sys
+SGR = re.compile("\x1b\\[([0-9;:]*)m")
+def plain(s): return SGR.sub("", s)
+def walk(s):
+    """(char, dim_active) over an ANSI line. 2 sets faint, 22 and a bare reset clear it."""
+    dim, i = False, 0
+    for m in SGR.finditer(s):
+        for ch in s[i:m.start()]: yield ch, dim
+        p = m.group(1)
+        if not p: dim = False
+        else:
+            for tok in p.replace(":", ";").split(";"):
+                if tok in ("", "0", "22"): dim = False
+                elif tok == "2": dim = True
+        i = m.end()
+    for ch in s[i:]: yield ch, dim
+try:
+    cols = int(os.environ.get("COLS") or 0)
+except ValueError:
+    cols = 0
+alt   = os.environ.get("ALT") == "True"
+lines = sys.stdin.read().split("\n")
+flat  = [plain(l) for l in lines]
+# A rule may EMBED a label ("──── @agent-name ──"), so COUNT the glyphs; a whole-line anchored
+# regex mis-reads a labelled agent pane as having no composer at all. Half the pane width is the
+# floor, never below 20.
+thresh = max(20, cols // 2) if cols else 20
+rules  = [i for i, l in enumerate(flat) if l.count("─") >= thresh]
+body   = lines[rules[-2] + 1:rules[-1]] if len(rules) >= 2 else []
+if not body or "❯" not in plain(body[0]):
+    print("UNKNOWN" if alt else "NO-TUI"); raise SystemExit
+seen = content = False
+for line in body:
+    for ch, dim in walk(line):
+        if not seen:                       # the glyph itself is coloured but never dim — skip it
+            seen = ch == "❯"
+            continue
+        if ch.isspace() or ch == " ": # NBSP follows the glyph and pads continuation lines
+            continue
+        if not dim:
+            content = True; break
+    if content: break
+print("NON-EMPTY" if content else "EMPTY")' 2>/dev/null || printf 'UNKNOWN'
+}
+
 case "$verb" in
 
   split)
@@ -615,6 +733,37 @@ else:
         err "unrelated window. Refusing is the only safe answer; re-derive the id and retry."
         exit 66
       }
+    fi
+    # THE COMPOSER GUARD (see composer_state above). Last gate before the pane dies, and deliberately
+    # the LAST one: it is the only check here that reads what the pane actually holds rather than who
+    # owns it. hf_close_pane's ownership guards refuse a close that should never have been aimed
+    # here; this one refuses a close aimed correctly at a pane that is nonetheless holding text.
+    if [ "${CC_CLOSE_COMPOSER_GUARD:-on}" = on ]; then
+      _cstate="$(composer_state "$SESSION")"
+      case "$_cstate" in
+        EMPTY|NO-TUI) : ;;
+        *)
+          # PRESERVE FIRST, REFUSE SECOND. A snapshot taken after the close is worth nothing, and
+          # this is the only moment the text still exists anywhere. Best-effort by design: a failed
+          # snapshot must never convert a refusal into a close.
+          _snap="$HOME/.claude/logs/composer-snapshots/$(date -u +%Y%m%dT%H%M%SZ)-win$SESSION.txt"
+          mkdir -p "${_snap%/*}" 2>/dev/null \
+            && kt get-text --match "id:$SESSION" >"$_snap" 2>/dev/null || _snap="(not captured)"
+          err "refusing to close window $SESSION — composer state is $_cstate."
+          if [ "$_cstate" = NON-EMPTY ]; then
+            err "That pane holds unsent composer text. It exists ONLY in this process's memory —"
+            err "not in history.jsonl (submit-keyed), not in queue-operation (Enter-keyed), and not"
+            err "in any transcript (not born until the first submit). Closing destroys it for good."
+          else
+            err "The pane is running a full-screen TUI whose composer could not be read (a"
+            err "permission modal occludes it, or the RPC failed). Text may exist behind it, and an"
+            err "unreadable pane is not an empty one — so this refuses rather than guesses."
+          fi
+          err "screen snapshot: $_snap"
+          err "incident 2026-08-07 06:41Z; predicate: docs/research/pane-theft-composer-guard.md §3."
+          exit 67
+          ;;
+      esac
     fi
     kt close-window --match "id:$SESSION" || exit 1
     ;;

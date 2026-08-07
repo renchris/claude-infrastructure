@@ -1,9 +1,14 @@
 ---
-status: research-complete
+status: SHIPPED — see §6. The research below stands; §3.3's pseudocode does NOT (two corrections).
 axis: composer-loss guard (Phase 2 item 5)
 date: 2026-08-07
 method: live read-only probing of this box (kitty, CC 2.1.220) + fleet transcript census
 ---
+
+> ⚠ **BEFORE IMPLEMENTING FROM §3.3 — READ §6 FIRST.** The predicate shipped, but the pseudocode in
+> §3.3 is wrong in two ways that only appear against live callers and live screens: it refuses every
+> self-close, and it reads CC's own placeholder hints as operator text. §6 records both, with the
+> measurements. §3.1/§3.2's *reasoning* is unchanged and was correct.
 
 # The composer guard — can the loss be made impossible?
 
@@ -340,3 +345,115 @@ in the commit rather than claiming impossibility.
 Kitty window **214** currently holds a live, multi-paragraph, unsent operator draft
 (§1.4) in `lakehouse-lecture`. It is in no file. Until the guard lands, any autonomous
 close, self-retire, or handoff fire that anchors on `focused` can take it.
+
+> **Status 2026-08-07, post-ship.** The guard has landed (§6) and window 214 still holds that draft
+> — re-verified live, and it now reads `NON-EMPTY`, so an autonomous close of it refuses. Window
+> **245** turned out to hold a second one nobody had noticed, and window **247** a half-typed `ck`.
+> All three were found by the shipped predicate, not by looking.
+
+---
+
+## 6 · WHAT SHIPPED — and the two ways §3.3 was wrong
+
+The predicate of §3.2 shipped verbatim in intent: **refuse unless the pane is positively proven to
+hold no composer text**, at the §3.1 chokepoint (`bin/it2-kitty`, the `close)` verb), exit **67**,
+snapshot-before-refusal, `CC_CLOSE_COMPOSER_GUARD=off` as the harness-only escape hatch. `-f` does
+not bypass it — every automated caller passes `-f`, so an `-f` exemption is a guard that never runs.
+
+§3.3's *pseudocode*, however, would have shipped two defects. Both are invisible against a stub and
+obvious against live callers and live screens, which is why they surfaced only at implementation.
+
+### 6.1 · Two states was one too few — it refused every self-close
+
+§3.3 refuses on any verdict but `EMPTY`, "no rule pair" included. **That refuses every self-close.**
+`scripts/handoff-fire.sh` types `/exit`, ps-polls until CC is gone, and only *then* closes — its own
+comment at `:2795` says so: *"The /exit half has already landed (CC is gone)"*. The pane it hands
+`it2-kitty close` is therefore sitting at a **shell prompt**, which has no composer region at all.
+Under §3.3 that is `UNKNOWN` ⇒ refuse ⇒ the 4-attempt retry loop at `:2805` exhausts and pages
+`HANDOFF-HUSK-PANE`. The fleet's single most common autonomous close would have failed every time.
+
+This is precisely `memory:abstain-rule-can-retire-the-common-case` — a two-state abstain rule
+deleting the main path of a three-state question. The fix is to split "no composer region" on
+whether a full-screen TUI is even present:
+
+| `in_alternate_screen` | verdict | why |
+|---|---|---|
+| `False` | **NO-TUI** → allow | Nothing is painting a composer, so there is none to lose. Positive proof of absence. |
+| `True` | **UNKNOWN** → refuse | A TUI is up and its composer is unreadable (a permission modal). Text may be behind it. |
+
+Measured live across all 27 kitty windows: **22 resolve** (19 `EMPTY`/`NO-TUI`, 3 `NON-EMPTY`),
+**4 refuse** as genuinely unknown (3 permission modals, 1 transiently blank read). All three
+`NON-EMPTY` were true positives; zero false positives. A missing `in_alternate_screen` field reads
+as `True`, not as falsey — the accessor tests `is not False`, so only kitty explicitly saying so
+buys the permissive branch (`memory:gate-default-decides-failure-direction`).
+
+### 6.2 · Dim is not content — CC's own placeholders read as operator text
+
+§3.3 tests the composer body as plain text. CC renders **placeholders inside the same rule pair as
+real input** — `Press up to edit queued messages`, and a queued prompt's preview — so a plain-text
+read calls them `NON-EMPTY`. That was **4 of the 27 windows**, every one a pane it is safe to close,
+and it would have blocked teammate teardown on any pane with a queued message. Worse, those queued
+prompts are already durably on disk as `queue-operation` records (§1.1), so the refusal protects
+nothing.
+
+Matching the placeholder strings by name would be a denylist enumerating spellings rather than the
+class (`memory:denylist-enumerates-spellings-not-the-class`) and would rot on CC's next wording
+change. **The rendering already carries the distinction:** placeholders arrive as SGR **2 (faint)**,
+real input never does. Verbatim, from `get-text --ansi`:
+
+```
+win 261  \x1b[m\x1b[38:2:153:153:153m❯\xa0\x1b[22;2;39mPress up to edit queued messages   ← dim ⇒ EMPTY
+win 245  \x1b[m❯\xa0Wow. So it was never "destroyed" it was just "hidden". How and why?  ← not dim ⇒ NON-EMPTY
+```
+
+So the guard requests `--ansi` and does not count dim runs as content. This degrades in the safe
+direction: were CC to stop dimming placeholders, they would read `NON-EMPTY` and the guard would
+**refuse** — a stuck pane, not a lost draft.
+
+### 6.3 · Deliberate deviations from §3.3 and §3.4
+
+- **Socket discovery is NOT ported from `bin/kitty-confirm-close:58-96`**, contra §3.3. That function
+  exists because `kitty-confirm-close` runs as a `--type=background` child with no `KITTY_LISTEN_ON`;
+  `it2-kitty` always has `CC_TERM_KITTY_TO` or an inherited one, and `kt()` resolves both already.
+  Reading the pane through a *different* channel than the close travels is
+  `memory:make-the-actuator-the-arbiter` — the guard could clear pane X while `close-window` destroys
+  pane Y. Same `kt()`, same socket, or neither. And a `kt` that cannot reach the socket cannot close
+  either, so the fail-closed direction is preserved for free.
+- **B1 (no transcript ⇒ refuse) NOT shipped.** As an independent refusal it re-imports the very S1
+  false positive §2 rejects: it would refuse every close of a pane whose session has not submitted
+  yet — including a freshly-spawned teammate being torn down. The case it was meant to catch
+  (modal-occluded *and* never submitted) already refuses via `UNKNOWN`.
+- **B2 (never close the focused window) NOT shipped.** It would retire the common case in the same
+  way §6.1 does: a retiring pane is frequently the focused one, so self-close would always refuse.
+  The incident's proximate cause is already covered upstream by `hf_close_pane`'s anchor invariant
+  (`scripts/handoff-fire.sh:764`), which refuses to destroy the pane a fire anchored on.
+- **B3 (log every close) was already shipped** by the pane-theft fix — `hf_close_attrib`.
+
+### 6.4 · What it cost the sibling suite
+
+`tests/it2-kitty.bats` had a pin asserting the unflagged close path *"makes NO ls probe"*, on the
+reasoning that an unconditional verification would make every caller depend on `kt ls` succeeding.
+The composer guard is exactly such a verification. That clause is now retired — narrowly, and with
+the argument recorded in the test — because the two failure directions are not symmetric: a blind
+refusal leaves a recoverable husk pane and a loud page, while a blind close destroys text that is on
+disk nowhere. The side with the incident wins
+(`memory:stale-assertion-becomes-an-inverted-guard`). What that test actually protects — that the
+*caller-supplied identity pin* stays opt-in — is unchanged and still asserted.
+
+### 6.5 · Verification
+
+19 behavioural tests in `tests/it2-kitty-composer-guard.bats`, 68/68 green across the five
+`it2-kitty` suites. Three are red-on-mutation controls, one per correction, each asserting its mutant
+parses, anchors exactly once, and actually *differs* from the subject — the NO-TUI mutant initially
+applied nothing (`awk`'s `sub()` takes a regex and the anchor carries parens), which would have made
+the control a green that proves the subject works. Plus a live end-to-end against the real RPC on a
+throwaway pane: text on screen ⇒ refused 67 and the pane survived; cleared to a shell prompt ⇒ closed
+and the window was gone, verified by content rather than by exit code.
+
+### 6.6 · Residual risk
+
+Unchanged from §3.5 and worth restating: the check is a **snapshot**. Text typed in the ~50 ms
+between `get-text` and `close-window` is still lost, because kitty has no atomic close-if-empty.
+Trading an unbounded window for a 50 ms one is the right deal, not a claim of impossibility. §4's
+open items also stand — in particular the guard is **kitty-only**; on iTerm2 every close would take
+the `UNKNOWN` branch and refuse, so an iTerm2 implementation is required before it can ship there.

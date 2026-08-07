@@ -301,13 +301,20 @@ fake_kitty_identity() {
   CALLS="$BATS_TEST_TMPDIR/kitty-calls"
   LSPAYLOAD="$BATS_TEST_TMPDIR/ls.json"
   : > "$CALLS"
+  # The get-text arm serves an EMPTY composer so these fixtures keep testing IDENTITY. The composer
+  # guard (bin/it2-kitty `composer_state`) reads every close now, and a stub that answered nothing
+  # made it refuse — which would have quietly converted this whole block into a test of the guard.
+  # The guard's own behaviour is pinned in tests/it2-kitty-composer-guard.bats.
+  RULE94="$(printf '─%.0s' $(seq 1 94))"
   cat > "$CC_TERM_KITTY" <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$CALLS"
 for a in "\$@"; do
-  [ "\$a" = ls ] || continue
-  cat "$LSPAYLOAD"
-  exit 0
+  if [ "\$a" = ls ]; then cat "$LSPAYLOAD"; exit 0; fi
+  if [ "\$a" = get-text ]; then
+    printf '%s\n\033[m❯\xc2\xa0\n%s\n' "$RULE94" "$RULE94"
+    exit 0
+  fi
 done
 exit 0
 SH
@@ -323,6 +330,7 @@ id_payload() {
   cat > "$LSPAYLOAD" <<JSON
 [{"id":1,"tabs":[{"id":1,"windows":[
   {"id":$1,"title":"t","cwd":"/tmp","pid":9,
+   "columns":100,"in_alternate_screen":true,
    "env":{"KITTY_PID":"$2","KITTY_WINDOW_ID":"$1"},
    "foreground_processes":[{"cmdline":["/usr/bin/caffeinate","-i"]},{"cmdline":$3}],
    "cmdline":["/bin/zsh"]}]}]}]
@@ -391,16 +399,42 @@ JSON
   if grep -q -- 'close-window' "$CALLS"; then echo "unexpected close call" >&2; false; fi
 }
 
-@test "close with NEITHER flag closes on the old path and makes NO ls probe (self-close untouched)" {
+@test "close with NEITHER flag runs NO IDENTITY check — a mispinned check still cannot be an outage" {
   fake_kitty_identity
   # THE regression pin for handoff-fire's self-close, cc-pane, and every operator close. The pin is
-  # caller-supplied precisely so a mispinned check can never become an outage — which is only true
-  # while the unflagged path never consults the oracle at all. A verification that crept in here
-  # would make every unpinned caller depend on `kt ls` succeeding. The payload deliberately names
-  # the WRONG agent, so a check that ran unconditionally would refuse and this would go red.
+  # caller-supplied precisely so a mispinned check can never become an outage. The payload
+  # deliberately names the WRONG agent, so an identity check that ran unconditionally would refuse
+  # and this would go red.
+  #
+  # ⚠ NARROWED 2026-08-07, deliberately. This test used to also assert "and makes NO ls probe",
+  # on the reasoning that "a verification that crept in here would make every unpinned caller
+  # depend on `kt ls` succeeding". The composer guard IS such a verification, and it is
+  # unconditional by design — so that half of the assertion is now false, and the question is which
+  # side wins. The composer guard does, because the two failure directions are not symmetric:
+  #
+  #   guard blind ⇒ refuse  → the pane survives; handoff-fire retries 4× and pages HUSK-PANE; the
+  #                            operator closes it by hand. Recoverable, and loudly.
+  #   guard absent ⇒ close  → unsent composer text is destroyed. It is on disk NOWHERE, so there is
+  #                            no recovery at all. This is the 2026-08-07 06:41Z incident.
+  #
+  # The side with the incident wins (memory: stale-assertion-becomes-an-inverted-guard). What this
+  # test protects — that the CALLER-SUPPLIED identity pin stays opt-in — is unchanged and is still
+  # asserted below; only the "no oracle call whatsoever" clause is retired.
   id_payload 15 4242 '["claude","--agent-name","someone-else"]'
   run "$K" session close -f -s 15
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
-  if grep -q -- ' ls ' "$CALLS"; then echo "unexpected ls probe on the unpinned path" >&2; false; fi
+  # The decisive assertion: no IDENTITY probe. The composer guard's own `ls` is expected, so the
+  # discriminator is the refusal that did NOT happen — a mismatched cmdline that went unremarked.
+  if [ "$status" -eq 66 ]; then echo "identity check ran on the unpinned path" >&2; false; fi
+}
+
+@test "the composer guard DOES probe on the unpinned path — it is unconditional by design" {
+  # The positive half of the narrowing above, stated so the retired clause cannot silently come back
+  # as a 'fix'. If someone re-adds an unpinned fast path that skips the oracle, this goes red.
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","someone-else"]'
+  run "$K" session close -f -s 15
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- 'get-text --match id:15' "$CALLS" || { cat "$CALLS"; false; }
 }
