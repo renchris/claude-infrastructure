@@ -465,6 +465,13 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   # is PULL-TIME, so a landing inside the wave-plan + admission tail is invisible to it; the latch
   # is now enforced by `cc-backlog claim` itself and 5a branches on that refusal as a SKIP. rc 4 has
   # two causes since the lease, so (m2)/(m2b) are each other's control at the same rc.
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 156 ] || false
+  # 156 → 161: the SELF-RELEASE rollback (backlog 98e0e325b3ed) — (d) 2 + (d2) 3.
+  #
+  # FLOOR, not `-eq N`. This assertion could only ever red on the suite's OWN GROWTH, and it just
+  # did, for the fifth recorded time in the comment above it — five edits, zero regressions caught
+  # (memory: exact-count-assertion-tripwires-its-own-subject). The floor keeps the property that was
+  # actually wanted (a selftest that silently stopped running its checks must not read as a pass),
+  # and the zero-FAIL line below is the half that was always doing the real work.
+  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -ge 156 ] || false
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
