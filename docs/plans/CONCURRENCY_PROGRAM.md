@@ -129,6 +129,21 @@ them; it appends 233 `unblock` records to an append-only ledger and hands them s
 next sweep, which re-blocks them. So the order is **land → converge → apply**, and the dry run
 (`scripts/thrash-block-recover.sh`, no flags) is the safe thing to run at any time.
 
+> **Correction (2026-08-07, measured while applying `f06c9bb61933`): the ORDER is right, the stated
+> MECHANISM is not.** Re-block does *not* come from the historical rows. The live binary already
+> carries the unblock watermark — `reap`'s fold cuts `fastFail` at the LAST `block`/`unblock` record
+> (`$cut`, `bin/cc-backlog:1711-1718`, whose own comment names this: *"a deliberate `unblock` is
+> re-blocked by the very next reap on pre-unblock history … unblock never survives cc-reaper"*). An
+> `unblock` therefore moves the watermark and the 238 historical pairs become uncountable.
+> The real re-block vector is **fresh, post-unblock dispatcher self-releases**: released items
+> re-enter the wave, the live `cc-dispatch` still reopens with a bare `--by` (its two `self-release`
+> mentions are comments, `bin/cc-dispatch:1059,1102`), the live `reap` has no `selfRelease`
+> exclusion, so each rc-9 refusal writes a *countable* fast pair — and at the measured 36 rc-9 vs 5
+> fired per 2 h, two pairs per item arrive fast. Early application is still worse; it just fails one
+> layer later, and one layer harder to see.
+
+
+
 ⛔ Convergence is currently **refused, by a cause outside this work**: `deploy-live.sh` is
 fail-closed on a GREEN post-land stamp and `cc-blockers` reports `trunk-red PERSISTENT-RED — newest
 5 all red, 2 green of 88 ever`, last green **2026-08-04**. None of the five newest red stamps names
@@ -136,6 +151,24 @@ any subject in this diff; the three suites here that appear anywhere in the hist
 last red 3-8 days ago and all ran green this session. Queued as backlog `f06c9bb61933`, whose premise
 is a live re-read (`grep -c selfRelease "$(readlink -f ~/.claude/bin/cc-backlog)"`) rather than a
 date — so it becomes actionable the moment the live layer advances, and refuses itself if it has not.
+
+> **Update (2026-08-07, same day): that ⛔ is no longer the state — the wall dissolved before the
+> item was worked.** `deploy-live.sh` was rebuilt (DEPLOY_LANE_GROUND_UP §2.2) precisely because a
+> green-only gate deadlocks by construction — its own header measures *534 identical refusals, 276
+> launchd runs all exit 1, live layer 91 commits stale, ZERO pages*. It now selects across three
+> tiers: **T1 VERIFIED** (newest green descendant) → **T2 DEGRADED** (T1 empty *and* lag past budget
+> ⇒ newest NOT-RED commit, under a loud banner + a page) → **T3 BLOCKED** (all red). So convergence
+> is **budgeted and autonomous**, not indefinitely refused: `com.claude.deploy-live` (`--auto`,
+> `StartInterval` 600 s, verified loaded) advances the live layer the moment
+> `CC_DEPLOY_MAX_LAG_COMMITS` (25) or `CC_DEPLOY_MAX_LAG_HOURS` (6) trips, whichever comes first.
+>
+> Read at 10:42: lag **14 commits / 5 h**, i.e. *inside* the budget — so the refusal seen at that
+> moment is the gate working, not a blocker. Note the hours clock is integer-floored and compared
+> `-gt 6`, so it authorises at **7 full hours** past the live commit's committer date, not 6.
+> `--force` / `--bootstrap` / a lowered budget remain the **operator's** escape hatches: an agent
+> taking one to make its own item dispatchable is laundering the gate, and is not the sanctioned path.
+
+
 
 ⚠️ **This does not retire S2.** Gate contention is real and still unfixed; what changed is that it is
 no longer the thing jamming the QUEUE. S2 governs throughput once items are dispatchable again.
