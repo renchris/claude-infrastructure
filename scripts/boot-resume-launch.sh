@@ -115,6 +115,26 @@ KITTY="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}"
 # is meant to SEE and type into), so the kitty arm must not silently become a background pop-up.
 IN_KITTY=0
 if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+# An explicit socket is explicit intent (bin/it2-kitty:197) — honor it even with no kitty env.
+if [ "$IN_KITTY" = 0 ] && [ -n "${CC_TERM_KITTY_TO:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
+# DAEMON-CONTEXT DISPATCH (2026-08-07). Env inheritance is a SAMPLING detector: a launchd job
+# carries no KITTY_WINDOW_ID even while the whole fleet lives in kitty, so every autonomous
+# resume fell through to the iTerm2 arm — which then `open -a iTerm`ed a terminal the operator
+# had left (observed 03:51:18 this morning: iTerm2 resurrected + 6 sessions fired into it while
+# kitty held 153 panes). bin/cc-kitty-socket is a LIVE detector — it verifies a running kitty
+# against its control socket — and feeding its answer through CC_TERM_KITTY_TO is it2-kitty's
+# documented explicit-intent channel. Env still wins when present (a genuine iTerm2 pane keeps
+# its arm; IT2_WRAPPER_NO_KITTY still forces it); the resolver decides only the ABSENT case.
+if [ "$IN_KITTY" = 0 ] && [ -z "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
+  _brl_sock=""
+  for _brl_ksb in "$(dirname "$_CC_KS")/../bin/cc-kitty-socket" \
+                  "$(dirname "$0")/../bin/cc-kitty-socket" \
+                  "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/bin/cc-kitty-socket" \
+                  "${HOME:-}/.claude/bin/cc-kitty-socket"; do
+    [ -x "$_brl_ksb" ] && { _brl_sock="$(brl_bounded "$_brl_ksb" 2>/dev/null)" || _brl_sock=""; break; }
+  done
+  if [ -n "$_brl_sock" ]; then CC_TERM_KITTY_TO="$_brl_sock"; export CC_TERM_KITTY_TO; IN_KITTY=1; fi
+fi
 
 brl_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
   if [ -n "${CC_TERM_KITTY_TO:-}" ]; then brl_bounded "$KITTY" @ --to "$CC_TERM_KITTY_TO" "$@"
@@ -226,8 +246,19 @@ fi
 
 command -v "${OSASCRIPT%% *}" >/dev/null 2>&1 || { echo "boot-resume-launch: osascript unavailable" >&2; exit 3; }
 
-# ensure iTerm2 is up (post-login it may not be running yet), then drive it.
-open -a iTerm 2>/dev/null || true
+# NEVER `open -a iTerm` (removed 2026-08-07 — it was this file's line for "post-login it may not
+# be running yet"). LAUNCHING the app is exactly how autonomous resumes resurrected iTerm2 behind
+# a kitty-fleet operator: the daemon context has no kitty env, fell to this arm, and `open -a`
+# brought the abandoned terminal back with sessions in it. This arm now REQUIRES iTerm2 to be
+# already running — the `is running` probe is the one iTerm2 reference that never launches it
+# (same guard as handoff-fire.sh:931). Not running ⇒ rc 3 (driver unavailable), the taxonomy
+# callers already map to their deferred/queue fallbacks; with the kitty socket resolver above,
+# reaching this line with iTerm2 down means NO drivable terminal exists at all.
+_brl_it2_up="$(brl_bounded "$OSASCRIPT" -e 'if application id "com.googlecode.iterm2" is running then return "UP"' 2>/dev/null || true)"
+if [ "$_brl_it2_up" != "UP" ]; then
+  echo "boot-resume-launch: iTerm2 not running and no kitty socket — refusing to launch a terminal for $sid" >&2
+  exit 3
+fi
 printf '%s' "$OSA" | brl_bounded "$OSASCRIPT" - >/dev/null 2>&1 || { echo "boot-resume-launch: osascript failed for $sid" >&2; exit 4; }
 command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
 exit 0

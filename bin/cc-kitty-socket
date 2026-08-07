@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# cc-kitty-socket — resolve the LIVE kitty control socket from ANY context, including launchd.
+#
+# WHY: every terminal dispatch in this repo keyed on env inheritance (KITTY_WINDOW_ID), which is a
+# SAMPLING detector — true only for processes descended from a kitty pane. launchd jobs
+# (lr-reset-poller, boot-resume) carry no such env even while the operator's entire fleet lives in
+# kitty, so autonomous spawns fell through to the iTerm2 arm; boot-resume-launch.sh then
+# `open -a iTerm`ed — observed 2026-08-07 03:51:18, iTerm2 RESURRECTED behind a kitty-fleet
+# operator (153 kitty panes) and 6 sessions fired into it. The control socket is a LIVE detector:
+# kitty.conf pins `listen_on unix:/tmp/kitty-{kitty_pid}`, so a socket whose embedded pid is a
+# running kitty process is proof of a drivable kitty RIGHT NOW, from any context. Handing that
+# socket to a caller as CC_TERM_KITTY_TO is it2-kitty's own documented explicit-intent channel
+# (bin/it2-kitty:197 — "naming a socket IS the statement that you mean to drive that kitty").
+#
+# stdout: exactly one `unix:/path` (the oldest live instance — the operator's login kitty; test
+#         instances are younger). Nothing else, ever.
+# rc: 0 resolved · 4 no live socket (mirrors it2-kitty's "no control socket" code).
+# NEVER launches anything, never writes anything.
+#
+# Seams (tests only): CC_KITTY_SOCKET_DIR (default /tmp) · CC_KITTY_SOCKET_PS (default /bin/ps —
+# absolute, launchd-safe per unattended-path-lint).
+set -u
+
+DIR="${CC_KITTY_SOCKET_DIR:-/tmp}"
+PSBIN="${CC_KITTY_SOCKET_PS:-/bin/ps}"
+
+# etime ([[dd-]hh:]mm:ss) → seconds. macOS ps has no etimes= column; parse the portable one.
+_etime_s() {
+  local e="$1" d=0 h=0 m=0 s=0 rest
+  case "$e" in *-*) d="${e%%-*}"; e="${e#*-}" ;; esac
+  rest="$e"
+  case "$rest" in
+    *:*:*) h="${rest%%:*}"; rest="${rest#*:}"; m="${rest%%:*}"; s="${rest#*:}" ;;
+    *:*)   m="${rest%%:*}"; s="${rest#*:}" ;;
+    *)     s="$rest" ;;
+  esac
+  case "$d$h$m$s" in *[!0-9]*) echo 0; return ;; esac
+  echo $(( d*86400 + 10#$h*3600 + 10#$m*60 + 10#$s ))
+}
+
+# Fast path: born inside kitty — the inherited socket is the right one by construction.
+if [ -n "${KITTY_LISTEN_ON:-}" ]; then
+  _p="${KITTY_LISTEN_ON#unix:}"
+  if [ -S "$_p" ]; then printf 'unix:%s\n' "$_p"; exit 0; fi
+fi
+
+best=""; best_et=-1
+for s in "$DIR"/kitty-*; do
+  [ -S "$s" ] || continue
+  pid="${s##*-}"
+  case "$pid" in ''|*[!0-9]*) continue ;; esac
+  # the pid embedded in the socket name must be a LIVE kitty — a recycled pid whose comm is
+  # anything else marks a stale socket file, not a drivable terminal.
+  comm="$("$PSBIN" -p "$pid" -o ucomm= 2>/dev/null | tr -d ' ')" || comm=""
+  [ "$comm" = "kitty" ] || continue
+  et="$("$PSBIN" -p "$pid" -o etime= 2>/dev/null | tr -d ' ')" || et=""
+  [ -n "$et" ] || et="0"
+  ets="$(_etime_s "$et")"
+  if [ "$ets" -gt "$best_et" ]; then best="$s"; best_et="$ets"; fi
+done
+
+[ -n "$best" ] || exit 4
+printf 'unix:%s\n' "$best"
