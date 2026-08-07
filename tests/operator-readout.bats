@@ -41,8 +41,29 @@ setup() {
   export CC_BACKLOG_KICK=off
   export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
   export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
-  mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR"
+  # ⚠️ The escalation dead-letter stores (D3's `◆ N escalation record(s) unseen` line) MUST be
+  # redirected here. Unexported they fall back to their $HOME defaults, i.e. the OPERATOR's live
+  # ~/.claude — measured 2026-08-07, that injected a real 47-record line into the rendered block and
+  # reddened 2 byte-identity tests that had nothing to do with escalations. Same class as the
+  # autonomy-sweep suite's reaper-dir note: an unseamed default turns a hermetic suite into an
+  # assertion about the machine it happens to run on.
+  export CC_HANDOFF_ALARM_DIR="$BATS_TEST_TMPDIR/handoff-alarms"
+  export CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/announce-alarms"
+  export CC_COMPLETION_RECORDS_DIR="$BATS_TEST_TMPDIR/completion-push"
+  export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"
+  export CC_SWEEP_SEEN_DIR="$BATS_TEST_TMPDIR/sweep-seen"
+  mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR" "$CC_HANDOFF_ALARM_DIR" \
+           "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
   : > "$CC_BACKLOG_FILE"
+}
+
+# ── D3: the escalation counted line ──────────────────────────────────────────────────────────────
+mk_escalation() { # <n> — one undrained handoff-alarm record
+  printf '{"kind":"handoff-alarm","class":"strand-risk","detail":"pane never closed","ts":"x"}\n' \
+    > "$CC_HANDOFF_ALARM_DIR/alarm-$1.json"
+}
+mk_escalation_seen() { # <n> — …and the sweep's REAL marker for it (sha256 of the FULL path)
+  : > "$CC_SWEEP_SEEN_DIR/$(printf '%s' "$CC_HANDOFF_ALARM_DIR/alarm-$1.json" | shasum -a 256 | cut -c1-32)"
 }
 
 hookrun() { # $1=cwd → run hook mode with stdin JSON; stdout in $output
@@ -1035,4 +1056,66 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   [ "$status" -eq 0 ]
   [ -z "$output" ]
   [ -z "$(find "$CC_ORB_BLG_CACHE_DIR" -type f ! -name '.w.*' 2>/dev/null)" ]
+}
+
+# ── D3: the escalation dead-letter counted line (additive; hooks/escalation-watch.sh owns the
+#    per-class SessionStart render, this is the ONE standing count on the close surface) ──────────
+
+@test "ESCALATIONS: undrained records render ONE counted ◆ line carrying its listing command" {
+  # A record must exist alongside at least one real step, because this line rides the block — it is
+  # deliberately NOT a fire predicate (that would be a behavioural change, not an additive line).
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  mk_escalation 1; mk_escalation 2; mk_escalation 3
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '◆ 3 escalation record(s) unseen — cc-escalations list' || false
+}
+
+@test "ESCALATIONS: zero records ⇒ the line is ABSENT (control for the assertion above)" {
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]                                    # positive control: the block DID render
+  ! echo "$output" | grep -q 'escalation record' || false
+}
+
+@test "ESCALATIONS: the count uses the sweep's REAL sha-key marker, so drained records drop out" {
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  mk_escalation 1; mk_escalation 2; mk_escalation 3
+  mk_escalation_seen 2
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 2 escalation record(s) unseen' || false
+}
+
+@test "ESCALATIONS: a completion-push record with verdict verified is NOT counted" {
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  printf '{\n  "kind": "completion-push",\n  "verdict": "push-failed(rc=5)"\n}\n' > "$CC_COMPLETION_RECORDS_DIR/push-1.json"
+  printf '{\n  "kind": "completion-push",\n  "verdict": "verified"\n}\n'          > "$CC_COMPLETION_RECORDS_DIR/push-2.json"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ 1 escalation record(s) unseen' || false
+}
+
+@test "ESCALATIONS: the line is UNNUMBERED, so the downstream NSTEPS count is unchanged" {
+  # NSTEPS greps `^ [0-9]+ (▶|◆)`. These are records a machine should have drained, not operator
+  # steps, so counting them as steps would inflate the rung the close reports.
+  # Measured under CLASSBUDGET=on, NOT the collapse default: collapse numbers nothing, so both sides
+  # would be 0 and the assertion would hold no matter what this line does. `|| true` because
+  # `grep -c` exits 1 on a zero count, which is a count, not an error.
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  ref="$(CC_OPREADOUT_CLASSBUDGET=on "$HOOK" --render --cwd "$BATS_TEST_TMPDIR" | grep -cE '^ [0-9]+ (▶|◆)' || true)"
+  [ "$ref" -ge 1 ] || false                     # the metric is live, so a no-op cannot pass this
+  mk_escalation 1; mk_escalation 2
+  out="$(CC_OPREADOUT_CLASSBUDGET=on "$HOOK" --render --cwd "$BATS_TEST_TMPDIR")"
+  now="$(printf '%s\n' "$out" | grep -cE '^ [0-9]+ (▶|◆)' || true)"
+  printf '%s\n' "$out" | grep -q '◆ 2 escalation record(s) unseen' || false   # …and the line IS there
+  [ "$ref" = "$now" ]
+}
+
+@test "ESCALATIONS: the line renders identically under every class-budget mode" {
+  printf '#!/bin/bash\necho hi\n' > "$CC_ACTIVATION_DIR/10-plain-activate.sh"
+  mk_escalation 1
+  for m in collapse on off; do
+    CC_OPREADOUT_CLASSBUDGET="$m" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+    echo "$output" | grep -q '◆ 1 escalation record(s) unseen — cc-escalations list' || false
+  done
 }
