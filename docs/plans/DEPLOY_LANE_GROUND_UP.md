@@ -229,11 +229,92 @@ A mode without an answer is an unfinished design.
 
 ### 1.5 What this keeps and discards from the 2026-07-28 landing rebuild
 
-The `/ground-up` methodology came from that rebuild — the same subsystem family — and it did not
-close this class. Which of its premises survive is being derived from `LAND_PIPELINE_V2.md` by the
-archaeology researcher; **this subsection is PENDING that read** and will be integrated before any
-implementer is spawned. The one premise already contradicted by measurement is recorded now: a
-design that treats *"the corpus goes green"* as an available event is refuted at 2/85.
+`LAND_PIPELINE_V2.md` (landed `8d50f953`, `status: complete`, the `/ground-up` exemplar) is the same
+subsystem family and did not close this class. Verdict on its own R1-R9 requirements table:
+
+| R | Bearing on the advance invariant | Verdict |
+|---|---|---|
+| **R3** — *"live `~/.claude` only ever advances to a full-suite-green tree"* | **This IS the incumbent invariant** | **DISCARD AS STATED.** R3 is a *safety* property with no *liveness* partner — **a property satisfied by never advancing is not an advance invariant.** In 10 days `deploy.log` records exactly **one** autonomous advance. |
+| **R9** — *"absence is loud"* | **Falsified for this exact state** | **KEEP the requirement, DISCARD the claim it was met.** R9 was implemented per-*fault*; the failing state is the *gap between* faults (§1.8). |
+| **R7** — *"fail-closed never amplifies; shedding = SKIP"* | The lane refuses 534× at one unchanged state with zero escalation | **EXTEND**: R7 covers *cost*, not *futility*. A fail-closed path must **escalate on repetition**, not merely refuse. This is D2. |
+| **R6** — *"a non-verdict is never a red"* | `is_green()` conflates `red`/`cut`/`hung` | **KEEP** — and D1 is largely just applying R6 where the land path already honors it. |
+| **R5** — bounds cover what they bound | The 0-green half's proximate cause was a bound scoring itself (`833dcf35`) | **KEEP, strengthen.** |
+| **R1** — land p50 ≤ 30s at 12+ writers | Fast landing is *what makes trunk outrun the verifier* | **KEEP, and state the coupling** — R1's success is R3's problem. |
+| R2 / R4 / R8 | trunk-red bounding · no-lost-commits · escalation parking | KEEP; R2's *"≤1 verifier cycle"* is not achieved (trunk red 65.6h). |
+
+**The missing row.** `LAND_PIPELINE_V2.md:438-456` maps 16 observed v1 modes to v2 answers. **There
+is no row for "the green cursor is behind live HEAD."** Its §3 architecture diagram (`:265-279`)
+draws exactly **one** arrow into the checkout — the second advance path is nowhere in the design.
+And decisively: `755dd24a`'s own suite already carried
+`@test "refuses to roll back: newest green is BEHIND the live HEAD"` (2026-07-25). **The case was
+anticipated as a refusal and never as a state to escalate from.** That single sentence is the class.
+
+**The premise the deadlock most strongly SUPPORTS** (`:646-651`) — *"v1 had already built every v2
+component but kept the verdict on the land path, so each component waited on the others' liveness and
+none could go live — an architecture problem is not fixable by component quality."* The deploy lane is
+now the same shape one level down: gate, guard, link-refresh, damping, host-checks, alarms, each
+individually correct and covered by 37 tests in `tests/deploy-live.bats` — and the lane has advanced
+once.
+
+**Two of its own REVISIT triggers have fired** and are hereby re-opened, not re-decided here:
+- *Off-box CI, rejected "for the verdict; optionable later for the pure-hermetic subset as a second opinion."* The dominant failing suites are the machine-coupled ones — a hermetic-subset second opinion is **a green producer the design currently lacks.**
+- *Second verification host, "revisit only if cycle time under load exceeds ~2h sustained."* Measured p50 ≈ 3.2h sustained across the newest 8 stamps. **By the doc's own criterion this is open.**
+
+### 1.7 The anti-rollback guard prevents a FALSE SUCCESS REPORT, not a rollback
+
+Re-derived in a throwaway repo (never the shared checkout): because the target **is** an ancestor of
+live HEAD, `git merge --ff-only <ancestor>` returns *"Already up to date."* with **exit 0** — it
+cannot roll anything back. Without the guard, the lane would take that exit 0, print
+`deployed a9060c18b314 → 3725e5432bfc`, run `install.sh`, run the host checks and file a host-RED
+backlog item — **all against an unchanged tree.**
+
+So the guard buys **truthfulness, not safety**. Removing it risks the lane *lying about having
+deployed*, not losing work. This reframes what the rebuild is giving up, and it means the guard is
+kept for a different reason than the one its own message states — *"this would ROLL BACK the live
+layer"* is a misnomer that should be corrected to name the real hazard.
+
+Provenance (`git log --diff-filter=A -- scripts/deploy-live.sh` → `755dd24a` only): **both guards
+were introduced by one commit**, `755dd24a` (2026-07-25), and **neither has ever been weakened.** The
+green-stamp gate answers a **named incident** — *"the old nag emitted a raw `git pull --ff-only`,
+which deploys whatever happens to be on origin/main, VERIFIED OR NOT"* — so it must not simply be
+deleted (this constrains D1, see §2.2). The anti-rollback guard has **no incident** anywhere in the
+commit, its diff, its tests, or the plan; it is a design assertion only.
+
+### 1.8 Why no alarm ever fired: the covered states are the two ENDPOINTS
+
+`bin/cc-blockers` has two deploy alarms and our state falls between them:
+
+- `deploy-lag` (`:425`) requires `git merge-base --is-ancestor "$head_sha" "$gcommit" || return 0`, under its own comment *"The ancestor test is load-bearing: **a green stamp BEHIND the deployed HEAD is history, not lag**"* — so in exactly our state it **returns silently**.
+- `never-green` (`:401`) requires `[ -z "$gcommit" ]` — no green **ever**. We have two, so it never fires.
+
+Its own comment concedes the shape: *"deploy-lag structurally cannot cover it (it needs a green in
+order to call one late)"* — written about the no-green case; the mirror case (**green-but-behind**)
+fell into the identical gap. **The predicate the filings actually asked for — *"no green stamp is a
+descendant of live HEAD"* — exists nowhere in `cc-blockers`.** Live run 2026-08-07: one `trunk-red`
+row, **zero deploy rows**, while the live layer is 91 commits stale.
+
+### 1.9 The provenance correction, and the trap it sets for THIS session's close
+
+Two counts in this plan's own §"Why this is a ground-up" were re-derived and are wrong in **both**
+directions:
+
+- **`#71` is not an independent filing.** `50.json` and `71.json` are twins from a multi-config-dir task-store merge that ran three times on 2026-07-29/30 (`mergedFrom: .claude-quaternary`, both `originalId: 30`); `71` carries the *pre-completion* text and never received the completion event. The identical duplication exists for `#51`/`#72`. **Do not cite `#71` as evidence of recurrence.**
+- **The class was filed ~20 times, not 5.** Census of `backlog.jsonl` (1,132 distinct items) → 107 matching items; net of one auto-minting generator family (18 items, itself filed as `07e6e3888e9c`), the distinct filings of *"landed work is not live because the deploy lane will not advance"* run to roughly twenty, from `2a51b6db07d3` (2026-07-20) onward.
+
+🚨 **And task `#50` — marked COMPLETED — landed no commit at all. It was CLOSED ON A PREDICTION.**
+Its closing text: *"Deploy's refusal CHANGED SHAPE from structural … to ordering …, **which
+self-resolves**: the next green unblocks the lane."* Disk truth: the next green took **5 days**, and
+in the interval `deploy.log` accumulated **160 refusals for that one target across 13 distinct live
+HEADs**. A third category, neither *never-landed* nor *landed-and-insufficient*: **closed on a
+prediction that the class was self-resolving.** (`833dcf35` is the one real remedy in that window —
+it fixed the retry ladder scoring its own bound as a failure, i.e. the **scarcity** half. It never
+touched the **ordering** half.)
+
+**This binds this session directly.** R2's forecast is that `SCAN_N=200` leaves ~66 commits of
+headroom, after which the refusal flips from `would ROLL BACK` back to `no GREEN stamp` — *a change
+of shape*. Closing on "it will start paging again once the message changes" would be **task #50
+repeated verbatim**. No claim in this rebuild may rest on a predicted future state; every acceptance
+criterion in §2.8 is a disk read taken after the fact.
 
 ### 1.6 Violation enumeration against the implementation
 
@@ -297,25 +378,34 @@ so `red`, `cut` and `hung` are treated identically — a non-verdict is scored a
 stamps, 3 are non-verdicts (2 `cut`, 1 `hung`). The deploy lane violates a principle its own land
 lane enforces; D1 is partly just applying R6 where it was already settled.
 
-### 2.2 D1 — evidence VETOES, it never PERMITS *(dissolves F1, F2)*
+### 2.2 D1 — a TWO-TIER target: prefer green, degrade to not-red under a budget *(dissolves F1, F2)*
 
-| | Incumbent | Rebuild |
-|---|---|---|
-| Target | newest commit whose tree carries a **green** stamp | newest commit on `origin/main` whose tree carries **no red** stamp |
-| No stamp at all | ineligible ⇒ blocked | **eligible** — absence is the overwhelmingly common case and is structurally guaranteed to stay so |
-| `cut` / `hung` | ineligible (conflated with red) | **eligible** — a non-verdict is not a red (R6) |
-| `red` | ineligible | ineligible — walk back one commit and retry |
-| Target position | bounded **above** by the newest green ⇒ lags | tracks trunk ⇒ **ahead of live HEAD by construction** |
+**Revised after §1.7.** The first draft of D1 made the target simply *"newest commit carrying no red
+stamp."* That is too weak: §1.7 establishes the green-stamp gate answers a **named incident** (the
+old raw `git pull --ff-only` shipping unverified trunk to the whole fleet), so deleting it outright
+re-enters the incident. The freeze is not caused by the gate existing — it is caused by the gate
+having **no degradation path**. So the gate is kept and given one.
 
-The absorbing state disappears because target-selection stops being a function of the evidence
-corpus. `deploy-live.sh:357-358`'s anti-rollback guard is **kept unchanged** — it stops being a trap
-the moment the target is no longer a lagging pointer, and it still does its real job of refusing a
-genuine rollback.
+| Tier | Condition | Target | Banner / page |
+|---|---|---|---|
+| **T1 · verified** *(default, unchanged from today)* | a green-stamped tree exists that is a **descendant of live HEAD** | that commit | none — this is the healthy path and stays silent |
+| **T2 · budgeted degradation** | T1 is empty **AND** lag exceeds `A3`'s budget | newest commit on `origin/main` whose tree carries **no red** stamp | **loud banner + a page recording that an unverified advance occurred**, with the lag that authorised it |
+| **T3 · blocked** | T2's walk-back reaches a red at every candidate | no advance | page — a genuine "trunk is red all the way down" state, which is real information |
 
-**The honest cost.** The fleet will run code that has not been proven green. It **already does**: 13
-ungated `merge origin/main` fast-forwards put it there, and 45 of 309 live files currently differ
-from trunk. D1 does not lower the safety bar; it stops pretending a gate exists where the measured
-gate coverage is ~6 of ~38 writes.
+Stamp semantics under T2, applying R6 where the land path already honors it: **no stamp ⇒ eligible**
+(absence is the common case and structurally guaranteed to stay so); **`cut`/`hung` ⇒ eligible** (a
+non-verdict is not a red); **`red` ⇒ ineligible**, walk back one commit.
+
+The absorbing state disappears because T2 makes the target a function of **trunk** rather than of the
+evidence corpus, so it is ahead of live HEAD by construction. The anti-rollback guard is **kept
+unchanged in behavior** — but per §1.7 its message is corrected to name what it actually prevents (a
+false success report), not a rollback that `--ff-only` makes impossible anyway.
+
+**The honest cost, stated plainly.** Past the budget the fleet may run code that has not been proven
+green. It **already does**, silently: 13 ungated `merge origin/main` fast-forwards put it there and
+45 of 309 live files currently differ from trunk. The change is not *unverified deploys start
+happening* — it is *unverified deploys start being announced, budgeted, and logged* instead of
+arriving through a side door nobody records. That is strictly more safety than today, not less.
 
 ### 2.3 D2 — a staleness budget, alarmed on NOT-ADVANCING *(dissolves F4, V8)*
 
@@ -358,6 +448,47 @@ worse than no row: it teaches the operator the board lies."* Same defect, same r
 534 consecutive times. By I11's own rule that is worse than no row. The platter must either carry a
 command that can succeed under the current state, or name the blocker instead of offering a fix its
 own gate rejects.
+
+### 2.6b D6 — a dirty tracked file is a LANE STATE, not a generic death *(dissolves F6)*
+
+`deploy-live.sh` dies with `merge --ff-only … FAILED (dirty tree? diverged?)` — a guess with two
+alternatives, printed at the moment it matters most. §1.7's Step-0 measurement shows the real state
+is knowable exactly: `merge-tree --write-tree` rc=0 (trees clean) and one modified tracked path that
+also changed on trunk. The lane must **name the blocking path**, distinguish *dirty* from *diverged*,
+and treat it as its own escalation class.
+
+It must **never auto-stash or auto-discard.** The blocking file is a peer session's uncommitted work
+(`hooks/backup-before-write.sh` today), and the repo's own `26-deploy-gate-unblock` refuses exactly
+this for exactly this reason: *"That is very likely a peer session's uncommitted work. REFUSING to
+overwrite it… this script never discards local work."* Detect, name, page, stop.
+
+### 2.6c Step 0, revised — a surgical one-file deploy strictly narrower than `--force`
+
+**The rebuild has the same bootstrap circle it is fixing**, and this must be said plainly: a landed
+`deploy-live.sh` v2 is *not live*, because the live layer executes the `a9060c18` copy, which still
+refuses. The fix cannot deploy itself. That is `C4`/F5 applied to this very change.
+
+The repo already ships the right primitive, and it is **much narrower than the `--force` the filing
+proposed**. `26-deploy-gate-unblock-activate.sh` documents the pattern (used 2026-07-31 to deploy a
+fix while the checkout was 119 behind with 4 live writers): `git checkout origin/main -- <one path>`
+in the shared checkout — **HEAD unmoved, nothing committed, nothing stashed, one file staged**. Left
+*staged* deliberately, because an unstaged-but-modified file is a local modification that blocks the
+very fast-forward it exists to enable, whereas index==worktree==trunk self-resolves on the next merge.
+
+| | Filing's Step 0 (`deploy-live.sh --force`) | This rebuild's Step 0 |
+|---|---|---|
+| What is deployed | **91 commits**, unverified, in one shot | **one file** — the fixed advancer |
+| Verification net | bypassed wholesale, by banner | untouched; the new lane then advances under its own budgeted policy |
+| Blocked by the dirty sibling file? | **yes** — dies at `:388` | **no** — a path-scoped checkout does not touch `hooks/backup-before-write.sh` |
+| Reversible | re-deploy | `git checkout HEAD -- <path>` |
+
+Both remain **operator-gated** — they write the shared checkout's index, which the `26-` script
+itself classifies C10 precisely because 4+ live sessions share one index and a sibling's bare
+`git commit` can sweep a staged file. The agent stages the script; the operator picks the moment.
+
+**Blocker B is still separate and still real:** once the new lane advances, its `merge --ff-only`
+meets the dirty `hooks/backup-before-write.sh`. D6 makes that a named, paged state instead of a
+generic death — but the file itself must still be parked by its owner or by the operator.
 
 ### 2.7 REJECTED ALTERNATIVES
 
