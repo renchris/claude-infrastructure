@@ -3255,6 +3255,80 @@ write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
   return 0
 }
 
+# ---- failure alarms: CAPTURE BEFORE NOTIFY (D1) ----------------------------------------------
+# The three alarms below this line — STRAND-RISK, HUSK-PANE, RECYCLE-DEAD — are each the ONLY
+# artifact their failure ever produces: a predecessor left alive with a dead successor, a husk pane
+# at a shell prompt, a relaunched pane that never engaged. All three pushed with
+# `cc-notify … >/dev/null 2>&1 || true`, an idiom that cannot fail, cannot be observed, and drops
+# the message with exactly the silence of success when `~/.claude/cc-roles/` is empty (the
+# operator's deliberate state today). Every one of those alarms was therefore total loss.
+#
+# ORDER IS THE MECHANISM. The RECORD is written FIRST and depends on nothing but mkdir+printf — no
+# jq, no role, no transport — so an add-on can never fail wider than what it supplements: capture
+# survives a dead notify, a missing role, an unreachable desk, and this process being SIGKILLed the
+# instant after. The push is demoted to a best-effort ACCELERATOR whose rc and `verdict=` token are
+# CAPTURED into a sidecar instead of discarded. A record with no sidecar reads as refused
+# (fail-closed) — the state is honest at every instant, including mid-write.
+#
+# The sidecar is the discrimination the old idiom threw away: `reached` (the desk actually got it)
+# vs `recorded` (it sat in a mailbox nobody may read) vs `refused-rcN` (it never went anywhere) are
+# three different worlds, and `|| true` collapsed them into one.
+#
+# Callers run inside detached watchers (detach() above), so the echo lands in the watcher log rather
+# than a terminal — which is why the record must not need jq to be written or a TTY to be read.
+# NEVER returns nonzero: an alarm helper that can break its caller is a worse bug than the alarm.
+# Kill switch CC_HF_ALARM_RECORDS=0 restores the legacy push-only behaviour verbatim.
+hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  → always 0
+  local _class="${1:-}" _pane="${2:-}" _sid="${3:-}" _succ="${4:-}" _raw="${5:-}"
+  local _notify _dir _file _stamp _ts _detail _out _rc _verdict _token
+  _notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+
+  if [ "${CC_HF_ALARM_RECORDS:-1}" = 0 ]; then
+    hf_bounded "$_notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_class: $_raw" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  # SANITIZE for a single-line JSON body written without jq: a newline/CR/tab truncates the record
+  # mid-field and a `"` or `\` makes it unparseable — and the recycle detail carries a whole
+  # relaunch command line, so neither is hypothetical. MAP, never delete: the length and the word
+  # boundaries are what makes the detail readable to the operator who eventually sees it.
+  _detail="$(printf '%s' "$_raw" | tr '\n\r\t"' "   '")" || _detail="$_raw"
+  _detail="${_detail//\\//}"
+
+  # RECORD FIRST — mkdir + printf only, every step guarded.
+  _dir="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
+  mkdir -p "$_dir" 2>/dev/null || true
+  _stamp="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)" || _stamp=""
+  _ts="$(date -u +%FT%TZ 2>/dev/null)" || _ts=""
+  _file="alarm-$_stamp-$$-${RANDOM}.json"
+  printf '{"kind":"handoff-alarm","class":"%s","pane":"%s","sid":"%s","successor":"%s","detail":"%s","ts":"%s"}\n' \
+    "$_class" "$_pane" "$_sid" "$_succ" "$_detail" "$_ts" > "$_dir/$_file" 2>/dev/null || true
+
+  # PUSH SECOND, bounded, with its verdict kept. `|| _rc=$?` rather than `|| true`: this file runs
+  # under `set -e`, and a bare assignment from a failing substitution would abort the caller — the
+  # one thing an alarm may never do.
+  _out=""; _rc=0
+  _out="$(hf_bounded "$_notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_class: $_raw" 2>&1)" || _rc=$?
+
+  # First `verdict=<token>` in the reply, extracted WITHOUT a pipeline: under this file's `pipefail`
+  # a `grep … | head -1` returns 141 when head closes the pipe on a MATCH, which would blank the
+  # verdict precisely when the push succeeded (the inverted-probe defect this tree has already paid
+  # for). Parameter expansion has no such failure mode and no fork.
+  _verdict=""
+  case "$_out" in
+    *verdict=*) _verdict="${_out#*verdict=}"; _verdict="${_verdict%%[!a-z-]*}" ;;
+  esac
+
+  if [ "$_rc" -ne 0 ]; then _token="refused-rc$_rc"
+  elif [ "$_verdict" = delivered ]; then _token="reached"
+  else _token="recorded"
+  fi
+  printf '%s\n' "$_token" > "$_dir/$_file.verdict" 2>/dev/null || true
+
+  echo "hf_alarm class=$_class record=$_file push=$_token"
+  return 0
+}
+
 # ---- P0-16 /goal >4000-char guard (a19 D-11) -------------------------------------------------
 # A /goal payload line whose condition exceeds the harness's 4000-char cap is a SILENT dead fire —
 # the successor spawns task-less and idles believing nothing to do (observed 2026-07-10). Hard-fail
@@ -4035,7 +4109,8 @@ if [ "${1:-}" = "__selfclose" ]; then
   # the pane's tty. This is the leg that makes the re-verify meaningful — re-running the old tty-only
   # check would pass on any node the pane picked up after the successor died, which is exactly the
   # arm-time defect deferred by 180s. UNPINNED (no registry row) falls back to the tty check.
-  # Dead ⇒ DO NOT close: page the desk (best-effort), leave the predecessor ALIVE, exit nonzero.
+  # Dead ⇒ DO NOT close: RECORD the alarm (durable; the page is a best-effort accelerator on top of
+  # it — hf_alarm), leave the predecessor ALIVE, exit nonzero.
   # Skipped when there is no successor (--terminal) or nothing was handed over to re-check.
   _t0_dead=0
   if [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_PIN" ]; then
@@ -4052,9 +4127,7 @@ if [ "${1:-}" = "__selfclose" ]; then
   fi
   if [ "$_t0_dead" = 1 ]; then
     echo "!! self-close ABORTED at close-instant: successor $SUCCESSOR ($SUCCESSOR_TTY) is NO LONGER ALIVE — NOT closing predecessor $SID (closing now would strand BOTH panes). Predecessor left alive." >&2
-    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
-      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-STRAND-RISK: self-close of $SID was aborted — its successor $SUCCESSOR died before the close instant. Predecessor left ALIVE to avoid stranding the work; the succession did NOT complete. Re-drive the handoff (re-fire a warm successor, then self-close again)." >/dev/null 2>&1 || true
-    fi
+    hf_alarm strand-risk "$SID" "" "$SUCCESSOR" "HANDOFF-STRAND-RISK: self-close of $SID was aborted — its successor $SUCCESSOR died before the close instant. Predecessor left ALIVE to avoid stranding the work; the succession did NOT complete. Re-drive the handoff (re-fire a warm successor, then self-close again)."
     exit 1
   fi
   # PANE CLOSE — retried. The /exit half has already landed (CC is gone), so a failure here is not
@@ -4065,7 +4138,8 @@ if [ "${1:-}" = "__selfclose" ]; then
   # for a moment; a single unretried call turns that blip into a permanent husk. Worse, the husk
   # keeps a FRESH teardown marker on a pane that may be reused — the precondition for the
   # crash-watchdog false-absolution class (see hooks/lead-crash-watchdog.sh marker_owns_sid).
-  # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + desk page, never a silent husk.
+  # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + a durable alarm record (hf_alarm; the desk
+  # page rides along best-effort), never a silent husk.
   _close_ok=0
   for _try in 1 2 3 4; do
     # mode=self: the pane IS the caller. The ownership guard is deliberately NOT applied — a
@@ -4093,25 +4167,31 @@ if [ "${1:-}" = "__selfclose" ]; then
     # Re-read at the failure instant, not from a variable: up to ~190s and four close attempts have
     # passed since the loop's verdict. Three states, and `unknown` says unknown — a tty that cannot
     # be read is not evidence of death (pane_cc_state's own rule).
+    #
+    # D1 rides ON TOP of that tri-state rather than replacing it: the page is still THREE different
+    # claims, but it is now CAPTURED BEFORE it is pushed (hf_alarm writes the record first, then
+    # pushes and keeps the verdict). The class travels with the state, so a drained record says
+    # which of the three this was — the whole point of the tri-state survives into the ledger.
     _final="$(pane_cc_state "${TTY_PATH:-}")"
     case "$_final" in
       cc)
+        _cls=close-failed-live
         _hk="!! PANE CLOSE FAILED after 4 attempts — and the session is NOT gone: claude is STILL RUNNING in pane $SID (re-checked at the failure instant on ${TTY_PATH:-?}). The /exit did not take. Do NOT close this pane blind; it has a live session in it."
         _pg="HANDOFF-CLOSE-FAILED-LIVE: self-close of $SID failed 4/4 AND claude is still running there — this is NOT a husk. The session did not exit and no work is lost, but it also did not retire: it is holding a pane and a worktree. Look at the pane before closing anything."
         ;;
       shell)
+        _cls=husk-pane
         _hk="!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude confirmed gone, pane still open at a shell prompt). Close it by hand; the session is already gone."
         _pg="HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (claude CONFIRMED gone on ${TTY_PATH:-?}) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk."
         ;;
       *)
+        _cls=close-failed-unknown
         _hk="!! PANE CLOSE FAILED after 4 attempts for pane $SID — and whether the session exited is UNKNOWN (its tty '${TTY_PATH:-none}' could not be read). Look at the pane before closing it: it may still hold a live session."
         _pg="HANDOFF-CLOSE-FAILED-UNKNOWN: self-close of $SID failed 4/4 and its liveness could not be determined (tty '${TTY_PATH:-none}' unreadable). It may be a husk or it may be a live session — this page cannot tell you which, and neither could the close. Look before closing."
         ;;
     esac
     echo "$_hk" >&2
-    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
-      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_pg" >/dev/null 2>&1 || true
-    fi
+    hf_alarm "$_cls" "$SID" "" "${SUCCESSOR:-}" "$_pg"
   fi
   if [ -n "$SUCCESSOR" ]; then
     # Succession legibility: land the operator's view ON the continuation. it2 python-API CLI
@@ -4248,17 +4328,18 @@ if [ "${1:-}" = "__recycle" ]; then
     # DEAD RECYCLE. Deliberately NO re-type: unlike the fire path, this pane holds a LIVE claude, and
     # pasting the brief into a session that IS working but whose transcript we simply could not read
     # would interrupt its turn. A recycle's only reader is the operator/desk, so the truthful verdict
-    # plus a page is worth more than a blind retry (the audit's complaint was the FALSE success, not
+    # plus a durable alarm record is worth more than a blind retry (the audit's complaint was the
+    # FALSE success, not
     # the absence of a recovery). The session is left exactly as it is, for inspection.
     echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap). The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
     echo "!!   recover: re-send the brief into the pane (cc-notify $RSID '<re-engage prompt>'), or relaunch manually: $(cat "$CMDFILE")" >&2
     # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
     # assistant turn. This is the "asked, answered no" half of the tri-state above.
+    # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
+    # assistant turn. This is the "asked, answered no" half of the tri-state above.
     emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)" || true
     goal_unreachable recycle-dead || true
-    if [ -x "$HOME/.claude/bin/cc-notify" ]; then
-      hf_bounded "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
-    fi
+    hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")"
     exit 1
   fi
   hf_bounded "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
