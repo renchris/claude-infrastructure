@@ -25,6 +25,11 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  # The hardware TERMS (resolver, both probes, both verdict awks, both default numbers) live here
+  # since 2026-08-07 and are shared with cc_capacity_admit(); the POLICY — unbounded, --recycle
+  # exempt, CC_FIRE_* namespace, handoffs.jsonl records — stays in capacity_gate(). Every case in
+  # this file still tests capacity_gate through the real script; the P-series below composes the two.
+  LIB="$REPO/scripts/lib/capacity-admit.sh"
   # HERMETICITY: handoff-fire.sh resolves the registry, mailbox, roles and projects dirs under
   # $HOME. Fixture it so an ADMIT case — which proceeds PAST the gate into that machinery — can
   # never read or mutate the operator's live ~/. Must precede any invocation below.
@@ -162,7 +167,14 @@ EOF
 @test "9 the gate runs BEFORE any side effect — a refused fire spawns nothing" {
   # exit 9 must happen in the pre-side-effect guard block, beside the /goal-cap and empty-payload
   # refusals. Proven positionally: the gate call sits after check_slash_head and before it2 land.
-  run bash -c "grep -n 'capacity_gate || exit 9' '$HF' | cut -d: -f1"
+  #
+  # `^[^#]*` — the CALL, not a comment that quotes it. This case went RED on a correct tree the
+  # moment capacity_gate's header explained what its call site does, because the unanchored grep
+  # returned two line numbers and `[ "2643\n3912" -gt … ]` is not an integer expression. Same shape
+  # as case 20's citation-vs-claim split in capacity-admit-coverage.bats: position is the
+  # discriminator, and a guard a future comment can convict is a guard that will be edited away
+  # (memory `guard-proxy-fails-in-both-directions`).
+  run bash -c "grep -nE '^[^#]*capacity_gate \|\| exit 9' '$HF' | cut -d: -f1"
   gate_line="$output"
   run bash -c "grep -n 'check_slash_head  \"\$PROMPT_FILE\"' '$HF' | cut -d: -f1"
   slash_line="$output"
@@ -631,6 +643,88 @@ _fires() {
   done <<< "$(grep -oE 'emit_fire_refusal [a-z-]+' "$REPO/scripts/handoff-fire.sh" | awk '{print $2}' | sort -u)"
 }
 
+# ---- THE EXTRACTION'S OWN FAILURE MODE (item a27a4d9485da, 2026-08-07) ------------------------
+# The hardware terms moved to scripts/lib/capacity-admit.sh, so for the first time this gate has a
+# DEPENDENCY IT CAN LOSE — and its call site turns any non-zero status into rc 9. An undefined
+# cc_hw_* would therefore make ONE missing file refuse EVERY fire on the box: fail-CLOSED, the
+# §12.2 amplifier the bounded sibling exists to avoid, arriving through the back door of a refactor.
+# Cases 32 and 33 are the proof it does not, and they are the reason the extraction is allowed to
+# have happened at all.
+#
+# CC_FIRE_CAPACITY_LIB is the seam that makes this testable: honoured VERBATIM and never folded into
+# the fallback list, exactly as CC_FIRE_SYSCTL is (P5). Pointing it at a nonexistent path is the
+# only way to reproduce absence — the script-relative candidate resolves through the checkout, so
+# HOME and CLAUDE_CONFIG_DIR cannot make the library unreachable (the same discovery
+# capacity-admit-coverage.bats case 24c records for the Agent hook, where the remedy was isolation).
+#
+# RED-PROOF (recorded 2026-08-07, re-runnable): this whole file was replayed against the pristine
+# pre-change tree recovered via `git archive 07f9707c` (5888 lines, 0 occurrences of `cc_hw_`), run
+# from that tree's OWN root so REPO/HF/LIB all resolve pre-change — one tree per side, never a mix.
+# 8 of 43 went RED there, 0 skips either side, so nothing below passes vacuously:
+#   32, 33   the absence branch and the wiring do not exist pre-change (32 REFUSES with exit 9 —
+#            the pristine gate ignores CC_FIRE_CAPACITY_LIB and measures the stubbed saturated box,
+#            which is the fail-CLOSED outcome these cases exist to forbid).
+#   P1       the composed extract carries no `cc_hw_resolve_sysctl` — the terms are still inline.
+#   P2/P4/P5 red BECAUSE P1 is: the new `gate_reads` matches nothing in the pristine body, so the
+#            fragment they execute is the source line alone. That is the intended reading and P1 is
+#            what makes it legible — a P2 red with P1 GREEN would mean the PATH bug is back, and a
+#            P2 red with P1 red means the extractor is pointed at the wrong tree. Do not read one
+#            without the other (memory `wrong-cause-corroborated-by-true-metric`).
+#   P6/P8    `cc_hw_resolve_sysctl` is not extractable from the pristine library, and the ncpu read
+#            is not in it either — P8's non-vacuity guard is what catches that.
+# GREEN ON BOTH TREES BY DESIGN, and each would be a defect otherwise: case 9 (its grep was anchored
+# to non-comment position — a robustness fix to a guard a comment could convict, not a new property)
+# and case 31 (a STANDING property both trees satisfy; its `>=9` admitting returns read 9 pre-change
+# and 10 after, the tenth being the absence branch).
+
+@test "32 an ABSENT library ADMITS, loudly and on the record — never a fleet-wide refusal" {
+  # A SATURATED box and a missing library at once. The load term would refuse if it ran, so an
+  # admit here can only be the absence branch — on a quiet box this case would pass vacuously.
+  run env STUB_NCPU=10 STUB_LOAD=27.16 CC_FIRE_CAPACITY_LIB=/nonexistent/capacity-admit.sh \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  echo "$output" | grep -q 'capacity-admit: ABSENT' || { echo "silent ungated fire: $output"; false; }
+  # ...and it is FILED as `absent`, not left as a bare admit: §12.2's rule is that inertness must be
+  # LOUD, and §9.5.1's is that you split on `basis` before believing any ratio from these rows. An
+  # ungated window counted as `measured` is the population defect both of them name.
+  if command -v jq >/dev/null 2>&1; then
+    run bash -c "jq -rc 'select(.gate==\"capacity\")|[.verdict,.basis]|@tsv' '$HOME/.claude/logs/handoffs.jsonl'"
+    [ "$output" = "$(printf 'admit\tabsent')" ]
+  fi
+  # POSITIVE CONTROL — the override is what caused the admit. The IDENTICAL fire with the library
+  # reachable refuses, so case 32 is testing absence and not a stub that quietly stopped working.
+  # Fired LAST: it writes a refusal row, and the jq assertion above is an exact match on the log.
+  run env STUB_NCPU=10 STUB_LOAD=27.16 bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -eq 9 ]
+}
+
+@test "33 the gate is WIRED to the library it sources — absence is the only ungated path" {
+  # Case 32 proves the absence branch is safe. This proves the PRESENT branch is real: that the
+  # terms capacity_gate runs are the library's, not a surviving private copy that would make the
+  # extraction cosmetic and case 32's admit meaningless.
+  grep -q 'cc_hw_load_verdict' "$HF"     || { echo "capacity_gate does not use the shared load term"; false; }
+  grep -q 'cc_hw_headroom_gb' "$HF"      || { echo "capacity_gate does not use the shared headroom term"; false; }
+  grep -q 'cc_hw_resolve_sysctl' "$HF"   || { echo "capacity_gate does not use the shared resolver"; false; }
+  # and it must READY-CHECK before using any of them, or the absence branch is unreachable
+  grep -q 'cc_hw_ready' "$HF"            || { echo "no readiness check — absence would be a crash"; false; }
+  # THE ORDER IS THE PROPERTY: the kill switch answers first (an operator who turned the gate off
+  # gets silence, not a complaint about a library it was never going to use), then absence, then
+  # any term. A readiness check placed after the first term would crash before reaching itself.
+  local body offline absent firstterm
+  body="$(awk '/^capacity_gate\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$HF")"
+  offline="$(printf '%s\n' "$body" | grep -n 'CC_FIRE_CAPACITY_GATE' | head -1 | cut -d: -f1)"
+  absent="$(printf '%s\n' "$body" | grep -n 'cc_hw_ready' | head -1 | cut -d: -f1)"
+  firstterm="$(printf '%s\n' "$body" | grep -n 'cc_hw_resolve_sysctl' | head -1 | cut -d: -f1)"
+  # Three separate assertions, NOT `[ -n "$a" ] && [ -n "$b" ]` on one line: that mid-test form is
+  # the dead assertion errexit cannot reach in bats, and it is exactly what let capacity-admit-
+  # coverage.bats case 26 compare "" to "" and call it parity.
+  [ -n "$offline" ]   || { echo "order probe: no kill switch found"; false; }
+  [ -n "$absent" ]    || { echo "order probe: no readiness check found"; false; }
+  [ -n "$firstterm" ] || { echo "order probe: no term found"; false; }
+  [ "$offline" -lt "$absent" ] || { echo "the kill switch must answer before the absence branch"; false; }
+  [ "$absent" -lt "$firstterm" ] || { echo "readiness must be checked before the first term runs"; false; }
+}
+
 # ── THE LOAD TERM IS PATH-INDEPENDENT BY CONSTRUCTION (item 02ae8ae886a1, 2026-08-06) ────────────
 # Everything above proves the gate REASONS correctly once it has numbers. None of it could see that
 # in production it never got any. Measured in ~/.claude/logs/handoffs.jsonl over 2026-08-03..06: of
@@ -650,21 +744,36 @@ _fires() {
 # The exact PATH shape from the repro: /usr/bin and /bin present, /usr/sbin absent.
 NOSBIN_PATH="/usr/local/bin:/usr/bin:/bin"
 
-# Extract the resolver + reads straight out of the shipping function, so this tests the real code
+# Extract the resolver + reads straight out of the shipping code, so this tests the real thing
 # rather than a restatement of it that can agree with itself while production disagrees.
+#
+# COMPOSED SINCE THE EXTRACTION: the resolver and both probes moved to scripts/lib/capacity-admit.sh
+# and capacity_gate() now CALLS them, so the fragment under test is `source the library` + `the
+# gate's own read block`. Testing either half alone would re-create the paraphrase this section
+# exists to forbid — the production question was never "does the resolver work", it was "does what
+# capacity_gate actually runs resolve sysctl on a /usr/sbin-less PATH", and only the composition
+# answers it.
 gate_reads() {
+  printf '. "%s"\n' "$REPO/scripts/lib/capacity-admit.sh"
   awk '/^capacity_gate\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$REPO/scripts/handoff-fire.sh" \
-    | sed -n '/sysctl_bin="\${CC_FIRE_SYSCTL/,/^  ceiling=/p' \
+    | sed -n '/sysctl_bin="\$(cc_hw_resolve_sysctl/,/^  ceiling=/p' \
     | grep -v '^  ceiling='
 }
 
-@test "P1 the resolver is extractable — the three cases below test code, not a paraphrase" {
-  # If this drifts, P2/P3/P4 would silently test an empty string and pass vacuously.
+@test "P1 the composition is extractable — the cases below test code, not a paraphrase" {
+  # If this drifts, P2/P4/P5 would silently test an empty string and pass vacuously.
   run gate_reads
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'CC_FIRE_SYSCTL' || { echo "no override read in the extract"; false; }
-  echo "$output" | grep -q '/usr/sbin/sysctl' || { echo "no absolute default in the extract"; false; }
-  echo "$output" | grep -q 'hw.ncpu' || { echo "no ncpu read in the extract"; false; }
+  echo "$output" | grep -q 'cc_hw_resolve_sysctl' || { echo "no resolver call in the extract"; false; }
+  echo "$output" | grep -q 'cc_hw_ncpu' || { echo "no ncpu read in the extract"; false; }
+  # …and the half that MOVED must still carry the absolute default and the sysctl key it resolves.
+  # Asserted separately rather than folded in: if the library stopped shipping either, P2/P4 would
+  # go red for a reason that reads like a PATH regression and is not (memory
+  # `wrong-cause-corroborated-by-true-metric`).
+  [ -f "$LIB" ] || { echo "the library the extract sources does not exist — every case below is vacuous"; false; }
+  grep -q '/usr/sbin/sysctl' "$LIB" || { echo "no absolute default in the library"; false; }
+  grep -q 'hw.ncpu' "$LIB" || { echo "no ncpu read in the library"; false; }
 }
 
 @test "P2 hw.ncpu reads a REAL core count with /usr/sbin off the PATH — the production shape" {
@@ -719,27 +828,22 @@ EOF
 
 @test "P6 the fallback still exists — an absent /usr/sbin/sysctl degrades to the bare name" {
   # The default must not become a hard dependency on one absolute path: a box without
-  # /usr/sbin/sysctl should still try, not die. Proven by pointing the -x test at a path that is
-  # absent by construction and checking the resolver lands on the bare name.
+  # /usr/sbin/sysctl should still try, not die.
   #
-  # `env -u CC_FIRE_SYSCTL` is load-bearing: setup() exports the seam, and an inherited override
-  # short-circuits the resolver before the fallback is ever reached — this case asserted nothing
-  # until it was unset (it failed loudly, which is the only reason the hole was visible at all).
-  run env -u CC_FIRE_SYSCTL bash -c '
-    sysctl_bin="${CC_FIRE_SYSCTL:-}"
-    if [ -z "$sysctl_bin" ]; then
-      if [ -x /nonexistent/sysctl ]; then sysctl_bin=/nonexistent/sysctl; else sysctl_bin=sysctl; fi
-    fi
-    echo "$sysctl_bin"'
+  # AGAINST THE SHIPPED FUNCTION, not a retyped copy of it. Both halves of this case used to be
+  # hand-written restatements of the resolver — which is the one thing this whole section calls a
+  # defect, and it was only ever done because the resolver was inline and its `/usr/sbin` literal
+  # could not be varied. Now it is a function, so the DEGRADE branch is reached by replaying the
+  # real body with that one constant mutated (memory `control-must-replay-the-real-artifact`).
+  local body
+  body="$(awk '/^cc_hw_resolve_sysctl\(\)/{p=1} p{print} p&&/^\}$/{exit}' "$LIB")"
+  [ -n "$body" ] || { echo "cc_hw_resolve_sysctl not extractable — the extractor, not the resolver, is broken"; false; }
+  run env -u CC_FIRE_SYSCTL bash -c "$(printf '%s' "$body" | sed 's#/usr/sbin/sysctl#/nonexistent/sysctl#g')
+    cc_hw_resolve_sysctl \"\${CC_FIRE_SYSCTL:-}\""
   [ "$output" = "sysctl" ]
-  # ...and the same resolver with the REAL path present picks the absolute one, so P6 proves the
+  # ...and the SAME function with the real path present picks the absolute one, so P6 proves the
   # fallback is a fallback rather than the branch that always runs.
-  run env -u CC_FIRE_SYSCTL bash -c '
-    sysctl_bin="${CC_FIRE_SYSCTL:-}"
-    if [ -z "$sysctl_bin" ]; then
-      if [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl; else sysctl_bin=sysctl; fi
-    fi
-    echo "$sysctl_bin"'
+  run env -u CC_FIRE_SYSCTL bash -c '. "$1"; cc_hw_resolve_sysctl "${CC_FIRE_SYSCTL:-}"' _ "$LIB"
   [ "$output" = "/usr/sbin/sysctl" ]
 }
 
@@ -755,11 +859,22 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "P8 no bare-name sysctl survives in handoff-fire.sh — the class, not just the two sites" {
+@test "P8 no bare-name sysctl survives in EITHER file — the class, not just the two sites" {
   # An inventory, not a spot-check: a third read added later by bare name would reintroduce exactly
   # this bug and every case above would still pass (memory inventory-before-building).
-  local hits
-  hits="$(grep -nE '(^|[^/[:alnum:]_-])sysctl[[:space:]]+-n' "$REPO/scripts/handoff-fire.sh" \
-            | grep -v '^\s*[0-9]*:\s*#' | grep -v 'sysctl_bin' || true)"
-  [ -z "$hits" ] || { echo "BARE-NAME sysctl read(s) still present:"; echo "$hits"; false; }
+  #
+  # THE INVENTORY FOLLOWS THE CODE. Scanning only handoff-fire.sh was complete while the reads lived
+  # there; after the extraction it would be an inventory of a file that no longer performs any read
+  # — green by construction, and blind to the file that does. Both are scanned, so the population
+  # matches the subject (memory `caller-census-keyed-on-path-misses-the-name`).
+  local hits f
+  for f in scripts/handoff-fire.sh scripts/lib/capacity-admit.sh; do
+    hits="$(grep -nE '(^|[^/[:alnum:]_-])sysctl[[:space:]]+-n' "$REPO/$f" \
+              | grep -v '^\s*[0-9]*:\s*#' | grep -v 'sysctl_bin' || true)"
+    [ -z "$hits" ] || { echo "BARE-NAME sysctl read(s) still present in $f:"; echo "$hits"; false; }
+  done
+  # NOT VACUOUS: the scanned population must actually contain the reads, or two clean files prove
+  # nothing. The library is where they went, so that is where they must be found.
+  grep -qE '"\$1" -n hw\.ncpu' "$REPO/scripts/lib/capacity-admit.sh" \
+    || { echo "the ncpu read is in neither file — P8 is scanning an empty subject"; false; }
 }
