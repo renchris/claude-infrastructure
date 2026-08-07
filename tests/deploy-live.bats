@@ -584,6 +584,41 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   [ -L "$DEST" ]
 }
 
+@test "L8 a DIRTY tracked file blocks BY NAME — tree unmoved, file untouched, never stashed" {
+  echo v1 > "$SHARED/shared.txt"; git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m base
+  git -C "$SHARED" push -q origin main
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  echo v2 > "$SHARED/shared.txt"; git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m bump
+  git -C "$SHARED" push -q origin main
+  git -C "$SHARED" reset -q --hard "$base"       # trunk is 1 ahead and that commit rewrites shared.txt
+  stamp origin/main                              # a green descendant exists — this is NOT a tier test
+  printf 'peer session work\n' > "$SHARED/shared.txt"      # a peer's UNCOMMITTED edit to that path
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DIRTY TREE"* ]] || false     # a named state, not "(dirty tree? diverged?)"
+  [[ "$output" == *"shared.txt"* ]] || false     # …naming the blocking path
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]             # the tree did not move
+  [ "$(cat "$SHARED/shared.txt")" = "peer session work" ]        # the peer's work is UNTOUCHED
+  [ -f "$PAGES/deploy-dirty-tree.page" ]
+  grep -q 'never stashes' "$PAGES/deploy-dirty-tree.page"
+  [ ! -f "$INSTALL_LOG" ]                        # and nothing downstream of the merge ran
+}
+
+@test "L8b a dirty tracked file OUTSIDE the advance's path set does NOT block (no over-refusal)" {
+  # The blocking set is an INTERSECTION. A pre-flight that refused on any dirty file would trade the
+  # green-stamp freeze for a dirty-file freeze — this checkout is shared and is dirty most of the day.
+  echo v1 > "$SHARED/untouched.txt"; git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m base
+  git -C "$SHARED" push -q origin main
+  advance_origin b                               # b touches b.txt only, never untouched.txt
+  stamp origin/main
+  printf 'peer edit\n' > "$SHARED/untouched.txt"
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dl
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [ "$(cat "$SHARED/untouched.txt")" = "peer edit" ]       # still the peer's, still uncommitted
+}
+
 @test "L9 the launchd job execs even when the ~/.claude symlink is ABSENT (59 exec failures)" {
   P="$REPO/launchd/com.claude.deploy-live.plist"
   run plutil -lint "$P"
