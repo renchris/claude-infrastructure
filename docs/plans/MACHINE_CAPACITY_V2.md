@@ -1405,6 +1405,45 @@ where a HARDWARE term can bind"*. **That sentence is false in the tree** and sho
 name the paths it actually covers — an in-source claim of chokepoint status that is untrue is worse
 than no claim, because it stops the next reader from checking.
 
+> #### ✅ CLOSED 2026-08-07 (`57cb9a60`) — all four gated, and the table above is now EXECUTABLE
+>
+> The bypass table is the part of this section that decays (`scan-revision-predates-the-fix`), so it
+> was replaced by an assertion rather than re-measured by hand: **`tests/capacity-admit-coverage.bats`
+> is the live coverage ledger** — a path that loses its gate goes RED instead of quietly rejoining
+> the bypass list. Read that suite, not this table.
+>
+> | path | 2026-07-31 | now |
+> |---|---|---|
+> | `boot-resume.sh` → `boot-resume-launch.sh` | BYPASS | **GATED** at the launcher (the seam that opens the window and runs `reso-resume-one`, so both its callers are covered). rc 9 = `shed`, kept distinct from `failed`. Closes §12.4. |
+> | `lr-fire-resume.sh` | BYPASS | **GATED** before its `exec expect` |
+> | `~/.reso/bin/reso-resume-one` | BYPASS | **GATED at every in-repo invocation** (all of which are the launcher above). Its body is unreachable: the file is in **no git repository** — untracked under `~/.reso` — so nothing this repo can land or verify touches it. Direct hand-invocations remain uncovered **by construction**; case 25 pins that residue so it stays stated rather than re-discovered. |
+> | **`Agent` tool** | BYPASS | **GATED** in `agent-teams-enforce.sh` — the hook ALREADY registered on `PreToolUse|Agent`, so enforcement rode the deploy instead of entering the pending-activation queue (11 scripts rotting >24h unrun; a gate that ships inert is the 2026-08-07 generator). |
+>
+> **NOT by universalising `capacity_gate()` — §12.2 below stands unamended.** The new term is a
+> sibling, `scripts/lib/capacity-admit.sh`, and the difference is the one §12.2 identified: it is
+> **BOUNDED**. After `CC_ADMIT_BUDGET` consecutive refusals the next evaluation admits and pages, so
+> a saturated box delays a spawn and can never stand as a permanent refusal — the outage §12.2
+> measured is structurally unreachable rather than merely unlikely. That framing is not this
+> section's invention: it is the narrowed law from the deploy lane's adversarial reply
+> (`docs/research/inertness-generator-2026-08-07.md` §9), which established that **unboundedness is
+> the defect, not the term** — and §12.2's own words ("no sustained-saturation escape") were already
+> pointing at it.
+>
+> **The Agent path runs the headroom term ONLY**, load term off. §8.5.7 measured loadavg swinging
+> 2.05x at constant session count; binding that proxy to the highest-volume spawn surface is exactly
+> the fleet-wide refusal §12.2 refuted. Memory headroom is the sheddable, session-attributable
+> quantity §8.5.2's retraction asked for — not spawning a subagent actually reclaims its footprint,
+> so this term's refusal can change what it reads, which the loadavg term's cannot.
+>
+> **The false chokepoint sentence is corrected in `handoff-fire.sh`** and case 20 keeps it corrected.
+> Ceilings and the `basis` vocabulary are pinned across both implementations (cases 26-27), so the
+> deliberate `CC_ADMIT_*` / `CC_FIRE_*` namespace split cannot decay into silent drift.
+>
+> Residue, named rather than closed: the two implementations remain **separate bodies of code**.
+> Extracting `capacity_gate()` into the shared library is the no-drift end state, but its 765-line
+> suite greps the function body in-place, so the extraction is a change with its own RED-proof — not
+> a rider on this one. Parity is enforced by test until then.
+
 ### 12.2 ⛔ DO NOT "just bind `capacity_gate()` everywhere" — §8.5.2 already discarded that architecture
 
 This was the obvious fix and it is wrong. §8.5.2's retraction says to discard *"1-min `loadavg/ncpu`
