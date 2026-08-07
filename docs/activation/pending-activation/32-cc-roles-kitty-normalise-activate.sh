@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-# 31-cc-roles-kitty-normalise  —  retire the iTerm2 UUIDs sitting in ~/.claude/cc-roles/ on a kitty box
+# 32-cc-roles-kitty-normalise  —  retire the iTerm2 UUIDs sitting in ~/.claude/cc-roles/ on a kitty box
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHAT: back up ~/.claude/cc-roles/{desk,operator,orchestrator}, then remove (or re-point) each one
 #   whose contents cannot be a window id in the terminal that is actually running.
@@ -33,9 +33,9 @@
 #   running fleet. An agent rewriting it underneath concurrent sessions is the class of edit this
 #   repo forbids outright.
 #
-# REPOINT INSTEAD: CC_ROLES_DESK=<kitty window id> ./31-cc-roles-kitty-normalise-activate.sh
+# REPOINT INSTEAD: CC_ROLES_DESK=<kitty window id> ./32-cc-roles-kitty-normalise-activate.sh
 #   (verified live before it is written; a non-existent id is refused).
-# DRY RUN:  CC_ROLES_DRY=1 ./31-cc-roles-kitty-normalise-activate.sh
+# DRY RUN:  CC_ROLES_DRY=1 ./32-cc-roles-kitty-normalise-activate.sh
 # UNDO:     cp ~/.claude/cc-roles.bak-<stamp>/* ~/.claude/cc-roles/
 # Mark done: touch <this file>.done
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -64,15 +64,21 @@ if [ "$TERM_KIND" != kitty ]; then
   exit 3
 fi
 
+# shellcheck disable=SC2016  # single quotes are REQUIRED: the body is Python, and letting the shell
+# expand anything inside it is precisely the class of bug this script exists to clean up.
 LIVE_IDS="$("$KITTY_BIN" @ ls 2>/dev/null | /usr/bin/python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
     sys.exit(1)
-print(" ".join(str(w.get("id")) for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])))
+# NEWLINE-separated, not space-separated: the membership tests below are `grep -qx` over one id per
+# line, and a space-joined list would have to be word-split by leaving the variable unquoted — which is
+# both a shellcheck SC2086 and a real glob hazard. Emitting the separator the consumer wants means
+# every expansion below can stay quoted.
+print("\n".join(str(w.get("id")) for ow in d for t in ow.get("tabs", []) for w in t.get("windows", [])))
 ')" || { say "!! could not enumerate kitty windows — aborting rather than guessing."; exit 3; }
-say "Live kitty window ids: ${LIVE_IDS:-<none>}"
+say "Live kitty window ids: $(printf '%s' "${LIVE_IDS:-<none>}" | tr '\n' ' ')"
 
 # ── 2. back up before touching anything ────────────────────────────────────────────────────────────
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -105,7 +111,7 @@ for role in desk operator orchestrator; do
     *)
       # Digits — right SHAPE, but a kitty window id is a per-process counter that restarts at 1, so
       # shape is not existence. Verify against the live enumeration before blessing it.
-      if printf '%s\n' $LIVE_IDS | grep -qx "$cur"; then
+      if printf '%s\n' "$LIVE_IDS" | grep -qx "$cur"; then
         say "· $role — '$cur' is a LIVE kitty window ⇒ keeping"
       else
         say "· $role — '$cur' is kitty-shaped but names no live window (stale) ⇒ REMOVING"
@@ -119,7 +125,7 @@ done
 # ── 4. optional repoint ────────────────────────────────────────────────────────────────────────────
 if [ -n "$WANT_DESK" ]; then
   say
-  if printf '%s\n' $LIVE_IDS | grep -qx "$WANT_DESK"; then
+  if printf '%s\n' "$LIVE_IDS" | grep -qx "$WANT_DESK"; then
     say "Re-pointing desk → kitty window $WANT_DESK"
     run bash -c "printf '%s' '$WANT_DESK' > '$ROLES/desk'"
     CHANGED=1
