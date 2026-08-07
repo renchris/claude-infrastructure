@@ -114,6 +114,14 @@ rows="$(jq -R 'fromjson? // empty' "$BACKLOG" | jq -s -r --argjson window "$WIND
       | [ range(0; ($h|length)-1) as $i
           | select($h[$i].event=="claim"
                    and (($h[$i+1].ts|fromdateiso8601) - ($h[$i].ts|fromdateiso8601)) > $window) ] as $long
+      # REFUSE rather than pad. The fromjson-or-empty pass above drops only lines that are not
+      # (NB: no apostrophe may appear in this comment — it lives inside a single-quoted shell string)
+      # JSON — a line that IS valid JSON but carries no `id` survives, groups under a null key, and
+      # would emit an EMPTY first cell. Tab is an IFS-whitespace character, so the reads below
+      # collapse that away entirely: `\tHOLD\t0\t0\t0` reads back as id="HOLD", verdict="0", and the
+      # printed table then names an item after its own verdict. Dropping the row is the honest fix —
+      # a record with no id names no item, so there is nothing for this tool to recover.
+      | select(($last.id // "") != "")
       | { id: $last.id,
           selfrel: ([$pairs[]|select(.self)]|length),
           worker:  ([$pairs[]|select(.self|not)]|length),

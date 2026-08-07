@@ -212,7 +212,21 @@ reading() {
       win="$(cut -f3 <<<"$c")"; off="$(cut -f5 <<<"$c")"; mpx="$(cut -f7 <<<"$c")"
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$cpu" "$mem" "$th" "$ports" "$win" "$off" "$mpx"
+  # PAD AT THE EMITTER. Tab is an IFS-*whitespace* character, so `IFS=$'\t' read` collapses a RUN
+  # of delimiters into one: an empty cell does NOT produce an empty variable, it shifts every LATER
+  # column one position LEFT, silently, at exit status 0. Splitting on tab explicitly (see `show`)
+  # does not prevent that — only a non-empty cell does. The live sources of an empty cell here are
+  # `awk '{print $5}'/'{print $6}'` on a `top` line with fewer stats columns than requested, which
+  # empties th and ports while the census still answers — so the window columns slide LEFT into
+  # them and the row reads th=<windows> ports=<offscreen>, the exact confusion the note above
+  # `show` warns about, on the instrument that decides a terminal change. Measured on trunk:
+  # `th=21 ports=20 win=1.00 off= mpx=` for a census reading windows=21 offscreen=20 mpx=1.00.
+  #
+  # This padding landed once already (68e17e2a) and was silently reverted by 68694672, a concurrent
+  # rewrite of this file that branched before it — which is why tests/terminal-bench.bats now pins
+  # it with a RED control instead of leaving it as a line the next same-file rewrite can drop.
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${cpu:--}" "${mem:--}" "${th:--}" "${ports:--}" "${win:--}" "${off:--}" "${mpx:--}"
 }
 
 # ── build the census once (interpreted start-up is ~0.4 s, which distorts a tight loop) ───────────
@@ -227,6 +241,11 @@ echo "terminal-bench — app=$APP pid=$PID panes=${PANES:-unset} interval=${INTE
 
 # Split on TAB explicitly. Relying on `printf ... $(echo "$row")` word-splitting silently shifts
 # every column left the moment one field is empty, which would misattribute ports to threads.
+#
+# The explicit split is only HALF the fix, and this note used to imply it was the whole one: tab is
+# an IFS-whitespace character, so `IFS=$'\t' read` collapses a run of tabs too and an empty cell
+# shifts the row here exactly as word-splitting would. What actually closes it is `reading()`
+# padding every cell to "-" at the emitter; this reader is safe only because that holds.
 show() {
   local label="$1" row="$2" cpu mem th ports win off mpx
   IFS=$'\t' read -r cpu mem th ports win off mpx <<<"$row"
