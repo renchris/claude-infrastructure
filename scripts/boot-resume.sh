@@ -57,6 +57,19 @@ if ! . "$_ccl" 2>/dev/null; then
 fi
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
+
+# ── machine-capacity admission (MACHINE_CAPACITY_V2 §12.1 / §12.4) lives in the LAUNCHER. ──────
+# §12.4 called this script a LATENT BOMB in precise terms: it resumes at GUI login, i.e. INTO the
+# boot storm — measured loadavg 346 at boot+2 min, decaying to 89 within 90 s — and it had no
+# capacity term at all. Its operator consequence, verbatim: *"activating boot-resume as-is converts
+# 'the box crashed' into 'the box crashes, reboots, and fires 4 Opus-max sessions into a load-346
+# storm, ungated.'"*
+#
+# The term is in `boot-resume-launch.sh`, not here, because that is the seam that ACTUALLY spawns
+# (opens the window, runs reso-resume-one) and it has a second caller — the resume-sessions skill's
+# hand path. Gating the spawn point covers both; gating here would cover one and would have to be
+# re-derived for the other. This script's job is to read the launcher's rc 9 and keep a SHED ghost
+# distinct from a FAILED one (see the fire loop below).
 # ── the shared resume-selection decision point (session-sprawl consolidation, 2026-07-21).
 #    Without it this loop fires one session PER GHOST — the incident shape (14 sessions, one
 #    project, 2.76 GB RSS). resolve_bin's search does not reach the limit-recover subdir. ──
@@ -205,6 +218,7 @@ fi
 # ── ACT: resume (posture=resume) per ghost, else page-only (posture=page). ──
 resumed=0
 resume_fail=0
+resume_shed=0   # ghosts SELECTED but REFUSED by the capacity term — distinct from resume_fail (launcher error)
 n_fire=0        # ghosts SELECTED to fire (post-consolidation) — distinct from n_open (ghosts found)
 if [ "$MODE" = "resume" ]; then
   if [ -z "$LAUNCH" ] || [ ! -x "$LAUNCH" ]; then
@@ -252,11 +266,19 @@ EOF
     [ -n "$sid" ] || continue
     branch=""
     [ -n "$cwd" ] && [ -d "$cwd" ] && branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    if "$LAUNCH" "$alias" "$cwd" "$sid" "$branch" >/dev/null 2>&1; then
-      resumed=$((resumed + 1))
-    else
-      resume_fail=$((resume_fail + 1))
-    fi
+    # The capacity term lives in the LAUNCHER (the seam that actually opens the window and runs
+    # reso-resume-one), not here — see its header. Evaluated per ghost, so the batch SHEDS its tail
+    # instead of being all-or-nothing: what fits is resumed, the rest is deferred.
+    #
+    # rc 9 is the launcher's capacity refusal and is NOT a failure. Keeping the two apart is the
+    # whole point: `resume_fail` means the launcher broke and needs fixing, `resume_shed` means the
+    # box was full and the session is waiting — same count, opposite operator action.
+    "$LAUNCH" "$alias" "$cwd" "$sid" "$branch" >/dev/null 2>&1
+    case "$?" in
+      0) resumed=$((resumed + 1)) ;;
+      9) resume_shed=$((resume_shed + 1)) ;;
+      *) resume_fail=$((resume_fail + 1)) ;;
+    esac
   done <<EOF
 $WINNERS
 EOF
@@ -291,6 +313,10 @@ if [ "$MODE" = "resume" ]; then
   [ "$n_open" -gt "$n_fire" ] && msg="${msg}
   consolidated: ${n_open} ghost(s) → ${n_fire} fired (max ${MAX_PER_WT}/worktree, ${MAX_TOTAL} total). The rest are LISTED, not lost — ${STATE_DIR}/last-triage.txt"
   [ "$resume_fail" -gt 0 ] && msg="${msg} ⚠ ${resume_fail} failed to launch — check /resume-sessions."
+  # A shed ghost is deferred, not lost, and it must SAY so: a boot-delta reading "resumed 1/4" with
+  # no other line is indistinguishable from three launcher failures (§12.4's whole concern is that
+  # the boot storm silently eats the recovery).
+  [ "$resume_shed" -gt 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
 else
@@ -306,7 +332,7 @@ DESK_TARGET=""
 if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   "$NOTIFY" "$DESK_TARGET" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
   mark_processed
-  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
+  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
   exit 0
 else
   # a wake with nobody to wake: keep the delta LIVE (do NOT mark) so a re-run re-attempts it.

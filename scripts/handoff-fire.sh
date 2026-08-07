@@ -2489,9 +2489,26 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 }
 
 # ---- P0-17 machine-capacity admission gate (lag incident 2026-07-29) --------------------------
-# EVERY fire mode funnels through this script — cc-dispatch defaults CC_DISPATCH_SPAWN_BIN here, and
-# the desk, the ground-up coordinator and manual fires all call it — so this is the ONE place where a
-# HARDWARE term can bind (enforcement-must-live-at-the-chokepoint).
+# THE FIRE-MODE chokepoint: cc-dispatch defaults CC_DISPATCH_SPAWN_BIN here, and the desk, the
+# ground-up coordinator, lr-reset-poller, lr-handoff and manual fires all call it — so this is where
+# a HARDWARE term binds for all of them (enforcement-must-live-at-the-chokepoint).
+#
+# ⚠ IT IS NOT THE ONLY SPAWN PATH ON THE BOX, and this comment used to say it was — verbatim,
+# "EVERY fire mode funnels through this script … this is the ONE place where a HARDWARE term can
+# bind". MACHINE_CAPACITY_V2 §12.1 measured that sentence FALSE in the tree and named why the lie
+# was expensive: "an in-source claim of chokepoint status that is untrue is worse than no claim,
+# because it stops the next reader from checking." Four paths bypassed this gate entirely —
+# scripts/boot-resume.sh, scripts/limit-recover/lr-fire-resume.sh, ~/.reso/bin/reso-resume-one, and
+# the Agent tool (subagents/teammates), which is the highest-volume spawn surface on the box.
+#
+# Those four are now gated by the SIBLING term, scripts/lib/capacity-admit.sh — deliberately a
+# separate implementation and NOT this function bound everywhere, because §8.5.2's retraction and
+# §12.2's live measurement refuted that architecture: this gate is UNBOUNDED (a readable,
+# permanently-over-ceiling probe refuses forever), and on an unattended recovery path that is an
+# outage, not a safeguard. capacity-admit carries a finite refusal budget whose expiry admits and
+# pages. The two share their ceiling DEFAULTS and their `basis` vocabulary, pinned by
+# tests/capacity-admit-coverage.bats cases 26-27, so they cannot drift apart silently.
+# The live coverage ledger is that suite — never this comment.
 #
 # Until now every admission guard counted API QUOTA and nothing counted the cores the spawned
 # sessions actually run on: cc-wave-plan bounds a wave by CC_WAVE_MAX_PER_ACCT (accounts x 2) and the

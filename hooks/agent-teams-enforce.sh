@@ -29,6 +29,80 @@ PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty')
 SUBAGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // empty')
 MODEL=$(echo "$INPUT" | jq -r '.tool_input.model // empty')
 
+# ── MACHINE-CAPACITY ADMISSION ────────────────────────────────────────────────────────────────
+# MACHINE_CAPACITY_V2 §12.1 measured the coverage of the one hardware term in the tree and found
+# the `Agent` tool BYPASSES it — and named that the one that matters most: *"it is the highest-
+# volume spawn surface. Its two PreToolUse hooks bind policy (agent-teams-enforce.sh) and frontier
+# budget (frontier-spawn-gate.sh), never hardware. So the spawn-cap PATTERN is proven here; it is
+# keyed on the wrong resource."* This is that pattern, keyed on the right one.
+#
+# WHY IT LIVES IN THIS HOOK RATHER THAN A NEW ONE. A new hook file needs a new settings.json entry,
+# which is a C10 operator hand-step, which lands in the pending-activation queue — where 11 scripts
+# are currently ROTTING >24h unrun. A gate that ships INERT is the generator this repo documented
+# on 2026-08-07 (docs/research/inertness-generator-2026-08-07.md): eight analyses reached correct
+# conclusions that changed nothing because the conclusion never reached an ENFORCING store. This
+# hook is ALREADY registered on PreToolUse|Agent, so the term goes live on the trunk fast-forward
+# with the rest of the diff. Enforcement rides the deploy; it does not wait behind a human.
+#
+# WHY THE LOAD TERM IS OFF HERE — a deliberate per-caller policy, not a weakened gate. §8.5.7
+# measured loadavg swinging 2.05x at CONSTANT session count (dominated by the TUI renderer,
+# WindowServer, XProtect), and §12.2 measured 2.16/core — over the 2.0 ceiling — on a box with 13
+# sessions, 24 GB free and 0 B compressor, i.e. perfectly healthy. Binding THAT proxy to the
+# highest-volume spawn surface is precisely the fleet-wide refusal §12.2 refuted. Memory headroom
+# is the sheddable, session-attributable quantity §8.5.2's retraction asked for: a subagent's
+# footprint IS reclaimable by not spawning it, so this term's refusal can actually change what it
+# reads — which the loadavg term's cannot.
+#
+# BOUNDED (§9 of the inertness-generator doc, the narrowed law): CC_ADMIT_BUDGET consecutive
+# refusals, then the next evaluation ADMITS and pages. A wave can be throttled; it can never be
+# permanently blocked by this.
+#
+# ABSENT LIBRARY, OR ADMIT ⇒ FALL THROUGH, never exit. Every policy check below this line
+# (model allowlist, brief-size cap, delivery-contract, impl-keyword deny) must still run: a
+# capacity library that went missing must not be able to silently disarm Agent Teams enforcement.
+#
+# RESOLUTION ORDER — the SYMLINK-RESOLVED sibling FIRST, and that ordering is the difference between
+# a gate that works and a gate that waits. ~/.claude/hooks/*.sh are symlinks into the checkout, so
+# resolving $0's link reaches the repo's own scripts/lib/ and the term goes live the moment the file
+# does. A $CLAUDE_CONFIG_DIR-first lookup would find nothing until install.sh re-globs the new file
+# on the next deploy — i.e. the gate would ship ABSENT and stay that way behind a deploy it cannot
+# trigger, which is the deployed-layer-bootstrap-circle. (Verified: this is not hypothetical — the
+# config-dir path does not exist until deploy, so config-dir-first meant ABSENT on every spawn.)
+_ateh_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _ca in "$(dirname "$_ateh_self")/../scripts/lib/capacity-admit.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+           "${HOME:-}/.claude/scripts/lib/capacity-admit.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_ca" ] && . "$_ca" 2>/dev/null && break
+done
+if command -v cc_capacity_admit >/dev/null 2>&1; then
+  if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit agent-tool "${SUBAGENT_TYPE:-subagent} spawn"; then
+    jq -n --arg r "$(cc_capacity_admit_reason)" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("MACHINE CAPACITY — subagent spawn refused. \($r). This is memory pressure, not policy: reclaimable headroom (free+speculative+inactive+purgeable) is what a new process can take WITHOUT swapping, and below the floor the whole box swaps and every live session slows. DO NOT retry in a loop — the refusal is BOUNDED and will release itself after CC_ADMIT_BUDGET consecutive refusals (it then admits and pages), so a retry storm only spends the budget that protects you. Instead: shed first (close finished panes, let the running wave drain, reduce the fan-out width), then spawn. Run this work SERIALLY on the lead if it cannot wait. Override for one spawn: CC_ADMIT_GATE=off. Lower the bar: CC_ADMIT_MIN_HEADROOM_GB=<n>. Rule: MACHINE_CAPACITY_V2 §12.1.")
+      }
+    }'
+    exit 0
+  fi
+else
+  # Inertness is LOUD, never a silent admit (§12.2's rule for capacity_gate, applied verbatim) —
+  # but LOUD HERE MEANS THE LEDGER, NOT stderr. This hook runs on EVERY Agent call on the box, so a
+  # stderr line would print on every spawn in every session: noise that gets tuned out, which is the
+  # opposite of loud (memory `alarm-polarity-and-attention-budget` — an alarm that always fires
+  # carries the same zero bits as one that cannot). It also lands in the hook's own output stream,
+  # where it corrupts the JSON contract: it broke 6 cases in tests/agent-teams-enforce.bats with a
+  # jq parse error, because bats' `run` merges stderr into $output.
+  # A row in the IDL is greppable, timestamped, damped by nature, and lands in the SAME store the
+  # gate's own verdicts do — so one query answers "was the Agent path gated?" across both states.
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+    '{ts:$ts,hook:"capacity-admit",sid:"?",disposition:"abstained",reason:"capacity",
+      gate:"capacity-admit",verdict:"admit",basis:"absent",caller:"agent-tool",
+      what:"subagent spawn",detail:"scripts/lib/capacity-admit.sh unreachable — spawn UNGATED for hardware"}' \
+    >> "${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
+fi
+
 # Teammate spawns (team_name set) MUST use a Max-plan auto-mode-allowlisted model.
 # Allowlist is read from the SSOT (~/.claude/model-config.yaml
 # .auto_mode_allowlist.non_firstParty_max — claude-opus-4-8 as of 2026-06-09) so
