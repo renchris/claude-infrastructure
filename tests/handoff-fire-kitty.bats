@@ -97,6 +97,12 @@ FAKE
   # Discriminate POSITIVELY on `-` (never negatively on "no -e"): a file argument does not read stdin
   # either, and the two mistakes are not symmetric — draining when we should not is a silent
   # forever-hang, not draining when we could is an unread pipe nobody notices.
+  #
+  # KFAKE_OSA_RC (2026-08-07, item 03682fdd378c): the exit code is now part of the fixture, because
+  # as_write's iTerm2 branch grew a SECOND transport that only runs when this one FAILS. Defaulted to
+  # 0, so every test written before this knob existed keeps the behaviour it was written against.
+  # The drain still happens on the `-` shape whatever the rc — a failing osascript that leaves the
+  # caller's heredoc unread would SIGPIPE it, which is a different failure than the one being faked.
   cat > "$STUB/osascript" <<'FAKE'
 #!/bin/sh
 printf 'osascript %s\n' "$*" >> "$OLOG"
@@ -104,6 +110,7 @@ for a in "$@"; do
   if [ "$a" = "-" ]; then cat >/dev/null 2>&1 || true; break; fi
 done
 printf '%s\n' "${KFAKE_OSA_OUT:-}"
+exit "${KFAKE_OSA_RC:-0}"
 FAKE
   chmod +x "$STUB/osascript"
 
@@ -116,12 +123,14 @@ FAKE
   chmod +x "$STUB/ps"
   export PATH="$STUB:$PATH"
 
-  # The it2 shim as_write routes through. Under kitty this is what execs bin/it2-kitty.
+  # The it2 shim as_write routes through. Under kitty this is what execs bin/it2-kitty; on iTerm2 it
+  # is now also the SECOND transport as_write falls back to (KFAKE_IT2_RC is what lets a test fail
+  # BOTH of them, which is the degrade control for the fallback).
   SHIM="$HOME/.claude/bin/it2"
   cat > "$SHIM" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$ILOG"
-exit 0
+exit "${KFAKE_IT2_RC:-0}"
 FAKE
   chmod +x "$SHIM"
   # shellcheck disable=SC2034  # consumed by the eval-extracted as_write, which shellcheck cannot see
@@ -228,6 +237,68 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ -s "$OLOG" ]
   [ ! -s "$KLOG" ]
   [ ! -s "$ILOG" ]
+  # The fallback is a FALLBACK: osascript succeeded, so the second transport must not have run. This
+  # is the half that keeps the added rung from becoming an unconditional double-send.
+  [ "$status" -eq 0 ]
+}
+
+# ── as_write's second transport (item 03682fdd378c) ──────────────────────────────────────────────
+# One arm per transport, each with a degrade control. A second live delivery path does not make one
+# arm red — it makes the suite AMBIENT, green or red by which transport the host happens to offer
+# (memory: second-transport-makes-an-e2e-ambient). So every arm below pins the terminal AND both
+# stub exit codes explicitly; none of them infers either.
+
+@test "as_write on iTerm2 falls back to the it2 shim when osascript fails — the pane still gets /exit" {
+  # THE DEFECT. Before this rung the iTerm2 branch had exactly one transport, and both callers treat
+  # its failure as terminal: self-close (:4097) and recycle (:5910) call as_write 3x and then kill
+  # their own armed watcher, so a finished peer could not retire and held a pane + worker slot
+  # (measured twice, 2026-07-31T06:16/06:17, pane 7BA549DA).
+  pin_iterm2
+  export KFAKE_OSA_RC=1
+  run as_write "ABC-DEF" "/exit"
+  [ "$status" -eq 0 ]
+  [ -s "$OLOG" ]                                   # osascript was tried FIRST — iTerm2 stays default
+  grep -qx 'session run -s ABC-DEF /exit' "$ILOG"  # …then the shim carried it
+  [ ! -s "$KLOG" ]                                 # never a third spelling at the control socket
+}
+
+@test "as_write's fallback uses session RUN, not session send — send types /exit without submitting" {
+  # `it2 session send` is async_send_text(text); `session run` is async_send_text(command + "\r")
+  # (it2 0.2.3 commands/session.py:22,44). AppleScript's `write text` submits, so only `run` is the
+  # same act. A `send` here would leave /exit sitting unsubmitted in the composer and the watcher
+  # would force-close a session that never exited gracefully — worse than the failure it replaces.
+  pin_iterm2
+  export KFAKE_OSA_RC=1
+  run as_write "ABC-DEF" "/exit"
+  [ "$status" -eq 0 ]
+  grep -q 'session run ' "$ILOG"
+  grep -q 'session send ' "$ILOG" && false
+  true
+}
+
+@test "as_write returns non-zero when BOTH transports fail — the watcher disarm is preserved" {
+  # THE DEGRADE CONTROL, and the property the fix must not break. The disarm at :4104/:5916 exists
+  # because a watcher left armed over a session whose /exit never landed force-closes a LIVE turn
+  # (self-close) or types a relaunch into a running composer (recycle). The fallback must add a rung,
+  # never remove that refusal — so a pane neither transport can reach still fails loud.
+  pin_iterm2
+  export KFAKE_OSA_RC=1 KFAKE_IT2_RC=1
+  run as_write "ABC-DEF" "/exit"
+  [ "$status" -ne 0 ]
+  [ -s "$OLOG" ]
+  grep -qx 'session run -s ABC-DEF /exit' "$ILOG"  # both were genuinely ATTEMPTED, not short-circuited
+}
+
+@test "as_write in kitty never double-sends — the fallback is on the iTerm2 branch only" {
+  # The kitty branch returns its own rc directly; a fallback reached from there would send the same
+  # text twice to the same pane. Fail the shim so a second attempt, if one existed, would be visible
+  # as a second logged line.
+  pin_kitty
+  export KFAKE_IT2_RC=1
+  run as_write 25 "/exit"
+  [ "$status" -ne 0 ]
+  [ "$(grep -c 'session run -s 25 /exit' "$ILOG")" -eq 1 ]
+  [ ! -s "$OLOG" ]                                 # and kitty never reaches osascript
 }
 
 # ── _as_tty_query: the two exit states are the contract ──────────────────────────────────────────
