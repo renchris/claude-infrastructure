@@ -34,6 +34,13 @@ setup() {
   export CC_TERM_KITTY="$BATS_TEST_TMPDIR/fake-kitty"
   export CC_PANE_CMD_DIR="$BATS_TEST_TMPDIR/cmd"
   export CC_PANE_RUNNER_BIN="$RUNNER"
+  # The terminal dependency named above has an exact twin one layer in, and this suite had it too
+  # (item 4c5eddc16c2d): the four variables the SUBJECT puts on a pane are inherited by every
+  # descendant of a pane it launched, so three tests here went red when — and only when — bats ran
+  # inside a pane this feature created. `arm()` and the file-transport tests key on the ABSENCE of
+  # CC_PANE_CMD, which an ambient value silently supplies. Same fix, same reasoning, fuller account
+  # in tests/handoff-fire-argv-launch.bats's setup.
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_WAIT_S CC_PANE_RUNNER
   KLOG="$BATS_TEST_TMPDIR/kitty.log"
   fake_kitty
 }
