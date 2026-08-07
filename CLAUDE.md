@@ -505,6 +505,35 @@ or nowhere — a close needing paragraphs has buried its own decision point. Cap
    the operator cannot act without the reason first — a `--force`, a destructive flag, a choice
    between two commands. Then one line of why, then the command. Never more than one line of why.
 
+🚨 **Every identifier is expanded at first use in that same message — and a label is never the
+subject of line 1.** A close opened `✅ Wave 1 + Wave 2 complete & live on trunk`, reported "six
+commits landed — M8, S1, S3, S4, S2", and made its one blocking question `G-A is the one thing I
+need from you`. The operator's entire reply was *"What is G-A, how do I give it to you"* — a full
+round-trip spent on vocabulary. The next message answered it in one sentence — *a one-word business
+call: may a new paying customer's database sit on Turso's Fly line? You answer by saying "G-A: yes"
+or "G-A: no"; there is no command to run* — which is what line 1 should have been. Two defects, and
+the second is the load-bearing one:
+
+- **Unexpanded tokens.** `M8 · S1 · S3 · S4 · S2 · R1/R2 · SIN` name nothing to a reader who was not
+  in the session; `R1`/`R2` are worse than jargon, because they are OUR OWN Minto vocabulary
+  (current-state / desired-state, `pyramid-principle-full/sessions/01-define-problem.md`) leaking
+  into an operator-facing close. Expand it, or — where the id carries no meaning to the reader at
+  all, as a plan-section label does — **delete it**: `git log` and the plan file already hold it.
+- **The label doing the answer's job.** *"G-A is the one thing I need from you"* makes the
+  identifier the subject and the decision the predicate — a category, not an idea, which rule 1
+  above already forbids (Ch 7 p. 94). The answer-first form states the decision: *"⛔ One call is
+  yours: may a new paying customer's database sit on Turso's Fly line? Reply yes or no — nothing to
+  run."* A close that must first be asked *"what is that"* has failed the 30-second test before the
+  operator reaches line 2.
+
+**Corollary — a decision you are holding IS the rung, and filing it is what makes it one.** Open it
+the moment you have it (`cc-decide open --class C …`); `wrap-ledger.sh` then computes `⛔` from your
+own session's open class-C packets and it outranks everything. Unfiled, a decision has no git
+footprint, no backlog row and no matched phrase, so every sensor is blind to it and
+`✅ SAFE TO CLOSE — nothing of mine is open` renders underneath it — truthfully, over facts that say
+nothing about a question. That is exactly how a blocking decision ended up in paragraph 4 under a ✅.
+Same law as the operator-only step above: prose is where it gets buried.
+
 **Acceptance — the 30-second test** (Ch 3 p. 29): if the operator cannot get the whole thinking —
 state · what it means · what to do — inside 30 seconds, the close has FAILED. And the defect is in
 the ideas, not the wording (Ch 1 p. 11): restructure it, do not polish it.
