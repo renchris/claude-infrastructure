@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # wrap-ledger.sh — pure-read Session-Close ledger computer (P0-2).
-# Emits the worst-open rung (⛔>📤>🔧>📦>✅) and a --full block from LIVE git/gate/DoD reads
+# Emits the worst-open rung (⛔>📤>🔧>📦>🚀>👤>✅) and a --full block from LIVE git/gate/DoD reads
 # ONLY — never self-report. The load-bearing assertion: committed-but-unlanded ⇒ 📦, NEVER a
 # silent ✅ (the FM1 "park-and-call-it-done" hazard). Absent DoD ⇒ says so out loud, never ✅-silent.
 #
@@ -555,4 +555,92 @@ mk_failed_migration() {
   printf '%s' "$output" | grep -q "^Live layer:"
   printf '%s' "$output" | grep -q "BEHIND"
   printf '%s' "$output" | grep -q "within budget"
+}
+
+# ── 10. LADDER PARITY — a rung the producer can EMIT must reach the docs that ROUTE it ──────────
+#
+# THE DEFECT THIS PINS (backlog 804e832f4283; docs/plans/INERTNESS_FACES_3_4_DELTA.md). Adding the
+# 🚀 rung to this script was ONE edit; teaching every consumer what to DO with it was four more,
+# and they were made by hand, one session apart. Three landed (CLAUDE.md's ladder,
+# hooks/completion-assert.sh, hooks/operator-readout.sh) and one did not: `commands/wrap.md` — the
+# PULL-path renderer — still documented `⛔ > 📤 > 🔧 > 📦 > ✅` and told the reader "if the ledger
+# says 🔧 or 📦, the work is not done". A 🚀 matches neither term, so it fell through as done. That
+# is the FAIL-OPEN direction: the rung built to stop a close asserting `✅ Complete & live on trunk`
+# over a stale live layer was, on that path, invisible.
+#
+# WHY IT LIVES IN *THIS* SUITE and not its own file: scripts/gate-select.sh maps a changed file to
+# `tests/<stem>.bats` by name (`naming()`), so a guard here is GUARANTEED selected the moment
+# wrap-ledger.sh grows a rung — which is the only edit that can create this drift. A separate
+# tests/rung-ladder-parity.bats would ride clause (e)'s token match instead, and be inert exactly
+# when it matters. The other drift direction is covered too: CLAUDE.md and commands/*.md are index
+# files (gate-select.sh:174), so editing them selects FULL.
+#
+# The assertion is emitted ⊆ documented, NOT equality — ⛔ and 📤 are model-state overlays this
+# script cannot derive from git, so they appear in the ladders without ever being emitted here.
+
+# every rung this script can ASSIGN — the producer's own truth, never a hand-kept list
+rungs_emitted() { /usr/bin/grep -o 'RUNG="[^"]*"' "$LEDGER" | sed 's/^RUNG="//; s/"$//' | sort -u; }
+
+# the ONE ladder line in a doc: it carries the priority ordering, so a rung dropped from it is a
+# rung the reader cannot route. Checking the whole FILE would pass vacuously — every one of these
+# docs discusses rungs in prose elsewhere.
+ladder_line() { /usr/bin/grep -n 'priority' "$1" | /usr/bin/grep '⛔'; }
+
+# rungs absent from $1's ladder line, one per line (empty = parity holds)
+missing_from_ladder() {
+  local line r; line="$(ladder_line "$1")"
+  for r in $(rungs_emitted); do
+    case "$line" in *"$r"*) ;; *) printf '%s\n' "$r" ;; esac
+  done
+}
+
+@test "parity: the extractor is not vacuous — it finds every rung this script assigns" {
+  # POSITIVE CONTROL ON THE DENOMINATOR. An extractor that silently returned nothing would make
+  # every parity test below pass while asserting exactly nothing, so pin the SET, not just a count.
+  run rungs_emitted
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c .)" -eq 5 ]
+  local r; for r in '✅' '🔧' '📦' '🚀' '👤'; do
+    printf '%s' "$output" | grep -q "$r" || { echo "extractor lost rung $r"; false; }
+  done
+}
+
+@test "parity: every emitted rung appears in CLAUDE.md's ladder" {
+  run missing_from_ladder "$REPO/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "CLAUDE.md ladder is missing: $output"; false; }
+}
+
+@test "parity: every emitted rung appears in commands/wrap.md's ladder" {
+  run missing_from_ladder "$REPO/commands/wrap.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "commands/wrap.md ladder is missing: $output"; false; }
+}
+
+# ── the controls: a guard that cannot go RED is decoration ───────────────────────────────────────
+# Both replay the REAL doc (copied, then mutated) rather than a hand-written approximation — an
+# approximation passes vacuously and proves nothing about the file that actually ships.
+
+@test "control: dropping 🚀 from a COPY of CLAUDE.md's ladder makes the guard FAIL" {
+  local m="$BATS_TEST_TMPDIR/CLAUDE.md"
+  sed 's/📦 > 🚀 > 👤/📦 > 👤/' "$REPO/CLAUDE.md" > "$m"
+  ! cmp -s "$m" "$REPO/CLAUDE.md" || false # the mutation actually landed
+  run missing_from_ladder "$m"
+  [ "$output" = '🚀' ]
+}
+
+@test "control: dropping 🚀 from a COPY of commands/wrap.md's ladder makes the guard FAIL" {
+  local m="$BATS_TEST_TMPDIR/wrap.md"
+  sed 's/📦 > 🚀 > 👤/📦 > 👤/' "$REPO/commands/wrap.md" > "$m"
+  ! cmp -s "$m" "$REPO/commands/wrap.md" || false
+  run missing_from_ladder "$m"
+  [ "$output" = '🚀' ]
+}
+
+@test "control: the ladder anchor matches EXACTLY ONE line in each doc" {
+  # A `grep` anchor that matched two lines (or zero) would make the checks above read a line that
+  # is not the ladder — the failure mode where a guard is green about the wrong subject.
+  local f; for f in "$REPO/CLAUDE.md" "$REPO/commands/wrap.md"; do
+    [ "$(ladder_line "$f" | grep -c .)" -eq 1 ] || { echo "anchor is not unique in $f"; false; }
+  done
 }
