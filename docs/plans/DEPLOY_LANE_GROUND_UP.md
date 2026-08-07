@@ -28,6 +28,35 @@ integration), so per the global CLAUDE.md it runs as an Agent Team, not a solo l
 T1 gates T2/T3 — do not spawn implementers before the invariant is written down and reviewed.
 Split further if any deliverable exceeds ~500 LOC.
 
+### Phase 0 as ACTUALLY RUN (2026-08-07)
+
+T1 was written and landed **before** `deploy-live.sh` was opened; the commit order is the provenance
+proof (`6b0579c9` invariant → `c3ea951a` violation enumeration). Wave 1 was three read-only
+researchers (archaeology · telemetry · branch-graveyard+seams), whose findings are folded into
+§1.5-§1.9 and materially **revised D1** (see §2.2). Wave 2 is two teammates with disjoint file
+ownership:
+
+| Teammate | Branch / worktree | Owns | Deliverable |
+|---|---|---|---|
+| `t2-guard` | `deploy-lane-t2-guard` · `.worktrees/deploy-lane-t2-guard` | `scripts/deploy-live.sh` · `tests/deploy-live.bats` · `launchd/com.claude.deploy-live.plist` | D1 two-tier target · §1.7 message · D6 dirty-state · D4 plist fallback · 8 RED-controls |
+| `t3-alarm` | `deploy-lane-t3-alarm` · `.worktrees/deploy-lane-t3-alarm` | `bin/cc-blockers` · `tests/cc-blockers.bats` | D2 `deploy-stale` kind · selector registration · runnable `recover_cmd` · 5 RED-controls |
+
+Lead retains: this plan, the merge, the land, and the §2.6c activation script. **D5 (the `cc-do`
+platter) is deliberately unassigned** — it is downstream of T2, so once the lane can advance the
+platter becomes runnable on its own. Re-verify after the merge rather than fixing it twice.
+
+**Spawn-API note (2.1.220):** teammates are `Agent({name})` with **no** `team_name` (it does not
+exist on this runtime) and **no** `isolation` — passing `isolation` alongside `name` silently demotes
+the spawn to an in-process subagent with no pane and no error, so the worktree is handed over as a
+**path in the brief** instead.
+
+### Material received mid-flight from the originating lag investigation
+
+- **`docs/plans/MACHINE_CAPACITY_V2.md` §12.7.7 "LANDED ≠ LIVE"** documented this identical deadlock on **2026-07-31 at 75 commits behind**, quoting both refusal messages, and named memory `verify-throughput-below-trunk-velocity`. Verified on disk. That makes the divergence series **75 (07-31) → 85 (08-06) → 87 (08-07 07:57Z) → 91 (08-07 08:15Z)** across four independent reads — monotone, and re-confirmed twice inside this session.
+- That plan (1655 lines, `status: open`, ground-up row 13) owns the **resource-governance** half — frozen scope 30 concurrent sessions, standing constraint *"the caller cannot be trusted"*. **Not re-derived here; out of this rebuild's scope.**
+- **`bin/cc-bats`** was built 2026-07-30 (21,656 B) and no `CLAUDE.md` routes any caller to it — built-but-unrouted, i.e. inert. Noted, not in scope.
+- The investigation's implication, which this plan accepts: the deploy lane is **why every fix landed since 07-31 is inert**, so Step 0 is the value rather than a precondition. Corroborated independently here: **45 of 309** live-present tracked files differ in content from `origin/main`.
+
 ---
 
 ## The defect, as measured (2026-08-06)
