@@ -166,8 +166,42 @@ trap '_forward INT'  INT
 trap '_forward TERM' TERM
 trap '_forward HUP'  HUP
 
-{ exec "$REAL_BIN" "$@" 2> >(tee -a "$CAPTURE" >&2); } <&0 &
+# The tee is created HERE, as an ordinary background job reading an explicit FIFO — not as the
+# inline `2> >(tee …)` procsub. Two load-bearing properties the procsub form lacked (both
+# measured 2026-08-07, the load-781 incident):
+#   (a) A HANDLE. The tee must DIE when this wrapper is done: its stdin is inherited by every
+#       process the session ever backgrounds, so a binary that dies leaving even one orphan
+#       keeps tee EOF-less forever — 43 of 59 wrappers were lingering beside their dead session
+#       (S+ up to 10h), each pinning a tee + its pipeline's zombies via the capture chain. A
+#       procsub's pid is unreachable: it forks under the background brace-group (a pid that
+#       exec's away, so `pkill -P $$` misses — tried), and `$!` after `exec 9> >(tee …)` names
+#       the previous job, not the tee (also tried — the tee survived both). A plain `tee … &`
+#       makes `$!` unambiguous, and the exact-pid kill after write_record (below) is the reap.
+#   (b) PARSE SAFETY. This spelling is plain POSIX fds + mkfifo, so /bin/bash 3.2 (the launchd
+#       minimal-PATH resolution of `env bash`) parses the file and still reaches the fail-open
+#       gates above.
+# FIFO open order is deadlock-free by construction: tee's `< FIFO` blocks for a writer, our
+# `exec 9>` blocks for a reader, and each is the other's counterpart. The name is unlinked the
+# moment both ends are open — the pipe then lives purely on fds, so a hard-killed wrapper
+# leaves no filesystem litter.
+TEE_PID=""
+TEE_FIFO="$(mktemp -u "${CAPTURE}.fifo.XXXXXX" 2>/dev/null)" || TEE_FIFO=""
+if [[ -n "$TEE_FIFO" ]] && mkfifo -m 600 "$TEE_FIFO" 2>/dev/null; then
+  tee -a "$CAPTURE" >&2 < "$TEE_FIFO" &
+  TEE_PID=$!
+  exec 9> "$TEE_FIFO"
+  rm -f "$TEE_FIFO" 2>/dev/null || true
+else
+  # No FIFO ⇒ no capture (fail-open, the file's hard rule) — fd 9 still must be a sink so the
+  # child spawn below is shape-identical on both branches.
+  exec 9> /dev/null
+fi
+
+{ exec "$REAL_BIN" "$@" 2>&9; } <&0 &
 child=$!
+# Drop the wrapper's own copy of the write end at once: the holders of record are the child and
+# whatever it spawns — exactly the procsub form's fd topology, minus an fd this process never uses.
+exec 9>&-
 
 # ── hard-link the live capture to its durable, watchdog-joinable name. Only now is $child
 #    (== LEAD_PID) known, and `ln` leaves tee's own path untouched, so there is no race: both
@@ -219,4 +253,10 @@ if [[ -n "$STDERR_LOG" ]]; then
   { ls -1t "$STDERR_DIR"/*.log 2>/dev/null | tail -n +$((STDERR_KEEP + 1)) \
       | while IFS= read -r _old; do rm -f "$_old" 2>/dev/null || true; done; } || true
 fi
+
+# ── reap our own tee BEFORE exiting (see the spawn block for why we hold its exact pid). The
+#    record is written and the capture disposed above; anything the dead session's orphans write
+#    to fd2 after this point is noise by definition. Exact-pid, never a pattern; best-effort —
+#    an empty TEE_PID (bash 3.2) costs a lingering tee, exactly the pre-fix behaviour. ─────────
+[[ -n "$TEE_PID" ]] && kill -TERM "$TEE_PID" 2>/dev/null || true
 exit "$code"
