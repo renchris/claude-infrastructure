@@ -12,9 +12,24 @@
 # rebase/cherry-pick that preserves the tree keeps its verdict). Written by postland-verify.sh.
 #
 # Behavior: UNCONDITIONAL link refresh (see link_refresh — monotone, so it is never nested in the
-# advance) → fetch origin/main → walk it newest-first → first GREEN commit = TARGET →
+# advance) → fetch origin/main → TARGET SELECTION (three tiers, below) →
 # `merge --ff-only TARGET` (never origin/main) → run install.sh (idempotent) → POST-DEPLOY HOST
 # CHECKS (§4.3) → report the un-stamped commits still queued above the deployed tip.
+#
+# TARGET SELECTION IS TWO-TIER WITH A BLOCKED FLOOR (DEPLOY_LANE_GROUND_UP §2.2). A single
+# green-only tier deadlocks BY CONSTRUCTION: the verifier emits 0.17 greens/day while trunk moves
+# ~63 commits/day, so the green pointer permanently LAGS, and the moment any other writer advances
+# live HEAD past it (~/.claude is per-file symlinks, so every land does) the target is history and
+# this script refuses forever. Measured 2026-08-07: 534 identical refusals, launchd runs=276 every
+# one exit 1, live layer 91 commits stale, ZERO pages. The green gate is NOT deleted — it answers a
+# named incident (the raw `git pull --ff-only` above) — it is given a DEGRADATION PATH:
+#   T1 VERIFIED  newest GREEN tree that is a DESCENDANT of live HEAD → advance, silent (unchanged)
+#   T2 DEGRADED  T1 empty AND lag past budget → newest commit above live HEAD carrying no RED
+#                stamp → advance under a LOUD banner + a page recording the unverified advance
+#   T3 BLOCKED   every commit above live HEAD is RED → refuse + page ("trunk is red all the way
+#                down" is real information; the old single tier could not tell it from "no stamps")
+# Stamp semantics under T2, applying R6 where the land path already honors it: absent ⇒ eligible ·
+# cut/hung ⇒ eligible (a NON-VERDICT is not a red) · red ⇒ ineligible, walk back one commit.
 #
 # --auto (LAND_PIPELINE_V2 §4.3) makes the same fail-closed decision AUTONOMOUSLY, on a launchd
 # tick every 600s. Three deltas, all of them consequences of running 144×/day unattended:
@@ -41,6 +56,9 @@
 # --bootstrap (stamps dir ABSENT: deploy the tip unstamped, loud banner) · --force (same, with
 # stamps present — documented escape hatch).
 # Env: DEPLOY_REPO · CC_POSTLAND_DIR · CC_POSTLAND_BIN · CC_PAGES_DIR · CC_DEPLOY_SCAN ·
+#      CC_DEPLOY_MAX_LAG_COMMITS (25) / CC_DEPLOY_MAX_LAG_HOURS (6) — the T2 budget, whichever
+#      trips FIRST · CC_DEPLOY_DEGRADE (on; off|0|no|false ⇒ T2 disabled = the strict green-only
+#      gate, i.e. exactly the pre-2026-08-07 behaviour, freeze included) ·
 #      CC_DEPLOY_DAMP_S · CC_HOST_MANIFEST · CC_DEPLOY_HOST_TIMEOUT_S · CC_BACKLOG_BIN ·
 #      CC_DEPLOY_BATS_BIN / CC_DEPLOY_TIMEOUT_BIN (UNSET ⇒ resolved; SET-EMPTY ⇒ disabled) ·
 #      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off).
@@ -53,6 +71,15 @@ STAMPS_DIR="$POSTLAND_DIR/stamps"
 POSTLAND_BIN="${CC_POSTLAND_BIN:-$DEPLOY_REPO/scripts/postland-verify.sh}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 SCAN_N="${CC_DEPLOY_SCAN:-200}"
+# T2's authorisation, and its kill switch. A budget of 0 is NOT "disabled" — it means "degrade the
+# moment there is any lag at all"; turning T2 off entirely is CC_DEPLOY_DEGRADE, one switch with one
+# job. `off` is the documented spelling; the other three are accepted because a kill switch that
+# silently ignores `=0` is a trap, and this one is the only way back to the strict green-only gate.
+MAX_LAG_COMMITS="${CC_DEPLOY_MAX_LAG_COMMITS:-25}"
+MAX_LAG_HOURS="${CC_DEPLOY_MAX_LAG_HOURS:-6}"
+DEGRADE="${CC_DEPLOY_DEGRADE:-on}"
+case "$MAX_LAG_COMMITS" in ''|*[!0-9]*) MAX_LAG_COMMITS=25 ;; esac
+case "$MAX_LAG_HOURS"   in ''|*[!0-9]*) MAX_LAG_HOURS=6 ;; esac
 DAMP_FILE="$POSTLAND_DIR/deploy-auto.damp"
 DAMP_WINDOW_S="${CC_DEPLOY_DAMP_S:-86400}"
 MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
@@ -141,6 +168,25 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
     return 1
   fi
   grep -qE '"verdict"[[:space:]]*:[[:space:]]*"green"' "$1" 2>/dev/null
+}
+
+# T2's eligibility test, and deliberately NOT `! is_green` — the two are not complements. Only an
+# explicit "red" verdict is disqualifying: an ABSENT stamp is the common case (the verifier emits
+# 0.17 greens/day, so most trees are simply unjudged) and a `cut`/`hung` stamp is a NON-VERDICT
+# about the machine, never a claim about the tree — R6, the same rule host_checks applies below.
+# An unparseable stamp lands here too, and lands as eligible: a stamp we cannot read has not
+# claimed anything. Kept as a second function rather than folded into a shared verdict-reader
+# because is_green sits on the DEFAULT path and rewriting it to serve this one would put the whole
+# green gate at risk for a caller that runs only past the budget.
+is_red() { # <stamp-file>
+  [ -f "$1" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+try: sys.exit(0 if json.load(open(sys.argv[1])).get("verdict")=="red" else 1)
+except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
+    return 1
+  fi
+  grep -qE '"verdict"[[:space:]]*:[[:space:]]*"red"' "$1" 2>/dev/null
 }
 
 # ── post-deploy HOST checks (§4.3) ───────────────────────────────────────────────────────────────
@@ -328,7 +374,30 @@ HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
 TIP_SHA="$(g rev-parse origin/main 2>/dev/null || true)"
 [ -n "$HEAD_SHA" ] && [ -n "$TIP_SHA" ] || die "cannot resolve HEAD / origin/main in $DEPLOY_REPO"
 
-TARGET=""; UNSTAMPED=0; BANNER=""
+# ── STALENESS, measured on BOTH axes before any tier decides (§2.3) ───────────────────────────────
+# Commits = how far the live layer trails trunk. Hours = the age of the commit the live layer is ON,
+# which is the only clock that keeps ticking when trunk is quiet. Whichever exceeds its budget first
+# authorises T2. Both are read here, unconditionally, so every refusal page can state them even when
+# the budget is nowhere near tripping — the old refusals named a reason and never a magnitude.
+LAG_COMMITS="$(g rev-list --count "$HEAD_SHA..origin/main" 2>/dev/null || echo 0)"
+case "$LAG_COMMITS" in ''|*[!0-9]*) LAG_COMMITS=0 ;; esac
+_head_ts="$(g log -1 --format=%ct "$HEAD_SHA" 2>/dev/null || echo 0)"
+_now="$(date +%s 2>/dev/null || echo 0)"
+case "$_head_ts" in ''|*[!0-9]*) _head_ts=0 ;; esac
+case "$_now"     in ''|*[!0-9]*) _now=0 ;; esac
+LAG_HOURS=0
+[ "$_head_ts" -gt 0 ] && [ "$_now" -gt "$_head_ts" ] && LAG_HOURS=$(( (_now - _head_ts) / 3600 ))
+# LAG_TRIP carries the boolean AND the reason in one value: empty ⇒ inside the budget. A degraded
+# advance must be able to say WHICH clock authorised it, or the banner is an assertion with no
+# evidence attached to it.
+LAG_TRIP=""
+if [ "$LAG_COMMITS" -gt "$MAX_LAG_COMMITS" ]; then
+  LAG_TRIP="$LAG_COMMITS commit(s) behind trunk (budget $MAX_LAG_COMMITS)"
+elif [ "$LAG_HOURS" -gt "$MAX_LAG_HOURS" ]; then
+  LAG_TRIP="${LAG_HOURS}h since the live commit was authored (budget ${MAX_LAG_HOURS}h)"
+fi
+
+TARGET=""; UNSTAMPED=0; BANNER=""; TIER=""; GREEN_SHA=""; RED_WALKED=0
 if [ ! -d "$STAMPS_DIR" ]; then
   # The verification net is not active yet. Deploying is a decision, not a default.
   if [ "$BOOTSTRAP" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
@@ -353,29 +422,92 @@ if [ ! -d "$STAMPS_DIR" ]; then
 elif [ "$FORCE" -eq 1 ]; then
   TARGET="$TIP_SHA"; BANNER="UNSTAMPED --force deploy — green-stamp gate BYPASSED by the operator"
 else
+  # ── T1 · VERIFIED — the default path, and the only tier that is allowed to be silent ────────────
   scanned=0
   while IFS= read -r sha; do
     [ -n "$sha" ] || continue
     tree="$(g rev-parse "$sha^{tree}" 2>/dev/null || true)"
-    if [ -n "$tree" ] && is_green "$STAMPS_DIR/$tree.json"; then TARGET="$sha"; UNSTAMPED="$scanned"; break; fi
+    if [ -n "$tree" ] && is_green "$STAMPS_DIR/$tree.json"; then
+      [ -n "$GREEN_SHA" ] || GREEN_SHA="$sha"    # newest green, deployable or not — the DIAGNOSIS
+      # The ancestry test belongs HERE and not only at the anti-rollback guard below. A green tree
+      # BEHIND live HEAD is history, not lag — bin/cc-blockers:425 says exactly that in its own
+      # comment — so selecting it as TARGET only to be refused 60 lines later is what turned a
+      # transient miss into an ABSORBING state: the same target, refused identically, 534 times.
+      if g merge-base --is-ancestor "$HEAD_SHA" "$sha" >/dev/null 2>&1; then
+        TARGET="$sha"; UNSTAMPED="$scanned"; TIER=T1; break
+      fi
+    fi
     scanned=$((scanned + 1))
   done <<EOF
 $(g rev-list "origin/main" -n "$SCAN_N" 2>/dev/null)
 EOF
+
+  if [ -z "$TARGET" ]; then
+    # T1 missed, in one of two states. WHICH one is a diagnosis for the page and the operator; the
+    # policy below is identical either way, so the tier logic never branches on it again.
+    RSTEM="deploy-blocked"
+    if [ -n "$GREEN_SHA" ]; then
+      RKEY="green-behind:${GREEN_SHA:0:12}"
+      RMSG="no GREEN tree is a DESCENDANT of live HEAD ${HEAD_SHA:0:12} (the newest one, ${GREEN_SHA:0:12}, is BEHIND it — deploying that would report a deploy that never happened)"
+    else
+      RKEY="no-green:$STAMPS_DIR"
+      RMSG="no GREEN stamp among the newest $SCAN_N commits of origin/main"
+    fi
+
+    # ── T2 · DEGRADED — authorised by the LAG, never by the reason ────────────────────────────────
+    # Three preconditions, and the third is not redundant: with LAG_COMMITS=0 there is nothing above
+    # live HEAD to degrade TO, while LAG_HOURS keeps climbing on a quiet trunk — so without it the
+    # hours budget would fire forever against an empty candidate list and report T3's "trunk is red
+    # all the way down" about a trunk that is simply already deployed.
+    if [ "$LAG_COMMITS" -gt 0 ] && [ -n "$LAG_TRIP" ]; then
+      case "$DEGRADE" in
+        off|OFF|0|no|NO|false|FALSE) : ;;   # the kill switch: strict green-only gate, freeze included
+        *)
+          # Bounded to HEAD..origin/main, so the walk cannot step below the live layer and re-propose
+          # history as a target. Every candidate here is above live HEAD by construction; the
+          # anti-rollback guard below still runs, because "above" is not "descendant" if HEAD ever
+          # diverges from trunk.
+          while IFS= read -r sha; do
+            [ -n "$sha" ] || continue
+            tree="$(g rev-parse "$sha^{tree}" 2>/dev/null || true)"
+            if [ -n "$tree" ] && is_red "$STAMPS_DIR/$tree.json"; then
+              RED_WALKED=$((RED_WALKED + 1)); continue      # walk back one commit
+            fi
+            TARGET="$sha"; TIER=T2; break
+          done <<EOF
+$(g rev-list "$HEAD_SHA..origin/main" -n "$SCAN_N" 2>/dev/null)
+EOF
+          if [ -n "$TARGET" ]; then
+            BANNER="DEGRADED deploy — $RMSG; taking the newest NOT-RED commit instead, authorised by $LAG_TRIP"
+          else
+            # ── T3 · BLOCKED ──
+            RSTEM="deploy-trunk-red"
+            RKEY="trunk-red:${TIP_SHA:0:12}"
+            RMSG="every one of the $RED_WALKED commit(s) above live HEAD carries a RED stamp — trunk is red all the way down"
+          fi
+          ;;
+      esac
+    fi
+  fi
+
   if [ -z "$TARGET" ]; then
     # Under --auto this refusal is damped on the REASON, not the tip: a moving tip with no green
     # is one persistent state, and keying the page on the tip would mint a fresh page per land.
-    if [ "$AUTO" -eq 1 ] && ! damp_ok "no-green:$STAMPS_DIR"; then exit 1; fi
+    if [ "$AUTO" -eq 1 ] && ! damp_ok "$RKEY"; then exit 1; fi
     if [ "$DRY_RUN" -eq 0 ]; then
       mkdir -p "$PAGES_DIR" 2>/dev/null || true
-      pf="$PAGES_DIR/deploy-blocked-$(printf '%.12s' "$TIP_SHA").page"
+      pf="$PAGES_DIR/$RSTEM-$(printf '%.12s' "$TIP_SHA").page"
       { date +%s
-        printf 'deploy-live BLOCKED: no GREEN stamp in the newest %s commits of origin/main (tip %.12s)\n' "$SCAN_N" "$TIP_SHA"
+        printf 'deploy-live BLOCKED: %s (tip %.12s)\n' "$RMSG" "$TIP_SHA"
+        # The magnitude, on every refusal. A refusal that names only its reason cannot be told from
+        # a healthy pause, which is how 534 of them read as normal for 33h.
+        printf 'lag: %s commit(s) / %sh · degrade budget %s commit(s) / %sh · CC_DEPLOY_DEGRADE=%s\n' \
+          "$LAG_COMMITS" "$LAG_HOURS" "$MAX_LAG_COMMITS" "$MAX_LAG_HOURS" "$DEGRADE"
         printf 'the live layer is FROZEN until a tree verifies green. stamps=%s verifier=%s\n' "$STAMPS_DIR" "$POSTLAND_BIN"
       } > "$pf" 2>/dev/null || true
       say "wrote page $pf"
     fi
-    die "no GREEN stamp among the newest $SCAN_N commits of origin/main — nothing is safe to deploy (verifier: $POSTLAND_BIN)"
+    die "$RMSG — nothing is safe to deploy (verifier: $POSTLAND_BIN)"
   fi
 fi
 
@@ -388,8 +520,15 @@ if [ "$TARGET" = "$HEAD_SHA" ]; then
   asay "already deployed — live layer is at the newest deployable commit ${HEAD_SHA:0:12} ($UNSTAMPED un-stamped commit(s) above)"
   exit 0
 fi
+# THE GUARD AND ITS CONDITION ARE UNCHANGED; ONLY ITS CLAIM IS. MEASURED 2026-08-07 in a throwaway
+# repo: when this test fails, TARGET is an ANCESTOR of live HEAD, and `git merge --ff-only <ancestor>`
+# returns "Already up to date." with EXIT 0 — it cannot roll anything back, so "this would ROLL BACK
+# the live layer" was never true. What the guard actually prevents is the lane taking that exit 0 and
+# reporting `deployed X → Y`, running install.sh, running the host checks and filing a backlog item,
+# ALL against a tree that never moved. It buys TRUTHFULNESS, not safety — which is also why it is
+# kept: removing it risks the lane lying about a deploy, not losing work.
 g merge-base --is-ancestor "$HEAD_SHA" "$TARGET" >/dev/null 2>&1 || \
-  die "target ${TARGET:0:12} is not a descendant of live HEAD ${HEAD_SHA:0:12} — this would ROLL BACK the live layer"
+  die "target ${TARGET:0:12} is not a descendant of live HEAD ${HEAD_SHA:0:12} — --ff-only would exit 0 WITHOUT moving the tree, so the lane would report a deploy that NEVER HAPPENED"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   [ -n "$BANNER" ] && say "!! $BANNER"
@@ -459,6 +598,19 @@ if ! g merge --ff-only "$TARGET" >/dev/null 2>&1; then
   die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with BOTH named causes RULED OUT (no dirty tracked path inside the advance's own path set; HEAD carries no commit missing from trunk) — read \`git -C $DEPLOY_REPO status\` by hand"
 fi
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"
+
+# T2 only: the page records that an UNVERIFIED advance OCCURRED, and is written AFTER the merge so
+# it can never claim one that did not. Sha-keyed and overwritten, like every per-deploy page here.
+if [ "$TIER" = T2 ]; then
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  { date +%s
+    printf 'deploy-live DEGRADED advance: %.12s → %.12s — NO green-verified tree was deployable\n' "$HEAD_SHA" "$TARGET"
+    printf 'authorised by: %s\n' "$LAG_TRIP"
+    printf 'the deployed tree carries no RED stamp, but nothing vouches for it GREEN. stamps=%s\n' "$STAMPS_DIR"
+    printf 'walked back past %s RED-stamped commit(s) to reach it.\n' "$RED_WALKED"
+    printf 'kill switch: CC_DEPLOY_DEGRADE=off restores the strict green-only gate (and its freeze).\n'
+  } > "$PAGES_DIR/deploy-degraded-$(printf '%.12s' "$TARGET").page" 2>/dev/null || true
+fi
 
 if [ -x "$DEPLOY_REPO/install.sh" ]; then
   "$DEPLOY_REPO/install.sh" >/dev/null 2>&1 || die "merged ${TARGET:0:12} but install.sh FAILED — re-run $DEPLOY_REPO/install.sh by hand"
