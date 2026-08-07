@@ -98,6 +98,28 @@ under current load — expect refusals, never work around.
   resolution; `1b5ff79a` diff.
 - Branch graveyard sweep (both commands) before building anything.
 
+## Scope (grown)
+
+- **+D7 desk-arm ownership trapdoor** (peer finding from 247, 02:01Z, VERIFIED in source): the
+  1b5ff79a kitty anchor picker's `pick()` takes the `desk` hint UNCONDITIONALLY
+  (`handoff-fire.sh:4724-4727`) — `agent_owned()` gates only the fallback walk (`:4733`). Any
+  future `cc-roles/desk` pointing at a live operator pane re-arms the pane-theft class silently
+  (an operator kitty id passes the isdigit identity guard `:4685`). Remedy chosen: **decouple the
+  role's two uses** — desk stays a valid NOTIFY receiver whatever its ownership, but the ANCHOR use
+  requires `agent_owned(desk)`; on failure, LOUD stderr demotion line + fall through to the gated
+  walk (which can only ever return agent-owned or refuse — safe by construction). The exit-3
+  identity guard is untouched (cross-terminal ids are corruption, not a receiver/anchor split).
+  Owner: LEAD, sequential after t1-hfalarm's merge (same file). Constraint-6 note: if any of the
+  46 tests pins the unconditional desk take, that test pins the trapdoor — amend WITH a mutation
+  control and this justification (stale-assertion-inverts law: the side with the incident wins).
+  Until this lands, cc-roles MUST stay empty (247 has told the operator so).
+- **+D8 numeric pane-id resolution gap** (hit live, confirmed by 247 both ways): `cc-notify 247`
+  → `verdict=unresolvable reason=no-such-target` while `--list` shows the session live; only the
+  NAME form (`lakehouse-lecture-247`) resolves. Every fired brief's back-channel recipe says
+  `cc-notify <number>` — the fleet's completion pings are one registry-shape away from silent
+  drop (this rebuild's exact class). Disposition: verify resolver size at lead-integration time;
+  fix if ≤~15 clean lines + test, else `cc-backlog add` with the exact evidence.
+
 ## Phase 1 findings — lead's own reads (2026-08-07)
 
 **The lattice is far richer than the brief's §3 — and the break is at exactly ONE point.**
