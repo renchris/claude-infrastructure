@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""cc-where — which physical screen is that Claude Code session on, and how do I reach it?
+
+THE DEFECT THIS CLOSES (measured 2026-08-07, operator incident)
+    A live session became unfindable without ever being destroyed. Two of them, in fact:
+    `Investigate hidden panes in Kitty Terminal` and `Investigate lakehouse-lecture session
+    crash and prevent data loss`. Both were idle, healthy, and rendering zero pixels.
+
+    kitty draws exactly ONE tab per OS window. At the time of the incident 9 of 21 session
+    panes sat in non-active tabs. That alone would be survivable — you would switch tabs and
+    find them — except kitty's default `tab_title_template` labels a tab with its ACTIVE
+    pane's title ONLY. So tab 4 advertised "Fix shared repo checkpoint overflow in
+    teammate-checkpoint.sh" while silently holding three other sessions. Nothing anywhere on
+    screen said the session the operator was hunting for existed. It was invisible AND
+    unnamed, which is indistinguishable from deleted.
+
+    Spread that over four OS windows on four physical displays and eyeballing is hopeless.
+    That is the gap: there was no way to ask "where is it" — only to look.
+
+WHY THIS IS A SEPARATE BINARY AND NOT A VERB ON AN EXISTING ONE
+    `cc-sessions` lists REGISTRY rows (name/uuid/account/age/cwd) — it knows a session exists,
+    not where it is drawn. `cc-pane` is the it2-era spawn/address/send/close driver. Neither
+    models "is this on screen right now". `kitty-pane-menu` is the closest relative and its
+    `window_screen_positions()` is the prior art reused below, but its job is choosing a MOVE
+    TARGET, not finding a lost session. Nothing answers the operator's actual question, so
+    this does — and it is deliberately NOT called `cc-panes`, one letter off `cc-pane`.
+
+DESIGN RULE — a lookup miss is not absence
+    `--go` refuses on 0 matches and refuses on >1, naming the candidates. It never picks one.
+    Focusing "some" pane is precisely how you lose the other one, which is the bug.
+    And it verifies BY CONTENT afterwards: `kitty @ focus-window` exits 0 on a window it
+    matched but could not actually raise, so the exit code alone proves nothing.
+"""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+
+# Below this a Claude Code TUI is present but not usable — the composer truncates and the
+# readout tables wrap into noise. Measured against the real client, not guessed: the incident
+# tab had panes at 24 and 36 columns and the operator could not read any of them.
+READABLE_COLS = 80
+
+# Explicit truecolor, never SGR-2 dim: this output is data the operator is hunting through.
+C = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "on": "\033[38;2;107;243;133m",      # green  — on screen and readable
+    "off": "\033[38;2;255;107;107m",     # red    — off screen entirely
+    "narrow": "\033[38;2;255;217;89m",   # yellow — on screen but squeezed
+    "head": "\033[38;2;138;180;248m",
+    "meta": "\033[38;2;150;150;160m",
+}
+
+
+def _kitty() -> str:
+    for name in ("kitty", "kitten"):
+        p = shutil.which(name)
+        if p:
+            return p
+    sys.exit("cc-where: kitty not on PATH")
+
+
+def ls_tree() -> list:
+    r = subprocess.run([_kitty(), "@", "ls"], capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        sys.exit(f"cc-where: kitty @ ls failed ({r.returncode}): {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
+def screen_positions() -> dict[str, tuple[float, float, float, float]]:
+    """macOS window title -> (x, y, w, h) for every kitty OS window, via System Events (JXA).
+
+    DUPLICATED, DELIBERATELY, from kitty-pane-menu.window_screen_positions(). That file is
+    owned by the move-menu work and is edited from other sessions; importing a sibling CLI
+    script would couple this tool to its module-level `__file__` setup and break silently when
+    it changes. Twenty-five lines of JXA is the cheaper coupling. Size is added here because
+    it is what distinguishes the 1728x974 built-in display from a 2560x1440 external.
+
+    Returns {} on ANY failure — most commonly the Accessibility permission not being granted
+    (kitty-setup.sh step 6, GUI-only). Degrades to no location labels, never blocks the census.
+    """
+    script = (
+        'var se = Application("System Events");\n'
+        'var wins = se.processes["kitty"].windows();\n'
+        'var out = [];\n'
+        'for (var i = 0; i < wins.length; i++) {\n'
+        '  try {\n'
+        '    var w = wins[i]; var p = w.position(); var s = w.size();\n'
+        '    out.push(w.name() + "\\t" + p[0] + "\\t" + p[1] + "\\t" + s[0] + "\\t" + s[1]);\n'
+        '  } catch (e) {}\n'
+        '}\n'
+        'out.join("\\n");\n'
+    )
+    try:
+        r = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        try:
+            out[parts[0]] = (float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]))
+        except ValueError:
+            continue
+    return out
+
+
+def _ordinal(n: int) -> str:
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+
+
+def location_labels(tree: list) -> dict[int, str]:
+    """kitty os-window id -> "2nd from left · 2560x1440". Same ordinal vocabulary as
+    kitty-pane-menu's move targets, on purpose: the operator should learn ONE way of naming a
+    physical window, not two that disagree.
+
+    Keying is by macOS window title, which kitty sets from the ACTIVE pane of the ACTIVE tab.
+    Two OS windows can therefore carry the same title (two panes both titled "Claude Code" is
+    routine here). An ambiguous title labels NEITHER window rather than mislabelling one —
+    a wrong location sends the operator to the wrong display, which is worse than no label.
+    """
+    positions = screen_positions()
+    if not positions:
+        return {}
+
+    expected: dict[int, str] = {}
+    for osw in tree:
+        tabs = osw.get("tabs", [])
+        tab = next((t for t in tabs if t.get("is_active")), tabs[0] if tabs else None)
+        if not tab or not tab.get("windows"):
+            continue
+        wins = tab["windows"]
+        # is_active = active WITHIN its tab, which is what kitty puts in the macOS window
+        # title. is_focused is global and true for at most one window on the whole desktop, so
+        # keying on it left every unfocused OS window unlabelled — and because the ordinals
+        # were then computed over the surviving subset, the labels that DID render were wrong
+        # ("3rd from left" for a window that is 4th of 4).
+        w = next((x for x in wins if x.get("is_active")), None) \
+            or next((x for x in wins if x.get("is_focused")), wins[0])
+        expected[osw["id"]] = w.get("title") or ""
+
+    seen: dict[str, int] = {}
+    for title in expected.values():
+        seen[title] = seen.get(title, 0) + 1
+
+    pts = [
+        (oid, positions[t])
+        for oid, t in expected.items()
+        if t in positions and seen[t] == 1
+    ]
+    if len(pts) < 2:
+        return {}
+
+    xs = [p[1][0] for p in pts]
+    ys = [p[1][1] for p in pts]
+    horizontal = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+    axis, word = (0, "left") if horizontal else (1, "top")
+    ordered = sorted(pts, key=lambda p: p[1][axis])
+    return {
+        oid: f"{_ordinal(i + 1)} from {word} · {int(pt[2])}x{int(pt[3])}"
+        for i, (oid, pt) in enumerate(ordered)
+    }
+
+
+def panes(tree: list) -> list[dict]:
+    """Flatten the tree, deciding for each pane whether it is actually DRAWN.
+
+    TWO independent ways a live pane renders zero pixels, and a census that models only the
+    first is exactly as useless as no census — it reports the lost session as visible:
+
+      1. TAB OCCLUSION — its tab is not the active tab of its OS window.
+      2. STACK LAYOUT — its tab IS active, but the tab is in `stack`, which draws only the
+         tab's active window and hides the rest full-size behind it. This is the mechanism
+         behind the 2026-08-07 incident: kitty.conf binds cmd+shift+enter to
+         `toggle_layout stack`, which is ALSO the chord the operator presses for a newline in
+         the Claude Code composer. One mis-keystroke zooms one pane and every other session in
+         that tab disappears. kitty reports every stacked pane at FULL width, so width alone
+         cannot distinguish "wide and visible" from "wide and buried".
+    """
+    rows = []
+    for osw in tree:
+        for tab in osw["tabs"]:
+            tab_visible = bool(tab.get("is_active"))
+            stacked = tab.get("layout") == "stack"
+            for w in tab["windows"]:
+                top_of_stack = bool(w.get("is_active"))
+                drawn = tab_visible and (top_of_stack if stacked else True)
+                if not tab_visible:
+                    hidden_by = "tab"
+                elif stacked and not top_of_stack:
+                    hidden_by = "stack"
+                else:
+                    hidden_by = ""
+                rows.append(
+                    {
+                        "oswin": osw["id"],
+                        "tab": tab["id"],
+                        "tab_panes": len(tab["windows"]),
+                        "tab_layout": tab.get("layout", ""),
+                        "win": w["id"],
+                        "pid": w.get("pid"),
+                        "title": w.get("title", ""),
+                        "cwd": w.get("cwd", ""),
+                        "cols": w.get("columns", 0),
+                        "on_screen": drawn,
+                        "hidden_by": hidden_by,
+                        "focused": bool(w.get("is_focused")),
+                    }
+                )
+    return rows
+
+
+def _state(r: dict) -> tuple[str, str]:
+    if not r["on_screen"]:
+        return C["off"], "off"
+    if r["cols"] < READABLE_COLS:
+        return C["narrow"], "narrow"
+    return C["on"], "on"
+
+
+def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> int:
+    labels = location_labels(tree)
+    shown = subset if subset is not None else rows
+
+    n_off = sum(1 for r in rows if not r["on_screen"])
+    n_narrow = sum(1 for r in rows if r["on_screen"] and r["cols"] < READABLE_COLS)
+    print(
+        f"{C['bold']}{len(rows)} panes{C['reset']} · "
+        f"{C['off']}{n_off} off-screen{C['reset']} · "
+        f"{C['narrow']}{n_narrow} squeezed under {READABLE_COLS} cols{C['reset']}"
+    )
+    print()
+
+    if not shown:
+        print("no pane matches.")
+        return 1
+
+    groups: dict[tuple[int, int], list[dict]] = {}
+    for r in shown:
+        groups.setdefault((r["oswin"], r["tab"]), []).append(r)
+
+    last_osw = None
+    for (osw, tab), group in sorted(groups.items()):
+        if osw != last_osw:
+            ntabs = sum(len(o["tabs"]) for o in tree if o["id"] == osw)
+            where = labels.get(osw, "position unknown")
+            print(f"{C['head']}▸ {where}{C['reset']}  {C['meta']}kitty window {osw} · {ntabs} tabs{C['reset']}")
+            last_osw = osw
+        g0 = group[0]
+        tab_drawn = any(r["on_screen"] for r in group) or g0["hidden_by"] != "tab"
+        mark = f"{C['on']}ON SCREEN {C['reset']}" if tab_drawn else f"{C['off']}OFF SCREEN{C['reset']}"
+        zoom = ""
+        if g0["tab_layout"] == "stack" and g0["tab_panes"] > 1:
+            zoom = f"  {C['off']}ZOOMED — {g0['tab_panes'] - 1} pane(s) buried underneath{C['reset']}"
+        print(f"   tab {tab:<4} {mark} {C['meta']}{g0['tab_panes']} panes{C['reset']}{zoom}")
+        for r in group:
+            col, _ = _state(r)
+            star = "*" if r["focused"] else " "
+            why = f"  {C['off']}[hidden by {r['hidden_by']}]{C['reset']}" if r["hidden_by"] else ""
+            print(
+                f"     {star} {col}{r['cols']:>4}c{C['reset']} "
+                f"{C['meta']}win {r['win']:<5}{C['reset']} {r['title'][:64]}{why}"
+            )
+        print()
+
+    if n_off and subset is None:
+        print(f"{C['meta']}reach one:  cc-where --go \"<part of its title>\"{C['reset']}")
+    return 0
+
+
+def go(rows: list[dict], query: str) -> int:
+    try:
+        pat = re.compile(query, re.I)
+    except re.error as e:
+        print(f"cc-where: bad pattern {query!r}: {e}", file=sys.stderr)
+        return 64
+    hits = [r for r in rows if pat.search(r["title"])]
+    if not hits:
+        print(f"cc-where: nothing matches {query!r}. Run `cc-where` for the census.", file=sys.stderr)
+        return 1
+    if len(hits) > 1:
+        print(f"cc-where: {query!r} matches {len(hits)} panes — refusing to guess:", file=sys.stderr)
+        for r in hits:
+            print(f"  win {r['win']}  {r['title']}", file=sys.stderr)
+        return 2
+
+    target = hits[0]
+    r = subprocess.run(
+        [_kitty(), "@", "focus-window", "--match", f"id:{target['win']}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if r.returncode != 0:
+        print(f"cc-where: focus-window failed: {r.stderr.strip()}", file=sys.stderr)
+        return 3
+
+    # Verify by CONTENT. focus-window exits 0 for a window it matched but could not raise, so
+    # re-read the tree and require the pane to now be in an ACTIVE tab.
+    tree = ls_tree()
+    after = next((p for p in panes(tree) if p["win"] == target["win"]), None)
+    if after is None:
+        print(f"cc-where: win {target['win']} vanished between match and focus", file=sys.stderr)
+        return 4
+    if not after["on_screen"]:
+        print(
+            f"cc-where: focus-window returned 0 but win {after['win']} is STILL off-screen "
+            f"(kitty window {after['oswin']}, tab {after['tab']})",
+            file=sys.stderr,
+        )
+        return 4
+
+    where = location_labels(tree).get(after["oswin"], f"kitty window {after['oswin']}")
+    warn = ""
+    if after["cols"] < READABLE_COLS:
+        warn = f"  {C['narrow']}[only {after['cols']} cols — press cmd+shift+e to equalize]{C['reset']}"
+    print(f"→ {where}, tab {after['tab']}: {after['title']}{warn}")
+    return 0
+
+
+USAGE = """cc-where — locate a Claude Code session on your physical screens
+
+  cc-where                 every pane, grouped by display > kitty window > tab
+  cc-where <regex>         only panes whose title matches
+  cc-where --hidden        only panes that are off-screen right now
+  cc-where --go <regex>    focus that pane (raises its window, switches to its tab)
+  cc-where --json          machine-readable census
+
+  A pane is OFF SCREEN when its tab is not the active tab of its kitty window:
+  live, healthy, and drawing zero pixels."""
+
+
+def main(argv: list[str]) -> int:
+    args = argv[1:]
+
+    if args and args[0] in ("-h", "--help"):
+        print(USAGE)
+        return 0
+
+    tree = ls_tree()
+    rows = panes(tree)
+
+    if not args:
+        return render(rows, tree)
+    if args[0] == "--json":
+        print(json.dumps(rows, indent=2))
+        return 0
+    if args[0] == "--go":
+        if len(args) < 2:
+            print("cc-where --go <regex>", file=sys.stderr)
+            return 64
+        return go(rows, args[1])
+    if args[0] == "--hidden":
+        hidden = [r for r in rows if not r["on_screen"]]
+        if not hidden:
+            print("nothing is off-screen — every pane is on a visible tab.")
+            return 0
+        return render(rows, tree, subset=hidden)
+    if args[0].startswith("-"):
+        print(USAGE, file=sys.stderr)
+        return 64
+
+    try:
+        pat = re.compile(args[0], re.I)
+    except re.error as e:
+        print(f"cc-where: bad pattern {args[0]!r}: {e}", file=sys.stderr)
+        return 64
+    return render(rows, tree, subset=[r for r in rows if pat.search(r["title"])])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
