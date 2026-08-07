@@ -280,6 +280,111 @@ does, while skipping the banner (`:366`), `install.sh`, the post-deploy host che
 the log line. `--force` is the strictly better instrument for the same content advance: it is the
 same act, announced. Both remain the operator's call under the frozen scope — surfaced, never fired.
 
+## Step 2 — THE DESIGN (2026-08-07)
+
+### 2.1 The inversion
+
+> **The incumbent asks "may the live layer move?" and defaults to no. The rebuild asks "why is the
+> live layer not at trunk?" and defaults to moving.**
+
+Staleness becomes a first-class failure with the same standing as a bad deploy. Today it is priced at
+zero (V8), which is why refusing 534 times reads as safe behavior instead of as the outage it is.
+
+**The repo already believes this on the land path and contradicts it on the deploy path.** `/ship`'s
+own contract (`.claude/commands/ship.md`) states *"a CUT smoke never blocks… A non-verdict is not a
+red (R6)"*. But `deploy-live.sh:135-143` `is_green()` returns true **only** for `verdict=="green"`,
+so `red`, `cut` and `hung` are treated identically — a non-verdict is scored as a red. Of the 85
+stamps, 3 are non-verdicts (2 `cut`, 1 `hung`). The deploy lane violates a principle its own land
+lane enforces; D1 is partly just applying R6 where it was already settled.
+
+### 2.2 D1 — evidence VETOES, it never PERMITS *(dissolves F1, F2)*
+
+| | Incumbent | Rebuild |
+|---|---|---|
+| Target | newest commit whose tree carries a **green** stamp | newest commit on `origin/main` whose tree carries **no red** stamp |
+| No stamp at all | ineligible ⇒ blocked | **eligible** — absence is the overwhelmingly common case and is structurally guaranteed to stay so |
+| `cut` / `hung` | ineligible (conflated with red) | **eligible** — a non-verdict is not a red (R6) |
+| `red` | ineligible | ineligible — walk back one commit and retry |
+| Target position | bounded **above** by the newest green ⇒ lags | tracks trunk ⇒ **ahead of live HEAD by construction** |
+
+The absorbing state disappears because target-selection stops being a function of the evidence
+corpus. `deploy-live.sh:357-358`'s anti-rollback guard is **kept unchanged** — it stops being a trap
+the moment the target is no longer a lagging pointer, and it still does its real job of refusing a
+genuine rollback.
+
+**The honest cost.** The fleet will run code that has not been proven green. It **already does**: 13
+ungated `merge origin/main` fast-forwards put it there, and 45 of 309 live files currently differ
+from trunk. D1 does not lower the safety bar; it stops pretending a gate exists where the measured
+gate coverage is ~6 of ~38 writes.
+
+### 2.3 D2 — a staleness budget, alarmed on NOT-ADVANCING *(dissolves F4, V8)*
+
+`A3` gets numbers: `CC_DEPLOY_MAX_LAG_COMMITS` and `CC_DEPLOY_MAX_LAG_HOURS` (env kill switches, per
+the methodology — never a revert-as-plan). Exceeding either pages **reason-agnostically**.
+
+This is the single most important behavioral change and it is one line of policy: the alarm keys on
+*"I have not advanced in H hours while trunk moved N commits"*, **not** on which refusal fired.
+`deploy-live.sh:331-345` pages the transient no-green case and `:357-358` pages nothing — so the
+permanent failure is the silent one. Measured: 0 pages across 534 refusals and 33h of total freeze.
+
+R2 adds the confirming forecast: `SCAN_N=200` gives **66 commits of headroom**, after which the lane
+flips from `would ROLL BACK` back to `no GREEN stamp` and starts paging again — **a change of
+message, not a recovery**. An alarm that only fires once the diagnosis has become wrong is worse than
+none.
+
+### 2.4 D3 — exclusivity becomes unnecessary rather than enforced *(dissolves F3, C1)*
+
+The obvious fix for C1 is to give the live layer its own checkout so `deploy-live.sh` is the only
+writer. **Rejected as the first move** (F8): with the producer at 0.17 greens/day, a genuinely
+exclusive gate converts today's *partial* freeze into a *total* one — strictly worse than the status
+quo, in which ungated fast-forwards at least deliver content.
+
+D1 dissolves the problem instead. Once the gated writer's target tracks trunk, the gated and ungated
+writers **want to go to the same place**. An ungated `merge origin/main` stops being an overtake and
+becomes a redundant, harmless instance of the same operation. Exclusivity stops being load-bearing.
+
+### 2.5 D4 — the advancer must not be undeployable by its own outage *(dissolves F5, C4)*
+
+The launchd job execs `$HOME/.claude/scripts/deploy-live.sh`, a symlink that `link_refresh` — inside
+that same script — is responsible for creating. Measured 59 × `No such file or directory`. Fix:
+`ProgramArguments` falls back to `$SHARED/scripts/deploy-live.sh` when the live symlink is absent.
+**Precedent exists in-repo**: `operator-readout.sh:238-246` already does exactly this for the
+platter, under the comment *"I11 — EXISTENCE-CHECK THE PLATTER… A recover command that cannot run is
+worse than no row: it teaches the operator the board lies."* Same defect, same remedy, one file over.
+
+### 2.6 D5 — the operator platter must be runnable *(V9)*
+
+`cc-do` RUN 1 platters `bash ~/.claude/scripts/deploy-live.sh` — the exact command that has refused
+534 consecutive times. By I11's own rule that is worse than no row. The platter must either carry a
+command that can succeed under the current state, or name the blocker instead of offering a fix its
+own gate rejects.
+
+### 2.7 REJECTED ALTERNATIVES
+
+Recorded so they are not relitigated.
+
+| | Alternative | Why rejected |
+|---|---|---|
+| R-A | **Make the verifier fast enough to gate per-commit** | 2h28m median over 297 suites. Even a 10× speedup leaves ~1.6 verdicts/hour against ~2.6 commits/hour. The rate gap is structural, not a tuning problem — the same conclusion `LAND_PIPELINE_V2` reached for the *land* path and then failed to carry over to the *deploy* path. |
+| R-B | **Re-add load/admission control so runs stop being killed** | **Forbidden.** Deleted deliberately (`postland-verify.sh:975`, §4.2.3/R7) and its *absence* is asserted by a structural test at `:1825-1830`. R3 flagged `wt-f8e40b4c577d`'s `f58a6cd3` as the losing side of exactly this argument. |
+| R-C | **Widen `SCAN_N` past 200** | Changes which refusal prints, not whether it recovers (R2: 66 commits of headroom, then the message flips). Treating a message change as progress is how this survived five filings. |
+| R-D | **Auto-`--force` when lag exceeds the budget** | Launders an unverified deploy through automation and takes the operator's documented escape hatch away from them. `--auto` is non-interactive *by construction* (`deploy-live.sh:76-79`); D2 pages instead. |
+| R-E | **Wait for the corpus to go green** | Refuted on measurement, not on preference: 1 green / 44 red over 7 days, `flakes=0` at `retries=10-22` (hard reds, not machine noise — the `RETRY_QOS` ladder fix that would have explained them away is verified **live**), and the auto-revert net that should restore green now reports `skipped` and `FAILED(step=revert rc=90)`. |
+
+### 2.8 ACCEPTANCE — disk-truth reads, not narration
+
+Per the methodology, each criterion names the file or log that proves it. **Acceptance is a DEPLOYED
+layer, not a green gate.**
+
+| # | Claim | The read that proves it |
+|---|---|---|
+| A-1 | The lane advances | `git -C <shared> rev-list --count HEAD..origin/main` falls, measured twice ≥1 tick apart |
+| A-2 | It advanced *by content* | `git ls-tree origin/main -- <path>` present **and** `md5` of the `~/.claude` symlink target == `git show origin/main:<path>` — never a rev-list count |
+| A-3 | Refusals stopped | `grep -c 'would ROLL BACK' deploy.log` stops increasing across ≥2 launchd ticks (`runs=` advances in `launchctl print`) |
+| A-4 | Non-advance is now loud | with the budget forced low, a page appears in `~/.claude/autonomy/pages/` keyed on lag, **not** on a refusal reason |
+| A-5 | Each guard leg is proven | one RED-control per leg, red against the pristine pre-change tree recovered via `git archive` — never a hand-edited approximation |
+| A-6 | No vacuous control | every control must be shown to FAIL when its leg is violated; watch for a control that passes because a sibling mechanism already fixed what it tests |
+
 ## Hard constraints
 
 - **Never commit or land in the shared checkout** (`.claude/CLAUDE.md`) — dedicated worktree, own
