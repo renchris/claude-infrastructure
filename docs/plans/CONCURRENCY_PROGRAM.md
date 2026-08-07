@@ -198,6 +198,78 @@ The dispatcher is healthy and starved, not missing: `com.claude.dispatcher`, `St
   built, landed and running — searching the graveyard first is what turned a rebuild into a
   20-line declaration.)*
 
+#### S4.1 · A refusal that reached only a journal — CLOSED (backlog `18323346082a`, 2026-08-07)
+
+The drain is worthless if the workers it admits duplicate each other. Item `191d4d056c98` produced
+**nine** sessions in ONE worktree (the filing said eight; forensics found a ninth, pane 358). Seven
+of them were each told, by name, that they were duplicates —
+
+```
+{"hook":"session-register","disposition":"noop","reason":"incumbent live","item":"191d4d056c98"}
+```
+
+— and each did the whole item anyway, in one shared tree on one branch, while load hit **161.92 on
+10 cores**. The ledger was never wrong: `cc-backlog`'s lease refused all seven correctly. **It had
+no consumer.** A census of the executable tree found `verdict=noop-live-claimer` in exactly three
+places — the producer (`bin/cc-backlog:1034`), one IDL write (`hooks/session-register.sh:220`), and
+two tests asserting the string appears. `tests/session-register-reclaim.bats:184` was even NAMED
+*"a second session in the worktree stands down"* while asserting only that the LEDGER was not
+stolen, and was green throughout.
+
+**Built** — `scripts/lib/worker-claim-gate.sh`, called from `hooks/check-edit-boundary.sh`
+(PreToolUse | `Write|Edit|MultiEdit`, already in settings.json). A session in `wt-<id>` that does not
+hold the lease is **denied its writes**, with `permissionDecisionReason` — which Claude Code feeds to
+the model — naming the incumbent and the self-close command. Tests: 26 new (`worker-claim-gate` 18,
+`worker-claim-gate-coverage` 8), 54/54 green across the four affected suites, six mutation controls
+run and confirmed RED.
+
+**Three things it deliberately does NOT do, each because the evidence refutes it:**
+
+1. **It does not gate the spawn on the claim.** That is the item's first suggested remedy and
+   **it already exists**: `bin/cc-dispatch:992-1005` claims before spawning and `continue`s on every
+   non-zero rc, so the spawn is unreachable without a granted claim (`inventory-before-building`).
+2. **It does not add a gate to `handoff-fire.sh` either — that would not have caught this storm.**
+   Forensics is decisive and corrects both contemporaneous filings: there was **ONE compose and NINE
+   spawns**, not nine fires and not "repeated fires reusing one prompt file". `handoff-fire.sh` mints
+   a fresh `handoff-prompt-nb-XXXXXX` and appends a per-process `HANDOFF-ENGAGE-$$-…` marker on every
+   invocation; only **two** such files exist in the window, and all nine first user messages are
+   byte-identical at 2281 chars with **one** marker (`$$`=27022). So eight panes were launched around
+   handoff-fire's front door, re-using an already-composed payload, taking no claim and leaving no
+   stamp. cc-dispatch, `lead-supervisor.sh` (which contains no spawn primitive at all, despite its
+   header claiming it "performs any respawn/close"), `waiting-recycle` (369 ticks, `not-armed` every
+   one) and repeated handoff-fire are each independently falsified.
+3. **It does not re-implement `claimer_live`.** The gate calls `cc-backlog reclaim` — the same atomic
+   primitive `session-register.sh` calls, from the same identity — and branches on its documented
+   `verdict=` contract, so whoever reclaims first owns the item and there is no second arbitration
+   surface to race (`make-the-actuator-the-arbiter`).
+
+**Why the enforcement is at the WRITE, and why it is not a message.** This repo already tried
+telling a duplicate to stand down: `GROUND_UP_DISPATCH.md:615-628` records that the ruling sat
+undrained because *"mailbox drain needs a turn boundary"* and the duplicate was deep in a tool loop —
+the dead-letter shape, hit three times in one day. The same passage names where the damage lands:
+*"The collision becomes real when either starts writing."* And SessionStart, where the refusal is
+already known, **structurally cannot act** — on 2.1.114 its output schema is `additionalContext` ·
+`sessionTitle` · `watchPaths` · `reloadSkills` · `systemMessage` · `terminalSequence`;
+`{"continue":false}` has no effect, `{"decision":"block"}` is not a field, exit 2 prints and
+proceeds. So `session-register.sh` stays the DETECTOR and the write is the ACTUATOR.
+
+⚠️ **The gate carries NO refusal budget, and that is deliberate — do not "restore parity" with
+`capacity-admit.sh`.** §9's law (no unbounded gate on an actuation path) is satisfied by a bound that
+already exists elsewhere: the LEASE. The incumbent dying, or `cc-backlog reap` ageing the claim past
+`LIVE_CLAIM_MAX_S`, releases the refusal automatically and the next write is admitted. Copying
+capacity-admit's *admit-after-N-refusals* would mint the second worker this gate exists to prevent —
+a capacity refusal denies a transient machine state the refusal cannot lower, this one denies a
+standing FACT, and the unsafe direction is inverted between them.
+`tests/worker-claim-gate.bats:13` and `…-coverage.bats:06` pin the absence structurally.
+
+🔭 **Residual, filed not fixed** (backlog `1467ea1dad4f`): **the producer of those eight pane-spawns
+is not recoverable from disk.** `dispatch-fires.log` and `handoffs.jsonl` can only count fires that go
+through handoff-fire's front door, and this storm went around it — so an unlogged caller and an
+undocumented detached child both remain live hypotheses, and nothing measured separates them. The
+write gate makes that *safe* without making it *visible*: it catches every spawn path including the
+unidentified one, which is exactly why it was chosen over gating any named path. Closing the
+visibility gap needs one log line per pane-spawn carrying the caller's pid and ppid.
+
 ### S5 · Scale beyond this box — the only route to ~100
 
 **100 local sessions is arithmetically unreachable**: 511 MB/session × 100 = **51.1 GB of 64 GB**,
