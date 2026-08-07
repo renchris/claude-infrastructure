@@ -984,11 +984,17 @@ trap '' HUP
     # that are slowest under the memory/CPU exhaustion that caused the crash being recorded. Neither
     # is worth delaying the shutdown_requests for; an empty field is honest, a hang is not.
     mem_free=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /usr/bin/memory_pressure 2>/dev/null | awk -F'[: ]+' '/free percentage/{print $(NF)}' | tr -d '%' || true)
-    # grep -c exits 1 on zero matches (true when the dead session was the LAST claude proc);
-    # `|| true` keeps that from tripping `set -e` and aborting handle_crash before the crash
-    # record AND the team-recovery below run. grep still prints "0" to stdout.
-    # shellcheck disable=SC2009  # ps|grep is deliberate: one pattern counts BOTH binary names portably
-    concurrent=$(lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" ps aux 2>/dev/null | grep -cE '[c]laude\.exe|[n]ode_modules/\.bin/claude' || true)
+    # pgrep -x, never `ps aux | grep` (changed 2026-08-07): the full-table walk is O(every
+    # process × argv) and under exactly the overload a crash burst creates it ran 10-30s — with
+    # ~49 daemons that was ~20 CONCURRENT full scans feeding the load they were measuring
+    # (load-781 incident). -x matches the COMM field exactly, so it can never match a brief in
+    # some session's argv (the pgrep -f trap) and costs milliseconds. claude.exe is the bun
+    # binary's comm; bare `claude` covers a directly-named binary. A node-RUN binary (comm=node)
+    # is no longer counted — acceptable: this is a diagnostic enrichment field on the crash row,
+    # not a verdict, and the whole eval-track fleet's comm is claude.exe. `|| true` keeps a
+    # zero-match rc from tripping `set -e`, exactly as the old grep -c needed.
+    concurrent=$({ lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /usr/bin/pgrep -x 'claude\.exe' 2>/dev/null; \
+                   lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /usr/bin/pgrep -x 'claude' 2>/dev/null; } | sort -u | wc -l | tr -d ' ' || true)
     # claude_version — THE decisive field: the crash rate is version-correlated (a regression
     # onset at 2.1.207: 2.1.183=0.02% → 2.1.207=4.76% → 2.1.215=1.56%, all mid-Bash in-process
     # deaths, NOT transcript size). Read from the transcript tail (every record carries it), cheap.
