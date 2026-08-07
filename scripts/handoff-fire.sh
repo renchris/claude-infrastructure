@@ -7176,6 +7176,23 @@ def agent_owned(wid):
         return False
     return True
 
+# OWNERSHIP GATES THE DESK ARM TOO (2026-08-07, peer finding from the pane-theft session,
+# VERIFIED here: the pick() desk arm returned the hint unconditionally, so any live operator
+# window written into cc-roles/desk re-armed the theft class through a valid-digit id — the
+# isdigit guard above is an ID-SPACE check, not an ownership one). The two uses of the role
+# split here: desk stays a fine NOTIFY target at any ownership (an inbox append is not a
+# keystroke), but the ANCHOR use opens panes in that window, and anchoring a headless fire
+# on the operator window IS the incident. Demote LOUDLY to the gated walk below (which
+# returns agent-owned or refuses — safe by construction); never silently, and never a hard
+# fire-refusal that would couple the two uses. A desk id that is not even live falls through
+# unchanged (existing semantics, untouched). NO APOSTROPHES in this block: it lives inside a
+# single-quoted bash python -c string, and one possessive ends the string mid-file.
+if desk and desk in by_id and not agent_owned(desk):
+    sys.stderr.write("Warning: desk role window " + desk + " is not provably agent-owned (no "
+                     "live fired-peer marker) - demoted for ANCHORING (it remains a valid "
+                     "notify target); picking an agent-owned window instead.\n")
+    desk = ""
+
 def pick(room):
     if desk:
         ws = by_id.get(desk)
