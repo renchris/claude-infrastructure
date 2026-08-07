@@ -271,9 +271,20 @@ case "\$1 \$2" in
 esac
 case "\$*" in
   *"session split"*) echo "Created new pane: $PANE" ;;
+  # A real screen shows the refusal AND whatever is on the input line — never one INSTEAD of the
+  # other. An either/or stub made this arm load-flaky, and the flake was measured, not theorised:
+  # \`_it2_type_line\` submits with \`send CR && return 0\`, so a CR that TAKES EFFECT but whose bounded
+  # call returns non-zero (a loaded box; observed once at 1-min load ~30) leaves DELIVERED set and
+  # the function retrying. With either/or, every later echo-verify then reads a screen that no
+  # longer echoes anything, all 4 attempts × 2 rounds fail, and the fire dies on "typing the launch
+  # command failed" — red on the parked-verdict grep, having never reached the oracle. Reproduced
+  # deterministically by making the first CR exit 1 after writing DELIVERED; green again with this.
+  # Printing both is also the strictly more faithful model, and it weakens nothing: the oracle's
+  # patterns are ^-anchored per physical line, and the echo-verify greps a whitespace-stripped
+  # screen for its own nonce, so neither can be satisfied by the other's line.
   *"session read"*)
-    if [ -f "\$DELIVERED" ]; then printf '%s\n' "$2"
-    else cat "\$LAST" 2>/dev/null; fi ;;
+    [ -f "\$DELIVERED" ] && printf '%s\n' "$2"
+    cat "\$LAST" 2>/dev/null ;;
   *) : ;;
 esac
 STUB
