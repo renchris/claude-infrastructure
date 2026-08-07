@@ -421,6 +421,57 @@ JSON
   printf '%s' "$output" | grep -q 'hooks=0'
 }
 
+@test "assignee-pane-residency: a member with an EMPTY name keeps its pane id in the PANE column" {
+  # `.name // "?"` is the defect, not the fix: jq's `//` fires on null/false only and "" is TRUTHY,
+  # so an empty-STRING name sails through the default and emits an empty cell 2 of 4. The row then
+  # collapses to team=<team> name=<paneId> pane=<joinedAt>.
+  #
+  # The discriminator is the joinedAt MILLISECONDS, which the render never prints (it reads into
+  # `_joined` and drops it). It can only reach the output by being shifted into `pane` — so its
+  # presence is the collapse and nothing else. Asserting on "401" instead would pass VACUOUSLY:
+  # the pane id is in the output either way, just in the wrong column.
+  mkdir -p "$C/teams/session-aa" "$C/state"
+  local old_ms; old_ms=$(( ($(date +%s) - 86400) * 1000 ))
+  printf '{"members":[{"name":"","tmuxPaneId":"401","joinedAt":%s}]}\n' "$old_ms" \
+    > "$C/teams/session-aa/config.json"
+  printf '401\n' > "$C/wins"
+  printf '#!/bin/bash\ncat "%s/wins"\n' "$C" > "$C/it2"; chmod +x "$C/it2"
+  printf '#!/bin/bash\nexit 1\n'                > "$C/ps";  chmod +x "$C/ps"
+
+  run env CC_RESIDENCY_TEAM_GLOB="$C/teams/*/config.json" \
+          CC_RESIDENCY_IT2_BIN="$C/it2" CC_RESIDENCY_PS_BIN="$C/ps" \
+          CC_RESIDENCY_STATE_DIR="$C/state" \
+          bash "$REPO/scripts/assignee-pane-residency.sh"
+  # the member must still be SEEN — a fix that merely dropped the row would also refute the ms
+  printf '%s' "$output" | grep -q 'resident members:'
+  refute_grep "$old_ms"
+}
+
+@test "thrash-block-recover: an id-less ledger record does not name an item after its own verdict" {
+  # `jq -R 'fromjson? // empty'` drops lines that are not JSON; a line that IS valid JSON but has no
+  # `id` survives, groups under a null key and emits an empty first cell. Unpadded that reads back as
+  # id="RECOVER", verdict="1" — a table row naming an item after its own verdict, while the summary
+  # counts it as a HOLD. Dry run by default, so this asserts the RENDER, which is where it shows.
+  local B="$C/backlog.jsonl"
+  {
+    # (a) the id-less group — same block shape, so it reaches the emitter on merit, not by accident
+    printf '{"ts":"2026-08-07T22:20:00Z","event":"claim","by":"w1"}\n'
+    printf '{"ts":"2026-08-07T22:20:10Z","event":"reopen","by":"w1"}\n'
+    printf '{"ts":"2026-08-07T22:20:20Z","event":"block","by":"cc-backlog-reap","needs":"persistent thrash — 2 fast claim cycles"}\n'
+    # (b) POSITIVE CONTROL — a well-formed group that must still be recovered, so a fix that simply
+    #     stopped emitting rows cannot pass this test
+    printf '{"id":"aaaa11112222","ts":"2026-08-07T22:30:00Z","event":"claim","by":"w2"}\n'
+    printf '{"id":"aaaa11112222","ts":"2026-08-07T22:30:10Z","event":"reopen","by":"w2"}\n'
+    printf '{"id":"aaaa11112222","ts":"2026-08-07T22:30:20Z","event":"block","by":"cc-backlog-reap","needs":"persistent thrash — 2 fast claim cycles"}\n'
+  } > "$B"
+
+  run env CC_BACKLOG_FILE="$B" bash "$REPO/scripts/thrash-block-recover.sh"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^aaaa11112222 '   # the real item still renders, still RECOVER
+  refute_grep '^RECOVER'                             # …and no row is named after a verdict
+  refute_grep '^HOLD'
+}
+
 # ─── §3 · the repo-wide guard ──────────────────────────────────────────────────────────────────
 
 # Files that read TSV with `IFS=$'\t' read` but legitimately carry no padding def. Each needs a
@@ -437,6 +488,10 @@ scripts/desk-recycle-invariant.sh|resolve_desk guarantees all three cells non-em
 scripts/relogin-probes/e1-concurrent-logins.sh|producer REFUSES on an empty identity field rather than emitting one (all four are required), so non-empty is guaranteed at the source instead of padded — the same discharge as desk-recycle-invariant above
 scripts/scratchpad-reaper.sh|the jq producer CAN emit an empty cell ([(.pid // ""), (.session_id // "")]), but both cells are existence-TESTED on the line after the read ([ -n "$rpid" ] && [ -n "$rsid" ] || continue) — so an empty cell discards the row identically with or without the shift, and the reaper's live-set cannot change. Keyed on that test, not on proximity
 scripts/store-bounds-census.sh|parse_manifest REFUSES to emit an OK row when any of its four fields is empty — it prints a BAD row instead ([ -z "${g:-}" ] || [ -z "${cap:-}" ] || … → BAD), so no OK row can carry an empty cell. The BAD rows are 2-field and only counted, never destructured. Same discharge as e1-concurrent-logins above
+scripts/wrap-ledger.sh|count FIRST, free text LAST — and the code says so at the emitter. The one read (count_blocking_decisions) consumes a single `@tsv` row built as [ (length|tostring), (what_plain or "") ]: cell 1 is the length of a jq array rendered as a string, which cannot be empty, and it is additionally digit-VALIDATED on the next line (case "${n:-}" in ''|*[!0-9]*) → error). The only empty-reachable cell is the operator's own prose, which is LAST, so nothing a human types into a decision packet can shift the field the ⛔ rung branches on
+scripts/unattended-path-lint.sh|both reads (:757 hooks, :804 launchd) share ONE producer, scan_shell's python emitter at :512 — `print("%s\t%d\t%s" % (path, lineno, word))`. Cell 1 is an argv path scan_shell was called with (non-empty by construction — an empty argv element names no file) and cell 2 is a %d of an int, which cannot be empty. The only variable-content cell is the extracted word, which is LAST and is existence-tested first thing in both loops ([ -n "$w" ] || continue). Same discharge as hooks/validate-bash.sh above, which shares the %d/%s-with-trailing-variable shape
+scripts/thrash-block-recover.sh|producer REFUSES on an empty id (`select(($last.id // "") != "")`, added with this exemption) rather than emitting one, so cell 1 is non-empty at the source. Cell 2 is a literal "RECOVER"/"HOLD" from an if/else, and cells 3-5 are `|tostring` of array LENGTHS — none can be empty. Both reads (:135 render, :159 apply) share that one jq. Same discharge as e1-concurrent-logins and store-bounds-census above
+scripts/branch-reaper.sh|the one read (:77, restore mode) consumes the manifest THIS script writes at :146 — printf '%s\t%s\n' "$b" "$sha", exactly two cells — and :145 drops any target whose refs/heads/$b does not rev-parse, so an empty name never reaches the writer and $sha is that verified output. A tab cannot widen the row into a third cell either: git check-ref-format rejects \t in a ref name. Belt-and-braces at the reader, since a manifest is a file a human can edit — :78 existence-tests BOTH cells and continues, so every degenerate 2-field row is discarded identically with or without the shift and `git branch` cannot run on a shifted pair
 EOF
 }
 

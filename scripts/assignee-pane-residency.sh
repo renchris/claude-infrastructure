@@ -157,10 +157,22 @@ members() { # <outfile> → echoes the status word
     [ -r "$cfg" ] || continue
     team="$(basename "$(dirname "$cfg")")"
     # shellcheck disable=SC2016  # $t is a jq variable bound by --arg — single quotes are REQUIRED
+    #
+    # PAD AT THE EMITTER. Tab is an IFS-*whitespace* character, so the `IFS=$'\t' read -r team name
+    # pane _joined` in the render below collapses a RUN of delimiters into one: an empty cell does
+    # NOT produce an empty variable, it shifts every LATER column one position LEFT, silently, at
+    # exit status 0. `.name // "?"` looks like it already prevents that and does NOT: jq's `//`
+    # fires on null/false ONLY, and "" is TRUTHY in jq — so a member declaring `"name": ""` passes
+    # straight through the default and emits an empty cell 2. The row then reads
+    # team=<team> name=<paneId> pane=<joinedAt>, i.e. the render names the member after its own
+    # pane id, on the instrument whose whole job is telling a resident member from a departed one.
+    # `def cell` keys on emptiness rather than on null, which is the distinction `//` cannot make.
     out="$("$JQ_BIN" -r --arg t "$team" '
+      def cell: (if . == null or . == "" then "?" else . end) | tostring;
       .members[]?
       | select(((.tmuxPaneId // "") | tostring) | test("^[0-9]+$"))
-      | [$t, (.name // "?"), (.tmuxPaneId|tostring), ((.joinedAt // 0)|tostring)]
+      | [($t|cell), (.name|cell), (.tmuxPaneId|tostring),
+         (.joinedAt | if . == null or . == "" then 0 else . end | tostring)]
       | @tsv' "$cfg" 2>/dev/null)" || continue
     [ -n "$out" ] || continue
     raw="$raw$out

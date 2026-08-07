@@ -285,6 +285,29 @@ describe_filter='
       else ($i | to_entries | map("\(.key)=\(.value|tostring)") | join(" ")) end
     | gsub("\\s+";" ") | if length > 0 then . else "(no detail)" end;'
 
+# PAD AT THE EMITTER. Tab is an IFS-*whitespace* character, so `IFS=$'\t' read` collapses a RUN of
+# delimiters into one: an empty cell does not produce an empty variable, it shifts every LATER column
+# one position LEFT, silently, at exit status 0. Both render loops below read seven- and six-column
+# rows, and three of those cells are empty-REACHABLE at the source:
+#   `.account // "?"`      — `//` fires on null/false only, and "" is TRUTHY in jq, so a beacon that
+#                            recorded an empty-string account passes straight through the default.
+#   `(.cwd//"")|sub(...)`  — defaults to "" explicitly; an absent cwd (or a cwd of "/") emits empty.
+#   `.model // ""`         — defaults to "" explicitly.
+# Measured on the BLOCKED queue, which is the row an operator reads to decide a permission: with cwd
+# absent the command lands in the TOOL column and the COMMAND column renders empty — `rm -rf /tmp/x: `
+# instead of `Bash: rm -rf /tmp/x`. The loop's own comment already forbids showing a cut prefix that
+# reads like the whole command; a shifted row is the same defect with the text moved instead of cut.
+#
+# The sentinel round-trips rather than defaulting to a visible "-" ON PURPOSE: `${ctx:+ctx ${ctx}%}`
+# below keys on the cell being EMPTY to omit the suffix entirely, so a printable default would render
+# `ctx -%`. Padding preserves the empty-vs-present distinction the renderer already relies on.
+TSV_PAD=$'\037'
+unpad(){ if [ "$1" = "$TSV_PAD" ]; then printf ''; else printf '%s' "$1"; fi; }
+# shellcheck disable=SC2016  # jq PROGRAM TEXT: $pad is a jq variable and must reach jq unexpanded.
+cell_filter='
+  def cell: (if . == null then "" else . end) | tostring
+            | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;'
+
 fmt_dur(){ # seconds → compact human duration
   local s="${1:-0}"
   # The COLD sentinel means "could not be resolved", NOT "11574 days ago". Rendering it as a duration
@@ -363,10 +386,16 @@ render_table(){
   # ── the exception queue: ALWAYS first, ALWAYS complete (never capped) ──
   if [ "$n_b" -gt 0 ]; then
     printf '%s\n' "${C_RED}${C_BLD}⛔ BLOCKED (${n_b})${C_OFF} ${C_DIM}— waiting on a permission answer; nothing in-session can self-approve${C_OFF}"
-    printf '%s' "$rows" | jq -r "$describe_filter"'
+    printf '%s' "$rows" | jq -r --arg pad "$TSV_PAD" "$describe_filter$cell_filter"'
       to_entries | map(select(.value.state=="blocked"))
-      | .[] | "\(.key+1)\t\(.value.wait_s)\t\(.value.account // "?")\t\((.value.cwd//"")|sub("^.*/";""))\t\(.value.tool)\t\(.value | desc)\t\(if .value.enriched then "" else " [enrich:none]" end)"' \
+      | .[] | "\((.key+1)|cell)\t\(.value.wait_s|cell)\t\(.value.account|cell)\t\(((.value.cwd//"")|sub("^.*/";""))|cell)\t\(.value.tool|cell)\t\((.value | desc)|cell)\t\(if .value.enriched then "" else " [enrich:none]" end)"' \
     | while IFS=$'\t' read -r idx wait acct proj tool cmd note; do
+        idx="$(unpad "$idx")"; wait="$(unpad "$wait")"; acct="$(unpad "$acct")"
+        proj="$(unpad "$proj")"; tool="$(unpad "$tool")"; cmd="$(unpad "$cmd")"
+        # `.account`'s old `// "?"` default is gone rather than kept alongside the pad: it never fired
+        # on the case that mattered ("" is truthy in jq) and keeping both would leave two spellings of
+        # one guarantee. An unknown account now renders empty, which the column already tolerates.
+        [ -n "$acct" ] || acct="?"
         # Mark truncation EXPLICITLY. An operator deciding whether to approve `rm -rf /x` must never
         # be shown a silently-cut prefix that reads like the whole command. Full text: --json.
         show="${cmd:0:70}"; [ "${#cmd}" -gt 70 ] && show="${show}…"
@@ -393,10 +422,13 @@ render_table(){
     [ "$n" -gt 0 ] || continue
     [ "$OPT_STATE" = all ] || [ "$OPT_STATE" = "$st" ] || continue
     printf '%s\n' "${colr}${label} (${n})${C_OFF}"
-    printf '%s' "$rows" | jq -r --arg st "$st" --argjson lim "$OPT_LIMIT" '
+    printf '%s' "$rows" | jq -r --arg st "$st" --argjson lim "$OPT_LIMIT" --arg pad "$TSV_PAD" "$cell_filter"'
       to_entries | map(select(.value.state==$st)) | (if $lim>0 then .[0:$lim] else . end)
-      | .[] | "\(.key+1)\t\(.value.activity_s)\t\(.value.account // "?")\t\((.value.cwd//"")|sub("^.*/";""))\t\(.value.model // "")\t\(.value.ctx_pct // "")"' \
+      | .[] | "\((.key+1)|cell)\t\(.value.activity_s|cell)\t\(.value.account|cell)\t\(((.value.cwd//"")|sub("^.*/";""))|cell)\t\(.value.model|cell)\t\(.value.ctx_pct // "")"' \
     | while IFS=$'\t' read -r idx act acct proj model ctx; do
+        idx="$(unpad "$idx")"; act="$(unpad "$act")"; acct="$(unpad "$acct")"
+        proj="$(unpad "$proj")"; model="$(unpad "$model")"
+        [ -n "$acct" ] || acct="?"
         printf '  %s%2s%s  %s%7s%s  %-10s %-22s %-18s %s\n' \
           "$C_DIM" "$idx" "$C_OFF" "$C_DIM" "$(fmt_dur "$act")" "$C_OFF" \
           "${acct:0:10}" "${proj:0:22}" "${model:0:18}" "${ctx:+ctx ${ctx}%}"
@@ -454,6 +486,25 @@ selftest(){
   out="$("$0" --no-color 2>&1)"
   saw 'git push --force origin main' "$out" "blocked row shows the EXACT blocked command"
   saw '5m00s' "$out" "blocked row shows how long it has waited (300s ⇒ 5m00s)"
+
+  # 3b. FIELD COLLAPSE. The same beacon with NO cwd. Tab is IFS-whitespace, so an empty cell does not
+  # produce an empty variable — it shifts every later column one LEFT at exit status 0. Unpadded, this
+  # row renders `git push --force origin main: ` — the command in the TOOL slot and the command slot
+  # EMPTY — which is the failure the truncation comment above exists to prevent, with the text moved
+  # instead of cut. The assertion is on the `tool: command` JOIN, not on the command alone: the bare
+  # command survives the shift (in the wrong column) and would pass vacuously.
+  # Control: reverting either emitter's `|cell` turns this red while every assertion above stays green.
+  printf '{"ts":999700,"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' > "$tmp/pend/sid-blocked.json"
+  out="$("$0" --no-color 2>&1)"
+  saw 'Bash: git push --force origin main' "$out" "a blocked beacon with NO cwd keeps the command in the COMMAND column"
+  # and the same for an empty-STRING account, which the old `// "?"` default could never catch —
+  # `//` fires on null/false only, and "" is truthy in jq.
+  printf '{"ts":999700,"tool_name":"Bash","tool_input":{"command":"git push --force origin main"},"cwd":"/x/proj","account":""}' > "$tmp/pend/sid-blocked.json"
+  out="$("$0" --no-color 2>&1)"
+  saw 'Bash: git push --force origin main' "$out" "an empty-string account does not shift the command column"
+  # restore the well-formed beacon for the assertions that follow
+  printf '{"ts":999700,"tool_name":"Bash","tool_input":{"command":"git push --force origin main"},"cwd":"/x/proj"}' > "$tmp/pend/sid-blocked.json"
+  out="$("$0" --no-color 2>&1)"
 
   # 4. fail-safe: a beacon with NO telemetry row is still a row
   saw 'enrich:none' "$out" "beacon with no telemetry row still renders (marked enrich:none)"

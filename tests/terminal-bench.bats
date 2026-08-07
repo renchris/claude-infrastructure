@@ -84,6 +84,82 @@ setup() {
   [ "$status" -eq 2 ]
 }
 
+# ── the emitter pad: every column must stay in its own column ──────────────────────────────────────
+#
+# WHY THIS LIVES HERE AND NOT ONLY IN tests/tsv-field-collapse.bats. `reading()` emits a 7-cell TSV
+# row that `show()` reads with `IFS=$'\t' read`. Tab is an IFS-*whitespace* character, so that read
+# COLLAPSES a run of delimiters: one empty cell does not yield an empty variable, it shifts every
+# later column one position LEFT, silently, at exit status 0 — ports takes windows' value and the
+# last column comes back empty. Splitting on tab explicitly does not prevent it; only a non-empty
+# cell does, which is why `reading()` pads each cell to "-".
+#
+# That pad landed at 68e17e2a and was reverted three hours later by 68694672 — a whole-function
+# rewrite from a stale base whose subject was about pgrep and which said nothing about padding. It
+# went unnoticed for a week because the ONLY thing pinning it was the whole-tree guard in
+# tests/tsv-field-collapse.bats §3, which no author's land is required to run against their own
+# diff. A cross-cutting guard cannot defend a single file's behaviour; this file's own gate can.
+#
+# `top` is shadowed rather than mocked at a seam because there is no seam: reading() calls it by
+# bare name. A short `top` line is not hypothetical — it is one of the two live sources of an empty
+# cell named in reading()'s own comment (the other being `cut -f3/-f5/-f7` on a short census row).
+stub_top_short() {
+  # `top -stats pid,command,cpu,mem,th,ports` normally prints six fields. This one prints FIVE, so
+  # reading()'s `awk '{print $6}'` for ports yields the empty string — the defect's real input.
+  STUBDIR="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUBDIR"
+  cat > "$STUBDIR/top" <<'STUB'
+#!/bin/bash
+p=""; while [ $# -gt 0 ]; do [ "$1" = "-pid" ] && p="$2"; shift; done
+printf '%s stubbed 1.2 100M 13\n' "$p"
+STUB
+  chmod +x "$STUBDIR/top"
+  PATH="$STUBDIR:$PATH"
+}
+
+@test "emitter pad: an empty ports cell does not slide windows into the ports column" {
+  # Drives the REAL script end to end. Census cells are 21/20/1.00 (windows/offscreen/onscreenMpx),
+  # so the shift is unambiguous: unpadded renders ports=21 win=20 off=1.00 mpx=<empty> — every
+  # column past the hole wearing its neighbour's number, and the row still exits 0.
+  start_subject
+  stub_census 1 20
+  stub_top_short
+  run bash "$BENCH" --app "$SUBJ_NAME" --interval 0 --sample-secs 1
+  [[ "$output" == *"cpu=1.2 mem=100MB th=13 ports=- win=21 off=20 mpx=1.00"* ]] || false
+
+  # …and the collapse signature specifically: the last column emptied by a hole further left.
+  [[ "$output" != *"mpx="$'\n'* ]] || false
+  [[ "$output" != *"ports=21"* ]]
+}
+
+@test "RED CONTROL: un-padding the SHIPPING emitter makes the row slide again" {
+  # A guard whose failure mode is unreachable proves nothing, and a hand-written approximation of
+  # the emitter would pass vacuously no matter what the real one does (memory
+  # control-must-replay-the-real-artifact). So the mutant is the REAL file with exactly one edit:
+  # the pad stripped back to the post-revert shape 68694672 left behind.
+  start_subject
+  stub_census 1 20
+  stub_top_short
+
+  local mutant="$BATS_TEST_TMPDIR/unpadded.sh"
+  sed 's/"${cpu:--}" "${mem:--}" "${th:--}" "${ports:--}" "${win:--}" "${off:--}" "${mpx:--}"/"$cpu" "$mem" "$th" "$ports" "$win" "$off" "$mpx"/' \
+    "$BENCH" > "$mutant"
+  # The mutation must have LANDED. A sed whose anchor silently missed produces a byte-identical copy
+  # that then "fails to slide" and reads as the guard working. Anchored on the PADDED form, which
+  # occurs exactly once — counting the un-padded form instead reads 2, because `show()`'s own printf
+  # carries a byte-identical argument list one line further down. Measured, not assumed.
+  run grep -c 'cpu:--' "$BENCH"
+  [ "$output" = "1" ]
+  run grep -c 'cpu:--' "$mutant"
+  [ "$output" = "0" ]
+  run bash -n "$mutant"
+  [ "$status" -eq 0 ]
+
+  run bash "$mutant" --app "$SUBJ_NAME" --interval 0 --sample-secs 1
+  # windows' 21 in the ports column, offscreen's 20 in windows', and the last column emptied —
+  # every one of them at exit status 0, which is what made this survive a week undetected.
+  [[ "$output" == *"th=13 ports=21 win=20 off=1.00 mpx="* ]] || false
+  [[ "$output" != *"ports=-"* ]]
+}
+
 @test "bench: resolves its repo root THROUGH a symlink, not to the symlink's parent" {
   # RED-PROOF of the self-path fix. Invoked via a symlink in a directory with no tools/ sibling,
   # the pre-fix code resolved REPO to that directory and warned/degraded. The fix walks the link
@@ -92,6 +168,17 @@ setup() {
   run bash "$BATS_TEST_TMPDIR/linked-bench.sh" --app NoSuchTerminalApp7391 --interval 0
   # It still exits NO-DATA (no such app) — but it must NOT have complained about a missing census.
   [[ "$output" != *"census source not found"* ]]
+}
+
+@test "POSITIVE CONTROL: with every cell populated, padded and unpadded agree" {
+  # The pad must be inert on the common path — a fix that changed the reading of a COMPLETE row
+  # would silently invalidate every measurement already filed against this instrument.
+  run bash -c '
+    cpu=12.3 mem=783 th=44 ports=95 win=21 off=20 mpx=1.00
+    bare="$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$cpu" "$mem" "$th" "$ports" "$win" "$off" "$mpx")"
+    pad="$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "${cpu:--}" "${mem:--}" "${th:--}" "${ports:--}" "${win:--}" "${off:--}" "${mpx:--}")"
+    if [ "$bare" = "$pad" ]; then printf identical; fi'
+  [ "$output" = "identical" ]
 }
 
 # ── tui-load: the rate it claims must be the rate it achieved ─────────────────────────────────────
