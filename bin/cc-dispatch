@@ -1000,6 +1000,19 @@ dispatch() { # <dry|run|decide>
       idl skipped "$id: already done — claim REFUSED at the actuator (landed after the step-1 snapshot)${cexc:+ — $cexc} — re-dispatch needs \`cc-backlog reopen $id --force\`"
       continue
     fi
+    # A PREMISE REFUSAL IS A SKIP, NOT A FAILURE — and it has to be said explicitly here, because
+    # the default arm below counts every other rc 4 as FAILED. That default is right for the lease
+    # (contention is transient; retrying next tick is the cure) and exactly wrong for this: a refuted
+    # premise is a PERMANENT state, so counting it a failure re-dispatches the same item every 300 s
+    # forever and inflates the failure rate that the admission logic reads. Same shape as the
+    # done-latch arm above, same positive discrimination on the token
+    # (memory: new-enum-member-falls-into-fail-closed-default).
+    if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=premise-refuted}" != "$cexc" ]; then
+      echo "cc-dispatch: skipped $id — its premise no longer holds (claim refused at the actuator)" >&2
+      SKIPPED=$((SKIPPED + 1))
+      idl skipped "$id: premise refuted — claim REFUSED at the actuator${cexc:+ — $cexc} — the disproof is the deliverable; re-dispatch needs \`cc-backlog claim $id --force\`"
+      continue
+    fi
     if [ "$crc" -ne 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
     fi
@@ -1029,9 +1042,24 @@ dispatch() { # <dry|run|decide>
       else
         rails="dedicated worktree + own branch; gate green before commit. This project has NO /ship rail — commit on your own branch and SURFACE it for the operator; never bare-push, never land yourself. C10 — never edit settings.json/live hooks/launchd in place."
       fi
+      # THE PREMISE CONTRACT RIDES THE BRIEF, because the brief is the only enforcing store a
+      # worker actually reads (memory: conclusion-must-reach-the-enforcing-store). The claim gate
+      # refuses the ~11 items whose whole premise is gone; the far larger class is an item with ONE
+      # refuted sub-claim and real work beside it, which MUST be worked — but not on the refuted
+      # part. Printing that verdict where only a log sees it changes nothing, so it goes here.
+      # Silent when there is nothing to say: a contract that fires on every item is one the worker
+      # learns to skip. Failure is a no-op — a brief without it is exactly the incumbent brief.
+      # `$_self` already resolved the symlink chain at the top of this file, so the CO-VERSIONED
+      # sibling is one dirname away — and it is tried FIRST rather than via `command -v`, for the
+      # reason the find-plan.sh gate gives above: resolving through $HOME would pair a worktree's
+      # cc-dispatch with the DEPLOYED cc-premise and silently skew the two.
+      local pcontract="" pbin
+      pbin="${CC_DISPATCH_PREMISE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-premise}"
+      [ -x "$pbin" ] && pcontract="$("$pbin" contract "$id" 2>/dev/null || true)"
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
+        ${pcontract:+"$pcontract"} \
         "Rails: $rails" \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
         "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify the desk role (cat ~/.claude/cc-roles/desk). Do NOT reopen an operator-gated item — that re-cycles it." \

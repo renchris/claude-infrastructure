@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""cc-premise — the premise-decay predicate for cc-backlog work items.
+
+A work item's premise is a CLAIM, not a fact. It is written out of context by construction,
+its facts decay, and its imperative voice reads as settled long after it stopped being true.
+This file is the ONE implementation of "is this item's premise still standing?", shared by
+every consumer so a report and a gate can never drift apart:
+
+    cc-backlog claim   → guard (5), the claim-time surfacing   (`check`)
+    cc-dispatch        → the worker BRIEF's premise contract    (`contract`)
+    an operator / desk → the S3 triage report                   (`sweep`)
+
+WHY A CLAIM-TIME CHECK AND NOT A SWEEP (docs/plans/CONCURRENCY_PROGRAM.md §S3). A one-time
+review goes stale the moment it finishes — that decay is precisely what produced the pile it
+would be reviewing. The durable form has to run at CONSUMPTION, every time, which is why the
+predicate lives here and is called from the actuator rather than run as a batch job.
+
+WHY IT ADVISES AND ALMOST NEVER REFUSES — the load-bearing design decision, and it comes from
+the data rather than from the plan's summary of it. The plan names one flagship case: item
+`bbad96d163ab` exists solely to record that `23eccae755a9`'s claim is FALSE, and warns that a
+worker claiming the latter "would very plausibly roll back a version on a refuted premise".
+Read verbatim, though, the correction refutes ONE SUB-CLAIM ("2.1.220 is 3.4x worse per
+session") while that item's MAIN work — a ~20x auth-error regression whose trigger is still
+unresolved — is entirely live. Refusing that claim would strand real work; the actual remedy
+is to guarantee the worker READS the correction before acting. So:
+
+    the enforcing store for a worker is its BRIEF, not this file's exit code.
+
+Hence `contract` is the primary product and refusal (`superseded`) is reserved for the narrow
+case where an item's WHOLE reason for existing is gone. This mirrors cc-dispatch's own
+plan-open premise gate, which is deliberately scoped to items whose entire claim was "this
+plan is open" and which fails OPEN on every sensor failure.
+
+FAIL-OPEN BY CONSTRUCTION. Only exit 3 blocks anything. Every other outcome — a clear read, an
+unreadable ledger, an exception, a missing git repo — exits 0, so a sensor failure can never
+starve the queue. An unread premise is "I could not tell", never "it is finished".
+
+Verbs:
+  check <id>       one-line `verdict=<token>` + the contract on stderr. exit 3 iff superseded.
+  contract <id>    the brief-injectable block, or nothing at all. always exit 0.
+  sweep [--json]   the whole-store triage report (§S3 "mechanical first").
+
+Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl} — the same resolution
+cc-backlog uses, so a fixtured test and the live desk read the same way.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import defaultdict
+
+BACKLOG = os.environ.get(
+    "CC_BACKLOG_FILE", os.path.join(os.path.expanduser("~"), ".claude/autonomy/backlog.jsonl")
+)
+
+
+def _default_repo():
+    """This file's OWN checkout — `bin/cc-premise` ⇒ the repo root one level up.
+
+    Resolved through the symlink chain exactly as `_folded_items` resolves its cc-backlog sibling,
+    so a worktree's cc-premise reads that worktree and a deployed symlink reads the checkout it
+    points into — never a mix of the two.
+
+    WHY A DEFAULT AT ALL, rather than leaving the git arms opt-in: neither live caller sets
+    CC_PREMISE_REPO. Opt-in therefore means the sha and path arms — §S3's entire "mechanical first"
+    half — never execute anywhere except an operator's hand-exported shell, which is a mechanism
+    that exists only as prose (memory: spec-named-mechanism-may-be-prose-only). Setting the
+    variable EXPLICITLY EMPTY still disables them; that is how the suite stays hermetic.
+    """
+    try:
+        return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    except OSError:
+        return ""
+
+
+REPO = os.environ.get("CC_PREMISE_REPO", _default_repo())
+
+# A backlog id is exactly 12 hex. Git shas cited in prose run 7-40. The two overlap at 12, so
+# an id-shaped token is resolved against the LEDGER first and only treated as a sha if no item
+# carries it — otherwise every "backlog item <id>" reference reads as a bogus git reference.
+RE_ID = re.compile(r"\b[0-9a-f]{12}\b")
+RE_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+# REFUTATION vs CITATION — and this had to be rebuilt once, which is the whole lesson.
+#
+# The first cut matched "a refuting verb within 120 chars of the id". Measured against the live
+# store that gave 370 hits where 24 are real, because the items that reference other items most
+# are COMPOSED STATUS notes citing five or six ids at once ("supersedes my X; extends Y / Z") —
+# a proximity window cannot tell which id a verb governs, so every id in the sentence inherited
+# the verb belonging to one of them. It convicted `21c6b3ab5532` (tmux debug logging) of being
+# superseded by an item about pane visibility, and `21c6b3ab5532` is one of only eleven OPEN
+# items in the store.
+#
+# So the relation must be DIRECTED — the verb has to take the id as its object:
+#   verb → id   "CORRECTION to backlog item <id>", "supersedes my <id>", "RETRACTS <id>"
+#   id → pred   "<id> is FALSE", "<id> was refuted"
+# with only closed-class filler allowed between them. That is the difference between a verb
+# NEAR an id and a verb ABOUT it, and it is what took 370 down to 24 with no true positive lost
+# (the dropped pairs are "extends Y / Z", which is not a refutation at all).
+RE_VERB = (
+    r"(?:CORRECTION|CORRECTS?|SUPERSEDES?|SUPERSEDED|RETRACTS?|RETRACTED"
+    r"|REFUTES?|REFUTED|INVALIDATES?|OBSOLETES?)"
+)
+# closed-class filler only — never an open word, or "supersedes X" would reach past a noun phrase
+RE_FILL = r"(?:\s+(?:to|of|vs\.?|by|my|the|backlog|item|blocked|open|and|or|[/,])){0,4}\s*"
+# `(?<!UN-)` is not decoration: the store contains "THIS PARTIALLY UN-RETRACTS <id>", which the
+# bare verb reads as a retraction of exactly the item it is REINSTATING.
+RE_VERB_ID = re.compile(r"(?<!UN-)(?<!un-)(?<!-)\b" + RE_VERB + RE_FILL + r"$", re.I)
+RE_ID_PRED = re.compile(
+    r"\s*(?:\([^)]*\)\s*)?(?:is|was|has been)\s+"
+    r"(FALSE|WRONG|REFUTED|RETRACTED|SUPERSEDED|OBSOLETE)",
+    re.I,
+)
+# Which verbs kill the WHOLE item (⇒ refusal) rather than one sub-claim (⇒ advisory).
+RE_WHOLE = re.compile(r"^(?:SUPERSEDES?|SUPERSEDED|RETRACTS?|RETRACTED|INVALIDATES?|OBSOLETES?)", re.I)
+
+# DUPLICATE IS THE OTHER DIRECTION, and reading it the same way as the verbs above would have
+# been the most dangerous bug in this file. "post-land RED … DUPLICATE of blocked <id> — STAND
+# DOWN" does not say the TARGET is stale; it says THE SPEAKER is, and the target is the
+# canonical item still holding the work. Treating it as a refutation would refuse claims on
+# precisely the live item that should be worked. Measured: six items share one condition
+# (`tests/deploy-parity.bats` post-land RED, re-keyed by the sha in each title), five of them
+# declare themselves duplicates of the sixth, and all six sit `blocked`.
+RE_SELF_DUP = re.compile(
+    r"\b(?:DUPLICATE|dupe)\s+(?:of\s+)?(?:blocked\s+|open\s+)?(?:item\s+)?([0-9a-f]{12})\b", re.I
+)
+
+# The verdicts that REFUSE a claim (exit 3). Everything else advises and proceeds. Kept as one
+# tuple so the gate, the report and the tests can never disagree about which is which.
+BLOCKING = ("superseded", "self-duplicate")
+
+# A file path cited in a premise. Conservative on purpose: a bare word with a slash is not a
+# path claim, so this wants a real extension or a known top-level dir of this repo.
+RE_PATH = re.compile(
+    r"\b((?:bin|hooks|scripts|tests|docs|src|lib|\.claude)/[\w./@-]+"
+    r"|[\w./@-]+\.(?:sh|py|bats|md|json|yaml|yml|ts|tsx|js|jsx))\b"
+)
+
+
+def _die_open(msg):
+    """Any failure to READ is fail-open: say so on stderr, verdict unknown, exit 0."""
+    sys.stderr.write("cc-premise: %s\n" % msg)
+    sys.stdout.write("verdict=unknown\n")
+    sys.exit(0)
+
+
+def load_records():
+    """Every well-formed ledger record, in file order. Malformed lines are skipped, never fatal.
+
+    Deliberately NOT a status fold — `check` only needs the TEXT of every item plus its filing
+    order, and folding the whole ledger on the claim hot path would tax every claim to answer a
+    question the fold cannot answer anyway. `sweep` asks cc-backlog itself for the fold, so
+    there stays exactly one implementation of "what status is this item".
+    """
+    recs = []
+    try:
+        with open(BACKLOG, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue  # malformed: cc-backlog reports these; we must not add a second voice
+                if isinstance(obj, dict) and obj.get("id"):
+                    recs.append(obj)
+    except (IOError, OSError) as exc:
+        _die_open("ledger unreadable (%s) — fail-open" % exc)
+    return recs
+
+
+def build_index(recs):
+    """id -> {text, first_ts, title} — the text of an item is every word ever filed under it."""
+    idx = {}
+    for r in recs:
+        rid = r["id"]
+        parts = [r.get(k) or "" for k in ("title", "needs", "evidence")]
+        text = " ".join(p for p in parts if p)
+        ent = idx.setdefault(rid, {"text": "", "first_ts": r.get("ts") or "", "title": "",
+                                   "project": "", "notes": []})
+        if text:
+            ent["text"] = (ent["text"] + " " + text).strip()
+            # PER-RECORD, WITH ITS OWN TIMESTAMP. Two measured reasons this cannot collapse to one
+            # blob keyed on the item's add-time:
+            #   1. `needs`/`evidence` are LAST-WRITE-WINS in the fold, and corrections overwrite
+            #      corrections — one item was annotated four times in 97 minutes, each note
+            #      correcting the previous, and only the last survives a fold. 17 superseded notes
+            #      across 11 items carry refutation language that the folded view has lost. This is
+            #      why the whole file reads the append-only ledger and never `list --json`.
+            #   2. A refutation is dated by the EVENT THAT WROTE IT, not by when its author-item was
+            #      filed. 6 of 64 correctors in the live store were added BEFORE their target — the
+            #      refuting sentence arrived later, in a `done` or `block` event on an older item.
+            #      Keying the ordering test on add-order silently drops all six (9%).
+            ent["notes"].append((r.get("ts") or "", text))
+        if r.get("title") and not ent["title"]:
+            ent["title"] = r["title"]
+        if r.get("project") and not ent["project"]:
+            ent["project"] = r["project"]
+        ts = r.get("ts") or ""
+        if ts and (not ent["first_ts"] or ts < ent["first_ts"]):
+            ent["first_ts"] = ts
+    return idx
+
+
+def _refutes(target, text):
+    """Directed refutation of `target` inside `text` → (matched_phrase, whole) or None."""
+    for m in re.finditer(r"\b%s\b" % re.escape(target), text):
+        # `wt-<id>` is a WORKTREE NAME — the dispatcher names a worker's worktree after the item
+        # it works on, so "reso wt-21c6b3ab5532" is a filesystem path, not a reference to it.
+        if text[max(0, m.start() - 3) : m.start()] in ("wt-", "/wt", "-wt"):
+            continue
+        v = RE_VERB_ID.search(text[max(0, m.start() - 80) : m.start()])
+        if v:
+            phrase = v.group(0).strip()
+            return phrase, bool(RE_WHOLE.match(phrase))
+        p = RE_ID_PRED.match(text[m.end() : m.end() + 60])
+        if p:
+            return p.group(0).strip(), p.group(1).upper() in ("SUPERSEDED", "RETRACTED", "OBSOLETE")
+    return None
+
+
+def find_correctors(target, idx):
+    """Items that REFUTE `target`, newest first.
+
+    Three conditions, all required — each removes a false-positive class measured in the store:
+      1. a DIRECTED verb→id / id→predicate relation (see RE_VERB_ID; a mere mention is a CITE)
+      2. the reference is not a `wt-<id>` worktree path
+      3. the corrector was filed AFTER the target — a correction cannot precede its subject
+    """
+    out = []
+    tgt_ts = idx.get(target, {}).get("first_ts", "")
+    for rid, ent in idx.items():
+        if rid == target:
+            continue  # an item never refutes itself; the corrector is a separate deliverable
+        if target not in ent["text"]:
+            continue
+        # Scan RECORDS, not the merged blob, so the ordering test below sees the timestamp of the
+        # event that actually wrote the refutation.
+        for nts, ntext in ent["notes"]:
+            if target not in ntext:
+                continue
+            if tgt_ts and nts and nts < tgt_ts:
+                continue  # written before the target existed ⇒ cannot be about it
+            hit = _refutes(target, ntext)
+            if not hit:
+                continue
+            out.append({"id": rid, "text": ntext, "phrase": hit[0], "whole": hit[1], "ts": nts})
+            break
+    out.sort(key=lambda c: c["ts"], reverse=True)
+    return out
+
+
+def self_duplicate_of(item_id, idx):
+    """The id this item declares ITSELF a duplicate of, if any — the inverted direction."""
+    ent = idx.get(item_id)
+    if not ent:
+        return None
+    for m in RE_SELF_DUP.finditer(ent["text"]):
+        other = m.group(1)
+        if other != item_id and other in idx:
+            return other
+    return None
+
+
+def _git(args):
+    """A bounded git read. Any failure is None — never an exception, never a block."""
+    if not REPO:
+        return None
+    try:
+        p = subprocess.run(
+            ["git", "-C", REPO] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else None
+
+
+_GIT_USABLE = []  # one-slot cache
+
+
+def _git_usable():
+    """Positive control: does this repo ANSWER at all? One cheap probe, cached.
+
+    THE FAIL-OPEN HOLE THIS CLOSES, and it was measured rather than reasoned. `_git` returns None
+    for two utterly different things — "git answered, that object is absent" and "git could not be
+    asked" (no repo, no git binary, a timeout) — and the path arm below read both as ABSENT. So
+    with no readable repo it convicted every cited path containing a slash. Against the live store
+    that is 156 `suspect` items where the truth is 76: **80 fabricated findings**, each one a false
+    sentence ("CITED PATH(S) not at that location on origin/main: tests/deploy-parity.bats") riding
+    a real worker's brief about a file that has never moved.
+
+    That was not a latent risk, it was the SHIPPING configuration: neither cc-backlog nor
+    cc-dispatch sets CC_PREMISE_REPO, so every production call took the fabricating path while the
+    suite — which unsets the variable too — could not see it. A sensor that cannot read must report
+    UNKNOWN, never ABSENT (memory: lookup-miss-is-not-absence); this file's own docstring already
+    promised exactly that, and only the ledger arm honoured it. Resolving origin/main is the
+    control that separates "answered no" from "did not answer".
+    """
+    if not _GIT_USABLE:
+        _GIT_USABLE.append(
+            bool(REPO) and _git(["rev-parse", "--verify", "origin/main"]) is not None
+        )
+    return _GIT_USABLE[0]
+
+
+def cited_shas(text, known_ids):
+    """SHA-shaped tokens that are NOT backlog ids and not decimal — deduped, order preserved.
+
+    The id test is a PREFIX test, not exact match, and that is not pedantry: a 7-8 char run of an
+    id is itself sha-shaped, so `fdf4161` (the citing item's OWN id, appearing as the branch name
+    `ship/backup-fdf4161`) and `f72db4e3` both read as git shas under an exact-match filter and
+    resolve to nothing — manufacturing two dead-pointer findings out of two self-references.
+    """
+    seen, out = set(), []
+    for tok in RE_SHA.findall(text):
+        if tok in seen or tok.isdigit():
+            continue
+        if any(i.startswith(tok) for i in known_ids):
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
+
+
+def resolve_sha(sha):
+    """landed | on-branch | absent | ambiguous | unknown — a claim about THIS repo only.
+
+    ⚠️ THIS RESOLVES A POINTER, NOT A PREMISE, and the difference is the whole reason nothing
+    downstream may auto-close on it. This repo lands by REBASE, so the commit that landed is a
+    DIFFERENT OBJECT than the branch commit an item cited: measured over the live store, 45 of 61
+    non-ancestor shas have an exact patch-id twin already on origin/main, and 5 of 10 shas that
+    resolve to no object at all describe changes that are demonstrably live on trunk under a
+    rewritten sha. `absent` therefore means "this pointer is dead", never "this work is undone" —
+    which is why every sha finding below is contract prose for a human, never an exit code.
+    """
+    if not REPO:
+        return "unknown"
+    typ = _git(["cat-file", "-t", sha])
+    if typ is None:
+        # `cat-file -t` fails both for an absent object and an ambiguous prefix; the two mean
+        # very different things to a reader, so ask rev-parse which it was before answering.
+        return "ambiguous" if _git(["rev-parse", "--disambiguate=" + sha]) else "absent"
+    if typ != "commit":
+        return "unknown"  # a tree/blob sha is cited as an artifact, not as a change
+    if _git(["merge-base", "--is-ancestor", sha, "origin/main"]) is not None:
+        return "landed"
+    return "on-branch"
+
+
+_TRUNK_BASENAMES = []  # one-slot cache; None inside means "asked and could not enumerate"
+
+
+def _trunk_basenames():
+    """Every basename on origin/main, read ONCE. None if the tree cannot be enumerated."""
+    if not _TRUNK_BASENAMES:
+        out = _git(["ls-tree", "-r", "--name-only", "origin/main"])
+        _TRUNK_BASENAMES.append(
+            None if out is None else {ln.rsplit("/", 1)[-1] for ln in out.splitlines()}
+        )
+    return _TRUNK_BASENAMES[0]
+
+
+def cited_paths(text):
+    seen, out = set(), []
+    for m in RE_PATH.finditer(text):
+        p = m.group(1).rstrip(".,;:)")
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out[:12]  # a contract is read by a human; an unbounded list is not read at all
+
+
+def assess(item_id, idx):
+    """The predicate. Returns (verdict, contract_lines)."""
+    ent = idx.get(item_id)
+    if ent is None:
+        return "unknown", []
+
+    lines, verdict = [], "clear"
+    text = ent["text"]
+
+    # (a) THIS item declares itself redundant. Strongest signal in the store and the cheapest to
+    # act on: the canonical sibling is named, so the reader is never left guessing what survives.
+    dup = self_duplicate_of(item_id, idx)
+    if dup:
+        verdict = "self-duplicate"
+        lines.append(
+            "THIS ITEM DECLARES ITSELF A DUPLICATE of %s — that item is canonical and holds the "
+            "work. Do not work this one; close it citing %s." % (dup, dup)
+        )
+
+    correctors = find_correctors(item_id, idx)
+    if correctors:
+        whole = [c for c in correctors if c["whole"]]
+        if verdict == "clear":
+            verdict = "superseded" if whole else "corrected"
+        elif whole:
+            verdict = "superseded"
+        for c in correctors[:3]:
+            excerpt = " ".join(c["text"].split())[:400]
+            lines.append("REFUTED BY %s (\"%s\")%s:"
+                         % (c["id"], c["phrase"], " — WHOLE ITEM" if c["whole"] else ""))
+            lines.append("    %s" % excerpt)
+
+    # THE GIT ARMS ONLY SPEAK ABOUT THIS REPO. An item filed against reso-management-app or
+    # doc_classifier cites THAT repo's shas and paths, which are correctly absent here — resolving
+    # them against this checkout manufactures a dead-pointer finding for every cross-project item
+    # (20 of 209 cited shas were verified present in a sibling repo). Silence is the honest answer.
+    own_repo = ent.get("project") in ("", "claude-infrastructure")
+
+    # …and they only speak when git is ANSWERING. `_git_usable()` is the difference between "absent"
+    # and "could not ask"; without it an unreadable repo fabricates a finding per cited path.
+    if own_repo and _git_usable():
+        known = set(idx)
+        bad = []
+        for sha in cited_shas(text, known)[:20]:  # bounded: the 21st sha adds no clarity
+            state = resolve_sha(sha)
+            if state in ("absent", "ambiguous"):
+                bad.append((sha, state))
+        if bad:
+            if verdict == "clear":
+                verdict = "suspect"
+            for sha, state in bad:
+                lines.append(
+                    "CITED SHA %s: no such object here (%s). This repo lands by REBASE, so a dead "
+                    "pointer does NOT mean the change is undone — check whether the described "
+                    "change is on trunk by CONTENT before concluding anything." % (sha, state)
+                )
+
+        gone = []
+        for p in cited_paths(text):
+            if _git(["cat-file", "-e", "origin/main:" + p]) is not None:
+                continue
+            # A BARE BASENAME IS NOT A PATH. `deploy-live.sh` lives at `scripts/deploy-live.sh`, so
+            # resolving it as a repo-root path fails and reports a live file as missing — which is
+            # what this arm did on its first run, on a file that has never moved. Anything without
+            # a directory component gets a basename search before it may be called absent.
+            if "/" not in p:
+                names = _trunk_basenames()
+                if names is None or p in names:
+                    continue  # present under some directory, or not enumerable ⇒ cannot convict
+            gone.append(p)
+        if gone:
+            if verdict == "clear":
+                verdict = "suspect"
+            lines.append(
+                "CITED PATH(S) not at that location on origin/main: %s — moved, renamed, or never "
+                "landed. Confirm before acting." % ", ".join(gone[:6])
+            )
+
+    return verdict, lines
+
+
+CONTRACT_HEADER = (
+    "PREMISE CHECK — verify BEFORE acting. This item's premise is a CLAIM written at filing "
+    "time, not a fact. If it is refuted, THE DISPROOF IS THE DELIVERABLE: write it back into "
+    "the store (cc-backlog add, naming this item's id) and close this item citing it — never "
+    "silently close, and never act on the refuted part."
+)
+
+
+def cmd_check(item_id):
+    idx = build_index(load_records())
+    verdict, lines = assess(item_id, idx)
+    # LINE 1 is the machine-readable token: cc-backlog's caller sees only a head-biased excerpt,
+    # so the verdict must ride the first line or it does not exist (memory:
+    # claimed-outcome-vs-checked-outcome).
+    sys.stdout.write("verdict=%s\n" % verdict)
+    if lines:
+        sys.stderr.write(CONTRACT_HEADER + "\n")
+        for ln in lines:
+            sys.stderr.write("  " + ln + "\n")
+    # ONLY a whole-item supersession or a self-declared duplicate blocks. Everything else has
+    # told the caller what it needs and must not stand in the way of real work — a `corrected`
+    # item usually still holds live work beside the one claim that was refuted.
+    sys.exit(3 if verdict in BLOCKING else 0)
+
+
+def cmd_contract(item_id):
+    """The brief-injectable block. Silent when there is nothing to say — a contract that fires
+    on every item is one the worker learns to skip."""
+    idx = build_index(load_records())
+    verdict, lines = assess(item_id, idx)
+    if verdict in ("clear", "unknown") or not lines:
+        sys.exit(0)
+    sys.stdout.write(CONTRACT_HEADER + "\n")
+    for ln in lines:
+        sys.stdout.write("  " + ln + "\n")
+    sys.exit(0)
+
+
+def _folded_items():
+    """The FOLD comes from cc-backlog itself — never re-implemented here (one arbiter per fact)."""
+    exe = os.environ.get("CC_PREMISE_BACKLOG_BIN") or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "cc-backlog"
+    )
+    try:
+        p = subprocess.run(
+            [exe, "list", "--all", "--json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+        if p.returncode != 0:
+            return None
+        return json.loads(p.stdout.decode("utf-8", "replace"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _norm_title(t):
+    """A title with its DECIMAL MEASUREMENTS removed — and deliberately NOT its shas.
+
+    The item id hashes project+title+source, so a title carrying a live figure re-keys itself on
+    every measurement; stripping those figures is what folds one standing condition back into one
+    cluster.
+
+    ⚠️ A HEX SHA IS LEFT ALONE, and that asymmetry is the measured decision rather than an
+    oversight (§S3 finding 3). `postland-verify` puts the culprit sha in the title ON PURPOSE — a
+    new RED at a new commit is new work, not a re-filing of the old one — so normalising shas out
+    merges 18 genuinely distinct findings into one and loses 17 of them. `\\b\\d+\\b` cannot match
+    inside `3e423b762e60` anyway (no word boundary mid-token), so the behaviour and the intent
+    agree; this docstring exists so nobody later "fixes" the regex into the harmful direction.
+    """
+    t = t.lower()
+    t = re.sub(r"\d+(?:\.\d+)?\s*(?:kb|mb|gb|%|ms|s\b|h\b|items?|commits?|sessions?|files?|lines?)", "#", t)
+    t = re.sub(r"\b\d+(?:\.\d+)?\b", "#", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def cmd_sweep(as_json):
+    items = _folded_items()
+    if items is None:
+        _die_open("cc-backlog list failed — cannot sweep")
+    idx = build_index(load_records())
+    nd = [i for i in items if i.get("status") != "done"]
+    done = [i for i in items if i.get("status") == "done"]
+
+    buckets = defaultdict(list)
+    for it in nd:
+        verdict, lines = assess(it["id"], idx)
+        if verdict != "clear":
+            buckets[verdict].append({"id": it["id"], "status": it.get("status"),
+                                     "title": (it.get("title") or "")[:120], "why": lines[:2]})
+
+    # THE RE-KEYING PILE. The item id hashes project+title+source, so a title carrying a live
+    # measurement — a byte count, a sha, a session count — mints a BRAND NEW item every time the
+    # same standing condition is measured. Normalising those figures out is what turns the
+    # scattered rows back into the one condition they always were.
+    #
+    # Clustered over non-done AND done together, deliberately: comparing non-done only against DONE
+    # items answers "is this already finished", which is a different and weaker question than "are
+    # these N rows one condition". A cluster whose members are ALL open is exactly the pile that
+    # must not be released into an unattended dispatcher as N separate pieces of work.
+    #
+    # ⚠️ BOTH COUNTS READ ZERO ON THE LIVE STORE, and zero is the CORRECT answer, not a dead sensor.
+    # The one visibly repetitive pile — 27 blocked `post-deploy HOST RED: …bats(1) @ <sha>` rows —
+    # is sha-keyed, and §S3 finding 3 measured that folding those together destroys 17 of 18
+    # distinct findings, so `_norm_title` leaves shas intact by design. What remains after that is a
+    # store with no decimal-re-keyed duplication left in it. Anyone reading 0/0 as breakage should
+    # read `_norm_title` first: the honest signal here is the item's own words, which is what the
+    # verdict buckets above are.
+    done_norm = defaultdict(list)
+    for it in done:
+        done_norm[_norm_title(it.get("title") or "")].append(it)
+    nd_norm = defaultdict(list)
+    for it in nd:
+        nd_norm[_norm_title(it.get("title") or "")].append(it)
+
+    dupes, clusters = [], []
+    for it in nd:
+        sibs = done_norm.get(_norm_title(it.get("title") or ""))
+        if not sibs:
+            continue
+        newest = max(s.get("lastTs") or "" for s in sibs)
+        dupes.append({"id": it["id"], "status": it.get("status"),
+                      "title": (it.get("title") or "")[:120],
+                      "done_sibling_newest": newest, "done_siblings": len(sibs),
+                      "closed_after_this": newest > (it.get("lastTs") or "")})
+    for norm, members in nd_norm.items():
+        if len(members) < 2:
+            continue
+        members = sorted(members, key=lambda m: m.get("lastTs") or "")
+        clusters.append({
+            "normalized": norm[:110],
+            "n": len(members),
+            "closed_siblings": len(done_norm.get(norm, [])),
+            "members": [{"id": m["id"], "status": m.get("status"),
+                         "lastTs": m.get("lastTs"), "title": (m.get("title") or "")[:110]}
+                        for m in members],
+        })
+    clusters.sort(key=lambda c: c["n"], reverse=True)
+
+    ages = defaultdict(int)
+    for it in nd:
+        ages[(it.get("lastTs") or "?")[:10]] += 1
+
+    report = {
+        "non_done": len(nd),
+        "done": len(done),
+        "superseded": buckets.get("superseded", []),
+        "self_duplicate": buckets.get("self-duplicate", []),
+        "corrected": buckets.get("corrected", []),
+        "suspect": buckets.get("suspect", []),
+        "dupes_of_done": dupes,
+        "rekey_clusters": clusters,
+        "rekey_redundant": sum(c["n"] - 1 for c in clusters),
+        "by_day": dict(sorted(ages.items())),
+    }
+    if as_json:
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+        sys.exit(0)
+
+    w = sys.stdout.write
+    w("cc-premise sweep — %d non-done items (%d done) · store %s\n" % (len(nd), len(done), BACKLOG))
+    w("\n  REFUSED at claim (exit 3):\n")
+    w("    superseded     — another item retracts this one WHOLE : %d\n" % len(report["superseded"]))
+    w("    self-duplicate — this item names its own canonical sib: %d\n" % len(report["self_duplicate"]))
+    w("  ALLOWED, contract rides the brief:\n")
+    w("    corrected      — a sub-claim refuted, work still live : %d\n" % len(report["corrected"]))
+    w("    suspect        — a cited sha/path no longer resolves  : %d\n" % len(report["suspect"]))
+    w("  re-keyed clusters (one condition, N rows)         : %d clusters, %d redundant rows\n"
+      % (len(clusters), report["rekey_redundant"]))
+    w("  dupes-of-done (same condition, numbers stripped)  : %d  (%d closed AFTER this item)\n"
+      % (len(dupes), sum(1 for d in dupes if d["closed_after_this"])))
+    for key, label in (("superseded", "SUPERSEDED"), ("self_duplicate", "SELF-DUPLICATE"),
+                       ("corrected", "CORRECTED"), ("suspect", "SUSPECT")):
+        rows = report[key]
+        if not rows:
+            continue
+        w("\n── %s ─────────────────────────────────────────────\n" % label)
+        for r in rows:
+            w("  %s [%s] %s\n" % (r["id"], r["status"], r["title"]))
+            for why in r["why"]:
+                w("      %s\n" % why[:160])
+    if clusters:
+        w("\n── RE-KEYED CLUSTERS (one standing condition, N ledger rows) ──\n")
+        for c in clusters:
+            w("  ×%d  %s%s\n" % (c["n"], c["normalized"],
+                                 "  (+%d already closed)" % c["closed_siblings"]
+                                 if c["closed_siblings"] else ""))
+            for m in c["members"]:
+                w("        %s [%s] %s\n" % (m["id"], m["status"], m["lastTs"]))
+    if dupes:
+        w("\n── DUPES OF DONE WORK ───────────────────────────────\n")
+        for d in sorted(dupes, key=lambda x: not x["closed_after_this"]):
+            w("  %s [%s] %s\n      %d done sibling(s), newest %s%s\n"
+              % (d["id"], d["status"], d["title"], d["done_siblings"], d["done_sibling_newest"],
+                 "  ← closed AFTER this item was last touched" if d["closed_after_this"] else ""))
+    sys.exit(0)
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        sys.stdout.write(__doc__)
+        sys.exit(0)
+    verb, rest = argv[0], argv[1:]
+    if verb == "check":
+        if not rest:
+            sys.stderr.write("cc-premise check: <id> is required\n")
+            sys.exit(2)
+        cmd_check(rest[0])
+    elif verb == "contract":
+        if not rest:
+            sys.stderr.write("cc-premise contract: <id> is required\n")
+            sys.exit(2)
+        cmd_contract(rest[0])
+    elif verb == "sweep":
+        cmd_sweep("--json" in rest)
+    else:
+        sys.stderr.write("cc-premise: unknown verb %s\n" % verb)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the whole point is that NOTHING here may block a claim
+        _die_open("unexpected error (%s) — fail-open" % exc)
