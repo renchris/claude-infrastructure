@@ -363,7 +363,17 @@ mklag() {  # a shared checkout that is BEHIND its origin, with a deploy script o
   # until a tree verifies green"), and this box's trunk is PERSISTENT-RED for reasons no operator
   # action clears. Deploy sorts FIRST, so treating its refusal as fatal meant the ONE COMMAND ran
   # NOTHING: every pending activation sat behind a step that cannot succeed today.
-  mklag 1
+  #
+  # FIXTURE RETARGETED (§2.6 D5). `mklag 1` made this test VACUOUS the moment cc-do started holding
+  # deploys the lane says it would refuse: the step is ⊘ and never runs, so "it did not halt the run"
+  # became true because nothing ran — a control passing because a sibling mechanism already fixed
+  # what it tests. The residual risk this skip actually exists for is narrower and still real: the
+  # probe is taken when the board is RENDERED and the run happens seconds later, so a lane that
+  # passes --dry-run can still refuse for real (the tip moved, the fetch now fails, a peer's file
+  # went dirty). This stub IS that state — probe passes, run refuses.
+  mklag 0
+  printf '#!/bin/bash\ncase " $* " in *" --dry-run "*) exit 0 ;; esac\nexit 1\n' \
+    > "$BATS_TEST_TMPDIR/dep.sh"
   mkact 70-after "$BATS_TEST_TMPDIR/ran"
   run "$DO" --run </dev/null
   [ "$status" -eq 0 ]
@@ -389,4 +399,49 @@ mklag() {  # a shared checkout that is BEHIND its origin, with a deploy script o
   [ "$status" -eq 1 ]
   [ ! -f "$CC_ACTIVATION_DIR/71-bad.sh.done" ]
   [ ! -f "$BATS_TEST_TMPDIR/should-not-run" ]
+}
+
+# ── the platter must not offer a command its own gate rejects (DEPLOY_LANE_GROUND_UP §2.6 D5 / V9) ─
+# RUN 1 on this board was `bash ~/.claude/scripts/deploy-live.sh` for the entire window in which that
+# command refused 534 consecutive times. I11 had already established the rule for a MISSING platter
+# command — "a recover command that cannot run is worse than no row: it teaches the operator the
+# board lies" — and existence was only half of it. A command that exists and cannot succeed teaches
+# exactly the same lesson. cc-do now asks the lane (`--dry-run --offline`: its own T1/T2/T3 verdict,
+# no network) and downgrades a refusing deploy to ⊘ HELD.
+
+@test "a deploy the LANE REFUSES is HELD, not plattered as RUN" {
+  mklag 1
+  run "$DO" --list </dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'HELD    dep ' || false
+  echo "$output" | grep -q 'the lane REFUSES' || false
+  ! echo "$output" | grep -q 'RUN  1\.' || false          # nothing was offered as runnable
+  echo "$output" | grep -q '^cc-do — 0 runnable' || false  # and it does not inflate the count
+}
+
+@test "POSITIVE CONTROL: a deploy the lane ACCEPTS is still plattered as RUN 1" {
+  # Without this, "refusing deploys are held" is satisfied by holding EVERY deploy — a gate that
+  # always fires carries the same zero bits as one that cannot. It also pins that the probe reads the
+  # lane's EXIT CODE and not merely the presence of a deploy script.
+  mklag 0
+  run "$DO" --list </dev/null
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'RUN  1. dep ' || false
+  ! echo "$output" | grep -q 'HELD' || false
+}
+
+@test "a HELD deploy is never EXECUTED — --run skips straight to the activations behind it" {
+  # The mark is the whole mechanism: NRUN, run_steps and the prompt all key on ▶, so a ⊘ row cannot
+  # be run by construction. Asserted through the sentinel rather than the board, because the board
+  # already passed the test above and this is about what the RUNNER does with the same row.
+  mklag 1
+  # The stub must tell the PROBE apart from the RUN, or the sentinel below records the probe's own
+  # invocation and the test can never fail. --dry-run ⇒ refuse silently; a bare call ⇒ leave a mark.
+  printf '#!/bin/bash\ncase " $* " in *" --dry-run "*) exit 1 ;; esac\ntouch "%s"\nexit 1\n' \
+    "$BATS_TEST_TMPDIR/deploy-ran" > "$BATS_TEST_TMPDIR/dep.sh"
+  mkact 70-after "$BATS_TEST_TMPDIR/ran"
+  run "$DO" --run </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/deploy-ran" ]                 # held ⇒ the refusing command never ran
+  [ -f "$BATS_TEST_TMPDIR/ran" ]                          # …and nothing behind it was starved
 }

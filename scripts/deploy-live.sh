@@ -52,9 +52,11 @@
 # files a backlog packet, and does NOT roll back (this script never rolls back — rolling the live
 # layer back is an operator decision) and does NOT change the exit code.
 #
-# Flags: --dry-run (decide + print, mutate nothing) · --auto (unattended launchd mode) ·
-# --bootstrap (stamps dir ABSENT: deploy the tip unstamped, loud banner) · --force (same, with
-# stamps present — documented escape hatch).
+# Flags: --dry-run (decide + print, mutate nothing) · --offline (decide against the ALREADY-FETCHED
+# origin/main, never the network — composes with --dry-run to give a caller this lane's own verdict
+# at zero network risk; that is how the operator platter avoids offering a command this gate
+# rejects, §2.6 D5) · --auto (unattended launchd mode) · --bootstrap (stamps dir ABSENT: deploy the
+# tip unstamped, loud banner) · --force (same, with stamps present — documented escape hatch).
 # Env: DEPLOY_REPO · CC_POSTLAND_DIR · CC_POSTLAND_BIN · CC_PAGES_DIR · CC_DEPLOY_SCAN ·
 #      CC_DEPLOY_MAX_LAG_COMMITS (25) / CC_DEPLOY_MAX_LAG_HOURS (6) — the T2 budget, whichever
 #      trips FIRST · CC_DEPLOY_DEGRADE (on; off|0|no|false ⇒ T2 disabled = the strict green-only
@@ -87,18 +89,25 @@ MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
 HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-300}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
 
-DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0
+DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0; OFFLINE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)   DRY_RUN=1 ;;
     --auto)      AUTO=1 ;;
     --bootstrap) BOOTSTRAP=1 ;;
     --force)     FORCE=1 ;;
+    --offline)   OFFLINE=1 ;;
     -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0 ;;
-    *)           printf 'deploy-live: unknown arg %s (use --dry-run|--auto|--bootstrap|--force)\n' "$1" >&2; exit 2 ;;
+    *)           printf 'deploy-live: unknown arg %s (use --dry-run|--offline|--auto|--bootstrap|--force)\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
+# --offline IS DECISION-ONLY, and that is a safety property, not a convenience. Skipping the fetch
+# means deciding against a tip that may be arbitrarily stale; a mode that could then really merge
+# would deploy old trunk without ever saying it had not looked. It also takes this mode off the
+# actuation path entirely, so its refusals (below) cannot strand an advance — they can only decline
+# to answer a question. Callers who want a real deploy must fetch.
+[ "$OFFLINE" -eq 1 ] && DRY_RUN=1
 
 # --auto implies non-interactive: the two gate-bypasses are OPERATOR verbs and an unattended job
 # must never be able to take them. Refused at parse time, before anything reads the network.
@@ -402,7 +411,39 @@ STATE_MIGRATIONS="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
 link_refresh
 migrations_converge
 
-g fetch origin main >/dev/null 2>&1 || die "git fetch origin main FAILED in $DEPLOY_REPO (network? remote?)"
+# ── --offline · DECIDE WITHOUT THE NETWORK (§2.6 D5 / V9) ────────────────────────────────────────
+# The operator platter (bin/cc-do, hooks/operator-readout.sh) must not offer a deploy command this
+# script's own gate rejects. So it asks THIS script for the verdict instead of re-deriving the tier
+# ladder in the renderer — the predicate stays in exactly one place, which is the whole point of
+# `--dry-run --offline` existing at all. Two reasons it cannot simply call `--dry-run`:
+#
+#   1. operator-readout.sh is a STOP HOOK. A fetch there is a network round-trip at every turn close.
+#   2. Decisive: a fetch that FAILS `die`s rc 1, and the caller reads rc as "the lane refuses" — so a
+#      renderer probing runnability over a dropped network would report a deploy blocker THAT IT
+#      CAUSED ITSELF. A gate must never key on a signal it produces. (Same shape as the guard that
+#      aborted its own measurement: memory gate-must-not-key-on-its-own-signal.)
+#
+# --offline therefore decides against the ALREADY-FETCHED origin/main — the identical ref both
+# renderers already use to compute `behind`, so the probe and the row it guards cannot disagree
+# about which trunk they mean. An absent ref is still a hard refusal: unknown is never assumed safe.
+if [ "$OFFLINE" -eq 1 ]; then
+  # gate_bounded: NOT-ON-THE-ACTUATION-PATH — --offline forces DRY_RUN at parse time, so this
+  # refusal can only decline to ANSWER, never withhold an advance; and its sole callers are
+  # renderers that print it as a ⊘ HELD row, so it is an EVENT on first occurrence rather than
+  # after a budget expires. The 545-refusal scar was a standing state nobody was told about; this
+  # one is told every time or it is not reached at all. (permission-gate-lint §9 — a gate that
+  # pages immediately is strictly stronger than one that pages when a clock runs out.)
+  #
+  # DECLARED HERE AND NOT ON THE ENCLOSING `if`, deliberately. The lint accepts a marker on the
+  # enclosing condition so a multi-line gate declares its bound once — but that would have covered
+  # the `g fetch … || die` on the else-branch too, and this marker's text is FALSE of that leg: the
+  # fetch gate IS on the actuation path, it is what the 144x/day launchd lane hits. It went from 10
+  # undeclared gates to 9 on the first attempt, which is the lint catching a declaration that
+  # exempted more than it was true of.
+  g rev-parse --verify -q origin/main >/dev/null 2>&1 || die "no already-fetched origin/main in $DEPLOY_REPO — --offline never fetches one"
+else
+  g fetch origin main >/dev/null 2>&1 || die "git fetch origin main FAILED in $DEPLOY_REPO (network? remote?)"
+fi
 
 HEAD_SHA="$(g rev-parse HEAD 2>/dev/null || true)"
 TIP_SHA="$(g rev-parse origin/main 2>/dev/null || true)"
@@ -457,10 +498,20 @@ elif [ "$FORCE" -eq 1 ]; then
   TARGET="$TIP_SHA"; BANNER="UNSTAMPED --force deploy — green-stamp gate BYPASSED by the operator"
 else
   # ── T1 · VERIFIED — the default path, and the only tier that is allowed to be silent ────────────
+  # ── ONE process for sha+tree, not one fork PER COMMIT ────────────────────────────────────────────
+  # This loop used to call `g rev-parse "$sha^{tree}"` per candidate, i.e. up to SCAN_N=200 forks per
+  # evaluation. Measured on this box: 2.233s for the 200-fork walk vs 0.011s for `git log --format`
+  # — a 200x difference that IS the whole cost of an evaluation. It matters twice over:
+  #   · the lane runs 144x/day under launchd, so this was ~28,800 forks/day of pure overhead; and
+  #   · it is the precondition for `--dry-run --offline` being cheap enough for the operator platter
+  #     to ask this script for a verdict (§2.6 D5) instead of re-deriving the ladder in a renderer.
+  # It is slowest in exactly the state that matters: T1 `break`s early when it finds a green
+  # descendant, so the full 200-commit walk happens only when the answer is "blocked".
+  # `git log --format` is the header-free spelling of `rev-list --format`; verified identical sha
+  # lists to the `rev-list` it replaces, and %T is the same tree `rev-parse ^{tree}` returned.
   scanned=0
-  while IFS= read -r sha; do
+  while IFS=' ' read -r sha tree; do
     [ -n "$sha" ] || continue
-    tree="$(g rev-parse "$sha^{tree}" 2>/dev/null || true)"
     if [ -n "$tree" ] && is_green "$STAMPS_DIR/$tree.json"; then
       [ -n "$GREEN_SHA" ] || GREEN_SHA="$sha"    # newest green, deployable or not — the DIAGNOSIS
       # The ancestry test belongs HERE and not only at the anti-rollback guard below. A green tree
@@ -473,7 +524,7 @@ else
     fi
     scanned=$((scanned + 1))
   done <<EOF
-$(g rev-list "origin/main" -n "$SCAN_N" 2>/dev/null)
+$(g log --format='%H %T' -n "$SCAN_N" origin/main 2>/dev/null)
 EOF
 
   if [ -z "$TARGET" ]; then
@@ -527,15 +578,15 @@ EOF
           # history as a target. Every candidate here is above live HEAD by construction; the
           # anti-rollback guard below still runs, because "above" is not "descendant" if HEAD ever
           # diverges from trunk.
-          while IFS= read -r sha; do
+          # Same one-process sha+tree read as T1 above, for the same reason.
+          while IFS=' ' read -r sha tree; do
             [ -n "$sha" ] || continue
-            tree="$(g rev-parse "$sha^{tree}" 2>/dev/null || true)"
             if [ -n "$tree" ] && is_red "$STAMPS_DIR/$tree.json"; then
               RED_WALKED=$((RED_WALKED + 1)); continue      # walk back one commit
             fi
             TARGET="$sha"; TIER=T2; break
           done <<EOF
-$(g rev-list "$HEAD_SHA..origin/main" -n "$SCAN_N" 2>/dev/null)
+$(g log --format='%H %T' -n "$SCAN_N" "$HEAD_SHA..origin/main" 2>/dev/null)
 EOF
           if [ -n "$TARGET" ]; then
             BANNER="DEGRADED deploy — $RMSG; taking the newest NOT-RED commit instead, authorised by $LAG_TRIP"
