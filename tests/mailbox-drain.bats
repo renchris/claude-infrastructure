@@ -10,6 +10,25 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DRAIN="$REPO/hooks/mailbox-drain.sh"
+  # ── HERMETIC $HOME (2026-08-07) ──────────────────────────────────────────────────────────────
+  # Un-grandfathers this suite from rule 1 of scripts/test-hermeticity-lint.sh; that ratchet's
+  # DOWNWARD half requires the allowlist line to be deleted in this same commit, or the lint reds.
+  #
+  # Three seams in the subject default under $HOME, and CC_MAILBOX_DIR masks only the first two:
+  #   hooks/lib/mailbox-pending.sh:101  _mbx_dir()   → $HOME/.claude/mailbox
+  #   hooks/mailbox-drain.sh:107        _mdir        → $HOME/.claude/mailbox
+  #   hooks/mailbox-drain.sh:224        _armcmd      → $HOME/.claude/bin/cc-await-ping  ← UNMASKED
+  # plus scripts/handoff-disposition.sh:52-54 (MAILBOX_DIR/SESSIONS_BIN/TASKS_DIR), which the
+  # cursor-parity test below executes.
+  #
+  # Stated honestly: today the leak is LATENT, not verdict-bearing — the suite was measured 27/27
+  # green under BOTH the live and the fixtured $HOME, so this closes a seam rather than a red. That
+  # is the point of a pin (the lint's own rule-5 note: "converts 'latent' into 'cannot'"). The one
+  # UNMASKED seam is what makes it more than paperwork: the arm command this suite pins is built
+  # from live $HOME, so without the fixture the string under assertion is the operator's, and any
+  # future test that forgets CC_MAILBOX_DIR reads and MUTATES the operator's real mailbox.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/bin"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   mkdir -p "$CC_MAILBOX_DIR"
   UUID="AAAAAAAA-1111-2222-3333-444444444444"

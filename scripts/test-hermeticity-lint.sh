@@ -303,7 +303,6 @@ lead-deathwatch.bats
 lead-supervisor.bats
 lr-team-audit.bats
 mail-ack-consume.bats
-mailbox-drain.bats
 mailbox-forward.bats
 notify-back.bats
 operator-readout.bats
