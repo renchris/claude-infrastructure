@@ -581,6 +581,38 @@ itself on its own landing. Land latency at target on first production use.
 
 ## Learnings (accumulate; never delete)
 
+- 2026-08-07: **the verifier reached the right verdict and then filed almost none of it — two
+  defects in one line, pointing opposite ways, each hiding the other.** `red_actions "$sha"
+  "${FAILING[0]}"` filed exactly one backlog item per RED run, keyed on project+title+source with
+  the sha *in the title* (`# sha defeats wasDone`, deliberately). Measured over `runner.log`:
+  **69 RED runs · 472 failing-suite observations · 69 items minted · 38 of 58 distinct suites filed
+  ZERO times.**
+  - *Per-EVENT key* ⇒ the same standing red minted a fresh item every sweep (memory
+    `per-event-key-defeats-per-finding-dedupe`: page per-EVENT, backlog per-FINDING).
+  - *`FAILING[0]` only* ⇒ `FAILING` is corpus/TAP-ordered, so a suite that never sorts first was
+    unfilable **by construction**, not by accident. Worst case `tests/gate-home-isolation.bats`:
+    28 appearances, 0 filings, 0 rows in `flakes.jsonl` — never a flake correctly withheld, just
+    never looked at. It went unnoticed because the *count* of items looked healthy (69 runs, 69
+    items); only the ratio against the failing-suite population showed the hole.
+  - **The two masked each other.** Fixing only the key would still file one suite forever; fixing
+    only the breadth would mint N items per sweep instead of 1. Both had to move together, and the
+    primitive for it already existed — `cc-backlog --condition` (stable state key, digits refused).
+  - **The trap inside the fix**, worth more than the fix: `valid_condition()` rejects any key with
+    a digit and REFUSES the whole `add` (rc 2), and this call site is best-effort. A slug that
+    stripped digits would have filed 295 of 305 suites and silently dropped the 10 whose names carry
+    one (`it2-*`, `iterm2-*`, `cc-dispatch-v2`, `subagent-stop-r1`) — **re-creating this exact
+    invisibility for a different subset.** Digits are spelled out instead (`it2-kitty` →
+    `postland-red-it-two-kitty`); verified over all 305 suites + the prelints + the sentinel:
+    0 rejected, 0 collisions. Pinned by C13f.
+  - Same reason the count is now a *checked* outcome (`verdict=filed n= refused=`), not the
+    attempt count an `|| true` would have reported as success (memory
+    `claimed-outcome-vs-checked-outcome`) — on the one path whose whole job is to stop failures
+    going unseen.
+  - **Not fixed here, and stated so it is not mistaken for fixed:** `gate-home-isolation` passes
+    **22/22 standalone at trunk**, so its corpus-only red is a band/contention property, not a suite
+    bug — consistent with the load-sensitivity note at `postland-verify.sh` §337-341. This change
+    makes it *visible*; it does not make it green.
+
 - 2026-08-06: **refusing to convict and reaching the right verdict are two different fixes, and
   the bisect needed both.** §4.2.4's innocent-tip protection (line 73) was defeated without ever
   being violated: the guard asks only *"did a bisect name this?"*, and the walk named the tip as a
