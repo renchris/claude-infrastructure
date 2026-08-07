@@ -108,17 +108,21 @@ case "$name" in
 esac
 SH
 
+  # The census arm must stay FIRST: its `pid=,ppid=,rss=,comm=` ends with the aggregate's own
+  # `rss=,comm=`, so a reordering would silently route the census through the aggregate's file.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 case "$*" in
-  *"pid=,ppid=,rss=,comm="*) cat "$PS_CENSUS" 2>/dev/null ;;
-  *"pid=,rss=,comm=,args="*) cat "$PS_ACT" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
+  *"pid=,rss=,comm=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
+  *"pid=,ppid=,rss=,pcpu=,args="*) cat "$PS_SNAP"   2>/dev/null ;;
+  *"rss=,comm="*)                  cat "$PS_EXE"    2>/dev/null ;;
   *) echo "stub-ps $*" ;;
 esac
 SH
 
-  : > "$D/ps.census"; : > "$D/ps.act"
-  export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act"
+  : > "$D/ps.census"; : > "$D/ps.act"; : > "$D/ps.snap"; : > "$D/ps.exe"
+  export PS_CENSUS="$D/ps.census" PS_ACT="$D/ps.act" PS_SNAP="$D/ps.snap" PS_EXE="$D/ps.exe"
   chmod +x "$STUB"/pick "$STUB"/vm_stat "$STUB"/sysctl "$STUB"/ps
 }
 
@@ -457,4 +461,150 @@ sel() { # <prev pids> <stdin lines>
 @test "--ticks rejects a non-integer rather than mis-comparing it every loop" {
   run bash "$S" --ticks abc
   [ "$status" -eq 64 ] || false
+}
+
+# ══ 7. SNAPSHOT ATTRIBUTION — rank first, then name ══════════════════════════════════════════════
+# The first shape of this snapshot fired 18 times across the 2026-08-06/07 incident and could not say
+# what consumed the memory in EITHER direction (machine-lag-and-kitty-2026-08-06.md §7-bis(b)): an
+# argv list cut at `head -80` (truncated in 16 of 18 trips) beside a COMM-only top-30, which renders
+# every Node workload as `node`. Joined by pid, 1-8 of the LARGEST rows stayed unidentified at every
+# trip, and two successive analyses read a confident "tsc = 0" off it that was an artifact of the
+# instrument. These are the tests that stop each half coming back.
+
+# top_by_rss <n> <argv_max> — stdin is `ps -Awwo pid=,ppid=,rss=,pcpu=,args=`
+tbr() { run env bash -c '. "$1"; top_by_rss "$2" "$3"' _ "$D/lib.sh" "$1" "$2" <<< "$3"; }
+
+@test "the bound is a RANK, not a line cut: the biggest row is found wherever ps emitted it" {
+  # THE control that separates this from `head -N`. The largest process is emitted LAST, so a line
+  # cut returns precisely the two rows the post-mortem does not need and drops the one it does.
+  tbr 2 0 "$(printf '100 1 200000 0.0 node small.js\n200 1 300000 0.0 node mid.js\n300 1 900000 0.0 node huge.js\n')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
+  echo "$output" | head -1 | grep -q 'huge.js' || false      # ranked first, though emitted last
+  echo "$output" | tail -1 | grep -q 'mid.js' || false
+  ! echo "$output" | grep -q 'small.js' || false             # the SMALLEST is what falls off
+}
+
+@test "full argv distinguishes two workloads that COMM alone renders identically" {
+  # The second blindness, stated as its own case: under `-o comm` both of these are `node`, which is
+  # exactly why no count of tsc — zero or four — could be read off the old log.
+  tbr 2 0 "$(printf '400 1 1480000 5.0 node /w/wt-n16-gates/node_modules/typescript/bin/tsc --noEmit\n401 1 3432416 0.0 node /w/reso/node_modules/.bin/next-server\n')"
+  echo "$output" | grep -q 'tsc --noEmit' || false
+  echo "$output" | grep -q 'next-server' || false
+  [ "$(echo "$output" | grep -c ' node ')" = "2" ] || false  # …and both still show the interpreter
+}
+
+@test "the argv cap STAMPS what it dropped, and 0 means uncapped" {
+  # A per-ROW tail cut is categorically not the head -80 defect: that dropped whole processes in
+  # silence, this shortens one NAMED row and says by how much. Agent briefs ride in argv, so the cap
+  # is what keeps 13 snapshots per trip inside a 25 MiB rotation.
+  local long; long="$(printf 'node worker.js %s' "$(printf 'x%.0s' $(seq 1 500))")"
+  tbr 1 40 "$(printf '500 1 900000 0.0 %s\n' "$long")"
+  echo "$output" | grep -q 'node worker.js' || false          # the identity survives the cut
+  echo "$output" | grep -qE '…\[\+[0-9]+ chars\]' || false     # …and the cut announces itself
+  # POSITIVE CONTROL: the same row uncapped carries the whole tail and no stamp, so the assertion
+  # above is the cap working rather than the renderer always printing that marker.
+  tbr 1 0 "$(printf '500 1 900000 0.0 %s\n' "$long")"
+  ! echo "$output" | grep -q 'chars\]' || false
+  [ "$(echo "$output" | grep -c 'xxxxx')" = "1" ] || false
+}
+
+@test "argv is taken VERBATIM — internal whitespace is not rewritten by a field rejoin" {
+  # Rejoining $5..$NF collapses runs of spaces, which silently edits the forensic record. A path with
+  # a double space is the cheapest thing that catches it.
+  tbr 1 0 "$(printf '600 1 900000 0.0 /Applications/My  App.app/Contents/MacOS/My  App --flag\n')"
+  echo "$output" | grep -q 'My  App.app' || false
+  echo "$output" | grep -q 'MacOS/My  App --flag' || false
+}
+
+@test "a %CPU column a locale renders as 0,0 does not drop every row on the floor" {
+  # The fourth column is matched as any non-blank rather than [0-9.]+ precisely so a decimal-comma
+  # locale cannot empty the whole section while looking rendered.
+  tbr 1 0 "$(printf '700 1 900000 0,0 node w.js\n')"
+  echo "$output" | grep -q 'node w.js' || false
+  # NEGATIVE CONTROL: a genuine header line still has no place in the output.
+  tbr 2 0 "$(printf '  PID  PPID    RSS %%CPU ARGS\n700 1 900000 0.0 node w.js\n')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "1" ] || false
+}
+
+@test "rss_by_exe sees the swarm the ranked section cannot: many small workers, one big total" {
+  # Forty workers at 180 MB each outweigh any single row and appear in none of them. Removing the old
+  # unranked list without this would have been a net loss of exactly this shape.
+  local many=""
+  for i in $(seq 1 40); do many="$many"'184320 /opt/homebrew/bin/node'$'\n'; done
+  many="$many"'900000 /Applications/Dia.app/Contents/MacOS/Dia'$'\n'
+  run env bash -c '. "$1"; rss_by_exe 2' _ "$D/lib.sh" <<< "$many"
+  echo "$output" | head -1 | grep -qE '7200\.0 MB +x40 +node' || false   # 40 x 180 MB ranks first
+  echo "$output" | tail -1 | grep -qE 'x1 +Dia' || false
+}
+
+@test "an executable path containing spaces groups whole — comm is the trailing field" {
+  # `…/Google Chrome for Testing` is a real path on this box. Splitting on whitespace would shard one
+  # browser into four fabricated executables.
+  run env bash -c '. "$1"; rss_by_exe 3' _ "$D/lib.sh" \
+    <<< "$(printf '189488 /Users/x/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing\n4816 /Users/x/Helpers/chrome_crashpad_handler\n')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
+  echo "$output" | head -1 | grep -q 'x1    Google Chrome for Testing$' || false
+}
+
+@test "END TO END: a trip snapshot names the workload, and neither old blind section survives" {
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '43687 1 1480000 92.0 node /w/wt-n16-gates/node_modules/typescript/bin/tsc --noEmit\n24847 1 3432416 0.1 next-server (v16.2.12)\n' > "$PS_SNAP"
+  printf '1480000 /opt/homebrew/bin/node\n3432416 next-server (v16.2.12)\n' > "$PS_EXE"
+  run_daemon 3
+  [ -f "$SNAPLOG" ] || false
+  grep -q -- '--- top 30 by RSS, full argv' "$SNAPLOG" || false
+  grep -q 'tsc --noEmit' "$SNAPLOG" || false                    # the question §7-bis could not answer
+  grep -q 'next-server (v16.2.12)' "$SNAPLOG" || false
+  grep -q -- '--- RSS by executable, top 15' "$SNAPLOG" || false
+  grep -q -- '--- vm_stat ---' "$SNAPLOG" || false              # unchanged section, still there
+  # The two defective sections are GONE by name, not merely widened.
+  ! grep -q 'head -80' "$SNAPLOG" || false
+  ! grep -q 'top by memory' "$SNAPLOG" || false
+}
+
+@test "the follow-up samples carry argv too — the ramp watch was the blindest part of the record" {
+  # Twelve COMM-only samples used to follow every trip, so a process BORN after the trip appeared
+  # nowhere in the record at all.
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '43687 1 1480000 92.0 node /w/wt/node_modules/typescript/bin/tsc --noEmit\n' > "$PS_SNAP"
+  FUP_N=3 run_daemon 6
+  grep -q -- '--- follow-up 1/3' "$SNAPLOG" || false
+  [ "$(grep -c -- '--- top 10 by RSS' "$SNAPLOG")" -ge 1 ] || false   # the tighter follow-up rank
+  [ "$(grep -c 'tsc --noEmit' "$SNAPLOG")" -ge 2 ] || false           # trip snapshot AND a follow-up
+}
+
+@test "ps unreadable renders NO ROWS explicitly — an empty section would read as an idle box" {
+  # Same contract the sysctl readers hold: "could not measure" must never render as the healthy
+  # value. Here the healthy-looking value is a section with nothing under it.
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  : > "$PS_SNAP"; : > "$PS_EXE"
+  run_daemon 3
+  grep -q 'NO ROWS — ps was unreadable' "$SNAPLOG" || false
+  # POSITIVE CONTROL: the identical run with ps readable renders rows and no such marker, so the
+  # assertion above is the absence being reported and not the marker being printed unconditionally.
+  # mkstubs, not just rm — it rewinds the stub's tick counter, and without that the second run
+  # resumes past the ramp on a flat sequence, never trips, and the control passes vacuously.
+  rm -f "$SNAPLOG" "$LOG" "$PAGE"
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '43687 1 1480000 92.0 node tsc --noEmit\n' > "$PS_SNAP"
+  printf '1480000 /opt/homebrew/bin/node\n' > "$PS_EXE"
+  run_daemon 3
+  ! grep -q 'NO ROWS' "$SNAPLOG" || false
+  grep -q 'tsc --noEmit' "$SNAPLOG" || false
+}
+
+@test "a non-numeric snapshot seam is REFUSED at startup, never rendered as an empty section" {
+  # awk turns `-v n=abc` into 0, and n=0 renders a section with a header and nothing under it — a
+  # typo would silently restore the blindness. Each seam is asserted separately: one shared loop can
+  # be right for the variable it was tested with and never read the other three.
+  mkstubs 800000 0 0
+  for v in CC_SENTINEL_SNAP_TOPN CC_SENTINEL_SNAP_TOPN_FUP CC_SENTINEL_SNAP_ARGV_MAX CC_SENTINEL_SNAP_AGG_N; do
+    run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" "$v=abc" bash "$S" --ticks 1
+    [ "$status" -eq 64 ] || false
+    echo "$output" | grep -q "$v" || false
+  done
+  # POSITIVE CONTROL: the same run with a numeric value proceeds, so 64 above is the guard and not
+  # the daemon being broken by the presence of the variable.
+  run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_SNAP_TOPN=5 bash "$S" --ticks 1
+  [ "$status" -eq 0 ] || false
 }

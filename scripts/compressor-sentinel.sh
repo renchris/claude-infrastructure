@@ -44,6 +44,14 @@
 #     manufacture a 2.5x trip out of an unchanged machine. The instrument must not invent its subject.
 #   · A skipped or stretched tick RESETS the two-consecutive-tick streak. Consecutiveness asserted
 #     across a gap is a fabrication.
+#   · THE SNAPSHOT NAMES WHAT IT RANKS. Its first shape could not: an argv list cut at `head -80`
+#     (truncated in 16 of 18 trips) beside a COMM-only top-30, which renders every Node workload as
+#     `node`. Joining the two by pid still left 1-8 of the LARGEST rows unidentified at every trip,
+#     so no count of `tsc` — zero or four — could be read off it, and two successive analyses read a
+#     confident "tsc = 0" that was an artifact first of the cut and then of the column. An instrument
+#     that fires 18 times in an incident without naming its subject is how an unverified cause gets
+#     filed. Rank by RSS FIRST, then print the full argv of the rows that ranked (§7-bis(b) of
+#     docs/research/machine-lag-and-kitty-2026-08-06.md).
 #
 # Verdict-free by design: this is a daemon, not a reporting command. It exits 0 on clean shutdown,
 # 64 on a usage error, 3 when it cannot read the machine at all on the very first tick.
@@ -52,6 +60,8 @@
 #         CC_SENTINEL_TRIP_SEG_PCT (15) · CC_SENTINEL_TRIP_CBU_MB (640) · CC_SENTINEL_TRIP_SWAP_MB
 #         (1024) · CC_SENTINEL_COOLDOWN (60) · CC_SENTINEL_CENSUS_EVERY (6) · CC_SENTINEL_LOG
 #         (moves the snap log with it) · CC_SENTINEL_SNAP · CC_PAGES_DIR · CC_SENTINEL_ACT=stop
+#         CC_SENTINEL_SNAP_TOPN (30) · CC_SENTINEL_SNAP_TOPN_FUP (10) · CC_SENTINEL_SNAP_ARGV_MAX
+#         (400) · CC_SENTINEL_SNAP_AGG_N (15)
 set -uo pipefail
 
 INTERVAL="${CC_SENTINEL_INTERVAL:-10}"
@@ -72,6 +82,10 @@ ACT_RSS_KB="${CC_SENTINEL_ACT_RSS_KB:-102400}"   # 100 MB — below this a worke
 ACT_CAP="${CC_SENTINEL_ACT_CAP:-200}"
 FOLLOWUP_N="${CC_SENTINEL_FOLLOWUP_N:-12}"       # 12 x 5 s = the 60 s cooldown, by construction
 FOLLOWUP_SEC="${CC_SENTINEL_FOLLOWUP_SEC:-5}"
+SNAP_TOPN="${CC_SENTINEL_SNAP_TOPN:-30}"         # trip snapshot: how many RSS ranks carry full argv
+SNAP_TOPN_FUP="${CC_SENTINEL_SNAP_TOPN_FUP:-10}" # each follow-up sample: same shape, tighter (x12)
+SNAP_ARGV_MAX="${CC_SENTINEL_SNAP_ARGV_MAX:-400}" # per-ROW argv cap in chars; 0 = uncapped
+SNAP_AGG_N="${CC_SENTINEL_SNAP_AGG_N:-15}"       # executables in the coarse by-executable total
 TICKS=0                                          # 0 = run forever; >0 bounds a smoke/test run
 
 while [ $# -gt 0 ]; do
@@ -91,6 +105,23 @@ if [ "${CC_SENTINEL:-on}" = "off" ]; then
   echo "compressor-sentinel: disabled (CC_SENTINEL=off)" >&2
   exit 0
 fi
+
+# A non-numeric snapshot seam must never reach awk: there `-v n=abc` becomes 0, an n of 0 renders an
+# EMPTY attribution section, and a typo in an env var would silently restore the exact blindness the
+# snapshot exists to remove — a section that looks rendered and names nothing. Refuse at startup the
+# same way --ticks does, rather than run blind.
+# It checks the ENV NAMES, not the internals they feed, so the message names the thing the operator
+# can actually act on — an error reading `SNAP_TOPN` sends them looking for a variable that does not
+# exist on their side. An unset seam is skipped: the default above already applied, and the defaults
+# are numeric by construction.
+for _v in CC_SENTINEL_SNAP_TOPN CC_SENTINEL_SNAP_TOPN_FUP CC_SENTINEL_SNAP_ARGV_MAX CC_SENTINEL_SNAP_AGG_N; do
+  _x="${!_v:-}"
+  [ -n "$_x" ] || continue
+  case "$_x" in *[!0-9]*)
+    printf 'compressor-sentinel.sh: %s must be a non-negative integer (got "%s")\n' "$_v" "$_x" >&2
+    exit 64 ;;
+  esac
+done
 
 # ── readers ───────────────────────────────────────────────────────────────────────────────────────
 # Every one of these returns NON-ZERO rather than a value when the instrument is unreadable. None of
@@ -229,20 +260,116 @@ select_stop_targets() { # <prev_census_pids> <rss_floor_kb> <cap>
     }'
 }
 
-# ── trip capture ──────────────────────────────────────────────────────────────────────────────────
-# The attribution gap §7.1 exists to close: full argv of the node/chrome/build trees, so the next
-# post-mortem does not have to infer which pipeline it was.
+# ── trip capture: rank first, then attribute ──────────────────────────────────────────────────────
+# §7-bis(b) of docs/research/machine-lag-and-kitty-2026-08-06.md is the postmortem of what these
+# replaced, and it is why BOTH of the old sections are gone rather than widened:
+#   · `--- argv (node|chrom|…, head -80) ---` hit the cut in 16 of 18 trips. A `head` over a
+#     NAME-filtered, unranked list drops whole PROCESSES, and a dropped process is a lookup MISS that
+#     reads as an ABSENCE — the filter was a second blindness besides, since nothing outside its six
+#     names could appear at all.
+#   · `--- top by memory ---` printed COMM only, so every Node workload rendered as `node`: tsc,
+#     next-server and an MCP chain were indistinguishable.
+# The composition is now inverted. What bounds a section is a RANK, in the exact quantity the
+# incident is about, so what falls off the end is provably smaller than everything that stays; the
+# old bound was a line count over an unranked list, where what fell off was whatever `ps` happened
+# to emit last. `pgrep -f` remains no substitute for `ps` here — macOS matches it against a TRUNCATED
+# argv (capacity-alarm.sh:231 measured it returning 0 against a real 8) — and neither renderer pipes
+# to `head`, which under `set -o pipefail` would SIGPIPE the producer and promote the pipeline to 141.
+
+# stdin: `ps -Awwo pid=,ppid=,rss=,pcpu=,args=` → the <n> highest-RSS rows, argv intact.
+#
+# Only <n> rows are ever held, by bounded insertion. Buffering the whole process table in order to
+# sort it would make the instrument allocate in proportion to the fleet it is measuring, at the one
+# moment memory is the scarce thing.
+#
+# The four leading columns are matched as a PREFIX and the remainder taken verbatim rather than
+# rejoined from $5..$NF, because rejoining collapses runs of whitespace INSIDE argv and so silently
+# rewrites the record. The fourth column is matched as "any non-blank" rather than [0-9.]+ so that a
+# locale rendering %CPU as `0,0` cannot drop every row on the floor.
+#
+# argv is capped per ROW at <amax> chars (0 = uncapped) and the cut is STAMPED with how much it
+# dropped. That is not the head -80 defect returning by another door: that one dropped whole
+# processes silently, this shortens ONE named row's tail and says by exactly how much. Agent briefs
+# travel in argv (memory pgrep-f-matches-agent-briefs), so uncapped rows run to tens of KB each,
+# 13 snapshots per trip, into a 25 MiB rotation.
+top_by_rss() { # <n> <argv_max_chars>
+  awk -v n="$1" -v amax="$2" '
+    match($0, /^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[0-9]+[ \t]+[^ \t]+[ \t]+/) {
+      rss = $3 + 0
+      args = substr($0, RSTART + RLENGTH)
+      if (amax > 0 && length(args) > amax)
+        args = substr(args, 1, amax) sprintf("…[+%d chars]", length(args) - amax)
+      row = sprintf("%7s %7s %10d %6s  %s", $1, $2, rss, $4, args)
+      if (k < n)           { pos = ++k }
+      else if (rss > r[k]) { pos = k }
+      else                 { next }
+      while (pos > 1 && r[pos - 1] < rss) { r[pos] = r[pos - 1]; l[pos] = l[pos - 1]; pos-- }
+      r[pos] = rss; l[pos] = row
+    }
+    END { for (i = 1; i <= k; i++) print l[i] }'
+}
+
+# stdin: `ps -Awwo rss=,comm=` → the <n> executables holding the most RSS, with their counts.
+#
+# It takes its OWN ps rather than reusing the rows above: comm is the last field there, so everything
+# past the RSS column is the executable path verbatim, spaces included (`…/Google Chrome for
+# Testing`). With argv trailing instead, no parseable boundary exists.
+#
+# Coarse BY CONSTRUCTION — it groups on the executable, the very column §7-bis convicted — so it is
+# labelled a total and never attribution. It is here because the ranked section above cannot see the
+# one shape the old unranked list caught by accident: forty workers at 180 MB each outweigh any
+# single row and appear in none of them. Removing that list without this would be a net loss.
+rss_by_exe() { # <n>
+  awk -v n="$1" '
+    match($0, /^[ \t]*[0-9]+[ \t]+/) {
+      exe = substr($0, RSTART + RLENGTH)
+      c = split(exe, p, "/"); base = p[c]
+      sum[base] += $1 + 0; cnt[base]++
+    }
+    END {
+      for (b in sum) {
+        v = sum[b]
+        if (m < n)          { pos = ++m }
+        else if (v > sv[m]) { pos = m }
+        else                { continue }
+        while (pos > 1 && sv[pos - 1] < v) { sv[pos] = sv[pos - 1]; sb[pos] = sb[pos - 1]; pos-- }
+        sv[pos] = v; sb[pos] = b
+      }
+      for (i = 1; i <= m; i++) printf "%10.1f MB  x%-4d %s\n", sv[i] / 1024, cnt[sb[i]], sb[i]
+    }'
+}
+
+# One sample of attribution. The follow-ups render it too, at a tighter rank: under the old shape
+# those twelve samples were COMM-only, which made the part of the record that WATCHES the ramp the
+# blindest part of it — and a process born after the trip appeared in no section at all.
+# <agg_n> 0 omits the coarse total, which is a standing shape rather than a ramp.
+render_attribution() { # <top_n> <argv_max_chars> <agg_n>
+  local rows exe
+  rows="$(ps -Awwo pid=,ppid=,rss=,pcpu=,args= 2>/dev/null)" || rows=""
+  if [ -z "$rows" ]; then
+    # An empty section would read as an idle machine. Say which of the two it is: this is the same
+    # contract the readers hold, where "could not measure" must never render as the healthy value.
+    printf '\n--- top %s by RSS ---\n(NO ROWS — ps was unreadable. A blind instrument, not an idle box.)\n' "$1"
+  else
+    printf '\n--- top %s by RSS, full argv (a RANK bound — nothing below is a line cut) ---\n' "$1"
+    printf '    PID    PPID     RSS_KB   %%CPU  ARGV\n'
+    printf '%s\n' "$rows" | top_by_rss "$1" "$2"
+  fi
+
+  [ "$3" -gt 0 ] || return 0
+  exe="$(ps -Awwo rss=,comm= 2>/dev/null)" || exe=""
+  if [ -z "$exe" ]; then
+    printf '\n--- RSS by executable ---\n(NO ROWS — ps was unreadable.)\n'
+  else
+    printf '\n--- RSS by executable, top %s (COARSE total: shared pages double-count, so an upper bound. The argv above is the attribution) ---\n' "$3"
+    printf '%s\n' "$exe" | rss_by_exe "$3"
+  fi
+}
+
 snapshot_trip() { # <ts> <why> <headline>
   {
-    printf '\n═══ TRIP %s  why=%s ═══\n%s\n\n--- argv (node|chrom|next|vitest|esbuild|playwright, head -80) ---\n' \
-      "$1" "$2" "$3"
-    # shellcheck disable=SC2009  # pgrep is NOT a substitute here: macOS pgrep -f matches against a
-    # TRUNCATED argv (capacity-alarm.sh:231 measured it returning 0 against a real 8), and the full
-    # argv IS the deliverable — this snapshot exists to close the attribution gap (§7.1).
-    ps -Awwo pid,ppid,rss,args 2>/dev/null \
-      | grep -E 'node|chrom|next|vitest|esbuild|playwright' | head -80
-    printf '\n--- top by memory (head -30) ---\n'
-    ps -axm -o pid,ppid,rss,pcpu,comm 2>/dev/null | head -30
+    printf '\n═══ TRIP %s  why=%s ═══\n%s\n' "$1" "$2" "$3"
+    render_attribution "$SNAP_TOPN" "$SNAP_ARGV_MAX" "$SNAP_AGG_N"
     printf '\n--- vm_stat ---\n'
     vm_stat 2>/dev/null
   } >> "$SNAP" 2>/dev/null || true
@@ -259,7 +386,7 @@ snapshot_followup() {
     i=$((i + 1))
     {
       printf '\n--- follow-up %s/%s  %s ---\n' "$i" "$FOLLOWUP_N" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      ps -axm -o pid,ppid,rss,pcpu,comm 2>/dev/null | head -20
+      render_attribution "$SNAP_TOPN_FUP" "$SNAP_ARGV_MAX" 0
     } >> "$SNAP" 2>/dev/null || true
   done
 }
