@@ -165,11 +165,38 @@ The dispatcher is healthy and starved, not missing: `com.claude.dispatcher`, `St
 `CC_DISPATCH_CEILING` **6**, admission `free_slots = max(0, CEILING − live_workers)`.
 
 - After S2+S3 it drains on its own.
-- **Widen its scope.** `CC_DISPATCH_PROJECT="claude-infrastructure"` pins it to one project, so
-  reso's **56** items and doc_classifier's **23** have no overnight path at all.
+- ~~**Widen its scope.** `CC_DISPATCH_PROJECT="claude-infrastructure"` pins it to one project, so
+  reso's **56** items and doc_classifier's **23** have no overnight path at all.~~
+  **CLOSED 2026-08-07 — and this bullet's premise was ALREADY FALSE when it was written.** The
+  widening landed in **`d249f460`** *(feat(dispatch): multi-project coverage — one queue, one
+  ceiling, one lock)*, which is an ancestor of `origin/main`. It does not widen the env var: a
+  `repo=` row in **`scripts/dispatch-projects.conf`** is unioned with `CC_DISPATCH_PROJECT`, so
+  coverage is an agent action needing no plist edit and no `launchctl bootstrap` (C10). The plist's
+  pin stays deliberately — a bad conf edit can never un-cover the incumbent.
+- **Verified OPERATING in production, not merely landed** — live IDL pass `20260807T102125Z-3091`
+  emitted real per-item verdicts for the foreign project: **3× `reso-management-app` `defer`
+  (`at-ceiling`) + 1× `skip` (`already-done`)**. `at-ceiling` is the S2 ceiling, i.e. these items
+  are *in the queue competing for slots* — the S4 symptom (no path at all) is gone; what remains is
+  S2's throughput problem, which is a different track.
+- **Residual leak found and closed: the label, not the mechanism.** One item sat under project
+  `reso` — an alias hand-passed as an explicit `cc-backlog add --project reso` (source
+  `wave7-close-2026-08-07`); `~/Development/reso` does not exist. It was journalled
+  `{verdict:"skip", reason:"project-not-dispatched"}` on every pass and could never drain. Migrated
+  `333aed941b6b` → **`0c9d92ba9a0a`** under `reso-management-app` (a mislabel is not a retraction —
+  closing it would have destroyed a live OrderBar clipping defect), and `reso` declared in the conf
+  as NEVER-DISPATCHABLE. Post-state: **`reso` open=0 · reso-management-app 59 · doc_classifier 23**,
+  all inside the dispatch set; the dispatcher's uncovered-project warning is silent.
+- ⚠️ **Why the premise went stale, and the generalisable trap.** This bullet's counts (56 / 23)
+  matched the ledger almost exactly (58 / 23) — a *true metric beside a refuted cause*, which reads
+  as corroboration and is the most persuasive way to be wrong. The fix had landed from a **sibling
+  stream** between filing and dispatch; open item `0c5d47c863bf` is precisely "nothing re-checks
+  whether an open item's requested fix already landed from a sibling". Check a work item's
+  **remedy** against `origin/main` before building it, not just its symptom against the world.
 - **Do not rebuild what exists**: `cc-backlog` / `cc-queue` / `cc-dispatch` are the sanctioned store,
   queue and dispatcher, and `com.claude.devserver-gc` already reaps dev servers — find out why five
-  survived it before writing another.
+  survived it before writing another. *(This warning earned its keep: the S4 remedy was already
+  built, landed and running — searching the graveyard first is what turned a rebuild into a
+  20-line declaration.)*
 
 ### S5 · Scale beyond this box — the only route to ~100
 
