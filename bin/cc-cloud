@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+# cc-cloud — the OFF-BOX session reconciler: one honest verdict per DECLARED cloud session,
+# read ENTIRELY from the repo side.
+#
+#   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
+#   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
+#   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
+#   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
+#   cc-cloud show <id>                               the declaration + its live state, human-readable
+#   cc-cloud --json | --table | --check | --selftest
+#
+# ── why this exists, and why it must be built BEFORE the first cloud session fires ───────────────
+# A session running in an Anthropic-managed VM shares no kernel, no filesystem and no terminal with
+# this box, so every local instrument the fleet is built on is blind to it: ps, lsof, kill -0,
+# launchctl, load average, vm_stat, ~/.claude/cc-registry, ~/.claude/cc-beats, /tmp/cc-telemetry,
+# and the iTerm2 pane id. Most of them go SILENT, which is survivable.
+#
+# Three of them do not go silent — they LIE, converting "not on this box" into "dead":
+#   bin/cc-spawn-verify:89-97      argv scan of the LOCAL process table ⇒ exit 1 ABSENT,
+#                                  "Died, or never launched", for a perfectly healthy cloud session.
+#   bin/cc-board:126-141           a registry row with no local telemetry whose pid fails `kill -0`
+#                                  is printed DIED-UNRENDERED — a fabricated death verdict.
+#   scripts/team-orphan-reaper.sh:61-70   treats a failed `kill -0` as "POSITIVE evidence of death"
+#                                  and ARCHIVES the team. Destructive, on a 600s launchd timer.
+# That is the real hazard, and it is why the observable set is designed before firing rather than
+# after: a false death is not recoverable by looking harder, and `is-offbox` below is the lookup
+# those three need in order to abstain instead of convict.
+#
+# The second reason for "before, not after": ATTRIBUTION CANNOT BE RETROFITTED. A cloud session that
+# pushed nothing and was never declared leaves zero trace anywhere this box can read — no transcript
+# under ~/.claude/projects, no registry row, no backlog write (the store is
+# ~/.claude/autonomy/backlog.jsonl and `git ls-files autonomy/` is 0 — a cloud VM cannot reach it).
+# There is no forensic path back. The declaration has to exist at fire time or the session is
+# permanently unobservable.
+#
+# ── the observable set (measured on this box 2026-08-07; see docs/plans/CLOUD_OBSERVABILITY.md) ───
+#   O1 remote ref exists      `git ls-remote --heads <remote> <branch>`   the VM booted, had network
+#                             + auth, and got far enough to push.
+#   O2 remote ref ADVANCES    sha delta vs the sidecar                    the only heartbeat there is.
+#   O3 `Claude-Session:` trailer on the commit                            which cloud session, + the
+#                             URL to open. VERSION-GATED — see `trailer_supported` below.
+#   O4 landed on trunk BY CONTENT  `git ls-tree <trunk> -- <path>`        completion. Never by count:
+#                             a count reads 0 after a sibling rebase and proves nothing.
+#   O5 PR state               `gh pr list --head <branch>`                a durable review handle.
+# The web UI (claude.ai/code) is REAL but has no CLI or API on either binary this box has (2.1.114
+# pinned, 2.1.220 present — neither exposes a `--cloud` verb). It is therefore an OPERATOR escalation
+# path, never an automation input, which is exactly why every row's recover_cmd is an `open <url>`.
+#
+# ── the discriminator this whole file is built around (measured, not assumed) ─────────────────────
+#   git ls-remote, remote REACHABLE + ref absent   → rc=0,   empty stdout
+#   git ls-remote, remote UNREACHABLE              → rc=128, empty stdout
+# Both are empty. A `[ -z "$out" ]` test conflates them, and that conflation would convict a live
+# cloud session as NOT-STARTED on a wifi blip. THE EXIT CODE IS THE ONLY DISCRIMINATOR: rc!=0 yields
+# UNKNOWN and never a verdict (the repo's own "no sensor, no verdict" law, at the one place it is
+# easy to get wrong).
+#
+# ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
+#   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git).
+#                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
+#   C1 NOT-STARTED  no ref, and now > declared_at + boot_s                                    ROW
+#   C2 BOOTING      no ref, still inside the boot budget — expected, not a fault            no row
+#   C3 LANDED       every declared path is content-present on the trunk ref                 no row
+#   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
+#   C5 ALIVE        ref exists and advanced inside the budget                               no row
+#   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
+# C3 precedes C4 DELIBERATELY: a finished session stops pushing, so a STALLED-first order would
+# alarm forever on every successful cloud session — the failure mode where an alarm that always
+# fires carries the same zero bits as one that never fires.
+# C4 claims STALLED only with sidecar HISTORY. With no history there is no evidence the sha ever
+# differed, so no verdict is available and none is invented.
+#
+# ── row schema (matches bin/cc-fleet's FROZEN shape so cc-blockers can consume it unchanged) ─────
+# {"kind":"cloud-session","state":"<S>","detail":"<ascii, <=44 bytes>","subject":"<id>",
+#  "recover_cmd":"<paste-ready>","ts":<epoch>}
+# state ∈ NOT-STARTED|STALLED|ABANDONED.  `detail` is ASCII-only and <=44 bytes: the board's
+# renderer pads by BYTES, so one em-dash silently shifts the column.
+#
+# READ-ONLY against the network and against the git repo. `git ls-remote` performs no fetch and
+# writes no ref. The only bytes this program writes are its own declarations and sidecars under
+# CC_CLOUD_STATE, and only `declare` / `retire` / `poll` write at all.
+#
+# Env seams (the override surface is what makes --selftest and the suite hermetic):
+#   CC_CLOUD_STATE     declaration dir (~/.claude/autonomy/cloud)   CC_CLOUD_NOW    epoch override
+#   CC_CLOUD_GIT_BIN   git binary (git)                             CC_CLOUD_RECONCILE  on|off
+#   CC_CLOUD_BOOT_S    default boot budget (900)                    CC_CLOUD_STALL_S    (3600)
+#   CC_CLOUD_LIFE_S    default lifetime budget (21600)              CC_CLOUD_NET_TIMEOUT_S (20)
+set -uo pipefail
+
+SELF="$0"
+while [ -L "$SELF" ]; do
+  _link="$(readlink "$SELF")"
+  case "$_link" in
+    /*) SELF="$_link" ;;
+    *)  SELF="$(dirname "$SELF")/$_link" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+STATE="${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}"
+GIT_BIN="${CC_CLOUD_GIT_BIN:-git}"
+RECONCILE="${CC_CLOUD_RECONCILE:-on}"
+DEF_BOOT="${CC_CLOUD_BOOT_S:-900}"
+DEF_STALL="${CC_CLOUD_STALL_S:-3600}"
+DEF_LIFE="${CC_CLOUD_LIFE_S:-21600}"
+NET_TIMEOUT="${CC_CLOUD_NET_TIMEOUT_S:-20}"
+DETAIL_MAX=44
+
+now() { if [ -n "${CC_CLOUD_NOW:-}" ]; then printf '%s' "$CC_CLOUD_NOW"; else date +%s; fi; }
+
+# ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+jesc() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf '%s' "$s"; }
+is_num() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+
+# Bound `detail` by BYTES, not characters, and only ever at a byte boundary we chose.
+clip() { local s="$1"; if [ "${#s}" -le "$DETAIL_MAX" ]; then printf '%s' "$s"; else printf '%s' "${s:0:$DETAIL_MAX}"; fi; }
+
+# A human duration for `detail`, kept short so the 44-byte budget survives a long id.
+dur() { # <seconds> → 45s | 12m | 3h | 2d
+  local s="${1:-0}"
+  if [ "$s" -lt 60 ]; then printf '%ss' "$s"
+  elif [ "$s" -lt 3600 ]; then printf '%sm' "$((s / 60))"
+  elif [ "$s" -lt 86400 ]; then printf '%sh' "$((s / 3600))"
+  else printf '%sd' "$((s / 86400))"; fi
+}
+
+# Declarations are `key=value`, one per line, values never containing a newline. Read WITHOUT eval:
+# a declaration is data written by a dispatcher, and `eval` on it would be an injection seam.
+dfield() { # <file> <key> → value (empty if absent)
+  local f="$1" k="$2" line
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "$k="*) printf '%s' "${line#*=}"; return 0 ;; esac
+  done < "$f"
+  return 0
+}
+
+ids() { # every declared, non-retired id, sorted
+  local f b
+  [ -d "$STATE" ] || return 0
+  for f in "$STATE"/*.decl; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; b="${b%.decl}"
+    [ -f "$STATE/$b.retired" ] && continue
+    printf '%s\n' "$b"
+  done | sort
+}
+
+# The network sensor. Returns rc 0 with the sha on stdout (ref present), rc 0 with EMPTY stdout
+# (remote reachable, ref absent), or rc 2 (SENSOR FAILED — never to be read as absence).
+NET_BOUND=""
+if command -v timeout >/dev/null 2>&1; then NET_BOUND="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then NET_BOUND="gtimeout"; fi
+remote_sha() { # <repo-path-or-empty> <remote> <branch>
+  local repo="$1" remote="$2" branch="$3" out rc
+  local -a cmd=()
+  [ -n "$NET_BOUND" ] && cmd=("$NET_BOUND" "$NET_TIMEOUT")
+  if [ -n "$repo" ] && [ -d "$repo" ]; then
+    cmd+=("$GIT_BIN" -C "$repo" ls-remote --heads "$remote" "refs/heads/$branch")
+  else
+    cmd+=("$GIT_BIN" ls-remote --heads "$remote" "refs/heads/$branch")
+  fi
+  # GIT_TERMINAL_PROMPT=0 is the difference between a bounded failure and an indefinite hang on a
+  # credential prompt, which no timeout on a parent can help with once git owns the tty.
+  out="$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/true "${cmd[@]}" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  printf '%s' "${out%%[[:space:]]*}"
+  return 0
+}
+
+# O4: landed BY CONTENT. `git ls-tree <trunk> -- <path>` per declared path — the repo's own rule,
+# because `rev-list --count` reads 0 after a sibling rebase and proves nothing (scripts/land-verify.sh:6-11).
+landed() { # <repo> <trunk-ref> <comma-separated-paths> → 0 landed, 1 not, 2 cannot tell
+  local repo="$1" trunk="$2" paths="$3" p rest out
+  [ -n "$paths" ] || return 1                       # nothing declared ⇒ landing is not assertable
+  [ -n "$repo" ] && [ -d "$repo" ] || return 2
+  "$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$trunk" >/dev/null 2>&1 || return 2
+  rest="$paths"
+  while [ -n "$rest" ]; do
+    case "$rest" in *,*) p="${rest%%,*}"; rest="${rest#*,}" ;; *) p="$rest"; rest="" ;; esac
+    [ -n "$p" ] || continue
+    out="$("$GIT_BIN" -C "$repo" ls-tree "$trunk" -- "$p" 2>/dev/null)" || return 2
+    [ -n "$out" ] || return 1
+  done
+  return 0
+}
+
+# O3 is version-gated and the gate is MEASURED, never assumed: the `Claude-Session:` trailer exists
+# in 2.1.220 (default on, emitted for web and Remote Control sessions) and does NOT exist in the
+# pinned 2.1.114. A design that hardcoded "the trailer is available" would be wrong on the very
+# binary the launcher runs.
+trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
+  local bin="${1:-}"
+  [ -n "$bin" ] && [ -f "$bin" ] || return 2
+  command -v strings >/dev/null 2>&1 || return 2
+  strings -a "$bin" 2>/dev/null | grep -q 'Claude-Session' && return 0
+  return 1
+}
+
+# ── the state function ───────────────────────────────────────────────────────────────────────────
+# Emits: <state>\t<detail>\t<recover_cmd>  — exactly one line per id, always.
+classify() { # <id>
+  local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
+  local branch remote repo paths trunk url dat boot stall life
+  local sha rc n age url_cmd first_seen sha_age
+
+  branch="$(dfield "$f" branch)"
+  remote="$(dfield "$f" remote)"
+  repo="$(dfield "$f" repo)"
+  paths="$(dfield "$f" paths)"
+  trunk="$(dfield "$f" trunk)";       [ -n "$trunk" ] || trunk="origin/main"
+  url="$(dfield "$f" url)";           [ -n "$url" ] || url="https://claude.ai/code"
+  dat="$(dfield "$f" declared_at)"
+  boot="$(dfield "$f" boot_s)";       is_num "$boot"  || boot="$DEF_BOOT"
+  stall="$(dfield "$f" stall_s)";     is_num "$stall" || stall="$DEF_STALL"
+  life="$(dfield "$f" life_s)";       is_num "$life"  || life="$DEF_LIFE"
+  url_cmd="open $url"
+
+  if [ -z "$branch" ] || [ -z "$remote" ] || ! is_num "$dat"; then
+    printf 'UNKNOWN\tdeclaration unreadable or incomplete\t%s\n' "cc-cloud show $id"; return 0
+  fi
+
+  n="$(now)"; age=$((n - dat)); [ "$age" -lt 0 ] && age=0
+
+  sha="$(remote_sha "$repo" "$remote" "$branch")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'UNKNOWN\tls-remote failed; remote unreachable\t%s\n' "$GIT_BIN ls-remote --heads $remote"
+    return 0
+  fi
+
+  if [ -z "$sha" ]; then
+    if [ "$age" -gt "$boot" ]; then
+      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+    else
+      printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+    fi
+    return 0
+  fi
+
+  # C3 before C4: a landed session has stopped pushing ON PURPOSE.
+  landed "$repo" "$trunk" "$paths"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'LANDED\tcontent present on %s\t-\n' "$trunk"; return 0
+  fi
+
+  # C4 needs HISTORY. The sidecar records "sha X was first seen at T"; `poll` writes it.
+  first_seen=""
+  if [ -f "$seen" ]; then
+    case "$(dfield "$seen" sha)" in
+      "$sha") first_seen="$(dfield "$seen" since)" ;;
+    esac
+  fi
+  if is_num "$first_seen"; then
+    sha_age=$((n - first_seen)); [ "$sha_age" -lt 0 ] && sha_age=0
+    if [ "$sha_age" -gt "$stall" ]; then
+      printf 'STALLED\tref frozen at %.7s for %s\t%s\n' "$sha" "$(dur "$sha_age")" "$url_cmd"; return 0
+    fi
+  fi
+
+  if [ "$age" -gt "$life" ]; then
+    printf 'ABANDONED\talive %s, past %s, not landed\t%s\n' "$(dur "$age")" "$(dur "$life")" "$url_cmd"; return 0
+  fi
+
+  printf 'ALIVE\tref at %.7s\t-\n' "$sha"
+  return 0
+}
+
+emit_rows() {
+  local id line state detail rcmd n
+  n="$(now)"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    line="$(classify "$id")"
+    state="${line%%	*}"; line="${line#*	}"
+    detail="${line%%	*}"; rcmd="${line#*	}"
+    case "$state" in
+      NOT-STARTED|STALLED|ABANDONED) ;;
+      *) continue ;;
+    esac
+    printf '{"kind":"cloud-session","state":"%s","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
+      "$state" "$(jesc "$(clip "$detail")")" "$(jesc "$id")" "$(jesc "$rcmd")" "$n"
+  done < <(ids)
+}
+
+emit_table() {
+  local id line state detail any=0
+  printf '%-22s %-12s %s\n' "SESSION" "STATE" "DETAIL"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    any=1
+    line="$(classify "$id")"
+    state="${line%%	*}"; line="${line#*	}"
+    detail="${line%%	*}"
+    printf '%-22s %-12s %s\n' "$id" "$state" "$detail"
+  done < <(ids)
+  [ "$any" -eq 1 ] || printf '%s\n' "(no cloud sessions declared — nothing is firing off-box)"
+}
+
+# --check: exit 0 iff every declared session is in a state that needs nobody. UNKNOWN FAILS it —
+# a check that could not run must never pass vacuously.
+do_check() {
+  local id line state bad=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    line="$(classify "$id")"; state="${line%%	*}"
+    case "$state" in
+      BOOTING|ALIVE|LANDED) ;;
+      *) bad=1; printf '%s %s\n' "$state" "$id" >&2 ;;
+    esac
+  done < <(ids)
+  return "$bad"
+}
+
+# ── mutating verbs ───────────────────────────────────────────────────────────────────────────────
+cmd_declare() {
+  local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item=""
+  local boot="" stall="" life="" f
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id)      id="${2:-}"; shift 2 ;;
+      --branch)  branch="${2:-}"; shift 2 ;;
+      --remote)  remote="${2:-}"; shift 2 ;;
+      --repo)    repo="${2:-}"; shift 2 ;;
+      --paths)   paths="${2:-}"; shift 2 ;;
+      --trunk)   trunk="${2:-}"; shift 2 ;;
+      --url)     url="${2:-}"; shift 2 ;;
+      --surface) surface="${2:-}"; shift 2 ;;
+      --item)    item="${2:-}"; shift 2 ;;
+      --boot)    boot="${2:-}"; shift 2 ;;
+      --stall)   stall="${2:-}"; shift 2 ;;
+      --life)    life="${2:-}"; shift 2 ;;
+      *) echo "cc-cloud declare: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] && [ -n "$branch" ] || { echo "cc-cloud declare: --id and --branch are REQUIRED (an undeclared cloud session is unobservable)" >&2; return 2; }
+  case "$id" in *[!A-Za-z0-9._-]*) echo "cc-cloud declare: --id must be [A-Za-z0-9._-]+ (it is a filename)" >&2; return 2 ;; esac
+  # The newline guard keeps the `key=value` store parseable. It is written as a literal because
+  # `$(printf '\n')` strips the very newline it is testing for and collapses to "", which makes the
+  # pattern `*""*` match EVERY input — a guard that rejects everything reads exactly like a guard
+  # that works, and it passed this file's own selftest vacuously before the selftest grew a
+  # positive control.
+  local NL='
+'
+  case "$branch$remote$paths$url" in *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;; esac
+  mkdir -p "$STATE" || return 1
+  f="$STATE/$id.decl"
+  {
+    printf 'id=%s\n' "$id"
+    printf 'branch=%s\n' "$branch"
+    printf 'remote=%s\n' "$remote"
+    printf 'repo=%s\n' "$repo"
+    printf 'paths=%s\n' "$paths"
+    [ -n "$trunk" ]   && printf 'trunk=%s\n' "$trunk"
+    [ -n "$url" ]     && printf 'url=%s\n' "$url"
+    [ -n "$surface" ] && printf 'surface=%s\n' "$surface"
+    [ -n "$item" ]    && printf 'item=%s\n' "$item"
+    is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
+    is_num "$stall" && printf 'stall_s=%s\n' "$stall"
+    is_num "$life"  && printf 'life_s=%s\n' "$life"
+    printf 'declared_at=%s\n' "$(now)"
+  } > "$f" || return 1
+  rm -f "$STATE/$id.retired"
+  printf 'declared %s (branch %s on %s) — it is now observable\n' "$id" "$branch" "$remote"
+}
+
+cmd_retire() {
+  local id=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id) id="${2:-}"; shift 2 ;;
+      *) echo "cc-cloud retire: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] || { echo "cc-cloud retire: --id is required" >&2; return 2; }
+  [ -f "$STATE/$id.decl" ] || { echo "cc-cloud retire: no such declaration: $id" >&2; return 1; }
+  printf 'retired_at=%s\n' "$(now)" > "$STATE/$id.retired" || return 1
+  printf 'retired %s\n' "$id"
+}
+
+# The ONLY mutator of the heartbeat sidecar. A stall verdict needs history and history needs a
+# writer; keeping it out of --json is what lets the renderers stay pure reads.
+cmd_poll() {
+  local id f sha rc prev n seen
+  n="$(now)"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    f="$STATE/$id.decl"; seen="$STATE/$id.seen"
+    sha="$(remote_sha "$(dfield "$f" repo)" "$(dfield "$f" remote)" "$(dfield "$f" branch)")"; rc=$?
+    [ "$rc" -eq 0 ] || { printf 'UNKNOWN %s (sensor failed — sidecar untouched)\n' "$id"; continue; }
+    [ -n "$sha" ] || { printf 'no-ref  %s\n' "$id"; continue; }
+    prev="$(dfield "$seen" sha)"
+    if [ "$prev" != "$sha" ]; then
+      { printf 'sha=%s\n' "$sha"; printf 'since=%s\n' "$n"; } > "$seen"
+      printf 'advanced %s -> %.7s\n' "$id" "$sha"
+    else
+      printf 'unchanged %s at %.7s\n' "$id" "$sha"
+    fi
+  done < <(ids)
+}
+
+# THE PRIMITIVE the three lying instruments need. Exit 0 means "this id is running off-box, so your
+# local absence evidence is NOT evidence of death — abstain." Deliberately silent and cheap: it is
+# meant to sit on a hot path, and its callers branch on the exit code alone.
+cmd_is_offbox() {
+  local id="${1:-}"
+  [ -n "$id" ] || return 2
+  [ -f "$STATE/$id.decl" ] || return 1
+  [ -f "$STATE/$id.retired" ] && return 1
+  return 0
+}
+
+cmd_show() {
+  local id="${1:-}" f line state detail rcmd
+  [ -n "$id" ] || { echo "cc-cloud show: need an id" >&2; return 2; }
+  f="$STATE/$id.decl"
+  [ -f "$f" ] || { echo "cc-cloud show: no such declaration: $id" >&2; return 1; }
+  cat "$f"
+  [ -f "$STATE/$id.retired" ] && cat "$STATE/$id.retired"
+  [ -f "$STATE/$id.seen" ] && cat "$STATE/$id.seen"
+  line="$(classify "$id")"
+  state="${line%%	*}"; line="${line#*	}"; detail="${line%%	*}"; rcmd="${line#*	}"
+  printf -- '--\nstate=%s\ndetail=%s\nrecover=%s\n' "$state" "$detail" "$rcmd"
+}
+
+# ── selftest: hermetic, RED-provable, no network ─────────────────────────────────────────────────
+# Uses REAL local bare repositories as the remote, not a stubbed `git`: the whole correctness claim
+# of this file is about what `git ls-remote` actually returns, so a stub would test the stub.
+_ST_PASS=0
+_ST_FAIL=0
+_st_expect() { # <name> <expected-state> <id>
+  local got; got="$(classify "$3")"; got="${got%%	*}"
+  if [ "$got" = "$2" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$1"
+  else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want %s, got %s)\n' "$1" "$2" "$got"; fi
+}
+do_selftest() {
+  # `_ST_D` is deliberately NOT `local`: the EXIT trap fires after this function has returned, and a
+  # local would be out of scope by then — under `set -u` that aborts the cleanup with an unbound
+  # variable instead of removing the fixture.
+  _ST_D="$(mktemp -d)" || return 1
+  trap 'rm -rf "$_ST_D"' EXIT
+  STATE="$_ST_D/state"
+  CC_CLOUD_NOW=2000000000
+
+  "$GIT_BIN" init -q --bare "$_ST_D/remote.git"
+
+  # POSITIVE CONTROL, and it is not ceremony: the first cut of this selftest reported 1/4 passing
+  # where the one "pass" came from a `declare` that had SILENTLY FAILED, leaving no file at all —
+  # classify then returned UNKNOWN for the right answer and the wrong reason. Asserting the
+  # declaration exists is what separates "the sensor said UNKNOWN" from "there was nothing to sense".
+  cmd_declare --id boot --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null
+  if [ -f "$STATE/boot.decl" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   declare wrote a declaration (control)\n'
+  else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL declare wrote no declaration — every verdict below is vacuous\n'; fi
+
+  _st_expect "absent ref inside the boot budget is BOOTING, not a fault" BOOTING boot
+
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_expect "absent ref past the boot budget is NOT-STARTED" NOT-STARTED boot
+  CC_CLOUD_NOW=2000000000
+
+  cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null
+  _st_expect "an UNREACHABLE remote is UNKNOWN, never NOT-STARTED" UNKNOWN gone
+
+  # A real pushed ref, produced by real git — not a stub. The entire correctness claim of this file
+  # is about what `git ls-remote` actually returns, so a stubbed git would only test the stub.
+  "$GIT_BIN" init -q "$_ST_D/work"
+  (
+    cd "$_ST_D/work" || exit 1
+    "$GIT_BIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed
+    "$GIT_BIN" push -q "$_ST_D/remote.git" HEAD:refs/heads/feat/x
+  ) >/dev/null 2>&1
+  _st_expect "a pushed ref inside its budgets is ALIVE" ALIVE boot
+
+  printf '%s\n' "--- $_ST_PASS passed, $_ST_FAIL failed"
+  [ "$_ST_FAIL" -eq 0 ]
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────────────────────────
+case "${1:-}" in
+  declare)    shift; cmd_declare "$@"; exit $? ;;
+  retire)     shift; cmd_retire "$@"; exit $? ;;
+  poll)       shift; cmd_poll "$@"; exit $? ;;
+  is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
+  show)       shift; cmd_show "${1:-}"; exit $? ;;
+  --selftest) do_selftest; exit $? ;;
+  -h|--help)  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --json|--table|--check) ;;
+  "")  echo "cc-cloud: pick a verb (declare|retire|poll|is-offbox|show|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
+esac
+
+# The kill switch mirrors cc-fleet's: zero rows, exit 0, one stderr line saying so — so turning the
+# reconciler off is legible rather than looking like a clean board.
+if [ "$RECONCILE" = "off" ]; then
+  echo "cc-cloud: CC_CLOUD_RECONCILE=off — reconciliation skipped, zero rows emitted" >&2
+  [ "$1" = "--table" ] && echo "(reconciliation disabled)"
+  exit 0
+fi
+
+case "$1" in
+  --json)  emit_rows ;;
+  --table) emit_table ;;
+  --check) do_check; exit $? ;;
+esac
