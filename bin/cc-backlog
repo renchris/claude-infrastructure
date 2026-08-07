@@ -879,6 +879,62 @@ cmd_transition() {
         return 4
       fi
     fi
+    # (5) PREMISE CHECK (CONCURRENCY_PROGRAM.md §S3) — the third `claim`-side refusal, and the only
+    # one that asks about the WORLD rather than about the ledger's own bookkeeping. (3) asks "is this
+    # finished?", (4) asks "is someone already on it?"; this asks "is the reason it was filed STILL
+    # TRUE?" A work item's premise is a CLAIM: written out of context, in imperative voice that reads
+    # as settled, about facts that decay. 359 items sit non-done here, 89 filed in one five-day jam
+    # window, and releasing them into an unattended dispatcher is what §S3 exists to make safe.
+    #
+    # AT THE ACTUATOR, for the reason the DONE LATCH is: cc-dispatch already ships a premise gate,
+    # but it is dispatcher-side and scoped to `source=="plan-open"` — 14 of 359 non-done items, 4%.
+    # Every other claimer (the desk, a peer session, a worker claiming by hand) bypasses it entirely.
+    # Folding the predicate into the transition that actually takes the claim is what makes it total.
+    #
+    # IT ALMOST NEVER REFUSES, and that is deliberate rather than timid. cc-premise separates an item
+    # whose WHOLE reason for existing is gone (`superseded`, `self-duplicate` → exit 3 → refuse here)
+    # from one where a SUB-CLAIM was corrected but real work remains (`corrected` → exit 0 → the
+    # contract rides the worker's brief instead). The distinction is not academic: §S3's own flagship
+    # example, 23eccae755a9, has one refuted sub-claim and a live ~20x auth-error regression beside
+    # it — refusing that claim would strand the work the item exists to do. Measured over the store
+    # at 359 non-done: 12 refuse (4 superseded · 8 self-duplicate), 78 carry an advisory (2
+    # corrected · 76 suspect).
+    #
+    # ⚠️ That advisory figure read 164 until the sensor behind it was fixed, and the gap is the more
+    # useful fact. cc-premise's git arms resolved a cited path with a helper that returns the same
+    # value for "git answered: absent" and "git could not be asked" — and since NEITHER caller sets
+    # CC_PREMISE_REPO, the could-not-ask branch was the shipping path. It convicted every cited path
+    # containing a slash: 80 fabricated findings, each a false sentence about a file that never
+    # moved, riding a real worker's brief. The suite could not see it because it unset the same
+    # variable. Fixed by a positive control (`_git_usable`) plus a default repo, both in cc-premise.
+    #
+    # FAIL-OPEN, like cc-dispatch's plan-open gate and for the same reason: this premise lives
+    # OUTSIDE the ledger fold (in other items' prose, in git), so every way of failing to read it —
+    # absent helper, unreadable ledger, timeout, a jq/python that is not there — must let the claim
+    # through. ONLY exit 3 blocks; every other exit code, including a crash, proceeds. Starving the
+    # queue on a sensor failure is the worse error (I6).
+    if [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
+      local pself pbin prc pout
+      pself="$0"; [ -L "$pself" ] && pself="$(readlink "$pself")"
+      pbin="${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$pself")" 2>/dev/null && pwd)/cc-premise}"
+      if [ -x "$pbin" ]; then
+        pout="$("$pbin" check "$id" 2>&1)"; prc=$?
+        if [ "$prc" -eq 3 ]; then
+          # `verdict=premise-refuted` rides LINE 1: rc 4 now has THREE causes and cc-dispatch can
+          # only see this through `claim_excerpt` (head -1, 200 chars). It discriminates POSITIVELY
+          # on each skip-worthy token, so a missing token degrades to the lease's FAILED path — the
+          # incumbent behaviour, never a new hole (memory: new-enum-member-falls-into-fail-closed).
+          { printf 'cc-backlog claim: REFUSED verdict=premise-refuted — %s\n' "$id"
+            printf '%s\n' "$pout" | sed 's/^/  /'
+            printf '  This item was not refused for being in progress or finished — its PREMISE no\n'
+            printf '  longer holds. THE DISPROOF IS THE DELIVERABLE: file it (cc-backlog add, naming\n'
+            printf '  this id) and close this item citing that, rather than silently closing it.\n'
+            printf '  If the premise does still hold:  cc-backlog claim %s --force\n' "$id"
+          } >&2
+          return 4
+        fi
+      fi
+    fi
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \

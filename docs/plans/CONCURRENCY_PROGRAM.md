@@ -159,6 +159,64 @@ the disproof IS the deliverable** — write it back into the store, never silent
 This track is **read-only and perfectly parallel** — 333 independent items, no worktree, no shared
 file. It is the one piece of this program that fans out cleanly.
 
+#### S3 — LANDED 2026-08-07 (backlog `77fb892c4db5`)
+
+Shipped: `bin/cc-premise` (the predicate — `check` / `contract` / `sweep`), claim guard **(5)
+PREMISE CHECK** in `bin/cc-backlog`, `verdict=premise-refuted` read as a **skip** plus the premise
+contract injected into the worker BRIEF in `bin/cc-dispatch`, and `tests/cc-premise.bats` (21 tests,
+every refusal paired with a near-miss control). Full report + method:
+`docs/research/backlog-premise-triage-2026-08-07.md`.
+
+**Result: 12 of 359 items refuse at claim (4 superseded · 8 self-duplicate); 78 carry an advisory;
+nothing is auto-closed.** Four of this section's own assumptions did not survive contact with the
+data, and the mechanism is shaped by the refutations rather than by the plan:
+
+1. **Refusing a "refuted" item is usually WRONG.** The flagship example above, `23eccae755a9`, has
+   one refuted sub-claim and a live ~20x auth-error regression beside it — refusing that claim
+   strands the work the item exists to do. A worker's enforcing store is its **brief**, not an exit
+   code, so `corrected` allows the claim and the disproof rides the brief. Refusal is reserved for
+   items whose WHOLE reason for existing is gone.
+2. **Resolving the 127 SHAs measures a POINTER, not a premise.** This repo lands by rebase: 45 of 61
+   non-ancestor shas have an exact patch-id twin already on trunk, and 5 of 10 fully-absent shas
+   describe changes demonstrably live under a rewritten sha. `absent` never implies "undone", so
+   every sha finding is contract prose, never an exit code.
+3. **"Dedupe by title" finds nothing, and a stronger matcher would do harm.** Zero non-done items
+   duplicate a done one (median similarity to nearest done item: 0.105). `postland-verify` puts the
+   culprit sha in the title *on purpose* — a new RED at a new commit is new work — so sha-normalised
+   clustering merges 18 genuinely distinct findings. The working signal is the item's own words.
+4. **The 55 self-declared count overstates the signal.** Re-derived as 64 of 348, but of the 90
+   marker-carrying items with no target id, exactly **1** refutes another backlog item.
+
+The predicate that does work is a **directed** verb→id / id→predicate relation, not proximity: the
+first cut matched "a refuting verb within 120 chars" and scored 370 hits where 24 were real,
+convicting an OPEN item of being superseded by an unrelated one. Three exclusions each came from a
+measured false positive — `wt-<id>` is a worktree path, `UN-RETRACTS` is not `RETRACTS`, and a
+refutation is dated by the **event that wrote it** (6 of 64 correctors were added *before* their
+target). `DUPLICATE of <id>` runs the other way and marks the **speaker** stale, never the target.
+
+🚨 **The checker was itself manufacturing decayed claims — caught at the gate, before landing.** The
+figures above were first measured with `CC_PREMISE_REPO` exported by hand; **neither `cc-backlog` nor
+`cc-dispatch` sets it**, so production ran a different configuration. `_git()` returned the same
+value for *"git answered: absent"* and *"git could not be asked"*, and the cited-path arm read both as
+absent — convicting every cited path containing a slash. Over the same 359 items: **`suspect` = 156
+unset vs 76 with a repo — 80 fabricated findings**, each a false sentence (`CITED PATH(S) not at that
+location on origin/main: tests/deploy-parity.bats`) about a file that has never moved, riding a real
+worker's brief as evidence. The suite was blind because `setup()` unset the same variable for
+tidiness; the §4 direction test even carried the false finding *inside its own fixture* and passed,
+because it asserted only "not superseded, not self-duplicate" and never `= clear`. Fixed with a
+positive control (`_git_usable()` resolving `origin/main`), a realpath'd default repo — without which
+fixing the first half would leave the whole "mechanical first" arm dead outside an operator's shell —
+and a fixture repo the suite owns. Both directions are mutation-verified: reverting the control
+reddens the fail-open test, deleting the arm reddens the positive-control test, and neither covers
+the other. **Generalisable: a sensor that cannot tell *absent* from *unreadable* reports the world as
+broken exactly when it is blindest, and a suite that disables it for tidiness ships that blindness
+green.** Detail: `docs/research/backlog-premise-triage-2026-08-07.md` §8.
+
+⚠️ **Known limit, carried forward as open work:** recall is ≈98% per refutation *statement* but
+**≈73% per endangered item** — the gap is a refuted premise **copied into sibling items** that the
+corrector never id-linked (the reso land-cost premise is the stated hold-reason in 6 further items,
+none linked). Closing it means diffing a corrector's refuted claim against sibling text.
+
 ### S4 · Restore autonomous overnight drain
 
 The dispatcher is healthy and starved, not missing: `com.claude.dispatcher`, `StartInterval` **300 s**,
