@@ -692,6 +692,24 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   unset CC_DEPLOY_MAX_LAG_HOURS
 }
 
+@test "deploy-stale detail cannot imply a leg that did not fire — floor, not round" {
+  # L6 (lead-added). A regression on the RENDERED CELL, not the predicate. 345M = 20700s = 5h45m is
+  # UNDER the 6h default budget, while 30 commits is OVER the 25 default — so the row must fire on the
+  # COMMITS leg, and must not print an hours figure at or above the hours budget.
+  # Pre-fix, hrs() rounded 20700s to 6 and the cell read "HEAD 6h old" beside CC_DEPLOY_MAX_LAG_HOURS=6,
+  # which an operator reads as the hours leg having tripped. Same defect class as the bug this row
+  # exists to catch: deploy-lag's predicate at :425 was CORRECT and its RENDERING is what hid 33h.
+  mkdeploy dr 30 345M
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="deploy-stale")]|length')" = 1 ] || false
+  age="$(echo "$output" | jq -r '.[]|select(.kind=="deploy-stale")|.detail' \
+         | sed -n 's/.*HEAD \([0-9][0-9]*\)h old.*/\1/p')"
+  [ -n "$age" ] || false                # the cell must actually carry an hours figure
+  [ "$age" -lt 6 ] || false             # >= 6 would assert the hours leg, which did NOT fire
+  [ "$age" -eq 5 ] || false             # and it must still carry the true magnitude, not be zeroed
+}
+
 @test "deploy-stale RENDERS in the LAND-PIPELINE table, not only in --json" {
   # L5. A kind absent from LAND_SEL is emitted, rides the --json array, and VANISHES from the one
   # surface the operator reads — the emit and the registration are two separate ways to ship nothing,
