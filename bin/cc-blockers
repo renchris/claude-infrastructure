@@ -506,7 +506,16 @@ deploy_stale_rows() { # → one JSON object per line (possibly none)
   [ "$behind" -gt "$DEPLOY_MAX_LAG_COMMITS" ] || [ "$over_h" -eq 1 ] || return 0
   # ASCII-only and MAGNITUDE-carrying (§4 F4): both numbers ship regardless of which leg fired, because
   # the pair is what sizes the exposure. printf pads by BYTES, so one em-dash would shift the column.
-  if [ -n "$age_s" ]; then dtl="$(printf 'live layer %s behind, HEAD %sh old' "$behind" "$(hrs "$age_s")")"
+  #
+  # FLOOR, NOT hrs(). hrs() rounds to nearest (`($1 + 1800) / 3600`), so a 5h45m layer renders "6h old"
+  # beside a 6h budget — telling the operator the HOURS leg tripped when this row actually fired on the
+  # COMMITS leg. Misattributing which leg fired is this rebuild's own defect class one level down:
+  # deploy-lag's ancestor test at :425 was CORRECT and its rendering is what hid the state for 33h.
+  # Floor makes the cell agree with the predicate by construction — `age_s/3600 >= budget` exactly when
+  # `age_s >= budget*3600` — so the number can never imply a leg that did not fire.
+  # hrs() itself is NOT touched: it has three other callers (:351, :444, :584) whose rows are unrelated
+  # to this threshold, and rounding is right for them.
+  if [ -n "$age_s" ]; then dtl="$(printf 'live layer %s behind, HEAD %sh old' "$behind" "$(( age_s / 3600 ))")"
   else                     dtl="$(printf 'live layer %s behind, HEAD age unreadable' "$behind")"; fi
   # I11 — EXISTENCE-CHECK THE PLATTER (hooks/operator-readout.sh:238-246). deploy-lag platters
   # `bash ~/.claude/scripts/deploy-live.sh`, and in THIS state that exact command is what has refused
