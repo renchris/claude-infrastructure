@@ -579,6 +579,133 @@ hold_run_lock() { # the verifier's OWN in-progress mark: run.lock.d/pid naming a
   [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-lag")]|length')" = 0 ]
 }
 
+# ── deploy-stale: NOT-ADVANCING, the state BETWEEN the two covered endpoints ──────────────────────
+# The gap these tests exist for, measured 2026-08-07: the live layer 91 commits and 33h stale, 534
+# identical refusals from the lane, and ZERO deploy rows on the board. deploy-lag needs the newest
+# green to be a DESCENDANT of live HEAD; never-green needs no green to have EVER existed. Two
+# ENDPOINTS of one axis, and the state between them belonged to neither.
+#
+# Every fixture below therefore varies exactly one thing — WHERE THE STAMP CURSOR SITS (behind /
+# ahead / nowhere / no stamps dir at all) — against an identical lag. deploy-stale must be
+# indifferent to all four, which is the claim "reason-agnostic" actually cashes out to.
+
+mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 40H>
+  # A checkout behind a REAL refs/remotes/origin/main, so the sensor's own default ref is what is
+  # under test — not a config-rewritten stand-in that could pass while `origin/main` is misspelled.
+  # Exports DEPLOY_REPO and leaves three shas in scope: $PRIOR (an ancestor of the deployed HEAD, the
+  # live green-BEHIND shape), $LIVE (the deployed HEAD), $TIP (trunk's tip).
+  local r="$D/$1" n="$2" when i=0
+  when="$(date -v-"$3" +%Y-%m-%dT%H:%M:%S)"
+  git init -q -b main "$r"
+  git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" git -C "$r" commit -q --allow-empty -m prior
+  PRIOR="$(git -C "$r" rev-parse HEAD)"
+  GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" git -C "$r" commit -q --allow-empty -m live
+  LIVE="$(git -C "$r" rev-parse HEAD)"
+  while [ "$i" -lt "$n" ]; do git -C "$r" commit -q --allow-empty -m "t$i"; i=$((i + 1)); done
+  TIP="$(git -C "$r" rev-parse HEAD)"
+  git -C "$r" update-ref refs/remotes/origin/main "$TIP"
+  git -C "$r" reset -q --hard "$LIVE"                       # the layer sits at $LIVE while trunk moved on
+  export DEPLOY_REPO="$r"
+  [ "$(git -C "$r" rev-list --count HEAD..origin/main)" = "$n" ] || false   # harness self-check
+}
+
+@test "deploy-stale/NOT-ADVANCING: a green BEHIND live HEAD — the exact live state, and the gap" {
+  # L1. The one that matters most: this is 2026-08-07 reproduced. The newest green is an ANCESTOR of
+  # the deployed HEAD, so deploy-lag's ancestor test returns silently and never-green's "no green
+  # EVER" is false — the board's two deploy alarms are both correct and both mute. The `kinds`
+  # equality is the whole claim in one assertion: deploy-stale fires and it fires ALONE.
+  mkdeploy dr 30 40H                                        # 30 > CC_DEPLOY_MAX_LAG_COMMITS default 25
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  : > "$CC_POSTLAND_DIR/deploy.log"                          # the lane's own log exists → platter tails it
+  [ "$(kinds)" = "deploy-stale " ]
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-stale")][0].state')" = "NOT-ADVANCING" ]
+  echo "$output" | jq -r '[.[]|select(.kind=="deploy-stale")][0].detail' | grep -q 'live layer 30 behind' || false
+  # I11 — the platter must be RUNNABLE. deploy-lag hands over `bash …/deploy-live.sh`, which is the
+  # command that has refused 534 consecutive times in exactly this state; this row hands over the
+  # diagnostic that shows why, and never a fix its own gate rejects. Captured then matched, never
+  # `| grep -q`: under `set -o pipefail` a matching grep can exit before its producer and invert the
+  # verdict, and an assertion that reads backwards is worse than no assertion.
+  local cmd
+  cmd="$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-stale")][0].recover_cmd')"
+  [ "$cmd" = "tail -20 $CC_POSTLAND_DIR/deploy.log ; git -C $DEPLOY_REPO log --oneline -5 HEAD..origin/main" ]
+  [ "${cmd#*deploy-live.sh}" = "$cmd" ] || false            # the refusing command must NOT be plattered
+}
+
+@test "deploy-stale fires with a green AHEAD too, and does NOT defer to deploy-lag" {
+  # L2. Reason-agnostic in the direction that is easiest to get wrong: the incumbent alarm DOES fire
+  # here, and folding this row into an `emitted` gate (never-green's shape) would have silenced it.
+  # Two rows is two facts — "a certified commit is late" and "the layer is not moving" — and the
+  # second stays true in states where the first is false, which is the entire point of the kind.
+  mkdeploy dr 30 40H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$TIP" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  [ "$(kinds)" = "deploy-lag deploy-stale " ]
+}
+
+@test "deploy-stale fires with NO green at all, alongside never-green" {
+  # L3. The other endpoint. never-green fires here — and it fired for a reason that has nothing to do
+  # with the lag: it is about the CURSOR being absent, not about the layer being frozen. L1 is the
+  # proof that it cannot stand in for this row (there, a green existed and it was silent).
+  mkdeploy dr 30 40H
+  mkstamp r1 red 1M; mkstamp r2 red 2M
+  [ "$(kinds)" = "deploy-stale never-green " ]
+}
+
+@test "deploy-stale fires with NO STAMPS DIR — it cannot be reached by the stamp cursor at all" {
+  # L3b, and the structural control for the design decision. alarm_rows() `return 0`s at its top when
+  # the stamps dir has never existed; a deploy-stale living inside that function would be UNREACHABLE
+  # in this state, and the failure would be silent. Composed as its own row source, it fires here.
+  # This is the test that goes red if a future refactor folds the kind back into alarm_rows().
+  export CC_POSTLAND_DIR="$D/never"
+  mkdeploy dr 30 40H
+  [ "$(kinds)" = "deploy-stale verifier-inert " ]
+  run ccb --json
+  # I11's other branch: with no postland dir there is no deploy.log, so the tail clause is OMITTED
+  # rather than pointing at a file that is not there. Both branches of the existence check are proven.
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-stale")][0].recover_cmd')" = "git -C $DEPLOY_REPO log --oneline -5 HEAD..origin/main" ]
+}
+
+@test "deploy-stale is SILENT under both budgets — and each leg is proven live, not vacuously quiet" {
+  # L4. The false-positive control. A one-commit, one-hour-old lag is an ordinary healthy lane and
+  # must not page. The two re-runs are the anti-vacuity half (§2.8 A-6): a fixture that CANNOT fire
+  # would satisfy the silence assertion for the wrong reason, so each budget is then forced to 0 in
+  # turn and the row must appear — which also proves the HOURS leg is not dead code behind the
+  # commits leg, since it fires here at behind=1, far under the commit budget.
+  mkdeploy dr 1 1H
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="deploy-stale")]|length')" = 0 ]
+  # export/unset, never a `VAR=x run ccb` prefix: an assignment prefixing a FUNCTION call persists in
+  # the shell after it returns, so leg 3 would silently run with BOTH budgets at 0 and stop isolating
+  # anything — a vacuous control that still reads green.
+  export CC_DEPLOY_MAX_LAG_COMMITS=0                         # commits leg alone (hours budget intact)
+  run ccb --json
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="deploy-stale")]|length')" = 1 ]
+  unset CC_DEPLOY_MAX_LAG_COMMITS
+  export CC_DEPLOY_MAX_LAG_HOURS=0                           # hours leg alone, at behind=1 of a budget of 25
+  run ccb --json
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="deploy-stale")]|length')" = 1 ]
+  unset CC_DEPLOY_MAX_LAG_HOURS
+}
+
+@test "deploy-stale RENDERS in the LAND-PIPELINE table, not only in --json" {
+  # L5. A kind absent from LAND_SEL is emitted, rides the --json array, and VANISHES from the one
+  # surface the operator reads — the emit and the registration are two separate ways to ship nothing,
+  # so the assertion goes through the real render path rather than stopping at the row.
+  mkdeploy dr 30 40H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  run ccb
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'deploy-stale' || false
+  echo "$output" | grep -q 'NOT-ADVANCING' || false
+}
+
 @test "alarms fail OPEN: an unreadable/absent sensor yields NO row, never an invented blocker" {
   for n in 1 2 3 4 5; do mkstamp "r$n" red "${n}M"; done   # would be trunk-red…
   export CC_LAND_LOG="$D/nope.log"                         # …but the land sensor is absent
