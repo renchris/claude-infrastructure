@@ -2039,6 +2039,12 @@ selfclose_inventory_warn() { # $1=our-session-id $2=logfile(optional)
       fb="$(jq -r '.firedBy // empty' "$f" 2>/dev/null)"; [ "$fb" = "$sid" ] || continue
       fp="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$fp" ] || continue
       ftty="$(as_tty "$fp" 2>/dev/null || true)"
+      # KNOWN-BLIND, left as-is deliberately (2026-08-06). This tty-only read cannot see a peer
+      # whose CC sits behind `expect`'s nested pty, so it over-counts orphans — but its only act is
+      # an advisory WARN, and converting it to pane_cc_state would need a fixture upgrade in four
+      # self-close suites for no change in behaviour. Backlogged with its two siblings at :2639 and
+      # :3391; all three fail SAFE (they warn or refuse), unlike the two acting sites this commit
+      # converts. Do not "fix" one of the three alone — they share a fixture problem, not a bug.
       if [ -z "$ftty" ] || ! ps -o comm= -t "$(basename "$ftty")" 2>/dev/null | grep -qE 'node|claude'; then
         fired_orphans=$((fired_orphans + 1))
       fi
@@ -2588,23 +2594,35 @@ if [ "${1:-}" = "__selfclose" ]; then
   # gone, pane left at a shell prompt, which reads to the operator as exactly the crash this path
   # exists to avoid. Refusing before the foreground types /exit keeps the session alive instead.
   pane_proof "$HOME/.claude/bin/it2" "$SID" __selfclose || exit 1
-  cc_alive() { ps -o comm= -t "$(basename "$TTY_PATH")" 2>/dev/null | grep -qE 'node|claude'; }
+  # SAME PREDICATE, SAME FAIL-DANGEROUS POLARITY as the recycle probe (pane_cc_state's header) — and
+  # here the act is destructive rather than merely wrong: the `elif` arm below CLOSES THE PANE
+  # OUTRIGHT, skipping the graceful /exit. A CC launched under `expect` is invisible to a tty-only
+  # read, so this arm would kill a live session mid-turn on exactly the panes the resume path
+  # creates. The instant close now requires the AFFIRMATIVE shell verdict; `unknown` falls through
+  # to the wait loop, which is the graceful path and costs only time.
+  cc_alive() { [ "$(pane_cc_state "$TTY_PATH")" = cc ]; }
+  at_shell() { [ "$(pane_cc_state "$TTY_PATH")" = shell ]; }
   if [ -z "$TTY_PATH" ]; then
     # Truly blind (no tty handed over): NEVER instant-close on a blind read — fixed grace lets
     # the queued /exit land after the calling turn ends, then close teammate-style.
     echo "⚠ no tty handed over — fixed 90s grace, then close" >&2
     sleep 90
-  elif ! cc_alive; then
+  elif at_shell; then
     : # CC already exited before our first look (fast graceful exit, or shell-only pane) → close now
   else
     waited=0
     while [ "$waited" -lt 180 ]; do
       sleep 5; waited=$((waited+5))
-      cc_alive || break                            # ps on a known tty is reliable — no flake class
+      cc_alive || break                            # now tree-aware: expect's nested pty no longer hides CC
       # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
       # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
       [ "$waited" = 60 ] && hf_bounded "$HOME/.claude/bin/it2" session send -s "$SID" $'\r' >/dev/null 2>&1 || true
     done
+    # Deliberately `cc_alive || break` and NOT `at_shell && break`, unlike the recycle watcher. The
+    # act at the end of this loop is a CLOSE, which is this path's whole purpose and which the typed
+    # /exit has already committed to — so an `unknown` pane must not be able to hold the grace open
+    # for its full 180s. The recycle watcher's act is a TYPE into a composer, which is never
+    # something an unconfirmed pane should receive; the polarities differ because the acts do.
     cc_alive && echo "⚠ CC still alive after ${waited}s — teammate-style force-close" >&2
   fi
   # CLOSE-INSTANT RE-VERIFY (T-0). The successor was verified alive+engaged at ARM time, but this
@@ -2626,6 +2644,8 @@ if [ "${1:-}" = "__selfclose" ]; then
     fi
   elif [ -n "$SUCCESSOR" ] && [ -n "$SUCCESSOR_TTY" ] && \
      ! ps -o comm= -t "$(basename "$SUCCESSOR_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
+    # KNOWN-BLIND to a successor behind `expect`'s nested pty — see the note at :2042. Fails SAFE
+    # (a miss ABORTS the close and leaves both panes alive), so it is backlogged, not fixed here.
     _t0_dead=1
   fi
   if [ "$_t0_dead" = 1 ]; then
@@ -3376,7 +3396,9 @@ USAGE
          exit 3 ;;
       *) # UNPINNABLE — no registry row / no session_id / no pid. Fall back to the tty-only check
          # the pin replaces, but say so: an adopted operator pane legitimately has no row, and
-         # refusing every such close would be worse than the weaker proof.
+         # refusing every such close would be worse than the weaker proof. KNOWN-BLIND to a
+         # successor behind `expect`'s nested pty — see the note at :2042. Fails SAFE (refuses),
+         # so it is backlogged rather than converted here.
          if ! ps -o comm= -t "$(basename "$SUC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
            echo "!! self-close ABORTED: no live claude on successor pane $SC_SUCCESSOR ($SUC_TTY) — refusing to close a session whose continuation is not running" >&2
            exit 3
@@ -3524,10 +3546,16 @@ MSG
   # watcher's routing. (stage 1 of item 191d1fc4143c)
   pin_term_verdict_for_watcher
   SC_TTY="$(as_tty "$SC_SID")"
-  if [ -n "$SC_TTY" ] && ! ps -o comm= -t "$(basename "$SC_TTY")" 2>/dev/null | grep -qE 'node|claude'; then
-    # No CC on the pane (shell-only, or still launching): typing /exit would hit the SHELL and
-    # vanish (observed). Nothing to exit gracefully — the watcher closes the pane directly.
-    echo "→ no CC on $SC_TTY — skipping /exit, closing pane directly" >&2
+  # AFFIRMATIVE, not "I could not find CC" (pane_cc_state's header). Skipping the /exit is a
+  # decision to kill a pane WITHOUT letting the session end gracefully, so a tty-only read that
+  # cannot see a CC under `expect` would take it on exactly the panes the resume path creates.
+  # Only a CONFIRMED prompt qualifies; `unknown` takes the graceful arm, which types /exit and
+  # waits — harmless on a pane that really was empty, and the difference between a clean exit and
+  # a killed turn on one that was not.
+  if [ -n "$SC_TTY" ] && [ "$(pane_cc_state "$SC_TTY")" = shell ]; then
+    # CONFIRMED shell-only pane: typing /exit would hit the SHELL and vanish (observed). Nothing to
+    # exit gracefully — the watcher closes the pane directly.
+    echo "→ pane $SC_TTY CONFIRMED at a shell prompt (no CC) — skipping /exit, closing pane directly" >&2
     pin_term_verdict_for_watcher
     detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
