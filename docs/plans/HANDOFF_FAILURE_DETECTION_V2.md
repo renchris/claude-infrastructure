@@ -113,6 +113,16 @@ under current load — expect refusals, never work around.
   46 tests pins the unconditional desk take, that test pins the trapdoor — amend WITH a mutation
   control and this justification (stale-assertion-inverts law: the side with the incident wins).
   Until this lands, cc-roles MUST stay empty (247 has told the operator so).
+- **+D9 fixture-noise hermeticity patch** (from R2 §1: 93.7% of live HUSK mailbox traffic is bats
+  litter — `tests/handoff-fire-completion-push.bats` runs the real handoff-fire against the live
+  `$HOME`, and the same suite would litter the NEW handoff-alarms/ store on day one). LEAD-owned,
+  with D7: point that suite's setup() at tmpdir stores (CC_HANDOFF_ALARM_DIR +
+  CC_COMPLETION_RECORDS_DIR + CC_ANNOUNCE_ALARM_DIR + CC_MAILBOX_DIR as applicable). An
+  alarm store that is 94% test noise re-creates the boy-who-cried-wolf channel this rebuild kills.
+- **D4 under deploy lag (R2 §5, note):** live layer runs 2-day-old code with no `hf_close_attrib`,
+  so close-attrib.jsonl is absent until deploy-live advances. D4 stays safe by construction: an
+  old-code SUCCESSFUL close removes the pane → benign-gone arm; an old-code husk (pane present, no
+  row) → orphan alarm, which is CORRECT. No gating needed.
 - **+D8 numeric pane-id resolution gap** (hit live, confirmed by 247 both ways): `cc-notify 247`
   → `verdict=unresolvable reason=no-such-target` while `--list` shows the session live; only the
   NAME form (`lakehouse-lecture-247`) resolves. Every fired brief's back-channel recipe says
@@ -355,9 +365,12 @@ opted in. Mutation control: pre-change file pages on the same fixture.
 | Engagement latency, live | 16s (proof=marker) | today's fire, brief §3 |
 | Banner truncation | 200 chars | autonomy-sweep.sh:324 |
 | notify bound | 25s (CC_SWEEP_NOTIFY_TIMEOUT_S) | autonomy-sweep.sh:43 |
-| Today's silent-drop volume | 21 announce-alarms, 3 push-failed completion records, 1 engaged:0 fire | live ls/jq 2026-08-07 |
-| Alarm-class incidence | R2 (pending) | — |
-| Next-SessionStart latency p50/p95 | R2 (pending) — bounds D3's clock | — |
+| Desk-channel success rate | **0 delivered / 389 announce-alarms / 19 days** (352→one pane dead since 07-26; 12 days stale BEFORE today's emptying) + 238/250 completion-push `push-failed(rc=5)`, 0 success | R2 §2/§4 (instrument commands inline there) |
+| Alarm-class incidence | HUSK **25 real** (9.7% of 257 closes; **22/25 unread** — only 3 pre-cursor-freeze 07-26 consumed) · STRAND-RISK **0 ever** · RECYCLE-DEAD **0 since 07-29 land** (pre-08-05 handoffs.jsonl UNKNOWN) · fires-never-engaged 21/303 (6.9%, P0-11-caught inline) | R2 §1 (two agreeing instruments) |
+| Next-SessionStart latency | p50 **89s** · p90 19.5m · **p95 40.6m** · p99 3.7h · **max 9.8h, nightly** (59 gaps >1h in 14d) — D3's clock; OS banner + future phone cover the tail | R2 §3 (sessions.log, 1,671 gaps) |
+| Fixture noise in live stores | **93.7% of HUSK mailbox traffic (370/395) is bats litter** — tests/handoff-fire-completion-push.bats runs real handoff-fire against live $HOME | R2 §1 ⚠️ → folded: hermeticity patch (below) |
+| Deploy lag (live layer) | live ~/.claude runs main@a9060c18 (08-05); `hf_close_attrib` not yet deployed — close-attrib.jsonl cannot exist until deploy-live advances | R2 §5 |
+| cc-inbox-guard | LIVE, 88 `undelivered-escalated` IDL rows, all 08-06/08-07 (rail is 2 days old) | R2 §4 |
 
 ## Phase 0 (Agent Team Orchestration)
 
