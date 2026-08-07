@@ -445,6 +445,66 @@ the document the item cites, so the same extrapolation cannot be re-filed from �
 (the corpus mutex, `22b9f2b5a660`) is untouched by this and remains valid: `bin/cc-bats` still takes
 no lock, and `run.lock.d` still lives only at `scripts/postland-verify.sh:379`.
 
+## 7-ter. Finding G — the dev-server reaper is real, but its yield is ~450 MB, not ~7 GB (2026-08-07)
+
+§7-bis(c) filed backlog `2b1045b13b03`: build the reaper/cap/census that `grep` proved absent. It is
+**built** (`scripts/devserver-census.sh`, `tests/devserver-census.bats`, hourly launchd job staged at
+`docs/activation/pending-activation/33-devserver-gc-activate.sh`). Two of that section's own numbers
+did not survive the build.
+
+### (a) The named reap target is the BUSIEST process on the box
+
+§7-bis(c) singles out pid 24847 — "5.82 GB after 38 minutes and still growing" — as the thing to
+collect. Re-measured at 57 minutes, joined against liveness rather than read off `ps` alone:
+
+| pid | worktree | RSS | CPU Δ / sample | live owner | conns on dev port |
+|---|---|---|---|---|---|
+| 24847 | `wt-cc-001759-77337` | 4.6 GB | **+49 s** | **YES** | 0 |
+| 42743 | `bs-spacing-header` | 444 MB | +0.04 s | no | 0 |
+| 65219 | `bs-deck-retarget` | 667 MB | +0.03 s | no | 0 |
+| 70584 | `wt-cc-225106-82355` | 661 MB | +0.03 s | **YES** | 0 |
+
+24847 is the single most CPU-active process in the census and its worktree holds a live `claude`
+session. **Reaping by size kills the one server that is provably working** — the never-reap-the-
+living failure `scripts/reap-guard.sh` was built for, in a new family. It also shrank, 5.82 → 4.6 GB,
+so "still growing" was a two-sample artifact: RSS is non-monotonic under memory pressure.
+
+A gate-respecting reaper collects the *unowned tail*: **1–2 servers, ~450 MB–1.1 GB of the 6.2 GB**.
+The ~7 GB in §7-bis(c) is the population total, and most of it was never collectable. The item is
+built as filed; only its expected yield is corrected.
+
+### (b) "No browser attached" is not idleness — and the obvious way to measure it is wrong
+
+**All four** servers had **zero** established connections on their dev port, including both with live
+owners. A browser holds the HMR socket only while a tab is open, so absence is the *normal* state; a
+reaper keyed on it would have killed all four. Connections are therefore a KEEP signal only, never a
+REAP signal.
+
+Worse, the natural probe is invalid: `lsof -p <pid> -sTCP:ESTABLISHED` returns 1–2 rows for an
+entirely unused server, because it counts `next dev`'s **own internal IPC** (ephemeral→ephemeral on
+127.0.0.1). The count must be scoped to the *listening* port. Likewise `ps | grep next-server` reads
+**9** on this box where the truth is **4** — agent briefs carry the string in argv — so discovery is
+anchored at command position and ownership resolves through `cwd`, never argv.
+
+Nor is an idle server quiescent: it ticks in **bursts** (42743 gained 48 CPU-s and 65219 43 over one
+session, while reading 0.00 s across three consecutive 1 s samples). Two runner passes 28 s apart
+returned `reaped=0 kept=4` and `reaped=2 kept=2` for an unchanged population. The CPU gate flaps
+toward KEEP by construction, and the hourly cadence converges.
+
+### (c) The reaper's own oracle is the largest remaining risk, and is fail-closed
+
+Both the owner gate and the browser gate resolve through `lsof`, which lives in `/usr/sbin`. reso's
+worktree reaper shipped a launchd `PATH` without it; `lsof` was command-not-found, every liveness
+gate returned empty, and it reaped a **live** worktree (`wt-cc-233227-53597`, 2026-06-19). The same
+omission here would read every dev server as unowned and kill the lot. So the module positively
+controls its instrument — `lsof` must be able to report the module's *own* cwd — and **exits 3
+refusing to decide** when it cannot. A silently-empty liveness oracle is indistinguishable from an
+idle machine, and that is the one confusion this family cannot survive.
+
+The job ships **observe-only**: no `DEVGC_ACT` in the plist, so every run is a dry run until the
+operator arms it. Same split as `com.claude.compressor-sentinel` — and §7-bis(d) is the standing
+argument for why an unarmed actuator must be visible as such rather than assumed live.
+
 ## 8. Recommendations, ordered by leverage
 
 1. **Break the deploy-live deadlock (§5).** Nothing else in this document compounds the way this
