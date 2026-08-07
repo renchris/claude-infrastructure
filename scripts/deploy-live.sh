@@ -61,7 +61,8 @@
 #      gate, i.e. exactly the pre-2026-08-07 behaviour, freeze included) ·
 #      CC_DEPLOY_DAMP_S · CC_HOST_MANIFEST · CC_DEPLOY_HOST_TIMEOUT_S · CC_BACKLOG_BIN ·
 #      CC_DEPLOY_BATS_BIN / CC_DEPLOY_TIMEOUT_BIN (UNSET ⇒ resolved; SET-EMPTY ⇒ disabled) ·
-#      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off).
+#      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off) ·
+#      CC_DEPLOY_MIGRATIONS (UNSET ⇒ scripts/deploy-migrations.sh; SET-EMPTY ⇒ migration converge off).
 # bash-3.2-safe, no eval, fail-closed, never rolls back.
 set -uo pipefail
 
@@ -364,9 +365,42 @@ EOF
 
 g rev-parse --git-dir >/dev/null 2>&1 || die "DEPLOY_REPO is not a git checkout: $DEPLOY_REPO"
 
+# ── migration converge (face 3 of inertness-generator-2026-08-07 §3) ────────────────────────────
+# Registration state is no longer a script in a folder someone is supposed to visit: it is a
+# migration that landed in the same diff as its subject, and the converger runs it. Two phases —
+# materialise the live pending-activation queue from the repo SSOT (which makes the REPO-ONLY and
+# CONTENT-DRIFT parity classes unrepresentable), then run every un-applied migrations/*.sh.
+#
+# Called from TWO places, deliberately, and the reason is the same one the link_refresh block above
+# spells out. This step is idempotent and monotone, so it "has no business being conditional" — but
+# the ONLY call that can run a migration in the same cycle as the land that carried it is the one
+# BELOW the advance, and both early exits ("already deployed", the rollback refusal) return before
+# reaching it. Unconditional here catches the retries and any hand-edit of the derived queue; the
+# post-advance call is what makes LANDED ⇒ LIVE hold within one cycle. In steady state the second
+# call never runs (the early exit fires first) and this one is two `cmp`s and a ledger read.
+#
+# NEVER `die`: a migration failure is a finding about the enforcing store, not a reason to abandon
+# the deploy — the advance has value on its own, and scripts/wrap-ledger.sh is what refuses ✅ while
+# a failure stands. Same contract as host_checks below.
+MIGRATIONS_BIN="${CC_DEPLOY_MIGRATIONS-$DEPLOY_REPO/scripts/deploy-migrations.sh}"
+migrations_converge() { # never fails, never changes the exit code
+  [ -n "$MIGRATIONS_BIN" ] && [ -x "$MIGRATIONS_BIN" ] || return 0
+  # --dry-run MUST propagate. This script's own contract for the flag is "decide + print, mutate
+  # nothing", and a converge step that quietly ran for real underneath it would make the operator's
+  # one safe way to inspect a deploy the thing that performs it.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    "$MIGRATIONS_BIN" --dry-run || true
+    return 0
+  fi
+  "$MIGRATIONS_BIN" || say "migration converge reported a FAILURE — see $STATE_MIGRATIONS/failed/ (the deploy itself stands: a migration failure is a finding about the enforcing store, and scripts/wrap-ledger.sh is what refuses ✅ while it holds)"
+  return 0
+}
+STATE_MIGRATIONS="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
+
 # UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
 # even when the network is down, the tip has no green stamp, or the live layer already sits above it.
 link_refresh
+migrations_converge
 
 g fetch origin main >/dev/null 2>&1 || die "git fetch origin main FAILED in $DEPLOY_REPO (network? remote?)"
 
@@ -657,6 +691,11 @@ if [ -x "$DEPLOY_REPO/install.sh" ]; then
 else
   die "merged ${TARGET:0:12} but $DEPLOY_REPO/install.sh is missing/not executable — new files are NOT linked"
 fi
+
+# The advance has landed new tracked files, so a migration that shipped WITH its subject is on disk
+# for the first time here. This is the call that makes LANDED ⇒ LIVE true within ONE cycle rather
+# than two — the pre-fetch call above ran before the merge and could not see it.
+migrations_converge
 
 # The live layer has ADVANCED — only now do the host suites have a real subject to assert.
 host_checks "$TARGET"
