@@ -69,6 +69,16 @@ setup() {
   push_ref() { # $1=bare-path $2=branch [$3=file $4=content]
     local w="$D/w$RANDOM"
     git init -q "$w" >/dev/null 2>&1
+    # BUILD ON TOP of the branch when it already exists. Every call inits a FRESH repo, so without
+    # this a second push to the same branch carries an unrelated root commit — a non-fast-forward
+    # the remote rejects, which under errexit aborts the CALLER rather than this helper. That is
+    # what made "C4 poll resets the stall clock when the ref actually advances" red: the one test
+    # that pushes the same branch twice, i.e. the only one that models what a cloud worker does.
+    # A real worker advances a ref; the fixture must too, or the advance it asserts is not an
+    # advance at all.
+    if git -C "$w" fetch -q "$1" "refs/heads/$2" >/dev/null 2>&1; then
+      git -C "$w" reset -q --hard FETCH_HEAD >/dev/null 2>&1 || true
+    fi
     if [ -n "${3:-}" ]; then
       mkdir -p "$(dirname "$w/$3")"; printf '%s' "${4:-x}" > "$w/$3"
       git -C "$w" add -A >/dev/null 2>&1
@@ -204,14 +214,14 @@ setup() {
   have_subject
   r="$(bare rem)"; push_ref "$r" feat/a >/dev/null
   repo="$(trunk_repo work docs/thing.md)"
-  cloud declare --id done --branch feat/a --remote "$r" --repo "$repo" \
+  cloud declare --id 'done' --branch feat/a --remote "$r" --repo "$repo" \
         --trunk origin/main --paths docs/thing.md --stall 3600 --life 999999
   cloud poll >/dev/null
 
   # A finished session stops pushing ON PURPOSE. Ordering STALLED first would alarm forever on
   # every successful cloud session — an alarm that always fires carries no information.
   export CC_CLOUD_NOW=$((T0 + 100000))
-  [ "$(tstate done)" = "LANDED" ]
+  [ "$(tstate 'done')" = "LANDED" ]
   [ "$(rows)" -eq 0 ]
 
   # POSITIVE CONTROL: an identically-aged, identically-frozen session whose declared path is NOT on
@@ -298,7 +308,11 @@ setup() {
   [ "$(rows)" -eq 1 ]                     # control: it fires while the switch is on
 
   export CC_CLOUD_RECONCILE=off
-  run "$CLOUD" --json
+  # STDOUT ONLY. bats' `run` merges stderr into $output, and the disabled-reconciler warning is
+  # deliberately written to stderr (the very next assertion proves it is there) — so an unredirected
+  # `run` made this "zero rows on stdout" check fail on the presence of the warning it is paired
+  # with. The two assertions must read different streams or they contradict each other.
+  run bash -c "'$CLOUD' --json 2>/dev/null"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
   # A disabled reconciler must not look like a clean board.
