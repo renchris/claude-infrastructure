@@ -246,7 +246,16 @@ STUB
 # shell's refusal, which is exactly when the wedge becomes observable. Ordering matters on the
 # typed arm: the echo-verify BEFORE the CR must still see the command, else typing fails first and
 # the engagement gate is never reached.
-parked_it2_stub() { # $1=path → an it2 stub that parks the pane once $CMD has been delivered
+#
+# The SCREEN is a parameter, because the two transports do not wedge the same way. zsh's CORRECT
+# prompt is raised by ZLE while READING a typed line, so the 2026-07-26 `[nyae]` shape belongs to
+# the typed arm; an argv pane never reads a line through ZLE. What it CAN produce — and what the
+# verdict's own remedy text names — is the launcher word failing to resolve, because the launchers
+# are interactive-rc zsh functions and cc-pane-runner runs $CMD under `$SHELL -l -i -c`. Each arm
+# therefore feeds the oracle a refusal ITS transport can actually generate. (Pattern coverage
+# across all the shapes is tests/handoff-fire-pane-parked.bats's subject, not this suite's.)
+parked_it2_stub() { # $1=path $2=the shell refusal its screen shows → an it2 stub that parks the
+                    # pane once $CMD has been delivered
   cat > "$1" <<STUB
 #!/bin/bash
 LAST="$BATS_TEST_TMPDIR/it2-last-send2"
@@ -263,7 +272,7 @@ esac
 case "\$*" in
   *"session split"*) echo "Created new pane: $PANE" ;;
   *"session read"*)
-    if [ -f "\$DELIVERED" ]; then printf "zsh: correct 'go' to 'god' [nyae]? \n"
+    if [ -f "\$DELIVERED" ]; then printf '%s\n' "$2"
     else cat "\$LAST" 2>/dev/null; fi ;;
   *) : ;;
 esac
@@ -280,7 +289,7 @@ STUB
 # refusal before the echo-verify ever runs, and killing the fire on a path that tests nothing.
 @test "E2E: a PARKED pane (zsh [nyae]) fails loud as parked, not as 'never engaged' [TYPED]" {
   local BIN2="$BATS_TEST_TMPDIR/bin2"; mkdir -p "$BIN2"
-  parked_it2_stub "$BIN2/it2"
+  parked_it2_stub "$BIN2/it2" "zsh: correct 'go' to 'god' [nyae]? "
   # FIRE_NOCORRECT=0 — 0e03861c types a separate `unsetopt correct correct_all` disarm line, with
   # its own CR, BEFORE the launch command. The stub keys the typed arm on a CR, so the disarm's CR
   # would flip it to the parked screen before the real command is ever typed — the echo-verify would
@@ -314,7 +323,7 @@ STUB
 # which the control below would catch).
 @test "E2E: a PARKED pane fails loud as parked on the ARGV transport too (nothing typed) [ARGV]" {
   local BIN2="$BATS_TEST_TMPDIR/bin3"; mkdir -p "$BIN2"
-  parked_it2_stub "$BIN2/it2"
+  parked_it2_stub "$BIN2/it2" "zsh: command not found: claude-test"
   run env -u CC_PANE_CMD -u IT2_WRAPPER_NO_KITTY HOME="$HOMEDIR" IT2_BIN="$BIN2/it2" \
     TMPDIR="$BATS_TEST_TMPDIR" KITTY_WINDOW_ID=1 FIRE_ARGV_LAUNCH=1 \
     CC_PANE_RUNNER_BIN="$REPO/bin/cc-pane-runner" \
@@ -324,13 +333,18 @@ STUB
       --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire
   [ "$status" -ne 0 ]
   printf '%s\n' "$output" | grep -q 'pane PARKED, launcher never ran'
-  printf '%s\n' "$output" | grep -q "correct 'go' to 'god'"
+  printf '%s\n' "$output" | grep -q 'command not found: claude-test'
   ! printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged' || false
   ! printf '%s\n' "$output" | grep -q '→ fired' || false
   # CONTROL, both halves: the command rode the SPLIT (so this is the argv branch), and NOTHING was
   # typed (so it did not quietly degrade to the typed arm above and prove that instead).
   [ -f "$BATS_TEST_TMPDIR/cmd-delivered" ]
   [ ! -s "$BATS_TEST_TMPDIR/it2-sends" ]
+  # …and the verdict must not blame a keystroke on a transport that makes none. The arm above is
+  # what made this checkable: nothing here was typed, so "the typed line" would be a false lead in
+  # a fail-loud message whose whole job is naming the cause.
+  ! printf '%s\n' "$output" | grep -q 'typed line' || false
+  ! printf '%s\n' "$output" | grep -q 'The typed command was' || false
 }
 
 @test "E2E: an engaged fire (marker in a transcript) prints '→ fired' exit 0" {
