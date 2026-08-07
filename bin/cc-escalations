@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+# cc-escalations — the explicit DRAIN + operator ACK over the fleet's escalation record stores (D5).
+#
+# THE DEFECT it closes: every escalation layer writes a durable record into a dir, and until D2/D3
+# the only consumer was autonomy-sweep's 300 s tick — which surfaces a record ONCE and then damps it
+# forever. There was no way for a human to (a) ASK what is currently outstanding, or (b) say "seen,
+# stop nagging" about one. D3's session render nags from the same stores; without an off switch a
+# render that fires every SessionStart is the alarm-polarity defect (an alarm that always fires
+# carries the same zero bits as one that cannot). This CLI is both halves: `list` is the read,
+# `ack` is the humane off switch.
+#
+# STORES (four, each with its own env seam — the seam names are the PRODUCERS' own, so a test that
+# redirects a producer redirects this reader with it):
+#   handoff-alarms/*.json    D1 handoff alarm records   class = the record's own "class" field
+#   cc-announce-alarms/*     cc-announce's alarm/degrade records   class = the filename prefix
+#   completion-push/*        terminal-completion pushes whose verdict is NOT "verified" (stuck)
+#   autonomy/pages/*.page    supervisor page stamps
+# The globs mirror autonomy-sweep.sh:101-116 EXACTLY (`*.page` for pages, bare `*` for the announce
+# and completion dirs) — this reader and that sweep must agree on what a record IS, or an ack could
+# silently miss the thing the sweep re-surfaces.
+#
+# ── THE SEEN-MARKER CONTRACT (why TWO markers per ack) ────────────────────────────────────────────
+# Two conventions exist for "this record has been surfaced", and an ack that wrote only one would
+# leave the other consumer still nagging:
+#   1. autonomy-sweep.sh:89-91 — `$SEEN_DIR/$(printf %s <record-PATH> | shasum -a 256 | cut -c1-32)`,
+#      a hash of the record's FULL PATH with no extension. This is what the live sweep reads today
+#      (~/.claude/autonomy/sweep-seen holds 1,193 such files), so ONLY this key can make the sweep
+#      treat an ack as its own.
+#   2. The D-series frozen interface — `$SEEN_DIR/<record-basename>.seen`, the literal, greppable
+#      form the render side is specified against.
+# So `ack` writes BOTH and `list`'s seen column reads EITHER. Cheap (two empty files, both inside
+# the sweep's own 7-day `find -mtime` compaction) and it cannot be wrong in one direction. The
+# hash-key half is proven by tests/cc-escalations.bats, which acks a record and then runs the REAL
+# sweep against the same fixture and asserts it collects nothing — key parity asserted against the
+# consumer, never against a copy of its source.
+#
+# Verbs:
+#   list [--json]      one row per outstanding record: basename · class · age · push-verdict · seen.
+#                      Nothing outstanding ⇒ prints "none" (`[]` under --json) and exits 0.
+#   ack <basename>     mark ONE record seen (idempotent — re-acking an acked record is a no-op that
+#                      still reports 1). Unknown basename ⇒ exit 5, never a silent success.
+#   ack --all          mark every UNSEEN record seen; prints the count actually newly acked.
+#   --selftest         hermetic fixture proof of list / ack / empty.
+#   -h|--help          this block.
+#
+# The push-verdict column is the `<record>.verdict` sidecar (frozen interface: one token —
+# reached|recorded|refused-rc<N>), falling back to the record's own `verdict` field (that is where
+# the completion-push store keeps it), else "-". An ABSENT sidecar is NOT rendered as success.
+#
+# Env seams (tests): CC_HANDOFF_ALARM_DIR · CC_ANNOUNCE_ALARM_DIR · CC_COMPLETION_RECORDS_DIR ·
+#   CC_PAGES_DIR · CC_SWEEP_SEEN_DIR.
+# jq OPTIONAL — degrades to sed field extraction (this reader must work in the same dependency-free
+# envs the record WRITERS were built for). BSD+GNU portable, no eval, fail-loud.
+# Exit: 0 ok · 2 usage · 5 no such record.
+set -uo pipefail
+
+HANDOFF_ALARM_DIR="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
+ANNOUNCE_DIR="${CC_ANNOUNCE_ALARM_DIR:-$HOME/.claude/cc-announce-alarms}"
+COMPLETION_DIR="${CC_COMPLETION_RECORDS_DIR:-$HOME/.claude/completion-push}"
+PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
+SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+JQ="$(command -v jq 2>/dev/null || true)"
+TAB="$(printf '\t')"
+
+usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
+
+# Portable mtime (BSD then GNU) — the house idiom from bin/cc-idl.
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || printf '0'; }
+
+now_epoch() { date +%s; }
+
+human_age() { # <seconds> → 45s · 12m · 3h · 9d
+  local s="$1"
+  case "$s" in ''|*[!0-9]*) s=0 ;; esac
+  if   [ "$s" -lt 60 ];    then printf '%ds' "$s"
+  elif [ "$s" -lt 3600 ];  then printf '%dm' "$(( s / 60 ))"
+  elif [ "$s" -lt 86400 ]; then printf '%dh' "$(( s / 3600 ))"
+  else                          printf '%dd' "$(( s / 86400 ))"
+  fi
+}
+
+json_field() { # <file> <key> → the string value, or "" (jq when present; sed otherwise)
+  # shellcheck disable=SC2016  # jq program body: $k is a jq variable, single quotes are required
+  if [ -n "$JQ" ]; then "$JQ" -r --arg k "$2" '.[$k] // ""' "$1" 2>/dev/null; return 0; fi
+  # Covers BOTH spellings the stores actually hold: the printf-JSON writers emit compact
+  # `"verdict":"x"`, completion-push is pretty-printed `"verdict": "x"`. A predicate that matched
+  # only one would silently reclassify a whole store.
+  sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" 2>/dev/null | head -1
+}
+
+json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# ── seen markers — see § THE SEEN-MARKER CONTRACT above ───────────────────────────────────────────
+# seen_key is VERBATIM autonomy-sweep.sh:89 (path in, 32 hex out). Copying it is deliberate: this is
+# a bin/ CLI and that is a scripts/ launchd job with no shared lib between them, so the parity is
+# asserted by test against the real sweep rather than by a shared symbol.
+seen_key()  { printf '%s' "$1" | shasum -a 256 | cut -c1-32; }
+is_seen()   { [ -f "$SEEN_DIR/$(seen_key "$1")" ] || [ -f "$SEEN_DIR/$(basename "$1").seen" ]; }
+mark_seen() { # <record-path> — write BOTH conventions
+  mkdir -p "$SEEN_DIR" 2>/dev/null || true
+  : > "$SEEN_DIR/$(seen_key "$1")" 2>/dev/null || true
+  : > "$SEEN_DIR/$(basename "$1").seen" 2>/dev/null || true
+}
+
+push_verdict() { # <record-path> → sidecar token · own verdict field · "-"
+  local v=""
+  [ -f "$1.verdict" ] && v="$(head -1 "$1.verdict" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$v" ] || v="$(json_field "$1" verdict)"
+  [ -n "$v" ] || v="-"
+  printf '%s' "$v"
+}
+
+records() { # → "<path>\t<class>" per outstanding record, store order then glob (alphabetical) order
+  local f b c
+  for f in "$HANDOFF_ALARM_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    c="$(json_field "$f" class)"; [ -n "$c" ] || c="handoff-alarm"
+    printf '%s\t%s\n' "$f" "$c"
+  done
+  for f in "$ANNOUNCE_DIR"/*; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f")"
+    case "$b" in
+      announce-degrade-*) c="announce-degrade" ;;
+      *)                  c="announce-alarm" ;;
+    esac
+    printf '%s\t%s\n' "$f" "$c"
+  done
+  # completion-push: a record whose verdict IS "verified" completed — it is not outstanding. Every
+  # other value (push-failed(…), pending, absent) is stuck. Mirrors autonomy-sweep.sh:110-116.
+  for f in "$COMPLETION_DIR"/*; do
+    [ -f "$f" ] || continue
+    [ "$(json_field "$f" verdict)" = "verified" ] && continue
+    printf '%s\t%s\n' "$f" "push-failed"
+  done
+  for f in "$PAGES_DIR"/*.page; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\n' "$f" "page"
+  done
+}
+
+cmd_list() { # [--json]
+  local json=0 path class n=0 now age v first=1
+  [ "${1:-}" = "--json" ] && json=1
+  now="$(now_epoch)"
+  [ "$json" -eq 1 ] && printf '[\n'
+  while IFS="$TAB" read -r path class; do
+    [ -n "$path" ] || continue
+    n=$((n + 1))
+    age=$(( now - $(mtime "$path") ))
+    v="$(push_verdict "$path")"
+    if [ "$json" -eq 1 ]; then
+      [ "$first" -eq 1 ] || printf ',\n'; first=0
+      printf '{"record":"%s","class":"%s","age_s":%d,"verdict":"%s","seen":%s,"path":"%s"}' \
+        "$(json_str "$(basename "$path")")" "$(json_str "$class")" "$age" "$(json_str "$v")" \
+        "$(if is_seen "$path"; then printf 'true'; else printf 'false'; fi)" \
+        "$(json_str "$path")"
+    else
+      [ "$n" -eq 1 ] && printf '%-46s  %-16s  %5s  %-26s  %s\n' RECORD CLASS AGE PUSH-VERDICT SEEN
+      printf '%-46s  %-16s  %5s  %-26s  %s\n' "$(basename "$path")" "$class" "$(human_age "$age")" \
+        "$v" "$(if is_seen "$path"; then printf 'yes'; else printf 'no'; fi)"
+    fi
+  done < <(records)
+  if [ "$json" -eq 1 ]; then
+    [ "$first" -eq 1 ] || printf '\n'
+    printf ']\n'
+  elif [ "$n" -eq 0 ]; then
+    printf 'none\n'
+  fi
+  return 0
+}
+
+cmd_ack() { # <basename> | --all
+  local target="${1:-}" path class n=0 hit=0
+  [ -n "$target" ] || { printf 'cc-escalations: ack needs <basename> or --all\n' >&2; exit 2; }
+  while IFS="$TAB" read -r path class; do
+    [ -n "$path" ] || continue
+    if [ "$target" = "--all" ]; then
+      # --all counts what it CHANGED: an already-seen record is not re-acked, so the count is the
+      # drain, not the inventory. (A count that included them would read as work done on every run.)
+      is_seen "$path" && continue
+      mark_seen "$path"; n=$((n + 1)); continue
+    fi
+    [ "$(basename "$path")" = "$target" ] || continue
+    hit=1; mark_seen "$path"; n=1
+  done < <(records)
+  if [ "$target" != "--all" ] && [ "$hit" -eq 0 ]; then
+    printf 'cc-escalations: no such record: %s — run "cc-escalations list"\n' "$target" >&2
+    exit 5
+  fi
+  printf 'cc-escalations: acked %d record(s)\n' "$n"
+  return 0
+}
+
+# ════ selftest — hermetic fixture stores; list / ack / empty each proven ══════════════════════════
+PASS=0; FAIL=0
+okp()  { printf '  ok   %-58s\n' "$1"; PASS=$((PASS + 1)); }
+badp() { printf '  FAIL %-58s\n' "$1"; FAIL=$((FAIL + 1)); }
+
+# shellcheck disable=SC2317  # selftest helpers are reached only via the --selftest dispatch
+st_env() { # <case-dir> — export the FULL seam surface; nothing may fall back to a $HOME default
+  export CC_HANDOFF_ALARM_DIR="$1/handoff-alarms" CC_ANNOUNCE_ALARM_DIR="$1/announce" \
+         CC_COMPLETION_RECORDS_DIR="$1/completion" CC_PAGES_DIR="$1/pages" \
+         CC_SWEEP_SEEN_DIR="$1/seen"
+  mkdir -p "$CC_HANDOFF_ALARM_DIR" "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" \
+           "$CC_PAGES_DIR" "$CC_SWEEP_SEEN_DIR"
+}
+
+# shellcheck disable=SC2317
+selftest() {
+  d="$(mktemp -d "${TMPDIR:-/tmp}/cc-escalations-selftest.XXXXXX")" || { echo "mktemp failed"; exit 1; }
+  trap 'rm -rf "${d:-}"' EXIT
+  echo "cc-escalations --selftest:"
+
+  # 1. EMPTY — every store present and empty ⇒ "none", rc 0 (never a bare blank line)
+  local out rc
+  out="$( set +e; ( st_env "$d/empty"; "$SELF" list ); )"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = none ] && okp "empty: prints none, rc 0" || badp "empty: rc=$rc out=$out"
+
+  # 2. LIST — one record per store, verified completion EXCLUDED
+  ( st_env "$d/full"
+    printf '{"kind":"handoff-alarm","class":"husk-pane","pane":"P","detail":"d","ts":"t"}\n' \
+      > "$d/full/handoff-alarms/alarm-1.json"
+    printf 'refused-rc3\n' > "$d/full/handoff-alarms/alarm-1.json.verdict"
+    printf '{"kind":"announce-alarm"}\n' > "$d/full/announce/announce-alarm-1.json"
+    printf '{"kind":"announce-degrade"}\n' > "$d/full/announce/announce-degrade-1.json"
+    printf '{\n  "verdict": "push-failed(cc-announce rc=5)"\n}\n' > "$d/full/completion/push-stuck.json"
+    printf '{\n  "verdict": "verified"\n}\n' > "$d/full/completion/push-ok.json"
+    : > "$d/full/pages/p1.page" ) >/dev/null
+  out="$( st_env "$d/full"; "$SELF" list )"
+  printf '%s' "$out" | grep -q 'alarm-1.json .*husk-pane .*refused-rc3' \
+    && okp "list: handoff class + verdict sidecar" || badp "list: handoff row wrong"
+  printf '%s' "$out" | grep -q 'announce-degrade-1.json .*announce-degrade' \
+    && okp "list: announce-degrade classed by prefix" || badp "list: degrade row wrong"
+  printf '%s' "$out" | grep -q 'push-stuck.json .*push-failed' \
+    && okp "list: non-verified completion record listed" || badp "list: stuck completion row missing"
+  printf '%s' "$out" | grep -q 'push-ok.json' \
+    && badp "list: VERIFIED completion record listed (must be excluded)" \
+    || okp "list: verified completion record excluded (control above lists the stuck one)"
+  printf '%s' "$out" | grep -q 'p1.page .*page' && okp "list: page row" || badp "list: page row missing"
+
+  # 3. ACK one — BOTH marker conventions written, seen column flips
+  ( st_env "$d/full"; "$SELF" ack alarm-1.json ) >/dev/null
+  st_env "$d/full"
+  [ -f "$d/full/seen/alarm-1.json.seen" ] \
+    && okp "ack: literal <basename>.seen marker written" || badp "ack: no literal .seen marker"
+  [ -f "$d/full/seen/$(seen_key "$d/full/handoff-alarms/alarm-1.json")" ] \
+    && okp "ack: sweep hash-key marker written" || badp "ack: no sweep hash-key marker"
+  out="$("$SELF" list)"
+  printf '%s' "$out" | grep -q 'alarm-1.json .*yes' && okp "ack: seen column flips to yes" || badp "ack: seen column still no"
+  printf '%s' "$out" | grep -q 'p1.page .*no' && okp "ack: un-acked record still reads no (control)" || badp "ack: acked everything"
+
+  # 4. ACK --all — nothing unseen remains; a second --all is a 0-count no-op
+  out="$("$SELF" ack --all)"
+  printf '%s' "$out" | grep -q 'acked 4 record(s)' && okp "ack --all: acked the 4 remaining" || badp "ack --all: $out"
+  out="$("$SELF" ack --all)"
+  printf '%s' "$out" | grep -q 'acked 0 record(s)' && okp "ack --all: idempotent (0 on re-run)" || badp "ack --all re-run: $out"
+
+  # 5. unknown record ⇒ rc 5, never a silent success
+  ( set +e; "$SELF" ack no-such-record.json >/dev/null 2>&1; printf '%s' "$?" ) | grep -qx 5 \
+    && okp "ack: unknown basename ⇒ exit 5" || badp "ack: unknown basename did not exit 5"
+
+  echo "cc-escalations --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ] || exit 1
+  echo "cc-escalations --selftest: GREEN"
+}
+
+case "${1:-}" in
+  -h|--help)  usage; exit 0 ;;
+  --selftest) selftest ;;
+  list)       shift; cmd_list "${1:-}" ;;
+  ack)        shift; cmd_ack "${1:-}" ;;
+  *)          printf 'cc-escalations: unknown verb %s (use list | ack | --selftest | --help)\n' "${1:-<none>}" >&2; exit 2 ;;
+esac

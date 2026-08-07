@@ -72,6 +72,9 @@ FIRE
   # mailbox — a suite mutating the state it is supposed to be isolated from.
   export CC_MAILBOX_DIR="$C/mailbox"
   : > "$C/brief.md"
+  # D6: the opt-in switch is read from the AMBIENT env, so a suite that inherited it from the
+  # operator's shell would silently test the other branch. Unset here; the tests that want it set it.
+  unset CC_DESK_OPTIN
 }
 row() { # <uuid> <sid> <pid> — write a registry row
   jq -cn --arg u "$1" --arg s "$2" --argjson p "$3" --arg c "$C" \
@@ -84,11 +87,11 @@ transcript() { # <sid> <iso-ts> [cap-text]
 }
 disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
 
-@test "selftest passes and runs all 22 checks (a zero-check suite must not 'pass')" {
+@test "selftest passes and runs all 26 checks (a zero-check suite must not 'pass')" {
   run "$DI" --selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -eq 22 ]
+  [ "$n_ok" -eq 26 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -387,6 +390,52 @@ FIRE
   [ "$(disp)" = no-desk ]
   [ "$(cat "$C/roles/desk")" = "abcdef01-2345-6789-abcd-ef0123456789" ]   # heal UNBLOCKED by the mail failure
   ! grep -q 'mail forwarded' "$C/idl.jsonl"
+}
+
+# ── D6: DESK ENFORCEMENT IS OPT-IN (2026-08-07) ──────────────────────────────────────────────────
+# This organ was written when a desk was assumed. Under the deskless model a machine that never wired
+# one is in a DELIBERATE state, and enforcing there means a 5-minute page loop plus a budgeted
+# replacement desk fired at an operator who asked for none. The gate keys on the ROLE FILE, never on
+# the caller's reason string — which is exactly what the two controls below pin: a role file that
+# EXISTS and rots is a wired-then-broken desk, i.e. an opted-in fault, and must still take the legacy
+# path. An over-broad gate (one keyed on "no-desk-ness") would swallow those and read green here
+# without them.
+
+@test "opt-in: NO role file + CC_DESK_OPTIN unset → not-opted-in, NO page, NO fire, no budget spent" {
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = not-opted-in ]
+  grep -q 'verdict=not-opted-in' "$C/idl.jsonl"           # the IDL row carries the verdict token
+  [ ! -f "$C/stubs/fire.log" ]                            # nothing fired…
+  [ ! -f "$C/stubs/push.log" ]                            # …nothing paged…
+  ! ls "$C/state"/respawn-*.marker >/dev/null 2>&1 || false   # …and no respawn budget consumed
+  # an EMPTY role file is the same never-wired state (evaluate() reads both as "no pane")
+  : > "$C/roles/desk"
+  run "$DI" --once
+  [ "$(disp)" = not-opted-in ]
+  [ ! -f "$C/stubs/fire.log" ]
+}
+
+@test "opt-in: NO role file + CC_DESK_OPTIN=1 → the legacy no-desk path (page + budgeted fire)" {
+  # The positive control for the absence assertions above: same fixture, switch on, everything fires.
+  export CC_DESK_OPTIN=1
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  [ -f "$C/stubs/push.log" ]
+  ls "$C/state"/respawn-*.marker >/dev/null 2>&1
+}
+
+@test "opt-in: a PRESENT-but-dead role file is an opted-in FAULT — legacy path even with the switch off" {
+  # The design point. Someone registered a desk here and its pointer rotted; that is precisely the
+  # incident this organ exists for, so the opt-in gate must NOT swallow it. CC_DESK_OPTIN stays unset.
+  printf 'UDEAD\n' > "$C/roles/desk"        # holder present, no registry row → dead pointer
+  run "$DI" --once
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = no-desk ]
+  [ -f "$C/stubs/fire.log" ]
+  [ -f "$C/stubs/push.log" ]
 }
 
 @test "no-desk: a SELF-forward is refused (a pointer that looks wired must not hide a stuck role)" {
