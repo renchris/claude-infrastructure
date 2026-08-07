@@ -4686,7 +4686,7 @@ home = os.environ.get("ACC_HOME") or ""
 if desk and not desk.isdigit():
     sys.stderr.write("Error: desk role is not a kitty window id: " + desk + "\n")
     sys.stderr.write("       ~/.claude/cc-roles/* describe a DIFFERENT terminal than the live one.\n")
-    sys.stderr.write("       Refusing to guess an anchor. Repair: ~/.claude/autonomy/pending-activation/31-cc-roles-kitty-normalise-activate.sh\n")
+    sys.stderr.write("       Refusing to guess an anchor. Repair: ~/.claude/autonomy/pending-activation/32-cc-roles-kitty-normalise-activate.sh\n")
     sys.exit(3)                       # TERMINAL-IDENTITY MISMATCH — caller must treat as inconclusive
 
 tabs = [t.get("windows") or [] for ow in d for t in ow.get("tabs", [])]
