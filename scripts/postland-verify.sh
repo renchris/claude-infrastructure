@@ -1532,8 +1532,17 @@ EOF
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
     cut_clear                                   # a verdict was reached: the cut streak is over
+    # A now-passing state clears every standing page. postland-revert-* belongs in that set and was
+    # the one class missing from it: a FAILED auto-revert's page asserts "trunk is STILL RED" and
+    # hands the operator a `do:` line to land the revert BY HAND, and neither claim survives a
+    # green — the red is gone, so the remedy has become the wrong action (at best a no-op, at worst
+    # re-reverting a commit whose red was fixed forward, per memory
+    # work-item-remedy-can-become-forbidden). Nothing durable is lost: the never-twice record is the
+    # $REVERTS/<culprit> marker, which this does not touch. Measured 2026-08-06 — 5 standing revert
+    # pages, oldest a week old, against 0 red/cut/hung: the classes that ARE retracted had none, so
+    # the omission is the whole reason the channel filled with stale ones.
     rm -f "$PAGES"/postland-red-*.page "$PAGES"/postland-cut-*.page \
-          "$PAGES"/postland-hung-*.page 2>/dev/null || true  # now-passing state clears standing pages
+          "$PAGES"/postland-hung-*.page "$PAGES"/postland-revert-*.page 2>/dev/null || true
     log "GREEN $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else

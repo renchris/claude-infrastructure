@@ -149,6 +149,7 @@ idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
 pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 cells_n()     { find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-*' 2>/dev/null | wc -l | tr -d ' '; }
 cut_pages_n() { find "$CC_PAGES_DIR" -name 'postland-cut-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+rev_pages_n() { find "$CC_PAGES_DIR" -name 'postland-revert-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 
 # Collapse duplicate slashes into $PWD's normal form; result in $NORM (a GLOBAL, deliberately: a
 # `case` inside `$( )` is a silent no-op under the bash 3.2 that ships as /bin/bash, and returning
@@ -1142,6 +1143,21 @@ arv_red() {   # [subject] → echoes the culprit sha
   push_commit "${1:-the culprit}"
   origin_head
 }
+# Same red, but the culprit is UNREVERTABLE: a follow-on commit edits the culprit's own file, so
+# `git revert <culprit>` off the trunk tip conflicts and auto_revert stops at rc 90 (step=revert)
+# instead of landing. This is the real shape — the 2026-08-06 incident reverted 13bfa557db3a, whose
+# fleet.manifest row and activation script two later commits had amended. The bisect still names the
+# culprit (the red starts there and never clears), so the tip-confirmation path is not involved.
+arv_red_unrevertable() {   # → echoes the culprit sha
+  local culprit
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
+  printf '@test "boom" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "the culprit"
+  culprit="$(origin_head)"
+  printf '@test "boom" { false; }\n@test "boom too" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "a follow-on amending the culprit's own file"
+  printf '%s' "$culprit"
+}
 ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
 
 @test "C20: a reproducible RED with a BISECTED culprit is reverted and landed via the land lane" {
@@ -1210,6 +1226,39 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
   run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=1 bash "$SUT" --run-if-needed
   [ -s "$REC/ship.argv" ]                                      # under the cap ⇒ it reverts
+}
+
+# A FAILED auto-revert's page was the ONE page class the green path did not retract, so it stood
+# forever — and its `do:` line kept telling the operator to hand-land a revert whose red may since
+# have been fixed forward, i.e. the remedy outlived the symptom (memory:
+# work-item-remedy-can-become-forbidden). Measured on the live box 2026-08-06: 5 standing
+# postland-revert pages, oldest a week, against 0 red/cut/hung — the retracted classes had none.
+@test "C20: a green retracts a standing FAILED-REVERT page (its remedy has gone stale)" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS, from the REAL producer — the page under test only exists if the revert failed at
+  # the revert STEP. Asserted, never assumed: had it landed (or been skipped) there would be no page
+  # and the retraction below would pass vacuously.
+  run grep -c '^land_exit=90$' "$CC_POSTLAND_DIR/reverts/$culprit"
+  [ "$output" = "1" ]
+  [ ! -f "$REC/ship.argv" ]                              # rc 90 stops BEFORE the land lane
+  [ "$(rev_pages_n)" = "1" ]
+  # Now fix the red FORWARD, the way a human does: the culprit stays on trunk and the page's
+  # remedy becomes the wrong action. REPAIR the suite rather than deleting it — deleting restores
+  # the byte-identical tree of the green base, and this verifier is TREE-keyed, so the sweep
+  # abstains "already-stamped" and never reaches the green branch at all (it exits 0 either way,
+  # which is why the verdict below is asserted from the STAMP and not from $status).
+  printf '@test "fixed forward" { true; }\n' > "$R/tests/bad.bats"
+  push_commit "the red fixed forward — the standing revert page's remedy is now stale"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  tree="$(origin_tree)"
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                                # the green actually happened...
+  [ "$(rev_pages_n)" = "0" ]                             # ...and the stale page is retracted
+  [ "$(pages_n)" = "0" ]                                 # (its RED sibling too, as before)
+  [ -f "$CC_POSTLAND_DIR/reverts/$culprit" ]             # never-twice marker SURVIVES (not a page)
 }
 
 @test "C20: an UNDECIDABLE bisect pages and backlogs but attempts ZERO reverts" {
