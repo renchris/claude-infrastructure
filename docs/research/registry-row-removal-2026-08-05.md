@@ -121,3 +121,49 @@ the pane has no addressable row: `cc-notify` cannot reach it, `cc-board` reads i
 `cc-backlog`'s `claimer_live` can answer PROVEN NOT-LIVE for a session-keyed claim held by a
 perfectly healthy worker — a false death. The self-close orphan gate is no longer affected: as of
 `4cd1d2e4` it resolves the sid from Claude Code's own per-pid registry when the row cannot answer.
+
+## The WRITE side — same mechanism, other direction (2026-08-08, backlog `55e1e65c7548`)
+
+Everything above is about a phantom **removing** a row. A child session can also **overwrite** one,
+and that half had no gate at all. `register()` wrote `$pane.json` keyed on
+`${CC_PANE_ID:-$ITERM_SESSION_ID}` — inherited by every child process — so any nested `claude`
+firing a SessionStart replaced the tenant's row with its own pid and session_id, and that pid was
+dead within seconds.
+
+Three measurements, escalating:
+
+1. **The hook has no tenancy gate.** Fixtured `CC_REGISTRY_DIR`, incumbent row owned by a live
+   foreign pid: overwritten, no condition consulted.
+2. **A real headless child does it end to end.** One `claude -p` fired from inside a live session,
+   throwaway `CLAUDE_CONFIG_DIR` wiring only `session-register.sh`: pane 841 went from
+   (pid 82949, `PARENT-SID-0001`) to (pid 38739, the child's sid), and 38739 was dead when the probe
+   returned while 82949 ran throughout. **The child exited on "Not logged in" — it never reached the
+   model.** So this is not cost-gated the way `d246307ff1e1` (the upgrade gate's throwaway sessions)
+   suggested: invoking the CLI at all is enough, from any script that shells out to it.
+3. **The same probe against the fixed hook leaves the row untouched** and journals
+   `disposition:"refused"` naming ancestor pid 82949.
+
+`hooks/live-session-registry.sh` had the identical defect one key over — it registers on the
+session's **cwd**, equally inherited (measured: row pid 94327 → 94337, dead). That row is worse to
+lose, because `worktree-gc.sh:361-372` `registry_live()` is a POSITIVE proof with nothing behind it:
+a dead pid drops the worktree back to the cwd/lsof oracle that file's header exists to replace
+("live `claude` procs routinely report cwd=/ … a single bad pass made a LIVE session's worktree look
+dead and it was reaped"). One throwaway probe disarms the reap guard for the session that fired it.
+
+**The remedy is ancestry, not liveness.** Both gates refuse only when the row's owning pid is a live
+**ancestor** of the registering process — a nested claude got the pane id (or the cwd) by inheriting
+it from the process that owns it, so ancestry *is* the proof the row is not ours. The cheaper "the
+incumbent is live and is a claude" test was rejected because it convicts on pid REUSE (wedging a
+pane forever) and on pane REUSE (a `--recycle` overlap would refuse the incoming tenant and leave
+the pane holding a row about to become a corpse — this very bug, re-created by its own fix). Both
+suites pin those two cases as controls that must still WRITE.
+
+### A denominator note, because the first census was wrong
+
+Asking "would this gate refuse anything legitimate?" was answered twice. A `ps -eo command=` grep for
+`node_modules/.bin/claude` reported **25 of 50** live claude processes nested inside another — which
+would have made the gate look catastrophic. That population is fiction: it counts wrappers such as
+`bash ~/.claude/bin/cc-close-attrib …/claude …`, whose argv contains the path but whose `comm` is
+`bash`. The gates match on `ps -o comm=`, exactly as `claude_ancestor_pid()` always has. Re-run with
+the subject's own predicate: **27 live claude processes, 0 nested.** The refusal population is the
+transient probes and nothing else. (memory: positive-control-the-denominator.)
