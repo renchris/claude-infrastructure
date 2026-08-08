@@ -497,6 +497,48 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
     exit 4
   fi
 
+  # ── STEP 1b: ROUTE TO THE OWNING ACCOUNT ────────────────────────────────────────────────────
+  # A session id is NOT a globally-addressable handle. Measured 2026-08-08 (backlog 95422d3518bc)
+  # with a clean A/B — same id, same command, only CLAUDE_CONFIG_DIR differs: the owning account
+  # returns {ok:true}; another account returns {ok:false,…,"Session not found"}.
+  #
+  # 🚨 The scoping is not the trap; the ERROR STRING is. A wrong-account send fails as "Session not
+  # found", which reads as a DEAD or expired session — so the otherwise-correct rule below ("exit
+  # with the API's own reason, never a bare failure") is, on this ONE path, how a confidently wrong
+  # diagnosis reaches a human with the API's authority behind it. Same class as the three liars in
+  # §5.2: a condition converted into a different, scarier one on its way out. So the mismatch is
+  # detected HERE and named HERE, before the transport can speak for it.
+  #
+  # THREE states, not two. A declaration with no `account=` predates the field, and "assume the
+  # current account" is precisely the guess that manufactures the misleading error. It gets its own
+  # warning and proceeds unrouted, because refusing would strand every declaration made before
+  # today — but it is never silent.
+  CLOUD_ACCT="$("$CC_CLOUD" show "$CLOUD_ID" 2>/dev/null | sed -n 's/^account=//p' | head -1)"
+  CLOUD_CFG=""
+  if [ -n "$CLOUD_ACCT" ]; then
+    CLOUD_CFG="$(jq -r --arg a "$CLOUD_ACCT" '.accounts[]? | select(.name==$a) | (.config_dir // empty)' \
+                 "$HOME/.claude/accounts.json" 2>/dev/null | head -1)"
+    # accounts.json stores a literal `~`, which does NOT expand inside a variable. Skipping this
+    # yields a path that exists nowhere — and the resulting failure would look like the very
+    # wrong-account error this block exists to prevent.
+    # shellcheck disable=SC2088  # the quoted ~ is the literal we are MATCHING, not one to expand
+    case "$CLOUD_CFG" in "~/"*) CLOUD_CFG="$HOME/${CLOUD_CFG#\~/}" ;; esac
+    if [ -z "$CLOUD_CFG" ] || [ ! -d "$CLOUD_CFG" ]; then
+      verdict cloud-account-unresolvable reason=no-config-dir "cloud=$CLOUD_ID" "account=$CLOUD_ACCT"
+      echo "cc-notify: [$CLOUD_ID] is declared to account '$CLOUD_ACCT', but that account has no usable config dir in ~/.claude/accounts.json." >&2
+      echo "  refusing: sending from the wrong account returns 'Session not found', which is indistinguishable from a dead session." >&2
+      exit 5
+    fi
+    if [ "$CLOUD_CFG" != "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ]; then
+      echo "cc-notify: routing to owning account '$CLOUD_ACCT' (CLAUDE_CONFIG_DIR=$CLOUD_CFG) — a session id is scoped to the account that created it." >&2
+    fi
+  else
+    verdict cloud-account-undeclared reason=predates-account-field "cloud=$CLOUD_ID"
+    echo "cc-notify: ⚠ [$CLOUD_ID] carries NO owning account in its declaration, so this send cannot be routed — it will go from whatever account is ambient." >&2
+    echo "  if that is not the account that CREATED the session, the API answers 'Session not found', which reads as a dead session and is NOT one." >&2
+    echo "  fix the declaration: cc-cloud declare --id $CLOUD_ID --branch <b> --account <acct>" >&2
+  fi
+
   resolve_from
   CLOUD_MSG1="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
 
@@ -504,7 +546,11 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
   # here too rather than inherited — an inherited terminal is exactly the difference between a
   # measured call and an untested one.
   CLOUD_ERR="$(mktemp "${TMPDIR:-/tmp}/cc-notify-cloud.XXXXXX" 2>/dev/null || printf '/tmp/cc-notify-cloud.%s' "$$")"
-  CLOUD_OUT="$("$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+  if [ -n "$CLOUD_CFG" ]; then
+    CLOUD_OUT="$(CLAUDE_CONFIG_DIR="$CLOUD_CFG" "$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+  else
+    CLOUD_OUT="$("$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+  fi
   CLOUD_ERRTXT="$(cat "$CLOUD_ERR" 2>/dev/null || true)"; rm -f "$CLOUD_ERR" 2>/dev/null || true
 
   # Is the flag even SUPPORTED? `--cloud` is present-but-hidden on CC 2.1.220 and ABSENT on the

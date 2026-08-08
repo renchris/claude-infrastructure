@@ -374,7 +374,7 @@ do_check() {
 
 # ── mutating verbs ───────────────────────────────────────────────────────────────────────────────
 cmd_declare() {
-  local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item=""
+  local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -386,6 +386,12 @@ cmd_declare() {
       --trunk)   trunk="${2:-}"; shift 2 ;;
       --url)     url="${2:-}"; shift 2 ;;
       --surface) surface="${2:-}"; shift 2 ;;
+      # THE OWNING ACCOUNT. A session id is NOT a globally-addressable handle: measured 2026-08-08
+      # (backlog 95422d3518bc), the same id from the owning account returns {ok:true} and from
+      # another account returns {ok:false,"Session not found"} — a wrong-account send that reads as
+      # a DEAD SESSION. Nothing downstream can recover that distinction without this field, so it
+      # is recorded at declaration time or it is unrecoverable, exactly like the declaration itself.
+      --account) account="${2:-}"; shift 2 ;;
       --item)    item="${2:-}"; shift 2 ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
@@ -402,7 +408,7 @@ cmd_declare() {
   # positive control.
   local NL='
 '
-  case "$branch$remote$paths$url" in *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;; esac
+  case "$branch$remote$paths$url$account" in *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;; esac
   mkdir -p "$STATE" || return 1
 
   # BASELINE (migrated from cc-cloud-watch `record`). Probe the remote ONCE, now, so that "the
@@ -427,6 +433,7 @@ cmd_declare() {
     [ -n "$trunk" ]   && printf 'trunk=%s\n' "$trunk"
     [ -n "$url" ]     && printf 'url=%s\n' "$url"
     [ -n "$surface" ] && printf 'surface=%s\n' "$surface"
+    [ -n "$account" ] && printf 'account=%s\n' "$account"
     [ -n "$item" ]    && printf 'item=%s\n' "$item"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
@@ -662,6 +669,7 @@ cmd_list() {
       printf '{"id":"%s","branch":"%s","remote":"%s","item":"%s","declared_at":%s,"age_s":%s,' \
         "$(jesc "$id")" "$(jesc "$branch")" "$(jesc "$remote")" "$(jesc "$item")" \
         "$(is_num "$dat" && printf '%s' "$dat" || printf 'null')" "$age"
+      printf '"account":"%s",' "$(jesc "$(dfield "$f" account)")"
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
         "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
         "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"
