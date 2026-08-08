@@ -599,6 +599,83 @@ cannot be proven this session by construction, and both are recorded as ACCRUING
 asserted: that a drain actually reaches `k == 0` in time, and that unattended re-auth works at all.
 Everything else is a disk read.
 
+### §11.2 THE LIVE WINDOW RAN — 2026-08-08, and it REFUTED the headline claim
+
+§11.1 named two claims as unprovable by construction and deferred both to `next`'s real cliff on
+**2026-08-02T20:21:49Z**. That date has passed. The reads it specified are now available, and the
+answer is not the one the design expected.
+
+**The cadence works. The executor does not.** The C10 activation ran, so the poller has been
+ticking hourly since 2026-07-30, and `~/.claude/logs/cc-relogin-poll.log` now holds **6 ATTEMPT
+lines** where §11.1 recorded 0 all-time. The drain→`k == 0` half of the chain is therefore
+**PROVEN on production data**: the poller caught real zero-session windows and invoked
+`cc-relogin` four separate times against `next` before its deadline. Every later leg failed.
+
+| # | Tick | Result | What it actually was |
+|---|---|---|---|
+| 1 | 2026-07-30T20:36:03Z | `PROVEN (0)` | deadline "moved" `…48.963` → `…49.116` = **+0.153 s** |
+| 2 | 2026-07-30T21:36:31Z | `BROWSER-FAILED (4)` | `cc-authbrowser --start` exit 4 |
+| 3 | 2026-07-30T22:37:18Z | `PROVEN (0)` | deadline "moved" `…48.815` → `…49.195` = **+0.380 s** |
+| 4 | 2026-07-31T05:39:01Z | `REFUSED (2)` | 4 live sessions — the k==0 gate, correctly |
+
+Attempts 1 and 3 are the finding. Both reported success; both left the wall on the **same second**,
+two hours apart. `verify()` tested `new > old`, and §1's own confirmed cell says why that can never
+decide it: the server returns a **countdown to a FIXED wall, re-expressed from a fresh `Date.now()`
+at every refresh**, so a successful refresh always creeps the absolute stamp a few hundred
+milliseconds without renewing anything. The oracle was satisfied **by construction**. Worse, `run()`
+returns `EXIT_PROVEN` the moment `verify()` says ok — so **phase 2, the browser OAuth that is the
+only leg that resets the wall, was never reached.** The code's own comment already stated the
+correct model ("a refresh grant does not move the login deadline … Escalate, never stop here"); the
+comparison could not express it.
+
+**`next` was saved by a human.** Its cliff is now `2026-08-30T15:03:18Z` — about 30 days after
+**2026-07-31 ~23:00Z**, which is exactly when it dropped out of the poller's T-7d window (T-45h at
+22:48, "nothing due" at 23:48). No `ATTEMPT` in that hour and no `heal next:` line: an interactive
+login moved it. So the first end-to-end test of the automation ended with the automation reaching
+the account four times, declaring victory twice, and the operator doing the work.
+
+**R-1 is ANSWERED, and phase 2 is no longer unexercised.** It ran unattended once (attempt 2) and
+failed at `cc-authbrowser --start`. The supervised-first-run caution stands, but the reason has
+changed: it is not that phase 2 has never run, it is that phase 2 has never *succeeded*.
+
+**Three sites shared one root defect; all three are fixed.** The error is comparing two
+re-expressions of a fixed wall with exact arithmetic, when the wall's real movements are ~30 days:
+
+- **`f001ae29` · `bin/cc-relogin`** — `verify()`'s `>` (the table above). A renewal must now clear
+  `CC_RELOGIN_DEADLINE_EPSILON_H` (12 h). The stamps were also being compared as **strings**, so an
+  unparseable one read as lexicographically "moved"; they are parsed now.
+- **`7c7a6676` · `bin/cc-relogin-poll`** — the same error with the opposite sign: `!=` on the state
+  key. `$DL` is derived as `NOW + hours_secs(<fmt_h text>)`, so it *cannot* repeat across ticks —
+  every tick read "the deadline moved → fresh cycle". Hence all six ATTEMPT lines reading `#1`, an
+  **unreachable** `MAX_ATTEMPTS` arm, and dedup failure (next2 was paged twice in two hours on the
+  `dl=NOW` path, where dedup was structurally impossible). The class-C row raised for `next` on
+  2026-07-31T20:47:13Z told the operator **"no k==0 window caught in 0 attempt(s)"** — after four.
+- **`33b374a7` · `scripts/relogin-probes/e3-warm-profile-authorize.sh`** — the worst-placed copy.
+  E3's `PROVEN` verdict is the documented authorization to activate the cadence, and its `UNVERIFIED`
+  branch exists *precisely* to catch "cc-relogin exited 0 but the deadline did not verifiably move …
+  its verify-by-EFFECT gate is not doing its job". It could not: the watchdog computed the verdict
+  with the same bare `>` as the subject. It now uses its **own** epsilon variable, deliberately not
+  the executor's, so one mis-set knob cannot blind both.
+
+**R-6 is re-classified, and this is the transferable lesson.** It was filed as "a named limit, not a
+bug" because ±1.2 h of `fmt_h()` quantization is immaterial against a 48 h escalation threshold.
+That reasoning is correct **for a threshold and wrong for an identity**: the same quantization that
+cannot change a comparison's answer destroys a key's stability. R-6 was the direct cause of the
+poller defect and was on file, correctly measured, for the whole window.
+
+**Why 176 green tests never saw any of it.** Each suite modelled the jitter away. `cc-relogin.bats`
+moved its "moved" fixtures by *hours* and held its "did not move" fixtures *exactly equal* — the
+production case, +153 ms, was modelled by neither. `cc-relogin-poll.bats` **pins the clock**
+(`CC_RELOGIN_POLL_NOW`), and the poller defect exists only because the clock advances, so repeated
+ticks in the suite were identical by construction. This is the same F14/R-7 class the row already
+named — *a fixture more forgiving than the producer it models* — landing twice more, in the two
+suites most responsible for this behaviour.
+
+**Still accruing.** No account has yet been renewed by the automation, so the executor's end-to-end
+claim remains unproven — it is now blocked on `cc-authbrowser`, not on the oracle. The next real
+window is `next` / `next4` at **2026-08-30**, ~22 days out; `next2` 2026-08-31, `next3` 2026-09-03.
+`route.jsonl`'s `quota_age_s` series (R-3) keeps accruing.
+
 ### Learnings — three defects the build itself surfaced (each cost a real land or gate cycle)
 
 1. **My own suite caught a masking bug in my own first cut of M1.** `_excluded()` returns the
@@ -665,12 +742,14 @@ a real dark dependency rather than a hypothetical one.
 
 | R | Remainder | Owner | Why not now |
 |---|---|---|---|
-| R-1 | **`next`'s real cliff on 2026-08-02T20:21:49Z is the first-ever live test of `cc-relogin` Phase 2** (CDP context→profile match, Authorize click, `code#state` scrape, fifo hand-back — all still unexercised per `RELOGIN_AUTOMATION_PLAN.md:293`). Treat as a supervised run. | 7 + operator | 3.76 days out; cannot be run early without deliberately breaking an account. |
+| R-1 | ~~**`next`'s real cliff on 2026-08-02T20:21:49Z is the first-ever live test of `cc-relogin` Phase 2**~~ **ANSWERED 2026-08-08 — see §11.2.** The window ran. The cadence half PROVED OUT (6 ATTEMPT lines where §11.1 recorded 0); the executor half FAILED, and `next` was rescued by an interactive login on 2026-07-31 ~23:00Z. Phase 2 *was* driven unattended once and failed at `cc-authbrowser --start` (exit 4), so the caution stands with a changed reason: not "never run" but "never succeeded". Two of the four attempts declared victory on 0.153 s / 0.380 s of re-expression jitter — fixed in `f001ae29`. **Successor remainder R-10.** | 7 + operator | — |
 | R-2 | `com.claude.relogin` LaunchAgent activation is a **C10 operator step** (classifier-terminal for agents). | operator | Staged + plattered by M4. |
 | R-3 | The 600 s cache-grace degrade path is now *recorded* (M3b) but not *bounded* — nobody counts how often routing serves a 600 s-old number. | 7 | Needs a period of records first; the read is `jq` over `quota_as_of` in `route.jsonl`. |
-| R-4 | `bin/claude-accounts:1525` `RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"` is **stale** — the flag is on this build (`:1692`). A stale recovery string sends the operator to a landed branch. | 7 | Cosmetic; folded into M2's land if it stays clean. |
+| R-4 | ~~`RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"` is **stale**~~ **DONE 2026-08-08 · `1742c4b4`.** Both the constant and the `--relogin-status` DETECTION-UNAVAILABLE warning now name a recovery that exists (`claude-accounts --fresh; if it persists, cc-relogin <acct>`), because on this build UNKNOWN means `probe_account` returned early on `kstate != "present"` (`:588-594` before `:603`), not a missing feature. The test that pinned the old string asserts the opposite now — it had gone stale in lockstep with its subject and was holding the defect in place. | 7 | — |
 | R-5 | Session-lifetime distribution is unmeasured, so `CC_ROUTE_CLIFF_DRAIN_H=48` is a *reasoned* default, not a measured one. If 48 h of drain does not reach `k == 0`, behaviour degrades to today's (escalation row at T−48 h) — never worse. | 7 (data lives with 2/4) | Needs row 2/4's session-lifetime data; the design fails soft without it. |
-| R-6 | The `--login-status` leg carries the deadline only as `fmt_h()` text, whose days form rounds to 0.1 d — so a deadline derived through that leg is precise to **±1.2 h**. Harmless against a 48 h escalation threshold, but it is a real quantization and it is why the live poller reads T−88 h for a T−90.3 h cliff. The `json-fields` leg carries the raw float. Widening the TSV to carry an ISO stamp would break its frozen 6-field shape (`norm 6` parses positionally), so this is a **named limit, not a bug**. | 7 | Fixing it means a 7th field or a new flag; neither is worth breaking a frozen contract for 1.2 h against a 48 h threshold. |
+| R-6 | The `--login-status` leg carries the deadline only as `fmt_h()` text, whose days form rounds to 0.1 d — so a deadline derived through that leg is precise to **±1.2 h**. Harmless against a 48 h escalation threshold, but it is a real quantization and it is why the live poller reads T−88 h for a T−90.3 h cliff. The `json-fields` leg carries the raw float. Widening the TSV to carry an ISO stamp would break its frozen 6-field shape (`norm 6` parses positionally), so this is a **named limit, not a bug**. **⚠ RE-CLASSIFIED 2026-08-08 — this was the direct cause of the poller defect (§11.2, fixed in `7c7a6676`).** The "harmless" argument is sound for a THRESHOLD and false for an IDENTITY: ±1.2 h cannot change the answer to `is T-h <= 48`, but it destroys the stability of a key. The poller keyed its attempt counter and its escalation dedup on the deadline derived through this leg, so the quantization made the key change on every tick. The remainder was on file, correctly measured, for the whole live window — what was wrong was the *scope* of its harmlessness claim, not its measurement. The TSV contract stays frozen; the consumer now compares deadlines with a tolerance instead of for equality. | 7 | Fixing the quantization itself still means a 7th field or a new flag; still not worth breaking a frozen contract. |
 | R-8 | **M3(a) — `login_expires_at` into the last-good ledger** (AC7). NOT BUILT this session, by the reprioritization above: it is visibility and history (the operator's "when was this login due", and a durable series that would let C1's ~30 d period be *measured* rather than bracketed to [26.1, 30.0] d), not a stranding fix — M2b's F16 already makes the poller act on exactly the account whose cliff is unreadable. ~10 lines: carry the absolute stamp into the `entry` dict beside the quota, restore it in `inherit_lastgood`, and let `refresh_login_countdown` derive `_h` from it for free. **R3 must be preserved exactly:** an inherited cliff must NOT make a row routable — the row still carries `error`, so `_excluded()` still bails. Pinned by the existing AC11 control. | 7 | Ranked below M3(b)/M4 on measured value; named, not silently dropped. AC7 stays UNMET and is reported as such. |
 | R-9 | A **load-dependent flake** in this row's own tests was found and fixed (see §11), but the general lesson is unowned: **a bats assertion on a process EXIT CODE is fragile whenever the subject forks a child under the background QoS band `bin/cc-bats` imposes.** Two of this row's tests hit it. The durable fix pattern is to assert the subject's own durable product instead — but nothing enforces or even detects the fragile pattern. | 13 (owns `cc-bats`/QoS) / 1 (owns the gate) | Row 7 fixed its own two instances. A detector would need to know which code paths fork, which is not a lint. |
+| R-10 | **The executor's remaining blocker is now `cc-authbrowser`, not the oracle** (§11.2). Phase 2 ran unattended once, 2026-07-30T21:36, and died at `cc-authbrowser <acct> --start` with exit 4 (BROWSER-FAILED) — the transcript was kept at `/tmp/cc-relogin-next.out` and has since been reaped. With `f001ae29` in place a jitter-only phase 1 now correctly falls through to phase 2, so this leg will be reached far more often; if it still cannot start a browser, the automation escalates honestly instead of claiming success, which is strictly better but still not a renewal. **Read at the next window (`next`/`next4` 2026-08-30):** a `BROWSER-FAILED` vs a `PROVEN` in `~/.claude/logs/cc-relogin.log`, and whether `E3` now emits `moved=jitter` where it used to emit `yes`. | 7 | Needs a real cliff to exercise, and `cc-authbrowser`'s exit 4 has no captured transcript to diagnose from — the failure must be reproduced, not inferred. |
+| R-11 | **The F16 `REQUIRED → dl=NOW` rule fires on accounts that need nothing.** On 2026-08-03 `next2` was escalated and attempted twice at "T-0h" while holding **674.6 h** (28 days) of cliff; `cc-relogin` refused both with *"no re-auth needed — healthy (auth=stale …)"*. The `--login-status` sweep had classified it REQUIRED via `login_fixable`, and F16 resolves a REQUIRED row with no parseable deadline to NOW. `7c7a6676` stops the repeat-paging (one row per cycle, not per tick), but the **first** row is still raised on an account the actuator immediately declares healthy. The structural question is that escalation is deliberately written BEFORE the attempt (so a hung attempt cannot swallow it) and nothing RETRACTS it when the attempt refutes it. | 7 | The escalate-first ordering is correct and load-bearing; adding a retraction path is a real design change to the class-C board's contract, not a one-liner, and it belongs with row 10 (which renders the board). |
 | R-7 | **A campaign-wide question this row can only raise, not answer:** the F14 defect class — *a test fixture more parseable than the producer it claims to model* — is invisible to every gate we have. `hours_secs` had **zero** effective coverage while its suite reported 33 passing tests. Worth a sweep: for every stub that renders a sibling tool's output, does it emit that tool's LITERAL formatting? | 1 (owns `run_gate`) / campaign | Out of row 7's scope; row 7 fixed its own two instances. A lint is conceivable (compare a stub's emitted shape against the producer's formatter) but is a real design problem, not a one-liner. |
