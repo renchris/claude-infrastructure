@@ -100,7 +100,20 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
     FILING="FILING: if you file this as work it is ONE standing condition, not a new item per measurement — \`cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\"\`. The size belongs in the title; putting it in the key is what minted 21 items for this one condition."
     if [ "$TOTAL" -ge "$LIMIT" ]; then
       OVER=$(( TOTAL - LIMIT ))
-      DROPPED=$(( (OVER / (PFX_AVG + HOOK_AVG)) + 1 ))
+      # EXACT, not averaged. The old form (OVER / mean-line-cost) reads the index as
+      # though every entry were mean-length; a real index is not, and its TAIL is
+      # exactly where the estimate is applied. Measured 2026-08-08 against the live
+      # store it announced 6 dropped entries where the exact count was 4 — a number
+      # the operator sizes a compaction pass from. Count instead the entries whose
+      # own start offset falls at/after the limit. LC_ALL=C so awk's length() is
+      # BYTES: this is a byte limit and the index carries multibyte punctuation
+      # (the same trap tests/memory-index-budget.bats pins for the gate).
+      DROPPED=$(LC_ALL=C awk -v lim="$LIMIT" \
+        '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' \
+        "$MEM" 2>/dev/null) || DROPPED=""
+      # Over the limit means at least the final entry is cut, even when the overage
+      # falls INSIDE that entry and no start offset is past the limit.
+      case "$DROPPED" in ''|*[!0-9]*|0) DROPPED=1 ;; esac
       # Which lever can actually reach the target? Say so — do not make the reader derive it.
       RECOVER=0
       [ "$HOOK_AVG" -gt "$HOOK_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - HOOK_TARGET) ))
@@ -111,7 +124,7 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       else
         LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${HOOK_TARGET} B target), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B). The loader drops the TAIL silently, so roughly the NEWEST ${DROPPED} entries did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B). The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))

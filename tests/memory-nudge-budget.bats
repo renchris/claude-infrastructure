@@ -223,3 +223,85 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   [ -f "$MEMORY_NUDGE_STATE_DIR/nudge-s-count.count" ]
   [ "$(cat "$MEMORY_NUDGE_STATE_DIR/nudge-s-count.count")" = "1" ]
 }
+
+# ── the dropped-entry count is EXACT, not an average ──────────────────────────
+#
+# Every fixture above is UNIFORM (mkindex writes one hook length), and on a uniform
+# index the averaged estimator and the exact count AGREE — so a uniform fixture can
+# never fail an averaged implementation, and the whole suite passed one for a week.
+# The discriminating fixture is a SKEWED one: many short entries, then a long tail.
+# That is also the live index's actual shape — measured 2026-08-08 the averaged form
+# announced 6 dropped entries where the exact count was 4, and that number is what an
+# operator sizes a compaction pass from.
+
+# A skewed index: $1 short entries of $2 bytes, then $3 long entries of $4 bytes.
+mkskewed() {
+  local ns="$1" hs="$2" nl="$3" hl="$4" dir f i pads padl
+  dir="$BATS_TEST_TMPDIR/skew-$ns-$hs-$nl-$hl"; mkdir -p "$dir"; f="$dir/MEMORY.md"
+  pads="$(head -c "$hs" /dev/zero | tr '\0' x)"
+  padl="$(head -c "$hl" /dev/zero | tr '\0' y)"
+  : >"$f"
+  for ((i=0; i<ns; i++)); do printf -- '- [S%s](s%s.md) — %s\n' "$i" "$i" "$pads" >>"$f"; done
+  for ((i=0; i<nl; i++)); do printf -- '- [L%s](l%s.md) — %s\n' "$i" "$i" "$padl" >>"$f"; done
+  printf '%s' "$f"
+}
+
+@test "dropped count is the entries that START past the limit, not overage/mean-line" {
+  idx="$(mkskewed 200 100 6 900)"
+  total="$(wc -c <"$idx" | tr -d ' ')"
+  [ "$total" -gt "$LIMIT" ]
+  # The exact answer, computed independently of the hook and in the same unit (bytes).
+  exact="$(LC_ALL=C awk -v lim="$LIMIT" \
+    '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' "$idx")"
+  # The averaged answer the old implementation produced. The fixture is only a valid
+  # control if the two DISAGREE — otherwise this test passes against either one.
+  n="$(grep -c '^- \[' "$idx")"
+  entry_b="$(grep '^- \[' "$idx" | wc -c | tr -d ' ')"
+  # Kept flat: a nested `((` inside `$(( ))` reads as an arithmetic ASSERTION to
+  # scripts/bats-assert-liveness.py, whose lookbehind only exempts the `$((` opener.
+  mean_line=$(( entry_b / n ))
+  averaged=$(( (total - LIMIT) / mean_line + 1 ))
+  [ "$averaged" -ne "$exact" ]
+  run fire s-exact "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" "the NEWEST $exact entries begin past the limit"
+  hasnt "$out" "the NEWEST $averaged entries"
+}
+
+@test "an overage landing INSIDE the last entry still reports at least one dropped" {
+  # No entry STARTS past the limit here — the limit falls mid-entry — so a bare count
+  # returns 0 and the alarm would claim nothing was lost while the tail was cut.
+  idx="$(mkskewed 0 0 1 40000)"
+  [ "$(wc -c <"$idx" | tr -d ' ')" -gt "$LIMIT" ]
+  starts_past="$(LC_ALL=C awk -v lim="$LIMIT" \
+    '{ if (substr($0,1,3)=="- [" && off>=lim) n++; off+=length($0)+1 } END{ print n+0 }' "$idx")"
+  [ "$starts_past" -eq 0 ]
+  run fire s-inside "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" "the NEWEST 1 entries begin past the limit"
+}
+
+# ── the limit is ONE number, however many files read it ───────────────────────
+
+@test "the gate and the nudge default to the SAME limit, and nothing else spells it" {
+  # They are separate literals in separate files (single-sourcing was rejected: a
+  # sourced lib the host cannot resolve fails open SILENTLY and reads as landed while
+  # inert — tests/memory-index-budget.bats pins that trap for the gate). Two literals
+  # are safe only while something fails when they drift. This is that something.
+  nudge="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/memory-nudge.sh")"
+  gate="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/lib/memory-index-budget.sh")"
+  [ "$nudge" -eq 1 ]
+  [ "$gate" -eq 1 ]
+  # And no THIRD spelling anywhere in the executable surface. Counted in a loop, not
+  # with `grep -vc`: grep exits 1 on a zero count, so the healthy case would abort the
+  # test under errexit and read as a failure of the thing it is asserting is fine.
+  list="$(grep -rl 'MEMORY_INDEX_LIMIT:-' "$REPO/hooks" "$REPO/bin" "$REPO/scripts" 2>/dev/null || true)"
+  others=0
+  for f in $list; do
+    case "$f" in
+      */memory-nudge.sh|*/memory-index-budget.sh) ;;
+      *) others=$(( others + 1 )) ;;
+    esac
+  done
+  [ "$others" -eq 0 ]
+}
