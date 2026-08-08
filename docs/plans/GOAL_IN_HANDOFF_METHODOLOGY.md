@@ -143,3 +143,47 @@ below (INTEGRATE, never overwrite).
   before a `--recycle`. F1 and F2 measured on disk that session; `it2_paste_submit` identified as the
   existing second-message primitive. Nothing built yet. Prior work landed the same session and
   unrelated to this topic: `1c4813ab` (README timeline banner), `21ac6186` (idle-recycle root cause).
+
+- **2026-08-08, successor session `588e029f` — CLOSED. Frozen scope met in full; nothing deferred.**
+  Full record: `docs/research/goal-in-handoff-2026-08-08.md`.
+
+  **F1 CONFIRMED and quantified.** Goal-carrying fires fell **20.0% → 3.0%** across the 2026-07-31
+  universalization (70→14 vs 67→2 provably-fired sessions, parsed not grepped, deduped by session
+  id). The ledger holds **zero** real `payload-slash-head` refusals — every one is a bats fixture —
+  and there are **zero** real invocations of `FIRE_ALLOW_SLASH_HEAD=1` in the whole corpus. So we did
+  not merely make `/goal` harder; producers stopped writing it at all, and nothing replaced it.
+
+  **F2 CONFIRMED, and worse than supposed.** `/goal` is a harness BUILT-IN (two command records in
+  the CC 2.1.220 binary; no `goal.md` anywhere, no skill). `commands/handoff.md` also asserted "the
+  CLI does not parse slash commands out of the initial prompt — the model dispatches a LEADING `/x`
+  via its Skill tool"; a fired session writes the `goal_status` attachment BEFORE its first model
+  turn, so that dispatch path never ran. Corrected in `6cc14dd0`, same-diff-as-finding.
+
+  **A finding neither F1 nor F2 anticipated, and it decides the design.** `check_slash_head`'s
+  premise is only half true. An in-cap `/goal` does NOT leave a task-less pane: setting a goal
+  returns a query that re-injects the ENTIRE condition as the model's directive. The task-less pane
+  is real only OVER the cap, and for other slash heads. The guard therefore over-refuses on exactly
+  the shape the operator wanted — and admitting it would still be wrong, because that shape caps the
+  brief at 4000 chars. Hence two messages rather than a relaxed gate.
+
+  **Question 3 answered YES, and landed.** `--goal "<condition>"` (`68b2e007`): brief as message 1
+  (uncapped, gate untouched), `/goal` bracketed-pasted as message 2 after engagement is proven,
+  re-armed across `--recycle` (a goal is session-scoped and dies with its session — measured), and
+  read back from the fired session's own transcript as
+  `goal-arm verdict=set|unverified|abstained`. Never fails the fire; never types into a shell.
+
+  **Empirical, in four live fired panes** (constraint 3). A bracketed-pasted `/goal` parses exactly
+  as a typed one — the crux, and the one link the 51 typed-mid-session instances on disk could not
+  establish. Over-cap replies in text and sets nothing. A goal does not survive a recycle. The
+  end-to-end run read `goal ARMED + VERIFIED … verdict=set`.
+
+  **The probe earned its mandate.** Its first end-to-end run returned `unverified` for a goal that
+  was demonstrably set: the oracle looked at the projects ROOT while CC nests transcripts one level
+  down, and the unit fixture had copied the wrong layout — 18/18 green over a false negative. Fixed,
+  with a regression case. The guard held under its own defect (it said *unverified*, not *armed*),
+  which is the only reason this was a caught bug rather than a shipped false positive.
+
+  **Constraints:** 1 `check_slash_head` unchanged, pinned by a test. 2 fail-closed, four-way table in
+  the research doc. 3 verified in real panes. 4 spec corrected same-diff. 5 own branch, project-local
+  `/ship`. **Filed, not fixed (out of scope):** `recycle_engaged` path (b) has the same root-vs-nested
+  transcript-resolution confusion — `cc-backlog 7176bda11a8d`.
