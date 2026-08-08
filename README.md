@@ -48,7 +48,7 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 <!-- Diagram source: assets/diagrams/vendor-convergence.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/vendor-convergence-dark.svg">
-  <img src="assets/diagrams/vendor-convergence-light.svg" alt="Two groups. The first, titled 'this repo shipped first', holds two pairs: peer session messaging here on 2026-07-10 leading to Claude Code 2.1.224 on 2026-08-07, twenty-eight days later; and an adversarial-role research team here on 2026-05-24 leading to Dynamic Workflows 2.1.154 on 2026-05-28, four days later. Both of this repo's nodes are green, both of Claude Code's are blue. The second group, titled 'Claude Code shipped first', holds one pair: status-line context fields shipped in Claude Code 2.0.70 on 2025-12-15, read here only on 2026-07-14 — seven months, and the caption names it as our gap rather than theirs. That node is red.">
+  <img src="assets/diagrams/vendor-convergence-light.svg" alt="A single chronological chain, oldest at the top, running from February 2025 to August 2026. Claude Code 0.2.6 ships on 2025-02-24. Claude Code 2.0.70 makes status-line context fields available on 2025-12-15. This repo's first commit is 2026-03-24, thirteen months into Claude Code's life. On 2026-05-24 this repo builds an adversarial-role research team — a fraction of every wave briefed to attack it — and four days later, on 2026-05-28, Dynamic Workflows 2.1.154 ships the same idea. On 2026-07-10 this repo builds peer session messaging, and twenty-eight days later Claude Code 2.1.224 lets sessions message each other on 2026-08-07. In between, on 2026-07-14, this repo finally reads the status-line fields that had existed since December — seven months late, our gap rather than theirs. This repo's two leads are green and rounded, Claude Code's releases are blue rectangles, the late read is red, and the two framing dates are grey.">
 </picture>
 
 <details>
@@ -57,27 +57,28 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 <!-- mermaid-fence: assets/diagrams/vendor-convergence.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    subgraph WE["this repo shipped first"]
-        direction TB
-        P1["peer session messaging<br/>2026-07-10"]
-        P2["Claude Code 2.1.224<br/>2026-08-07"]
-        P1 -.->|"28 days"| P2
-        R1["adversarial-role research team<br/>2026-05-24"]
-        R2["Dynamic Workflows 2.1.154<br/>2026-05-28"]
-        R1 -.->|"4 days"| R2
-    end
-    subgraph THEY["Claude Code shipped first"]
-        direction TB
-        S1["status-line context fields<br/>Claude Code 2.0.70 · 2025-12-15"]
-        S2["read here<br/>2026-07-14"]
-        S1 -.->|"7 months — our gap, not theirs"| S2
-    end
-    classDef win fill:#12261a,stroke:#3fb950,color:#e6edf3
+    T0["<b>2025-02-24</b> · Claude Code 0.2.6 ships"]
+    T1["<b>2025-12-15</b> · Claude Code 2.0.70<br/>status-line context fields exist"]
+    T2["<b>2026-03-24</b> · this repo's first commit<br/><i>13 months into Claude Code's life</i>"]
+    T3(["<b>2026-05-24</b> · this repo<br/><b>adversarial-role research team</b><br/>a fraction of every wave briefed to attack it"])
+    T4["<b>2026-05-28</b> · Dynamic Workflows 2.1.154<br/>the same idea — <b>4 days later</b>"]
+    T5(["<b>2026-07-10</b> · this repo<br/><b>peer session messaging</b>"])
+    T6["<b>2026-07-14</b> · this repo finally reads<br/>the 2025-12 status-line fields<br/><i>7 months late — our gap, not theirs</i>"]
+    T7["<b>2026-08-07</b> · Claude Code 2.1.224<br/>sessions can message each other<br/><b>28 days later</b>"]
+    T0 --> T1 --> T2 --> T3
+    T3 -->|"4 days"| T4
+    T4 --> T5
+    T5 -->|"28 days"| T7
+    T5 --> T6
+    T6 --> T7
     classDef cc fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
+    classDef win fill:#12261a,stroke:#3fb950,color:#e6edf3
     classDef late fill:#2b1618,stroke:#f85149,color:#e6edf3
-    class P1,R1 win
-    class P2,R2,S1 cc
-    class S2 late
+    classDef base fill:#161b22,stroke:#6e7681,color:#e6edf3
+    class T0,T2 base
+    class T1,T4,T7 cc
+    class T3,T5 win
+    class T6 late
 ```
 
 <sup><a href="assets/diagrams/vendor-convergence-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/vendor-convergence-light.svg?raw=true">light</a> · <a href="assets/diagrams/vendor-convergence.mmd">source</a></sup>

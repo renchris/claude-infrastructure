@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 544.163 667.8000000000001" width="544.163" height="667.8000000000001" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 427.51225 948.5000000000001" width="427.51225" height="948.5000000000001" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e">
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
   svg {
@@ -25,59 +25,62 @@
     <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="WE" data-label="this repo shipped first">
-  <rect x="40" y="343.90000000000003" width="464.163" height="283.90000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="343.90000000000003" width="464.163" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="357.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">this repo shipped first</text>
+<polyline class="edge" data-from="T0" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,76.9 181.017,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,178.70000000000002 181.017,226.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2" data-to="T3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,280.5 181.017,328.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T3" data-to="T4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="4 days" points="181.017,399.20000000000005 181.017,515.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T4" data-to="T5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,569.3000000000001 181.017,617.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T5" data-to="T7" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="28 days" points="150.06633333333332,671.1 150.06633333333332,707.1 95.16125,707.1 95.16125,825.8000000000001 140.68033333333332,825.8000000000001 140.68033333333332,837.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T5" data-to="T6" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="211.96766666666664,671.1 211.96766666666664,707.1 266.87275,707.1 266.87275,719.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T6" data-to="T7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="266.87275,789.8000000000001 266.87275,825.8000000000001 221.35366666666664,825.8000000000001 221.35366666666664,837.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="T3" data-to="T4" data-label="4 days">
+  <rect x="156.017" y="442.20000000000005" width="49.132" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="180.583" y="457.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">4 days</text>
 </g>
-<g class="subgraph" data-id="THEY" data-label="Claude Code shipped first">
-  <rect x="40" y="40" width="256.23599999999993" height="283.90000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="40" width="256.23599999999993" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Claude Code shipped first</text>
+<g class="edge-label" data-from="T5" data-to="T7" data-label="28 days">
+  <rect x="67.16125" y="764.5000000000001" width="55.072" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="94.69725" y="779.6500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">28 days</text>
 </g>
-<polyline class="edge" data-from="P1" data-to="P2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="28 days" points="148.85199999999998,441.70000000000005 148.85199999999998,558" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="R1" data-to="R2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="4 days" points="374.9335,441.70000000000005 374.9335,558" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="S1" data-to="S2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="7 months — our gap, not theirs" points="168.11799999999997,137.8 168.11799999999997,254.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="P1" data-to="P2" data-label="28 days">
-  <rect x="120.85199999999998" y="484.70000000000005" width="55.072" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="148.38799999999998" y="499.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">28 days</text>
+<g class="node" data-id="T0" data-label="&lt;b&gt;2025-02-24&lt;/b&gt; · Claude Code 0.2.6 ships" data-shape="rectangle">
+  <rect x="50.744500000000016" y="40" width="260.54499999999996" height="36.900000000000006" rx="0" ry="0" fill="#f6f8fa" stroke="#59636e" stroke-width="0.75" />
+  <text x="181.017" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328" dy="4.55"><tspan font-weight="bold">2025-02-24</tspan> · Claude Code 0.2.6 ships</text>
 </g>
-<g class="edge-label" data-from="R1" data-to="R2" data-label="4 days">
-  <rect x="349.9335" y="484.70000000000005" width="49.132" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="374.49949999999995" y="499.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">4 days</text>
+<g class="node" data-id="T1" data-label="&lt;b&gt;2025-12-15&lt;/b&gt; · Claude Code 2.0.70
+status-line context fields exist" data-shape="rectangle">
+  <rect x="68.899" y="124.9" width="224.236" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="181.017" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-3.9000000000000012"><tspan font-weight="bold">2025-12-15</tspan> · Claude Code 2.0.70</tspan><tspan x="181.017" dy="16.900000000000002">status-line context fields exist</tspan></text>
 </g>
-<g class="edge-label" data-from="S1" data-to="S2" data-label="7 months — our gap, not theirs">
-  <rect x="92.11799999999998" y="180.8" width="151.89400000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="168.065" y="195.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">7 months — our gap, not theirs</text>
+<g class="node" data-id="T2" data-label="&lt;b&gt;2026-03-24&lt;/b&gt; · this repo's first commit
+&lt;i&gt;13 months into Claude Code's life&lt;/i&gt;" data-shape="rectangle">
+  <rect x="57.41350000000001" y="226.70000000000002" width="247.20699999999997" height="53.800000000000004" rx="0" ry="0" fill="#f6f8fa" stroke="#59636e" stroke-width="0.75" />
+  <text x="181.017" y="253.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-3.9000000000000012"><tspan font-weight="bold">2026-03-24</tspan> · this repo&#39;s first commit</tspan><tspan x="181.017" dy="16.900000000000002"><tspan font-style="italic">13 months into Claude Code&#39;s life</tspan></tspan></text>
 </g>
-<g class="node" data-id="P1" data-label="peer session messaging
-2026-07-10" data-shape="rectangle">
-  <rect x="56" y="387.90000000000003" width="185.70399999999998" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
-  <text x="148.85199999999998" y="414.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="148.85199999999998" dy="-3.9000000000000012">peer session messaging</tspan><tspan x="148.85199999999998" dy="16.900000000000002">2026-07-10</tspan></text>
+<g class="node" data-id="T3" data-label="&lt;b&gt;2026-05-24&lt;/b&gt; · this repo
+&lt;b&gt;adversarial-role research team&lt;/b&gt;
+a fraction of every wave briefed to attack it" data-shape="stadium">
+  <rect x="40" y="328.5" width="282.034" height="70.7" rx="35.35" ry="35.35" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="181.017" y="363.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-12.350000000000001"><tspan font-weight="bold">2026-05-24</tspan> · this repo</tspan><tspan x="181.017" dy="16.900000000000002"><tspan font-weight="bold">adversarial-role research team</tspan></tspan><tspan x="181.017" dy="16.900000000000002">a fraction of every wave briefed to attack it</tspan></text>
 </g>
-<g class="node" data-id="P2" data-label="Claude Code 2.1.224
-2026-08-07" data-shape="rectangle">
-  <rect x="70.079" y="558" width="157.546" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
-  <text x="148.85199999999998" y="584.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="148.85199999999998" dy="-3.9000000000000012">Claude Code 2.1.224</tspan><tspan x="148.85199999999998" dy="16.900000000000002">2026-08-07</tspan></text>
+<g class="node" data-id="T4" data-label="&lt;b&gt;2026-05-28&lt;/b&gt; · Dynamic Workflows 2.1.154
+the same idea — &lt;b&gt;4 days later&lt;/b&gt;" data-shape="rectangle">
+  <rect x="45.55750000000006" y="515.5" width="270.91899999999987" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="181.017" y="542.4" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-3.9000000000000012"><tspan font-weight="bold">2026-05-28</tspan> · Dynamic Workflows 2.1.154</tspan><tspan x="181.017" dy="16.900000000000002">the same idea — <tspan font-weight="bold">4 days later</tspan></tspan></text>
 </g>
-<g class="node" data-id="R1" data-label="adversarial-role research team
-2026-05-24" data-shape="rectangle">
-  <rect x="261.70399999999995" y="387.90000000000003" width="226.459" height="53.800000000000004" rx="0" ry="0" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
-  <text x="374.9335" y="414.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="374.9335" dy="-3.9000000000000012">adversarial-role research team</tspan><tspan x="374.9335" dy="16.900000000000002">2026-05-24</tspan></text>
+<g class="node" data-id="T5" data-label="&lt;b&gt;2026-07-10&lt;/b&gt; · this repo
+&lt;b&gt;peer session messaging&lt;/b&gt;" data-shape="stadium">
+  <rect x="88.165" y="617.3000000000001" width="185.70399999999998" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#dafbe1" stroke="#1a7f37" stroke-width="0.75" />
+  <text x="181.017" y="644.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-3.9000000000000012"><tspan font-weight="bold">2026-07-10</tspan> · this repo</tspan><tspan x="181.017" dy="16.900000000000002"><tspan font-weight="bold">peer session messaging</tspan></tspan></text>
 </g>
-<g class="node" data-id="R2" data-label="Dynamic Workflows 2.1.154
-2026-05-28" data-shape="rectangle">
-  <rect x="278.747" y="558" width="192.37299999999996" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
-  <text x="374.9335" y="584.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="374.9335" dy="-3.9000000000000012">Dynamic Workflows 2.1.154</tspan><tspan x="374.9335" dy="16.900000000000002">2026-05-28</tspan></text>
+<g class="node" data-id="T6" data-label="&lt;b&gt;2026-07-14&lt;/b&gt; · this repo finally reads
+the 2025-12 status-line fields
+&lt;i&gt;7 months late — our gap, not theirs&lt;/i&gt;" data-shape="rectangle">
+  <rect x="146.23325" y="719.1" width="241.279" height="70.7" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
+  <text x="266.87275" y="754.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="266.87275" dy="-12.350000000000001"><tspan font-weight="bold">2026-07-14</tspan> · this repo finally reads</tspan><tspan x="266.87275" dy="16.900000000000002">the 2025-12 status-line fields</tspan><tspan x="266.87275" dy="16.900000000000002"><tspan font-style="italic">7 months late — our gap, not theirs</tspan></tspan></text>
 </g>
-<g class="node" data-id="S1" data-label="status-line context fields
-Claude Code 2.0.70 · 2025-12-15" data-shape="rectangle">
-  <rect x="56" y="84" width="224.23599999999993" height="53.800000000000004" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
-  <text x="168.11799999999997" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="168.11799999999997" dy="-3.9000000000000012">status-line context fields</tspan><tspan x="168.11799999999997" dy="16.900000000000002">Claude Code 2.0.70 · 2025-12-15</tspan></text>
-</g>
-<g class="node" data-id="S2" data-label="read here
-2026-07-14" data-shape="rectangle">
-  <rect x="116.02099999999996" y="254.10000000000002" width="104.194" height="53.800000000000004" rx="0" ry="0" fill="#ffebe9" stroke="#cf222e" stroke-width="0.75" />
-  <text x="168.11799999999997" y="281" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="168.11799999999997" dy="-3.9000000000000012">read here</tspan><tspan x="168.11799999999997" dy="16.900000000000002">2026-07-14</tspan></text>
+<g class="node" data-id="T7" data-label="&lt;b&gt;2026-08-07&lt;/b&gt; · Claude Code 2.1.224
+sessions can message each other
+&lt;b&gt;28 days later&lt;/b&gt;" data-shape="rectangle">
+  <rect x="60.007" y="837.8000000000001" width="242.01999999999998" height="70.7" rx="0" ry="0" fill="#ddf4ff" stroke="#0969da" stroke-width="0.75" />
+  <text x="181.017" y="873.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2328"><tspan x="181.017" dy="-12.350000000000001"><tspan font-weight="bold">2026-08-07</tspan> · Claude Code 2.1.224</tspan><tspan x="181.017" dy="16.900000000000002">sessions can message each other</tspan><tspan x="181.017" dy="16.900000000000002"><tspan font-weight="bold">28 days later</tspan></tspan></text>
 </g>
 </svg>
