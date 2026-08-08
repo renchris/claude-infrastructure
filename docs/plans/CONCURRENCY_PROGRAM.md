@@ -717,6 +717,79 @@ at `claude.ai/code`, and the routines `/fire` endpoint — **proven to exist**, 
 a `404` control on a sibling path, and subscription-billed with no `--cloud` verb or TTY in the way —
 is blocked on minting a per-routine bearer token. Both are **web-only operator actions**, one action
 each. Interactive attach is blocked by an **Anthropic-side rollout** and is not clearable here.
+
+#### S5.2 · The measured ceiling — MEASURED 2026-08-08, and the honest answer is a LOWER BOUND (gate G7)
+
+**The command, so this is re-run rather than believed** (§7 discipline). Every create spends real
+quota; `--confirm` is mandatory and `--max` has no default:
+
+```bash
+scripts/cloud-ceiling-probe.sh --account <acct> --max <N> --confirm   # ramp
+scripts/cloud-ceiling-probe.sh --control --confirm                    # validate the classifier
+scripts/cloud-ceiling-probe.sh --report                               # re-print the ledger
+```
+Ledger: `~/.claude/autonomy/cloud/ceiling-probe.jsonl`, one row per attempt, each carrying `run`
+and `cwd`.
+
+**THE NUMBER: ≥ 2 concurrent cloud creates on ONE account, and NO ceiling was reached.** Reported as
+required even though it is disappointing — it is a *lower bound*, not the ceiling, because the ramp
+ran out of the budget it was given rather than out of quota. A lower bound is still worth publishing
+because, unlike a ceiling, it does not depend on the classifier being right: it counts successes.
+
+Two findings matter more than the number:
+
+1. 🚨 **Weekly quota does not gate cloud CREATE.** `next2` sat at **100% weekly** (`claude-accounts`
+   reporting `weekly LIMITED`) and created **four** cloud sessions across four runs. So the premise
+   this program has been sequencing on — *"cloud relieves CPU and RAM, not tokens; the ceiling moves
+   from 64 GB to per-account rate limits"* — is **not observable at the create boundary**. Creating a
+   session and running tokens through it are different questions, and only the first has been
+   measured. **The `--control` arm is consequently VOID, and there is no free known-refusal left to
+   validate the classifier against**: the control's entire design assumed a 100%-weekly account would
+   be refused, and it is not. So anything published as a *ceiling* from this instrument remains
+   unvalidated; only lower bounds are safe today.
+
+2. ⚠️ **A create from a git WORKTREE fails where the same account from the main checkout succeeds.**
+   The refusal is `Error: Bundle upload failed: Socket is closed after 3 attempts. Please set up
+   GitHub on https://claude.ai/code` — which names GitHub and is therefore easy to misread as the
+   §6.5 linking blocker returning. It is not: linking is done, and the same account created a session
+   seconds earlier.
+
+   | cwd | `.git` | ramps | result |
+   |---|---|---|---|
+   | `.worktrees/cloud-100pct` | a **file** (86 B gitdir pointer) | 3 | every ramp hit `Bundle upload failed`; 2 of 5 creates got through |
+   | `~/Development/claude-infrastructure` | a **directory** | 1 | 2/2 created back-to-back, no refusal |
+
+   **STATUS: SUSPECTED, NOT ESTABLISHED.** 3-of-3 against 0-of-1 is a real asymmetry on a plausible
+   mechanism — a bundle upload walking a `.git` that is a pointer into another tree — but the main
+   checkout has n=1 ramp and one worktree create did succeed, so "back-to-back creates are simply
+   flaky" is not excluded. Filed, not asserted.
+
+   **It gates G5 whichever explanation wins.** This repo's standing rule is that every concurrent
+   writer session gets its own worktree, and Agent Teams isolate teammates in worktrees by
+   construction. So the *default* configuration for firing cloud work is exactly the one that failed
+   here. `handoff-fire.sh --cloud` must fire the create from the **main checkout** — or measure this
+   properly first — rather than inheriting the caller's worktree cwd and hoping.
+
+**What the instrument itself cost, recorded because it is the transferable part.** The probe landed
+at `66ef4d8c` with no test suite and **four** stacked defects, each of which alone made a measurement
+impossible, and every one of which failed in the direction that looks like honest abstention rather
+than like a bug:
+
+| # | Defect | Why it was invisible |
+|---|---|---|
+| 1 | `fire_one` emitted no trailing newline; both consumers are `read`, which returns 1 at EOF under `set -e` | Died **after** firing the create — quota spent, verdict never printed. The ledger held a `ramp-start` with zero `attempt` rows. |
+| 2 | The create path is interactive-only; `fire_one` ran under `$( )` | Refused on **every** account before quota was consulted, and the three-outcome classifier had to call it `refused-other` ⇒ *"classifier WRONG"*, convicting the one component that was right. |
+| 3 | The pty fix used `script(1)`, which calls `tcgetattr` on its **own** stdin | Works from an interactive shell; dies `Operation not supported on socket` from an agent call, cron, launchd or CI — i.e. everywhere a measurement rig actually runs. |
+| 4 | ANSI stripping deleted cursor-forward (`CSI n C`), which a TUI emits **instead of** runs of spaces | Fused a live refusal into `Error:Bundleuploadfailed:Socketisclosed…`. Every quota pattern contains a space, so a real ceiling would have matched nothing and been reported as a network non-verdict. |
+
+A fifth was found in the ledger rather than the code: rows carried no run id, and the file is shared
+across concurrent sessions — so two interleaved 2-create runs read exactly like one 4-create run. For
+a measurement that **is** a count of rows, that is not lost provenance, it is a doubled ceiling.
+
+All five are fixed and pinned by `tests/cloud-ceiling-probe.bats` (21 tests, RED-verified at 9
+failures before the first fix). A fourth outcome, `refused-harness`, now sits **ahead of** the quota
+arm, so a fault in our own rig can never be published as a property of the fleet.
+
 #### S5.1 · Cloud observability — DONE (backlog `191d4d056c98`, 2026-08-07)
 
 **→ `docs/plans/CLOUD_OBSERVABILITY.md`** (design + measurements, with the command for each so they
