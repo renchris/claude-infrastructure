@@ -95,8 +95,24 @@ against the account. Read it as "we did this at some point", never as "this is t
 
 ## 2 · Fire a cloud session
 
-<!-- WAVE-E: filled in after the send arm lands; see §8.1 of CLOUD_OBSERVABILITY.md — the id does
-     not exist until AFTER the fire, so declare-then-fire is not orderable on either real route -->
+**The create needs a PTY. This is the single most surprising thing on this page.**
+
+```
+script -q /dev/null claude --cloud "<what the session should do>" </dev/null
+```
+
+Without a pty you get `Error: --cloud requires an interactive terminal.` A script captures stdout by
+construction, so the plain form is refused on its own capture. 🚨 **Do not go looking for a flag to
+turn this check off.** Its own message says what would otherwise happen: the run *"would silently
+ignore `--cloud`"* and execute **locally** — a fleet that believes it is off-box while every session
+runs on this machine. The check is protecting you from a much worse failure than the one it causes.
+
+⚠️ **The create is INTERMITTENT today.** Measured 2026-08-08: 1 of 4 attempts succeeded in a
+~15-minute window on one account. The failures all read
+`Error: Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on
+https://claude.ai/code` — the CLI falling back to **bundle mode**, which is what it does when the
+GitHub link is unavailable. If you get that, **retry before you conclude the account is unlinked**;
+and note that a `.linked` marker does not mean the account can create (see §1).
 
 **Before you fire**, run the preflight. It refuses when a fire here could not be observed at all:
 
@@ -112,7 +128,14 @@ failing case is the overwhelmingly likely one.
 **After you fire**, declare immediately — including the owning account:
 
 ```
-cc-cloud declare --id <session-id> --branch <branch> --account <acct> --url <url>
+cc-cloud declare --id <session-id> --branch <branch> --url <url>
+```
+
+This is not bookkeeping. Until the declaration exists the session is invisible to every local tool
+**and unprotected from the reaper** — §5 explains why the two are the same fact. Confirm it took:
+
+```
+cc-cloud is-offbox <session-id>; echo $?
 ```
 
 ---
@@ -213,6 +236,8 @@ team**. `2` = you passed no id.
 | `{"ok":false,…,"error":"Session not found: session_…"}` | **Usually the WRONG ACCOUNT, not a dead session.** A session id is scoped to the account that created it; the API reports another account's live session as not-found. | Check the declaration's `account`, and send from that account's config dir. Only after that reads correct is "genuinely retired" the diagnosis. |
 | `cc-spawn-verify: ✗ ABSENT … Died, or never launched` **for a cloud id** | The id is **not declared** (or is retired) — the abstain did not engage. | `cc-cloud is-offbox <id>`; if 1, declare it. |
 | `cc-board: OFFBOX` | Working as intended — the board is abstaining, not reporting a problem. | Nothing. Use `cc-cloud show <id>` for real liveness. |
+| `Error: --cloud requires an interactive terminal` | You are running the create without a pty. | Wrap it: `script -q /dev/null claude --cloud "…" </dev/null`. Never suppress the check — without it the session runs **locally** while looking off-box. |
+| `Error: Bundle upload failed: Socket is closed after 3 attempts` | The CLI fell back to **bundle mode**, which it does when the GitHub link is unavailable. Measured intermittent — it is not always a real unlink. | Retry first. If it persists on that account, re-link it (§1). Do not read a `.linked` marker as proof it is fine. |
 | `cc-cloud preflight` refuses on the branch | Your branch is not on the remote; the VM would clone the default branch instead. | Push the branch first. |
 | `cc-cloud: never polled` | No sidecar history, so `C4 STALLED` cannot be evaluated. | Run `cc-cloud poll`. Until something polls, "stalled" is unknowable, not false. |
 | `cc-await-ping` exits 5, *"the session that armed me is GONE"* | A known local defect on a stale registry row (backlog `a116d60af388`) — **not** a cloud problem. | Re-arm it. The mailbox write is durable regardless. |
