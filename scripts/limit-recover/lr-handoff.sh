@@ -243,6 +243,23 @@ exec $(printf '%q ' "${FIRE_ARGV[@]}")
 EOF
 chmod +x "$LAUNCHER"
 
+# VERIFIED TYPING (backlog item 270106134cc8). Both spawn shapes below type a command into a pane
+# that has just been created. They used to blind-send it with `write text`, surviving only because
+# `exec` happens to be a shell builtin — a property nothing pinned. Under `setopt CORRECT` an
+# unrecognised command word parks the pane on an unanswerable `[nyae]` prompt while this script
+# reports a successful fire. Resolution ladder: beside-script → CFG → ~/.claude.
+_cctv="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="$HOME/.claude/scripts/lib/cc-type-verified.sh"
+# shellcheck source=../lib/cc-type-verified.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_cctv" 2>/dev/null; then
+  # Fail LOUD. Unlike the poller there is no typing-free fallback here — both paths type — so
+  # degrading would mean blind-sending, which is the failure mode this change removes.
+  echo "lr-handoff: FATAL — cannot source $_cctv (verified typing unavailable)" >&2
+  exit 2
+fi
+
 if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   # Split a pane to the RIGHT of the invoking pane (⌘D equivalent) so the recovered
   # session lands beside its recovery operator. New window ONLY when there is no
@@ -308,7 +325,12 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
     esac
   elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split iterm2 "" "${PWD:-}" "lr-handoff osascript split-vertically anchor:$OWN_PANE"
-    FIRED=$(lrh_bounded osascript 2>/dev/null <<OSA || true
+    # SPLIT ONLY, returning the new pane's id — the command is typed afterwards, through
+    # osa_type_verified. `write text` appends the newline itself, so the old combined form EXECUTED
+    # the line before anything could confirm it arrived intact; splitting create from type is what
+    # makes the echo-verify possible at all. The kitty arm above needs none of this: it execs the
+    # launcher via argv, so nothing it passes is ever re-parsed by a shell.
+    NEWPANE=$(lrh_bounded osascript 2>/dev/null <<OSA || true
 if not (application id "com.googlecode.iterm2" is running) then return ""
 tell application id "com.googlecode.iterm2"
   repeat with w in windows
@@ -317,9 +339,8 @@ tell application id "com.googlecode.iterm2"
         if id of s is "$OWN_PANE" then
           tell s
             set newPane to (split vertically with default profile)
-            tell newPane to write text "exec /bin/bash $LAUNCHER"
           end tell
-          return "split"
+          return id of newPane
         end if
       end repeat
     end repeat
@@ -328,6 +349,12 @@ tell application id "com.googlecode.iterm2"
 end tell
 OSA
 )
+    NEWPANE="$(printf '%s' "$NEWPANE" | tr -d '[:space:]')"
+    # FIRED stays empty unless the command was VERIFIABLY typed, so an unverifiable pane falls
+    # through to the new-window path below rather than reporting a fire that never engaged.
+    if [[ -n "$NEWPANE" ]] && osa_type_verified "$NEWPANE" "exec /bin/bash $LAUNCHER"; then
+      FIRED="split"
+    fi
   fi
   if [[ "$FIRED" == "split" ]]; then
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
@@ -338,14 +365,21 @@ OSA
     echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-handoff fallback create-window"
-    lrh_bounded osascript >/dev/null 2>&1 <<OSA || { echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2; }
-if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"
+    # CREATE ONLY, then type through osa_type_verified (same reason as the split arm above).
+    WINPANE=$(lrh_bounded osascript 2>/dev/null <<OSA || true
+if not (application id "com.googlecode.iterm2" is running) then return ""
 tell application id "com.googlecode.iterm2"
   set newWin to (create window with default profile)
-  tell current session of newWin to write text "exec /bin/bash $LAUNCHER"
+  return id of (current session of newWin)
 end tell
 OSA
-    echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+)
+    WINPANE="$(printf '%s' "$WINPANE" | tr -d '[:space:]')"
+    if [[ -n "$WINPANE" ]] && osa_type_verified "$WINPANE" "exec /bin/bash $LAUNCHER"; then
+      echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
+    else
+      echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2
+    fi
   fi
 else
   command -v cursor >/dev/null 2>&1 && cursor "$LAUNCHER" >/dev/null 2>&1 || true

@@ -80,6 +80,7 @@ ROOT="${1:-$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 _default_allowlist() {
   cat <<'ALLOW'
 scripts/terminal-bakeoff.sh::a one-off TERMINAL COMPARISON bench. Its surfaces are WezTerm and Ghostty windows plus a DETACHED private kitty instance on its own socket (`kitty --listen-on … --detach`), none of which can host an agent session — so a pane it makes can never be mistaken for one of the fleet's, which is the only confusion this lint exists to prevent.
+scripts/typed-send-lint.sh::a LINT, and its spawn-shaped lines are FIXTURE TEXT, not spawns. They live inside --selftest heredocs that are written into a mktemp sandbox so the detector can be run against them and proven to go RED; nothing there is ever executed, and the file creates no terminal surface at any point. Instrumenting it would mean calling cc_log_pane_spawn from a scanner that spawns nothing, which would put FALSE rows in the very log this lint exists to keep trustworthy.
 ALLOW
 }
 
