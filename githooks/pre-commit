@@ -92,10 +92,18 @@ git_() { if [ -n "$REPO" ]; then git -C "$REPO" "$@"; else git "$@"; fi; }
 # ── Scope: is this one of the owner's own GitHub repos? ───────────────────────────────────────
 # Matches both URL forms git uses: https://github.com/OWNER/… and git@github.com:OWNER/….
 # A repo with no remote (every bats fixture) falls through and is never gated.
+#
+# 🚨 CASE-INSENSITIVE. GitHub owner names are case-insensitive — github.com/RenChris and
+# github.com/renchris are the SAME account and both accept a push — but a shell glob is not.
+# Measured: a remote spelled `RenChris` fell out of scope, the gate never ran, and `t@e.com` was
+# pushed. Worse, the sweep counted such a repo in "out-of-scope skipped", so it was invisible
+# there too. Both sides are folded to lower case before comparing.
 in_scope=1
+_want_lc="$(printf '%s' "$WANT_OWNER" | tr '[:upper:]' '[:lower:]')"
 while IFS= read -r url; do
+  url="$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')"
   case "$url" in
-    *github.com/"$WANT_OWNER"/*|*github.com:"$WANT_OWNER"/*) in_scope=0; break ;;
+    *github.com/"$_want_lc"/*|*github.com:"$_want_lc"/*) in_scope=0; break ;;
   esac
 done <<EOF
 $(git_ remote -v 2>/dev/null | awk '{print $2}')

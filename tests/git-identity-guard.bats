@@ -592,3 +592,53 @@ load_resident_guard() {
 user.name Chris Ren"
   [ "$status" -ne 0 ]
 }
+
+# ── C4: GitHub owner names are case-insensitive; a shell glob is not ──────────────────────────
+@test "scope is CASE-INSENSITIVE on the owner (pre-commit)" {
+  # Measured pre-fix: a `RenChris` remote fell out of scope, the gate never ran, t@e.com committed.
+  local r; r="$(mkrepo caseowner https://github.com/OwNeR/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  check "$r"
+  [ "$status" -eq 1 ]
+}
+
+@test "scope is CASE-INSENSITIVE on the owner (pre-push)" {
+  local r base bad; r="$(push_fixture caseown)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m bad
+  bad="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  run env -C "$r" bash "$SRC/githooks/pre-push" origin "https://github.com/OwNeR/x.git" \
+      <<<"refs/heads/main $bad refs/heads/main $base"
+  [ "$status" -eq 1 ]
+}
+
+@test "scope control: a DIFFERENT owner is still out of scope, whatever its case" {
+  # Without this, the two above pass for a hook that gave up scoping entirely.
+  local r; r="$(mkrepo caseother https://github.com/SomeoneElse/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  check "$r"
+  [ "$status" -eq 0 ]
+}
+
+# ── C5: a new-branch push measured against EVERY remote, not the target ───────────────────────
+@test "pre-push new-branch range excludes only the TARGET remote's refs" {
+  # Pre-fix `--not --remotes` excluded commits known to ANY remote, so a bad commit fetched from
+  # an unrelated mirror rode a new-branch push through unexamined. Here the bad commit is present
+  # on a second remote's tracking refs; the push must still be refused.
+  local r base bad; r="$(push_fixture c5)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m "smuggled"
+  bad="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  # Fabricate a mirror tracking-ref that already contains the bad commit.
+  git -C "${r:?repo path required}" update-ref refs/remotes/mirror/smuggle "$bad"
+  run env -C "$r" bash "$SRC/githooks/pre-push" origin "https://github.com/owner/c5.git" \
+      <<<"refs/heads/newbranch $bad refs/heads/newbranch 0000000000000000000000000000000000000000"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNATTRIBUTABLE"* ]] || false
+  echo "$base" >/dev/null
+}

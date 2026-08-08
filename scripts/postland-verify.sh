@@ -1972,9 +1972,37 @@ identity_resident_guard() {
   git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
 }
 
+# Re-assert that the identity GATES are still installed. Same tick, same reasoning, and it closes
+# the last structural gap the red-team named: scripts/git-identity-assert.sh had ZERO invoking
+# callers — not a plist, not install.sh, not a hook, not cron — so the sensor built to notice a
+# missing gate was itself only ever run by hand. A guard nobody runs is the original fault (a
+# defence with no sensor) repeated one layer out.
+#
+# Hooks are COPIES now (a symlink into the working tree dangled on any older checkout), so what
+# this catches is deletion or a re-init, not a dangle. Idempotent and silent when nothing is
+# missing; it logs only when it actually restored something, so the log carries EVENTS rather than
+# a heartbeat that nobody would read.
+identity_hooks_guard() {
+  local cdir hookdir src h from restored=0
+  cdir="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  hookdir="$cdir/hooks"; [ -d "$hookdir" ] || return 0
+  src="$REPO/githooks"; [ -d "$src" ] || return 0    # older checkout: nothing to assert from
+  for h in pre-commit pre-push pre-merge-commit; do
+    [ -e "$hookdir/$h" ] && continue
+    case "$h" in pre-merge-commit) from="$src/pre-commit" ;; *) from="$src/$h" ;; esac
+    [ -f "$from" ] || continue
+    cp "$from" "$hookdir/$h" 2>/dev/null || continue
+    chmod +x "$hookdir/$h" 2>/dev/null || true
+    restored=$((restored+1))
+  done
+  [ "$restored" -gt 0 ] && log "IDENTITY: re-installed $restored missing git identity hook(s) in $REPO"
+  return 0
+}
+
 do_run_if_needed() {
   local target tree new loops=0
   identity_resident_guard                      # BEFORE every abstain — see the note above
+  identity_hooks_guard                         # …and the gates themselves must still be there
   git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
   target="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
   [ -n "$target" ] || { idl abstained no-origin-main; return 0; }
