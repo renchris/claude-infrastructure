@@ -119,7 +119,21 @@ assert_capable() {
 }
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
-record() { mkdir -p "$(dirname "$LEDGER")"; printf '%s\n' "$1" >> "$LEDGER"; }
+# ── EVERY ROW CARRIES ITS RUN AND ITS CWD, OR THE LEDGER CANNOT BE READ ─────────────────────────
+# The ledger is ONE shared file under ~/.claude and this box runs many sessions at once. Measured
+# 2026-08-08 mid-measurement: rows from a concurrent probe interleaved with this run's, and because
+# a row named only a timestamp and an account, no reader could tell which run produced which
+# attempt — including `--report`, which just tails the last 40 lines.
+# That is worse than lost provenance. A ceiling IS a count of rows, so two interleaved 2-create runs
+# are indistinguishable from one 4-create run: the ledger can silently publish a doubled ceiling.
+# `cwd` rides along because it turned out to be a live variable rather than context — creates from a
+# git worktree hit `Bundle upload failed` where the same account from the main checkout succeeded
+# back-to-back (CONCURRENCY_PROGRAM.md §S5.2), and no row recorded which was which.
+RUN_ID="${CLOUD_CEILING_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+record() {
+  mkdir -p "$(dirname "$LEDGER")"
+  printf '%s\n' "$1" | jq -c --arg r "$RUN_ID" --arg c "$PWD" '. + {run:$r, cwd:$c}' >> "$LEDGER"
+}
 
 # config dir for an account name, from accounts.json — never a hardcoded path (a hardcoded one
 # stops being true the moment an account is added or moved). The stored value carries a literal
@@ -155,6 +169,19 @@ classify_outcome() { # stdin = combined create output; echoes created|refused-qu
     printf 'refused-quota'; return 0
   fi
   printf 'refused-other'
+  return 0
+}
+
+# ── THE FOURTH STATE: OUR RIG, NOT THEIR FLEET ──────────────────────────────────────────────────
+# Checked BEFORE quota by is_harness_refusal's caller, because a fault in the instrument must never
+# be publishable as a property of the accounts. Added 2026-08-08 after the first control run that
+# was able to report: the create path is interactive-only, the call was inside `$( )`, and the real
+# answer came back "Error: --cloud requires an interactive terminal." With three states that lands
+# in `refused-other`, whose control verdict is "✗ classifier WRONG" — convicting the classifier for
+# being RIGHT (it correctly declined to call a TTY complaint a quota refusal) while the rig was the
+# thing at fault. Same for `script: tcgetattr … not supported on socket`, our own allocator failing.
+is_harness_refusal() { # stdin → 0 iff this refusal is about how WE called it
+  grep -qiE 'interactive terminal|requires a (tty|terminal)|not a tty|tcgetattr|Operation not supported on socket|pty-run:|unknown option|unrecognized (option|argument)|cannot be combined with|requires a description|no config_dir|no claude binary|no pty allocator|setup GitHub|Bundle upload failed'
 }
 
 # Strip the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching, so it emits
@@ -212,21 +239,44 @@ fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>
   # The SEND arm needs none of this: §6.3 measured `claude -p … --cloud <id>` delivering with no pty
   # and stdin closed. Create and send are gated differently, and conflating them is how one of these
   # gets a pty it does not need or loses one it does.
-  local ptybin; ptybin="$(command -v script 2>/dev/null || true)"
+  # ⚠️ CORRECTION 2026-08-08, MEASURED: `script(1)` is the right idea and the wrong allocator here.
+  # It calls tcgetattr on ITS OWN stdin. From an interactive shell that is a tty and the line above
+  # works; from an agent tool call, cron, launchd or CI it is a socket and script dies before ever
+  # reaching the child:
+  #     script: tcgetattr/ioctl: Operation not supported on socket
+  # Which is to say it fails in precisely the contexts a measurement rig is meant to run in, and the
+  # classifier then has to read OUR harness fault as a refusal from the account. Measured live while
+  # taking the G7 ceiling: the run that produced this comment.
+  # scripts/lib/pty-run.py uses pty.openpty(), which needs nothing of the caller's stdin. Verified on
+  # the four properties this depends on — the child sees `[ -t 1 ]` true against a same-command
+  # control, stdout captured, stderr captured, exit code propagated — plus a timeout so a create that
+  # never returns cannot wedge the probe. `script` is kept as the fallback for the interactive case.
+  local ptybin ptyrun
+  ptyrun="${CLOUD_CEILING_PTY_RUN:-$(dirname "$SELF")/lib/pty-run.py}"
+  ptybin="$(command -v script 2>/dev/null || true)"
   # `|| true` on the call, NOT on the classification: a non-zero exit is DATA here (it is how a
   # refusal arrives), and letting errexit kill the ramp would turn the wall into a crash.
-  if [ -n "$ptybin" ]; then
+  if [ -f "$ptyrun" ] && command -v python3 >/dev/null 2>&1; then
+    out="$(PTY_RUN_TIMEOUT_S="${CLOUD_CEILING_CREATE_TIMEOUT_S:-180}" CLAUDE_CONFIG_DIR="$cfg" \
+           python3 "$ptyrun" "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
+  elif [ -n "$ptybin" ]; then
     out="$(CLAUDE_CONFIG_DIR="$cfg" "$ptybin" -q /dev/null "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
-    # Strip \r AND the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching,
-    # so it emits colour, cursor moves, bracketed-paste toggles and terminal queries — measured, the
-    # raw capture rendered `Error:` as `[38;2;255;107;128mError:[8GBundle[15Gupload…`, with
-    # cursor-column jumps standing in for the SPACES. That defeats any grep with a space in it, and
-    # a classifier whose patterns silently stop matching is worse than one that has none.
-    out="$(printf '%s' "$out" | strip_pty)"
   else
     out="$(CLAUDE_CONFIG_DIR="$cfg" "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
   fi
-  outcome="$(printf '%s' "$out" | classify_outcome)"
+  # Strip \r AND the pty's ANSI/OSC/DCS traffic, for EVERY branch rather than inside one of them.
+  # A pty makes the CLI think a human is watching, so it emits colour, cursor moves,
+  # bracketed-paste toggles and terminal queries — measured, the raw capture rendered `Error:` as
+  # `[38;2;255;107;128mError:[8GBundle[15Gupload…`, with cursor-column jumps standing in for
+  # the SPACES. That defeats any grep with a space in it, and a classifier whose patterns silently
+  # stop matching is worse than one that has none.
+  # It sits outside the branch because there are now TWO pty allocators: a strip attached to only
+  # one of them is a correctness property that holds or not depending on which allocator was
+  # available at runtime — exactly the kind of environment-dependent classifier this file keeps
+  # being bitten by. On non-pty output it is a no-op.
+  out="$(printf '%s' "$out" | strip_pty)"
+  if printf '%s' "$out" | is_harness_refusal; then outcome=refused-harness
+  else outcome="$(printf '%s' "$out" | classify_outcome)"; fi
   printf '%s\t%s\n' "$outcome" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
 }
 
@@ -252,17 +302,21 @@ case "$MODE" in
     case "$oc" in
       refused-quota) echo "✓ classifier VALIDATED — a real quota refusal is recognised as one."; exit 0 ;;
       created)       echo "✗ control VOID — the account was not actually limited. Nothing was validated."; exit 4 ;;
-      *)
+      refused-harness)
         # A refusal that never REACHED the quota check indicts the RIG, not the classifier — and
         # saying "classifier WRONG" there sends the next reader to fix the wrong file. This arm
         # exists because the first live control did exactly that: the TTY refusal fires before any
         # account is consulted, so the run carried no information about quota patterns at all.
-        if printf '%s' "$msg" | grep -qiE 'interactive terminal|requires a tty|not a tty|unknown option|unrecognized|setup GitHub|Bundle upload failed'; then
-          echo "✗ control VOID — the create was refused BEFORE the account was ever consulted:"
-          echo "    a precondition of the rig failed, so this run says nothing about the classifier."
-          echo "  Fix the rig (the message above names it), then re-run. Do NOT touch classify_outcome."
-          exit 7
-        fi
+        #
+        # It is now driven by the classifier's own `refused-harness` verdict rather than by a second
+        # grep local to this arm. One implementation, so a rig-fault pattern added for the RAMP's
+        # benefit cannot silently stop applying to the CONTROL, or vice versa — the drift this repo
+        # keeps re-learning (a gate and its report must share the predicate, cf. bin/cc-premise).
+        echo "✗ control VOID — the create was refused BEFORE the account was ever consulted:"
+        echo "    a precondition of the rig failed, so this run says nothing about the classifier."
+        echo "  Fix the rig (the message above names it), then re-run. Do NOT touch classify_outcome."
+        exit 7 ;;
+      *)
         echo "✗ classifier WRONG — a known quota refusal classified as '$oc'."
         echo "  Fix classify_outcome's patterns against the string above BEFORE ramping."; exit 5 ;;
     esac ;;
@@ -287,6 +341,7 @@ for i in $(seq 1 "$MAXN"); do
     created) created=$((created + 1))
              ids="$ids $(printf '%s' "$msg" | grep -oE 'session_[A-Za-z0-9]+' | head -1)" ;;
     refused-quota) verdict="ceiling"; break ;;
+    refused-harness) verdict="harness"; break ;;
     *)             verdict="nonverdict"; break ;;
   esac
 done
@@ -296,6 +351,14 @@ case "$verdict" in
   ceiling)
     echo "CEILING = $created concurrent creates on '$ACCOUNT' before a quota refusal."
     record "{\"ts\":\"$(now)\",\"kind\":\"verdict\",\"account\":\"$ACCOUNT\",\"verdict\":\"ceiling\",\"n\":$created}" ;;
+  harness)
+    # Distinct from nonverdict on purpose: "diagnose the refusal" sends a reader to the fleet, and
+    # this refusal is about OUR side of the call. Naming it separately is what stops the next reader
+    # from re-deriving the TTY/allocator/worktree walls from scratch.
+    echo "NON-VERDICT after $created create(s): the ramp stopped on a refusal about HOW IT CALLED"
+    echo "  the binary, not about the account. This measures the instrument, not the ceiling —"
+    echo "  publish NO number. Fix the rig (see the message above), then re-run from scratch."
+    record "{\"ts\":\"$(now)\",\"kind\":\"verdict\",\"account\":\"$ACCOUNT\",\"verdict\":\"harness\",\"n\":$created}" ;;
   nonverdict)
     echo "NON-VERDICT after $created create(s): the ramp stopped on a refusal that was NOT a quota"
     echo "  refusal. Publish NO ceiling from this run — diagnose the refusal above and re-run."
