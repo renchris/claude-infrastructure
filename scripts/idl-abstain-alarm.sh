@@ -104,13 +104,28 @@ sweep() {
   # numbers, which is precisely the silent-green this alarm exists to catch. Only `.hook` can be
   # empty (the rest are `length`), and it pads to $'\037' rather than a visible placeholder
   # because the reader tests it for emptiness (`[ -n "$hook" ] || continue`).
+  # DENOMINATOR = EVALUATIONS ONLY (2026-08-08). Both problem verdicts key on `abst == total`, so a
+  # record in `total` that is NOT an evaluation of the guard can only ever WEAKEN them. The shipped
+  # contract is exactly four dispositions (premortem-gate.sh:90 — "every check ships emitting
+  # {fired|passed|abstained|failed}"); housekeeping rows that never reached the guard are not
+  # evaluations and must not dilute it. waiting-recycle emits `gc`/bats-pollution sweep records and
+  # session-continue emits `armed`/`cleared` lifecycle rows, neither of which evaluates anything.
+  # Measured live: waiting-recycle at total=2868 abst=2864 fired=0 reported HEALTHY on the strength
+  # of 4 `gc` rows, while the idle-recycle actuator had fired ZERO times in 14 days — see
+  # docs/research/idle-recycle-not-proactive-2026-08-08.md. Strictly TIGHTENING: a hook with no
+  # evaluations leaves the table rather than posing as healthy, and nothing previously INERT or
+  # DORMANT-100 can become HEALTHY through this filter.
+  # memory: positive-control-the-denominator - new-enum-member-falls-into-fail-closed-default
   local agg TSV_PAD=$'\037'
-  agg="$(jq -Rrn --argjson cutoff "$cutoff" --argjson blind "$BLIND_JSON" --arg pad "$TSV_PAD" '
+  local EVAL_JSON='["fired","passed","abstained","failed"]'
+  agg="$(jq -Rrn --argjson cutoff "$cutoff" --argjson blind "$BLIND_JSON" \
+                 --argjson evals "$EVAL_JSON" --arg pad "$TSV_PAD" '
     def cell: (if . == null then "" else . end) | tostring
               | gsub("[\\t\\r\\n]"; " ") | if . == "" then $pad else . end;
     [ inputs
       | (fromjson? // null) | select(. != null)
       | select((.hook? != null) and (.disposition? != null))
+      | select(.disposition as $d | ($evals | index($d)) != null)
       | select(((.ts // "") | fromdateiso8601? // 0) >= $cutoff)
       | { hook: .hook, disp: .disposition, rt: ((.reason // "") | split(":")[0]) } ]
     | group_by(.hook)
@@ -266,6 +281,27 @@ selftest() {
   out="$(env CC_IDL="$L" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log" CC_ABSTAIN_NMIN=10 \
             CC_ABSTAIN_BLIND_REASONS="widget-missing" "$SELF" --run)"; rc=$?
   [ "$rc" -ne 0 ]                              && okp "L blind-override → INERT on custom reason" || badp "L blind-override did not fire"
+
+  # ── M/N: a NON-EVALUATION record must not enter the denominator ───────────────────────────────
+  # Both problem verdicts require `abst == total`, and `total` used to count EVERY record carrying
+  # {.hook,.disposition} — including housekeeping that never reached the guard (waiting-recycle's
+  # `gc`/bats-pollution sweep). One such record breaks the equality and the hook falls through to
+  # HEALTHY, the same verdict a firing hook gets. Measured live 2026-08-08: waiting-recycle at
+  # total=2868 abst=2864 fired=0 read HEALTHY on the strength of 4 `gc` rows, while the recycle
+  # actuator had fired ZERO times in 14 days. N is the dangerous direction — a genuinely INERT hook
+  # laundered green — so it is pinned separately from the merely-mis-verdicted M.
+  # memory: positive-control-the-denominator · new-enum-member-falls-into-fail-closed-default
+  local M="$d/m.jsonl"; emit "$M" 12 gc-dormant abstained not-armed
+  printf '{"ts":"%s","hook":"gc-dormant","sid":"g0","disposition":"gc","reason":"bats-pollution"}\n' "$FIXTS" >> "$M"
+  out="$(run_alarm "$M")"; rc=$?
+  [ "$rc" -eq 0 ]                              && okp "M gc record → exit 0" || badp "M gc record nonzero exit"
+  printf '%s' "$out" | grep -q 'DORMANT-100'   && okp "M gc record does NOT launder dormant-100 → HEALTHY" || badp "M gc record laundered dormant-100 into HEALTHY"
+
+  local N="$d/n.jsonl"; emit "$N" 12 gc-inert abstained no-telemetry
+  printf '{"ts":"%s","hook":"gc-inert","sid":"g0","disposition":"gc","reason":"bats-pollution"}\n' "$FIXTS" >> "$N"
+  out="$(run_alarm "$N")"; rc=$?
+  [ "$rc" -ne 0 ]                              && okp "N gc record does NOT launder INERT → green" || badp "N one gc record laundered an INERT hook green"
+  printf '%s' "$out" | grep -q 'gc-inert'      && okp "N gc record → inert hook still named" || badp "N inert hook not named"
 
   echo "idl-abstain-alarm --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
