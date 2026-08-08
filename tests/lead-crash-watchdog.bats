@@ -11,6 +11,14 @@
 # transcript degrades to CRASH (bias: unsure ⇒ CRASH).
 
 setup() {
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
+  # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
+  # past its bar, so an unpinned suite goes RED purely because the box is busy — the corpus deciding a
+  # verdict on machine state instead of on the tree. Both terms are pinned off here (they are the two
+  # TERMS of one exit 9, handoff-fire.sh:4487); tests/handoff-fire-capacity-gate.bats is the ONE place
+  # the gate runs ON, against synthetic inputs.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/lead-crash-watchdog.sh"
   # sandbox account root + jetsam + teardown-marker + registry dirs — no live paths touched

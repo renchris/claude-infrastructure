@@ -339,44 +339,16 @@ ALLOW
 # right: while this rule was being written, three suites (fire-engagement, handoff-fire-focus,
 # handoff-fire-payload-lint) were pinned and landed by a sibling — listing them from an earlier
 # reading would have shipped a ratchet that was stale on arrival, i.e. RED on its first run.
+#
+# 2026-08-08 — THE LIST IS NOW EMPTY, and that is the ratchet arriving at its terminus, not a bypass.
+# All 37 remaining entries were pinned in setup() in one pass (LOAD_INSENSITIVE_VERIFY_V2 C1), which
+# closes A1: every suite that reaches a net-new fire now pins the gate, so rule 2 binds on the whole
+# tree with nothing exempt. The four named above (account-sweep, failed-cleanup, repo-resolution,
+# recycle-engagement) were the per-test-only cases; their setup() now carries the pin and the older
+# per-test ones are left in place as redundant-but-harmless. An empty list is STRICTLY stronger than
+# a populated one — `-` not `:-` on the seam below keeps "set but empty" meaning "grandfather
+# nothing", which is exactly this state. Re-populating it is an ADDITION, and additions are forbidden.
 EMBEDDED_FIRE_ALLOWLIST="$(cat <<'FIREALLOW'
-cc-backlog.bats
-cc-classify.bats
-cc-close-attrib.bats
-cc-recover-safeguard.bats
-cc-relogin.bats
-cc-teardown.bats
-cc-wave-plan-verdict.bats
-cc-wave-plan.bats
-claude-accounts-core.bats
-claude-accounts-fresh-lock-bound.bats
-desk-invariant.bats
-desk-land.bats
-desk-register.bats
-handoff-close-mail-guard.bats
-handoff-fire-account-sweep.bats
-handoff-fire-completion-push.bats
-handoff-fire-failed-cleanup.bats
-handoff-fire-inject.bats
-handoff-fire-it2-bound.bats
-handoff-fire-repo-resolution.bats
-handoff-fire-tab-window-typing.bats
-handoff-fire-typed-cmd-correctable.bats
-handoff-fire-validate.bats
-handoff-lifecycle-record.bats
-handoff-orphaned-assignee.bats
-handoff-payload-gates.bats
-handoff-recycle-durable-cwd.bats
-handoff-recycle-engagement.bats
-handoff-selfclose-session-pin.bats
-handoff-selfclose-teammate-gate.bats
-handoff-selfclose.bats
-handoff-splitright.bats
-handoff-teardown-marker.bats
-it2-wrapper.bats
-lead-crash-watchdog.bats
-self-path-lint.bats
-teammate-auto-shutdown.bats
 FIREALLOW
 )"
 

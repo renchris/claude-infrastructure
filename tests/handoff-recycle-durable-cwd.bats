@@ -33,6 +33,14 @@ run_emitted() { # $1=the emitted chain
 }
 
 setup() {
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
+  # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
+  # past its bar, so an unpinned suite goes RED purely because the box is busy — the corpus deciding a
+  # verdict on machine state instead of on the tree. Both terms are pinned off here (they are the two
+  # TERMS of one exit 9, handoff-fire.sh:4487); tests/handoff-fire-capacity-gate.bats is the ONE place
+  # the gate runs ON, against synthetic inputs.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   # HERMETIC $HOME (test-hermeticity-lint.sh — binds every NEW suite), with the gate's own idiom:
   # the fixture $HOME SYMLINKS the read-only config the subject must resolve (~/.claude carries the
   # launcher/account layout) and owns everything else. A bare empty $HOME makes the subject exit 1

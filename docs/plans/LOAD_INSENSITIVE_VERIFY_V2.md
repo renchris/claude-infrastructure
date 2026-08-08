@@ -18,6 +18,18 @@ Status: DESIGN 2026-07-30 · originating session 9b41fe5a · branch `docs/gpu-vs
 
 ## Phase 0 — Agent Team Orchestration
 
+**EXECUTION LOCUS PER WAVE** (added 2026-08-08 — the field was missing, so the waves below were
+recorded without the one fact that decides whose context pays for them):
+
+| Wave | Locus | Why |
+|---|---|---|
+| 1 — T1/T2 suite pinning | **L** (lead-inline) | One mechanical transformation (the same 6-line block at the top of 37 `setup()` bodies), single shared file already single-ownered, and the wave's own load is this document's subject. See §7 for the full judgement. |
+| 2 — T3 lint rule | **S** (dispatched session) | Real design work — a second ratchet rule, its grandfather list and its RED-proof. Landed before this session. |
+
+**Lead context budget + succession point:** the lead holds the allowlist and the two plan docs and
+nothing else; succession point is immediately after the land, since everything of value is on disk
+(commit + this document) and no in-flight judgement survives it.
+
 Three teammates, disjoint file ownership, no `blockedBy` edges except T3's read-only dependency on
 the CONTRACT (the pin string `CC_FIRE_CAPACITY_GATE=off`), which is pinned here in Phase 0 — not on
 T1's code. Spawn T1+T2 concurrently (wave 1); T3 in wave 2 so it lints a tree that already contains
@@ -221,10 +233,108 @@ violate this document's standing constraint.
 Kill switches: the change is additive env pins plus one lint rule; `CC_HERM_ALLOWLIST` already overrides
 the lint's list, and the new rule ships with its own off seam.
 
+## 6b. Status 2026-08-08 — C1/C2/C3 all landed; A1 met; A4/A5 still open
+
+**C2 — DONE, and it generalised.** Landed before this session. RULE 2 exists in
+`scripts/test-hermeticity-lint.sh` with its own ratchet, own allowlist, own kill switch
+(`CC_HERM_FIRE_RULE=off`) and its own selftest cases. The mechanism proved reusable: RULES 3-5
+(orphan-close lever, selftest scratch path, non-`$HOME` seam) were built on the same shape, so the
+"extend the existing chokepoint, do not build a new guard" call in §4 paid off three more times than
+it was argued for.
+
+**C1 — DONE this session. The ratchet reached ZERO.** All 37 remaining grandfathered suites now pin
+both gate terms in `setup()`, and `EMBEDDED_FIRE_ALLOWLIST` is empty — rule 2 binds on the whole tree
+with nothing exempt. **A1 is met**, read from the lint's own verdict, not narrated:
+`0 grandfathered (capacity gate)` where it read 37. Four of the 37 (`handoff-fire-account-sweep`,
+`handoff-fire-failed-cleanup`, `handoff-fire-repo-resolution`, `handoff-recycle-engagement`) had pinned
+per-test only — the shape the rule rejects — and their `setup()` now carries it; the older per-test
+pins are left as redundant-but-harmless rather than risk a wider edit.
+
+**C3 — DONE this session.** `R1b` is now in `LAND_PIPELINE_V2.md`'s requirement table.
+
+### The finding that outlived the fix: a capacity-only pin is not load-indifferent
+
+`capacity` and `headroom` are the two TERMS of a **single** refusal — there is exactly ONE `exit 9`
+in the script (`scripts/handoff-fire.sh:4487`, `capacity_gate || exit 9`), and `capacity_gate()`
+returns non-zero if EITHER the loadavg term or the M10 memory-headroom term is past its bar. Rule 2
+only tests the capacity term. So a suite can satisfy the ratchet — and now, with an empty allowlist,
+satisfy it tree-wide — while still consulting ambient machine state through memory. Measured
+2026-08-08 over the 54 suites that pin at all: **only 14 pin BOTH terms; 40 are capacity-only.**
+
+This is the same class as the original defect and it is worth stating plainly: *the enforcement was
+written against the symptom that was measured (load) rather than against the mechanism that produces
+it (the gate).* §3's inversion is the wider claim — *a test may never consult ambient machine state* —
+and the lint currently enforces half of it. All 37 suites pinned in this pass set both terms, so the
+hole does not grow; closing the remaining 40 and widening rule 2's predicate to demand both is filed
+as follow-on work, not done here (it is a second mechanical sweep plus a lint-predicate change, and
+bundling it would have put C1's landing at risk).
+
+### Deterministic control, per A6 — the instrument had to be positive-controlled first
+
+`CC_FIRE_LOADAVG_OVERRIDE=999` forces the refusal without touching the box. Validated against the
+real artifact before any suite verdict was believed:
+
+```
+CC_FIRE_LOADAVG_OVERRIDE=999                          … --prompt-file P --dry-run  → rc 9
+  "capacity gate: REFUSING a net-new fire — load 999 on 10 cores = 99.90/core > ceiling 2.0/core"
+CC_FIRE_CAPACITY_GATE=off CC_FIRE_LOADAVG_OVERRIDE=999 … --prompt-file P --dry-run  → rc 0
+```
+
+⚠️ **Two instrument defects were caught by that step, and either would have produced a confident wrong
+answer.** (1) The first probe passed `--prompt`, which is not a flag — the script printed usage and
+exited 1 *before* the gate, so the gate was never reached and a "no refusal" reading meant nothing.
+(2) The rc was read after a pipe into `tail`, so it reported `tail`'s status, not the script's. A
+suite that is green in BOTH arms is therefore reported as **NO-REACH (control inert)**, never as a
+pass — a control that cannot fail proves nothing about the suite it is pointed at.
+
+### `cc-bats`'s exit 75 is what load-sensitivity looks like when it is done RIGHT
+
+Verifying the 37 surfaced the contrast this whole document turns on. A first sweep returned `rc=75`
+for all 37 in under a second — which is not 37 reds, and reading it as one would have been the same
+error in a new place. `bats` on this box resolves to `bin/cc-bats`, which refuses when concurrent
+execution roots exceed `CC_BATS_MAX_ROOTS` AND load/core is over its bar, and says so in words:
+
+```
+cc-bats: REFUSED — 3 concurrent bats execution root(s) (ceiling CC_BATS_MAX_ROOTS=2) AND
+         1-min load/core at or above CC_BATS_MAX_LOAD_PER_CORE=2.0.
+cc-bats: nothing ran, nothing was verified — this is a DEFERRAL, not a test result.
+cc-bats: override for this run: CC_BATS_MAX_ROOTS=0 …
+```
+
+Both mechanisms read ambient load; only one of them is a defect. `capacity_gate` inside a corpus
+suite produces a **plausible RED** — a real assertion failing with a real message — which is exactly
+why §2's chain went unnoticed for so long. `cc-bats` produces a **loud non-verdict** that names
+itself as one, names its holders, and prints its own override. That is R6 ("a non-verdict is never a
+red") holding, and it is the shape any future load-aware mechanism in the verdict path must take:
+**if a thing must consult the box, it must be incapable of being mistaken for a verdict about the
+tree.** R1b forbids the first shape; it does not forbid the second.
+
 ## 7. Open / next
+
+**Still open after 2026-08-08 (A4 and A5 only — both are OBSERVATIONS downstream of the land, not
+work):** A4 wants a verifier stamp green on a post-pin tree, and A5 wants `deploy-live --auto` to
+advance. Neither can be produced in the session that lands the pin: `ship-land.sh` queues the landed
+head to `postland-verify.sh` (:2001-2007) and the launchd singleton `com.claude.postland-verify` owns
+the verdict. Live read at land time: **104 stamps = `{red:93, cut:7, green:3, hung:1}`**, and
+`deploy-live` REFUSED with a *different* message than §A5 recorded — `no GREEN tree is a DESCENDANT of
+live HEAD dec39a391362 (the newest one, 71e96bcbc825, is BEHIND it)`. So the orphaned-green diagnosis
+in §A5 still holds in shape while its shas have moved; re-read it live rather than quoting these.
+⚠️ Do not read a post-land green as proof the pin caused it, or a post-land red as proof it did not —
+the corpus has ~349 suites and this change touched 37. The honest claim is narrower and is already
+proven above: those 37 can no longer go red for a reason that is not in the tree.
+
+**Retired as done — kept for the record, since the Phase 0 call was made and should be judged:**
 
 - C1 and C2 are code changes across ~39 test files + one lint ⇒ **Agent Teams**, disjoint file
   ownership, per the standard discipline.
+  → **Judged 2026-08-08: correct for C2, over-specified for C1's remainder.** C2 was a real design
+  task and got a teammate. C1's remainder turned out to be ONE mechanical transformation — the same
+  6-line block at the top of 37 `setup()` bodies — whose only shared file was the allowlist this
+  plan had already single-ownered. Fanning that out would have paid 37 briefs and a merge loop to
+  parallelise an `awk` script, on the box whose saturation is this document's subject. It was done
+  lead-inline instead, and the load discipline below is the reason. The rule the next reader should
+  take: **file COUNT is not work SIZE** — what decides the locus is whether the pieces need
+  independent judgment, and a mechanical sweep with one owner does not.
 - **Tension to flag honestly:** spawning teammates adds load to the box whose saturation is the subject.
   Teammates run in the background QoS band and the corpus is not on the land path, so this is
   acceptable — but the wave should be small and the lint work serialized against the suite work.

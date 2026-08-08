@@ -8,6 +8,13 @@
 # so "no bridge" is asserted as the ABSENCE of the "## ACCOUNT STATE" header.
 
 setup() {
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. The per-test pins
+  # below predate this and are the shape the hermeticity ratchet rejects: they leave every OTHER test in
+  # the file reading live machine state. handoff-fire.sh's capacity_gate reads the box's loadavg AND
+  # (M10) its memory headroom — the two TERMS of one exit 9 (handoff-fire.sh:4487) — so both are pinned
+  # here, for the whole file. tests/handoff-fire-capacity-gate.bats is the ONE place the gate runs ON.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN" "$BATS_TEST_TMPDIR/info"

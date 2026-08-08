@@ -129,6 +129,17 @@ verification which caps throughput at corpus-time and was abandoned everywhere v
 ### Requirements (from the goal + hard-won invariants that SURVIVE the redesign)
 
 R1 land p50 ≤ 30s, p99 ≤ 3 min, at 12+ concurrent writers, load-indifferent.
+R1b the VERIFIER's corpus is load-indifferent too: no test may read ambient machine state, and the
+   verdict is a function of the TREE ALONE. Added 2026-08-08 (LOAD_INSENSITIVE_VERIFY_V2 C3) because
+   R1 was propagated to the LANDER and silently never to the VERIFIER — and an unpropagated
+   requirement leaves no trace, so nothing could detect the omission. The cost of leaving it unnamed,
+   measured: 37 corpus suites reached a net-new fire while `capacity_gate()` read live loadavg and
+   memory headroom, so on a permanently-saturated box they went red for a reason that was not in the
+   tree; the verifier never stamped green; `deploy-live --auto` never opened; the live layer sat tens
+   of commits behind. Naming it here is what stops the next relocation of a verdict from re-inheriting
+   it — the corollary already learned twice is that MOVING a load-sensitive verdict does not fix it,
+   it only changes who blocks on it. Enforced, not merely asserted: `scripts/test-hermeticity-lint.sh`
+   RULE 2 binds on the whole tree with an EMPTY grandfather list, and it runs as a verifier prelint.
 R2 trunk red is bounded: detected ≤ 1 verifier cycle, auto-reverted, author notified.
 R3 live ~/.claude only ever advances to a full-suite-green tree (stronger than today: 0 green
    stamps have ever existed, so deploys have been manual/unverified all along).
