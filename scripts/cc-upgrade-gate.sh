@@ -11,7 +11,7 @@
 # (a PRESUMED demotion that was actually fine) is the exact failure mode this eliminates: every check
 # verifies the ARTIFACT (modelUsage / argv / exit), never a claim.
 #
-# The 13 checks live one-per-file in lib/cc-upgrade-gate/check*.sh and are AUTO-DISCOVERED (each defines
+# The 14 checks live one-per-file in lib/cc-upgrade-gate/check*.sh and are AUTO-DISCOVERED (each defines
 # a `check_NN` function). Adding a probe is a new FILE, never an edit here — that is what makes the
 # multi-teammate build collision-free.
 #

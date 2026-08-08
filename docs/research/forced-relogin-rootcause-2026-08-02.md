@@ -615,6 +615,26 @@ already matched both spellings; this was one of the last two.
   in-session and `auth login` paths report success regardless. Our fixes reduce exposure (fewer
   concurrent grants) and make the outcome detectable and escalatable — they cannot make the
   vendor's write atomic.
+
+  **2026-08-08 — converted from prose to a tracked condition** (backlog `4adbeab56aa7`). Every
+  clause above was re-verified against the shipped `2.1.220` bundle rather than recalled, and two
+  details this paragraph did not have turned out to matter: the write is attempted **exactly once**
+  (`Hcg()` retries only the lock, never the write), and `auth login` **deletes the stored credential
+  before** writing the replacement — so a lost write there leaves the machine logged out while the
+  CLI prints `Login successful.` and exits 0. The submittable write-up, with the verbatim code and
+  the ranked fixes, is `vendor-report-cc-authstore-write-loss.md`; a secondary finding lives there
+  too (above 4 032 command characters the credential blob moves onto `security`'s **argv** — not
+  reached on this machine, but the largest account measured 3 906, i.e. 126 characters below it).
+
+  The tracking is mechanical, because a known-open fact that lives only in prose has no way to learn
+  it changed: `scripts/cc-authstore-probe.sh <binary>` reads any candidate bundle and answers
+  FIXED / STATUS-QUO / WORSE / UNREADABLE, resolving the 2 000 ms timeout and the 4 032-character
+  threshold from the candidate's own use-sites instead of trusting the numbers written here. It runs
+  as check **#14** of `cc-upgrade-gate.sh`, where STATUS-QUO deliberately SKIPs — an upstream defect
+  we cannot fix, unchanged from the binary we already run, is not grounds to park an upgrade, and a
+  check that went red on every candidate forever would carry no information. WORSE (the plaintext
+  tier removed) and UNREADABLE (the storage layer no longer introspectable) fail the gate; FIXED is
+  the signal to close `4adbeab56aa7` and revisit the compensations landed in `f8178bfe`.
 * **The fabricated `T-0h` deadline** in `cc-relogin-poll` (defect D5) — the escalation fires,
   but names a calendar deadline that is not the reason.
 * `~/.claude` remains logged out with `claude-prev` still pointing at it; `next` still carries
