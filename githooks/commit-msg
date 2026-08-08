@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# commit-msg — reject AI-authorship trailers at write time.
+# Seeded into new repos via `git config --global init.templateDir ~/.git-template`.
+#
+# This is the BACKSTOP. The primary control is settings.json:
+#   "attribution": { "commit": "", "pr": "", "sessionUrl": false }
+# which stops Claude Code from ever constructing the trailer (verified against
+# the decompiled 2.1.215 binary). This hook catches the cases config misses.
+#
+# Never bypass with --no-verify. If this fires, fix the message.
+set -euo pipefail
+
+MSG_FILE="$1"
+
+# Authorship trailers only. The bare word "Claude" is NOT banned — legitimate
+# prose about Anthropic as a vendor must survive.
+BAD=$(grep -n -i -E '^[[:space:]]*(Claude-Session:|Co-authored-by:[[:space:]]*Claude|Generated with Claude)|claude\.ai/code' "$MSG_FILE" || true)
+
+if [ -n "$BAD" ]; then
+  {
+    echo "commit-msg: BLOCKED — the message carries an AI-authorship trailer:"
+    while IFS= read -r line; do echo "    $line"; done <<<"$BAD"
+    echo
+    echo "Remove the trailer and commit again. Commits here are authored by a person;"
+    echo "the history is a durable, public-facing record and must read as one."
+  } >&2
+  exit 1
+fi
+
+exit 0

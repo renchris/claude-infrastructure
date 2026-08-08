@@ -278,6 +278,54 @@ for lib in "$REPO_DIR"/hooks/lib/*.sh; do
   link_file "$lib" "$CONFIG_DIR/hooks/lib/$(basename "$lib")"
 done
 
+# --- Git hooks (githooks/) ---
+# GIT hooks, not Claude hooks: git runs these itself out of .git/hooks, so they never passed
+# through any loop above and were, until 2026-08-08, outside the deploy lane entirely.
+# `commit-msg` existed as two byte-identical HAND-PLACED copies (this repo's .git/hooks and
+# ~/.git-template/hooks) that no install path owned, no test covered, and nothing would have
+# noticed the loss of. That is the same class this file already documents twice above — a guard
+# that is real on exactly one machine — which is why githooks/ is now tracked.
+#
+# TWO DESTINATIONS, DELIBERATELY DIFFERENT:
+#   * this repo's shared .git/hooks → SYMLINK, so a repo edit is live with no second copy to
+#     drift (the ~/bin/claude-accounts rule). ONE link covers all ~200 linked worktrees, because
+#     a linked worktree resolves hooks through the common dir — measured 2026-08-08.
+#   * ~/.git-template/hooks → real COPIES. A template is consumed by `git init`/`git clone`,
+#     possibly on a machine where this checkout does not exist; a symlink would seed new repos
+#     with a dangling link, which git treats as "no hook" — fail-open, and silently.
+echo ""
+echo "Git hooks → repo .git/hooks/ (symlink) + $HOME/.git-template/hooks/ (copy)"
+_gh_common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "$_gh_common" ]]; then
+  ensure_real_dir "$_gh_common/hooks"
+  for gh in "$REPO_DIR"/githooks/*; do
+    [[ -f "$gh" ]] || continue
+    _gh_dest="$_gh_common/hooks/$(basename "$gh")"
+    # Never clobber a foreign hook: replacing one to install ours would trade this bug for
+    # whatever that hook was preventing. Only an absent entry, or a symlink we own, is written.
+    if [[ -e "$_gh_dest" && ! -L "$_gh_dest" ]]; then
+      echo "  ⚠ $_gh_dest exists and is not a symlink — left alone; chain it by hand" >&2
+      warnings=$((warnings + 1))
+    else
+      link_file "$gh" "$_gh_dest"
+    fi
+  done
+else
+  echo "  ⚠ cannot resolve git-common-dir — git hooks NOT installed" >&2
+  warnings=$((warnings + 1))
+fi
+ensure_real_dir "$HOME/.git-template/hooks"
+for gh in "$REPO_DIR"/githooks/*; do
+  [[ -f "$gh" ]] || continue
+  copy_file "$gh" "$HOME/.git-template/hooks/$(basename "$gh")"
+done
+# init.templateDir is what makes the template reach a new repo at all. Unset, every clone lands
+# unguarded and the copies above are inert decoration.
+if [[ "$(git config --global --get init.templateDir || true)" != "$HOME/.git-template" ]]; then
+  run git config --global init.templateDir "$HOME/.git-template"
+  echo "  ✓ git config --global init.templateDir → $HOME/.git-template"
+fi
+
 # --- Shared shell libs (lib/) ---
 # config-mirror.zsh in particular: it decides which state each account config dir SHARES vs
 # isolates, and it lived for months as an unversioned real file at ~/.claude/lib/ — a config with
