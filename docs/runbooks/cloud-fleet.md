@@ -41,7 +41,45 @@ create a session at all.
 **Current state (2026-08-08): all four accounts — `next`, `next2`, `next3`, `next4` — are linked.**
 So you are here for a *re-link*, a new account, or a rebuild on another box, not to unblock.
 
-<!-- WAVE-B: exact command + flags filled in when scripts/cloud-websetup-drive.sh lands -->
+**You do not have to remember any of this.** The link drive is filed as a staged migration
+(`migrations/0003-cloud-fleet-link-drive.sh`, class `c10`), so it surfaces itself as one counted
+operator step in the session close block and as one `cc-do` entry. It is **staged, never run by the
+converger** — on an unlinked account the drive opens a window on your desk and types into it, and
+`deploy-live.sh` runs unattended. "Usually a no-op" is exactly the shape that makes an unattended
+actuator look safe until the one run that does something is the run nobody is watching.
+
+**See where every account stands** (read-only, spends nothing):
+
+```
+scripts/cloud-websetup-drive.sh --status
+```
+
+**Link one account, or all of them:**
+
+```
+scripts/cloud-websetup-drive.sh --account next4
+scripts/cloud-websetup-drive.sh --all
+```
+
+An account already recorded as linked is a no-op. To re-drive it anyway — which is what you want
+when you suspect the marker is lying — add `--force`.
+
+**Read the exit code; it has four states and the fourth is the one that matters:**
+
+| rc | State | What it means, and what to do |
+| --- | --- | --- |
+| 0 | `LINKED` | The pane printed `Connected as `, or the account was already recorded linked. |
+| 1 | `FAILED` | An error was **observed** and named (no config dir, no window id, `GitHub CLI not found`). Fix the named cause. |
+| 2 | `PRECONDITION` | This box cannot run the drive at all (no `kitten`, remote control refused, no repo) or the argv was bad. **Nothing was attempted.** |
+| 3 | `NOT-SUCCESS` | The drive ran, nothing errored, and `Connected as ` never appeared. **INDETERMINATE — not a failure and not a success.** No state file is written. Go look at the pane, or re-run with a longer `CC_WEBSETUP_POLL_MAX`. Do **not** record a link. |
+
+Across several accounts the run reports the worst outcome, with an observed error outranking an
+indeterminate one: any `FAILED` ⇒ 1, else any `NOT-SUCCESS` ⇒ 3, else 0. An observed error names a
+cause; an indeterminate says only that nothing was named, so the one carrying information wins.
+
+**Why rc 3 exists at all** is the entire point of §1: folding "nothing was named" into either
+neighbour is how a link that was never made gets recorded as made, or how a healthy-but-slow pane
+gets torn down as broken.
 
 ⚠️ **Do not trust `~/.claude/autonomy/websetup/<acct>.linked` as the authority.** It is a progress
 log, and it has already drifted: measured 2026-08-08, the directory held markers for `next2`,
