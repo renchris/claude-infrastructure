@@ -17,15 +17,30 @@ SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo ""
 [ -z "$SID" ] && exit 0
 case "$SID" in *[!a-zA-Z0-9_-]*) exit 0 ;; esac
 
-DB="$HOME/.claude/session-index.db"
+# Same default + env override as hooks/lib/session-index-helpers.sh, so a fixtured
+# suite can point this hook at a throwaway DB instead of the operator's live index.
+DB="${SESSION_INDEX_DB:-$HOME/.claude/session-index.db}"
 [ -f "$DB" ] || exit 0
 
-ROW=$(sqlite3 "$DB" "SELECT message_count || '|' || commands_run || '|' || files_changed FROM sessions WHERE session_id='$SID' LIMIT 1;" 2>/dev/null || echo "")
-[ -z "$ROW" ] && exit 0
+# PER-COLUMN extraction. The previous form joined the three columns with '|' and split
+# them back with `cut -d'|'` — but `commands_run` is RAW SHELL TEXT and routinely holds
+# pipes (one probed row carried 127), so -f2 was a fragment of the first command and -f3
+# the next fragment, never the file list. The corruption is visible in every record the
+# hook has ever written: _candidates.jsonl line 1 stores a ` head -30 && echo …` fragment
+# in files_changed. There is no delimiter that is safe against arbitrary shell text, so
+# the join is removed rather than re-delimited — same class as
+# docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md, at a call site that sweep never reached.
+# `.timeout` because a raw sqlite3 spawns with a 0 ms busy timeout and dies under the
+# concurrent SessionEnd writers this hook runs alongside (session-index-helpers.sh:43).
+ROW=$(sqlite3 -json "$DB" ".timeout ${SESSION_INDEX_BUSY_TIMEOUT:-5000}" \
+  "SELECT message_count AS m, commands_run AS c, files_changed AS f FROM sessions WHERE session_id='$SID' LIMIT 1;" \
+  2>/dev/null || echo "")
+# No row is '[]', not the empty string — a bare -z test would fall through to jq.
+case "$ROW" in ''|'[]') exit 0 ;; esac
 
-MSGS=$(printf '%s' "$ROW" | cut -d'|' -f1)
-CMDS=$(printf '%s' "$ROW" | cut -d'|' -f2)
-FILES=$(printf '%s' "$ROW" | cut -d'|' -f3)
+MSGS=$(printf '%s' "$ROW" | jq -r '.[0].m // 0' 2>/dev/null || echo 0)
+CMDS=$(printf '%s' "$ROW" | jq -r '.[0].c // ""' 2>/dev/null || echo "")
+FILES=$(printf '%s' "$ROW" | jq -r '.[0].f // ""' 2>/dev/null || echo "")
 
 # Gate: skip trivial sessions (need real back-and-forth + tool activity)
 [ "${MSGS:-0}" -ge 12 ] 2>/dev/null || exit 0
