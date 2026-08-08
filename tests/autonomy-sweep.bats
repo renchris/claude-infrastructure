@@ -211,11 +211,44 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 }
 
 # ── the horizon must outlive the reaper-horizon-lint floor (600 s sweep × 10 = 6,000 s) ────────
+# Assert THIS sweep's own horizon against the floor the lint PUBLISHES — never the lint's whole-tree
+# exit code. The lint scans every file in the repo, so the bare `[ "$status" -eq 0 ]` that stood on
+# the last line made this test answerable for debt it did not create and could not name: at
+# 9899aabef9ec it went RED because `bin/cc-queue` was UNDECLARED (§3), post-land filed the failure
+# under THIS test's title, and the title sent two workers at a 7-day horizon that was healthy the
+# whole time — the item sat blocked 7 days (backlog 2490e355832e; the lint's own fix, 24ba1cbc,
+# landed one commit later). tests/scratchpad-reaper.bats:148 had already reached this conclusion and
+# scoped its assertion; that suite was NOT filed by the same scan. This is the same remedy for the
+# file that still carried the whole-tree form.
+#
+# The scoping had to be DERIVED, not copied: the sibling greps the lint for its own `ok` line, which
+# works because it writes a LITERAL `-mmin +2880` that §1 can score. This sweep writes
+# `-mtime +"$EVENT_TTL"` — a variable — so NO scorer in the lint can read it and no per-file verdict
+# about it is ever printed. Declaring it in $DECLARED would therefore be exactly the rubber stamp the
+# lint forbids in its own §1b ("passes BY BEING LISTED rather than by being checked"). So the three
+# facts are asserted directly, and the floor is READ from the lint rather than restated — two copies
+# of that constant is the drift the lint's §4 exists to forbid.
 @test "the event horizon is 7 days — three orders of magnitude above the lint floor" {
   run bash -c "grep -c 'CC_EVENT_TTL_DAYS:-7' '$SWEEP'"
   [ "$status" -eq 0 ]
+  # (a) the 7 GOVERNS the reaping — the premise the whole-tree exit code never checked at all.
+  #     Two assertions, because the file-wide grep alone is not per-site: the sweep passes
+  #     $EVENT_TTL to TWO finds (the event dirs, and the .escalated markers), so mutating either
+  #     one to a literal left the other to satisfy the grep. The second line closes that by
+  #     forbidding the literal form outright — a hardcoded `-mtime +N` here bypasses the knob,
+  #     which is precisely how a horizon regresses without the name in this test's title changing.
+  grep -qF -- '-mtime +"$EVENT_TTL"' "$SWEEP"
+  run grep -cE -- '-mtime \+[0-9]' "$SWEEP"
+  [ "$status" -ne 0 ]
+  # (b) the floor, from the lint's own mouth. Its exit code is deliberately NOT asserted: another
+  #     file's undeclared reaper is still caught by §3 where it is reported against ITS name.
   run bash "$REPO/scripts/reaper-horizon-lint.sh"
-  [ "$status" -eq 0 ]
+  floor=$(printf '%s\n' "$output" | sed -nE '1s/.*= ([0-9]+)s$/\1/p')
+  [ -n "$floor" ]
+  # (c) three orders of magnitude above it — the claim in this test's own name
+  ttl=$(sed -nE 's/^EVENT_TTL="\$\{CC_EVENT_TTL_DAYS:-([0-9]+)\}"$/\1/p' "$SWEEP")
+  [ -n "$ttl" ]
+  [ "$(( ttl * 86400 ))" -ge "$floor" ]
 }
 
 # ══ fired-default triage: subject project + the no-change carve-out (item f32588a73993) ═════════
