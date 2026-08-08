@@ -940,3 +940,37 @@ the path.
 **and no `next.linked`**, for an account reported and believed linked. Nothing reconciles the marker
 against the account, so a reader that trusts the marker set will conclude `next` is unlinked and
 re-drive a link it does not need. Treat the markers as a progress log, never as the authority.
+
+### 10.4 · The tap gate — what must be TRUE before backlog work is fired into cloud sessions
+
+This is the acceptance list for opening the tap, moved here from `/tmp` so it stops living somewhere
+nothing reads. **The tap is DEFAULT-OFF and stays off until every row is green.** G7 is the row that
+gates the rest, because an unmeasured ceiling is how "15 sessions" became folklore.
+
+| # | Gate | State |
+|---|---|---|
+| **G1** | The three local oracles ABSTAIN on off-box sessions (`cc-spawn-verify`, `cc-board`, `team-orphan-reaper.sh` consult `cc-cloud is-offbox`). Without it the reaper ARCHIVES healthy cloud sessions on a 600 s timer. | ✅ `d0765876` |
+| **G2** | Account affinity in `cc-cloud` — `declare --account`, `show`/`list --json` surface it, `account-of <id>`, legacy declarations read UNKNOWN and never crash. | 🔄 in flight (cloud `session_01EuB5…`) |
+| **G3** | `cc-notify --cloud <id>` per §9.2 — route via the OWNING account, refuse a mismatch with a WRONG-ACCOUNT message rather than the bare `Session not found`, and `--receipt` must exit UNKNOWN off-box (`{ok:true}` means *queued*, not read). | 🔄 in flight (`cloud-fleet`) |
+| **G4** | Off-box rendering — `cc-sessions --offbox` + `cc-where` answer for off-box ids, sourced from `cc-cloud`, never the registry. | ✅ `66ef4d8c` |
+| **G5** | `handoff-fire.sh --cloud` + `cc-dispatch` venue — honour `--venue local\|cloud`, record the owning account at claim, declare immediately after create (§8.1), and BRANCH the box-local capacity gate onto account headroom. Ships default-off. | ✅ `c06a13ad` — ⚠️ see the cwd finding below |
+| **G6** | The landing path — a cloud VM pushes only its own branch and cannot run `/ship`, so something local must reconcile and land `claude/*` or every result strands. | ✅ `c8b2b446` |
+| **G7** | The measured ceiling, recorded with its command. | ✅ **MEASURED** — `CONCURRENCY_PROGRAM.md` §S5.2. **Lower bound ≥2, no ceiling reached.** |
+| **G8** | Eligibility as a REFUSAL, not a doc note — repo-only ✅ · visual/design ❌ · anything about this box ❌. | ✅ `01f1bf33` |
+| **G9** | Repeatable + documented — the link drive, its tests, and a runbook. | ✅ `66ef4d8c` |
+| **G10** | The wake path — `cc-await-ping` self-disarms (exit 5 on a stale registry pid; a group-TERM prints nothing), and §9 names it as *the* wake path, so cloud→here pings can vanish. | ✅ `f7c1948a` |
+
+🚨 **The one finding that changes how G5 must fire, and it was not predicted by any row above.**
+A cloud create issued from a **git worktree** hit `Bundle upload failed: Socket is closed after 3
+attempts` on 3 of 3 ramps, while the same account from the **main checkout** created 2 of 2
+back-to-back. Suspected mechanism: the bundle upload walking a `.git` that is an 86-byte gitdir
+pointer rather than a directory. **Not established** (main checkout n=1; one worktree create did
+succeed) — but this repo's standing rule gives every concurrent writer its own worktree, and Agent
+Teams isolate teammates in worktrees by construction, so *the default configuration for firing cloud
+work is the one that failed*. Full evidence table: `CONCURRENCY_PROGRAM.md` §S5.2.
+
+⚠️ **The classifier control is VOID and cannot currently be restored.** `--control` was designed
+around a free known-refusal: an account already at 100% weekly. Measured 2026-08-08, an account at
+100% weekly **creates cloud sessions normally** — so weekly quota does not gate cloud CREATE, the
+control validates nothing, and no *ceiling* from this instrument is trustworthy yet. Lower bounds
+remain safe because they count successes and do not depend on the classifier at all.
