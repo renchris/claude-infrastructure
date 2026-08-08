@@ -1031,3 +1031,64 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [ "$(sent_count)" -eq 0 ]                       # the anti-keystroke invariant still holds
   [ "$(cloud_calls)" -eq 0 ]                      # and no local send ever reached the cloud transport
 }
+
+# ── ACCOUNT SCOPING (backlog 95422d3518bc) ───────────────────────────────────────────────────────
+# A session id is NOT a globally-addressable handle. Measured 2026-08-08, clean A/B: same id, same
+# command, only CLAUDE_CONFIG_DIR differs → the owning account returns {ok:true}; another account
+# returns {ok:false,…,"Session not found"}.
+#
+# The scoping is not what these tests are really about; the ERROR STRING is. A wrong-account send
+# fails as "Session not found", which reads as a DEAD session — so passing the API's own reason
+# through, which is right everywhere else, is on THIS path how a confidently wrong diagnosis reaches
+# a human with the API's authority behind it. cc-notify must name the routing itself.
+
+declare_cloud_acct() {   # $1=id $2=account (omit ⇒ no account field, the pre-existing-declaration state)
+  if [ -n "${2:-}" ]; then
+    "$REPO/bin/cc-cloud" declare --id "$1" --branch cf-wave-c --account "$2" --repo "$BATS_TEST_TMPDIR/not-a-repo" >/dev/null 2>&1
+  else
+    "$REPO/bin/cc-cloud" declare --id "$1" --branch cf-wave-c --repo "$BATS_TEST_TMPDIR/not-a-repo" >/dev/null 2>&1
+  fi
+}
+# accounts.json with a LITERAL ~, because that is how the real file stores it and an unexpanded ~
+# yields a path that exists nowhere — a failure that would look exactly like the wrong-account error.
+write_accounts() {
+  mkdir -p "$HOME/.claude" "$HOME/cfg-owner"
+  printf '{"accounts":[{"name":"owner","config_dir":"~/cfg-owner"},{"name":"ghost","config_dir":"~/cfg-missing"}]}\n' \
+    > "$HOME/.claude/accounts.json"
+}
+
+@test "cloud: the send is ROUTED to the declared owning account" {
+  write_accounts
+  declare_cloud_acct session_01OWNED owner
+  run "$NOTIFY" --cloud session_01OWNED "hi"
+  echo "$output" | grep -q "routing to owning account 'owner'" || false
+  echo "$output" | grep -q "cfg-owner" || false
+}
+
+# THE THIRD STATE. A declaration made before the account field existed must not be GUESSED at —
+# "assume the current account" is precisely what manufactures the misleading error.
+@test "cloud: a declaration with NO account WARNS and names the fix — it never guesses" {
+  write_accounts
+  declare_cloud_acct session_01NOACCT
+  run "$NOTIFY" --cloud session_01NOACCT "hi"
+  echo "$output" | grep -q 'NO owning account' || false
+  echo "$output" | grep -q 'reads as a dead session and is NOT one' || false
+  echo "$output" | grep -q 'cc-cloud declare .* --account' || false
+  # It still SENDS — refusing would strand every declaration made before the field existed.
+  ! echo "$output" | grep -q 'routing to owning account' || false
+}
+
+@test "cloud: an account with no usable config dir REFUSES rather than sending from the wrong one" {
+  write_accounts
+  declare_cloud_acct session_01GHOST ghost      # config_dir points at a directory that does not exist
+  run "$NOTIFY" --cloud session_01GHOST "hi"
+  [ "$status" -eq 5 ] || false
+  echo "$output" | grep -q "indistinguishable from a dead session" || false
+}
+
+@test "cloud: cc-cloud records the owning account, and list --json exposes it" {
+  declare_cloud_acct session_01FIELD owner
+  grep -q '^account=owner$' "$CC_CLOUD_STATE/session_01FIELD.decl" || false
+  run "$REPO/bin/cc-cloud" list --json
+  echo "$output" | grep -q '"account":"owner"' || false
+}
