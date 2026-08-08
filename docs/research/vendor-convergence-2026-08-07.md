@@ -8,7 +8,17 @@ building on the same artifact, and the same capabilities keep appearing on both 
 That reads two ways: a power user anticipating the roadmap, or a power user rebuilding what already
 shipped. We tested six of our own priority claims against the changelog. It is neither.
 
-## 1. Behind on mechanisms — four of six claims refuted
+> **Revised 2026-08-08.** The first version of this note refuted the research-fan-out claim. That was
+> wrong twice over, and both errors were mine as author. (1) I dated our side from git (`2026-06-06`)
+> without sweeping `~/Desktop`, where a 10-file, 213 KB corpus — including a 37 KB, 24-citation
+> evidence document — has sat since **2026-05-24**, four days *before* Dynamic Workflows shipped.
+> (2) I used Anthropic's cookbook *sizing ladder* to defeat a claim about *role differentiation*;
+> `research_lead_agent.md` assigns subagents different **topics**, never different **roles**, and
+> contains no adversarial, verification or red-team slot at all. §1 and §3 below are corrected.
+> The governing thought is unchanged — if anything the order-not-precedence reading is stronger,
+> since the two parties now land four days apart on the same idea.
+
+## 1. Behind on mechanisms — three of six claims refuted
 
 Claude Code's first npm publish is `0.2.6`, **2025-02-24**. This repository's first commit is
 `aa391e46`, **2026-03-24** — thirteen months later, and that commit already contained four agents,
@@ -22,10 +32,11 @@ nine commands, a status line and twenty-two hooks. It was an adoption layer from
 | Task management + dependencies | `2.1.16` 2026-01-22 | 2026-07-18 | −6 months |
 | File-based auto-memory | `2.1.59` 2026-02-25 | 2026-06-06 | −3.4 months |
 | `--worktree` flag | `2.1.49` 2026-02-19 | *never adopted* | 33 days before this repo existed |
-| Dynamic workflows | `2.1.154` 2026-05-28 | 2026-06-06 | −9 days |
+| Subagent count scaling with complexity | cookbook ladder, ≤ Jun 2025 | 2026-05-24 | −11 months |
+| Adversarial-role research team | `2.1.154` 2026-05-28 | 2026-05-24 | **+4 days — see §3** |
 | Peer session messaging | `2.1.224` 2026-08-07 | 2026-07-10 | **+28 days — see §3** |
 
-The two examples we believed in most both invert.
+One example we believed in inverts. One splits.
 
 **The status line.** We thought the fields for an accurate context percentage did not exist and were
 added silently months later. They were already there — `current_usage` 2025-12-15, `used_percentage`
@@ -33,12 +44,15 @@ at `2.1.6`, 2026-01-13 — both present in the very `2.1.114` binary (2026-04-17
 them, and unread here until 2026-07-14. A consumption gap of our own making. (`2.1.114` is also a
 single-file executable with no `cli.js`, so the introspection we remember cannot have happened.)
 
-**Research fan-out.** Nothing in 1,984 commits records a "fifty subagents" episode. The 50+ figure is
-*Anthropic's own* published failure mode, 2025-06-13 — inherited, not observed.
+**Research fan-out splits in two, and only one half is inherited.** *Scaling agent count with problem
+size* was already Anthropic's published ladder — `research_lead_agent.md`: "Simple queries: 1 subagent
+· Standard: 2-3 · Medium: 3-5 · High complexity: 5-10 (maximum 20)" — and our own evidence document
+quotes it, concluding our 10-30 default sat in their **pre-pruning** regime. That sub-claim is theirs
+by eleven months. *Differentiating the roles* is not: see §3.
 
 **The denominator matters.** ~316 live artifacts across ~60–100 subsystems, of which roughly six have
-a vendor counterpart *at all*. One survivor from six tested is the base rate for parallel obvious
-needs; four hits without that denominator is selection bias.
+a vendor counterpart *at all*. Two survivors from six tested is close to the base rate for parallel
+obvious needs; hits published without that denominator are selection bias.
 
 ## 2. Level on sequence — each fix manufactures the next bottleneck
 
@@ -97,12 +111,24 @@ Five things still have no counterpart as of `2.1.225`, today:
   (2026-04-17); Anthropic added a *warning* at `2.1.223`, 2026-08-05, and was still fixing the silent
   demotion at `2.1.224`, 2026-08-07. A hundred and ten days, and we deny where they warn.
 
-**Peer messaging is the honest edge case, and it is undecidable.** Ours: registry and ping 2026-07-10,
-mail 2026-07-20; theirs `2.1.224`, 2026-08-07 — 28 and 18 days later. But their changelog names
-"cross-session messaging" *under repair* at `2.1.162` (2026-06-03) and `2.1.166` (2026-06-05), five weeks
-before our build, and whether those lines mean peer sessions or teammate mailboxes cannot be settled from
-public artifacts. The publishable claim is **built independently inside their own development window** —
-not "first". Both designs landed on the same shape regardless: a per-session box plus an on-disk registry,
+**And a sixth that was contested for four days: a research team that verifies against its own output.**
+Anthropic always let you *scale* searchers; until Dynamic Workflows it never shipped a team any of whose
+members attack the team's findings. `research_lead_agent.md` is explicit — subagents get different
+**topics**, never different **roles**, and *"no adversarial, verification, or red-team roles exist …
+the synthesis responsibility rests entirely with the lead."* Across all 481 versions only four changelog
+lines mention adversarial/critic/judge/verifier/refute at all, and the sole pre-`2.1.154` one is a
+guardrail verifier attached to a hook (`2.1.118`, 2026-04-22), not a research role; Anthropic's own
+`/deep-research` grew a verifier stage only at `2.1.196`, 2026-06-29. Our mandatory 15–20% adversarial
+floor across four distinct brief types dates to **2026-05-24**; Dynamic Workflows' adversarial-verify,
+judge-panel and completeness-critic patterns to **2026-05-28**. Four days, and neither borrowed the
+other's vocabulary — zero shared distinctive terms in either direction.
+
+**Peer messaging is the clearest lead, and the vendor dates it themselves.** Ours: registry and ping
+2026-07-10, mail 2026-07-20; theirs `2.1.224`, 2026-08-07 — 28 and 18 days later. Their changelog does
+name "cross-session messaging" under repair at `2.1.162`/`2.1.166` (2026-06-03/05), but that is teammate
+mailbox scope on a different transport, and their own docs settle it: *"Cross-session messaging requires
+Claude Code v2.1.224 or later"*, with `/list-agents` as the test for whether a session has the feature at
+all. Both designs landed on the same shape anyway: a per-session box plus an on-disk registry,
 plain-text-only payloads, delivery at safe tool boundaries, sender-side loop damping.
 
 ---
