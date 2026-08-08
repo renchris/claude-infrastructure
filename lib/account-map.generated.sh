@@ -24,6 +24,22 @@ cc_acct_dir_for_name() {
   esac
 }
 
+# account name -> LAUNCHER command name (the launcher field of accounts.json). The opposite
+# direction from cc_acct_dir_for_name, which merely ACCEPTS a launcher as a key: a caller
+# that holds an account and must COMPOSE a launch line needs the command name itself, and
+# the only place that name is declared is accounts.json. Returns 1 on an unknown account
+# rather than guessing, so a caller under set -e fails loud instead of firing a command the
+# shell does not define.
+cc_acct_launcher_for_name() {
+  case "$1" in
+    next) echo "claude" ;;
+    next4) echo "claude4" ;;
+    next3) echo "claude3" ;;
+    next2) echo "claude2" ;;
+    *) return 1 ;;
+  esac
+}
+
 # config-dir basename (or a declared alias, e.g. the primary account's mirror dir) -> name.
 cc_acct_name_for_dir_basename() {
   case "$1" in

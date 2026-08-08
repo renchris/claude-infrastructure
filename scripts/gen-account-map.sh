@@ -78,6 +78,23 @@ N="$(jq '.accounts | length' "$ACCOUNTS_JSON")"
   echo '  esac'
   echo '}'
   echo
+  echo '# account name -> LAUNCHER command name (the launcher field of accounts.json). The opposite'
+  echo '# direction from cc_acct_dir_for_name, which merely ACCEPTS a launcher as a key: a caller'
+  echo '# that holds an account and must COMPOSE a launch line needs the command name itself, and'
+  echo '# the only place that name is declared is accounts.json. Returns 1 on an unknown account'
+  echo '# rather than guessing, so a caller under set -e fails loud instead of firing a command the'
+  echo '# shell does not define.'
+  echo 'cc_acct_launcher_for_name() {'
+  echo '  case "$1" in'
+  jq -c '.accounts[]' "$ACCOUNTS_JSON" | while IFS= read -r row; do
+    name="$(jq -r '.name' <<<"$row")"
+    launcher="$(jq -r '.launcher' <<<"$row")"
+    printf '    %s) echo "%s" ;;\n' "$name" "$launcher"
+  done
+  echo '    *) return 1 ;;'
+  echo '  esac'
+  echo '}'
+  echo
   echo '# config-dir basename (or a declared alias, e.g. the primary account'"'"'s mirror dir) -> name.'
   echo 'cc_acct_name_for_dir_basename() {'
   echo '  case "$1" in'
