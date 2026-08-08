@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# cc-git-identity-gate — installed by scripts/git-identity-assert.sh (this marker is how install
+# recognises its own copy, so it can upgrade ours and refuse to clobber a foreign hook).
+# pre-push — THE guarantee. Nothing unattributable reaches github.com/<owner> through this remote.
+#
+# WHY THIS EXISTS AND pre-commit DOES NOT SUFFICE. pre-commit gates commit CREATION, and four of
+# the paths that put commits on a branch never create them through `git commit`. Measured on
+# git 2.54.0, 2026-08-08, with the pre-commit gate installed, executable, in scope and working:
+#
+#     git rebase <base>        pre-commit DOES NOT RUN — replayed commits keep their author
+#     git cherry-pick          DOES NOT RUN — author preserved
+#     git merge / git pull     DOES NOT RUN for the merge commit
+#     git am <patch>           DOES NOT RUN — author taken from the From: header
+#     git commit-tree          plumbing, no hooks at all
+#     --no-verify / -n         opt-out by design
+#
+# That is not a theoretical list. `scripts/ship-land.sh` runs `git rebase origin/main` immediately
+# before `git push HEAD:main` on EVERY land, so the land path itself is a replay — the one route
+# every commit must take was the one route pre-commit could not see. At the time this was written
+# ~66 mis-authored commits were already sitting on ~33 local branches, staged behind exactly that.
+#
+# pre-push is the only chokepoint that sees what actually reaches the remote, and it is universal:
+# however a commit came to exist — rebase, cherry-pick, merge, am, plumbing, or a --no-verify
+# commit made before this hook existed — it must pass through here to become visible on GitHub.
+#
+# BOTH FIELDS. A commit carries an author AND a committer, and GitHub renders both. A rebase
+# rewrites the committer while preserving the author, so an author-only check reads clean on a
+# commit whose committer line is `t <t@e.com>`. Measured: 95 of 2022 commits on origin/main are
+# unattributable, and 2 of those are author-clean/committer-bad — invisible to an author-only scan.
+#
+# Deletions and the zero sha are pushes with nothing to inspect; they pass. A new branch (remote
+# sha all-zero) is inspected against the remote's other heads, not against the empty set, so
+# pushing a fresh branch cannot smuggle history in unexamined.
+#
+# Scope, exemption and the sanctioned address are IDENTICAL to githooks/pre-commit — deliberately,
+# because two gates over one question that can disagree is worse than one gate.
+#
+# Never bypass with --no-verify. Exit: 0 = allowed · 1 = refused.
+set -uo pipefail
+
+WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}"
+WANT_OWNER="${CC_GIT_IDENTITY_OWNER:-renchris}"
+ZERO=0000000000000000000000000000000000000000
+
+remote_url="${2:-}"
+[ -n "$remote_url" ] || remote_url="$(git remote get-url "${1:-origin}" 2>/dev/null || true)"
+
+case "$remote_url" in
+  *github.com/"$WANT_OWNER"/*|*github.com:"$WANT_OWNER"/*) ;;
+  *) exit 0 ;;                       # not the owner's GitHub — out of scope, silent
+esac
+
+exempt="$(git config --local --get cc.identity.exempt 2>/dev/null)"
+[ -n "$exempt" ] && exit 0
+
+# Everything already on the remote is history we cannot change from here; only inspect what this
+# push would ADD. `--not --remotes` excludes commits already known to any remote-tracking ref, so
+# a brand-new branch is measured against what the remote already has rather than against nothing.
+bad=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue           # branch deletion: nothing to inspect
+  if [ "$remote_sha" = "$ZERO" ]; then
+    range="$local_sha --not --remotes"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  # %H|%ae|%ce — both identity fields, because a rebase rewrites the committer and keeps the author.
+  # shellcheck disable=SC2086
+  while IFS='|' read -r sha ae ce; do
+    [ -n "$sha" ] || continue
+    if [ "$ae" != "$WANT_EMAIL" ] || [ "$ce" != "$WANT_EMAIL" ]; then
+      bad="$bad
+  ${sha:0:9}  author=$ae  committer=$ce"
+    fi
+  done <<EOF
+$(git rev-list $range --format='%H|%ae|%ce' 2>/dev/null | grep -v '^commit ')
+EOF
+done
+
+[ -n "$bad" ] || exit 0
+
+n="$(printf '%s' "$bad" | grep -c '^  ')"
+{
+  echo "pre-push: BLOCKED — $n commit(s) in this push would be UNATTRIBUTABLE on GitHub."
+  echo
+  printf '%s\n' "$bad" | head -20
+  [ "$n" -gt 20 ] && echo "  … and $((n - 20)) more"
+  echo
+  echo "    must be : $WANT_EMAIL   (the only address that resolves to @$WANT_OWNER)"
+  echo
+  echo "  These commits were NOT made through 'git commit' with a bad identity — pre-commit would"
+  echo "  have caught that. They were replayed by rebase / cherry-pick / merge / am, or predate the"
+  echo "  gate. Re-author the range, then push again:"
+  echo
+  echo "      git rebase --exec 'git commit --amend --no-edit --reset-author' <base>"
+  echo
+  echo "  Do NOT use --no-verify. A commit pushed under another identity renders as an"
+  echo "  unattributed grey user on GitHub permanently, and only a history rewrite undoes it."
+} >&2
+exit 1

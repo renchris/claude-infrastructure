@@ -87,39 +87,53 @@ do_repair() {
 }
 
 # ── install ───────────────────────────────────────────────────────────────────────────────────
-# Deploys the gate as a SYMLINK into the repo's shared hooks dir. Symlink, not copy, for the same
-# reason ~/bin/claude-accounts is one: a copy drifts silently from its source and nothing notices,
-# which is precisely how .git/hooks/commit-msg came to exist in two hand-placed copies that no
-# install path owned. A linked worktree resolves .git/hooks through the common dir, so ONE link
-# here protects every worktree of the repo (measured: a commit from a linked worktree is refused
-# by the shared hook).
+# Installs pre-commit AND pre-push AND pre-merge-commit as REAL COPIES into the repo's shared
+# hooks dir. A linked worktree resolves .git/hooks through the common dir, so one install protects
+# every worktree of the repo (measured).
 #
-# NEVER CLOBBERS. Four repos on this machine already ship a pre-commit. Overwriting one to install
-# a guard would trade an identity bug for whatever that hook was preventing, so a foreign hook is
-# reported and skipped — an unprotected repo you know about beats a broken one you do not.
+# 🚨 COPIES, NOT SYMLINKS — this was a symlink for six hours and that was a critical bug. A link
+# into the WORKING TREE points at a file that only exists on branches containing it. githooks/
+# landed 2026-08-08, so 384 of 400 local branches lack it; a single `git checkout <older-branch>`
+# or `git bisect` in the shared checkout makes the link dangle, and git fails OPEN on a dangling
+# hook — no warning, no exit code, nothing. One checkout in one directory silently ungated all 207
+# worktrees at once, and CLAUDE.md itself notes the shared checkout "frequently sits on another
+# session's feature branch". A copy is immune to what the tree is currently checked out to.
+#
+# The cost of a copy is drift, and drift is the lesser failure: it is loud on inspection and
+# `install` re-asserts on every deploy, whereas the dangling link was silent and permanent. install
+# rewrites a copy whose content differs, so a repo edit propagates on the next deploy.
+#
+# NEVER CLOBBERS A FOREIGN HOOK. Overwriting one to install a guard would trade an identity bug for
+# whatever that hook was preventing — an unprotected repo you know about beats a broken one you do
+# not. Recognition is by content marker, so our own older copy is upgraded rather than skipped.
+CC_HOOK_MARKER='cc-git-identity-gate'
 do_install() {
-  local repo="${1:-$PWD}" cdir hookdir dest
+  local repo="${1:-$PWD}" cdir hookdir wrote=0 kept=0 skipped=0
   git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die2 "not a git repo: $repo"
   cdir="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
     || die2 "cannot resolve git-common-dir for $repo"
   hookdir="$cdir/hooks"; mkdir -p "$hookdir"
-  dest="$hookdir/pre-commit"
 
-  local src; src="$(cd "$(dirname "$HOOK")" && pwd)/$(basename "$HOOK")"
+  local srcdir; srcdir="$(cd "$(dirname "$HOOK")" && pwd)"
+  local h src dest
+  # pre-merge-commit shares pre-commit's implementation: a merge commit is a commit, and git runs
+  # a DIFFERENT hook name for it, so without this the merge path is ungated by name alone.
+  for h in pre-commit pre-push pre-merge-commit; do
+    case "$h" in pre-merge-commit) src="$srcdir/pre-commit" ;; *) src="$srcdir/$h" ;; esac
+    [ -f "$src" ] || continue
+    dest="$hookdir/$h"
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+      if ! grep -q "$CC_HOOK_MARKER" "$dest" 2>/dev/null; then
+        echo "SKIP-FOREIGN  $repo/$h  (not ours; chain it by hand)"; skipped=$((skipped+1)); continue
+      fi
+      if cmp -s "$src" "$dest"; then kept=$((kept+1)); continue; fi
+    fi
+    cp "$src" "$dest" && chmod +x "$dest" && wrote=$((wrote+1))
+  done
 
-  if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then
-    echo "already   $repo"; return 0
-  fi
-  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
-    echo "SKIP-FOREIGN  $repo  (a non-symlink pre-commit is already installed; chain it by hand)"
-    return 1
-  fi
-  if [ -L "$dest" ]; then
-    echo "SKIP-FOREIGN  $repo  (pre-commit links elsewhere: $(readlink "$dest"))"
-    return 1
-  fi
-  ln -s "$src" "$dest" || return 1
-  echo "installed $repo  ($dest → $src)"
+  [ "$skipped" -gt 0 ] && { echo "partial   $repo  (wrote $wrote, current $kept, foreign $skipped)"; return 1; }
+  [ "$wrote" -eq 0 ] && { echo "already   $repo  ($kept hook(s) current)"; return 0; }
+  echo "installed $repo  ($wrote hook(s) written, $kept current)"
 }
 
 # ── sweep ─────────────────────────────────────────────────────────────────────────────────────
@@ -167,9 +181,19 @@ do_sweep() {
 
     # Is it actually protected, or merely correct by luck today? "ok + unprotected" is the state
     # the whole 3-day leak lived in — a correct identity with nothing holding it there.
-    local hookfile="$cdir/hooks/pre-commit" prot="unprotected"
-    [ -e "$hookfile" ] && prot="guarded"
-    [ "$prot" = unprotected ] && unprot=$((unprot+1))
+    #
+    # pre-PUSH is the one that decides the verdict. pre-commit is early warning; only pre-push sees
+    # what reaches GitHub, because rebase/cherry-pick/merge/am replay commits without ever running
+    # pre-commit and `ship-land.sh` rebases before every push. A repo with pre-commit but no
+    # pre-push reads `partial`, not `guarded` — it is exactly the state that let ~66 mis-authored
+    # commits sit staged behind a gate that could not see them.
+    local prot="unprotected"
+    if [ -e "$cdir/hooks/pre-push" ]; then
+      prot="guarded"; [ -e "$cdir/hooks/pre-commit" ] || prot="push-only"
+    elif [ -e "$cdir/hooks/pre-commit" ]; then
+      prot="partial"                              # commit-time only — replays walk around it
+    fi
+    [ "$prot" = guarded ] || unprot=$((unprot+1))
 
     case "$out" in
       exempt*) exempted=$((exempted+1)); printf '  %-9s %-11s %s\n' "exempt" "$prot" "$repo"
