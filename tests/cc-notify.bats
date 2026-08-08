@@ -12,6 +12,13 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   NOTIFY="$REPO/bin/cc-notify"
+  # Fixture $HOME FILE-WIDE (2026-08-08, landed with the --cloud arm). Five tests below already did
+  # this per-test, which is precisely the shape the hermeticity ratchet names as insufficient: it
+  # leaves every OTHER test resolving cc-notify's $HOME-rooted defaults — the mailbox, the roles dir,
+  # the comms-alarm store, and now the cc-cloud declaration store — against the operator's live ~/.
+  # The per-test lines stay where they are (harmless, and they document the intent at the tests that
+  # most depend on it); this makes the property hold for the file.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   export IT2_LOG="$BATS_TEST_TMPDIR/it2.log"
@@ -44,6 +51,47 @@ exit 0
 SH
   chmod +x "$STUB"
   export IT2_BIN="$STUB"
+
+  # ── OFF-BOX (--cloud) fixtures — docs/plans/CLOUD_OBSERVABILITY.md §9.2 ─────────────────────────
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloud"
+  # The REAL bin/cc-cloud, deliberately NOT a stub: the whole first step of §9.2 is a join against
+  # cc-cloud's declaration store (declared AND not retired), and a stub would test the stub. The
+  # store itself is fixtured above, so this touches nothing live.
+  export CC_CLOUD_BIN="$REPO/bin/cc-cloud"
+
+  # `claude` STUB. The real binary would spend the operator's quota AND fire a message at a live
+  # session, so no test in this file may ever reach it. Its answer is file-driven (out/err/rc under
+  # $STUB_DIR) so a test can pose ANY of the API's answers without re-writing the stub.
+  export STUB_DIR="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB_DIR"
+  export CLOUD_LOG="$BATS_TEST_TMPDIR/claude.log"
+  CLAUDE_STUB="$BATS_TEST_TMPDIR/claude"
+  cat > "$CLAUDE_STUB" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$CLOUD_LOG"
+[ -f "$STUB_DIR/out" ] && cat "$STUB_DIR/out"
+[ -f "$STUB_DIR/err" ] && cat "$STUB_DIR/err" >&2
+exit "$(cat "$STUB_DIR/rc" 2>/dev/null || echo 0)"
+SH
+  chmod +x "$CLAUDE_STUB"
+  export CC_CLAUDE_BIN="$CLAUDE_STUB"
+  # The default answer is the one MEASURED against a live session on 2026-08-08 (no pty, stdin
+  # closed) — the fixture is the observed artifact, not an invented shape.
+  printf '{"ok":true,"session_id":"session_01CHQoFxvsoDQ9KgJFSLrKno","url":"https://claude.ai/code/session_01CHQoFxvsoDQ9KgJFSLrKno"}\n' > "$STUB_DIR/out"
+
+  CLOUD_ID="session_01CHQoFxvsoDQ9KgJFSLrKno"
+
+  # Answer poser: cloud_answer <stdout> [stderr] [rc]
+  cloud_answer() {
+    printf '%s\n' "$1" > "$STUB_DIR/out"
+    printf '%s' "${2:-}" > "$STUB_DIR/err"
+    printf '%s' "${3:-0}" > "$STUB_DIR/rc"
+  }
+  # A declaration, made WITHOUT touching the network: --repo points at a non-repo, so cc-cloud's
+  # `git ls-remote` baseline probe fails fast and the declaration is still written (that is its
+  # documented behaviour — an unmeasured baseline beats an unobservable session).
+  declare_cloud() { "$REPO/bin/cc-cloud" declare --id "${1:-$CLOUD_ID}" --branch cf-wave-c --repo "$BATS_TEST_TMPDIR/not-a-repo" >/dev/null 2>&1; }
+  retire_cloud()  { "$REPO/bin/cc-cloud" retire  --id "${1:-$CLOUD_ID}" >/dev/null 2>&1; }
+  cloud_calls()   { if [ -f "$CLOUD_LOG" ]; then grep -c . "$CLOUD_LOG"; else echo 0; fi; }
 }
 
 sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 0; fi; }
@@ -805,4 +853,181 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [[ "$output" == *"the desk is the standing triager"* ]] || false
   [[ "$output" != *"NO proven reader"* ]] || false
   grep -q "\[for:$D3\] live desk page" "$CC_MAILBOX_DIR/$UUID.md"
+}
+
+# ══ OFF-BOX (--cloud) — CLOUD_OBSERVABILITY.md §9.2, the SEND-side seam ════════════════════════════
+# One test per arm of §9.2's three steps, plus the two disciplines the spec is emphatic about: the
+# refusal that keeps an uncheckable claim from ever being made (step 1), and the --receipt UNKNOWN
+# that keeps a QUEUE ACK from being read as a READ RECEIPT. The `claude` binary is a stub in every
+# one of them — the real one spends the operator's quota and messages a live session.
+
+@test "--cloud: an UNDECLARED id is REFUSED with exit 3, and the transport is never even called" {
+  run "$NOTIFY" --cloud "$CLOUD_ID" "hello off-box"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"verdict=cloud-unobservable"* ]] || false
+  [[ "$output" == *"reason=undeclared"* ]] || false
+  [[ "$output" == *"could never be checked"* ]] || false
+  # The load-bearing half: refusing AFTER sending would still have made the uncheckable claim.
+  [ "$(cloud_calls)" -eq 0 ]
+}
+
+@test "--cloud: DECLARED + {ok:true} → exit 0, verdict=cloud-queued, sidecar records the URL" {
+  declare_cloud
+  run "$NOTIFY" --cloud "$CLOUD_ID" "hello off-box"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=cloud-queued"* ]] || false
+  [[ "$output" == *"queued=1"* ]] || false
+  [[ "$output" == *"recorded=1"* ]] || false
+  # §9.2 step 2, verbatim: the transport is `claude -p <msg> --cloud <id> --output-format json`.
+  grep -qF -- "-p hello off-box --cloud $CLOUD_ID --output-format json" "$CLOUD_LOG"
+  # §9.2 step 3: the send is recorded in the declaration's sidecar, WITH the returned url — the only
+  # handle by which anyone can later go and look at what the session did with the message.
+  [ -f "$CC_CLOUD_STATE/$CLOUD_ID.sends" ]
+  grep -qF '"url":"https://claude.ai/code/session_01CHQoFxvsoDQ9KgJFSLrKno"' "$CC_CLOUD_STATE/$CLOUD_ID.sends"
+  grep -qF '"msg":"hello off-box"' "$CC_CLOUD_STATE/$CLOUD_ID.sends"
+  # QUEUED, never "delivered": the word this tool reserves for a message a live reader will drain is
+  # not available for a queue ack.
+  [[ "$output" != *"delivered to inbox"* ]] || false
+}
+
+@test "--cloud: {ok:false} exits non-zero carrying the API's OWN reason, never a bare failure" {
+  declare_cloud
+  cloud_answer '{"ok":false,"error":"session has already terminated"}'
+  run "$NOTIFY" --cloud "$CLOUD_ID" "too late"
+  [ "$status" -eq 8 ]
+  [[ "$output" == *"verdict=cloud-refused"* ]] || false
+  [[ "$output" == *"session has already terminated"* ]] || false
+  [[ "$output" == *"NOT queued"* ]] || false
+  # A refused send must leave no record claiming otherwise.
+  [ ! -f "$CC_CLOUD_STATE/$CLOUD_ID.sends" ]
+}
+
+@test "--cloud --receipt: UNKNOWN (rc 7) — and the assertion that matters is that it is NOT 0" {
+  declare_cloud
+  run "$NOTIFY" --cloud "$CLOUD_ID" --receipt 1
+  # THE invariant. {ok:true} is a QUEUE ack; there is no <uuid>.seen/.acked cursor off-box, so no
+  # configuration of this box could make the answer "read". 0 here would rebuild exactly the false
+  # confidence this file's DELIVERED-IS-NOT-READ apparatus was paid for.
+  [ "$status" -ne 0 ]
+  # …and distinguishable from the LOCAL "not read" (rc 1), which is a fact that was measured.
+  [ "$status" -ne 1 ]
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"verdict=cloud-receipt-unknown"* ]] || false
+  [[ "$output" == *"UNKNOWN"* ]] || false
+  [[ "$output" != *"READ —"* ]] || false
+}
+
+@test "--cloud --receipt: UNKNOWN does not depend on the declaration (an undeclared id is not 0 either)" {
+  run "$NOTIFY" --cloud "$CLOUD_ID" --receipt 1
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"verdict=cloud-receipt-unknown"* ]] || false
+}
+
+@test "--cloud: a RETIRED declaration is NOT off-box → refused, exit 3" {
+  declare_cloud
+  retire_cloud
+  run "$NOTIFY" --cloud "$CLOUD_ID" "after retirement"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"verdict=cloud-unobservable"* ]] || false
+  [ "$(cloud_calls)" -eq 0 ]
+}
+
+@test "--cloud: a claude binary with NO --cloud flag fails with a NAMED reason (exit 4), never generic" {
+  declare_cloud
+  # 2.1.114 (the stable pin) has no --cloud at all; 2.1.220 has it present-but-hidden. `--help`
+  # cannot tell them apart, so the answer comes from the real call's own refusal.
+  cloud_answer '' 'error: unknown option --cloud' 1
+  run "$NOTIFY" --cloud "$CLOUD_ID" "to an old binary"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"verdict=cloud-transport-unavailable"* ]] || false
+  [[ "$output" == *"reason=flag-unsupported"* ]] || false
+  [[ "$output" == *"does NOT support --cloud"* ]] || false
+  [ ! -f "$CC_CLOUD_STATE/$CLOUD_ID.sends" ]
+}
+
+@test "--cloud: a SEMANTIC refusal is not laundered into 'your binary is too old'" {
+  declare_cloud
+  # The discriminator: this refusal does NOT name the option. Reporting it as a version fault would
+  # send the caller upgrading a binary that was fine.
+  cloud_answer '{"ok":false,"error":"unknown session id"}' '' 1
+  run "$NOTIFY" --cloud "$CLOUD_ID" "who?"
+  [ "$status" -eq 8 ]
+  [[ "$output" == *"unknown session id"* ]] || false
+  [[ "$output" != *"does NOT support --cloud"* ]] || false
+}
+
+@test "--cloud: an unparseable answer is a REFUSAL, never a success" {
+  declare_cloud
+  cloud_answer 'Bad gateway' '' 1
+  run "$NOTIFY" --cloud "$CLOUD_ID" "into the fog"
+  [ "$status" -eq 8 ]
+  [[ "$output" == *"verdict=cloud-refused"* ]] || false
+  [[ "$output" == *"Bad gateway"* ]] || false
+}
+
+@test "--cloud: CC_CLOUD_BIN set-EMPTY genuinely disables the lookup and FAILS CLOSED (exit 3)" {
+  declare_cloud
+  # The seam contract: `${VAR+set}` honors set-including-empty. A `${VAR:-}` implementation cannot
+  # tell unset from set-empty and would silently fall back to PATH — i.e. the seam could not turn
+  # the thing OFF, which is the property being asserted here.
+  export CC_CLOUD_BIN=
+  run "$NOTIFY" --cloud "$CLOUD_ID" "no oracle"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"reason=cc-cloud-unavailable"* ]] || false
+  [ "$(cloud_calls)" -eq 0 ]
+}
+
+@test "--cloud: CC_CLAUDE_BIN set-EMPTY is a TRANSPORT outage (exit 4), not a bad target (3)" {
+  declare_cloud
+  export CC_CLAUDE_BIN=
+  run "$NOTIFY" --cloud "$CLOUD_ID" "no transport"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"reason=no-claude-binary"* ]] || false
+  [[ "$output" == *"UNVERIFIED, not invalid"* ]] || false
+}
+
+@test "--cloud: refuses to be combined with a pane target — they are different address KINDS" {
+  declare_cloud
+  run "$NOTIFY" --cloud "$CLOUD_ID" --role desk "which one?"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"different address KINDS"* ]] || false
+  [ "$(cloud_calls)" -eq 0 ]
+}
+
+@test "--cloud: --help documents the flag (usage() prints a fixed line range — a stale range hides it)" {
+  run "$NOTIFY" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--cloud"* ]] || false
+  [[ "$output" == *"exits 7"* ]] || false
+}
+
+@test "REGRESSION CONTROL: with the cloud arm present, every LOCAL path is byte-for-byte unchanged" {
+  # Without this you cannot tell a working feature from a broken resolver: the cloud dispatch sits
+  # AHEAD of role resolution, the forward chain and the liveness classification, so a mistake there
+  # is a mistake in every send this tool has ever made. One assertion per local verdict.
+  declare_cloud                                   # a declared cloud id exists — and is irrelevant here
+
+  run "$NOTIFY" peer "local name"                 # live registered name → delivered
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+
+  run "$NOTIFY" "$UUID" "local uuid"              # raw uuid passthrough → delivered
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"delivered to inbox"* ]] || false
+
+  run "$NOTIFY" "DDDDDDDD-9999-8888-7777-666666666666" "local dead"   # not-live → mailbox only
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"mailbox only"* ]] || false
+
+  run "$NOTIFY" nosuchsession "local unknown"     # unknown name → 3, unchanged
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"verdict=unresolvable"* ]] || false
+
+  run "$NOTIFY" --receipt peer 1                  # the LOCAL receipt still measures, rc 0/1 not 7
+  [ "$status" -ne 7 ]
+  [[ "$output" == *"receipt="* ]] || false
+
+  grep -q '\] local name' "$CC_MAILBOX_DIR/$UUID.md"
+  [ "$(sent_count)" -eq 0 ]                       # the anti-keystroke invariant still holds
+  [ "$(cloud_calls)" -eq 0 ]                      # and no local send ever reached the cloud transport
 }
