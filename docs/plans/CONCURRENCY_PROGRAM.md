@@ -510,6 +510,61 @@ session lifecycle; a session switcher saves nothing if it is a view over the sam
 So: **route repo-only work off-box.** Entitlement for remote/cloud execution is per-account and
 gated — check `/accounts`, never assume. Viability is split (census §5): repo-only work ✅ · visual
 design ❌ (needs the local browser + dev server) · anything about this box ❌ · branch banking ⚠️
+
+#### S5-CEILING · The off-box ceiling, measured 2026-08-08 — and it is NOT the number this section expected
+
+**Verdict: the ceiling is UNMEASURED, and the blocker is not quota. It is create RELIABILITY.**
+No number is published here, deliberately: §7's discipline is a measurement with its command, and
+"~15 sessions" is folklore precisely because a number once got published without one.
+
+**What WAS proven — and it is the load-bearing half.** A cloud session can be created with **no
+human in the loop**: `session_01VhevKS8tr3aRmULXtfW2xj`, created from a script, captured, declared,
+and confirmed observable. Two conditions, both non-obvious:
+
+- **The create requires a PTY.** Measured: `Error: --cloud requires an interactive terminal.
+  Non-interactive invocations (piped stdout, …) run locally and would silently ignore --cloud.` A
+  probe captures stdout by construction, so the naive form is refused on its own capture. `script -q
+  /dev/null <cmd>` satisfies it and still allows capture. ⚠️ **Do not look for a flag to suppress
+  this check**: the refusal says the run would otherwise *"silently ignore --cloud"* and execute
+  **locally** — a fleet that believes it is off-box while every session runs on this machine, which
+  is the exact inverse of what this section is for. The check is a guard against a far worse
+  failure than the one it causes.
+- **The SEND arm needs no pty** (§6.3, stdin closed, `{ok:true}`). Create and send are gated
+  differently; conflating them loses one of them a gate it needs.
+
+**What BLOCKED the ceiling measurement.** The create is **intermittent**: 1 of 4 attempts succeeded
+inside a ~15-minute window on `next3`, all from the same box. The three failures are all
+`Error: Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on
+https://claude.ai/code` — i.e. the CLI fell back to **bundle mode**, which §6.5 of
+`CLOUD_OBSERVABILITY.md` establishes is what happens *when the GitHub link is unavailable*. So a
+ramp cannot distinguish "the account hit its limit" from "this attempt fell back to bundle mode",
+and a ceiling read off that ramp would be measuring flakiness.
+
+⚠️ **An unresolved confound, recorded rather than resolved, because resolving it costs quota per
+data point.** The one success ran with `CLAUDE_CONFIG_DIR` **inherited**; the three failures ran
+with it **re-exported through `env` at the identical value**. That correlation is perfect and it is
+also n=1 on the success side, against a failure mode whose own text (`Socket is closed after 3
+attempts`) reads as a transport flake. **Both readings fit every observation**, and picking one
+would be a wrong cause corroborated by a true metric. Next measurement should hold `env` fixed and
+re-run the same invocation several times, before anything is concluded about the environment.
+
+**Two refuted hypotheses, recorded so they are not re-run:**
+
+| Hypothesis | Test | Result |
+| --- | --- | --- |
+| A linked git **worktree** breaks the CLI's repo/GitHub detection (its `.git` is a file, not a dir) | same create from the main checkout | **REFUTED** — identical failure |
+| The marker set tells you which accounts can create | `next2.linked` exists; its create fell back to bundle mode | **REFUTED** — the marker is a progress log, not a capability |
+
+**Re-measure with** (both arms; the control first, and never skip it):
+
+```
+scripts/cloud-ceiling-probe.sh --control --confirm          # validate the classifier, free
+scripts/cloud-ceiling-probe.sh --account <acct> --max N --confirm
+```
+
+The control needs an account at ≥99% weekly — a **known** quota refusal — and it refuses to pass
+without one. On 2026-08-08 the only such account (`next2`) could not create at all, so the
+classifier's quota patterns remain **UNVALIDATED**; that alone forbids publishing a ceiling.
 (the 199 branches exist only here, which is the whole problem).
 
 Cheap local wins meanwhile: **consolidate to one terminal emulator** (kitty *and* iTerm2 are both
