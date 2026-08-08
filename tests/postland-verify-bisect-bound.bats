@@ -502,7 +502,7 @@ stub_bats_at_head() {
   # The floor is not merely unmeasured here, it is INAPPLICABLE: the suite cannot have been red at a
   # commit where the file does not exist, so the assumption B13 guards has nothing to be wrong about.
   # Settled by `git cat-file -e`, so it costs no run at all. (The runner's rc could not decide it: it
-  # returns 125 for an absent file AND for a /Users/chrisren/.claude/bin/cc-bats that errored, and those must not share a verdict.)
+  # returns 125 for an absent file AND for a bats that errored, and those must not share a verdict.)
   mk_history 5 2 tests/late.bats   # the failing FILE is born at c2, the culprit — absent at GOOD
   stub_bats_at_head marker
 
