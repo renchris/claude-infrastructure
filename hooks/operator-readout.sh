@@ -856,7 +856,13 @@ if [ "${CC_CLOSE_CERT:-1}" != "0" ]; then
     # shellcheck source=lib/session-writes.sh
     # shellcheck disable=SC1091
     if . "$_swlib" 2>/dev/null; then
-      session_wrote_files "$TP"; CERT_WROTE=$?
+      # TURN-scoped and CWD-scoped, both deliberately (lib § TWO SCOPES). The session-scoped
+      # boolean that used to sit here answered a wider question than the one asked: after a
+      # session's first edit it read rc 0 on every later Stop, so a purely conversational close
+      # still certified — E0 is per-TURN, and the oracle was per-SESSION. It also certified on
+      # writes that landed in another tree entirely. An older lib without this function leaves
+      # CERT_WROTE=127, which matches no arm below and therefore withholds — the safe direction.
+      session_wrote_here_this_turn "$TP" "$CWD"; CERT_WROTE=$?
     fi
   fi
 fi
