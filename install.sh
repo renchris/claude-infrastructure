@@ -286,39 +286,57 @@ done
 # noticed the loss of. That is the same class this file already documents twice above — a guard
 # that is real on exactly one machine — which is why githooks/ is now tracked.
 #
-# TWO DESTINATIONS, DELIBERATELY DIFFERENT:
-#   * this repo's shared .git/hooks → SYMLINK, so a repo edit is live with no second copy to
-#     drift (the ~/bin/claude-accounts rule). ONE link covers all ~200 linked worktrees, because
-#     a linked worktree resolves hooks through the common dir — measured 2026-08-08.
-#   * ~/.git-template/hooks → real COPIES. A template is consumed by `git init`/`git clone`,
-#     possibly on a machine where this checkout does not exist; a symlink would seed new repos
-#     with a dangling link, which git treats as "no hook" — fail-open, and silently.
+# 🚨 COPIES EVERYWHERE, NEVER SYMLINKS — this shipped as a symlink for six hours and that was a
+# critical bug. A link into the WORKING TREE points at a file that exists only on branches
+# containing it. githooks/ landed 2026-08-08, so 384 of 400 local branches lack it, and a single
+# `git checkout <older-branch>` or `git bisect` in the shared checkout dangles the link. Git fails
+# OPEN on a dangling hook — no warning, no exit code — so one checkout in one directory silently
+# ungated all 207 worktrees at once, and this repo's own CLAUDE.md notes the shared checkout
+# "frequently sits on another session's feature branch". The same argument applies to the template,
+# where a link would additionally point outside any checkout at all.
+#
+# The cost of a copy is drift, and drift is the lesser failure: it is visible on inspection, this
+# loop re-asserts it on every deploy, and scripts/git-identity-assert.sh sweep reports it. The
+# dangling link was silent and permanent.
+#
+# pre-merge-commit is pre-commit's implementation under git's OTHER name for the merge path —
+# without it a `git merge`/`git pull` commit is ungated by hook name alone.
 echo ""
-echo "Git hooks → repo .git/hooks/ (symlink) + $HOME/.git-template/hooks/ (copy)"
-_gh_common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-if [[ -n "$_gh_common" ]]; then
-  ensure_real_dir "$_gh_common/hooks"
+echo "Git hooks → repo .git/hooks/ + $HOME/.git-template/hooks/ (copies, never symlinks)"
+_gh_install() {   # <destdir>
+  local _d="$1" gh base dest
+  ensure_real_dir "$_d"
   for gh in "$REPO_DIR"/githooks/*; do
     [[ -f "$gh" ]] || continue
-    _gh_dest="$_gh_common/hooks/$(basename "$gh")"
-    # Never clobber a foreign hook: replacing one to install ours would trade this bug for
-    # whatever that hook was preventing. Only an absent entry, or a symlink we own, is written.
-    if [[ -e "$_gh_dest" && ! -L "$_gh_dest" ]]; then
-      echo "  ⚠ $_gh_dest exists and is not a symlink — left alone; chain it by hand" >&2
+    base="$(basename "$gh")"
+    dest="$_d/$base"
+    # Never clobber a FOREIGN hook — recognised by our content marker, so our own older copy is
+    # upgraded rather than skipped.
+    if [[ -e "$dest" || -L "$dest" ]] && ! grep -q 'cc-git-identity-gate\|commit-msg — reject' "$dest" 2>/dev/null; then
+      echo "  ⚠ $dest is a foreign hook — left alone; chain it by hand" >&2
+      warnings=$((warnings + 1)); continue
+    fi
+    copy_file "$gh" "$dest"
+  done
+  # pre-merge-commit shares pre-commit's body; git runs it under a different name for merges.
+  if [[ -f "$REPO_DIR/githooks/pre-commit" ]]; then
+    if [[ -e "$_d/pre-merge-commit" || -L "$_d/pre-merge-commit" ]] \
+       && ! grep -q 'cc-git-identity-gate' "$_d/pre-merge-commit" 2>/dev/null; then
+      echo "  ⚠ $_d/pre-merge-commit is a foreign hook — left alone" >&2
       warnings=$((warnings + 1))
     else
-      link_file "$gh" "$_gh_dest"
+      copy_file "$REPO_DIR/githooks/pre-commit" "$_d/pre-merge-commit"
     fi
-  done
+  fi
+}
+_gh_common="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ -n "$_gh_common" ]]; then
+  _gh_install "$_gh_common/hooks"
 else
-  echo "  ⚠ cannot resolve git-common-dir — git hooks NOT installed" >&2
+  echo "  ⚠ cannot resolve git-common-dir — repo git hooks NOT installed" >&2
   warnings=$((warnings + 1))
 fi
-ensure_real_dir "$HOME/.git-template/hooks"
-for gh in "$REPO_DIR"/githooks/*; do
-  [[ -f "$gh" ]] || continue
-  copy_file "$gh" "$HOME/.git-template/hooks/$(basename "$gh")"
-done
+_gh_install "$HOME/.git-template/hooks"
 # init.templateDir is what makes the template reach a new repo at all. Unset, every clone lands
 # unguarded and the copies above are inert decoration.
 if [[ "$(git config --global --get init.templateDir || true)" != "$HOME/.git-template" ]]; then

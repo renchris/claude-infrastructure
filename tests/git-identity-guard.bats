@@ -205,7 +205,129 @@ check() { run "$HOOK" --check "$1"; }
   [[ "$output" == *"NEEDS-HUMAN"* ]]
 }
 
-@test "install never clobbers a foreign pre-commit" {
+# ── pre-push: THE guarantee ───────────────────────────────────────────────────────────────────
+# pre-commit gates commit CREATION. rebase / cherry-pick / merge / am REPLAY commits without ever
+# running it, and ship-land.sh rebases before every push — so the land path itself walked around
+# the gate. These pin the chokepoint that actually sees what reaches the remote.
+
+# push_fixture <name> — a repo whose origin is BOTH a real pushable bare repo AND in scope.
+#
+# The scope test reads the URL of the remote being PUSHED TO, so a fixture pushing to a plain
+# local path is correctly out of scope and every assertion against it passes vacuously — the first
+# version of these tests did exactly that and read GREEN while proving nothing. Putting the bare
+# repo at a path containing `github.com/owner/` makes the URL match the real predicate while
+# staying a genuine local push, so git itself invokes the hook and the e2e wiring is proven.
+push_fixture() {
+  # Two `local`s, not one: a name assigned in a `local` is not reliably visible to a later
+  # assignment in that SAME statement (SC2318), so `r="$D/$n"` there is fragile by construction.
+  local n="${1:?name}"
+  local r="$D/$n" o="$D/gh/github.com/owner/$n.git"
+  mkdir -p "$(dirname "$o")"; git init -q --bare "$o"
+  mkdir -p "$r"; git -C "$r" init -q
+  git -C "$r" remote add origin "$o"
+  git -C "$r" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  git -C "$r" config user.name Good
+  mkdir -p "$r/.git/hooks"
+  cp "$SRC/githooks/pre-push" "$r/.git/hooks/pre-push"; chmod +x "$r/.git/hooks/pre-push"
+  echo base > "$r/f"; git -C "$r" add f; git -C "$r" commit -q -m base
+  echo "$r"
+}
+
+@test "pre-push E2E: git itself invokes the hook and REFUSES the push" {
+  # The wiring proof. Everything else drives the hook directly; this one lets git do it.
+  local r; r="$(push_fixture e2e)"
+  git -C "${r:?repo path required}" push -q origin HEAD:refs/heads/main
+  git -C "${r:?repo path required}" config user.email t@e.com
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m "bad, made with no pre-commit installed"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  run git -C "${r:?repo path required}" push origin HEAD:refs/heads/main
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"UNATTRIBUTABLE"* ]] || false
+}
+
+# run_prepush <repo> <old> <new> — invoke the hook exactly as git does.
+#
+# Git hands pre-push `<remote-name> <remote-url>` in argv and one `<lref> <lsha> <rref> <rsha>`
+# line per ref on stdin, and the URL it passes is the one being PUSHED TO. A fixture that pushes
+# to a local bare repo therefore hands the hook a filesystem path, which is correctly out of scope
+# — the first version of these tests read GREEN for exactly that reason, proving nothing. The
+# end-to-end wiring is covered by the two real-push tests below; these drive the contract.
+run_prepush() {
+  local r="${1:?repo}" old="${2:?old}" new="${3:?new}"
+  run env -C "$r" bash "$SRC/githooks/pre-push" origin "https://github.com/owner/x.git" \
+      <<<"refs/heads/main $new refs/heads/main $old"
+}
+
+@test "pre-push BLOCKS a commit pre-commit never saw" {
+  local r base bad; r="$(push_fixture rp)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m "replayed bad"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  bad="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  run_prepush "$r" "$base" "$bad"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNATTRIBUTABLE"* ]] || false
+}
+
+@test "pre-push control: the SAME range with a clean identity is allowed" {
+  # Without this, the test above cannot distinguish "the gate caught it" from "the gate refuses
+  # everything" — the range, the fixture and the invocation are identical but for the identity.
+  local r base good; r="$(push_fixture rpc)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m "replayed clean"
+  good="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  run_prepush "$r" "$base" "$good"
+  [ "$status" -eq 0 ]
+}
+
+@test "pre-push passes a branch DELETION (nothing to inspect)" {
+  local r base; r="$(push_fixture del)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  run env -C "$r" bash "$SRC/githooks/pre-push" origin "https://github.com/owner/x.git" \
+      <<<"(delete) 0000000000000000000000000000000000000000 refs/heads/main $base"
+  [ "$status" -eq 0 ]
+}
+
+@test "pre-push E2E: a clean range is ALLOWED through a real push" {
+  local r; r="$(push_fixture okp)"
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  git -C "${r:?repo path required}" commit -q -m clean
+  run git -C "${r:?repo path required}" push origin HEAD:refs/heads/main
+  [ "$status" -eq 0 ]
+}
+
+@test "pre-push catches a bad COMMITTER on an author-clean commit" {
+  # A rebase rewrites the committer and preserves the author, so an author-only scan reads clean.
+  # 2 of the 95 bad commits on origin/main are exactly this shape.
+  local r base bad; r="$(push_fixture ce)"
+  base="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  echo x > "$r/g"; git -C "${r:?repo path required}" add g
+  GIT_COMMITTER_EMAIL=t@e.com GIT_COMMITTER_NAME=t \
+    git -C "${r:?repo path required}" commit -q -m "author clean, committer bad"
+  bad="$(git -C "${r:?repo path required}" rev-parse HEAD)"
+  run_prepush "$r" "$base" "$bad"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"committer=t@e.com"* ]] || false
+}
+
+@test "pre-push is inert for a remote that is not the owner's" {
+  local r o; r="$D/np"; o="$D/np-origin.git"
+  git init -q --bare "$o"; mkdir -p "$r"; git -C "$r" init -q
+  git -C "$r" remote add origin "$o"                 # no github.com/owner remote at all
+  git -C "${r:?repo path required}" config user.email t@e.com
+  git -C "${r:?repo path required}" config user.name t
+  mkdir -p "$r/.git/hooks"
+  cp "$SRC/githooks/pre-push" "$r/.git/hooks/pre-push"; chmod +x "$r/.git/hooks/pre-push"
+  echo x > "$r/f"; git -C "$r" add f; git -C "$r" commit -q -m x
+  run git -C "${r:?repo path required}" push origin HEAD:refs/heads/main
+  [ "$status" -eq 0 ]
+}
+
+@test "install never clobbers a foreign hook" {
   local r; r="$(mkrepo inst https://github.com/owner/x.git)"
   mkdir -p "$r/.git/hooks"
   printf '#!/bin/sh\nexit 0\n' > "$r/.git/hooks/pre-commit"
@@ -215,6 +337,20 @@ check() { run "$HOOK" --check "$1"; }
   [[ "$output" == *"SKIP-FOREIGN"* ]] || false
   run cat "$r/.git/hooks/pre-commit"
   [[ "$output" == *"exit 0"* ]]   # the incumbent hook is untouched
+}
+
+@test "install writes COPIES, not symlinks — a checkout must not be able to dangle the gate" {
+  # The symlink form silently ungated 207 worktrees whenever the shared checkout moved to a branch
+  # without githooks/ (384 of 400 branches), because git fails OPEN on a dangling hook. The shape
+  # IS the fix, so the shape is what this asserts.
+  local r; r="$(mkrepo instcopy https://github.com/owner/x.git)"
+  run bash "$ASSERT" install "$r"
+  [ "$status" -eq 0 ]
+  [ -f "$r/.git/hooks/pre-commit" ]
+  [ ! -L "$r/.git/hooks/pre-commit" ]
+  [ -f "$r/.git/hooks/pre-push" ]
+  [ ! -L "$r/.git/hooks/pre-push" ]
+  [ -f "$r/.git/hooks/pre-merge-commit" ]
 }
 
 @test "install is idempotent" {

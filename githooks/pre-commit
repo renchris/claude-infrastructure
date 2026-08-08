@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# cc-git-identity-gate — installed by scripts/git-identity-assert.sh (this marker is how install
+# recognises its own copy, so it can upgrade ours and refuse to clobber a foreign hook).
 # pre-commit — refuse a commit that would be authored by anyone but the operator.
 #
 # WHY THIS EXISTS. On 2026-08-05 a test fixture's identity write escaped into this repo's
@@ -121,8 +123,15 @@ fi
 # The cure is chosen by WHERE the wrong value lives, because the wrong fix is a no-op that reads
 # as a fix: unsetting a local override that does not exist leaves a wrong global untouched, and
 # the next commit is refused identically (memory: work-item-remedy-can-become-forbidden).
+#
+# 🚨 `GIT_AUTHOR_EMAIL` IS NOT EVIDENCE OF AN ENV OVERRIDE IN HOOK MODE. Git resolves the author
+# before running us and EXPORTS it into the hook environment, so the variable is always set and
+# always equals the effective address — testing `-n` alone therefore blamed the environment for
+# every fault, including a plain local-config override, and printed a cure that fixes nothing.
+# The discriminator is whether the env value DIFFERS from what config alone would produce.
 local_email="$(git_ config --local --get user.email 2>/dev/null)"
-if [ -n "${GIT_AUTHOR_EMAIL:-}" ] && [ "${GIT_AUTHOR_EMAIL:-}" != "$WANT_EMAIL" ]; then
+cfg_email="$(git_ config --get user.email 2>/dev/null)"
+if [ -n "${GIT_AUTHOR_EMAIL:-}" ] && [ "${GIT_AUTHOR_EMAIL:-}" != "$cfg_email" ]; then
   cure="unset GIT_AUTHOR_EMAIL GIT_AUTHOR_NAME   # the identity is coming from the ENVIRONMENT"
 elif [ -n "$local_email" ] && [ "$local_email" != "$WANT_EMAIL" ]; then
   cure="git config --local --remove-section user   # drop the local override shadowing your global"
