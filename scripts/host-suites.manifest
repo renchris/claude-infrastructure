@@ -44,8 +44,60 @@
 # tests/deploy-parity.bats now asserts BOTH directions of that split against this manifest, so
 # re-listing it (or deleting the live half) is a named RED rather than a silent regression.
 #
+# DE-LISTED 2026-08-08 — FIVE ENTRIES THAT WERE NEVER HOST SUITES (backlog 22b839c85a52). The
+# section above says admit a file only when its live-layer dependence is the WHOLE file. Five of the
+# six non-wrapper entries had NONE of it: desk-arm-live (8 tests), desk-recycle-durable (9),
+# lr-team-audit (3), session-continue (23), waiting-recycle (108). 151 tests were excluded from the
+# tree verdict AND from the land smoke for a property not one of them has. They are gone from the
+# list below; only tests/deploy-parity-live.bats, whose two tests resolve the real ~/bin and
+# ~/.claude, remains.
+#
+# THE MEASUREMENT, and it is the ONE that can distinguish the two cases. Green in a fresh cell
+# proves nothing here — the bootstrap circle is precisely that a live-layer suite passes while the
+# live layer happens to agree with the tree. So each suite was run in a fresh detached worktree with
+# `HOME` pointed at an EMPTY directory: ~/.claude does not exist. A suite whose subject is the
+# deployed layer CANNOT pass that. All five did, at full count (8/8, 9/9, 3/3, 23/23, 108/108), and
+# identically under the real $HOME. CONTROL, run through the same harness on the same box:
+# tests/deploy-parity-live.bats goes RED on `not ok 1 the real repo passes its own assertion (guards
+# the live host deployment)`. The probe can see the property; the five greens are not vacuous.
+#
+# THIS REPO HAD ALREADY MEASURED IT ONCE, which is why the de-listing is a closure and not a new
+# claim. docs/research/POSTLAND-CELL-BISECT-2026-07-29.md ran "the 6 convicted suites" in a fresh
+# cell three times — C1 (session PATH), C2 (v1 daemon PATH), D1 (at the convicting sha 59f7eb38) —
+# and got 155 ok / 0 not-ok every time. The one not-ok that ever appeared (D2, reused cell) was
+# isolated by a same-minute control to deploy-parity ALONE. So the tree verdict was never red
+# because of these five; it was red because of the one file whose live half now lives in
+# tests/deploy-parity-live.bats. The count in docs/plans/LAND_PIPELINE_V2.md §"failing = exactly the
+# 6 host suites" is the pre-bisect reading, annotated there rather than rewritten.
+#
+# WHAT THE DE-LISTING COST, because it was not free and the bill is the interesting part. These
+# suites did not assert the live layer, but four of them READ ambient inputs, and this list was the
+# only thing keeping that off the critical path of a verdict that AUTO-REVERTS. All were named by
+# the tree's own scripts/test-hermeticity-lint.sh once its grandfather lists were emptied, and all
+# were pinned in the same land, which is what earned the de-listing:
+#   · $HOME unfixtured (rule 1) — desk-arm-live, lr-team-audit, session-continue, waiting-recycle.
+#   · CC_TELEMETRY_DIR unpinned (rule 5) — desk-arm-live, desk-recycle-durable, session-continue.
+#     Its default /tmp/cc-telemetry is ABSOLUTE, so a fixtured $HOME does not redirect it: these
+#     three were reading the operator's LIVE session telemetry.
+#   · CC_FIRE_CAPACITY_GATE unpinned (rule 2) — waiting-recycle. Inert today (every fire is stubbed
+#     through CC_WR_HANDOFF_FIRE), pinned anyway: the ratchet's job is the gap between inert and
+#     cannot.
+# The eight matching grandfather lines are DELETED in the same diff — the lint reds if you pin a
+# seam and leave its line, which is the property that keeps a ratchet from becoming an exemption
+# list.
+#
+# ONE FINDING WORTH MORE THAN THE DE-LISTING. Under the empty-$HOME probe, session-continue.bats
+# deposited .claude/autonomy/idl.jsonl and .claude/logs/session-continue.log — it had been appending
+# to the operator's live audit trail on every run. Its setup() has isolated the IDL since the
+# 404-leaked-lines fix of 2026-07-25… by exporting CC_IDL, which hooks/session-continue.sh does not
+# read. That hook reads CONTINUE_IDL / CONTINUE_LOG (hooks/session-continue.sh:58-59); CC_IDL is a
+# real seam belonging to hooks/lib/idl-log.sh and boundary-handoff.sh, so the export was neither
+# wrong nor doing what its comment claimed. A seam bound under a name the subject does not read
+# looks exactly like a closed leak, and nothing in the tree could tell the difference — the leak was
+# found by giving the suite an ABSENT $HOME and reading what appeared in it, not by inspection.
+#
 # SECOND admission criterion — WHOLE-TREE META-LINT WRAPPERS (tests/test-hermeticity-lint.bats and
-# tests/test-walltime-lint.bats). These two are here for a different reason than the six above: not
+# tests/test-walltime-lint.bats). These two are here for a different reason than the one above: not
 # because they assert the live layer, but because their whole-tree scans are LOAD-SENSITIVE, and a
 # full corpus is the load. Clean-room corpora failed on exactly the hermeticity wrapper and nothing
 # else (2,085 ok / 1 not-ok and 2,242 ok / 1 not-ok; backlogs b59eb997d035, b4e49b4b5014), which
@@ -96,11 +148,6 @@
 # THE TREE; the same violation reported by one of these wrappers mid-corpus was about the LOAD.
 
 tests/deploy-parity-live.bats
-tests/desk-arm-live.bats
-tests/desk-recycle-durable.bats
-tests/lr-team-audit.bats
-tests/session-continue.bats
-tests/waiting-recycle.bats
 
 # whole-tree meta-lint wrappers (see the SECOND admission criterion above) — the checks they wrap
 # are enforced standalone and pre-corpus by postland-verify.sh; re-run here post-deploy against the

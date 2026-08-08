@@ -6,6 +6,10 @@
 # reset poller must never bare-`--resume` an assignee session (lead-owned recovery).
 
 setup() {
+  # Fixture $HOME (hermeticity rule 1). Measured before it was added, not assumed: this suite runs
+  # 3/3 with HOME pointed at an EMPTY dir, so it never read the live layer — but it was the last
+  # thing standing between it and the tree corpus, which runs under the operator's real $HOME.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   AUDIT="$REPO/scripts/limit-recover/lr-audit.py"
   POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"

@@ -267,7 +267,6 @@ completion-push.bats
 context-econ.bats
 delivery-verify.bats
 deploy-parity-live.bats
-desk-arm-live.bats
 desk-assert-wiring.bats
 desk-assert.bats
 desk-brief-ssot.bats
@@ -301,7 +300,6 @@ land-verify.bats
 lead-crash-watchdog.bats
 lead-deathwatch.bats
 lead-supervisor.bats
-lr-team-audit.bats
 mail-ack-consume.bats
 mailbox-forward.bats
 notify-back.bats
@@ -316,7 +314,6 @@ reap-guard.bats
 reset-hard-shadow-allow.bats
 rm-safe-allowlist.bats
 rotate-autonomy-logs.bats
-session-continue.bats
 session-registry.bats
 settings-dedup-stop.bats
 ship-land.bats
@@ -326,7 +323,6 @@ task-helpers-scope.bats
 task-quality-gate.bats
 validate-plan-structure.bats
 wait-contract-lint.bats
-waiting-recycle.bats
 wrap-ledger.bats
 ALLOW
 )"
@@ -383,7 +379,6 @@ it2-wrapper.bats
 lead-crash-watchdog.bats
 self-path-lint.bats
 teammate-auto-shutdown.bats
-waiting-recycle.bats
 FIREALLOW
 )"
 
@@ -460,10 +455,8 @@ cc-classify.bats
 cc-relogin-status.bats
 claude-accounts-core.bats
 ctx-recycle-record.bats
-desk-arm-live.bats
 desk-invariant.bats
 desk-land.bats
-desk-recycle-durable.bats
 dispatch-cadence.bats
 fire-autonomy.bats
 fire-engagement.bats
@@ -507,7 +500,6 @@ lead-supervisor-page-verdict.bats
 lead-supervisor.bats
 notify-back.bats
 operator-surface-scope.bats
-session-continue.bats
 settings-dedup-stop.bats
 settings-drift.bats
 settings-hook-timeouts.bats

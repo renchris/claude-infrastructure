@@ -11,6 +11,16 @@
 # the model-facing additionalContext payload, and the arm/clear/status/kill/unkill CLI.
 
 setup() {
+  # Fixture $HOME (hermeticity rule 1) — measured 108/108 with HOME pointed at an empty dir before
+  # this line was added, so it changes no verdict; it removes the last ambient input standing
+  # between this suite and the tree corpus. The one test that needs a DIFFERENT home still sets its
+  # own per-command HOME, which wins.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # …and rule 2: every fire path here is stubbed through CC_WR_HANDOFF_FIRE, so handoff-fire's
+  # capacity_gate() is never reached and this pin is inert TODAY. It is the difference between
+  # "inert" and "cannot", which is the whole point of the ratchet: unstub one fire and the suite
+  # would start reading this box's loadavg instead of its subject.
+  export CC_FIRE_CAPACITY_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/waiting-recycle.sh"
   export CC_WR_STATE_DIR="$BATS_TEST_TMPDIR/state"

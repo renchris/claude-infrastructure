@@ -17,6 +17,10 @@ setup() {
   # override can never fall back to the REAL ~/.claude state dir (the bats-pollution leak). Per-command
   # HOME= / CLAUDE_CONFIG_DIR= / DRI_HOME overrides below still win where a test sets them.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # …and the seam a fixtured $HOME cannot reach (rule 5): waiting-recycle.sh reads CC_TELEMETRY_DIR,
+  # whose default /tmp/cc-telemetry is ABSOLUTE, so it stays pointed at the operator's live session
+  # telemetry no matter what $HOME says. Pinned so this suite can be judged by the tree corpus.
+  export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   DESK_CWD="$TMP/deskcwd"; mkdir -p "$DESK_CWD"
   BRIEF="$TMP/brief.md"; printf 'canonical desk boot brief\n' > "$BRIEF"
 }

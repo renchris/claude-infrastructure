@@ -199,6 +199,19 @@ session-continue, waiting-recycle) — the strongest direct evidence for the §4
 the tree verdict is red SOLELY because host-coupled suites assert a live layer the tree is
 ahead of. Corpus cycle estimate for the verifier: ~52 min at moderate load.
 
+> **CORRECTED on the attribution, 2026-08-08** (backlog `22b839c85a52`; the partition itself is
+> unchanged and still right). "Failing = exactly the 6" was a set identity, not a per-suite
+> conviction — those six *are* the manifest, so a red anywhere in them names all six. Only ONE of
+> them ever asserted the live layer. `POSTLAND-CELL-BISECT-2026-07-29.md` ran the six in a fresh
+> cell three times (C1/C2/D1) for **155 ok / 0 not-ok**, and isolated the single not-ok that did
+> appear to **deploy-parity alone** by a same-minute control. Re-measured 2026-08-08 the way that
+> distinguishes the two cases — a fresh cell with `HOME` pointed at an EMPTY dir, so `~/.claude`
+> does not exist — the other five pass at full count (8/8, 9/9, 3/3, 23/23, 108/108) while
+> `deploy-parity-live` goes red on `not ok 1`. So five entries, **151 tests**, sat out both the tree
+> verdict and the land smoke for a property they never had; they are de-listed, and the reasoning
+> plus the three ambient seams that had to be pinned first is in `scripts/host-suites.manifest`.
+> Read every "the 6 host suites" below as **one** from that date.
+
 ---
 
 **2026-07-28 archaeology deltas (evidence pack: docs/research/land-pipeline-v2-research-2026-07-28/):**
