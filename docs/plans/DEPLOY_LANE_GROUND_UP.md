@@ -783,3 +783,48 @@ un-filed item goes to die.
 **Remaining, and it is the operator's:** run `34-deploy-plist-fallback-activate.sh`. Nothing else in
 this plan is open — `status:` flips to complete on that basis, with D4's activation surfaced through
 the pending-activation queue where the platter renders it by construction.
+
+### 2026-08-08 — §1.5's second REVISIT trigger, resolved: open, and still no
+
+`343d7cc392b6` (second verification host) is **closed as NO**, with the full argument and its
+measurements landed in `LAND_PIPELINE_V2.md` §8 under the bullet it re-opens. Three things this
+session establishes that §1.5 could not:
+
+**The trigger is open by more than §1.5 measured, and the metric it used can only under-report.**
+Partitioned to the launchd lane and to runs that produced a verdict: **p50 3.16h / p90 3.35h over 41
+completed runs**, with **78% recording the 10800s suite wall** rather than their work — a floor, not
+an estimate. §1.5's "p50 ≈ 3.2h across the newest 8 stamps" quoted the interval *between* verdicts
+beside a median *run* duration as if one supported the other, pooled across two execution paths whose
+medians are 2.46x apart. The pooling fails one way only: a `cut` writes a short `run_s`, so **a lane
+collapsing into truncated runs reads as a lane that got fast** — across 89 rolling windows, naive and
+honest medians disagreed 5 times, every time naive-quiet/honest-firing.
+
+**The answer was already in the doc, one bullet up, contradicting itself.** §8 rejects off-box CI
+because *"the corpus asserts THIS host … a macOS runner proves a different machine"* — and then holds
+a second Mac open. A second Mac is a different machine. With `host-suites.manifest` declaring 3 of 331
+suites machine-coupled, there is no hermetic subset to hand it: identical, it reproduces ~95% of the
+chronic reds; quiet and dedicated, it certifies greens that do not hold where the code runs. This
+also **sharpens §1.6's sibling trigger** (`b4f93c9fa73c`, off-box CI for the hermetic subset): that
+item's premise — *"a green producer the design lacks"* — requires a hermetic partition that does not
+exist yet, so **the partition is the prerequisite, not the CI**. The lane is not queue-bound either
+(duty cycle 61.1%).
+
+**What the criterion should have pointed at, now priced.** The corpus is clamped to `taskpolicy -c
+background` (PRI 4) while every other actuator moved to `utility` at `2514226e`; the rejection of a
+higher band rested on *"foregrounding"*, which `utility` is not. Measured this session, interleaved:
+**2.26x** on a 0-sleep suite (51/37s utility vs 103/96s background @ load 18-22), controls confirming
+sleep is band-immune and pure CPU carries 5-6x. Separately, the 2.46x scheduled/session gap is **not**
+the band — `QOS` applies to both — but the launchd envelope over it (`ProcessType Background` + `Nice
+10` + `LowPriorityIO`). Two levers, neither hardware; filed rather than fired (reverses a documented
+choice; the launchd half is C10).
+
+**And the generalizable defect, which is why this took nine days to notice.** The trigger was prose
+with no sensor and no definition — "cycle time" undefined (three readings, all breaching), "under
+load" unreadable because that instrument was **blind in every scheduled run** until `4c58eaf5` and
+rendered blindness as `"load":"0"`, an idle machine. **A conditional exemption whose condition nobody
+re-reads is an exemption that expires silently**: the band was exempted in 2026-07-28 on the argument
+*"the corpus is sleep-bound, ~94-99% of wall is sleep ⇒ background loses little"*, true at 144 suites
+and false at 329 (sleep is now ~45%; the band-taxable share went 6% → 55%). The remedy is
+`scripts/cycle-time-census.sh` — the criterion with population and denominator pinned, three-state,
+refusing to call "within" on majority-censored data, with `tests/cycle-time-census.bats` carrying two
+controls that each red when their exclusion is removed. Re-read it; do not re-derive it by hand.

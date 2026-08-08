@@ -528,6 +528,74 @@ deployed HEAD > 60 min ⇒ surface). Both read disk only. land.log keeps one lin
   once-per-cycle in the background band; revisit only if cycle time under load exceeds ~2h
   sustained.
 
+  **REVISIT PERFORMED 2026-08-08 (backlog `343d7cc392b6`, re-opened by `DEPLOY_LANE_GROUND_UP`
+  §1.5). The trigger is OPEN — and the answer is still no, for a reason the bullet above does
+  not contain.** Verdict: **do not acquire a second host.** Three findings, in the order that
+  decides it.
+
+  **1. The breach is real, and worse than filed.** Partitioned to the launchd lane and to runs
+  that actually produced a verdict: **p50 3.16h, p90 3.35h over 41 completed runs**
+  (2026-07-26→08-08) against a 2h trigger. And **78% of those runs recorded the `SUITE_TO`
+  wall (10800s) rather than their own work**, so 3.16h is a *floor*, not an estimate.
+  The filing's "p50 ≈ 3.2h" was right by accident: it quoted the interval *between* verdicts
+  beside a median *run* duration of 8852s as if one supported the other, pooled over both
+  execution paths. Two ways that pooling reads BACKWARDS, both measured, both now pinned by
+  `scripts/cycle-time-census.sh`:
+  · *Non-verdicts shorten the median.* A `cut` writes a small `run_s`, so a lane collapsing
+  into truncated runs reads as a lane that got fast. Over 89 rolling 8-stamp windows the naive
+  and completed-runs-only medians disagreed about the trigger 5 times, **every disagreement one
+  way** — naive quiet, honest firing.
+  · *Two populations share one store.* Scheduled p50 3.16h vs session-invoked 1.28h. The
+  discriminator is `env.cc`, not the loadavg column — that instrument was **blind in every
+  scheduled run** until `4c58eaf5` and rendered blindness as `"load":"0"`, a dead sensor reading
+  as an idle machine (38 of 96 stamps). Cross-check that the split is not an artifact of that
+  fix: inside SCHEDULED, pre-fix p50 3.16h, post-fix 3.17h.
+
+  **2. A second Mac cannot produce a valid verdict for this corpus — the bullet two above says
+  so.** Off-box CI is rejected here because *"the corpus asserts THIS host … a macOS runner
+  proves a different machine."* **That reason applies verbatim to a second Mac.** These two
+  entries contradict each other and always did. Structurally: `scripts/host-suites.manifest`
+  declares **3** of 331 suites machine-coupled, so 328 sit on the shared tree verdict with no
+  hermetic partition to hand a second box. It lands on one of two horns — configured
+  *identically*, it reproduces ~95% of the chronic reds (the largest single class, ~72 of them,
+  is one launchd-plist PATH constant missing `/usr/sbin`:`/sbin`, proven by a same-tree same-box
+  A/B in `2dbeb436`); configured *quiet and dedicated*, it stamps greens that do not hold on the
+  machine the code runs on — defeating the detection `postland-verify.sh:154-178` deliberately
+  preserves by refusing to normalize PATH. Nor is the lane queue-bound: **duty cycle 61.1%**, it
+  idles 39% of the time. Green rate is 3/96; reds fall to zero when fixes land (11 measured
+  cases). The constraint is verdict quality, not machine count. Adding a host would also cross
+  five deep single-machine couplings — the mutex is a local pid (`kill -0`), the stamp key is
+  the bare tree sha with no host identity and last-writer-wins, work selection has no lease, and
+  auto-revert **pushes to origin/main on a single verdict**. It is a protocol rebuild, not a
+  purchase.
+
+  **3. The cheap lever the criterion should have pointed at was never priced.** The corpus is
+  clamped to `taskpolicy -c background` (PRI 4, E-core confined) while every other actuator moved
+  to `utility` (PRI 20) at `2514226e` for exactly this reason; `DEPLOY_GATE_CONVERGENCE.md:95`
+  rejected raising it, but on the premise of *"foregrounding a 233-suite corpus"* — and `utility`
+  is not foreground, it is still demoted below interactive. The corpus's own band tax had never
+  been measured. **Measured 2026-08-08, interleaved on this box at load 18-22:
+  `tests/cc-classify.bats` (58 tests, 0 sleeps) 51s/37s at `utility` vs 103s/96s at `background`
+  = 2.26x.** Controls: pure `sleep 20` is band-immune (20s/20s), pure CPU carries 5-6x. Note the
+  band is **not** what separates the two stamp populations — `QOS` is applied unconditionally to
+  both — so the 2.46x scheduled/session gap is the *launchd envelope on top of it*
+  (`ProcessType Background` + `Nice 10` + `LowPriorityIO`). **Two independent levers, neither of
+  them hardware.** Bounded below by the ~1.2h of literal `sleep` in the corpus (4312s across 46
+  files, band-immune), but even conservatively applied this brings the lane under 2h for $0.
+  Filed as backlog **`70dff02dcf4a`** rather than fired here: the corpus band reverses a documented
+  deliberate choice (`postland-verify.sh:285-297`, *"the verifier may never be the thing that
+  waits"*), and the launchd half is C10 (plist edit + operator bootout, and `launchd-parity-lint`
+  reds the fleet on a repo-only plist edit).
+
+  **The criterion itself was the deeper defect, and is now executable.** "Cycle time" was never
+  defined (three readings, all breaching), "under load" was unmeasurable from a blind instrument,
+  and no denominator was named — so it fired around 2026-07-30 and nothing noticed for nine days.
+  `scripts/cycle-time-census.sh` computes it with the population and denominator pinned, three-state
+  (`WITHIN` / `BREACH` / `CENSORED` / `NO-VERDICT` — it refuses to call "within" on majority-censored
+  data), covered by `tests/cycle-time-census.bats`, whose two controls each go red when their
+  exclusion is removed. **Re-read it with `bash scripts/cycle-time-census.sh --all`; do not
+  re-derive it by hand.**
+
 ## §9 Supersessions & backlog reconciliation
 
 - GATE_ARCHITECTURE_PLAN: Phase 1 (per-suite) and 2a ($HOME clone) live on inside the
