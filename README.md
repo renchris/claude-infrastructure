@@ -43,7 +43,21 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 
 ---
 
-## Twice, this repo shipped it first — and foresight is not the reason
+## Twice, this repo shipped it first — weeks before Claude Code did
+
+**Anthropic's engineers and Claude Code's power users are the same kind of user, hitting the same
+walls in the same order — so the same feature gets invented twice, weeks apart, by people who never
+saw each other's work.** This repo is a dated record of that happening. Both times, the capability
+was running here before it existed in Claude Code:
+
+| What was built | Running here | Shipped in Claude Code | Lead |
+|---|---|---|---|
+| **A research team that attacks its own findings** — a mandatory share of every wave briefed to refute the rest, not to add more searchers | **2026-05-24** | Dynamic Workflows `2.1.154` — 2026-05-28 | **4 days** |
+| **Two-way messaging between independent sessions** — open, brief, question and retire peers from any session | **2026-07-10** | `2.1.224` — 2026-08-07 | **28 days** |
+
+Anthropic's own documentation dates cross-session messaging to `2.1.224` — *"requires Claude Code
+v2.1.224 or later"* — the release that landed 28 days after it was already running here. And neither
+side borrowed the other's vocabulary: **zero shared distinctive terms in either direction**.
 
 <!-- Diagram source: assets/diagrams/vendor-convergence.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
@@ -85,29 +99,21 @@ flowchart TB
 
 </details>
 
-Anthropic ships Claude Code; heavy users extend it. The same capabilities keep appearing on both
-sides weeks apart, which reads either as a power user anticipating the roadmap or as one rebuilding
-what already shipped. Six of this repo's own priority claims were tested against the official
-changelog, dated on both sides — first-add shas here against the npm publish timestamp of the exact
-version carrying each entry. **Two stand. Three were refuted. One splits in half.**
+**It is a cascade, not foresight.** Nobody here saw a roadmap. Both sides optimise the same thing —
+useful agent-hours per human-hour — against the same limits, and **each fix manufactures the next
+bottleneck**: relieve single-session quality and throughput binds; relieve throughput and two
+sessions collide on one git index; isolate the checkouts and context runs out; recycle contexts and
+the sessions can no longer hear each other. Written down as a prediction *before* this repo's history
+was read, that order matched **eight of nine rungs**. The commit curve says the same thing twice —
+4 in March, 24 in April, **zero in May**, 1,515 in July: the May silence is the plateau between two
+ceilings, because a curiosity-driven builder trickles and a ceiling-driven one goes quiet.
 
-The two that stand are above. Neither borrowed the other's vocabulary: **zero shared distinctive
-terms in either direction** — `OASIS` and `obvious-axis saturation` here, `loop-until-dry` and
-`completeness critic` there.
-
-**The reason is a cascade, not foresight.** Both parties optimise the same objective over the same
-resource lattice, and each fix manufactures the next bottleneck: relieve single-session quality and
-throughput binds; relieve throughput and the shared checkout collides; isolate the checkouts and
-context exhausts; recycle contexts and the sessions cannot hear each other. Written as a prediction
-*before* reading this repo's history, that order matched **eight of nine rungs**. The commit curve is
-the same instrument read twice — 4 in March, 24 in April, **zero in May**, 1,515 in July. The May
-silence is the plateau between two ceilings; a curiosity-driven builder trickles, a ceiling-driven
-one goes quiet.
-
-**And the honest limit.** ~316 live artifacts across ~60–100 subsystems, of which roughly six have a
-vendor counterpart *at all*. Two survivors from six tested is close to the base rate for parallel
-obvious needs — which is exactly why the tally is published beside the wins, and why the one place
-this repo was seven months *late* is in the diagram too.
+**Scored against the changelog, losses published.** Six priority claims were tested, both sides dated
+— first-add shas here against the npm publish timestamp of the exact version carrying each entry.
+Two stand, above. Three were refuted outright, and the one place this repo ran **seven months
+behind** Claude Code is in the timeline, in red. Roughly six of this repo's ~60–100 subsystems have a
+vendor counterpart at all, so two leads is close to the base rate for parallel obvious needs — which
+is precisely why the tally sits beside the wins instead of replacing them.
 
 <sub><b>Full evidence, including every refuted claim and the two errors the first version of it made</b> → <a href="docs/research/vendor-convergence-2026-08-07.md"><code>docs/research/vendor-convergence-2026-08-07.md</code></a></sub>
 
