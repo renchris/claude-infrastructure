@@ -1337,3 +1337,46 @@ EOF
   [ "$(wc -l < "$cnt" | tr -d ' ')" -eq 2 ]            # bound fired once, the retry actually ran
   echo "$output" | grep -q 'classified'                # and the sweep completed on the retry's verdict
 }
+
+# ── task-less (2026-08-08): the booted-but-brief-less pane ────────────────────────────────────────
+# cc-classify used to answer `active` for a pane that started claude and never produced an assistant
+# turn. `active` is in NEITHER regex here, so such a pane was never reaped AND never paged — it just
+# persisted with no board row. The fix routes it to a NEW cause that is surfaced only. These tests pin
+# BOTH halves, because the value of the fix is entirely in the second one holding forever.
+
+@test "task-less pages the desk (the blind spot's whole fix: an empty pane finally gets a board row)" {
+  set_desk
+  mock_classify task-less "$D/clean" 7200 yes PANE-TL
+  run "$R" sweep --reap
+  ! td_called || false
+  notified
+  grep -q 'task-less' "$D/notify-calls"
+}
+
+@test "task-less is NEVER reaped — landed, idle far past settle, --reap, and still no teardown" {
+  # Every gate a reapable cause would clear is deliberately satisfied here: work landed, idle 99999s
+  # (>> settle), --reap armed, desk wired. The ONLY thing standing between this pane and a teardown is
+  # its absence from REAPABLE_RE. Killing a live session on a wrong verdict is the destructive path this
+  # item explicitly declined to open, so this test is the contract that it stays closed.
+  set_desk
+  mock_classify task-less "$D/clean" 99999 yes PANE-TL
+  run "$R" sweep --reap
+  ! td_called || false
+}
+
+@test "task-less is not promotable either — a fired-peer stamp must not turn it into an auto-reap" {
+  # AUTOREAP_FIRED_RE promotes a surfaced cause to reapable when the spawner stamped the pane. A
+  # task-less pane is very often exactly such a stamped worker (a fire that landed a pane but no brief),
+  # so this is the realistic path by which a never-reap cause could quietly acquire a teardown.
+  set_desk; mark_fired "PANE-TL"
+  mock_classify task-less "$D/clean" 99999 yes PANE-TL
+  run "$R" sweep --reap
+  ! td_called || false
+  notified
+}
+
+@test "REAPABLE_RE / AUTOREAP_FIRED_RE do not name task-less; SURFACE_PAGE_RE does (structural)" {
+  grep -q "^REAPABLE_RE=.*handed-off-lead" "$R"                 # anchor: the line still exists as expected
+  ! grep -E '^(REAPABLE_RE|AUTOREAP_FIRED_RE)=' "$R" | grep -q 'task-less' || false
+  grep -E '^SURFACE_PAGE_RE=' "$R" | grep -q 'task-less'
+}

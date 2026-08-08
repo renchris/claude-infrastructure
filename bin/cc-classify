@@ -69,6 +69,17 @@ _SG_SIG_DEFAULT='safeguards flagged this message|can'\''t respond to this reques
 SAFEGUARD_SIGNATURES="${CC_CLASSIFY_SAFEGUARD_SIGNATURES:-$_SG_SIG_DEFAULT}"
 SAFEGUARD_REFUSAL_SUBTYPE="${CC_CLASSIFY_SAFEGUARD_SUBTYPE:-model_refusal_no_fallback}"
 SAFEGUARD_IDLE_S="${CC_CLASSIFY_SAFEGUARD_IDLE_S:-120}"   # refusal terminal AND idle >= this ⇒ blocked
+# ── task-less (2026-08-08): booted this long ago with ZERO assistant turns ever ⇒ a pane that started
+#    claude and never got a brief. Sized well above any real first-turn latency (a fired peer's first
+#    assistant record lands in seconds; the slowest cold start measured is far under a minute), because
+#    the ONLY cost of a too-large value is that an empty pane stays invisible a while longer, while a
+#    too-small one mislabels a session that is merely early. FLOORED like INTERACTIVE_HOLD_S — a
+#    mis-set (empty / non-numeric / tiny) value must never make this fire at boot age ~0.
+TASKLESS_BOOT_S="${CC_CLASSIFY_TASKLESS_BOOT_S:-1800}"
+case "$TASKLESS_BOOT_S" in
+  ''|*[!0-9]*) TASKLESS_BOOT_S=1800 ;;
+  *) [ "$TASKLESS_BOOT_S" -lt 60 ] 2>/dev/null && TASKLESS_BOOT_S=1800 ;;
+esac
 
 die(){ printf 'cc-classify: %s\n' "$*" >&2; exit 2; }
 
@@ -157,6 +168,33 @@ last_assistant_ts() { # <jsonl> → epoch of last real assistant turn (excludes 
   [ -f "$f" ] || return 1
   iso="$(jq -rc 'select(.type=="assistant" and (.isSidechain|not) and ((.isApiErrorMessage//false)|not)) | .timestamp' "$f" 2>/dev/null | tail -1)"
   [ -n "$iso" ] && iso_to_epoch "$iso"
+}
+
+# turn-census (2026-08-08, the task-less blind spot): "<assistant-count> <real-user-count>" on stdout,
+# rc 1 iff the file could not be READ. last_assistant_ts() returns EMPTY for three different answers —
+# transcript unresolvable, transcript resolved-but-zero-assistant-records, and timestamp unparseable —
+# and classify_entry collapses all three into IDLE=-1 ⇒ CAUSE=active ⇒ neither reaped nor paged. This
+# function exists to separate "answered: never spoke" from "could not ask" (memory
+# sensor-default-off-makes-blindness-the-shipping-path: one probe value for both is how blindness ships).
+#
+# THE rc CHECK IS LOAD-BEARING, NOT HYGIENE. A live session's transcript is being appended to RIGHT NOW,
+# so its trailing line is routinely a partial write; measured 2026-08-08, jq exits 5 on such a file and a
+# naive `jq … | wc -l` still prints the count of the records BEFORE the parse error — i.e. a transcript
+# truncated before its first assistant record reports "0 assistant turns" for a session that is actively
+# working. Capturing jq's own rc (never a pipeline's — memory pipefail-inverts-early-exit-probe) is what
+# keeps an unreadable file an UNREADABLE answer instead of a confident zero.
+turn_census() { # <jsonl> → "<assistant> <real-user>"; rc 1 = unreadable (never a count)
+  local f="${1:-}" out line a=0 u=0
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  out="$(jq -rc 'if (.type=="assistant" and (.isSidechain|not) and ((.isApiErrorMessage//false)|not)) then "A"
+                 elif (.type=="user" and (.isSidechain|not) and ((.isMeta//false)|not)) then "U"
+                 else empty end' "$f" 2>/dev/null)" || return 1
+  while IFS= read -r line; do
+    case "$line" in A) a=$((a+1)) ;; U) u=$((u+1)) ;; esac
+  done <<EOF
+$out
+EOF
+  printf '%s %s' "$a" "$u"
 }
 
 recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is among the last records
@@ -508,6 +546,48 @@ classify_entry() { # <entry-json> <all-sessions-json>
   # 3. recent assistant turn → active
   if [ "$IDLE" -ge 0 ] 2>/dev/null && [ "$IDLE" -lt "$IDLE_S" ]; then
     CAUSE=active; DETAIL="last assistant turn ${IDLE}s ago (< ${IDLE_S}s)"; return 0
+  fi
+  # 3.5 task-less (2026-08-08): booted, ALIVE, and it has never produced a single assistant turn —
+  #     a pane that started claude but got no brief. Such a pane took the IDLE=-1 fail-safe below, which
+  #     answers `active`; `active` is in NEITHER cc-reaper's REAPABLE_RE nor its SURFACE_PAGE_RE, so the
+  #     pane persisted forever with no board row and nothing ever asked about it. The generator was
+  #     mostly removed by the argv-launch landing (2f074ef14947), but the blind spot outlived it.
+  #
+  #     THIS IS A SURFACE-ONLY CAUSE AND MUST STAY ONE. Making `active` reapable is the destructive
+  #     path — a wrong verdict kills a live session — so the fix does not touch what may be reaped at
+  #     all: task-less is added to SURFACE_PAGE_RE and to NEITHER REAPABLE_RE nor AUTOREAP_FIRED_RE.
+  #     The change is therefore a strict NARROWING of `active` and a strict WIDENING of what the desk
+  #     can see, with the reapable set byte-identical.
+  #
+  #     Three gates, each closing one way a healthy session could be mislabeled:
+  #       (a) the transcript RESOLVED — this is the whole point (turn_census's rc separates "never
+  #           spoke" from "could not ask"); an unresolvable or unreadable transcript still falls to
+  #           the fail-safe below, unchanged.
+  #       (b) ZERO assistant records, positively counted — never inferred from an empty last_assistant_ts,
+  #           which is also empty for an unparseable timestamp.
+  #       (c) booted >= TASKLESS_BOOT_S ago, from the registry's own startedAt. Measured 2026-08-08:
+  #           THIS session read cause=active idle=-1 while genuinely working, seconds into its first
+  #           turn — a live falsifier for (a)+(b) alone. Age is what separates "never got a brief" from
+  #           "has not answered yet", and startedAt is validated exactly as fired_peer validates it, so
+  #           an absent/0/malformed value fails toward the fail-safe rather than toward a label.
+  if [ "$IDLE" -lt 0 ] && [ -n "$tj" ]; then
+    local _tc _ta _tu _bootage
+    if _tc="$(turn_census "$tj")"; then
+      _ta="${_tc%% *}"; _tu="${_tc##* }"
+      case "$started" in ''|*[!0-9]*) _bootage="" ;; *)
+        if [ "$started" -gt 0 ] 2>/dev/null; then _bootage=$(( NOW - started / 1000 )); else _bootage=""; fi ;;
+      esac
+      if [ "$_ta" = 0 ] && [ -n "$_bootage" ] && [ "$_bootage" -ge "$TASKLESS_BOOT_S" ] 2>/dev/null; then
+        IDLE="$_bootage"                       # re-anchor to boot age (mirrors §2.5): -1 on a board row says nothing
+        CAUSE=task-less
+        if [ "$_tu" = 0 ]; then
+          DETAIL="booted ${_bootage}s ago, ZERO assistant turns and no prompt ever arrived — task-less pane (never-reap, surface)"
+        else
+          DETAIL="booted ${_bootage}s ago, ${_tu} prompt(s) but ZERO assistant turns ever — never started work (never-reap, surface)"
+        fi
+        return 0
+      fi
+    fi
   fi
   # If we could not read a transcript ts AT ALL, we cannot prove idleness → treat as active (never-reap).
   if [ "$IDLE" -lt 0 ]; then CAUSE=active; DETAIL="no readable assistant timestamp — cannot prove idle (fail-safe)"; return 0; fi

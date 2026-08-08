@@ -663,3 +663,112 @@ nolib_run() { HOME="$D/live" CLAUDE_CONFIG_DIR="$D/live/.claude" "$(nolib_bin)" 
   [ -z "$output" ]
   [ ! -e "$D/idlc.jsonl" ]
 }
+
+# ── task-less (2026-08-08): the booted-but-brief-less pane ────────────────────────────────────────
+# A pane that started claude and never got a brief produces NO assistant turn, so last_assistant_ts is
+# empty, IDLE stays -1, and the fail-safe answers `active` — a cause in NEITHER cc-reaper's REAPABLE_RE
+# nor its SURFACE_PAGE_RE, so the pane persisted forever with no board row. These fixtures pin the new
+# SURFACE-only cause and, more importantly, pin every way a HEALTHY session must NOT acquire it.
+#
+# BOOT_AGO writes a registry startedAt (epoch-MS) N seconds before NOW; every existing fixture in this
+# file leaves startedAt at reg()'s default 0, which is INVALID for this gate — so they all still take
+# the unchanged `active` fail-safe, by construction.
+boot_ago() { printf '%s' "$(( (NOW - $1) * 1000 ))"; }
+# a transcript that EXISTS but carries zero assistant records: the boot-time record shapes only.
+tx_silent() { local sid="$1"
+  printf '{"type":"attachment","timestamp":"2001-09-08T00:00:00.000Z"}\n{"type":"mode"}\n{"type":"permission-mode"}\n' \
+    > "$D/proj/slug/$sid.jsonl"; }
+
+@test "task-less — booted past the window with ZERO assistant turns and no prompt ever (surface, never active)" {
+  reg PANE-A "$LIVE" /repo sidTL "$(boot_ago 7200)"; tx_silent sidTL
+  [ "$(cause PANE-A)" = task-less ]
+  run "$C" PANE-A --json
+  printf '%s' "$output" | jq -e '.detail | test("no prompt ever arrived")' >/dev/null
+  # IDLE is re-anchored to the boot age (mirrors §2.5): a board row reading idle=-1 says nothing.
+  [ "$(printf '%s' "$output" | jq -r '.idle_s')" = 7200 ]
+}
+
+@test "task-less — a prompt arrived but ZERO assistant turns ever ⇒ still task-less, detail says so" {
+  reg PANE-A "$LIVE" /repo sidTLU "$(boot_ago 7200)"; tx_silent sidTLU; utx sidTLU 7100
+  [ "$(cause PANE-A)" = task-less ]
+  run "$C" PANE-A --json
+  printf '%s' "$output" | jq -e '.detail | test("1 prompt\\(s\\) but ZERO assistant turns")' >/dev/null
+}
+
+@test "LIVE FALSIFIER: a session seconds into its FIRST turn is active, never task-less" {
+  # Measured 2026-08-08 on the session that wrote this fix: cc-classify reported cause=active idle=-1
+  # while it was genuinely working, because its transcript had not yet taken an assistant record. Gates
+  # (a) transcript-resolved and (b) zero-assistant BOTH hold for that session — only the boot-age gate
+  # separates it from an empty pane. Drop the age gate and this fixture goes task-less.
+  reg PANE-A "$LIVE" /repo sidYoung "$(boot_ago 20)"; tx_silent sidYoung
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "boot age just BELOW the window ⇒ active; at the window ⇒ task-less (the boundary is >=)" {
+  reg PANE-A "$LIVE" /repo sidB "$(boot_ago 1799)"; tx_silent sidB
+  [ "$(cause PANE-A)" = active ]
+  reg PANE-A "$LIVE" /repo sidB "$(boot_ago 1800)"
+  [ "$(cause PANE-A)" = task-less ]
+}
+
+@test "UNREADABLE ≠ never-spoke: a truncated transcript stays active (the jq-rc gate)" {
+  # THE load-bearing case. A live session's transcript is appended to continuously, so its trailing line
+  # is routinely a partial write; jq exits 5 on such a file while `jq | wc -l` still counts the records
+  # BEFORE the error — i.e. a transcript truncated ahead of its first assistant record would report
+  # "0 assistant turns" for a session that is actively working. turn_census captures jq's OWN rc; drop
+  # that and this fixture flips to task-less and the reaper starts paging live sessions.
+  reg PANE-A "$LIVE" /repo sidTrunc "$(boot_ago 7200)"
+  printf '{"type":"attachment","timestamp":"2001-09-08T00:00:00.000Z"}\n{"type":"user"\n' > "$D/proj/slug/sidTrunc.jsonl"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "an assistant turn with an UNPARSEABLE timestamp is not zero-turns ⇒ active, never task-less" {
+  # last_assistant_ts returns empty here too (iso_to_epoch fails), so IDLE is -1 and this reaches the
+  # new branch — but the session HAS spoken. Counting records rather than reusing the empty timestamp
+  # is what keeps it out of task-less.
+  reg PANE-A "$LIVE" /repo sidBadTs "$(boot_ago 7200)"
+  printf '{"type":"assistant","isSidechain":false,"timestamp":"not-a-timestamp","message":{"role":"assistant","content":[]}}\n' \
+    > "$D/proj/slug/sidBadTs.jsonl"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "transcript UNRESOLVABLE ⇒ active fail-safe unchanged (could-not-ask is not an answer)" {
+  # COMPOSITE PIN, not a per-site one — stated because a reader who deletes one guard will see this
+  # test stay green and conclude the guard was dead code. Measured 2026-08-08 by mutation: removing the
+  # caller's `[ -n "$tj" ]` alone leaves this green (turn_census still refuses a missing file), and
+  # removing turn_census's own file check alone leaves it green too (the caller never calls). Only
+  # removing BOTH flips it to task-less. The redundancy is deliberate: turn_census must be safe for any
+  # future caller, and the caller's check is the cheap short-circuit.
+  reg PANE-A "$LIVE" /repo sidNoFile "$(boot_ago 7200)"    # no transcript written at all
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "startedAt absent/0/malformed ⇒ active (age unprovable ⇒ fail toward the fail-safe)" {
+  reg PANE-A "$LIVE" /repo sidNoStart; tx_silent sidNoStart     # reg default startedAt=0
+  [ "$(cause PANE-A)" = active ]
+  printf '[{"name":"t","paneUUID":"PANE-A","account":"next","cwd":"/repo","pid":%s,"session_id":"sidNoStart","startedAt":"garbage"}]\n' \
+    "$LIVE" > "$D/sessions.json"
+  [ "$(cause PANE-A)" = active ]
+}
+
+@test "a mis-set TASKLESS_BOOT_S is FLOORED — it can never fire at boot age ~0" {
+  reg PANE-A "$LIVE" /repo sidFloor "$(boot_ago 20)"; tx_silent sidFloor
+  CC_CLASSIFY_TASKLESS_BOOT_S=0 "$C" PANE-A --json 2>/dev/null | jq -e '.cause=="active"' >/dev/null
+  CC_CLASSIFY_TASKLESS_BOOT_S=oops "$C" PANE-A --json 2>/dev/null | jq -e '.cause=="active"' >/dev/null
+  CC_CLASSIFY_TASKLESS_BOOT_S='' "$C" PANE-A --json 2>/dev/null | jq -e '.cause=="active"' >/dev/null
+}
+
+@test "a DEAD pid still reads crashed, not task-less (branch order: liveness precedes everything)" {
+  reg PANE-A "$DEAD" /repo sidDead "$(boot_ago 7200)"; tx_silent sidDead
+  [ "$(cause PANE-A)" = crashed ]
+}
+
+@test "rate-limited still WINS over task-less (a capped first turn leaves zero countable assistant turns)" {
+  # An isApiErrorMessage record is EXCLUDED from the assistant filter, so a session capped on its very
+  # first turn presents exactly like a task-less pane. §2 is ordered ahead of the new branch and must stay
+  # there — rate-limited resumes on reset and carries its own disposition.
+  reg PANE-A "$LIVE" /repo sidCap "$(boot_ago 7200)"; tx_silent sidCap
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 6pm"}]}}\n' \
+    >> "$D/proj/slug/sidCap.jsonl"
+  [ "$(cause PANE-A)" = rate-limited ]
+}
