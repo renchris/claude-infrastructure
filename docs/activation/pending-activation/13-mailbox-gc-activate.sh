@@ -56,8 +56,12 @@ if [ "${1:-}" = "--rollback" ]; then
 fi
 
 [ -f "$PLIST" ] || { echo "✗ not found: $PLIST (is the cc-reaper job installed?)" >&2; exit 1; }
+# THE SANCTIONED ADVANCE, never a raw ff (hooks/activation-watch.sh:294, commands/ship.md). A bare
+# `merge --ff-only origin/main` advances the FILES and creates no symlinks — so the very file this
+# check just found missing would stay missing from the live layer — and it carries live HEAD above
+# every green stamp, wedging scripts/deploy-live.sh (cc-blockers `deploy-wedged`, measured 2026-08-08).
 [ -x "$REPO/bin/cc-mailbox-gc" ] || { echo "✗ $REPO/bin/cc-mailbox-gc missing — deploy the checkout first:" >&2
-                                      echo "    git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2; exit 1; }
+                                      echo "    bash $REPO/scripts/deploy-live.sh   # the ONLY sanctioned advance (green-gated + runs install.sh, which creates the symlinks a bare ff never makes)" >&2; exit 1; }
 
 CUR="$(read_args "$PLIST")"
 if printf '%s' "$CUR" | grep -q 'CC_REAPER_MBXGC=1'; then

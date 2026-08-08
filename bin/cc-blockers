@@ -39,6 +39,14 @@
 #                           For a VERDICT ask "is it red?"; for an ALARM ask "is it green?".
 #                           Kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores `red == seen`.
 #   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
+#   kind=="deploy-wedged"   NO-GREEN-AHEAD — a green stamp EXISTS but none is a DESCENDANT of live
+#                           HEAD, so deploy-live has nothing it may advance to and refuses every
+#                           tick until a new green lands ABOVE the layer. Structural and budget-free
+#                           — the complement of deploy-lag's ancestor test, hence disjoint from it
+#                           and from never-green by construction. Covers the state deploy-stale's
+#                           lag proxy goes blind to: a raw ff resets BOTH of its legs at once (see
+#                           the measurement at alarm_rows (c')), so the board is quietest exactly
+#                           while the cause is most active.
 #   kind=="deploy-stale"    NOT-ADVANCING — the live layer is behind trunk past
 #                           CC_DEPLOY_MAX_LAG_COMMITS (25) or CC_DEPLOY_MAX_LAG_HOURS (6) and has
 #                           not moved within that window. Keyed on the LAG ITSELF, never on which
@@ -272,7 +280,7 @@ alarm_rows() { # → one JSON object per line (possibly none)
   # life/life_g — LIFETIME denominators (§4 F3). `seen` is capped at REDRUN_N, so the board used to
   #             say "5 verdicts, 0 green EVER" against a real history of 33 — understating its own
   #             evidence 6.6x in the one cell the operator reads to size the problem.
-  local notgreen=0 life=0 life_g=0 behind="" astate fcount dtl
+  local notgreen=0 life=0 life_g=0 behind="" behind_g="" astate fcount dtl
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
 
@@ -438,7 +446,49 @@ EOF
   head_sha="$(git -C "$DEPLOY_REPO" rev-parse HEAD 2>/dev/null || true)"
   [ -n "$head_sha" ] || return 0                                       # not a checkout ⇒ fail open
   [ "$gcommit" != "$head_sha" ] || return 0                            # already deployed
-  git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1 || return 0
+  # ── (c') DEPLOY-WEDGED — the ABSORBING state, and why the lag proxy cannot see it ───────────────
+  # This `|| return 0` is deploy-lag's own documented silence ("a green stamp BEHIND the deployed
+  # HEAD is history, not lag") and it is CORRECT for deploy-lag. What made it a hole is that the
+  # state it returns on is not history at all: with no green at or above live HEAD, deploy-live.sh
+  # has nothing it is ALLOWED to advance to, so it refuses every tick until a NEW green lands above
+  # the layer. That is an absorbing state, not a pause.
+  #
+  # deploy_stale_rows() below was built (2026-08-07) to cover exactly this, keyed REASON-AGNOSTICALLY
+  # on the lag so no refusal-string change could mute it. That reasoning holds for a refusal STRING
+  # and does not transfer to this one, because the lag is a PROXY for the freeze and the proxy shares
+  # a cause with it. MEASURED on the live host 2026-08-08: the shared checkout was being raw-ff'd to
+  # trunk every ~20min (27 such advances in the reflog), which is the very thing that carries live
+  # HEAD above every green stamp — and each ff simultaneously reset BOTH of deploy-stale's legs.
+  # Three minutes after the 04:12 ff: `behind` ~0 of a 25 budget, and HEAD's commit timestamp 04:09:33
+  # so the hours leg read 0h of 6 — both silent, while the lane had been wedged since 2026-08-07
+  # 16:28 and deploy-live was refusing on every tick. The producer of the wedge is also the suppressor
+  # of its alarm, so the board goes quietest exactly while the cause is most active.
+  #
+  # The fix is to assert the STRUCTURE rather than a symptom of it: "no green stamp is a descendant of
+  # live HEAD" is a git-computable invariant, immune to how fresh HEAD is and to how the lane words
+  # its refusal. It is the complement of the ancestor test on the very next line, so the two are
+  # mutually exclusive by construction and can never both fire; never-green owns the no-green-EVER
+  # endpoint and needs a green to be absent, so it is disjoint from this too. deploy-stale MAY
+  # co-fire — that is two facts ("the layer is not moving" and "it structurally cannot"), the L2
+  # precedent, and deliberately NOT folded into an `emitted` gate.
+  #
+  # I11 — the platter is a DIAGNOSTIC, never `deploy-live.sh`: in this exact state that command is
+  # what refuses, and a board offering a fix its own gate rejects teaches the operator that the board
+  # lies. Both clauses are proven runnable at emit time by the rev-parse and rev-list that just
+  # succeeded against these same two refs in this same repo. Fail-OPEN as everywhere in this file: an
+  # unreadable count drops only the magnitude clause, never the row.
+  if ! git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1; then
+    behind_g="$(git -C "$DEPLOY_REPO" rev-list --count "$gcommit..$head_sha" 2>/dev/null || true)"
+    case "${behind_g:-}" in ''|*[!0-9]*|0) behind_g="" ;; esac
+    if [ -n "$behind_g" ]; then
+      dtl="$(printf 'green %.12s sits %s behind live HEAD' "$gcommit" "$behind_g")"
+    else
+      dtl="$(printf 'green %.12s is not above live HEAD' "$gcommit")"
+    fi
+    printf '{"kind":"deploy-wedged","state":"NO-GREEN-AHEAD","detail":"%s","subject":"%s","recover_cmd":"git -C %s log --oneline -1 %.12s ; jq -r .verdict %s/*.json | sort | uniq -c | sort -rn","ts":%s}\n' \
+      "$dtl" "$DEPLOY_REPO" "$DEPLOY_REPO" "$gcommit" "$STAMPS_DIR" "$now"
+    return 0
+  fi
   [ "$((now - green_ts))" -gt "$((DEPLOY_LAG_MIN * 60))" ] || return 0
   printf '{"kind":"deploy-lag","state":"LAGGING","detail":"green %.12s unshipped for %sh","subject":"%s","recover_cmd":"bash %s/.claude/scripts/deploy-live.sh ; tail -20 %s/deploy.log","ts":%s}\n' \
     "$gcommit" "$(hrs "$((now - green_ts))")" "$DEPLOY_REPO" "$HOME" "$POSTLAND_DIR" "$now"
@@ -1203,7 +1253,7 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # A kind absent from this selector is EMITTED and then silently dropped from the table — it rides the
 # --json array and vanishes from the one surface the operator reads. That is not hypothetical: the
 # mirror bug has bitten this file before, which is why every kind here carries a render test.
-LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-stale" or .kind=="never-green")'
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-wedged" or .kind=="deploy-stale" or .kind=="never-green")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —

@@ -613,13 +613,28 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
 @test "deploy-stale/NOT-ADVANCING: a green BEHIND live HEAD — the exact live state, and the gap" {
   # L1. The one that matters most: this is 2026-08-07 reproduced. The newest green is an ANCESTOR of
   # the deployed HEAD, so deploy-lag's ancestor test returns silently and never-green's "no green
-  # EVER" is false — the board's two deploy alarms are both correct and both mute. The `kinds`
-  # equality is the whole claim in one assertion: deploy-stale fires and it fires ALONE.
+  # EVER" is false — the INCUMBENT pair of deploy alarms are both correct and both mute, and this row
+  # is what speaks instead.
+  #
+  # The `kinds` equality read "deploy-stale " alone until 2026-08-08, when `deploy-wedged` was added
+  # to cover this same cursor geometry STRUCTURALLY rather than through the lag (deploy-stale's legs
+  # are both reset by the raw ff that creates the state — see the W-series). That made the "ALONE"
+  # clause stale in the strict sense: it pinned a solitude that was only ever a symptom of the state
+  # being under-covered, so leaving it would have turned this test into a tripwire against its own
+  # subject's fix. What it was really asserting — that the two INCUMBENT rows stay mute here and that
+  # deploy-stale is the one carrying the lag signal — is preserved and now asserted explicitly below,
+  # which is strictly stronger than the equality it replaces.
   mkdeploy dr 30 40H                                        # 30 > CC_DEPLOY_MAX_LAG_COMMITS default 25
   printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
   touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
   : > "$CC_POSTLAND_DIR/deploy.log"                          # the lane's own log exists → platter tails it
-  [ "$(kinds)" = "deploy-stale " ]
+  [ "$(kinds)" = "deploy-stale deploy-wedged " ]
+  run ccb --json
+  [ "$status" -eq 0 ]
+  # The load-bearing half, unchanged in substance: BOTH incumbents are silent in the state that hid
+  # for 33h. These are the assertions the equality above was standing in for.
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="deploy-lag")]|length')" = 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="never-green")]|length')" = 0 ]
   run ccb --json
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-stale")][0].state')" = "NOT-ADVANCING" ]
@@ -722,6 +737,81 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
   echo "$output" | grep -q 'deploy-stale' || false
   echo "$output" | grep -q 'NOT-ADVANCING' || false
+}
+
+# ── deploy-wedged: the ABSORBING state, keyed on structure rather than on a proxy for it ──────────
+# The gap these tests exist for, measured on the live host 2026-08-08: the shared checkout was being
+# raw-ff'd to trunk every ~20min, which is what carries live HEAD above every green stamp AND what
+# resets both of deploy-stale's legs. Three minutes after the 04:12 ff, `behind` was ~0 of a budget of
+# 25 and HEAD's commit timestamp was 04:09:33 so the hours leg read 0h of 6 — both silent, while
+# deploy-live had been refusing since 2026-08-07 16:28. Every deploy-stale fixture above uses `30 40H`
+# (over BOTH budgets), so the under-budget case was untested and the state was uncovered.
+
+@test "deploy-wedged: a green BEHIND live HEAD fires even when BOTH lag budgets are silent" {
+  # W1, and the whole point of the kind. Identical cursor geometry to L1 — the newest green is an
+  # ANCESTOR of the deployed HEAD — but at a lag that is healthy on both of deploy-stale's axes. This
+  # is the state the board could not see, and the `kinds` equality is the claim: deploy-wedged fires,
+  # and it fires ALONE, so it is carrying the signal rather than riding on a sibling that also tripped.
+  mkdeploy dr 1 1H                                          # 1 of 25 commits, 1h of 6 — both UNDER budget
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  [ "$(kinds)" = "deploy-wedged " ]
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-wedged")][0].state')" = "NO-GREEN-AHEAD" ]
+  # MAGNITUDE (§4 F4): $PRIOR is exactly one commit below $LIVE, so the cell must size the wedge.
+  echo "$output" | jq -r '[.[]|select(.kind=="deploy-wedged")][0].detail' | grep -q 'sits 1 behind live HEAD' || false
+  # I11 — the platter must be RUNNABLE, and must NOT be the command that refuses in this very state.
+  # Captured then matched, never `| grep -q`: under pipefail a matching grep can exit before its
+  # producer and invert the verdict.
+  local cmd
+  cmd="$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-wedged")][0].recover_cmd')"
+  [ "${cmd#*deploy-live.sh}" = "$cmd" ] || false
+}
+
+@test "deploy-wedged is the COMPLEMENT of deploy-lag — the two can never both fire" {
+  # W2. Disjointness by construction, asserted rather than assumed. Same fixture as W1 with the green
+  # moved ABOVE live HEAD: deploy-lag owns that side, and deploy-wedged must go silent. Run against
+  # both cursor positions, this pair proves the ancestor test partitions the axis with no overlap and
+  # no gap — the property that lets this row live inside alarm_rows() without an `emitted` gate.
+  mkdeploy dr 1 1H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$TIP" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  [ "$(kinds)" = "deploy-lag " ]
+}
+
+@test "deploy-wedged is SILENT when the green IS the deployed HEAD — already deployed, not wedged" {
+  # W3. The false-positive control, and the one an over-eager structural test would fail: a green
+  # exactly AT live HEAD is not a descendant of it in the strict sense the operator cares about, but
+  # it is the HEALTHY terminal state — the layer is carrying the certified tree. `--is-ancestor` is
+  # reflexive so the guard on the line above already returns, and this pins that it stays that way.
+  mkdeploy dr 1 1H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$LIVE" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  [ "$(kinds)" = "" ]
+}
+
+@test "deploy-wedged co-fires with deploy-stale — two facts, and neither defers to the other" {
+  # W4. At a lag over budget BOTH are true and both must ship: "the layer is not moving" and "it
+  # structurally cannot". Folding either into the other's gate loses a fact — the L2 precedent applied
+  # to the new kind. This is also the regression that would catch a future `emitted` gate added here.
+  mkdeploy dr 30 40H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  [ "$(kinds)" = "deploy-stale deploy-wedged " ]
+}
+
+@test "deploy-wedged RENDERS in the LAND-PIPELINE table, not only in --json" {
+  # W5. Emit and registration are two separate ways to ship nothing (the L5 law): a kind missing from
+  # LAND_SEL rides the --json array and vanishes from the only surface the operator reads.
+  mkdeploy dr 1 1H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$PRIOR" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  run ccb
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'deploy-wedged' || false
+  echo "$output" | grep -q 'NO-GREEN-AHEAD' || false
 }
 
 @test "alarms fail OPEN: an unreadable/absent sensor yields NO row, never an invented blocker" {
