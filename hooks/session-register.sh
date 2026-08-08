@@ -65,6 +65,34 @@ claude_ancestor_pid() {
 
 CPID="$(claude_ancestor_pid)"
 
+# pid_is_strict_ancestor <pid> → 0 iff <pid> is an ancestor of $CPID, i.e. strictly ABOVE our own
+# claude process. This is the tenancy proof the write gate below needs, and it is a live kernel fact
+# rather than an inference: a nested `claude` got the pane id by INHERITING it from the process that
+# owns the pane, so the row's owner being our ancestor IS the statement "this row is not ours".
+#
+# WHY NOT the cheaper "the incumbent pid is live and is a claude" test: that convicts on pid REUSE
+# (a stale row whose pid the kernel recycled onto an unrelated claude would refuse a legitimate new
+# tenant forever) and on pane REUSE (handoff-fire --recycle relaunches the same pane; any overlap
+# between the outgoing and incoming process would refuse the incoming row and leave the pane holding
+# a row that is about to become a corpse — the exact failure this gate exists to prevent, re-created
+# by the gate). Ancestry has neither hazard: a recycled pid is not our ancestor, and a relaunched
+# tenant is never a descendant of the one it replaced.
+#
+# One `ps` per hop, bounded at 16 (measured production depth is 4-6: hook sh → child claude → the
+# tool's shell → parent claude). Called ONLY from the contested path — a row that exists, names a
+# live pid, and that pid is not ours — so the overwhelmingly common session start pays zero forks.
+pid_is_strict_ancestor() {
+  local target="${1:-}" walk i=0
+  case "$target" in ''|*[!0-9]*) return 1 ;; esac
+  walk=$(ps -o ppid= -p "$CPID" 2>/dev/null | tr -d ' ')
+  while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 16 ]; do
+    [ "$walk" = "$target" ] && return 0
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+  return 1
+}
+
 register() {
 command -v jq >/dev/null 2>&1 || return 0
 
@@ -94,6 +122,46 @@ cpid="$CPID"
 started=$(( $(date +%s) * 1000 ))
 reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 mkdir -p "$reg_dir" 2>/dev/null || return 0
+
+# ── TENANCY GATE (write side) — the mirror of session-deregister.sh's remove-side gate ─────────
+# A pane id is not a tenancy, and it is INHERITED: every child process of the pane's session carries
+# CC_PANE_ID/ITERM_SESSION_ID, so any nested `claude` that fires a SessionStart — a `claude -p`
+# probe, an upgrade-gate check, a script that shells out to the CLI — reached this line holding the
+# LIVE pane's id and, until this gate, wrote its OWN pid and session_id over the tenant's row.
+#
+# Measured 2026-08-08, deployed hook + fixtured CC_REGISTRY_DIR, one `claude -p` fired from inside a
+# live session: the row for pane 841 went from (pid 82949, PARENT-SID-0001) to (pid 38739, the
+# child's sid) and pid 38739 was dead by the time the probe returned — a DEAD-PID CORPSE on a pane
+# whose own claude was alive throughout. The child never even reached the model (it exited on "Not
+# logged in"), so the trigger is not cost-gated: firing the CLI at all is enough. Consequence chain:
+# cc-sessions hides a dead-pid row from the addressing view, so cc-notify cannot reach the pane,
+# cc-board reads it absent, and cc-backlog's `claimer_live` answers PROVEN NOT-LIVE for any claim the
+# pane holds — a false death, for up to CC_REG_RETAIN_H until cc-reconcile heals it.
+#
+# This is the SAME hazard session-deregister.sh:12-32 documents from the removal side (the `claude
+# mcp list` phantom, 2026-08-05, docs/research/registry-row-removal-2026-08-05.md). That fix proved
+# tenancy before REMOVING; 64b655be additionally `env -u`'d the one known caller. Neither reaches
+# this side: `env -u` is a per-callsite denylist that only ever names the probes someone has already
+# found, and the write had no gate at all. So prove tenancy here too, on the same asymmetry — a
+# refused write leaves the pane addressable under its true tenant, while a wrongly-allowed one
+# erases a live pane from the fleet's only cross-account addressing table.
+#
+# Fail-OPEN on everything unprovable (no row, unreadable row, no pid, pid dead, pid not ours and not
+# our ancestor): those all take the write, exactly as before this gate existed.
+row="$reg_dir/$pane.json"
+if [ -f "$row" ]; then
+  inc=$(jq -r '.pid // empty' "$row" 2>/dev/null)
+  case "$inc" in ''|*[!0-9]*) inc="" ;; esac
+  if [ -n "$inc" ] && [ "$inc" != "$cpid" ] && kill -0 "$inc" 2>/dev/null \
+     && pid_is_strict_ancestor "$inc"; then
+    # Journalled, because a guard that no-ops silently cannot be told apart from one that is inert
+    # (memory: claimed-outcome-vs-checked-outcome). `refused` is a NEW disposition token; cc-digest
+    # and cc-discover bucket anything that is not "abstained" as fired, which is what this is — the
+    # gate ran and acted.
+    reclaim_idl refused "pane $pane held by live ancestor pid $inc — nested session, not the tenant"
+    return 0
+  fi
+fi
 
 # Atomic write (tmp + mv) so a concurrent cc-sessions read never sees a partial file.
 tmp="$reg_dir/.$pane.$$.tmp"
@@ -136,6 +204,12 @@ return 0
 # the process exists, and a pane that comes up but never engages (the cold-worktree auto-submit race)
 # must still be reapable — its live pid is now bounded by cc-backlog's LIVE_CLAIM_MAX_S ceiling.
 RECLAIM_IDL="${SESSION_REGISTER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+
+# Derived HERE rather than beside the reclaim invocation at the foot of the file: register() also
+# journals now (the tenancy gate), and it runs BEFORE that point — a later assignment would have left
+# every gate record stamped with the `?` sid fallback, i.e. unattributable to the session that was
+# refused, which is the one thing the record is for.
+RECLAIM_SID=$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')
 
 reclaim_idl() { # $1=disposition $2=reason [$3=item id]
   mkdir -p "$(dirname "$RECLAIM_IDL")" 2>/dev/null || true
@@ -250,7 +324,6 @@ wait "$_k" >/dev/null 2>&1
 # cases, where a poll cannot prove that nothing was written. It is NOT the production path, so the
 # suite also carries one case that fires WITHOUT it and polls for the durable record, so the detached
 # shape shipped here is itself covered.
-RECLAIM_SID=$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')
 if [ -n "${SESSION_REGISTER_RECLAIM_WAIT:-}" ]; then
   reclaim_worker_item >/dev/null 2>&1
 else
