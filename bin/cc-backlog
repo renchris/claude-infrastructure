@@ -2095,10 +2095,19 @@ land_lock_owner() {
 # SHAPE — deliberately the {actor, action} row cc-dispatch's `idl_decision` writes (same ledger
 # family, same consumers), NOT the {hook, disposition} hook row. idl-abstain-alarm.sh selects exactly
 # on `.hook` + `.disposition`, so a hook-shaped row would silently enroll reap in a PAGING population
-# against whose blind/dormant reason vocabulary it has never been calibrated. Wiring the abstain
-# alarm to these rows is a real and separate change (reap's UNRESOLVED keeps are genuinely BLIND, so
-# a permanently starved oracle SHOULD page); manufacturing 3am pages as a side effect of adding a
-# journal is not (memory: alarm-polarity-and-attention-budget).
+# against whose blind/dormant reason vocabulary it had never been calibrated — manufacturing 3am
+# pages as a side effect of adding a journal (memory: alarm-polarity-and-attention-budget).
+#
+# THAT CALIBRATION IS NOW DONE, and it did NOT change this shape (backlog 420b9cb2166c). The alarm
+# PROJECTS these rows at the READER: it classifies the four `keep` reasons below — `claimer-live` and
+# `owned-wait` DORMANT (an oracle answered), `claimer-unresolved` and `worktree-unresolved` BLIND
+# (rc 2, no answer at all) — and pages only on 100%-blind. Projecting at the reader rather than
+# hook-shaping here is what keeps the enrollment to ONE consumer: `.hook` + `.disposition` are also
+# read by cc-audit, cc-digest, cc-discover, desk-invariant, desk-recycle-invariant and subagent-stop,
+# and adding those keys would enroll reap in all of them at once. So this row stays actor-only, and
+# tests/cc-backlog.bats still pins it that way. ⚠️ A NEW `keep` REASON MUST BE CLASSIFIED THERE — an
+# unclassified one defaults to DORMANT and can never page; `idl-abstain-alarm.sh --vocab-lint` fails
+# the suite if this function's keep-vocabulary and that classification ever disagree.
 #
 # ORACLE PROVENANCE — `claimer_rc` and `worktree` are JSON `null` when the oracle was NOT CONSULTED,
 # never a carried-over value. `clrc` is FUNCTION-scoped and assigned only inside the stale branch, so
