@@ -20,7 +20,15 @@
 #
 # The helpers are extracted from the shipped bin/cc-dispatch and executed, so this replays the real
 # artifact rather than an approximation of it (memory: control-must-replay-the-real-artifact).
-# Case 10 is the mutation control proving the structural pin in case 9 can fail.
+# Case 13 is the mutation control proving the structural pin in case 12 can fail.
+#
+# RED-PROOF (MEASURED 2026-08-08, re-runnable): replayed against `git show origin/main:bin/cc-dispatch`
+# in a scratch tree with this file copied in unchanged — 13 of 13 RED, because the sed extractions
+# in setup() find none of fire_venue / fire_branch / cloud_declare there and every case runs
+# against an empty library. That is a weaker red than the sibling suite's (it proves the helpers
+# are new, not that each assertion binds); what proves the assertions bind is case 13's mutation
+# control plus the analyzer pass — `scripts/bats-assert-liveness.py` reports 0 dead assertions for
+# this file, after it caught 6 of them here that were being evaluated and silently discarded.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -49,6 +57,10 @@ EOF
 
 lib() { bash -c ". '$LIB'; $*"; }
 declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
+# code_of <file> — $CODE is <file> with whole-line comments removed, so a structural scan cannot
+# match the subject's own documentation. Written to a FILE rather than piped, so no case depends
+# on whether pipefail happens to be set (memory: pipefail-inverts-early-exit-probe).
+code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "$CODE"; }
 
 # ── the venue is read off the argv that will actually run ─────────────────────────────
 
@@ -107,7 +119,7 @@ declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
   printf 'the fire said nothing useful\n' > "$CAP"
   run lib "cloud_declare item1 '$CAP' feat/x"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"UNDECLARED"* ]]
+  [[ "$output" == *"UNDECLARED"* ]] || false
   [ -z "$(declared)" ]
 }
 
@@ -123,7 +135,7 @@ declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
   # exported, not merely set.
   run bash -c ". '$LIB'; export STUB_DECL_RC=2; cloud_declare item1 '$CAP' feat/y"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"UNDECLARED"* ]]
+  [[ "$output" == *"UNDECLARED"* ]] || false
   [[ "$output" == *"session_zz9"* ]]
 }
 
@@ -131,7 +143,7 @@ declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
   printf 'Created cloud session: session_zz9\n' > "$CAP"
   run lib "cloud_declare item1 '$CAP' ''"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"UNDECLARED"* ]]
+  [[ "$output" == *"UNDECLARED"* ]] || false
   [ -z "$(declared)" ]
 }
 
@@ -143,7 +155,7 @@ declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
   # resolve_bin's last-resort sibling lookup finds nothing either.
   run bash -c "cd '$BATS_TEST_TMPDIR'; export CC_DISPATCH_CLOUD_BIN='' PATH=/usr/bin:/bin HOME='$HOME'; . '$LIB'; cloud_declare i '$CAP' feat/y"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"UNDECLARED"* ]]
+  [[ "$output" == *"UNDECLARED"* ]] || false
   [[ "$output" == *"unresolvable"* ]]
 }
 
@@ -154,19 +166,27 @@ declared() { cat "$BATS_TEST_TMPDIR/declared.log" 2>/dev/null; }
   # a whole planner+backlog+spawn fleet to reach. What it pins is the DECISION, which is the part
   # that could silently regress: cloud claims are labelled, local ones are left alone.
   #
-  # `--venue local` is deliberately absent. The fold already defaults a claim with no venue to
-  # "local" (bin/cc-backlog:615), so passing it explicitly would add a field to every claim in the
-  # fleet and carry exactly zero information — while making a real cloud claim harder to find.
-  grep -q -- '--venue cloud' "$DISPATCH"
-  ! grep -q -- '--venue local' "$DISPATCH"
+  # The absent half is `--venue local`. The fold already defaults a claim with no venue to the
+  # local one (bin/cc-backlog:615), so passing it explicitly would add a field to every claim in
+  # the fleet, carry exactly zero information, and make a real cloud claim harder to find.
+  #
+  # COMMENTS ARE STRIPPED FIRST, and the first draft of this case is why: the dispatcher's own
+  # comment EXPLAINS why the local label is omitted, so a scan of the raw file matched its own
+  # documentation and convicted a correct tree. Same failure the sibling capacity-gate lint records
+  # against itself ("this function's own prose says `return 0`") — a scan whose subject is code
+  # must not read prose.
+  code_of "$DISPATCH"
+  grep -q -- '--venue cloud' "$CODE"
+  ! grep -q -- '--venue local' "$CODE" || false
   # and it is built as an ARRAY, so the flag cannot be word-split or injected
-  grep -q 'claim_args' "$DISPATCH"
+  grep -q 'claim_args' "$CODE"
 }
 
 @test "13 MUTATION CONTROL — case 12's pin can fail" {
   # Without this, case 12 could be passing because its greps cannot go red.
+  code_of "$DISPATCH"
   local mutant="$BATS_TEST_TMPDIR/mutant"
-  sed 's/--venue cloud/--venue local/' "$DISPATCH" > "$mutant"
-  ! grep -q -- '--venue cloud' "$mutant"
+  sed 's/--venue cloud/--venue local/' "$CODE" > "$mutant"
+  ! grep -q -- '--venue cloud' "$mutant" || false
   grep -q -- '--venue local' "$mutant"
 }

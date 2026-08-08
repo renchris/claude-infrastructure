@@ -24,11 +24,18 @@
 # case 7 is the control proving an unrecognised flag still dies the ordinary way, so case 1's
 # refusal is caused by the opt-in and not by the parser not knowing the flag at all.
 #
-# RED-PROOF (recorded 2026-08-08, re-runnable): every case below was run against the pristine
-# pre-change scripts/handoff-fire.sh (`git show origin/main:scripts/handoff-fire.sh`, 0 occurrences
-# of `--cloud`). Cases 1-6 FAILED there — 1/2/3/4/6 because `--cloud` hit the parser's `*)` arm and
-# exited 1 via usage, 5 because it never ran. Case 7 passed there and here, which is what makes it
-# a control rather than a duplicate of case 1.
+# RED-PROOF (MEASURED 2026-08-08, re-runnable). Replayed against the pristine pre-change
+# scripts/handoff-fire.sh — `git show origin/main:scripts/handoff-fire.sh`, 0 occurrences of
+# `--cloud` — in a scratch tree, this file copied in unchanged:
+#
+#   RED there, green here : 1 2 3 4 6 8   (1/2/3/4/6 die at the parser's `*)` arm, exit 1 via
+#                                          usage; 8's extractor finds no cloud-branch markers)
+#   green on BOTH trees   : 5 7           — which is precisely what makes them controls
+#
+# ONE TRAP for whoever re-runs this: the scratch tree must also carry
+# `scripts/lib/capacity-admit.sh`. Without it the gate takes its ABSENT-LIBRARY branch and
+# fail-OPENS, so control case 5 goes red for a reason that has nothing to do with the change —
+# a harness artifact that reads exactly like a real refutation.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
