@@ -151,6 +151,45 @@ BATS_BIN="${CC_POSTLAND_BATS:-bats}"
 #
 # NOT via `bounded`: that helper also runs `git bisect run` and other non-bats children, and the
 # screen that licenses /dev/null covers the bats tree only. Per call site, deliberately.
+# ── THE VERIFIER IS EXEMPT FROM cc-bats ADMISSION CONTROL (2026-08-08) ───────────────────────────
+# $BATS_BIN defaults to the bare name `bats`, which on this box PATH-resolves to ~/.claude/bin/cc-bats
+# — an ADMISSION WRAPPER. When >=CC_BATS_MAX_ROOTS (2) other bats execution roots are live AND 1-min
+# load/core is >=CC_BATS_MAX_LOAD_PER_CORE (2.0), it runs NOTHING and exits 75 (EX_TEMPFAIL): a
+# DEFERRAL, explicitly "not a test result". Setting the ceiling to 0 is cc-bats' own documented
+# admission-only kill switch, and it disables BOTH halves — this runner is never refused, and never
+# mints a slot others are refused against.
+#
+# WHY THIS RUNNER AND NOT THE GENERAL CASE. This file DELETED its own admission control on purpose
+# (see "NO ADMISSION CONTROL — deleted, not tuned" below, §4.2.3/R7: "the verifier is the one party
+# that may never wait"), and then reached admission control anyway — through a bare NAME nothing here
+# accounts for. Nothing in this file mentioned cc-bats before this line. The exemption restores the
+# property R7 already asserted; it does not invent a new privilege.
+#
+# WHY A DEFERRAL IS WORSE HERE THAN ANYWHERE ELSE. rc 75 is not in the {0,1} set that speaks about the
+# tree, so the ladder abstains, LADDER_UNPROVEN fires, and the WHOLE sweep stamps `cut` — no green
+# stamp, so deploy-live stays fail-closed and needs --force. MEASURED, runner.log:
+#     2026-08-07T23:29:53Z  ladder UNPROVEN for tests/cc-backlog-compact-race.bats
+#                           — the re-run exited 75 ...; no verdict (cut, not red)
+#     2026-08-07T23:29:53Z  CUT 488742fcb66a ... consecutive=2
+# A ~3.4h sweep discarded to skip ONE re-run of ONE named test that costs ~1s at the utility band.
+# The asymmetry is the whole argument: the load this deferral sheds is unmeasurable, the verdict it
+# destroys is the only one that unblocks deploy.
+#
+# cc-bats ITSELF NAMED THIS HAZARD and did not close it — its admission block warns the refusal
+# "inside the corpus, would present as a test failure in a repo that AUTO-REVERTS on red". This is
+# that hazard, one level up: not a test failure but a whole-run non-verdict. Closing it there (a
+# blanket cc-bats change) would weaken the bound for every caller; closing it here scopes it to the
+# single background-clamped singleton that already holds run.lock.d and may never wait.
+#
+# SEAM SAFETY. Exported, so it reaches all SIX executing $BATS_BIN sites uniformly — the corpus in
+# both its shapes (bounded, and the stall-watched leg), confirm_hang's per-file re-run, both
+# retry_once legs, and do_bisect's generated probe runner — instead of six prefixes a seventh site
+# would silently miss. (The other two sites, `--version` and `--count`, cc-bats classifies
+# non-executing and never refuses; its own case (xvi).) It cannot blind cc-bats' own suite:
+# tests/cc-bats-admission.bats unsets CC_BATS_MAX_ROOTS in setup() for exactly this reason ("an
+# ambient value would decide the verdict instead of the test"), and suites nested inside a bats test
+# skip the bound already (its case (x)).
+export CC_BATS_MAX_ROOTS=0
 # ── THIS SCRIPT DELIBERATELY DOES NOT NORMALIZE PATH (settled 2026-07-29) ────────────────────────
 # Do not re-add a PATH prepend here. It was here (5abe5934, 2026-07-26) and was removed on purpose;
 # the reasoning below is what stops it coming back the next time a red stamp looks PATH-shaped.
@@ -941,6 +980,14 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
            if   [ "$tap_rc" -eq 124 ]; then why="our own bound cut the run"
            elif [ "$tap_rc" -gt 128 ]; then why="the run was KILLED by signal $(( tap_rc - 128 )) (machine pressure, not the tree)"
            elif [ "$tap_rc" -eq 126 ] || [ "$tap_rc" -eq 127 ]; then why="the run could not execute (rc $tap_rc)"
+           # WORDING IS LOAD-BEARING: this says "ADMISSION DEFERRAL", never the bare token R-E-F-U-S-E-D.
+           # permission-gate-lint treats that token as a guard-refusal VERB (`s ~ /REFUSED/`, substring,
+           # inside strings too) and would count this message-assignment as an unbounded permission gate
+           # on an actuation path. It is not one — nothing here refuses; cc-bats did, and this arm only
+           # NAMES it, after which the cut path logs and retries next sweep. Declaring a `gate_bounded:`
+           # budget for a gate that does not exist would launder a false positive into a real exemption.
+           # "Deferral" is also cc-bats' own word for it ("this is a DEFERRAL, not a test result").
+           elif [ "$tap_rc" -eq 75 ]; then why="the run hit cc-bats' ADMISSION DEFERRAL (rc 75, EX_TEMPFAIL) — NOTHING RAN. This runner exports CC_BATS_MAX_ROOTS=0 to be exempt, so seeing this means the exemption did not reach the child"
            else why="the run exited $tap_rc — not a tree verdict (bats says 0=pass, 1=fail)"
            fi
            CUT_WHY="unattributable not-ok (${FAILTEST}) in a run that reached no verdict — $why"
@@ -1025,6 +1072,13 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       if   [ "$arc" -eq 124 ]; then why="our own ${RETRY_TO}s bound fired on the re-run"
       elif [ "$arc" -gt 128 ]; then why="the re-run was KILLED by signal $(( arc - 128 )) (machine pressure, not the tree)"
       elif [ "$arc" -eq 126 ] || [ "$arc" -eq 127 ]; then why="the re-run could not execute (rc $arc)"
+      # 75 = cc-bats' EX_TEMPFAIL deferral. It is the ONLY abstaining code that means "nothing was even
+      # attempted" — 124/137/143/126/127 are all facts about the machine that a re-run cannot undo. This
+      # runner is exempt (CC_BATS_MAX_ROOTS=0, see BATS_BIN), so this arm is a BACKSTOP: it exists so a
+      # recurrence names itself instead of falling into the generic "exited N" arm, which is what sent
+      # the 2026-08-07T23:29Z investigation hunting a slow test that had never been slow.
+      # Same wording constraint as the corpus arm above — "ADMISSION DEFERRAL", never the bare token.
+      elif [ "$arc" -eq 75 ]; then why="the re-run hit cc-bats' ADMISSION DEFERRAL (rc 75, EX_TEMPFAIL) — NOTHING RAN, so this is a deferral, not evidence; the CC_BATS_MAX_ROOTS=0 exemption did not reach the child"
       else why="the re-run exited $arc — not a tree verdict (bats says 0=pass, 1=fail)"
       fi
       log "ladder UNPROVEN for $f — $why; no verdict (cut, not red)"

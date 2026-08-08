@@ -107,6 +107,13 @@ setup() {
   # from pushing. The revert tests below opt IN explicitly, so a guard that silently stopped
   # working cannot hide behind a blanket suite-wide switch.
   export POSTLAND_AUTOREVERT=off
+  # C28: the SUT now EXPORTS CC_BATS_MAX_ROOTS=0 (its cc-bats admission exemption), and C28's stubs
+  # assert that the child sees it. An ambient value would supply that `0` for free and the assertion
+  # would pass with the export DELETED — measured, not theorised: the first mutation run of C28 was
+  # green on all three because this suite was invoked as `CC_BATS_MAX_ROOTS=0 bats …`. Same trap
+  # tests/cc-bats-admission.bats records in its own setup ("an ambient value would decide the verdict
+  # instead of the test"); clearing it here is what makes the SUT the only possible source.
+  unset CC_BATS_MAX_ROOTS
   # Per-run worktree cells (C7) land here, so a leak is visible to the tests rather than landing
   # in the developer's real ~/Development/.worktrees.
   export CC_POSTLAND_WT_ROOT="$BATS_TEST_TMPDIR/cells"
@@ -1975,6 +1982,113 @@ exit 0"
   [ -f "$REC/bandpri.txt" ]                     # the retry ran at all
   # substring assertion as a LIVE `[ ]` — a non-final `[[ ]]` here would be errexit-exempt and dead
   [ "${output#*unbound variable}" = "$output" ]
+}
+
+# ── C28 ADMISSION: the verifier is EXEMPT from cc-bats' EX_TEMPFAIL deferral ─────────────────────
+# $BATS_BIN defaults to the bare name `bats`, which PATH-resolves to ~/.claude/bin/cc-bats — an
+# ADMISSION WRAPPER that runs NOTHING and exits 75 when >=CC_BATS_MAX_ROOTS other bats roots are live
+# AND load/core is over the ceiling. 75 is outside the {0,1} set that speaks about the tree, so the
+# ladder abstains, LADDER_UNPROVEN fires, and the ENTIRE sweep stamps `cut` — no green stamp, so
+# deploy-live stays fail-closed. MEASURED on the live host, runner.log 2026-08-07T23:29:53Z:
+#   `ladder UNPROVEN for tests/cc-backlog-compact-race.bats — the re-run exited 75` then
+#   `CUT 488742fcb66a ... consecutive=2`. A ~3.4h sweep discarded to skip ONE ~1s re-run.
+#
+# Distinct from every non-verdict above it: 124/137/143/126/127 are facts about the MACHINE that a
+# re-run cannot undo, so abstaining is correct. 75 means NOTHING WAS ATTEMPTED — the one abstaining
+# code the verifier can cure, and it cures it by declaring itself exempt (R7: the singleton verifier
+# is the one party that may never wait; it deleted its OWN gate_admit() for that reason, then reached
+# admission control anyway through a bare NAME nothing in the file accounted for).
+#
+# The stub refuses EXACTLY as cc-bats does — unless the exemption is in its environment. That makes
+# this its own mutation control: delete the `export CC_BATS_MAX_ROOTS=0` from the SUT and the stub
+# refuses, the ladder abstains, and the verdict flips green -> cut. Nothing else in the fixture moves.
+stub_ladder_admit() {   # refuses with 75 on the RETRY unless CC_BATS_MAX_ROOTS=0 reaches it
+  stub_bats "ladderadmit" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+n=\$(cat '$REC/admit.n' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$REC/admit.n'
+if [ \"\$n\" = 1 ]; then
+  printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+  exit 1
+fi
+printf '%s' \"\${CC_BATS_MAX_ROOTS-UNSET}\" > '$REC/admit.seen'
+if [ \"\${CC_BATS_MAX_ROOTS-UNSET}\" != \"0\" ]; then
+  echo 'cc-bats: REFUSED — 2 concurrent bats execution root(s)' >&2
+  exit 75
+fi
+printf '1..1\nok 1 beta\n'
+exit 0"
+}
+
+@test "C28: the ladder's re-run is EXEMPT from cc-bats admission — a deferral cannot cut the sweep" {
+  b="$(stub_ladder_admit)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ -f "$REC/admit.seen" ]                      # the ladder actually engaged (else vacuous)
+  [ "$(cat "$REC/admit.seen")" = "0" ]          # PRE-FIX this reads UNSET — the whole defect
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                       # PRE-FIX: "cut" — the retry was refused, never run
+  [ "$(pages_n)" = "0" ]
+}
+
+stub_ladder_admit75() {   # refuses with 75 on the RETRY whatever the environment says
+  # A HELPER, not an inline heredoc in the test body, for a mechanical reason: the stub's own source
+  # contains `n=$((n+1))`, and the bats dead-assertion ratchet reads any arithmetic inside an @test
+  # block as a statement whose exit status errexit cannot reach. Inside a quoted stub string it is
+  # neither — but the lint scans text, not scope, so the fix is to put it where its two siblings
+  # already live (stub_ladder_kill, stub_ladder_admit). The ratchet's suggested fixer is the WRONG
+  # remedy here: it rewrites assertions, and this line is stub source code, not an assertion.
+  stub_bats "ladderadmit75" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+n=\$(cat '$REC/a75.n' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$REC/a75.n'
+if [ \"\$n\" = 1 ]; then
+  printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+  exit 1
+fi
+exit 75"
+}
+
+@test "C28: POSITIVE CONTROL — an UNCONDITIONAL 75 still abstains, and names itself a DEFERRAL" {
+  # The exemption must not blind the runner to a refusal it genuinely could not prevent. A stub that
+  # refuses whatever the environment says stands in for the exemption failing to reach the child; the
+  # run must still take the CUT path (never a RED — nothing ran, so nothing was proven) AND the log
+  # must NAME it. Without the naming arm this falls into the generic "exited 75" message, which is
+  # exactly what sent the 2026-08-07 investigation hunting a slow test that had never been slow.
+  b="$(stub_ladder_admit75)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                         # nothing ran ⇒ nothing proven; never a RED
+  [ "$(pages_n)" = "0" ]
+  run grep -c "ADMISSION DEFERRAL" "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" != "0" ]                          # PRE-FIX: the generic "exited 75 — not a tree verdict"
+}
+
+stub_admit_corpus() {   # records what EVERY call site sees; refuses unless the exemption reached it
+  stub_bats "admitcorpus" "
+case \"\$1\" in --count) echo 1; exit 0 ;; esac
+printf '%s\n' \"\${CC_BATS_MAX_ROOTS-UNSET}\" >> '$REC/corpus.seen'
+if [ \"\${CC_BATS_MAX_ROOTS-UNSET}\" != \"0\" ]; then exit 75; fi
+printf '1..1\nok 1 alpha\n'
+exit 0"
+}
+
+@test "C28: the exemption is EXPORTED, so it reaches the corpus and do_bisect, not just the ladder" {
+  # Scope assertion. SIX executing $BATS_BIN sites exist — the corpus in both shapes (bounded, and the
+  # stall-watched leg), confirm_hang's per-file re-run, both retry_once legs, and do_bisect's generated
+  # probe runner — so a per-prefix fix would immunise only the ones someone remembered. The corpus run
+  # is the one that matters most: refused THERE, the TAP holds cc-bats' stderr, the `not ok` count is
+  # 0, and C13 case (a) cuts the sweep before the ladder ever engages.
+  b="$(stub_admit_corpus)"
+  export CC_POSTLAND_BATS="$b"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  [ -f "$REC/corpus.seen" ]
+  run grep -c 'UNSET' "$REC/corpus.seen"
+  [ "$output" = "0" ]                           # NO call site saw it unset
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                       # PRE-FIX: "cut" — the corpus itself was refused
 }
 
 # ── C4b: the stamp carries the DENOMINATOR of the population it judged ────────────────────────────
