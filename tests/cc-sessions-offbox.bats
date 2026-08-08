@@ -63,6 +63,8 @@ EOF
   }
 
   # The OFF-BOX block only — everything after the blank line that follows the local table.
+  # shellcheck disable=SC2120  # the "$@" pass-through is deliberate: every current caller wants the
+  # default table, but a test asking for --json/--names must not have to fork the helper to get it.
   offblock() { "$SESSIONS" "$@" | sed -n '/^OFF-BOX/,$p'; }
 }
 
