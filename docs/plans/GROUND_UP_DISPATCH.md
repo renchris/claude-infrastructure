@@ -315,6 +315,67 @@ verdict — a cold `--worktree` fire has an auto-submit race.
 
 ## Wave log (coordinator appends; map rows carry the durable status)
 
+### 🚨 2026-08-07 — THE CAMPAIGN HAS BEEN DORMANT 8 DAYS, AND "OPEN ROW" NO LONGER MEANS "NEEDS A REBUILD"
+
+Coordinator cycle run from a dispatch worker (`cc-backlog 1af414fbe229`), not from the standing
+coordinator pane — which no longer exists. **Everything below is re-derived from disk today; nothing
+is inherited from the entries beneath this one.**
+
+**What happened: nothing, and the runbook predicted exactly that.** The prior coordinator recorded
+*"both die with the session that armed them, so a recycling coordinator MUST re-arm both"* for the
+row-11 and row-9 fire loops. That coordinator ended. **Neither loop was re-armed, and no row has
+moved since 2026-07-30.** The campaign did not stall on load, quota or a blocker — it stalled
+because its continuation depended on a live session's in-memory state, with the durable re-arm
+instructions filed in a payload doc nobody was scheduled to read. **The lesson is the campaign's own,
+one level up: a coordinator's next action must live in a store that outlives the coordinator, not in
+a runbook paragraph addressed to a successor who is never spawned.** The re-arm has now been filed to
+`cc-backlog` (ids below) so a dispatch wave picks it up without a coordinator existing at all.
+
+**State, re-derived from trunk 2026-08-07 — 10 of 13 DONE · 3 OPEN (6 · 9 · 11):**
+
+| Row | Verdict today | Basis |
+|---|---|---|
+| 1,2,3,4,5,7,8,10,12,13 | **DONE** | map cells carry plan links + landed shas |
+| **9** memory-knowledge | **OPEN — design landed, build never did, OVERTAKEN out-of-band** | `MEMORY_KNOWLEDGE_V2.md` landed `1761b9ee`; its M1 (`bin/cc-mem-budget`, `hooks/lib/memory-budget.sh`, `MEM_INDEX_BYTE_CAP`) is **absent from trunk** ⇒ AC1·2·3·8 FAIL. A non-campaign session shipped a *different, better* answer in `16dfe3b5` (predicate moved to the PreToolUse chokepoint) |
+| **11** worktree-warmpool | **OPEN — RE-SCOPED, no longer a full rebuild** | Phase 1 **rescued from an 8-day strand** today (`217ca100` → `cherry-pick -x`, + §7 rescue note). Headline finding E1 answered out-of-band (`--ignored` in `worktree-gc.sh`, 64 tests) — **but with a remedy the doc rejects** |
+| **6** guardrail-hooks | **OPEN — genuinely untouched** | only its payload landed (`53c6eee9`). No design doc, no build |
+
+🚨 **THE CAMPAIGN'S CENTRAL ASSUMPTION HAS BROKEN, AND THIS IS THE FINDING THAT MATTERS.** The
+dispatch model treats an open row as *work waiting for a rebuild session*. For **two of the three
+open rows that is now false**: the subsystem moved underneath the row while the row sat still, and
+in row 9's case the out-of-band answer is **better than the specced one**. A row-9 or row-11 session
+fired against the stale payloads would **rebuild what already ships** — row 9 would duplicate a
+landed chokepoint gate; row 11 would implement a KEEP gate the shipping side already considered and
+rejected with a measured reason (`tests/worktree-gc.bats:776`). **Every remaining payload must
+therefore open with a RECONCILE step, not a build step:** re-run the row's own acceptance reads
+against trunk FIRST, and design only against what actually fails. Both stale payloads
+(`docs/ground-up-payloads/row9-memory-knowledge.md`, `row11-worktree-warmpool.md`) are now
+**superseded on this point** — the map cells for 9 and 11 carry the measured detail.
+
+**Row 11's rescue, and why the coordinator landed another row's artifact.** 283 lines of measured
+Phase-1 work — including a reproduced **data-loss** finding with positive controls — sat unlanded on
+`gu-worktree-warmpool-b` for 8 days while `origin/main` moved 708 commits. The doc's own §0 records
+the lesson *"land Phase 1 before building anything"*, and it then failed to land itself. Landing a
+row's own already-written design out of the graveyard is the coordinator's documented graveyard-sweep
+duty and is **not** the hand-patching the row-10 precedent forbids: no code was touched, §§0-6 were
+left byte-identical, and every re-derivation is quarantined in an additive §7.
+
+**No fires this cycle — a deliberate refusal, recorded so it is not re-litigated.** The protocol
+requires every fire to carry `--notify-back` to a coordinator that verifies the completion ping by
+disk. **This session self-retires on completion**, so a notify-back aimed at it would land nowhere —
+the same structurally-one-way channel this runbook already flags 🚨. Firing 2 long-lived rebuild
+sessions from a pane that is about to close would manufacture exactly the orphan class rows 2 and 4
+spent the campaign closing. Ambient load at the decision was **9.89 / 16.51 / 21.80 on 10 cores**
+with a dispatch wave already running. **The fire is filed, not skipped** — see the ledger ids below.
+
+**Filed to `cc-backlog` this cycle** (a store, so no coordinator need exist for these to be picked
+up):
+- `d605fd2f4635` — 🚨 `scripts/worktree-gc.sh` has **no env kill switch** (16 `CC_WTGC_*` vars, none
+  a disable) while `com.claude.worktree-gc-infra` is launchd-registered: a **scheduled destructive**
+  job breaching the campaign's own standing rule. Row 11's AC-7.
+- `2d687628ce46` — re-arm the campaign: fire row 6 (payload ready), and rows 9/11 **reconcile-first**
+  per the cells above.
+
 - 2026-07-29: campaign opened; coordinator = the recycled successor of session e891e080.
 - 2026-07-29T17:53Z: coordinator re-armed — pane `71B42B48-1331-4F60-8DA3-6849F2682CA2`,
   session `98f66842`, account next2 (claude-secondary), worktree `.worktrees/gu-coordinator`
@@ -1795,6 +1856,26 @@ whoever picks up `da18f179ac50` should not re-file it.
 
 ## Learnings (accumulate; never delete)
 
+- 🚨 **A campaign's next action must live in a STORE, not in a paragraph addressed to a successor.**
+  This campaign went dormant for **8 days** with 3 rows open, no blocker and no load problem. The
+  prior coordinator armed both fire loops correctly and wrote the exact re-arm commands into
+  `coordinator-recycle-5.md`, flagged *"both die with the session that armed them"*. It was right —
+  they died, and nothing read the instructions, because **the reader it addressed was a successor
+  nobody was scheduled to spawn.** Prose in a runbook is advisory behind a diode; a `cc-backlog` row
+  is picked up by a dispatch wave with no coordinator in existence. Same class as the
+  conclusion-must-reach-the-enforcing-store learning, applied to orchestration state: **if the
+  continuation of the work depends on a live session's memory, the work stops when that session
+  does.** File it, then arm it.
+- 🚨 **"Open row" ≠ "needs a rebuild" — a dormant row's subsystem keeps moving without it.** Verified
+  2026-08-07 on 2 of the 3 open rows: row 9's index-budget problem was solved out-of-band by
+  `16dfe3b5` (predicate moved to the PreToolUse chokepoint) **better than row 9's own spec**, whose
+  M1 was never built; row 11's data-loss finding E1 was answered by `--ignored` in `worktree-gc.sh`
+  — **but with a remedy row 11's doc explicitly rejects** (`tests/worktree-gc.bats:776`). A payload
+  fired against either stale spec would rebuild shipped code, or implement a design the shipping side
+  already refused for a measured reason. **Every payload for a row that has sat >1 day must open with
+  a RECONCILE step — re-run the row's own acceptance reads against trunk, design only against what
+  fails.** Corollary for verification: when two oracles disagree, the shipping side wins and the
+  stranded doc is the stale one, however carefully it was measured.
 - Wave sizing is the load lever: sessions are the ambient load (14 ≈ load 88-104 pre-v2);
   lands are cheap now. Cap in-flight rebuilds, not landing frequency.
 - **One rebuild fire moves the load guard by itself.** Row 4's fire took the 1-min load

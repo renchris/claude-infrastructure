@@ -281,3 +281,65 @@ designed, not built. Nothing in §5 may be reported met until its read is run an
 - **R-d** Warm-pool semantics: `wt-pool-3`, `wt-pool-7` exist on disk (3.71/3.88 GiB) but the
   pool build logic lives in `scripts/handoff-fire.sh` (row 2's file, row 2 DONE). **Coordinator
   ping required before touching that file** — it is the campaign's live fire path.
+
+---
+
+## §7 — COORDINATOR RESCUE NOTE, 2026-08-07 (added on landing; §§0-6 above are untouched)
+
+**This document sat unlanded on `gu-worktree-warmpool-b` for 8 days** (authored `217ca100`,
+2026-07-30 01:43; cherry-picked to trunk with `-x` today). Its own §0 records the lesson *"land
+Phase 1 before building anything"* — and it then failed to land itself, which is the campaign's
+own documented graveyard failure mode applied to the document that names it. Nothing in §§0-6 was
+edited on rescue; everything below is the coordinator's re-derivation of **what decayed under it**,
+so attempt #3 starts from measured truth instead of re-deriving Phase 1 a third time.
+
+### 7.1 What still holds
+
+| Ref | Claim | Re-read 2026-08-07 |
+|---|---|---|
+| C28-C30 | all three owned surfaces are per-file symlinks into the shared checkout ⇒ **landing == deploying**, no activation step | **HOLDS** — `readlink ~/.claude/{scripts/worktree-gc.sh,hooks/worktree-setup.sh,hooks/git-worktree-guard.sh}` all resolve into the checkout |
+| E1-E5 | git's "unsafe to delete" excludes ignored files; E2/E3 are the positive controls | **HOLDS as git semantics** — but see 7.3, the remedy shipped differently |
+
+### 7.2 What DECAYED — do not inherit these
+
+| Ref | Was | Is now |
+|---|---|---|
+| C32 | row 4's beat oracle `~/.claude/cc-beats` **ABSENT — INERT**; the design's fail-soft rested on never consulting it | **PRESENT.** The row-4 seam is live; a design that assumes the oracle is absent is now reasoning about a dependency that exists |
+| payload (1) | `scripts/new-worktree.sh` "does not exist anywhere" — one of two phantom surfaces | **EXISTS ON TRUNK** (`c28f68c2`, 2026-08-05, fixed a slashed `-w` name on the cold path). `.worktreeinclude` is still absent, so the phantom count is **1, not 2** |
+| — | the reaper was operator-invoked | **`com.claude.worktree-gc-infra` is launchd-registered** (`dae60868` built the cron 2026-08-01, `554a5404` activated + effect-verified it). A destructive sweep now runs on a schedule |
+
+### 7.3 🚨 The headline finding was answered OUT-OF-BAND — with a remedy this document REJECTS
+
+E1 (a bare `git worktree remove` silently destroying gitignored content) was independently
+rediscovered and fixed on trunk while this doc sat stranded. **AC-1 is MET**: `grep -c -- '--ignored'
+scripts/worktree-gc.sh` → **2**, and `:265` / `:497` carry comments naming E1's exact mechanism
+("deletes it anyway at exit 0 with no `--force` and no warning"). `tests/worktree-gc.bats` is now
+**64 tests**.
+
+**But the shipped remedy is not AC-2's.** AC-2 asks that an ignored-only worktree be **KEPT**. The
+implementer considered exactly that and rejected it in-file at `tests/worktree-gc.bats:776`: *"6 of
+6 candidates carry ignored content, so a KEEP gate here would make oracle 3 inert."* What shipped
+instead is **blast-radius recording** — `:779` asserts the disposal ledger carries
+`"destroyed_ignored":"secrets.env"` and the operator line says *"gitignored content destroyed with
+it"*. So the disposal still happens; it is now *attributable* rather than silent.
+
+⚠️ **Attempt #3 must NOT build AC-2 as written.** Two oracles disagree and the shipping side has the
+measured reason; re-litigate the choice on its merits (is attributable destruction sufficient, or
+does an un-recreatable `.env` warrant a real KEEP gate?) — do not implement the stranded
+prescription just because this document is the one being read.
+
+### 7.4 AC status on trunk today (coordinator's read — each is the doc's own named read, re-run)
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| AC-1 | **MET** | `--ignored` × 2 in `scripts/worktree-gc.sh` |
+| AC-2 | **SUPERSEDED, contested** | see 7.3 — shipped as blast-radius recording, not KEEP |
+| AC-3 | **MET** | `CC_WTGC_DISPOSAL_LOG` → `~/.claude/autonomy/worktree-disposals.jsonl`; test at `:779` |
+| AC-4 · AC-5 · AC-6 | **UNPROVEN** | no evidence found for an unresolvable-trunk-ref verdict token or a degraded-oracle refusal; `PGREP_BIN` is parameterised (`:177`) but function-verification is not demonstrated |
+| AC-7 | 🚨 **NOT MET** | **no kill switch exists.** 16 `CC_WTGC_*` vars, none a disable — and the job is now launchd-registered. This breaches the campaign's standing rule *"every new mechanism ships with an env kill switch"* on an **automatically-scheduled destructive** surface. Filed to the ledger by the coordinator |
+| AC-8 | **MET this commit** | map row 11 corrected in the same land |
+
+**Net re-scope for attempt #3:** the data-loss half is largely done and the map is now accurate, so
+row 11 is no longer a full ground-up rebuild. The live remainder is **AC-7 (kill switch on a
+scheduled destructive job)**, **AC-4/5/6 (verdict tokens + oracle function-verification)**, and the
+**AC-2 adjudication** above — plus §6's R-a…R-d, which nothing since has touched.
