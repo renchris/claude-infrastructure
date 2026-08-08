@@ -106,3 +106,37 @@ suspects is the binding one, and either the fix or a named blocker. Report to
 - **2026-08-08** — plan created at 71% context by `a64e4989`; both tracks unstarted. Successor fires
   the wave. Related landed work this session: `7bb7526e` (research note), `14711d73` (its correction),
   `6c4c86d7` / `7691cd44` / `1be299a7` (README section + two diagram iterations).
+
+- **2026-08-08 — Track B COMPLETE.** Report: `docs/research/idle-recycle-not-proactive-2026-08-08.md`.
+  **Binding suspect = 1 (`hooks/waiting-recycle.sh`), and it is desk-role-gated as suspected — but the
+  proximate gate was a different one.** Session `a64e4989` abstained `disarmed` on 85 of 88 evaluations
+  (`waiting-recycle.sh:530`): a durable, never-expiring `clear` marker written `2026-07-31T17:58:44Z`,
+  keyed on **(CLAUDE_CONFIG_DIR, cwd)** — so the same directory is ARM+LIVE under `~/.claude`,
+  `-tertiary` and `-quaternary` but DISARMED under `-next` and `-secondary`, and the session drew a
+  disarmed slot purely from account routing. Two further gates sit behind it: arm-by-default is dead
+  (`cc-roles/desk` no longer exists — only `orchestrator` — and `DESK_ROLE` defaults to `desk` at
+  `:205`; the `liveness-free-channel-never-gated-behind-liveness` pattern recurring, with
+  `autonomy-sweep.sh:253` documenting the removal), and the hook is registered on **`PostToolUse:Bash`
+  only, never `Stop`,** in all five config dirs. Reproduced live by running the deployed hook with a
+  realistic payload across four (account, cwd) pairs.
+  - **Suspect 2 REFUTED** — `boundary-handoff.sh:394` emits `{decision:"block"}`, not the inert
+    `additionalContext` channel; it evaluated 21× for this session and abstained *correctly* every
+    time (`below-threshold:NN<73`, peak 70 vs `T=73` at `:88`). It is the wrong TIER, not inert.
+  - **Suspect 3 NOT CAUSAL** — telemetry was complete throughout (`window:1000000`, 27-row `.hist`).
+    Direction on a genuine miss is silent-open (`:180`,`:187` abstain), which is a real post-reboot
+    hole, named not fixed.
+  - **Suspect 4** — the Stop actuator is proven live in this very session (IDL `session-continue
+    armed/fired/cleared`), and `boundary-handoff` already uses it. Plainly: **nobody wired it.**
+  - **Fix landed** (`scripts/idl-abstain-alarm.sh`): the monitor built to catch an inert hook counted
+    non-evaluation `gc` housekeeping rows in its denominator, so 4 such rows made waiting-recycle read
+    `HEALTHY` at 2,864 abstains / **0 fires in 14 days**. `total` now counts evaluations only. Selftest
+    cases M/N provably RED before, green after; 29/29 selftest, 11/11 bats, shellcheck clean; live
+    verdict is now `DORMANT-100`, exit 0 (surfaced, not paged). `tests/idl-abstain-alarm.bats:25`
+    exact `-eq 25` count converted to floor+tally (it red on the suite's own growth).
+  - **Named blocker (specified, NOT built)** — the ≥35% idle free-win tier has **no Stop-side
+    carrier**: `waiting-recycle` owns the tier but runs mid-turn on `PostToolUse:Bash`;
+    `boundary-handoff` owns Stop but starts at 73%. Between 35% and 73% an idle session at a clean
+    committed boundary is seen by nothing. Proposed: a damped, env-gated `CC_BOUNDARY_T_IDLE` second
+    threshold in `boundary-handoff.sh`, reusing its existing clean-tree/gate-green/no-teammates gates
+    and the S6 conversation-hold suppression. Not built here because it changes Stop behaviour
+    fleet-wide — larger than a safe in-actuator fix. Full spec + two secondary items in the report.
