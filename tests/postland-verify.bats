@@ -24,6 +24,18 @@
 #               it is a seconds-long decision procedure on the critical path to a green stamp, and
 #               at PRI 4 it is starved into the non-verdict that blocks deploy forever. RETRY_QOS
 #               never expands empty (nice is its floor) — bash 3.2 + set -u would die instead.
+#   C29 windows the ladder's 3 runs are BACK TO BACK on one box, so they sample ONE LOAD WINDOW and
+#               a >=2/3 there is one experiment, not three. C24 varies the retry's PRIORITY, which
+#               is the other half of the same law and NOT a substitute: a box at load 15 is at load
+#               15 for all three attempts. Measured across C24's own landing, the false-conviction
+#               fingerprint SURVIVED it — 7 of 34 consecutive red pairs fully disjoint before,
+#               7 of 47 after, with 1 green in 46 sweeps before and 2 in 54 after. So a LADDER
+#               conviction is a CANDIDATE: it reds only when a LATER sweep, >=CONVICT_SPREAD on,
+#               convicts the same file again. One window ⇒ the C23 abstention (cut, retried) —
+#               which IS the second window, so no extra run is ever scheduled. Deterministic reds
+#               (prelints, bash -n, the C13b sentinel) are exempt and never delayed. The gate is
+#               separation in TIME, never a lower load: the box has no quiet window, and waiting
+#               for one is gate_admit again (C19/R1).
 #   C5 target   origin/main of $CC_POSTLAND_REPO; ABSTAIN (exit 0) when that
 #               TREE already has a stamp
 #   C6 mutex    run.lock.d mkdir+pid — a second LIVE instance exits 0 quietly;
@@ -107,6 +119,14 @@ setup() {
   # from pushing. The revert tests below opt IN explicitly, so a guard that silently stopped
   # working cannot hide behind a blanket suite-wide switch.
   export POSTLAND_AUTOREVERT=off
+  # C29 shrinks a BOUND, it does not disable a guard. Corroboration requires two things: a second
+  # SWEEP, and >=CONVICT_SPREAD seconds between them. Only the second is impossible in a suite whose
+  # sweeps are seconds apart, so only the second is relaxed — CC_POSTLAND_CONVICT stays ON for every
+  # test in this file, and each red test drives its own second_window explicitly. A blanket
+  # CC_POSTLAND_CONVICT=off here would be the same anti-pattern the AUTOREVERT comment above names:
+  # a guard that silently stopped working would hide behind the switch. The floor itself, and the
+  # kill switch itself, each have their own test below.
+  export CC_POSTLAND_CONVICT_SPREAD_S=0
   # C28: the SUT now EXPORTS CC_BATS_MAX_ROOTS=0 (its cc-bats admission exemption), and C28's stubs
   # assert that the child sees it. An ambient value would supply that `0` for free and the assertion
   # would pass with the export DELETED — measured, not theorised: the first mutation run of C28 was
@@ -200,6 +220,12 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   printf '@test "%s" { run bash "$BATS_TEST_DIRNAME/%s-helper.sh"; [ "$status" -eq 0 ]; }\n' \
     "$1" "$1" > "$R/tests/$1.bats"
 }
+# C29: a LADDER conviction is a candidate, not a verdict — the same file must be convicted again by
+# a LATER sweep before it reds. The first sweep therefore stamps `cut` (nothing proven) and leaves
+# the tree unstamped-green, which is exactly what makes it eligible to run again; this drives that
+# second run. Named rather than inlined so every red test states, at its own call site, that its
+# conviction spans two windows. Deterministic reds (prelints, bash -n) never need it.
+second_window() { run bash "$SUT" --run-if-needed; }
 
 # ── C2 kill switch ──────────────────────────────────────────────────────────────
 @test "POSTLAND_VERIFY=off is an immediate no-op exit 0" {
@@ -474,9 +500,11 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   printf '@test "f" { false; }\n' > "$R/tests/bad.bats"   # fails 3/3 => C8 red
   push_commit "the culprit"
   bad="$(origin_head)"; badtree="$(origin_tree)"
-  run bash "$SUT" --run-if-needed                  # exit code on RED: unspecified
+  run bash "$SUT" --run-if-needed                  # window 1 — C29: a candidate, stamped cut
   s="$CC_POSTLAND_DIR/stamps/$badtree.json"
   [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]                 # C29: one window proves nothing
+  second_window                                    # window 2 re-convicts the same file => RED
   run jq -r '.verdict' "$s"; [ "$output" = "red" ]                 # C10
   run jq -e '.failing | length > 0' "$s"; [ "$status" -eq 0 ]      # C4: names the file
   [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$green" ]            # C10: NOT advanced
@@ -509,13 +537,20 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   run bash "$SUT" --run-if-needed                  # green baseline => a bisect floor
   [ "$status" -eq 0 ]
   green="$(cat "$CC_POSTLAND_DIR/last-green")"
-  # fails attempts 1 and 2, passes attempt 3 => 2/3 => RED (the C8 boundary case;
-  # a SUT that short-circuits at 2 fails never reaches attempt 3 — still RED)
+  # fails attempts 1 and 2, passes attempt 3 => 2/3 => a conviction (the C8 boundary case;
+  # a SUT that short-circuits at 2 fails never reaches attempt 3 — still convicted).
+  # MODULAR, not "n>=3": C29 makes this a TWO-sweep test, so the fixture has to present the same
+  # 2-of-3 shape in EACH window (attempts 1,2,3 then 4,5,6). A plain >=3 latch would pass outright
+  # in window 2 and the file would clear as a flake — the test would then pass for the wrong reason
+  # on a broken SUT, which is the failure this whole clause exists to prevent.
   c="$BATS_TEST_TMPDIR/counter"
-  add_stateful_test twofail "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -ge 3 ] && exit 0\nexit 1\n' "$c")"
+  add_stateful_test twofail "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ $((n %% 3)) -eq 0 ] && exit 0\nexit 1\n' "$c")"
   push_commit "reproducibly failing suite"
   tree="$(origin_tree)"
-  run bash "$SUT" --run-if-needed
+  run bash "$SUT" --run-if-needed                  # window 1 => candidate, not a verdict
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                            # C29: a same-window 2/3 is ONE experiment
+  second_window                                    # window 2 convicts 2/3 again => RED
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "red" ]                            # C8: >=2/3 => reproducible RED
   [ "$(pages_n)" = "1" ]                           # C10
@@ -577,16 +612,18 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   push_commit "one failing test beside a witness"
   tree="$(origin_tree)"
   run bash "$SUT" --run-if-needed
+  second_window                                    # C29: conviction spans two sweeps
   # The PREMISE of the count, asserted rather than assumed: no last-green ⇒ no bisect ⇒ nothing but
   # the ladder can move the number below. Restore a baseline run above and this fails HERE, at the
   # reason, instead of leaving the count to drift by whatever the bisect happens to cost that month.
   [ ! -f "$CC_POSTLAND_DIR/last-green" ]
-  # WITNESS ACCOUNTING (measured, so nobody has to re-derive it): 1 = the corpus run, alone. The two
-  # RETRIES contribute ZERO, because each re-ran only the named test. The paired file-granularity
-  # test below is the control: same fixture, 3 — and that delta of exactly 2 IS the retries.
-  [ "$(wc -l < "$wit" | tr -d ' ')" = "1" ]
+  # WITNESS ACCOUNTING (measured, so nobody has to re-derive it): 2 = the corpus run in EACH of the
+  # two C29 windows, alone. The four RETRIES contribute ZERO, because each re-ran only the named
+  # test. The paired file-granularity test below is the control: same fixture, 6 — and that delta of
+  # exactly 4 IS the retries, 2 per window.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "2" ]
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
-  [ "$output" = "red" ]                            # C8 still convicts: "boom" failed 3/3
+  [ "$output" = "red" ]                            # C8 still convicts: "boom" failed 3/3, twice over
 }
 
 @test "C23: POSTLAND_RETRY_GRANULARITY=file restores the whole-file re-run" {
@@ -594,13 +631,155 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   printf '@test "boom" { false; }\n@test "wit" { echo x >> "%s"; }\n' "$wit" > "$R/tests/pair2.bats"
   push_commit "the granularity seam"
   tree="$(origin_tree)"
-  POSTLAND_RETRY_GRANULARITY=file run bash "$SUT" --run-if-needed
+  # `run env VAR=…` rather than a bare `VAR=… run …`: an env prefix on a bats FUNCTION has
+  # POSIX-vs-bash persistence quirks, and this seam must reach BOTH windows unambiguously. It is
+  # also the form the rest of this suite already uses for seams (see the CC_POSTLAND_BATS sites).
+  run env POSTLAND_RETRY_GRANULARITY=file bash "$SUT" --run-if-needed   # C29 window 1
+  run env POSTLAND_RETRY_GRANULARITY=file bash "$SUT" --run-if-needed   # C29 window 2
   [ ! -f "$CC_POSTLAND_DIR/last-green" ]           # same premise: no bisect inside this number
-  # 3 = corpus (1) + TWO WHOLE-FILE retries (2). Against the test-granular default the same fixture
-  # yields 1 — the seam is what moves those two executions, and now the ONLY thing that can.
-  [ "$(wc -l < "$wit" | tr -d ' ')" = "3" ]
+  # 6 = per C29 window [corpus (1) + TWO WHOLE-FILE retries (2)] × 2. Against the test-granular
+  # default the same fixture yields 2 — the seam is what moves those four executions, and now the
+  # ONLY thing that can.
+  [ "$(wc -l < "$wit" | tr -d ' ')" = "6" ]
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "red" ]                            # the seam changes HOW the ladder re-runs, never WHAT it decides
+}
+
+# ── C29 the ladder's three runs are ONE load window ───────────────────────────────────────────────
+# THE FALSE-CONVICTION DEFECT, filed 2026-07-28, re-measured 2026-08-08. classify_failures re-runs a
+# failing test twice more BACK TO BACK — seconds apart, same box, inside one run. So its three
+# observations sample ONE LOAD WINDOW, and ">=2/3 agreed" means only "it failed twice under the same
+# ambient load" — which is what a starved box produces just as reliably as a bug.
+# GATE_ARCHITECTURE_PLAN.md already recorded the law one variable off: "re-running is evidence only
+# if the environment actually changed" (written about a ladder that re-ran under the same wrong PATH
+# three times and called the agreement reproducible).
+#
+# WHY THIS IS NOT C24 AGAIN, WHICH IS THE WHOLE POINT. C24 (08dd4e3c) closed the FIRST half of that
+# law: the retry now runs in the UTILITY band instead of the corpus's background clamp, so the
+# re-run genuinely does happen in a different environment. It helped and it stays. But the variable
+# it moves is PRIORITY, not AMBIENT LOAD — a box at load 15 is at load 15 for all three attempts,
+# and a suite losing to memory or IO pressure loses in utility too. MEASURED over the 100 stamps on
+# disk, split at C24's own landing:
+#     PRE  C24 (n=46): 42 red · 1 green · 2 cut · 1 hung — 7 of 34 consecutive red pairs DISJOINT
+#     POST C24 (n=54): 48 red · 2 green · 4 cut        — 7 of 47 consecutive red pairs DISJOINT
+# The fingerprint SURVIVED the band fix. A genuine red re-convicts the SAME file until somebody
+# fixes it; a convicted set that reshuffles sweep to sweep (prev=11 now=2 overlap=0 · prev=12 now=1
+# overlap=0 · prev=9 now=1 overlap=0) is the box talking, not the tree. Two greens in 54 sweeps, and
+# a red is not just a wrong stamp — it is terminal for that tree (C5 abstains on it forever) and it
+# arms the bisect and AUTO-REVERT, which pushes a revert of an innocent commit to trunk.
+#
+# WHAT THIS IS NOT: more retries. §8 of LAND_PIPELINE_V2 forbids that class outright ("raising the
+# ceiling / more retries / bigger budgets" = parameter motion in a broken frame), and nothing here
+# adds an attempt, a poll, a sleep or a budget — the in-run ladder is untouched and costs what it
+# always did. Only the WORTH of one window's agreement changes: it becomes the C23 abstention, and
+# the cut C23 already performs is itself the second window. Nor is it a wait for a quiet box — that
+# is gate_admit (C19/R1), and this box has no quiet window by construction. The gate is separation
+# in TIME, which the clock always eventually satisfies; load is recorded, never tested.
+@test "C29: a conviction that does NOT reproduce in a second window is a flake, not a RED" {
+  # THE WHOLE POINT, stated as a fixture: fails 3/3 inside window 1 — unanimous, by the old rule an
+  # open-and-shut "reproducible RED" — and then passes once the window moves. That is precisely the
+  # shape a load-starved suite has, and precisely what the old ladder could not tell from a bug.
+  c="$BATS_TEST_TMPDIR/window-counter"
+  add_stateful_test loadflake "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 3 ] && exit 1\nexit 0\n' "$c")"
+  push_commit "a suite that fails 3/3 in one window and passes in the next"
+  tree="$(origin_tree)"
+  target="$(origin_head)"
+  run bash "$SUT" --run-if-needed                  # window 1: attempts 1,2,3 all fail
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                            # C29: 3/3 in ONE window still proves nothing
+  [ "$(pages_n)" = "0" ]                           # C10: pages stay RED-only
+  second_window                                    # window 2: attempt 4 passes
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "green" ]                          # C29: the second window CLEARED it
+  [ "$(cat "$CC_POSTLAND_DIR/last-green")" = "$target" ]   # C9: and the tree is provable again
+  [ "$(pages_n)" = "0" ]                           # nothing was ever paged as a red
+}
+
+@test "C29: the SPREAD floor holds — two sweeps too close together do not corroborate" {
+  # CONVICT_SPREAD is what stops a run's own ladder, or two runs that happen to land back to back,
+  # from counting as two windows. Asserted with the floor RAISED, so the sweeps below cannot clear
+  # it, and controlled at the other side of the boundary in the same body.
+  printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "always fails"
+  tree="$(origin_tree)"
+  # CUT_MAX pinned, not inherited: this is the one test that takes THREE sweeps on ONE tree, and the
+  # default CUT_MAX is 3 — so the third sweep clears the cool-off refusal by a margin of exactly
+  # zero. Lower that unrelated constant to 2 and this test goes red for a reason that has nothing to
+  # do with corroboration, which is precisely the coupling the suite keeps pinning out.
+  export CC_POSTLAND_CUT_MAX=99
+  run env CC_POSTLAND_CONVICT_SPREAD_S=3600 bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]
+  run env CC_POSTLAND_CONVICT_SPREAD_S=3600 bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                            # C29: seconds apart is not a second WINDOW
+  # POSITIVE CONTROL at the other side of the boundary — the identical tree with the floor dropped
+  # must red, else this test would pass just as happily if corroboration were dead in every case.
+  run env CC_POSTLAND_CONVICT_SPREAD_S=0 bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]
+}
+
+@test "C29: a VERDICT spends the candidates — a green in between cannot corroborate a later red" {
+  # The trap this closes: candidate rows live for CONVICT_TTL (24h), so without an explicit clear a
+  # file convicted once, then EXONERATED by a green corpus, then failing once more hours later would
+  # be red off a SINGLE window — C29 rebuilt out of its own state. Fails runs 1-3 (window 1), passes
+  # run 4 (window 2 ⇒ green ⇒ candidates spent), fails from run 5 on.
+  c="$BATS_TEST_TMPDIR/spend-counter"
+  add_stateful_test spender "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -eq 4 ] && exit 0\nexit 1\n' "$c")"
+  push_commit "convicted, then exonerated, then failing again"
+  t1="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # window 1 => candidate recorded
+  second_window                                    # window 2 => GREEN, ledger cleared
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t1.json"
+  [ "$output" = "green" ]                          # precondition, asserted not assumed
+  printf '# retarget\n' >> "$R/tests/spender.bats"
+  push_commit "a new tree, same suite, now failing again"
+  t2="$(origin_tree)"
+  run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  [ "$output" = "cut" ]                            # C29: the pre-green row may NOT corroborate
+  second_window                                    # ...and a genuine second window still converges
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$t2.json"
+  [ "$output" = "red" ]
+}
+
+@test "C29: a DETERMINISTIC red is never delayed — bash -n convicts in ONE window" {
+  # The exemption, and why it is safe: syntax and the whole-tree prelints reproduce BY CONSTRUCTION,
+  # so a second window cannot tell them anything and delaying them would only leave a broken trunk
+  # broken for another sweep. Only LADDER convictions — the load-attributable ones — are corroborated.
+  printf 'if [ ; then\n' > "$R/bad-syntax.sh"
+  chmod +x "$R/bad-syntax.sh"
+  push_commit "a file that cannot parse"
+  tree="$(origin_tree)"
+  run bash "$SUT" --run-if-needed                  # ONE sweep only — no second_window here
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                            # C29: deterministic reds skip corroboration
+  run jq -r '.failing | join(",")' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "${output#*bad-syntax.sh}" != "$output" ]      # ...and the stamp names it
+}
+
+@test "C29: CC_POSTLAND_CONVICT=off restores the one-window red (the kill switch)" {
+  printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
+  push_commit "always fails"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_CONVICT=off bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                            # one sweep, one verdict — the pre-C29 behaviour
+}
+
+@test "C29: the selftest's load-branch guard is LIVE (it must be able to fail)" {
+  # Same shape as C19's control, and for the same reason: the guard asserts an ABSENCE, so it is
+  # worth nothing unless its pattern can actually match. It is also the pattern that matched ITSELF
+  # when first written unanchored — which is why it is anchored to statement position.
+  run grep -cE '^[[:space:]]*(if|while|until)[[:space:]].*(loadavg|load1)' "$SUT"
+  [ "$output" = "0" ]                              # the runner branches on load NOWHERE
+  printf 'f() {\n  while [ "$(load1)" -gt 8 ]; do sleep 15; done\n}\n' > "$BATS_TEST_TMPDIR/bait.sh"
+  run grep -cE '^[[:space:]]*(if|while|until)[[:space:]].*(loadavg|load1)' "$BATS_TEST_TMPDIR/bait.sh"
+  [ "$output" = "1" ]                              # ...and the pattern DOES catch a quiet-box wait
+  # the recorded-for-evidence assignment must stay legal, else the guard forbids the wrong thing
+  run grep -cE '^[[:space:]]*load="\$\(load1\)"' "$SUT"
+  [ "$output" -ge 1 ]
 }
 
 # ── C13 CUT ≠ RED ────────────────────────────────────────────────────────────────────────────
@@ -629,9 +808,15 @@ add_stateful_test() {   # $1 = basename, $2 = body of the helper script
   printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\necho "not ok 1 boom"\necho "# (in test file tests/ok.bats, line 2)"\nexit 1\n' > "$fake"
   chmod +x "$fake"
   tree="$(origin_tree)"
-  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  # TWO WINDOWS (C29), unlike its C13b sibling above. The difference is the `# (in test file …)`
+  # diagnostic this fake emits: it makes the not-ok ATTRIBUTABLE, so classify_failures runs the
+  # LADDER and the conviction is load-attributable. C13b's fake omits the diagnostic, takes the
+  # `FAILING=("tests/")` sentinel path before the ladder, and so is exempt and still reds in one.
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed     # C29 window 1 => candidate
   s="$CC_POSTLAND_DIR/stamps/$tree.json"
   [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]                 # one window proves nothing
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed     # C29 window 2 => verdict
   run jq -r '.verdict' "$s"; [ "$output" = "red" ]
 }
 
@@ -850,7 +1035,11 @@ STUB
 
 @test "C13e: EVERY failing suite is filed, not just the one that sorts first" {
   fake="$(multi_red_bats)"
-  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  # TWO WINDOWS (C29): the fixture's failures are ATTRIBUTED, so they are ladder convictions and
+  # window 1 only stamps a cut — which files nothing, so every assertion below would read an absent
+  # backlog. The stub is stateless (no run counter), so window 2 presents the identical 3-file TAP.
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 1 => candidate, cut
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 2 => RED, files them
   [ -f "$REC/cc-backlog.argv" ]
   # The one the old code DID file — the control. If this fails the fixture never reached red_actions.
   grep -q 'post-land RED: tests/aaa-sorts-first.bats::alpha @' "$REC/cc-backlog.argv"
@@ -870,7 +1059,8 @@ STUB
 # invisibility for a different subset. The fixture's third file is one of them ON PURPOSE.
 @test "C13f: a digit-bearing suite name still yields a VALID condition key (the silent-drop trap)" {
   fake="$(multi_red_bats)"
-  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # C29 window 1 => cut, files nothing
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 2 => RED, files them
   # Digits are SPELLED OUT, not stripped — so it stays distinct from a hypothetical `it-kitty`.
   grep -q -- '--condition postland-red-it-two-kitty' "$REC/cc-backlog.argv"
   # Every condition passed must satisfy the REAL predicate, read from cc-backlog itself rather than
@@ -901,7 +1091,11 @@ STUB
   # moves the debounce marker, so the kick is never debounced and fires EVERY time. A test that
   # spawns live agents is not a test.
   export CC_BACKLOG_KICK=off
-  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  # TWO SWEEPS PER RED (C29) — and this test's whole subject is what a SECOND red sweep does, so be
+  # explicit that the pairs below are windows, not repeats. A ladder conviction files nothing until
+  # a later sweep re-convicts it, so each "sweep" this test reasons about is now a window PAIR.
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 1 => candidate, cut
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 2 => RED, files 3
   [ -f "$CC_BACKLOG_FILE" ]
   local after1; after1="$(jq -r 'select(.event=="add").id' "$CC_BACKLOG_FILE" | sort -u | wc -l | tr -d ' ')"
   [ "$after1" = "3" ]                                 # one per failing suite, not one per run
@@ -911,7 +1105,11 @@ STUB
   # gate does not short-circuit on `already-stamped`.
   echo second > "$R/second-fixture"
   push_commit second                                  # a NEW sha ⇒ a new run over the same red set
-  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  # Window 1 again on the NEW tree: the verdict above spent the candidate ledger (conviction_clear
+  # runs beside cut_clear at every verdict), so this red has to earn its two windows from scratch —
+  # which is exactly the property that keeps a stale row from convicting off one experiment.
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 1 => cut
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed   # window 2 => RED, re-files the same 3
   local after2; after2="$(jq -r 'select(.event=="add").id' "$CC_BACKLOG_FILE" | sort -u | wc -l | tr -d ' ')"
   [ "$after2" = "3" ]                                 # THE regression: was 6 (a fresh item per sweep)
   # And the reason it holds: identity is the CONDITION, which carries no sha/count/timestamp.
@@ -1259,6 +1457,11 @@ hung_pages_n() { find "$CC_PAGES_DIR" -name 'postland-hung-*.page' 2>/dev/null |
   printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
   push_commit "a red tree"
   run bash "$SUT" --run-if-needed
+  second_window                                    # C29: make it an actual RED, not merely a cut —
+                                                   # this test's claim is about a RED, and a
+                                                   # one-window cut would satisfy it vacuously
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$(origin_tree).json"
+  [ "$output" = "red" ]                            # the premise, asserted not assumed
   [ "$(cat "$gc/gate-green")" = "$target" ]        # still the last PROVEN commit
 }
 
@@ -1278,6 +1481,13 @@ arv_red() {   # [subject] → echoes the culprit sha
   bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
   printf '@test "boom" { false; }\n' > "$R/tests/bad.bats"
   push_commit "${1:-the culprit}"
+  # C29 WINDOW 1, burned here. A ladder conviction is a candidate until a SECOND separate sweep
+  # re-convicts it, so after one run there is no red — and therefore no bisect and no revert for
+  # these tests to observe. This spends the first window (it stamps `cut`; the suite default
+  # POSTLAND_AUTOREVERT=off applies, and a cut fires no revert under any setting) so the CALLER's
+  # own sweep is the one that reds. Deliberately NOT CC_POSTLAND_CONVICT=off: C20 must be proved
+  # against the real conviction path, not a version of it with the new guard switched out.
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
   origin_head
 }
 # Same red, but the culprit is UNREVERTABLE: a follow-on commit edits the culprit's own file, so
@@ -1293,6 +1503,10 @@ arv_red_unrevertable() {   # → echoes the culprit sha
   culprit="$(origin_head)"
   printf '@test "boom" { false; }\n@test "boom too" { false; }\n' > "$R/tests/bad.bats"
   push_commit "a follow-on amending the culprit's own file"
+  # C29 WINDOW 1 on the FOLLOW-ON tree — the one the caller's sweep will judge. Burned after the
+  # follow-on lands, not before, because the candidate ledger is keyed on the FILE and the tree the
+  # caller reds is this one. Same reasoning as arv_red above.
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 || true
   printf '%s' "$culprit"
 }
 ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
@@ -1374,7 +1588,12 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   [ -z "$(find "$CC_POSTLAND_DIR/reverts" -type f 2>/dev/null)" ]
   # POSITIVE CONTROL at the other side of the boundary
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
-  run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=1 bash "$SUT" --run-if-needed
+  # TWO WINDOWS AGAIN (C29), because this is a SECOND red EPISODE, not a continuation of the first.
+  # The verdict above spent the candidate ledger (conviction_clear runs beside cut_clear at every
+  # verdict), so wiping the stamps restarts this tree at window 1 — one sweep here would cut and
+  # revert nothing, and the control would fail while the cap it is controlling for works fine.
+  run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=1 bash "$SUT" --run-if-needed   # window 1
+  run env POSTLAND_AUTOREVERT=on POSTLAND_MAX_REVERTS=1 bash "$SUT" --run-if-needed   # window 2
   [ -s "$REC/ship.argv" ]                                      # under the cap ⇒ it reverts
 }
 
@@ -1508,7 +1727,8 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   printf '@test "f" { false; }\n' > "$R/tests/bad.bats"
   push_commit "red, with no green floor to bisect from"
   [ ! -f "$CC_POSTLAND_DIR/last-green" ]                       # precondition, asserted not assumed
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 1 — candidate only
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 2 — now it reds
   [ "$(pages_n)" = "1" ]                                       # it PAGES...
   [ -f "$REC/cc-backlog.argv" ]                                # ...and BACKLOGS...
   [ ! -f "$REC/ship.argv" ]                                    # ...and reverts NOTHING
@@ -1521,7 +1741,8 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   [ -f "$CC_POSTLAND_DIR/last-green" ]
   printf '@test "f2" { false; }\n' > "$R/tests/bad2.bats"
   push_commit "the control culprit"
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 1
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 2
   [ -s "$REC/ship.argv" ]                                      # decidable ⇒ a revert IS attempted
 }
 
@@ -1557,7 +1778,12 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   # only new fact is the tip — which is exactly the fact the old guard could not read.
   git -C "$R" push -qf origin "$culprit:main"
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # A SECOND red EPISODE ⇒ its own two windows (C29). The verdict above spent the candidate ledger,
+  # so this tree starts again at window 1; one sweep would cut, never reach red_actions, and the
+  # re-arm under test would look broken when it is not. Window 1 also logs no `AUTOREVERT rearm`
+  # line (no red ⇒ no red_actions), so the `= 1` count below still measures exactly one re-arm.
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 1 => cut
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # window 2 => red => the re-arm fires
   [ -s "$REC/ship.argv" ]                                # THE CLAIM: the veto ACTUATED on retry
   [ "$(mk_get "$culprit" attempts)" = "2" ]
   [ "$(mk_get "$culprit" land_exit)" = "0" ]
@@ -1582,7 +1808,12 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   push_commit "an innocuous follow-on — the trunk tip now differs from the recorded one"
   [ "$(origin_head)" != "$(mk_get "$culprit" tip)" ]     # the control, asserted not assumed
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # A SECOND red EPISODE ⇒ its own two windows (C29) — and here the one-window version is worse than
+  # a plain failure: `! -s ship.argv` passes VACUOUSLY on a cut (a cut reverts nothing), so only the
+  # page count below would have caught it. The claim is about a TERMINAL SKIP, which requires
+  # actually reaching red_actions.
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # C29 window 1 => cut
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # window 2 => red => the skip pages
   [ ! -s "$REC/ship.argv" ]                              # SAFETY UNCHANGED: never a second revert
   [ "$(inert_pages_n)" = "1" ]                           # THE CLAIM: it is no longer silent
   # ...and DURABLY so — a page dies on the next green, a backlog item does not — with the damper
@@ -1618,7 +1849,11 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   [ ! -f "$REC/ship.argv" ]                              # ...which failed at the revert step
   git -C "$R" push -qf origin "$culprit:main"            # new evidence — enough to re-arm, if budget
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json                 # remained. It does not.
-  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=1 bash "$SUT" --run-if-needed
+  # EVERY red EPISODE gets its own two windows (C29): a verdict spends the candidate ledger, so each
+  # stamp-wipe restarts this tree at window 1. The log-count assertions below stay exact because a
+  # window-1 cut never reaches red_actions and so emits none of the lines they count.
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=1 bash "$SUT" --run-if-needed  # window 1
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=1 bash "$SUT" --run-if-needed  # window 2
   [ ! -f "$REC/ship.argv" ]                              # budget spent ⇒ no attempt
   [ "$(mk_get "$culprit" attempts)" = "1" ]              # ...and the marker is untouched
   [ "$(inert_pages_n)" = "1" ]                           # ...and it PAGED rather than skipping mute
@@ -1627,7 +1862,8 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   # BOUNDARY CONTROL at the other side: the identical state with one more unit of budget ATTEMPTS.
   # Without this the test would pass just as well against an actuator that never retries at all.
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
-  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=2 bash "$SUT" --run-if-needed
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=2 bash "$SUT" --run-if-needed  # window 1
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_MAX=2 bash "$SUT" --run-if-needed  # window 2
   [ -s "$REC/ship.argv" ]
   [ "$(mk_get "$culprit" attempts)" = "2" ]
 }
@@ -1643,7 +1879,10 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   # here would fire every sweep and train the operator to ignore the class (memory: alarm-polarity).
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
   : > "$CC_POSTLAND_DIR/runner.log"
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # Two windows per red episode (C29). The log was just truncated, and a window-1 cut writes only
+  # CUT lines — none of the `reason=` lines counted below — so the exact counts still hold.
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # window 1 => cut
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed   # window 2 => red => the quiet skip
   [ ! -f "$REC/ship.argv" ]
   [ "$(mk_get "$culprit" attempts)" = "1" ]              # untouched — no attempt was spent
   [ "$(inert_pages_n)" = "0" ]                           # NOT terminal, so NOT paged
@@ -1653,7 +1892,8 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   # window collapses. It must attempt, which also proves the skip above was the DECAY and not some
   # other refusal silently standing in for it.
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
-  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_DECAY_S=0 bash "$SUT" --run-if-needed
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_DECAY_S=0 bash "$SUT" --run-if-needed # window 1
+  run env POSTLAND_AUTOREVERT=on POSTLAND_REVERT_RETRY_DECAY_S=0 bash "$SUT" --run-if-needed # window 2
   [ "$(mk_get "$culprit" attempts)" = "2" ]
   run grep -c 'AUTOREVERT rearm .* why=decay-' "$CC_POSTLAND_DIR/runner.log"
   [ "$output" = "1" ]
@@ -1670,7 +1910,13 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   printf '@test "rec" { printf "%%s\\n" "$TMPDIR" >> "%s/tmpdirs.txt"; false; }\n' "$REC" \
     > "$R/tests/bad.bats"
   push_commit "the culprit"
-  run bash "$SUT" --run-if-needed
+  run bash "$SUT" --run-if-needed                               # C29 window 1 — a cut, so NO bisect
+  # TRUNCATE between windows, deliberately. Each sweep mints its OWN $RUN_TMP (a fresh mktemp -d
+  # suffix), so leaving window 1's rows in place would compare window 2's probe against window 1's
+  # corpus — two different directories that SHOULD differ, turning the claim into a guaranteed
+  # failure about the wrong thing. Everything below is one window's invocations.
+  : > "$REC/tmpdirs.txt"
+  run bash "$SUT" --run-if-needed                               # C29 window 2 — reds, so it bisects
   [ -s "$REC/tmpdirs.txt" ]
   [ "$(wc -l < "$REC/tmpdirs.txt" | tr -d ' ')" -ge 2 ]         # corpus, then ladder, then the probe
   corpus="$(head -1 "$REC/tmpdirs.txt")"                        # invocation 1 IS the corpus run
@@ -1705,7 +1951,8 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   push_commit "the innocent tip"
   tip="$(origin_head)"
   [ "$culprit" != "$tip" ]                                      # precondition of the entire test
-  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed    # C29 window 1 — candidate only
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed    # C29 window 2 — reds, then reverts
   [ -s "$REC/ship.argv" ]                                       # something WAS reverted...
   [ "$(ship_field branch)" = "postland-revert-${culprit:0:12}" ] # ...and it was the CULPRIT...
   [ "$(ship_field branch)" != "postland-revert-${tip:0:12}" ]    # ...never the innocent tip
@@ -1873,15 +2120,28 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
 #
 # Distinct from the C13 cut tests above: those kill the WHOLE corpus run with ZERO `not ok`. This
 # drives the LADDER — a real `not ok` engages the retry, and the RETRY is what dies.
-stub_ladder_kill() {   # $1 = rc the retries die with; first corpus run emits a REAL not ok
+stub_ladder_kill() {   # $1 = rc the retries die with; the CORPUS run emits a REAL not ok
+  # KEYED ON ARGV, NOT ON A CALL COUNTER — and the counter it replaces was load-bearing, so this is
+  # worth stating. The old form latched on "n == 1", which worked only because exactly one call ever
+  # needed the corpus TAP. C29 makes the rc-1 case below a TWO-sweep test and the state file persists
+  # across sweeps, so window 2 got no TAP at all and cut on `notok == 0` — the right verdict for the
+  # wrong reason. The obvious repair (n % 3 == 1, "one corpus + two retries per window") is ALSO
+  # wrong, and measured so: the real sequence is FOUR calls, not three —
+  #     1: tests/ok.bats              (corpus)
+  #     2: -f ^beta$ tests/probe.bats (retry 1, test-granular)
+  #     3: tests/probe.bats           (retry 1's WHOLE-FILE fallback — the -f run planned 0 tests)
+  #     4: -f ^beta$ tests/probe.bats (retry 2)
+  # so `n % 3` re-emitted the TAP at call 4 and turned the rc-0 FLAKE control into a conviction: the
+  # control stopped being able to fail for its own reason. Any arithmetic over call counts encodes
+  # the ladder's internal fallback behaviour, which is not this fixture's subject and is free to
+  # change. What IS stable is what each call is ASKED to run: the corpus runs the tree's suites, and
+  # every retry names probe.bats (with -f or, on fallback, without). Discriminating on that is
+  # window-agnostic and count-agnostic, and it is the same shape multi_red_bats already uses.
   stub_bats "ladder$1" "
 case \"\$1\" in --count) echo 1; exit 0 ;; esac
-n=\$(cat '$REC/ladder.n' 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > '$REC/ladder.n'
-if [ \"\$n\" = 1 ]; then
-  printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
-  exit 1
-fi
-exit $1"
+case \"\$*\" in *probe.bats*) exit $1 ;; esac
+printf '1..2\nok 1 alpha\nnot ok 2 beta\n# (in test file tests/probe.bats, line 3)\n'
+exit 1"
 }
 
 @test "ladder: a retry killed by SIGKILL (137) is a CUT, not a RED" {
@@ -1914,7 +2174,10 @@ exit $1"
   b="$(stub_ladder_kill 1)"
   export CC_POSTLAND_BATS="$b"
   tree="$(origin_tree)"
-  run bash "$SUT" --run-if-needed
+  run bash "$SUT" --run-if-needed           # C29 window 1 — a candidate, not yet a verdict
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                     # rc 1 IS a tree verdict, but one window does not prove it
+  second_window                             # window 2 re-convicts the same file
   run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
   [ "$output" = "red" ]                     # a reproducible failure still convicts
   run jq -r '.failing | length' "$CC_POSTLAND_DIR/stamps/$tree.json"
