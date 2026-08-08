@@ -157,6 +157,41 @@ _beat() {
 _unbeat() { local k; for k in $BEAT_KEYS; do rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true; done; }
 trap '_unbeat' EXIT
 
+# ── A KILLED WATCHER MUST NOT DIE SILENT (G10, backlog 5b77e20d9db6) ──────────────────────────────
+# The EXIT trap above was the ONLY trap in this file, so an external SIGTERM ended the watch with no
+# word at all: the wake path this session was relying on simply stopped existing, and the reader's
+# whole account of it was the harness's `failed with exit code 143` / `144`.
+#
+# THIS DOES NOT PREVENT THE KILL, AND CANNOT. The sender is NOT recoverable from an exit code (see
+# the header: 143 = this process alone was TERMed, 144 = the harness's sentinel for the process
+# GROUP; an SA_SIGINFO recorder is the only thing that yields si_pid, and 144 proves only that the
+# signal came from outside the harness). What it fixes is the SILENCE and the STALE CLAIM: the
+# marker is cleared before dying, so a dead watcher stops advertising an armed wake path to
+# cc-notify / mailbox-drain / cc-announce, and a `verdict=killed` line rides the stderr that the
+# harness's task-completion notification actually carries — the same convention the timeout verdict
+# at the foot of this file uses, and for the same reason.
+#
+# NOTE: backlog 5b77e20d9db6 reads 144 as 128+16 ⇒ SIGURG. That is WRONG on the signal (SIGURG's
+# default action is IGNORE, so bash cannot die from it) though right in its conclusion that this is
+# an external group-kill rather than a designed exit. Measured: `kill -TERM <inner pid>` → 143;
+# `kill -TERM -<pgid>` → 144 with si_pid captured showing sig=15.
+#
+# Exits 128+signal deliberately: that is the number the harness already reports for the
+# watcher-alone case, so the trap adds a verdict without inventing a code its readers must learn.
+# Caveat kept honest — bash defers a trap until the current foreground command returns, so a TERM
+# aimed at this process alone can be up to --interval seconds late. A group-TERM (the measured 144)
+# also kills the `sleep`, so the trap fires promptly in exactly the case that produced the defect.
+# shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines below are its only callers.
+_sig_verdict() {   # <signame> <signum>
+  trap - TERM HUP INT EXIT
+  _unbeat
+  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
+  exit $(( 128 + $2 ))
+}
+trap '_sig_verdict TERM 15' TERM
+trap '_sig_verdict HUP 1'   HUP
+trap '_sig_verdict INT 2'   INT
+
 # ── OWNER GUARD — a watcher must never outlive the session it wakes ───────────────────────────────
 # MEASURED (2026-07-29): a watcher whose owner dies is reparented to pid 1 and keeps polling. When
 # mail arrives it takes it with ack_now=1 — advancing BOTH cursors — and prints the body to a stdout
@@ -185,13 +220,114 @@ trap '_unbeat' EXIT
 # pane is legitimate), an unreadable row, or a live pid → keep watching. So the guard can strand a
 # watcher it cannot adjudicate, but it can never kill a live session's wake path — and an
 # unadjudicable watcher is still bounded by --timeout, which is the case that was always true.
+#
+# ── A CACHED PID IS NOT ENOUGH: EXIT 5 NOW NEEDS A SECOND, INDEPENDENT ORACLE (G10, 2026-08-08) ───
+# MEASURED (backlog a116d60af388): this guard exited 5 announcing pane 700 was GONE while pane 700
+# was demonstrably alive and typing. The pane id had been renumbered underneath the registry, so
+# `<uuid>.json` named a pid that really was dead while the session it addressed was not — and a
+# sibling `handoff-fire self-close` saw the SAME cwd under a DIFFERENT pane id. Nothing about the
+# fail-safe direction above was wrong; the fault is that ONE cached field carried a verdict this
+# destructive on its own. Exit 5 abandons a live session's wake path and leaves it deaf.
+#
+# So the pid oracle is now necessary and NOT sufficient. Once it fires, a corroborator must
+# independently agree, and it must not be a second reader of the same row — that would prove nothing
+# beyond what the first read already said. Two are consulted, in order:
+#
+#   B1  PANE LIVENESS — is $CUR_UUID in `it2 session list --json`? iTerm2's OWN answer about its own
+#       panes, which touches the registry not at all. Catches the in-place case: the pane is right
+#       there and only the recorded pid has been superseded.
+#   B2  CWD OCCUPANCY — is the row's cwd held by a LIVE pid in a DIFFERENT registry row? That is the
+#       renumbering signature the incident actually recorded, and it is the case B1 cannot see:
+#       when the id itself changed, the old id is genuinely absent from iTerm2 while the session
+#       that owned it is alive under the new one. Different field, different rows, different pids.
+#
+# FAIL-CLOSED ON UNKNOWN, exactly as cc-reconcile's prune is (:258): a transport that cannot answer
+# means pane liveness is UNKNOWN, never "every pane is gone". So where it2 is absent or wedged, exit
+# 5 becomes unreachable and the watcher falls back to being bounded by --timeout — the same
+# unadjudicable-but-safe state the paragraph above already accepted. This change only ever makes
+# exit 5 HARDER to reach; there is no input for which it now fires and previously did not.
+#
+# COST: the corroborators run ONLY after the pid oracle has fired, which is rare — and a veto is
+# remembered for CC_AWAIT_OWNER_RECHECK_S so a permanently-stale row cannot turn a 15s poll into a
+# 15s it2 IPC loop. The it2 call is wall-clock bounded for the reason cc-reconcile bounds its own:
+# on the 2026-07-26 machine-wide wedge a bare `it2 session list --json` returned rc 124 with zero
+# output while blocked forks piled up across ~110 sessions.
 REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
-_owner_dead() {  # 0 iff the watched pane is PROVABLY gone
-  local rf="$REG_DIR/$CUR_UUID.json" p
+# `${VAR-}` not `${VAR:-}`: set-but-EMPTY means "no pane transport" and is honored verbatim, so a
+# test can run the UNKNOWN branch. A test that cannot turn the transport off cannot prove the
+# fail-closed direction differs from the confirming one.
+IT2_BIN="${CC_AWAIT_IT2_BIN-$HOME/.claude/bin/it2}"
+IT2_TIMEOUT_S="${CC_AWAIT_IT2_TIMEOUT_S:-5}"
+OWNER_RECHECK_S="${CC_AWAIT_OWNER_RECHECK_S:-120}"
+_TO_BIN=""
+for _c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+          /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+          /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+  [ -n "$_c" ] && [ -x "$_c" ] && { _TO_BIN="$_c"; break; }
+done
+unset _c
+
+_it2_panes() {   # echo the live pane-id set; rc 1 = the transport could not answer (UNKNOWN)
+  [ -n "$IT2_BIN" ] && [ -x "$IT2_BIN" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  local out ids
+  if [ -n "$_TO_BIN" ]; then out="$("$_TO_BIN" -k 3 "$IT2_TIMEOUT_S" "$IT2_BIN" session list --json 2>/dev/null)"
+  else                       out="$("$IT2_BIN" session list --json 2>/dev/null)"; fi
+  [ -n "$out" ] || return 1
+  ids="$(printf '%s' "$out" | jq -r 'if type=="array" then .[].id // empty else empty end' 2>/dev/null)"
+  [ -n "$ids" ] || return 1
+  printf '%s\n' "$ids"
+}
+
+_pane_gone() {   # 0 = CONFIRMED absent · 1 = PRESENT (alive) · 2 = cannot answer (UNKNOWN)
+  local ids
+  ids="$(_it2_panes)" || return 2
+  printf '%s\n' "$ids" | grep -qxF "$CUR_UUID" && return 1
+  return 0
+}
+
+_cwd_occupied() {  # 0 iff the row's cwd is held by a LIVE pid in some OTHER registry row
+  local rf="$REG_DIR/$CUR_UUID.json" cwd f p
+  command -v jq >/dev/null 2>&1 || return 1
+  cwd="$(jq -r '.cwd // empty' "$rf" 2>/dev/null)"
+  [ -n "$cwd" ] || return 1
+  for f in "$REG_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$rf" ] && continue
+    [ "$(jq -r '.cwd // empty' "$f" 2>/dev/null)" = "$cwd" ] || continue
+    p="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+_corrob_ok_until=0
+_veto() {  # remember an ALIVE corroboration, say it once per window, and keep watching
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+  _corrob_ok_until=$(( now + OWNER_RECHECK_S ))
+  echo "cc-await-ping: registry pid for [$CUR_UUID] is dead, but $1 — NOT exiting 5, still watching (re-checking in ${OWNER_RECHECK_S}s)" >&2
+  return 1
+}
+
+_owner_dead() {  # 0 iff the watched pane is PROVABLY gone — pid oracle AND an independent corroborator
+  local rf="$REG_DIR/$CUR_UUID.json" p now pg
   [ -f "$rf" ] || return 1
   p="$(jq -r '.pid // empty' "$rf" 2>/dev/null)"
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null && return 1
+  # ORACLE A has fired. It is necessary, not sufficient — corroborate or keep watching.
+  now="$(date +%s 2>/dev/null || echo 0)"
+  [ "$now" -lt "$_corrob_ok_until" ] && return 1        # a recent corroborator said ALIVE; don't re-ask
+  _pane_gone; pg=$?
+  case "$pg" in
+    1) _veto "iTerm2 still lists that pane as LIVE (a superseded pid, not a dead session)"; return $? ;;
+    2) _veto "pane liveness is UNKNOWN (no readable it2 transport) — an unreadable transport is not 'every pane is gone'"; return $? ;;
+  esac
+  if _cwd_occupied; then
+    _veto "its cwd is held by a LIVE session under a DIFFERENT pane id (the id was renumbered underneath the registry — a116d60af388)"
+    return $?
+  fi
   return 0
 }
 

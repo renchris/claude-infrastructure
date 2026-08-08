@@ -7,6 +7,12 @@ setup() {
   AWAIT="$REPO/bin/cc-await-ping"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"
   mkdir -p "$CC_MAILBOX_DIR"
+  # FIXTURE THE PANE TRANSPORT (G10). cc-await-ping's owner-guard corroborator defaults to
+  # ~/.claude/bin/it2, and this suite does NOT redirect $HOME — so left unset, any test reaching the
+  # corroborator would fire a real IPC into the operator's LIVE iTerm2. Set-but-EMPTY is honored
+  # verbatim as "no transport" ⇒ pane liveness UNKNOWN, which is the fail-closed branch, so this
+  # default can only ever make exit 5 harder to reach. Tests needing a verdict stub it explicitly.
+  export CC_AWAIT_IT2_BIN=
   UUID="AAAAAAAA-1111-2222-3333-444444444444"
   MB="$CC_MAILBOX_DIR/$UUID.md"
 }
@@ -160,6 +166,11 @@ LIB
 
 @test "owner guard: an ORPHANED watcher exits WITHOUT consuming (mail stays unacked for the guard)" {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  # G10: this used to reach exit 5 on the dead registry pid ALONE. It no longer can — that single
+  # cached field convicted a live pane in a116d60af388 — so the corroborating pane transport is now
+  # stubbed to report the uuid ABSENT. Everything the test actually asserts (no consumption, cursors
+  # untouched, marker cleared) is unchanged; only the premise it stands on got a second source.
+  export CC_AWAIT_IT2_BIN="$(it2_stub SOMEONE-ELSE)"
   sleep 0.1 & local dead=$!; wait "$dead" 2>/dev/null || true       # a pid that is now provably dead
   printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1}' "$UUID" "$dead" \
     > "$CC_REGISTRY_DIR/$UUID.json"
@@ -295,4 +306,140 @@ CC_KEYSET_PREFIX_SHA="${CC_KEYSET_PREFIX_SHA:-0272e835}"
   run "$old/bin/cc-await-ping" "$SESSKEY" --interval 1 --timeout 3
   [ "$status" -eq 2 ]                                     # RED: timed out with the mail one filename away
   [[ "$output" != *"addressed by pane"* ]] || false
+}
+
+# ══ G10 — THE WAKE PATH: exit 5 needs TWO oracles, and a killed watcher stops being silent ════════
+# Backlog a116d60af388 measured exit 5 claiming pane 700 was GONE while pane 700 was alive and typing:
+# the pane id had been renumbered underneath the registry, so `<uuid>.json` named a pid that was dead
+# while the session it addressed was not. A cached pid is ONE reading of ONE fact; it cannot carry a
+# verdict this destructive on its own (exit 5 abandons a live session's wake path).
+#
+# The corroborator must not be a second reader of the same row. Two are used, in order:
+#   B1  pane liveness — the uuid's presence in `it2 session list --json`, iTerm2's OWN answer.
+#   B2  cwd occupancy — the row's cwd held by a live pid in a DIFFERENT registry row, which is the
+#       renumbering signature the incident actually recorded (a sibling saw the same cwd, new id).
+# Both are consulted only AFTER the pid oracle fires, and UNKNOWN never convicts (fail-closed, the
+# same direction cc-reconcile's prune takes at :258).
+#
+# Every it2 answer here comes from a STUB: unstubbed, CC_AWAIT_IT2_BIN would resolve to the operator's
+# real ~/.claude/bin/it2 and this suite would IPC into their live iTerm2.
+it2_stub() {   # it2_stub <id>...   → a session-list transport reporting exactly these live panes
+  local p="$BATS_TEST_TMPDIR/it2-stub" ids="" i
+  for i in "$@"; do ids="$ids{\"id\":\"$i\"},"; done
+  printf '#!/bin/bash\nprintf %%s %s\n' "'[${ids%,}]'" > "$p"; chmod +x "$p"; printf '%s' "$p"
+}
+it2_dead() {   # a transport that CANNOT answer (empty output, non-zero) — liveness UNKNOWN
+  local p="$BATS_TEST_TMPDIR/it2-dead"; printf '#!/bin/bash\nexit 1\n' > "$p"; chmod +x "$p"; printf '%s' "$p"
+}
+reg_row() {    # reg_row <uuid> <pid> [cwd]
+  printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1%s}' "$1" "$2" \
+    "$([ -n "${3:-}" ] && printf ',"cwd":"%s"' "$3")" > "$CC_REGISTRY_DIR/$1.json"
+}
+dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%s' "$d"; }
+
+@test "G10 POSITIVE CONTROL: dead pid AND pane absent from iTerm2 ⇒ exit 5 is still reachable" {
+  # Without this, every assertion below is satisfied by a guard that simply never fires.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  reg_row "$UUID" "$(dead_pid)"
+  printf '2026-08-08T10:00:00+0000 [desk] must not be consumed into the void\n' > "$MB"
+  run env CC_AWAIT_IT2_BIN="$(it2_stub SOMEONE-ELSE)" "$AWAIT" "$UUID" --interval 1 --timeout 6
+  [ "$status" -eq 5 ]
+  [[ "$output" != *"consumed into the void"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]
+}
+
+@test "G10 REGRESSION a116d60af388: a dead registry pid beside a LIVE pane keeps watching, never 5" {
+  # The measured incident. The pid oracle says gone; iTerm2 says the pane is right there. One stale
+  # cached field must not abandon a live session's wake path.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  reg_row "$UUID" "$(dead_pid)"
+  run env CC_AWAIT_IT2_BIN="$(it2_stub "$UUID" OTHER)" "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]                                   # timed out watching — NOT 5
+  [[ "$output" != *"is GONE"* ]] || false
+}
+
+@test "G10: a dead pid + a live pane still WAKES on mail (the veto keeps the path armed, not merely open)" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  reg_row "$UUID" "$(dead_pid)"
+  ( sleep 1; printf '2026-08-08T10:01:00+0000 [desk] the wake still lands\n' >> "$MB" ) & local w=$!
+  run env CC_AWAIT_IT2_BIN="$(it2_stub "$UUID")" "$AWAIT" "$UUID" --interval 1 --timeout 10
+  wait "$w" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the wake still lands"* ]] || false
+}
+
+@test "G10 RENUMBERED: pane absent from iTerm2 but the row's cwd held by a LIVE sibling ⇒ keeps watching" {
+  # The incident's own evidence: a sibling handoff-fire self-close saw the SAME cwd under a DIFFERENT
+  # pane id. B1 alone convicts here (the id really is gone); B2 is what sees the session survived it.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  local cwd="/Users/x/Development/.worktrees/g10"
+  reg_row "$UUID" "$(dead_pid)" "$cwd"
+  reg_row "DDDD0001-1111-2222-3333-444444444444" "$$" "$cwd"     # the renumbered sibling, alive
+  run env CC_AWAIT_IT2_BIN="$(it2_stub NOBODY)" "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"is GONE"* ]] || false
+}
+
+@test "G10 DISCRIMINATOR: same shape but the cwd sibling is DEAD ⇒ nothing vetoes, exit 5 fires" {
+  # Proves the cwd oracle is reading liveness, not merely matching a string — without it the test
+  # above would pass against a guard that vetoes on any cwd row at all.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  local cwd="/Users/x/Development/.worktrees/g10"
+  reg_row "$UUID" "$(dead_pid)" "$cwd"
+  reg_row "DDDD0002-1111-2222-3333-444444444444" "$(dead_pid)" "$cwd"
+  run env CC_AWAIT_IT2_BIN="$(it2_stub NOBODY)" "$AWAIT" "$UUID" --interval 1 --timeout 6
+  [ "$status" -eq 5 ]
+}
+
+@test "G10 FAIL-CLOSED: an UNREADABLE pane transport is UNKNOWN, never 'every pane is gone'" {
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  reg_row "$UUID" "$(dead_pid)"
+  run env CC_AWAIT_IT2_BIN="$(it2_dead)" "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"is GONE"* ]] || false
+}
+
+# ── DEFECT 2: a group-TERMed watcher used to die SILENT, still advertising an armed wake path ─────
+# The only trap in the file was EXIT, so an external SIGTERM printed nothing and could leave a
+# .watching marker claiming a wake this process no longer provides. The sender is NOT recoverable
+# from the exit code (143 = the watcher alone, 144 = the harness's process-GROUP sentinel — see the
+# header), so this makes the death LEGIBLE; it does not prevent it.
+
+@test "G10: a TERMed watcher prints a verdict on stderr instead of dying silent" {
+  local log="$BATS_TEST_TMPDIR/term.log"
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
+  sleep 2
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control: it WAS armed before the kill
+  kill -TERM "$watcher" 2>/dev/null
+  local rc=0; wait "$watcher" 2>/dev/null || rc=$?
+  grep -q 'verdict=killed' "$log"
+  [ "$rc" -eq 143 ]
+}
+
+@test "G10: a TERMed watcher clears .watching, so it stops advertising a wake it cannot deliver" {
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control for the absence asserted below
+  kill -TERM "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null || true
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+}
+
+@test "G10: HUP is handled the same way (a closed pane is not a different kind of death)" {
+  local log="$BATS_TEST_TMPDIR/hup.log"
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
+  sleep 2
+  kill -HUP "$watcher" 2>/dev/null
+  local rc=0; wait "$watcher" 2>/dev/null || rc=$?
+  grep -q 'verdict=killed' "$log"
+  grep -q 'SIGHUP' "$log"
+  [ "$rc" -eq 129 ]
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
+}
+
+@test "G10 CONTROL: an UNKILLED watcher never prints the killed verdict (the trap is not always-on)" {
+  run "$AWAIT" "$UUID" --interval 1 --timeout 2
+  [ "$status" -eq 2 ]
+  [[ "$output" != *"verdict=killed"* ]] || false
+  [[ "$output" == *"verdict=timeout"* ]] || false
 }
