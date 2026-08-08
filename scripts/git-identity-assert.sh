@@ -203,26 +203,48 @@ do_verify_attribution() {
         | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
   [ -n "$slug" ] || die2 "no github origin on $repo"
 
-  echo "Re-deriving email → account from the GitHub API (repo $slug):"
-  local any=1
+  # SAMPLE ONLY FROM THE REMOTE-REACHABLE HISTORY. The first version searched `--all` and picked
+  # whatever commit carried the address first — routinely a local-only checkpoint ref, for which
+  # the API answers 422 "No commit found for SHA". With stderr swallowed that read as
+  # UNATTRIBUTED, so the verifier declared the SANCTIONED address broken and told the operator not
+  # to trust its own allowlist. A null from an instrument that cannot see the subject is not
+  # absence (memory: lookup-miss-is-not-absence) — and a false alarm here is worse than no check,
+  # because the printed advice is "do not edit the constant", i.e. distrust a correct config.
+  local base; base="$(git -C "$repo" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)"
+  base="${base#refs/remotes/}"; [ -n "$base" ] || base="origin/main"
+  git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null \
+    || die2 "no remote-tracking $base to sample — fetch first; refusing to test against local-only shas"
+
+  echo "Re-deriving email → account from the GitHub API (repo $slug, sampling $base):"
+  local any=1 untestable=0
   while IFS= read -r em; do
     [ -n "$em" ] || continue
     local sha login
-    sha="$(git -C "$repo" log --all --format='%H %ae' | awk -v e="$em" '$2==e{print $1; exit}')"
-    [ -n "$sha" ] || continue
+    sha="$(git -C "$repo" log "$base" --format='%H %ae' | awk -v e="$em" '$2==e{print $1; exit}')"
+    if [ -z "$sha" ]; then
+      # Present in local history but on no pushed commit: GitHub has never seen it, so the
+      # question is unanswerable rather than answered "no". Named, not silently skipped.
+      printf '  %-34s %-9s -> (no pushed commit — untestable)\n' "$em" "—"
+      [ "$em" = "$WANT_EMAIL" ] && untestable=1
+      continue
+    fi
     login="$(gh api "repos/$slug/commits/$sha" --jq '.author.login // "UNATTRIBUTED"' 2>/dev/null)"
+    [ -n "$login" ] || login="API-ERROR"
     printf '  %-34s %s -> %s\n' "$em" "${sha:0:9}" "$login"
     [ "$em" = "$WANT_EMAIL" ] && [ "$login" = "$WANT_OWNER" ] && any=0
   done <<EOF
-$(git -C "$repo" log --all --format='%ae' | sort -u)
+$(git -C "$repo" log "$base" --format='%ae' | sort -u)
 EOF
 
   echo
   if [ "$any" -eq 0 ]; then
     echo "  ✓ sanctioned address $WANT_EMAIL still resolves to @$WANT_OWNER"
+  elif [ "$untestable" -eq 1 ]; then
+    echo "  ? sanctioned address $WANT_EMAIL has no pushed commit here — UNTESTABLE, not refuted."
+    echo "     Land one commit under it and re-run. Do not treat this as a failure."
   else
     echo "  ⛔ sanctioned address $WANT_EMAIL did NOT resolve to @$WANT_OWNER."
-    echo "     Either the address changed on the account, or there is no commit to test it with."
+    echo "     Either the address changed on the account, or the API could not be reached."
     echo "     Do not edit the constant until you know which — a wrong allowlist blocks every commit."
   fi
   return "$any"
