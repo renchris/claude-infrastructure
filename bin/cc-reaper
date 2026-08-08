@@ -50,7 +50,7 @@
 #   5. cc-teardown re-runs its OWN gate (work-safe G-a + positive-done G-b + self-guard + tty-exclusive
 #      + re-observed effect-verify). The done-evidence is DERIVED from positive signals (successor
 #      alive, commits on trunk), NEVER inferred from silence — "idle ≠ done".
-# active / owned-wait / coordination-hang / rate-limited / crashed are NEVER reaped — surfaced only.
+# active / owned-wait / coordination-hang / rate-limited / crashed / task-less are NEVER reaped — surfaced only.
 #
 # T-P3-4 AUTO-REAP OF DESK-FIRED WORKERS (the one exception, 2026-07-20): finished-shared-review
 # (a done session whose dirty shared cwd is owned by a live sibling) was ALSO surfaced-only, for desk
@@ -135,7 +135,12 @@ PAGE_TO_FILE="${CC_PAGE_TO_FILE:-$HOME/.claude/cc-roles/desk}"          # DEFAUL
 # owned-wait, rate-limited are DELIBERATELY excluded: healthy or self-healing, a page would be noise.
 # finished-operator (2026-07-24): an operator-launched pane that looks done — confirm-close is the
 # operator's call, never the reaper's (the Danny-Studio-60 / Opus-5 reaps).
-SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator)$'
+# task-less (2026-08-08): a pane that booted claude and never produced a single assistant turn. It used
+# to read `active` (cc-classify's IDLE=-1 fail-safe), and `active` is in NEITHER regex — so an empty pane
+# persisted forever with no board row and nothing ever asked about it. Surfacing is the WHOLE fix: it is
+# deliberately absent from REAPABLE_RE and AUTOREAP_FIRED_RE, because making a never-spoke pane reapable
+# is the destructive path (a wrong verdict kills a live session) and needs its own design, not this one.
+SURFACE_PAGE_RE='^(coordination-hang|crashed|finished-shared-review|finished-operator|task-less)$'
 # ── T-P3-4: auto-reap the DESK-FIRED WORKER pile ───────────────────────────────────────────────
 # Every finished session sharing a cwd with a live sibling was SURFACED for operator confirm-close
 # (finished-shared-review) and 0 were auto-reaped, so 13+ finished desk-fired workers piled up and
