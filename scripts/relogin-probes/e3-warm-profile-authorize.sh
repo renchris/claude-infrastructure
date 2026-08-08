@@ -111,16 +111,34 @@ echo "running: $RELOGIN_BIN $ACCT --json"
 RESULT="$("$RELOGIN_BIN" "$ACCT" --json 2>&1)"; RC=$?
 echo "$RESULT"
 AFTER_EXP="$(row login_expires_at "$("$ACCOUNTS_BIN" --fresh --json 2>/dev/null)")"
-# The field's TYPE is unverified (it lands with feat/accounts-login-cliff), so accept epoch
-# numbers AND ISO-8601 — and say "unparseable" rather than silently reporting "did not move",
-# which would fail a genuinely successful renewal and wrongly block the cadence.
+# The field carries either an epoch number or ISO-8601, so accept both — and say "unparseable"
+# rather than silently reporting "did not move", which would fail a genuinely successful renewal
+# and wrongly block the cadence.
+#
+# A BARE `>` CANNOT DECIDE THIS, and using one left this probe unable to catch the exact defect its
+# own UNVERIFIED branch below exists to catch. The login deadline is a countdown to a FIXED wall,
+# re-expressed from a fresh Date.now() at every refresh (ACCOUNT_ROUTING_V2.md §1) — so a refresh
+# that renews NOTHING still nudges the absolute stamp a few hundred milliseconds later. Measured on
+# the real fleet 2026-07-30, both runs reported PROVEN while the wall stayed on the same second:
+#     2026-08-02T20:21:48.963+00:00 -> 2026-08-02T20:21:49.116+00:00   (+0.153 s)
+#     2026-08-02T20:21:48.815+00:00 -> 2026-08-02T20:21:49.195+00:00   (+0.380 s)
+# A real re-grant moves the wall 26.1-30.0 d (C1). So the move must clear a threshold that
+# separates those two populations; anything under it is re-expression jitter and is reported as
+# `jitter`, which falls into the UNVERIFIED branch below rather than certifying the executor.
+#
+# E3_DEADLINE_EPSILON_H is deliberately NOT the variable cc-relogin reads. This probe exists to
+# judge that executor, so one knob governing both would let a single mis-set value blind the
+# subject and its own watchdog in the same stroke.
+E3_EPS_H="${E3_DEADLINE_EPSILON_H:-12}"
 MOVED="$(python3 -c 'import sys
 from datetime import datetime as D
 def p(s):
     try: return float(s)
-    except ValueError: return D.fromisoformat(s.replace("Z","+00:00")).timestamp()
-try: print("yes" if p(sys.argv[1]) > p(sys.argv[2]) else "no")
-except Exception: print("unparseable")' "${AFTER_EXP:-}" "$BEFORE_EXP" 2>/dev/null)"
+    except ValueError: return D.fromisoformat(s.replace("Z","+00:00").replace("z","+00:00")).timestamp()
+try:
+    delta = p(sys.argv[1]) - p(sys.argv[2])
+    print("yes" if delta > float(sys.argv[3]) * 3600.0 else "jitter" if delta > 0 else "no")
+except Exception: print("unparseable")' "${AFTER_EXP:-}" "$BEFORE_EXP" "$E3_EPS_H" 2>/dev/null)"
 MOVED="${MOVED:-unparseable}"
 if [[ "$RC" == 0 && "$MOVED" == yes ]]; then
   VERDICT=PROVEN; DECIDES="the unattended executor works end to end — cadence (§5) and observability (§6) may be activated."
