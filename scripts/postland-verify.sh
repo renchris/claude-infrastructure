@@ -480,6 +480,52 @@ QUEUE="$STATE/queue"
 CUTS="$STATE/cuts"                                     # "<tree> <consecutive-n> <epoch>"
 CUT_MAX="${CC_POSTLAND_CUT_MAX:-3}"                    # consecutive cuts on one tree before paging
 CUT_COOLOFF="${CC_POSTLAND_CUT_COOLOFF:-1800}"         # ...and before the box is fed another suite
+# ── C29 CROSS-WINDOW CORROBORATION — the ladder's three runs are ONE experiment ───────────────────
+# classify_failures re-runs a failing test twice more BACK TO BACK: seconds apart, on the same box,
+# inside the same run. Its three observations therefore sample ONE LOAD WINDOW, so ">=2/3 agreed"
+# means only "it failed twice under the same ambient load" — which is what a starved box produces
+# exactly as reliably as a bug. GATE_ARCHITECTURE_PLAN.md already records the governing law one
+# variable off: "re-running is evidence only if the environment actually changed" (written about a
+# ladder that re-ran under the same wrong PATH three times and called the agreement reproducible).
+#
+# THE BAND AXIS WAS ALREADY TRIED, AND IT IS NOT ENOUGH — this is the load-bearing fact, and it is
+# why this clause is not a duplicate of C24. C24 (08dd4e3c, 2026-07-31) closed the FIRST half of
+# that law by elevating the re-run OUT of the corpus's background clamp into utility, so the retry
+# genuinely does run in a different environment now. It helped and it stays. But the environment it
+# varies is PRIORITY, not AMBIENT LOAD: a box at load 15 is at load 15 for all three attempts, and
+# a suite losing to memory/IO pressure loses in the utility band too. MEASURED on this box over the
+# 100 stamps on disk, split at C24's own landing:
+#     PRE  C24 (n=46): 42 red · 1 green · 2 cut · 1 hung — 7 of 34 consecutive red pairs DISJOINT
+#     POST C24 (n=54): 48 red · 2 green · 4 cut        — 7 of 47 consecutive red pairs DISJOINT
+# The fingerprint SURVIVED the band fix. A genuine red re-convicts the SAME file until somebody
+# fixes it; a convicted set that reshuffles sweep to sweep (prev=11 now=2 overlap=0 · prev=12 now=1
+# overlap=0 · prev=9 now=1 overlap=0) is the box talking, not the tree. Two greens in 54 sweeps, and
+# a red is not merely a wrong stamp — it is terminal for that tree (C5 abstains on it forever) and
+# it arms the bisect and AUTO-REVERT, which pushes a revert of an innocent commit to trunk.
+#
+# THIS IS AN EVIDENCE AXIS, NOT MORE RETRIES. §8 of LAND_PIPELINE_V2 forbids the "raising the
+# ceiling / more retries / bigger budgets" class outright as parameter motion inside a broken frame,
+# so be precise about what this is: nothing below adds an attempt, a poll, a sleep or a budget, and
+# the in-run ladder costs exactly what it cost before. What changes is what ONE window's agreement
+# BUYS — a conviction seen in one window becomes an ABSTENTION (the C23 shape: neither convicted nor
+# cleared ⇒ cut ⇒ retried next sweep), and the second observation then arrives FREE, on the sweep
+# that retry was already going to run.
+#
+# AND IT NEVER WAITS FOR A QUIET BOX (R1; LOAD_INSENSITIVE_VERIFY_V2.md — "no quiet period will ever
+# exist… any design whose success requires load to fall is already failed"). The gate is SEPARATION
+# IN TIME, which the clock always eventually satisfies; it is emphatically NOT "a lower load", which
+# this box may never offer and which would deadlock exactly the way gate_admit did. Load is RECORDED
+# per observation, as evidence a human can read, and is never tested by anything — a --selftest
+# assert anchored to statement position forbids any if/while/until branch on it.
+CONVICTIONS="$STATE/convictions"                       # TSV "<epoch>\t<file>\t<tree>\t<sha>\t<load>"
+CONVICT_MODE="${CC_POSTLAND_CONVICT:-on}"              # kill switch: off ⇒ a one-window red again
+CONVICT_TTL="${CC_POSTLAND_CONVICT_TTL_S:-86400}"      # an observation older than this is stale
+CONVICT_SPREAD="${CC_POSTLAND_CONVICT_SPREAD_S:-900}"  # min separation of the two windows. A corpus
+# run measures 50 min - 3.4 h (run_s on the stamps above), so consecutive sweeps clear this floor by
+# construction and it is never the thing delaying a real conviction; it exists so that two runs that
+# somehow land back-to-back cannot both count as "windows". Tests shrink it to 0 the same way they
+# shrink every other bound — which removes the WALL-CLOCK floor ONLY: the two-SWEEP requirement, the
+# actual guard, stays live in every test in the suite.
 
 # ── PATH-INDEPENDENT sysctl(8) (item ff544977e4ea, 2026-08-06) ───────────────────────────────────
 # sysctl lives in /usr/sbin, and this job's plist wrapper EXPORTS a PATH ending /usr/bin:/bin — no
@@ -519,6 +565,12 @@ FAILING=(); SYNTAX_BAD=(); RETRIES=0; NFLAKE=0; FAILTEST=""; RUN_TMP=""; IDL_DON
 # push site appends to BOTH — but red_actions still reads it as `${FAILNAME[i]:-}`, because
 # SYNTAX_BAD is spliced onto FAILING wholesale after the fact and pads nothing.
 FAILNAME=()
+# C29: the subset of FAILING the LADDER convicted — i.e. the load-attributable ones, and the only
+# population cross-window corroboration adjudicates. Deterministic reds (bash -n, the whole-tree
+# prelints, the C13b sentinel) never enter it and are never delayed: they reproduce by construction,
+# so a second window cannot tell them anything.
+LADDER_FAILING=()
+CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
 # Suites actually handed to bats. 0 is not a filler default — it is the honest value on every path
 # where the corpus never ran (a prelint red SKIPS it), and the stamp should say so.
 CORPUS_N=0
@@ -1147,7 +1199,9 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
       esac
       [ "$rc" -eq 0 ] || fails=$((fails+1))
     done
-    if [ "$fails" -ge 2 ]; then FAILING+=("$f"); FAILNAME+=("$t"); [ -n "$FAILTEST" ] || FAILTEST="$t"
+    # C29: record it as LADDER-convicted as well. Same push, one extra array — the verdict this run
+    # renders is unchanged here; corroborate_convictions below decides what it is WORTH.
+    if [ "$fails" -ge 2 ]; then FAILING+=("$f"); FAILNAME+=("$t"); LADDER_FAILING+=("$f"); [ -n "$FAILTEST" ] || FAILTEST="$t"
     elif [ "$abstain" = 1 ]; then
       # Not a red (nothing was proven) and not a flake (nothing was cleared) ⇒ the cut path, which
       # says exactly that and retries next sweep. FAILTEST carries the name so the cut is diagnosable.
@@ -1173,6 +1227,69 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   done <<EOF
 $pairs
 EOF
+}
+conviction_observe() { # <file> <tree> <sha> → 0 when a PRIOR, time-SEPARATED observation exists
+  local f="$1" tree="$2" sha="$3" now cutoff newest prior load tmp
+  now="$(now_epoch)"; cutoff=$(( now - CONVICT_TTL )); newest=$(( now - CONVICT_SPREAD ))
+  # READ for the record, never a predicate and never slept on — which is verbatim the invariant
+  # qos-chokepoint.bats (xiii) settled on 2026-08-07 after its own proxy was found wrong in BOTH
+  # directions: "read the instrument if you must, never wait on it". (Its earlier form banned the
+  # substring `loadavg` outright, which forbade the plan's own remedy while still passing any shim
+  # that slept without writing the word.) Same accessor record_flake uses, so a PATH-blind sysctl
+  # cannot make this row silently empty.
+  load="$(load1)"
+  prior=0
+  if [ -f "$CONVICTIONS" ]; then
+    # A QUALIFYING prior: same FILE, still inside the TTL, and at least CONVICT_SPREAD ago. That
+    # last clause is the whole point — without it this run's own ladder would corroborate itself.
+    prior="$(awk -F'\t' -v f="$f" -v lo="$cutoff" -v hi="$newest" \
+               '$2==f && $1+0>=lo && $1+0<=hi {n++} END{print n+0}' "$CONVICTIONS" 2>/dev/null || printf 0)"
+    # PRUNE past the TTL on the way through: this file is re-read on every conviction, so it may not
+    # grow without bound. Best-effort by construction — a failed prune costs disk, never a verdict.
+    tmp="$(mktemp "$STATE/convictions.XXXXXX" 2>/dev/null)" && {
+      awk -F'\t' -v lo="$cutoff" '$1+0>=lo' "$CONVICTIONS" > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$CONVICTIONS" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    }
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$f" "$tree" "$sha" "${load:-}" >> "$CONVICTIONS" 2>/dev/null || true
+  [ "${prior:-0}" -ge 1 ]
+}
+corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WINDOW-corroborated reds
+  # The C29 filter. Runs AFTER classify_failures, so the in-run ladder is untouched and still costs
+  # what it always did; this only decides what its verdict is worth. A file the ladder convicted in
+  # one window is recorded and DROPPED from FAILING — not cleared (nothing exonerated it) and not
+  # convicted (one window is one experiment) — which is precisely the abstention C23 already
+  # established: FAILING empty + a pending flag ⇒ cut ⇒ the same tree is re-run next sweep, and THAT
+  # sweep is the second window. No new run is scheduled to get it; the retry was already happening.
+  local tree="${1:-}" f i n=0
+  local -a keep keepname
+  keep=(); keepname=()
+  [ "$CONVICT_MODE" != "off" ] || return 0
+  [ "${#LADDER_FAILING[@]}" -gt 0 ] || return 0     # nothing load-attributable ⇒ nothing to adjudicate
+  [ "${#FAILING[@]}" -gt 0 ] || return 0
+  # INDEX-WALKED, not value-walked, because FAILNAME is index-aligned with FAILING and both must be
+  # rebuilt in LOCKSTEP. Dropping a file from FAILING alone would shift every later name by one and
+  # red_actions would file each surviving file under its NEIGHBOUR's test name — a silent
+  # mis-attribution on the one path whose entire job is to say what failed. (This runs BEFORE the
+  # SYNTAX_BAD splice, which is the point at which the two arrays are still 1:1.)
+  for (( i = 0; i < ${#FAILING[@]}; i++ )); do
+    f="${FAILING[$i]}"
+    case " ${LADDER_FAILING[*]} " in
+      *" $f "*) ;;
+      *) keep+=("$f"); keepname+=("${FAILNAME[$i]:-}"); continue ;;   # deterministic: never delayed
+    esac
+    if conviction_observe "$f" "$tree" "${CUR_SHA:-}"; then
+      keep+=("$f"); keepname+=("${FAILNAME[$i]:-}")
+      log "C29 CORROBORATED $f — convicted again in a SECOND window (>=${CONVICT_SPREAD}s apart): RED"
+    else
+      CONVICT_PENDING=1; n=$(( n + 1 ))
+      log "C29 PENDING $f — convicted in ONE load window only; a same-window 2/3 is one experiment, not three (re-run next sweep decides)"
+    fi
+  done
+  if [ "${#keep[@]}" -gt 0 ]; then FAILING=("${keep[@]}"); FAILNAME=("${keepname[@]}")
+  else FAILING=(); FAILNAME=(); fi
+  [ "$n" -eq 0 ] || CUT_WHY="the ladder convicted $n file(s) in ONE load window - awaiting a second (C29)"
+  return 0
 }
 # ════ NO ADMISSION CONTROL — deleted, not tuned (§4.2.3, R7) ══════════════════════════════════════
 # v1's gate_admit() lived here: poll the 1-min load, sleep while it exceeded a ceiling, proceed when
@@ -1814,6 +1931,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   t0="$(now_epoch)"; env_fingerprint            # captured at run START — a green is env-relative
   RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
   FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
+  LADDER_FAILING=(); CONVICT_PENDING=0                                     # C29, same reset scope
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
@@ -1892,6 +2010,10 @@ EOF
   fi
   adv="$(sc_count)"
   [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
+  # C29 — BEFORE the SYNTAX_BAD splice, for two reasons: those findings are DETERMINISTIC and must
+  # never be delayed by a corroboration round they cannot fail, and this is the last point at which
+  # FAILING and FAILNAME are still index-aligned 1:1 (the splice pads no names, by design).
+  corroborate_convictions "$tree"
   [ "${#SYNTAX_BAD[@]}" -eq 0 ] || FAILING+=("${SYNTAX_BAD[@]}")
   identity_assert            # did anything we just ran write a git identity into the shared config?
   # A meta-lint whose own bound fired proves nothing — so an otherwise-clean run may NOT be stamped
@@ -1900,7 +2022,12 @@ EOF
   # Same rule for a RETRY whose own bound fired (C23): the file was neither convicted nor cleared, so
   # the run proved nothing about this tree. Green would be unearned; red would be the lie that kept
   # every stamp red and deploy refused. Cut says it honestly and the next sweep retries.
-  { [ "$PRELINT_UNPROVEN" = 1 ] || [ "$LADDER_UNPROVEN" = 1 ]; } && [ "${#FAILING[@]}" -eq 0 ] && CUT=1
+  # C29 joins the same clause for the same reason: a conviction seen in ONE load window neither
+  # convicted nor cleared the file, so this run proved nothing about this tree. Cut says exactly
+  # that, keeps the tree unstamped-green so C5's abstain does not fire, and hands the NEXT sweep the
+  # second window — which is the whole mechanism, obtained without scheduling a single extra run.
+  { [ "$PRELINT_UNPROVEN" = 1 ] || [ "$LADDER_UNPROVEN" = 1 ] || [ "$CONVICT_PENDING" = 1 ]; } \
+    && [ "${#FAILING[@]}" -eq 0 ] && CUT=1
   run_s="$(( $(now_epoch) - t0 ))"
   if [ "$CUT" = "1" ] && [ "${#FAILING[@]}" -eq 0 ] && classify_hang "$tap" "$rc"; then
     # HUNG is carved out of the cut population and IS a verdict about the tree: it reproduced here,
@@ -1908,7 +2035,7 @@ EOF
     # page the FILE with the fix that actually applies (timeout-wrap the seam), not "retry when
     # quieter" — which is the one response guaranteed never to clear it.
     write_stamp "$tree" "$sha" hung "$run_s" "$RETRIES" "$adv" "${SUSPECT:-tests/}"
-    cut_clear                                   # a verdict was reached: the cut streak is over
+    cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
     log "HUNG $(sha12 "$sha") tree=$(sha12 "$tree") suspect=${SUSPECT:-?} wedge_at=$WEDGE_AT sig=$DEATH_SIG reproduced=$REPRODUCED run_s=$run_s"
     hung_actions "$sha" "$tree"
     echo "postland-verify: HUNG $(sha12 "$sha") — ${SUSPECT:-tests/} wedged at $WEDGE_AT ($DEATH_SIG)"
@@ -1921,11 +2048,15 @@ EOF
     n="$(cut_bump "$tree")"
     [ "$n" -ge "$CUT_MAX" ] && cut_page "$sha" "$tree" "$n"
     log "CUT $(sha12 "$sha") tree=$(sha12 "$tree") run_s=$run_s retries=$RETRIES sc_adv=$adv consecutive=$n ($CUT_WHY; will retry)"
-    echo "postland-verify: CUT $(sha12 "$sha") (${run_s}s) - run truncated, not red; retrying next sweep"
+    # $CUT_WHY, not a fixed "run truncated": the two cut populations need OPPOSITE things said about
+    # them. A truncation means NO test failed; a C29 pending means a test DID fail and is one load
+    # window short of proof. The log line one above already reads CUT_WHY — this one asserted the
+    # truncation unconditionally, which would have described every C29 cut wrongly.
+    echo "postland-verify: CUT $(sha12 "$sha") (${run_s}s) - $CUT_WHY; not red, retrying next sweep"
   elif [ "${#FAILING[@]}" -eq 0 ]; then
     write_stamp "$tree" "$sha" green "$run_s" "$RETRIES" "$adv"
     printf '%s\n' "$sha" > "$LASTGREEN"
-    cut_clear                                   # a verdict was reached: the cut streak is over
+    cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
     # A now-passing state clears every standing page. postland-revert-* belongs in that set and was
     # the one class missing from it: a FAILED auto-revert's page asserts "trunk is STILL RED" and
     # hands the operator a `do:` line to land the revert BY HAND, and neither claim survives a
@@ -1941,7 +2072,7 @@ EOF
     echo "postland-verify: GREEN $(sha12 "$sha") (${run_s}s, flakes=$NFLAKE)"
   else
     write_stamp "$tree" "$sha" red "$run_s" "$RETRIES" "$adv" "${FAILING[@]}"
-    cut_clear                                   # a verdict was reached: the cut streak is over
+    cut_clear; conviction_clear                 # a verdict was reached: streak over, candidates spent
     log "RED $(sha12 "$sha") failing=${FAILING[*]} run_s=$run_s retries=$RETRIES flakes=$NFLAKE sc_adv=$adv"
     red_actions "$sha" "${FAILING[0]}"
     echo "postland-verify: RED $(sha12 "$sha") — ${FAILING[*]}"
@@ -2075,6 +2206,13 @@ cut_bump() { # <tree> → the new CONSECUTIVE cut count for this tree
   printf '%s' "$n"
 }
 cut_clear() { rm -f "$CUTS" 2>/dev/null || true; }
+# A VERDICT SPENDS THE CANDIDATES (C29) — called at exactly the three sites cut_clear is, and for the
+# same reason: candidate rows are suspicion accumulated TOWARD a verdict, so once one is reached they
+# are spent. Without this the ledger's 24h TTL becomes a trap. File F is convicted once (window 1,
+# cut); the next sweep proves the whole corpus GREEN, exonerating F; hours later F fails once on some
+# unrelated tree — and the stale row from before the exoneration corroborates it into an instant RED
+# off a single window, which is the exact defect C29 exists to prevent, rebuilt out of its own state.
+conviction_clear() { rm -f "$CONVICTIONS" 2>/dev/null || true; }
 in_cut_cooloff() { # <tree> — 0 = still cooling off
   local pt pn pts
   [ -f "$CUTS" ] || return 1                      # see cut_bump: the redirect fails before 2>/dev/null
@@ -2089,9 +2227,21 @@ cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no b
   { now_epoch
     printf 'post-land CUT (no verdict) @ %s\n' "$(now_iso)"
     printf 'target:  %s (tree %s)\n' "$(sha12 "$1")" "$t12"
-    printf 'cut:     %s consecutive runs — the suite emitted ZERO "not ok" lines, so NO test failed.\n' "$3"
-    printf '         Each run was TRUNCATED before reaching a verdict (peer pkill / OOM / load).\n'
-    printf 'NOT a test failure — do not bisect. Re-run on a quiet box:\n'
+    printf 'cut:     %s consecutive runs reached NO verdict.\n' "$3"
+    # The two cut populations need OPPOSITE things said about them, and a page that guesses is worse
+    # than no page. A TRUNCATION means no test failed at all; a C29 pending means a test DID fail and
+    # is one load window short of proof. Printing "ZERO not ok, do not bisect" over the second would
+    # send the operator hunting a machine event that never happened. Branched on CONVICT_PENDING
+    # rather than on the CUT_WHY text, so a later reword of that string cannot silently flip the page.
+    if [ "${CONVICT_PENDING:-0}" = 1 ]; then
+      printf '         %s\n' "$CUT_WHY"
+      printf 'A test DID fail here — it is simply not PROVEN, having failed in ONE load window only.\n'
+      printf 'The next sweep re-runs this tree and decides it. Ledger: %s\n' "$CONVICTIONS"
+    else
+      printf '         The suite emitted ZERO "not ok" lines, so NO test failed.\n'
+      printf '         Each run was TRUNCATED before reaching a verdict (peer pkill / OOM / load).\n'
+      printf 'NOT a test failure — do not bisect. Re-run on a quiet box:\n'
+    fi
     printf 're-run:  git -C %s worktree add --detach /tmp/pv-repro %s && cd /tmp/pv-repro && bats tests/\n' \
       "$REPO" "$(sha12 "$1")"
     printf 'env:     %s\n' "$ENV_FP"
@@ -2239,8 +2389,15 @@ selftest() {
 
   printf '#!/usr/bin/env bats\n@test "boom" { false; }\n' > "$d/src/tests/bad.bats"     # ── red path
   fixture_land red; red_sha="$(git -C "$d/src" rev-parse HEAD)"
-  run_fixture --run-if-needed >/dev/null 2>&1; rc=$?
+  # C29 WINDOW 1 — a LADDER conviction is a candidate, so this sweep stamps `cut` and proves nothing.
+  # CONVICT_SPREAD is zeroed for the fixture the same way every other bound is shrunk here: the
+  # two-SWEEP requirement is what this exercises, and it is left fully live.
+  CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1
   tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  grep -q '"verdict":"cut"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "C29: one window convicts nothing — the first sweep stamps cut" \
+    || badp "C29: a SINGLE window produced a verdict (a same-window 2/3 is one experiment)"
+  CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1; rc=$?   # ── window 2
   [ "$rc" -eq 0 ] && okp "red: exit 0 (the net pages, it does not fail launchd)" || badp "red: exit $rc"
   grep -q '"verdict":"red"' "$d/state/stamps/$tree.json" 2>/dev/null && okp "red: stamp verdict red" || badp "red: stamp not red"
   [ -n "$(find "$d/pages" -name 'postland-red-*.page' 2>/dev/null)" ] && okp "red: state-keyed page written" || badp "red: NO page written"
@@ -2295,6 +2452,25 @@ selftest() {
     || okp "qos: no admission control anywhere in the runner"
   grep -qE 'nice -n 19' "$SELF" \
     && okp "qos: the corpus runs in the background band" || badp "qos: no background-band prefix"
+
+  # ── C29 cross-window corroboration — structural, and specifically that it did NOT become a wait ──
+  # The failure mode this guards is not "the feature is missing", it is "somebody implemented the
+  # second window by SLEEPING until the box went quiet" — which is gate_admit again under a new name,
+  # and the name-anchored grep above would not catch it. So assert the mechanism directly: the gate
+  # is a TIME SEPARATION between two sweeps, and no branch anywhere may test the load it records.
+  grep -qE '^corroborate_convictions\(\)' "$SELF" \
+    && okp "C29: ladder convictions are corroborated across sweeps" \
+    || badp "C29: corroborate_convictions is gone (a one-window 2/3 can red again)"
+  # ANCHORED TO STATEMENT POSITION, for the same reason the gate_admit pattern above is anchored: an
+  # unanchored '.*load1' matches this very comment and reports the guard as the violation. A load
+  # WAIT has to be a conditional or a loop at statement position, so that is what is forbidden; the
+  # `load=` capture in conviction_observe is an assignment and is deliberately still legal. Both
+  # spellings are covered — the raw sysctl key and the load1() accessor that wraps it — because
+  # closing only one leaves the other as an open door.
+  # Positive control for this pattern lives with C29 in tests/postland-verify.bats.
+  grep -qE '^[[:space:]]*(if|while|until)[[:space:]].*(loadavg|load1)' "$SELF" \
+    && badp "C29: a branch tests the recorded load (a quiet-box wait is gate_admit again, R1)" \
+    || okp "C29: load is recorded as evidence, never branched on or waited for"
 
   # ── SHARED-CONFIG IDENTITY — behavioural, through the real corpus path ───────────────────────────
   # The leak suite writes its identity exactly the way the incident did: a bare `git config

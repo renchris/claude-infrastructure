@@ -16,6 +16,17 @@ Status: DESIGN 2026-07-28 · owner session e891e080 · branch `land-pipeline-v2`
 
 ## Phase 0 — Agent Team Orchestration
 
+**EXECUTION LOCUS PER WAVE** (recorded retroactively 2026-08-08 — the field postdates this plan's
+build wave, and the history below is what actually happened, not a re-plan):
+
+| Wave | Locus | Why |
+|---|---|---|
+| Build wave (2026-07-28): fastlane · verifier · deploy | **T** — in-session teammates | Three deliverables had to be reviewed against each other at each Phase A ack against three frozen contracts (exit codes · stamp schema · manifest format), so the synthesis had to sit in one window. Checkpoint log below. |
+| Every follow-on single-clause fix (C22-C29) | **S** — dispatched session, one per backlog item | Default. Each is one item against one already-frozen contract; the lead pays only for the brief and a completion ping. C29 (§4.2.7) ran this way on branch `wt-4ac16c22d6ba`. |
+
+Lead context budget: ≥50% held for deciding; succession point = after each wave's merge, via
+`/handoff`. Background subagents remain research-only — no code changes.
+
 Three teammates, disjoint file ownership, spawned concurrently (no blockedBy edges — T3's only
 dependency on T2 is the manifest CONTRACT, pinned in §4.2, not T2's code).
 
@@ -424,6 +435,87 @@ Change:
    `KeepAlive.SuccessfulExit=false`? NO — skip-not-queue semantics + StartInterval suffice;
    absence-is-loud covers death (R9 freshness alarm via cc-blockers: newest stamp age).
 
+#### 4.2.7 Cross-window corroboration — the ladder's three runs are ONE experiment (C29)
+
+**Added 2026-08-08**, closing backlog `4ac16c22d6ba` (filed 2026-07-28). Landed in
+`scripts/postland-verify.sh` (`conviction_observe`, `corroborate_convictions`, `conviction_clear`)
++ 6 new tests in `tests/postland-verify.bats` + 2 new `--selftest` asserts.
+
+**The defect.** `classify_failures` re-runs a failing test twice more *back to back* — seconds
+apart, on the same box, inside one run. Its three observations therefore sample **one load
+window**, so ">=2/3 agreed" means only *"it failed twice under the same ambient load"* — which a
+starved box produces exactly as reliably as a bug does. `GATE_ARCHITECTURE_PLAN.md:349-352` had
+already recorded the governing law one variable off: *"re-running is evidence only if the
+environment actually changed"* (written about a ladder that re-ran under the same wrong PATH three
+times and called the agreement reproducible).
+
+**Why this is not C24 restated — the band axis was tried, and it was not enough.** C24 (`08dd4e3c`,
+2026-07-31) closed the *first* half of that law by elevating the re-run out of the corpus's
+background clamp into the utility band, so the retry genuinely does run in a changed environment
+now. It helped and it stays. But the variable it moves is **priority**, not **ambient load**: a box
+at load 15 is at load 15 for all three attempts, and a suite losing to memory or IO pressure loses
+in utility too. Measured 2026-08-08 over the 100 stamps on disk, split at C24's own landing:
+
+| | n | red | green | cut | hung | consecutive red pairs fully DISJOINT |
+|---|---|---|---|---|---|---|
+| PRE C24 | 46 | 42 | 1 | 2 | 1 | 7 of 34 |
+| POST C24 | 54 | 48 | 2 | 4 | 0 | 7 of 47 |
+
+The fingerprint **survived the band fix**. A genuine red re-convicts the *same* file until somebody
+fixes it; a convicted set that reshuffles sweep to sweep (`prev=11 now=2 overlap=0` · `prev=12
+now=1 overlap=0` · `prev=9 now=1 overlap=0`) is the box talking, not the tree. Two greens in 54
+sweeps. And a red is not merely a wrong stamp — it is terminal for that tree (C5 abstains on
+`green|red|hung` forever) and it arms the bisect and **auto-revert**, which pushes a revert of an
+innocent commit to trunk.
+
+**The rule.** A conviction produced by the LADDER is a *candidate*, not a verdict. It reds only
+when a later sweep, at least `CONVICT_SPREAD` (900 s) on, convicts the same file again. One window
+⇒ the C23 abstention: `FAILING` empties, `CONVICT_PENDING=1`, the run stamps `cut`, and the tree —
+still unstamped-green — is re-run next sweep. **That retry IS the second window**, so nothing extra
+is ever scheduled. A real verdict spends the candidate ledger (`conviction_clear`, at the same
+three sites as `cut_clear`), which is what stops a stale pre-exoneration row from corroborating a
+later single-window failure into an instant red.
+
+**Why this is not in the §8-rejected class.** §8 forbids *"raising the ceiling / more retries /
+bigger budgets"* as parameter motion inside a broken frame, and the distinction matters: nothing
+here adds an attempt, a poll, a sleep or a budget. The in-run ladder is untouched and costs exactly
+what it did. What changes is what **one window's agreement is worth** — an evidence axis, and the
+same shape C23 already landed (adding an abstention class). Nor is it a wait for a quiet box: that
+is `gate_admit` (C19/R1), this box has no quiet window by construction
+(`LOAD_INSENSITIVE_VERIFY_V2.md:11-13`), and a design that needs load to fall is already failed.
+**The gate is separation in TIME, which the clock always eventually satisfies — never a lower load,
+which would be unsatisfiable.** Load is recorded per observation as evidence for a human and is
+never tested; a `--selftest` assert, anchored to statement position, forbids any `if`/`while`/
+`until` branch on it (it matched itself when first written unanchored).
+
+**Cost, stated rather than hidden.** A genuine red now takes two sweeps to heal instead of one.
+That is deliberate: the announcement is cheap and the auto-revert is destructive, so the run that
+cannot yet prove its conviction stamps a `cut` and reverts nothing. Deterministic reds — `bash -n`
+and the whole-tree prelints — are **exempt** and still convict in one window, because they
+reproduce by construction and a second window cannot tell them anything.
+
+**The one interaction worth knowing about, because it is reachable and not obvious.** A C29 pending
+takes the cut path, so it increments the *same* consecutive-cut counter a truncation does. A real
+red therefore costs one cut and then clears it (`conviction_clear` runs beside `cut_clear` at every
+verdict), and a load-flake clears it on the green — neither approaches `CUT_MAX`. But the pathology
+this clause was built for — a box convicting a *different* file every sweep — now reaches
+`CUT_MAX=3` and fires `cut_page` plus the 1800 s cool-off. That is the correct outcome and worth
+saying out loud: three sweeps that cannot agree on *what* failed is exactly the state a human should
+be told about, the page now says so in the C29 wording rather than claiming a truncation that did
+not happen, and a half-hour cool-off on an unprovable tree is strictly better than the false RED
+that used to be terminal for it.
+
+**Seams.** `CC_POSTLAND_CONVICT=off` (kill switch, restores the one-window red) ·
+`CC_POSTLAND_CONVICT_SPREAD_S` (window floor; tests shrink it to 0, which removes the wall-clock
+floor ONLY — the two-sweep requirement stays live) · `CC_POSTLAND_CONVICT_TTL_S` (86400).
+Ledger: `<state>/convictions`, TSV `epoch⇥file⇥tree⇥sha⇥load`, pruned to the TTL on every read.
+
+**Known residue (not fixed here, deliberately).** The C13b sentinel — `not ok` present but no
+`# (in test file …)` diagnostic ⇒ `FAILING=("tests/")` — still reds off a single window. It runs
+*no* conviction runs at all, and `"tests/"` is not a key that can identify the same failure twice,
+so corroborating on it would merge unrelated reds. Closing it needs a real attribution key, not a
+wider filter.
+
 ### 4.3 Deploy lane — autopilot (tv2-deploy)
 
 1. `launchd/com.claude.deploy-live.plist` (new): every 600s run
@@ -672,6 +764,37 @@ itself on its own landing. Land latency at target on first production use.
    --auto advance (runs install.sh); no separate operator step required.
 
 ## Learnings (accumulate; never delete)
+
+- 2026-08-08 (§4.2.7, C29): **N repetitions inside one environment are ONE observation, not N —
+  and a fix that varies the WRONG variable leaves the count at one.** The retry ladder's
+  ">=2/3 ⇒ reproducible" read as three independent trials but ran all three back to back, seconds
+  apart, so it could not discriminate the very thing it existed to discriminate. The giveaway was
+  never in any single stamp but ACROSS them: the convicted SET reshuffled sweep to sweep, which a
+  real red never does. Three things generalise, and the middle one is the expensive one.
+  **(a)** When a check repeats itself for confidence, ask what actually VARIES between the repeats.
+  If the answer is "wall clock, by seconds", the repeats are decorative.
+  **(b) A partial fix along a NEIGHBOURING axis reads exactly like a closed item, and only
+  re-measurement tells them apart.** C24 (`08dd4e3c`) had already been prescribed by this very
+  reasoning and had already landed — it varied the retry's BAND, which is genuinely the "changed
+  environment" the law asks for, and any reader would have called this item closed on sight. The
+  item was re-measured instead: 7-of-34 disjoint red pairs before C24, **7-of-47 after**, 1 green
+  in 46 sweeps before, 2 in 54 after. Priority is not ambient load, and the fingerprint did not
+  move. Had the re-measurement been skipped, the honest-looking close ("the band fix covers it")
+  would have left an auto-revert convicting innocent commits off one experiment. The corollary for
+  any parked item: **re-derive the evidence against today's tree, because the remedy that landed in
+  between may have moved a variable adjacent to the one that mattered.** This also cut the other
+  way — the WIP inherited from the pre-C24 session asserted in prose that "both the corpus run and
+  the retry expand the same `QOS` array", which C24 had made FALSE; landing it unread would have
+  shipped a confident, checkable lie in a comment block.
+  **(c)** The fix had to be an evidence axis, not a parameter — "more retries" is explicitly a
+  rejected class (§8) and would have been the obvious wrong move. The cheap axis was already on
+  disk: the sweep the abstention *already* triggers is a free second window, so the second
+  observation costs nothing that was not already being spent.
+- 2026-08-08 (corollary, worth its own line): **an availability gate must key on something the
+  world always eventually supplies.** Corroboration keys on elapsed TIME, never on "a lower load" —
+  on a box whose designed steady state is 20-40 sessions, a quiet window may never arrive, so a
+  load-keyed gate could convict but never exonerate. That asymmetry is the same one that produced
+  the 0-green-stamp deadlock (C23) one clause earlier in the same function.
 
 - 2026-08-07: **the verifier reached the right verdict and then filed almost none of it — two
   defects in one line, pointing opposite ways, each hiding the other.** `red_actions "$sha"
