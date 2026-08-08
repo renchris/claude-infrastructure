@@ -76,10 +76,27 @@ EOF
   chmod +x "$BIN/claude-accounts"
   export CC_ACCOUNTS_BIN="$BIN/claude-accounts"
   export HANDOFF_ACCOUNT_SWEEP=off   # the stranded-account sweep is not under test here
+  # …and turning the sweep OFF is not the same as pinning WHERE it would have written. Both of
+  # these default to an ABSOLUTE /tmp path, which no amount of $HOME fixturing redirects, so an
+  # unpinned run reaches the operator's real files. Absent paths are the right value — these
+  # sensors fail open on one.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
+  # THE BOX GATE IS OFF BY DEFAULT HERE, AND EVERY CASE THAT IS ABOUT IT TURNS IT BACK ON.
+  # A suite exercising handoff-fire on a shared box otherwise goes red-by-LOAD rather than by its
+  # subject: this machine lives well above the 2.0/core ceiling, so the verdict would be a function
+  # of what else happens to be running. Off is the safe default for cases that merely need a fire
+  # to proceed; `gate_on` is how a case that genuinely tests the gate opts in — against the STUBBED
+  # sysctl, so the load it sees is an input rather than the mood of the machine.
+  export CC_FIRE_CAPACITY_GATE=off
   export PATH="$BIN:$PATH"
   PAYLOAD="$BATS_TEST_TMPDIR/p.txt"
   echo "TASK — cloud venue gate fixture payload." > "$PAYLOAD"
 }
+
+# Opt back into the capacity gate for the cases that ARE the gate. Paired with the sysctl stub, so
+# STUB_LOAD/STUB_NCPU are what the gate reads — never /usr/sbin/sysctl's live answer.
+gate_on() { export CC_FIRE_CAPACITY_GATE=on; }
 
 # fire() — the real script, always --dry-run so an ADMIT never actually launches anything.
 # $1 = ncpu, $2 = load; the rest are passed through.
@@ -96,6 +113,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "2 cloud branch ADMITS when the account router reports headroom" {
+  gate_on
   # `-ne 9` and `-ne 2`, not `-eq 0`, and for the reason the sibling suite's case 2 gives: a
   # --dry-run that clears the gate proceeds into the rest of the script, which has its own exit
   # paths under a fixtured $HOME. The GATE's verdict is what is under test, so the assertion is
@@ -109,6 +127,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "3 cloud branch REFUSES on claude-accounts exit 3 — missing data is NEVER headroom" {
+  gate_on
   # THE case. rc 3 means the live limits could not be READ. A gate that admits on it has silently
   # converted "we do not know" into "there is room" — and the resulting fire is the one that finds
   # out. Mirrors bin/claude-accounts:1039-1040, which refuses to score a row with no weekly data.
@@ -119,6 +138,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "4 cloud branch REFUSES on claude-accounts exit 2 — no account routable by policy" {
+  gate_on
   # Distinct from case 3 and must stay distinct: rc 2 is a healthy instrument reporting an
   # exhausted fleet, rc 3 is a blind one. Same refusal, different reason text, because the two
   # have different cures (wait for a reset vs fix the prober).
@@ -129,6 +149,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "5 CONTROL — the box-local gate still refuses a LOCAL fire on a saturated box" {
+  gate_on
   # Proof the change is a BRANCH, not a weakening. 10 cores at load 30 = 3.0/core, over the 2.0
   # default ceiling. Without this case, case 6 would be indistinguishable from "the capacity gate
   # was accidentally disabled for everyone".
@@ -138,6 +159,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "6 the cloud fire ADMITS on that same saturated box — it does not run here" {
+  gate_on
   # The reason the branch exists at all: identical box state to case 5, opposite verdict, because
   # a cloud fire consumes none of this box's cores or RAM. The gate that binds it is the account's.
   STUB_ROUTE_RC=0 STUB_ROUTE_ACCT=next2 CC_FIRE_CLOUD=on fire 10 30.00 --cloud
@@ -157,6 +179,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
 }
 
 @test "8 the cloud branch records every admit — no silent return, reason mapped to a gate" {
+  gate_on
   # The two standing properties tests/handoff-fire-capacity-gate.bats case 31 asserts over the
   # whole of capacity_gate(), restated here so this file fails on its OWN branch rather than only
   # via the sibling: (a) each `return 0` the cloud branch owns is preceded by an emit_gate_admit,
