@@ -340,13 +340,42 @@ EOF
   [ "$status" -ne 9 ]
 }
 
-# _setup_pins <file> — 0 when that file's setup() block exports BOTH gate kill switches.
-_setup_pins() {
+# _setup_gate_off <file> — 0 when that file's setup() DISABLES both gate terms (pin form 1).
+# Split out from _setup_pins so the two questions stay separable: "is this suite load-insensitive"
+# (either form) and "does this suite turn the gate OFF" (this one). Test 23's DISJOINTNESS clause
+# needs the second and would be silently satisfied by the first — the shape of an assertion whose
+# span outgrew its subject.
+_setup_gate_off() {
   local blk
   blk="$(awk '/setup\(\)[[:space:]]*\{/{p=1} p{print} p&&/^\}/{exit}' "$1")"
   printf '%s\n' "$blk" | grep -q 'export CC_FIRE_CAPACITY_GATE=off' || return 1
   printf '%s\n' "$blk" | grep -q 'export CC_FIRE_HEADROOM_GATE=off'  || return 1
   return 0
+}
+
+# _setup_pins <file> — 0 when that file's setup() block makes the gate load-INSENSITIVE, by either
+# of the two sufficient forms below.
+_setup_pins() {
+  local blk
+  blk="$(awk '/setup\(\)[[:space:]]*\{/{p=1} p{print} p&&/^\}/{exit}' "$1")"
+  # FORM 1 — turn BOTH gate terms OFF. What a suite that merely happens to fire should do.
+  if _setup_gate_off "$1"; then return 0; fi
+  # FORM 2 — make the gate's INPUTS synthetic. Added 2026-08-08, when tests/handoff-fire-cloud.bats
+  # (G5, the off-box venue branch) became the SECOND suite whose SUBJECT is this gate. Form 1 is
+  # unavailable to such a suite by construction: turning the gate off deletes the only thing it
+  # tests. That is precisely why case 25 has always exempted THIS file by name — and a name is not
+  # a property, so the exemption stopped covering the population the moment a second gate suite
+  # existed.
+  #
+  # This is the second SUFFICIENT condition for the property the pin actually protects — ambient
+  # box load cannot flip the suite — not a widening of it. A setup() exporting CC_FIRE_SYSCTL (load
+  # and core count become stub output) AND CC_FIRE_HEADROOM_OVERRIDE (the memory term becomes a
+  # literal) has closed BOTH paths by which the real machine reaches the gate, which is exactly
+  # what form 1 achieves, and it is checkable the same way. A suite with NEITHER form still goes
+  # RED, so the ratchet keeps its teeth — this adds a second door, not a hole.
+  if printf '%s\n' "$blk" | grep -q 'export CC_FIRE_SYSCTL=' \
+  && printf '%s\n' "$blk" | grep -q 'export CC_FIRE_HEADROOM_OVERRIDE='; then return 0; fi
+  return 1
 }
 
 @test "23 PIN-GUARD (M11) — the known red-by-load fire suites pin BOTH terms off in setup()" {
@@ -371,7 +400,13 @@ _setup_pins() {
   done
   # DISJOINTNESS: this suite must NOT be pinned off, or the gate would be exercised nowhere at all
   # — "pin it everywhere" is the failure mode that turns M11 into a deletion of the M10 gate.
-  rc=0; _setup_pins "$BATS_TEST_FILENAME" || rc=$?
+  #
+  # Asserted against _setup_gate_off, not _setup_pins, since 2026-08-08. The clause has always
+  # meant "this suite does not DISABLE the gate"; it was written as `! _setup_pins` only because
+  # the two were the same predicate. They stopped being the same when _setup_pins grew form 2
+  # (synthetic inputs), which is how THIS suite is load-insensitive — so the old wording would now
+  # convict the file for the very technique that keeps its coverage alive.
+  rc=0; _setup_gate_off "$BATS_TEST_FILENAME" || rc=$?
   [ "$rc" -ne 0 ] || false
 }
 
@@ -636,6 +671,11 @@ _fires() {
     [ -n "$reason" ] || continue
     case "$reason" in
       capacity|headroom) printf '%s' "$mapped" | grep -q 'capacity|headroom' || false ;;
+      # G5 — the off-box venue's refusals (cloud-optin, cloud-router-absent,
+      # cloud-account-headroom, cloud-account-policy) map to their OWN gate name, deliberately not
+      # capacity's: a cloud fire never measured this box, so counting its refusals into the
+      # capacity denominator would mix two populations read by two different instruments.
+      cloud-*)           printf '%s' "$mapped" | grep -q 'cloud-\*'          || false ;;
       payload-*)         printf '%s' "$mapped" | grep -q 'payload-\*'        || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
