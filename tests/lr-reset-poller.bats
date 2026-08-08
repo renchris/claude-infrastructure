@@ -33,6 +33,18 @@ setup() {
 #!/bin/bash
 printf '%s\n' "$*" >> "${OSA_LOG:?}"
 [ "${OSA_FAIL:-0}" = 1 ] && exit 1
+# Minimal fake iTerm2 — only the two answers osa_type_verified needs to make progress (item
+# 270106134cc8). The GUI spawn no longer blind-sends its command: it creates the pane, reads the
+# typed line back off the screen, and only then sends Enter. So the stub must (a) hand back a
+# session id on create, and (b) ECHO THE TYPED LINE BACK when asked for the pane contents — that
+# read-back IS the proof the helper gates its Enter on. A stub that stays silent makes the helper
+# correctly refuse to submit, and every GUI-spawn assertion below would then fail for a reason
+# unrelated to what it tests.
+case "$*" in
+  *"create window"*|*"split vertically"*) echo "FAKE-PANE-0001" ;;
+  *"contents of s"*)
+    for a in "$@"; do case "$a" in ": cctv-"*) printf '%s\n' "$a" ;; esac; done ;;
+esac
 exit 0
 STUB
   chmod +x "$BATS_TEST_TMPDIR/stubs/osascript"

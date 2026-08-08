@@ -33,7 +33,49 @@ setup() {
   echo "$output" | grep -q "/Users/x/Development/.worktrees/wt-zeta"
   echo "$output" | grep -q "sid-123"
   echo "$output" | grep -q "create window with default profile"
-  echo "$output" | grep -q "write text"
+  # The command is NO LONGER blind-sent by a combined `write text` (item 270106134cc8). It is typed
+  # through osa_type_verified, which echo-verifies each line before sending its Enter, so the
+  # osascript the dry-run prints CREATES ONLY — it must not carry the command with it.
+  ! echo "$output" | grep -q 'write text' || false
+  echo "$output" | grep -q 'TYPE (verified): unsetopt correct correct_all'
+  echo "$output" | grep -qE 'TYPE \(verified\): .*reso-resume-one'
+}
+
+@test "the spell-correction disarm is typed FIRST, on its own accepted line" {
+  # Order is the whole mechanism: zsh CORRECT fires as a line is READ, so a disarm that arrives
+  # after the command (or inline with it) has not run when the command word is resolved.
+  run bash "$LAUNCH" --dry-run next4 /tmp/wt sid-123
+  [ "$status" -eq 0 ]
+  local dis cmdline
+  dis="$(echo "$output" | grep -n 'TYPE (verified): unsetopt correct' | head -1 | cut -d: -f1)"
+  cmdline="$(echo "$output" | grep -nE 'TYPE \(verified\): .*reso-resume-one' | head -1 | cut -d: -f1)"
+  # Split, one assertion per value. `[ A ] && [ B ] || { …; false; }` reads fine but is and-absorbed
+  # under errexit, so it can never fail the test — and it names neither value when it does.
+  [ -n "$dis" ] || { echo "the disarm line was never typed: $output"; false; }
+  [ -n "$cmdline" ] || { echo "the command line was never typed: $output"; false; }
+  [ "$dis" -lt "$cmdline" ] || { echo "disarm ($dis) does not precede the command ($cmdline)"; false; }
+}
+
+@test "RED-PROOF: the pre-fix blind-send shape would fail the guard above" {
+  # Proves the assertions discriminate rather than passing vacuously — the exact pre-fix
+  # construction, checked by the same predicate, must trip it.
+  local old='  tell current session of w
+    write text "$osa_cmd"
+  end tell'
+  echo "$old" | grep -q 'write text' || false
+  ! echo "$old" | grep -q 'TYPE (verified)' || false
+}
+
+@test "a missing verified-typing lib fails LOUD, never a silent blind send" {
+  # This runs at BOOT from launchd. Degrading to an unverified `write text` because a lib went
+  # missing would reinstate the exact silent-hang this file was changed to remove.
+  local fake="$BATS_TEST_TMPDIR/fakehome"
+  mkdir -p "$fake/scripts"
+  cp "$LAUNCH" "$fake/scripts/boot-resume-launch.sh"
+  HOME="$fake" CLAUDE_CONFIG_DIR="$fake" run bash "$fake/scripts/boot-resume-launch.sh" \
+    --dry-run next4 /tmp/wt sid-123
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "cannot source"
 }
 
 @test "dry-run: a cwd with spaces stays single-quoted (survives the write-text shell)" {

@@ -67,6 +67,25 @@ if [ -z "$acct" ] || [ -z "$sid" ]; then
   exit 2
 fi
 
+# VERIFIED TYPING (backlog item 270106134cc8). The resume command used to be typed by a single
+# `write text`, which is a blind send: it appends the newline itself, so the line is EXECUTED before
+# anything can check it arrived intact. This path survived only because shq() below single-quotes
+# every word and zsh skips spell-correction for a quoted command word — a property nothing pinned.
+# Drop the quoting, or point CC_RESUME_ONE_BIN at a bare name, and a `setopt CORRECT` shell parks
+# this window forever on `zsh: correct … [nyae]?` — AT BOOT, with nobody present to answer.
+# Resolution ladder mirrors the hooks/lib house idiom: beside-script → CFG → ~/.claude.
+_cctv="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="$HOME/.claude/scripts/lib/cc-type-verified.sh"
+# shellcheck source=lib/cc-type-verified.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_cctv" 2>/dev/null; then
+  # Fail LOUD: this is a launchd job at BOOT, and typing a resume command with no verification is
+  # precisely the silent-degradation mode this file was changed to remove.
+  echo "boot-resume-launch: FATAL — cannot source $_cctv (verified typing unavailable)" >&2
+  exit 1
+fi
+
 RESUME_ONE="${CC_RESUME_ONE_BIN:-$HOME/.reso/bin/reso-resume-one}"
 OSASCRIPT="${CC_OSASCRIPT_BIN:-osascript}"
 # Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
@@ -160,15 +179,22 @@ if [ "$IN_KITTY" = 1 ]; then
   KARGS+=(-- "$RESUME_ONE" "$acct" "$cwd" "$sid")
   [ -n "$branch" ] && KARGS+=("$branch")
 else
-  # osascript escaping: the command runs inside an AppleScript double-quoted string → escape " and \.
-  osa_cmd="$(printf '%s' "$CMD" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  read -r -d '' OSA <<OSA_EOF || true
+  # CREATE ONLY — the command is typed separately, through osa_type_verified. Splitting create from
+  # type is what makes the echo-verify possible at all: `write text` always appends the newline, so
+  # a combined call submits the line before anything can read it back. Returning the new session's
+  # `id` is what lets the helper address this exact pane afterwards.
+  #
+  # The AppleScript-string escaping that used to live here is GONE, not relocated: the helper passes
+  # the command as a trailing argv item to `on run argv`, so there is no double-quoted AppleScript
+  # literal for a quote or backslash in the command to break out of.
+  #
+  # Only THIS arm needs any of it. The kitty arm above execs the program via argv, so nothing it
+  # passes is ever re-parsed by a shell and no correction prompt can exist there.
+  read -r -d '' OSA_CREATE <<'OSA_EOF' || true
 tell application id "com.googlecode.iterm2"
   activate
   set w to (create window with default profile)
-  tell current session of w
-    write text "$osa_cmd"
-  end tell
+  return id of (current session of w)
 end tell
 OSA_EOF
 fi
@@ -176,7 +202,14 @@ fi
 if [ "$DRYRUN" = "1" ]; then
   printf 'CMD: %s\n' "$CMD"
   if [ "$IN_KITTY" = 1 ]; then printf 'KITTY: %s @ %s\n' "$KITTY" "$(printf '%q ' "${KARGS[@]}")"
-  else printf '%s\n' "$OSA"; fi
+  else
+    printf '%s\n' "$OSA_CREATE"
+    # Both typed lines, in order, each echo-verified before its Enter. The disarm goes first and on
+    # its OWN accepted line: CORRECT fires as the line is READ, so an inline `unsetopt` has not run
+    # yet. Printed only on the osascript arm — the kitty arm types nothing.
+    printf 'TYPE (verified): %s\n' "$CC_NOCORRECT_LINE"
+    printf 'TYPE (verified): %s\n' "$CMD"
+  fi
   exit 0
 fi
 
@@ -259,6 +292,11 @@ if [ "$_brl_it2_up" != "UP" ]; then
   echo "boot-resume-launch: iTerm2 not running and no kitty socket — refusing to launch a terminal for $sid" >&2
   exit 3
 fi
-printf '%s' "$OSA" | brl_bounded "$OSASCRIPT" - >/dev/null 2>&1 || { echo "boot-resume-launch: osascript failed for $sid" >&2; exit 4; }
+pane="$(printf '%s' "$OSA_CREATE" | brl_bounded "$OSASCRIPT" - 2>/dev/null | tr -d '[:space:]')"
+[ -n "$pane" ] || { echo "boot-resume-launch: osascript failed for $sid (no window, or no session id returned)" >&2; exit 4; }
+# Fail LOUD rather than submit a line we could not prove intact: a mangled command word is exactly
+# what parks the pane on an unanswerable [nyae] prompt, and at boot there is no operator to notice.
+osa_type_verified "$pane" "$CMD" \
+  || { echo "boot-resume-launch: could not verifiably type the resume command for $sid into pane $pane — refusing to submit an unverified line" >&2; exit 4; }
 command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
 exit 0

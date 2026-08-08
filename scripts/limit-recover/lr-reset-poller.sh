@@ -213,6 +213,18 @@ lrp_tmpdir() {
 }
 
 # ── headless-capable resume spawn (P0-8) ───────────────────────────────────────────────
+# VERIFIED TYPING (backlog item 270106134cc8). spawn_gui below types a command into a brand-new
+# pane. It used to blind-send it with a single `write text`, surviving only because `exec` happens
+# to be a shell builtin — a property nothing pinned. Under `setopt CORRECT` an unrecognised command
+# word parks the pane on `zsh: correct … [nyae]?`, and THIS poller fires UNATTENDED from a
+# LaunchAgent, so there is nobody to answer it. Resolution ladder: beside-script → CFG → ~/.claude.
+_cctv="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-type-verified.sh"
+[ -f "$_cctv" ] || _cctv="$HOME/.claude/scripts/lib/cc-type-verified.sh"
+# shellcheck source=../lib/cc-type-verified.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if . "$_cctv" 2>/dev/null; then LRP_TYPE_VERIFIED=1; else LRP_TYPE_VERIFIED=0; fi
+
 SPAWN_MECH="${LR_POLLER_SPAWN:-auto}"
 # Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
 # Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
@@ -269,9 +281,21 @@ spawn_gui() {
     return 0
   fi
   command -v osascript >/dev/null 2>&1 || return 1
+  # No verified-typing helper ⇒ REFUSE the GUI path rather than fall back to a blind send. Under
+  # `auto` this drops through to spawn_tmux, which types nothing at all, so the resume still
+  # happens — just headless. A degraded resume beats a pane wedged on an unanswerable prompt.
+  [ "${LRP_TYPE_VERIFIED:-0}" = 1 ] || {
+    echo "lr-reset-poller: verified typing unavailable — skipping GUI spawn (tmux still eligible)" >&2
+    return 1
+  }
   # Multi `-e` (not a heredoc) on purpose: the AppleScript stays in ARGV, which is where
   # tests/lr-reset-poller.bats' osascript stub observes the spawn — a heredoc would move it to
   # stdin and silently blind three GUI-spawn assertions (fixture-shape parity).
+  #
+  # CREATE ONLY, then type through osa_type_verified. `write text` appends the newline itself, so a
+  # combined call EXECUTES the line before anything can confirm it arrived intact; splitting the two
+  # is what makes the echo-verify possible, and `id of` is what lets the helper address this pane.
+  #
   # `is running` FIRST, and iTerm2 addressed by bundle id (2026-07-31). "iTerm2" is only the
   # CFBundleName of iTerm.app, so the old NAME lookup resolved solely while iTerm2 was already
   # running; after the kitty migration this poller could hang on an undismissable "Where is iTerm2?"
@@ -280,12 +304,15 @@ spawn_gui() {
   # falls back to tmux rather than stranding the resume"). Launching iTerm2 instead would resurrect
   # the app behind the operator on a fleet that deliberately left it.
   command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-reset-poller spawn_gui create-window launcher:$(basename -- "$1")"
-  lrp_bounded osascript >/dev/null 2>&1 \
+  local pane
+  pane="$(lrp_bounded osascript 2>/dev/null \
     -e 'if not (application id "com.googlecode.iterm2" is running) then error "iTerm2 is not running"' \
     -e 'tell application id "com.googlecode.iterm2"' \
     -e 'set newWin to (create window with default profile)' \
-    -e "tell current session of newWin to write text \"exec /bin/bash $1\"" \
-    -e 'end tell'
+    -e 'return id of (current session of newWin)' \
+    -e 'end tell' | tr -d '[:space:]')"
+  [ -n "$pane" ] || return 1
+  osa_type_verified "$pane" "exec /bin/bash $1"
 }
 # spawn_tmux <launcher> <sid> — run the launcher in a DETACHED tmux session (headless PTY). 0 = created.
 spawn_tmux() {
