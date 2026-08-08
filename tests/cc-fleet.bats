@@ -569,8 +569,15 @@ STUB
   # gap and no selector edge would have closed it. The net caught both exactly where it is designed
   # to: postland-verify -> backlog. Do NOT "fix" that by deriving `n` from the plists on disk; the
   # paragraph above already ruled on it, and the shed is a deliberate non-verdict, not a leak.
-  if [ "$n" != 27 ]; then
-    echo "manifest declares $n labels, expected 27 — if a plist was legitimately added or retired,"
+  # 28 since 2026-08-08: com.claude.devserver-gc (195d91f5) — the capacity-alarm/scratchpad-reaper
+  # shape a THIRD time: a plist landed with no manifest row, so the coverage loop below (not this
+  # count) was RED on pristine origin/main for every lander after it. The count moves WITH the
+  # repair, as every entry above did. Worth stating once more because the shape keeps recurring:
+  # the coverage loop is the only leg that catches it, and it can only fire POST-land — the smoke
+  # mostly reads `smoke:"skipped"` under R7 load-shed, and `gate-select.sh --direct` naming this
+  # suite was never the gap either. postland-verify → backlog caught it exactly as designed.
+  if [ "$n" != 28 ]; then
+    echo "manifest declares $n labels, expected 28 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
