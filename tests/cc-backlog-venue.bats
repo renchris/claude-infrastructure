@@ -213,3 +213,113 @@ reap_mid() {
   run reap_aged "$id"
   [[ "$output" == *"WOULD-REOPEN"* ]]
 }
+
+# ── ELIGIBILITY (G8): a cloud claim must also be REFUSED for work a VM cannot do ────────────────
+#
+# The venue tests above answer "which oracles may judge this claim". These answer the prior
+# question: "may this work go off-box at ALL?" — CONCURRENCY_PROGRAM.md §S5's sentence (repo-only ✅
+# · visual ❌ · about-this-box ❌ · branch banking ⚠️), turned from prose into an exit code at the
+# actuator via bin/cc-eligible.
+#
+# EVERY REFUSAL ARM IS PAIRED WITH ITS LOCAL CONTROL, for this suite's own stated reason: a gate
+# that refused everything would satisfy "the cloud claim was refused" just as happily, while
+# breaking every local claim in the repo. The pairs below run the SAME item through BOTH venues, so
+# the only variable is the venue.
+
+# add_only <source> <title> → an unclaimed item id
+add_only() { "$CB" add --title "$2" --project probe --source "$1"; }
+
+@test "eligibility: work about THIS BOX is refused off-box" {
+  local id; id="$(add_only elig-box "restart the launchd daemon and re-read its plist")"
+  run "$CB" claim "$id" --by "cloudvm-1" --venue cloud
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=cloud-ineligible"* ]] || { echo "$output"; false; }
+  # …and it appended NOTHING: a refused claim must leave the item claimable.
+  run "$CB" list --json
+  [[ "$output" != *'"status":"claimed"'* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL: that SAME item claims fine with --venue local" {
+  # The one assertion that separates "the eligibility gate works" from "the gate broke claiming".
+  # Identical id, identical claimer, only the venue differs.
+  local id; id="$(add_only elig-box "restart the launchd daemon and re-read its plist")"
+  run "$CB" claim "$id" --by "$(hostname -s)-$$" --venue local
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"cloud-ineligible"* ]] || { echo "$output"; false; }
+}
+
+@test "eligibility: VISUAL work is refused off-box, with its own verdict" {
+  local id; id="$(add_only elig-visual "screenshot the banner against the dev server")"
+  run "$CB" claim "$id" --by "cloudvm-2" --venue cloud
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=cloud-ineligible"* ]] || { echo "$output"; false; }
+  # The CLASS rides the body even though the claim-level token is one string: a reader must be able
+  # to tell "needs a browser" from "needs this box" without re-running anything.
+  [[ "$output" == *"ineligible-visual"* ]] || { echo "$output"; false; }
+}
+
+@test "eligibility: repo-only work claims fine WITH --venue cloud" {
+  # The tap itself. If this ever goes red the gate has become a blanket refusal and cloud dispatch
+  # is dead — which is indistinguishable, from the refusal arms alone, from the gate working.
+  local id; id="$(add_only elig-repo "audit the eslint rule config across every package")"
+  run "$CB" claim "$id" --by "cloudvm-3" --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$CB" list --json
+  [[ "$output" == *'"venue":"cloud"'* ]] || { echo "$output"; false; }
+}
+
+@test "eligibility: the verdict token is on LINE 1 of the refusal" {
+  # cc-dispatch sees this refusal only through claim_excerpt — `head -1`, 200 chars. A token on
+  # line 2 does not exist (memory: claimed-outcome-vs-checked-outcome).
+  local id; id="$(add_only elig-line1 "rebuild the iTerm2 pane registry")"
+  run bash -c '"$1" claim "$2" --by cloudvm-4 --venue cloud 2>&1 | head -1' _ "$CB" "$id"
+  [[ "$output" == *"verdict=cloud-ineligible"* ]] || { echo "$output"; false; }
+  [ "${#output}" -le 200 ] || { echo "excerpt longer than claim_excerpt's window: $output"; false; }
+}
+
+@test "eligibility FAILS OPEN: an ABSENT classifier never blocks a cloud claim" {
+  # The sensor-failure direction. A classifier that refused on "I could not tell" would take the
+  # whole cloud tap down with it the first time the helper went missing (I6, cc-premise's rule).
+  local id; id="$(add_only elig-open "restart the launchd daemon")"
+  run env CC_BACKLOG_ELIGIBLE_BIN="$BATS_TEST_TMPDIR/no-such-classifier" \
+      "$CB" claim "$id" --by "cloudvm-5" --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "eligibility FAILS OPEN: a CRASHING classifier never blocks a cloud claim" {
+  # Distinct from absent: the helper is there, executable, and dies. Only exit 3 may block, so a
+  # non-3 failure code must proceed — the arm that a naive `if ! "$bin"; then refuse` would break.
+  local stub="$BATS_TEST_TMPDIR/crashy"
+  printf '#!/bin/bash\necho boom >&2\nexit 1\n' > "$stub"; chmod +x "$stub"
+  local id; id="$(add_only elig-crash "restart the launchd daemon")"
+  run env CC_BACKLOG_ELIGIBLE_BIN="$stub" "$CB" claim "$id" --by "cloudvm-6" --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "CONTROL: that same stub REFUSES when it exits 3 — the wiring is live, not inert" {
+  # The positive control for the two fail-open arms above. Without it, both would pass against a
+  # cc-backlog that never called the classifier at all (memory: control-must-replay-the-real-artifact).
+  local stub="$BATS_TEST_TMPDIR/refuser"
+  printf '#!/bin/bash\necho "verdict=ineligible-box"\nexit 3\n' > "$stub"; chmod +x "$stub"
+  local id; id="$(add_only elig-ctl "audit the eslint rule config")"
+  run env CC_BACKLOG_ELIGIBLE_BIN="$stub" "$CB" claim "$id" --by "cloudvm-7" --venue cloud
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=cloud-ineligible"* ]] || { echo "$output"; false; }
+}
+
+@test "eligibility: --force overrides the refusal" {
+  local id; id="$(add_only elig-force "restart the launchd daemon")"
+  run "$CB" claim "$id" --by "cloudvm-8" --venue cloud --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "eligibility: the gate can be switched off, and OFF is not the default" {
+  local id; id="$(add_only elig-off "restart the launchd daemon")"
+  run env CC_BACKLOG_ELIGIBLE_GATE=off "$CB" claim "$id" --by "cloudvm-9" --venue cloud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The default half — an unset variable must still gate, or the knob IS the shipping path
+  # (memory: sensor-default-off-makes-blindness-the-shipping-path).
+  local id2; id2="$(add_only elig-off2 "restart the launchd daemon twice")"
+  run "$CB" claim "$id2" --by "cloudvm-9" --venue cloud
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+}

@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""cc-eligible — may this work item run OFF-BOX, in a cloud VM?
+
+A cloud VM has no `~/.claude`, no local browser, no dev server, no pane registry, no keychain,
+and none of this box's 199 unpushed branches. Which work may go off-box was, until this file,
+a SENTENCE IN A PLAN — docs/plans/CONCURRENCY_PROGRAM.md §S5:
+
+    "repo-only work ✅ · visual design ❌ (needs the local browser + dev server) ·
+     anything about this box ❌ · branch banking ⚠️"
+
+(longer form, with the measurements behind each verdict: docs/research/concurrency-census-2026-08-07.md §5)
+
+A sentence in a plan is ADVISORY, and advisory is behind a diode: nothing reads it at the moment a
+claim is taken (memory: conclusion-must-reach-the-enforcing-store). This file is the ONE
+implementation of the predicate, shared by every consumer so a report and a gate can never drift:
+
+    cc-backlog claim --venue cloud  → the claim-side refusal      (`check`)
+    a human / a desk report         → the census                  (`sweep`)
+    a reader asking why             → the reason                  (`explain`)
+
+Modelled on bin/cc-premise, deliberately: same shape (verdict token on line 1, exit 3 iff refused,
+fail-OPEN on everything else), same reason (a per-item predicate must run at CONSUMPTION, every
+time, or it is a one-time review that goes stale the moment it finishes).
+
+🚨 THE KEYWORD LIST BELOW IS NOT THE DEFINITION OF THE CLASS. It is a list of SPELLINGS that the
+class has been observed to use. A denylist enumerates spellings, never the class it is standing in
+for (memory: denylist-enumerates-spellings-not-the-class — a `-rf` denylist let 11 of 13 real cases
+past while refusing its own fix). Two consequences are designed in rather than hoped for:
+
+  1. `sweep` prints the ELIGIBLE bucket, titles and all, because that is the bucket where a missed
+     spelling does damage. The sweep is the instrument for finding what this list does not say; it
+     is not a scoreboard for how well the list is doing. Read it, and ADD the spelling you find.
+  2. Nothing here is authoritative enough to be worth widening on a hunch. A word added because it
+     "sounds local" costs the cloud tap a whole class of real work, and the tap is the entire point.
+
+FAIL-OPEN, BUT ONLY ABOUT READING. The two halves are different and conflating them is how a
+classifier becomes a queue-starver:
+
+  · Cannot READ (ledger absent, malformed, unknown id, an exception) ⇒ exit 0 with a verdict that
+    NAMES the uncertainty. A classifier that refused on "I could not tell" would block the whole
+    cloud tap on a missing file. This is cc-premise's rule verbatim, and cc-backlog's premise gate
+    already depends on it.
+  · Read fine, and the text names local-only state ⇒ REFUSE (exit 3). Here the asymmetry points the
+    other way and it is worth stating, since it looks like a contradiction of the line above: a
+    wrong ELIGIBLE puts a worker in a VM that CANNOT do the work at all and cannot tell you so —
+    it will improvise something plausible against state it cannot see. A wrong INELIGIBLE leaves
+    the item exactly where it is today, claimable locally, losing nothing. Stranding is
+    recoverable; a confident worker on invisible state is not.
+
+BRANCH BANKING IS ITS OWN VERDICT, not a sub-case of "box work", because the plan marks it ⚠️ and
+not ❌ and that distinction is real: the WORK is ordinary repo work, and only the CORPUS it operates
+on (2,304 commits across 199 branches that exist nowhere but this disk) is local. It refuses — a
+worker that cannot see the branches cannot bank them — but under a token that says which half is
+the problem, so a reader is not sent looking for a browser.
+
+Verbs:
+  check <id>       `verdict=<token>` on line 1, reasons on stderr. exit 3 iff INELIGIBLE.
+  explain <id>     the human-readable reason, on stdout. always exit 0.
+  sweep [--json]   the census over every non-done item — one implementation, two consumers.
+
+Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl} — the same resolution
+cc-backlog and cc-premise use, so a fixtured test and the live desk read the same way.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import Counter, defaultdict
+
+BACKLOG = os.environ.get(
+    "CC_BACKLOG_FILE", os.path.join(os.path.expanduser("~"), ".claude/autonomy/backlog.jsonl")
+)
+
+# ── THE SPELLINGS ──────────────────────────────────────────────────────────────────────────────
+# Read the header before touching these. Each entry is (token, pattern); the token is what `sweep`
+# counts and what `explain` names, so a spelling that never fires is visible as a zero rather than
+# as a comfortable silence.
+#
+# Word-boundaried on purpose: `\bcss\b` must not fire inside "success", and `\bpanes?\b` must not
+# fire inside "japanese". A substring list here would refuse most of the store.
+
+BOX = [
+    # ANYTHING ABOUT THIS BOX — the plan's ❌, and the widest of the three. These name state that
+    # exists only in this kernel, this filesystem, this keychain, or this window server. A VM has
+    # none of it and, worse, has a plausible-looking empty version of most of it.
+    ("launchd", r"\blaunchd\b"),
+    ("plist", r"\bplists?\b"),
+    ("daemon", r"\bdaemons?\b"),
+    ("pane", r"\bpanes?\b"),
+    ("terminal", r"\bterminals?\b"),
+    ("iterm2", r"\biterm ?2?\b"),
+    ("kitty", r"\bkitty\b"),
+    ("tmux", r"\btmux\b"),
+    # `hook` is the ambiguous one and it is included KNOWINGLY. A hook script is ordinary repo text
+    # that a VM can edit perfectly well — but every hook in this repo is specified against the live
+    # ~/.claude layer it fires from, and its verification is a Stop/PreToolUse event on THIS box.
+    # An off-box worker can write one and can never learn whether it fires. Refusing costs the tap
+    # a real class of work; the sweep counts this token separately so that cost stays visible.
+    ("hook", r"\bhooks?\b"),
+    ("quota", r"\bquotas?\b"),
+    ("account", r"\baccounts?\b"),
+    ("keychain", r"\bkeychain\b"),
+    ("hardware", r"\bhardware\b"),
+    ("this-machine", r"\bthis machine\b"),
+    ("this-box", r"\bthis box\b"),
+    ("reboot", r"\breboots?\b"),
+]
+
+VISUAL = [
+    # VISUAL / DESIGN — the plan's other ❌. Every measurement in the originating session ran
+    # through the local browser against localhost:3554; a sandboxed clone has neither server nor
+    # browser nor eyes. The failure is silent: a worker "verifies" a render it never saw.
+    ("screenshot", r"\bscreen ?shots?\b"),
+    ("browser", r"\bbrowsers?\b"),
+    ("dev-server", r"\bdev server\b"),
+    ("localhost", r"\blocalhost\b"),
+    ("visual", r"\bvisual(?:ly)?\b"),
+    ("css", r"\bcss\b"),
+    ("render", r"\brender(?:s|ed|ing)?\b"),
+    ("pixel", r"\bpixels?\b"),
+    ("banner", r"\bbanners?\b"),
+]
+
+BANKING = [
+    # BRANCH BANKING — the plan's ⚠️. The work is ordinary; the corpus is not.
+    ("branch-banking", r"\bbranch bank(?:ing|ed)?\b"),
+    ("worktree", r"\bwork ?trees?\b"),
+    ("unpushed", r"\bunpushed\b"),
+    ("unlanded", r"\bunlanded\b"),
+    ("stranded", r"\bstranded\b"),
+    ("local-branch", r"\blocal(?:-only)? branch(?:es)?\b"),
+]
+
+# Compiled once, in REFUSAL ORDER. Order decides which verdict a multi-class item reports, and it
+# runs widest-first: an item that says both "launchd" and "render" is box work whose remedy happens
+# to be visible, not design work. The alternative — reporting every class — makes the verdict token
+# unparseable by a `head -1` consumer, which is the only channel cc-dispatch has.
+CLASSES = [
+    ("ineligible-box", "anything about THIS BOX — local-only state a VM cannot see", BOX),
+    ("ineligible-visual", "VISUAL/DESIGN — needs the local browser + dev server", VISUAL),
+    ("ineligible-branch-banking", "BRANCH BANKING — the corpus exists only on this disk", BANKING),
+]
+CLASSES = [(v, d, [(t, re.compile(p, re.I)) for t, p in pats]) for v, d, pats in CLASSES]
+
+# The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
+# disagree about which is which — cc-premise's BLOCKING, same reason.
+BLOCKING = tuple(v for v, _d, _p in CLASSES)
+
+# The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
+# things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
+# outage, and a single `unknown` for both would hide an outage inside a typo (memory:
+# sensor-default-off-makes-blindness-the-shipping-path).
+UNKNOWN_ITEM = "unknown-item"
+UNKNOWN_STORE = "unknown-store"
+
+
+def _open_unknown(token, msg):
+    """Any failure to READ: say so on stderr, name the uncertainty on line 1, exit 0."""
+    sys.stderr.write("cc-eligible: %s\n" % msg)
+    sys.stdout.write("verdict=%s\n" % token)
+    sys.exit(0)
+
+
+def load_records():
+    """Every well-formed ledger record, in file order. Malformed lines are skipped, never fatal.
+
+    Deliberately NOT a status fold and deliberately NOT a call back into cc-backlog: `check` runs
+    INSIDE cc-backlog's claim path, so shelling out to `cc-backlog list` would re-enter the subject
+    on its own hot path. `sweep` — which is not on that path — asks cc-backlog for the fold instead,
+    so there stays exactly one implementation of "what status is this item".
+    """
+    recs = []
+    try:
+        with open(BACKLOG, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue  # malformed: cc-backlog reports these; we must not add a second voice
+                if isinstance(obj, dict) and obj.get("id"):
+                    recs.append(obj)
+    except (IOError, OSError) as exc:
+        _open_unknown(UNKNOWN_STORE, "ledger unreadable (%s) — fail-open" % exc)
+    return recs
+
+
+# THE CLASSIFIED SPAN is the item's SPECIFICATION, not everything ever written under its id
+# (memory: assertion-span-must-equal-its-subject). `title`, `dodRef`, `condition` and `source` say
+# what the work IS. `evidence` is the proof a finished item left behind, and `needs` is an
+# operator-only step — an item carrying one is `blocked`, i.e. outside every dispatch wave, so
+# classifying on it could only ever add false refusals to work that is never claimed anyway.
+SPAN_FIELDS = ("title", "dodRef", "condition", "source")
+
+
+def build_index(recs):
+    """id -> the item's specification text, accumulated across its records.
+
+    Accumulated rather than last-write-wins because these fields are written by the `add` record and
+    an item may be re-added (the id is a hash of project+title+source, so a re-add is idempotent and
+    carries the same words) — taking the union costs nothing and cannot lose a field that only one
+    record carried.
+    """
+    idx = {}
+    for r in recs:
+        rid = r["id"]
+        ent = idx.setdefault(rid, {"text": "", "title": "", "project": ""})
+        parts = [r.get(k) or "" for k in SPAN_FIELDS]
+        text = " ".join(p for p in parts if p)
+        if text:
+            ent["text"] = (ent["text"] + " " + text).strip()
+        if r.get("title") and not ent["title"]:
+            ent["title"] = r["title"]
+        if r.get("project") and not ent["project"]:
+            ent["project"] = r["project"]
+    return idx
+
+
+def classify(text):
+    """(verdict, description, [matched tokens]) for a span of specification text.
+
+    Pure — no I/O, no ledger, no git. Everything that can fail lives in the callers, which is what
+    makes the fail-open rule enforceable in one place.
+    """
+    for verdict, desc, pats in CLASSES:
+        hits = [tok for tok, rx in pats if rx.search(text)]
+        if hits:
+            return verdict, desc, hits
+    return "eligible", "repo-only work — no local-only state named", []
+
+
+def assess(item_id, idx):
+    """(verdict, description, tokens, title) — the predicate, over a built index."""
+    ent = idx.get(item_id)
+    if ent is None:
+        return UNKNOWN_ITEM, "no such item in %s" % BACKLOG, [], ""
+    verdict, desc, hits = classify(ent["text"])
+    return verdict, desc, hits, ent["title"]
+
+
+REFUSAL_NOTE = (
+    "This is not a judgement about the work's value or its readiness — it is a statement about\n"
+    "  WHERE it can run. Claim it LOCALLY and it proceeds untouched; only `--venue cloud` is\n"
+    "  refused. If the classification is wrong, the spelling that fired is named above: fix\n"
+    "  bin/cc-eligible's list rather than forcing past it, so the next item of this shape is\n"
+    "  classified correctly too."
+)
+
+
+def cmd_check(item_id):
+    idx = build_index(load_records())
+    verdict, desc, hits, title = assess(item_id, idx)
+    # LINE 1 is the machine-readable token: cc-backlog's caller sees only a head-biased excerpt
+    # (head -1, 200 chars), so the verdict must ride the first line or it does not exist
+    # (memory: claimed-outcome-vs-checked-outcome).
+    sys.stdout.write("verdict=%s\n" % verdict)
+    # FLUSHED BEFORE THE REASONS, and this is not tidiness. Every caller captures `2>&1`, and a
+    # piped stdout is block-buffered while stderr is not — so without this the reasons overtake the
+    # token and "line 1" becomes a sentence, exactly where a `head -1` consumer is looking.
+    sys.stdout.flush()
+    if verdict in BLOCKING:
+        sys.stderr.write("OFF-BOX INELIGIBLE — %s\n" % desc)
+        sys.stderr.write("  item : %s %s\n" % (item_id, title[:120]))
+        sys.stderr.write("  named: %s\n" % ", ".join(hits))
+        sys.stderr.write("  " + REFUSAL_NOTE + "\n")
+    elif verdict == UNKNOWN_ITEM:
+        sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
+    sys.exit(3 if verdict in BLOCKING else 0)
+
+
+def cmd_explain(item_id):
+    idx = build_index(load_records())
+    verdict, desc, hits, title = assess(item_id, idx)
+    w = sys.stdout.write
+    w("%s  %s\n" % (item_id, title[:120]))
+    w("  verdict : %s\n" % verdict)
+    w("  because : %s\n" % desc)
+    w("  named   : %s\n" % (", ".join(hits) if hits else "(nothing — no spelling in the list fired)"))
+    if verdict == "eligible":
+        w("  ⚠️ 'eligible' means NO SPELLING IN THE LIST FIRED, which is weaker than 'this is\n"
+          "     repo-only work'. The list enumerates spellings, not the class. Read the title.\n")
+    sys.exit(0)
+
+
+def _folded_items():
+    """The FOLD comes from cc-backlog itself — never re-implemented here (one arbiter per fact)."""
+    exe = os.environ.get("CC_ELIGIBLE_BACKLOG_BIN") or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "cc-backlog"
+    )
+    try:
+        p = subprocess.run(
+            [exe, "list", "--all", "--json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+        if p.returncode != 0:
+            return None
+        return json.loads(p.stdout.decode("utf-8", "replace"))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def cmd_sweep(as_json):
+    """The census — and, more importantly, the instrument for finding the spellings this file misses.
+
+    The ELIGIBLE bucket is printed in full and the refused ones are summarised, which is the
+    opposite of how a scoreboard would be built. That is deliberate: a refusal is self-announcing
+    (the token names the word that fired and a human sees it at claim time), while a WRONG eligible
+    is silent by construction — it looks exactly like a right one until a VM worker improvises
+    against state it cannot see. The only way to find those is to read the titles.
+    """
+    items = _folded_items()
+    if items is None:
+        _open_unknown(UNKNOWN_STORE, "cc-backlog list failed — cannot sweep")
+    idx = build_index(load_records())
+    nd = [i for i in items if i.get("status") != "done"]
+
+    buckets = defaultdict(list)
+    tokens = Counter()
+    for it in nd:
+        verdict, _desc, hits, _title = assess(it["id"], idx)
+        buckets[verdict].append({
+            "id": it["id"], "status": it.get("status"),
+            "title": (it.get("title") or "")[:120], "tokens": hits,
+        })
+        tokens.update(hits)
+
+    report = {
+        "non_done": len(nd),
+        "store": BACKLOG,
+        "counts": {v: len(buckets.get(v, [])) for v in
+                   list(BLOCKING) + ["eligible", UNKNOWN_ITEM, UNKNOWN_STORE]},
+        "tokens": dict(tokens.most_common()),
+        "eligible": buckets.get("eligible", []),
+        "ineligible": {v: buckets.get(v, []) for v in BLOCKING},
+    }
+    if as_json:
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+        sys.exit(0)
+
+    w = sys.stdout.write
+    w("cc-eligible sweep — %d non-done items · store %s\n" % (len(nd), BACKLOG))
+    w("\n  REFUSED off-box (exit 3 at `cc-backlog claim --venue cloud`):\n")
+    for v, desc, _p in CLASSES:
+        w("    %-27s %-58s : %d\n" % (v, desc[:58], len(buckets.get(v, []))))
+    w("  ALLOWED off-box:\n")
+    w("    %-27s %-58s : %d\n"
+      % ("eligible", "no spelling fired — NOT a proof of repo-only", len(buckets.get("eligible", []))))
+    unk = len(buckets.get(UNKNOWN_ITEM, []))
+    if unk:
+        w("    %-27s %-58s : %d\n" % (UNKNOWN_ITEM, "folded but not in the raw ledger", unk))
+    if tokens:
+        w("\n  spellings that fired: %s\n"
+          % ", ".join("%s×%d" % (t, n) for t, n in tokens.most_common()))
+        never = [t for _v, _d, pats in CLASSES for t, _rx in pats if t not in tokens]
+        if never:
+            w("  never fired (a dead spelling is not a clean store — it may be the wrong word): %s\n"
+              % ", ".join(never))
+    for v, _desc, _p in CLASSES:
+        rows = buckets.get(v, [])
+        if not rows:
+            continue
+        w("\n── %s ─────────────────────────────────\n" % v.upper())
+        for r in rows:
+            w("  %s [%s] %s\n" % (r["id"], r["status"], r["title"]))
+            w("      named: %s\n" % ", ".join(r["tokens"]))
+    w("\n── ELIGIBLE — READ THESE ────────────────────────────────────\n")
+    w("  This is the bucket where a missed spelling does damage: a wrong refusal announces itself,\n"
+      "  a wrong ELIGIBLE puts a worker in a VM against state it cannot see. If a title below\n"
+      "  names local-only work, the spelling it uses is missing from bin/cc-eligible — add it.\n")
+    for r in buckets.get("eligible", []):
+        w("  %s [%s] %s\n" % (r["id"], r["status"], r["title"]))
+    sys.exit(0)
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        sys.stdout.write(__doc__)
+        sys.exit(0)
+    verb, rest = argv[0], argv[1:]
+    if verb in ("check", "explain"):
+        if not rest:
+            sys.stderr.write("cc-eligible %s: <id> is required\n" % verb)
+            sys.exit(2)
+        (cmd_check if verb == "check" else cmd_explain)(rest[0])
+    elif verb == "sweep":
+        cmd_sweep("--json" in rest)
+    else:
+        sys.stderr.write("cc-eligible: unknown verb %s\n" % verb)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the whole point is that NOTHING here may block a claim
+        _open_unknown(UNKNOWN_STORE, "unexpected error (%s) — fail-open" % exc)
