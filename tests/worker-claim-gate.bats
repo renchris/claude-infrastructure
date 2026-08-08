@@ -301,3 +301,68 @@ fire_hook() { # $1=cwd $2=file_path → the hook's stdout
   printf '%s' "$output" | jq -e --arg i "$id" --arg h "$HOST-$$" \
     'select(.gate=="worker-claim-gate" and .verdict=="refuse" and .item==$i and .holder==$h)' >/dev/null
 }
+
+# ── 19-22 · THE DONE ARM ───────────────────────────────────────────────────────────────────────
+# Why this arm exists (measured 2026-08-07, item 149789b69fc4). The `noop-status` branch used to
+# admit open / done / blocked alike, on the stated premise that "`cc-dispatch` owns whether an item
+# may be worked, and a done-latch refusal is its rc 4, taken before any spawn". That premise covers
+# only workers dispatch SPAWNED. On the day, dispatch fired EXACTLY ONCE and the population arrived
+# by Agent-tool fan-out instead — 224 spawns over 3 generations, a path that never consults dispatch
+# and so never meets its rc 4. Those workers reached a DONE item, read "not claimed", and were let
+# through: 6 rows, basis=no-claim, every one a duplicate. Lifetime record before the fix: 21 admits,
+# ZERO refusals. Case 19 is that storm as an executable assertion.
+#
+# Case 20 is the anti-clog control and matters as much as 19. The finisher's own follow-up writes —
+# the commit, the cleanup — must NOT be refused, or the gate locks every worker out of the work it
+# just completed and jams the commit path it exists to protect. A refusal that cannot tell the
+# finisher from a duplicate is a worse defect than the one being fixed.
+item_done_by() { # $1=title $2=holder → id, and makes wt-<id>
+  local id; id="$(bash "$CB" add --project /r --title "$1" --source s)"
+  bash "$CB" claim "$id" --by "$2" >/dev/null
+  # `done` QUOTED: it is a shell keyword, so a bare one reads as a loop terminator and shellcheck
+  # says so (SC1010) — the same class as the `local then` trap this library's own cache helper
+  # records. It parses today only because no for/while is open; quoting makes the verb literal.
+  bash "$CB" "done" "$id" --evidence e >/dev/null
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  printf '%s' "$id"
+}
+
+@test "19 a DONE item REFUSES a session that did not finish it (the 149789b69fc4 fan-out)" {
+  id="$(item_done_by finished "$HOST-$$")"
+  [ "$(by_of "$id")" = "$HOST-$$" ]          # the latch carries `by` — the premise of the whole arm
+  export CC_WCLAIM_PID=999999                # a DIFFERENT session, exactly like the 40 duplicates
+  run admit "$(wt "$id")"
+  [ "$status" -eq 9 ]
+  printf '%s' "$output" | grep -q 'REFUSING'
+  printf '%s' "$output" | grep -q 'STAND DOWN'
+  run cat "$CC_WCLAIM_IDL"
+  printf '%s' "$output" | jq -e --arg i "$id" \
+    'select(.gate=="worker-claim-gate" and .verdict=="refuse" and .basis=="done-latched" and .item==$i)' >/dev/null
+}
+
+@test "20 the FINISHER of a done item is ADMITTED — it must not be locked out of its own commit" {
+  id="$(item_done_by mine-finished "$HOST-$$")"
+  run admit "$(wt "$id")"                    # same identity that completed it
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'REFUSING'
+}
+
+@test "21 an OPEN item is STILL admitted — the done arm must not widen into eligibility policy" {
+  id="$(bash "$CB" add --project /r --title still-open --source s)"
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  export CC_WCLAIM_PID=999999
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'REFUSING'
+}
+
+@test "22 a done item whose holder is UNREADABLE admits — never refuse on a lookup that failed" {
+  id="$(item_done_by unreadable "$HOST-$$")"
+  export CC_WCLAIM_PID=999999
+  printf '#!/bin/bash\ncase "$1" in list) exit 1 ;; esac\nexec %s "$@"\n' "$CB" \
+    > "$BATS_TEST_TMPDIR/cb-nolist"; chmod +x "$BATS_TEST_TMPDIR/cb-nolist"
+  export CC_WCLAIM_BACKLOG_BIN="$BATS_TEST_TMPDIR/cb-nolist"
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'REFUSING'
+}
