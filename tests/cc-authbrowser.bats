@@ -288,6 +288,13 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
 
 argv_has() { grep -qxF -- "$1" "$STUB_ARGV_LOG"; }
 
+json_body() { # <$output> — the JSON object alone, for jq.
+  # bats merges stderr into $output, and the fallback-port path deliberately warn()s to stderr
+  # BEFORE printing its JSON, so feeding $output straight to jq is a parse error. Slice from the
+  # first line that opens the object; the frozen shape is pretty-printed, so `^{` matches once.
+  echo "$1" | sed -n '/^{/,$p'
+}
+
 port_map_of() { # <base>|--unset — the subject's OWN acct→port map, read without binding anything.
   # Loads bin/cc-authbrowser as a module (its `__main__` guard means nothing executes), so the
   # frozen map can be asserted against the REAL 9341-9344 while peers are running: no listener,
@@ -598,20 +605,90 @@ EOF
   refute port_open "$P_NEXT"
 }
 
-@test "a FOREIGN process on the port is BROWSER-FAILED (exit 4) and is NOT killed" {
+# A FOREIGN holder on the frozen port used to be EXIT_BROWSER (exit 4). That assertion was not
+# stale-but-harmless — it PINNED the defect: 9341-9344 is also inside the range this box hands to
+# per-worktree Node --inspect debuggers, so on 2026-08-08 `pnpm dev` out of one reso worktree held
+# 9341 (next) and 9342 (next2), `--start` refused, and cc-relogin's phase 2 -- the ONLY leg that
+# moves the ~30-day login deadline -- had never once launched. The safety property was never the
+# refusal; it is "never adopt or kill what we did not launch", and that is asserted BELOW, on the
+# path that now succeeds. Reverting the subject reddens this test on its very first assertion.
+@test "a FOREIGN process on the frozen port: browser STARTS on a fallback port, foreign untouched" {
   if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
   FOREIGN=$(spawn_bg "$D/foreign-listener" "$P_NEXT")
   for _ in 1 2 3 4 5 6 7 8 9 10; do port_open "$P_NEXT" && break; sleep 0.2; done
   port_open "$P_NEXT"
 
   run "$B" next --start
-  [ "$status" -eq 4 ]
-  echo "$output" | grep -qi "foreign"
-  alive "$FOREIGN"                           # never kill a browser/process we did not launch
-  port_open "$P_NEXT"                             # never steal the port either
-  [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
+  [ "$status" -eq 0 ]                        # the collision is survived, not fatal
+  echo "$output" | grep -qi "foreign"        # ...and it is still REPORTED, never silent
+  GOT="$(json_body "$output" | jq -r '.port')"
+  [ "$GOT" != "$P_NEXT" ]                    # the discriminator: a DIFFERENT port was used
+  [ "$GOT" -ge 1024 ]
+  port_open "$GOT"                           # the browser really is listening there
+  # ws_url must carry the fallback port — cc-relogin dials THIS string, not the frozen map.
+  json_body "$output" | jq -r '.ws_url' | grep -q "127.0.0.1:$GOT/"
+  [ "$(jq -r '.port' "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json")" = "$GOT" ]
+
+  alive "$FOREIGN"                           # never kill a process we did not launch
+  port_open "$P_NEXT"                        # never steal the port either
 
   { kill "$FOREIGN" && wait "$FOREIGN"; } 2>/dev/null || true
+}
+
+# The regression this fix could plausibly introduce. Idempotency USED to be keyed on the frozen
+# port ("is our pid among that port's listeners"), which cannot see a browser living on a fallback
+# port: a second --start would find the frozen port still foreign-held, fall back AGAIN, and leave
+# a SECOND browser running for one account. Keying on the state file's own port is what prevents
+# that, and same-pid is the assertion that proves it.
+@test "IDEMPOTENT ON A FALLBACK PORT: a 2nd --start adopts our browser, never launches a 2nd" {
+  if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
+  FOREIGN=$(spawn_bg "$D/foreign-listener" "$P_NEXT")
+  for _ in 1 2 3 4 5 6 7 8 9 10; do port_open "$P_NEXT" && break; sleep 0.2; done
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  PID1="$(json_body "$output" | jq -r '.pid')"; PORT1="$(json_body "$output" | jq -r '.port')"
+  [ "$PORT1" != "$P_NEXT" ]
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  [ "$(json_body "$output" | jq -r '.pid')"  = "$PID1" ]
+  [ "$(json_body "$output" | jq -r '.port')" = "$PORT1" ]
+
+  alive "$FOREIGN"
+  { kill "$FOREIGN" && wait "$FOREIGN"; } 2>/dev/null || true
+}
+
+@test "--stop tears down a browser started on a FALLBACK port and leaves the foreign one alone" {
+  if port_open "$P_NEXT"; then skip "leased port $P_NEXT already in use on this machine"; fi
+  FOREIGN=$(spawn_bg "$D/foreign-listener" "$P_NEXT")
+  for _ in 1 2 3 4 5 6 7 8 9 10; do port_open "$P_NEXT" && break; sleep 0.2; done
+
+  run "$B" next --start
+  [ "$status" -eq 0 ]
+  PID="$(json_body "$output" | jq -r '.pid')"; PORT="$(json_body "$output" | jq -r '.port')"
+
+  run "$B" next --stop
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_AUTHBROWSER_STATE_DIR/cc-authbrowser-next.json" ]
+  refute alive "$PID"
+  refute port_open "$PORT"                   # the fallback port is freed...
+  alive "$FOREIGN"; port_open "$P_NEXT"      # ...and the foreign holder is still untouched
+
+  { kill "$FOREIGN" && wait "$FOREIGN"; } 2>/dev/null || true
+}
+
+@test "free_port() returns a real, currently-unheld loopback port" {
+  local prog='import importlib.machinery as m, importlib.util as u, socket, sys
+ld = m.SourceFileLoader("ccab", sys.argv[1]); sp = u.spec_from_loader("ccab", ld)
+mod = u.module_from_spec(sp); ld.exec_module(mod)
+p = mod.free_port()
+assert isinstance(p, int) and 1024 <= p <= 65535, p
+s = socket.socket(); s.settimeout(0.5)
+assert s.connect_ex(("127.0.0.1", p)) != 0, "free_port returned a port already in LISTEN"
+print(p)'
+  run python3 -c "$prog" "$B"
+  [ "$status" -eq 0 ]
 }
 
 # ------------------------------------------------------------------------------ stop

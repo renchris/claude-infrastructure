@@ -19,9 +19,17 @@ hard-kills the browser even if the caller dies. EVERY kill here is gated on a pi
 guard -- the live command line must still match the Chrome we launched -- so a recycled
 pid is never killed (house precedent: bin/cc-deathwatch-kqueue's {pid,start} guard).
 
+The frozen port is PREFERRED, not required. When a foreign process already holds it, the
+browser starts on an OS-assigned free port instead -- never adopting or killing the
+foreign holder. The frozen map is what keeps two ACCOUNTS off each other's port; it was
+never something an outside caller reads (cc-relogin takes `ws_url` from --start's JSON;
+--stop/--status read `port` from the state file), and holding it as a hard requirement is
+what kept cc-relogin's phase 2 from ever launching -- 9341-9344 is also inside the range
+this box hands to per-worktree Node --inspect debuggers.
+
 Exit: 0 OK - 1 ERROR - 2 REFUSED (unknown acct / bad args) - 4 BROWSER-FAILED (chrome
-binary missing - CDP not up in time - port held by a foreign process). --status is a
-QUERY: it exits 0 either way; read `running` from --status --json to branch.
+binary missing - CDP not up in time - no free port obtainable). --status is a QUERY: it
+exits 0 either way; read `running` from --status --json to branch.
 
 Test-injection env: CC_AUTHBROWSER_CHROME_BIN - CC_AUTHBROWSER_PROFILE_ROOT (default
 ~/.claude/auth-profiles) - CC_AUTHBROWSER_STATE_DIR (default /tmp) -
@@ -317,6 +325,27 @@ def port_listener_pids(port: int) -> List[int]:
     return [int(tok) for tok in out.stdout.split() if tok.isdigit()]
 
 
+def free_port() -> Optional[int]:
+    """An OS-assigned free loopback port, or None if even that fails.
+
+    bind(0) then close: the kernel picks a port nothing currently holds. Deliberately no
+    SO_REUSEADDR -- we want a port that is genuinely unheld, not one shared with a socket
+    in TIME_WAIT.
+
+    The close-to-Chrome-bind gap is a real TOCTOU, and it is bounded ON PURPOSE rather than
+    locked: if something steals the port in that window Chrome simply never answers CDP,
+    cdp_version() returns None, and do_start returns EXIT_BROWSER -- the SAME failure this
+    already had. The race can therefore only reproduce the pre-existing outcome, never a
+    worse one, which is why it does not need a lock.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+    except OSError:
+        return None
+
+
 def cdp_version(port: int, deadline: float,
                 child: Optional["subprocess.Popen[bytes]"] = None) -> Optional[Dict[str, Any]]:
     """Poll http://127.0.0.1:<port>/json/version until it answers or <deadline>. Bails
@@ -381,15 +410,44 @@ def do_start(acct: str, ttl: int, headless: bool) -> int:
         warn("chrome binary missing or not executable: %s" % binpath)
         return EXIT_BROWSER
 
-    if port_listening(port):
-        st = read_state(acct)
-        owners = port_listener_pids(port)
-        if st and int(st.get("pid") or 0) in owners and is_running(st):
-            print(json.dumps(public_view(st), indent=2))  # already ours: idempotent
+    # Idempotency is keyed on OUR STATE, not on the frozen port: a browser we started on a
+    # fallback port (below) is still ours, and keying on the frozen port would miss it and
+    # launch a SECOND browser for the same account.
+    st0 = read_state(acct)
+    if st0 is not None and is_running(st0):
+        held = int(st0.get("port") or 0)
+        if held and int(st0.get("pid") or 0) in port_listener_pids(held):
+            print(json.dumps(public_view(st0), indent=2))  # already ours: idempotent
             return EXIT_OK
-        warn("port %d is held by a foreign process (pids=%s) -- refusing to adopt or kill it"
-             % (port, owners or "unknown"))
-        return EXIT_BROWSER
+
+    if port_listening(port):
+        # The frozen SS1 port is taken by something that is NOT ours. Still never adopt or
+        # kill it -- but do not fail the run either: fall back to a free port.
+        #
+        # This was not hypothetical. It is the whole reason phase 2 of cc-relogin had never
+        # once succeeded: 127.0.0.1:9341-9344 is the frozen CDP map, and it is ALSO inside
+        # the range this box hands to per-worktree Node --inspect debuggers (reso's
+        # package.json `dev` script is NODE_OPTIONS="${NODE_OPTIONS:---inspect}" next dev).
+        # Measured 2026-08-08: 9341 (next) and 9342 (next2) were both held by `pnpm dev` /
+        # next-server out of one reso worktree, so `--start` returned EXIT_BROWSER and the
+        # ONLY leg that actually moves the ~30-day login deadline could never even launch.
+        # Any fixed port has this failure mode; only a fallback removes the class.
+        #
+        # The frozen map stays the PREFERRED port (contract SS1 is unchanged and its test
+        # still asserts next=9341..next4=9344) -- it is what keeps two ACCOUNTS off each
+        # other's port. The fallback is the collision path only. Nothing outside reads the
+        # port from the map: cc-relogin takes `ws_url` from this command's own JSON, and
+        # --stop/--status read `port` from the state file, so a fallback port flows through
+        # both unchanged.
+        owners = port_listener_pids(port)
+        alt = free_port()
+        if alt is None:
+            warn("port %d is held by a foreign process (pids=%s) and no free fallback port "
+                 "could be obtained" % (port, owners or "unknown"))
+            return EXIT_BROWSER
+        warn("port %d is held by a foreign process (pids=%s) -- not adopting or killing it; "
+             "falling back to free port %d" % (port, owners or "unknown", alt))
+        port = alt
 
     pdir = profile_dir(acct)
     os.makedirs(pdir, exist_ok=True)
