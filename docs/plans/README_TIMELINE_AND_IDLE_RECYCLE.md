@@ -140,3 +140,37 @@ suspects is the binding one, and either the fix or a named blocker. Report to
     threshold in `boundary-handoff.sh`, reusing its existing clean-tree/gate-green/no-teammates gates
     and the S6 conversation-hold suppression. Not built here because it changes Stop behaviour
     fleet-wide — larger than a safe in-actuator fix. Full spec + two secondary items in the report.
+
+- **2026-08-08 — Track A DONE** (`1f31117f`). Mermaid is out of the shipped slot;
+  `assets/diagrams/convergence-timeline-{dark,light}.svg` are hand-built by `tools/timeline/gen.py`
+  (`npm run timeline` / `timeline:check`). The `.mmd` source and its `<details>` fence stay as the
+  interactive fallback and `npm run diagrams:check` is still green — the renderer only ever walks
+  `*.mmd`-derived outputs, so a hand-authored sibling in that directory is invisible to it.
+
+  **The design decision, so a successor does not re-litigate it.** A chain — mermaid's only shape —
+  can say "then, then, then" and nothing else, which throws away the section's actual claim. The
+  replacement is **two lanes on one time axis**, so the distance between a repo marker and its
+  Claude Code twin *is* the lead: 26 px for 4 days, 179 px for 28, and 845 px for the 7 months we
+  owe. Three consequences worth keeping:
+  - **The axis break is at 2026-03-24, this repo's first commit.** A linear axis over 529 days puts
+    four events inside 152 px and cannot be labelled at all. Breaking there makes the compression
+    *be* the 13-month head start rather than a concession to it; the month gridlines are drawn at
+    both scales (27 px/month left, 194 right) and their density change is the disclosure. A ghost
+    lane marks the months this repo did not exist.
+  - **Direction encodes ownership.** Leads run downward, repo → Claude Code. The one gap that is
+    ours runs upward, in orange, across the break.
+  - **Two files, each carrying BOTH palettes**, differing only in the default. `<picture>` picks
+    one, but an SVG in `<img>` also resolves `prefers-color-scheme` itself, and a single baked
+    palette is wrong in exactly the case where those two mechanisms disagree.
+
+  **Verification.** `banner-verify` 6/6 on both files (well-formed · one-animation-per-element ·
+  t=0 == t=24 seam · 12/12 distinct frames · dark != light · reduced-motion still), plus screenshots
+  at the measured 838 px column on both GitHub backgrounds. **Constraint 5 earned its place twice** —
+  two defects passed every mechanical gate and only the render showed them: `phase_for()` ignored
+  both the ignite-peak offset and the delay sign, so every marker lit ~11 s away from the light
+  column it was supposed to be following; and the axis-break masking band rendered as a bright white
+  stripe on GitHub light while masking nothing (no month boundary falls inside those 70 px).
+
+  Incidental: `scripts/render-diagrams.mjs` claimed `assets/diagrams/handoff-choreography.svg` was
+  the hand-authored exception. That file has never existed in this tree — the comment now names the
+  real one.
