@@ -1289,6 +1289,19 @@ arv_red_unrevertable() {   # → echoes the culprit sha
   printf '%s' "$culprit"
 }
 ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
+# The same seam REFUSING to land: the revert commits, then the land lane says no. exit 6 is the
+# real one — live marker 47a5350498ee, step=land, revert df989882dc02 — and it is the arm whose
+# `do:` line must go on working while the rc-90 arm's is corrected (C27 below).
+ship_stub_fail() {
+  printf '#!/bin/bash\n{ echo "cwd=$PWD"; echo "branch=$(git rev-parse --abbrev-ref HEAD)"; } >> "%s/ship.argv"\nexit 6\n' \
+    "$REC" > "$STUB/ship-land"
+  chmod +x "$STUB/ship-land"
+  export CC_POSTLAND_SHIP_BIN="$STUB/ship-land"
+}
+# <c12> <fixed-string> → prints 1 if the page's `do:` line contains it, 0 if not. A COUNT, so the
+# caller asserts with a live `[ "$output" = ... ]`; a `[[ ]]` match would be errexit-exempt and
+# therefore a dead assertion (see the ASSERTION FORM note above C13).
+do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -1 | grep -cF -- "$2"; }
 
 @test "C20: a reproducible RED with a BISECTED culprit is reverted and landed via the land lane" {
   ship_stub
@@ -1389,6 +1402,94 @@ ship_field() { sed -n "s/^$1=//p" "$REC/ship.argv" | head -1; }
   [ "$(rev_pages_n)" = "0" ]                             # ...and the stale page is retracted
   [ "$(pages_n)" = "0" ]                                 # (its RED sibling too, as before)
   [ -f "$CC_POSTLAND_DIR/reverts/$culprit" ]             # never-twice marker SURVIVES (not a page)
+}
+
+# ── C27 the FAILED page's remedy must match the failure it reports (item 1fa1e874c098) ───────────
+# Filed by a1743ffebd35: `AUTO-REVERT FAILED(step=revert rc=90): tests/bats-assert-liveness.bats
+# (revert none ...)`. auto_revert's rc-90 half never applies a revert, so its branch is a bare copy
+# of origin/main — and yet the page printed the step=land remedy, `worktree add <br> && ship-land`,
+# which hands the land lane a branch with ZERO commits on it: it lands nothing, exits clean, and
+# reads as "the revert is in". The page's own `branch:` line said `revert commit none` two lines
+# above it. Live on the box 2026-08-07: postland-revert-13bfa557db3a, standing page from 03:40Z,
+# `git rev-list --count origin/main..postland-revert-13bfa557db3a` = 0. rc 90 is the COMMON half —
+# 4 of the 5 FAILED attempts all-time (13bfa557db3a, 57e162494c10, d25c4dd47384, a1743ffebd35) —
+# so this was every rc-90 page ever written, and the one arm where it was right (rc 6, 47a5350498ee)
+# is the minority.
+# THE TWO TESTS ARE EACH OTHER'S CONTROL. They differ in exactly one fact — whether a revert commit
+# exists — and each pins BOTH the branch and the remedy, so a fix that dropped both arms' branches,
+# or printed the conflict remedy for both, reddens the other one.
+@test "C27: a revert that never APPLIED drops its empty branch and stops prescribing it" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS, from the REAL producer — asserted, never assumed: with any other outcome there is
+  # no empty branch and no rc-90 page, and every claim below would pass vacuously.
+  [ "$(mk_get "$culprit" land_exit)" = "90" ]
+  [ "$(mk_get "$culprit" step)" = "revert" ]
+  [ "$(mk_get "$culprit" revert)" = "none" ]             # nothing was ever committed
+  [ ! -f "$REC/ship.argv" ]                              # rc 90 stops BEFORE the land lane
+  [ "$(rev_pages_n)" = "1" ]
+  # CLAIM 1: the branch that held nothing is gone, so nothing can be handed it by mistake later.
+  run git -C "$R" branch --list "postland-revert-${culprit:0:12}"
+  [ -z "$output" ]
+  # CLAIM 2: the remedy no longer routes a branch into the land lane at all...
+  run do_has "${culprit:0:12}" "$STUB/ship-land"
+  [ "$output" = "0" ]
+  # ...it tells the operator to MAKE the revert that does not exist yet, on the culprit named.
+  run do_has "${culprit:0:12}" "git revert $culprit"
+  [ "$output" = "1" ]
+}
+
+@test "C27: a revert that APPLIED but did not land keeps its branch, and its page still ships it" {
+  ship_stub_fail
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS: the revert COMMITTED and the land lane refused it — the other arm entirely.
+  [ "$(mk_get "$culprit" step)" = "land" ]
+  [ "$(mk_get "$culprit" land_exit)" = "6" ]
+  [ "$(mk_get "$culprit" revert)" != "none" ]
+  [ -s "$REC/ship.argv" ]                                # the land lane WAS reached
+  [ "$(rev_pages_n)" = "1" ]
+  # THE CONTROL: the branch survives AND really is the only copy of a real commit — which is the
+  # premise the old rc-keyed rule asserted for rc 90 too, where it was false.
+  run git -C "$R" rev-list --count "origin/main..postland-revert-${culprit:0:12}"
+  [ "$output" = "1" ]
+  # ...so hand-landing that branch is the right remedy here, and must survive the fix above.
+  run do_has "${culprit:0:12}" "$STUB/ship-land"
+  [ "$output" = "1" ]
+  run do_has "${culprit:0:12}" "postland-revert-${culprit:0:12}"
+  [ "$output" = "1" ]
+}
+
+# The rc-90 remedy is the ONE that asks the operator for hand-work — resolving a revert conflict —
+# and it used to park that work at $WT_ROOT/wt-revert-manual, inside the glob
+# reap_stale_worktrees deletes (`wt-run-*` -o `wt-revert-*`, older than WT_STALE_S). That reaper is
+# deliberately blind to ownership, so the next sweep after 8h would take the cell and the
+# half-resolved conflict with it. Replayed against the REAL reaper, never a spelling check on the
+# name: a `-name` assertion would go stale the moment the reaper's globs change, and a path is only
+# safe against the reaper that actually runs.
+@test "C27: the manual cell the rc-90 page names survives the worktree reaper" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ "$(mk_get "$culprit" land_exit)" = "90" ]           # precondition: this IS the rc-90 page
+  # The path the page ACTUALLY printed — read out of the remedy, never a literal, so this tracks
+  # whatever the remedy says rather than agreeing with a copy of it.
+  cell="$(sed -n 's/^do: .*worktree add -b [^ ]* \([^ ]*\) .*/\1/p' "$CC_PAGES_DIR/postland-revert-${culprit:0:12}.page")"
+  [ -n "$cell" ]
+  mkdir -p "$cell"
+  printf 'a half-resolved conflict\n' > "$cell/CONFLICT"
+  # The CONTROL cell: same root, same age, but inside the machine's own namespace. Without it a
+  # dead reaper would pass this test — which is the exact failure being guarded.
+  mkdir -p "$CC_POSTLAND_WT_ROOT/wt-revert-control"
+  touch -t 202001010000 "$cell" "$CC_POSTLAND_WT_ROOT/wt-revert-control"
+  # One sweep, and a GREEN one: the reaper runs from prepare_worktree, before any verdict, so
+  # fixing the red forward exercises it on the cheapest path instead of re-bisecting.
+  printf '@test "fixed forward" { true; }\n' > "$R/tests/bad.bats"
+  push_commit "the red fixed forward"
+  run env CC_POSTLAND_WT_STALE_S=60 bash "$SUT" --run-if-needed
+  [ ! -d "$CC_POSTLAND_WT_ROOT/wt-revert-control" ]     # CONTROL: the reaper really did fire...
+  [ -f "$cell/CONFLICT" ]                               # THE CLAIM: ...and it did not take this
 }
 
 @test "C20: an UNDECIDABLE bisect pages and backlogs but attempts ZERO reverts" {

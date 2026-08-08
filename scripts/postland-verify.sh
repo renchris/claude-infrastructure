@@ -1461,27 +1461,62 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   if [ "$rc" -ne 0 ]; then
     # The revert did NOT land: trunk is still red, deploy stays pinned to the last green (R3 holds
     # by construction), and this needs a human. State-keyed page, same protocol as the RED page.
+    #
+    # TWO DIFFERENT FAILURES SHARE THIS PAGE, and until 2026-08-07 they shared one remedy. At
+    # step=land the revert commit EXISTS on $br and did not reach trunk, so hand-landing that branch
+    # is exactly right. At step=revert (rc 90) the revert CONFLICTED and applied nothing, so $br is
+    # a bare copy of origin/main — and the same `do:` line then ships a branch with ZERO commits on
+    # it. That lands nothing, exits clean, and reads to the operator as "the revert is in". The
+    # page's own `branch:` line printed `revert commit none` two lines above the remedy that assumed
+    # one existed. Measured on the live box 2026-08-07: postland-revert-13bfa557db3a, standing page
+    # from 03:40Z, `git rev-list --count origin/main..postland-revert-13bfa557db3a` = 0 — and rc 90
+    # is the COMMON half, 4 of the 5 FAILED attempts in the all-time census (the other 3 rc-90
+    # markers: 57e162494c10, d25c4dd47384, a1743ffebd35, which is the item that filed this).
+    # So branch on what actually EXISTS ($rev), never on the exit code: the remedy for "no revert
+    # commit was ever made" is to make one, and it is the operator who has to resolve the conflict.
     pf="$PAGES/postland-revert-$c12.page"
     { now_epoch
       printf 'post-land AUTO-REVERT FAILED @ %s\n' "$(now_iso)"
       printf 'culprit: %s (failing %s)\n' "$c12" "$file"
       printf 'step:    %s (exit %s%s)\n' "$step" "$rc" \
         "$( [ "$rc" -eq 124 ] && printf ' — OUR %ss bound fired' "$SHIP_TO" || true )"
-      printf 'branch:  %s (revert commit %s) — worktree already torn down\n' "$br" "${rev:-none}"
       printf 'trunk is STILL RED; deploy stays pinned to the last green stamp.\n'
-      printf 'do:      git -C %s worktree add %s/wt-revert-manual %s && cd %s/wt-revert-manual && %s\n' \
-        "$REPO" "$WT_ROOT" "$br" "$WT_ROOT" "$REPO_SHIP"
+      # The cell is `manual-revert-*`, NOT `wt-revert-manual`. reap_stale_worktrees deletes anything
+      # under $WT_ROOT matching `wt-run-*` or `wt-revert-*` older than WT_STALE_S (8h) — and it is
+      # deliberately blind to whose cell it is, "never by is-it-mine, which is exactly the cell a
+      # crash leaves unclaimed". The old path sat inside that glob, so the one remedy that asks the
+      # operator for HAND-WORK — resolving a revert conflict — parked it where the next sweep would
+      # delete it, unresolved conflict and all. `manual-revert-` matches neither glob, and the
+      # branch is `revert-*` rather than `postland-revert-*` for the same reason: the branch reaper
+      # below is scoped to the machine's own namespace and must never reach the operator's.
+      if [ -n "$rev" ]; then
+        printf 'branch:  %s (revert commit %s) — worktree already torn down\n' "$br" "$rev"
+        printf 'do:      git -C %s worktree add %s/manual-revert-%s %s && cd %s/manual-revert-%s && %s\n' \
+          "$REPO" "$WT_ROOT" "$c12" "$br" "$WT_ROOT" "$c12" "$REPO_SHIP"
+      else
+        printf 'branch:  none — the revert CONFLICTED and applied nothing, so %s held no commit and was dropped\n' "$br"
+        printf 'do:      git -C %s worktree add -b revert-%s %s/manual-revert-%s origin/main && cd %s/manual-revert-%s && git revert %s\n' \
+          "$REPO" "$c12" "$WT_ROOT" "$c12" "$WT_ROOT" "$c12" "$c"
+        printf 'then:    resolve the conflict, git revert --continue, and land it with %s — or fix the red FORWARD, which the next green retracts this page for.\n' "$REPO_SHIP"
+      fi
       printf 'env:     %s\n' "$ENV_FP"
     } > "$pf" 2>/dev/null || true
     notify "Claude post-land AUTO-REVERT FAILED" "$c12 — trunk still red, see $pf"
   fi
   log "AUTOREVERT verdict=$outcome culprit=$c12 attempt=$ATTEMPT_N/$REVERT_RETRY_MAX revert=$(sha12 "${rev:-none}") branch=$br step=$step rc=$rc"
   wt_remove "$wt"; WT_REVERT=""
-  # A LANDED revert's branch is now in trunk and carries nothing else — drop it. A FAILED one is the
-  # only copy of the revert commit, so it stays for the operator (the page names it).
-  [ "$rc" -eq 0 ] && case "$br" in
-    postland-revert-*) bounded 30 git -C "$REPO" branch -D "$br" >/dev/null 2>&1 || true ;;
-  esac
+  # KEEP the branch in exactly ONE case: it is the only copy of something. A LANDED revert's branch
+  # is now in trunk and carries nothing else. A revert that never APPLIED left the branch identical
+  # to origin/main, and the old rule — keyed on `rc`, with the stated reason "a FAILED one is the
+  # only copy of the revert commit" — kept that one too, on a premise that is FALSE for rc 90: there
+  # is no revert commit to be the only copy of. That empty branch is what made the page's remedy
+  # look actionable, so dropping it is half of the same fix. Keyed on $rev, which is the thing being
+  # preserved; `branch -D` on a name `worktree add` never created (rc 91) is a harmless no-op.
+  if [ "$rc" -eq 0 ] || [ -z "$rev" ]; then
+    case "$br" in
+      postland-revert-*) bounded 30 git -C "$REPO" branch -D "$br" >/dev/null 2>&1 || true ;;
+    esac
+  fi
   return 0
 }
 red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. Side channels || true'd.
