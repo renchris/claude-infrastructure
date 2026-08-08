@@ -97,3 +97,56 @@ run_guard() {  # $1 = the bash command string
   run run_guard "git branch -d free-branch"
   [ "$status" -eq 0 ]
 }
+
+# ── PATH INDEPENDENCE (2026-08-08) ───────────────────────────────────────────────────────────────
+# Every test above runs on the ambient session PATH, which carries /usr/sbin — so none of them could
+# see the defect that lived here. lsof IS /usr/sbin/lsof, and the PATH a LaunchAgent exports for its
+# children stops at /usr/bin:/bin. Off-session, both liveness calls found nothing, `live` stayed 0,
+# and this SAFETY REFUSAL returned 0: it permitted exactly the removal it exists to block. Measured
+# at trunk under the literal PATH below — test A returned 0, not 2 — and 8/8 on the same tree with
+# /usr/sbin restored, which is what isolates the cause to PATH and nothing else.
+
+# The runner's literal PATH, read FROM THE PLIST rather than restated here: a copy in the test could
+# drift from the plist and pass while production is broken. This suite is executed BY that job, so
+# it is the environment in which the defect was measured, not a hypothetical one.
+runner_path() {
+  /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' \
+    "$BATS_TEST_DIRNAME/../launchd/com.claude.postland-verify.plist" 2>/dev/null \
+    | sed -n 's/.*export PATH="\([^"]*\)".*/\1/p'
+}
+
+guard_json() {  # $1 = command string → the hook's stdin payload. Paths here come from mktemp -d,
+  printf '{"tool_input":{"command":"%s"}}' "$1"   # so they carry no quote/backslash to escape.
+}
+
+@test "RED CONTROL: the corpus runner's own PATH really does hide a bare lsof" {
+  # If this ever passes, /usr/sbin joined that PATH and the two tests below prove nothing — a control
+  # that cannot fail is not a control.
+  local p; p="$(runner_path)"; p="${p//\$HOME/$HOME}"
+  [ -n "$p" ] || { echo "could not parse PATH from the postland-verify plist"; false; }
+  run env -i PATH="$p" HOME="$HOME" bash -c 'command -v lsof'
+  [ "$status" -ne 0 ] || { echo "lsof IS reachable on: $p — this suite no longer discriminates"; false; }
+}
+
+@test "PATH-INDEPENDENT: a LIVE worktree is still BLOCKED with /usr/sbin off the PATH" {
+  cd "$REPO"
+  spawn_live_probe "$TDIR/wt-held"
+  local p; p="$(runner_path)"; p="${p//\$HOME/$HOME}"
+  run env PATH="$p" bash -c "$(declare -f guard_json); guard_json 'git worktree remove $TDIR/wt-held' | bash '$GUARD'"
+  [ "$status" -eq 2 ]
+}
+
+@test "THIRD STATE: an UNRESOLVABLE lsof BLOCKS — unreadable liveness is not 'nothing is live'" {
+  # Deliberately no live probe: even the idle-looking path must refuse, because an oracle that cannot
+  # answer cannot distinguish idle from live. Both spellings of unresolvable are pinned — set-but-
+  # EMPTY (honoured verbatim; the only way to reach this branch on a host that HAS /usr/sbin/lsof)
+  # and a path that does not exist. The pre-fix code took the opposite branch on both: `command -v`
+  # turned a missing lsof into a clean skip and the guard exited 0.
+  cd "$REPO"
+  local v
+  for v in "" /nonexistent/lsof; do
+    run env CC_WTG_LSOF="$v" bash -c "$(declare -f guard_json); guard_json 'git worktree remove $TDIR/wt-held' | bash '$GUARD'"
+    [ "$status" -eq 2 ] || { echo "CC_WTG_LSOF=[$v] exited $status, expected 2 (fail-CLOSED)"; false; }
+    [[ "$output" == *"lsof is not resolvable"* ]] || { echo "wrong refusal for CC_WTG_LSOF=[$v]: $output"; false; }
+  done
+}
