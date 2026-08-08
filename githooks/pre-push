@@ -66,8 +66,12 @@ ZERO=0000000000000000000000000000000000000000
 remote_url="${2:-}"
 [ -n "$remote_url" ] || remote_url="$(git remote get-url "${1:-origin}" 2>/dev/null || true)"
 
-case "$remote_url" in
-  *github.com/"$WANT_OWNER"/*|*github.com:"$WANT_OWNER"/*) ;;
+# Case-insensitive: github.com/RenChris and github.com/renchris are the same account and both
+# accept a push, but a glob is not. Measured — a `RenChris` remote pushed t@e.com straight through.
+_want_lc="$(printf '%s' "$WANT_OWNER" | tr '[:upper:]' '[:lower:]')"
+_url_lc="$(printf '%s' "$remote_url" | tr '[:upper:]' '[:lower:]')"
+case "$_url_lc" in
+  *github.com/"$_want_lc"/*|*github.com:"$_want_lc"/*) ;;
   *) exit 0 ;;                       # not the owner's GitHub — out of scope, silent
 esac
 
@@ -81,7 +85,12 @@ bad=""
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue           # branch deletion: nothing to inspect
   if [ "$remote_sha" = "$ZERO" ]; then
-    range="$local_sha --not --remotes"
+    # A NEW branch: measure against what THIS remote already has, not against every remote. The
+    # first cut used a bare `--not --remotes`, which excluded commits known to ANY remote — so a
+    # bad commit pushed to an unrelated mirror, then fetched, counted as "already there" and rode
+    # a new-branch push onto the owner's remote unexamined. Measured. The named form asks the only
+    # question that matters: is this commit already on the remote I am pushing to?
+    range="$local_sha --not --remotes=${1:-origin}"
   else
     range="$remote_sha..$local_sha"
   fi
