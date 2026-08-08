@@ -92,7 +92,7 @@ esac
 # === PLAN CONVENTIONS (injected for both Write AND Edit on plan files) ===
 PLAN_RULES=""
 if [ "$IS_PLAN" = true ]; then
-  PLAN_RULES=" PLAN UPDATE RULES: (1) COMPLETED sections: mark DONE, compact to key learnings + commit hashes only — remove step-by-step details. (2) UPCOMING sections: keep comprehensive and expansive — file paths, line ranges, decision context, trade-offs. (3) Phase 0 MANDATORY: first upcoming section must be Agent Team Orchestration (team size, roles, task dependencies, worktree assignments, spawn wave order). (4) NEVER delete: historical decisions, 'Why:' explanations, learnings, or known issues — these compound across sessions."
+  PLAN_RULES=" PLAN UPDATE RULES: (1) COMPLETED sections: mark DONE, compact to key learnings + commit hashes only — remove step-by-step details. (2) UPCOMING sections: keep comprehensive and expansive — file paths, line ranges, decision context, trade-offs. (3) Phase 0 MANDATORY: first upcoming section must be Agent Team Orchestration, and its FIRST field is the EXECUTION LOCUS PER WAVE — S = dispatched handoff session (the DEFAULT, no justification needed) | T = in-session teammates (output lands in the LEAD's context — justify) | L = lead-inline (justify) — then team size, roles, task dependencies, worktree assignments, spawn wave order, and the LEAD's context budget + succession point. (4) NEVER delete: historical decisions, 'Why:' explanations, learnings, or known issues — these compound across sessions."
 fi
 
 # === EDIT TOOL: plan context only, no backup needed ===

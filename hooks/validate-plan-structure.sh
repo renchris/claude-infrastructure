@@ -93,13 +93,37 @@ if grep -qEi "Phase [1-9]|Implementation|Wave [1-9]|Task [1-9]|Sprint|Milestone"
   IS_IMPL=true
 fi
 
-if [ "$IS_IMPL" = true ] && ! grep -qEi "Phase 0|Agent Team Orchestration|Team Orchestration|Pre-Flight Checklist|Team Roster" "$FILE" 2>/dev/null; then
-  BASENAME=$(basename "$FILE")
+HAS_PHASE0=false
+grep -qEi "Phase 0|Agent Team Orchestration|Team Orchestration|Pre-Flight Checklist|Team Roster" \
+  "$FILE" 2>/dev/null && HAS_PHASE0=true
+
+# EXECUTION LOCUS (added 2026-08-07). Phase 0 answered "who does the work" but never
+# "WHERE does it run", so its only delegation unit — in-session teammates — routes every
+# teammate's output back into the LEAD's context. A plan can obey the Agent-Teams rule
+# perfectly and still burn the lead's window on implementation detail. The locus line is
+# what makes a dispatched handoff session (locus S) the declared default. SSOT for the
+# rule + rationale: skills/plan-conventions/SKILL.md § Execution locus.
+HAS_LOCUS=false
+grep -qEi "Execution Locus|locus S|dispatched session|handoff-fire|lead-inline" \
+  "$FILE" 2>/dev/null && HAS_LOCUS=true
+
+BASENAME=$(basename "$FILE")
+
+if [ "$IS_IMPL" = true ] && [ "$HAS_PHASE0" = false ]; then
   cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "⚠️ AGENT TEAMS REQUIRED [${BASENAME}]: This implementation plan has NO Phase 0 / Agent Team Orchestration. Per CLAUDE.md: Agent Teams are the DEFAULT for all implementation work (9/10 sessions). Add Phase 0 as the FIRST section with: team roster, task dependency graph, worktree assignments, spawn wave order. Only omit for purely research/exploration plans with no code changes. Use the plan-update skill 'Phase 0' template."
+    "additionalContext": "⚠️ AGENT TEAMS REQUIRED [${BASENAME}]: This implementation plan has NO Phase 0 / Agent Team Orchestration. Per CLAUDE.md: Agent Teams are the DEFAULT for all implementation work (9/10 sessions). Add Phase 0 as the FIRST section with: EXECUTION LOCUS PER WAVE (S = dispatched handoff session — the DEFAULT; T = in-session teammates; L = lead-inline — T and L each need one line of justification), team roster, task dependency graph, worktree assignments, spawn wave order, and the LEAD's context budget + succession point. Only omit for purely research/exploration plans with no code changes. Use the plan-update skill 'Phase 0' template."
+  }
+}
+EOF
+elif [ "$IS_IMPL" = true ] && [ "$HAS_LOCUS" = false ]; then
+  cat <<EOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "⚠️ EXECUTION LOCUS MISSING [${BASENAME}]: Phase 0 is present but no wave declares WHERE it runs, so every wave defaults to the lead's own context — the one resource a long-horizon plan cannot refill. Add an Execution Locus row per wave: S = dispatched session (\`handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>\`, the DEFAULT, needs no justification) | T = in-session teammates (their output lands in the LEAD's window — justify in one line) | L = lead-inline (justify in one line). Also state the lead's context budget + succession point. Rule: skills/plan-conventions/SKILL.md § Execution locus."
   }
 }
 EOF

@@ -80,3 +80,60 @@ drive() { printf '{"tool_input":{"file_path":"%s"}}' "$1" | bash "$HOOK" 2>&1; }
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi 'Agent Team'
 }
+
+# === EXECUTION LOCUS (2026-08-07) ===
+# Phase 0 answered "who does the work" but never "WHERE does it run", so its only
+# delegation unit (in-session teammates) routed every teammate's output back into the
+# LEAD's context. These pin the third state: Phase 0 PRESENT but locus UNDECLARED.
+
+# An impl plan carrying Phase 0 but no locus declaration. Used as both subject and control.
+write_phase0_plan() {
+  printf -- '---\nstatus: open\n---\n# Impl Plan\n\n## Phase 0: Agent Team Orchestration\n\n### Team Roster\n\n| Agent | Role |\n|---|---|\n| a1 | build |\n\n## Phase 1\nTask 1 do a thing\n\n## Phase 2\nmore\n' > "$1"
+}
+
+@test "locus: Phase 0 present but NO locus declared → warns EXECUTION LOCUS MISSING" {
+  f="$PROJ/docs/plans/noloc.md"; write_phase0_plan "$f"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'EXECUTION LOCUS MISSING'
+  # It must name the DEFAULT, else the warning cannot be acted on.
+  echo "$output" | grep -q 'dispatched session'
+}
+
+@test "locus: declaring the locus SILENCES the warning (control — same plan, one line added)" {
+  f="$PROJ/docs/plans/withloc.md"; write_phase0_plan "$f"
+  # The ONLY delta from the failing case above:
+  printf '\n### Execution Locus\n\n| Wave | Locus |\n|---|---|\n| 1 | S — dispatched session |\n' >> "$f"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -q 'EXECUTION LOCUS MISSING'
+}
+
+@test "locus: the warning is valid JSON (message embeds backticks and pipes)" {
+  f="$PROJ/docs/plans/json.md"; write_phase0_plan "$f"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' >/dev/null
+  echo "$output" | jq -e '.hookSpecificOutput.additionalContext | test("EXECUTION LOCUS MISSING")' >/dev/null
+}
+
+@test "locus: no-Phase-0 plan emits the Phase 0 warning ONLY — never both (elif, not two ifs)" {
+  f="$PROJ/docs/plans/nophase0.md"
+  printf -- '---\nstatus: open\n---\n# Impl Plan\n\n## Phase 1\nTask 1\n\n## Phase 2\nmore\n' > "$f"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'AGENT TEAMS REQUIRED'
+  ! echo "$output" | grep -q 'EXECUTION LOCUS MISSING' || false
+  # Two concatenated JSON objects would break any consumer: assert exactly one parse.
+  [ "$(echo "$output" | jq -s 'length')" -eq 1 ]
+  # The Phase 0 warning must itself now teach the locus (it is the first field).
+  echo "$output" | grep -q 'EXECUTION LOCUS PER WAVE'
+}
+
+@test "locus: non-implementation plan (no phases/waves) is never asked for a locus" {
+  f="$PROJ/docs/plans/research.md"
+  printf -- '---\nstatus: open\n---\n# Research\n\n## Findings\na\n\n## Method\nb\n' > "$f"
+  run drive "$f"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

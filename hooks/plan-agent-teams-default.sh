@@ -41,7 +41,7 @@ cat <<'EOF'
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "allow",
-    "additionalContext": "AGENT TEAMS DEFAULT: This is a plan file. Agent Teams are the standard workflow for ALL implementation tasks with 2+ code-writing tasks. Include Phase 0 (Agent Team Orchestration) as the FIRST section: team roster, task dependency graph, worktree assignments, spawn wave order. Only use background subagents for research/exploration (no code changes). Reference: memory/agent-teams-hardened-playbook.md for pre-flight checklist and lifecycle."
+    "additionalContext": "PLAN DEFAULTS: This is a plan file. Include Phase 0 (Agent Team Orchestration) as the FIRST section. Its FIRST field is the EXECUTION LOCUS PER WAVE — where the wave runs, which decides whose context pays for it: S = dispatched handoff session (handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>; the DEFAULT for every implementation wave, needs no justification) | T = in-session teammates via Agent({name}) — their output lands in the LEAD's window, so justify in one line | L = lead-inline, justify in one line. Then: team roster, task dependency graph, worktree assignments, spawn wave order, and the LEAD's own context budget + succession point. Background subagents remain research/exploration only (no code changes). Rules + rationale: the plan-conventions skill (SSOT). Teammate lifecycle: the agent-teams skill."
   }
 }
 EOF
