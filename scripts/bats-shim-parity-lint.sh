@@ -38,7 +38,16 @@
 #                   THIS IS THE WHOLE POINT: brew restored it and 30% of invocations are uncovered.
 #   STALE-SEED  2   seed present, shim installed, but the seeded target is gone/non-executable —
 #                   brew upgraded the Cellar out from under the recording. cc-bats degrades to its
-#                   guessing resolver (bin/cc-bats:106-118), so this is MEASURED FALSE in review: with two shims on PATH a stale seed did NOT reach the Cellar sweep — the PATH walk returned the SIBLING SHIM and the run became a non-terminating 2-cycle (rc=137, zero output). Treat STALE-SEED as serious, not cosmetic..
+#                   guessing resolver. This line used to record the degradation as MEASURED FALSE:
+#                   with two shims on PATH a stale seed did NOT reach the Cellar sweep — the PATH
+#                   walk returned the SIBLING SHIM and the run became a non-terminating 2-cycle
+#                   (rc=137, zero output). THAT CYCLE IS NOW GUARDED (2026-08-07): cc-bats carries a
+#                   visited set plus a self-revisit check, so a chain that re-enters a shim resolves
+#                   from the Cellar instead of looping — re-measured, the two-shim case exits 0 and
+#                   runs the gate, and tests/qos-chokepoint.bats (ii-b)/(ii-c) pin both halves with
+#                   a mutation control. The degradation therefore terminates now. STALE-SEED is
+#                   still serious rather than cosmetic — it means the shim is GUESSING which bats to
+#                   run — but it is no longer a fork-storm.
 #   NO-DATA     3   cannot read what it needs to judge. A NON-VERDICT, never a pass.
 #   DISABLED    0   kill switch — reported as its own state so "turned off" can never be misread as
 #                   NOT-ACTIVE (which is a real judgement about the machine).

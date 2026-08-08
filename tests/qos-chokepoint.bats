@@ -41,8 +41,13 @@ setup() {
   # cause. A suite that tests a wrapper must not inherit that wrapper's own state — unset the whole
   # family so each test controls exactly the seams it sets via `run env ...` (per-invocation env is
   # unaffected by this).
+  # CC_BATS_SEEN belongs in this list for exactly the reason CC_BATS_ACTIVE does, and omitting it
+  # would fail SILENTLY: when the suite is invoked THROUGH the shim (what CLAUDE.md tells a gate
+  # session to do), the inherited visited set already names the installed shim's physical path, so
+  # the cycle tests below would start with their candidate pre-emptively excluded and would pass
+  # without the guard ever firing.
   unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET \
-        CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY
+        CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY CC_BATS_SEEN
   # Used by (xiii)/(xiv). A here-doc-free one-liner so this helper cannot itself contain the tokens
   # the guard greps for.
   strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
@@ -63,16 +68,120 @@ EOF
   [[ "$output" =~ Bats ]] || false
 }
 
+# ── THE VACUITY THIS SECTION REPLACES (measured 2026-08-07) ───────────────────────────────────
+# (ii) shipped as `env PATH="$TMP/shimdir:$PATH" timeout 30 …` — it PREPENDED to the INHERITED PATH.
+# Inside a bats run that PATH begins with BATS_LIBEXEC, which holds a REAL bats, so the resolver
+# answered from position 2 and never reached the guard the test names. Re-measured on this revision,
+# everything else identical:
+#
+#     shimdir : <bats libexec> : ~/.claude/bin : …   rc 0    ← what the test actually exercised
+#     shimdir :                  ~/.claude/bin : …   rc 124  ← the same test, honest PATH: a HANG
+#
+# ~/.claude/bin/bats resolves to the MAIN checkout's cc-bats, so on this machine a second,
+# physically distinct shim genuinely sits on PATH — the two-shim 2-cycle that
+# scripts/bats-shim-parity-lint.sh:41 had already recorded as measured and unfixed. The test could
+# not see it because bats' own PATH manipulation rescued every run.
+#
+# So every test below NARROWS PATH deliberately — shim dirs plus /usr/bin:/bin and nothing else.
+# /usr/bin and /bin stay because real bats is `#!/usr/bin/env bash`, and dropping them would fail the
+# SHEBANG rather than the resolution (the wrong-premise trap (vi-b) records). With the walk
+# exhausted, branch 3's hardcoded /opt/homebrew/bin/bats answers — a real resolution result, not a
+# PATH accident.
+#
+# `timeout` precedes `env` throughout, for the reason the seed tests document below: under
+# `env PATH=<narrow> timeout …`, timeout(1) resolves against the NARROWED path and the test dies at
+# rc 127 without ever reaching the resolver.
+#
+# CC_BATS_MAX_ROOTS=0 on every invocation: the admission bound is a DIFFERENT mechanism, and left
+# live it can refuse these runs for load reasons that have nothing to do with resolution — a
+# refusal and a resolution failure must never be confusable in a resolution test.
+
+# _shim_copy <dir> — a physically DISTINCT copy of the shim installed as <dir>/bats, path echoed.
+# A copy, never a symlink: two symlinks to one file physicalise EQUAL, so the incumbent self-skip
+# fires and the cycle guard is never reached. Distinctness is what makes these tests non-vacuous,
+# and it is asserted rather than assumed at the call site.
+_shim_copy() {
+  mkdir -p "$1"
+  cp "$SHIM" "$1/bats"
+  chmod +x "$1/bats"
+  printf '%s' "$1/bats"
+}
+
 @test "(ii) shim does NOT recurse when it is itself named 'bats' on PATH" {
-  # The self-shadowing case: put a dir containing a `bats` -> cc-bats symlink FIRST on PATH.
-  # A naive `command -v bats` implementation fork-bombs here; correct resolution skips itself.
+  # The self-shadowing case: a dir holding a `bats` -> cc-bats symlink, and NOTHING that could
+  # answer ahead of it. A naive `command -v bats` fork-bombs here; correct resolution skips itself
+  # by physical path and falls through to the known install locations.
   mkdir -p "$TMP/shimdir"
   ln -sf "$SHIM" "$TMP/shimdir/bats"
-  run env PATH="$TMP/shimdir:$PATH" timeout 30 /bin/bash "$TMP/shimdir/bats" --version
+  run timeout 30 env -u CC_BATS_SEED -u CC_BATS_SEEN CC_BATS_MAX_ROOTS=0 \
+      PATH="$TMP/shimdir:/usr/bin:/bin" /bin/bash "$TMP/shimdir/bats" --version
+  [ "$status" -ne 124 ] || false          # timeout(1) reports 124 on a hang; a hang IS the failure
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ Bats ]] || false
-  # timeout(1) returns 124 on a hang — assert we did not merely get lucky on ordering.
+}
+
+@test "(ii-b) TWO physically distinct shims on PATH terminate — the 2-cycle guard" {
+  # What (ii) claimed to cover and did not. Two COPIES, so no identity test could call them the same
+  # file and the incumbent self-skip cannot be what passes: shim A must exclude shim B on the
+  # strength of the visited set alone.
+  local a b
+  a=$(_shim_copy "$TMP/cycA")
+  b=$(_shim_copy "$TMP/cycB")
+  # NON-VACUITY: if these ever physicalised equal this test would silently degrade into (ii).
+  [ "$(/usr/bin/readlink -f "$a")" != "$(/usr/bin/readlink -f "$b")" ] || false
+  run timeout 30 env -u CC_BATS_SEED -u CC_BATS_SEEN CC_BATS_MAX_ROOTS=0 \
+      PATH="$TMP/cycA:$TMP/cycB:/usr/bin:/bin" /bin/bash "$a" --version
   [ "$status" -ne 124 ] || false
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ Bats ]] || false
+}
+
+@test "(ii-c) a NON-COOPERATING peer shim still terminates — self-revisit, not the visited set" {
+  # The case that makes the visited set insufficient ON ITS OWN, and it is not hypothetical: during
+  # any rollout the OTHER shim on PATH is the PREVIOUS version, which neither clears CC_BATS_SEEN nor
+  # appends to it. The set then stays {me}, the peer is never excluded, and the cycle survives. This
+  # peer models exactly that — it bounces straight back and touches nothing.
+  local a
+  a=$(_shim_copy "$TMP/ncA")
+  mkdir -p "$TMP/ncPeer"
+  printf '#!/bin/bash\nexec /bin/bash %s "$@"\n' "$a" > "$TMP/ncPeer/bats"
+  chmod +x "$TMP/ncPeer/bats"
+  run timeout 30 env -u CC_BATS_SEED -u CC_BATS_SEEN CC_BATS_MAX_ROOTS=0 \
+      PATH="$TMP/ncA:$TMP/ncPeer:/usr/bin:/bin" /bin/bash "$a" --version
+  [ "$status" -ne 124 ] || false
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ Bats ]] || false                      # the gate STILL RUNS — not merely bounded
+  [[ "$output" =~ "exec CYCLE detected" ]] || false     # and it was loud about why
+}
+
+@test "(ii-d) POSITIVE CONTROL for (ii)/(ii-b)/(ii-c): this harness CAN observe a 124" {
+  # Those three assert `status -ne 124`. An absence assertion needs existence evidence: if `run
+  # timeout …` could not surface 124 through bats at all, all three would pass against a shim that
+  # hangs every single time. Prove the value is reachable, on a program that genuinely never ends.
+  run timeout 2 /bin/bash -c 'while :; do :; done'
+  [ "$status" -eq 124 ] || false
+}
+
+@test "(ii-e) MUTATION CONTROL: neutering the cycle guard brings the hang back" {
+  # The strongest statement available here — that the GUARD terminates (ii-b), not the PATH narrowing
+  # and not luck. `_on_chain` returning false is precisely the pre-fix resolver.
+  #
+  # Mutant discipline (memory per-site-mutation-attributes-coverage): the anchor must match EXACTLY
+  # once, and the result must be syntax-checked before use — a malformed mutant fails for its own
+  # reason and reads as coverage.
+  local n
+  n=$(grep -c '^_on_chain() {$' "$SHIM")
+  [ "$n" -eq 1 ] || false
+  mkdir -p "$TMP/mutA" "$TMP/mutB"
+  sed 's/^_on_chain() {$/_on_chain() { return 1;/' "$SHIM" > "$TMP/mutA/bats"
+  chmod +x "$TMP/mutA/bats"
+  /bin/bash -n "$TMP/mutA/bats" || false                # the mutant must be a valid script
+  ! cmp -s "$SHIM" "$TMP/mutA/bats" || false            # and must actually differ from the subject
+  cp "$TMP/mutA/bats" "$TMP/mutB/bats"
+  chmod +x "$TMP/mutB/bats"
+  run timeout 12 env -u CC_BATS_SEED -u CC_BATS_SEEN CC_BATS_MAX_ROOTS=0 \
+      PATH="$TMP/mutA:$TMP/mutB:/usr/bin:/bin" /bin/bash "$TMP/mutA/bats" --version
+  [ "$status" -eq 124 ] || false                        # guard removed ⇒ the 2-cycle returns
 }
 
 @test "(iii) shim fails loudly (rc 127) when no real bats can be resolved" {
@@ -1031,4 +1140,200 @@ EOF
   [ "$status" -eq 0 ] || false
   [[ "$output" != *GLOB_EXPANDED_REACHED_FAKE* ]] || false   # the entry stayed literal
   [[ "$output" == *Bats* ]] || false                         # and a REAL bats is what ran
+}
+
+# ── RUN-WEIGHTED COVERAGE: one vote per gate run, undistortable by a single proc ───────────────
+# Added 2026-08-07. PROC coverage answers "what fraction of /Users/chrisren/.claude/bin/cc-bats PROCESSES are demoted", which is not
+# the question the operator asks. It is proc-weighted, so a 40-proc suite outvotes a 1-proc suite
+# 40:1 though both are one gate run; and it is movable by a SINGLE process, which is not theoretical
+# here — one `timeout` wrapper per run at pri=31 is what dragged a genuinely 114/114 population down
+# to 73.2% (DENOMINATOR PURITY above). Strict matching removed those particular wrappers; it did not
+# remove the SHAPE, because the metric still lets one proc speak for a whole run.
+#
+# The two tests below pin both halves: that the tiers PARTITION the run set (so the trio
+# runs_demoted / runs_full / runs_in_flight cannot drift apart unnoticed), and that a wrapper proc
+# which demonstrably IS in the population casts no vote.
+
+@test "(xxxv) RUN tiers partition the run set, and a wrapper proc cannot move them" {
+  local real
+  real=$(_cellar_bats)
+  if [ -z "$real" ]; then skip "no real /Users/chrisren/.claude/bin/cc-bats binary on this host to run"; fi
+  local tok="qoscensus$$g$RANDOM$RANDOM"
+  # THE CORPUS LIVES OUTSIDE $BATS_TEST_TMPDIR, deliberately, and this is the whole reason the
+  # fixture differs from (xxxii)/(xxxiii). $BATS_TEST_TMPDIR sits INSIDE this suite's own
+  # bats-run-XXXXXX tmpdir, so a corpus placed there puts a SECOND run id into every row's argv —
+  # including the wrapper's — and the wrapper stops being unattributable for a reason that has
+  # nothing to do with the property under test. Production corpora are repo paths, not bats
+  # tmpdirs, so a system temp dir is the shape the census actually meets. Measured both ways:
+  # nested, procs_unattributed 0; unnested, the wrapper lands in it exactly as designed.
+  local corpus
+  corpus=$(mktemp -d)
+  mkdir -p "$corpus/$tok"
+  cat > "$corpus/$tok/slow.bats" <<'EOF'
+@test "occupies the scheduler long enough to be sampled" {
+  /bin/sleep 12
+}
+EOF
+  # Under a timeout(1) wrapper ON PURPOSE: that is the proc class that made the PROC metric lie, and
+  # it carries no bats-run stamp, so it is exactly the distortion the RUN metric must be immune to.
+  timeout 30 "$real" "$corpus/$tok/slow.bats" >/dev/null 2>&1 &
+  local wpid=$!
+  local spawned=0
+  if _qos_wait_runs "$tok" 1; then spawned=1; fi
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      /bin/bash "$CENSUS" --json --no-append
+  local s_st="$status" s_out="$output"
+  run timeout 40 env QOS_CENSUS_STRICT=off QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      /bin/bash "$CENSUS" --json --no-append
+  local p_st="$status" p_out="$output"
+  kill "$wpid" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$wpid" 2>/dev/null || true
+  rm -rf "$corpus"                                       # swept before any assertion can abort us
+  [ "$spawned" -eq 1 ] || false                          # a real run really was in flight
+  [ "$s_st" -ne 124 ] || false
+  [ "$s_st" -ne 127 ] || false                           # 127 = never executed; not "measured 0"
+  [ "$p_st" -ne 124 ] || false
+  [ "$p_st" -ne 127 ] || false
+  local s_runs s_rd s_rf s_cov s_total
+  s_runs=$(_json_field runs_in_flight "$s_out")
+  s_rd=$(_json_field runs_demoted "$s_out")
+  s_rf=$(_json_field runs_full "$s_out")
+  s_cov=$(_json_field coverage_run_pct "$s_out")
+  s_total=$(_json_field procs_total "$s_out")
+  [ -n "$s_runs" ] || false
+  [ "$s_runs" -ge 1 ] || false                           # NON-VACUITY: an empty run set proves nothing
+  [ -n "$s_rd" ] || false
+  [ -n "$s_rf" ] || false
+  [ "$((s_rd + s_rf))" -eq "$s_runs" ] || false          # the tiers PARTITION the run set
+  [ -n "$s_cov" ] || false                               # and the metric is reported on every row
+  # The wrapper's invariance is asserted INSIDE the permissive sample, not as an equality across the
+  # two: these are two sequential reads of a LIVE process table, and an exact cross-sample equality
+  # of run counts is a race — it failed once here for exactly that reason. What is race-free is the
+  # accounting WITHIN one census: the extra procs the permissive filter admits land in the
+  # unattributed bucket, which is precisely WHY they cannot vote, and the partition still holds.
+  local p_runs p_rd p_rf p_total p_un
+  p_runs=$(_json_field runs_in_flight "$p_out")
+  p_rd=$(_json_field runs_demoted "$p_out")
+  p_rf=$(_json_field runs_full "$p_out")
+  p_total=$(_json_field procs_total "$p_out")
+  p_un=$(_json_field procs_unattributed "$p_out")
+  [ -n "$p_total" ] || false
+  [ -n "$p_un" ] || false
+  [ "$p_total" -gt "$s_total" ] || false                 # the wrapper class demonstrably IS there
+  [ "$p_un" -ge 1 ] || false                             # ...and it landed OUTSIDE every run tier
+  [ "$((p_rd + p_rf))" -eq "$p_runs" ] || false          # the partition survives its presence
+  [ "$p_runs" -ge "$s_runs" ] || false                   # permissive is a superset, never fewer runs
+}
+
+@test "(xxxvi) QOS_GATE_ON=run gates on the RUN metric, and proc remains the default" {
+  # FAIL must be REACHABLE through the run metric, or the seam is decorative.
+  #
+  # THE OBVIOUS FIXTURE DOES NOT WORK HERE, and the reason is worth stating: (xxxiii) builds an
+  # undemoted population by spawning with CC_BATS_QOS=off. That seam only stops the SHIM from adding
+  # a clamp — it cannot remove an INHERITED one, and a suite invoked through the shim (what CLAUDE.md
+  # tells a gate session to do) is itself utility-clamped, so every child comes up at PRI 20.
+  # Measured while writing this: procs_total 10, procs_pri20 10, coverage_run_pct 100.0 — the
+  # "undemoted" burst was fully demoted. (xxxiii)'s precondition guard only catches the BACKGROUND
+  # band (pri<=10), so it does not see this case either.
+  #
+  # Guarding on the band would make this test SKIP on the normal invocation, which retires the very
+  # path it exists to cover (memory abstain-rule-can-retire-the-common-case). So the population is
+  # left alone and the CLASSIFIER is moved instead — the same technique (xix) uses: raise the ceiling
+  # so the range always admits, and let the CLAMP SET decide. `actual` admits every proc; `actual+1`
+  # is a value no proc in the population can occupy, so nothing classifies as demoted. Deterministic,
+  # band-independent, and two-sided over ONE live population.
+  local real
+  real=$(_cellar_bats)
+  if [ -z "$real" ]; then skip "no real /Users/chrisren/.claude/bin/cc-bats binary on this host to run"; fi
+  local tok="qoscensus$$n$RANDOM$RANDOM"
+  mkdir -p "$TMP/$tok"
+  cat > "$TMP/$tok/slow.bats" <<'EOF'
+@test "occupies the scheduler long enough to be sampled" {
+  /bin/sleep 14
+}
+EOF
+  "$real" "$TMP/$tok/slow.bats" >/dev/null 2>&1 &
+  local r1=$!
+  "$real" "$TMP/$tok/slow.bats" >/dev/null 2>&1 &
+  local r2=$!
+  local burst=0
+  if _qos_wait_runs "$tok" 2; then burst=1; fi
+  # The band this population actually landed in, read from the live table rather than assumed.
+  local actual
+  actual=$(_qos_probe_rows "$tok" | awk '{print $3}' | sort -n | tail -1)
+  run timeout 40 env QOS_GATE_ON=run QOS_DEMOTED_PRI_MAX=99 QOS_CLAMP_PRIS="$actual" \
+      QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 /bin/bash "$CENSUS" --json --no-append
+  local ok_st="$status" ok_out="$output"
+  run timeout 40 env QOS_GATE_ON=run QOS_DEMOTED_PRI_MAX=99 QOS_CLAMP_PRIS="$((actual + 1))" \
+      QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 /bin/bash "$CENSUS" --json --no-append
+  local bad_st="$status" bad_out="$output"
+  run timeout 40 env QOS_CENSUS_PATTERN="$tok" QOS_CENSUS_NO_CONTROL=1 \
+      /bin/bash "$CENSUS" --json --no-append
+  local d_out="$output"
+  kill "$r1" "$r2" 2>/dev/null || true
+  pkill -f "$tok" >/dev/null 2>&1 || true
+  wait "$r1" 2>/dev/null || true
+  wait "$r2" 2>/dev/null || true
+  [ "$burst" -eq 1 ] || false                            # a real burst was in flight
+  [ -n "$actual" ] || false                              # and we could read its band
+  [ "$ok_st" -ne 124 ] || false
+  [ "$bad_st" -ne 124 ] || false
+  [ "$bad_st" -ne 127 ] || false
+  [[ "$ok_out" =~ \"gate_on\":\"run\" ]] || false        # the seam is LIVE, not merely accepted
+  local runs
+  runs=$(_json_field runs_in_flight "$ok_out")
+  [ -n "$runs" ] || false
+  [ "$runs" -ge 2 ] || false                             # cleared the NO-BURST gate on RUNS
+  # ADMIT side: with the population's own band in the clamp set, the runs are covered and it PASSes.
+  [ "$(_json_field coverage_run_pct "$ok_out")" = "100.0" ] || false
+  [ "$ok_st" -eq 0 ] || false
+  [[ "$ok_out" =~ \"verdict\":\"PASS\" ]] || false
+  # REJECT side: same live runs, clamp set they cannot occupy ⇒ run coverage collapses and the gate
+  # FAILs. Two-sided, so the PASS above cannot be a metric that is simply always high.
+  [ "$(_json_field runs_demoted "$bad_out")" -eq 0 ] || false
+  [ "$(_json_field coverage_run_pct "$bad_out")" = "0.0" ] || false
+  [ "$bad_st" -eq 1 ] || false                           # FAIL is REACHABLE through this metric
+  [[ "$bad_out" =~ \"verdict\":\"FAIL\" ]] || false
+  # THE DEFAULT MUST NOT HAVE MOVED. Changing what an accruing metric gates on would silently re-base
+  # the AC1 record, so run coverage is REPORTED always and GATED only on request.
+  [[ "$d_out" =~ \"gate_on\":\"proc\" ]] || false
+}
+
+
+@test "(xxxvii) the census's clamp filter is LITERAL — the working directory cannot flip its control" {
+  # MEASURED against the pre-fix census 2026-08-07, identical environment, cwd the ONLY difference:
+  #     QOS_CLAMP_PRIS='2*'  cwd empty              → control FAIL, verdict SIGNAL-DEAD  (honest)
+  #     QOS_CLAMP_PRIS='2*'  cwd holds a file `20`  → control OK,   verdict NO-BURST     (a lie)
+  # `for p in $CLAMP_PRIS` word-split AND pathname-expanded, so a FILENAME supplied the clamp value:
+  # the shell filter that judges the POSITIVE CONTROL accepted PRI 20 as clamped while the awk filter
+  # that judges the POPULATION never globs and did not. Two halves of one script disagreeing about
+  # what "demoted" means, with the control declaring itself healthy over a dead classifier — and a
+  # green control is what licenses every other number in the row.
+  #
+  # The resolver's own PATH walk had the same exposure and was fixed separately (see (xxxiv)); this
+  # is the sibling site, in the file the backlog item actually named.
+  #
+  # Both runs must now agree, AND agree on the honest answer: '2*' is not a PRI, so nothing is
+  # clamped, so the control cannot separate the bands and the run must refuse to report coverage.
+  mkdir -p "$TMP/globcwd"
+  cd "$TMP/globcwd"
+  run timeout 60 env QOS_CLAMP_PRIS='2*' QOS_CENSUS_PATTERN=zzz-no-such-process \
+      /bin/bash "$CENSUS" --json --no-append
+  local empty_st="$status" empty_out="$output"
+  printf '' > "$TMP/globcwd/20"
+  # NON-VACUITY: the pattern must really match the file, else "identical" is trivially true.
+  local expanded
+  expanded=$(/bin/bash -c "printf '%s' $TMP/globcwd/2*")
+  [ "$expanded" = "$TMP/globcwd/20" ] || false
+  run timeout 60 env QOS_CLAMP_PRIS='2*' QOS_CENSUS_PATTERN=zzz-no-such-process \
+      /bin/bash "$CENSUS" --json --no-append
+  local file_st="$status" file_out="$output"
+  [ "$empty_st" -ne 124 ] || false
+  [ "$empty_st" -ne 127 ] || false
+  [ "$file_st" -eq "$empty_st" ] || false                        # the cwd changed NOTHING
+  [ "$empty_st" -eq 4 ] || false                                 # and the shared answer is honest
+  [[ "$empty_out" =~ \"verdict\":\"SIGNAL-DEAD\" ]] || false
+  [[ "$file_out" =~ \"verdict\":\"SIGNAL-DEAD\" ]] || false
+  [[ "$file_out" =~ \"clamp_pris\":\"2\*\" ]] || false           # honoured VERBATIM, not expanded
 }

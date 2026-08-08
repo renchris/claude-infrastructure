@@ -95,13 +95,18 @@
 #                              path on which this bound is inert says so, rather than reading as a
 #                              quiet admit indistinguishable from a healthy one).
 #
-# NOT a seam — an INTERNAL flag, do not set it by hand:
+# NOT seams — INTERNAL flags, do not set them by hand:
 #   CC_BATS_ACTIVE=1         → the re-entrancy marker this script exports for its OWN nested
 #                              re-execs (bats re-execs itself; see the guard below). Set externally,
 #                              it makes the shim hand straight off to the real bats and apply NO
 #                              demotion — the exact silent-inert failure this file exists to
 #                              prevent. It is why tests/qos-chokepoint.bats unsets the whole
 #                              CC_BATS_* family before each test rather than only the seams it sets.
+#   CC_BATS_SEEN=<a:b:…>     → the VISITED SET: physical paths of every shim already on this exec
+#                              chain, appended one hop at a time. It is what makes a multi-shim
+#                              cycle terminate — see THE 2-CYCLE IS STILL LIVE below. Unset and
+#                              empty mean the same thing ("nothing visited yet"), so unlike the
+#                              VALUE seams there is no set-but-empty asymmetry to honour here.
 #
 # FAIL LOUD WHEN INERT (R4): TWO modes now, not three. Either the clamp is applied (FULL) or it is
 # not (NONE) — and NONE always says so on stderr, even under CC_BATS_QUIET. There is no middle tier,
@@ -183,6 +188,88 @@ if [ -z "$self_phys" ]; then
   exit 127
 fi
 
+# ── THE 2-CYCLE IS STILL LIVE — what readlink fixed, and what it could not (measured 2026-08-07) ──
+# `readlink -f` closed the case §9.6 records: two symlink PATHS to ONE file physicalise equal, so the
+# self-skip fires. It cannot close the case where the two shims are DIFFERENT FILES, because then no
+# identity test could call them the same — two checkouts of this repo, each exposing a `bats`-named
+# shim on PATH, are genuinely two files. Re-measured on THIS revision:
+#
+#     PATH=<shimA>:<shimB>:/usr/bin:/bin                   rc 124, zero output, sustained
+#     PATH=<shimdir>:~/.claude/bin:/usr/bin:/bin           rc 124  ← the LIVE configuration
+#     PATH=<shimdir>:<real bats libexec>:~/.claude/bin:…   rc 0    ← a real bats answers first
+#
+# The second line is not a constructed hazard: ~/.claude/bin/bats resolves to the MAIN checkout's
+# cc-bats, so any worktree that also puts a shim on PATH is the second shim. The third line is why
+# nobody saw it — bats prepends its own libexec to PATH, so inside a bats run a real binary always
+# sat ahead of the sibling and tests/qos-chokepoint.bats (ii) never reached the guard it names.
+# scripts/bats-shim-parity-lint.sh:41 had already recorded this cycle as MEASURED and unfixed.
+#
+# THE FIX IS A VISITED SET, not a sharper identity test. Each shim appends its own physical path to
+# CC_BATS_SEEN before it execs, and no candidate already on that list is acceptable. Termination is
+# structural rather than heuristic: every hop removes one shim from the candidate set, the set is
+# finite, so the chain must reach a real bats or exit 127. With two shims that costs exactly ONE
+# extra exec (A execs B, B skips A and resolves onward) — the same convergence property (xxii) pins
+# for the seed path — and the band still lands, because CC_BATS_ACTIVE=1 makes B hand straight off.
+#
+# WHY NOT a content marker ("is this candidate also a cc-bats?"): it decides by what a file LOOKS
+# like, so an edited copy defeats it and every candidate must be read. The visited set decides by
+# where this PROCESS CHAIN has already been, which is ground truth and costs one env var.
+
+# _on_chain <phys> — true when <phys> is a shim ALREADY on this exec chain.
+# Chopped by parameter expansion, never `for x in $VAR`: this list holds absolute paths, and an
+# unquoted expansion is word-split AND pathname-expanded — the exact exposure branch 2 documents.
+_on_chain() {
+  local target="$1" rest="${CC_BATS_SEEN:-}" e
+  [ -n "$target" ] || return 1
+  while [ -n "$rest" ]; do
+    e="${rest%%:*}"
+    if [ "$e" = "$rest" ]; then rest=""; else rest="${rest#*:}"; fi
+    [ -n "$e" ] || continue
+    [ "$e" = "$target" ] && return 0
+  done
+  return 1
+}
+
+# _acceptable <candidate> — true when <candidate> may be exec'd as the real bats. THREE ways to be
+# unacceptable, and only the third is new:
+#   · unresolvable — phys_of failed. NEVER read "cannot tell" as "not me": treating an unresolvable
+#     candidate as different is precisely how this guard once inverted into an exec loop.
+#   · it IS us — same physical file. Kept as its own test rather than folded into the visited set,
+#     so an externally-clobbered CC_BATS_SEEN cannot disable the self-skip.
+#   · it is already on this exec chain — the cycle guard.
+# Every resolver branch goes through this, so acceptance is decided in ONE place.
+_acceptable() {
+  local phys
+  phys="$(phys_of "$1")" || phys=""
+  [ -n "$phys" ] || return 1
+  [ "$phys" != "$self_phys" ] || return 1
+  ! _on_chain "$phys"
+}
+
+# ── SELF-REVISIT: the half of the guard that needs NO cooperation from the other shim ────────────
+# The visited set is a PROTOCOL, and a protocol only binds peers that speak it. During any rollout
+# the OTHER shim on PATH is the PREVIOUS version: it does not clear CC_BATS_SEEN, but it never
+# appends to it either, so the set stays {me}, the sibling is never excluded, and the cycle survives
+# untouched. Measured here — fixed+fixed terminates, fixed+old still hangs. So the set is the FAST
+# path, not the guard.
+#
+# The guard is this: if my own physical path is ALREADY in the set I inherited, this exec chain has
+# passed through me before. That is a cycle by definition, whatever any peer does or fails to do —
+# a cycle must revisit its members, so a member watching for its own return cannot be evaded.
+#
+# ON DETECTION, RESOLVE FROM WHERE A SHIM CANNOT BE. Exiting 127 would be bounded but would fail
+# every gate on the box; instead skip the branches a `bats`-named shim actually gets installed into
+# (the PATH walk and the known bin/ locations) and sweep the Cellar, whose binaries are Homebrew's
+# own. That terminates — a Cellar binary cannot bounce back — and still runs the gate. The SEED is
+# deliberately NOT trusted here either: a seed recorded at activation can name the sibling shim,
+# which is exactly how the chain would re-enter and cycle a second time.
+CC_BATS_CYCLED=0
+if _on_chain "$self_phys"; then CC_BATS_CYCLED=1; fi
+
+# Join ourselves onto the chain BEFORE resolving, so the exec we are about to perform carries it.
+# Appended, never overwritten: the whole value of the set is that it accumulates across hops.
+export CC_BATS_SEEN="${CC_BATS_SEEN:+$CC_BATS_SEEN:}$self_phys"
+
 # Seed file: the ABSOLUTE path of the real bats, recorded from DISK TRUTH at activation time.
 # It exists only when the operator has activated the deeper "shadow the Homebrew path" mode
 # (activation 22 — shadow mode). Why a seed rather than a Cellar glob: the glob is version-shaped
@@ -205,22 +292,45 @@ else
   CC_BATS_SEED_PATH="$HOME/.claude/state/cc-bats-real"
 fi
 
+# _cellar_sweep — branch 4, extracted so the cycle path can reach it WITHOUT the branches a shim can
+# occupy. Ordered newest-version-last by `sort -V`, so the tail is the highest version.
+_cellar_sweep() {
+  local c found=""
+  # shellcheck disable=SC2044  # find|for is the incumbent shape here; Cellar paths carry no spaces
+  for c in $(find /opt/homebrew/Cellar/bats-core /usr/local/Cellar/bats-core \
+                  /opt/homebrew/opt/bats-core -maxdepth 3 -name bats -type f \
+                  -perm -u+x 2>/dev/null | sort -V); do
+    [ -x "$c" ] || continue
+    _acceptable "$c" && found="$c"
+  done
+  [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+  return 1
+}
+
 resolve_real_bats() {
   # 1 — explicit pin (tests, and any caller that knows better). Honoured even if non-executable
   #     so a test can assert the failure path.
   if [ -n "${CC_BATS_REAL+set}" ]; then printf '%s' "$CC_BATS_REAL"; return 0; fi
+  # 1.1 — CYCLE DETECTED (see SELF-REVISIT above): every branch a shim can occupy is skipped. The
+  #       notice is unconditional — CC_BATS_QUIET may not reach it — because an exec cycle survived
+  #       in silence is precisely the looks-applied-but-is-not failure this file exists to prevent.
+  if [ "$CC_BATS_CYCLED" = "1" ]; then
+    echo "cc-bats: WARNING — exec CYCLE detected (my own path is already on this chain: ${CC_BATS_SEEN:-}). Another cc-bats shim on PATH is bouncing back to me; resolving from the Cellar only. Fix: make every installed shim this version, or drop the duplicate from PATH." >&2
+    _cellar_sweep && return 0
+    return 1
+  fi
   # 1.5 — the activation-recorded seed. Tried BEFORE the PATH walk because in shadow mode the
   #       Homebrew path on PATH *is* this shim, and the seed is the only non-guessing answer.
   #       A seed pointing at something absent/non-executable is IGNORED rather than fatal — a stale
   #       seed (brew upgraded the Cellar out from under it) must degrade to the search below, not
   #       break every gate run on the machine.
   if [ -n "$CC_BATS_SEED_PATH" ] && [ -f "$CC_BATS_SEED_PATH" ]; then
-    local seeded seeded_phys
+    local seeded
     seeded=$(head -1 "$CC_BATS_SEED_PATH" 2>/dev/null | tr -d '[:space:]')
     if [ -n "$seeded" ] && [ -x "$seeded" ] && [ ! -d "$seeded" ]; then
-      seeded_phys="$(phys_of "$seeded")" || seeded_phys=""
-      # never accept a seed that resolves back to us — that is the fork-bomb
-      if [ -n "$seeded_phys" ] && [ "$seeded_phys" != "$self_phys" ]; then printf '%s' "$seeded"; return 0; fi
+      # never accept a seed that resolves back to us, or to a shim already on this chain — that is
+      # the fork-bomb, and (xxii) pins that the SECOND hop is where an indirect self gets caught.
+      if _acceptable "$seeded"; then printf '%s' "$seeded"; return 0; fi
     fi
   fi
   # 2 — walk PATH, skipping ourselves by PHYSICAL path (a symlinked shim dir must not fool us).
@@ -235,7 +345,7 @@ resolve_real_bats() {
   # safe: there is no state left to unwind on any exit path, which the previous shape got wrong (it
   # restored IFS at the early return but would have leaked `set -f` had one been added). The function
   # takes no arguments (sole call site `REAL_BATS=$(resolve_real_bats)`), so `set --` clobbers nothing.
-  local oldifs="$IFS" d cand cand_phys oldglob
+  local oldifs="$IFS" d cand oldglob
   case "$-" in *f*) oldglob=on ;; *) oldglob=off ;; esac
   set -f
   IFS=:
@@ -247,32 +357,21 @@ resolve_real_bats() {
     [ -n "$d" ] || continue
     cand="$d/bats"
     if [ -x "$cand" ] && [ ! -d "$cand" ]; then
-      cand_phys="$(phys_of "$cand")" || cand_phys=""
-      # empty cand_phys = could not resolve ⇒ SKIP it. Treating unresolvable as
+      # _acceptable folds in the unresolvable check: an empty phys ⇒ SKIP. Treating unresolvable as
       # "different from me" is exactly how the guard inverted into an exec loop.
-      if [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ]; then printf '%s' "$cand"; return 0; fi
+      if _acceptable "$cand"; then printf '%s' "$cand"; return 0; fi
     fi
   done
   # 3 — known install locations, last resort. Order: Homebrew arm64, Homebrew x86, MacPorts.
   for cand in /opt/homebrew/bin/bats /usr/local/bin/bats /opt/local/bin/bats; do
     if [ -x "$cand" ]; then
-      cand_phys="$(phys_of "$cand")" || cand_phys=""
-      [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ] && { printf '%s' "$cand"; return 0; }
+      _acceptable "$cand" && { printf '%s' "$cand"; return 0; }
     fi
   done
   # 4 — Cellar/opt sweep, reached only in shadow mode with a stale-or-absent seed (every path above
-  #     resolved to US). Ordered newest-version-last by `sort -V` so the tail is the highest
-  #     version. This IS a guess, which is exactly why the seed exists and is tried first — but a
-  #     guess that runs the right tests beats exiting 127 and failing every gate on the box.
-  local c found=""
-  for c in $(find /opt/homebrew/Cellar/bats-core /usr/local/Cellar/bats-core \
-                  /opt/homebrew/opt/bats-core -maxdepth 3 -name bats -type f \
-                  -perm -u+x 2>/dev/null | sort -V); do
-    [ -x "$c" ] || continue
-    cand_phys="$(phys_of "$c")" || cand_phys=""
-    [ -n "$cand_phys" ] && [ "$cand_phys" != "$self_phys" ] && found="$c"
-  done
-  [ -n "${found:-}" ] && { printf '%s' "$found"; return 0; }
+  #     resolved to US). This IS a guess, which is exactly why the seed exists and is tried first —
+  #     but a guess that runs the right tests beats exiting 127 and failing every gate on the box.
+  _cellar_sweep && return 0
   return 1
 }
 
