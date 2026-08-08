@@ -516,7 +516,25 @@ load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, senso
   max="${CC_GATE_MAX_LOAD:-8}"
   [[ "$max" = "0" || "$max" = "off" ]] && return 1            # kill switch: never shed
   case "$max" in ''|*[!0-9.]*) return 1 ;; esac               # non-numeric ceiling ⇒ fail OPEN
-  load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+  # sysctl is /usr/sbin/sysctl, and /usr/sbin is absent from the PATH a LaunchAgent exports for its
+  # children — so a BARE name reads the load fine from the operator's shell and does not exist for
+  # any unattended caller, routing straight into the fail-OPEN arm below. The shed then never fired
+  # and the gate ran its smoke on exactly the loaded box it had been told to shed from. A fail-open
+  # sensor that is blind ONLY off-session is the worst available polarity: green where a human tests
+  # it, dead where it runs. Measured at trunk under that literal PATH, `bats -f shed` was 2/4 red
+  # (`ABOVE` unreachable at any ceiling; "smoke SKIPPED" never emitted); absolute resolution is 4/4.
+  # Resolved INSIDE the function, never from a file-level global: tests/ship-land.bats extracts this
+  # function with sed and runs it standalone, so a dependency on state set elsewhere in the file
+  # would make it behave differently under test than in production. The seam is honoured VERBATIM
+  # (including empty) — the only way to exercise the unreadable arm on a host that HAS the binary.
+  # (Class = memory path-resolved-dependency-in-daemon-code; first landed as e6de2e15.)
+  local sysctl_bin
+  if [ -n "${CC_GATE_SYSCTL+set}" ]; then sysctl_bin="$CC_GATE_SYSCTL"
+  elif [ -x /usr/sbin/sysctl ];      then sysctl_bin=/usr/sbin/sysctl
+  else                                    sysctl_bin="$(command -v sysctl 2>/dev/null || true)"
+  fi
+  [ -n "$sysctl_bin" ] || return 1                            # no sensor at all ⇒ fail OPEN
+  load="$("$sysctl_bin" -n vm.loadavg 2>/dev/null | awk '{print $2}')"
   case "${load:-}" in ''|*[!0-9.]*) return 1 ;; esac          # unreadable sensor ⇒ fail OPEN
   awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 >= m+0)}'
 }

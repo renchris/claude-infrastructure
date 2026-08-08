@@ -1352,8 +1352,12 @@ shed_probe() {  # $@ = env assignments → runs load_above_ceiling once, echoes 
     printf 'if load_above_ceiling; then echo ABOVE; else echo BELOW; fi\n'
   } > "$BATS_TEST_TMPDIR/shed.sh"
   # Positive control: a silent sed miss (renamed/moved function) would leave a probe that echoes
-  # BELOW for every input and "passes" three of the four assertions vacuously.
-  grep -q 'sysctl -n vm.loadavg' "$BATS_TEST_TMPDIR/shed.sh" || return 1
+  # BELOW for every input and "passes" three of the four assertions vacuously. Keyed on the SENSOR
+  # (vm.loadavg), never on how its binary is spelled: the 2026-08-08 absolute-path fix changed the
+  # spelling from `sysctl` to a resolved variable, and a literal-match control would have gone red
+  # over a perfectly good extraction — a control that fails for a reason other than the one it
+  # exists to catch is worse than none (memory: control-calibrated-to-implementation-decays).
+  grep -q 'vm.loadavg' "$BATS_TEST_TMPDIR/shed.sh" || return 1
   env "$@" bash "$BATS_TEST_TMPDIR/shed.sh" 2>&1
 }
 
@@ -1378,6 +1382,43 @@ shed_probe() {  # $@ = env assignments → runs load_above_ceiling once, echoes 
     [ "$status" -eq 0 ]
     [ "$output" = "BELOW" ] || false
   done
+}
+
+# ── the sensor must survive an UNATTENDED PATH (2026-08-08) ─────────────────────────────────────
+# Every shed test above runs on the ambient PATH, which carries /usr/sbin — so none of them could see
+# that the sensor read EMPTY for every unattended caller and fell into the fail-OPEN arm, meaning the
+# shed never fired and the gate ran its smoke on the loaded box it was told to shed from. Measured at
+# trunk under the PATH below: tests 1 and 4 of this section were RED (ABOVE unreachable at any
+# ceiling, "smoke SKIPPED" never emitted).
+
+@test "RED CONTROL: a bare sysctl really is blind on the unattended PATH, and an absolute one is not" {
+  # Both halves, or the test below proves nothing. If the bare form ever answers here, /usr/sbin
+  # joined the minimal PATH and the PATH-independence claim is vacuous.
+  local bare abs
+  bare="$(env -i PATH="/usr/bin:/bin" bash -c 'sysctl -n vm.loadavg 2>/dev/null | awk "{print \$2}"')"
+  [ -z "$bare" ] || { echo "bare sysctl answered [$bare] — the defect is not reproducible here"; false; }
+  abs="$(env -i PATH="/usr/bin:/bin" bash -c '/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | awk "{print \$2}"')"
+  [ -n "$abs" ] || skip "/usr/sbin/sysctl does not answer on this host — nothing to assert"
+}
+
+@test "shed: the ceiling is still measurable with /usr/sbin off the PATH (the daemon shape)" {
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe PATH=/usr/bin:/bin CC_GATE_MAX_LOAD=0.0001"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE" ]      # pre-fix this read BELOW: an empty load is not a load below the ceiling
+}
+
+@test "shed: a genuinely unreadable sensor still fails OPEN (the seam is honoured verbatim)" {
+  # Hardening the resolution must not delete the fail-open arm — only stop reaching it by accident.
+  # Set-but-EMPTY is the only way to exercise it on a host that HAS /usr/sbin/sysctl.
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe CC_GATE_SYSCTL= CC_GATE_MAX_LOAD=0.0001"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BELOW" ]      # unreadable ⇒ never shed ⇒ the smoke RUNS
+  run bash -c "$(declare -f shed_probe); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe CC_GATE_SYSCTL=/nonexistent/sysctl CC_GATE_MAX_LOAD=0.0001"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BELOW" ] || false
 }
 
 @test "shed: NEVER sleeps — the deleted wait must not come back as a poll loop" {
