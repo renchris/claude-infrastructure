@@ -134,8 +134,29 @@ lineno() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
   for basis in 'fail-open' 'gate-off' 'unknown-id' 'no-claim'; do
     grep -q "$basis" "$LIB"
   done
-  # exactly ONE `return 9` in the library: the live-claimer branch and nothing else
-  [ "$(grep -c 'return 9' "$LIB")" -eq 1 ]
+  # EVERY refusal is ENUMERATED AND JOURNALLED — the invariant, not a headcount.
+  #
+  # This was `[ "$(grep -c 'return 9' "$LIB")" -eq 1 ]`, which reddened the moment a SECOND
+  # legitimate refusal arrived (the done-latched arm, 2026-08-07) while being unable to catch the
+  # thing it was written to catch: a `return 9` smuggled into a fail-open branch keeps the count at
+  # one. An `-eq N` over a growing subject only ever fires on its own growth
+  # (memory `exact-count-assertion-tripwires-its-own-subject`), so it is replaced by the property
+  # the count was standing in for.
+  #
+  # The property: every `return 9` is immediately preceded by a `_cc_wclaim_emit refuse <basis>`,
+  # and every such basis is on this list. Adding a refusal is then a DELIBERATE edit here — which is
+  # the point — while adding an admit costs nothing. A refusal on an unnamed basis goes RED, and so
+  # does a refusal that returns silently.
+  n9="$(grep -c 'return 9' "$LIB")"
+  [ "$n9" -ge 1 ]
+  [ "$(grep -c '_cc_wclaim_emit refuse' "$LIB")" -eq "$n9" ]
+  # the basis set is exactly the sanctioned two — a live lease, and a completed item
+  bases="$(grep -o '_cc_wclaim_emit refuse [a-z-]*' "$LIB" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+  [ "$bases" = "done-latched measured " ]
+  # and NO fail-open basis may sit on a refusing path
+  for basis in 'fail-open' 'gate-off' 'unknown-id' 'no-claim'; do
+    [ "$(grep -c "_cc_wclaim_emit refuse $basis" "$LIB")" -eq 0 ]
+  done
   grep -A2 'verdict=noop-live-claimer\*)' "$LIB" >/dev/null
 }
 

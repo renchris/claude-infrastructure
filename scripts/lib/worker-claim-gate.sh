@@ -184,6 +184,30 @@ _cc_wclaim_backlog_bin() {
   printf ''
 }
 
+# ── the DONE holder ────────────────────────────────────────────────────────────────────────────
+# Who last held a DONE-latched item. Printed empty when it cannot be established — and every caller
+# treats empty as ADMIT, never as "not the holder", because an unreadable oracle is not evidence
+# (memory `lookup-miss-is-not-absence`; the same rule the unparsed-reclaim arm already follows).
+#
+# WHY THIS COSTS A FORK AND WHY THAT IS ACCEPTABLE. `cc-backlog` has no single-item read, so this is
+# the whole-ledger fold. It is paid ONLY on the `status=done` branch, which is off the hot path by
+# construction: an open item never reaches here, and a done item is the case we are about to refuse.
+# The finisher's own admit is cached like any other, so a session tidying up after its own `done`
+# pays it once per TTL, not per write.
+_cc_wclaim_item_holder() { # $1=bin $2=item → holder identity, or empty
+  local out cap="${CC_WCLAIM_TIMEOUT_S:-30}"
+  case "$cap" in ''|*[!0-9]*) cap=30 ;; esac
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout "$cap" "$1" list --all --json 2>/dev/null || true)"
+  else
+    out="$("$1" list --all --json 2>/dev/null || true)"
+  fi
+  [ -n "$out" ] || { printf ''; return 0; }
+  printf '%s' "$out" | jq -r --arg id "$2" '
+      [ .[]? | select(.id == $id) | .by // "" ] | first // ""
+    ' 2>/dev/null || printf ''
+}
+
 # ── the ADMIT cache ────────────────────────────────────────────────────────────────────────────
 # POSITIVE only: an admit is cached for CC_WCLAIM_TTL_S, a refusal NEVER is. That asymmetry is the
 # whole self-healing property — the moment the incumbent dies, the next write re-asks the ledger,
@@ -289,9 +313,41 @@ cc_worker_claim_admit() { # $1=caller $2=cwd $3=what → 0 admit / 9 refuse
       _cc_wclaim_emit admit measured "$caller" "$what" "claim held by this session ($ident)" "$item"
       return 0 ;;
     *verdict=noop-status*)
-      # Not claimed at all (open / done / blocked). No lease, so no duplicate — and NOT this gate's
-      # business to invent one: `cc-dispatch` owns whether an item may be worked, and a done-latch
-      # refusal is its rc 4, taken before any spawn.
+      # THREE-VALUED, not two. This arm used to admit open / done / blocked alike, reasoning that
+      # "`cc-dispatch` owns whether an item may be worked, and a done-latch refusal is its rc 4,
+      # taken before any spawn." That premise held only for workers dispatch SPAWNED. Measured
+      # 2026-08-07 on item 149789b69fc4: dispatch fired exactly ONCE, and the population arrived by
+      # Agent-tool fan-out instead — 224 spawns over 3 generations, which never consults dispatch and
+      # so never meets its rc 4. Those workers reached a DONE item, read "not claimed", and were
+      # admitted: 6 rows, basis=no-claim, every one a duplicate. Across the gate's whole lifetime it
+      # had recorded 21 admits and zero refusals.
+      #
+      # So DONE gets its own arm. OPEN and BLOCKED keep the old behaviour verbatim — there is no
+      # lease to conflict with and taking one is not this gate's job.
+      case "$out" in
+        *status=done*)
+          # The finisher is NOT a duplicate. A worker that completed the item and is now committing
+          # or tidying must not be locked out of its own work — that would clog exactly the commit
+          # path this gate exists to protect. The ledger's `by` carries forward through `done`, so
+          # it names the session that held it. Unreadable ⇒ ADMIT (fail-open), never a refusal built
+          # on a lookup we could not perform.
+          CC_WCLAIM_HOLDER="$(_cc_wclaim_item_holder "$bin" "$item")"
+          if [ -z "$CC_WCLAIM_HOLDER" ]; then
+            CC_WCLAIM_REASON="worker-claim-gate: ADMIT (fail-open) — $item is done but its holder is unreadable"
+            _cc_wclaim_emit admit fail-open "$caller" "$what" "done item, holder unreadable" "$item"
+            return 0
+          fi
+          if [ "$CC_WCLAIM_HOLDER" = "$ident" ]; then
+            [ -n "$cfile" ] && printf '%s\n' "$(date +%s 2>/dev/null || echo 0)" > "$cfile" 2>/dev/null || true
+            CC_WCLAIM_REASON="worker-claim-gate: ADMIT — $ident is the session that completed $item"
+            _cc_wclaim_emit admit measured "$caller" "$what" "finisher of a done item ($ident)" "$item"
+            return 0
+          fi
+          detail="$item is DONE (completed by $CC_WCLAIM_HOLDER); this session is $ident"
+          CC_WCLAIM_REASON="worker-claim-gate: REFUSING $what — $detail. The work is finished; STAND DOWN rather than redo it. If you believe it is genuinely unfinished, reopen it deliberately (cc-backlog reopen $item) instead of writing over a closed item."
+          _cc_wclaim_emit refuse done-latched "$caller" "$what" "$detail" "$item" "$CC_WCLAIM_HOLDER"
+          return 9 ;;
+      esac
       [ -n "$cfile" ] && printf '%s\n' "$(date +%s 2>/dev/null || echo 0)" > "$cfile" 2>/dev/null || true
       CC_WCLAIM_REASON="worker-claim-gate: ADMIT — $item carries no claim to conflict with"
       _cc_wclaim_emit admit no-claim "$caller" "$what" "item not in claimed state" "$item"
