@@ -4540,7 +4540,42 @@ if [ -n "$MODEL" ]; then
     ARGS="$ARGS --model $MODEL"
   fi
 fi
-[ -n "$EXTRA" ] && ARGS="$ARGS $EXTRA"
+# $EXTRA is the ONE token in the typed line that reaches an interactive zsh UNQUOTED — every path
+# below goes through `printf %q`, this does not, because it is raw shell TEXT the caller owns
+# (`--extra "--permission-mode plan"`, `--extra "--resume <sid>"`) and is deliberately word-split.
+# Quoting it here would fuse `--foo bar` into one word, so it cannot be fixed the way the paths are.
+#
+# That matters because of `!`. The line is composed in bash and TYPED INTO zsh, where BANG_HIST is
+# on by default and `!word` at the prompt is an event reference — measured on this box, a typed
+# `cd /tmp/x && nocorrect echo --foo a!b` answers `zsh: event not found: b` and refuses THE ENTIRE
+# LINE; nothing launches. It is invisible upstream: it2_type_verified echo-verifies the buffer
+# BEFORE the CR and returns right after sending it, so its success predicate cannot see a PARSE-time
+# hazard at all, and the fire reports as landed. (A MATCHING event is worse still — oh-my-zsh's
+# HIST_VERIFY reloads the expanded line into the buffer and waits for a second Enter that never
+# comes.) The pane-parked oracle at :637 catches the refusal shape in seconds, but only after a
+# wasted fire; this refuses before one is spent.
+#
+# The %q'd paths are NOT exposed and deliberately get no treatment here: bash's `printf %q` escapes
+# `!` unconditionally (`a!b` → `a\!b`, measured in a non-interactive `#!/usr/bin/env bash` script
+# exactly like this one), and its one form that leaves the bang bare — `$'…'`, emitted for a tab or
+# newline — is a form zsh does not history-expand inside either. Both were typed into a real zsh and
+# both ran. NOTE FOR THE NEXT READER: `printf %q` is a SHELL BUILTIN and the two shells disagree —
+# zsh's leaves `!` bare, bash's escapes it. Measuring this at an interactive zsh prompt (or through
+# any tool whose shell is zsh) reports a bug in bash's quoting that bash does not have.
+if [ -n "$EXTRA" ]; then
+  # DELETE-THEN-MATCH, never a widened pattern: strip already-escaped `\!` first, so a caller who
+  # pre-escaped is not convicted for doing the right thing. A `!` the caller single-quoted
+  # themselves is safe in zsh but reads the same here and is refused too — a false refusal that is
+  # loud, actionable, and unreachable in practice (every --extra caller in the tree passes
+  # `--resume <hex sid>` or `--permission-mode plan`).
+  case "${EXTRA//\\!/}" in
+    *'!'*)
+      emit_fire_refusal extra-bang "--extra carries an unescaped '!'"
+      echo "!! --extra carries an unescaped '!' — an interactive zsh history-expands it and refuses the ENTIRE typed line, so nothing launches and nothing reports the failure. Pre-escape it as '\\!', or pass a value without '!': $EXTRA" >&2
+      exit 2 ;;
+  esac
+  ARGS="$ARGS $EXTRA"
+fi
 
 PREFIX=""
 [ "$IN_PLACE" = 1 ] && PREFIX="CLAUDE_ISOLATION_SKIP=1 "
