@@ -239,6 +239,32 @@ com.claude.worktree-gc-infra      | run    | 0    | ~/.claude/logs/worktree-gc-i
 # worktree-gc-infra, whose runners route their output elsewhere and leave stdout at 0 bytes.
 com.claude.teammate-reap-alarm    | staged | 600  | auto | 4  | 30-teammate-reap-alarm-activate.sh | 0,1,2,3
 
+# ── com.claude.devserver-gc (row 13) — the hourly idle-reaper for per-worktree `next dev` servers ──
+# `195d91f5 feat(devserver-gc)` landed launchd/com.claude.devserver-gc.plist with NO manifest row,
+# so the three-way coverage loop in tests/cc-fleet.bats and `cc-fleet --plist-parity` were RED on
+# pristine origin/main for every lander after it — the capacity-alarm / scratchpad-reaper shape for
+# the third time. Same repair, not an allowlist.
+# `run`, from DISK TRUTH read not assumed: installed in ~/Library/LaunchAgents, `=> enabled` in the
+# override db, `launchctl print gui/501/com.claude.devserver-gc` → runs=33, last exit code 0, and
+# the live activation queue holds 33-devserver-gc-activate.sh.done (Aug 7 02:06). The operator made
+# the C10 decision, so `staged` would be the already-false claim relogin's block above dissects.
+# INTERVAL 3600, NOT the `0` the header prescribes for StartCalendarInterval — and this is deliberate.
+# `0` is the sentinel for "no declarable cadence" and buys an 86400 x factor bound; this job HAS a
+# cadence (:40 past every hour), and a 3-day staleness bound on the one reaper standing between this
+# box and its fourth compressor panic is a sensor that cannot report the failure it exists for.
+# 3600 is the same reading of the field as com.claude.compressor-sentinel's `10` — the REAL cadence,
+# never whichever launchd key expresses it. MEASURED before declaring, so the tighter bound is not a
+# false-alarm generator: 39 runs over 33.2 h, worst observed gap 1.41 h INCLUDING overnight, against
+# a 3 h bound (3600 x STALE_FACTOR 3).
+# `auto` is a REAL sensor here, unlike lead-supervisor / relogin / worktree-gc-infra: those route
+# their output through their own writer and leave StandardOutPath at 0 bytes, so `auto` could only
+# ever say STALLED. devserver-gc-run.sh's emit() tees every terminal verdict to that exact file and
+# appends the module's output beside it, so its mtime really does prove execution.
+# ok_exits stays 0. Exit 3 is `verdict=oracle-blind` — lsof inoperable, the module REFUSED to decide
+# — which is precisely relogin's exit 3 (DETECTION-UNAVAILABLE) and must row for the same reason: a
+# reaper that cannot see which servers are live is not healthy, it is blind. Exit 1 is a real error.
+com.claude.devserver-gc           | run    | 3600 | auto | 13 | 33-devserver-gc-activate.sh
+
 # ── com.chrisren.* — the SECOND family this repo owns (added 2026-07-29 after the reconciler's
 # first live run declared only com.claude.*, hiding 6 LOADED, RUNNING jobs from every leg).
 # All six are enabled-by-default (ABSENT from the override db — never disabled, which is a THIRD
