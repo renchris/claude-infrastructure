@@ -18,7 +18,15 @@
 #   list    [--open | --all | --blocked | --project P] [--json]  (default: --open, table)
 #   claim   <id> --by <sid> [--venue local|cloud] [--force]      → LEASE: refused if held & live
 #                                                                  (claimer OR its worktree), or if
-#                                                                  the item is done-latched
+#                                                                  the item is done-latched, or if a
+#                                                                  SIBLING sharing its condition is
+#                                                                  held & live (see CONDITION LEASE)
+#   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
+#                                                                  condition group (the lease's
+#                                                                  population); --force to re-key
+#   dups    [--project P] [--json]                               → REPORT candidate duplicate rows
+#                                                                  (same project+dodRef, live, not
+#                                                                  already linked). Gates nothing.
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
@@ -143,6 +151,45 @@
 # work (index a topic file · capture a lesson · fix the nudge hook's cardinality blindness · fix
 # compact-memory.md's orphan sweep), and no pattern separates those from the 21 above. The caller
 # knows which channel it is in; a regex does not.
+#
+# ── CONDITION LEASE (2026-08-07, backlog 0bded74c6fa2) ─────────────────────────────────────────
+# The block above dedupes at `add`. It cannot dedupe what `add` never saw: two SESSIONS filing one
+# piece of work in two wordings mint two ids, and nothing downstream re-joins them. Measured
+# 2026-08-07 — 97f16b6709fa (08:47:44Z) and 6078392359ac (08:47:54Z), same project, same dodRef,
+# ten seconds apart, a session and its successor, NEITHER carrying a condition. Both were claimed,
+# both dispatched, and two worktrees built the same mechanism to completion. 97f16b6709fa's own
+# closing evidence records it: "faces 3-4 proper were landed by DUPLICATE-DISPATCH sibling
+# 6078392359ac; this item delivered the surviving delta."
+#
+# So the lease must be taken on the CONDITION, not the row — and two things had to change for that
+# sentence to mean anything.
+#
+# (1) A CONDITION MUST BE ATTACHABLE TO A ROW THAT ALREADY EXISTS (`link`). Note what the block
+#     above implies: `mk_cond_id` hashes project+condition into the ID, so two rows sharing a
+#     condition ARE one row, and the ledger contains ZERO groups with >1 distinct id per
+#     (project, condition) — verified over all 1257 add events. A lease keyed on `.condition` alone
+#     therefore governs an EMPTY POPULATION and could never fire on any ledger. `--condition` is
+#     settable only at `add`, by the filer, who by construction has not seen the sibling row; the
+#     actor who CAN see both rows is a later reader of the ledger, and until `link` there was no
+#     verb for it to speak. (memory: work-item-citation-refutes-its-own-remedy.)
+#
+# (2) NO AUTOMATIC KEY IS SOUND, and dodRef is the one that looks it. Both incident rows share a
+#     dodRef, so it is the obvious inference. Replaying every claim INTERVAL in the ledger and
+#     counting same-dodRef pairs whose claims overlapped in time — exactly the dispatches such a
+#     lease would have deferred — gives 81 overlaps across 7 groups, of which ONE is the incident:
+#     70 are ORCHESTRATOR_DESK_24X7_PLAN.md, a 22-item plan whose phases are DESIGNED to run in
+#     parallel. ~1 true positive in 81. The incident's own doc refutes it hardest: that dodRef holds
+#     THREE items, and the third (8e8a306f6dc0, "postland auto-revert actuator is 12% effective") is
+#     unrelated work that overlapped both duplicates — so dodRef groups the duplicate WITH the
+#     non-duplicate even in the single case it was derived from. It ships as `dups` (a REPORT that
+#     gates nothing, where a 98% false-positive rate costs only reading) and never as a predicate.
+#
+# The lease itself is claim guard (6) below. It lives HERE, in the actuator, and not in cc-dispatch
+# where the item filed it: the item is right that dedupe belongs at DISPATCH TIME rather than at
+# `add`, but a sibling check inside the dispatcher would read the ledger and then claim, and a
+# concurrent pass slips between the read and the append. `claim` already holds the fold one step
+# before the append (memory: make-the-actuator-the-arbiter, and cc-dispatch's own step 5a: "THE
+# ACTUATOR IS THE ARBITER … this caller must not re-implement").
 #
 # KICK ON WRITE (S5): a successful `add` fires ONE debounced, detached `cc-dispatch --decide` pass
 # so new work gets a decision in seconds instead of waiting out the launchd interval. Strictly
@@ -847,8 +894,12 @@ cmd_transition() {
   # more fundamental fact and the more useful refusal — the lease would send the reader chasing an
   # incumbent worker for work that is finished.
   if [ "$event" = claim ] && [ "$force" -eq 0 ]; then
-    local lcur lstatus lby lrc ldone lev lts lowned lowrc
-    lcur="$(item_json "$id")"
+    local lcur lstatus lby lrc ldone lev lts lowned lowrc lall
+    # ONE fold for all three guards, for the reason stated above — guard (6) needs the SIBLING rows
+    # as well as this one, and `item_json` would re-walk the whole ledger to find them. Folding once
+    # and selecting twice keeps the claim at exactly the cost it had before the sibling lease existed.
+    lall="$(fold 2>/dev/null)"
+    lcur="$(printf '%s' "$lall" | jq -c --arg i "$id" 'map(select(.id == $i)) | first // empty' 2>/dev/null)"
     lstatus="$(printf '%s' "$lcur" | jq -r '.status  // ""'    2>/dev/null)"
     lby="$(    printf '%s' "$lcur" | jq -r '.by      // ""'    2>/dev/null)"
     ldone="$(  printf '%s' "$lcur" | jq -r '.wasDone // false' 2>/dev/null)"
@@ -1024,7 +1075,7 @@ cmd_transition() {
       if [ -x "$pbin" ]; then
         pout="$("$pbin" check "$id" 2>&1)"; prc=$?
         if [ "$prc" -eq 3 ]; then
-          # `verdict=premise-refuted` rides LINE 1: rc 4 now has THREE causes and cc-dispatch can
+          # `verdict=premise-refuted` rides LINE 1: rc 4 now has FOUR causes and cc-dispatch can
           # only see this through `claim_excerpt` (head -1, 200 chars). It discriminates POSITIVELY
           # on each skip-worthy token, so a missing token degrades to the lease's FAILED path — the
           # incumbent behaviour, never a new hole (memory: new-enum-member-falls-into-fail-closed).
@@ -1038,6 +1089,79 @@ cmd_transition() {
           return 4
         fi
       fi
+    fi
+    # (6) SIBLING-CONDITION LEASE — the row lease above asks "is THIS ROW held?"; this asks "is this
+    # WORK held?", which is a different question the moment one piece of work has two rows. See
+    # CONDITION LEASE in the header for the incident and for why no automatic key is sound.
+    #
+    # POSITION GATES COST, exactly as the SECOND ORACLE's does (referred to by name, not number:
+    # two blocks above are both labelled "(5)" since the premise check landed): an item with no
+    # condition exits on the `-z` below before any jq runs, which is 1238 of 1257 rows in the live
+    # ledger. The scan itself is a select over the fold already in hand — no second ledger walk.
+    #
+    # LAST, after the row lease, because the refusals answer different questions and the more
+    # specific one should win: if THIS row is already held, "your own row is taken" is the fact the
+    # reader needs, not "a sibling is taken". Reaching here means this row is claimable and only the
+    # work is spoken for.
+    #
+    # THE ORACLE CONTRACT IS GUARD (4)+(5)'s, CALLED not restated: `claimer_live` then `owned_wait`,
+    # and ONLY rc 1 from BOTH (proven not-live, proven unoccupied) releases the lease. rc 0 is
+    # positive life and rc 2 is a probe that never ran; both leave the sibling alone. Note which way
+    # that asymmetry points here — abstaining STRANDS this row for a tick (visible, self-healing:
+    # the claim appends nothing, so the item stays `open` and the next pass retries), while
+    # convicting mints the second worker the whole mechanism exists to prevent. Stranding is
+    # recoverable, double-dispatch is not.
+    #
+    # A DEAD sibling must NOT hold the lease, or a duplicate pair whose first worker died would
+    # strand both rows forever — that is what the second control in
+    # tests/cc-backlog-condition-lease.bats pins.
+    local lcond lproj
+    lcond="$(printf '%s' "$lcur" | jq -r '.condition // ""' 2>/dev/null)"
+    lproj="$(printf '%s' "$lcur" | jq -r '.project   // ""' 2>/dev/null)"
+    if [ -n "$lcond" ]; then
+      local sibid sibby sibvenue sibrc sibowned sibowrc
+      while IFS=$'\037' read -r sibid sibby sibvenue; do
+        [ -n "$sibid" ] || continue
+        # An empty `by` cannot be an incumbent — nothing to be live — mirroring guard (4).
+        [ -n "$sibby" ] || continue
+        claimer_live "$sibby" "${sibvenue:-local}"; sibrc=$?
+        if [ "$sibrc" -ne 1 ]; then
+          { printf 'cc-backlog claim: REFUSED verdict=sibling-held — %s shares condition "%s" with %s, which is claimed by %s and %s\n' \
+              "$id" "$lcond" "$sibid" "$sibby" \
+              "$([ "$sibrc" -eq 0 ] && echo LIVE || echo 'whose liveness is UNRESOLVED')"
+            printf '  These are two ledger rows naming ONE piece of work (joined by cc-backlog link),\n'
+            printf '  so dispatching this one puts a second worker onto work already in progress. That\n'
+            printf '  is the 2026-08-07 incident exactly: 97f16b6709fa and 6078392359ac were filed ten\n'
+            printf '  seconds apart in two wordings, both dispatched, and two worktrees built the same\n'
+            printf '  mechanism to completion.\n'
+            printf '  Nothing is lost by waiting: this claim appended NOTHING, the item is still open,\n'
+            printf '  and the next dispatch pass retries once %s releases.\n' "$sibid"
+            printf '  If they are NOT the same work, unjoin this row:  cc-backlog link %s --condition <other> --force\n' "$id"
+            printf '  To override deliberately:  cc-backlog claim %s --by %s --force\n' "$id" "${by:-<sid>}"
+          } >&2
+          return 4
+        fi
+        # Oracle 1 says the sibling's SHELL is gone. Ask the same second oracle guard (5) asks,
+        # about the SIBLING's worktree — a <host>-<pid> claim names a shell, and shells rotate
+        # while the work does not.
+        sibowned="$(owned_wait "$sibid" "${sibvenue:-local}")"; sibowrc=$?
+        if [ "$sibowrc" -ne 1 ]; then
+          { printf 'cc-backlog claim: REFUSED verdict=sibling-held — %s shares condition "%s" with %s, whose claimer %s is gone but whose WORKTREE is %s\n' \
+              "$id" "$lcond" "$sibid" "$sibby" \
+              "$([ "$sibowrc" -eq 0 ] && echo LIVE || echo UNRESOLVED)"
+            printf '  evidence: %s\n' "$sibowned"
+            printf '  Two rows, one piece of work: dispatching this one duplicates a worker that is\n'
+            printf '  still in its worktree (the e1ce92772859 shape, 2026-08-06 — pid dead, worker\n'
+            printf '  mid-suite, ~20 min of duplicated work).\n'
+            printf '  This claim appended nothing; the next pass retries once %s releases.\n' "$sibid"
+            printf '  To override deliberately:  cc-backlog claim %s --by %s --force\n' "$id" "${by:-<sid>}"
+          } >&2
+          return 4
+        fi
+      done < <(printf '%s' "$lall" | jq -r --arg i "$id" --arg c "$lcond" --arg p "$lproj" '
+        .[] | select(.id != $i and (.condition // "") == $c and (.project // "") == $p
+                     and .status == "claimed")
+        | [.id, (.by // ""), (.venue // "local")] | join("\u001f")' 2>/dev/null)
     fi
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
@@ -1142,6 +1266,120 @@ cmd_needs() {
 # SessionStart firing again (resume, /compact) would append a record and RESET claimAgeS on every
 # fire, letting one session's restarts hold the stale gate open indefinitely.
 #
+# cmd_link <id> --condition <slug> [--force]
+#
+# Join a row that ALREADY EXISTS to a condition group — the verb that gives claim guard (6) a
+# non-empty population to govern (see CONDITION LEASE in the header). `add --condition` cannot do
+# this: it derives the id FROM the condition, so it can only ever produce one row per condition,
+# and the two rows that need joining were minted from their titles before anyone knew they were
+# the same work.
+#
+# NOT a transition. The record carries no `by`/`evidence` and the fold's status arm has no `link`
+# branch, so it falls to `($p.status // "open")` and the item's status is untouched — linking a
+# claimed item does not release it, and linking a done item does not resurrect it. The condition
+# itself needs no fold change at all: `condition: ($r.condition // $p.condition // "")` already
+# carries any record that names one.
+#
+# Three guards:
+#   · SAME DIGIT RULE as `add --condition`, enforced by the SAME `valid_condition` (called, never
+#     restated — memory: sibling-auditors-must-share-the-state-model). A slug carrying a
+#     measurement re-mints one group per measurement, which is the defect one layer down.
+#   · RE-KEY NEEDS --force. Silently moving a row from one condition group to another would
+#     release a lease that is holding a live worker off duplicated work, and nothing would say so.
+#   · IDEMPOTENT on the same slug: writes nothing, exits 0. A desk pass that re-links every tick
+#     must not grow the ledger.
+cmd_link() {
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local condition="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --condition) shift; condition="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --force)     force=1; shift ;;
+      *) printf 'cc-backlog link: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ]        || { printf 'cc-backlog link: <id> is required\n' >&2; return 2; }
+  [ -n "$condition" ] || { printf 'cc-backlog link: --condition <slug> is required\n' >&2; return 2; }
+  if ! valid_condition "$condition"; then
+    { printf 'cc-backlog link: --condition "%s" is not a stable key.\n' "$condition"
+      printf '  A condition names a recurring STATE, so it must hold still: lowercase letters and\n'
+      printf '  hyphens only, no digits. A slug carrying a measurement mints one GROUP per\n'
+      printf '  measurement, which is the same defect one layer down. Spell out a numeral a\n'
+      printf '  condition genuinely needs (opus-five-routing-drift).\n'
+    } >&2
+    return 2
+  fi
+  ensure_file
+  has_id "$id" || { printf 'cc-backlog link: unknown id %s\n' "$id" >&2; return 3; }
+  local cur prev
+  cur="$(item_json "$id")"
+  prev="$(printf '%s' "$cur" | jq -r '.condition // ""' 2>/dev/null)"
+  if [ "$prev" = "$condition" ]; then echo "$id"; return 0; fi
+  if [ -n "$prev" ] && [ "$force" -eq 0 ]; then
+    { printf 'cc-backlog link: REFUSED — %s is already on condition "%s"\n' "$id" "$prev"
+      printf '  Re-keying it to "%s" moves it out of a group whose lease may be holding a live\n' "$condition"
+      printf '  worker off duplicated work, and nothing downstream would report the move.\n'
+      printf '  To re-key deliberately:  cc-backlog link %s --condition %s --force\n' "$id" "$condition"
+    } >&2
+    return 4
+  fi
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg condition "$condition" \
+     --argjson force "$force" \
+     '{id:$id, ts:$ts, event:"link", condition:$condition}
+      + (if $force == 1 then {force:true} else {} end)' >> "$BACKLOG"
+  echo "$id"
+}
+
+# cmd_dups [--project P] [--json] — REPORT candidate duplicate rows. Gates nothing.
+#
+# The detector half of the condition lease, and deliberately only a detector. Same-project +
+# same-dodRef is the strongest automatic signal available (both incident rows carried it), and it
+# is far too weak to gate on: replayed over the ledger's claim intervals it produces 81 concurrent
+# pairs for ~1 real duplicate, because a plan doc's Phase-0 items SHOULD run in parallel (the
+# measurement is in the CONDITION LEASE header block). As a gate that is a 98% false-refusal rate;
+# as a report the same rows are the exact review queue, and `link` is the one-line answer.
+#
+# Scoped to LIVE rows (open/claimed). A done item shares its dodRef with its siblings forever, so
+# including terminal work would make every finished plan a permanent standing group — an alarm that
+# always fires carries no bits (memory: alarm-polarity-and-attention-budget). Rows that ALREADY
+# share a condition are excluded for the same reason: they are answered, and re-reporting an
+# answered group trains the reader to skip the list.
+cmd_dups() {
+  local project="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) shift; project="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --json)    json=1; shift ;;
+      *) printf 'cc-backlog dups: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  ensure_file
+  local groups
+  groups="$(fold | jq -c --arg p "$project" '
+    [ .[]
+      | select((.status == "open") or (.status == "claimed"))
+      | select((.dodRef // "") != "")
+      | select($p == "" or .project == $p) ]
+    | group_by([.project, .dodRef])
+    | map(select(length > 1))
+    # A group whose members already share ONE non-empty condition is answered — drop it. Mixed or
+    # absent conditions still report: that is precisely the un-joined case.
+    | map(select([ .[] | .condition // "" ] | unique | (length > 1 or .[0] == "")))
+    | map({project: .[0].project, dodRef: .[0].dodRef,
+           items: [ .[] | {id, status, condition: (.condition // ""), title} ]})')"
+  if [ "$json" -eq 1 ]; then printf '%s\n' "$groups"; return 0; fi
+  local n; n="$(printf '%s' "$groups" | jq 'length')"
+  if [ "$n" -eq 0 ]; then echo "cc-backlog dups: no candidate duplicate groups."; return 0; fi
+  printf '%s' "$groups" | jq -r '.[]
+    | "── \(.project)  \(.dodRef)",
+      (.items[] | "   \(.id)  \(.status)\(if .condition == "" then "" else "  [" + .condition + "]" end)  \(.title[0:96])"),
+      ""'
+  printf 'cc-backlog dups: %s candidate group(s) — same project+dodRef, live, not joined.\n' "$n"
+  printf '  These are CANDIDATES, not duplicates: a plan doc'"'"'s parallel phases share a dodRef too.\n'
+  printf '  If two rows ARE one piece of work, join them so only one can be dispatched:\n'
+  printf '      cc-backlog link <id> --condition <slug>   # both rows, same slug\n'
+}
+
 # Every path prints a structured `verdict=<token>`: the caller is a fail-open hook whose exit code
 # cannot carry the outcome, and a silent no-op is indistinguishable from an inert mechanism
 # (memory: claimed-outcome-vs-checked-outcome, feature-durability-mechanism-not-memory). rc is 0 for
@@ -2221,6 +2459,11 @@ case "${1:-}" in
   list)    shift; cmd_list "$@" ;;
   claim)   shift; cmd_transition claim "$@" ;;
   reclaim) shift; cmd_reclaim "$@" ;;
+  # NO dispatch_kick on either. `link` writes no status, so it cannot make an item newly
+  # dispatchable — and a kick would in fact be backwards here: the whole point of a link is to make
+  # ONE of the joined rows undispatchable. `dups` is a pure read.
+  link)    shift; cmd_link "$@" ;;
+  dups)    shift; cmd_dups "$@" ;;
   done)    shift; cmd_transition "done" "$@" ;;
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;

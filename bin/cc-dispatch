@@ -999,10 +999,14 @@ dispatch() { # <dry|run|decide>
       FAILED=$((FAILED + 1)); idl failed "$id: empty/invalid fire_line"; continue
     fi
 
-    # a. claim — THE ACTUATOR IS THE ARBITER, for two distinct predicates it owns and this caller
+    # a. claim — THE ACTUATOR IS THE ARBITER, for four distinct predicates it owns and this caller
     # must not re-implement. A refusal (rc 4) is the system WORKING, never a malfunction, but the
-    # two causes need OPPOSITE journalling, so the verdict token on line 1 discriminates them:
+    # causes need OPPOSITE journalling, so the verdict token on line 1 discriminates them:
     #
+    #   verdict=sibling-held — a DIFFERENT ROW naming the SAME WORK is claimed and live (cc-backlog
+    #     § CONDITION LEASE, 2026-08-07: 97f16b6709fa and 6078392359ac, two wordings of one piece of
+    #     work, both dispatched, two worktrees building the same mechanism). Recorded as a SKIP, and
+    #     see the branch below for why it must not be the lease's FAILED.
     #   verdict=done-latched — the item LANDED between step 1b's snapshot and this claim, inside the
     #     7-45 s wave-plan plus the admission tail. A race the puller cannot win: a second pull-time
     #     re-check would only shrink the read→append gap, never close it (backlog dadc3c2410aa;
@@ -1022,6 +1026,26 @@ dispatch() { # <dry|run|decide>
     fi
     cexc="$(claim_excerpt "$cerrf")"
     [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
+    if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=sibling-held}" != "$cexc" ]; then
+      # verdict=sibling-held — another ROW naming the SAME WORK is claimed and live, and the actuator
+      # declined to put a second worker on it (cc-backlog § CONDITION LEASE). A DEFERRAL, journalled
+      # like done-latched rather than like the row lease, for two reasons the row lease does not have:
+      #
+      #   · It RECURS BY DESIGN. The refusal appends nothing, so the item stays `open` and every pass
+      #     until the sibling releases will land here again. That is the same shape as an at-ceiling
+      #     deferral — a normal recorded state — whereas `failed` would feed thrash_map a fault
+      #     record on every tick for a correct refusal, and eventually block the item outright.
+      #   · NOBODY IS NEEDED. The row lease's FAILED is right because contention over one row can
+      #     mean a wedged worker someone must look at. Here the second row is SUPPOSED to wait: the
+      #     work is in progress, and it will be dispatchable (or done) when the sibling finishes.
+      #
+      # Discriminated POSITIVELY, like done-latched and for the same reason: a token that went
+      # missing degrades to the lease's incumbent FAILED path, never to a silent fire.
+      echo "cc-dispatch: skipped $id — a sibling row holds this condition (claim refused, will retry)" >&2
+      SKIPPED=$((SKIPPED + 1))
+      idl skipped "$id: sibling-held — claim REFUSED at the actuator: another row naming this work is live${cexc:+ — $cexc} — retries automatically when the sibling releases"
+      continue
+    fi
     if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=done-latched}" != "$cexc" ]; then
       echo "cc-dispatch: skipped $id — landed during this pass's admission tail (claim refused)" >&2
       SKIPPED=$((SKIPPED + 1))

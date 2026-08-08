@@ -403,3 +403,18 @@ is the *same defect one level up* — the ledger's dedupe is a permission-style 
 **state record** (a title hash) that rots the moment the same condition is described differently.
 A dispatch that leased the CONDITION rather than the row would have caught it. Filed rather than
 fixed here: it is the dispatcher's edge, not this document's.
+
+**Closed** (backlog `0bded74c6fa2` → `docs/plans/CONDITION_LEASE.md`). The lease is built, and the
+build corrected this paragraph's prescription on one point worth recording, because it is this
+document's own thesis turned on itself. "Lease the condition" could not be implemented as written:
+`--condition` derives the item **id** from the condition, so two rows sharing one cannot exist —
+0 such groups in 1257 add events — and a lease keyed on that field governs an empty population.
+The mechanism was *named* and *reachable by nothing*, which is precisely face 2's shape. What was
+missing was a verb to join rows that already exist (`cc-backlog link`), and the lease then lives in
+`cc-backlog claim` — the actuator that holds the fold one step before the append — not in
+cc-dispatch, which would have had to sample-then-act. The obvious automatic key (`dodRef`, which
+both duplicates *did* share) was refuted by measurement rather than by argument: replayed over the
+ledger's claim intervals it produces 81 concurrent pairs for ~1 real duplicate, and this very
+document's dodRef holds a third item (`8e8a306f6dc0`) that is unrelated work — so the signal groups
+the duplicate *with* the non-duplicate even in the one case it was derived from. It ships as a
+report (`cc-backlog dups`), never as a gate.
