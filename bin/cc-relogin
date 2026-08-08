@@ -344,12 +344,27 @@ class CDP:
 
 def authbrowser(acct: str, *args: str) -> tuple[int, str]:
     """Run cc-authbrowser. NEVER branch on `--status` exit status (it is 0 whether or not a
-    browser runs — nonzero is reserved for failure); read `.running` from `--status --json`."""
+    browser runs — nonzero is reserved for failure); read `.running` from `--status --json`.
+
+    On FAILURE the detail is stdout+stderr; on success it is stdout ALONE. That asymmetry is
+    the point, not an inconsistency. cc-authbrowser writes every diagnostic to stderr on
+    purpose so stdout stays clean JSON for machine consumers — and this function used to
+    return `p.stdout` only, so a failing --start (which prints JSON on NO path) handed back
+    an EMPTY string. That is why the one and only recorded phase-2 attempt logged
+    'cc-authbrowser --start exit 4:' with nothing after the colon (2026-07-30, ~/.claude/
+    logs/cc-relogin.log), leaving the single leg that actually moves the ~30-day login
+    deadline failing for an unstated reason for nine days. The reason was there the whole
+    time, on the stream we discarded. Merging stderr unconditionally is NOT the fix: the
+    success path does json.loads() on this value, and a warn() line prepended to the object
+    would break the parse (the same trap this cost a bats rewrite to learn).
+    """
     try:
         p = subprocess.run([AUTHBROWSER_BIN, acct, *args], capture_output=True,
                            text=True, timeout=60)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return EXIT_ERROR, str(exc)
+    if p.returncode != 0:
+        return p.returncode, "\n".join(s for s in (p.stdout.strip(), p.stderr.strip()) if s)
     return p.returncode, p.stdout
 
 
