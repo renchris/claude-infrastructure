@@ -809,6 +809,27 @@ Three rules, each one a re-statement of something already paid for:
 - **The recover action is `open <url>`, not a kill.** There is no local process to signal, and the web
   UI is the operator escalation path (`cc-cloud`'s header, §3).
 
+**BUILT 2026-08-08 — and `cc-panes` above names no binary in this tree.** The rendering line was
+written against a tool that does not exist; one letter off `cc-pane` (the spawn/address/send/close
+seam), and `bin/cc-where`'s own header says it is *deliberately* not called that. The two real
+targets, and why the split falls where it does:
+
+- **`bin/cc-sessions` = ENUMERATION.** It is the view §9.3 already indicts by name, so it grew an
+  `OFF-BOX` block sourced from `cc-cloud list --json --state`, plus `--offbox [--json|--names]` as
+  the machine surface. `--json`/`--names` stay LOCAL-ONLY by default: they are the addressing views
+  cc-notify resolves a friendly name → pane UUID through, and a row with no local delivery path must
+  never resolve there. With zero declarations every mode is byte-identical to the feature's absence.
+- **`bin/cc-where` = LOOKUP.** `--go` on a declared off-box session now exits **5** — *found,
+  off-box, nothing local to focus* — printing `kind=offbox · addr · state · open <url>`, instead of
+  the `nothing matches` that is §5.2's lie in its purest form. `--json` stays a pane census: an
+  off-box session has no kitty window, so a synthesised row would be focusable and countable as a
+  pane. It is never faked into one.
+
+State is **never re-derived** by either consumer. `cc-cloud list` gained an opt-in `--state` that
+calls `classify` and emits its verdict verbatim (the default stays probe-free, which is that verb's
+whole point); a probe that cannot run degrades to the literal `UNKNOWN`, never to a dropped row.
+Suites: `tests/cc-sessions-offbox.bats`, `tests/cc-where-offbox.bats`.
+
 ### 9.4 · What one successful fire validates, in order
 
 This is the W2 checklist from Phase 0 — five claims, one session, and the order matters because the
