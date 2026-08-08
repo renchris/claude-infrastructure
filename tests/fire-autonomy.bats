@@ -16,6 +16,15 @@ setup() {
   export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  # config_dir_for_launcher now asks the accounts.json-generated map FIRST (item 64828ce9c5a5), so
+  # the map must be loaded or the SSOT branch would hit an undefined command, return non-zero, and
+  # fall through to the digit fallback — the test would then pass while exercising only the half it
+  # is not there to pin. Sourced from the real generated file (never a hand-written stand-in, which
+  # would pass against an approximation), and HARD-FAILED if absent so the vacuum can never be quiet.
+  ACCT_MAP="$REPO/lib/account-map.generated.sh"
+  [ -r "$ACCT_MAP" ] || { echo "missing $ACCT_MAP — regenerate with scripts/gen-account-map.sh" >&2; return 1; }
+  # shellcheck source=/dev/null
+  . "$ACCT_MAP"
   eval "$(sed -n '/^config_dir_for_launcher() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^pre_trust() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^write_role() {/,/^}/p' "$HF")"
@@ -110,18 +119,55 @@ STUB
 }
 
 @test "config_dir_for_launcher maps launcher → account config dir" {
-  # The mapping keys on the TRAILING DIGIT, not on the family stem — which is why the 2026-08-01
-  # claude-nextN → claudeN rename needed no code change. `claude` carries no digit and MUST fall
-  # through to the account-1 default arm; that is the case the rename newly exercises.
-  [ "$(config_dir_for_launcher claude)"  = "$HOME/.claude" ]
+  # RE-ADJUDICATED 2026-08-08 (item 64828ce9c5a5). This assertion used to read
+  #   [ "$(config_dir_for_launcher claude)" = "$HOME/.claude" ]
+  # and was WRONG — it pinned the bug. Its comment reasoned that the trailing digit is the key and
+  # that `claude`, carrying none, "MUST fall through to the account-1 default arm". The premise is
+  # right and the conclusion does not follow: account 1's config dir is ~/.claude-NEXT, so the
+  # default arm answers the wrong file, and pre_trust wrote its trust record where the fired session
+  # would never look. The 2026-08-01 claudeN rename is what made this live, and the same change
+  # hardened this test around it — which is why it survived: the digit heuristic was re-affirmed at
+  # exactly the moment it acquired a counter-example.
+  #
+  # The next two lines are the discriminating pair, and they must stay adjacent. `claude` and
+  # `claude-prev` are BOTH account 1 and BOTH carry no digit, yet resolve to DIFFERENT dirs (eval
+  # track vs stable track). No rule keyed on the name's shape can separate them — only the SSOT can.
+  # So the pair is mutation-killing in both directions: revert to a pure digit map and `claude`
+  # fails; drop the digit fallback and `claude-prev` fails.
+  [ "$(config_dir_for_launcher claude)"      = "$HOME/.claude-next" ]   # SSOT (accounts.json)
+  [ "$(config_dir_for_launcher claude-prev)" = "$HOME/.claude" ]        # digit fallback, correct here
   [ "$(config_dir_for_launcher claude2)" = "$HOME/.claude-secondary" ]
   [ "$(config_dir_for_launcher claude3)" = "$HOME/.claude-tertiary" ]
   [ "$(config_dir_for_launcher claude4)" = "$HOME/.claude-quaternary" ]
-  # A non-`claudeN` stem still maps by its digit — `--launcher` can name the stable track. (This
-  # slot used to be claude-fable2; that family is deleted, but the prefix-agnostic property it
-  # pinned is what matters and claude-prev2 pins it with a name that still exists.)
+  # A non-`claudeN` stem the SSOT does not declare still maps by its digit — `--launcher` is
+  # unvalidated and can name the stable track. (This slot used to be claude-fable2; that family is
+  # deleted, but the prefix-agnostic property it pinned is what matters and claude-prev2 pins it
+  # with a name that still exists.)
   [ "$(config_dir_for_launcher claude-prev2)" = "$HOME/.claude-secondary" ]
-  [ "$(config_dir_for_launcher claude-prev)"  = "$HOME/.claude" ]
+}
+
+# The durable invariant behind the table above: for EVERY account the SSOT declares, the launcher→dir
+# answer must equal the account→dir answer. The table pins today's four names and goes stale the day
+# a name changes or a 5th account lands; this derives both sides from accounts.json, so it keeps
+# testing the real contract — the two directions of one mapping may never disagree — without naming
+# anything. It is exactly the disagreement that shipped: launcher_for() was migrated to the SSOT and
+# config_dir_for_launcher() was left deriving, so the pair silently drifted apart for account 1.
+@test "config_dir_for_launcher agrees with the SSOT for every declared account" {
+  local acct launcher dir_from_launcher dir_from_account n=0
+  while read -r acct; do
+    [ -n "$acct" ] || continue
+    launcher="$(cc_acct_launcher_for_name "$acct")" || { echo "no launcher declared for $acct" >&2; return 1; }
+    cc_acct_dir_for_name "$acct" || { echo "no config_dir declared for $acct" >&2; return 1; }
+    dir_from_account="$CC_ACCT_DIR"
+    dir_from_launcher="$(config_dir_for_launcher "$launcher")"
+    [ "$dir_from_launcher" = "$dir_from_account" ] \
+      || { echo "DISAGREEMENT for $acct: launcher '$launcher' → $dir_from_launcher, account → $dir_from_account" >&2; return 1; }
+    n=$((n + 1))
+  done <<< "$(jq -r '.accounts[].name' "$REPO/accounts.json")"
+  # FLOOR, not an exact count — an exact one would red on the suite's own growth when a 5th account
+  # lands, which is the change this test most needs to survive. The floor only has to prove the loop
+  # ran over a real population rather than an empty one (an empty `while read` passes vacuously).
+  [ "$n" -ge 4 ]
 }
 
 @test "dry-run: --worktree fire pre-trusts the worktree path in the account config" {
@@ -129,6 +175,18 @@ STUB
   run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --worktree wslug --account next2 --dry-run
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -qE 'pre-trust: .*/\.worktrees/wslug → \.claude-secondary'
+}
+
+# Account 1 gets its own call-site test because it is the account the mapping got WRONG (item
+# 64828ce9c5a5), and because the two tests above both name a DIGIT account — so between them they
+# could not distinguish a correct function from a correct function handed the wrong argument. The
+# assertion deliberately includes the trailing " (" : `.claude` is a strict prefix of `.claude-next`,
+# so a looser pattern would match the buggy output too and pass while asserting nothing.
+@test "dry-run: --worktree fire on account 1 pre-trusts in ~/.claude-next, not ~/.claude" {
+  printf 'x\n' > "$BATS_TEST_TMPDIR/p.txt"
+  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --worktree wslug --account next --dry-run
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qE 'pre-trust: .*/\.worktrees/wslug → \.claude-next \('
 }
 
 @test "dry-run: --cwd fire pre-trusts the cwd in the account config" {
