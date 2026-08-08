@@ -786,7 +786,25 @@ A fifth was found in the ledger rather than the code: rows carried no run id, an
 across concurrent sessions — so two interleaved 2-create runs read exactly like one 4-create run. For
 a measurement that **is** a count of rows, that is not lost provenance, it is a doubled ceiling.
 
-All five are fixed and pinned by `tests/cloud-ceiling-probe.bats` (21 tests, RED-verified at 9
+⚠️ **Attribution, because it is itself a finding.** Defects 1, 2 and 4 were found and fixed
+*independently and concurrently* by a sibling session, which landed first (`4a3c07af`, `200198ac`) —
+two sessions converged on the same three bugs within the same hours, from the same evidence, neither
+aware of the other. Defects 3 and 5, and the `refused-harness` state, are this branch's delta on top
+of theirs. Three things worth carrying:
+
+- The convergence is **evidence about the defects, not about the sessions**: bugs that two
+  independent readers both hit on first live contact are load-bearing, not incidental.
+- It cost a real merge conflict and a rebuild-on-top, and the cheap prevention existed the whole
+  time — `git log --all --oneline -- <path>` before starting on a file this active. The repo already
+  knows this rule for abandoned branches; the lesson here is that it applies just as hard to
+  *concurrent* work.
+- Where the two implementations disagreed, the merge kept **the measured one**. The sibling's
+  `script(1)` allocator is correct interactively but dies `tcgetattr … Operation not supported on
+  socket` under an agent call, cron or launchd — measured here, which is why `scripts/lib/pty-run.py`
+  is now first and `script` is the fallback. Neither side was wrong about its own evidence; only one
+  side had run it headless.
+
+All five are fixed and pinned by `tests/cloud-ceiling-probe.bats` (18 tests, RED-verified at 9
 failures before the first fix). A fourth outcome, `refused-harness`, now sits **ahead of** the quota
 arm, so a fault in our own rig can never be published as a property of the fleet.
 

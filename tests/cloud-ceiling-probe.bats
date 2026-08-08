@@ -173,3 +173,80 @@ EOF
   [ "$status" -eq 2 ] || false
   [ ! -f "$CLOUD_CEILING_LEDGER" ] || ! grep -q '"kind":"attempt"' "$CLOUD_CEILING_LEDGER" || false
 }
+
+# ── ADDED 2026-08-08 (gate G7, taking the measurement) ───────────────────────────────────────────
+# Three properties the suite above does not yet hold, each found by running the probe for real
+# against live accounts rather than by reading it.
+
+@test "a rig refusal indicts THE RIG (exit 7) and explicitly exonerates the classifier" {
+  # The live control's actual message, verbatim. The create path is interactive-only (§6.2) and the
+  # call is inside $( ), so this fires on EVERY account before quota is ever consulted.
+  capable_stub "Error: --cloud requires an interactive terminal. Non-interactive invocations (piped stdout, --init-only, --sdk-url) run locally and would silently ignore --cloud. Drop --cloud, or run from a TTY."
+  run bash "$P" --control --confirm
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"refused BEFORE the account was ever consulted"* ]]
+  [[ "$output" == *"Do NOT touch classify_outcome"* ]]
+  # The defect being pinned: it must NOT reach the arm that blames the classifier.
+  [[ "$output" != *"classifier WRONG"* ]]
+}
+
+@test "a rig refusal carrying a QUOTA WORD still classifies as rig, never as the ceiling" {
+  # The load-bearing ordering test. `is_harness_refusal` runs BEFORE the quota patterns, so a
+  # refusal that mentions both cannot be published as a wall. Without the ordering this classifies
+  # `refused-quota`, the control prints "VALIDATED", and a broken rig certifies itself — after which
+  # a ramp would report a ceiling of N for a wall that was our own call.
+  capable_stub "Error: --cloud requires an interactive terminal; your weekly limit reached is irrelevant here."
+  run bash "$P" --control --confirm
+  [ "$status" -eq 7 ]
+  [[ "$output" != *"VALIDATED"* ]]
+  [[ "$output" != *"CEILING"* ]]
+}
+
+@test "a rig refusal mid-ramp is its own verdict, distinct from a plain non-verdict" {
+  capable_stub "Error: Bundle upload failed: Socket is closed after 3 attempts. Please set up GitHub"
+  run bash "$P" --account acct-a --max 4 --confirm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"about HOW IT CALLED"* ]]
+  [[ "$output" != *"CEILING ="* ]]
+  run /usr/bin/grep -c '"verdict":"harness"' "$CLOUD_CEILING_LEDGER"
+  [ "$output" -eq 1 ]
+}
+
+@test "every ledger row is attributable to its run and cwd" {
+  # A ceiling is a COUNT OF ROWS in a SHARED file (~/.claude/autonomy/cloud/ceiling-probe.jsonl),
+  # and this box runs many sessions at once — observed live, a concurrent probe interleaving with
+  # this one mid-ramp. Unattributable rows do not merely lose provenance: two interleaved 2-create
+  # runs read exactly like one 4-create run, so the ledger can publish a doubled ceiling.
+  capable_stub "Created cloud session: session_01ABCdefGHIjklMNOpqrs"
+  CLOUD_CEILING_RUN_ID=RUN-A run bash "$P" --account acct-a --max 2 --confirm
+  [ "$status" -eq 0 ]
+  CLOUD_CEILING_RUN_ID=RUN-B run bash "$P" --account acct-a --max 1 --confirm
+  [ "$status" -eq 0 ]
+  run /usr/bin/grep -c '"kind":"attempt"' "$CLOUD_CEILING_LEDGER"
+  [ "$output" -eq 3 ]                       # positive control: all three really are in one file
+  run bash -c "jq -r 'select(.kind==\"attempt\" and .run==\"RUN-A\")|.n' '$CLOUD_CEILING_LEDGER' | wc -l | tr -d ' '"
+  [ "$output" -eq 2 ]                       # …and each run's own count is still recoverable
+  run bash -c "jq -r 'select(.kind==\"attempt\" and .run==\"RUN-B\")|.n' '$CLOUD_CEILING_LEDGER' | wc -l | tr -d ' '"
+  [ "$output" -eq 1 ]
+  run bash -c "jq -r 'select(.kind==\"attempt\")|.cwd' '$CLOUD_CEILING_LEDGER' | sort -u | wc -l | tr -d ' '"
+  [ "$output" -eq 1 ]                       # cwd is a live variable, not context — see §S5.2
+}
+
+@test "the create runs under a pty that needs no tty of its own" {
+  # scripts/lib/pty-run.py, not script(1): script calls tcgetattr on ITS OWN stdin and dies
+  # "Operation not supported on socket" from an agent call, cron, launchd or CI — i.e. everywhere a
+  # measurement rig actually runs. The stub reports what it sees, so this fails if the allocator
+  # ever silently stops being applied.
+  capable_stub ""
+  cat > "$D/fake-claude" <<'STUB'
+#!/bin/bash
+# --cloud ultrareview
+if [ -t 1 ]; then echo "Error: weekly limit reached (saw a TTY)"; else echo "Error: NO-TTY"; fi
+STUB
+  chmod +x "$D/fake-claude"
+  export CLOUD_CEILING_CLAUDE_BIN="$D/fake-claude"
+  run bash "$P" --control --confirm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"saw a TTY"* ]]
+  [[ "$output" != *"NO-TTY"* ]]
+}
