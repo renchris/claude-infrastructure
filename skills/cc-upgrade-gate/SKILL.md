@@ -54,7 +54,7 @@ scripts/cc-upgrade-gate.sh ~/.claude-219/node_modules/.bin/claude claude-opus-5 
 - Accounts are the auto-mode config names (`next` `next2` `next3` `next4`); `[0]` is primary. Pass
   the full sweep to prove entitlement across every account you'll actually run on.
 
-## THE 13 CHECKS
+## THE 14 CHECKS
 
 Each is one file `lib/cc-upgrade-gate/check*.sh` defining a `check_NN` — adding a probe is a new
 FILE, never an edit to the orchestrator (collision-free multi-author build).
@@ -74,10 +74,20 @@ FILE, never an edit to the orchestrator (collision-free multi-author build).
 | 11 | permission-nonblock | a benign command runs WITHOUT a permission wall in auto-mode (`permission_denials==[]`; 216/219 moved dangerous ops onto the classifier — benign must still pass). |
 | 12 | resume              | `cc-next` routes a resumable session to the `claude-next` eval-track launcher (the right binary track). |
 | 13 | mcp                 | session-connected MCP servers resolve on the candidate (`mcp list`, ≥1 `✔ Connected`); none configured ⇒ SKIP. |
+| 14 | authstore-writeloss ‡ | the way-of-working is STAYING LOGGED IN: reads (never executes) the candidate's credential-write path and reports whether the upstream write-loss window is `FIXED` / `STATUS-QUO` / `WORSE` / `UNREADABLE`. Backed by `scripts/cc-authstore-probe.sh`; the defect itself is `docs/research/vendor-report-cc-authstore-write-loss.md`. |
 
 † #7 / #8 / #9 are the spawn probes gated by `GATE_SPAWN` — they SKIP (not FAIL) when
 `GATE_SPAWN=0`, so a fast run's GREEN honestly reads "everything that ran passed", never a false
 all-clear.
+
+‡ #14 is the one check whose *ordinary* answer is SKIP, deliberately. The defect is upstream and we
+cannot fix it, so a candidate that merely matches the binary we already run is not a regression and
+must not park an upgrade — an alarm that fired on every candidate forever would carry no
+information. It goes **FAIL** only on a real change for the worse: the plaintext fallback removed
+(`WORSE`), or the credential-storage layer no longer introspectable (`UNREADABLE`, fail-closed —
+every auth-health compensation we run assumes that layer's shape). **PASS is the news**: it means
+the vendor closed the window, so close backlog `4adbeab56aa7` and revisit the compensations in
+`f8178bfe`.
 
 ## POLICY — the decision tree
 
