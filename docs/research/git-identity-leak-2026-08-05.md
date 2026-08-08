@@ -636,3 +636,131 @@ them apart — which is the reconciliation section's own closing point, now with
 Filed, not fired: retiring `fix/gi-corpus` (its content is fully landed, so the ref holds nothing)
 or reverting the inert guards is a separate destructive call on a peer's branch, outside this item's
 frozen scope.
+
+---
+
+# 2026-08-08 — the leak was closed; its EFFECT ran for three more days
+
+Everything above is about the WRITE side: which lines of source could emit a stray identity, and
+which agent-typed one-liner did. Both halves shipped and both hold. This section is about the fact
+that none of it mattered to the operator, because on 2026-08-08 the observable complaint was still
+*"our commits come across as `t` instead of `renchris`"* — and it was still true.
+
+## What was actually wrong on 2026-08-08
+
+`claude-infrastructure/.git/config` still carried the poison, three days after the leak was
+root-caused:
+
+```
+[user]
+	email = t@e.com
+	name = t
+```
+
+Effective identity `t <t@e.com>`, beating the correct global `Chris Ren <ren.chris@outlook.com>`.
+Because ~200 linked worktrees share one `.git/config`, that was the identity of **every** session,
+subagent, handoff session and account on the machine.
+
+Attribution measured against the GitHub API rather than assumed — the point of the leak is that
+GitHub cannot resolve these to an account, so the API is the only oracle that answers the operator's
+actual question:
+
+| author email | commits | `repos/renchris/claude-infrastructure/commits/<sha>.author.login` |
+|---|---:|---|
+| `ren.chris@outlook.com` | 7747 | **`renchris`** |
+| `t@e.com` | 651 | UNATTRIBUTED |
+| `t@t` | 56 | UNATTRIBUTED |
+| `ren.chris+claude@outlook.com` | 18 | UNATTRIBUTED |
+| `ichris96+claude@hotmail.com` | 7 | UNATTRIBUTED |
+| `chris.claudecode@outlook.com` | 2 | UNATTRIBUTED |
+
+Two things fall out of that table, and the second is the one that shapes the fix:
+
+1. **76 of 2020 commits on `origin/main`** are unattributable, all inside 2026-08-05..08 — the
+   leak's exact lifetime. 710 across all refs.
+2. **The sanctioned set is an allowlist of ONE.** The three `+claude` variants are just as
+   unattributed as `t`. A guard written as a denylist of known-bad spellings would have passed all
+   three (memory: `denylist-enumerates-spellings-not-the-class`).
+
+## Why the 2026-08-05 fixes could not have caught this
+
+Both shipped defences answer *"did someone just try to write a bad identity?"*:
+
+* `scripts/git-identity-lint.sh` — a corpus ratchet over source.
+* the `validate-bash.sh` PreToolUse rule — the agent-typed one-liner half.
+
+Neither answers *"is a bad identity currently in force?"*, and neither stands between a wrong
+identity and a commit. So a value that escaped **before** they landed was invisible to both,
+permanently. A write-side defence has a blind spot exactly the width of its own deployment date,
+and nothing in the tree emitted the observable that would have closed it: *the effective author in
+a real repo is not the operator*.
+
+This is the same shape as `conclusion-must-reach-the-enforcing-store` — the enforcing store for an
+identity is not a lint's verdict, it is `.git/config` and the commit object.
+
+## The fix: a brake at the commit, plus the missing sensor
+
+`githooks/pre-commit` refuses a commit whose author GitHub could not attribute.
+
+**Why `git var GIT_AUTHOR_IDENT` and not `git config user.email`.** The effective author has five
+inputs. Measured against this hook shape on git 2.54.0:
+
+| identity path | caught by a config read | caught by `git var` |
+|---|---|---|
+| local `.git/config` (the 2026-08-05 fault) | ✓ | ✓ |
+| `~/.gitconfig` | ✓ | ✓ |
+| `GIT_AUTHOR_EMAIL=… git commit` | ✗ | ✓ |
+| `git -c user.email=… commit` | ✗ | ✓ |
+| `git commit --author="X <y>"` | ✗ | ✓ |
+
+`--author` is caught because git resolves it *before* running the hook and exports it into the hook
+environment. A config-reading guard would have covered two of five and read green on the rest;
+`tests/git-identity-guard.bats` tests 6–8 are the arms that discriminate the two designs.
+
+**Scope is the remote, not the machine.** The hook fires only where a remote points at
+`github.com/<owner>`. That is load-bearing in both directions: the /Users/chrisren/.claude/bin/cc-bats corpus creates hundreds of
+fixture repos that commit as `t` on purpose and none has such a remote, so the gate is inert across
+the whole suite; and a deliberate per-repo identity stays legal, which a machine-wide rule would
+have broken. The first sweep proved that second half immediately by convicting
+`renchris/pivot-table-library`, which commits as `contributors@pivot-table.dev` on purpose — hence
+the per-repo `cc.identity.exempt` marker, which must carry a reason and is counted in every sweep.
+
+`scripts/git-identity-assert.sh` is the sensor that did not exist: `check` / `repair` / `install` /
+`sweep` over every repo on the machine, delegating its verdict to the installed hook so a sweep and
+a gate can never disagree (memory: `make-the-actuator-the-arbiter`). `repair` only ever *removes* a
+local override shadowing a correct global; it never invents an identity, and a wrong global is
+reported as `NEEDS-HUMAN` rather than guessed at.
+
+**First sweep, 2026-08-08:** 90 in-scope repos, 1 wrong (the deliberate one above), **85 with no
+pre-commit hook at all**. The sweep counts `unprotected` as a failure, because "correct right now"
+is precisely the state that read green for three days while 710 commits went out unattributable.
+
+## The third thing this exposed: git hooks were outside the deploy lane
+
+`.git/hooks/commit-msg` existed as two byte-identical hand-placed copies — this repo's hooks dir and
+`~/.git-template/hooks` — that **no install path owned, no test covered, and nothing tracked**.
+`install.sh` deploys `hooks/*.sh`, `hooks/*.py`, `lib/*`, skills, commands and agents; it had no leg
+for git hooks, so the one guard already standing was one `rm` from gone on the only machine it
+existed on. `githooks/` is now tracked and `install.sh` deploys it: symlink into the shared
+`.git/hooks` (one link covers all worktrees), real copies into `~/.git-template/hooks` (a template
+is consumed where this checkout may not exist, and a dangling symlink is a silently absent hook).
+
+## Still open — the operator's call, not the agent's
+
+The 76 unattributable commits already on `origin/main` cannot be re-attributed without rewriting
+history and force-pushing the trunk of the repo that is the live symlink source for `~/.claude`,
+with ~200 linked worktrees pointing at it. `.mailmap` does **not** change GitHub's commit-list
+attribution. That trade is filed, not fired.
+
+## A stated limit of the brake: `git commit-tree` does not run hooks
+
+Three sites build commits with plumbing rather than `git commit` — `bin/cc-respawn:92`,
+`scripts/lead-deathwatch.sh:71`, `hooks/teammate-checkpoint.sh:267` — and `commit-tree` runs no
+`pre-commit`. They are therefore outside the gate, by construction, and no hook can cover them.
+
+This is deliberately not fixed, because it cannot reach the operator's problem: all three write to
+local-only checkpoint refs (`refs/respawn/*`, `refs/deathwatch/*`, `refs/checkpoints/*`), and
+`git ls-remote --heads origin` carries exactly **one** ref, `main`, with zero remote tags. Those
+commits are the bulk of the 572 checkpoint/wip-only mis-authored objects in the census — invisible
+to GitHub, and garbage-collected with their refs. Recorded so a later reader does not mistake the
+gate for universal: it covers `git commit`, which is every path that can reach a pushed branch.

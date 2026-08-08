@@ -772,17 +772,49 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
 # current value. Restoring as well is strictly better than either alone: the repo comes back AND the
 # run goes red, so the cause still gets found.
 #
+# 🚨 RESTORE-TO-SNAPSHOT WAS THE RECURRENCE ENGINE (fixed 2026-08-08). "Restore the run-start value"
+# is only a repair if the run-start value was RIGHT. It was not. A sweep that begins while
+# .git/config already holds `user.email=t@e.com` snapshots the poison, and at the end faithfully
+# writes it back — so the guard built to undo a corpus leak instead PINNED it, re-applying it after
+# every clean-up, for as long as sweeps kept running. Measured: pid 27946 snapshotted the poison at
+# 01:40 on 2026-08-08, a human unset it at 02:13, and the sweep would have restored it at ~04:40.
+# That is why the 2026-08-05 fix "landed" and the operator still saw `t` on GitHub three days later.
+#
+# The repair now restores the snapshot ONLY when the snapshot is itself acceptable — absent, or the
+# sanctioned identity. A poisoned snapshot is DROPPED rather than re-applied, which is always safe
+# here because the correct identity lives in the global config and an absent local override simply
+# lets it through. Either way the run still goes RED, so the leak is still found: this narrows what
+# the guard WRITES, never what it REPORTS.
+#
 # Side-car discipline (memory: addon-failure-exceeds-its-blast-radius): this may never fail wider than
 # itself. Every git call is best-effort, an unreadable snapshot means "cannot judge" and stays silent
 # rather than fabricating a red, and only a genuine non-empty DIFFERENCE convicts.
 identity_snapshot() { git -C "$REPO" config --local --get-regexp '^user\.' 2>/dev/null | sort || true; }
-identity_assert() {  # compare against $IDENTITY_SNAP, restore it, and convict on any change
+# A snapshot is restorable iff it cannot itself mis-author a commit: no local override at all, or one
+# whose email is the sanctioned address. Anything else is the fault, not the baseline.
+identity_snap_ok() {
+  local snap="$1" want="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}" em
+  [ -z "$snap" ] && return 0
+  em="$(printf '%s\n' "$snap" | awk '$1=="user.email"{print $2; exit}')"
+  [ "$em" = "$want" ]
+}
+identity_assert() {  # compare against $IDENTITY_SNAP, restore it if SAFE, and convict on any change
   local now line k v
   [ -n "${IDENTITY_SNAP+set}" ] || return 0        # never snapshotted ⇒ nothing to compare against
   now="$(identity_snapshot)"
   [ "$now" = "$IDENTITY_SNAP" ] && return 0
   log "IDENTITY LEAK: the corpus mutated $REPO local [user] during this run — was [${IDENTITY_SNAP:-absent}] now [${now:-absent}]"
   git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
+  if ! identity_snap_ok "$IDENTITY_SNAP"; then
+    # The baseline was already poisoned. Dropping it hands the repo back to the global SSOT, which is
+    # the state a human would have to restore by hand anyway. Say so loudly — a silent divergence
+    # from "restored" is exactly the shape that hid this for three days.
+    log "IDENTITY LEAK: run-start value [${IDENTITY_SNAP}] was ITSELF unsanctioned — DROPPED, not restored; $REPO now falls through to the global identity"
+    FAILING+=("shared-config-identity")
+    FAILNAME+=("$REPO started this run with an unsanctioned git identity: ${IDENTITY_SNAP}")
+    [ -n "$FAILTEST" ] || FAILTEST="$REPO started this run with an unsanctioned git identity"
+    return 0
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     k="${line%% *}"; v="${line#* }"

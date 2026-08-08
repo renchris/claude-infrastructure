@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# pre-commit — refuse a commit that would be authored by anyone but the operator.
+#
+# WHY THIS EXISTS. On 2026-08-05 a test fixture's identity write escaped into this repo's
+# .git/config (`git -C "" config user.email t@e.com` — a documented NO-OP that writes to the
+# CURRENT repo). The override `user.name=t / user.email=t@e.com` then shadowed the correct global
+# identity for THREE DAYS. Because ~100 linked worktrees share one .git/config, every session,
+# subagent, handoff session and account on the machine committed as `t <t@e.com>`, which GitHub
+# cannot attribute to any account: 76 commits on origin/main and 710 across all refs render as a
+# grey unattributed `t` instead of `renchris`. Measured 2026-08-08.
+#
+# WHY THE 2026-08-05 FIX DID NOT HOLD. That round shipped scripts/git-identity-lint.sh (a corpus
+# ratchet) and a PreToolUse guard in hooks/validate-bash.sh (the agent-typed half). Both are
+# WRITE-side: they stop new leaky code and new leaky one-liners. Neither could see the wrong
+# identity ALREADY sitting in .git/config, and neither stood between a wrong identity and a
+# commit. The leak was closed; its EFFECT had no sensor and no brake. This hook is the brake.
+#
+# WHY `git var GIT_AUTHOR_IDENT` AND NOT `git config user.email`. A config read sees only the
+# config layers. The effective author has five inputs, and all five were measured against this
+# hook shape on git 2.54.0 (scratchpad probe, 2026-08-08):
+#     local .git/config  ✓ caught      GIT_AUTHOR_EMAIL=… git commit   ✓ caught
+#     ~/.gitconfig       ✓ caught      git -c user.email=… commit      ✓ caught
+#     git commit --author="X <y>"      ✓ caught — git resolves --author BEFORE running us and
+#                                        exports it into the hook environment, so it is visible.
+# Reading config would catch two of five and read GREEN on the other three. `git var` is the
+# arbiter git itself will use, so this hook cannot disagree with the commit it is gating.
+#
+# SCOPE — this fires ONLY where the identity is publicly consequential: a repo with a remote on
+# github.com/<OWNER>. That is deliberate and load-bearing in two directions:
+#   * The bats corpus creates hundreds of fixture repos that commit as `t` ON PURPOSE. None of
+#     them has such a remote (verified: no `remote add` in tests/ names github.com), so this hook
+#     is inert across the whole suite and cannot turn it red.
+#   * A deliberate per-repo identity stays legal. shadcn-pivot-data-table-example commits as
+#     `Chris Ren <contributors@pivot-table.dev>` by design; it is not the operator's repo, so this
+#     hook never looks at it. A machine-wide "must be ren.chris@outlook.com" rule would be WRONG
+#     there — which is exactly why the predicate is the remote and not the machine.
+#
+# WHY ONE ADDRESS AND NOT A FAMILY. Measured against the GitHub API on 2026-08-08, of the six
+# author emails in this repo's history exactly ONE resolves to the account `renchris`:
+#     ren.chris@outlook.com          -> renchris        (7747 commits)
+#     t@e.com · t@t                  -> UNATTRIBUTED    (651 · 56)
+#     ren.chris+claude@outlook.com   -> UNATTRIBUTED    (18)
+#     ichris96+claude@hotmail.com    -> UNATTRIBUTED    (7)
+#     chris.claudecode@outlook.com   -> UNATTRIBUTED    (2)
+# So the sanctioned set is an ALLOWLIST OF ONE, not a denylist of known-bad spellings. A denylist
+# would have passed all three `+claude` variants, which are just as unattributed as `t` — the
+# failure this tree has hit before (memory: denylist-enumerates-spellings-not-the-class).
+# That mapping is a PERISHABLE FACT about a live account, so it is re-measurable rather than
+# merely asserted: `scripts/git-identity-assert.sh verify-attribution` re-derives it from the API.
+#
+# Never bypass with --no-verify. If this fires, the identity is genuinely wrong and every commit
+# you make until you fix it is unattributable. The cure is one command and it is printed for you.
+#
+# Exit: 0 = allowed (correct identity, or out of scope) · 1 = refused.
+# Entry points: as a git hook (no args), or `pre-commit --check [<repo>]` for the sweep in
+# scripts/git-identity-assert.sh — ONE predicate, two callers, so a sweep can never disagree
+# with the gate (memory: make-the-actuator-the-arbiter).
+set -uo pipefail
+
+WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}"
+WANT_OWNER="${CC_GIT_IDENTITY_OWNER:-renchris}"
+
+MODE=hook
+REPO=""
+if [ "${1:-}" = "--check" ]; then MODE=check; REPO="${2:-}"; fi
+
+git_() { if [ -n "$REPO" ]; then git -C "$REPO" "$@"; else git "$@"; fi; }
+
+# ── Scope: is this one of the owner's own GitHub repos? ───────────────────────────────────────
+# Matches both URL forms git uses: https://github.com/OWNER/… and git@github.com:OWNER/….
+# A repo with no remote (every bats fixture) falls through and is never gated.
+in_scope=1
+while IFS= read -r url; do
+  case "$url" in
+    *github.com/"$WANT_OWNER"/*|*github.com:"$WANT_OWNER"/*) in_scope=0; break ;;
+  esac
+done <<EOF
+$(git_ remote -v 2>/dev/null | awk '{print $2}')
+EOF
+
+if [ "$in_scope" -ne 0 ]; then
+  [ "$MODE" = check ] && echo "n/a  (no github.com/$WANT_OWNER remote — out of scope)"
+  exit 0
+fi
+
+# ── Deliberate per-repo identity: an EXEMPTION, recorded rather than assumed ───────────────────
+# The remote test says "this repo is the owner's", which is not the same as "this repo must use
+# the owner's default address". A fork of an upstream project can sit under github.com/<OWNER>
+# and still owe its commits a project address: shadcn-pivot-data-table-example commits as
+# `contributors@pivot-table.dev` on purpose, and the first sweep convicted it. Widening the
+# allowlist to admit it would admit every address, so the exemption is per-repo and must carry a
+# REASON, which makes it a decision on the record instead of a silent hole:
+#
+#     git config --local cc.identity.exempt "upstream project requires contributors@pivot-table.dev"
+#
+# This cannot launder the fault it guards against: the 2026-08-05 leak was a stray fixture write
+# of `t@e.com`, and a stray write never also writes a reason. Exemptions are COUNTED in every
+# sweep, never silent, so a hole cannot be opened and then forgotten.
+exempt="$(git_ config --local --get cc.identity.exempt 2>/dev/null)"
+if [ -n "$exempt" ]; then
+  [ "$MODE" = check ] && echo "exempt  $exempt"
+  exit 0
+fi
+
+# ── The effective identity git will actually stamp on this commit ─────────────────────────────
+ident="$(git_ var GIT_AUTHOR_IDENT 2>/dev/null)"
+if [ -z "$ident" ]; then
+  echo "pre-commit: BLOCKED — cannot resolve the author identity at all." >&2
+  echo "  \`git var GIT_AUTHOR_IDENT\` returned nothing. Refusing rather than guessing." >&2
+  exit 1
+fi
+# "Name <email> <ts> <tz>" -> email
+email="${ident##*<}"; email="${email%%>*}"
+
+if [ "$email" = "$WANT_EMAIL" ]; then
+  [ "$MODE" = check ] && echo "ok   $ident"
+  exit 0
+fi
+
+# ── Refuse, and hand back a cure this same gate will ACCEPT ───────────────────────────────────
+# The cure is chosen by WHERE the wrong value lives, because the wrong fix is a no-op that reads
+# as a fix: unsetting a local override that does not exist leaves a wrong global untouched, and
+# the next commit is refused identically (memory: work-item-remedy-can-become-forbidden).
+local_email="$(git_ config --local --get user.email 2>/dev/null)"
+if [ -n "${GIT_AUTHOR_EMAIL:-}" ] && [ "${GIT_AUTHOR_EMAIL:-}" != "$WANT_EMAIL" ]; then
+  cure="unset GIT_AUTHOR_EMAIL GIT_AUTHOR_NAME   # the identity is coming from the ENVIRONMENT"
+elif [ -n "$local_email" ] && [ "$local_email" != "$WANT_EMAIL" ]; then
+  cure="git config --local --remove-section user   # drop the local override shadowing your global"
+else
+  cure="git config --global user.email $WANT_EMAIL"
+fi
+
+if [ "$MODE" = check ]; then
+  echo "WRONG  $ident"
+  echo "       cure: $cure"
+  exit 1
+fi
+
+{
+  echo "pre-commit: BLOCKED — this commit would be authored by someone GitHub cannot attribute."
+  echo
+  echo "    would commit as : $email"
+  echo "    must commit as  : $WANT_EMAIL   (the only address that resolves to @$WANT_OWNER)"
+  echo
+  echo "  Run this, then commit again:"
+  echo
+  echo "      $cure"
+  echo
+  echo "  Do NOT use --no-verify. A commit authored by anything else renders on GitHub as an"
+  echo "  unattributed grey user forever — it cannot be fixed after the fact without a history"
+  echo "  rewrite. This is the 2026-08-05 leak; see docs/research/git-identity-leak-2026-08-05.md."
+} >&2
+exit 1
