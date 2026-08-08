@@ -14,8 +14,11 @@
 // BOTH GitHub color modes. Output is deterministic (zero-DOM, bundled font metrics),
 // which is what makes the --check byte-equality guard sound.
 //
-// NOT generated here: assets/diagrams/handoff-choreography.svg is hand-authored
-// (CSS-animated; motion is the fact it carries) and has no .mmd source.
+// NOT generated here: assets/diagrams/convergence-timeline-{dark,light}.svg are built by
+// tools/timeline/gen.py (`npm run timeline`) — a hand-authored, CSS-animated two-lane timeline
+// that mermaid has no primitive for. This script only ever touches *.mmd-derived outputs, so
+// --check neither sees nor reports them; `npm run timeline:check` is their staleness guard.
+// (The name previously carried here, handoff-choreography.svg, has never existed in this tree.)
 import { renderMermaidSVG, THEMES } from 'beautiful-mermaid'
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

@@ -5,7 +5,9 @@
   "description": "Diagram render pipeline only — this repo is shell/markdown; node is used solely to pre-render assets/diagrams/*.mmd through beautiful-mermaid for GitHub.",
   "scripts": {
     "diagrams": "node scripts/render-diagrams.mjs",
-    "diagrams:check": "node scripts/render-diagrams.mjs --check"
+    "diagrams:check": "node scripts/render-diagrams.mjs --check",
+    "timeline": "python3 tools/timeline/gen.py",
+    "timeline:check": "python3 tools/timeline/gen.py --check"
   },
   "devDependencies": {
     "beautiful-mermaid": "1.1.3"
