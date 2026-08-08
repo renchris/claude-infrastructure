@@ -130,7 +130,27 @@ report "I told session X", off-box you cannot; you can only report that it was q
 
 ## 4 · See a session
 
-<!-- WAVE-D: exact command filled in when the off-box rendering lands -->
+**List every session, local and off-box together:**
+
+```
+cc-sessions
+```
+
+Off-box rows carry `kind=offbox`, and they come from `cc-cloud`, never from the pane registry — the
+registry cannot represent a session with no local pid, which is what made it one of the three liars
+in the first place. Narrow to just the cloud ones with `cc-sessions --offbox` (composes with
+`--json` and `--names`).
+
+**Find one you have lost:**
+
+```
+cc-where <name-or-id>
+```
+
+For an off-box session this answers instead of reporting absence: it says the session is on **no
+screen, by construction**, gives its state, and prints the one action that exists —
+`open <url>`. §9.3 of the design doc called this tool `cc-panes`, which has never existed; the doc
+now records what was actually built.
 
 Three rules the views obey, so you can read them correctly:
 
