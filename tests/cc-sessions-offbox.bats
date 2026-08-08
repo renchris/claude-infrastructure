@@ -55,12 +55,21 @@ setup() {
 
   bare() { git init -q --bare "$D/$1.git" >/dev/null 2>&1; printf '%s' "$D/$1.git"; }
 
-  # A live LOCAL row: the pid is this bats process, so `kill -0` succeeds for real.
+  # A live LOCAL row: the pid is this bats process, so `kill -0` succeeds for real. `startedAt` is
+  # real-clock relative because cc-sessions has no clock seam — its AGE column is computed from
+  # `date +%s` at read time, which is why the control below normalises that ONE column instead of
+  # comparing it (see there).
   local_row() { # $1=name $2=uuid
     cat > "$CC_REGISTRY_DIR/$2.json" <<EOF
-{"paneUUID":"$2","name":"$1","account":"next","pid":$$,"startedAt":1999999000000,"cwd":"/w/local"}
+{"paneUUID":"$2","name":"$1","account":"next","pid":$$,"startedAt":$(( ($(date +%s) - 7200) * 1000 )),"cwd":"/w/local"}
 EOF
   }
+
+  # The AGE cell, and only it. cc-sessions derives it from the wall clock at read time, so two
+  # invocations one second apart legitimately disagree — this suite watched that happen. Blanking
+  # it keeps the byte-comparison honest about what it is testing (row set and shape); the FORMAT it
+  # blanks is pinned separately, off a SINGLE run, where no straddle is possible.
+  norm_age() { sed -E 's/ [0-9]+[smhd] / AGE /g'; }
 
   # The OFF-BOX block only — everything after the blank line that follows the local table.
   # shellcheck disable=SC2120  # the "$@" pass-through is deliberate: every current caller wants the
@@ -184,11 +193,18 @@ EOF
   local_row local-one AAAA-1111-BBBB-2222
   local_row local-two CCCC-3333-DDDD-4444
 
+  # FORMAT PIN, off a single run: every cell of a local row is exactly as it was, AGE included. This
+  # is what lets the comparison below normalise that one column without losing coverage of it.
+  run "$SESSIONS"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qE '^local-one +AAAA-1111-BBBB-2222 +next +[0-9]+[smhd] +/w/local$' || false
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 3 ]
+
   for mode in "" "--json" "--names" "--all"; do
     # shellcheck disable=SC2086
-    with="$("$SESSIONS" $mode)"
+    with="$("$SESSIONS" $mode | norm_age)"
     # shellcheck disable=SC2086
-    without="$(CC_CLOUD_BIN="$D/there-is-no-cc-cloud" "$SESSIONS" $mode)"
+    without="$(CC_CLOUD_BIN="$D/there-is-no-cc-cloud" "$SESSIONS" $mode | norm_age)"
     [ "$with" = "$without" ] || { echo "mode '$mode' DIFFERS:"; diff <(printf '%s\n' "$without") <(printf '%s\n' "$with"); false; }
   done
 
@@ -196,8 +212,8 @@ EOF
   # declared. Otherwise a lister that ignored cc-cloud entirely would pass this test.
   r="$(bare rem)"
   "$CLOUD" declare --id sess_new --branch feat/a --remote "$r" --repo "" >/dev/null 2>&1
-  with="$("$SESSIONS")"
-  without="$(CC_CLOUD_BIN="$D/there-is-no-cc-cloud" "$SESSIONS")"
+  with="$("$SESSIONS" | norm_age)"
+  without="$(CC_CLOUD_BIN="$D/there-is-no-cc-cloud" "$SESSIONS" | norm_age)"
   ! [ "$with" = "$without" ] || { echo "table did NOT change when a session was declared"; false; }
   printf '%s\n' "$with" | grep -q 'sess_new' || false
 }
