@@ -288,6 +288,92 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   jq -rs '.[0].reason' "$CC_REAPER_IDL" | grep -q 'attempt'
 }
 
+# ── the SAME cycle across an ADVANCING clock ────────────────────────────────────────────────
+#
+# Every test above drives repeated ticks with CC_RELOGIN_POLL_NOW FROZEN, which is the one
+# condition production never has. On the login-status leg the deadline is DERIVED as NOW +
+# hours_secs(<fmt_h text>), so a moving clock moves $DL on every tick — and the state was keyed
+# on $DL by exact match. Production consequence, measured 2026-07-30/31: all six ATTEMPT lines
+# in ~/.claude/logs/cc-relogin-poll.log read `#1`, the MAX_ATTEMPTS arm was unreachable, and the
+# class-C row raised for `next` said "no k==0 window caught in 0 attempt(s)" after four attempts.
+# These tests advance the clock the way the real hourly job does.
+
+@test "advancing clock: attempts accumulate across ticks (the deadline only LOOKS moved)" {
+  mk next3 100 0
+  build ls                             # the leg production actually uses (detection=login-status)
+  echo 1 > "$D/relogin.rc"
+  run "$P"; [ "$status" -eq 0 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 3600))
+  run "$P"; [ "$status" -eq 0 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 7200))
+  run "$P"; [ "$status" -eq 0 ]
+  [ "$(attempts next3)" -eq 3 ]        # pristine: 1 — every tick reset the counter
+  [ "$(ncalls)" -eq 3 ]
+  grep -q 'ATTEMPT #3 next3' "$CC_RELOGIN_POLL_LOG"
+}
+
+@test "advancing clock: the attempt cap is REACHABLE (pristine: unreachable by construction)" {
+  mk next3 100 0                       # far outside the T-48h escalate window
+  build ls
+  echo 1 > "$D/relogin.rc"
+  export CC_RELOGIN_POLL_MAX_ATTEMPTS=2
+  run "$P"; [ "$status" -eq 0 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 3600))
+  run "$P"; [ "$status" -eq 0 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 7200))
+  run "$P"; [ "$status" -eq 5 ]        # cap tripped — pristine never gets here, S_ATT caps at 1
+  [ "$(nrows)" -eq 1 ]
+  jq -rs '.[0].reason' "$CC_REAPER_IDL" | grep -q 'cap 2'
+}
+
+@test "advancing clock: escalation is deduped — one row per CYCLE, not one per tick" {
+  mk next3 20 0                        # inside T-48h → escalates on every tick
+  build ls
+  echo 1 > "$D/relogin.rc"
+  run "$P"; [ "$status" -eq 5 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 3600))
+  run "$P"; [ "$status" -eq 5 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 7200))
+  run "$P"; [ "$status" -eq 5 ]
+  [ "$(nrows)" -eq 1 ]                 # pristine: 3 — next2 was really paged twice in two hours
+  grep -q 'ESCALATED(already)' "$CC_RELOGIN_POLL_LOG"
+}
+
+@test "the escalation reason no longer claims 0 attempts after attempts were made" {
+  mk next3 20 0
+  build ls
+  echo 1 > "$D/relogin.rc"
+  run "$P"; [ "$status" -eq 5 ]        # tick 1 escalates with a genuine 0 attempts so far
+  reason="$(jq -rs '.[0].reason' "$CC_REAPER_IDL")"
+  # Pure string matching: no pipe to invert under pipefail, no bare `!` to go dead.
+  [[ "$reason" == *"no k==0 window caught yet"* ]] || false
+  [[ "$reason" != *"in 0 attempt"* ]]   # the phrasing that lied on the real 2026-07-31 board row
+}
+
+@test "a deadline moving MORE than the tolerance still starts a fresh cycle" {
+  mk next3 100 0
+  build ls
+  echo 1 > "$D/relogin.rc"
+  run "$P"; [ "$status" -eq 0 ]
+  [ "$(attempts next3)" -eq 1 ]
+  : > "$D/fixture"                     # mk APPENDS — without this the old row wins on nearest-first
+  mk next3 150 0; build ls             # +50h — a real move, well past the 12h tolerance
+  export CC_RELOGIN_POLL_NOW=$((NOW + 3600))
+  run "$P"; [ "$status" -eq 0 ]
+  [ "$(attempts next3)" -eq 1 ]        # counter reset: cycle detection is preserved, not disabled
+}
+
+@test "kill switch: DEADLINE_EPSILON_H=0 restores exact matching (per-tick reset)" {
+  mk next3 100 0
+  build ls
+  echo 1 > "$D/relogin.rc"
+  export CC_RELOGIN_POLL_DEADLINE_EPSILON_H=0
+  run "$P"; [ "$status" -eq 0 ]
+  export CC_RELOGIN_POLL_NOW=$((NOW + 3600))
+  run "$P"; [ "$status" -eq 0 ]
+  [ "$(attempts next3)" -eq 1 ]        # the pre-fix behaviour, on demand
+}
+
 @test "child stdout+stderr land in the poll log" {
   mk next3 100 0
   build json

@@ -46,7 +46,8 @@
 #
 # Env (test injection): CC_RELOGIN_POLL_LOG · CC_RELOGIN_POLL_STATE_DIR · CC_REAPER_IDL ·
 # CC_RELOGIN_POLL_ACCOUNTS_BIN · CC_RELOGIN_POLL_RELOGIN_BIN · CC_RELOGIN_POLL_NOW (fixed clock) ·
-# CC_RELOGIN_POLL_MAX_ATTEMPTS (24) · CC_RELOGIN_POLL_TIMEOUT_S (900, child watchdog).
+# CC_RELOGIN_POLL_MAX_ATTEMPTS (24) · CC_RELOGIN_POLL_TIMEOUT_S (900, child watchdog) ·
+# CC_RELOGIN_POLL_DEADLINE_EPSILON_H (12, same-cycle tolerance; 0 = exact match).
 set -uo pipefail
 
 JSON=0 DRYRUN=0 TRIG_DAYS=7 ESC_HOURS=48
@@ -70,6 +71,31 @@ ACCOUNTS_BIN="${CC_RELOGIN_POLL_ACCOUNTS_BIN:-claude-accounts}"
 RELOGIN_BIN="${CC_RELOGIN_POLL_RELOGIN_BIN:-cc-relogin}"
 MAX_ATTEMPTS="${CC_RELOGIN_POLL_MAX_ATTEMPTS:-24}"
 TIMEOUT_S="${CC_RELOGIN_POLL_TIMEOUT_S:-900}"
+EPS_H="${CC_RELOGIN_POLL_DEADLINE_EPSILON_H:-12}"
+case "$EPS_H" in ''|*[!0-9]*) echo "cc-relogin-poll: CC_RELOGIN_POLL_DEADLINE_EPSILON_H needs a non-negative integer" >&2; exit 1 ;; esac
+
+# Do two deadlines name the SAME login cycle? Not a rounding nicety — the state key.
+#
+# $DL is DERIVED as NOW + <remaining>, and <remaining> arrives as claude-accounts' fmt_h() TEXT,
+# quantized to 0.1d (~±1.2h — remainder R-6). NOW advances ~3600s per tick, so $DL can only repeat
+# across two ticks if <remaining> falls by exactly 3600s, which coarse text cannot do. Keying state
+# on `!=` therefore read "the deadline moved → fresh cycle" on essentially EVERY tick. Observed on
+# one account over four hours: 19:55:31 → 20:55:48 → 19:31:50 → 20:35:35 → 19:12:27 → 20:21:49.
+#
+# Three consequences, all measured: attempts never accumulated (all six ATTEMPT lines in the
+# production log read `#1`); the MAX_ATTEMPTS arm below was therefore UNREACHABLE; and the class-C
+# row raised for `next` on 2026-07-31T20:47:13Z told the operator "no k==0 window caught in 0
+# attempt(s)" after FOUR attempts. On the REQUIRED path $DL is NOW itself, so dedup was
+# structurally impossible and next2 was paged twice in two hours.
+#
+# The two populations do not overlap: jitter ≤ ~2.4h between adjacent ticks, a real re-grant moves
+# the wall 26.1-30.0d (C1). 12h is 5x the former and 52x under the latter. 0 restores exact match.
+same_cycle() {  # <a_epoch> <b_epoch> — success when both are set and within EPS_H of each other
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  case "$1$2" in *[!0-9]*) return 1 ;; esac
+  d=$(( $1 - $2 )); [ "$d" -lt 0 ] && d=$(( 0 - d ))
+  [ "$d" -le $(( EPS_H * 3600 )) ]
+}
 
 # Tab is IFS *whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs into one delimiter: an
 # EMPTY field silently shifts every later field left (a launcher landing in `k` reads as "account
@@ -254,7 +280,7 @@ if [ -f "$SFILE" ]; then
   S_DL="$(dash "$S_DL")"; S_ESC="$(dash "$S_ESC")"
 fi
 case "${S_ATT:-}" in ''|*[!0-9]*) S_ATT=0 ;; esac
-if [ "$S_DL" != "$DL" ]; then S_ATT=0; S_ESC=""; fi   # deadline moved (or first sighting) → fresh cycle
+same_cycle "$S_DL" "$DL" || { S_ATT=0; S_ESC=""; }    # genuinely moved (or first sighting) → fresh cycle
 write_state() { # <attempts> <escalated_for> <result>
   mkdir -p "$STATE_DIR" 2>/dev/null || { echo "cc-relogin-poll: cannot create state dir $STATE_DIR" >&2; exit 1; }
   jq -nc --arg dl "$DL" --argjson att "$1" --arg esc "$2" --arg res "$3" --arg ts "$(utc)" \
@@ -266,7 +292,15 @@ write_state() { # <attempts> <escalated_for> <result>
 RECOVER_CMD="cc-relogin $ACCT"
 ESC_NOW=0; ESC_REASON=""
 if [ "$SECS_LEFT" -le $((ESC_HOURS * 3600)) ]; then
-  ESC_NOW=1; ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and no k==0 window caught in $S_ATT attempt(s)"
+  # Say which of the two it is. The old text hardcoded the no-window story and read the count off a
+  # state that reset every tick, so the real 2026-07-31 board row claimed "no k==0 window caught in
+  # 0 attempt(s)" after four attempts — three of which reached cc-relogin.
+  ESC_NOW=1
+  if [ "$S_ATT" -eq 0 ]; then
+    ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and no k==0 window caught yet — every tick so far found live sessions"
+  else
+    ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and $S_ATT attempt(s) against it have not renewed it"
+  fi
 elif [ "$S_ATT" -ge "$MAX_ATTEMPTS" ]; then
   ESC_NOW=1; ESC_REASON="$S_ATT attempt(s) against deadline $DL_ISO all failed (cap $MAX_ATTEMPTS) — re-login is not self-healing"
 fi
@@ -275,8 +309,11 @@ if [ "$ESC_NOW" = 1 ]; then
   ESCALATED=1
   if [ "$DRYRUN" = 1 ]; then
     log "DRY-RUN would raise relogin-blocked for $ACCT: $ESC_REASON (recover: $RECOVER_CMD)"
-  elif [ "$S_ESC" = "$DL" ]; then
-    log "ESCALATED(already) $ACCT deadline=$DL_ISO — row already on the board for this deadline, not re-raising"
+  elif same_cycle "$S_ESC" "$DL"; then
+    # Ratchet the stored key forward: the row is on the board for THIS cycle, and the derived
+    # deadline drifts every tick, so a fixed key would drift out of tolerance and re-page.
+    S_ESC="$DL"
+    log "ESCALATED(already) $ACCT deadline=$DL_ISO — row already on the board for this cycle, not re-raising"
   else
     mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
     if jq -nc --arg ts "$(utc)" --arg acct "$ACCT" --arg dl "$DL_ISO" --arg reason "$ESC_REASON" \
