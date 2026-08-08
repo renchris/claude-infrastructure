@@ -362,6 +362,82 @@ EOF
   echo "$output" | grep -q 'UNVERIFIABLE'
 }
 
+# ---- the deadline-move EPSILON ------------------------------------------------------------------
+# The two "moved" / "did NOT move" cases above move the deadline by a MONTH or by exactly nothing,
+# and production's real case was neither. The server returns a countdown to a FIXED wall, re-
+# expressed from a fresh Date.now() at every refresh, so a successful headless refresh always nudges
+# the absolute stamp a few hundred ms without renewing anything — and `new > old` was therefore
+# satisfied BY CONSTRUCTION. Two live runs two hours apart (~/.claude/logs/cc-relogin.log,
+# 2026-07-30 13:36:27 and 15:37:35) were both reported PROVEN on +0.153s and +0.380s, landing on
+# the same second of the same unchanged wall — which returned 0 at phase 1 and so never reached
+# phase 2, the only leg that resets it. These pin the tolerance that separates the two populations
+# (jitter: sub-second · real re-grant: 626-720h).
+
+@test "the production case: a +0.153s re-expression is jitter, not a renewal → UNVERIFIED (5)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-02T20:21:48.963000+00:00"   # verbatim from the 13:36:27 run
+  mk_fresh 2 ok         "2026-08-02T20:21:49.116000+00:00"
+  run "$C" next3 --no-browser
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q '0.153s'                 # the delta is NAMED, not just rejected
+  echo "$output" > "$D/out.txt"
+  refute grep -q 'did NOT move' "$D/out.txt"        # it DID change — saying otherwise is a lie
+}
+
+@test "sub-epsilon creep + a browser allowed → escalates to phase 2, never declares victory" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-02T20:21:48.963000+00:00"
+  mk_fresh 2 ok         "2026-08-02T20:21:49.116000+00:00"
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo 4 > "$D/ab.start.rc"                         # fail --start: reaching it IS the assertion
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  grep -q -- '--start' "$D/authbrowser-calls"
+}
+
+@test "a genuine ~30-day re-grant clears the threshold → PROVEN (0)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-02T20:21:48.963000+00:00"
+  mk_fresh 2 ok         "2026-09-01T20:21:49.116000+00:00"   # 720h — the C1 re-grant population
+  run "$C" next3 --no-browser
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'deadline moved'
+}
+
+@test "kill switch: CC_RELOGIN_DEADLINE_EPSILON_H=0 restores the any-positive-move oracle" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-02T20:21:48.963000+00:00"
+  mk_fresh 2 ok         "2026-08-02T20:21:49.116000+00:00"
+  CC_RELOGIN_DEADLINE_EPSILON_H=0 run "$C" next3 --no-browser
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'deadline moved'
+}
+
+@test "epsilon boundary: 13h (just over the 12h default) → PROVEN (0)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-08-01T13:00:00Z"
+  run "$C" next3 --no-browser
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '13.00h'
+}
+
+@test "epsilon boundary: 11h (just under the 12h default) → UNVERIFIED (5)" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"; mk_fresh 2 ok "2026-08-01T11:00:00Z"
+  run "$C" next3 --no-browser
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q '11.00h'
+}
+
+@test "an unparseable after-stamp is incomparable, never silently 'moved' → UNVERIFIED (5)" {
+  mk_info all true; mk_creds                        # 'garbage' > '2026-…' as STRINGS — the old
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"      # comparison read that as a renewal
+  mk_fresh 2 ok         "garbage"
+  run "$C" next3 --no-browser
+  [ "$status" -eq 5 ]
+  echo "$output" | grep -q 'incomparable'
+}
+
 @test "phase 1 binary failure + --no-browser → HEADLESS-EXHAUSTED (3)" {
   needy; echo 1 > "$D/claude.rc"
   run "$C" next3 --no-browser

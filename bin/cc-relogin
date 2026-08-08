@@ -9,15 +9,18 @@ and a discarded rotation IS a logout). Two phases, cheapest first:
   phase 2  browser OAuth over CDP in the account's dedicated Chrome profile
            (`cc-authbrowser <acct> --start` -> Target.createTarget -> Authorize).
 Success is proven by EFFECT, never by report: `claude-accounts --fresh --no-heal --json`
-must come back auth=="ok" AND the login deadline must have MOVED. "Login successful." is a
-claim; the moved deadline is the proof. The measurement reads are --no-heal so they cannot
-move the very state they measure.
+must come back auth=="ok" AND the login deadline must have MOVED — by MORE than
+CC_RELOGIN_DEADLINE_EPSILON_H hours (default 12), because the server returns a countdown to a
+FIXED wall re-expressed from a fresh Date.now(), so every successful refresh nudges the
+absolute stamp by a few hundred milliseconds without renewing anything. "Login successful."
+is a claim; the moved deadline is the proof. The measurement reads are --no-heal so they
+cannot move the very state they measure.
 
 Exit: 0 PROVEN · 1 ERROR · 2 REFUSED · 3 HEADLESS-EXHAUSTED · 4 BROWSER-FAILED ·
 5 UNVERIFIED · 6 FALLBACK-REQUIRED · 7 CONSENT-GATE (retained, never emitted).
-Test-injection env: CC_RELOGIN_{ACCOUNTS_BIN,TMP,WARN_H,PS_BIN,SECURITY_BIN,
-AUTHBROWSER_BIN,LOG}. Identity (claude binary, config dir, email, scopes) comes ONLY from
-`claude-accounts --relogin-info`; scopes are passed verbatim, NEVER widened.
+Test-injection env: CC_RELOGIN_{ACCOUNTS_BIN,TMP,WARN_H,DEADLINE_EPSILON_H,PS_BIN,
+SECURITY_BIN,AUTHBROWSER_BIN,LOG}. Identity (claude binary, config dir, email, scopes) comes
+ONLY from `claude-accounts --relogin-info`; scopes are passed verbatim, NEVER widened.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from typing import Any
 
 HOME = os.path.expanduser("~")
@@ -61,6 +65,14 @@ try:
     WARN_H = float(_env("CC_RELOGIN_WARN_H", "72"))
 except ValueError:
     WARN_H = 72.0
+# How far the login deadline must move before it counts as RENEWED. Not hygiene — the oracle. A
+# refresh grant re-expresses a FIXED wall as a countdown from a fresh Date.now(), so it always
+# nudges the absolute stamp; 12h sits ~4 orders of magnitude above that jitter and 52x below the
+# smallest real re-grant (26.1d). 0 disables the tolerance (kill switch: any positive move counts).
+try:
+    DEADLINE_EPSILON_H = float(_env("CC_RELOGIN_DEADLINE_EPSILON_H", "12"))
+except ValueError:
+    DEADLINE_EPSILON_H = 12.0
 DEBUG = False
 
 
@@ -498,6 +510,40 @@ def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
 
 # ---- verify by EFFECT --------------------------------------------------------------------------
 
+def _stamp(value: Any) -> datetime | None:
+    """One ISO-8601 login_expires_at as a datetime; None when it is not one.
+
+    A trailing Z is normalised because datetime.fromisoformat only accepted it from 3.11, and the
+    interpreter is NOT fixed here: `#!/usr/bin/env python3` under launchd resolves /usr/bin/python3
+    (3.9), which would otherwise read every real stamp as unparseable.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def deadline_delta_h(old: Any, new: Any) -> float | None:
+    """Hours the login deadline moved by; None when the pair is not comparable."""
+    a, b = _stamp(old), _stamp(new)
+    if a is None or b is None:
+        return None
+    try:
+        return (b - a).total_seconds() / 3600.0
+    except TypeError:            # one aware, one naive — incomparable, exactly as `>` was
+        return None
+
+
+def _fmt_delta(hours: float) -> str:
+    """The move in whichever unit still carries information at that magnitude."""
+    return f"{hours:.2f}h" if abs(hours) >= 1.0 else f"{hours * 3600.0:.3f}s"
+
+
 def verify(acct: str, before: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
     """Proof, not report: auth=="ok", a refresh token present, and the deadline MOVED."""
     try:
@@ -513,13 +559,24 @@ def verify(acct: str, before: dict[str, Any]) -> tuple[bool, str, dict[str, Any]
     if old is None:
         return True, ("auth ok + refresh token present; deadline-move UNVERIFIABLE — this "
                       "claude-accounts emits no login_expires_at (contract §2)"), after
-    try:
-        moved = new is not None and new > old
-    except TypeError:
-        return False, f"login_expires_at incomparable ({old!r} -> {new!r})", after
-    if not moved:
+    if new is None:
         return False, f"login deadline did NOT move ({old!r} -> {new!r})", after
-    return True, f"login deadline moved ({old!r} -> {new!r})", after
+    # NOT `new > old`. That comparison was satisfied BY CONSTRUCTION on every successful refresh —
+    # the server hands back a countdown to a FIXED wall, re-expressed from a fresh Date.now(), so
+    # the absolute stamp always creeps forward a few hundred ms without the wall having moved. Two
+    # production runs two hours apart (2026-07-30) were reported PROVEN on +0.153s and +0.380s,
+    # which returned EXIT_PROVEN at phase 1 and so never reached phase 2 — the only leg that
+    # actually resets the wall. The renewal must clear DEADLINE_EPSILON_H to count.
+    delta_h = deadline_delta_h(old, new)
+    if delta_h is None:
+        return False, f"login_expires_at incomparable ({old!r} -> {new!r})", after
+    if delta_h <= 0:
+        return False, f"login deadline did NOT move ({old!r} -> {new!r})", after
+    if delta_h <= DEADLINE_EPSILON_H:
+        return False, (f"login deadline crept {_fmt_delta(delta_h)} ({old!r} -> {new!r}) — under "
+                       f"the {DEADLINE_EPSILON_H:g}h renewal threshold, so this is the refresh "
+                       "re-expressing the SAME wall, not a renewal"), after
+    return True, f"login deadline moved {_fmt_delta(delta_h)} ({old!r} -> {new!r})", after
 
 
 # ---- driver ------------------------------------------------------------------------------------
