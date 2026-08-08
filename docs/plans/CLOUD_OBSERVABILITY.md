@@ -928,12 +928,33 @@ arm must detect the mismatch itself and name it, rather than letting the API's w
 verdict. This is the *same class* as §5.2's three liars — a condition converted into a different,
 scarier one on its way to a human — arriving through a channel §5.2 did not cover.
 
+### 10.2b · What waves B and D built
+
+| Wave | Landed | The one thing worth knowing about it |
+| --- | --- | --- |
+| **B** — `scripts/cloud-websetup-drive.sh` (+15 tests) | `66ef4d8c` | Success is the **verdict line** `Connected as `, never the absence of an error. Four exit codes, and the fourth is the point: **rc 3 NOT-SUCCESS** — the drive ran, nothing errored, and the string never appeared. Folding that into either neighbour is how a link that was never made gets recorded as made, or a healthy-but-slow pane gets torn down. Across accounts an OBSERVED error outranks an indeterminate one, because it names a cause. |
+| **D** — `bin/cc-sessions --offbox`, `bin/cc-where`, `cc-cloud list --state` (+12 tests) | `66ef4d8c` | Rows come from `cc-cloud`, never the registry. `--state` is an **opt-in** flag that hands out `classify`'s verdict rather than a copy of it — the probe-free default stays probe-free, and no consumer re-implements the state function outside its owner. |
+
+⚠️ **§9.3 named a binary that has never existed.** It specified "cc-panes / cc-where"; `bin/cc-panes`
+is not in this tree and never was — `bin/cc-where`'s own docstring says it is "deliberately NOT
+called `cc-panes`". Wave D corrected the section in place rather than building to the name. Recorded
+because the failure is generic and this repo has hit it before: **a plan's identifiers are not
+checked against the tree by anything**, so a cited mechanism can be prose-only for as long as nobody
+tries to run it (`[[spec-named-mechanism-may-be-prose-only]]`).
+
 ### 10.3 · Account linking — all four are linked, and the marker set already disagrees
 
-All four accounts (`next`, `next2`, `next3`, `next4`) are GitHub-linked; `next3` is verified
-end-to-end with `session_019uShq6mQCgKYkPvyUqg24d`. The CLI create path (§6.5) is unblocked for all
-of them, so `scripts/cloud-websetup-drive.sh` exists for **repeatability and re-link**, not to open
-the path.
+All four accounts (`next`, `next2`, `next3`, `next4`) were reported GitHub-linked, and `next3` was
+verified end-to-end with `session_019uShq6mQCgKYkPvyUqg24d`. So
+`scripts/cloud-websetup-drive.sh` exists for **repeatability and re-link**, not to open the path.
+
+🚨 **"Linked" and "can create" turned out to be different facts, measured later the same day.**
+`next2` carries a `.linked` marker and **cannot create** — its attempt falls back to bundle mode
+(`Bundle upload failed … Please setup GitHub`), which §6.5 establishes is what the CLI does when the
+GitHub link is unavailable. Wave B's own `verify_account()` reads that string as `NOT LINKED`, so
+the driver and an independent probe agree against the marker. See §S5-CEILING in
+`CONCURRENCY_PROGRAM.md`: the create is also **intermittent** on an account that does work, so a
+single bundle-mode failure is not by itself proof of an unlink — retry before concluding.
 
 ⚠️ **`~/.claude/autonomy/websetup/<acct>.linked` is a cache, and it has already drifted.** Measured
 2026-08-08: the directory holds `next2.linked`, `next3.linked`, `next3.verified`, `next4.linked` —
