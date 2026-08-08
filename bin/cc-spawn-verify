@@ -22,6 +22,31 @@
 #   2  PARKED   — no such process AND a pane is sitting at a shell prompt showing a launch that
 #                 died. This is knowable in SECONDS and names its own remedy; folding it into 1
 #                 loses the diagnosis. Callers MUST branch on 2 explicitly.
+#   3  OFFBOX   — the subject is a DECLARED off-box (cloud) session, so this box's process table is
+#                 structurally unable to answer the question. A NON-VERDICT, not a severity.
+#
+# ── WHY 3 EXISTS, AND WHY IT OUTRANKS THE OTHERS (CLOUD_OBSERVABILITY.md §5.2, liar #1) ──────────
+# A session running in an Anthropic-managed VM shares no kernel and no process table with this box.
+# `agent_pid` below scans the LOCAL process table, so for such a session it returns empty — every
+# time, by construction — and this file then printed `✗ ABSENT … Died, or never launched.` That is
+# not a missing feature, it is a FABRICATED DEATH VERDICT: the instrument converts "not on this box"
+# into "dead", and a caller acting on it kills or re-fires a perfectly healthy session.
+#
+# So the absence path now asks `cc-cloud is-offbox <id>` FIRST — before the wait loop, because
+# waiting `$TIMEOUT` seconds for a process that can never appear is burning the clock to reach a
+# wrong answer — and abstains when the id is declared. It is checked before `parked_evidence` too:
+# for a declared off-box id, LOCAL evidence of any kind is inadmissible, including a pane that
+# happens to quote the launch.
+#
+# 3 outranks 2 in the worst-verdict fold below because it is a NON-VERDICT (memory:
+# gate-never-ran-vs-gate-red — one exit code for "asked and got no" and "could not ask" forces every
+# caller to lie). A wave containing one off-box member is NOT verified-green, and must not read as
+# one; the caller is told exactly which member it could not answer for.
+#
+# Binding a local name to a cloud id: `--cloud <id>`. With no flag the NAME ITSELF is tried as an
+# id, which is the common case (a cloud session is addressed by its `session_…` id, and there is no
+# local pane to give it another name). An UNDECLARED id is not off-box — `is-offbox` returns 1 and
+# the ordinary local verdict stands, so this can only ever ABSTAIN, never manufacture a green.
 #
 # WHY PROCESS-FIRST, NOT PANE-FIRST. The process table is the authority on "is it running": the
 # harness stamps `--agent-name <n>` into the child's argv, so the agent is directly addressable and
@@ -43,7 +68,7 @@
 # It answers "is a full-screen TUI running", not "is claude running" — vim would read True too.
 # That is sufficient here because it is only ever used to explain an ALREADY-ESTABLISHED absence.
 #
-# Usage:  cc-spawn-verify <agent-name> [--timeout N] [--quiet]
+# Usage:  cc-spawn-verify <agent-name> [--timeout N] [--quiet] [--cloud <session-id>]
 #         cc-spawn-verify --all <name>...      → verifies each, exits non-zero if ANY is not RUNNING
 set -euo pipefail
 
@@ -51,10 +76,12 @@ TIMEOUT="${CC_SPAWN_VERIFY_TIMEOUT:-25}"
 INTERVAL="${CC_SPAWN_VERIFY_INTERVAL:-1}"
 QUIET=0
 ALL=0
+CLOUD_ID=""
 NAMES=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --cloud) CLOUD_ID="${2:-}"; shift 2 ;;
     --timeout) TIMEOUT="${2:-25}"; shift 2 ;;
     --interval) INTERVAL="${2:-1}"; shift 2 ;;
     --quiet|-q) QUIET=1; shift ;;
@@ -67,6 +94,31 @@ done
 [ ${#NAMES[@]} -gt 0 ] || { printf 'usage: cc-spawn-verify <agent-name> [--timeout N] [--quiet]\n' >&2; exit 64; }
 
 say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
+
+# ── THE ABSTAIN LOOKUP (see "WHY 3 EXISTS" in the header) ────────────────────────────────────────
+# Resolve cc-cloud PATH-first so a test shim wins, then the standard install path, then this repo's
+# own bin/ (this file is run straight out of a worktree during development). Seam: CC_CLOUD_BIN —
+# SET, including set to EMPTY, is honored verbatim, so `CC_CLOUD_BIN=` genuinely disables the
+# lookup. `${VAR:-}` cannot tell unset from set-empty, and a seam that cannot turn a thing OFF is
+# not a seam (same contract as team-orphan-reaper.sh's TEAM_REAPER_LSOF_BIN).
+if [ -n "${CC_CLOUD_BIN+set}" ]; then
+  CC_CLOUD="$CC_CLOUD_BIN"
+else
+  CC_CLOUD="$(command -v cc-cloud 2>/dev/null || true)"
+  [ -n "$CC_CLOUD" ] || { [ -x "$HOME/.claude/bin/cc-cloud" ] && CC_CLOUD="$HOME/.claude/bin/cc-cloud"; }
+  [ -n "$CC_CLOUD" ] || { [ -x "$(dirname "$0")/cc-cloud" ] && CC_CLOUD="$(dirname "$0")/cc-cloud"; }
+fi
+
+# is_offbox <name> → 0 iff the subject is a DECLARED, unretired cloud session.
+# Fails CLOSED toward the ordinary local verdict: no cc-cloud, an unreadable state dir, or an
+# undeclared id all return 1, which leaves ABSENT/PARKED exactly as they were. This can only ever
+# suppress a false death, never invent a false life.
+is_offbox() {
+  local id="${CLOUD_ID:-$1}"
+  [ -n "$id" ] || return 1
+  [ -n "$CC_CLOUD" ] && [ -x "$CC_CLOUD" ] || return 1
+  "$CC_CLOUD" is-offbox "$id" >/dev/null 2>&1
+}
 
 # ── IS THE AGENT PROCESS RUNNING? ────────────────────────────────────────────────────────────────
 # TWO conditions, and BOTH are load-bearing — this took a false RUNNING to get right.
@@ -160,8 +212,15 @@ for w in d:
   return 0
 }
 
-verify_one() { # $1=name → 0 running / 1 absent / 2 parked
+verify_one() { # $1=name → 0 running / 1 absent / 2 parked / 3 offbox
   local name="$1" waited=0 pids
+  # FIRST, before the clock: a declared off-box session can never appear in the local process
+  # table, so waiting for it is spending $TIMEOUT to arrive at a wrong answer.
+  if is_offbox "$name"; then
+    say "◇ OFFBOX   $name (${CLOUD_ID:-$name}) — declared off-box; this box's process table cannot"
+    say "           see it. NOT a death verdict. Liveness: cc-cloud show ${CLOUD_ID:-$name}"
+    return 3
+  fi
   while :; do
     pids="$(agent_pid "$name" || true)"
     if [ -n "$pids" ]; then
@@ -184,7 +243,9 @@ verify_one() { # $1=name → 0 running / 1 absent / 2 parked
 }
 
 # Worst-verdict wins, so a wave is only green when EVERY member is running. PARKED (2) outranks
-# ABSENT (1) because it is the more specific diagnosis, not because it is more severe.
+# ABSENT (1) because it is the more specific diagnosis, not because it is more severe. OFFBOX (3)
+# outranks both because it is a NON-VERDICT: the wave is not verified-green, and folding it down
+# into 0 would be this file claiming an answer it did not get.
 #
 # `rc=0; verify_one … || rc=$?` — NOT `verify_one … || rc=$?` on one line, and never a trailing
 # `[ … ] && worst=…` as the last statement of the loop body: under `set -e` a false test there
