@@ -4707,7 +4707,29 @@ launcher_for() { # $1=account → launcher name. ACCOUNT ONLY — the model is a
 # account's config BEFORE spawning, so the session skips the dialog and runs headless. Surgical —
 # sets ONLY hasTrustDialogAccepted (tool prompts still apply; this is NOT --dangerously-skip-
 # permissions). Idempotent + race-avoidant: skips the write entirely when the dir is already trusted.
-config_dir_for_launcher() { # $1=launcher name → the account's config dir (by trailing digit)
+config_dir_for_launcher() { # $1=launcher name → the account's config dir
+  # SSOT FIRST, trailing digit only as a fallback (item 64828ce9c5a5). The trailing-digit
+  # heuristic below is right for accounts 2/3/4 by coincidence of naming and WRONG for account 1,
+  # because account 1 is the one account whose launcher carries no digit — so it lands in the `*`
+  # arm, which answers `$HOME/.claude` while account 1's real config dir is `$HOME/.claude-next`
+  # (accounts.json, and `claude()` in the operator's rc: `_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude-next}"`).
+  # Consequence: pre_trust() wrote its record into a file the fired session never reads. Measured
+  # 2026-08-08 — 195 of the 196 `/.worktrees/` keys in ~/.claude/.claude.json carry EXACTLY the two
+  # fields pre_trust writes and nothing else, i.e. they are orphaned writes no session ever read,
+  # while the sessions themselves accreted 9-field entries over in ~/.claude-next.
+  #
+  # WHY THE DIGIT CANNOT BE PATCHED IN PLACE: `claude` and `claude-prev` BOTH carry no digit and
+  # BOTH are account 1, yet they have DIFFERENT config dirs — the eval track is ~/.claude-next, the
+  # stable track is ~/.claude. The `*` arm is genuinely correct for `claude-prev` and genuinely
+  # wrong for `claude`; no rule keyed on the shape of the name can separate them. Only the SSOT
+  # knows, and it already does: cc_acct_dir_for_name accepts a LAUNCHER as a key (`next|claude`).
+  # This is the same migration launcher_for() already made for the opposite direction (item
+  # 253e4d4254d9) — that half read accounts.json, this half kept deriving. Finishing it here.
+  #
+  # The digit fallback stays for names the SSOT does not declare — the stable track (`claude-prev`,
+  # `claude-prev2/3/4`), reachable via an unvalidated `--launcher`. For those the old mapping is
+  # correct, so every previously-right answer is preserved and only account 1's is corrected.
+  if cc_acct_dir_for_name "$1"; then echo "$CC_ACCT_DIR"; return 0; fi
   case "$1" in
     *2) echo "$HOME/.claude-secondary" ;;
     *3) echo "$HOME/.claude-tertiary" ;;
