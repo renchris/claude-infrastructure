@@ -195,6 +195,7 @@
 #
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
+#        CC_CAP_PRESSURE_WARN (default 2) · CC_CAP_PRESSURE_ALARM (default 4) ·
 #        CC_CAP_TOP (top(1) binary, for stubbing) · CC_CAP_SELFTEST=1 (positive control) ·
 #        CC_CAP_COAL_WARN (default 500) · CC_CAP_COAL_ALARM (default 700) ·
 #        CC_CAP_PS (ps(1) binary, for stubbing rung 6's tree walk) ·
@@ -213,6 +214,16 @@ set -uo pipefail
 WARN_GB="${CC_CAP_WARN_GB:-8}"
 ALARM_GB="${CC_CAP_ALARM_GB:-3}"
 PROC_WARN_GB="${CC_CAP_PROC_WARN_GB:-3}"
+# Kernel memorystatus pressure (rung 3). The DEFAULTS ARE UNCHANGED — 2/4 is what the kernel's own
+# levels mean and there is nothing to tune here. The seam exists because rung 3 was the only one of
+# the seven whose floors were literals, and that asymmetry had a cost paid entirely by the tests: a
+# rung with a floor seam can be pinned neutral by a test that does not own it, and a rung without one
+# can only be pinned by stubbing sysctl — which is exactly what (xxxii) must NOT do, since its whole
+# subject is that the REAL sysctl is reached. So the one un-pinnable ambient input kept turning
+# tests/capacity-alarm.bats::(ii) red in postland (5 flake rows, 2026-07-31..08-08), and the fix for
+# that test was unavailable until this line existed. Uniform seams, same behaviour.
+PRESSURE_WARN="${CC_CAP_PRESSURE_WARN:-2}"
+PRESSURE_ALARM="${CC_CAP_PRESSURE_ALARM:-4}"
 # Compressor-segment saturation (rung 5). Deliberately low: the 2026-07-30 panic went from a cold
 # compressor to 100% of segments in ~26 seconds, so a threshold set near the ceiling would fire only
 # after the box was already unrecoverable. These are canary values, not capacity values.
@@ -808,8 +819,8 @@ classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] 
   # rung 3 — kernel pressure level (M9-ext). Absent ⇒ SKIPPED, never NO-DATA (header).
   case "$pl" in
     ''|*[!0-9]*) : ;;
-    *) if [ "$pl" -ge 4 ]; then r3=ALARM; v=2
-       elif [ "$pl" -ge 2 ]; then r3=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+    *) if [ "$pl" -ge "$PRESSURE_ALARM" ]; then r3=ALARM; v=2
+       elif [ "$pl" -ge "$PRESSURE_WARN" ]; then r3=WARN; if [ "$v" -lt 1 ]; then v=1; fi
        else r3=OK
        fi ;;
   esac
@@ -1180,7 +1191,7 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
         case "$_rung" in
           swap)      _detail="swap grew ${SWAP_DELTA:-?} MB in ${SWAP_WINDOW_S}s (floor ${SWAP_DELTA_MB} MB) — now ${SWAP_MB:-?} MB in use" ;;
           headroom)  _detail="reclaimable headroom ${HEAD:-?} GB (warn <${WARN_GB} · alarm <${ALARM_GB}) with ${SESSIONS} live sessions" ;;
-          pressure)  _detail="kernel memorystatus pressure level ${PRESSURE:-?} (>=2 WARN · >=4 ALARM)" ;;
+          pressure)  _detail="kernel memorystatus pressure level ${PRESSURE:-?} (>=${PRESSURE_WARN} WARN · >=${PRESSURE_ALARM} ALARM)" ;;
           maxproc)   _detail="largest process footprint ${MAX_PROC_GB:-?} GB > ${PROC_WARN_GB} GB floor" ;;
           segments)  _detail="compressor segments ${SEG_PCT:-?}% of limit (warn ${SEG_WARN_PCT}% · alarm ${SEG_ALARM_PCT}%) · source ${SEG_SOURCE:-?} · occupancy ${OCCUPANCY_PCT:-?}% of 16 pages/segment" ;;
           coalition) _detail="${COAL_PROCS:-?} procs in the ${COAL_APP:-?} coalition (warn >=${COAL_WARN} · alarm >=${COAL_ALARM})" ;;
@@ -1214,7 +1225,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  compressor segments:    ${SEG_PCT:-SKIPPED (segment estimate unreadable)}${SEG_PCT:+% of limit  (warn ${SEG_WARN_PCT}% / alarm ${SEG_ALARM_PCT}%, source ${SEG_SOURCE})}"
   echo "  segment occupancy:      ${OCCUPANCY_PCT:-?}% of 16 pages/segment   (low + rising seg% = fragmentation, the 2026-07-30 shape)"
   echo "  thrash (decomp/comp):   ${THRASH_CD_RATIO:-n/a}   (~0.60 sustained with ~0% retention is the fatal signature)"
-  echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=2 ⇒ WARN · >=4 ⇒ ALARM · absent ⇒ rung skipped)"
+  echo "  kernel pressure level:  ${PRESSURE:-unreadable}   (>=${PRESSURE_WARN} ⇒ WARN · >=${PRESSURE_ALARM} ⇒ ALARM · absent ⇒ rung skipped)"
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
   # SKIPPED, not "0" — an unreadable ps must never render as an empty, healthy-looking coalition.
   echo "  terminal coalition:     ${COAL_PROCS:-SKIPPED (ps unreadable)}${COAL_PROCS:+ procs in ${COAL_APP}  (warn >=${COAL_WARN} / alarm >=${COAL_ALARM})}"
