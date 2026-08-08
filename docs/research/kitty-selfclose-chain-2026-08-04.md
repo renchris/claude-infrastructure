@@ -31,6 +31,17 @@ in a reso-management-app worktree.** This probe was read-only; a code-writing ag
 written into the wrong repo. Filed separately — it is not part of the self-close fix, but it is a
 data-integrity finding that this investigation surfaced and must not absorb silently.
 
+> **RESOLVED 2026-08-08 — backlog 4afd0515c83a, landed 72abcf14.** The placement was ours, not the
+> vendor's: `isolation:"worktree"` fires the WorktreeCreate hook, and `hooks/worktree-setup.sh` then
+> fell back to the machine-GLOBAL `$HOME/.reso/bin/worktree-pool.sh` for any repo shipping no
+> allocator of its own, which handed back one of reso's shared `wt-pool-N` slots switched to our
+> branch. `worktree-lifecycle.log` holds both events — `wt-pool-2` at 2026-08-04 01:18 (this probe)
+> and `wt-pool-9` at 2026-08-05 01:16. efecf749 removed that fallback and reso's 99753cf31 refuses a
+> foreign caller; 72abcf14 adds the assertion neither of them makes — every rung's returned path is
+> checked against the expected repo's common git dir before it is printed, so the class is closed
+> rather than two of its spellings. Re-measured live on 2.1.220: a fresh `isolation:"worktree"` probe
+> landed in `wt-agent-a5c50396d1a00261c` with its gitdir in claude-infrastructure.
+
 **C2 · The hook prescribes the thing C1 just disproved, and so does the backlog.**
 `hooks/teammate-auto-shutdown.sh:837` SURFACEs *"Fix at spawn (give the member its own cwd)"* — 231
 times all-time — and backlog #140 repeats it. Following that instruction produces a NON-teammate
@@ -222,6 +233,14 @@ Then confirm the fix is *exercised*, not merely present: `grep -c '✓ closed pa
 
 - **Vendor: the third close path.** Something closed panes 403/405/407 at 00:42 (four `Session ended` in `~/.claude/logs/sessions.log` at 00:42:12–00:42:27) with **zero** lifecycle-log lines, and CC rewrote `config.json` to drop those members within minutes. Ruled out on disk: `teammate-auto-shutdown` (it logged the opposite) and `cc-teardown` (no record since 2026-07-31 15:01). Strongest remaining candidate, unproven: CC's own `killInProcessTeammate` → `memberRemoval` + `osTeardown` + `paneTeardown` (`swarm_in_process_kill`), which the binary documents as **non-blocking** — *"Not blocking the stop result on it; the backend kill continues in the background and the separate `claude --agent-id` process may still be running."* **Bound**: this actuator already closes our targets, so our fix may be partly redundant and its effect will be hard to attribute. **Experiment**: with the live 13-member team, sample `it2 session list` + `ps --agent-name` every 30 s and correlate departures against the lead's `TaskStop` calls — read-only, no pane touched. Do it before landing, or the alarm's first `departed` may not be ours.
 - **Vendor: `AgentInput.isolation?: "worktree"`** (`/Users/chrisren/.claude-220/…/sdk-tools.d.ts:517-521`) — the literal remedy the hook prints at every SURFACE (`:837` *"Fix at spawn (give the member its own cwd)"*), three fields after the `team_name?` this investigation already quoted. **Untested on 2026-08-04**: whether it works on 2.1.220, whether the member's `config.json` then records its **own** cwd (which would make 218/218 of the population satisfiable and delete the gate problem entirely), what it writes into `tmuxPaneId`, and whether the GH #34645 / #48927 data-loss caveat in the operator's global CLAUDE.md still reproduces. **Bound**: it is the only candidate that fixes 100% of the population at the source; every fix in §3 is a downstream workaround whose *necessity* is unproven until this is measured. It is the single highest-value unrun experiment and it is cheap: spawn one throwaway assignee with `isolation:"worktree"` and read the resulting config.
+  **RUN 2026-08-08 (backlog 4afd0515c83a) — and it does not rescue the population.** C1 above already
+  refuted the teammate half: `isolation` passed *alongside* `name` silently demotes the spawn to an
+  in-process subagent, so there is no member whose `config.json` could record its own cwd, and the
+  218/218 hope dies there. What this run adds is the other half — passed *without* `name`, isolation
+  works exactly as documented on 2.1.220: a real worktree, its own branch, and (since 72abcf14) a
+  hook that now refuses to hand back one belonging to another repo. The GH #34645 / #48927 caveat did
+  not reproduce in a single run, which is not evidence against a race. Treat this bullet as closed
+  for the data-integrity question and unchanged for the gate question: every §3 fix stays necessary.
 - **Vendor: `TeammateIdle` supply.** One emitter, turn-end only, no heartbeat. 98/155 members post-fix received ≤2 events against a `MAX_DEFERS` of 3. **We cannot make the harness emit more.** Bound: after this fix a member acts on its *first* qualifying event, so supply stops binding — but 161 counters currently sit at rung 2 on disk (`~/.claude/watchdog/defer-*.count`, 326 files, only reset by `rm -f` at `:884`), meaning **161 pre-armed ladders will act on their very next event under the new policy**. State that behaviour explicitly in the commit message; it is not a defect but it is a surprise.
 - **Kitty cross-generation aliasing.** Confirmed link-by-link (per-process counter restarting at 1; no identity check at `it2-kitty:477`; positive-controlled close of a non-claude window; `cc-reconcile:273` makes an aliased row immortal) but the **composite has never been exercised** — kitty 613 has run 78.8 h and the kitty era began 2026-07-31, so no integer-keyed record has ever outlived the process that minted its id. **Bound**: hazard is 100% latent and the population is 12 live pane ids today. The identity pin in §3 closes it prospectively. A safe composite test exists and was not run: seed a scratch registry row with an id a second `--instance-group` kitty will reissue, point `CC_TERM_KITTY_TO` at the probe socket, and drive the close — blocked only because `bin/cc-teardown` exposes no registry-dir seam.
 - **SIGHUP during an active turn.** Measured only on an idle REPL (1.373 s, clean flush). `Ps()`'s watchdog bounds shutdown at `max(5000, sessionEndHookTimeout+3500)` ms, 15000 ms on one branch — unmeasured. The actuator fires `CLOSE_GRACE_S=3` s (`:66`) after the decision with **no re-check that the member is still idle at that instant**. Bound: the idle→close window is unguarded by anything, in the current code and after this fix. Filing it is honest; closing it needs a re-read of `_tool_in_flight` inside the detached block at `:1113`.
