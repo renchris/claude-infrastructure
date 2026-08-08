@@ -86,6 +86,12 @@ log, and it has already drifted: measured 2026-08-08, the directory held markers
 `next3`, `next4` and **none for `next`**, an account that was linked. Nothing reconciles the marker
 against the account. Read it as "we did this at some point", never as "this is true now".
 
+Measured 2026-08-08 and worth stating plainly, because the reassuring explanation is wrong: `next2`'s
+marker records the full `Connected as renchris` token — the strong signal, not a weak proxy — and
+`next2` **still cannot create**. A marker is not a capability check. Re-verify with
+`--verify <acct>` (which spends one create and proves it end to end) or just try the thing you
+actually want to do.
+
 **Success is a string, not the absence of an error.** The link succeeded iff the pane printed
 `Connected as ` — confirmed live on `next3`, which printed
 `Connected as renchris. Opened https://claude.ai/code`. A run that produced no error and no

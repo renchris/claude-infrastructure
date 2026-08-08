@@ -1004,6 +1004,22 @@ the driver and an independent probe agree against the marker. See §S5-CEILING i
 `CONCURRENCY_PROGRAM.md`: the create is also **intermittent** on an account that does work, so a
 single bundle-mode failure is not by itself proof of an unlink — retry before concluding.
 
+⚠️ **A refuted explanation, recorded so it does not re-emit.** The wave-B teammate reported that
+every `.linked` file was written by the draft driver, whose `.linked` meant only *"consent keystroke
+sent"* rather than *"verdict line read"* — which would make the markers weak-signal claims and the
+whole discrepancy benign. **The artifacts refute it.** The draft (`/tmp/cloud-fleet-brief-driver.sh`
+line 126, and its sibling `/tmp/cloud-websetup-drive.sh`) writes exactly
+`printf '%s consent-sent\n'` — no account token. Every marker on disk reads
+`… consent-sent Connected-as-renchris`. Neither script can produce that string, so an
+**unidentified third producer** wrote them, and it recorded the STRONG signal.
+
+That inverts the comfort: `next2`'s marker carries the very `Connected as` token that is this
+system's definition of success, and `next2` **still cannot create**. So the correct statement is not
+"the markers were written on a weak test" — it is that **a marker recording the right signal is
+still not a statement about current capability**, because the link can lapse after it was truly
+established. The remedy is unchanged (`--force` re-drive) but the reason matters: re-driving on a
+stronger test would not have prevented this.
+
 ⚠️ **`~/.claude/autonomy/websetup/<acct>.linked` is a cache, and it has already drifted.** Measured
 2026-08-08: the directory holds `next2.linked`, `next3.linked`, `next3.verified`, `next4.linked` —
 **and no `next.linked`**, for an account reported and believed linked. Nothing reconciles the marker
