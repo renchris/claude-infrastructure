@@ -454,6 +454,92 @@ fire_log_keep() { # $1=item id $2=account $3=rc $4=captured-output file
   return 0
 }
 
+# ---- G5: THE VENUE, and the declare that makes an off-box session observable ------------------
+# `cc-backlog claim --venue local|cloud` shipped fully built and fully tested with ZERO PRODUCERS.
+# This is the producer. It matters more than a label: the venue string SELECTS WHICH ORACLES MAY
+# CONVICT the item (bin/cc-backlog § VENUE), so an off-box session claimed as `local` is judged by
+# oracles that structurally cannot see it — and reads as DEAD while it is working.
+#
+# fire_venue <fire argv> → "cloud" | "local".
+# Read off the argv that will ACTUALLY RUN — `$spawn "${fire_args[@]}"` — and not re-derived from
+# the plan, because that argv is the one source which cannot disagree with what was launched. A
+# venue label that disagrees with the fire is worse than no label at all: it is a mislabel that
+# reads as a verdict.
+#
+# ELEMENT-EXACT, never a substring test. `--venue` is a closed set at the actuator for exactly this
+# reason, and a loose match here would hand that actuator a well-formed string derived from the
+# wrong fire — e.g. a payload or an --extra that merely MENTIONS --cloud.
+fire_venue() {
+  local a
+  for a in "$@"; do
+    if [ "$a" = "--cloud" ]; then printf cloud; return 0; fi
+  done
+  printf local
+}
+
+# fire_branch <fire argv> → the branch the fire targets, or "" when it names none.
+# Needed because `cc-cloud declare` REQUIRES --branch (an undeclared session is unobservable, so it
+# refuses to record a half-identified one). Two sources, in the order the fire itself resolves them:
+# an explicit --worktree, else the basename of --cwd — which is not a guess but warm_worktree's own
+# rule (`br="$(basename "$wt")"`), so the two can never answer this question differently.
+# Prints NOTHING when neither is present: an unnameable branch is loud downstream, never invented.
+fire_branch() {
+  local prev="" a
+  for a in "$@"; do
+    if [ "$prev" = "--worktree" ]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--cwd" ]; then printf '%s' "${a##*/}"; return 0; fi
+    prev="$a"
+  done
+  return 0
+}
+
+# cloud_declare <item id> <captured fire output> <branch> → prints a one-line verdict; 0 declared.
+#
+# CLOUD_OBSERVABILITY.md §8.1: a cloud session id DOES NOT EXIST until after the fire — it is a
+# return value — so declare-before-fire is unsatisfiable and the id must be scraped from the fire's
+# own output and declared immediately after.
+#
+# EVERY failure path returns 1 with UNDECLARED in the verdict, and the caller says so loudly. This
+# is the failure worth being loud about: the fire returned 0, the session is LIVE and spending an
+# account's quota, and only its observability is missing — so nothing on this box can see it, name
+# it, or reap it, and nothing will ever report it absent either. A silent swallow here produces a
+# session that exists only off-box (bin/cc-cloud:51 — "pushed nothing and was never declared leaves
+# zero trace anywhere this box can read").
+#
+# cc-cloud is called as a CLI and is NEVER edited from here. TODO(in-flight): a sibling session is
+# adding `--account` to bin/cc-cloud; once it lands, pass the routed account through here so the
+# declaration records WHICH account's quota the off-box session is spending. Until then the account
+# lives in this dispatcher's own IDL journal (see the claim site below).
+cloud_declare() {
+  local id="$1" cap="$2" branch="$3" sid="" ccbin
+  if [ -n "$cap" ] && [ -f "$cap" ]; then
+    sid="$(/usr/bin/grep -Eo 'session_[A-Za-z0-9._-]+' "$cap" 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$sid" ]; then
+    printf 'UNDECLARED — the cloud fire for %s emitted no session id; it is unobservable AND reapable' "$id"
+    return 1
+  fi
+  if [ -z "$branch" ]; then
+    printf 'UNDECLARED — %s fired as %s but the fire names no branch (no --worktree/--cwd); cc-cloud declare requires one' "$id" "$sid"
+    return 1
+  fi
+  ccbin="$(resolve_bin "${CC_DISPATCH_CLOUD_BIN:-}" cc-cloud "$HOME/.claude/bin/cc-cloud")" || ccbin=""
+  if [ -z "$ccbin" ]; then
+    printf 'UNDECLARED — %s fired as %s but cc-cloud is unresolvable (set CC_DISPATCH_CLOUD_BIN)' "$id" "$sid"
+    return 1
+  fi
+  if ! "$ccbin" declare --id "$sid" --branch "$branch" >/dev/null 2>&1; then
+    printf 'UNDECLARED — %s fired as %s but cc-cloud declare --id %s --branch %s FAILED' "$id" "$sid" "$sid" "$branch"
+    return 1
+  fi
+  printf 'declared %s (branch %s)' "$sid" "$branch"
+  return 0
+}
+
 # claim_excerpt <file> → a claim refusal's HEADLINE (first line, sanitized, bounded).
 # HEAD-biased on purpose, unlike fire_excerpt: a lease refusal states its verdict in line 1 and
 # spends the rest naming the escape hatches, so a tail-200 excerpt (right for a spawn log, whose
@@ -1019,10 +1105,25 @@ dispatch() { # <dry|run|decide>
     #     breakage — the same un-evidenced-verdict defect the spawn capture below exists to fix.
     #
     # Neither path rolls back: a REFUSED claim appends nothing, so the item is exactly as it was.
+    #
+    # G5 — THE CLAIM CARRIES THE VENUE. Built as an ARRAY so the flag cannot be word-split, and
+    # labelled ONLY for a cloud fire: the fold already defaults a venue-less claim to "local"
+    # (bin/cc-backlog:615), so an explicit `--venue local` would add a field to every claim in the
+    # fleet, carry zero information, and make the rare cloud claim harder to find.
+    #
+    # NO CAPABILITY FALLBACK, deliberately — unlike the --self-release path below. If this
+    # cc-backlog is older than --venue it rejects the flag with rc 2 and the claim FAILS, which is
+    # correct: retrying without the flag would mint a claim that says `local` about a session
+    # running off-box, and every local oracle would then convict it. Fail-closed and visible beats
+    # a silently mislabelled lease.
+    local venue claim_args
+    venue="$(fire_venue "${fire_args[@]}")"
+    claim_args=(claim "$id" --by "$SID")
+    if [ "$venue" = cloud ]; then claim_args+=(--venue cloud); fi
     local cerrf crc cexc
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$cerrf" ]; then "$backlog" claim "$id" --by "$SID" >/dev/null 2>"$cerrf"; crc=$?
-    else                     "$backlog" claim "$id" --by "$SID" >/dev/null 2>&1;       crc=$?
+    if [ -n "$cerrf" ]; then "$backlog" "${claim_args[@]}" >/dev/null 2>"$cerrf"; crc=$?
+    else                     "$backlog" "${claim_args[@]}" >/dev/null 2>&1;       crc=$?
     fi
     cexc="$(claim_excerpt "$cerrf")"
     [ -n "$cerrf" ] && rm -f "$cerrf" 2>/dev/null || true
@@ -1067,6 +1168,25 @@ dispatch() { # <dry|run|decide>
     fi
     if [ "$crc" -ne 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
+    fi
+    # G5 — WHERE THE OWNING ACCOUNT IS RECORDED, and why it is here rather than on the claim.
+    # An off-box session spends ONE account's rate limit, and "which one" is the first question
+    # anyone asks of a cloud item — but cc-backlog's claim record has no account field
+    # (bin/cc-backlog:1171-1179 writes id/ts/event/by/evidence/needs/run/session/venue/force), and
+    # bin/cc-backlog is owned by another live session, so this change may not add one.
+    #
+    # The two existing fields were both REJECTED as carriers. `--evidence` is folded FORWARD
+    # (bin/cc-backlog:604 `($r.evidence // $p.evidence // "")`), so an account name written there
+    # would render as the item's evidence in `show` and in the operator readouts until a `done`
+    # overwrote it — where the contract is "the landed sha". `--session` names a session id, which
+    # `by` already carries. Either would be a mislabel, and a mislabel reads as a verdict.
+    #
+    # So it goes in the DISPATCHER'S OWN journal, which has no competing semantics and no owner but
+    # us. Emitted at CLAIM time rather than only at fire time so the pairing survives a fire that
+    # never returns: an item claimed `venue=cloud` with no recorded account would otherwise be an
+    # off-box lease whose spender is unknowable.
+    if [ "$venue" = cloud ]; then
+      idl claimed "$id: venue=cloud account=${acct} — claimed --venue cloud; the account is recorded HERE because cc-backlog's claim record has no account field"
     fi
     # a2. compose the BRIEF the fire_line references. wave-plan (a pure planner) only emits the
     # path; the actuator writes the content — with nothing writing it, every spawn died on the
@@ -1176,8 +1296,31 @@ dispatch() { # <dry|run|decide>
     if [ "$frc" -eq 0 ]; then
       local fanch=""
       [ -n "$ferrf" ] && fanch="$(/usr/bin/grep -m1 -o 'anchored to live pane [^ ]*' "$ferrf" 2>/dev/null || true)"
+      # The venue is deliberately NOT added to this line. It is already journalled at claim time
+      # (the `idl claimed` record above), so repeating it here would buy nothing — and this exact
+      # literal is pinned by tests/cc-dispatch-fire-evidence.bats, which exists because the anchor
+      # decision went un-recorded through an incident. Not worth reddening that pin for a duplicate.
       FIRED=$((FIRED + 1)); spawned=$((spawned + 1)); idl fired "$id -> $acct${fanch:+ — $fanch}"
       [ -n "$ferrf" ] && fire_log_keep "$id" "$acct" "$frc" "$ferrf"
+      # G5 — DECLARE THE CLOUD SESSION, NOW. The id is a RETURN VALUE (CLOUD_OBSERVABILITY.md
+      # §8.1), so this is the earliest moment it can be done at all, and every moment it is not
+      # done the session is unobservable AND reapable. Loud on failure, on stderr and in the
+      # journal, because the fire itself returned 0 — nothing else about this pass looks wrong,
+      # which is exactly why a swallowed declare failure would never be found.
+      #
+      # NOT counted into FAILED: the fire succeeded and the item is legitimately claimed and
+      # working. What is broken is the observability of it, which is its own state and needs its
+      # own name in the ledger rather than being folded into "the spawn failed".
+      if [ "$venue" = cloud ]; then
+        local cdv cdrc=0
+        cdv="$(cloud_declare "$id" "$ferrf" "$(fire_branch "${fire_args[@]}")")" || cdrc=$?
+        if [ "$cdrc" -eq 0 ]; then
+          idl declared "$id: $cdv"
+        else
+          echo "cc-dispatch: !! $id — $cdv" >&2
+          idl undeclared "$id: $cdv — the session is LIVE and spending ${acct}'s quota, but nothing on this box can see, name or reap it"
+        fi
+      fi
     else
       # THE HIGH-VOLUME ONE. rc 9 here is the fire CAPACITY GATE, whose refusal text is literally
       # "Shed load first … then re-fire" — a retryable machine state, measured at 36 refusals against
