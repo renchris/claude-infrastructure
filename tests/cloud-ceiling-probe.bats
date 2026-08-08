@@ -184,8 +184,8 @@ EOF
   capable_stub "Error: --cloud requires an interactive terminal. Non-interactive invocations (piped stdout, --init-only, --sdk-url) run locally and would silently ignore --cloud. Drop --cloud, or run from a TTY."
   run bash "$P" --control --confirm
   [ "$status" -eq 7 ]
-  [[ "$output" == *"refused BEFORE the account was ever consulted"* ]]
-  [[ "$output" == *"Do NOT touch classify_outcome"* ]]
+  [[ "$output" == *"refused BEFORE the account was ever consulted"* ]] || false
+  [[ "$output" == *"Do NOT touch classify_outcome"* ]] || false
   # The defect being pinned: it must NOT reach the arm that blames the classifier.
   [[ "$output" != *"classifier WRONG"* ]]
 }
@@ -198,7 +198,7 @@ EOF
   capable_stub "Error: --cloud requires an interactive terminal; your weekly limit reached is irrelevant here."
   run bash "$P" --control --confirm
   [ "$status" -eq 7 ]
-  [[ "$output" != *"VALIDATED"* ]]
+  [[ "$output" != *"VALIDATED"* ]] || false
   [[ "$output" != *"CEILING"* ]]
 }
 
@@ -206,8 +206,8 @@ EOF
   capable_stub "Error: Bundle upload failed: Socket is closed after 3 attempts. Please set up GitHub"
   run bash "$P" --account acct-a --max 4 --confirm
   [ "$status" -eq 0 ]
-  [[ "$output" == *"about HOW IT CALLED"* ]]
-  [[ "$output" != *"CEILING ="* ]]
+  [[ "$output" == *"about HOW IT CALLED"* ]] || false
+  [[ "$output" != *"CEILING ="* ]] || false
   run /usr/bin/grep -c '"verdict":"harness"' "$CLOUD_CEILING_LEDGER"
   [ "$output" -eq 1 ]
 }
@@ -247,6 +247,6 @@ STUB
   export CLOUD_CEILING_CLAUDE_BIN="$D/fake-claude"
   run bash "$P" --control --confirm
   [ "$status" -eq 0 ]
-  [[ "$output" == *"saw a TTY"* ]]
+  [[ "$output" == *"saw a TTY"* ]] || false
   [[ "$output" != *"NO-TTY"* ]]
 }
