@@ -197,35 +197,44 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
 
 - **Dynamic Workflows / ultracode:** prepend the word `ultracode` to the payload's first line when the
   receiving session should use multi-agent Workflow orchestration. Prompt-level keyword only — no CLI flag.
-- **`/goal` (or any SKILL-BACKED slash command — never built-ins like `/clear`/`/model`, which only
-  the TUI parses):** recognition is POSITIONAL — it must be the payload's very FIRST line
-  (`/goal <one-line goal>`, pointer/constraint lines after). A `/x` buried mid-payload reads as
-  ordinary prose and is NOT invoked (useful when you want to *mention* a command without running it).
-  > **🚨 THE FIRE PATH NOW REFUSES A SLASH-COMMAND-HEADED PAYLOAD BY DEFAULT.** `handoff-fire.sh`'s
+- **`/goal` — pass `--goal "<condition>"`, and NEVER put it in the payload.** The brief and the goal
+  are TWO SUBMISSIONS, and `handoff-fire.sh` sends both: message 1 is the payload exactly as always
+  (plain-text-headed, no cap), message 2 is a short `/goal <condition>` bracketed-pasted into the
+  pane once engagement is PROVEN. It re-arms across `--recycle`, refuses a multi-line / slash-headed
+  / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained`
+  read back from the fired session's own transcript — never a claim. A failed arming leaves a
+  session that has its brief and is working; it can never leave a goal with no brief.
+  > **Write the condition as a POINTER, not the brief:**
+  > `--goal '<one-line objective> — full brief in the prompt above; DoD at <path>'`, where `<path>` is
+  > a committed plan/research doc (`docs/plans/*.md`) or a `/tmp/<slug>-brief.md` on the same machine.
+  > The 4000-char cap is on the CONDITION, and message 1 already carries the detail with no cap.
+  > **🚨 A SLASH-COMMAND-HEADED PAYLOAD IS STILL REFUSED, and `--goal` does not change that.**
   > `check_slash_head` was universalized (item `c89b9c7b1526`, 2026-07-31) from "only an over-cap
-  > `/goal`" to "ANY leading slash command (`/goal`, `/research`, `/ship`, `/wrap`, a custom `/x`)",
-  > because the harness parses the whole submission as that command — the brief is consumed as its
-  > argument or rejected for length, and either way the pane idles TASK-LESS. So the positional
-  > feature above is **opt-in through a fire:** pass `FIRE_ALLOW_SLASH_HEAD=1` (and, for `/goal`, keep
-  > the whole payload ≤4000 chars) when you genuinely mean to submit a command; otherwise lead with
-  > PLAIN TEXT and move the `/x` onto a later STEP line. The manual-paste fallback is unaffected.
-  The CLI does not parse slash commands out of the initial prompt — the receiving model dispatches a
-  LEADING user-typed `/x` via its Skill tool (current harness behavior, system-prompt-driven;
-  re-verify on CC bumps), equivalent in effect for command-file skills. When `/goal` leads a fired
-  payload, put the `[locate]` self-locate line immediately AFTER it — in fire mode the spawner's `cd`
-  already does the locating, and the header stays intact for the manual-paste fallback.
-  > **🚨 4000-CHARACTER GOAL CAP — a `/goal` payload consumes the ENTIRE payload (every line, not just
-  > the first) as the goal condition, and the goal condition is hard-capped at 4000 chars.** A longer
-  > payload is REJECTED at the fired session ("Goal condition is limited to 4000 characters (got N)")
-  > and the session gets NO task — a silent dead fire (observed 2026-07-10: a 4901-char inlined brief
-  > was rejected). **Fix — keep the goal SHORT by REFERENCING a durable doc, never inlining the brief:**
-  > `/goal <one-line objective> — full brief at <path>` where `<path>` is a committed plan/research doc
-  > (`docs/plans/*.md`) or a `/tmp/<slug>-brief.md` the fired session reads (same machine ⇒ `/tmp` is
-  > reachable; a committed doc is more durable). The detail lives in the doc; the goal just names the
-  > objective + the pointer + the 3-6 HARD constraints — keep the whole payload well under 4000. If a
-  > brief genuinely can't be shortened AND you don't need the persistent Stop-hook goal, **OMIT `/goal`
-  > and send the brief as a plain prompt** (no char cap — but no goal-condition). Budget the payload:
-  > if `wc -c` on the fire file is near 4000, move detail into the referenced doc BEFORE firing.
+  > `/goal`" to "ANY leading slash command (`/goal`, `/research`, `/ship`, `/wrap`, a custom `/x`)".
+  > `FIRE_ALLOW_SLASH_HEAD=1` remains the escape for genuinely submitting a command with no brief
+  > body — but for `/goal` it is now the WRONG tool: use `--goal`. A `/x` buried mid-payload still
+  > reads as ordinary prose and is NOT invoked (useful when you want to *mention* a command).
+  > **📐 WHAT `/goal` ACTUALLY IS — measured 2026-08-08 against the CC 2.1.220 binary and live panes
+  > (`docs/research/goal-in-handoff-2026-08-08.md`); the three claims that used to stand here were
+  > inferences, and two of them were false.**
+  > - `/goal` is a **HARNESS BUILT-IN**, not skill-backed. Two command records live in the binary —
+  >   `{type:"local-jsx",name:"goal"}` (TUI) and `{type:"local",name:"goal",supportsNonInteractive}`
+  >   (thin client) — and there is no `goal.md` in any commands dir and no skill that provides it.
+  >   This bullet previously said "any SKILL-BACKED slash command — never built-ins", and built its
+  >   whole dispatch argument on that classification.
+  > - **The CLI DOES parse a slash command out of the initial prompt.** This bullet previously said
+  >   it does not, and that "the receiving model dispatches a LEADING `/x` via its Skill tool".
+  >   Refuted: a fired session's transcript carries `<command-name>/goal</command-name>` and an
+  >   `activeGoal` attachment written BEFORE the first model turn. No model, no Skill tool.
+  > - **A `/goal` UNDER the cap does not leave a task-less pane** — setting a goal returns a query
+  >   whose prompt re-injects the ENTIRE condition ("treat the condition itself as your directive"),
+  >   so the argument IS delivered as work. The task-less pane is real for an OVER-cap `/goal` (text
+  >   reply, nothing set — observed 2026-07-10 with a 4901-char brief) and for other slash heads.
+  >   The payload gate stays anyway: `--goal` removes the need to head a payload with a command at all.
+  > - **A goal dies with its session.** It is a session-scoped Stop hook, so a `--recycle` successor
+  >   carries none (measured). `--goal` re-arms it on the recycle path for exactly this reason.
+  Put the `[locate]` self-locate line at the head of the payload as usual — with `/goal` out of the
+  payload there is nothing for it to sit behind any more.
 - Omit both for a plain continuation prompt.
 
 **2 · Account → launcher.** Explicit user choice wins. Else `--account auto` ranks by **live
