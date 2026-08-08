@@ -247,7 +247,6 @@ cc-discover.bats
 cc-dispatch.bats
 cc-idl.bats
 cc-inbox-guard.bats
-cc-notify.bats
 cc-permission-beacon.bats
 cc-reconcile.bats
 cc-recover-safeguard.bats

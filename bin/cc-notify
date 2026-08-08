@@ -4,6 +4,7 @@
 #
 #   cc-notify <target> "<message>"   target = friendly-name | pane-UUID | --self
 #   cc-notify --role <name> "<msg>"  target = a ROLE (desk/operator/…), resolved at SEND time
+#   cc-notify --cloud <id> "<msg>"   target = an OFF-BOX cloud session (no pane, no inbox — §9.2)
 #   cc-notify --self                 print THIS session's pane UUID and exit
 #   cc-notify --list [--json]        list sessions (delegates to cc-sessions)
 #   cc-notify --receipt <t> <line>   did they READ it? rc 0 = read · 1 = not read (line from the send)
@@ -12,6 +13,12 @@
 #   --role <name>     address a ROLE, not a pane: reads ~/.claude/cc-roles/<name> at SEND time, so a
 #                     recycled/succeeded pane is followed automatically. PREFER THIS for any automated
 #                     pager (see ADDRESSING below). Missing/empty role file → exit 3.
+#   --cloud <id>      address an OFF-BOX cloud session by its session id — a FOURTH address KIND with
+#                     no pane uuid and no inbox file, so it never enters the role/forward/uuid
+#                     resolver at all. Undeclared to cc-cloud → exit 3 (an undeclared cloud target is
+#                     unobservable, so "delivered" about it could never be checked). See OFF-BOX below.
+#                     --receipt on a --cloud target exits 7 = UNKNOWN, NEVER 0: the API's {ok:true} is
+#                     QUEUED, and off-box there is no `acked` cursor that could make it READ.
 #   --from <name>     attribution written to the inbox line (default: own registered name / account)
 #   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
 #   --receipt         READ side of the cursor a send prints. DELIVERED IS NOT READ — a claim that a
@@ -99,17 +106,49 @@
 #   exits with, so stderr is the ONLY channel left. Callers MUST read `enqueued=` before treating a
 #   non-zero rc as a lost message; cc-announce does.
 #
-# Resolution order: --role (cc-roles) -> friendly name (exact, cc-registry, LIVE rows) -> raw pane
-#   UUID passthrough -> unambiguous UUID PREFIX (>=8 hex — what `--list` prints) -> --self; then the
-#   forward chain.
+# ── OFF-BOX (--cloud, 2026-08-08): a FOURTH address KIND, dispatched before everything above ───────
+#   docs/plans/CLOUD_OBSERVABILITY.md §9.2 is the SSOT for this path; the three steps below are its
+#   three steps, in its order. A session running in an Anthropic-managed VM shares no filesystem with
+#   this box: it has NO pane uuid and NO inbox file, so it cannot enter the role → forward-chain →
+#   uuid resolver, and the liveness classification below has nothing to classify. It is therefore
+#   dispatched FIRST, and its own three steps are the whole path:
+#     1. `cc-cloud is-offbox <id>` → REFUSE (exit 3) if undeclared. An undeclared cloud target is
+#        unobservable, so a "delivered" claim about it could never be checked — the one thing this
+#        tool exists not to emit.
+#     2. `claude -p "<message>" --cloud <id> --output-format json`. Transport VALIDATED 2026-08-08
+#        against a live session with no pty and stdin closed → {"ok":true,"session_id":…,"url":…}.
+#     3. ok:true  → record the send in the declaration's sidecar (<id>.sends under CC_CLOUD_STATE),
+#                   INCLUDING the returned url, so the send is later checkable at all.
+#        ok:false → exit 8 carrying the API's OWN reason, never a bare failure.
+#
+#   🚨 QUEUED IS NOT READ, and off-box there is no cursor that could ever upgrade it. The local
+#   receipt is a line-count over the target's inbox (<uuid>.seen ≥ line); a cloud target has neither
+#   the file nor an `acked` field, and {ok:true} is an ACK FROM A QUEUE. So `--receipt` on a --cloud
+#   target exits 7 = UNKNOWN — distinct from the local rc 1 ("not read", a fact we measured) because
+#   UNKNOWN is not a measurement at all. Returning 0 here would rebuild exactly the false confidence
+#   this file's whole DELIVERED-IS-NOT-READ apparatus was paid for.
+#
+#   The `--cloud` FLAG ITSELF is version-dependent: present-but-hidden on CC 2.1.220, ABSENT on the
+#   2.1.114 stable pin. `--help` cannot answer that (it does not list hidden flags), so support is
+#   decided from the REAL call's own refusal — an "unknown option --cloud" is reported as exactly
+#   that (exit 4, transport unavailable: the target is UNVERIFIED, not invalid), never as a generic
+#   failure that reads like the session rejected the message.
+#
+# Resolution order: --cloud (off-box, first — see above) -> --role (cc-roles) -> friendly name
+#   (exact, cc-registry, LIVE rows) -> raw pane UUID passthrough -> unambiguous UUID PREFIX (>=8 hex
+#   — what `--list` prints) -> --self; then the forward chain.
 # Env overrides (tests): CC_REGISTRY_DIR, CC_MAILBOX_DIR, CC_ROLES_DIR, CC_COMMS_ALARM_DIR, IT2_BIN,
-#   CC_IT2_TIMEOUT_S.
+#   CC_IT2_TIMEOUT_S, CC_CLOUD_BIN, CC_CLAUDE_BIN, CC_CLOUD_STATE.
 # bash 3.2-safe. Exit: 0 = enqueued (delivered to a live inbox, OR mailbox-only to a not-live/unknown-
 #   liveness target, possibly rerouted — stderr says which); 2 = usage; 3 = target genuinely UNKNOWN
-#   (the registry was readable and holds no such name/uuid; incl. a missing/empty --role file);
+#   (the registry was readable and holds no such name/uuid; incl. a missing/empty --role file, and an
+#   UNDECLARED --cloud id);
 #   4 = RESOLVER UNAVAILABLE (the registry could not be read — the target may well be valid; retry,
-#   do NOT treat as a bad address); 6 = AMBIGUOUS uuid prefix (>1 pane matches — name one exactly);
+#   do NOT treat as a bad address; also: no claude binary / a claude binary with no --cloud flag);
+#   6 = AMBIGUOUS uuid prefix (>1 pane matches — name one exactly);
 #   5 = inbox UNWRITABLE (LOUD — a message that cannot even persist must alarm, never a silent drop);
+#   7 = --receipt on a --cloud target: UNKNOWN, and unknowably so (never 0, never the measured 1);
+#   8 = a --cloud send the API REFUSED (ok:false, or an unparseable answer) — stderr carries its reason;
 #   124 = killed by a signal mid-send (a caller's own bound fired) — read `enqueued=` on stderr to
 #   learn whether the message persisted; the rc alone cannot tell you.
 set -uo pipefail
@@ -142,7 +181,10 @@ for _cand in "$(dirname "$0")/../hooks/lib/mailbox-pending.sh" \
   [ -f "$_cand" ] && { . "$_cand" 2>/dev/null || true; break; }
 done
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+# The usage block is lines 2-26 of THIS file. The range is hard-coded, so a flag documented OUTSIDE
+# it is a flag `--help` never mentions: extend the range whenever the block grows (a stale range is
+# how help goes silently out of date about a flag that exists).
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # cc-sessions lives beside cc-notify (same bin/). Prefer the sibling (deterministic for tests +
 # symlinked deploys), then PATH, then the canonical ~/.claude/bin. It is BOTH the name resolver and
@@ -311,6 +353,12 @@ _on_signal() {
   verdict interrupted reason=signal
   if [ "$ENQUEUED" = 1 ]; then
     echo "cc-notify: killed by a signal mid-send — the message IS persisted in the target's inbox (the delivery stands; only the liveness verdict is missing)" >&2
+  elif [ -n "${CLOUD_ID:-}" ]; then
+    # The off-box path has no local durable step, so ENQUEUED=0 does NOT mean "nothing happened":
+    # the API call may already have been accepted. Saying UNDELIVERED here would license a re-send
+    # of a message that landed — the exact both-ways-wrong guess the CALLER CONTRACT above exists to
+    # end. Name the ambiguity and point at the one artifact that can settle it.
+    echo "cc-notify: killed by a signal mid --cloud send to [$CLOUD_ID] — the API call may or may not have been accepted; do NOT assume either. Check the send sidecar (cc-cloud show $CLOUD_ID / \$CC_CLOUD_STATE/$CLOUD_ID.sends) before re-sending." >&2
   else
     echo "cc-notify: killed by a signal BEFORE the message was persisted — treat as UNDELIVERED" >&2
   fi
@@ -320,12 +368,16 @@ trap _on_signal TERM INT HUP
 
 # --- parse args ---
 FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0; RECEIPT=0
+CLOUD_ID=""; CLOUD_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list)         shift; if [ -n "$CCS" ]; then exec "$CCS" "$@"; else echo "cc-notify: cc-sessions not found" >&2; exit 1; fi ;;
     --self)         TARGET="__self__"; HAVE_TARGET=1; shift ;;
     --role)         ROLE="${2:-}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
     --role=*)       ROLE="${1#--role=}"; HAVE_TARGET=1; ROLE_GIVEN=1; shift ;;
+    # --cloud consumes the TARGET slot exactly as --role does, so the next positional is the MESSAGE.
+    --cloud)        CLOUD_ID="${2:-}"; HAVE_TARGET=1; CLOUD_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
+    --cloud=*)      CLOUD_ID="${1#--cloud=}"; HAVE_TARGET=1; CLOUD_GIVEN=1; shift ;;
     --mailbox-only) MAILBOX_ONLY=1; shift ;;
     --receipt)      RECEIPT=1; shift ;;
     --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
@@ -344,6 +396,197 @@ done
 
 # --- resolve target -> pane UUID ---
 own_uuid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_uuid="${own_uuid##*:}"
+
+# --- attribution (default: own registered name, else account) ---
+# Extracted so the OFF-BOX dispatch below and the local enqueue path further down share ONE
+# definition of "who is speaking": the cloud path needs the same string, and it needs it before any
+# uuid exists. Two copies would drift, and the attribution is what a recipient reads to decide
+# whether to act on the message at all.
+resolve_from() {
+  [ -n "$FROM" ] && return 0
+  local rdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  if [ -n "$own_uuid" ] && [ -f "$rdir/$own_uuid.json" ]; then
+    FROM="$(jq -r '.name // empty' "$rdir/$own_uuid.json" 2>/dev/null)"
+  fi
+  [ -n "$FROM" ] || FROM="$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" | sed 's/^\.//')"
+  return 0
+}
+
+# ══ OFF-BOX DISPATCH (--cloud) — see the OFF-BOX section of the header; SSOT is §9.2 ═══════════════
+# FIRST, before role resolution / the forward chain / the liveness classification, because an
+# off-box target is a different KIND of address rather than a different value of the same one: it
+# has no pane uuid to resolve and no inbox file to enqueue into, so every layer below would be
+# answering a question that does not apply to it.
+if [ "$CLOUD_GIVEN" = 1 ]; then
+  [ -n "$CLOUD_ID" ] || { echo "cc-notify: --cloud needs a session id (e.g. --cloud session_01ABC…)" >&2; usage >&2; exit 2; }
+  # An off-box id and an on-box address are different KINDS, so accepting both would mean guessing
+  # which one the caller meant. Refuse instead of picking.
+  if [ "$ROLE_GIVEN" = 1 ] || [ -n "$TARGET" ]; then
+    echo "cc-notify: --cloud cannot be combined with a pane/role target ('${TARGET:---role $ROLE}') — they are different address KINDS; name exactly one" >&2
+    usage >&2; exit 2
+  fi
+
+  # ── SEAM: CC_CLOUD_BIN. SET, including set to EMPTY, is honored verbatim, so `CC_CLOUD_BIN=`
+  # genuinely disables the lookup. `${VAR:-}` cannot tell unset from set-empty, and a seam that
+  # cannot turn a thing OFF is not a seam. Same contract + same resolution order as the wave-A
+  # sites (bin/cc-spawn-verify, bin/cc-board, scripts/team-orphan-reaper.sh): PATH first, so a test
+  # shim wins; then the standard install path; then this repo's own bin/ (cc-notify is run straight
+  # out of a worktree during development).
+  if [ -n "${CC_CLOUD_BIN+set}" ]; then
+    CC_CLOUD="$CC_CLOUD_BIN"
+  else
+    CC_CLOUD="$(command -v cc-cloud 2>/dev/null || true)"
+    [ -n "$CC_CLOUD" ] || { [ -x "$HOME/.claude/bin/cc-cloud" ] && CC_CLOUD="$HOME/.claude/bin/cc-cloud"; }
+    [ -n "$CC_CLOUD" ] || { [ -n "$_sd" ] && [ -x "$_sd/cc-cloud" ] && CC_CLOUD="$_sd/cc-cloud"; }
+  fi
+
+  # ── STEP 0 (before step 1): --receipt is answered UNKNOWN unconditionally ────────────────────
+  # Placed ahead of the is-offbox refusal ON PURPOSE. The answer does not depend on the declaration,
+  # on cc-cloud being installed, or on anything else that could fail: there IS no off-box read
+  # cursor, so no configuration of this box could ever make the answer 0. Putting the check first is
+  # what makes "never 0" an invariant rather than a behaviour of the happy path.
+  if [ "$RECEIPT" = 1 ]; then
+    verdict cloud-receipt-unknown reason=no-offbox-cursor "cloud=$CLOUD_ID"
+    printf 'cc-notify: receipt=unknown cloud=%s line=%s\n' "$CLOUD_ID" "${MSG:-none}" >&2
+    echo "cc-notify ❔ UNKNOWN — [$CLOUD_ID] is OFF-BOX: there is no <uuid>.seen/.acked cursor on this box to read, and the API's {ok:true} means QUEUED, not read. This is not 'not read' (rc 1, a fact we measured) — it is unmeasurable (rc 7). Do NOT report this session as told." >&2
+    echo "  the only off-box progress signal is cc-cloud's own O1/O2 (a remote ref that ADVANCES): cc-cloud show $CLOUD_ID" >&2
+    exit 7
+  fi
+
+  # A usage error is answered before anything is looked up or spent — checked here rather than with
+  # the other arg validation above because --receipt legitimately takes no message.
+  [ "$HAVE_MSG" = 1 ] || { echo "cc-notify: no message given" >&2; usage >&2; exit 2; }
+
+  # ── STEP 1: is this id declared? An undeclared cloud target is UNOBSERVABLE, so a "delivered"
+  # claim about it could never be checked — which makes refusing the send strictly better than
+  # making an uncheckable claim. Fails CLOSED: no cc-cloud, an unreadable state dir and an
+  # undeclared id are all a refusal, never a silent send.
+  if [ -z "$CC_CLOUD" ] || [ ! -x "$CC_CLOUD" ]; then
+    verdict cloud-unobservable reason=cc-cloud-unavailable "cloud=$CLOUD_ID"
+    echo "cc-notify: cannot verify [$CLOUD_ID] is a DECLARED cloud session — cc-cloud is not available (CC_CLOUD_BIN='${CC_CLOUD_BIN-unset}', PATH, ~/.claude/bin, ./bin all missed)." >&2
+    echo "  refusing the send: an unobservable target cannot carry a checkable delivery claim." >&2
+    exit 3
+  fi
+  if ! "$CC_CLOUD" is-offbox "$CLOUD_ID" >/dev/null 2>&1; then
+    verdict cloud-unobservable reason=undeclared "cloud=$CLOUD_ID"
+    echo "cc-notify: [$CLOUD_ID] is NOT a declared, unretired cloud session — refusing to send." >&2
+    echo "  an undeclared cloud target is unobservable from this box (no pane, no pid, no transcript,"  >&2
+    echo "  no registry row), so a 'delivered' claim about it could never be checked afterwards." >&2
+    echo "  declare it first: cc-cloud declare --id $CLOUD_ID --branch <b>   (or: cc-cloud list)" >&2
+    exit 3
+  fi
+
+  # ── SEAM: CC_CLAUDE_BIN — same set-including-empty contract as CC_CLOUD_BIN above.
+  if [ -n "${CC_CLAUDE_BIN+set}" ]; then
+    CLOUD_CLAUDE="$CC_CLAUDE_BIN"
+  else
+    CLOUD_CLAUDE="$(command -v claude 2>/dev/null || true)"
+    # bin/cc-claude-bin is this repo's own resolver for the pinned track (a `claude` that is only a
+    # shell function is invisible to `command -v` in a script; that resolver knows the real paths).
+    if [ -z "$CLOUD_CLAUDE" ] && [ -n "$_sd" ] && [ -x "$_sd/cc-claude-bin" ]; then
+      CLOUD_CLAUDE="$("$_sd/cc-claude-bin" 2>/dev/null || true)"
+    fi
+    if [ -z "$CLOUD_CLAUDE" ] && [ -x "$HOME/.claude/bin/cc-claude-bin" ]; then
+      CLOUD_CLAUDE="$("$HOME/.claude/bin/cc-claude-bin" 2>/dev/null || true)"
+    fi
+  fi
+  if [ -z "$CLOUD_CLAUDE" ] || [ ! -x "$CLOUD_CLAUDE" ]; then
+    verdict cloud-transport-unavailable reason=no-claude-binary "cloud=$CLOUD_ID"
+    echo "cc-notify: no claude binary resolved for the --cloud transport (CC_CLAUDE_BIN='${CC_CLAUDE_BIN-unset}')." >&2
+    echo "  [$CLOUD_ID] is UNVERIFIED, not invalid — this is a transport outage on THIS box; retry after setting CC_CLAUDE_BIN." >&2
+    exit 4
+  fi
+
+  resolve_from
+  CLOUD_MSG1="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
+
+  # ── STEP 2: the transport. VALIDATED 2026-08-08 with no pty and stdin closed, so stdin is closed
+  # here too rather than inherited — an inherited terminal is exactly the difference between a
+  # measured call and an untested one.
+  CLOUD_ERR="$(mktemp "${TMPDIR:-/tmp}/cc-notify-cloud.XXXXXX" 2>/dev/null || printf '/tmp/cc-notify-cloud.%s' "$$")"
+  CLOUD_OUT="$("$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+  CLOUD_ERRTXT="$(cat "$CLOUD_ERR" 2>/dev/null || true)"; rm -f "$CLOUD_ERR" 2>/dev/null || true
+
+  # Is the flag even SUPPORTED? `--cloud` is present-but-hidden on CC 2.1.220 and ABSENT on the
+  # 2.1.114 stable pin, and `--help` cannot answer that (it does not list hidden flags). So the
+  # question is decided from the REAL call's own refusal, and only when that refusal names the
+  # OPTION — a semantic refusal ("no such session") must NOT be laundered into "your binary is too
+  # old", which would send the caller off upgrading a binary that was fine.
+  case "$CLOUD_ERRTXT$CLOUD_OUT" in
+    *"nknown option"*"--cloud"*|*"--cloud"*"nknown option"*|\
+    *"nrecognized option"*"--cloud"*|*"--cloud"*"nrecognized option"*|\
+    *"nknown argument"*"--cloud"*|*"--cloud"*"nknown argument"*|\
+    *"nvalid option"*"--cloud"*|*"--cloud"*"nvalid option"*)
+      verdict cloud-transport-unavailable reason=flag-unsupported "cloud=$CLOUD_ID" "bin=$CLOUD_CLAUDE"
+      echo "cc-notify: this claude binary does NOT support --cloud: $CLOUD_CLAUDE" >&2
+      echo "  it is present-but-hidden on CC 2.1.220 and ABSENT on the 2.1.114 stable pin, so this is a" >&2
+      echo "  BINARY VERSION fault on this box — [$CLOUD_ID] is UNVERIFIED, not invalid, and the message" >&2
+      echo "  was NOT sent. Point CC_CLAUDE_BIN at a 2.1.220+ binary and retry. The binary said:" >&2
+      # stderr FIRST, but never only stderr: a CLI that writes its own refusal to stdout would
+      # otherwise be quoted as having said nothing, which is the one thing it demonstrably did not do.
+      _cl_said="$(printf '%s' "$CLOUD_ERRTXT" | head -n2)"
+      [ -n "$_cl_said" ] || _cl_said="$(printf '%s' "$CLOUD_OUT" | head -n2)"
+      printf '  %s\n' "$_cl_said" >&2
+      exit 4 ;;
+  esac
+
+  # ── STEP 3: the answer. `ok` decides; anything that is not a parseable object carrying a boolean
+  # `ok` is treated as a REFUSAL, never as success — a transport whose answer we cannot read has not
+  # told us the message landed.
+  CLOUD_OK="$(printf '%s' "$CLOUD_OUT" | jq -r 'if type=="object" and (.ok|type)=="boolean" then (.ok|tostring) else "" end' 2>/dev/null || true)"
+  if [ "$CLOUD_OK" != "true" ]; then
+    CLOUD_WHY="$(printf '%s' "$CLOUD_OUT" | jq -r 'if type=="object" then (.error // .message // .reason // .detail // empty) else empty end' 2>/dev/null || true)"
+    # The API's OWN reason, never a bare failure. Falling back through stderr and then the raw body
+    # keeps that promise even when the answer was not the shape we expected: a caller that is told
+    # only "it failed" has to guess, and every guess here is a wrong action.
+    [ -n "$CLOUD_WHY" ] || CLOUD_WHY="$(printf '%s' "$CLOUD_ERRTXT" | head -n3)"
+    [ -n "$CLOUD_WHY" ] || CLOUD_WHY="$(printf '%s' "$CLOUD_OUT" | head -c 300)"
+    [ -n "$CLOUD_WHY" ] || CLOUD_WHY="(the transport exited $CLOUD_RC and said NOTHING on stdout or stderr)"
+    verdict cloud-refused reason=api-not-ok "cloud=$CLOUD_ID" "rc=$CLOUD_RC"
+    echo "cc-notify ✖ --cloud send to [$CLOUD_ID] REFUSED — the message was NOT queued. The API's own reason:" >&2
+    printf '  %s\n' "$CLOUD_WHY" >&2
+    exit 8
+  fi
+
+  CLOUD_URL="$(printf '%s' "$CLOUD_OUT" | jq -r '.url // empty' 2>/dev/null || true)"
+  CLOUD_SID="$(printf '%s' "$CLOUD_OUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+
+  # ── STEP 3 (record). The sidecar lives beside the declaration, under the SAME state dir cc-cloud
+  # reads (CC_CLOUD_STATE is the shared seam; cc-cloud's own `STATE=` line is its SSOT). One JSON
+  # object per line, appended: a send is an EVENT and there are many of them, so the `key=value`
+  # shape of .decl/.seen — which cc-cloud's dfield reads as first-match-wins — cannot hold them.
+  # `.sends` is a name cc-cloud does not read, so this cannot disturb its state function.
+  # Recording the URL is the load-bearing part: it is the only handle by which anyone can later go
+  # LOOK at what the session did with the message.
+  CLOUD_STATE_DIR="${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}"
+  CLOUD_RECORDED=0
+  CLOUD_REC="$(jq -nc --arg id "$CLOUD_ID" --arg url "$CLOUD_URL" --arg sid "$CLOUD_SID" \
+                      --arg from "$FROM" --arg msg "$CLOUD_MSG1" \
+                      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+       '{kind:"cloud-send", id:$id, url:$url, session_id:$sid, from:$from, msg:$msg, ts:$ts, queued:true, read:null}' 2>/dev/null || true)"
+  if [ -n "$CLOUD_REC" ] && mkdir -p "$CLOUD_STATE_DIR" 2>/dev/null \
+     && printf '%s\n' "$CLOUD_REC" >> "$CLOUD_STATE_DIR/$CLOUD_ID.sends" 2>/dev/null; then
+    CLOUD_RECORDED=1
+  fi
+
+  verdict cloud-queued reason=api-ok "cloud=$CLOUD_ID" "queued=1" "recorded=$CLOUD_RECORDED" \
+          "url=${CLOUD_URL:-none}"
+  # `verdict=cloud-queued`, deliberately NOT `delivered`: the word this tool reserves for a message
+  # a live reader will drain is not available for a queue ack. enqueued=0 in the token above is
+  # likewise literal — nothing was written to a local inbox, because off-box there is none.
+  echo "cc-notify ☁ QUEUED to off-box [$CLOUD_ID] — the API accepted it (ok:true). QUEUED IS NOT READ: there is no off-box cursor, so nothing here can ever prove the session consumed it (cc-notify --cloud $CLOUD_ID --receipt exits 7 UNKNOWN, by construction)." >&2
+  [ -n "$CLOUD_URL" ] && echo "  session: $CLOUD_URL" >&2
+  if [ "$CLOUD_RECORDED" = 1 ]; then
+    echo "  recorded: $CLOUD_STATE_DIR/$CLOUD_ID.sends" >&2
+  else
+    # The message IS queued — that already happened at the API and no local failure can undo it. So
+    # this is loud but NOT a failure exit: reporting failure would license a re-send of a message
+    # that landed. What is lost is the forensic record, and saying so is the honest verdict.
+    echo "  ⚠ NOT RECORDED — could not append to $CLOUD_STATE_DIR/$CLOUD_ID.sends. The send STANDS (do not re-send); what is missing is the local record of it, so this send is not auditable later." >&2
+  fi
+  _echo_sent
+  exit 0
+fi
 # rc 0 = resolved (uuid on stdout) · 1 = target genuinely UNKNOWN · 4 = RESOLVER UNAVAILABLE
 # · 6 = AMBIGUOUS prefix (candidates on stdout). The caller MUST branch on these: reporting a
 # resolver outage as "not a live session name or a pane UUID" is what sent this desk chasing the
@@ -493,14 +736,8 @@ if [ "$HAVE_MSG" = 0 ]; then
   echo "cc-notify: no message given" >&2; usage >&2; exit 2
 fi
 
-# --- attribution (default: own registered name, else account) ---
-if [ -z "$FROM" ]; then
-  rdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
-  if [ -n "$own_uuid" ] && [ -f "$rdir/$own_uuid.json" ]; then
-    FROM="$(jq -r '.name // empty' "$rdir/$own_uuid.json" 2>/dev/null)"
-  fi
-  [ -z "$FROM" ] && FROM="$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" | sed 's/^\.//')"
-fi
+# --- attribution (default: own registered name, else account) — defined once, above ---
+resolve_from
 
 # --- ENQUEUE to the inbox (the durable, keystroke-free transport) ---
 # One message = one line: collapse any embedded newlines/CR to spaces so the <uuid>.seen line-count
