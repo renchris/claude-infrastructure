@@ -55,12 +55,34 @@ setup() {
 
 # ---- one-way fires are NOT gated (fire-and-forget default) ------------------------------------
 
-@test "one-way fire (no cc-notify) → advisory note, NOT blocked, dry exit 0" {
+# Since 2026-08-08 a bare fire is NOT one-way — the back-channel trailer is opt-out — so a payload
+# with no cc-notify of its own gets one materialized at fire time, and saying "one-way fire" here
+# would be false. The old advisory now belongs to the case that IS genuinely one-way: --no-notify-back.
+@test "no authored cc-notify → NOT blocked, and reported as materialized-at-fire-time, dry exit 0" {
   printf 'Go build feature X. Fire and forget.\n' > "$P"
   run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" --dry-run
   [ "$status" -eq 0 ]
+  [[ "$output" == *"one is materialized at fire time"* ]] || false
+  [[ "$output" != *"WOULD BLOCK"* ]]
+}
+
+@test "--no-notify-back → the genuine one-way fire still gets the advisory, still not blocked" {
+  printf 'Go build feature X. Fire and forget.\n' > "$P"
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID" \
+    --no-notify-back --dry-run
+  [ "$status" -eq 0 ]
   [[ "$output" == *"payload-lint (advisory): one-way fire"* ]] || false
   [[ "$output" != *"WOULD BLOCK"* ]]
+}
+
+# THE LAUNDERING REGRESSION, pinned. F3 judges what the AUTHOR wrote; our own trailer must never
+# make a malformed authored back-channel pass. Without PROMPT_FILE_ORIG this exits 0 and fires.
+@test "our default trailer does NOT launder a malformed AUTHORED back-channel past F3" {
+  printf 'Continue the build.\nOn completion, cc-notify the desk when finished.\n' > "$P"
+  run timeout 25 bash "$HF" --prompt-file "$P" --cwd "$WT" --launcher claude --session-id "$SID"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"ABORTED (F3 / T-P2-5)"* ]] || false
+  [[ "$output" != *"→ fired"* ]]
 }
 
 # ---- dry preview reports the block without failing (dry never fires) --------------------------

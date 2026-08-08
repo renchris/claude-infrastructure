@@ -482,8 +482,8 @@ Mixed turn → show the worst-open rung only.
 
   | | Test | Action |
   |---|---|---|
-  | **♻️ Recycle** | Everything of value is already on disk (committed · plan · memory · packet). The context holds no judgment a successor could not re-derive. | `handoff-fire.sh --recycle` — same pane, fresh context. The cheapest case and the common one. |
-  | **📤 Handoff** | Work remains AND it needs a *different* setup (another repo, account, or worklist), or this pane should retire. | `Skill(handoff)` — build the bridge, then fire. Never hand-type the chain. |
+  | **♻️ Recycle** | Everything of value is already on disk (committed · plan · memory · packet). The context holds no judgment a successor could not re-derive. **A different worktree does NOT disqualify this** — see below. | `handoff-fire.sh --recycle` — same pane, fresh context. The cheapest case and the common one. A new worktree/dir rides along: `--recycle --worktree <name>` (or `--cwd`). |
+  | **📤 Handoff** | Work remains AND it needs a setup THIS PANE CANNOT BECOME — a different **account** or **model** (both are launch-time identity), or this pane should retire. | `Skill(handoff)` — build the bridge, then fire. Never hand-type the chain. |
   | **⏸ Hold** | The context IS the asset: a live exchange, a half-formed judgment, an investigation whose *dead ends* are the value and are nowhere on disk. | **Do not cut.** Finish the thought, PERSIST it, then recycle at the natural seam. |
 
   **The Hold test, stated so it cannot become an excuse:** ask *"what would a successor reading only
@@ -492,6 +492,18 @@ Mixed turn → show the worst-open rung only.
   FIRST action is to write that answer down, which converts the Hold into a Recycle. **No concrete
   answer means no Hold.** "I have a lot of context" is not an answer; persisting is precisely what
   stops it being true.
+
+  🚨 **"It needs a fresh worktree" is NOT a reason to Handoff — that was a TOOL LIMIT, and it is
+  gone (2026-08-08).** `--recycle` used to refuse `--worktree`/`--cwd` outright ("same pane = same
+  dir"), so the commonest long-horizon succession — *wave N done, wave N+1 starts on a fresh
+  worktree off origin/main* — could only be expressed as a Handoff, i.e. a NEW pane. The cost is a
+  pane that survives holding nothing: an **ORIGIN** session may not self-close into its successor
+  (that invariant is deliberate and stays), so it idles forever. Measured on
+  `TENANT_PROVISIONING_100P` wave 5 — pane 427 fired the wave lead, ran `self-close --successor
+  756`, was correctly refused, and sat idle from 05:39 on while the work finished elsewhere.
+  `--recycle --worktree <name>` now provisions the worktree through the ordinary fire machinery and
+  relaunches THE SAME PANE into it. **Reach for Recycle first; Handoff is for what a pane cannot
+  become** — a different account or model, which are fixed at launch.
 - **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
