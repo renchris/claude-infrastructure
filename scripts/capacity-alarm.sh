@@ -171,16 +171,27 @@
 # 2,520 — and the combined page is one fixed self-clearing slug. The cost of being wrong is one
 # page; the cost of the blindness it replaces was measured four times.
 #
-# ABSOLUTE-PATH sysctl, unlike every incumbent rung in this file. This job runs under launchd with
-# a PATH the wrapper EXPORTS, and the bare-name class has already cost this repo three silently
-# dead rungs (see the plist's own /usr/sbin paragraph) — and is costing it one right now: every
-# capacity-gate row in handoffs.jsonl reads `hw.ncpu unreadable ('') — load term not evaluated`,
-# which is this exact sysctl, resolved by bare name, from a daemon context. So rung 7 resolves
-# /usr/sbin/sysctl directly and only falls back to the bare name when that file is absent. The
-# incumbent bare-`sysctl` sites are deliberately NOT converted in this change: they are pinned by
-# tests/capacity-alarm-launchd-path.bats against the plist's own PATH string, and that suite's RED
-# CONTROL requires read_segments to stay PATH-sensitive. Converting them is an edit to a landed
-# guard, not a maintenance edit — backlogged, not forgotten.
+# ABSOLUTE-PATH sysctl — now EVERY sysctl site in this file, not just rung 7. This job runs under
+# launchd with a PATH the wrapper EXPORTS, and the bare-name class has already cost this repo three
+# silently dead rungs (see the plist's own /usr/sbin paragraph). Rung 7 resolved /usr/sbin/sysctl
+# directly from the start, falling back to the bare name only when that file is absent.
+#
+# THE INCUMBENT SITES WERE CONVERTED 2026-08-08 (backlog 2c1388d063bf), closing the deferral this
+# paragraph used to record. What made it a deferral: converting them is an edit to a LANDED GUARD,
+# because tests/capacity-alarm-launchd-path.bats induced "sysctl is unreachable" by stripping
+# /usr/sbin from PATH, and an absolutely-resolved rung is by construction immune to that. The first
+# attempt (e6de2e15) converted the sites without touching the guard, so the guard went red and the
+# post-land verifier auto-reverted the whole commit (d12a4812) — including three unrelated fixes.
+#
+# The guard was not stale and it was not wrong; it conflated two things. Its INVARIANT — an
+# unreadable sysctl yields a SKIPPED rung, never a fabricated healthy 0 — is exactly right and is
+# still pinned. Its MECHANISM for making sysctl unreadable (drop /usr/sbin) was only ever a proxy,
+# and hardening the code is precisely what retires a proxy. It now induces the unreadable state
+# through the seam ($SYSCTL / CC_CAP_SYSCTL, honoured verbatim), which tests the invariant against
+# any resolution strategy, and a NEW test pins the property the old mechanism used to stand for:
+# these rungs answer with /usr/sbin off the PATH. That is strictly more than the old pair proved —
+# the plist's PATH string is a fact about ANOTHER FILE, it has already been false once, and three
+# rungs died silently for the whole time it was.
 #
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
@@ -192,7 +203,8 @@
 #        CC_CAP_SEG_SOURCE (est | zprint — default est) ·
 #        CC_CAP_TIMEOUT (timeout(1) binary, for stubbing the zprint slow lane) ·
 #        CC_CAP_LOAD_WARN_PER_CORE (default 1.5) · CC_CAP_LOAD_ALARM_PER_CORE (default 2.5) ·
-#        CC_CAP_SYSCTL (sysctl(1) binary for rung 7 ONLY — absolute by default, see D4)
+#        CC_CAP_SYSCTL (sysctl(1) binary for EVERY rung — absolute by default, see D4; an explicit
+#          value is honoured verbatim, so =/nonexistent/sysctl is how a test reaches "unreadable")
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -302,7 +314,7 @@ print("%.2f %.2f %.2f %.2f" % (head,comp,act,wired))
 }
 
 MEM="$(read_mem || true)"
-SWAP_MB="$(sysctl -n vm.swapusage 2>/dev/null \
+SWAP_MB="$("$SYSCTL" -n vm.swapusage 2>/dev/null \
             | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
 
 # ── the log's own recent history — the state D1 and D3 need, with no sidecar to go stale ─────────
@@ -438,8 +450,19 @@ fi
 # Column 7 of the zprint row is `cur inuse`, validated 2026-07-30 against zones with known-nonzero
 # counts; the `cur size`/`#elts` columns read 0 on this build, so position 7 is the one to parse.
 read_segments() { # → "<inuse> <limit> <source>", or nothing when unreadable (never a fabricated 0)
-  local to row inuse limit pgsz pages swap_mb
-  limit="$(sysctl -n vm.compressor_segment_limit 2>/dev/null)"
+  local to row inuse limit pgsz pages swap_mb sysctl_bin
+  # Resolved INSIDE the function rather than read from the file-level $SYSCTL, because this function
+  # is EXTRACTED and called standalone by tests/capacity-alarm-segments.bats and by this file's
+  # launchd-PATH suite — a bare dependency on a global set elsewhere would make it behave differently
+  # under test than in production. An explicit $SYSCTL is still honoured VERBATIM (that is how both
+  # suites inject a stub, and the only way to reach the unreadable arm on a host that HAS the binary);
+  # absent one, the fallback computes the SAME value the file-level block does, so extracted and
+  # shipped behaviour are identical. See the header's D4 paragraph for why this is absolute at all.
+  if   [ -n "${SYSCTL+set}" ];  then sysctl_bin="$SYSCTL"
+  elif [ -x /usr/sbin/sysctl ]; then sysctl_bin=/usr/sbin/sysctl
+  else                               sysctl_bin=sysctl
+  fi
+  limit="$("$sysctl_bin" -n vm.compressor_segment_limit 2>/dev/null)"
   case "$limit" in ''|*[!0-9]*) return 1 ;; esac
   [ "$limit" -gt 0 ] || return 1
 
@@ -473,7 +496,7 @@ read_segments() { # → "<inuse> <limit> <source>", or nothing when unreadable (
   pgsz="${row%% *}"; pages="${row##* }"
   case "$pgsz" in ''|*[!0-9]*) return 1 ;; esac
   case "$pages" in ''|*[!0-9]*) return 1 ;; esac
-  swap_mb="$(sysctl -n vm.swapusage 2>/dev/null \
+  swap_mb="$("$sysctl_bin" -n vm.swapusage 2>/dev/null \
               | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p' | head -1)"
   case "$swap_mb" in ''|*[!0-9.]*) return 1 ;; esac
   inuse="$(awk -v p="$pages" -v z="$pgsz" -v s="$swap_mb" \
@@ -511,7 +534,7 @@ fi
 # through UNDER-packing (the pool is provisioned for 124.3 GiB on a 64 GiB box), so a falling
 # occupancy while seg_pct climbs is the fragmentation signature.
 OCCUPANCY_PCT=""
-SEG_PAGES="$(sysctl -n vm.compressor_segment_pages_compressed 2>/dev/null | tr -dc '0-9')"
+SEG_PAGES="$("$SYSCTL" -n vm.compressor_segment_pages_compressed 2>/dev/null | tr -dc '0-9')"
 if [ -n "$SEG_PAGES" ] && [ -n "$SEG_EST" ] && [ "$SEG_EST" -gt 0 ]; then
   OCCUPANCY_PCT="$(awk -v p="$SEG_PAGES" -v s="$SEG_EST" 'BEGIN{printf "%.1f", 100*p/(16*s)}')"
 fi
@@ -602,7 +625,7 @@ case "$SESSIONS_BIN" in ''|*[!0-9]*) SESSIONS_BIN=0 ;; esac
 # ── the kernel's own leading indicator (M9-ext rung 3) ────────────────────────────────────────────
 # Empty when the sysctl does not exist on this build; see the header — that is a skipped rung, never
 # NO-DATA. Stripped of whitespace so the numeric guards in classify() see a bare integer.
-PRESSURE="$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null | tr -dc '0-9')"
+PRESSURE="$("$SYSCTL" -n kern.memorystatus_vm_pressure_level 2>/dev/null | tr -dc '0-9')"
 
 # ── per-proc physical-footprint outlier (M9b rung 4) ──────────────────────────────────────────────
 # §8.5.6 prescribed footprint(1) as the instrument because summed `ps rss` OVERCOUNTS ~2.34x (shared

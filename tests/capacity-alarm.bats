@@ -248,7 +248,13 @@ esac
 SC
   chmod +x "$STUBS/sysctl"
   mk_top_stub 900
-  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  # CC_CAP_SYSCTL, not PATH. Since 2026-08-08 EVERY sysctl site in the script resolves absolutely
+  # (/usr/sbin/sysctl), for the reason rung 7 always did — the plist's PATH is a fact about another
+  # file and has been wrong before. A PATH stub is therefore bypassed, and this test would silently
+  # start reading the live box's pressure level instead of the 2 it thinks it injected: green on a
+  # healthy machine, and a lie either way. The stub's own `*) exec /usr/sbin/sysctl` fall-through
+  # keeps every other rung (including rung 7) reading the real values.
+  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 1 ] || false
   [[ "$output" =~ \"verdict\":\"WARN\" ]] || false
   [[ "$output" =~ \"pressure_level\":2 ]] || false
@@ -266,7 +272,7 @@ esac
 SC
   chmod +x "$STUBS/sysctl"
   mk_top_stub 900
-  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 2 ] || false
   [[ "$output" =~ \"verdict\":\"ALARM\" ]] || false
 }
@@ -287,7 +293,7 @@ esac
 SC
   chmod +x "$STUBS/sysctl"
   mk_top_stub 900
-  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ \"verdict\":\"OK\" ]] || false
   ! [[ "$output" =~ \"verdict\":\"NO-DATA\" ]] || false

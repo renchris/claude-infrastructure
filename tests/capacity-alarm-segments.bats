@@ -95,7 +95,13 @@ mk_seg_stubs() { # <dir> [swap_used] — writes stub vm_stat + sysctl; caller ma
 
 run_read_segments() { # <script> <stubdir> [env...]
   local script="$1" stub="$2"; shift 2
-  run env PATH="$stub:/usr/bin:/bin" "$@" bash -c "$(sed -n '/^read_segments() {/,/^}/p' "$script")"'
+  # SYSCTL is injected EXPLICITLY, not left to the stub-only PATH. Since 2026-08-08 read_segments
+  # resolves sysctl absolutely (/usr/sbin/sysctl), so a PATH stub alone is simply bypassed and the
+  # extraction would read the LIVE machine — the exact non-hermeticity this helper exists to prevent,
+  # and it would fail silently, as a suite that passes on an idle box and flakes on a busy one.
+  # vm_stat is still reached through PATH; only the sysctl half moved. Caller env comes after, so a
+  # test can still override SYSCTL itself.
+  run env PATH="$stub:/usr/bin:/bin" SYSCTL="$stub/sysctl" "$@" bash -c "$(sed -n '/^read_segments() {/,/^}/p' "$script")"'
                read_segments'
 }
 
