@@ -84,30 +84,66 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   grep -q 'do NOT hand-write mailbox files' "$copy"  # the "durable fallback" invitation is gone
 }
 
-@test "--no-self-retire (no --notify-back): no trailer, original prompt used as-is" {
+@test "--no-self-retire --no-notify-back: no trailer at all, original prompt used as-is" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000004" \
-    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire --dry-run
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-self-retire --no-notify-back --dry-run
   [ "$status" -eq 0 ]
   ! printf '%s\n' "$output" | grep -q 'notify-back:' || false
   printf '%s\n' "$output" | grep -qF "cat $PF"  # command reads the original prompt directly
 }
 
-@test "default (no --notify-back): self-retire trailer added, a COPY is used not the original" {
+# --- back-channel is OPT-OUT (2026-08-08) -------------------------------------------------------
+# Was opt-in. Measured over 7 days: 8 of 301 real fires carried a back-channel, so a surviving
+# originator routinely had no completion signal and leads hand-wrote git-poll loops with GUESSED
+# commit counts. These four tests pin the new default and each of its three escapes.
+
+@test "default fire: back-channel trailer added with NO flag, addressed to the firing pane" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000005" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
   [ "$status" -eq 0 ]
-  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false # no back-channel (no --notify-back)
-  ! printf '%s\n' "$output" | grep -qF "cat $PF" || false     # NOT the original — self-retire wrapped it
+  printf '%s\n' "$output" | grep -q 'originator AAAAAAAA-0000-0000-0000-000000000005'
   copy="$(cmd_prompt_of "$output")"
   [ -n "$copy" ]; [ -f "$copy" ]
   [ "$copy" != "$PF" ]                                        # a distinct copy, never the caller's file
-  grep -q 'SELF-RETIRE' "$copy"                               # the self-retire directive is present
+  grep -q 'cc-notify AAAAAAAA-0000-0000-0000-000000000005 "HANDOFF-PING' "$copy"
+  grep -q 'SELF-RETIRE' "$copy"                               # both trailers coexist
   grep -q 'ORIGINAL PROMPT BODY' "$copy"                      # original body preserved first
 }
 
-@test "--recycle: self-retire auto-excluded (the recycled pane IS the continuation)" {
+@test "--no-notify-back opts out but KEEPS self-retire" {
+  run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-00000000000A" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --no-notify-back --dry-run
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false
+  copy="$(cmd_prompt_of "$output")"
+  [ -n "$copy" ]; [ -f "$copy" ]
+  ! grep -q 'HANDOFF-PING' "$copy" || false                   # no back-channel
+  grep -q 'SELF-RETIRE' "$copy"                               # self-retire is a separate opt-out
+}
+
+# THE REGRESSION THIS DEFAULT COULD HAVE CAUSED. A headless fire (launchd/cron) has no firing pane,
+# so the defaulted BACK_SID cannot resolve. Before this test the same code path exit-1'd — which
+# would have broken every scheduled fire on the box the moment the default landed.
+@test "defaulted back-channel with no firing pane DEGRADES (exit 0), does not error" {
+  run env -u ITERM_SESSION_ID \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'back-channel: SKIPPED'
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false
+}
+
+@test "EXPLICIT --notify-back with no firing pane still hard-errors (degrade is default-only)" {
+  run env -u ITERM_SESSION_ID \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --notify-back --dry-run
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'ITERM_SESSION_ID and no UUID'
+  ! printf '%s\n' "$output" | grep -q 'back-channel: SKIPPED' || false
+}
+
+@test "--recycle: self-retire AND back-channel auto-excluded (the recycled pane IS the continuation)" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000006" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle --dry-run
   [ "$status" -eq 0 ]
-  ! printf '%s\n' "$output" | grep -q 'handoff-prompt-nb'     # no trailer copy made — original used as-is
+  ! printf '%s\n' "$output" | grep -q 'handoff-prompt-nb' || false # no trailer copy made — original used as-is
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false # no originator distinct from this pane
 }

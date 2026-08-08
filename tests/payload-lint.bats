@@ -12,10 +12,12 @@ setup() {
   P="$BATS_TEST_TMPDIR/p.txt"
 }
 
-@test "selftest passes 5/5 (a zero-check suite must not 'pass')" {
+@test "selftest passes 7/7 (a zero-check suite must not 'pass')" {
   run "$L" --selftest
   [ "$status" -eq 0 ]
-  [[ "$output" == *"5/5"* ]]
+  # 5→7 on 2026-08-08: + a kitty pane-id back-channel goes GREEN, + a prose integer stays RED.
+  # The COUNT is the assertion — it is what stops a selftest silently shrinking to zero checks.
+  [[ "$output" == *"7/7"* ]]
 }
 
 @test "block-less payload → RED (exit 1) — the W5 drop" {

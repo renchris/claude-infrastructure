@@ -292,7 +292,12 @@ spawner creates the branch AT the frozen ref) and DROP the payload's Step-0 `git
 the branch already exists; keep only the rebase/verify lines. `--wtroot` relocates the worktree parent
 if the bridge promised `/tmp/wt-<slug>`. **Mode A fire (single track) → RECYCLE this pane, not a new
 pane:** `--recycle` = **EXIT + RELAUNCH**, never `/clear`+queued-payload (rebuilt 2026-07-03 after the
-catnav incident). CC's queue is TYPE-ASYMMETRIC: plain text typed mid-turn is STEERED into the
+catnav incident). **A fresh worktree no longer forces a new pane (2026-08-08):** `--recycle` composes
+with `--worktree <slug>` / `--cwd <dir>` — same pane, new dir, worktree provisioned by the ordinary
+fire machinery (pool-claim / cold-create / dep install / pre-trust). Before this, a wave-to-wave
+succession needing a fresh worktree could only be a new-pane fire, and the predecessor was left idle
+holding nothing — an ORIGIN session cannot self-close into its successor. Recycle first; spawn a new
+pane only for what a pane cannot BECOME (a different account or model). CC's queue is TYPE-ASYMMETRIC: plain text typed mid-turn is STEERED into the
 still-running turn at the next tool-result boundary (arrives as a `queued_command` attachment) — and the
 fire script's own Bash call guarantees that boundary — while `/clear` holds until turn end. So the old
 design deterministically ran the payload INLINE in the old context with `/clear` armed behind it to wipe

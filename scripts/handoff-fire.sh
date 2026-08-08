@@ -110,16 +110,32 @@
 #                       FLAGS (typed /model+/effort mutated saved defaults); old transcript
 #                       stays resumable via --resume. Account defaults to THIS session's
 #                       (CLAUDE_CONFIG_DIR-derived); --account/--launcher/--model/--effort/
-#                       --extra/--probe all compose. Excludes --worktree/--cwd/surface flags.
+#                       --extra/--probe all compose. Excludes surface flags (same pane by
+#                       definition).
+#                       RELOCATING RECYCLE (2026-08-08): --recycle now COMPOSES with --worktree NAME
+#                       / --cwd DIR — same pane, NEW dir. The worktree is provisioned by the ordinary
+#                       fire machinery (pool-claim / cold-create / dep install / pre-trust), then the
+#                       relaunch cd's into it instead of $PWD. This is what makes ♻️ Recycle reachable
+#                       for the commonest long-horizon succession — wave N done, wave N+1 needs a
+#                       fresh worktree off origin/main — which previously had to become a 📤 Handoff
+#                       (new pane) purely because recycle could not express it, stranding the
+#                       predecessor as an idle orphan that an ORIGIN session cannot even self-close.
 #   --session-id UUID   Recycle/self-close target pane. Default = this pane's own id: on iTerm2
 #                       $ITERM_SESSION_ID's UUID, and on a kitty pane whose ancestry cc-in-kitty
 #                       CONFIRMS, $KITTY_WINDOW_ID (self-close only — see self_pane_id).
-#   --notify-back [UUID] Two-way sugar: append a back-channel trailer to a COPY of the prompt
+#   --notify-back [UUID] DEFAULT for every non-recycle fire. Append a back-channel trailer to a COPY
+#   --no-notify-back    of the prompt
 #                       (never the caller's file) telling the fired session to ping the
 #                       ORIGINATOR via `cc-notify <UUID> "HANDOFF-PING <slug>: <status>"` on
 #                       completion / decision gate / blocker. UUID defaults to THIS firing pane
 #                       ($ITERM_SESSION_ID / --session-id). Pair with `cc-await-ping` on the
 #                       originator for a modal-safe wake. See docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md.
+#                       OPT-OUT since 2026-08-08 (was opt-in; measured 8 of 301 fires carried one,
+#                       so leads hand-wrote git-poll loops with GUESSED commit counts instead).
+#                       Auto-OFF for --recycle (the recycled pane IS the continuation, so there is
+#                       no distinct originator). DEGRADES, never fails: a headless fire with no
+#                       firing pane silently skips it — only an EXPLICIT --notify-back errors.
+#                       --no-notify-back opts out for a deliberate one-way fire.
 #   --self-retire       DEFAULT for non-recycle fires. Append a SELF-RETIRE directive to the prompt
 #   --no-self-retire    copy: the fired PEER drives its trivial pre-authorized tail, then runs
 #                       `self-close --terminal` on its OWN pane instead of idling. --notify-back
@@ -287,7 +303,8 @@ PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
 REPO="$DEFAULT_REPO" REPO_EXPLICIT=0 REPO_SRC="default (cwd is not a git repo)"
 WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
-NOTIFY_BACK="" SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
+NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
+RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 # ---- V2 LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5) -----------------------------------------
 # THE INVERSION: row 2 owns the lifecycle ACTIONS but used to own almost none of the FACTS about
@@ -3042,7 +3059,15 @@ payload_lint_gate() {
   if [ "$rc" -eq 2 ]; then
     echo "⚠ payload-lint: INDETERMINATE — $out (proceeding; the empty/missing prompt guards already passed)" >&2
   else
-    echo "⚠ payload-lint (advisory): one-way fire with no back-channel block — a fired session cannot announce back. Add --notify-back or a cc-notify recipe if a completion ping is expected." >&2
+    # This lints the CALLER'S file, which is pre-trailer by construction — so once the back-channel
+    # became opt-out (2026-08-08) the bare advisory would have fired on almost every fire while a
+    # trailer was in fact about to be appended to the launch-time copy. A warning that is wrong by
+    # default is a warning nobody reads.
+    if [ -n "${NOTIFY_BACK:-}" ]; then
+      echo "→ payload-lint: no back-channel in the caller's payload — one is materialized at fire time (--notify-back is the default; --no-notify-back opts out)." >&2
+    else
+      echo "⚠ payload-lint (advisory): one-way fire with no back-channel block — a fired session cannot announce back. Add --notify-back or a cc-notify recipe if a completion ping is expected." >&2
+    fi
   fi
   return 0
 }
@@ -4131,7 +4156,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --probe)       PROBE=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
-  --notify-back) NOTIFY_BACK="${2:-}"; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
+  --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
+  --no-notify-back) NOTIFY_BACK_OPT_OUT=1; NOTIFY_BACK=""; shift ;;
   --self-retire)    SELF_RETIRE=1; shift ;;
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
@@ -4247,7 +4273,30 @@ env_account() { # reverse of cfg_dir: THIS session's account from its own CLAUDE
 # defaulting happen here, execution happens in recycle_fire at the bottom.
 SID=""
 if [ "$RECYCLE" = 1 ]; then
-  [ -n "$WORKTREE$CWD" ] && { echo "!! --recycle excludes --worktree/--cwd (same pane = same dir)" >&2; exit 1; }
+  # RELOCATING RECYCLE (2026-08-08). This used to refuse --worktree/--cwd outright — "same pane =
+  # same dir" — and that refusal made ♻️ Recycle STRUCTURALLY UNREACHABLE for the single most common
+  # succession in a long-horizon plan: wave N finishes, wave N+1 needs a FRESH worktree off
+  # origin/main. The close protocol's disposition table routes that to 📤 Handoff purely because
+  # Recycle could not express it, so the predecessor pane survives as an orphan — and an ORIGIN
+  # session cannot even self-close into its successor (that invariant is deliberate), so it idles
+  # forever holding nothing. Measured on TENANT_PROVISIONING_100P wave 5: pane 427 fired the wave
+  # lead, ran `self-close --successor 756`, was correctly refused, and has sat idle since.
+  #
+  # What is relaxed is ONLY the dir identity. Everything that makes recycle *recycle* is untouched:
+  # one pane, exit-then-relaunch, no new surface. The worktree is provisioned by the normal
+  # (non-recycle) machinery below, so pool-claim, cold-create, dep install and pre-trust all behave
+  # exactly as they do for an ordinary --worktree fire. Surface flags stay refused because THOSE are
+  # structural — there is no second surface to place.
+  #
+  # IN_PLACE is deliberately NOT forced here (it is, below, for a same-dir recycle). IN_PLACE exists
+  # to set CLAUDE_ISOLATION_SKIP=1 so a repo-ROOT relaunch cannot auto-create a worktree out from
+  # under the continuation; a relocating recycle is already landing IN a worktree, where
+  # _cc_route_check launches in place anyway — so forcing it would diverge from the ordinary
+  # --worktree fire for no reason.
+  if [ -n "$WORKTREE$CWD" ]; then
+    [ -n "$WORKTREE" ] && [ -n "$CWD" ] && { echo "!! --recycle: --worktree and --cwd are mutually exclusive" >&2; exit 1; }
+    RECYCLE_RELOC=1
+  fi
   [ "$SURFACE_EXPLICIT" = 1 ] && { echo "!! --recycle excludes surface flags (same pane by definition)" >&2; exit 1; }
   # SAME SELF-IDENTITY QUESTION AS self-close, same answer (item 4e074b938da7). Measured 2026-08-05:
   # `--recycle` on a kitty pane with no $ITERM_SESSION_ID exited 1 here, so the in-place continuation
@@ -4265,7 +4314,10 @@ if [ "$RECYCLE" = 1 ]; then
   pin_term_verdict_for_watcher
   SID="${SESSION_ID:-$(self_pane_id)}"
   [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
-  IN_PLACE=1                                     # relaunch stays in this pane's dir by definition
+  # Same-dir recycle only: relaunch stays in this pane's dir by definition, so CLAUDE_ISOLATION_SKIP=1
+  # must stop the repo-root launcher auto-routing into a fresh worktree. A relocating recycle is
+  # landing in an explicit dir and takes the ordinary --worktree/--cwd path (see RECYCLE_RELOC above).
+  [ "$RECYCLE_RELOC" = 0 ] && IN_PLACE=1
   if [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
     ACCOUNT="$(env_account)" \
       || { echo "!! --recycle: can't derive this session's account from CLAUDE_CONFIG_DIR='${CLAUDE_CONFIG_DIR:-}' — pass --account or --launcher" >&2; exit 1; }
@@ -4547,6 +4599,24 @@ NC="nocorrect "
 # self-retires. BACK_SID mirrors FIRING_SID (the spawn anchor), computed inline to stay self-contained.
 WANT_SELF_RETIRE=0
 [ "$SELF_RETIRE" = 1 ] && [ "$RECYCLE" = 0 ] && WANT_SELF_RETIRE=1
+# ---- BACK-CHANNEL BY DEFAULT (2026-08-08) ------------------------------------------------------
+# Measured over 7 days of real fires: 8 of 301 carried a back-channel. One-way was the NORM, not the
+# exception — so a firing session that survives its fire routinely had NO completion signal, and
+# leads compensated by hand-writing git-poll loops against the child's worktree. The one on
+# TENANT_PROVISIONING_100P wave 5 read `[ "$uic" -ge 2 ]` — a GUESSED commit count, re-authored per
+# fire; UI-R happened to produce 3, and had it produced 1 the loop would have run to its 170-minute
+# timeout while the child sat finished. A ping needs no guess.
+#
+# So the trailer is now opt-OUT for a fire whose originator survives it. --recycle is excluded
+# because the recycled pane IS the continuation — there is no distinct originator to ping.
+#
+# DEGRADES, NEVER FAILS. A headless fire (launchd/cron) has no firing pane, so BACK_SID cannot
+# resolve. An EXPLICIT --notify-back keeps its hard error (the caller asked for something that
+# cannot be delivered), but the DEFAULT silently stands down — a default that could abort a cron
+# fire would be a worse defect than the silence it replaces.
+if [ -z "$NOTIFY_BACK" ] && [ "$NOTIFY_BACK_OPT_OUT" = 0 ] && [ "$RECYCLE" = 0 ]; then
+  NOTIFY_BACK="__self__"
+fi
 # P0-11 engagement verify is active for every REAL (non-dry) non-recycle fire — it needs the
 # marker embedded in a COPY of the prompt (never the caller's file), so a copy is made even when
 # no trailer is requested (--no-self-retire without --notify-back). Dry runs make no copy (nothing
@@ -4567,7 +4637,16 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       _nb_it="${ITERM_SESSION_ID:-}"
       BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
     fi
-    [ -n "$BACK_SID" ] || { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
+    if [ -z "$BACK_SID" ]; then
+      # Explicit ask that cannot be honored → hard error (unchanged, pinned by notify-back.bats).
+      [ "$NOTIFY_BACK_EXPLICIT" = 1 ] && { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }
+      # Defaulted → stand down. No firing pane exists (headless launchd/cron fire), so there is
+      # nobody to ping; the fire proceeds exactly as it did before this default existed.
+      NOTIFY_BACK=""
+      echo "→ back-channel: SKIPPED — no firing pane to ping (headless fire); pass --notify-back <uuid> to name one" >&2
+    fi
+  fi
+  if [ -n "$NOTIFY_BACK" ]; then
     NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
     # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not shell expansions
     {
@@ -4622,6 +4701,14 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
     RECYCLE_MARKER="${RCY_ENGAGE_MARKER:-HANDOFF-RECYCLE-$$-$(date +%s)-${RANDOM:-0}}"
     printf '\n<!-- handoff-fire recycle engagement marker: %s (ignore) -->\n' "$RECYCLE_MARKER" >> "$PF_NB"
   fi
+  # THE AUTHOR'S PAYLOAD, kept for the payload gates. They exist to judge what a HUMAN/AGENT WROTE;
+  # everything appended above is machine-generated and known-good. Linting the copy instead lets our
+  # own trailer LAUNDER a malformed authored back-channel straight past the F3 enforce gate — with
+  # the back-channel opt-out (2026-08-08) that stopped being a rare --notify-back edge case and
+  # became universal: a payload saying "cc-notify the desk when finished" (no address — the exact
+  # W5 root F3 exists to catch) went GREEN purely because our trailer added a well-formed ping to a
+  # DIFFERENT recipient. The author's broken instruction survives into the successor either way.
+  PROMPT_FILE_ORIG="$PROMPT_FILE"
   PROMPT_FILE="$PF_NB"
 fi
 
@@ -4726,7 +4813,11 @@ trap fire_cleanup EXIT
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
 QP="$(printf %q "$PROMPT_FILE")"
-if [ "$RECYCLE" = 1 ]; then
+# A RELOCATING recycle (--recycle --worktree/--cwd) deliberately falls through to the ordinary
+# worktree/cwd arms below: the whole point is that the relaunch cd's somewhere NEW, so none of the
+# same-dir reasoning in this first arm applies. It keeps the recycle EXECUTION path (one pane,
+# exit-then-relaunch via recycle_fire) — only the cd target differs.
+if [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then
   # Same pane, same dir: $PWD is the session's working dir (the harness re-pins the Bash tool
   # cwd to it). PREFIX carries CLAUDE_ISOLATION_SKIP=1 (IN_PLACE forced in the pre-pass) so a
   # repo-root relaunch can't auto-create a fresh worktree out from under the continuation.
@@ -4892,7 +4983,9 @@ hf_argv_launch
 # The dir the fired session lands in — pre-trusted below so it never stalls at the trust dialog.
 # Recycle reuses the CURRENT pane's dir (already trusted — the running session proves it), so it
 # needs no pre-trust and is excluded from the spawn path.
-if   [ "$RECYCLE" = 1 ]; then LAUNCH_DIR="$PWD"
+# A RELOCATING recycle lands in a dir this run just provisioned, so — unlike a same-dir recycle —
+# it DOES need the pre-trust below, and falls through to the $WT / $CWD arms to get it.
+if   [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then LAUNCH_DIR="$PWD"
 elif [ -n "$WORKTREE" ]; then LAUNCH_DIR="$WT"
 elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
 else                          LAUNCH_DIR="$REPO"
@@ -5903,7 +5996,10 @@ recycle_fire() {
   # ROW-CHANGE signal compare a value against itself and never witness a change).
   rcy_old_sid="$(cc_sid_for_pane "$SID")"
   pin_term_verdict_for_watcher
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$PWD" "$rcy_old_sid" "$RECYCLE_MARKER")"
+  # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
+  # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
+  # dir being LEFT — naming it in a "cwd VANISHED" warning would accuse the wrong directory.
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -6036,7 +6132,7 @@ if [ "$DRY" = 1 ]; then
     echo "engagement: post-spawn transcript/registry-birth verify (P0-11) → re-send once on miss → FIRE FAILED (never a false '→ fired')"
     echo "registry:  provisional row if no P8 SessionStart row appears ≤${FIRE_REG_TIMEOUT:-30}s (P0-12)"
     [ -n "$AS_ROLE" ] && echo "role:      --as-role $AS_ROLE → $CC_ROLES_DIR/$AS_ROLE = <fired pane> (P0-15)"
-    payload_lint_gate "$PROMPT_FILE" preview   # T-P2-5: preview the back-channel lint (dry lints the PRE-trailer payload; a --notify-back block is materialized at fire time)
+    payload_lint_gate "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" preview   # T-P2-5: preview the back-channel lint. ORIG keeps this the PRE-trailer payload — which the comment always claimed, but stopped being true for a dry run the moment the back-channel became the default (a dry run now makes a copy, because NOTIFY_BACK is set even when DRY=1).
   fi
   [ "$RECYCLE" = 1 ] || echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
@@ -6045,6 +6141,11 @@ elif [ "$RECYCLE" = 1 ]; then
   # and honor --as-role. refresh is a no-op when nothing named this pane.
   refresh_roles_for "$CC_ROLES_DIR" "$SID" "$SID"
   [ -n "$AS_ROLE" ] && write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SID"
+  # A same-dir recycle needs no pre-trust — the running session in that dir already proves it is
+  # trusted. A RELOCATING recycle lands somewhere this run just provisioned, which has never been
+  # trusted for this config dir, so without this the relaunched pane stalls at the workspace-trust
+  # dialog with the brief sitting unread behind it — indistinguishable from a dead relaunch.
+  [ "$RECYCLE_RELOC" = 1 ] && pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   recycle_fire
 else
   # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).
@@ -6053,7 +6154,9 @@ else
   # (/goal fires) passes — payload-lint accepts cc-roles/<role>.
   # V2 §5.5 — payload legibility gates at the chokepoint, BEFORE anything is spawned.
   payload_pane_id_gate "$PROMPT_FILE" || { _g=$?; emit_fire_refusal payload-truncated-pane-id "payload carries a truncated pane uuid"; exit "$_g"; }
-  payload_lint_gate    "$PROMPT_FILE" enforce || { _g=$?; emit_fire_refusal payload-backchannel "malformed back-channel block"; exit "$_g"; }
+  # …ORIG, so our own trailer cannot launder a malformed authored back-channel past F3 (see the
+  # PROMPT_FILE_ORIG assignment). Falls back to PROMPT_FILE when no copy was made.
+  payload_lint_gate    "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" enforce || { _g=$?; emit_fire_refusal payload-backchannel "malformed back-channel block"; exit "$_g"; }
   pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
   # V2 §5.3 — the fire's TRUE start, captured BEFORE the pane exists. This is the producer the
   # headline metric never had: pre-v2 the earliest timestamp anywhere was written after
