@@ -14,6 +14,16 @@
 #   The fixtures-b2 lesson: a teammate ran >1h past red-100% and completed.) · STALE (age >15m,
 #   pid unknown — a legacy row from before the pid export; treat as STALL? and verify by hand).
 #   Proven 2026-07-14: a respawn sat nominally-RUNNING 1h25m with 78m-stale telemetry.
+#   · OFFBOX (the session is DECLARED off-box in cc-cloud, so no local pid exists to test and
+#   `kill -0` cannot answer — an ABSTENTION, never a death. CLOUD_OBSERVABILITY.md §5.2.)
+#
+# SCOPE OF THE OFFBOX ARM, stated so it is not over-read: this file's two spines are the telemetry
+# files and the local registry, and a cloud session writes to NEITHER (both are written by hooks
+# running inside the VM's own $HOME). So the arm fires only where a row for an off-box id does
+# reach one of those spines — a session that ran here and moved, a hand-seeded row, a future
+# producer. Making cc-board ENUMERATE off-box sessions is a different change, sourced from
+# `cc-cloud list --json` per §9.3, and it is not this one. What is fixed here is the lie: where a
+# row for an off-box id exists, the board no longer calls it dead.
 set -u
 TDIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 HANDOFF_T="${CC_BOARD_HANDOFF_PCT:-73}"
@@ -81,6 +91,35 @@ val_cell() {
   if [ "$n" -gt 0 ] 2>/dev/null; then printf '+%sc' "$n"; else printf '%s' '-'; fi
 }
 
+# ── OFF-BOX ABSTAIN (CLOUD_OBSERVABILITY.md §5.2, liar #2) ───────────────────────────────────────
+# Both death verdicts below — `DEAD` in the telemetry loop and `DIED-UNRENDERED` in the registry
+# join — are `kill -0` on a LOCAL pid. A session running in an Anthropic-managed VM has no pid on
+# this box, so for it `kill -0` fails EVERY TIME, by construction, and the board prints a
+# fabricated death for a healthy session. Neither arm is a missing feature; both are instruments
+# converting "not on this box" into "dead".
+#
+# So before either verdict is printed, ask `cc-cloud is-offbox <session-id>` and render OFFBOX
+# instead. Called ONLY on the convict path — a `kill -0` that succeeds needs no second opinion — so
+# the common row costs nothing and the fork happens only where a lie was about to be told.
+#
+# Seam: CC_CLOUD_BIN. SET, including set to EMPTY, is honored verbatim so a test can turn the
+# lookup OFF; `${VAR:-}` cannot tell unset from set-empty, and a seam that cannot turn a thing off
+# is not a seam. Fails CLOSED toward the existing verdict: no cc-cloud, unreadable state, or an
+# undeclared id all leave DEAD/DIED-UNRENDERED exactly as they were. It can only ever suppress a
+# false death, never invent a false life.
+if [ -n "${CC_CLOUD_BIN+set}" ]; then
+  CC_CLOUD="$CC_CLOUD_BIN"
+else
+  CC_CLOUD="$(command -v cc-cloud 2>/dev/null || true)"
+  [ -n "$CC_CLOUD" ] || { [ -x "$HOME/.claude/bin/cc-cloud" ] && CC_CLOUD="$HOME/.claude/bin/cc-cloud"; }
+  [ -n "$CC_CLOUD" ] || { [ -x "$(dirname "$0")/cc-cloud" ] && CC_CLOUD="$(dirname "$0")/cc-cloud"; }
+fi
+is_offbox() { # $1=session-id → 0 iff DECLARED off-box and not retired
+  [ -n "${1:-}" ] || return 1
+  [ -n "$CC_CLOUD" ] && [ -x "$CC_CLOUD" ] || return 1
+  "$CC_CLOUD" is-offbox "$1" >/dev/null 2>&1
+}
+
 now=$(date +%s)
 printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %-4s %s\n" SESSION AGE CTX ACCT 5h WK FABLE STATE VAL CWD
 # shellcheck disable=SC2045  # `ls -t` is intentional: newest-telemetry-first ordering (a glob cannot sort by mtime); filenames are session-ids, no whitespace
@@ -106,7 +145,8 @@ for f in $(ls -t "$TDIR"/*.json 2>/dev/null); do
   # liveness LAST — it outranks every other state (a DEAD row's ctx/quota is meaningless).
   # Effect-verified (invariant 1): trust `kill -0`, never telemetry freshness.
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-    state=DEAD
+    # A dead LOCAL pid is not a dead session if the session is not on this box (see OFF-BOX ABSTAIN).
+    if is_offbox "$sid"; then state=OFFBOX; else state=DEAD; fi
   elif [ "$age" -gt "$STALE_S" ]; then
     if [ -n "$pid" ]; then state="STALL?"; else state=STALE; fi
   fi
@@ -134,7 +174,13 @@ if [ -d "$REG_DIR" ]; then
     case "$rpid" in ''|*[!0-9]*) rpid="" ;; esac
     ragen=$(( now - ${rstart:-0} ))
     [ "${rstart:-0}" -gt 0 ] && [ "$ragen" -lt "$GRACE_S" ] && continue   # still starting up
-    if [ -n "$rpid" ] && ! kill -0 "$rpid" 2>/dev/null; then rstate="DIED-UNRENDERED"; else rstate="NO-RENDER?"; fi
+    # OFF-BOX ABSTAIN (see the header block above). Checked BEFORE the pid arms, not inside the
+    # dead-pid one: an off-box session has no local pid AT ALL, so it takes the `else` branch and
+    # renders `NO-RENDER?` — a verdict that is just as wrong ("up, but never rendered: hung/GO-deaf"
+    # describes a LOCAL process) and, being the softer word, is the one that would have survived
+    # review. Both arms are local-pid claims about a session that has no local pid.
+    if is_offbox "$rsid"; then rstate="OFFBOX"
+    elif [ -n "$rpid" ] && ! kill -0 "$rpid" 2>/dev/null; then rstate="DIED-UNRENDERED"; else rstate="NO-RENDER?"; fi
     if   [ "$ragen" -lt 7200 ]; then rastr="$((ragen/60))m"; else rastr="$((ragen/3600))h"; fi
     printf "%-9s %-5s %-5s %-6s %-4s %-4s %-6s %-7s %-4s %s\n" \
       "${rsid:0:8}" "$rastr" "--" "?" "?%" "?%" "?%" "$rstate" "-" "$rcwd ($rname)"

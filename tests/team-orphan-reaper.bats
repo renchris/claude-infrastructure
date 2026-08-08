@@ -146,3 +146,93 @@ archived()     { ls -d "$TEAMS/_archive/$1-"* >/dev/null 2>&1; }  # 0 iff an arc
   [ "$status" -eq 0 ]
   archived t-fb
 }
+
+# ── OFF-BOX ABSTAIN (CLOUD_OBSERVABILITY.md §5.2, liar #3 — the destructive one) ─────────────────
+# Every oracle in this file is local: `kill -0` on a watchdog pid, `lsof -d cwd`, and a cc-sessions
+# registry written by local hooks. A lead in an Anthropic-managed VM answers NO to all three BY
+# CONSTRUCTION, and the ladder then archives — on a 600s launchd timer, so an unattended cloud fleet
+# would be destroyed within ten minutes of being fired, by our own safety mechanism.
+#
+# The branch that matters is UNKNOWN, not DEAD: an off-box lead has NO watchdog pid file, so it
+# never reaches the dead-pid arm — it enters UNKNOWN, and UNKNOWN archives too past the ceiling.
+# A guard placed on the DEAD arm alone would have been correct-looking and completely ineffective.
+
+use_cc_cloud() {
+  export CC_CLOUD_BIN="$REPO/bin/cc-cloud"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloud"
+  mkdir -p "$CC_CLOUD_STATE"
+}
+declare_cloud() { printf 'id=%s\nbranch=b\n' "$1" > "$CC_CLOUD_STATE/$1.decl"; }
+
+# THE ONE THAT WOULD HAVE DESTROYED THE FLEET. No pid file (UNKNOWN), nothing occupying a worktree,
+# no live session, and the UNKNOWN clock already past its ceiling ⇒ the pre-wiring subject archives.
+@test "offbox: an UNKNOWN off-box lead past UNKNOWN_MAX_S is NOT archived" {
+  use_cc_cloud
+  declare_cloud session_01FLEET
+  export TEAM_REAPER_UNKNOWN_MAX_S=0            # the ceiling is already breached — archive is due
+  mk_team t-cloud '{"leadSessionId":"session_01FLEET","members":[{"name":"team-lead","cwd":"/nowhere"}]}'
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  ! archived t-cloud || false
+  [ -d "$TEAMS/t-cloud" ]
+  grep -q "DECLARED OFF-BOX" "$LOG"
+}
+
+# THE POSITIVE CONTROL FOR THAT TEST. Identical fixture, undeclared id: the subject MUST still
+# archive. Without this the test above passes for a subject that simply stopped archiving.
+@test "offbox control: the SAME fixture with an UNDECLARED lead IS archived" {
+  use_cc_cloud
+  export TEAM_REAPER_UNKNOWN_MAX_S=0
+  mk_team t-local '{"leadSessionId":"session_01UNDECLARED","members":[{"name":"team-lead","cwd":"/nowhere"}]}'
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  archived t-local
+}
+
+@test "offbox: a DEAD-pid off-box lead is NOT archived either" {
+  use_cc_cloud
+  declare_cloud session_01DEADPID
+  mk_team t-cd '{"leadSessionId":"session_01DEADPID","members":[{"name":"team-lead","cwd":"/x"}]}'
+  mk_pid_dead session_01DEADPID              # a stale local pid file must not override the declaration
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  ! archived t-cd || false
+}
+
+@test "offbox: a RETIRED declaration resumes the ordinary ladder — retire is terminal" {
+  use_cc_cloud
+  declare_cloud session_01RETIRED
+  printf 'retired_at=1\n' > "$CC_CLOUD_STATE/session_01RETIRED.retired"
+  mk_team t-ret '{"leadSessionId":"session_01RETIRED","members":[{"name":"team-lead","cwd":"/x"}]}'
+  mk_pid_dead session_01RETIRED
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  archived t-ret
+}
+
+@test "offbox: an off-box team is not counted as live, and does not page the operator" {
+  use_cc_cloud
+  declare_cloud session_01QUIET
+  export TEAM_REAPER_UNKNOWN_MAX_S=0 TEAM_REAPER_UNRESOLVED_MAX_S=0
+  mk_team t-q '{"leadSessionId":"session_01QUIET","members":[{"name":"team-lead","cwd":"/nowhere"}]}'
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  # An abstention is not a page: the operator debt this file already fought (77 identical pages for
+  # one session) must not come back through the cloud door.
+  [ ! -s "$NOTIFY_LOG" ] || false
+  grep -q "0 live" "$LOG" || false
+  # …and it must be an ABSTENTION, not a quiet archive. Without this line the pre-wiring subject
+  # also passes (it archives silently, which is likewise 0-live and page-free) and the test
+  # discriminates nothing.
+  ! archived t-q || false
+  grep -q "keep t-q" "$LOG" || false
+}
+
+@test "offbox: no cc-cloud on the box degrades to the old ladder, never to a crash" {
+  export CC_CLOUD_BIN=""                       # set-to-EMPTY must genuinely disable the lookup
+  export TEAM_REAPER_UNKNOWN_MAX_S=0
+  mk_team t-nocloud '{"leadSessionId":"session_01WOULDBE","members":[{"name":"team-lead","cwd":"/nowhere"}]}'
+  run bash "$REAPER"
+  [ "$status" -eq 0 ]
+  archived t-nocloud
+}

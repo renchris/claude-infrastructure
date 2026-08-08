@@ -2,6 +2,12 @@
 # team-orphan-reaper.sh — Archive dead teams + auto-deny stale permission
 # requests. Invoked by launchd every 10 minutes.
 #
+# A team whose lead is DECLARED OFF-BOX (`cc-cloud is-offbox`) is exempt from the whole ladder: every
+# oracle here is local to this box, so all of them answer "dead" about a session that is merely
+# elsewhere. See the OFF-BOX ABSTAIN block below. Such a team is also skipped by the stale-permission
+# scan — that scan auto-DENIES on a local clock, and this file has no basis for a claim about the
+# pace of a session it cannot see.
+#
 # A team is ARCHIVED only on POSITIVE evidence of death:
 #   - ~/.claude/teams/<name>/config.json exists with a leadSessionId, AND
 #   - that lead has an EXISTING watchdog pid file whose pid fails `kill -0` (dead), AND
@@ -48,6 +54,40 @@ readonly UNRESOLVED_MAX_S="${TEAM_REAPER_UNRESOLVED_MAX_S:-$UNKNOWN_MAX_S}"
 _reaper_bin() { command -v "$1" 2>/dev/null || { [ -x "$HOME/.claude/bin/$1" ] && printf '%s\n' "$HOME/.claude/bin/$1"; }; }
 readonly CC_SESSIONS_BIN="${CC_SESSIONS_BIN:-$(_reaper_bin cc-sessions)}"
 readonly CC_NOTIFY_BIN="${CC_NOTIFY_BIN:-$(_reaper_bin cc-notify)}"
+
+# ── OFF-BOX ABSTAIN (CLOUD_OBSERVABILITY.md §5.2, liar #3 — THE DESTRUCTIVE ONE) ─────────────────
+# Every liveness oracle in this file is local to this box: `kill -0` on a watchdog pid, `lsof -d cwd`
+# over local processes, and a cc-sessions registry written by local SessionStart hooks. A team whose
+# lead runs in an Anthropic-managed VM answers NO to all three — every time, by construction — and
+# this script's honest-looking ladder then walks straight to `archive_team`. It runs on a 600s
+# launchd timer, so an unattended cloud fleet would be archived within ten minutes of being fired,
+# by our own safety mechanism, with a log line reading "no watchdog record, no process occupying any
+# member worktree, no live session — for longer than the ceiling".
+#
+# That last sentence is what makes this the dangerous one: the three oracles are not broken, they
+# are ANSWERING CORRECTLY about a box the session is not on. Adding a fourth local oracle cannot
+# help. The only fix is a declaration this box can read, which is what `cc-cloud is-offbox` is.
+#
+# Checked FIRST, before `lead_liveness` — not folded into the DEAD arm. An off-box lead has no
+# watchdog pid file at all, so it enters the UNKNOWN arm, and the UNKNOWN arm archives too (past
+# UNKNOWN_MAX_S). Guarding only the word "DEAD" would have left the destructive path open on the
+# branch the case actually takes.
+#
+# Seam: CC_CLOUD_BIN — SET, including set to EMPTY, honored verbatim so a test can disable the
+# lookup; `${VAR:-}` cannot tell unset from set-empty. Fails CLOSED toward the existing behaviour:
+# no cc-cloud, unreadable state, or an undeclared id all leave every verdict as it was. It can only
+# ever PREVENT an archive, never cause one — strictly the conservative direction.
+if [[ -n "${CC_CLOUD_BIN+set}" ]]; then
+  CC_CLOUD_BIN_R="$CC_CLOUD_BIN"
+else
+  CC_CLOUD_BIN_R="$(_reaper_bin cc-cloud)"   # separate from `readonly`: SC2155 masks the rc
+fi
+readonly CC_CLOUD_BIN_R
+lead_is_offbox() { # $1=leadSessionId → 0 iff DECLARED off-box and not retired
+  [[ -n "${1:-}" ]] || return 1
+  [[ -n "$CC_CLOUD_BIN_R" ]] && [[ -x "$CC_CLOUD_BIN_R" ]] || return 1
+  "$CC_CLOUD_BIN_R" is-offbox "$1" >/dev/null 2>&1
+}
 
 mkdir -p "$ARCHIVE_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
@@ -362,6 +402,16 @@ main() {
     lead_sid=$(jq -r '.leadSessionId // empty' "$team_dir/config.json" 2>/dev/null)
     if [[ -z "$lead_sid" ]]; then
       log "skip $team_name: no leadSessionId"
+      continue
+    fi
+
+    # OFF-BOX: no local oracle in this file can speak to this team. KEEP, log, move on — and do NOT
+    # count it as `live`, because we did not observe life; we observed that we cannot look. Its
+    # liveness lives in `cc-cloud show <id>` (observables O1-O5), which is a different instrument.
+    if lead_is_offbox "$lead_sid"; then
+      log "keep $team_name: lead $lead_sid is DECLARED OFF-BOX — no local oracle applies (cc-cloud show $lead_sid)"
+      unknown_clear "$team_name"     # end any UNKNOWN episode this team accrued before it was declared
+      unknown_count=$((unknown_count + 1))
       continue
     fi
 
