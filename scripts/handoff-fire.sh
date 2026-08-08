@@ -4637,6 +4637,39 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       _nb_it="${ITERM_SESSION_ID:-}"
       BACK_SID="${SESSION_ID:-${_nb_it##*:}}"
     fi
+    # NORMALIZE OFF ANY `wNtNpN:` PREFIX FIRST. $ITERM_SESSION_ID is `w0t0p0:<id>` and the __self__
+    # branch above already strips it with `##*:`; an explicit --session-id may carry the same shape,
+    # and before this the two paths disagreed — the prefixed form fell through as an un-addressable
+    # token, and only ever "passed" F3 because the uuid regex matched the SUBSTRING after the colon.
+    BACK_SID="${BACK_SID##*:}"
+    # A BARE PANE ID IS NOT A DELIVERABLE ADDRESS — measured 2026-08-08, and it inverts what the
+    # F3 widening earlier the same day assumed. cc-notify's resolution order is
+    # --role → FRIENDLY NAME (exact, from cc-registry) → raw pane UUID. On iTerm2 $BACK_SID *is* a
+    # pane uuid, so it resolves. On kitty it is a bare integer, which is NONE of the three:
+    #   cc-notify 776 …                     → verdict=unresolvable  reason=no-such-target
+    #   cc-notify wt-cc-005655-99631-776 …  → verdict=delivered
+    # So the trailer must carry the REGISTRY NAME on kitty, or the fired peer's announce goes
+    # nowhere — silently, which is the exact W5 root the back-channel exists to prevent.
+    # Stand down rather than emit a dead address: a fire with no ping degrades to today's behaviour,
+    # a fire with an UNDELIVERABLE ping looks like it has one and does not.
+    case "$BACK_SID" in
+      [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-*-*-*-*) : ;;   # uuid-shaped → cc-notify resolves it raw
+      "") : ;;
+      *)  _nb_reg="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$BACK_SID.json"
+          # `|| true` is LOAD-BEARING under `set -euo pipefail` (:197): with no registry row, sed
+          # exits non-zero, pipefail propagates it out of the command substitution, and the
+          # assignment kills the whole script — SILENTLY, since the sed error is already
+          # 2>/dev/null'd. That is the same trap the PYTHON_BIN resolver hits under a fixtured
+          # $HOME, and it presents as a fire that prints one line and vanishes.
+          _nb_name=""
+          [ -f "$_nb_reg" ] && _nb_name="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_nb_reg" 2>/dev/null | head -1 || true)"
+          if [ -n "$_nb_name" ]; then
+            BACK_SID="$_nb_name"
+          else
+            echo "→ back-channel: SKIPPED — pane '$BACK_SID' is not uuid-shaped and has no registry name to address (cc-notify could not deliver to it)" >&2
+            BACK_SID=""
+          fi ;;
+    esac
     if [ -z "$BACK_SID" ]; then
       # Explicit ask that cannot be honored → hard error (unchanged, pinned by notify-back.bats).
       [ "$NOTIFY_BACK_EXPLICIT" = 1 ] && { echo "!! --notify-back: no \$ITERM_SESSION_ID and no UUID given" >&2; exit 1; }

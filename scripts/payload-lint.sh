@@ -48,18 +48,28 @@ NEGATION='never|not a teammate|unresolv|do ?n.?t|does ?n.?t|avoid|degrad|silent|
 # cats, or a --role flag) is addressable and MUST satisfy F3 alongside a literal uuid — else every
 # role-driven fire (every /goal fire uses `cc-notify "$(cat ~/.claude/cc-roles/desk)"`) false-REDs.
 ROLE_REF='cc-roles/(desk|operator|orchestrator)|--role[[:space:]=]+(desk|operator|orchestrator)'
-# KITTY PANE ID (2026-08-08) — the third resolvable target, and its absence was a REAL refusal, not a
-# theoretical gap. iTerm2 pane ids are uuids; KITTY pane ids are BARE INTEGERS ($KITTY_WINDOW_ID), and
-# kitty-setup.sh exports a synthetic $ITERM_SESSION_ID of the form `w0t0p0:776` whose "uuid" half is
-# just that integer. cc-notify, ~/.claude/cc-registry/<id>.json and ~/.claude/mailbox/<id>.md all treat
-# it as a first-class target — this box's live registry holds `345.json` next to
-# `269D738C-….json` — but F3 accepted ONLY a uuid or a hardcoded role, so ANY back-channel addressed to
-# a kitty pane went RED-with-intent and `payload_lint_gate … enforce` ABORTED THE FIRE (exit 4). On a
-# kitty box that made `--notify-back` unusable by construction, and a refused fire is not inert: it runs
-# fire_cleanup, which removes the worktree and deletes the branch.
-# Anchored to the cc-notify ARGUMENT position, never a bare number anywhere in the prose — `100 req/min`
-# in a brief must not read as a back-channel target. Optional quotes cover `cc-notify "776"`.
-PANE_ID_REF='cc-notify[[:space:]]+"?[0-9]+"?([[:space:]]|$)'
+# KITTY SESSION NAME (2026-08-08) — the third resolvable target, and its absence was a REAL refusal,
+# not a theoretical gap. iTerm2 pane ids are uuids; KITTY pane ids are BARE INTEGERS
+# ($KITTY_WINDOW_ID), and kitty-setup.sh exports a synthetic $ITERM_SESSION_ID of the form `w0t0p0:776`
+# whose "uuid" half is just that integer. F3 accepted ONLY a uuid or a hardcoded role, so a
+# back-channel addressed to a kitty pane went RED-with-intent and `payload_lint_gate … enforce`
+# ABORTED THE FIRE (exit 4) — and a refused fire is not inert: it runs fire_cleanup, which removes the
+# worktree and deletes the branch.
+# Anchored to the cc-notify ARGUMENT position, never a bare token anywhere in the prose. Optional
+# quotes cover `cc-notify "wt-foo-776"`.
+#
+# 🚨 IT IS THE REGISTRY *NAME*, NOT THE BARE PANE ID — corrected hours after the first version of
+# this rule, which accepted `cc-notify 776` and was WRONG. Measured on this kitty box:
+#     cc-notify 776 …                     → verdict=unresolvable  reason=no-such-target
+#     cc-notify wt-cc-005655-99631-776 …  → verdict=delivered
+# cc-notify resolves --role → FRIENDLY NAME (exact, from cc-registry) → raw pane UUID; a bare integer
+# is none of the three. So F3's original uuid-only rule was INADVERTENTLY CORRECT on kitty — it
+# refused precisely because the address could not be delivered — and widening it to bare integers
+# turned a loud refusal into a payload that passes the gate carrying a dead address. That is strictly
+# worse: the successor completes, announces into nothing, and the silence looks like success.
+# The registry-name shape is `<slug>-<paneid>` (wt-cc-005655-99631-776, claude-infrastructure-700),
+# so it must end in `-<digits>`; `100 req/min` and a bare `776` both fail it.
+SESSION_NAME_REF='cc-notify[[:space:]]+"?[A-Za-z][A-Za-z0-9._-]*-[0-9]+"?([[:space:]]|$)'
 
 lint_file() {
   local pf="$1"
@@ -68,13 +78,13 @@ lint_file() {
   grep -qE 'cc-notify'   "$pf" && has_cc=1   || has_cc=0
   grep -qE "$UUID"       "$pf" && has_uuid=1 || has_uuid=0
   grep -qE "$ROLE_REF"   "$pf" && has_role=1 || has_role=0
-  grep -qE "$PANE_ID_REF" "$pf" && has_pane=1 || has_pane=0
+  grep -qE "$SESSION_NAME_REF" "$pf" && has_pane=1 || has_pane=0
   # F3 — the back-channel block: a cc-notify reference AND a resolvable target — a full desk uuid,
   # role-indirection (cc-roles/<role> | --role <role>, the P0-15 form that follows a recycled desk),
-  # or a bare kitty pane id in the cc-notify argument position (see PANE_ID_REF).
+  # or a registry SESSION NAME in the cc-notify argument position (see SESSION_NAME_REF).
   # Missing the reference, or having it with NO resolvable target → RED (a successor cannot announce).
   if [ "$has_cc" = 0 ] || { [ "$has_uuid" = 0 ] && [ "$has_role" = 0 ] && [ "$has_pane" = 0 ]; }; then
-    echo "  RED  F3   BACK-CHANNEL BLOCK missing — cc-notify: $([ "$has_cc" = 1 ] && echo present || echo ABSENT); resolvable target (desk full-uuid OR role-indirection cc-roles/<role>|--role OR kitty pane id): $({ [ "$has_uuid" = 1 ] || [ "$has_role" = 1 ] || [ "$has_pane" = 1 ]; } && echo present || echo ABSENT). A successor cannot announce (the W5 root)."
+    echo "  RED  F3   BACK-CHANNEL BLOCK missing — cc-notify: $([ "$has_cc" = 1 ] && echo present || echo ABSENT); resolvable target (desk full-uuid OR role-indirection cc-roles/<role>|--role OR kitty session name): $({ [ "$has_uuid" = 1 ] || [ "$has_role" = 1 ] || [ "$has_pane" = 1 ]; } && echo present || echo ABSENT). A successor cannot announce (the W5 root)."
     fail=1
   fi
   # F3/a — a PRESCRIPTIVE terminal-announce via SendMessage (a prohibition is filtered out by NEGATION).
@@ -84,7 +94,7 @@ lint_file() {
     printf '           %s\n' "$presc"
     fail=1
   fi
-  [ "$fail" -eq 0 ] && { echo "  OK   F3   back-channel block present (cc-notify + $(if [ "$has_uuid" = 1 ]; then echo 'desk full-uuid'; elif [ "$has_role" = 1 ]; then echo 'role-indirection cc-roles/<role>'; else echo 'kitty pane id'; fi)); no SendMessage terminal-announce"; return 0; }
+  [ "$fail" -eq 0 ] && { echo "  OK   F3   back-channel block present (cc-notify + $(if [ "$has_uuid" = 1 ]; then echo 'desk full-uuid'; elif [ "$has_role" = 1 ]; then echo 'role-indirection cc-roles/<role>'; else echo 'kitty session name'; fi)); no SendMessage terminal-announce"; return 0; }
   return 1
 }
 
@@ -126,14 +136,22 @@ BACK-CHANNEL: announce to the desk via cc-notify "$(cat ~/.claude/cc-roles/desk)
 NEVER SendMessage — the desk is NOT a teammate.
 EOF
 
-  # (5) KITTY PANE ID — cc-notify + a BARE INTEGER target, no uuid, no role. This is the exact shape
-  #     handoff-fire.sh's --notify-back trailer emits on a kitty box ($KITTY_WINDOW_ID is an integer),
-  #     and it went RED until 2026-08-08 — which made `payload_lint_gate … enforce` ABORT every such
-  #     fire at exit 4. MUST go GREEN.
+  # (5) KITTY SESSION NAME — cc-notify + the registry name, no uuid, no role. This is what
+  #     handoff-fire.sh's --notify-back trailer emits on a kitty box, and what cc-notify actually
+  #     resolves (verdict=delivered). MUST go GREEN.
   cat >"$d/paneid.txt" <<'EOF'
 SUCCESSOR FIRE — continue the build.
-BACK-CHANNEL: on completion ping the originator via cc-notify 776 "HANDOFF-PING wave6: <status>".
+BACK-CHANNEL: ping the originator via cc-notify wt-cc-005655-99631-776 "HANDOFF-PING w6: <status>".
 NEVER SendMessage — the originator is NOT a teammate.
+EOF
+
+  # (5b) BARE PANE ID — the shape this lint wrongly accepted for a few hours on 2026-08-08. cc-notify
+  #      resolves --role → friendly NAME → raw pane UUID; a bare integer is none of the three:
+  #      `cc-notify 776 …` → verdict=unresolvable. A payload carrying it passes no useful gate — the
+  #      successor announces into nothing and the silence reads as success. MUST stay RED.
+  cat >"$d/bareint.txt" <<'EOF'
+SUCCESSOR FIRE — continue the build.
+BACK-CHANNEL: ping the originator via cc-notify 776 "HANDOFF-PING w6: <status>".
 EOF
 
   # (6) PROSE INTEGER — a number that is NOT a cc-notify target must NOT satisfy F3, or the widening
@@ -153,10 +171,11 @@ EOF
   expect "$d/sendmsg.txt" 1 "a SendMessage terminal-announce did not go RED"
   expect "$d/role.txt"    0 "role-indirection payload (cc-notify + cc-roles/<role>, no uuid) did not go GREEN"
   expect "$d/absent.txt"  2 "a missing file did not exit 2 (LOUD)"
-  expect "$d/paneid.txt"  0 "kitty pane-id back-channel (cc-notify <int>, no uuid/role) did not go GREEN"
+  expect "$d/paneid.txt"  0 "kitty session-name back-channel (cc-notify <registry name>) did not go GREEN"
+  expect "$d/bareint.txt" 1 "a BARE pane id (cc-notify 776 — verdict=unresolvable) wrongly satisfied F3"
   expect "$d/prose-int.txt" 1 "a prose integer (not a cc-notify target) wrongly satisfied F3"
   if [ "$fails" -eq 0 ]; then
-    echo "payload-lint --selftest: 7/7 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated) AND on a kitty pane id; RED on a prose integer; LOUD on missing."
+    echo "payload-lint --selftest: 8/8 — RED on a block-less payload, RED on a SendMessage terminal-announce, GREEN on a well-formed one (uuid), on role-indirection (cc-roles/<role>; prohibition tolerated) AND on a kitty session NAME; RED on a bare pane id (undeliverable) and on a prose integer; LOUD on missing."
     exit 0
   fi
   echo "payload-lint --selftest: FAILED — the lint does not discriminate (do not trust F3)."

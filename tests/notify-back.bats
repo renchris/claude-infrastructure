@@ -140,6 +140,32 @@ cmd_prompt_of() { printf '%s\n' "$1" | sed -n 's/.*cat \([^)]*\)).*/\1/p'; }
   ! printf '%s\n' "$output" | grep -q 'back-channel: SKIPPED' || false
 }
 
+# THE ADDRESS MUST BE ONE cc-notify CAN RESOLVE, not merely one payload-lint accepts. Measured
+# 2026-08-08: `cc-notify 776` → verdict=unresolvable, `cc-notify wt-cc-005655-99631-776` →
+# verdict=delivered. A bare kitty pane id passed F3 for a few hours and would have sent every fired
+# peer's announce into nothing — silently, which is the exact W5 root the back-channel exists to
+# prevent. cc-notify resolves --role → friendly NAME (cc-registry) → raw pane UUID.
+@test "a NON-uuid pane id is addressed by its REGISTRY NAME, not the bare id" {
+  mkdir -p "$BATS_TEST_TMPDIR/reg"
+  printf '{"paneUUID":"776","name":"wt-probe-776","cwd":"/tmp"}\n' > "$BATS_TEST_TMPDIR/reg/776.json"
+  run env ITERM_SESSION_ID="w0t0p0:776" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'originator wt-probe-776'
+  copy="$(cmd_prompt_of "$output")"
+  grep -q 'cc-notify wt-probe-776 "HANDOFF-PING' "$copy"
+  ! grep -qE 'cc-notify 776( |")' "$copy" || false      # never the bare id — it does not resolve
+}
+
+@test "a NON-uuid pane id with NO registry row STANDS DOWN (never emits a dead address)" {
+  mkdir -p "$BATS_TEST_TMPDIR/emptyreg"
+  run env ITERM_SESSION_ID="w0t0p0:999" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/emptyreg" \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --dry-run
+  [ "$status" -eq 0 ]                                    # degrades, never fails the fire
+  printf '%s\n' "$output" | grep -q 'back-channel: SKIPPED'
+  ! printf '%s\n' "$output" | grep -q 'notify-back:' || false
+}
+
 @test "--recycle: self-retire AND back-channel auto-excluded (the recycled pane IS the continuation)" {
   run env ITERM_SESSION_ID="w1t0p0:AAAAAAAA-0000-0000-0000-000000000006" \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --recycle --dry-run
