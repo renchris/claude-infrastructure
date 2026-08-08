@@ -63,6 +63,49 @@ link_memory() {
   return 0
 }
 
+# ── EXIT-POINT OWNERSHIP ASSERTION — the CLASS, not one spelling of it ─────────────────────────
+#
+# Every rung below ends by printing a path that CC turns into an agent's cwd, and nothing between
+# "an allocator handed us a path" and "we print it" ever asked whether that path is a worktree of
+# THIS repo. Twice it was not, both recorded in worktree-lifecycle.log: 2026-08-04 01:18 an
+# `Agent isolation:"worktree"` spawn from a claude-infrastructure session was handed RESO's
+# `wt-pool-2` (branch agent-a9cac33d5c961c805, its .git file pointing at
+# reso-management-app/.git/worktrees/…), and 2026-08-05 01:16 the same rung took `wt-pool-9`. The
+# first probe happened to be read-only; a code-writing agent would have committed into the wrong
+# repository, which is why this is filed as data-integrity and not as a launcher bug.
+#
+# efecf749 deleted the machine-global fallback that produced both, and reso now refuses a foreign
+# caller at its allocator (99753cf31). Each of those removes one SPELLING of "we returned someone
+# else's tree" — neither asks the question. This does, at the one point every rung must pass
+# through, so a future allocator (a repo's own pool, a cold builder, a path CC pre-created) is
+# checked by construction instead of trusted.
+#
+# THE TEST IS EXACT, NOT A PROXY: a worktree of repo X resolves to X's common git dir from any of
+# its linked worktrees, so comparing common dirs cannot misjudge a legitimate path. It has THREE
+# outcomes and the third is load-bearing — a path in no git repo at all (a not-yet-built target, a
+# stub) is not evidence of a FOREIGN repo, and refusing there would fire on cases carrying none of
+# this defect's harm. The harm requires the path to sit inside ANOTHER repo; that is exactly and
+# only what is refused.
+_repo_key() {  # <dir> → canonical common git dir, or empty when the dir belongs to no repo
+  local d k
+  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$d" ] || return 0
+  k="$(git -C "$d" rev-parse --git-common-dir 2>/dev/null)" || return 0
+  [ -n "$k" ] || return 0
+  case "$k" in /*) ;; *) k="$d/$k" ;; esac
+  (cd "$k" 2>/dev/null && pwd -P)
+}
+
+# rc 0 = ours, or unattributable; rc 1 = it demonstrably belongs to another repository.
+_owned_by_us() {  # <candidate worktree> <any dir inside the expected repo>
+  local want have
+  want="$(_repo_key "$2")"
+  have="$(_repo_key "$1")"
+  [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ] || return 0
+  log "FOREIGN WORKTREE REFUSED: $1 belongs to $have, not $want — see hooks/worktree-setup.sh"
+  return 1
+}
+
 INPUT=$(cat)
 NAME=$(echo "$INPUT" | jq -r '.name // empty')
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -71,6 +114,8 @@ MAIN_WORKTREE=$(echo "$INPUT" | jq -r '.main_worktree // empty')
 
 # ── Older shape: CC created the worktree already; we just finish setup ──────
 if [ -n "$WORKTREE_PATH" ]; then
+  # Checked BEFORE any setup runs — .env.local must never be copied into another repo's tree.
+  _owned_by_us "$WORKTREE_PATH" "${MAIN_WORKTREE:-$CWD}" || exit 1
   if [ -n "$MAIN_WORKTREE" ] && [ -f "$MAIN_WORKTREE/.env.local" ] && [ ! -f "$WORKTREE_PATH/.env.local" ]; then
     cp "$MAIN_WORKTREE/.env.local" "$WORKTREE_PATH/.env.local" && chmod 0600 "$WORKTREE_PATH/.env.local"
     log "copied .env.local into $WORKTREE_PATH"
@@ -109,6 +154,12 @@ BRANCH="$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
 POOL_SH="$REPO/scripts/worktree-pool.sh"
 if [ -f "$POOL_SH" ] && [ -f "$REPO/scripts/new-worktree.sh" ]; then
   WT="$(cd "$REPO" && bash "$POOL_SH" claim "$BRANCH" 2>>"$LOG_FILE")"
+  # A foreign slot degrades to the cold path rather than exiting: this rung is an OPTIMISATION, and
+  # the rungs below need nothing from it (same reasoning as the fall-through above).
+  if [ -n "$WT" ] && [ -d "$WT" ] && ! _owned_by_us "$WT" "$REPO"; then
+    log "pool claim for $BRANCH returned a FOREIGN worktree ($WT) — falling through to the cold path"
+    WT=""
+  fi
   if [ -n "$WT" ] && [ -d "$WT" ]; then
     link_memory "$WT"
     log "claimed pool worktree: $WT (branch $BRANCH)"
@@ -122,6 +173,9 @@ if [ -f "$REPO/scripts/new-worktree.sh" ]; then
   SAFE="${BRANCH//\//-}"
   WT="$HOME/Development/.worktrees/wt-$SAFE"
   ( cd "$REPO" && bash scripts/new-worktree.sh "$BRANCH" "$WT" ) >>"$LOG_FILE" 2>&1 || { log "new-worktree.sh failed for $BRANCH"; exit 1; }
+  # No rung remains below this one, so a foreign tree here fails the launch. A failed `claude -w` is
+  # recoverable; an agent writing into the wrong repository is not.
+  _owned_by_us "$WT" "$REPO" || exit 1
   link_memory "$WT"
   log "cold-built worktree: $WT (branch $BRANCH)"
   printf '%s\n' "$WT"
@@ -133,6 +187,7 @@ SAFE="${BRANCH//\//-}"
 WT="$HOME/Development/.worktrees/$(basename "$REPO")-$SAFE"
 mkdir -p "$(dirname "$WT")"
 git -C "$REPO" worktree add "$WT" -b "$BRANCH" >>"$LOG_FILE" 2>&1 || { log "git worktree add failed for $BRANCH"; exit 1; }
+_owned_by_us "$WT" "$REPO" || exit 1
 [ -f "$REPO/.env.local" ] && { cp "$REPO/.env.local" "$WT/.env.local"; chmod 0600 "$WT/.env.local"; }
 link_memory "$WT"
 log "generic worktree: $WT (branch $BRANCH)"

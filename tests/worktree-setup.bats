@@ -35,8 +35,14 @@ setup() {
   LOG="$HOME/.claude/logs/worktree-lifecycle.log"
   export LOG
 
+  # `-b main` is HERMETICITY, not style: init.defaultBranch is unset on this box, so a bare
+  # `git init` fixture lands on `master`, while the real scripts/new-worktree.sh resolves its base
+  # as origin/main → main and then fails to find it. That left tests 8 and 9 — the two that use the
+  # REAL cold builder — red from the environment rather than from the subject (measured 2026-08-08,
+  # red at HEAD before this file's ownership tests existed). The suite must not read a git config
+  # it does not set.
   REPO="$BATS_TEST_TMPDIR/repo"
-  git init -q "$REPO"
+  git init -q -b main "$REPO"
   git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
   mkdir -p "$REPO/scripts"
   export REPO
@@ -213,6 +219,100 @@ EOS
   [ "$status" -eq 0 ]
   [ "$output" = "$COLD" ]
   [ "$(git -C "$output" branch --show-current)" = "demo" ]
+}
+
+# ── 10-13: the exit-point ownership assertion (backlog 4afd0515c83a, 2026-08-08) ────────────────
+#
+# THE DEFECT: on 2026-08-04 01:18 an `Agent isolation:"worktree"` spawn from a claude-infrastructure
+# session was handed reso's wt-pool-2 — a worktree of ANOTHER REPOSITORY — and on 2026-08-05 01:16
+# the same rung took wt-pool-9. Both lines are in worktree-lifecycle.log. Tests 1-5 above cover the
+# fallback that produced them; these cover the QUESTION, which nothing asked: is the path we are
+# about to hand back even ours?
+#
+# WHY A REAL SECOND REPO. The assertion is `git rev-parse --git-common-dir`, so only a genuine
+# foreign worktree can trigger it — the mkdir'd stub dirs in tests 1-7 resolve to no repo at all,
+# which is the assertion's deliberate third outcome (unattributable ⇒ not refused) and the reason
+# this change left every one of them green.
+make_foreign_worktree() {  # <dest> → a REAL worktree belonging to a DIFFERENT repository
+  local other="$BATS_TEST_TMPDIR/other-repo"
+  [ -d "$other" ] || {
+    git init -q -b main "$other"
+    git -C "$other" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  }
+  mkdir -p "$(dirname "$1")"
+  git -C "$other" worktree add -q "$1" -b "foreign-$(basename "$1")" >/dev/null 2>&1
+}
+
+@test "10. RED PROOF: a pool slot belonging to ANOTHER repo is refused, not returned" {
+  # The 2026-08-04 shape exactly: the allocator succeeds, prints a real directory, and the directory
+  # is reso's. Pre-fix the hook printed it and exited 0 — that is how an agent got the wrong repo.
+  install_cold
+  make_foreign_worktree "$HOME/Development/.worktrees/wt-pool-9"
+  cat > "$REPO/scripts/worktree-pool.sh" <<'EOS'
+#!/bin/bash
+printf '%s\n' "$HOME/Development/.worktrees/wt-pool-9"
+exit 0
+EOS
+  chmod +x "$REPO/scripts/worktree-pool.sh"
+  run_hook demo
+
+  [ "$status" -eq 0 ]
+  [ "$output" != "$HOME/Development/.worktrees/wt-pool-9" ]   # the load-bearing assertion
+  [ "$output" = "$COLD" ]                                     # ...degraded to the cold rung
+  [ -f "$HOME/.cold-ran" ]
+  grep -q 'FOREIGN WORKTREE REFUSED' "$LOG"
+}
+
+@test "11. NEGATIVE CONTROL: a pool slot that really is OURS is still returned" {
+  # Without this, test 10 could not tell "the guard reads ownership" from "the pool rung got
+  # stricter" — both would pass. Same rung, same shape, only the owning repo differs.
+  install_cold
+  MINE="$HOME/Development/.worktrees/wt-pool-mine"
+  mkdir -p "$(dirname "$MINE")"
+  git -C "$REPO" worktree add -q "$MINE" -b pool-mine
+  cat > "$REPO/scripts/worktree-pool.sh" <<EOS
+#!/bin/bash
+printf '%s\n' "$MINE"
+exit 0
+EOS
+  chmod +x "$REPO/scripts/worktree-pool.sh"
+  run_hook demo
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$MINE" ]
+  [ ! -f "$HOME/.cold-ran" ]                                  # the fast path still short-circuits
+  ! grep -q 'FOREIGN WORKTREE REFUSED' "$LOG"
+}
+
+@test "12. the pre-created shape refuses a foreign path BEFORE copying .env.local into it" {
+  # This rung's setup step writes a secret into the tree it was handed, so the check has to precede
+  # it: a leaked .env.local is not undone by a later refusal.
+  printf 'SECRET=1\n' > "$REPO/.env.local"
+  WT="$HOME/Development/.worktrees/wt-precreated-foreign"
+  make_foreign_worktree "$WT"
+  run bash -c "printf '{\"worktree_path\":\"$WT\",\"main_worktree\":\"$REPO\"}' | bash '$HOOK'"
+
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  [ ! -f "$WT/.env.local" ]
+  grep -q 'FOREIGN WORKTREE REFUSED' "$LOG"
+}
+
+@test "13. a cold builder wired to the wrong repo fails the launch instead of returning it" {
+  # No rung remains below the cold one, so there is nothing to degrade to: the only safe answer is a
+  # failed `claude -w`. Models a repo whose own new-worktree.sh points at another repository.
+  cat > "$REPO/scripts/new-worktree.sh" <<EOS
+#!/bin/bash
+git -C "$BATS_TEST_TMPDIR/other-repo" worktree add -q "\$2" -b "wrong-\$1" >/dev/null 2>&1
+EOS
+  chmod +x "$REPO/scripts/new-worktree.sh"
+  git init -q -b main "$BATS_TEST_TMPDIR/other-repo"
+  git -C "$BATS_TEST_TMPDIR/other-repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  run_hook demo
+
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  grep -q 'FOREIGN WORKTREE REFUSED' "$LOG"
 }
 
 @test "7. the pre-created shape (worktree_path in stdin) still echoes the path back" {
