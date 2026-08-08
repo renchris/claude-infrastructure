@@ -85,12 +85,26 @@ _fallback() {
 # which tests/handoff-fire-typed-cmd-correctable.bats pins — need no argv-specific variant.
 _launch() { # $1=command — never returns
   printf '%s\n' "$1"
+  # CONSUME the env-mode delivery record before running it — the exact analogue of the `rm -f` the
+  # file path does below, and for the mirror-image reason. `kitty @ launch --env` puts these two in
+  # the PANE's environment, so they are inherited by the command this file runs and by every
+  # DESCENDANT of it: a delivery record that outlives its delivery by the entire life of the pane.
+  # Measured 2026-08-07 in a pane scripts/handoff-fire.sh had fired — the agent session it started
+  # still carried the launch line that started IT, so `bin/it2-kitty session split` run inside that
+  # session read the ancestor's spent CC_PANE_CMD as its own caller's intent (it2-kitty:626),
+  # forwarded it as `--env CC_PANE_CMD=<the parent's own handoff command>`, and did NOT arm the new
+  # pane. The child would have re-run the PARENT's launch, while the command Claude Code actually
+  # meant for it was typed at a pane with no prompt to receive it. Non-emptiness is not provenance
+  # (memory: second-transport-makes-an-e2e-ambient); consuming the record is what restores it.
+  # Read the mode FIRST: it is half of the same record, and the branch below still needs it.
+  local _interactive="${CC_PANE_CMD_INTERACTIVE:-0}"
+  unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE
   # `set +u` FIRST — and it is parity, not laxity. The command this file runs used to be typed at an
   # interactive zsh where nounset is off; inheriting THIS file's `set -u` into it would abort any
   # command that reads an unset variable, i.e. this file would change the meaning of commands it is
   # only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
   set +u
-  if [ "${CC_PANE_CMD_INTERACTIVE:-0}" = 1 ]; then
+  if [ "$_interactive" = 1 ]; then
     "${SHELL:-/bin/zsh}" -l -i -c "$1"
   else
     eval "$1"

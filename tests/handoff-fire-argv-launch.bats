@@ -54,6 +54,11 @@ setup() {
   # live state, which is rule 1's argument in scripts/test-hermeticity-lint.sh verbatim. That lint
   # cannot catch this class today — its seam table only recognises a `${VAR:-default}` whose default
   # NAMES a repo-shipped tool, and this one defaults to `0`.
+  #
+  # That pin makes the SUITE hermetic; it does not make the leak stop existing. Under item
+  # 22a170cc62aa bin/cc-pane-runner gained the other half — it CONSUMES both variables at delivery,
+  # so the command it runs (and every descendant of it) can no longer inherit a spent record at all.
+  # "env mode CONSUMES its delivery record" below is that half's control.
   unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_WAIT_S CC_PANE_RUNNER
   KLOG="$BATS_TEST_TMPDIR/kitty.log"
   fake_kitty
@@ -98,6 +103,32 @@ fixture_rc() {
   [ "$(cat "$BATS_TEST_TMPDIR/ran.txt")" = "ran" ]
   # …and it still ends as a SHELL, never an exit — a pane that vanishes takes its diagnostic with it.
   printf '%s\n' "$output" | grep -q -- '-l -i' || false
+}
+
+@test "env mode CONSUMES its delivery record — the command inherits NEITHER half" {
+  # The pair to the `rm -f "$_cmdfile" "$_armed"` the FILE path does, and the half that was missing.
+  # `kitty @ launch --env` puts these in the PANE's environment, so without a consume they outlive
+  # the delivery by the whole life of the pane and are inherited by every descendant of the command.
+  # Measured 2026-08-07 inside a pane scripts/handoff-fire.sh had fired: the agent session still
+  # carried the launch line that started it, so `it2-kitty session split` read that spent value as
+  # its own caller's intent (it2-kitty:626), forwarded `--env CC_PANE_CMD=<the PARENT's own handoff
+  # command>` into the new pane and left it UNARMED — a child re-running its parent's launch while
+  # the command actually meant for it was typed at a pane with no prompt.
+  #
+  # INTERACTIVE=0, not unset: it selects the same eval branch (so this pins consumption and nothing
+  # else) while still being SET, which is what keeps the second assertion from passing vacuously.
+  cat > "$BATS_TEST_TMPDIR/showenv" <<'SH'
+#!/bin/bash
+printf 'SAW_CMD=[%s]\nSAW_INT=[%s]\n' "${CC_PANE_CMD:-}" "${CC_PANE_CMD_INTERACTIVE:-}"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/showenv"
+  run env -u CC_PANE_CMD_DIR -u KITTY_WINDOW_ID \
+      CC_PANE_CMD="$BATS_TEST_TMPDIR/showenv" CC_PANE_CMD_INTERACTIVE=0 SHELL="/bin/echo" "$RUNNER"
+  [ "$status" -eq 0 ]
+  # It must have RUN (else both greps below pass on output the command never produced).
+  printf '%s\n' "$output" | grep -q 'SAW_CMD=' || false
+  printf '%s\n' "$output" | grep -qx 'SAW_CMD=\[\]' || false
+  printf '%s\n' "$output" | grep -qx 'SAW_INT=\[\]' || false
 }
 
 @test "the env-mode command is ECHOED first, so a watching operator and get-text see the same line" {
