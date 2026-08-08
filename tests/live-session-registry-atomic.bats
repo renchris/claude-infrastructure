@@ -27,6 +27,10 @@ setup() {
   WT="$HOME/Development/.worktrees/wt-testbed"
   REG="$HOME/.reso/live-sessions"
   mkdir -p "$WT" "$REG"
+  # The tenancy gate journals refusals. $HOME is already fixtured, so the default IDL path is
+  # inside the fixture — pinned explicitly anyway, so a later default change cannot leak the
+  # suite's writes into the operator's live ~/.claude/autonomy/idl.jsonl.
+  export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
 }
 
 # fire the hook as SessionStart for the fixtured worktree
@@ -92,4 +96,71 @@ inode() { ls -i "$1" 2>/dev/null | awk '{print $1}'; }
   done
   wait "$writer" 2>/dev/null || true
   [ "$bad" -eq 0 ] || { echo "reader saw $bad empty/partial pid field(s) — the O_TRUNC gap is observable"; false; }
+}
+
+# ── TENANCY (backlog 55e1e65c7548) ─────────────────────────────────────────────────────────────
+# The atomic-write tests above make the row impossible to read HALF-written. These make it
+# impossible for a nested session to overwrite it WHOLE. A cwd is inherited by every child process,
+# so a `claude -p` probe fired from inside a worktree session lands on this same row and used to
+# replace the tenant's pid with its own — which is dead seconds later. worktree-gc's
+# `registry_live()` then answers NOT-LIVE and the worktree falls back to the flaky cwd/lsof oracle
+# this file's header exists to eliminate: one throwaway probe disarms the guard for its own session.
+
+# helper: fire the hook as a NESTED claude. The outer tier seeds the row with its own pid (the
+# tenant registering); the inner runs the hook (the probe squatting).
+# `ln -s /bin/bash …/claude` gives a process whose `ps -o comm=` basename is `claude` — a COPY of
+# /bin/bash does not execute on this box (measured; it fails silently, which would make the fixture
+# pass vacuously). The trailing `:` defeats bash's last-command exec optimisation, which otherwise
+# collapses both tiers onto ONE pid and the ancestry the test exercises silently does not exist.
+nested_fire() { # $1=sid
+  local fake="$BATS_TEST_TMPDIR/fake"; mkdir -p "$fake"; ln -sf /bin/bash "$fake/claude"
+  cat > "$BATS_TEST_TMPDIR/outer.sh" <<'OUT'
+printf '%s\t%s\t%s\n' "$$" "TENANT-SID" "$NF_WT" > "$HOME/.reso/live-sessions/wt-testbed"
+"$NF_FAKE/claude" "$NF_INNER"
+:
+OUT
+  cat > "$BATS_TEST_TMPDIR/inner.sh" <<'IN'
+printf '{"hook_event_name":"SessionStart","cwd":"%s","session_id":"%s"}' "$NF_WT" "$NF_SID" \
+  | bash "$NF_HOOK"
+:
+IN
+  NF_WT="$WT" NF_SID="${1:-sid-child}" NF_FAKE="$fake" NF_HOOK="$HOOK" \
+    NF_INNER="$BATS_TEST_TMPDIR/inner.sh" "$fake/claude" "$BATS_TEST_TMPDIR/outer.sh"
+}
+
+@test "5: a nested claude does NOT overwrite its live parent's row (headless-probe squat)" {
+  nested_fire "sid-child"
+  run cut -f2 "$REG/wt-testbed"
+  [ "$output" = "TENANT-SID" ] || { echo "row was stolen: $(cat "$REG/wt-testbed")"; false; }
+}
+
+@test "6: the tenancy refusal is journalled (a silent no-op reads as an inert gate)" {
+  nested_fire "sid-child"
+  [ -s "$CC_IDL" ] || { echo "no IDL record written"; false; }
+  # `run grep` + `[ ]`, never `[[ ]]`: bash exempts the `[[` keyword from errexit, so a non-final
+  # one evaluates and DISCARDS its false result (scripts/bats-assert-liveness.py, which caught it).
+  run grep -Fc '"disposition":"refused"' "$CC_IDL"
+  [ "$status" -eq 0 ]
+  run grep -Fc '"hook":"live-session-registry"' "$CC_IDL"
+  [ "$status" -eq 0 ]
+}
+
+@test "7: a live incumbent that is NOT an ancestor still writes (basename collision / pid reuse)" {
+  # Two repos sharing ~/Development/.worktrees can produce the same basename (worktree-gc.sh:368),
+  # and a stale row's pid can be recycled. Neither is our ancestor, so neither may wedge the row —
+  # a gate that refused here would cause the reap this whole file exists to prevent.
+  sleep 30 & local other=$!
+  printf '%s\t%s\t%s\n' "$other" "OTHER-SID" "$WT" > "$REG/wt-testbed"
+  fire "sid-mine"
+  kill "$other" 2>/dev/null || true; wait "$other" 2>/dev/null || true
+  run cut -f2 "$REG/wt-testbed"
+  [ "$output" = "sid-mine" ] || { echo "legitimate write was refused: $(cat "$REG/wt-testbed")"; false; }
+}
+
+@test "8: a dead-pid row still writes (the worktree's next session registers normally)" {
+  sleep 30 & local gone=$!; kill "$gone" 2>/dev/null || true; wait "$gone" 2>/dev/null || true
+  printf '%s\t%s\t%s\n' "$gone" "OLD-SID" "$WT" > "$REG/wt-testbed"
+  fire "sid-next"
+  run cut -f2 "$REG/wt-testbed"
+  [ "$output" = "sid-next" ]
 }
