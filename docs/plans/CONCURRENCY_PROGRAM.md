@@ -603,7 +603,18 @@ execution is available. Latency is push/pull, not poll: nothing arrives until so
 
 **→ `docs/plans/CLOUD_OBSERVABILITY.md`** (design + measurements, with the command for each so they
 can be re-measured rather than believed) and `docs/research/cloud-observability-2026-08-07.md`.
-Built: `bin/cc-cloud` (fire-time capture) · `bin/cc-cloud-watch` (`ls-remote` observer).
+Built: `bin/cc-cloud` — fire-time capture (`preflight`/`declare`) *and* the `ls-remote` observer
+(`poll`/`--json`/`--table`/`--check`), one tool.
+
+*(This line read "`bin/cc-cloud` (fire-time capture) · `bin/cc-cloud-watch` (`ls-remote` observer)"
+until 2026-08-07. Both halves were wrong: the two were not a division of labour but two independent
+implementations of the SAME observable set, written by two sessions of the 9-way dispatch storm on
+`191d4d056c98` and landed in one commit, each doing fire-time capture AND observation. Two tools
+over one observable set drift, and a caller cannot tell which is authoritative — `cc-cloud-watch`
+was deleted and its two verbs with no home in `cc-cloud` (`preflight`, `list`) plus the one
+behaviour it had and `cc-cloud` did not (a fire-time baseline sha, without which a declaration onto
+a re-used branch name reads healthy for the whole 6h life budget) were migrated in. Backlog
+`163676679912`.)*
 
 Three results that change how S5 is sequenced:
 

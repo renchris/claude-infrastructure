@@ -11,6 +11,23 @@
 # before C4, the sidecar-history precondition on C4, the `is-offbox` primitive the three lying
 # local instruments call, the frozen row schema, and read-only-ness against git.
 #
+# ── ABSORBED SUITE: tests/cc-cloud-watch.bats (backlog 163676679912) ──────────────────────────────
+# `bin/cc-cloud-watch` was a second, independent implementation of the same observable set, landed
+# in the same commit by a sibling session. It is deleted; its two verbs with no home here —
+# `preflight` and `list` — moved into the subject and their tests moved into this file. Its verdict
+# arms map onto the state function already covered above with nothing lost:
+#   nofetch → U0 UNKNOWN ("could not look" never folds into a fault verdict — same discipline)
+#   waiting → C2 BOOTING / C5 ALIVE      fresh → C5 after a poll advance
+#   dark    → C1 NOT-STARTED / C4 STALLED / C6 ABANDONED      retired → the retire test
+#
+# ── FIXTURE ORDERING IS LOAD-BEARING: declare BEFORE push ─────────────────────────────────────────
+# `declare` now probes the remote once and records the sha the branch held BEFORE the fire (migrated
+# from cc-cloud-watch's `record`). So "push, then declare" no longer models a session that pushed —
+# it models a branch that ALREADY EXISTED, which is C1/C2, not C5. Four fixtures below were
+# reordered for that reason: the old ordering asserted ALIVE off a ref the declared session had
+# never touched. That is not a test that became wrong; it is a test that was always describing the
+# wrong situation, and the baseline is what made the difference visible.
+#
 # HERMETIC BY CONSTRUCTION: setup() fixtures $HOME, the declaration store and the clock, and every
 # "remote" is a REAL local bare repository created in $BATS_TEST_TMPDIR. NO test touches the
 # network, the operator's ~/.claude, or any real remote.
@@ -89,6 +106,18 @@ setup() {
     git -C "$w" push -q "$1" "HEAD:refs/heads/$2" >/dev/null 2>&1
     git -C "$w" rev-parse HEAD
   }
+  # A working clone whose `origin` is a real bare remote — what `preflight` inspects. Optionally
+  # pushes $2 so the "branch is visible off-box" arm has both a present and an absent case.
+  work_with_remote() { # $1=bare-path [$2=branch-to-push] → work path
+    local w="$D/pf$RANDOM"
+    git init -q "$w" >/dev/null 2>&1
+    git -C "$w" remote add origin "$1" >/dev/null 2>&1
+    git -C "$w" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed >/dev/null 2>&1
+    if [ -n "${2:-}" ]; then
+      git -C "$w" push -q origin "HEAD:refs/heads/$2" >/dev/null 2>&1
+    fi
+    printf '%s' "$w"
+  }
   # A local repo carrying a trunk ref, for the content-verified LANDED arm (O4).
   trunk_repo() { # $1=name $2=path-that-is-present-on-trunk → repo path
     local r="$D/$1"
@@ -159,8 +188,11 @@ setup() {
 # ── C5 ALIVE ─────────────────────────────────────────────────────────────────────────────────────
 @test "C5 a pushed ref inside its budgets is ALIVE and silent" {
   have_subject
-  r="$(bare rem)"; push_ref "$r" feat/a >/dev/null
+  r="$(bare rem)"
+  # Declare FIRST, then push: that is what a session doing the work looks like. Pushing first would
+  # seed the fire-time baseline with this very sha, making it a pre-existing branch (C1/C2).
   cloud declare --id live --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600
+  push_ref "$r" feat/a >/dev/null
   [ "$(tstate live)" = "ALIVE" ]
   [ "$(rows)" -eq 0 ]
 
@@ -173,8 +205,9 @@ setup() {
 # ── C4 STALLED, and its history precondition ─────────────────────────────────────────────────────
 @test "C4 STALLED needs sidecar history — with none, it is never claimed" {
   have_subject
-  r="$(bare rem)"; push_ref "$r" feat/a >/dev/null
+  r="$(bare rem)"
   cloud declare --id frozen --branch feat/a --remote "$r" --repo "" --stall 3600 --life 999999
+  push_ref "$r" feat/a >/dev/null
 
   # No poll has ever run ⇒ no evidence the sha ever differed ⇒ no verdict is invented.
   export CC_CLOUD_NOW=$((T0 + 100000))
@@ -212,33 +245,34 @@ setup() {
 # ── C3 LANDED, and why it must precede C4 ────────────────────────────────────────────────────────
 @test "C3 LANDED is content-verified on trunk, and OUTRANKS STALLED" {
   have_subject
-  r="$(bare rem)"; push_ref "$r" feat/a >/dev/null
+  r="$(bare rem)"
   repo="$(trunk_repo work docs/thing.md)"
+  # Both declared BEFORE the push, so both refs genuinely MOVED off their fire-time baseline and the
+  # only thing separating them below is the O4 content check.
   cloud declare --id 'done' --branch feat/a --remote "$r" --repo "$repo" \
         --trunk origin/main --paths docs/thing.md --stall 3600 --life 999999
+  cloud declare --id notdone --branch feat/a --remote "$r" --repo "$repo" \
+        --trunk origin/main --paths docs/absent.md --stall 3600 --life 999999
+  push_ref "$r" feat/a >/dev/null
   cloud poll >/dev/null
 
   # A finished session stops pushing ON PURPOSE. Ordering STALLED first would alarm forever on
   # every successful cloud session — an alarm that always fires carries no information.
   export CC_CLOUD_NOW=$((T0 + 100000))
   [ "$(tstate 'done')" = "LANDED" ]
-  [ "$(rows)" -eq 0 ]
 
   # POSITIVE CONTROL: an identically-aged, identically-frozen session whose declared path is NOT on
   # trunk falls through to STALLED — so the silence above is the LANDED arm, not a dead code path.
-  cloud declare --id notdone --branch feat/a --remote "$r" --repo "$repo" \
-        --trunk origin/main --paths docs/absent.md --stall 3600 --life 999999
-  export CC_CLOUD_NOW=$T0
-  cloud poll >/dev/null
-  export CC_CLOUD_NOW=$((T0 + 100000))
   [ "$(tstate notdone)" = "STALLED" ]
+  [ "$(rows)" -eq 1 ]
 }
 
 # ── C6 ABANDONED ─────────────────────────────────────────────────────────────────────────────────
 @test "C6 ABANDONED: pushed, never landed, past its lifetime" {
   have_subject
-  r="$(bare rem)"; push_ref "$r" feat/a >/dev/null
+  r="$(bare rem)"
   cloud declare --id old --branch feat/a --remote "$r" --repo "" --life 3600 --stall 999999
+  push_ref "$r" feat/a >/dev/null
   [ "$(tstate old)" = "ALIVE" ]           # control: inside the budget it is silent
 
   export CC_CLOUD_NOW=$((T0 + 3601))
@@ -362,4 +396,137 @@ setup() {
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'no cloud sessions declared'
   [ "$(rows)" -eq 0 ]
+}
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# MIGRATED FROM tests/cc-cloud-watch.bats (backlog 163676679912) — the two verbs and the one
+# behaviour that the deleted twin carried and this subject did not.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── BASELINE: cc-cloud-watch's `record` seeded lastSha from the live remote; `declare` now does ───
+@test "BASELINE a ref that ALREADY existed at fire time is not progress — C2 then C1, not C5" {
+  have_subject
+  r="$(bare rem)"
+  push_ref "$r" feat/a >/dev/null            # the branch name is re-used: it exists BEFORE the fire
+  cloud declare --id reused --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+
+  # Without the fire-time baseline this reads ALIVE — and stays silent for the whole life budget,
+  # hiding the likeliest real failure (a session that never boots onto a re-used branch name).
+  [ "$(tstate reused)" = "BOOTING" ]
+  [ "$(rows)" -eq 0 ]
+
+  # POSITIVE CONTROL, same remote and same clock: a session declared BEFORE its push has moved off
+  # its baseline and stays ALIVE. So the verdicts here are the baseline arm, not the clock.
+  cloud declare --id moved --branch feat/b --remote "$r" --repo "" --boot 900 --life 999999
+  push_ref "$r" feat/b >/dev/null
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate reused)" = "NOT-STARTED" ]
+  [ "$(tstate moved)" = "ALIVE" ]
+  [ "$(rows)" -eq 1 ]
+  [ "$(field subject)" = "reused" ]
+}
+
+@test "BASELINE abstains when the fire-time probe could not run — unmeasured is not empty" {
+  have_subject
+  # Declare against a remote that does not exist yet, so declare's probe FAILS and no baseline is
+  # recorded. Then bring the remote up and push. The ref is new, and the classifier must say so
+  # rather than reading an unmeasured baseline as an empty one and convicting a live session.
+  r="$D/late.git"
+  cloud declare --id late --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+  [ -f "$CC_CLOUD_STATE/late.decl" ]
+  run grep -c '^base_probe=' "$CC_CLOUD_STATE/late.decl"
+  [ "$output" = "0" ]
+
+  git init -q --bare "$r"
+  push_ref "$r" feat/a >/dev/null
+  export CC_CLOUD_NOW=$((T0 + 5000))
+  [ "$(tstate late)" = "ALIVE" ]
+  [ "$(rows)" -eq 0 ]
+
+  # POSITIVE CONTROL: an identically-aged declaration WITH a measured baseline over the same,
+  # now-reachable remote and the same branch DOES convict. The abstention above is the missing
+  # measurement, not a classifier that has stopped firing.
+  cloud declare --id measured --branch feat/a --remote "$r" --repo "" --boot 900 --life 999999
+  grep -q '^base_probe=ok$' "$CC_CLOUD_STATE/measured.decl"
+  export CC_CLOUD_NOW=$((T0 + 10000))
+  [ "$(tstate measured)" = "NOT-STARTED" ]
+}
+
+# ── preflight: "design the observable set BEFORE firing", executable ─────────────────────────────
+@test "preflight REFUSES a branch that exists only locally, and names the push that fixes it" {
+  have_subject
+  r="$(bare rem)"
+  w="$(work_with_remote "$r" main)"
+  git -C "$w" branch local-only
+
+  run "$CLOUD" preflight --repo "$w" --branch local-only
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'is NOT on origin'
+  # A refusal that does not say how to clear it is a wall, not a gate.
+  printf '%s' "$output" | grep -q 'git push -u origin local-only'
+
+  # POSITIVE CONTROL on the same repo and remote: the branch that IS pushed passes. Without this,
+  # a preflight that refused everything would look exactly like one that works.
+  run "$CLOUD" preflight --repo "$w" --branch main
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'PREFLIGHT PASS'
+}
+
+@test "preflight REFUSES a repo with no remote, and a path that is no repo at all" {
+  have_subject
+  norem="$D/norem"; git init -q "$norem"
+  run "$CLOUD" preflight --repo "$norem" --branch main
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'no git remote'
+
+  mkdir -p "$D/plain"
+  run "$CLOUD" preflight --repo "$D/plain" --branch main
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'not a git repo'
+}
+
+@test "preflight warns but PASSES without --branch — an unchecked O2 is not a refusal" {
+  have_subject
+  r="$(bare rem)"
+  w="$(work_with_remote "$r" main)"
+  run "$CLOUD" preflight --repo "$w"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'no --branch given'
+  printf '%s' "$output" | grep -q 'PREFLIGHT PASS (with warnings'
+}
+
+# ── list: the inventory, from disk, with no probe ────────────────────────────────────────────────
+@test "list reads DISK ONLY — it still answers with the remote destroyed, where --table cannot" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id offline --branch feat/a --remote "$r" --repo "" --item deadbeef
+  push_ref "$r" feat/a >/dev/null
+  cloud poll >/dev/null
+
+  rm -rf "$r"                                # the remote is now gone: any probe MUST fail
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"id":"offline"'
+  printf '%s' "$output" | grep -q '"item":"deadbeef"'
+  printf '%s' "$output" | python3 -c 'import json,sys; json.loads(sys.stdin.read())'
+
+  # POSITIVE CONTROL: the probing renderer, on the identical fixture, cannot answer at all. That is
+  # what makes the success above evidence of "no probe" rather than evidence of a reachable remote.
+  [ "$(tstate offline)" = "UNKNOWN" ]
+}
+
+@test "list keeps RETIRED declarations for forensics; reconciliation drops them" {
+  have_subject
+  r="$(bare rem)"
+  cloud declare --id keepme --branch feat/a --remote "$r" --repo ""
+  cloud retire --id keepme >/dev/null
+
+  run "$CLOUD" list --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"retired":true'
+
+  # CONTROL: the reconciler's own enumeration DOES drop it — the two views differ on purpose.
+  run "$CLOUD" --table
+  printf '%s' "$output" | grep -q 'no cloud sessions declared'
 }

@@ -183,13 +183,47 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 ### 5.1 Built and green — `bin/cc-cloud`
 
 ```text
+cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
 cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
 cc-cloud retire  --id <id>
 cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
 cc-cloud show <id>
+cc-cloud list [--json]            the declaration inventory from DISK — no probe, no network
 cc-cloud --json | --table | --check | --selftest
 ```
+
+**One tool, not two** (backlog `163676679912`, 2026-08-07). `bin/cc-cloud-watch` was an independent
+implementation of this same observable set, written by a second session of the 9-way dispatch storm
+on `191d4d056c98` and landed in the same commit (`07f9707c`). It has been deleted, because two
+tools reading one observable set drift and a caller cannot tell which is authoritative. Three things
+it had and this one did not were migrated in; nothing else was lost, and the verb map is recorded in
+`bin/cc-cloud`'s own header so it survives this document:
+
+- **`preflight`** — the executable form of this document's own §8 rule. Its load-bearing refusal is
+  an **unpushed branch**: a cloud VM clones from the *remote*, so local-only work is invisible to it
+  and the session silently runs against the default branch instead. Measured 2026-08-07, §7: origin
+  carried **1** head against **286** local branches with no upstream, so the failing case is the
+  overwhelmingly likely one. Corroborated independently by backlog `6be74142f98d` reading the
+  2.1.220 binary — cloud agents require a GitHub remote and cannot see an unpushed local branch.
+- **`list`** — the inventory, disk-only. It departs from the tool it replaces on purpose: that one
+  replayed a stored `lastVerdict` labelled "last known", but every arm of §4.3 is a function of the
+  **clock** as well as the sha, so BOOTING becomes NOT-STARTED with no new observation at all. A
+  replayed verdict is not stale-but-directional; it is wrong in the direction that reads as healthy.
+  `list` therefore reports only what does not decay — what was declared, and what was last observed.
+- **the fire-time baseline** — `declare` now probes once and records the sha the branch held *before*
+  the fire. §4.3's C1/C2 keyed on "no ref", so a declaration onto a **re-used branch name** read C5
+  ALIVE from the instant it was made and stayed silent for the whole `life_s` budget (6 h) — the
+  likeliest real failure, a session that never boots, hidden behind a green verdict. "Produced
+  nothing" is now `sha == base_sha`, which takes the same two arms. It is checked **after** C3 for
+  the same reason C3 precedes C4: a session whose content is on trunk is finished, and how its ref
+  moved has stopped being a question worth alarming on. The baseline is MEASURED, never assumed — if
+  the fire-time probe could not run, no `base_probe=ok` is written and the arm abstains entirely,
+  which is §4.2's law one level down.
+
+Its verdict vocabulary maps onto §4.3 with nothing dropped: `nofetch`→U0, `waiting`→C2/C5,
+`fresh`→C5 after a poll advance, `dark`→C1/C4/C6, `retired`→retired. Its suite was absorbed into
+`tests/cc-cloud.bats` (22 tests).
 
 Row schema, matching `bin/cc-fleet`'s frozen shape:
 
