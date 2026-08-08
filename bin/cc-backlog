@@ -20,7 +20,10 @@
 #                                                                  (claimer OR its worktree), or if
 #                                                                  the item is done-latched, or if a
 #                                                                  SIBLING sharing its condition is
-#                                                                  held & live (see CONDITION LEASE)
+#                                                                  held & live (see CONDITION LEASE),
+#                                                                  or — on --venue cloud ONLY — if
+#                                                                  the work cannot run off-box
+#                                                                  (see OFF-BOX ELIGIBILITY)
 #   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
 #                                                                  condition group (the lease's
 #                                                                  population); --force to re-key
@@ -75,6 +78,22 @@
 # Cloud liveness cannot be read from this box's process table at all; it is read from the repo side
 # and the control plane. The observable set, the channel taxonomy and the producer contract a cloud
 # dispatch must satisfy before it is fired: docs/research/cloud-observability-2026-08-07.md.
+#
+# ── OFF-BOX ELIGIBILITY (2026-08-08, gate G8) ───────────────────────────────────────────────────
+# `--venue cloud` says WHERE the worker runs. This asks the prior question: may this WORK go there
+# at all? CONCURRENCY_PROGRAM.md §S5 settles it in a sentence — "repo-only work ✅ · visual design ❌
+# (needs the local browser + dev server) · anything about this box ❌ · branch banking ⚠️" — measured
+# in docs/research/concurrency-census-2026-08-07.md §5, and until G8 enforced NOWHERE. A conclusion
+# that reaches only a plan file is behind a diode: nothing re-reads it when a claim is taken.
+#
+# The predicate lives in `bin/cc-eligible` (ONE implementation, shared by the gate and the census,
+# so a report and a refusal cannot drift) and is called from guard (5b). Contract, mirroring
+# cc-premise exactly: `verdict=<token>` on line 1, exit 3 iff INELIGIBLE, fail-OPEN on everything
+# it cannot read. Only exit 3 blocks; the claim then returns rc 4 with `verdict=cloud-ineligible`.
+#
+# Off-switch `CC_BACKLOG_ELIGIBLE_GATE=off`, helper override `CC_BACKLOG_ELIGIBLE_BIN`. A LOCAL
+# claim never reaches the block — it is gated on `[ "$venue" = cloud ]` — so nothing about local
+# claiming changed, which is what tests/cc-backlog-venue.bats' same-item local control pins.
 #
 # ── SELF-RELEASE (2026-08-07, backlog 98e0e325b3ed) ─────────────────────────────────────────────
 # `reopen --self-release <token>` marks a reopen the CLAIMER issued because it could not START the
@@ -1085,6 +1104,57 @@ cmd_transition() {
             printf '  longer holds. THE DISPROOF IS THE DELIVERABLE: file it (cc-backlog add, naming\n'
             printf '  this id) and close this item citing that, rather than silently closing it.\n'
             printf '  If the premise does still hold:  cc-backlog claim %s --force\n' "$id"
+          } >&2
+          return 4
+        fi
+      fi
+    fi
+    # (5b) OFF-BOX ELIGIBILITY — fires ONLY on `--venue cloud`, so a local claim is byte-for-byte
+    # what it was. The question it asks is prior to every other guard here: not "is this finished",
+    # "is someone on it" or "is its premise standing", but CAN THE WORK BE DONE WHERE THE WORKER IS.
+    #
+    # It exists because the answer was PROSE. CONCURRENCY_PROGRAM.md §S5 settles it in one sentence
+    # — "repo-only work ✅ · visual design ❌ (needs the local browser + dev server) · anything about
+    # this box ❌ · branch banking ⚠️" — measured in docs/research/concurrency-census-2026-08-07.md
+    # §5, correct, and enforced NOWHERE. A conclusion that reaches only a plan file sits behind a
+    # diode: nothing re-reads it at the moment a claim is taken, so it changes no behaviour at all
+    # (memory: conclusion-must-reach-the-enforcing-store). This block is that sentence's exit code.
+    #
+    # AT THE ACTUATOR, for guard (5)'s reason verbatim: the dispatcher is not the only claimer. A
+    # desk, a peer session, a worker claiming by hand all reach this transition, and only this
+    # transition. Folding the predicate in here is what makes it total rather than dispatcher-scoped.
+    #
+    # WHY A WRONG *ELIGIBLE* IS THE EXPENSIVE DIRECTION, which is why the classifier is allowed to
+    # be conservative about what it READ while still failing open on what it could not read. A
+    # worker in an Anthropic-managed VM has no ~/.claude, no pane registry, no keychain, no browser,
+    # no dev server, and none of this box's 199 unpushed branches — but it has a plausible-looking
+    # EMPTY version of most of them, so it does not error, it improvises. A wrong refusal, by
+    # contrast, leaves the item exactly where it is today: open, and claimable locally by the very
+    # next pass. Stranding is recoverable; a confident worker against invisible state is not.
+    #
+    # FAIL-OPEN, like the premise gate above and for the same reason: this predicate lives OUTSIDE
+    # the ledger fold, so every way of failing to read it — absent helper, unreadable store, a
+    # python3 that is not there, a crash — must let the claim through. ONLY exit 3 blocks.
+    if [ "$venue" = cloud ] && [ "${CC_BACKLOG_ELIGIBLE_GATE:-on}" != off ]; then
+      local eself ebin erc eout
+      eself="$0"; [ -L "$eself" ] && eself="$(readlink "$eself")"
+      ebin="${CC_BACKLOG_ELIGIBLE_BIN:-$(cd "$(dirname "$eself")" 2>/dev/null && pwd)/cc-eligible}"
+      if [ -x "$ebin" ]; then
+        eout="$("$ebin" check "$id" 2>&1)"; erc=$?
+        if [ "$erc" -eq 3 ]; then
+          # `verdict=cloud-ineligible` rides LINE 1 — rc 4 now has FIVE causes and cc-dispatch can
+          # only see this through `claim_excerpt` (head -1, 200 chars). ONE token at this level, not
+          # one per class: the classes ride the body, where a human reads them, while the machine
+          # gets a single string it can discriminate on positively (memory:
+          # new-enum-member-falls-into-fail-closed-default).
+          { printf 'cc-backlog claim: REFUSED verdict=cloud-ineligible — %s\n' "$id"
+            printf '%s\n' "$eout" | sed 's/^/  /'
+            printf '  This item was not refused for being finished, held, or premise-dead — it is\n'
+            printf '  work a CLOUD VM cannot do: the state it operates on exists only on this box.\n'
+            printf '  Claim it LOCALLY and it proceeds untouched:  cc-backlog claim %s --by %s\n' "$id" "${by:-<sid>}"
+            printf '  If the classification is wrong, fix the spelling list in bin/cc-eligible so the\n'
+            printf '  next item of this shape is classified right too, rather than forcing past it.\n'
+            printf '  To override deliberately:  cc-backlog claim %s --by %s --venue cloud --force\n' "$id" "${by:-<sid>}"
           } >&2
           return 4
         fi
