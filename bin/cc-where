@@ -79,6 +79,87 @@ def ls_tree() -> list:
     return json.loads(r.stdout)
 
 
+def _cloud_bin() -> str | None:
+    """`cc-cloud`, the ONLY source of off-box rows (CLOUD_OBSERVABILITY.md §9.3).
+
+    CC_WHERE_CLOUD_BIN is the test seam. Sibling-first otherwise, same order cc-sessions uses:
+    the tool beside this one is the deterministic pick, and ~/.claude/bin is the live layer.
+    """
+    override = os.environ.get("CC_WHERE_CLOUD_BIN")
+    if override:
+        return override if os.access(override, os.X_OK) else None
+    here = os.path.dirname(os.path.realpath(__file__))
+    for cand in (os.path.join(here, "cc-cloud"), os.path.expanduser("~/.claude/bin/cc-cloud")):
+        if os.access(cand, os.X_OK):
+            return cand
+    return shutil.which("cc-cloud")
+
+
+def cloud_sessions() -> list[dict]:
+    """Declared, non-retired off-box sessions — NEVER a pane row.
+
+    An off-box session has no kitty window, no pid and no local anything, so it cannot be
+    synthesised into the census list: `panes()` rows carry `win`/`oswin`/`on_screen`, and a fake
+    one would be focusable, killable and countable as a pane. It gets its own block instead.
+
+    `--state` asks cc-cloud's own state function; cc-where does not re-derive it. A probe that
+    could not answer degrades to the probe-free inventory, whose rows then render the literal
+    UNKNOWN — never to an empty list, because that would put this tool back in the class of local
+    oracles that report a healthy off-box session as absent.
+    """
+    cc = _cloud_bin()
+    if not cc:
+        return []
+    out = ""
+    for argv in ([cc, "list", "--json", "--state"], [cc, "list", "--json"]):
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            out = r.stdout
+            break
+    rows = []
+    for line in out.splitlines():          # NDJSON: one object per LINE, never an array
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict) or d.get("retired") is True:
+            continue
+        rows.append(
+            {
+                "kind": "offbox",
+                "id": d.get("id") or "",
+                "branch": d.get("branch") or "",
+                "item": d.get("item") or "",
+                "state": d.get("state") or "UNKNOWN",   # U0 renders as the WORD, never as a gap
+                "url": d.get("url") or "https://claude.ai/code",
+            }
+        )
+    return rows
+
+
+def cloud_match(rows: list[dict], pat: "re.Pattern[str]") -> list[dict]:
+    return [r for r in rows if pat.search(r["id"]) or pat.search(r["branch"]) or pat.search(r["item"])]
+
+
+def cloud_block(rows: list[dict]) -> None:
+    """§9.3's row, verbatim in shape: kind · addr · state · action. No pid, no kill."""
+    if not rows:
+        return
+    print(f"{C['head']}▸ OFF-BOX — no screen anywhere; these run in an Anthropic VM{C['reset']}")
+    for r in rows:
+        print(
+            f"     {C['off']}offbox{C['reset']} "
+            f"kind=offbox  addr={r['id']}  state={r['state']}  action=open {r['url']}"
+        )
+    print()
+
+
 def overlay_map(tab: dict, windows: list | None = None) -> tuple[dict[int, int], dict[int, int]]:
     """(covered_by, overlay_of) for one tab, from kitty's window GROUPS.
 
@@ -331,9 +412,15 @@ def _state(r: dict) -> tuple[str, str]:
     return C["on"], "on"
 
 
-def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> int:
+def render(
+    rows: list[dict],
+    tree: list,
+    subset: list[dict] | None = None,
+    cloud: list[dict] | None = None,
+) -> int:
     labels = location_labels(tree)
     shown = subset if subset is not None else rows
+    cloud = cloud or []
 
     sessions = [r for r in rows if not r["is_overlay"]]
     n_off = sum(1 for r in sessions if not r["on_screen"])
@@ -354,6 +441,11 @@ def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> in
     print()
 
     if not shown:
+        # An off-box match is an ANSWER, not a miss: reporting "no pane matches" over a live cloud
+        # session is the same conversion of "not on this box" into "gone" that §5.2 catalogues.
+        if cloud:
+            cloud_block(cloud)
+            return 0
         print("no pane matches.")
         return 1
 
@@ -403,6 +495,8 @@ def render(rows: list[dict], tree: list, subset: list[dict] | None = None) -> in
             )
         print()
 
+    cloud_block(cloud)
+
     if n_off and subset is None:
         print(f"{C['meta']}reach one:  cc-where --go \"<part of its title>\"{C['reset']}")
     return 0
@@ -418,6 +512,17 @@ def go(rows: list[dict], query: str) -> int:
     # to be sent, and matching one would make `--go` refuse-on-ambiguity against a lid.
     hits = [r for r in rows if not r["is_overlay"] and pat.search(r["title"])]
     if not hits:
+        # BEFORE declaring a miss, ask cc-cloud. "Nothing matches" over a declared off-box session
+        # is the local-oracle lie (§5.2): the session is fine, it is simply on no screen this box
+        # owns. There is nothing to focus and nothing to signal — the action is the URL, and it
+        # goes to STDOUT because it is an answer, not an error. Exit 5 says exactly that: found,
+        # off-box, not focusable — distinguishable from 1 (no such session anywhere).
+        offbox = cloud_match(cloud_sessions(), pat)
+        if offbox:
+            print(f"{len(offbox)} off-box session(s) match {query!r} — on NO screen, by construction:")
+            cloud_block(offbox)
+            print(f"open it:  open {offbox[0]['url']}")
+            return 5
         print(f"cc-where: nothing matches {query!r}. Run `cc-where` for the census.", file=sys.stderr)
         return 1
     if len(hits) > 1:
@@ -476,7 +581,14 @@ USAGE = """cc-where — locate a Claude Code session on your physical screens
   cc-where <regex>         only panes whose title matches
   cc-where --hidden        only panes that are off-screen right now
   cc-where --go <regex>    focus that pane (raises its window, switches to its tab)
-  cc-where --json          machine-readable census
+  cc-where --json          machine-readable census (LOCAL PANES ONLY — see below)
+
+  OFF-BOX sessions (declared with cc-cloud) are listed in their own block: they run
+  in an Anthropic-managed VM, so they are on no screen this box owns, have no pid
+  and no pane, and the only way to reach one is `open <url>` — never a kill.
+  `--go` on one exits 5: found, off-box, nothing local to focus. They are absent
+  from `--json` on purpose — that is a census of kitty panes, and an off-box row is
+  not one; `cc-sessions --offbox --json` is the machine surface for them.
 
   A pane is OFF SCREEN when its tab is not the active tab of its kitty window,
   when the tab is ZOOMED (stack) and this is not the pane on top, or when a
@@ -501,7 +613,7 @@ def main(argv: list[str]) -> int:
     rows = panes(tree)
 
     if not args:
-        return render(rows, tree)
+        return render(rows, tree, cloud=cloud_sessions())
     if args[0] == "--json":
         print(json.dumps(rows, indent=2))
         return 0
@@ -512,10 +624,17 @@ def main(argv: list[str]) -> int:
         return go(rows, args[1])
     if args[0] == "--hidden":
         hidden = [r for r in rows if not r["on_screen"]]
+        # An off-box session is off-screen by construction, so --hidden is exactly the query it
+        # answers — and it must not report "every pane is on a visible tab" while one exists.
+        offbox = cloud_sessions()
         if not hidden:
-            print("nothing is off-screen — every pane is on a visible tab.")
+            if not offbox:
+                print("nothing is off-screen — every pane is on a visible tab.")
+                return 0
+            print("every local pane is on a visible tab; these are not on this box at all:")
+            cloud_block(offbox)
             return 0
-        return render(rows, tree, subset=hidden)
+        return render(rows, tree, subset=hidden, cloud=offbox)
     if args[0].startswith("-"):
         print(USAGE, file=sys.stderr)
         return 64
@@ -525,7 +644,12 @@ def main(argv: list[str]) -> int:
     except re.error as e:
         print(f"cc-where: bad pattern {args[0]!r}: {e}", file=sys.stderr)
         return 64
-    return render(rows, tree, subset=[r for r in rows if pat.search(r["title"])])
+    return render(
+        rows,
+        tree,
+        subset=[r for r in rows if pat.search(r["title"])],
+        cloud=cloud_match(cloud_sessions(), pat),
+    )
 
 
 if __name__ == "__main__":
