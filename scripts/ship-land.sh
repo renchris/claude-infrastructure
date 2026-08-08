@@ -199,6 +199,44 @@ EXTRA_RANGE=""
 # a kill, and must never be softened into a retryable non-verdict.
 GATE_RED=0        # ≥1 check produced a REAL verdict and it was red
 GATE_KILLED=0     # ≥1 bats run died to a signal / produced no attributable failure
+GATE_RED_WHY=""   # WHICH arm(s) went red, fire-ordered "arm[:subject]" list — attested as "red"
+
+# ATTRIBUTE THE RED (GATE_ARCHITECTURE_PLAN §9 item 4). land.log recorded `exit` and nothing else,
+# so a red was a number: the plan's own post-mortem of a 44-red window had to INFER cause from an
+# exit code and said so — "every post-mortem here is inference over an exit code, which is the same
+# blindness §1 was written to escape". §9 then blocks further probabilistic modelling on this being
+# fixed, because §1's `P=(1-q)^n` model cannot even SEE the deterministic blockers (ratchet,
+# wall-clock bomb, deploy drift) that the same section measured as the real blocking class. You
+# cannot tell those two populations apart in a corpus of bare 6s.
+#
+# gate_red() is the ONLY sanctioned way to raise GATE_RED — a bare assignment to it is a red that
+# attests as "unattributed", and tests/ship-land.bats fails the build on one, so a NEW arm cannot
+# silently re-open the blind spot. That ratchet is the point: 22 arms can raise a red here and the
+# next one is written by someone who never read this comment. The lint is a whole-file count of the
+# assignment literal, which is why this sentence spells the literal out in words rather than quoting
+# it — a comment that quoted it would make the lint's own explanation into a violation.
+gate_red() {  # $1=arm  [$2=subject: the file/suite it named] — raise GATE_RED *and* say why
+  GATE_RED=1
+  local why="$1"
+  [[ -n "${2:-}" ]] && why="$1:$2"
+  # `,` separates arms and `:` separates arm from subject, so neither may survive inside a subject;
+  # everything outside the JSON-safe set goes too, because land.log is one JSON object per line and
+  # a stray quote/backslash from a filename would corrupt the line for every reader on the box.
+  why="$(printf '%s' "$why" | tr -c 'A-Za-z0-9._/:=-' '-' | tr -s '-')"
+  # Already at the cap ⇒ stop appending. Without this the next arm would be concatenated and the
+  # result re-truncated THROUGH the marker ("...+trunca+truncated"), i.e. the field would start
+  # eating its own honesty token — the bound has to be sticky, not re-applied.
+  case "$GATE_RED_WHY" in *'+truncated') return 0 ;; esac
+  case ",${GATE_RED_WHY}," in *",${why},"*) return 0 ;; esac   # same arm twice ⇒ one entry
+  GATE_RED_WHY="${GATE_RED_WHY:+${GATE_RED_WHY},}${why}"
+  # Bounded, and LOUDLY: a truncation that reads as a complete list would be a fresh instance of the
+  # blindness this whole field exists to remove, so the cut is named in the value itself. Reachable
+  # in practice — the bats/smoke arms name every failing suite, not just the first.
+  if (( ${#GATE_RED_WHY} > 240 )); then
+    GATE_RED_WHY="${GATE_RED_WHY:0:240}+truncated"
+  fi
+  return 0
+}
 
 # ---- SMOKE + NET state (attested, seeded across the locked re-exec like SELECTED_N) ---------
 SMOKE_STATE="${SHIP_LAND_SMOKE_STATE:-none}"   # green | red | partial | skipped | none
@@ -437,11 +475,18 @@ attest_land() {  # $1=verify $2=sweep $3=esc $4=exit — self-attesting land.log
   # answerable per land — the §7 acceptance read (p50/p99, zero exit-9) comes from exactly here.
   local log; log="${LAND_LOG:-$HOME/.claude/land.log}"
   mkdir -p "$(dirname "$log")" 2>/dev/null || true
-  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s"}\n' \
+  # `red` has THREE states and they must never collapse into two (memory:
+  # sensor-default-off-makes-blindness-the-shipping-path — one value serving both "answered no" and
+  # "could not ask" fabricated 80 of 156 findings). "" = no arm went red on this land. A named list
+  # = these arms did. "unattributed" = a red WAS raised and no arm claimed it, which indicts this
+  # instrument, not the tree — so a reader can subtract it instead of miscounting it as a cause.
+  local red=""
+  [[ "${GATE_RED:-0}" = "1" ]] && red="${GATE_RED_WHY:-unattributed}"
+  printf '{"ts":"%s","tool":"ship-land","repo":"%s","branch":"%s","sid":"%s","verify":"%s","sweep":"%s","esc_scan":"%s","exit":%s,"head":"%s","base":"%s","tree":"%s","gate_scope":"%s","selected_n":%s,"smoke":"%s","smoke_n":%s,"smoke_s":%s,"net":"%s","red":"%s"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${REPO_ROOT}" "${BRANCH}" "${CLAUDE_CODE_SESSION_ID:-}" \
     "$1" "$2" "$3" "$4" \
     "${ATTEST_HEAD:-?}" "${ATTEST_BASE:-?}" "${ATTEST_TREE:-?}" "${LANE}" "${SELECTED_N:--1}" \
-    "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" \
+    "${SMOKE_STATE:-none}" "${SMOKE_N:-0}" "${SMOKE_S:-0}" "${NET_STATE:-none}" "${red}" \
     >> "$log" 2>/dev/null || true
 }
 
@@ -758,6 +803,7 @@ run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one pro
   # q=2.94%/suite ⇒ 2.3% at n=126 → 49.9% with the fresh-TMPDIR re-run) a kill costs ONE suite.
   # The monolith had no such appeal and failed 33 of its 34 runs; it is deleted, not kept.
   local direct="${1:-}" f n=0 red=0 killed=0 srv
+  local -a redf=()          # WHICH suites named a failure — §9 item 4's "log the failing suite name"
   echo "→ gate[v1]: bats tests/ — full corpus, one process per suite (SHIP_LAND_LANE kill switch)" >&2
   for f in tests/*.bats; do
     [[ -e "$f" ]] || continue
@@ -766,13 +812,13 @@ run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one pro
     case "$srv" in
       0) ;;
       2) killed=$(( killed + 1 )) ;;
-      *) red=$(( red + 1 )) ;;
+      *) red=$(( red + 1 )); redf+=("$f") ;;
     esac
   done
   SELECTED_N="$n"
   if [[ "$n" -eq 0 ]]; then
     echo "✗ gate[v1]: no suites matched tests/*.bats — refusing to claim green on an empty corpus" >&2
-    GATE_RED=1; return 1
+    gate_red bats-empty-corpus; return 1
   fi
   if [[ "$red" -eq 0 && "$killed" -eq 0 ]]; then
     echo "✓ gate[v1]: FULL corpus green — $n suites, one process each" >&2; return 0
@@ -788,7 +834,9 @@ run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one pro
     echo "⛔ gate[v1]: GATE-KILLED — $killed of $n suite(s) were cut TWICE with ZERO 'not ok'; they earned no verdict. Free a stuck gate with scripts/gate-cleanup.sh (worktree-scoped), never a bare pkill." >&2
   fi
   if [[ "$red" -gt 0 ]]; then
-    GATE_RED=1
+    # One entry per failing suite, not a count: "$red of $n failed" is exactly the shape §9 could
+    # not act on. The cap in gate_red bounds a mass failure and says so rather than trimming quietly.
+    for f in "${redf[@]}"; do gate_red bats "$f"; done
     echo "✗ gate[v1]: bats RED — $red of $n suite(s) failed" >&2
   fi
   return 1
@@ -840,6 +888,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   # behind us will re-prove the tree, and turning "the box was busy" into a failed land is exactly
   # the kill→"RED"→re-block→retry runaway (f8e40b4c577d). It becomes smoke:"partial" and lands.
   local range="$1" direct budget start f n=0 red=0 cut=0 srv
+  local -a redf=()          # the direct suites that named a failure — attested, not just counted
   SMOKE_STATE="none"; SMOKE_N=0; SMOKE_S=0; SMOKE_DEADLINE=""
   ls tests/*.bats >/dev/null 2>&1 || return 0
 
@@ -903,7 +952,7 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     case "$srv" in
       0) ;;
       2) cut=1 ;;                                        # cut twice / bound fired ⇒ NO verdict
-      *) red=$(( red + 1 )) ;;                           # a named `not ok` ⇒ a verdict
+      *) red=$(( red + 1 )); redf+=("$f") ;;             # a named `not ok` ⇒ a verdict
     esac
   done <<< "$direct"
   SMOKE_S=$(( $(date +%s) - start ))
@@ -912,7 +961,8 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
   gate_home_teardown
 
   if [[ "$red" -gt 0 ]]; then
-    SMOKE_STATE="red"; GATE_RED=1
+    SMOKE_STATE="red"
+    for f in "${redf[@]}"; do gate_red smoke "$f"; done
     echo "✗ gate: smoke RED — $red of $n direct suite(s) named a failure. This is a VERDICT about your diff (O(diff), reproducible): fix it, do not retry unchanged." >&2
     return 1
   fi
@@ -1119,7 +1169,10 @@ run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0 HERM_LINT SELFPATH_LINT
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
   # stamp_gate_green self-noops and the verifier stays the marker's only writer (§4.2).
-  GATE_EFFECTIVE_FULL=0; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0
+  # GATE_RED_WHY resets WITH GATE_RED, never separately: the optimistic loop re-enters run_gate on
+  # the exit-42 stale-gate round, and a why that outlived its flag would attest round 1's arm against
+  # round 2's verdict — attribution that is worse than none, because it reads as evidence.
+  GATE_EFFECTIVE_FULL=0; SELECTED_N=-1; GATE_RED=0; GATE_KILLED=0; GATE_RED_WHY=""
   local shellfiles=() pyfiles=()
   while IFS= read -r -d '' p; do
     [[ -z "$p" ]] && continue
@@ -1134,14 +1187,15 @@ run_gate() {  # $1=range → 0 green / 1 red
 
   if [[ ${#shellfiles[@]} -gt 0 ]]; then
     echo "→ gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s)" >&2
-    shellcheck "${shellfiles[@]}" >&2 || { echo "✗ gate: shellcheck RED" >&2; rc=1; GATE_RED=1; }
+    # No subject: shellcheck judges the whole set in one call, so naming one file would be a guess.
+    shellcheck "${shellfiles[@]}" >&2 || { echo "✗ gate: shellcheck RED" >&2; rc=1; gate_red shellcheck; }
     for p in "${shellfiles[@]}"; do
-      bash -n "$p" 2>&1 >&2 || { echo "✗ gate: bash -n RED: $p" >&2; rc=1; GATE_RED=1; }
+      bash -n "$p" 2>&1 >&2 || { echo "✗ gate: bash -n RED: $p" >&2; rc=1; gate_red bash-n "$p"; }
     done
   fi
   if [[ ${#pyfiles[@]} -gt 0 ]]; then
     echo "→ gate: py_compile on ${#pyfiles[@]} python file(s) (incl. extensionless-by-shebang)" >&2
-    python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; GATE_RED=1; }
+    python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; gate_red py_compile; }
   fi
 
   # ── test-hermeticity ratchet — BEFORE the bats block, in EVERY scope (~1s) ──────────────────
@@ -1217,7 +1271,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       # A REAL verdict, never a non-verdict: the ratchet names a file and is deterministic, so it
       # must exit 6 (fix your tree) and never 9 (GATE-KILLED, "re-run when the box is quieter").
       # Without this flag a bats CUT elsewhere in the same run could soften it into a retryable 9.
-      GATE_RED=1
+      gate_red hermeticity
       return 1
     fi
   fi
@@ -1238,7 +1292,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! CC_WALLTIME_OWN="$wown" "$WALL_LINT" tests >&2; then
       echo "✗ gate: wall-clock RED — a fixture THIS LAND CHANGES seeds a future absolute date." >&2
       echo "  Seed relative to now instead; the file and dates are named above." >&2
-      GATE_RED=1
+      gate_red walltime
       return 1
     fi
   fi
@@ -1286,7 +1340,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "  session on the box. Guard the ARGUMENT (\"\${1:?}\" or a literal suffix) — for the no-\`-C\`" >&2
       echo "  shape a \`||\`-chain alone is inert, because an empty path makes the cd SUCCEED." >&2
       echo "  The file, the line, and the accepted forms are named above." >&2
-      GATE_RED=1
+      gate_red git-identity
       return 1
     fi
   fi
@@ -1319,13 +1373,13 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$UTC_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: utc-stamp-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red utc-stamp-selftest
       return 1
     fi
     if ! CC_UTC_OWN="$uown" "$UTC_LINT" >&2; then
       echo "✗ gate: UTC-stamp RED — a file THIS LAND CHANGES stamps a literal Z from a local clock." >&2
       echo "  Add -u to the date call (or emit %z instead of Z); the file and lines are named above." >&2
-      GATE_RED=1
+      gate_red utc-stamp
       return 1
     fi
   fi
@@ -1382,7 +1436,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         echo "  appended false. The fixer rewrites those to '! A || <same RHS>', and DECLINES (exit 2," >&2
         echo "  line named, file untouched) rather than guess at a shape it cannot prove. A decline is" >&2
         echo "  YOUR hand-edit: verify it in BOTH directions with a mutant, never by the analyzer alone." >&2
-        GATE_RED=1
+        gate_red dead-assertion
         return 1
       fi
     fi
@@ -1424,14 +1478,14 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$SELFPATH_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: self-path-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red self-path-selftest
       return 1
     fi
     if ! CC_SELFPATH_OWN="$spown" "$SELFPATH_LINT" >&2; then
       echo "✗ gate: self-path RED — a file THIS LAND CHANGES derives a path via '..' from an" >&2
       echo "  unresolved \$0/\$BASH_SOURCE. Resolve the symlinks first (_resolve_self above); the" >&2
       echo "  file and lines are named above." >&2
-      GATE_RED=1
+      gate_red self-path
       return 1
     fi
   fi
@@ -1468,7 +1522,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$PSPAWN_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: pane-spawn-coverage-lint --selftest FAILED — the detector no longer" >&2
       echo "  discriminates, so its clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red pane-spawn-selftest
       return 1
     fi
     # gate_bounded: THE AUTHOR'S OWN DIFF — see the marker above; CC_PSC_OWN carries the same
@@ -1477,7 +1531,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "✗ gate: pane-spawn coverage RED — a file THIS LAND CHANGES creates a terminal surface" >&2
       echo "  and never calls cc_log_pane_spawn (scripts/lib/pane-spawn-log.sh). Add the row, or the" >&2
       echo "  log's 'no row ⇒ not from this tree' inference is false; the lines are named above." >&2
-      GATE_RED=1
+      gate_red pane-spawn
       return 1
     fi
   fi
@@ -1519,14 +1573,14 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$UNATTENDED_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red unattended-path-selftest
       return 1
     fi
     if ! CC_UNATTENDED_OWN="$upown" "$UNATTENDED_LINT" >&2; then
       echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
       echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
       echo "  PATH at the top of the file; the file, line and binary are named above." >&2
-      GATE_RED=1
+      gate_red unattended-path
       return 1
     fi
   fi
@@ -1573,7 +1627,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$PERMGATE_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: permission-gate-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red permission-gate-selftest
       return 1
     fi
     if ! CC_PERMGATE_OWN="$pgown" "$PERMGATE_LINT" >&2; then
@@ -1581,7 +1635,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       echo "  actuation path with no declared bound (or its ratchet line is stale). Give the gate a" >&2
       echo "  budget whose expiry converts the standing state into an EVENT, then declare it with a" >&2
       echo "  \`gate_bounded: <what expires, and into what>\` marker; the lines are named above." >&2
-      GATE_RED=1
+      gate_red permission-gate
       return 1
     fi
   fi
@@ -1612,14 +1666,14 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$CHROMIUM_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: chromium-bundle-lint --selftest FAILED — the detector no longer discriminates," >&2
       echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red chromium-bundle-selftest
       return 1
     fi
     if ! CC_CHROMIUM_OWN="$cbown" "$CHROMIUM_LINT" >&2; then
       echo "✗ gate: chromium-bundle RED — a file THIS LAND CHANGES takes screenshots through the" >&2
       echo "  full Chromium.app bundle, which strobes the operator's Dock once per launch. Use" >&2
       echo "  resolve_headless_chrome from scripts/lib/cc-common.sh; the file is named above." >&2
-      GATE_RED=1
+      gate_red chromium-bundle
       return 1
     fi
   fi
@@ -1666,13 +1720,13 @@ run_gate() {  # $1=range → 0 green / 1 red
     if ! "$SC_BATS_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: bats-shellcheck-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
-      GATE_RED=1
+      gate_red bats-shellcheck-selftest
       return 1
     fi
     if ! CC_BATS_SC_OWN="$bown" "$SC_BATS_LINT" tests >&2; then
       echo "✗ gate: bats-shellcheck RED — a line THIS LAND WROTE carries a shellcheck finding," >&2
       echo "  or a suite it touches aborts shellcheck entirely. Both are named above." >&2
-      GATE_RED=1
+      gate_red bats-shellcheck
       return 1
     fi
   fi

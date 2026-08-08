@@ -994,6 +994,98 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -qE '"smoke_s":[0-9]+' "$LAND_LOG"
   grep -qE '"net":"(live|inert|none)"' "$LAND_LOG"
   grep -q '"selected_n":' "$LAND_LOG"
+  grep -q '"red":""' "$LAND_LOG"                            # green ⇒ no arm claimed a red
+}
+
+# ── ATTRIBUTE THE RED — land.log names WHICH arm went red (GATE_ARCHITECTURE_PLAN §9 item 4) ─────
+# §9 measured a 44-red window and could not attribute a single one of them, because land.log carried
+# `exit` and nothing else: "the ratchet blocked me" and "a suite flaked" are the SAME observation in
+# a corpus of bare 6s. That is why the plan blocks further probabilistic modelling on this — §1's
+# `P=(1-q)^n` models an independent per-suite hazard and cannot represent a deterministic blocker at
+# all, so the two populations must first be separable in the log. The field has THREE states and
+# these pin them apart; collapsing any two re-creates the blindness.
+
+@test "attest-red: a statics RED attests the ARM that produced it, not just exit 6" {
+  git checkout -q -b feat/red-arm main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-arm.sh   # SC2164 ⇒ shellcheck RED
+  git add bad-arm.sh && git commit -q -m "feat: bad-arm"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"exit":6' "$LAND_LOG"
+  grep -q '"red":"shellcheck"' "$LAND_LOG"
+}
+
+@test "attest-red: a smoke RED names the failing SUITE — §9's literal ask" {
+  # "log the failing suite name on exit 6" is the plan's own cheapest-next-measurement. A count
+  # ("2 of 29 failed") is exactly what §9 already had and could not act on.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  echo red > "$KILL_MODE"
+  landable feat/red-suite rs.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"red":"smoke:tests/a.bats"' "$LAND_LOG"
+}
+
+@test "attest-red: two arms in one run are BOTH attested, fire-ordered" {
+  # The gate does not stop at the first finding (run_corpus's no-fail-fast rule), so the field must
+  # not stop at the first either — an attribution that reported only the first arm would under-count
+  # whichever arm happens to run late, and the ratchets all run after the statics.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  echo red > "$KILL_MODE"                                   # the smoke suite names a failure…
+  git checkout -q -b feat/red-both main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > rb.sh    # …and shellcheck names one too
+  git add rb.sh && git commit -q -m "feat: red-both"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"red":"shellcheck,smoke:tests/a.bats"' "$LAND_LOG"
+}
+
+@test "attest-red: every arm goes through gate_red — a bare assignment cannot ship" {
+  # THE RATCHET. 22 arms can raise a red in ship-land.sh and the 23rd will be written by someone who
+  # never read the comment above gate_red(), so the invariant is enforced, not documented: exactly
+  # ONE assignment to the flag exists in the whole file, and it is the one inside gate_red itself.
+  [ "$(grep -c 'GATE_RED=1' "$SHIPLAND")" -eq 1 ]
+
+  # CONTROL — the predicate must be ABLE to fail, or this test passes vacuously for the rest of its
+  # life (memory: control-must-replay-the-real-artifact). Mutate the REAL script at an anchor that
+  # matches exactly once, and confirm the count moves.
+  [ "$(grep -c '^ *gate_red hermeticity$' "$SHIPLAND")" -eq 1 ]
+  mut="$BATS_TEST_TMPDIR/mutant-lint.sh"
+  sed 's/^\( *\)gate_red hermeticity$/\1GATE_RED=1/' "$SHIPLAND" > "$mut"
+  [ "$(grep -c 'GATE_RED=1' "$mut")" -eq 2 ]
+}
+
+@test "attest-red: a bare assignment attests \"unattributed\" — never a silent \"\"" {
+  # The RUNTIME half of the ratchet, and the reason the third state exists at all: if an arm ever
+  # raises the flag without saying why, the line must SAY it is unattributed. One value serving both
+  # "no red" and "a red nobody claimed" is the shape that fabricated 80 of 156 findings once already
+  # (memory: sensor-default-off-makes-blindness-the-shipping-path) — a reader would score the
+  # unattributed red as a clean land instead of subtracting it.
+  #
+  # Executed, not asserted about: a real ship-land.sh with ONE arm reverted to the old bare shape.
+  # SCRIPT_DIR is dirname($SELF) with no env override, so the mutant needs its siblings beside it —
+  # symlinks, since only ship-land.sh itself must be a real (mutated) file for _resolve_self.
+  bin="$BATS_TEST_TMPDIR/sbin"; mkdir -p "$bin"
+  for s in "$REPO"/scripts/*.sh; do ln -sf "$s" "$bin/"; done
+  rm -f "$bin/ship-land.sh"
+  [ "$(grep -c 'gate_red shellcheck;' "$SHIPLAND")" -eq 1 ]        # anchor matches exactly once
+  sed 's/gate_red shellcheck;/GATE_RED=1;/' "$SHIPLAND" > "$bin/ship-land.sh"
+  chmod +x "$bin/ship-land.sh"
+  stub_selector "" ""                                             # no direct suites ⇒ statics only
+
+  git checkout -q -b feat/red-unattr main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad-unattr.sh
+  git add bad-unattr.sh && git commit -q -m "feat: bad-unattr"
+
+  run bash "$bin/ship-land.sh" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"red":"unattributed"' "$LAND_LOG"
+  ! grep -q '"red":""' "$LAND_LOG" || false                        # and NOT the resting state
 }
 
 # ── the post-land net: DETECTED and ATTESTED, never a control-flow input ──────────────────────

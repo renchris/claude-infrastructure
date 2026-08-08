@@ -6,6 +6,18 @@ status: in-progress
 
 ## Phase 0 — orchestration
 
+**EXECUTION LOCUS PER WAVE** (S = dispatched handoff session, the default · T = in-session teammates
+· L = lead-inline; T and L each need one line of why):
+
+| Wave | Locus | Why |
+|---|---|---|
+| Phase 1 — per-suite runner | **L** | One function in one file plus its own suite; a teammate's merge surface would land on the very change the gate's health depends on. Reasoning in full below. |
+| Phase 2 — `gate-home-iso`, `gate-hermetic-hot`, `gate-proof-cache` | **S** | Three independent deliverables with their own worktrees; the lead keeps its window for the §4 coupling decision, not for their implementation detail. |
+| §9 remaining program (items 1-4) | **L** | Each is a single-file instrument change with its own suite — item 4 measured at ~175 lines across two files. Below the split threshold; a dispatched session would cost more brief than build. |
+
+Lead context budget: hold ≥50% for adjudicating §4's honest-coupling call and §7's policy fork —
+both are judgment the plan cannot pre-decide. Succession point: after any Phase 2 wave lands.
+
 **Phase 1 is deliberately NOT an Agent-Team task: it is a single-function change in one file
 (`scripts/ship-land.sh::run_bats_all`) plus its own suite.** Splitting it across teammates would
 add merge surface to the one change that must land first and cannot itself rely on a healthy gate.
@@ -238,8 +250,12 @@ design being the defect, and its premise is stale.
 | **2a** | `$HOME` isolation per gate (APFS clone) | precondition | **LANDED** `d9b934ee` — effect-read verified: `gate_home_setup` ×5 in both `origin/main` and live `~/.claude` |
 | 2b | content-addressed proof cache | work: 5.5× fewer executions | **precondition met**; still gated on §7's embargo — needs one real green stamp first |
 | 3 | hermeticity for ~20 hot cacheable suites | enables caching | after |
+| **9** | attribute-the-red: `land.log` names the failing arm/suite | **neither — it makes `n` vs the deterministic class SEPARABLE** | **LANDED** 2026-08-08 (§9) |
 
-Judge every future proposal against §1: **does it reduce `n`, or is it another `q` fix?**
+Judge every future proposal against §1: **does it reduce `n`, or is it another `q` fix?** — and note
+that §9's row is the one entry that answers *neither*, deliberately. §1's question presumes the
+blocking class is the probabilistic one; §9 measured that it is not, and an instrument that tells
+the two apart is worth more than another move against whichever one we guessed.
 
 ---
 
@@ -503,6 +519,53 @@ same blindness §1 was written to escape.
 **Revised remaining program** (supersedes "2b then 3" as the unblocking path):
 
 1. The ratchet must not hard-stop a lander over a suite outside its diff (fix-forward or carve-out).
+   — **LANDED `594b4d89`** ("the hermeticity ratchet binds on YOUR diff, not the whole tree"). A
+   violation inside the land's own diff blocks; everything else prints as `advisory`. Every ratchet
+   added to `run_gate` since has adopted the same own-scope contract.
 2. A lint forbidding absolute dates in fixtures, so wall-clock bombs cannot be authored.
-3. Deploy-parity existence leg — **already built** in `tm/growth`, currently operator-blocked.
+   — **LANDED `07e0fb27`** — `scripts/test-walltime-lint.sh`, wired into `run_gate` as a ratchet.
+3. Deploy-parity existence leg — *"already built in `tm/growth`, currently operator-blocked"* is
+   stale: **LANDED `f84e48de`**, live in `scripts/deploy-parity-assert.sh`.
 4. Attribute-the-red logging (above) before any further probabilistic modelling.
+   — **LANDED**, see the subsection below.
+
+**Dated 2026-08-08, and the dating is the finding.** All four were written on 2026-07-30 as open
+work; three had been closed by sibling sessions within nine days while this list went on reading as
+pending. A session resuming from it without dating it first would have rebuilt two landed mechanisms
+— the exact failure `work-item-remedy-can-become-forbidden` and `scan-revision-predates-the-fix`
+name. **Date every item here against the live tree before acting on it**, and prefer
+`git log --reverse -S<identifier>` over the subject line: item 1's mechanism is named `own-scope`
+nowhere in its own commit subject.
+
+### LANDED (2026-08-08) — attribute-the-red: `land.log` now names the arm, commit `feat(land-gate): a red was a number, so the blocking class could not be counted`
+
+**The measurement this section asked for.** `attest_land` wrote `exit` and nothing else, so the
+44-red window above could not be attributed cause-by-cause — and §9's own finding is that the real
+blocking class is **deterministic** (ratchet · wall-clock bomb · deploy drift · escalation park),
+which §1's `P=(1-q)^n` cannot represent at all. In a log of bare 6s those two populations are
+byte-identical. Land lines now carry `"red"`, so the next post-mortem is a `jq` group-by instead of
+an inference over an exit code.
+
+- **Three states, never two.** `""` = no arm went red · a named list = these arms did ·
+  `"unattributed"` = a red was raised and no arm claimed it. The third state is the whole point: one
+  value serving both "answered no" and "could not ask" is the shape that fabricated 80 of 156
+  findings in a sibling sensor, and here it would score an unattributed red as a *clean land*.
+- **The bats and smoke arms name the SUITE** — one entry per failing file, never a count. `"$red of
+  $n suite(s) failed"` is precisely what this section already had and could not act on.
+- **`gate_red()` is the only way to raise the flag.** `tests/ship-land.bats` enforces that as a
+  whole-file count of the assignment literal (exactly 1, inside `gate_red` itself), with a mutation
+  control proving the count moves. 22 arms can go red in `run_gate` today; the ratchet is what stops
+  the 23rd from silently re-opening the blind spot, because its author will not read this plan.
+- **Schema growth was verified, not assumed.** Every `land.log` reader on the box parses with `jq` or
+  an unanchored `sed`, so appending a field breaks none of them — the claim at `attest_land`'s head
+  ("its only reader is a raw tail") is now weaker than the truth, and was re-checked rather than
+  trusted.
+- **`GATE_RED_WHY` resets WITH `GATE_RED`.** The optimistic loop re-enters `run_gate` on the exit-42
+  stale-gate round; a why that outlived its flag would attest round 1's arm against round 2's
+  verdict — attribution *worse* than none, because it reads as evidence.
+
+**What it does NOT do.** This is an instrument, not a fix: it changes no verdict and unblocks no
+land. Its entire value is that the next revision of §1 can be derived from attributed causes instead
+of inferred from exit codes — which §9 named as the precondition for any further probabilistic
+modelling. **The first honest use of it is a re-measurement of §9's table**, once enough attributed
+lands have accumulated to group by arm.
