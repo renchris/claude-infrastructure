@@ -58,13 +58,47 @@ plist_path() {
   [ "$status" -ne 0 ]
 }
 
-@test "the three sysctl-backed rungs go SKIPPED, never healthy, when sysctl is unreachable" {
-  # Prove the failure MODE, so a future PATH regression is loud rather than a silent green.
-  # SEG_PCT must be empty (=> rung 5 skipped) rather than a fabricated 0.
+@test "the sysctl-backed rungs go SKIPPED, never healthy, when sysctl is genuinely unreadable" {
+  # Prove the failure MODE, so a regression is loud rather than a silent green: SEG_PCT must be
+  # empty (=> rung 5 skipped) rather than a fabricated 0.
+  #
+  # THE INVARIANT IS UNCHANGED; ITS MECHANISM MOVED (2026-08-08, backlog 2c1388d063bf). Until then
+  # this test made sysctl unreadable by stripping /usr/sbin from PATH — a PROXY for unreadability
+  # that was only ever valid while the rung resolved by bare name. Now that read_segments resolves
+  # absolutely (the whole point: the plist's PATH is a fact about another file and has been wrong
+  # before), the proxy no longer induces the state, and a test asserting REFUSED on a PATH strip
+  # would be asserting that the fix did not happen. So the unreadable state is induced through the
+  # seam, which is strictly better: it holds for ANY resolution strategy, including the next one.
+  # (The first attempt to convert these sites, e6de2e15, left this test alone; it went red and the
+  # post-land verifier auto-reverted three unrelated fixes along with it.)
   run env -i PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
     '"$(sed -n '/^read_segments() {/,/^}/p' "$SCRIPT")"'
+    SYSCTL=/nonexistent/sysctl
     read_segments && echo "RETURNED-A-VALUE" || echo "REFUSED"'
   [ "$output" = "REFUSED" ]
+}
+
+@test "rung 5: read_segments ANSWERS with /usr/sbin off the PATH — the property the proxy stood for" {
+  # The positive half, and the one the old PATH-strip test could never assert. It pins what the strip
+  # was really a proxy for: this rung does not depend on the plist carrying /usr/sbin. Both halves
+  # are needed — REFUSED-when-unreadable above without this one is satisfied by a rung that never
+  # answers at all, which is precisely the silent death the suite exists to catch.
+  run env -i PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
+    '"$(sed -n '/^read_segments() {/,/^}/p' "$SCRIPT")"'
+    read_segments >/dev/null && echo OK || echo REFUSED'
+  [ "$output" = "OK" ]
+}
+
+@test "the SHIPPED script fills swap and pressure with /usr/sbin off the PATH (end-to-end)" {
+  # The two above pin the mechanism on one extracted function; this pins that the shipped code path
+  # actually CHOOSES it, for the rungs that die most quietly. `swap_used_mb` is the dangerous shape
+  # named in this file's header — ${SWAP_MB:-0} renders a dead instrument as the HEALTHY value — so
+  # assert it is neither null nor absent, on the PATH where it used to be exactly that.
+  run env -i PATH="/usr/bin:/bin" HOME="$HOME" /bin/bash "$SCRIPT" --json --no-append
+  [[ "$output" == *'"swap_used_mb":'* ]] || false
+  [[ "$output" != *'"swap_used_mb":null'* ]] || false
+  [[ "$output" == *'"seg_pct":'* ]] || false
+  [[ "$output" != *'"seg_pct":null'* ]]
 }
 
 @test "sysctl is reachable on the CURRENT plist PATH (the actual fix)" {
