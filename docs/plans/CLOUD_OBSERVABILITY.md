@@ -969,6 +969,17 @@ when the account's config dir does not exist · warned-and-sent when the declara
 silently assuming the current account is exactly the guess that manufactures the misleading
 "Session not found".
 
+### 10.2e · The kitten permission rule was already granted at user scope
+
+Wave B added `Bash(kitten @ send-text:*)` (plus `get-text`/`launch`/`close-window`/`ls`) to a new
+project-scope `.claude/settings.json`. Verified after the fact: **the operator's own
+`~/.claude/settings.json` already carries `Bash(kitten @ send-text:*)` at line 184** — so the
+intermittent classifier block the rule was meant to cure was **never a missing user-scope grant**,
+and the project-scope entry is belt-and-braces rather than the fix.
+
+Recorded because the obvious next move on a recurrence — "add the allow rule" — is the one move
+already known not to work. The real cause of the intermittency is still unidentified.
+
 ### 10.2c · A false ALIVE, from declaring against trunk
 
 Using `cc-cloud` for real surfaced a hole in its own state function that §4.3's design did not close.
