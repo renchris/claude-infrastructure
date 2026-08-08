@@ -277,8 +277,14 @@ Filed as backlog work, not left as a recommendation to a future reader.
 
 ## 6 · The open question this design does not close
 
-**Whether a cloud session can be fired from this box at all is unresolved, and it is the operator's
-to resolve.** ~~Measured 2026-08-07: neither the pinned 2.1.114 binary nor the 2.1.220 binary exposes
+> ✅ **§6's headline question is CLOSED as of 2026-08-08: a cloud session CAN be fired from this box,
+> programmatically, and one was** — `claude --cloud "<desc>"` → `session_01CHQoFxvsoDQ9KgJFSLrKno`
+> (§6.5), with the headless send arm proven to deliver into it (§6.3). The section is kept whole
+> because it is the record of how three wrong answers were reached and corrected; read the ✅/🔧
+> markers as the current state and the struck-through text as history.
+
+~~**Whether a cloud session can be fired from this box at all is unresolved, and it is the operator's
+to resolve.**~~ ~~Measured 2026-08-07: neither the pinned 2.1.114 binary nor the 2.1.220 binary exposes
 a `--cloud` verb.~~ **← SUPERSEDED 2026-08-07 (later same day); see §6.1. The verb DOES exist on
 2.1.220 — it is HIDDEN, and `--help` is structurally incapable of showing it.** What 2.1.220 does
 expose is `--bg/--background` (a **local** background agent), `--remote-control`, `--from-pr`,
@@ -291,6 +297,12 @@ contract and the abstain primitive all have to exist **before** the first fire, 
 The first real cloud session is the validation — and until one runs, this instrument has never been
 exercised against a real cloud VM. It has been exercised against real `git ls-remote` behaviour
 (§7), which is the part that decides whether it lies.
+
+📌 **Still true after 2026-08-08, and worth stating precisely so the ✅ above is not over-read.** A
+session was *created* and *messaged* — the **fire path** is validated. `cc-cloud`'s own observables
+(O1–O5, the state function, `declare`/`poll`/`is-offbox`) were **not** run against it, so *this
+instrument* remains unexercised against a real cloud VM. Fire-path proven ≠ instrument validated;
+§9.4 steps 3–5 are what close the second one.
 
 ### 6.1 · The `--cloud` verb DOES exist — and how a controlled measurement still missed it
 
@@ -352,23 +364,68 @@ path is `tengu_remote_send_headless_success` with `entry_point: "cloud_attach_he
 product has a named headless cloud-attach path**, which is the single most important fact for a
 2-way design — `cc-notify`'s send side has an off-box transport (§9).
 
-⚠️ **What this does NOT establish.** With no real cloud session to address, every id tried was
+~~⚠️ **What this does NOT establish.** With no real cloud session to address, every id tried was
 rejected as `invalid session ID: must be a cse_… or session_… tagged ID`, so the arm is proven to
 **exist, parse, and need no TTY** — it is **UNPROVEN that a message reaches a live session**. That
 verification is gated behind the same operator step as everything else (§6.5). Also UNPROVEN: whether
 this arm is subject to the attach entitlement gate in §6.4; the CLI error ordering puts the id
-validator first, so the two could not be separated.
+validator first, so the two could not be separated.~~
+
+✅ **PROVEN 2026-08-08 on 2.1.220 — the arm DELIVERS, and the `invalid session ID` wall was an
+artifact of having nothing to address.** Once §6.5's blocker cleared and a real session existed
+(`session_01CHQoFxvsoDQ9KgJFSLrKno`), the same command with **no pty and stdin closed** returned:
+
+```text
+{"ok":true,"session_id":"session_01CHQoFxvsoDQ9KgJFSLrKno","url":"…"}
+```
+
+Two of the three unknowns above are now closed: the send arm **delivers**, and it is **not** covered
+by §6.4's attach entitlement gate — that gate refuses every account interactively, yet this headless
+send succeeded on a live session, so **attach-interactive and attach-headless are separately gated**.
+The third (error ordering) is moot: there is no longer a need to separate the validators, because the
+real id passes both. The struck-through paragraph's *reasoning* was sound — it is retained because
+its error is the instructive part: **every id was fake, so the only thing being measured was the id
+validator.** A wall that only ever fires on synthetic input says nothing about the real path
+(`[[lookup-miss-is-not-absence]]`).
 
 ### 6.4 · Entitlement, measured per account — attach is gated OFF on ALL FOUR
 
-`hasRemoteEnvironment: true` in `~/.claude-quaternary/.claude.json` (account 4 only) was the open
-UNVERIFIED question in `CONCURRENCY_PROGRAM.md` §S5a: entitlement, or merely a record? **Measured: a
-record.** Account 4 — the only one carrying the key — is gated exactly like the other three:
+~~`hasRemoteEnvironment: true` in `~/.claude-quaternary/.claude.json` (account 4 only)~~ **← the
+"account 4 only" half is WRONG; corrected 2026-08-08 below.** `hasRemoteEnvironment: true` was the
+open UNVERIFIED question in `CONCURRENCY_PROGRAM.md` §S5a: entitlement, or merely a record?
+**Measured: a record.** The accounts carrying the key are gated exactly like the ones that do not:
 
 ```text
 CLAUDE_CONFIG_DIR=<each of the 4> claude --cloud session_0000000000000000000000000000   # under a pty
 → Error: Attaching to an existing cloud session is not enabled for your account.       # all 4, identical
 ```
+
+🔧 **Correction 2026-08-08 — the key is on TWO accounts, not one. The conclusion is unchanged; the
+distribution was never re-measured.** Re-read across all four account config dirs (the SSOT map is
+`~/.claude/accounts.json`, whose `accounts[]` order is *spend priority*, not an account numbering):
+
+| Config dir | Account | `hasRemoteEnvironment` |
+| --- | --- | --- |
+| `~/.claude-next` | next | **`true`** |
+| `~/.claude-quaternary` | next4 | **`true`** |
+| `~/.claude-tertiary` | next3 | absent |
+| `~/.claude-secondary` | next2 | absent |
+
+```text
+for d in ~/.claude-next ~/.claude-quaternary ~/.claude-tertiary ~/.claude-secondary; do
+  grep -o '"hasRemoteEnvironment":[^,}]*' "$d/.claude.json" || echo ABSENT; done
+```
+
+**2 of 4, both `true`** — so "account 4 only" understated it by half, and the record-vs-entitlement
+verdict is *strengthened*, not weakened: two accounts carry the key and both are refused identically
+to the two that do not. ⚠️ **Two traps this correction walked into, worth the ink because either one
+re-manufactures the wrong sentence.** (a) `~/.claude` is **not** an account config dir — it is the
+live symlink layer; sweeping it in place of `~/.claude-secondary` silently drops a real account and
+adds a non-account, and it still reports a plausible-looking 2-of-4. (b) The doc's "account 4"
+referred to `~/.claude-quaternary` by *name*, but `accounts[]` orders by spend priority, so ordinal
+labels and directory names do not agree — **cite the config dir, never the ordinal**
+(`[[caller-census-keyed-on-path-misses-the-name]]`: an identifier that resolves two ways will
+eventually resolve the wrong one).
 
 Two properties make this probe usable rather than merely repeatable: the entitlement gate is checked
 **before** id validation, so a fake id is enough and **nothing is created**; and the same binary
@@ -380,9 +437,16 @@ that the operator cannot clear.
 argument validation into a real upload attempt (§6.5). So the interactive-attach refusal, quoted in
 the brief that opened this work as though it governed cloud access, governs only *attach*.
 
-### 6.5 · What actually blocks the CLI create path — and it is ONE operator step
+### 6.5 · ~~What actually blocks the CLI create path — and it is ONE operator step~~ · RESOLVED 2026-08-08
 
-From a trusted repo dir, `claude --cloud "<description>"` reaches:
+> ✅ **The CLI create path WORKS.** `claude --cloud "<desc>"` returns
+> `Created cloud session: … session_01CHQoFxvsoDQ9KgJFSLrKno`. The blocker was the **CLI-side GitHub
+> link**, cleared by `/web-setup` (a TUI-only command), **not** the web app's GitHub App
+> authorization and **not** the bundle size. The original diagnosis below is kept in full because
+> both of its wrong turns are instructive. **Do not re-run a create to re-confirm this** — each one
+> spends weekly quota.
+
+From a trusted repo dir, `claude --cloud "<description>"` reached (2026-08-07):
 
 ```text
 Error: Bundle upload failed: Socket is closed after 3 attempts.
@@ -391,19 +455,67 @@ Please setup GitHub on https://claude.ai/code
 
 Reproduced twice, so **not transient** (`[[memory-hygiene]]`: a one-off would not be recorded here).
 The repo is not the problem: `origin` is `https://github.com/renchris/claude-infrastructure.git`,
-public, and local `gh` is authenticated as `renchris` with `repo` + `workflow` scopes. **Connecting
+public, and local `gh` is authenticated as `renchris` with `repo` + `workflow` scopes. ~~**Connecting
 GitHub to the claude.ai account is a web-only action** — that is the operator step, and after it the
-measurement must be re-run rather than assumed.
+measurement must be re-run rather than assumed.~~
+
+🔑 **The real cause was narrower, and the error string named the wrong side of it.**
+`Please setup GitHub on https://claude.ai/code` reads as *authorize the GitHub App for your claude.ai
+account* — and **that was already connected the entire time.** Four cloud sessions on
+`renchris/claude-infrastructure` were visible at `claude.ai/code` while this error still reproduced,
+which is decisive: the web app cannot list sessions for a repo it has no GitHub access to. What was
+missing was the **CLI-side** link — the local `gh` token synced up to the account — and the only
+thing that establishes it is `/web-setup`, a **TUI-only slash command** with no headless equivalent.
+Running it cleared the error; the next `claude --cloud "<desc>"` created a session.
+
+**The transferable shape:** a remediation string is a *fallback*, not a diagnosis. This one names a
+surface (`claude.ai/code`) that was healthy, for a link (CLI→account) that lives somewhere else
+entirely, and it is emitted by whatever fails last regardless of why. It sent an investigation to the
+web UI, where everything looked correct, which then made a **second** wrong cause look attractive
+(the bundle reading below). *Same class as §6.1's `--help` lesson: an instrument that cannot see the
+subject's class will still return a confident answer.*
 
 🔑 **A mechanism finding that contradicts a cited source.** "Bundle upload" means the CLI create path
 **uploads a bundle of the local tree**. §S5a states, citing `sdk-tools.d.ts` L3764, that "the VM
 clones from the *pushed* remote, not local disk". Both can be true of *different* surfaces — a
 web/cloud-environment session cloning the remote vs the CLI's `--cloud` create shipping a bundle —
-but they cannot both describe this route. Consequence if the bundle reading holds: `cc-cloud
+but they cannot both describe this route. ~~Consequence if the bundle reading holds: `cc-cloud
 preflight`'s load-bearing refusal (an **unpushed branch** makes the session invisible, because the VM
 clones the remote) **does not bind on the CLI create route**, since the local tree travels in the
 bundle. Recorded as a **contradiction to settle with the first successful fire**, not as a decided
-fact — the refusal stays in place until then, because it is safe when wrong in that direction.
+fact — the refusal stays in place until then, because it is safe when wrong in that direction.~~
+
+✅ **SETTLED 2026-08-08, in favour of CLONE for the linked path — and the bundle numbers survive as a
+cost, not a cause.** The contradiction was never one: **bundle mode is what the CLI falls back to
+when the GitHub link is missing** (the docs say exactly this — bundle mode activates when GitHub
+access is unavailable). With the link established, the VM clones the remote and **no bundle is
+uploaded, so the 100MB cap never applies**. §S5a's `sdk-tools.d.ts` L3764 reading is therefore
+correct for the route we will actually use, and `cc-cloud preflight`'s unpushed-branch refusal
+**does bind** — it was safe when uncertain and is now simply right. It stays.
+
+**KEEP the measurement — it is real, and it is the price of the fallback path** (taken 2026-08-08,
+before the link was fixed):
+
+| Quantity | Measured | Against |
+| --- | --- | --- |
+| `.git` on this repo | **231 MB** | — |
+| all-branches bundle | **104 MB** | documented **100 MB** cap → over |
+| single-branch fallback bundle | **94 MB** | under the cap, but the socket still died |
+
+So bundle mode on this repo is **at the cap on day one**, driven by 286 upstream-less local branches
+(§7). That matters the moment anything drops the GitHub link — a revoked token, a private fork, a
+repo with no remote — because the fallback is then a 94–104 MB upload that is already marginal.
+**Recorded as a standing cost of bundle mode, explicitly NOT as the create blocker.**
+
+⚠️ **How the false cause was manufactured, since the mechanism is repeatable.** The bundle numbers
+were measured *after* the web UI had been checked and found healthy, so they arrived as the only
+remaining anomaly — real, quantitative, and sitting right next to a documented cap the larger number
+exceeded. That is a **true measurement corroborating a wrong cause**
+(`[[wrong-cause-corroborated-by-true-metric]]`): nothing in 104-vs-100 distinguishes "the bundle is
+too big" from "we should not be building a bundle at all", and the question that *would* have
+distinguished them — *why is this in bundle mode when a GitHub remote exists?* — was never asked. The
+94 MB single-branch fallback is the tell that was there all along: it was **under** the cap and failed
+anyway.
 
 ### 6.6 · The third route is real: the routines `/fire` endpoint
 
@@ -444,20 +556,33 @@ disjoint:
 
 | Route | Blocker | Whose |
 | --- | --- | --- |
-| CLI create — `claude --cloud "<desc>"` | connect GitHub at `claude.ai/code`, then re-measure §6.5 | **operator**, one web action |
+| CLI create — `claude --cloud "<desc>"` | ~~connect GitHub at `claude.ai/code`, then re-measure §6.5~~ **NONE — CLEARED 2026-08-08 via `/web-setup` (§6.5); creates work** | — |
 | routines `/fire` | mint a per-routine bearer token (web-only, shown once) | **operator**, one web action |
 | CLI interactive attach — `claude --cloud <id>` | `not enabled for your account`, all 4 accounts | **Anthropic** — rollout; not clearable here |
 | browser agent | last resort; not needed to decide, and not attempted | — |
 
-**Everything downstream bottlenecks on one of the two operator actions**, because each unproven
-claim on this page needs a live `session_…` id to test: whether the headless send arm delivers
-(§6.3), whether the attach gate also covers it (§6.3), whether the bundle-vs-clone reading holds
-(§6.5), whether `agents --json` is blind to cloud rows (§7), and the `refs/cc/*` per-branch-vs-
-per-refspec experiment §S5a calls the deciding measurement (§S5a line 586). One successful fire
-settles all five. **The browser route stays unattempted deliberately** — it is the operator's
-preference order (programmatic first), and a browser fire would produce a session id without
-producing a *programmatic* path, so it would answer the downstream questions while leaving the
-question that matters open.
+~~**Everything downstream bottlenecks on one of the two operator actions**, because each unproven
+claim on this page needs a live `session_…` id to test:~~ **← the bottleneck BROKE 2026-08-08.** The
+five claims it named have split three ways:
+
+| # | Claim | Status after 2026-08-08 |
+| --- | --- | --- |
+| 1 | headless send arm **delivers** (§6.3) | ✅ **PROVEN** — `{"ok":true,…}`, no pty, stdin closed |
+| 2 | attach gate also covers the send arm (§6.3) | ✅ **SETTLED — it does not**; interactive and headless attach are gated separately |
+| 3 | bundle-vs-clone (§6.5) | ✅ **SETTLED — CLONE** on the linked path; bundle mode is the unlinked fallback |
+| 4 | `agents --json` blind to cloud rows (§7.1) | ⬜ still **UNPROVEN** — not re-probed against the live session |
+| 5 | `refs/cc/*` per-branch vs per-refspec (§S5a line 586) | ⬜ still **UNRUN** — needs a push *from inside* a session |
+
+**The remaining two are no longer operator-shaped — they are ours to run**, and both now have a
+live-session precondition that is satisfiable on demand rather than blocked. Their one real cost is
+quota: creating a session spends against the weekly limit (the account was at **77%** when this
+correction was written), so they should be batched onto **one** fire, in §9.4's order, not taken one
+per session. Of the original operator actions only the **routines bearer token** (§6.6) remains, and
+it gates only the routines route. **The browser route stays unattempted deliberately** — it is the
+operator's preference order (programmatic first), and a browser fire would produce a session id
+without producing a *programmatic* path, so it would answer the downstream questions while leaving
+the question that matters open. That reasoning is now moot for the CLI route, which *is* the
+programmatic path and works.
 
 ---
 
@@ -502,16 +627,53 @@ Positive/negative controls are named per row; none of these is a `--help` read.
 | `--remote` | alias of `--cloud` | its refusal text names `--cloud` | ⚠️ version-scoped |
 | create vs address split | argument is **polymorphic** | `--cloud session_abc_def` → send path · `--cloud session_abc-def` → create path (hyphen) · `--cloud` bare → `requires a description` | ⚠️ version-scoped |
 | headless send arm | exists, **no TTY** | `claude -p m --cloud <id> --output-format json` reaches the id validator with `stdin</dev/null`; bundle telemetry `tengu_remote_send_headless_success` / `cloud_attach_headless` | ⚠️ version-scoped |
-| headless send **delivers** | **UNPROVEN** | needs a live `session_…`; every fake id dies at `invalid session ID` | blocked on §6.7 |
+| ~~headless send **delivers**~~ | ~~**UNPROVEN**~~ **PROVEN 2026-08-08** | `claude -p "<msg>" --cloud session_01CHQoFxvsoDQ9KgJFSLrKno --output-format json`, no pty, `stdin</dev/null` → `{"ok":true,…}` | ⚠️ version-scoped |
 | interactive attach entitlement | **gated OFF, 4/4 accounts** | `CLAUDE_CONFIG_DIR=<dir> script -q /dev/null claude --cloud session_0000…` → `not enabled for your account`; gate precedes id validation, so nothing is created | Anthropic rollout — recheck |
-| `hasRemoteEnvironment: true` | a **record**, NOT entitlement | account 4 has it and is gated identically to 1–3 | stable finding |
+| `hasRemoteEnvironment: true` | a **record**, NOT entitlement | ~~account 4 has it and is gated identically to 1–3~~ **corrected 2026-08-08: on 2 of 4 — `.claude-next` AND `.claude-quaternary`; both gated identically to the two without it (§6.4)** | stable finding |
 | CLI create entitlement | **not gated** | reaches a real upload attempt (row below) | Anthropic rollout |
-| CLI create blocker | `Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on https://claude.ai/code` | `claude --cloud "<desc>"` from a trusted repo dir, under a pty; **run twice** → identical, so not transient | clears on the operator web step |
+| ~~CLI create blocker~~ | ~~`Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on https://claude.ai/code`~~ **CLEARED 2026-08-08 — create returns `Created cloud session: … session_01CHQoFxvsoDQ9KgJFSLrKno`** | cleared by `/web-setup` (TUI-only, links the CLI's `gh` token to the account) — **NOT** the web GitHub App, which was connected throughout (§6.5) | ⚠️ re-links on token revoke |
+| bundle sizes on this repo | `.git` **231 MB** · all-branches bundle **104 MB** vs a **100 MB** cap · single-branch **94 MB** | measured 2026-08-08 pre-fix; **a cost of bundle mode, NOT the create blocker** — with GitHub linked the VM clones and no bundle is built (§6.5) | grows with the 286 upstream-less branches |
 | routines `/fire` endpoint | **exists** | unauth `POST /v1/claude_code/routines/trig_0000000000/fire` → **401**; control `…/zzz_not_a_real_surface/trig_0/fire` → **404** | beta header dated |
 | routine token on this box | **none** | no `routines*` under any of the 4 config dirs; keychain holds only `Claude Code-credentials-*` | operator can change |
 | routines already used | `routineFiredWatermark` in **4/4** configs | `grep -o '"routineFiredWatermark":[^,}]*' <each>/.claude.json` | stable |
 | `agents --json` sees cloud rows | **UNPROVEN — do not read as "no"** | 5 rows returned, all local (`pid`, `kind:"interactive"`); **zero cloud sessions existed**, so this is a lookup miss, not an absence (`[[lookup-miss-is-not-absence]]`) | blocked on §6.7 |
 | `agents --json` as a local observable | real, **TTY-free** | `claude agents --json [--all]` → `pid·cwd·kind·sessionId·name·status·waitingFor` | ⚠️ version-scoped |
+
+### 7.2 · Harness traps — the measurement rig lying about the subject
+
+Every row on this page is taken through a harness, and a harness can fail in ways that read exactly
+like a finding. Two are now recorded, because each one produced a confident wrong answer.
+
+**T1 · A `kitten @ launch` of the binary DIRECTLY skips the login shell (2026-08-08).** Driving a
+TUI-only command headlessly (here `/web-setup`, §6.5) means launching `claude` under kitty remote
+control. Launched directly, the process inherits kitty's environment rather than the operator's
+interactive one, so `~/.zshrc`'s PATH additions never run — **`gh` is off PATH**, and `/web-setup`
+reports:
+
+```text
+GitHub CLI not found
+```
+
+That string is about the **harness**, not the subject: `gh` 2.96.0 is installed and authenticated
+(§7). Taken at face value it manufactures a whole false branch of investigation — "install/repair
+`gh`" — for a tool that was never broken. **Launch through the login shell instead:**
+
+```text
+kitten @ launch --type=os-window /bin/zsh -l -i -c '<the claude command>'
+```
+
+🚨 **Same class as §6.1's `--help` lesson, one layer down.** There, the *instrument* could not see
+the subject's class (a hidden flag is omitted from `--help` by construction). Here, the *environment*
+could not see the subject's dependency — and in both cases the tool answered anyway, in a register
+indistinguishable from a real negative. **A negative result must first be attributed to the rig**:
+before recording "X is not found / not present / not supported", re-run it in the context that
+normally runs it, and confirm the rig can see a control that is *known present*. `command -v gh`
+inside the same launched shell is that control, and it costs one line.
+
+**T2 · `~/.claude` is not an account config dir (2026-08-08, §6.4).** It is the live symlink layer.
+Any per-account sweep must enumerate from `~/.claude/accounts.json`, never from a hand-written list —
+a hand-written one silently substituted `~/.claude` for `~/.claude-secondary` and still returned a
+plausible 2-of-4.
 
 ---
 
@@ -574,6 +736,13 @@ The local stack is `cc-notify` (send) + the inbox at `~/.claude/mailbox/<pane-uu
 channel is asymmetric. §6.3 changes exactly one thing about that: **the send side now has an off-box
 transport.**
 
+⚠️ **Pointer, not a finding — the local wake arm named above has an open defect** (`cc-backlog`
+`a116d60af388`): `cc-await-ping` self-disarms with exit 5 (*"the session that armed me is GONE"*) on a
+**stale registry row**, while the pane is alive. It is a purely local bug and nothing in §9 depends on
+it, but §9's stack sentence names `cc-await-ping` as the wake path, so anyone wiring cloud→here
+delivery on top of this stack should know the wake arm can go silent underneath them. Tracked there,
+not here.
+
 ### 9.1 · The two arms are different mechanisms, and that asymmetry is permanent
 
 | Arm | Transport | Latency | Why not the other one |
@@ -586,7 +755,15 @@ nothing to push *to* — this box has no reachable endpoint, and the one channel
 have is the git remote it cloned from. The asymmetry is a property of the network topology, not a gap
 in the design.
 
-### 9.2 · `cc-notify --cloud <id>` — the send-side seam
+### 9.2 · `cc-notify --cloud <id>` — the send-side seam, **transport VALIDATED 2026-08-08**
+
+✅ **The transport this seam specifies is no longer a hypothesis.** Step 2 below — `claude -p
+"<message>" --cloud <id> --output-format json` — was executed against a live session with **no pty
+and stdin closed** and returned `{"ok":true,"session_id":"session_01CHQoFxvsoDQ9KgJFSLrKno","url":…}`
+(§6.3). The seam therefore moves from *specified* to *validated*: what remains unbuilt is `cc-notify`'s
+own dispatch layer, not the mechanism it dispatches to. **The `--receipt` refusal below is unchanged
+and now more load-bearing, not less** — `{ok:true}` is precisely the ack that was just observed, and
+it means *queued*, so a validated transport makes the temptation to read it as *read* stronger.
 
 `cc-notify` resolves an address through three layers (role file → forward chain → pane uuid) and then
 appends to a local inbox file. An off-box target has **no pane uuid and no inbox file**, so it cannot
@@ -635,13 +812,17 @@ Three rules, each one a re-statement of something already paid for:
 ### 9.4 · What one successful fire validates, in order
 
 This is the W2 checklist from Phase 0 — five claims, one session, and the order matters because the
-session is short-lived:
+session is short-lived. **Steps 1–2 are DONE as of 2026-08-08; the live list is 3–5.** Batch them
+onto ONE fire: a create spends weekly quota (77% used when this was written), so re-running the
+settled steps to watch them pass again is pure cost.
 
-1. `cc-cloud declare` binds the returned id, and `is-offbox` answers `true` (§8.1).
-2. `claude -p "<msg>" --cloud <id>` returns `{ok:true}` — the send arm **delivers** (§6.3), and
-   whether the §6.4 attach gate also covers it.
+1. ~~`cc-cloud declare` binds the returned id, and `is-offbox` answers `true` (§8.1).~~ ✅ a real id
+   exists — `session_01CHQoFxvsoDQ9KgJFSLrKno` (§6.5).
+2. ~~`claude -p "<msg>" --cloud <id>` returns `{ok:true}` — the send arm **delivers** (§6.3), and
+   whether the §6.4 attach gate also covers it.~~ ✅ **both settled** — it delivers, and the attach
+   gate does **not** cover the headless arm (§6.3).
 3. `claude agents --json` — does a cloud row appear, or is it local-only? Settles the row §7.1 marks
-   UNPROVEN rather than "no".
+   UNPROVEN rather than "no". **← now the first live step.**
 4. Which branch the VM pushes — settles bundle-vs-clone (§6.5) and §8 step 2.
 5. `git push origin HEAD:refs/cc/<id>` **from inside the session** — the per-branch vs per-refspec
    experiment `CONCURRENCY_PROGRAM.md` §S5a line 586 calls the deciding measurement for the
