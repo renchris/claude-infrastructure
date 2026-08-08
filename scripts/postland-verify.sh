@@ -802,7 +802,20 @@ identity_assert() {  # compare against $IDENTITY_SNAP, restore it if SAFE, and c
   local now line k v
   [ -n "${IDENTITY_SNAP+set}" ] || return 0        # never snapshotted ⇒ nothing to compare against
   now="$(identity_snapshot)"
-  [ "$now" = "$IDENTITY_SNAP" ] && return 0
+  if [ "$now" = "$IDENTITY_SNAP" ]; then
+    identity_snap_ok "$now" && return 0
+    # UNCHANGED but WRONG. Guarding only the CHANGED case leaves the machine wedged: once a bad
+    # value is resident, every later sweep reads now == snap and returns early, so nothing ever
+    # clears it — and with githooks/pre-commit installed every commit is refused until a human
+    # runs the cure by hand. Fail-closed is right for one commit and wrong as a resting state, so
+    # a resident unsanctioned identity is dropped here too. It falls through to the global SSOT.
+    log "IDENTITY: $REPO local [user] is unsanctioned and UNCHANGED this run [${now}] — DROPPING; falls through to the global identity"
+    git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
+    # Deliberately NOT added to FAILING. A red here reaches red_actions, which can auto-revert —
+    # and this run did not cause the fault, it inherited it. Convicting the commit that happened
+    # to be under test would launder someone else's red into this land's verdict.
+    return 0
+  fi
   log "IDENTITY LEAK: the corpus mutated $REPO local [user] during this run — was [${IDENTITY_SNAP:-absent}] now [${now:-absent}]"
   git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
   if ! identity_snap_ok "$IDENTITY_SNAP"; then
