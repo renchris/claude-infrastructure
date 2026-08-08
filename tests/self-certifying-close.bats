@@ -246,6 +246,46 @@ PY
   ! printf '%s' "$output" | jq -r '.systemMessage // ""' 2>/dev/null | grep -q 'SAFE TO CLOSE'
 }
 
+# a transcript whose FIRST turn edits $2 and whose LAST turn is purely conversational
+mktr_chat_last() { # $1=out $2=path written in turn 1
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+out, p = sys.argv[1], sys.argv[2]
+rows = [{"type": "user", "message": {"content": "turn 1: change the file"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": p}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "landed"}]}},
+        {"type": "user", "message": {"content": "turn 2: what does that hook do again?"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "it renders the operator block."}]}}]
+open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+  printf '%s' "$1"
+}
+
+@test "A: an EARLIER turn's write never certifies a CONVERSATIONAL close" {
+  # THE 2026-08-08 DEFECT, end to end. The read-only control above uses a transcript with no write
+  # anywhere, which the SESSION-scoped oracle also answers correctly — so it passed throughout the
+  # window in which the certificate was firing on every conversational close of any session that had
+  # ever edited a file (measured 4 of 4 consecutive, undamped: this arm exits ahead of the latch
+  # write). The difference between the two fixtures is the entire claim.
+  w="$(mkrepo a8)"; tr="$(mktr_chat_last "$BATS_TEST_TMPDIR/a8.jsonl" "$w/f.txt")"
+  run bash -c "python3 -c 'import json,sys;print(json.dumps({\"session_id\":\"S1\",\"cwd\":sys.argv[1],\"transcript_path\":sys.argv[2]}))' '$w' '$tr' | bash '$READOUT'"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | jq -r '.systemMessage // ""' 2>/dev/null | grep -q 'SAFE TO CLOSE'
+}
+
+@test "A: a write into ANOTHER tree never certifies THIS tree's close" {
+  # cwd's ledger is ✅ and the session really did write this turn — but not here. Every other fact
+  # the certificate cites is scoped to cwd; the write gate was the one that was not.
+  w="$(mkrepo a9)"; other="$BATS_TEST_TMPDIR/other-tree"; mkdir -p "$other"
+  tr="$(mktr "$BATS_TEST_TMPDIR/a9.jsonl" "$other/x.txt")"
+  run bash -c "python3 -c 'import json,sys;print(json.dumps({\"session_id\":\"S1\",\"cwd\":sys.argv[1],\"transcript_path\":sys.argv[2]}))' '$w' '$tr' | bash '$READOUT'"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | jq -r '.systemMessage // ""' 2>/dev/null | grep -q 'SAFE TO CLOSE'
+}
+
 @test "A: cannot-tell (no transcript) never claims safe-to-close" {
   w="$(mkrepo a3)"
   run bash -c "printf '{\"session_id\":\"S1\",\"cwd\":\"$w\"}' | bash '$READOUT'"
