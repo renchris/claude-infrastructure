@@ -232,6 +232,19 @@ check() { run "$HOOK" --check "$1"; }
   [[ "$output" == *"already"* ]]
 }
 
+@test "verify-attribution REFUSES rather than sampling local-only shas" {
+  # The first version searched `--all`, picked a local-only checkpoint sha, got API 422 with
+  # stderr swallowed, and reported the SANCTIONED address as UNATTRIBUTED — a false alarm whose
+  # printed advice was "do not edit the constant", i.e. distrust a correct config. It must now
+  # fail LOUD (exit 2) when there is no remote-tracking base to sample, never answer from a sha
+  # GitHub has never seen.
+  local r; r="$(mkrepo noremotetrack https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" commit -q -m local-only
+  run bash "$ASSERT" verify-attribution "$r"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"local-only"* ]] || [[ "$output" == *"fetch first"* ]]
+}
+
 @test "selftest's own controls discriminate" {
   run bash "$ASSERT" selftest
   [ "$status" -eq 0 ]
