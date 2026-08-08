@@ -22,6 +22,40 @@
 # scripts/deploy-parity-assert.sh. The two scripts partition the deployed surface; neither
 # duplicates the other.
 #
+# THE OTHER DIRECTION (2026-08-08) — STRAY: a live REAL FILE that is in no checkout at all. Every
+# leg above walks checkout→live, so it can only ever ask "did this landed file get deployed?" and is
+# structurally blind to a file that entered the live layer without ever being in the repo:
+#   - bin/cc-mail sat live and unversioned for 5 DAYS while this script read "0 actionable"; a peer
+#     session working in another repo had hand-placed it into ~/.claude/bin, which is on PATH.
+#     bin/cc-thread was the same failure a day earlier. Two occurrences, one blind spot.
+# An unversioned executable on PATH is one `rm -rf ~/.claude` from being lost, is invisible to every
+# reviewer, and — because ~/.claude/bin is shared by every session — silently becomes a dependency
+# of peers that cannot see where it came from.
+#
+# WHY THIS IS NOT A BARE live→checkout DIFF, which is the trap the item shipped with. The live layer
+# legitimately holds real files the checkout does not: ~/.claude/bin/it2 is cp'd from the tracked
+# bin/it2-wrapper under a DIFFERENT NAME (install.sh:593). Convicting it would repeat the failure
+# this repo has already paid for — a sibling auditor that did not model the design and so convicted
+# the live layer for obeying it (memory sibling-auditors-must-share-the-state-model). So the copy-
+# deploy state is modelled FIRST and the match is by CONTENT, never by path: a real file whose bytes
+# are in ANY tracked file is versioned, whatever it is called. Only what content-matching cannot see
+# — a compiled binary, deliberate residue — needs a row in config/live-only.manifest, and each row
+# names a witness that must still exist and still mention it, so a dissolved reason FAILS LOUD
+# rather than silently exempting (memory discovery-critic-premise-goes-stale).
+#
+# STRAY SCOPE is the EXECUTED surfaces only — bin, hooks, hooks/lib, scripts, scripts/lib,
+# scripts/limit-recover, lib. Measured 2026-08-08, not assumed:
+#   · SYMLINKS are excluded entirely. Links into this checkout are the forward walk's and
+#     sweep_orphans' business; a link pointing anywhere else is explicitly not ours to judge
+#     (tests/deploy-link-parity.bats:156). Cost of honouring that: a hand-placed link to a non-repo
+#     path is missed. The defect that recurred twice was a hand-placed real FILE.
+#   · PROMPT-DOCUMENT surfaces (skills/, agents/, commands/) are excluded: live-only content there
+#     is the normal path — 20 of 35 live skills are vendor/plugin-installed and unversioned. Reporting
+#     them would red every deploy forever and train the operator to skip the report (memory
+#     alarm-polarity-and-attention-budget). Tracked separately; not this leg's class.
+#   · DIRECTORIES are skipped (hooks/lib and scripts/lib are structural; __pycache__ is bytecode
+#     residue of the *.py hooks). Neither is a hand-placed tool.
+#
 # Usage:  deploy-link-parity.sh [--all] [--quiet]
 #   --all     also list files that ARE correctly linked (default: only findings)
 #   --quiet   print nothing when there is nothing actionable (for hooks/cron callers)
@@ -29,8 +63,8 @@
 #        · 3 = missing prerequisite.
 #
 # Covered by tests/deploy-link-parity.bats, whose fixtures drive it via CC_LINKPARITY_REPO /
-# CC_LINKPARITY_CONFIG / CC_LINKPARITY_BINDIR / CC_LINKPARITY_PENDING (fully hermetic — no case
-# reads the real ~/.claude or the real checkout).
+# CC_LINKPARITY_CONFIG / CC_LINKPARITY_BINDIR / CC_LINKPARITY_PENDING / CC_LINKPARITY_MANIFEST
+# (fully hermetic — no case reads the real ~/.claude or the real checkout).
 set -uo pipefail
 
 ALL=false
@@ -81,6 +115,7 @@ BINDIR="${CC_LINKPARITY_BINDIR:-$HOME/bin}"
 # Activation scripts are staged in the repo AND mirrored live (the live dir is where the operator's
 # .done markers land). Both are scanned: some staged scripts exist in only one of the two.
 PENDING_DIRS="${CC_LINKPARITY_PENDING:-$REPO/docs/activation/pending-activation:$CFG/autonomy/pending-activation}"
+MANIFEST="${CC_LINKPARITY_MANIFEST:-$REPO/config/live-only.manifest}"
 
 [ -d "$REPO" ]  || { echo "deploy-link-parity: no checkout at $REPO" >&2; exit 3; }
 [ -d "$CFG" ]   || { echo "deploy-link-parity: no config dir at $CFG" >&2; exit 3; }
@@ -88,8 +123,10 @@ PENDING_DIRS="${CC_LINKPARITY_PENDING:-$REPO/docs/activation/pending-activation:
 findings=0
 pending_n=0
 linked_n=0
+extra_n=0
 LINES=""
 FIXES=""
+SEEN=""     # repo-relative paths the forward walk claimed; the STRAY leg defers to them
 
 note() { LINES="${LINES}$(printf '  %-9s %-44s %s' "$1" "$2" "$3")"$'\n'; }
 fix()  { FIXES="${FIXES}  ▶ $1"$'\n'; }
@@ -121,6 +158,12 @@ check_one() {  # $1 = repo-relative path · $2 = absolute live destination
   local rel="$1" dest="$2" src tgt act
   src="$REPO/$rel"
   [ -f "$src" ] || return 0
+  # Claim this path for the forward walk. The STRAY leg below sweeps the same live directories, so
+  # without a claim a live REAL file that shadows a tracked one is classified twice — SHADOW here and
+  # COPY (or STRAY) there — inflating the tally and printing two lines for one file with one remedy.
+  # Recorded rather than re-derived: the forward walk's globs are the map of record, and a second
+  # hand-written copy of them is precisely how two auditors over one population come to disagree.
+  SEEN="${SEEN}${rel}"$'\n'
   if [ -L "$dest" ]; then
     tgt="$(_resolve "$dest")"
     if [ "$tgt" = "$src" ]; then
@@ -170,6 +213,110 @@ sweep_orphans() {
   done
 }
 
+# --- STRAY: a live REAL FILE whose content is in no tracked file and which no row declares --------
+#
+# The tracked-content set is built LAZILY — only once a real-file candidate actually appears, which
+# on a healthy machine is never. Two code paths, each internally consistent about its hash:
+#   · a real checkout → `git hash-object` the live file and look the blob up in `git ls-files -s`.
+#     ONE git call for the whole set, and the comparison is git's own content identity, so a copy
+#     under a different name (it2 ← bin/it2-wrapper) matches exactly.
+#   · no git (the hermetic fixtures) → shasum both sides. Never mix the two: a git blob hash carries
+#     a header and can never equal a bare content digest, so a mixed comparison would report every
+#     legitimate copy as a STRAY — a false RED on the one case this leg exists to NOT convict.
+TRACKED_SET=""
+TRACKED_MODE=""
+_load_tracked() {
+  [ -n "$TRACKED_MODE" ] && return 0
+  if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    TRACKED_MODE="git"
+    TRACKED_SET="$(git -C "$REPO" ls-files -s 2>/dev/null | awk '{print $2}')"
+  else
+    TRACKED_MODE="hash"
+    TRACKED_SET="$(find "$REPO" -type f -not -path '*/.git/*' -not -path '*/node_modules/*' \
+                     -exec shasum -a 1 {} + 2>/dev/null | awk '{print $1}')"
+  fi
+  return 0
+}
+
+content_is_tracked() {  # $1 = absolute live file → 0 if its bytes are in a tracked checkout file
+  local h
+  _load_tracked
+  if [ "$TRACKED_MODE" = "git" ]; then
+    h="$(git -C "$REPO" hash-object -- "$1" 2>/dev/null)" || return 1
+  else
+    h="$(shasum -a 1 < "$1" 2>/dev/null | awk '{print $1}')" || return 1
+  fi
+  [ -n "$h" ] || return 1
+  printf '%s\n' "$TRACKED_SET" | grep -qxF -- "$h"
+}
+
+# A declared row is honoured ONLY while its witness still exists AND still mentions the artifact.
+# Prints "OK<TAB>why" when live, "STALE<TAB>witness" when the reason has dissolved, nothing when no
+# row matches. The three outcomes are distinct on purpose: a row whose producer was renamed away must
+# become a finding, not a permanent licence — that is how an exemption outlives the design it encodes.
+declared_owner() {  # $1 = live-relative path
+  local rel="$1" path kind witness why stem base dir
+  [ -f "$MANIFEST" ] || return 0
+  while IFS="$(printf '\t')" read -r path kind witness why; do
+    case "$path" in ''|'#'*) continue ;; esac
+    # A short row cannot be honoured: with no witness there is nothing to re-verify, so the row is
+    # skipped and its file falls through to STRAY. That is the safe direction — a malformed manifest
+    # loses its exemptions rather than silently granting unverifiable ones.
+    [ -n "$witness" ] || continue
+    base="${path##*/}"; dir="${path%/*}"
+    case "$base" in
+      \**) stem="${base#\*}"
+           [ "$dir/${rel##*/}" = "$rel" ] || continue
+           case "$rel" in *"$stem") ;; *) continue ;; esac ;;
+      *)   stem="$base"
+           [ "$path" = "$rel" ] || continue ;;
+    esac
+    if [ -f "$REPO/$witness" ] && grep -qF -- "$stem" "$REPO/$witness" 2>/dev/null; then
+      printf 'OK\t[%s] %s\n' "$kind" "$why"
+    else
+      printf 'STALE\t%s\n' "$witness"
+    fi
+    return 0
+  done < "$MANIFEST"
+  return 0
+}
+
+sweep_strays() {  # $1 = live-relative directory
+  local d="$1" f base rel verdict why
+  [ -d "$CFG/$d" ] || return 0
+  for f in "$CFG/$d"/*; do
+    [ -e "$f" ] || continue          # no match, or a dangling link — sweep_orphans owns those
+    [ -L "$f" ] && continue          # every symlink belongs to the forward walk / sweep_orphans
+    [ -d "$f" ] && continue          # structural dirs and __pycache__ residue are not tools
+    base="$(basename "$f")"; rel="$d/$base"
+    # Already classified by the forward walk (it reported SHADOW) — one file, one verdict, one remedy.
+    printf '%s' "$SEEN" | grep -qxF -- "$rel" && continue
+    if content_is_tracked "$f"; then
+      extra_n=$((extra_n + 1))
+      $ALL && note "COPY" "$rel" "real file, but its bytes are tracked — deployed by copy"
+      continue
+    fi
+    verdict="$(declared_owner "$rel")"
+    why="${verdict#*"$(printf '\t')"}"
+    case "$verdict" in
+      OK*)
+        extra_n=$((extra_n + 1))
+        $ALL && note "DECLARED" "$rel" "live-only by design — $why"
+        ;;
+      STALE*)
+        note "STALE-DECL" "$rel" "declared live-only, but its witness $why is gone or no longer names it"
+        fix "review config/live-only.manifest: the row for $rel no longer has a producer"
+        findings=$((findings + 1))
+        ;;
+      *)
+        note "STRAY" "$rel" "live and executable, in NO checkout — unversioned, invisible to review"
+        fix "cp \"$CFG/$rel\" \"$REPO/$rel\" && git -C \"$REPO\" add \"$rel\"    # or rm it, or declare it in config/live-only.manifest"
+        findings=$((findings + 1))
+        ;;
+    esac
+  done
+}
+
 # --- the per-file symlink surfaces install.sh deploys (install.sh is the map of record) --------
 for f in "$REPO"/hooks/*.sh;      do check_one "hooks/$(basename "$f")"     "$CFG/hooks/$(basename "$f")"; done
 for f in "$REPO"/hooks/lib/*.sh;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
@@ -191,16 +338,25 @@ check_one "bin/claude-accounts" "$BINDIR/claude-accounts"
 for d in hooks hooks/lib commands scripts scripts/limit-recover bin; do sweep_orphans "$CFG/$d"; done
 for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 
+# The EXECUTED surfaces only — see STRAY SCOPE in the header. scripts/lib and lib are swept here but
+# are not in the forward walk above; that asymmetry is deliberate, not an oversight. The two
+# directions answer different questions, and "is anything live here unversioned?" stands on its own.
+for d in bin hooks hooks/lib scripts scripts/lib scripts/limit-recover lib; do sweep_strays "$d"; done
+
 # --- report -------------------------------------------------------------------------------------
 if [ "$findings" -eq 0 ] && $QUIET; then exit 0; fi
 
 printf 'link parity: %s → %s\n' "$REPO" "$CFG"
 [ -n "$LINES" ] && printf '%s' "$LINES"
-printf '  %d linked · %d staged-pending · %d actionable\n' "$linked_n" "$pending_n" "$findings"
+# live-extra is counted, never hidden: it is what makes "0 actionable" mean "we looked at the live
+# side too", rather than "we only ever walked the checkout". Its own count going UP unexplained is
+# the signal that a copy-deploy surface grew.
+printf '  %d linked · %d staged-pending · %d live-extra · %d actionable\n' \
+  "$linked_n" "$pending_n" "$extra_n" "$findings"
 
 if [ "$findings" -gt 0 ]; then
-  printf '\n  ✗ landed but NOT live — the checkout is current and this code still does not run.\n'
-  printf '  Fix (review each — a link is never created blindly):\n%s' "$FIXES"
+  printf '\n  ✗ deploy parity broken — landed code that does not run, or live code that is in no repo.\n'
+  printf '  Fix (review each — nothing is created or deleted blindly):\n%s' "$FIXES"
   printf '  Or deploy every surface at once:  ▶ %s/install.sh\n' "$REPO"
   exit 1
 fi

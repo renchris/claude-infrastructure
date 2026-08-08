@@ -231,3 +231,218 @@ stage_activation() {  # $1 = script name · $2 = repo-relative path it will link
   run "$LP"
   [ "$status" -eq 3 ]
 }
+
+# ── STRAY: the live→checkout direction (2026-08-08) ──────────────────────────────────────────────
+#
+# Every case above walks checkout→live and so is blind to a file that entered the live layer without
+# ever being in the repo. bin/cc-mail sat live and unversioned for 5 days — hand-placed into
+# ~/.claude/bin (which is on PATH) by a peer session working in another repo — while this script read
+# "0 actionable"; bin/cc-thread was the same failure a day earlier.
+#
+# The hard half is NOT detection, it is not convicting the copy-deploy state: ~/.claude/bin/it2 is a
+# real file by design, cp'd from the tracked bin/it2-wrapper under a DIFFERENT NAME. The it2 case
+# below is therefore a CONTROL, not a courtesy — it is the assertion that fails if the leg ever
+# regresses to a path-keyed diff, which is the sibling-auditors-disagree failure this repo has paid
+# for once already.
+
+# A tool hand-placed straight into the live layer, exactly as a peer session does it: a real file,
+# never `git add`ed, in no checkout.
+hand_place() { printf '%s\n' "${2:-#!/bin/bash}" > "$CC_LINKPARITY_CONFIG/$1"; }
+
+# A manifest row. Written to a fixture path so no case reads the repo's real config/live-only.manifest.
+declare_row() {  # $1 = live path (basename may lead with *) · $2 = kind · $3 = witness · $4 = why
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/live-only.manifest"
+  printf '# fixture\n%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$CC_LINKPARITY_MANIFEST"
+}
+
+# A witness landed AND linked. The link matters: a witness dropped into scripts/ is itself a new
+# checkout file, so the forward walk would report it UNLINKED and the case would go red for a reason
+# that has nothing to do with the row under test (memory assertion-span-must-equal-its-subject).
+witness() {  # $1 = repo-relative path · $2 = the line that must name the artifact
+  printf '%s\n' "$2" > "$CC_LINKPARITY_REPO/$1"
+  ln -sfn "$CC_LINKPARITY_REPO/$1" "$CC_LINKPARITY_CONFIG/$1"
+}
+
+@test "a hand-placed live tool in NO checkout ⇒ STRAY, exit 1 (the cc-mail/cc-thread regression)" {
+  hand_place "bin/cc-mail"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/cc-mail"
+  has "unversioned, invisible to review"
+}
+
+@test "CONTROL: a copy under a DIFFERENT NAME is matched by CONTENT, never convicted (the it2 trap)" {
+  # install.sh:593 cp's the tracked bin/it2-wrapper to ~/.claude/bin/it2. A path-keyed live→checkout
+  # diff reports it as a stray on every single run. This case is the mutant-proof for that: it is red
+  # the moment the leg stops comparing bytes.
+  printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
+  printf 'wrapper\n' > "$CC_LINKPARITY_CONFIG/bin/it2"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+  has "1 live-extra"
+}
+
+@test "CONTROL: the same file with ONE byte changed IS a stray — the match is exact, not fuzzy" {
+  # Without this, the case above could pass because the leg exempts everything named it2, or
+  # everything in bin, rather than because it compared content.
+  printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
+  printf 'wrapperX\n' > "$CC_LINKPARITY_CONFIG/bin/it2"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/it2"
+}
+
+@test "CONTROL: content-matching still holds under a REAL git checkout, not just the fixtures" {
+  # The leg has two hash paths — `git hash-object` + `git ls-files -s` for a real checkout, shasum for
+  # a bare directory. A git blob hash carries a header and can NEVER equal a bare content digest, so
+  # mixing them would convict every legitimate copy — and the fixtures alone would never show it,
+  # because they are the branch that does not use git. Production is the git branch; test it.
+  git -C "$CC_LINKPARITY_REPO" init -q
+  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
+  git -C "$CC_LINKPARITY_REPO" add -A; git -C "$CC_LINKPARITY_REPO" commit -qm f
+  printf 'wrapper\n' > "$CC_LINKPARITY_CONFIG/bin/it2"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+  has "1 live-extra"
+}
+
+@test "an UNTRACKED file in the checkout never launders a live file into a clean exit" {
+  # The whole defect is unversionedness, so the exemption set is `git ls-files` — not the working
+  # tree. An untracked twin sitting beside the checkout is exactly as lost as no twin at all.
+  #
+  # WHICH LEG reports it is deliberately NOT pinned here. The forward walk's globs are FILESYSTEM
+  # globs, so it claims $REPO/bin/cc-* whether or not git tracks it, and calls this SHADOW; the stray
+  # leg then defers (one file, one verdict). Asserting the class would pin an incidental ordering and
+  # go red the day either glob changes, while the property worth guarding — an unversioned live file
+  # is never silently exempt — would still hold. So assert the property.
+  git -C "$CC_LINKPARITY_REPO" init -q
+  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  git -C "$CC_LINKPARITY_REPO" commit -q --allow-empty -m empty
+  printf 'ghost\n' > "$CC_LINKPARITY_REPO/bin/cc-ghost"     # present on disk, never added
+  printf 'ghost\n' > "$CC_LINKPARITY_CONFIG/bin/cc-ghost"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "bin/cc-ghost"
+  has "0 live-extra"          # never counted as an accounted-for live file
+}
+
+@test "a live file with NO checkout twin at all is a STRAY even under git mode" {
+  # The complement of the case above, and the shape the defect actually took: nothing in the checkout
+  # claims the path, so no forward glob reaches it and the stray leg is the ONLY thing that can see it.
+  git -C "$CC_LINKPARITY_REPO" init -q
+  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  git -C "$CC_LINKPARITY_REPO" commit -q --allow-empty -m empty
+  hand_place "bin/cc-thread"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/cc-thread"
+}
+
+@test "a DECLARED live-only file is exempt, and its reason is printed under --all" {
+  hand_place "bin/kitty-pane-menu-native"
+  declare_row "bin/kitty-pane-menu-native" build "scripts/kitty-setup.sh" "compiled from the tracked .swift"
+  witness "scripts/kitty-setup.sh" "swiftc -o kitty-pane-menu-native"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+  run "$LP" --all
+  has "DECLARED"
+  has "compiled from the tracked .swift"
+}
+
+@test "a declared row whose witness is GONE fails loud — an exemption is never permanent" {
+  # The row outliving its producer is how a dissolved reason keeps laundering a real defect. It must
+  # become a finding, not silently keep exempting.
+  hand_place "bin/kitty-pane-menu-native"
+  declare_row "bin/kitty-pane-menu-native" build "scripts/kitty-setup.sh" "compiled from the tracked .swift"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STALE-DECL"
+}
+
+@test "a declared row whose witness no longer NAMES it fails loud too (renamed away, not deleted)" {
+  # The likelier rot: the producer survives a rename of what it builds. Existence alone would pass.
+  hand_place "bin/kitty-pane-menu-native"
+  declare_row "bin/kitty-pane-menu-native" build "scripts/kitty-setup.sh" "compiled from the tracked .swift"
+  witness "scripts/kitty-setup.sh" "swiftc -o something-else-entirely"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STALE-DECL"
+  has "1 actionable"        # STALE-DECL is the ONLY finding — not exit 1 borrowed from the forward walk
+}
+
+@test "a wildcard row matches by suffix and stays scoped to its own directory" {
+  mkdir -p "$CC_LINKPARITY_CONFIG/lib"
+  hand_place "lib/config-mirror.zsh.prelink-bak"
+  hand_place "bin/impostor.prelink-bak"
+  declare_row "lib/*.prelink-bak" residue "docs/act.sh" "kept by the activation script"
+  mkdir -p "$CC_LINKPARITY_REPO/docs"; printf 'cp x x.prelink-bak\n' > "$CC_LINKPARITY_REPO/docs/act.sh"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "STRAY"
+  has "bin/impostor.prelink-bak"                    # same suffix, WRONG directory ⇒ still a finding
+  lacks "lib/config-mirror.zsh.prelink-bak"         # matched the row ⇒ exempt, and silent without --all
+}
+
+@test "SYMLINKS are never judged by the stray leg — that contract is inherited, not re-decided" {
+  # A live link into another checkout is that repo's business (see the FOREIGN case above). The stray
+  # leg must not quietly reverse a decision another case already made, which is how two auditors over
+  # one population end up disagreeing.
+  # The link must RESOLVE. A dangling one is skipped by the earlier "does it exist" guard, so it
+  # exercises nothing here and the case passes even with the symlink rule deleted — measured, and it
+  # is what this assertion originally did. ~/.claude/bin carries 5 resolving links into
+  # claude-session-search today, so the resolving case is also the real population.
+  mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+  printf 'not ours\n' > "$BATS_TEST_TMPDIR/elsewhere/tool"
+  ln -sfn "$BATS_TEST_TMPDIR/elsewhere/tool" "$CC_LINKPARITY_CONFIG/bin/cc-linked-away"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+}
+
+@test "PROMPT-DOCUMENT surfaces are out of the stray leg's scope (20/35 live skills are vendor-owned)" {
+  # Sweeping commands/ and skills/ would print a standing wall of vendor- and plugin-installed files
+  # that reds every deploy forever, which trains the operator to skip the report entirely.
+  hand_place "commands/personal.md"
+  mkdir -p "$CC_LINKPARITY_CONFIG/skills/vendor"; hand_place "skills/vendor/SKILL.md"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+}
+
+@test "directories in a swept surface are not tools — __pycache__ never reads as a stray" {
+  mkdir -p "$CC_LINKPARITY_CONFIG/bin/__pycache__"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  lacks "STRAY"
+}
+
+@test "a SHADOW is classified ONCE — the stray leg defers to the forward walk, never doubles it" {
+  # Both legs sweep the same live directories. A live real file that shadows a tracked one is the
+  # overlap: without a claim it is SHADOW here and COPY/STRAY there — two lines, one file, one remedy,
+  # and an inflated tally. One population, one state model.
+  land_new "hooks/shadowed.sh"
+  printf 'new\n' > "$CC_LINKPARITY_CONFIG/hooks/shadowed.sh"     # identical bytes ⇒ would match COPY
+  run "$LP"
+  [ "$status" -eq 1 ]
+  has "SHADOW"
+  has "1 actionable"
+  has "0 live-extra"
+  [ "$(printf '%s' "$output" | grep -c "hooks/shadowed.sh")" -eq 2 ]   # the note + its fix line, not 4
+}
+
+@test "a clean live layer still proves the stray leg LOOKED (live-extra is counted, not hidden)" {
+  # A leg that can only ever print nothing is indistinguishable from one that never ran.
+  printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
+  printf 'wrapper\n' > "$CC_LINKPARITY_CONFIG/bin/it2"
+  run "$LP"
+  [ "$status" -eq 0 ]
+  has "1 live-extra"
+  has "every landed file is live"
+}

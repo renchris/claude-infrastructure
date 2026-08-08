@@ -1,0 +1,53 @@
+# live-only.manifest — every REAL file that legitimately exists in a live executed surface
+# (~/.claude/{bin,hooks,hooks/lib,scripts,scripts/lib,scripts/limit-recover,lib}) while having NO
+# counterpart content anywhere in this checkout's tracked tree.
+#
+# Read by scripts/deploy-link-parity.sh's STRAY leg. A live real file that matches no row and whose
+# bytes are in no tracked file is reported STRAY — the "untracked hand-placed tool" defect: bin/cc-mail
+# sat live and unversioned for 5 days (and bin/cc-thread before it, both hand-placed by peer sessions
+# working in other repos) while link-parity, which only ever walked checkout→live, read "0 actionable".
+#
+# WHY A MANIFEST AND NOT A BARE live→checkout DIFF. The naive check convicts the copy-deploy state:
+# ~/.claude/bin/it2 is a real file BY DESIGN, cp'd from the tracked bin/it2-wrapper under a DIFFERENT
+# NAME (install.sh:593, scripts/kitty-setup.sh:215). That shape needs no row — the leg matches by
+# CONTENT, not by path, so a renamed copy is recognised automatically and name-independently. Rows are
+# needed only for the residue that content-matching CANNOT see: a file the checkout never contains.
+# Getting this backwards is the sibling-auditors-disagree failure this repo has already paid for
+# (memory sibling-auditors-must-share-the-state-model — one check modelled "unlinked BY DESIGN" and
+# its sibling convicted the live layer for obeying the design).
+#
+# THE WITNESS COLUMN IS THE ANTI-ROT DEVICE. A row is not a permanent licence: it names a tracked file
+# that must still exist AND still mention the artifact. Delete or rename that producer and the row goes
+# STALE, which is reported as a FINDING — never as a silent exemption. An exemption whose reason has
+# dissolved is exactly how a stale premise keeps laundering a real defect (memory
+# discovery-critic-premise-goes-stale: re-check the premise at CONSUMPTION, and fail toward reporting).
+#
+# NOT COVERED, DELIBERATELY — and measured, not assumed (2026-08-08):
+#   · SYMLINKS of every kind. A live link into this checkout is the forward walk's business; a link
+#     pointing ANYWHERE ELSE is explicitly not ours to judge (tests/deploy-link-parity.bats:156 — "a
+#     dangling one there is that repo's business, and flagging it would train the operator to ignore
+#     this report"). ~/.claude/bin carries 5 such links into claude-session-search today. The cost of
+#     honouring that contract is that a hand-placed link to a non-repo path is missed; the defect that
+#     actually recurred twice was a hand-placed real FILE, which is what this leg catches.
+#   · PROMPT-DOCUMENT surfaces — skills/, agents/, commands/. Live-only content there is the NORMAL
+#     path, not a defect: 20 of the 35 live skills are unversioned (vendor- and plugin-installed —
+#     motion, react-best-practices, vercel-design-guidelines …), as is agents/motion-reviewer.md.
+#     Sweeping them would print a 20-item standing wall that reds every deploy and teaches the operator
+#     to skip the report (memory alarm-polarity-and-attention-budget — an alarm that always fires
+#     carries the same zero bits as one that cannot). The defect class here is an EXECUTABLE silently
+#     entering PATH, not a document. The unversioned-skills gap is real and separately filed.
+#   · DIRECTORIES. hooks/lib and scripts/lib are structural; the three live __pycache__ dirs are
+#     bytecode residue of the *.py hooks. Neither is a hand-placed tool.
+#
+# FORMAT — 4 TAB-separated columns, '#' comments and blank lines ignored:
+#   <live-relative-path>  <kind>  <witness>  <why>
+#     live-relative-path : path under ~/.claude. A leading '*' in the BASENAME is a wildcard
+#                          (lib/*.prelink-bak). The literal remainder is also what the witness must
+#                          mention, so a row cannot drift away from its own producer silently.
+#     kind               : build   — compiled from a tracked source; the repo carries no binaries
+#                          residue — written on purpose by a tracked script, and kept
+#     witness            : repo-relative path that must EXIST and must CONTAIN the match stem
+#     why                : one line, for the human reading a report
+
+bin/kitty-pane-menu-native	build	scripts/kitty-setup.sh	swiftc -O of the tracked bin/kitty-pane-menu-native.swift; a compiled binary cannot be symlinked and the repo does not carry binaries (kitty-setup.sh:239-246)
+lib/*.prelink-bak	residue	docs/activation/pending-activation/15-shared-task-board-activate.sh	the activation script deliberately preserves the previous REAL file before replacing it with a link, so the operator can recover it (15-shared-task-board-activate.sh:67)
