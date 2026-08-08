@@ -1,5 +1,5 @@
 ---
-status: closed
+status: complete
 ---
 
 <!-- markdownlint-configure-file { "MD013": false, "MD041": false } -->
@@ -50,13 +50,23 @@ Raw hook payloads captured by registering a dump-only hook on `Stop` / `Subagent
 subagents. **There are two subagent shapes with OPPOSITE exposure, and the plan below conflates
 them.**
 
-| | Foreground subagent (`run_in_background:false`) | Background / named subagent |
+| | **Nameless** subagent (no `name:`) | **Named** subagent (`name:` set) |
 |---|---|---|
 | Event fired | **`SubagentStop`** (`hook_event_name:"SubagentStop"`) | **`Stop`** — the full main-session chain |
 | Hooks registered for it | **0** | **11** (3 can block) |
 | Process | in-process; no own session | a **real child session**: `claude.exe --agent-id <n>@session-<t> --agent-name <n> --team-name <t> --parent-session-id <p>` |
-| Own transcript | `agent_transcript_path`, `isSidechain` records | its own top-level `.jsonl`, `isSidechain:false` |
+| Own transcript | `~/.claude/projects/<proj>/<parent-sid>/subagents/agent-*.jsonl` + `.meta.json`, `isSidechain:true` | its own **top-level** `.jsonl`, `isSidechain:false` |
 | Can it be blocked? | **No** | **Yes — reproduced** |
+
+⚠️ **Column labels corrected 2026-08-07 — they originally read "Foreground
+(`run_in_background:false`)" vs "Background / named", which names the WRONG discriminator.**
+`run_in_background` does not decide the shape; `name:` does. Measured over 110 real spawns in the
+120 most recent transcripts — all six `(has_name, run_in_background)` combinations occur in the
+wild — session `3f115520` spawned three subagents with `name:None, run_in_background:true` and
+**all three produced in-process sidechain transcripts**, while a named spawn
+(`a1-research-workflows`, session `a64e4989`) produced a real child process and **no `subagents/`
+directory at all**. A reader taking the old label literally would conclude that a default-background
+nameless `Agent()` — the most common spawn in this fleet — runs the full `Stop` chain. It does not.
 
 So **approach 1 is refuted**: for the foreground shape there is nothing to fix (zero `SubagentStop`
 hooks), and for the background shape "detect a subagent and no-op" would suppress the guard for a
@@ -204,6 +214,29 @@ not proof of the subagent path specifically.
   The `completion-assert.sh` exoneration wiring was in flight on `fix/completion-assert-attribution`
   during this investigation and was left to that owner rather than same-hunk-collided; it landed as
   `6e406c7b`.
+- 2026-08-07 — **Re-measured to settle backlog item `2cc7ee852288`, which read this bimodality
+  backwards. Two corrections above; the plan's verdict is unchanged and still CLOSED.**
+  That item proposed wiring `SubagentStop` because "the whole Stop chain — completion-assert,
+  operator-readout, session-continue, the wake floor — is unreachable for the nameless subagent
+  shape". Its *facts* re-verify today (`SubagentStop`=0 groups, `Stop`=2 groups/11 hooks,
+  `hooks/subagent-stop.sh` symlinked live and registered nowhere, present in
+  `settings-templates/settings.example.json:482`). Its *framing* does not, three ways:
+  1. **The template's `SubagentStop` entry wires exactly ONE hook** — `subagent-stop.sh` — which is
+     fail-open by construction (no `set -e`, every write `|| true`, `exit 0` on every path) and
+     therefore cannot block a stop. It does not bring the `Stop` chain with it. "Wire
+     `SubagentStop`" and "give subagents the `Stop` chain" are different changes; only the first is
+     on offer, so the item's stated blast radius ("fleet-wide … across every concurrent session")
+     overstates a hook that is structurally incapable of altering any session's control flow.
+     29 tests green (`tests/subagent-stop.bats`, `tests/subagent-stop-r1.bats`), including *the hook
+     never writes outside its four declared sinks*.
+  2. **The un-hooked side is the CORRECT side.** The `Stop` chain reaching a subagent is the landed
+     defect of this very plan, not a gap: `2d07d468`+`57b67f10` taught `completion-assert` to
+     exonerate a write-free assignee because the chain was blocking read-only subagents into a
+     bounded loop that delivered nothing, and `5dbaf901` taught the operator-facing Stop hooks not
+     to render into teammate sessions at all. Wiring the chain onto the nameless shape would
+     re-import, on the more common shape, exactly what two sessions spent themselves removing.
+  3. **The discriminator is `name:`, not `run_in_background`** — the item is RIGHT and this doc's
+     own table label was wrong. Corrected in § MEASURED above.
 - 2026-08-02 — **R1 CLOSED (`57b67f10`), plan COMPLETE.** The landed attribution arm did not reach a
   read-only subagent — it exonerates only on positive write evidence, and such a session has none by
   construction. Fixed by trusting "wrote nothing" ONLY for a confirmed assignee (`3333b9a0` extracts
