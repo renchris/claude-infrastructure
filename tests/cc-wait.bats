@@ -99,13 +99,20 @@ awaiter_rc() { local p="$BATS_TEST_TMPDIR/await-rc$1"; printf '#!/bin/bash\nexit
   [[ "$output" != *"past deadline"* ]] || false
 }
 
-@test "rc 5: ORPHANED waiter ⇒ ABORTED (exit 6), no deadline claim, nobody paged" {
-  run env CC_AWAIT_BIN="$(awaiter_rc 5)" "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+@test "rc 5: ORPHANED waiter ⇒ ABORTED (exit 6), no deadline claim — and it DOES page (G10)" {
+  # Title corrected 2026-08-08. This read "nobody paged", which was the behaviour until G10 and is
+  # now the defect: an abort that alarms nobody is the same silent loss the contract rung exists to
+  # end. "Nobody alive to page" also mis-described the transport — a page is a MAILBOX write, durable
+  # by design, so on rc 5 the line stays unacked for cc-inbox-guard and the successor's adoption
+  # inherits it. Every assertion that still holds is untouched: ABORTED, exit 6, never a deadline.
+  run env CC_AWAIT_BIN="$(awaiter_rc 5)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
   [ "$status" -eq 6 ]
   cf="$(contract_file)"
   [ "$(jq -r '.status' "$cf")" = "ABORTED" ]
   [[ "$output" != *"past deadline"* ]] || false
   [[ "$output" == *"provably gone"* ]] || false
+  [ -s "$(pages_log)" ]
 }
 
 @test "rc 3: nothing to watch ⇒ ABORTED, distinct from a timeout" {
@@ -128,4 +135,70 @@ awaiter_rc() { local p="$BATS_TEST_TMPDIR/await-rc$1"; printf '#!/bin/bash\nexit
   [[ "$output" == *"verdict=timeout"* ]] || false
   [[ "$output" == *"DESIGNED outcome"* ]] || false
   [[ "$output" == *"RE-ARM"* ]] || false
+}
+
+# ══ G10 — AN ABORTED CONTRACT THAT ALARMS NOBODY IS THE SAME SILENT LOSS, ONE LEVEL UP ═══════════
+# rc 0 and rc 4 close SATISFIED; rc 2 closes TIMED_OUT and pages. EVERYTHING else fell into a
+# catch-all that closed ABORTED and paged no one — so cc-await-ping's measured 144 (the harness's
+# sentinel for "the watcher's process GROUP was SIGTERMed", backlog 5b77e20d9db6) closed the
+# contract in silence. The wait is over, the waiter is not woken, and nothing says so. The rung
+# below the watcher exists precisely to survive the watcher; a mute abort forfeits that.
+#
+# ABORTED stays distinct from TIMED_OUT and the exit code stays 6 — only 5 is a statement about the
+# WAITEE. What changed is that both now reach the pager.
+pages_log() { printf '%s' "$BATS_TEST_TMPDIR/pages.log"; }
+page_recorder() {   # a --on-timeout page transport that RECORDS instead of swallowing
+  local p="$BATS_TEST_TMPDIR/pagerec"
+  cat > "$p" <<REC
+#!/bin/bash
+printf '%s\n' "\$*" >> "$(pages_log)"
+REC
+  chmod +x "$p"; printf '%s' "$p"
+}
+
+@test "G10 POSITIVE CONTROL: the deadline (rc 2) reaches the pager — the recorder is not inert" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 2)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 5 ]
+  [ -s "$(pages_log)" ]
+  grep -q 'past deadline' "$(pages_log)"
+}
+
+@test "G10 NEGATIVE CONTROL: a SATISFIED contract (rc 0) pages nobody" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 0)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 0 ]
+  [ ! -s "$(pages_log)" ]
+}
+
+@test "G10 THE HOLE: rc 144 (the group-kill sentinel) closes ABORTED and STILL pages" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 144)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 6 ]
+  [ "$(jq -r '.status' "$(contract_file)")" = "ABORTED" ]
+  [ -s "$(pages_log)" ]
+  grep -q 'ABORTED' "$(pages_log)"
+  ! grep -q 'past deadline' "$(pages_log)" || false   # never a false claim about the WAITEE
+}
+
+@test "G10: rc 143 (the watcher alone was TERMed) pages too — same silence, different number" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 143)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 6 ]
+  [ -s "$(pages_log)" ]
+}
+
+@test "G10: rc 3 (nothing to watch) pages — an unowned wait is exactly what this rung is for" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 3)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout reobserve
+  [ "$status" -eq 6 ]
+  [ -s "$(pages_log)" ]
+}
+
+@test "G10: an ABORTED escalate goes to the ESCALATION target, not silently to the waiter" {
+  run env CC_AWAIT_BIN="$(awaiter_rc 144)" CC_WAIT_PAGE_CMD="$(page_recorder)" \
+    CC_WAIT_PAGE_TARGET="DESK-0000-0000-0000-000000000000" \
+    "$WAIT" --waiter "$UUID" --waitee peer --signal ping --deadline 60 --on-timeout escalate
+  [ "$status" -eq 6 ]
+  grep -q 'DESK-0000-0000-0000-000000000000' "$(pages_log)"
 }
