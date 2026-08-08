@@ -16,6 +16,14 @@
 # like the real CLI); spawn_frontmost / it2_land / as_tab are stubbed to record which path ran.
 
 setup() {
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
+  # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
+  # past its bar, so an unpinned suite goes RED purely because the box is busy — the corpus deciding a
+  # verdict on machine state instead of on the tree. Both terms are pinned off here (they are the two
+  # TERMS of one exit 9, handoff-fire.sh:4487); tests/handoff-fire-capacity-gate.bats is the ONE place
+  # the gate runs ON, against synthetic inputs.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   # handoff-fire.sh bounds every external iTerm2 call (osascript / it2 CLI / iterm2 python) through
   # hf_bounded — a timeout(1) wrapper — because a wedged iTerm2 API blocks them indefinitely. These
   # suites EXTRACT individual functions instead of sourcing the script, so that helper is not in
