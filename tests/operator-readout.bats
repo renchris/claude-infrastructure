@@ -866,8 +866,8 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   printf '%s' "$output" | grep -q '41 commit' || { echo "the lag was not named: $output"; false; }
   printf '%s' "$output" | grep -q 'deploy-live.sh' || { echo "no runnable step: $output"; false; }
   # The defect this case exists for: an unhandled rung renders a header with an EMPTY state.
-  printf '%s' "$output" | grep -qE 'OPERATOR ▸[[:space:]]*$' \
-    && { echo "empty state — the rung fell into the default arm: $output"; false; }
+  ! printf '%s' "$output" | grep -qE 'OPERATOR ▸[[:space:]]*$' \
+    || { echo "empty state — the rung fell into the default arm: $output"; false; }
   true
 }
 

@@ -26,6 +26,15 @@ That derivation has ONE precondition — S must be ABLE to succeed — and the n
 family violates it. See revive() for the family, the rewrite it gets instead, and why a shape
 this cannot prove is DECLINED rather than repaired on a guess.
 
+A finding names a LINE; the thing to repair is a STATEMENT, and in this corpus those differ
+often (201 of the suites use `\` continuations). Every repair below is therefore derived from
+the whole logical statement — the finding's line joined with its continuations — and only the
+emission is per-line. Judging the head line alone is not a conservative approximation, it is a
+corruption: ` || false` appended after a trailing `\` escapes the SPACE instead of continuing
+the line, which strands the next line's `|| { …; false; }` as a statement beginning with `||`
+— a bash syntax error. Measured 2026-08-03 on tests/teammate-auto-shutdown.bats: 30 ok → 0 ok,
+and this script exited 0 announcing "0 dead assertions" over the file it had just broken.
+
 Usage:
   bats-assert-liveness-fix.py [--dry-run] [PATH ...]
 
@@ -37,13 +46,28 @@ findings afterwards.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 ANALYZER = HERE / "bats-assert-liveness.py"
+
+# What counts as ONE statement is imported, never re-implemented: this script consumes the
+# analyzer's line numbers, so a private copy of that rule would be free to drift — and a drift
+# is exactly how an append landed on the head of a statement that ran on.
+_spec = importlib.util.spec_from_file_location("bats_assert_liveness", ANALYZER)
+if _spec is None or _spec.loader is None:  # pragma: no cover - packaging accident
+    sys.exit(f"bats-assert-liveness-fix: cannot load analyzer at {ANALYZER}")
+_an = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_an)
+line_continues = _an.line_continues
+join_continued = _an.join_continued
+strip_comment = _an.strip_comment
+trailing_backslashes = _an.trailing_backslashes
 
 SUFFIX = " || false"
 
@@ -145,6 +169,11 @@ def top_level_seps(code: str) -> list[tuple[int, str]] | None:
             i += 1
             continue
         if c == "\\":
+            if i + 1 >= n:
+                # The escaped character is the NEWLINE: this is a line continuation, so the
+                # statement is not all here. Refusing at the scanner is what makes the
+                # corruption structurally impossible rather than merely avoided by callers.
+                return None
             i += 2
             continue
         if c in "'\"":
@@ -263,7 +292,20 @@ class Undecidable(Exception):
     """This line's correct repair is not derivable here — report it, never guess at it."""
 
 
-def revive(code: str) -> str | None:
+class Repair(NamedTuple):
+    """A derived repair, tagged with HOW it changes the statement.
+
+    `append` only ever adds a trailing element, so it can be emitted onto the last physical
+    line of a multi-line statement with the rest untouched. `rewrite` re-forms the statement
+    around a new `!`/`||`, which has no faithful re-flow across a split the author chose — so
+    across lines it is reported for a hand-edit instead of guessed at.
+    """
+
+    kind: str  # "append" | "rewrite"
+    text: str  # the whole statement, repaired, on one line
+
+
+def revive(code: str) -> Repair | None:
     """Rewrite `code` so its failure reaches the test's exit status, or None if already live.
 
     The default transform APPENDS ` || false`: the statement's failure then lands in the list's
@@ -328,10 +370,10 @@ def revive(code: str) -> str | None:
         # Indentation is re-applied explicitly: the block's shape is how these
         # assertion runs are read, and a de-indented line reviews as unrelated.
         indent = code[: len(code) - len(code.lstrip())]
-        return f"{indent}! {a} || {last}"
+        return Repair("rewrite", f"{indent}! {a} || {last}")
 
     if verdict == CAN_SUCCEED:
-        return code.rstrip() + SUFFIX
+        return Repair("append", code.rstrip() + SUFFIX)
 
     raise Undecidable(
         f"cannot prove the last element ({last!r}) can succeed; appending ` || false` to a "
@@ -339,13 +381,59 @@ def revive(code: str) -> str | None:
     )
 
 
+def statement_span(lines: list[str], idx: int) -> list[int]:
+    """Indices of every physical line of the logical statement starting at `idx`.
+
+    Mirrors the analyzer's own block parser — same continuation predicate, the same stop at
+    a blank/comment-only line, and the same `}`-at-column-0 body boundary — so the two can
+    never disagree about where the statement the finding names actually ends.
+    """
+    span = [idx]
+    while True:
+        i = span[-1]
+        if i + 1 >= len(lines):
+            break
+        if not line_continues(lines[i], strip_comment(lines[i]).strip()):
+            break
+        if lines[i + 1] == "}" or not strip_comment(lines[i + 1]).strip():
+            break
+        span.append(i + 1)
+    return span
+
+
+def multiline_rewrite_advice(stmt: str, repair: Repair, nlines: int) -> str:
+    """Why a `rewrite` split across lines is declined, and the two forms that resolve it."""
+    parts = split_and_or(stmt)
+    cond = parts[0][1] if parts else stmt
+    return (
+        "the repair re-forms the statement around a new `!`/`||`, and this one is split "
+        f"across {nlines} lines — there is no faithful re-flow of that across a split the "
+        "author chose. Replace those lines with either\n"
+        f"       {repair.text.strip()}\n"
+        "     or the explicit block form, whichever reads better here:\n"
+        f"       if {cond}; then …; false; fi"
+    )
+
+
+def splice_comment(original: str, new_code: str, comment: str) -> str:
+    """Re-attach `original`'s trailing comment after `new_code`, holding its column."""
+    if not comment:
+        return new_code
+    # Keep a trailing comment at its original column when the longer code still leaves
+    # room, so annotated assertion blocks hold their shape; otherwise fall back to a
+    # single space.
+    body = comment.strip()
+    gap = max(1, original.index(body) - len(new_code))
+    return new_code + " " * gap + body
+
+
 def fix_file(
     path: str, lines_to_fix: list[int], dry_run: bool
 ) -> tuple[int, list[tuple[int, str, str]]]:
-    """Rewrite the named lines in place. Returns (count, declined) — see revive().
+    """Rewrite the named statements in place. Returns (count, declined) — see revive().
 
-    A DECLINED line is left byte-identical. That is the whole point: the alternative to a
-    repair this script cannot derive is a hand-edit, not a plausible-looking guess.
+    A DECLINED statement is left byte-identical. That is the whole point: the alternative
+    to a repair this script cannot derive is a hand-edit, not a plausible-looking guess.
     """
     src = Path(path).read_text(encoding="utf-8")
     lines = src.split("\n")
@@ -353,25 +441,34 @@ def fix_file(
     declined: list[tuple[int, str, str]] = []
     for ln in sorted(lines_to_fix):
         idx = ln - 1
-        original = lines[idx]
-        code, comment = split_trailing_comment(original)
+        span = statement_span(lines, idx)
+        stmt = join_continued([strip_comment(lines[i]).strip() for i in span])
         try:
-            new_code = revive(code)
+            repair = revive(stmt)
         except Undecidable as exc:
-            declined.append((ln, original.strip(), str(exc)))
+            declined.append((ln, stmt, str(exc)))
             continue
-        if new_code is None:
+        if repair is None:
             continue  # already revived
-        if comment:
-            # Keep a trailing comment at its original column when the longer code still
-            # leaves room, so annotated assertion blocks hold their shape; otherwise fall
-            # back to a single space.
-            body = comment.strip()
-            gap = max(1, original.index(body) - len(new_code))
-            new_line = new_code + " " * gap + body
+        if repair.kind == "append":
+            # An append only ever adds a trailing element, so it lands on the statement's
+            # LAST physical line and every line before it is untouched.
+            target = span[-1]
+            code, comment = split_trailing_comment(lines[target])
+            code = code.rstrip()
+            if trailing_backslashes(code) % 2 == 1:
+                # A continuation left dangling by a blank line or EOF. bash drops it, and
+                # so must we — appending AFTER it escapes the space instead of continuing.
+                code = code[:-1].rstrip()
+            lines[target] = splice_comment(lines[target], code + SUFFIX, comment)
+        elif len(span) == 1:
+            code, comment = split_trailing_comment(lines[idx])
+            lines[idx] = splice_comment(lines[idx], repair.text, comment)
         else:
-            new_line = new_code
-        lines[idx] = new_line
+            declined.append(
+                (ln, stmt, multiline_rewrite_advice(stmt, repair, len(span)))
+            )
+            continue
         changed += 1
     if changed and not dry_run:
         Path(path).write_text("\n".join(lines), encoding="utf-8")

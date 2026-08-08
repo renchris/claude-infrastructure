@@ -375,3 +375,94 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   run bats_passes "$D/t.bats"
   [ "$status" -ne 0 ]                                    # live after
 }
+
+# ── line continuations: a finding names a LINE, the repair belongs to the STATEMENT ────────────
+# `\` continuations are this corpus's norm — 201 of the suites use them — and both layers used to
+# judge only the finding's FIRST physical line. That is wrong in both directions at once:
+#
+#     ! grep -q X "$F" \
+#         || { echo diag; false; }
+#
+# reads as a bare dead negation on line 1, while the statement it heads is LIVE. The analyzer
+# reported it, and the fixer then appended ` || false` AFTER the backslash — which escapes the
+# SPACE instead of continuing the line, stranding `|| { … }` as a statement beginning with an
+# operator. Measured 2026-08-03 on tests/teammate-auto-shutdown.bats: 30 ok → 0 ok, and the fixer
+# exited 0 announcing "0 dead assertions" over the file it had just broken.
+#
+# `[ "$status" -eq 0 ]` cannot catch that: bats exits 0 on a file whose tests all vanished. The
+# assertion below is `ok 1` in the TAP stream, because a corrupted body renders `1..0` — a
+# NON-VERDICT that reads exactly like success.
+
+@test "continued: a live '! A \\ || { …; false; }' is neither reported nor touched" {
+  mkbats "$D/t.bats" '@test "x" {' \
+    "  ! echo clean | grep -q NOPE \\" \
+    '      || { echo DIAG; false; }' \
+    '  echo tail' '}'
+  [ "$(findings "$D/t.bats")" -eq 0 ]                    # the statement is live ⇒ nothing to report
+  before="$(cat "$D/t.bats")"
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 0 ]
+  [ "$before" = "$(cat "$D/t.bats")" ]                   # byte-identical: no ` \ || false`
+  run bats "$D/t.bats"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '^ok 1' || false              # the test still RAN — not `1..0`
+}
+
+# The fixture above asserts something that does NOT hold, so "live" and "never fires" look the
+# same there. This is the other direction: the identical shape with a MATCHING condition must
+# fail the test, which is what makes the pair above evidence rather than decoration.
+@test "continued: the same statement with a MATCHING condition FAILS — the pair is not vacuous" {
+  mkbats "$D/t.bats" '@test "x" {' \
+    "  ! echo hit | grep -q hit \\" \
+    '      || { echo DIAG; false; }' \
+    '  echo tail' '}'
+  run bats_passes "$D/t.bats"
+  [ "$status" -ne 0 ]
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+}
+
+# A genuinely dead multi-line statement still gets repaired — the append lands on the statement's
+# LAST physical line, where it joins the same AND-OR list. Both continuation spellings are pinned:
+# a trailing `\`, and a trailing `&&` (which continues across the newline all by itself).
+@test "continued: a DEAD multi-line statement is revived on its LAST line, not its head" {
+  local pair
+  for pair in '  [[ 1 -eq 1 ]] \|      && [[ 1 -eq 2 ]]' \
+              '  [[ 1 -eq 1 ]] &&|      [[ 1 -eq 2 ]]'; do
+    mkbats "$D/t.bats" '@test "x" {' "${pair%%|*}" "${pair##*|}" '  echo tail' '}'
+    run bats_passes "$D/t.bats"
+    [ "$status" -eq 0 ] || { echo "not dead BEFORE: $pair"; false; }
+    [ "$(findings "$D/t.bats")" -eq 1 ] || { echo "not reported: $pair"; false; }
+    run python3 "$FIX" "$D/t.bats"
+    [ "$status" -eq 0 ] || { echo "fixer rc=$status on: $pair"; false; }
+    grep -qF '[[ 1 -eq 2 ]] || false' "$D/t.bats" || { echo "not on the last line: $(cat "$D/t.bats")"; false; }
+    [ "$(grep -c '\\ || false' "$D/t.bats")" -eq 0 ] || { echo "appended AFTER a continuation"; false; }
+    run bats_passes "$D/t.bats"
+    [ "$status" -ne 0 ] || { echo "still dead AFTER: $pair"; false; }
+    [ "$(findings "$D/t.bats")" -eq 0 ] || { echo "still reported: $pair"; false; }
+    before="$(cat "$D/t.bats")"
+    run python3 "$FIX" "$D/t.bats"
+    [ "$before" = "$(cat "$D/t.bats")" ] || { echo "not idempotent across the join"; false; }
+  done
+}
+
+# The negation rewrite RE-FORMS the statement around a new `!`/`||`. Across lines there is no
+# faithful re-flow of that onto a split the author chose, so it is reported for a hand-edit —
+# with both usable forms printed — rather than guessed at. Declining is the whole point: the
+# alternative to a repair this script cannot derive is a human, not a plausible-looking edit.
+@test "continued: a repair that RE-FORMS the statement is DECLINED across lines, never guessed" {
+  mkbats "$D/t.bats" '@test "x" {' \
+    "  echo clean | grep -q NOPE \\" \
+    '      && { echo DIAG; false; }' \
+    '  echo tail' '}'
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                    # correct BEFORE
+  before="$(cat "$D/t.bats")"
+  run python3 "$FIX" "$D/t.bats"
+  [ "$status" -eq 2 ]                                    # loud, not a silent skip
+  [ "$before" = "$(cat "$D/t.bats")" ]                   # and it wrote NOTHING
+  echo "$output" | grep -q 'DECLINED' || false
+  echo "$output" | grep -qF '! echo clean | grep -q NOPE || { echo DIAG; false; }' || false
+  echo "$output" | grep -qF 'if echo clean | grep -q NOPE; then' || false
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]                                    # STILL correct AFTER
+}

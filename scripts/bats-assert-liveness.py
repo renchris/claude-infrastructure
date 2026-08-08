@@ -190,23 +190,79 @@ def heredoc_open(raw: str) -> tuple[str, bool] | None:
     return None
 
 
+# ---------------------------------------------------------------- logical statements
+
+# `&&`, `||` and `|` continue onto the next line all by themselves.
+RE_CONT_OP = re.compile(r"(&&|\|\||\|)$")
+
+
+def trailing_backslashes(s: str) -> int:
+    """How many `\\` the string ENDS with. Parity is what decides a continuation."""
+    n = 0
+    while n < len(s) and s[len(s) - 1 - n] == "\\":
+        n += 1
+    return n
+
+
+def line_continues(raw: str, code: str) -> bool:
+    """True when the NEXT source line belongs to this same LOGICAL statement.
+
+    Two bash rules that read different text, and conflating them is a defect in each
+    direction:
+
+      * A backslash continuation must be the RAW line's last character — `foo \\  # c`
+        does not continue — and an EVEN run of trailing backslashes is a literal `\\`,
+        not a continuation.
+      * `&&` / `||` / `|` continue across the newline whether or not a comment follows,
+        so that half is judged on the COMMENT-STRIPPED code.
+
+    This is the single definition of "one statement" for the analyzer AND the fixer
+    (which imports it). A private copy in either would be free to drift, and a drift
+    here is precisely how the fixer came to append ` || false` to a line whose statement
+    ran on — see bats-assert-liveness-fix.py's module docstring.
+    """
+    if trailing_backslashes(raw.rstrip("\n")) % 2 == 1:
+        return True
+    return bool(RE_CONT_OP.search(code))
+
+
+def join_continued(fragments: list[str]) -> str:
+    """Splice the comment-stripped fragments of one logical statement onto one line.
+
+    A continuation backslash is dropped from EVERY fragment, the last included: bash removes
+    `\\<newline>` unconditionally, so a statement left dangling by a blank line — `foo \\`
+    with nothing after it — is simply `foo`. Keeping that trailing `\\` on the joined text is
+    what let it survive into an emitted repair and escape the appended space.
+    """
+    parts: list[str] = []
+    for frag in fragments:
+        f = frag.rstrip()
+        if trailing_backslashes(f) % 2 == 1:
+            f = f[:-1].rstrip()
+        if f:
+            parts.append(f)
+    return " ".join(parts)
+
+
 class Stmt:
-    """One meaningful (non-blank, non-comment) source line inside a @test body."""
+    """One LOGICAL statement inside a @test body — possibly spanning several lines."""
 
-    __slots__ = ("lineno", "depth", "text", "raw", "continued_from")
+    __slots__ = ("lineno", "depth", "text")
 
-    def __init__(
-        self, lineno: int, depth: int, text: str, raw: str, continued_from: bool
-    ):
+    def __init__(self, lineno: int, depth: int, text: str):
         self.lineno = lineno
         self.depth = depth
         self.text = text
-        self.raw = raw
-        self.continued_from = continued_from
 
 
 def parse_block(lines: list[str], start: int, end: int) -> list[Stmt]:
     """Collect meaningful statements between body lines (start, end) exclusive.
+
+    Continuation lines are JOINED into the statement they belong to, so `classify` is
+    handed the whole AND-OR list rather than its first physical line. Judging a fragment
+    is not a conservative approximation, it is a wrong answer in both directions:
+    `! grep -q X "$F" \\` alone reads as a bare dead negation, while the statement it
+    heads — `… || { echo diag; false; }` — is LIVE (verified under bats both ways).
 
     Skips heredoc bodies entirely — a fixture that *writes* bats source must never be
     analyzed as if it were this file's own assertions.
@@ -215,7 +271,24 @@ def parse_block(lines: list[str], start: int, end: int) -> list[Stmt]:
     depth = 0
     heredoc: str | None = None
     heredoc_tabs = False
-    prev_continues = False
+    pending: list[str] = []  # fragments of a statement still being continued
+    pending_lineno = 0
+
+    def flush() -> None:
+        nonlocal depth, pending
+        text = join_continued(pending)
+        pending = []
+        if not text:
+            return
+        if RE_CLOSER.match(text):
+            depth = max(0, depth - 1)
+            return
+        stmts.append(Stmt(pending_lineno, depth, text))
+        if RE_OPENER.match(text):
+            depth += 1
+        # A trailing `{` (function/group) also opens a level.
+        elif text.endswith("{") and not RE_TEST_OPEN.match(text):
+            depth += 1
 
     for ln in range(start, end):
         raw = lines[ln]
@@ -234,25 +307,20 @@ def parse_block(lines: list[str], start: int, end: int) -> list[Stmt]:
             heredoc, heredoc_tabs = opened
 
         if not code:
-            prev_continues = False
+            # A blank or comment-only line ends a continuation, as it does in bash for
+            # the backslash form. Anything already buffered is flushed as it stands.
+            if pending:
+                flush()
             continue
 
-        continued_from = prev_continues
-        # This line continues onto the next if it ends with `\`, `&&`, `||`, or `|`.
-        prev_continues = bool(re.search(r"(\\|&&|\|\||\|)$", code))
+        if not pending:
+            pending_lineno = ln + 1
+        pending.append(code)
+        if not line_continues(raw, code):
+            flush()
 
-        if RE_CLOSER.match(code):
-            depth = max(0, depth - 1)
-            continue
-
-        stmts.append(Stmt(ln + 1, depth, code, raw, continued_from))
-
-        if RE_OPENER.match(code):
-            depth += 1
-        # A trailing `{` (function/group) also opens a level.
-        elif code.endswith("{") and not RE_TEST_OPEN.match(code):
-            depth += 1
-
+    if pending:
+        flush()
     return stmts
 
 
@@ -474,8 +542,6 @@ def analyze_file(path: str) -> list[dict]:
                 break
 
         for s in stmts:
-            if s.continued_from:
-                continue  # part of a multi-line list already judged at its head
             if RE_COND_CTX.match(s.text) or RE_FOR_HDR.match(s.text):
                 continue  # condition / loop-header position — not an assertion
             cls = classify(s.text)

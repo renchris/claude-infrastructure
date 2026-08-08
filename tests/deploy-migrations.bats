@@ -100,8 +100,8 @@ setup() {
     # its rationale, and a detector that matches prose about the surface reports the explanation as
     # the breach (memory: detector-matching-its-own-skill-description).
     body="$(grep -v '^[[:space:]]*#' "$f" || true)"
-    printf '%s' "$body" | grep -qE 'settings\.json|LaunchAgents|launchctl|\.plist|security +(add|find)-generic-password' \
-      && { echo "$(basename "$f"): class 'mechanical' reaches a C10 surface — declare it c10 until the rescope is ratified"; false; }
+    ! printf '%s' "$body" | grep -qE 'settings\.json|LaunchAgents|launchctl|\.plist|security +(add|find)-generic-password' \
+      || { echo "$(basename "$f"): class 'mechanical' reaches a C10 surface — declare it c10 until the rescope is ratified"; false; }
   done
   true
 }
@@ -156,7 +156,7 @@ setup() {
   # that on EVERY SessionStart, to every agent and operator.
   W="$REPO/hooks/activation-watch.sh"
   grep -q 'deploy-live.sh' "$W" || { echo "activation-watch no longer points at the converger"; false; }
-  grep -nE '▶ cp \$mirror/<name> \$DIR/<name>|▶ diff \$mirror' "$W" \
-    && { echo "activation-watch still platters a hand-sync for a converger-owned class"; false; }
+  ! grep -nE '▶ cp \$mirror/<name> \$DIR/<name>|▶ diff \$mirror' "$W" \
+    || { echo "activation-watch still platters a hand-sync for a converger-owned class"; false; }
   true
 }
