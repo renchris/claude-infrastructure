@@ -37,6 +37,11 @@ exit 0
 SH
   chmod +x "$STUB"
   export IT2_BIN="$STUB"
+
+  # The write-side tenancy gate journals its refusals. Without this the suite would append to the
+  # operator's live ~/.claude/autonomy/idl.jsonl — a test that writes production state is not
+  # hermetic, and cc-audit/cc-digest read that file.
+  export SESSION_REGISTER_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
 }
 
 # helper: write a registry entry file directly
@@ -231,4 +236,94 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   printf '{"reason":"other","session_id":"SID-ANY"}' \
     | ITERM_SESSION_ID="w1t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$DEREG"
   [ -f "$CC_REGISTRY_DIR/AAAAAAAA-1111-2222-3333-444444444444.json" ]
+}
+
+# ── WRITE-SIDE TENANCY (backlog 55e1e65c7548) ──────────────────────────────────────────────────
+# The deregister cases above prove the REMOVE side cannot delete another session's row. These prove
+# the WRITE side cannot overwrite one. Same hazard, other direction: CC_PANE_ID/ITERM_SESSION_ID are
+# inherited by every child process, so a nested `claude` (a `claude -p` probe, an upgrade-gate check,
+# any script that shells out to the CLI) arrives at register() holding the LIVE pane's id. Measured
+# 2026-08-08 against the deployed hook: one such child replaced pane 841's row with its own pid and
+# sid, and that pid was dead before the probe returned — a dead-pid corpse on a pane whose claude was
+# alive throughout, which cc-sessions hides from the addressing view for up to CC_REG_RETAIN_H.
+#
+# The gate refuses ONLY when the row's owner is a live ANCESTOR of this process. The four controls
+# below are the other half of the contract: a live-but-unrelated pid, a dead pid, an absent row and a
+# pid-less provisional row must all still be written, or the gate would wedge panes it is meant to
+# protect. They are not decoration — a gate that refuses everything passes the first test alone.
+
+PANE_T="BBBBBBBB-1111-2222-3333-444444444444"
+CHILD='{"cwd":"/tmp/child","session_id":"CHILD-SID","reason":"startup","hook_event_name":"SessionStart"}'
+
+# helper: run the hook as a NESTED claude — outer `claude` seeds the pane row with its OWN pid (the
+# tenant registering), then spawns an inner `claude` that runs the hook (the probe squatting).
+#
+# `ln -s /bin/bash …/claude` yields a process whose `ps -o comm=` basename is `claude`, which is what
+# the hook's ancestor walk matches. It must be a SYMLINK: a copy of /bin/bash does not execute on
+# this box (measured — it fails silently, which would make the fixture pass vacuously). And it must
+# exist at all: without a fake tenant the walk climbs past the fixture into whatever real `claude` is
+# running the suite, so the test's verdict would depend on how it was launched.
+#
+# The trailing `:` in each tier defeats bash's last-command exec optimisation. Without it the inner
+# `claude` REPLACES the outer, both tiers collapse onto one pid, and the ancestor relation the test
+# exists to exercise silently does not exist (measured: inner pid == outer pid).
+nested_register() { # $1=pane $2=payload
+  local fake="$BATS_TEST_TMPDIR/fake"
+  mkdir -p "$fake" "$CC_REGISTRY_DIR"; ln -sf /bin/bash "$fake/claude"
+  cat > "$BATS_TEST_TMPDIR/outer.sh" <<'OUT'
+printf '{"paneUUID":"%s","name":"TENANT","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"TENANT-SID"}' \
+  "$NR_PANE" "$$" > "$CC_REGISTRY_DIR/$NR_PANE.json"
+"$NR_FAKE/claude" "$NR_INNER"
+:
+OUT
+  cat > "$BATS_TEST_TMPDIR/inner.sh" <<'IN'
+printf '%s' "$NR_PAYLOAD" | ITERM_SESSION_ID="w1t0p0:$NR_PANE" bash "$NR_HOOK"
+:
+IN
+  NR_PANE="$1" NR_PAYLOAD="$2" NR_FAKE="$fake" NR_HOOK="$REG" NR_INNER="$BATS_TEST_TMPDIR/inner.sh" \
+    "$fake/claude" "$BATS_TEST_TMPDIR/outer.sh"
+}
+
+@test "register: a nested claude does NOT overwrite its live parent's row (headless-probe squat)" {
+  nested_register "$PANE_T" "$CHILD"
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$PANE_T.json"
+  [ "$output" = "TENANT-SID" ]
+}
+
+@test "register: the tenancy refusal is journalled (a silent no-op reads as an inert gate)" {
+  nested_register "$PANE_T" "$CHILD"
+  # Existence first, as its own assertion, so "no record at all" cannot read as wrong content.
+  # `run grep` + `[ ]`, never `[[ ]]`: bats bodies run under `set -eET` and bash EXEMPTS the `[[`
+  # keyword from errexit, so a non-final `[[ ]]` evaluates, discards its false result, and the test
+  # passes — scripts/bats-assert-liveness.py exists to catch exactly that, and caught it here.
+  [ -s "$SESSION_REGISTER_IDL" ]
+  run grep -Fc '"disposition":"refused"' "$SESSION_REGISTER_IDL"
+  [ "$status" -eq 0 ]
+  run grep -Fc '"sid":"CHILD-SID"' "$SESSION_REGISTER_IDL"
+  [ "$status" -eq 0 ]
+}
+
+@test "register: a live incumbent that is NOT an ancestor is overwritten (pid reuse must not wedge)" {
+  sleep 30 & local other=$!
+  mkentry "$PANE_T" "stale" "$other" "OLD-SID"
+  printf '%s' "$CHILD" | ITERM_SESSION_ID="w1t0p0:$PANE_T" bash "$REG"
+  kill "$other" 2>/dev/null || true; wait "$other" 2>/dev/null || true
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$PANE_T.json"
+  [ "$output" = "CHILD-SID" ]
+}
+
+@test "register: a dead-pid row is overwritten (the pane's next tenant registers normally)" {
+  mkentry "$PANE_T" "corpse" "$(deadpid)" "OLD-SID"
+  printf '%s' "$CHILD" | ITERM_SESSION_ID="w1t0p0:$PANE_T" bash "$REG"
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$PANE_T.json"
+  [ "$output" = "CHILD-SID" ]
+}
+
+@test "register: a pid-less provisional row is upgraded (handoff-fire ensure_registration)" {
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"%s","name":"prov","cwd":"/tmp","cmd":"x","provisional":true}' "$PANE_T" \
+    > "$CC_REGISTRY_DIR/$PANE_T.json"
+  printf '%s' "$CHILD" | ITERM_SESSION_ID="w1t0p0:$PANE_T" bash "$REG"
+  run jq -r '.session_id' "$CC_REGISTRY_DIR/$PANE_T.json"
+  [ "$output" = "CHILD-SID" ]
 }
