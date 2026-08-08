@@ -42,7 +42,8 @@
 # S5 STALLED compares an artifact's mtime against the declared cadence, so it needs a durable
 # product the job touches on EVERY run. postland-verify, deploy-live, dispatcher and discovery do
 # not have one: deploy-live is damped-silent on refusal (it deliberately writes nothing for a whole
-# day), `idl.jsonl` is a SHARED journal so its mtime does not prove the dispatcher specifically ran,
+# day — see the RE-MEASURE below before trusting a fresh mtime), `idl.jsonl` is a SHARED journal so
+# its mtime does not prove the dispatcher specifically ran,
 # and one postland-verify corpus cycle takes ~50 min against a 300s interval so evidence-age
 # bounded by interval x factor can never be right for it. Declaring `-` is R8 applied honestly —
 # no sensor ⇒ NO VERDICT, not a red. They keep full S1/S2/S3/S4 coverage from launchd's own
@@ -50,6 +51,22 @@
 # provable for them is a persisted `runs` cursor per label (launchd increments `runs` on every
 # invocation regardless of output); that is named in the plan as the next step, NOT done here —
 # and a silent false STALLED would have been worse than an honest gap.
+#
+# RE-MEASURE (2026-08-08, backlog 4e0038a19faf): deploy-live's `-` is still RIGHT, but the sentence
+# above no longer describes WHY, and the gap between them is a trap. `a7cba56d` (2026-08-07, nine
+# days after this row was measured) wired scripts/deploy-migrations.sh into deploy-live.sh, so a
+# `deploy-migrations: migrate: …` line now lands in postland/deploy.log — deploy-live's OWN stdout,
+# not a shared journal, so unlike `idl.jsonl` its mtime DOES attribute to this label. That makes the
+# log look like the durable per-run product this row says does not exist: measured today it was 450s
+# old against a 600s interval, across runs=160. It is not one. That line is CONDITIONAL —
+# deploy-migrations.sh:400 emits only when `applied + staged > 0` — and it prints today solely
+# because 2 operator-owned migrations sit staged. Clear that queue and the log goes silent again on
+# every refusing tick, exactly as the paragraph above describes.
+# So the failure mode is INVERTED from the usual stale-comment case: a future session that re-reads
+# the live log to check this claim will find it fresh, conclude the comment is stale, and flip `-` →
+# `auto` — minting a sensor calibrated on a transient queue depth that goes blind the moment the
+# operator does the thing the board is asking them to do. Do not flip this row on a log-mtime
+# observation. The `runs` cursor named above is still the only sensor that would earn `auto`.
 #
 # A lint (§4.4) enforces manifest <-> launchd/*.plist <-> ~/Library/LaunchAgents three-way
 # coverage, so a new plist cannot land undeclared. `bin/cc-fleet --plist-parity` is that read.
