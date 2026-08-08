@@ -62,9 +62,23 @@
 #   O4 landed on trunk BY CONTENT  `git ls-tree <trunk> -- <path>`        completion. Never by count:
 #                             a count reads 0 after a sibling rebase and proves nothing.
 #   O5 PR state               `gh pr list --head <branch>`                a durable review handle.
-# The web UI (claude.ai/code) is REAL but has no CLI or API on either binary this box has (2.1.114
-# pinned, 2.1.220 present — neither exposes a `--cloud` verb). It is therefore an OPERATOR escalation
-# path, never an automation input, which is exactly why every row's recover_cmd is an `open <url>`.
+# The web UI (claude.ai/code) is REAL. The claim that used to stand here — "no CLI or API on either
+# binary this box has (2.1.114 pinned, 2.1.220 present — neither exposes a `--cloud` verb)" — is
+# RETRACTED as of 2026-08-07: `--cloud` is genuinely absent on the pinned 2.1.114 but present and
+# HIDDEN on 2.1.215/219/220, so `claude --help` (how it was measured) is structurally incapable of
+# seeing it. See docs/plans/CLOUD_OBSERVABILITY.md §6.1-6.7 + §7.1 for the parser probes and controls.
+#
+# What survives that retraction, and why recover_cmd is still `open <url>`: a cloud session cannot be
+# FIRED programmatically from this box today. Both programmatic routes need one web-only operator
+# action (CLI create → connect GitHub at claude.ai/code; routines `/fire` → mint a per-routine bearer
+# token), and interactive attach is refused `not enabled for your account` on ALL FOUR accounts — an
+# Anthropic-side rollout. So the web UI remains the OPERATOR escalation path in practice.
+#
+# One capability IS now available and is NOT an `open <url>`: the headless send arm
+# `claude -p "<msg>" --cloud <id> --output-format json` (no TTY; the bundle calls it
+# `cloud_attach_headless`). It needs a live session id, so it is reachable only once a fire happens.
+# Design for wiring it into cc-notify: CLOUD_OBSERVABILITY.md §9.2 — and note §8.1: `declare` before
+# fire is UNSATISFIABLE on both real routes, because the id is a RETURN VALUE of the fire.
 #
 # ── the discriminator this whole file is built around (measured, not assumed) ─────────────────────
 #   git ls-remote, remote REACHABLE + ref absent   → rc=0,   empty stdout

@@ -515,6 +515,32 @@ design ❌ (needs the local browser + dev server) · anything about this box ❌
 Cheap local wins meanwhile: **consolidate to one terminal emulator** (kitty *and* iTerm2 are both
 running — 27% of a core), and stop dev servers when idle (1.9 GB each, five up).
 
+🔑 **What going off-box actually buys, and what it does not (settled by primary source 2026-08-07).**
+The arithmetic above prices RAM, so it implies the cap *moves* off-box. It does — but only one of the
+two caps:
+
+- **Claude Code on the web is subscription-billed**, and its own limits section is explicit:
+  *"Claude Code on the web shares rate limits with all other Claude and Claude Code usage within your
+  account. Running multiple tasks in parallel consumes more rate limits proportionately. There is no
+  separate compute charge for the cloud VM."*
+- So off-box **relieves CPU and RAM, not tokens.** The binding constraint moves from 64 GB / core
+  count to **per-account rate limits across the 4 accounts** — which is a real win (the 51.1 GB wall
+  is absolute; rate limits are four-way shardable and refill), but it is not free concurrency, and a
+  ~100-session target has to be priced against four accounts' limits rather than against a VM count.
+  Live headroom is `claude-accounts` / `/accounts`, never an assumption — measured 2026-08-07 the four
+  accounts sat at 75% · 76% · 25% · 99% weekly, i.e. **one of the four was already effectively
+  unusable**. Rate-limit headroom is the scheduling input, and it is volatile.
+- Docs state **no numeric per-account concurrent cloud-session cap** — UNVERIFIED, and worth measuring
+  rather than assuming; it is the number that decides the fan-out width.
+
+❌ **Claude Managed Agents is OUT for this fleet — settled, do not re-investigate.** It was the
+obvious candidate for "route work off-box" and it does not fit on any subscription: prerequisite #1 is
+*"A Claude API key"* (`platform.claude.com/docs/en/managed-agents/overview.md` § Beta access), and it
+bills standard model token rates **plus $0.08 per session-hour**
+(`…/about-claude/pricing.md` § Claude Managed Agents pricing). There is no subscription-backed path.
+Claude Code on the web is the surface to build on, and it is the one this section's route already
+assumes.
+
 #### S5a · The comms prerequisite — LANDED (backlog `5341a9e5fc4d`, 2026-08-07)
 
 "Route repo-only work off-box" was blocked on something the census did not price: **the entire 2-way
@@ -590,15 +616,52 @@ per-refspec, `refs/cc/*` cannot be written from a cloud VM at all and O1 must be
 commit — the shape that design rejected — or leave git. One `--cloud` session and one attempted ref
 push decides it. This bus does not depend on the answer; that design does.
 
-**What this does NOT establish.** Cloud entitlement is per-account and remains unverified — the same
+**What this does NOT establish.** ~~Cloud entitlement is per-account and remains unverified~~ — the same
 limit §7 of the sibling doc records. Measured on this box: `hasRemoteEnvironment: true` appears in
 `~/.claude-quaternary/.claude.json` (**account 4 only**; absent for accounts 1–3), and
-`remote.defaultEnvironmentId` is absent everywhere, so `/remote-env` has never been run. Whether that
-key means *entitlement* or merely *an environment record exists* is unverified, as is the org's
+`remote.defaultEnvironmentId` is absent everywhere, so `/remote-env` has never been run. ~~Whether that
+key means *entitlement* or merely *an environment record exists* is unverified~~, as is the org's
 `allow_remote_sessions` policy (the binary carries `allow_remote_sessions policy denied` as a live
-error path). `--cloud` is a real hidden flag on v2.1.220 and refuses without a TTY. This is the
+error path). ~~`--cloud` is a real hidden flag on v2.1.220 and refuses without a TTY.~~ This is the
 prerequisite that must exist *before* cloud execution is used; it is not evidence that cloud
 execution is available. Latency is push/pull, not poll: nothing arrives until someone syncs.
+
+**↑ Three of those claims were RESOLVED 2026-08-07 (later same day). Full measurements + controls:
+`CLOUD_OBSERVABILITY.md` §6.1–6.7 and §7.1. In brief:**
+
+1. **`hasRemoteEnvironment: true` is a RECORD, not entitlement.** Account 4 — the only one carrying
+   the key — is gated *identically* to accounts 1–3: interactive attach refuses
+   `Attaching to an existing cloud session is not enabled for your account` on **all four**. The gate
+   is checked *before* session-id validation, so a fake id probes it without creating anything.
+2. **"refuses without a TTY" was half right, and the half that is wrong is the load-bearing one.**
+   `--cloud` is polymorphic: an *id-shaped* argument addresses an existing session, anything else is
+   read as a new session's task **description**. The create path is interactive-only; the send path
+   is **not**. `claude -p "<msg>" --cloud <id> --output-format json` runs headless with no pty — the
+   bundle's own telemetry calls it `cloud_attach_headless`. The refusal that reads as a TTY
+   requirement is what you get when a mis-shaped id silently falls through to the create path. **So
+   `cc-notify` has an off-box send transport** (design: `CLOUD_OBSERVABILITY.md` §9.2). Whether a
+   message actually *reaches* a live session is UNPROVEN — it needs an id we cannot yet mint.
+3. **The `--cloud` verb genuinely is absent on the pinned 2.1.114** and present-hidden on
+   2.1.215/219/220 — so this section and §6 of the sibling doc were never in conflict, only
+   version-split. `--remote` is its alias. Do not re-litigate this without re-measuring the parser
+   (`--help` cannot see a hidden flag, which is how the sibling doc's controlled measurement still
+   got it wrong).
+
+⚠️ **One S5a fact is now contradicted by a live measurement and needs adjudicating.** Fact 3 above
+states, citing `sdk-tools.d.ts` L3764, that "the VM clones from the *pushed* remote, not local disk".
+The CLI create path fails with `Bundle upload failed: … Please setup GitHub on https://claude.ai/code`
+— i.e. it **uploads a bundle of the local tree**. Both can hold for *different* surfaces (a
+cloud-environment session cloning the remote vs the CLI's `--cloud` shipping a bundle), but they
+cannot both describe the CLI route, and the difference decides whether an unpushed branch is invisible
+off-box. Left as an open contradiction, not a decided fact; the first successful fire settles it
+(`CLOUD_OBSERVABILITY.md` §6.5, §9.4 item 4).
+
+**Why the `refs/cc/*` experiment below is still unrun, now with a named cause.** It needs one live
+cloud session, and no programmatic fire path is open today: CLI create is blocked on connecting GitHub
+at `claude.ai/code`, and the routines `/fire` endpoint — **proven to exist**, unauthenticated `401` vs
+a `404` control on a sibling path, and subscription-billed with no `--cloud` verb or TTY in the way —
+is blocked on minting a per-routine bearer token. Both are **web-only operator actions**, one action
+each. Interactive attach is blocked by an **Anthropic-side rollout** and is not clearable here.
 #### S5.1 · Cloud observability — DONE (backlog `191d4d056c98`, 2026-08-07)
 
 **→ `docs/plans/CLOUD_OBSERVABILITY.md`** (design + measurements, with the command for each so they

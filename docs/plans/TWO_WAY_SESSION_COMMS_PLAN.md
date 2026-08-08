@@ -645,3 +645,45 @@ wired into `run_gate` for exactly that reason.
   Every one of these call sites is fire-and-forget (`|| true`). The divert returns a real rc and
   shouts, but never aborts the caller — and each producer keeps its original inline write as a
   fallback, so the backstop can never become *weaker* than it was before it had a chokepoint.
+
+---
+
+## v6 — the OFF-BOX arm: this stack acquires a network transport, on the send side only (2026-08-07)
+
+**Design + measurements live in `docs/plans/CLOUD_OBSERVABILITY.md` §9** (with §6.1–6.7 for the
+evidence and §7.1 for the per-row controls). Recorded here because it changes a premise this whole
+plan was built on, and a reader of v1–v5 would otherwise not know to look.
+
+**The premise that changed.** `CONCURRENCY_PROGRAM.md` §S5a established that this stack is
+local-filesystem-only and that *"a sandbox can reach none of it"* — `cc-notify` appends to
+`~/.claude/mailbox/<pane-uuid>.md`, liveness is `kill -0` on a local pid, and none of it has a network
+transport of any kind. Measured 2026-08-07: **the send side now has one.**
+
+```text
+claude -p "<message>" --cloud <session-id> --output-format json   →  {"ok":true,"session_id":…,"url":…}
+```
+
+Headless, no pty, present on 2.1.215/219/220 (absent on the pinned 2.1.114). Not an accident of
+argument parsing — the bundle's own success telemetry is `tengu_remote_send_headless_success` with
+`entry_point: "cloud_attach_headless"`.
+
+**What this does and does not change for this plan:**
+
+- **`cc-notify` gains a fourth address KIND, not a fourth resolver layer.** The three layers (role
+  file → forward chain → pane uuid) all terminate in a local inbox file; an off-box target has neither
+  a pane uuid nor an inbox, so `--cloud <id>` dispatches *before* the liveness classification and
+  refuses on an undeclared id (`cc-cloud is-offbox`). Design: §9.2.
+- 🚨 **`--receipt` must return UNKNOWN off-box, never 0.** This plan's own DELIVERED-IS-NOT-READ
+  invariant is enforced by the `<uuid>.seen` line-count cursor, and there is no cursor off-box.
+  `{ok:true}` means **queued**. Treating a queue ack as a read receipt would re-create exactly the
+  false-confidence v1–v5 spent five revisions removing.
+- **The receive side is unchanged and stays asymmetric.** cloud→here has no push path — this box has
+  no reachable endpoint, and a cloud VM may push only its own working branch. It remains `cc-bus`
+  shards over git plus `cc-cloud`'s O1–O5 observables: pull, and nothing arrives until someone syncs.
+  Do not try to symmetrise it; the asymmetry is network topology, not a design gap.
+- **UNPROVEN, and blocked on one operator action.** That a message *reaches* a live session is not
+  demonstrated — it needs a real `session_…` id, and no programmatic fire path is open today (CLI
+  create is blocked on connecting GitHub at `claude.ai/code`; the routines `/fire` endpoint is proven
+  to exist but needs a web-minted bearer token). Interactive attach is refused
+  `not enabled for your account` on **all four** accounts — an Anthropic-side rollout. So v6 is a
+  *design*, validated only as far as "the transport exists, parses, and needs no TTY".
