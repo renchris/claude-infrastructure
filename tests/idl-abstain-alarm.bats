@@ -22,11 +22,19 @@ emit() { # <n> <hook> <disposition> <reason>
 }
 alarm() { env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 "$S" "${1:---run}"; }
 
-@test "selftest is green and runs all 25 checks (a zero-check suite must not 'pass')" {
+# FLOOR + TALLY, never `-eq N` (2026-08-08). This asserted `-eq 25` and went RED the moment the
+# selftest GREW by 4 checks (cases M/N, the non-evaluation-denominator fix) — an exact-count
+# assertion over a growing subject can only ever catch its own growth, never a regression: the
+# vacuous-suite risk it exists for is "checks went to ZERO", which a FLOOR states directly. The
+# tally half keeps it honest — every `ok` is accounted for and no `FAIL` is present, so a suite
+# that silently stopped running checks still reds. memory: exact-count-assertion-tripwires-its-own-subject
+@test "selftest is green and runs its full check set (a zero-check suite must not 'pass')" {
   run "$S" --selftest
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 25 ]
-  ! printf '%s' "$output" | grep -q '^  FAIL'
+  local n_ok; n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
+  [ "$n_ok" -ge 25 ]
+  ! printf '%s' "$output" | grep -q '^  FAIL' || false
+  printf '%s' "$output" | grep -q "selftest: ${n_ok} passed, 0 failed"
 }
 
 @test "100%-BLIND hook over N>=10 → RED (exit 1) naming the inert hook" {
