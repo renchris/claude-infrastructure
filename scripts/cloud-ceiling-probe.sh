@@ -157,7 +157,16 @@ classify_outcome() { # stdin = combined create output; echoes created|refused-qu
   printf 'refused-other'
 }
 
-fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>"
+# ── WHY THIS PRINTS A TRAILING NEWLINE, AND WHY EVERY CALLER GUARDS ITS `read` ───────────────────
+# `IFS=$'\t' read -r a b < <(fire_one …)` returns 1 when the producer's last line has NO trailing
+# newline — the values ARE assigned, but the rc is 1, and under `set -e` that KILLS THE SCRIPT. It
+# killed this one: the first `--control` run fired its create, died at the read, and recorded
+# nothing. That is the worst possible failure for a probe — it SPENT the attempt and produced no
+# evidence, while exiting 0 through `timeout` so it looked like a clean run that simply said little.
+# Fixed on both sides deliberately: the newline here so the rc is 0, and `|| true` at each call site
+# so a future producer that loses the newline degrades to a recorded reading instead of a silent
+# death.
+fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>\n"
   local acct="$1" label="$2" cfg out outcome
   cfg="$(config_dir_for "$acct")"
   [ -n "$cfg" ] || { printf 'refused-other\tno config_dir for account %s in %s' "$acct" "$ACCOUNTS_JSON"; return 0; }
@@ -166,7 +175,7 @@ fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>
   # refusal arrives), and letting errexit kill the ramp would turn the wall into a crash.
   out="$(CLAUDE_CONFIG_DIR="$cfg" "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
   outcome="$(printf '%s' "$out" | classify_outcome)"
-  printf '%s\t%s' "$outcome" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  printf '%s\t%s\n' "$outcome" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
 }
 
 case "$MODE" in
@@ -185,7 +194,7 @@ case "$MODE" in
     echo "control: firing ONE create on '$limited' (weekly $(weekly_pct_for "$limited")%) — expecting refused-quota"
     [ "$CONFIRM" = 1 ] || { echo "  (add --confirm; this spends one create attempt)"; exit 2; }
     assert_capable
-    IFS=$'\t' read -r oc msg < <(fire_one "$limited" "ceiling-probe control $(now)")
+    IFS=$'\t' read -r oc msg < <(fire_one "$limited" "ceiling-probe control $(now)") || true
     record "{\"ts\":\"$(now)\",\"kind\":\"control\",\"account\":\"$limited\",\"outcome\":\"$oc\",\"msg\":$(printf '%s' "$msg" | jq -Rs .)}"
     printf 'control outcome: %s\n  %s\n' "$oc" "$msg"
     case "$oc" in
@@ -207,7 +216,7 @@ echo "ramp: account=$ACCOUNT max=$MAXN weekly_before=$(weekly_pct_for "$ACCOUNT"
 record "{\"ts\":\"$(now)\",\"kind\":\"ramp-start\",\"account\":\"$ACCOUNT\",\"max\":$MAXN,\"weekly_before\":\"$(weekly_pct_for "$ACCOUNT")\"}"
 created=0; verdict=""; ids=""
 for i in $(seq 1 "$MAXN"); do
-  IFS=$'\t' read -r oc msg < <(fire_one "$ACCOUNT" "ceiling-probe $i/$MAXN $(now)")
+  IFS=$'\t' read -r oc msg < <(fire_one "$ACCOUNT" "ceiling-probe $i/$MAXN $(now)") || true
   wk="$(weekly_pct_for "$ACCOUNT")"
   record "{\"ts\":\"$(now)\",\"kind\":\"attempt\",\"n\":$i,\"account\":\"$ACCOUNT\",\"outcome\":\"$oc\",\"weekly_after\":\"$wk\",\"msg\":$(printf '%s' "$msg" | jq -Rs .)}"
   printf '  %2d/%s  %-14s weekly=%s%%  %s\n' "$i" "$MAXN" "$oc" "$wk" "$(printf '%s' "$msg" | cut -c1-110)"
