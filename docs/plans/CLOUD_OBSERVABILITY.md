@@ -942,6 +942,33 @@ because the failure is generic and this repo has hit it before: **a plan's ident
 checked against the tree by anything**, so a cited mechanism can be prose-only for as long as nobody
 tries to run it (`[[spec-named-mechanism-may-be-prose-only]]`).
 
+### 10.2d · Wave C — the send arm, and the two things it got righter than its brief
+
+`cc-notify --cloud <id>` implements §9.2's three steps, dispatched **before** role resolution and the
+liveness classification, because an off-box target is a different *kind* of address rather than a
+different value of the same one — it has no pane uuid to resolve and no inbox to enqueue into.
+
+Two decisions worth keeping:
+
+- **`--receipt` is answered UNKNOWN (rc 7) BEFORE the is-offbox check**, not after. The answer does
+  not depend on the declaration, on `cc-cloud` being installed, or on anything else that could fail:
+  there is no off-box read cursor, so no configuration of this box could make the answer 0. Ordering
+  it first is what makes "never 0" an *invariant* rather than a property of the happy path. And rc 7
+  is deliberately distinct from the local rc 1 — "not read" is a fact somebody measured; this is not
+  measurable at all.
+- **Flag support is decided from the REAL call's own refusal**, and only when the refusal *names the
+  option*. The lead had filed a `strings`-based pre-check as a required fix; that was wrong. A
+  pre-check is a second implementation of a question the call already answers, and it cannot tell a
+  semantic refusal ("no such session") from a version one — laundering the first into "your binary
+  is too old" sends the caller off upgrading something that was fine. Actuator-as-arbiter wins.
+
+**What the lead did add**, after the account-scoping finding landed mid-build (§10.2): the send now
+routes `CLAUDE_CONFIG_DIR` to the declared owning account, with **three** states — routed · refused
+when the account's config dir does not exist · warned-and-sent when the declaration predates the
+`account` field. That third state matters: refusing it would strand every earlier declaration, while
+silently assuming the current account is exactly the guess that manufactures the misleading
+"Session not found".
+
 ### 10.2c · A false ALIVE, from declaring against trunk
 
 Using `cc-cloud` for real surfaced a hole in its own state function that §4.3's design did not close.

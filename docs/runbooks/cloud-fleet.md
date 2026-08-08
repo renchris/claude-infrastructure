@@ -150,12 +150,30 @@ cc-cloud is-offbox <session-id>; echo $?
 
 ## 3 · Message a session
 
-<!-- WAVE-C: exact command + exit codes filled in when the cc-notify --cloud arm lands -->
+```
+cc-notify --cloud <session-id> "<message>"
+```
+
+It refuses an **undeclared** id (exit 3) — an unobservable target cannot carry a checkable delivery
+claim — and it **routes the send to the session's owning account**, because a session id is scoped
+to whoever created it. Watch for the routing line; if you instead see *"carries NO owning account"*,
+the declaration predates the account field and the send is going from whatever account is ambient.
+Fix it with `cc-cloud declare … --account <acct>`.
+
+| rc | Means |
+| --- | --- |
+| 0 | Queued. **Not read** — see the warning below. |
+| 2 | Usage (e.g. `--cloud` combined with a pane/role target — those are different address *kinds*). |
+| 3 | The id is not a declared, unretired cloud session. Declare it. |
+| 4 | Transport outage on **this box** (no usable claude binary, or one with no `--cloud`). The session is UNVERIFIED, not invalid; nothing was sent. |
+| 5 | The declared account has no usable config dir. Refused rather than send from the wrong account. |
+| **7** | **`--receipt` on a cloud target: UNKNOWN, and unknowably so.** Never 0, and distinct from the local rc 1 ("not read", which is a fact somebody measured). |
 
 🚨 **`{ok:true}` means QUEUED, not read.** There is no `acked` cursor off-box — the local read
 receipt is a line count over the target's inbox file, and an off-box target has no inbox file. A
 read receipt against a cloud target therefore returns **UNKNOWN**, never 0. If you are about to
-report "I told session X", off-box you cannot; you can only report that it was queued.
+report "I told session X", off-box you cannot; you can only report that it was queued. The nearest
+real progress signal is `cc-cloud show <id>` — a remote ref that ADVANCES (O1/O2), not an ack.
 
 ---
 
