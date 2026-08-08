@@ -28,12 +28,21 @@ setup() {
 }
 
 # Run classify() from an arbitrary copy of the script with explicit thresholds.
+# EVERY threshold classify() reads must be declared below, at the SHIPPED default. That list is a
+# second copy of the subject's own defaults block, and it fails in a shape that does not name itself:
+# an undeclared threshold makes `[ "$pl" -ge "" ]` emit "integer expression expected" on stderr, bats
+# folds stderr into $output, and the probe then fails on a STRING COMPARISON while the verdict it
+# computed was correct all along. The two PRESSURE_ entries arrived late, with the commit that gave
+# rung 3 the floor seam every other rung already had, and four probes here went red for a rung none
+# of them tests. NOTE the body is a SINGLE-QUOTED bash -c string: no apostrophes may appear inside it
+# (one closes the quote and the whole suite reports zero tests rather than a syntax error).
 run_classify() { # <script> <args...>
   local script="$1"; shift
   bash -c '
     WARN_GB=8; ALARM_GB=3; PROC_WARN_GB=3; SEG_WARN_PCT=45; SEG_ALARM_PCT=70
     SWAP_DELTA_MB=256; SWAP_WINDOW_S=600; COAL_WARN=500; COAL_ALARM=700
     LOAD_WARN_PER_CORE=1.5; LOAD_ALARM_PER_CORE=2.5
+    PRESSURE_WARN=2; PRESSURE_ALARM=4
     '"$(sed -n '/^classify() {/,/^}/p' "$script")"'
     classify "$@"
   ' _ "$@"

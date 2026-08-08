@@ -18,13 +18,47 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
   export CC_CAP_LOG="$BATS_TEST_TMPDIR/cap.jsonl"
-  # RUNG 7 IS PINNED NEUTRAL FOR EVERY TEST THAT DOES NOT OWN IT — a hermeticity fix, not a way to
-  # hide the rung. Load is the only input in this file that is a property of the RUNNING BOX rather
-  # than of a fixture, and a dozen tests below assert an exact verdict or rc. Unpinned, they would
-  # flip WARN/ALARM exactly when the box is busiest — i.e. during a full-corpus run, which is the one
-  # moment this suite has to be trustworthy, and is precisely the window §8.5.7 measured at
-  # 2.92-5.98 load/core for 13 consecutive samples. The rung-7 tests set their own floors explicitly.
-  export CC_CAP_LOAD_WARN_PER_CORE=9999 CC_CAP_LOAD_ALARM_PER_CORE=9999
+  # EVERY AMBIENT RUNG IS PINNED NEUTRAL FOR EVERY TEST THAT DOES NOT OWN IT — a hermeticity fix, not
+  # a way to hide a rung. This pin used to cover rung 7 alone, on the stated grounds that "load is the
+  # only input in this file that is a property of the RUNNING BOX rather than of a fixture". THAT
+  # CLAIM WAS FALSE, and it is the whole bug: SIX of the seven rungs read the live box, so a dozen
+  # tests below asserted an exact verdict or rc against whatever else the machine happened to be
+  # doing. The verdict is a MAX (see classify), so an ambient rung can only ever RAISE it — which
+  # makes every OK-asserting and WARN-asserting test in this file a hostage to box weather.
+  #
+  # It came due on (ii): five postland RED rows, 2026-07-31..08-08, all adjudicated 1-of-3 by the
+  # retry ladder and re-filed as a fresh backlog item each time. Measured here 2026-08-08 on an IDLE
+  # box, each ambient rung and its distance from its own WARN floor:
+  #   headroom 27.91 GB (warn <8) · pressure 1 (warn >=2 — ONE step) · max-proc 2.41 GB (warn >3) ·
+  #   segments 7.8% (warn >=45) · coalition 215 procs (warn >=500) · swap delta 0 MB (alarm >=256)
+  # Injecting pressure=2 and NOTHING else turns (ii)'s own command into WARN rc 1. During a
+  # full-corpus postland run — 268 suites, ~2.4 h, dozens of live sessions — several of those are
+  # ordinary readings, which is why this suite goes red exactly when it has to be trustworthy.
+  #
+  # WHAT THIS PINS IS THE CLASSIFICATION FLOOR, NEVER THE INSTRUMENT. Every reader still runs for
+  # real, so a broken one still reports SKIPPED (rungs 1,3-7) or NO-DATA (headroom, rung 2) and the
+  # tests that assert on those still fail. Rung 2's floors go to 0 rather than 9999 for exactly that
+  # reason: headroom must still be READ, or (ii)'s "never null" assertion would be vacuous.
+  # Each rung-owning test sets its own floors explicitly and overrides this — which is also why the
+  # two selftests clear the pins: their probes hard-code expectations true only at shipped defaults.
+  export CC_CAP_LOAD_WARN_PER_CORE=9999 CC_CAP_LOAD_ALARM_PER_CORE=9999   # rung 7 scheduler
+  export CC_CAP_WARN_GB=0 CC_CAP_ALARM_GB=0                              # rung 2 headroom (still read)
+  export CC_CAP_PRESSURE_WARN=9999 CC_CAP_PRESSURE_ALARM=9999            # rung 3 kernel pressure
+  export CC_CAP_PROC_WARN_GB=999999                                      # rung 4 per-proc outlier
+  export CC_CAP_SEG_WARN_PCT=999999 CC_CAP_SEG_ALARM_PCT=999999          # rung 5 compressor segments
+  export CC_CAP_COAL_WARN=999999 CC_CAP_COAL_ALARM=999999                # rung 6 coalition population
+  export CC_CAP_SWAP_DELTA_MB=999999                                     # rung 1 swap growth
+
+  # The same pins as an `env -u` argument list, for the two selftests, which must run at the SHIPPED
+  # defaults (see (i)). An ARRAY rather than a string: `env $(f)` needs word-splitting to work, which
+  # is both a shellcheck finding and the exact hazard this suite bans elsewhere. Derived by hand from
+  # the exports above — keep the two in step; a pin missing here silently re-tautologises a selftest.
+  UNPIN=( -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE
+          -u CC_CAP_WARN_GB            -u CC_CAP_ALARM_GB
+          -u CC_CAP_PRESSURE_WARN      -u CC_CAP_PRESSURE_ALARM
+          -u CC_CAP_PROC_WARN_GB       -u CC_CAP_SEG_WARN_PCT
+          -u CC_CAP_SEG_ALARM_PCT      -u CC_CAP_COAL_WARN
+          -u CC_CAP_COAL_ALARM         -u CC_CAP_SWAP_DELTA_MB )
 }
 
 # sysctl stub for rung 7. It is reached through CC_CAP_SYSCTL, not through PATH, because rung 7
@@ -52,7 +86,7 @@ SC
   # expectations from the live thresholds instead would make the control tautological, which is the
   # exact defect the census note below documents. So the control runs at the defaults, and the
   # ambient neutral-load pin — correct for every OTHER test in this file — is removed for this one.
-  run env -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE /bin/bash "$ALARM" --selftest
+  run env "${UNPIN[@]}" /bin/bash "$ALARM" --selftest
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ "selftest GREEN" ]] || false
   # each rung must be named, so a silently-unreachable rung cannot hide behind an aggregate pass
@@ -254,7 +288,9 @@ SC
   # start reading the live box's pressure level instead of the 2 it thinks it injected: green on a
   # healthy machine, and a lie either way. The stub's own `*) exec /usr/sbin/sysctl` fall-through
   # keeps every other rung (including rung 7) reading the real values.
-  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" /bin/bash "$ALARM" --json --no-append
+  # This test OWNS rung 3, so it states rung 3's floors rather than inheriting setup()'s neutral pin.
+  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" \
+          CC_CAP_PRESSURE_WARN=2 CC_CAP_PRESSURE_ALARM=4 /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 1 ] || false
   [[ "$output" =~ \"verdict\":\"WARN\" ]] || false
   [[ "$output" =~ \"pressure_level\":2 ]] || false
@@ -272,7 +308,9 @@ esac
 SC
   chmod +x "$STUBS/sysctl"
   mk_top_stub 900
-  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" /bin/bash "$ALARM" --json --no-append
+  # Owns rung 3 — states its own floors, per (xix).
+  run env PATH="$STUBS:$PATH" CC_CAP_SYSCTL="$STUBS/sysctl" \
+          CC_CAP_PRESSURE_WARN=2 CC_CAP_PRESSURE_ALARM=4 /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 2 ] || false
   [[ "$output" =~ \"verdict\":\"ALARM\" ]] || false
 }
@@ -318,7 +356,9 @@ SC
   mk_stubs
   mk_top_stub 5000
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages-outlier"
-  run env PATH="$STUBS:$PATH" CC_CAP_LOG="$BATS_TEST_TMPDIR/out.jsonl" /bin/bash "$ALARM" --quiet
+  # Owns rung 4 — states the 3 GB floor rather than inheriting setup()'s neutral pin.
+  run env PATH="$STUBS:$PATH" CC_CAP_LOG="$BATS_TEST_TMPDIR/out.jsonl" \
+          CC_CAP_PROC_WARN_GB=3 /bin/bash "$ALARM" --quiet
   [ "$status" -eq 1 ] || false
   page="$CC_PAGES_DIR/capacity-alarm.page"
   [ -f "$page" ] || false
@@ -333,7 +373,8 @@ SC
   # the level that means the box is swapping. A regression that made it ALARM would break this.
   mk_stubs
   mk_top_stub 60000
-  run env PATH="$STUBS:$PATH" /bin/bash "$ALARM" --json --no-append
+  # Owns rung 4 — states the 3 GB floor, per (xxiii).
+  run env PATH="$STUBS:$PATH" CC_CAP_PROC_WARN_GB=3 /bin/bash "$ALARM" --json --no-append
   [ "$status" -eq 1 ] || false
   [[ "$output" =~ \"verdict\":\"WARN\" ]] || false
   ! [[ "$output" =~ \"verdict\":\"ALARM\" ]] || false
@@ -354,7 +395,7 @@ SC
   # (i) guards the four verdicts; this guards that the rungs ADDED here are equally positive-
   # controlled, so a future edit cannot make one unreachable behind an aggregate GREEN.
   # Pins cleared for the reason (i) states: the probes are only true at the shipped defaults.
-  run env -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE /bin/bash "$ALARM" --selftest
+  run env "${UNPIN[@]}" /bin/bash "$ALARM" --selftest
   [ "$status" -eq 0 ] || false
   [[ "$output" =~ pressure=\'2\' ]] || false
   [[ "$output" =~ pressure=\'4\' ]] || false
