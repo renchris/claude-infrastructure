@@ -157,6 +157,26 @@ classify_outcome() { # stdin = combined create output; echoes created|refused-qu
   printf 'refused-other'
 }
 
+# Strip the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching, so it emits
+# colour, cursor moves, bracketed-paste toggles and terminal queries — measured, the raw capture
+# rendered `Error:` as `\e[38;2;255;107;128mError:\e[8GBundle\e[15Gupload…`, with cursor-column
+# jumps standing in for the SPACES. That defeats any classifier pattern containing a space, and a
+# pattern that silently stops matching is worse than no pattern at all.
+#
+# perl, not sed: BSD sed has no \x escapes and the bracket-class spelling this needs is rejected as
+# "unbalanced brackets" — which it reported to stderr while still emitting an EMPTY body, so the
+# classifier read '' and the control blamed itself. Loud enough to catch, silent enough to matter.
+strip_pty() {
+  perl -pe '
+      s/\e\][^\a\e]*(?:\a|\e\\)//g;          # OSC
+      s/\e[P^_].*?\e\\//g;                     # DCS/PM/APC
+      s/\e\[[0-9;]*[GC]/ /g;                    # CHA/CUF are HORIZONTAL MOVEMENT — a SPACE, not a deletion
+      s/\e\[[0-9;?<>]*[a-zA-Z]//g;               # every other CSI
+      s/\e[()][A-Za-z0-9]//g;                    # charset selection
+      s/[\x00-\x08\x0b-\x0d\x0e-\x1f\x7f]//g;  # control chars incl. CR
+    ' | tr -s ' '
+}
+
 # ── WHY THIS PRINTS A TRAILING NEWLINE, AND WHY EVERY CALLER GUARDS ITS `read` ───────────────────
 # `IFS=$'\t' read -r a b < <(fire_one …)` returns 1 when the producer's last line has NO trailing
 # newline — the values ARE assigned, but the rc is 1, and under `set -e` that KILLS THE SCRIPT. It
@@ -171,9 +191,41 @@ fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>
   cfg="$(config_dir_for "$acct")"
   [ -n "$cfg" ] || { printf 'refused-other\tno config_dir for account %s in %s' "$acct" "$ACCOUNTS_JSON"; return 0; }
   [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ] || { printf 'refused-other\tno claude binary (CLOUD_CEILING_CLAUDE_BIN)'; return 0; }
+  # ── THE CREATE MUST RUN UNDER A PTY, AND THIS IS NOT A DETAIL ────────────────────────────────
+  # Measured 2026-08-08, by this script's own --control:
+  #     Error: --cloud requires an interactive terminal. Non-interactive invocations (piped
+  #     stdout, --init-only, --sdk-url) run locally and would silently ignore --cloud.
+  # A probe captures stdout BY CONSTRUCTION — that is what makes it a probe — so the naive
+  # `out="$(… --cloud …)"` is refused on its own capture, every time, on every account. It never
+  # reaches the quota question it exists to ask.
+  #
+  # Note what the refusal says would otherwise happen: the run "would silently ignore --cloud" and
+  # execute LOCALLY. So the TTY check is a guard against a far worse failure than the one it
+  # causes — a fleet that believes it is off-box while every session runs on this machine, which is
+  # the exact opposite of the thing being built. Do not look for a flag to suppress it.
+  #
+  # `script -q /dev/null <cmd>` allocates a pty and still lets us capture, which is the whole trick.
+  # It is BSD `script` (macOS): the command is passed directly, not via -c. Its output carries \r
+  # line endings from the pty, stripped below — an unstripped \r rides into the ledger and into
+  # every grep the classifier does.
+  #
+  # The SEND arm needs none of this: §6.3 measured `claude -p … --cloud <id>` delivering with no pty
+  # and stdin closed. Create and send are gated differently, and conflating them is how one of these
+  # gets a pty it does not need or loses one it does.
+  local ptybin; ptybin="$(command -v script 2>/dev/null || true)"
   # `|| true` on the call, NOT on the classification: a non-zero exit is DATA here (it is how a
   # refusal arrives), and letting errexit kill the ramp would turn the wall into a crash.
-  out="$(CLAUDE_CONFIG_DIR="$cfg" "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
+  if [ -n "$ptybin" ]; then
+    out="$(CLAUDE_CONFIG_DIR="$cfg" "$ptybin" -q /dev/null "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
+    # Strip \r AND the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching,
+    # so it emits colour, cursor moves, bracketed-paste toggles and terminal queries — measured, the
+    # raw capture rendered `Error:` as `[38;2;255;107;128mError:[8GBundle[15Gupload…`, with
+    # cursor-column jumps standing in for the SPACES. That defeats any grep with a space in it, and
+    # a classifier whose patterns silently stop matching is worse than one that has none.
+    out="$(printf '%s' "$out" | strip_pty)"
+  else
+    out="$(CLAUDE_CONFIG_DIR="$cfg" "$CLAUDE_BIN" --cloud "$label" 2>&1 || true)"
+  fi
   outcome="$(printf '%s' "$out" | classify_outcome)"
   printf '%s\t%s\n' "$outcome" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
 }
@@ -200,8 +252,19 @@ case "$MODE" in
     case "$oc" in
       refused-quota) echo "✓ classifier VALIDATED — a real quota refusal is recognised as one."; exit 0 ;;
       created)       echo "✗ control VOID — the account was not actually limited. Nothing was validated."; exit 4 ;;
-      *)             echo "✗ classifier WRONG — a known quota refusal classified as '$oc'."
-                     echo "  Fix classify_outcome's patterns against the string above BEFORE ramping."; exit 5 ;;
+      *)
+        # A refusal that never REACHED the quota check indicts the RIG, not the classifier — and
+        # saying "classifier WRONG" there sends the next reader to fix the wrong file. This arm
+        # exists because the first live control did exactly that: the TTY refusal fires before any
+        # account is consulted, so the run carried no information about quota patterns at all.
+        if printf '%s' "$msg" | grep -qiE 'interactive terminal|requires a tty|not a tty|unknown option|unrecognized|setup GitHub|Bundle upload failed'; then
+          echo "✗ control VOID — the create was refused BEFORE the account was ever consulted:"
+          echo "    a precondition of the rig failed, so this run says nothing about the classifier."
+          echo "  Fix the rig (the message above names it), then re-run. Do NOT touch classify_outcome."
+          exit 7
+        fi
+        echo "✗ classifier WRONG — a known quota refusal classified as '$oc'."
+        echo "  Fix classify_outcome's patterns against the string above BEFORE ramping."; exit 5 ;;
     esac ;;
 esac
 
