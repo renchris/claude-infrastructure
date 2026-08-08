@@ -355,3 +355,20 @@ cpubound_path() { printf '%s' "$(cd -P "$REPO/bin" && pwd)/cc-cpubound"; }
   [ "$status" -eq 0 ] || false
   [ "$(cmd_of "$output")" = "$(cpubound_path) 90 grep -rn x /p" ]
 }
+
+# ── the DEPLOYED shape for (c): this is the property that decides whether it works at all ────────
+# The live hook is ~/.claude/hooks/qos-rewrite.sh, a SYMLINK into the checkout, and a symlinked
+# directory acquires no links for NEW files — so neither ../config nor ../bin exists beside the
+# symlink. Both the table AND the wrapper must be found by resolving $0 physically first. The
+# sibling test above covers the table; without this one, a regression in the wrapper's resolution
+# would leave transform (c) matching commands and bounding nothing, in production only, silently.
+@test "cc-cpubound resolves through a symlinked \$0 into the checkout, not the symlink's parent" {
+  mkdir -p "$D/deployed2/hooks"
+  ln -s "$HOOK" "$D/deployed2/hooks/qos-rewrite.sh"
+  [ ! -d "$D/deployed2/bin" ] || false      # the live shape: no sibling bin/ beside the symlink
+  [ ! -d "$D/deployed2/config" ] || false
+  run bash -c 'jq -n --arg c "$2" "{tool_input:{command:\$c}}" | bash "$1"' \
+    _ "$D/deployed2/hooks/qos-rewrite.sh" "grep -rn needle /p"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 60 grep -rn needle /p" ]
+}
