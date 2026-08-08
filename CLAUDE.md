@@ -112,7 +112,7 @@ hook all embed this same list.)
 
 ### Plan Document Conventions
 
-Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE never overwrite; completed sections compact (learnings + commit hashes + blockers), upcoming sections expand (file:line detail); **MANDATORY Phase 0 (Agent Team Orchestration) as the FIRST section** for any plan with 2+ code-writing tasks; never delete historical decisions / "Why:" rationale / learnings / known issues. Full conventions → the **plan-conventions** skill (the `backup-before-write` hook also auto-injects an abridged form on plan-file edits).
+Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE never overwrite; completed sections compact (learnings + commit hashes + blockers), upcoming sections expand (file:line detail); **MANDATORY Phase 0 (Agent Team Orchestration) as the FIRST section** for any plan with 2+ code-writing tasks — and Phase 0's **first field is the EXECUTION LOCUS PER WAVE**: **S** = dispatched handoff session (the DEFAULT for every implementation wave, no justification needed) · **T** = in-session teammates · **L** = lead-inline (T and L each need one line of why), plus the **lead's own context budget + succession point**; never delete historical decisions / "Why:" rationale / learnings / known issues. Full conventions → the **plan-conventions** skill (the `backup-before-write` hook also auto-injects an abridged form on plan-file edits).
 
 ## Browser Automation
 
@@ -136,6 +136,29 @@ serialized lead that could have fanned out has already lost the time. **A "clean
 2+ pieces of work that are independent (no shared file, no ordering dependency) and each
 self-verifiable** — fan those out immediately, in ONE message so they run concurrently, and keep only
 the synthesis (and anything touching a file you own) on the lead.
+
+🚨 **Parallelism has TWO units, and the bigger one is the DEFAULT for implementation.** Teammates
+(`Agent({name})`) and **dispatched sessions** (`handoff-fire.sh`) are both fan-out, but they differ
+on the axis that decides a long-horizon plan's outcome — **whose context absorbs the work**. A
+teammate's every report, shutdown exchange, and the whole merge loop land in the **LEAD's** window;
+a dispatched session's land in its own, and the lead pays only for the brief it wrote and a one-line
+completion ping. So the mandated delegation unit above was the one that does *not* protect the
+scarcest resource: **a plan could obey the Agent-Teams rule perfectly and still burn the lead's
+judgment on implementation detail it will never need again.** Therefore, for an implementation
+**wave or phase**, the default locus is a **dispatched session** — one `/handoff` session per phase,
+fired and awaited, with the lead holding ≥50% of its window for deciding:
+
+```
+scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt --worktree <branch> \
+    --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right
+cc-await-ping "${ITERM_SESSION_ID##*:}"      # Bash run_in_background — event-driven wake
+```
+
+Teammates remain correct **inside** such a session (that session is then the lead of its own team),
+and on the lead itself only when a wave's members must be synthesised against each other immediately
+AND their combined output is small. Read-only research fan-out is unaffected — subagents return
+findings, not implementations. Rule + rationale + the plan field that records it → the
+**plan-conventions** skill § Execution locus; firing mechanics → `commands/handoff.md` § Waves.
 
 **Why this clause is worded as a precedence rule.** Some session runtimes inject a system-prompt line
 of the form *"do not call the Agent tool / do not use workflows unless the user requested it"*. On

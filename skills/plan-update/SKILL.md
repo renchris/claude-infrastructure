@@ -280,10 +280,27 @@ Upcoming phases are the working blueprint. Include file paths, line ranges, deci
 The Phase 0 RULE (when it is mandatory, and what it must contain) is defined once, in the
 `plan-conventions` skill. What follows is only the SCAFFOLD to paste and fill.
 
-**Source**: `memory/PHASE_0_TEMPLATE.md` (refer to it for complete details)
+**Source**: the `plan-conventions` skill (the rules) + this scaffold (the shape). *(Until 2026-08-07
+this line pointed at `memory/PHASE_0_TEMPLATE.md`, which has never existed on this machine — the
+"executable reference" was a dangling pointer, so the scaffold below is in fact the whole template.)*
 
 ```markdown
 ## Phase 0: Agent Team Orchestration — CRITICAL SETUP
+
+### Execution Locus (FIRST — decides whose context pays)
+
+| Wave | Locus | Why (T and L only — S needs no reason) |
+|------|-------|----------------------------------------|
+| Wave 1 | **S** — dispatched session | — |
+| Wave 2 | **S** — dispatched session | — |
+| Wave 3 | **T** — in-session teammates | [one line: why the lead must synthesise these immediately] |
+
+**S** = `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>`, lead arms
+`cc-await-ping <lead-uuid>` in the background. **T** = `Agent({name, …})`. **L** = lead edits inline.
+S is the DEFAULT for every implementation wave — see the `plan-conventions` skill for why.
+
+**Lead context budget**: reserve ≥50% of the lead's window for decisions.
+**Succession point**: the lead recycles (`handoff-fire.sh --recycle`) at the end of Wave [N].
 
 ### Pre-Flight Checklist
 
@@ -349,6 +366,15 @@ ls -lh ~/.claude/agents/            # deep-research, deep-research-sonnet, front
 | Context at 90%+ | Shutdown + respawn | During wave |
 
 ### Context Budget
+
+**Lead** (the scarce one — it absorbs every wave it does not dispatch):
+
+| Item | Budget | Notes |
+|------|--------|-------|
+| Reserved for leading | **≥50% of window** | decisions, not implementation detail |
+| Per **S** wave | ~5–10K | the brief written + the completion ping read |
+| Per **T** wave | ~100–300K | every teammate report + shutdown exchange + merge loop |
+| Succession point | end of Wave [N] | `handoff-fire.sh --recycle` |
 
 **Per-agent**: 1M tokens total
 
@@ -432,7 +458,10 @@ git branch -d feat/[stream1]/cr feat/[stream2]/cr ...
 ---
 ```
 
-**For complete Phase 0 details** (pre-flight commands, spawn prompt templates, failure decision tree, success criteria): Refer to `memory/PHASE_0_TEMPLATE.md` — this template is an overview, that memory file is the executable reference.
+**For the Phase 0 RULES** (when it is mandatory, the execution-locus table, the lead's context
+budget + succession point, and the rationale for each): the `plan-conventions` skill. For teammate
+lifecycle, brief discipline, and crash recovery: the `agent-teams` skill. For firing a locus-S wave:
+`commands/handoff.md` § Waves + `scripts/handoff-fire.sh --help`.
 
 ---
 
