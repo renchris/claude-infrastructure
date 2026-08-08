@@ -4303,11 +4303,16 @@ ranked_accounts() {
     rm -f "/tmp/handoff-rank-err.$$"
   fi
   # Tie-break order = the SSOT operator spend priority (accounts.json _order), NOT the retired
-  # next2-first hint — on an idle machine (all-zero activity) the order IS the ranking.
+  # next2-first hint — on an idle machine (all-zero activity) the order IS the ranking. So READ
+  # that order from the SSOT: $CC_ACCT_NAMES is generated in accounts[] order and, until item
+  # 253e4d4254d9, had no consumer at all while this loop restated its value as a literal — the
+  # same defect as launcher_for() below, one field over. A 5th account was invisible here.
   local i=0 a
   {
     printf '# activity-proxy (DEGRADED: live limits unavailable)\n'
-    for a in next next4 next3 next2; do
+    # shellcheck disable=SC2086  # deliberate word-splitting: the generated map declares a
+    # space-separated name list, matching how postland-verify.sh:356 splits its own seam list.
+    for a in $CC_ACCT_NAMES; do
       printf '%s %s %s\n' "$(activity "$a")" "$i" "$a"; i=$((i+1))
     done | sort -s -k1,1n -k2,2n | awk '{print $3, $1}'
   }
@@ -4317,10 +4322,26 @@ launcher_for() { # $1=account → launcher name. ACCOUNT ONLY — the model is a
   # 2026-08-01 consolidation: `claude` is THE entrypoint and claude2/3/4 are the same body on
   # accounts 2/3/4. The claude-fableN family is DELETED — the frontier tier is selected by
   # `--model claude-fable-5` on these same names (composed in the ARGS block below), so this
-  # function no longer reads $MODEL at all. Account 1 has NO trailing digit by design.
-  local suffix=""
-  case "$1" in next2) suffix="2" ;; next3) suffix="3" ;; next4) suffix="4" ;; esac
-  echo "claude${suffix}"
+  # function no longer reads $MODEL at all.
+  #
+  # READ from accounts.json (through the generated map this file already sources for cfg_dir) —
+  # never COMPOSED from `claude` + a trailing digit, which is what this was until item
+  # 253e4d4254d9. accounts.json declares a `launcher` per account and calls itself the SSOT for
+  # exactly that mapping; a second, independent derivation of the same field agrees with it only
+  # while today's names happen to follow the convention. Account 1 was already the exception —
+  # `next` → bare `claude`, hardcoded as an empty suffix — so the convention shipped with a
+  # counter-example inside it. Rename a launcher in accounts.json, or add a 5th account whose
+  # launcher is not `claude5`, and every other consumer (claude-accounts, the relogin skill, the
+  # generated map's own key set) follows the SSOT while this one keeps composing a command the
+  # operator's shell does not define. The failure lands at spawn, on a pane that never boots.
+  command -v cc_acct_launcher_for_name >/dev/null 2>&1 || {
+    echo "!! account map defines no cc_acct_launcher_for_name — regenerate it: scripts/gen-account-map.sh" >&2
+    return 1
+  }
+  cc_acct_launcher_for_name "$1" || {
+    echo "!! accounts.json declares no launcher for account '$1' — cannot compose a launch line" >&2
+    return 1
+  }
 }
 
 # ---- fire autonomy: pre-trust the launch dir -------------------------------------------------
