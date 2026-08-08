@@ -355,7 +355,6 @@ desk-land.bats
 desk-register.bats
 handoff-close-mail-guard.bats
 handoff-fire-account-sweep.bats
-handoff-fire-capacity-gate.bats
 handoff-fire-completion-push.bats
 handoff-fire-failed-cleanup.bats
 handoff-fire-inject.bats
@@ -730,10 +729,29 @@ references_fire() {
 # identical hole — a suite documenting `CC_FIRE_CAPACITY_GATE=off` without setting it would have
 # read as pinned. Measured before changing it: across every handoff-fire suite in the tree, ZERO
 # verdicts flip, so this closes a latent hole and grandfathers nobody new.
+#
+# TWO SUFFICIENT FORMS since 2026-08-08, when tests/handoff-fire-cloud.bats (G5, the off-box venue
+# branch) became the SECOND suite whose SUBJECT is this gate. Form 1 — the kill switch — is
+# unavailable to such a suite BY CONSTRUCTION: pinning the gate off deletes the only thing it
+# tests, which is why the incumbent gate suite sits on the allowlist above rather than passing this
+# predicate. Sitting on that list is not a form, it is a debt, and this rule's own header says the
+# list may only ever shrink.
+#
+# Form 2 reaches the property this rule actually protects — that the gate cannot read AMBIENT
+# machine load — by the other available route. A setup() exporting CC_FIRE_SYSCTL (load and core
+# count become stub output) AND CC_FIRE_HEADROOM_OVERRIDE (the memory term becomes a literal) has
+# closed BOTH paths by which the real box reaches the gate, so those fires are exactly as
+# load-insensitive as form 1's while the coverage survives. Comment-stripped like form 1, and for
+# form 1's reason. A suite with NEITHER form is still AMBIENT and still blocks: a second door, not
+# a hole.
 is_fire_pinned() {
-  local rc
+  local rc st
   for _ in 1 2 3; do
-    setup_statements "$1" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
+    st="$(setup_statements "$1")"
+    printf '%s\n' "$st" | grep -qF 'CC_FIRE_CAPACITY_GATE=off'; rc=$?
+    if [ "$rc" -eq 1 ] \
+       && printf '%s\n' "$st" | grep -qF 'CC_FIRE_SYSCTL=' \
+       && printf '%s\n' "$st" | grep -qF 'CC_FIRE_HEADROOM_OVERRIDE='; then rc=0; fi
     case "$rc" in
       0) return 0 ;;
       1) return 1 ;;
