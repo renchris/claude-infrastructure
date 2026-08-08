@@ -1,0 +1,22 @@
+flowchart TB
+    subgraph WE["this repo shipped first"]
+        direction TB
+        P1["peer session messaging<br/>2026-07-10"]
+        P2["Claude Code 2.1.224<br/>2026-08-07"]
+        P1 -.->|"28 days"| P2
+        R1["adversarial-role research team<br/>2026-05-24"]
+        R2["Dynamic Workflows 2.1.154<br/>2026-05-28"]
+        R1 -.->|"4 days"| R2
+    end
+    subgraph THEY["Claude Code shipped first"]
+        direction TB
+        S1["status-line context fields<br/>Claude Code 2.0.70 · 2025-12-15"]
+        S2["read here<br/>2026-07-14"]
+        S1 -.->|"7 months — our gap, not theirs"| S2
+    end
+    classDef win fill:@green-bg,stroke:@green-fg,color:@text
+    classDef cc fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef late fill:@red-bg,stroke:@red-fg,color:@text
+    class P1,R1 win
+    class P2,R2,S1 cc
+    class S2 late
