@@ -151,6 +151,35 @@ BATS_BIN="${CC_POSTLAND_BATS:-bats}"
 #
 # NOT via `bounded`: that helper also runs `git bisect run` and other non-bats children, and the
 # screen that licenses /dev/null covers the bats tree only. Per call site, deliberately.
+#
+# ── THE BOUNDING INVARIANT: every $BATS_BIN call is bounded, and the RUNNER'S is bounded THREE times
+#    (measured 2026-08-08) ────────────────────────────────────────────────────────────────────────
+# Backlog 36ed9b03e47a (filed 2026-07-29) read do_bisect's generated-runner bats as "the ONLY
+# unbounded bats call in the file — a WEDGING suite hangs the singleton verifier". Its premise is
+# literally true and its consequence is REFUTED; both halves are stated here because otherwise the
+# next reader of that line re-files it. The runner's bats carries no `bounded` of its own BY
+# CONSTRUCTION — the runner is never executed except through one, at all three of its call sites:
+# the walk (`bounded "$BISECT_TO" git … bisect run`), the tip confirmation, and the floor check
+# (both `bounded "$RETRY_TO" "$runner"`). The item also predates its own fix by a week: the wall
+# landed as 7c32cc6f on 2026-08-05. Its lock clause is wrong on a third count — try_acquire never
+# reaps a LIVE holder at any age, so LOCK_TTL cannot double a wedged verifier.
+#
+# WHAT ACTUALLY CONTAINS IT is the one word NOT in `bounded`: `--foreground`. Without it timeout(1)
+# puts the child in its OWN process group and signals the whole group, so the kill reaches a bats
+# nested two levels down inside `git bisect run`. Measured: a stub wedging 400s per step against a
+# 3s wall ⇒ the SUT returns in 3s with ZERO survivors. The invariant is the process-group kill, NOT
+# the presence of the token `bounded`.
+#
+# ...WHICH IS ONE TOKEN FROM SILENT FAILURE, and the two call-site shapes fail DIFFERENTLY. Adding
+# `--foreground` leaves the WALK site loud — the orphan holds that site's `$( )` pipe open, so the
+# SUT hangs 401s against a 3s bound and B1's wall-clock assertion goes red — and the TIP/FLOOR sites
+# SILENT: they call the runner directly, with no command substitution to pin the parent, so the SUT
+# returns in 4s with all 15 pre-existing assertions green while the wedged suite is reparented to
+# PPID 1. That is the 2026-08-05 incident's exact shape (pid 57191, orphaned to PPID 1, alive
+# 12h53m). B17 in tests/postland-verify-bisect-bound.bats is the assertion that sees it; B18 there
+# is the call-site census, which is the half no runtime test can cover. The walk site is deliberately
+# NOT given a survivor test — that block records why it would be unfalsifiable.
+#
 # ── THE VERIFIER IS EXEMPT FROM cc-bats ADMISSION CONTROL (2026-08-08) ───────────────────────────
 # $BATS_BIN defaults to the bare name `bats`, which on this box PATH-resolves to ~/.claude/bin/cc-bats
 # — an ADMISSION WRAPPER. When >=CC_BATS_MAX_ROOTS (2) other bats execution roots are live AND 1-min
@@ -550,7 +579,13 @@ cond_slug() {
 tree_of() { git -C "$REPO" rev-parse "$1^{tree}" 2>/dev/null; }
 env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tree (tool bumps happen
   local b c l                                # constantly), so a stale-env green stamp stays diagnosable
-  b="$("$BATS_BIN" --version </dev/null 2>/dev/null | awk '{print $2}')"
+  # `bounded` like every other $BATS_BIN call (see THE BOUNDING INVARIANT at BATS_BIN) — this was the
+  # file's one real exception until 2026-08-08. It executes no test, so on a healthy box the bound is a
+  # formality; it is here because an invariant with a remembered exception is one a census cannot
+  # check, and because this call runs BEFORE the corpus, where a $BATS_BIN on a wedged network mount
+  # would hang the run with no other bound watching. A cut leaves $b empty ⇒ "unknown" below, which
+  # is the same honest rendering any other failure already gets.
+  b="$(bounded 20 "$BATS_BIN" --version </dev/null 2>/dev/null | awk '{print $2}')"
   c="${CLAUDE_CODE_EXECPATH:-}"; [ -n "$c" ] && c="$(basename "$c")" || c=unknown
   l="$(load1)"                                                               # 1-min, at run start
   # `?`, never `0`: an unread instrument must not render as a value the reader would call healthy.

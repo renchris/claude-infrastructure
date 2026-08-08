@@ -26,6 +26,9 @@
 #                 own contract block sits with those tests below.
 #   B13-B16       the same clause for the OTHER endpoint, the FLOOR. B10-B12 cover `bad`; a walk that
 #                 converges on the first commit after `good` measured that end no better. Own block.
+#   B17-B18       a FOURTH clause, and the first that looks at what a fired bound left BEHIND rather
+#                 than at how the SUT returned from it: the kill must reach the wedged bats itself,
+#                 and every $BATS_BIN call site must be under a bound at all. Own block below.
 #
 # POSITIVE CONTROL: B1/B2/B3 drive a fixture bats stub that sleeps far past a 3s bound, so the
 # bound is SEEN to fire. A bound that has never been observed firing is not shipped.
@@ -510,4 +513,125 @@ stub_bats_at_head() {
   grep -q "bisect floor N/A" "$RUNLOG"
   # ...and it did NOT pay for a probe that could not have taught it anything
   ! /usr/bin/grep -q "$GOOD" "$HEADLOG" || false
+}
+
+# ── B17-B18: THE BOUND MUST REACH THE WEDGE, NOT MERELY RETURN FROM IT (2026-08-08) ───────────────
+# WHAT B1-B16 DO NOT ASSERT. Every bound above is measured by the SUT's OWN return — rc, log line,
+# wall clock. None of them looks at what the bound left BEHIND. That gap is the whole subject of
+# backlog 36ed9b03e47a ("do_bisect's bats invocation is the ONLY unbounded one in the file"): the
+# runner's bats genuinely carries no bound of its own, and what contains it is not the token
+# `bounded` but the word MISSING from it — `--foreground`. Without that flag timeout(1) puts the
+# child in its own PROCESS GROUP and signals the whole group, so the kill reaches a bats nested two
+# levels down inside `git bisect run`.
+#
+# ONE TOKEN, AND THE TWO SITES FAIL DIFFERENTLY. Measured by mutating the real script at that one
+# anchor and running this suite against it (2026-08-08):
+#   walk site  `out="$(bounded "$BISECT_TO" git … bisect run "$runner")"` — the orphan inherits the
+#              command-substitution pipe and holds it open, so the SUT hangs for the wedge's FULL
+#              duration (401s against a 3s bound). LOUD: B1's `<60s` already goes red.
+#   tip/floor  `bounded "$RETRY_TO" "$runner"` — called directly, no substitution, nothing to pin
+#              the parent: the SUT returns in 4s, every one of the 15 assertions above stays GREEN,
+#              and the wedged suite is reparented to PPID 1. SILENT — and it is the 2026-08-05
+#              incident's exact shape (pid 57191, orphaned to PPID 1, still alive 12h53m later).
+#              B17 is the only assertion in this file that sees it.
+#
+# A WALK-SITE SURVIVOR TEST WAS WRITTEN AND DROPPED — recorded so it does not get re-added as an
+# obvious omission. It is unfalsifiable BY CONSTRUCTION: the same lost kill that orphans the wedge
+# also pins the SUT past the wedge's own lifetime, so by the time the test regains control the
+# wedge has exited of old age and the survivor count reads 0. It was green under the mutation it
+# existed to catch. The walk site is covered by B1 (wall clock) and B18 (census) instead.
+#
+# THE OBSERVABLE is a uniquely-named wedge under $BATS_TEST_TMPDIR, so a survivor is attributable to
+# THIS test and to nothing else running on the box — `pgrep -f sleep` would convict a sibling.
+
+# A bats stub that WEDGES for <secs>, optionally answering GREEN for the first <green_first_n> calls
+# so the walk converges before the wedge lands. The wedge is a uniquely-PATHED script (not a bare
+# `sleep`) precisely so wedge_survivors cannot match anything but our own.
+stub_bats_wedging() {
+  local secs="$1" green="${2:-0}"
+  WEDGE="$STUB/plv-wedge"
+  # The wedge REAPS ITS OWN sleep(1) on the way out. Two rejected alternatives, both measured:
+  # a bare `sleep "$1"` leaks the child (teardown's `pkill -f` matches the wrapper's argv, not the
+  # forked sleep's, so a red test left a 400s process behind — observed); and `cp /bin/sleep` to get
+  # a single unique-argv process does not run at all on arm64 macOS, which refuses an unsigned
+  # Mach-O — the copy fails silently and the `&&` chain just stops. The trap keeps ONE process
+  # carrying the unique path in argv, with nothing left over when it dies by signal.
+  printf '#!/bin/bash\nsleep "$1" & c=$!\ntrap %s TERM EXIT\nwait "$c"\n' \
+    "'kill -9 \"\$c\" 2>/dev/null; exit 143'" > "$WEDGE"; chmod +x "$WEDGE"
+  WEDGE_CNT="$BATS_TEST_TMPDIR/wedge.calls"; : > "$WEDGE_CNT"
+  { printf '#!/bin/bash\ncase "${1:-}" in --version) echo "Bats 1.0.0"; exit 0;; esac\n'
+    printf 'n=$(( $(cat %q 2>/dev/null || echo 0) + 1 )); printf %%s "$n" > %q\n' "$WEDGE_CNT" "$WEDGE_CNT"
+    printf '[ "$n" -le %s ] && exit 0\n' "$green"
+    printf 'exec %q %s\n' "$WEDGE" "$secs"
+  } > "$STUB/bats-stub"
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+}
+wedge_survivors() { pgrep -f "$WEDGE" 2>/dev/null | /usr/bin/grep -c . ; }
+wedge_reaped_within() { # <secs> — 0 once nothing of ours is left alive
+  local i=0
+  while [ "$i" -lt "$1" ]; do
+    [ "$(wedge_survivors)" = "0" ] && return 0
+    sleep 1; i=$(( i + 1 ))
+  done
+  echo "SURVIVING WEDGE after ${1}s:"; pgrep -lf "$WEDGE" 2>/dev/null
+  return 1
+}
+# A red B17/B18 must not leave a 400s process on the operator's box.
+teardown() {
+  [ -n "${WEDGE:-}" ] || return 0
+  pkill -f "$WEDGE" 2>/dev/null; sleep 1; pkill -9 -f "$WEDGE" 2>/dev/null
+  return 0
+}
+
+@test "B17: the TIP CONFIRMATION's bound kills the WEDGE, not just the bisect — the SILENT site" {
+  command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1 || skip "no timeout(1)"
+  command -v pgrep >/dev/null 2>&1 || skip "no pgrep(1)"
+  mk_history 6
+  # GREEN for the two interior probes ⇒ the walk converges on the TIP without ever running it ⇒ the
+  # confirmation invokes the runner DIRECTLY, and THAT call is the one that wedges.
+  stub_bats_wedging 400 2
+
+  TMPDIR="$SUTTMP" POSTLAND_BISECT_TIMEOUT_S=300 POSTLAND_RETRY_TIMEOUT_S=3 \
+    run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
+  [ "$status" -eq 1 ]
+
+  # It was the CONFIRMATION that cut, not the walk's wall — otherwise this measures the wrong site.
+  grep -q "bisect UNCONFIRMED" "$RUNLOG"
+  # The wedge was REACHED (2 green walk probes + the confirmation). Without this the survivor check
+  # below passes vacuously on any run where the fixture never got as far as wedging at all.
+  [ "$(cat "$WEDGE_CNT")" -ge 3 ]
+  # ...and the process group went with it. 25s is generous past timeout's own `-k 10` SIGKILL grace.
+  wedge_reaped_within 25
+}
+
+@test "B18: every \$BATS_BIN call site is under a bound — a census, which no runtime test can be" {
+  local joined exempt exec_sites unbounded
+  joined="$BATS_TEST_TMPDIR/joined.sh"
+  # Join backslash-continuations FIRST: retry_once's `bats` sits on the line after its `bounded`, so
+  # a per-line grep convicts a correctly-bounded site and the whole census reads as a false alarm.
+  /usr/bin/sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$SUT" > "$joined"
+
+  # THE ONE EXEMPTION — do_bisect's generated-runner template, bounded at its CALL SITES instead
+  # (asserted below). Anchored to exactly one line: an exemption that silently widened would start
+  # covering a site nobody ever looked at, which is the failure this census exists to prevent.
+  exempt="$(/usr/bin/grep -c "printf 'TMPDIR=%q" "$joined")"
+  [ "$exempt" = "1" ]
+
+  unbounded="$(/usr/bin/grep -n '"\$BATS_BIN"' "$joined" \
+      | /usr/bin/grep -v '^[0-9]*:[[:space:]]*#' \
+      | /usr/bin/grep -v "printf 'TMPDIR=%q" \
+      | /usr/bin/grep -v 'bounded ' \
+      | /usr/bin/grep -v '"\$TIMEOUT_BIN"' || true)"
+  [ -z "$unbounded" ] || { echo "UNBOUNDED \$BATS_BIN call site(s):"; echo "$unbounded"; false; }
+
+  # ...and the exempted runner is EXECUTED only under a bound. The non-executing mentions are named
+  # individually rather than pattern-guessed, so a genuinely new call site cannot hide among them.
+  exec_sites="$(/usr/bin/grep -n '"\$runner"' "$joined" \
+      | /usr/bin/grep -v 'rm -f\|chmod\|> "\$runner"\|bisect_floor_ok ' || true)"
+  # FLOOR, deliberately not an exact tally (an exact count reds on legitimate GROWTH and catches no
+  # regression): >=3 only so a renamed variable cannot make the emptiness below read as green.
+  [ "$(printf '%s' "$exec_sites" | /usr/bin/grep -c .)" -ge 3 ]
+  unbounded="$(printf '%s\n' "$exec_sites" | /usr/bin/grep -v 'bounded ' || true)"
+  [ -z "$unbounded" ] || { echo "UNBOUNDED runner call site(s):"; echo "$unbounded"; false; }
 }
