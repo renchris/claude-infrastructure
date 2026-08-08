@@ -1,0 +1,13 @@
+{
+  "_what": "PROJECT-scope settings for claude-infrastructure. Loaded only when a session's cwd is this repo (or a worktree of it), so nothing here ships to any other project. Deliberately minimal: the operator's ~/.claude/settings.json owns the fleet-wide hooks, deny/ask rules and statusline. This file exists for permissions that are a property of THIS REPO's tooling.",
+  "permissions": {
+    "_why_kitten": "scripts/cloud-websetup-drive.sh drives /web-setup by typing into a kitty pane over remote control, and `kitten @ send-text` is the one verb in that flow the auto-mode classifier judges intermittently — the payload is a command line plus a bare `\\r`, which reads as an unbounded write to something outside the working tree. Intermittent is the worst shape: the drive gets half-way through an account, blocks on a prompt no one is watching, and the pane is left sitting in /web-setup with consent unanswered. An explicit allow makes the verdict deterministic. The other four verbs are listed for the same reason and because a drive that can type but cannot read the pane back (get-text) is exactly the absence-is-not-success trap the driver exists to avoid.",
+    "allow": [
+      "Bash(kitten @ send-text:*)",
+      "Bash(kitten @ get-text:*)",
+      "Bash(kitten @ launch:*)",
+      "Bash(kitten @ close-window:*)",
+      "Bash(kitten @ ls:*)"
+    ]
+  }
+}
