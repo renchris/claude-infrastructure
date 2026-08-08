@@ -144,7 +144,7 @@ ALLOW
 #
 # Full-line comments are stripped BEFORE matching. Load-bearing: six files in this repo DISCUSS
 # `dirname "$0"` in prose (this header included, ship-land.sh:126, test-hermeticity-lint.sh:27,
-# bats-shellcheck-lint.sh:119, never-stuck-gate.sh:39, host-suites.manifest:67). A detector that
+# bats-shellcheck-lint.sh:119, never-stuck-gate.sh:39, host-suites.manifest:144). A detector that
 # matches text ABOUT the defect reports the fix as the bug (memory:
 # detector-matching-its-own-skill-description).
 #
