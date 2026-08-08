@@ -793,9 +793,16 @@ identity_snapshot() { git -C "$REPO" config --local --get-regexp '^user\.' 2>/de
 # A snapshot is restorable iff it cannot itself mis-author a commit: no local override at all, or one
 # whose email is the sanctioned address. Anything else is the fault, not the baseline.
 identity_snap_ok() {
-  local snap="$1" want="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}" em
+  local snap="$1" want em
+  # Sealed like the hooks: an env var that can widen this predicate is a bypass, not a seam.
+  if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then want="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}"
+  else want="ren.chris@outlook.com"; fi
   [ -z "$snap" ] && return 0
-  em="$(printf '%s\n' "$snap" | awk '$1=="user.email"{print $2; exit}')"
+  # LAST, not first. `user.email` is multi-valued when .git/config carries two [user] sections,
+  # and git's effective author is the LAST one — measured. An `awk … exit` read the FIRST, i.e.
+  # the opposite end of the list from the arbiter, so a config whose good value precedes a bad one
+  # read "sanctioned" to the oracle while git committed with the bad one.
+  em="$(printf '%s\n' "$snap" | awk '$1=="user.email"{v=$2} END{print v}')"
   [ "$em" = "$want" ]
 }
 identity_assert() {  # compare against $IDENTITY_SNAP, restore it if SAFE, and convict on any change

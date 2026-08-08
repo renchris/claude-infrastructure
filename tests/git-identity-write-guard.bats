@@ -162,3 +162,50 @@ allowed() { [ "$status" -eq 0 ] && [[ "$output" != *"identity write"* ]]; }
   run_hook 'git -C "$REPO" status --short'
   allowed
 }
+
+# ── The identity GATE's own escape hatches (added 2026-08-08) ─────────────────────────────────
+# githooks/pre-commit refuses a mis-authored commit, and this hook already blocks the two obvious
+# opt-outs (the long bypass flag and its short form) — the escapes an agent reaches for FIRST. A
+# red-team found that the two which actually WORK were unblocked, and both were documented as
+# supported overrides three lines from the refusal message, so an agent under "🔧 never yields"
+# was being steered straight at them:
+#   CC_GIT_IDENTITY_OWNER=x   takes the repo OUT OF SCOPE — the gate exits 0 without reading the
+#                             identity at all, silently.
+#   cc.identity.exempt        exempts the repo, and from a linked worktree writes the SHARED
+#                             config, exempting ~200 worktrees at once.
+# The vars are additionally sealed behind CC_GIT_IDENTITY_TEST=1 inside the hooks themselves;
+# this is the agent-typed half.
+
+@test "identity-gate: CC_GIT_IDENTITY_OWNER assignment is DENIED" {
+  run_hook 'CC_GIT_IDENTITY_OWNER=someone-else git commit -m x'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || false
+  [[ "$output" == *"TEST seams"* ]] || false
+}
+
+@test "identity-gate: the two-var form (sentinel + email) is DENIED" {
+  run_hook 'CC_GIT_IDENTITY_TEST=1 CC_GIT_IDENTITY_EMAIL=t@e.com git commit -m x'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || false
+}
+
+@test "identity-gate: writing cc.identity.exempt is DENIED" {
+  run_hook 'git config --local cc.identity.exempt "just make it stop"'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || false
+}
+
+@test "identity-gate control: READING cc.identity.exempt is allowed" {
+  # A guard that blocks reading the state it guards makes that state unauditable — and the sweep
+  # itself reads it. The first cut of this rule matched the key anywhere after `config` and denied
+  # this, so without the control the rule looked correct while breaking its own sensor.
+  run_hook 'git config --get cc.identity.exempt'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"permissionDecision": "deny"'* ]] || false
+}
+
+@test "identity-gate control: the sweep's own --get-regexp read is allowed" {
+  run_hook 'git config --local --get-regexp cc.identity'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"permissionDecision": "deny"'* ]] || false
+}

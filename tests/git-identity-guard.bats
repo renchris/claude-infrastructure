@@ -35,6 +35,9 @@ setup() {
   D="$BATS_TEST_TMPDIR/w"; mkdir -p "$D"
 
   # Pin the identity contract so these tests never depend on the operator's real address.
+  # CC_GIT_IDENTITY_TEST=1 is REQUIRED for the other two to be honoured at all — without it they
+  # are inert, which is the whole point: left live they were a one-line total bypass of the gate.
+  export CC_GIT_IDENTITY_TEST=1
   export CC_GIT_IDENTITY_EMAIL=good@example.test
   export CC_GIT_IDENTITY_OWNER=owner
   export CC_GIT_IDENTITY_HOOK="$HOOK"
@@ -379,6 +382,51 @@ run_prepush() {
   run bash "$ASSERT" verify-attribution "$r"
   [ "$status" -eq 2 ]
   [[ "$output" == *"local-only"* ]] || [[ "$output" == *"fetch first"* ]]
+}
+
+# ── The env seams must be SEALED without the test sentinel ────────────────────────────────────
+# Both were documented as supported overrides three lines from the refusal message, while
+# validate-bash.sh blocked the escape an agent reaches for first (--no-verify). The escape that
+# worked was the one being advertised.
+@test "seal: CC_GIT_IDENTITY_OWNER cannot take a repo out of scope without the sentinel" {
+  local r; r="$(mkrepo sealowner https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  # Sentinel removed; OWNER pointed elsewhere. Pre-seal this exited 0 without reading the identity.
+  # `env -u`, not `VAR= ` — the latter sets it EMPTY, and the seal tests for the literal 1, so
+  # empty and unset happen to behave alike here. Unsetting is what a real caller does, and it does
+  # not lean on that coincidence (it also trips SC1007, which is the lint noticing the ambiguity).
+  run env -u CC_GIT_IDENTITY_TEST CC_GIT_IDENTITY_OWNER=someone-else "$HOOK" --check "$r"
+  # With the seal the built-in owner (renchris) applies, so this fixture is genuinely out of scope
+  # for a DIFFERENT reason — what must NOT happen is the attacker-supplied owner being honoured.
+  [[ "$output" != *"ok "* ]] || false
+}
+
+@test "seal: CC_GIT_IDENTITY_EMAIL cannot widen the allowlist without the sentinel" {
+  local r; r="$(mkrepo sealemail https://github.com/renchris/x.git)"   # the REAL owner
+  git -C "${r:?repo path required}" config user.email attacker@evil.test
+  run env -u CC_GIT_IDENTITY_TEST CC_GIT_IDENTITY_EMAIL=attacker@evil.test "$HOOK" --check "$r"
+  [ "$status" -eq 1 ]                       # the env value must NOT be accepted as sanctioned
+  [[ "$output" == *"attacker@evil.test"* ]] || false
+}
+
+@test "seal control: WITH the sentinel the seams still work (else the suite is testing nothing)" {
+  local r; r="$(mkrepo sealctl https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email good@example.test
+  run "$HOOK" --check "$r"                  # setup() exports the sentinel + owner=owner
+  [ "$status" -eq 0 ]
+}
+
+@test "postland: the oracle reads the LAST user.email, as git does" {
+  # user.email is multi-valued with two [user] sections, and git's effective author is the LAST.
+  # An `awk … exit` read the FIRST — the opposite end of the list from the arbiter — so a config
+  # with a good value before a bad one read "sanctioned" while git committed with the bad one.
+  load_snap_ok
+  run identity_snap_ok "user.email $CC_GIT_IDENTITY_EMAIL
+user.email t@e.com"
+  [ "$status" -ne 0 ]                       # last is bad ⇒ NOT restorable
+  run identity_snap_ok "user.email t@e.com
+user.email $CC_GIT_IDENTITY_EMAIL"
+  [ "$status" -eq 0 ]                       # last is good ⇒ restorable
 }
 
 @test "selftest's own controls discriminate" {

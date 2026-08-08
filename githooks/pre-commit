@@ -59,8 +59,29 @@
 # with the gate (memory: make-the-actuator-the-arbiter).
 set -uo pipefail
 
-WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}"
-WANT_OWNER="${CC_GIT_IDENTITY_OWNER:-renchris}"
+# ── The contract, and why the env seams are SEALED in production ───────────────────────────────
+# CC_GIT_IDENTITY_EMAIL / _OWNER exist so the /Users/chrisren/.claude/bin/cc-bats suite can pin a contract that does not depend
+# on the operator's real address. Left live, they were a ONE-LINE TOTAL BYPASS, and the worse of
+# the two is _OWNER: it does not widen the allowlist, it makes the repo out of scope, so the gate
+# exits 0 without ever looking at the identity.
+#
+#     CC_GIT_IDENTITY_OWNER=someone-else git commit -m x      # committed t <t@e.com>, silently
+#
+# That is reachable, not contrived. hooks/validate-bash.sh blocks `--no-verify` and `commit -n`,
+# so the escape an agent reaches for FIRST is refused — and both of these were documented as
+# supported overrides in this very file, three lines from the refusal message. An agent told
+# "🔧 never yields" was being steered straight at them. handoff-fire.sh's `--env KEY=VAL` is
+# inherited by every descendant of a fired pane, so one such var set once poisons a whole session.
+#
+# They now require CC_GIT_IDENTITY_TEST=1 as well, which the suite sets and nothing in production
+# does. An env var that can silently WIDEN a security predicate is not a seam, it is a hole.
+if [ "${CC_GIT_IDENTITY_TEST:-}" = 1 ]; then
+  WANT_EMAIL="${CC_GIT_IDENTITY_EMAIL:-ren.chris@outlook.com}"
+  WANT_OWNER="${CC_GIT_IDENTITY_OWNER:-renchris}"
+else
+  WANT_EMAIL="ren.chris@outlook.com"
+  WANT_OWNER="renchris"
+fi
 
 MODE=hook
 REPO=""

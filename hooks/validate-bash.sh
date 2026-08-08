@@ -289,6 +289,35 @@ if echo "$CMD" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*
   deny "git commit -n blocked — short form of --no-verify, bypasses pre-commit hooks. See CLAUDE.md critical rule #2."
 fi
 
+# ── the identity GATE's own escape hatches (2026-08-08) ───────────────
+# The rules above refuse `--no-verify` and `git commit -n` — the escape an agent reaches for FIRST
+# when githooks/pre-commit refuses it. A red-team found that the two which actually WORK were both
+# unblocked and documented as supported overrides three lines from the refusal message, so an
+# agent under "🔧 never yields" was being steered straight at them:
+#
+#   CC_GIT_IDENTITY_OWNER=x git commit …        takes the repo OUT OF SCOPE, so the gate exits 0
+#                                               without ever reading the identity. Silent.
+#   git config --local cc.identity.exempt "…"   exempts the repo — and from a linked worktree that
+#                                               writes the SHARED config, exempting ~200 at once.
+#
+# The vars are now sealed behind CC_GIT_IDENTITY_TEST=1 (the suite sets it, production does not),
+# so the single-var form is already inert. This blocks the two-var form and the exemption: a
+# bypass that merely also has to disable the seal is still a bypass, and an exemption is a
+# DECISION about how the operator's commits are attributed, which is theirs to make.
+if printf '%s' "$CMD" | grep -qE '\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)='; then
+  deny "CC_GIT_IDENTITY_* assignment blocked — these are the identity gate's TEST seams, not a route past it. Setting OWNER takes the repo out of scope so the gate never reads the identity at all; setting EMAIL widens the allowlist. If a commit is being refused, the identity is genuinely wrong — run the cure the hook printed. To run the suite, invoke bats (it sets the sentinel itself); never set these by hand."
+fi
+# WRITES only. The first cut matched the key anywhere after `config`, so `--get cc.identity.exempt`
+# — the way you INSPECT an exemption, and what the sweep itself does — was denied. A guard that
+# blocks reading the thing it guards makes the state unauditable, which is the opposite of the
+# point. Same read-form exclusion the identity-write clause below uses, and a write is recognised
+# the same way: the key must be FOLLOWED BY A VALUE.
+if printf '%s' "$CMD" | grep -qE '\bconfig\b' \
+   && ! printf '%s' "$CMD" | grep -qE '\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b' \
+   && printf '%s' "$CMD" | grep -qE '\bcc\.identity\.exempt[[:space:]]+[^[:space:]]'; then
+  deny "cc.identity.exempt write blocked — an exemption declares that a repo's commits SHOULD carry a non-default address. That is the operator's call, not a way to clear a refusal. From a linked worktree 'git config --local' writes the SHARED .git/config, so it exempts every worktree of the repo at once (~200 here). If the identity is simply wrong, fix the identity; if the repo genuinely needs a project address, ask."
+fi
+
 # ── git identity write that can collapse into the CURRENT repo ────────
 # 2026-08-05 incident: `git -C "" config user.email t@t` is a DOCUMENTED NO-OP on the -C — it
 # does NOT change directory (verified live on git 2.54.0), so the write lands in whatever repo
