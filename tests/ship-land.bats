@@ -1531,6 +1531,124 @@ shed_probe() {  # $@ = env assignments → runs load_above_ceiling once, echoes 
   [ "$(grep -vE '^[[:space:]]*#' "$SHIPLAND" | grep -cE '(^|[^[:alnum:]_])sleep[[:space:]]+[-0-9"'"'"'$]')" -eq 0 ] || false
 }
 
+# ── the DEFAULT ceiling is DERIVED from the box, not the constant 8 (2026-08-08) ────────────────
+# Every shed test above pins an EXPLICIT ceiling, so none of them could see that the UNSET default
+# was `8` — 0.8/core on this 10-core box, a ceiling it is essentially never under. Measured in
+# ~/.claude/land.log before this fix: 352 of the 405 lands that reached the predicate SHED (87%),
+# so "landed green" meant "statically green only" for ~7 lands in 8. These tests stub the sensor so
+# LOAD IS AN INPUT rather than whatever the box happens to be doing — otherwise they would assert
+# the ambient `uptime`, which is the same defect one layer up (a verdict decided by the weather).
+shed_stub() {  # $1=1-min load  $2=hw.ncpu ('' ⇒ hw.ncpu UNANSWERED) → echoes the stub's path
+  local f="$BATS_TEST_TMPDIR/sysctl-stub-$$"
+  { printf '#!/bin/sh\ncase "$2" in\n'
+    printf '  vm.loadavg) echo "{ %s %s %s }" ;;\n' "$1" "$1" "$1"   # real shape; awk takes field 2
+    [ -n "$2" ] && printf '  hw.ncpu) echo "%s" ;;\n' "$2"
+    printf '  *) exit 1 ;;\nesac\n'
+  } > "$f"
+  chmod +x "$f"; printf '%s\n' "$f"
+}
+
+# shed_probe REPORTS ONLY ABOVE/BELOW, and for the DERIVED default that is not enough to be honest:
+# setup() exports CC_GATE_MAX_LOAD=0 suite-wide (the never-shed kill switch), which short-circuits
+# the derivation and answers BELOW — so a derived-default test written on shed_probe passes WITHOUT
+# EVER DERIVING ANYTHING. Caught exactly that way while writing these: three BELOW assertions went
+# green against a ceiling that was never computed. Two structural defences, not one comment:
+#   1. the inherited ceiling AND factor are UNSET here by construction, so the suite's export can
+#      never reach the derivation (a caller wanting an explicit ceiling passes it as an assignment,
+#      which env applies AFTER the unsets);
+#   2. the ceiling and load are PRINTED, so every assertion below pins the derived NUMBER. A
+#      kill-switch or fail-open path returns before SHED_CEILING is set and renders `ceiling=NONE`,
+#      which matches none of them — vacuity becomes a red, not a green.
+shed_probe_v() {  # $@ = env assignments → "<ABOVE|BELOW> ceiling=<c> load=<l>"
+  { sed -n '/^load_above_ceiling() {/,/^}/p' "$SHIPLAND"
+    printf 'if load_above_ceiling; then v=ABOVE; else v=BELOW; fi\n'
+    printf 'printf "%%s ceiling=%%s load=%%s\\n" "$v" "${SHED_CEILING:-NONE}" "${SHED_LOAD:-NONE}"\n'
+  } > "$BATS_TEST_TMPDIR/shedv.sh"
+  grep -q 'vm.loadavg' "$BATS_TEST_TMPDIR/shedv.sh" || return 1   # same anti-sed-miss control
+  env -u CC_GATE_MAX_LOAD -u CC_GATE_MAX_LOAD_PER_CORE "$@" bash "$BATS_TEST_TMPDIR/shedv.sh" 2>&1
+}
+
+@test "shed DERIVED DEFAULT: the ceiling scales with hw.ncpu — 10 cores ⇒ 80, not 8" {
+  local stub; stub="$(shed_stub 18.05 10)"          # 18.05 = a real reading off this box
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BELOW ceiling=80 load=18.05" ]      # 18.05 < 10×8 ⇒ the smoke RUNS
+
+  # THE MUTANT, and the reason this is not vacuous: the SAME load against the OLD constant still
+  # sheds. Both answers are reachable from one fixture, so what moved is the default — not the
+  # stub, not the comparison. This is the defect itself, pinned: 8 shed the box's ordinary load.
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub CC_GATE_MAX_LOAD=8"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE ceiling=8 load=18.05" ] || false
+}
+
+@test "shed REGRESSION CONTROL: the measured SURVIVED band must still run the smoke" {
+  # The pinned false positive (memory: threshold-must-separate-fatal-from-survived). Not invented
+  # numbers: MACHINE_CAPACITY_V2 §8.5.7 sampled THIS box at 29.15-59.80 across 13 readings at a
+  # CONSTANT 31-32 sessions — ordinary heavy operation, on a box that lived. A ceiling that sheds
+  # anywhere inside that band has re-created the defect at a bigger number, so a future
+  # re-derivation has to move a RED test rather than edit a comment.
+  local stub
+  for l in 29.15 44.35 59.80 62; do                  # 62 = the highest reading on record here
+    stub="$(shed_stub "$l" 10)"
+    run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+      shed_probe_v CC_GATE_SYSCTL=$stub"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BELOW ceiling=80 load=$l" ] || { echo "load $l → $output (survived band must RUN)"; false; }
+  done
+}
+
+@test "shed CIRCUIT-BREAKER: a genuine runaway above the band still sheds" {
+  # The ceiling is raised, not deleted. Without this the change would be indistinguishable from
+  # ripping the sensor out, and a real thundering herd would get a smoke piled on top of it.
+  local stub; stub="$(shed_stub 95.0 10)"
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE ceiling=80 load=95.0" ]       # 95 ≥ 80 ⇒ shed
+}
+
+@test "shed: an EXPLICIT ceiling stays ABSOLUTE — the derivation only fills an UNSET default" {
+  # The backward-compatibility contract. Every caller in the tree sets this explicitly (the 0|off
+  # kill switch, land-gate-cas.bats, gate-home-isolation.bats, this suite's own probes), and all of
+  # them must keep their exact meaning — an explicit ceiling silently multiplied by hw.ncpu would
+  # turn every fixture's tuning into something else. `ceiling=20`, not 200, is the whole assertion.
+  local stub; stub="$(shed_stub 18.05 10)"
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub CC_GATE_MAX_LOAD=20"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BELOW ceiling=20 load=18.05" ]      # 20 absolute, NOT 20×10
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub CC_GATE_MAX_LOAD=15"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE ceiling=15 load=18.05" ] || false
+}
+
+@test "shed: the per-core FACTOR is overridable, and a junk factor falls back to the default" {
+  local stub; stub="$(shed_stub 18.05 10)"
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub CC_GATE_MAX_LOAD_PER_CORE=1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE ceiling=10 load=18.05" ]      # 1×10 = 10 ⇒ 18.05 sheds
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub CC_GATE_MAX_LOAD_PER_CORE=bogus"
+  [ "$status" -eq 0 ]
+  [ "$output" = "BELOW ceiling=80 load=18.05" ] || false   # junk ⇒ factor 8, never an empty ceiling
+}
+
+@test "shed: an UNREADABLE core count derives 1 core — the SAFE direction, never a wild ceiling" {
+  # hw.ncpu unanswered must not yield an empty multiplier. An empty one would make the ceiling 0 —
+  # which IS the kill switch — turning a half-broken sensor into "never shed again", permanently
+  # and silently. 1 core reproduces the old constant instead: conservative, and loudly so.
+  local stub; stub="$(shed_stub 18.05 '')"           # answers vm.loadavg, refuses hw.ncpu
+  run bash -c "$(declare -f shed_probe_v); SHIPLAND='$SHIPLAND' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' \
+    shed_probe_v CC_GATE_SYSCTL=$stub"
+  [ "$status" -eq 0 ]
+  [ "$output" = "ABOVE ceiling=8 load=18.05" ]       # 1 core × 8 = 8 ⇒ sheds, as the old default did
+}
+
 @test "shed: load >= ceiling ⇒ smoke SKIPPED, ZERO bats, land proceeds and attests it" {
   # The end-to-end half: the predicate above, wired into a real pipeline. Shedding defers to the
   # post-land verifier, never to a queue — so the land completes with no test work at all.
@@ -1542,6 +1660,16 @@ shed_probe() {  # $@ = env assignments → runs load_above_ceiling once, echoes 
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "smoke SKIPPED"
   echo "$output" | grep -q "never a wait"
+  # LOUD (2026-08-08): a shed must name its CONSEQUENCE, not just its cause. The old wording closed
+  # "the post-land verifier proves this tree", which reads as a finished proof — but the verifier is
+  # a backstop trailing trunk by hours, so at land time nothing has executed this diff. 352 ungated
+  # lands went unnoticed behind that sentence.
+  echo "$output" | grep -q "behaviorally UNGATED" || false
+  echo "$output" | grep -q "0.0001" || false              # the raw inputs are printed, not implied
+  # NOT `grep -qv`: -v inverts LINE SELECTION, so it succeeds whenever ANY other line exists — a
+  # negation that can never fail. The old sentence must be genuinely absent, so branch on the
+  # POSITIVE match (a bare `!` compound is errexit-exempt in bats, hence the explicit `if`).
+  if echo "$output" | grep -q "verifier proves this tree"; then false; fi
   [ ! -s "$BATS_ARGV" ]                                   # not one suite was started
   grep -q '"smoke":"skipped"' "$LAND_LOG"
   grep -q '"smoke_n":0' "$LAND_LOG"

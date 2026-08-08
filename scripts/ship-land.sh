@@ -60,10 +60,13 @@
 #   CUT PROCEEDS         a cut / budget kill earned NO verdict, and a non-verdict must never
 #                        block a land (R6): recorded to flakes.jsonl, attested smoke:"partial",
 #                        the verifier decides. Smoke therefore NEVER yields exit 9.
-#   SHED = SKIP          at 1-min load ≥ CC_GATE_MAX_LOAD (default 8) the smoke is SKIPPED
-#                        ENTIRELY, never waited (R7). Waiting WAS the amplifier; shedding defers
-#                        to the net, never to a queue. Fail-OPEN: an unreadable sensor runs the
-#                        (bounded) smoke rather than inventing a skip.
+#   SHED = SKIP          at 1-min load ≥ CC_GATE_MAX_LOAD the smoke is SKIPPED ENTIRELY, never
+#                        waited (R7). Waiting WAS the amplifier; shedding defers to the net, never
+#                        to a queue. Fail-OPEN: an unreadable sensor runs the (bounded) smoke
+#                        rather than inventing a skip. The DEFAULT ceiling is DERIVED — hw.ncpu ×
+#                        CC_GATE_MAX_LOAD_PER_CORE (8), so 80 on a 10-core box — because the old
+#                        constant 8 was 0.8/core here and shed 87% of all lands (352/405). It is
+#                        a runaway circuit-breaker, NOT a capacity model; see load_above_ceiling.
 #
 # A land makes NO full-suite claim: GATE_EFFECTIVE_FULL is 0 always — in BOTH lanes — so
 # stamp_gate_green self-noops and gate-green advances ONLY via the verifier (§4.2). Two writers
@@ -105,7 +108,9 @@
 #
 # Env overrides (mostly for tests): SHIP_LAND_LANE · SHIP_LAND_SMOKE_BUDGET_S ·
 # SHIP_LAND_SMOKE_NICE · SHIP_LAND_TIMEOUT_BIN (set-but-EMPTY ⇒ unbounded children) ·
-# CC_GATE_MAX_LOAD (0|off ⇒ never shed) · SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
+# CC_GATE_MAX_LOAD (ABSOLUTE ceiling; 0|off ⇒ never shed; UNSET ⇒ derived, see below) ·
+# CC_GATE_MAX_LOAD_PER_CORE (default 8 — the derived default's factor) ·
+# SHIP_LAND_SHARED_CHECKOUT · SHIP_LAND_SESSION_BRANCH_RE
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE (EFFECT class — exemptible) ·
 # SHIP_LAND_ESC_RE_SECRET (DISCLOSURE class — never exemptible) · SHIP_LAND_ESC_EXEMPT_FILE
 # (default scripts/esc-exempt.manifest) · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
@@ -556,11 +561,52 @@ postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — ne
 # "nothing heavy may EVER enter the land-lock" (see run_gate) — the invariant the v1 in-lock full
 # gate broke, producing a 3h36m lock holder and the multi-day land jam.
 IN_LAND_LOCK="${IN_LAND_LOCK:-0}"
+# ---- THE CEILING IS DERIVED FROM THE BOX, NOT A CONSTANT (2026-08-08) --------------------------
+# WHAT WAS WRONG: the default was the literal `8`, and on this 10-core box that is 0.8/core — a
+# ceiling the machine is essentially never under. Measured consequence in ~/.claude/land.log:
+# of 405 lands that reached this predicate, 352 SHED (87%); only 26 green + 16 red + 11 partial
+# ever earned a behavioral verdict. So "landed green" meant "statically green only" for ~7 lands
+# in 8, silently. Live instance: d6b417e9 changed bin/cc-wave-plan and left tests/cc-wave-plan.bats
+# asserting the INVERSE contract; that suite is direct-selected via BOTH the literal: and naming:
+# edges (un-exonerable), yet the next land recorded smoke:"skipped" and the suite stayed RED on
+# trunk for a day (fixed by hand, 4926f76a).
+#
+# WHY 8 WAS EVER THERE — and why it stopped being the right number. It arrived in dda9e189 as
+# `gate_admit`, a bounded WAIT in front of the v1 gate's FULL 126-suite corpus (20-53 min). v2
+# (492c5106) deleted both the corpus and the wait and put a ≤120s, one-process-at-a-time, nice'd
+# smoke behind the same predicate — but carried the NUMBER across untouched. The ceiling now
+# guards something ~2 orders of magnitude cheaper than the thing it was sized for. Classic
+# premise-rot: the threshold outlived the cost it was chosen against.
+#
+# WHY PER-CORE, AND WHY 8 OF THEM. This repo's own MACHINE_CAPACITY_V2 §8.5.7 measured THIS box
+# SURVIVING 29.15-59.80 (2.92-5.98/core) across 13 samples at a CONSTANT 31-32 sessions — i.e.
+# that band is ordinary heavy operation here, not distress. The same section established that
+# loadavg is the wrong instrument for this decision at all: it swung 2.05x in 100 s at constant
+# workload, the whole session fleet is only ~18% of process CPU, and a single iTerm2 process
+# out-consumes it — so the signal is neither ATTRIBUTABLE to the gate nor SHEDDABLE by skipping
+# its smoke. 8/core = 80 here, above every reading ever recorded on this box (max 62). At the
+# measured band this is therefore EFFECTIVELY LOAD-INSENSITIVE by design; what survives is a
+# runaway CIRCUIT-BREAKER, not a capacity model — say so rather than implying a calibration this
+# number does not have (memory: threshold-must-separate-fatal-from-survived — the fatal 2.53/core
+# sits BELOW the survived band, so no per-core value separates the two, and none is claimed to).
+#
+# THE ASYMMETRY THAT PICKS THE DIRECTION: a false RUN costs ≤120 s of one nice'd bats process on a
+# box that lives at 6/core. A false SHED costs a behaviorally ungated land whose only net trails
+# trunk by ~111 commits / ~20 h (measured 2026-08-08) — which is exactly the "red on trunk for a
+# full day" above. When one error is bounded-and-trivial and the other is the defect being fixed,
+# the ceiling belongs high.
+#
+# NOT the background QoS band, which was the other obvious remedy: postland keeps `background` for
+# hours of bats because there wall time is deploy latency, but PRI 4 taxes the same work 4-84x
+# (memory: bound-must-fit-the-band-not-the-bench), so a ≤120s budget there becomes a PERMANENT
+# non-verdict — smoke:"partial" every time. That trades a loud skip for a quiet one and gates
+# nothing. The smoke stays in its own band and simply runs.
+#
+# BACKWARD COMPATIBLE BY CONSTRUCTION: an EXPLICIT CC_GATE_MAX_LOAD is still an ABSOLUTE ceiling,
+# so every existing caller keeps its exact meaning (0|off kill switch, the fixture probes, and
+# tests/ship-land.bats' 0.0001/100000/31 all set it explicitly). Only the UNSET default changed.
 load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, sensor broken, or off
-  local max load
-  max="${CC_GATE_MAX_LOAD:-8}"
-  [[ "$max" = "0" || "$max" = "off" ]] && return 1            # kill switch: never shed
-  case "$max" in ''|*[!0-9.]*) return 1 ;; esac               # non-numeric ceiling ⇒ fail OPEN
+  local max load ncpu percore
   # sysctl is /usr/sbin/sysctl, and /usr/sbin is absent from the PATH a LaunchAgent exports for its
   # children — so a BARE name reads the load fine from the operator's shell and does not exist for
   # any unattended caller, routing straight into the fail-OPEN arm below. The shed then never fired
@@ -579,8 +625,45 @@ load_above_ceiling() {  # 0 = at/above the ceiling (SHED) · 1 = below it, senso
   else                                    sysctl_bin="$(command -v sysctl 2>/dev/null || true)"
   fi
   [ -n "$sysctl_bin" ] || return 1                            # no sensor at all ⇒ fail OPEN
+
+  # The ceiling is resolved AFTER the sensor because the DERIVED default needs hw.ncpu from that
+  # same binary — one resolution, so a host where sysctl is unreachable cannot end up with a
+  # half-derived ceiling. An explicit value never consults hw.ncpu at all.
+  max="${CC_GATE_MAX_LOAD:-}"
+  if [ -z "$max" ]; then
+    percore="${CC_GATE_MAX_LOAD_PER_CORE:-8}"
+    # These two `case`s are written MULTI-LINE on purpose, and it is not style. permission-gate-lint
+    # tracks an if/case block stack to decide which condition ENCLOSES a refusal, and it pushes on a
+    # line-initial `case` (its line 253) without the trailing-`esac` check it applies to a one-line
+    # `if … fi` (247-248). A single-line `case … esac` therefore pushes and never pops, and the leak
+    # shifts the MAXENC window for refusals far LATER in the file: two one-liners here made
+    # run_corpus()'s `no suites matched` guard (line ~890) read as a newly-added unbounded gate,
+    # 17 → 18 against the ratchet, in a function this change never touched. Multi-line pops
+    # correctly. The lint defect is real and filed separately — it is position-dependent, so
+    # injecting a one-liner at TOP LEVEL does NOT reproduce it (that probe reads clean and looks
+    # like a refutation). Do not collapse these back onto one line to "tidy" them.
+    case "$percore" in
+      ''|*[!0-9.]*) percore=8 ;;                               # non-numeric factor ⇒ the default
+    esac
+    ncpu="$("$sysctl_bin" -n hw.ncpu 2>/dev/null || true)"
+    case "${ncpu:-}" in
+      ''|*[!0-9]*) ncpu=1 ;;                                   # unreadable core count ⇒ 1 core,
+    esac
+    # Integral results print as integers so the shed message reads "80", not "80.0000"; %.4f is the
+    # fractional fallback. NEVER %g — it renders ≥1e6 in scientific notation, which the numeric
+    # guard below would reject as non-numeric and fail OPEN on a ceiling that was merely large.
+    max="$(awk -v n="$ncpu" -v p="$percore" \
+      'BEGIN{v=n*p; if (v==int(v)) printf "%d", v; else printf "%.4f", v}')"  # the SAFE direction:
+  fi                                                          # a low ceiling sheds, never runs wild
+  [[ "$max" = "0" || "$max" = "off" ]] && return 1            # kill switch: never shed
+  case "$max" in ''|*[!0-9.]*) return 1 ;; esac               # non-numeric ceiling ⇒ fail OPEN
+
   load="$("$sysctl_bin" -n vm.loadavg 2>/dev/null | awk '{print $2}')"
   case "${load:-}" in ''|*[!0-9.]*) return 1 ;; esac          # unreadable sensor ⇒ fail OPEN
+  # Publish the raw inputs so the SHED MESSAGE can name them. A skip that cannot say what load it
+  # saw, against what ceiling, is unauditable after the fact — and this whole defect survived a
+  # year of lands precisely because nothing downstream carried the numbers.
+  SHED_LOAD="$load"; SHED_CEILING="$max"
   awk -v l="$load" -v m="$max" 'BEGIN{exit !(l+0 >= m+0)}'
 }
 
@@ -927,7 +1010,12 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
 
   if load_above_ceiling; then
     SMOKE_STATE="skipped"
-    echo "⏭ gate: smoke SKIPPED — 1-min load is at/above the ceiling ${CC_GATE_MAX_LOAD:-8}. Shedding is a SKIP, never a wait (waiting is what starved five gates below their own ceiling); the post-land verifier proves this tree. Override: CC_GATE_MAX_LOAD=0." >&2
+    # LOUD, and it names the CONSEQUENCE rather than only the cause. The old wording ended "the
+    # post-land verifier proves this tree", which reads as a completed proof; the verifier is a
+    # BACKSTOP that trails trunk (measured 111 commits / ~20 h behind on 2026-08-08), so at the
+    # moment of landing nothing has executed this diff. A skip that sounds like a hand-off is how
+    # 352 ungated lands went unnoticed — the numbers are printed for the same reason.
+    echo "⏭ gate: smoke SKIPPED — this land is behaviorally UNGATED: statics passed, but NO suite of this diff ran (1-min load ${SHED_LOAD:-?} ≥ ceiling ${SHED_CEILING:-?}). Shedding is a SKIP, never a wait (waiting is what starved five gates below their own ceiling). The post-land verifier is the only remaining net and it trails trunk by hours, so a suite this diff breaks can sit RED on trunk until it catches up. Override: CC_GATE_MAX_LOAD=0." >&2
     return 0
   fi
 
