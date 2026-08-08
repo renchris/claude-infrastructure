@@ -147,6 +147,19 @@
 #                       no distinct originator). DEGRADES, never fails: a headless fire with no
 #                       firing pane silently skips it — only an EXPLICIT --notify-back errors.
 #                       --no-notify-back opts out for a deliberate one-way fire.
+#   --goal COND         MESSAGE 2. Arm a `/goal COND` Stop-hook goal in the fired session AFTER
+#                       engagement is proven, as a SEPARATE submission — never as the payload's
+#                       head. This is the supported way to get a goal into a fire: the payload gate
+#                       (check_slash_head) still refuses a slash-headed brief, because one message
+#                       cannot be both. COND is ONE line, <=4000 chars, and must not itself start
+#                       with '/' — all three are refused pre-fire. Also re-armed across --recycle
+#                       (a goal is session-scoped and dies with its session — measured 2026-08-08).
+#                       NEVER fails the fire: the brief has already landed and been proven to
+#                       engage, so a failed arming leaves a working session that simply has no goal.
+#                       The result is READ BACK from the fired session's own transcript and printed
+#                       as `goal-arm verdict=set|unverified|abstained` (also a handoffs.jsonl row).
+#                       Keep COND a POINTER, not the brief: '<objective> — full brief in the prompt
+#                       above; DoD at <path>'. Env equivalent: FIRE_GOAL.
 #   --self-retire       DEFAULT for non-recycle fires. Append a SELF-RETIRE directive to the prompt
 #   --no-self-retire    copy: the fired PEER drives its trivial pre-authorized tail, then runs
 #                       `self-close --terminal` on its OWN pane instead of idling. --notify-back
@@ -320,6 +333,7 @@ RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd:
 # WHICH TERMS capacity_gate() evaluates, so it is a gate input and must be parsed before the gate.
 CLOUD=0
 CLOUD_OPTIN="${CC_FIRE_CLOUD:-off}"              # default-off; `on` enables --cloud on this box
+FIRE_GOAL="${FIRE_GOAL:-}"                       # --goal: MESSAGE 2, armed AFTER engagement (arm_goal)
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 # ---- V2 LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5) -----------------------------------------
 # THE INVERSION: row 2 owns the lifecycle ACTIONS but used to own almost none of the FACTS about
@@ -438,6 +452,26 @@ _fire_gate_of() { # $1=refusal reason → gate name
 }
 emit_fire_refusal() { # $1=reason $2=detail → always 0 — a fire that did NOT happen
   emit_fire_event refused "${1:-unknown}" "${2:-}" refuse "$(_fire_gate_of "${1:-unknown}")"
+}
+# MESSAGE-2 (--goal) outcome. Its OWN emitter, deliberately NOT emit_fire_event: that one writes
+# `engaged:false` on every non-admit row, and `engaged` is the numerator of the V2 M-1 engagement
+# rate. A goal-arm row says nothing whatever about whether the FIRE engaged — by construction it is
+# only ever written AFTER engagement was proven — so borrowing that schema would deflate the metric
+# by one row per armed goal, which is exactly the fabricated-outcome trap the emit_fire_event header
+# spells out. Same log, distinct class, no `engaged` key: R9, an unmeasured field reads ABSENT.
+emit_goal_event() { # $1=verdict (set|unverified|abstained) $2=detail → always 0
+  local log="$HOME/.claude/logs/handoffs.jsonl" line
+  [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
+  mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  line=$(jq -cn --arg ts "$(_iso_now)" --arg vd "${1:-unknown}" --arg d "${2:-}" \
+                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" \
+    '{ts:$ts, class:"goal-arm", verdict:$vd, gate:"goal",
+      firing_sid:(if $fs == "" then null else $fs end),
+      account:   (if $ac == "" then null else $ac end),
+      detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+  [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
+  return 0
 }
 emit_gate_admit() { # $1=gate $2=basis $3=detail → always 0 — a gate decision that let a fire THROUGH
   emit_fire_event admitted "${2:-unknown}" "${3:-}" admit "${1:-unknown}"
@@ -2741,6 +2775,156 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
   return 1
 }
 
+# ---- THE TWO-MESSAGE GOAL PATH (--goal), 2026-08-08 ------------------------------------------
+# check_slash_head above is CORRECT and stays. This is the path that makes `/goal` work ALONGSIDE
+# it, by refusing to put the two things in one message in the first place.
+#
+# WHAT WAS ACTUALLY MEASURED (docs/research/goal-in-handoff-2026-08-08.md), because every previous
+# statement in this file about `/goal` was an inference and two of them were wrong:
+#   · `/goal` is a HARNESS BUILT-IN, not a skill. Two command records live in the CC 2.1.220 binary
+#     (`{type:"local-jsx",name:"goal"}` for the TUI and `{type:"local",name:"goal",
+#     supportsNonInteractive:true}` for the thin client); there is no goal.md in any commands dir
+#     and no skill provides it. commands/handoff.md called it "SKILL-BACKED, never a built-in" and
+#     built its whole dispatch argument on that — corrected in the same commit as this block.
+#   · The CLI DOES parse a slash command out of the initial prompt. commands/handoff.md said it does
+#     not, and that "the receiving model dispatches a LEADING /x via its Skill tool". Refuted: a
+#     fired session's transcript shows `<command-name>/goal</command-name>` and an `activeGoal`
+#     attachment written BEFORE the first model turn. No model, no Skill tool.
+#   · The 4000-char cap is on the goal CONDITION — i.e. on the command's whole argument, which for a
+#     `/goal`-headed payload IS the whole rest of the submission (`Ydr=4000`; measured live:
+#     "Goal condition is limited to 4000 characters (got 4100)").
+#   · A `/goal` UNDER the cap does NOT leave a task-less pane. Setting a goal returns a QUERY whose
+#     prompt re-injects the ENTIRE condition — "treat the condition itself as your directive" — so
+#     the brief IS delivered as work. check_slash_head's refusal text over-generalises here: it is
+#     right about an OVER-cap `/goal` (text-only reply, no query, pane idles) and right about every
+#     other slash head, and wrong about exactly the shape the operator wants. The refusal stays
+#     anyway, because the fix is not to admit that shape — it is to stop needing it.
+#   · A goal set by ANY route dies with its session. Measured across a --recycle: the successor's
+#     transcript carries zero goal_status. `--goal` therefore has to be re-passed on every recycle,
+#     which is why it is a FLAG and not a property of the brief.
+#
+# THE SHAPE. Two submissions, in this order, never one:
+#   1. the brief — plain-text-headed, NO cap, delivered exactly as every fire already delivers it.
+#   2. `/goal <condition>` — bracketed-pasted into the now-engaged pane, AFTER engagement is proven.
+# Measured 2026-08-08 in a real fired pane (probe ad6d8d16): a bracketed-paste + CR of a `/goal`
+# into a RUNNING session is parsed identically to the operator typing it — `Goal set: …`, a
+# goal_status attachment on disk, `◎ /goal active` in the TUI. 51 sessions in the corpus had already
+# set a goal as a later TYPED message; this probe closes the gap between "typed" and "pasted",
+# which was the one link nothing on disk could establish.
+#
+# FAIL-CLOSED, in the only direction that matters. Message 2 is ADDITIVE: message 1 has already
+# landed and been PROVEN to engage before this runs, so every failure here leaves a session that has
+# its brief and is working. It can never produce the inverse — a goal with no brief — because the
+# goal is never the carrier of the brief. Concretely: arm_goal never fails the fire (the caller
+# ignores its status), and it2_paste_submit ABSTAINS unless composer_owned proves a live CC session
+# owns the pane, so it can never type into a shell.
+#
+# AND IT IS READ BACK, never claimed. A paste that "succeeded" is not a goal that was SET (memory
+# claimed-outcome-vs-checked-outcome — a `|| true` plus a damping marker on a fake success deletes
+# the message). goal_armed_for_pane re-reads the FIRED session's own transcript for the attachment
+# the harness writes, matching the condition exactly, and every outcome prints a parseable
+# `goal-arm verdict=<set|unverified|abstained>` token and lands a ledger row.
+
+# Pre-fire validation of a --goal condition. Runs beside the payload gates, BEFORE any side effect,
+# so a malformed goal costs a refusal rather than a half-fired pane.
+check_goal_arm() { # → 0 ok (or no --goal), 1 (loud) refuse
+  local cond="${FIRE_GOAL:-}" limit="${GOAL_MAX_CHARS:-4000}" chars nl
+  [ -n "$cond" ] || return 0
+  # A newline would submit the condition's first line and leave the rest in the composer as an
+  # unsent fragment — the paste is atomic but the CR is not selective. Single line, enforced.
+  #
+  # `nl=$'\n'`, NEVER `$(printf '\n')`: command substitution STRIPS trailing newlines, so the latter
+  # expands to the EMPTY string and the pattern degrades to `**` — which matches every condition and
+  # refuses all of them under the multi-line reason. Caught by this suite's own boundary case; noted
+  # because the broken form reads correct and its failure is a guard that refuses everything.
+  nl=$'\n'
+  case "$cond" in *"$nl"*)
+    echo "!! --goal condition contains a NEWLINE. The arming paste submits at the first CR, so the rest would be stranded in the composer as an unsent fragment." >&2
+    echo "   Fix: make the condition ONE line — a pointer, not a brief: --goal '<objective> — full brief in the prompt above; DoD at <path>'." >&2
+    emit_fire_refusal payload-goal-arm-multiline "--goal condition is multi-line"
+    return 1 ;;
+  esac
+  # A second slash command would be dispatched INSTEAD of /goal — the arming line is `/goal $cond`,
+  # so a cond of "/research …" submits "/goal /research …" and the condition becomes that text.
+  # Scoped to the dangerous EFFECT (a leading slash in the ARGUMENT), never to a location.
+  case "$cond" in /*)
+    echo "!! --goal condition itself STARTS with '/'. It is pasted as '/goal <condition>', so a leading slash makes the condition read as another command invocation rather than a goal." >&2
+    emit_fire_refusal payload-goal-arm-slash "--goal condition starts with a slash"
+    return 1 ;;
+  esac
+  chars=${#cond}
+  if [ "$chars" -gt "$limit" ]; then
+    echo "!! --goal condition is ${chars} chars — the harness HARD-CAPS a goal condition at ${limit} and replies 'Goal condition is limited to ${limit} characters (got ${chars})' WITHOUT setting anything (measured 2026-08-08)." >&2
+    echo "   Fix: the goal is a POINTER, not the brief — '<one-line objective> — full brief in the prompt above; DoD at <path>'. The detail is already in message 1, which has no cap." >&2
+    emit_fire_refusal payload-goal-arm-cap "--goal condition is ${chars} chars > ${limit}"
+    return 1
+  fi
+  return 0
+}
+
+# READ-BACK ORACLE. Resolve pane → session id → transcript, and look for the attachment the HARNESS
+# writes when a goal is actually set: {"type":"goal_status","met":false,"condition":"<cond>"}. Keyed
+# on the condition so a stale goal from a previous session can never be read as this arming's proof.
+# jq-only on purpose: a grep -F for the condition also matches the pasted USER message, which is
+# present whether or not the command was accepted — the whole failure this oracle exists to catch.
+goal_armed_for_pane() { # $1=pane $2=condition → 0 goal is live / 1 not proven
+  local pane="${1:-}" cond="${2:-}" sid pdir hit
+  [ -n "$pane" ] && [ -n "$cond" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  sid="$(cc_sid_for_pane "$pane" 2>/dev/null || true)"
+  [ -n "$sid" ] || return 1
+  # `find`, NOT "$pdir/$sid.jsonl". A CC_PROJECTS_DIRS entry is the projects ROOT; the transcript
+  # lives one level down, in a per-cwd project dir (…/projects/-Users-…-worktree/<sid>.jsonl). The
+  # direct-path form was written first, passed all 17 unit tests against a fixture that put the
+  # transcript at the root, and then read `unverified` on the FIRST real fired pane whose goal was
+  # demonstrably set — a false negative that only the live probe could see, because the fixture had
+  # replayed the wrong artifact (memory control-must-replay-the-real-artifact). engagement_seen
+  # already resolves a sid this way; the test fixture now uses the real nesting too.
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] || continue
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      jq -e --arg c "$cond" 'select(.attachment.type=="goal_status" and .attachment.met==false and .attachment.condition==$c)' \
+         "$hit" >/dev/null 2>&1 && return 0
+    done <<EOF
+$(find "$pdir" -name "$sid.jsonl" -type f 2>/dev/null)
+EOF
+  done
+  return 1
+}
+
+# MESSAGE 2. Never fails the fire — see FAIL-CLOSED above. Always 0.
+arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable verdict
+  local it2="${1:-}" pane="${2:-}" cond="${3:-}" t=0
+  local timeout="${FIRE_GOAL_VERIFY_TIMEOUT:-45}" interval="${FIRE_GOAL_VERIFY_INTERVAL:-3}"
+  [ -n "$cond" ] || return 0
+  if [ -z "$it2" ] || [ -z "$pane" ]; then
+    echo "⚠ goal NOT armed — no pane/it2 to paste into; the session has its brief and is working. goal-arm verdict=abstained reason=no-pane" >&2
+    emit_goal_event abstained "no pane/it2 binding for the arming paste" || true
+    return 0
+  fi
+  # The ownership gate lives INSIDE it2_paste_submit (composer_owned) and abstains loudly.
+  if ! it2_paste_submit "$it2" "$pane" "/goal $cond"; then
+    echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused" >&2
+    emit_goal_event abstained "arming paste refused/abstained for pane $pane" || true
+    return 0
+  fi
+  while [ "$t" -lt "$timeout" ]; do
+    if goal_armed_for_pane "$pane" "$cond"; then
+      echo "→ goal ARMED + VERIFIED on pane $pane (read back from the session's own transcript, ${#cond} chars). goal-arm verdict=set" >&2
+      emit_goal_event set "pane $pane; condition ${#cond} chars" || true
+      return 0
+    fi
+    /bin/sleep "$interval"; t=$((t + interval))
+  done
+  # Submitted but not READ BACK. Never call this "armed": an over-cap or gate-refused /goal replies
+  # in TEXT and sets nothing, and that reply is indistinguishable from success at the pane.
+  echo "⚠ goal SUBMITTED but NOT VERIFIED after ${timeout}s — no goal_status attachment with this condition in the session's transcript. The harness may have refused it (trusted-workspace gate, restricted hooks, or an over-cap condition), and a submitted /goal that was refused looks exactly like one that worked. The session HAS its brief and is working. goal-arm verdict=unverified" >&2
+  emit_goal_event unverified "pane $pane; submitted, no goal_status read back within ${timeout}s" || true
+  return 0
+}
+
 # ---- P0-17 machine-capacity admission gate (lag incident 2026-07-29) --------------------------
 # THE FIRE-MODE chokepoint: cc-dispatch defaults CC_DISPATCH_SPAWN_BIN here, and the desk, the
 # ground-up coordinator, lr-reset-poller, lr-handoff and manual fires all call it — so this is where
@@ -3335,6 +3519,7 @@ if [ "${1:-}" = "__recycle" ]; then
   # ignores them, and this one degrades to the honest weaker verdict when they are absent).
   RCY_OLD_SID="${6:-}"                             # pre-recycle CC sid — the ROW-CHANGE baseline
   RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
+  FIRE_GOAL="${8:-}"                               # --goal condition to re-arm as MESSAGE 2
   RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
   RCY_ENGAGE_INTERVAL="${RCY_ENGAGE_INTERVAL:-5}"
   if [ -n "$RCWD" ] && [ ! -d "$RCWD" ]; then
@@ -3393,6 +3578,11 @@ if [ "${1:-}" = "__recycle" ]; then
     while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
       if recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; then
         echo "→ relaunched + ENGAGEMENT CONFIRMED in $RSID (a real assistant turn, not just a process)"
+        # MESSAGE 2, re-armed. A recycle mints a NEW session id, and a goal is a SESSION-SCOPED Stop
+        # hook — measured 2026-08-08: the successor's transcript carries zero goal_status, and the
+        # predecessor's goal was never cleared, it simply died. So the commonest succession on this
+        # box is exactly the one that silently loses its goal unless it is re-armed here.
+        arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
         exit 0
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
@@ -4247,6 +4437,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
   --no-notify-back) NOTIFY_BACK_OPT_OUT=1; NOTIFY_BACK=""; shift ;;
+  --goal)           FIRE_GOAL="${2:?--goal needs a condition}"; shift 2 ;;
   --self-retire)    SELF_RETIRE=1; shift ;;
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
@@ -4288,6 +4479,9 @@ fi
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
 check_slash_head  "$PROMPT_FILE" || exit 1
+# …and validate --goal (MESSAGE 2) here too, so a malformed condition costs a refusal rather than a
+# pane that fired, engaged, and then could not be armed.
+check_goal_arm || exit 1
 # P0-17: refuse a NET-NEW fire onto an already-saturated box, BEFORE any side effect. A recycle
 # REPLACES a session (net-zero panes) and is exempt — see capacity_gate().
 if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi
@@ -6177,7 +6371,7 @@ recycle_fire() {
   # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
   # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
   # dir being LEFT — naming it in a "cwd VANISHED" warning would accuse the wrong directory.
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER")"
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -6456,6 +6650,10 @@ else
       fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
+      # MESSAGE 2. Strictly after engagement was PROVEN — that ordering is the whole design, and it
+      # was already instrumented (P0-11), so this adds no new liveness assumption. Never gates the
+      # fire: the brief has landed and the session is working whatever happens here.
+      arm_goal "$REAL_IT2" "$SPAWNED_PANE" "$FIRE_GOAL"
     elif [ "$ENGAGE_RC" = 2 ]; then
       # The launcher NEVER RAN: the pane is still a shell and that shell refused or is blocking on
       # the launch command. Distinct message because the remedy is distinct — there is no session to
