@@ -287,6 +287,48 @@ exited 1 *before* the gate, so the gate was never reached and a "no refusal" rea
 suite that is green in BOTH arms is therefore reported as **NO-REACH (control inert)**, never as a
 pass — a control that cannot fail proves nothing about the suite it is pointed at.
 
+### A THIRD channel, found by the verification itself: wall-clock waits sized on an idle box
+
+The 37-suite post-change sweep came back **36 pass / 1 red / 0 non-verdict**. The red was
+`tests/teammate-auto-shutdown.bats` → `not ok 15 worktree-by-name: a member-named worktree resolves
+via git and IS removed (owned)`, and it is worth writing down precisely because the first instinct —
+"a flake, re-run it" — would have thrown away the finding.
+
+It is **not** caused by the pin, and that is provable rather than assumed: the suite asserts no gate
+refusal (the only `capacity`/`exit 9` strings in the file are the comment C1 just added), and the pin
+can only make the gate MORE permissive, so it cannot manufacture a new failure. It reproduced GREEN
+4/4 on the landed tree.
+
+The cause is one line — `tests/teammate-auto-shutdown.bats:381`:
+
+```bash
+wait_gone() { local i=0; while [ -e "$1" ] && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i+1)); done; [ ! -e "$1" ]; }
+```
+
+**A 3-second wall-clock bound (60 × 0.05s) on an asynchronous `git worktree remove`.** It failed in
+the one window where this session's own 37-suite sweep, a sibling's full-corpus run, and
+`ship-land.sh`'s stranded-sweep over 547 branches were all running at once. So the assertion is a
+statement about **how fast the box is**, dressed as a statement about the tree — which is exactly
+§3's inversion, reached through a channel `capacity_gate` has nothing to do with.
+
+That makes **three** distinct channels in this one class, and C1 closes only the first:
+
+| # | Channel | Status |
+|---|---|---|
+| 1 | `capacity_gate` loadavg term | **closed** by C1 — pinned tree-wide, ratchet empty |
+| 2 | `capacity_gate` headroom term | filed `dd76e48db6b2` — 40 suites still capacity-only |
+| 3 | **wall-clock waits sized on an idle box** | filed — previously unnamed |
+
+⚠️ **Do not "fix" channel 3 by enlarging the constant.** That is §5's rejected row — *raise the
+ceiling until tests pass* — one row down: time is unbounded above under a designed steady state of
+20-40 concurrent sessions, so any constant is a future permanent-red, and picking one here would be
+guessing. The fix is to make the wait **deterministic** (assert on the operation's own completion
+rather than on elapsed time), which is design work, not a constant edit. It is filed rather than
+guessed at.
+
+This also sharpens why §2's chain did not predict the whole red rate: pinning the gate cannot fix a
+timing bound, so "37 suites were red-by-load" and "89% of stamps are red" were never the same claim.
+
 ### `cc-bats`'s exit 75 is what load-sensitivity looks like when it is done RIGHT
 
 Verifying the 37 surfaced the contrast this whole document turns on. A first sweep returned `rc=75`
