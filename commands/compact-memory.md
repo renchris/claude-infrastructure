@@ -1,6 +1,6 @@
 ---
 name: compact-memory
-description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes its load warning (>200 lines / ~46KB). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
+description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes the loader's read limit (~24,985 B — BYTES bind, not the 200-line cap). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion
 argument-hint: "[--apply-safe to apply the SAFE-AUTO archival; default = dry-run report only]"
 ---
@@ -426,4 +426,6 @@ Consequences for how you run this command:
 
 ## Output
 A report: SAFE-AUTO actions (taken or previewed), then the PROPOSE-ONLY queue as an
-approve/reject list. End with before/after `MEMORY.md` line count + the remaining gap to ~200 lines.
+approve/reject list. End with before/after `MEMORY.md` **byte** count against the ~24,985 B limit —
+bytes are what truncate, so a line-count delta alone cannot say whether the pass worked. Report the
+line count too, but as context, never as the verdict.
