@@ -62,6 +62,25 @@ SH
   export PATH="$BIN:$PATH"
   export KITTY_WINDOW_ID=300
   export CC_KITTY_ARGV_SPAWN=0
+  # THE PANE-IDENTITY ENV, PINNED — never inherited. bin/it2-kitty refuses at its terminal gate long
+  # before it reaches the composer guard unless BOTH hold: bin/cc-in-kitty agrees this pane is
+  # kitty's, and a control socket is named. KITTY_WINDOW_ID alone satisfies NEITHER — cc-in-kitty
+  # walks the process tree up to KITTY_PID and answers 2 UNVERIFIABLE without it, so the shim exits
+  # 3 and 17 of these 19 tests fail on their `status` line having never run the subject at all.
+  #
+  # Inside a kitty session KITTY_PID/KITTY_LISTEN_ON arrive ambiently, so the suite passed in every
+  # hand-run while being RED under launchd — which is precisely where postland-verify runs it
+  # (com.claude.postland-verify sets PATH and nothing else). That split is the whole of item
+  # 04e8028b980d: a green no developer could reproduce as red, and a red no rerun could clear.
+  #
+  # CC_TERM=kitty is cc-in-kitty's OWN documented override, honoured verbatim ahead of every check,
+  # so the precondition is DECLARED here rather than walked — no ps, no ancestry, no ambient state.
+  # CC_TERM_KITTY_TO would satisfy both gates with one variable and is deliberately NOT used: it
+  # adds `--to <socket>` to every kitty argv, and the argv these tests assert on is the one
+  # production self-close actually issues.
+  export CC_TERM=kitty
+  export KITTY_LISTEN_ON="unix:$BATS_TEST_TMPDIR/kitty-sock"
+  unset CC_TERM_KITTY_TO
 }
 
 RULE='──────────────────────────────────────────────────────────────────────────────────────────────'
@@ -258,4 +277,38 @@ open(sys.argv[2], "w").write(src.replace(a, b))' "$SHIM" "$m" || return 1
   CC_CLOSE_COMPOSER_GUARD=off run "$SHIM" session close -f -s 300
   [ "$status" -eq 0 ]
   closed                         # kitty WAS asked to destroy it — the guard is the only thing stopping this
+}
+
+@test "CONTROL: setup()'s environment is SUFFICIENT — nothing here is inherited from a real kitty" {
+  # The defect this suite SHIPPED with, pinned as a test rather than left as a comment. Every
+  # assertion above runs in whatever environment the developer's shell happens to carry, so a
+  # variable the fixture forgot to pin is indistinguishable from one it pinned — right up until the
+  # suite runs somewhere that variable does not exist, and 17 tests fail at once on a subject that
+  # never changed.
+  #
+  # TWO HALVES, because neither covers both pins on its own — one mutant per site, or the coverage
+  # of one is credited to the other (memory: per-site-mutation-attributes-coverage).
+  #
+  # (1) OWNERSHIP, asserted before anything runs. `env -i VAR="$VAR"` forwards by REFERENCE, so a
+  #     pin deleted from setup() is silently replaced by the ambient value and the behavioural half
+  #     below stays green — measured: dropping the KITTY_LISTEN_ON pin left this test passing,
+  #     because a kitty session exports a perfectly usable socket of its own. The socket pin is
+  #     therefore keyed to $BATS_TEST_TMPDIR, which is unique per test and which no inherited value
+  #     can ever equal, so this assertion can only be satisfied by setup() having set it.
+  [ "$CC_TERM" = kitty ] || { echo "setup() must pin CC_TERM=kitty; got '${CC_TERM:-<unset>}'"; false; }
+  [ "$KITTY_LISTEN_ON" = "unix:$BATS_TEST_TMPDIR/kitty-sock" ] \
+    || { echo "KITTY_LISTEN_ON is not setup()'s — got '${KITTY_LISTEN_ON:-<unset>}' (ambient?)"; false; }
+  #
+  # (2) BEHAVIOUR. `env -i` forwards ONLY the names listed here, so any OTHER variable this fixture
+  #     comes to rely on ambiently is simply absent — which is launchd's environment, and postland's.
+  #     Half (1) pins the two seams known today; this half is what catches the third one.
+  screen "$(printf '\033[m❯%sirreplaceable' "$NBSP")"
+  run env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+        CC_TERM="$CC_TERM" KITTY_LISTEN_ON="$KITTY_LISTEN_ON" \
+        CC_TERM_KITTY="$CC_TERM_KITTY" KITTY_WINDOW_ID="$KITTY_WINDOW_ID" \
+        CC_KITTY_ARGV_SPAWN="$CC_KITTY_ARGV_SPAWN" KITTY_ARGV="$KITTY_ARGV" \
+        SCREEN="$SCREEN" ALT="$ALT" LS_RC="$LS_RC" TEXT_RC="$TEXT_RC" \
+        "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ] || { echo "$output"; false; }
+  [ "$(attempts)" = "0" ]
 }
