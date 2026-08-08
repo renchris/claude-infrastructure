@@ -53,6 +53,37 @@
 # `/usr/bin/taskinfo` exits "must be run as root", so it is unusable from a launchd/hook context.
 # PRI is the only unprivileged signal there is.
 #
+# THREE COVERAGE METRICS, and the one an operator actually asks for is RUN-weighted (added
+# 2026-08-07). PROC coverage answers "what fraction of bats PROCESSES are demoted", which is not the
+# question the box poses. Two properties make it a poor headline:
+#
+#   · IT IS PROC-WEIGHTED, so runs vote in proportion to their fan-out. A 40-proc suite and a 1-proc
+#     suite are one gate run each to the operator, but 40:1 to this metric — so one large covered
+#     run can outvote several small uncovered ones and hold the number above threshold.
+#   · IT IS MOVABLE BY A SINGLE PROCESS. Not theoretical: that is the defect DENOMINATOR PURITY
+#     below was written to fix, where one `timeout` wrapper per run sat at pri=31 and dragged a
+#     genuinely 114/114 population down to 73.2%. Strict matching removed those particular wrappers;
+#     it did not remove the SHAPE, because the metric still lets one proc speak for a whole run.
+#
+# RUN coverage answers it directly — how many concurrent gate RUNS are undemoted — and one stray
+# process cannot move it, because a run is one vote no matter how many procs carry it. A run counts
+# as covered only when EVERY attributed proc of that run is demoted, which is the conservative
+# direction: a partially-demoted run is uncovered.
+#
+# ATTRIBUTION, stated rather than assumed. bats stamps its per-invocation tmpdir (bats-run-XXXXXX)
+# into argv, and MEASURED on this box only the `bats-exec-file` rows carry it — the top-level `bats`,
+# `bats-exec-suite` and `bats-exec-test` rows do not. So the run metric is computed over the rows
+# that carry a run stamp, and the rows that do not are counted into `procs_unattributed` rather than
+# silently dropped: an exclusion nobody can see is how the proc denominator went wrong in the first
+# place. This costs nothing in fidelity, because the clamp is applied ONCE at the root of a run and
+# every descendant inherits it (verified: all five procs of a sampled run read the same PRI), so any
+# proc of a run reports that run's band.
+#
+# NO-BURST is unchanged and still gates everything: runs_in_flight < 2 is a NON-VERDICT whichever
+# coverage metric is selected. runs_demoted + runs_full == runs_in_flight BY CONSTRUCTION — all three
+# derive from the same run-id extraction over the same snapshot — which makes the trio a reconcilable
+# check on the classifier rather than three numbers that can drift apart unnoticed.
+#
 # READ-ONLY with respect to the fleet: spawns nothing but its own two short-lived controls, kills
 # nothing, waits on nothing (R1 — no load polling, ever).
 #
@@ -118,11 +149,33 @@ while [ $# -gt 0 ]; do
 done
 
 # ── is this PRI a clamp-pinned value? (empty filter ⇒ everything passes) ───────────────────────
+#
+# CHOPPED BY PARAMETER EXPANSION, not `for p in $CLAMP_PRIS`. Word-splitting an unquoted expansion
+# ALSO pathname-expands each field, and this filter decides the census's own POSITIVE CONTROL — so
+# the working directory was able to decide whether that control passed. Measured 2026-08-07 with
+# identical environment, varying only the contents of cwd:
+#
+#     QOS_CLAMP_PRIS='2*'  cwd empty                 → control FAIL, verdict SIGNAL-DEAD  (honest)
+#     QOS_CLAMP_PRIS='2*'  cwd contains a file `20`  → control OK,   verdict NO-BURST     (a lie)
+#
+# In the second run the clamp value came from a FILENAME: the glob matched `20`, the shell filter
+# then accepted a PRI-20 process as clamped, and the control declared itself healthy. The awk filter
+# used for the POPULATION never globs, so the two halves of this script disagreed about what
+# "demoted" means — and the disagreement is silent in exactly the direction that matters, since a
+# green control is what licenses every other number in the row. A control a stray file can flip is
+# not a control.
+#
+# `set -f` would suppress it, but it mutates SHELLOPTS, which an exporting environment propagates
+# into every child; chopping the string removes the exposure by construction. (The trap is invisible
+# under zsh, which does not word-split unquoted parameters — memory
+# verification-harness-vacuous-pass-traps. This file ships to launchd and is tested under /bin/bash.)
 _is_clamp_pri() {
   [ -z "$CLAMP_PRIS" ] && return 0
-  local p
-  # shellcheck disable=SC2086  # word-splitting on spaces is the POINT: CLAMP_PRIS is a value LIST.
-  for p in $CLAMP_PRIS; do
+  local rest="$CLAMP_PRIS" p
+  while [ -n "$rest" ]; do
+    p="${rest%% *}"
+    if [ "$p" = "$rest" ]; then rest=""; else rest="${rest#* }"; fi
+    [ -n "$p" ] || continue
     [ "$1" = "$p" ] && return 0
   done
   return 1
@@ -306,8 +359,53 @@ CPU_TOTAL=$(awk -v a="$CPU_DEMOTED" -v b="$CPU_FULL" 'BEGIN{printf "%.1f", a+b}'
 N_RUNS=$(printf '%s\n' "$SNAP" | grep -oE 'bats-run-[A-Za-z0-9]+' | sort -u | grep -c . || true)
 [ -z "$N_RUNS" ] && N_RUNS=0
 
+# ── RUN-WEIGHTED tiers (see THREE COVERAGE METRICS in the header) ─────────────────────────────
+# A run is COVERED only when every attributed proc of that run is demoted; any full-priority proc
+# condemns the whole run. Rows carrying no run stamp cannot be attributed and are counted separately
+# rather than dropped in silence. The clamp predicate is deliberately the SAME awk function as the
+# proc pass, so the two metrics can never disagree about what "demoted" means.
+RUNS_DEMOTED=0; RUNS_FULL=0; N_UNATTRIB=0
+if [ -n "$SNAP" ]; then
+  read -r RUNS_DEMOTED RUNS_FULL N_UNATTRIB <<EOF
+$(printf '%s\n' "$SNAP" | awk -v m="$DEMOTED_PRI_MAX" -v cl="$CLAMP_PRIS" '
+  function isclamp(p) {
+    if (cl == "") return 1
+    n = split(cl, a, " ")
+    for (i = 1; i <= n; i++) if (p == a[i]+0) return 1
+    return 0
+  }
+  # EVERY id on the row, not the first. A row can legitimately carry TWO: bats-exec-file names its
+  # own run tmpdir, and a corpus whose PATH sits under another run tmpdir names that one too (the
+  # shape (xxxiii) already relies on). runs_in_flight is a `grep -o | sort -u`, which sees all of
+  # them — so taking only the first here made runs_demoted + runs_full != runs_in_flight, i.e. the
+  # partition silently failed to hold and the trio stopped being reconcilable. Matching the
+  # denominator EXACTLY is what keeps it a check rather than three independent numbers.
+  #
+  # RESIDUAL, stated: a proc is attributed to every run it mentions, so in that nested shape one
+  # full-priority proc can condemn the run whose tmpdir merely CONTAINS its corpus. That is the
+  # conservative direction — it can only UNDER-report coverage, never over-report it, and
+  # over-reporting is the exact failure this whole row exists to prevent. In the production shape
+  # (corpus paths are repo paths, not bats tmpdirs) a row carries one id and the question does not
+  # arise.
+  { pri=$3+0
+    t=$0; n=0
+    while (match(t, /bats-run-[A-Za-z0-9]+/)) {
+      run = substr(t, RSTART, RLENGTH)
+      t = substr(t, RSTART + RLENGTH)
+      n++
+      seen[run]=1
+      if (!(pri<=m && isclamp(pri))) bad[run]=1
+    }
+    if (n == 0) { un++ } }
+  END { nd=0; nf=0
+        for (r in seen) { if (r in bad) nf++; else nd++ }
+        printf "%d %d %d", nd+0, nf+0, un+0 }')
+EOF
+fi
+
 COV_PROC=$(awk -v d="$N_DEMOTED" -v t="$N_TOTAL" 'BEGIN{ if(t<=0){print "0.0"} else {printf "%.1f", 100*d/t} }')
 COV_CPU=$(awk -v d="$CPU_DEMOTED" -v t="$CPU_TOTAL" 'BEGIN{ if(t<=0){print "0.0"} else {printf "%.1f", 100*d/t} }')
+COV_RUN=$(awk -v d="$RUNS_DEMOTED" -v t="$N_RUNS" 'BEGIN{ if(t<=0){print "0.0"} else {printf "%.1f", 100*d/t} }')
 
 # ── verdict ───────────────────────────────────────────────────────────────────────────────────
 # AMBIENT-DEMOTED is a TRUSTWORTHY control state, not a failure: the demoted side was verified and
@@ -325,9 +423,15 @@ else
   # single proc is correctly demoted — it would fail for reasons unrelated to the fix. (A
   # CPU-ACTIVE demoted proc does register correctly: verified 14.4% at pri=4, so CPU coverage is
   # still worth REPORTING as the impact metric — it is just the wrong thing to GATE on.)
-  # Seam: QOS_GATE_ON=cpu switches the gate to CPU coverage for a burst known to be CPU-active.
+  # Seam: QOS_GATE_ON=cpu switches the gate to CPU coverage for a burst known to be CPU-active;
+  # QOS_GATE_ON=run gates on RUN coverage, the metric one stray proc cannot distort (header, THREE
+  # COVERAGE METRICS). The DEFAULT deliberately stays proc: changing what an ACCRUING metric gates
+  # on would silently re-base the AC1 record that has been accumulating against it, so run coverage
+  # is REPORTED on every row from today and GATED only on an explicit, separate call.
   _gate_metric="${QOS_GATE_ON:-proc}"
-  if [ "$_gate_metric" = "cpu" ]; then _gv="$COV_CPU"; else _gv="$COV_PROC"; fi
+  if [ "$_gate_metric" = "cpu" ]; then _gv="$COV_CPU"
+  elif [ "$_gate_metric" = "run" ]; then _gv="$COV_RUN"
+  else _gv="$COV_PROC"; fi
   _ok=$(awk -v c="$_gv" -v t="$THRESHOLD" 'BEGIN{print (c+0 >= t+0) ? 1 : 0}')
   if [ "$_ok" = "1" ]; then VERDICT="PASS"; RC=0; else VERDICT="FAIL"; RC=1; fi
 fi
@@ -341,10 +445,13 @@ fi
 # APPEND-ONLY schema discipline: the M1-rev fields go at the END and no existing key is renamed or
 # re-typed, so every consumer of a historical row keeps parsing (the tier fields simply read as
 # absent on pre-M1-rev rows, which is the truthful answer for a row taken before the split existed).
-JSON=$(printf '{"ts":"%s","verdict":"%s","control":"%s","runs_in_flight":%s,"procs_total":%s,"procs_demoted":%s,"procs_full":%s,"cpu_total":%s,"cpu_demoted":%s,"coverage_proc_pct":%s,"coverage_cpu_pct":%s,"threshold":%s,"demoted_pri_max":%s,"loadavg1":"%s","pattern":"%s","gate_on":"%s","procs_pri4":%s,"procs_pri20":%s,"clamp_pris":"%s"}' \
+# The run-weighted fields (2026-08-07) follow the same rule and for the same reason — they append,
+# and a pre-run-metric row reads as absent rather than as zero.
+JSON=$(printf '{"ts":"%s","verdict":"%s","control":"%s","runs_in_flight":%s,"procs_total":%s,"procs_demoted":%s,"procs_full":%s,"cpu_total":%s,"cpu_demoted":%s,"coverage_proc_pct":%s,"coverage_cpu_pct":%s,"threshold":%s,"demoted_pri_max":%s,"loadavg1":"%s","pattern":"%s","gate_on":"%s","procs_pri4":%s,"procs_pri20":%s,"clamp_pris":"%s","runs_demoted":%s,"runs_full":%s,"coverage_run_pct":%s,"procs_unattributed":%s}' \
   "$TS" "$VERDICT" "$CONTROL" "$N_RUNS" "$N_TOTAL" "$N_DEMOTED" "$N_FULL" \
   "$CPU_TOTAL" "$CPU_DEMOTED" "$COV_PROC" "$COV_CPU" "$THRESHOLD" "$DEMOTED_PRI_MAX" \
-  "${LOAD1:-?}" "$PATTERN" "${_gate_metric:-proc}" "$N_PRI4" "$N_PRI20" "$CLAMP_PRIS")
+  "${LOAD1:-?}" "$PATTERN" "${_gate_metric:-proc}" "$N_PRI4" "$N_PRI20" "$CLAMP_PRIS" \
+  "$RUNS_DEMOTED" "$RUNS_FULL" "$COV_RUN" "$N_UNATTRIB")
 
 if [ "$APPEND" = "1" ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -357,6 +464,9 @@ if [ "$QUIET" != "1" ] && [ "$WANT_JSON" != "1" ]; then
   echo "  gate runs in flight:          $N_RUNS"
   echo "  procs   demoted/total:        $N_DEMOTED/$N_TOTAL   (${COV_PROC}%)"
   echo "    by band  utility/bg+maint:  ${N_PRI20}/${N_PRI4}   (pri 20 / pri<=4)"
+  # RUN coverage is the operator-facing one — one vote per gate run, undistortable by a single proc
+  # (header, THREE COVERAGE METRICS). Unattributed rows are NAMED here rather than quietly excluded.
+  echo "  runs    demoted/total:        ${RUNS_DEMOTED}/${N_RUNS}   (${COV_RUN}%)   [${N_UNATTRIB} proc(s) unattributed]"
   echo "  CPU     demoted/total:        ${CPU_DEMOTED}/${CPU_TOTAL}   (${COV_CPU}%)"
   # The label names the metric actually GATED (seam QOS_GATE_ON), which is PROC by default. It read
   # "(CPU)" while gating proc — a static falsehood in the operator-facing line, fixed here because
