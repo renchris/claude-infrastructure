@@ -1,0 +1,56 @@
+# qos-bound.patterns — the CPU-ceiling table read by hooks/qos-rewrite.sh transform (c).
+#
+# FORMAT (one row per line):   <cpu_seconds><TAB><ERE>
+#   <cpu_seconds>  a positive integer, the PER-PROCESS CPU-time ceiling handed to bin/cc-cpubound.
+#                  It is CPU consumed, never wall-clock: a command that is slow because it WAITS is
+#                  never bounded by it (measured — `ulimit -t 2; sleep 5` runs the full 5 s, exit 0).
+#                  The hook allowlists digits only and skips any other row rather than break a
+#                  command, the same shape as the band allowlist in qos-batch.patterns.
+#   <ERE>          an extended regex matched against the WHOLE command with `grep -E`. First match
+#                  wins. `#` comments and blank lines are ignored. The separator is a literal TAB.
+#
+# A row only ever fires on a SINGLE SIMPLE command (no `;` `&` `|` `<` `>` `(` `)` backtick, newline,
+# or leading `VAR=value`) — the hook refuses anything with structure. That conservatism is not
+# incidental here, it is THE REASON THIS TABLE IS SAFE: see the calibration below.
+#
+# WHY THESE ROWS, AND WHY 60 (backlog 2af4c4908422). The generating incident, 2026-08-02: an agent's
+# Bash-tool `grep` (rewritten by the interactive shell function to `ugrep -G …`) hit catastrophic
+# backtracking on ONE HTML file and burned 12m48s of CPU at 7.84 GiB RSS with nothing to stop it.
+# A 60 CPU-second ceiling would have ended it at roughly 8% of the CPU it actually spent.
+#
+# CALIBRATED AGAINST THE LIVE CORPUS, not chosen for roundness. Pairing the PreToolUse and PostToolUse
+# bash logs over 2026-07-30 → 2026-08-08 (8.8 days, 56,269 paired agent Bash calls):
+#
+#   population                                            n        > 30 s     > 60 s
+#   ────────────────────────────────────────────────────────────────────────────────
+#   ALL agent bash calls                              56,269            —      2.611%   ← 1 in 38
+#   SIMPLE calls (what this hook can touch at all)     4,343            —           —
+#   SIMPLE + starting with a search binary               233        0           0       ← the table
+#
+# ZERO of the 233 exceeded even THIRTY seconds of wall time, so the ceiling sits at better than 2×
+# the widest observed call. The contrast with the 2.611% fleet-wide rate is the whole design: a
+# 60-second bound applied to every Bash call would fire on 1 in 38 and kill typechecks, bats suites
+# and ship-land runs. A separate survey that classified "pure search" WITHOUT excluding compounds
+# found 88 calls over 60 s and, on inspection, every one was a pipeline that merely pipes a heavy job
+# through grep (`ship-land.sh … ; grep`, `eslint … ; grep`). The hook's refusal to touch compound
+# commands removes that entire population by construction, which is why the measured rate here is 0
+# and not 0.67%.
+#
+# Honest bound on that zero: 0/233 is a 95% upper bound near 1.3% (rule of three), not proof of
+# impossibility. The failure mode if it is ever wrong is one bounded command returning rc 152 with a
+# verdict line on stderr naming the ceiling and telling the agent to narrow and retry — recoverable
+# in one turn, and far cheaper than the 12m48s it exists to prevent.
+#
+# WHY A NARROW TABLE AND NOT A FLEET-WIDE CEILING. MACHINE_CAPACITY_V2.md:1513-1519 puts this class
+# ("B — single runaway action in one session") at the Bash tool boundary and asks for "a RESOURCE
+# guard — never a denylist of binary names". bin/cc-cpubound IS that resource guard, and it is
+# general. This table is only the ROLLOUT, held to the population whose false-positive rate has
+# actually been measured. Widening it is cheap and welcome — but the price of a new row is the same
+# measurement, because the fleet-wide number above shows what an uncalibrated ceiling costs.
+#
+# Each ERE is word-anchored with `(^|[[:space:]])…([[:space:]]|$)` and additionally requires the
+# binary to be in COMMAND POSITION (`^[[:space:]]*`), so `ls | grep x` — already refused as a
+# compound — and `cat notes-about-find.md` can never match.
+60	^[[:space:]]*(/[^[:space:]]*/)?(u?grep|egrep|fgrep)([[:space:]]|$)
+60	^[[:space:]]*(/[^[:space:]]*/)?(rg|ag|ack)([[:space:]]|$)
+60	^[[:space:]]*(/[^[:space:]]*/)?find([[:space:]]|$)
