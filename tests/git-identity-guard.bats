@@ -288,6 +288,61 @@ user.name t"
   [ "$status" -ne 0 ]
 }
 
+# identity_assert's UNCHANGED-but-wrong arm. Guarding only the CHANGED case left the machine
+# wedged: once a bad value is resident, every later sweep reads now == snap and returns early, so
+# nothing clears it — and with the pre-commit gate installed, every commit is refused until a
+# human intervenes. Fail-closed is right for one commit and wrong as a resting state.
+load_assert_fns() {
+  # These four look unused to shellcheck and are not: they are the ambient state the extracted
+  # postland functions read and append to, and the eval below is opaque to static analysis.
+  # Annotated per variable rather than file-wide, so a genuinely unused one still gets caught.
+  # shellcheck disable=SC2034
+  REPO="$1"
+  FAILING=()
+  # shellcheck disable=SC2034
+  FAILNAME=()
+  # shellcheck disable=SC2034
+  FAILTEST=""
+  log() { :; }
+  eval "$(sed -n '/^identity_snapshot() {/,/^}/p'  "$SRC/scripts/postland-verify.sh")"
+  eval "$(sed -n '/^identity_snap_ok() {/,/^}/p'   "$SRC/scripts/postland-verify.sh")"
+  eval "$(sed -n '/^identity_assert() {/,/^}/p'    "$SRC/scripts/postland-verify.sh")"
+  [ "$(type -t identity_assert)" = function ] || return 1   # extraction control
+}
+
+@test "postland: a RESIDENT unsanctioned identity is dropped even when UNCHANGED" {
+  local r; r="$(mkrepo resident https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  git -C "${r:?repo path required}" config user.name t
+  load_assert_fns "$r"
+  IDENTITY_SNAP="$(identity_snapshot)"          # snapshot the poison, as a real sweep would
+  [ -n "$IDENTITY_SNAP" ] || false              # control: the fixture really is poisoned
+  identity_assert
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ -z "$output" ]                              # dropped → falls through to the global
+}
+
+@test "postland: that drop does NOT convict the run (no auto-revert of an inherited fault)" {
+  # A red here reaches red_actions, which can auto-revert. This run did not cause the fault.
+  local r; r="$(mkrepo resident2 https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  load_assert_fns "$r"
+  IDENTITY_SNAP="$(identity_snapshot)"
+  identity_assert
+  [ "${#FAILING[@]}" -eq 0 ]
+}
+
+@test "postland: a SANCTIONED resident identity is left alone" {
+  # The mirror arm — without it the test above passes for a function that drops unconditionally.
+  local r; r="$(mkrepo resident3 https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  load_assert_fns "$r"
+  IDENTITY_SNAP="$(identity_snapshot)"
+  identity_assert
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ "$output" = "$CC_GIT_IDENTITY_EMAIL" ]
+}
+
 @test "postland: the OTHER unattributed family is not restorable either" {
   # ren.chris+claude@outlook.com looks legitimate and is just as unattributable on GitHub
   # (verified 2026-08-08). A denylist keyed on `t` would have restored this one.
