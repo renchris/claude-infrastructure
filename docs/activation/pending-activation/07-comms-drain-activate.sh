@@ -79,8 +79,13 @@ for pair in "SessionStart:$SS_ENTRY" "UserPromptSubmit:$UP_ENTRY"; do
   key="${pair%%:*}"; val="${pair#*:}"
   if [ -z "$val" ] || [ "$val" = "null" ]; then
     echo "✗ no mailbox-drain entry under .hooks.$key in $TEMPLATE — nothing to copy. STOP." >&2
+    # THE SANCTIONED ADVANCE, never a raw ff (hooks/activation-watch.sh:294, commands/ship.md). A bare
+    # `merge --ff-only origin/main` advances the FILES but creates no symlinks, so newly landed code
+    # goes live unlinked and silently inert, and it skips the green-stamp gate — while carrying live
+    # HEAD above every green stamp, which is what wedges scripts/deploy-live.sh into refusing every
+    # tick (cc-blockers `deploy-wedged`; measured on the live host 2026-08-08).
     echo "  The checkout predates the 2-way-comms commit. Deploy it first, then re-run:" >&2
-    echo "      git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2
+    echo "      bash $REPO/scripts/deploy-live.sh   # the ONLY sanctioned advance (green-gated + runs install.sh, which creates the symlinks a bare ff never makes)" >&2
     echo "      (currently behind origin/main by: $(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo '?') commit(s))" >&2
     exit 1
   fi

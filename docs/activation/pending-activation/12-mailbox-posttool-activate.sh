@@ -101,8 +101,15 @@ if [ -z "$PT_ENTRY" ] || [ "$PT_ENTRY" = "null" ]; then
       # is the same dead end in a different costume.
       if [ "$_behind" != '?' ] && [ "$_behind" -gt 0 ] 2>/dev/null; then
         echo "  CAUSE: deploy lag. origin/main HAS the entry; this checkout is behind by ${_behind}." >&2
+        # THE SANCTIONED ADVANCE, never a raw ff (hooks/activation-watch.sh:294, commands/ship.md).
+        # This line used to hand over `git -C $REPO merge --ff-only origin/main`, the one command the
+        # deploy doctrine forbids: a bare ff advances the FILES but creates no symlinks, so a newly
+        # landed file goes live unlinked and silently inert, and it skips the green-stamp gate. Here
+        # it was worse than advice — a raw ff carries live HEAD ABOVE every green stamp, which is
+        # exactly what wedges scripts/deploy-live.sh into refusing every tick (cc-blockers
+        # `deploy-wedged`; measured on the live host 2026-08-08, 27 raw ffs in one reflog window).
         echo "  FIX — advance the checkout, then re-run this script:" >&2
-        echo "      git -C $REPO fetch origin && git -C $REPO merge --ff-only origin/main" >&2
+        echo "      bash $REPO/scripts/deploy-live.sh   # the ONLY sanctioned advance (green-gated + runs install.sh, which creates the symlinks a bare ff never makes)" >&2
       else
         echo "  CAUSE: local divergence, NOT deploy lag. origin/main HAS the entry and this checkout" >&2
         echo "  is level with it (behind by ${_behind}) — so the working copy of the template has been" >&2
