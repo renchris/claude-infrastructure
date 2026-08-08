@@ -1658,8 +1658,14 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   # idl-abstain-alarm.sh selects on {.hook, .disposition} and PAGES a hook whose in-window abstentions
   # are 100% BLIND. Reap's UNRESOLVED keeps are genuinely blind, so hook-shaping these rows would
   # enroll reap in a nightly paging population against whose reason vocabulary it has never been
-  # calibrated — a 3am page manufactured as a side effect of adding a journal. Wiring that alarm is a
-  # real change and gets its own verification; this pins the shape so it cannot happen by accident.
+  # calibrated — a 3am page manufactured as a side effect of adding a journal.
+  #
+  # STILL LOAD-BEARING NOW THAT THE ALARM *IS* WIRED (backlog 420b9cb2166c) — and the reason has
+  # SHARPENED, not lapsed. The alarm projects these rows at its own READER, so the enrollment reaches
+  # exactly one consumer; `.hook` + `.disposition` are also read by cc-audit, cc-digest, cc-discover,
+  # desk-invariant, desk-recycle-invariant and subagent-stop, and hook-shaping the writer would enroll
+  # reap in ALL of them in one edit. This assertion is what stops that. Reap's enrollment in the alarm
+  # is verified where it lives: tests/idl-abstain-alarm.bats § the cc-backlog reap enrollment.
   reap_env
   rec '{"id":"jrnlshap0010","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"JShape"}'
   rec "{\"id\":\"jrnlshap0010\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"

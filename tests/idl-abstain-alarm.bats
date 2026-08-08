@@ -115,3 +115,181 @@ alarm() { env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTA
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'no IDL'
 }
+
+# ══ the cc-backlog reap enrollment (backlog 420b9cb2166c) ═══════════════════════════════════════
+# reap's UNRESOLVED keeps are the "could not observe my guard" class §3i pages on, but its journal
+# rows are {actor, action}-shaped, so the {hook, disposition} selector never saw them. The alarm now
+# PROJECTS them (see the script header for why at the reader, not the writer). Two things need
+# independent proof here: that the projection is real in BOTH polarities, and that it is calibrated
+# against the vocabulary the LIVE producer actually emits.
+
+emit_reap() { # <n> <verdict> <reason> <acted> — the actor-shaped row, as bin/cc-backlog writes it
+  local i
+  for ((i = 0; i < $1; i++)); do
+    printf '{"ts":"%s","actor":"cc-backlog-reap","action":"verdict","id":"i%d","verdict":"%s","reason":"%s","acted":%s,"claim_by":"h-1","claim_age_s":9000,"attempts":1,"fast_fail":0,"claimer_rc":2,"worktree":null,"detail":"d"}\n' \
+      "$TS" "$i" "$2" "$3" "$4" >> "$IDL"
+  done
+}
+
+@test "reap: 100% UNRESOLVED keeps → INERT, paged under the hook name cc-backlog-reap" {
+  emit_reap 12 keep claimer-unresolved false
+  run alarm
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'cc-backlog-reap'
+  printf '%s' "$output" | grep -q 'INERT'
+}
+
+@test "reap: 100% ANSWERED keeps (owned-wait) → DORMANT-100, never paged" {
+  emit_reap 12 keep owned-wait false
+  run alarm
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'DORMANT-100'
+  ! printf '%s' "$output" | grep -q 'INERT'
+}
+
+@test "reap: one ANSWERED keep among blind ones proves observability → suppressed" {
+  emit_reap 11 keep claimer-unresolved false
+  emit_reap 1  keep claimer-live false
+  run alarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'INERT'
+}
+
+@test "reap: a BLOCK is the check acting → productive, breaks abstained==total (the documented seam)" {
+  # A starvation that reaches CC_BACKLOG_UNRESOLVED_MAX_S escalates to `block …-unresolvable-…`,
+  # which parks the item in front of a human. That half announces itself, so it must NOT also page
+  # here — this alarm is the backstop for the blindness nobody else announces.
+  emit_reap 11 keep claimer-unresolved false
+  emit_reap 1  block unresolvable-claimer true
+  run alarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'INERT'
+}
+
+@test "reap: a REFUSED transition (acted:false) counts as failed, not as an abstention" {
+  # The ledger refusing a reopen is a failure of the ACTION; reap still reached its guard. Folding it
+  # into `abstained` would let a run of refused reopens read as 100%-blind and manufacture a page.
+  emit_reap 11 keep claimer-unresolved false
+  emit_reap 1  reopen dead-worker false
+  run alarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'INERT'
+}
+
+# ── REAL-PRODUCER PARITY ───────────────────────────────────────────────────────────────────────
+# The five cases above are hand-typed rows, and a hand-typed approximation passes VACUOUSLY if the
+# producer's real shape has drifted (memory: control-must-replay-the-real-artifact). These two drive
+# `bin/cc-backlog reap` itself and feed the alarm ITS OWN journal — one per polarity, because a
+# parity test that only proves "a reap row pages" would still pass if the projection paged on
+# everything.
+reap_producer() { # <n-items> <mode: unresolved|owned> → writes $IDL via the real reap
+  local n="$1" mode="$2" i
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+  export CC_BACKLOG_IDL="$IDL"
+  export CC_BACKLOG_WT_ROOT="$BATS_TEST_TMPDIR/wtroot"; mkdir -p "$CC_BACKLOG_WT_ROOT"
+  export CC_BACKLOG_NOW; CC_BACKLOG_NOW="$(jq -n '"2026-01-01T02:00:00Z"|fromdateiso8601')"
+  # EMPTY registry output — not `[]`. `[]` is the registry ANSWERING "not listed" (rc 1, a real
+  # not-live verdict); no output at all is rc 2, the UNRESOLVED non-verdict this enrollment is about.
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/emptysess"; chmod +x "$BATS_TEST_TMPDIR/emptysess"
+  export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/emptysess"
+  # The occupancy probe is asked ONCE PER ITEM and answers about the whole machine, so `owned` mode
+  # needs a cwd line for EVERY worktree — naming only the last one leaves the other n-1 items with an
+  # empty `owned` and lands them on claimer-unresolved instead, i.e. the wrong polarity under the
+  # right-looking name. The precondition in each test is what makes that visible rather than silent.
+  local out="$BATS_TEST_TMPDIR/lsof-out"; : > "$out"
+  for ((i = 0; i < n; i++)); do
+    local id; id="$(printf 'reapreal%04d' "$i")"
+    if [ "$mode" = owned ]; then
+      mkdir -p "$CC_BACKLOG_WT_ROOT/wt-$id"
+      printf 'p%d\nn%s\n' "$((i + 1))" "$CC_BACKLOG_WT_ROOT/wt-$id" >> "$out"
+    fi
+    printf '{"id":"%s","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"R"}\n' "$id" >> "$CC_BACKLOG_FILE"
+    # A SESSION-SHAPED claimer: a `<host>-<pid>` one is settled by `kill -0` and never reaches the
+    # registry, so it can never produce the rc-2 non-verdict.
+    printf '{"id":"%s","ts":"2026-01-01T00:00:00Z","event":"claim","by":"6c135981-cacf-4527-acd2-%012d"}\n' "$id" "$i" >> "$CC_BACKLOG_FILE"
+  done
+  # `unresolved` mode: the probe RAN and found nobody — a real answer, outside every worktree. That
+  # is what keeps the claimer-unresolved branch (one oracle silent) reachable at all.
+  [ "$mode" = owned ] || printf 'p1\nn/\n' > "$out"
+  # Hermetic, load-immune occupancy probe emitting the producer's own `-F pn` stream.
+  printf '#!/bin/bash\ncat %s\n' "$out" > "$BATS_TEST_TMPDIR/stublsof"
+  chmod +x "$BATS_TEST_TMPDIR/stublsof"
+  export CC_BACKLOG_LSOF_BIN="$BATS_TEST_TMPDIR/stublsof"
+  bash "$REPO/bin/cc-backlog" reap >/dev/null
+}
+
+@test "reap PARITY: rows written by the real cc-backlog reap are seen, and blind ones page" {
+  reap_producer 12 unresolved
+  # The producer really did emit the blind token — if this drifts, the case below would go vacuous.
+  [ "$(jq -s '[.[]|select(.reason=="claimer-unresolved")]|length' "$IDL")" -eq 12 ]
+  # No CC_ABSTAIN_NOW: reap stamps rows with the REAL clock, so the window must be the real one too.
+  run env CC_IDL="$IDL" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 "$S" --run
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'cc-backlog-reap'
+  printf '%s' "$output" | grep -q 'INERT'
+}
+
+@test "reap PARITY: real ANSWERED keeps stay quiet — the projection is not paging on any reap row" {
+  reap_producer 12 owned
+  [ "$(jq -s '[.[]|select(.reason=="owned-wait")]|length' "$IDL")" -eq 12 ]
+  run env CC_IDL="$IDL" CC_ABSTAIN_LOG="$LOG" CC_ABSTAIN_NMIN=10 "$S" --run
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'DORMANT-100'
+  ! printf '%s' "$output" | grep -q 'INERT'
+}
+
+# ── --vocab-lint: the completeness guard for the calibration ────────────────────────────────────
+# "Unclassified ⇒ DORMANT" is the right global bias and a FAIL-OPEN for this enrollment: a future
+# blind keep-reason would be classified quiet, with a green suite. The lint pins the classification
+# to the producer's real vocabulary in both directions.
+
+@test "vocab-lint: the classification matches the live bin/cc-backlog keep-vocabulary" {
+  run "$S" --vocab-lint
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'GREEN'
+}
+
+@test "vocab-lint MUTANT: a keep reason neither array classifies → RED, naming it" {
+  local m="$BATS_TEST_TMPDIR/mutant-new"
+  { printf 'idl_verdict "$id" keep claimer-live false "$by"\n'
+    printf 'idl_verdict "$id" keep owned-wait false "$by"\n'
+    printf 'idl_verdict "$id" keep claimer-unresolved false "$by"\n'
+    printf 'idl_verdict "$id" keep worktree-unresolved false "$by"\n'
+    printf 'idl_verdict "$id" keep registry-half-answered false "$by"\n'; } > "$m"
+  run "$S" --vocab-lint "$m"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'registry-half-answered'
+}
+
+@test "vocab-lint MUTANT: a classified token the producer no longer emits → RED (the downward half)" {
+  # A rename drops the old spelling and adds a new one. Catching only the ADD direction would leave
+  # the stale classification in place and the new spelling silently DORMANT.
+  local m="$BATS_TEST_TMPDIR/mutant-renamed"
+  { printf 'idl_verdict "$id" keep claimer-live false "$by"\n'
+    printf 'idl_verdict "$id" keep owned-wait false "$by"\n'
+    printf 'idl_verdict "$id" keep claimer-unresolved false "$by"\n'; } > "$m"
+  run "$S" --vocab-lint "$m"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'worktree-unresolved'
+}
+
+@test "vocab-lint: zero matched call sites is RED, not a vacuous all-clear" {
+  # The extractor going blind must never read as the subject coming up clean — with no keep sites to
+  # classify, every assertion above would pass over nothing.
+  : > "$BATS_TEST_TMPDIR/no-sites"
+  run "$S" --vocab-lint "$BATS_TEST_TMPDIR/no-sites"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q '0 .*keep'
+}
+
+@test "vocab-lint: a keep reason passed as a VARIABLE is RED — it cannot be classified from source" {
+  local m="$BATS_TEST_TMPDIR/mutant-var"
+  { printf 'idl_verdict "$id" keep claimer-live false "$by"\n'
+    printf 'idl_verdict "$id" keep owned-wait false "$by"\n'
+    printf 'idl_verdict "$id" keep claimer-unresolved false "$by"\n'
+    printf 'idl_verdict "$id" keep worktree-unresolved false "$by"\n'
+    printf 'idl_verdict "$id" keep "$ktoken" false "$by"\n'; } > "$m"
+  run "$S" --vocab-lint "$m"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'not a literal token'
+}
