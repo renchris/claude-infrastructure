@@ -8,7 +8,8 @@
 #   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
 #   cc-cloud show <id>                               the declaration + its live state, human-readable
-#   cc-cloud list [--json]                           the declaration inventory from DISK — no probe
+#   cc-cloud list [--json] [--state]                 the declaration inventory from DISK — no probe
+#                                                    (--state opts INTO the state function, §9.3)
 #   cc-cloud --json | --table | --check | --selftest
 #
 # ── ONE tool, because two reading one observable set is worse than either ─────────────────────────
@@ -608,17 +609,33 @@ all_ids() {
 # it is wrong, and wrong in the direction that reads as healthy. So `list` reports only what does
 # not decay: what was declared, and what was last OBSERVED. Verdicts come from --table/--json,
 # which probe.
+#
+# `--state` is the OPT-IN probing form (§9.3). The default above must stay probe-free — that is the
+# whole point of this verb — but a VIEW that renders an off-box session beside local ones needs the
+# verdict, and the one thing it must not do is re-derive it. `classify` is the arbiter; this flag
+# exposes it on the inventory so a consumer makes ONE call to the owning tool instead of
+# re-implementing its arms outside it. `url` is emitted unconditionally because it is declaration
+# truth, not a verdict: the `open <url>` recover action costs no probe and must be available even
+# when the network cannot answer.
 cmd_list() {
-  local fmt="table" id f seen branch remote item dat base bprobe lsha lsince n age any=0
+  local fmt="table" probe=0 id f seen branch remote item dat base bprobe lsha lsince n age any=0
+  local url line state detail rcmd
   while [ $# -gt 0 ]; do
     case "$1" in
       --json)  fmt=json; shift ;;
       --table) fmt=table; shift ;;
+      --state) probe=1; shift ;;
       *) echo "cc-cloud list: unknown arg $1" >&2; return 2 ;;
     esac
   done
   n="$(now)"
-  [ "$fmt" = table ] && printf '%-22s %-24s %-8s %s\n' "SESSION" "BRANCH" "AGE" "LAST OBSERVED"
+  if [ "$fmt" = table ]; then
+    if [ "$probe" -eq 1 ]; then
+      printf '%-22s %-24s %-12s %-8s %s\n' "SESSION" "BRANCH" "STATE" "AGE" "LAST OBSERVED"
+    else
+      printf '%-22s %-24s %-8s %s\n' "SESSION" "BRANCH" "AGE" "LAST OBSERVED"
+    fi
+  fi
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     any=1
@@ -631,14 +648,28 @@ cmd_list() {
     bprobe="$(dfield "$f" base_probe)"; [ "$bprobe" = ok ] || bprobe="unmeasured"
     lsha="$(dfield "$seen" sha)"
     lsince="$(dfield "$seen" since)"
+    url="$(dfield "$f" url)"; [ -n "$url" ] || url="https://claude.ai/code"
     if is_num "$dat"; then age=$((n - dat)); [ "$age" -lt 0 ] && age=0; else age=0; fi
+    # THE ARBITER, not a copy of it: state/detail/recover come from `classify` verbatim.
+    state=""; detail=""; rcmd=""
+    if [ "$probe" -eq 1 ]; then
+      line="$(classify "$id")"
+      state="${line%%	*}"; line="${line#*	}"
+      detail="${line%%	*}"; rcmd="${line#*	}"
+      [ -n "$state" ] || state="UNKNOWN"
+    fi
     if [ "$fmt" = json ]; then
       printf '{"id":"%s","branch":"%s","remote":"%s","item":"%s","declared_at":%s,"age_s":%s,' \
         "$(jesc "$id")" "$(jesc "$branch")" "$(jesc "$remote")" "$(jesc "$item")" \
         "$(is_num "$dat" && printf '%s' "$dat" || printf 'null')" "$age"
-      printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"retired":%s}\n' \
+      printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
         "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
-        "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" \
+        "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"
+      if [ "$probe" -eq 1 ]; then
+        printf '"state":"%s","detail":"%s","recover":"%s",' \
+          "$(jesc "$state")" "$(jesc "$(clip "$detail")")" "$(jesc "$rcmd")"
+      fi
+      printf '"retired":%s}\n' \
         "$([ -f "$STATE/$id.retired" ] && printf 'true' || printf 'false')"
     else
       local obs
@@ -646,7 +677,11 @@ cmd_list() {
       elif [ -n "$lsha" ] && is_num "$lsince"; then obs="$(printf '%.7s for %s' "$lsha" "$(dur $((n - lsince)))")"
       elif [ "$bprobe" = ok ] && [ -n "$base" ]; then obs="$(printf 'never polled (pre-fire %.7s)' "$base")"
       else obs="never polled"; fi
-      printf '%-22s %-24s %-8s %s\n' "$id" "$branch" "$(dur "$age")" "$obs"
+      if [ "$probe" -eq 1 ]; then
+        printf '%-22s %-24s %-12s %-8s %s\n' "$id" "$branch" "$state" "$(dur "$age")" "$obs"
+      else
+        printf '%-22s %-24s %-8s %s\n' "$id" "$branch" "$(dur "$age")" "$obs"
+      fi
     fi
   done < <(all_ids)
   [ "$any" -eq 1 ] || [ "$fmt" = json ] || printf '%s\n' "(no cloud sessions declared — nothing is firing off-box)"
