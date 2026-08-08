@@ -71,12 +71,35 @@ if [ -n "$PROJECT_DIR" ]; then
     fi
 fi
 
-# Fallback: extract from transcript first lines
-if [ -z "$SUMMARY" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-    # First user message from transcript JSONL
-    FIRST_PROMPT=$(head -50 "$TRANSCRIPT_PATH" 2>/dev/null | \
-        jq -r 'select(.type == "human") | .message.content // empty' 2>/dev/null | \
-        head -1 | cut -c1-500)
+# Fallback: first substantive user message from the transcript.
+#
+# The guard names FIRST_PROMPT, not SUMMARY. A predicate on one field guarding an assignment to
+# another is how this blanked good data: the entry could carry a real firstPrompt and an empty
+# summary, and the summary-keyed branch overwrote the firstPrompt anyway. The extra `-n` test keeps
+# that true even if someone later widens the guard — the fallback may only ever ADD a value.
+#
+# Extraction delegates to session_index_extract_context, the one filter in this repo for
+# "substantive user text". Re-implementing it locally in jq is what broke it: that copy matched
+# `.type == "human"`, a type Claude Code transcripts do not emit (measured 2026-08-08: 0 `human`
+# records across the newest live transcripts, 313/224/277 `user`), so it always yielded "" .
+#
+# Swapping the type alone would NOT have been the fix. `.message.content` is a block array on the
+# large majority of user records (294/313 in one live transcript) and the first `type=="user"`
+# record is usually machinery, not the human: measured over the 4 newest transcripts, a raw
+# first-record read returns `[`, `<command-name>/goal</command-name>`, and `<local-command-caveat>`
+# for 3 of them. That stores garbage in the search index and, being non-empty, walks straight past
+# the `-n` test above — strictly worse than the empty string it replaced. The helper is what knows
+# to join `type=="text"` blocks, drop `<`-leading machinery, and require ≥10 chars.
+if [ -z "$FIRST_PROMPT" ] && [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+    # Trimmed with parameter expansion rather than `… | head -1 | cut`: under this file's
+    # `set -o pipefail`, a `head -1` that closes the pipe early SIGPIPEs the producer and the 141
+    # propagates out of the command substitution into `set -e` (measured: a 200k-line producer
+    # exits the caller 141; a one-line producer does not). The helper prints one line today, so
+    # that trap is latent, not live — but expansion costs no subprocess and cannot arm it.
+    transcript_first_prompt=$(session_index_extract_context "$TRANSCRIPT_PATH" 1)
+    transcript_first_prompt="${transcript_first_prompt%%$'\n'*}"
+    transcript_first_prompt="${transcript_first_prompt:0:500}"
+    [ -n "$transcript_first_prompt" ] && FIRST_PROMPT="$transcript_first_prompt"
 fi
 
 # Defaults
