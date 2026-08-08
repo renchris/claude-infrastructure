@@ -170,7 +170,12 @@ LIB
   # cached field convicted a live pane in a116d60af388 — so the corroborating pane transport is now
   # stubbed to report the uuid ABSENT. Everything the test actually asserts (no consumption, cursors
   # untouched, marker cleared) is unchanged; only the premise it stands on got a second source.
-  export CC_AWAIT_IT2_BIN="$(it2_stub SOMEONE-ELSE)"
+  # Declared and assigned separately (SC2155): `export X="$(cmd)"` masks the command's exit status
+  # behind export's own 0, so a stub builder that FAILED would read as a stub that was installed —
+  # and the test would then attribute the missing corroboration to the subject rather than to itself.
+  local it2bin
+  it2bin="$(it2_stub SOMEONE-ELSE)"
+  export CC_AWAIT_IT2_BIN="$it2bin"
   sleep 0.1 & local dead=$!; wait "$dead" 2>/dev/null || true       # a pid that is now provably dead
   printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1}' "$UUID" "$dead" \
     > "$CC_REGISTRY_DIR/$UUID.json"
