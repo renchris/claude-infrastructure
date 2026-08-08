@@ -503,6 +503,11 @@ _provfix() {   # ~/bin legs made to PASS so the exit code isolates this leg; pro
   # Absent by default, so the CONTENT fact is unclaimed unless a case opts in — that keeps the
   # mechanism cases measuring one thing. mkdir'd only where the verification fact is the subject.
   export CC_PARITY_STAMPS="$BATS_TEST_TMPDIR/stamps"
+  # PINNED, not left to default. PAGES falls back through deploy-live's OWN seam CC_PAGES_DIR, which
+  # is an absolute path independent of the fixture HOME above — so an inherited one would point every
+  # case below at the operator's real pages dir, where a genuine deploy-degraded-*.page could make the
+  # DEGRADED case pass without the fixture writing anything. Absent by default, same as stamps.
+  export CC_PARITY_PAGES="$BATS_TEST_TMPDIR/pages"
   git -C "$CC_PARITY_REPO" init -q
   git -C "$CC_PARITY_REPO" config user.email t@t
   git -C "$CC_PARITY_REPO" config user.name t
@@ -584,6 +589,42 @@ _stamp_green() {   # stamp the CURRENT HEAD tree green, exactly as postland-veri
   run "$ASSERT"
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '^  VERIFIED'
+}
+
+# ── THE T2 DEGRADE, the CONTENT fact's third value (2026-08-07, backlog 13ba97f1701d) ────────────
+# Regression pin for a self-inflicted RED: deploy-live's two-tier lane degraded to the newest NOT-RED
+# commit under its declared staleness budget, printed the banner, deployed, then ran THIS suite's
+# live sibling — which reddened on "no green stamp", i.e. on the state the banner had just announced,
+# and paged + filed a backlog item for it. The evidence is four consecutive deploy.log lines, quoted
+# at the branch itself. The discriminator is the page the LANE writes after the merge, sha-keyed.
+_degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as it keys it
+  mkdir -p "$CC_PARITY_PAGES"
+  printf 'deploy-live DEGRADED advance: … — NO green-verified tree was deployable\n' \
+    > "$CC_PARITY_PAGES/deploy-degraded-$(git -C "$CC_PARITY_REPO" rev-parse HEAD | cut -c1-12).page"
+}
+
+@test "provenance: a lane-DECLARED degraded advance ⇒ DEGRADED, exit 0 (the banner is not a finding)" {
+  _provfix; mkdir -p "$CC_PARITY_STAMPS"; _ff_gated; _degrade_page
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^  DEGRADED'
+  if printf '%s' "$output" | grep -q 'UNVERIFIED'; then false; fi
+}
+
+# NON-VACUITY, and the fail-closed direction in one case. Identical to the pass above except the page
+# names a DIFFERENT commit — so it proves the sha key is load-bearing rather than "any file in the
+# pages dir", and it proves a stale page from an earlier degraded advance cannot vouch for the commit
+# the checkout is on NOW. The `--force's shape` case above is the same guard from the other side: a
+# sanctioned-but-unverified advance that writes no page at all is still exit 1.
+@test "provenance: a degrade page for ANOTHER sha does NOT vouch for this one ⇒ UNVERIFIED, exit 1" {
+  _provfix; mkdir -p "$CC_PARITY_STAMPS"; _ff_gated
+  mkdir -p "$CC_PARITY_PAGES"
+  printf 'deploy-live DEGRADED advance: …\n' \
+    > "$CC_PARITY_PAGES/deploy-degraded-$(printf '%s' "$_BASE" | cut -c1-12).page"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'UNVERIFIED'
+  if printf '%s' "$output" | grep -q 'DEGRADED'; then false; fi
 }
 
 # No stamps dir = the verification net is not active, which is deploy-live's own separate refusal

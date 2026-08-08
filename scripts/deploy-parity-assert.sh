@@ -31,6 +31,8 @@
 # failure ship.md:98 names this script the catcher of was, until now, the one failure it could not
 # see. Scored as two independent facts: UNGATED (the mechanism bypassed deploy-live.sh) and
 # UNVERIFIED (the live tree never earned a green stamp). Full derivation at the leg itself.
+# The CONTENT fact is three-valued as of 2026-08-07 — VERIFIED · DEGRADED · UNVERIFIED — because the
+# two-tier lane deploys unverified ON PURPOSE; see the DEGRADED branch for the measured incident.
 #
 # READ-ONLY: compares and reports. It never installs, copies, or repairs anything.
 # Exit 0 = parity · 1 = a NAMED failure · 3 = NO VERDICT — the repo under assertion could not be
@@ -41,7 +43,7 @@
 # deploying again — the remedy block names the difference so the two never get one blanket fix.
 # Covered by tests/deploy-parity.bats, whose fixtures drive it via CC_PARITY_REPO /
 # CC_PARITY_BINDIR / CC_PARITY_STRICT / CC_PARITY_COPY / CC_PARITY_LIVE / CC_PARITY_PENDING /
-# CC_PARITY_STAMPS / CC_PARITY_PROVENANCE (fully hermetic — no host deps).
+# CC_PARITY_STAMPS / CC_PARITY_PAGES / CC_PARITY_PROVENANCE (fully hermetic — no host deps).
 set -uo pipefail
 
 if [ -n "${CC_PARITY_REPO:-}" ]; then
@@ -255,6 +257,10 @@ LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
 PENDING_DIRS="${CC_PARITY_PENDING:-$REPO/docs/activation/pending-activation:$LIVE/autonomy/pending-activation}"
 # Post-land verification stamps, keyed by TREE sha (deploy-live.sh's contract). Read-only here.
 STAMPS="${CC_PARITY_STAMPS:-$LIVE/autonomy/postland/stamps}"
+# deploy-live.sh's page dir, resolved through ITS OWN env seam first so the two cannot drift apart if
+# the operator relocates it — a reader that hardcodes a writer's default silently stops seeing the
+# writer. CC_PARITY_PAGES is the fixture seam, matching every other CC_PARITY_* above. Read-only.
+PAGES="${CC_PARITY_PAGES:-${CC_PAGES_DIR:-$LIVE/autonomy/pages}}"
 missing=0
 pending=0
 
@@ -461,13 +467,49 @@ if [ "$do_provenance" = 1 ] && [ -e "$REPO/.git" ]; then
   # arbiter directly is also refused — deploy-live calls THIS script for link_refresh, so that would
   # recurse.) No stamps dir ⇒ the verification net is not active, which is deploy-live's own
   # separate refusal state ⇒ nothing to compare and this leg makes NO claim either way.
+  #
+  # THE CONTENT FACT IS THREE-VALUED, and the third value is the whole reason this branch exists.
+  # "BY CONSTRUCTION" above was true of the SINGLE-TIER gate and was falsified the day the two-tier
+  # lane went live: T2 (DEPLOY_LANE_GROUND_UP.md §2.2, deploy-live.sh:568) deploys the newest NOT-RED
+  # commit ON PURPOSE once the green cursor is past its staleness budget. That advance is sanctioned
+  # in mechanism (resolved-SHA ff ⇒ GATED above) and unverified in content BY DESIGN — so a leg that
+  # reads "no green stamp ⇒ DRIFT" convicts the lane of the one thing it just announced.
+  #
+  # MEASURED 2026-08-07, ~/.claude/autonomy/postland/deploy.log, four consecutive lines:
+  #     deploy-live: !!!!! DEGRADED deploy — no GREEN stamp …; taking the newest NOT-RED commit
+  #                  instead, authorised by 7h since the live commit was authored (budget 6h) !!!!!
+  #     deploy-live: deployed 38e2513b0cce → 488742fcb66a: …
+  #     deploy-live: post-deploy host checks: 8 suite(s) from host-suites.manifest …
+  #     deploy-live:   RED  tests/deploy-parity-live.bats — 1 failing
+  # The lane declared the state, deployed, then ran the suite that reds on exactly that state, paged
+  # the operator and filed backlog 13ba97f1701d. The alarm restates the banner four lines above it —
+  # zero bits, and it fires on EVERY degraded deploy, which on this machine is the normal tier (the
+  # green cursor produced 2 greens in 85 verifier runs against ≈63 commits/day).
+  #
+  # WHAT MAKES IT THE THIRD STATE RATHER THAN A PASS: the discriminator is a record the ACTUATOR
+  # wrote — deploy-live.sh:715 emits deploy-degraded-<sha12>.page AFTER the merge specifically so it
+  # "can never claim one that did not" happen. This leg reads it; it does NOT re-derive the degrade
+  # predicate (lag budget, RED walk-back, kill switch) — re-implementing an atomic gate's predicate
+  # outside the gate is how an assert quietly becomes a second, divergent gate, which the paragraph
+  # above already refuses for target selection. Sha-keyed, so the page can only vouch for the exact
+  # commit the lane moved to.
+  #
+  # FAIL-CLOSED, AND NOT AN EXCUSE FOR --force. Page absent ⇒ nothing is laundered: the flow falls
+  # through to UNVERIFIED ⇒ drift, unchanged. That is what keeps the sibling case honest — a --force
+  # deploy is GATED and unverified and writes NO degrade page, so it still exits 1 (the leg's own
+  # `--force's shape ⇒ GATED but UNVERIFIED` test is the pin, and it stays red on this branch by
+  # construction). This state is REPORTED, never silent: the operator sees the line here, and the
+  # lane's own page is the escalation channel that already exists — a second page would double-fire.
   if [ -d "$STAMPS" ]; then
     _tree="$(git -C "$REPO" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+    _sha="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
     if [ -z "$_tree" ]; then
       report "NOVERDICT" "(verification)" "cannot resolve HEAD tree in $REPO — no claim about verification"
       noverdict=1
     elif is_green "$STAMPS/$_tree.json"; then
       report "VERIFIED" "(verification)" "HEAD tree carries a GREEN post-land stamp"
+    elif [ -n "$_sha" ] && [ -f "$PAGES/deploy-degraded-${_sha:0:12}.page" ]; then
+      report "DEGRADED" "(verification)" "no green stamp, but deploy-live DECLARED this advance degraded (${_sha:0:12}) — sanctioned, not drift"
     else
       report "UNVERIFIED" "(verification)" "HEAD tree $_tree has NO green stamp — this tree never passed the gate"
       unverified=1
