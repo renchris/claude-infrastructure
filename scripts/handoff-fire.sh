@@ -49,6 +49,17 @@
 #   --base REF          Base ref for --worktree (default origin/main; fetched first).
 #   --in-place          Prefix CLAUDE_ISOLATION_SKIP=1 (launch in cwd even at the reso primary
 #                       root, where claude otherwise auto-creates a fresh worktree).
+#   --cloud             OFF-BOX VENUE (G5). Marks this fire as one that does NOT run on this
+#                       machine, which changes WHICH GATE ADMITS IT: the box-local capacity terms
+#                       (load per core, reclaimable RAM) are the wrong two questions for a fire
+#                       that consumes neither, so they are replaced — not deleted — by per-account
+#                       rate-limit headroom read from `claude-accounts --route general`. That
+#                       router's exit 3 (live limits UNREADABLE) is a REFUSAL, never headroom.
+#                       DEFAULT-OFF: rejected unless CC_FIRE_CLOUD=on. An off-box fire spends an
+#                       account's quota rather than this box's cores, so it is opt-in per box.
+#                       Downstream, cc-dispatch reads this flag off the fire_line and claims the
+#                       item `--venue cloud`, which is what lets the cloud oracles judge it
+#                       instead of the local ones (see VENUE in bin/cc-backlog).
 #   --follow            OPT-IN. "The operator is WATCHING this fire — land their view on the
 #                       continuation": RAISE + focus the new surface (⌘D split of the firing pane by
 #                       default) exactly as a manual /handoff wants. WITHOUT --follow the fire is
@@ -305,6 +316,10 @@ WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
+# G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
+# WHICH TERMS capacity_gate() evaluates, so it is a gate input and must be parsed before the gate.
+CLOUD=0
+CLOUD_OPTIN="${CC_FIRE_CLOUD:-off}"              # default-off; `on` enables --cloud on this box
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
 # ---- V2 LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5) -----------------------------------------
 # THE INVERSION: row 2 owns the lifecycle ACTIONS but used to own almost none of the FACTS about
@@ -412,6 +427,11 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
 _fire_gate_of() { # $1=refusal reason → gate name
   case "${1:-}" in
     capacity|headroom) printf capacity ;;
+    # G5 — the off-box venue's refusals get their OWN gate name, not capacity's. A cloud fire
+    # never measured this box, so folding its refusals into the capacity denominator would make
+    # that denominator span two different populations measured by two different instruments —
+    # and an admit ratio over a mixed population answers no question anyone asked.
+    cloud-*)           printf cloud    ;;
     payload-*)         printf payload  ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
@@ -2879,6 +2899,74 @@ capacity_gate() {
     # a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
     emit_gate_admit capacity gate-off "CC_FIRE_CAPACITY_GATE=off — no term evaluated"; return 0
   fi
+  # ---- G5: CLOUD VENUE BRANCH — a DIFFERENT QUESTION, not a weaker answer -----------------------
+  # Placed here deliberately: AFTER the operator kill switch (which turns off admission entirely,
+  # both venues) and BEFORE the capacity-admit library check, because a cloud fire never evaluates
+  # a hardware term and so must not be admitted-with-basis-`absent` on a library it was never
+  # going to use — that row would count an off-box fire into the box's ungated-window ledger.
+  #
+  # The substitution, stated plainly: terms 1 and 2 below ask "does THIS BOX have a core and a
+  # gigabyte to spare". A fire that runs off-box consumes neither, so both terms are not merely
+  # unnecessary — they are WRONG IN BOTH DIRECTIONS. They would refuse a fire that costs this box
+  # nothing (case 6 in tests/handoff-fire-cloud.bats), and they would admit one whose actual
+  # constraint, the account's rate limit, no term had looked at. "No gate at all" is worse than
+  # either: the venue that is hardest to observe would be the only one nothing admits.
+  #
+  # The replacement term is the CANONICAL one, not new arithmetic: `claude-accounts --route
+  # general` is the same router cc-wave-plan and --account auto already route by
+  # (bin/claude-accounts:2307-2328, score_general at :1034-1046). Re-deriving quota headroom here
+  # would be a second implementation of a policy that already has one, free to drift from it.
+  if [ "$CLOUD" = 1 ]; then
+    if [ "${CC_FIRE_CLOUD_GATE:-on}" = off ]; then
+      # Recorded, never silent — same rule as the capacity kill switch above: an override must not
+      # read back later as a healthy admit, or an ungated window enters the measured population.
+      emit_gate_admit cloud gate-off "CC_FIRE_CLOUD_GATE=off — no account-headroom term evaluated"
+      return 0
+    fi
+    local cbin croute crc
+    cbin="$CC_ACCOUNTS_BIN"
+    # FAIL-CLOSED HERE, unlike the absent-library branch below — and the asymmetry is the point.
+    # That branch fails OPEN because it sits on the UNIVERSAL spawn chokepoint, where one missing
+    # file would refuse every fire on the box (the §12.2 amplifier). This branch is reached only by
+    # a fire that explicitly asked for the off-box venue, so its blast radius is exactly that one
+    # fire — and there is no safe reading of "the only instrument that can price this fire is
+    # missing" other than refusal.
+    if ! command -v "$cbin" >/dev/null 2>&1 && [ ! -x "$cbin" ]; then
+      echo "!! cloud capacity gate: REFUSING an off-box fire — the account router '$cbin' is unreachable." >&2
+      echo "   A cloud fire is priced in ACCOUNT rate limit, and that is the only instrument that reads it." >&2
+      echo "   Missing data is NEVER headroom. Fix the router, or override for one fire: CC_FIRE_CLOUD_GATE=off" >&2
+      emit_fire_refusal cloud-router-absent "account router '$cbin' unreachable — no account-headroom term evaluable"
+      return 9
+    fi
+    croute="$("$cbin" --route general 2>/dev/null)" && crc=0 || crc=$?
+    # rc 3 vs rc 2 stay DISTINCT all the way into the ledger. Both refuse, but they have opposite
+    # cures — 2 is a healthy instrument reporting an exhausted fleet (wait for a reset), 3 is a
+    # blind instrument (fix the prober) — and a single merged reason would make the fleet-wide
+    # question "are we out of quota, or out of vision?" unanswerable after the fact.
+    if [ "$crc" -eq 3 ]; then
+      echo "!! cloud capacity gate: REFUSING an off-box fire — claude-accounts --route general exited 3 (live limits UNREADABLE)." >&2
+      echo "   Missing data is NEVER headroom: an unreadable limit is indistinguishable from an exhausted one," >&2
+      echo "   and only one of those two readings is safe to act on. (bin/claude-accounts:1039-1040 refuses the same way.)" >&2
+      emit_fire_refusal cloud-account-headroom "route general rc=3 (data unavailable) — missing data is never headroom"
+      return 9
+    fi
+    if [ "$crc" -ne 0 ] || [ -z "$croute" ] || [ "$croute" = none ]; then
+      echo "!! cloud capacity gate: REFUSING an off-box fire — no account is routable by POLICY (claude-accounts --route general rc=$crc)." >&2
+      echo "   The limits were readable and every account is excluded (exhausted / window / cutoff)." >&2
+      echo "   Wait for a reset, or override for one fire: CC_FIRE_CLOUD_GATE=off" >&2
+      emit_fire_refusal cloud-account-policy "route general rc=$crc route='${croute:-}' — no account routable by policy"
+      return 9
+    fi
+    echo "-- cloud capacity gate: ADMIT — account ${croute} has general rate-limit headroom (claude-accounts --route general)." >&2
+    echo "   Box load/RAM NOT evaluated: this fire does not run here." >&2
+    # Basis `measured` means the same thing it means for the box gate — a live instrument was read
+    # and it cleared — but under gate `cloud`, so a reader can tell WHICH gate ran without having
+    # to infer it from the fire's argv.
+    emit_gate_admit cloud measured \
+      "account ${croute} routable for general (claude-accounts --route general) · box load/headroom not evaluated (off-box venue)"
+    return 0
+  fi
+  # ---- end G5 cloud branch — everything below is the BOX-LOCAL gate, unchanged ------------------
   # ABSENT LIBRARY IS LOUD AND FAILS OPEN — the one branch that MUST come before any term. This is
   # the universal spawn chokepoint and the call site turns ANY non-zero status into rc 9, so an
   # undefined `cc_hw_*` would make a missing file refuse EVERY fire on the box: fail-CLOSED, the
@@ -4154,6 +4242,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --window)      SURFACE="window"; SURFACE_EXPLICIT=1; shift ;;
   --surface-reason) SURFACE_REASON="${2:?--surface-reason needs a value}"; shift 2 ;;
   --probe)       PROBE=1; shift ;;
+  --cloud)       CLOUD=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
@@ -4168,6 +4257,27 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "!! unknown arg: $1" >&2; usage 1 ;;
 esac; done
 
+# ---- G5: --cloud ships DEFAULT-OFF ------------------------------------------------------------
+# Checked FIRST, before the payload checks and therefore before any side effect, because this is a
+# refusal about what the fire IS rather than about whether its arguments are well-formed.
+#
+# Why default-off rather than "on where it works": every other fire this script makes is priced in
+# THIS BOX's cores and RAM, and the operator's mental model of "what does firing cost" is built on
+# that. A cloud fire is priced in an ACCOUNT's rate limit — a shared, fleet-wide, slow-to-recover
+# resource that no pane can see being spent. Turning that on silently, per box, by landing a diff,
+# is how a resource gets exhausted by a mechanism nobody remembers enabling.
+#
+# Distinct exit code (2), not the parser's 1: `--cloud` IS recognised here, and a caller must be
+# able to tell "this flag does not exist" (fix your argv) from "this venue is not enabled on this
+# box" (set the env var) — states that need opposite responses. Recorded as a refusal for the same
+# reason every other pre-fire refusal is: a fire that did not happen has to be visible as one.
+if [ "$CLOUD" = 1 ] && [ "$CLOUD_OPTIN" != on ]; then
+  echo "!! --cloud is OFF BY DEFAULT on this box: set CC_FIRE_CLOUD=on to enable off-box dispatch." >&2
+  echo "   An off-box fire spends an ACCOUNT's rate limit, not this box's cores — a different, shared," >&2
+  echo "   fleet-wide resource — so the venue is opted into per box rather than enabled by landing a diff." >&2
+  emit_fire_refusal cloud-optin "--cloud passed with CC_FIRE_CLOUD='${CLOUD_OPTIN}' (needs 'on') — off-box venue not enabled on this box"
+  exit 2
+fi
 [ -n "$PROMPT_FILE" ] || { echo "!! --prompt-file is required" >&2; usage 1; }
 [ -f "$PROMPT_FILE" ] || { echo "!! missing prompt file: $PROMPT_FILE" >&2; exit 1; }
 # FM-D (Fable panel 2026-07-19): an EMPTY prompt file passed the [ -f ] check and fired `claude ""` →
