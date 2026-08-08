@@ -31,8 +31,12 @@
 #           line WAS delivered and only its cursor write failed: a bounded dup, never a missed wake) ·
 #       2 = usage / fail-closed refusal · 3 = no waiter uuid ·
 #       5 = deadline reached (contract TIMED_OUT; re-observe emitted, NOT a reap) ·
-#       6 = the watcher exited before its deadline (contract ABORTED — rc 3/5/crash). Distinct from 5
-#           on purpose: only 5 is a statement about the WAITEE, and only 5 pages.
+#       6 = the watcher exited before its deadline (contract ABORTED — rc 3/5/143/144/crash). Distinct
+#           from 5 on purpose: only 5 is a statement about the WAITEE. BOTH page (G10, 2026-08-08) —
+#           6 used to be silent, which meant a watcher killed from outside (cc-await-ping's measured
+#           144) ended the wait, left the waiter un-woken, and told nobody. An abort that alarms
+#           nobody is the same silent loss this rung exists to end, displaced one level up. The
+#           abort page names the rc and NEVER claims a deadline or anything about the waitee.
 # Env overrides (tests): CC_WAIT_CONTRACTS_DIR, CC_MAILBOX_DIR, CC_AWAIT_BIN.
 set -uo pipefail
 
@@ -160,10 +164,43 @@ cmd_wait() {
     exit 0
   fi
   if [ "$rc" -ne 2 ]; then
-    # rc 3 (no uuid/role) · rc 5 (orphaned) · any crash. The wait never reached its deadline, so
-    # TIMED_OUT would be a false statement about the waitee — and on rc 5 the page target is dead.
+    # rc 3 (no uuid/role) · rc 5 (orphaned) · rc 143/144 (the watcher was SIGTERMed / its process
+    # GROUP was) · any crash. The wait never reached its deadline, so TIMED_OUT would be a false
+    # statement about the waitee — ABORTED and exit 6 both stand, and only 5 ever claims a deadline.
+    #
+    # ── BUT AN ABORTED CONTRACT MUST STILL ALARM (G10, 2026-08-08) ──────────────────────────────
+    # This arm used to close ABORTED and page NOBODY, on the reasoning that there is no deadline to
+    # report and, on rc 5, nobody alive to page. Both halves are true and the conclusion was still
+    # wrong: the WAIT IS OVER AND THE WAITER WAS NOT WOKEN. That is the exact silent loss this whole
+    # rung exists to end, displaced one level up — and it is not hypothetical. cc-await-ping's
+    # measured 144 (the harness's sentinel for an external process-GROUP SIGTERM, backlog
+    # 5b77e20d9db6) landed here, closed the contract, and told no one; the watcher had already died
+    # without printing, so the abort was the LAST place the fact could surface and it stayed mute.
+    #
+    # "Nobody alive to page" also mis-describes the transport. A page is a MAILBOX WRITE, which is
+    # durable precisely so it survives a closed pane: on rc 5 the line stays unacked for
+    # cc-inbox-guard to alarm on and for the successor's SessionStart adoption to inherit — the same
+    # property that makes leaving the mail unacked the right call in the first place.
+    #
+    # The structured action is dispatched exactly as the deadline arm dispatches it (same closed
+    # allowlist, same no-eval-of-prose, --note still inert), so an abort reaches whatever a timeout
+    # reaches. The TEXT is what differs: it says ABORTED and names the rc, and never claims a
+    # deadline or anything about the waitee. Nothing is reaped here either (S-3b/L2-d).
+    local why
+    why="$(case "$rc" in
+      3)   echo 'no uuid/role to watch' ;;
+      5)   echo 'the waiter session is provably gone; mail left unacked for the guard' ;;
+      143) echo 'the WATCHER process was SIGTERMed from outside' ;;
+      144) echo 'the watcher process GROUP was SIGTERMed from outside (the harness sentinel — NOT 128+16/SIGURG)' ;;
+      *)   echo 'unexpected exit' ;;
+    esac)"
     close_contract "$cf" ABORTED
-    echo "cc-wait: contract $id ABORTED — the watcher exited $rc before its deadline ($(case "$rc" in 3) echo 'no uuid/role to watch';; 5) echo 'the waiter session is provably gone; mail left unacked for the guard';; *) echo 'unexpected exit';; esac)). NOT a timeout: no deadline page issued (S-3b/L2-d still holds — nothing is reaped)." >&2
+    echo "cc-wait: contract $id ABORTED — the watcher exited $rc before its deadline ($why). NOT a timeout: nothing is claimed about the waitee and nothing is reaped (S-3b/L2-d) — but the wait is OVER and the waiter was NOT woken, so this still pages." >&2
+    local abrt="⚠ wait-contract $id ABORTED — the watcher exited $rc before the deadline ($why). Your wait for '$waitee' is OVER and you were NOT woken: this is NOT a timeout and says nothing about the waitee. RE-OBSERVE the waitee's effect and RE-ARM the wake path if you are still idle. NOT reaped (S-3b). note: ${note:-none}"
+    case "$ontimeout" in
+      escalate) page "${CC_WAIT_PAGE_TARGET:-$waiter}" "$abrt" ;;
+      *)        page "$waiter"                         "$abrt" ;;
+    esac
     exit 6
   fi
 
