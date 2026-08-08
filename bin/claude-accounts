@@ -2063,7 +2063,13 @@ RELOGIN_POLL_LOG = os.environ.get(
 # beats all-clear; UNKNOWN deliberately outranks OK.
 RELOGIN_EXIT = {"ESCALATED": 2, "DUE": 1, "UNKNOWN": 3, "OK": 0}
 RELOGIN_PRECEDENCE = ("ESCALATED", "DUE", "UNKNOWN", "OK")
-RELOGIN_UNKNOWN_ACTION = "land feat/accounts-login-cliff (adds --login-status)"
+# UNKNOWN = this row carries no login_expires_* at all. That USED to mean the build lacked the
+# fields, and this string said so ("land feat/accounts-login-cliff"). The branch landed, so the
+# only way a row reaches UNKNOWN on this build is that probe_account returned early on
+# kstate != "present" (:588-594, before :603 sets the stamp) — i.e. the account's keychain could
+# not be read — or the row came from a ledger written before the fields existed. Both are answered
+# by a re-probe, and a persistent one is a broken account, not a missing feature.
+RELOGIN_UNKNOWN_ACTION = "claude-accounts --fresh; if it persists, cc-relogin {acct}"
 
 
 def relogin_last_attempt(acct: str, path: str = "") -> dict:
@@ -2122,7 +2128,8 @@ def relogin_row(r: dict) -> dict:
             "login_expires_at": at, "login_expires_h": h,
             "login_fixable": r.get("login_fixable"),
             "last_attempt_ts": last.get("ts"), "last_attempt_result": last.get("result"),
-            "next_action": ("-" if state == "OK" else RELOGIN_UNKNOWN_ACTION
+            "next_action": ("-" if state == "OK"
+                            else RELOGIN_UNKNOWN_ACTION.format(acct=acct)
                             if state == "UNKNOWN" else f"cc-relogin {acct}")}
 
 
@@ -2150,8 +2157,10 @@ def render_relogin_status(rows: list, args: list) -> int:
         # status board which cannot see is worse than useless if it claims "all clear".
         print("claude-accounts --relogin-status: DETECTION-UNAVAILABLE — login_expires_at/"
               "login_expires_h absent for " + ", ".join(blind)
-              + "; `claude-accounts --login-status` is not on this build (branch "
-                "feat/accounts-login-cliff). Reporting UNKNOWN, NOT OK.", file=sys.stderr)
+              + ". This build DOES emit them, so the probe could not read that account's "
+                "keychain (or the row predates the fields): re-run with --fresh, and if it "
+                "persists treat the account as broken. Reporting UNKNOWN, NOT OK.",
+              file=sys.stderr)
     return code
 
 
