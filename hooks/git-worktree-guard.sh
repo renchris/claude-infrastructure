@@ -72,9 +72,33 @@ if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
   # it should block. Batching keeps the population and the predicate byte-identical; it is the same
   # check, spawned once. The -n guard is load-bearing: `lsof -p ""` lists EVERY process on the box
   # (measured 1890 lines), which would silently widen the predicate to "anyone, anywhere".
+  # RESOLVE lsof ABSOLUTELY. It lives in /usr/sbin, which is NOT on the PATH a LaunchAgent — or a
+  # session spawned by one — hands its hooks ($HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:
+  # /usr/bin:/bin). So the bare name resolves in an operator's shell and does not exist off-session,
+  # and both calls below then found nothing, `live` stayed 0, and this SAFETY REFUSAL returned 0: it
+  # permitted exactly the removal it exists to block. Measured at trunk 2026-08-08 under that literal
+  # PATH — tests/git-worktree-guard.bats test A ("a LIVE worktree is BLOCKED") returns 0, not 2; the
+  # same suite on the same tree with /usr/sbin restored is 8/8, which is what isolates the cause.
+  # The `command -v` on the second call made it worse rather than better: it converted a visible
+  # "command not found" into a clean skip. (Class = memory path-resolved-dependency-in-daemon-code;
+  # first landed as e6de2e15, auto-reverted for a collision in a different suite — this is that half
+  # re-landed alone.) An EXPLICIT override is honoured VERBATIM, including empty, because that is the
+  # only way to exercise the unresolvable branch below on a host where /usr/sbin/lsof exists.
+  if   [ -n "${CC_WTG_LSOF+set}" ]; then LSOF="$CC_WTG_LSOF"
+  elif [ -x /usr/sbin/lsof ];       then LSOF=/usr/sbin/lsof
+  else                                   LSOF="$(command -v lsof 2>/dev/null || true)"
+  fi
+  if [ -z "$LSOF" ] || [ ! -x "$LSOF" ]; then
+    # THIRD STATE, and it must not be silence. Liveness is UNREADABLE here — which is not the same
+    # as "nothing is live" — and this file's header is explicit that anything giving up on this leg
+    # can only fail OPEN. Refuse: a blocked removal is recoverable, a removal out from under a live
+    # session is not.
+    echo "git-worktree-guard: BLOCKED 'git worktree remove $wt' — lsof is not resolvable (PATH=$PATH), so this guard CANNOT determine whether a live process is cwd'd in the worktree. Refusing rather than guessing — a blocked removal is recoverable, a removal out from under a live session is not. If lsof lives elsewhere on this host, set CC_WTG_LSOF=<path>." >&2
+    exit 2
+  fi
   cpids="$(pgrep -f claude 2>/dev/null | sort -u | paste -sd, -)"
-  if [ -n "$cpids" ] && lsof -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -qxF "$wtabs"; then live=1; fi
-  if [ "$live" = "0" ] && command -v lsof >/dev/null 2>&1 && lsof -- "$wtabs" 2>/dev/null | grep -q .; then live=1; fi
+  if [ -n "$cpids" ] && "$LSOF" -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -qxF "$wtabs"; then live=1; fi
+  if [ "$live" = "0" ] && "$LSOF" -- "$wtabs" 2>/dev/null | grep -q .; then live=1; fi
   if [ "$live" = "1" ]; then
     echo "git-worktree-guard: BLOCKED 'git worktree remove $wt' — a live process (likely a Claude session) is cwd'd in / has files open under it. Removing it now yanks the worktree out from under active work (clean tree != idle session). Let 'bash scripts/worktree-gc.sh --prune' handle reaping — it KEEPS anything live and only removes clean+merged+idle>30m worktrees, preserving the branch. Or wait for that session to finish." >&2
     exit 2
