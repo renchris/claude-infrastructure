@@ -9,6 +9,12 @@
 # re-arm (landmine), and the default cwd resolves from the installed-hook symlink source.
 
 setup() {
+  # Fixture $HOME (rule 1) + the one non-$HOME seam the subject reaches (rule 5: waiting-recycle.sh
+  # reads CC_TELEMETRY_DIR, default the ABSOLUTE /tmp/cc-telemetry, which a fixtured $HOME does not
+  # redirect by one character). Both measured before being added: 8/8 with HOME pointed at an empty
+  # dir. They are here so this suite can leave the host-suites partition and be judged by the tree.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HELPER="$REPO/scripts/desk-arm-live.sh"
   export CC_ARM_WR="$REPO/hooks/waiting-recycle.sh"

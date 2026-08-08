@@ -11,6 +11,11 @@
 # Base behavior (no sentinel ⇒ allow; armed same-sid benign ⇒ block; set/clear/status) is preserved.
 
 setup() {
+  # Fixture $HOME (hermeticity rule 1) + CC_TELEMETRY_DIR, whose default /tmp/cc-telemetry is
+  # ABSOLUTE and so survives a fixtured $HOME untouched (rule 5). Measured, not assumed: 23/23 with
+  # HOME pointed at an empty dir. Both are here so this suite can leave the host-suites partition.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/session-continue.sh"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"     # isolate the state dir from any real sentinel
@@ -23,6 +28,16 @@ setup() {
   # this every test writes to the LIVE ~/.claude/autonomy/idl.jsonl (404 leaked lines found 2026-07-25).
   # Only one test previously exported its own ($BATS_TEST_TMPDIR/bidl.jsonl) — that override still wins.
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # …and CC_IDL was NOT the seam this hook reads, so that isolation never bound (measured 2026-08-08,
+  # backlog 22b839c85a52): run under an empty fixture $HOME, this suite deposited BOTH
+  # .claude/autonomy/idl.jsonl and .claude/logs/session-continue.log — i.e. every run since had been
+  # appending to the operator's live pair. hooks/session-continue.sh:58-59 reads CONTINUE_IDL /
+  # CONTINUE_LOG; CC_IDL is real, but it belongs to hooks/lib/idl-log.sh and to boundary-handoff.sh,
+  # which is why the line above still earns its place (the boundary test at the bottom drives it).
+  # The seam was bound under a NAME the subject does not read, and a fix under the wrong name reads
+  # exactly like a fix — the comment above asserted isolation for a year of runs that had none.
+  export CONTINUE_IDL="$BATS_TEST_TMPDIR/continue-idl.jsonl"
+  export CONTINUE_LOG="$BATS_TEST_TMPDIR/continue.log"
   # PIN THE PANE. Without this, $_ouid is whatever pane RAN the suite — the suite is hermetic in its
   # paths and stubs yet still encodes the caller's identity, so a verdict can flip by pane. Two tests
   # already pinned it inline; those local exports still win.
