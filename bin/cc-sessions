@@ -21,9 +21,30 @@
 #   cc-sessions --json     JSON array of live entries (cc-notify uses this to
 #                          resolve a friendly name → pane UUID)
 #   cc-sessions --names    one friendly name per line
+#   cc-sessions --offbox   ONLY the off-box (cloud) sessions; composes with --json/--names
 #   cc-sessions -h         this help
 #
-# Env overrides (for tests): CC_REGISTRY_DIR, IT2_BIN.
+# ── OFF-BOX SESSIONS (docs/plans/CLOUD_OBSERVABILITY.md §9.3) ─────────────────────────────────────
+# This lister enumerates ~/.claude/cc-registry with `kill -0` on a LOCAL pid, which makes it
+# structurally unable to represent a session running in an Anthropic-managed VM — §5.2 names it as
+# one of the three local oracles that convert "not on this box" into "dead". Off-box rows therefore
+# come from `cc-cloud`, NEVER from the registry, and are rendered as a SEPARATE block with a
+# distinct `kind=offbox` so nothing about them can be read as a local pane:
+#   · NEVER a pid/UUID column and never `kill -0` — a blank pid beside live local pids reads as
+#     "dead" to a human scanning the column. State comes from cc-cloud's state function, whose arms
+#     are total, via `cc-cloud list --json --state`. This file does NOT re-derive that verdict:
+#     re-implementing another tool's arbiter outside it is a defect this repo has already paid for.
+#   · U0 UNKNOWN renders as the literal word UNKNOWN, never as a gap. An empty cell in a table of
+#     live sessions is read as absence, and absence is exactly the ambiguity §4 exists to remove.
+#     So a probe that could not run degrades to UNKNOWN rows, never to silence.
+#   · The recover action is `open <url>`, never a kill — there is no local process to signal.
+# `--json` and `--names` stay LOCAL-ONLY by default, deliberately: they are the ADDRESSING views
+# (cc-notify resolves a friendly name → pane UUID through them, and the teammate/shutdown hooks
+# select on registry keys), so a row that cannot be delivered to locally must never resolve there.
+# `--offbox` is the explicit machine surface, and the default TABLE — the operator's view, the one
+# §9.3 is about — shows both. With zero declarations every byte of every mode is unchanged.
+#
+# Env overrides (for tests): CC_REGISTRY_DIR, IT2_BIN, CC_CLOUD_BIN, CC_CLOUD_LIST_TIMEOUT_S.
 # Read-only except for the lazy stale-sweep. Always exit 0 (empty registry too).
 set -uo pipefail
 
@@ -31,10 +52,10 @@ REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-MODE=table; ALL=0
+MODE=table; ALL=0; OFFBOX=0
 # --all = the FORENSIC view (live + retained-dead rows). The default stays the ADDRESSING view
 # (live only), so cc-notify can never resolve a friendly name onto a dead pane.
 for a in "$@"; do
@@ -42,6 +63,7 @@ for a in "$@"; do
     --json)     MODE=json ;;
     --names)    MODE=names ;;
     --all)      ALL=1 ;;
+    --offbox)   OFFBOX=1 ;;
     -h|--help)  usage; exit 0 ;;
     '')         ;;
     *)          echo "cc-sessions: unknown option '$a'" >&2; usage >&2; exit 2 ;;
@@ -50,9 +72,102 @@ done
 
 command -v jq >/dev/null 2>&1 || { echo "cc-sessions: jq required" >&2; exit 1; }
 
+_TO=""; for _c in timeout gtimeout; do command -v "$_c" >/dev/null 2>&1 && { _TO="$_c"; break; }; done
+
+# ── off-box rows, from cc-cloud only (§9.3) ───────────────────────────────────────────────────────
+# Resolution order mirrors cc-notify's sibling-first search: the tool beside this one is the
+# deterministic choice under a test PATH, and $HOME/.claude/bin is where the live layer symlinks it.
+CLOUD_BIN="${CC_CLOUD_BIN:-}"
+if [ -z "$CLOUD_BIN" ]; then
+  for _c in "$(dirname "$0")/cc-cloud" "$HOME/.claude/bin/cc-cloud"; do
+    if [ -x "$_c" ]; then CLOUD_BIN="$_c"; break; fi
+  done
+fi
+[ -n "$CLOUD_BIN" ] || CLOUD_BIN="$(command -v cc-cloud 2>/dev/null || true)"
+CLOUD_TIMEOUT_S="${CC_CLOUD_LIST_TIMEOUT_S:-25}"
+
+# NDJSON — one object per LINE, not an array. `cc-cloud list` emits it that way and every consumer
+# here reads it line-wise; a `jq '.[]'` over this would break on the first row.
+offbox_ndjson() {
+  local out rc
+  [ -n "$CLOUD_BIN" ] && [ -x "$CLOUD_BIN" ] || return 0
+  if [ -n "$_TO" ]; then
+    out="$("$_TO" "$CLOUD_TIMEOUT_S" "$CLOUD_BIN" list --json --state 2>/dev/null)"; rc=$?
+  else
+    out="$("$CLOUD_BIN" list --json --state 2>/dev/null)"; rc=$?
+  fi
+  # A verdict that could not be obtained must not delete the ROW. Fall back to the probe-free
+  # inventory, whose `state` is then absent and renders as the literal UNKNOWN below — the U0
+  # discipline: "could not look" is a non-verdict, never an absence.
+  if [ "$rc" -ne 0 ]; then out="$("$CLOUD_BIN" list --json 2>/dev/null)" || out=""; fi
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out"
+}
+
+# KIND \t SESSION \t STATE \t AGE \t ACTION — no pid, no UUID, no kill, and no empty cell.
+offbox_tsv() {
+  local nd; nd="$(offbox_ndjson)"
+  [ -n "$nd" ] || return 0
+  printf '%s\n' "$nd" | jq -r '
+    select(.retired != true) |
+    ((.age_s // 0) | floor) as $age |
+    ( if   $age < 60    then "\($age)s"
+      elif $age < 3600  then "\(($age / 60)    | floor)m"
+      elif $age < 86400 then "\(($age / 3600)  | floor)h"
+      else                   "\(($age / 86400) | floor)d" end ) as $ago |
+    ( if (.state // "") == "" then "UNKNOWN" else .state end ) as $state |
+    ( if (.url   // "") == "" then "https://claude.ai/code" else .url end ) as $url |
+    [ "offbox", .id, $state, $ago, "open " + $url ] | @tsv
+  ' 2>/dev/null
+}
+
+offbox_json() {
+  local nd; nd="$(offbox_ndjson)"
+  if [ -z "$nd" ]; then echo '[]'; return 0; fi
+  printf '%s\n' "$nd" | jq -s '[ .[] | select(.retired != true) |
+    ( if (.url // "") == "" then "https://claude.ai/code" else .url end ) as $url | {
+      kind:   "offbox",
+      id:     .id,
+      name:   .id,
+      branch: (.branch // ""),
+      item:   (.item // ""),
+      state:  (if (.state // "") == "" then "UNKNOWN" else .state end),
+      detail: (.detail // ""),
+      age_s:  (.age_s // 0),
+      url:    $url,
+      action: ("open " + $url)
+    } ]'
+}
+
+offbox_table() { # the block appended under the local table; silent when nothing is declared
+  local rows; rows="$(offbox_tsv)"
+  [ -n "$rows" ] || return 0
+  printf '\nOFF-BOX — no local process; state is cc-cloud'\''s, and the action is the URL\n'
+  {
+    printf 'KIND\tSESSION\tSTATE\tAGE\tACTION\n'
+    printf '%s\n' "$rows"
+  } | { if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi; }
+}
+
+if [ "$OFFBOX" = 1 ]; then
+  case "$MODE" in
+    json)  offbox_json ;;
+    names) offbox_tsv | cut -f2 ;;
+    table)
+      _rows="$(offbox_tsv)"
+      if [ -z "$_rows" ]; then
+        echo "(no off-box sessions declared — nothing is firing off-box)"
+      else
+        offbox_table
+      fi
+      ;;
+  esac
+  exit 0
+fi
+
 if [ ! -d "$REG_DIR" ]; then
   [ "$MODE" = json ] && echo '[]'
-  [ "$MODE" = table ] && echo "(no sessions registered)"
+  if [ "$MODE" = table ]; then echo "(no sessions registered)"; offbox_table; fi
   exit 0
 fi
 
@@ -64,7 +179,6 @@ fi
 # only). Duplicated rather than shared with cc-notify on purpose: a brand-new tracked file is not
 # symlinked into the live ~/.claude layer, so a shared helper would ship broken until someone noticed.
 IT2_TIMEOUT_S="${CC_IT2_TIMEOUT_S:-5}"
-_TO=""; for _c in timeout gtimeout; do command -v "$_c" >/dev/null 2>&1 && { _TO="$_c"; break; }; done
 it2_list_bounded() {
   [ -n "$IT2" ] && [ -x "$IT2" ] || return 1
   if [ -n "$_TO" ]; then "$_TO" "$IT2_TIMEOUT_S" "$IT2" session list --json 2>/dev/null; return $?; fi
@@ -138,7 +252,7 @@ if [ "${ALL:-0}" = 1 ]; then live+=("${dead[@]+"${dead[@]}"}"); fi
 if [ "${#live[@]}" -eq 0 ]; then
   case "$MODE" in
     json)  echo '[]' ;;
-    table) echo "(no live sessions registered)" ;;
+    table) echo "(no live sessions registered)"; offbox_table ;;
     names) : ;;
   esac
   exit 0
@@ -161,6 +275,7 @@ case "$MODE" in
         ' "$f"
       done
     } | { if command -v column >/dev/null 2>&1; then column -t -s "$(printf '\t')"; else cat; fi; }
+    offbox_table
     ;;
 esac
 exit 0
