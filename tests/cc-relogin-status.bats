@@ -208,7 +208,11 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   echo "$output" | grep -qE '^next2 +UNKNOWN '
   echo "$output" | grep -q 'DETECTION-UNAVAILABLE'
   echo "$output" | grep -q 'login_expires_h' # names the missing surface (§2)
-  echo "$output" | grep -q 'feat/accounts-login-cliff'
+  # The warning must name a RECOVERY THAT EXISTS. It used to say the fields were absent because
+  # this build lacked them ("branch feat/accounts-login-cliff") — true when written, false since
+  # that branch landed, and a landed branch is not something the operator can go land. R-4.
+  echo "$output" | grep -q -- '--fresh'
+  [[ "$output" != *"feat/accounts-login-cliff"* ]]
 }
 
 @test "UNKNOWN: the machine surface agrees — zero OK rows, every row UNKNOWN" {
