@@ -40,6 +40,14 @@ setup() {
   # inside a pane this feature created. `arm()` and the file-transport tests key on the ABSENCE of
   # CC_PANE_CMD, which an ambient value silently supplies. Same fix, same reasoning, fuller account
   # in tests/handoff-fire-argv-launch.bats's setup.
+  #
+  # The half that account does not reach, measured under item 22a170cc62aa: the same ambient value is
+  # read by bin/it2-kitty:626 as its own CALLER's intent, so a split forwards
+  # `--env CC_PANE_CMD=<the ancestor's own launch line>` into the new pane and takes the pre-delivered
+  # path, which never ARMS — case 1's failure here, and in production a child re-running its parent's
+  # launch while the command meant for it is typed at a pane with no prompt. bin/cc-pane-runner now
+  # CONSUMES the record at delivery (its `_launch`), so it can no longer be inherited at all; this
+  # line stays regardless, because a subject's fix is not a suite's hermeticity.
   unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_WAIT_S CC_PANE_RUNNER
   KLOG="$BATS_TEST_TMPDIR/kitty.log"
   fake_kitty
