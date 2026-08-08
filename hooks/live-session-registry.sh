@@ -52,6 +52,49 @@ while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$i" -lt 12 ]; do
 done
 [ -z "$cpid" ] && cpid="$PPID"   # fallback: still a live descendant anchor
 
+# ── TENANCY GATE: a cwd is not a tenancy either (backlog 55e1e65c7548) ─────────────────────────
+# Same defect as session-register.sh's pane row, one key over: a nested `claude` (a `claude -p`
+# probe, an upgrade-gate check, any script that shells out to the CLI) inherits the session's CWD,
+# so it lands on the SAME worktree row and — until this gate — wrote its own pid over the tenant's.
+# Measured 2026-08-08 with a fixtured $HOME and a two-tier ancestry: row pid 94327 (alive) became
+# 94337, dead before the probe returned.
+#
+# That is worse here than it looks, because this row is a POSITIVE proof and nothing else replaces
+# it. worktree-gc.sh:361-372 `registry_live()` returns NOT-LIVE on a dead pid, so the worktree falls
+# back to the cwd/lsof oracle — the flakiness this file's header says it exists to eliminate ("live
+# `claude` procs routinely report cwd=/ … a single bad pass made a LIVE session's worktree look dead
+# and it was reaped"). One throwaway probe silently disarms the guard for the session that fired it.
+#
+# Refuse ONLY when the incumbent pid is a live ANCESTOR of ours: a nested claude got this cwd by
+# inheriting it from the process that owns the worktree, so ancestry IS the proof the row is not
+# ours. A live-but-unrelated pid (basename collision across the repos sharing ~/Development/
+# .worktrees, or a recycled pid) is NOT an ancestor and still writes, so this cannot wedge a
+# worktree — the failure mode the row exists to prevent, which a blunter test would re-create.
+inc=""
+if [ -f "$REG_DIR/$base" ]; then
+  inc=$(cut -f1 "$REG_DIR/$base" 2>/dev/null)
+  case "${inc:-}" in ''|*[!0-9]*) inc="" ;; esac
+fi
+if [ -n "$inc" ] && [ "$inc" != "$cpid" ] && kill -0 "$inc" 2>/dev/null; then
+  walk=$(ps -o ppid= -p "$cpid" 2>/dev/null | tr -d ' '); i=0
+  while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 16 ]; do
+    if [ "$walk" = "$inc" ]; then
+      # Journalled into the shared IDL so cc-digest/cc-discover's inert-gate census can see this
+      # guard fire at all; a silent no-op is indistinguishable from a gate that never runs.
+      idl="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+      mkdir -p "$(dirname "$idl")" 2>/dev/null || true
+      jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+             --arg sid "${sid:-?}" --arg base "$base" --arg inc "$inc" \
+        '{ts:$ts,hook:"live-session-registry",sid:$sid,disposition:"refused",
+          reason:("worktree " + $base + " held by live ancestor pid " + $inc + " — nested session, not the tenant")}' \
+        >> "$idl" 2>/dev/null || true
+      exit 0
+    fi
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+fi
+
 # ATOMIC (tmp+mv), never `> "$REG_DIR/$base"` directly. `>` is O_TRUNC — the file is emptied by one
 # syscall and refilled by a later one, so a reader landing in that gap sees ZERO bytes. That reader is
 # worktree-gc: it `cut -f2`s an empty file → empty pid → `kill -0 ""` fails → this LIVE session's
