@@ -1,0 +1,125 @@
+#!/bin/bash
+# cc-cpubound — run a command under a per-process CPU-TIME ceiling, and say so when it fires.
+#
+# WHY THIS EXISTS (backlog 2af4c4908422; MACHINE_CAPACITY_V2.md:1513-1519 class B, "single runaway
+# action in one session", control point = the Bash tool boundary, "a RESOURCE guard — never a
+# denylist of binary names").
+#
+# 2026-08-02, measured from the investigating session's own `ps` samples: an agent's Bash-tool
+# `grep` — which the interactive shell function rewrites to `ugrep -G …` — hit catastrophic regex
+# backtracking on ONE
+# HTML file and burned **12m48s of CPU at 7.84 GiB RSS** before it went away. Nothing stopped it.
+# It was not a big-corpus scan; the pathology was two bounded classes straddling an alternation
+# (`[^<>{}"]{0,90}(a|b|c)[^<>{}"]{0,90}`), so no corpus-size heuristic could have seen it coming.
+#
+# WHY A CPU CEILING AND NOT A WALL CLOCK. macOS gives an unprivileged spawner NO memory ceiling —
+# measured on Darwin 24.6.0, 2026-08-08: setrlimit on RLIMIT_AS / RLIMIT_RSS / RLIMIT_DATA all
+# return EINVAL, while RLIMIT_CPU / NOFILE / NPROC / FSIZE set fine in the SAME process (that
+# 4-of-8 split is the positive control proving the refusal is Darwin's, not a broken probe).
+# `ulimit -m` is absent from zsh entirely and inert in bash; `ulimit -v` cannot be set at all; and
+# capping virtual address space would be useless anyway — a bare `node` reserves 392.4 GB of VA
+# against 37 MB of RSS, so any VA ceiling low enough to matter false-kills node on startup.
+#
+# RLIMIT_CPU is the one ceiling Darwin actually honours, and its semantics are better suited to
+# this job than a wall clock in three specific ways:
+#
+#   1. IT BOUNDS COMPUTE, NOT PATIENCE. Measured: `ulimit -t 2; sleep 5` runs the full 5 s and
+#      exits 0. A command that is slow because it waits — on the network, on a lock, on a build
+#      it did not start — is untouched. A wall-clock bound cannot tell those apart and kills both.
+#   2. IT IS PER-PROCESS AND INHERITED, NOT SHARED ACROSS THE TREE. Each process gets its own
+#      budget, so a long pipeline of many short-lived children is never bounded in aggregate,
+#      while any SINGLE process that runs away is stopped on its own. That is exactly the observed
+#      shape: the runaway ugrep was at 12m48s of CPU while its parent shell sat at 0.0% and 752 KB.
+#   3. THE KERNEL ENFORCES IT. No poller to schedule, starve, or keep alive — and nothing to
+#      reap, because the process is gone at the ceiling rather than found dead afterwards.
+#
+# ORDER IS LOAD-BEARING, AND GETTING IT WRONG FAILS SILENTLY. The soft limit must be lowered
+# BEFORE the hard limit: a hard limit below the current soft limit is EINVAL, so `ulimit -H -t N`
+# on a fresh shell (soft = unlimited) fails and leaves BOTH unlimited — measured, and the failure
+# prints nothing anyone reads. Soft first, then hard, then verify.
+#
+# DECLARED BLIND SPOT, MEASURED NOT ASSUMED: on Darwin the HARD tier does not deliver the SIGKILL
+# that POSIX specifies. A process that installs SIG_IGN for SIGXCPU survives its hard ceiling
+# indefinitely — verified 2026-08-08 with soft=1/hard=3 and a spin loop that consumed 12.0 CPU-s
+# and reported `SURVIVED`. So the enforcing tier here is SIGXCPU at the soft limit and nothing
+# else; the hard limit is set for the grace window and for kernels that do honour it. The class
+# this misses is "a program that deliberately ignores SIGXCPU", which no member of the bounded
+# table does (grep/ugrep/rg/ag/ack/find all die on default disposition). The layer that would
+# cover it is a polling per-pid CPU watchdog — deliberately NOT built here, because it costs a
+# poller to protect against a case with no measured instance.
+#
+# FAIL-OPEN IS THE HARD CONTRACT, same as the hook that calls this. Every path that cannot set the
+# ceiling still RUNS THE COMMAND. A guard that turns a working command into a failure has done more
+# damage than the runaway it was built to stop.
+#
+# Usage:  cc-cpubound <cpu_seconds> <command> [args...]
+# Exit:   the command's own status, verbatim — except that death by SIGXCPU (152) is reported on
+#         stderr first, as a PARSEABLE verdict line, because the only consumer that can act on it
+#         is the agent that is blocked on this very call.
+
+set -uo pipefail
+
+# Grace between the SIGXCPU tier and the hard ceiling. Small on purpose: it exists so a program
+# that CATCHES SIGXCPU can flush and exit, not so it can keep working.
+GRACE_S="${CC_CPUBOUND_GRACE_S:-5}"
+
+usage() {
+  printf 'usage: cc-cpubound <cpu_seconds> <command> [args...]\n' >&2
+  exit 2
+}
+
+[ "$#" -ge 2 ] || usage
+
+SECS="$1"
+shift
+
+# A non-integer or non-positive ceiling is a CONFIG error, and a config error must not cost the
+# caller their command: run it unbounded rather than refuse it. Loud on stderr, exit status
+# untouched — the same shape as the hook's "refusing to rewrite costs one undemoted process".
+case "$SECS" in
+  ''|*[!0-9]*)
+    printf 'cc-cpubound: verdict=bad-limit limit=%s — running UNBOUNDED\n' "$SECS" >&2
+    exec "$@"
+    ;;
+esac
+[ "$SECS" -gt 0 ] 2>/dev/null || {
+  printf 'cc-cpubound: verdict=bad-limit limit=%s — running UNBOUNDED\n' "$SECS" >&2
+  exec "$@"
+}
+
+# ── set the ceiling: SOFT first, then HARD (see ORDER IS LOAD-BEARING above) ───────────────────
+# Both are best-effort. `ulimit` writes to stderr on refusal, which would corrupt the caller's
+# stderr with noise about a limit they did not ask for, so it is suppressed and the OUTCOME is
+# checked instead — a refusal that we then report ourselves, in our own vocabulary.
+ulimit -S -t "$SECS" 2>/dev/null
+ulimit -H -t "$((SECS + GRACE_S))" 2>/dev/null
+
+# Verify the ceiling actually took. `ulimit -S -t` reads back the effective soft limit; if it is
+# still unlimited, the kernel refused us and the caller is running unbounded — which is the
+# fail-open outcome we chose, but it must not be SILENT, or a future reader will believe every
+# command in the table was bounded when none of them were.
+EFFECTIVE="$(ulimit -S -t 2>/dev/null)" || EFFECTIVE=""
+if [ "$EFFECTIVE" != "$SECS" ]; then
+  printf 'cc-cpubound: verdict=limit-not-applied requested=%s effective=%s — running UNBOUNDED\n' \
+    "$SECS" "${EFFECTIVE:-unknown}" >&2
+  exec "$@"
+fi
+
+# ── run it ────────────────────────────────────────────────────────────────────────────────────
+# NOT `exec`: we stay as the parent so the SIGXCPU death can be turned into a sentence. The cost
+# is one idle shell holding the same ceiling it set — it burns no CPU waiting, so it cannot trip
+# its own limit. stdin/stdout/stderr pass through untouched.
+"$@"
+RC=$?
+
+# 128 + SIGXCPU(24) = 152. This is the ceiling firing, and it is the ONLY status this script
+# interprets; everything else is the command's own business and is passed through unread.
+if [ "$RC" -eq 152 ]; then
+  printf 'cc-cpubound: verdict=cpu-ceiling-exceeded limit_cpu_s=%s signal=SIGXCPU rc=152\n' \
+    "$SECS" >&2
+  printf 'cc-cpubound: the command used more than %s CPU-seconds in a single process and the kernel stopped it.\n' \
+    "$SECS" >&2
+  printf 'cc-cpubound: this is a RESOURCE ceiling, not a failure of the command — narrow the work (a tighter pattern, a smaller path set, a bounded regex) and run it again. A call you KNOW is this expensive can opt out: any command the rewriter declines is unbounded, so a leading env assignment (CC_X=1 <cmd>) or CC_QOS_REWRITE=off runs it verbatim.\n' >&2
+fi
+
+exit "$RC"

@@ -244,3 +244,114 @@ mktable() {
   [ "$status" -eq 0 ]
   [ "$(cmd_of "$output")" = "$TP -c utility uv run pytest -m load" ]
 }
+
+# ══ transform (c) — the CPU ceiling (backlog 2af4c4908422) ══════════════════════════════════════
+# (b) decides WHERE a command runs; (c) decides HOW LONG it may run. The three shipped rows are
+# tested against the REAL config/qos-bound.patterns and the REAL bin/cc-cpubound for the same reason
+# the four batch rows are: those rows ARE the deliverable, and a fixture table would test nothing
+# about them. Mechanics below use fixtures.
+
+# The real wrapper path, as the hook resolves it: normalised, checkout-relative, NOT ~/.claude/bin
+# (a new file has no live symlink until the next converge tick, so pointing there would leave a
+# silent window where the table matches and nothing is bounded).
+cpubound_path() { printf '%s' "$(cd -P "$REPO/bin" && pwd)/cc-cpubound"; }
+
+@test "a simple grep gets the 60 CPU-second ceiling from the shipped table" {
+  run run_hook "grep -rn needle /some/path"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 60 grep -rn needle /some/path" ]
+}
+
+@test "ripgrep and find — the other shipped rows — are bounded the same way" {
+  run run_hook "rg --hidden pattern src"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 60 rg --hidden pattern src" ] || false
+  run run_hook "find . -name '*.ts'"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 60 find . -name '*.ts'" ]
+}
+
+# The word/command-position anchors: a search binary NAMED inside an argument is not the command.
+@test "a search binary appearing as an argument, not in command position, is untouched" {
+  run run_hook "cat notes-about-grep.md"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  run run_hook "echo findings"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+# COMPOSITION. (b) and (c) answer different questions, so a command in BOTH tables must get BOTH
+# wrappers. Under a first-match-wins scheme one would be silently dropped, and WHICH one would
+# depend on table read order — the exact order-dependent bug the compose was written to prevent.
+@test "a command in BOTH tables gets both prefixes, ceiling outermost" {
+  tbl="$(mktable batch utility '(^|[[:space:]])grep([[:space:]]|$)')"
+  CC_QOS_PATTERNS="$tbl" run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 60 $TP -c utility grep -rn x /p" ]
+}
+
+# THE SAFETY PROPERTY, and the reason the measured false-positive rate is 0 and not 0.67%: every
+# long-running "search" call in the live corpus was a pipeline that pipes a heavy job through grep.
+# The compound refusal excludes that whole population by construction.
+@test "a compound line containing a search command is refused, so pipelines are never bounded" {
+  run run_hook "bash scripts/ship-land.sh > /tmp/o.log; grep -c ok /tmp/o.log"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  run run_hook "eslint src | grep -c warning"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+@test "a command already carrying cc-cpubound is untouched — no second ceiling chosen by nobody" {
+  run run_hook "$(cpubound_path) 60 grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+# ── seams: each disables ONE transform, verbatim, with the other proven still live ──────────────
+@test "CC_QOS_BOUND_PATTERNS set-but-EMPTY turns (c) off while (b) stays on" {
+  export CC_QOS_BOUND_PATTERNS=
+  run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  run run_hook "uv run pytest -m load"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$TP -c utility uv run pytest -m load" ]
+}
+
+@test "CC_QOS_CPUBOUND set-but-EMPTY turns (c) off while (b) stays on" {
+  export CC_QOS_CPUBOUND=
+  run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  run run_hook "du -sh ."
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$TP -c utility du -sh ." ]
+}
+
+# A rewrite that names a wrapper which is not there turns a working search into exit 127. Refusing
+# costs one unbounded search; a bad rewrite costs the agent's command.
+@test "an unexecutable cc-cpubound refuses the ceiling rather than emit a broken command" {
+  printf '#!/bin/bash\n' > "$D/notexec"; chmod -x "$D/notexec"
+  CC_QOS_CPUBOUND="$D/notexec" run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ]
+}
+
+# The ceiling allowlist, both directions: a config file must not be able to break a tool call, and
+# the control proves the SAME table shape does fire when the value is valid.
+@test "a non-numeric or zero ceiling in the table is refused; a valid one is admitted (control)" {
+  bad="$(mktable bound abc '(^|[[:space:]])grep([[:space:]]|$)')"
+  CC_QOS_BOUND_PATTERNS="$bad" run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  zero="$(mktable boundzero 0 '(^|[[:space:]])grep([[:space:]]|$)')"
+  CC_QOS_BOUND_PATTERNS="$zero" run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  good="$(mktable boundgood 90 '(^|[[:space:]])grep([[:space:]]|$)')"
+  CC_QOS_BOUND_PATTERNS="$good" run run_hook "grep -rn x /p"
+  [ "$status" -eq 0 ] || false
+  [ "$(cmd_of "$output")" = "$(cpubound_path) 90 grep -rn x /p" ]
+}

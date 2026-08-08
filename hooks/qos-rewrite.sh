@@ -24,9 +24,28 @@
 #
 # NOT admission control. Nothing here waits, sleeps, queues, or polls load — demotion only (R1).
 #
-# TWO TRANSFORMS, in order; the first one that fires wins and returns:
+# THREE TRANSFORMS. (a) fires alone and returns; (b) and (c) are PREFIXES over the same command and
+# COMPOSE, so a row in both tables yields both prefixes rather than silently dropping one:
 #   (a) any-spelling `bats` token  →  cc-bats                (converge on the PROVEN artifact)
-#   (b) a pattern-table match      →  nice + taskpolicy prefix, SIMPLE commands ONLY
+#   (b) a batch-table match        →  taskpolicy prefix, SIMPLE commands ONLY   (WHERE it runs)
+#   (c) a bound-table match        →  cc-cpubound prefix, SIMPLE commands ONLY  (HOW LONG it may run)
+#
+# WHY (c) EXISTS, AND WHY IT IS A CPU CEILING (backlog 2af4c4908422; MACHINE_CAPACITY_V2.md:1513-1519
+# class "B — single runaway action in one session", control point = this boundary, asking for "a
+# RESOURCE guard — never a denylist of binary names"). (b) decides what a command COMPETES WITH; it
+# has never bounded how long one may run. On 2026-08-02 an agent's Bash-tool `grep` — rewritten by the
+# interactive shell function to `ugrep -G …` — hit catastrophic backtracking on ONE HTML file and
+# burned 12m48s of CPU at 7.84 GiB RSS. Demotion would not have stopped it; it would have made it
+# slower. macOS gives an unprivileged spawner no memory ceiling at all (RLIMIT_AS/RSS/DATA are EINVAL
+# on Darwin, measured, with RLIMIT_CPU/NOFILE/NPROC/FSIZE setting fine in the same process as the
+# positive control), so the one ceiling that exists is CPU time — and it is the RIGHT one here,
+# because it bounds compute rather than patience: a command that is slow because it WAITS is never
+# touched. Mechanism, measured semantics and the declared blind spot live in bin/cc-cpubound.
+#
+# (b) and (c) COMPOSE rather than race because they answer different questions and the first-wins
+# rule would have made the answer depend on table order — a silent, order-dependent drop is exactly
+# the class of bug this file's conservatism exists to avoid. The bound goes OUTERMOST so the ceiling
+# covers the whole chain including taskpolicy's own exec.
 #
 # FAIL-OPEN IS THE HARD CONTRACT (row 6's standing constraint: a hook failure must never block a
 # tool). Every path exits 0. Every path that cannot be SURE prints NOTHING — and no output means
@@ -56,6 +75,8 @@
 #   CC_QOS_PATTERNS=<path>  → pin the pattern table; SET-BUT-EMPTY disables transform (b) ONLY.
 #   CC_QOS_CC_BATS=<path>   → pin the cc-bats target; SET-BUT-EMPTY disables transform (a) ONLY.
 #   CC_QOS_TASKPOLICY=<p>   → pin taskpolicy(8); set-but-empty ⇒ transform (b) off entirely.
+#   CC_QOS_BOUND_PATTERNS=<path> → pin the CPU-ceiling table; SET-BUT-EMPTY disables (c) ONLY.
+#   CC_QOS_CPUBOUND=<path>  → pin cc-cpubound; set-but-empty ⇒ transform (c) off entirely.
 #
 # THE BAND, AND WHY nice(1) IS NOT IN THE PREFIX (M1-rev, 2026-07-30; §11.9 per lead message).
 # Two measured facts changed the shape of this prefix after day one:
@@ -104,11 +125,13 @@ emit() { # <rewritten command>
 }
 
 # ── idempotency: never wrap what is already wrapped ───────────────────────────────────────────
-# Both transforms are skipped, not just (a). A command already naming cc-bats self-demotes; one
-# already carrying `taskpolicy -c` is already in a band. Re-wrapping is harmless in effect and
-# costs a fork pair — and this file exists to reduce load, not to add it (cc-bats:97-104).
+# ALL THREE transforms are skipped, not just (a). A command already naming cc-bats self-demotes; one
+# already carrying `taskpolicy -c` is already in a band; one already naming cc-cpubound already
+# carries a ceiling, and a second ceiling would be the tighter of two numbers chosen by nobody.
+# Re-wrapping is harmless in effect and costs a fork pair — and this file exists to reduce load,
+# not to add it (cc-bats:97-104).
 case "$CMD" in
-  *cc-bats*|*'taskpolicy -c'*) exit 0 ;;
+  *cc-bats*|*'taskpolicy -c'*|*cc-cpubound*) exit 0 ;;
 esac
 
 # ══ TRANSFORM (a) — any-spelling `bats` token → cc-bats ═══════════════════════════════════════
@@ -147,31 +170,11 @@ if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
   fi
 fi
 
-# ══ TRANSFORM (b) — pattern table → demotion prefix ═══════════════════════════════════════════
-# ── resolve the table, THROUGH SYMLINKS FIRST ─────────────────────────────────────────────────
-# ~/.claude/hooks/<name> is a per-file symlink into the checkout, so a naive
-# `dirname "$BASH_SOURCE"` yields ~/.claude/hooks and `../config/...` resolves to
-# ~/.claude/config/... — which does not exist and never will, because a symlinked directory does
-# not acquire links for NEW files (memory deploy-lag-checkout-behind-origin,
-# shared-lib-source-ladder-collapses-when-deployed: the top-level dirs do not auto-deploy).
-# Resolving $0 physically lands us in the CHECKOUT's hooks/, where ../config/ is real.
-# bash 3.2-safe: macOS has no `readlink -f`.
-if [ -n "${CC_QOS_PATTERNS+set}" ]; then
-  TABLE="$CC_QOS_PATTERNS"              # set-but-EMPTY ⇒ transform (b) OFF, honoured verbatim
-else
-  _self="${BASH_SOURCE[0]:-$0}"
-  _hops=0
-  while [ -L "$_self" ] && [ "$_hops" -lt 20 ]; do
-    _d=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || break
-    _self=$(readlink "$_self") || break
-    case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
-    _hops=$((_hops + 1))
-  done
-  _dir=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || _dir=""
-  TABLE=""
-  [ -n "$_dir" ] && TABLE="$_dir/../config/qos-batch.patterns"
-fi
-[ -n "$TABLE" ] && [ -r "$TABLE" ] || exit 0
+# ══ TRANSFORMS (b) and (c) — PREFIXING transforms, shared pre-conditions first ════════════════
+# Both prepend a wrapper to the command, so both are governed by the same two refusals. They are
+# hoisted ABOVE table resolution because they are properties of the COMMAND, not of any table: a
+# compound line is unprefixable no matter which table matched it, and checking that once means a
+# new transform cannot forget to check it.
 
 # ── only a SINGLE SIMPLE command may be prefixed ──────────────────────────────────────────────
 # A prefix is string surgery, and string surgery on a compound line is how you demote the wrong
@@ -180,6 +183,11 @@ fi
 # Conservative by design — anything with structure is left ALONE (fail-open, §11.3 M7: "never wrap
 # compounds by string surgery"). `(`/`)` cover the brief's `$(` and command grouping in one test.
 # The single-quoted metacharacters are LITERALS to match, mirroring rm-safe-allowlist.sh:53-56.
+#
+# For transform (c) this refusal is also what makes the ceiling SAFE, not merely careful: measured
+# over 8.8 days and 56,269 paired Bash calls, 2.611% of ALL agent commands run over 60 s, but of the
+# 233 SIMPLE commands starting with a search binary, ZERO exceeded even 30 s. The >60 s "search"
+# calls are pipelines that pipe a heavy job through grep, and they are all excluded right here.
 case "$CMD" in
   *';'*|*'&'*|*'|'*|*'<'*|*'>'*|*'('*|*')'*|*'`'*|*$'\n'*) exit 0 ;;
 esac
@@ -187,39 +195,135 @@ esac
 # A leading `VAR=value` assignment cannot be prefixed: `taskpolicy -c background VAR=1 pytest`
 # tries to EXEC `VAR=1` and dies. The env is the caller's, so we decline rather than re-order it.
 # This is a DELIBERATE, MEASURED residual, not an oversight — see KNOWN COVERAGE RESIDUAL in the
-# header for why it is the day-one call and what pins it.
+# header for why it is the day-one call and what pins it. It doubles as transform (c)'s documented
+# opt-out: a command the rewriter declines is a command that runs unbounded.
 printf '%s' "$CMD" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' && exit 0
 
-# ── walk the table: `<band><TAB><ERE>`, first match wins ───────────────────────────────────────
+# ── resolve the CHECKOUT directory ONCE, THROUGH SYMLINKS FIRST ───────────────────────────────
+# ~/.claude/hooks/<name> is a per-file symlink into the checkout, so a naive
+# `dirname "$BASH_SOURCE"` yields ~/.claude/hooks and `../config/...` resolves to
+# ~/.claude/config/... — which does not exist and never will, because a symlinked directory does
+# not acquire links for NEW files (memory deploy-lag-checkout-behind-origin,
+# shared-lib-source-ladder-collapses-when-deployed: the top-level dirs do not auto-deploy).
+# Resolving $0 physically lands us in the CHECKOUT's hooks/, where ../config/ is real.
+# bash 3.2-safe: macOS has no `readlink -f`.
+# ~/.claude/hooks/<name> is a per-file symlink into the checkout, so a naive
+# `dirname "$BASH_SOURCE"` yields ~/.claude/hooks and `../config/...` resolves to
+# ~/.claude/config/... — which does not exist and never will, because a symlinked directory does
+# not acquire links for NEW files (memory deploy-lag-checkout-behind-origin,
+# shared-lib-source-ladder-collapses-when-deployed: the top-level dirs do not auto-deploy).
+# Resolving $0 physically lands us in the CHECKOUT's hooks/, where ../config/ and ../bin/ are real.
+# bash 3.2-safe: macOS has no `readlink -f`.
+#
+# `../bin/cc-cpubound` is deliberately resolved the SAME way rather than as ~/.claude/bin/cc-cpubound
+# (which is how transform (a) finds cc-bats): a NEW file has no symlink in the live layer until the
+# next converge tick, so pointing at the checkout makes transform (c) work the moment it lands
+# instead of leaving a silent up-to-10-minute window where the table matches and nothing is bounded.
+_self="${BASH_SOURCE[0]:-$0}"
+_hops=0
+while [ -L "$_self" ] && [ "$_hops" -lt 20 ]; do
+  _d=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || break
+  _self=$(readlink "$_self") || break
+  case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
+  _hops=$((_hops + 1))
+done
+_dir=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || _dir=""
+
+# ── walk a table: `<field1><TAB><ERE>`, first match wins ───────────────────────────────────────
+# Shared by (b) and (c) — one reader, so the two tables cannot drift in how they parse.
 # `|| [ -n "$line" ]` so a final line with no trailing newline is still read. No IFS splitting on
 # a control character anywhere (memory bash32-case-in-substitution-zsh-repro-trap); the fields come
-# out by parameter expansion, which cannot silently no-op.
-BAND=""
-while IFS= read -r line || [ -n "$line" ]; do
-  line=${line%$'\r'}                                   # tolerate a CRLF table
-  case "$line" in ''|'#'*) continue ;; esac
-  _band=${line%%$'\t'*}
-  _ere=${line#*$'\t'}
-  [ "$_band" != "$line" ] || continue                  # no TAB on this line ⇒ malformed, skip
-  [ -n "$_band" ] && [ -n "$_ere" ] || continue
-  if printf '%s' "$CMD" | grep -qE "$_ere" 2>/dev/null; then BAND="$_band"; break; fi
-done < "$TABLE"
-[ -n "$BAND" ] || exit 0
+# out by parameter expansion, which cannot silently no-op. Prints field 1 of the first matching row
+# and returns 0; returns 1 on an unreadable table or no match, so "no table" and "no match" are the
+# same fail-open outcome for the caller.
+table_match() { # <table path>
+  local _t="$1" line _f1 _ere
+  [ -n "$_t" ] && [ -r "$_t" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}                                 # tolerate a CRLF table
+    case "$line" in ''|'#'*) continue ;; esac
+    _f1=${line%%$'\t'*}
+    _ere=${line#*$'\t'}
+    [ "$_f1" != "$line" ] || continue                  # no TAB on this line ⇒ malformed, skip
+    [ -n "$_f1" ] && [ -n "$_ere" ] || continue
+    if printf '%s' "$CMD" | grep -qE "$_ere" 2>/dev/null; then printf '%s' "$_f1"; return 0; fi
+  done < "$_t"
+  return 1
+}
+
+# ══ TRANSFORM (c) — bound table → CPU-ceiling prefix ══════════════════════════════════════════
+# Computed BEFORE (b) only so it can sit outermost in the emitted string; neither depends on the
+# other, and either may be empty.
+BOUND_PREFIX=""
+if [ -n "${CC_QOS_BOUND_PATTERNS+set}" ]; then
+  BTABLE="$CC_QOS_BOUND_PATTERNS"       # set-but-EMPTY ⇒ transform (c) OFF, honoured verbatim
+else
+  BTABLE=""
+  [ -n "$_dir" ] && BTABLE="$_dir/../config/qos-bound.patterns"
+fi
+SECS="$(table_match "$BTABLE")" || SECS=""
+if [ -n "$SECS" ]; then
+  # CEILING ALLOWLIST — digits only, and > 0. Same reasoning as the band allowlist below: a config
+  # file must not be able to break a tool call. cc-cpubound itself also refuses a bad ceiling and
+  # runs the command unbounded, so this is the belt to its braces — but the belt matters, because
+  # here we can decline to rewrite at all rather than emit a wrapper that will only complain.
+  case "$SECS" in
+    ''|*[!0-9]*) SECS="" ;;
+    *) [ "$SECS" -gt 0 ] 2>/dev/null || SECS="" ;;
+  esac
+fi
+if [ -n "$SECS" ]; then
+  # Resolve cc-cpubound and check it EXECUTABLE before naming it — rewriting to a wrapper that is
+  # not there turns a working search into exit 127, which is the bad-rewrite failure this file's
+  # header refuses. Single-dash `${VAR-default}` so a set-but-EMPTY seam turns (c) off verbatim.
+  if [ -n "${CC_QOS_CPUBOUND+set}" ]; then
+    CPUBOUND_BIN="$CC_QOS_CPUBOUND"
+  else
+    CPUBOUND_BIN=""
+    # Normalised (`cd -P`) rather than left as `hooks/../bin/…`: unlike the table path, this string
+    # is EMITTED, so the agent reads it in its own command line and in any error it reports. The
+    # extra fork is paid only on a command that actually matched.
+    _bindir=$(cd -P "$_dir/../bin" 2>/dev/null && pwd) || _bindir=""
+    [ -n "$_bindir" ] && CPUBOUND_BIN="$_bindir/cc-cpubound"
+  fi
+  if [ -n "$CPUBOUND_BIN" ] && [ -x "$CPUBOUND_BIN" ]; then
+    BOUND_PREFIX="$CPUBOUND_BIN $SECS "
+  fi
+fi
+
+# ══ TRANSFORM (b) — batch table → demotion prefix ═════════════════════════════════════════════
+if [ -n "${CC_QOS_PATTERNS+set}" ]; then
+  TABLE="$CC_QOS_PATTERNS"              # set-but-EMPTY ⇒ transform (b) OFF, honoured verbatim
+else
+  TABLE=""
+  [ -n "$_dir" ] && TABLE="$_dir/../config/qos-batch.patterns"
+fi
+BAND="$(table_match "$TABLE")" || BAND=""
 
 # BAND ALLOWLIST — measured 2026-07-30: taskpolicy(8) parses ONLY these three, and on anything else
 # exits 64 WITHOUT RUNNING THE PROGRAM. An unvalidated band in a config file would therefore turn
 # every matching command into a no-op failure. A config file must not be able to break a tool call.
 case "$BAND" in
   utility|background|maintenance) ;;
-  *) exit 0 ;;
+  *) BAND="" ;;
 esac
 
-# ── resolve taskpolicy(8); missing ⇒ no rewrite ────────────────────────────────────────────────
-# Single-dash `${VAR-default}`: the default applies only when the var is UNSET, so a set-but-EMPTY
-# seam is honoured verbatim and turns transform (b) off. Hooks run without Homebrew on PATH, so this
-# is absolute (the lesson lead-crash-watchdog.sh:23 records for timeout(1)).
-# ONE binary, not two — see THE BAND, AND WHY nice(1) IS NOT IN THE PREFIX in the header.
-TP_BIN="${CC_QOS_TASKPOLICY-/usr/sbin/taskpolicy}"
-[ -n "$TP_BIN" ] && [ -x "$TP_BIN" ] || exit 0
+TP_PREFIX=""
+if [ -n "$BAND" ]; then
+  # ── resolve taskpolicy(8); missing ⇒ no demotion prefix ─────────────────────────────────────
+  # Single-dash `${VAR-default}`: the default applies only when the var is UNSET, so a set-but-EMPTY
+  # seam is honoured verbatim and turns transform (b) off. Hooks run without Homebrew on PATH, so
+  # this is absolute (the lesson lead-crash-watchdog.sh:23 records for timeout(1)).
+  # ONE binary, not two — see THE BAND, AND WHY nice(1) IS NOT IN THE PREFIX in the header.
+  TP_BIN="${CC_QOS_TASKPOLICY-/usr/sbin/taskpolicy}"
+  if [ -n "$TP_BIN" ] && [ -x "$TP_BIN" ]; then
+    TP_PREFIX="$TP_BIN -c $BAND "
+  fi
+fi
 
-emit "$TP_BIN -c $BAND $CMD"
+# ── emit once, or not at all ──────────────────────────────────────────────────────────────────
+# Neither prefix, no rewrite: silence means the command runs verbatim. Either or both, one emit —
+# so a command in both tables gets both wrappers instead of whichever table was read first.
+[ -n "$BOUND_PREFIX" ] || [ -n "$TP_PREFIX" ] || exit 0
+
+emit "${BOUND_PREFIX}${TP_PREFIX}${CMD}"

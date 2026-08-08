@@ -1516,6 +1516,27 @@ Class B's chokepoint already exists: **M7 moved QoS enforcement to the Bash PreT
 (`config/qos-batch.patterns`, 22/22 green). A resource-ladder term belongs there, as a *resource*
 guard — never a denylist of binary names (`denylist-enumerates-spellings-not-the-class`).
 
+**BUILT 2026-08-08 (backlog `2af4c4908422`) — the first resource term at that chokepoint:
+`qos-rewrite.sh` transform (c) + `bin/cc-cpubound` + `config/qos-bound.patterns`, 32/32 + 14/14
+green.** Write-up: [resource-guard-2026-08-08.md](../research/resource-guard-2026-08-08.md). Three
+things there change this section's assumptions:
+
+- **The resource term is CPU-TIME, not any of the three this table guessed** (thread count, proc
+  count, alloc size). Measured on Darwin: `RLIMIT_AS`/`RSS`/`DATA`/`STACK` all return `EINVAL` to an
+  unprivileged spawner while `RLIMIT_CPU`/`NOFILE`/`NPROC`/`FSIZE` set fine in the same process —
+  the 4-of-8 split being the positive control. There is no memory ceiling to ladder, and a VA
+  ceiling would be useless anyway (`node` reserves 392.4 GB of VA against 37 MB RSS). This also
+  **refutes `panic-compressor-2026-08-05.md:260`** on `ulimit -v` for the userspace path.
+- **The item's open fork (notify-only vs kill) was mis-posed.** At this boundary the only consumer
+  of a notification is the agent *blocked on the command being notified about*, so notify-only
+  degenerates to a post-mortem log. The guard declares a ceiling before the command starts and the
+  return value IS the notification (rc 152 + a parseable verdict). No selector, no reaper, so none
+  of the reaper-safety failure modes apply.
+- **Scope is calibration-gated, and the numbers are stark**: 2.611% of ALL agent Bash calls run over
+  60 s (1 in 38 — a fleet-wide ceiling would kill typechecks and ship-land), against **0 of 233**
+  simple search commands exceeding even 30 s. The existing compound-command refusal is what makes
+  that zero real. A new table row costs the same measurement.
+
 ### 12.4 `boot-resume.sh` is a LATENT bomb — do not activate before §12.2 lands
 
 It resumes at GUI login, i.e. into the boot storm — **measured loadavg 346 at boot+2 min today**,
