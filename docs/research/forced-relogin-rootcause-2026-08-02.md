@@ -629,3 +629,165 @@ log line sits outside the stubbed `heal()`, and `LOG_PATH` resolved from `$HOME`
 test cases wrote to the production log. Fixed in `31e76310` (control: the log's line count is
 identical across a full 87-test run). Left in place rather than edited out, and recorded here
 so a future investigator is not misled by them.
+
+
+---
+
+# UPDATE 4 — 2026-08-07: the trigger question, closed by effect
+
+Backlog item `23eccae755a9` — *"Auth-error rate regressed ~20x from 2026-08-01T00:46Z — TRIGGER
+UNRESOLVED"* — was filed at **2026-08-02T19:49:55Z**, twenty minutes before the root-cause block
+at the top of this document was written. Nothing connected the two, so the item outlived its own
+answer and was re-dispatched five days later. This update adjudicates it against the evidence
+neither could have: **five days of post-fix data.**
+
+**Verdict, three parts.**
+
+* The headline **"TRIGGER UNRESOLVED" is superseded.** The trigger is the config-mirror race
+  already described at the top of this document, and it is now confirmed **by effect** — which
+  the 2026-08-02 session could assert only by mechanism.
+* Candidate **(b), the same-account multi-grant condition on `next` (the E1 question), is
+  REFUTED** by the data. It should not be carried forward as an explanation for this regression.
+* Candidate **(a), a server-side change to refresh behaviour, is unnecessary and unsupported.**
+  No evidence contradicts it outright, but nothing requires it and its central prediction fails
+  (below).
+
+## What made the question adjudicable: there were two failure classes, not one
+
+The original measurement pooled every `isApiErrorMessage` carrying an auth string. That is what
+kept the picture muddy for five days, because two unrelated failures share the phrase
+*"Please run /login"*:
+
+| class | text | meaning |
+|---|---|---|
+| **A** | `Please run /login · API Error: 401 OAuth access token has expired.` | the 8h access token ran out because the in-session **refresh could not run**. Credential intact, refresh path broken. |
+| **B** | `Not logged in` / `Login expired` | the stored credential is **empty or the grant is dead**. No refresh helps; only an interactive login does. |
+
+Class A is the regression. Class B is a pre-existing, separate phenomenon that runs from Jul 9 to
+the present. Pooled, class A's cure is invisible — **2026-08-04 shows 13 auth errors, which reads
+as "still broken", and every one of them is class B.**
+
+## Class A is a bounded event — all 35 of them
+
+Measured with `tools/auth/auth-error-rate.py` (committed alongside this update):
+
+| period | class-A errors | sessions | per session |
+|---|---|---|---|
+| before onset (all history) | **0** | 1727 | 0.0000 |
+| onset → lock fix | **35** | 224 | 0.1562 |
+| since the lock fix | **0** | 899 | 0.0000 |
+
+Every class-A error **ever recorded on this machine** falls inside one 41.2-hour window:
+**2026-08-01T00:46:55Z → 2026-08-02T18:01:42Z**. The window opens at the onset the backlog item
+names and closes before `1677218f` landed (2026-08-02T20:05:18Z).
+
+Daily, with the two classes separated — the same rows that read as an unresolved regression when
+pooled:
+
+| day | sessions | A | B |
+|---|---|---|---|
+| 2026-07-30 | 270 | 0 | 0 |
+| 2026-07-31 | 171 | 0 | 2 |
+| **2026-08-01** | 182 | **18** | 0 |
+| **2026-08-02** | 79 | **17** | 1 |
+| 2026-08-03 | 123 | 0 | 0 |
+| 2026-08-04 | 113 | **0** | 13 |
+| 2026-08-05 | 89 | 0 | 0 |
+| 2026-08-06 | 92 | 0 | 0 |
+| 2026-08-07 | 466 | 0 | 1 |
+
+## Why candidate (b) — the multi-grant condition — is refuted
+
+**The first error of the regression, at 2026-08-01T00:46:55Z, is on `next4`** — the
+*single*-grant account this document named as the clean control ("next4 — one store — has had
+zero forced re-logins in 30 days"). It is not an outlier: next4 carries **8 of Aug 1's 18**
+class-A errors, more than any other account.
+
+And the onset is **simultaneous across all four accounts** — next(6), next2(3), next3(1),
+next4(8) on Aug 1 alone. An account-scoped grant condition cannot do that. A machine-wide mirror
+that symlinked one lock into all four config dirs is precisely what does.
+
+The multi-grant observation itself stands — `next` really does carry 2-4 grants and that is still
+worth collapsing, for the rotation reasons in UPDATE 3. It is simply **not the cause of this
+regression**, and E1 remains genuinely open rather than answered-in-the-negative.
+
+## Why candidate (a) — a server-side change — is unnecessary
+
+Its central prediction fails: a server-side change to refresh behaviour would not **stop** when a
+local symlink was deleted. The cessation is bracketed by the deletion, on the same client build,
+with no other auth-touching change in between.
+
+One honest caveat that cuts the other way, and it is why this section says *unnecessary* rather
+than *refuted*: the class-A text is **server-authored**. Checked with `strings` against the
+running 2.1.220 binary, `Please run /login` and `API Error` are client literals, but
+`access token has expired` and `Re-authenticate to continue` are **not present in the binary at
+all**. So the body could in principle be reworded upstream. That loophole is closed by measurement
+rather than assumption — see the third control below.
+
+## Four controls, because each alternative reading has one
+
+1. **The instrument reproduces the published artifact.** `auth-error-rate.py --active-denominator`
+   returns the 2026-08-02 table in this document row for row — 190/123/61/22/101/270/171/182
+   sessions and 4/1/0/1/0/0/2/18 errors. (Aug 2 reads 79 sessions against the published 74: that
+   table was written at 19:49Z and five more sessions started before midnight.)
+2. **Not a denominator artifact.** The quietest days are the busiest: **2026-08-07 ran 466
+   sessions — the highest in the window — with zero class-A.**
+3. **Not a server rewording.** Every `isApiErrorMessage` record in the 899 post-fix sessions was
+   read, not just the ones that classify. **None pairs the client literal `Please run /login` with
+   `API Error`.** The remainder are `Overloaded` (8), stalled/closed streams (7), `ECONNRESET` (2)
+   and weekly-limit (2). A reworded 401 body would still have carried the client frame.
+4. **Not heal masking a still-broken refresh.** `heal` did not become more active — 2/day on Aug 1,
+   5 on Aug 2, 3 on Aug 3, 2 on Aug 4, 1 on Aug 7. Decisively, **2026-08-05 and 08-06 ran 162
+   sessions with zero heal events and zero auth errors of any class.** Each account's 8h token
+   expired ~3× per day across those two days with nothing rescuing it out of band, and no session
+   ever saw a 401 — which requires in-session refresh to be working. This is the same conclusion
+   item `8af0d2e65920` reached from the credential side, by a disjoint route.
+
+Two smaller readings, disposed of: the **client build is controlled** — 2.1.220 ran on *both*
+sides of the boundary (848 of the 899 post-fix sessions), so this is a within-build before/after,
+which is exactly the comparison correction `bbad96d163ab` said the original version claim never
+had. And the **~2h gap between the last class-A (18:01Z) and the fix (20:05Z)** is not an early
+cure: class-A arrives in clusters 4-10h apart (7 clusters over the 41.2h window, tracking each
+account's own 8h expiry), so the fix landed in an ordinary trough. **15.7 TTL cycles per account
+have elapsed since, and no cluster ever came again.**
+
+## What this does NOT establish
+
+**The four symlink birth times — 2026-07-31 14:58:12 / 15:13:45 / 16:11:07 / 16:36:18 — rest on a
+single source**, the measurement recorded in `1677218f`'s own commit message. The symlinks were
+deleted the same day, so the timestamps are not re-verifiable now, and the bash logs hold no
+record of the removal. Treat "70 minutes before the first forced login" as attested, not
+reproducible.
+
+The causal case does not depend on them. What is independently re-checkable is stronger:
+
+* **The mechanism, from the diff.** The pre-fix share loop is `for e in "$src"/*(ND)` — the `D`
+  glob qualifier includes dotfiles — so `.oauth_refresh.lock` was in scope and would be symlinked
+  into every account dir, dangling the moment the real lock released
+  (`git show 1677218f -- lib/config-mirror.zsh`).
+* **The arithmetic.** This machine is PDT (UTC-7) in August, so the "17:46 local" first forced
+  login is **exactly 2026-08-01T00:46Z** — the onset timestamp in the backlog item, derived from a
+  different instrument by a different session.
+* **The bracket**, above.
+
+## The instrument, committed rather than scratchpadded
+
+`tools/auth/auth-error-rate.py` — READ-ONLY, harness-side companion to `auth-timeseries.sh`
+(which samples the credential store; this reads what the operator was actually shown). It exists
+because this investigation's *first* instrument died with its session, which is why the question
+had to be re-measured from scratch to close a five-day-old item. It carries the class split, the
+realpath dedupe (`~/.claude-next/projects` is a symlink to `~/.claude/projects`), datetime rather
+than string boundary compares, and `--all-errors` so that an absence can be distinguished from a
+blind spot.
+
+## Filed, not fixed here
+
+* **The class-B daily pattern on `next`** — `Not logged in` at ~11:17-11:38Z on Jul 11-20, 26, 28
+  and 31, then stopping. A daily scheduled job hitting the erased `~/.claude` credential is the
+  obvious shape (this document's §4: bare `claude-prev` resolves there), but it is a different
+  phenomenon from the class-A regression and was not chased.
+* **A research subagent can take its own lead's work lease.** Closing this item, two read-only
+  subagents spawned by the lead claimed item `23eccae755a9` and the claim gate then refused the
+  *lead's* writes as a duplicate worker. The gate walks the ancestor chain to a `claude` pid, so a
+  subagent's tool call claims under the subagent's pid. It self-released when the children exited
+  and no override was used — but a read-only research subagent should never take a work lease.
