@@ -20,6 +20,15 @@ hygiene; index at read-size limit"*. Both halves are wrong in an instructive way
 
 ## Phase 0 — orchestration
 
+**Execution locus — attempt #1 (design): L, lead-inline.** Justification: the deliverable was one
+design document; there was no implementation wave to dispatch.
+**Execution locus — attempt #2 (build, 2026-08-08): L, lead-inline.** Justification: after
+reconciliation the remaining build was three files, none shared, totalling ~120 LOC of change; the
+brief needed to dispatch it would have been longer than the diff. Read-only research WAS fanned out
+(3 concurrent subagents: out-of-band commit reconciliation, cap-constant census, harvest
+measurement). Lead context budget: ≤60% at close; succession point = after §7 lands, since
+everything of value is then on disk and in commits.
+
 Single-owner build. No teammates: every deliverable below is ≤120 LOC and four of the six touch the
 SAME two files (`hooks/memory-nudge.sh`, `commands/compact-memory.md`), so worktree-isolated
 teammates would serialise on a shared file and buy nothing — the agent-teams rule exists to
@@ -290,3 +299,130 @@ Each is a command whose output decides it. No criterion is satisfied by narratio
   The coordinator's "arm both keys" instruction is unexecutable with this actuator.
 - **R-4 (`claude-session-search` repo):** nothing required by this row, recorded so R6's correction
   is not lost.
+
+---
+
+## 7. Attempt #2 — reconciliation, not rebuild (2026-08-08)
+
+§§1-6 above are attempt #1's design and stay as written. This section records what happened to it.
+**The build never ran, and between 2026-07-31 and 2026-08-06 non-campaign sessions shipped most of
+it by a different and better route.** The map cell's instruction — *"attempt #2 must RECONCILE, not
+rebuild; building `cc-mem-budget` as specced would duplicate a shipped chokepoint gate"* — is
+correct, and this attempt obeyed it: **not one line of M1 was built.**
+
+### 7.1 Method note — the first read falsified the second
+
+The dispatch worktree was **800 commits behind `origin/main`**, and `git rev-list --count
+origin/main..HEAD` read **0** — because HEAD was an *ancestor*, which that count cannot distinguish
+from *equal*. Read that way, every M1 artifact was correctly absent and the row looked untouched.
+The falsifier was content, not count: the checkout's live `hooks/memory-nudge.sh` is 10,231 B where
+this worktree held the 2,103 B original. This is the repo's own standing rule — *verify by CONTENT,
+never by count* — biting on the read that decides whether to build at all.
+
+### 7.2 What actually shipped, against §3's failure modes
+
+| Mode | §3 answer (planned) | What shipped instead | Verdict |
+|---|---|---|---|
+| F1 | M1 oracle in `bin/cc-mem-budget` | `hooks/lib/memory-index-budget.sh` + `hooks/memory-nudge.sh:81-134` measure live, in bytes | **MET, different shape** |
+| F2 | M3 recalibrate the remedy | body of `commands/compact-memory.md` moved to 24,985 B; **frontmatter had not** | **MET this attempt** — `3f3600b4` |
+| F3 | M2 fire on state, 100% reach | `memory-nudge.sh:139-145` — over-limit fires at `COUNT==1`; healthy stays periodic | **MET for the alarm** |
+| F4 | M2 emit the measured balance | the whole advisory is now computed; nothing fixed remains | **MET** |
+| F5 | M1 exposes a consumable verdict | `mib_verdict` — a PreToolUse **refusal**, stronger than a verdict | **EXCEEDED** |
+| F6 | M4 per-column extraction | nothing — still `\|`-joined and `cut`-split on trunk | **STILL-OPEN → fixed `25e897fd`** |
+| F7 | M4 surfaces the backlog | unchanged; still 0 skills drafted | reported, human-gated by R3 |
+| F8 | `/evolve-skill` inert by design | unchanged | inert-by-design, no build |
+| F9 | one condition, many items | the nudge now hands over the **condition-keyed** filing form | **MET** |
+| F10 | M6 corrects the cell | coordinator did it 2026-08-07 | **MET** |
+
+### 7.3 Acceptance criteria — final disposition
+
+| AC | Verdict | Evidence |
+|---|---|---|
+| AC1 | **SUPERSEDED** | the symbol is `MEMORY_INDEX_LIMIT`, not `MEM_INDEX_BYTE_CAP`; `hooks/lib/memory-index-budget.sh:104`, `hooks/memory-nudge.sh:78` |
+| AC2 | **SUPERSEDED** | no `--json` CLI; the balance is emitted as `additionalContext` by the hook that already runs |
+| AC3 | **SUPERSEDED** | the contract is a PreToolUse **deny**, not an exit code; fail-open on every unknown, pinned by 23 tests |
+| AC4 | **MET** | ran the hook once at `COUNT==1` against the live store — the alarm is the first thing it prints |
+| AC5 | **MET, then sharpened** | it reported a *measured* number that was an *averaged* one; now exact — `1f828fcc` |
+| AC6 | **MET this attempt** | `3f3600b4`. Spelling is **24,985**, not AC6's literal `25000` — the shipped mechanisms' number wins over a superseded doc's |
+| AC7 | **MET this attempt** | `25e897fd`; proven on a live corrupted row |
+| AC8 | **MET** | `MEMORY_INDEX_LIMIT`; `MEMORY_NUDGE_INTERVAL=0` is a total kill switch (test 14) |
+| AC9 | **MET** | both mechanisms are read-only against the store; the gate only ever *refuses* |
+| AC10 | **MET** | coordinator, 2026-08-07 |
+
+### 7.4 Constants re-derived this session — the cap is not a constant
+
+Every figure below is first-person on **binary 2.1.220** (`ps -o command= -p $PPID` →
+`~/.claude-220/…`). Attempt #1 probed **2.1.219**. Re-derived rather than quoted, because
+§1's own numbers had decayed.
+
+| # | Constant | Value | How |
+|---|---|---|---|
+| C29 | live index | **26,415 B / 113 lines / 105 entries** | `wc` (C5 read 22,473 B) |
+| C30 | **delivered prefix, this session** | **25,791 B** (through entry 103) | last delivered line vs the file |
+| C31 | first entry NOT delivered | entry 104 → would make **26,098 B** | — |
+| C32 | **live cap bracket** | **[25,791, 26,098)** | C30/C31 |
+| C33 | **C1's bracket does NOT intersect it** | C1 `[24,869, 25,017)` vs C32 | the cap **moved between binary versions** |
+| C34 | the tail actually dropped | **exactly 2 entries** | named below |
+| C35 | what the alarm claimed | **6** (averaged) → **4** (exact, at the hardcoded limit) → truth **2** | `1f828fcc` closes the first gap |
+| C36 | producers of the `24985` default | **2**, agreeing | `memory-nudge.sh:78`, `memory-index-budget.sh:104` |
+| C37 | C15 re-verified | one inode **407890046** across `~/.claude` and `~/.claude-tertiary` | `stat -f %i` |
+
+**C34 named, because "silently dropped" should never be an abstraction:** this session did not load
+`capture-based-probe-cannot-exercise-a-tty-gated-verb.md` or
+`guard-universalization-deletes-a-capability-silently.md`. Both are on disk; neither is in context.
+That is the row's whole thesis, observed rather than argued.
+
+**C33 is the finding that outlives this row.** The hook's header states *"Every figure is computed at
+runtime: a hardcoded one decays against its subject"* — and `LIMIT=24985` is the one hardcoded figure
+in the mechanism, now measurably **~800 B low** on the running binary. The error is in the **safe**
+direction (it alarms early, and it refuses writes early), so it was left at 24,985 rather than
+re-pinned: re-pinning is R1's whack-a-mole, and it would decay again at 2.1.221. What changed instead
+is that **drift can no longer be silent** — `1f828fcc` fails when the two literals diverge or a third
+appears — and that the derived figure the operator acts on no longer compounds the constant's error
+with an averaging error.
+
+### 7.5 Rejected this attempt
+
+**R8 — Re-pin `LIMIT` to the measured 25,791.** Rejected: n=1 against attempt #1's controlled n=3,
+the current value errs safe, and a number re-pinned per binary version is the decay this row exists
+to end. Recorded as C33 with the method to re-derive instead.
+
+**R9 — Have the hook read the loader's own self-reported limit.** The loader *does* state its limit
+in the reader's own unit (C4: `WARNING: MEMORY.md is 24.8KB (limit: 24.4KB)`), which would make the
+constant measured rather than assumed. **Rejected because it is not buildable: that string is
+delivered only into the model's context and is persisted nowhere a hook can read.** Verified, not
+assumed — across this session's 306 KB transcript, hits for `Only part of it was loaded`, for the
+index's own first entry, and for the hook's own `additionalContext` are **0, 0 and 0**. Worth
+recording precisely because it is the obviously-right design and it is unavailable.
+
+**R10 — Single-source the limit into the lib.** Rejected: `memory-nudge.sh` would gain a source
+dependency that, when unresolvable, fails open *silently* and reads as landed while inert — the trap
+`tests/memory-index-budget.bats:259` already pins for the gate. Two literals plus a test that fails
+on drift buys the same guarantee with no new runtime failure mode.
+
+### 7.6 Landed this attempt
+
+| sha | What |
+|---|---|
+| `25e897fd` | harvest field collapse — per-column extraction, `.timeout`, `SESSION_INDEX_DB`; 11 new tests |
+| `1f828fcc` | exact dropped-entry count (was averaged); limit-drift guard; 20/20 |
+| `3f3600b4` | `/compact-memory` trigger recalibrated to the binding unit |
+
+### 7.7 Why the row does not close on its headline metric
+
+The mechanisms are done; **the index is still over the limit and two entries are still unreadable**
+(C34). That is deliberate and not a loose end of this attempt: R2 forbids automated mutation of a
+store **no repository tracks**, and the lossy half of the remedy is PROPOSE-ONLY by policy, so
+closing the gap is a human-gated act. It is already filed as the standing condition
+`memory-index-over-budget` (open: `150c50055e1c`, `7e2df754d0b8`; blocked: `6267e2e3c707`,
+`7021e89884df`) — and roughly twenty rows exist for this one condition, which is the re-minting the
+nudge's filing form now exists to stop. **No new item was filed for it here.**
+
+### 7.8 Remainders — updated
+
+- **R-1 (row 10)** — unchanged in ownership, but the producer it needs now exists as a PreToolUse
+  refusal rather than an exit code. A board row keyed on the live index size is still row 10's.
+- **R-2 (operator)** — the throwaway probe store from attempt #1 is **gone**; nothing to remove.
+- **R-5 (new, whoever next touches the loader)** — C33: the cap moved between 2.1.219 and 2.1.220.
+  Re-derive with the C30/C31 method (compare the last delivered index line against the file) before
+  trusting `24985`; it is a floor, not a measurement.
