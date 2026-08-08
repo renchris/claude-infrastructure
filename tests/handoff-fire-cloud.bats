@@ -108,7 +108,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   # resource from the one every other fire spends, so it does not ship live by default.
   fire 10 1.00 --cloud
   [ "$status" -eq 2 ]
-  [[ "$output" == *"CC_FIRE_CLOUD"* ]]
+  [[ "$output" == *"CC_FIRE_CLOUD"* ]] || false
   [[ "$output" == *"--cloud"* ]]
 }
 
@@ -122,7 +122,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   STUB_ROUTE_RC=0 STUB_ROUTE_ACCT=next3 CC_FIRE_CLOUD=on fire 10 1.00 --cloud
   [ "$status" -ne 9 ]   # not a gate refusal
   [ "$status" -ne 2 ]   # not the opt-in refusal
-  [[ "$output" == *"cloud capacity gate: ADMIT"* ]]
+  [[ "$output" == *"cloud capacity gate: ADMIT"* ]] || false
   [[ "$output" == *"next3"* ]]
 }
 
@@ -133,7 +133,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   # out. Mirrors bin/claude-accounts:1039-1040, which refuses to score a row with no weekly data.
   STUB_ROUTE_RC=3 CC_FIRE_CLOUD=on fire 10 1.00 --cloud
   [ "$status" -eq 9 ]
-  [[ "$output" == *"REFUSING"* ]]
+  [[ "$output" == *"REFUSING"* ]] || false
   [[ "$output" == *"Missing data is NEVER headroom"* ]]
 }
 
@@ -144,7 +144,7 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   # have different cures (wait for a reset vs fix the prober).
   STUB_ROUTE_RC=2 CC_FIRE_CLOUD=on fire 10 1.00 --cloud
   [ "$status" -eq 9 ]
-  [[ "$output" == *"REFUSING"* ]]
+  [[ "$output" == *"REFUSING"* ]] || false
   [[ "$output" == *"POLICY"* ]]
 }
 
@@ -164,8 +164,8 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   # a cloud fire consumes none of this box's cores or RAM. The gate that binds it is the account's.
   STUB_ROUTE_RC=0 STUB_ROUTE_ACCT=next2 CC_FIRE_CLOUD=on fire 10 30.00 --cloud
   [ "$status" -ne 9 ]
-  [[ "$output" == *"cloud capacity gate: ADMIT"* ]]
-  [[ "$output" == *"next2"* ]]
+  [[ "$output" == *"cloud capacity gate: ADMIT"* ]] || false
+  [[ "$output" == *"next2"* ]] || false
   # …and the box terms were not merely cleared, they were never asked: the load verdict line the
   # sibling gate always prints is ABSENT. Without this the case would also pass if the branch had
   # run both gates and the box happened to admit.
