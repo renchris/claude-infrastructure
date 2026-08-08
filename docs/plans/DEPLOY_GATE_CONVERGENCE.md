@@ -1,12 +1,19 @@
 ---
-status: open
+status: complete
 created: 2026-07-31
+closed: 2026-08-08
 owner: desk
 ---
 
 # The deploy gate cannot converge — measured 2026-07-31
 
-**Status:** OPEN · the live `~/.claude` layer has no working automatic deploy path.
+**Status:** COMPLETE (2026-08-08) · the title's claim is **refuted by observation** — the lane
+converged twice under measurement and reached lag 0. Closing evidence in **§8**; read it first.
+
+> ⚠️ **The original status line — "the live `~/.claude` layer has no working automatic deploy
+> path" — was true when written and is now FALSE.** It is kept here rather than deleted because
+> §7 and §8 are both corrections *of this sentence*, and a doc that silently edits its own premise
+> destroys the record of what was believed when the fix was designed.
 
 > 🔁 **RE-DIAGNOSED later the same day — read §7 before acting on §1–§5.** The title's claim is
 > wrong: the gate *can* converge and its predicate is correct. §2.1 and §2.3 are **withdrawn** —
@@ -275,3 +282,82 @@ echo "on-trunk stamps: $n   of which GREEN: $g"
 > for every input**, including a positive control (the tip's own tree). It could not return anything
 > but `on-trunk stamps: 0`. That non-verdict was read as a finding and became §2.1 and §5 below.
 > **See §7 — the diagnosis those claims support does not survive the corrected measurement.**
+
+---
+
+## 8. CLOSE — the lane converged under measurement (2026-08-08)
+
+**The title is refuted by observation, not by argument.** While this session was reading the tier
+logic, the lane advanced on its own: at **2026-08-08 01:08:32 −0700** `deploy-live` fast-forwarded
+the live layer `7bb7526e81b2 → 14711d73c3db` and then reported `at trunk tip … — nothing above the
+live layer to deploy`, **lag 0**. That happened ~30 s after a lag reading taken for this section, so
+it is an observation of the mechanism running, not a reconstruction from logs.
+
+### 8.1 The convergence evidence
+
+| Evidence | Value | Source |
+|---|---|---|
+| Observed advances | **3** — one T1 (green), two T2 (degraded) | `autonomy/postland/deploy.log:340, 769-770, 857-858` |
+| Newest advance | `7bb7526e81b2 → 14711d73c3db`, *"authorised by 7h since the live commit was authored (budget 6h)"* | `deploy.log:857-858` |
+| Live lag after it | **0 commits** · `at trunk tip 14711d73c3db`, exit **0** | `deploy-live.sh --dry-run --offline` |
+| Prior state (§2) | 8 h / 120 commits behind, refusing | this doc, 2026-07-31 |
+
+**Two mechanisms were required, and only one of them is §7.5's.** §7.5 restored the retry ladder's
+ability to *decide* (the 2026-08-08T00:47Z green was minted at **loadavg 19.43 after 4 retries** —
+the ladder rendering a verdict under exactly the pressure that used to force the `cut` path). But at
+the measured green rate that alone would still have left the lane waiting: **3 greens in 97 stamps
+(3.1%)**. What actually closed the gate is **D1's two-tier target** from the successor plan
+`DEPLOY_LANE_GROUND_UP.md` §2.2 — T2 degrades to *the newest NOT-RED commit* once lag passes
+`CC_DEPLOY_MAX_LAG_COMMITS` (25) or `CC_DEPLOY_MAX_LAG_HOURS` (6). Green left the critical path.
+Recording this split matters: **§7.5 was necessary and not sufficient**, and a reader who credits
+this doc's own fix with the convergence would draw the wrong lesson about which change to protect.
+
+### 8.2 §7.4's red-set churn collapsed — the ladder fix is visible in the stamp series
+
+Failing-suite count per RED stamp, 2026-08-05 → 2026-08-08:
+
+```
+12 · 8 · 10 · 10 · 6 · 10 · 9 · 4 · 8 · 5 · 4 · 4 · 5 · 2 · 1 · 3 · 1
+```
+
+§7.4 measured sets of **8 · 6 · 3 · 7 with an intersection of 1** and called it churn. The newest
+stamps name **one** suite. The churn was the ladder failing to discriminate, exactly as §7.4 derived.
+
+### 8.3 §7.8's residual tail — confirmed, and narrowed to one named suite
+
+`tests/boot-resume-launch.bats` is red in 3 of the last 5 stamps, has **zero `flakes.jsonl` rows**
+(so it was never ladder-acquitted), and **passes 10/10 standalone on this host** at the trunk
+revision. That is precisely the machine-coupled failure §7.8 predicted and declared out of scope:
+*"a bug in the suite, not an environment to fake."* **Named here, not fixed** — this doc's frozen
+scope excludes implementing fixes, and the lane no longer depends on it (T2 routes around red).
+
+### 8.4 One boundary artifact, recorded because it will be re-found
+
+`LAG_HOURS` is integer-truncated: at the reading taken for this section, elapsed was **6.997 h**,
+`LAG_HOURS=6`, and the test `[ "$LAG_HOURS" -gt "$MAX_LAG_HOURS" ]` is `6 -gt 6` = **false**. So the
+hours budget behaves as **≥7 h**, not >6 h — which is why *both* observed T2 advances are stamped
+`"7h … (budget 6h)"`. Not a defect; the bound is simply one hour wider than the constant reads.
+
+⚠️ **A hypothesis tested and REJECTED here, to stop the next reader re-deriving it:** the
+`cc-blockers` `deploy-stale` alarm fires while `deploy-live` is still inside its trip test, which
+looks like two surfaces disagreeing on a threshold. It is not — `bin/cc-blockers:43` reads *the same*
+`CC_DEPLOY_MAX_LAG_COMMITS (25) / CC_DEPLOY_MAX_LAG_HOURS (6)` constants. The gap is one tick wide
+and is the truncation above. Stated as a rejected cause rather than omitted, per this repo's
+`wrong-cause-corroborated-by-true-metric`.
+
+### 8.5 Disposition
+
+| Item | State |
+|---|---|
+| §7.5 fix (`RETRY_QOS`, `suites` denominator, `last-green` rendering) | **landed + live** — `scripts/postland-verify.sh:331`; `status` renders `last-green: 71e96bcbc825 → stamp 7af134ebcbad.json green` |
+| §7.7 activation `26-deploy-gate-unblock-activate.sh` | **run** — `.done` marker 2026-08-07 03:47 |
+| §7.7's bootstrap circle | **dissolved** — D4's plist fallback is in the *loaded* job (`launchctl print` carries `[ -x "$D" ] \|\| D=…`), so the advancer is no longer undeployable by its own outage |
+| Structural fix (the gate itself) | **owned by `DEPLOY_LANE_GROUND_UP.md`** (`status: complete`) — that plan supersedes §5's A/B/C directions and §7.6's re-cost |
+| §7.8 residual | **open elsewhere** — one suite, §8.3; not a lane blocker |
+
+**Why this doc closes rather than staying open for §8.3.** Its frozen scope was to *record the
+measured proof* so a later session would fix the gate instead of performing a fourth manual sync.
+That happened: the proof was recorded, re-measured, corrected in §7, and the gate was rebuilt in a
+successor plan. Holding it open on a single machine-coupled test would keep re-dispatching a
+finished investigation — which is what it had already begun doing (this item thrashed twice before
+this session). The residual belongs to whoever owns that suite, not to the convergence question.
