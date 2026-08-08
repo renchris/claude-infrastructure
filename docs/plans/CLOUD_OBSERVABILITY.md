@@ -828,3 +828,94 @@ settled steps to watch them pass again is pure cost.
    experiment `CONCURRENCY_PROGRAM.md` §S5a line 586 calls the deciding measurement for the
    `refs/cc/*` heartbeat design. Run it last: it is the only step that can fail in a way that tells
    us nothing about the others.
+
+---
+
+## 10 · What was built after the fire path opened (2026-08-08)
+
+§6.7's bottleneck broke, so the work this document deliberately deferred became live. This section
+records what landed, in the order the dependency forced.
+
+### 10.1 · §5.2's three liars now ABSTAIN — landed `d0765876`
+
+The gate the rest waited on. `cc-cloud is-offbox` had existed since the reconciler landed and had
+**zero references on trunk**; all three call sites now branch on it.
+
+| Site | Was | Now |
+| --- | --- | --- |
+| `bin/cc-spawn-verify` | exit 1 `ABSENT` — "Died, or never launched" | exit **3 `OFFBOX`**, a fourth verdict in the exit-code vocabulary |
+| `bin/cc-board` | `DEAD` (telemetry loop) · `DIED-UNRENDERED` and **`NO-RENDER?`** (registry join) | `OFFBOX` on all three |
+| `scripts/team-orphan-reaper.sh` | archive, on a 600s launchd timer | KEEP + log, checked **before** `lead_liveness` |
+
+Three things about the shape of the fix that are worth more than the fix:
+
+- **The reaper's guard could not go on the `DEAD` arm.** An off-box lead has no watchdog pid file at
+  all, so it never reaches the dead-pid branch — it enters **UNKNOWN**, and the UNKNOWN arm archives
+  too once its ceiling passes. A guard on the word "DEAD" would have read as correct and been
+  completely inert. The same shape appears in `cc-board`: an off-box registry row has no local pid,
+  so it fell past `DIED-UNRENDERED` to the softer `NO-RENDER?`, whose own gloss ("up, but never
+  rendered: hung/GO-deaf") is just as much a claim about a local process. **In both files the
+  dangerous branch was the one that did not say "dead".**
+- **`cc-spawn-verify` checks before its wait loop**, not after. Waiting `$TIMEOUT` for a process that
+  can never appear spends the clock to arrive at a wrong answer. And `OFFBOX` outranks `PARKED` in
+  the `--all` worst-verdict fold, because it is a **non-verdict**: a wave containing an off-box
+  member is not verified-green, and folding it down to 0 would be the tool claiming an answer it
+  never got.
+- **Every site fails CLOSED toward its existing verdict.** No `cc-cloud`, an unreadable state dir, an
+  undeclared id, or a retired one — all leave the old behaviour byte-for-byte. Each site can only
+  ever suppress a false death, never invent a false life. Seam `CC_CLOUD_BIN`, honored as
+  SET-including-EMPTY (`${VAR+set}`), so a test can genuinely turn the lookup off.
+
+**29 tests across three suites** (`tests/cc-board.bats` is new — the file had no coverage at all),
+each off-box case paired with a control proving the abstain is not blanket.
+
+⚠️ **Two harness defects were caught in this change's own verification, both vacuous-pass shaped, and
+they are the transferable part.**
+
+1. **The RED control was vacuous.** The pre-fix subject was replayed from a scratchpad directory, so
+   the suite's own `REPO="$(dirname $BATS_TEST_FILENAME)/.."` resolved somewhere with no
+   `bin/cc-cloud` — every "RED" was the **lookup being absent**, not the subject convicting. It
+   produced the right-looking red set for entirely the wrong reason, and it would have certified a
+   subject that did nothing. Redone as a real `git worktree add --detach` at the parent commit,
+   where the whole tree resolves. A partial replay had already lied once in the same session, on
+   `cc-board`'s `dirname $0` sibling resolution. **A control must replay the real artifact, in a
+   tree where everything it reaches still resolves.**
+2. **Five assertions were dead.** `echo … | grep -q X && false` is and-absorbed — it can never fail
+   — and they sat in exactly the tests carrying the load-bearing half ("it must not utter the death
+   verdict at all"). The **land gate's** dead-assertion ratchet caught them, not the author and not
+   the green suite. Revived to `! A || false`, then mutation-verified per site: a single-anchor
+   mutant that keeps the `OFFBOX` word and re-adds the death word reddens exactly one test each,
+   which is the property the rewrite restored — the positive half passes on that mutant, so only a
+   live negative can catch it.
+
+### 10.2 · Cloud sessions are ACCOUNT-SCOPED — measured 2026-08-08, backlog `95422d3518bc`
+
+A finding from a sibling session, recorded here because it changes §9.2 and nothing in §9 predicted
+it. Clean A/B: **same session id, same command, only `CLAUDE_CONFIG_DIR` differs** — the owning
+account (`next3`) returns `{ok:true}`; another account (`next`) returns
+`{ok:false, error:"Session not found"}`.
+
+**A `session_…` id is therefore not a globally-addressable handle**, and §9.2's three-step dispatch
+is incomplete without an account: the declaration must record the owning account, and the send must
+route through that account's config dir.
+
+🚨 **The trap is the error string, not the scoping.** A wrong-account send fails as *"Session not
+found"* — it reads as a **dead session**. So the honest-looking behaviour §9.2 already specifies
+("exit non-zero with the API's own reason, NEVER a bare failure") is, on this one path, how the
+wrong diagnosis gets laundered into the operator's face with the API's authority behind it. The send
+arm must detect the mismatch itself and name it, rather than letting the API's word be the whole
+verdict. This is the *same class* as §5.2's three liars — a condition converted into a different,
+scarier one on its way to a human — arriving through a channel §5.2 did not cover.
+
+### 10.3 · Account linking — all four are linked, and the marker set already disagrees
+
+All four accounts (`next`, `next2`, `next3`, `next4`) are GitHub-linked; `next3` is verified
+end-to-end with `session_019uShq6mQCgKYkPvyUqg24d`. The CLI create path (§6.5) is unblocked for all
+of them, so `scripts/cloud-websetup-drive.sh` exists for **repeatability and re-link**, not to open
+the path.
+
+⚠️ **`~/.claude/autonomy/websetup/<acct>.linked` is a cache, and it has already drifted.** Measured
+2026-08-08: the directory holds `next2.linked`, `next3.linked`, `next3.verified`, `next4.linked` —
+**and no `next.linked`**, for an account reported and believed linked. Nothing reconciles the marker
+against the account, so a reader that trusts the marker set will conclude `next` is unlinked and
+re-drive a link it does not need. Treat the markers as a progress log, never as the authority.
