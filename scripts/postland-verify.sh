@@ -1944,8 +1944,30 @@ EOF
 }
 
 # ════ verbs ═══════════════════════════════════════════════════════════════════════════════════════
+# Runs on EVERY 300s tick, BEFORE any abstain — and that placement is the entire point.
+#
+# identity_assert lives inside run_target, which do_run_if_needed skips on `already-stamped`,
+# `cut-cooloff` and `lock-held`. On a quiet trunk it is therefore never reached, and with
+# githooks/pre-commit installed that closes a CIRCLE: a resident bad identity refuses every commit,
+# while only a NEW commit would produce the unstamped tree whose sweep would clear it. The box
+# would sit unable to commit until a human ran the cure by hand — fail-closed is the right answer
+# for one commit and the wrong resting state for a machine.
+#
+# Deliberately silent and verdict-free: two config reads, never appends to FAILING, and cannot fail
+# wider than itself. It only ever REMOVES an unsanctioned local override, handing the repo back to
+# the global SSOT; it never writes an identity of its own.
+identity_resident_guard() {
+  local now
+  now="$(identity_snapshot)"
+  [ -n "$now" ] || return 0                    # no local override at all ⇒ the healthy default
+  identity_snap_ok "$now" && return 0          # a sanctioned override is legal — leave it alone
+  log "IDENTITY: resident unsanctioned [user] in $REPO [${now}] — DROPPING ahead of the abstain gate; falls through to the global identity"
+  git -C "$REPO" config --local --remove-section user >/dev/null 2>&1 || true
+}
+
 do_run_if_needed() {
   local target tree new loops=0
+  identity_resident_guard                      # BEFORE every abstain — see the note above
   git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
   target="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
   [ -n "$target" ] || { idl abstained no-origin-main; return 0; }

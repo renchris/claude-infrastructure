@@ -356,6 +356,50 @@ load_assert_fns() {
   [ "$output" = "$CC_GIT_IDENTITY_EMAIL" ]
 }
 
+# The abstain-path guard. Without it the box deadlocks: a resident bad identity refuses every
+# commit, and only a new commit produces the unstamped tree whose sweep would clear it.
+load_resident_guard() {
+  # REPO is the ambient state the extracted functions read; the eval below is opaque to shellcheck.
+  # shellcheck disable=SC2034
+  REPO="$1"
+  log() { :; }
+  eval "$(sed -n '/^identity_snapshot() {/,/^}/p'        "$SRC/scripts/postland-verify.sh")"
+  eval "$(sed -n '/^identity_snap_ok() {/,/^}/p'         "$SRC/scripts/postland-verify.sh")"
+  eval "$(sed -n '/^identity_resident_guard() {/,/^}/p'  "$SRC/scripts/postland-verify.sh")"
+  [ "$(type -t identity_resident_guard)" = function ] || return 1   # extraction control
+}
+
+@test "postland: the tick-level guard drops a resident bad identity with NO sweep run" {
+  local r; r="$(mkrepo tickguard https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email t@e.com
+  git -C "${r:?repo path required}" config user.name t
+  load_resident_guard "$r"
+  identity_resident_guard
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ -z "$output" ]
+}
+
+@test "postland: the tick-level guard leaves a SANCTIONED override alone" {
+  local r; r="$(mkrepo tickguard2 https://github.com/owner/x.git)"
+  git -C "${r:?repo path required}" config user.email "$CC_GIT_IDENTITY_EMAIL"
+  load_resident_guard "$r"
+  identity_resident_guard
+  run git -C "${r:?repo path required}" config --local --get user.email
+  [ "$output" = "$CC_GIT_IDENTITY_EMAIL" ]
+}
+
+@test "postland: do_run_if_needed calls the guard BEFORE its first abstain" {
+  # Placement is the fix. If the call sits after any `return 0`, the deadlock is back — so this
+  # asserts ORDER in the source, which is the only thing that distinguishes fixed from broken.
+  local body first_guard first_abstain
+  body="$(sed -n '/^do_run_if_needed() {/,/^}/p' "$SRC/scripts/postland-verify.sh")"
+  first_guard="$(printf '%s\n' "$body"   | grep -n 'identity_resident_guard' | head -1 | cut -d: -f1)"
+  first_abstain="$(printf '%s\n' "$body" | grep -n 'return 0'                | head -1 | cut -d: -f1)"
+  [ -n "$first_guard" ] || false
+  [ -n "$first_abstain" ] || false
+  [ "$first_guard" -lt "$first_abstain" ]
+}
+
 @test "postland: the OTHER unattributed family is not restorable either" {
   # ren.chris+claude@outlook.com looks legitimate and is just as unattributable on GitHub
   # (verified 2026-08-08). A denylist keyed on `t` would have restored this one.
