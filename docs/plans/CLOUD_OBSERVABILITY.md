@@ -942,6 +942,27 @@ because the failure is generic and this repo has hit it before: **a plan's ident
 checked against the tree by anything**, so a cited mechanism can be prose-only for as long as nobody
 tries to run it (`[[spec-named-mechanism-may-be-prose-only]]`).
 
+### 10.2c · A false ALIVE, from declaring against trunk
+
+Using `cc-cloud` for real surfaced a hole in its own state function that §4.3's design did not close.
+A probe session declared `--branch main` reported:
+
+```
+state=ALIVE    detail=ref at 55c18e2
+```
+
+`55c18e2` was a **sibling local session's commit**. O2 — "the declared ref advanced" — is the only
+heartbeat off-box, and trunk advances constantly from everything else on this box. So a session
+declared against a shared branch reads `C5 ALIVE` forever, *including after it dies*: the arm that
+is supposed to be the liveness signal has been wired to the fleet's own background traffic.
+
+It is not a bug in `classify` — every arm behaved as specified. It is a **declaration-time hazard**
+the tool does not refuse, and it produces the one failure this whole document is organised against:
+a confident verdict about a session, computed from evidence that has nothing to do with it. The
+runbook now says never to declare `--branch main`; the stronger fix is for `declare` to refuse a
+branch that is the remote's default, or for the fire protocol to use the per-session `refs/cc/<id>`
+that `CONCURRENCY_PROGRAM.md` §S5a already specifies (still unrun — §6.7 claim 5).
+
 ### 10.3 · Account linking — all four are linked, and the marker set already disagrees
 
 All four accounts (`next`, `next2`, `next3`, `next4`) were reported GitHub-linked, and `next3` was

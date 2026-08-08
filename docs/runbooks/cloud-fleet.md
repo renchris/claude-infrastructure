@@ -132,7 +132,15 @@ cc-cloud declare --id <session-id> --branch <branch> --url <url>
 ```
 
 This is not bookkeeping. Until the declaration exists the session is invisible to every local tool
-**and unprotected from the reaper** — §5 explains why the two are the same fact. Confirm it took:
+**and unprotected from the reaper** — §5 explains why the two are the same fact.
+
+🚨 **Never declare `--branch main`, or the liveness you get back is a lie.** The only heartbeat there
+is (O2) is "the declared ref advanced". Trunk advances constantly, from every other session on the
+box — so a session declared against it reads `ALIVE` forever, including after it dies. Measured
+2026-08-08: a probe session declared `--branch main` reported `state=ALIVE  detail=ref at 55c18e2`,
+and `55c18e2` was a *sibling* session's commit. Declare the branch that session alone writes.
+
+Confirm the declaration took:
 
 ```
 cc-cloud is-offbox <session-id>; echo $?
