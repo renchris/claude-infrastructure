@@ -169,10 +169,11 @@ JSON
 
 @test "cc-board: an accounts row missing weekly_pct does not slide FABLE into the WK column" {
   mkdir -p "$C/bin" "$C/tele"
-  # `if` rather than `[ … ] && …`: scripts/bats-assert-liveness.py scans .bats files line-wise and
-  # does not track heredocs, so the `&&` form inside this STUB body is counted as a non-final
-  # dead assertion in a @test and turns the dead-assertion RATCHET red. It is stub code, not an
-  # assertion — but the analyser cannot know that, and an `if` is equally clear either way.
+  # `if` rather than `[ … ] && …`: scripts/bats-assert-liveness.py once scanned .bats files
+  # line-wise with no heredoc tracking, so the `&&` form inside this STUB body counted as a
+  # non-final dead assertion in a @test and turned the dead-assertion RATCHET red. It tracks
+  # both now — heredoc bodies are skipped, and statements are joined across continuations — so
+  # this is no longer forced. Left as an `if` because it is equally clear either way.
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
 if [ "${1:-}" = "--json" ]; then
