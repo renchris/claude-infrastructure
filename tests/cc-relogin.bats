@@ -97,6 +97,9 @@ echo "authbrowser $*" >> "$FIX/authbrowser-calls"
 case "$*" in
   *--start*)
     if [ -f "$FIX/ab.start.json" ]; then cat "$FIX/ab.start.json"; fi
+    # STDERR is a separate fixture on purpose: the real cc-authbrowser puts JSON on stdout and
+    # every diagnostic on stderr, and a stub that cannot split them cannot test either half.
+    if [ -f "$FIX/ab.start.err" ]; then cat "$FIX/ab.start.err" >&2; fi
     exit "$(cat "$FIX/ab.start.rc" 2>/dev/null || echo 0)" ;;
 esac
 exit 0
@@ -489,6 +492,35 @@ EOF
   echo "$output" | grep -q 'cc-authbrowser --start exit 4'
   grep -q -- '--start' "$D/authbrowser-calls"
   refute grep -q -- '--stop' "$D/authbrowser-calls"
+}
+
+# The 2026-07-30 log line was 'cc-authbrowser --start exit 4:' — nothing after the colon. The
+# reason existed, on stderr, and authbrowser() returned p.stdout alone; a failing --start prints
+# JSON on no path, so the detail was empty and the only leg that moves the ~30-day login deadline
+# failed unexplained for nine days. A bare exit code is not a diagnosis.
+@test "phase 2: a FAILING --start carries cc-authbrowser's STDERR reason into the detail" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo 4 > "$D/ab.start.rc"
+  echo 'cc-authbrowser: port 9341 is held by a foreign process (pids=[69721])' > "$D/ab.start.err"
+  run "$C" next3 --url-timeout 5
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -q 'cc-authbrowser --start exit 4'
+  echo "$output" | grep -q 'held by a foreign process'      # the REASON, not just the code
+}
+
+# The control for the test above: stderr must reach the FAILURE detail without contaminating the
+# SUCCESS path, which json.loads() this same value. Merging the two streams unconditionally would
+# prepend a warn() line to the object and break the parse — so 'no ws_url' appearing here would
+# mean the fix traded a silent failure for a louder one.
+@test "phase 2: a SUCCEEDING --start still parses as JSON when cc-authbrowser warns on stderr" {
+  mk_info all false; mk_fresh 1 logged-out
+  echo 'https://claude.ai/oauth/authorize?code_challenge=xyz' > "$D/claude.out"
+  echo '{"ws_url":"ws://127.0.0.1:1/devtools/browser/dead"}' > "$D/ab.start.json"
+  echo 'cc-authbrowser: falling back to free port 49720' > "$D/ab.start.err"
+  run "$C" next3 --url-timeout 5
+  echo "$output" > "$D/out.txt"
+  refute grep -q 'no ws_url' "$D/out.txt"     # the object parsed; stderr never reached json.loads
 }
 
 @test "phase 2: --start emitting no ws_url → 4, and teardown still stops the browser" {
