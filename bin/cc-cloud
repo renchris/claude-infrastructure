@@ -2,12 +2,32 @@
 # cc-cloud — the OFF-BOX session reconciler: one honest verdict per DECLARED cloud session,
 # read ENTIRELY from the repo side.
 #
+#   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
 #   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
 #   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
 #   cc-cloud show <id>                               the declaration + its live state, human-readable
+#   cc-cloud list [--json]                           the declaration inventory from DISK — no probe
 #   cc-cloud --json | --table | --check | --selftest
+#
+# ── ONE tool, because two reading one observable set is worse than either ─────────────────────────
+# `bin/cc-cloud-watch` was an independent implementation of this same observable set, landed in the
+# same commit (07f9707c) by a second session of the 9-way dispatch storm on backlog 191d4d056c98.
+# Two tools over one observable set drift, and a caller cannot tell which is authoritative — so it
+# was deleted and its two verbs that had no home here were migrated in (backlog 163676679912):
+#   preflight  → here, verbatim in intent: the executable form of "design the observable set BEFORE
+#                firing". Its load-bearing refusal is an UNPUSHED branch — a cloud VM clones from
+#                the REMOTE, so local-only work is invisible to it and the session silently runs
+#                against the default branch instead.
+#   record     → `declare`, which was already a superset EXCEPT for one behaviour that is migrated
+#                below: seeding `base_sha` from the live remote at fire time (see BASELINE).
+#   list       → here, but factual rather than a cached verdict: see `cmd_list`.
+#   observe    → `--json` / `--table`, which stay PURE READS (`poll` is the only sidecar mutator);
+#                cc-cloud-watch's `observe` wrote its store as a side effect of rendering.
+#   retire     → `retire --id`, unchanged.
+# Its verdict vocabulary maps onto this state function with nothing lost: nofetch=U0 UNKNOWN,
+# waiting=C2 BOOTING / C5 ALIVE, fresh=C5 after a poll advance, dark=C1 / C4 / C6, retired=retired.
 #
 # ── why this exists, and why it must be built BEFORE the first cloud session fires ───────────────
 # A session running in an Anthropic-managed VM shares no kernel, no filesystem and no terminal with
@@ -57,12 +77,26 @@
 # ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
 #   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git).
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref, and now > declared_at + boot_s                                    ROW
-#   C2 BOOTING      no ref, still inside the boot budget — expected, not a fault            no row
+#   C1 NOT-STARTED  no ref (or the ref is STILL at its fire-time sha), past declared_at+boot_s  ROW
+#   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
 #   C4 STALLED      ref exists, sha unchanged for > stall_s (sidecar evidence REQUIRED)       ROW
 #   C5 ALIVE        ref exists and advanced inside the budget                               no row
 #   C6 ABANDONED    ref exists, not landed, past life_s                                       ROW
+#
+# ── BASELINE: why C1/C2 also fire on a ref that EXISTS (migrated from cc-cloud-watch `record`) ────
+# `declare` probes the remote once and records the sha the branch held BEFORE the fire. Without it,
+# declaring against a branch name that already exists reads C5 ALIVE from the instant of the
+# declaration and stays silent for the whole life_s budget (6h by default) — the single most likely
+# real failure, a session that never boots onto a re-used branch name, hidden for six hours behind
+# a green verdict. With it, "the session has produced nothing" is `sha == base_sha`, which is the
+# same fact as "no ref" and takes the same two arms.
+# The baseline is MEASURED, never assumed: `base_probe=ok` is written only when the fire-time probe
+# actually answered. If it could not run, the key is ABSENT and this arm abstains entirely rather
+# than treating an unmeasured baseline as an empty one — the same law as U0 one level down.
+# It is checked AFTER C3: a session whose declared content is on trunk is finished, and how its ref
+# moved is no longer a question worth alarming on.
+#
 # C3 precedes C4 DELIBERATELY: a finished session stops pushing, so a STALLED-first order would
 # alarm forever on every successful cloud session — the failure mode where an alarm that always
 # fires carries the same zero bits as one that never fires.
@@ -201,7 +235,7 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 classify() { # <id>
   local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
   local branch remote repo paths trunk url dat boot stall life
-  local sha rc n age url_cmd first_seen sha_age
+  local sha rc n age url_cmd first_seen sha_age base_sha base_probe
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -240,6 +274,19 @@ classify() { # <id>
   landed "$repo" "$trunk" "$paths"; rc=$?
   if [ "$rc" -eq 0 ]; then
     printf 'LANDED\tcontent present on %s\t-\n' "$trunk"; return 0
+  fi
+
+  # BASELINE (C1/C2 for a ref that exists but has not MOVED since the fire). Only when the fire-time
+  # probe actually answered: an unmeasured baseline abstains rather than being read as an empty one.
+  base_probe="$(dfield "$f" base_probe)"
+  base_sha="$(dfield "$f" base_sha)"
+  if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
+    if [ "$age" -gt "$boot" ]; then
+      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+    else
+      printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
+    fi
+    return 0
   fi
 
   # C4 needs HISTORY. The sidecar records "sha X was first seen at T"; `poll` writes it.
@@ -313,7 +360,7 @@ do_check() {
 # ── mutating verbs ───────────────────────────────────────────────────────────────────────────────
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item=""
-  local boot="" stall="" life="" f
+  local boot="" stall="" life="" f base="" brc=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -342,6 +389,15 @@ cmd_declare() {
 '
   case "$branch$remote$paths$url" in *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;; esac
   mkdir -p "$STATE" || return 1
+
+  # BASELINE (migrated from cc-cloud-watch `record`). Probe the remote ONCE, now, so that "the
+  # session has pushed nothing" is later distinguishable from "the branch already existed". Failure
+  # is NOT fatal and NOT silently coerced: an undeclared session is unobservable, which is strictly
+  # worse than an unmeasured baseline, so the declaration is still written — but `base_probe` is
+  # then absent and `classify` abstains from the baseline arm instead of reading an unmeasured
+  # baseline as an empty one.
+  base="$(remote_sha "$repo" "$remote" "$branch")"; brc=$?
+
   f="$STATE/$id.decl"
   {
     printf 'id=%s\n' "$id"
@@ -349,6 +405,10 @@ cmd_declare() {
     printf 'remote=%s\n' "$remote"
     printf 'repo=%s\n' "$repo"
     printf 'paths=%s\n' "$paths"
+    if [ "$brc" -eq 0 ]; then
+      printf 'base_probe=ok\n'
+      printf 'base_sha=%s\n' "$base"
+    fi
     [ -n "$trunk" ]   && printf 'trunk=%s\n' "$trunk"
     [ -n "$url" ]     && printf 'url=%s\n' "$url"
     [ -n "$surface" ] && printf 'surface=%s\n' "$surface"
@@ -360,6 +420,13 @@ cmd_declare() {
   } > "$f" || return 1
   rm -f "$STATE/$id.retired"
   printf 'declared %s (branch %s on %s) — it is now observable\n' "$id" "$branch" "$remote"
+  if [ "$brc" -ne 0 ]; then
+    printf '  ! fire-time baseline UNMEASURED (remote did not answer) — a pre-existing ref on %s\n' "$branch" >&2
+    printf '    cannot be told from this session pushing one; re-declare when the remote answers.\n' >&2
+  elif [ -n "$base" ]; then
+    printf '  ! %s ALREADY EXISTS on %s at %.7s — progress is measured as a move OFF that sha\n' \
+      "$branch" "$remote" "$base" >&2
+  fi
 }
 
 cmd_retire() {
@@ -421,6 +488,157 @@ cmd_show() {
   printf -- '--\nstate=%s\ndetail=%s\nrecover=%s\n' "$state" "$detail" "$rcmd"
 }
 
+# ── preflight — the executable form of "design the observable set BEFORE firing" ─────────────────
+# Migrated wholesale from cc-cloud-watch, minus its `jq` check (this tool has no jq dependency, and
+# a preflight that asserts a dependency its subject does not have is a lie about what is required).
+# Exit 0 = a fire here is observable. Exit 1 = it is NOT, and firing would produce a session nothing
+# on this box can ever see again.
+#
+# The load-bearing check is the branch one. A cloud VM clones from the REMOTE, so work that exists
+# only in a local branch is invisible to it and the session silently runs against the default branch
+# instead. Measured 2026-08-07 on this repo: origin carried exactly ONE head (refs/heads/main)
+# against 286 local branches with no upstream, so the failing case is the overwhelmingly likely one.
+cmd_preflight() {
+  local repo="$ROOT" branch="" remote="" fail=0 warn=0 sha rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)   repo="${2:-}"; shift 2 ;;
+      --branch) branch="${2:-}"; shift 2 ;;
+      --remote) remote="${2:-}"; shift 2 ;;
+      *) echo "cc-cloud preflight: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+
+  if ! "$GIT_BIN" -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+    printf '✗ %s is not a git repo — there is no repo-side channel to observe\n' "$repo"
+    printf '\nPREFLIGHT FAIL — a session fired now would be UNOBSERVABLE.\n'
+    return 1
+  fi
+
+  [ -n "$remote" ] || remote="$("$GIT_BIN" -C "$repo" remote 2>/dev/null | head -1)"
+  if [ -z "$remote" ]; then
+    printf '✗ no git remote — a cloud VM clones from the REMOTE; with none there is nothing to watch\n'
+    fail=1
+  else
+    printf '✓ remote: %s\n' "$remote"
+    # Reachability, bounded the same way every other probe here is. Note this asks for ALL heads
+    # rather than one: it separates "the remote is unreachable" from "that branch is absent", which
+    # is the same rc=128-vs-rc=0 discriminator the state function is built on, one level up.
+    local -a rcmd=()
+    [ -n "$NET_BOUND" ] && rcmd=("$NET_BOUND" "$NET_TIMEOUT")
+    rcmd+=("$GIT_BIN" -C "$repo" ls-remote --heads "$remote")
+    if GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/true "${rcmd[@]}" >/dev/null 2>&1; then
+      printf '✓ remote reachable — ls-remote answers\n'
+    else
+      printf '✗ remote UNREACHABLE within %ss — every verdict would be UNKNOWN\n' "$NET_TIMEOUT"
+      fail=1
+    fi
+  fi
+
+  if [ -n "$branch" ] && [ -n "$remote" ]; then
+    sha="$(remote_sha "$repo" "$remote" "$branch")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '✗ could not probe %s on %s — cannot confirm the branch is visible off-box\n' "$branch" "$remote"
+      fail=1
+    elif [ -z "$sha" ]; then
+      printf '✗ branch %s is NOT on %s — the cloud VM would clone without it.\n' "$branch" "$remote"
+      printf '  git push -u %s %s\n' "$remote" "$branch"
+      fail=1
+    else
+      printf '✓ branch %s present on %s (%.12s)\n' "$branch" "$remote" "$sha"
+    fi
+  elif [ -z "$branch" ]; then
+    printf '! no --branch given — the observer would not know which ref to poll\n'
+    warn=1
+  fi
+
+  if mkdir -p "$STATE" 2>/dev/null && [ -w "$STATE" ]; then
+    printf '✓ declaration store writable: %s\n' "$STATE"
+  else
+    printf '✗ declaration store NOT writable: %s — the session id could not be captured at fire time\n' "$STATE"
+    fail=1
+  fi
+
+  if command -v gh >/dev/null 2>&1; then
+    printf '✓ gh present — PR-side observation (O5) available if the session opens one\n'
+  else
+    printf '! gh ABSENT — O5 unavailable; commits and branches only\n'
+    warn=1
+  fi
+
+  if [ "$fail" -ne 0 ]; then
+    printf '\nPREFLIGHT FAIL — a session fired now would be UNOBSERVABLE. Fix the ✗ lines first.\n'
+    return 1
+  fi
+  if [ "$warn" -ne 0 ]; then printf '\nPREFLIGHT PASS (with warnings above).\n'
+  else printf '\nPREFLIGHT PASS.\n'; fi
+  return 0
+}
+
+# Every declaration including RETIRED ones — `list` keeps them for forensics, which is the whole
+# reason `retire` writes a marker instead of deleting the declaration.
+all_ids() {
+  local f b
+  [ -d "$STATE" ] || return 0
+  for f in "$STATE"/*.decl; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; printf '%s\n' "${b%.decl}"
+  done | sort
+}
+
+# ── list — the declaration inventory, from DISK ONLY. No probe, no network. ───────────────────────
+# This is where the migration departs from cc-cloud-watch's `list`, which replayed a stored
+# `lastVerdict` under the label "last known". Every arm of this state function is a function of the
+# CLOCK as well as the sha: BOOTING becomes NOT-STARTED with no new observation at all, purely by
+# time passing. A verdict stored at T and replayed at T+n is therefore not stale-but-directional —
+# it is wrong, and wrong in the direction that reads as healthy. So `list` reports only what does
+# not decay: what was declared, and what was last OBSERVED. Verdicts come from --table/--json,
+# which probe.
+cmd_list() {
+  local fmt="table" id f seen branch remote item dat base bprobe lsha lsince n age any=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json)  fmt=json; shift ;;
+      --table) fmt=table; shift ;;
+      *) echo "cc-cloud list: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+  n="$(now)"
+  [ "$fmt" = table ] && printf '%-22s %-24s %-8s %s\n' "SESSION" "BRANCH" "AGE" "LAST OBSERVED"
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    any=1
+    f="$STATE/$id.decl"; seen="$STATE/$id.seen"
+    branch="$(dfield "$f" branch)"
+    remote="$(dfield "$f" remote)"
+    item="$(dfield "$f" item)"
+    dat="$(dfield "$f" declared_at)"
+    base="$(dfield "$f" base_sha)"
+    bprobe="$(dfield "$f" base_probe)"; [ "$bprobe" = ok ] || bprobe="unmeasured"
+    lsha="$(dfield "$seen" sha)"
+    lsince="$(dfield "$seen" since)"
+    if is_num "$dat"; then age=$((n - dat)); [ "$age" -lt 0 ] && age=0; else age=0; fi
+    if [ "$fmt" = json ]; then
+      printf '{"id":"%s","branch":"%s","remote":"%s","item":"%s","declared_at":%s,"age_s":%s,' \
+        "$(jesc "$id")" "$(jesc "$branch")" "$(jesc "$remote")" "$(jesc "$item")" \
+        "$(is_num "$dat" && printf '%s' "$dat" || printf 'null')" "$age"
+      printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"retired":%s}\n' \
+        "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
+        "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" \
+        "$([ -f "$STATE/$id.retired" ] && printf 'true' || printf 'false')"
+    else
+      local obs
+      if [ -f "$STATE/$id.retired" ]; then obs="RETIRED"
+      elif [ -n "$lsha" ] && is_num "$lsince"; then obs="$(printf '%.7s for %s' "$lsha" "$(dur $((n - lsince)))")"
+      elif [ "$bprobe" = ok ] && [ -n "$base" ]; then obs="$(printf 'never polled (pre-fire %.7s)' "$base")"
+      else obs="never polled"; fi
+      printf '%-22s %-24s %-8s %s\n' "$id" "$branch" "$(dur "$age")" "$obs"
+    fi
+  done < <(all_ids)
+  [ "$any" -eq 1 ] || [ "$fmt" = json ] || printf '%s\n' "(no cloud sessions declared — nothing is firing off-box)"
+  return 0
+}
+
 # ── selftest: hermetic, RED-provable, no network ─────────────────────────────────────────────────
 # Uses REAL local bare repositories as the remote, not a stubbed `git`: the whole correctness claim
 # of this file is about what `git ls-remote` actually returns, so a stub would test the stub.
@@ -430,6 +648,12 @@ _st_expect() { # <name> <expected-state> <id>
   local got; got="$(classify "$3")"; got="${got%%	*}"
   if [ "$got" = "$2" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$1"
   else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want %s, got %s)\n' "$1" "$2" "$got"; fi
+}
+_st_rc() { # <name> <expected-rc> <cmd...>
+  local name="$1" want="$2"; shift 2
+  local got=0; "$@" >/dev/null 2>&1 || got=$?
+  if [ "$got" = "$want" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$name"
+  else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want rc %s, got %s)\n' "$name" "$want" "$got"; fi
 }
 do_selftest() {
   # `_ST_D` is deliberately NOT `local`: the EXIT trap fires after this function has returned, and a
@@ -469,21 +693,47 @@ do_selftest() {
   ) >/dev/null 2>&1
   _st_expect "a pushed ref inside its budgets is ALIVE" ALIVE boot
 
+  # BASELINE (migrated from cc-cloud-watch `record`). `boot` above was declared BEFORE the push, so
+  # its ref MOVED and ALIVE is right. `reused` is declared AFTER, onto the same already-pushed
+  # branch: nothing has moved, and without a fire-time baseline that reads ALIVE for the whole 6h
+  # life budget — a session that never booted onto a re-used branch name, hidden behind a green.
+  cmd_declare --id reused --branch feat/x --remote "$_ST_D/remote.git" --repo "" >/dev/null 2>&1
+  _st_expect "a ref that already existed at fire time is BOOTING, not ALIVE" BOOTING reused
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  _st_expect "an unmoved pre-fire ref past the boot budget is NOT-STARTED" NOT-STARTED reused
+  # POSITIVE CONTROL at the SAME clock: the session that genuinely pushed is still ALIVE. Without
+  # this, both verdicts above are equally explained by the clock convicting every declaration.
+  _st_expect "control: the session that DID push is ALIVE at that same clock" ALIVE boot
+  CC_CLOUD_NOW=2000000000
+
+  # PREFLIGHT (migrated from cc-cloud-watch). The refusal that carries the point: a cloud VM clones
+  # from the REMOTE, so a local-only branch is invisible to it and the session runs against the
+  # default branch instead — measured 2026-08-07, origin held 1 head against 286 local branches.
+  "$GIT_BIN" -C "$_ST_D/work" remote add origin "$_ST_D/remote.git" >/dev/null 2>&1
+  _st_rc "preflight passes for a branch that is on the remote (control)" 0 \
+    cmd_preflight --repo "$_ST_D/work" --branch feat/x
+  _st_rc "preflight REFUSES a branch that exists only locally" 1 \
+    cmd_preflight --repo "$_ST_D/work" --branch never-pushed
+  _st_rc "preflight REFUSES a repo with no remote at all" 1 \
+    cmd_preflight --repo "$_ST_D/remote.git" --branch feat/x
+
   printf '%s\n' "--- $_ST_PASS passed, $_ST_FAIL failed"
   [ "$_ST_FAIL" -eq 0 ]
 }
 
 # ── dispatch ─────────────────────────────────────────────────────────────────────────────────────
 case "${1:-}" in
+  preflight)  shift; cmd_preflight "$@"; exit $? ;;
   declare)    shift; cmd_declare "$@"; exit $? ;;
   retire)     shift; cmd_retire "$@"; exit $? ;;
   poll)       shift; cmd_poll "$@"; exit $? ;;
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
   show)       shift; cmd_show "${1:-}"; exit $? ;;
+  list)       shift; cmd_list "$@"; exit $? ;;
   --selftest) do_selftest; exit $? ;;
-  -h|--help)  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
-  "")  echo "cc-cloud: pick a verb (declare|retire|poll|is-offbox|show|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  "")  echo "cc-cloud: pick a verb (preflight|declare|retire|poll|is-offbox|show|list|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
 esac
 
