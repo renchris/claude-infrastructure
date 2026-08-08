@@ -536,6 +536,31 @@ fixed thing: `docs/plans/TEAMMATE_SELFCLOSE_INVESTIGATION.md:681-699` still carr
 section for the reap-guard tree-scope work. **It is live** — content-verified, and 21 panes closed
 today. (Memory: `parked-blocker-obsoleted-by-later-fix`.)
 
+### The `subagent-stop.sh` row is inert but NOT a data-loss path (measured 2026-08-07)
+
+Backlog item `7ea31ffa1a08` parked the wiring decision behind a blocking question: *"an UNNAMED
+`Agent()` is in-process and may leave no durable transcript (`isSidechain:true` = 0 of 799,606
+records at 2.1.220, so the 2026-08-02 tell is not reproducible). If unnamed subagents really leave
+no harvestable trace, this unwired hook is a live DATA-LOSS path, not a tidiness gap."*
+
+**That zero is a glob miss, not an absence** (memory: `lookup-miss-is-not-absence`). Nameless
+subagents do not write into the top-level transcript — they get their **own file one directory
+down**, which `projects/*/*.jsonl` cannot reach:
+
+| Tier | Glob | Files | Records | `isSidechain:true` |
+|---|---|---|---|---|
+| top-level sessions | `~/.claude/projects/*/*.jsonl` | 716 | 262,008 | **0** |
+| nameless subagents | `~/.claude/projects/*/*/subagents/*.jsonl` | **165** | 14,289 | **14,289 (100%)** |
+
+So every nameless subagent leaves a complete, durable, deterministically-pathed transcript
+(`agent-<id>.jsonl` + `agent-<id>.meta.json`; specimens here run 437 KB–735 KB). The unwired hook is
+therefore a **harvest/routing gap, not data loss** — which is the same verdict this document already
+reaches for the fleet as a whole ("this is a ROUTING problem, not a build problem", § above), and it
+is consistent with the two rows above rather than a correction to them. `7ea31ffa1a08`'s stated
+precondition for wiring is now settled, and settled in the direction that *lowers* its urgency: the
+reports are on disk either way, so wiring `subagent-stop.sh` buys an index over data that was never
+at risk. The wiring call stays with that item; nothing here should be read as pre-empting it.
+
 ---
 
 # The lever we actually control (verified, not assumed)
