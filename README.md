@@ -43,6 +43,75 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 
 ---
 
+## Twice, this repo shipped it first — and foresight is not the reason
+
+<!-- Diagram source: assets/diagrams/vendor-convergence.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/vendor-convergence-dark.svg">
+  <img src="assets/diagrams/vendor-convergence-light.svg" alt="Two groups. The first, titled 'this repo shipped first', holds two pairs: peer session messaging here on 2026-07-10 leading to Claude Code 2.1.224 on 2026-08-07, twenty-eight days later; and an adversarial-role research team here on 2026-05-24 leading to Dynamic Workflows 2.1.154 on 2026-05-28, four days later. Both of this repo's nodes are green, both of Claude Code's are blue. The second group, titled 'Claude Code shipped first', holds one pair: status-line context fields shipped in Claude Code 2.0.70 on 2025-12-15, read here only on 2026-07-14 — seven months, and the caption names it as our gap rather than theirs. That node is red.">
+</picture>
+
+<details>
+<summary>Interactive Diagram</summary>
+
+<!-- mermaid-fence: assets/diagrams/vendor-convergence.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart TB
+    subgraph WE["this repo shipped first"]
+        direction TB
+        P1["peer session messaging<br/>2026-07-10"]
+        P2["Claude Code 2.1.224<br/>2026-08-07"]
+        P1 -.->|"28 days"| P2
+        R1["adversarial-role research team<br/>2026-05-24"]
+        R2["Dynamic Workflows 2.1.154<br/>2026-05-28"]
+        R1 -.->|"4 days"| R2
+    end
+    subgraph THEY["Claude Code shipped first"]
+        direction TB
+        S1["status-line context fields<br/>Claude Code 2.0.70 · 2025-12-15"]
+        S2["read here<br/>2026-07-14"]
+        S1 -.->|"7 months — our gap, not theirs"| S2
+    end
+    classDef win fill:#12261a,stroke:#3fb950,color:#e6edf3
+    classDef cc fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
+    classDef late fill:#2b1618,stroke:#f85149,color:#e6edf3
+    class P1,R1 win
+    class P2,R2,S1 cc
+    class S2 late
+```
+
+<sup><a href="assets/diagrams/vendor-convergence-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/vendor-convergence-light.svg?raw=true">light</a> · <a href="assets/diagrams/vendor-convergence.mmd">source</a></sup>
+
+</details>
+
+Anthropic ships Claude Code; heavy users extend it. The same capabilities keep appearing on both
+sides weeks apart, which reads either as a power user anticipating the roadmap or as one rebuilding
+what already shipped. Six of this repo's own priority claims were tested against the official
+changelog, dated on both sides — first-add shas here against the npm publish timestamp of the exact
+version carrying each entry. **Two stand. Three were refuted. One splits in half.**
+
+The two that stand are above. Neither borrowed the other's vocabulary: **zero shared distinctive
+terms in either direction** — `OASIS` and `obvious-axis saturation` here, `loop-until-dry` and
+`completeness critic` there.
+
+**The reason is a cascade, not foresight.** Both parties optimise the same objective over the same
+resource lattice, and each fix manufactures the next bottleneck: relieve single-session quality and
+throughput binds; relieve throughput and the shared checkout collides; isolate the checkouts and
+context exhausts; recycle contexts and the sessions cannot hear each other. Written as a prediction
+*before* reading this repo's history, that order matched **eight of nine rungs**. The commit curve is
+the same instrument read twice — 4 in March, 24 in April, **zero in May**, 1,515 in July. The May
+silence is the plateau between two ceilings; a curiosity-driven builder trickles, a ceiling-driven
+one goes quiet.
+
+**And the honest limit.** ~316 live artifacts across ~60–100 subsystems, of which roughly six have a
+vendor counterpart *at all*. Two survivors from six tested is close to the base rate for parallel
+obvious needs — which is exactly why the tally is published beside the wins, and why the one place
+this repo was seven months *late* is in the diagram too.
+
+<sub><b>Full evidence, including every refuted claim and the two errors the first version of it made</b> → <a href="docs/research/vendor-convergence-2026-08-07.md"><code>docs/research/vendor-convergence-2026-08-07.md</code></a></sub>
+
+---
+
 ## 1. Sessions run each other
 
 **A session is not a terminal you babysit — it is an addressable process that can open, message, and retire its peers.** The mechanics are four commands.
