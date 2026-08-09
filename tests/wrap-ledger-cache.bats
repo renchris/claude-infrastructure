@@ -232,8 +232,9 @@ runshim() { : > "$SHIM/calls.log"; PATH="$SHIM:$PATH" bash "$S" --machine >/dev/
 
 conc6() { # <label-of-env> — six concurrent --machine runs, returns the git subprocess count
   : > "$SHIM/calls.log"
-  local i
-  for i in 1 2 3 4 5 6; do
+  local _r
+  for _r in 1 2 3 4 5 6; do
+    : "$_r"
     PATH="$SHIM:$PATH" env "$@" bash "$S" --machine >/dev/null 2>&1 &
   done
   wait
@@ -243,7 +244,7 @@ conc6() { # <label-of-env> — six concurrent --machine runs, returns the git su
 @test "F1: six CONCURRENT consumers cost strictly less than six uncached — no stampede" {
   mkshim
   off="$(conc6 WRAP_CACHE=off)"
-  cold="$(conc6 WRAP_CACHE_DIR=$WRAP_CACHE_DIR)"
+  cold="$(conc6 "WRAP_CACHE_DIR=$WRAP_CACHE_DIR")"
   # The cold concurrent case is the one that regressed before single-flight. It must be a saving,
   # not merely "no worse" — a cache that breaks even on its own hot path is not worth its risk.
   [ "$cold" -lt "$off" ]
@@ -280,11 +281,11 @@ conc6() { # <label-of-env> — six concurrent --machine runs, returns the git su
 
   mkshim
   : > "$SHIM/calls.log"
-  for i in 1 2 3 4 5 6; do PATH="$SHIM:$PATH" WRAP_CACHE=off bash "$m" --machine >/dev/null 2>&1 & done
+  for _r in 1 2 3 4 5 6; do : "$_r"; PATH="$SHIM:$PATH" WRAP_CACHE=off bash "$m" --machine >/dev/null 2>&1 & done
   wait
   off="$(gitcalls)"
   : > "$SHIM/calls.log"
-  for i in 1 2 3 4 5 6; do PATH="$SHIM:$PATH" bash "$m" --machine >/dev/null 2>&1 & done
+  for _r in 1 2 3 4 5 6; do : "$_r"; PATH="$SHIM:$PATH" bash "$m" --machine >/dev/null 2>&1 & done
   wait
   cold="$(gitcalls)"
   # Without the lock the memo costs MORE than no memo at all: six fingerprints on top of six
