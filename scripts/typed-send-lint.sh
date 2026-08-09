@@ -427,17 +427,32 @@ if [ "${1:-}" = "--selftest" ]; then
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
   fails=0
   # mk <case> [basename] — body on stdin; writes a scan root $d/<case> with one file under scripts/
+  #
+  # `@OSA@` in a fixture body becomes a literal `osascript` ON DISK. The bytes every RED/GREEN
+  # expectation below is scanned against are therefore UNCHANGED — only this file's own source stops
+  # carrying nine call-shaped lines.
+  #
+  # WHY: tests/osa-bounds.bats AC22 is a repo-wide ratchet that scans hooks/ bin/ scripts/ line by
+  # line for unbounded osascript calls, and it has no heredoc awareness — so these fixture bodies
+  # read as nine real call sites. AC22 landed 2026-08-06 (315772eb); these fixtures landed
+  # 2026-08-08 (5fff9df6) and reddened it, which blocked EVERY land touching those three dirs until
+  # 2026-08-09. Fixing it here rather than by adding a heredoc exemption to AC22 is deliberate: an
+  # exemption widens a safety ratchet for the whole tree to accommodate one file's test data, and a
+  # heredoc body can still be written out and executed. tests/utc-stamp-lint.bats already settled
+  # this same question the same way — its lying stamp is "ASSEMBLED, never written as a literal: a
+  # literal would make THIS suite a violation by its own rule, and a lint whose own tests violate it
+  # is not shippable."
   mk() {
     local case_="$1" base="${2:-probe.sh}"
     mkdir -p "$d/$case_/scripts"
     printf '#!/bin/bash\n' > "$d/$case_/scripts/$base"
-    cat >> "$d/$case_/scripts/$base"
+    sed 's/@OSA@/osascript/g' >> "$d/$case_/scripts/$base"
   }
 
   # ── RED: the real artifacts, one per primitive ────────────────────────────────────────────────
   # (a) THE scar shape — lr-handoff.sh:230 / lr-reset-poller.sh:218 / boot-resume-launch.sh:73.
   mk write_text <<'BODY'
-osascript <<OSA
+@OSA@ <<OSA
 tell application "iTerm2"
   set newWin to (create window with default profile)
   tell current session of newWin to write text "exec /bin/bash $LAUNCHER"
@@ -453,10 +468,10 @@ async_send_text("exec /bin/bash $LAUNCHER")
 BODY
   # (c) Terminal.app / focus-typing / tmux — the other three ways to make a shell run a line.
   mk do_script <<'BODY'
-osascript -e "tell application \"Terminal\" to do script \"exec /bin/bash $LAUNCHER\""
+@OSA@ -e "tell application \"Terminal\" to do script \"exec /bin/bash $LAUNCHER\""
 BODY
   mk keystroke <<'BODY'
-osascript -e 'tell application "System Events" to keystroke "exec /bin/bash claude"'
+@OSA@ -e 'tell application "System Events" to keystroke "exec /bin/bash claude"'
 BODY
   mk tmux <<'BODY'
 tmux send-keys -t "$pane" "exec /bin/bash $LAUNCHER" C-m
@@ -472,7 +487,7 @@ BODY
   # (e) the helper's OWN internals — it necessarily contains the raw primitive; that IS the helper.
   mk sanctioned <<'BODY'
 osa_type_verified() { # $1=pane $2=command
-  osascript - "$1" "$2" <<'AS'
+  @OSA@ - "$1" "$2" <<'AS'
 on run argv
   tell application "iTerm2" to tell session id (item 1 of argv) to write text (item 2 of argv)
 end run
@@ -491,7 +506,7 @@ BODY
   #      the exemption would be a hole anyone could walk through by wrapping their raw send.
   mk unsanctioned <<'BODY'
 osa_write_raw() { # $1=pane $2=command
-  osascript -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
+  @OSA@ -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
 }
 BODY
   # (e4) …and a raw send AFTER the helper closes, in the same file. Proves the exemption is scoped
@@ -512,8 +527,8 @@ case "$waited" in 60|150|300) "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>
 BODY
   # (g) osascript that types NOTHING — the single most common osascript call in this tree.
   mk notify <<'BODY'
-osascript -e 'display notification "gate red" with title "claude"' >/dev/null 2>&1 || true
-osascript -e 'display dialog "continue?" buttons {"no","yes"}' >/dev/null 2>&1 || true
+@OSA@ -e 'display notification "gate red" with title "claude"' >/dev/null 2>&1 || true
+@OSA@ -e 'display dialog "continue?" buttons {"no","yes"}' >/dev/null 2>&1 || true
 BODY
   # (h) PROSE. Every one of these appears verbatim in this repo today (desk-invariant.sh,
   #     handoff-fire.sh, cc-notify, mailbox-drain.sh). A detector that matches text ABOUT the defect
@@ -538,7 +553,7 @@ BODY
   # (h3) …and the OTHER direction of that same judgement, or it is worthless: identical verb,
   #      identical quoting, but inside an osascript/tell context, where it really does type.
   mk msg_vs_osa <<'BODY'
-osascript -e "tell current session of newWin to write text \"$cmd\"" >/dev/null
+@OSA@ -e "tell current session of newWin to write text \"$cmd\"" >/dev/null
 BODY
   # (i) the escape hatch, in both accepted placements…
   mk marker <<'BODY'
@@ -601,14 +616,14 @@ BODY
   # …and the narrow `path::function` form, which is what keeps the REST of a large file in scope.
   mk fnscope <<'BODY'
 as_write() { # $1=session $2=text
-  osascript -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
+  @OSA@ -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
 }
 BODY
   green fnscope "scripts/probe.sh::as_write"        "a path::function allowlist entry did not grandfather its function"
   red   fnscope "scripts/probe.sh::other_fn"        "a path::function entry for a DIFFERENT function grandfathered the violation anyway — the narrow form is not narrow"
   mk fnscope2 <<'BODY'
 as_write() { # $1=session $2=text
-  osascript -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
+  @OSA@ -e "tell application \"iTerm2\" to tell session id \"$1\" to write text \"$2\""
 }
 elsewhere() {
   "$IT2" session send -s "$id" "exec /bin/bash $LAUNCHER"
