@@ -457,3 +457,81 @@ and adversarially proven. M2 and M3 improve *reporting honesty* and *close-time 
 real, both specified in full here with their contracts and kill switches, neither on the critical path
 of the constraint this row was fired to dissolve. What cannot be closed by any amount of code in this
 row is the **rate** (A14/A15): it is unmeasurable until deploy advances, and that is row 1's.
+
+---
+
+## §10 Status log
+
+### 2026-08-09 — the arming mechanism was PROVEN and NEVER WIRED; the address split is NOT discharged
+
+Fired to ground-up "the mailbox is brittle between armed and unarmed state". The brief's premise was
+that arming needed designing. It did not: it needed **building**. Both halves below are re-derived
+from primary disk truth this session, not inherited.
+
+**Finding 1 — `asyncRewake` is real, is current on the binary this fleet actually runs, and is
+wired into the runtime, not merely present as a string.** Re-verified against
+`~/.claude-220/…/bin/claude.exe` (2.1.220 — the binary **all 14 live sessions run**, read off
+`ps`, not off a launcher's `--version`, per `[[version-identity-is-the-running-process-not-the-launcher]]`):
+
+| needle | 2.1.219 (proof) | 2.1.220 (this session) |
+|---|---|---|
+| `asyncRewake` | 7 | **7** |
+| `rewakeSummary` | 5 | **5** |
+| `rewakeMessage` | 4 | **4** |
+| `watchPaths` | 13 | **13** |
+
+Occurrence-count identity is a weak criterion on its own, so the **semantics** were read too. The
+field is consumed at the hook-dispatch call site — `asyncRewake:e.asyncRewake, rewakeMessage:…,
+rewakeSummary:…` passed into the backgrounding call, which then returns `backgrounded:!0`. It is a
+live per-hook config field, not a leftover symbol. **The 2026-07-29 verdict stands unmodified.**
+
+> ⚠️ Two probes in this re-verification returned a **false zero** before the real one landed, both the
+> same shape (`[[lookup-miss-is-not-absence]]`): a grep of `cli.js` (**that path does not exist** in a
+> 2.1.220 install — the subject is `bin/claude.exe`), and a grep of the global-npm 2.1.224 `claude.exe`,
+> which is a **500-byte error stub** ("claude native binary not installed") because postinstall never
+> ran. Either zero, recorded, would have refuted a true finding and killed this build. **A count of 0
+> from an instrument you have not proven can return non-zero is a non-verdict.**
+
+**Finding 2 — it was never wired. Anywhere.** The two greps that establish it, run this session:
+
+```bash
+grep -rn 'asyncRewake' ~/.claude/settings*.json ~/.claude-next/settings*.json   # → EMPTY
+git grep -ln asyncRewake origin/main -- settings                                # → EMPTY
+```
+
+Corroborated from the other side: **every commit in all-branch history mentioning `asyncRewake` is a
+`docs(…)` commit** (`git log --all -S asyncRewake` → 6 commits, all documentation). A branch-graveyard
+sweep found **no stranded implementation** on any of the 40 branches ahead of trunk. So this is not a
+landed-but-undeployed case and not a deploy-lag case: it was derived, proven, written up, and the
+build never happened. **That is the root cause of the reported armed/unarmed brittleness** — arming is
+still a thing a model must remember to do, exactly as before the proof.
+
+**Finding 3 — the P0 address split is NOT discharged, and the strand grew ~8×.** M1 is recorded above
+as "BUILT AND PROVEN" (`a8b3a093`). Read by content, that commit changed `hooks/lib/mailbox-pending.sh`,
+`hooks/mailbox-drain.sh` and a test file — **`bin/cc-notify` is not in its diff.** `mailbox_resolve_key`,
+whose own docstring at `mailbox-pending.sh:555` reads *"the one resolver every SENDER uses"*, has **zero
+call sites in any sender** (`git log -S` finds none, ever). The §4 M1 spec's 4-step send-side
+resolution order was never implemented past its fallback step.
+
+Live census of `~/.claude/mailbox/`, this session:
+
+| key shape | boxes w/ unacked | unacked lines |
+|---|---|---|
+| UPPER-case uuid (iTerm **pane**) | 62 | **14,329** |
+| numeric (kitty **pane** id) | 21 | 44 |
+| bare NAME (`deskA`, `DESK-UUID-1`) | 3 | 307 |
+| lower-case uuid (**session** id) | 52 | **83** |
+
+**14,763 unacked lines; 99.4% sit under a key the drain never reads at a live boundary.** The
+2026-07-29 figure was 1,747 in 79 boxes. Every one of the 21 numeric pane boxes **has an alias trail**
+— i.e. `mailbox_resolve_key` would have resolved it — which is the direct mechanical proof the writer
+never calls it.
+
+**Finding 4 — the exit-code inversion nobody named.** The 2026-07-29 remainder specifies W1 as *"a
+SessionStart hook `asyncRewake:true` running `cc-await-ping`, with the body moved to stderr"*. That
+names the stream problem and **misses a fatal one**: `asyncRewake` wakes on **exit 2**, while
+`cc-await-ping` exits **0 on mail-arrived** and **2 on timeout** (`bin/cc-await-ping:550`, `:575`).
+Registered as specified, the hook would stay **silent on every delivered message and fire a spurious
+wake on every idle timeout** — precisely inverted. Its rc 2 cannot simply be re-mapped: it is
+load-bearing for `cc-wait:138`. W1 therefore needs a **contract adapter**, which is what this session
+builds. A spec is not a build, and this is what the difference was hiding.
