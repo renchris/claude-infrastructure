@@ -202,6 +202,9 @@ Ranked by how directly each addresses the **measured** cause.
 2. **The sampling interval must be shorter than the event it watches.** 600 s cannot see an 11-min
    transition. Either sample far faster when any rung is non-green (adaptive cadence), or accept
    that this guard is forensic-only and say so in its own output.
+   → **DONE 2026-07-31, but by rejecting the adaptive half — see §9.** The first clause shipped
+   (`StartInterval` is 60, unconditionally); the *adaptive* mechanism named here was measured to be
+   unable to arm on this very series and must not be built. Do not re-file it.
 3. **It needs an actuator.** Detection without shedding cannot save an unattended box. The safe
    shed is bounded: refuse *new* session spawns above a coalition-proc ceiling. That is a decision
    with real cost (it can refuse legitimate work) and is flagged here rather than taken unilaterally.
@@ -277,6 +280,12 @@ fatal transition fits inside one interval, and the sample due mid-event never la
 the guard *able* to see the event; it does not make it *fast enough*. Until the cadence is adaptive
 (sample every ~60 s whenever any rung is non-green), this guard remains **forensic, not
 preventive** — and its own output should say so rather than implying protection it cannot deliver.
+
+> **SUPERSEDED 2026-07-31 21:47 by `9678fb89`, three hours after this paragraph was written — see
+> §9.** The cadence defect is fixed, and the parenthetical above is the one design that was ruled
+> out: an adaptive dwell can only arm *after* a non-green sample exists, and this series had none.
+> The fix is an unconditional 60 s. This paragraph is preserved because it is what the item filed
+> against it quoted verbatim.
 
 **Sequencing note.** Rung 6 is specified here rather than implemented, because implementing it
 touches `classify()`, the R6 positive-control probe table, and the JSON emitter in one edit, and a
@@ -456,3 +465,92 @@ unreproducible, the panic half was incommensurable — and each looked plausible
 Two numbers that agree on a story are not corroboration when neither was measured against the same
 population; see [[wrong-cause-corroborated-by-true-metric]] and
 [[positive-control-the-denominator]].
+
+---
+
+## 9. Cadence — the recommendation was implemented by REJECTING it (2026-08-09)
+
+§6.2 and §7 both prescribe an **adaptive** cadence: *"sample every ~60 s whenever any rung is
+non-green."* A backlog item was filed quoting that phrase verbatim. Driving it produced a refutation
+of both halves, so the disproof is recorded here rather than the change.
+
+### 9.1 The premise is false at every layer that could carry it
+
+`StartInterval` has not been 600 since 2026-07-31. Checked on 2026-08-09 in the four places the
+claim could be true, because a tree is not an enforcing store
+([[conclusion-must-reach-the-enforcing-store]]):
+
+| Layer | Read | Value |
+|---|---|---|
+| trunk | `git show origin/main:launchd/com.claude.capacity-alarm.plist` | `60` |
+| loaded file | `~/Library/LaunchAgents/com.claude.capacity-alarm.plist` | `60` — **byte-identical to trunk** (`diff` clean) |
+| launchd runtime | `launchctl print gui/501/com.claude.capacity-alarm` | `run interval = 60 seconds`, `runs = 2089`, `last exit code = 0` |
+| observed behaviour | 500 rows of `capacity-alarm.jsonl` | gaps **min 64 · p50 66 · p90 69 · max 174 s**; 1 gap >120 s; newest row 59 s old |
+
+The config and the behaviour agree, which is the part worth stating: a `StartInterval` job whose
+`ProcessType` was once `Background` had previously gone **6 h 24 m** between samples while still
+*configured* at 600 s (see the plist's own paragraph). Reading the key alone would not have settled
+this; the gap distribution is what does.
+
+### 9.2 The remedy is not stale — it is forbidden
+
+The fix commit is `9678fb89 fix(capacity): sample every 60s — a dwell loop would never have armed`
+(2026-07-31 21:47:01 -0700, ancestor of `origin/main`; diff is exactly `-600` / `+60`). Its
+reasoning is the refutation of the prescription above:
+
+> A dwell loop that tightens the cadence after a non-green reading can only arm **after** a bad
+> sample exists. The 2026-07-31 series went green → dead with no non-green sample in between, so a
+> dwell would never have armed. The sampler has to be fast ALWAYS, or it is fast only when it is
+> already too late.
+
+So the adaptive design is not merely unnecessary now that the interval is 60 s — it is *strictly
+worse than what shipped*, and on this incident's own series it would have delivered **zero** samples
+inside the fatal window, which is what 600 s already delivered. Implementing the item would have
+been a regression wearing a work item's clothes. Measured margin the unconditional 60 s buys, against
+this event's growth rate (~68 procs/min off a 257 baseline): rung 6 WARN at ~3.6 min, ALARM at
+~6.5 min, death at ~11–12 min — about five minutes of ALARM.
+
+### 9.3 Why it rotted in three hours, and what that costs
+
+The two commits are the same evening:
+
+```
+34ae6ea1  2026-07-31 18:43:02 -0700   feat(capacity): rung 6 counts the population…
+9678fb89  2026-07-31 21:47:01 -0700   fix(capacity): sample every 60s — a dwell loop would never have armed
+```
+
+The item was written in the **3 h 04 m** between them, and every word of it was true when written:
+rung 6 had just landed, the interval was still 600, and the adaptive design was still the standing
+recommendation. It cited rung 6 by a pre-rebase sha (`b6a34451`) that no longer resolves — this repo
+lands by rebase, so a dead pointer is not evidence of anything and the change had to be confirmed by
+content ([[read-the-diff-not-the-commit-subject]]).
+
+The generalisable part is that **an item's symptom and its remedy rot independently, and the remedy
+can rot into something actively harmful** ([[work-item-remedy-can-become-forbidden]]). A filed item
+carries a snapshot of a mutable premise that nothing re-reads at consumption time
+([[discovery-critic-premise-goes-stale]]); the dispatch-time premise check is the mechanism that
+catches it, and here it did.
+
+### 9.4 Why this section exists at all
+
+The item was generated from §6.2 and §7 of *this file*, which still read as open prescriptions. An
+unannotated recommendation whose implementation deliberately rejected it **re-emits** — the next
+sweep over this doc files the same item again, and the next worker spends the same slot proving the
+same disproof. Both sites now carry a pointer here. Annotating the generating doc is the durable
+half of a refutation; closing the item alone is not
+([[work-item-remedy-can-become-forbidden]], [[scan-revision-predates-the-fix]]).
+
+### 9.5 What remains genuinely open
+
+Unchanged by this section, and none of it is cadence:
+
+1. **§6.3 — the guard still has no actuator.** It reports and exits; the landed `capacity_gate()`
+   measured REFUSE 10/10 against real load (a permanent dispatch outage) and is documented as the
+   cautionary case in `docs/plans/MACHINE_CAPACITY_V2.md` §8.5.7. Detection without shedding still
+   cannot save an unattended box.
+2. **§8.5.2 — rung 6 still counts the wrong noun.** Population size cannot separate the classes;
+   total anon footprint per coalition can (139.50 GiB fatal vs a 28.18 GiB survived ceiling). That
+   re-nouning is a design change and is still filed rather than half-applied.
+
+Cadence is closed. The guard being **forensic rather than preventive** is item 1 above, not a
+sampling-rate question — the sensor now resolves the event it was blind to; nothing acts on it.
