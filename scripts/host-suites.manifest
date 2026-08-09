@@ -132,11 +132,27 @@
 # ENFORCEMENT — what these moves DO cost, recorded honestly. The whole-tree scan is fully preserved:
 # postland-verify runs both scripts STANDALONE and whole-tree-strict BEFORE the corpus, so a real
 # violation is a deterministic named RED that outranks a cut. The `--selftest` DISCRIMINATION proof
-# is NOT: the prelint invokes `./scripts/<lint>.sh tests`, never `--selftest`, so the 17 cases that
-# prove the ratchet actually goes RED on a new leak and on a stuck entry run only in these wrappers
+# was NOT, and this paragraph used to end there: the prelint invoked the scan only, so the cases that
+# prove the ratchet actually goes RED on a new leak and on a stuck entry ran only in these wrappers
 # and in scripts/nightly-regression.sh — whose launchd job com.claude.nightly-regression is staged
-# in ~/Library/LaunchAgents but NOT loaded (`launchctl print` → "Could not find service"). So today
-# that proof runs nowhere automatically. Tracked as backlog 76644e76aaae, not silently accepted.
+# in ~/Library/LaunchAgents but NOT loaded (`launchctl print` → "Could not find service"). Three
+# carriers, all dark, so the proof ran nowhere automatically. Tracked as backlog 76644e76aaae.
+#
+# CLOSED 2026-08-08 (76644e76aaae) — the prelint now runs `--selftest` too, in its OWN verdict
+# column. The reason it was not simply added earlier is the substance of the fix: a scan's exit 1
+# means THE TREE is dirty (attributable, revert-eligible) while a selftest's exit 1 means THE LINT
+# does not discriminate, which says nothing about the tree — so mapping the second onto the first
+# would let a broken lint auto-revert an innocent commit, and would additionally void the scan's
+# GREEN, since a ratchet that cannot fire reports "clean" on a dirty tree just as loudly. A failed
+# selftest therefore lands in the existing "no claim about the tree is available" column
+# (PRELINT_UNPROVEN ⇒ CUT: never red, never green) and SKIPS that lint's scan. An UNRUNNABLE
+# selftest deliberately does not skip it — otherwise fork pressure, the b4e49b4b5014 condition,
+# could silently disarm the ratchet. Cost measured in the utility band the prelints run in, load
+# 11.5: 67s + 5s + 4s + 1s ≈ 77s against a 600s per-lint bound and a corpus measured in hours.
+# See scripts/postland-verify.sh § THE INSTRUMENT CHECK; RED-proved in tests/postland-verify.bats
+# (C22b). This does not re-admit anything — the partition below is unchanged, and the case against
+# re-admission in WHY THEY NEVERTHELESS STAY HERE is untouched by it: the discrimination proof is
+# now enforced pre-corpus, standalone, which is the one place it was ever wanted.
 # Partly mitigated by being HERE rather than deleted: deploy-live.sh runs exactly these lines AFTER
 # an advance, so post-deploy — against the live layer, the one place a whole-tree assertion has a
 # stable subject — both wrappers run in full, `--selftest` included. That is a lagging check, not a

@@ -2060,6 +2060,114 @@ prelint_stub() { # <body> — installs it as the tree's walltime lint and lands 
   [ ! -f "$CC_POSTLAND_DIR/last-green" ] || false
 }
 
+# ── C22b THE INSTRUMENT CHECK — `--selftest` runs here, in its OWN verdict column ─────────────────
+# Backlog 76644e76aaae. The prelint used to run the whole-tree SCAN only, so the ~130 cases proving
+# these ratchets actually go RED on a new leak and on a stuck entry gated nothing: the bats wrappers
+# are partitioned to host-suites.manifest (post-deploy, lagging) and nightly-regression.sh's launchd
+# job is staged-not-loaded. The reason it could not simply be added is the whole point of this block:
+# a scan's exit 1 means THE TREE is dirty (attributable, revert-eligible) while a selftest's exit 1
+# means THE LINT is broken — and mapping the second onto the first lets a broken lint auto-revert a
+# commit that never touched it.
+selftest_stub() { # <selftest-body> <scan-body> — one stub that answers --selftest and the scan
+  # DIFFERENTLY, which is the only shape that can tell the two verdict columns apart. A stub that
+  # behaved identically either way would pass whatever the mapping does.
+  prelint_stub "if [ \"\${1:-}\" = \"--selftest\" ]; then $1; fi
+printf scan >> \"\$PLREC\"; $2"
+}
+
+@test "C22b: a lint whose --selftest FAILS is a CUT naming the LINT, and its scan never runs" {
+  # The load-bearing case. The scan here would exit 0 — a clean tree by a ratchet that cannot fire,
+  # which is the exact shape of a vacuous green. Pre-fix the run stamps GREEN off that scan; the
+  # instrument check is what makes "the ratchet does not discriminate" reachable at all.
+  selftest_stub 'echo "SELFTEST FAIL: the ratchet does not discriminate"; exit 1' 'exit 0'
+  tree="$(origin_tree)"
+  run env PLREC="$REC/scanran.txt" bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "cut" ]                                    # never a RED: the tree was not convicted
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                   # ...and never a GREEN: nothing was proven
+  [ ! -f "$REC/scanran.txt" ]                              # the scan was SKIPPED — no red to mint
+}
+
+@test "C22b: the CUT says the LINT is broken, not that the TREE is dirty" {
+  # The verdict CATEGORY the item asked for. Both halves of the split reach the operator through the
+  # same `cut` verdict, so the reason string is the only thing that tells them apart — and the two
+  # need opposite responses (fix the lint vs fix the tree). Asserted on the reason, not the verdict.
+  selftest_stub 'echo "SELFTEST FAIL: the ratchet does not discriminate"; exit 1' 'exit 0'
+  run env PLREC="$REC/scanran.txt" bash "$SUT" --run-if-needed
+  [ "${output#*the LINT is broken, not the tree}" != "$output" ]
+  # CONTROL — the OTHER cut population must NOT claim the lint is broken. Without this the assertion
+  # above could be satisfied by a string emitted on every cut, which would carry no information.
+  prelint_stub 'exit 2'
+  run bash "$SUT" --run-if-needed
+  [ "${output#*the LINT is broken, not the tree}" = "$output" ]
+}
+
+@test "C22b: a PASSING --selftest leaves the scan's RED intact (the positive control)" {
+  # Without this, "cut" above could mean the instrument check disabled prelint reds altogether
+  # rather than routing one specific outcome away from them.
+  selftest_stub 'exit 0' 'echo "  RATCHET stale entry"; exit 1'
+  tree="$(origin_tree)"
+  run env PLREC="$REC/scanran.txt" bash "$SUT" --run-if-needed
+  [ -f "$REC/scanran.txt" ]                                # the scan DID run
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]
+  run jq -r '.failing[0]' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "scripts/test-walltime-lint.sh" ]
+}
+
+@test "C22b: a --selftest that could not RUN still lets the scan judge — pressure may not disarm the ratchet" {
+  # DELIBERATELY NOT SYMMETRIC with the exit-1 case. Exit 2 is the fork-exhaustion case (b4e49b4b5014):
+  # if an unrunnable instrument check suppressed the scan, then load — the very condition that
+  # produces exit 2 — would silently switch the ratchet off, which is the one failure direction this
+  # mechanism exists to prevent. Unproven-but-scanned is fail-closed toward MORE proof.
+  selftest_stub 'echo "⛔ UNUSABLE — a predicate failed to run" >&2; exit 2' 'echo "  RATCHET stale entry"; exit 1'
+  tree="$(origin_tree)"
+  run env PLREC="$REC/scanran.txt" bash "$SUT" --run-if-needed
+  [ -f "$REC/scanran.txt" ]                                # the scan ran anyway
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                                    # ...and a real violation still convicts
+}
+
+@test "C22b: a lint carrying NO --selftest dispatch is scanned as before, never deadlocked" {
+  # Same rule as an absent lint: a tree cannot be judged by a check it does not carry. Inventing a
+  # non-verdict here would make every custom CC_POSTLAND_PRELINTS list a permanent CUT — no green
+  # ever claimable — which is the deadlock shape this file has already paid for twice.
+  prelint_stub 'printf scan >> "$PLREC"; echo "  RATCHET stale entry"; exit 1'
+  tree="$(origin_tree)"
+  run env PLREC="$REC/scanran.txt" bash "$SUT" --run-if-needed
+  [ -f "$REC/scanran.txt" ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" = "red" ]                                    # judged on its scan, not stalled
+}
+
+# The two halves of the seam are SEPARATE tests, one fixture each, because `--run-if-needed` is
+# idempotent on a tree: a second invocation inside one test sees the stamp the first one wrote and
+# skips the prelint entirely, so the record reads EMPTY and the assertion fails for a reason that
+# has nothing to do with the seam. Both assert on which TOKENS appear rather than on the exact
+# string — the requeue loop calls run_target twice in one process, so an `= "scan"` equality reads
+# "scanscan". `st` and `scan` share no substring, so presence/absence is exact.
+@test "C22b: CC_POSTLAND_PRELINT_SELFTEST=off disables the instrument check" {
+  selftest_stub 'printf st >> "$PLREC"; exit 1' 'printf scan >> "$PLREC"; exit 0'
+  tree="$(origin_tree)"
+  run env PLREC="$REC/off.txt" CC_POSTLAND_PRELINT_SELFTEST=off bash "$SUT" --run-if-needed
+  rec="$(cat "$REC/off.txt" 2>/dev/null || true)"
+  [ "${rec#*scan}" != "$rec" ] || { echo "off.txt=[$rec] — the scan did not run"; false; }
+  [ "${rec#*st}" = "$rec" ] || { echo "off.txt=[$rec] — the selftest ran despite the seam being off"; false; }
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ "$output" != "cut" ]                                   # ...so the broken instrument cut nothing
+}
+
+@test "C22b: the instrument check is ON by default — the seam must be SET to lose it" {
+  # The half that actually matters. A sensor whose shipping path is "off" ships blindness, and this
+  # one exists precisely because the proof was running nowhere; the test above would be satisfied by
+  # a check that never runs at all.
+  selftest_stub 'printf st >> "$PLREC"; exit 1' 'printf scan >> "$PLREC"; exit 0'
+  run env PLREC="$REC/on.txt" bash "$SUT" --run-if-needed
+  rec="$(cat "$REC/on.txt" 2>/dev/null || true)"
+  [ "${rec#*st}" != "$rec" ] || { echo "on.txt=[$rec] — the selftest did NOT run by default"; false; }
+  [ "${rec#*scan}" = "$rec" ] || { echo "on.txt=[$rec] — the scan ran after a failed selftest"; false; }
+}
+
 @test "C22: the lint runs whole-tree STRICT — an inherited own-set cannot narrow it" {
   # Both lints distinguish own-set ABSENT (judge the whole tree) from set-but-EMPTY (judge
   # nothing) via ${VAR+set}. If the verifier leaked its own environment through, a lander's
