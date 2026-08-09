@@ -3,7 +3,8 @@
 **Date:** 2026-08-09
 **Wave:** S6.4 Phase B ("cut active-session occupancy"), `docs/plans/CONCURRENCY_PROGRAM.md`
 **Instruments (this wave):** `scripts/hook-dispatch-bench.sh` (+ `tests/hook-dispatch-bench.bats`)
-**Landed change:** the `--machine` memo in `scripts/wrap-ledger.sh` (+ `tests/wrap-ledger-cache.bats`)
+**Landed change:** none to the runtime — the one attempted (a `wrap-ledger --machine` memo) was
+measured, found to break the ledger, and **withdrawn** (§5)
 **Inherits:** `docs/research/idle-session-occupancy-2026-08-09.md` (Wave A — residency is free)
 **Closes as measured:** `docs/plans/HOOK_CHAIN_COST.md` §8's standing caveat, open since it was written
 
@@ -17,10 +18,15 @@ directions.**
 | Lever | §S6.4's framing | What the measurement says |
 |---|---|---|
 | **Serialise the hooks** | "the count is not the variable" — implies a large win | **Premise confirmed, prize NOT first-order.** Hooks *are* dispatched concurrently (§2, newly measured). But the load integral is invariant under serialisation (§3): the entire win is a second-order queueing term that exists only in the contended regime. The lever is real and it is *conditional*, which is not how the plan reads. |
-| **Shorten what holds a slot** | "cache branch/status per turn"; `git rev-parse` 17.95 ms vs 2.20 ms, an "8.2× saving" | **Right direction, wrong target and an unreproducible ratio.** The scattered `rev-parse` calls are the minority of the cost. One amplifier — `wrap-ledger.sh`, called by six Stop hooks — is ~80% of a Stop's git subprocesses (§4). Memoising it at the chokepoint: **60 → 27 git subprocesses per Stop cold, 18 warm — landed** (§5). It needed single-flight to be a saving at all: benchmarked in the wrong arrival pattern it read 2.22× while actually being 20% *worse* (§5.2). The 17.95/2.20 pair does not reproduce (§6). |
+| **Shorten what holds a slot** | "cache branch/status per turn"; `git rev-parse` 17.95 ms vs 2.20 ms, an "8.2× saving" | **Right direction, wrong target and an unreproducible ratio.** The scattered `rev-parse` calls are the minority of the cost. One amplifier — `wrap-ledger.sh`, called by six Stop hooks — is ~80% of a Stop's git subprocesses (§4). Memoising it at the chokepoint measured **60 → 27 git subprocesses per Stop** and was then **WITHDRAWN**: it makes the ⛔ rung go stale, because no cheap fingerprint covers the ledger's non-git inputs (§5). The 17.95/2.20 pair does not reproduce (§6). |
 
 **The single most useful sentence for the next wave:** the plan's own cost model pointed at the wrong
 files, because nobody had counted the calls — and the count was reachable in an afternoon.
+
+**What is landed is the evidence and the instruments, not a speedup.** That is the honest summary of
+this wave: the serialisation lever is now measured rather than assumed, the git cost is now located
+rather than guessed, and the obvious fix for the latter was built, measured, and rejected on its own
+evidence.
 
 ## 2. Claude Code dispatches a matcher group's hooks CONCURRENTLY
 
@@ -104,6 +110,38 @@ an uncontrolled nuisance" as fixed. Sweep the concurrency deliberately instead o
 the box was doing, subtract a per-cycle ambient, and divide by completed work, and the term is
 directly observable. `scripts/hook-dispatch-bench.sh` is that instrument.
 
+### 3.1 Measured: parallel dispatch costs ~3.5× the occupancy of serial, for identical work
+
+`scripts/hook-dispatch-bench.sh`, 3 simulated sessions × 8 members, 4 s windows, 5 interleaved
+cycles, ambient subtracted per cycle, divided by completed dispatches:
+
+```
+                     R-seconds per dispatch     per-cycle ratios
+serial                       0.09689
+parallel                     0.31308            2.10  2.66  3.46  3.70  6.43
+                                                MEDIAN 3.46x   (spread 2.10..6.43)
+```
+
+Identical work per dispatch in both arms — 8 members, same bodies. The serial arm completed ~132
+dispatches per window against the parallel arm's ~430, and dividing by that is what makes the
+comparison legitimate.
+
+⚠️ **This number is DIRECTIONAL, not certified, and the rig says so itself.** The null control run
+immediately before it, under the same ambient, reported a **median of exactly 1.00× — correct — with
+a spread of 0.29..1.51**. So the rig is *unbiased and underpowered*: its noise floor is ±50%, which
+is wider than most effects worth finding. By the acceptance rule written into the bench, that is a
+FAILED control and the live median is not quotable bare.
+
+What can be said honestly is the comparison of the two ranges: **the live effect's floor (2.10)
+sits above the control's ceiling (1.51)**, and all five live cycles exceeded every control cycle but
+one. That is real evidence for the *direction and rough scale* of §3's queueing term, and it is not
+a measurement of its magnitude. The box was never quiet during this wave — a sibling worktree held a
+94%-CPU python job throughout, and the bench refused outright (exit 4, load floor) on three earlier
+attempts.
+
+**To certify it:** re-run both arms on a box whose ambient is stable within 2×, per §7's prediction 2.
+The instrument is landed and the run is a single command.
+
 **The consequence for `hook-chain.sh` is a re-opening, not a reversal.** Its shelving verdict
 ("REAL 6-guard chain, serial 174 ms · dispatcher exec ~180 ms") is a *wall-clock* result and remains
 true. Wall-clock is the quantity that does *not* move under serialisation — the dispatcher trades
@@ -152,81 +190,91 @@ One further asymmetry worth naming: `session-continue.sh:529` pays the full 10-c
 the rung test at `:532` (`[ "$rung" = "🔧" ] || return 1`) — so the most expensive read on the event
 is taken on every Stop including the ones where its answer cannot change the outcome.
 
-## 5. The landed fix, and why it went at the chokepoint
+## 5. The obvious fix, built and then WITHDRAWN on its own evidence
 
-Memoising at each call site would be **six edits to six safety-adjacent hooks**. The memo went into
-`wrap-ledger.sh` itself — the one chokepoint all six already funnel through (MEMORY.md
-`enforcement-must-live-at-the-chokepoint`).
+The memo was written, tested (18 tests, 4 mutation controls), measured, committed — and then removed
+before landing, because the consumer suite refuted it. The sequence is recorded in full because each
+step produced a plausible number that the next step destroyed, and the next reader deserves the
+reasons rather than the conclusion.
 
-**Measured on this repo, one Stop = 6 consumers, dispatched the way §2 says they actually are —
-CONCURRENTLY:**
+### 5.1 What was built
 
-```
-WRAP_CACHE=off (today)                     60 git subprocesses
-memo, COLD  (all six arrive together)      27          ⇒ 2.22×
-memo, WARM  (unchanged tree, within TTL)   18          ⇒ 3.33×
-```
+`wrap-ledger.sh --machine` memoised at the chokepoint all six consumers already funnel through
+(MEMORY.md `enforcement-must-live-at-the-chokepoint`), keyed by content — HEAD + the full porcelain
+digest + the mtimes of the non-git stores the rungs read — with a TTL as a second bound, atomic
+`mktemp`+`mv` writes, and `WRAP_CACHE=off` degrading to today.
 
-### 5.2 The sequential figure was real, and it measured the wrong arrival pattern
+### 5.2 It shipped INERT, then it shipped a REGRESSION — two measurements, two corrections
 
-The first version of this memo had no single-flight, and it was measured by calling `--machine` six
-times **in sequence**: 60 → 27, a clean 2.22×. That number was arithmetically correct and
-operationally meaningless, because §2 of this very document had already established that the six
-consumers do **not** arrive in sequence — they are dispatched inside one 45 ms window.
+**The TTL did not exist.** The first draft bounded freshness with `find -mmin +"$(TTL/60)"`. BSD
+`find` takes `-mmin` in whole minutes and truncates, so every TTL under 60 s evaluated as `+0`, which
+matches nothing for a file written this minute, and therefore reported **every** entry as fresh.
+Nothing about the output looked wrong. Its own test (`a 0 s TTL must never serve a hit`) is what
+surfaced it — the repo's indexed `spec-named-mechanism-may-be-prose-only` class.
 
-Re-measured in the shape production actually uses:
+**Then it was benchmarked in the wrong arrival pattern.** Six sequential `--machine` calls read
+60 → 27 git subprocesses, a clean 2.22×. But §2 of this same document had already established that
+the six consumers do **not** arrive in sequence — they land inside one 45 ms window. Re-measured in
+production shape:
 
 ```
 WRAP_CACHE=off                             60 git subprocesses
 memo, six CONCURRENT, cold                 72          ⇒ 20% WORSE
+memo, six CONCURRENT, cold + single-flight 27          ⇒ 2.22×
+memo, six CONCURRENT, warm                 18          ⇒ 3.33×
 ```
 
-All six miss together, all six compute, and the six fingerprints become pure added cost. **The memo
-was a regression on its own hot path** — the first Stop after any tree change, which is the common
-case — and the sequential bench could not see it.
+Cold, all six miss together, all six compute, and the six fingerprints are pure added cost. **The
+memo was a regression on its own hot path** — the first Stop after any tree change — and the
+sequential bench was structurally unable to see it. Fixed with bounded single-flight (a `mkdir` lock
+plus **one** sleep for the losers; a 40 ms poll loop would fork ~50 sleeps per loser and cost more
+than the git calls it saves).
 
-Fixed with bounded **single-flight**: the first caller takes a `mkdir` lock and computes; the others
-take one short sleep and re-read the atomically-`mv`'d result. Deliberately **one sleep, not a poll
-loop** — `sleep` is a fork on this box, so a 40 ms poll over a 2 s bound would fork ~50 times per
-loser and cost more than the git calls it saves. Fail-open at every step: cannot lock ⇒ compute;
-waited and still nothing ⇒ compute; stale lock from a crashed winner ⇒ clear it and compute, never
-wait behind a corpse. Pinned by `F1` (concurrent cold must be strictly cheaper than uncached), `F3`
-(a backdated lock must not be waited behind) and the `F4` mutation (removing the lock must make the
-concurrent path regress — if it did not, `F1` proves nothing).
+### 5.3 And then the consumer suite refuted the whole approach
 
-**The generalisable lesson, and it is the sharper of this wave's two:** a cache benchmarked in an
-arrival pattern its callers do not use will report the saving it was hoping for. The correction was
-available in §2 of the same document — the concurrency finding and the cache were measured hours
-apart and it took a deliberate re-check to connect them. *A cache may never make the uncached path
-worse than uncached*, and that is a property of the **arrival pattern**, not of the hit rate.
+`tests/wrap-ledger.bats` went **3 red** with the memo on and **0 red** with `WRAP_CACHE=off` — the
+same 0 as `origin/main`, so the attribution is unambiguous. The three:
 
-**Keyed by content, not by time.** The key is HEAD + the full porcelain digest + the mtimes of the
-non-git stores the rungs read (decisions ⇒ ⛔, backlog ⇒ 👤, failed migrations ⇒ 🚀). A pure TTL
-would let a tree go dirty inside the window and still serve a ✅ — the false-done this ledger exists
-to make impossible. `git status --porcelain` is therefore paid on every call and deliberately **not**
-replaced by a stat-bit shortcut: `wrap-ledger.sh:157-169` already records that experiment and its
-false-clean result.
+```
+37  open class-B from THIS session ⇒ NOT ⛔
+38  a vetoed/actioned class-C     ⇒ NOT ⛔
+40  dirty tree + a blocking decision ⇒ RUNG=⛔
+```
 
-**The residual staleness, stated rather than hidden:** a sibling's fetch can move the trunk ref
-without moving any keyed input, so a hit inside the TTL can serve an `AHEAD` count up to TTL seconds
-old. That errs toward **📦 still-parked** and never toward ✅ — the direction that matters, since the
-hazard the ledger names is FM1 park-and-call-it-done, not its reverse.
+All three are **⛔ rung** cases, and the cause is not tunable:
 
-`WRAP_CACHE=off` calls straight through. It is a *cache, not a guard*, so disabling it costs forks
-and changes no verdict — the opposite of `hook-chain.sh`'s no-skip law, and the reason a kill switch
-is safe here where it would be a defect there.
+- **A directory's mtime does not move when a file's CONTENT changes.** Test 38 flips a class-C packet
+  from open to vetoed *inside an existing file*. The store directory is untouched, so a fingerprint
+  built from directory mtimes cannot see it — the memo serves the pre-veto ⛔ over a decision the
+  operator has already resolved.
+- **`stat` mtime is second-granular**, so even content-addressed changes that *do* touch a directory
+  are invisible to a second call in the same second.
 
-### 5.1 The TTL shipped INERT, and its own test is what caught it
+The fix that would work is a **content digest of the stores**, and it was priced rather than assumed:
+`find + stat + cksum` over the live stores costs **16.46 ms** against 115 decision files today. That
+is more than two git calls, paid by every one of the six consumers, and it **grows without bound with
+the decision store** — a new unbounded per-Stop cost introduced by a change whose entire purpose is
+removing unbounded per-Stop cost.
 
-The first draft bounded freshness with `find "$CACHE_FILE" -mmin +"$(TTL/60)"`. **BSD `find` takes
-`-mmin` in whole minutes and truncates**, so every TTL under 60 s evaluated as `+0`, which matches
-nothing for a file written this minute — and therefore reported **every** entry as fresh. The bound
-did not exist. Nothing about the output looked wrong; the cache worked, the parity tests passed, and
-the documented second bound was prose. `C3` (a 0 s TTL must never serve a hit) failed and is what
-surfaced it. Replaced with an explicit `stat`/`date` age in seconds.
+**So the memo is withdrawn, and the reason is the shape of the problem, not the quality of the
+attempt.** The ⛔ rung outranks everything and is derived from an unbounded content-addressed store
+that no cheap fingerprint covers. `wrap-ledger.sh` is byte-identical to trunk.
 
-This is the repo's own indexed `spec-named-mechanism-may-be-prose-only` class, committed inside a
-wave whose whole subject is that a plan's mechanisms had never been checked against the tree.
+### 5.4 The design that would work, recorded so it is not rebuilt from scratch
+
+**Split the computation, not the cache.** The ledger's fields divide cleanly:
+
+| fields | source | cacheable? |
+|---|---|---|
+| `DIRTY · AHEAD · CHERRY · UNLANDED · SHAS · TRUNK · LIVE_*` | git | **yes** — HEAD + porcelain is a complete and cheap key |
+| `BLOCKED · BLOCKED_SRC` | `cc-decide list --open --class C --json` | no — one bounded fork, always fresh |
+| `YOURS · YOURS_SRC` | `cc-backlog list --blocked --json` | no — one bounded fork, always fresh |
+
+Cache the git half; always run the two bounded store forks; re-derive `RUNG` from the union. That
+keeps every rung exact while still collapsing ~7 of the 10 git subprocesses, and the two store forks
+were already being paid on every call. It was **not** attempted here because re-deriving `RUNG`
+outside its existing code path is a change to the close protocol's core, and this wave had already
+spent its risk budget on the two corrections above.
 
 ## 6. Correcting the plan's own cost figures
 
@@ -263,8 +311,9 @@ Each is cheap and re-runnable with the landed instruments:
 3. `hook-dispatch-bench.sh` at `--members 1` must report ~1.00 whatever the box is doing: with one
    member, parallel and serial dispatch are the same operation. A ratio materially off 1.00 there
    indicts the rig, not the subject.
-4. A `git` counting shim on PATH during one real Stop reports **≤30** git subprocesses with the memo
-   live and **≥60** with `WRAP_CACHE=off`. A figure near 60 in both refutes §5.
+4. A `git` counting shim on PATH during one real Stop reports **≥60** git subprocesses today. That is
+   the standing cost §5.4's split-cache design would cut to ~20; a figure well under 60 would mean
+   the census in §4 is wrong about the consumer count.
 5. The bench's ratio should *rise* with `--sessions` and fall toward 1.00 as the box empties, because
    the effect is a queueing term. A ratio flat in concurrency would refute §3's mechanism while
    leaving its arithmetic intact — and would be the most interesting negative result available here.
@@ -299,6 +348,9 @@ output — the same pattern Wave A §9 recorded, and the reason that section is 
   certifies whatever it is pointed at.
 - **The TTL bound was inert** (§5.1) — `find -mmin` truncation, caught only because a test asserted
   against it rather than reading the code.
+- **A fix that passed its own suite and failed its consumer's** (§5.3). 18 tests and 4 mutation
+  controls, all green, over a fingerprint that could not see a file's contents change. The suite
+  tested what the cache *does*; only the consumer tested what the ledger must *mean*.
 - **A benchmark in the wrong arrival pattern** (§5.2) — six sequential calls reported a 2.22× saving
   for a change that was 20% *worse* in the concurrent shape its callers actually use. The refuting
   fact was already written down in §2 of this same document.

@@ -1121,7 +1121,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 |---|---|---|---|
 | **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
 | **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
-| **B** — cut active occupancy (serialise hooks, cache git) ✅ **LANDED 2026-08-09** (§S6.4-MEASURED) | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache  **Outcome: one premise confirmed-but-conditional, one retargeted.** Hooks ARE dispatched concurrently (newly measured, closes HOOK_CHAIN_COST §8) but serialisation is a second-order queueing win only — `hook-chain.sh` is RE-OPENED, not reversed, since its wall-clock verdict is silent on occupancy. The git lever was pointed at the wrong event: PreToolUse/Bash forks ZERO git on its hot path; Stop forks ~72-82 because `wrap-ledger.sh` is called 6x. Memoised at that chokepoint: **60 -> 27 per Stop, 2.22x**. |
+| **B** — cut active occupancy (serialise hooks, cache git) — **MEASURED 2026-08-09, no runtime change** (§S6.4-MEASURED) | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache  **Outcome: evidence + instruments landed, NO runtime change.** Hooks ARE dispatched concurrently (newly measured, closes HOOK_CHAIN_COST §8) but serialisation is a second-order queueing win only — `hook-chain.sh` is RE-OPENED, not reversed, since its wall-clock verdict is silent on occupancy. The git lever was pointed at the wrong event: PreToolUse/Bash forks ZERO git on its hot path; Stop forks ~72-82 because `wrap-ledger.sh` is called 6x. Memoising that chokepoint measured 60 -> 27 per Stop and was WITHDRAWN — it staled the ⛔ rung and no cheap fingerprint covers the stores; the working design is recorded, not built. Bench: parallel dispatch = **3.46x** serial occupancy for identical work (directional — the null control is unbiased but underpowered). |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
 | **E** — headless / render — **precondition MEASURED 2026-08-09, see §S6.7-MEASURED; substrate NOT built** | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. **Outcome: precondition PASSES (no pty, all six hooks fire, mail reaches the model) — and the pty wall it was re-justified on is at ~509 panes, not 150: the census carried a constant +16 from static legacy `/dev/ttys[0-9a-f]` nodes. Render (140 panes) binds 3.6× sooner and is E's original rationale. Substrate declined pending two named comms gaps.** | **instruments + one additive gauge row** — `scripts/pty-census.sh`, `scripts/headless-precondition-probe.sh`, `tests/{pty-census,headless-precondition-probe}.bats`, and a non-verdict `ptys` row in `scripts/render-census.sh`. It did **not** touch `handoff-fire.sh`, any spawn/fire/close path, or `capacity-admit.sh`. |
 | **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
@@ -1322,28 +1322,34 @@ live-layer arm) and **six Stop hooks each call it on the same event** (`session-
 `operator-readout.sh:426`/`:991`). **Roughly six of every seven git subprocesses in a Stop are
 literally the same query as another one in the same event.**
 
-**LANDED: the memo goes at the chokepoint, not at six call sites.**
+**BUILT, MEASURED, AND WITHDRAWN — the memo cannot be made correct cheaply.** Six concurrent
+consumers cost 60 git subprocesses today; the memo (with bounded single-flight, without which it was
+a 20%-WORSE regression) cut that to 27 cold / 18 warm. It was then **removed before landing**:
+`tests/wrap-ledger.bats` went **3 red** with it on and **0 red** with it off — the same 0 as
+`origin/main`. All three are ⛔-rung cases, and the cause is not tunable:
 
-```
-one Stop = 6 consumers, dispatched CONCURRENTLY (the shape §2 measured)
-WRAP_CACHE=off (today)                     60 git subprocesses
-memo, COLD  (all six arrive together)      27          ⇒ 2.22×
-memo, WARM  (unchanged tree, within TTL)   18          ⇒ 3.33×
-```
+- **A directory mtime does not move when a file CONTENT changes** — a class-C packet flipping from
+  open to vetoed *inside an existing file* is invisible to any fingerprint built from store mtimes,
+  so the memo serves a stale ⛔ over a decision the operator already resolved.
+- The correct key is a **content digest of the stores**, priced at **16.46 ms** over 115 decision
+  files — more than two git calls, paid by all six consumers, and **growing without bound with the
+  store**. A new unbounded per-Stop cost, introduced by a change whose purpose is removing one.
 
-🚨 **The memo needed bounded SINGLE-FLIGHT or it was a regression, and the first bench could not see
-it.** Measured six times *in sequence* it read a clean 60 → 27. But §2 of this same wave had already
-established that the six consumers arrive inside one 45 ms window — so cold, all six miss together,
-all six compute, and the fingerprints are pure added cost: **72 vs 60, i.e. 20% WORSE on the first
-Stop after any tree change**, which is the common case. Fixed with a `mkdir` lock plus ONE short
-sleep for the losers (a poll loop would fork ~50 sleeps per loser and cost more than it saves),
-fail-open at every step. **Lesson: a cache benchmarked in an arrival pattern its callers do not use
-reports the saving it was hoping for.**
+`scripts/wrap-ledger.sh` is byte-identical to trunk. **The design that would work is recorded in the
+findings doc §5.4 so it is not rebuilt from scratch:** split the computation rather than the cache —
+cache the git-derived fields (HEAD + porcelain is a complete, cheap key for them), always run the two
+already-bounded store forks, re-derive `RUNG` from the union. That keeps every rung exact while still
+collapsing ~7 of the 10 git subprocesses. Not attempted here because re-deriving `RUNG` outside its
+existing code path is a change to the close protocol's core.
 
-Keyed by **content** (HEAD + full porcelain digest + the mtimes of the non-git stores the rungs read),
-never by time alone — a pure TTL would let a tree go dirty inside the window and still serve a ✅.
-Residual: a sibling's fetch can serve an `AHEAD` up to TTL seconds stale, which errs toward 📦 and
-never toward ✅. `WRAP_CACHE=off` degrades to today (a cache, not a guard).
+**MEASURED, and it is this wave's primary evidence: parallel dispatch costs ~3.5× the occupancy of
+serial for IDENTICAL work.** 3 sessions × 8 members, 5 interleaved cycles, ambient subtracted per
+cycle, divided by completed dispatches: serial **0.097** vs parallel **0.313** R-seconds/dispatch,
+median ratio **3.46×** (per-cycle 2.10 · 2.66 · 3.46 · 3.70 · 6.43). ⚠️ **Directional, not
+certified** — the null control run under the same ambient reported a median of exactly 1.00× (correct)
+with a spread of 0.29..1.51, i.e. the rig is *unbiased and underpowered*. What holds is that the live
+floor (2.10) clears the control ceiling (1.51). The box was never quiet this wave. Certifying it is
+one command on a calm box.
 
 ⚠️ **§S6.4's own cost figures do not reproduce.** "17.95 ms vs 2.20 ms → 8.2×" mixes wrapper-billed
 and marginal conventions — the artifact `hook-chain.sh:12-16` already flags against its own numbers.
