@@ -1,0 +1,65 @@
+# coldcompile.patterns — the ignition table read by hooks/coldcompile-admit.sh (CONCURRENCY_PROGRAM §S6.5).
+#
+# FORMAT (one row per line):   <class><TAB><ERE>
+#   <class>  a short label, letters/digits/dash only. It is telemetry ONLY — it reaches
+#            ~/.claude/logs/ignition-gate.jsonl as the `class` field so a later census can say
+#            WHICH kind of ignition was staggered. It never changes the gate's behaviour, and the
+#            hook drops any row whose class is not [A-Za-z0-9-]+ rather than emitting it.
+#   <ERE>    an extended regex matched against the WHOLE command with `grep -E`. First match wins.
+#   `#` comments and blank lines are ignored. The separator is a literal TAB, not spaces.
+#
+# UNLIKE config/qos-*.patterns, a row here fires on COMPOUND commands too — that is the entire
+# point. Measured over ~/.claude/logs/bash-commands.log{,.gz} (2026-07-19 → 08-09, 49,510 agent
+# Bash entries), 232 entries actually RUN an ignition tool and **231 of them are compound**:
+# `cd X && (npx next dev … &) ; sleep 25; tail …`, `PORT=3033 NODE_OPTIONS=… pnpm dev`, multi-line
+# scripts with heredocs. The qos hook's simple-command-only rule is right for a PREFIX (string
+# surgery on a compound demotes the wrong half); it is fatal for this one, which is why the gate is
+# prepended as a separate statement (`gate ; <original>`) instead of wrapped. See bin/cc-ignition-gate
+# § WHY NOT A WRAPPER.
+#
+# WHY THESE ROWS. Every one is an ignition path named in the panic evidence
+# (docs/research/crash-rootcause-2026-08-09.md §1–§2), not a guess:
+#   next-dev    `next dev` cold compile — the ignition of panics #5 and #6 (18→372 procs in 90 s;
+#               700 procs / 38.9 GB of postcss workers under `next-server (v16.2.6)` pid 36923).
+#   next-build  `next build` — measured as a 3.5 GB pair in the 08-09 00:31 dev-tooling singles.
+#   pkg-script  `pnpm|npm|yarn|bun` dev/build/design:gate — the spelling that ignited panic #4
+#               (a backgrounded `pnpm design:gate` → `next dev` cold compile). The package-manager
+#               script is matched as well as the binary because the binary is invoked from inside
+#               node_modules/.bin, where no PATH shim and no argv table can see it in advance.
+#
+# `next start` is deliberately absent — it serves a prebuilt app and compiles nothing.
+# `next lint`, `tsc`, `eslint` are absent — they are single heavy processes, which is the CPU-ceiling
+# hook's job (config/qos-bound.patterns), not a fan-out burst.
+#
+# DELETING A ROW IS THE PER-PATTERN KILL SWITCH; CC_IGNITION_GATE=off kills the gate itself and
+# CC_COLDCOMPILE_ADMIT=off kills the hook. Three independent off-switches, none of which requires
+# a code change.
+#
+# EVERY ROW IS ANCHORED AT COMMAND POSITION, NOT AT A WORD BOUNDARY — and that choice is
+# calibrated, not stylistic. A word-anchored ERE matches this fleet's own vocabulary: agents
+# constantly `grep -rn "pnpm dev"`, `echo "=== next dev ==="`, and write briefs about the very
+# storm this table exists to stop. Measured over the 49,510-entry Bash corpus:
+#
+#   ERE shape                                   entries matched
+#   ─────────────────────────────────────────────────────────────
+#   word-anchored (`(^|space)<tool>`)                   161      ← ~54 of them are mentions, not runs
+#   command-position + wrapper allowance                145      ← this table
+#
+# The 16-entry difference is dominated by prose (`echo "=== does next dev write into .next root"`,
+# `git grep -n "…pnpm build…"`). Gating a `grep` costs nothing while the box is clear — but during
+# a genuine burst it would stall an unrelated read for the gate's whole budget, which is the
+# false-positive this anchoring buys out. (memory: pgrep-f-matches-agent-briefs — an argv census on
+# this box read 50 where the truth was 1, for exactly this reason.)
+#
+# COMMAND POSITION = start of any line (`^`, which grep -E applies per line, so multi-line commands
+# are covered line by line), or immediately after `;`, `&`, `&&`, `|`, `||`, `(`.
+# THE WRAPPER ALLOWANCE is what keeps the anchoring from being too tight: a real ignition is
+# routinely preceded by env assignments and process wrappers, and dropping those would re-create
+# the coverage hole the anchoring was supposed to trade for precision. The allowed prefixes are
+# `VAR=value`, nohup, setsid, exec, env, command, time, nice [-n N], timeout <arg>,
+# taskpolicy -c <band> — each repeatable, in any order. Two live corpus rows that exist ONLY
+# because of it: `nohup env PORT=3950 pnpm dev >/tmp/bs-dev.log 2>&1 &` and
+# `(setsid env PORT=3950 pnpm dev > /tmp/w7-dev.log 2>&1 &)`.
+next-dev	(^|[;&|(])[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|nohup|setsid|exec|env|command|time|nice([[:space:]]+-n[[:space:]]*[0-9]+)?|timeout[[:space:]]+[^[:space:]]+|taskpolicy[[:space:]]+-c[[:space:]]+[a-z]+)[[:space:]]+)*(npx[[:space:]]+)?next[[:space:]]+dev([[:space:]]|$)
+next-build	(^|[;&|(])[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|nohup|setsid|exec|env|command|time|nice([[:space:]]+-n[[:space:]]*[0-9]+)?|timeout[[:space:]]+[^[:space:]]+|taskpolicy[[:space:]]+-c[[:space:]]+[a-z]+)[[:space:]]+)*(npx[[:space:]]+)?next[[:space:]]+build([[:space:]]|$)
+pkg-script	(^|[;&|(])[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|nohup|setsid|exec|env|command|time|nice([[:space:]]+-n[[:space:]]*[0-9]+)?|timeout[[:space:]]+[^[:space:]]+|taskpolicy[[:space:]]+-c[[:space:]]+[a-z]+)[[:space:]]+)*(pnpm|npm|yarn|bun)([[:space:]]+run)?[[:space:]]+(dev|build|design:gate)([[:space:]]|$)
