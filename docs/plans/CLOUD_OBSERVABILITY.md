@@ -1165,7 +1165,7 @@ gates the rest, because an unmeasured ceiling is how "15 sessions" became folklo
 | **G2** | Account affinity in `cc-cloud` — `declare --account`, `show`/`list --json` surface it, `account-of <id>`, legacy declarations read UNKNOWN and never crash. | 🔄 in flight (cloud `session_01EuB5…`) |
 | **G3** | `cc-notify --cloud <id>` per §9.2 — route via the OWNING account, refuse a mismatch with a WRONG-ACCOUNT message rather than the bare `Session not found`, and `--receipt` must exit UNKNOWN off-box (`{ok:true}` means *queued*, not read). | 🔄 in flight (`cloud-fleet`) |
 | **G4** | Off-box rendering — `cc-sessions --offbox` + `cc-where` answer for off-box ids, sourced from `cc-cloud`, never the registry. | ✅ `66ef4d8c` |
-| **G5** | `handoff-fire.sh --cloud` + `cc-dispatch` venue — honour `--venue local\|cloud`, record the owning account at claim, declare immediately after create (§8.1), and BRANCH the box-local capacity gate onto account headroom. Ships default-off. | 🔄 **REGRADED 2026-08-09** — `c06a13ad` built the venue flag, the default-off gate and the account-headroom term, all ✅. But **the fire path issues NO cloud create** (census below), so "declare immediately after create" has no create. The tap cannot deliver work until it exists. |
+| **G5** | `handoff-fire.sh --cloud` + `cc-dispatch` venue — honour `--venue local\|cloud`, record the owning account at claim, declare immediately after create (§8.1), and BRANCH the box-local capacity gate onto account headroom. Ships default-off. | ✅ **CLOSED 2026-08-09, §10.5** — `c06a13ad` built the venue flag, the default-off gate and the account-headroom term; the create + declare that its own wording assumed was **never built** (regraded 🔄 earlier the same day, census below) and now is. Validated by a live fire: `session_01Kpc1kwHjwsRjERad1tTDuG` created and declared, exit 0. |
 | **G6** | The landing path — a cloud VM pushes only its own branch and cannot run `/ship`, so something local must reconcile and land `claude/*` or every result strands. | ✅ `c8b2b446` |
 | **G7** | The measured ceiling, recorded with its command. | ✅ **MEASURED** — `CONCURRENCY_PROGRAM.md` §S5.2. **Lower bound ≥2, no ceiling reached.** |
 | **G8** | Eligibility as a REFUSAL, not a doc note — repo-only ✅ · visual/design ❌ · anything about this box ❌. | ✅ `01f1bf33` |
@@ -1257,3 +1257,110 @@ occur and the ramp can only ever exhaust its own `--max`. **The ceiling is there
 UNMEASURABLE BY THIS INSTRUMENT, not merely unmeasured**, and G7 publishes a lower bound only.
 What is validatable is the classifier's **specificity** — that it never *invents* a quota refusal —
 and §S5.3 supplied the live artifact to control it with.
+
+---
+
+## 11 · The fire path can now fire — built, and validated by a live create (2026-08-09)
+
+§10.4's NEXT STEP, in the order it forced: the create FIRST, the fire second. Landed `1b2b8a94`.
+
+`handoff-fire.sh --cloud` now issues a create and declares it. The create itself was **factored out
+of `cloud-bundle-probe.sh:fire_one`** into `scripts/lib/cloud-create.sh`, per §10.4's instruction
+not to write it a fourth time; the probe now sources that library. The branch is
+`scripts/lib/cloud-create.sh` + a 176-line branch in `handoff-fire.sh` placed BEFORE the typed
+command is composed — everything below that point is box-local machinery a cloud fire must not
+reach (no pane to spawn, no composer to type into, no engagement to verify, no pane uuid to
+register). **35 tests**, in `tests/cloud-create-lib.bats` (19, new) and `tests/handoff-fire-cloud.bats`
+(8 → 16).
+
+### 11.1 · The live fire, step by step
+
+Account `next3`, from a worktree, 2026-08-09 23:14Z:
+
+| step | outcome |
+| --- | --- |
+| capacity gate | ADMIT — account headroom read from `claude-accounts --route general`; box load/RAM not evaluated |
+| create attempt 1 | **`refused-bundle`** — §S5.3's marginal ~95 MiB-against-100 MiB upload, reproduced live on the first try |
+| create attempt 2 | **`session_01Kpc1kwHjwsRjERad1tTDuG`** |
+| declare | immediate, carrying branch + **owning account** + repo + url + item |
+| exit | **0** |
+| `cc-cloud show` | `state=BOOTING · no ref yet, 1m into a 15m budget` — the state function's first honest verdict on a session this path fired |
+
+**The retry is load-bearing, and this fire is the proof rather than the argument for it.** Attempt 1
+refused; without the bounded retry the fire would have reported a named refusal and stopped, and
+§10.4's frozen DoD would still be open. §S5.3's "roughly 50-75% per attempt, reaching a session on
+attempt 2 of 4 twice over" reproduced on the very first live use.
+
+⚠️ **What this does NOT yet establish**, stated at the minute observed rather than at the budget's
+end (the discipline `8c691106` set for T2): as of 1m into the session's 15m budget,
+`git ls-remote --heads origin 'claude/*'` still returns **0**. The create half of §10.4's DoD is
+closed; the `push → reconcile → land` half is not, and a BOOTING session says nothing either way.
+
+### 11.2 · Three findings, each measured rather than assumed
+
+**1. `refused-other` was never measuring an unknown refusal — it was measuring the normaliser.**
+Across both probe ledgers, all 10 rows in that bucket have an identifiable cause and NONE is
+unknown: 7 real bundle refusals and 3 rig faults. A TUI positions text with cursor motion instead of
+runs of spaces, and every classifier pattern contains a space, so a refusal rendered that way
+matches nothing and is filed as a non-verdict — the instrument lying in the one direction that looks
+like honest abstention.
+
+🚨 **The producer is `scripts/lib/pty-run.py:strip_ansi`, NOT the probes' own `normalise()` — and
+the obvious attribution would have sent the fix to the wrong file.** `cloud-bundle-probe.sh` had
+already learned this lesson and handles both `CSI n C` and `CSI n G`; its own fused ledger row
+predates that fix. Replaying the real bytes through `strip_ansi` verbatim reproduces the ledger
+shape exactly — `Error:\x1b[8GBundle\x1b[15Gupload…` → `Error:Bundleuploadfailed:Socketis closed`,
+fused where the sequence was G and spaced where it was C, which is precisely the
+`Error:Bundleuploadfailed:…Pleasesetup  GitHubon` signature in `ceiling-probe.jsonl`. The shared
+allocator converted cursor-FORWARD and let cursor-ABSOLUTE fall through to its generic delete,
+**one line below a comment lecturing about that exact defect**. Fixed at the source, with the
+pre-fix behaviour pinned as a RED control (`tests/cloud-create-lib.bats` case 2) so the wrong file
+is not re-fixed later.
+
+**2. The declared branch was being GUESSED, and a guess here is a permanent false verdict.**
+Baseline measured before the fire: `git ls-remote --heads origin 'claude/*'` returns **zero rows** —
+no cloud session had ever pushed — and the one prior fire-shaped declaration on this box names
+`claude/fire-20260809T101645Z-78351`, a branch with **no producer anywhere in the tree**. Nothing
+would ever have pushed to it, so it reads C1 NOT-STARTED forever: §10.2c's hazard with the sign
+flipped, and the same failure this document is organised against — a confident verdict computed
+from evidence that has nothing to do with the session. The fire now **assigns** the branch and the
+payload instructs the push, which also closes §10.2c from the other side: the name is unique per
+fire, so unlike `--branch main` (where trunk's own background traffic reads as a heartbeat forever)
+nothing but that session can advance it, and O2 becomes a real signal.
+
+**3. `created-unidentified` is its own outcome, because both ways of folding it lose the fact that
+matters.** A create can succeed while id extraction fails. Folding it into `created` hands the
+caller an empty id to declare; folding it into a refusal reports "no session" while one is running.
+It is neither — it is a live session spending an account's quota that no local instrument can
+observe, address or reap, and the 600 s orphan reaper cannot see it either. It exits **11**, names
+the account, and prints the exact `cc-cloud declare` line to recover it by hand.
+
+Two smaller ones, both from `fire_one` and both harmless in a probe that only tallies: a bare
+`session_…` counted as a create (on the fire path that declares a session which does not exist), and
+the CSI sweep used a hand-written character class instead of the ECMA-48 grammar, so a private-mode
+sequence *inside* a phrase broke the match. Both now carry RED controls proving the predecessor got
+them wrong.
+
+⚠️ **The probe keeps the SINGLE-attempt entry point, and that is not an oversight.**
+`cloud-bundle-probe.sh` exists to measure the PER-ATTEMPT success rate; wrapping its attempt in the
+retry would report the success of up to N attempts under the name of one, inflating the rate and
+erasing the marginality it was built to measure. `cc_cloud_create_once` is the measurement, the
+retry is a consumer's policy on top of it.
+
+### 11.3 · Known residual — `paths=` is empty, so a landed cloud branch reads ELIGIBLE forever
+
+The declaration written at fire time carries `paths=` empty, because the firing side genuinely does
+not know which files an off-box session will touch. `scripts/cloud-reconcile.sh:landed()` treats
+empty paths as *"nothing declared ⇒ landing is not assertable"* (`:137`) and returns 1, so
+`classify()` files the branch **ELIGIBLE** — including after it has actually landed. Landedness is
+decided BY CONTENT in this repo precisely because counts lie, and with no paths there is no content
+to check.
+
+This is recorded rather than fixed, and the reason is that the two available fixes are both worse
+than the residual: inventing a path at fire time would be the dispatcher asserting something it
+cannot know, and the alternative — an ancestry test (`is the branch tip reachable from trunk`) — is
+the count-shaped oracle `scripts/land-verify.sh:6-11` already refuses. The honest fix is for the
+cloud session to declare its own paths on the way out, which needs a channel that does not exist
+yet (§9.1: the cloud→here arm is a different mechanism, permanently). Until then a landed
+`claude/*` branch stays eligible and can be re-offered; `ship-land` finds an empty diff and refuses,
+so the cost is a wasted invocation rather than a wrong land.
