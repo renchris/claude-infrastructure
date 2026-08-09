@@ -261,3 +261,32 @@ already built and tested.
 - The 2.0/core ceiling has already survived one retract-and-restore cycle `[D: MACHINE_CAPACITY_V2.md
   §8.5.2 → §9.5]`. **Do not re-litigate it from a single window** — that document's own closing lesson
   is that loadavg swings 2.05× at constant session count.
+
+---
+
+## 9 · Addendum — independent corroboration and the worktree census
+
+The Spotlight refutation in §2.1 was reproduced independently, by a different method, on a different
+control set: `mdfind` returns **0** for every query under `~/Development/.worktrees` while returning
+459 / 11,760 / 76,898 hits on three control paths. Two independent measurements, same verdict.
+
+**The 200 GB is not where the worktree count is** (all 382 measured, parallelised walk):
+
+| Parent repo | worktrees | % of dirs | GB | % of GB | FS entries | % of entries |
+|---|---|---|---|---|---|---|
+| reso-management-app | 71 | 18.6% | **141.3** | **70.5%** | **6,602,899** | **73.6%** |
+| doc_classifier | 59 | 15.4% | 39.3 | 19.6% | 1,795,848 | 20.0% |
+| claude-infrastructure | **236** | **61.8%** | 16.8 | 8.4% | 388,129 | **4.3%** |
+| orphaned (no `.git`) | 9 | 2.4% | 0.4 | — | 7,426 | 0.1% |
+| **TOTAL** | **382** | 100% | **200.4** | 100% | **8,968,869** | 100% |
+
+Two things follow. First, **this repo's own 236 worktrees — 62% of the directory count — are 4.3% of
+the inodes.** The mass is 71 `reso-management-app` trees at ~93k entries each (`node_modules`). So even
+if FS pressure *were* the constraint (§2.3 says it is not), pruning claude-infrastructure worktrees
+would be aiming at the wrong 62%.
+
+Second, a method correction worth keeping: **the brief's `du -sh` 120-second timeout does not
+reproduce.** Parallelised (`xargs -P 12`, per-item `timeout 60`), all 382 completed in under 200 s with
+zero timeouts. Serial `du` over a 9-million-entry tree is what hangs — not the tree. The hazard in
+constraint 5 of the brief is real but its cause was misattributed, and the "200 GB is pathological"
+framing rests partly on that timeout.
