@@ -28,6 +28,14 @@
 # the demand instantly, is reversible, and cannot lose work; a frozen worker is recoverable, a
 # panicked box is not. It is DEFAULT OFF and arms only on CC_SENTINEL_ACT=stop.
 #
+# WHY IT ALSO BREAKS THE PARENT (§7, crash-rootcause-2026-08-09). Freezing the cohort alone does not
+# end the storm, because the thing MINTING it is not in the cohort. The 03:39 panic's 700 node procs
+# were `postcss.js` workers of ONE `next-server` (pid 36923) whose comm is not `^node`, so the cohort
+# test cannot reach it — and the cooldown is 60 s, which is a spawner's whole working day at the
+# measured rate. So after the cohort is chosen, any eligible parent owning enough of it is SIGSTOPped
+# FIRST, then the children. Same signal, same reversibility, same exclusions (never claude/mcp-shaped,
+# never pid ≤ 1, never this daemon or its launcher).
+#
 # WHY NO KILL PATH EXISTS ANYWHERE IN HERE (§4a). macOS ships CONFIG_JETSAM off; the release-kernel
 # compressor-exhaustion branch can only harvest IDLE-band processes (measured: ~2 MB of Apple
 # daemons), and no_paging_space_action needs ONE process holding >50% of the whole compressor
@@ -60,6 +68,9 @@
 #         CC_SENTINEL_TRIP_SEG_PCT (15) · CC_SENTINEL_TRIP_CBU_MB (640) · CC_SENTINEL_TRIP_SWAP_MB
 #         (1024) · CC_SENTINEL_COOLDOWN (60) · CC_SENTINEL_CENSUS_EVERY (6) · CC_SENTINEL_LOG
 #         (moves the snap log with it) · CC_SENTINEL_SNAP · CC_PAGES_DIR · CC_SENTINEL_ACT=stop
+#         CC_SENTINEL_ACT_RSS_KB (102400) · CC_SENTINEL_ACT_CAP (200) · CC_SENTINEL_ACT_PARENT
+#         (on — the parent-breaker's OPT-OUT; it rides CC_SENTINEL_ACT=stop, see below) ·
+#         CC_SENTINEL_ACT_PARENT_MIN (3) · CC_SENTINEL_ACT_PARENT_CAP (4) ·
 #         CC_SENTINEL_SNAP_TOPN (30) · CC_SENTINEL_SNAP_TOPN_FUP (10) · CC_SENTINEL_SNAP_ARGV_MAX
 #         (400) · CC_SENTINEL_SNAP_AGG_N (15)
 set -uo pipefail
@@ -80,6 +91,16 @@ PAGE="$PAGES_DIR/compressor-sentinel.page"
 ACT="${CC_SENTINEL_ACT:-off}"
 ACT_RSS_KB="${CC_SENTINEL_ACT_RSS_KB:-102400}"   # 100 MB — below this a worker is not the burst
 ACT_CAP="${CC_SENTINEL_ACT_CAP:-200}"
+# The parent-breaker RIDES CC_SENTINEL_ACT=stop rather than taking an arm of its own, and that is a
+# deliberate reversal of this file's opt-in habit. The live job is already armed by an export inside
+# launchd/com.claude.compressor-sentinel.plist's wrapper; a second, separately-defaulted-off flag
+# would ship the mechanism INERT on the one box it was written for, and its absence would be
+# invisible — the trip snapshot would look exactly as it does today. So this is an OPT-OUT
+# (CC_SENTINEL_ACT_PARENT=off), the arming decision stays the single one the operator already made,
+# and the snapshot prints a parent-break verdict on EVERY armed trip, including "none".
+ACT_PARENT="${CC_SENTINEL_ACT_PARENT:-on}"
+ACT_PARENT_MIN="${CC_SENTINEL_ACT_PARENT_MIN:-3}"   # burst children a parent must own to be a spawner
+ACT_PARENT_CAP="${CC_SENTINEL_ACT_PARENT_CAP:-4}"   # most spawners frozen per trip, biggest first
 FOLLOWUP_N="${CC_SENTINEL_FOLLOWUP_N:-12}"       # 12 x 5 s = the 60 s cooldown, by construction
 FOLLOWUP_SEC="${CC_SENTINEL_FOLLOWUP_SEC:-5}"
 SNAP_TOPN="${CC_SENTINEL_SNAP_TOPN:-30}"         # trip snapshot: how many RSS ranks carry full argv
@@ -236,7 +257,12 @@ census() {
 }
 
 # ── actuator target selection ─────────────────────────────────────────────────────────────────────
-# stdin: `ps -axwwo pid=,rss=,comm=,args=`. Prints "<pid> <rss_kb> <comm>" per line, capped.
+# stdin: `ps -axwwo pid=,ppid=,rss=,comm=,args=`. Prints "<pid> <rss_kb> <comm>" per line, capped.
+#
+# The ppid column is read by select_break_parents, not by this function, and it is in this stream
+# rather than a second `ps` on purpose: the two reads would be taken seconds apart in the middle of a
+# 300-processes-in-90-s churn, and a parent attributed from the later read can be a pid that was
+# already recycled. One table, one instant, both decisions.
 #
 # Deliberately UNDER-inclusive: the cohort test is the EXECUTABLE NAME (comm basename ~ /^node/),
 # never the argv. Matching argv would sweep in any shell whose command line merely mentions node, and
@@ -247,8 +273,8 @@ census() {
 select_stop_targets() { # <prev_census_pids> <rss_floor_kb> <cap>
   awk -v prev=" $1 " -v floor="$2" -v cap="$3" '
     $1 ~ /^[0-9]+$/ {
-      pid = $1; rss = $2 + 0; comm = $3
-      args = ""; for (i = 4; i <= NF; i++) args = args " " $i
+      pid = $1; rss = $3 + 0; comm = $4
+      args = ""; for (i = 5; i <= NF; i++) args = args " " $i
       n = split(comm, p, "/"); base = p[n]
       if (base !~ /^node/) next
       if (base == "claude.exe" || base == "claude") next
@@ -257,6 +283,81 @@ select_stop_targets() { # <prev_census_pids> <rss_floor_kb> <cap>
       if (index(prev, " " pid " ") > 0) next          # present at the last census ⇒ not the burst
       if (++k > cap) exit
       printf "%s %s %s\n", pid, rss, base
+    }'
+}
+
+# ── parent-breaker: the spawner is not in the cohort ──────────────────────────────────────────────
+# stdin: the SAME `ps -axwwo pid=,ppid=,rss=,comm=,args=` table the cohort was selected from.
+# Prints "<pid> <burst_children> <comm>" per eligible spawner, most children first, capped.
+#
+# WHY A SPAWNER NEEDS ITS OWN SELECTOR. `select_stop_targets` is keyed on comm `^node`, and the
+# thing minting the horde is by observation NOT node-named — `next-server` on 08-09, a shell or a
+# task runner in the general case. It is therefore unreachable by widening the cohort, and widening
+# it is the wrong lever anyway (that rule is deliberately under-inclusive because a wrongly-stopped
+# process costs the operator's session). This asks a different question — "who just made these?" —
+# and answers it from evidence already in hand.
+#
+# THE THRESHOLD IS A COUNT, NOT UNANIMITY. The obvious reading of "the cohort shares one parent" is
+# `all children agree`, and it would retire the mechanism's own main path: a real storm's cohort
+# picks up strays — an unrelated worker over the floor, a second worktree's server — and one stray
+# would veto the break every time (memory abstain-rule-can-retire-the-common-case). So the rule is
+# per-parent and ranked: every parent owning >= <min> of the selected burst is a spawner, biggest
+# first, at most <cap> of them. That also answers the two-`next dev` case, which unanimity cannot.
+#
+# THE FIVE EXCLUSIONS, each for a different failure:
+#   · pid <= 1 — launchd. It is also where the kernel REPARENTS the children of a spawner that has
+#     already exited, so the one bucket guaranteed to clear any threshold is exactly the one whose
+#     "parent" no longer exists. (Those ownerless servers are devserver-gc's job, not a signal's.)
+#   · this daemon and its launcher — a guard that can freeze its own supervisor is not a guard.
+#   · claude/claude.exe by comm, anything claude/mcp-shaped by argv — the same double test the cohort
+#     uses, and for the stronger reason: SIGSTOP is only reversible if something is left running to
+#     send SIGCONT, and that something is the operator's session.
+#   · a parent already in the selected cohort — it is about to be frozen as a child; counting it
+#     twice would inflate the reported spawner count over a process that gets exactly one signal.
+#   · a parent with no row of its own in this table — it exited between spawning and this read, so
+#     there is nothing to stop and nothing to name. Printing it would fabricate a comm.
+#
+# Only pid → (comm, protected?) is retained, never argv: agent briefs travel in argv (memory
+# pgrep-f-matches-agent-briefs), so buffering the table's argv to answer a question about parentage
+# would make the instrument allocate in proportion to the fleet at the one moment memory is scarce.
+select_break_parents() { # <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>
+  awk -v cohort=" $1 " -v min="$2" -v cap="$3" -v self="$4" -v selfp="$5" '
+    $1 ~ /^[0-9]+$/ {
+      pid = $1; ppid = $2; comm = $4
+      args = ""; for (i = 5; i <= NF; i++) args = args " " $i
+      n = split(comm, p, "/"); base = p[n]
+      seen[pid] = 1; name[pid] = base
+      if (base == "claude.exe" || base == "claude" || args ~ /claude/ || args ~ /mcp/) protect[pid] = 1
+      if (index(cohort, " " pid " ") > 0) kids[ppid]++
+    }
+    END {
+      k = 0
+      # `pp`, not `p` — `p` is the split() array in the per-row block above, and awk refuses to
+      # reuse that name for a scalar: it dies with "can-not assign to p; it is an array name", and
+      # only once `kids` is non-empty — i.e. on the FIRST table with a parent to consider, which is
+      # exactly the storm this exists for and never an idle box.
+      # (This comment lives inside a single-quoted awk program: NO APOSTROPHES. Two of them close
+      # and reopen the shell string, and the awk source between them is silently word-split — which
+      # turned all 13 cases below red on the run that first wrote it.)
+      for (pp in kids) {
+        if (kids[pp] < min) continue
+        if (pp + 0 <= 1) continue
+        if (pp + 0 == self + 0 || pp + 0 == selfp + 0) continue
+        if (index(cohort, " " pp " ") > 0) continue
+        if (!(pp in seen)) continue
+        if (pp in protect) continue
+        cand[++k] = pp
+      }
+      # Selection sort rather than a pipe to sort(1): `sort | head` under `set -o pipefail` SIGPIPEs
+      # the producer and promotes the pipeline to 141, and k is bounded by cohort_size/min anyway.
+      for (i = 1; i <= k && i <= cap; i++) {
+        b = i
+        for (j = i + 1; j <= k; j++)
+          if (kids[cand[j]] > kids[cand[b]] || \
+             (kids[cand[j]] == kids[cand[b]] && cand[j] + 0 < cand[b] + 0)) b = j
+        t = cand[i]; cand[i] = cand[b]; cand[b] = t
+        printf "%s %s %s\n", cand[i], kids[cand[i]], name[cand[i]]
+      }
     }'
 }
 
@@ -537,9 +638,31 @@ while :; do
     write_page "$TS" "$WHY" "$HEAD_LINE" "$ROW"
 
     if [ "$ACT" = "stop" ]; then
-      STOPPED=0
-      TARGETS="$(ps -axwwo pid=,rss=,comm=,args= 2>/dev/null \
-                 | select_stop_targets "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
+      STOPPED=0; PARENT_N=0; PARENT_STOPPED=0
+      # ONE `ps`, feeding both selections — see select_stop_targets' header for why a second read is
+      # not equivalent. Held in a variable rather than piped twice for the same reason.
+      PSTABLE="$(ps -axwwo pid=,ppid=,rss=,comm=,args= 2>/dev/null)"
+      TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
+      COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
+      COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
+
+      # THE SPAWNER GOES FIRST, and the order is the mechanism rather than a preference. Freezing
+      # the cohort is up to <cap> kill(2) calls; a spawner left running mints throughout that window
+      # and every process it mints after the table was read is invisible to this trip and survives
+      # into the next 60 s cooldown. Stopping the parent first makes the cohort a closed set.
+      if [ "$ACT_PARENT" = "on" ]; then
+        PARENTS="$(printf '%s\n' "$PSTABLE" \
+                   | select_break_parents "$COHORT" "$ACT_PARENT_MIN" "$ACT_PARENT_CAP" "$$" "$PPID")"
+        while read -r ppid pkids pcomm; do
+          [ -n "$ppid" ] || continue
+          PARENT_N=$((PARENT_N + 1))
+          if kill -STOP "$ppid" 2>/dev/null; then
+            PARENT_STOPPED=$((PARENT_STOPPED + 1))
+            printf 'SIGSTOP parent pid=%s kids=%s comm=%s\n' "$ppid" "$pkids" "$pcomm" >> "$SNAP" 2>/dev/null || true
+          fi
+        done <<< "$PARENTS"
+      fi
+
       while read -r spid srss scomm; do
         [ -n "$spid" ] || continue
         # SIGSTOP only. Never SIGKILL — we are the only actor above the kernel here (§4a: jetsam is
@@ -551,6 +674,18 @@ while :; do
       done <<< "$TARGETS"
       printf 'actuator: SIGSTOPped %s process(es) (cap %s, floor %s kB)\n' \
         "$STOPPED" "$ACT_CAP" "$ACT_RSS_KB" >> "$SNAP" 2>/dev/null || true
+      # A verdict on EVERY armed trip, including the negative one. A mechanism that prints nothing
+      # when it finds nothing is indistinguishable in the log from a mechanism that is not wired.
+      if [ "$ACT_PARENT" != "on" ]; then
+        printf 'actuator: parent-break off (CC_SENTINEL_ACT_PARENT=%s)\n' \
+          "$ACT_PARENT" >> "$SNAP" 2>/dev/null || true
+      elif [ "$PARENT_N" -gt 0 ]; then
+        printf 'actuator: parent-break SIGSTOPped %s of %s spawner(s), each owning >= %s of the %s selected burst procs\n' \
+          "$PARENT_STOPPED" "$PARENT_N" "$ACT_PARENT_MIN" "$COHORT_N" >> "$SNAP" 2>/dev/null || true
+      else
+        printf 'actuator: parent-break none — no eligible parent owns >= %s of the %s selected burst procs\n' \
+          "$ACT_PARENT_MIN" "$COHORT_N" >> "$SNAP" 2>/dev/null || true
+      fi
     else
       printf 'actuator: DISARMED (CC_SENTINEL_ACT=%s) — detection only\n' "$ACT" >> "$SNAP" 2>/dev/null || true
     fi

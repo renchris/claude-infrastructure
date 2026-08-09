@@ -147,11 +147,50 @@ sufficient at a 15–20 % trip point and is reversible/lossless (`SIGCONT`). The
 | Item | Why | Where filed |
 |---|---|---|
 | **Arm `devserver-gc`** (`DEVGC_ACT=1`) | Removes ownerless `next dev` spawners between storms; would have reaped one at 03:40 tonight; dry-run log is clean (keeps live-owner servers) | backlog `898f8eafb809` (pre-existing) — recommendation upgraded by tonight's evidence |
-| **Sentinel parent-breaker** | The spawner (`next-server`, comm ≠ `^node`) is outside the cohort and keeps minting between trips; when the frozen cohort shares one non-claude parent, SIGSTOP the parent too | new backlog item (this session) |
+| **Sentinel parent-breaker** — **DELIVERED**, see §7-bis | The spawner (`next-server`, comm ≠ `^node`) is outside the cohort and keeps minting between trips; when the frozen cohort shares one non-claude parent, SIGSTOP the parent too | backlog `55e09eef8d38` — closed |
 | **Next.js postcss worker storm — remedy is a CONFIG FLAG, not an upgrade** (W11, delivered) | **No released Next fixes it**: `process_pool/mod.rs` byte-identical v16.2.6↔v16.2.12 (sha1 `4ae43bcf`), v16.3.0 adds diagnostics only; upstream #95108 (exact symptom match) was bot-auto-closed 30 s after filing, untriaged. Source-level mechanism: bootup semaphore gains +1 permanent permit per completed boot; scheduler spawns fresh with ZERO delay whenever `queued_tasks` spikes (mass invalidation from fleet edits); idle heap unbounded; the only reaper fires after whole-app module-graph COMPLETION, which continuous edits prevent. Fix shipped in the installed 16.2.6: `experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` in reso's next.config — structurally removes the child processes AND the `fork()` abort (`node-2026-08-09-041046.ips`: next-swc aborting in `_malloc_fork_parent` at 04:10:46 — which is why wave 1 "self-recovered": the spawner died mid-fork). Known bounded risk: pre-#96592 (unreleased), a failing plugin can leak worker THREADS — one V8 heap, not 700 PIDs. Also worth filing a reproduction upstream — this machine's evidence exceeds the original report's. | reso task (this board) updated with the exact edit; execution via reso's own rails per cross-repo policy |
 | **`memorystatus_control` per-pid memlimit lever** | The one kernel-enforced per-process cap available on macOS (root; phys_footprint ledger); never built | W7 §4 finding — backlog |
 | **MEMORY.md over-cap repair** | The crash memories are unindexed; the loader drops the tail | pre-existing blocked items (`150c50055e1c` et al.) |
 | kitty IOSurface churn test + `close_on_child_death` | ~1 GB non-purgeable GPU pool at 24 panes, growth-vs-plateau undetermined; dead panes retain surfaces (secondary, non-causal) | task #90 (in progress) + W4 §Open |
+
+## 7-bis. The parent-breaker, as built (`scripts/compressor-sentinel.sh`)
+
+Delivered against the §7 row. It reaches the spawner without widening the cohort rule, which stays
+deliberately under-inclusive: **after the burst cohort is selected, every eligible parent owning
+≥ `CC_SENTINEL_ACT_PARENT_MIN` (3) of it is SIGSTOPped, biggest first, at most
+`CC_SENTINEL_ACT_PARENT_CAP` (4) per trip.** Three decisions in it are not what the filed sketch
+implied, and each is the reason it can fire at all:
+
+- **A count, not unanimity.** "The cohort shares one non-claude parent" reads naturally as *all
+  children agree*, and that rule would have retired its own main path: a real cohort picks up strays
+  — a worker from another worktree, a second server — and one stray vetoes the break forever. Per
+  parent and ranked also answers the two-`next dev` case, which unanimity answers with silence while
+  both keep minting.
+- **The parent is stopped FIRST, then the children.** Freezing up to 400 children is 400 `kill(2)`
+  calls; a spawner left running through that window mints processes that are invisible to this trip
+  (they postdate the `ps` read) and survive into the next 60 s cooldown. Parent-first makes the
+  cohort a closed set. Both selections read ONE `ps -axwwo pid=,ppid=,rss=,comm=,args=` for the same
+  reason — two reads seconds apart during a 300-in-90-s churn can attribute a child to a recycled pid.
+- **It rides `CC_SENTINEL_ACT=stop` as an OPT-OUT (`CC_SENTINEL_ACT_PARENT=off`), not a second arm.**
+  A separately-defaulted-off flag would have shipped inert on the one box it was written for — the
+  live job's arming export is inside the plist wrapper, and nothing would have said so: the trip
+  snapshot would look exactly as it does today. Every armed trip now prints a parent-break verdict,
+  *including the negative one*, so "found none" and "not wired" are different lines in the log.
+
+Five exclusions, each for a distinct failure: **pid ≤ 1** (launchd — and the bucket the kernel
+reparents an *already-exited* spawner's children into, i.e. the one guaranteed to clear any
+threshold); **the daemon and its launcher**; **claude/claude.exe by comm and anything claude/mcp-shaped
+by argv** (SIGSTOP is only reversible while something survives to send `SIGCONT`, and that something
+is the operator's session); **a parent already in the cohort** (one process, one signal — otherwise
+the log reports two spawners stopped over one pid); **a parent with no row in this table** (exited
+between spawning and the read — printing it would fabricate a comm).
+
+Proof: `tests/compressor-sentinel.bats` §5b — 11 cases over the pure selector, every absence
+assertion paired with a positive control, plus an end-to-end daemon run that drives ps-routing →
+cohort → attribution → kill attempt → verdict against impossible pids (`999xxx`, above macOS
+`PID_MAX`), so the chain is proven without signalling anything on this machine. §5's cohort cases
+gained a ppid column and one new per-site mutant (`RSS is read from the RSS column, never from the
+ppid beside it`) — an off-by-one there would have re-admitted the whole fleet silently.
 
 ## 8. Acceptance test (the difference between "armed" and "verified")
 
@@ -169,10 +208,15 @@ post-reboot box, and macOS compresses only under genuine free-page exhaustion �
 segment pressure cheaply is not possible without a ~30-40 GB dirty ballooner). Aborted clean at
 the time bound; decoy released and killed. The armed state therefore rests on: (1) the loaded
 job definition carries the exports (`launchctl print` ProgramArguments; exec preserves env),
-(2) `tests/compressor-sentinel.bats:434` proves `CC_SENTINEL_ACT=stop` reaches the actuator
-branch, (3) the 08-06 field SIGSTOP of a real burst by the orphan armed instance. The standing
-observable: the next genuine trip's snap line must read `actuator: SIGSTOPped N process(es)` —
-any `actuator: DISARMED` line after 2026-08-09 04:36 PDT is a regression to escalate.
+(2) the `tests/compressor-sentinel.bats` case named *"CC_SENTINEL_ACT=stop reaches the actuator
+branch"* proves the branch is wired (named, not line-numbered: a line number in a growing suite
+points at whatever moved into it), (3) the 08-06 field SIGSTOP of a real burst by the orphan armed
+instance. The standing observable: the next genuine trip's snap line must read
+`actuator: SIGSTOPped N process(es)` — any `actuator: DISARMED` line after 2026-08-09 04:36 PDT is a
+regression to escalate. **Second observable, added with §7-bis:** the same trip must also carry an
+`actuator: parent-break …` line. Its absence means the live daemon is still running pre-parent-breaker
+bytes (it `exec`s the script once and holds it; new bytes reach it only on restart), not that no
+spawner was found — "found none" prints its own line.
 
 ## 9. Residuals (named, unresolved, honest)
 

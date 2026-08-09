@@ -108,13 +108,19 @@ case "$name" in
 esac
 SH
 
-  # The census arm must stay FIRST: its `pid=,ppid=,rss=,comm=` ends with the aggregate's own
-  # `rss=,comm=`, so a reordering would silently route the census through the aggregate's file.
+  # ORDERING LAW — MOST SPECIFIC FIRST, and it is load-bearing rather than tidy. Each caller's
+  # format is a SUBSTRING of a longer one: the actuator's `pid=,ppid=,rss=,comm=,args=` contains the
+  # census's `pid=,ppid=,rss=,comm=`, which itself ends with the by-executable aggregate's
+  # `rss=,comm=`. Get the order wrong and one caller silently reads another's fixture file — and
+  # since those files are EMPTY in most tests, the symptom is not a red test but a green one over a
+  # mechanism that never ran. The actuator arm moved above the census arm when the parent-breaker
+  # put ppid into that read (the two formats then differed only by the `,args=` tail); the routing
+  # test in §5 is the positive control that keeps this order honest from here on.
   cat > "$STUB/ps" <<'SH'
 #!/bin/bash
 case "$*" in
+  *"pid=,ppid=,rss=,comm=,args="*) cat "$PS_ACT"    2>/dev/null ;;
   *"pid=,ppid=,rss=,comm="*)       cat "$PS_CENSUS" 2>/dev/null ;;
-  *"pid=,rss=,comm=,args="*)       cat "$PS_ACT"    2>/dev/null ;;
   *"pid=,ppid=,rss=,pcpu=,args="*) cat "$PS_SNAP"   2>/dev/null ;;
   *"rss=,comm="*)                  cat "$PS_EXE"    2>/dev/null ;;
   *) echo "stub-ps $*" ;;
@@ -131,7 +137,7 @@ run_daemon() { # <ticks> [extra env assignments already exported by the caller]
     CC_SENTINEL_LOG="$LOG" CC_SENTINEL_INTERVAL="${IV:-1}" \
     CC_SENTINEL_CENSUS_EVERY="${CENSUS_EVERY:-6}" \
     CC_SENTINEL_FOLLOWUP_N="${FUP_N:-1}" CC_SENTINEL_FOLLOWUP_SEC=1 \
-    CC_SENTINEL_ACT="${ACT:-off}" \
+    CC_SENTINEL_ACT="${ACT:-off}" CC_SENTINEL_ACT_PARENT="${PARENT:-on}" \
     bash "$S" --ticks "$1"
 }
 
@@ -375,60 +381,201 @@ assert rows[0]["n"] == 2 and rows[0]["orph"] == 2 and rows[0]["nrss"] == 1044, r
 }
 
 # ══ 5. THE ACTUATOR — exclusions are structural, not incidental ═══════════════════════════════════
-# select_stop_targets <prev_census_pids> <rss_floor_kb> <cap>, reading `pid rss comm args` on stdin.
+# select_stop_targets <prev_census_pids> <rss_floor_kb> <cap>, reading `pid ppid rss comm args`.
+# The ppid column belongs to the parent-breaker (§5b) and is inert here — which is itself asserted
+# below, because a silently mis-indexed column would read ppid as RSS and re-admit the whole fleet.
 
 sel() { # <prev pids> <stdin lines>
   run env bash -c '. "$1"; select_stop_targets "$2" 102400 200' _ "$D/lib.sh" "$1" <<< "$2"
 }
 
 @test "claude.exe is NEVER stopped, however big or however new" {
-  sel "" "$(printf '901 4000000 /Users/x/.claude/bin/claude.exe --resume\n902 4000000 /usr/local/bin/claude serve')"
+  sel "" "$(printf '901 1 4000000 /Users/x/.claude/bin/claude.exe --resume\n902 1 4000000 /usr/local/bin/claude serve')"
   [ -z "$output" ] || false
   # POSITIVE CONTROL: the same shape with a plain node comm IS selected, so the emptiness above is
   # the exclusion working and not the selector being broken.
-  sel "" "$(printf '903 4000000 /opt/homebrew/bin/node dist/worker.js')"
+  sel "" "$(printf '903 1 4000000 /opt/homebrew/bin/node dist/worker.js')"
   [ "$output" = "903 4000000 node" ] || false
 }
 
 @test "anything claude- or mcp-shaped in argv is excluded even with a node comm" {
-  sel "" "$(printf '904 900000 /opt/homebrew/bin/node /Users/x/.claude/hooks/foo.js\n905 900000 /opt/homebrew/bin/node /opt/mcp-server/index.js')"
+  sel "" "$(printf '904 1 900000 /opt/homebrew/bin/node /Users/x/.claude/hooks/foo.js\n905 1 900000 /opt/homebrew/bin/node /opt/mcp-server/index.js')"
   [ -z "$output" ] || false
+  # POSITIVE CONTROL — the same two rows with innocent argv ARE selected. Without it this case reads
+  # green against a selector whose columns are off by one, which is exactly the mutation the ppid
+  # column introduced: at the wrong offset `comm` becomes an argv word and nothing matches ^node.
+  sel "" "$(printf '904 1 900000 /opt/homebrew/bin/node /w/app/hooks/foo.js\n905 1 900000 /opt/homebrew/bin/node /w/app/index.js')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
 }
 
 @test "non-node executables are out of the cohort entirely" {
-  sel "" "$(printf '906 4000000 /Applications/Chrome.app/Contents/MacOS/Chrome --type=renderer\n907 4000000 /usr/bin/python3 train.py')"
+  sel "" "$(printf '906 1 4000000 /Applications/Chrome.app/Contents/MacOS/Chrome --type=renderer\n907 1 4000000 /usr/bin/python3 train.py')"
   [ -z "$output" ] || false
 }
 
 @test "the RSS floor holds: a 100 MB worker is not the burst" {
-  sel "" "$(printf '908 102400 /opt/homebrew/bin/node w.js\n909 102401 /opt/homebrew/bin/node w.js')"
+  sel "" "$(printf '908 1 102400 /opt/homebrew/bin/node w.js\n909 1 102401 /opt/homebrew/bin/node w.js')"
   [ "$output" = "909 102401 node" ] || false
+}
+
+@test "RSS is read from the RSS column, never from the ppid beside it" {
+  # The floor is the one field the new ppid column sits next to, so this is its per-site mutant: a
+  # 50 MB worker whose PARENT pid happens to be a large number must still fall under the floor.
+  sel "" "$(printf '920 4000000 51200 /opt/homebrew/bin/node w.js')"
+  [ -z "$output" ] || false
+  sel "" "$(printf '920 4000000 4000000 /opt/homebrew/bin/node w.js')"   # POSITIVE CONTROL
+  [ "$output" = "920 4000000 node" ] || false
 }
 
 @test "BURST COHORT: a pid present at the previous census is never stopped" {
   # The whole point of the census — stop what just appeared, not the fleet that was already working.
-  sel "910 912" "$(printf '910 900000 /opt/homebrew/bin/node old.js\n911 900000 /opt/homebrew/bin/node new.js')"
+  sel "910 912" "$(printf '910 1 900000 /opt/homebrew/bin/node old.js\n911 1 900000 /opt/homebrew/bin/node new.js')"
   [ "$output" = "911 900000 node" ] || false
 }
 
 @test "the pid match is exact, not a substring of the census list" {
   # Without the space-delimited index test, census pid 9110 would shadow burst pid 911.
-  sel "9110 9112" "$(printf '911 900000 /opt/homebrew/bin/node new.js')"
+  sel "9110 9112" "$(printf '911 1 900000 /opt/homebrew/bin/node new.js')"
   [ "$output" = "911 900000 node" ] || false
 }
 
 @test "the cap is enforced — a 500-process burst yields exactly 200 stops" {
   local many=""
-  for i in $(seq 1000 1499); do many="$many$i 900000 /opt/homebrew/bin/node w.js"$'\n'; done
+  for i in $(seq 1000 1499); do many="$many$i 1 900000 /opt/homebrew/bin/node w.js"$'\n'; done
   sel "" "$many"
   [ "$(echo "$output" | wc -l | tr -d ' ')" = "200" ] || false
 }
+
+# ══ 5b. THE PARENT-BREAKER — the spawner is not in the cohort ═════════════════════════════════════
+# select_break_parents <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>, same stdin table.
+#
+# WHY THIS EXISTS AT ALL (docs/research/crash-rootcause-2026-08-09.md §7). Freezing the cohort does
+# not end the storm: the 03:39 panic's 700 node procs were postcss workers of ONE `next-server`
+# whose comm is not `^node`, so §5's rule cannot reach it, and it re-minted the horde across every
+# 60 s cooldown. Every case below is a way that reach can fail — either by missing the spawner or by
+# freezing something whose freezing costs more than the storm.
+#
+# 70001/70002 stand in for the daemon's own pid and its launcher. They are constants here on purpose:
+# a test that passed the LIVE $$ could not tell "the guard excluded me" from "that pid was absent".
+
+brk() { # <cohort pids> <stdin lines> [min] [cap]
+  run env bash -c '. "$1"; select_break_parents "$2" "$3" "$4" 70001 70002' \
+    _ "$D/lib.sh" "$1" "${3:-3}" "${4:-4}" <<< "$2"
+}
+
+@test "THE INCIDENT: three postcss workers name the next-server that is not in the cohort" {
+  brk "40001 40002 40003" "$(printf '36923 1 3432416 /w/reso/node_modules/.bin/next-server next-server (v16.2.6)\n40001 36923 900000 /opt/homebrew/bin/node postcss.js\n40002 36923 900000 /opt/homebrew/bin/node postcss.js\n40003 36923 900000 /opt/homebrew/bin/node postcss.js')"
+  [ "$output" = "36923 3 next-server" ] || false
+}
+
+@test "the threshold is a real floor: two burst children are not a spawner, three are" {
+  local t; t="$(printf '36923 1 3432416 /w/reso/.bin/next-server serve\n40001 36923 900000 /opt/homebrew/bin/node p.js\n40002 36923 900000 /opt/homebrew/bin/node p.js\n40003 36923 900000 /opt/homebrew/bin/node p.js')"
+  brk "40001 40002" "$t"          # only two of the three are in the cohort
+  [ -z "$output" ] || false
+  brk "40001 40002 40003" "$t"    # POSITIVE CONTROL: the same table, one more child
+  [ "$output" = "36923 3 next-server" ] || false
+}
+
+@test "min is a SEAM that moves the verdict, not a constant the test restates" {
+  local t; t="$(printf '500 1 9000 /bin/watcher run\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js')"
+  brk "40001 40002" "$t" 3
+  [ -z "$output" ] || false
+  brk "40001 40002" "$t" 2
+  [ "$output" = "500 2 watcher" ] || false
+}
+
+@test "pid 1 is never the spawner — it is where an EXITED spawner's orphans reparent" {
+  # The one bucket guaranteed to clear any threshold is the one whose 'parent' is launchd, i.e. the
+  # case where the thing that minted the burst is already gone. Stopping launchd ends the box.
+  #
+  # THE launchd ROW IS THE POINT, not scenery. Written without it this case passed with the pid<=1
+  # guard DELETED — the parent-has-a-row guard was quietly doing the work, so the assertion measured
+  # a sibling (memory sibling-guard-makes-the-fixture-vacuous). A real `ps -ax` always carries pid 1;
+  # with it present, this guard is the only thing standing between the actuator and `kill -STOP 1`.
+  brk "40001 40002 40003" "$(printf '1 0 20000 /sbin/launchd\n40001 1 900000 /opt/homebrew/bin/node p.js\n40002 1 900000 /opt/homebrew/bin/node p.js\n40003 1 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL: the identical three children under a live parent ARE attributed, launchd still
+  # in the table — so the emptiness above is pid 1 being refused, not the selector being broken.
+  brk "40001 40002 40003" "$(printf '1 0 20000 /sbin/launchd\n777 1 9000 /w/app/serve.sh run\n40001 777 900000 /opt/homebrew/bin/node p.js\n40002 777 900000 /opt/homebrew/bin/node p.js\n40003 777 900000 /opt/homebrew/bin/node p.js')"
+  [ "$output" = "777 3 serve.sh" ] || false
+}
+
+@test "claude.exe is never the spawner, however much of the burst it owns" {
+  # SIGSTOP is only reversible while something is left running to send SIGCONT, and on this box that
+  # something is the operator's session. Three exclusions, three shapes, one assertion each.
+  brk "40001 40002 40003" "$(printf '800 1 4000000 /Users/x/.claude/bin/claude.exe --resume\n40001 800 900000 /opt/homebrew/bin/node p.js\n40002 800 900000 /opt/homebrew/bin/node p.js\n40003 800 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+  brk "40001 40002 40003" "$(printf '801 1 900000 /opt/homebrew/bin/node /opt/mcp-server/index.js\n40001 801 900000 /opt/homebrew/bin/node p.js\n40002 801 900000 /opt/homebrew/bin/node p.js\n40003 801 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+  brk "40001 40002 40003" "$(printf '70001 1 9000 /bin/bash sentinel\n40001 70001 900000 /opt/homebrew/bin/node p.js\n40002 70001 900000 /opt/homebrew/bin/node p.js\n40003 70001 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false   # the daemon itself
+  brk "40001 40002 40003" "$(printf '70002 1 9000 /bin/bash launcher\n40001 70002 900000 /opt/homebrew/bin/node p.js\n40002 70002 900000 /opt/homebrew/bin/node p.js\n40003 70002 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false   # …and its launcher
+}
+
+@test "a parent already IN the cohort is not counted a second time" {
+  # It is about to be frozen as a child. Naming it again would report two spawners stopped over one
+  # process that receives exactly one signal — the inflated-count defect, in a log read after a panic.
+  brk "500 40001 40002 40003" "$(printf '500 1 900000 /opt/homebrew/bin/node orchestrator.js\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js\n40003 500 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL: the same node orchestrator, this time NOT in the cohort (it predates the burst,
+  # so the census spared it) — which is precisely the spawner this mechanism exists to reach.
+  brk "40001 40002 40003" "$(printf '500 1 900000 /opt/homebrew/bin/node orchestrator.js\n40001 500 900000 /opt/homebrew/bin/node p.js\n40002 500 900000 /opt/homebrew/bin/node p.js\n40003 500 900000 /opt/homebrew/bin/node p.js')"
+  [ "$output" = "500 3 node" ] || false
+}
+
+@test "a parent with no row of its own is never named — a comm cannot be fabricated" {
+  brk "40001 40002 40003" "$(printf '40001 999 900000 /opt/homebrew/bin/node p.js\n40002 999 900000 /opt/homebrew/bin/node p.js\n40003 999 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+}
+
+@test "TWO spawners are both named, ranked by how much of the burst each owns" {
+  # The case a unanimity rule ('the cohort shares ONE parent') answers with silence while both
+  # servers keep minting. Ranking, not first-seen: the bigger spawner is emitted LAST by ps here.
+  brk "40001 40002 40003 40004 40005" "$(printf '501 1 9000 /w/a/.bin/next-server a\n40001 501 900000 /opt/homebrew/bin/node p.js\n40002 501 900000 /opt/homebrew/bin/node p.js\n40003 502 900000 /opt/homebrew/bin/node p.js\n40004 502 900000 /opt/homebrew/bin/node p.js\n40005 502 900000 /opt/homebrew/bin/node p.js\n502 1 9000 /w/b/.bin/next-server b')" 2
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
+  [ "$(echo "$output" | head -1)" = "502 3 next-server" ] || false
+  [ "$(echo "$output" | tail -1)" = "501 2 next-server" ] || false
+}
+
+@test "the cap keeps the BIGGEST spawners, not the ones ps happened to emit first" {
+  local t="" c=""
+  # Four spawners owning 2,3,4,5 of the burst, emitted smallest-first so a line cut takes the wrong two.
+  for s in 1:2 2:3 3:4 4:5; do
+    local p="${s%%:*}" n="${s##*:}" i
+    t="$t$((600 + p)) 1 9000 /w/$p/.bin/next-server s"$'\n'
+    for i in $(seq 1 "$n"); do
+      t="$t$((41000 + p * 100 + i)) $((600 + p)) 900000 /opt/homebrew/bin/node p.js"$'\n'
+      c="$c $((41000 + p * 100 + i))"
+    done
+  done
+  brk "$c" "$t" 2 2
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
+  [ "$(echo "$output" | head -1)" = "604 5 next-server" ] || false
+  [ "$(echo "$output" | tail -1)" = "603 4 next-server" ] || false
+}
+
+@test "the cohort pid match is exact, not a substring" {
+  # Cohort 400010 must not credit child 40001 to its parent — the same space-delimited index law §5
+  # already carries for the census list, asserted here because it is a SECOND, independent call site.
+  brk "400010 400020 400030" "$(printf '505 1 9000 /w/a/.bin/next-server a\n40001 505 900000 /opt/homebrew/bin/node p.js\n40002 505 900000 /opt/homebrew/bin/node p.js\n40003 505 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+}
+
+@test "an empty cohort names nobody — no burst, no spawner" {
+  brk "" "$(printf '506 1 9000 /w/a/.bin/next-server a\n40001 506 900000 /opt/homebrew/bin/node p.js\n40002 506 900000 /opt/homebrew/bin/node p.js\n40003 506 900000 /opt/homebrew/bin/node p.js')"
+  [ -z "$output" ] || false
+}
+
+# ── the actuator end to end ───────────────────────────────────────────────────────────────────────
 
 @test "the actuator is DISARMED by default, and says so in the snapshot" {
   mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
   run_daemon 3
   grep -q 'actuator: DISARMED' "$SNAPLOG" || false
   ! grep -q 'SIGSTOP pid=' "$SNAPLOG" || false
+  ! grep -q 'SIGSTOP parent pid=' "$SNAPLOG" || false
+  ! grep -q 'parent-break' "$SNAPLOG" || false
 }
 
 @test "CC_SENTINEL_ACT=stop reaches the actuator branch (and signals nothing here)" {
@@ -436,10 +583,36 @@ sel() { # <prev pids> <stdin lines>
   # 100000 — so `kill -STOP` fails and this proves the branch is WIRED without signalling anything
   # on the real machine. That impossibility is the reason this test is safe to run at all.
   mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
-  printf '999901 900000 /opt/homebrew/bin/node w.js\n' > "$PS_ACT"
+  printf '999901 1 900000 /opt/homebrew/bin/node w.js\n' > "$PS_ACT"
   ACT=stop run_daemon 3
   grep -q 'actuator: SIGSTOPped 0 process' "$SNAPLOG" || false
   ! grep -q 'DISARMED' "$SNAPLOG" || false
+  # THE ROUTING CONTROL. `SIGSTOPped 0` is also what a run reads when the actuator's `ps` was routed
+  # to another caller's (empty) fixture, so it cannot on its own prove the table arrived. The count
+  # of SELECTED procs can: it is 1 here and would be 0 if PS_ACT never reached the selector.
+  grep -qF 'parent-break none — no eligible parent owns >= 3 of the 1 selected burst procs' "$SNAPLOG" || false
+}
+
+@test "END TO END: the spawner is identified from the trip's own ps table" {
+  # The full chain in one run — ps routing → cohort selection → parent attribution → kill attempt →
+  # verdict — against three impossible-pid children of one impossible-pid next-server. Nothing on
+  # this machine can be signalled by it, and `0 of 1 spawner` is the proof the kill was attempted.
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '999900 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n999901 999900 900000 /opt/homebrew/bin/node postcss.js\n999902 999900 900000 /opt/homebrew/bin/node postcss.js\n999903 999900 900000 /opt/homebrew/bin/node postcss.js\n' > "$PS_ACT"
+  ACT=stop run_daemon 3
+  grep -qF 'actuator: parent-break SIGSTOPped 0 of 1 spawner(s), each owning >= 3 of the 3 selected burst procs' "$SNAPLOG" || false
+  grep -q 'actuator: SIGSTOPped 0 process' "$SNAPLOG" || false
+}
+
+@test "CC_SENTINEL_ACT_PARENT=off is a real opt-out, and the snapshot says which" {
+  # The opt-out must be legible in the record: a trip that broke no parent because it was told not to
+  # is a different event from one that found none, and a post-mortem reads only this log.
+  mkstubs "$(printf '800000\n1200000\n1600000\n2000000')" 0 0
+  printf '999900 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n999901 999900 900000 /opt/homebrew/bin/node postcss.js\n999902 999900 900000 /opt/homebrew/bin/node postcss.js\n999903 999900 900000 /opt/homebrew/bin/node postcss.js\n' > "$PS_ACT"
+  ACT=stop PARENT=off run_daemon 3
+  grep -qF 'actuator: parent-break off (CC_SENTINEL_ACT_PARENT=off)' "$SNAPLOG" || false
+  ! grep -q 'SIGSTOP parent pid=' "$SNAPLOG" || false
+  grep -q 'actuator: SIGSTOPped 0 process' "$SNAPLOG" || false   # the cohort arm is untouched by it
 }
 
 # ══ 6. SEAMS ═════════════════════════════════════════════════════════════════════════════════════
