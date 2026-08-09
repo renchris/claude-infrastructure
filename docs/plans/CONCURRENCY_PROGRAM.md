@@ -956,6 +956,75 @@ bundle size, and pre-seeding `hasTrustDialogAccepted` is a read-modify-write of 
 interactive trust of the control directory. Until it runs, "size is the cause" is a **mechanism plus
 a refuted alternative**, not a demonstrated dose-response.
 
+#### S5.4 · The replacement calibration control — THERE IS NONE, and the ceiling is unmeasurable by this instrument
+
+**VERDICT, stated as the brief demanded rather than papered over: no free known-refusal is reachable
+today, so `scripts/cloud-ceiling-probe.sh` cannot validate its quota classifier, and NO CEILING from
+it is publishable. The lower bound (≥2, §S5.2) stands, because it counts successes and never
+consults the classifier at all.**
+
+*Candidates enumerated, so this is a searched space and not an assertion:*
+
+| Candidate known-refusal | Free? | Verdict |
+|---|---|---|
+| An account at 100% weekly | yes | **VOID — measured.** `next2` at 100% weekly created **four** sessions. Weekly quota does not gate cloud create. |
+| An account at its 5-hour cap | no | Untested, and not free — it costs burning an account's session quota. Expected to fail the same way: the create boundary is not where session quota binds. |
+| A logged-out / invalid-token account | yes | Reachable, but yields an **auth** refusal. Validates that the classifier does not OVER-match; says nothing about its quota patterns. |
+| `allow_remote_sessions policy denied` | n/a | A **policy** refusal, same category as auth — and not reachable on these accounts anyway. |
+| Feeding the classifier a synthetic refusal string | yes | **Vacuous.** The question is whether our patterns match *the API's real string*, and a string we invented cannot answer it (`[[control-must-replay-the-real-artifact]]`). |
+
+🚨 **The deeper reason, which outranks "we lack a control": the instrument may be hunting an event
+that does not occur.** The ramp's whole design assumes a concurrency ceiling *surfaces as a refusal
+at create time*. Two measurements now say it may not: weekly quota demonstrably does not gate create,
+and the vendor documents no numeric per-account concurrent-session cap. If create is not capped, then
+`refused-quota` is an outcome with **no reachable instance**, the ramp can only ever exhaust its own
+`--max` — which is exactly what it did — and "an unvalidated classifier" understates the problem. So
+the ceiling is marked **UNMEASURABLE BY THIS INSTRUMENT**, not merely unmeasured.
+
+**What would change that, named so this is falsifiable:** one observation, anywhere, of a cloud
+*create* refused for a limit — in a log, from another account, or after the vendor introduces a cap.
+That string is the missing artifact; until it exists, there is nothing to calibrate against.
+
+✅ **What IS validatable, and it is the half that actually protects this program: SPECIFICITY, not
+sensitivity.** The two error directions are not symmetric. A false `refused-quota` **publishes a
+fabricated ceiling** — the exact failure this subsystem keeps having. A false `refused-other` merely
+abstains and costs a re-run. We cannot prove the classifier catches a real quota refusal (no
+instance exists), but we CAN prove it does not *invent* one — and §S5.3 handed us the material: a
+live, reliably reproducible, non-quota refusal (`Bundle upload failed: Socket is closed after 3
+attempts`) that the classifier must never call quota. That is a real positive control over a real
+artifact, and it bounds the only error that can put a wrong number in this document.
+
+**Concrete consequence for the probe:** `refused-bundle` belongs as its own outcome, ordered AHEAD of
+the quota arm, exactly as `refused-harness` was placed ahead of it for the same reason — a transport
+failure must never reach the quota patterns at all. Implemented in `scripts/cloud-bundle-probe.sh`
+and to be adopted by `cloud-ceiling-probe.sh`.
+
+#### S5.5 · T2 (one real round trip) and T3 (token load) — BLOCKED, on a wall that is now named
+
+**T3 is blocked ON T2, and T2 is blocked on a session that never executes.** Recorded plainly
+because a number here would be the very thing this section exists to prevent.
+
+- **Creates now work** (§S5.3) — with a retry, on demand, from either cwd. That is new; the create
+  path was the wall for the whole prior program and it is no longer the wall.
+- **Execution still does not.** Across this session 6 sessions were created and declared
+  (`session_01YNvu…`, `01TaP5…`, `01FBfk…`, `016CX8…`, `01UWce…`, and the round-trip fire
+  `session_01XtCjjRVvZpadMH7ZfK8jsQ`), joining the 11 already on the books. `cc-cloud --check`
+  reports `NOT-STARTED`/`ABANDONED`; the round-trip session sat at `BOOTING — no ref yet` through its
+  budget. **Zero observable actions, now across 17 sessions.**
+- ⚠️ **One instrument caveat that must not be lost:** five of this session's six probes were given
+  deliberately no-op tasks ("print the repository name and stop"), so `no-ref` is what they would
+  produce *even if they ran perfectly*. `no-ref` therefore does NOT discriminate "never executed"
+  from "executed and had nothing to push". Only `session_01XtCjjRVvZpadMH7ZfK8jsQ` was given a task
+  that MUST produce a branch, and it is the only one whose silence is evidence.
+- **The likely mechanism, from §S5.3's decompilation and NOT yet confirmed:** in bundle mode the VM
+  is seeded from an uploaded bundle of local HEAD, not from a GitHub clone — so it has no GitHub
+  remote to push a `claude/*` branch back to, and G6's landing arm has nothing to reconcile. That
+  would make "cloud work cannot return" a *consequence* of the same missing GitHub App install that
+  forces bundle mode. It is a hypothesis with a mechanism, filed as such — it is not established, and
+  §S5.2's own history is what happens when a plausible mechanism gets promoted early.
+- **T3 (token load) is consequently NOT MEASURED, and no figure is published.** Creating a session
+  and running tokens through it remain different questions; the second still has no instance.
+
 #### S5.1 · Cloud observability — DONE (backlog `191d4d056c98`, 2026-08-07)
 
 **→ `docs/plans/CLOUD_OBSERVABILITY.md`** (design + measurements, with the command for each so they

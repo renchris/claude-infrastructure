@@ -1196,3 +1196,13 @@ around a free known-refusal: an account already at 100% weekly. Measured 2026-08
 100% weekly **creates cloud sessions normally** — so weekly quota does not gate cloud CREATE, the
 control validates nothing, and no *ceiling* from this instrument is trustworthy yet. Lower bounds
 remain safe because they count successes and do not depend on the classifier at all.
+
+🚨 **RESOLVED-AS-UNMEASURABLE 2026-08-09 (`CONCURRENCY_PROGRAM.md` §S5.4).** The replacement control
+was searched for and **does not exist**: every candidate is either void (100% weekly — measured),
+not free (the 5-hour cap), the wrong category (auth / policy refusals), or vacuous (feeding the
+classifier a string we invented). The stronger finding is that the instrument may be hunting an
+event with no reachable instance — if cloud create is not capped at all, `refused-quota` can never
+occur and the ramp can only ever exhaust its own `--max`. **The ceiling is therefore marked
+UNMEASURABLE BY THIS INSTRUMENT, not merely unmeasured**, and G7 publishes a lower bound only.
+What is validatable is the classifier's **specificity** — that it never *invents* a quota refusal —
+and §S5.3 supplied the live artifact to control it with.
