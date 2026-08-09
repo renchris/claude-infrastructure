@@ -141,7 +141,33 @@ setup() {
     done; } > "$D/ctrl-bad.tsv"
   run bash "$S" --control --analyse "$D/ctrl-bad.tsv"
   printf '%s' "$output" | grep -q 'CONTROL FAILED'
-  printf '%s' "$output" | grep -q 'Do NOT quote a live run'
+  # Assert the DIAGNOSIS, not the boilerplate: a median off 1.00 means one arm is measured
+  # differently from the other, which is a different fault with a different remedy from mere noise.
+  # (Keying on the sentence 'Do NOT quote a live run' broke the moment the line wrapped between
+  # 'quote' and 'a live run' — an assertion on prose layout, not on meaning.)
+  printf '%s' "$output" | grep -q 'BIASED'
+  ! printf '%s' "$output" | grep -q 'UNDERPOWERED' || false
+}
+
+@test "C2b: --control distinguishes UNDERPOWERED from BIASED" {
+  # Median exactly 1.00 but a spread far too wide to resolve anything: the rig is unbiased and
+  # underpowered. That verdict must NOT read as bias — the remedies differ (re-run quieter / with
+  # more cycles, versus find the asymmetry between the arms), and only this one leaves a
+  # directional reading available.
+  { printf '1\tidle\t4.000\tbash\t4\t0\n'
+    printf '1\tserial\t8.000\tgit\t4\t100\n'
+    printf '1\tserial-b\t5.600\tgit\t4\t100\n'
+    printf '2\tidle\t4.000\tbash\t4\t0\n'
+    printf '2\tserial\t8.000\tgit\t4\t100\n'
+    printf '2\tserial-b\t8.000\tgit\t4\t100\n'
+    printf '3\tidle\t4.000\tbash\t4\t0\n'
+    printf '3\tserial\t8.000\tgit\t4\t100\n'
+    printf '3\tserial-b\t14.000\tgit\t4\t100\n'; } > "$D/ctrl-wide.tsv"
+  run bash "$S" --control --analyse "$D/ctrl-wide.tsv"
+  printf '%s' "$output" | grep -q 'MEDIAN RATIO = 1.00x'
+  printf '%s' "$output" | grep -q 'CONTROL FAILED ON SPREAD'
+  printf '%s' "$output" | grep -q 'UNDERPOWERED'
+  ! printf '%s' "$output" | grep -q 'The rig is BIASED' || false
 }
 
 @test "C3: the two control arms are keyed DISTINCTLY — the control cannot compare a value to itself" {
