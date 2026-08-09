@@ -18,6 +18,11 @@
 #
 # Exit: 0 = clean · 1 = a horizon is too short, or an UNDECLARED reaper appeared on an evidence artifact.
 set -uo pipefail
+# Resolve our OWN path before the cd. §5 reads this file's `@anchor` lines, and after `cd ..` a
+# relative $0 (`bash ./reaper-horizon-lint.sh` from scripts/) no longer resolves — the anchor pass
+# would then read nothing and report clean, which is the blind-spot shape §3's header forbids
+# (memory: self-identity-guard-must-fully-resolve).
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.." || exit 2
 
 # ── the one source of truth for the sweep interval ────────────────────────────────────────────────
@@ -72,16 +77,26 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # temp `$tmp` (`$REG_DIR/.$pane.$$.tmp`, schema byte-identical to session-register.sh:75-81), removed on a
 # failed mv/jq. It only ever CREATES registry rows (via mv); it never age-reaps the registry — durable
 # evidence is never deleted. No -mmin/RETAIN_H, so sections 1/2 find nothing to bound. Declared = reviewed (2026-07-19 desk wave).
-# hooks/lead-crash-watchdog.sh READS CC_REGISTRY_DIR (:262,:302 — `grep -l` only; no registry row is ever
-# deleted) and has rm -f sites, so section-3 flags it — but every one is a LIFECYCLE op, never an age
-# reaper: gc_teardown_marker (:299) removes $CC_TEARDOWN_DIR/$sid.json + its pane alias, and its own
-# docstring binds it to "ONLY the owner-guarded pidfile-rm blocks below" (our own pid's recycle/self-close,
-# fully handled); the pidfile/.id/.daemon removals (:869,:893) are pid-EQUALITY-guarded (the documented
-# cross-incarnation disarm), and the death-claim `rmdir` releases a mutex this same function took. No
-# -mmin/RETAIN_H anywhere in the file, so sections 1/2 find nothing to bound. Identical shape to
+# hooks/lead-crash-watchdog.sh READS CC_REGISTRY_DIR (`grep -lE` on the session id, in the assignee-harvest
+# helper and in gc_teardown_marker; no registry row is ever deleted) and has rm -f sites, so section-3
+# flags it — but every one is a LIFECYCLE op, never an age reaper: gc_teardown_marker() removes
+# $CC_TEARDOWN_DIR/$sid.json + its pane alias, and its own docstring binds it to "ONLY the owner-guarded
+# pidfile-rm blocks below" (our own pid's recycle/self-close, fully handled); the pidfile trio under
+# $WATCHDOG_DIR ($sid.pid/.id/.daemon) is pid-EQUALITY-guarded (`[[ "$(cat …$sid.pid)" == "$pid" ]]` — the documented
+# cross-incarnation disarm, 125 proven disarms before it); the death-claim `rmdir "$claim"` releases a
+# mutex this same function took; and the `rm -f "$tmp"` in the shutdown_request injector is the mv-or-rm
+# on its own jq atomic write (the handoff-fire.sh temp-scaffold shape declared above). No
+# -mmin/-mtime/RETAIN_H anywhere in the file, so sections 1/1b/2 find nothing to bound. Identical shape to
 # lead-reconciler.sh + waiting-recycle.sh above. Declared = reviewed (2026-07-25 infra-perfection pass,
-# adopted from the stranded 101ab269; line refs re-derived 2026-07-29 after the singleton/jetsam work,
+# adopted from the stranded 101ab269; re-verified against live code 2026-08-08,
 # and the +2d sweeps of .daemon / *.death-*.d live in hooks/session-end.sh, which owns that dir's GC).
+# ⚠️ Cited by SYMBOL, never by line number — deliberately, and this entry is why (see §5). It carried
+# five line refs (:262,:302 · :299 · :869,:893), which were already hand-re-derived once on 2026-07-29
+# "after the singleton/jetsam work". By 2026-08-08 all five had rotted AGAIN across three unrelated
+# commits to the subject (:299→:323, :869→:1054, :893→:1078) — a reader following :869 lands 185 lines
+# from the code the sentence describes. Nine days of validity per hand-derivation is not a maintenance
+# problem, it is the wrong anchor: line numbers are the one form guaranteed to move on an edit that
+# changes nothing this justification claims.
 # scripts/scratchpad-reaper.sh READS CC_REGISTRY_DIR (the liveness roster) and `rm -rf`s, so section-3
 # flags it — and unlike the entries above it IS a genuine age reaper, so it belongs here on the merits.
 # What it reaps is NOT supervisor evidence: `/private/tmp/claude-501/<project>/<sessionUUID>/` is the CC
@@ -97,22 +112,37 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # never deletes a row). Its horizon is a LITERAL `-mmin +2880` (48 h = 172,800 s), scored by §1 below —
 # 28× the 6,000 s floor — and liveness (live pid OR a transcript touched inside the horizon) outranks
 # age, so a long-running session's scratchpad survives regardless. Declared = reviewed (2026-07-25).
-# bin/cc-recover-safeguard READS CC_REGISTRY_DIR (:40 CC_RECOVER_REG_DIR, :59 — a single `jq` read of
-# the blocked pane's row to resolve cwd/account/session_id) and has `rm -f` sites, so section-3 flags
-# it — but BOTH sites (:145 the re-fire-failed path, :173 the success path) remove the SAME thing: its
-# own `mktemp` reworded-brief file $REWORDED (:110), scaffolding handed to handoff-fire --prompt-file
-# and consumed within the run. Exactly the handoff-fire.sh / cc-value temp-scaffold shape declared
-# above. It never deletes a registry row, and it is not an age reaper at all — no -mmin / RETAIN_H /
-# CC_SUP_GC_S, so sections 1/2/2b find nothing to bound. The durable evidence of a recovery is the
-# re-fired session's transcript + its new registry row + the announce to the originator, none of which
-# this script can touch. Declared = reviewed (2026-07-25 infra-perfection pass).
+# bin/cc-recover-safeguard READS CC_REGISTRY_DIR (CC_RECOVER_REG_DIR — a single `jq` read of the blocked
+# pane's row to resolve cwd/account/session_id) and has `rm -f` sites, so section-3 flags it — but BOTH
+# sites (the re-fire-FAILED path, which exits 5 preserving the blocked pane, and the success path after
+# the announce) remove the SAME thing: its own `mktemp` reworded-brief file $REWORDED, scaffolding handed
+# to handoff-fire --prompt-file and consumed within the run. Exactly the handoff-fire.sh / cc-value
+# temp-scaffold shape declared above. It never deletes a registry row, and it is not an age reaper at
+# all — no -mmin / -mtime / RETAIN_H / CC_SUP_GC_S, so sections 1/1b/2/2b find nothing to bound. The
+# durable evidence of a recovery is the re-fired session's transcript + its new registry row + the
+# announce to the originator, none of which this script can touch. Declared = reviewed (2026-07-25
+# infra-perfection pass; line refs :40/:59/:110/:145/:173 replaced by symbols and the claim re-verified
+# against live code 2026-08-08 — they were still ACCURATE, and are gone anyway, because the neighbouring
+# lead-crash-watchdog entry proves accuracy today buys ~9 days, not durability).
 # Declared reapers. A file here is one whose deletion sites have been READ and whose horizons the
 # scorers above can actually see — never a file listed merely to silence §3 (see 1b).
 #   hooks/dispatch-assert.sh  its state sweep is `-mtime +7` = 604800s, scored by §1b. Its other
-#                             `rm -f "$PENDING"` sites are obligation-state discharge (kill-switch /
-#                             corrupt / discharged), not age reaping — no horizon to bound.
-#   scripts/desk-invariant.sh MARKER_MAX_AGE_S 604800s, scored by §1c. Its other `rm -f "$tmp"` sites
-#                             are temp scaffold on a failed `mv -f`, not evidence.
+#                             `rm -f "$PENDING"` sites are obligation-state discharge — kill-switch,
+#                             pending-corrupt, discharged, AND capped (`p_count >= MAX`, the arm this
+#                             entry omitted until 2026-08-08; a COUNT cap, so still not age reaping).
+#                             The class claim was right and the enumeration was short, which is the
+#                             failure mode of listing instances instead of naming the class
+#                             (memory: denylist-enumerates-spellings-not-the-class).
+#   scripts/desk-invariant.sh STALE_MARKER_MAX_AGE_S 604800s, scored by §1c, and the deletion it bounds
+#                             is sweep_stale_markers()'s `rm -f "$f"` over $STATE_DIR/paged-*-stale.marker
+#                             — gated on `now - mtime > STALE_MARKER_MAX_AGE_S`, so the horizon and the
+#                             reaping site are the same mechanism. Its OTHER rm sites are not evidence:
+#                             the `rm -f "$tmp"` pair is temp scaffold on a failed `mv -f`, and the
+#                             `rm -rf "${d:-}"` is the --selftest EXIT trap over its own `mktemp -d`
+#                             sandbox. (Until 2026-08-08 this entry said only "its other rm -f $tmp
+#                             sites are temp scaffold" — which described the scaffold and never named
+#                             the actual reaping site, leaving a reader unable to connect the declared
+#                             horizon to the code it bounds.)
 #   bin/cc-await-ping         NOT an age reaper: `rm -f` of its OWN watchfile in an EXIT trap and on
 #                             wake — self-owned lifecycle, no horizon (same class as the
 #                             bin/cc-recover-safeguard declaration in 8195561a).
@@ -126,6 +156,22 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 #                             RETAIN_H / MARKER_MAX_AGE_S / CC_SUP_GC_S, so §1/1b/1c/2/2b find
 #                             nothing to bound. Declared = reviewed (2026-07-31; the land of
 #                             57e16249 is what made §3 fire).
+# ── ANCHORS: the load-bearing symbol of each justification, re-checked by §5 every run ────────────
+# Form: `# @anchor <path> <ERE>`. One per claim a reader would have to find code for. §5 fails if an
+# anchor stops matching CODE in its file — i.e. if the justification above now describes something
+# that moved, was renamed, or is gone. This is what makes "Declared = reviewed" a claim the gate
+# re-checks rather than a sentence someone wrote once.
+# ⚠️ COVERAGE IS PARTIAL AND DELIBERATELY STATED: anchors exist for the four entries re-verified
+# against live code on 2026-08-08 (item 74a0896ee989). The older declarations above are NOT anchored
+# and are NOT asserted to be current — add an anchor when you next re-verify one. A comment claiming
+# coverage it does not have is the defect this gate exists to prevent, so it is claimed narrowly.
+# @anchor hooks/dispatch-assert.sh mtime \+7
+# @anchor hooks/dispatch-assert.sh rm -f "\$PENDING"
+# @anchor scripts/desk-invariant.sh sweep_stale_markers
+# @anchor scripts/desk-invariant.sh STALE_MARKER_MAX_AGE_S
+# @anchor bin/cc-recover-safeguard REWORDED
+# @anchor hooks/lead-crash-watchdog.sh gc_teardown_marker
+# @anchor hooks/lead-crash-watchdog.sh sid\.daemon
 DECLARED='bin/cc-context bin/cc-board bin/cc-sessions bin/cc-notify bin/cc-reaper bin/cc-value bin/cc-reconcile bin/cc-recover-safeguard hooks/session-register.sh hooks/session-deregister.sh statusline.sh scripts/lead-supervisor.sh scripts/lead-reconciler.sh hooks/waiting-recycle.sh scripts/handoff-fire.sh hooks/lead-crash-watchdog.sh scripts/scratchpad-reaper.sh hooks/lib/context-econ.sh hooks/dispatch-assert.sh scripts/desk-invariant.sh bin/cc-await-ping bin/cc-queue'
 
 viol=0
@@ -258,6 +304,46 @@ if [ -f scripts/lead-supervisor.sh ]; then
     bad "scripts/lead-supervisor.sh exists but does NOT source SUPERVISOR_SWEEP_MAX_S — two copies of the constraint WILL drift (invariant 7)"
   fi
 fi
+
+# ── 5. every declaration's ANCHOR must still resolve ──────────────────────────────────────────────
+# §1-§2b bound the horizons they can SEE, and §3 catches an undeclared reaper. Nothing checked the
+# other half of a declaration: the JUSTIFICATION — the prose a future author reads to decide whether
+# their new `rm` is safe. It rotted silently. The lead-crash-watchdog entry carried five line numbers,
+# was hand-re-derived once on 2026-07-29, and all five had drifted again nine days later across three
+# unrelated commits to the subject; the desk-invariant entry described its temp scaffold and never
+# named the site its own declared horizon bounds. Both files passed every section, every run, because
+# "declared" was tested and "justified" was not — an allowlist entry that passes BY BEING LISTED,
+# which §1b's header already names as functionally a deleted check.
+#
+# So each load-bearing claim is pinned as a `# @anchor <path> <ERE>` above and re-checked here. Matched
+# against CODE only (is_comment), for the reason §1/§2/§3 are: a check must observe the thing it guards,
+# not prose about it — an anchor satisfied by a comment MENTIONING the symbol would re-open exactly the
+# hole §3's header documents. Line numbers are deliberately not an anchor form: they are the one form
+# guaranteed to move on an edit that changes nothing the justification claims.
+while IFS= read -r spec; do
+  [ -n "$spec" ] || continue
+  af="${spec%% *}"; ape="${spec#* }"
+  if [ -z "$af" ] || [ "$af" = "$ape" ]; then
+    bad "malformed @anchor (want '<path> <ERE>'): $spec"; continue
+  fi
+  case " $DECLARED " in
+    *" $af "*) ;;
+    *) bad "$af  @anchor names a file absent from \$DECLARED — anchor and declaration have diverged"; continue ;;
+  esac
+  if [ ! -f "$af" ]; then
+    bad "$af  @anchor names a file that no longer exists — its declaration describes code that is gone"; continue
+  fi
+  hit=0
+  while IFS= read -r h; do
+    is_comment "$af:$h" && continue
+    hit=1; break
+  done < <(grep -nE -- "$ape" "$af" 2>/dev/null)
+  if [ "$hit" -eq 1 ]; then
+    say "ok  $af  anchor /$ape/ resolves"
+  else
+    bad "$af  anchor /$ape/ NO LONGER RESOLVES IN CODE — the declaration above describes code that moved, was renamed, or is gone. Re-read that file's deletion sites and correct the justification (do not just delete the anchor)."
+  fi
+done < <(sed -nE 's/^# @anchor[[:space:]]+(.+)$/\1/p' "$SELF")
 
 if [ "$viol" -gt 0 ]; then
   echo "reaper-horizon-lint: ⛔ $viol violation(s). A reaper shorter than the sweep interval makes its"
