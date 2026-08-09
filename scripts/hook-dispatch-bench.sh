@@ -184,8 +184,10 @@ awk -F'\t' -v ctrl="$CONTROL" -v armb="$ARM_B" -v ls="$2" -v le="$3" '
     spread_bad = (m >= 2 && R[1] > 0.0000001 && R[m]/R[1] > 2.5)
     if (ctrl) {
       printf "\n  NULL CONTROL: both arms dispatch SERIALLY; only the results key differs.\n"
-      if (med < 0.80 || med > 1.25 || spread_bad)
-        printf "  ⛔ CONTROL FAILED — median %.2fx is not 1.00x (or the spread is too wide). This rig\n     cannot presently resolve the effect it is used to measure. Do NOT quote a live run\n     taken under this ambient; re-run both when the box is quieter.\n", med
+      if (med < 0.80 || med > 1.25)
+        printf "  ⛔ CONTROL FAILED — median %.2fx, and a null must sit at 1.00x. The rig is BIASED,\n     not merely noisy: one arm is being measured differently from the other. Do NOT quote\n     a live run taken under this ambient.\n", med
+      else if (spread_bad)
+        printf "  ⛔ CONTROL FAILED ON SPREAD — the median is %.2fx (correct), but the per-cycle ratios\n     run %.2f..%.2f, so the noise floor here is wider than most effects worth finding.\n     It is UNBIASED and UNDERPOWERED. A live median is quotable only if its own spread\n     clears this band; say so explicitly rather than quoting the number bare.\n", med, R[1], R[m]
       else
         printf "  ✅ CONTROL PASSED — median %.2fx, spread %.2f..%.2f. A live run under this ambient\n     is quotable.\n", med, R[1], R[m]
     } else if (spread_bad) {
