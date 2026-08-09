@@ -495,7 +495,10 @@ if [ -z "$MODE" ] && [ "$#" -eq 0 ] && [ -z "${CC_BATS_SC_OWN+set}" ]; then
     # to stderr, and the rc is swallowed by the `|| true` that keeps `set -o pipefail` happy). So the
     # naive ladder captures a non-empty non-ref, short-circuits past origin/main, and every repo
     # without an origin/HEAD refuses. Caught by the fixture repo in tests/, which has exactly that
-    # shape. (scripts/wrap-ledger.sh:55 carries the same pattern — noted, out of scope here.)
+    # shape. (scripts/wrap-ledger.sh carried the same pattern; FIXED there by 7bc4b4e5, which used
+    # `symbolic-ref -q` — a probe that prints NOTHING on failure — and it is now pinned by a test.
+    # The pointer is kept because this ladder gets copied between scripts: copy THIS form, never the
+    # naive one. The old wording said "out of scope here", which a later reader took as still-open.)
     if git -C "$ROOT" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
       _trunk="$(git -C "$ROOT" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || true)"
     fi
