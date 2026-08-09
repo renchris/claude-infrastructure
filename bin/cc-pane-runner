@@ -83,6 +83,55 @@ _fallback() {
 #   transport usable by handoff at all; it is not a stylistic alternative to eval.
 # `nocorrect` survives it (a zsh reserved word, verified under -l -i -c), so the shared $CMD shapes —
 # which tests/handoff-fire-typed-cmd-correctable.bats pins — need no argv-specific variant.
+# ── STARTUP-WEDGE WATCHDOG (backlog 71908843ff77) ────────────────────────────────────────────────
+# This file is the chokepoint every kitty-spawned agent pane passes through, and it is the only
+# place that sees the launch BEFORE the command runs — so it is where the census
+# (docs/research/cc-startup-modals-2026-08-04.md §3) put the detector for the one failure mode that
+# no other instrument on this box can see: a session stopped at a blocking startup modal. The pane
+# is alive, the process is alive, SessionStart never fires, so there is no cc-registry row, no
+# telemetry row and no transcript. cc-spawn-verify reports `0 RUNNING` because the process really
+# does exist. The brief is never run and nothing notices.
+#
+# ARM ONLY FOR A CLAUDE SESSION. This runner transports whatever command it is handed; a monitor,
+# a probe or a plain shell has no assistant turn to produce and no composer to render, so arming
+# on one would page a pane that is behaving exactly as intended. The verb is matched, not the whole
+# line, so a `--append-system-prompt` that merely MENTIONS claude cannot arm it.
+#
+# BLAST RADIUS. A side-car must fail no wider than itself (memory:
+# addon-failure-exceeds-its-blast-radius). Everything below is unset-safe, non-fatal, backgrounded,
+# and — load-bearing in a pane launcher — has all three fds redirected to /dev/null. A background
+# child that keeps the pane's stdout/stderr open is how 43 wrappers once sat pinned for 10h on one
+# orphan's fd2 (memory: procsub-pid-is-unreachable-own-the-pipe).
+_arm_wedge_watch() { # $1=the command about to run
+  [ "${CC_PANE_WEDGE_WATCH:-1}" = 0 ] && return 0
+  [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
+
+  # The launch VERB: strip a leading `nocorrect`, take the first word, then its basename.
+  local _v="${1#nocorrect }"; _v="${_v%% *}"; _v="${_v##*/}"
+  case "$_v" in
+    claude|claude[0-9]|claude-*|fable|fable[0-9]|cc) ;;
+    *) return 0 ;;
+  esac
+
+  # Resolve THIS file's real directory (it is reached through ~/.claude/bin's per-file symlinks as
+  # often as through the checkout), then fall back to the live layer. Every candidate is
+  # unset-guarded: a bare $HOME here would abort the whole runner under `set -u` and take the pane's
+  # command with it — the resolver failing wider than the thing it resolves.
+  local _s="$0" _t _sd _c _w=""
+  while [ -L "$_s" ]; do
+    _t="$(readlink "$_s" 2>/dev/null)" || break
+    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
+  done
+  _sd="$(cd "$(dirname "$_s")" 2>/dev/null && pwd)" || _sd=""
+  for _c in "${_sd:+$_sd/cc-wedge-watch}" "${HOME:-}/.claude/bin/cc-wedge-watch"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { _w="$_c"; break; }
+  done
+  [ -n "$_w" ] || return 0
+
+  ( "$_w" --pane "$KITTY_WINDOW_ID" --label "${_v}" >/dev/null 2>&1 </dev/null & ) >/dev/null 2>&1
+  return 0
+}
+
 _launch() { # $1=command — never returns
   printf '%s\n' "$1"
   # CONSUME the env-mode delivery record before running it — the exact analogue of the `rm -f` the
@@ -99,6 +148,7 @@ _launch() { # $1=command — never returns
   # Read the mode FIRST: it is half of the same record, and the branch below still needs it.
   local _interactive="${CC_PANE_CMD_INTERACTIVE:-0}"
   unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE
+  _arm_wedge_watch "$1"
   # `set +u` FIRST — and it is parity, not laxity. The command this file runs used to be typed at an
   # interactive zsh where nounset is off; inheriting THIS file's `set -u` into it would abort any
   # command that reads an unset variable, i.e. this file would change the meaning of commands it is

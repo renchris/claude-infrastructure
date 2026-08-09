@@ -41,6 +41,13 @@ key, bypass disclaimer, managed settings, MCP approval, CLAUDE.md includes, spen
 detector — which is the part that makes this class-level rather than instance-level, and is the
 open work.
 
+> **DETECTOR BUILT 2026-08-08** (backlog 71908843ff77) — `bin/cc-wedge-watch`, armed from
+> `bin/cc-pane-runner`, oracle in `hooks/lib/engagement.sh`, proof in
+> `tests/spawn-wedge-watchdog.bats`. **§3's prescribed screen-text anchor was refuted at build time
+> and is NOT what shipped** — see the boxed correction in §3 before reading that section's design.
+> The rest of this line still stands: the MUST-REACH-OPERATOR class remains deliberately
+> unsuppressed.
+
 ---
 
 VERDICT — the fix is **two settings.json keys + one per-cwd trust seed + one positive-anchor watchdog**, and all four halves are now measured, not inferred. `tui:"default"` is the real, schema-validated suppressor (doctor validates it in both directions; A/B G→H proves it on the natural path). `settings.json`'s `.env` block **is applied to Claude Code's own startup gates** (inversion J vs K), which is the durable rail for every gate that has no schema key. The class-level part is the detector, because the enumeration rots — this repo already shipped that enumeration on 2026-07-11 (`lr-preseed-env.sh:115-123`, six counters, `fullscreenUpsellSeenCount` absent because the dialog did not exist yet) and that stale list is *why* the operator was blocked on 2026-08-04.
@@ -142,6 +149,58 @@ The last two are AMBER — they are the only way to reach resume-return and the 
 
 **Anchor, measured 9/9 across every probe:** whitespace-collapsed **`?forshortcuts`**. PRESENT in all 5 usable runs, ABSENT under all 4 blocking modals. Rejected alternative: `Entertoconfirm` — absent on the theme picker, i.e. it false-GREENs on dialog #1.
 
+> ### ⛔ CORRECTION 2026-08-08 — THE ANCHOR ABOVE WAS DEAD BEFORE IT SHIPPED. Do not build on it.
+>
+> Re-measured against the LIVE fleet at build time (backlog 71908843ff77), every kitty pane,
+> `kitten @ get-text`, this section's own de-escape-then-collapse normalisation:
+>
+> | anchor | healthy, working CC panes |
+> |---|---|
+> | `?forshortcuts` | **0 of 23** |
+> | `automodeon` | **23 of 23** |
+>
+> Every pane on this box runs **auto mode**, whose footer — `⏵⏵ auto mode on (shift+tab to cycle) ·
+> ← for agents` — REPLACES the shortcuts hint. The 9/9 above was measured on throwaway probe homes
+> started *without* auto mode, so it never described the production population at all. Shipped as
+> prescribed, this detector's first act would have been to page **23 healthy panes as wedged** — the
+> alarm that always fires, which carries exactly as many bits as one that never fires and is
+> switched off within a day.
+>
+> This section predicted its own failure four days early ("the anchor is UI text and will change")
+> and drew the right conclusion — *mandate a positive control* — but attached it to the wrong
+> half: a control on the ANCHOR could only ever say "the anchor died", never "here is a signal that
+> does not". **The load-bearing correction is that screen text cannot be the primary oracle at all.**
+>
+> **What was built instead** (`bin/cc-wedge-watch` + `hooks/lib/engagement.sh` +
+> `tests/spawn-wedge-watchdog.bats`), keeping this section's polarity argument intact:
+>
+> ```
+> WEDGED := NOT engaged(a content-bearing assistant turn)  AND  NOT ui_up(screen anchors)
+> ```
+>
+> - **Primary = the assistant turn**, via the registry row → `session_id` → transcript path lifted
+>   from `handoff-fire.sh` (the "second arm" below). A fact about a JSONL record; no footer
+>   redesign can touch it. This is what backlog 71908843ff77 asked for in its own title.
+> - **Screen text is DEMOTED to a suppressor**, multi-alternative (`?forshortcuts` retained — it is
+>   still correct for a pane not in auto mode), so it distinguishes "idle at a composer" (healthy)
+>   from "stopped at a dialog". `cc-wedge-watch --calibrate` is the standing check that the set has
+>   not gone inert again, scored over panes that HAVE a cc-registry row — the only denominator for
+>   which "should match an anchor" is even true.
+> - **Both axes are is-it-GREEN tests, so both degrade toward MORE pages, never fewer**: a stale
+>   anchor set collapses the predicate onto the transcript axis; a moved registry collapses it onto
+>   the screen axis. Neither failure is silent.
+>
+> Verified at build time: **20/20 live panes ENGAGED, 0 false pages**; a real pane held at a
+> blocking prompt with its registry row removed reads **WEDGED**; three suite mutants (inverted
+> detector, anchor set reduced to `?forshortcuts`, lib copy drifted) each go red on the right test.
+>
+> Two of this section's other calls survived contact and are worth keeping: the **box-drawing rule
+> `─────` is not usable** (present on 23/23 healthy panes, but every dialog draws a frame — it
+> false-GREENs on the target state), and **`Entertoconfirm` stays rejected** for the reason given.
+> *(memory: control-calibrated-to-implementation-decays — a control keyed to the current
+> implementation dies silently when the implementation changes; and a rendering claim is only ever
+> true of the renderer you measured.)*
+
 **Why not the obvious signals** (all measured, all blind): SessionStart hooks never fire behind a modal ⇒ no cc-registry row, so `cc-board`'s otherwise-correct `NO-RENDER?` predicate has nothing to join against. No `/tmp/cc-telemetry` row (statusline writes at turn boundaries) ⇒ `lead-supervisor.sh:96` iterates an empty set, and its fleet-aggregate `self_check` is separately saturated shut (56 rows vs 9 panes, delta −47 vs `PANE_DELTA_TOL=0`). Transcript absence does not discriminate — 0 `*.jsonl` in **both** the stalled and the cleared home. `cc-spawn-verify` returns `0 RUNNING` (the process exists with `--agent-name`) and its `parked_evidence` arm filters `in_alternate_screen is False` (`bin/cc-spawn-verify:124-131`) — the exact condition a TUI modal inverts.
 
 **Where it lives — `bin/cc-pane-runner`, the chokepoint.** Every kitty-spawned agent pane passes through it, it already knows `$KITTY_WINDOW_ID`, and it is the only place that sees the launch **before** the command runs. Arm a background watchdog immediately before `eval "$_cmd"`:
@@ -173,6 +232,23 @@ fi
 **Positive control is mandatory** (the anchor is UI text and will change): `tests/spawn-wedge-watchdog.bats` must include a deliberately-stalled arm that **FAILS** the check. Without it, the day `? for shortcuts` changes every pane silently reads as wedged — or worse, someone inverts the check to quiet it.
 
 **Second arm, generalise rather than rebuild:** lift `assistant_turn_in()` / `engagement_seen()` out of `scripts/handoff-fire.sh:978-1028` into `hooks/lib/engagement.sh` and call it from `lr-fire-resume.sh` and `cc-upgrade-gate.sh`, which today have no oracle at all. It is the only thing in the tree that would have caught this incident, and it is already proven in production.
+
+> **BUILT 2026-08-08 — and the correction above PROMOTED it from second arm to primary.** `hooks/lib/engagement.sh`
+> exists and `bin/cc-wedge-watch` is its first consumer. Two deltas from the prescription:
+>
+> - **The line numbers had moved** (`978-1028` → `1752-1800`); the functions are found by name, not offset.
+> - **It is a byte-identical COPY under a parity test, not a refactor.** Six suites — `fire-engagement`,
+>   `handoff-engage-scan-window`, `handoff-fire-pane-parked`, `handoff-lifecycle-record`,
+>   `handoff-recycle-engagement`, `handoff-selfclose` — `sed`-extract these functions out of
+>   `handoff-fire.sh` as ISOLATED units; that extraction *is* their isolation strategy. Making
+>   handoff-fire source the lib would break all six and put the live fire path at risk for a
+>   refactor's benefit. `tests/spawn-wedge-watchdog.bats` instead compares the two copies
+>   byte-for-byte on every run, with a mutation control proving the comparison can fail — so drift
+>   is caught in the only direction that matters, and no existing suite had to change.
+>
+> **Still open, and still correct:** `scripts/limit-recover/lr-fire-resume.sh` and
+> `scripts/cc-upgrade-gate.sh` remain without an oracle. The lib they need now exists — each is a
+> `source` plus a `cc_engaged_pane` call away.
 
 ---
 
