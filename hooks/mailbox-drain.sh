@@ -109,7 +109,11 @@ if [ "$MODE" = "post-tool" ]; then
   _min="${CC_POSTTOOL_DRAIN_MIN_S:-20}"; case "$_min" in ''|*[!0-9]*) _min=20 ;; esac
   # cheap pre-gate: no pending mail ⇒ the overwhelmingly common path exits without a lock or a take.
   command -v mailbox_has_pending >/dev/null 2>&1 || exit 0
-  mailbox_has_pending "$own_uuid" || exit 0
+  # COVERAGE, NOT AGREEMENT (2026-08-09) — this pre-gate must span the SAME key space the fold below
+  # covers, or it exits before the fold can run. Keyed on the session box alone it returns false for
+  # every pane-keyed line, which is 99.4% of live mail: the cheap path became a cheap DROP.
+  { mailbox_has_pending "$own_uuid" \
+    || { [ "$own_pane" != "$own_uuid" ] && mailbox_has_pending "$own_pane"; }; } || exit 0
   _pt="$_mdir/$own_uuid.posttool"
   if [ -f "$_pt" ] && [ "$_min" -gt 0 ]; then
     _ptm="$(stat -f %m "$_pt" 2>/dev/null || stat -c %Y "$_pt" 2>/dev/null || echo 0)"
@@ -117,6 +121,33 @@ if [ "$MODE" = "post-tool" ]; then
     _ptnow="$(date +%s 2>/dev/null || echo 0)"
     [ "$(( _ptnow - _ptm ))" -lt "$_min" ] 2>/dev/null && exit 0
   fi
+fi
+
+# ── COVERAGE FOLD (2026-08-09) — our OWN pane box, at EVERY boundary, not only SessionStart ──────
+# THE DEFECT THIS CLOSES. Every sender resolves a target to a PANE key (a role file, a registry row,
+# a raw uuid — all pane-keyed) and none of them calls `mailbox_resolve_key`, so mail lands in
+# `<pane>.md`. This hook reads `<session>.md`. The own-pane migrate that reconciles the two lived
+# inside the `MODE = session-start` branch below, so a session picked its pane box up **once, at
+# birth, and never again** — for its entire life a delivered line was invisible until it restarted.
+# Measured this session: 14,763 unacked lines, **99.4% under a pane key**, including 14 addressed to
+# the live `orchestrator` role minutes before the census.
+#
+# WHY READ-SIDE AND NOT A WRITER FIX. The lib's own header already reached this conclusion and it is
+# the design inversion of this repair: *"agreement is not the invariant, COVERAGE is."* Making the
+# sender resolve is one more place to be wrong, it cannot reach mail already sent, and a write-side
+# regression sends mail somewhere NOBODY reads. A read-side fold can only ever make a session hear
+# MORE, never less — so it cannot make a live session deaf, which is the one failure mode a fleet-wide
+# comms change must not have. It also retroactively drains the existing 14k-line strand.
+#
+# BOUNDED (R3): one `-f` test and, only when it hits, one migrate of the key WE already own. No
+# directory scan, no glob, no alias walk — those stay SessionStart-only below. Runs BEFORE the take so
+# the folded lines surface at this same boundary rather than the next one.
+# KILL SWITCH: CC_MBX_COVER_PANE=0 → SessionStart-only, i.e. today's behaviour verbatim.
+_covered=0
+if [ "${CC_MBX_COVER_PANE:-1}" != 0 ] && [ "$own_pane" != "$own_uuid" ] \
+   && [ -f "$_mdir/$own_pane.md" ] && command -v mailbox_migrate >/dev/null 2>&1; then
+  _covered="$(mailbox_migrate "$own_pane" "$own_uuid" 2>/dev/null || true)"
+  case "$_covered" in ''|*[!0-9]*) _covered=0 ;; esac
 fi
 
 # LOCKED atomic take on a delivery boundary → advance ONLY .seen (ack_now=0); .acked is promoted at the
@@ -171,7 +202,11 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
   # resolution fell through to the pane, lands under the pane key. One bounded, idempotent migration.
   if [ "${CC_MBX_PULL_ADOPT:-1}" != 0 ] && [ -n "$own_sid" ] \
      && command -v mailbox_adoptable_predecessors >/dev/null 2>&1; then
-    # our own pane box first (cheapest, most common)
+    # our own pane box first (cheapest, most common).
+    # 2026-08-09: the COVERAGE FOLD above now does this at EVERY boundary, so on the default path this
+    # is already drained and migrates 0 — kept because it is idempotent and because it remains the ONLY
+    # own-pane migrate when CC_MBX_COVER_PANE=0 (the fold's kill switch must degrade to today's
+    # behaviour verbatim, not to no coverage at all).
     if [ "$own_pane" != "$own_uuid" ] && [ -f "$_mdir/$own_pane.md" ]; then
       _n="$(mailbox_migrate "$own_pane" "$own_uuid" 2>/dev/null || true)"
       case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
