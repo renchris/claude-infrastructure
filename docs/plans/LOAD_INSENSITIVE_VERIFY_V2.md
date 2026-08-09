@@ -384,3 +384,68 @@ proven above: those 37 can no longer go red for a reason that is not in the tree
   `ship/backup-*` refs that may be prunable rather than landable. Do not assume stranded = landable
   (a land that never happened and a rejected design leave identical traces — only the originating doc
   distinguishes them).
+
+## 8. Status 2026-08-09 — the verdict path was ACQUITTED; the tree really was red
+
+**The standing conclusion of `da18f179ac50` is REFUTED, and that is this session's main output.** That
+item ends *"audit the VERDICT PATH, not the suites — a verifier that cannot distinguish KILLED from
+FAILED will stamp red forever on a box that logged 49 kill invocations in one night."* Measured today,
+that verifier makes the distinction correctly and the reds it was writing were true.
+
+**The elimination that closes it (the 13th).** Three measurements, none of which re-runs the filed
+chain:
+
+1. **A killed run cannot become a red — reproduced.** `timeout -k 10 6 bats a.bats b.bats` over a
+   fixture whose second test merely `sleep 60`s exits **124** and its TAP contains **zero `not ok`** —
+   only `bats: line 336: … Terminated: 15`. `classify_failures` therefore sees `pairs` empty and
+   `notok == 0`, and takes the **CUT** arm. The killed→failed hole the item hypothesised is closed by
+   C13/C23/C29 and stays closed.
+2. **The convicted population had MOVED.** Not one of the six suites the chain cleared
+   (deploy-parity, desk-arm-live, desk-recycle-durable, lr-team-audit, session-continue,
+   waiting-recycle) appears in any recent stamp. The live convicts are
+   `tests/boot-resume-launch.bats` and `tests/cc-authbrowser.bats`. Any conclusion keyed on the old
+   population was reasoning about a set that no longer exists — the `scan-revision-predates-the-fix`
+   shape, one level up: it was the *subject* that moved, not the scan.
+3. **The conviction reproduces with postland removed entirely.** In a plain detached worktree at
+   `origin/main`, a 25-file `bats` run under the same env/QoS band reddens
+   `tests/cc-authbrowser.bats:509 [ "$status" -eq 4 ]` — twice, independently — and so does that test
+   run **standalone under `-f`**, which is exactly what the retry ladder does. So the red survives
+   with the verifier, the corpus, the load and the launchd context all subtracted. **`retries=2` with
+   zero flake rows in 87 was the tell all along:** a load artefact produces flake rows; a
+   deterministic failure produces none, and this file has never once had one.
+
+**The cause, and it is one line.** `d022242d` (2026-08-08 11:00) deliberately changed the verdict for
+an unrecognisable holder on the frozen CDP port from `EXIT_BROWSER` to *fall back to a free port and
+succeed* — correctly, because 9341-9344 is also the range this box hands to per-worktree Node
+`--inspect` debuggers, and the refusal is why `cc-relogin` phase 2 had never once launched. It
+rewrote the FOREIGN-holder test for the new verdict and added three more. **It missed the positive
+control one screen below**, which still asserted `[ "$status" -eq 4 ]` on precisely that path. From
+that minute trunk was genuinely red, the ladder convicted honestly every sweep, and `deploy-live`
+refused for want of a green descendant. Fixed and landed 2026-08-09 (`ba9f6df9` → `11f83bbb`), with
+the discriminator moved from the exit code to the **port** — knob wired ⇒ cannot adopt ⇒ a different
+port; knob validated-but-unwired ⇒ adopts ⇒ same port — and mutation-proven at its own line.
+
+⚠️ **This is a FOURTH channel of §3's inversion, and it points the opposite way from the other three.**
+Channels 1-3 are tests that consult ambient machine state. This one is a test that consulted a
+**stale contract**: the subject's verdict moved and one assertion stayed behind, so it stopped
+guarding the property and started guarding the old behaviour (memory
+`stale-assertion-becomes-an-inverted-guard`). It is worth separating because the remedies do not
+overlap — pinning an env seam cannot help here, and the detector is not a lint over test bodies but
+*"which assertions did the commit that changed this verdict fail to visit?"*.
+
+🚨 **The lesson for the next reader of this document, stated plainly: a long, well-evidenced
+elimination chain is itself a premise that rots.** Ten hypotheses were killed with real evidence and
+the conclusion drawn from them was sound *on 2026-07-27*. What made it wrong on 2026-08-09 is that
+its subject — the set of convicted suites — was replaced underneath it on 2026-08-08, and nothing in
+the chain re-read that set. **Before spending a session on a filed conclusion, re-measure the thing
+it is a conclusion ABOUT.** Here that cost one `ls -t stamps | head` and one grep of `flakes.jsonl`.
+
+**Still open.** `tests/boot-resume-launch.bats::daemon context (no terminal env) + live kitty socket
+-> kitty arm` is the remaining convict and it is a genuinely DIFFERENT animal: 10/10 green standalone,
+green under `-f` exactly as the ladder runs it, green in postland's own detached cell under
+`nice -n 19 taskpolicy -c background` — i.e. not reproducible outside the full corpus. Its one ambient
+channel is `BRL_TIMEOUT_S=20` (`scripts/boot-resume-launch.sh:41`) bounding the `bin/cc-kitty-socket`
+resolver — an unpinned wall-clock budget in the SUBJECT, which is channel 3 again. C29 cross-window
+corroboration already downgrades it to a CUT on some sweeps. Do **not** enlarge the constant (§5's
+rejected row); the fix is a pinnable seam in the suite, as `cc-authbrowser` already does for its two
+budgets. Filed on `423947ccdb96`.
