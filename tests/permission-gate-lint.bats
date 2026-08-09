@@ -94,6 +94,12 @@ run_leg() {
   printf '%s' "$body" | grep -q 'CC_PERMGATE_OWN=' \
     || { echo "could not extract the leg from ship-land.sh — anchors no longer match"; return 9; }
   { printf '%s\n' '#!/bin/bash' 'set -uo pipefail' 'GATE_RED=0' 'range="AAA..BBB"'
+    # STUB gate_red — without it cases 22/23 could never pass. The leg does not assign GATE_RED
+    # directly; it calls ship-land's gate_red helper (ship-land.sh:223, used by all 27 ratchet
+    # arms). Unstubbed that is a command-not-found, swallowed by the 2>/dev/null on the harness
+    # run, so the leg still returned 1 while GATE_RED stayed 0 — exactly the "GATE_RED=0 rc=1"
+    # both mutations reported. The mutation was not surviving; the harness could not observe it.
+    printf '%s\n' 'gate_red() { GATE_RED=1; }'
     # stubbed: this land's diff touches an actuation file, so the leg must build a non-empty own-set
     printf '%s\n' 'git() { printf "%s\n" scripts/deploy-live.sh; }'
     printf 'SHIP_LAND_PERMGATE_LINT=%s\n' "$1"
