@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Hook-chain cost — the durable record
@@ -11,6 +11,27 @@ asked for.
 **Scope (frozen):** drive `2193948bb00e` to finished-verified-landed — establish what the hook chain
 actually costs, decide broker-vs-collapse on measured grounds, and land what the measurement
 supports.
+
+**CLOSED 2026-08-09.** All of AC1–AC9 met: the cost is established (§2), the broker is rejected and
+the collapse deferred on measured grounds (§3), and everything the measurement supported is built
+and landed — the abstain class of §2.5 is now closed on **all three** hooks it named (M1, M2, M3).
+
+*Why the status flipped to `complete` rather than staying open with a remainders table.* This file
+being open is what mints the recurring "advance Hook-chain cost" dispatch item (`cc-discover` C2 →
+`find-plan.sh --list-open`, gated by `cc-premise`), so an open plan whose scope is discharged
+re-dispatches workers against work that no longer exists — and this item had already logged three
+fast claim→reopen thrash cycles. The surviving remainders were therefore moved to the **enforcing**
+store first, so closing this file drops nothing:
+
+| Remainder | Backlog id |
+|---|---|
+| R-3 — `validate-bash.sh`'s 12 `grep` forks (blocked on a differential corpus) | `8942f3b1506d` |
+| R-5 — `bash-execution.log` unbounded, and it is the decay window of every rate here | `9a25cbc24799` |
+| R-7 — no all-tool-call census, so no match-all hook's cost can be stated per-hour | `f6cc5c79885b` |
+
+R-6 is deliberately **not** filed: it is a reconcile-at-point-of-use note and already lives in
+`config/hook-chains.d/pretooluse-bash` itself, where the person wiring the dispatcher will read it.
+A backlog row would be a second copy that can rot away from the first.
 
 ---
 
@@ -260,6 +281,67 @@ one payload, the desk-role file read **3×**, `key_cwd`'s `shasum`+`cut` **2×**
   cases, because the truthiness form falls through to a re-read yielding the same empty value. The
   suite header says so explicitly, so no future reader infers a contract no test enforces.
 
+### M3 — the abstain path of `teammate-checkpoint.sh` (closes R-2)
+
+The last hot-path hook in §2.5, and the one with the widest blast radius: it is registered on the
+**match-all** PostToolUse matcher (`"matcher": ""`), so unlike M1 and M2 — both scoped to `Bash` —
+its abstain path runs on **every tool call of every session**. §2.5's "9 externals to find no team"
+was re-measured today and is exactly right: `cat`, **5 × `jq` over one payload**, `git rev-parse
+--git-common-dir`, the GC damper's `find`, and `cat` of the counter.
+
+Four changes, each "spend less before a decision you were always going to reach":
+
+- **One `jq` instead of five.** The three fields the abstain path needs come from a single `jq`,
+  newline-separated. `.team_name` / `.teammate_name` are now **lazy** — read at their only use site
+  on the snapshot path (M2's lazy-`CMD` pattern), so an abstaining call never pays for them.
+- **`read` instead of `cat`**, twice: the stdin slurp (`read -r -d ''`) and the per-session counter
+  (`read < file`). Both are builtin redirects; both replaced a subshell *and* an exec.
+- **The abstain gate now precedes the GC block.** The GC is damped to once/day, but its damper is a
+  `find` — an exec — and it sat *in front of* the gate, so 4 of every 5 calls paid it only to be
+  turned away immediately after. The sweep is not rationed by the move: Stop always passes the gate
+  and fires at the end of every turn. The block itself moved **byte-identical** (asserted
+  programmatically, not by eye).
+- **The counter is validated numerically.** Not cosmetic: `read` of a corrupt counter (`not-a-number`
+  from a half-written file) reaches `$(( COUNT + 1 ))`, which under `set -u` is a *fatal* unbound-
+  variable error that kills the hook before it can checkpoint. Measured, not assumed — an empty file
+  and `007` are both harmless, so the fixture had to be the one that actually errors.
+
+**Measured — 9 → 2 external execs** on the steady-state abstain path (per-binary counting shims),
+and **−27.75 ms median (−37.5%)**, p95 82.05 → 56.33 ms (−25.73), n=30 **interleaved** A/B at load
+16.9→16.5. Interleaving is not decoration: §3 records that load swung 10.6→24.0 *during* a sibling's
+block-sequential runs and buried its deltas in noise.
+
+**The alignment guard is what makes the batched parse safe rather than merely fast.** Splitting one
+`jq`'s output on newlines assumes no field contains a newline — always true of a session uuid and an
+event name, but a *directory* may hold one. So `jq` emits a trailing sentinel; if it does not arrive
+intact, the hook re-reads per field. Without it the failure is silent and fail-**quiet**: `CWD` takes
+only the first line, `git rev-parse` rejects it, and the hook abstains — a session in such a
+directory loses its crash-recovery net with nothing logged. `tests/teammate-checkpoint-parse.bats`
+pins it with a real newline-in-path repo, with the newline in a *parent* component because git will
+not accept a ref name containing one.
+
+**Verification:** 11 new cases; `teammate-checkpoint-gc.bats` 13/0, `teammate-auto-shutdown.bats`
+50/0, `store-bounds.bats` 23/0, `rotate-autonomy-logs.bats` 14/0 — all unchanged. **Five mutants,
+one per site, all killed:** deleting the sentinel guard, re-eagering the payload fields, restoring
+the per-field `jq` fan-out, moving the GC back in front of the gate, and dropping the counter's
+numeric guard each red their named case.
+
+**A harness defect recorded because it nearly shipped a false verdict.** The first mutation pass
+reported three mutants SURVIVED. They had not — `bats` here is the `cc-bats` wrapper, which
+**refuses to start** above a concurrency/load ceiling and exits *without emitting TAP*, saying in
+its own words: "nothing ran, nothing was verified — this is a DEFERRAL, not a test result".
+Counting `not ok` lines then yields zero, byte-indistinguishable from a clean pass. The harness now
+requires the `1..N` plan line **and** N result lines before it will call anything a verdict, plus a
+green baseline before spending any mutant; with that control all three were killed. Any harness in
+this repo that shells out to `bats` needs the same positive control — this failure reads as success.
+
+**Claims this section does NOT make.** (a) The **fleet** value is larger than M1's and M2's because
+the matcher is match-all rather than `Bash` — but *how much* larger is **unmeasured**, and is not
+inferable from §2.4: that rate comes from `bash-execution.log`, which logs only Bash. Filed as R-7.
+The per-call delta above is measured; the per-hour one is not. (b) `basename` on the snapshot path
+is still a fork, left alone deliberately — it feeds the member-name derivation that recovery refs
+are keyed on, and ~3 ms on 1-in-5 calls does not buy perturbing it.
+
 ---
 
 ## 5. Remainders (named, with owners — none silently dropped)
@@ -267,10 +349,11 @@ one payload, the desk-role file read **3×**, `key_cwd`'s `shasum`+`cut` **2×**
 | # | Remainder | Measured value | Owner |
 |---|---|---|---|
 | ~~R-1~~ | **DONE — see M2 below.** | — | — |
-| R-2 | `teammate-checkpoint.sh` runs on the **match-all** PostToolUse matcher and pays 9 externals to find no team. | ~32 ms | 6 |
+| ~~R-2~~ | **DONE — see M3 above.** Re-measured before it was touched: the 9 externals were exactly as filed. 9 → 2, −27.75 ms median. | ~~~32 ms~~ → **−27.75 ms measured** | — |
 | R-3 | `validate-bash.sh` performs **12 `grep` forks** for pattern matching bash can do natively. **Deliberately not taken here** — it is a DANGER-pattern safety gate, `grep -E` and bash `=~` differ subtly, and `denylist-enumerates-spellings-not-the-class` is a live scar on this exact file. Needs a differential corpus proving identical verdicts on every pattern before a line changes. | ~42 ms | 6 |
 | ~~R-4~~ | **Superseded before it was filed** — the collapse is built and measured negative in `5c88633f`, landed inert. Not a remainder; see §3. Any revival must be measured under *sustained controlled* high load, since the win is O(load) and vanishes into noise at ambient. | — | — |
 | R-6 | **Registry/settings coupling introduced by M1.** `config/hook-chains.d/pretooluse-bash` names `curl-gate.py` because that is what settings.json registers today. If the operator runs `26-curl-gate-scope-activate.sh`, settings.json will name `curl-gate-scope.sh` and the two sets diverge. **No runtime effect while the dispatcher is inert** (it cannot run), and `tests/hook-chain-live-parity.bats`'s drift guard compares the registry against a test-internal `MEMBERS` array rather than live settings, so nothing reds either. But whoever wires the dispatcher must reconcile them — a note to that effect is in the registry file itself, at the point of use. | — | 6 |
+| R-7 | **No census of ALL-tool calls exists**, only of Bash. §2.4's fleet rate comes from `bash-execution.log`, so every per-hour figure in this document is scoped to `matcher: "Bash"` hooks. M3's subject runs on the **match-all** matcher, i.e. on a strictly larger population that nothing measures — so M3's fleet value is known only in direction, not magnitude, and the same blind spot covers `cc-permission-beacon.sh` and `mailbox-drain.sh`, which are also registered match-all. Needs a tool-call counter before any match-all hook's cost can be stated per-hour. | unmeasured | 6 |
 | R-5 | `bash-execution.log` is **9.46 MB** and unbounded (§8.5.5 flagged it at 23% over its stated cap; it has since grown). It is the *only* source for the fleet Bash rate in §2.4, so its rotation policy silently sets the decay window of every figure in this document. | — | 6 / 10 |
 
 ---
@@ -298,6 +381,8 @@ one payload, the desk-role file read **3×**, `key_cwd`'s `shasum`+`cut` **2×**
 | AC5 | M1 changes no security verdict | 14/14 green incl. `\u`-escape anchor; byte-identical delegation asserted against the real gate as oracle |
 | AC6 | Wiring respects C10 and is reversible | activation script verified dry-run/apply/re-apply/undo; live layer untouched |
 | AC7 | Every unbuilt improvement is named with its measured value and owner | §5 |
+| AC8 | The abstain class §2.5 identified is closed on all three hooks it named, each re-measured before being touched rather than trusted from the filing | M1 (`curl-gate.py`), M2 (`waiting-recycle.sh`), M3 (`teammate-checkpoint.sh` — 9 externals re-measured as filed, then 9 → 2) |
+| AC9 | No fast path is asserted by a test that cannot fail on its absence | M3's 5 mutants, one per site, all killed — over a baseline proved green first, through a harness that now proves the suite RAN (§M3, the `cc-bats` deferral) |
 
 ---
 
