@@ -158,15 +158,47 @@ Memoising at each call site would be **six edits to six safety-adjacent hooks**.
 `wrap-ledger.sh` itself — the one chokepoint all six already funnel through (MEMORY.md
 `enforcement-must-live-at-the-chokepoint`).
 
-**Measured on this repo, one Stop = 6 consumers:**
+**Measured on this repo, one Stop = 6 consumers, dispatched the way §2 says they actually are —
+CONCURRENTLY:**
 
 ```
-today            6 × 10  = 60 git subprocesses
-with the memo    1 × 12 + 5 × 3 = 27
-cut              2.22×
+WRAP_CACHE=off (today)                     60 git subprocesses
+memo, COLD  (all six arrive together)      27          ⇒ 2.22×
+memo, WARM  (unchanged tree, within TTL)   18          ⇒ 3.33×
 ```
 
-(A miss costs 12, not 10, because the fingerprint itself reads HEAD and porcelain. A hit costs 3.)
+### 5.2 The sequential figure was real, and it measured the wrong arrival pattern
+
+The first version of this memo had no single-flight, and it was measured by calling `--machine` six
+times **in sequence**: 60 → 27, a clean 2.22×. That number was arithmetically correct and
+operationally meaningless, because §2 of this very document had already established that the six
+consumers do **not** arrive in sequence — they are dispatched inside one 45 ms window.
+
+Re-measured in the shape production actually uses:
+
+```
+WRAP_CACHE=off                             60 git subprocesses
+memo, six CONCURRENT, cold                 72          ⇒ 20% WORSE
+```
+
+All six miss together, all six compute, and the six fingerprints become pure added cost. **The memo
+was a regression on its own hot path** — the first Stop after any tree change, which is the common
+case — and the sequential bench could not see it.
+
+Fixed with bounded **single-flight**: the first caller takes a `mkdir` lock and computes; the others
+take one short sleep and re-read the atomically-`mv`'d result. Deliberately **one sleep, not a poll
+loop** — `sleep` is a fork on this box, so a 40 ms poll over a 2 s bound would fork ~50 times per
+loser and cost more than the git calls it saves. Fail-open at every step: cannot lock ⇒ compute;
+waited and still nothing ⇒ compute; stale lock from a crashed winner ⇒ clear it and compute, never
+wait behind a corpse. Pinned by `F1` (concurrent cold must be strictly cheaper than uncached), `F3`
+(a backdated lock must not be waited behind) and the `F4` mutation (removing the lock must make the
+concurrent path regress — if it did not, `F1` proves nothing).
+
+**The generalisable lesson, and it is the sharper of this wave's two:** a cache benchmarked in an
+arrival pattern its callers do not use will report the saving it was hoping for. The correction was
+available in §2 of the same document — the concurrency finding and the cache were measured hours
+apart and it took a deliberate re-check to connect them. *A cache may never make the uncached path
+worse than uncached*, and that is a property of the **arrival pattern**, not of the hit rate.
 
 **Keyed by content, not by time.** The key is HEAD + the full porcelain digest + the mtimes of the
 non-git stores the rungs read (decisions ⇒ ⛔, backlog ⇒ 👤, failed migrations ⇒ 🚀). A pure TTL
@@ -258,7 +290,7 @@ Each is cheap and re-runnable with the landed instruments:
 
 ## 9. Method note
 
-Three instrument defects were caught during this wave, each of which had already produced plausible
+Four instrument defects were caught during this wave, each of which had already produced plausible
 output — the same pattern Wave A §9 recorded, and the reason that section is now a standing habit:
 
 - **The null control could not fail.** Its first version labelled both arms `serial`, so the verdict
@@ -267,6 +299,9 @@ output — the same pattern Wave A §9 recorded, and the reason that section is 
   certifies whatever it is pointed at.
 - **The TTL bound was inert** (§5.1) — `find -mmin` truncation, caught only because a test asserted
   against it rather than reading the code.
+- **A benchmark in the wrong arrival pattern** (§5.2) — six sequential calls reported a 2.22× saving
+  for a change that was 20% *worse* in the concurrent shape its callers actually use. The refuting
+  fact was already written down in §2 of this same document.
 - **An apostrophe inside a single-quoted `awk` program** silently terminated the program mid-verdict.
   It failed loudly here, but the same class in a `sed` mutation expression made a mutation check
   *error out* rather than fail — and an erroring mutation check reads, at a glance, exactly like a

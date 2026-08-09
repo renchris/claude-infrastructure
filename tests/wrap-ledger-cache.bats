@@ -223,3 +223,75 @@ runshim() { : > "$SHIM/calls.log"; PATH="$SHIM:$PATH" bash "$S" --machine >/dev/
   fi
   [ "$n2" -eq "$n1" ]
 }
+
+# ══ §F — SINGLE-FLIGHT. Without it the memo is a measured REGRESSION, not a saving. ══
+#
+# The six consumers are dispatched CONCURRENTLY, not one after another. Cold, all six miss together
+# and the fingerprints become pure added cost: measured 72 git subprocesses against 60 with the
+# cache off. The sequential figure was real and measured the wrong arrival pattern.
+
+conc6() { # <label-of-env> — six concurrent --machine runs, returns the git subprocess count
+  : > "$SHIM/calls.log"
+  local i
+  for i in 1 2 3 4 5 6; do
+    PATH="$SHIM:$PATH" env "$@" bash "$S" --machine >/dev/null 2>&1 &
+  done
+  wait
+  gitcalls
+}
+
+@test "F1: six CONCURRENT consumers cost strictly less than six uncached — no stampede" {
+  mkshim
+  off="$(conc6 WRAP_CACHE=off)"
+  cold="$(conc6 WRAP_CACHE_DIR=$WRAP_CACHE_DIR)"
+  # The cold concurrent case is the one that regressed before single-flight. It must be a saving,
+  # not merely "no worse" — a cache that breaks even on its own hot path is not worth its risk.
+  [ "$cold" -lt "$off" ]
+  [ "$off" -ge 30 ]
+}
+
+@test "F2: six concurrent consumers leave NO lock behind" {
+  mkshim
+  conc6 WRAP_CACHE_DIR="$WRAP_CACHE_DIR" >/dev/null
+  n="$(find "$WRAP_CACHE_DIR" -name '*.lock' -type d 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 0 ]
+}
+
+@test "F3: a STALE lock is cleared, not waited behind" {
+  # A winner that died mid-compute must cost one stale window, never wedge every later close.
+  bash "$S" --machine >/dev/null            # mint the key so the lock path is predictable
+  f="$(find "$WRAP_CACHE_DIR" -name '*.machine' | head -1)"
+  : > "$f"                                   # force a miss without changing the key
+  mkdir -p "$f.lock"
+  touch -t 202001010000 "$f.lock"
+  run bash "$S" --machine
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG='
+  ! [ -d "$f.lock" ] || false
+}
+
+@test "F4: MUTATION — removing single-flight makes the concurrent cold path REGRESS" {
+  m="$D/mut4.sh"
+  # Neuter the lock acquisition so every concurrent caller believes it is the winner, which is the
+  # pre-single-flight behaviour exactly.
+  sed 's|if mkdir "$LOCK" 2>/dev/null; then|if true; then|' "$S" > "$m"
+  chmod +x "$m"
+  grep -q 'if true; then' "$m"
+
+  mkshim
+  : > "$SHIM/calls.log"
+  for i in 1 2 3 4 5 6; do PATH="$SHIM:$PATH" WRAP_CACHE=off bash "$m" --machine >/dev/null 2>&1 & done
+  wait
+  off="$(gitcalls)"
+  : > "$SHIM/calls.log"
+  for i in 1 2 3 4 5 6; do PATH="$SHIM:$PATH" bash "$m" --machine >/dev/null 2>&1 & done
+  wait
+  cold="$(gitcalls)"
+  # Without the lock the memo costs MORE than no memo at all: six fingerprints on top of six
+  # full computations. If this still comes out cheaper, F1 proves nothing.
+  if [ "$cold" -lt "$off" ]; then
+    echo "MUTATION SURVIVED: single-flight removed but the concurrent cold path was still cheaper ($cold < $off)" >&2
+    false
+  fi
+  [ "$cold" -ge "$off" ]
+}

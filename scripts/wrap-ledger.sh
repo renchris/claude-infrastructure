@@ -204,6 +204,45 @@ if [ "$MODE" = machine ] && [ "$WRAP_CACHE" != off ]; then
         exit 0
       fi
     fi
+
+    # ── SINGLE-FLIGHT. Without this the memo is a REGRESSION, measured. ────────────────────────
+    # The six consumers do not arrive one after another — they are dispatched CONCURRENTLY (the
+    # finding in docs/research/active-session-occupancy-2026-08-09.md §2: 8-9 distinct Stop hooks in
+    # flight inside one 45 ms sample). So on the first Stop after any tree change all six miss
+    # together, all six compute, and the fingerprints are pure added cost. Measured, six concurrent
+    # consumers, cold: 72 git subprocesses against 60 with the cache off — 20% WORSE. The sequential
+    # 60 -> 27 figure was real and measured the wrong arrival pattern, which is the whole trap.
+    #
+    # ONE SLEEP, NOT A POLL LOOP. `sleep` is a fork on this box, so a 40 ms poll over a 2 s bound
+    # would fork ~50 times per loser and cost more than the git calls it saves. A single wait sized
+    # just above a full ledger run catches the winner; missing it degrades to computing, which is
+    # exactly today's behaviour. A cache may never make the uncached path worse than uncached.
+    #
+    # FAIL-OPEN AT EVERY STEP. Cannot mkdir the lock ⇒ compute. Waited and still nothing ⇒ compute.
+    # Stale lock from a crashed winner ⇒ clear it and compute, never wait behind a corpse.
+    WRAP_CACHE_WAIT_S="${WRAP_CACHE_WAIT_S:-0.25}"
+    WRAP_CACHE_LOCK_STALE_S="${WRAP_CACHE_LOCK_STALE_S:-10}"
+    LOCK="$CACHE_FILE.lock"
+    mkdir -p "$WRAP_CACHE_DIR" 2>/dev/null
+    if mkdir "$LOCK" 2>/dev/null; then
+      # WINNER: compute, write, release. The trap is what makes a crash cost one stale-lock window
+      # instead of wedging every later close.
+      trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+    else
+      lock_mt="$(stat -f '%m' "$LOCK" 2>/dev/null || echo 0)"
+      now_s="$(date +%s 2>/dev/null || echo 0)"
+      if [ "$((now_s - lock_mt))" -ge "$WRAP_CACHE_LOCK_STALE_S" ]; then
+        rmdir "$LOCK" 2>/dev/null
+      else
+        # LOSER: one bounded wait for the winner's atomic mv, then re-read. No git in this path.
+        sleep "$WRAP_CACHE_WAIT_S" 2>/dev/null
+        if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && cache_fresh "$CACHE_FILE" \
+           && grep -q '^RUNG=' "$CACHE_FILE" 2>/dev/null; then
+          cat "$CACHE_FILE"
+          exit 0
+        fi
+      fi
+    fi
   fi
 fi
 
