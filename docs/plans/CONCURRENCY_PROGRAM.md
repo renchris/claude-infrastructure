@@ -1121,7 +1121,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 |---|---|---|---|
 | **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
 | **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
-| **B** — cut active occupancy (serialise hooks, cache git) | **S**, but **SERIALISED AFTER A** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
+| **B** — cut active occupancy (serialise hooks, cache git) — **UNBLOCKED, unowned; now the ONLY load lever** | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
 | **E** — headless / render | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. | launch path |
 | **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
@@ -1186,7 +1186,12 @@ remaining for bursts       ≈ 19 GB      vs a measured 372-proc wave ≈ 23 GB
 ⇒ **At 150 resident there is no room for even ONE unbounded cold compile.** Burst bounding is not an
 optimisation on this path, it is a precondition.
 
-### S6.3 · Phase A — make idle sessions free  ⟵ *start here; largest lever*
+### S6.3 · Phase A — make idle sessions free  ⟵ 🚨 **CLOSED, NOTHING BUILT — PREMISE REFUTED. See S6-UPDATE.**
+
+> Wave A (`fb62d4a0`, `64bc5d47`, `docs/research/idle-session-occupancy-2026-08-09.md`) measured an
+> idle resident session at **0.0031 runnable threads** — 6× UNDER this section's own 0.02 target,
+> with no change made. Idle sessions were **already free**. The poller census below is **argv
+> contamination** and is retained only as the evidence trail. Do not scope work from it.
 
 An idle session must cost ~0. Today it does not: measured concurrently at 12–19 sessions were **19
 `cc-reaper`, 20 `cc-await-ping`, 6 `cc-reconcile`, 37 `sleep` processes** — per-session pollers that
@@ -1412,3 +1417,90 @@ waiting on one. Re-order accordingly:
 - **A new term belongs on this list and is owned by nobody: ptys.** 2.2/session measured ⇒ 330 of
   511 at 150 resident, while load sits at 0.46 of 20. It binds ~43× sooner than the term this whole
   section is written in.
+
+---
+
+## S6-UPDATE · Wave A closed — and it refutes S6.3's premise (2026-08-09, owner edit)
+
+Wave A landed `fb62d4a0` + `64bc5d47`; detail in `docs/research/idle-session-occupancy-2026-08-09.md`.
+Integrated here by the file's owner. **Nothing was built, and that is the correct outcome.**
+
+### 1 · Phase A is closed with no change made — idle sessions were already free
+
+| | S6.3's target | Measured |
+|---|---|---|
+| idle resident session | ≤0.02 runnable threads | **0.0031** (6× under) |
+| 150 resident, fleet + every poller | — | **0.46** against a ceiling of **20** |
+
+The residency lever S6.3 called "the largest" did not exist. Phase A required no code.
+
+### 2 · 🚨 The census S6.3 was scoped on was argv contamination — and the plan manufactured it
+
+Command-position re-measurement against my `pgrep -f`-shaped original:
+
+| Process | S6.3 claimed | Command-position truth |
+|---|---|---|
+| `cc-reaper` | 19 | **0** |
+| `cc-reconcile` | 6 | **0** |
+| `cc-await-ping` | 20 | **1** |
+
+Both sweepers are **ONE box-wide launchd job with zero hook call-sites**. Reproduced live while
+writing this: `cc-reaper` reads **9** by `ps -axo args= | grep` and **0** by command position.
+
+**The generating defect, stated so it cannot recur.** `pgrep -f` matches any process whose *argv*
+mentions the string — and on this box argv carries whole agent briefs. **The contaminating strings
+were in this plan's own text, and in the brief written from it.** So the plan became the source of
+the evidence for its own largest wave: the more sessions read S6.3, the more "pollers" S6.3's method
+found. The live counts above are nonzero *only* because sessions are currently reading this file.
+
+This is already in the fleet's memory index (`pgrep-f-matches-agent-briefs`). It was also caught and
+corrected **mid-session by the author** — a command-position census was run, and then the
+*uncorrected* numbers were carried into the plan anyway. **Detecting a bad instrument does not
+retract the figures already taken with it; the deliverable must be re-derived, not just the method.**
+
+### 3 · The 1.6 is an ACTIVE-session number — B is now the only load lever
+
+S6.2 already said this; S6.3 nonetheless spent the residency budget on it. With idle at 0.0031,
+**Wave B is the sole remaining load lever**, and it is **UNBLOCKED**: Wave A touched no hook, no
+poller and no session tooling, so the single-owner-per-shared-file gate in S6-Phase 0 has nothing to
+hold B behind. B is unowned — dispatch it.
+
+⚠️ **Instrument note for B:** Wave A reports ~1.5 of the 1.6 is fork churn its ΔCPU method **cannot
+see**. Use `occupancy-probe.sh`'s **1 Hz R-state sampler**, not ΔCPU, or B will measure its own
+blind spot and report success.
+
+### 4 · A new binding term nothing in A–F owns: PTYs — but it does NOT foreclose 150
+
+Wave A raises the pty ceiling as the real wall at 150 and ranks it #1; the Fable panel derived the
+same term independently from the opposite direction. **The term is real and belongs in this plan.**
+I am recording it with a dissent on its magnitude, because the two available measurements differ 1.8×
+and they are measuring different things:
+
+| Method | Measured | ⇒ at 150 sessions | vs `kern.tty.ptmx_max` = **511** |
+|---|---|---|---|
+| Wave A — `ls /dev/ttys*` (allocated device **nodes**) | 33 nodes / 15 procs = **2.2** | 330 | fits (65%) |
+| This session — distinct ttys **in use** (`ps -axo tty=`) | 11 / 9 sessions = **1.22** | 183 | fits (36%) |
+
+Node-count is an **upper** bound (nodes persist after use); in-use is a **lower** bound. Truth sits
+between, and on *both* it **fits under the stock 511** — before raising anything. The architectural
+ceiling is ~**999** (`/dev/ttys%03d`, three digits), and `ptmx_max` is raisable toward it with root.
+
+⇒ **Correction to Wave A's ranking: ptys are a MARGIN item, not the wall that stops 150.** At 2.2 the
+headroom is thin (181 ptys left for everything else, and exhaustion is a hard spawn failure, not a
+slowdown); at 1.22 it is comfortable. **What is NOT established is whether the ratio is
+activity-dependent** — and it almost certainly is, exactly as the 1.6 load figure turned out to be
+active-only. **The measurement that settles it:** distinct in-use ttys per session sampled under
+ACTIVE tool load, not at rest. Until then, treat 150 as pty-feasible with a watch, not pty-blocked.
+
+Wave **E** now owns this term, with the headless-session precondition as its first deliverable —
+*does a detached session keep its hooks and stay reachable by fleet mail*, measured not inferred.
+That is the right re-scoping: E's original justification was render cost alone, which is now the
+weaker of its two reasons.
+
+### 5 · What this does to the S6 ceiling model
+
+Load is no longer the residency constraint at all — at 150 resident the whole fleet is **0.46 of 20**.
+The three walls in S6.1 are re-ranked: **memory (§S6.2's 35 GB) and PTYs bound residency; load bounds
+only ACTIVE concurrency (Wave B); toolchain bursts (Wave C) remain the crash term.** S6.2's design
+point — 150 resident, ~10 active — is unchanged in shape, but its *reason* is corrected: residency
+was never load-limited.
