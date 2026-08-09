@@ -165,51 +165,36 @@ cmd_report() {
 }
 
 # ── CREATE A/B ARM ───────────────────────────────────────────────────────────────────────────
-# Normalises a pty capture WITHOUT the defect that made the last instrument unreadable: a TUI
-# positions text with cursor motion INSTEAD of emitting runs of spaces, so deleting escapes
-# outright fuses `Bundle upload failed: Socket is closed` into one word and every space-containing
-# pattern stops matching — a real refusal then classifies as a non-verdict.
+# THE CREATE NO LONGER LIVES HERE. It was factored out to scripts/lib/cloud-create.sh — the pty
+# allocator, the normaliser, the classifier, the id extraction and the retry — so the fire path
+# (`handoff-fire.sh --cloud`, CLOUD_OBSERVABILITY.md §10.4) could use THIS implementation rather
+# than become a fourth copy. `fire_one` below is now an adapter over that library, and its
+# behaviour here is unchanged in the two ways this instrument depends on:
 #
-# ⚠️ Two spellings do this, and fixing only one is how the defect survives its own fix.
-# cloud-ceiling-probe.sh's post-mortem named cursor-FORWARD (CSI n C); measured here on 2.1.220
-# the TUI actually emits cursor-horizontal-ABSOLUTE (CSI n G) — `Error:[8GBundle[15Gupload[22G…`.
-# Handling C alone left the exact symptom the fix was written to remove. Both become one space.
-normalise() {
-  python3 -c '
-import sys,re
-d=sys.stdin.buffer.read().decode("utf-8","replace")
-d=re.sub(r"\x1b\[[0-9;]*[CG]"," ",d)       # cursor forward AND horizontal-absolute -> space
-d=re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]","",d)   # every other CSI
-d=re.sub(r"\x1b[]P][^\x07\x1b]*(\x07|\x1b\\\\)?","",d)
-d=re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]","",d)
-print(re.sub(r"[ \t]+"," ",d))'
-}
+#   * normalisation still maps BOTH cursor-FORWARD (CSI n C) and cursor-horizontal-ABSOLUTE
+#     (CSI n G) to a space. That was this file's own hard-won finding — the ceiling probe's
+#     post-mortem named C alone, and handling C alone left the exact symptom the fix was written to
+#     remove (`Error:[8GBundle[15Gupload[22G…` fusing into one unmatchable word). The library
+#     carries it, plus a wider CSI parameter class so a private-mode sequence INSIDE a phrase
+#     cannot break the match either.
+#   * a bare `session_…` no longer counts as a create. This file's classify accepted it, which is
+#     harmless where all we do is tally but wrong for a caller that then declares the id.
+#
+# 🚨 THE SINGLE-ATTEMPT CALL IS LOAD-BEARING HERE. The library also exposes `cc_cloud_create`, a
+# bounded retry over the transient class — and this instrument must NOT use it. The number this
+# probe exists to produce is the PER-ATTEMPT success rate (§S5.3: roughly 50-75%); wrapping the
+# attempt in a retry would make every round report the success of up to N attempts under the name
+# of one, inflating the rate and erasing the very marginality it measured. `create_once` is the
+# measurement; the retry is a consumer's policy built on top of it.
+_CC_BP_LIB="$ROOT/scripts/lib/cloud-create.sh"
+[ -f "$_CC_BP_LIB" ] || die "missing $_CC_BP_LIB (the create implementation)"
+# shellcheck source=scripts/lib/cloud-create.sh
+. "$_CC_BP_LIB"
+export CC_CLOUD_CREATE_BIN="${CLOUD_BUNDLE_CLAUDE_BIN:-$CC_CLOUD_CREATE_BIN}"
+export CC_CLOUD_CREATE_TIMEOUT_S="${CLOUD_BUNDLE_TIMEOUT_S:-300}"
 
-classify() { # stdin = normalised output -> token on stdout
-  local t; t="$(cat)"
-  case "$t" in
-    *"Created cloud session"*|*"session_"*) echo created; return ;;
-  esac
-  # A fault in OUR OWN rig must never be published as a property of the fleet, so it is classified
-  # FIRST and separately (the `refused-harness` lesson from cloud-ceiling-probe.sh).
-  if printf '%s' "$t" | grep -qiE 'interactive terminal|tcgetattr|Operation not supported on socket|pty-run:|unknown option|no claude binary'; then
-    echo refused-harness; return
-  fi
-  if printf '%s' "$t" | grep -qiE 'Bundle upload failed|Repo is too large'; then echo refused-bundle; return; fi
-  if printf '%s' "$t" | grep -qiE 'limit|quota|rate.?limit|exceeded'; then echo refused-quota; return; fi
-  echo refused-other
-}
-
-fire_one() { # $1=cfgdir $2=cwd $3=label -> "<outcome>\t<first 200 chars>"
-  local cfg="$1" d="$2" label="$3" out norm
-  local bin="${CLOUD_BUNDLE_CLAUDE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
-  [ -x "$bin" ] || { printf 'refused-harness\tno claude binary at %s' "$bin"; return 0; }
-  # The create path is interactive-only and refuses on its own capture without a pty, so the
-  # allocator is not optional. pty.openpty() needs nothing of OUR stdin, which script(1) does.
-  out="$(cd "$d" && PTY_RUN_TIMEOUT_S="${CLOUD_BUNDLE_TIMEOUT_S:-300}" CLAUDE_CONFIG_DIR="$cfg" \
-         python3 "$ROOT/scripts/lib/pty-run.py" "$bin" --cloud "$label" 2>&1 || true)"
-  norm="$(printf '%s' "$out" | normalise)"
-  printf '%s\t%s' "$(printf '%s' "$norm" | classify)" "$(printf '%s' "$norm" | tr -d '\n' | cut -c1-200)"
+fire_one() { # $1=cfgdir $2=cwd $3=label -> "<outcome>\t<session id>\t<first 300 chars>"
+  cc_cloud_create_once "$1" "$2" "$3"
 }
 
 cmd_ab() {
@@ -271,7 +256,7 @@ print(os.path.expanduser(m.get(sys.argv[1],'')))" "$acct")"
   [ -n "$small" ] && printf '  arm small = %s\n' "$small"
   echo
 
-  local r arm d outcome msg line
+  local r arm d outcome msg line rest sid
   for r in $(seq 1 "$rounds"); do
     # Interleaved, never blocked: a transient network window must not land entirely on one arm.
     for arm in ${arms//,/ }; do
@@ -281,11 +266,14 @@ print(os.path.expanduser(m.get(sys.argv[1],'')))" "$acct")"
         *) die "unknown arm: $arm" ;;
       esac
       line="$(fire_one "$cfg" "$d" "cloud-bundle-probe $arm r$r: print the repository name, then stop. Do not modify any files.")"
-      outcome="${line%%$'\t'*}"; msg="${line#*$'\t'}"
-      printf '  r%s %-6s %-16s %s\n' "$r" "$arm" "$outcome" "$(printf '%s' "$msg" | cut -c1-90)"
+      outcome="${line%%$'\t'*}"; rest="${line#*$'\t'}"; sid="${rest%%$'\t'*}"; msg="${rest#*$'\t'}"
+      printf '  r%s %-6s %-16s %s %s\n' "$r" "$arm" "$outcome" "$sid" "$(printf '%s' "$msg" | cut -c1-90)"
+      # The session id goes in the ledger. This probe's own closing line tells the operator to
+      # DECLARE every created session — which was unactionable while the id lived only in a
+      # truncated msg field, and an undeclared session is both unobservable and reaper-invisible.
       emit "$(jq -n --arg k ab --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg arm "$arm" \
-        --arg cwd "$d" --arg acct "$acct" --arg o "$outcome" --arg m "$msg" \
-        '{kind:$k,ts:$ts,arm:$arm,cwd:$cwd,account:$acct,outcome:$o,msg:$m}')"
+        --arg cwd "$d" --arg acct "$acct" --arg o "$outcome" --arg m "$msg" --arg sid "$sid" \
+        '{kind:$k,ts:$ts,arm:$arm,cwd:$cwd,account:$acct,outcome:$o,session:$sid,msg:$m}')"
     done
   done
   case ",$arms," in *,small,*) [ -n "${CLOUD_BUNDLE_SMALL_DIR:-}" ] || rm -rf "$(dirname "$small")" ;; esac

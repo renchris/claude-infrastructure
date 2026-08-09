@@ -5458,6 +5458,182 @@ if [ "$FABLE_EFFECTIVE" = 1 ] && [ -f "$MODEL_CONFIG" ]; then
   [ "$active" = "true" ] || echo "⚠️  frontier_access.active != true in $MODEL_CONFIG — Fable will likely reject ('model may not exist or you may not have access'). Use --probe, or flip the SSOT first." >&2
 fi
 
+# ---- G5: THE CLOUD FIRE — create + declare, and NO local pane ---------------------------------
+# This is the half G5's ✅ never covered. CLOUD_OBSERVABILITY.md §10.4 census: this script parsed
+# `--cloud`, gated it default-off and priced it against account headroom, then never invoked a
+# create, never called `cc-cloud declare`, and never touched the claude binary — so the venue that
+# was graded green could not fire. `grep -rnE -- '--cloud' bin/ scripts/ | grep -E 'claude|pty-run'`
+# returned only the two probes and the web-setup driver.
+#
+# It branches HERE, before the typed command is composed, because everything below this point is
+# box-local machinery a cloud fire has no use for and must not run: there is no pane to spawn, no
+# composer to type into, no engagement to verify, no pane uuid to register, no cwd index row. The
+# create IS the fire. Placed after the account pick because the create is account-scoped (§10.2 —
+# a session id is not a globally-addressable handle) and the owning account has to be recorded at
+# declaration time or it is unrecoverable.
+#
+# THE CREATE ITSELF IS NOT WRITTEN HERE. §10.4: factor it out of a probe "rather than written a
+# fourth time". scripts/lib/cloud-create.sh is that factoring, out of cloud-bundle-probe.sh's
+# fire_one — it owns the pty allocator, the normaliser, the classifier, the id extraction and the
+# bounded retry, and it is the ONE implementation the probes share.
+if [ "$CLOUD" = 1 ]; then
+  _CC_CC=""
+  if [ -n "${CC_FIRE_CLOUD_LIB:-}" ]; then
+    if [ -f "${CC_FIRE_CLOUD_LIB}" ]; then _CC_CC="${CC_FIRE_CLOUD_LIB}"; fi
+  else
+    for _CC_CCD in "$(dirname "$_CC_KS")/lib/cloud-create.sh" \
+                   "$(dirname "$0")/lib/cloud-create.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cloud-create.sh" \
+                   "${HOME:-}/.claude/scripts/lib/cloud-create.sh"; do
+      if [ -f "$_CC_CCD" ]; then _CC_CC="$_CC_CCD"; break; fi
+    done
+  fi
+  # FAIL-CLOSED, unlike the capacity library's absent branch. That one fails OPEN because it sits on
+  # the universal spawn chokepoint where one missing file would refuse every fire on the box. This
+  # branch is reached only by a fire that explicitly asked for the off-box venue, so its blast
+  # radius is exactly that one fire — and firing without the library would mean firing without the
+  # pty allocator, i.e. spending an attempt on a create the CLI refuses on its own capture.
+  if [ -z "$_CC_CC" ]; then
+    echo "!! cloud fire: REFUSING — scripts/lib/cloud-create.sh is unreachable, so there is no create to make." >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh unreachable — no create implementation"
+    exit 10
+  fi
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_CC" || { echo "!! cloud fire: cloud-create.sh failed to source" >&2
+    emit_fire_refusal cloud-lib-absent "scripts/lib/cloud-create.sh failed to source"; exit 10; }
+
+  # The account's config dir. `--launcher` bypasses account selection entirely and leaves CHOSEN as
+  # a placeholder string, which cannot be routed — and an unrouted create would silently run as
+  # whichever account this session happens to be, then be declared under a name that is not its
+  # owner. That is exactly the wrong-account send §10.2 shows surfacing as "Session not found".
+  CLOUD_ACCT="$CHOSEN"
+  CLOUD_CFG=""
+  if [ -n "$CLOUD_ACCT" ] && [ "${CLOUD_ACCT#(}" = "$CLOUD_ACCT" ]; then
+    CLOUD_CFG="$(cfg_dir "$CLOUD_ACCT" 2>/dev/null || true)"
+  fi
+  if [ -z "$CLOUD_CFG" ] || [ ! -d "$CLOUD_CFG" ]; then
+    echo "!! cloud fire: REFUSING — no account config dir resolved (account='${CLOUD_ACCT:-unset}')." >&2
+    echo "   A cloud session is ACCOUNT-SCOPED: its id answers only to the account that created it," >&2
+    echo "   and a wrong-account send comes back as the API's own 'Session not found' — a DEAD-session" >&2
+    echo "   reading for a healthy session (§10.2). Use --account, not --launcher, for a cloud fire." >&2
+    emit_fire_refusal cloud-account-unresolved "no config dir for account '${CLOUD_ACCT:-unset}' — cloud sessions are account-scoped"
+    exit 10
+  fi
+
+  # THE BRANCH IS ASSIGNED HERE, NOT GUESSED. Measured 2026-08-09: `git ls-remote --heads origin
+  # 'claude/*'` returns zero rows, and the one prior fire-shaped declaration on this box names
+  # `claude/fire-20260809T101645Z-78351` — a branch with no producer anywhere in the tree. A
+  # declaration against a branch the session will never push to reads C1 NOT-STARTED forever: a
+  # confident verdict computed from evidence that has nothing to do with the session, which is the
+  # failure this whole document is organised against. So the fire NAMES the branch and the payload
+  # instructs the push. It also closes §10.2c's hazard from the other side — the name is unique per
+  # fire, so unlike `--branch main` (where trunk's own background traffic reads as a heartbeat
+  # forever) nothing but this session can advance it, and O2 becomes a real signal.
+  CLOUD_BRANCH="$(cc_cloud_branch_name)"
+  CLOUD_CWD="$PWD"; [ -d "$CLOUD_CWD" ] || CLOUD_CWD="$REPO"
+
+  # The payload = the brief, plus the ONE instruction that makes the result reachable. A cloud VM
+  # has no ~/.claude, no cc-notify and no /ship (§1, G6), so the local trailers below — the
+  # back-channel ping, the self-retire, the pane bookkeeping — are all unrunnable there. Its push
+  # IS its back-channel: scripts/cloud-reconcile.sh discovers `claude/*` on the remote and hands it
+  # to the sanctioned local lander.
+  CLOUD_PAYLOAD="$(cat "$PROMPT_FILE")
+"'
+── HOW TO RETURN YOUR WORK (this session runs off-box; read this before you finish) ──
+You are running in an Anthropic-managed VM. Nothing on the operator'"'"'s machine can see your
+filesystem, your processes or your terminal, and you cannot run this repo'"'"'s /ship. Your ONLY
+channel back is a git push, and it must go to exactly this branch:
+
+    git push origin HEAD:'"$CLOUD_BRANCH"'
+
+That branch name was assigned by the firing side and is already declared as the one thing watched
+for your progress — a push anywhere else is invisible and your work will strand. Push whatever you
+have before you finish, even if the work is incomplete; an unpushed cloud session leaves no trace
+of any kind. A local reconciler (scripts/cloud-reconcile.sh) discovers the branch and lands it.'
+
+  if [ "$DRY" = 1 ]; then
+    echo "-- DRY RUN: cloud fire (no create issued, no quota spent)"
+    echo "   account : $CLOUD_ACCT   (config dir $CLOUD_CFG)"
+    echo "   cwd     : $CLOUD_CWD"
+    echo "   branch  : $CLOUD_BRANCH   (assigned here; the payload instructs the push)"
+    echo "   repo    : $REPO"
+    echo "   binary  : $CC_CLOUD_CREATE_BIN   (attempts up to $CC_CLOUD_CREATE_ATTEMPTS)"
+    exit 0
+  fi
+
+  echo "-- cloud fire: creating on account $CLOUD_ACCT from $CLOUD_CWD (branch $CLOUD_BRANCH)" >&2
+  CLOUD_LINE="$(cc_cloud_create "$CLOUD_CFG" "$CLOUD_CWD" "$CLOUD_PAYLOAD")"
+  CLOUD_OUTCOME="${CLOUD_LINE%%$'\t'*}"
+  CLOUD_REST="${CLOUD_LINE#*$'\t'}"
+  CLOUD_ID="${CLOUD_REST%%$'\t'*}"
+  CLOUD_MSG="${CLOUD_REST#*$'\t'}"
+
+  # created-unidentified is its own exit, and it is the LOUDEST state this script can reach. A
+  # session exists, is spending an account's quota, and cannot be declared — so it is unobservable
+  # by construction (§1) and invisible to the 600 s orphan reaper. Folding it into `created` would
+  # declare an empty id; folding it into a refusal would report "no session" while one runs.
+  if [ "$CLOUD_OUTCOME" = created-unidentified ]; then
+    echo "!! cloud fire: A SESSION WAS CREATED AND CANNOT BE NAMED — the create banner carried no session id." >&2
+    echo "   It is live, spending ${CLOUD_ACCT}'s quota, and nothing local can observe, address or reap it." >&2
+    echo "   Find it at https://claude.ai/code and either declare it by hand or stop it:" >&2
+    echo "     cc-cloud declare --id <id> --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    echo "   raw: $CLOUD_MSG" >&2
+    emit_fire_refusal cloud-create-unidentified "create succeeded, no session id extractable — UNOBSERVABLE live session on $CLOUD_ACCT"
+    exit 11
+  fi
+  if [ "$CLOUD_OUTCOME" != created ]; then
+    # "or refuses with a named reason" — the DoD's other half. The classifier's token IS the name,
+    # and the four are kept distinct because they have four different cures: retry later (bundle,
+    # already retried here), wait for a reset (quota), fix the rig (harness), report a new shape
+    # (other). One merged "cloud fire failed" would make all four unanswerable after the fact.
+    echo "!! cloud fire: REFUSED — $CLOUD_OUTCOME" >&2
+    echo "   $CLOUD_MSG" >&2
+    case "$CLOUD_OUTCOME" in
+      refused-bundle)  echo "   The CLI bundled this repo and the upload failed. Retried ${CC_CLOUD_CREATE_ATTEMPTS}× (§S5.3: ~95 MiB against a 100 MiB cap)." >&2
+                       echo "   Installing the Claude GitHub App on the repo removes the upload from the create path entirely." >&2 ;;
+      refused-quota)   echo "   An account limit. Not retried: retrying inside one fire cannot clear a shared limit." >&2 ;;
+      refused-harness) echo "   OUR rig, not the fleet — binary, pty allocator or argv. Not retried: the fault is deterministic." >&2 ;;
+      refused-other)   echo "   UNRECOGNISED refusal shape. Not retried, and worth reporting: with the current normaliser this" >&2
+                       echo "   bucket had no true members across both probe ledgers, so a member now is genuinely new." >&2 ;;
+    esac
+    emit_fire_refusal "cloud-create-${CLOUD_OUTCOME#refused-}" "cloud create $CLOUD_OUTCOME on $CLOUD_ACCT: $CLOUD_MSG"
+    exit 10
+  fi
+
+  # DECLARE IMMEDIATELY (§8.1). The window between create and declare is the one interval in which
+  # a real cloud session exists that nothing on this box can see — and the orphan reaper runs on a
+  # 600 s timer — so nothing goes between these two calls. §8.1's own finding is why the order is
+  # create-then-declare and not the reverse: the id does not exist until after the fire, so it
+  # cannot be declared before it.
+  CLOUD_DECL="cc-cloud"
+  if [ -n "${CC_CLOUD_BIN+set}" ]; then CLOUD_DECL="$CC_CLOUD_BIN"      # SET-including-EMPTY seam
+  elif [ -x "$(dirname "$_CC_KS")/../bin/cc-cloud" ]; then CLOUD_DECL="$(dirname "$_CC_KS")/../bin/cc-cloud"
+  elif [ -x "${HOME:-}/.claude/bin/cc-cloud" ]; then CLOUD_DECL="${HOME:-}/.claude/bin/cc-cloud"
+  fi
+  if [ -z "$CLOUD_DECL" ] || ! command -v "$CLOUD_DECL" >/dev/null 2>&1 && [ ! -x "$CLOUD_DECL" ]; then
+    echo "!! cloud fire: session $CLOUD_ID CREATED but cc-cloud is unreachable — IT IS UNDECLARED." >&2
+    echo "   Declare it by hand before the 600s orphan reaper sees a team with no live lead:" >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    emit_fire_refusal cloud-declare-absent "session $CLOUD_ID created, cc-cloud unreachable — session is live and UNDECLARED"
+    exit 11
+  fi
+  if ! "$CLOUD_DECL" declare --id "$CLOUD_ID" --branch "$CLOUD_BRANCH" --account "$CLOUD_ACCT" \
+         --repo "$REPO" --url "https://claude.ai/code/$CLOUD_ID" \
+         --item "handoff-fire $(basename "$PROMPT_FILE")" >&2; then
+    echo "!! cloud fire: session $CLOUD_ID CREATED but the declaration FAILED — it is live and unobservable." >&2
+    echo "     cc-cloud declare --id $CLOUD_ID --branch $CLOUD_BRANCH --account $CLOUD_ACCT --repo $REPO" >&2
+    emit_fire_refusal cloud-declare-failed "session $CLOUD_ID created, cc-cloud declare exited non-zero — live and UNDECLARED"
+    exit 11
+  fi
+
+  echo "✓ cloud fire: $CLOUD_ID on $CLOUD_ACCT — declared against $CLOUD_BRANCH"
+  echo "  view    : https://claude.ai/code/$CLOUD_ID"
+  echo "  observe : cc-cloud show $CLOUD_ID"
+  echo "  send    : cc-notify --cloud $CLOUD_ID '<message>'"
+  echo "  land    : scripts/cloud-reconcile.sh --list   (then --land $CLOUD_BRANCH)"
+  exit 0
+fi
+
 # ---- compose the typed command ---------------------------------------------------------------
 ARGS=""
 [ -n "$EFFORT" ] && ARGS="$ARGS --effort $EFFORT"
