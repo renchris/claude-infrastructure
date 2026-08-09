@@ -235,6 +235,29 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   >   carries none (measured). `--goal` re-arms it on the recycle path for exactly this reason.
   Put the `[locate]` self-locate line at the head of the payload as usual — with `/goal` out of the
   payload there is nothing for it to sit behind any more.
+  > **📊 EVERY FIRE RECORDS ITS GOAL DISPOSITION — so adoption is one query, never a corpus sweep**
+  > (2026-08-09). The first `--goal` shipped in the same shape as the bug it fixed: a `goal-arm` row
+  > when a goal WAS requested and nothing when it was not — a numerator with no denominator. Every
+  > fire-outcome row now carries **`goal_requested`** (a JSON boolean, never absent, present on the
+  > jq-less fallback row too), and a goal requested on a fire that died before message 2 lands a
+  > fifth verdict, **`unreachable`**, naming the branch that killed it (`pane-parked` ·
+  > `pane-wedged` · `never-engaged` · `recycle-dead` · `recycle-unverified`). *Could not ask* and
+  > *asked and got no* are different facts and never collapse. A successful `--recycle` — previously
+  > the one fire outcome on the box that wrote **nothing at all** — now emits `class:"recycle-engaged"`
+  > with `engaged:true`.
+  > ```
+  > jq -rs '[.[]|select(.class=="handoff" or .class=="self-retire-peer" or .class=="recycle-engaged")]
+  >         | group_by(.goal_requested) | map({(.[0].goal_requested|tostring): length}) | add' \
+  >    ~/.claude/logs/handoffs.jsonl                        # ← the adoption rate, with a real denominator
+  > jq -rs '[.[]|select(.class=="goal-arm")] | group_by(.verdict)
+  >         | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl   # ← and its outcomes
+  > ```
+  > **A goal-less fire is NOT warned about, deliberately.** Measured the day this landed: 139 fire
+  > rows over the ledger's 41h window, 4 goal-arm rows — so a "you forgot `--goal`" nudge would fire
+  > on ~97% of fires, nearly all of them legitimate plain continuations. An alarm that always fires
+  > carries the same zero bits as one that never fires, and it trains everyone to read past the next
+  > real one. The countable row is the remedy: a *rate* can be checked once and cheaply, and a rate
+  > falling 20%→3% is loud in a way 137 individually-unremarkable fires never were.
 - Omit both for a plain continuation prompt.
 
 **2 · Account → launcher.** Explicit user choice wins. Else `--account auto` ranks by **live

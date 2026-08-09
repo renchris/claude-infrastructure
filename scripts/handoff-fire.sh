@@ -470,7 +470,20 @@ emit_fire_refusal() { # $1=reason $2=detail → always 0 — a fire that did NOT
 # only ever written AFTER engagement was proven — so borrowing that schema would deflate the metric
 # by one row per armed goal, which is exactly the fabricated-outcome trap the emit_fire_event header
 # spells out. Same log, distinct class, no `engaged` key: R9, an unmeasured field reads ABSENT.
-emit_goal_event() { # $1=verdict (set|unverified|abstained) $2=detail → always 0
+#
+# FIVE verdicts, and the fifth exists because four could not tell two different silences apart:
+#   set          pasted AND read back from the fired session's own transcript
+#   unverified   submitted, no goal_status ever appeared — the harness may have refused it
+#   abstained    requested, but the paste could not be sent (no pane, or the composer gate refused)
+#   unreachable  requested, and the ARMING POINT WAS NEVER REACHED — the fire failed first. This is
+#                "could not ask", and it is a DIFFERENT fact from "asked and the answer was no"
+#                (memory sensor-default-off-makes-blindness-the-shipping-path: one value standing for
+#                both fabricated 80 of 156 findings). Without it, a requested goal on a fire that
+#                never engaged leaves NO goal row at all — indistinguishable from a fire that never
+#                asked for one, which is exactly the silent non-emission this whole change is about.
+#   Deliberately-omitted is NOT a verdict here. It is `goal_requested:false` on the fire's OWN row
+#   (emit_handoff_telemetry), because its denominator is FIRES, not goal attempts — see there.
+emit_goal_event() { # $1=verdict (set|unverified|abstained|unreachable) $2=detail → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
@@ -484,8 +497,54 @@ emit_goal_event() { # $1=verdict (set|unverified|abstained) $2=detail → always
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   return 0
 }
+# A goal was REQUESTED and the fire died before message 2 could be attempted. Called from every
+# branch that exits between "a goal was parsed" and arm_goal — and from nowhere else, because a
+# no-op on a fire that asked for no goal is the whole point (see the nudge ruling in
+# emit_handoff_telemetry). Records WHY at the SOURCE — the branch's own name — rather than leaving a
+# downstream reader to infer it from an absence (memory
+# rollback-of-an-unstarted-attempt-convicts-the-subject: a producer that claims before it acts
+# writes the same trail when it merely could not start, and a counter over that shape blocked 64%).
+goal_unreachable() { # $1=branch (why the arming point was never reached) → always 0
+  [ -n "${FIRE_GOAL:-}" ] || return 0
+  echo "⚠ goal NOT armed — the fire did not reach message 2 (${1:-unknown}); nothing was pasted. goal-arm verdict=unreachable reason=${1:-unknown}" >&2
+  emit_goal_event unreachable "arming point never reached: ${1:-unknown}" || true
+  return 0
+}
 emit_gate_admit() { # $1=gate $2=basis $3=detail → always 0 — a gate decision that let a fire THROUGH
   emit_fire_event admitted "${2:-unknown}" "${3:-}" admit "${1:-unknown}"
+}
+# A RECYCLE THAT WORKED. Until now this was the one fire outcome on the box that wrote NOTHING.
+# `ENGAGE_VERIFY` is hard-wired to 0 for recycles, so emit_handoff_telemetry never runs on this path,
+# and the two `emit_fire_event recycle-*` callers fire only on FAILURE — so a successful recycle and
+# a recycle that never happened produce byte-identical ledgers. Measured 2026-08-09: 1012 rows
+# spanning 41h carry ZERO recycle rows of any class, while `--recycle` is the commonest succession on
+# this box (global CLAUDE.md § Context is a CLOSE-TIME decision makes it the default disposition).
+# That is the same non-emission this change exists to abolish, in the neighbouring function.
+#
+# Its OWN emitter, not emit_fire_event — same reasoning as emit_goal_event's: emit_fire_event
+# hard-codes `engaged:false` on every non-admit row, and writing that on an ENGAGEMENT-CONFIRMED
+# recycle would be a fabricated outcome in the numerator of the V2 M-1 rate. Here `engaged` is
+# measured true and says so.
+# The two FAILURE classes (`recycle-unverified`, `recycle-dead`) are deliberately left on their
+# existing emitter and their existing names: consumers and tests count those strings, and renaming
+# them would be a migration for no gain. The asymmetry is therefore real and bounded — a recycle
+# denominator is `recycle-engaged + recycle-dead + recycle-unverified`, and only the first carries
+# goal_requested. Stated here so the next reader does not have to discover it.
+emit_recycle_engaged() { # $1=pane $2=detail → always 0
+  local log="$HOME/.claude/logs/handoffs.jsonl" line
+  [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
+  mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  line=$(jq -cn --arg ts "$(_iso_now)" --arg tp "${1:-}" --arg d "${2:-}" \
+                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" \
+                --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+    '{ts:$ts, class:"recycle-engaged", engaged:true, target_pane:(if $tp == "" then null else $tp end),
+      goal_requested:$gr, gate:"recycle",
+      firing_sid:(if $fs == "" then null else $fs end),
+      account:   (if $ac == "" then null else $ac end),
+      detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+  [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
+  return 0
 }
 
 _iso_delta_s() { # $1=start $2=end → seconds, or "" when unparseable
@@ -3918,6 +3977,7 @@ if [ "${1:-}" = "__recycle" ]; then
       # Disk-visible so a task-less recycle is findable without being at the pane. class distinguishes
       # it from a fire: a recycle is net-zero panes and is never capacity-gated.
       emit_fire_event recycle-unverified process-alive "relaunched pane $RSID; engagement NOT verifiable (no marker/baseline handed to the watcher)"
+      goal_unreachable recycle-unverified || true
       exit 0
     fi
     echo "→ relaunch process up in $RSID (claude on tty) — verifying ENGAGEMENT"
@@ -3930,6 +3990,9 @@ if [ "${1:-}" = "__recycle" ]; then
         # predecessor's goal was never cleared, it simply died. So the commonest succession on this
         # box is exactly the one that silently loses its goal unless it is re-armed here.
         arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
+        # …and RECORD the success. Strictly after arm_goal so the row's goal_requested sits beside a
+        # goal-arm row that already carries the verdict, rather than promising one that never comes.
+        emit_recycle_engaged "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
         exit 0
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
@@ -3942,6 +4005,7 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap). The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
     echo "!!   recover: re-send the brief into the pane (cc-notify $RSID '<re-engage prompt>'), or relaunch manually: $(cat "$CMDFILE")" >&2
     emit_fire_event recycle-dead never-engaged "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)"
+    goal_unreachable recycle-dead || true
     if [ -x "$HOME/.claude/bin/cc-notify" ]; then
       hf_bounded "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
     fi
@@ -7023,6 +7087,37 @@ else
     # in NO durable artifact — not here, not the cc-fired record, not the registry — so "did this fire
     # open a new window?" could only be INFERRED (from firing_sid being null). That is how a
     # 174-new-windows-in-one-day regression ran unnoticed. Record the surface at the source.
+    #
+    # goal_requested (2026-08-09) — THE DENOMINATOR. Same defect as the surface field above, one
+    # subsystem over, and it is the defect that generated this whole change. `--goal` emitted a
+    # `goal-arm` row when a goal WAS requested and NOTHING when it was not, so the ledger could count
+    # goal attempts and could not count fires-without-a-goal — i.e. it could not answer "what
+    # fraction of fires carry a goal?" at all, which is byte-for-byte the shape that hid the original
+    # regression: producers stopped emitting and NOTHING COUNTS A NON-EMISSION. Recovering the
+    # 20.0%→3.0% adoption fact needed a hand sweep of 137 provably-fired sessions out of a
+    # 1,901-transcript corpus (docs/research/goal-in-handoff-2026-08-08.md §1.1). With this field it
+    # is one query with a real denominator, no corpus, no join:
+    #   jq -rs '[.[]|select(.class=="handoff" or .class=="self-retire-peer" or .class=="recycle-engaged")]
+    #           | group_by(.goal_requested) | map({(.[0].goal_requested|tostring): length}) | add' \
+    #      ~/.claude/logs/handoffs.jsonl
+    # BOOLEAN, never null and never absent: FIRE_GOAL is fully known at parse time, long before any
+    # branch can fail, so there is no state this field cannot measure. An absent-when-unmeasured
+    # field (R9) would be wrong HERE for the same reason it is right elsewhere — a fire that
+    # deliberately carried no goal is a MEASURED false, and it is the measurement the ledger lacked.
+    #
+    # ── AND THE FIRE THAT CARRIES NO GOAL GETS NO NUDGE. Deliberately. ──────────────────────────
+    # The brief asked whether a `--goal`-less fire deserves one. Measured on the live ledger the day
+    # this landed: 139 fire rows over the 41h window, 4 goal-arm rows — and 2 of those 4 are this
+    # feature's own landing probes. So a "you forgot --goal" warning would fire on ~97% of fires, and
+    # the overwhelming majority of those are legitimate: a plain continuation, a recycle, a one-shot
+    # peer with a self-contained brief. An alarm that always fires carries exactly as many bits as
+    # one that cannot fire (memory alarm-polarity-and-attention-budget), and it would be read past
+    # within a day — after which the NEXT real regression has a warning it has already trained
+    # everyone to ignore, which is strictly worse than silence.
+    # The countable row is the whole remedy and it is the right one: a nudge asks a human to notice
+    # each fire, and the failure being fixed is precisely that nobody can notice a fleet-wide
+    # non-emission one fire at a time. A RATE can be checked once, cheaply, whenever anyone asks —
+    # and a rate that falls 20%→3% is loud in a way 137 individually-unremarkable fires never were.
     local _hf_json _hf_lat _hf_ts
     # This function's contract is "a telemetry hiccup can never affect the fire", and `set -e` makes
     # an unresolved helper a fire-killing 127 — so every collaborator is probed, never assumed. Not
@@ -7047,7 +7142,9 @@ else
         --arg sa "${LR_STARTED_AT:-}" --arg ea "${LR_ENGAGED_AT:-}" \
         --arg pr "${LR_PROOF:-}" --arg la "$_hf_lat" --argjson en "${1:-0}" \
         --arg sf "${SURFACE:-}" --arg sr "${SURFACE_REASON:-}" --arg ai "${ANCHOR_INTENT:-}" \
+        --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
+         + {goal_requested:  $gr}
          + {firing_sid:      (if $fs == "" then null else $fs end)}
          + {surface:         (if $sf == "" then null else $sf end)}
          + {surface_reason:  (if $sr == "" then null else $sr end)}
@@ -7063,8 +7160,11 @@ else
       printf '%s\n' "$_hf_json" >> "$_hf_log" 2>/dev/null || true
     else
       # jq-less / jq-failed fallback: keep the pre-v2 line shape rather than lose the record.
-      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s}\n' \
+      # goal_requested rides this path too — a denominator with a hole in it is not a denominator,
+      # and "the rows jq wrote" is not a population anyone would think to split on.
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
+        "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         >> "$_hf_log" 2>/dev/null || true
     fi
     # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
@@ -7131,6 +7231,7 @@ else
       echo "   The launch command was: $CMD" >&2
       echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
       emit_handoff_telemetry 0 || true
+      goal_unreachable pane-parked || true
       exit 1
     elif [ "$ENGAGE_RC" = 4 ]; then
       # The INVERSE of the branch above, and the distinction is the whole point of the verdict: the
@@ -7142,12 +7243,14 @@ else
       echo "   $(pane_modal_remedy "$ENGAGE_WEDGED")" >&2
       echo "   The session is LIVE — do NOT clear the pane or re-fire; answer the dialog, then re-check engagement. ps reports it healthy, which is why nothing else flagged it." >&2
       emit_handoff_telemetry 0 || true
+      goal_unreachable pane-wedged || true
       exit 1
     else
       echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
       # is answerable in one grep. Guarded so a telemetry hiccup can never preempt the exit 1.
       emit_handoff_telemetry 0 || true
+      goal_unreachable never-engaged || true
       exit 1
     fi
   fi
