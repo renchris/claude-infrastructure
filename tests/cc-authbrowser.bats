@@ -499,15 +499,41 @@ refute() { # <cmd…> — assert the command FAILS.
   echo "$output" | grep -qi "CDP did not answer"      # ⇒ the CDP knob reaches the readiness wait
   export CC_AUTHBROWSER_CDP_TIMEOUT_S=180
 
-  # With our OWN browser up, an unmeetable lsof budget must fall CLOSED to "pids=unknown" —
-  # which is precisely the production failure observed under load, so this asserts the seam
-  # reaches the listener lookup AND pins the shape of the failure it is there to prevent.
+  # With our OWN browser up, an unmeetable lsof budget makes the subject unable to RECOGNISE its
+  # own listener: pids=unknown, so its own port reads foreign. That is the production failure this
+  # knob exists to expose, and it is what this half asserts.
+  #
+  # THE VERDICT MOVED, THE PROPERTY DID NOT (d022242d, 2026-08-08). Until that commit an
+  # unrecognisable holder on the frozen port was EXIT_BROWSER, and this assertion read
+  # `[ "$status" -eq 4 ]`. d022242d deliberately made that survivable — do_start now falls back to
+  # a free port rather than refusing, because 9341-9344 is also the range this box hands to
+  # per-worktree Node --inspect debuggers and the refusal meant cc-relogin phase 2 could never
+  # launch. It rewrote the FOREIGN-holder test for the new verdict and added three more; this
+  # positive control, one screen below, was the site it missed. The stale `-eq 4` then stopped
+  # being harmless and became a guard on the OLD behaviour: deterministically red on trunk from
+  # 2026-08-08 11:00, red in the corpus and red standalone, and — since the retry ladder re-runs
+  # the named test and gets the same real bats failure every time — a permanent RED stamp with no
+  # flake row. That is the whole 0-green-stamp deadlock as of 2026-08-09: postland was telling the
+  # truth about a tree that genuinely was red.
+  #
+  # THE EFFECT-READ IS NOT WEAKENED BY MOVING IT, and the discriminator is the PORT, not the exit
+  # code. With the knob WIRED, lsof cannot answer, the idempotent branch cannot fire, and --start
+  # is forced onto a DIFFERENT port. With the knob UNWIRED (the decoration this control exists to
+  # catch) lsof answers inside its real budget, do_start adopts, and the port is UNCHANGED. So the
+  # port comparison fails exactly when the seam has rotted — which `-eq 4` no longer does at all.
   run "$B" next --start
   [ "$status" -eq 0 ]
+  PORT_OURS="$(json_body "$output" | jq -r '.port')"
+  # TWO statements, never `[ A ] && [ B ]`: a compound is and-absorbed under errexit, so the
+  # first half failing would be a false condition rather than a failed test (bats-assert-liveness
+  # flags it DEAD, and it flagged this very line).
+  [ -n "$PORT_OURS" ]
+  [ "$PORT_OURS" != "null" ]
   export CC_AUTHBROWSER_PROC_TIMEOUT_S=0.001
   run "$B" next --start
-  [ "$status" -eq 4 ]
-  echo "$output" | grep -q "pids=unknown"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "pids=unknown"            # ⇒ the proc knob reaches the listener lookup
+  [ "$(json_body "$output" | jq -r '.port')" != "$PORT_OURS" ]   # ...and the failure to adopt BITES
 }
 
 # ------------------------------------------------------------------- launch posture (argv)
