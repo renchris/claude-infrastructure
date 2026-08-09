@@ -9,6 +9,13 @@ average* and is the wrong instrument for bursty daemons, which is how the prior 
 
 ## 1 · The answer
 
+> 🚨 **§1's causal claim is CORRECTED in §10 (2026-08-09, later same day).** The *correlation* below —
+> load tracks session count, and fork rate tracks session count — is solid and reproduced. The
+> *mechanism* ("forks cause the load") is **NOT established**: three attempts to validate it were
+> each invalid by construction, and a fourth measurement points against it. Read §10 before acting on
+> the lever ranking in §6. What replaced it as the actionable finding is the **compressor-segment
+> admission term** (§11), which is live-readable today.
+
 **The binding constraint is runnable-thread pressure produced by the fleet's own tooling fork rate —
 roughly 50 forks/second per active session — and the admission gate keys on exactly that number.
 Claude inference is not the load, the filesystem is not the load, and memory is not the load.**
@@ -290,3 +297,165 @@ reproduce.** Parallelised (`xargs -P 12`, per-item `timeout 60`), all 382 comple
 zero timeouts. Serial `du` over a 9-million-entry tree is what hangs — not the tree. The hazard in
 constraint 5 of the brief is real but its cause was misattributed, and the "200 GB is pathological"
 framing rests partly on that timeout.
+
+---
+
+## 10 · Correction — the fork→load mechanism is NOT established
+
+§1 asserted that the fleet's fork rate *causes* the load. That claim is withdrawn. What survives and
+what does not:
+
+**Survives (reproduced, two well-separated operating points):**
+
+| Sessions | Load (1-min) | Fork rate | CPU idle |
+|---|---|---|---|
+| 3 (quiet box, post-reboot) | **3.0 – 5.2**, mean ~4.2 | 7 – 249/s, mean ~83/s | 74 – 91% |
+| 12 | ~19 | 648 – 695/s (3 trials) | ~11% |
+
+Load is very nearly linear in session count with a **near-zero intercept** (≈1.6 load units/session).
+That is the load result that matters for capacity, and it is independent of any mechanism story: the
+box's *ambient* load is essentially nil, so the sessions are the load. **The gate's 2.0/core ceiling
+(= load 20) is therefore reached at ~12 sessions**, which matches both the observed refusals and the
+operator's ~15.
+
+**Does not survive — the causal step.** Per-fork cost was measured cleanly:
+
+| Fork kind | ms/fork (100 iterations) |
+|---|---|
+| `/usr/bin/true` | 2.12 |
+| `bash -c :` | 2.20 |
+| `bash -c 'x=$(echo hi)'` | 2.86 |
+| `bash -c 'git rev-parse --abbrev-ref HEAD'` | **17.95** |
+
+The obvious model is Little's Law — `load ≈ fork_rate × fork_duration` — which would give
+676/s × 17.95 ms ≈ 12 load units and fit the fleet nicely. **It could not be validated, and should not
+be quoted as if it were.** Four attempts, each defeated by its own instrument:
+
+1. **`ps`-max-PID fork counting** — read 0 PIDs/30 s while the true rate was ~1,000/s. Max-*alive* PID
+   is not the allocation counter; it pins near the 99,999 wrap. Replaced by fresh-PID delta (sound).
+2. **Newborn-census script** — `samples=0`, histogram key `0`. `/bin/bash` on macOS is **3.2**, which
+   has no `declare -A`. Produced a confident-looking empty table.
+3. **First Little's Law run** — `set -- $spec` does not word-split in **zsh**, so the `kind` variable
+   was empty and the generator spawned cheap `/usr/bin/true` while the output labelled it `git`. The
+   run tested something other than its own hypothesis and printed `PREDICTED_ADD=0.0`.
+4. **Corrected Little's Law run — invalid by construction.** The generator spawns a batch of 8 and
+   `wait`s, so it can never exceed ~8 concurrent runnable threads *regardless of spawn rate*. It
+   structurally caps the very quantity under test. Measured: 430 git-forks/s added **+0.94** load
+   (model predicted +7.7); the cheap-fork control then read *higher* (+2.1) than the expensive
+   treatment, and post-run load *rose* rather than decayed — contamination, not a result.
+
+**Standing verdict: the fork storm is a measured, large, real phenomenon (~50–56 forks/s/session,
+43.9% sys time, XProtect at 31% mean) whose contribution to load is UNQUANTIFIED.** A synthetic
+generator at comparable fork rates produced ~1 load unit where the fleet sits at ~19, which is
+evidence *against* forks being the dominant term — but that generator was concurrency-capped, so it
+cannot carry the refutation either. The honest state is: **correlation established, mechanism open.**
+
+**The decisive test, stated so the next session can run it:** a generator with N *independent*
+long-lived spawner loops (no batch-`wait` barrier, concurrency set by N not by batch size), swept
+across N, measuring steady-state load after ≥90 s of EWMA settle, with a paired cheap/expensive fork
+arm and a full decay between arms. Prediction if the model holds: load add ≈ rate × duration,
+independent of N once N exceeds the predicted thread count. Exact per-fork attribution still wants
+`sudo dtrace -n 'proc:::exec-success'`, which is unavailable here.
+
+**Method note worth keeping:** every one of the four failures produced a *plausible number*, not an
+error. Three of them are already in this fleet's memory index (zsh word-split; `pgrep -f` matching
+argv; a control that cannot fail the way its subject does). An instrument that returns a clean figure
+is not thereby a working instrument.
+
+---
+
+## 11 · What the constraint actually is — compressor SEGMENT exhaustion (peer transfer, verified live)
+
+A parallel investigation into six kernel panics closed the same night and supplies the mechanism this
+document was missing. Cross-checked against this box rather than taken on trust:
+
+**This box rebooted at 04:18:26 today, 38 minutes after the previous boot, following panic #6 at
+04:17.** `uptime` now reads 9 h 40 m. **Every measurement in §2–§4 above was taken at ~03:00–03:20 on
+the *pre-crash* box** — i.e. during the run-up to panics #5 (03:39) and #6 (04:17). That reframes one
+observation: the monotonic decline in free RAM across my sampler (4588 → 4115 MB) was not a steady
+state, it was a panic trajectory being observed live without knowing it.
+
+**The machine dies of VM-compressor segment exhaustion, and every ordinary gauge reads healthy at the
+moment of death**: 100% of `vm.compressor_segment_limit` (1,629,615) consumed at only **~28% mean
+segment fill**, while the compressed-pages gauge simultaneously reads 31–32% "OK" and the kernel's own
+`memoryPressure` flag reads False. Six panics, same signature, 66–68 swapfiles and swap growing at
+457–580 MB/s at each.
+
+**This explains §4's anomaly exactly.** The gate's headroom term is not merely unfired — it measures a
+quantity that *cannot bind*. Free bytes stay abundant while the segment table exhausts, because
+fragmentation means segments are consumed ~3.5× faster than the bytes they hold would suggest.
+Measured live this session, on the quiet box, both terms side by side:
+
+```
+gate term  : free+spec+inactive+purgeable = 40.55 GB  (floor 4 GB)  => ADMIT
+segment term: segs_in_core 0 + segs_swapped 0 = 0 / 1,629,615       => 0.00%
+```
+At the panic those read **29.79 GB → still ADMIT** against segments at **100%**. That is the whole
+defect in one line.
+
+**The replacement term already exists as shipped code — it does not need inventing.**
+`scripts/compressor-sentinel.sh` computes it every 10 s from cheap sysctls:
+```
+segs_in_core ≈ vm_stat "Pages occupied by compressor" ÷ (vm.compressor_segment_buffer_size ÷ pagesize)
+segs_swapped  = vm.swapusage used ÷ 65536          # EXACT — swap is allocated in 64 KiB chunks
+seg_pct       = (segs_in_core + segs_swapped) ÷ vm.compressor_segment_limit
+```
+Verified live this session: the daemon is running (9 h 23 m, since boot), armed, and emitting rows
+(`"seg":0,"lim":1629615,"pct":0.00`). It trips on **level AND rate** — >15% of limit *and* >600
+segments/s — deliberately far below the ceiling, "on the way up".
+
+⇒ **Concrete next step for the gate: the admission term should read the sentinel's estimator rather
+than free bytes.** §6.2's proposal asked for "compressor + swap"; this is the precise, already-tested
+form of it. Note it is *not* a session-capacity term — at steady state a session compresses nothing,
+so `seg_pct` stays ~0 regardless of session count. **It is a burst guard, and it produces no session
+ceiling at all.** Both terms are needed: one for standing capacity, one for burst survival.
+
+**Two corrections to §6/§7 from the same transfer:**
+- **kitty is exonerated as a ceiling term** — real anonymous memory 0.11–0.17 GB; its 1.4–1.8 GB
+  resident is mostly IOSurface shared with WindowServer. The "kitty 4.73 TB" Force-Quit figure is a
+  coalition/VSZ artifact (every arm64 process carries ~395 GB VSZ; 12 × 395 GB = 4.74 TB), and that
+  dialog lists GUI apps only — so a headless 700-process storm is *structurally invisible* in it.
+  kitty sat in jetsam band 0 and was itself suspended: a victim, not a cause. (The same artifact
+  framed iTerm2 at ~500 GB on 07-31.) My §2.4 attribution of the memory baseline to "Dia, Chrome,
+  kitty" should be read with this caveat — resident ≠ footprint for compositing clients.
+- **There is no OS safety net above us.** The whole CC fleet sits in jetsam band 180 (killed last),
+  `CONFIG_JETSAM` is off, and `no_paging_space_action` needs a single process holding >50% of the
+  compressor — untrippable by a fleet of 60–75 MB workers. Nothing above the sentinel will act. The
+  box does not degrade at the top of the curve; it panics.
+
+### 11.1 · The real adversary is what sessions *spawn*
+
+Ignition in all six panics is a dev-toolchain burst, not session count: `next dev` cold compile /
+`next-server v16.2.6` postcss worker pools, measured **18 → 372 processes in 90 s**, and 700 procs /
+38.9 GB and 736 / 44.7 GB within minutes — hundreds of 60–180 MB near-idle node interpreters.
+
+**For a 150-session target this re-frames the budget entirely: per-session steady state is cheap
+(232 MB median, 0.058 cores); the ceiling is BURST HEADROOM for spawned toolchains.**
+
+### 11.2 · Does cap 400 become the binding ceiling? — No. Simultaneous bursts do.
+
+Answering the question put to this session, from the actuator's own source:
+
+1. **The cap does not count sessions.** The cohort is `comm` basename matching `^node`, RSS ≥ 40 MB,
+   *new since 60 s ago*, with `claude.exe`/`claude` excluded twice over (by comm **and** by argv, plus
+   anything argv-matching `claude|mcp`). **150 sessions contribute 0 to the 400.** The cap is
+   structurally incapable of binding on session count.
+2. **It is a per-trip cap, not a standing ceiling, and the loop runs at `CC_SENTINEL_INTERVAL=10 s`.**
+   Stop capacity ≈ **400 per 10 s = 40 procs/s**. Measured storm growth is **3.9 procs/s** (18→372 in
+   90 s); the worst measured wave (619→736) grew at ~2/s. **Stop capacity exceeds the worst measured
+   growth by ~10×.** So it does not bind as a rate either.
+3. **Where it genuinely bites:** a wave already larger than 400 at first trip. Measured waves reached
+   700 and 736. The first trip stops 400 and leaves ~336 running for up to one interval; at the
+   measured 62–75 MB each that is **~23 GB resident for ≤10 s**. Survivable once on a 64 GB box.
+   **Not survivable twice concurrently:** two simultaneous 736-proc waves ≈ 1,470 procs ≈ 100 GB, and
+   at 457–580 MB/s swap growth the second 10 s tick arrives after the segment table is gone.
+
+**Answer: the actuator cap is not the binding ceiling for 150 sessions — the binding term is how many
+sessions may run a cold compile *at the same time*, which is ~1–2, not 150.** Raising `ACT_CAP` is the
+wrong lever; the right ones are (a) admission-serialising toolchain ignition so concurrent cold
+compiles are bounded, and (b) the `workerThreads` remedy already identified for the postcss pool. A
+150-session fleet is compatible with cap 400 **iff** toolchain bursts are serialised; without that,
+the fleet dies at ~2 concurrent bursts no matter what the cap is.
+
+**Standing observable inherited with this transfer:** the next genuine storm's sentinel line must read
+`actuator: SIGSTOPped N process(es)`. Any `DISARMED` line after 04:36 today is a regression.
