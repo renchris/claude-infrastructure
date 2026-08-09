@@ -93,6 +93,17 @@
 #               verdict clears both the streak and the page. BOTH stamp-consulting
 #               call sites are verdict-aware — the entry gate AND C12's requeue-loop
 #               break — so a mid-sweep move onto a cut tree is verified, not dropped.
+#   C30 grammar ONE spelling of the TAP result line, shared by every reader: a completed test is
+#               `^(ok|not ok) [0-9]+` and a FAILED one is `^not ok [0-9]+`, so the failure set is a
+#               strict SUBSET of the completed set and `notok > 0` IMPLIES `tap_done > 0`. The <N>
+#               is the only thing separating a result line from arbitrary text opening with those
+#               bytes, and arbitrary text is routine — the corpus TAP is captured `2>&1`, so an
+#               unprefixed stderr write splices in raw and a killed run truncates a line mid-buffer.
+#               When the readers disagreed, one TAP could be BOTH "0 tests completed" (what the
+#               stall watcher cuts on) and "a failure exists" (what C13b convicts on) — runner.log
+#               2026-07-30T05:47:21Z and 06:04:21Z, `STALL … at test 0` then `RED failing=tests/`.
+#               Distinct from C13c, which decides the same branch on the RUN'S rc: C13c answers
+#               "was anyone speaking about the tree", C30 answers "is this line a verdict at all".
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -2529,4 +2540,88 @@ exit 0"; }
   # "green" can never be absent and would fail this test no matter how the SUT behaves — an
   # assertion that cannot pass is as useless as one that cannot fail.
   [ "${output#*.json green}" = "$output" ]
+}
+
+# ── C30 ONE TAP grammar: `notok > 0` must IMPLY `tap_done > 0` ───────────────────────────────────
+# tap_done required the result line's <N> (`^(ok|not ok) [0-9]+`); classify_failures' failure count
+# did not (`^not ok`); the awk pairing a failure with its file diagnostic required neither. Three
+# spellings of one grammar, and the loosest decided whether the tree was RED. So one TAP could read
+# as BOTH "0 tests completed" — which is what the stall watcher cuts on — AND "a not-ok exists",
+# which is what branch (b) convicts on. runner.log 2026-07-30T05:47:21Z (9586f1ac51f5) and 06:04:21Z
+# (4399852f21c2) are that pair: `STALL … at test 0` then `RED failing=tests/ retries=0`, an item
+# pointing at a DIRECTORY and a bisect that can hand auto_revert a culprit off a run in which no
+# test failed. AUTOREVERT defaults on.
+#
+# THE rc AXIS IS DELIBERATELY HELD AT 1. C13c already routes rc∉{0,1} to a cut, so a fixture that
+# stalled or was killed would pass here through THAT fix and prove nothing about this one. At rc 1
+# /Users/chrisren/.claude/bin/cc-bats is genuinely saying "something failed", the C13c guard is inert by construction, and the ONLY
+# thing standing between these four shapes and `failing=tests/` is the grammar.
+#
+# THE DISCRIMINATING CONTROL IS ALREADY IN THIS SUITE and must stay green: "C13b: a not-ok with NO
+# file diagnostic stays RED and carries the test NAME" drives `not ok 1 boom` at rc 1 — a WELL-FORMED
+# result line, same branch, same rc, and it reds in ONE sweep (branch (b) returns before the ladder,
+# so C29's two-window rule never applies to it). The <N> is the only axis between it and the four
+# below, so a fix that merely stopped convicting would take C13b red.
+
+# `not ok` truncated mid-write · a torn digit · a PREFIX OF A WORD · stderr spliced into the line
+# (the TAP is captured `2>&1`, so an unprefixed write from a test's background child lands raw).
+# The payload goes through a QUOTED heredoc so a shape carrying `:` or spaces reaches the TAP
+# verbatim — an approximation mangled by the fixture would test a shape the defect never saw.
+c30_shape_is_not_a_verdict() {   # $1 = the TAP line to plant, verbatim
+  fake="$BATS_TEST_TMPDIR/bats-c30"
+  { printf '#!/bin/bash\n[ "$1" = "--version" ] && { echo "Bats 1.13.0"; exit 0; }\necho "1..1"\n'
+    printf 'cat <<%sTAPEOF%s\n' "'" "'"
+    printf '%s\n' "$1"
+    printf 'TAPEOF\nexit 1\n'
+  } > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]                                              # a stamp must exist either way
+  run jq -r '.verdict' "$s"
+  [ "$output" != "red" ]                                   # THE defect: this was `red`
+  run grep -c 'failing=tests/' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "0" ]                                      # reachable from branch (b) and nowhere else
+  [ "$(pages_n)" = "0" ]                                   # C10: pages are RED-only
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]                   # and a non-verdict earns nothing either
+}
+
+@test "C30: a TAP line truncated mid-write (\`not ok\`) is not a failing test" {
+  c30_shape_is_not_a_verdict 'not ok'
+}
+
+@test "C30: a torn digit (\`not ok3 …\`) is not a failing test" {
+  c30_shape_is_not_a_verdict 'not ok3 squashed'
+}
+
+@test "C30: \`not okay …\` is a PREFIX OF A WORD, not a failing test" {
+  c30_shape_is_not_a_verdict 'not okay then'
+}
+
+@test "C30: stderr spliced into the line (\`not okcorpus: …\`) is not a failing test" {
+  c30_shape_is_not_a_verdict 'not okcorpus: 3 tree suites, 0 host'
+}
+
+# The INVARIANT itself, read LIVE off the SUT — not a copy of it. Recording only the four
+# consequences above would leave "one definition" unfalsifiable: a future edit could re-diverge the
+# two readers on a FIFTH shape and every test here would stay green. This asserts the structural
+# property that makes the whole class unreachable — every line the failure pattern matches is a line
+# the completed-test pattern matches too, so `notok > 0` implies `tap_done > 0`.
+@test "C30: the failure grammar is a strict SUBSET of the completed-test grammar" {
+  done_re="$(sed -n "s/^TAP_DONE_RE='\(.*\)'.*/\1/p" "$SUT" | head -1)"
+  notok_re="$(sed -n "s/^TAP_NOTOK_RE='\(.*\)'.*/\1/p" "$SUT" | head -1)"
+  [ -n "$done_re" ]                       # absent ⇒ fail by NAME, never vacuously
+  [ -n "$notok_re" ]
+  corpus="$BATS_TEST_TMPDIR/c30-corpus.tap"
+  printf '1..6\nok 1 healthy pass\nnot ok 2 healthy fail\nnot ok\nnot ok3 squashed\nnot okay then\nnot okcorpus: 3 suites\n' > "$corpus"
+  # Every NOTOK line must also be a DONE line ⇒ subtracting DONE from NOTOK leaves nothing.
+  run bash -c "grep -aE \"\$1\" \"\$2\" | grep -avE \"\$3\" | wc -l | tr -d ' '" _ "$notok_re" "$corpus" "$done_re"
+  [ "$output" = "0" ]
+  # ...and the control: the corpus DOES contain lines the loose old pattern would have counted,
+  # so a SUT that simply matched nothing at all could not pass the assertion above by vacancy.
+  run bash -c "grep -acE \"\$1\" \"\$2\"" _ "$notok_re" "$corpus"
+  [ "$output" = "1" ]                     # exactly the ONE well-formed `not ok 2 …`
+  run bash -c "grep -ac '^not ok' \"\$1\"" _ "$corpus"
+  [ "$output" = "5" ]                     # the old pattern counted FIVE — four of them torn
 }

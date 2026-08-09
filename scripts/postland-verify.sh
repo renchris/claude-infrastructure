@@ -1037,9 +1037,60 @@ int_or_zero() { case "${1:-}" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;;
 tap_plan() { # <tap> → N from the `1..N` plan line (0 when it never even planned)
   int_or_zero "$(sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1 | tr -d '\n')"
 }
+# ════ THE TAP RESULT-LINE GRAMMAR — ONE definition, every reader (C30) ════════════════════════════
+# TAP13 (and bats) spell a result line `ok <N> <desc>` / `not ok <N> <desc>`. The <N> is not
+# decoration: it is the ONLY thing separating a RESULT LINE from arbitrary text that merely opens
+# with those bytes — and arbitrary text is ROUTINE here, because the corpus TAP is captured as
+# `> "$tap" 2>&1`: an unprefixed stderr write (a test's background child, a shell's own diagnostic)
+# splices straight into the stream, and a run we kill mid-write truncates a line wherever the
+# buffer happened to end.
+#
+# TWO READERS DISAGREEING WAS THE BUG. tap_done required the <N>; classify_failures' failure count
+# did not; the awk that pairs a failure with its file diagnostic required neither. Three spellings
+# of one grammar, and the loosest decided whether the tree was RED. Measured against /usr/bin/grep
+# (BSD 2.6.0-FreeBSD), FOUR shapes read as BOTH "0 tests completed" — which is what the stall
+# watcher cuts on — AND "a not-ok exists", which is what branch (b) convicts on, with zero
+# attributable pairs:
+#
+#   `not ok`                 truncated mid-write   tap_done=0  notok=1  pairs=0
+#   `not ok3 squashed`       torn digit            tap_done=0  notok=1  pairs=0
+#   `not okay then`          PREFIX OF A WORD      tap_done=0  notok=1  pairs=0
+#   `not okcorpus: 3 suites` stderr spliced in     tap_done=0  notok=1  pairs=0
+#
+# That pair is in runner.log at 2026-07-30T05:47:21Z (9586f1ac51f5) and 06:04:21Z (4399852f21c2):
+# `STALL … at test 0 — cutting the run` and then `RED failing=tests/ retries=0` 41s later — a
+# backlog item pointing at a DIRECTORY, and a bisect that can hand auto_revert a culprit off a run
+# in which no test failed. AUTOREVERT defaults on.
+#
+# C13c (the rc guard below) closed the ROUTE those two events took — rc∉{0,1} ⇒ cut, never red —
+# but not the CONTRADICTION: at rc 1, bats genuinely saying "something failed", all four shapes
+# still file `FAILING=(tests/)`.
+#
+# NOTOK is now a strict SUBSET of DONE by construction, so `notok > 0` IMPLIES `tap_done > 0` and
+# "stalled at test 0" and "a failure exists" can no longer both be true. The invariant is the
+# guarded property — C30 pins it per shape AND asserts the subset relation itself, so a future
+# re-divergence on a FIFTH shape is falsifiable rather than merely unobserved. Both readers also
+# take `-a`: the count must not change with WHICH grep is on PATH (ugrep 7.5.0 — on the operator's
+# own interactive PATH — counts a NUL-carrying TAP as EMPTY without it, which would resurrect the
+# disagreement from the other side).
+TAP_DONE_RE='^(ok|not ok) [0-9]+'    # a test that COMPLETED — either verdict
+TAP_NOTOK_RE='^not ok [0-9]+'        # a test that completed and FAILED — strict subset of the above
 tap_done() { # <tap> → completed tests. bats emits `ok`/`not ok` only AFTER a test returns, so this
   # is exactly "how far did it get". (`grep -c` prints 0 AND exits 1 on no-match — never `|| printf 0`.)
-  int_or_zero "$(grep -acE '^(ok|not ok) [0-9]+' "$1" 2>/dev/null | head -1 | tr -d '\n')"
+  int_or_zero "$(grep -acE "$TAP_DONE_RE" "$1" 2>/dev/null | head -1 | tr -d '\n')"
+}
+tap_notok() { # <tap> → completed tests that FAILED. Same grammar as tap_done, so it can only ever
+  # count a SUBSET of what tap_done counts — that implication is the whole point (C30).
+  int_or_zero "$(grep -acE "$TAP_NOTOK_RE" "$1" 2>/dev/null | head -1 | tr -d '\n')"
+}
+tap_failtest() { # <tap> → the <desc> off the FIRST failing result line ("" when there is none).
+  # Derived from TAP_NOTOK_RE rather than re-spelled: the old `s/^not ok [0-9]* //` matched ZERO
+  # digits too, i.e. it was a THIRD spelling of the grammar and the loosest of the three.
+  # Armed on the regex PLUS its separating space — the sed it replaces required that space too
+  # (`s/^not ok [0-9]* //`), and this keeps a DESCRIPTIONLESS `not ok 1` falling through to the
+  # caller's "(unattributed)" instead of being reported as though `not ok 1` were a test's name.
+  awk -v re="$TAP_NOTOK_RE" 'BEGIN{ re = re " " } $0 ~ re { sub(re, "", $0); print; exit }' "$1" \
+    2>/dev/null | cut -c1-120
 }
 tap_signal() { # <tap> → the job-control death line, if the shell printed one. `# `-prefixed lines
   # are a TEST'S OWN captured output (this repo has reaper/kill suites that print those very words),
@@ -1188,7 +1239,10 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
   # never invent a cut.
   local pairs f t rc i tdir fails notok abstain ABSTAIN_RC arc why tap_rc="${2:-1}"
   # TAP: `not ok N <name>` followed by a `# (in test file tests/X.bats, line N)` diagnostic.
-  pairs="$(awk '/^not ok /{p=1; n=$0; sub(/^not ok [0-9]+ /,"",n); next}
+  # $TAP_NOTOK_RE, never a re-spelling: this arming pattern was the LOOSEST of the three readers
+  # (`/^not ok /`, no <N> at all), so a torn line armed `p` and paired the NEXT `#` line's filename
+  # with a description that was never a test name — attributing a failure to an innocent file (C30).
+  pairs="$(awk -v re="$TAP_NOTOK_RE" '$0 ~ re {p=1; n=$0; sub(re " ","",n); next}
                 /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH) "\t" n; p=0 } }' "$1" \
              | awk -F'\t' '!seen[$1]++')"
   if [ -z "$pairs" ]; then
@@ -1213,12 +1267,12 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
     #       2026-07-30T06:04:21Z stamped `RED 4399852f21c2 failing=tests/ retries=0` 41s after its
     #       own `STALL … at test 0 — cutting the run`, minting a backlog item that pointed at a
     #       DIRECTORY. `retries=0` is the tell — (b) returns before the ladder can run.
-    notok="$(grep -c '^not ok' "$1" 2>/dev/null || true)"; notok="${notok:-0}"
+    notok="$(tap_notok "$1")"                   # THE one grammar (C30) — tap_done's, exactly
     if [ "$notok" -eq 0 ]; then CUT=1; return 0; fi
     case "$tap_rc" in
       0|1) ;;                                   # the only two codes that speak about the tree
       *)   CUT=1                                # 124 / >128 signal / 126 / 127 ⇒ nothing proven
-           FAILTEST="$(sed -n 's/^not ok [0-9]* //p' "$1" 2>/dev/null | head -1 | cut -c1-120)"
+           FAILTEST="$(tap_failtest "$1")"
            [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
            # Name WHICH non-verdict fired, for the same reason C23 does: a fixed message would
            # misattribute a SIGKILL to our timeout and send the next reader hunting a slow test.
@@ -1245,7 +1299,7 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
     # cannot tell "a real failure we could not attribute" from "no verdict at all", which is
     # the whole distinction this branch exists to draw. Keep the sentinel only as a fallback.
     FAILING=("tests/")
-    FAILTEST="$(sed -n 's/^not ok [0-9]* //p' "$1" 2>/dev/null | head -1 | cut -c1-120)"
+    FAILTEST="$(tap_failtest "$1")"
     [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
     FAILNAME=("$FAILTEST")
     return 0
@@ -2344,7 +2398,10 @@ cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no b
       printf 'A test DID fail here — it is simply not PROVEN, having failed in ONE load window only.\n'
       printf 'The next sweep re-runs this tree and decides it. Ledger: %s\n' "$CONVICTIONS"
     else
-      printf '         The suite emitted ZERO "not ok" lines, so NO test failed.\n'
+      # Quotes $TAP_NOTOK_RE rather than a hand-spelled "not ok": the cut's claim is about RESULT
+      # lines, and a hint LOOSER than the predicate sends the reader grepping up a torn line the
+      # cut deliberately did not count — then disbelieving a page that was right (C30).
+      printf '         The suite emitted ZERO result lines matching %s, so NO test failed.\n' "$TAP_NOTOK_RE"
       printf '         Each run was TRUNCATED before reaching a verdict (peer pkill / OOM / load).\n'
       printf 'NOT a test failure — do not bisect. Re-run on a quiet box:\n'
     fi
