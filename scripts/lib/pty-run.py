@@ -39,16 +39,29 @@ def strip_ansi(d):
 
     d = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", d)  # OSC … BEL | ST
 
-    # ⚠️ CURSOR-FORWARD IS WHITESPACE. DELETING IT CORRUPTS THE TEXT BEING CLASSIFIED.
-    # A TUI does not emit runs of spaces; it emits CSI n C ("move right n"). Strip those as
-    # decoration and the words fuse. Measured live 2026-08-08, a real refusal arrived as:
+    # ⚠️ CURSOR MOTION IS WHITESPACE. DELETING IT CORRUPTS THE TEXT BEING CLASSIFIED.
+    # A TUI does not emit runs of spaces; it emits cursor motion. Strip that as decoration and the
+    # words fuse. Measured live 2026-08-08, a real refusal arrived as:
     #     Error:Bundleuploadfailed:Socketisclosedafter3attempts.
     # Every classifier pattern downstream contains a space ("weekly limit reached", "rate limit",
     # "interactive terminal"), so a refusal rendered this way matches NOTHING and is reported as
     # `refused-other` — a non-verdict — when it may have been the ceiling itself. That is the
     # instrument lying about the subject in the one direction that looks like honest abstention.
-    # Converted to the spaces it stands for, BEFORE the generic CSI sweep can eat it.
+    # Converted to the spaces they stand for, BEFORE the generic CSI sweep can eat them.
+    #
+    # 🚨 G WAS MISSING UNTIL 2026-08-09, AND THIS COMMENT IS WHY THAT WAS HARD TO SEE. The rule was
+    # written for CSI n C (cursor FORWARD) alone, so CSI n G (cursor horizontal ABSOLUTE) fell
+    # through to the generic delete one line below — directly under a paragraph describing exactly
+    # the defect it was still committing. The symptom above is itself a G artifact: replaying the
+    # real bytes `Error:\x1b[8GBundle\x1b[15Gupload…` through this function produced
+    # `Error:Bundleuploadfailed:Socketis closed` — fused where the sequence was G, spaced where it
+    # was C. That mixed shape is the signature all over ~/.claude/autonomy/cloud/ceiling-probe.jsonl
+    # (`Error:Bundleuploadfailed:…Pleasesetup  GitHubon`), where 6 of 9 `refused-other` rows are
+    # real bundle refusals this function made unreadable. cloud-bundle-probe.sh's own normalise()
+    # had already learned this and handles [CG]; the allocator every probe shares had not.
+    # Absolute positioning is not a run length, so it collapses to ONE space rather than n.
     d = re.sub(r"\x1b\[(\d*)C", lambda m: " " * max(1, int(m.group(1) or 1)), d)
+    d = re.sub(r"\x1b\[\d*G", " ", d)
 
     d = re.sub(r"\x1b\[[0-9;?<>=]*[A-Za-z]", "", d)  # CSI
     d = re.sub(r"\x1b[()][A-Za-z0-9]", "", d)  # charset select

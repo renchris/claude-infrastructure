@@ -216,3 +216,156 @@ fire() { run env STUB_NCPU="$1" STUB_LOAD="$2" bash "$HF" --prompt-file "$PAYLOA
   printf '%s' "$mapped" | grep -q 'cloud-\*' \
     || { echo "cloud-* refusal reasons are unmapped in _fire_gate_of"; false; }
 }
+
+# ══ 9-16 · THE CREATE ITSELF (CLOUD_OBSERVABILITY.md §10.4) ═════════════════════════════════════
+#
+# Cases 1-8 above are entirely about the GATE — which questions admit an off-box fire. They passed,
+# and shipped, over a fire path that could not fire: §10.4's census found handoff-fire.sh parsing
+# `--cloud`, gating it default-off and pricing it against account headroom, then never invoking a
+# create, never calling `cc-cloud declare` and never touching the claude binary. G5 was graded ✅ on
+# the parts that were built. These cases are the part that was not — and they are written so that
+# the same mistake cannot repeat: every one of them asserts on an EFFECT (a create attempted, a
+# declaration written, an exit code), never on the presence of a flag or a string in the source.
+#
+# THE TWO SEAMS. `CC_CLOUD_CREATE_BIN` is the claude binary the library invokes; `CC_CLOUD_BIN` is
+# the cc-cloud used to declare, honored SET-including-EMPTY (`${VAR+set}`) exactly as
+# bin/cc-spawn-verify and bin/cc-notify honor it, so a case can genuinely turn the declaration off.
+
+# An account map the fixture actually owns. Without it cfg_dir resolves against the operator's real
+# accounts.json, and a cloud case would either read live paths or refuse for a reason unrelated to
+# its subject.
+cloud_acct() {
+  mkdir -p "$HOME/.claude-next3"
+  cat > "$BATS_TEST_TMPDIR/acctmap.sh" <<'EOF'
+cc_acct_dir_for_name() {
+  CC_ACCT_IS_FABLE=0; CC_ACCT_DIR=""
+  case "$1" in next3|claude3) CC_ACCT_DIR="$HOME/.claude-next3" ;; *) return 1 ;; esac
+}
+cc_acct_launcher_for_name() { case "$1" in next3) echo claude3 ;; *) return 1 ;; esac; }
+cc_acct_name_for_dir_basename() { case "$1" in .claude-next3) echo next3 ;; *) return 1 ;; esac; }
+EOF
+  export CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/acctmap.sh"
+  export CC_FIRE_CLOUD=on CC_FIRE_CLOUD_GATE=off
+}
+
+# A stub claude that emits a canned create/refusal. Real ANSI, because the normaliser is in the path.
+cloud_claude() { # $1 = payload written to stdout, $2 = exit code
+  printf '#!/bin/bash\nprintf %%s "$CLOUD_STUB_OUT"\nexit %s\n' "${2:-0}" > "$BIN/claude-cloud"
+  chmod +x "$BIN/claude-cloud"
+  export CLOUD_STUB_OUT="$1" CC_CLOUD_CREATE_BIN="$BIN/claude-cloud"
+}
+
+# A stub cc-cloud that RECORDS the declaration argv, so case 13 asserts the declare happened with
+# the right fields rather than that the script contains the word "declare".
+cloud_ccloud() {
+  cat > "$BIN/cc-cloud" <<'EOF'
+#!/bin/bash
+echo "$@" >> "$CLOUD_DECL_LOG"
+exit "${CLOUD_DECL_RC:-0}"
+EOF
+  chmod +x "$BIN/cc-cloud"
+  export CLOUD_DECL_LOG="$BATS_TEST_TMPDIR/decl.log" CC_CLOUD_BIN="$BIN/cc-cloud"
+}
+
+cfire() { run env "$@" bash "$HF" --prompt-file "$PAYLOAD" --cloud --account next3; }
+
+@test "9 --dry-run prints the create PLAN and issues no create at all" {
+  cloud_acct
+  cloud_claude "Created cloud session: should never run" 0
+  run env bash "$HF" --prompt-file "$PAYLOAD" --cloud --account next3 --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DRY RUN: cloud fire"* ]] || false
+  [[ "$output" == *"next3"* ]] || false
+  [[ "$output" == *"claude/fire-"* ]] || false          # the branch is assigned even on a dry run…
+  [ ! -f "$BATS_TEST_TMPDIR/decl.log" ]                  # …and nothing was declared
+}
+
+@test "10 the create library being ABSENT is a REFUSAL, not an ungated fire" {
+  # Deliberately the OPPOSITE default from the capacity library, whose absent branch fails OPEN
+  # because it sits on the universal spawn chokepoint. This branch is reached only by a fire that
+  # asked for the off-box venue, so its blast radius is one fire — and firing without the library
+  # means firing without the pty allocator, i.e. spending an attempt the CLI refuses outright.
+  cloud_acct
+  cfire CC_FIRE_CLOUD_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh"
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"cloud-create.sh is unreachable"* ]] || false
+}
+
+@test "11 a cloud fire REFUSES when no owning account resolves — sessions are account-scoped" {
+  # §10.2: the same id returns {ok:true} from the owning account and "Session not found" from any
+  # other, so an unrouted create would be declared under a name that is not its owner and every
+  # later send would read as a DEAD session. --launcher bypasses account selection entirely.
+  cloud_acct
+  run env CC_FIRE_CLOUD=on CC_FIRE_CLOUD_GATE=off bash "$HF" --prompt-file "$PAYLOAD" --cloud \
+      --launcher claude-nope
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"account"* ]] || false
+  [[ "$output" == *"Session not found"* ]] || false     # names the symptom it is preventing
+}
+
+@test "12 a refused create is NAMED by its class, and the four stay distinct" {
+  # "…or refuses with a named reason" is half of §10.4's frozen DoD. The classes have four
+  # different cures, so one merged 'cloud fire failed' would make them unanswerable after the fact.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Error:\x1b[8GBundle\x1b[15Gupload\x1b[22Gfailed: Socket is closed after 3 attempts')" 1
+  cfire CC_CLOUD_CREATE_ATTEMPTS=2 CC_CLOUD_CREATE_BACKOFF_S=0
+  [ "$status" -eq 10 ]
+  [[ "$output" == *"REFUSED — refused-bundle"* ]] || false
+  [ ! -f "$CLOUD_DECL_LOG" ]                             # nothing declared for a session that is not there
+}
+
+@test "13 a successful create is DECLARED IMMEDIATELY, with id, branch AND owning account" {
+  # §8.1: the id does not exist until after the fire, so create-then-declare is the only possible
+  # order — which makes the window between them the one interval where a real cloud session exists
+  # that nothing on this box can see, with a 600s orphan reaper running. Nothing goes between them.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire
+  [ "$status" -eq 0 ]
+  [ -s "$CLOUD_DECL_LOG" ]
+  grep -q -- "--id session_01TESTTESTTESTTESTTESTT" "$CLOUD_DECL_LOG"
+  grep -q -- "--account next3" "$CLOUD_DECL_LOG"
+  grep -q -- "--branch claude/fire-" "$CLOUD_DECL_LOG"
+  [[ "$output" == *"session_01TESTTESTTESTTESTTESTT"* ]] || false
+}
+
+@test "14 created-unidentified gets its OWN exit — a live session nobody can name" {
+  # The loudest state this script reaches. It is neither `created` (there is no id to declare) nor
+  # a refusal (a session IS running and spending quota), and folding it into either loses the one
+  # fact the operator needs: something is live and no local instrument can see it.
+  cloud_acct; cloud_ccloud
+  cloud_claude "Created cloud session: a banner carrying no id whatsoever" 0
+  cfire
+  [ "$status" -eq 11 ]
+  [[ "$output" == *"CANNOT BE NAMED"* ]] || false
+  [[ "$output" == *"cc-cloud declare"* ]] || false       # hands over the exact recovery command
+  [ ! -f "$CLOUD_DECL_LOG" ]
+}
+
+@test "15 a created-but-UNDECLARED session exits 11 too — created is not the success condition" {
+  # The declaration is what makes the session observable, so a create whose declare failed is not a
+  # successful fire. Exit 0 there would report a healthy off-box session that the three abstaining
+  # oracles cannot even recognise as off-box — cc-cloud is-offbox answers from the declaration.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cfire CLOUD_DECL_RC=1
+  [ "$status" -eq 11 ]
+  [[ "$output" == *"declaration FAILED"* ]] || false
+  [[ "$output" == *"session_01TESTTESTTESTTESTTESTT"* ]] || false
+}
+
+@test "16 CONTROL — a cloud fire spawns NO local surface (the venue is the whole point)" {
+  # The pane machinery below the branch is all box-local: a composer to type into, an engagement to
+  # verify, a pane uuid to register. A cloud fire that fell through to it would be firing locally
+  # while reporting off-box. Asserted by effect: the it2 backend is never reached.
+  cloud_acct; cloud_ccloud
+  cloud_claude "$(printf 'Created cloud session: t\x1b[8GView: https://claude.ai/code/session_01TESTTESTTESTTESTTESTT?from=cli')" 0
+  cat > "$BIN/it2" <<'EOF'
+#!/bin/bash
+echo "it2 $*" >> "$CLOUD_IT2_LOG"
+EOF
+  chmod +x "$BIN/it2"
+  cfire CLOUD_IT2_LOG="$BATS_TEST_TMPDIR/it2.log"
+  [ "$status" -eq 0 ]
+  [ ! -f "$BATS_TEST_TMPDIR/it2.log" ]
+}
