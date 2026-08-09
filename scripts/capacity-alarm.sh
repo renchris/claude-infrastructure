@@ -1093,7 +1093,37 @@ SEG_SOURCE_JSON='null'
 # from anything better than two panics and thirteen survived samples. `ncpu` ships beside them so a
 # row stays interpretable if it is ever read on another machine — a per-core figure whose denominator
 # is not in the row is not a measurement, it is a number.
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s}' \
+# ── pty census: the finite table nothing on this box was watching (S6.7 Phase E) ─────────────────
+# A pty is consumed per PANE. It is the only kernel table on this box sized in HUNDREDS while every
+# other is 10^4-10^6, and the only one still at its stock value — so it is the next wall and nothing
+# reported it.
+#
+# 🚨 THE PREDICATE IS THE POINT. `ls /dev/ttys*` matches two disjoint device classes:
+#     /dev/ttys000..999   major 16, <user>:tty, created on open and REMOVED on last close  ← the resource
+#     /dev/ttys0..ttysf   major 64, root:wheel, present since boot, static legacy BSD nodes ← NOT
+# Exactly 16 of the latter, always, allocated to nobody. The naive glob therefore carries a CONSTANT
+# +16, and at the 6- and 15-session fleets the program's published figures were taken at, that
+# offset WAS the reported effect (2.2 ptys/session where the truth is 1.13). The 3-digit form is not
+# a heuristic: slaves are named /dev/ttys%03d, which is also where the ~999 architectural ceiling
+# comes from. Detail: docs/research/pty-ceiling-2026-08-09.md.
+#
+# GAUGE ONLY — it feeds no rung and no verdict here, and no term in the admission gate
+# (scripts/lib/capacity-admit.sh is wave D's; a refusing term is operator-gated).
+PTY_USED=0
+for _p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$_p" ] && PTY_USED=$((PTY_USED+1)); done
+# sysctl lives in /usr/sbin, which a restricted PATH does not carry. Resolved absolutely so the
+# limit cannot read empty, become 0, and render as a reassuring "0%" — one value meaning both
+# "empty" and "could not ask".
+PTY_SYSCTL=""
+for _c in /usr/sbin/sysctl /sbin/sysctl; do [ -x "$_c" ] && { PTY_SYSCTL="$_c"; break; }; done
+[ -z "$PTY_SYSCTL" ] && PTY_SYSCTL="$(command -v sysctl 2>/dev/null || true)"
+PTY_MAX=""
+[ -n "$PTY_SYSCTL" ] && PTY_MAX="$("$PTY_SYSCTL" -n kern.tty.ptmx_max 2>/dev/null || true)"
+case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
+PTY_PCT=""
+if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
+
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1103,7 +1133,8 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "${OCCUPANCY_PCT:-null}" "${THRASH_CD_RATIO:-null}" \
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
   "${LOAD_1M:-null}" "${LOAD_5M:-null}" "${LOAD_15M:-null}" "${NCPU:-null}" \
-  "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE")"
+  "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE" \
+  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -1237,6 +1268,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
   fi
+  echo "  ptys (ptmx clones):     ${PTY_USED} / ${PTY_MAX:-unknown}   (${PTY_PCT:-unknown}% of kern.tty.ptmx_max · 1 per PANE · gauge only, feeds no rung)"
   echo "  swap used:              ${SWAP_MB:-unreadable} MB   (a LEVEL never alarms — it latches for days)"
   echo "  swap growth:            ${SWAP_DELTA:-unknown} MB in the last ${SWAP_WINDOW_S}s   (>=${SWAP_DELTA_MB} ⇒ ALARM)"
   echo "  est. room for:          >=${ROOM} more sessions (FLOOR: ~${PER_MB} MB/session is an rss-derived UPPER bound, so this under-promises)"
