@@ -697,3 +697,93 @@ argument parsing — the bundle's own success telemetry is `tengu_remote_send_he
   to exist but needs a web-minted bearer token). Interactive attach is refused
   `not enabled for your account` on **all four** accounts — an Anthropic-side rollout. So v6 is a
   *design*, validated only as far as "the transport exists, parses, and needs no TTY".
+
+---
+
+## 2026-08-09 — three MEASURED loop failures in one reso session, and the one that is a design race
+
+A `reso-management-app` lead (`wt-cc-234834-28059-886`) ran the fire → ping → wake loop four times
+in one night. **It failed three different ways, none of them the way the docs anticipate.** All three
+are measured, not inferred; the fourth fire worked perfectly, which is what makes the contrast usable.
+
+### F-1 · A peer can die without ever reaching the retire mechanism
+
+`wt-rum-iad-endpoints-895` was killed mid-work — last assistant message *"Typecheck green. Lint
+reports 126 pre-existing repo-wide errors — attributing before I drive anything."*, then nothing. Its
+transcript carries **zero `Prompt is too long`**, `cc-reaper` logged **`keep wt-rum-iad-endpoints-895
+[active] — never-reap cause`**, and there was no jetsam/lowmem event. It exited cleanly enough to
+print CC's `Resume this session with: claude --resume …` banner, and **its pane stayed open at a
+shell prompt**.
+
+That last fact is the discriminator: `self-close` closes the pane and refuses a dirty tree
+(`handoff-fire.sh:5621`). An open pane + a dirty tree proves **`self-close` was never invoked at
+all** — the peer did not violate the protocol's ordering, it never reached the protocol. It left 339
+lines uncommitted with a dead author.
+
+**Consequence for the trailer, and it is small but real:** the SELF-RETIRE directive
+(`handoff-fire.sh:5613-5623`) enforces durability (self-close refuses dirty) and ordering
+(retire is step 2), but the **announce is a parenthetical** — *"When your work is finished (and you
+have pinged back if asked to)"*. Durability and retirement are mechanical; the ping is advisory
+prose. **Retire should be conditional on announce the way it is already conditional on a clean
+tree** — i.e. `self-close` should refuse, or at minimum warn loudly, when a `--notify-back` was armed
+and no ping was ever sent from that pane.
+
+### F-2 · Both ends of the loop were TERMed together, from outside the harness
+
+The lead's own `cc-await-ping` exited **144** at the same moment. `cc-await-ping:41-43` documents
+exactly what that means and it is not arithmetic: *"144 = the whole process GROUP was TERMed (the
+wrapper died) — a harness sentinel… 144 also proves the SIGTERM came from OUTSIDE the harness:
+every harness-initiated kill resolves the task with its own code BEFORE signalling, so it can never
+surface as 144."* So an external SIGTERM took the watcher and (on the same minute) the peer.
+
+**The lead did not notice it was deaf.** The tool says the right thing —
+*"the wake path for [uuid] is now DOWN … If you are going idle, RE-ARM"* — but that text rides
+**stderr of a background task the harness labels `failed`**, and a lead that reads "failed" as noise
+stays deaf indefinitely. **A lead must never infer liveness from its own watcher's absence of
+complaint.**
+
+### F-3 🚨 · The drain hook and the ping watcher SHARE one cursor, so the watcher is structurally starvable
+
+**This is the design defect, and it is the one that would have hung the lead forever.**
+
+The fourth fire (`wt-rum-iad-resume-897`) executed the protocol **perfectly**: landed `9da394a9c`
+content-verified, pinged at `00:56:08`, then self-closed. Durable → announce → retire.
+
+**The lead's armed watcher never fired.** Post-mortem: `886.seen = 3`, `886.acked = 3`,
+`mailbox lines = 3`. `hooks/mailbox-drain.sh:13` states the mechanism — *"Deliveries here advance
+ONLY the .seen (emitted) cursor"* — and `cc-await-ping` polls that **same shared `.seen` cursor**.
+The drain ran first (a `UserPromptSubmit`), surfaced the ping as `additionalContext`, and advanced
+`.seen` past it. The watcher then polled an empty delta forever: **alive, armed, and permanently
+silent.** `.acked = 3` confirms a turn provably carried the mail.
+
+So the ping was *delivered* and the wake was *lost*, and the two facts are indistinguishable from
+the lead's side. The operator surfaced it by asking; nothing in the loop did.
+
+**Why this is not merely "the drain already told you":** the drain's delivery is passive context in
+an already-running turn. The watcher's delivery is an **event that re-invokes an idle lead**. A lead
+that goes idle *after* a drain-consumed ping is unreachable by either path — the drain has nothing
+left to emit and the watcher has nothing left to see. That is the forever-hang.
+
+### What is already BUILT for this, and the premise every implementer must check first
+
+🚨 **Do not build a death-watcher. One exists, is RED-proven, is landed on trunk, and is merely
+UN-ACTIVATED.** `docs/NEVER-WAIT-ACTIVATION.md`: *"The five-layer build (L0..L4) is complete,
+RED-proven, and landed on trunk; `scripts/wait-safety-gate.sh` is fully GREEN (13 met · 0 failed ·
+0 NOT BUILT). What remains is activation — wiring the built tools into the live runtime — which is
+C10 (human-only) by policy."* L1 is `bin/cc-deathwatch-kqueue` + `scripts/lead-deathwatch.sh`
+(kqueue `EVFILT_PROC`/`NOTE_EXIT`, fires within ~1ms of child exit, with a `{pid,start-time}`
+recycling guard so a recycled pid cannot read as false-liveness). Tests: `tests/lead-deathwatch.bats`.
+
+The activation queue confirms it is not live: 6 pending-activation scripts un-run, 5 rotting >24h.
+
+**So the honest split for whoever picks this up:**
+
+| | Status | What is actually needed |
+| --- | --- | --- |
+| **L1 death-watch** | BUILT, RED-proven, NOT activated (C10 human-only) | stage the activation; do NOT rebuild |
+| **F-3 cursor race** | **NOT built — this is the new work** | the drain and the watcher need cursors that cannot starve each other, OR the watcher must wake on drain-consumed mail |
+| **F-1 announce-before-retire** | partially enforced (durability yes, announce no) | make the ping a precondition of `self-close`, not prose |
+| **F-2 deaf-lead** | tool says the right thing on a channel a lead ignores | a `verdict=killed`/144 must reach the lead as something it ACTS on |
+
+**The transferable rule, stated for the next reader:** *a delivered message and a woken reader are
+different events, and a system that conflates them will report success while the reader sleeps.*
