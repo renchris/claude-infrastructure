@@ -963,3 +963,67 @@ missing_from_ladder() {
     [ "$(ladder_line "$f" | grep -c .)" -eq 1 ] || { echo "anchor is not unique in $f"; false; }
   done
 }
+
+# ── the trunk ladder, and the rung that abstains when it finds nothing ────────────────────────────
+# Every test above exports WRAP_TRUNK, so none of them exercises the ladder itself — which is how
+# the origin/HEAD capture (fixed in 7bc4b4e5) shipped and stayed live for months with no test, and
+# how the rung it feeds kept a second false-✅ afterwards. These unset it.
+
+@test "trunk ladder: origin/main resolves when origin/HEAD is ABSENT (pins 7bc4b4e5)" {
+  # `rev-parse --abbrev-ref origin/HEAD` ECHOES ITS ARGUMENT on stdout when the ref is absent, so
+  # the naive ladder captured the literal string, skipped the origin/main + origin/master rungs as
+  # "already resolved", and the final --verify blanked it ⇒ TRUNK=none on a repo with a good trunk.
+  # The fixture (a clone of an EMPTY bare repo) has exactly that shape: no refs/remotes/origin/HEAD.
+  # Written as a plain `[ ]`, not `! git …`: errexit does not fire on a `!`-negated command, so the
+  # negated spelling is a DEAD assertion — it cannot fail this test no matter what the repo holds.
+  [ -z "$(git for-each-ref refs/remotes/origin/HEAD --format='%(refname)')" ]
+  unset WRAP_TRUNK
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" TRUNK)" = "origin/main" ]
+  ! printf '%s' "$output" | grep -q "^TRUNK=origin/HEAD" || false # the captured non-ref
+  ! printf '%s' "$output" | grep -q "^TRUNK=none"          # the symptom it decayed into
+}
+
+@test "trunk ladder: unlanded commits ⇒ 📦 with no origin/HEAD (the false ✅ 7bc4b4e5 killed)" {
+  unset WRAP_TRUNK
+  echo more > more.txt; git add more.txt; git commit -q -m "unlanded work"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" AHEAD)" = "1" ]
+  [ "$(field "$output" UNLANDED)" = "1" ]
+  [ "$(field "$output" RUNG)" = "📦" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=✅"
+}
+
+@test "trunk ladder: a PRESENT origin/HEAD is still honoured (the probe must not skip its rung)" {
+  unset WRAP_TRUNK
+  git remote set-head origin main            # writes refs/remotes/origin/HEAD → origin/main, no network
+  git rev-parse --verify -q origin/HEAD >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" TRUNK)" = "origin/main" ]
+}
+
+@test "no trunk resolves at all ⇒ 🔧 landing UNPROVEN, never ✅ 'Clean & landed'" {
+  # With no trunk, UNLANDED=0 is a DEFAULT and not a measurement. This rung used to sit BELOW the
+  # absent-DoD arm, whose readout opens "✅ Clean & landed" — so the abstain was shadowed on exactly
+  # the branch this case reaches, a repo with no trunk having no DoD either. The 👤/🚀 carve-out
+  # above it in the source already says a missing trunk must not ASSERT landed; this is the third
+  # arm that rule has to reach.
+  unset WRAP_TRUNK
+  git remote remove origin                                   # takes refs/remotes/origin/* with it
+  [ -z "$(git for-each-ref refs/remotes)" ]
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/does-not-exist.md" # the common case: no DoD either
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" TRUNK)" = "none" ]
+  [ "$(field "$output" DOD)" = "absent" ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=✅" || false
+  # scoped to the READOUT sentence: the machine block legitimately carries an UNLANDED= field, so a
+  # whole-output grep for "landed" would match it and pass/fail for the wrong reason.
+  local say; say="$(field "$output" READOUT)"
+  ! printf '%s' "$say" | grep -qi "landed" || false
+  printf '%s' "$say" | grep -qi "unproven"
+}
