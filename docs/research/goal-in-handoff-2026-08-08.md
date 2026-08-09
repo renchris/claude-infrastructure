@@ -314,3 +314,161 @@ goal substitute for the agent's own completion discipline. Same class as the ine
 and then does nothing. Assert the BEHAVIOUR, not the installation.
 
 Filed: `11c25d8f7c55`.
+
+---
+
+# RESOLVED 2026-08-09 — the goal hook is REMOVED at every Stop, by CC, because a background Bash is running
+
+**The mechanism is not kitty, not hook shadowing, and not the steered-stop path. All three are
+refuted below with the binary's own code.** `/goal` evaluation is gated on the task registry being
+QUIET, and this box's standing operating procedure — `cc-await-ping --timeout 14400` armed as a
+background Bash so peer mail is not missed — holds a `local_bash` task open for **four hours**. For
+as long as that watcher lives, CC deletes the goal's Stop hook before the Stop runner can see it,
+then silently puts it back.
+
+## The code, read out of the binary
+
+`claude.exe` 2.1.220 (`~/.claude-220/…/bin/claude.exe`, the binary `ps -o command= -p $PPID` names
+as the running process). Same technique as §2 — read the bundled JS out of the compiled Bun
+executable. Offsets are for this build and will move.
+
+**The arm path** (`Xdr`, @232982): registers the goal as a session-scoped **prompt-type** Stop hook
+and appends the marker attachment:
+
+```js
+t.sessionHooksRegistry.add(n,"Stop","",{type:"prompt",prompt:e});
+t.setAppState((i)=>({...i,activeGoal:{condition:e,iterations:0,setAt:Date.now(),…}}));
+t.applyMessageOp({type:"append",messages:[kld(!1,e)]});
+```
+
+**The deferral** (@233098, first statements of the Stop handler, before the runner is called):
+
+```js
+let D=A.activeGoal;
+if(D){
+  let B=i.taskRegistry.all();
+  if(_We(B)||Tio(B)){                                    // ← the gate
+    if(y=Jdr(A,kt()).find((j)=>j.prompt===D.condition), y)
+      i.sessionHooksRegistry.remove(kt(),"Stop",y),
+      w("[goal] evaluation deferred — background work still running")
+  }
+}
+…
+finally{ if(y) i.sessionHooksRegistry.add(kt(),"Stop","",y); … }   // ← puts it back
+```
+
+and the two predicates (@229209):
+
+```js
+function Tio(e){for(let t of Object.values(e)) if(t.type==="local_bash" && !CT(t.status)) return !0; return !1}
+function _We(e){for(let t of Object.values(e)) if(a1g.has(t.type) && !CT(t.status) && … ) return !0; return !1}
+function CT(e){return e==="completed"||e==="failed"||e==="killed"}
+a1g = new Set(["local_agent","remote_agent","in_process_teammate","local_workflow"])
+```
+
+**`Tio` is the one that fires here: any `local_bash` task not yet `completed`/`failed`/`killed`.**
+A background Bash *is* a `local_bash` task. `cc-await-ping --timeout 14400` blocks for up to four
+hours by design, so it is non-terminal for four hours, so `Tio` is `true` at every Stop in that
+span.
+
+## Why every prior hypothesis was looking in the wrong place
+
+The `finally` block re-adds the hook. **The registry is therefore correct whenever anyone inspects
+it** — before the Stop and after the Stop. It is wrong only during the Stop, which is the only
+moment that matters and the only moment nothing can observe. That is why "11 Stop hooks registered,
+none is a goal hook" (§ Ruled OUT) read as evidence of a healthy registry: the goal hook genuinely
+is in the registry, as a `type:"prompt"` entry with `matcher:""` — `Jdr` is the accessor that finds
+it — and it is genuinely absent at Stop time.
+
+## The measurement, re-read against the mechanism
+
+Session `d33abf12`, goal armed 07:13:38Z. Background Bash launches in that transcript
+(`tool_use` with `run_in_background:true`):
+
+| Time (Z) | Command |
+| --- | --- |
+| 07:00:58 | `cc-await-ping --timeout 14400 --interval 15` |
+| 07:01:40 | `cc-await-ping --timeout 14400 --interval 15` |
+| **07:13:38** | **← goal armed here** |
+| 07:20:26 | `cc-await-ping --timeout 14400 --interval 15` |
+| 07:44:43 | `cc-await-ping --timeout 14400 --interval 15` |
+| 08:23:26 | `cc-await-ping --timeout 14400 --interval 15` |
+| 08:52:01 | `cc-await-ping --timeout 14400 --interval 15` |
+| 08:53:58 | `cc-await-ping --timeout 14400 --interval 15` |
+| 08:58:31 | `cc-await-ping --timeout 14400 --interval 15` |
+
+A four-hour watcher was already running when the goal was armed, and seven more were armed across
+the window. **There is no Stop in 07:13:38Z → 09:14:02Z at which `Tio` was false.** Zero evaluations
+is the exactly-predicted output, not an anomaly.
+
+This also explains the two facts that made the original finding look paradoxical:
+
+- **"Never blocked a stop."** Blocking is what the *evaluator* does on `ok:false`. The evaluator
+  never ran.
+- **"Never auto-cleared."** Clearing happens on `ok:true` in the same handler. Also never ran. The
+  sole attachment keeps reading `met:false` forever because nothing ever writes a second one.
+
+## `sentinel: true` — answered, and it is the tell
+
+Undocumented anywhere in the repo, and defined at @232982:
+
+```js
+function kld(e,t){return {type:"attachment",…,attachment:{type:"goal_status",met:e,sentinel:!0,condition:t}}}
+```
+
+`kld(false, cond)` is appended by the **arm** path; `kld(true, cond)` by the **clear** path (`Qdr`).
+**`sentinel:true` means "this record is a marker for the UI, not an evaluation."** CC's own readback
+helper refuses to treat sentinels as results:
+
+```js
+function Kks(e){ … if(!n.met||n.sentinel) continue; … }        // skips every sentinel
+```
+
+Evaluations are the records **without** the field — written at @233099/@233100 with `iterations`,
+`durationMs`, `tokens`. So the shape of a healthy goal is: one `sentinel:true` at arm, then a
+non-sentinel `met:false` per unmet Stop, then one non-sentinel `met:true` at success. **A transcript
+holding exactly one record, and that record a sentinel, is the signature of a goal that was armed
+and never once evaluated.** The original measurement had already captured the diagnostic field; what
+was missing was the dictionary.
+
+## The three refutations, with their evidence
+
+| Hypothesis | Verdict | Evidence |
+| --- | --- | --- |
+| **Kitty, not iTerm2** (addendum's flagged variable 2) | **REFUTED** | The deferral reads `taskRegistry`, `activeGoal`, and `sessionHooksRegistry`. No terminal, pane id, TTY or `$TERM_PROGRAM` value is on the path. The two prior kitty failures were pane-id resolution; this path resolves no pane. |
+| **A blocking shell Stop hook shadows the goal hook** (the updated leading hypothesis) | **REFUTED** | The dispatcher `uL` (@237793) maps every resolved hook to a concurrent async generator — `let H=_.map(async function*({hook:q,…},Y)=>{…})` — and the consumer `for await` loop in the Stop handler drains **all** yielded results, checking `B.blockingError`, `B.additionalContexts` and `B.preventContinuation` per result. `preventContinuation` sets a flag `v`; the `return` that honours it is **after** the loop. One hook blocking cannot suppress another hook's result. |
+| **Only a clean Stop evaluates; steered mid-turn messages skip it** | **REFUTED as the cause** | Steering changes *when* Stop is reached, not whether the handler runs — and the handler is where the removal happens. It is upstream of any ordering question. |
+
+The 11 operator shell hooks are bystanders. `session-continue.sh` firing its WAKE-FLOOR block inside
+the window is consistent with, not contrary to, this mechanism: Stop was reached, the shell hooks
+ran, and the goal hook was simply not in the list handed to the runner.
+
+## Is CC wrong here?
+
+**No — the deferral is deliberate and defensible.** Evaluating "is the objective met?" while a
+subagent or a background command is still producing its result would judge on an incomplete
+transcript, and each evaluation costs a real LLM call (`querySource:"hook_prompt"`, JSON-schema
+output). Deferring until the work settles is the right default.
+
+**What is wrong is the interaction with our own standing procedure.** `cc-await-ping --timeout
+14400` is not a unit of work that settles; it is an idle watcher that is deliberately long-lived,
+and we tell every session to arm one — the SessionStart and UserPromptSubmit hooks both emit
+*"before you go idle, run this as a Bash tool call with run_in_background=true"*. CC's predicate
+cannot distinguish *"work is in flight"* from *"a watcher is parked"*, because both are
+`local_bash`, non-terminal. **We built a box on which `/goal` is structurally inert by default.**
+The defect is ours, and it is in the procedure, not in the binary.
+
+## The operational rule, restated now that the mechanism is known
+
+The rule at the end of the previous section stands and gains a second clause:
+
+1. **`goal-arm verdict=set` proves SET, never LIVE** — count non-sentinel `goal_status` attachments
+   over time. (Unchanged.)
+2. **A goal and a parked background watcher are mutually exclusive on this box.** Arming
+   `cc-await-ping` disables the goal for as long as it lives, silently and with no log the operator
+   sees. Any long-horizon mechanism that depends on `/goal` blocking a stop must not co-exist with a
+   background watcher — or must not depend on `/goal` at all.
+
+⚠️ **Do not "fix" this by dropping `cc-await-ping`.** It is load-bearing for peer mail; removing it
+trades a silent goal failure for a silent comms failure. The compensating control below keeps both.
+
