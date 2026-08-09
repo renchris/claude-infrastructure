@@ -179,6 +179,36 @@ Properties that make this the right primitive: refs are writable without touchin
 `git ls-remote` reads them in one round trip without a fetch; they are namespaced away from
 `refs/heads/*` so no branch-reaper, land-lock, or `/ship` path sees them; and force-update is atomic.
 
+> 🚨 **RETRACTED as the transport, 2026-08-08 (item `40b46a34e1ce`). The cloud worker cannot write
+> these refs.** Every property listed above is a property of *git*, and every one of them is real.
+> None of them is a property of **the proxy standing between the worker and the remote**, which is
+> what actually adjudicates the push — and it allows exactly one destination:
+>
+> > **Push protection**: `git push` works only against the session's current working branch;
+> > cloning, fetching, and PR operations work normally.
+> > — [Configure cloud environments § GitHub proxy](https://code.claude.com/docs/en/cloud-environments)
+>
+> `refs/cc/heartbeat/<id>` is not the session's current working branch, so **O1 as designed is not
+> writable from a cloud VM.** `CONCURRENCY_PROGRAM.md` §S5a set the consequence in advance and it now
+> binds: **O1 must become a working-branch commit — the shape this section rejected — or leave git.**
+>
+> **What this section got wrong is its first sentence, not its ref design.** *"The only channel a
+> cloud VM and this Mac reliably share is the git remote"* is false, and believing it is what made a
+> ref namespace look like the only place to put a heartbeat. Two non-git channels were found while
+> measuring this (§4.6): the CLI's hidden `--teleport` and the `/v1/code/sessions/{id}/events` REST
+> surface it reads. A heartbeat does not have to be a git object at all, and the strongest reason not
+> to force it into one is that the git path is the single most restricted channel of the three.
+>
+> ⚠️ **The retraction rests on the vendor's stated rule, NOT on a measurement — and the measurement
+> that would have closed it could not be run.** The loophole hypothesis (a proxy that enforces
+> "your working branch" by checking `refs/heads/*` only, leaving `refs/cc/*` unexamined) is
+> **untested**: eleven cloud sessions across three accounts have now been created and *none has ever
+> produced an observable push* (§4.7), so the probe never reached the proxy. That gap does not
+> reopen the design decision. Building a liveness channel on an undocumented gap in a stated
+> security control is the wrong design **even in the world where the gap is real**: it is one
+> proxy patch from silently going dark, and a heartbeat that fails silent is the one failure mode
+> §4.4 exists to prevent.
+
 ### 4.2 The four observables
 
 | # | observable | question it answers | read by |
@@ -226,6 +256,55 @@ unreachable remote, a hung `git ls-remote`. Every one of them looks identical to
 beating". So the poller must **time-cap its probe and report `UNRESOLVED` distinctly from `STALE`** —
 the same `rc 2` discipline `claimer_live` already applies to a wedged `it2` (`bin/cc-backlog:1204–1206`),
 for the same stated reason: *our own timeout must never forge the kill evidence.*
+
+### 4.6 The git remote is not the only shared channel — added 2026-08-08
+
+§4.1's premise was that it is. Two others exist on 2.1.220, both found while measuring `40b46a34e1ce`:
+
+| channel | what it is | evidence |
+| --- | --- | --- |
+| `claude --teleport <session-id>` | **hidden** flag (in `strings`, absent from `--help`); pulls a cloud session down to continue locally | binary carries `teleportFromSessionsAPI`, `checkOutTeleportedSessionBranch`, `[teleport] Fetching events from:` |
+| `/v1/code/sessions/{id}` and `…/events` | the REST surface teleport reads; siblings `/events/stream`, `/teleport-events`, `/archive`, `/client/presence` | string-extracted from the 2.1.220 bundle |
+
+**Why this matters more than the ref question it displaced.** These are *pull* channels the observer
+drives, so they do not depend on the worker emitting anything — which is the exact defect §4.2 named
+as O1's reason to exist (*"a heartbeat is not observable — it must be emitted"*). A session-events
+read is closer to a real liveness oracle than a beat ref ever was, and it is not behind the push
+proxy.
+
+⚠️ **Both are UNVALIDATED as instruments, and neither is free.** `--teleport` was driven to a real
+session and stopped at an interactive **folder-trust dialog**; scripting past that is bypassing a
+safety prompt, so it was not done. The REST path needs the account's OAuth token, which is
+credential material this box's own tooling correctly refuses to hand an agent. So both are **named,
+not commissioned** — the next design pass should cost them properly rather than assume them.
+
+### 4.7 Eleven sessions, zero observable actions — the wall this design now sits behind
+
+The `refs/cc/*` probe could not be run, and the reason is upstream of the proxy: **no cloud session
+created from this box has ever been observed to do anything.**
+
+| | | re-read with |
+| --- | --- | --- |
+| sessions declared (≥2 accounts — 6 tagged `next2`, 1 `next3`, 4 untagged) | **11** | `cc-cloud list` |
+| that pushed any ref, opened any PR, or produced any remote-visible artifact | **0** | `git ls-remote origin` → 2 refs, both `main` |
+| longest observed | **17h** (`session_01TYUBVAqDxXPQ6hpZhpWpUP`, next2) | `cc-cloud show <id>` |
+| fired on a `--verify`-linked account, clone mode, explicit push instructions | `session_01DcTULYmXVnUnrwyFKm8LGH` (next3) — **0 refs in 7h** | same |
+
+The next3 row is the one that carries the weight: it is the arm with every known precondition
+satisfied — an account whose CLI→GitHub link is not merely recorded but **end-to-end `--verify`d**,
+a create that returned in clone mode rather than falling back to a bundle, and a task description
+whose entire content is four `git push` commands. It behaved exactly like the other ten.
+
+The create path returns a real session id, the headless send arm returns `{"ok":true}`, and
+`cc-cloud` classifies the result `NOT-STARTED · no ref after 9h (boot budget 15m)`. Per §4.4 that
+verdict is honest and **collectively** unrevealing: it separates *alive* from the other seven
+worlds and does not name which one holds.
+
+🚨 **This retires the premise the program has been sequencing on.** `CONCURRENCY_PROGRAM.md` §S5.2
+already narrowed it once — *"creating a session and running tokens through it are different
+questions, and only the first has been measured"* — and this is the second question measured, with
+a null result. **Cloud capacity is not capacity until a cloud session is observed doing work.**
+Nothing downstream of "a cloud worker does X" should be built until one has been.
 
 ---
 
