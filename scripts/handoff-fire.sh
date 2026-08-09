@@ -421,20 +421,61 @@ _iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 #   jq -rs '[.[]|select(.gate=="capacity")] | group_by(.verdict)
 #            | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl
 #   …and split the admits by `basis` before believing any of it.
+# WAS THIS ROW WRITTEN BY THE TEST SUITE? — 2026-08-09, and it is the field that decides whether any
+# ratio computed off this ledger means anything.
+#
+# The suites that do not `export HOME` write into the OPERATOR'S live ledger. Measured on the live
+# file the day this landed: 107 of 237 refusals (45%) carry a bats fingerprint in `detail`
+# (`bats-run-…` tmpdirs, `firing_sid:"fake:DEADBEEF-…"`, the `GOAL_MAX_CHARS=20` fixture's
+# "30 chars > 20"), and ZERO of the 109 payload-gate refusals in the entire window come from a real
+# fire. On the admit side 453 of 633 carry `basis:"gate-off"`, which only `CC_FIRE_CAPACITY_GATE=off`
+# produces — set by 88 test files and by no production caller at all.
+#
+# The cost is already on the record, twice. MACHINE_CAPACITY_V2 §9.5 called capacity_gate a
+# "permanent dispatch outage" from 13 samples and retracted it; §9.5.1 then retracted the
+# RETRACTION'S corroboration too. The admit side was added so the ratio would finally be provable —
+# and the query that header publishes still reads 84.4% admit today, against 58.9% over the
+# production-bearing rows alone. A 25.5-point error, in the exact metric the fix was for, because
+# the denominator silently spans two populations and nothing on a row says which.
+#
+# It measures the ENVIRONMENT, not intent, and says so: true ⟺ a bats harness variable was present
+# in this process at emission. That is a fact this code can always read, so there is no third
+# "could not tell" state to model here and `false` is a measurement rather than a default (memory
+# sensor-default-off-makes-blindness-the-shipping-path — the trap is a single value standing for
+# both "no" and "never asked", and the read that produces this one cannot fail).
+# Split every rate on it:
+#   jq -rs '[.[]|select(.gate=="capacity" and (.under_test|not))] | group_by(.verdict)
+#           | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl
+#
+# Every call site spells it `$(_under_test 2>/dev/null || echo false)`, never a bare call. Under
+# `set -e` an unresolved helper is a 127 that kills the FIRE — and four sibling suites sed-extract
+# these emitters individually, so "the helper is defined above it" is true of the script and false of
+# every extraction context. That is not a hypothetical: adding a bare call reddened 14 cases across
+# four suites in one run. In production the definition always resolves (top-level, above every
+# caller), so the fallback is unreachable there and `false` cannot become the shipping value.
+_under_test() { # → "true" when a bats harness is present in this process, else "false"
+  if [ -n "${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}${BATS_TEST_FILENAME:-}" ]; then
+    printf true
+  else
+    printf false
+  fi
+}
 emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] → always 0
   local log="$HOME/.claude/logs/handoffs.jsonl" line
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   if command -v jq >/dev/null 2>&1; then
-    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte, key order included —
-    # the two recycle-* callers below are unchanged by construction, not by inspection.
+    # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the trailing
+    # `under_test` key — the two recycle-* callers below are unchanged by construction, not by
+    # inspection. The key is appended LAST so no existing key's position moves.
     line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
                   --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
-                  --arg vd "${4:-}" --arg gt "${5:-}" \
+                  --arg vd "${4:-}" --arg gt "${5:-}" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
       '{ts:$ts, class:$cl}
        + (if $vd == "admit" then {basis:$r} else {engaged:false, refuse_reason:$r} end)
        + (if $vd == "" then {} else {verdict:$vd} end)
        + (if $gt == "" then {} else {gate:$gt}    end)
+       + {under_test:$ut}
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
        + {detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
@@ -489,8 +530,8 @@ emit_goal_event() { # $1=verdict (set|unverified|abstained|unreachable) $2=detai
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   command -v jq >/dev/null 2>&1 || return 0
   line=$(jq -cn --arg ts "$(_iso_now)" --arg vd "${1:-unknown}" --arg d "${2:-}" \
-                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" \
-    '{ts:$ts, class:"goal-arm", verdict:$vd, gate:"goal",
+                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
+    '{ts:$ts, class:"goal-arm", verdict:$vd, gate:"goal", under_test:$ut,
       firing_sid:(if $fs == "" then null else $fs end),
       account:   (if $ac == "" then null else $ac end),
       detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
@@ -530,19 +571,44 @@ emit_gate_admit() { # $1=gate $2=basis $3=detail → always 0 — a gate decisio
 # them would be a migration for no gain. The asymmetry is therefore real and bounded — a recycle
 # denominator is `recycle-engaged + recycle-dead + recycle-unverified`, and only the first carries
 # goal_requested. Stated here so the next reader does not have to discover it.
-emit_recycle_engaged() { # $1=pane $2=detail → always 0
-  local log="$HOME/.claude/logs/handoffs.jsonl" line
+# THE RECYCLE OUTCOME ROW — all three verdicts, one shape.
+#
+# `engaged` is a TRI-STATE here, and that is the point (memory
+# sensor-default-off-makes-blindness-the-shipping-path):
+#   true    recycle_engaged() proved a real assistant turn
+#   false   the window expired with a live claude and no turn — asked, answered NO
+#   ABSENT  nothing to verify against (an older arming side handed over neither marker nor
+#           baseline) — COULD NOT ASK, and R9 says an unmeasured field reads absent, never false
+# emit_fire_event cannot express that: it hard-codes `engaged:false` on every non-admit row, so the
+# pre-existing `recycle-unverified` caller was publishing a measured-negative for a state it had
+# explicitly declined to measure, into the numerator of the V2 M-1 engagement rate.
+#
+# `prev_sid` is what makes a recycle JOINABLE. This runs in the detached `__recycle` re-exec, where
+# FIRING_SID is never assigned (`:5884` is far below the `__recycle` branch), so every row from here
+# carries firing_sid:null by construction — but the watcher IS handed the pre-recycle session id as
+# $6, and a recycle's identity is exactly (pane, predecessor → successor). Recording it turns
+# "does an armed recycle actually succeed?" — answered in ARMED_SUCCESSION_LIFECYCLE §1 by a hand
+# census of TMPDIR watcher logs on a SELF-DELETING 2-day window, verdict 1-of-7 — into a query.
+# The class names `recycle-unverified` / `recycle-dead` are kept verbatim: consumers and tests count
+# those strings, and renaming them would be a migration for no gain.
+emit_recycle_event() { # $1=class $2=engaged (1|0|"") $3=pane $4=detail → always 0
+  local log="$HOME/.claude/logs/handoffs.jsonl" line en="${2:-}"
   [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] || return 0
   mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  line=$(jq -cn --arg ts "$(_iso_now)" --arg tp "${1:-}" --arg d "${2:-}" \
-                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" \
+  case "$en" in 1) en=true ;; 0) en=false ;; *) en=null ;; esac
+  line=$(jq -cn --arg ts "$(_iso_now)" --arg cl "${1:-recycle}" --arg tp "${3:-}" --arg d "${4:-}" \
+                --arg fs "${FIRING_SID:-}" --arg ac "${CHOSEN:-}" --arg ps "${RCY_OLD_SID:-}" \
+                --argjson en "$en" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                 --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
-    '{ts:$ts, class:"recycle-engaged", engaged:true, target_pane:(if $tp == "" then null else $tp end),
-      goal_requested:$gr, gate:"recycle",
-      firing_sid:(if $fs == "" then null else $fs end),
-      account:   (if $ac == "" then null else $ac end),
-      detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
+    '{ts:$ts, class:$cl, gate:"recycle"}
+     + (if $en == null then {} else {engaged:$en} end)
+     + {target_pane:(if $tp == "" then null else $tp end),
+        prev_sid:   (if $ps == "" then null else $ps end),
+        goal_requested:$gr, under_test:$ut,
+        firing_sid:(if $fs == "" then null else $fs end),
+        account:   (if $ac == "" then null else $ac end),
+        detail:    (if $d  == "" then null else $d  end)}' 2>/dev/null) || line=""
   [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   return 0
 }
@@ -3976,7 +4042,9 @@ if [ "${1:-}" = "__recycle" ]; then
       echo "  reading the transcript's assistant turns, not this line."
       # Disk-visible so a task-less recycle is findable without being at the pane. class distinguishes
       # it from a fire: a recycle is net-zero panes and is never capacity-gated.
-      emit_fire_event recycle-unverified process-alive "relaunched pane $RSID; engagement NOT verifiable (no marker/baseline handed to the watcher)"
+      # engaged ABSENT, not false — this branch is reached precisely BECAUSE there was nothing to
+      # verify against, so a `false` would be a measured negative for a question never asked.
+      emit_recycle_event recycle-unverified "" "$RSID" "relaunched pane $RSID; engagement NOT verifiable (no marker/baseline handed to the watcher)" || true
       goal_unreachable recycle-unverified || true
       exit 0
     fi
@@ -3992,7 +4060,7 @@ if [ "${1:-}" = "__recycle" ]; then
         arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
         # …and RECORD the success. Strictly after arm_goal so the row's goal_requested sits beside a
         # goal-arm row that already carries the verdict, rather than promising one that never comes.
-        emit_recycle_engaged "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
+        emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
         exit 0
       fi
       sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
@@ -4004,7 +4072,9 @@ if [ "${1:-}" = "__recycle" ]; then
     # the absence of a recovery). The session is left exactly as it is, for inspection.
     echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap). The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
     echo "!!   recover: re-send the brief into the pane (cc-notify $RSID '<re-engage prompt>'), or relaunch manually: $(cat "$CMDFILE")" >&2
-    emit_fire_event recycle-dead never-engaged "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)"
+    # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
+    # assistant turn. This is the "asked, answered no" half of the tri-state above.
+    emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)" || true
     goal_unreachable recycle-dead || true
     if [ -x "$HOME/.claude/bin/cc-notify" ]; then
       hf_bounded "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
@@ -7134,6 +7204,13 @@ else
     else
       _hf_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
     fi
+    # Same probe-never-assume rule as the two above, and for the same reason: under `set -e` an
+    # unresolved helper is a fire-killing 127, and tests/handoff-teardown-marker.bats sed-extracts
+    # this unit ALONE — where _under_test is genuinely absent. `false` is the right fallback: a row
+    # that cannot read the harness is production as far as any evidence goes, and the alternative
+    # (defaulting true) would quietly delete real fires from every production-only denominator.
+    local _hf_ut
+    if command -v _under_test >/dev/null 2>&1; then _hf_ut="$(_under_test)"; else _hf_ut=false; fi
     _hf_json='{}'
     if command -v jq >/dev/null 2>&1; then
       _hf_json=$(jq -cn \
@@ -7143,8 +7220,10 @@ else
         --arg pr "${LR_PROOF:-}" --arg la "$_hf_lat" --argjson en "${1:-0}" \
         --arg sf "${SURFACE:-}" --arg sr "${SURFACE_REASON:-}" --arg ai "${ANCHOR_INTENT:-}" \
         --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
+        --argjson ut "$_hf_ut" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {goal_requested:  $gr}
+         + {under_test:      $ut}
          + {firing_sid:      (if $fs == "" then null else $fs end)}
          + {surface:         (if $sf == "" then null else $sf end)}
          + {surface_reason:  (if $sr == "" then null else $sr end)}
@@ -7175,8 +7254,53 @@ else
     # in one high-variance window) gets EASIER, not harder, as the window shrinks. Doubling the bound
     # against a doubled write rate holds the window constant in TIME, which is the thing that matters.
     # ~250 B/row ⇒ ~250 KB. Tail-trimming keeps a CONTIGUOUS suffix, so the ratio stays unbiased.
+    #
+    # …AND THE TRIM NOW LEAVES A RECORD OF ITSELF (2026-08-09). It is the only operation in this
+    # file that DESTROYS data, and it was the only one that wrote nothing: a reader could not tell a
+    # ledger that had never been trimmed from one that had just lost a day. Every rate anyone quotes
+    # off this file is over a window the file itself could not state.
+    #
+    # And the budget is CLASS-BLIND, which is what makes that dangerous rather than merely untidy.
+    # Measured 2026-08-09: 1012 rows spanning 40.9h — but the classes accrue at wildly different
+    # rates (admitted 371/day, self-retire-peer 80/day, goal-arm 2.4/day), so the per-fire class
+    # loses ~7× and goal-arm ~245× of the window they would each have under their own budget. On
+    # 2026-08-08 the admit class alone consumed 456 of the 1000 rows, and 45% of refusals are bats
+    # fixtures — i.e. ONE HEAVY TEST RUN CAN EVICT A DAY OF PRODUCTION FIRE HISTORY, silently.
+    # That is not hypothetical damage: MACHINE_CAPACITY_V2 §9.5's retracted "permanent dispatch
+    # outage" was projected from 13 samples in one high-variance window, and the remedy then was to
+    # double this bound — which the test rows have since re-consumed.
+    #
+    # Not fixed by raising the bound again (the next test day eats that too) and not by trimming per
+    # class (a class-aware trim would have to pick winners, and the 1200-row budget is a disk
+    # bound, not a fairness one). Fixed by making the loss LEGIBLE: one `class:"trim"` row naming
+    # how many rows of each class were dropped and how far back the survivors now reach. A reader
+    # who finds no trim row knows the window is the whole history; one who finds a trim row knows
+    # exactly what it costs them, per class, and can say so instead of quoting a rate over an
+    # unstated window (memory published-figure-decays-with-its-source: publish COVERAGE, never a
+    # bare percentile). Written AFTER the mv, so it survives the trim it describes.
     if [ -f "$_hf_log" ] && [ "$(wc -l < "$_hf_log" 2>/dev/null || echo 0)" -gt 1200 ]; then
-      tail -1000 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null || true
+      local _hf_drop='' _hf_from='' _hf_total _hf_ndrop
+      _hf_total=$(wc -l < "$_hf_log" 2>/dev/null | tr -d ' ') || _hf_total=0
+      _hf_ndrop=$(( ${_hf_total:-0} - 1000 ))
+      # `head -n "$n"`, NEVER `head -n -1000`: BSD head refuses a negative count outright
+      # ("illegal line count"), and this file runs on Darwin. The GNU spelling reads correct, fails
+      # loudly the first time it runs, and would have taken the whole record down with it.
+      if [ "$_hf_ndrop" -gt 0 ] && command -v jq >/dev/null 2>&1; then
+        # What is about to be lost, computed BEFORE the trim — afterwards it is unknowable, which is
+        # the entire defect. Guarded: a jq hiccup must degrade the record, never the trim.
+        _hf_drop=$(head -n "$_hf_ndrop" "$_hf_log" 2>/dev/null \
+                   | jq -cs 'group_by(.class)|map({key:(.[0].class//"?"),value:length})|from_entries' 2>/dev/null) || _hf_drop=''
+      fi
+      if tail -1000 "$_hf_log" > "$_hf_log.tmp" 2>/dev/null && mv "$_hf_log.tmp" "$_hf_log" 2>/dev/null; then
+        if command -v jq >/dev/null 2>&1; then
+          _hf_from=$(head -1 "$_hf_log" 2>/dev/null | jq -r '.ts // empty' 2>/dev/null) || _hf_from=''
+          jq -cn --arg ts "$_hf_ts" --arg from "$_hf_from" --argjson ut "$_hf_ut" \
+                 --argjson dropped "${_hf_drop:-null}" \
+            '{ts:$ts, class:"trim", kept:1000, dropped:$dropped, under_test:$ut,
+              window_starts_at:(if $from == "" then null else $from end)}' \
+            >> "$_hf_log" 2>/dev/null || true
+        fi
+      fi
     fi
   }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
