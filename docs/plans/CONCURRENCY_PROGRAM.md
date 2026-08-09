@@ -1120,7 +1120,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 | Wave | Locus | Why | Owns (single-owner files) |
 |---|---|---|---|
 | **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
-| **C** — bound toolchain ignition | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. | cold-compile admission path + worker-pool cap |
+| **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
 | **B** — cut active occupancy (serialise hooks, cache git) | **S**, but **SERIALISED AFTER A** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
 | **E** — headless / render | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. | launch path |
@@ -1276,6 +1276,86 @@ worker pools), never session count. Per S6.2 the burst budget at 150 resident is
   3.9 procs/s storm growth by ~10×, and it excludes `claude` by construction, so it can never bind on
   session count.
 - **Verify:** run a deliberate cold compile at design-point residency; `seg_pct` must stay < 15%.
+
+#### S6.5-DONE · Wave C — LANDED 2026-08-09 (branch `wave-c-ignition`)
+
+**Shipped.** `bin/cc-ignition-gate` (the box-wide waiter) · `hooks/coldcompile-admit.sh`
+(PreToolUse/Bash chokepoint) · `config/coldcompile.patterns` (the ignition table) ·
+`scripts/turbopack-worker-cap-audit.sh` (the worker-pool cap, made observable) ·
+`migrations/0006` (c10, staged — **the hook is NOT registered**) · 42 bats cases across three
+files, 5 of them mutation/positive controls.
+
+**The design decision, and it was measured rather than assumed.** The obvious shape is a prefix
+wrapper, as `hooks/qos-rewrite.sh` uses for `taskpolicy` and `cc-cpubound`. A prefix can only ever
+be applied to a **single simple command** — string surgery on a compound demotes the wrong half.
+Over `~/.claude/logs/bash-commands.log{,.gz}` (2026-07-19 → 08-09, 49,510 agent Bash entries),
+**232 entries actually RUN an ignition tool and 231 of them are compound**. A wrapper would have
+covered 1 of 232, i.e. shipped inert. So the gate is prepended as a *separate statement* —
+`gate ; <original>` — which does no surgery at all and covers every spelling by construction.
+`;` not `&&`: a comment-leading first line makes `gate && # …` a syntax error.
+
+**It is a waiter, never a lock holder.** Busy = an ignition-shaped process younger than
+`SETTLE_S` (90 s), **or** more than `BURST_N` (100) non-fleet node processes. So a `next dev` that
+has been up an hour stops being an incumbent when its burst ends, and nothing has to release
+anything. Term 2 exists because term 1 is blind to W11's actual storm generator: an *old*
+`next-server` re-storming on mass invalidation, whose etime says nothing.
+
+**Bounded by the caller's timeout, not by the storm.** `WAIT_S` = 90 s, deliberately under the Bash
+tool's 120 s default: a gate that outwaits its caller gets the whole tool call killed and the
+compile never runs — stranding dressed as safety. Budget exhausted ⇒ **admit + `verdict=admit-timeout`**;
+that residual is what the compressor sentinel backstops. Every path exits 0.
+
+**Disjoint from `qos-rewrite.sh` by construction, because the alternative is undetermined.** Two
+PreToolUse hooks both emitting `updatedInput` for one call has **no documented resolution on
+2.1.220** (checked against the binary and the published docs: a fallback string exists for an
+*empty* updatedInput, nothing for two non-empty ones; order and chaining are undocumented). So the
+new hook declines every shape qos can rewrite. Measured cost: **zero** of the 232 ignition entries.
+
+**ACCEPTANCE — measured 2026-08-09 22:16–22:19 UTC, and it PASSES with a named caveat.**
+A genuinely cold compile (the 834 MB `.next/dev` turbopack cache moved aside; `.next` holds no
+other cache) of `reso-qa-runner` — Next 16.2.6, 810 TS/TSX files, `postcss.config.cjs`, the same
+app shape as the panic subject:
+
+| | measured | bar |
+|---|---|---|
+| peak `seg_pct` (live `compressor-sentinel.jsonl` `pct`) | **0.00 %** | < 15 % |
+| peak node processes | **3** | — |
+| peak node RSS | **0.1 GB** | — |
+| first-route cold compile | 15.3 s (`GET / 200 in 16.9s`) | — |
+| 14 routes fired concurrently | all 200/307, 0.1–3.7 s | — |
+
+🚨 **The caveat is the finding, and it must not be read as "the fix is proven against the panic
+shape".** The 372–736-proc postcss horde **did not reproduce**, so this run did not exercise the
+burst the wave exists to bound. Two named reasons: residency was ~2 sessions, not 150 (150 is not
+synthesizable before Wave A lands); and per W11 the storm's generator is *repeated mass
+invalidation of a long-lived server under continuous fleet edits*, which one fresh server serving
+14 routes once does not produce. **What this does establish is a sharpened model:** an isolated
+cold compile is cheap (3 procs, 0.1 GB) — ignition is a cold compile *under fleet-scale concurrent
+load*, not a cold compile per se. The `< 15 %` bar as written is therefore satisfiable by a run
+that never approaches the failure mode; the honest re-verification point is **after Wave A**, at
+real residency.
+
+**Proven end-to-end on live processes, twice:** with a real `next dev` in flight the gate returned
+`verdict=busy reason=incumbent pid=58892 age_s=21` and again `pid=81051 age_s=21` — the actual
+compile pids — while correctly ignoring this fleet's own `claude` processes, whose argv literally
+contains the words "next dev" because the wave brief is in it. That hazard is not hypothetical: a
+naive `ps | grep "next dev"` run during this wave returned **2 rows, both of them this session**
+(memory `pgrep-f-matches-agent-briefs`). Argv-anchoring is what makes the gate safe to prefix onto
+the commands of the very sessions that discuss it.
+
+**Worker-pool cap — confirmed still applicable, and the gap is wider than filed.**
+`experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` is present in the **installed**
+next 16.2.6 (zod enum in `config-schema.js`, the type in `config-shared.d.ts`, and the
+`TurbopackPluginRuntimeStrategy::WorkerThreads` discriminant in the `next-swc` native binary),
+defaulting to `'childProcesses'`. The edit lives in each app's own `next.config`, which this repo
+does not own — so what ships here is the auditor. It reads each app's **installed schema**, never a
+version label (`reso-playwright` declares `^15.5.11` with **14.2.30** installed — exactly the drift
+a version test gets wrong). Census: **75 Next apps, 3 whose installed schema carries the option,
+and none of the 3 set it** — `reso-management-app` (filed, pending), plus **`reso-qa-runner` and
+`agent-build-hackathon`, which no item covered**; both now filed (`d60fd1f9c375`, `0e4f795b3a20`).
+
+**Not touched, deliberately:** `compressor-sentinel` tuning, `CC_FIRE_MAX_LOAD_PER_CORE`, any gate
+default, and every file Wave A owns.
 
 ### S6.6 · Phase D — fix what the gate measures
 
