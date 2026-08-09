@@ -188,17 +188,27 @@ if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
   if . "$_mbxlib" 2>/dev/null; then
     # CANONICALISE the box key before ANY use below (2026-07-29). _ouid above is the PANE uuid, but
     # mailbox-drain.sh reads the SESSION-keyed box whenever it knows its session id (its :64-68,
-    # CC_MBX_SESSION_KEY default 1) and writes the pane→session alias on the way. So the two hooks
-    # named DIFFERENT keys for one mechanism: the WAKE FLOOR below advertised a PANE-keyed
-    # `cc-await-ping` arm while the drain read the SESSION-keyed box. Following that advice arms a
-    # watcher on a key nothing writes to, and because each side then checks its OWN key the nudge
-    # recurs forever while the operator believes they are armed. (Cost two wrong arms in one session
-    # before it was traced.) `bin/cc-await-ping` resolves NO alias — it watches the key it is handed
-    # literally — so the resolution has to happen HERE, at the single place _ouid is derived, rather
-    # than being fixed up in the watcher or duplicated per call site.
-    # mailbox_resolve_key is the lib's one implementation of that mapping; reusing it is what stops
-    # the two hooks drifting apart again. It falls back to the pane when no alias exists, so a
-    # never-drained pane still resolves to its own box.
+    # CC_MBX_SESSION_KEY default 1) and writes the pane→session alias on the way. Every _ouid consumer
+    # below is a mailbox READ against that box — mailbox_promote_acked (:213), mailbox_wake_armed and
+    # mailbox_pending_count in the floor, mailbox_take in the fold — so each must ask the key the drain
+    # actually fills. mailbox_resolve_key is the lib's one implementation of that mapping, and it falls
+    # back to the pane when no alias exists, so a never-drained pane still resolves to its own box.
+    #
+    # WHAT THIS BLOCK NO LONGER DOES (2026-07-31, a079cfdf). It was once ALSO the fix for the two
+    # advisories naming different keys: the WAKE FLOOR advertised a PANE-keyed arm while the drain read
+    # the SESSION-keyed box, so following it armed a watcher on a key nothing writes to, and each side
+    # then re-checked its OWN key and nagged forever. That is history. The floor (:416) and
+    # mailbox-drain.sh (:224) now both advertise NO id, and the watcher covers its own whole key space
+    # (bin/cc-await-ping `_keys()` → mailbox_keyset). The invariant is COVERAGE, not agreement.
+    #
+    # WRITTEN AS A POINTER ON PURPOSE — the reason is worth more than the fix. This comment used to
+    # assert "`bin/cc-await-ping` resolves NO alias — it watches the key it is handed literally". True
+    # the day it was written, FALSE the moment a079cfdf gave the watcher mailbox_keyset, and nothing
+    # anywhere went red: the code contract is pinned by tests, the prose about it is pinned by nothing.
+    # A reader trusted it eight days later, quoted it into docs/plans/GROUND_UP_DISPATCH.md, and it
+    # minted backlog 6b04aee261bb — a session dispatched to fix a defect that had been dead for a week.
+    # A restated fact about a sibling file rots silently; a named symbol rots loudly, at the grep that
+    # cannot find it. State the neighbour's behaviour by pointing at the symbol that implements it.
     case "$_ouid" in
       ''|*[!0-9A-Fa-f-]*) : ;;
       *) if command -v mailbox_resolve_key >/dev/null 2>&1; then

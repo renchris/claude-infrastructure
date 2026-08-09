@@ -936,6 +936,24 @@ Everything in #3 below still holds except where this overrides it.
   a STALE READ** — you see it as of your branch-cut, not as of now. Cite the DEPLOYED copy for any
   deployed-behaviour claim, which this campaign already learned once for row 13's capacity gate and
   which I then repeated in the opposite direction.
+  - ⚠️ **CORRECTION 2026-08-08 — one sentence of the retraction above is itself now stale, and it went
+    on to mint a false work item.** "`bin/cc-await-ping` resolves NO alias — it watches the key it is
+    handed, literally" was quoted here from `hooks/session-continue.sh`'s comment. It was true when
+    that comment was written (2026-07-29) and **false two days later**: `a079cfdf` (2026-07-31) gave
+    the watcher `_keys()` → `mailbox_keyset`, pointed BOTH advisories at no id at all, and made it
+    write `.watching` under every key of the set. **Measured today on the live code**, replaying the
+    real key shape (numeric pane aliased to a session uuid): keyset covers pane→session AND the reverse
+    edge · `.watching` lands under both keys · `mailbox_wake_armed` answers ARMED from *either* side ·
+    a pane-addressed write (how `cc-notify` actually writes) woke a no-arg watcher, rc=0, body
+    delivered. So the "nags forever" symptom this block describes **cannot occur on current code**, and
+    the corrected rule it states — *arm the exact command the hook hands you* — remains right for a
+    different reason: the hook now hands you a command with no key in it.
+    Cost of not annotating this sooner: backlog `6b04aee261bb` restated all three claims as a live
+    defect on 2026-08-07 and consumed a dispatched session. **The deeper lesson supersedes the one
+    above:** a stale read is not only a file you do not own — it is a *sentence about* a file you do
+    not own. The retraction cited a comment as its authority without re-checking the sibling the
+    comment described, so it laundered a two-day-old falsehood into a plan doc that dispatches work.
+    Cite the SYMBOL, not the sentence.
 - 🚨 **ROW 11 DIED AT 04:39Z WITH NOTHING LANDED — RE-FIRE IS PARKED ON CAPACITY, NOT ON THE CAP.**
   Death proven on the three axes this campaign requires before acting on silence: **pane ABSENT** from
   `it2 session list --json | jq -r '.[].id'` under a **passing positive control** (my own pane
