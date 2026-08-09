@@ -452,7 +452,7 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   [ "$(dec)" -eq 1 ]
 }
 
-@test "A12: the in-script selftest still RED-proves every branch (156 checks, zero FAIL)" {
+@test "A12: the in-script selftest still RED-proves every branch (floor + tally, zero FAIL)" {
   run "$DISP" selftest
   [ "$status" -eq 0 ] || false
   # 106 → 111 with multi-project coverage (f7abcbdee98c): the brief's rails line is read from the
@@ -472,6 +472,30 @@ spawns()     { local n; n="$(grep -c . "$C/spawn.log" 2>/dev/null || true)"; ech
   # (memory: exact-count-assertion-tripwires-its-own-subject). The floor keeps the property that was
   # actually wanted (a selftest that silently stopped running its checks must not read as a pass),
   # and the zero-FAIL line below is the half that was always doing the real work.
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -ge 156 ] || false
+  #
+  # TALLY, added 2026-08-09 — the floor above closed the growth-tripwire half, but not the OTHER
+  # thing `-eq N` never asserted: that the reporter's own summary agrees with what it RENDERED.
+  # Measured on this tree — mutate `ok()` to count +2 and the selftest prints `334 passed, 0 failed`
+  # over 167 `ok` lines, and the floor-only version passes GREEN (the old `-eq 156` reds here too, but
+  # on the COUNT, not the lie — it was already red on the unmutated tree at 167). A reporter
+  # claiming a green it did not render is the vacuous pass this test is named for
+  # (memory: claimed-outcome-vs-checked-outcome), so the count is now pinned to the claim.
+  # `|| true` normalizes grep's rc-1-on-zero-matches: without it the assignment aborts the test HERE
+  # and the floor is never reached. It swallows no verdict — the count is data, the checks are the
+  # verdict. Written as SEPARATE statements, never `[ -n "$claimed" ] && [ ... ]`: in an `&&` list
+  # set -e sees only the command after the FINAL `&&`, so a short-circuit on the left is ABSORBED and
+  # an unparseable summary would pass vacuously (tests/bats-assert-liveness.bats calls that shape
+  # `and-absorbed`; it is the defect 404c832a's own first draft shipped).
+  #
+  # FLOOR RAISED 156 → 167, the measured count on this tree (167 `t` sites, 167 rendered). A floor is
+  # only as strong as its slack: left at 156 while the suite grew to 167, it could not have caught
+  # ELEVEN deleted checks — and catching a deletion is the entire downward half of the ratchet
+  # (memory: downward-ratchet-catches-the-over-scoped-marker). "Raise when checks are added" is the
+  # maintenance this line asks for; it is cheap, and skipping it silently un-arms the assertion.
+  ok_lines="$(printf '%s' "$output" | grep -c '^  ok ' || true)"
+  claimed="$(printf '%s' "$output" | sed -n 's/^cc-dispatch selftest: \([0-9][0-9]*\) passed,.*/\1/p')"
+  [ "$ok_lines" -ge 167 ] || false
+  [ -n "$claimed" ] || false
+  [ "$claimed" = "$ok_lines" ] || false
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
