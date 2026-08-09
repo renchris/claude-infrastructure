@@ -147,14 +147,76 @@ _keys() {   # every physical key of this logical inbox (see the lib's mailbox_ke
   fi
 }
 BEAT_KEYS="$CUR_UUID"
+#
+# ONE MARKER, MANY WATCHERS (backlog def25802babf, measured 2026-08-08). The marker is a SINGLE FILE
+# per key with ONE owner slot, but a session may legitimately have TWO watchers armed on that key at
+# once — the ordinary re-arm, where a fresh watcher is started near the term-end of the old one. The
+# exiting one used to `rm` the key unconditionally, so a live sibling's heartbeat vanished and the
+# "is this session armed?" hooks reported DEAF while a watcher was genuinely beating: watcher A timed
+# out at 18:44 and cleared key …843 while B (pid 58128) was alive and re-stamping the marker every
+# 15s. A false DEAF downgrades a real wake path in cc-notify / cc-announce for up to one full poll.
+#
+# WHY A pid==$$ GUARD ALONE IS NOT THE FIX — it is only the fallback layer below. Both watchers write
+# the SAME file every poll, so at A's exit the slot holds whichever of them beat MOST RECENTLY, which
+# is arbitrary. In the half of the overlaps where it holds A's pid, both readings are wrong: deleting
+# blanks B's claim, and keeping leaves a marker naming a pid that is about to be DEAD — and
+# mailbox_wake_armed reads a dead pid as NOT armed (that is the whole point of recording it). Either
+# way the session reads deaf until B's next beat. The ownership question the slot cannot answer is
+# "does another live watcher exist for this key?", so each watcher also stakes a per-pid CLAIM file
+# and the exiting one HANDS THE SLOT OVER to a live claimant instead of deleting it.
+#
+# Claims are trusted only while FRESH (a live watcher re-stamps its claim every poll), on the same
+# CC_WATCH_FRESH_S window its readers judge the marker by — so a stale claim cannot resurrect a
+# marker its readers would already call dead, and a recycled pid cannot inherit a dead watcher's
+# claim. A sibling running a version with no claim file still survives via the pid guard.
+WATCH_CLAIM_DIR="$MAILBOX_DIR/.watchers"
+_claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this key; rc 1 = none
+  local k="$1" c p mt now
+  now="$(date +%s 2>/dev/null || echo 0)"
+  for c in "$WATCH_CLAIM_DIR/$k".*; do
+    [ -e "$c" ] || continue                       # unmatched glob expands to itself — never a claim
+    p="${c##*.}"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    [ "$p" = "$$" ] && continue                   # my own claim proves nothing about a survivor
+    mt="$(stat -f %m "$c" 2>/dev/null || stat -c %Y "$c" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+    if [ "$(( now - mt ))" -le "${CC_WATCH_FRESH_S:-90}" ] && kill -0 "$p" 2>/dev/null; then
+      printf '%s\n' "$p"; return 0
+    fi
+    kill -0 "$p" 2>/dev/null || rm -f "$c" 2>/dev/null || true   # its watcher is gone: claims nothing
+  done
+  return 1
+}
 _beat() {
   local k
   BEAT_KEYS="$(_keys)"
-  for k in $BEAT_KEYS; do printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true; done
+  mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
+  for k in $BEAT_KEYS; do
+    printf 'pid=%s\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+    : > "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
+  done
 }
-# Clears exactly the markers this process wrote — never a key it merely resolved once. bash 3.2, default
-# IFS: the unquoted expansion splits the newline-separated set (this file is #!/bin/bash, not zsh).
-_unbeat() { local k; for k in $BEAT_KEYS; do rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true; done; }
+# Clears exactly the markers this process still OWNS — never a key it merely resolved once, and never
+# one a live sibling is maintaining. bash 3.2, default IFS: the unquoted expansion splits the
+# newline-separated set (this file is #!/bin/bash, not zsh).
+_unbeat() {
+  local k sib owner
+  for k in $BEAT_KEYS; do
+    rm -f "$WATCH_CLAIM_DIR/$k.$$" 2>/dev/null || true
+    if sib="$(_claim_live "$k")"; then
+      # HAND OVER, do not delete: the survivor keeps the wake path, and the slot names a LIVE pid
+      # immediately rather than after up to one of its poll intervals.
+      printf 'pid=%s\n' "$sib" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+      continue
+    fi
+    owner="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$MAILBOX_DIR/$k.watching" 2>/dev/null | head -n1)"
+    # No pid recorded ⇒ legacy/empty marker ⇒ unchanged behaviour (removed), exactly as before: an
+    # empty marker still reads as armed-by-freshness, so leaving one behind would advertise a wake
+    # path nobody provides — the stale claim this file's PROVEN WAKE note exists to prevent.
+    if [ -n "$owner" ] && [ "$owner" != "$$" ] && kill -0 "$owner" 2>/dev/null; then continue; fi
+    rm -f "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
+  done
+}
 trap '_unbeat' EXIT
 
 # ── A KILLED WATCHER MUST NOT DIE SILENT (G10, backlog 5b77e20d9db6) ──────────────────────────────
