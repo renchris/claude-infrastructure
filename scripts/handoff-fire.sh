@@ -301,6 +301,17 @@ HF_SELF="$0"; while [ -L "$HF_SELF" ]; do _hf_t="$(readlink "$HF_SELF")"; case "
 HF_DIR="$(cd "$(dirname "$HF_SELF")" && pwd)"
 PAYLOAD_LINT_BIN="${CC_PAYLOAD_LINT_BIN:-$HF_DIR/payload-lint.sh}"
 COMPLETION_PUSH_BIN="${CC_COMPLETION_PUSH_BIN:-$HF_DIR/completion-push.sh}"
+# How long the terminal completion push may take before the close proceeds without its verdict.
+# SIZED FROM ITS CONTENTS, not from a bench: completion-push → cc-announce makes up to TWO cc-notify
+# attempts with a 1s retry sleep between them, and each cc-notify contains one internally-bounded it2
+# IPC call (CC_IT2_TIMEOUT_S, default 5s) plus a cc-sessions read and the inbox write. Worst
+# legitimate foreground cost is therefore ~15s; measured on the resolve-fail path it is 1.2-1.6s.
+# 60s is ~4x the legitimate worst case, which buys headroom for the background-QoS tax that makes a
+# bench-sized bound a permanent non-verdict (memory: bound-must-fit-the-band-not-the-bench).
+# The asymmetry is deliberate: expiring too EARLY costs a false "did NOT verify" on a push that may
+# well have landed — corrupting exactly the verified/degraded truthfulness the F5 chain exists for —
+# while expiring too LATE costs only a pane that retires a minute after it could have.
+COMPLETION_PUSH_TIMEOUT_S="${HANDOFF_COMPLETION_PUSH_TIMEOUT_S-60}"
 
 # ---- Part A2: pre-handoff account sweep config (all env-overridable for tests) -----------------
 # The cross-account visibility + auto-heal that runs BEFORE a fire (see pre_fire_account_sweep).
@@ -533,8 +544,33 @@ fi
 # Run an external iTerm2-reaching command under the bound. Returns the command's own rc, or 124 on
 # expiry — which every caller here already treats as "that call failed", its fail-loud path.
 hf_bounded() {
-  if [ -z "$HF_TIMEOUT_BIN" ] || [ ! -x "$HF_TIMEOUT_BIN" ]; then "$@"; return $?; fi
-  "$HF_TIMEOUT_BIN" -k 3 "$HF_TIMEOUT_S" "$@"
+  hf_bounded_s "$HF_TIMEOUT_S" "$@"
+}
+
+# Same bound, but with the seconds named by the CALLER. Extracted so the `timeout`-binary resolution
+# above stays a single chokepoint: that resolution is the load-bearing part (absolute paths, because
+# the launchd jobs and hooks that fire this script run without Homebrew on PATH), and a second call
+# site that re-derived it would be the one that silently ran unbounded.
+#
+# Why a per-caller duration at all: HF_TIMEOUT_S (10s) is sized for ONE iTerm2 IPC round-trip. A
+# call that legitimately contains several of those needs a bound larger than its own contents, or
+# the bound can only ever CONVICT a healthy-but-slow callee (memory: exoneration-bound-must-fit-
+# what-it-bounds; bound-must-fit-the-band-not-the-bench).
+#
+# An empty or 0 duration runs UNBOUNDED, deliberately and explicitly. GNU `timeout 0` also means
+# "no timeout", but relying on that would make the disable path depend on a coreutils detail; and a
+# seam that cannot turn a thing OFF is not a seam (this file's own HANDOFF_IT2_TIMEOUT_BIN lesson).
+#
+# NO `--foreground`, and that absence is load-bearing — do not "tidy" it in. Without it GNU timeout
+# puts itself and the child in a NEW PROCESS GROUP and signals the whole group, so a descendant that
+# outlived its parent while still holding an inherited fd dies with it. That is precisely the wedge
+# this bound exists to cut (memory: invariant-can-live-in-an-absent-token).
+hf_bounded_s() { # <seconds|empty> <cmd...>
+  local _s="$1"; shift
+  if [ -z "$_s" ] || [ "$_s" = 0 ] || [ -z "$HF_TIMEOUT_BIN" ] || [ ! -x "$HF_TIMEOUT_BIN" ]; then
+    "$@"; return $?
+  fi
+  "$HF_TIMEOUT_BIN" -k 3 "$_s" "$@"
 }
 
 # ── TERMINAL DISPATCH (2026-07-31) ───────────────────────────────────────────────────────────────
@@ -4513,6 +4549,17 @@ MSG
     else
       echo "successor: none (--terminal: end-of-line, nothing continues this session's work)"
       echo "completion: push a program-terminal completion to the '${CC_COMPLETION_ROLE:-desk}' role via completion-push (F5 / T-P2-1) — VERIFIED-or-LOUD, never silent"
+      # The bound is named in the PLAN, not just in the failure message: "can this close hang?" is the
+      # question a --dry-run is read to answer, and before this it could only be answered by grepping
+      # the source. Every disable path renders as the word `unbounded`, EXPLICITLY — `${x:-unbounded}`
+      # alone would print "≤ 0s" for the 0 case, which hf_bounded_s treats as unbounded, so the plan
+      # would assert a bound the run does not apply (memory: negative-array-slice-empties-the-
+      # diagnostic — render every path, do not trust one expansion to cover them all).
+      case "${COMPLETION_PUSH_TIMEOUT_S:-}" in
+        ''|0) SC_CP_BOUND_TXT="unbounded (seam disabled — the push CAN suspend this close)" ;;
+        *)    SC_CP_BOUND_TXT="≤ ${COMPLETION_PUSH_TIMEOUT_S}s" ;;
+      esac
+      echo "bound:     completion-push $SC_CP_BOUND_TXT (expiry ⇒ LOUD + proceed, so the close is never suspended by the push; HANDOFF_COMPLETION_PUSH_TIMEOUT_S)"
       echo "chain:     completion-push → arm watcher → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds) → detached ps-poll ≤180s (CR nudge @60s) → it2 force-close pane"
     fi
     exit 0
@@ -4552,12 +4599,51 @@ MSG
   # A --successor close is NOT terminal (work continues in the successor) → no push. The desk role is the
   # freshest target (kept current by P0-15's role-writer); a stale role degrades LOUD, never silent.
   if [ "$SC_TERMINAL" = 1 ] && [ -x "$COMPLETION_PUSH_BIN" ]; then
-    if "$COMPLETION_PUSH_BIN" fire --role "${CC_COMPLETION_ROLE:-desk}" --from handoff-fire \
-         --event "session $SC_SID self-closed (--terminal: nothing continues)" --detail "cwd $(pwd)"; then
-      echo "→ terminal completion pushed to the '${CC_COMPLETION_ROLE:-desk}' role (F5 / T-P2-1)"
-    else
-      echo "⚠ terminal completion push did NOT verify (recorded LOUD by completion-push, never silent) — proceeding with the close" >&2
-    fi
+    # BOUNDED (2026-08-08). The contract two paragraphs up — "never aborts the close, the pane must
+    # retire" — was enforced for a non-zero EXIT and for nothing else: the `if/else` below has no arm
+    # a HANG can reach, so an unbounded push suspended the close indefinitely. Measured: a --terminal
+    # self-close (pid 68958) sat 15+ minutes on completion-push → cc-announce; phase 2 was never
+    # reached, so the pane never retired and the finished peer read as idle-not-done — feeding false
+    # dead-worker verdicts about a session whose work was complete.
+    #
+    # The wedge is BELOW cc-notify, which is already bounded internally (5s per it2 IPC call, with a
+    # pure-bash fallback). cc-announce was the childless leaf for the whole 15 minutes, and it has no
+    # stdin read and no lock — so what never returned was its `out="$(cc-notify …)"` CAPTURE: a
+    # descendant that outlived cc-notify while still holding the inherited write end keeps that pipe
+    # from ever reaching EOF (memory: procsub-pid-is-unreachable-own-the-pipe). No bound *inside* the
+    # chain can fix that, because every process the bound can see has already exited. Only the caller
+    # can, which is why the bound belongs exactly here.
+    #
+    # Expiry is treated as the contract's OWN failure path — LOUD, then proceed — but is NAMED
+    # separately from exit 5, because the two have different fixes (a wedged channel vs an
+    # undeliverable one) and, more importantly, different TRUTH: exit 5 is completion-push reporting
+    # that it could not deliver, whereas a bound that fired knows only that no verdict arrived. The
+    # push may well have landed — capture-before-notify put the record on disk first, and cc-notify
+    # prints `enqueued=1` to stderr for exactly this case — so this says UNKNOWN and never "failed".
+    # rc is captured, not read from `$?` in an elif: under `set -e` the `|| rc=$?` suffix is what makes
+    # a non-zero push non-fatal here, and an explicit variable cannot be invalidated by anything that
+    # later gets inserted between the call and its test.
+    SC_CP_RC=0
+    hf_bounded_s "$COMPLETION_PUSH_TIMEOUT_S" \
+      "$COMPLETION_PUSH_BIN" fire --role "${CC_COMPLETION_ROLE:-desk}" --from handoff-fire \
+      --event "session $SC_SID self-closed (--terminal: nothing continues)" --detail "cwd $(pwd)" \
+      || SC_CP_RC=$?
+    # BOTH expiry codes, because `-k 3` makes two of them and they are MEASURED, not assumed (GNU
+    # coreutils 9.1, this box): 124 when the callee dies on the SIGTERM, 137 when it ignores TERM and
+    # needs the follow-up SIGKILL. Matching only 124 would file the wedge case — a shell sitting in a
+    # capture it cannot leave, which is what cc-notify's own TERM trap makes likely — under the WRONG
+    # label, i.e. as a channel that reported failure rather than one that never answered.
+    case "$SC_CP_RC" in
+      0)
+        echo "→ terminal completion pushed to the '${CC_COMPLETION_ROLE:-desk}' role (F5 / T-P2-1)" ;;
+      124|137)
+        # "bound ${N}s", not "after ${N}s": on the 137 path the callee ignored SIGTERM and the wall
+        # time is N+3 (the -k grace). Naming the CONFIGURED bound keeps the line true for both codes,
+        # so an investigator diffing it against a timestamp is never chasing a phantom 3s.
+        echo "⚠ terminal completion push TIMED OUT (bound ${COMPLETION_PUSH_TIMEOUT_S}s, rc=$SC_CP_RC; NO verdict arrived — the push may or may not have landed: check the completion-push record and cc-notify's enqueued= token) — proceeding with the close, the pane must retire" >&2 ;;
+      *)
+        echo "⚠ terminal completion push did NOT verify (recorded LOUD by completion-push, never silent) — proceeding with the close" >&2 ;;
+    esac
   fi
   # P0-15: the pane is about to close — repoint every role still naming it to the (verified-alive)
   # successor, so a role-addressed ping lands on the continuation, never on the dead pane (SO-1).

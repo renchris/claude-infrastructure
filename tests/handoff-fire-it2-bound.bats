@@ -32,7 +32,13 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"    # hermeticity ratchet: never the live ~/
   # Extract the helper AND its two configuration lines the same way the sibling suites extract
   # functions. Sourcing the whole script is not an option: it has top-level side effects.
-  eval "$(sed -n '/^hf_bounded() {/,/^}/p' "$HF")"
+  #
+  # BOTH functions, because hf_bounded now DELEGATES (2026-08-08): the caller-named-duration variant
+  # hf_bounded_s holds the actual timeout invocation and hf_bounded is a one-line wrapper passing the
+  # default. Extracting only hf_bounded gave every test below exit 127 — loudly RED, not vacuous, which
+  # is the property that makes this extraction style safe to maintain. If a third helper joins the
+  # chain, it is added here or these tests go red on the next run and say exactly why.
+  eval "$(sed -n '/^hf_bounded() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' "$HF")"
   TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || echo /opt/homebrew/bin/timeout)"
 }
 
@@ -89,6 +95,70 @@ IN
   run hf_bounded /bin/echo still-runs
   [ "$status" -eq 0 ]
   [ "$output" = "still-runs" ]
+}
+
+# ── hf_bounded_s: the caller-named duration (2026-08-08) ─────────────────────────────────────────────
+# Added for the completion-push bound, whose contents (up to two cc-notify attempts, each holding an
+# internally-bounded it2 call) legitimately exceed HF_TIMEOUT_S — a bound smaller than what it bounds
+# can only ever CONVICT a healthy callee (memory: exoneration-bound-must-fit-what-it-bounds).
+
+@test "hf_bounded_s honours the CALLER's duration, not HF_TIMEOUT_S" {
+  # The whole reason the variant exists: a long default must not stop a caller cutting early, and a
+  # short default must not cut a caller that needs longer. Both directions, since pinning only one
+  # would pass on a build that ignored the argument and used HF_TIMEOUT_S throughout.
+  HF_TIMEOUT_BIN="$TIMEOUT_BIN" HF_TIMEOUT_S=30
+  run hf_bounded_s 1 /bin/sleep 20
+  [ "$status" -eq 124 ]                     # caller's 1s won over the 30s default
+
+  HF_TIMEOUT_BIN="$TIMEOUT_BIN" HF_TIMEOUT_S=1
+  run hf_bounded_s 10 /bin/echo fits
+  [ "$status" -eq 0 ]                       # caller's 10s won over the 1s default
+  [ "$output" = "fits" ]
+}
+
+@test "hf_bounded_s: an empty OR zero duration runs UNBOUNDED (both disable paths, explicitly)" {
+  # 0 is pinned separately from empty because GNU `timeout 0` ALSO means "no timeout" — so a build
+  # that forwarded 0 straight to timeout(1) would pass a test that only checked the empty case, while
+  # every consumer reading back the configured value would disagree about whether a bound exists.
+  # HF_TIMEOUT_S=1 is a deliberate FOIL, not decoration: a build that ignored the ""/0 argument and
+  # fell back to the default would cut `sleep 2` at 1s and these assertions would fail. HF_TIMEOUT_BIN
+  # is likewise essential — with no timeout binary the calls would run unbounded for the WRONG reason,
+  # and the test would pass while proving nothing about the duration.
+  # shellcheck disable=SC2034  # both are read by the eval'd hf_bounded_s, whose body shellcheck cannot see
+  HF_TIMEOUT_BIN="$TIMEOUT_BIN" HF_TIMEOUT_S=1
+  run hf_bounded_s "" /bin/sleep 2
+  [ "$status" -eq 0 ]
+  run hf_bounded_s 0 /bin/sleep 2
+  [ "$status" -eq 0 ]
+}
+
+@test "hf_bounded_s escalates to SIGKILL: a TERM-ignoring wedge is still cut (rc 137, not a hang)" {
+  # `-k 3` is the half that matters for a real wedge — the completion-push chain installs its own TERM
+  # trap, so a TERM-only bound would expire and leave the callee running, still holding the pipe that
+  # made it a wedge. MEASURED codes: 124 when TERM suffices, 137 when the KILL is needed.
+  # No HF_TIMEOUT_S here, deliberately: hf_bounded_s takes its duration as an ARGUMENT, so setting the
+  # default would be a dead assignment implying this test depends on it (shellcheck SC2034 caught it).
+  # shellcheck disable=SC2034  # read by the eval'd hf_bounded_s — shellcheck cannot see that body
+  HF_TIMEOUT_BIN="$TIMEOUT_BIN"
+  local ign="$BATS_TEST_TMPDIR/ign.sh"
+  printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done\n' > "$ign"; chmod +x "$ign"
+  run hf_bounded_s 1 "$ign"
+  [ "$status" -eq 137 ]
+}
+
+@test "hf_bounded delegates to hf_bounded_s — one timeout(1) invocation, not two that can drift" {
+  # The delegation is the POINT: a second call site that re-derived the timeout binary is precisely
+  # the one that would silently run unbounded on a launchd PATH. Pinned textually because the
+  # behavioural tests above cannot tell delegation from a faithful duplicate.
+  run bash -c "sed -n '/^hf_bounded() {/,/^}/p' '$HF'"
+  [[ "$output" == *"hf_bounded_s"* ]] || false
+  [[ "$output" != *"-k 3"* ]] || false        # the invocation lives in ONE place, below
+  # SPAN = the two helpers, NOT the whole file. A file-wide `-eq 1` would red on any unrelated future
+  # `-k 3 ` — growth, not regression — which is the tripwire shape this repo has shipped before
+  # (memory: assertion-span-must-equal-its-subject; exact-count-assertion-tripwires-its-own-subject).
+  # Scoped here the count IS the invariant: these two functions must hold exactly one invocation.
+  run bash -c "sed -n '/^hf_bounded() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' '$HF' | grep -c -- '-k 3 '"
+  [ "$output" = "1" ]
 }
 
 @test "the script resolves timeout(1) by ABSOLUTE path, not PATH alone (launchd has no Homebrew)" {
