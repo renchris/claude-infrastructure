@@ -52,16 +52,42 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-# Parse hook JSON stdin
-INPUT=$(cat 2>/dev/null || echo '{}')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null || echo 'unknown')
-EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // "?"' 2>/dev/null || echo '?')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo '')
+# ── Parse hook JSON stdin ───────────────────────────────────────────────────────────────────────
+# This hook is registered on the MATCH-ALL PostToolUse matcher (`"matcher": ""` in settings.json),
+# so everything above the abstain gate is a tax on EVERY tool call of EVERY session — the abstain
+# class of HOOK_CHAIN_COST.md §2.5 (R-2). The incumbent spent 6 external execs parsing ONE payload
+# before it could discover it had nothing to do: `cat`, then 5 `jq` over the same bytes. Both go:
+#
+#   · stdin is slurped by the `read` builtin (`-d ''` = read to EOF), not by `cat`.
+#   · the three fields the abstain path needs come from ONE `jq`, newline-separated.
+#   · `.team_name` / `.teammate_name` are LAZY — read only on the snapshot path that uses them
+#     (M2's lazy-`CMD` pattern), so an abstaining call never pays for them at all.
+#
+# THE ALIGNMENT GUARD is what makes batching safe. Splitting one jq's output on newlines assumes no
+# field CONTAINS a newline — always true of a session uuid and an event name, but a DIRECTORY may
+# hold one. So jq emits a trailing sentinel: if it does not arrive intact the fields did not align
+# and we re-read per field, which cannot mis-split. Without the guard that failure is silent and
+# fail-QUIET, which is the worst shape available here — `CWD` would take only the first line,
+# `git rev-parse` would reject it, and the hook would ABSTAIN, so a session in such a directory
+# loses its crash-recovery net with nothing logged and no test able to see it. jq failing outright
+# (malformed payload) lands on the same fallback, which then yields the same defaults as before.
+# Both arms are pinned by tests/teammate-checkpoint-parse.bats against a real newline-in-path repo.
+readonly FIELD_SENTINEL='__cc_fields_ok__'
+INPUT=''
+IFS= read -r -d '' INPUT 2>/dev/null || true
+[[ -z "$INPUT" ]] && INPUT='{}'
+
+_FIELDS=$(jq -r '(.session_id // "unknown"), (.hook_event_name // "?"), (.cwd // ""), "__cc_fields_ok__"' <<< "$INPUT" 2>/dev/null || true)
+_ALIGNED=''
+{ IFS= read -r SESSION_ID; IFS= read -r EVENT; IFS= read -r CWD; IFS= read -r _ALIGNED; } <<< "$_FIELDS"
+if [[ "$_ALIGNED" != "$FIELD_SENTINEL" ]]; then
+  SESSION_ID=$(jq -r '.session_id // "unknown"' <<< "$INPUT" 2>/dev/null || echo 'unknown')
+  EVENT=$(jq -r '.hook_event_name // "?"' <<< "$INPUT" 2>/dev/null || echo '?')
+  CWD=$(jq -r '.cwd // empty' <<< "$INPUT" 2>/dev/null || echo '')
+fi
+[[ -z "$SESSION_ID" ]] && SESSION_ID='unknown'
+[[ -z "$EVENT" ]] && EVENT='?'
 [[ -z "$CWD" ]] && CWD="$PWD"
-# Prefer names from payload — Claude Code provides these for TeammateIdle;
-# teammate-auto-shutdown.sh also populates them in its synthetic payload.
-PAYLOAD_TEAM=$(echo "$INPUT" | jq -r '.team_name // empty' 2>/dev/null || echo '')
-PAYLOAD_MEMBER=$(echo "$INPUT" | jq -r '.teammate_name // empty' 2>/dev/null || echo '')
 
 # Normalize /private/tmp → /tmp (macOS realpath quirk)
 CWD="${CWD#/private}"
@@ -86,6 +112,44 @@ if [[ -d "$CWD/.git/rebase-merge" || -d "$CWD/.git/rebase-apply" || -f "$CWD/.gi
   exit 0
 fi
 
+# Per-session counter (avoid collisions across parallel teammates).
+# `read < file` is a builtin redirect — the `$(cat …)` it replaces was a subshell AND an exec on
+# every abstaining call. The numeric guard is not cosmetic: a truncated or half-written counter
+# (two teammates, one crash) used to reach `$(( COUNT + 1 ))` and abort the hook under `set -u`;
+# now it resets to 0 and the session simply re-counts.
+COUNTER_FILE="$WATCHDOG_DIR/cp-$SESSION_ID.count"
+COUNT=0
+[[ -f "$COUNTER_FILE" ]] && { read -r COUNT < "$COUNTER_FILE" 2>/dev/null || COUNT=0; }
+case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+
+# Always checkpoint on Stop + TeammateIdle; otherwise every EVERY tool uses
+SHOULD_SNAPSHOT=false
+case "$EVENT" in
+  Stop|TeammateIdle)
+    SHOULD_SNAPSHOT=true
+    ;;
+  *)
+    COUNT=$((COUNT + 1))
+    echo "$COUNT" > "$COUNTER_FILE"
+    if (( COUNT % EVERY == 0 )); then
+      SHOULD_SNAPSHOT=true
+    fi
+    ;;
+esac
+
+$SHOULD_SNAPSHOT || exit 0
+
+# ── ORDER: the abstain gate runs BEFORE the GC ─────────────────────────────────────────────────
+# The GC below is damped to once/day, but its damper is a `find` — an exec — and it used to sit
+# in front of this gate, so 4 of every 5 tool calls paid it only to be turned away immediately
+# after. Gating first removes that exec from the common path (HOOK_CHAIN_COST.md §2.5, R-2).
+#
+# The sweep is NOT rationed by this. Stop and TeammateIdle always pass the gate, and Stop fires at
+# the end of every turn, so the GC still gets many chances a day in any directory a session is
+# actually working in — while a directory nobody is snapshotting has nothing to collect. The
+# damper (mtime on the per-directory stamp) is untouched, which is what keeps `an expired stamp
+# re-arms the sweep` honest: it back-dates the stamp with `touch`, so the freshness test must stay
+# mtime-based and must NOT become a day-string written into the file.
 # ── Damped GC (audit 09 D-10; re-derived 2026-08-06, cc-backlog 700269d9c450) ────────────────
 # This hook is the fixed per-tool-call tax (`matcher: ""` = every tool, every session) and it GC'd
 # nothing, unlike memory-nudge.sh:26 (`-mtime +1 -delete`) or completion-assert.sh (`.fired`,
@@ -183,28 +247,6 @@ EOF
   log "gc: swept $WATCHDOG_DIR cp-*.count (>2d) + $CWD checkpoint refs (>${GC_DAYS}d or rank>$GC_KEEP, keep $GC_FLOOR/member): $GC_DEL dropped"
 fi
 
-# Per-session counter (avoid collisions across parallel teammates)
-COUNTER_FILE="$WATCHDOG_DIR/cp-$SESSION_ID.count"
-COUNT=0
-[[ -f "$COUNTER_FILE" ]] && COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-
-# Always checkpoint on Stop + TeammateIdle; otherwise every EVERY tool uses
-SHOULD_SNAPSHOT=false
-case "$EVENT" in
-  Stop|TeammateIdle)
-    SHOULD_SNAPSHOT=true
-    ;;
-  *)
-    COUNT=$((COUNT + 1))
-    echo "$COUNT" > "$COUNTER_FILE"
-    if (( COUNT % EVERY == 0 )); then
-      SHOULD_SNAPSHOT=true
-    fi
-    ;;
-esac
-
-$SHOULD_SNAPSHOT || exit 0
-
 # Only snapshot if there's something to snapshot
 if ! git -C "$CWD" status --porcelain 2>/dev/null | grep -q .; then
   log "no checkpoint needed for $CWD — tree clean"
@@ -220,6 +262,13 @@ fi
 #   /tmp/worktree-<team>-<member>  — legacy ("worktree-" prefix, team slug)
 #   /tmp/wt-<team>-<member>        — newer ("wt-" prefix, team slug like "ui-sh-v2")
 #   /tmp/worktree-<member>         — single-segment (no team prefix)
+# LAZY, per the parse block: these two are used ONLY here, on the snapshot path — 1 call in EVERY
+# plus Stop/TeammateIdle. Reading them at the top made every abstaining call pay 2 `jq` execs for
+# values it then discarded. Kept as per-field reads: correctness matters more than 2 forks on a
+# path that is about to run read-tree + write-tree + commit-tree anyway.
+PAYLOAD_TEAM=$(jq -r '.team_name // empty' <<< "$INPUT" 2>/dev/null || echo '')
+PAYLOAD_MEMBER=$(jq -r '.teammate_name // empty' <<< "$INPUT" 2>/dev/null || echo '')
+
 BASENAME=$(basename "$CWD")
 if [[ -n "$PAYLOAD_MEMBER" ]]; then
   MEMBER="$PAYLOAD_MEMBER"
