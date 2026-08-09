@@ -47,8 +47,8 @@ EOF
 @test "1 runs clean and reports the three quantities" {
   run bash "$P"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ptys"* ]]
-  [[ "$output" == *"sessions"* ]]
+  [[ "$output" == *"ptys"* ]] || false
+  [[ "$output" == *"sessions"* ]] || false
   [[ "$output" == *"511"* ]]
 }
 
@@ -67,7 +67,7 @@ for k in ("pty_used","pty_max","pty_pct","pty_arch_max","pty_legacy_nodes","sess
   run bash "$P" --json
   [ "$status" -eq 0 ]
   # 2 clones present, 16 legacy present. The naive `ttys*` glob would say 18.
-  [[ "$output" == *'"pty_used":2'* ]]
+  [[ "$output" == *'"pty_used":2'* ]] || false
   [[ "$output" == *'"pty_legacy_nodes":16'* ]]
 }
 
@@ -81,7 +81,7 @@ for k in ("pty_used","pty_max","pty_pct","pty_arch_max","pty_legacy_nodes","sess
 @test "5 sessions counted by command POSITION, and ptys/session derived from it" {
   run bash "$P" --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"sessions":2'* ]]
+  [[ "$output" == *'"sessions":2'* ]] || false
   [[ "$output" == *'"ptys_per_session":"1.00"'* ]]   # 2 ptys / 2 sessions
 }
 
@@ -91,10 +91,10 @@ for k in ("pty_used","pty_max","pty_pct","pty_arch_max","pty_legacy_nodes","sess
   # "empty" and "could not ask", which is the fleet's sensor-default-off-ships-blindness shape.
   CC_PTY_MAX=x run bash "$P"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"unknown"* ]]
-  [[ "$output" != *"(0%)"* ]]
+  [[ "$output" == *"unknown"* ]] || false
+  [[ "$output" != *"(0%)"* ]] || false
   CC_PTY_MAX=x run bash "$P" --json
-  [[ "$output" == *'"pty_max":null'* ]]
+  [[ "$output" == *'"pty_max":null'* ]] || false
   [[ "$output" == *'"pty_pct":null'* ]]
 }
 
@@ -128,7 +128,7 @@ for k in ("pty_used","pty_max","pty_pct","pty_arch_max","pty_legacy_nodes","sess
   run bash "$D/mutant.sh" --json
   [ "$status" -eq 0 ]
   # 2 clones + 16 legacy = 18 — the inflated number, reproduced on demand.
-  [[ "$output" == *'"pty_used":18'* ]]
+  [[ "$output" == *'"pty_used":18'* ]] || false
   [[ "$output" != *'"pty_used":2'* ]]
 }
 
@@ -150,7 +150,7 @@ EOF
   echo "/Users/x/.claude/hooks/lead-crash-watchdog.sh" >> "$D/ps-contaminated.txt"
   CC_PTY_PS_FILE="$D/ps-contaminated.txt" run bash "$D/mutant.sh" --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"sessions":3'* ]]         # over-counts: the watchdog matched
+  [[ "$output" == *'"sessions":3'* ]] || false # over-counts: the watchdog matched
   CC_PTY_PS_FILE="$D/ps-contaminated.txt" run bash "$P" --json
   [[ "$output" == *'"sessions":2'* ]]         # the real file is immune
 }
@@ -161,7 +161,7 @@ EOF
   # in the copy that the fleet actually reads.
   R="$REPO/scripts/render-census.sh"
   grep -q 'ttys\[0-9\]\[0-9\]\[0-9\]' "$R"
-  ! grep -q 'ls -d /dev/ttys\* ' "$R"
+  ! grep -q 'ls -d /dev/ttys\* ' "$R" || false
   grep -q 'ptys_used' "$R"
   grep -q 'ptys_max' "$R"
 }

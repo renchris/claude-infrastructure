@@ -93,38 +93,38 @@ ALL_HOOKS="SessionStart UserPromptSubmit PreToolUse PostToolUse Stop SessionEnd"
 @test "1 full hook set + token echoed back ⇒ P1/P2/P3 all PASS" {
   run_probe "$ALL_HOOKS" token
   [ "$status" -eq 0 ]
-  [[ "$output" == *"P1 no-pty     PASS"* ]]
-  [[ "$output" == *"P2 hooks      PASS"* ]]
-  [[ "$output" == *"P3 mail       PASS"* ]]
+  [[ "$output" == *"P1 no-pty     PASS"* ]] || false
+  [[ "$output" == *"P2 hooks      PASS"* ]] || false
+  [[ "$output" == *"P3 mail       PASS"* ]] || false
   [[ "$output" == *"reached-model=yes"* ]]
 }
 
 @test "2 cursor advanced but token NOT echoed ⇒ PARTIAL, never PASS (the vacuous pass, pinned)" {
   run_probe "$ALL_HOOKS" silent
   # Enqueued: yes. Cursor advanced: yes. Reached the model: unproven. That is PARTIAL.
-  [[ "$output" == *"enqueued=yes"* ]]
-  [[ "$output" == *"cursor-advanced=yes"* ]]
-  [[ "$output" == *"reached-model=no"* ]]
-  [[ "$output" == *"P3 mail       PARTIAL"* ]]
+  [[ "$output" == *"enqueued=yes"* ]] || false
+  [[ "$output" == *"cursor-advanced=yes"* ]] || false
+  [[ "$output" == *"reached-model=no"* ]] || false
+  [[ "$output" == *"P3 mail       PARTIAL"* ]] || false
   [[ "$output" != *"P3 mail       PASS"* ]]
 }
 
 @test "3 model positively denies receiving mail ⇒ P3 FAIL" {
   run_probe "$ALL_HOOKS" nomail
-  [[ "$output" == *"P3 mail       FAIL"* ]]
+  [[ "$output" == *"P3 mail       FAIL"* ]] || false
   [ "$status" -eq 1 ]          # a FAIL predicate is the only thing that makes the probe exit non-zero
 }
 
 @test "4 a missing hook is reported by NAME, not rounded into PASS" {
   run_probe "SessionStart UserPromptSubmit Stop SessionEnd" token
-  [[ "$output" == *"P2 hooks      PARTIAL"* ]]
-  [[ "$output" == *"PreToolUse"* ]]
+  [[ "$output" == *"P2 hooks      PARTIAL"* ]] || false
+  [[ "$output" == *"PreToolUse"* ]] || false
   [[ "$output" == *"PostToolUse"* ]]
 }
 
 @test "5 no hooks at all ⇒ P2 FAIL — the precondition that would kill the wave" {
   run_probe "" token
-  [[ "$output" == *"P2 hooks      FAIL"* ]]
+  [[ "$output" == *"P2 hooks      FAIL"* ]] || false
   [ "$status" -eq 1 ]
 }
 
@@ -144,6 +144,6 @@ ALL_HOOKS="SessionStart UserPromptSubmit PreToolUse PostToolUse Stop SessionEnd"
   export CC_STUB_HOOKS="$ALL_HOOKS"
   export CC_STUB_REPLY=""              # token NOT echoed — exactly test 2's scenario
   run bash "$D/mutant.sh" --dir "$W" --timeout 12
-  [[ "$output" == *"reached-model=no"* ]]
+  [[ "$output" == *"reached-model=no"* ]] || false
   [[ "$output" == *"P3 mail       PASS"* ]]   # the false PASS, reproduced on demand
 }
