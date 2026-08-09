@@ -155,11 +155,11 @@ EOF
   [[ "$output" == *'"sessions":2'* ]]         # the real file is immune
 }
 
-@test "9 render-census carries the pty gauge and uses the SAME narrow predicate" {
-  # The gauge is embedded in the capacity readout that already budgets render per PANE, so the two
-  # terms can be compared directly. This guards against a later "simplification" back to `ttys*`
-  # in the copy that the fleet actually reads.
-  R="$REPO/scripts/render-census.sh"
+@test "9 capacity-alarm carries the pty gauge and uses the SAME narrow predicate" {
+  # The gauge is embedded in the fleet's capacity readout — the surface that already carries a row
+  # per finite resource — so the pty table stops being the one nothing reports. This guards against
+  # a later "simplification" back to `ttys*` in the copy the fleet actually reads.
+  R="$REPO/scripts/capacity-alarm.sh"
   grep -q 'ttys\[0-9\]\[0-9\]\[0-9\]' "$R"
   ! grep -q 'ls -d /dev/ttys\* ' "$R" || false
   grep -q 'ptys_used' "$R"

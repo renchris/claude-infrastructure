@@ -262,41 +262,6 @@ SESSIONS="$(printf '%s\n' "$PS_SNAP" | awk '
 ' 2>/dev/null || true)"
 case "$SESSIONS" in ''|*[!0-9]*) SESSIONS=0 ;; esac
 
-# ── pty census: the finite table NOTHING on this box was watching ─────────────────────────────────
-# Added by Phase E (S6.7). A pty is consumed per PANE, which is the same quantity this alarm already
-# budgets render against — so this is the one readout where the two terms can be compared directly,
-# and it costs one `ls`.
-#
-# 🚨 THE PREDICATE IS THE WHOLE POINT. `ls /dev/ttys*` — used by every prior census in this program
-# — matches two disjoint device classes:
-#     /dev/ttys000..999   major 16, <user>:tty, created on open and REMOVED on last close.
-#                         These are the ptmx clones. THIS is what kern.tty.ptmx_max governs.
-#     /dev/ttys0..ttysf   major 64, root:wheel, present since boot, static legacy BSD nodes.
-#                         Exactly 16, always, allocated to nobody, counted against nothing.
-# The naive glob therefore carries a CONSTANT +16 offset, which at the small fleet sizes the
-# published figures were taken at (6 and 15 sessions) was a 2-4x inflation — i.e. the entire
-# claimed effect. Measured 2026-08-09: 27 glob matches = 11 real ptys + 16 legacy nodes.
-# The 3-digit form is not a heuristic: slave nodes are named `/dev/ttys%03d`, which is also where
-# the ~999 architectural ceiling comes from.
-#
-# This is a GAUGE and stays one — it feeds no verdict here and no term in the admission gate
-# (scripts/lib/capacity-admit.sh is wave D's, and a refusing term is operator-gated).
-PTY_USED=0
-for _p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$_p" ] && PTY_USED=$((PTY_USED+1)); done
-case "$PTY_USED" in ''|*[!0-9]*) PTY_USED="null" ;; esac
-# sysctl lives in /usr/sbin, which a restricted PATH does not carry — resolved absolutely so the
-# limit cannot silently read as 0 and render as a reassuring "0%".
-PTY_SYSCTL=""
-for _c in /usr/sbin/sysctl /sbin/sysctl; do [ -x "$_c" ] && { PTY_SYSCTL="$_c"; break; }; done
-[ -z "$PTY_SYSCTL" ] && PTY_SYSCTL="$(command -v sysctl 2>/dev/null || true)"
-PTY_MAX="null"
-[ -n "$PTY_SYSCTL" ] && PTY_MAX="$("$PTY_SYSCTL" -n kern.tty.ptmx_max 2>/dev/null || true)"
-case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="null" ;; esac
-PTY_PCT="null"
-if [ "$PTY_USED" != "null" ] && [ "$PTY_MAX" != "null" ] && [ "$PTY_MAX" -gt 0 ]; then
-  PTY_PCT=$(( PTY_USED * 100 / PTY_MAX ))
-fi
-
 # mdworker spawn count inside the sample window — the churn term §11.2(e) measured at 21/60s.
 # macOS ps has NO `etimes` keyword (verified: "keyword not found"), so elapsed time is parsed from
 # `etime`'s three shapes: MM:SS, HH:MM:SS, DD-HH:MM:SS.
@@ -337,10 +302,9 @@ case "$VERDICT" in
 esac
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-JSON="$(printf '{"ts":"%s","verdict":"%s","render_cores":%s,"iterm_cpu_pct":%s,"windowserver_cpu_pct":%s,"hot_thread_pct":%s,"hot_thread_share":%s,"hot_thread_src":"ps-M-lifetime-avg","panes":%s,"sessions":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"indexing_cores":%s,"indexing_cpu_pct":%s,"mdworker_spawns_in_window":%s,"top_consumer":"%s","top_consumer_pct":%s,"sample_s":%s,"top_rows":%s,"warn_cores":%s,"alarm_cores":%s}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","render_cores":%s,"iterm_cpu_pct":%s,"windowserver_cpu_pct":%s,"hot_thread_pct":%s,"hot_thread_share":%s,"hot_thread_src":"ps-M-lifetime-avg","panes":%s,"sessions":%s,"indexing_cores":%s,"indexing_cpu_pct":%s,"mdworker_spawns_in_window":%s,"top_consumer":"%s","top_consumer_pct":%s,"sample_s":%s,"top_rows":%s,"warn_cores":%s,"alarm_cores":%s}' \
   "$TS" "$VERDICT" "${RENDER_CORES:-null}" "${ITERM_CPU:-null}" "${WS_CPU:-null}" \
-  "$HOT_PCT" "$HOT_SHARE" "$PANES" "$SESSIONS" "$PTY_USED" "$PTY_MAX" "$PTY_PCT" \
-  "$IDX_CORES" "${IDX_CPU:-null}" \
+  "$HOT_PCT" "$HOT_SHARE" "$PANES" "$SESSIONS" "$IDX_CORES" "${IDX_CPU:-null}" \
   "$MDW_SPAWNS" "$TOP_NAME" "$TOP_PCT" "$SAMPLE_S" "${TOP_ROWS:-0}" "$WARN_CORES" "$ALARM_CORES")"
 
 if [ "$APPEND" = 1 ]; then
@@ -383,7 +347,6 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  iTerm2 / WindowServer:  ${ITERM_CPU:-?}% / ${WS_CPU:-?}%   (top -l 2 second sample)"
   echo "  iTerm2 hot thread:      ${HOT_PCT}% (share ${HOT_SHARE} — ps -M lifetime avg, not sample)"
   echo "  panes / sessions:       ${PANES} / ${SESSIONS}"
-  echo "  ptys (ptmx clones):     ${PTY_USED} / ${PTY_MAX}  (${PTY_PCT}% · gauge only, feeds no verdict)"
   echo "  indexing class:         ${IDX_CORES} cores · ${MDW_SPAWNS} mdworker spawns in ${SAMPLE_S}s"
   echo "  top consumer:           ${TOP_NAME} at ${TOP_PCT}%"
   echo "  VERDICT:                ${VERDICT}"
