@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# cc-wedge-watch — page when a pane this box SPAWNED never produced an assistant turn.
+#
+#   cc-wedge-watch --pane <kitty-window-id> [--timeout N] [--label L] [--now] [--dry-run]
+#   cc-wedge-watch --calibrate                 # is the on-screen anchor set still real?
+#
+# EXIT CODES ARE THE VERDICT (memory: claimed-outcome-vs-checked-outcome — a consumer must be able
+# to PARSE the answer, not infer it from silence):
+#   0  ENGAGED     — a content-bearing assistant turn exists, or CC's interactive UI is on screen
+#   3  WEDGED      — neither; the desk has been paged
+#   4  NOT-APPLICABLE — the pane is gone, or this box has no kitty to ask (nothing to page about)
+#   2  usage error
+#
+# ── THE DEFECT THIS EXISTS FOR ───────────────────────────────────────────────────────────────────
+# A spawned session stopped at a blocking startup modal ("Try the new fullscreen renderer?", the
+# theme picker, workspace trust, a Pro-trial screen) never runs its brief and NOTHING NOTICES. The
+# pane is alive, the process is alive, no hook fires. Measured in the census
+# (docs/research/cc-startup-modals-2026-08-04.md): no cc-registry row, so cc-board's `NO-RENDER?`
+# predicate has nothing to join against; no /tmp/cc-telemetry row, so lead-supervisor.sh iterates an
+# empty set; `cc-spawn-verify` returns `0 RUNNING` because the process genuinely exists. Every
+# instrument on this box reports health. The vendor makes it worse in one case: the Grove policy
+# dialog's Esc path calls `Du(0)`, so a wedged pane there dies with **exit 0**.
+#
+# ── POLARITY: POSITIVE ANCHORS ONLY, AND WHY THAT IS THE WHOLE DESIGN ────────────────────────────
+# The check is "prove this session is ALIVE-AND-WORKING", never "detect the dialog". A dialog that
+# does not exist yet still cannot produce an assistant turn and still cannot render a composer, so
+# an unknown future modal is caught WITHOUT being enumerated. Enumerating is what already failed:
+# this repo shipped the modal enumeration on 2026-07-11 (lr-preseed-env.sh:115-123, six counters)
+# and `fullscreenUpsellSeenCount` was absent from it because the dialog did not exist yet — that
+# stale list is precisely why the operator was blocked on 2026-08-04.
+#
+# ── ANCHOR: WHY THE PRIMARY ORACLE IS THE TRANSCRIPT AND NOT `? for shortcuts` ───────────────────
+# The census prescribed a screen-text detector keyed on whitespace-collapsed `?forshortcuts`,
+# "measured 9/9 across every probe: PRESENT in all 5 usable runs, ABSENT under all 4 blocking
+# modals". Re-measured 2026-08-08 against the LIVE fleet — every kitty pane, `kitten @ get-text`,
+# the census's own de-escape-then-collapse normalisation:
+#
+#     ?forshortcuts   PRESENT in  0 of 23 healthy, working CC panes
+#     automodeon      PRESENT in 23 of 23
+#
+# Every pane on this box runs auto mode, whose footer (`⏵⏵ auto mode on (shift+tab to cycle) · ←
+# for agents`) REPLACES the shortcuts hint. The census's 9/9 was measured on throwaway probe homes
+# started without auto mode; four days later the anchor was dead on the entire production
+# population. Shipped as prescribed, this detector's first act would have been to page 23 healthy
+# panes as wedged — the alarm-that-always-fires, which carries exactly as many bits as one that
+# never fires and gets switched off within a day.
+#
+# So the ORACLE is the assistant turn — a fact about a JSONL record, which no footer redesign can
+# touch — and screen text is demoted to a SUPPRESSOR (below). This is what backlog 71908843ff77
+# asked for in its own title: "a spawned CC session that produced no assistant turn within N
+# seconds". (memory: control-calibrated-to-implementation-decays; a rendering claim is only true of
+# the renderer you measured.)
+#
+# ── THE TWO AXES, AND WHY BOTH DEGRADE TOWARD NOISE ──────────────────────────────────────────────
+#     WEDGED := NOT engaged(assistant turn)  AND  NOT ui_up(screen anchors)
+#
+# `engaged` alone would page every pane that reached the composer and was never given a prompt —
+# and the census measured exactly that blind spot ("transcript absence does not discriminate — 0
+# *.jsonl in BOTH the stalled and the cleared home"), because a pane idling at a composer is
+# healthy. `ui_up` alone is the 23/23 false-positive above. Requiring both to be negative is what
+# makes each one's failure mode safe:
+#
+#   · the anchor list goes stale again  ⇒ ui_up is always false ⇒ predicate collapses to `engaged`
+#                                         ⇒ MORE pages, never fewer
+#   · the registry/transcript path moves ⇒ engaged is always false ⇒ collapses to `ui_up`
+#                                         ⇒ MORE pages, never fewer
+#
+# Both axes are "is it GREEN?" tests and the alarm fires only when no axis can say green — the
+# polarity scripts/alarm-polarity-lint.sh exists to protect ("for a VERDICT ask is-it-red, for an
+# ALARM ask is-it-green"). `--calibrate` is the standing check that the suppressor has not silently
+# become inert; run it when a CC upgrade changes the TUI.
+#
+# ── SIDE-CAR DISCIPLINE ──────────────────────────────────────────────────────────────────────────
+# This is armed from bin/cc-pane-runner, i.e. it runs inside the launch path of every agent pane on
+# this box. It must NEVER fail wider than itself (memory: addon-failure-exceeds-its-blast-radius —
+# a `$HOME` default under `set -u` killed a beacon). Hence: no `set -e`; every external call is
+# guarded; an unresolvable kitty is exit 4 (not-applicable), never an error; and the caller
+# redirects this process's fds to /dev/null so a backgrounded watchdog can never hold the pane's
+# pipes open (memory: procsub-pid-is-unreachable-own-the-pipe — 43 wrappers pinned 10h by one
+# orphan's fd2).
+
+set -u
+
+TOOL=cc-wedge-watch
+
+PANE=""
+TIMEOUT="${CC_PANE_WEDGE_TIMEOUT_S:-180}"
+LABEL=""
+NOW=0
+DRY=0
+CALIBRATE=0
+
+usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pane)      PANE="${2:-}"; shift 2 ;;
+    --timeout)   TIMEOUT="${2:-}"; shift 2 ;;
+    --label)     LABEL="${2:-}"; shift 2 ;;
+    --now)       NOW=1; shift ;;
+    --dry-run)   DRY=1; shift ;;
+    --calibrate) CALIBRATE=1; shift ;;
+    -h|--help)   usage; exit 0 ;;
+    *) printf '%s: unknown argument %s\n' "$TOOL" "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+# ── BINARY RESOLUTION: ABSOLUTE, ALWAYS ──────────────────────────────────────────────────────────
+# This runs on an unattended path — inside a spawned pane, from a launcher, with whatever PATH that
+# pane inherited. A bare `kitty` is green in the operator's shell and 127 where it actually runs
+# (scripts/unattended-path-lint.sh, five recurrences). bin/cc-kitty-bin is the ONE resolver; resolve
+# THIS file's real directory first so the repo copy works before install.sh has ever run.
+_self="$0"; while [ -L "$_self" ]; do
+  _t="$(readlink "$_self" 2>/dev/null)" || break
+  case "$_t" in /*) _self="$_t" ;; *) _self="$(dirname "$_self")/$_t" ;; esac
+done
+SELF_DIR="$(cd "$(dirname "$_self")" 2>/dev/null && pwd)" || SELF_DIR="$HOME/.claude/bin"
+
+KITTY=""
+for _kb in "$SELF_DIR/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+  [ -x "$_kb" ] || continue
+  KITTY="$("$_kb" 2>/dev/null)" && [ -n "$KITTY" ] && break
+  KITTY=""
+done
+# Fallback to the previous spelling on non-zero, exactly as cc-kitty-bin's contract requires: a
+# side-car degrades, it does not break.
+[ -n "$KITTY" ] || KITTY="$(command -v kitten 2>/dev/null || command -v kitty 2>/dev/null || true)"
+
+# CC_NOTIFY_BIN is this repo's existing override for the pager (scripts/completion-push.sh) — an
+# explicit choice wins verbatim, the same contract cc-kitty-bin gives CC_TERM_KITTY.
+NOTIFY=""
+for _nb in "${CC_NOTIFY_BIN:-}" "$SELF_DIR/cc-notify" "$HOME/.claude/bin/cc-notify"; do
+  [ -n "$_nb" ] && [ -x "$_nb" ] && { NOTIFY="$_nb"; break; }
+done
+
+# shellcheck source=hooks/lib/engagement.sh
+for _lb in "$SELF_DIR/../hooks/lib/engagement.sh" "$HOME/.claude/hooks/lib/engagement.sh"; do
+  # shellcheck disable=SC1090
+  [ -r "$_lb" ] && { . "$_lb"; break; }
+done
+if ! command -v cc_engaged_pane >/dev/null 2>&1; then
+  printf '%s: hooks/lib/engagement.sh not found — cannot judge engagement\n' "$TOOL" >&2
+  exit 4
+fi
+
+# ── SCREEN TEXT ──────────────────────────────────────────────────────────────────────────────────
+# De-escape BEFORE collapsing whitespace. The reverse order scores 0 on a modal that is plainly on
+# screen, because an SGR sequence lands mid-word (measured, census session 2026-08-04).
+pane_text() { # $1=pane id → raw visible text on stdout
+  [ -n "$KITTY" ] || return 1
+  if [ -n "${KITTY_LISTEN_ON:-}" ]; then
+    "$KITTY" @ --to "$KITTY_LISTEN_ON" get-text --match "id:$1" 2>/dev/null
+  else
+    "$KITTY" @ get-text --match "id:$1" 2>/dev/null
+  fi
+}
+
+normalize() { # stdin → de-escaped, whitespace-collapsed text on stdout
+  perl -pe 's/\e\][^\a\e]*(?:\a|\e\\)?//g; s/\e\[[0-9;?]*[ -\/]*[@-~]//g; s/\s+//g' 2>/dev/null
+}
+
+# THE ANCHOR SET. Any ONE match means Claude Code's interactive UI is on screen, i.e. no modal is
+# blocking. Multi-alternative on purpose: a single string is what died in four days. Each entry is
+# a footer/composer element that a BLOCKING DIALOG cannot be showing, because the dialog owns the
+# screen. Deliberately NOT included: the box-drawing rule `─────`, which every modal also draws —
+# it would false-GREEN on the exact state this tool exists to catch.
+#   automodeon       23/23 live panes, 2026-08-08 (auto mode is this fleet's default)
+#   ?forshortcuts     0/23 live but 9/9 census probes — correct for a pane NOT in auto mode
+#   shift+tabtocycle  the mode-cycle hint that rides with auto mode
+#   esctointerrupt    shown only mid-turn, i.e. the session is demonstrably running
+#   foragents         the agents-drawer hint on the composer footer
+CC_WEDGE_ANCHORS="${CC_WEDGE_ANCHORS:-automodeon ?forshortcuts shift+tabtocycle esctointerrupt foragents}"
+
+ui_up() { # $1=normalized screen text → 0 CC's interactive UI is visible / 1 not
+  local n="$1" a
+  [ -n "$n" ] || return 1
+  for a in $CC_WEDGE_ANCHORS; do
+    printf '%s' "$n" | grep -qF -- "$a" && return 0
+  done
+  return 1
+}
+
+pane_alive() { # $1=pane id → 0 the pane still exists / 1 gone or unknowable
+  [ -n "$KITTY" ] || return 1
+  local out
+  if [ -n "${KITTY_LISTEN_ON:-}" ]; then
+    out="$("$KITTY" @ --to "$KITTY_LISTEN_ON" ls --match "id:$1" 2>/dev/null)" || return 1
+  else
+    out="$("$KITTY" @ ls --match "id:$1" 2>/dev/null)" || return 1
+  fi
+  [ -n "$out" ] && [ "$out" != "[]" ]
+}
+
+# ── --calibrate ──────────────────────────────────────────────────────────────────────────────────
+# The standing check that the SUPPRESSOR has not gone inert. Non-zero when NO anchor matches ANY
+# pane in the population — at that point ui_up can only ever answer "not up", the predicate has
+# silently collapsed to one axis, and the fix is to re-measure the footer.
+#
+# THE DENOMINATOR IS PANES THAT HAVE A cc-registry ROW, and choosing it correctly is most of this
+# verb's value (memory: positive-control-the-denominator — a perfect classifier still scored 73%
+# against a true 100% because the population was wrong). A registry row means "a Claude Code
+# session started here and said so", so those panes are exactly the ones whose footer the anchors
+# describe. Ordinary shell panes, `_fallback` panes and non-CC tools legitimately match nothing;
+# counting them would peg the score below 100% forever and make a REAL collapse unreadable.
+#
+# The window ids come from the `windows` arrays specifically. A flat grep for `"id"` also picks up
+# tab and OS-window ids — a first cut did exactly that, and the ids it invented made the score read
+# 17/20 with three phantom misses that no pane ever produced.
+if [ "$CALIBRATE" = 1 ]; then
+  if [ -z "$KITTY" ]; then printf '%s: no kitty binary — cannot calibrate\n' "$TOOL" >&2; exit 4; fi
+  _ls="$(if [ -n "${KITTY_LISTEN_ON:-}" ]; then
+           "$KITTY" @ --to "$KITTY_LISTEN_ON" ls 2>/dev/null
+         else "$KITTY" @ ls 2>/dev/null; fi)"
+  if command -v jq >/dev/null 2>&1; then
+    ids="$(printf '%s' "$_ls" | jq -r '.[].tabs[].windows[].id' 2>/dev/null | sort -un)"
+  else
+    ids="$(printf '%s' "$_ls" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | sort -un)"
+  fi
+  regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+  total=0; anymatch=0; skipped=0
+  printf '%s: anchor calibration (%s)\n' "$TOOL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for a in $CC_WEDGE_ANCHORS; do eval "hits_$(printf '%s' "$a" | tr -c 'a-zA-Z0-9' '_')=0"; done
+  for id in $ids; do
+    [ -f "$regdir/$id.json" ] || { skipped=$((skipped + 1)); continue; }
+    n="$(pane_text "$id" | normalize)"
+    [ -n "$n" ] || { skipped=$((skipped + 1)); continue; }
+    total=$((total + 1)); matched=0
+    for a in $CC_WEDGE_ANCHORS; do
+      if printf '%s' "$n" | grep -qF -- "$a"; then
+        v="hits_$(printf '%s' "$a" | tr -c 'a-zA-Z0-9' '_')"
+        eval "$v=\$(( \$$v + 1 ))"; matched=1
+      fi
+    done
+    [ "$matched" = 1 ] && anymatch=$((anymatch + 1))
+  done
+  for a in $CC_WEDGE_ANCHORS; do
+    v="hits_$(printf '%s' "$a" | tr -c 'a-zA-Z0-9' '_')"
+    eval "printf '  %-18s %s/%s\n' \"\$a\" \"\$$v\" \"\$total\""
+  done
+  printf '  %-18s %s/%s\n' 'ANY anchor' "$anymatch" "$total"
+  printf '  (%s pane(s) skipped: no cc-registry row or no readable text — not CC sessions)\n' "$skipped"
+  if [ "$total" -gt 0 ] && [ "$anymatch" = 0 ]; then
+    printf '%s: STALE ANCHOR SET — 0 of %s live panes match any anchor. ui_up is inert; the wedge\n' "$TOOL" "$total" >&2
+    printf '       detector has collapsed to its transcript axis alone. Re-measure the CC footer.\n' >&2
+    exit 3
+  fi
+  exit 0
+fi
+
+[ -n "$PANE" ] || { printf '%s: --pane is required\n' "$TOOL" >&2; usage >&2; exit 2; }
+case "$TIMEOUT" in ''|*[!0-9]*) printf '%s: --timeout must be an integer\n' "$TOOL" >&2; exit 2 ;; esac
+
+# ── THE DEADLINE ─────────────────────────────────────────────────────────────────────────────────
+# N defaults to 180s, and it is neither a guess nor the census's 120. handoff-fire.sh's own fire
+# path already runs FIRE_ENGAGE_TIMEOUT=120 plus a 60s retry window (its one re-type recovery), and
+# its recycle path uses 180. A pane-local watchdog firing at 120 would page DURING that recovery and
+# pre-empt it — two pages for one event, the second of which was about to fix itself. 180 puts this
+# check strictly AFTER the fire path has spent its own budget, so the orderings are deterministic
+# and the two mechanisms compose instead of racing. (memory: exoneration-bound-must-fit-what-it-
+# bounds — a bound shorter than what it re-runs can only ever convict.)
+if [ "$NOW" != 1 ]; then sleep "$TIMEOUT"; fi
+
+# A pane that has since closed is not a wedge. Checked FIRST so a closed pane never pages: the
+# operator closing a tab must not look like a startup stall. Unknowable (no kitty) is the same
+# not-applicable answer — this tool refuses to page on evidence it does not have.
+if ! pane_alive "$PANE"; then
+  [ "$DRY" = 1 ] && printf 'NOT-APPLICABLE pane=%s reason=pane-gone-or-no-kitty\n' "$PANE"
+  exit 4
+fi
+
+SCREEN="$(pane_text "$PANE")"
+NORM="$(printf '%s' "$SCREEN" | normalize)"
+
+# AXIS 1 — the structural oracle. This is the item's own predicate.
+if cc_engaged_pane "$PANE"; then
+  [ "$DRY" = 1 ] && printf 'ENGAGED pane=%s proof=%s sid=%s\n' "$PANE" "${CC_ENGAGE_PROOF:-}" "${CC_ENGAGE_SID:-}"
+  exit 0
+fi
+WHY="${CC_ENGAGE_WHY:-unknown}"
+
+# AXIS 2 — the suppressor. CC's interactive UI is on screen, so no dialog is blocking; this pane is
+# simply idle at a composer, which is a healthy state and not this tool's business.
+if ui_up "$NORM"; then
+  [ "$DRY" = 1 ] && printf 'ENGAGED pane=%s proof=ui-anchor engage_why=%s\n' "$PANE" "$WHY"
+  exit 0
+fi
+
+# ── WEDGED ───────────────────────────────────────────────────────────────────────────────────────
+# Neither axis can say green. The page carries the pane id, the reason the transcript axis failed,
+# and the last 20 visible lines — the operator needs the SCREEN to know which dialog it is, and the
+# whole point of this class is that the dialog may be one nobody has enumerated yet.
+TAIL="$(printf '%s' "$SCREEN" | perl -pe 's/\e\][^\a\e]*(?:\a|\e\\)?//g; s/\e\[[0-9;?]*[ -\/]*[@-~]//g' 2>/dev/null | tail -20)"
+MSG="SPAWN-WEDGED: pane $PANE${LABEL:+ ($LABEL)} produced no assistant turn in ${TIMEOUT}s and shows no Claude Code composer — a blocking startup dialog most likely ate the brief.
+engagement: $WHY${CC_ENGAGE_SID:+ (sid ${CC_ENGAGE_SID})}
+Last screen:
+$TAIL"
+
+if [ "$DRY" = 1 ]; then
+  printf 'WEDGED pane=%s engage_why=%s\n' "$PANE" "$WHY"
+  printf '%s\n' "$MSG"
+  exit 3
+fi
+
+if [ -n "$NOTIFY" ]; then
+  "$NOTIFY" --role "${CC_COMPLETION_ROLE:-desk}" "$MSG" >/dev/null 2>&1 || true
+else
+  # No pager reachable is still a finding — say it where a pane's own scrollback keeps it, rather
+  # than exiting silently and turning a detected wedge into no event at all.
+  printf '%s: %s\n' "$TOOL" "$MSG" >&2
+fi
+exit 3
