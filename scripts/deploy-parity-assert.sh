@@ -541,25 +541,44 @@ if [ "$ungated" -ne 0 ] || [ "$unverified" -ne 0 ]; then
   # An operator-facing diagnostic that quotes another file's output is a cross-file coupling with no
   # test holding it — so quote only the durable predicate clause, never the whole sentence.
   #
-  # THE PROGNOSIS BELOW ALSO CHANGED. Until 2026-08-07 this said the condition "does NOT clear on its
-  # own" because the green gate was structurally unsatisfiable at the fleet's commit rate (3h verify
-  # vs ~7min between commits — DEPLOY_GATE_CONVERGENCE.md), and naming an unreachable cure is how an
-  # alarm becomes furniture. That was correct for the single-tier gate. DEPLOY_LANE_GROUND_UP.md §2.2
-  # replaced it with a two-tier target: past CC_DEPLOY_MAX_LAG_COMMITS / _HOURS the lane degrades to
-  # the newest not-RED commit under a banner, so the state IS now self-clearing — but only once the
-  # v2 advancer is actually LIVE, which is its own step (§2.6c). Both halves are stated, because
-  # promising a self-clear that the deployed copy cannot yet perform is the same furniture defect
-  # pointing the other way.
-  # BOTH doc references are load-bearing and tests/deploy-parity.bats:614 pins the second one.
-  # DEPLOY_GATE_CONVERGENCE.md is why the single-tier gate could not clear; DEPLOY_LANE_GROUND_UP.md
-  # is the two-tier remedy. Dropping the former would have reddened that test — which is the correct
-  # outcome for a pointer the operator still needs, not a stale assertion to update away.
+  # THE PROGNOSIS BELOW ALSO CHANGED — TWICE, and the second correction is the one that bites.
+  # Until 2026-08-07 this said the condition "does NOT clear on its own" because the green gate was
+  # structurally unsatisfiable at the fleet's commit rate (3h verify vs ~7min between commits), and
+  # naming an unreachable cure is how an alarm becomes furniture. The 08-07 rewrite kept that as its
+  # characterisation of the single-tier gate — "that was correct for the single-tier gate" — and it
+  # was NOT. DEPLOY_GATE_CONVERGENCE.md §7 withdrew exactly this claim 53 minutes after it was first
+  # written (ban 0d03c584 16:14 → retraction 397cad30 17:07, 2026-07-31), so the doc that was being
+  # cited as the authority for it already said the opposite; nothing connected the two, and the dead
+  # mechanism was carried forward through a rewrite that touched the very lines holding it.
+  #
+  # What §7 measured: the claim came from testing a TREE sha with a COMMIT predicate
+  # (merge-base --is-ancestor), which exits 128 for every input — including the tip's own tree as a
+  # positive control — so it could only ever print 0. Re-derived, the gate's predicate is CORRECT
+  # and commit rate was never the mechanism: deploy-live scans back CC_DEPLOY_SCAN commits and takes
+  # the FIRST green, so lag is designed for. The single-tier gate's real limitation is narrower —
+  # it has no STALENESS BUDGET, so it waits for a green instead of degrading past one — and what
+  # withholds that green is §7.4's churning red set.
+  #
+  # Why the distinction is worth these lines: commit rate is UNFIXABLE, so naming it hands the
+  # reader a permanent --force at the exact moment they are deciding what to do about a broken
+  # deploy, and it discourages the triage that actually clears the lane. Cite the SECTION, never the
+  # doc's head — that head is still a title asserting the withdrawn claim. Carry no number that can
+  # rot: the doc holds those and can be re-measured, this file cannot.
+  # BOTH doc references are load-bearing and the remedy test below pins both.
+  # DEPLOY_GATE_CONVERGENCE.md §7 is why a green is withheld and how to triage it;
+  # DEPLOY_LANE_GROUND_UP.md is the two-tier remedy that removes the waiting altogether.
   printf '  Whether this clears on its own depends on which advancer is LIVE: the two-tier lane\n' >&2
-  printf '  (DEPLOY_LANE_GROUND_UP.md §2.2) degrades past its staleness budget and clears; the older\n' >&2
-  printf '  single-tier gate does not — it is structurally unsatisfiable at this commit rate\n' >&2
-  printf '  (3h verify vs ~7min between commits — docs/plans/DEPLOY_GATE_CONVERGENCE.md).\n' >&2
+  printf '  (DEPLOY_LANE_GROUND_UP.md §2.2) degrades past its staleness budget and clears by itself;\n' >&2
+  printf '  the older single-tier gate has no such budget, so it waits for a GREEN. That wait is NOT\n' >&2
+  printf '  permanent and NOT a commit-rate limit: deploy-live scans back CC_DEPLOY_SCAN commits and\n' >&2
+  printf '  takes the FIRST green, so a green on ANY tree in that window releases the lane. What\n' >&2
+  printf '  withholds one is a CHURNING red set — mostly machine-state-coupled suites convicting on a\n' >&2
+  printf '  loaded box, not on the tree. Triage that, do not wait for it:\n' >&2
+  printf '    docs/plans/DEPLOY_GATE_CONVERGENCE.md §7   (§7.4 the mechanism · §7.8 how to triage it)\n' >&2
+  printf '  Read §7 FIRST — its title and §1-§5 are withdrawn by §7 itself. In flakes.jsonl a 1-of-3\n' >&2
+  printf '  row is ALREADY acquitted.\n' >&2
   printf '  Check which is live:  grep -c CC_DEPLOY_DEGRADE %s/scripts/deploy-live.sh\n' "$HOME/.claude" >&2
-  printf '  Fixing the GATE is the open work; a raw ff is not a workaround for it, it is this finding.\n' >&2
+  printf '  A raw ff is not a workaround for a red corpus — it IS this finding.\n' >&2
 fi
 
 # ORDER IS THE DOCTRINE: a NAMED failure outranks a non-verdict. Real drift was actually observed on

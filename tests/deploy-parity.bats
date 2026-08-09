@@ -648,12 +648,23 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   printf '%s' "$output" | grep -q 'IS this checkout'
   if printf '%s' "$output" | grep -q 'the code running is not the code'; then false; fi
   if printf '%s' "$output" | grep -q 'merge --ff-only origin/main'; then false; fi
-  # And it must not promise a cure the fleet has proven unreachable: the green gate is structurally
-  # unsatisfiable at this commit rate (3h verify vs ~7min commits), so "wait for a green stamp"
-  # would send the reader to watch for something that cannot arrive — the way an alarm becomes
-  # furniture. The remedy names the real blocker instead; pin that it keeps doing so.
-  printf '%s' "$output" | grep -q 'DEPLOY_GATE_CONVERGENCE'
-  if printf '%s' "$output" | grep -q 'It clears when'; then false; fi
+  # And the remedy must name a mechanism that is still TRUE. It used to cite a commit-rate diagnosis
+  # ("structurally unsatisfiable") that DEPLOY_GATE_CONVERGENCE.md's own §7 withdrew 53 minutes after
+  # it was written — and the negative assertion that stood here, banning "It clears when", then
+  # GUARDED the dead claim: it forbade the exact sentence the corrected remedy needs, so keeping this
+  # test green meant keeping the withdrawn mechanism, and the 2026-08-07 rewrite carried it forward.
+  # A stale assertion never reads as stale; it reads as an ordinary red, which is how it survives a
+  # fix (memory: stale-assertion-becomes-an-inverted-guard).
+  #
+  # Re-pointed at the surviving diagnosis. Both doc pointers are pinned HERE, together, because the
+  # script's comment says both are load-bearing and a pin living somewhere else is how one of them
+  # gets dropped unnoticed: §7 is why a green is withheld, GROUND_UP is the two-tier remedy. The
+  # section anchor is pinned, not the bare filename — the doc's head is still a withdrawn title, so
+  # citing the file alone is the defect this test now exists to catch.
+  printf '%s' "$output" | grep -q 'DEPLOY_GATE_CONVERGENCE.md §7'
+  printf '%s' "$output" | grep -q 'DEPLOY_LANE_GROUND_UP'
+  printf '%s' "$output" | grep -q 'CHURNING red set'
+  if printf '%s' "$output" | grep -q 'structurally unsatisfiable'; then false; fi
 }
 
 # The seam: this script asserts the POSTCONDITION of deploy-live's own target choice, so the two
