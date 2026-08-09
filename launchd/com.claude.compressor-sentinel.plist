@@ -49,11 +49,21 @@
   different and louder rather than silent — an unreadable sysctl SKIPS the tick and logs to stderr
   rather than rendering as 0 — but the sentinel would still be totally blind.
 
-  THE ACTUATOR IS DISARMED IN THIS PLIST. CC_SENTINEL_ACT is not set, so the job runs detection-only
-  and writes ~/.claude/autonomy/pages/compressor-sentinel.page on a trip. Arming it (SIGSTOP of the
-  burst cohort, §7.2) is an operator decision, made by adding CC_SENTINEL_ACT=stop to the wrapper —
-  deliberately not a maintenance edit, because it is the first thing on this box that acts on live
-  processes without being asked.
+  THE ACTUATOR WAS ARMED 2026-08-09 04:3x PDT — operator authorization "arm it" in-session, after
+  watchdog panics #5 (03:39) and #6 (04:17) the same night. CC_SENTINEL_ACT=stop is exported in the
+  wrapper below: on a trip the sentinel SIGSTOPs the newest ^node-comm burst cohort (RSS ≥100 MB,
+  cap 200) — never claude/mcp-shaped processes, never SIGKILL; SIGSTOP is reversible (SIGCONT).
+  Disarm: delete the export from the wrapper (or CC_SENTINEL=off, or launchctl bootout
+  gui/$UID/com.claude.compressor-sentinel).
+  Cohort tuning, same authorization: ACT_RSS_KB=40960 (40 MB — the 08-09 04:08/04:13 storm's 372-736
+  node procs averaged 62-75 MB, UNDER the default 100 MB floor, so the stock floor would have spared
+  most of the horde) and ACT_CAP=400 (waves measured at 372-736 members; the default 200/trip covers
+  barely half a wave between 60 s cooldowns).
+  (Pre-arming rationale, kept for history: arming is an operator decision, made by adding
+  CC_SENTINEL_ACT=stop to the wrapper — deliberately not a maintenance edit, because it is the
+  first thing on this box that acts on live processes without being asked. Detection-only mode
+  wrote pages that nothing could act on in the 5-minute storm window; detection alone saved
+  nothing in four consecutive panics. Full evidence: docs/research/crash-rootcause-2026-08-09.md.)
 
   Kill switches after load: CC_SENTINEL=off in the wrapper, or
   `launchctl bootout gui/$UID/com.claude.compressor-sentinel`.
@@ -67,7 +77,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/compressor-sentinel.sh"</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; export CC_SENTINEL_ACT=stop; export CC_SENTINEL_ACT_RSS_KB=40960; export CC_SENTINEL_ACT_CAP=400; exec "$HOME/.claude/scripts/compressor-sentinel.sh"</string>
     </array>
 
     <key>RunAtLoad</key>
