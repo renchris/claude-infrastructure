@@ -168,7 +168,7 @@ EOF
   chmod +x "$m"
   # the mutation must actually have applied — a no-op sed would pass this test vacuously
   grep -q '"local_bash"' "$m"
-  ! grep -q '"shell","subagent"' "$m"
+  ! grep -q '"shell","subagent"' "$m" || false
   export CC_PAGE_DAMP_DIR="$D/damp-m1"
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m1")' | '$m'"
   [ "$status" -eq 0 ]
@@ -193,7 +193,7 @@ EOF
   sed 's/\[ "\$IS_SENTINEL" = "true" \] && //' "$H" > "$m"
   chmod +x "$m"
   grep -q 'IS_SENTINEL' "$m"                                  # variable still assigned…
-  ! grep -q '\[ "$IS_SENTINEL" = "true" \] &&' "$m"           # …but no longer gates the fire
+  ! grep -q '\[ "$IS_SENTINEL" = "true" \] &&' "$m" || false  # …but no longer gates the fire
   export CC_PAGE_DAMP_DIR="$D/damp-m2m"
   run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "m2-mutant")' | '$m'"
   [ "$status" -eq 0 ]
