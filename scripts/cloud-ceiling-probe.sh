@@ -42,6 +42,26 @@
 # `claude-accounts` readout at run time — an account at 100% is a PERISHABLE fact and a hardcoded
 # one would silently stop being a control.)
 #
+# 🚨 EVERY WORD OF THE PARAGRAPH ABOVE IS NOW FALSE, AND IT IS KEPT SO THE REPLACEMENT IS LEGIBLE.
+# Measured 2026-08-08: `next2` at 100% weekly created FOUR cloud sessions. Weekly quota does not gate
+# cloud CREATE, so the "free known-refusal" this control was built on DOES NOT EXIST, `--control`
+# returns `created`, and by its own rule above it is VOID.
+#
+# The replacement was searched for and there is none (CONCURRENCY_PROGRAM.md §S5.4): every candidate
+# is void, not free, the wrong category (auth/policy refusals are not quota refusals), or vacuous
+# (feeding the classifier a string WE invented cannot test whether our patterns match the API's).
+# Worse — and this is the part that retires the whole approach — if create is not quota-gated at all,
+# `refused-quota` has NO REACHABLE INSTANCE, the ramp can only ever exhaust its own `--max`, and the
+# ceiling is UNMEASURABLE BY THIS INSTRUMENT rather than merely unmeasured.
+#
+# So the standing rule for this script is now: PUBLISH LOWER BOUNDS ONLY. A lower bound counts
+# successes and never consults the classifier, which is exactly why it survived all of this.
+#
+# What IS still validatable is SPECIFICITY, not sensitivity — and it is the half that matters, because
+# the two errors are not symmetric: a false `refused-quota` publishes a fabricated ceiling, while a
+# false `refused-other` merely abstains. The `refused-bundle` state below is that control: a live,
+# reliably reproducible, NON-quota refusal that the classifier must never call quota.
+#
 # ── COST, STATED PLAINLY ─────────────────────────────────────────────────────────────────────────
 # EVERY create spends real weekly quota on a real account. That is why `--confirm` is required, why
 # `--max` has no default, and why the ramp stops at the FIRST refusal rather than confirming it.
@@ -181,7 +201,26 @@ classify_outcome() { # stdin = combined create output; echoes created|refused-qu
 # being RIGHT (it correctly declined to call a TTY complaint a quota refusal) while the rig was the
 # thing at fault. Same for `script: tcgetattr … not supported on socket`, our own allocator failing.
 is_harness_refusal() { # stdin → 0 iff this refusal is about how WE called it
-  grep -qiE 'interactive terminal|requires a (tty|terminal)|not a tty|tcgetattr|Operation not supported on socket|pty-run:|unknown option|unrecognized (option|argument)|cannot be combined with|requires a description|no config_dir|no claude binary|no pty allocator|setup GitHub|Bundle upload failed'
+  grep -qiE 'interactive terminal|requires a (tty|terminal)|not a tty|tcgetattr|Operation not supported on socket|pty-run:|unknown option|unrecognized (option|argument)|cannot be combined with|requires a description|no config_dir|no claude binary|no pty allocator'
+}
+
+# ── THE FIFTH STATE: THE REPO'S BUNDLE, WHICH IS NEITHER OUR RIG NOR THEIR QUOTA ────────────────
+# `Bundle upload failed` and `setup GitHub` used to live in is_harness_refusal above. That kept the
+# ceiling honest — anything checked before the quota arm cannot publish a fake ceiling — but it
+# filed the commonest refusal on this box under "our instrument is broken", and it is not.
+# CONCURRENCY_PROGRAM.md §S5.3 measured the cause: the CLI seeds a cloud session by uploading a
+# `git bundle` of local HEAD whenever it cannot use a GitHub source, this repo's bundle is 95 MiB
+# against a 100 MiB cap, and the upload gets 3 retries. That is a property of THE REPO AND THE
+# VENDOR, not of how we invoked anything — and the two demand opposite actions: `refused-harness`
+# means fix the rig, `refused-bundle` means shrink the bundle or install the GitHub App on the repo
+# (which removes the upload entirely). Folding them lost that, and lost it in the direction that
+# reads as our own fault, so nobody goes looking at the repo.
+#
+# Kept AHEAD of the quota arm for the original reason, which is unchanged: a transport failure must
+# never reach the quota patterns. This split changes what a run is CALLED, never what it is allowed
+# to publish.
+is_bundle_refusal() { # stdin → 0 iff the create died seeding the sandbox, not on any limit
+  grep -qiE 'Bundle upload failed|Repo is too large to bundle|setup GitHub'
 }
 
 # Strip the pty's ANSI/OSC/DCS traffic. A pty makes the CLI think a human is watching, so it emits
@@ -276,6 +315,7 @@ fire_one() { # $1=account $2=label → echoes "<outcome>\t<first-line-of-output>
   # being bitten by. On non-pty output it is a no-op.
   out="$(printf '%s' "$out" | strip_pty)"
   if printf '%s' "$out" | is_harness_refusal; then outcome=refused-harness
+  elif printf '%s' "$out" | is_bundle_refusal; then outcome=refused-bundle
   else outcome="$(printf '%s' "$out" | classify_outcome)"; fi
   printf '%s\t%s\n' "$outcome" "$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
 }
@@ -342,6 +382,7 @@ for i in $(seq 1 "$MAXN"); do
              ids="$ids $(printf '%s' "$msg" | grep -oE 'session_[A-Za-z0-9]+' | head -1)" ;;
     refused-quota) verdict="ceiling"; break ;;
     refused-harness) verdict="harness"; break ;;
+    refused-bundle)  verdict="bundle";  break ;;
     *)             verdict="nonverdict"; break ;;
   esac
 done
@@ -359,6 +400,18 @@ case "$verdict" in
     echo "  the binary, not about the account. This measures the instrument, not the ceiling —"
     echo "  publish NO number. Fix the rig (see the message above), then re-run from scratch."
     record "{\"ts\":\"$(now)\",\"kind\":\"verdict\",\"account\":\"$ACCOUNT\",\"verdict\":\"harness\",\"n\":$created}" ;;
+  bundle)
+    # Its own verdict for the same reason `harness` is: it sends the reader somewhere SPECIFIC.
+    # This one is neither our rig nor the account — it is THIS REPO's seed bundle, and it has a
+    # known cause and a known cure (CONCURRENCY_PROGRAM.md §S5.3).
+    echo "NON-VERDICT after $created create(s): the ramp stopped seeding the sandbox, not on any"
+    echo "  limit. The CLI uploads a \`git bundle\` of local HEAD whenever it cannot use a GitHub"
+    echo "  source; this repo's bundle is ~95 MiB against a 100 MiB cap, with 3 retries — marginal"
+    echo "  by construction, and it fails from ANY cwd (the worktree story is refuted, §S5.3)."
+    echo "  Publish NO number. Cure: install the Claude GitHub App on the repo (the create then"
+    echo "  uses a git_repository source and uploads nothing), or simply re-run — it is intermittent."
+    echo "  Measure the bundle first, for free: scripts/cloud-bundle-probe.sh --measure"
+    record "{\"ts\":\"$(now)\",\"kind\":\"verdict\",\"account\":\"$ACCOUNT\",\"verdict\":\"bundle\",\"n\":$created}" ;;
   nonverdict)
     echo "NON-VERDICT after $created create(s): the ramp stopped on a refusal that was NOT a quota"
     echo "  refusal. Publish NO ceiling from this run — diagnose the refusal above and re-run."

@@ -203,12 +203,34 @@ EOF
 }
 
 @test "a rig refusal mid-ramp is its own verdict, distinct from a plain non-verdict" {
-  capable_stub "Error: Bundle upload failed: Socket is closed after 3 attempts. Please set up GitHub"
+  # MIGRATED 2026-08-09, not deleted. This case used to feed the BUNDLE-UPLOAD string and assert
+  # `verdict":"harness"` — because `Bundle upload failed` was folded into is_harness_refusal. That
+  # classification is now known to be wrong: CONCURRENCY_PROGRAM.md §S5.3 measured the cause as this
+  # repo's ~95 MiB seed bundle against a 100 MiB cap, which is a property of the REPO and the VENDOR,
+  # not of how we invoked the binary. Left as-is, the assertion would have guarded the defect
+  # (memory: stale-assertion-becomes-an-inverted-guard — the side with the incident wins).
+  # The INTENT is preserved exactly: a rig refusal still gets its own verdict, distinct from a bare
+  # non-verdict. Only the stimulus changed, to one that is genuinely about our own call.
+  capable_stub "Error: --cloud requires an interactive terminal. Drop --cloud, or run from a TTY."
   run bash "$P" --account acct-a --max 4 --confirm
   [ "$status" -eq 0 ]
   [[ "$output" == *"about HOW IT CALLED"* ]] || false
   [[ "$output" != *"CEILING ="* ]] || false
   run /usr/bin/grep -c '"verdict":"harness"' "$CLOUD_CEILING_LEDGER"
+  [ "$output" -eq 1 ]
+}
+
+@test "a BUNDLE refusal is its own verdict — not the rig's, not the ceiling's" {
+  # The specificity control §S5.4 calls for, over a REAL artifact: the exact refusal this box
+  # produces on demand, which must never reach the quota patterns and must never be blamed on the
+  # rig. Ordered ahead of quota for the same reason `harness` is.
+  capable_stub "Error: Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on https://claude.ai/code"
+  run bash "$P" --account acct-a --max 4 --confirm
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CEILING ="* ]] || false
+  [[ "$output" != *"about HOW IT CALLED"* ]] || false
+  [[ "$output" == *"seeding the sandbox"* ]] || false
+  run /usr/bin/grep -c '"verdict":"bundle"' "$CLOUD_CEILING_LEDGER"
   [ "$output" -eq 1 ]
 }
 
