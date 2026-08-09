@@ -66,7 +66,8 @@ setup() {
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
   OSA_GONE_DIR="$BATS_TEST_TMPDIR/gone"; mkdir -p "$OSA_GONE_DIR"
   PS_DEAD_DIR="$BATS_TEST_TMPDIR/dead";  mkdir -p "$PS_DEAD_DIR"
-  export OSA_GONE_DIR PS_DEAD_DIR
+  PS_BLIND_DIR="$BATS_TEST_TMPDIR/blind"; mkdir -p "$PS_BLIND_DIR"
+  export OSA_GONE_DIR PS_DEAD_DIR PS_BLIND_DIR
 
   # as_tty's query: `osascript - <uuid>` → print TTY-<uuid>, or empty when a gone-marker exists.
   cat > "$SHIM/osascript" <<'SH'
@@ -106,6 +107,11 @@ root_pid() {                     # $1=tty → that pane's root pid, stable acros
   printf '%s' "$(( 700000 + n * 10 ))"
 }
 tty_live() { [ -z "${PS_DEAD_DIR:-}" ] || [ ! -e "$PS_DEAD_DIR/$1" ]; }
+# BLIND is a THIRD state, not a synonym for dead. A tty with no readable processes is a tty we
+# cannot READ (pane gone, bridge hiccup) — pane_cc_state calls that `unknown` and must never
+# downgrade it to "shell-only", which is the fail-dangerous default. Without this the shim can only
+# model live and exited, so `unknown` is unreachable and the branch that handles it is untestable.
+tty_blind() { [ -n "${PS_BLIND_DIR:-}" ] && [ -e "$PS_BLIND_DIR/$1" ]; }
 
 fmt="" tty="" pid="" pgid="" all=0
 while [ $# -gt 0 ]; do
@@ -149,6 +155,7 @@ if [ -n "$pgid" ]; then                    # the foreground group: shells only (
   exit 0
 fi
 [ -n "$tty" ] || exit 0
+tty_blind "$tty" && exit 0                 # unreadable tty → no rows at all → pane_cc_state=unknown
 p="$(root_pid "$tty")"
 case "$fmt" in                             # tpgid BEFORE pid — "tpgid" contains "pid"
   *tpgid*) printf '%s\n' "$p" ;;
@@ -212,6 +219,10 @@ if [ "${1:-}" = session ] && [ "${2:-}" = list ]; then
   else printf '%s\n' PRED-PANE SUCC-PANE PREDSID SUCC-B; fi
   exit 0
 fi
+# $IT2_CLOSE_FAIL models the iTerm2 python-API socket refusing the CLOSE while every other verb
+# still answers — the real 2026-07-26 failure (1 of 16 self-closes), and the only way to reach the
+# post-close diagnosis branch. Inert unless a test sets it, so every existing case is unchanged.
+if [ -n "${IT2_CLOSE_FAIL:-}" ] && [ "${1:-}" = session ] && [ "${2:-}" = close ]; then exit 1; fi
 exit 0
 SH
   cat > "$h/.claude/bin/cc-notify" <<'SH'
@@ -358,6 +369,70 @@ SH
   grep -q "session focus SUCC-B" "$H/it2-calls.log"
   [ ! -f "$H/ccnotify-calls.log" ]                     # happy path pages nobody
   [[ "$output" == *"focus handed to successor SUCC-B"* ]]
+}
+
+# ── 2b. A FAILED CLOSE MUST DIAGNOSE, NOT ASSUME (item 71909cbeee08) ─────────────────────────────
+# When the 4 close attempts are exhausted this branch used to state, unconditionally, "claude
+# exited, pane still open … the session is already gone" — to the operator AND to the desk page.
+# It asserted two facts it had never checked. On 2026-07-30 (session c5f80b8b) both were FALSE: the
+# session was live and answering. The evidence was already in hand and thrown away — the wait loop
+# 50 lines above computes cc_alive and prints "⚠ CC still alive" on the way past.
+#
+# The states have OPPOSITE remedies, which is why one message cannot serve all three. A husk: close
+# it, nothing is at risk. A LIVE session behind a failed close: do not touch it — and an operator
+# who believes the old page closes a pane with work in it. "Unknown" is its own answer and must not
+# be rounded to either neighbour (pane_cc_state's own rule: an unreadable tty is not a death).
+#
+# The verdict is re-read AT THE FAILURE INSTANT, ~190s and four attempts after the loop's, so these
+# cases pin the branch and not a stale variable.
+
+@test "close fails + CC CONFIRMED GONE → the husk wording, and it may say the session is gone" {
+  H="$BATS_TEST_TMPDIR/home-husk"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"                              # CC exited → pane_cc_state(TTY-A)=shell
+  run env HOME="$H" IT2_CLOSE_FAIL=1 bash "$HF" __selfclose PREDSID TTY-A
+  [[ "$output" == *"is a HUSK"* ]] || false
+  [[ "$output" == *"claude confirmed gone"* ]] || false
+  [[ "$output" == *"the session is already gone"* ]] || false
+  grep -q "HANDOFF-HUSK-PANE" "$H/ccnotify-calls.log"
+  grep -q "CONFIRMED gone" "$H/ccnotify-calls.log"
+}
+
+@test "close fails + CC STILL RUNNING → says NOT gone, and the page says NOT a husk" {
+  # THE REGRESSION ITSELF. Pre-fix this printed "claude exited … the session is already gone" and
+  # paged "session is gone" over a session that was still answering. The grace seam is what makes
+  # the branch reachable at all: it is only entered after the wait loop gives up on a LIVE CC.
+  H="$BATS_TEST_TMPDIR/home-live"; mk_home "$H"
+  # no dead-marker for TTY-A → CC alive throughout, so the loop expires rather than breaking
+  run env HOME="$H" IT2_CLOSE_FAIL=1 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
+      bash "$HF" __selfclose PREDSID TTY-A
+  [[ "$output" == *"CC still alive"* ]] || false        # the loop's own verdict, unchanged
+  [[ "$output" == *"the session is NOT gone"* ]] || false
+  [[ "$output" == *"STILL RUNNING"* ]] || false
+  # the two false assertions must be ABSENT, not merely outweighed by a truer sentence beside them
+  ! [[ "$output" == *"the session is already gone"* ]] || false
+  ! [[ "$output" == *"is a HUSK"* ]] || false
+  grep -q "HANDOFF-CLOSE-FAILED-LIVE" "$H/ccnotify-calls.log"
+  grep -q "NOT a husk" "$H/ccnotify-calls.log"
+  ! grep -q "HANDOFF-HUSK-PANE" "$H/ccnotify-calls.log" || false
+}
+
+@test "close fails + tty UNREADABLE → says UNKNOWN, and claims neither death nor life" {
+  # The third state, and the one an over-eager fix would collapse into "husk" (its neighbour on the
+  # fail-safe side) — which is how the original defect was written in the first place.
+  H="$BATS_TEST_TMPDIR/home-unk"; mk_home "$H"
+  : > "$PS_BLIND_DIR/TTY-A"                             # tty readable by nobody → unknown
+  run env HOME="$H" IT2_CLOSE_FAIL=1 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
+      bash "$HF" __selfclose PREDSID TTY-A
+  [[ "$output" == *"is UNKNOWN"* ]] || false
+  ! [[ "$output" == *"the session is already gone"* ]] || false
+  ! [[ "$output" == *"STILL RUNNING"* ]] || false
+  grep -q "HANDOFF-CLOSE-FAILED-UNKNOWN" "$H/ccnotify-calls.log"
+}
+
+@test "grace seam is INERT unless set — the shipped bound is still 180s/5s" {
+  # A seam that silently changed the production grace would be a worse bug than the one it tests.
+  grep -qF 'HF_SELFCLOSE_GRACE_S:-180' "$HF"
+  grep -qF 'HF_SELFCLOSE_GRACE_STEP_S:-5' "$HF"
 }
 
 # ── 3. PRE-CLOSE INVENTORY (light, WARN-only) ────────────────────────────────────────────────────
