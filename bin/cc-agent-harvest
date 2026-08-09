@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""cc-agent-harvest — recover a team member's deliverable from its OWN transcript.
+
+WHY THIS EXISTS (measured 2026-08-09, H-CAP-1 Fable panel).
+Passing `name:` to the Agent tool does NOT create a fire-and-forget subagent whose final text
+returns to the lead. It registers a TEAM MEMBER — `~/.claude*/teams/session-<lead>/config.json`
+gains an entry with `backendType`, a `tmuxPaneId` and `isActive`. A member's deliverable channel
+is `SendMessage` back to the lead; there is **no Agent-tool return value for this spawn shape**.
+
+So a member can do all of its work, write a complete report into its own session transcript,
+signal `idle`, and hand the lead nothing. That is not a hypothetical: three Fable 5 derivation
+panelists did exactly this — real frontier tokens spent, three complete reports produced, zero
+delivered. They were recovered only because someone went looking. Compounding it, `backendType`
+read `iterm2` on a kitty box, so the panes were never created: the members were headless,
+invisible to the operator, and unreachable by the pane tooling.
+
+`scripts/team-orphan-reaper.sh` already reaps stale members. Reaping without harvesting is the
+loss path — this tool is the harvest half, and it is deliberately READ-ONLY with respect to
+everything it inspects.
+
+RESOLUTION STRATEGY (member -> transcript). The team config stores each member's `prompt`
+VERBATIM but no session id. The member's own transcript opens with that prompt wrapped in a
+`<teammate-message teammate_id="team-lead">` envelope. So the join key is the prompt text itself,
+which is exact, needs no new bookkeeping, and cannot drift — it is the same bytes on both sides.
+
+EXIT CODES (the verdict is the exit code — see memory `claimed-outcome-vs-checked-outcome`):
+  0  every member accounted for (harvested, or provably had nothing to harvest)
+  2  usage error / no team found
+  3  AT LEAST ONE member has a transcript containing output that could NOT be harvested,
+     or has no locatable transcript despite having been given a prompt. This is the
+     loss-risk verdict and it is the reason this tool exits non-zero at all.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+MIN_OUTPUT_CHARS = 200          # below this a block is a status line, not a deliverable
+PROMPT_TAIL_CHARS = 400         # fallback join key: the TAIL of the brief, never the head
+TRANSCRIPT_MAX_AGE_DAYS = 14    # bound the scan; members older than this are not live work
+
+# WHY THE JOIN KEY IS THE FULL PROMPT, AND WHY A PREFIX IS BANNED.
+# The first implementation joined on the first 300 chars of the member's prompt. That shipped a
+# false join on its very first live run: sibling briefs from one panel share a boilerplate head
+# ("READ-ONLY. Do not write... THE BOX (fixed, no new hardware): Apple M1 Max..."), and two of
+# three briefs were byte-identical until char 320. With transcripts scanned newest-first, the
+# wrong one matched, and the tool reported HARVESTED with exit 0 while writing one member's
+# report under another member's name.
+#
+# That is worse than harvesting nothing: it manufactures a confident wrong attribution, and the
+# whole point of this tool is that nobody is checking. A prefix is a PROXY for the brief; the
+# brief itself is the identity. Match on the full text, and when falling back, fall back to the
+# TAIL — briefs diverge at the end (the task), never at the start (the preamble).
+#
+# Second defence: a transcript is CONSUMED when claimed. Even if two keys collided, the second
+# member cannot silently inherit the first one's transcript — it falls through and reports.
+
+
+def config_dirs() -> list[Path]:
+    """Every CLAUDE_CONFIG_DIR on this box, current one first.
+
+    A member can live in a different account's store than the lead, so a single-dir scan
+    is a silent miss. Ordering puts the live dir first so the common case is fast.
+    """
+    home = Path.home()
+    seen: list[Path] = []
+    cur = os.environ.get("CLAUDE_CONFIG_DIR")
+    if cur and Path(cur).is_dir():
+        seen.append(Path(cur))
+    for name in (".claude", ".claude-next", ".claude-secondary",
+                 ".claude-tertiary", ".claude-quaternary"):
+        d = home / name
+        if d.is_dir() and d not in seen:
+            seen.append(d)
+    return seen
+
+
+def find_team(team: str | None, lead_session: str | None) -> Path | None:
+    """Locate the team config.json. Explicit name wins, then lead session, then newest."""
+    candidates: list[Path] = []
+    for cd in config_dirs():
+        tdir = cd / "teams"
+        if not tdir.is_dir():
+            continue
+        for d in tdir.iterdir():
+            cfg = d / "config.json"
+            if cfg.is_file():
+                candidates.append(cfg)
+    if not candidates:
+        return None
+    if team:
+        for c in candidates:
+            if c.parent.name == team or c.parent.name == f"session-{team}":
+                return c
+        return None
+    if lead_session:
+        short = lead_session[:8]
+        for c in candidates:
+            if c.parent.name.endswith(short):
+                return c
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def iter_transcripts(cutoff: float):
+    """Yield every plausible session transcript newer than cutoff, newest first.
+
+    Skips `agent-*.jsonl` (subagent internals) and `wf_*` dirs (workflow internals) — neither
+    is a resumable member session, and including them only adds false join candidates.
+    """
+    found = []
+    for cd in config_dirs():
+        proj = cd / "projects"
+        if not proj.is_dir():
+            continue
+        for pdir in proj.iterdir():
+            if not pdir.is_dir() or pdir.name.startswith("wf_"):
+                continue
+            for f in pdir.glob("*.jsonl"):
+                if f.name.startswith("agent-"):
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                if st.st_mtime >= cutoff:
+                    found.append((st.st_mtime, f))
+    found.sort(reverse=True)
+    for _, f in found:
+        yield f
+
+
+def read_rows(path: Path) -> list[dict]:
+    rows = []
+    try:
+        with path.open(errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except (ValueError, TypeError):
+                    continue          # a torn last line is normal on a live transcript
+    except OSError:
+        return []
+    return rows
+
+
+def block_text(msg_content) -> str:
+    if isinstance(msg_content, str):
+        return msg_content
+    if isinstance(msg_content, list):
+        return "".join(b.get("text", "") for b in msg_content
+                       if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def first_user_text(rows: list[dict]) -> str:
+    for d in rows:
+        if d.get("type") != "user":
+            continue
+        t = block_text((d.get("message") or {}).get("content"))
+        if t:
+            return t
+    return ""
+
+
+def final_output(rows: list[dict], min_chars: int) -> tuple[str, str, int]:
+    """Return (text, timestamp, n_blocks) for the member's substantive assistant output.
+
+    Takes the LAST block above the threshold, not the concatenation: a member's earlier blocks
+    are narration ("I'll start by…"), and joining them would bury the deliverable. n_blocks is
+    reported so a caller can tell "one clean report" from "many partial ones".
+    """
+    blocks = []
+    for d in rows:
+        if d.get("type") != "assistant":
+            continue
+        t = block_text((d.get("message") or {}).get("content"))
+        if len(t.strip()) >= min_chars:
+            blocks.append((d.get("timestamp") or "", t))
+    if not blocks:
+        return "", "", 0
+    ts, txt = blocks[-1]
+    return txt, ts, len(blocks)
+
+
+def harvest(cfg_path: Path, out_dir: Path, min_chars: int, write: bool) -> tuple[list[dict], int]:
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except (OSError, ValueError) as exc:
+        print(f"cc-agent-harvest: unreadable team config {cfg_path}: {exc}", file=sys.stderr)
+        return [], 2
+
+    members = [m for m in cfg.get("members", []) if m.get("name") != "team-lead"]
+    if not members:
+        return [], 0
+
+    cutoff = time.time() - TRANSCRIPT_MAX_AGE_DAYS * 86400
+    transcripts = list(iter_transcripts(cutoff))
+
+    results: list[dict] = []
+    claimed: set = set()          # one member <-> one transcript; see the join-key note above
+    loss = False
+
+    for m in members:
+        name = m.get("name") or m.get("agentId", "unknown")
+        prompt = (m.get("prompt") or "").strip()
+        rec = {"name": name, "status": "", "chars": 0, "blocks": 0,
+               "path": "", "session": "", "model": m.get("model", ""),
+               "backend": m.get("backendType", "")}
+
+        if not prompt:
+            # No join key. Not a loss claim — some member shapes carry no stored prompt —
+            # but it IS unharvestable, so say which rather than reporting silence.
+            rec["status"] = "NO-PROMPT"
+            results.append(rec)
+            continue
+
+        # Exact key first. Only if the brief is nowhere verbatim (envelope mangling, truncation)
+        # fall back to its TAIL — and then demand the match be UNIQUE, because a non-unique
+        # fallback is precisely the false join this tool shipped once already.
+        matches = []
+        for t in transcripts:
+            if t in claimed:
+                continue
+            rows = read_rows(t)
+            if not rows:
+                continue
+            if prompt in first_user_text(rows):
+                matches.append((t, rows))
+                break                      # a full-prompt hit is exact; stop looking
+        if not matches:
+            tail = prompt[-PROMPT_TAIL_CHARS:]
+            for t in transcripts:
+                if t in claimed:
+                    continue
+                rows = read_rows(t)
+                if not rows:
+                    continue
+                if tail in first_user_text(rows):
+                    matches.append((t, rows))
+            if len(matches) > 1:
+                # Refuse to guess. An ambiguous join is a loss verdict, not a coin flip.
+                rec["status"] = "AMBIGUOUS"
+                loss = True
+                results.append(rec)
+                continue
+
+        match = matches[0] if matches else None
+        if match is None:
+            rec["status"] = "NO-TRANSCRIPT"
+            loss = True
+            results.append(rec)
+            continue
+        claimed.add(match[0])
+
+        tpath, rows = match
+        rec["session"] = tpath.stem
+        text, ts, nblocks = final_output(rows, min_chars)
+        rec["blocks"] = nblocks
+
+        if not text:
+            # The member produced no substantive block. That is a real answer (it never got
+            # going), not a harvest failure — do not inflate the loss verdict with it.
+            rec["status"] = "NO-OUTPUT"
+            results.append(rec)
+            continue
+
+        rec["chars"] = len(text)
+        if write:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            dest = out_dir / f"{name}.md"
+            header = (
+                f"# Harvested deliverable — `{name}`\n\n"
+                f"Recovered by `cc-agent-harvest` from the member's own transcript "
+                f"(`{tpath.stem}`), because a named `Agent` spawn returns no value to the lead.\n"
+                f"Model: `{rec['model'] or 'unknown'}` · backend: `{rec['backend'] or 'unknown'}` "
+                f"· final block: {ts or 'unknown'} · substantive blocks: {nblocks}\n\n"
+                f"Verbatim, unedited.\n\n---\n\n"
+            )
+            dest.write_text(header + text + "\n")
+            rec["path"] = str(dest)
+        rec["status"] = "HARVESTED"
+        results.append(rec)
+
+    return results, (3 if loss else 0)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="cc-agent-harvest",
+        description="Recover team members' deliverables from their own transcripts.")
+    ap.add_argument("--team", help="team name (with or without the session- prefix)")
+    ap.add_argument("--session", help="lead session id; selects that session's team")
+    ap.add_argument("--out", default=None,
+                    help="output dir (default: <cwd>/.harvest/<team>)")
+    ap.add_argument("--min-chars", type=int, default=MIN_OUTPUT_CHARS,
+                    help=f"minimum block size to count as a deliverable (default {MIN_OUTPUT_CHARS})")
+    ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    args = ap.parse_args()
+
+    lead = args.session or os.environ.get("CLAUDE_SESSION_ID")
+    cfg_path = find_team(args.team, lead)
+    if cfg_path is None:
+        print("cc-agent-harvest: no team config found", file=sys.stderr)
+        return 2
+
+    team_name = cfg_path.parent.name
+    out_dir = Path(args.out) if args.out else Path.cwd() / ".harvest" / team_name
+
+    results, rc = harvest(cfg_path, out_dir, args.min_chars, write=not args.dry_run)
+
+    if args.json:
+        print(json.dumps({"team": team_name, "config": str(cfg_path),
+                          "out": str(out_dir), "verdict": rc,
+                          "members": results}, indent=2))
+        return rc
+
+    if not results:
+        print(f"cc-agent-harvest: {team_name} — no members to harvest")
+        return rc
+
+    print(f"cc-agent-harvest: {team_name}  ({cfg_path})")
+    for r in results:
+        detail = f"{r['chars']:>7} chars  {r['path'] or '(not written)'}" \
+            if r["status"] == "HARVESTED" else ""
+        print(f"  {r['status']:<14} {r['name']:<20} {detail}")
+    if rc == 3:
+        print("\ncc-agent-harvest: VERDICT loss-risk — a member's work could not be located.",
+              file=sys.stderr)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
