@@ -339,18 +339,78 @@ currently exercises; the cost of being late is silent duplicate execution agains
 ⚠️ **This table is a perishable measurement, not a standing fact** — CLI surfaces change per release
 (`published-figure-decays-with-its-source`). Re-run the probes rather than citing this table.
 
+### Settled since — entitlement was never ONE fact (2026-08-08)
+
+~~**Cloud entitlement is per-account and remains unverified.** … Settling this needs a probe that
+does not exist yet, or an operator check in the web UI.~~ **← SETTLED BY EXECUTION. All three
+clauses are false: the probe exists, it was run, and no web-UI check is required.** The question was
+unanswerable as posed because it asked *one* thing about **three separately-gated surfaces**, which
+is why "is cloud enabled?" kept returning contradictory answers:
+
+| Surface | Gate | Measured on this box |
+| --- | --- | --- |
+| `Agent(isolation: "remote")` | `ian()` = `hasUsedRemoteSession && hasRemoteEnvironment && Ke("tengu_neapolitan")` | **OFF, all four accounts** — `hasUsedRemoteSession` ABSENT everywhere and `tengu_neapolitan` in no `cachedStatsigGates`, so the conjunction is false regardless of the third term |
+| CLI attach — `claude --cloud <id>` | Anthropic rollout | **OFF, uniformly** — `not enabled for your account` ×4 (`CLOUD_OBSERVABILITY.md` §6.4) |
+| CLI create — `claude --cloud "<desc>"` · routines API | none found | **WORKS** — creates land (§6.5); `RemoteTrigger{action:"list"}` returned **HTTP 200** live from this session |
+
+🚨 **`isolation:"remote"` reportedly does not fail loudly when gated — it silently downgrades to
+`isolation:"worktree"` and logs a line.** *Provenance: that behaviour is a **binary read**, relayed
+from the filing session and NOT re-derived here* (`spec-named-mechanism-may-be-prose-only`). What
+**is** confirmed here: all four identifiers — `tengu_neapolitan`, `hasRemoteEnvironment`,
+`remote_launched`, `async_launched` — are present as fixed strings in the running 2.1.220 binary
+(`~/.claude-220/…/bin/claude.exe`, 257 MB, compiled — grep it with `-a -F` and a timeout, it is not
+readable JS). Two distinct status values existing is consistent with a downgrade but does not prove
+one. Either way the experimental rule is forced: branch on the returned **status**, never on call
+success, or a naive test reports cloud success while having run locally
+(`claimed-outcome-vs-checked-outcome`).
+
+🚨 **`hasRemoteEnvironment` is a mutable RECORD, and quoting its distribution is publishing a
+decaying figure.** Measured three times, three answers — each correct when taken:
+
+| When | Reading | Source |
+| --- | --- | --- |
+| 2026-08-07 | **1 of 4** — `~/.claude-quaternary` only | the backlog item this section answers |
+| 2026-08-08 01:08 | **2 of 4** — `+ ~/.claude-next` | landed correction `99aad939` |
+| 2026-08-08 17:26 | **4 of 4** — all four | this section (`~/.claude-secondary` and `~/.claude-tertiary` written 17:22 / 17:23) |
+
+The spread is monotone and client-written (`bin/cc-cloud` does not write the key), and it happened
+*while* the fleet was probing cloud paths — so the act of measuring moves the reading, and the local
+negative control is now gone. Two consequences: the key can never be an entitlement oracle (which is
+the same verdict §6.4 reached from the refusal probe, reached independently from the other
+direction), and **no document may cite its distribution** — cite the command
+(`published-figure-decays-with-its-source`):
+
+```text
+for d in ~/.claude-next ~/.claude-secondary ~/.claude-tertiary ~/.claude-quaternary; do
+  grep -o '"hasRemoteEnvironment":[^,}]*' "$d/.claude.json" || echo ABSENT; done
+```
+
+⚠️ `~/.claude` is the live symlink layer, **not** an account dir — sweeping it in place of a real
+account still reports a plausible count.
+
+**Routines are account-scoped, and one already exists.** The item recorded `{"data":[]}` on account
+`next`; the same call from this session (`next3`, `~/.claude-tertiary`) returns **one** enabled
+routine — `trig_019FHJArDsm8KaMqNRNq2CX6`, created `via http_api` 2026-06-14, next run 2027-06-01,
+carrying a materialized `job_config.ccr.environment_id`. So "zero routines exist" was an
+account-scoped reading, not a fleet fact — the same scoping §10.2 of the plan found for cloud
+sessions. **`CronCreate`/`CronList` are NOT this path**: they are local, in-memory, session-only and
+expire in 7 days. The cloud path is `/schedule` → `RemoteTrigger` → CCR.
+
+`bin/claude-accounts` still has **no cloud-entitlement concept** — that part of the original bullet
+stands. It is no longer a blocker, just the wrong instrument: read the per-account `.claude.json`
+keys, or run the refusal probe (§6.4). The `CONCURRENCY_PROGRAM.md` S5 instruction to "check
+`/accounts`" still points at a surface that cannot answer it
+(`spec-named-mechanism-may-be-prose-only`).
+
+~~**Nothing yet passes `--venue cloud`.**~~ **← also stale: `bin/cc-dispatch:1122` is the producer**
+(`claim_args+=(--venue cloud)`, landed `b25b5c24`), and `bin/cc-backlog:1112` gates off-box
+eligibility on it. The flag is no longer inert.
+
 ### Still open
 
-- **Cloud entitlement is per-account and remains unverified.** Census §5 and `CONCURRENCY_PROGRAM.md`
-  S5 both say check `/accounts`, never assume — and `bin/claude-accounts` reads only the 5 h / weekly /
-  Fable usage endpoints. It has **no cloud-entitlement concept**, so the S5 instruction currently
-  points at a surface that cannot answer it (`spec-named-mechanism-may-be-prose-only`). Settling this
-  needs a probe that does not exist yet, or an operator check in the web UI.
 - **The heartbeat emitter (O1) is worker-side.** It belongs in the cloud worker's brief, not in
-  `cc-backlog`, and cannot be written until the dispatch path above is chosen.
-- **Nothing yet passes `--venue cloud`.** The guard is a prerequisite, deliberately landed ahead of its
-  producer; the first cloud dispatch path must set it. Until then the flag is inert by construction —
-  which is what makes landing it now safe.
+  `cc-backlog`, and cannot be written until the dispatch path above is chosen. Still unbuilt — no
+  `cc-heartbeat` producer exists in `bin/` or `scripts/`.
 
 ---
 

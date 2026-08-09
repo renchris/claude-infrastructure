@@ -427,6 +427,22 @@ labels and directory names do not agree — **cite the config dir, never the ord
 (`[[caller-census-keyed-on-path-misses-the-name]]`: an identifier that resolves two ways will
 eventually resolve the wrong one).
 
+🔧 **Second correction, 2026-08-08 17:26 — it is now `true` on ALL FOUR, and that is the real
+finding: the distribution is not a fact, it is a decaying reading.** Re-measured (JSON-parsed, not
+grepped) 16 h after the correction above landed: `~/.claude-secondary` and `~/.claude-tertiary` had
+flipped, their `.claude.json` written at **17:22 and 17:23 the same afternoon** — minutes before the
+sweep, while the fleet was probing cloud paths. Three measurements, three answers, each correct when
+taken: **1 of 4** (2026-08-07) → **2 of 4** (`99aad939`, 01:08) → **4 of 4** (17:26).
+
+The spread is monotone and written by the client (`bin/cc-cloud` does not write the key), so the act
+of probing cloud paths moves the reading — **the local negative control no longer exists.** The
+record-vs-entitlement verdict is strengthened a third time and from a new direction: the key's value
+changes while entitlement does not. Practical rule — **do not cite a distribution for this key, cite
+the command**; a table of it is stale on a timescale of hours
+(`[[published-figure-decays-with-its-source]]`). The two traps above still bind, and the table
+immediately above is kept as the 01:08 reading, not as current state. Detail:
+`docs/research/cloud-observability-2026-08-07.md` §7.
+
 Two properties make this probe usable rather than merely repeatable: the entitlement gate is checked
 **before** id validation, so a fake id is enough and **nothing is created**; and the same binary
 emits three *distinct* refusals across the sibling paths above, so the instrument is not a
