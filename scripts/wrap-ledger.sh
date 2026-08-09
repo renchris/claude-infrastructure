@@ -131,6 +131,82 @@ die_notrepo() {
 command -v git >/dev/null 2>&1 || { printf 'wrap-ledger: git not found.\n' >&2; exit 3; }
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die_notrepo
 
+# ── --machine MEMO (Wave B / §S6.4) ────────────────────────────────────────────────────────────
+# WHY HERE AND NOWHERE ELSE. One `--machine` run is 10 git subprocesses (17 when the live-layer arm
+# runs), and SIX Stop hooks each call it on the same event: session-continue.sh:529,
+# completion-assert.sh:189/:191, anti-deference-nudge.sh:249, boundary-handoff.sh:272,
+# operator-readout.sh:426 and :991. Censused 2026-08-09, a working close is ~72-82 git subprocesses,
+# of which roughly six of every seven are LITERALLY the same query as another one in the same event.
+# Memoising at each call site would be six edits to six safety-adjacent hooks; memoising here is one
+# edit at the chokepoint every one of them already funnels through (MEMORY.md
+# enforcement-must-live-at-the-chokepoint).
+#
+# KEYED BY CONTENT, NOT BY TIME. The key is HEAD + the full porcelain digest + the mtimes of the
+# non-git stores the rungs read (decisions ⇒ ⛔, backlog ⇒ 👤, failed migrations ⇒ 🚀). A pure TTL
+# would let a tree go dirty inside the window and still serve a ✅ — the false-done this ledger
+# exists to make impossible. `git status --porcelain` is therefore paid on every call and is NOT
+# replaced by a stat-bit shortcut: wrap-ledger.sh:157-169 already records that experiment and its
+# false-clean result. The TTL is a SECOND bound layered on top, never the primary key.
+#
+# WHAT THE RESIDUAL STALENESS CAN AND CANNOT DO. A sibling's fetch can move the trunk ref without
+# moving any keyed input, so a hit inside the TTL can serve an AHEAD count up to TTL seconds old.
+# That errs toward 📦 (still-parked) and never toward ✅ — the direction that matters, since the
+# hazard this file names is FM1 park-and-call-it-done, not the reverse.
+#
+# OFF DEGRADES TO TODAY. WRAP_CACHE=off calls straight through. It is a cache, not a guard, so
+# disabling it costs forks and changes no verdict — the opposite of hook-chain.sh's no-skip law,
+# and the reason a kill switch is safe here where it would not be there.
+WRAP_CACHE="${WRAP_CACHE:-on}"
+WRAP_CACHE_TTL_S="${WRAP_CACHE_TTL_S:-15}"
+case "$WRAP_CACHE_TTL_S" in ''|*[!0-9]*) WRAP_CACHE_TTL_S=15 ;; esac
+WRAP_CACHE_DIR="${WRAP_CACHE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/wrap-ledger}"
+CACHE_FILE=""
+
+cache_fingerprint() {
+  # Every input a rung can turn on, or nothing. Cost: 2 git + 1 stat.
+  local head status_digest stores
+  head="$(git rev-parse HEAD 2>/dev/null)" || return 1
+  status_digest="$(git status --porcelain 2>/dev/null | cksum)" || return 1
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  # One stat call over every store, not one per store. Missing paths are fine: stat reports them on
+  # stderr and contributes nothing, which is a stable fingerprint component for "absent".
+  stores="$(stat -f '%m' \
+      "$cfg/autonomy/decisions" \
+      "$cfg/autonomy/backlog" \
+      "${CC_MIGRATIONS_STATE:-$cfg/autonomy/migrations}/failed" \
+      2>/dev/null | tr '\n' '.')"
+  printf '%s|%s|%s|%s|%s|%s' \
+    "$head" "$status_digest" "$stores" "$PWD" "${SESSION_FLAG:-}" "${WRAP_TRUNK:-}"
+}
+
+if [ "$MODE" = machine ] && [ "$WRAP_CACHE" != off ]; then
+  if fp="$(cache_fingerprint)"; then
+    key="$(printf '%s' "$fp" | cksum | tr -d ' ')"
+    CACHE_FILE="$WRAP_CACHE_DIR/$key.machine"
+    # AGE IN SECONDS, via stat — NOT `find -mmin`. BSD find takes -mmin in whole minutes and
+    # truncates, so every TTL under 60 s evaluated as "+0" — which matches nothing for a file
+    # written this minute, and therefore reported EVERY entry as fresh. The bound was inert for its
+    # entire first draft and its own test is what caught it: a documented mechanism that is only
+    # prose reads exactly like a working one until something asserts against it.
+    cache_fresh() {
+      local now mt age
+      now="$(date +%s 2>/dev/null)" || return 1
+      mt="$(stat -f '%m' "$1" 2>/dev/null)" || return 1
+      age=$(( now - mt ))
+      [ "$age" -ge 0 ] && [ "$age" -lt "$WRAP_CACHE_TTL_S" ]
+    }
+    if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && cache_fresh "$CACHE_FILE"; then
+      # A truncated cache file must never be served: a consumer greps RUNG= and a partial write
+      # would answer with a rung that was never computed. -s plus the RUNG= check below is the
+      # cheapest form of "the record is whole".
+      if grep -q '^RUNG=' "$CACHE_FILE" 2>/dev/null; then
+        cat "$CACHE_FILE"
+        exit 0
+      fi
+    fi
+  fi
+fi
+
 # ── Trunk ref: explicit override → origin/HEAD → origin/main → origin/master → none ──
 TRUNK="${WRAP_TRUNK:-}"
 if [ -z "$TRUNK" ]; then
@@ -572,8 +648,30 @@ rung_next() {
   esac
 }
 
+write_cache() { # <the exact bytes this run is about to print>
+  # ATOMIC OR NOT AT ALL. Six hooks read this file concurrently on one Stop; a reader that catches a
+  # half-written file would parse a rung out of a fragment. mktemp + mv inside the same directory is
+  # a rename on one filesystem, so a reader sees the whole old file or the whole new one.
+  # BSD mktemp honours only TRAILING Xs (MEMORY.md prescribed-remedy-worse-than-the-bug).
+  [ -n "$CACHE_FILE" ] || return 0
+  mkdir -p "$WRAP_CACHE_DIR" 2>/dev/null || return 0
+  local tmp; tmp="$(mktemp "$WRAP_CACHE_DIR/.w.XXXXXX" 2>/dev/null)" || return 0
+  if printf '%s' "$1" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$CACHE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  # A cache that cannot be written is a slow ledger, never a wrong one — every failure path above
+  # returns 0 and the caller has already computed the real answer.
+  return 0
+}
+
 case "$MODE" in
-  machine) emit_machine ;;
+  machine)
+    MACHINE_OUT="$(emit_machine)"
+    write_cache "$MACHINE_OUT"
+    printf '%s' "$MACHINE_OUT"
+    ;;
   full)    emit_full ;;
   *)       printf '%s\n' "$READOUT" ;;
 esac
