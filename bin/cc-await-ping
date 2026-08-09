@@ -250,11 +250,42 @@ trap '_unbeat' EXIT
 # Caveat kept honest — bash defers a trap until the current foreground command returns, so a TERM
 # aimed at this process alone can be up to --interval seconds late. A group-TERM (the measured 144)
 # also kills the `sleep`, so the trap fires promptly in exactly the case that produced the defect.
+#
+# ── F-2 (2026-08-09): SAY IT ON A CHANNEL THE LEAD ACTS ON, NOT ONLY THE ONE IT IGNORES ────────────
+# MEASURED the same night as F-3: the lead's watcher exited 144 — which the header above proves is an
+# external group-TERM — and THE LEAD DID NOT NOTICE IT HAD GONE DEAF. The text below is correct and
+# says exactly the right thing; the problem is where it rides. stderr of a background task the harness
+# renders as `failed with exit code 144` is a stream a lead triages as noise, and a lead must never
+# infer its own liveness from its watcher's absence of complaint.
+#
+# So the verdict is ALSO written into the watched inbox itself — the one channel this whole substrate
+# already proves a lead consumes. hooks/mailbox-drain.sh surfaces it at the next SessionStart /
+# UserPromptSubmit / PostToolUse boundary as `📬 peer mail` additionalContext AND as an operator-visible
+# systemMessage, so the human sees the wake path drop too. No new transport, no new convention: the
+# line is the ordinary `<ISO> [<from>] <msg>` the box already holds.
+#
+# WRITTEN DIRECTLY, NOT VIA cc-notify: cc-notify resolves aliases and follows `.forward` chains, and
+# the box we must reach is precisely the one WE were watching. A resolver could send this somewhere
+# else — the failure mode would be a wake-path alarm delivered to a session that has no such watcher.
+# Best-effort and never fatal: we are already dying, and a failed append must not cost the verdict on
+# stderr or the marker cleanup. It is deliberately NOT filtered by the drain's fixture/noise grep, so
+# it counts as real traffic and cannot be crowded out.
+_wake_down_notice() {
+  local box="$MAILBOX_DIR/${CUR_UUID}.md"
+  [ -n "${CUR_UUID:-}" ] || return 0
+  mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 0
+  printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s) — it did NOT time out and consumed no ping. You are now DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" \
+    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" \
+    >> "$box" 2>/dev/null || true
+  return 0
+}
 # shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines below are its only callers.
 _sig_verdict() {   # <signame> <signum>
   trap - TERM HUP INT EXIT
   _unbeat
-  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
+  _wake_down_notice "$1"
+  echo "cc-await-ping: verdict=killed signal=SIG$1 uuid=${CUR_UUID} — this watcher was TERMINATED from outside; it did NOT time out and no ping was consumed. The wake path for [$CUR_UUID] is now DOWN and its .watching marker has been cleared, so nothing is still claiming it. A WAKE-PATH-DOWN line has also been written into this inbox, so the next boundary surfaces it as ordinary peer mail rather than leaving the verdict on a stream the harness labels 'failed'. The sender is not recoverable from an exit code. If you are going idle, RE-ARM." >&2
   exit $(( 128 + $2 ))
 }
 trap '_sig_verdict TERM 15' TERM
