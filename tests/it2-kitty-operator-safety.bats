@@ -50,10 +50,35 @@ SH
   chmod +x "$BIN/kitty"
   export CC_TERM_KITTY="$BIN/kitty"
   export PATH="$BIN:$PATH"
-  # Make the shim believe it is inside kitty (its own terminal-dispatch seam).
   export KITTY_WINDOW_ID=300
   export CC_KITTY_ARGV_SPAWN=0
-  # The variables the subject puts on every pane it launches, inherited by every descendant of a
+  # THE PANE-IDENTITY ENV, PINNED — never inherited. KITTY_WINDOW_ID was commented here as making
+  # "the shim believe it is inside kitty", and that was false: bin/it2-kitty refuses at its terminal
+  # gate long before it reaches any verb unless BOTH hold — bin/cc-in-kitty agrees this pane is
+  # kitty's, and a control socket is named. KITTY_WINDOW_ID alone satisfies NEITHER. cc-in-kitty
+  # walks the process tree up to KITTY_PID and answers 2 UNVERIFIABLE without it, so the shim exits
+  # 3 with "refusing to drive kitty from a pane that is not kitty's" and 7 of these 8 tests fail on
+  # their `status` line having never run the subject at all — including the two the suite is named
+  # for, which then "pass their point" for the wrong reason: no send-text is recorded because the
+  # shim died at the gate, not because the guard refused.
+  #
+  # Inside a kitty session KITTY_PID/KITTY_LISTEN_ON arrive ambiently, so this suite passed in every
+  # hand-run while being RED under launchd — which is precisely where postland-verify runs it
+  # (com.claude.postland-verify sets PATH and nothing else). Measured: 3 postland REDs
+  # (c53ea13efa44, 4b3b6b010e6c, 04470b5d4250), zero flakes.jsonl rows, and green on this same tree
+  # the moment an ambient KITTY_PID leaked in. Same defect and same remedy as the sibling suite's
+  # item 04e8028b980d (4857bb9b) — a green no developer could reproduce as red, and a red no rerun
+  # could clear.
+  #
+  # CC_TERM=kitty is cc-in-kitty's OWN documented override, honoured verbatim ahead of every check,
+  # so the precondition is DECLARED here rather than walked — no ps, no ancestry, no ambient state.
+  # CC_TERM_KITTY_TO would satisfy both gates with one variable and is deliberately NOT used: it
+  # adds `--to <socket>` to every kitty argv, and the argv these tests assert on (`--match id:300`,
+  # `--source-window id:300`) is the one production actually issues.
+  export CC_TERM=kitty
+  export KITTY_LISTEN_ON="unix:$BATS_TEST_TMPDIR/kitty-sock"
+  unset CC_TERM_KITTY_TO
+  # …and the variables the subject puts on every pane it launches, inherited by every descendant of a
   # fired pane — bats included, when an agent runs this from the pane that fired it (0588d255).
   # In setup, not per-test: a per-test unset leaves every OTHER test inheriting.
   unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
