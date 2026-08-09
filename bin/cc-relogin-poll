@@ -164,7 +164,19 @@ hours_secs() { # <fmt_h-or-numeric-string> -> seconds | ""
 }
 
 # ── detection ladder ────────────────────────────────────────────────────────────────────────
-# ROWS lines (tab-separated, NO empty fields — "-" stands in): acct, deadline_epoch, k, launcher
+# ROWS lines (tab-separated, NO empty fields — "-" stands in):
+#   acct, deadline_epoch, k, launcher, deadline_src, cause, state
+#
+# `deadline_src` is the PROVENANCE of column 2, and it exists because that column serves two jobs
+# that need different values:
+#   ORDERING   — "how urgent is this account?" (the T-window filter + the nearest-first sort + the
+#                state file's cycle key). Every row needs a number here, always.
+#   PUBLICATION— "when does this account's login actually die?" (the escalation text, the class-C
+#                board row, the --json object). Only a MEASURED deadline may be published.
+# stamp/hours are measurements. `required` is NOT: it is NOW used as an ordering position for a row
+# whose deadline the producer deliberately did not publish (see the REQUIRED arm below), and it is
+# the one value that must never be printed as a deadline. `expired` is a measured BOUND — the
+# deadline is known to be at or before now.
 NOW="$(now)"; ROWS=""; DETECT="unavailable"; MISSING=""; WINDOW_CAPPED=""
 # READ THE HELP ONCE, MATCH IT WITH `case` — NEVER `… -h | grep -q` (2026-07-30).
 # `grep -q` exits the instant it matches, so the producer is SIGPIPEd on the NEXT line it tries
@@ -205,22 +217,42 @@ if [ "$LS_ADVERTISED" = 1 ]; then
     [ -n "$WINDOW_CAPPED" ] && log "WINDOW-CAPPED $WINDOW_CAPPED"
     # norm 6 first: the frozen TSV carries an optional `reason`, and an empty one would otherwise
     # collapse with its neighbour and slide `when`/`hours` into the wrong variables.
-    while IFS=$'\t' read -r a state _reason when hours launcher; do
+    while IFS=$'\t' read -r a state reason when hours launcher; do
       case "${state:-}" in REQUIRED|EXPIRING) ;; *) continue ;; esac   # shape-validated, not trusted
+      src=stamp; cause="-"
       dl="$(iso_epoch "$(dash "$when")")"
       if [ "$dl" = 0 ]; then
         s="$(hours_secs "$(dash "$hours")")"
-        if [ -n "$s" ]; then dl=$((NOW + s))
+        if [ -n "$s" ]; then dl=$((NOW + s)); src=hours
         elif [ "$state" = REQUIRED ]; then
           # REQUIRED's own documented meaning is "action required NOW", so NOW is that surface's
           # ANSWER, not a fabricated deadline. Before this, a REQUIRED row whose cause was not its
           # deadline (a rejected grant with time still on the stamp — next3's real 2026-07-24
           # shape) printed "—" in both deadline columns and was `continue`d: the poller silently
           # dropped the one account that most needed it, forever.
-          dl="$NOW"
+          #
+          # …but NOW is that answer only as an ORDERING POSITION, never as a deadline to PUBLISH,
+          # and conflating the two is what `src=required` exists to stop. The producer blanks both
+          # deadline columns DELIBERATELY, and says so at bin/claude-accounts:2284 — "An account can
+          # need /login for a reason that is NOT its deadline … printing that stamp beside REQUIRED
+          # read as 'required, and it expires in 14 days'. The deadline columns are therefore filled
+          # only when the deadline is what is driving the verdict; otherwise the reason column
+          # carries the cause". Reading that "—" as a deadline of NOW re-manufactures exactly the
+          # misreading the producer removed, in the opposite direction: measured live on 2026-08-03,
+          # next2 escalated TWICE with `T-0h to the login deadline (2026-08-03T14:34:18Z)` while its
+          # own grant stamp read 674.6h out (docs/research/forced-relogin-rootcause-2026-08-02.md
+          # UPDATE 3). Worse than cosmetic — a class-C row whose `deadline` is NOW is EARLIER than
+          # the account's live login_expires_at, which is precisely cc-blockers' stale-drop
+          # predicate (bin/cc-blockers drop_stale_relogin), so the loudest surface this poller has
+          # discarded the row by construction. Measured: 1 row raised, 0 rendered.
+          #
+          # So: keep NOW for ordering, publish NO deadline, and carry the `reason` the producer says
+          # holds the cause — it was being read into `_reason` and thrown away.
+          dl="$NOW"; src=required; cause="${reason:--}"
         else continue; fi                        # EXPIRING with no deadline is genuinely unknowable
       fi
-      ROWS+="$a	$dl	-	$launcher"$'\n'   # k is not in the TSV — resolved lazily, only if we act
+      # k is not in the TSV — resolved lazily, only if we act
+      ROWS+="$a	$dl	-	$launcher	$src	$cause	$state"$'\n'
     done < <(printf '%s\n' "$LS_OUT" | norm 6)
   else
     MISSING="claude-accounts --login-status advertised but exited $LS_RC"
@@ -235,12 +267,20 @@ if [ "$DETECT" = unavailable ]; then
     DETECT="json-fields"
     while IFS=$'\t' read -r a at hrs expired k launcher; do
       [ -n "$a" ] && [ "$a" != "-" ] || continue
+      src=stamp
       dl="$(iso_epoch "$(dash "$at")")"
       if [ "$dl" = 0 ]; then
         s="$(hours_secs "$(dash "$hrs")")"
-        if [ -n "$s" ]; then dl=$((NOW + s)); elif [ "$expired" = true ]; then dl="$NOW"; else continue; fi
+        # `expired` is NOT the `required` case: login_expired=true says the deadline is at or
+        # before now, so NOW is a MEASURED upper bound and stays publishable. The REQUIRED arm
+        # above has no bound at all — its deadline may be weeks out and simply is not the cause.
+        if [ -n "$s" ]; then dl=$((NOW + s)); src=hours
+        elif [ "$expired" = true ]; then dl="$NOW"; src=expired
+        else continue; fi
       fi
-      ROWS+="$a	$dl	$k	$launcher"$'\n'
+      # No state token on this surface — `-`, never a guess. Deriving REQUIRED/EXPIRING here would
+      # be a second copy of claude-accounts' classifier, free to rot against it.
+      ROWS+="$a	$dl	$k	$launcher	$src	-	-"$'\n'
     done < <(printf '%s' "$JS" | jq -r '.rows[]? | select(type=="object") | [(.acct//""),(.login_expires_at//""),
               ((.login_expires_h // "")|tostring),((.login_expired//false)|tostring),((.k // "")|tostring),(.launcher//"")]
               | @tsv' 2>/dev/null | norm 6)
@@ -269,9 +309,23 @@ if [ "${NCAND:-0}" -eq 0 ]; then
     '{ts:(now|todate),detection:$d,trigger_days:$td,candidates:0,action:"none",exit:0}'
   exit 0
 fi
-IFS=$'\t' read -r ACCT DL K LAUNCHER <<< "$(printf '%s' "$CAND" | head -1)"
-K="$(dash "$K")"; LAUNCHER="$(dash "$LAUNCHER")"
-SECS_LEFT=$((DL - NOW)); HOURS_LEFT=$((SECS_LEFT / 3600)); DL_ISO="$(epoch_iso "$DL")"
+IFS=$'\t' read -r ACCT DL K LAUNCHER DLSRC CAUSE STATE <<< "$(printf '%s' "$CAND" | head -1)"
+K="$(dash "$K")"; LAUNCHER="$(dash "$LAUNCHER")"; STATE="$(dash "${STATE:-}")"
+DLSRC="$(dash "${DLSRC:-stamp}")"; CAUSE="$(dash "${CAUSE:-}")"; [ -n "$DLSRC" ] || DLSRC=stamp
+SECS_LEFT=$((DL - NOW)); HOURS_LEFT=$((SECS_LEFT / 3600))
+
+# ── ORDERING is settled; PUBLICATION starts here, and only a MEASURED deadline crosses ────────
+# Below this line $DL and $SECS_LEFT still decide WHAT WE DO (escalate? attempt? which cycle?) —
+# that part is right and unchanged. $DL_ISO / $HOURS_LEFT decide WHAT WE CLAIM, and on the
+# `required` path there is nothing to claim: DL_ISO is empty and hours_left is JSON null, so no
+# consumer can read a fabricated instant back out of this poller. $DL_DISP / $T_DISP are the log's
+# renderings of the same two states — "unknown" and "T-?" — never a number we did not measure.
+if [ "$DLSRC" = required ]; then
+  DL_KNOWN=0; DL_ISO=""; DL_DISP="unknown(no-deadline-published)"; T_DISP="T-?"; HL_JSON=null
+else
+  DL_KNOWN=1; DL_ISO="$(epoch_iso "$DL")"; DL_DISP="$DL_ISO"; T_DISP="T-${HOURS_LEFT}h"
+  HL_JSON="$HOURS_LEFT"
+fi
 
 # ── state: attempts + escalation are keyed to THIS deadline; a moved deadline resets both ────
 SFILE="$STATE_DIR/relogin-poll-$ACCT.json"; S_DL=""; S_ATT=0; S_ESC=""
@@ -296,13 +350,22 @@ if [ "$SECS_LEFT" -le $((ESC_HOURS * 3600)) ]; then
   # state that reset every tick, so the real 2026-07-31 board row claimed "no k==0 window caught in
   # 0 attempt(s)" after four attempts — three of which reached cc-relogin.
   ESC_NOW=1
-  if [ "$S_ATT" -eq 0 ]; then
-    ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and no k==0 window caught yet — every tick so far found live sessions"
+  # WHY we are loud, in the surface's OWN terms. The clock sentence is reachable only when a
+  # deadline was measured; a `required` row says what actually drives it — the state and the cause
+  # claude-accounts published beside it — and says plainly that no deadline is being claimed. The
+  # operator reading "T-0h" against a grant with 674h on its stamp is the defect this replaces.
+  if [ "$DL_KNOWN" = 1 ]; then
+    ESC_WHY="T-${HOURS_LEFT}h to the login deadline ($DL_ISO)"
   else
-    ESC_REASON="T-${HOURS_LEFT}h to the login deadline ($DL_ISO) and $S_ATT attempt(s) against it have not renewed it"
+    ESC_WHY="login state is REQUIRED now (cause: ${CAUSE:-not published}) and claude-accounts published NO deadline for it — the deadline is not what drives this verdict"
+  fi
+  if [ "$S_ATT" -eq 0 ]; then
+    ESC_REASON="$ESC_WHY and no k==0 window caught yet — every tick so far found live sessions"
+  else
+    ESC_REASON="$ESC_WHY and $S_ATT attempt(s) against it have not renewed it"
   fi
 elif [ "$S_ATT" -ge "$MAX_ATTEMPTS" ]; then
-  ESC_NOW=1; ESC_REASON="$S_ATT attempt(s) against deadline $DL_ISO all failed (cap $MAX_ATTEMPTS) — re-login is not self-healing"
+  ESC_NOW=1; ESC_REASON="$S_ATT attempt(s) against deadline $DL_DISP all failed (cap $MAX_ATTEMPTS) — re-login is not self-healing"
 fi
 ESCALATED=0
 if [ "$ESC_NOW" = 1 ]; then
@@ -313,15 +376,29 @@ if [ "$ESC_NOW" = 1 ]; then
     # Ratchet the stored key forward: the row is on the board for THIS cycle, and the derived
     # deadline drifts every tick, so a fixed key would drift out of tolerance and re-page.
     S_ESC="$DL"
-    log "ESCALATED(already) $ACCT deadline=$DL_ISO — row already on the board for this cycle, not re-raising"
+    log "ESCALATED(already) $ACCT deadline=$DL_DISP — row already on the board for this cycle, not re-raising"
   else
     mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
+    # `deadline` is EMPTY, not NOW, when none was measured — and `deadline_known` says which of the
+    # two states an empty field is, so no consumer has to guess "unpublished" from "dropped a field".
+    # An empty deadline lands in cc-blockers' documented fail-open ("$d == null … keep"): it is the
+    # branch that file chose on purpose, on the polarity its author stated — "a stale row is noise,
+    # a dropped live one is silence". With NOW here the row was silence.
+    # `state` closes a contract cc-blockers already had and this producer never met: its renderer
+    # reads `(.state // .reason)` into a 12-char STATE column and its own suite fixtures the field
+    # on rows attributed to `cc-relogin-poll` (tests/cc-relogin-status.bats rl()), while every row
+    # this poller has ever written omitted it — so that column has only ever shown the first 12
+    # characters of the reason prose. Sent when the surface published one; DELETED (not "") when it
+    # did not, so the json-fields path keeps falling back to `.reason` exactly as before.
     if jq -nc --arg ts "$(utc)" --arg acct "$ACCT" --arg dl "$DL_ISO" --arg reason "$ESC_REASON" \
-              --arg cmd "$RECOVER_CMD" --arg launcher "${LAUNCHER:-}" \
+              --arg cmd "$RECOVER_CMD" --arg launcher "${LAUNCHER:-}" --arg st "$STATE" \
+              --arg src "$DLSRC" --arg cause "$CAUSE" --argjson known "$DL_KNOWN" \
          '{ts:$ts,actor:"cc-relogin-poll",kind:"relogin-blocked",acct:$acct,account:$acct,
-           deadline:$dl,launcher:$launcher,reason:$reason,recover_cmd:$cmd}' >> "$IDL_FILE"
+           deadline:$dl,deadline_known:($known==1),deadline_src:$src,cause:$cause,state:$st,
+           launcher:$launcher,reason:$reason,recover_cmd:$cmd}
+          | if $st == "" then del(.state) else . end' >> "$IDL_FILE"
     then
-      S_ESC="$DL"; log "ESCALATED $ACCT deadline=$DL_ISO reason=$ESC_REASON recover=$RECOVER_CMD"
+      S_ESC="$DL"; log "ESCALATED $ACCT deadline=$DL_DISP src=$DLSRC reason=$ESC_REASON recover=$RECOVER_CMD"
     else
       log "ESCALATION-WRITE-FAILED $ACCT board=$IDL_FILE — recover: $RECOVER_CMD"
       echo "cc-relogin-poll: could not write the class-C row to $IDL_FILE — recover: $RECOVER_CMD" >&2
@@ -339,14 +416,14 @@ case "$K" in ''|0|*[!0-9]*) K_BUSY=0 ;; *) K_BUSY=1 ;; esac
 ACTION="invoked"; CHILD_RC=""
 if [ "$DRYRUN" = 1 ]; then
   ACTION="dry-run"
-  log "DRY-RUN $ACCT deadline=$DL_ISO (T-${HOURS_LEFT}h, k=${K:-?}, attempts=$S_ATT) would run: $RELOGIN_BIN $ACCT"
+  log "DRY-RUN $ACCT deadline=$DL_DISP ($T_DISP, k=${K:-?}, attempts=$S_ATT) would run: $RELOGIN_BIN $ACCT"
 elif [ "$K_BUSY" = 1 ]; then
   ACTION="skipped-busy"     # NOT an attempt: nothing was invoked, so the attempt cap must not move
-  log "SKIP $ACCT k=$K (>0) — cc-relogin would refuse; deadline=$DL_ISO T-${HOURS_LEFT}h attempts=$S_ATT"
+  log "SKIP $ACCT k=$K (>0) — cc-relogin would refuse; deadline=$DL_DISP $T_DISP attempts=$S_ATT"
   write_state "$S_ATT" "$S_ESC" "skipped-busy"
 else
   S_ATT=$((S_ATT + 1))
-  log "ATTEMPT #$S_ATT $ACCT deadline=$DL_ISO T-${HOURS_LEFT}h k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
+  log "ATTEMPT #$S_ATT $ACCT deadline=$DL_DISP $T_DISP k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
   "$RELOGIN_BIN" "$ACCT" >>"$LOG" 2>>"$LOG" &
   cp=$!
   ( sleep "$TIMEOUT_S"; kill -TERM "$cp" 2>/dev/null ) >/dev/null 2>&1 &
@@ -358,12 +435,17 @@ else
 fi
 
 if [ "$JSON" = 1 ]; then
+  # hours_left is JSON `null` — not 0 — when no deadline was measured. 0 is a NUMBER a consumer
+  # will compare, and "T-0h" is exactly the claim this poller must not make; null cannot be
+  # mistaken for a countdown, and deadline_known says the emptiness is deliberate.
   jq -nc --arg d "$DETECT" --arg a "$ACCT" --arg dl "$DL_ISO" --arg act "$ACTION" --arg k "${K:-}" \
          --arg rc "${CHILD_RC:-}" --arg reason "$ESC_REASON" --arg cmd "$RECOVER_CMD" \
-         --argjson td "$TRIG_DAYS" --argjson eh "$ESC_HOURS" --argjson hl "$HOURS_LEFT" \
+         --arg src "$DLSRC" --arg cause "$CAUSE" --argjson known "$DL_KNOWN" \
+         --argjson td "$TRIG_DAYS" --argjson eh "$ESC_HOURS" --argjson hl "$HL_JSON" \
          --argjson att "$S_ATT" --argjson cand "$NCAND" --argjson esc "$ESCALATED" --argjson dry "$DRYRUN" \
     '{ts:(now|todate),detection:$d,trigger_days:$td,escalate_hours:$eh,candidates:$cand,acct:$a,
-      deadline:$dl,hours_left:$hl,k:$k,attempts:$att,action:$act,child_exit:$rc,
+      deadline:$dl,deadline_known:($known==1),deadline_src:$src,cause:$cause,
+      hours_left:$hl,k:$k,attempts:$att,action:$act,child_exit:$rc,
       escalated:($esc==1),escalation_reason:$reason,recover_cmd:$cmd,dry_run:($dry==1),
       exit:(if ($esc==1 and $dry==0) then 5 else 0 end)}'
 fi

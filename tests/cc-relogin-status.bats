@@ -410,6 +410,50 @@ PY
   echo "$output" | grep -qF 'cc-relogin next'
 }
 
+@test "cc-blockers: a REQUIRED escalation with NO deadline SURVIVES the stale-drop (backlog 8e394583d5d4)" {
+  # WHY THIS IS A cc-blockers TEST OF A cc-relogin-poll FIX. drop_stale_relogin retracts a relogin
+  # row once the account's live login_expires_at is LATER than the row's deadline. That rule is
+  # right for a MEASURED deadline and nonsense for a fabricated one: the pre-fix poller wrote
+  # `deadline = NOW` for a REQUIRED row whose deadline the producer deliberately did not publish,
+  # and NOW is earlier than any future cliff — so the loudest surface the poller has discarded the
+  # row by construction. Measured on next2's real 2026-08-03 shape (grant rejected, cliff 674h out):
+  # 1 row raised, 0 rendered. The poller now publishes NO deadline, which lands in this file's own
+  # documented fail-open ("$d == null … keep") on the polarity its author chose — "a stale row is
+  # noise, a dropped live one is silence".
+  #
+  # The gate must be ARMED for this to mean anything: setup() points CC_BLOCKERS_ACCOUNTS_BIN at a
+  # deliberately ABSENT binary, under which every row is kept vacuously and both arms below would
+  # pass without the subject running at all (memory control-must-replay-the-real-artifact).
+  local far; far="$(date -u -r "$(( $(date +%s) + 674*3600 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+                    || date -u -d "@$(( $(date +%s) + 674*3600 ))" +%Y-%m-%dT%H:%M:%SZ)"
+  printf '#!/bin/sh\nprintf %%s %s\n' \
+    "'{\"rows\":[{\"acct\":\"next2\",\"login_expires_at\":\"$far\"}]}'" > "$D/ca-far"
+  chmod +x "$D/ca-far"; export CC_BLOCKERS_ACCOUNTS_BIN="$D/ca-far"
+
+  # POST-FIX shape: no deadline claimed, so the clock cannot adjudicate and the row is KEPT.
+  jq -nc --arg f "$far" '{ts:"2026-08-03T14:34:26Z",actor:"cc-relogin-poll",kind:"relogin-blocked",
+    acct:"next2",account:"next2",deadline:"",deadline_known:false,deadline_src:"required",
+    state:"REQUIRED",cause:"token-invalid",recover_cmd:"cc-relogin next2"}' > "$CC_REAPER_IDL"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 1 ]
+  run "$C"
+  echo "$output" | grep -q 'RELOGIN-BLOCKED'
+  echo "$output" | grep -q 'REQUIRED'                    # the STATE column, not 12 chars of prose
+  echo "$output" | grep -qF 'cc-relogin next2'
+
+  # MUTATION CONTROL — the PRE-FIX row, byte-for-byte the shape the poller used to write, is
+  # dropped by the same run. Without this the assertions above could not tell a working gate from
+  # an absent one.
+  jq -nc '{ts:"2026-08-03T14:34:26Z",actor:"cc-relogin-poll",kind:"relogin-blocked",
+    acct:"next2",account:"next2",deadline:"2026-08-03T14:34:18Z",
+    reason:"T-0h to the login deadline (2026-08-03T14:34:18Z)",recover_cmd:"cc-relogin next2"}' \
+    > "$CC_REAPER_IDL"
+  run "$C" --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq '[.[]|select(.kind=="relogin-blocked")]|length')" = 0 ]
+}
+
 @test "cc-blockers --json: one array carrying both kinds, newest first" {
   sg "2026-07-25T09:05:00Z" "PANE-A" "peer-a" "cc-recover-safeguard PANE-A"
   rl "2026-07-25T09:20:00Z" "next" "ESCALATED" "2026-07-27T00:00:00Z" "cc-relogin next"

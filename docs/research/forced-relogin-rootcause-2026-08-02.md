@@ -635,8 +635,36 @@ already matched both spellings; this was one of the last two.
   check that went red on every candidate forever would carry no information. WORSE (the plaintext
   tier removed) and UNREADABLE (the storage layer no longer introspectable) fail the gate; FIXED is
   the signal to close `4adbeab56aa7` and revisit the compensations landed in `f8178bfe`.
-* **The fabricated `T-0h` deadline** in `cc-relogin-poll` (defect D5) — the escalation fires,
-  but names a calendar deadline that is not the reason.
+* ~~**The fabricated `T-0h` deadline** in `cc-relogin-poll` (defect D5) — the escalation fires,
+  but names a calendar deadline that is not the reason.~~ **FIXED 2026-08-09** (backlog
+  `8e394583d5d4`). `$DL` was serving two jobs at once: an ORDERING position (which account is most
+  urgent — for which `NOW` is the correct answer on a REQUIRED row) and a PUBLISHED deadline (for
+  which `NOW` was never measured). They are now separated by a `deadline_src` provenance tag, and
+  only a measured deadline is published: the escalation still fires, and it names the state plus
+  the cause `claude-accounts` published beside it (`login state is REQUIRED now (cause:
+  token-invalid) and claude-accounts published NO deadline for it`) instead of a clock.
+  `deadline` is empty, `hours_left` is JSON `null` — not `0`, which a consumer would compare — and
+  `deadline_known:false` keeps the emptiness from having to mean both "no deadline exists" and
+  "the field went missing".
+
+  **The damage was worse than the wrong text, and that half was not in this list.** A class-C row
+  whose `deadline` is `NOW` is EARLIER than the account's live `login_expires_at`, which is exactly
+  `cc-blockers`' stale-drop predicate (`drop_stale_relogin`) — so the loudest surface the poller
+  has discarded the row **by construction**. Measured on next2's own 2026-08-03 shape (grant
+  rejected, cliff 674h out): **1 row raised, 0 rendered**. Publishing no deadline lands in that
+  file's documented fail-open (`$d == null … keep`) on the polarity its author chose — *"a stale
+  row is noise, a dropped live one is silence"* — and the row now renders. Pinned by a mutation
+  control in `tests/cc-relogin-status.bats` that replays the pre-fix row byte-for-byte and asserts
+  it is still dropped, with `CC_BLOCKERS_ACCOUNTS_BIN` armed at a present stub (the suite's default
+  is a deliberately ABSENT binary, under which both arms would pass vacuously).
+
+  Root cause, for the next reader: the producer blanks both deadline columns **on purpose** —
+  `bin/claude-accounts:2284`, *"An account can need /login for a reason that is NOT its deadline …
+  printing that stamp beside REQUIRED read as 'required, and it expires in 14 days'. The deadline
+  columns are therefore filled only when the deadline is what is driving the verdict; otherwise the
+  reason column carries the cause"*. The poller read that deliberate `—` as a deadline of `NOW` and
+  discarded the `reason` column into an unused `_reason`, re-manufacturing the exact misreading the
+  producer had removed, in the opposite direction. It now carries that cause through to the board.
 * `~/.claude` remains logged out with `claude-prev` still pointing at it; `next` still carries
   multiple grants. Both unchanged from UPDATE 2.
 
