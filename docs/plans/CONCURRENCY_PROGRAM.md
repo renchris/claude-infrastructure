@@ -1121,7 +1121,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 |---|---|---|---|
 | **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
 | **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
-| **B** — cut active occupancy (serialise hooks, cache git) — **UNBLOCKED, unowned; now the ONLY load lever** | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
+| **B** — cut active occupancy (serialise hooks, cache git) ✅ **LANDED 2026-08-09** (§S6.4-MEASURED) | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache  **Outcome: one premise confirmed-but-conditional, one retargeted.** Hooks ARE dispatched concurrently (newly measured, closes HOOK_CHAIN_COST §8) but serialisation is a second-order queueing win only — `hook-chain.sh` is RE-OPENED, not reversed, since its wall-clock verdict is silent on occupancy. The git lever was pointed at the wrong event: PreToolUse/Bash forks ZERO git on its hot path; Stop forks ~72-82 because `wrap-ledger.sh` is called 6x. Memoised at that chokepoint: **60 -> 27 per Stop, 2.22x**. |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
 | **E** — headless / render — **precondition MEASURED 2026-08-09, see §S6.7-MEASURED; substrate NOT built** | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. **Outcome: precondition PASSES (no pty, all six hooks fire, mail reaches the model) — and the pty wall it was re-justified on is at ~509 panes, not 150: the census carried a constant +16 from static legacy `/dev/ttys[0-9a-f]` nodes. Render (140 panes) binds 3.6× sooner and is E's original rationale. Substrate declined pending two named comms gaps.** | **instruments + one additive gauge row** — `scripts/pty-census.sh`, `scripts/headless-precondition-probe.sh`, `tests/{pty-census,headless-precondition-probe}.bats`, and a non-verdict `ptys` row in `scripts/render-census.sh`. It did **not** touch `handoff-fire.sh`, any spawn/fire/close path, or `capacity-admit.sh`. |
 | **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
@@ -1277,6 +1277,77 @@ release-test that confirms it: `docs/research/pty-ceiling-2026-08-09.md` §2. Th
   bare `bash -c :` — an **8.2× occupancy saving** on every git-bearing hook. Cache branch/status
   per turn instead of re-shelling per hook.
 - **Target:** active-session occupancy 1.6 → ~0.5, which raises the active ceiling from ~10 to ~30.
+
+#### S6.4-MEASURED · Wave B — 2026-08-09, both premises were unmeasured and they resolve oppositely
+
+Everything above this line is the brief as written. Evidence:
+`docs/research/active-session-occupancy-2026-08-09.md`. Landed: the `--machine` memo in
+`scripts/wrap-ledger.sh`, the bench `scripts/hook-dispatch-bench.sh`, both with suites carrying
+mutation controls.
+
+✅ **The serialisation premise is CONFIRMED and was never measured before.** Claude Code dispatches
+a matcher group's hooks **concurrently**: sampling the live process table at 21.9 Hz caught **8–9
+DISTINCT Stop hooks in flight under ONE parent inside a single 45 ms sample, three separate times**
+(and 9 on SessionStart). `HOOK_CHAIN_COST.md:396-399` had this open as *"Unresolved, and named as
+unresolved"* — every per-hook timing in this repo was taken by invoking the hook **outside** the
+harness. It corroborates the independent static bundle read at `goal-in-handoff-2026-08-08.md:439`
+(`uL` @237793, concurrent async generators).
+
+⚠️ **But the prize is NOT first-order, and this bullet's framing oversells it.** `load` is the
+time-average of the runnable-thread count, so an event contributes the **sum** of its members'
+runnable time: ten members at once for `d` ms and ten in sequence for `10d` ms are **identical**.
+Serialisation cannot win on that term. The entire effect is a **queueing** second-order one — a
+process in the run queue is in state R, accruing runnable-time while doing no work, so
+oversubscription inflates every member's R-time. §S6.1's own cross-over already sizes it:
+cost-per-fork rose **~21×** between concurrency 4 and 16. So the lever is real, large at the design
+point (10 active × ~10 hooks = ~100 simultaneous processes on 10 cores), and **conditional on
+contention** — which is not how this section reads.
+
+🚨 **`hooks/hook-chain.sh`'s shelving is RE-OPENED, not reversed.** Its verdict ("real 6-guard chain
+serial 174 ms vs dispatcher ~180 ms") is **wall-clock**, and wall-clock is precisely the quantity
+that does *not* move under serialisation — the dispatcher trades concurrency for duration at roughly
+constant product. That measurement is therefore **silent** on the occupancy axis, not evidence
+against. `hook-chain.sh:41-46` was right that wall-clock cannot adjudicate this at normal load; the
+error was concluding it was unmeasurable. `scripts/hook-dispatch-bench.sh` sweeps the concurrency
+deliberately, subtracts ambient per cycle, and divides by completed work. Wiring the dispatcher would
+edit `settings.json` ⇒ **`c10` migration, never a direct registration.**
+
+🚨 **The "cache branch/status per turn" bullet pointed at the wrong files.** Censused per event,
+with file:line: **PreToolUse/Bash forks ZERO git subprocesses on its hot path** — the event every
+prior cost model in this repo optimised, and the one `hook-chain.sh` was built for. The cost is
+almost entirely **Stop**, at ~72–82 git subprocesses on a working close, because
+**`scripts/wrap-ledger.sh` is an amplifier**: one `--machine` run is 10 git subprocesses (17 with the
+live-layer arm) and **six Stop hooks each call it on the same event** (`session-continue.sh:529`,
+`completion-assert.sh:189`/`:191`, `anti-deference-nudge.sh:249`, `boundary-handoff.sh:272`,
+`operator-readout.sh:426`/`:991`). **Roughly six of every seven git subprocesses in a Stop are
+literally the same query as another one in the same event.**
+
+**LANDED: the memo goes at the chokepoint, not at six call sites.**
+
+```
+one Stop = 6 consumers
+today            6 × 10  = 60 git subprocesses
+with the memo    1 × 12 + 5 × 3 = 27      ⇒  2.22×
+```
+
+Keyed by **content** (HEAD + full porcelain digest + the mtimes of the non-git stores the rungs read),
+never by time alone — a pure TTL would let a tree go dirty inside the window and still serve a ✅.
+Residual: a sibling's fetch can serve an `AHEAD` up to TTL seconds stale, which errs toward 📦 and
+never toward ✅. `WRAP_CACHE=off` degrades to today (a cache, not a guard).
+
+⚠️ **§S6.4's own cost figures do not reproduce.** "17.95 ms vs 2.20 ms → 8.2×" mixes wrapper-billed
+and marginal conventions — the artifact `hook-chain.sh:12-16` already flags against its own numbers.
+Re-measured marginal at load ~8/10 cores: builtin `:` **0.28 ms** · bare fork+exec **2.67 ms** ·
+`git rev-parse` **7.08 ms** · `git status --porcelain` **15.19 ms**. Honest form: a cached read
+replaces a `rev-parse` for ~6.8 ms and a `status --porcelain` for ~14.9 ms. Direction right,
+magnitude defensible, **specific figures not quotable**.
+
+**Two follow-ons named and NOT taken here** (both independent of the memo):
+- `session-continue.sh:529` pays the full 10-call ledger **before** the rung test at `:532` that can
+  discard it — worth one whole `wrap-ledger` run per Stop on the non-🔧 path. Left alone because it
+  is a behaviour change inside the continuation actuator and this wave's diff already sits under the
+  close protocol.
+- Re-adjudicating `hook-chain.sh` on the occupancy axis with the landed bench, then staging it `c10`.
 
 ### S6.5 · Phase C — bound toolchain ignition  ⟵ *this is the crash fix, and it is non-optional*
 
