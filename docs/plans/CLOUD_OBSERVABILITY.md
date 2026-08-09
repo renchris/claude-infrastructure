@@ -1291,10 +1291,7 @@ refused; without the bounded retry the fire would have reported a named refusal 
 §10.4's frozen DoD would still be open. §S5.3's "roughly 50-75% per attempt, reaching a session on
 attempt 2 of 4 twice over" reproduced on the very first live use.
 
-⚠️ **What this does NOT yet establish**, stated at the minute observed rather than at the budget's
-end (the discipline `8c691106` set for T2): as of 1m into the session's 15m budget,
-`git ls-remote --heads origin 'claude/*'` still returns **0**. The create half of §10.4's DoD is
-closed; the `push → reconcile → land` half is not, and a BOOTING session says nothing either way.
+**The push half did NOT complete, and the instrument's own terminal verdict is below (§11.4).**
 
 ### 11.2 · Three findings, each measured rather than assumed
 
@@ -1364,3 +1361,64 @@ cloud session to declare its own paths on the way out, which needs a channel tha
 yet (§9.1: the cloud→here arm is a different mechanism, permanently). Until then a landed
 `claude/*` branch stays eligible and can be re-offered; `ship-land` finds an empty diff and refuses,
 so the cost is a wasted invocation rather than a wrong land.
+
+### 11.4 · The round trip does NOT complete — `NOT-STARTED`, and what that does and does not prove
+
+The instrument's own terminal verdict on the first fire, at the end of its budget rather than at an
+arbitrary give-up point:
+
+```
+state=NOT-STARTED
+detail=no ref after 15m (boot budget 15m)
+recover=open https://claude.ai/code/session_01Kpc1kwHjwsRjERad1tTDuG
+```
+
+`git ls-remote --heads origin 'claude/*'` returned **0** throughout, and still does. So **§10.4's
+frozen DoD is half closed**: `handoff-fire.sh --cloud` creates a declared cloud session (proven),
+and one item does NOT yet traverse `create → execute → claude/* push → cloud-reconcile → land`.
+
+🚨 **This is `NOT-STARTED`, which under §4.1 means "the declared ref never appeared" — NOT "the
+session did nothing".** The distinction is this document's founding one and it must not be quietly
+collapsed here of all places. What is established: a create happened, a bundle was uploaded (attempt
+1's `Bundle upload failed` is positive evidence that the CLI took the BUNDLE path, not a GitHub
+one), the session was declared, and no ref reached the remote inside 15 minutes. What is **not**
+established: whether the VM executed at all, whether it attempted the push, and what it saw if it
+did.
+
+**And this box structurally cannot find out.** §9.1's asymmetry is permanent: the send arm works —
+`cc-notify --cloud` delivered a status probe to this very session, correctly routed through the
+owning account (`{ok:true}`, recorded in `<id>.sends`) — but "queued is not read", there is no
+off-box cursor, and the session's reply lands in a transcript no local instrument can open. A probe
+was sent asking it to paste `git remote -v`, its branch, and any push error. **The answer is
+unreachable from here by construction, not by omission.**
+
+⚠️ Two smaller things the fire settled on the way past, both worth more than the negative result:
+
+- **The retry is what produced the session at all.** Attempt 1 refused with a live
+  `Bundle upload failed: Socket is closed after 3 attempts`; attempt 2 created. §S5.3's 50-75%
+  reproduced on first use, and a fire path without the bounded retry would have reported a named
+  refusal and stopped.
+- **`cc-notify --cloud` self-diagnosed a binary-version fault correctly**, and it is a trap worth
+  recording: the default resolution picked `~/Library/pnpm/claude` (the 2.1.114 pin, which has no
+  `--cloud`), and rather than reading `unknown option '--cloud'` as a bad address it reported
+  `verdict=cloud-transport-unavailable reason=flag-unsupported`, said the id was **UNVERIFIED, not
+  invalid**, and named the fix (`CC_CLAUDE_BIN` at a 2.1.220+ binary). That is §10.2d's
+  actuator-as-arbiter rule paying off live — a `strings` pre-check would have had to guess.
+
+**→ NEXT STEP, and the fire is what makes it the right one.** §10.4 said to install the Claude
+GitHub App only once a fire proved bundle mode was the blocker, "not before", because an App
+install read from silence tells you nothing. The fire has now supplied the missing half: the create
+demonstrably took the bundle path, and nothing came back. Installing the App on this repo makes the
+create use a `git_repository` source and **bundle nothing** — which simultaneously removes the ~95
+MiB marginal upload (the retry's whole reason for existing) and gives the VM an authenticated
+remote to push to. It is a GUI consent flow on the operator's own GitHub account, so it is
+**operator-only** and is filed as such rather than described here.
+
+If a session fired AFTER the App install still leaves `claude/*` empty, that result is meaningful in
+a way today's is not — bundle mode would be eliminated as the cause, and the next suspect is the
+VM's push credentials, which §7.4 already showed are restricted (a cloud VM cannot write
+`refs/cc/*` at all).
+
+*(The declaration is deliberately left un-retired: `NOT-STARTED` with a recover URL is a true
+statement, and retiring it would stop the three abstaining oracles treating the id as off-box while
+the session may still exist. It costs one row.)*
