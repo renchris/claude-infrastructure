@@ -13,6 +13,20 @@ setup() {
   # own suite (tests/kitty-recovery-launch.bats).
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
+  # PIN THE SUBJECT'S WALL-CLOCK BUDGET (LOAD_INSENSITIVE_VERIFY_V2 §3 / §6b channel 3, and the
+  # same discipline tests/cc-authbrowser.bats setup() already applies to its two budgets).
+  # scripts/boot-resume-launch.sh:41 bounds the bin/cc-kitty-socket resolver at
+  # CC_OSA_TIMEOUT_S:-20. If that bound fires, _brl_sock is empty, IN_KITTY stays 0, dispatch
+  # falls to the iTerm2 arm and no `KITTY: ` line is printed — a PLAUSIBLE RED that is a
+  # statement about how fast the box is, not about the tree. Unpinned, the daemon-context tests
+  # below measure the load average of a box designed to run 20-40 concurrent sessions.
+  #
+  # A CEILING, NOT A SLEEP: `timeout N` returns the instant the resolver answers, so a generous
+  # value costs a passing run nothing. Deliberately NOT a bigger constant in the SUBJECT — §5's
+  # rejected row ("raise the ceiling until tests pass"): time is unbounded above under that
+  # steady state, so any production constant is a future permanent-red. The seam is the fix.
+  # The positive control below proves this pin is REACHED rather than decorative.
+  export CC_OSA_TIMEOUT_S=180
 }
 
 @test "--help exits 0" {
@@ -117,6 +131,41 @@ EOF
   run bash "$LAUNCH" --dry-run next4 /tmp sid-dc1
   [ "$status" -eq 0 ]
   echo "$output" | grep -q '^KITTY: '                  # dispatch chose kitty with no env at all
+}
+
+# POSITIVE CONTROL for setup()'s CC_OSA_TIMEOUT_S pin. Without it that pin is decoration: the test
+# above would pass identically whether the budget is honoured or hardcoded, and an unpinned suite
+# silently goes back to measuring ambient load (a control that cannot fail proves nothing — the
+# NO-REACH rule, LOAD_INSENSITIVE_VERIFY_V2 §6b).
+#
+# Same fixture as above, one variable moved: crush the budget to a value the resolver cannot meet.
+# The bound then fires, _brl_sock is empty, IN_KITTY stays 0 — so dispatch must fall to the iTerm2
+# arm and print NO `KITTY: ` line, even though a live socket is sitting right there. That is
+# precisely the false red the pin exists to prevent, asserted rather than assumed.
+@test "POSITIVE CONTROL: the resolver's wall-clock budget is REACHED (a crushed one loses the kitty arm)" {
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID CC_TERM_KITTY_TO KITTY_LISTEN_ON
+  mkdir -p "$BATS_TEST_TMPDIR/sock"
+  python3 - "$BATS_TEST_TMPDIR/sock/kitty-42" <<'PY'
+import socket, sys
+socket.socket(socket.AF_UNIX).bind(sys.argv[1])
+PY
+  cat > "$BATS_TEST_TMPDIR/ps" <<'EOF'
+#!/bin/bash
+pid=""; col=""
+while [ $# -gt 0 ]; do case "$1" in -p) pid="$2"; shift 2 ;; -o) col="$2"; shift 2 ;; *) shift ;; esac; done
+[ "$pid" = "42" ] || exit 1
+case "$col" in ucomm=) echo kitty ;; etime=) echo 05:00 ;; esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/ps"
+  export CC_KITTY_SOCKET_DIR="$BATS_TEST_TMPDIR/sock" CC_KITTY_SOCKET_PS="$BATS_TEST_TMPDIR/ps"
+  export CC_OSA_TIMEOUT_S=0.001                        # the ONE variable that moves
+  run bash "$LAUNCH" --dry-run next4 /tmp sid-dc1
+  [ "$status" -eq 0 ]
+  # `! … || false` is THIS file's own negative idiom (see the `write text` assertion above).
+  # `refute` is not defined here — it is a local helper in tests/cc-authbrowser.bats, and using
+  # it lands as `command not found`, which errexit turns into a red that says nothing.
+  ! echo "$output" | grep -q '^KITTY: ' || false       # the budget fired ⇒ no kitty arm
+  echo "$output" | grep -q 'create window with default profile'   # ...it fell to the iTerm2 arm
 }
 
 @test "daemon context + NO kitty anywhere + iTerm2 not running -> rc 3 refusal, app NEVER launched" {
