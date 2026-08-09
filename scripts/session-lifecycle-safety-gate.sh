@@ -44,7 +44,38 @@ TEARDOWN=bin/cc-teardown
 # Claude Code session's fd 0 is a unix socket a child can read forever without EOF (measured
 # 2026-08-06) — so this, not launchd, is the exposed path. One redirect in the helper covers both
 # call sites below. This gate reads no stdin of its own, so nothing loses an input it was using.
-bats_green(){ command -v bats >/dev/null 2>&1 && bats "$1" </dev/null >/dev/null 2>&1; }
+#
+# THREE states, not two (item 38e4601fa933, 2026-08-08). The helper this replaced — `bats_green`,
+# a plain `command -v bats && bats "$1" </dev/null >/dev/null 2>&1` — is GONE rather than left
+# beside its successor, because its whole defect was being silently callable: any future row wired
+# to it would re-acquire the bug. `bats` on PATH is a symlink to bin/cc-bats,
+# whose ADMISSION BOUND (added 2026-08-06) exits **75** — EX_TEMPFAIL — and says so on stderr:
+# "nothing ran, nothing was verified — this is a DEFERRAL, not a test result". A two-state helper
+# cannot see that: `2>&1` discards the message and every nonzero collapses into RED. MEASURED on
+# this box 2026-08-08 at 1-min load 22 on 10 cores (ceiling 2.0/core, 2 sibling bats roots): this
+# gate reported "1 met · 2 failed" in 14 SECONDS having executed ZERO tests, while the same suites
+# run green the moment a slot frees (measured same box, same hour — see the baseline rows in
+# scripts/nightly-regression.sh for the per-suite counts and durations).
+#
+# Why that is worse than a slow gate rather than merely noisier: nightly-regression.sh already
+# models this exact idea — rc 124/137/143 classify as NON-VERDICT precisely so a check that could
+# not RUN is never scored as a failure. rc 75 is a NEW member of that enum that landed in the
+# gates' `else → RED` arm (memory: new-enum-member-falls-into-fail-closed-default), so the deferral
+# is laundered into a *bar count* one level down, and the nightly then compares that fabricated
+# count against a declared baseline. A tally whose criteria never executed is not a readiness bar;
+# it is a non-verdict wearing a bar's clothes, and it must never reach ngr_bar_verdict.
+BATS_DEFERRED=0
+bats_row(){ # <label> <suite> <green-msg> <red-msg> — 0 green · 75 DEFERRED · other RED
+  local label="$1" suite="$2" okmsg="$3" badmsg="$4" rc
+  command -v bats >/dev/null 2>&1 || { bad "$label" "bats unavailable — the proof cannot run (install bats-core)"; return; }
+  bats "$suite" </dev/null >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0)  ok  "$label" "$okmsg" ;;
+    75) BATS_DEFERRED=$((BATS_DEFERRED+1))
+        printf '  ⏸️ %-6s %s\n' "$label" "$suite DEFERRED — cc-bats admission bound refused (rc 75); nothing ran, nothing verified" ;;
+    *)  bad "$label" "$badmsg" ;;
+  esac
+}
 
 # ── CL — the classifier ─────────────────────────────────────────────────────────────────────────────────
 if [ ! -x "$CLASSIFY" ]; then
@@ -52,9 +83,9 @@ if [ ! -x "$CLASSIFY" ]; then
   todo "CL-b" "NOT BUILT — the two REAPABLE causes need POSITIVE evidence: handed-off-lead ⇒ real /handoff + LIVE successor; a dead successor is refused."
   todo "CL-c" "NOT BUILT — handoff is NOT inferred from CC-native bridge-session records; an unreadable timestamp fails safe to active."
 else
-  bats_green tests/cc-classify.bats \
-    && ok "CL" "cc-classify built · tests/cc-classify.bats green (7 causes + dead-successor + bridge-false-positive RED-proofs)" \
-    || bad "CL" "cc-classify present but tests/cc-classify.bats is RED"
+  bats_row "CL" tests/cc-classify.bats \
+    "cc-classify built · tests/cc-classify.bats green (7 causes + dead-successor + bridge-false-positive RED-proofs)" \
+    "cc-classify present but tests/cc-classify.bats is RED"
 fi
 
 # ── RP — the reaper ─────────────────────────────────────────────────────────────────────────────────────
@@ -64,9 +95,9 @@ if [ ! -x "$REAPER" ]; then
   todo "RP-c" "NOT BUILT — post-classify dirty tree ABORTS the reap (WIP checkpointed); cc-teardown's gate re-run (double-gate)."
   todo "RP-d" "NOT BUILT — active/owned-wait/coordination-hang/rate-limited/crashed NEVER reaped."
 else
-  bats_green tests/cc-reaper.bats \
-    && ok "RP" "cc-reaper built · tests/cc-reaper.bats green (reap-path + checkpoint-first + race-abort + all 5 never-reap guarantees)" \
-    || bad "RP" "cc-reaper present but tests/cc-reaper.bats is RED"
+  bats_row "RP" tests/cc-reaper.bats \
+    "cc-reaper built · tests/cc-reaper.bats green (reap-path + checkpoint-first + race-abort + all 5 never-reap guarantees)" \
+    "cc-reaper present but tests/cc-reaper.bats is RED"
 fi
 
 # ── TD — the actuator (reused; must stay green under the blind-enumerator fix) ───────────────────────────
@@ -84,6 +115,16 @@ echo "      (ps --agent-name + team config.json); imprecision cannot cause a wro
 echo "      NEVER-reap, so the split only steers SURFACING. Successor detection is cwd-heuristic; the reaper's"
 echo "      work-landed re-check + cc-teardown's independent gate are the covering layers."
 
+# A DEFERRAL voids the tally, so the tally is not printed. Emitting "N met · M failed" here would
+# hand nightly-regression.sh a bar count assembled from criteria that never executed — and its bar
+# branch has no way to tell that apart from a measured one. Exit 75 instead: the runner classifies
+# it alongside 124/137/143 as a NON-VERDICT, which is exactly what this is.
+if [ "$BATS_DEFERRED" -gt 0 ]; then
+  echo
+  echo "⇒ NON-VERDICT: $BATS_DEFERRED proof suite(s) never RAN (cc-bats admission bound, rc 75)."
+  echo "  This gate has no opinion about the bar right now — re-run when a bats slot frees."
+  exit 75
+fi
 printf 'session-lifecycle-safety-gate: %d met · %d failed · %d NOT BUILT\n' "$PASS" "$FAIL" "$TODO"
 if [ "$FAIL" -gt 0 ] || [ "$TODO" -gt 0 ]; then
   echo "⇒ AUTONOMOUS SESSION REAPING: NOT READY. (Red here is not a bug — it is the bar. Build to green, never lower the bar.)"

@@ -83,7 +83,25 @@ else
     # ce13bd08 fixed the landing runners). MEASURED 2026-08-06: launchd already hands /dev/null, so
     # the exposed path is the one this gate actually runs on — a session/desk invocation, whose fd 0
     # is a unix socket a child reads without ever seeing EOF. This gate reads no stdin of its own.
-    if bats "$SUITE" </dev/null >/dev/null 2>&1; then
+    # THREE states, not two (item 38e4601fa933, 2026-08-08). `bats` on PATH is a symlink to
+    # bin/cc-bats, whose ADMISSION BOUND (added 2026-08-06) exits **75** — EX_TEMPFAIL — over a
+    # stderr line this call discards: "nothing ran, nothing was verified — this is a DEFERRAL, not
+    # a test result". Treating that as RED (which the bare `if bats …; then/else` did) manufactures
+    # a failed-count from criteria that never executed: measured on this box 2026-08-08 at 1-min
+    # load 22 on 10 cores, this gate reported "0 met · 1 failed" in ZERO seconds while $SUITE runs
+    # 23/23 green in 23s the moment a bats slot frees. nightly-regression.sh already models exactly
+    # this idea for rc 124/137/143 (NON-VERDICT — a check that could not RUN is not a failure); 75
+    # is a new member of that enum which landed in the `else → RED` arm (memory:
+    # new-enum-member-falls-into-fail-closed-default), so the deferral was being laundered into a
+    # *bar count* that the runner then compared against a declared baseline. Propagate it instead.
+    bats "$SUITE" </dev/null >/dev/null 2>&1; BRC=$?
+    if [ "$BRC" -eq 75 ]; then
+      echo "  ⏸️ LR-a..v $SUITE DEFERRED — cc-bats admission bound refused (rc 75); nothing ran, nothing verified"
+      echo
+      echo "⇒ NON-VERDICT: the registered proof never RAN, so this gate has no opinion about the bar"
+      echo "  right now. No tally is printed — a count assembled from unexecuted criteria is not a bar."
+      exit 75
+    elif [ "$BRC" -eq 0 ]; then
       ok "LR-a..v" "$SUITE GREEN — detect+ledger, no-fire-before-reset, headroom guard, notify-only default + notify-once, autofire idempotency, runaway cap, kill-switch, outcome records, event-keyed recurrence, headless tmux spawn (LR-j) + auto→tmux fallback (LR-m), monthly-spend class-B packet (LR-k) + idempotency (LR-l) + teammate-skip (LR-n), and the 2026-07-25 false-positive pair — envelope-required detection (LR-o) + no spend-branch shadowing of a real kill (LR-p), and the 2026-07-30 injection triad — parked-record fields read as DATA not code (LR-q), fail-closed on a malformed record (LR-r), %q-quoted launcher argv (LR-s), plus the posture-honesty trio â hint-matches-reason (LR-t), positional-independent --dry-run + unknown-arg refusal (LR-u, which fixed a silent REAL run), and the SSOT-pair ratchet (LR-v: plist â header cannot drift) â all proven (fixtures = real transcript bytes; stubs for claude-accounts/osascript/tmux/cc-decide; suite RED-proven against the as-shipped poller: LR-c blind headroom + LR-i forever-skip fired, and LR-j/k RED against the GUI-only + session|weekly-only poller)"
     else
       bad "LR-a..v" "$SUITE RED — a registered limit-reset criterion fails (run: bats $SUITE)"

@@ -116,7 +116,7 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
   local name="$1" base="$2"; shift 2
   NCHECK=$((NCHECK+1))
   local out; out="$(outfile "$name")"; [ -n "$out" ] || out=/dev/null
-  local rc=0 to dto
+  local rc=0 to dto _nv
   case "$NGR_CHECK_TIMEOUT" in ''|*[!0-9]*) to=0 ;; *) to="$NGR_CHECK_TIMEOUT" ;; esac
   # A per-check MEASURED bound outranks the global default. The default is sized for one gate/lint;
   # a check that is itself a COMPOSITION of gates is a different animal, and a bound that does not
@@ -135,9 +135,25 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
   # bound; 137/143 = SIGKILL/SIGTERM, i.e. killed from OUTSIDE (the peer-pkill class, backlog
   # a0718a5d78b3, where concurrent sessions killed each other's gates with machine-wide patterns).
   # Scoring these as failures is what made this page unreadable: it convicted on a missing verdict.
+  #
+  # 75 = EX_TEMPFAIL, added 2026-08-08 (item 38e4601fa933). bin/cc-bats — which every `bats` call
+  # resolves to, via a PATH symlink — grew an ADMISSION BOUND on 2026-08-06 that REFUSES when the
+  # box is over CC_BATS_MAX_LOAD_PER_CORE with CC_BATS_MAX_ROOTS suites already running, exiting 75
+  # and printing "nothing ran, nothing was verified — this is a DEFERRAL, not a test result".
+  # cc-bats did its part; the GATES threw it away (`bats … >/dev/null 2>&1`, every nonzero ⇒ RED),
+  # so a deferral arrived here disguised as a bar count — a tally over criteria that never executed,
+  # which the bar branch below would then compare against a declared baseline and score as met or
+  # regressed. That is the same "convicted on a missing verdict" defect this block was built to
+  # stop, re-entering one level down through a NEW exit code that fell into everyone's `else` arm
+  # (memory: new-enum-member-falls-into-fail-closed-default). The gates now propagate 75 unchanged;
+  # this arm is what makes propagating it correct.
   case "$rc" in
-    124|137|143)
-      printf '  CUT  %s (rc %d — NON-VERDICT: cut/killed, not a failure)\n' "$name" "$rc"
+    124|137|143|75)
+      case "$rc" in
+        75) _nv='cc-bats DEFERRAL — the admission bound refused, the proof never ran' ;;
+        *)  _nv='cut/killed, not a failure' ;;
+      esac
+      printf '  CUT  %s (rc %d — NON-VERDICT: %s)\n' "$name" "$rc" "$_nv"
       TIMEOUTS+=("$name:rc$rc"); return 0 ;;
   esac
 
@@ -255,11 +271,32 @@ NGR_BAR_BASELINE=(
   # those two states print the identical line — `RED never-stuck-gate(live) (exit 1)` — which is the
   # 21·0→19·2 slip this whole job was built to catch, still invisible on its own page.
   "never-stuck-gate.sh|0"
-  # DELIBERATELY UNDECLARED — limit-reset-safety-gate.sh and session-lifecycle-safety-gate.sh. Both
-  # re-run bats internally and outran a 900s probe on a loaded box, so no honest baseline exists yet.
-  # They reach the NON-VERDICT branch (rc 124) long before the bar branch, so leaving them undeclared
-  # costs nothing today; if one ever COMPLETES it reports RED as "undeclared bar", which is the
-  # intended fail-closed prompt to measure it on a quiet box and add a row. Never guess these.
+  # MEASURED 2026-08-08 (item 38e4601fa933), resolving the two rows this block used to hold open as
+  # "DELIBERATELY UNDECLARED — both re-run bats internally and outran a 900s probe on a loaded box,
+  # so no honest baseline exists yet … Never guess these." That instruction was followed, and what
+  # it turned up was not slowness. Recorded in full because the reasoning, not the number, is the
+  # durable part:
+  #
+  #   · Both gates are GREEN — every registered criterion is met, so both exit 0 and never reach the
+  #     bar branch at all. Per-suite, admission-verified, this box, 1-min load 18.6-21.0 on 10 cores:
+  #       limit-reset       tests/lr-reset-poller.bats  23/23 ok, rc 0, 23s
+  #       session-lifecycle tests/cc-classify.bats      58/58 ok, rc 0, 48s
+  #                         tests/cc-reaper.bats        94/94 ok, rc 0, 205s
+  #                         bin/cc-teardown --selftest        rc 0, 13s
+  #     ⇒ limit-reset 1 met · 0 failed · session-lifecycle 3 met · 0 failed. Both rows are therefore
+  #     0, pinned for the same reason premortem and wait-safety are: a baseline is a RATCHET, and
+  #     leaving room the bar does not need lets the first future regression back in silently.
+  #
+  #   · The 900s "timeout" was never the suites — 289s covers all four proofs. It was bin/cc-bats'
+  #     ADMISSION BOUND (2026-08-06) refusing under load with rc 75 and the message "nothing ran,
+  #     nothing was verified — this is a DEFERRAL, not a test result", which both gates discarded
+  #     via `>/dev/null 2>&1` and reported as a failed criterion. Measured at load 22: they emitted
+  #     "0 met · 1 failed" in 0s and "1 met · 2 failed" in 14s having run ZERO tests. Declaring a
+  #     baseline off THOSE numbers would have pinned a bar to a non-verdict — which is precisely
+  #     what "Never guess these" was protecting. Both gates now propagate 75 and the NON-VERDICT
+  #     arm above classifies it.
+  "limit-reset-safety-gate.sh|0"           # measured 2026-08-08: 1 met · 0 failed (suite 23/23 green)
+  "session-lifecycle-safety-gate.sh|0"     # measured 2026-08-08: 3 met · 0 failed (CL 58/58 · RP 94/94 · TD ok)
 )
 
 # PER-CHECK TIMEOUT overrides: "<basename>|<seconds>". Read through the same ngr_decl_lookup
@@ -706,6 +743,31 @@ selftest() {
   else
     badp "T: no timeout(1) resolved — the bound assertions would pass vacuously"
   fi
+
+  # rc 75 (cc-bats DEFERRAL) — the fixture prints a bar's OWN wording AND a parsable count before
+  # exiting 75, because that is the exact shape the defect produced: a gate that never ran a test
+  # still emitting "N met · M failed" and "it is the bar". A fixture that exited 75 silently would
+  # pass against the BROKEN code too (no marker ⇒ it lands in the plain-regression arm either way),
+  # so it could not tell the two apart — this one can. Pre-fix, 75 fell past the NON-VERDICT case
+  # into the bar branch and scored red-undeclared: REDS=1, TIMEOUTS=0. Asserting all three buckets
+  # is what pins it; BARS=0 is the half that catches the worse failure, a deferral ABSORBED as a
+  # met bar once a baseline row exists.
+  printf '#!/bin/bash\necho "fake-gate: 1 met · 2 failed · 0 NOT BUILT"\necho "⇒ NOT READY. (Red here is not a bug — it is the bar.)"\nexit 75\n' \
+    > "$nvd/deferred-gate.sh"; chmod +x "$nvd/deferred-gate.sh"
+  ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0
+    run_check_step4 "deferred-gate.sh" deferred-gate.sh "$nvd/deferred-gate.sh" >/dev/null 2>&1
+    [ "${#REDS[@]}" -eq 0 ] && [ "${#BARS[@]}" -eq 0 ] && [ "${#TIMEOUTS[@]}" -eq 1 ] ) \
+    && okp "NV: rc 75 (cc-bats DEFERRAL) is a NON-VERDICT — never a bar, even when it prints one" \
+    || badp "NV: a cc-bats deferral was scored as a bar or a RED"
+
+  # The two rows measured 2026-08-08 must RESOLVE — same ratchet discipline as premortem above:
+  # assert they parse to a number, never to one specific number, so tightening a bar stays legal.
+  for _b in limit-reset-safety-gate.sh session-lifecycle-safety-gate.sh; do
+    case "$(ngr_decl_lookup "$_b" NGR_BAR_BASELINE)" in
+      ''|*[!0-9]*) badp "B: $_b baseline missing or non-numeric" ;;
+      *)           okp  "B: $_b baseline resolves to a number" ;;
+    esac
+  done
 
   echo "nightly-regression --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
