@@ -448,10 +448,21 @@ else
   # matter — on the 🔧/📦 paths neither can change the answer, so neither is ever paid for (cost
   # discipline: Stop hook, every close; both report SRC=skip there, so "not counted" stays
   # distinguishable from "counted zero"). A missing trunk means "landed" is unproven, so neither 👤
-  # nor 🚀 — both of which ASSERT landed — is computed there; that case keeps its pre-existing
-  # ordering below.
+  # nor 🚀 — both of which ASSERT landed — is computed there, AND the no-trunk rung is ranked ahead
+  # of every remaining arm (see below): the carve-out has to cover all three, not two.
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
-  if [ "$LIVE_BREACH" -eq 1 ]; then
+  if [ -z "$TRUNK" ]; then
+    # No trunk resolved ⇒ UNLANDED=0 is a DEFAULT, not a measurement: nothing was ever compared, so
+    # every arm below that says "landed" would be asserting a fact this run never read. This rung
+    # used to sit BELOW the absent-DoD arm, whose readout opens "✅ Clean & landed" — so the abstain
+    # was shadowed on the branch the case actually reaches, since a repo with no trunk usually has
+    # no DoD either. Measured on 8c691106: a local-only repo read "✅ Clean & landed", the same
+    # false-✅-on-unproven-landing this ladder's own origin/HEAD fix (7bc4b4e5) was written to kill.
+    # The 👤/🚀 carve-out above already states the rule; this is the third arm it has to reach.
+    # The sentence deliberately carries no form of the word this rung refuses to assert — the test
+    # greps for it, and the first draft failed its own check by saying "(not 'landed')".
+    RUNG="🔧"; READOUT="🔧 Loose ends — no upstream trunk resolved, so landing is UNPROVEN; continuing."
+  elif [ "$LIVE_BREACH" -eq 1 ]; then
     # 🚀 outranks 👤: "the machine is not running this yet" is a fact about the work itself, where an
     # operator step is a fact about someone's queue.
     RUNG="🚀"
@@ -466,8 +477,6 @@ else
   elif [ "$DOD" = "absent" ]; then
     # ✅-eligible git state, but no durable DoD to confirm the scope was met → say so, never silent ✅.
     RUNG="✅"; READOUT="✅ Clean & landed — but NO durable DoD to confirm scope (completeness unverified; frozen a DoD via ~/.claude/autonomy/dod)."
-  elif [ -z "$TRUNK" ]; then
-    RUNG="🔧"; READOUT="🔧 Loose ends — no upstream trunk to compare landing against; continuing."
   elif [ "$LIVE_SRC" = "behind" ]; then
     # Behind but INSIDE the converge budget — the normal, expected state for the first minutes after
     # a land. Not a rung (it would fire at every close), but not silent either: the one line says
