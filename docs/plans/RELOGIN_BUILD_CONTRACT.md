@@ -136,22 +136,91 @@ fewer fork. `case` on a captured string is bash-3.2 safe (the known trap is `cas
   consumer exits, so a match on the last line is safe and a match early in long output is nearly
   always wrong — which is why this suite failed a **different subset every run** (40,43 then
   38,40,42,43). A varying failing subset means collision or race, never logic.
+  **Sharpened 2026-08-08:** the discriminator is not output SIZE and not "the match is not on the
+  last line" — it is whether the producer makes **more than one write** after the match. A single
+  `write(2)` under the 64 KiB pipe buffer lands before the consumer is scheduled, so
+  `printf '%s' "$BIG"` is safe at 4 KiB (0/200) while a *streaming* producer fails **85/100 at one
+  kilobyte** and 100/100 at ≥32 KiB. A four-line separate process fails 44/400. That is why the
+  ratchet below exempts `echo`/`printf` producers and flags external ones.
 - **Instrumentation HIDES it.** `bash -x` made it pass; wrapping the producer in a logging shim
   made it pass. Anything that slows the pipe closes the window. "Works when traced" is not
   evidence.
-- **Reproduce under the shipping interpreter.** The first repro loop showed 0/300 — because it
-  ran under `zsh`, which does not share bash's pipefail/SIGPIPE interaction. The 66% only
-  appeared under `/bin/bash`.
+- **Reproduce under the shipping interpreter.** The first repro loop showed 0/300 — the lesson
+  holds, but ~~because it ran under `zsh`, which does not share bash's pipefail/SIGPIPE
+  interaction. The 66% only appeared under `/bin/bash`.~~ **CORRECTED 2026-08-08 — the stated
+  cause is wrong. zsh is NOT immune:** re-measured, `zsh -c 'set -uo pipefail; { echo MATCH; seq
+  1 200000; } | grep -q MATCH'` is **400/400 FALSE**, identical to bash. That 0/300 was a
+  *single-write* producer, i.e. the safe shape, so the repro was testing the wrong thing and
+  agreeing with itself. The real discriminator is below.
 
 The new `M2c` test makes the probabilistic defect deterministic (large payload after the match)
 and was RED-proven against the **exact** artifact restored from `git show`, not a hand-written
 approximation.
 
-**Same class, repo-wide, NOT fixed here:** 358 candidate sites across 102 files use an
-early-exit pipe consumer (`grep -q` / `grep -m N` / `head -N`) inside a file that enables
-`pipefail` — backlog `791345455b58`. Candidates, not confirmed defects: each needs triage on
-whether its producer keeps writing after the match. Deliberately left alone — 102 files
-including live hooks is far outside this contract's blast radius.
+**Same class, repo-wide — ~~NOT fixed here~~ CLOSED 2026-08-08 (backlog `791345455b58`).** The
+original note read: *358 candidate sites across 102 files … candidates, not confirmed defects:
+each needs triage on whether its producer keeps writing after the match. Deliberately left alone —
+102 files including live hooks is far outside this contract's blast radius.* That framing was
+right, and the triage it asked for has now been done.
+
+**What the sweep actually found.** Re-derived on the current tree: 615 early-exit pipe consumers
+live in the 315 files that enable `pipefail`; **367** sit in a status-consuming position; of those,
+**138** have an external producer. Four parallel triage passes then *measured* each one on this box
+rather than reasoning about it, and the honest answer is that **most are latent, not live** — a
+`git status --porcelain` is 345 B in one flush (0/300), a `find -maxdepth 1 -name <exact>` emits
+≤1 line (0/200). They flip only at volume (~1,700 dirty paths), which is why this class survived so
+long: it is invisible until it isn't.
+
+**22 sites were misfiring, several of them permanently:**
+
+| site | measured | consequence |
+|---|---|---|
+| `bin/cc-cloud:244` | **5/5 FALSE** (`strings` over a 245 MB binary) | the O3 trailer version gate had been failing **100% of the time**, silently disabling session-trailer routing |
+| `hooks/git-worktree-guard.sh:100` | **60/60 FALSE** | the cwd liveness leg never fired, inverting a SAFETY refusal whose own header says it can only fail OPEN |
+| `bin/dia-cdp-launch.sh:123` | 79% FALSE | doctor reports "LaunchAgent not loaded" while it IS |
+| `scripts/never-stuck-gate.sh:135,138` · `docs/activation/wiring-all.sh:116-128` | ~100% (`launchctl list`, 20 KiB) | launchd jobs reported NOT loaded while loaded |
+| `scripts/worktree-gc.sh:596,663,730` | — | a live worktree reads idle ⇒ removable; a preserved branch reads unpreserved ⇒ never reclaimed |
+| `scripts/wrap-ledger.sh:179` | — | `git cherry` ⇒ CHERRY=0 ⇒ **the wrap ledger reports "nothing unlanded" while commits are unlanded** |
+| `scripts/restore-file.sh:27` | — | dies 141 before reaching `exit 0` |
+| + `nightly-regression.sh`, `reaper-e2e.sh`, `cc-pane-redproof.sh`, 4 activation scripts | — | gates run their live path instead of `--selftest`; false red-proof failures |
+
+`scripts/ship-land.sh` and `scripts/postland-verify.sh` were swept individually and are **clean**.
+
+**One site needed a different fix, and it matters.** `git-worktree-guard.sh:100` is *not* a SIGPIPE
+race: `lsof -p <list>` exits **1 on its own** whenever any pid in a ~120-pid `pgrep -f claude`
+snapshot has gone away, which is the permanent steady state here. Draining the consumer does not
+repair it (measured 60/60 still FALSE) — the producer's own status has to be dropped, so only
+CAPTURE works. A remedy prescribed for the class would have been applied, verified by eye, and left
+the guard just as broken.
+
+**The remedy is a ratchet, not a flag-day** — the same judgment `self-path-lint.sh` made for its 26,
+and now backed by measurement rather than assumption: rewriting 138 mostly-latent sites across 71
+files is a larger and less reversible change than the bug. So: the 22 live sites are fixed, the
+remaining 30 are grandfathered **by file with their count** in `scripts/pipefail-sigpipe-allow.txt`,
+and `scripts/pipefail-sigpipe-lint.sh` (+ `tests/pipefail-sigpipe-lint.bats`, 14 tests) blocks new
+ones at `run_gate` in `ship-land.sh` — the fifth deterministic blocker class. The count, rather than
+a bare path exemption, is what keeps protecting files edited every week; the list can only SHRINK,
+and the lint goes RED both when a file gains a violation and when one is fixed without lowering the
+number.
+
+**Known limit of the rule, stated because it is not statically fixable.** Clause 3 exempts
+`echo`/`printf` producers on the measurement that a single write under the 64 KiB pipe buffer is
+safe (0/200 at 4 KiB). That exemption **fails above ~64 KiB**: `printf '%s' "$V"` at 200 KB measures
+0/200 TRUE — always broken. A lint cannot know a variable's runtime size, so this is a deliberate
+false-negative class. Two known instances:
+
+- `scripts/gate-cleanup.sh:84` — `$PS_SNAPSHOT` measured **237 KiB**, 3.7× the buffer. Hardened
+  here with `|| true`; safe today only because no caller reads `ppid_of`'s status.
+- `scripts/cloud-ceiling-probe.sh:167-168` — `$out` is an unbounded PTY capture of `claude --cloud`
+  (180 s timeout) whose status IS consumed under `set -euo pipefail`. Measured 200/200 TRUE below
+  64 KiB, 1/100 at 64 KiB, 0/200 at 200 KB. **NOT fixed here, deliberately:** it is hardening rather
+  than one of the 22 live sites, and touching that file pulls `tests/tsv-field-collapse.bats` — red
+  on trunk for an unrelated unpadded-TSV finding in the same file — into this land's own-scope.
+  Carrying optional hardening at the cost of a fifth subsystem's ratchet is the wrong trade; filed
+  separately instead.
+
+If either file ever gains `set -e` on the wrong path, or a new large-variable producer appears, the
+lint will not catch it.
 
 **Landing history — three attempts, three different causes (all diagnosed):**
 

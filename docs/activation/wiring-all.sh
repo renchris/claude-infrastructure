@@ -113,9 +113,9 @@ for t in cc-wait cc-respawn cc-route cc-teardown cc-announce; do
 done
 readlink "$HOME/.claude/scripts/limit-recover/lr-reset-poller.sh" | grep -q "$REPO" \
   && echo "  ✓ poller mirror → repo" || { echo "  ✗ poller mirror not a repo symlink"; FAILS=$((FAILS+1)); }
-launchctl list 2>/dev/null | grep -q com.claude.lead-supervisor \
+launchctl list 2>/dev/null | grep com.claude.lead-supervisor >/dev/null \
   && echo "  ✓ lead-supervisor launchd ACTIVE (D2)" || echo "  · lead-supervisor NOT loaded — see D2 template below"
-launchctl list 2>/dev/null | grep -q com.reso.lr-reset-poller \
+launchctl list 2>/dev/null | grep com.reso.lr-reset-poller >/dev/null \
   && echo "  ✓ lr-reset-poller launchd ACTIVE" || echo "  · lr-reset-poller NOT loaded — install per template ① below"
 "$BIN/cc-sessions" --names >/dev/null 2>&1 \
   && echo "  ✓ P8 session registry answers" || echo "  · P8 registry quiet — see /tmp/p8-activate.sh for a fresh machine"
@@ -123,9 +123,9 @@ for s in desk-invariant.sh nightly-regression.sh settings-drift-assert.sh; do
   if [ -x "$HOME/.claude/scripts/$s" ] && readlink "$HOME/.claude/scripts/$s" | grep -q "$REPO"; then echo "  ✓ scripts/$s live → repo"
   else echo "  ✗ scripts/$s symlink broken/foreign"; FAILS=$((FAILS+1)); fi
 done
-launchctl list 2>/dev/null | grep -q com.claude.desk-invariant \
+launchctl list 2>/dev/null | grep com.claude.desk-invariant >/dev/null \
   && echo "  ✓ desk-invariant launchd ACTIVE (P0-14)" || echo "  · desk-invariant NOT loaded — install per template ⑨ below"
-launchctl list 2>/dev/null | grep -q com.claude.nightly-regression \
+launchctl list 2>/dev/null | grep com.claude.nightly-regression >/dev/null \
   && echo "  ✓ nightly-regression launchd ACTIVE (P0-18)" || echo "  · nightly-regression NOT loaded — install per template ⑩ below"
 # desk-existence liveness snapshot (read-only; the invariant itself will page/re-fire when loaded)
 if [ -f "$HOME/.claude/cc-roles/desk" ]; then

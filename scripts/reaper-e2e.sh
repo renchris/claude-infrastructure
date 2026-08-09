@@ -124,7 +124,7 @@ EOF
 chmod +x "$D/bin/classifyB"
 CC_REAPER_CLASSIFY_BIN="$D/bin/classifyB" "$HERE/bin/cc-reaper" sweep --reap > "$D/outB.txt" 2>&1 || true
 if pane_present "$PANE" && kill -0 "$VICTIM_PID" 2>/dev/null; then ok "orphan NOT reaped — pane + process survive (WIP not lost)"; else bad "orphan was reaped despite dirty tree (WIP LOST)"; fi
-if git -C "$REPO" for-each-ref 'refs/wip/**' 'refs/checkpoints/**' 2>/dev/null | grep -q .; then ok "WIP checkpointed BEFORE the close attempt ($(git -C "$REPO" for-each-ref --format='%(refname)' 'refs/wip/**' 'refs/checkpoints/**' | head -1))"; else bad "no checkpoint ref created for uncommitted work"; fi
+if git -C "$REPO" for-each-ref 'refs/wip/**' 'refs/checkpoints/**' 2>/dev/null | grep . >/dev/null; then ok "WIP checkpointed BEFORE the close attempt ($(git -C "$REPO" for-each-ref --format='%(refname)' 'refs/wip/**' 'refs/checkpoints/**' | head -1))"; else bad "no checkpoint ref created for uncommitted work"; fi
 grep -q ABORT "$D/outB.txt" && ok "reaper reported ABORT (dirty at act-time re-check)" || bad "no ABORT reported"
 rm -f "$REPO/WIP_UNCOMMITTED.txt"; git -C "$REPO" update-ref -d refs/wip/e2e-lead/LAST 2>/dev/null || true
 
