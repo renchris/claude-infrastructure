@@ -287,6 +287,24 @@ EOF
   echo "$output" | grep -q 'live session'
 }
 
+@test "a claude.exe worker is a live session — the spelling this gate was blind to" {
+  # The dispatched-worker spelling. Interactive launches exec the `.bin/claude` SYMLINK (caught by
+  # the /claude arm above); cc-pane-runner workers, teammates and research subagents exec the
+  # RESOLVED native binary, and NOTHING else on the line says "claude session". Pinned per-file
+  # rather than trusting live_sessions()'s "mirrors concurrency() exactly" docstring: that claim
+  # was FALSE for five days after f8178bfe fixed only the claude-accounts copy.
+  needy
+  printf '%s\n' \
+    "/Users/c/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@s  CLAUDE_CONFIG_DIR=$CFG" \
+    > "$D/ps"
+  run "$C" next3
+  # REFUSED, not proven: undercounting to 0 does not weaken this gate, it OPENS it — run() only
+  # refuses on k != 0, so a blind matcher green-lights a token redemption against live sessions.
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'live session'
+  [ ! -f "$D/claude-calls" ]
+}
+
 @test "ps unavailable → live count UNKNOWN → REFUSED, never assumed idle" {
   needy
   export CC_RELOGIN_PS_BIN="$D/no-such-ps"
