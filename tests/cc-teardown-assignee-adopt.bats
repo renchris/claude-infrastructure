@@ -365,7 +365,7 @@ probe_in() {
 }
 
 teardown() {
-  [ -n "${D:-}" ] && [ -f "$D/probe.pid" ] && kill -9 "$(cat "$D/probe.pid")" 2>/dev/null
+  [ -n "${D:-}" ] && [ -f "$D/probe.pid" ] && kill -9 "$(cat "$D/probe.pid")" 2>/dev/null || true
   return 0
 }
 

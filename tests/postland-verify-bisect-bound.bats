@@ -580,7 +580,7 @@ wedge_reaped_within() { # <secs> — 0 once nothing of ours is left alive
 # A red B17/B18 must not leave a 400s process on the operator's box.
 teardown() {
   [ -n "${WEDGE:-}" ] || return 0
-  pkill -f "$WEDGE" 2>/dev/null; sleep 1; pkill -9 -f "$WEDGE" 2>/dev/null
+  pkill -f "$WEDGE" 2>/dev/null || true; sleep 1; pkill -9 -f "$WEDGE" 2>/dev/null || true
   return 0
 }
 

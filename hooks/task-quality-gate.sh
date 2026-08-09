@@ -206,6 +206,20 @@ run_infra_gate() {  # runs from $WORKTREE_PATH; exits 0 (pass/skip) or 2 (fail)
     fi
   fi
 
+  # unguarded-kill ratchet — the same class ship-land's gate now blocks, at the earlier chokepoint,
+  # so an author learns it here rather than at the land. A kill whose stderr is silenced but whose
+  # exit status is not: once the child is REAPED it returns 1 and bats' errexit aborts the body, so a
+  # test that passed on its own merits goes red under load. Strict and whole-corpus (the baseline is
+  # zero), so no own-set is derived here — unlike the shellcheck block above, this one has nothing to
+  # grandfather. Unconditional on batsfiles: the class can be introduced by any land, and the scan is
+  # ~0.2s over the whole corpus.
+  if [ -x "scripts/bats-kill-guard-lint.sh" ]; then
+    local kgout=""
+    if ! kgout="$(scripts/bats-kill-guard-lint.sh tests 2>&1)"; then
+      rc=1; summary="${summary}"$'\n'"[bats-kill-guard]"$'\n'"${kgout}"
+    fi
+  fi
+
   if [ "${#batsfiles[@]}" -gt 0 ]; then
     local uniq="" runbats=()
     uniq="$(printf '%s\n' "${batsfiles[@]}" | LC_ALL=C sort -u)"

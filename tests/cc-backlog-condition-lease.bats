@@ -43,7 +43,7 @@ setup() {
 }
 
 teardown() {
-  [ -f "$BATS_TEST_TMPDIR/live.pid" ] && kill "$(cat "$BATS_TEST_TMPDIR/live.pid")" 2>/dev/null
+  [ -f "$BATS_TEST_TMPDIR/live.pid" ] && kill "$(cat "$BATS_TEST_TMPDIR/live.pid")" 2>/dev/null || true
   return 0
 }
 
