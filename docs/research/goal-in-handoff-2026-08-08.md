@@ -472,3 +472,119 @@ The rule at the end of the previous section stands and gains a second clause:
 ⚠️ **Do not "fix" this by dropping `cc-await-ping`.** It is load-bearing for peer mail; removing it
 trades a silent goal failure for a silent comms failure. The compensating control below keeps both.
 
+## The live A/B — this session was the experiment
+
+The fire that produced this section armed a `/goal` on the investigating session, deliberately, so
+the investigator carried an instance of the bug. It ran with **no background Bash at any point** —
+the SessionStart hook's own banner recorded *"No inbox wake path armed"*. That makes it the positive
+control, and the two sessions differ in exactly the variable under test:
+
+| | `d33abf12` (the original finding) | `1d46d9c4` (this session) |
+| --- | --- | --- |
+| terminal | kitty | **kitty (identical)** |
+| operator Stop hooks | the same 11 | **the same 11** |
+| `cc-await-ping` background watcher | live across the whole window | **none, ever** |
+| sentinel attachments | 1 | 1 |
+| **evaluations** | **0 over ~2 h / ~12 turns** | **1, at the FIRST Stop, 8 min after arm** |
+
+```
+09:50:38Z  goal_status  met=false  sentinel=true            ← armed
+09:58:56Z  hook_blocking_error  hookEvent=Stop              ← a SHELL Stop hook blocked
+09:59:10Z  goal_status  met=true  sentinel=absent  iterations=1
+           reason="The condition specified two deliverables: (a) establish the mechanism…"
+```
+
+Two things are settled by those three records:
+
+1. **The evaluator works on this box, in kitty, unmodified.** It ran, judged, wrote a non-sentinel
+   record with `iterations:1`, and auto-cleared — the full healthy shape the original session never
+   produced a single instance of. Terminal-shaped causation is not merely unsupported by the code
+   reading; it is contradicted by a live run.
+2. **A blocking shell Stop hook does not shadow the goal hook — measured, not just read.** At
+   `09:58:56Z` a shell hook returned a blocking decision, and **14 seconds later, at the same
+   Stop**, the goal evaluated anyway. That is the updated leading hypothesis refuted by direct
+   observation, independently of the `uL` code reading.
+
+⚠️ **A fleet-wide census was attempted and is NOT offered as evidence.** Across 351 goal-arming
+sessions, "a watcher was already live at arm" showed 69% zero-eval (n=13) against a 53% base rate
+(n=338) — a difference far too weak to carry a claim, and confounded three ways: task *terminal
+status* is not recorded in transcripts, so "a watcher was launched" is not "a watcher was running at
+that Stop"; `_We` defers on subagents and teammates too, which the census did not model; and most
+zero-eval sessions simply ended before any Stop occurred with a live goal. It is reported here so
+the next reader does not re-run it expecting a result. **The code is the mechanism and the A/B is
+the corroboration; the census is neither.**
+
+---
+
+# The compensating control — landed 2026-08-09
+
+**The cause is inside the CC binary and the deferral is correct behaviour, so there is nothing of
+ours to repair in the evaluation path.** What is ours is that the skip is *silent*. Two things
+landed, and deliberately nothing else:
+
+### 1 · `hooks/goal-inert-watch.sh` — make the skip loud (`8b0dac58`)
+
+A Stop hook that reports, on the same Stop where the skip happens, that the armed goal is not being
+evaluated and names the tasks holding it off. It is possible only because CC hands every Stop hook
+the very population its own predicate scans — `YTe` @237761 spreads
+`{background_tasks: cip(i.taskRegistry.all()), session_crons: uip()}` into the hook input.
+
+Fires only when **all four** hold: a goal's arm marker is the most recent `goal_status` attachment
+(armed and never evaluated) · ≥1 non-terminal background task of a deferring type · the payload is a
+real Stop · not damped on the condition. **Delivery is `systemMessage` only** — never
+`decision:"block"`, never `additionalContext` (which on 2.1.220 forces a turn and increments the
+consecutive-block counter). It informs; it structurally cannot hold a session open, which bounds the
+blast radius of a regression to one unwanted line.
+
+Two traps it is built around, each of which yields a hook that is clean, green and **permanently
+silent** — the failure mode that would make shipping it worse than not:
+
+- **`background_tasks[].type` is the DISPLAY name.** `F$o` @237760745 maps `local_bash → "shell"`,
+  `local_agent → "subagent"`, `local_workflow → "workflow"`, `in_process_teammate → "teammate"`,
+  `remote_agent → "cloud session"`. A hook keyed on `local_bash` matches nothing and reports
+  all-clear forever — the caller-census-keyed-on-path defect, caught before it shipped only because
+  the map was read rather than assumed.
+- **A bare `grep goal_status` matches the assistant's own prose** — 6 hits where the truth was 1 on
+  the very transcript that produced this finding. Every read filters `type == "attachment"` first.
+
+It **abstains on `teammate` and `cloud session`**: `_We` excludes `in_process_teammate && isIdle` and
+`remote_agent && isLongRunning`, and `cip()` ships neither flag, so CC's predicate is not
+reproducible for those two. Under-reporting is the correct direction for an alarm — a hook that
+cried inert at a healthy goal would be trained around. `shell` alone covers `cc-await-ping`, the
+entire observed cause.
+
+`tests/goal-inert-watch.bats` — 14/14, including two mutation checks that each flip a positive test:
+keying on the raw type name silences the fire case (M1), and removing the sentinel discrimination
+makes it nag a goal that is evaluating perfectly (M2).
+
+### 2 · `migrations/0005-…` — the registration, STAGED (`68e3d7b4`)
+
+Declared `c10` because it edits `settings.json`; it is staged and never self-runs. It writes **every**
+config dir carrying the sibling Stop hooks — `~/.claude/settings.json` and
+`~/.claude-tertiary/settings.json` are separate real files, not symlinks into the checkout, and were
+already divergent when measured, so registering one would leave every session launched against the
+other blind. Exercised in a sandbox `$HOME`: registers both, second run is a clean no-op, verifies
+the edit by content before replacing the live file, backs up first, leaves the file untouched on any
+failure.
+
+**Until an operator runs it, the sensor is inert** — which is the honest state, and exactly what the
+`c10` class exists to represent.
+
+### What was deliberately NOT built
+
+- **No change to `session-continue.sh`.** It already blocks stops from a hook we own, is unaffected
+  by CC's deferral, and is 703 lines running at every Stop across the whole box. It is the answer to
+  *"a long-running session that does not stop early"* and it needed nothing; touching it to
+  duplicate `/goal` semantics would put every session in every repo at risk to re-implement a
+  feature that already exists one layer down.
+- **No attempt to defeat the deferral.** It is CC's, it is correct, and routing around it would mean
+  evaluating a goal against a transcript whose background work has not landed yet.
+
+### The rule for anyone arming a goal on this box
+
+> **A `/goal` and a parked background watcher are mutually exclusive.** If a session's completion
+> genuinely depends on the goal blocking its stop, do not arm `cc-await-ping` in it. If it needs the
+> watcher — nearly every fired peer session does — then use
+> `~/.claude/hooks/session-continue.sh set "<the ONE next step>"`, which is ours, is unaffected, and
+> was already the sanctioned actuator for the 🔧 state.
+
