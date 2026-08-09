@@ -241,7 +241,7 @@ oracles are local and answered correctly about a box the session is not on:
 
 | Tool | Used to say | Now says |
 | --- | --- | --- |
-| `cc-spawn-verify` | `ABSENT — Died, or never launched` (exit 1) | `OFFBOX` (exit **3**) |
+| `cc-spawn-verify` | `ABSENT — Died, or never launched` (exit 1) | `OFFBOX` (exit **3**) — and see the exit-4 note below |
 | `cc-board` | `DEAD` · `DIED-UNRENDERED` · `NO-RENDER?` | `OFFBOX` |
 | `team-orphan-reaper.sh` | **archived the team**, on a 600s launchd timer | KEEP + log |
 
@@ -267,6 +267,7 @@ team**. `2` = you passed no id.
 | --- | --- | --- |
 | `{"ok":false,…,"error":"Session not found: session_…"}` | **Usually the WRONG ACCOUNT, not a dead session.** A session id is scoped to the account that created it; the API reports another account's live session as not-found. | Check the declaration's `account`, and send from that account's config dir. Only after that reads correct is "genuinely retired" the diagnosis. |
 | `cc-spawn-verify: ✗ ABSENT … Died, or never launched` **for a cloud id** | The id is **not declared** (or is retired) — the abstain did not engage. | `cc-cloud is-offbox <id>`; if 1, declare it. |
+| `cc-spawn-verify: ✗ WEDGED … INERT on a blocking dialog` (exit **4**) | Not a cloud verdict at all — a LOCAL agent that started and stopped on a startup modal. `ps` reports it healthy; that is the point. | Answer the dialog in the named pane. The verdict prints the durable fix for its class. **Do not kill or re-fire** — the session is live. |
 | `cc-board: OFFBOX` | Working as intended — the board is abstaining, not reporting a problem. | Nothing. Use `cc-cloud show <id>` for real liveness. |
 | `Error: --cloud requires an interactive terminal` | You are running the create without a pty. | Wrap it: `script -q /dev/null claude --cloud "…" </dev/null`. Never suppress the check — without it the session runs **locally** while looking off-box. |
 | `Error: Bundle upload failed: Socket is closed after 3 attempts` | The CLI fell back to **bundle mode**, which it does when the GitHub link is unavailable. Measured intermittent — it is not always a real unlink. | Retry first. If it persists on that account, re-link it (§1). Do not read a `.linked` marker as proof it is fine. |

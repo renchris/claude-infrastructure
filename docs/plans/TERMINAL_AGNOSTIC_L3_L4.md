@@ -1214,6 +1214,63 @@ with a second consumer, not a local edit (`new-enum-member-falls-into-fail-close
 what a careless fourth member does). **Filed as a follow-on for that file's owner rather than forced
 through here.** With §9.2 closed, it has no live trigger today.
 
+### 9.6 The fourth state — CLOSED 2026-08-09 (backlog `75c2e3e2bde7`)
+
+Shipped as **exit 4 `WEDGED`** in `cc-spawn-verify` and **return 4** in
+`handoff-fire.sh:verify_engagement`, with the dialog enumeration in ONE shared file,
+`hooks/lib/pane-modal.sh`, so the rotting half has a single edit site. §9.5's framing held up on
+every point; four things it could not have known:
+
+- **It is a FIFTH member, not a fourth, and the fold had to be rewritten because of it.** `3 OFFBOX`
+  landed between the filing and the fix (CLOUD_OBSERVABILITY.md §5.2). `--all` folded with
+  `max(rc)`, which silently encoded "highest exit code = worst outcome" — true by luck up to 3,
+  false at 4, because `OFFBOX` is the set's only NON-VERDICT and must outrank every verdict no
+  matter what integer it wears. The rank is now an explicit table and a test asserts the property
+  the integer used to imply. This is the *real* shape of
+  `new-enum-member-falls-into-fail-closed-default`: the default arm was `max()`.
+- **The §9.5 prescription — "header AND an option" — is necessary and was NOT sufficient.** Measured
+  while writing the tests: two ordinary lines of THIS PLAN's prose, one naming the header and one
+  quoting an option mid-sentence, satisfy the conjunction *between them*, and a fleet whose agents
+  read this document produces that screen routinely. The fix is the other half of §9.5's own
+  sentence, translated instead of copied: the shell states anchor to column 0, so the TUI states
+  anchor to **column 0 modulo box chrome and menu index** (`^[^[:alnum:]]*([0-9]+\.)?[[:space:]]*`).
+  Prose begins with a letter; a rendered dialog line does not. The index is optional deliberately —
+  `hideIndexes` exists in the binary's own dialog vocabulary, and a rule that could go inert on a
+  rendering flag fails in the expensive direction.
+- **cfdd9fc3's folder-trust matcher was ALREADY INERT and nothing could have said so.** It keyed on
+  `Do you trust the files in this folder`, which does not exist in claude.exe 2.1.220 (both
+  spellings checked). The live wording is `Accessing workspace:` / `Quick safety check:` with
+  options `Yes, I trust this folder` / `No, continue without these permissions`. So the enumeration
+  is now pinned by a test that greps every fragment **out of the lib** and into the shipping binary
+  — with the stale string as its positive control, proving the anchor can fail. Measured across the
+  six co-installed tracks: the fragments are 8/8 in 183/219/220 and 7/8 in 156/161/170, so the test
+  resolves the NEWEST track (a plain `$HOME/.claude-*` glob is lexical and picked 156 — a binary
+  nothing launches — and convicted a healthy enumeration on its first run).
+- **The verdict buys a SAFETY property, not just a label.** Before it, a wedged fire fell through
+  the whole engagement window into the INC-4 recovery, which pastes the brief and sends CR at a
+  pane that is a single-key prompt — so the paste's own bytes become ANSWERS to whichever dialog is
+  up, and the two reachable here are workspace-trust and MCP-approval, i.e. exactly the two
+  `docs/research/cc-startup-modals-2026-08-04.md` §1 classifies as boundaries that must reach a
+  human. `verify_engagement` now abstains on 4, on both the in-loop and pre-resend paths.
+
+**Deliberately NOT built: the composer anchor as a general predicate.** The `? for shortcuts`
+positive anchor (`cc-startup-modals-2026-08-04.md` §3, measured 9/9) is class-level and is the right
+oracle for a one-shot startup watchdog in `bin/cc-pane-runner`, where "should have reached a composer
+by now" is sound. It is wrong for an any-time verdict in both directions: as a positive test a busy
+agent is not at a composer either, so it would report WEDGED for every working agent; as a negative
+veto over the enumeration, a modal opening mid-session leaves the earlier composer line in scrollback,
+so it would suppress a genuine wedge — trading a glance for an agent.
+
+**Verification.** 17 tests in `tests/pane-modal.bats` (new), 9 added to `tests/cc-spawn-verify.bats`,
+11 added to `tests/handoff-fire-pane-parked.bats`; 68 assertions green. Eleven mutants, each
+convicting the tests that exist for it and no others: conjunction weakened to header-only and to
+option-only, anchor removed, a fragment gone stale, the wedge check removed, the fold reverted to
+`max(rc)`, 4 folded into 2, the pane join degraded to a substring, the fail-closed screen read
+inverted, and the abstain deleted on each of its two paths. **One mutant initially SURVIVED** — the
+pre-resend abstain, because at any non-zero timeout the in-loop check returns first and that line is
+never evaluated; it is now pinned by a `FIRE_ENGAGE_TIMEOUT=0` arm. An invariant no test can reach is
+an invariant nobody is holding.
+
 **Two defects the LIVE FLEET caught in the unlanded tool that its fixtures could not.** Both are
 recorded because the LESSONS outlive the code, and both were found by running it against 27 real
 panes rather than a fixture:

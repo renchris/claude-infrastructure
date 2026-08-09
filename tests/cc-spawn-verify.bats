@@ -25,8 +25,19 @@ setup() {
   # operator's live fleet — a sibling suite learned that the hard way.
   D="$BATS_TEST_TMPDIR/bin"; mkdir -p "$D"
   export PATH="$D:$PATH"
-  # No kitty on PATH ⇒ parked_evidence fails OPEN ⇒ absence reports ABSENT(1), never PARKED(2).
+  # No kitty ⇒ both pane oracles fail OPEN ⇒ absence reports ABSENT(1) never PARKED(2), and presence
+  # reports RUNNING(0) never WEDGED(4).
+  #
+  # ⚠ CC_KITTY_BIN, not PATH. This line used to be `CC_TERM_KITTY_TO=""` alone, with a comment
+  # claiming "no kitty on PATH" — but PREPENDING $D to PATH does not REMOVE the operator's real
+  # /opt/homebrew/bin/kitten further down it, and CC_TERM_KITTY_TO="" falls through `:-` to an
+  # inherited KITTY_LISTEN_ON. This suite was therefore querying the operator's live 20-pane fleet
+  # and passing by luck (no live pane happened to quote `--agent-name worker`). The subject's
+  # `+set` seam is honored set-to-EMPTY, so this genuinely turns the lookup off (memory:
+  # unfixtured-sensor-executes-the-deployed-subject).
+  export CC_KITTY_BIN=""
   export CC_TERM_KITTY_TO=""
+  unset KITTY_LISTEN_ON
   # No cc-cloud by default: the off-box abstain seam is OFF for every pre-existing test, so the
   # local verdicts below are measured against the same subject they always were. Set-to-EMPTY is
   # honored verbatim by the subject; the off-box tests re-enable it explicitly.
@@ -164,4 +175,156 @@ fake_ps() {
   # Waiting the full timeout for a process that can NEVER appear is spending the clock to reach a
   # wrong answer. 3s is a generous ceiling on "did not wait 6".
   [ "$elapsed" -le 3 ] || false
+}
+
+# ================================================================================================
+# 4 WEDGED — the process EXISTS and is inert on a modal (plan §9.5, backlog 75c2e3e2bde7)
+#
+# THE STATE THIS SUITE COULD NOT PREVIOUSLY EXPRESS. Every test above models an agent that is NOT
+# in the process table. §9.2's failure is the inverse: `claude.exe` is running, `ps` is healthy,
+# `agent_pid` finds it — and the session is stopped on a startup dialog doing no work. This file
+# reported that as `✓ RUNNING`, which is the one verdict that costs an agent rather than a glance.
+# ================================================================================================
+
+# A kitty that answers exactly two RPCs from files, and logs what it was asked, so a test can assert
+# WHICH pane was read rather than only what came back.
+#   $1 = file holding the `@ ls` JSON      $2 = file holding the `get-text` screen
+fake_kitty() {
+  KLOG="$BATS_TEST_TMPDIR/kitty.log"; : > "$KLOG"
+  cat > "$D/kitten" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$KLOG"
+for a in "\$@"; do
+  case "\$a" in
+    ls)       cat "$1"; exit 0 ;;
+    get-text) cat "$2"; exit 0 ;;
+  esac
+done
+exit 0
+SH
+  chmod +x "$D/kitten"
+  export CC_KITTY_BIN="$D/kitten"
+}
+
+# One window hosting a genuine agent process for $1, as `kitty @ ls` renders it.
+agent_window_json() { # $1=agent-name $2=window-id
+  cat > "$BATS_TEST_TMPDIR/ls.json" <<JSON
+[{"tabs":[{"windows":[{"id":$2,"in_alternate_screen":true,"at_prompt":false,
+  "foreground_processes":[{"cmdline":["/Users/x/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe","--agent-id","w@s","--agent-name","$1"]}]}]}]}]
+JSON
+  printf '%s' "$BATS_TEST_TMPDIR/ls.json"
+}
+
+mcp_modal_screen() {
+  cat > "$BATS_TEST_TMPDIR/screen" <<'EOF'
+│ New MCP server found in this project: ms365                  │
+│ 1. Use this MCP server                                       │
+│ 3. Continue without using this MCP server                    │
+EOF
+  printf '%s' "$BATS_TEST_TMPDIR/screen"
+}
+
+working_screen() {
+  cat > "$BATS_TEST_TMPDIR/screen" <<'EOF'
+⏺ Clauding… (2m 11s · 18.4k tokens)
+  ? for shortcuts
+EOF
+  printf '%s' "$BATS_TEST_TMPDIR/screen"
+}
+
+live_agent_ps() { fake_ps "  501 /Users/x/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@s --agent-name worker --model claude-opus-5"; }
+
+@test "WEDGED (4) — a live agent parked on the MCP-approval dialog is NOT reported RUNNING" {
+  live_agent_ps
+  fake_kitty "$(agent_window_json worker 312)" "$(mcp_modal_screen)"
+  run "$V" worker --timeout 0
+  [ "$status" -eq 4 ] || false
+  echo "$output" | grep -q 'WEDGED' || false
+  echo "$output" | grep -q 'mcp-trust-modal' || false
+  echo "$output" | grep -q 'pane id=312' || false
+  # The remedy is part of the verdict — a diagnosis with no next action is a report nobody can act on.
+  echo "$output" | grep -q 'enabledMcpjsonServers' || false
+  # `! A || false`, never `A && false` — the latter is and-absorbed under errexit, so it asserts
+  # nothing (scripts/bats-assert-liveness-fix.py names the class and rewrites it).
+  ! echo "$output" | grep -q 'RUNNING' || false
+}
+
+@test "a live agent that is WORKING stays RUNNING (0) — the oracle is not 'a TUI is up'" {
+  live_agent_ps
+  fake_kitty "$(agent_window_json worker 312)" "$(working_screen)"
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'RUNNING' || false
+}
+
+@test "REGRESSION: the pane join is by ARGV POSITION — a window merely QUOTING the flags is not it" {
+  # The same defect the process oracle above already paid for, arriving through the pane door: a
+  # shell whose command line carries the launch text is not the agent. If this join were a substring
+  # test, that window's screen would be read and any modal-shaped text on it would convict the agent.
+  live_agent_ps
+  cat > "$BATS_TEST_TMPDIR/ls.json" <<'JSON'
+[{"tabs":[{"windows":[{"id":999,"in_alternate_screen":false,"at_prompt":true,
+  "foreground_processes":[{"cmdline":["/bin/zsh","-lc","claude --agent-id w@s --agent-name worker"]}]}]}]}]
+JSON
+  fake_kitty "$BATS_TEST_TMPDIR/ls.json" "$(mcp_modal_screen)"
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+  # …and it never even read that pane. Absence of the read is the strong form of the assertion.
+  ! grep -q 'get-text' "$KLOG" || false
+}
+
+@test "a DIFFERENT agent's wedged pane does not convict the one we asked about" {
+  live_agent_ps
+  fake_kitty "$(agent_window_json somebody-else 312)" "$(mcp_modal_screen)"
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+}
+
+@test "FAIL-OPEN: no kitty ⇒ RUNNING, never WEDGED (a blind oracle cannot convict)" {
+  live_agent_ps
+  export CC_KITTY_BIN=""
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+}
+
+@test "FAIL-OPEN: the modal lib is ABSENT ⇒ RUNNING, exactly the pre-4 behaviour" {
+  # The deploy-lag branch: bin/ is a per-file symlink into the checkout, so this file can be live
+  # before install.sh next re-globs hooks/lib into ~/.claude. A missing side-car must degrade, and
+  # must not abort the script under `set -e`.
+  live_agent_ps
+  fake_kitty "$(agent_window_json worker 312)" "$(mcp_modal_screen)"
+  export CC_PANE_MODAL_LIB=""
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'RUNNING' || false
+}
+
+@test "FAIL-OPEN: an unreadable pane screen ⇒ RUNNING" {
+  live_agent_ps
+  : > "$BATS_TEST_TMPDIR/screen"
+  fake_kitty "$(agent_window_json worker 312)" "$BATS_TEST_TMPDIR/screen"
+  run "$V" worker --timeout 0
+  [ "$status" -eq 0 ] || false
+}
+
+@test "the fold RANK, not max(rc): OFFBOX still outranks WEDGED" {
+  # The property the old `max(rc)` fold got right only by arithmetic luck, and which 4 breaks:
+  # WEDGED is a verdict, OFFBOX is a NON-VERDICT, and a wave carrying a question this box could not
+  # ask must not report as one whose members were all answered.
+  use_cc_cloud
+  declare_cloud session_01CLOUD
+  live_agent_ps
+  fake_kitty "$(agent_window_json worker 312)" "$(mcp_modal_screen)"
+  run "$V" --all worker session_01CLOUD --timeout 0
+  [ "$status" -eq 3 ] || false
+  echo "$output" | grep -q 'WEDGED' || false
+  echo "$output" | grep -q 'OFFBOX' || false
+}
+
+@test "the fold RANK: WEDGED outranks PARKED and ABSENT in a mixed wave" {
+  live_agent_ps
+  fake_kitty "$(agent_window_json worker 312)" "$(mcp_modal_screen)"
+  run "$V" --all ghost worker --timeout 0
+  [ "$status" -eq 4 ] || false
+  echo "$output" | grep -q 'ABSENT   ghost' || false
 }

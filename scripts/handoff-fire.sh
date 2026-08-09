@@ -1757,6 +1757,27 @@ it2_paste_submit() { # $1=it2-bin $2=pane-uuid $3=text → 0 pasted+submitted / 
 # (`bash: no job control in this shell`, emitted by any `bash -i` without a tty) can never match:
 # it has no second colon, and it is not a refusal.
 FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash): (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory))}"
+
+# The modal enumeration for pane_wedge_reason below. Same guarded shape as the capacity-admit lib
+# (~line 3300) and for the same stated reason: a bare `. lib` under this script's `set -e` would
+# take out EVERY fire on the box when the file is missing, which is the fail-CLOSED direction for a
+# side-car whose whole job is to add one verdict. Repo-relative first — a lib landing in the same
+# commit is present beside this script before install.sh next re-globs hooks/lib into ~/.claude.
+# Absent ⇒ pane_modal_reason is undefined ⇒ pane_wedge_reason returns 1 ⇒ the pre-4 behaviour.
+_CC_PM=""
+if [ -n "${CC_PANE_MODAL_LIB+set}" ]; then
+  if [ -f "${CC_PANE_MODAL_LIB}" ]; then _CC_PM="${CC_PANE_MODAL_LIB}"; fi
+else
+  for _CC_PMD in "$(dirname "$0")/../hooks/lib/pane-modal.sh" \
+                 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/pane-modal.sh" \
+                 "${HOME:-}/.claude/hooks/lib/pane-modal.sh"; do
+    if [ -f "$_CC_PMD" ]; then _CC_PM="$_CC_PMD"; break; fi
+  done
+fi
+if [ -n "$_CC_PM" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_CC_PM" 2>/dev/null || _CC_PM=""
+fi
 pane_parked_reason() { # $1=it2-bin $2=session-id → echoes the reason, 0 parked / 1 not-parked/unknown
   local it2="$1" id="$2" screen line
   [ -n "$it2" ] && [ -n "$id" ] || return 1
@@ -1766,6 +1787,43 @@ pane_parked_reason() { # $1=it2-bin $2=session-id → echoes the reason, 0 parke
   line="$(printf '%s\n' "$screen" | grep -aoiE "$FIRE_PARKED_RE.*" | head -1 || true)"
   [ -n "$line" ] || return 1
   printf '%s' "$line"
+}
+
+# ---- PANE-WEDGED oracle: claude STARTED, and is inert on a modal (backlog 75c2e3e2bde7) --------
+# The EXACT INVERSE of pane_parked_reason above, and the reason it needs its own verdict rather than
+# a second pattern in FIRE_PARKED_RE. Parked = the shell refused the launch, so there is no session
+# and nothing to recover. Wedged = the session exists, booted, and stopped on a dialog it will hold
+# forever. `ps` is healthy for both halves of the pair and blind to the difference; only the pane's
+# own pixels carry it (plan §9.2 — every fresh session in a project whose .mcp.json declares an
+# unapproved server renders "New MCP server found in this project: …" and BLOCKS there).
+#
+# WHY THIS BUYS MORE THAN A LABEL — THE RE-TYPE. Before this verdict existed, a wedged fire fell
+# through the whole engagement window into the INC-4 recovery, which PASTES THE WHOLE BRIEF into the
+# pane and then sends CR. verify_engagement's own comment already records what a paste does to a
+# pane that is not an empty composer: at a single-key prompt "the paste's own ESC[200~ bytes are
+# consumed one-by-one as single-key ANSWERS". A startup modal is exactly such a prompt, and the two
+# it can reach are the workspace-trust and MCP-approval dialogs — the two the research classifies as
+# security boundaries that must reach a human (docs/research/cc-startup-modals-2026-08-04.md §1). So
+# the abstain is not a nicety: without it this script can answer a supply-chain prompt by accident.
+#
+# The enumeration itself is deliberately NOT here — it is hooks/lib/pane-modal.sh, shared verbatim
+# with bin/cc-spawn-verify, because a rotting list of UI strings must have exactly one edit site and
+# exactly one test pinning it against the shipping binary.
+#
+# Fails CLOSED to "not wedged" on an unreadable screen, an absent lib, or an unenumerated dialog —
+# identical polarity to pane_parked_reason, so a blind read can only ever cost the abstain, never
+# manufacture one. It reads the pane a SECOND time rather than sharing pane_parked_reason's read:
+# one extra bounded call per poll against a 3 s interval, in exchange for leaving a tested oracle on
+# the fire path byte-for-byte untouched.
+pane_wedge_reason() { # $1=it2-bin $2=session-id → echoes the modal slug, 0 wedged / 1 not-wedged/unknown
+  local it2="$1" id="$2" screen slug
+  [ -n "$it2" ] && [ -n "$id" ] || return 1
+  command -v pane_modal_reason >/dev/null 2>&1 || return 1
+  screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+  [ -n "$screen" ] || return 1
+  slug="$(printf '%s\n' "$screen" | pane_modal_reason || true)"
+  [ -n "$slug" ] || return 1
+  printf '%s' "$slug"
 }
 
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
@@ -1841,24 +1899,37 @@ EOF
 # INC-4 recovery), re-poll ≤retry, then return 1 (caller FAILS LOUD — never a false "→ fired").
 # All windows are env-overridable so tests run in seconds.
 #
-# THREE outcomes, not two (item 7146aab37a9a). 0 = engaged · 1 = never engaged · 2 = the pane is
-# PARKED on a shell prompt, i.e. the launcher never ran. 2 is not a slower 1: it has a different
-# cause, a different remedy, and — critically — it is knowable in SECONDS rather than after the
-# full window, which is the only reason the verdict reaches the caller at all. Every consumer of
-# this function must branch on 2 explicitly; a `!` test that folds 2 into 1 loses the diagnosis
-# (memory: a new third state must be taught to EVERY consumer of the exit code).
-# PARKED is checked FIRST in each iteration but can never mask a real engagement: it is a pure
-# short-circuit, and pane_parked_reason fails CLOSED to "not parked" whenever the screen is
-# unreadable, so the disk oracle remains the authority on success.
-verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2
+# FOUR outcomes, not two (item 7146aab37a9a gave the third, 75c2e3e2bde7 the fourth). 0 = engaged ·
+# 1 = never engaged · 2 = the pane is PARKED on a shell prompt, i.e. the launcher never ran ·
+# 4 = the pane is WEDGED, i.e. claude STARTED and is inert on a blocking modal. Neither 2 nor 4 is
+# a slower 1: each has a different cause, a different remedy, and — critically — each is knowable in
+# SECONDS rather than after the full window, which is the only reason the verdict reaches the caller
+# at all. Every consumer of this function must branch on 2 and 4 explicitly; a `!` test that folds
+# them into 1 loses the diagnosis (memory: a new state must be taught to EVERY consumer of the exit
+# code — new-enum-member-falls-into-fail-closed-default).
+#
+# WHY 4 AND NOT 3. This vocabulary is shared verbatim with bin/cc-spawn-verify, deliberately, so a
+# consumer learns ONE exit-code set. That file already spends 3 on OFFBOX (a declared cloud session,
+# which its local process table cannot answer for). Reusing 3 here for a different meaning would put
+# two incompatible contracts behind one number — strictly worse than the gap, which is inert.
+#
+# Both pane verdicts are checked in each iteration but neither can mask a real engagement: they are
+# pure short-circuits taken only AFTER engagement_seen has said no, and both oracles fail CLOSED
+# whenever the screen is unreadable, so the disk oracle remains the authority on success. PARKED is
+# tested first because the two are mutually exclusive by construction — a pane cannot be both a bare
+# shell and a running TUI — so the order is stability, not precedence.
+verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2/4
   local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
   local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
   local t=0
   ENGAGE_PARKED=""
+  ENGAGE_WEDGED=""
   while [ "$t" -lt "$timeout" ]; do
     engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
     ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_PARKED" ] && return 2
+    ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
+    [ -n "$ENGAGE_WEDGED" ] && return 4
     /bin/sleep "$interval"; t=$((t + interval))
   done
   # ABSTAIN rather than re-send into a shell. The re-send pastes the WHOLE BRIEF and then sends CR;
@@ -1871,6 +1942,12 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   # self-insert per character anyway, so even the flood guarantee does not hold.
   ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
   [ -n "$ENGAGE_PARKED" ] && return 2
+  # …and for the same reason, abstain on a MODAL. A startup dialog is a single-key prompt, so the
+  # paste below does not merely fail to help — its own bytes become ANSWERS to a workspace-trust or
+  # MCP-approval question. This gate is what makes the fourth state worth having rather than a nicer
+  # label on an unchanged failure.
+  ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
+  [ -n "$ENGAGE_WEDGED" ] && return 4
   echo "⚠ fired session not engaged after ${timeout}s — re-typing the prompt once (INC-4 recovery)" >&2
   if [ -n "$pane" ] && [ -n "$it2" ] && [ -n "$resend" ]; then
     it2_paste_submit "$it2" "$pane" "$resend" || true   # bracketed-paste: no flood if pane is still a shell
@@ -1880,6 +1957,11 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
     engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
     ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_PARKED" ] && return 2
+    # The re-typed brief can itself CAUSE this: a session that boots into a trust dialog swallows
+    # the paste as answers and then sits there. The retry loop has to be able to say so, or the
+    # window closes on a generic "never engaged" for a pane whose screen names its own cause.
+    ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
+    [ -n "$ENGAGE_WEDGED" ] && return 4
     /bin/sleep "$interval"; t=$((t + interval))
   done
   return 1
@@ -6973,10 +7055,10 @@ else
   }
   if [ "$ENGAGE_VERIFY" = 1 ]; then
     PROJ_DIR="$(config_dir_for_launcher "$LAUNCHER")/projects"
-    # Capture the rc rather than testing it inline: verify_engagement has THREE outcomes and an
-    # `if verify_engagement` folds 2 (pane parked on a shell prompt) into the same else-branch as 1
-    # (booted but never ingested), whose printed remedy — "re-fire warm" — is right for 1 and
-    # actively wrong for 2. `|| rc=$?` is set -e-safe.
+    # Capture the rc rather than testing it inline: verify_engagement has FOUR outcomes and an
+    # `if verify_engagement` folds 2 (pane parked on a shell prompt) and 4 (session up, wedged on a
+    # modal) into the same else-branch as 1 (booted but never ingested), whose printed remedy —
+    # "re-fire warm" — is right for 1 and actively wrong for both others. `|| rc=$?` is set -e-safe.
     ENGAGE_RC=0
     verify_engagement "$PROJ_DIR" "$FIRE_MARKER" "$REG_DIR" "$SPAWNED_PANE" "$REAL_IT2" "$(cat "$PROMPT_FILE")" \
       || ENGAGE_RC=$?
@@ -7022,6 +7104,17 @@ else
       echo "!! FIRE FAILED — pane PARKED, launcher never ran: ${SPAWNED_PANE:-<pane?>} is still a shell and refused/blocked on the launch command — $ENGAGE_PARKED" >&2
       echo "   The launch command was: $CMD" >&2
       echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
+      emit_handoff_telemetry 0 || true
+      exit 1
+    elif [ "$ENGAGE_RC" = 4 ]; then
+      # The INVERSE of the branch above, and the distinction is the whole point of the verdict: the
+      # session EXISTS. It booted, it is alive, and it stopped on a dialog. Do not clear the pane and
+      # do not re-fire — both destroy a live session whose only problem is one unanswered keystroke.
+      # No re-send was attempted (verify_engagement abstains on 4), so nothing has been typed at the
+      # dialog and the operator's answer is still their own.
+      echo "!! FIRE FAILED — pane WEDGED, session alive but INERT: ${SPAWNED_PANE:-<pane?>} booted and is blocked on a startup dialog — $ENGAGE_WEDGED" >&2
+      echo "   $(pane_modal_remedy "$ENGAGE_WEDGED")" >&2
+      echo "   The session is LIVE — do NOT clear the pane or re-fire; answer the dialog, then re-check engagement. ps reports it healthy, which is why nothing else flagged it." >&2
       emit_handoff_telemetry 0 || true
       exit 1
     else
