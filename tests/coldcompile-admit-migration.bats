@@ -56,7 +56,7 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   bash "$MIG" >/dev/null
   run bash "$MIG"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already registered"* ]]
+  [[ "$output" == *"already registered"* ]] || false
   [ "$(jq -r --arg c "$HOOK_CMD" '[.hooks.PreToolUse[]?.hooks[]?.command] | map(select(. == $c)) | length' "$SETTINGS")" = "1" ]
 }
 
@@ -64,7 +64,7 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   bash "$MIG" >/dev/null
   run bash "$MIG" --undo
   [ "$status" -eq 0 ]
-  ! registered
+  ! registered || false
   [ "$(bash_group_len)" = "2" ]
   jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("qos-rewrite"))' "$SETTINGS" >/dev/null
   jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("validate-bash"))' "$SETTINGS" >/dev/null
@@ -80,7 +80,7 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   rm "$HOME/.claude/hooks/coldcompile-admit.sh"
   run bash "$MIG"
   [ "$status" -ne 0 ]
-  ! registered
+  ! registered || false
   [[ "$output" == *"missing or not executable"* ]]
 }
 
@@ -96,7 +96,7 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   ln -s "$fake/hooks/coldcompile-admit.sh" "$HOME/.claude/hooks/coldcompile-admit.sh"
   run bash "$MIG"
   [ "$status" -ne 0 ]
-  ! registered
+  ! registered || false
   [[ "$output" == *"would be inert"* ]]
 }
 
@@ -104,6 +104,6 @@ bash_group_len() { jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash")][0].ho
   jq 'del(.hooks.PreToolUse[1])' "$SETTINGS" > "$SETTINGS.new" && mv "$SETTINGS.new" "$SETTINGS"
   run bash "$MIG"
   [ "$status" -eq 0 ]
-  ! registered
+  ! registered || false
   [[ "$output" == *"not a fleet config"* ]]
 }

@@ -184,7 +184,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   local f; f="$(ps_fixture busy "$FRESH_NEXT" "$OLD_SERVER" "$A_SHELL")"
   CC_IGNITION_PS_FILE="$f" run bash "$GATE" --class next-dev --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=busy"* ]]
+  [[ "$output" == *"verdict=busy"* ]] || false
   [[ "$output" == *"incumbent pid=123"* ]]
 }
 
@@ -250,7 +250,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   local f="$D/burst.ps" i
   : > "$f"; for i in 1 2 3 4 5; do printf '  %d 10:00 %s %s /srv/w.js\n' $((400+i)) "$NODE" "$NODE" >> "$f"; done
   CC_IGNITION_PS_FILE="$f" CC_IGNITION_BURST_N=3 run bash "$GATE" --check
-  [[ "$output" == *"burst node_n=5 limit=3"* ]]
+  [[ "$output" == *"burst node_n=5 limit=3"* ]] || false
   CC_IGNITION_PS_FILE="$f" CC_IGNITION_BURST_N=9 run bash "$GATE" --check
   [ -z "$output" ]
 }
@@ -268,7 +268,7 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
   local f; f="$(ps_fixture stuck "$FRESH_NEXT")"
   CC_IGNITION_PS_FILE="$f" CC_IGNITION_WAIT_S=2 CC_IGNITION_INTERVAL_S=1 run bash "$GATE" --class next-dev
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=admit-timeout"* ]]
+  [[ "$output" == *"verdict=admit-timeout"* ]] || false
   [ "$(jq -r 'select(.verdict=="admit-timeout") | .waited_s' "$CC_IGNITION_LOG" | tail -1)" = "2" ]
 }
 

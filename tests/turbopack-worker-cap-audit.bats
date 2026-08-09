@@ -105,7 +105,7 @@ state_of() { # $1 = json output, $2 = app
 @test "7 the verdict token goes to stderr on every format, so a table caller can still parse it" {
   mkapp exposed 16.2.6 y
   run bash -c 'bash "$1" --root "$2" --quiet 2>&1 >/dev/null' _ "$AUDIT" "$ROOT"
-  [[ "$output" == *"verdict=uncovered"* ]]
+  [[ "$output" == *"verdict=uncovered"* ]] || false
   [[ "$output" == *"uncovered=1"* ]]
 }
 
