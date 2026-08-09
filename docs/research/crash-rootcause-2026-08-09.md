@@ -148,7 +148,7 @@ sufficient at a 15–20 % trip point and is reversible/lossless (`SIGCONT`). The
 |---|---|---|
 | **Arm `devserver-gc`** (`DEVGC_ACT=1`) | Removes ownerless `next dev` spawners between storms; would have reaped one at 03:40 tonight; dry-run log is clean (keeps live-owner servers) | backlog `898f8eafb809` (pre-existing) — recommendation upgraded by tonight's evidence |
 | **Sentinel parent-breaker** | The spawner (`next-server`, comm ≠ `^node`) is outside the cohort and keeps minting between trips; when the frozen cohort shares one non-claude parent, SIGSTOP the parent too | new backlog item (this session) |
-| **Next.js postcss worker leak — upstream fix/upgrade target** | The v16.2.6 dev server hosted every Aug-9 horde; v16.2.12 ran horde-free the same nights; reso-repo change | W11 research agent in flight; lands as a reso task |
+| **Next.js postcss worker storm — remedy is a CONFIG FLAG, not an upgrade** (W11, delivered) | **No released Next fixes it**: `process_pool/mod.rs` byte-identical v16.2.6↔v16.2.12 (sha1 `4ae43bcf`), v16.3.0 adds diagnostics only; upstream #95108 (exact symptom match) was bot-auto-closed 30 s after filing, untriaged. Source-level mechanism: bootup semaphore gains +1 permanent permit per completed boot; scheduler spawns fresh with ZERO delay whenever `queued_tasks` spikes (mass invalidation from fleet edits); idle heap unbounded; the only reaper fires after whole-app module-graph COMPLETION, which continuous edits prevent. Fix shipped in the installed 16.2.6: `experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` in reso's next.config — structurally removes the child processes AND the `fork()` abort (`node-2026-08-09-041046.ips`: next-swc aborting in `_malloc_fork_parent` at 04:10:46 — which is why wave 1 "self-recovered": the spawner died mid-fork). Known bounded risk: pre-#96592 (unreleased), a failing plugin can leak worker THREADS — one V8 heap, not 700 PIDs. Also worth filing a reproduction upstream — this machine's evidence exceeds the original report's. | reso task (this board) updated with the exact edit; execution via reso's own rails per cross-repo policy |
 | **`memorystatus_control` per-pid memlimit lever** | The one kernel-enforced per-process cap available on macOS (root; phys_footprint ledger); never built | W7 §4 finding — backlog |
 | **MEMORY.md over-cap repair** | The crash memories are unindexed; the loader drops the tail | pre-existing blocked items (`150c50055e1c` et al.) |
 | kitty IOSurface churn test + `close_on_child_death` | ~1 GB non-purgeable GPU pool at 24 panes, growth-vs-plateau undetermined; dead panes retain surfaces (secondary, non-causal) | task #90 (in progress) + W4 §Open |
@@ -162,10 +162,24 @@ and watch segments drain. Manual abort bound: kill the decoy at 30 % segments re
 drill must not depend on the mechanism under test. (The 08-06 orphan-instance SIGSTOP already
 demonstrates the path end-to-end; the drill re-proves it with tonight's tuned floor/cap.)
 
+**Drill attempt 2026-08-09 04:50 — clean no-trip, verification stands on three other legs.**
+`memory_pressure -S -l critical` + an 80 MB decoy ran 180 s without moving the compressor
+(segments held 0.00 % throughout; the simulator's allocation never exceeded free RAM on the
+post-reboot box, and macOS compresses only under genuine free-page exhaustion — synthesizing
+segment pressure cheaply is not possible without a ~30-40 GB dirty ballooner). Aborted clean at
+the time bound; decoy released and killed. The armed state therefore rests on: (1) the loaded
+job definition carries the exports (`launchctl print` ProgramArguments; exec preserves env),
+(2) `tests/compressor-sentinel.bats:434` proves `CC_SENTINEL_ACT=stop` reaches the actuator
+branch, (3) the 08-06 field SIGSTOP of a real burst by the orphan armed instance. The standing
+observable: the next genuine trip's snap line must read `actuator: SIGSTOPped N process(es)` —
+any `actuator: DISARMED` line after 2026-08-09 04:36 PDT is a regression to escalate.
+
 ## 9. Residuals (named, unresolved, honest)
 
-- **What exactly spawns 300+ postcss workers in 90 s** — per-file-change worker spawn without reap
-  under mass worktree edits is the leading mechanism; W11 (upstream issue + fixed version) pending.
+- ~~What exactly spawns 300+ postcss workers in 90 s~~ **RESOLVED by W11 at source level** (see §7):
+  queue-spike → zero-delay spawn preference + monotonically widening bootup semaphore + a reaper
+  gated on a graph completion that never comes. The Aug-2 25-crash node burst is also resolved:
+  an **unrelated** third-party napi addon SIGSEGV (`index.node`, uuid `15297104…`), not postcss.
 - The 08-09 00:38 triple-SIGTERM (`session-sigterm-forensics-2026-08-09.md`) remains unlinked to
   the panics — open, per its own doc.
 - W10 (hostile-review alternates axis) was killed by panic #6 before delivering; its named
