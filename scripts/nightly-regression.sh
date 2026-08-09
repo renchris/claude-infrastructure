@@ -116,8 +116,14 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
   local name="$1" base="$2"; shift 2
   NCHECK=$((NCHECK+1))
   local out; out="$(outfile "$name")"; [ -n "$out" ] || out=/dev/null
-  local rc=0 to
+  local rc=0 to dto
   case "$NGR_CHECK_TIMEOUT" in ''|*[!0-9]*) to=0 ;; *) to="$NGR_CHECK_TIMEOUT" ;; esac
+  # A per-check MEASURED bound outranks the global default. The default is sized for one gate/lint;
+  # a check that is itself a COMPOSITION of gates is a different animal, and a bound that does not
+  # fit turns a real verdict into a permanent NON-VERDICT — worse than the too-late page it prevents.
+  if dto="$(ngr_decl_lookup "$base" NGR_CHECK_TIMEOUT_DECL)"; then
+    case "$dto" in ''|*[!0-9]*) ;; *) to="$dto" ;; esac
+  fi
   if [ "$to" -gt 0 ] && [ -n "$NGR_OSA_TB" ] && [ -x "$NGR_OSA_TB" ]; then
     "$NGR_OSA_TB" -k 10 "$to" "$@" >"$out" 2>&1 || rc=$?
   else
@@ -135,8 +141,18 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
       TIMEOUTS+=("$name:rc$rc"); return 0 ;;
   esac
 
-  # (2) READINESS BAR — judge the failed-COUNT against its declared baseline, never the exit code.
-  if ngr_bar_marker "$out"; then
+  # (2) COUNT-JUDGED — judge the failed-COUNT against its declared baseline, never the exit code.
+  # Two ways in, and the second is why never-stuck-gate stopped being unreadable:
+  #   · the output self-identifies as a READINESS BAR (chronic-by-design; it may sit at a nonzero
+  #     baseline), or
+  #   · the check carries a DECLARED baseline, which is itself the statement "this check's verdict
+  #     is its count". An INVARIANT is exactly that with the baseline pinned at 0 — it must never
+  #     print a bar marker, because it is not chronic-by-design and a nonzero row here would declare
+  #     a broken invariant tolerable.
+  # Widening this entry cannot silence anything at baseline 0: ngr_bar_verdict returns `bar` only
+  # when failed ≤ baseline, i.e. failed = 0, i.e. the check exited 0 and never reached this branch.
+  # So for a 0-baseline row the only reachable outcomes are red-regressed and red-unparsable.
+  if ngr_bar_marker "$out" || ngr_decl_lookup "$base" NGR_BAR_BASELINE >/dev/null; then
     local nf bmax v; nf="$(ngr_bar_failed "$out")"
     bmax="$(ngr_decl_lookup "$base" NGR_BAR_BASELINE || true)"
     v="$(ngr_bar_verdict "$nf" "$bmax")"
@@ -151,7 +167,10 @@ run_check_step4() { # <display-name> <basename> -- <cmd...>
         printf '  RED  %s (readiness bar with NO declared baseline — add a row to NGR_BAR_BASELINE)\n' "$name"
         REDS+=("$name"); return 1 ;;
       *)
-        printf '  RED  %s (readiness bar emitted no parsable "N met · M failed" count)\n' "$name"
+        # rc travels: a DECLARED check can reach here by dying before it counts anything (syntax
+        # error, set -u, argv rejection), and "no parsable count" alone would drop the one datum
+        # that says which.
+        printf '  RED  %s (exit %d — no parsable "N met · M failed" count; judged a plain failure)\n' "$name" "$rc"
         REDS+=("$name"); return 1 ;;
     esac
   fi
@@ -228,11 +247,35 @@ NGR_BAR_BASELINE=(
   "reaper-safety-gate.sh|0"
   "respawn-safety-gate.sh|1"               # measured 2026-07-30: 1 met · 1 failed
   "route-safety-gate.sh|0"                 # measured 2026-07-30: 2 met · 0 failed
+  # never-stuck-gate is an INVARIANT, not a readiness bar: 0 is its baseline BY DEFINITION, and a
+  # nonzero row here would declare a broken invariant tolerable. The row exists so the page can
+  # print HOW FAR it slipped. Measured 2026-08-08: 22 met · 0 failed at trunk AND at the deployed
+  # layer; the 2026-07-30 pre-fix revision b21ff641 reproduces 20 met · 2 failed (wait-safety-gate +
+  # premortem-gate, both from one reaper-horizon-lint red, closed by a9b784eb). Without this row
+  # those two states print the identical line — `RED never-stuck-gate(live) (exit 1)` — which is the
+  # 21·0→19·2 slip this whole job was built to catch, still invisible on its own page.
+  "never-stuck-gate.sh|0"
   # DELIBERATELY UNDECLARED — limit-reset-safety-gate.sh and session-lifecycle-safety-gate.sh. Both
   # re-run bats internally and outran a 900s probe on a loaded box, so no honest baseline exists yet.
   # They reach the NON-VERDICT branch (rc 124) long before the bar branch, so leaving them undeclared
   # costs nothing today; if one ever COMPLETES it reports RED as "undeclared bar", which is the
   # intended fail-closed prompt to measure it on a quiet box and add a row. Never guess these.
+)
+
+# PER-CHECK TIMEOUT overrides: "<basename>|<seconds>". Read through the same ngr_decl_lookup
+# indirection as its two siblings, so SC2034 is the same false positive documented above.
+# A bound must fit the BAND it runs in, not the bench it was sized on: this job's plist declares
+# ProcessType Background + Nice 10 + LowPriorityIO, and a check cut at its bound reports rc 124 —
+# a NON-VERDICT forever, which is silence wearing a verdict's clothes.
+# shellcheck disable=SC2034
+NGR_CHECK_TIMEOUT_DECL=(
+  # never-stuck-gate runs EIGHT sibling gates, four of which re-run bats internally, so it is this
+  # job's longest check by construction. Measured 2026-08-08 on this box: 245s in the foreground at
+  # load 7.6, and 422s under the plist's OWN band (taskpolicy -c background + nice 10) at load 9.9 —
+  # a 1.72x tax that puts it 41% ABOVE the 300s default. Moving it onto the bounded runner at the
+  # default would have converted the job's headline signal into a nightly rc-124 NON-VERDICT. 1800s
+  # is ~4.3x the measured background number and is still a TIGHTENING: on run_check it was unbounded.
+  "never-stuck-gate.sh|1800"
 )
 
 ngr_decl_lookup() { # <basename> <array-name> → payload on stdout, rc 1 when undeclared
@@ -353,7 +396,17 @@ regress() {
   fi
 
   # 3. the live systematic invariant (p12 regression signal)
-  [ -x "$NEVERSTUCK" ] && run_check "never-stuck-gate(live)" "$NEVERSTUCK"
+  # On run_check_step4, NOT run_check: this is the one check this job's own header names as its
+  # reason to exist, and on the plain runner it got none of the three verdicts step 4 was built to
+  # express. Two consequences, both measured 2026-08-08:
+  #   · it is the job's LONGEST check (422s in the plist's own band) and therefore the likeliest to
+  #     be cut or peer-pkilled — and run_check convicts rc 124/137/143 as RED. The selftest below
+  #     has asserted "rc 143 is a NON-VERDICT" since 2026-07-30, but its subject was step 4, so the
+  #     property was proven for every check EXCEPT the headline one.
+  #   · its verdict is a COUNT ("N met · M failed"), and run_check threw it away: a slip to 20·2 and
+  #     a collapse to 3·19 both printed `RED never-stuck-gate(live) (exit 1)`. That is the same
+  #     blindness that let premortem slip 7·1 → 6·2 in plain view of this page.
+  [ -x "$NEVERSTUCK" ] && run_check_step4 "never-stuck-gate(live)" never-stuck-gate.sh "$NEVERSTUCK"
 
   # 3b. the live IDL abstention monitor — a check stuck at 100% BLIND abstention is a silent
   #     no-check (blind-check law §3i, T-P6-4). Exits nonzero only on a PROVABLY inert hook;
@@ -574,6 +627,85 @@ selftest() {
     run_check_step4 "broken-gate.sh" broken-gate.sh "$nvd/broken-gate.sh" >/dev/null 2>&1
     [ "${#REDS[@]}" -eq 1 ] && [ "${#TIMEOUTS[@]}" -eq 0 ] ) \
     && okp "NV: a genuine exit 1 is still RED (the control)" || badp "NV: a real failure stopped being RED"
+
+  # ── I: the headline check — a DECLARED INVARIANT is count-judged (2026-08-08) ───────────────────
+  # never-stuck-gate is not chronic-by-design, so it emits no bar marker and the marker alone could
+  # never reach the count branch for it. Its DECLARATION is the way in; these prove the way in works
+  # and that widening the entry did not make every plain failure count-judged.
+  printf 'never-stuck-gate: 20 met · 2 failed\n⇒ THE INVARIANT IS BROKEN — a session CAN currently go silently idle through the failing leg.\n' > "$d/cls/invariant.out"
+  ngr_bar_marker "$d/cls/invariant.out" \
+    && badp "I: never-stuck-gate output must NOT read as a readiness bar (it tolerates nothing)" \
+    || okp  "I: never-stuck-gate emits no bar marker — the declaration is the only way in"
+  [ "$(ngr_bar_failed "$d/cls/invariant.out")" = 2 ] \
+    && okp "I: parses the invariant's failed-count (the 20·2 the page could not print)" \
+    || badp "I: invariant failed-count parse wrong"
+  # Pinned at 0, unlike its bar siblings above: a bar's baseline ratchets, an invariant's is 0 BY
+  # DEFINITION, so "resolves to a number" would accept the one value that must never be written.
+  case "$(ngr_decl_lookup never-stuck-gate.sh NGR_BAR_BASELINE)" in
+    0) okp  "I: never-stuck-gate baseline is 0 — an invariant tolerates nothing" ;;
+    *) badp "I: never-stuck-gate baseline missing or nonzero (a broken invariant would read as a bar)" ;;
+  esac
+  [ "$(ngr_bar_verdict 2 0)" = red-regressed ] \
+    && okp "I: 2 failed against baseline 0 ⇒ RED naming the count (the 19·2 case)" \
+    || badp "I: a broken invariant was absorbed"
+
+  local decd; decd="$d/cls/dec"; mkdir -p "$decd"
+  printf '#!/bin/bash\necho "never-stuck-gate: 20 met · 2 failed"\nexit 1\n' > "$decd/counting-gate.sh"
+  chmod +x "$decd/counting-gate.sh"
+  # The verdict line goes to a FILE, never `$(…)`: a command substitution is its own subshell, so
+  # run_check_step4's REDS+=/BARS+= would land there and the count read back as 0 — an assertion
+  # that can only ever see an empty array is a vacuous pass wearing a measurement's clothes.
+  ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0
+    run_check_step4 "declared-invariant" never-stuck-gate.sh "$decd/counting-gate.sh" >"$decd/v-dec.txt" 2>&1
+    [ "${#REDS[@]}" -eq 1 ] && [ "${#BARS[@]}" -eq 0 ] \
+      && grep -q '2 failed > baseline 0' "$decd/v-dec.txt" ) \
+    && okp "I: a DECLARED check with no marker is count-judged — the page names 2 failed > baseline 0" \
+    || badp "I: the declaration never reached the count branch — the slip stays unprintable"
+  ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0
+    run_check_step4 "undeclared-plain" no-such-gate.sh "$decd/counting-gate.sh" >"$decd/v-und.txt" 2>&1
+    [ "${#REDS[@]}" -eq 1 ] && grep -q '(exit 1)' "$decd/v-und.txt" ) \
+    && okp "I: an UNDECLARED check with the same output is still a plain RED (the widening's control)" \
+    || badp "I: the widening swallowed an undeclared plain failure"
+  # Every I-assertion above calls run_check_step4 DIRECTLY, so all of them would still pass with the
+  # live invariant wired back onto plain run_check — the assertion's span would not be its subject,
+  # which is the exact defect this change exists to fix (the 2026-07-30 "rc 143 is a NON-VERDICT"
+  # row proved that property for every check EXCEPT the headline one, for a whole release). So pin
+  # the CALL SITE. $SELF is BASH_SOURCE-derived, so this reads the file actually running, never a
+  # sibling checkout that CC_NIGHTLY_REPO happens to point at.
+  # shellcheck disable=SC2016  # the single quotes are the point: `$NEVERSTUCK` is LITERAL TEXT being
+  # matched inside this file, not a variable to expand. Expanding it would search for the resolved
+  # path and the assertion would pass on any wiring at all.
+  grep -qE '\[ -x "\$NEVERSTUCK" \][[:space:]]*&&[[:space:]]*run_check_step4 "never-stuck-gate\(live\)" never-stuck-gate\.sh' "$SELF" \
+    && okp  "I: the live invariant is wired to the count-judging runner under its declared basename" \
+    || badp "I: never-stuck-gate(live) is on plain run_check — its count and its NON-VERDICTs are dropped"
+
+  # ── T: the per-check bound must FIT ITS BAND, and must reach the runner ─────────────────────────
+  case "$(ngr_decl_lookup never-stuck-gate.sh NGR_CHECK_TIMEOUT_DECL)" in
+    ''|*[!0-9]*) badp "T: never-stuck-gate has no numeric per-check bound" ;;
+    *) [ "$(ngr_decl_lookup never-stuck-gate.sh NGR_CHECK_TIMEOUT_DECL)" -gt "$NGR_CHECK_TIMEOUT" ] \
+         && okp  "T: the declared bound exceeds the default it exists to correct (422s measured > 300s)" \
+         || badp "T: the declared bound is at-or-under the default — the check would be cut nightly" ;;
+  esac
+  ngr_decl_lookup route-safety-gate.sh NGR_CHECK_TIMEOUT_DECL >/dev/null \
+    && badp "T: an undeclared check picked up an override" \
+    || okp  "T: an undeclared check keeps the global default"
+  # Effect-read, not table-read: a row nothing consults is a decoration. Paired so neither can pass
+  # vacuously — same stub, same tiny global bound, ONLY the declaration differs.
+  if [ -n "$NGR_OSA_TB" ] && [ -x "$NGR_OSA_TB" ]; then
+    printf '#!/bin/bash\nsleep 3\n' > "$decd/slow-gate.sh"; chmod +x "$decd/slow-gate.sh"
+    ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0; NGR_CHECK_TIMEOUT=1
+      run_check_step4 "declared-slow" never-stuck-gate.sh "$decd/slow-gate.sh" >/dev/null 2>&1
+      [ "${#TIMEOUTS[@]}" -eq 0 ] && [ "${#REDS[@]}" -eq 0 ] ) \
+      && okp "T: the declared 1800s bound OVERRIDES a 1s global — the check completes" \
+      || badp "T: the per-check override never reached the runner"
+    ( REDS=(); TIMEOUTS=(); BARS=(); NCHECK=0; NGR_CHECK_TIMEOUT=1
+      run_check_step4 "undeclared-slow" no-such-gate.sh "$decd/slow-gate.sh" >/dev/null 2>&1
+      [ "${#TIMEOUTS[@]}" -eq 1 ] ) \
+      && okp "T: the same stub UNDECLARED is cut at 1s (the override is doing the work)" \
+      || badp "T: the global bound did not cut an undeclared check — the pair proves nothing"
+  else
+    badp "T: no timeout(1) resolved — the bound assertions would pass vacuously"
+  fi
 
   echo "nightly-regression --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1

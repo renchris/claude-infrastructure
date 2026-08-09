@@ -151,6 +151,12 @@ RED-proven, including the two that must stay RED (a regressed bar, an undeclared
 
 - **`never-stuck-gate` 19·2** — real and chronic, the invariant this job exists to watch. A separate
   subsystem item, not a 07-25 regression.
+  > **CLOSED 2026-08-08 — and this line was already false when it was written.** See
+  > *§ never-stuck-gate 19·2 — closed* below. The two legs were `wait-safety-gate` and
+  > `premortem-gate`, and the generator fix five sections above (`a9b784eb`, rebased from the
+  > `3f8972ce` this doc cites) had already cleared both. This bullet cited the job header's figure
+  > instead of re-running the gate, so the same doc reports the legs green in one section and files
+  > them open in another — and it was the *open* half that got dispatched, 9 days later.
 - **The nightly has not run since 2026-07-26.** `regression.log` has one entry per night for
   07-19..26 and nothing for 07-27..29; `launchctl list` shows no `com.claude.nightly-regression`
   even though `~/Library/LaunchAgents/com.claude.nightly-regression.plist` exists. Reloading a
@@ -161,6 +167,83 @@ RED-proven, including the two that must stay RED (a regressed bar, an undeclared
 - **4 readiness bars still undeclared** (`limit-reset`, `respawn`, `route`,
   `session-lifecycle-safety-gate`) — they re-run `bats` internally and could not be measured under
   load. Fail-closed by design: they read RED as "undeclared bar" until a measured baseline is added.
+
+## never-stuck-gate 19·2 — closed (2026-08-08, item `72cb1474bb4b`)
+
+**The two failing legs were `wait-safety-gate` and `premortem-gate`, and both were already green
+before this item was dispatched.** Measured, not inferred — a control worktree at `b21ff641`
+(2026-07-30 00:47, the commit immediately before the fix) reproduces the failure exactly:
+
+```
+⛔ wait-safety-gate  RED (exit 1)
+⛔ premortem-gate    RED (exit 1)
+never-stuck-gate: 20 met · 2 failed
+```
+
+`20·2`, not `19·2`, for a reason worth keeping: `eb4088cf` added `session-lifecycle-safety-gate` to
+LEG 1 on 07-29, so the composition grew from 21 checks to 22. **The failing set never changed — only
+the passing count did.** Any future reading of this gate must compare the *failed* count, never the
+met count, against a total that moves whenever a sibling gate joins.
+
+Both legs trace to a single upstream red: `premortem-gate.sh:63` (S-1) shells out to
+`reaper-horizon-lint.sh`, and `wait-safety-gate.sh:57` (L0) shells out to `premortem-gate.sh`. One
+lint violation therefore lands as exactly two LEG-1 failures. `a9b784eb` (on `origin/main`) taught
+the lint the `-mtime +N` and marker-seconds horizon forms and declared the three reapers, with its
+own negative control. At HEAD the gate reads **22 met · 0 failed** — verified twice, from trunk *and*
+through the `~/.claude/scripts/never-stuck-gate.sh` symlink into the shared checkout (23 commits
+behind trunk, but carrying identical copies of all eight component gates and the lint).
+
+### What was actually still open: the watcher could not report the slip
+
+The invariant was green; the thing built to watch it was not able to say so. `never-stuck-gate(live)`
+was wired to `run_check`, not `run_check_step4` — so the one check this job's header names as its
+reason to exist received none of the three verdicts step 4 was built to express:
+
+- **A cut or externally-killed run was convicted as RED.** It is the job's longest check by
+  construction (eight sibling gates, four of which re-run `bats`), so it is the likeliest to be
+  SIGTERMed by the peer-pkill class — the very class root cause #4 above was written for. The
+  selftest has asserted *"rc 143 is a NON-VERDICT, not RED"* since 07-30, but its subject was step 4,
+  so the property held for every check **except** the headline one.
+- **The count was discarded.** `20 met · 2 failed` and `3 met · 19 failed` both printed
+  `RED never-stuck-gate(live) (exit 1)`. That is this document's own transferable rule — *count
+  NOT-success, not non-zero* — unapplied to the check the rule was discovered on.
+
+Fixed by moving the check onto `run_check_step4` under its declared basename, with three supporting
+changes:
+
+- **`NGR_BAR_BASELINE` row pinned at `0`.** never-stuck-gate is an **invariant**, not a readiness
+  bar: it must never emit a bar marker, and a nonzero row here would declare a broken invariant
+  tolerable.
+- **The count branch now also admits a check with a declared baseline**, not only one whose output
+  self-identifies as a bar. Safe by construction at baseline 0: `ngr_bar_verdict` returns `bar` only
+  when `failed ≤ baseline`, i.e. `failed = 0`, i.e. the check exited 0 and never reached the branch —
+  so a 0-baseline row can only ever produce `red-regressed` or `red-unparsable`, never silence.
+- **`NGR_CHECK_TIMEOUT_DECL`, a per-check bound.** The default 300s would have cut this check every
+  night. Measured on this box 2026-08-08: **245s foreground at load 7.6, 422s under the plist's own
+  `ProcessType Background` + `Nice 10` band at load 9.9** — a 1.72× tax putting it 41% *above* the
+  default. Declared 1800s: ~4.3× the measured background figure, and still a tightening, because on
+  `run_check` it was unbounded.
+
+Selftest 39 → 48 assertions, 0 failed on `/bin/bash` 3.2. Four mutants, one per changed site, each
+reddening exactly the assertion that owns it: revert the entry widening → the declaration never
+reaches the count branch; delete the baseline row → baseline + count assertions; remove the timeout
+lookup → the override never reaches the runner; revert the call site → back on plain `run_check`.
+
+That last mutant exists because of a trap worth naming: **every other new assertion calls
+`run_check_step4` directly, so all of them would still pass with the check wired back onto
+`run_check`.** The assertion's span would not have been its subject — the same defect being fixed.
+The call-site assertion reads `$SELF` (BASH_SOURCE-derived) so it can never grade a sibling checkout.
+
+Two notes for whoever picks up the neighbouring items:
+
+- **The nightly has never run from launchd at all** — the eight `regression.log` entries are manual
+  runs at working-day times (item `1e2fdb524533`, blocked on a C10 activation). So the 422s
+  background figure above is a *prediction* about the first real launchd run, not an observation of
+  one. It is the right band to size against; it is not yet a measurement of the job in flight.
+- **`limit-reset-safety-gate` and `session-lifecycle-safety-gate` both completed and exited 0** inside
+  LEG 1 on both runs, with all eight gates finishing in 245s/422s total. That is in tension with
+  item `38e4601fa933`'s premise that they outran a 900s probe. Deliberately **not** acted on here: a
+  baseline needs each gate timed on its own, and this table's own rule is *never guess these*.
 
 ## The transferable rule
 
