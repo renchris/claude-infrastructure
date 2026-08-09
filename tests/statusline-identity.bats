@@ -43,10 +43,35 @@
 # ⚠️ READ THIS BEFORE CALLING TESTS 2-9 VACUOUS: they are a FROZEN PROOF, not a live guard, and
 # that is deliberate. A live byte-identity guard is not available at any price — the marker is
 # INTENTIONALLY volatile, so any live baseline either freezes the design or needs a hand-maintained
-# exclusion list that rots. What stays LIVE against the working tree is what can still actually
-# regress: the process-count assertions (last test) and untracked-is-not-dirty (test 5). Do NOT
-# "fix" a future red here by regenerating the baseline from HEAD — that compares the script to
-# itself and passes vacuously forever.
+# exclusion list that rots. Do NOT "fix" a future red here by regenerating the baseline from HEAD —
+# that compares the script to itself and passes vacuously forever.
+#
+# ── WHICH QUESTION EACH LAYER ANSWERS (2026-08-09) ────────────────────────────────────────────
+# This suite now has TWO layers, because it was asked TWO different questions and the pin above
+# only answered the first:
+#
+#   LAYER 1 — tests 1-9, FROZEN.  "Did the perf refactor move the bytes?"  Answered NO, over a
+#             matrix of payloads x repo states, against two blobs resolved from git by content.
+#             Historical certification. It cannot go red for a change to statusline.sh, by design.
+#   LAYER 2 — the tests below, LIVE.  "Do these specific identity fields still render?"  Per FIELD
+#             against the WORKING TREE, so it guards what layer 1 stopped guarding.
+#
+# Why layer 2 had to exist: with layer 1 frozen, the only live behaviour left was
+# untracked-is-not-dirty (test 5) and the process counts (test 10) — and test 5 is a NEGATIVE
+# (`no *`), so it is structurally blind to the marker DISAPPEARING. Measured 2026-08-09 by
+# mutation: seven single-line mutants of statusline.sh — the fixed-48 buffer offset, IFS=$'\t' in
+# the payload read, main-branch suppression, the MECE worktree de-dup, the dirty marker, the effort
+# segment, the instance marker — ALL SEVEN left the suite 10/10 green. Two of those seven are
+# literal restorations of bugs statusline.sh's own header records as having SHIPPED (the fixed-48
+# offset that rendered 37%-real as "86%" on a 1M window, statusline.sh:16-20; the IFS field-shift
+# that read remaining_percentage AS used_percentage, statusline.sh:52-55). A suite that cannot
+# catch its subject's own two known regressions is not guarding it.
+#
+# Layer 2 asserts FIELDS, never bytes, and that is what stops the drift recurring: the five 2026-08-02
+# marker redesigns would not have reddened one test below. The marker's own coverage is therefore
+# DIFFERENTIAL — instance 3 renders differently from instance 1, and the stable launcher renders
+# nothing — which holds for any glyph anyone picks next. The one thing layer 2 pins exactly is
+# arithmetic (the context %), because that is where both shipped bugs actually lived.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -242,4 +267,204 @@ mk_repo() { # <dir> <branch>
   [ "$(code "$NEW" | grep -c 'git branch --show-current')" -eq 0 ]
   [ "$(code "$OLD" | grep -cE '^[[:space:]]*(COMMIT|BRANCH)=\$\(git')" -eq 2 ]
   [ "$(code "$OLD" | grep -c 'git diff --quiet')" -eq 1 ]     # the two index walks, one line
+}
+
+# ═══ LAYER 2 — the LIVE per-field guard (see "WHICH QUESTION EACH LAYER ANSWERS") ═══════════════
+# Everything below runs the WORKING-TREE script ($NEW) and asserts a FIELD. Nothing below compares
+# a byte sequence to a baseline, so a marker redesign cannot redden any of it.
+
+payload_1m_estimate() {  # no used_percentage → the ESTIMATE path, on a 1M window
+  jq -nc '{session_id:"1111-2222-3333",
+           transcript_path:"/Users/x/.claude-next/projects/-Users-x-p/1111.jsonl",
+           model:{id:"claude-opus-4-8"}, effort:{level:"medium"},
+           context_window:{context_window_size:1000000, remaining_percentage:70,
+                           total_input_tokens:300000},
+           cwd:"/Users/x/p"}'
+}
+payload_divergent() {    # used_percentage and remaining_percentage deliberately NOT complementary
+  # Fixture design note: payload_full carries used:47 / remaining:53, so "display used_percentage"
+  # and "compute 100 - remaining_percentage" produce the SAME 47 and no assertion over it can tell
+  # the two apart — a mutant swapping one for the other survived the whole suite (2026-08-09).
+  # 47/40 discriminates the FIELD. It is a discriminating fixture, not a claim that a real payload
+  # diverges this far.
+  jq -nc '{session_id:"6666-6666-6666",
+           transcript_path:"/Users/x/.claude-tertiary/projects/-Users-x-p/6666.jsonl",
+           model:{id:"claude-opus-4-8"}, effort:{level:"max"},
+           context_window:{context_window_size:1000000, used_percentage:47,
+                           remaining_percentage:40},
+           cwd:"/Users/x/p"}'
+}
+payload_stable() {       # the STABLE launcher's config dir — not in the ordinal map ⇒ no marker
+  jq -nc '{session_id:"5555-5555-5555",
+           transcript_path:"/Users/x/.claude/projects/-Users-x-p/5555.jsonl",
+           model:{id:"claude-opus-4-8"}, effort:{level:"high"},
+           context_window:{context_window_size:1000000, used_percentage:47},
+           cwd:"/Users/x/p"}'
+}
+
+# Render $NEW and strip SGR colour, so an assertion names a FIELD rather than a byte sequence.
+# Every ambient input the script reads is PINNED here, because the VERIFIER'S OWN environment
+# reaches it — measured on this box 2026-08-09: a live session exports
+# CLAUDE_CONFIG_DIR=~/.claude-secondary (so a payload without transcript_path would render the
+# marker for whichever ACCOUNT ran the suite), ITERM_SESSION_ID (~/.zshrc exports it INSIDE kitty
+# by design — statusline.sh:314-320), and TERM=xterm-kitty. Unpinned, these tests would assert the
+# verifier's terminal instead of the script. Later VAR=VAL wins (env(1); verified).
+render() { # <payload-producer> <dir> [VAR=VAL ...]
+  local p d; p=$("$1"); d="$2"; shift 2
+  ( cd "$d" && printf '%s' "$p" \
+      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID \
+            CLAUDE_CONFIG_DIR= TERM_PROGRAM=not-iterm TERM=xterm-256color \
+            "$@" bash "$NEW" 2>/dev/null
+  ) | sed $'s/\033\[[0-9;]*m//g'
+}
+# The line is ${GLYPH_PREFIX}${OUTPUT} and OUTPUT starts with the dir name, so the dir splits the
+# two. Keeping them apart is what makes this layer drift-proof: the marker is asserted only
+# DIFFERENTIALLY (below), and the body assertions cannot see a marker redesign at all.
+marker_of() { printf '%s' "${1%%"$2"*}"; }                       # <line> <dir>
+body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
+
+@test "live: dir, short commit, feature branch and the DIRTY marker all render" {
+  mk_repo "$WORK/live-plain" some-branch
+  local sha line
+  sha=$(git -C "$WORK/live-plain" rev-parse --short HEAD)
+  line=$(render payload_full "$WORK/live-plain")
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch · max · 47%" ]
+  # the POSITIVE twin of test 5. Test 5 asserts NO `*` for untracked files; on its own that is
+  # satisfied by a dirty marker that never renders at all (mutation-confirmed 2026-08-09).
+  printf 'changed\n' > "$WORK/live-plain/f"
+  line=$(render payload_full "$WORK/live-plain")
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max · 47%" ]
+  # and staged-only is dirty too (porcelain v2 `1` records, either index side)
+  git -C "$WORK/live-plain" add -A
+  line=$(render payload_full "$WORK/live-plain")
+  [ "$(body_of "$line" live-plain)" = "live-plain ($sha)  some-branch* · max · 47%" ]
+}
+
+@test "live: main and detached HEAD suppress the branch segment" {
+  mk_repo "$WORK/live-main" ""
+  local sha line
+  sha=$(git -C "$WORK/live-main" rev-parse --short HEAD)
+  line=$(render payload_full "$WORK/live-main")
+  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max · 47%" ]
+  git -C "$WORK/live-main" checkout -q --detach
+  line=$(render payload_full "$WORK/live-main")
+  [ "$(body_of "$line" live-main)" = "live-main ($sha) · max · 47%" ]
+  # a branch that is NOT main/master must still show — otherwise "suppressed" is unfalsifiable
+  git -C "$WORK/live-main" checkout -q -b keeper
+  line=$(render payload_full "$WORK/live-main")
+  [ "$(body_of "$line" live-main)" = "live-main ($sha)  keeper · max · 47%" ]
+}
+
+@test "live: a wt-<branch> dir renders the branch ONCE, dirty folded onto the dir (MECE)" {
+  mk_repo "$WORK/wt-live-dedupe" live-dedupe
+  local sha line
+  sha=$(git -C "$WORK/wt-live-dedupe" rev-parse --short HEAD)
+  line=$(render payload_full "$WORK/wt-live-dedupe")
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha) · max · 47%" ]
+  printf 'changed\n' > "$WORK/wt-live-dedupe/f"
+  line=$(render payload_full "$WORK/wt-live-dedupe")
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe* ($sha) · max · 47%" ]
+  # ...and the de-dup must not fire when the dir does NOT encode the branch, or "renders once"
+  # is unfalsifiable — the same repo on a renamed branch keeps its separate branch segment.
+  git -C "$WORK/wt-live-dedupe" checkout -q -b unrelated
+  line=$(render payload_full "$WORK/wt-live-dedupe")
+  [ "$(body_of "$line" wt-live-dedupe)" = "wt-live-dedupe ($sha)  unrelated* · max · 47%" ]
+}
+
+@test "live: the effort segment renders the payload's own effort level" {
+  mk_repo "$WORK/live-effort" some-branch
+  local line
+  line=$(render payload_full "$WORK/live-effort")     # effort: max
+  [ "${line% · max · 47%}" != "$line" ]
+  line=$(render payload_legacy "$WORK/live-effort")   # effort: medium
+  [ "${line% · medium · 78%}" != "$line" ]
+  # absent effort must render NO empty segment (payload_bare has no .effort)
+  line=$(render payload_bare "$WORK/live-effort")
+  ! printf '%s' "$line" | grep -q ' ·  ' || false
+  ! printf '%s' "$line" | grep -q ' · $' || false
+}
+
+@test "live: context % — exact on the parity path, WINDOW-SCALED on the estimate path" {
+  mk_repo "$WORK/live-ctx" some-branch
+  local line
+  # parity path: used_percentage is displayed as-is (integer-truncated), never recomputed.
+  line=$(render payload_full "$WORK/live-ctx")
+  [ "${line% · 47%}" != "$line" ]
+  # ...and it really is that FIELD being read: on a payload whose two figures do not sum to 100,
+  # deriving from remaining_percentage would render 60%. This is the assertion that fails if the
+  # parity path ever starts recomputing what the payload already states exactly.
+  line=$(render payload_divergent "$WORK/live-ctx")
+  [ "${line% · 47%}" != "$line" ]
+  ! printf '%s' "$line" | grep -q '60%' || false
+  # estimate path (no used_percentage): 97000 reserved tokens are scaled to the REAL window.
+  #   200k → offset 48 → 70-48 = 22 remaining → 78% used
+  #   1M   → offset  9 → 70- 9 = 61 remaining → 39% used
+  # SAME remaining_percentage (70), different window ⇒ different answer. This pair is the whole
+  # point: with the pre-2026-07-13 FIXED 48-point offset the 1M case renders 78% — the measured
+  # ~2.3x overstatement that relieved a 47%-real lead as "95% context" (statusline.sh:16-20).
+  line=$(render payload_legacy "$WORK/live-ctx")
+  [ "${line% · 78%}" != "$line" ]
+  line=$(render payload_1m_estimate "$WORK/live-ctx")
+  [ "${line% · 39%}" != "$line" ]
+  # and the fields must stay POSITIONAL: payload_1m_estimate has no used_percentage, so a
+  # whitespace IFS in the one-shot payload read would shift remaining_percentage into USED and
+  # render 70%. The US separator is what keeps empty fields positional (statusline.sh:52-55).
+  ! printf '%s' "$line" | grep -q '70%' || false
+  # no context block at all when the payload carries neither figure
+  line=$(render payload_bare "$WORK/live-ctx")
+  ! printf '%s' "$line" | grep -q '%' || false
+}
+
+@test "live: the parallel-instance marker distinguishes instances and is ABSENT on stable" {
+  mk_repo "$WORK/live-inst" some-branch
+  # DIFFERENTIAL, never a glyph literal — the marker was redesigned five times on 2026-08-02 and
+  # is expected to change again. What must hold for ANY design: a mapped config dir renders SOME
+  # marker, two different instances render DIFFERENT ones, and the stable launcher renders none.
+  local m3 m1 mstable
+  m3=$(marker_of "$(render payload_full   "$WORK/live-inst")" live-inst)   # .claude-tertiary → 3
+  m1=$(marker_of "$(render payload_legacy "$WORK/live-inst")" live-inst)   # .claude-next     → 1
+  mstable=$(marker_of "$(render payload_stable "$WORK/live-inst")" live-inst)
+  [ -n "$m3" ]
+  [ -n "$m1" ]
+  [ "$m3" != "$m1" ]
+  [ -z "$mstable" ]
+  # route 1: the explicit override wins over the config-dir map, and a malformed one falls
+  # through to the map rather than blanking the marker (statusline.sh:246-249).
+  local mov mbad
+  mov=$(marker_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=7)" live-inst)
+  [ -n "$mov" ]
+  [ "$mov" != "$m3" ]
+  mbad=$(marker_of "$(render payload_full "$WORK/live-inst" CLAUDE_INSTANCE_N=nonsense)" live-inst)
+  [ "$mbad" = "$m3" ]
+}
+
+@test "live: the iTerm2 glyph gate keys on TERM_PROGRAM, not on a spoofable ITERM_SESSION_ID" {
+  mk_repo "$WORK/live-term" some-branch
+  local base iterm spoof kitty
+  base=$(marker_of  "$(render payload_full "$WORK/live-term")" live-term)
+  iterm=$(marker_of "$(render payload_full "$WORK/live-term" TERM_PROGRAM=iTerm.app)" live-term)
+  [ "$iterm" != "$base" ]      # iTerm2 opts IN by name — otherwise the gate is doing nothing
+  # 🚨 the 7ab0acb5 regression, stated as an EQUALITY so no glyph literal appears: ~/.zshrc
+  # exports ITERM_SESSION_ID inside kitty BY DESIGN (Claude Code gates its pane backend on it),
+  # so a render that trusts it hands the unreadable small glyph back to kitty — which shipped,
+  # and broke within minutes. Setting it alone must change NOTHING.
+  spoof=$(marker_of "$(render payload_full "$WORK/live-term" ITERM_SESSION_ID=w0t0p0:901)" live-term)
+  [ "$spoof" = "$base" ]
+  # belt-and-braces conjunct: an iTerm2 session launched from a kitty pane inherits the kitty
+  # vars permanently, so $TERM — set by the emulator on each attach — wins the tie.
+  kitty=$(marker_of "$(render payload_full "$WORK/live-term" TERM_PROGRAM=iTerm.app TERM=xterm-kitty)" live-term)
+  [ "$kitty" = "$base" ]
+}
+
+@test "live: outside a git repo only the non-git fields render" {
+  mkdir -p "$WORK/live-norepo"
+  local line
+  line=$(render payload_full "$WORK/live-norepo")
+  local body; body=$(body_of "$line" live-norepo)
+  [ "$body" = "live-norepo · max · 47%" ]
+  # on the BODY, not the line — the instance marker carries its own parens, so testing the whole
+  # line here would assert the marker's current design and re-introduce exactly the drift
+  # this layer exists to stop.
+  ! printf '%s' "$body" | grep -q '(' || false      # no commit parens, no branch, no dirty marker
+  ! printf '%s' "$body" | grep -q '\*' || false
 }
