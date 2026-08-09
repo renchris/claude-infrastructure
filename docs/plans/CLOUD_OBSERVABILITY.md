@@ -586,8 +586,8 @@ five claims it named have split three ways:
 | 1 | headless send arm **delivers** (§6.3) | ✅ **PROVEN** — `{"ok":true,…}`, no pty, stdin closed |
 | 2 | attach gate also covers the send arm (§6.3) | ✅ **SETTLED — it does not**; interactive and headless attach are gated separately |
 | 3 | bundle-vs-clone (§6.5) | ✅ **SETTLED — CLONE** on the linked path; bundle mode is the unlinked fallback |
-| 4 | `agents --json` blind to cloud rows (§7.1) | ⬜ still **UNPROVEN** — not re-probed against the live session |
-| 5 | `refs/cc/*` per-branch vs per-refspec (§S5a line 586) | ⬜ still **UNRUN** — needs a push *from inside* a session |
+| 4 | `agents --json` blind to cloud rows (§7.1) | ✅ **PROVEN BLIND 2026-08-08** — probed *with a live cloud session as the positive control*; `kind` ∈ {`background`,`interactive`}, zero cloud rows, the live id absent from the array (§7.3) |
+| 5 | `refs/cc/*` per-branch vs per-refspec (§S5a line 586) | ✅ **ANSWERED per-REFSPEC 2026-08-08 — from the vendor's docs, NOT from a probe** (§7.4). The push never reached the proxy: **no cloud session has ever been observed to execute** (§7.5) — which is now the bigger open item |
 
 **The remaining two are no longer operator-shaped — they are ours to run**, and both now have a
 live-session precondition that is satisfiable on demand rather than blocked. Their one real cost is
@@ -690,6 +690,82 @@ inside the same launched shell is that control, and it costs one line.
 Any per-account sweep must enumerate from `~/.claude/accounts.json`, never from a hand-written list —
 a hand-written one silently substituted `~/.claude` for `~/.claude-secondary` and still returned a
 plausible 2-of-4.
+
+### 7.3 · `agents --json` is blind to cloud sessions — PROVEN 2026-08-08 (ledger row 4)
+
+```bash
+CLAUDE_CONFIG_DIR=$HOME/.claude-secondary claude agents --json --all </dev/null \
+  | grep -oE '"kind": *"[a-z]*"' | sort -u        # → "background", "interactive". Nothing else.
+```
+
+**The control is what makes this a finding rather than an empty list.** The same probe was run
+earlier and returned the same answer, but at that moment every declared cloud session was of unknown
+liveness — so a blind instrument and an empty world were indistinguishable, which is
+`[[lookup-miss-is-not-absence]]` exactly. It was re-run **while `session_01TYUBVAqDxXPQ6hpZhpWpUP`
+was live** (created minutes earlier; the headless send arm had just returned `{"ok":true}` against
+that id). The array still contained 8 rows, none of them cloud, and `grep -c` for the live session id
+returned **0**.
+
+⇒ **`agents --json` is a LOCAL pane census and must never be used as a cloud inventory.** `cc-cloud
+list` remains the only cloud-session inventory this box has, and it reads declarations, not the world
+— which is why §8.1's declare-before-fire is load-bearing rather than tidy.
+
+### 7.4 · The `refs/cc/*` question — answered from docs, unmeasurable from here (ledger row 5)
+
+**Answer: per-REFSPEC.** The vendor documents the rule under *GitHub proxy*:
+
+> **Push protection**: `git push` works only against the session's current working branch; cloning,
+> fetching, and PR operations work normally.
+> — <https://code.claude.com/docs/en/cloud-environments>
+
+⇒ `refs/cc/heartbeat/<id>` is not writable from a cloud VM. The O1 design in
+`cloud-observability-2026-08-07.md` §4.1 is **retracted** there, with the consequence
+`CONCURRENCY_PROGRAM.md` §S5a pre-committed to: a working-branch commit, or leave git.
+
+**The probe was designed, fired twice, and never reached the proxy.** Recorded because the *design*
+is reusable the moment a cloud session executes:
+
+| arm | target | separates |
+| --- | --- | --- |
+| **C** (control) | `HEAD:refs/heads/<own working branch>` | "refused" from "never ran" — without it, absence is unreadable |
+| P1 | `HEAD:refs/cc/probe/<id>` | is a non-`refs/heads` namespace reachable? ← the question |
+| P2 | `HEAD:refs/tags/<id>` | is the rule namespace-scoped or branch-scoped? |
+| P3 | `HEAD:refs/heads/<a different branch>` | own-branch-only vs any-branch |
+
+Two traps the first fire walked into, both fixed in the second brief and worth keeping:
+
+1. **The control was void as first written.** It said "push the branch you are on", but a VM that has
+   not branched yet is on `main`, and a refused push to `main` is refused *for a different reason* —
+   it would have been read as evidence about ref namespaces. The fix is `git switch -c` **first**, so
+   the control is a real session branch.
+2. **The report needs a channel that survives the thing being measured.** If every push is refused
+   the worker cannot report by pushing. The brief therefore also encodes each exit code in a *branch
+   name* (`cc-rc-<id>-c<n>-p1-<n>-…`), readable by `ls-remote` with no fetch. The push-independent
+   alternative — `gh issue comment`, which the docs say works through the proxy regardless of push
+   protection — is the right channel and was not used: creating a public issue on the operator's repo
+   is an outward-facing action, and it is theirs to authorise.
+
+### 7.5 · Why it could not be measured: eleven sessions, zero actions
+
+| | | re-read with |
+| --- | --- | --- |
+| cloud sessions declared (≥2 accounts) | **11** | `cc-cloud list` |
+| that produced any remote-visible artifact, ever | **0** | `git ls-remote origin` → 2 refs, both `main` |
+| longest | **17h** — `session_01TYUBVAqDxXPQ6hpZhpWpUP` (next2) | `cc-cloud show <id>` → `NOT-STARTED` |
+| best-conditions arm | `session_01DcTULYmXVnUnrwyFKm8LGH` (next3, `--verify`d link, clone mode, four-`git push` brief) — **0 refs in 7h** | same |
+
+Both probe sessions accepted work: the create returned a session id and an auto-generated title
+derived from the brief (*"Measure git ref namespace push behavior"*), and the headless send arm
+returned `{"ok":true}`. **Accepting is not executing**, and nothing downstream of the accept has ever
+been observed. Per §4.4 of the design doc, `NOT-STARTED` separates *alive* from seven other worlds
+collectively and names none of them — so this is a **wall, not a diagnosis**.
+
+⚠️ **One live defect found on the way, worth its own line:** `cloud-websetup-drive.sh --status`
+reported `next2  linked`, and a create on next2 minutes later fell back to **bundle mode**
+(`Bundle upload failed … Please setup GitHub`) — the exact signal §6.5 identifies as *the link is
+missing*. The store records that a link was once made; it does not observe that one still holds. Its
+own `--verify` is the un-fakeable check and is opt-in, so **`--status` alone must not be read as a
+precondition being satisfied** — pick the `--verify`d account, which is what the second fire did.
 
 ---
 
@@ -858,13 +934,20 @@ settled steps to watch them pass again is pure cost.
 2. ~~`claude -p "<msg>" --cloud <id>` returns `{ok:true}` — the send arm **delivers** (§6.3), and
    whether the §6.4 attach gate also covers it.~~ ✅ **both settled** — it delivers, and the attach
    gate does **not** cover the headless arm (§6.3).
-3. `claude agents --json` — does a cloud row appear, or is it local-only? Settles the row §7.1 marks
-   UNPROVEN rather than "no". **← now the first live step.**
-4. Which branch the VM pushes — settles bundle-vs-clone (§6.5) and §8 step 2.
-5. `git push origin HEAD:refs/cc/<id>` **from inside the session** — the per-branch vs per-refspec
-   experiment `CONCURRENCY_PROGRAM.md` §S5a line 586 calls the deciding measurement for the
-   `refs/cc/*` heartbeat design. Run it last: it is the only step that can fail in a way that tells
-   us nothing about the others.
+3. ~~`claude agents --json` — does a cloud row appear, or is it local-only?~~ ✅ **DONE 2026-08-08 —
+   BLIND** (§7.3). It needed no *successful* fire, only a live id: the probe is local and the session
+   only had to exist.
+4. Which branch the VM pushes — settles bundle-vs-clone (§6.5) and §8 step 2. ⬜ **still unrun, and
+   now known to be unrunnable by this route** — the VM never pushes anything (§7.5).
+5. ~~`git push origin HEAD:refs/cc/<id>` **from inside the session**~~ ✅ **ANSWERED from the vendor's
+   docs, not from the fire** (§7.4) — per-REFSPEC; the design is retracted in
+   `cloud-observability-2026-08-07.md` §4.1. The probe itself is **still unrun** and its brief is
+   preserved in §7.4 for whenever a session executes.
+
+🚨 **This checklist's own premise is now the open question.** It is titled *"what one successful fire
+validates"* and it assumed the scarce thing was a **live session id**. Two ids were obtained cheaply;
+what none of them produced was a session that **acts**. Steps 4 and 5 do not need another id — they
+need the first observed cloud execution (§7.5). Re-firing to collect more ids validates nothing.
 
 ---
 
@@ -1014,8 +1097,12 @@ It is not a bug in `classify` — every arm behaved as specified. It is a **decl
 the tool does not refuse, and it produces the one failure this whole document is organised against:
 a confident verdict about a session, computed from evidence that has nothing to do with it. The
 runbook now says never to declare `--branch main`; the stronger fix is for `declare` to refuse a
-branch that is the remote's default, or for the fire protocol to use the per-session `refs/cc/<id>`
-that `CONCURRENCY_PROGRAM.md` §S5a already specifies (still unrun — §6.7 claim 5).
+branch that is the remote's default. ~~or for the fire protocol to use the per-session `refs/cc/<id>`
+that `CONCURRENCY_PROGRAM.md` §S5a already specifies (still unrun — §6.7 claim 5).~~ **← that second
+option is DEAD (2026-08-08, §7.4): a cloud VM cannot write `refs/cc/*` at all, so a fire protocol
+keyed on one would declare against a ref that can never appear — a permanent false `NOT-STARTED`,
+which is this section's own hazard with the sign flipped.** The `declare`-refuses-the-default-branch
+fix is therefore the only one of the two left standing, and it is now the whole remedy.
 
 ### 10.3 · Account linking — all four are linked, and the marker set already disagrees
 

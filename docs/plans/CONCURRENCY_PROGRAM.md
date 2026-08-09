@@ -664,12 +664,57 @@ cloud-environments docs + the shipped `sdk-tools.d.ts` + the changelog, 2026-08-
    copied into the tree — copying another actor's shard would be the cross-write the one-writer law
    forbids).
 
-⚠️ **This lands on the `refs/cc/*` heartbeat design and is the next experiment to run.** Whether push
+⚠️ ~~**This lands on the `refs/cc/*` heartbeat design and is the next experiment to run.** Whether push
 protection is enforced per-*branch* (leaving `git push origin HEAD:refs/cc/…` a loophole) or
-per-*refspec* (blocking it outright) is settled by no doc, changelog entry, or binary string. If
+per-*refspec* (blocking it outright) is settled by no doc, changelog entry, or binary string.~~ If
 per-refspec, `refs/cc/*` cannot be written from a cloud VM at all and O1 must become a working-branch
-commit — the shape that design rejected — or leave git. One `--cloud` session and one attempted ref
-push decides it. This bus does not depend on the answer; that design does.
+commit — the shape that design rejected — or leave git. ~~One `--cloud` session and one attempted ref
+push decides it.~~ This bus does not depend on the answer; that design does.
+
+✅ **RESOLVED 2026-08-08 (item `40b46a34e1ce`) — treat it as per-REFSPEC. `refs/cc/*` is out, and the
+consequence this paragraph pre-committed to now binds: O1 becomes a working-branch commit or leaves
+git.** The strike-through above is the part that was wrong on its facts, and it is the instructive
+half: **"settled by no doc" was false when written.** Anthropic's cloud-environments page states the
+rule in one line, under *GitHub proxy*:
+
+> **Push protection**: `git push` works only against the session's current working branch; cloning,
+> fetching, and PR operations work normally.
+> — <https://code.claude.com/docs/en/cloud-environments>
+
+`refs/cc/heartbeat/<id>` is not the session's current working branch. **The lesson is about search,
+not about git:** the claim "no doc settles this" is a claim about a *corpus you searched*, and the
+searched corpus here was `sdk-tools.d.ts`, the changelog and the binary's strings — the three places
+this program had been finding everything else. The vendor's own configuration docs were never read.
+A negative existence claim is only as strong as the sources it enumerates, so **state the sources or
+do not make the claim** (`[[lookup-miss-is-not-absence]]`, applied to documentation).
+
+🔑 **And the answer was already on disk, in shipping code, while this paragraph called it open.**
+`bin/cc-bus:31` — landed as part of the very commit (`37796b13`) this section says "does not depend
+on the answer" — carries the comment: *"a `refs/cc/*` beat ref is precisely what push protection
+blocks."* Its author read the same push-protection rule and drew the same conclusion. So the repo
+held **two oracles in contradiction**: a plan doc saying *unsettled, needs an experiment*, and a live
+program saying *settled, here is the consequence*. The shipping side was right, which is the
+resolution rule this repo already knows (`[[spec-named-mechanism-may-be-prose-only]]`: when two
+oracles disagree, one is stale and the shipping side wins). **Cost of not checking: two cloud
+sessions and a day of watching a remote for a ref that could never appear.** The cheap prevention was
+one `grep -rn 'refs/cc' bin/`, which is the same *search the code before running the experiment* rule
+as `[[search-branch-graveyard-before-building]]` — it applies to settling questions, not just to
+building things.
+
+⚠️ **Honest limit — this is the vendor's stated rule, not a measurement of the proxy.** The loophole
+hypothesis (enforcement that checks `refs/heads/*` only, leaving `refs/cc/*` unexamined) is
+**untested**: the probe never reached the proxy, because **no cloud session this box creates has ever
+been observed to execute** — 11 sessions, ≥2 accounts, longest 17h, zero remote-visible actions
+(`cloud-observability-2026-08-07.md` §4.7). That gap is not a reason to keep the design alive.
+A heartbeat built on an undocumented gap in a stated security control fails **silently** the day the
+gap closes, and silent failure is the one mode the O1 design exists to prevent.
+
+🚨 **The bigger finding is the one that blocked the measurement, and it outranks this item.**
+§S5.2 measured that quota does not gate cloud *create*, and noted that *"creating a session and
+running tokens through it are different questions, and only the first has been measured."* The second
+is now measured, and the answer is **zero**. Until one cloud session is observed doing work,
+**cloud capacity is not capacity** and nothing downstream of "a cloud worker does X" should be built.
+Filed as its own item; it is a precondition for S5, not a detail of it.
 
 **What this does NOT establish.** ~~Cloud entitlement is per-account and remains unverified~~ — the same
 limit §7 of the sibling doc records. Measured on this box: `hasRemoteEnvironment: true` appears in
@@ -717,6 +762,13 @@ at `claude.ai/code`, and the routines `/fire` endpoint — **proven to exist**, 
 a `404` control on a sibling path, and subscription-billed with no `--cloud` verb or TTY in the way —
 is blocked on minting a per-routine bearer token. Both are **web-only operator actions**, one action
 each. Interactive attach is blocked by an **Anthropic-side rollout** and is not clearable here.
+
+**↑ That named cause is SPENT, and the replacement is worse (2026-08-08).** The CLI create path
+opened (§6.5 of the sibling doc) and two sessions were fired for this very experiment, on two
+accounts, one of them `--verify`-linked. Neither ran. So the blocker moved from *"we cannot start a
+cloud session"* to *"a started cloud session does nothing observable"* — 11 declared, 0 actions,
+longest 17h. **A named cause that gets cleared is not the same as a problem that gets solved**: this
+paragraph's diagnosis was correct and its clearing bought no measurement.
 
 #### S5.2 · The measured ceiling — MEASURED 2026-08-08, and the honest answer is a LOWER BOUND (gate G7)
 
@@ -843,8 +895,11 @@ Three results that change how S5 is sequenced:
 
 **Composes with S5a, and depends on it.** S5a's bus is how a cloud worker *participates*; this is how
 it is *observed*. The split is deliberate on both sides: the bus carries messages and work
-transitions (low-frequency, the trail IS the audit), `refs/cc/*` carries liveness (high-frequency,
-must never enter history). S5a's "the claim stays local" is exactly this doc's local-proxy shape —
+transitions (low-frequency, the trail IS the audit), ~~`refs/cc/*` carries liveness (high-frequency,
+must never enter history)~~ — **the liveness half lost its carrier 2026-08-08 (§S5a): a cloud VM
+cannot write `refs/cc/*`. The split itself survives and is still right; only the liveness transport
+is now unassigned** (candidates: a working-branch commit, or the non-git session-events surface in
+`cloud-observability-2026-08-07.md` §4.6). S5a's "the claim stays local" is exactly this doc's local-proxy shape —
 and it is the safer of the two answers to the `--venue` problem, because it never mints a cloud claim
 at all.
 
