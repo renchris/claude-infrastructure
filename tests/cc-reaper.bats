@@ -19,6 +19,24 @@ setup() {
   # non-$HOME seams (hermeticity ratchet): these default to ABSOLUTE /tmp paths, which a
   # fixtured $HOME cannot redirect — an absent path is right, the sensors fail open on it.
   export CC_PERMPEND_DIR="$D/permpend" CC_TELEMETRY_DIR="$D/telemetry"
+  # BEAT-FAMILY seams — the OVERRIDE half of the leak fixed above, and the half a fixtured $HOME
+  # cannot reach. `cb_beat_dir` reads "${CC_BEAT_DIR:-$HOME/.claude/cc-beats}": the $HOME path is
+  # only the FALLBACK, so an ambient CC_BEAT_DIR wins outright and reinstates the 2026-07-31
+  # incident verbatim — cb_system_live TRUE, every fixture sid beat-less, R3 fail-closed, teardown
+  # never invoked. Measured 2026-08-09 on this very tree: exporting CC_BEAT_DIR at a live beat dir
+  # takes the suite to 64-ok/17-FAIL, 15 of them at `td_called`, the other 2 at worktree_cleanup.
+  # That is what backlog 7d71a3467e61 reported as a "trunk red"; trunk was green the whole time.
+  #
+  # Why $HOME alone could never have covered it, and why the lint did not catch it either:
+  # test-hermeticity-lint.sh RULE 1 asks only "does setup() fixture $HOME?" (yes → hermetic), while
+  # RULE 5, which owns non-$HOME seams, explicitly skips any seam whose default mentions $HOME
+  # ("a $HOME-rooted default is RULE 1's business"). A `${VAR:-$HOME/…}` seam is therefore claimed
+  # by rule 1 and disclaimed by rule 5, and rule 1's remedy does not actually defend it. Neither
+  # rule covers the shape. Pin the variable itself; a $HOME default is not a defence.
+  export CC_BEAT_DIR="$D/cc-beats"          # absent by default → cb_system_live FALSE → v1 legs
+  export CC_BEAT_LIVE_MAX_S=900             # the liveness window is the DEFAULT, not the box's
+  export CC_REAP_BEAT_RETAKE=on             # never let an ambient `off` silently disarm R3
+  unset CC_BEAT_NOW                         # the beat clock is real time here, not a pinned one
   # real git repos: clean+shipped (landed) and dirty (not landed)
   # `git -C ""` is a NO-OP, not an error — an empty <dir> would write this identity into the cwd repo.
   mkrepo() { local r="${1:?mkrepo: repo path required}"; mkdir -p "$r"; git -C "$r" init -q; git -C "$r" config user.email t@t; git -C "$r" config user.name t
@@ -172,6 +190,21 @@ td_called() { [ -f "$D/td-calls" ]; }
   td_called
   grep -q 'PANE-A' "$D/td-calls"
   grep -q -- '--done-evidence' "$D/td-calls"
+}
+
+# The exact negative of the test above: same candidate, same fixture, ONE seam moved. It is the
+# positive control for the CC_BEAT_DIR pin in setup() — it must go GREEN only because R3 fires, and
+# it is the assertion that can fail if the pin is ever removed (then the test above reds instead,
+# and the diagnosis is immediate). R3 itself had no coverage at all before this.
+@test "R3 fail-closed: a live beat world + a beat-less sid → reap REFUSED, teardown never invoked" {
+  mkdir -p "$D/cc-beats"
+  printf '{"t":%s,"operatorT":%s,"who":"operator"}\n' "$(date +%s)" "$(date +%s)" \
+    > "$D/cc-beats/some-other-live-session.json"   # the world beats; OUR sid does not
+  mock_classify_handoff "$D/clean" 999 yes PANE-A
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  ! td_called || false                              # refused BEFORE teardown, not after
+  [[ "$output" == *"no presence beat"* ]]
 }
 
 @test "checkpoint runs BEFORE teardown (checkpoint-first)" {
