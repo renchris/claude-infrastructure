@@ -226,7 +226,19 @@ drain_count() { # $1=file $2=hook key
   [ ! -e "$empty/settings.json" ]
 }
 
-@test "a template PREDATING the 2-way-comms commit → nonzero + names the ff-sync fix" {
+# 2026-08-09 — THIS ASSERTION WENT STALE AND STARTED GUARDING THE BUG.
+# It used to require the abort to name `merge --ff-only origin/main`. The subject was then changed
+# DELIBERATELY to stop recommending exactly that (07-comms-drain-activate.sh:82-88): a bare ff
+# advances the FILES but creates no symlinks, so newly landed code goes live unlinked and silently
+# inert, and it carries live HEAD above every green stamp — which wedges scripts/deploy-live.sh into
+# refusing every tick (measured on the live host 2026-08-08). So the test was demanding the one
+# remedy the script had been fixed to reject, and it read as an ordinary red: RED on trunk before
+# this branch existed, fail-closed across every land in the repo.
+# The rule that resolves it (memory stale-assertion-becomes-an-inverted-guard): git log the SUBJECT
+# first — the side with the incident wins. Here the subject cites a measured incident and the test
+# cites nothing. Intent is unchanged and still pinned: the abort must name its OWN fix rather than
+# failing mutely. Only the sanctioned command changed.
+@test "a template PREDATING the 2-way-comms commit → nonzero + names its own sanctioned-advance fix" {
   fake="$BATS_TEST_TMPDIR/oldrepo"
   mkdir -p "$fake/settings-templates"
   echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"~/.claude/hooks/session-start.sh"}]}]}}' \
@@ -234,7 +246,10 @@ drain_count() { # $1=file $2=hook key
   CC_CONFIG_DIRS="$A" CC_LIVE_DIR="$LIVE" CC_REPO="$fake" CONFIRM=1 run bash "$S"
   [ "$status" -ne 0 ]
   printf '%s' "$output" | grep -q 'no mailbox-drain entry'
-  printf '%s' "$output" | grep -q 'merge --ff-only origin/main'
+  printf '%s' "$output" | grep -q 'deploy-live.sh'
+  # …and it must NOT hand back the remedy the subject was fixed to reject — asserting the positive
+  # alone would pass again the moment someone re-added the bare ff beside it.
+  [ "$(printf '%s' "$output" | grep -c 'merge --ff-only')" = "0" ]
   ! grep -q 'mailbox-drain' "$A/settings.json"
 }
 
