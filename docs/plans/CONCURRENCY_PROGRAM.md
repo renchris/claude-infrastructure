@@ -1325,10 +1325,20 @@ literally the same query as another one in the same event.**
 **LANDED: the memo goes at the chokepoint, not at six call sites.**
 
 ```
-one Stop = 6 consumers
-today            6 × 10  = 60 git subprocesses
-with the memo    1 × 12 + 5 × 3 = 27      ⇒  2.22×
+one Stop = 6 consumers, dispatched CONCURRENTLY (the shape §2 measured)
+WRAP_CACHE=off (today)                     60 git subprocesses
+memo, COLD  (all six arrive together)      27          ⇒ 2.22×
+memo, WARM  (unchanged tree, within TTL)   18          ⇒ 3.33×
 ```
+
+🚨 **The memo needed bounded SINGLE-FLIGHT or it was a regression, and the first bench could not see
+it.** Measured six times *in sequence* it read a clean 60 → 27. But §2 of this same wave had already
+established that the six consumers arrive inside one 45 ms window — so cold, all six miss together,
+all six compute, and the fingerprints are pure added cost: **72 vs 60, i.e. 20% WORSE on the first
+Stop after any tree change**, which is the common case. Fixed with a `mkdir` lock plus ONE short
+sleep for the losers (a poll loop would fork ~50 sleeps per loser and cost more than it saves),
+fail-open at every step. **Lesson: a cache benchmarked in an arrival pattern its callers do not use
+reports the saving it was hoping for.**
 
 Keyed by **content** (HEAD + full porcelain digest + the mtimes of the non-git stores the rungs read),
 never by time alone — a pure TTL would let a tree go dirty inside the window and still serve a ✅.
