@@ -1,9 +1,9 @@
 #!/bin/bash
 # migration-class: c10
 # migration-step: register hooks/mailbox-wake-arm.sh as an asyncRewake SessionStart hook so every session is inbox-armed at birth with no model action — it edits settings.json, which is C10
-# migration-run: bash ~/Development/claude-infrastructure/migrations/0006-mailbox-wake-arm-registration.sh
+# migration-run: bash ~/Development/claude-infrastructure/migrations/0007-mailbox-wake-arm-registration.sh
 #
-# 0006 — the registration half of arming-by-construction.
+# 0007 — the registration half of arming-by-construction.
 # Subject: hooks/mailbox-wake-arm.sh · tests/mailbox-wake-arm.bats (12/12, 2 mutants killed)
 # Finding: docs/plans/CROSS_SESSION_COMMS_V2.md §10 (findings 1, 2 and 4)
 #
@@ -58,14 +58,14 @@ REWAKE_MSG='📬 Peer mail arrived while you were idle — delivered by the inbo
 REWAKE_SUM='📬 peer mail'
 rc=0
 
-command -v jq >/dev/null 2>&1 || { printf '0006: jq required\n' >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { printf '0007: jq required\n' >&2; exit 1; }
 
 # ── precondition, re-derived at CONSUMPTION rather than trusted from the header ──────────────────
 # A migration's premise can rot between staging and the converge that reads it
 # (MEMORY.md discovery-critic-premise-goes-stale). If the adapter is not on the live layer yet, the
 # registration would name a path that does not execute — a registered no-op, which reads GREEN.
 if [ ! -x "$HOOK_FILE" ]; then
-  printf '0006: NOT registered — %s is missing or not executable.\n' "$HOOK_FILE" >&2
+  printf '0007: NOT registered — %s is missing or not executable.\n' "$HOOK_FILE" >&2
   printf '      hooks/ is symlinked into the live layer by install.sh; run it first.\n' >&2
   exit 1
 fi
@@ -94,17 +94,17 @@ for _t in "$HOME"/.claude-2*/node_modules/@anthropic-ai/claude-code/bin/claude.e
   strings -a "$_t" 2>/dev/null | grep -q 'asyncRewake' || _bad="${_bad}${_t} "
 done
 if [ -n "$_bad" ]; then
-  printf '0006: NOT registered — these installed tracks do NOT carry asyncRewake: %s\n' "$_bad" >&2
+  printf '0007: NOT registered — these installed tracks do NOT carry asyncRewake: %s\n' "$_bad" >&2
   printf '      Registering would make this hook BLOCK every session birth on them for %ss.\n' "$TIMEOUT" >&2
   exit 1
 fi
 if [ "$_checked" -gt 0 ]; then
-  printf '0006: precondition OK — asyncRewake present in all %s installed track(s)\n' "$_checked"
+  printf '0007: precondition OK — asyncRewake present in all %s installed track(s)\n' "$_checked"
 else
   # No readable track (a fresh box, or an install layout this loop does not know). Do not guess:
   # the field is inert-but-harmless on a binary that ignores an unknown key, and the blocking risk
   # requires it to have been REMOVED after being present, which no track on this box exhibits.
-  printf '0006: NOTE — no readable installed track to re-confirm asyncRewake; proceeding.\n' >&2
+  printf '0007: NOTE — no readable installed track to re-confirm asyncRewake; proceeding.\n' >&2
 fi
 
 for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
@@ -115,20 +115,20 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   # SessionStart array is not a fleet config, and inventing one here would be a scope this migration
   # never claimed.
   if ! jq -e '.hooks.SessionStart | type == "array" and length > 0' "$f" >/dev/null 2>&1; then
-    printf '0006: %s — no SessionStart array; skipped (not a fleet config)\n' "$f"
+    printf '0007: %s — no SessionStart array; skipped (not a fleet config)\n' "$f"
     continue
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
        '[.hooks.SessionStart[].hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
-    printf '0006: %s — already registered\n' "$f"
+    printf '0007: %s — already registered\n' "$f"
     continue
   fi
 
-  bak="$f.bak-0006-$(date +%Y%m%d%H%M%S)"
-  cp -p "$f" "$bak" || { printf '0006: %s — backup FAILED, not touching it\n' "$f" >&2; rc=1; continue; }
+  bak="$f.bak-0007-$(date +%Y%m%d%H%M%S)"
+  cp -p "$f" "$bak" || { printf '0007: %s — backup FAILED, not touching it\n' "$f" >&2; rc=1; continue; }
 
-  tmp="$f.tmp-0006-$$"
+  tmp="$f.tmp-0007-$$"
   # Append to the FIRST SessionStart group. Ordering is irrelevant to correctness: this hook is
   # BACKGROUNDED by the harness the moment it is dispatched, so it can neither delay nor be delayed
   # by a sibling — which is the entire property that makes arming-at-birth free.
@@ -141,12 +141,12 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
     if jq -e --arg c "$HOOK_CMD" \
          '[.hooks.SessionStart[].hooks[]? | select(.command == $c)]
           | length == 1 and .[0].asyncRewake == true' "$tmp" >/dev/null 2>&1; then
-      mv "$tmp" "$f" && printf '0006: %s — registered asyncRewake (backup: %s)\n' "$f" "$bak"
+      mv "$tmp" "$f" && printf '0007: %s — registered asyncRewake (backup: %s)\n' "$f" "$bak"
     else
-      rm -f "$tmp"; printf '0006: %s — edit did not verify; left unchanged\n' "$f" >&2; rc=1
+      rm -f "$tmp"; printf '0007: %s — edit did not verify; left unchanged\n' "$f" >&2; rc=1
     fi
   else
-    rm -f "$tmp"; printf '0006: %s — jq edit FAILED; left unchanged\n' "$f" >&2; rc=1
+    rm -f "$tmp"; printf '0007: %s — jq edit FAILED; left unchanged\n' "$f" >&2; rc=1
   fi
 done
 
