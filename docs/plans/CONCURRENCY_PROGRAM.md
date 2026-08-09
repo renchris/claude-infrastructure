@@ -1119,7 +1119,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 
 | Wave | Locus | Why | Owns (single-owner files) |
 |---|---|---|---|
-| **A** — idle sessions free (poller consolidation) | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. | the per-session poller call-sites + the new box-wide daemon |
+| **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
 | **C** — bound toolchain ignition | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. | cold-compile admission path + worker-pool cap |
 | **B** — cut active occupancy (serialise hooks, cache git) | **S**, but **SERIALISED AFTER A** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
@@ -1198,6 +1198,62 @@ run whether or not the session is doing anything. That is the population that mu
 - **Verify (the decisive test):** launch N idle sessions, sweep N, regress load on N. **The slope
   must fall from the measured 1.6 to ≤0.1.** Slope, not absolute load — absolute drifts with ambient.
 
+#### S6.3-MEASURED · Phase A — CLOSED 2026-08-09, target already met, premise refuted
+
+Everything above this line is the brief as written. It was executed, and the measurement refutes it.
+Evidence: `docs/research/idle-session-occupancy-2026-08-09.md`. Instruments landed:
+`scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh` (+ suites, both with mutation checks).
+
+**An idle resident session costs 0.0031 runnable threads against the ≤0.02 target — 6× under, with
+no change made.** At 150 resident the whole fleet plus every poller is **0.46 runnable threads**
+against a ceiling of 20.
+
+| Term | Measured | Method |
+|---|---|---|
+| idle `claude` process | 0.00067 | Δcpu/Δwall, n=6 truly-idle sessions |
+| `cc-await-ping` (15 s poll) | 0.00216 | cpu/wall over a 60 s real run |
+| `lead-crash-watchdog` (30 s poll) | 0.00024 | 200-iteration timing of the loop body |
+| **idle session, total** | **0.00307** | — |
+
+🚨 **The per-session poller census in S6.3 was argv contamination.** Re-measured with a
+command-position predicate: `cc-reaper` **0** (not 19), `cc-reconcile` **0** (not 6),
+`cc-await-ping` **1** (not 20). Both sweepers are ONE box-wide launchd job
+(`com.chrisren.cc-reaper`, `StartInterval 300`, `mkdir` mutex, skip-not-queue) with **zero** hook
+call sites. The contaminating string is *in this plan and in the wave's own brief* — every session
+carrying it matched itself once per pane, plus `tests/cc-reaper.bats` by pathname. This fleet's
+indexed `pgrep-f-matches-agent-briefs` failure, committed against the number a wave was scoped on.
+The real per-session population is **two** processes: `lead-crash-watchdog.sh` (SessionStart, no
+matcher, 1:1 with sessions) and `cc-await-ping` (armed on demand; the wake floor at
+`hooks/session-continue.sh:351` blocks Stop until it is, so a steady-state resident carries one).
+
+**The 1.6 is an ACTIVE-session number, exactly as S6.2 already says** (*"a session blocked on the API
+contributes ~0"*). The model decomposes: idle = **0.0031**, active ≈ 1.6 (~0.09 resident + ~1.5 fork
+churn from short-lived processes). Phase A's subject was 500× below the figure quoted against it.
+
+**Consolidation NOT built, and the reason is the trade, not the difficulty.** Payoff 0.33 runnable
+threads at 150 — **1.6% of the budget**. Cost: `cc-await-ping`'s wake IS the watcher process exiting
+(the only channel that re-invokes an idle model), so a box-wide daemon cannot replace the waiter,
+only its polling; its `.watching` marker gates `cc-notify`'s verdict, the drain nudge, and the
+Stop-blocking wake floor — stop re-stamping one key and that session can never Stop. 53 test files
+reference the pair. Against the wave's own "strands real work box-wide if wrong" constraint that is
+the wrong trade. *Cheap lever priced but not fired:* `cc-await-ping` at 60 s instead of 15 s is a 4×
+cut, bounded above by `CC_WATCH_FRESH_S=90`; it spends peer-mail wake latency (≤15 s → ≤60 s) to buy
+0.24 of 20, which is a responsiveness call, not a capacity fix.
+
+⚠️ **The decisive test was RUN. It refutes 1.6 and cannot estimate 0.003 — and both halves matter.**
+Sweep over N ∈ {0,3,6,9}, 120 s settle, 60 s measure: **load1 slope −0.141 (R² 0.383)**, mean-runnable
+slope −0.438. Negative is not physical; it is ambient decay across the 13-minute run, larger than the
+effect and running against it. At the *briefed* 1.6, nine sessions would have added **+14.4 load** —
+8× the 1.7 ambient swing, unmissable. Load at N=9 came in **below** N=0. So the acceptance criterion
+("slope ≤0.1") is satisfied on the arithmetic, but **must not be read as a win**: nothing was changed,
+and it passes because the quantity was never large. Per-process Δcpu/Δwall carries the point estimate
+instead — another session's `git` cannot enter a `claude` process's own CPU counter.
+
+🚨 **The wall at 150 resident is PTYS, not load — and no wave in S6 owns it.** Measured this session:
+**33 ptys at 15 `claude` processes = 2.2/session** ⇒ **330 of `kern.tty.ptmx_max` 511** at 150, before
+any teaming burst, against load at 0.46 of 20 (43× headroom). Pollers hold no ptys; panes do, so
+Phase A could never have touched it. C-CAP-2 (pty-less substrate) is the named candidate.
+
 ### S6.4 · Phase B — cut active-session occupancy
 
 - **Serialise** each session's hooks (one at a time) rather than shrinking their count — per S6.1 the
@@ -1260,3 +1316,19 @@ Two term changes, both evidence-backed, both **operator's call** (they gate spaw
 one that changes the *residency* slope and every later number is quoted against it. **C must land
 before residency is actually pushed past ~30**, or the first cold compile takes the box down. **D**
 follows A and B (it needs their measured slopes to set thresholds). **E** and **F** are parallel.
+
+**REVISED 2026-08-09, after A ran** (§S6.3-MEASURED). A is **CLOSED — measured, not built**: the
+residency slope is **~0.003/session, not 1.6**, so A never had a slope to change and B is no longer
+waiting on one. Re-order accordingly:
+
+- **B is now the only load lever and should start immediately** — it is unblocked, since the reason
+  it was serialised after A (shared hook/session tooling) is moot once A ships no behavioural change.
+  A's files are instruments only (`scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh` and
+  their suites); **A touched no hook, no poller, and no session tooling**, so B inherits a clean tree
+  and owns that surface outright.
+- **C is unchanged and is now the highest-value wave**, since burst survival — not residency — is
+  what the arithmetic says binds.
+- **D's thresholds**: A's half is measured and negligible. D still needs B's active-session number.
+- **A new term belongs on this list and is owned by nobody: ptys.** 2.2/session measured ⇒ 330 of
+  511 at 150 resident, while load sits at 0.46 of 20. It binds ~43× sooner than the term this whole
+  section is written in.
