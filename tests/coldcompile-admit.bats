@@ -126,8 +126,12 @@ A_SHELL='  200    05:00 /bin/zsh /bin/zsh -lc echo hi'
 @test "10 kill switch, empty table and empty gate seam each disable the hook verbatim" {
   CC_COLDCOMPILE_ADMIT=off run run_hook 'cd /repo && pnpm dev'
   [ -z "$(cmd_of "$output")" ]
+  # shellcheck disable=SC1007  # set-but-EMPTY is the seam's CONTRACT, not a typo: the hook uses
+  # the single-dash ${VAR+set} form so an empty value turns it off verbatim. `VAR=''` would be the
+  # same value, but this spelling is the one the header documents and the one operators type.
   CC_COLDCOMPILE_PATTERNS= run run_hook 'cd /repo && pnpm dev'
   [ -z "$(cmd_of "$output")" ]
+  # shellcheck disable=SC1007  # ditto — see above.
   CC_COLDCOMPILE_GATE= run run_hook 'cd /repo && pnpm dev'
   [ -z "$(cmd_of "$output")" ]
 }

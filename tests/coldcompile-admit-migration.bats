@@ -36,6 +36,9 @@ setup() {
       ]
     }
   }' > "$SETTINGS"
+  # shellcheck disable=SC2088  # the tilde is DELIBERATELY literal — this is the exact string
+  # stored INTO settings.json, where CC expands it at hook-run time. Expanding it here would make
+  # the assertion pass against a value the migration never writes.
   HOOK_CMD='~/.claude/hooks/coldcompile-admit.sh'
 }
 
