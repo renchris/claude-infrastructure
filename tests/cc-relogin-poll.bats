@@ -791,6 +791,81 @@ STUB
   [ "$(nrows)" -eq 0 ] || false
 }
 
+@test "M2b: a REQUIRED row with no deadline columns publishes NO deadline — never a T-0h fabrication" {
+  # THE DEFECT (backlog 8e394583d5d4, docs/research/forced-relogin-rootcause-2026-08-02.md UPDATE 3).
+  # The row above is acted on — correctly — by placing it at NOW. NOW is a legitimate ORDERING
+  # position and an illegitimate DEADLINE, and the pre-fix code published it as both. Measured live
+  # 2026-08-03: next2 escalated twice reading `T-0h to the login deadline (2026-08-03T14:34:18Z)`
+  # while its own grant stamp read 674.6h out. The producer blanks those columns ON PURPOSE
+  # (bin/claude-accounts:2284) precisely so nobody prints a deadline beside REQUIRED.
+  build ls
+  printf 'next2\tREQUIRED\ttoken-invalid\t—\t—\tclaude2\n' > "$D/ls.tsv"
+  printf '1\n' > "$D/ls.rc"
+  run "$P" --dry-run --json
+  [ "$status" -eq 0 ] || false
+  # STILL ESCALATED — the fix removes a false claim, it does not re-silence the account.
+  json | jq -e '.candidates==1 and .acct=="next2" and .escalated==true' >/dev/null || false
+  # …and publishes nothing it did not measure. `deadline_known` is the discriminator that keeps an
+  # empty string from having to mean both "no deadline exists" and "the field went missing".
+  json | jq -e '.deadline=="" and .deadline_known==false and .hours_left==null' >/dev/null || false
+  json | jq -e '.deadline_src=="required" and .cause=="token-invalid"' >/dev/null || false
+  # The reason names the CAUSE the producer published, in place of a clock it never published.
+  reason="$(json | jq -r '.escalation_reason')"
+  [[ "$reason" == *"REQUIRED"* && "$reason" == *"token-invalid"* ]] || false
+  # NEGATED FORM, deliberately. `[[ … ]] && false` is and-absorbed — the [[ ]] failing is the
+  # SUCCESS case and is exempt from set -e, so that spelling asserts nothing at all (memory
+  # exact-count-assertion-tripwires-its-own-subject). `! cmd || false` fails loudly on a hit.
+  ! [[ "$reason" == *"T-0h"* ]] || false
+  [[ "$reason" == *"no k==0 window caught yet"* ]] || false        # the surviving half, unchanged
+  # No fabricated instant reaches the LOG either — that is where the live evidence was found.
+  ! grep -qE 'T-[0-9]+h' "$CC_RELOGIN_POLL_LOG" || false
+  # DISCRIMINATING CONTROLS — a REAL deadline still publishes in full, on BOTH measured
+  # provenances. This is what makes the assertions above a fix rather than a blanket mute.
+  # (a) `hours`: what `build ls` emits, because the producer's `when` is a human-local string.
+  rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
+  mk next2 12 0; build ls
+  run "$P" --dry-run --json
+  json | jq -e '.deadline_known==true and .deadline_src=="hours" and .hours_left==12' >/dev/null || false
+  json | jq -e '.deadline | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")' >/dev/null || false
+  [[ "$(json | jq -r '.escalation_reason')" == *"T-12h to the login deadline"* ]] || false
+  # (b) `stamp`: the landed producer emits a normalised UTC ISO in `when`, so pin that arm too —
+  # it is the path a REQUIRED row takes whenever its deadline IS the cause.
+  rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
+  printf 'next2\tREQUIRED\ttoken-invalid\t%s\t12.0\tclaude2\n' "$(iso_in_h 12)" > "$D/ls.tsv"
+  run "$P" --dry-run --json
+  json | jq -e '.deadline_known==true and .deadline_src=="stamp" and .hours_left==12' >/dev/null || false
+}
+
+@test "M2b: the class-C board row carries the same non-claim, plus the state cc-blockers renders" {
+  # The --json object is one consumer; the DURABLE product is the board row, and it is the one the
+  # operator reads. Both must carry the same non-claim or the fix is half-applied.
+  build ls
+  printf 'next2\tREQUIRED\ttoken-invalid\t—\t—\tclaude2\n' > "$D/ls.tsv"
+  printf '1\n' > "$D/ls.rc"
+  run "$P" --json
+  [ "$(nrows)" -eq 1 ] || false
+  # has()/tostring, NEVER `.[$k] // "<absent>"`: jq's `//` treats **false** as falsy, so the
+  # alternative fires on the very value under test and `deadline_known:false` reads "<absent>" —
+  # one token for two states, which is the exact defect class this test exists to pin.
+  row() { jq -rs --arg k "$1" '.[0] | if has($k) then (.[$k]|tostring) else "<absent>" end' "$CC_REAPER_IDL"; }
+  [ "$(row deadline)" = "" ] || false
+  [ "$(row deadline_known)" = "false" ] || false
+  [ "$(row deadline_src)" = "required" ] || false
+  [ "$(row cause)" = "token-invalid" ] || false
+  # `state` closes a contract cc-blockers' renderer has always read — `(.state // .reason)` into a
+  # 12-char column — and that this producer never satisfied, so the column showed the first 12
+  # characters of the reason prose. Its own suite fixtures the field on rows attributed to this
+  # actor (tests/cc-relogin-status.bats rl()).
+  [ "$(row state)" = "REQUIRED" ] || false
+  # ABSENT, not empty, when the surface published no state token: the json-fields path must keep
+  # falling back to `.reason` byte-for-byte as before rather than gaining a blank column.
+  rm -rf "$CC_RELOGIN_POLL_STATE_DIR" "$CC_REAPER_IDL"; : > "$CC_RELOGIN_POLL_LOG"
+  mk next4 1 0; build json
+  run "$P" --json
+  [ "$(nrows)" -eq 1 ] || false
+  [ "$(row state)" = "<absent>" ] || false
+}
+
 # ── M4: the label is DECLARED, so its inertness is READABLE (ACCOUNT_ROUTING_V2) ─────────────────
 # The poller existed and was tested from 2026-07-26 and went unscheduled for four days — two log
 # lines all-time. Nothing reported that, because launchd/fleet.manifest never declared the label, so
