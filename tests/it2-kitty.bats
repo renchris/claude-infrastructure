@@ -34,6 +34,13 @@ setup() {
   # and the sibling suites learned the hard way that an unfixtured seam reaches real $HOME.
   export CC_TERM_KITTY_TO="unix:$BATS_TEST_TMPDIR/sock"
   export CC_TERM_KITTY="$BATS_TEST_TMPDIR/fake-kitty"
+  # The variables the SUBJECT puts on every pane it launches, and therefore inherits from any pane
+  # it launched — bats included, when an agent runs this suite from a fired pane. it2-kitty's
+  # file-transport tests key on the ABSENCE of CC_PANE_CMD, which an ambient value silently
+  # supplies, so the split pre-delivers instead of arming (0588d255, on the sibling argv suite).
+  # In setup, not per-test: a per-test unset leaves every OTHER test inheriting (rule 1's argument
+  # in scripts/test-hermeticity-lint.sh, now enforced there by rule 6).
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 # A stand-in for `kitty @ … ls`. Three panes across two tabs in one OS window, so a flattening bug

@@ -81,6 +81,12 @@ SH
   export CC_TERM=kitty
   export KITTY_LISTEN_ON="unix:$BATS_TEST_TMPDIR/kitty-sock"
   unset CC_TERM_KITTY_TO
+  # …and the variables the subject puts on every pane it LAUNCHES, which are inherited by every
+  # descendant of a fired pane — bats included, when an agent runs this from the pane that fired it
+  # (0588d255). The block above pins what makes this pane look like kitty's; this pins what a pane
+  # this feature created leaves lying in the environment. Same class, opposite direction.
+  # In setup, not per-test: a per-test unset leaves every OTHER test inheriting.
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 RULE='──────────────────────────────────────────────────────────────────────────────────────────────'

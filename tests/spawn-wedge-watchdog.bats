@@ -72,6 +72,11 @@ STUB
   export CC_NOTIFY_BIN="$NSTUB"
 
   : > "$SCREEN_FILE"
+  # The variables the pane tools this suite drives put on every pane THEY launch, and therefore
+  # inherit from any pane launched that way — bats included, when an agent runs this from the pane
+  # that fired it (0588d255: 5 failures on a pristine trunk, one of them a negative CONTROL).
+  # In setup, not per-test: a per-test unset leaves every OTHER test inheriting.
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 # A transcript that shows a REAL assistant turn.

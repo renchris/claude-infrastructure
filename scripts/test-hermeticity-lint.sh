@@ -184,6 +184,102 @@
 #   same contract as rules 1-2 — ONLY EVER DELETE LINES; pinning a suite's seams without deleting
 #   its line is a RED. 61 of 299 is a fifth of the tree, against rule 1's 109 of 118 when it landed.
 #
+# RULE 6 (the INHERITED-VALUE seam) — rule 5's blind spot, and it is blind BY CONSTRUCTION for the
+# same reason rule 1 was blind to rule 5. Rule 5 asks where a subject's state RESOLVES, so it can
+# only see a seam whose DEFAULT betrays it: an absolute /tmp path (5a) or a bare name this repo
+# ships (5b). Every other default is skipped. But a default is IRRELEVANT when a VALUE is already in
+# the environment — the fallback never runs at all. That is a different question, so it needs a
+# different rule.
+#
+# THE INCIDENT THAT GENERATED IT (0588d255, 2026-08-07): bin/cc-pane-runner selects its launch
+# branch on CC_PANE_CMD_INTERACTIVE, whose default is the plain value `0`. scripts/handoff-fire.sh
+# and bin/it2-kitty INJECT that variable into every argv-launched pane, so every DESCENDANT of a
+# fired pane carries it — including bats, when an agent runs a suite from the pane that fired it.
+# tests/handoff-fire-argv-launch.bats and tests/it2-kitty-argv-spawn.bats went 5-RED on a PRISTINE
+# `git archive origin/main` tree, and green the moment one inherited variable was unset. One of the
+# five was the negative CONTROL "the SAME launcher DIES under the eval path" — i.e. the assertion
+# whose whole job is to show that branch is not decoration. The shape a feature's own suite can
+# least afford: red exactly when run from inside a pane that feature created, green everywhere
+# else, so it reads as a genuine trunk red and the BOX decides the verdict. THIS LINT REPORTED BOTH
+# SUITES CLEAN THROUGHOUT — rule 5 saw `:-0` and moved on.
+#
+# WHY IT IS A SIXTH RULE AND NOT A THIRD SHAPE OF RULE 5, which was the filing's first instinct and
+# is wrong on a MEASURED point, not a stylistic one. Rule 5's position predicate is
+# is_seam_assigned(), which requires `VAR=`. The compliant fix for an inherited value is very often
+# `unset`, and 0588d255 used exactly that — so a bolted-on shape 5c would report the very fix that
+# generated this rule STILL VIOLATING, forever. Rule 6 therefore takes rule 3's asymmetry instead:
+# ANY deterministic position clears it (`unset`, `=`, `export …=`), because what is forbidden is
+# INHERITING one, not choosing the "wrong" one. A separate list follows for rule 2's reason verbatim
+# — the rules are independent, and one shared list could only shrink when every rule was satisfied
+# at once.
+#
+#   THE TABLE IS AN INTERSECTION, and that is the whole design. The filing's candidate rule was "for
+#   each tool F, collect the CC_* vars F reads; any suite naming F must pin them". Measured, that is
+#   1047 seam assignments across the tool tree and it would oblige most of 324 suites — a lint
+#   nobody can turn on is worth zero (rule 1's founding argument). The narrowing is the MECHANISM
+#   itself: a variable can only be INHERITED if something PUTS it there, and this repo puts a
+#   variable into a descendant environment in exactly one way — the explicit pane-launch API
+#   `--env NAME=VALUE` (bin/it2-kitty, scripts/handoff-fire.sh). A pane is a long-lived interactive
+#   shell, which is precisely why the value survives to reach a later bats run. So:
+#
+#       rule 6's table  =  PROPAGATED (some tool injects it)  ∩  READ (this tool reads `${NAME:-`)
+#
+#   EACH HALF ALONE IS WRONG, and both failures are measured rather than imagined:
+#     * READ alone is the filing's naive rule — most of 324 suites, above.
+#     * PROPAGATED alone convicts scripts/handoff-fire.sh, which injects a runner variable it never
+#       READS (its only mention outside the injection is inside SINGLE QUOTES, expanded by the
+#       PANE's shell, not this one; the two `…_BIN` reads near it are a DIFFERENT variable). 51
+#       suites name handoff-fire.sh and 49 would have been grandfathered for a variable their
+#       subject does not read. That is rule 6's mandatory INJECT-ONLY scope control, and it is worth
+#       more than every other control here put together.
+#
+#   COST, measured rather than assumed, because this lint is ship-land's FAIL-FAST gate and every
+#   land pays it: rule 6 adds ~5.7s to a 19.6s whole-tree run (274 tools, 324 suites) — one bulk
+#   pre-filter for the table plus the same one-grep-per-suite scope test every other rule here uses,
+#   i.e. in line with their per-rule cost. The naive shape of the same code cost +10s, by stripping
+#   and extracting all 274 tools instead of the 3 that carry either shape.
+#
+#   TREE-DERIVED, COMMENT-STRIPPED, AND THE EXTRACTOR NEVER READS THE MACHINE — rule 5's law, and
+#   here the comment strip is load-bearing in a way it is not there: rule 5's table pattern is
+#   ^-anchored so a `#` excludes itself, while `--env NAME=` and `${NAME:-` match anywhere on a
+#   line. Unstripped, THIS FILE's own header would mint phantom propagated variables out of the
+#   prose you are reading. Rules 2, 3 and 4 were each shipped VACUOUS by a predicate that matched
+#   prose; this is that lesson applied before the fact rather than after.
+#
+#   SCOPE is rule 5's, verbatim: a suite is in scope for tool T iff its COMMENT-STRIPPED text names
+#   T's path. Per-test assignment does NOT count, for rule 1's reason verbatim.
+#
+#   THE EXTRACTOR IS ANCHORED, not counted — rules 4 and 5's argument and wording apply unchanged.
+#   THIS script carries CC_HERM_ENV_SELFPROBE below in BOTH halves — a real injection argument and a
+#   real read — so wherever this file sits inside the scanned root the extractor must find it. An
+#   anchor that exercised only one half could not tell a broken intersection from an empty tree.
+#
+#   TWO EXCLUSIONS, and BOTH were forced by measurement against a trunk that moved mid-flight —
+#   which is the strongest evidence this file's "derive the list at the LAST possible moment" rule
+#   has ever collected. Neither was in the design; both are in build_env_table() with their numbers:
+#     * a $HOME-ROOTED default is RULE 1's business (rule 5 makes the identical exclusion, in the
+#       same words). Rule 5's two-form test is also widened here to `${HOME` — three tools spell it
+#       that way and rule 5 misses every one.
+#     * a variable this repo also EXPORTS as a plain session setting is a CONFIGURED input, not
+#       leaked pane state. CC_PANE_CMD / _DIR / _INTERACTIVE are exported NOWHERE — they exist only
+#       as pane-launch arguments — while CLAUDE_CONFIG_DIR is exported by a launcher and is ambient
+#       in every session by design. Between them these took a first run against the new base from
+#       123 suites to 1.
+#
+#   MEASURED AGAINST TRUNK, every figure read back out of THIS file's own extractor rather than out
+#   of the survey that proposed the rule — and the two DISAGREED, worth recording because the survey
+#   was the looser instrument, not the subject: it matched a tool by BASENAME where the rule (through
+#   the shared seam_names_tool) matches the repo-relative PATH, so it counted three suites that only
+#   stub their own `it2-kitty` in $BATS_TEST_TMPDIR or name a TEST FILE of that name.
+#   The table is 2 tools (bin/cc-pane-runner, bin/it2-kitty) × 3 variables. 8 suites violated and
+#   ALL 8 ARE FIXED IN THIS DIFF rather than grandfathered, so the list below ships EMPTY: 6 take the
+#   pane variables, 2 name this script and take its anchor. The suites that PASSED throughout are
+#   exactly the two 0588d255 fixed — the rule is green on the artifact that generated it and red only
+#   on what is still ambient, which is the pair of facts that makes a new ratchet worth landing.
+#   The 8th is tests/spawn-wedge-watchdog.bats, which origin/main added WHILE THIS WAS BEING WRITTEN
+#   and which inherits all three: the rule caught a genuine new instance on its first run against a
+#   base it had never seen, which is the only demonstration that matters for a ratchet.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
@@ -201,6 +297,10 @@
 #                              (default: this script's ROOT). The scan dir stays lint_dir's
 #                              positional argument — the table's population and the suites' are
 #                              different sets, exactly as for rule 4.
+#   CC_HERM_ENV_ALLOWLIST      overrides rule 6's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_ENV_RULE=off       kill switch — disables rule 6 entirely, leaving rules 1-5 untouched
+#   CC_HERM_ENV_ROOT           overrides the repo root rule 6 derives its INHERITED-VALUE table from
+#                              (default: this script's ROOT), for CC_HERM_SEAM_ROOT's reason
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -506,6 +606,61 @@ SEAM_TOOLS=""          # the DISTINCT repo-relative tool paths in the table, spa
 SEAM_TOOLS_RE=""       # those same paths as ONE anchored alternation, for the per-suite pre-filter
 SEAM_ANCHOR_SEEN=0
 
+# ── RULE 6's ratchet: suites naming a tool that READS a variable this repo INJECTS into a launched
+# pane, without taking a position on it in setup(). ONLY EVER DELETE LINES FROM THIS LIST. Derived
+# AGAINST TRUNK at the last possible moment, for the reason rules 2-5 record — a list read earlier
+# ships stale, i.e. RED on its first run. A FOURTH list rather than a merge, for rule 2's reason
+# verbatim: the rules are independent, and one shared list could only shrink when every rule was
+# satisfied at once.
+# Ships EMPTY, and that is an OUTCOME rather than an aspiration: the rule was measured at 7 in-scope
+# violations against trunk and all 7 were FIXED in the landing diff rather than grandfathered,
+# because rule 6's remedy is a single `unset` in setup() that is a NO-OP in an ordinary shell and a
+# fix only inside a fired pane — so the usual reason to grandfather (the fix is a change of
+# behaviour someone must review) does not apply here. A ratchet that starts empty can only stay
+# empty, which is rules 3 and 4's argument and the better artifact where it is affordable.
+# ONLY EVER DELETE LINES FROM THIS LIST. It should never gain one.
+EMBEDDED_ENV_ALLOWLIST=""
+
+# Rule 6's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim —
+# lint_dir's ARITY is load-bearing on the own-scope seam. `-` not `:-`, so set-but-EMPTY means
+# "grandfather nothing".
+ENV_ALLOW="${CC_HERM_ENV_ALLOWLIST-$EMBEDDED_ENV_ALLOWLIST}"
+ENV_RULE="${CC_HERM_ENV_RULE:-on}"
+ENV_ROOT="${CC_HERM_ENV_ROOT:-$ROOT}"
+
+# THE EXTRACTOR'S ANCHOR, and it must exercise BOTH halves of the intersection or it cannot tell a
+# broken extractor from an empty tree. These two lines are read by nothing: the first is a literal
+# pane-injection argument (the PROPAGATED half), the second a literal seam read (the READ half), and
+# together they make this script a rule-6 tool by construction. They are real CODE, not comments, on
+# purpose — the table build strips comments, so an anchor in prose would be invisible to the very
+# extractor it exists to prove. (Rules 4 and 5's anchor argument; a count could not do this work.)
+# shellcheck disable=SC2034  # deliberately inert — the extractor's positive control, not a setting
+ENV_SELF_ANCHOR_ARGV="--env CC_HERM_ENV_SELFPROBE=1"
+# shellcheck disable=SC2034  # ditto — the READ half of the same anchor
+ENV_SELF_ANCHOR="${CC_HERM_ENV_SELFPROBE:-0}"
+ENV_ANCHOR_VAR="CC_HERM_ENV_SELFPROBE"
+
+# ONE scan pattern for BOTH halves, so a tool is comment-stripped ONCE. grep -oE yields tokens that
+# are self-classifying by their first character — `--env NAME=` is an injection, `${NAME:-` a read.
+#
+# The injection half is `--env NAME=`: the ONE way this repo puts a variable into a descendant's
+# environment, and an explicit API rather than an inference. `export NAME=…; <term> session split`
+# is deliberately NOT counted — it configures the CLI wrapper, whose environment does not reach the
+# new pane (that is precisely why --env exists), and measured, the two pane-destined variables those
+# sites carry already appear in an --env argument elsewhere, so keying on --env loses nothing today.
+# The read half carries the DEFAULT as well as the name, because rule 6 must be able to SKIP a
+# $HOME-rooted one — see build_env_table(). `[^}]*` stops at the first `}`, so a nested default
+# (`${A:-${B:-}/x}`) yields a truncated but still $HOME-bearing string, which is all the test needs.
+# The third token class is `export NAME=` at the head of a line — a variable this repo sets as a
+# general SESSION SETTING. See build_env_table() for why that disqualifies it from rule 6.
+ENV_SCAN_RE='(--env[[:space:]]+"?[A-Za-z_][A-Za-z0-9_]*=|\$\{[A-Za-z_][A-Za-z0-9_]*:-[^}]*\}?|^[[:space:]]*export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=)'
+
+ENV_TABLE=""           # tool <TAB> inherited-var — built once per ROOT
+ENV_TABLE_ROOT=""      # the root the cached table was built FROM (SEAM_TABLE_ROOT's reason verbatim)
+ENV_TOOLS=""           # the DISTINCT repo-relative tool paths in the table, space-separated
+ENV_TOOLS_RE=""        # the seam-bearing tool paths as ONE alternation, for the per-suite pre-filter
+ENV_ANCHOR_SEEN=0
+
 # Build the seam table from <root>'s tool dirs. TREE-DERIVED ONLY — no `command -v`, no PATH read,
 # no stat of a default: see RULE 5's header for why a lint that resolves the operator's PATH is
 # committing the defect it lints. Sets SEAM_ANCHOR_SEEN when it finds its own anchor.
@@ -573,6 +728,118 @@ EOF
   # `.` is still escaped, so `handoff-fire.sh` cannot match `handoff-fireXsh` — that is not a
   # narrowing, just an escape.
   [ -n "$SEAM_TOOLS_RE" ] && SEAM_TOOLS_RE="/($SEAM_TOOLS_RE)"
+  return 0
+}
+
+# Build rule 6's INHERITED-VALUE table from <root>'s tool dirs: the INTERSECTION of the variables
+# this repo injects into a launched pane and the variables each tool READS as a `${NAME:-` seam.
+# TREE-DERIVED ONLY — no `command -v`, no PATH read, no environment read: rule 5's law, and doubly
+# binding here, since the whole subject is what the environment happens to carry.
+#
+# ONE pass and ONE comment strip per tool. The propagated set is not known until every tool has been
+# read, so the reads are banked as CANDIDATES and filtered afterwards; running it as two literal
+# passes would strip every file twice, and this file's PREDICATE RETRY block is a standing record of
+# what fork pressure does to a lint on this box.
+#
+# COMMENT-STRIPPED through the SHARED strip_comments(), never a private sed — and unlike rule 5's
+# ^-anchored table pattern, here it is load-bearing rather than free: `--env NAME=` and `${NAME:-`
+# both match anywhere on a line, so unstripped, THIS FILE's own RULE 6 header would mint phantom
+# propagated variables out of its prose. Sets ENV_ANCHOR_SEEN when it finds its own anchor.
+build_env_table() {
+  local root="$1" f rel tok v d rest props="" cands="" exported=""
+  local -a files=()
+  ENV_TABLE=""; ENV_TOOLS=""; ENV_TOOLS_RE=""; ENV_ANCHOR_SEEN=0; ENV_TABLE_ROOT="$root"
+  for f in "$root"/bin/* "$root"/scripts/*.sh "$root"/hooks/*.sh; do
+    [ -f "$f" ] && files+=("$f")
+  done
+  [ "${#files[@]}" -gt 0 ] || return 0
+  # A BULK PRE-FILTER, then the real read only for files that can possibly contribute. Stripping and
+  # extracting every tool cost 2 forks each — 548 on this tree, and a measured +10s on a 19.5s run,
+  # paid by ship-land's fail-fast gate on every land. This narrows it to one bulk grep plus a
+  # handful of real reads (measured: 3 files of 274 carry either shape).
+  # STRICTLY WEAKER than the extraction it gates, on both axes: it matches the same two shapes on
+  # RAW text, so it can only OVER-select — a file it excludes contains neither shape anywhere,
+  # comments included, and would have contributed nothing after stripping either. That is the
+  # discipline seam_referenced()/env_referenced() already carry, and the reason the strip stays
+  # WHOLE-FILE: filtering on grep's own `path:line:` output instead would leave a column-0 comment
+  # unstripped (strip_comments' `^#` rule cannot fire behind a path prefix), and THIS FILE's RULE 6
+  # header is exactly that shape — it would mint a phantom propagated variable out of its own prose.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # A heredoc-fed `while` is NOT a subshell, so `props`/`cands` survive the loop.
+    while IFS= read -r tok; do
+      tok="${tok#"${tok%%[![:space:]]*}"}"     # the `export` arm is ^-anchored, so it carries indent
+      [ -n "$tok" ] || continue
+      case "$tok" in
+        export[[:space:]]*)
+          v="${tok#export}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%=}"
+          case " $exported " in *" $v "*) ;; *) exported="$exported $v" ;; esac ;;
+        --env*)
+          v="${tok#*--env}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v#\"}"; v="${v%=}"
+          case " $props " in *" $v "*) ;; *) props="$props $v" ;; esac ;;
+        \$\{*)
+          rest="${tok#\$\{}"; v="${rest%%:-*}"; d="${rest#*:-}"; d="${d%\}}"
+          # A $HOME-ROOTED default is RULE 1's business and must never be claimed by rule 6 — rule
+          # 5's table build makes the identical exclusion, in the same words, and for the identical
+          # reason: double-reporting one breach under two rules teaches nobody anything and inflates
+          # two ratchets at once. MEASURED, not stylistic: `CLAUDE_CONFIG_DIR` defaults to
+          # `$HOME/.claude`, is read by 54 tools here, and gained an injection site on 2026-08-08
+          # (scripts/cloud-websetup-drive.sh drives a per-account web-setup). Without this line rule
+          # 6 claimed 123 of 324 suites on its first run against that trunk — the exact "fires on
+          # most of the tree" failure this rule's whole design exists to avoid, and a rule-1 question
+          # (is the $HOME fixture complete?) wearing rule 6's clothes. That gap is real and is filed
+          # SEPARATELY; it is not this rule's class and must not ride in on it silently.
+          # `${HOME` as well as `$HOME`: three tools here spell it `${CLAUDE_CONFIG_DIR:-${HOME:-}/…}`,
+          # and rule 5's two-form test would miss every one of them. Same reason `~/` is listed.
+          # shellcheck disable=SC2016  # the patterns match the LITERAL strings; expansion would break them
+          case "$d" in *'$HOME'*|*'${HOME'*|*'~/'*) continue ;; esac
+          cands="$cands$f	$v
+" ;;
+      esac
+    done <<EOF
+$(strip_comments < "$f" 2>/dev/null | grep -oE -- "$ENV_SCAN_RE" | sort -u)
+EOF
+  done <<EOF
+$(grep -lE -- "$ENV_SCAN_RE" "${files[@]}" 2>/dev/null)
+EOF
+  # Nothing is injected anywhere ⇒ nothing can be inherited ⇒ the rule has no population. That is
+  # the honest answer for a tree that launches no panes, and the ANCHOR (not a count) is what tells
+  # it apart from an extractor that has simply stopped working.
+  [ -n "$props" ] || return 0
+  while IFS='	' read -r f v; do
+    [ -n "$f" ] || continue
+    # THE INTERSECTION. Dropping this test is the filing's naive rule — 1047 seam assignments and
+    # most of 324 suites in scope. Dropping the other half instead convicts a tool for a variable it
+    # only INJECTS (49 suites, measured); that half is the `case` on $props being reached at all.
+    case " $props " in *" $v "*) ;; *) continue ;; esac
+    # A variable this repo also EXPORTS as a plain session setting is a CONFIGURED input, not leaked
+    # pane state, and is out of rule 6's class. The tree draws this line by itself and it is exactly
+    # the line that matters: CC_PANE_CMD / _DIR / _INTERACTIVE are exported NOWHERE — they exist only
+    # as pane-launch arguments, so bats seeing one means a fired pane put it there. CLAUDE_CONFIG_DIR
+    # is `export`ed by a launcher (bin/claude-kimi), i.e. it is ambient in EVERY session by design;
+    # its `--env` site (added 2026-08-08) merely forwards it to one child. Without this test rule 6
+    # claimed 72 suites for a variable whose ambience has nothing to do with pane leakage — a
+    # different, real gap (does a $HOME fixture cover a config-dir override? it does not), filed as
+    # backlog 7c05d45796d8 with its numbers. Not this rule's class, and not something to smuggle in
+    # behind it: a naive version of THAT rule hits 123 of 355 suites and needs its own measurement.
+    case " $exported " in *" $v "*) continue ;; esac
+    [ "$v" = "$ENV_ANCHOR_VAR" ] && ENV_ANCHOR_SEEN=1
+    ENV_TABLE="$ENV_TABLE${ENV_TABLE:+
+}$f	$v"
+    rel="${f#"$root/"}"
+    case " $ENV_TOOLS " in
+      *" $rel "*) ;;
+      *) ENV_TOOLS="$ENV_TOOLS $rel"
+         ENV_TOOLS_RE="$ENV_TOOLS_RE${ENV_TOOLS_RE:+|}$(printf '%s' "$rel" | sed 's/\./\\./g')" ;;
+    esac
+  done <<EOF
+$cands
+EOF
+  ENV_TOOLS="${ENV_TOOLS# }"
+  # DELIBERATELY WITHOUT the trailing boundary class the exact scope test applies — a cost gate must
+  # be STRICTLY WEAKER than the test it gates, on every axis, or it shadows it. Rule 5's build
+  # records both ways that bit (end-of-line misses, and a mutation control passing vacuously).
+  [ -n "$ENV_TOOLS_RE" ] && ENV_TOOLS_RE="/($ENV_TOOLS_RE)"
   return 0
 }
 
@@ -922,6 +1189,56 @@ is_seam_assigned() {
   [[ "$1" =~ (^|[[:space:]\;\&])(export[[:space:]]+)?"$2"= ]]
 }
 
+# Is this suite in scope for rule 6 AT ALL? 0 = it names some tool that reads an injected variable ·
+# 1 = it does not. Purely a COST GATE in front of the comment strip and setup extraction, and a
+# strict SUPERSET of the exact scope test for seam_referenced()'s reason verbatim (stripping
+# comments only ever REMOVES text), so skipping on a miss cannot hide a violation.
+# Fail-SAFE = 0 (in scope): an unreadable scope check must leave the suite to the exact predicate
+# rather than silently excusing it, and CHECK_FAILED still forces exit 2.
+env_referenced() {
+  local rc
+  for _ in 1 2 3; do
+    grep -qE "$ENV_TOOLS_RE" "$1" 2>/dev/null; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ inherited-value scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0
+}
+
+# Does the setup() text in $1 take a DETERMINISTIC POSITION on injected variable $2? 0 = yes · 1 = it
+# inherits the operator's.
+#
+# RULE 3's ASYMMETRY, and here it is FORCED rather than chosen. Rule 5's is_seam_assigned() demands
+# `VAR=`; the compliant fix for an inherited value is very often `unset`, and 0588d255 — the fix that
+# generated this rule — used exactly that. A predicate that accepted only assignment would report
+# that fix still violating, forever, which is the measured reason rule 6 is its own rule (see the
+# header). So any position clears it: an assignment (`VAR=`, with or without `export`) or an
+# `unset`. What is forbidden is INHERITING one, not choosing the "wrong" one.
+#
+# Forks nothing, so it cannot fail, so it needs no retry and no third state — is_seam_assigned()'s
+# note applies verbatim, including why the caller hoists the setup extraction out of the seam loop.
+# Both arms require a BOUNDARY after the name, which is not cosmetic: CC_PANE_CMD is a strict prefix
+# of CC_PANE_CMD_DIR and CC_PANE_CMD_INTERACTIVE, so without it a suite pinning only the longer name
+# would read as having pinned the shorter one too. Pinned as a control in --selftest.
+#
+# THE TRAILING CLASS IS WIDER THAN RULE 3'S, and deliberately so — found by MUTATION, not by review.
+# Rule 3's is_orphan_pinned() closes its unset arm with `([[:space:]]|$)`, and this predicate was
+# written from it. That misses a statement-terminated unset — `unset CC_PANE_CMD;` or
+# `unset CC_PANE_CMD && …` — for the LAST name in the list only, since every earlier one is followed
+# by a space. The fail direction is the bad one: too NARROW on a PIN test is a false RED, i.e. a
+# compliant suite blocked for a position it did in fact take. Rule 3 is left alone (its verdicts are
+# measured against its own tree and changing them is not this rule's business), but the divergence is
+# recorded here rather than silently inherited, and (o6) pins the widened half.
+is_env_pinned() {
+  [[ "$1" =~ (^|[[:space:]\;\&\(])(export[[:space:]]+)?"$2"= ]] && return 0
+  [[ "$1" =~ (^|[[:space:]\;\&\(])unset([[:space:]]+-[a-zA-Z]+)?([[:space:]]+[A-Za-z_][A-Za-z0-9_]*)*[[:space:]]+"$2"([[:space:]]|[\;\&\)]|$) ]]
+}
+
 # 0 = present · 1 = absent · sets CHECK_FAILED if the check could not run
 in_allowlist() {
   local rc
@@ -979,6 +1296,8 @@ lint_dir() {
   local orphan_allow="$ORPHAN_ALLOW" orphan_leak=0 orphan_stuck=0
   local seam_allow="$SEAM_ALLOW" seam_leak=0 seam_stuck=0
   local seam_text="" seam_setup="" seam_why="" s_tool s_var s_cls s_def
+  local env_allow="$ENV_ALLOW" env_leak=0 env_stuck=0
+  local env_text="" env_setup="" env_why="" env_seen="" e_tool e_var
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
   [ -d "$dir" ] || { echo "test-hermeticity-lint: ⛔ not a directory: $dir" >&2; return 2; }
@@ -993,6 +1312,21 @@ lint_dir() {
       echo "test-hermeticity-lint: ⛔ the seam extractor did not detect its OWN anchor ($SEAM_ANCHOR_VAR) in $SEAM_ROOT/scripts/$(basename "$SELF")" >&2
       echo "  That file carries a shape-5a seam by construction, so this is the EXTRACTOR failing, not a clean tree." >&2
       echo "  Every rule-5 verdict in this run is therefore void; do not read it as a clean bill." >&2
+      return 2
+    fi
+  fi
+  # RULE 6's inherited-value table, built ONCE per run off ENV_ROOT — rule 5's split verbatim: the
+  # tools and the suites are different populations.
+  if [ "$ENV_RULE" = on ] && [ "$ENV_TABLE_ROOT" != "$ENV_ROOT" ]; then
+    build_env_table "$ENV_ROOT"
+    # THE EXTRACTOR CONTROL, and deliberately NOT a count — rules 4 and 5's argument verbatim. This
+    # script declares the anchor in BOTH halves by construction, so if it is inside the scanned root
+    # the extractor must have found it. Absent the anchor, an empty table is the honest answer for a
+    # tree that launches no panes.
+    if [ -f "$ENV_ROOT/scripts/$(basename "$SELF")" ] && [ "$ENV_ANCHOR_SEEN" -eq 0 ]; then
+      echo "test-hermeticity-lint: ⛔ the inherited-value extractor did not detect its OWN anchor ($ENV_ANCHOR_VAR) in $ENV_ROOT/scripts/$(basename "$SELF")" >&2
+      echo "  That file declares it as BOTH an injection and a read by construction, so this is the EXTRACTOR failing, not a clean tree." >&2
+      echo "  Every rule-6 verdict in this run is therefore void; do not read it as a clean bill." >&2
       return 2
     fi
   fi
@@ -1122,6 +1456,55 @@ EOF
         fi
       fi
     fi
+    # ── RULE 6, applied INDEPENDENTLY of rules 1-5 (a suite can violate any, all, or none) and ONLY
+    # to suites naming a tool that READS a variable this repo INJECTS into a launched pane. A suite
+    # naming no such tool is out of scope and must never appear here — and neither must a suite
+    # naming a tool that only INJECTS one, which is why the table is an INTERSECTION rather than
+    # either half (see RULE 6's header: that control alone is worth 49 suites).
+    if [ "$ENV_RULE" = on ] && [ -n "$ENV_TABLE" ]; then
+      env_why=""; env_seen=""
+      # The pre-filter runs FIRST and both extractions are hoisted behind it, ONCE per suite rather
+      # than once per variable — rule 5's cost argument verbatim.
+      if env_referenced "$f"; then
+      # Comment-stripped through the SHARED code_lines(), and matched with the SHARED
+      # seam_names_tool(): rules 5 and 6 must not be able to disagree about what counts as naming a
+      # tool, for the same reason the halves of ONE rule must not (b00a5010).
+      env_text="$(code_lines "$f" 2>/dev/null)"
+      env_setup="$(setup_statements "$f")"
+      while IFS='	' read -r e_tool e_var; do
+        [ -n "$e_tool" ] || continue
+        seam_names_tool "$env_text" "${e_tool#"$ENV_ROOT/"}" || continue
+        is_env_pinned "$env_setup" "$e_var" && continue
+        # Two tools can read the SAME injected variable (the pane runner and the terminal shim both
+        # do), so a suite naming both would otherwise report it twice. Delimited, never a substring
+        # test: CC_PANE_CMD is a strict prefix of two of its siblings.
+        case " $env_seen " in *" $e_var "*) continue ;; esac
+        env_seen="$env_seen $e_var"
+        env_why="$env_why${env_why:+, }$e_var"
+      done <<EOF
+$ENV_TABLE
+EOF
+      fi
+      if [ -z "$env_why" ]; then
+        if in_allowlist "$base" "$env_allow"; then
+          if in_own "$base" "$own" "$own_scoped"; then
+            printf '  RATCHET-ENV  %s pins its inherited-value seams now — delete its ENV allowlist line\n' "$base"
+            env_stuck=$((env_stuck + 1))
+          else
+            printf '  ratchet-env? %s pins its inherited seams but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$env_allow"; then
+        if in_own "$base" "$own" "$own_scoped"; then
+          printf '  INHERIT  %s: setup() takes no position on a variable its subject READS and this repo INJECTS into every pane — %s\n' "$base" "$env_why"
+          env_leak=$((env_leak + 1))
+        else
+          printf '  inherit? %s inherits an injected variable (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
   done
   [ "$seen" -gt 0 ] || { echo "test-hermeticity-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-hermeticity-lint: $other pre-existing violation(s) NOT in your diff — reported, not blocking (own-scope)."
@@ -1181,7 +1564,20 @@ EOF
     echo "test-hermeticity-lint: ⛔ $seam_stuck suite(s) above pin their non-\$HOME seams but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_SEAM_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck)) -eq 0 ] || return 1
+  if [ "$env_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $env_leak suite(s) above INHERIT a variable their subject reads."
+    echo "  WHY: this repo injects those variables into every pane it launches, so every DESCENDANT of"
+    echo "       a fired pane carries them — including bats, when an agent runs the suite from the pane"
+    echo "       that fired it. The suite then goes red exactly THERE and green everywhere else, so it"
+    echo "       reads as a genuine trunk red (0588d255: 5 failures, one of them a negative CONTROL)."
+    echo "  Fix: in setup(), \`unset <VAR>\` — or assign it, if the suite needs a value. Either counts;"
+    echo "       what is forbidden is inheriting one. Do NOT add to the inherited-value allowlist."
+  fi
+  if [ "$env_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $env_stuck suite(s) above pin their inherited-value seams but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_ENV_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
   local fire_note orphan_note
@@ -1195,13 +1591,18 @@ EOF
   else
     orphan_note="orphan-close rule OFF (CC_HERM_ORPHAN_RULE)"
   fi
-  local seam_note
+  local seam_note env_note
   if [ "$SEAM_RULE" = on ]; then
     seam_note="$(printf '%s\n' "$seam_allow" | grep -c .) grandfathered (non-\$HOME seam)"
   else
     seam_note="non-\$HOME seam rule OFF (CC_HERM_SEAM_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, 0 new leaks."
+  if [ "$ENV_RULE" = on ]; then
+    env_note="$(printf '%s\n' "$env_allow" | grep -c .) grandfathered (inherited value)"
+  else
+    env_note="inherited-value rule OFF (CC_HERM_ENV_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, 0 new leaks."
   return 0
 }
 
@@ -1702,6 +2103,119 @@ F
 echo "a lint that declares no seam anchor at all"
 F
   cp "$SELF" "$d/r5anchor_ok/scripts/$(basename "$SELF")"
+  # ── RULE 6 fixtures: a fixture TOOL ROOT plus suite dirs naming into it, rule 5's two populations
+  # verbatim — a rule-6 assertion must never be answerable by the real checkout.
+  #
+  # THE SELF-REFERENCE TRAP, one rule later and now on BOTH halves: this block sits inside the region
+  # build_env_table() reads, so a heredoc line spelling an injection argument would add a phantom
+  # variable to the REAL propagated set, and one spelling a read would make THIS script a reader of
+  # it — permanently obliging every suite that names this script to pin a fixture variable.
+  # env_line() keeps the variable NAME from ever being adjacent to either shape here (`%s` is not a
+  # valid identifier start, so neither extractor pattern matches), while the fixture on disk is the
+  # exact shape under test. The ANCHOR above is spelled for real, deliberately — that is its job.
+  # shellcheck disable=SC2059  # the format string IS the payload — see constant_line()/seam_line()
+  env_line() { printf "$@"; }
+  mkdir -p "$d/r6root/bin" "$d/r6root/scripts" "$d/r6root/hooks" \
+           "$d/r6leak" "$d/r6unset" "$d/r6assign" "$d/r6inject" "$d/r6unprop" "$d/r6scope" \
+           "$d/r6pertest" "$d/r6comment" "$d/r6prefix" "$d/r6semi"
+  # THE INJECTOR: puts two variables onto a launched pane and READS NEITHER. This is
+  # scripts/handoff-fire.sh's exact shape, and a suite naming it must stay GREEN — see (d6).
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # the format string IS the payload — see env_line() above
+    env_line 'exec term --env "%s=1" --env "%s=/x" -- "$SHELL"\n' ZZ_ENV_MODE ZZ_ENV_MODE_DIR
+  } >"$d/r6root/bin/zz-launcher"
+  # THE READER: reads both injected variables. ZZ_ENV_MODE is a strict PREFIX of ZZ_ENV_MODE_DIR,
+  # which is what the (i6) boundary control needs — the real tree has the same collision.
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # the format string IS the payload — see env_line() above
+    env_line 'MODE="${%s:-0}"\n' ZZ_ENV_MODE
+    # shellcheck disable=SC2016  # ditto
+    env_line 'DIR="${%s:-/tmp/zz-env}"\n' ZZ_ENV_MODE_DIR
+    cat <<'F'
+echo "$MODE $DIR"
+F
+  } >"$d/r6root/bin/zz-panetool"
+  # THE NON-PROPAGATED CONTROL: reads a `${NAME:-plain}` seam that NOTHING injects. This is the
+  # filing's naive rule — "every CC_* var a tool reads" — and it is what would have put most of 324
+  # suites in scope. A suite naming this must be GREEN.
+  { cat <<'F'
+#!/bin/bash
+F
+    # shellcheck disable=SC2016  # ditto — the format string IS the payload
+    env_line 'LVL="${%s:-0}"\n' ZZ_ENV_UNPROP
+    cat <<'F'
+echo "$LVL"
+F
+  } >"$d/r6root/bin/zz-plainseam"
+  cat >"$d/r6root/bin/zz-noseam" <<'F'
+#!/bin/bash
+echo no-seam
+F
+  # Every rule-6 suite fixture is $HOME-hermetic, fire-free and close-leg-free on purpose, so a
+  # rule-6 verdict can never be rules 1-3 leaking through.
+  # Quoted heredocs for every fixed line and an escaped-`\$` printf for the varying one — the same
+  # discipline rules 4-5's fixture writers use, and not only style: `echo '…$x…'` trips SC2016,
+  # which this repo does not waive and ship-land's gate enforces at `info`.
+  mk6() {  # mk6 <dir> <extra-setup-line> <tool>
+    { cat <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+F
+      [ -n "$2" ] && printf '  %s\n' "$2"
+      printf "  T=\"\$REPO/bin/%s\"\n" "$3"
+      cat <<'F'
+}
+@test "a" { run bash "$T"; }
+@test "b" { run bash "$T"; }
+F
+    } > "$d/$1/zz-fixture.bats"
+  }
+  mk6 r6leak   ''                                              zz-panetool
+  mk6 r6unset  'unset ZZ_ENV_MODE ZZ_ENV_MODE_DIR'             zz-panetool
+  # shellcheck disable=SC2016  # the literal must reach the FIXTURE FILE, not expand here
+  mk6 r6assign 'export ZZ_ENV_MODE=0 ZZ_ENV_MODE_DIR="$BATS_TEST_TMPDIR/d"' zz-panetool
+  mk6 r6inject ''                                              zz-launcher
+  mk6 r6unprop ''                                              zz-plainseam
+  mk6 r6scope  ''                                              zz-noseam
+  # THE BOUNDARY CONTROL: pins ONLY the longer name. ZZ_ENV_MODE must still be reported — without a
+  # boundary after the name, `ZZ_ENV_MODE_DIR=` would read as having pinned `ZZ_ENV_MODE` too.
+  # shellcheck disable=SC2016  # ditto — the literal must reach the FIXTURE FILE
+  mk6 r6prefix 'export ZZ_ENV_MODE_DIR="$BATS_TEST_TMPDIR/d"'  zz-panetool
+  # A STATEMENT-TERMINATED unset — the shape rule 3's narrower trailing class misses for the LAST
+  # name in the list, found by mutation rather than review. Must be GREEN: the position was taken.
+  mk6 r6semi   'unset ZZ_ENV_MODE ZZ_ENV_MODE_DIR;'            zz-panetool
+  # Per-test position does NOT count — rule 1's reason verbatim.
+  cat >"$d/r6pertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  T="$REPO/bin/zz-panetool"
+}
+@test "a" { unset ZZ_ENV_MODE ZZ_ENV_MODE_DIR; run bash "$T"; }
+@test "b" { run bash "$T"; }
+F
+  # THE COMMENT-STRIP CONTROL: a tool named only in PROSE executes nothing.
+  cat >"$d/r6comment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # unrelated: the pane this suite asserts on is also launched by $REPO/bin/zz-panetool
+  T="$REPO/bin/zz-noseam"
+}
+@test "x" { run bash "$T"; }
+F
+  # RULE 6's ANCHOR fixtures, rules 4-5's pair verbatim.
+  mkdir -p "$d/r6anchor/bin" "$d/r6anchor/scripts" "$d/r6anchor_ok/bin" "$d/r6anchor_ok/scripts"
+  cat >"$d/r6anchor/scripts/$(basename "$SELF")" <<'F'
+#!/bin/bash
+echo "a lint that declares no inherited-value anchor at all"
+F
+  cp "$SELF" "$d/r6anchor_ok/scripts/$(basename "$SELF")"
   fails=0
   # Pin BOTH rule-2 knobs for the duration of the selftest: an ambient CC_HERM_FIRE_RULE=off or a
   # stray CC_HERM_FIRE_ALLOWLIST in the caller's environment would otherwise make every rule-2
@@ -1731,6 +2245,14 @@ F
   # assertion turns it on IN A SUBSHELL, against the FIXTURE seam root, so nothing leaks either way.
   SEAM_RULE=off
   SEAM_ALLOW=""
+  # Rule 6's knobs, pinned OFF for rule 5's reason verbatim and with the same NOTE about the
+  # entrypoint: the rules-1-5 fixtures name real tools, and a rule-6 verdict about the real $ROOT
+  # must never become the answer to a rule-1/2/3/4/5 assertion about a two-file fixture. Every
+  # entrypoint assertion below therefore also carries CC_HERM_ENV_RULE=off, because a child re-reads
+  # the environment and would default the rule back ON. Rule 6's own assertions turn it on IN A
+  # SUBSHELL, against the FIXTURE tool root, so nothing leaks either way.
+  ENV_RULE=off
+  ENV_ALLOW=""
   lint_dir "$d/leak" ""               >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a NEW non-hermetic suite did not go RED"; fails=1; }
   lint_dir "$d/herm" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a fixed-but-still-allowlisted suite did not go RED (ratchet not shrinking)"; fails=1; }
   lint_dir "$d/herm" ""                >/dev/null 2>&1 || { echo "SELFTEST FAIL: a hermetic suite did not go GREEN"; fails=1; }
@@ -1743,14 +2265,16 @@ F
   FIRE_ALLOW="$EMBEDDED_FIRE_ALLOWLIST"
   ORPHAN_ALLOW="$EMBEDDED_ORPHAN_ALLOWLIST"
   SEAM_RULE=on; SEAM_ALLOW="$EMBEDDED_SEAM_ALLOWLIST"; SEAM_ROOT="$ROOT"
+  ENV_RULE=on; ENV_ALLOW="$EMBEDDED_ENV_ALLOWLIST"; ENV_ROOT="$ROOT"; ENV_TABLE_ROOT=""
   lint_dir "$ROOT/tests" "$EMBEDDED_ALLOWLIST" >/dev/null 2>&1; rc_real=$?
   FIRE_ALLOW=""
   ORPHAN_ALLOW=""
   SEAM_RULE=off; SEAM_ALLOW=""
+  ENV_RULE=off; ENV_ALLOW=""
   case "$rc_real" in
     0) ;;
     2) echo "SELFTEST FAIL: could not scan $ROOT/tests — a NON-VERDICT (bad ROOT?), NOT a stale allowlist"; fails=1 ;;
-    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate and/or orphan-close) — the real tree is not clean"; fails=1 ;;
+    *) echo "SELFTEST FAIL: an embedded allowlist is stale (\$HOME, capacity-gate, orphan-close and/or inherited-value) — the real tree is not clean"; fails=1 ;;
   esac
   # ── RULE 3's four-way discrimination. Each assertion is paired with the one that proves it fired
   # for the RIGHT reason: red without the scope control is a rule that reds on everything.
@@ -1793,8 +2317,8 @@ F
   # unlike the in-process lint_dir cases they would ALSO run rule 4 against the real $ROOT, and a
   # rule-4 verdict about the checkout would silently become this rule-1/2 assertion's answer.
   # Rule 4 gets its own entrypoint parity pair at (a4)-(m4), where it is pinned ON.
-  ( unset CC_HERM_OWN; CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_SEAM_RULE=off CC_HERM_OWN="" CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
+  ( unset CC_HERM_OWN; CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ENV_RULE=off "$SELF" "$d/leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_OWN unset did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_OWN="" CC_HERM_SELFTEST_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_ENV_RULE=off "$SELF" "$d/leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_OWN set-but-empty blocked at the entrypoint"; fails=1; }
   # (n) COULD-NOT-CHECK is a non-verdict, not a leak — and own-scope must not paper over it.
   # Simulates the real incident: a `grep` that cannot RUN (rc>1). Shadowing grep in a subshell
   # reproduces exactly what fork exhaustion / a reaped child does to these predicates. Before the
@@ -1866,10 +2390,10 @@ F
   #     variable. Rule 1's allowlist is emptied in both so only rule 2 can produce the verdict.
   #     CC_HERM_FIRE_RULE=on is passed explicitly so an ambient kill switch in the CALLER's
   #     environment cannot neuter the child and turn (y)'s RED half into an unexplained failure.
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="zz-fixture.bats" CC_HERM_FIRE_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   # (z) the kill switch turns rule 2 off — and ONLY rule 2 (rule 1 still judges the same tree).
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_FIRE_ALLOWLIST="" CC_HERM_FIRE_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/fireleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_FIRE_RULE=off did not disable rule 2"; fails=1; }
 
   # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
   # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
@@ -1951,9 +2475,9 @@ F
   # (m4) entrypoint parity for rule 4's two seams, and the kill switch with its positive control.
   #      The scan dir is the hermetic fixture with rule 1's allowlist emptied, so rule 1 contributes
   #      0 and only rule 4 can produce the verdict.
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="zz-tool" CC_HERM_SELFTEST_RULE=on "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
-  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=on CC_HERM_ENV_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="zz-tool" CC_HERM_SELFTEST_RULE=on CC_HERM_ENV_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_ROOT="$d/s_collide" CC_HERM_SELFTEST_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/herm" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SELFTEST_RULE=off did not disable rule 4"; fails=1; }
 
   # ── RULE 5's assertions. Every one runs in a SUBSHELL that turns the rule on against the FIXTURE
   # seam root: the globals stay off outside, so a rule-5 verdict can never answer a rule-1/2/3
@@ -1994,12 +2518,70 @@ F
   # (l5) entrypoint parity for all three of rule 5's env seams, with the kill switch's positive
   #      control. The scan dir is the hermetic fixture with rule 1's allowlist emptied, so rule 1
   #      contributes 0 and only rule 5 can produce the verdict.
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=on "$SELF" "$d/r5leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="zz-fixture.bats" CC_HERM_SEAM_RULE=on "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
-  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=off "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_RULE=off did not disable rule 5"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=on CC_HERM_ENV_RULE=off "$SELF" "$d/r5leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="zz-fixture.bats" CC_HERM_SEAM_RULE=on CC_HERM_ENV_RULE=off "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_ROOT="$d/r5root" CC_HERM_SEAM_ALLOWLIST="" CC_HERM_SEAM_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/r5leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_SEAM_RULE=off did not disable rule 5"; fails=1; }
+
+  # ── RULE 6's assertions. Every one runs in a SUBSHELL that turns the rule on against the FIXTURE
+  # tool root — rule 5's discipline verbatim: the globals stay off outside, so a rule-6 verdict can
+  # never answer a rules-1-5 question and the real checkout can never answer a rule-6 one.
+  r6() { ( ENV_RULE=on; ENV_ROOT="$d/r6root"; ENV_TABLE_ROOT=""; ENV_ALLOW="$2"
+           lint_dir "$d/$1" "" >/dev/null 2>&1 ) }
+  # (a6) RED: the subject READS a variable this repo injects into every pane, and setup() takes no
+  #      position on it — 0588d255's shape exactly.
+  r6 r6leak ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: an unpinned inherited-value seam did not go RED"; fails=1; }
+  # (b6) GREEN via unset — the remedy 0588d255 actually used, and the one rule 5's assignment-only
+  #      predicate REJECTS. If this goes red, rule 6 has collapsed into rule 5 and the very fix that
+  #      generated the rule reads as violating it.
+  r6 r6unset "" || { echo "SELFTEST FAIL: an 'unset' in setup() did not clear the rule — rule 6 has collapsed into rule 5's assignment-only predicate"; fails=1; }
+  # (c6) GREEN via ASSIGNMENT — rule 3's asymmetry: ANY deterministic position counts, because what
+  #      is forbidden is INHERITING one, not choosing the "wrong" one.
+  r6 r6assign "" || { echo "SELFTEST FAIL: an ASSIGNED inherited-value seam did not go GREEN"; fails=1; }
+  # (d6) THE INJECT-ONLY SCOPE CONTROL, and the most load-bearing assertion rule 6 has. A tool that
+  #      puts a variable on a pane and never READS it is not exposed to it. Drop this half of the
+  #      intersection and scripts/handoff-fire.sh joins the table, grandfathering 49 suites for a
+  #      variable their subject does not read (measured, not supposed).
+  r6 r6inject "" || { echo "SELFTEST FAIL: a suite naming an INJECT-ONLY tool was pulled into scope — the intersection collapsed to its PROPAGATED half"; fails=1; }
+  # (e6) THE NON-PROPAGATED SCOPE CONTROL, the other half. A plain-valued seam that NOTHING injects
+  #      cannot be inherited. Drop this half and the rule is the filing's naive version — 1047 seam
+  #      assignments and most of 324 suites in scope.
+  r6 r6unprop "" || { echo "SELFTEST FAIL: a plain-valued seam that NOTHING injects was flagged — the intersection collapsed to its READ half (the naive rule)"; fails=1; }
+  # (f6) the ordinary scope control: a suite naming a tool with no seam of any kind.
+  r6 r6scope "" || { echo "SELFTEST FAIL: a suite naming a tool with NO inherited-value seam was dragged into scope"; fails=1; }
+  # (g6) RED: a per-test position leaves every OTHER test inheriting — rule 1's law.
+  r6 r6pertest ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PER-TEST unset was accepted as a position"; fails=1; }
+  # (h6) THE COMMENT-STRIP CONTROL: a tool named only in PROSE executes nothing.
+  r6 r6comment "" || { echo "SELFTEST FAIL: a tool named only in a COMMENT pulled the suite into rule 6"; fails=1; }
+  # (i6) THE NAME-BOUNDARY CONTROL: pinning ZZ_ENV_MODE_DIR must NOT count as pinning ZZ_ENV_MODE.
+  #      The real tree carries the same collision (CC_PANE_CMD strictly prefixes two siblings), so
+  #      without a boundary after the name one pin would excuse all three.
+  r6 r6prefix ""; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: pinning a LONGER variable counted as pinning the one it prefixes"; fails=1; }
+  # (o6) GREEN: a STATEMENT-TERMINATED unset is still a position. Rule 3's narrower trailing class
+  #      misses this for the LAST name in the list, so the predicate would report a suite that DID
+  #      take a position as violating — a false RED, the fail direction a pin test must never have.
+  #      Found by mutation (judging the whole file instead of setup() failed to flip (g6), because
+  #      the fixture's unset ended in `;` and neither name matched).
+  r6 r6semi "" || { echo "SELFTEST FAIL: a statement-terminated 'unset FOO;' was not accepted as a position — the trailing boundary is too narrow and compliant suites go falsely RED"; fails=1; }
+  # (j6)/(k6) the ratchet consulted in BOTH directions — grandfathered ⇒ green, fixed-but-listed ⇒ red.
+  r6 r6leak "zz-fixture.bats" || { echo "SELFTEST FAIL: a grandfathered inherited-value leak did not go GREEN"; fails=1; }
+  r6 r6unset "zz-fixture.bats"; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-allowlisted suite did not go RED (inherited-value ratchet not shrinking)"; fails=1; }
+  # (l6) THE ANCHOR CONTROL, calibration-free: a tool root carrying this script's own path WITHOUT
+  #      the anchor is an EXTRACTOR failure, so the run is a NON-VERDICT (exit 2), never a clean
+  #      bill. (m6) is its paired GREEN — a real copy, whose anchor must be found through BOTH
+  #      halves of the intersection at once.
+  ( ENV_RULE=on; ENV_ROOT="$d/r6anchor"; ENV_TABLE_ROOT=""; ENV_ALLOW=""
+    lint_dir "$d/herm" "" >/dev/null 2>&1 ); [ "$?" -eq 2 ] || { echo "SELFTEST FAIL: an inherited-value extractor blind to its OWN anchor did not produce a NON-VERDICT"; fails=1; }
+  ( ENV_RULE=on; ENV_ROOT="$d/r6anchor_ok"; ENV_TABLE_ROOT=""; ENV_ALLOW=""
+    lint_dir "$d/herm" "" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: a WORKING inherited-value anchor (this script itself) was not detected"; fails=1; }
+  # (n6) entrypoint parity for all three of rule 6's env seams, with the kill switch's positive
+  #      control. Rule 1's allowlist is emptied and rules 4-5 pinned off, so only rule 6 can produce
+  #      the verdict.
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="" CC_HERM_ENV_RULE=on "$SELF" "$d/r6leak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_ENV_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="zz-fixture.bats" CC_HERM_ENV_RULE=on "$SELF" "$d/r6leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ENV_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_ALLOWLIST="" CC_HERM_SELFTEST_RULE=off CC_HERM_SEAM_RULE=off CC_HERM_ENV_ROOT="$d/r6root" CC_HERM_ENV_ALLOWLIST="" CC_HERM_ENV_RULE=off "$SELF" "$d/r6leak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_ENV_RULE=off did not disable rule 6"; fails=1; }
 
   if [ "$fails" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 80/80 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint."
+    echo "test-hermeticity-lint --selftest: 97/97 — RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (path-form accepted), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form, NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."

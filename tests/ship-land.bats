@@ -58,6 +58,10 @@ setup() {
   # These tests assert VERDICT logic; shedding has its own dedicated tests below, which set it
   # per-test.
   export CC_GATE_MAX_LOAD=0
+  # This suite names scripts/test-hermeticity-lint.sh (it asserts the gate's chokepoint wiring), and
+  # that file declares CC_HERM_ENV_SELFPROBE as both an injection and a read — the anchor its own
+  # rule-6 extractor is proved against. So this suite is in scope for it; any position clears it.
+  export CC_HERM_ENV_SELFPROBE=0
 }
 
 on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fresh branch
