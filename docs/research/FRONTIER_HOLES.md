@@ -85,7 +85,55 @@ Cost: 3 Fable spawns of a 6-spawn session budget; 0 panelist writes.
 
 ## In-Panel
 
-_(none)_
+### H-CAP-1 · What resource on this box exhausts while every conventional gauge reads healthy? — CONFIRMED-BY-PANEL 2026-08-09 (3 Fable panelists, baseline-blind; lead session 03515ee3) — RESOLVED, see verdict below
+- **Seam/axis**: the admission-control model for concurrent Claude Code sessions on a fixed 10-core /
+  64 GB M1 Max, targeting 150+ — every shared, finite, non-obvious kernel or userspace resource a session
+  (and what a session spawns) consumes, versus the gauges the fleet's capacity model actually reads.
+- **Why frontier-shaped**: the failure class is *instruments that read healthy at the moment of death*.
+  A derivation panel is the only method that can enumerate members of that class; an evidence sweep can
+  only rediscover the ones already instrumented. The one confirmed member cost six kernel panics and five
+  failed "resolutions" to name.
+- **Capture provenance**: raised at the desk 2026-08-09 while relaying `crash-rootcause-2026-08-09.md`
+  into the live scale-150 capacity session. Operator authorized the spend explicitly.
+- **Panel constraint**: panelists received the box spec, the target, and the *class* of question only.
+  The confirmed member and the in-flight ceiling model were withheld.
+
+#### PANEL VERDICT 2026-08-09 — CONFIRMED, and the answer is a table nobody raised
+
+**NEW: `kern.tty.ptmx_max = 511`** — the pty namespace. All three panelists ranked it #1 independently.
+It is the only kernel table on this box sized in *hundreds* (every other is 10^4-10^6) and the only one
+still at its stock value, while `maxproc` (16000), `maxprocperuid` (10666) and `maxfiles` (491520) have
+all been raised — the **tuning fingerprint**: every ceiling this box has already hit was raised; ptmx_max
+is stock because the fleet has never reached it, which is exactly why nothing watches it. Consumption is
+linear in *panes*, not sessions (~1.5-4 per session-equivalent once handoff/teammate/notify-back panes
+count), so 150 sessions under the visible-pane doctrine projects to 300-600+. It cannot be tuned past
+~999 (`/dev/ttys%03d`). Failure is `posix_openpt` ENXIO — spawn errors that read as application bugs —
+with every conventional gauge green. Verified by the lead: 511 limit, 21 in use at ~6 sessions.
+
+**NEW: the live admission gate is blind to it and to the confirmed killer.** `scripts/lib/capacity-admit.sh`
+reads exactly `vm.loadavg` + `head_gb`, both fail-open. No pty term, no compressor term. And `head_gb`
+(free+speculative+inactive+purgeable) conflates inactive-anon with inactive-file — `vm_stat` has no
+inactive-anon line, so the conflation is **structural, not a tuning error**. That is the mechanism behind
+the capacity session's 127/127-refusals-from-the-load-term anomaly: the memory floor is built on a
+quantity that cannot bind, and it over-reads worst precisely at the target scale.
+
+**CONFIRMED (convergence, not discovery)**: two panelists independently re-derived compressor thrash as
+the binding memory failure, with sys% as the misread symptom — the crash root-cause doc's verdict,
+reached without being shown it.
+
+**REFUTED by the panel's own probes**: per-uid proc table, thread table, system file table, swap-file
+space, ephemeral ports/mbufs — all far from limits at 150. The 200 GB / 402 worktrees bind through
+shared-lock contention and vnode working set, NOT through space or inodes.
+
+→ generator-class candidates emitted: **C-CAP-1** (occupancy-table admission) and **C-CAP-2** (pty-less
+session substrate), both under `## Campaign Candidates`.
+→ full write-up: `docs/research/session-capacity-blind-terms-2026-08-09.md`; raw returns verbatim in
+`docs/research/panels/h-cap-1/`.
+→ **process defect found by this panel's own failure**: named `Agent` spawns become team members whose
+deliverable channel is `SendMessage`, not a return value — all three completed and returned nothing.
+Recovered from their transcripts. See the write-up §8.
+
+_(none currently in panel)_
 
 ## Resolved
 
@@ -116,6 +164,22 @@ design: `desk-self-handoff-2026-07-19/synthesis.md`. → CORE implemented on the
 | land→activate→deploy→exercise lifecycle | `commands/ship.md`·`scripts/ship-land.sh`·`docs/activation/pending-activation/*`·`hooks/activation-watch.sh`·`scripts/settings-drift-assert.sh`·`scripts/settings-hooks-lint.sh`·`scripts/deploy-link-parity.sh`·`install.sh`·`launchd/fleet.manifest`·5×`settings.json` | 2026-07-30 | Fable panel (3 panelists, baseline-blind: lifecycle-derivability / separability / adversarial+negative-space), 8 panel predictions re-probed by the lead | **CONFIRMED-BY-PANEL** → C-INERT-1. Expectation is imperative, never declared ⇒ `LIVE` not derivable. Live at sweep: detection layer wired 0/5 · 4 settings drifts · 11/23 launchd loaded · 57/89 registry dead-pid · MEMORY.md 4KB over the loader cap · `lib/cc-upgrade-gate` unlinked |
 
 ## Campaign Candidates
+
+### C-CAP-1 — Occupancy-table admission (GENERATOR · from H-CAP-1, Fable panel 2026-08-09)
+Replace rate/level PROXIES in `scripts/lib/capacity-admit.sh` with one probe reading every finite table as a
+fraction of its limit (`ttys/511`, `procs/16000`, `procs-uid/10666`, `threads/81920`, `files/491520`,
+`compressor_bytes/limit`) and gating on the max fraction. Dissolves at once: the pty blind spot (it becomes the
+fullest row), the loadavg-ceiling debate the gate's own header documents (§8.5.2 retraction, boot-storm 346 —
+saturation proxies stop being load-bearing), the compressor sentinel that gates nothing (it becomes a row), and
+the structural inactive-anon conflation in `head_gb`. **Tables lie far less than proxies: they ARE the
+resource.** Emitted independently by two panelists.
+
+### C-CAP-2 — A pty-less session substrate (GENERATOR · from H-CAP-1, Fable panel 2026-08-09)
+The visible-pane doctrine has a hard numeric ceiling of <=999 ptys on this box, ever. Sessions running detached,
+with panes as VIEWS attached on demand, dissolves the pty cliff, the terminal-emulator fd slope, orphaned-pane
+reaping, and the pane-anchor fragility class in the handoff machinery — because a session stops BEING a pane.
+The only H-CAP-1 finding that cannot be tuned away: at 150 sessions with teams, the doctrine itself is the
+ceiling.
 
 ### C-INERT-1 — Declared ⇒ wired, by construction (GENERATOR · from H-INERT-1, Fable panel 2026-07-30)
 ALL THREE panelists emitted this independently. Five parts in dependency order — note only part 3 is a
