@@ -296,6 +296,48 @@ alias_pane_to_session() {
   [ ! -f "$CC_MAILBOX_DIR/$SESSKEY.watching" ]
 }
 
+# ── OVERLAP (def25802babf): two watchers, ONE marker slot ────────────────────────────────────────
+# A single watcher's exit is the case the tests above cover, and it passes against the pre-fix code —
+# it proves nothing about the defect. The measured incident is an OVERLAP: a session re-arms near the
+# term-end of its old watcher, so two are armed on one key, and the first to exit used to rm the
+# survivor's heartbeat. Both tests below make the exiting watcher the LAST BEATER (interval 1 beside
+# a long-interval survivor), because that is the half of the overlaps a bare pid==$$ guard cannot
+# fix: the slot legitimately names the exiting pid, so deleting blanks the survivor and keeping leaves
+# a marker naming a pid that is dead — which readers score NOT armed either way.
+@test "overlap def25802babf: an exiting watcher hands the marker to its LIVE sibling, never blanks it" {
+  wf="$CC_MAILBOX_DIR/$UUID.watching"
+  # B — the survivor. A LONG interval so its next beat cannot restore the marker inside the window
+  # measured below; otherwise the assertion is satisfied by B's re-beat and the defect goes unseen.
+  "$AWAIT" "$UUID" --interval 30 --timeout 90 >/dev/null 2>&1 & B=$!
+  sleep 1
+  "$AWAIT" "$UUID" --interval 1 --timeout 3 >/dev/null 2>&1 & A=$!
+  wait "$A" 2>/dev/null || true                      # A times out ⇒ its EXIT trap runs
+  ! kill -0 "$A" 2>/dev/null || false                 # …and A really is gone (not merely detached)
+  [ -f "$wf" ]                                       # the survivor's heartbeat is STILL there
+  wpid="$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$wf" | head -n1)"
+  [ "$wpid" -eq "$B" ]                               # and the slot names B, not the pid that exited
+  kill -0 "$wpid"                                    # which is alive ⇒ a reader scores ARMED, not DEAF
+  kill "$B" 2>/dev/null || true; wait "$B" 2>/dev/null || true
+}
+
+# Pinned, never a moving ref — the same rule as the keyset RED-PROOF below: once this lands, a
+# floating control IS the fixed tree and the proof inverts. Replays the REAL pre-fix artifact.
+CC_AWAIT_OVERLAP_PREFIX_SHA="${CC_AWAIT_OVERLAP_PREFIX_SHA:-399ed0da}"
+@test "RED-PROOF def25802babf: the pre-fix watcher blanks a LIVE sibling's heartbeat on exit" {
+  local old="$BATS_TEST_TMPDIR/preoverlap"; mkdir -p "$old"
+  git -C "$REPO" archive "$CC_AWAIT_OVERLAP_PREFIX_SHA" bin hooks | tar -x -C "$old" \
+    || skip "pre-fix tree $CC_AWAIT_OVERLAP_PREFIX_SHA unavailable"
+  [ -x "$old/bin/cc-await-ping" ]
+  ! grep -q '_claim_live' "$old/bin/cc-await-ping" || false     # genuinely predates the fix
+  "$old/bin/cc-await-ping" "$UUID" --interval 30 --timeout 90 >/dev/null 2>&1 & B=$!
+  sleep 1
+  "$old/bin/cc-await-ping" "$UUID" --interval 1 --timeout 3 >/dev/null 2>&1 & A=$!
+  wait "$A" 2>/dev/null || true
+  kill -0 "$B"                                       # positive control: the survivor IS still running
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # RED: its wake path was cleared out from under it
+  kill "$B" 2>/dev/null || true; wait "$B" 2>/dev/null || true
+}
+
 # Pinned, never a moving ref: once this lands, a floating control IS the fixed tree and the proof
 # inverts. Replays the REAL pre-fix artifact from git, never a hand-edited approximation.
 CC_KEYSET_PREFIX_SHA="${CC_KEYSET_PREFIX_SHA:-0272e835}"
