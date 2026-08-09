@@ -281,7 +281,6 @@ fire-engagement.bats
 gate-classify.bats
 gate-manifest.bats
 handoff-disposition.bats
-handoff-fire-account-sweep.bats
 handoff-fire-completion-push.bats
 handoff-fire-focus.bats
 handoff-fire-inject.bats

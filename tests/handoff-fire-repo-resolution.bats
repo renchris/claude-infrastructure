@@ -183,3 +183,44 @@ fire() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "worktree: $WTROOT/chore  (exists — reused as-is)" || false
 }
+
+@test "9 an ABSENT it2 shim degrades to the fallback — it does not silently abort the fire" {
+  # THE PREMISE THIS RETIRES is stated in setup() above ("The it2 shim must EXIST … an absent file
+  # aborts the whole script"). That was true, and it was a BUG in handoff-fire.sh, not a fact about
+  # bats: the REAL_IT2/PYTHON_BIN resolvers ran `sed … | head -1` under `set -euo pipefail`, so an
+  # absent shim made the COMMAND SUBSTITUTION non-zero and the assignment killed the script — with
+  # the sed's own `2>/dev/null` swallowing the only evidence. Each resolver already had a fallback
+  # on its very next line (`[ -n … ] || PYTHON_BIN="python3"`), written for exactly this case and
+  # unreachable in exactly this case. Fixed 2026-08-08 by `|| true` on both pipelines.
+  #
+  # WHY THIS TEST IS WORTH ITS LINE. The workaround — hand-seed a shim into the fixtured $HOME — is
+  # in 19 suites, and four state this reason in a comment. Nothing asserted the underlying
+  # behaviour, so the tree recorded the defect four times and guarded it zero times; deleting any
+  # one seeding line would have reintroduced a SILENT abort that reads as an ordinary red.
+  #
+  # RED-ON-MUTATION: drop either `|| true` and this test fails on `[ "$status" -eq 0 ]` with empty
+  # output — the same signature the four comments describe.
+  rm -f "$HOME/.claude/bin/it2"
+  [ ! -e "$HOME/.claude/bin/it2" ]                       # the premise is actually absent
+  fire "$DEFAULT_REPO"
+  [ "$status" -eq 0 ]
+  # Not merely "exit 0": the fire must have RUN. The dry-run readout is the evidence it got past
+  # the resolvers, which a silent abort never reaches.
+  echo "$output" | grep -q "repo:" || false
+}
+
+@test "10 …and on the REAL_IT2 branch too — the sibling resolver, which test 9 cannot reach" {
+  # ONE MUTANT PER SITE (the two resolvers are two sites, not one). Test 9 alone measured GREEN
+  # against a mutant that stripped `|| true` from the REAL_IT2 line: on this box KITTY_IT2 resolves
+  # to the repo's own bin/it2-kitty and kitty_headless() answers yes, so the `elif` branch wins and
+  # REAL_IT2 is assigned WITHOUT ever running its sed. The site was real, the coverage was not — a
+  # green that would have attributed test 9's protection to a line it never executed.
+  # CC_FIRE_KITTY_PROBE=off is kitty_headless()'s own documented kill switch (handoff-fire.sh:706);
+  # with no KITTY_WINDOW_ID either, both upper branches fail and the `else` sed is forced to run.
+  # RED-ON-MUTATION: strip `|| true` from the REAL_IT2 line and this test fails where 9 still passes.
+  rm -f "$HOME/.claude/bin/it2"
+  export CC_FIRE_KITTY_PROBE=off
+  fire "$DEFAULT_REPO"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "repo:" || false
+}

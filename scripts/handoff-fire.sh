@@ -5864,7 +5864,10 @@ elif [ -n "${KITTY_IT2:-}" ] && kitty_headless; then
   # name exists), so those six assertions keep resolving exactly what they resolved before.
   REAL_IT2="$KITTY_IT2"
 else
-  REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
+  # `|| true` is LOAD-BEARING, for the reason spelled out at the PYTHON_BIN resolver below: without
+  # it an ABSENT shim kills the whole script here, and the fallback on the very next line — the one
+  # written to handle exactly that case — never runs.
+  REAL_IT2="$(sed -n 's/^REAL_IT2="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1 || true)"
   [ -n "$REAL_IT2" ] && [ -x "$REAL_IT2" ] || REAL_IT2="$IT2_SHIM"
 fi
 [ -n "${IT2_BIN:-}" ] && REAL_IT2="$IT2_BIN"   # test seam (same convention as cc-sessions)
@@ -5874,7 +5877,30 @@ fi
 # two things the it2 0.2.3 CLI cannot do WITHOUT stealing focus (C1): read the operator-focused session,
 # and create a BACKGROUND surface then restore focus atomically. Same transport the shim uses for
 # `session close -f`. Falls back to `python3` if the shim is unreadable; IT2_PYTHON_BIN is the test seam.
-PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1)"
+#
+# `|| true` IS THE FALLBACK'S ONLY ROUTE TO EXISTENCE (2026-08-08). Without it the next line was
+# DEAD CODE: this script runs `set -euo pipefail` (:197), so when $IT2_SHIM is absent `sed` exits
+# non-zero, pipefail propagates that out of the command substitution, and the ASSIGNMENT itself
+# kills the script — before `[ -n "$PYTHON_BIN" ]` can ever observe the empty string it was written
+# to catch. The `2>/dev/null` on the sed makes it worse than a crash: the fire prints one or two
+# lines and vanishes with no message. So the `[ -n … ] || PYTHON_BIN="python3"` guard below, and its
+# REAL_IT2 twin above, could not run in the one situation they exist for.
+#
+# THE REPO ALREADY KNEW, WHICH IS WHY THIS IS A FIX AND NOT A DISCOVERY. The identical trap is named
+# verbatim at the back-channel registry lookup (:5001, "the same trap the PYTHON_BIN resolver hits
+# under a fixtured $HOME") where `|| true` was correctly applied — the remedy landed at that site and
+# at neither of these two. Downstream, THREE hermetic suites pay a workaround tax for it, each
+# hand-seeding a fake shim into its fixtured $HOME purely to keep this line from aborting the run:
+# tests/handoff-recycle-relocate.bats:40 (whose comment states the mechanism exactly),
+# tests/handoff-fire-launcher-map.bats:54, tests/handoff-fire-repo-resolution.bats:52. That seeding
+# is now belt-and-braces rather than load-bearing; it is left in place deliberately, since a suite
+# that pins the shim's CONTENT is testing the resolver, not dodging it.
+#
+# WHY IT SURFACED HERE. tests/handoff-fire-account-sweep.bats could not be made hermetic at all
+# while this stood: fixturing $HOME is precisely what removes the shim, so the dry-run fire died
+# silently and the suite went red — indistinguishable from a real regression. That suite is the one
+# backlog 2f71dded07f2 named, and this is the defect actually behind it.
+PYTHON_BIN="$(sed -n 's/^PYTHON_BIN="\(.*\)"$/\1/p' "$IT2_SHIM" 2>/dev/null | head -1 || true)"
 [ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || PYTHON_BIN="python3"
 [ -n "${IT2_PYTHON_BIN:-}" ] && PYTHON_BIN="$IT2_PYTHON_BIN"
 
