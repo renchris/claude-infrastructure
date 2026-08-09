@@ -2441,6 +2441,36 @@ read_fired_cwd_index() { # $1=fired-dir $2=cwd → echoes the pane id, or nothin
   jq -r '.paneUUID // ""' "$f" 2>/dev/null || true
 }
 
+# sc_announce_before_retire — the F-1 actuator. Kept a FUNCTION rather than inline in the self-close
+# preflight so it is drivable on its own: the self-close path ahead of it resolves pane identity,
+# teammate liveness and the origin class, none of which this decision depends on, and a test that had
+# to satisfy all of them to reach one stamp read would be testing the wrong thing.
+# Always returns 0 — see the call site for why this must never be able to refuse a close.
+sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-effort, always 0
+  local pane="${1:-}" dir="${2:-}" mdir="${3:-}" stamp nb sent
+  [ -n "$pane" ] && [ -n "$dir" ] && [ -n "$mdir" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  stamp="$dir/$pane.json"
+  [ -s "$stamp" ] || return 0
+  nb="$(jq -r '.notifyBack // empty' "$stamp" 2>/dev/null || true)"
+  # No armed back-channel ⇒ nothing was promised ⇒ nothing to enforce. This is the branch that keeps
+  # the mechanism quiet on an ordinary fire, so it carries information when it does speak.
+  [ -n "$nb" ] || return 0
+  sent="$mdir/.sent/$pane"
+  if [ -s "$sent" ] && grep -qF "$nb" "$sent" 2>/dev/null; then
+    echo "→ announce-before-retire: this pane pinged $nb — proceeding"
+    return 0
+  fi
+  echo "⚠ announce-before-retire: fired with --notify-back $nb but NO ping was ever sent from this pane. Announcing on its behalf so the originator is not left waiting on an event that never comes." >&2
+  if "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --mailbox-only "$nb" \
+       "HANDOFF-PING (auto, unannounced retire): peer $pane is retiring NOW and never sent its own status ping. Its work is committed (self-close refuses a dirty tree), but you are getting this from the close path, not from the peer — so treat its status as UNREPORTED and check its branch/worktree yourself." >/dev/null 2>&1; then
+    echo "→ announce-before-retire: auto-announce delivered to $nb"
+  else
+    echo "⚠ announce-before-retire: auto-announce to $nb FAILED — retiring anyway (a pane that cannot announce must still be able to retire), but the originator has NOT been told." >&2
+  fi
+  return 0
+}
+
 mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=prompt-file] → best-effort, always 0
   local dir="$1" pane="$2" cwd="$3" by="$4" pf="${5:-}" tmp
   # MFP_SKIP_REASON — why this function declined, for a caller that needs to know.
@@ -2503,10 +2533,12 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
         --arg startedAt "${LR_STARTED_AT:-}" --arg engagedAt "${LR_ENGAGED_AT:-}" \
         --arg proof "${LR_PROOF:-}" --arg transcript "${LR_TRANSCRIPT:-}" \
         --arg marker "${FIRE_MARKER:-}" --arg originator "$by" \
+        --arg notifyBack "${NB_ARMED_TARGET:-}" \
         --arg latency "$(_iso_delta_s "${LR_STARTED_AT:-}" "${LR_ENGAGED_AT:-}")" \
         '{paneUUID:$paneUUID, cwd:$cwd, firedBy:$firedBy, firedAt:$firedAt, selfRetire:true}
          + {schema:2, originClass:"fired-peer"}
          + {originator:      (if $originator  == "" then null else $originator  end)}
+         + {notifyBack:      (if $notifyBack  == "" then null else $notifyBack  end)}
          + {firedStartedAt:  (if $startedAt   == "" then null else $startedAt   end)}
          + {engagedAt:       (if $engagedAt   == "" then null else $engagedAt   end)}
          + {engageProof:     (if $proof       == "" then null else $proof       end)}
@@ -4750,6 +4782,34 @@ MSG
       fi
     fi
   fi
+  # ── F-1: ANNOUNCE BEFORE RETIRE — MECHANICAL, NOT A PARENTHETICAL (2026-08-09) ─────────────────
+  # The SELF-RETIRE trailer enforces durability (the dirty-tree refusal directly above) and ordering
+  # (retire is step 2), but the announce was PROSE — "When your work is finished (and you have pinged
+  # back if asked to)". Durability and retirement were mechanical; the ping was advisory, and a peer
+  # that skipped it retired silently, leaving the originator waiting on an event that never came.
+  #
+  # THE FAIL-SAFE DIRECTION, AND WHY IT IS *NOT* A REFUSAL. The obvious shape — make self-close exit
+  # non-zero when no ping was sent, exactly as it does for a dirty tree — is wrong here, and the brief
+  # that requested this said why: an unretireable peer is a worse failure than an unannounced one. A
+  # dirty tree has a cure the closing pane fully controls (commit it). An announce does not: if
+  # cc-notify cannot resolve the originator, or the originator is gone, the peer can NEVER satisfy the
+  # gate and holds a pane and a worktree forever. That is the pile-up the --untracked-files=no fix
+  # above already had to undo once.
+  #
+  # There is also a sharper reason. A refusal is only as good as the reader that acts on it, and the
+  # peer that skipped the ping is precisely the one least likely to handle a refusal correctly —
+  # which is the same "advisory prose" failure wearing an exit code. So the mechanism DOES the
+  # announce rather than asking for it: the originator learns the peer retired either way, which was
+  # the entire point of announce-before-retire.
+  #
+  # Note what this can and cannot reach. F-1's own measured case — a peer KILLED mid-work, open pane,
+  # dirty tree — never invoked self-close at all, so no gate here could have fired. This closes the
+  # narrower, real gap it exposed: a peer that DOES reach the protocol and skips its step. The killed
+  # case is L1 death-watch's to catch, and L1 is built (scripts/wait-safety-gate.sh is GREEN).
+  #
+  # --no-notify opts out, matching the succession announce it sits beside. Best-effort throughout: a
+  # close must never die on its own bookkeeping.
+  [ "$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
   SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
@@ -5590,6 +5650,13 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
   fi
   if [ -n "$NOTIFY_BACK" ]; then
     NB_SLUG="$(basename "${PROMPT_FILE%.*}")"
+    # F-1: remember the address the peer was ACTUALLY told to ping, so mark_fired_peer can record it
+    # on the stamp and `self-close` can enforce the announce instead of merely asking for it in prose.
+    # Set HERE, at the point the trailer is really appended, rather than beside BACK_SID's resolution
+    # above — every stand-down path between the two blanks NOTIFY_BACK, and a stamp claiming an armed
+    # back-channel that was never written into the brief would make self-close demand a ping the peer
+    # was never asked for.
+    NB_ARMED_TARGET="$BACK_SID"
     # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not shell expansions
     {
       printf '\n'
@@ -5612,8 +5679,10 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       printf '\n'
       printf '## ON COMPLETION — SELF-RETIRE (do NOT idle)\n'
       printf '%s\n' 'You are a fired PEER session: the desk drives you to DONE and you CLOSE YOURSELF — you are'
-      printf '%s\n' 'NOT an idle human-in-the-loop pane. When your work is finished (and you have pinged back if'
-      printf '%s\n' 'asked to):'
+      printf '%s\n' 'NOT an idle human-in-the-loop pane. ANNOUNCE, then retire — the ping is a STEP, not a'
+      printf '%s\n' 'courtesy: self-close checks whether this pane ever pinged the address it was fired with,'
+      printf '%s\n' 'and if it did not it announces on your behalf and says your status is UNREPORTED. That is'
+      printf '%s\n' 'a strictly worse report than the one you would have written. When your work is finished:'
       printf '%s\n' '  1. DRIVE any trivial, pre-authorized remaining step to a clean terminal state (push / ff /'
       printf '%s\n' '     land per the standing values). NEVER finish on a "say the word" / "heads-up" and sit'
       printf '%s\n' '     idle — that is the deference defect. A step that is GENUINELY the operator'"'"'s call is'
