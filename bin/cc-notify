@@ -789,9 +789,31 @@ resolve_from
 # One message = one line: collapse any embedded newlines/CR to spaces so the <uuid>.seen line-count
 # cursor counts MESSAGES, not physical lines (a multi-line message would otherwise desync the cursor).
 MSG_1LINE="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
+# ── SENDER-SIDE SEND RECORD (F-1, 2026-08-09) ────────────────────────────────────────────────────
+# The inbox is a record of what a target RECEIVED. Nothing recorded what a sender SENT, so no
+# mechanism could answer "did this pane ever announce back?" — and that is exactly the question
+# handoff-fire's `self-close` has to ask before it retires a peer that was fired with --notify-back.
+# The `[<from>]` tag on the delivered line cannot answer it: it is a friendly NAME resolved from the
+# registry (resolve_from, :406-411), not the sender's pane id, so it is neither unique nor derivable
+# by a closing pane reasoning about itself.
+#
+# So each successful enqueue leaves one line under the SENDER's own key. `.sent/` sits beside the
+# existing `.alias/` and `.watchers/` dirs, and the leading dot is what keeps it out of the box
+# namespace by construction — `_mbx_valid_uuid` refuses any key beginning with `.`, so this can never
+# be mistaken for an inbox. Best-effort and always 0: a send that succeeded must never be reported as
+# failed because its audit line could not be written.
+_record_send() { # <resolved-target-key>
+  local sdir="$MAILBOX_DIR/.sent"
+  [ -n "${own_uuid:-}" ] || return 0
+  case "$own_uuid" in ''|*[!A-Za-z0-9._-]*|.*) return 0 ;; esac
+  mkdir -p "$sdir" 2>/dev/null || return 0
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "${1:-}" >> "$sdir/$own_uuid" 2>/dev/null || true
+  return 0
+}
 mailbox_write() {
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 1
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md"
+  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md" || return 1
+  _record_send "$uuid"
 }
 if ! mailbox_write; then
   # A message that cannot even be persisted must NOT read as delivered — LOUD, never a silent drop.
