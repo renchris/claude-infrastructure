@@ -20,10 +20,31 @@ mkcfg() { # <dir> <deny-json-array> <stop-cmd>
     > "$1/settings.json"
 }
 
-@test "selftest passes and runs all 6 checks (a zero-check suite must not 'pass')" {
+# CHANGED 2026-08-09 — was `-eq 6`, the class 404c832a retired for activation-watch (whose count had
+# been bumped 7 → 14 → 18 → 26 by four commits that did nothing but ADD checks). An exact ok-count is
+# a tripwire on the growth of the very suite it guards — the NUMBER, not a defect, is what gets
+# "fixed" — and it never asserted the premise in its own name: `-eq 6` conflates "non-vacuous" with
+# "exactly this many", so a reporter claiming 12 passed while rendering 6 `ok` lines sails through.
+# What survives is that premise, as the two independent things that make a suite non-vacuous:
+#   FLOOR — a DOWNWARD ratchet. Growth passes freely; a DELETED check reds, and lowering the floor has
+#           to be a deliberate edit (memory: downward-ratchet-catches-the-over-scoped-marker).
+#   TALLY — the summary's own `N passed` must equal the `  ok ` lines it actually rendered — the
+#           vacuous-pass class this test is named for (memory: claimed-outcome-vs-checked-outcome).
+# The count is environment-stable: 6 unconditional okp/badp sites, each emitting exactly one line.
+@test "selftest passes, is non-vacuous (floor), and its tally matches what it rendered" {
+  floor=6                         # raise when checks are added; LOWERING it is a deliberate act
   run "$S" --selftest
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | grep -c '^  ok ')" -eq 6 ]
+  # `|| true` normalizes grep's rc-1-on-zero-matches, which would otherwise abort the test HERE and
+  # never reach the floor. It swallows no verdict — the count is data, the assertions are the verdict.
+  ok_lines="$(printf '%s' "$output" | grep -c '^  ok ' || true)"
+  claimed="$(printf '%s' "$output" | sed -n 's/^settings-drift-assert --selftest: \([0-9][0-9]*\) passed,.*/\1/p')"
+  [ "$ok_lines" -ge "$floor" ]
+  # Two statements, never `[ -n "$claimed" ] && [ ... ]`: in an `&&` list set -e sees only the command
+  # after the FINAL `&&`, so a short-circuit on the left half is ABSORBED and an unparseable summary
+  # would pass vacuously (tests/bats-assert-liveness.bats classifies that shape `and-absorbed`).
+  [ -n "$claimed" ]
+  [ "$claimed" = "$ok_lines" ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 

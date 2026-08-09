@@ -31,8 +31,14 @@ alarm() { env CC_IDL="$IDL" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$LOG" CC_ABSTA
 @test "selftest is green and runs its full check set (a zero-check suite must not 'pass')" {
   run "$S" --selftest
   [ "$status" -eq 0 ]
+  # FLOOR RAISED 25 → 44 (2026-08-09), the measured count on this tree (44 okp/badp sites, 44
+  # rendered). The floor+tally shape above is right and is left alone; only the NUMBER was stale.
+  # A floor is only as strong as its slack: left at 25 while the suite grew to 44, it could not have
+  # caught NINETEEN deleted checks — and catching a deletion is the entire downward half of the
+  # ratchet (memory: downward-ratchet-catches-the-over-scoped-marker). Raise it when checks are
+  # added; lowering it must stay a deliberate edit.
   local n_ok; n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -ge 25 ]
+  [ "$n_ok" -ge 44 ]
   ! printf '%s' "$output" | grep -q '^  FAIL' || false
   printf '%s' "$output" | grep -q "selftest: ${n_ok} passed, 0 failed"
 }
