@@ -551,3 +551,41 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 2 ]   # not regressed
   [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]  # promoted by our reliable delivery
 }
+
+# ── F-2: THE DEAF LEAD (2026-08-09) ──────────────────────────────────────────────────────────────
+# Measured the same night as F-3: the lead's watcher exited 144 (an external group-TERM) and the lead
+# never noticed it had gone deaf. The verdict was correct and complete — it just rode stderr of a
+# background task the harness renders as `failed`, which a lead triages as noise. The fix puts the
+# same verdict on the channel this substrate already proves a lead consumes: its own inbox.
+
+@test "F-2: a TERMed watcher writes WAKE-PATH-DOWN into the inbox it was watching" {
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
+  kill -TERM "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null || true
+  grep -q 'WAKE-PATH-DOWN' "$MB"                     # …and the death is now ordinary, drainable mail
+  grep -q "$UUID" "$MB"
+}
+
+@test "F-2: the WAKE-PATH-DOWN line is drain-shaped, so a boundary surfaces it as peer mail" {
+  # hooks/mailbox-drain.sh parses `<ISO> [<from>] <msg>` for its operator-visible digest and counts a
+  # line as PENDING off the cursor. A line that did not match would still be delivered, but it would
+  # be attributed to nobody — so the shape is asserted, not assumed.
+  "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
+  sleep 2
+  kill -TERM "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null || true
+  grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{4} \[cc-await-ping\] WAKE-PATH-DOWN' "$MB"
+  # and it is genuinely UNDRAINED — the whole point is that the next boundary still has it to surface
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ] || [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 0 ]
+}
+
+@test "F-2 CONTROL: a clean TIMEOUT writes no WAKE-PATH-DOWN (an alarm that always fires says nothing)" {
+  # A timeout is the DESIGNED end of a healthy watch, not a wake-path failure. Writing a line on
+  # every 4-hour term would put this alarm on the normal path, where it would carry as few bits as
+  # one that never fires. Only the anomaly — an external kill — is news.
+  run "$AWAIT" "$UUID" --interval 1 --timeout 2
+  [ "$status" -eq 2 ]
+  [ ! -f "$MB" ] || ! grep -q 'WAKE-PATH-DOWN' "$MB"
+}
