@@ -21,6 +21,13 @@ setup() {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
+  # Fixturing $HOME above does NOT close the dispatch_kick seam that `cc-backlog add` fires: kick_bin()
+  # tries `command -v cc-dispatch` FIRST, and PATH still points at the operator's live ~/.claude/bin.
+  # Measured at 1 real `cc-dispatch --decide` spawn per run of this suite, journaling a TEST backlog's
+  # decisions into the production IDL. Same seam that reddened tests/cc-dispatch.bats case (b).
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   mkdir -p "$CC_REGISTRY_DIR" "$CC_DECISIONS_DIR"
   : > "$CC_BACKLOG_FILE"
 }

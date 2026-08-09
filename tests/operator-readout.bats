@@ -28,6 +28,15 @@ setup() {
   export CC_SHARED_CHECKOUT="$BATS_TEST_TMPDIR/no-such-checkout"
   export CC_OPREADOUT_NOW=1000000
   export CC_OPREADOUT_TTL_S=900
+  # `cc-backlog add` ends in dispatch_kick(), which backgrounds a real `cc-dispatch --decide`. This
+  # file fixtures CC_BACKLOG_FILE but not $HOME, so unpinned the kick resolved the operator's LIVE
+  # marker and LIVE ~/.claude/bin/cc-dispatch — measured at 2 spawns per run of this suite. Because
+  # CC_DISPATCH_IDL is unset here, that dispatcher then journals decisions about a TEMP TEST backlog
+  # into the operator's PRODUCTION idl.jsonl. Same seam that reddened tests/cc-dispatch.bats case (b);
+  # all three legs pinned for the reason given there.
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
   mkdir -p "$CC_ACTIVATION_DIR" "$CC_DECISIONS_DIR"
   : > "$CC_BACKLOG_FILE"
 }

@@ -18,6 +18,35 @@ setup() {
   # which is exactly why it went unnoticed until the hermeticity ratchet scoped this suite.)
   export CC_FIRE_CAPACITY_GATE=off
 
+  # SAME CLASS AS THE PIN ABOVE, and the one that actually reddened this suite. `cc-backlog add` ends
+  # in dispatch_kick(), which stamps a marker and backgrounds `cc-dispatch --decide` — by DESIGN, so
+  # a filed item is dispatched without waiting for the next cron tick. Unfixtured, all three of its
+  # seams resolve to the operator's live desk: the marker is the REAL ~/.claude/autonomy/.dispatch-kick
+  # and the bin is the REAL ~/.claude/bin/cc-dispatch. So every add_item below both PERTURBED the live
+  # debounce window and spawned a second, concurrent dispatcher — which inherited this setup's exported
+  # fixtures (CC_DISPATCH_IDL, _PAGES_DIR, CC_BACKLOG_FILE) and therefore raced the test's OWN
+  # foreground pass on the test's own state, contending for the singleton at $(dirname $IDL)/dispatch.lock.
+  # A pass that loses that lock DECIDES but never admits (see cc-dispatch "THE LOCK COVERS ADMISSION,
+  # NOT DECISION"), so it never calls wave-plan, never reaches the cliff branch, and writes neither the
+  # `abstained` record nor the page that case (b) asserts.
+  #
+  # That is a REAL post-land RED, not a theory: tests/cc-dispatch.bats is stamped in
+  # ~/.claude/autonomy/postland/flakes.jsonl four times (2026-08-02 → 2026-08-08), every row naming
+  # case (b) and nothing else. It reads as a rare flake only because the 30 s debounce is keyed on the
+  # operator's SHARED marker — whether the window is open when the corpus runs is decided by what the
+  # desk happens to be doing, which is also why it survived every solo re-run. Forcing the window open
+  # reproduces it at 10/15; with the three pins below, 0/15.
+  #
+  # All three seams are pinned, because each closes a different path: the kill switch stops the kick,
+  # the marker keeps a kick that somehow fired off the operator's live debounce state, and a
+  # non-existent bin makes the spawn itself unreachable (`[ -x "$bin" ] || return 0`). Same belt-and-
+  # braces as tests/cc-backlog-needs.bats:33-35; postland-verify.bats:1093 calls it MANDATORY whenever
+  # a suite drives the real binary. No coverage is lost — the kick has its own positive controls in
+  # tests/dispatch-cadence.bats:167 and tests/cc-backlog-needs.bats:134.
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/.dispatch-kick"
+  export CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
+
   # wave-plan stub: echoes placements keyed by the input --items ids (as a real planner would),
   # with a fixed account + fire_line argv; rc read from $WP_RC_FILE ("4" ⇒ quota-cliff).
   cat > "$C/stubs/waveplan" <<'EOF'
