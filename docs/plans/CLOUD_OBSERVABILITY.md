@@ -1218,6 +1218,30 @@ one existing end-to-end create+declare implementation lives in `cloud-websetup-d
 sibling session owns — so the fire path's create should be factored out of a probe rather than
 written a fourth time.
 
+**→ NEXT STEP, and why it is this one rather than the GitHub App.** Both are open; the ORDER matters
+and is not obvious, so it is recorded rather than left to be re-derived:
+
+1. **Build the create into the fire path FIRST** (this is the work). Factor the create+declare out
+   of `scripts/cloud-bundle-probe.sh:fire_one` — it is the smallest correct implementation and it
+   already carries the two things a naive one gets wrong: the pty allocator (`scripts/lib/pty-run.py`,
+   because the create path is interactive-only and refuses on its own capture) and an ANSI normaliser
+   that maps cursor-absolute `CSI n G` to a space (without it a real refusal classifies as a
+   non-verdict). Add a bounded retry there — §S5.3 measured create success at roughly 50-75% per
+   attempt, reaching a session on attempt 2 of 4 twice over. Declare immediately after create (§8.1),
+   which is the half G5's ✅ never covered.
+   ⚠️ Do NOT edit `scripts/cloud-websetup-drive.sh` — a sibling session owns it. Read it, do not write it.
+2. **Then one fire settles everything T2/T3 needs**, in a single observation: whether bundle mode
+   holds, whether the session executes, whether it can push `claude/*` back, and whether
+   `cloud-reconcile.sh` can land it. That is why this ordering beats installing the App first —
+   the App install alone can only be read from SILENCE (a session that still does nothing tells you
+   nothing about why), whereas a fire with a real create produces a positive or negative on all four
+   at once. Install the App when the fire proves bundle mode is the blocker, not before.
+
+**The DoD for that work, frozen here so it is not re-judged:** `handoff-fire.sh --cloud` creates a
+declared cloud session, or refuses with a named reason — and one item traverses create → execute →
+`claude/*` push → `cloud-reconcile.sh` → land. Anything short of that leaves T2/T3 exactly where
+§S5.5 left them.
+
 ⚠️ **The classifier control is VOID and cannot currently be restored.** `--control` was designed
 around a free known-refusal: an account already at 100% weekly. Measured 2026-08-08, an account at
 100% weekly **creates cloud sessions normally** — so weekly quota does not gate cloud CREATE, the
