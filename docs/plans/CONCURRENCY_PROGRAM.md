@@ -1009,8 +1009,10 @@ because a number here would be the very thing this section exists to prevent.
 - **Execution still does not.** Across this session 6 sessions were created and declared
   (`session_01YNvu…`, `01TaP5…`, `01FBfk…`, `016CX8…`, `01UWce…`, and the round-trip fire
   `session_01XtCjjRVvZpadMH7ZfK8jsQ`), joining the 11 already on the books. `cc-cloud --check`
-  reports `NOT-STARTED`/`ABANDONED`; the round-trip session sat at `BOOTING — no ref yet` through its
-  budget. **Zero observable actions, now across 17 sessions.**
+  reports `NOT-STARTED`/`ABANDONED`; the round-trip session was still `BOOTING — no ref yet, 12m
+  into a 15m budget` when this was written, and `git ls-remote origin 'refs/heads/claude/*'` was
+  empty. **Zero observable actions, now across 17 sessions.** (Stated at 12m rather than 15m
+  deliberately — the budget had not expired, so this is "no ref yet", not "never".)
 - ⚠️ **One instrument caveat that must not be lost:** five of this session's six probes were given
   deliberately no-op tasks ("print the repository name and stop"), so `no-ref` is what they would
   produce *even if they ran perfectly*. `no-ref` therefore does NOT discriminate "never executed"
