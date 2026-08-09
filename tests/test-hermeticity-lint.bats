@@ -1,12 +1,16 @@
 #!/usr/bin/env bats
 # test-hermeticity-lint — the RATCHET that stops NEW test harnesses from running against AMBIENT
-# STATE. Four rules, one mechanism: rule 1 is the operator's live ~/ ($HOME fixtured in setup()),
-# rule 2 the machine's live LOAD (CC_FIRE_CAPACITY_GATE=off, for a suite that drives handoff-fire),
-# rule 3 an operator-armed lever (LCW_ORPHAN_CLOSE, for a suite driving the orphan-close leg), and
-# rule 4 a SIBLING RUN OF ITSELF — a tool's EMBEDDED selftest whose scratch path is the same string
-# every time, so two concurrent runs collide. Rules 1-3 judge tests/*.bats; rule 4 judges the ~50
-# tools in bin/, scripts/ and hooks/ that ship a selftest instead of a suite and were outside the
-# ratchet entirely until it landed. Two properties matter for each and both are proved here: it
+# STATE. Six rules, one mechanism, each a different thing "ambient" can mean: rule 1 is the
+# operator's live ~/ ($HOME fixtured in setup()), rule 2 the machine's live LOAD
+# (CC_FIRE_CAPACITY_GATE=off, for a suite that drives handoff-fire), rule 3 an operator-armed lever
+# (LCW_ORPHAN_CLOSE, for a suite driving the orphan-close leg), rule 4 a SIBLING RUN OF ITSELF — a
+# tool's EMBEDDED selftest whose scratch path is the same string every time, so two concurrent runs
+# collide — rule 5 state that does not resolve under $HOME at all (an absolute /tmp default, or a
+# bare name executed off the operator's PATH), and rule 6 a value already IN THE ENVIRONMENT: a
+# variable this repo injects into every pane it launches, which every descendant of a fired pane
+# inherits, bats included. Rules 1-3, 5 and 6 judge tests/*.bats; rule 4 judges the ~50 tools in
+# bin/, scripts/ and hooks/ that ship a selftest instead of a suite and were outside the ratchet
+# entirely until it landed. Two properties matter for each and both are proved here: it
 # discriminates (RED on a new violation, RED on an entry that stayed grandfathered after being
 # fixed), and it is GREEN on the tree as it stands — a lint that ships standing-RED is the rot this
 # repo is killing, and the nightly auto-runs every scripts/*lint*.sh, so a false RED here poisons
@@ -31,12 +35,22 @@ setup() {
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/absent-heal-"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
   export CC_HERM_SEAM_SELFPROBE="$BATS_TEST_TMPDIR/absent-seam-anchor"
+  # Dogfood RULE 6 for the same reason, on the same file: the lint declares CC_HERM_ENV_SELFPROBE as
+  # both an injection and a read, which is its inherited-value extractor's anchor — so this suite,
+  # which names the lint's path, is in scope for it. Any position clears rule 6; a value is used
+  # here rather than an unset only because it reads more obviously as deliberate.
+  export CC_HERM_ENV_SELFPROBE=0
   # Rule 5 OFF by default here, for rule 4's reason verbatim: its seam table is derived from the
   # REPO's tool dirs, not from the two-file fixture each case below passes as its scan dir, so left
   # ambient a rule-5 verdict about the checkout would silently become the answer to a rule-1 or
   # rule-2 assertion about a fixture. The rule-5 cases switch it back on BY NAME, against a fixture
   # seam root of their own.
   export CC_HERM_SEAM_RULE=off
+  # Rule 6 OFF by default here, for rules 4 and 5's reason verbatim: its table is derived from the
+  # REPO's tool dirs, not from the fixture scan dir each case passes, so left ambient a rule-6
+  # verdict about the checkout would silently become the answer to a rules-1-5 assertion about a
+  # two-file fixture. The rule-6 cases switch it back on BY NAME, against a fixture tool root.
+  export CC_HERM_ENV_RULE=off
   FIX="$BATS_TEST_TMPDIR/fix"; mkdir -p "$FIX"
   # A neutral, rule-1-clean bats dir for the rule-4 cases. They still have to pass a scan dir (the
   # two passes compose, and 2 dominates 1), so it must be one lint_dir returns 0 on — otherwise the
@@ -63,7 +77,12 @@ mk_suite() {
 }
 
 @test "the real tree is CLEAN (exit 0) — the embedded allowlist matches HEAD, nightly stays green" {
-  CC_HERM_SELFTEST_RULE=on run bash "$LINT"          # ALL FOUR rules judge the tree here
+  # Rules 1-4 judge the tree here: 1-3 are on by default and rule 4 is switched on by name. Rules 5
+  # and 6 stay OFF (setup() pins them, for the reason recorded there) — their real-tree guarantee is
+  # proved in the lint's own --selftest case (e), where it costs nothing. Deliberately NOT widened:
+  # backlog b59eb997d035 is the standing lesson that the one assertion here which lints the WHOLE
+  # TREE mid-suite passes standalone, fails in-suite, and alone kept 14 green stamps red.
+  CC_HERM_SELFTEST_RULE=on run bash "$LINT"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'test-hermeticity-lint: clean'
 }
@@ -530,4 +549,150 @@ echo "$DIR"'
   [ "$status" -eq 1 ] || false
   echo "$output" | grep -q 'SEAM ' || false
   [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false      # rule 1 is satisfied; only rule 5 fired
+}
+
+# ── RULE 6 (the INHERITED-VALUE seam). Rule 5 asks where a subject's state RESOLVES, so it can only
+# see a seam whose DEFAULT betrays it; a default is irrelevant when a VALUE is already in the
+# environment. 0588d255: two suites went 5-RED on a PRISTINE trunk tree because /Users/chrisren/.claude/bin/cc-bats was run from a
+# pane the feature under test had launched, and `--env CC_PANE_CMD_INTERACTIVE=1` is inherited by
+# every descendant of one. This lint reported both CLEAN throughout — rule 5 saw `:-0` and moved on.
+#
+# EVERY case below is FIXTURE-based — a fixture tool root plus a fixture scan dir — and NONE asserts
+# a property of the real checkout, for the reason rule 5's block records (backlog b59eb997d035: the
+# one assertion here that lints the WHOLE TREE mid-suite passes standalone and fails in-suite, and
+# alone kept 14 consecutive green stamps red). Rule 6's real-tree guarantee is proved where it costs
+# nothing — case (e) of the lint's own --selftest.
+#
+# mk_env_tool <root> <name> <body> — a fixture TOOL. Safe to spell both literal shapes here, unlike
+# in the lint itself: rule 6's extractor scans bin/, scripts/ and hooks/, never tests/.
+mk_env_tool() {
+  mkdir -p "$FIX/$1/bin"
+  { echo '#!/bin/bash'; printf '%s\n' "$3"; } > "$FIX/$1/bin/$2"
+}
+# the standard pair: an INJECTOR that never reads, and a READER of what it injects.
+mk_env_pair() {
+  mk_env_tool "$1" zz-launcher 'exec term --env "ZZ_ENV_MODE=1" --env "ZZ_ENV_MODE_DIR=/x" -- "$SHELL"'
+  mk_env_tool "$1" zz-panetool 'MODE="${ZZ_ENV_MODE:-0}"
+DIR="${ZZ_ENV_MODE_DIR:-/tmp/zz-env}"
+echo "$MODE $DIR"'
+}
+r6run() {  # r6run <tool-root> <scan-dir>
+  CC_HERM_ENV_RULE=on CC_HERM_ENV_ROOT="$FIX/$1" CC_HERM_ENV_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/$2"
+}
+
+@test "RULE 6 RED: a suite INHERITS a variable its subject reads and this repo puts on every pane" {
+  mk_env_pair r6a
+  mk_suite r6a_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  r6run r6a r6a_s
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'INHERIT ' || false
+  echo "$output" | grep -q 'ZZ_ENV_MODE' || false
+}
+
+@test "RULE 6 GREEN: an 'unset' clears it — the remedy rule 5's assignment-only predicate REJECTS" {
+  # This is what makes rule 6 a RULE and not a shape of rule 5. 0588d255 fixed the real incident
+  # with `unset`, and rule 5's is_seam_assigned() requires `VAR=` — so a bolted-on shape would
+  # report the very fix that generated this rule as still violating, forever.
+  mk_env_pair r6b
+  mk_suite r6b_s 'export HOME="$BATS_TEST_TMPDIR/home"; unset ZZ_ENV_MODE ZZ_ENV_MODE_DIR; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  r6run r6b r6b_s
+  [ "$status" -eq 0 ] || false
+  [ "$(echo "$output" | grep -c 'INHERIT ')" -eq 0 ] || false
+}
+
+@test "RULE 6 GREEN: an ASSIGNMENT also clears it — any deterministic position counts" {
+  # Rule 3's asymmetry: what is forbidden is INHERITING a value, not choosing the "wrong" one.
+  mk_env_pair r6c
+  mk_suite r6c_s 'export HOME="$BATS_TEST_TMPDIR/home"; export ZZ_ENV_MODE=0 ZZ_ENV_MODE_DIR="$BATS_TEST_TMPDIR/d"; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  r6run r6c r6c_s
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 6 SCOPE CONTROL: a tool that INJECTS a variable it never READS is out of scope" {
+  # The most load-bearing control rule 6 has, and the reason its table is an INTERSECTION. Drop this
+  # half and scripts/handoff-fire.sh joins the table — it injects a runner variable it never reads —
+  # and 49 suites that name it get grandfathered for a variable their subject does not read.
+  mk_env_pair r6d
+  mk_suite r6d_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-launcher"' 'run bash "$T"'
+  r6run r6d r6d_s
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 6 SCOPE CONTROL: a plain-valued seam that NOTHING injects cannot be inherited" {
+  # The other half of the intersection. Without it the rule is the filing's naive version — "every
+  # CC_* var a tool reads" — which measured 1047 seam assignments and most of 324 suites in scope.
+  mk_env_pair r6e
+  mk_env_tool r6e zz-plainseam 'LVL="${ZZ_ENV_UNPROP:-0}"
+echo "$LVL"'
+  mk_suite r6e_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-plainseam"' 'run bash "$T"'
+  r6run r6e r6e_s
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 6: pinning a variable that merely PREFIXES the unpinned one does not count" {
+  # The real tree has this collision: CC_PANE_CMD strictly prefixes CC_PANE_CMD_DIR and
+  # CC_PANE_CMD_INTERACTIVE, so without a boundary after the name one pin would excuse all three.
+  mk_env_pair r6f
+  mk_suite r6f_s 'export HOME="$BATS_TEST_TMPDIR/home"; export ZZ_ENV_MODE_DIR="$BATS_TEST_TMPDIR/d"; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  r6run r6f r6f_s
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'ZZ_ENV_MODE' || false
+}
+
+@test "RULE 6: a statement-terminated 'unset FOO;' IS a position — the fail direction is a false RED" {
+  # Found by MUTATION, not review: rule 3's trailing class is `([[:space:]]|$)`, which misses the
+  # LAST name in a `;`-terminated unset. Too narrow on a PIN test convicts a compliant suite.
+  mk_env_pair r6g
+  mkdir -p "$FIX/r6g_s"
+  { echo '#!/usr/bin/env bats'; echo 'setup() {'
+    echo '  export HOME="$BATS_TEST_TMPDIR/home"'
+    echo '  unset ZZ_ENV_MODE ZZ_ENV_MODE_DIR;'
+    echo '  T="$REPO/bin/zz-panetool"'
+    echo '}'; echo '@test "x" { run bash "$T"; }'; } > "$FIX/r6g_s/zz-fixture.bats"
+  r6run r6g r6g_s
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 6 kill switch: CC_HERM_ENV_RULE=off disables it — with the RED as positive control" {
+  mk_env_pair r6h
+  mk_suite r6h_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  r6run r6h r6h_s
+  [ "$status" -eq 1 ] || false                       # the control: it DOES fire when armed
+  CC_HERM_ENV_RULE=off CC_HERM_ENV_ROOT="$FIX/r6h" CC_HERM_ENV_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r6h_s"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "RULE 6 is INDEPENDENT of rules 1-5 — a \$HOME-hermetic suite still inherits injected values" {
+  # The whole point: rule 1 answers YES for this suite, rule 5 sees a `:-0` default and moves on,
+  # and it is still reading whatever pane it was launched from.
+  #
+  # The reader here holds ONLY the PLAIN-VALUED seam — no /tmp default, no bare tool name — so rule 5
+  # is blind to it BY CONSTRUCTION and the `SEAM` assertion below means what it says. The shared
+  # mk_env_pair reader would not do: its second variable defaults to /tmp/zz-env, which is a genuine
+  # shape-5a seam, so rule 5 fires on it and the independence claim is answered by the wrong rule.
+  mk_env_tool r6i zz-launcher 'exec term --env "ZZ_ENV_MODE=1" -- "$SHELL"'
+  mk_env_tool r6i zz-panetool 'MODE="${ZZ_ENV_MODE:-0}"
+echo "$MODE"'
+  mk_suite r6i_s 'export HOME="$BATS_TEST_TMPDIR/home"; T="$REPO/bin/zz-panetool"' 'run bash "$T"'
+  CC_HERM_SEAM_RULE=on CC_HERM_SEAM_ROOT="$FIX/r6i" CC_HERM_SEAM_ALLOWLIST="" \
+    CC_HERM_ENV_RULE=on CC_HERM_ENV_ROOT="$FIX/r6i" CC_HERM_ENV_ALLOWLIST="" \
+    CC_HERM_ALLOWLIST="" run bash "$LINT" "$FIX/r6i_s"
+  [ "$status" -eq 1 ] || false
+  echo "$output" | grep -q 'INHERIT ' || false
+  [ "$(echo "$output" | grep -c 'LEAK')" -eq 0 ] || false     # rule 1 is satisfied
+  [ "$(echo "$output" | grep -c 'SEAM ')" -eq 0 ] || false    # rule 5 is blind to a plain default
+}
+
+@test "RULE 6: a SMALL tree that launches no panes is CLEAN — never unlandable for being small" {
+  # Rule 4's standing property, applied to rule 6's extractor. Nothing here injects anything, so the
+  # table is legitimately empty and "clean" is the honest answer — and the ANCHOR (not a count) is
+  # what tells that apart from an extractor that has stopped working. A floor would have condemned
+  # exactly the fixture repos ship-land lands, whose scripts/ holds a single file.
+  mkdir -p "$FIX/r6small/bin" "$FIX/r6small/scripts" "$FIX/r6small/hooks"
+  mk_suite r6small_s 'export HOME="$BATS_TEST_TMPDIR/home"'
+  r6run r6small r6small_s
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q 'grandfathered (inherited value)' || false
 }

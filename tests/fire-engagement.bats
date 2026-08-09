@@ -64,6 +64,14 @@ STUB
   # IT2_SHIM ($HOME/.claude/bin/it2) must EXIST or the script's `sed | head` REAL_IT2 probe aborts
   # under pipefail (in prod the shim is always present; IT2_BIN then overrides it to our stub).
   mkdir -p "$HOMEDIR/.claude/bin"; cp "$BIN/it2" "$HOMEDIR/.claude/bin/it2"
+  # …and the variables the SUBJECT itself puts on every pane it launches. `--env CC_PANE_CMD=…` is
+  # set on the launch, so every DESCENDANT of a fired pane carries them — including bats, when an
+  # agent runs this suite from the pane that fired it. That is the shape a feature's own suite can
+  # least afford: red exactly THERE, green everywhere else, so it reads as a genuine trunk red
+  # (0588d255 — 5 failures across two sibling suites, one of them a negative CONTROL).
+  # In setup, not per-test: a per-test unset leaves every OTHER test in the file inheriting, which
+  # is rule 1's argument in scripts/test-hermeticity-lint.sh verbatim. Rule 6 there now enforces it.
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 # ---- P0-11 unit: engagement_seen (the pure detector) ----------------------------------------

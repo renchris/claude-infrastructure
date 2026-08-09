@@ -53,6 +53,10 @@ SH
   # Make the shim believe it is inside kitty (its own terminal-dispatch seam).
   export KITTY_WINDOW_ID=300
   export CC_KITTY_ARGV_SPAWN=0
+  # The variables the subject puts on every pane it launches, inherited by every descendant of a
+  # fired pane — bats included, when an agent runs this from the pane that fired it (0588d255).
+  # In setup, not per-test: a per-test unset leaves every OTHER test inheriting.
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 kitty_argv() { cat "$KITTY_ARGV" 2>/dev/null; }

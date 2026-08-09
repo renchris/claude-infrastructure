@@ -38,6 +38,10 @@ setup() {
   export CC_TERM_KITTY="$KB"
   export KITTY_LISTEN_ON="unix:/tmp/kitty-test"
   unset CC_TERM_KITTY_TO
+  # …and the variables the subject puts on every pane it launches, inherited by every descendant of
+  # a fired pane — bats included, when an agent runs this from the pane that fired it (0588d255).
+  # In setup, not per-test: a per-test unset leaves every OTHER test inheriting.
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
 }
 
 # $1 = exit code the stub verdict returns; "none" omits it entirely.
