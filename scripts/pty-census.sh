@@ -62,17 +62,33 @@ done
 # Production never sets it.
 DEV="${CC_PTY_DEV_DIR:-/dev}"
 
-# `ls -d` on a non-matching glob prints nothing and errors; the count is what we want either way.
-pty_used=$(ls -d "$DEV"/ttys[0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ')
-pty_used=${pty_used:-0}
+# Count the glob directly rather than through `ls | wc -l`. An unmatched glob expands to its own
+# literal text, which fails `-e`, so the no-match case counts 0 without a subshell or a pipeline.
+count_matches() {
+  local n=0 p
+  for p in "$@"; do [ -e "$p" ] && n=$((n+1)); done
+  printf '%s' "$n"
+}
+
+pty_used=$(count_matches "$DEV"/ttys[0-9][0-9][0-9])
 
 # The legacy nodes, counted explicitly so the offset is VISIBLE in the output rather than
 # silently corrected. A reader who has the old number in hand can reconcile it here.
-pty_legacy=$(ls -d "$DEV"/ttys[0-9a-f] 2>/dev/null | wc -l | tr -d ' ')
-pty_legacy=${pty_legacy:-0}
+pty_legacy=$(count_matches "$DEV"/ttys[0-9a-f])
 
-pty_max="${CC_PTY_MAX:-$(sysctl -n kern.tty.ptmx_max 2>/dev/null || echo 0)}"
-case "$pty_max" in ''|*[!0-9]*) pty_max=0 ;; esac
+# `sysctl` lives in /usr/sbin, which is NOT on a restricted PATH — and hooks and hermetic test
+# harnesses both run with one. Resolving it by bare name made the limit read 0, which rendered as a
+# reassuring "0%": one value meaning both "empty" and "could not ask" (the fleet's indexed
+# sensor-default-off-ships-blindness shape). An unreadable limit is now `unknown`, never a number.
+sysctl_bin=""
+for _c in /usr/sbin/sysctl /sbin/sysctl; do [ -x "$_c" ] && { sysctl_bin="$_c"; break; }; done
+[ -z "$sysctl_bin" ] && sysctl_bin="$(command -v sysctl 2>/dev/null || true)"
+
+pty_max="${CC_PTY_MAX:-}"
+if [ -z "$pty_max" ] && [ -n "$sysctl_bin" ]; then
+  pty_max="$("$sysctl_bin" -n kern.tty.ptmx_max 2>/dev/null || true)"
+fi
+case "$pty_max" in ''|*[!0-9]*) pty_max="" ;; esac      # "" == unknown, and stays distinguishable
 
 # Architectural ceiling: slave nodes are named /dev/ttys%03d, so 3 digits bounds it at 1000
 # names (000-999) no matter what the sysctl is raised to.
@@ -90,8 +106,8 @@ else
 fi
 sessions=$(printf '%s\n' "$ps_snap" | awk '{n=split($0,p,"/"); if (p[n]=="claude") c++} END{print c+0}')
 
-pct=0
-if [ "$pty_max" -gt 0 ]; then
+pct=""
+if [ -n "$pty_max" ] && [ "$pty_max" -gt 0 ]; then
   pct=$(( pty_used * 100 / pty_max ))
 fi
 
@@ -103,15 +119,15 @@ fi
 case "$FORMAT" in
   json)
     printf '{"pty_used":%s,"pty_max":%s,"pty_pct":%s,"pty_arch_max":%s,"pty_legacy_nodes":%s,"sessions":%s,"ptys_per_session":"%s"}\n' \
-      "$pty_used" "$pty_max" "$pct" "$pty_arch_max" "$pty_legacy" "${sessions:-0}" "$per_session"
+      "$pty_used" "${pty_max:-null}" "${pct:-null}" "$pty_arch_max" "$pty_legacy" "${sessions:-0}" "$per_session"
     ;;
   terse)
     printf 'ptys %s/%s (%s%%) · %s/session over %s sessions\n' \
-      "$pty_used" "$pty_max" "$pct" "$per_session" "${sessions:-0}"
+      "$pty_used" "${pty_max:-unknown}" "${pct:-unknown}" "$per_session" "${sessions:-0}"
     ;;
   *)
     printf 'ptys        %s / %s  (%s%%)   arch ceiling %s (/dev/ttys%%03d)\n' \
-      "$pty_used" "$pty_max" "$pct" "$pty_arch_max"
+      "$pty_used" "${pty_max:-unknown}" "${pct:-unknown}" "$pty_arch_max"
     printf 'sessions    %s   ⇒ %s ptys/session\n' "${sessions:-0}" "$per_session"
     printf 'excluded    %s static legacy /dev/ttys[0-9a-f] nodes (NOT ptys, not ptmx_max-governed)\n' "$pty_legacy"
     ;;
@@ -119,6 +135,10 @@ esac
 
 if [ -n "$ASSERT_UNDER" ]; then
   case "$ASSERT_UNDER" in ''|*[!0-9]*) echo "$PROG: --assert-under needs an integer percent" >&2; exit 2 ;; esac
+  if [ -z "$pct" ]; then
+    echo "$PROG: cannot assert — kern.tty.ptmx_max unreadable (no sysctl on PATH?)" >&2
+    exit 2                       # "could not measure" is never "under the threshold"
+  fi
   [ "$pct" -lt "$ASSERT_UNDER" ] || exit 1
 fi
 exit 0
