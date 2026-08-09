@@ -125,6 +125,34 @@
 # backlog 816015ecb30b), which is why the repo side derefs BASH_SOURCE and gates on `.git`.
 # Whole-file `cmp`, never plutil: `plutil -extract` without `-o -` REWRITES the plist in place.
 # --json emits ONE array carrying all kinds (each row keeps its .kind), alarms first.
+#
+# ── NOT JOINED, DELIBERATELY: cc-backlog `blocked` items ─────────────────────────────────────────
+# Filed as a defect (cc-backlog 7a500d315ae9) on the reading that this board is the SSOT for
+# operator-gated work yet shows none of the blocked pile, with a prescribed fix: a fourth row
+# family over `cc-backlog list --blocked --json`, each item's `.needs` rendered as its recover_cmd.
+# The answer lives HERE rather than in a closed ledger row because the ledger row is where the
+# first two sessions looked and found nothing. Measured against the live store 2026-08-09 — 171
+# blocked items — all three legs of that proposal fail:
+#   (a) They are NOT invisible, which is the premise the whole item rests on. hooks/operator-
+#       readout.sh reads the SAME `cc-backlog list --blocked --json` stream and renders it in two
+#       classes: the counted rollup `171 blocked backlog - your call   cc-backlog list --blocked`,
+#       and `yours` — the items whose .session is the closing session's. scripts/wrap-ledger.sh
+#       reads it again for the `yours` rung. The pile already has a home, an exact command, and a
+#       footer pointing back at this board by name.
+#   (b) `.needs` is NOT a command. The stated convention is the inverse of the data: median 439
+#       bytes, max 3902, 168 of 171 over 120, and 171 of 171 carrying non-ASCII — against a DETAIL
+#       cell that is ASCII-only and <=44 BYTES precisely because the renderer pads by bytes. The
+#       exact command is the SEPARATE `run` field, and only 53 of 171 have one. Rendering `.needs`
+#       into RECOVER hands the operator a prose paragraph where a runnable command belongs: the
+#       broken platter this file's beacon note names, not a fix for it.
+#   (c) A count-keyed row would carry ZERO BITS. The pile has sat at ~171-200 for weeks, so such a
+#       row fires on every invocation forever and permanently deletes the all-clear line below —
+#       the one surface here that says silence is not evidence. An alarm that always fires is the
+#       same non-signal as one that cannot fire (memory alarm-polarity-and-attention-budget).
+# scripts/wrap-ledger.sh already records the architecture in prose: the standing pile "already has
+# a home in operator-readout's ... and NOTHING else". Two homes for one pile is the second-renderer
+# defect this file refuses in three other places. If the pile ever does belong on this board it is
+# as a BREACH — growth past a budget, or staleness — never as a census.
 set -uo pipefail
 
 IDL_FILE="${CC_REAPER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
