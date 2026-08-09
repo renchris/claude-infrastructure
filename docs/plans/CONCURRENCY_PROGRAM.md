@@ -1107,3 +1107,135 @@ S0 is the operator's, and gates the automation of everything else. **S1 is indep
 should not wait for it — it is pure loss-avoidance and needs no gate. S2 → S3 → S4 is a strict
 chain: contention-fix RELEASES the items, so triage must exist before the release, not after. S5 is
 parallel to all of it and is the only track that changes the ceiling rather than the throughput.
+
+---
+
+## S6 · The measured path from ~12 to 150 — occupancy, bursts, render (2026-08-09)
+
+Evidence: `docs/research/session-capacity-ceiling-2026-08-09.md` (§10–§12 carry the corrections).
+Every number here was measured on this box today. **S5's premise is superseded** — see S6.0.
+
+### S6.0 · The correction that reopens the local track
+
+S5 states *"100 local sessions is arithmetically unreachable: 511 MB/session × 100 = 51.1 GB."*
+**The 511 MB is `ps` RSS**, which charges the ~992 MB of shared read-only libraries once per session.
+Against `vmmap` phys_footprint (corroborated by `top`'s MEM column on 4/4 processes): **216 MB fresh,
+median 232 MB, mean 283 MB**. So 100 sessions ≈ **23 GB, not 51 GB**, and 150 ≈ **35 GB**.
+RAM is *not* what stops the local track. S5's off-box conclusion stands on its own merits (and its
+create-reliability blocker is unchanged), but its stated *reason* no longer holds.
+
+### S6.1 · Three independent walls, each with its own term
+
+| # | Wall | The term | Measured today | Binds at |
+|---|---|---|---|---|
+| 1 | **Lag / admission** | `load = mean simultaneously-runnable threads` | **1.6 threads/session** | **~12 sessions** (20 ÷ 1.6) |
+| 2 | **Crash** | compressor **segment** exhaustion, ignited by spawned toolchains | waves of 372 → 736 procs, 38.9–44.7 GB | ~1–2 concurrent cold compiles |
+| 3 | **Render** | WindowServer + kitty CPU per visible pane | 0.42 cores at ~17 panes = **0.025 cores/pane** | ~20 panes (0.5 cores) |
+
+Walls 1 and 3 cause *lag*; wall 2 causes the *crash*. They are attacked separately.
+
+🚨 **The reframe that makes 150 tractable: fork RATE is not a capacity variable — occupancy is.**
+Measured cross-over: 2,376 forks/s at concurrency 4 adds **+1.6** load; 1,255 forks/s at concurrency 16
+adds **+17.5**. Rate down 1.9×, load up 11×. So *"make hooks fork less"* buys nothing on its own.
+**`occupancy = concurrency × duration`**, and either factor delivers the win.
+
+### S6.2 · The design point — 150 RESIDENT, ~10 ACTIVE
+
+150 sessions all *actively working* is not achievable and never will be on this box: inference alone
+is 150 × 0.058 = **8.7 cores**, plus 3.7 cores of render, against 10. But a session **blocked on the
+API contributes ~0 runnable threads**. So the target is residency, with active concurrency bounded:
+
+```
+load budget                             20   (gate ceiling, 2.0/core)
+150 idle sessions × 0.02 target        = 3.0
+remaining for active work              = 17
+active sessions at 1.6 each            ≈ 10        ⇒  150 resident, ~10 active
+```
+**This is the single most important change in framing: the gate today limits RESIDENT sessions via
+load; it should limit ACTIVE sessions and let residency be cheap.** Everything below serves that.
+
+Memory budget at the design point, and it is tight — this is what forces S6.5:
+```
+150 sessions × 232 MB      ≈ 35 GB
+macOS + render + baseline  ≈ 10 GB      (browsers CLOSED; Dia alone was 5.0 GB)
+                             -------
+remaining for bursts       ≈ 19 GB      vs a measured 372-proc wave ≈ 23 GB
+                                        vs a measured 736-proc wave ≈ 45 GB
+```
+⇒ **At 150 resident there is no room for even ONE unbounded cold compile.** Burst bounding is not an
+optimisation on this path, it is a precondition.
+
+### S6.3 · Phase A — make idle sessions free  ⟵ *start here; largest lever*
+
+An idle session must cost ~0. Today it does not: measured concurrently at 12–19 sessions were **19
+`cc-reaper`, 20 `cc-await-ping`, 6 `cc-reconcile`, 37 `sleep` processes** — per-session pollers that
+run whether or not the session is doing anything. That is the population that multiplies by 150.
+
+- **Do:** consolidate per-session pollers into ONE box-wide daemon that services all sessions
+  (fleet-wide reaper/reconcile/await already have single-daemon precedent in `compressor-sentinel`).
+- **Target:** idle-session occupancy ≤ **0.02** runnable threads.
+- **Verify (the decisive test):** launch N idle sessions, sweep N, regress load on N. **The slope
+  must fall from the measured 1.6 to ≤0.1.** Slope, not absolute load — absolute drifts with ambient.
+
+### S6.4 · Phase B — cut active-session occupancy
+
+- **Serialise** each session's hooks (one at a time) rather than shrinking their count — per S6.1 the
+  count is not the variable.
+- **Shorten** what holds a slot: a hook's `git rev-parse` costs **17.95 ms** against **2.20 ms** for
+  bare `bash -c :` — an **8.2× occupancy saving** on every git-bearing hook. Cache branch/status
+  per turn instead of re-shelling per hook.
+- **Target:** active-session occupancy 1.6 → ~0.5, which raises the active ceiling from ~10 to ~30.
+
+### S6.5 · Phase C — bound toolchain ignition  ⟵ *this is the crash fix, and it is non-optional*
+
+Ignition in all six panics is a dev-toolchain burst (`next dev` cold compile / `next-server` postcss
+worker pools), never session count. Per S6.2 the burst budget at 150 resident is ~19 GB.
+
+- **Do:** admission-serialise cold compiles to **1 concurrent**, and cap the worker pool
+  (`workerThreads` remedy already identified). The `compressor-sentinel` SIGSTOP actuator (armed
+  2026-08-09, 40 MB floor, `ACT_CAP=400`) is the **backstop, not the fix** — it acts only after
+  segments climb, and it has ~10 s of exposure on a >400-member wave.
+- **Not the lever:** raising `ACT_CAP`. Its 40 procs/s stop capacity already beats the worst measured
+  3.9 procs/s storm growth by ~10×, and it excludes `claude` by construction, so it can never bind on
+  session count.
+- **Verify:** run a deliberate cold compile at design-point residency; `seg_pct` must stay < 15%.
+
+### S6.6 · Phase D — fix what the gate measures
+
+Two term changes, both evidence-backed, both **operator's call** (they gate spawn box-wide):
+
+1. **Admit on ACTIVE concurrency, not load.** Load conflates residency with activity, which is exactly
+   what S6.2 needs to separate.
+2. **Replace the memory term.** The current one — `free+speculative+inactive+purgeable ≥ 4 GB` — has
+   fired **0 times in 127 refusals** and *cannot* bind: it counts dirty-anonymous inactive pages as
+   free. Measured side by side on the quiet box: gate term **40.55 GB → ADMIT**, segment term
+   **0.00%**; at the panic those were **29.79 GB → still ADMIT** against segments at **100%**.
+   The replacement needs no inventing — `compressor-sentinel.sh` already computes it every 10 s
+   (`occupied_pages ÷ 4` + `swap_used ÷ 65536`, exact). ⚠️ It is a **burst guard, not a capacity
+   term** — a steady-state session compresses nothing — so **both** terms are needed.
+
+### S6.7 · Phase E — render, and Phase F — the remainder
+
+- **E:** at 0.025 cores/pane, 150 visible panes is 3.7 cores. Keep **≤20 visible kitty panes**; the
+  rest run headless/detached (render cost 0). Confirm the headless launch path retains hooks and
+  `cc-notify` before committing to it.
+- **F:** whatever will not fit locally goes off-box per S5 — still blocked on the **create step**
+  (17 declared sessions, zero ever executed, one head on `origin`).
+
+### S6.8 · What is NOT achievable, stated plainly
+
+- **150 simultaneously-ACTIVE local sessions.** 8.7 cores of inference + 3.7 of render > 10. Not a
+  tuning problem.
+- **150 resident with unbounded toolchain bursts.** The RAM arithmetic in S6.2 forecloses it.
+- **Any gain from the Spotlight/worktree levers.** `~/Development/.worktrees` returns **0** indexed
+  files (dot-directories are never indexed) — already free. A full `find` over all 382 worktrees
+  moves load **+4.5%**. Disk and FS are not capacity variables on this box.
+- **`taskpolicy`/QoS throttling** — already rejected in §2 and re-confirmed: `-c background` is an
+  84–89× tax.
+
+### S6.9 · Sequencing
+
+**A → B → C** are independent of S0–S5 and can start immediately; **A first**, because it is the only
+one that changes the *residency* slope and every later number is quoted against it. **C must land
+before residency is actually pushed past ~30**, or the first cold compile takes the box down. **D**
+follows A and B (it needs their measured slopes to set thresholds). **E** and **F** are parallel.
