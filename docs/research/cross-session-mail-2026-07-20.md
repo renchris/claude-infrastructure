@@ -41,8 +41,16 @@ mail ever sent (1,401 of 1,788 lines) was never consumed.**
 
 **Load-bearing harness floors** (from the v2 plan, confirmed against real escapes — trumps docs):
 no external process can wake a fully-idle CC session without keystrokes or a **pre-armed in-session
-background task**; a Stop `decision:block` continuation does **not** re-fire UserPromptSubmit; Stop
-`additionalContext` is inert on the running version.
+background task**; a Stop `decision:block` continuation does **not** re-fire UserPromptSubmit; ~~Stop
+`additionalContext` is inert on the running version~~ — **SUPERSEDED 2026-08-08, see below**.
+
+> **Correction (2026-08-08, measured on 2.1.220).** The struck floor was true when written (2.1.207)
+> and is now false. Stop `additionalContext` reaches the model as a `<system-reminder>`-wrapped user
+> message, and the binary's own schema calls it the sanctioned feedback channel. It is **not**
+> advisory, though: its schema reads *"the conversation continues so the model can act on it"* — it
+> forces a turn and increments the same consecutive-block counter as `decision:block`. So the mail
+> design below is unaffected; only its stated reason changes.
+> Evidence: `docs/research/final-response-shaping-2026-08-08.md`.
 
 ## 2 · Live evidence (2026-07-20 ~15:45 PT)
 
@@ -120,13 +128,13 @@ visible to the model on the running version — which is P2's first step, not P1
 | Surface | Sees it | Fires | Facts + caveats |
 |---|---|---|---|
 | ⚑ `additionalContext` (SessionStart, UserPromptSubmit) | model only | session start / human prompt submit | the v2 delivery channel (`mailbox-drain.sh:12-13`); renders NOTHING to the human (operator-confirmed) |
-| ⚑ `additionalContext` (Stop) | — | — | **INERT** on the running version (`boundary-handoff.sh:22`, learned from a real escape) |
+| ⚑ `additionalContext` (Stop) | model only | end of every turn | ~~**INERT** on the running version~~ → **DELIVERS as of 2.1.220** (measured 2026-08-08). Not a quiet channel: it forces a turn and counts toward the same consecutive-block cap as `decision:block`. See `docs/research/final-response-shaping-2026-08-08.md` |
 | ⚑ Stop `decision:block` reason | both (model = next-turn input; human sees the blocked-stop notice) | turn end, when a Stop hook blocks | the desk loop + mail fold ride it (`session-continue.sh:189-190`); a `decision:block` continuation does NOT re-fire UserPromptSubmit (v2 load-bearing fact) |
 | ⚑ `systemMessage` (hook JSON, top-level) | human (TUI notice) | on the emitting hook's event | already emitted at `session-continue.sh:144` (cap message); the D11 lever. **RESOLVED (2026-07-20, P1 step 0):** the official hooks reference documents `systemMessage` in the **universal** JSON-output field table ("Warning message shown to the user") — NOT scoped to a subset of events, so SessionStart/UserPromptSubmit are covered. Same running-binary caveat as the row above applies to any single event, but here a shipped in-repo emitter already proves the field renders |
 | ⚑ background-task completion notification | both — renders in the TUI AND re-invokes the model | when an in-session background task exits | the `cc-await-ping` wake path; the ONLY external-write→model wake (harness floor) |
 | ⚑ statusline command | human (ambient) | re-runs on UI/transcript updates — event-driven, NOT timed | proven caveat in `statusline.sh:47-52`: a session inside ONE long operation renders ZERO times (telemetry-staleness lesson) — the 📬 badge (D10) inherits this; fine for idle sessions, which is where the badge matters |
 | ⚑ mid-turn user messages | both | queued into the RUNNING turn alongside tool results | demonstrated in this very session (operator's mid-turn pointer); does NOT pass the UserPromptSubmit boundary → the drain does not fire on it |
-| ⚑◇ `additionalContext` (PreToolUse / PostToolUse) | model only | every tool call, including hours-long autonomous turns | **DOCS-CONFIRMED** (2026-07-20, P1 step 0): the official hooks reference lists `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch` among the events where an `hookSpecificOutput.additionalContext` reminder renders — placed "next to the tool result" — with an explicit `PostToolUse` JSON example. **Caveat that keeps this ◇, not ⚑:** docs describe the CONTRACT, not the running binary — the row two above is the standing counter-example (Stop `additionalContext` is documented in the SAME list yet is INERT/probe-gated on 2.1.207, `boundary-handoff.sh:21-22`, learned from a real escape). So D5 stays gated on a **live smoke-probe of the running version**, not on this citation |
+| ⚑◇ `additionalContext` (PreToolUse / PostToolUse) | model only | every tool call, including hours-long autonomous turns | **DOCS-CONFIRMED** (2026-07-20, P1 step 0): the official hooks reference lists `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch` among the events where an `hookSpecificOutput.additionalContext` reminder renders — placed "next to the tool result" — with an explicit `PostToolUse` JSON example. **Caveat that keeps this ◇, not ⚑:** docs describe the CONTRACT, not the running binary — the row two above is the standing counter-example (Stop `additionalContext` is documented in the SAME list yet is INERT/probe-gated on 2.1.207, `boundary-handoff.sh:21-22`, learned from a real escape). So D5 stays gated on a **live smoke-probe of the running version**, not on this citation. **[2026-08-08: the smoke-probe ran. Stop `additionalContext` now DELIVERS on 2.1.220 — so the counter-example inverted, and the RULE it illustrates is confirmed twice over: the same documented field read INERT on 2.1.207 and live on 2.1.220, so a doc citation dates neither direction. Probe the running binary. See `docs/research/final-response-shaping-2026-08-08.md`.]** |
 | ◇ Notification hook (permission_prompt / idle_prompt / elicitation_dialog) | outbound only (CC → hook command) | on those TUI events | no inbound external-push-into-transcript channel exists — consistent with the v2 harness floor |
 | ◇ external process → rendered transcript message | none | — | no supported API; keystrokes (banned) and context injection at boundaries remain the only external inputs |
 

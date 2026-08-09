@@ -71,7 +71,7 @@ harness-owned chokidar watcher, nothing of ours polling) — worth a later probe
 ## 2 · The probe — PASSED end-to-end
 
 Method: RED-proof by effect, with a positive control, per [[effect-read-predicate-red-proof]]. A
-documented-but-inert surface is the known failure mode here (Stop `additionalContext` is documented and
+documented-but-inert surface is the known failure mode here (Stop `additionalContext` is documented and **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 empirically dead), so a citation was never going to be enough.
 
 **Subject:** a fresh CC 2.1.219 interactive session in a detached tmux pane, hermetic

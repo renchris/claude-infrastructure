@@ -257,7 +257,7 @@ for the lead).** Asked of each grouping: what member is *missing*? Two gaps foun
    work *because* we were second, which is why they were easy to overlook.
 
 **Misfit scan:** the hooks axis contributed "we falsified a documented vendor capability by measurement"
-(Stop `additionalContext` inert on 2.1.207). It is not a position on the vendor axis and does not belong
+(Stop `additionalContext` inert on 2.1.207). It is not a position on the vendor axis and does not belong **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 in the key line — it is a *depth-of-exploitation* fact. Assigned to position 3's lower level as
 supporting texture, not promoted to a key-line member.
 

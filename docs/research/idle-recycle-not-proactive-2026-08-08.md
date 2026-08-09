@@ -91,7 +91,7 @@ Confirmed above. Two further facts matter:
 
 ### 2. `hooks/boundary-handoff.sh` — **REFUTED as inert; it is simply the wrong tier**
 
-The plan's hypothesis was that it rides the inert `additionalContext` channel. It does not:
+The plan's hypothesis was that it rides the inert `additionalContext` channel. It does not: **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 `boundary-handoff.sh:394` emits
 
 ```
@@ -99,7 +99,7 @@ jq -nc --arg r "$reason" '{decision:"block",reason:$r,systemMessage:$r}'
 ```
 
 — the same `decision:"block"` actuator `session-continue.sh` uses, and its own header at `:21`
-records why (`additionalContext is inert/probe-gated on 2.1.207`). It is registered on `Stop` in all
+records why (`additionalContext is inert/probe-gated on 2.1.207`). It is registered on `Stop` in all **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 five config dirs and it **did** evaluate for `a64e4989` — 21 IDL rows, every one
 `abstained: below-threshold:NN<73`, climbing `37 → 38 → 39 → 49 → 50 → 52 → 53 → 54 → 55 → 57 → 59
 → 60 → 61 → 66 → 67 → 70`. Threshold `T=73` (`boundary-handoff.sh:88`); the session peaked at 71%

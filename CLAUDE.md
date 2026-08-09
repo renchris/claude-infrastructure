@@ -312,9 +312,18 @@ calibration.
 🚨 Drive in-scope work to a finished, verified, committed state **without stopping to ask**;
 surface everything else; end every *write* turn with one un-fakeable state readout — replacing
 the manual "are we complete / loose-ends / handoff?" close. **Mechanism = this rule + a `/wrap`
-command + fact-bound Stop hooks — never a scope-judging one** (a Stop hook can't see scope and
-can't reach the model except by *blocking* — an infinite-loop anti-pattern; an advisory
-`additionalContext` Stop hook is inert. What DOES run at Stop is fact-bound: `completion-assert.sh`
+command + fact-bound Stop hooks — never a scope-judging one** (a Stop hook can't see scope, and
+every way it CAN reach the model forces another turn — the infinite-loop anti-pattern, unless
+bounded. *(Corrected 2026-08-08, measured on 2.1.220: this used to say a Stop hook "can't reach the
+model except by blocking" and that "an advisory `additionalContext` Stop hook is inert". Both halves
+are now false — `hookSpecificOutput.additionalContext` DOES reach the model on Stop, and the binary
+calls it the sanctioned feedback channel. The conclusion is unchanged and the reason is stronger:
+`additionalContext` is not advisory either. Its schema reads "the conversation continues so the
+model can act on it" — it forces a turn and increments the same consecutive-block counter as
+`decision:"block"`, which the harness caps at 8 via `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`. There is no
+whisper channel at Stop; `systemMessage` is the only field that does not extend the turn, and it
+provably cannot reach the model. Evidence:
+`docs/research/final-response-shaping-2026-08-08.md`.)* What DOES run at Stop is fact-bound: `completion-assert.sh`
 blocks a false-done against the live ledger; `operator-readout.sh` renders the operator's
 manual-steps close block from disk truth — pure `systemMessage`, never a block).
 The agent runs the git/gate reads itself, so the ledger reports facts, not self-report.

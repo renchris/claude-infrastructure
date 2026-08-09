@@ -18,9 +18,20 @@
 #      "never evaluated" are the same observation (the D9 blind-verifier shape, in the primitive whose
 #      whole job is to fire). Alarm on abstained==100% over N≥10 (the ship-gate rule).
 #
-# Delivery: one-shot-latched {decision:"block"} (D-C — additionalContext is inert/probe-gated on
-# 2.1.207; the latch is what makes a block ADVISORY-not-looping — an UNLATCHED block is the banned
-# infinite-loop anti-pattern). Exit 0 ALWAYS: a Stop hook must never cost a session.
+# Delivery: one-shot-latched {decision:"block"} (D-C. The latch is what makes a block
+# ADVISORY-not-looping — an UNLATCHED block is the banned infinite-loop anti-pattern). Exit 0
+# ALWAYS: a Stop hook must never cost a session.
+#
+#   D-C's ORIGINAL reason was "additionalContext is inert/probe-gated on 2.1.207". That reason is
+#   STALE: measured 2026-08-08 on 2.1.220, Stop additionalContext DOES reach the model, and the
+#   binary's own schema calls it the sanctioned feedback channel
+#   (docs/research/final-response-shaping-2026-08-08.md).
+#   The DECISION stands, on a better reason — additionalContext is not advisory either. Its schema
+#   reads "the conversation continues so the model can act on it": it forces a turn and increments
+#   the SAME consecutive-block counter as decision:block (measured 11 hook invocations against a
+#   control's 2). Switching would buy nothing and would still need this latch. It is also the weaker
+#   channel for compliance — arriving out-of-band and attributed to a hook, the model may classify it
+#   as a prompt injection and refuse (observed: same payload, opposite outcomes across two runs).
 #
 # ── CONTEXT-ECON (2026-07-20 — docs/research/context-econ-2026-07-20.md) ──
 # Two continuous signals from hooks/lib/context-econ.sh sharpen the static threshold for ALL sessions:

@@ -18,7 +18,7 @@ this session.
   `bin/cc-board`. RELIABLE, live (this desk renders fresh).
 - **Hook→live-model channels (injection-channel law, synthesis.md)**: ONLY
   `UserPromptSubmit.additionalContext`, `PostToolUse.additionalContext`, `decision:block` reason.
-  Stop `additionalContext` INERT. A disk record with no consumer never reaches the desk.
+  Stop `additionalContext` INERT. A disk record with no consumer never reaches the desk. **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 
 ## H-DSH-1 actuation — lead's independent verdict
 - **Mechanical feasibility: LIKELY YES.** `handoff-fire.sh --recycle` (traced :388-439, :648-673):
