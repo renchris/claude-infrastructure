@@ -84,7 +84,7 @@ that should `/handoff` immediately. It did not.
   desk-role arm and so was disabled by removing stale roles. If this only ever fires for the desk, a
   normal operator session can never self-recycle.
 - `hooks/boundary-handoff.sh` — committed+green Stop advisory. Does it fire, and is it *inert*?
-  CLAUDE.md asserts an advisory `additionalContext` Stop hook is INERT; if the nudge rides that channel
+  CLAUDE.md asserts an advisory `additionalContext` Stop hook is INERT; if the nudge rides that channel **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
   it reaches nobody.
 - **Fill measurement.** Fill is `input_tokens / window` and the **window** lives only in ephemeral
   `/tmp/cc-telemetry/<sid>.json`, wiped on reboot. If the denominator is missing the tier cannot be

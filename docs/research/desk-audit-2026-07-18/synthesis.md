@@ -128,7 +128,7 @@ CONTRADICTION RESOLVED: P13's G-P13-5 claims lead-supervisor unscheduled — FAL
 + P5/P7 (pid 17867). Real sliver: plist absent from REPO launchd/ (provisioning gap, joins G-P1-5/G-P6-7
 template-capture class). Verify-pass value demonstrated; carry the sliver, drop the claim.
 Injection-channel law (P13 thesis, design input): mid-session reach = UserPromptSubmit.additionalContext ·
-PostToolUse.additionalContext · decision:block reason. Stop additionalContext INERT. Rot-resistance =
+PostToolUse.additionalContext · decision:block reason. Stop additionalContext INERT. Rot-resistance = **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
 deterministic trigger on one of these channels; resident-only rules decay. FM1 fixes MUST ride these
 channels, not CLAUDE.md prose.
 

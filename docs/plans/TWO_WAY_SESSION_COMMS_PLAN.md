@@ -248,10 +248,17 @@ battle-tested hook comments):
 - **A `Stop` `decision:block` continuation does NOT re-fire `UserPromptSubmit`** (confirmed). ⇒ a desk
   looping via `session-continue` (Stop-block) never hits the `UserPromptSubmit` drain, so in-loop mail
   MUST be delivered on the **Stop** channel.
-- **`Stop` `additionalContext` is empirically INERT on the running version** (`boundary-handoff.sh:22`,
+- ~~**`Stop` `additionalContext` is empirically INERT on the running version**~~ (`boundary-handoff.sh:22`,
   learned from a real escape — trumps the doc which says "active"). ⇒ the Stop channel uses
   `decision:block` (which `session-continue`/`completion-assert`/`anti-deference` all rely on), never
   `additionalContext`.
+  **SUPERSEDED 2026-08-08 (measured, 2.1.220): `additionalContext` now delivers on Stop.** The
+  conclusion is UNCHANGED — keep using `decision:block` — but for a new reason. `additionalContext`
+  is not the cheap alternative it would need to be: its own schema says *"the conversation continues
+  so the model can act on it"*, so it forces a turn and increments the same consecutive-block counter
+  as `decision:block`. It is also weaker for compliance, because the model may read an out-of-band
+  hook-attributed injection as a prompt-injection attempt and refuse it (observed).
+  Evidence: `docs/research/final-response-shaping-2026-08-08.md`.
 - **The cursor already exists**: `~/.claude/mailbox/<uuid>.seen` holds a line-count; `handoff-disposition.sh`
   reads `mailbox_pending` = (`wc -l <uuid>.md` > `<uuid>.seen`) and its `--ack` advances it. The drain
   MUST reuse this SAME cursor, so "delivered" and "pending" agree across both systems by construction.
@@ -478,6 +485,9 @@ comms-alarms on the Operator Blocker Board.
   - **§4 harness verdict — docs CONFIRM PreToolUse/PostToolUse `additionalContext` and universal
     `systemMessage`, but that does NOT open the D5 gate.** This repo holds a counter-example in the
     same field: Stop `additionalContext` is in the docs' supported list and is INERT on 2.1.207
+    — **and on 2.1.220 it DELIVERS (measured 2026-08-08), which makes this example even stronger:
+    the same field read INERT then and live now, so a doc citation dates neither. See
+    `docs/research/final-response-shaping-2026-08-08.md`** —
     (`boundary-handoff.sh:21-22`). A citation proves the documented contract, not the running
     binary. **D5's real gate is a live smoke-probe** — a throwaway PostToolUse hook emitting a
     sentinel, confirmed visible to the model — and that is P2's FIRST step. D11 (systemMessage) is

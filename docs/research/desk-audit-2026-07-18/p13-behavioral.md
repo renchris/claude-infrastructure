@@ -9,8 +9,17 @@ verified byte-identical to repo `CLAUDE.md` (288 lines, 21165 B, same mtime — 
 
 Mid-session, the model is reachable by **exactly three injection channels**: `UserPromptSubmit.additionalContext`,
 `PostToolUse.additionalContext` (confirmed delivered @2.1.183 — waiting-recycle.sh:44), and a `decision:"block"`
-`reason` on Stop/PostToolUse (fed back as the next turn). **Stop-hook `additionalContext` is INERT** (memory-nudge.sh:5-8
-cites GH #37559; boundary-handoff.sh:21 "additionalContext is inert/probe-gated on 2.1.207"). Therefore:
+`reason` on Stop/PostToolUse (fed back as the next turn). ~~**Stop-hook `additionalContext` is INERT**~~
+— **SUPERSEDED 2026-08-08: there are FOUR channels, not three.** Therefore:
+
+> **Correction (2026-08-08, measured on 2.1.220).** The INERT claim was true when written (2.1.207,
+> GH #37559) and is now false: Stop `additionalContext` reaches the model as a
+> `<system-reminder>`-wrapped user message, and the binary calls it the sanctioned feedback channel.
+> The thesis below still holds with one amendment — the fourth channel is **not** a quiet one. Every
+> model-facing Stop channel forces another turn and increments the same consecutive-block counter,
+> so a rule delivered by Stop `additionalContext` costs a round-trip that the two
+> `UserPromptSubmit` / `PostToolUse` channels do not. It is therefore an addition to the menu, not a
+> cheaper option on it. Evidence: `docs/research/final-response-shaping-2026-08-08.md`.
 
 - A rule with a **deterministic trigger** on one of those channels is **re-injected at the relevant seam → context-rot-RESISTANT.**
 - A rule that is **resident-only** (read once at token 0) or **never-triggered** decays with fill and is **context-rot-EXPOSED.**
@@ -160,7 +169,7 @@ T-P13-6 | Generalize task-quality-gate to the repo's declared gate + desk-own co
 **Hostile-reviewer gaps I chased (with tool calls, not assumptions):**
 1. *"You read the repo CLAUDE.md, not what agents load."* → Verified live `~/.claude/CLAUDE.md` is byte-identical (288 lines, 21165 B, same mtime). Parity holds **now**; FF5 made install.sh deploy it, but it's a **copied regular file, not a symlink** → future drift is possible (config-mirror-assert.sh SessionStart is the guard).
 2. *"`/goal` must exist somewhere."* → Exhaustive grep across hooks/scripts/bin/commands/launchd/settings in all 3 config trees: only an English-word comment hit. Genuinely absent on disk → runtime-injected/unversioned (G-P13-3).
-3. *"Is UserPromptSubmit really the only mid-session channel?"* → Corrected: **three** channels (UPS.additionalContext, PostToolUse.additionalContext, Stop/PostToolUse decision:block reason). Stop.additionalContext is inert (GH #37559). Precise statement used throughout.
+3. *"Is UserPromptSubmit really the only mid-session channel?"* → Corrected: **three** channels (UPS.additionalContext, PostToolUse.additionalContext, Stop/PostToolUse decision:block reason). Stop.additionalContext is inert (GH #37559). Precise statement used throughout. **[Re-corrected 2026-08-08 on 2.1.220: FOUR — Stop.additionalContext now delivers, but forces a turn like decision:block, so it is not a quiet channel. See `docs/research/final-response-shaping-2026-08-08.md`.]**
 4. *"lead-supervisor may cover the boundary blind spot."* → It exists but has **no launchd plist** (only team-orphan-reaper does) → the deferred-to backstop may be unscheduled (G-P13-5).
 
 **Uncertainties (named):**

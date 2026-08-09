@@ -65,7 +65,7 @@ docs remain SSOT for design law: `docs/L3-L4-AUTONOMY-ROADMAP.md`,
    one-liner. Activation queue is absence-is-loud (activation-watch re-pages un-run items).
 7. **Injection-channel law (P13):** mid-session behavioral reach = UserPromptSubmit
    `additionalContext` · PostToolUse `additionalContext` · `decision:block` reason. Stop-hook
-   additionalContext is INERT. Every FM1/FM2 behavioral fix rides one of these — never
+   additionalContext is INERT. Every FM1/FM2 behavioral fix rides one of these — never **[STALE as of 2026-08-08 — measured on 2.1.220, Stop `additionalContext` DOES reach the model; it forces a turn like `decision:block`, so every conclusion below still stands. See docs/research/final-response-shaping-2026-08-08.md]**
    resident-prose-only.
 8. **FM1 flag predicate (P11):** `(done_assertion ∨ deference_tell) ∧ (uncommitted ∨
    unlanded_verified ∨ scope_remainder) ∧ ¬genuine_three`. Ship/land of verified net-positive

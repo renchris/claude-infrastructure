@@ -3,9 +3,18 @@
 #
 # Periodic in-session reminder (every MEMORY_NUDGE_INTERVAL prompts, default 12)
 # to persist DURABLE knowledge to MEMORY.md / a topic file, with the hermes-agent
-# anti-capture list embedded. Fires while context is LIVE — UserPromptSubmit is
-# the only event whose additionalContext reaches the model mid-session (Stop
-# cannot inject; GH anthropics/claude-code#37559).
+# anti-capture list embedded. Fires while context is LIVE — UserPromptSubmit
+# reaches the model MID-SESSION, while the context being nudged about is still in
+# hand.
+#
+#   This used to read "the ONLY event whose additionalContext reaches the model
+#   mid-session (Stop cannot inject; GH anthropics/claude-code#37559)". That is
+#   STALE: measured 2026-08-08 on 2.1.220, Stop additionalContext DOES reach the
+#   model (docs/research/final-response-shaping-2026-08-08.md). UserPromptSubmit
+#   remains correct, and is now the stronger of two live options rather than the
+#   only one — Stop fires when the turn is already over, and every model-facing
+#   Stop channel forces an extra turn, so nudging there would arrive too late to
+#   act on AND cost a round-trip.
 #
 # Adapted from hermes-agent agent/background_review.py (nudge_interval=10), minus
 # the autonomous write: this NUDGES, the model decides + the human reviews.
