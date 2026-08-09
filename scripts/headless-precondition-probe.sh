@@ -60,6 +60,7 @@ LOG="$WORK/hookfire.log"; : > "$LOG"
 
 note() { printf '%s\n' "$*" >> "$WORK/notes.txt"; }
 
+# shellcheck disable=SC2329  # invoked indirectly by the trap below
 cleanup() {
   [ -n "${HP:-}" ] && kill "$HP" 2>/dev/null
   [ "$KEEP" -eq 0 ] && rm -rf "$WORK"
@@ -84,7 +85,9 @@ if [ -z "$CLAUDE_BIN" ] || [ ! -x "$CLAUDE_BIN" ]; then
 fi
 note "binary: $CLAUDE_BIN"
 
-pty_count() { ls -d /dev/ttys[0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' '; }
+# Counted off the glob directly: an unmatched glob expands to its own literal, which fails -e,
+# so the no-match case is 0 without a pipeline.
+pty_count() { local n=0 p; for p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$p" ] && n=$((n+1)); done; printf '%s' "$n"; }
 
 # --- probe settings: one hook per event, each appending its own name ---------------------------
 cat > "$WORK/probe-settings.json" <<EOF
@@ -108,7 +111,7 @@ EOF
 FIFO="$WORK/in.fifo"; rm -f "$FIFO"; mkfifo "$FIFO" || exit 2
 
 PTY_BEFORE=$(pty_count)
-SID=$(/usr/bin/uuidgen 2>/dev/null | tr 'A-Z' 'a-z')
+SID=$(/usr/bin/uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]')
 
 "$CLAUDE_BIN" -p \
   --settings "$WORK/probe-settings.json" \

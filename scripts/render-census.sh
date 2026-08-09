@@ -281,9 +281,16 @@ case "$SESSIONS" in ''|*[!0-9]*) SESSIONS=0 ;; esac
 #
 # This is a GAUGE and stays one — it feeds no verdict here and no term in the admission gate
 # (scripts/lib/capacity-admit.sh is wave D's, and a refusing term is operator-gated).
-PTY_USED="$(ls -d /dev/ttys[0-9][0-9][0-9] 2>/dev/null | wc -l | tr -d ' ')"
+PTY_USED=0
+for _p in /dev/ttys[0-9][0-9][0-9]; do [ -e "$_p" ] && PTY_USED=$((PTY_USED+1)); done
 case "$PTY_USED" in ''|*[!0-9]*) PTY_USED="null" ;; esac
-PTY_MAX="$(sysctl -n kern.tty.ptmx_max 2>/dev/null || true)"
+# sysctl lives in /usr/sbin, which a restricted PATH does not carry — resolved absolutely so the
+# limit cannot silently read as 0 and render as a reassuring "0%".
+PTY_SYSCTL=""
+for _c in /usr/sbin/sysctl /sbin/sysctl; do [ -x "$_c" ] && { PTY_SYSCTL="$_c"; break; }; done
+[ -z "$PTY_SYSCTL" ] && PTY_SYSCTL="$(command -v sysctl 2>/dev/null || true)"
+PTY_MAX="null"
+[ -n "$PTY_SYSCTL" ] && PTY_MAX="$("$PTY_SYSCTL" -n kern.tty.ptmx_max 2>/dev/null || true)"
 case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="null" ;; esac
 PTY_PCT="null"
 if [ "$PTY_USED" != "null" ] && [ "$PTY_MAX" != "null" ] && [ "$PTY_MAX" -gt 0 ]; then

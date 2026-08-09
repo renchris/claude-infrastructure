@@ -18,6 +18,10 @@ setup() {
   P="$REPO/scripts/pty-census.sh"
   D="$BATS_TEST_TMPDIR"
 
+  # Fixtured $HOME. The subject reads no dotfile today, but a suite that runs against the operator's
+  # live ~/ is one edit away from mutating it, and the whole run's results stop being trustworthy.
+  export HOME="$D/home"; mkdir -p "$HOME"
+
   # A fixture /dev carrying BOTH device classes, in the exact naming production sees:
   #   2 ptmx clones      ttys000 ttys001          ← the resource
   #  16 legacy nodes     ttys0..ttys9 ttysa..ttysf ← NOT the resource
@@ -79,6 +83,24 @@ for k in ("pty_used","pty_max","pty_pct","pty_arch_max","pty_legacy_nodes","sess
   [ "$status" -eq 0 ]
   [[ "$output" == *'"sessions":2'* ]]
   [[ "$output" == *'"ptys_per_session":"1.00"'* ]]   # 2 ptys / 2 sessions
+}
+
+@test "6a an unreadable limit reports UNKNOWN — never a reassuring 0%" {
+  # Caught live during this wave: `sysctl` is in /usr/sbin, which a restricted PATH (hooks, hermetic
+  # harnesses) does not carry. The limit read 0 and the gauge printed "0%" — one value meaning both
+  # "empty" and "could not ask", which is the fleet's sensor-default-off-ships-blindness shape.
+  CC_PTY_MAX=x run bash "$P"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unknown"* ]]
+  [[ "$output" != *"(0%)"* ]]
+  CC_PTY_MAX=x run bash "$P" --json
+  [[ "$output" == *'"pty_max":null'* ]]
+  [[ "$output" == *'"pty_pct":null'* ]]
+}
+
+@test "6b --assert-under REFUSES while blind (rc 2) — 'could not measure' is not 'under'" {
+  CC_PTY_MAX=x run bash "$P" --assert-under 50
+  [ "$status" -eq 2 ]
 }
 
 @test "6 --assert-under is the ONLY mode that can exit non-zero" {
