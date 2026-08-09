@@ -237,3 +237,80 @@ scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <branch> \
   (the condition is the caller's to choose) but it means a long-horizon chain silently drops its goal
   at the first recycle that omits the flag. Whether the recycle path should *inherit* the
   predecessor's live condition is a design question, not a defect.
+
+---
+
+# ADDENDUM 2026-08-09 — a goal that was SET, VERIFIED, and then never EVALUATED
+
+**This document proved a goal can be ARMED. It never asked whether an armed goal is EVALUATED.
+Measured on 2026-08-09: it is not — at least not here.**
+
+## The measurement
+
+Session `d33abf12` (reso lead, pane `wt-cc-234834-28059-886`), goal armed by the operator typing
+`/goal <1199-char condition>` at **07:13:38Z**. The harness wrote exactly **one** attachment:
+
+```json
+{"type":"goal_status","met":false,"sentinel":true,"condition":"Not done until every agent-side leg of the fly-iad …"}
+```
+
+From 07:13:38Z to 09:14:02Z — **~2 hours, ~12 assistant turns, several genuine idles** — the harness
+wrote **ZERO further `goal_status` records** and **never once blocked a stop or forced a continuation**.
+The goal also never auto-cleared: it still reads `met:false`, so this is not "the condition was judged
+satisfied". It was armed, recorded once, and thereafter inert.
+
+⚠️ **Methodology note that nearly produced the opposite conclusion.** `grep -c goal_status` returns
+**6** on that transcript, which reads like repeated evaluation. Five are the assistant's own PROSE
+discussing the goal. Only `type == "attachment"` records are the harness speaking:
+
+```bash
+python3 -c "
+import json
+for l in open('<transcript>.jsonl'):
+    if 'goal_status' not in l: continue
+    d=json.loads(l)
+    if d.get('type')=='attachment': print(d['timestamp'], d['attachment'].get('met'))"
+```
+
+**Grepping a token that appears in your own discussion of a mechanism measures you talking about it.**
+
+## Ruled OUT, with evidence — do not re-derive these
+
+| Hypothesis | Verdict |
+| --- | --- |
+| claude-infrastructure interfered (that night's `2df6188e` landed cc-await-ping / cc-notify / self-close changes) | **REFUTED** — `git show --stat 2df6188e` touches **no Stop hook** |
+| An operator Stop hook shadows or swallows the goal check | **REFUTED** — 11 Stop hooks are registered and **none is a goal hook**; `/goal` is a BINARY BUILT-IN (§2 of this doc), so its evaluation is internal to CC and unreachable by any operator hook |
+| The goal auto-cleared because it was met | **REFUTED** — the sole attachment still reads `met:false` |
+| Stop hooks were not firing at all | **REFUTED** — `session-continue.sh` fired its WAKE-FLOOR block during the window, so Stop was reached and hooks ran |
+
+## NOT established — this is the open question
+
+**Why it stops evaluating.** The leading hypothesis is UNTESTED and must not be written up as fact:
+nearly every turn in that window ended because the operator sent a message **mid-turn** (the STEERED
+path — CC's type-asymmetric queue, §Autonomous-fire item 4 of `commands/handoff.md`), rather than the
+model reaching a clean Stop. The evaluator may only run on the latter. The one confirmed clean Stop
+had a *different* hook return a blocking decision first, and no goal evaluation was recorded near it.
+
+**Two variables this doc has never controlled for, and the second is new:**
+
+1. **`sentinel: true`.** Every other field is self-explanatory; this one is not. Is a `sentinel`
+   record an ARMED marker rather than a live goal? Nothing here or in `commands/handoff.md` says.
+2. 🚨 **THE TERMINAL. This box runs KITTY, not iTerm2.** `$KITTY_WINDOW_ID` is set; `$ITERM_SESSION_ID`
+   is a kitty-shimmed `w0t0p0:<n>`. The entire handoff/goal apparatus is iTerm2-shaped — `it2-kitty`,
+   `cc-kitty-socket`, `kitty-split-launch.sh`, `it2-wrapper` exist precisely because it had to be
+   retrofitted — and **kitty has already produced two silent goal/back-channel-adjacent failures**:
+   a bare-integer pane id that `payload-lint` accepted and `cc-notify` could not resolve
+   (`55c18e2b`), and `--recycle`'s pane probe typing into a live composer
+   (`reference-recycle-probe-types-into-live-composer`). A terminal-shaped cause is PLAUSIBLE and
+   has never been tested for `/goal`. **It is also falsifiable in one run:** arm an identical goal in
+   an iTerm2 pane and count attachments over the same interval.
+
+## The operational rule, which holds whatever the mechanism turns out to be
+
+**`goal-arm verdict=set` proves a goal was SET. It is not evidence the goal is LIVE.** Verify by
+counting `goal_status` attachments OVER TIME, never by the arm-time verdict — and never let an armed
+goal substitute for the agent's own completion discipline. Same class as the inert-export defect
+(`reference-exported-but-uncalled-passes-every-gate`): a thing that reports success at installation
+and then does nothing. Assert the BEHAVIOUR, not the installation.
+
+Filed: `11c25d8f7c55`.
