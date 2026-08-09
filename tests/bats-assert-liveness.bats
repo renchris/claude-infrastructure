@@ -134,6 +134,47 @@ bats_passes() { bats "$1" >/dev/null 2>&1; }
   [ "$(findings "$D/t.bats")" -eq 0 ]
 }
 
+# `for ((…))` above is only ONE of the two ways a `((` is not an assertion. The other is
+# arithmetic EXPANSION — `$(( … ))`, a value with no exit status of its own. RE_ARITH_OPEN's
+# lookbehind exempts the expansion's own `((` (the `$` is adjacent) but is blind one level
+# down: an inner `((` is preceded by `(`, which is neither `\w` nor `$`. So a nested
+# expansion inside a plain ASSIGNMENT was reported `DEAD [arith]` — a false RED that blocked
+# a real commit on 2026-08-08, whose only workaround was flattening correct arithmetic into
+# two statements. Both directions are pinned here: the expansion must go quiet, and a bare
+# `(( ))` assertion must keep being caught, because a lint that cannot fail is worth nothing.
+@test "arithmetic NESTED inside a \$(( )) expansion is a value, not a dead assertion" {
+  mkblock "$D/t.bats" 'averaged=$(( ((total - LIMIT) / (entry_b / n)) + 1 ))' nonfinal
+  [ "$(findings "$D/t.bats")" -eq 0 ]
+
+  # The oracle: it is an assignment, so it CANNOT fail — the fixture passes with the
+  # arithmetic intact, and the value it produced is what a real assertion would judge.
+  mkbats "$D/o.bats" '@test "x" {' \
+    '  total=9 LIMIT=1 entry_b=4 n=1' \
+    '  averaged=$(( ((total - LIMIT) / (entry_b / n)) + 1 ))' \
+    '  [ "$averaged" -eq 3 ]' '}'
+  run bats_passes "$D/o.bats"
+  [ "$status" -eq 0 ]
+
+  # Depth beyond one level, and an expansion sharing a line with other code, stay quiet too.
+  mkblock "$D/d.bats" 'x=$(( (((a+b)*c) - (d/(e+1))) % 7 ))' nonfinal
+  [ "$(findings "$D/d.bats")" -eq 0 ]
+  mkblock "$D/e.bats" 'echo "$(( ((a - b) / c) + 1 ))" > "$D/out"' nonfinal
+  [ "$(findings "$D/e.bats")" -eq 0 ]
+}
+
+@test "CONTROL — a genuine bare (( )) assertion is still flagged beside an expansion" {
+  # Green before the fix and after it: masking must be aimed at the EXPANSION class only.
+  mkblock "$D/t.bats" 'n=$(( ((a - b) / c) + 1 )) && (( n == 2 ))' nonfinal
+  [ "$(findings "$D/t.bats")" -eq 1 ]
+
+  # …and the plain bare form, cross-checked against the bats oracle: it asserts something
+  # false, bats passes it anyway ⇒ discarded ⇒ dead, and the analyzer must say so.
+  mkblock "$D/b.bats" '(( 1 == 2 ))' nonfinal
+  run bats_passes "$D/b.bats"
+  [ "$status" -eq 0 ]
+  [ "$(findings "$D/b.bats")" -eq 1 ]
+}
+
 @test "a heredoc body is never analyzed as this file's own assertions" {
   # A fixture that WRITES bats source must not be mistaken for source.
   mkbats "$D/t.bats" '@test "x" {' '  cat > "$BATS_TEST_TMPDIR/gen.bats" <<EOF' \
