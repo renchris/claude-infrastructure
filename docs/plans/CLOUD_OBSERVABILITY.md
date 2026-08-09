@@ -1172,14 +1172,24 @@ gates the rest, because an unmeasured ceiling is how "15 sessions" became folklo
 | **G9** | Repeatable + documented — the link drive, its tests, and a runbook. | ✅ `66ef4d8c` |
 | **G10** | The wake path — `cc-await-ping` self-disarms (exit 5 on a stale registry pid; a group-TERM prints nothing), and §9 names it as *the* wake path, so cloud→here pings can vanish. | ✅ `f7c1948a` |
 
-🚨 **The one finding that changes how G5 must fire, and it was not predicted by any row above.**
-A cloud create issued from a **git worktree** hit `Bundle upload failed: Socket is closed after 3
+~~🚨 **The one finding that changes how G5 must fire, and it was not predicted by any row above.**~~
+~~A cloud create issued from a **git worktree** hit `Bundle upload failed: Socket is closed after 3
 attempts` on 3 of 3 ramps, while the same account from the **main checkout** created 2 of 2
 back-to-back. Suspected mechanism: the bundle upload walking a `.git` that is an 86-byte gitdir
-pointer rather than a directory. **Not established** (main checkout n=1; one worktree create did
+pointer rather than a directory.~~ **Not established** (main checkout n=1; one worktree create did
 succeed) — but this repo's standing rule gives every concurrent writer its own worktree, and Agent
 Teams isolate teammates in worktrees by construction, so *the default configuration for firing cloud
 work is the one that failed*. Full evidence table: `CONCURRENCY_PROGRAM.md` §S5.2.
+
+🚨 **REFUTED 2026-08-09 — G5 needs a RETRY, not a cwd change** (`CONCURRENCY_PROGRAM.md` §S5.3,
+instrument `scripts/cloud-bundle-probe.sh`, commit `70f0cbba`). Both cwds share ONE object store, so
+both build the same bundle — 99,778,280 B from the worktree vs 99,712,572 B from the main checkout,
+a 0.07% difference, both at **95% of the CLI's 100 MiB cap**. An interleaved live A/B then had the
+main checkout fail with the *identical* refusal while the worktree created; failures cluster by
+round, not by cwd. The real defect is a ~95 MiB upload with 3 retries — marginal by construction.
+`handoff-fire.sh --cloud` may keep inheriting the caller's worktree; what it must not do is treat
+the first `Bundle upload failed` as terminal. The upload disappears entirely once the Claude GitHub
+App is installed on the repo (the create then uses a `git_repository` source and bundles nothing).
 
 ⚠️ **The classifier control is VOID and cannot currently be restored.** `--control` was designed
 around a free known-refusal: an account already at 100% weekly. Measured 2026-08-08, an account at
