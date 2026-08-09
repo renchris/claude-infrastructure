@@ -31,6 +31,12 @@ setup() {
   # absolute /tmp defaults and one BARE NAME the subject then EXECUTES off the operator's PATH.
   # Absent paths are the right fixture: these sensors fail open on one.
   export CC_FIRE_CAPACITY_GATE=off
+  # BOTH TERMS, not one. exit 9 has two of them — loadavg AND (M10) memory headroom — and pinning
+  # only the first leaves the suite red on a box that is merely low on RAM, which is the same
+  # ambient verdict the pin exists to remove. tests/handoff-fire-capacity-gate.bats:440 derives the
+  # population of fire-executing suites and requires both exports; this file arrived after that
+  # roster was written and has been the ratchet's one NEW UNPINNED FIRE SUITE ever since.
+  export CC_FIRE_HEADROOM_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
