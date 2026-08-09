@@ -9,6 +9,19 @@
 # The real-fire path runs osascript/detach after the push; the push fires FIRST (capture-before-notify),
 # so a timeout-bounded run still captures the push side effect. self-close operates in $PWD, so tests cd
 # to a non-git tmpdir (the dirty-tree guard is then skipped) and stub CC_COMPLETION_PUSH_BIN.
+#
+# ── THE BOUND (2026-08-08) ───────────────────────────────────────────────────────────────────────────
+# "NON-FATAL" above was enforced for a non-zero EXIT and for nothing else: an unbounded push has no arm a
+# HANG can reach, and a --terminal close (pid 68958) sat 15+ min in completion-push → cc-announce, never
+# retired its pane, and read as idle-not-done. The bound is the enforcement the contract always specified.
+#
+# 🚨 THE PRE-EXISTING TESTS IN THIS FILE CANNOT CATCH THAT, AND THAT IS WHY IT SHIPPED. They wrap the
+# subject in `timeout 6 bash "$HF" … || true` — a bound in the HARNESS. Under it a hang and a clean close
+# are the same observation, so the suite stayed green across the whole defect. The bound tests below
+# therefore never bound the subject from outside as the pass condition: they set the SEAM
+# (HANDOFF_COMPLETION_PUSH_TIMEOUT_S) and require the subject to return on its OWN, with the outer
+# `timeout` present only as a backstop whose firing is a FAILURE (the mutation control inverts exactly
+# this, and is the only test here that may legitimately hit it).
 
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
@@ -103,4 +116,89 @@ setup() {
   [ -n "$rec" ]
   [ "$(jq -r '.verdict' "$rec")" = "verified" ]
   [ "$(jq -r '.role' "$rec")" = "desk" ]
+}
+
+# ── the bound: a HANG must not suspend the close ─────────────────────────────────────────────────────
+# Stubs live here rather than in setup() so the tests above keep their exact fixture.
+#   hang_stub  — never returns on its own (the wedge: cc-announce blocked in a capture that never EOFs)
+#   ignterm_stub — additionally IGNORES SIGTERM, so `timeout -k 3` must escalate to SIGKILL
+mk_hang_stub() { printf '#!/bin/bash\nsleep 30\n' > "$1"; chmod +x "$1"; }
+mk_ignterm_stub() { printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 1; done\n' > "$1"; chmod +x "$1"; }
+
+@test "BOUND: a HANGING completion-push expires → LOUD 'TIMED OUT', and the close is NOT suspended" {
+  local hang="$BATS_TEST_TMPDIR/hang.sh"; mk_hang_stub "$hang"
+  local t0 t1
+  t0="$(date +%s)"
+  # `timeout 20` is a BACKSTOP, not the mechanism: status 124 here would mean the subject never
+  # returned, which is the defect. The pass condition is that handoff-fire ends on its own.
+  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$hang' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=2 \
+      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+  t1="$(date +%s)"
+  [ "$status" -ne 124 ]                                   # the subject returned; the backstop did NOT fire
+  [[ "$output" == *"TIMED OUT (bound 2s"* ]] || false
+  [[ "$output" == *"the pane must retire"* ]] || false
+  [[ "$output" == *"rc=124"* ]] || false                  # names WHICH expiry code, not a bare failure
+  # NOT the exit-5 wording: a bound that fired knows only that no verdict arrived, and the push may
+  # well have landed (capture-before-notify wrote the record first). Claiming "did NOT verify" here
+  # would assert a delivery FACT this path cannot possibly hold.
+  [[ "$output" != *"did NOT verify"* ]] || false
+  [ $(( t1 - t0 )) -lt 15 ]                               # bounded at 2s, nowhere near the stub's 30s
+}
+
+@test "BOUND mutation control: with the seam DISABLED the same hang DOES suspend the close" {
+  # The red-on-mutation half. Without it every assertion above could pass on a build where the stub
+  # merely exited early for some unrelated reason — this proves the BOUND is what cures the hang.
+  # Here, and only here, the outer timeout firing (124) is the EXPECTED observation.
+  local hang="$BATS_TEST_TMPDIR/hang.sh"; mk_hang_stub "$hang"
+  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$hang' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=0 \
+      timeout 5 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+  [ "$status" -eq 124 ]                                   # suspended — the outer backstop had to kill it
+  [[ "$output" != *"TIMED OUT"* ]] || false                # and no expiry was ever reported
+}
+
+@test "BOUND: a TERM-ignoring push needs the -k SIGKILL → rc 137 is ALSO reported as TIMED OUT" {
+  # MEASURED, not assumed (GNU coreutils 9.1, this box): `timeout -k` yields 124 when the callee dies
+  # on SIGTERM and 137 when it must be SIGKILLed. A `= 124` test would file this — the likelier shape,
+  # since cc-notify installs its own TERM trap — under the WRONG label: a channel that reported
+  # failure rather than one that never answered.
+  local ign="$BATS_TEST_TMPDIR/ignterm.sh"; mk_ignterm_stub "$ign"
+  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$ign' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=2 \
+      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+  [ "$status" -ne 124 ]
+  [[ "$output" == *"TIMED OUT (bound 2s"* ]] || false
+  [[ "$output" == *"rc=137"* ]] || false
+  [[ "$output" != *"did NOT verify"* ]] || false
+}
+
+@test "BOUND false-positive control: a SLOW but healthy push under the bound still reads VERIFIED" {
+  # The bound must separate wedged from merely slow. Without this arm, shrinking the bound to 0s would
+  # pass every test above while converting each healthy push into a false LOUD — corrupting exactly the
+  # verified/degraded truthfulness the F5 chain exists for (memory: threshold-must-separate-fatal-from-
+  # survived — pin the false positive as a control, not just the fatal case).
+  local slow="$BATS_TEST_TMPDIR/slow.sh"
+  { printf '#!/bin/bash\n'; printf 'sleep 2\n'
+    printf 'printf "%%s\\n" "CALLED $*" >> "%s"\n' "$MARK"; printf 'exit 0\n'; } > "$slow"
+  chmod +x "$slow"
+  run bash -c "cd '$WORK' && CC_COMPLETION_PUSH_BIN='$slow' HANDOFF_COMPLETION_PUSH_TIMEOUT_S=15 \
+      timeout 20 bash '$HF' self-close --terminal --session-id 'fake:BBBB-2222' 2>&1"
+  [[ "$output" == *"terminal completion pushed to the 'desk' role"* ]] || false
+  [[ "$output" != *"TIMED OUT"* ]] || false
+  grep -q 'CALLED fire --role desk' "$MARK"               # it really ran to completion, not skipped
+}
+
+@test "BOUND is stated in the --dry-run PLAN, and renders 'unbounded' when the seam disables it" {
+  # "Can this close hang?" is a question --dry-run is read to answer; before the bound existed it could
+  # only be answered by grepping the source. The disabled render is pinned because `${x:-unbounded}`
+  # alone prints "≤ 0s" for the 0 case — a plan asserting a bound the run does not apply.
+  run env CC_COMPLETION_PUSH_BIN="$STUB" HANDOFF_COMPLETION_PUSH_TIMEOUT_S=45 \
+      bash "$HF" self-close --terminal --session-id "fake:AAAA-1111" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bound:"* ]] || false
+  [[ "$output" == *"≤ 45s"* ]] || false
+
+  run env CC_COMPLETION_PUSH_BIN="$STUB" HANDOFF_COMPLETION_PUSH_TIMEOUT_S=0 \
+      bash "$HF" self-close --terminal --session-id "fake:AAAA-1111" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unbounded"* ]] || false
+  [[ "$output" != *"≤ 0s"* ]] || false
 }
