@@ -234,6 +234,96 @@ inert_axis() { # → axis 3: a `.done` marker whose EFFECT never landed (empty w
     "${#inert[@]}" "$(join_names "${inert[@]}")" "$DIR"
 }
 
+envarm_axis() { # → axis 4: a `.done` ENV-VAR arm whose value never reached the consumer (empty when delivered)
+  # M6 (backlog 80321b2556e6) — WHY THIS EXISTS. Axis 1 trusts the `.done` marker and axis 3
+  # effect-reads launchctl, so an activation whose entire effect is an EXPORTED VARIABLE escapes
+  # BOTH by construction: it installs no launchd job to read, and the marker it sets is the very
+  # thing that silences axis 1. `10-lead-crash-orphan-close-activate.sh` is exactly that shape — it
+  # appends `export LCW_ORPHAN_CLOSE=1` to an env file and nothing else. Marked `.done` 2026-07-30
+  # with nothing sourcing that file, so hooks/lead-crash-watchdog.sh read `${LCW_ORPHAN_CLOSE:-0}`
+  # as 0 and went on leaving orphaned assignee panes RUNNING: an activation reported fully
+  # activated while 100% inert, and no axis on this hook could say so.
+  #
+  # The gap is self-demonstrating. The backlog item that commissioned this axis asserted the arm was
+  # inert — and by the time it was worked, `~/.zshrc` DID source the file and the var WAS being
+  # delivered. Both the original finding and its refutation were invisible to every sensor; the only
+  # way anyone learned either was a human reading the tree by hand. That is the durable defect, and
+  # it is why this axis reports a live verdict instead of anyone re-asserting a remembered one
+  # (memory: resident-policy-must-not-restate-perishable-facts).
+  #
+  # THE CONSUMER READ IS THIS PROCESS'S OWN ENVIRONMENT, and that is the mechanism, not a shortcut.
+  # The consumer is spawned from a SessionStart hook; this axis IS a SessionStart hook. Same process
+  # tree, same inherited environment ⇒ what we can see is precisely what the consumer can see. It is
+  # not a proxy that can drift from its subject (memory: proxy-must-be-independent-of-what-it-
+  # supplements — a proxy needs calibration; an identity does not), and it costs zero execs.
+  #
+  # It is therefore a PER-SESSION verdict, which is the only honest one: an env-only arm is
+  # PROSPECTIVE-ONLY (no already-running session ever inherits it) and cannot reach a
+  # launchd-invoked caller at all. A session whose provenance did not deliver the var IS unarmed,
+  # and this says so for THAT session instead of averaging over a fleet.
+  # Kill switch: CC_ACTIVATION_ENVARM=off.
+  [ "${CC_ACTIVATION_ENVARM:-on}" = off ] && return 0
+  local f envf var val line seen cands bad=()
+  # ONE exec for the whole queue. The class is narrow — exactly 1 of the 46 staged scripts is in it
+  # — so a per-script grep would spend 45 execs to learn there was nothing to do, the shape da5c862c
+  # just removed from the checkpoint hook. This pre-filter is strictly WEAKER than the per-script
+  # test below (it matches any `.env` mention; the test demands an ASSIGNMENT), so it can only
+  # over-select and can never shadow the real discriminator, whose own mutant must stay inert
+  # (memory: cost-gate-must-be-strictly-weaker).
+  cands="$(grep -lE '\.env([^A-Za-z0-9_]|$)' "$DIR"/*.sh 2>/dev/null || true)"
+  [ -n "$cands" ] || return 0
+  while IFS= read -r f; do
+    { [ -n "$f" ] && [ -f "$f" ]; } || continue
+    [ -f "$f.done" ] || continue                 # axis 1 already owns the un-run case
+    # The CLASS is "the script ASSIGNS an env-file path", never "the script says export". That
+    # distinction is load-bearing and was measured against the real queue: four sibling scripts
+    # carry a bare `export VAR=` in prose (a kill switch, a PATH line, two echo'd instructions) and
+    # none of them arms anything through a sourced file. Keying on `export` convicts all four
+    # (memory: denylist-enumerates-spellings-not-the-class).
+    envf="$(sed -n 's/^[A-Za-z_][A-Za-z0-9_]*="\([^"]*\.env\)".*/\1/p' "$f" 2>/dev/null | head -1)"
+    [ -n "$envf" ] || continue                   # pre-filter over-selected; that is its job
+    # These are LITERAL prefixes read out of another script's source text, not paths this shell is
+    # expanding, so every pattern is quoted on purpose. SC2088's advice is inverted here: bash DOES
+    # tilde-expand an unquoted `case` pattern, so `~/*` would silently become this machine's home
+    # directory and could never match the `~` the file actually contains.
+    # shellcheck disable=SC2088
+    case "$envf" in
+      '$HOME'/*)   envf="$HOME${envf#\$HOME}" ;;
+      '${HOME}'/*) envf="$HOME${envf#\$\{HOME\}}" ;;
+      '~/'*)       envf="$HOME${envf#\~}" ;;
+    esac
+    # A path we cannot resolve is REPORTED, never skipped — a check that quietly declines to run is
+    # the vacuous pass this whole file exists to prevent (cf. resolve_mirror's unresolvable arm).
+    case "$envf" in *'$'*) bad+=("$(basename "$f") → $envf [UNRESOLVED-PATH]"); continue ;; esac
+    [ -f "$envf" ] || { bad+=("$(basename "$f") → $envf [NOT-STAGED]"); continue; }
+    seen=""
+    while IFS= read -r line; do
+      case "$line" in 'export '*) ;; *) continue ;; esac
+      var="${line#export }"; var="${var%%=*}"; var="${var%"${var##*[![:space:]]}"}"
+      case "$var" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+      val="${line#*=}"
+      case "$val" in *[[:space:]]#*) val="${val%%[[:space:]]#*}" ;; esac   # inline trailing comment
+      val="${val%"${val##*[![:space:]]}"}"
+      case "$val" in \"*\") val="${val#\"}"; val="${val%\"}" ;; \'*\') val="${val#\'}"; val="${val%\'}" ;; esac
+      seen=1
+      # THREE states, not two, and the two failing ones have OPPOSITE fixes — the same law axis 3
+      # had to learn for DISABLED vs NOT-INSTALLED, one layer out. Collapsing them sends the
+      # operator to the wrong remedy half the time.
+      if [ -z "${!var+set}" ]; then
+        bad+=("$(basename "$f") → $var [NOT-DELIVERED]")
+      elif [ "${!var}" != "$val" ]; then
+        bad+=("$(basename "$f") → $var [OVERRIDDEN: file=$val live=${!var}]")
+      fi
+    done < "$envf"
+    [ -n "$seen" ] || bad+=("$(basename "$f") → $envf [NOT-STAGED: file has no export line]")
+  done <<EOF
+$cands
+EOF
+  [ "${#bad[@]}" -eq 0 ] && return 0
+  printf 'ACTIVATION ARMED BUT NOT IN EFFECT (axis 4, env-arm effect-read): %s activation(s) carry a `.done` marker while the variable they arm is NOT what this session actually sees — %s. These install no launchd job, so axis 3 cannot see them, and the marker itself silences axis 1: an env-var arm is invisible to both by construction. This axis reads the variable in ITS OWN environment, which is the one the consumer hook inherits. The three states have DIFFERENT fixes. NOT-STAGED: marked done but the arm was never written — re-run `bash %s/<name>`. NOT-DELIVERED: the arm is on disk but nothing in this session'"'"'s provenance sourced it — add a source line to the shell rc that launches sessions. OVERRIDDEN: something later in the chain set a different value. An env-only arm is PROSPECTIVE-ONLY even once sourced — no already-running session inherits it, and it cannot reach a launchd-invoked caller at all, so a consumer that must work under launchd has to source the file itself.\n' \
+    "${#bad[@]}" "$(join_names "${bad[@]}")" "$DIR"
+}
+
 # M4 (OPERATOR_SURFACE_V2 §4 F8) — LIVE-ONLY must be adjudicated against TRUNK, not the working
 # tree. resolve_mirror() dereferences to the SHARED CHECKOUT, so parity is live-vs-checkout; while
 # that checkout trails origin/main, a file that IS committed reads as "never committed, one `rm` from
@@ -331,10 +421,11 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
 
 watch() {
   [ -d "$DIR" ] || exit 0
-  local msg age par inert
+  local msg age par inert envarm
   age="$(age_axis)"
   par="$(parity_axis)"
   inert="$(inert_axis)"
+  envarm="$(envarm_axis)"
   msg="$age"
   if [ -n "$par" ]; then
     if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$par"; else msg="$par"; fi
@@ -343,6 +434,13 @@ watch() {
   # (axis 1 is silenced by the very marker that is lying), so it must still reach the operator.
   if [ -n "$inert" ]; then
     if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$inert"; else msg="$inert"; fi
+  fi
+  # Axis 4 is quieter still: axis 3 at least has a launchd job to interrogate, while an env-var arm
+  # leaves NO durable artifact outside the env file itself. Never folded into axis 3 — their fixes
+  # share no vocabulary (`bootstrap` vs `source`), and one axis emitting two remedy languages is how
+  # the operator gets sent to the wrong one.
+  if [ -n "$envarm" ]; then
+    if [ -n "$msg" ]; then msg="$msg"$'\n\n'"$envarm"; else msg="$envarm"; fi
   fi
   [ -z "$msg" ] && exit 0
   emit "$msg"
@@ -473,6 +571,15 @@ case "${1:-}" in
               # deciding the set changed, and letting a look reset the window would mean the next
               # genuine change went unpaged.
               CC_ACTIVATION_DAMP_S=0 DAMP_WINDOW_S=0 DAMP_FILE=/dev/null age_axis ;;
+  --envarm)   # standalone entry: rc 1 when an env-var arm is not in effect for THIS shell, rc 0 when
+              # every armed variable is delivered. Deliberately NOT a commit gate: the verdict is a
+              # property of the CALLER's provenance, so a CI/launchd runner would read NOT-DELIVERED
+              # for a perfectly healthy arm. It is an inspection entry, the `--queue` analogue.
+    if [ ! -d "$DIR" ]; then echo "activation env-arm: live queue $DIR absent — nothing to read."; exit 0; fi
+    EA="$(envarm_axis)"
+    if [ -n "$EA" ]; then printf '%s\n' "$EA"; exit 1; fi
+    echo "activation env-arm: GREEN — every armed variable is delivered to this shell (or none is staged)."
+    ;;
   --parity)   # standalone/gate entry: rc 1 on ANY drift (incl. an unresolvable mirror), rc 0 only in parity
     if [ ! -d "$DIR" ]; then echo "activation SSOT parity: live queue $DIR absent — nothing to compare."; exit 0; fi
     PAR="$(parity_axis)"

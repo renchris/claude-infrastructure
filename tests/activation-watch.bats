@@ -352,3 +352,151 @@ lcstub() { # $1=labels reported LOADED (space-sep) $2=labels reported "=> disabl
     CC_ACTIVATION_LAUNCHCTL_BIN="$(lcstub '' '')" run "$H"
   ! printf '%s' "$output" | grep -q 'CLAIMED-DONE BUT INERT' || false
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# M6 · axis 4 ENV-ARM effect-read (backlog 80321b2556e6) — the class axes 1 and 3 are both blind to
+#
+# Axis 1 is silenced by the `.done` marker; axis 3 needs a launchd job and an env-var arm installs
+# none. So an activation whose whole effect is `export VAR=1` in a sourced file can be marked done
+# and never take effect, with every sensor reading clean — which is exactly what happened to
+# 10-lead-crash-orphan-close (marked done 2026-07-30, nothing sourced the file, orphaned assignee
+# panes left RUNNING). Most of these drive `--envarm` rather than the bare hook: it runs axis 4
+# ALONE, so a finding here is attributable to this axis and not borrowed from another's silence.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+# stage an env-arm activation. $1=script name · $2=env-file path · $3…=lines written to that file
+# (pass none to leave the file ABSENT, the NOT-STAGED case).
+arm() {
+  local s="$1" ef="$2"; shift 2
+  printf '#!/bin/bash\nENVFILE="%s"\n' "$ef" > "$Q/$s"
+  : > "$Q/$s.done"
+  [ "$#" -eq 0 ] || printf '%s\n' "$@" > "$ef"
+  return 0
+}
+
+@test "M6: an armed variable the consumer cannot see → NOT-DELIVERED (invisible to axes 1 and 3)" {
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
+  CC_ACTIVATION_DIR="$Q" run env -u M6_FIXTURE_VAR "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'ARMED BUT NOT IN EFFECT'
+  printf '%s' "$output" | grep -q 'M6_FIXTURE_VAR \[NOT-DELIVERED\]'
+}
+
+@test "M6 POSITIVE CONTROL: a DELIVERED variable yields NO row (the axis can go quiet)" {
+  # The trailing comment is the REAL file's shape (`export LCW_ORPHAN_CLOSE=1   # arm …`); a value
+  # parser that kept it would compare "1   # arm …" against "1" and this axis would fire forever on
+  # a healthy arm — an alarm that always fires carries as many bits as one that cannot
+  # (memory: alarm-polarity-and-attention-budget).
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1   # armed, with a comment'
+  CC_ACTIVATION_DIR="$Q" M6_FIXTURE_VAR=1 run "$H" --envarm
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'GREEN'
+  ! printf '%s' "$output" | grep -q 'ARMED BUT NOT IN EFFECT' || false
+}
+
+@test "M6: OVERRIDDEN is distinguished from NOT-DELIVERED — they have OPPOSITE fixes" {
+  # Same law axis 3 had to learn for DISABLED vs NOT-INSTALLED. "add a source line" is the wrong
+  # remedy for a variable that IS being delivered and then reset by something later in the chain.
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
+  CC_ACTIVATION_DIR="$Q" M6_FIXTURE_VAR=0 run "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'M6_FIXTURE_VAR \[OVERRIDDEN: file=1 live=0\]'
+  # The BRACKETED row form, not the bare word: the finding's own remedy text names all three states
+  # (they have different fixes, so it must), and asserting absence of the bare string matches that
+  # explanation instead of a row. Caught here — this assertion failed against a correct subject.
+  ! printf '%s' "$output" | grep -q '\[NOT-DELIVERED\]' || false
+}
+
+@test "M6: a .done marker over an env file that was never written → NOT-STAGED" {
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/never-written.env"        # no lines ⇒ file absent
+  CC_ACTIVATION_DIR="$Q" run "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'NOT-STAGED'
+}
+
+@test "M6: an env-file path that does not resolve is REPORTED, never a silent skip" {
+  printf '#!/bin/bash\nENVFILE="$SOME_UNSET_THING/w.env"\n' > "$Q/70-arm-activate.sh"
+  : > "$Q/70-arm-activate.sh.done"
+  CC_ACTIVATION_DIR="$Q" run "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q 'UNRESOLVED-PATH'
+}
+
+@test "M6: an un-run env-arm is axis 1's, not axis 4's (no .done ⇒ silent here)" {
+  printf '#!/bin/bash\nENVFILE="%s"\n' "$BATS_TEST_TMPDIR/w.env" > "$Q/70-arm-activate.sh"
+  printf 'export M6_FIXTURE_VAR=1\n' > "$BATS_TEST_TMPDIR/w.env"       # NO .done marker
+  CC_ACTIVATION_DIR="$Q" run env -u M6_FIXTURE_VAR "$H" --envarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'ARMED BUT NOT IN EFFECT' || false
+}
+
+@test "M6 DISCRIMINATOR: the class is an env-file ASSIGNMENT, not the word 'export'" {
+  # Both directions in one test, because a guard keyed on a spelling fails BOTH ways (memory:
+  # guard-proxy-fails-in-both-directions). A kill-switch line, a PATH line and an echo'd
+  # instruction all contain `export VAR=` while arming nothing through a sourced file.
+  printf '#!/bin/bash\necho "Kill switch: export CC_SOMETHING=off"\nexport PATH="/x:$PATH"\n' \
+    > "$Q/71-prose-activate.sh"
+  : > "$Q/71-prose-activate.sh.done"
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
+  CC_ACTIVATION_DIR="$Q" run env -u M6_FIXTURE_VAR "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q '70-arm-activate.sh'                  # in class → named
+  ! printf '%s' "$output" | grep -q '71-prose-activate.sh' || false     # prose only → NOT named
+}
+
+@test "M6 DISCRIMINATOR: a script that only MENTIONS a .env path is still out of class" {
+  # The case the cheap pre-filter CANNOT decide, and the only one that actually exercises the
+  # discriminator. Found by mutation: widening the `sed` to key on `export` survived the whole suite,
+  # because the prose fixture above contains no `.env` string at all — so the PRE-FILTER was
+  # rejecting it and the discriminator was never reached. Two redundant filters read as one tested
+  # filter (memory: cost-gate-must-be-strictly-weaker — a fast path that shadows the real test makes
+  # its own mutation control vacuous). This fixture passes the pre-filter by construction, so only
+  # the ASSIGNMENT rule can reject it.
+  printf '#!/bin/bash\n# to disarm, edit ~/.claude/autonomy/other.env by hand\nexport CC_SOMETHING=off\n' \
+    > "$Q/72-mentions-activate.sh"
+  : > "$Q/72-mentions-activate.sh.done"
+  CC_ACTIVATION_DIR="$Q" run "$H" --envarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q '72-mentions-activate.sh' || false
+}
+
+@test "M6 REAL-ARTIFACT control: the actual queue selects the one env-arm and none of its siblings" {
+  # A hand-written approximation can pass vacuously (memory: control-must-replay-the-real-artifact),
+  # so this replays the SHIPPED scripts. Four of them carry a bare `export VAR=` in prose; exactly
+  # one arms through a sourced env file. Stable whichever state the operator's real watchdog.env is
+  # in — absent ⇒ NOT-STAGED, present ⇒ NOT-DELIVERED with the var unset — and both are "named",
+  # which is what this asserts. It reads that file; it executes nothing from $HOME.
+  local src="$REPO/docs/activation/pending-activation"
+  for s in 04-page-channel 10-close-attrib 13-mailbox-gc 26-curl-gate-scope \
+           10-lead-crash-orphan-close; do
+    cp "$src/$s-activate.sh" "$Q/" && : > "$Q/$s-activate.sh.done"
+  done
+  CC_ACTIVATION_DIR="$Q" run env -u LCW_ORPHAN_CLOSE "$H" --envarm
+  [ "$status" -eq 1 ]
+  printf '%s' "$output" | grep -q '10-lead-crash-orphan-close-activate.sh'
+  for s in 04-page-channel 10-close-attrib 13-mailbox-gc 26-curl-gate-scope; do
+    ! printf '%s' "$output" | grep -q "$s-activate.sh" || false
+  done
+}
+
+@test "M6 kill switch: CC_ACTIVATION_ENVARM=off silences the axis" {
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
+  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_ENVARM=off run env -u M6_FIXTURE_VAR "$H" --envarm
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'ARMED BUT NOT IN EFFECT' || false
+}
+
+@test "M6: axis 4 composes into the SessionStart emit as ONE valid JSON object" {
+  arm "70-arm-activate.sh" "$BATS_TEST_TMPDIR/w.env" 'export M6_FIXTURE_VAR=1'
+  stage "p0-99-activate.sh" "$OLD"                    # axis 1 fires too ⇒ both must coexist
+  CC_ACTIVATION_DIR="$Q" CC_ACTIVATION_DAMP_S=0 run env -u M6_FIXTURE_VAR "$H"
+  [ "$status" -eq 0 ]
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null
+    ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  else
+    ctx="$output"
+  fi
+  printf '%s' "$ctx" | grep -q 'ACTIVATION QUEUE'
+  printf '%s' "$ctx" | grep -q 'ARMED BUT NOT IN EFFECT'
+}
