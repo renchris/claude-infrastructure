@@ -10,6 +10,22 @@
 
 ## 1. Verdict
 
+> ⚠️ **PARTIALLY CORRECTED 2026-08-09 by Phase E — the finding stands, the occupancy does not.**
+> The tuning-fingerprint observation is intact and was the sharpest call in this panel: `ptmx_max`
+> is genuinely the only table in the hundreds, genuinely stock, genuinely unmonitored, and
+> exhaustion is genuinely silent. But **the occupancy figures below are inflated by a constant 16**:
+> `ls /dev/ttys* | wc -l` also counts 16 **static legacy** BSD nodes (`/dev/ttys0..ttysf`, major 64,
+> root:wheel, present since boot) that are allocated to nobody and governed by nothing. So the
+> "**21 of 511** at ~6 live sessions" below was **5 of 511**, and the projected **1.5–4 ptys per
+> session-equivalent** is really **~1.13 — one pty per PANE plus ~2 ambient**. 150 sessions
+> projects to **~152, not 300–600+**, and the wall is at **~509 panes**. Prediction 1 in §6
+> ("ramp to 50, predict 60–90") is superseded: predict **52 ± 4**.
+> Full correction + the allocate/release test that proves the offset:
+> `docs/research/pty-ceiling-2026-08-09.md` §2. Landed gauge: `scripts/pty-census.sh`.
+>
+> §2's separate finding — that `capacity-admit.sh` has no pty term and no compressor term — is
+> unaffected and remains true.
+
 **The panel found a new member of the class, and all three panelists ranked it #1 independently: the pty
 namespace.** `kern.tty.ptmx_max = 511` — the only kernel table on this box sized in *hundreds* while every
 other is 10⁴–10⁶, and the only one still at its stock value.
