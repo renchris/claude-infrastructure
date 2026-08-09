@@ -63,6 +63,51 @@ RE_NEG = re.compile(r"^!\s+\S")
 RE_COND_OPEN = re.compile(r"(?<![\[\w$])\[\[(?=\s|$)")
 RE_ARITH_OPEN = re.compile(r"(?<![\w$])\(\((?=[\s\w$!+-])")
 
+
+def mask_arith_expansion(s: str) -> str:
+    """Blank every `$(( ... ))` EXPANSION span, preserving length.
+
+    `$(( ))` is a value, not a command: it has no exit status of its own, so nothing
+    inside it can be a dead assertion. `RE_ARITH_OPEN`'s negative lookbehind exempts the
+    expansion's OWN `((` — the `$` is right there — but it cannot see one nesting level
+    down. In `averaged=$(( ((total - LIMIT) / (entry_b / n)) + 1 ))` the inner `((` is
+    preceded by `(`, which is neither `\\w` nor `$`, so it matched and the line — a plain
+    ASSIGNMENT, never an assertion — was reported `DEAD [arith]`. That is a false RED in
+    a commit gate: it blocked a real commit on 2026-08-08, and the only way past it was to
+    flatten the arithmetic into two statements, i.e. edit correct code to appease a lint.
+
+    Masking the whole span (rather than widening the lookbehind) keeps the fix aimed at
+    the actual class — arithmetic that is EVALUATED FOR ITS VALUE — so a genuine bare
+    `(( x == y ))` elsewhere on the same line is still seen. Spans are matched by paren
+    depth, so nesting of any depth is covered.
+
+    An UNTERMINATED `$((` is deliberately left unmasked: blanking to end-of-string there
+    could swallow a real assertion, and over-reporting is the safe direction.
+    """
+    out = list(s)
+    i = 0
+    n = len(s)
+    while i < n - 2:
+        if s[i] == "$" and s[i + 1] == "(" and s[i + 2] == "(":
+            depth = 0
+            j = i + 1
+            while j < n:
+                if s[j] == "(":
+                    depth += 1
+                elif s[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j < n:  # matched close found — blank the whole span
+                for k in range(i, j + 1):
+                    out[k] = " "
+                i = j + 1
+                continue
+        i += 1
+    return "".join(out)
+
+
 # Statement keywords that open a nesting level.
 RE_OPENER = re.compile(r"^(if|while|until|for|case)\b")
 # Words that close / continue a nesting level; never assertions themselves.
@@ -467,7 +512,7 @@ def elem_dead_class(elem: str) -> str | None:
         return CLASS_NEG
     if RE_COND_OPEN.search(elem):
         return CLASS_COND
-    if RE_ARITH_OPEN.search(elem):
+    if RE_ARITH_OPEN.search(mask_arith_expansion(elem)):
         return CLASS_ARITH
     return None
 
