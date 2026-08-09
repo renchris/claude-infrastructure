@@ -40,7 +40,10 @@ setup() {
 
   export PSTAB="$BATS_TEST_TMPDIR/pstab"; : > "$PSTAB"
   # ps shim: `-Ao pid=,args=` emits the synthetic table; `-o comm= -t <tty>` reports the pane
-  # liveness the watcher polls (empty ⇒ CC already gone ⇒ close immediately, no 180s loop).
+  # liveness the watcher polls. EMPTY means the tty is UNREADABLE, which is `unknown` — not "CC
+  # already gone", the conflation this comment carried until 2026-08-08 (item 71909cbeee08). Both
+  # states skip the 180s loop identically (pane_cc_state != cc), so nothing about these tests'
+  # timing depends on the distinction; only the post-close DIAGNOSIS does, and H2 asserts it.
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -292,8 +295,22 @@ SH
   run bash "$HF" __selfclose "$PANE" /dev/ttys022 "" ""
   [ "$(grep -c 'session close' "$IT2_LOG")" -eq 4 ]   # bounded — exactly 4 attempts
   [[ "$output" == *"PANE CLOSE FAILED"* ]] || false
-  [[ "$output" == *"HUSK"* ]] || false
-  grep -q "HANDOFF-HUSK-PANE" "$NOTIFY_LOG"
+  # THE DIAGNOSIS FOLLOWS THE FIXTURE (updated 2026-08-08, item 71909cbeee08). This used to assert
+  # the literal word HUSK and the HANDOFF-HUSK-PANE page — i.e. "claude exited, the session is
+  # already gone". But the ps shim above answers EVERY `-t` form empty when PS_CC_ALIVE=0, and
+  # pane_cc_state's own rule is that a tty with no readable processes is `unknown`, never
+  # shell-only ("Believing it 'shell-only' is the fail-dangerous default itself"). So this fixture
+  # models an UNREADABLE tty, and the old assertion pinned the subject asserting a death it had
+  # never checked — the exact false report of session c5f80b8b (2026-07-30), where the session was
+  # live and answering. A test pinning behaviour the subject changed in order to PREVENT stops
+  # being stale and starts guarding the bug (memory: stale-assertion-becomes-an-inverted-guard).
+  # THE TEST'S INTENT IS UNCHANGED and still fully asserted: bounded retries, a loud failure line,
+  # and a desk page. Only the claim about WHAT was found moved, to the one this fixture earns. The
+  # husk and still-alive branches are pinned in tests/handoff-selfclose.bats §2b, over a ps model
+  # rich enough to tell all three apart.
+  [[ "$output" == *"is UNKNOWN"* ]] || false
+  ! [[ "$output" == *"the session is already gone"* ]] || false
+  grep -q "HANDOFF-CLOSE-FAILED-UNKNOWN" "$NOTIFY_LOG"
 }
 
 @test "H3: the happy path still closes on the FIRST attempt (no added latency)" {

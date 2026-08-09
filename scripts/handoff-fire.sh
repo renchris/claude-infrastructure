@@ -1251,6 +1251,198 @@ self_pane_id() { # → this pane's id IN ITS OWN id space, or empty when the cal
   printf '%s' "${v##*:}"
 }
 
+# ── SELF-IDENTITY: THE ENV VAR IS A CLAIM, THE PROCESS TREE IS THE EVIDENCE (item 71909cbeee08) ───
+# self_pane_id above answers "which pane am I" from $KITTY_WINDOW_ID / $ITERM_SESSION_ID and nothing
+# else. Both inherit transitively and permanently — across exec, and across pane boundaries — so
+# both can name a pane this process does not live in, and every gate below keys on that answer.
+#
+# MEASURED (2026-07-30, session c5f80b8b). `self-close --terminal` targeted pane
+# 1C80FDB5-1BB5-4C5D-9107-899232DA2371, which was not among the 21 live iTerm2 panes; the session's
+# real pane was 86A04828-EA39-4974-A022-8DD0385654BC, confirmed by reading its statusline. Four
+# close attempts could not possibly succeed, and the path then reported "claude exited, pane still
+# open / the session is already gone" — both false; the session was live and answering.
+#
+# THAT TRACE'S FIRST HALF IS ALREADY CLOSED, and this is deliberately not a re-fix of it: pane_proof
+# (:1288, landed 2026-08-05) refuses when the id names NO live pane, so the four futile attempts and
+# the husk page can no longer be reached that way.
+#
+# WHAT pane_proof STRUCTURALLY CANNOT SEE. It proves the id names A live pane. It does not prove the
+# id names MY pane. A stale id that happens to name a DIFFERENT live pane passes it — and then /exit
+# is typed into a stranger's composer and their pane is closed, which is an operator's session
+# vanishing mid-turn, the exact failure the whole succession-legibility apparatus exists to prevent.
+# On kitty that is not a coincidence case but the default one: kitty numbers windows with small
+# integers and REUSES them across restarts (22 live windows numbered 700-866 on this box,
+# 2026-08-08), so a stale id collides BY CONSTRUCTION rather than by luck. The fired-peer stamp gate
+# (:4104) is not a second line of defence either — it looks the stamp up UNDER THE SAME WRONG ID, so
+# it can only ever agree with it.
+#
+# THE ORACLE IS THE PROCESS TREE, the one thing this process cannot be wrong about:
+#   kitty   `kitty @ ls` reports the pid each window launched. MINE iff that pid is an ancestor of
+#           mine. Verified exact on this box 2026-08-08: window 866 → pid 44222, the
+#           `login … kitten run-shell` five hops above the Bash tool's own shell.
+#   iTerm2  a pane exposes its tty. MINE iff that tty is owned ANYWHERE in my ancestry. Anywhere,
+#           not merely by me: the Bash tool's shell has no controlling tty at all (ps prints `??`),
+#           and under the resume path's `expect` wrapper CC sits on a NESTED pty while the pane's
+#           real tty belongs to an ancestor. Matching only my own tty calls both of those not-mine,
+#           which is precisely the false negative this must not have.
+#
+# POLARITY — only a POSITIVE DISPROOF may refuse. A false negative here aborts a HEALTHY self-close
+# and leaks the pane and its worktree, a bill this file has already paid twice (:1461, :3382). So
+# there are THREE verdicts and `unknown` is byte-for-byte today's behaviour: an unreachable terminal
+# API, a stubbed shim, an absent `ps` — none is evidence about the pane, and none refuses anything.
+own_ancestry_pids() { # → this pid, then each ancestor, one per line · bounded · never fails
+  local p="$$" n=0
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 32 ]; do
+    printf '%s\n' "$p"
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]')" || p=""
+    n=$((n + 1))
+  done
+}
+
+own_ancestry_ttys() { # → the DISTINCT ttys owned anywhere in this ancestry, as basenames
+  local pids csv
+  pids="$(own_ancestry_pids)" || pids=""
+  [ -n "$pids" ] || return 0
+  csv="$(printf '%s' "$pids" | tr '\n' ',' | sed 's/,*$//')"
+  [ -n "$csv" ] || return 0
+  # ONE ps over the whole comma-list (BSD ps accepts it), then awk — not a grep chain. A grep that
+  # filters everything out exits 1, and under `set -o pipefail` that becomes the function's status.
+  ps -o tty= -p "$csv" 2>/dev/null | awk 'NF && $1 != "??" { s[$1] = 1 } END { for (t in s) print t }' || true
+}
+
+_it2_pane_tty_listing() { # → "<pane-id><TAB><tty>" per live iTerm2 session · empty when unreadable
+  hf_bounded osascript - <<'AS' 2>/dev/null
+on run argv
+  if not (application id "com.googlecode.iterm2" is running) then return ""
+  set out to ""
+  tell application id "com.googlecode.iterm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          set out to out & (id of s) & tab & (tty of s) & linefeed
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return out
+end run
+AS
+}
+
+pane_ownership() { # $1=pane id → prints mine|not-mine|unknown · ALWAYS exits 0
+  local pane="${1:-}" kpid ptty mine
+  [ -n "$pane" ] || { printf 'unknown'; return 0; }
+  if kitty_identity; then
+    kpid="$(kt_window_field "$pane" pid 2>/dev/null)" || kpid=""
+    [ -n "$kpid" ] || { printf 'unknown'; return 0; }
+    # here-string, never `printf … | grep -q`: grep exits on the match, SIGPIPEs the producer, and
+    # pipefail promotes 141 — so the probe would read FALSE precisely WHEN IT MATCHES (memory:
+    # pipefail-inverts-early-exit-probe). Same reason pane_proof uses one at :1331.
+    if grep -qxF -- "$kpid" <<<"$(own_ancestry_pids)"; then printf 'mine'; else printf 'not-mine'; fi
+    return 0
+  fi
+  ptty="$(as_tty "$pane")" || ptty=""
+  [ -n "$ptty" ] || { printf 'unknown'; return 0; }
+  mine="$(own_ancestry_ttys)" || mine=""
+  [ -n "$mine" ] || { printf 'unknown'; return 0; }
+  if grep -qxF -- "${ptty##*/}" <<<"$mine"; then printf 'mine'; else printf 'not-mine'; fi
+}
+
+own_pane_id() { # → the pane id this process ACTUALLY lives in, or empty when unresolvable
+  local pids ttys listing
+  if kitty_identity; then
+    pids="$(own_ancestry_pids)" || pids=""
+    [ -n "$pids" ] || return 0
+    kt ls 2>/dev/null | HF_ANC="$(printf '%s' "$pids" | tr '\n' ' ')" /usr/bin/python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+anc = set(os.environ.get("HF_ANC", "").split())
+for ow in d:
+    for t in ow.get("tabs", []):
+        for w in t.get("windows", []):
+            # "id is not None" deliberately: this value becomes the pane a destructive actuator
+            # writes to, and a bare print would emit the string "None" as a pane id.
+            # No backticks anywhere in this block: shellcheck parses the single-quoted argument
+            # as shell and SC2016s a backtick as an unexpanded command substitution — an
+            # info-level finding, which the land gate treats as RED on a changed line.
+            if str(w.get("pid")) in anc and w.get("id") is not None:
+                print(w.get("id")); sys.exit(0)
+sys.exit(0)' 2>/dev/null || true
+    return 0
+  fi
+  ttys="$(own_ancestry_ttys)" || ttys=""
+  [ -n "$ttys" ] || return 0
+  listing="$(_it2_pane_tty_listing)" || listing=""
+  [ -n "$listing" ] || return 0
+  # SPACE-separated into awk, never newline-separated: BSD awk dies "newline in string" on an
+  # embedded newline in -v, and it dies SILENTLY while the substitution still succeeds — the same
+  # trap pane_cc_state documents at :1080.
+  printf '%s\n' "$listing" | awk -F'\t' -v ttys="$(printf '%s' "$ttys" | tr '\n' ' ')" '
+    BEGIN { n = split(ttys, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+    NF >= 2 { t = $2; sub(/^.*\//, "", t); if (t in want) { print $1; exit } }' || true
+}
+
+# THE GATE ITSELF, ONE COPY FOR BOTH ACTUATORS. self-close and --recycle resolve their pane through
+# the same self_pane_id and are exposed to the same wrong-pane hazard; --recycle's is strictly
+# WORSE, because it does not merely close the pane it names — it types /exit AND a launcher command
+# into it, so a stale id relaunches a fresh CC in a stranger's pane, pointed at this session's
+# worktree and this session's brief. Two copies of a three-state gate is how sibling auditors end up
+# disagreeing about a single population (memory: sibling-auditors-must-share-the-state-model), so
+# there is one, and both call sites consume its verdict.
+# Sets $HF_VERIFIED_PANE to the id the caller should ACT ON. Returns 0 = proceed · 2 = refuse.
+verify_self_pane() { # $1=claimed pane id  $2=1 if the caller stated it explicitly  $3=mode label
+  local claimed="$1" explicit="$2" mode="$3" verdict true_pane why consequence
+  HF_VERIFIED_PANE="$claimed"
+  verdict="$(pane_ownership "$claimed")"
+  case "$verdict" in
+    mine) return 0 ;;
+    unknown)
+      # NOT a refusal. This is "no evidence either way" — a wedged terminal API, a stubbed shim, a
+      # ps that answered nothing — and refusing on it would abort healthy retirements and leak their
+      # panes and worktrees. Degrade to exactly the pre-gate behaviour, and SAY so rather than
+      # inheriting a guess.
+      echo "⚠ self-identity UNPROVEN for pane $claimed (the terminal API returned no owner) — proceeding on the environment's claim, as before this gate existed" >&2
+      return 0 ;;
+  esac
+  true_pane="$(own_pane_id)" || true_pane=""
+  if [ "$explicit" = 0 ] && [ -n "$true_pane" ] && [ "$true_pane" != "$claimed" ]; then
+    # ADOPT — the DoD's prescribed repair (reverse-map pid→tty→pane), and what turns the defect from
+    # "acts on the wrong pane" into "acts on the right one". Only for a DEFAULTED id: the tool chose
+    # it, so the tool may correct it. LOUD, because a pane silently changing which pane it means is
+    # the very class of surprise this gate exists to stop.
+    { echo "→ self-identity CORRECTED ($mode): the environment named pane $claimed, but the process tree proves this session does NOT live there — it lives in pane $true_pane. Acting on THAT one."
+      echo "   \$KITTY_WINDOW_ID/\$ITERM_SESSION_ID inherit across exec and across pane boundaries, so a resume, a crash-recreate or a kitty renumber leaves them naming a pane someone else now uses."
+    } >&2
+    HF_VERIFIED_PANE="$true_pane"
+    return 0
+  fi
+  # WHY THE TWO REFUSAL REASONS ARE NAMED SEPARATELY: they send a reader to different remedies. An
+  # explicit --session-id that is not ours is a CALLER bug (fix the caller); a defaulted id we could
+  # not repair is an unresolvable pane (close it by hand, or re-fire).
+  if [ "$explicit" = 1 ]; then
+    why="That id came from --session-id, so it is an ASSERTION BY THE CALLER. A wrong one is a caller bug, and silently retargeting an explicitly-named pane would be the same surprise in the other direction — so this refuses instead of repairing."
+  else
+    why="And this session's own pane could not be resolved either, so there is nothing safe to act on in its place."
+  fi
+  case "$mode" in
+    --recycle) consequence="Recycling it would type /exit AND a launcher command into a DIFFERENT live session's composer — killing their turn and relaunching a CC in their pane against this session's worktree." ;;
+    *)         consequence="Closing it would end a DIFFERENT live session mid-turn." ;;
+  esac
+  cat >&2 <<USAGE
+!! $mode REFUSED: pane $claimed is NOT this session's pane.
+!!   The process tree says so, and it is the one oracle here that cannot be stale: no ancestor of
+!!   this process owns that pane's tty (iTerm2) or launched pid (kitty).
+!!   $why
+!!   $consequence That is the failure this gate exists for
+!!   (observed 2026-07-30, session c5f80b8b; memory: handoff-succession-legibility).
+!!   Nothing was typed and nothing was closed; this session stays alive.
+USAGE
+  return 2
+}
+
 # The probe itself, run BY the watcher as its second act (the foreground consumes its verdict via
 # await_pane_proof). Read-only, and over the REAL transport: `session list` goes through the same
 # shim the relaunch/close write will take, so it cannot be right about a route the write resolves
@@ -3390,9 +3582,15 @@ if [ "${1:-}" = "__selfclose" ]; then
   elif at_shell; then
     : # CC already exited before our first look (fast graceful exit, or shell-only pane) → close now
   else
+    # SELFTEST SEAM (item 71909cbeee08), the same shape as HANDOFF_TTY_RETRIES / _RETRY_SLEEP_S
+    # above. The "CC is STILL ALIVE when the close fails" branch below is only reachable after this
+    # grace expires, so at the shipped 180s/5s it is not assertable in a suite at all — and that is
+    # precisely the branch that spent a year telling operators their live session was gone. Unset,
+    # the arithmetic is byte-for-byte what it was: 180 and 5.
+    _grace="${HF_SELFCLOSE_GRACE_S:-180}" _step="${HF_SELFCLOSE_GRACE_STEP_S:-5}"
     waited=0
-    while [ "$waited" -lt 180 ]; do
-      sleep 5; waited=$((waited+5))
+    while [ "$waited" -lt "$_grace" ]; do
+      sleep "$_step"; waited=$((waited+_step))
       cc_alive || break                            # now tree-aware: expect's nested pty no longer hides CC
       # One CR nudge at 60s (it2 python API — proven detached): submits a stranded /exit whose
       # Enter a redraw swallowed; a no-op on an empty composer. MUST be \r — Ink ignores \n.
@@ -3456,9 +3654,40 @@ if [ "${1:-}" = "__selfclose" ]; then
     sleep 2
   done
   if [ "$_close_ok" = 0 ]; then
-    echo "!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude exited, pane still open). Close it by hand; the session is already gone." >&2
+    # ── ASSERT THE DEATH, DO NOT ASSUME IT (item 71909cbeee08) ────────────────────────────────────
+    # This branch used to state, unconditionally, "claude exited, pane still open … the session is
+    # already gone" — to the operator's terminal AND to the desk page. It asserted two facts it had
+    # not checked, and on 2026-07-30 (session c5f80b8b) both were FALSE: claude was live and
+    # answering. The evidence was already in hand and ignored — the wait loop 50 lines up computes
+    # `cc_alive` and prints "⚠ CC still alive after Ns" before falling through to here.
+    #
+    # It matters because the two states have OPPOSITE remedies. A real husk is a dead session's
+    # leftover pane: close it, nothing is at risk. A live session behind a failed close is a session
+    # STILL RUNNING that has been told it is dead — and an operator who believes the page closes a
+    # pane with work in it. Telling someone their session is gone when it is not is the same class
+    # of harm as closing it for them, only slower.
+    #
+    # Re-read at the failure instant, not from a variable: up to ~190s and four close attempts have
+    # passed since the loop's verdict. Three states, and `unknown` says unknown — a tty that cannot
+    # be read is not evidence of death (pane_cc_state's own rule).
+    _final="$(pane_cc_state "${TTY_PATH:-}")"
+    case "$_final" in
+      cc)
+        _hk="!! PANE CLOSE FAILED after 4 attempts — and the session is NOT gone: claude is STILL RUNNING in pane $SID (re-checked at the failure instant on ${TTY_PATH:-?}). The /exit did not take. Do NOT close this pane blind; it has a live session in it."
+        _pg="HANDOFF-CLOSE-FAILED-LIVE: self-close of $SID failed 4/4 AND claude is still running there — this is NOT a husk. The session did not exit and no work is lost, but it also did not retire: it is holding a pane and a worktree. Look at the pane before closing anything."
+        ;;
+      shell)
+        _hk="!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude confirmed gone, pane still open at a shell prompt). Close it by hand; the session is already gone."
+        _pg="HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (claude CONFIRMED gone on ${TTY_PATH:-?}) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk."
+        ;;
+      *)
+        _hk="!! PANE CLOSE FAILED after 4 attempts for pane $SID — and whether the session exited is UNKNOWN (its tty '${TTY_PATH:-none}' could not be read). Look at the pane before closing it: it may still hold a live session."
+        _pg="HANDOFF-CLOSE-FAILED-UNKNOWN: self-close of $SID failed 4/4 and its liveness could not be determined (tty '${TTY_PATH:-none}' unreadable). It may be a husk or it may be a live session — this page cannot tell you which, and neither could the close. Look before closing."
+        ;;
+    esac
+    echo "$_hk" >&2
     if [ -x "$HOME/.claude/bin/cc-notify" ]; then
-      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (session is gone) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk." >/dev/null 2>&1 || true
+      "$HOME/.claude/bin/cc-notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_pg" >/dev/null 2>&1 || true
     fi
   fi
   if [ -n "$SUCCESSOR" ]; then
@@ -3946,9 +4175,9 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0
   while [ $# -gt 0 ]; do case "$1" in
-    --session-id)  SC_SID="${2:?--session-id needs a value}"; shift 2 ;;
+    --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
     --successor-assume-engaged) SC_ASSUME_ENGAGED=1; shift ;;
     --terminal)    SC_TERMINAL=1; shift ;;
@@ -3988,6 +4217,15 @@ if [ "${1:-}" = "self-close" ]; then
   pin_term_verdict_for_watcher
   SC_SID="${SC_SID:-$(self_pane_id)}"
   [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
+  # ---- SELF-IDENTITY GATE (item 71909cbeee08) — prove the pane is OURS before anything acts on it.
+  # FIRST, ahead of every gate below, because all of them key on $SC_SID: the fired-peer stamp is
+  # looked up under it (:4034), the assignee tty read resolves from it (:4042), the successor
+  # equality check compares against it (:4012), and the watcher types /exit into it. An identity
+  # settled after those have already reasoned about it is not a gate, it is a footnote.
+  # See the pane_ownership / verify_self_pane headers (:1253) for the oracle, the three verdicts,
+  # and why `unknown` must not refuse.
+  verify_self_pane "$SC_SID" "$SC_SID_EXPLICIT" self-close || exit 2
+  SC_SID="$HF_VERIFIED_PANE"
   # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
   # a close with no declared continuation read as "the handoff killed our session" — twice a real
   # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
@@ -4618,6 +4856,14 @@ if [ "$RECYCLE" = 1 ]; then
   pin_term_verdict_for_watcher
   SID="${SESSION_ID:-$(self_pane_id)}"
   [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
+  # SAME SELF-IDENTITY GATE AS self-close, and needed MORE here (item 71909cbeee08). Recycle does not
+  # merely close the pane it names: it types /exit AND a launcher command into it. A stale id
+  # therefore kills a stranger's turn and relaunches a CC in their pane against THIS session's
+  # worktree and brief — strictly worse than the wrong-pane close the item was filed for, through
+  # the identical self_pane_id read. `unknown` proceeds exactly as before; only a positive disproof
+  # refuses. (Scope grown under Follow-On Gate F1-F4: same defect, same helper, same envelope.)
+  verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
+  SID="$HF_VERIFIED_PANE"
   # Same-dir recycle only: relaunch stays in this pane's dir by definition, so CLAUDE_ISOLATION_SKIP=1
   # must stop the repo-root launcher auto-routing into a fresh worktree. A relocating recycle is
   # landing in an explicit dir and takes the ordinary --worktree/--cwd path (see RECYCLE_RELOC above).
