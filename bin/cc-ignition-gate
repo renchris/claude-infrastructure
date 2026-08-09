@@ -1,0 +1,251 @@
+#!/bin/bash
+# cc-ignition-gate — box-wide admission serializer for DEV-TOOLCHAIN COLD COMPILES.
+#
+#   cc-ignition-gate [--class <label>] [--check]
+#
+# Blocks until this box has no cold-compile burst in flight, then exits 0 so the caller's own
+# command runs. It is a WAITER, not a lock holder: it never wraps, never execs, never holds a
+# mutex across the caller's work. That shape is what lets it be prefixed onto ANY command —
+# `cc-ignition-gate ; <whatever the agent wrote>` — including the compound, multi-line,
+# heredoc-bearing, backgrounded forms that are 231 of the 232 real ignition commands in this
+# fleet's own 8.8-day Bash corpus (measured 2026-08-09; see WHY NOT A WRAPPER below).
+#
+# WHY THIS EXISTS (CONCURRENCY_PROGRAM.md §S6.5; crash-rootcause-2026-08-09.md).
+# All six kernel panics on this box ignite the same way: a dev-toolchain burst — `next dev` cold
+# compile, `next-server` postcss worker pools — floods the VM compressor's SEGMENT structures at
+# only ~28% mean segment fill, the pageout path wedges, watchdogd misses its checkins, the kernel
+# panics. Never session count. Measured storm shape: 18→372 procs in 90 s · 700 procs / 38.9 GB ·
+# 736 procs / 44.7 GB. At the program's design point of 150 resident sessions the whole burst
+# budget is ~19 GB against a measured 372-proc wave at ~23 GB, so there is no room for even ONE
+# unbounded cold compile, let alone two superimposed. Serialising ignition to 1 concurrent is a
+# PRECONDITION of the 150-session target, not an optimisation of it.
+#
+# THE COMPRESSOR SENTINEL IS THE BACKSTOP, NOT THIS. `compressor-sentinel` (armed 2026-08-09,
+# 40 MB floor, ACT_CAP=400) SIGSTOPs a node horde once segments are already climbing — ~10 s of
+# exposure on a >400-member wave, and only AFTER the box is in the failure mode. This gate acts
+# BEFORE ignition, which is the only place the burst is cheap to stop.
+#
+# WHY NOT A WRAPPER (the design decision this file is built on, and it was measured, not assumed).
+# The obvious shape is `cc-ignition-admit <cmd>` prefixed onto the agent's command, exactly as
+# hooks/qos-rewrite.sh prefixes taskpolicy(8) and bin/cc-cpubound. That shape can only ever be
+# applied to a SINGLE SIMPLE command — prefixing a compound is string surgery on a line whose parse
+# is no longer ours (`taskpolicy -c utility du -s x | sort` demotes `du` and nothing else). So the
+# coverage question is empirical, and the corpus answers it: of 232 entries in
+# ~/.claude/logs/bash-commands.log{,.gz} (2026-07-19 → 08-09) that actually RUN an ignition tool,
+# **231 are compound** — `cd X && (npx next dev … &) ; sleep 25; tail …`, `PORT=3033 NODE_OPTIONS=…
+# pnpm dev`, multi-line scripts with heredocs. A prefix wrapper would have covered ONE of 232.
+# A mechanism that covers 0.4% of its own population is not a conservative mechanism, it is an
+# inert one (memory: sensor-default-off-makes-blindness-the-shipping-path).
+#
+# `<gate> ; <original>` covers all 232 by construction, because it does no surgery on the original
+# at all: it prepends a complete statement and a separator. `;` and not `&&` deliberately — a first
+# line that is a comment (`# …`) turns `gate && # …` into an `&&` with no right operand, i.e. a
+# syntax error, while `gate ; # …` is fine. The gate prints NOTHING on stdout on the common path,
+# so a caller parsing its own output is unaffected.
+#
+# THE PREDICATE — two independent terms, either of which means "wait":
+#
+#   1. INCUMBENT. A process whose argv is ignition-shaped AND whose elapsed time is under
+#      CC_IGNITION_SETTLE_S. This is what makes the gate a SERIALIZER: at most one compile can be
+#      inside its ignition window at a time, and the window closes on its own, so nothing has to
+#      release a lock. A `next dev` server that has been up for an hour is NOT an incumbent — the
+#      burst is over; holding a mutex for the server's whole life would strand every other repo.
+#
+#   2. BURST. More than CC_IGNITION_BURST_N node-shaped processes on the box, excluding this
+#      fleet's own `claude`/mcp processes. This term exists because term 1 is blind to the storm
+#      W11 identified at source: an OLD `next-server` re-storms on mass invalidation (fleet edits
+#      spike `queued_tasks`, the scheduler spawns fresh workers with ZERO delay, and the only
+#      reaper fires after a module-graph completion that continuous edits prevent). Its etime is
+#      hours; only the process count tells. Term 2 is also the term that catches an ignition
+#      spelling term 1's ERE does not know about.
+#
+# ARGV ANCHORING IS LOAD-BEARING. Term 1's ERE is anchored at the START of argv and requires a
+# next-shaped argv[0]/argv[1]. A substring match would count this fleet's own agents: a session's
+# argv carries its whole brief, so `pgrep -f "next dev"` on this box matches every session that
+# MENTIONS a cold compile (memory: pgrep-f-matches-agent-briefs — a census read 50 where the truth
+# was 1). This gate is prefixed onto the commands of the very sessions that talk about it, so an
+# unanchored match would deadlock the fleet against its own vocabulary.
+#
+# FAIL-OPEN IS THE HARD CONTRACT. Every path exits 0. An unreadable `ps`, a missing `jq`, a
+# malformed table, an arithmetic failure, the wait budget running out — all ADMIT. Stranding an
+# agent's real work box-wide is a worse failure than a stagger, and the sentinel is the backstop
+# for what gets through. What we refuse to do is admit SILENTLY: every non-immediate outcome emits
+# a parseable `verdict=` token (memory: claimed-outcome-vs-checked-outcome — a `|| true` plus a
+# damping marker on a fake success deletes the message) and one JSON telemetry row.
+#
+# THE WAIT BUDGET IS BOUNDED BY THE CALLER'S TIMEOUT, NOT BY THE STORM. CC_IGNITION_WAIT_S
+# defaults to 90 s, under the Bash tool's 120 s default timeout: a gate that outwaits its caller
+# gets the whole tool call killed, the agent retries, and the compile never runs — stranding
+# dressed as safety. 90 s is also the measured duration of the 18→372-proc wave, so in the common
+# case the second compile starts exactly as the first's burst window closes. When the budget runs
+# out we admit anyway and SAY SO (`verdict=admit-timeout`); that residual is the sentinel's job.
+#
+# Seams (single-dash `${VAR-default}` where a set-but-EMPTY value must be honoured verbatim):
+#   CC_IGNITION_GATE=off      → kill switch: exit 0 immediately, no ps, no log.
+#   CC_IGNITION_SETTLE_S      → ignition window, seconds (90).
+#   CC_IGNITION_WAIT_S        → max total wait, seconds (90). 0 ⇒ check-and-admit, never sleep.
+#   CC_IGNITION_INTERVAL_S    → poll interval, seconds (3).
+#   CC_IGNITION_BURST_N       → node-process count above which the box counts as bursting (100).
+#   CC_IGNITION_LOG           → telemetry path (~/.claude/logs/ignition-gate.jsonl).
+#   CC_IGNITION_PS_FILE       → TEST SEAM: read process rows from this file instead of running ps.
+#
+# bash 3.2-safe (macOS default): no `declare -A`, no `mapfile`, no `[[ -v ]]`, no `wait -n`.
+# `set -e` is deliberately absent — every failure here must fall through to an admit, not abort.
+
+[ "${CC_IGNITION_GATE:-on}" = "off" ] && exit 0
+
+set -uo pipefail
+
+CLASS="unknown"
+CHECK_ONLY=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --class) CLASS="${2:-unknown}"; shift 2 || shift ;;
+    --check) CHECK_ONLY=1; shift ;;
+    --) shift; break ;;
+    *) shift ;;                      # unknown flag: ignore, never fail the caller's line
+  esac
+done
+
+SETTLE_S="${CC_IGNITION_SETTLE_S:-90}"
+WAIT_S="${CC_IGNITION_WAIT_S:-90}"
+INTERVAL_S="${CC_IGNITION_INTERVAL_S:-3}"
+BURST_N="${CC_IGNITION_BURST_N:-100}"
+LOG="${CC_IGNITION_LOG:-$HOME/.claude/logs/ignition-gate.jsonl}"
+
+# A non-numeric seam is a config error, and a config file must not be able to break a tool call:
+# fall back to the default rather than letting arithmetic fail open in some unexamined way.
+_num() { # <value> <default>
+  case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+}
+SETTLE_S="$(_num "$SETTLE_S" 90)"
+WAIT_S="$(_num "$WAIT_S" 90)"
+INTERVAL_S="$(_num "$INTERVAL_S" 3)"
+[ "$INTERVAL_S" -gt 0 ] 2>/dev/null || INTERVAL_S=3
+BURST_N="$(_num "$BURST_N" 100)"
+
+# ── the ignition ERE, anchored at argv[0] ─────────────────────────────────────────────────────
+# Real argv shapes on this box (verified against the corpus and against a live `next dev`):
+#   node /…/node_modules/.bin/next dev -p 3000      ← the launcher
+#   node /…/next/dist/bin/next build                ← ditto, other spelling
+#   next-server (v16.2.6)                           ← the dev server's own process title
+#   next-render-worker … / next-build-worker …      ← Next's named worker titles
+# `next start` is deliberately ABSENT: it serves a prebuilt app and compiles nothing.
+IGNITION_ERE='^([^[:space:]]*/)?(node|bun|npx|deno)[[:space:]]+([^[:space:]]*/)?next([[:space:]]|$)|^([^[:space:]]*/)?next[[:space:]]+(dev|build)([[:space:]]|$)|^next-(server|render-worker|build-worker|route-worker)([[:space:]]|$)'
+
+# Exclusion, applied to argv[0] ONLY. A `next dev` living under a path that contains the word
+# "claude" (every worktree of this repo does) must NOT be excluded, so the test is on the FIRST
+# token's basename, never a substring of the whole line.
+CLAUDE_ARGV0_ERE='^([^[:space:]]*/)?(claude|claude-latest|claude-next[0-9]*|claude-fable[0-9]*)([[:space:]]|$)'
+
+# ── process rows: "<pid> <etime> <comm> <args…>" ──────────────────────────────────────────────
+# ONE ps per poll. `-ww` because macOS ps truncates a column to its width and a truncated argv
+# silently drops matches (compressor-sentinel.sh:226 records the same lesson).
+# `etimes` is NOT available here: macOS ps ACCEPTS the keyword and prints an EMPTY column — a
+# silent non-verdict, not an error (measured 2026-08-09). So we take `etime` and parse it.
+ps_rows() {
+  if [ -n "${CC_IGNITION_PS_FILE:-}" ]; then
+    cat "$CC_IGNITION_PS_FILE" 2>/dev/null
+    return 0
+  fi
+  ps -Awwo pid=,etime=,comm=,args= 2>/dev/null
+}
+
+# ── the predicate ─────────────────────────────────────────────────────────────────────────────
+# stdin: process rows. Prints "<reason> <detail>" and returns 0 when the box is BUSY; returns 1
+# when it is clear. An unreadable/empty ps returns 1 (clear ⇒ admit) — fail-open, by contract.
+busy_reason() { # <settle_s> <burst_n>
+  awk -v settle="$1" -v burstn="$2" \
+      -v ere="$IGNITION_ERE" -v cl_ere="$CLAUDE_ARGV0_ERE" '
+    # etime is [[dd-]hh:]mm:ss — parse to seconds. Anything unparseable yields -1, which never
+    # satisfies "< settle", so a weird clock can only ever ADMIT.
+    function esec(e,   d, p, n, s) {
+      d = 0
+      n = index(e, "-")
+      if (n > 0) { d = substr(e, 1, n - 1) + 0; e = substr(e, n + 1) }
+      n = split(e, p, ":")
+      if (n == 3)      s = p[1] * 3600 + p[2] * 60 + p[3]
+      else if (n == 2) s = p[1] * 60 + p[2]
+      else return -1
+      return d * 86400 + s
+    }
+    {
+      pid = $1; et = $2; comm = $3
+      args = $0
+      sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]*/, "", args)
+      if (args == "") next
+      if (args ~ cl_ere) next                      # this fleet is not a cold compile
+
+      # TERM 2 — the burst census. comm basename exactly `node`, same under-inclusive test the
+      # sentinel uses: a comm containing a space yields a prefix whose basename is not `node`,
+      # which drops the row rather than guessing at it.
+      nb = split(comm, cp, "/"); base = cp[nb]
+      if (base == "node") nodes++
+
+      # TERM 1 — the incumbent.
+      if (args ~ ere) {
+        s = esec(et)
+        if (s >= 0 && s < settle) { if (inc == "") { inc = pid; incage = s } }
+      }
+    }
+    END {
+      if (inc != "") { printf "incumbent pid=%s age_s=%s\n", inc, incage; exit 0 }
+      if (nodes + 0 > burstn) { printf "burst node_n=%d limit=%d\n", nodes, burstn; exit 0 }
+      printf "clear node_n=%d\n", nodes + 0
+      exit 1
+    }
+  '
+}
+
+# ── telemetry: one row per invocation, never on the kill-switch path ──────────────────────────
+# jq-built so a reason containing a quote can never produce a line that breaks a downstream
+# `jq -rs` slurp (memory: a single malformed line reads as "no records" and flips an alarm green).
+emit_row() { # <verdict> <waited_s> <reason>
+  command -v jq >/dev/null 2>&1 || return 0
+  [ -n "$LOG" ] || return 0
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null || return 0
+  jq -cn --arg ts "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" --arg v "$1" --arg c "$CLASS" \
+        --argjson w "$2" --arg r "$3" \
+        '{ts:$ts, gate:"ignition", verdict:$v, class:$c, waited_s:$w, reason:$r}' \
+    >> "$LOG" 2>/dev/null || true
+}
+
+say() { printf 'cc-ignition-gate: %s\n' "$1" >&2; }
+
+# ── the wait loop ─────────────────────────────────────────────────────────────────────────────
+# BUSY IS THE rc, NOT THE STRING. `x="$(cmd)" || x=""` would discard the `clear node_n=N` diagnostic
+# on the very path that prints it — the assignment succeeds, then `||` fires on the pipeline's
+# non-zero rc and blanks it. The verdict and its evidence must survive together, so rc is captured
+# separately and the string is never used as a predicate.
+probe() { REASON="$(ps_rows | busy_reason "$SETTLE_S" "$BURST_N")"; BUSY=$?; }
+
+probe
+if [ "$BUSY" -ne 0 ]; then
+  emit_row admit 0 "${REASON:-no-rows}"
+  exit 0
+fi
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  say "verdict=busy reason=$REASON (--check: not waiting)"
+  emit_row busy 0 "$REASON"
+  exit 0
+fi
+
+say "verdict=waiting reason=$REASON budget=${WAIT_S}s — serialising cold compiles (§S6.5)"
+WAITED=0
+while [ "$WAITED" -lt "$WAIT_S" ]; do
+  sleep "$INTERVAL_S"
+  WAITED=$((WAITED + INTERVAL_S))
+  probe
+  if [ "$BUSY" -ne 0 ]; then
+    say "verdict=admit-after-wait waited=${WAITED}s"
+    emit_row admit-after-wait "$WAITED" "${REASON:-no-rows}"
+    exit 0
+  fi
+done
+
+# Budget exhausted. We ADMIT — see THE WAIT BUDGET above — but this is the one outcome that must
+# never be silent: it is the residual the compressor sentinel is left holding.
+say "verdict=admit-timeout waited=${WAITED}s reason=$REASON — ADMITTED UNGATED; sentinel is the backstop"
+emit_row admit-timeout "$WAITED" "$REASON"
+exit 0
