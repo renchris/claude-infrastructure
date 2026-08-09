@@ -141,7 +141,7 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
   for spec in \
     "scripts/nightly-regression.sh|run_check \"bats:|1" \
     "hooks/task-quality-gate.sh|bats \"\${runbats[@]}\"|2" \
-    "scripts/session-lifecycle-safety-gate.sh|bats \"\$1\"|1" \
+    "scripts/session-lifecycle-safety-gate.sh|bats \"\$suite\" </dev/null|1" \
     "scripts/route-safety-gate.sh|bats tests/cc-route.bats|1" \
     "scripts/respawn-safety-gate.sh|bats tests/cc-respawn.bats|1" \
     "scripts/limit-reset-safety-gate.sh|bats \"\$SUITE\"|1" \
@@ -199,11 +199,23 @@ build_ngr_probe() {   # $1=variant(fixed|mutant) → $BATS_TEST_TMPDIR/ngr.sh
 
 # ── G4/G5 — session-lifecycle-safety-gate: the helper-function shape ──────────────────────────────
 
+# RE-ANCHORED 2026-08-09 onto bats_row. The old anchor was `bats_green(){`, a ONE-LINE helper that
+# `real_line` could lift whole; item 38e4601fa933 (2026-08-08) DELETED it — deliberately, and the
+# subject says so at scripts/session-lifecycle-safety-gate.sh:48 — replacing it with the three-state
+# `bats_row` so that cc-bats' rc 75 (EX_TEMPFAIL: "nothing ran, nothing was verified") stops being
+# laundered into RED. The property these arms assert did NOT change: the successor still redirects
+# (`bats "$suite" </dev/null >/dev/null 2>&1`, line 71). Only the anchor died, which is exactly the
+# drift G1's floor exists to catch — and its instruction is RE-VERIFY the sites, never lower the
+# number, so the site was re-verified and the anchor moved to the surviving execution line.
+#
+# bats_row is multi-line, so instead of lifting a whole function this lifts the REAL execution line
+# and supplies the one variable it reads. That keeps the mutant honest: strip_redirect still asserts
+# `</dev/null` was present exactly once and is gone after, on bytes taken from the shipping file.
 build_slg_probe() {   # $1=variant → $BATS_TEST_TMPDIR/slg.sh
   local line
-  line="$(real_line "$SLG" 'bats_green(){')"
+  line="$(real_line "$SLG" 'bats "$suite" </dev/null')" || return 1
   if [ "$1" = mutant ]; then line="$(printf '%s\n' "$line" | strip_redirect)" || return 1; fi
-  { printf '%s\n' "$line"; printf 'bats_green tests/foo.bats\n'; } > "$BATS_TEST_TMPDIR/slg.sh"
+  { printf 'suite="tests/foo.bats"\n'; printf '%s\n' "$line"; } > "$BATS_TEST_TMPDIR/slg.sh"
 }
 
 @test "G4: session-lifecycle bats_green returns PROMPTLY on a stdin that never EOFs" {
