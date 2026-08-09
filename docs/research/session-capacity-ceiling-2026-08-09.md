@@ -459,3 +459,74 @@ the fleet dies at ~2 concurrent bursts no matter what the cap is.
 
 **Standing observable inherited with this transfer:** the next genuine storm's sentinel line must read
 `actuator: SIGSTOPped N process(es)`. Any `DISARMED` line after 04:36 today is a regression.
+
+---
+
+## 12 · The mechanism, settled — load is CONCURRENCY, not fork rate
+
+§10 left the mechanism open and specified the test. It has now been run, with the design flaw fixed:
+**N independent serial spawner loops**, so concurrency is exactly N and is set by how many loops run,
+never by a batch-`wait` barrier. Rate then varies freely as `N ÷ fork_duration`, which decouples the
+two variables that every earlier attempt had welded together.
+
+| N (concurrency) | fork kind | measured fork rate | load ADD |
+|---|---|---|---|
+| 4 | git (17.95 ms) | 884/s | **+2.5** |
+| 4 | `true` (2.12 ms) | 2,376/s | **+1.6** |
+| 16 | git | 1,255/s | **+17.5** |
+| 16 | `true` | 3,668/s | **+12.8** |
+
+**Load add tracks N and ignores rate.** The decisive pair is the cross-over:
+
+```
+2,376 forks/s at concurrency  4  →  +1.6 load
+1,255 forks/s at concurrency 16  →  +17.5 load
+```
+**Fork rate DOWN 1.9×, load UP 11×.** Rate spans 884 → 3,668/s (4.1×) across the four arms with no
+corresponding load response; N spans 4 → 16 (4×) and load follows it almost exactly.
+
+⇒ **`load ≈ mean number of simultaneously-runnable threads`. Fork *rate* is not a capacity variable;
+fork *concurrency* is.** This is what XNU's `sched_run_buckets[TH_BUCKET_RUN]` says on its face (§2.2),
+and it is now measured rather than assumed.
+
+### 12.1 · What this does to the capacity model
+
+The fleet at 12 sessions sits at load ~19 over a near-zero ambient baseline ⇒ **~1.6 runnable threads
+per session, time-averaged**. That is the whole capacity term:
+
+```
+max_sessions = ceiling_load ÷ runnable_threads_per_session
+             = 20 ÷ 1.6  ≈  12          (matches the observed refusals and the operator's ~15)
+150 sessions ⇒ requires ≤ 0.13 runnable threads/session — a 12× reduction
+```
+
+A session **blocked on the API contributes ~0**. So the 1.6 is duty cycle: the fraction of wall-clock
+during which that session has *something* runnable — the agent process's own threads plus every hook,
+statusline, poller and tool subprocess that happens to be running concurrently with it.
+
+### 12.2 · The lever ranking changes
+
+**§6 lever 1 ("cut forks/session in the hook path") is mis-specified and is hereby demoted.** Halving
+the *number* of forks changes nothing if the same number run *at the same time*; the 2,376-forks/s arm
+proves a high-rate workload can be nearly load-free. The correctly-specified lever is:
+
+> **Reduce per-session concurrent runnable threads — serialise, don't merely shrink.** Running a
+> session's hooks sequentially instead of in parallel cuts its contribution proportionally, at
+> identical total work. Making each hook *cheaper* (the 17.95 ms → 2.20 ms git-call saving) reduces
+> the *duration* each occupies a slot, which lowers the time-average — so it helps, but only through
+> occupancy, not through rate.
+
+Both surviving levers therefore attack the same product — **occupancy = concurrency × duration** —
+and either can deliver the 12×. That is a materially different engineering target from "make hooks
+fork less", and it is testable per-session before anything ships.
+
+**Caveat, stated because it bounds the arithmetic:** decay between arms was incomplete (arm baselines
+drifted 4.93 → 5.60 → 5.92 → 12.81), so the absolute ADD values at N=16 carry noise and the final
+box load had not returned to its ~4 baseline. The *ordering* is unaffected and is what carries the
+verdict — a lower-rate/higher-N arm producing 11× the load of a higher-rate/lower-N arm cannot be
+explained by baseline drift.
+
+**Next measurement (specified, not run):** sample runnable-thread count per session directly
+(`top`'s running figure and `ps -axo state,command` at ≥1 Hz, attributed by process tree) to confirm
+the 1.6 figure bottom-up and to rank *which* per-session components hold slots. That converts the 12×
+target into a named list of things to serialise.
