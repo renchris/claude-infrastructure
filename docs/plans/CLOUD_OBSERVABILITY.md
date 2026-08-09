@@ -1165,7 +1165,7 @@ gates the rest, because an unmeasured ceiling is how "15 sessions" became folklo
 | **G2** | Account affinity in `cc-cloud` — `declare --account`, `show`/`list --json` surface it, `account-of <id>`, legacy declarations read UNKNOWN and never crash. | 🔄 in flight (cloud `session_01EuB5…`) |
 | **G3** | `cc-notify --cloud <id>` per §9.2 — route via the OWNING account, refuse a mismatch with a WRONG-ACCOUNT message rather than the bare `Session not found`, and `--receipt` must exit UNKNOWN off-box (`{ok:true}` means *queued*, not read). | 🔄 in flight (`cloud-fleet`) |
 | **G4** | Off-box rendering — `cc-sessions --offbox` + `cc-where` answer for off-box ids, sourced from `cc-cloud`, never the registry. | ✅ `66ef4d8c` |
-| **G5** | `handoff-fire.sh --cloud` + `cc-dispatch` venue — honour `--venue local\|cloud`, record the owning account at claim, declare immediately after create (§8.1), and BRANCH the box-local capacity gate onto account headroom. Ships default-off. | ✅ `c06a13ad` — ⚠️ see the cwd finding below |
+| **G5** | `handoff-fire.sh --cloud` + `cc-dispatch` venue — honour `--venue local\|cloud`, record the owning account at claim, declare immediately after create (§8.1), and BRANCH the box-local capacity gate onto account headroom. Ships default-off. | 🔄 **REGRADED 2026-08-09** — `c06a13ad` built the venue flag, the default-off gate and the account-headroom term, all ✅. But **the fire path issues NO cloud create** (census below), so "declare immediately after create" has no create. The tap cannot deliver work until it exists. |
 | **G6** | The landing path — a cloud VM pushes only its own branch and cannot run `/ship`, so something local must reconcile and land `claude/*` or every result strands. | ✅ `c8b2b446` |
 | **G7** | The measured ceiling, recorded with its command. | ✅ **MEASURED** — `CONCURRENCY_PROGRAM.md` §S5.2. **Lower bound ≥2, no ceiling reached.** |
 | **G8** | Eligibility as a REFUSAL, not a doc note — repo-only ✅ · visual/design ❌ · anything about this box ❌. | ✅ `01f1bf33` |
@@ -1187,9 +1187,36 @@ both build the same bundle — 99,778,280 B from the worktree vs 99,712,572 B fr
 a 0.07% difference, both at **95% of the CLI's 100 MiB cap**. An interleaved live A/B then had the
 main checkout fail with the *identical* refusal while the worktree created; failures cluster by
 round, not by cwd. The real defect is a ~95 MiB upload with 3 retries — marginal by construction.
-`handoff-fire.sh --cloud` may keep inheriting the caller's worktree; what it must not do is treat
-the first `Bundle upload failed` as terminal. The upload disappears entirely once the Claude GitHub
+`handoff-fire.sh --cloud` may keep inheriting the caller's worktree; ~~what it must not do is treat
+the first `Bundle upload failed` as terminal~~. The upload disappears entirely once the Claude GitHub
 App is installed on the repo (the create then uses a `git_repository` source and bundles nothing).
+
+🚨 **G5 IS NOT ✅ — THE FIRE PATH HAS NO CREATE AT ALL (measured 2026-08-09).** The strike-through
+above was written on the assumption that `handoff-fire.sh --cloud` issues a create that could be
+retried. It does not. A repo-wide census of every invocation:
+
+```bash
+grep -rnE -- '--cloud' bin/ scripts/ | grep -E 'claude|CLAUDE_BIN|pty-run'
+```
+returns **only** `scripts/cloud-ceiling-probe.sh`, `scripts/cloud-bundle-probe.sh` and
+`scripts/cloud-websetup-drive.sh` — the two probes and the web-setup driver. `handoff-fire.sh`
+parses `--cloud` (L4975), gates it default-off (L4991-5009) and prices it against account headroom
+(L3523-3576), then **never invokes a create, never calls `cc-cloud declare`, and never touches the
+claude binary.** `grep -nE 'cc-cloud (preflight|declare)|claude .*--cloud' scripts/handoff-fire.sh`
+is empty.
+
+So G5's own wording — *"declare immediately after create (§8.1)"* — describes a create that does not
+exist on the fire path, and the row's ✅ (`c06a13ad`) covers the venue flag, the default-off gate and
+the capacity term, **not the ability to fire cloud work**. This is
+`[[spec-named-mechanism-may-be-prose-only]]` inside our own gate table: the gate was graded on the
+parts that were built.
+
+**Consequence for sequencing, and it outranks the retry:** opening the tap would change nothing
+today — with G2/G3 green and the GitHub App installed, `handoff-fire.sh --cloud` would still create
+no session. The unbuilt create is the real G5, and it should be graded 🔄, not ✅. Note also that the
+one existing end-to-end create+declare implementation lives in `cloud-websetup-drive.sh`, which a
+sibling session owns — so the fire path's create should be factored out of a probe rather than
+written a fourth time.
 
 ⚠️ **The classifier control is VOID and cannot currently be restored.** `--control` was designed
 around a free known-refusal: an account already at 100% weekly. Measured 2026-08-08, an account at
