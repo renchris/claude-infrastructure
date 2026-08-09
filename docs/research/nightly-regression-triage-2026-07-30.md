@@ -142,6 +142,12 @@ Two process notes worth carrying:
   (`desk-invariant.sh:332-343`, 7d) is bounded by **nothing**. Both sit 100× above the 6000s floor
   today, but a future edit lowering either passes the gate silently — and §3's own header names this
   exact failure: *"a detector with a blind spot is the bug it exists to prevent."* Filed, not fixed here.
+  > **CLOSED — `a9b784eb` taught the lint both forms** (§1b scores `-mtime +N`, §1c scores the
+  > marker-seconds constant). A live run now scores `hooks/dispatch-assert.sh` and
+  > `scripts/desk-invariant.sh` at 604800s each, so neither is "bounded by nothing" any longer and
+  > **no horizon needs hand-verification**. The line refs in this bullet (`:117`, `:332-343`) have
+  > since rotted — see § reaper-horizon-lint declarations below, where that rot turned out to be the
+  > item's real remaining work.
 
 Selftest 21 → 37 assertions, 0 failed, on `/bin/bash` 3.2 (what the plist runs). Every new branch is
 RED-proven, including the two that must stay RED (a regressed bar, an undeclared bar) and a real
@@ -244,6 +250,60 @@ Two notes for whoever picks up the neighbouring items:
   LEG 1 on both runs, with all eight gates finishing in 245s/422s total. That is in tension with
   item `38e4601fa933`'s premise that they outran a 900s probe. Deliberately **not** acted on here: a
   baseline needs each gate timed on its own, and this table's own rule is *never guess these*.
+
+## reaper-horizon-lint declarations — closed (2026-08-08, item `74a0896ee989`)
+
+**All four files the item named were already declared before it was dispatched, and the lint was
+already clean.** The item read *"4 UNDECLARED reapers on evidence artifacts —
+`bin/cc-recover-safeguard`, `hooks/lead-crash-watchdog.sh`, `hooks/dispatch-assert.sh`,
+`scripts/desk-invariant.sh`"*. That is the page's stale 4-file list verbatim — the same list the
+**process note two sections above** warned about (*"Re-derive from a run, never act on a page's
+list"*), minted into a work item anyway, nine days later. `a9b784eb` had declared all four and taught
+the lint the two horizon forms it was blind to; a live run at dispatch scored `dispatch-assert.sh`
+and `desk-invariant.sh` at 604800s each and listed the other two as reviewed non-reapers.
+
+### What was actually still open: the justifications, not the declarations
+
+A `$DECLARED` entry has two halves, and only one was ever re-checked. The **horizons** are re-scored
+every run by §1–§2b. The **justification** — the prose block a future author reads to decide whether
+their new `rm` is safe — was never checked by anything, and three of the four had rotted:
+
+| entry | claim as written | live code |
+|---|---|---|
+| `lead-crash-watchdog.sh` | reads registry at `:262,:302`; `gc_teardown_marker` at `:299`; pidfile rms at `:869,:893` | `:281,:321` · `:323`+`:327` · `:1054,:1078` — **all five wrong**, plus an unenumerated `rm -f "$tmp"` at `:1176` |
+| `desk-invariant.sh` | *"its other `rm -f "$tmp"` sites are temp scaffold"* | true, but never names `sweep_stale_markers()`'s `rm -f "$f"` — **the site its own declared horizon bounds** |
+| `dispatch-assert.sh` | discharge arms are *"kill-switch / corrupt / discharged"* | a fourth arm, `capped` (`p_count >= MAX`), present since `2fdfa7da` |
+| `cc-recover-safeguard` | `:110`, `:145`, `:173` | **accurate** — the one entry that had not drifted |
+
+The `lead-crash-watchdog` line refs are the sharp case: the comment records that they were *already
+hand-re-derived once*, on 2026-07-29. All five rotted again within **nine days**, across three
+commits to the subject that changed nothing the justification claims. A reader following `:869` lands
+185 lines away. That is §1b's own rubber stamp — *"an allowlist entry that makes the file pass BY
+BEING LISTED rather than by being checked"* — reached by decay rather than by design, and it passed
+every section of the gate on every run while it was false.
+
+### What landed
+
+Justifications corrected and re-anchored on **symbols** (`gc_teardown_marker`,
+`sweep_stale_markers`, `$REWORDED`), never line numbers, plus **§5**: `# @anchor <path> <ERE>` lines
+that the gate re-resolves every run, matched against **code only** (via the existing `is_comment`, so
+prose mentioning a symbol cannot satisfy an anchor). Anchor coverage is the four entries re-verified
+here and says so in the file — an unclaimed declaration is honest; a comment claiming coverage it
+lacks is the defect this gate exists to prevent. `tests/reaper-horizon-lint.bats` is the lint's
+**first** test (its dual, `growth-coverage-lint`, shipped with one): 9 assertions, each RED-proven,
+including the silent-blindness branch — §5 reads its own anchors via `$SELF` resolved *before* the
+script's `cd ..`, because a relative `$0` would read zero anchors and report **clean**.
+
+Verified green after: `reaper-horizon-lint` clean (7 anchors resolve) · `premortem-gate` 8·0 ·
+`wait-safety-gate` 13·0 · `bats` 9/9 · `shellcheck` clean · all under `/bin/bash` 3.2.
+
+### The transferable rule from this one
+
+**A line number is a citation with a nine-day half-life.** Prose that points at code needs an anchor
+the code itself carries — a symbol — and a gate that re-resolves it, or the justification decays into
+confident misdirection while every check stays green. And: *this doc told the next reader not to act
+on the page's list, and the next reader acted on the page's list.* A warning in prose does not bind;
+re-deriving from a live run before starting is what binds.
 
 ## The transferable rule
 
