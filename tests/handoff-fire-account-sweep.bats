@@ -15,6 +15,28 @@ setup() {
   # here, for the whole file. tests/handoff-fire-capacity-gate.bats is the ONE place the gate runs ON.
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # HERMETIC $HOME (scripts/test-hermeticity-lint.sh rule 1) — the SAME "pinned, not ambient" rule as
+  # M11 above, applied to the other ambient input. Every ACCOUNT seam below was already
+  # stubbed, which is what made this file LOOK hermetic — and is why it was grandfathered rather
+  # than fixed. But the two `--dry-run` tests drive the WHOLE fire path, and that path resolves its
+  # state under `~` and APPENDS a row to $HOME/.claude/logs/handoffs.jsonl (handoff-fire.sh:414,463).
+  # MEASURED 2026-08-08 by running this suite under an EMPTY $HOME: `.claude/logs/handoffs.jsonl`
+  # appeared in it — so unfixtured, every run of this suite had been writing into the operator's LIVE
+  # handoff audit trail. Same shape as the session-continue.bats leak recorded in
+  # scripts/host-suites.manifest, and found the same way: give the suite an ABSENT $HOME and read
+  # what appears in it, never by inspection.
+  # PHYSICAL form, as in tests/handoff-fire-launcher-map.bats: /tmp is a symlink to /private/tmp on
+  # Darwin, and the fire path compares paths it has already resolved.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
+  HOME="$(cd "$HOME" && pwd -P)"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry"; mkdir -p "$CC_REGISTRY_DIR"
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$CC_FIRED_DIR"
+  export CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/projects"; mkdir -p "$CC_PROJECTS_DIRS"
+  # NOTE this fixture was IMPOSSIBLE until the same commit's handoff-fire.sh fix: fixturing $HOME is
+  # exactly what removes the ~/.claude/bin/it2 shim, and the REAL_IT2/PYTHON_BIN resolvers then
+  # aborted the whole script under `set -euo pipefail` with the evidence swallowed. The two dry-run
+  # tests died there — a red indistinguishable from a real regression. That is the defect behind
+  # backlog 2f71dded07f2, and it is why no it2 shim is seeded here: the fallback now works.
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN" "$BATS_TEST_TMPDIR/info"
