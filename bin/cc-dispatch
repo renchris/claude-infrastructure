@@ -1166,6 +1166,26 @@ dispatch() { # <dry|run|decide>
       idl skipped "$id: premise refuted — claim REFUSED at the actuator${cexc:+ — $cexc} — the disproof is the deliverable; re-dispatch needs \`cc-backlog claim $id --force\`"
       continue
     fi
+    # verdict=cloud-ineligible — bin/cc-eligible refused the item for THIS VENUE ONLY (repo-only work
+    # is fine off-box; visual/design work and anything about THIS BOX is not), and bin/cc-backlog
+    # translated its rc 3 into the claim's rc 4. A SKIP, for the same two reasons as sibling-held:
+    #
+    #   · It RECURS BY DESIGN. The refusal appends nothing, so the item stays `open` and every future
+    #     cloud pass lands here again until it is reclassified or claimed locally. Counting that
+    #     FAILED feeds thrash_map a fault record per tick for a correct refusal.
+    #   · NOBODY IS NEEDED, and nothing is broken. The item is perfectly dispatchable — just not
+    #     off-box. `--venue local` runs it untouched, which is the opposite of a failure.
+    #
+    # Positively discriminated on the token like the three arms above, so a renamed or missing
+    # verdict degrades to the incumbent FAILED path rather than to a silent fire
+    # (memory: new-enum-member-falls-into-fail-closed-default). Without this arm the item took the
+    # default below and was journalled as a lease FAILURE — harmless only while the tap is shut.
+    if [ "$crc" -eq 4 ] && [ "${cexc#*verdict=cloud-ineligible}" != "$cexc" ]; then
+      echo "cc-dispatch: skipped $id — ineligible for --venue cloud (claim refused at the actuator)" >&2
+      SKIPPED=$((SKIPPED + 1))
+      idl skipped "$id: cloud-ineligible — claim REFUSED at the actuator: this work cannot run off-box${cexc:+ — $cexc} — it claims LOCALLY untouched, or \`cc-backlog claim $id --venue cloud --force\`"
+      continue
+    fi
     if [ "$crc" -ne 0 ]; then
       FAILED=$((FAILED + 1)); idl failed "$id: claim rc=$crc${cexc:+ — $cexc}"; continue
     fi
@@ -1531,6 +1551,22 @@ STUB
   t "(m2b) LEASE refusal → skipped stays 0"                       test "$(last '.skipped')" = 0
   t "(m2b) LEASE refusal → the record names rc + the excerpt"     grep -q 'claim rc=4 — .*already claimed by peer-9' "$tmp/idl.jsonl"
   t "(m2b) LEASE refusal → ZERO spawn"                            test ! -s "$tmp/spawn.log"
+
+  # (m2c) THE FOURTH rc-4 CAUSE — cloud-ineligible (bin/cc-backlog translating cc-eligible's rc 3).
+  # Same actuator-arbiter shape as (m2): refused for THIS VENUE ONLY must journal as a SKIP, never
+  # the lease's FAILED. Paired with (m2b) above, which keeps a real lease refusal on the FAILED
+  # path, this is what stops the new arm being widened to a bare `[ "$crc" -eq 4 ]`.
+  reset; unset STUB_CLAIM_RC STUB_CLAIM_VERDICT
+  seed_items '[{"id":"i1","project":"a","status":"open","title":"t1"}]'
+  seed_plan '[{"id":"i1","account":"next3","fire_line":["--prompt-file","'"$tmp"'/f1.txt"]}]'
+  STUB_CLAIM_RC=4 STUB_CLAIM_VERDICT="verdict=cloud-ineligible — i1 cannot run off-box" \
+    "$SELF" --once >/dev/null 2>&1
+  t "(m2c) cloud-ineligible → ZERO spawn (no burned session)"   test ! -s "$tmp/spawn.log"
+  t "(m2c) cloud-ineligible → the claim WAS attempted"          grep -qx 'claim i1' "$tmp/backlog.log"
+  t "(m2c) cloud-ineligible → counted SKIPPED, not failed"      test "$(last '.skipped')" = 1
+  t "(m2c) cloud-ineligible → failed stays 0"                   test "$(last '.failed')" = 0
+  t "(m2c) cloud-ineligible → IDL skipped carries the verdict"  grep -q 'verdict=cloud-ineligible' "$tmp/idl.jsonl"
+  t "(m2c) cloud-ineligible → names the LOCAL claim as the cure" grep -q 'claims LOCALLY untouched' "$tmp/idl.jsonl"
 
   # (m3) …and the new branch did not swallow ORDINARY claim failures: any non-4 rc is still a
   # FAILURE, with the rc named in the record (§1(c)/R3 — a verdict must name its cause).
