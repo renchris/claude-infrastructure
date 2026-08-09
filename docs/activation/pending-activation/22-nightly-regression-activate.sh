@@ -82,7 +82,7 @@ if launchctl print "gui/$UID_N/$LABEL" >/tmp/nightly-reg-activate-print.log 2>&1
 else
   echo "  ✗ still NOT loaded — read /tmp/nightly-reg-activate-print.log" >&2; exit 1
 fi
-if launchctl print-disabled "gui/$UID_N" 2>/dev/null | grep -q "\"$LABEL\" => disabled"; then
+if launchctl print-disabled "gui/$UID_N" 2>/dev/null | grep "\"$LABEL\" => disabled" >/dev/null; then
   echo "  ✗ still marked DISABLED — the enable in step 1 did not take" >&2; exit 1
 fi
 echo "  ✓ no longer in the disabled list"

@@ -132,10 +132,10 @@ run_leg4() {
     elif [ -e "$HOME/.claude/bin/$t" ]; then info "COPY?" "$t → present but NOT a symlink (Deploy-DoD drift risk — repo edits will not propagate)"
     else info "C10-PEND" "$t → not deployed (operator hand-step in wiring-all.sh)"; fi
   done
-  if launchctl list 2>/dev/null | grep -q 'com.claude.lead-supervisor'; then
+  if launchctl list 2>/dev/null | grep 'com.claude.lead-supervisor' >/dev/null; then
     info "ACTIVE" "lead-supervisor launchd loaded (page-only sweeps live)"
   else info "C10-PEND" "lead-supervisor launchd NOT loaded"; fi
-  if launchctl list 2>/dev/null | grep -q 'com.reso.lr-reset-poller'; then
+  if launchctl list 2>/dev/null | grep 'com.reso.lr-reset-poller' >/dev/null; then
     info "ACTIVE" "lr-reset-poller launchd loaded"
   else info "C10-PEND" "lr-reset-poller launchd NOT loaded (plist install + LR_POLLER_AUTOFIRE=1 = operator hand-steps)"; fi
   run_leg4_exercise

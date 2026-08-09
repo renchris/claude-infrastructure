@@ -1472,6 +1472,65 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── pipefail/SIGPIPE ratchet (backlog 791345455b58) ───────────────────────────────────────────
+  # Fifth deterministic blocker class, same own-scope contract as the ratchets above. `producer |
+  # grep -q PAT` under `set -o pipefail` reads FALSE **on a match**: grep exits at the match, the
+  # producer takes SIGPIPE on its next write, and pipefail promotes that 141 over grep's 0. It
+  # presents as flake, not failure, and instrumentation HIDES it — anything that slows the pipe
+  # closes the window, so "works when traced" is not evidence.
+  #
+  # Not hypothetical, and not rare: ec9a43a9 fixed it in cc-relogin-poll's capability probe, and the
+  # 2026-08-08 sweep behind this ratchet found 22 more live sites — including a version gate that
+  # had been failing 100% of the time over a 245 MB binary, a launchd liveness check reporting jobs
+  # NOT loaded while loaded, and the worktree guard's cwd leg reading "nothing live" 60/60 on a true
+  # match, which inverted a SAFETY refusal whose own header says it can only fail open.
+  #
+  # It belongs HERE and not only in its own bats suite, for the reason the ratchets above document:
+  # a lint enforced solely by its own suite is post-hoc DETECTION, and gate-select will not pick that
+  # suite up when the edited file is a PRODUCER rather than the lint. At the gate it is scope-
+  # independent, sub-second, and names the file to the session that wrote it.
+  #
+  # --selftest runs alongside the scan: the fixtures replay the scar shapes verbatim (so the lint
+  # cannot scan itself — see the self-exclusion in scan()), and the selftest is what proves the
+  # detector still discriminates. A ratchet whose own discrimination is unverified is not a gate —
+  # and this detector has a specific way of dying quiet: it is an awk program inside a single-quoted
+  # bash string, where one stray apostrophe truncates it into something that matches nothing and
+  # reports a clean tree. It exits 2 on that, and exit 2 is treated as a NON-VERDICT below.
+  PF_LINT="${SHIP_LAND_PIPEFAIL_LINT:-scripts/pipefail-sigpipe-lint.sh}"
+  if [[ -x "$PF_LINT" ]]; then
+    local pown=""
+    if [[ "${SHIP_LAND_PIPEFAIL_OWN_SCOPE:-on}" != "off" ]]; then
+      pown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 'tests/*' 'docs/*' '*.sh' 2>/dev/null || true)"
+      [[ -n "$pown" ]] && echo "→ gate: pipefail-sigpipe own-scope — blocking on $(printf '%s\n' "$pown" | grep -c .) file(s) in this land's diff; others advisory." >&2
+    fi
+    echo "→ gate: pipefail/SIGPIPE ratchet (an early-exit pipe consumer that reads FALSE on a match)" >&2
+    local pf_self=0
+    "$PF_LINT" --selftest >/dev/null 2>&1 || pf_self=$?
+    if (( pf_self != 0 )); then
+      echo "✗ gate: pipefail-sigpipe-lint --selftest FAILED — the detector no longer discriminates," >&2
+      echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
+      gate_red pipefail-sigpipe-selftest
+      return 1
+    fi
+    local pf_rc=0
+    CC_PIPEFAIL_OWN="$pown" "$PF_LINT" >&2 || pf_rc=$?
+    if (( pf_rc == 2 )); then
+      echo "⛔ gate: pipefail-sigpipe-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about" >&2
+      echo "  your tree. Nothing is wrong with the files named above (if any)." >&2
+      GATE_KILLED=1
+      return 1
+    fi
+    if (( pf_rc != 0 )); then
+      echo "✗ gate: pipefail-SIGPIPE RED — a file THIS LAND CHANGES pipes a streaming producer into" >&2
+      echo "  an early-exit consumer under pipefail, so the condition reads FALSE on a MATCH." >&2
+      echo "  Drain it: 'grep -q P' → 'grep P >/dev/null'; 'head -N' → \"awk 'NR<=N'\". Where draining" >&2
+      echo "  is expensive, neutralise instead: '{ p || true; } | grep -q P' keeps the early exit." >&2
+      echo "  If you FIXED a grandfathered site, lower its count in scripts/pipefail-sigpipe-allow.txt." >&2
+      gate_red pipefail-sigpipe
+      return 1
+    fi
+  fi
+
   # ── bats dead-assertion ratchet (2026-07-31) ──────────────────────────────────────────────────
   # Fourth deterministic blocker class, same own-scope contract as the ratchets above. An assertion
   # errexit cannot reach is a silent no-op — the check runs, its false result is discarded, and the

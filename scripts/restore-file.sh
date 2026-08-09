@@ -24,7 +24,7 @@ if [ "${1:-}" = "--recent" ]; then
   echo ""
   find "$BACKUP_DIR" -maxdepth 1 -name "*.bak" -print0 \
     | xargs -0 ls -lt \
-    | head -n "$COUNT" \
+    | awk -v n="$COUNT" 'NR<=n' \
     | while IFS= read -r line; do
         bak_path=$(echo "$line" | awk '{print $NF}')
         bak_name=$(basename "$bak_path")

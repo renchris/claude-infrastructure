@@ -55,7 +55,7 @@ if [ "${CONFIRM:-0}" = 1 ]; then
   echo "== verify (A11) =="
   if "$LAUNCHCTL" print "gui/$UID_/$LABEL" >/dev/null 2>&1; then echo "  ✓ label resolves in gui/$UID_"
   else echo "  ✗ label does NOT resolve — the bootstrap did not take" >&2; fi
-  if "$LAUNCHCTL" print-disabled "gui/$UID_" 2>/dev/null | grep -q "\"$LABEL\" => disabled"; then
+  if "$LAUNCHCTL" print-disabled "gui/$UID_" 2>/dev/null | grep "\"$LABEL\" => disabled" >/dev/null; then
     echo "  ✗ still in the DISABLED database — it will never fire; re-run the enable above" >&2
   else echo "  ✓ not in the disabled database"; fi
   if [ -s "$LOG" ]; then echo "  ✓ $LOG is non-empty"

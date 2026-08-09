@@ -241,7 +241,7 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
   local bin="${1:-}"
   [ -n "$bin" ] && [ -f "$bin" ] || return 2
   command -v strings >/dev/null 2>&1 || return 2
-  strings -a "$bin" 2>/dev/null | grep -q 'Claude-Session' && return 0
+  { strings -a "$bin" 2>/dev/null || true; } | grep -q 'Claude-Session' && return 0
   return 1
 }
 

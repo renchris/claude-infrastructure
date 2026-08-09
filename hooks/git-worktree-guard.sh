@@ -97,8 +97,24 @@ if printf '%s' "$ncmd" | grep -qE 'git worktree remove([[:space:]]|$)'; then
     exit 2
   fi
   cpids="$(pgrep -f claude 2>/dev/null | sort -u | paste -sd, -)"
-  if [ -n "$cpids" ] && "$LSOF" -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | grep -qxF "$wtabs"; then live=1; fi
-  if [ "$live" = "0" ] && "$LSOF" -- "$wtabs" 2>/dev/null | grep -q .; then live=1; fi
+  # CAPTURE, not a pipeline condition — and the reason is NOT the SIGPIPE race that the sibling
+  # sites here were fixed for. `lsof -p <list>` exits 1 ON ITS OWN whenever any pid in the list has
+  # already gone away, which is the permanent steady state for a ~120-pid `pgrep -f claude` snapshot
+  # on this box. Under pipefail that 1 outranks grep's 0, so this leg discarded a genuine match and
+  # read "nothing live" 60/60 on a TRUE match — measured 2026-08-08, with the target on both the
+  # first and the last line of lsof output. Draining the consumer does NOT repair it (measured
+  # 60/60 still FALSE): the producer's own status has to be dropped, which only capture can do.
+  #
+  # That inverted this guard's stated fail-open contract into fail-CLOSED-to-open, silently: :100 is
+  # the cwd leg, and :101 only runs when :100 says not-live, so :101 has been the sole working leg —
+  # and it asks a different question (files OPEN under the path, not processes CWD'd there), which a
+  # live session often does not satisfy. A worktree removal could proceed under active work.
+  if [ -n "$cpids" ]; then
+    _cwds="$("$LSOF" -a -p "$cpids" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' || true)"
+    # printf of a captured variable is ONE write — the safe producer shape (measured 0/200 at 4 KiB).
+    if printf '%s\n' "$_cwds" | grep -qxF "$wtabs"; then live=1; fi
+  fi
+  if [ "$live" = "0" ] && "$LSOF" -- "$wtabs" 2>/dev/null | grep . >/dev/null; then live=1; fi
   if [ "$live" = "1" ]; then
     echo "git-worktree-guard: BLOCKED 'git worktree remove $wt' — a live process (likely a Claude session) is cwd'd in / has files open under it. Removing it now yanks the worktree out from under active work (clean tree != idle session). Let 'bash scripts/worktree-gc.sh --prune' handle reaping — it KEEPS anything live and only removes clean+merged+idle>30m worktrees, preserving the branch. Or wait for that session to finish." >&2
     exit 2

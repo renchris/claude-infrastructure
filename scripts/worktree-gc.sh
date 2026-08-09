@@ -593,7 +593,7 @@ recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, righ
   done <<EOF
 $(claude_cwds)
 EOF
-  if command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep -q .; then
+  if command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
     return 0
   fi
   return 1
@@ -603,7 +603,7 @@ verify_preserved() { # <branch> <head-sha> <unlanded-set-before> → 0 iff nothi
   local branch="$1" head="$2" before="$3" now
   now="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
   [ -n "$now" ] && [ "$now" = "$head" ] || return 1
-  durable_refs "$head" | grep -q . || return 1
+  durable_refs "$head" | grep . >/dev/null || return 1
   [ "$(unlanded_set "$branch")" = "$before" ]
 }
 
@@ -660,7 +660,7 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
   head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
   wt_head="$("$GIT_BIN" -C "$path" rev-parse HEAD 2>/dev/null)"
   before="$(unlanded_set "$branch")"
-  if [ -z "$head" ] || [ "$head" != "$wt_head" ] || ! durable_refs "$head" | grep -qx "refs/heads/$branch"; then
+  if [ -z "$head" ] || [ "$head" != "$wt_head" ] || ! durable_refs "$head" | grep -x "refs/heads/$branch" >/dev/null; then
     echo "KEEP    $path [$branch] — DISPOSE refused: no durable ref proves the commits survive removal"
     N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
     return 0
@@ -727,7 +727,7 @@ process_record() {
   elif op_in_progress "$path";                               then reason="a git operation is parked here ($OP_KIND) — removal would discard it"
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
-  elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep -q .; then
+  elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
                                                                   reason="open by a live process"
   elif [ "$detached" = "1" ] || [ -z "$branch" ];            then reason="detached HEAD (manual review — no branch records where the work went)"
   else

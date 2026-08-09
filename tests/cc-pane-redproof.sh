@@ -86,7 +86,7 @@ check() {
   fi
   # Red is not enough: the RIGHT test must be the one that caught it, else the mutant was caught
   # by collateral damage and the named claim is still unproven.
-  if ! grep '^not ok' "$out" | grep -qF "$want"; then
+  if ! grep '^not ok' "$out" | grep -F "$want" >/dev/null; then
     printf '  \033[31mWRONG TEST\033[0m   %-42s (red, but not via: %s)\n' "$label" "$want"
     grep '^not ok' "$out" | head -3 | sed 's/^/      /'
     fail=$((fail+1)); return

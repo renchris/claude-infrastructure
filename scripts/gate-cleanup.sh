@@ -81,7 +81,7 @@ under_worktree() {  # <path> → 0 when at or under $WORKTREE
 
 # ── exclusion set: self + every ancestor (never kill the hand holding the knife) ────────────────
 PS_SNAPSHOT="$(ps_all)"
-ppid_of() { printf '%s\n' "$PS_SNAPSHOT" | awk -v p="$1" '$1==p {print $2; exit}'; }
+ppid_of() { printf '%s\n' "$PS_SNAPSHOT" | awk -v p="$1" '$1==p {print $2; exit}' || true; }
 EXCLUDE=" $$ "
 _a="$(ppid_of "$$")"
 while [ -n "$_a" ] && [ "$_a" != "0" ] && [ "$_a" != "1" ]; do

@@ -176,7 +176,7 @@ AHEAD=0; CHERRY=0; SHAS=""
 if [ -n "$TRUNK" ]; then
   AHEAD="$(git rev-list --count "$TRUNK"..HEAD 2>/dev/null || echo 0)"; case "$AHEAD" in ''|*[!0-9]*) AHEAD=0 ;; esac
   # git cherry prints '+ <sha>' for commits whose patch is NOT present upstream (content-absent).
-  if git cherry "$TRUNK" HEAD 2>/dev/null | grep -q '^+ '; then CHERRY=1; fi
+  if git cherry "$TRUNK" HEAD 2>/dev/null | grep '^+ ' >/dev/null; then CHERRY=1; fi
   SHAS="$(git rev-list --abbrev-commit "$TRUNK"..HEAD 2>/dev/null | head -5 | tr '\n' ' ' | sed 's/ *$//' || true)"
 fi
 UNLANDED=0; { [ "$AHEAD" -gt 0 ] || [ "$CHERRY" -eq 1 ]; } && UNLANDED=1

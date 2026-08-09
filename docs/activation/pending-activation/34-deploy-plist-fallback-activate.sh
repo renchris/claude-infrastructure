@@ -97,7 +97,7 @@ echo "[4] verify BY CONTENT (never by exit code — a bootstrap that 'worked' ca
 echo "    the old plist if the copy silently failed)"
 # shellcheck disable=SC2016  # same reason: $HOME is literal text inside the loaded plist's argv, not
 # a path to expand. Expanding it would search for /Users/<me>/… which is NOT what launchctl prints.
-if launchctl print "gui/$UID_/$LABEL" 2>/dev/null | grep -q 'D="\$HOME/.claude/scripts/deploy-live.sh"'; then
+if launchctl print "gui/$UID_/$LABEL" 2>/dev/null | grep 'D="\$HOME/.claude/scripts/deploy-live.sh"' >/dev/null; then
   echo "  ✓ the LOADED job now carries the fallback"
 else
   echo "✗ the loaded job does NOT carry the fallback — it did not take. Inspect:" >&2

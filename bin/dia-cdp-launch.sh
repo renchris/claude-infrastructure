@@ -120,7 +120,7 @@ doctor_check() {
   echo "=== Dia CDP Health Check ==="
   echo ""
   # LaunchAgent
-  if launchctl list 2>/dev/null | grep -q 'com.chrisren.dia-cdp'; then
+  if launchctl list 2>/dev/null | grep 'com.chrisren.dia-cdp' >/dev/null; then
     echo "❌ LaunchAgent LOADED — must be disabled (see com.chrisren.dia-cdp.plist.disabled)"
   elif [[ -f "$HOME/Library/LaunchAgents/com.chrisren.dia-cdp.plist" ]]; then
     echo "⚠ LaunchAgent plist exists (not loaded) — consider renaming to .disabled"
