@@ -462,7 +462,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
   sleep 2
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control: it WAS armed before the kill
-  kill -TERM "$watcher" 2>/dev/null
+  kill -TERM "$watcher" 2>/dev/null || true
   local rc=0; wait "$watcher" 2>/dev/null || rc=$?
   grep -q 'verdict=killed' "$log"
   [ "$rc" -eq 143 ]
@@ -472,7 +472,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
   sleep 2
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]          # positive control for the absence asserted below
-  kill -TERM "$watcher" 2>/dev/null
+  kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
 }
@@ -481,7 +481,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   local log="$BATS_TEST_TMPDIR/hup.log"
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >"$log" 2>&1 & local watcher=$!
   sleep 2
-  kill -HUP "$watcher" 2>/dev/null
+  kill -HUP "$watcher" 2>/dev/null || true
   local rc=0; wait "$watcher" 2>/dev/null || rc=$?
   grep -q 'verdict=killed' "$log"
   grep -q 'SIGHUP' "$log"
@@ -562,7 +562,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
   sleep 2
   [ -f "$CC_MAILBOX_DIR/$UUID.watching" ]            # positive control: it WAS armed before the kill
-  kill -TERM "$watcher" 2>/dev/null
+  kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -q 'WAKE-PATH-DOWN' "$MB"                     # …and the death is now ordinary, drainable mail
   grep -q "$UUID" "$MB"
@@ -574,7 +574,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   # be attributed to nobody — so the shape is asserted, not assumed.
   "$AWAIT" "$UUID" --interval 1 --timeout 30 >/dev/null 2>&1 & local watcher=$!
   sleep 2
-  kill -TERM "$watcher" 2>/dev/null
+  kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{4} \[cc-await-ping\] WAKE-PATH-DOWN' "$MB"
   # and it is genuinely UNDRAINED — the whole point is that the next boundary still has it to surface

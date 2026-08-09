@@ -328,8 +328,8 @@ start_subject() {
   sleep 0.3
 }
 teardown() {
-  [ -n "${SUBJ_PID:-}" ] && kill "$SUBJ_PID" 2>/dev/null
-  for p in ${FLIP_PIDS:-}; do kill "$p" 2>/dev/null; done
+  [ -n "${SUBJ_PID:-}" ] && kill "$SUBJ_PID" 2>/dev/null || true
+  for p in ${FLIP_PIDS:-}; do kill "$p" 2>/dev/null || true; done
   return 0
 }
 

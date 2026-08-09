@@ -43,7 +43,7 @@ teardown() {
   for d in "$CC_PANE_HOME"/hdl-* "$CC_PANE_HOME"/dead-*; do
     [ -d "$d" ] || continue
     p="$(sed -n 's/^pid=//p' "$d/meta" 2>/dev/null | head -1)"
-    [ -n "$p" ] && kill -9 "$p" 2>/dev/null
+    [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
   done
   return 0
 }

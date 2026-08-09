@@ -23,7 +23,7 @@ teardown() {
   # Kill the liveness probe FIRST. A backgrounded grandchild that outlives the test holds bats' TAP
   # fd open and wedges the whole run (memory: fixture-lifetime-is-an-orphan-leak-bound) — which is
   # why the probe below is spawned with all three fds detached and is killed unconditionally here.
-  [ -n "${PROBE_PID:-}" ] && kill "$PROBE_PID" 2>/dev/null && wait "$PROBE_PID" 2>/dev/null
+  [ -n "${PROBE_PID:-}" ] && kill "$PROBE_PID" 2>/dev/null && wait "$PROBE_PID" 2>/dev/null || true
   git -C "$REPO" worktree remove --force "$TDIR/wt-held" 2>/dev/null || true
   rm -rf "$TDIR"
 }

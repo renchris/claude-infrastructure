@@ -1819,6 +1819,47 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── unguarded-kill ratchet: the load-flake class that has been fixed BY HAND eight times ─────────
+  # `kill "$p" 2>/dev/null` with no `|| true`. Once the child is REAPED the kill returns 1 (ESRCH),
+  # bats' errexit aborts the body, and a test that passed on its own merits goes red — only under
+  # load, never in isolation. It has cost this gate a refused push already (debc016f: the bats
+  # retry's extra executed count tripped the 1614≠1613 plan mismatch). Four commits fixed nine sites
+  # by hand; nothing ever stopped the tenth, and eleven had re-accumulated by 2026-08-09.
+  #
+  # STRICT AND WHOLE-CORPUS, unlike its four own-scoped neighbours above. They grandfather because
+  # their corpora carry inherited debt; this one does not, because the commit that introduced it
+  # swept the corpus to zero first. With a clean baseline the strictest rule is the free one — no
+  # own-set to derive, no exemption list to rot — and it is ~0.2s over 355 suites.
+  KILL_GUARD_LINT="${SHIP_LAND_KILL_GUARD_LINT:-scripts/bats-kill-guard-lint.sh}"
+  # gate_bounded: EVENT-ON-FIRST-LAND, DIFF-SCOPED, ONE-TOKEN-CLEARABLE — neither refusal below can
+  # become a standing state nobody is told about (the 545-refusal scar, inertness-generator §2.3).
+  # The scan refusal names the exact file:line:col and prints the whole remedy, so it is an EVENT
+  # with an actor: the author who typed the kill clears it with `|| true` in the same edit, and it
+  # cannot fire for anyone else because the corpus baseline is zero. The selftest refusal fires on
+  # the FIRST land after the lint stops discriminating rather than after a clock, which §9 of
+  # permission-gate-lint calls strictly stronger than a budget — and it is the only thing standing
+  # between a broken detector and a clean verdict that means nothing. Declared release if either
+  # ever does wedge a land it should not: `SHIP_LAND_KILL_GUARD_LINT=/nonexistent` skips this block
+  # whole (the -x test below), which is auditable in land.log rather than silent.
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$KILL_GUARD_LINT" ]]; then
+    echo "→ gate: unguarded-kill ratchet (a kill whose stderr is silenced and whose status is not)" >&2
+    # --selftest alongside the scan, for the reason the UTC ratchet documents: a ratchet whose own
+    # discrimination is unverified is not a gate. Its controls replay the real flaking lines from
+    # f676d2f6/e90476e6 byte-for-byte, and both exemptions are proven narrow in both directions.
+    if ! "$KILL_GUARD_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: bats-kill-guard-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
+      echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
+      gate_red kill-guard-selftest
+      return 1
+    fi
+    if ! "$KILL_GUARD_LINT" tests >&2; then
+      echo "✗ gate: unguarded-kill RED — a kill above silences its stderr but not its exit status," >&2
+      echo "  so a reaped child aborts the test body under load. Guard it: '|| true'." >&2
+      gate_red kill-guard
+      return 1
+    fi
+  fi
+
   # ── the test phase — SMOKE in the fast lane, the whole corpus only under the v1 kill switch ──
   # NOT gated on the statics rc above: an already-red land still runs the smoke, so the author gets
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —
