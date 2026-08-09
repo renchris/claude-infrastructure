@@ -236,6 +236,7 @@ fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hdb.XXXXXX")" || { echo 'hook-dispatch-bench.sh: mktemp failed' >&2; exit 3; }
 # BSD mktemp takes only TRAILING Xs (memory: prescribed-remedy-worse-than-the-bug) — the template
 # above is correct for this box; a mid-string X would mint a CONSTANT name.
+# shellcheck disable=SC2329  # invoked indirectly by the trap on the next line
 cleanup() { [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 trap cleanup EXIT TERM INT HUP
 
@@ -244,6 +245,12 @@ trap cleanup EXIT TERM INT HUP
 # it is deliberately distinctive: `hdb-member.sh` cannot collide with an ambient process, which is
 # what makes the per-bucket figure attributable rather than merely correlated.
 MEMBER="$WORK/hdb-member.sh"
+# The single quotes below are deliberate: $CACHE must expand in the GENERATED member, not here.
+# Expanding it now would bake this run's scratch path into a script whose whole point is to be
+# re-read. The directive sits in front of the whole `case` because SC1124 rejects one placed in
+# front of an individual branch — and a rejected directive does not merely fail, it aborts parsing
+# of the entire file (MEMORY.md lint-blindness-composes-and-hides-the-next-defect).
+# shellcheck disable=SC2016
 case "$PROFILE" in
   git)    BODY='git rev-parse --show-toplevel >/dev/null 2>&1; git rev-parse --abbrev-ref HEAD >/dev/null 2>&1' ;;
   cached) BODY='read -r _a < "$CACHE" 2>/dev/null; read -r _b < "$CACHE" 2>/dev/null' ;;
