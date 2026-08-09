@@ -1116,9 +1116,23 @@ dispatch() { # <dry|run|decide>
     # correct: retrying without the flag would mint a claim that says `local` about a session
     # running off-box, and every local oracle would then convict it. Fail-closed and visible beats
     # a silently mislabelled lease.
+    # G6 — THE CLAIM CARRIES THE ROLE, AND THIS ONE IS UNCONDITIONAL. `$SID` is `<host>-$$`, this
+    # dispatcher's own bash pid, and this pass is ALIVE by construction at the instant the worker it
+    # is about to spawn runs its SessionStart hand-over. To `kill -0` that is indistinguishable from
+    # a competing peer worker, so cc-backlog's anti-steal guard refused the hand-over and the worker
+    # was then gate-refused on its own first write as a "duplicate" of its own dispatcher — measured
+    # 2026-08-09 on item b922dde5567b (bin/cc-backlog cmd_reclaim carries the full trace). Labelling
+    # the claim is what lets `reclaim` tell a HAND-OVER from a STEAL; nothing else can.
+    #
+    # Unconditional, unlike --venue above: a dispatcher claim is ALWAYS a placeholder for a worker
+    # that does not exist yet, so there is no case where omitting it is right. And NO CAPABILITY
+    # FALLBACK, for the same reason --venue has none, sharpened: retrying without the flag would mint
+    # an UNLABELLED dispatcher claim, which is precisely the deadlocking claim this fixes — the fix
+    # would go silently inert exactly when it is needed (memory:
+    # sensor-default-off-makes-blindness-the-shipping-path). Fail-closed and visible.
     local venue claim_args
     venue="$(fire_venue "${fire_args[@]}")"
-    claim_args=(claim "$id" --by "$SID")
+    claim_args=(claim "$id" --by "$SID" --role dispatcher)
     if [ "$venue" = cloud ]; then claim_args+=(--venue cloud); fi
     local cerrf crc cexc
     cerrf="$(mktemp "${TMPDIR:-/tmp}/cc-dispatch-claim.XXXXXX" 2>/dev/null || true)"
@@ -1382,7 +1396,10 @@ case "\$1" in
         else jq -cn --argjson n "\${STUB_LIVE:-0}" '[range(\$n) | {id:"c\(.)", status:"claimed"}]'; fi ;;
       *)  cat "$tmp/items.json" ;;
     esac ;;
-  claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"; echo "\$2"
+  claim) printf 'claim %s\n' "\$2" >> "$tmp/backlog.log"
+         # The FULL argv on its own line, so the id-only line above keeps matching \`grep -qx 'claim i2'\`
+         # verbatim while the flags become assertable (G6's --role, G5's --venue).
+         printf 'claimargs %s\n' "\$*" >> "$tmp/backlog.log"; echo "\$2"
          # REFUSAL seam. \$STUB_CLAIM_RC is the exit code; \$STUB_CLAIM_VERDICT is the LINE-1 stderr
          # the dispatcher discriminates on, because rc 4 has two causes with opposite journalling
          # (done-latch ⇒ skip, lease ⇒ failed). Emitted in the real verb's shape — verdict token
@@ -1509,6 +1526,14 @@ STUB
   t "(m) mixed wave → the done-latched item does NOT"        not grep -q '"i1"' "$tmp/wave.json"
   t "(m) mixed wave → the un-done item IS claimed"     grep -qx 'claim i2' "$tmp/backlog.log"
   t "(m) mixed wave → the done-latched item is NOT claimed" not grep -qx 'claim i1' "$tmp/backlog.log"
+  # (m4) G6 — THE CLAIM IS LABELLED A DISPATCHER CLAIM. Without this flag on the wire, cc-backlog's
+  # `reclaim` cannot tell this pass's still-live pid from a competing peer worker, refuses the
+  # hand-over, and the worker this pass is about to spawn is denied on its own first write as a
+  # duplicate of its own dispatcher (measured 2026-08-09, item b922dde5567b). The flag going missing
+  # is SILENT — every claim still succeeds, dispatch still fires, and only the worker deadlocks — so
+  # it has to be asserted on the wire rather than inferred from the pass succeeding.
+  t "(m4) the claim is labelled --role dispatcher (else reclaim cannot tell hand-over from steal)" \
+    grep -q '^claimargs claim i2 .*--role dispatcher' "$tmp/backlog.log"
   t "(m) mixed wave → exactly 1 spawn"                 test "$(grep -c . "$tmp/spawn.log")" -eq 1
 
   # (m2) THE ACTUATOR IS THE ARBITER (backlog dadc3c2410aa). The item is clean at step 1b — no

@@ -192,6 +192,51 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   printf '%s' "$output" | jq -e 'select(.disposition=="noop" and .reason=="incumbent live")'
 }
 
+# ── DISPATCHER HAND-OVER (backlog b922dde5567b, 2026-08-09) ────────────────────────────────────
+# The test directly above is the CONTROL and the pair is the whole point: identical shape, identical
+# LIVE `$HOST-$$` incumbent, opposite outcomes — the only delta is `--role dispatcher`. A live PEER
+# is still not stolen from; a live DISPATCHER hands over.
+#
+# This is the level the defect was actually measured at. `dispatched_item` above claims with a DEAD
+# pid, which quietly encoded the assumption in cc-backlog's own header — "cc-dispatch claims with its
+# own pid and then exits". A `--once` pass does not exit that fast: on 2026-08-09 dispatcher pid
+# 49310 claimed at 14:46:44 and was still running when this hook fired at 14:49:41, so the re-key was
+# refused, and the worker was then denied on its first write as a duplicate of its own dispatcher.
+# Because the hook re-keys EXACTLY ONCE, at process start, there is no second attempt — a dispatcher
+# that outlives its worker's SessionStart stranded that worker for good.
+
+@test "a LIVE DISPATCHER hands the claim over — the case where the dispatcher outlives the worker's SessionStart" {
+  id="$(bash "$CB" add --project /r --title live-dispatcher --source s)"
+  bash "$CB" claim "$id" --by "$HOST-$$" --role dispatcher >/dev/null   # alive, exactly like a --once pass
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  run fire "$BATS_TEST_TMPDIR/wt-$id"
+  [ "$status" -eq 0 ]
+  # The worker now holds it. Asserted as "no longer the dispatcher" rather than against a literal:
+  # the hook's own identity is its live `claude` ancestor pid, which the harness must not restate
+  # (memory: make-the-actuator-the-arbiter).
+  refute_match "$(by_of "$id")" "^$HOST-$$\$"
+  [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = claimed ]
+}
+
+@test "the hand-over is journalled with its BASIS — else a cured deadlock reads exactly like one that never happened" {
+  id="$(bash "$CB" add --project /r --title handover-idl --source s)"
+  bash "$CB" claim "$id" --by "$HOST-$$" --role dispatcher >/dev/null
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  fire "$BATS_TEST_TMPDIR/wt-$id"
+  run cat "$SESSION_REGISTER_IDL"
+  printf '%s' "$output" | jq -e --arg i "$id" \
+    'select(.hook=="session-register" and .disposition=="reclaimed" and .item==$i
+            and .basis=="dispatcher hand-over")'
+  # CONTROL: an ordinary dead-dispatcher re-key journals NO basis. Without this the field could be
+  # unconditional, which would carry exactly as many bits as never emitting it at all
+  # (memory: alarm-polarity-and-attention-budget).
+  id2="$(dispatched_item ordinary-rekey)"
+  fire "$BATS_TEST_TMPDIR/wt-$id2"
+  run cat "$SESSION_REGISTER_IDL"
+  printf '%s' "$output" | jq -e --arg i "$id2" \
+    'select(.hook=="session-register" and .item==$i and .disposition=="reclaimed" and (.basis // "") == "")'
+}
+
 @test "IDEMPOTENT across restarts: firing twice appends ONE record (resume/compact must not reset the clock)" {
   id="$(dispatched_item idempotent)"
   fire "$BATS_TEST_TMPDIR/wt-$id"

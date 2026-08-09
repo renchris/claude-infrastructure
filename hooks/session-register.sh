@@ -211,14 +211,15 @@ RECLAIM_IDL="${SESSION_REGISTER_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 # refused, which is the one thing the record is for.
 RECLAIM_SID=$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')
 
-reclaim_idl() { # $1=disposition $2=reason [$3=item id]
+reclaim_idl() { # $1=disposition $2=reason [$3=item id] [$4=basis]
   mkdir -p "$(dirname "$RECLAIM_IDL")" 2>/dev/null || true
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
   # jq-encode every field (house rule): one malformed line aborts cc-audit's `jq -rs` slurp.
   jq -cn --arg ts "$ts" --arg sid "${RECLAIM_SID:-?}" --arg disp "$1" --arg reason "$2" \
-         --arg item "${3:-}" \
+         --arg item "${3:-}" --arg basis "${4:-}" \
     '{ts:$ts,hook:"session-register",sid:$sid,disposition:$disp,reason:$reason}
-     + (if $item != "" then {item:$item} else {} end)' \
+     + (if $item  != "" then {item:$item}   else {} end)
+     + (if $basis != "" then {basis:$basis} else {} end)' \
     >> "$RECLAIM_IDL" 2>/dev/null || true
 }
 
@@ -288,6 +289,18 @@ reclaim_worker_item() {
     out="$("$bin" reclaim "$item" --by "$host-$pid" 2>&1)"
   fi
   case "$out" in
+    # ORDER IS LOAD-BEARING: `case` takes the FIRST match, so the hand-over arm must precede the
+    # generic reclaimed arm below — the marker rides INSIDE a `verdict=reclaimed` line, so the
+    # generic glob matches it too and would swallow it if it came first.
+    #
+    # Recorded with a distinct `basis` rather than a distinct disposition, because the DISPOSITION is
+    # the same fact (this worker now holds the claim) and the existing consumers select on it. What
+    # the basis buys is a countable answer to "did the dispatcher deadlock get cured, or did it just
+    # not happen this time?" — without it those two emit identical rows and the fix is unfalsifiable
+    # in production (memory: claimed-outcome-vs-checked-outcome). The rate the item asked for is then
+    #   jq 'select(.basis=="dispatcher hand-over")'  vs  'select(.reason=="incumbent live")'
+    *verdict=reclaimed*\[dispatcher\ hand-over\]*)
+                                  reclaim_idl reclaimed "$host-$pid" "$item" "dispatcher hand-over" ;;
     *verdict=reclaimed*)          reclaim_idl reclaimed        "$host-$pid" "$item" ;;
     *verdict=noop-already-ours*)  reclaim_idl noop             "already ours" "$item" ;;
     *verdict=noop-status*)        reclaim_idl noop             "not claimed" "$item" ;;

@@ -109,6 +109,42 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$(by_of "$id")" = "$HOST-$$" ]
 }
 
+# ── 03b · THE DISPATCHER IS NOT A PEER (backlog b922dde5567b, 2026-08-09) ─────────────────────
+# Case 02 above is the control, and the pair is the claim: same live `<host>-<pid>` holder, same
+# verb, opposite verdicts, one delta — `--role dispatcher`.
+#
+# This gate inherits the fix for free because it never re-implements the predicate: it calls
+# `cc-backlog reclaim` and branches on the documented verdict (the header's ACTUATOR IS THE ARBITER
+# property, paying off). Pinned here anyway, because THIS is where the damage landed — on 2026-08-09
+# the gate returned rc 9 on the FIRST Edit of the worker cc-dispatch had just fired for this very
+# item, and told it to stand down as a duplicate of its own dispatcher.
+@test "03b a LIVE DISPATCHER holder ADMITS the worker — it is a hand-over, not a duplicate" {
+  id="$(bash "$CB" add --project /r --title live-dispatcher --source s)"
+  bash "$CB" claim "$id" --by "$HOST-$$" --role dispatcher >/dev/null   # alive, by construction
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  export CC_WCLAIM_PID=999999                            # we are the worker it spawned
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'ADMIT'
+  [ "$(by_of "$id")" = "$HOST-999999" ]                  # and the worker now holds the lease
+}
+
+@test "03c ONE-SHOT at the gate: once a worker holds it, the NEXT session is refused as before" {
+  # The exemption must not survive the hand-over, or the gate stops protecting the worker it just
+  # admitted — which is the storm case 02 exists to prevent, merely deferred by one session.
+  id="$(bash "$CB" add --project /r --title oneshot-gate --source s)"
+  bash "$CB" claim "$id" --by "$HOST-1" --role dispatcher >/dev/null
+  mkdir -p "$BATS_TEST_TMPDIR/wt-$id"
+  export CC_WCLAIM_PID=$$                                # worker 1 takes it under a LIVE pid
+  run admit "$(wt "$id")"
+  [ "$status" -eq 0 ]
+  export CC_WCLAIM_PID=999999                            # worker 2 arrives in the same worktree
+  run admit "$(wt "$id")"
+  [ "$status" -eq 9 ]
+  printf '%s' "$output" | grep -q 'REFUSING'
+  [ "$(by_of "$id")" = "$HOST-$$" ]
+}
+
 @test "04 a DEAD incumbent is reclaimed and the write proceeds (self-healing, no operator step)" {
   id="$(item_claimed_by dead-incumbent "$HOST-$DEADPID")"
   run admit "$(wt "$id")"
