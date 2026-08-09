@@ -1123,7 +1123,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 | **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
 | **B** — cut active occupancy (serialise hooks, cache git) — **UNBLOCKED, unowned; now the ONLY load lever** | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
-| **E** — headless / render | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. | launch path |
+| **E** — headless / render — **precondition MEASURED 2026-08-09, see §S6.7-MEASURED; substrate NOT built** | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. **Outcome: precondition PASSES (no pty, all six hooks fire, mail reaches the model) — and the pty wall it was re-justified on is at ~509 panes, not 150: the census carried a constant +16 from static legacy `/dev/ttys[0-9a-f]` nodes. Render (140 panes) binds 3.6× sooner and is E's original rationale. Substrate declined pending two named comms gaps.** | **instruments + one additive gauge row** — `scripts/pty-census.sh`, `scripts/headless-precondition-probe.sh`, `tests/{pty-census,headless-precondition-probe}.bats`, and a non-verdict `ptys` row in `scripts/render-census.sh`. It did **not** touch `handoff-fire.sh`, any spawn/fire/close path, or `capacity-admit.sh`. |
 | **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
 
 **Lead's context budget + succession point.** The lead (this session) holds ≥50% of its window for
@@ -1259,6 +1259,16 @@ instead — another session's `git` cannot enter a `claude` process's own CPU co
 any teaming burst, against load at 0.46 of 20 (43× headroom). Pollers hold no ptys; panes do, so
 Phase A could never have touched it. C-CAP-2 (pty-less substrate) is the named candidate.
 
+⚠️ **CORRECTED 2026-08-09 by Phase E — the 2.2 is an instrument artifact and the pty wall is 3.6×
+further away than this paragraph says.** `ls /dev/ttys*` matches the 16 **static legacy** BSD nodes
+(`/dev/ttys0..ttysf`, major 64, root:wheel, present since boot, governed by nothing) as well as the
+ptmx clones (`/dev/ttys000..`, major 16, created on open and removed on close). The count therefore
+carries a **constant +16**: the 33 was **17 real ptys at 15 sessions = 1.13**, and 150 resident
+projects to **~152 of 511 (30%)**, binding at **~509 panes**. Evidence, corrected table and the
+release-test that confirms it: `docs/research/pty-ceiling-2026-08-09.md` §2. The narrow predicate is
+`/dev/ttys[0-9][0-9][0-9]`, now landed as `scripts/pty-census.sh` and as a row in `render-census.sh`.
+**Render, not ptys, is the binding term at 150** (§S6.7).
+
 ### S6.4 · Phase B — cut active-session occupancy
 
 - **Serialise** each session's hooks (one at a time) rather than shrinking their count — per S6.1 the
@@ -1381,6 +1391,55 @@ Two term changes, both evidence-backed, both **operator's call** (they gate spaw
 - **E:** at 0.025 cores/pane, 150 visible panes is 3.7 cores. Keep **≤20 visible kitty panes**; the
   rest run headless/detached (render cost 0). Confirm the headless launch path retains hooks and
   `cc-notify` before committing to it.
+
+#### S6.7-MEASURED · Phase E — precondition PASSES; the pty re-justification was an artifact (2026-08-09)
+
+Evidence: `docs/research/pty-ceiling-2026-08-09.md`. Instruments landed: `scripts/pty-census.sh`,
+`scripts/headless-precondition-probe.sh`, a pty row in `scripts/render-census.sh` (+ two suites,
+both with mutation checks).
+
+**The headless precondition PASSES on all three predicates**, measured on the running 2.1.220
+binary with no controlling terminal, resident via `--input-format stream-json` on a FIFO:
+
+| Predicate | Verdict | Evidence |
+|---|---|---|
+| P1 allocates no pty | **PASS** | `tty=??`; census `12→12→12→12` across before/resident/active/after |
+| P2 hooks fire | **PASS** | all six: SessionStart, UserPromptSubmit, Pre+PostToolUse, Stop, SessionEnd |
+| P3 mail reaches it | **PASS** | the model echoed a token existing nowhere but its inbox file |
+
+🚨 **The pty census was wrong everywhere, by a constant 16.** `ls /dev/ttys*` matches the 16 static
+legacy BSD nodes (major 64, root:wheel, since boot, governed by nothing) as well as the ptmx clones
+(major 16, created on open, removed on close). Corrected: the panel's 21 was **5** (0.83/session),
+wave A's 33 was **17** (1.13/session), and the true model is **1 pty per PANE + ~2 ambient** — read
+directly off one instrument as `panes 11 / sessions 11 / ptys 13`. So **150 resident is ~152 of 511
+(30%), binding at ~509 panes, not at 150.**
+
+**Render is the binding term at the design point, and it is Phase E's ORIGINAL rationale**: it binds
+at **140 panes** (3.5-core alarm floor ÷ 0.025 cores/pane) — 3.6× sooner than ptys — and is the only
+one of the four terms already over its own alarm floor at 150. The pty argument displaced a correct
+reason with an instrument artifact; the correct reason was in this section's first line all along.
+
+**The pty-less substrate is NOT built, and the trade is why.** Its target wall is at ~509 panes with
+3.4× headroom at the design point, the surface is `scripts/handoff-fire.sh` (7,461 lines — the exact
+"strands real work box-wide if wrong" surface), and **two prerequisites are unbuilt**:
+
+1. **Peers are told a headless session is dead.** `cc-notify` returned `verdict=mailbox-only` for a
+   live session that *did* receive the message — liveness is `cc-registry/<paneUUID>.json` + `kill -0`
+   (`bin/cc-sessions:5`, `bin/cc-notify:260`) and a headless session has no pane UUID. Transport
+   works; the verdict lies, in the direction that retires a live session.
+2. **Nothing wakes an idle headless session.** It drains its inbox at a turn boundary, and in
+   stream-json mode a turn boundary exists only when something writes its stdin. `cc-await-ping`'s
+   wake is the *watcher process exiting*, which assumes a session the harness will re-invoke; in
+   one-shot `-p` the wake floor blocked the stop, demanded a watcher it could not arm, and ended the
+   session with `Error: Input must be provided…`. The replacement (a watcher writing a user message
+   into the session's stdin FIFO) is more robust than the pane path — and is a new wake mechanism on
+   comms infrastructure.
+
+⇒ **Phase E is not closed.** Render still binds at 140 panes, so the substrate is still needed — for
+render, on the original rationale, after those two gaps close. What changed is that the next wave
+starts from a measured 1-per-pane and a PASSING precondition instead of from 2.2 and an assumption.
+**Gate terms untouched:** `scripts/lib/capacity-admit.sh` is wave D's; this wave only made the
+quantity visible.
 - **F:** whatever will not fit locally goes off-box per S5 — still blocked on the **create step**
   (17 declared sessions, zero ever executed, one head on `origin`).
 
@@ -1504,3 +1563,57 @@ The three walls in S6.1 are re-ranked: **memory (§S6.2's 35 GB) and PTYs bound 
 only ACTIVE concurrency (Wave B); toolchain bursts (Wave C) remain the crash term.** S6.2's design
 point — 150 resident, ~10 active — is unchanged in shape, but its *reason* is corrected: residency
 was never load-limited.
+
+### 6 · §4's dissent is SETTLED by measurement — and the owner's own number was the right one
+
+**Wave E ran the measurement §4 asked for, and §4's dissent was correct: ptys are a margin item, not
+the wall.** The two figures §4 could not reconcile are reconciled here, and the diagnosis §4 offered
+for the 1.8× gap turns out to be the one thing that was wrong.
+
+§4 reasoned that node-count is an *upper* bound because **"nodes persist after use"**. They do not.
+Directly tested — allocate 5 ptys, count, release, count:
+
+```
+baseline            dynamic=11   `ls /dev/ttys*`=27
++5 script procs     dynamic=16   `ls /dev/ttys*`=32
+after release       dynamic=11   `ls /dev/ttys*`=27
+```
+
+Allocation and release both move the count immediately and exactly. **The real cause of the 1.8× gap
+is that `ls /dev/ttys*` also matches 16 STATIC LEGACY BSD nodes** — `/dev/ttys0..ttysf`, major 64,
+`root:wheel`, present since boot, allocated to nobody and governed by nothing — alongside the ptmx
+clones (`/dev/ttys000..`, major 16, `<user>:tty`). A **constant +16**, in every count in this
+program.
+
+⇒ The `ps -axo tty=` row in §4's table was **not a lower bound. It was the answer.** 11/9 = 1.22 by
+that method; the corrected node method gives 11 of 27 minus 16 = the same 11. Wave A's 33 was **17
+real ptys at 15 sessions = 1.13**; the panel's 21 was **5 at ~6 sessions = 0.83**. The model is
+**one pty per PANE plus ~2 ambient**, now readable off a single instrument as `panes 11 / sessions
+11 / ptys 13`.
+
+**§4's open question — is the ratio activity-dependent? — is answered NO**, and by the mechanism
+rather than by a second sample: a pty is allocated by the terminal emulator per pane, not by the
+session's work. Measured across a headless session's full lifecycle (idle → active tool use → exit)
+the census never moved: `12 → 12 → 12 → 12`. There is no activity term to find.
+
+So §4's ranking correction stands and strengthens: **150 is pty-feasible without a watch, not merely
+with one** — ~152 of 511 (30%), binding at ~509 panes. And ptys are no longer unmeasured: they are a
+row in `render-census.sh` and a standalone census in `scripts/pty-census.sh`.
+
+**The re-ranking §4 asked for, completed.** §5 ranks memory and ptys as the residency bounds; with
+ptys at 30% the residency wall is memory, and above both sits the term §5 did not rank — render:
+
+```
+render   3.75 / 3.5 cores   107%   binds at ~140 panes     ← FIRST, and already over its alarm floor
+memory     35 / ~45 GB       78%   binds at ~190 sessions
+ptys      152 / 511          30%   binds at ~509 panes
+load     0.46 / 20            2%   binds at ~4,300 sessions
+```
+
+⇒ **C (burst survival) and the render half of E are the live path to 150; ptys and load are not.**
+§4 re-scoped E onto ptys and called render "the weaker of its two reasons" — **that is inverted**:
+the pty reason was an instrument artifact and render was E's correct rationale all along. E's
+headless precondition PASSES (§S6.7-MEASURED: no pty, all six hooks fire, mail reaches the model),
+so the substrate remains open **on render's account**, blocked on two comms gaps — `cc-registry` is
+keyed on a pane UUID, so peers are told a live headless session is dead; and nothing wakes an idle
+headless session.

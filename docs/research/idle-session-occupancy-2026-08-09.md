@@ -171,6 +171,19 @@ taken.
 
 ## 6. What actually binds at 150 resident — the wall is ptys, not load
 
+> ⚠️ **CORRECTED 2026-08-09 by Phase E — this section's numbers are inflated by a constant 16;
+> its conclusion does not survive.** `ls /dev/ttys*` also matches 16 **static legacy** BSD nodes
+> (`/dev/ttys0..ttysf`, major 64, root:wheel, present since boot, allocated to nobody and governed
+> by nothing) alongside the ptmx clones. So **33 was 17 real ptys at 15 sessions = 1.13/session**,
+> not 2.2; 150 resident is **~152 of 511 (30%)**, not 330 (65%); and the wall is at **~509 panes**,
+> not 150. The agreement with the panel's 1.5–4 band below was two instruments sharing one bad
+> predicate, not corroboration. **Render binds first, at 140 panes.** Full correction, the
+> release-test that proves the offset, and the narrow predicate:
+> `docs/research/pty-ceiling-2026-08-09.md` §2. Landed gauge: `scripts/pty-census.sh`.
+>
+> What survives: pollers hold no ptys and panes do, so Phase A could indeed never have touched this
+> term — and it was right that the term was unowned and unmeasured. Only the distance was wrong.
+
 Measured this session while the sweep ran: **33 ptys at 15 `claude` processes = 2.2 per session**,
 inside the H-CAP-1 panel's projected 1.5–4 band
 (`docs/research/session-capacity-blind-terms-2026-08-09.md` §1).
