@@ -404,6 +404,25 @@
 # re-key as a dispatch attempt: reap's `totalClaims` bound (see MAX_ATTEMPTS) and dispatch-assert's
 # discharge predicate.
 #
+# DISPATCHER HAND-OVER (`claim --role dispatcher`, 2026-08-09, backlog b922dde5567b) — what made the
+# above ACTUALLY WORK. The paragraph two up says cc-dispatch "claims with its OWN pid and then
+# exits". The second half is false often enough to matter: a `--once` pass holds its claim for the
+# whole pass, and the worker's SessionStart hand-over runs INSIDE that window — so the incumbent is
+# a LIVE `<host>-<pid>`, `reclaim`'s anti-steal guard refused, and the worker was then refused on its
+# own first write by scripts/lib/worker-claim-gate.sh as a "duplicate" of its own dispatcher. Measured
+# live 2026-08-09: dispatcher pid 49310 claimed at 14:46:44, the worker's re-key was refused at
+# 14:49:41, its first Edit was denied at 14:53. Since session-register re-keys exactly ONCE, at
+# process start, a dispatcher that outlives its worker's SessionStart STRANDS that worker outright;
+# the item's own thrash counter had already recorded two claim→reopen cycles, and cycle 3 completed
+# only because that pass happened to exit first. The deadlock was resolving on TIMING LUCK.
+#
+# The discriminator cannot be liveness — a dispatcher is alive by construction and does no work — so
+# the CLAIM RECORD CARRIES WHAT THE CLAIMER IS. `claim --role dispatcher` (cc-dispatch, G6) marks a
+# PLACEHOLDER lease held for a worker that does not exist yet; `reclaim` may re-key past such a claim
+# regardless of liveness, and past nothing else. It is one-shot: the re-key writes no role and fold()
+# RESETS role on every claim record, so the item becomes worker-held immediately and a second worker
+# racing it meets the ordinary live-claimer refusal. Full safety argument at cmd_reclaim.
+#
 # DEAD-WORKER EVIDENCE — the rule the whole sweep turns on: a dead verdict is keyed on PROCESS
 # LIVENESS, never on elapsed claim time or attempt count. Elapsed time only GATES when to ask; it is
 # never itself the answer. Under contention a healthy worker legitimately sits 5000s+ inside one
@@ -642,6 +661,20 @@ fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its
         # would close it and the next brace reads as bash. That failed loudly here — `bash -n`
         # pointed at this very line — but a quote landing inside a jq STRING would not.)
         venue: (if $r.event == "claim" then ($r.venue // "local") else ($p.venue // "local") end),
+        # ROLE — WHAT the current holder is, which decides whether a `reclaim` may re-key past a
+        # LIVE claimer (see DISPATCHER HAND-OVER in the header). "dispatcher" means the holder is a
+        # cc-dispatch pass holding a placeholder lease for a worker it has not spawned yet; ""
+        # (the default, and every pre-existing record) means an ordinary worker claim.
+        #
+        # RESET ON CLAIM, exactly like venue above and for a STRONGER reason. `reclaim` writes no
+        # role field, so reset-on-claim CLEARS it the instant a worker re-keys — which is what makes
+        # the hand-over exemption ONE-SHOT and self-extinguishing: the first worker takes the claim,
+        # the item becomes worker-held, and a second worker racing it meets an ordinary live-claimer
+        # refusal. A future reader will be tempted to "fix" this into `$r.role // $p.role` to match
+        # the carry-forward siblings above. DO NOT: that makes an item dispatcher-roled FOREVER, so
+        # every later worker could re-key past a live incumbent, and the exemption stops being a
+        # hand-over and becomes a standing hole in the lease.
+        role: (if $r.event == "claim" then ($r.role // "") else ($p.role // "") end),
         status: (
           if   $r.event == "done"    then "done"
           elif $r.event == "block"   then "blocked"
@@ -780,7 +813,7 @@ cmd_add() {
 cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local by="" evidence="" needs="" run="" session="" venue="" force=0 selfrel=""
+  local by="" evidence="" needs="" run="" session="" venue="" force=0 selfrel="" role=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -793,6 +826,9 @@ cmd_transition() {
       # --venue names WHERE the worker runs, which decides WHICH ORACLES CAN SEE IT (see VENUE in
       # the header). Claim-only: on any other event it is an error, never silently ignored.
       --venue)    venue="${1:-}";    [ $# -gt 0 ] && shift ;;
+      # --role names WHAT the claimer is, which decides whether a `reclaim` may re-key past it while
+      # it is still LIVE (see DISPATCHER HAND-OVER in the header). Claim-only, same as --venue.
+      --role)     role="${1:-}";     [ $# -gt 0 ] && shift ;;
       # `run` + `session` ride a `block` record (see the `needs` verb in the header). Accepted
       # here rather than in a third writer so the ONE transition writer stays the ONE writer.
       --run)      run="${1:-}";      [ $# -gt 0 ] && shift ;;
@@ -826,6 +862,26 @@ cmd_transition() {
     case "$venue" in
       local|cloud) ;;
       *) printf 'cc-backlog claim: unknown --venue %s (expected: local, cloud)\n' "$venue" >&2; return 2 ;;
+    esac
+  fi
+  # --role is claim-only and CLOSED-SET, for exactly the reasons --venue is, with the failure
+  # direction inverted and therefore worse: this string decides whether `reclaim` may re-key past a
+  # LIVE claimer. A typo'd `--role dispatchr` accepted as free text folds to a role no reclaim ever
+  # matches, so the hand-over silently never fires and cc-dispatch is back to deadlocking its own
+  # workers — a mislabel that reads as though it worked (memory:
+  # default-path-hardening-is-blind-to-the-explicit-argument). Unknown role is rc 2.
+  #
+  # `worker` is accepted and is a NO-OP by construction: it folds to the same "" that every
+  # pre-existing record and every plain claim folds to, so there is exactly ONE representation of
+  # "ordinary worker claim" and no second spelling for a reader to have to know about.
+  if [ -n "$role" ]; then
+    if [ "$event" != claim ]; then
+      printf 'cc-backlog %s: --role applies only to claim\n' "$event" >&2; return 2
+    fi
+    case "$role" in
+      dispatcher) ;;
+      worker) role="" ;;
+      *) printf 'cc-backlog claim: unknown --role %s (expected: dispatcher, worker)\n' "$role" >&2; return 2 ;;
     esac
   fi
   # --self-release is REOPEN-ONLY and CLOSED-SET, for the same two reasons --venue is, sharpened by
@@ -1237,7 +1293,7 @@ cmd_transition() {
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
-     --arg selfrel "$selfrel" \
+     --arg selfrel "$selfrel" --arg role "$role" \
      '{id:$id, ts:$ts, event:$event}
       + (if $by != ""       then {by:$by}             else {} end)
       + (if $evidence != "" then {evidence:$evidence} else {} end)
@@ -1245,6 +1301,7 @@ cmd_transition() {
       + (if $run != ""      then {run:$run}           else {} end)
       + (if $session != ""  then {session:$session}   else {} end)
       + (if $venue != ""    then {venue:$venue}       else {} end)
+      + (if $role != ""     then {role:$role}         else {} end)
       + (if $force == 1     then {force:true}         else {} end)
       + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
@@ -1483,14 +1540,54 @@ cmd_reclaim() {
     printf 'cc-backlog reclaim: verdict=noop-already-ours %s by %s\n' "$id" "$by"
     return 0
   fi
-  # ANTI-STEAL: refuse when the incumbent claimer is PROVABLY live and is not us. The intended case
-  # is a dead incumbent — cc-dispatch's own spent pid — so this costs one `kill -0` and never blocks
-  # it. What it does block is a second session opened in the same worktree (a hand /ship, a GC pass)
-  # taking the claim away from the worker that is still running: two live claimants is precisely the
+  # ANTI-STEAL: refuse when the incumbent claimer is PROVABLY live, is not us, and is a WORKER.
+  # What it blocks is a second session opened in the same worktree (a hand /ship, a GC pass) taking
+  # the claim away from the worker that is still running: two live claimants is precisely the
   # double-ownership this ledger exists to prevent, and the FIRST one is the rightful owner. An
   # UNRESOLVED incumbent (rc 2 — no registry answer) proceeds deliberately: refusing there would make
   # worker-keying inert exactly when the registry is wedged, and occupancy of the item's own worktree
   # is the better evidence of who is doing the work.
+  #
+  # THE `role` TERM IS NOT A CONVENIENCE — WITHOUT IT THIS GUARD DEADLOCKS ITS OWN HARNESS.
+  # This comment used to read "the intended case is a dead incumbent — cc-dispatch's own spent pid —
+  # so this costs one `kill -0` and never blocks it." That premise is FALSE, and it was false by
+  # construction, not by accident: cc-dispatch claims under `<host>-$$` (its own bash pid) and then
+  # spawns the worker, so the dispatcher is ALIVE at the exact instant its worker's SessionStart runs
+  # the hand-over. `kill -0` cannot tell that dispatcher from a competing peer worker — both are a
+  # live `<host>-<pid>` — so the guard fired on the very harness it exists to serve (memory:
+  # guard-refusal-fires-on-its-own-harness).
+  #
+  # MEASURED 2026-08-09 on item b922dde5567b, live, twice over:
+  #     14:46:44  pid 49310 = `/bin/bash .../cc-dispatch --once` claims the item
+  #     14:49:41  the worker's session-register reclaim → verdict=noop-live-claimer
+  #     14:53     worker-claim-gate → rc 9 REFUSE on the worker's FIRST Edit, holder=...-49310
+  # The write gate then tells that worker — the one cc-dispatch fired for this very item — that it is
+  # a duplicate and must STAND DOWN. It stands down or reopens, the dispatcher re-claims, and the
+  # next worker hits the same wall: the "persistent thrash - 2 fast claim->reopen cycle(s)" already
+  # recorded in the item's own needs field. It resolved ONLY when a `--once` dispatcher happened to
+  # exit first — i.e. on TIMING LUCK, and a dispatcher that outlives its worker's SessionStart (this
+  # one did, by 3 minutes) strands that worker completely, because session-register re-keys ONCE at
+  # process start and never retries.
+  #
+  # So the question that separates a hand-over from a steal was never "is the incumbent alive?" —
+  # a dispatcher is alive by construction and does no work — it is "is the incumbent a WORKER?".
+  # That fact is not derivable from the identity string, so the CLAIM RECORD CARRIES IT (`--role
+  # dispatcher`, written by cc-dispatch at bin/cc-dispatch step 5a).
+  #
+  # WHY THIS IS NOT A HOLE IN THE LEASE — four independent bounds, and the exemption needs all four:
+  #   1. `reclaim` ONLY. `claim` and `reopen` keep their live-claimer guards verbatim; nothing here
+  #      widens the verbs that can displace a live worker.
+  #   2. EXPLICIT, never inferred. Only a claim the dispatcher itself labelled is exempt. An absent
+  #      role (every pre-existing record, every hand claim) behaves exactly as before.
+  #   3. ONE-SHOT. The re-key below writes NO role field, and fold() RESETS role on every claim
+  #      record — so the item becomes worker-held the instant the first worker takes it, and a second
+  #      worker racing it meets an ordinary live-claimer refusal. The exemption consumes itself.
+  #   4. WORKTREE-SCOPED CALLERS. Both production callers (hooks/session-register.sh,
+  #      scripts/lib/worker-claim-gate.sh) refuse to call at all unless cwd is `wt-<the item's own
+  #      12-hex id>`, so the exemption is reachable only from inside the item's own dispatch worktree.
+  # A dispatcher holds a PLACEHOLDER lease for a worker it has not spawned yet; handing that lease to
+  # the worker that arrived in the item's own worktree is the designed transaction, not a steal.
+  local crole; crole="$(printf '%s' "$cur" | jq -r '.role // ""' 2>/dev/null)"
   # The incumbent's venue governs both the anti-steal probe AND the record written below. A reclaim
   # is a re-KEY, never a re-VENUE: the worker is naming itself, not moving hosts. The fold RESETS
   # venue on every `claim` record (see fold()), and a reclaim IS one — so omitting it here would
@@ -1500,14 +1597,26 @@ cmd_reclaim() {
   # default-path-hardening-is-blind-to-the-explicit-argument).
   local rvenue; rvenue="$(printf '%s' "$cur" | jq -r '.venue // "local"' 2>/dev/null)"
   [ -n "$rvenue" ] || rvenue=local
-  if [ -n "$cby" ] && claimer_live "$cby" "$rvenue"; then
+  if [ "$crole" != dispatcher ] && [ -n "$cby" ] && claimer_live "$cby" "$rvenue"; then
     printf 'cc-backlog reclaim: verdict=noop-live-claimer %s is held by %s, which is LIVE\n' "$id" "$cby"
     return 0
   fi
+  # NO role field is written — see bound (3) above. This is the line that makes the exemption
+  # one-shot; it is a deliberate omission, not an oversight.
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg by "$by" --arg venue "$rvenue" \
      '{id:$id, ts:$ts, event:"claim", by:$by, reclaim:true}
       + (if $venue != "local" then {venue:$venue} else {} end)' >> "$BACKLOG"
-  printf 'cc-backlog reclaim: verdict=reclaimed %s by %s (was %s)\n' "$id" "$by" "${cby:-<none>}"
+  # The `[dispatcher hand-over]` suffix rides the SAME `verdict=reclaimed` token both consumers
+  # already glob-match (`*verdict=reclaimed*` — hooks/session-register.sh, worker-claim-gate.sh), so
+  # it changes no branch. It exists so the hand-over is COUNTABLE in production: without it, a
+  # deadlock cured and a deadlock that never occurred emit identical lines, and the fix would be
+  # unfalsifiable in the field (memory: claimed-outcome-vs-checked-outcome).
+  if [ "$crole" = dispatcher ]; then
+    printf 'cc-backlog reclaim: verdict=reclaimed %s by %s (was %s) [dispatcher hand-over]\n' \
+      "$id" "$by" "${cby:-<none>}"
+  else
+    printf 'cc-backlog reclaim: verdict=reclaimed %s by %s (was %s)\n' "$id" "$by" "${cby:-<none>}"
+  fi
 }
 
 cmd_list() {

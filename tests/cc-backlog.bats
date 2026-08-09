@@ -1372,6 +1372,101 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   bash "$CB" list --all --json | jq -e --arg i "$id" --arg b "$HOST-$$" '.[]|select(.id==$i)|.by == $b'
 }
 
+# ── DISPATCHER HAND-OVER (backlog b922dde5567b, 2026-08-09) ────────────────────────────────────
+# The test directly above is this block's CONTROL and they must be read as a pair: same verb, same
+# oracle, same LIVE `<host>-<pid>` incumbent, opposite verdicts — and the ONLY difference between
+# them is `--role dispatcher` on the incumbent's claim. That is the whole claim of the change: the
+# discriminator is what the holder IS, not whether it is alive.
+#
+# What these RED-prove against the pre-fix tree: `reclaim` refused a live incumbent unconditionally,
+# so a dispatched worker could not take the lease its own dispatcher was holding for it, and was then
+# denied on its first write as a duplicate of that dispatcher. Measured live 2026-08-09 (dispatcher
+# pid 49310 claimed 14:46:44 · worker re-key refused 14:49:41 · first Edit denied 14:53).
+
+@test "reclaim: a LIVE DISPATCHER claim is handed over — the refusal that stranded every dispatched worker" {
+  reap_env                                             # empty-registry oracle + $HOST
+  id=$(bash "$CB" add --project /r --title T --source S)
+  # $$ is THIS bats process: provably live to `kill -0`, exactly like the real dispatcher, which is
+  # alive by construction at the instant its worker's SessionStart runs the hand-over.
+  bash "$CB" claim "$id" --by "$HOST-$$" --role dispatcher >/dev/null
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+  bash "$CB" list --all --json | jq -e --arg i "$id" --arg b "$HOST-2147483647" '.[]|select(.id==$i)|.by == $b'
+}
+
+@test "reclaim: the hand-over is ONE-SHOT — the re-key CLEARS the role, so the next worker meets the ordinary refusal" {
+  reap_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-1" --role dispatcher >/dev/null
+  # Worker 1 takes the hand-over under a LIVE pid, so oracle 1 can prove it live on the next probe.
+  bash "$CB" reclaim "$id" --by "$HOST-$$" >/dev/null
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|(.role // "") == ""'
+  # Worker 2 now faces an ordinary live WORKER, and the exemption must be spent.
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=noop-live-claimer'
+  bash "$CB" list --all --json | jq -e --arg i "$id" --arg b "$HOST-$$" '.[]|select(.id==$i)|.by == $b'
+}
+
+@test "reclaim: MUTANT — carrying the role forward instead of resetting it would make the exemption permanent" {
+  # The one-shot property lives in ONE jq clause (fold(): role resets on every claim record). This
+  # pins the failure it prevents, because the green above is also green under the broken carry-
+  # forward: there, worker 2 would ALSO be admitted, past a live worker, forever. Asserting the
+  # cleared role is necessary but not sufficient — this asserts the CONSEQUENCE.
+  reap_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-1" --role dispatcher >/dev/null
+  bash "$CB" reclaim "$id" --by "$HOST-$$" >/dev/null
+  # A hand-appended role-carrying record is what the mutant fold would have produced. With it, the
+  # live-worker refusal MUST NOT fire — proving the assertion above is load-bearing and not vacuous.
+  jq -nc --arg id "$id" --arg by "$HOST-$$" \
+    '{id:$id, ts:"2026-08-09T00:00:00Z", event:"claim", by:$by, reclaim:true, role:"dispatcher"}' \
+    >> "$CC_BACKLOG_FILE"
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'   # the hole, made visible
+}
+
+@test "reclaim: the hand-over ANNOUNCES itself — a cured deadlock must be tellable from one that never happened" {
+  reap_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" --role dispatcher >/dev/null
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"
+  printf '%s' "$output" | grep -q '\[dispatcher hand-over\]'
+  # …and it rides the SAME token both hook consumers glob-match, so no branch changes.
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+  # CONTROL: an ordinary re-key of a DEAD claimer carries no marker — else the marker means nothing.
+  id2=$(bash "$CB" add --project /r --title T2 --source S)
+  bash "$CB" claim "$id2" --by "$HOST-2147483647" >/dev/null
+  run bash "$CB" reclaim "$id2" --by "$HOST-$$"
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+  ! printf '%s' "$output" | grep -q 'dispatcher hand-over'
+}
+
+@test "claim --role: CLOSED-SET and claim-only — a typo must not fold to a role no reclaim matches" {
+  id=$(bash "$CB" add --project /r --title T --source S)
+  run bash "$CB" claim "$id" --role dispatchr --by h-1
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'unknown --role'
+  refute_in_file 'dispatchr' "$CC_BACKLOG_FILE"
+  bash "$CB" claim "$id" --by h-1 >/dev/null
+  run bash "$CB" reopen "$id" --role dispatcher --by h-1
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'applies only to claim'
+}
+
+@test "claim --role worker folds identically to a plain claim — ONE representation of an ordinary claim" {
+  # Not cosmetic: two spellings of "ordinary" would each need matching everywhere the exemption is
+  # read, and the second one is the one somebody forgets.
+  reap_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" --role worker >/dev/null
+  bash "$CB" list --all --json | jq -e --arg i "$id" '.[]|select(.id==$i)|(.role // "") == ""'
+  refute_in_file '"role"' "$CC_BACKLOG_FILE"
+  run bash "$CB" reclaim "$id" --by "$HOST-2147483647"     # still a live worker: still not stealable
+  printf '%s' "$output" | grep -q 'verdict=noop-live-claimer'
+}
+
 @test "reclaim: only a CLAIMED item is re-keyed — open/done/blocked are no-ops, never a resurrection" {
   id=$(bash "$CB" add --project /r --title T --source S)
   run bash "$CB" reclaim "$id" --by "worker-1"          # status open — the dispatcher's to hand out
