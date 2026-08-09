@@ -301,7 +301,11 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   # mixing them would convict every legitimate copy — and the fixtures alone would never show it,
   # because they are the branch that does not use git. Production is the git branch; test it.
   git -C "$CC_LINKPARITY_REPO" init -q
-  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  # `:?` guards the ARGUMENT, not the call: `git -C ""` is a NO-OP, so an unset/empty repo path
+  # would write these identities into whatever repo bats is standing in — and ~100 worktrees here
+  # share ONE .git/config, so one escape re-authors every session on the box.
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.email t@t
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.name t
   printf 'wrapper\n' > "$CC_LINKPARITY_REPO/bin/it2-wrapper"
   git -C "$CC_LINKPARITY_REPO" add -A; git -C "$CC_LINKPARITY_REPO" commit -qm f
   printf 'wrapper\n' > "$CC_LINKPARITY_CONFIG/bin/it2"
@@ -321,7 +325,11 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   # go red the day either glob changes, while the property worth guarding — an unversioned live file
   # is never silently exempt — would still hold. So assert the property.
   git -C "$CC_LINKPARITY_REPO" init -q
-  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  # `:?` guards the ARGUMENT, not the call: `git -C ""` is a NO-OP, so an unset/empty repo path
+  # would write these identities into whatever repo bats is standing in — and ~100 worktrees here
+  # share ONE .git/config, so one escape re-authors every session on the box.
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.email t@t
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.name t
   git -C "$CC_LINKPARITY_REPO" commit -q --allow-empty -m empty
   printf 'ghost\n' > "$CC_LINKPARITY_REPO/bin/cc-ghost"     # present on disk, never added
   printf 'ghost\n' > "$CC_LINKPARITY_CONFIG/bin/cc-ghost"
@@ -335,7 +343,11 @@ witness() {  # $1 = repo-relative path · $2 = the line that must name the artif
   # The complement of the case above, and the shape the defect actually took: nothing in the checkout
   # claims the path, so no forward glob reaches it and the stray leg is the ONLY thing that can see it.
   git -C "$CC_LINKPARITY_REPO" init -q
-  git -C "$CC_LINKPARITY_REPO" config user.email t@t; git -C "$CC_LINKPARITY_REPO" config user.name t
+  # `:?` guards the ARGUMENT, not the call: `git -C ""` is a NO-OP, so an unset/empty repo path
+  # would write these identities into whatever repo bats is standing in — and ~100 worktrees here
+  # share ONE .git/config, so one escape re-authors every session on the box.
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.email t@t
+  git -C "${CC_LINKPARITY_REPO:?repo path required}" config user.name t
   git -C "$CC_LINKPARITY_REPO" commit -q --allow-empty -m empty
   hand_place "bin/cc-thread"
   run "$LP"
