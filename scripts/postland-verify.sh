@@ -414,8 +414,45 @@ fi
 # Deleting the wrapper from the tree verdict WITHOUT putting the check somewhere would silently drop
 # the enforcement, so it lands here instead: the real lint, standalone, whole-tree-strict, once,
 # before the corpus — off every lander's critical path, where a violation can no longer fleet-block
-# a land but still cannot reach a green stamp. (Caveat recorded in the manifest: this preserves the
-# whole-tree SCAN, not the `--selftest` discrimination proof, which the prelint never invokes.)
+# a land but still cannot reach a green stamp.
+#
+# ── THE INSTRUMENT CHECK: `--selftest` RUNS HERE TOO (backlog 76644e76aaae, 2026-08-08) ───────────
+# The caveat this block used to record — "this preserves the whole-tree SCAN, not the `--selftest`
+# discrimination proof, which the prelint never invokes" — was true and it left the proof running
+# NOWHERE automatically. Its three carriers had each gone dark for a different reason: the bats
+# wrappers are partitioned to scripts/host-suites.manifest (so they run only post-deploy, a lagging
+# check); scripts/nightly-regression.sh runs `--selftest` on every scripts/*lint*.sh but its launchd
+# job is declared `staged` in launchd/fleet.manifest — an activation DECISION that is the operator's
+# by construction (cc-fleet --table renders it `UNDECIDED … decision pending`, measured 2026-08-08
+# as `staged: DISABLED`), never an agent's to make; and the prelint here only ever ran the scan. So
+# the ~130 cases that prove these ratchets actually go RED on a new leak and on a stuck entry gated
+# nothing. Read the declaration, not this sentence: whether that job is live is a perishable fact
+# and fleet.manifest plus `cc-fleet --table` are the two places entitled to answer it.
+#
+# A SCAN AND A SELFTEST ANSWER DIFFERENT QUESTIONS, so they may not share a verdict column:
+#   scan     exit 1 ⇒ THE TREE violates a rule      — attributable to a commit, RED, revert-eligible.
+#   selftest exit 1 ⇒ THE LINT does not discriminate — a fact about the INSTRUMENT. It says nothing
+#                     about the tree, and mapping it to RED would let a broken lint auto-revert a
+#                     commit that never touched it. Worse, it retroactively voids the scan's GREEN:
+#                     a ratchet that cannot fire reports "clean" on a dirty tree just as loudly.
+# So a failed selftest lands in the category this file already has for "no claim about the tree is
+# available" — PRELINT_UNPROVEN ⇒ CUT: never a red, and NEVER A GREEN either, with the CUT_MAX
+# ladder escalating if it persists. It additionally SKIPS that lint's scan, because a red minted by
+# an instrument already proven not to discriminate is exactly the auto-revert this guards against.
+#
+# THE OTHER DIRECTION IS DELIBERATELY NOT SYMMETRIC. A selftest that could not RUN (exit 2 / our own
+# bound / not executable) marks the run unproven but LETS THE SCAN PROCEED. Suppressing the scan on
+# an unrunnable instrument check would mean fork pressure — the very condition b4e49b4b5014 is about
+# — could silently switch the ratchet off, which is the one failure direction this whole mechanism
+# exists to prevent. Unproven-but-scanned is fail-closed toward MORE proof; unproven-and-skipped is
+# not. A lint carrying no `--selftest` dispatch at all is skipped by the same rule as an absent
+# lint, one clause below: a tree cannot be judged by a check it does not carry.
+#
+# COST, measured on this box 2026-08-08 at the UTILITY band the prelints run in, load 11.5:
+# hermeticity 67s · walltime 5s · git-identity 4s · subshell-cleanup 1s = ~77s, against the 600s
+# per-lint bound (~9x headroom on the slowest) and a corpus measured in hours. Sized in the band it
+# actually runs in, not on a foreground bench — the 60s-bound deadlock below is what that costs.
+# Seam: CC_POSTLAND_PRELINT_SELFTEST=off disables the instrument check (default on).
 # STRICTNESS: the own-set seams are UNSET in the child (`${VAR+set}` is how both lints distinguish
 # absent ⇒ judge the whole tree from set-but-empty ⇒ judge nothing), so an inherited own-set can
 # never silently narrow the verifier's check to somebody else's diff.
@@ -434,6 +471,9 @@ fi
 # ~250s still fits with 2.4x headroom, while a genuinely WEDGED lint is still cut well inside
 # SUITE_TO. Sized against its siblings, 60s was the lone foreground-scaled outlier here.
 LINT_TO="${CC_POSTLAND_LINT_TIMEOUT_S:-600}"
+# The instrument check (see the block above). Default ON: a sensor whose shipping path is "off" is a
+# sensor that ships blindness, and this one exists precisely because the proof was running nowhere.
+PRELINT_SELFTEST="${CC_POSTLAND_PRELINT_SELFTEST:-on}"
 PRELINT_UNPROVEN=0     # a lint whose own bound fired: nothing proven ⇒ never a red, never a green
 LADDER_UNPROVEN=0      # a RETRY whose own bound fired: same rule — a cut, never a red (C23)
 # Most backlog items ONE red run may file (red_actions files every failing entry, not just the
@@ -746,10 +786,41 @@ syntax_check() { # bash -n — cheap and verdict-affecting
 $(shell_files)
 EOF
 }
+# Does this file carry a real `--selftest` DISPATCH? 0 = yes · 1 = no · 2 = the check could not RUN.
+# THE REGEX IS NOT NEW — it is scripts/nightly-regression.sh's `supports_selftest`, S4-hardened after
+# its naive form (`grep -qE -- '--selftest|selftest\)'`) proved to be a false-positive machine: it
+# matched a `--selftest` in a USAGE comment, a `selftest)` verb-only case whose CLI then rejected the
+# flag, and a cosmetic mention in a log name. A false positive here is a lint fed a flag it does not
+# understand, whose exit code we would then read as a verdict about the instrument. Keep the two in
+# step; postland-verify's own --selftest asserts this predicate fires on all four default PRELINTS,
+# which is the positive control that stops a drifted regex from silently reading as "none support it".
+# THREE states, not two. A bare `grep -q` conflates rc=2 (grep could not run — the fork-exhaustion
+# case this whole file is scarred by) with rc=1 (no match), and that conflation would silently
+# down-grade a supported lint to "no instrument check" under exactly the load where it matters most.
+prelint_has_selftest() { # <path> → 0 supported · 1 not supported · 2 unknown (could not check)
+  grep -qE '^[[:space:]]*\(?[-|A-Za-z0-9_*."]*--selftest[-|A-Za-z0-9_*."]*\)|(^|[^[:alnum:]_])case[[:space:]].*[[:space:]]in[[:space:]].*--selftest[-|A-Za-z0-9_*."]*\)|==?[[:space:]]*"?--selftest"?' \
+    "$1" 2>/dev/null
+  local rc=$?
+  [ "$rc" -le 1 ] && return "$rc"
+  return 2
+}
+prelint_invoke() { # <script> <outfile> [argv…] → rc. THE one invocation shape, so the band, the
+  # bound and the own-seam unsets can never drift between the instrument check and the scan.
+  # `unset` inside the subshell, NOT `env -u`: env execs a binary and could never run the
+  # `bounded` FUNCTION, which has to stay the outer call so the bound owns the process group.
+  # `${LINT_QOS[@]+"${LINT_QOS[@]}"}` — NOT a bare "${LINT_QOS[@]}": this is bash 3.2 under `set -u`,
+  # where expanding an EMPTY array unguarded is an unbound-variable death (the taskpolicy-absent
+  # path). QOS above needs no such guard because it is never empty. `"$@"` IS safe empty — it is a
+  # positional expansion, not an array one — which is what keeps the scan's "no positional arg"
+  # contract below exact rather than passing an empty string.
+  local sc="$1" so="$2"; shift 2
+  ( cd "$WORKTREE" && unset CC_HERM_OWN CC_WALLTIME_OWN SHIP_LAND_HERM_OWN_SCOPE
+    bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$sc" "$@" ) > "$so" 2>&1
+}
 prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Appends any RED to FAILING
   # (so it flows through the existing verdict chain: FAILING non-empty ⇒ RED, and it OUTRANKS a cut
   # — which is the point, a deterministic named violation must never be filed as "nothing proven").
-  local s rc out first why
+  local s rc out first why sout src has
   PRELINT_UNPROVEN=0                        # reset BEFORE the early return — the requeue loop
   [ "${#PRELINTS[@]}" -eq 0 ] && return 0   # calls run_target twice in one process
   for s in "${PRELINTS[@]}"; do
@@ -757,12 +828,48 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     # ABSENT from this tree ⇒ skipped, never red: a tree cannot be judged by a check it does not
     # carry (an older sha predates the lint, and convicting it would make history unverifiable).
     [ -x "$WORKTREE/$s" ] || { log "prelint: $s absent from this tree — skipped"; continue; }
+    # ── THE INSTRUMENT CHECK — does this lint still DISCRIMINATE? (backlog 76644e76aaae) ─────────
+    # Runs BEFORE the scan, because its answer decides whether the scan's answer means anything.
+    # See the PRELINTS block above for the full verdict-column argument; the three outcomes are:
+    #   0 ⇒ proven, scan on.   1 ⇒ THE LINT IS BROKEN: unproven (never red, never green) + scan
+    #   SKIPPED.               other ⇒ the check could not be MADE: unproven, but scan STILL RUNS.
+    if [ "$PRELINT_SELFTEST" != off ]; then
+      prelint_has_selftest "$WORKTREE/$s"; has=$?
+      if [ "$has" -eq 2 ]; then
+        PRELINT_UNPROVEN=1
+        log "prelint: $s — could not determine whether it carries a --selftest (grep would not run); instrument unproven, scanning anyway"
+      elif [ "$has" -eq 1 ]; then
+        # Same rule as an absent lint: no dispatch means no proof is on offer, and inventing a
+        # non-verdict for every run would deadlock any custom CC_POSTLAND_PRELINTS list forever.
+        log "prelint: $s ships no --selftest dispatch — instrument check skipped (scan still judged)"
+      else
+        sout="$RUN_TMP/prelint.$(basename "$s").selftest.out"
+        prelint_invoke "$s" "$sout" --selftest
+        src=$?
+        if [ "$src" -eq 0 ]; then
+          log "prelint: $s --selftest proven — the instrument discriminates"
+        else
+          PRELINT_UNPROVEN=1
+          # The lints' own selftests announce failure on the LAST line ("… FAILED — the ratchet does
+          # not discriminate") and name the individual case on a `SELFTEST FAIL:` line, so prefer the
+          # named case and fall back to the summary. Quoted INTO the log, not pointed at: $RUN_TMP is
+          # removed when run_target returns, so a "see <path>" breadcrumb is dead before anyone reads it.
+          why="$(grep -aE 'SELFTEST FAIL|FAILED|⛔|✗' "$sout" 2>/dev/null | head -1 | cut -c1-160)"
+          [ -n "$why" ] || why="$(sed -n '$p' "$sout" 2>/dev/null | cut -c1-160)"
+          if [ "$src" -eq 1 ]; then
+            CUT_WHY="the LINT is broken, not the tree: $s --selftest does not discriminate — ${why:-（no output)}"
+            log "prelint INSTRUMENT-BROKEN: $s --selftest exit 1 — ${why:-（no output)}; its scan is SKIPPED (no red may be minted by a lint proven not to discriminate) and no green is claimable"
+            continue
+          fi
+          case "$src" in
+            124) log "prelint: $s --selftest hit OUR ${LINT_TO}s bound — instrument unproven, scanning anyway" ;;
+            *)   log "prelint: $s --selftest exit $src — the instrument check could not be MADE; unproven, scanning anyway — ${why:-（no output)}" ;;
+          esac
+        fi
+      fi
+    fi
     out="$RUN_TMP/prelint.$(basename "$s").out"
-    # `unset` inside the subshell, NOT `env -u`: env execs a binary and could never run the
-    # `bounded` FUNCTION, which has to stay the outer call so the bound owns the process group.
-    # `${LINT_QOS[@]+"${LINT_QOS[@]}"}` — NOT a bare "${LINT_QOS[@]}": this is bash 3.2 under `set -u`,
-    # where expanding an EMPTY array unguarded is an unbound-variable death (the taskpolicy-absent
-    # path). QOS above needs no such guard because it is never empty.
+    # The band/bound/own-seam mechanics moved to prelint_invoke above (one shape, two call sites).
     # NO POSITIONAL ARG — each lint resolves its OWN scan root from its own $0. This used to pass a
     # literal `tests`, which was correct only because both lints then in the list happen to default to
     # `${1:-$ROOT/tests}`, i.e. the argument re-stated their default. git-identity-lint does not scan a
@@ -772,8 +879,7 @@ prelint_check() { # whole-tree meta-lints, standalone, BEFORE the corpus. Append
     # PRELINT_UNPROVEN, so EVERY run would become a CUT and no tree could ever be stamped green again.
     # Measured before wiring: `git-identity-lint.sh tests` → exit 2 "nothing to scan"; no arg → exit 0,
     # 490 files, clean. The other two are unchanged by this: verified exit 0 both with and without it.
-    ( cd "$WORKTREE" && unset CC_HERM_OWN CC_WALLTIME_OWN SHIP_LAND_HERM_OWN_SCOPE
-      bounded "$LINT_TO" ${LINT_QOS[@]+"${LINT_QOS[@]}"} "./$s" ) > "$out" 2>&1
+    prelint_invoke "$s" "$out"
     rc=$?
     [ "$rc" -eq 0 ] && { log "prelint: $s clean (whole-tree strict)"; continue; }
     # THE VERDICT / NON-VERDICT SPLIT — exit 1 is the ONLY code that says anything about the tree.
@@ -2336,7 +2442,7 @@ okp()  { printf '  ok   %-52s\n' "$1"; PASS=$((PASS+1)); }
 badp() { printf '  FAIL %-52s\n' "$1"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC2317
 selftest() {
-  local d rc tree green_sha red_sha
+  local d rc tree green_sha red_sha pl pl_f pl_missing
   d="$(mktemp -d "$TMPBASE/postland-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d'" EXIT
@@ -2517,9 +2623,38 @@ selftest() {
   # PRELINT_UNPROVEN — so every run would CUT and no tree could be stamped green again. Assert the
   # absence of that argument, because its presence is silent and fleet-fatal.
   # shellcheck disable=SC2016  # a literal search pattern: the $s must NOT expand here
-  grep -qE '"\./\$s" \)' "$SELF" \
+  grep -qE '^[[:space:]]*prelint_invoke "\$s" "\$out"$' "$SELF" \
     && okp "prelint: lints are invoked with NO positional — each resolves its own scan root" \
     || badp "prelint: a positional is still passed — a root-scanning lint would exit 2 and CUT every run"
+
+  # ── the INSTRUMENT CHECK (backlog 76644e76aaae) ──────────────────────────────────────────────────
+  # The detector is a REGEX over other people's files, and a regex that silently stops matching does
+  # not fail — it reports "none of them support --selftest" and the instrument check evaporates for
+  # every lint at once, restoring exactly the gap this closed. So it is positive-controlled against
+  # the real files, and negative-controlled against a prose mention, which is the false positive
+  # nightly-regression's S4 audit actually caught. Without the negative half, a regex degenerate
+  # enough to match anything would pass the positive half perfectly.
+  pl_missing=""
+  for pl in "${PRELINTS[@]}"; do
+    [ -n "$pl" ] || continue
+    # $SELF-relative, NOT $WORKTREE-relative: during a selftest the check cell has not been minted.
+    pl_f="$(dirname "$SELF")/$(basename "$pl")"
+    [ -f "$pl_f" ] || continue
+    prelint_has_selftest "$pl_f" || pl_missing="$pl_missing $(basename "$pl")"
+  done
+  [ -z "$pl_missing" ] \
+    && okp "prelint: the detector fires on every default PRELINT (instrument check is reachable)" \
+    || badp "prelint: prelint_has_selftest does NOT detect --selftest in:$pl_missing — the instrument check would silently skip them"
+  printf '#!/bin/bash\n# usage: x.sh --selftest\n./other.sh --selftest >/dev/null && ok\n' > "$d/prose-only.sh"
+  prelint_has_selftest "$d/prose-only.sh" \
+    && badp "prelint: the detector matches a PROSE --selftest — it would feed a flag the lint rejects and read the rejection as a verdict" \
+    || okp "prelint: the detector ignores a prose-only --selftest (the S4 false positive)"
+  # A failed selftest must reach PRELINT_UNPROVEN and `continue` — never FAILING. The end-to-end
+  # RED-proof of both halves is tests/postland-verify.bats (C22); this asserts the wiring is present
+  # at all, so a refactor that drops the mapping cannot pass this file's own selftest.
+  grep -qE 'PRELINT_UNPROVEN=1' "$SELF" && grep -q 'INSTRUMENT-BROKEN' "$SELF" \
+    && okp "prelint: a failed --selftest is wired to the non-verdict column, not to FAILING" \
+    || badp "prelint: the INSTRUMENT-BROKEN mapping is gone — a broken lint could auto-revert an innocent commit"
   grep -qE 'PRELINTS=\(.*subshell-cleanup-lint\.sh' "$SELF" \
     && okp "prelint: subshell-cleanup-lint is in the blocking pre-corpus slot" \
     || badp "prelint: subshell-cleanup-lint NOT wired into PRELINTS"
