@@ -89,17 +89,24 @@ fi
 CUR_UUID="$(resolve_uuid)"
 [ -n "$CUR_UUID" ] || { echo "cc-await-ping: no uuid given and no \$ITERM_SESSION_ID (or role file '$ROLES_DIR/$ROLE' missing)" >&2; exit 3; }
 
-# ── shared cursor lib (critique F6a): baseline off the SAME .seen cursor the drain/fold use, so mail
-#    ALREADY pending when we arm fires IMMEDIATELY — the old `wc -l` arm-time baseline missed exactly
-#    that line. On fire, mailbox_take advances seen+acked (our stdout rides the harness task-completion
-#    notification → a reliable delivery the model reads). Lib absent → the standalone grep -c '' fallback.
+# ── cursor lib (critique F6a, amended by F-3 2026-08-09): SEED off the `.seen` cursor the drain/fold
+#    use, so mail ALREADY pending when we arm fires IMMEDIATELY — the old `wc -l` arm-time baseline
+#    missed exactly that line. But seed ONCE and then track a PRIVATE cursor: polling `.seen` live is
+#    what let the drain starve this watcher (see the F-3 block above the main loop). On fire,
+#    mailbox_take_from advances seen+acked without regressing them (our stdout rides the harness
+#    task-completion notification → a reliable delivery the model reads). Lib absent → the standalone
+#    grep -c '' fallback, which is arrival-based and therefore un-starvable too.
 _bd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 _mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 _have_lib=0
 if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
+  # mailbox_take_from is REQUIRED, not optional: it is what makes this watcher's trigger private (F-3
+  # below). An older deployed lib without it degrades to the standalone line-count baseline — which is
+  # arrival-based and therefore also un-starvable, merely blind to mail already pending at arm time —
+  # rather than calling a function that does not exist.
   # shellcheck source=/dev/null
-  . "$_mbxlib" 2>/dev/null && command -v mailbox_has_pending >/dev/null 2>&1 && _have_lib=1
+  . "$_mbxlib" 2>/dev/null && command -v mailbox_take_from >/dev/null 2>&1 && _have_lib=1
 fi
 
 # comms-alarm chokepoint lib. $0 is resolved THROUGH its symlinks first: ~/.claude/bin/cc-await-ping
@@ -121,7 +128,7 @@ done
 MBOX="$MAILBOX_DIR/$CUR_UUID.md"
 _lc() { if [ -f "$MBOX" ]; then grep -c '' "$MBOX" 2>/dev/null; else echo 0; fi; }   # grep -c '' — matches the lib (F1)
 baseline="$(_lc)"
-echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'shared .seen cursor' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
+echo "cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo 'private cursor, seeded from .seen' || echo "from line $baseline"); timeout ${TIMEOUT}s, every ${INTERVAL}s)" >&2
 
 # Wake-path HEARTBEAT (critique F5): touch <uuid>.watching each poll so cc-notify/cc-announce can tell a
 # live session that WILL be woken (a fresh watcher heartbeat) from a live-but-idle one that only drains on
@@ -393,12 +400,70 @@ _owner_dead() {  # 0 iff the watched pane is PROVABLY gone — pid oracle AND an
   return 0
 }
 
+# ── F-3: THE TRIGGER IS PRIVATE, BECAUSE A SHARED CURSOR IS A STARVABLE ONE ───────────────────────
+# MEASURED 2026-08-09 (docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md § F-3). This watcher used to poll
+# `mailbox_has_pending`, i.e. `lines - .seen`, and hooks/mailbox-drain.sh advances that SAME `.seen`
+# on every delivery (its :13). So the two consumers raced for one cursor and whichever ran first
+# starved the other. A peer executed the protocol perfectly — landed content-verified, pinged, then
+# self-closed — the drain surfaced the ping at a UserPromptSubmit and advanced `.seen` past it, and
+# the lead's armed watcher then polled an empty delta forever: `886.seen=3`, `886.acked=3`, 3 lines,
+# alive and armed and permanently silent. It would have waited 4 hours for a ping already delivered.
+#
+# WHY "THE DRAIN ALREADY DELIVERED IT" IS NOT A FIX, and why this is not paranoia about a dup: a
+# delivered message and a woken reader are DIFFERENT EVENTS. The drain's delivery is passive context
+# inside an already-running turn; this watcher's delivery is an event that re-invokes an IDLE lead. A
+# lead that goes idle after a drain-consumed ping is unreachable by both paths at once — the drain has
+# nothing left to emit and the watcher has nothing left to see. That is the forever-hang.
+#
+# REJECTED ALTERNATIVES, both weaker than a private cursor:
+#   • poll `.acked` instead — refuted by the post-mortem's own numbers: `.acked` was ALSO at EOF (3 of
+#     3), so this watcher would have been equally deaf. It swaps coupling-to-the-drain for
+#     coupling-to-the-Stop-fold rather than removing the coupling.
+#   • have the drain signal a live `.watching` watcher — the drain only ever runs INSIDE the lead's own
+#     session, so if it ran the lead is by definition already awake; and it buys a pid-signalling path
+#     (with a recycled-pid hazard) to do what needs no IPC at all.
+#
+# So the watcher keeps its OWN cursor, seeded from `.seen` the first time it sees a key, and thereafter
+# advanced only by ITS OWN takes. The seed is what preserves F6a (mail already pending when we arm
+# still fires immediately); the privacy is what makes the drain unable to starve us. Dup-biased in the
+# same direction the drain declares for itself: a duplicate wake is cheap, a lost wake is a 4-hour hang.
+#
+# bash 3.2 (macOS /bin/bash) has no associative arrays, so this is a newline-delimited "<key> <cursor>"
+# string with a linear scan. The set is at most a couple of keys (lib → mailbox_keyset) and a mailbox
+# key is validated to [A-Za-z0-9._-], so a space is an unambiguous separator. `while … done <<HEREDOC`
+# does NOT subshell in bash, so _woke_set really does mutate the caller's WOKE_MAP.
+WOKE_MAP=""
+_woke_get() {   # <key> → print its cursor on stdout; rc 1 = not yet seeded
+  local k="$1" line
+  while IFS= read -r line; do
+    case "$line" in "$k "*) printf '%s' "${line#* }"; return 0 ;; esac
+  done <<WOKEEOF
+$WOKE_MAP
+WOKEEOF
+  return 1
+}
+_woke_set() {   # <key> <cursor>
+  local k="$1" v="$2" line out=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in "$k "*) continue ;; esac
+    out="$out$line
+"
+  done <<WOKEEOF
+$WOKE_MAP
+WOKEEOF
+  WOKE_MAP="$out$k $v"
+}
+
 elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   next_uuid="$(resolve_uuid)"
   if [ -n "$next_uuid" ] && [ "$next_uuid" != "$CUR_UUID" ]; then
     _unbeat
     CUR_UUID="$next_uuid"; MBOX="$MAILBOX_DIR/$CUR_UUID.md"; baseline="$(_lc)"
+    # A re-pointed role is a DIFFERENT logical inbox: drop the private cursors so the new key set
+    # re-seeds from its own .seen on the next poll (same first-poll behaviour as a fresh arm).
+    WOKE_MAP=""
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; _beat                                     # heartbeat
@@ -413,13 +478,20 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     # FIRST key of the set that has anything — not just our own. cc-notify writes the PANE box while
     # the drain reads the SESSION box (lib → mailbox_keyset), so checking one key is how a watcher
     # ends up deaf to a delivery sitting one filename away.
-    _HIT=""
+    _HIT=""; _FROM=0
     for _k in $(_keys); do
-      if mailbox_has_pending "$_k"; then _HIT="$_k"; break; fi
+      # Seed this key's PRIVATE cursor from .seen the first time we see it — that is the F6a
+      # behaviour (already-pending mail fires at once) and it is the ONLY time .seen is consulted.
+      if ! _woke_get "$_k" >/dev/null 2>&1; then _woke_set "$_k" "$(mailbox_seen "$_k")"; fi
+      _w="$(_woke_get "$_k")"; case "$_w" in ''|*[!0-9]*) _w=0 ;; esac
+      if [ "$(mailbox_lines "$_k")" -gt "$_w" ]; then _HIT="$_k"; _FROM="$_w"; break; fi
     done
     if [ -n "$_HIT" ]; then
-      mailbox_take "$_HIT" 1        # print the new line(s) + advance the shared cursor (reliable delivery)
+      # Window opens at OUR cursor, never at .seen — so a drain that already advanced .seen past this
+      # line cannot turn our fire into an empty print (which is exactly what F-3 was).
+      mailbox_take_from "$_HIT" "$_FROM" 1
       _trc=$?
+      _woke_set "$_HIT" "$(mailbox_lines "$_HIT")"
       # F9: rc 2 = the body WAS printed but the cursor write FAILED — "the caller must escalate + still
       # deliver, never silently drop". This caller used to exit 0 regardless, so the lib's one escalation
       # contract had no honorer: a broken cursor looked exactly like a clean take. Deliver, alarm, exit loud.

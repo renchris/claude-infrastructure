@@ -33,6 +33,10 @@
 #                                    caller must escalate + still deliver, never silently drop (F9).
 #   mailbox_take_n <uuid> [ack] [max]  same, but delivers AT MOST <max> lines and advances the cursor by
 #                                    exactly what it printed (max=0/absent ⇒ unlimited ⇒ mailbox_take).
+#   mailbox_take_from <uuid> <from> [ack]  LOCKED: print lines (from, EOF] where <from> is the CALLER'S
+#                                    OWN cursor, not the shared .seen; advances the shared cursors but
+#                                    never REGRESSES them. For a reader that must not be starvable by
+#                                    another consumer's cursor write (bin/cc-await-ping — F-3).
 #   mailbox_promote_acked  <uuid>    LOCKED: acked=seen (the Stop-fold lag: last cycle's emitted is now consumed)
 #
 # ── FORWARD CHAINS (v3 D1 — succession must not strand an inbox) ──────────────────────────────────
@@ -295,6 +299,58 @@ mailbox_take_n() { # <uuid> [ack_now] [max]  (max 0/absent ⇒ unlimited)
   printf '%s' "$body"
   if ! _mbx_write_int "$(_mbx_dir)/$u.seen" "$cur"; then rc=2; fi   # F9: body printed, cursor write FAILED
   [ "$ack_now" = 1 ] && [ "$rc" = 0 ] && _mbx_write_int "$(_mbx_dir)/$u.acked" "$cur"
+  _mbx_unlock "$u"
+  return "$rc"
+}
+
+# ── READER-PRIVATE TAKE (F-3, 2026-08-09) ────────────────────────────────────────────────────────
+# Identical to mailbox_take_n except the window starts at the CALLER'S OWN cursor instead of the
+# shared `.seen`, and the shared cursors are advanced but NEVER regressed — this reader is an
+# ADDITIONAL consumer, not the owner of `.seen`.
+#
+# WHY IT HAS TO EXIST. `mailbox_take_n` opens its window at `.seen`, so a reader whose trigger is
+# "is there a line I have not delivered?" cannot use it once ANOTHER consumer has advanced `.seen`
+# past that line: the take returns rc 1 and prints nothing, while the line is demonstrably in the
+# box. That is the measured cursor race — hooks/mailbox-drain.sh advances `.seen` on delivery
+# (its :13, ack_now=0) and bin/cc-await-ping polled that same cursor, so whichever consumer ran
+# first starved the other. Post-mortem 2026-08-09: `886.seen=3`, `886.acked=3`, mailbox 3 lines, a
+# perfect ping (landed + announced + self-closed) delivered by the drain, and the lead's ARMED
+# watcher polling an empty delta forever — alive, armed, permanently silent.
+#
+# The fix is not to pick a different shared cursor (`.acked` was equally at EOF in that
+# post-mortem, and would merely re-couple the watcher to the Stop-fold's timing). It is to stop
+# sharing the TRIGGER at all: a reader passes the cursor it last delivered from, and no other
+# consumer's bookkeeping can move it. DUP-BIASED, matching the drain's own declared bias (:15) —
+# if the drain already surfaced the line, this re-delivers it and the reader wakes anyway, because
+# a duplicate wake is cheap and a lost wake is a multi-hour hang.
+#
+# Exit: 0 = printed + cursors reconciled · 1 = nothing new FOR THIS READER · 2 = body printed but a
+# cursor write FAILED (same F9 escalation contract as mailbox_take_n).
+mailbox_take_from() { # <uuid> <from> [ack_now]
+  local u="${1:-}" from="${2:-0}" ack_now="${3:-0}" f cur seen acked body rc=0
+  _mbx_valid_uuid "$u" || return 1
+  from="$(_mbx_int "$from")"
+  f="$(mailbox_file "$u")"
+  _mbx_lock "$u" || true                       # gave up ⇒ proceed lock-free (dup-risk, never a hang)
+  cur="$(mailbox_lines "$u")"
+  # A cursor PAST EOF means the box rotated/was GC'd under us — re-deliver rather than go silent,
+  # exactly as mailbox_seen's own past-EOF clamp does (F11).
+  [ "$from" -gt "$cur" ] 2>/dev/null && from=0
+  if [ "$cur" -le "$from" ]; then _mbx_unlock "$u"; return 1; fi
+  body="$(tail -n +"$((from + 1))" "$f" 2>/dev/null)"
+  printf '%s' "$body"
+  # ADVANCE-NEVER-REGRESS. Another consumer may already be ahead of us; writing our own `cur` over a
+  # larger `.seen` would un-deliver ITS mail and re-create this very race in the other direction.
+  seen="$(mailbox_seen "$u")"
+  if [ "$seen" -lt "$cur" ]; then
+    _mbx_write_int "$(_mbx_dir)/$u.seen" "$cur" || rc=2
+  fi
+  if [ "$ack_now" = 1 ] && [ "$rc" = 0 ]; then
+    acked="$(mailbox_acked "$u")"
+    if [ "$acked" -lt "$cur" ]; then
+      _mbx_write_int "$(_mbx_dir)/$u.acked" "$cur" || rc=2
+    fi
+  fi
   _mbx_unlock "$u"
   return "$rc"
 }

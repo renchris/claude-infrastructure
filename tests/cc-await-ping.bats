@@ -143,10 +143,15 @@ setup() {
   local root="$BATS_TEST_TMPDIR/tree"
   mkdir -p "$root/bin" "$root/hooks/lib"
   cp "$AWAIT" "$root/bin/cc-await-ping"
+  # The stub mirrors the seam the tool actually drives. Since F-3 that is mailbox_take_from (a
+  # reader-private window) seeded by mailbox_seen — NOT mailbox_has_pending/mailbox_take, which no
+  # longer decide anything here. A stub left on the old names would silently fail the
+  # `command -v mailbox_take_from` gate, drop the tool to its lib-free path, and pass this test
+  # vacuously by never reaching an rc-2 branch at all.
   cat > "$root/hooks/lib/mailbox-pending.sh" <<'LIB'
 mailbox_lines() { echo 1; }
-mailbox_has_pending() { return 0; }
-mailbox_take() { printf '%s\n' "2026-07-10T10:00:00+0000 [peer] undroppable ping"; return 2; }
+mailbox_seen() { echo 0; }
+mailbox_take_from() { printf '%s\n' "2026-07-10T10:00:00+0000 [peer] undroppable ping"; return 2; }
 LIB
   export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
   printf '2026-07-10T10:00:00+0000 [peer] undroppable ping\n' > "$MB"
@@ -489,4 +494,60 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   [ "$status" -eq 2 ]
   [[ "$output" != *"verdict=killed"* ]] || false
   [[ "$output" == *"verdict=timeout"* ]] || false
+}
+
+# ── F-3: THE DRAIN AND THE WATCHER MUST NOT SHARE A TRIGGER (2026-08-09) ──────────────────────────
+# Measured: a peer executed the protocol perfectly (landed content-verified → pinged → self-closed),
+# hooks/mailbox-drain.sh surfaced the ping at a UserPromptSubmit and advanced ONLY .seen (its :13,
+# ack_now=0), the Stop-fold then promoted .acked — and the lead's ARMED watcher, polling lines-.seen,
+# saw an empty delta forever. Post-mortem: 886.seen=3, 886.acked=3, mailbox 3 lines, watcher alive.
+# Delivered, but nobody woken. See docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md § 2026-08-09.
+
+@test "F-3: a drain that advances .seen past a new line does NOT starve an armed watcher" {
+  # The interval is deliberately LONGER than the writer's delay so both of the writer's actions (the
+  # append AND the drain's cursor advance) are in place before the next poll — otherwise the watcher
+  # could catch the line pre-drain and the test would pass for the wrong reason.
+  ( sleep 1
+    printf '2026-08-09T00:56:08+0000 [peer] HANDOFF-PING: landed 9da394a9c, self-closing\n' >> "$MB"
+    printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"     # the drain surfaced it and advanced .seen
+    printf '1\n' > "$CC_MAILBOX_DIR/$UUID.acked"    # ...and the Stop-fold promoted .acked to match
+  ) &
+  writer=$!
+  run "$AWAIT" "$UUID" --interval 3 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]                                # NOT 2 — a timeout here is the forever-hang
+  [[ "$output" == *"landed 9da394a9c"* ]] || false   # and the body is still printed, not an empty fire
+}
+
+@test "F-3 CONTROL: mail drained BEFORE the arm does NOT fire (the seed, not a wake loop)" {
+  # The other direction, and the reason the private cursor is SEEDED from .seen rather than from 0:
+  # a watcher that fired on any non-empty box would return instantly on every arm, turning the wake
+  # path into an arm→fire→arm busy loop. Already-consumed history must stay silent.
+  printf '2026-08-09T00:50:00+0000 [peer] read in a previous turn\n' > "$MB"
+  printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"
+  printf '1\n' > "$CC_MAILBOX_DIR/$UUID.acked"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"verdict=timeout"* ]] || false
+}
+
+@test "F-3: the watcher advances .seen/.acked when IT is first, and never REGRESSES a further-ahead one" {
+  # Two halves of mailbox_take_from's contract in one arm. A watcher is an ADDITIONAL consumer, so it
+  # must reconcile the shared cursors on fire (or cc-inbox-guard alarms and receipts read `unread`)
+  # while never writing a SMALLER value over another consumer's — which would un-deliver its mail and
+  # re-create this same race in the opposite direction.
+  printf 'line one\n' > "$MB"                       # history, already surfaced before we arm
+  printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"
+  printf '0\n' > "$CC_MAILBOX_DIR/$UUID.acked"      # ...but not yet provably consumed
+  ( sleep 1
+    printf '2026-08-09T01:00:00+0000 [peer] second line\n' >> "$MB"
+    printf '2\n' > "$CC_MAILBOX_DIR/$UUID.seen"     # the drain runs first and gets AHEAD of us
+  ) &
+  writer=$!
+  run "$AWAIT" "$UUID" --interval 3 --timeout 15
+  wait "$writer" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"second line"* ]] || false
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 2 ]   # not regressed
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]  # promoted by our reliable delivery
 }
