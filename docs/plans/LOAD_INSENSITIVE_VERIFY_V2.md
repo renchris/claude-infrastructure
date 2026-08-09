@@ -425,6 +425,23 @@ refused for want of a green descendant. Fixed and landed 2026-08-09 (`ba9f6df9` 
 the discriminator moved from the exit code to the **port** — knob wired ⇒ cannot adopt ⇒ a different
 port; knob validated-but-unwired ⇒ adopts ⇒ same port — and mutation-proven at its own line.
 
+**The two-sided control, run because the culprit commit denied being one.** `d022242d`'s own message
+ends *"41/41 `cc-bats` green; all three new tests go RED on a pre-fix mutant"* — an explicit claim
+that this suite passed at that commit. Rather than date the red from a stamp, the assertion was run
+at both ends of that single commit, same harness, same box:
+
+```
+d022242d^  → ok 1   POSITIVE CONTROL: the wall-clock budgets are PINNED…
+d022242d   → not ok 1   … tests/cc-authbrowser.bats:509  `[ "$status" -eq 4 ]' failed
+             "port 19341 is held by a foreign process (pids=unknown) … falling back to free port 50133"
+```
+
+One commit, both sides, opposite verdicts: the bisect is exact and the red starts at 2026-08-08
+11:00. **So the commit's own green claim was false** — `claimed-outcome-vs-checked-outcome`, and a
+reminder that a commit message is the author's *intent*, never evidence. Had that claim been taken
+at face value the search would have moved past the one commit that did it. **When a commit denies
+being the culprit, that denial is the cheapest thing in the investigation to test: two runs.**
+
 ⚠️ **This is a FOURTH channel of §3's inversion, and it points the opposite way from the other three.**
 Channels 1-3 are tests that consult ambient machine state. This one is a test that consulted a
 **stale contract**: the subject's verdict moved and one assertion stayed behind, so it stopped
