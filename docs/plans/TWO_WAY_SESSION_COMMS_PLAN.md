@@ -787,3 +787,101 @@ The activation queue confirms it is not live: 6 pending-activation scripts un-ru
 
 **The transferable rule, stated for the next reader:** *a delivered message and a woken reader are
 different events, and a system that conflates them will report success while the reader sleeps.*
+
+### RESOLUTION 2026-08-09 (session `loop-integrity`) — F-3/F-2/F-1 landed; L1 staged and REFUTED-in-part
+
+Premise check first, as the section above demanded: `scripts/wait-safety-gate.sh` ran **GREEN — 13 met ·
+0 failed · 0 NOT BUILT**. L1 was not rebuilt.
+
+#### F-3 — the cursor race. FIXED (`e1e57acd`)
+
+The watcher now keeps a **private cursor**, seeded from `.seen` the first time it sees a key and
+thereafter advanced only by its own takes. The seed preserves F6a (mail already pending at arm still
+fires at once); the privacy is what makes the drain unable to starve it. New lib primitive
+`mailbox_take_from` opens its window at the caller's own cursor and advances the shared cursors
+**without ever regressing them** — writing a smaller `.seen` over another consumer's would un-deliver
+its mail and re-create this race in the opposite direction.
+
+**The two candidate shapes it beat, and why — both were refutable from this section's own data:**
+
+- *Poll `.acked` instead (candidate c).* **Refuted by the post-mortem's own numbers.** `.acked` was
+  ALSO at EOF — `886.acked = 3` of 3 — so a `.acked`-polling watcher would have been **equally deaf**.
+  It swaps coupling-to-the-drain for coupling-to-the-Stop-fold; it does not remove the coupling.
+- *Have the drain signal a live `.watching` watcher (candidate b).* The drain only ever runs **inside
+  the lead's own session**, so if it ran, the lead is by definition already awake. It buys a
+  pid-signalling path (with a recycled-pid hazard) to do what needs no IPC at all.
+
+Dup-biased in the same direction the drain declares for itself (`mailbox-drain.sh:15`).
+
+#### F-2 — the deaf lead. FIXED (`d99fbcf2`)
+
+The `verdict=killed` text was already correct; the defect was the channel. It now **also writes a
+`WAKE-PATH-DOWN` line into the inbox it was watching**, so the drain surfaces it at the next boundary
+as ordinary peer mail *and* as an operator-visible `systemMessage`. No new transport. Written directly
+rather than via `cc-notify`, which resolves aliases and follows `.forward` chains — the box that must
+be reached is precisely the one we were watching. **Only the kill writes a line**: a timeout is the
+designed end of a healthy watch, and an alarm on the normal path would carry as few bits as one that
+never fires.
+
+#### F-1 — announce-before-retire. FIXED, and deliberately NOT as a refusal (`24b692b4`)
+
+The missing piece was an **oracle**: the inbox records what a target *received*, nothing recorded what
+a sender *sent*, and the `[<from>]` tag cannot stand in — it is a registry-resolved friendly NAME, not
+the sender's pane id. `cc-notify` now leaves one line per enqueue under the sender's own key in
+`mailbox/.sent/`; the fire records the armed address as `notifyBack` on the `cc-fired` stamp (additive,
+so `cc-reaper`'s contract is untouched), set where the trailer is *actually appended* because every
+stand-down path in between blanks `NOTIFY_BACK`.
+
+🚨 **It announces; it does not refuse — and that is the load-bearing decision.** A dirty tree has a cure
+the closing pane fully controls; an announce does not. If the originator is gone or unresolvable, a
+gating peer could never satisfy it and would hold a pane and a worktree forever — the pile-up the
+`--untracked-files=no` fix already had to undo once. Sharper still: a refusal is only as good as the
+reader that acts on it, and **the peer that skipped its ping is exactly the one least likely to handle
+one correctly** — the same advisory-prose failure wearing an exit code. So the mechanism does the
+announce and reports the status as `UNREPORTED`, which is a strictly worse report than the peer's own
+and is therefore its own incentive.
+
+**Scope, stated honestly:** F-1's *measured* case — a peer killed mid-work, open pane, dirty tree —
+never reached `self-close` at all, so no gate here could have fired. This closes the narrower gap it
+exposed. The killed case is L1's.
+
+#### L1 activation — STAGED as `migrations/0004`, and the doc's own L1 row is PARTLY WRONG
+
+Two deviations from the brief, both because disk truth disagreed with it:
+
+1. **Not `pending-activation/`.** That store is the advisory diode `migrations/README.md` exists to
+   abolish; the queue still read **6 un-run, 5 rotting >24 h** this session, and the SessionStart
+   banner itself says new wiring should land as a `c10` migration. None of the 6 staged L1.
+2. 🚨 **The activation is not one step, and the blocked half is not the one the doc names.** The L1 row
+   lists a symlink and a launchd watcher as peers. Measured: the **symlink has been live since
+   2026-07-18**; the launchd half is blocked, **and not on launchd**. *Nothing produces the
+   `<watch-file>`.* `lead-deathwatch.sh:31` specifies its format and the doc says it is "built from the
+   P8 registry (spawn-instant rows)", but no file in `scripts/`, `bin/` or `hooks/` writes one, and the
+   only contents of `~/.claude/deathwatch` are fixtures the 2026-07-15 `--selftest` left behind.
+
+   So installing the plist today would arm kqueue on an **empty watch-list** and report a healthy
+   heartbeat while watching nothing — a watcher whose own liveness says nothing about its coverage,
+   which is the failure `L1-e` exists to prevent, one level up. **`wait-safety-gate` GREEN means the
+   DETECTOR is complete; that is not the same claim as coverage of the fleet**, and `L1-a`
+   (`lead-deathwatch.sh:12`) already declares this blindness — the registry side of the composition it
+   names is what is missing. The migration re-derives that precondition **at consumption**, so the day
+   a producer lands it passes on its own with no edit. Producer filed: backlog `ed6d0716caa7`.
+
+#### Gates
+
+`tests/cc-await-ping.bats` 42/42 · `tests/announce-before-retire.bats` 10/10 (new) ·
+`tests/deploy-migrations.bats` 8/8 · `notify-back` 14 · `cc-notify` 80 · `notify` 32 ·
+`handoff-selfclose` 28 · `mailbox-drain` 27 · `mailbox-{forward,midturn,session-key}` green ·
+`shellcheck` clean on every file touched. **Every behavioural change was mutation-checked** — the
+pre-fix trigger reddens the F-3 pair, removing the notice reddens the F-2 pair, and an always-satisfied
+guard reddens 5 F-1 cases while all three F-1 controls stay green.
+
+**Pre-existing red, NOT from this diff** (verified by reverting this session's `handoff-fire.sh` changes
+and re-running): `tests/handoff-fired-cwd-index.bats` #10 "ADOPT spends the orphan".
+
+**Housekeeping:** the section above (`fe1df944`) had never landed — local `main` had diverged from
+`origin/main` at `8c691106` and was carrying it alone. It is cherry-picked (`-x`) into this branch, so
+landing this lands the post-mortem with its resolution.
+
+**The transferable rule this session adds to the one above:** *a shared cursor is a starvable one — if
+two consumers must both observe an event, neither may be able to advance the other's bookkeeping.*
