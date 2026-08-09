@@ -270,6 +270,7 @@ trap '_unbeat' EXIT
 # Best-effort and never fatal: we are already dying, and a failed append must not cost the verdict on
 # stderr or the marker cleanup. It is deliberately NOT filtered by the drain's fixture/noise grep, so
 # it counts as real traffic and cannot be crowded out.
+# shellcheck disable=SC2329  # invoked indirectly — its only caller, _sig_verdict, is itself trap-only.
 _wake_down_notice() {
   local box="$MAILBOX_DIR/${CUR_UUID}.md"
   [ -n "${CUR_UUID:-}" ] || return 0

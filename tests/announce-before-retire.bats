@@ -20,6 +20,19 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+  # HERMETIC. This suite drives cc-notify for real (the send-record case), and cc-notify resolves its
+  # mailbox, registry and alarm dirs under $HOME by default — so an unfixtured run would write into
+  # the operator's live store. Pinned before anything else reads it.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # …and the seams that do NOT resolve under $HOME: an absolute /tmp default or a BARE NAME the
+  # subject executes off the operator's PATH is untouched by fixturing $HOME (a514d3b0).
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts-absent"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
+  # handoff-fire's capacity_gate refuses above 2.0/core and this box lives well above that, so an
+  # unpinned suite would go red-by-load rather than by its subject.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   PANE="DDDDDDDD-1111-2222-3333-444444444444"
   ORIG="EEEEEEEE-1111-2222-3333-444444444444"
   FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$FIRED_DIR"
