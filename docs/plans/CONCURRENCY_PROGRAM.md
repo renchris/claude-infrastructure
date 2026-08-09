@@ -1115,6 +1115,27 @@ parallel to all of it and is the only track that changes the ceiling rather than
 Evidence: `docs/research/session-capacity-ceiling-2026-08-09.md` (§10–§12 carry the corrections).
 Every number here was measured on this box today. **S5's premise is superseded** — see S6.0.
 
+### S6-Phase 0 · Agent Team orchestration — EXECUTION LOCUS PER WAVE
+
+| Wave | Locus | Why | Owns (single-owner files) |
+|---|---|---|---|
+| **A** — idle sessions free (poller consolidation) | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. | the per-session poller call-sites + the new box-wide daemon |
+| **C** — bound toolchain ignition | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. | cold-compile admission path + worker-pool cap |
+| **B** — cut active occupancy (serialise hooks, cache git) | **S**, but **SERIALISED AFTER A** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache |
+| **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
+| **E** — headless / render | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. | launch path |
+| **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
+
+**Lead's context budget + succession point.** The lead (this session) holds ≥50% of its window for
+deciding, and absorbs only each wave's completion ping — never its implementation detail. Succession
+point: once A and C report, the lead either dispatches B or recycles into it.
+
+🚨 **Binding constraints inherited by EVERY wave** (from the 2026-08-09 capacity brief):
+never register a hook, never load launchd, never run an activation — **stage it as a `c10` migration**
+(`migrations/README.md`) and stop. Do not change `CC_FIRE_MAX_LOAD_PER_CORE` or any gate default as a
+side effect. Anything touching spawn/fire/close tooling strands real work box-wide if wrong, so every
+behavioural change needs a test **AND** a mutation check that fails when the change is neutered.
+
 ### S6.0 · The correction that reopens the local track
 
 S5 states *"100 local sessions is arithmetically unreachable: 511 MB/session × 100 = 51.1 GB."*
