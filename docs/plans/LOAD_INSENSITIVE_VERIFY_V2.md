@@ -480,3 +480,86 @@ resolver — an unpinned wall-clock budget in the SUBJECT, which is channel 3 ag
 corroboration already downgrades it to a CUT on some sweeps. Do **not** enlarge the constant (§5's
 rejected row); the fix is a pinnable seam in the suite, as `cc-authbrowser` already does for its two
 budgets. Filed on `423947ccdb96`.
+
+## 9. Status 2026-08-09T06:46Z — the green rate spans TWO machines, and the dominant red was fixed 24 min ago
+
+Re-derived live this session (`ls ~/.claude/autonomy/postland/stamps` + `jq`, not quoted from §7,
+whose 104-stamp numbers are stale by construction). **116 stamps = `{red:102, cut:10, green:3,
+hung:1}` ⇒ 2.6% green.** Greens ever: 07-30T06:42, 08-04T14:15, 08-08T00:47.
+
+**Three corrections, each of which changes what the next session should do.**
+
+### 9.1 The 2.6% blends two different verifiers — C29 landed mid-census
+
+`7e10f13a` ("a same-window 2/3 is one experiment — corroborate convictions across sweeps") landed
+**2026-08-08T23:45:59Z**, i.e. *inside* the stamp population everyone is averaging over. Post-C29 the
+machine converts a single-window ladder conviction into a **CUT**, not a RED — visible in
+`runner.log` at 04:55:15Z, 06:41:08Z ("C29 PENDING … awaiting a second") versus 05:58:16Z
+("C29 CORROBORATED … RED"). Split at the land:
+
+| regime | stamps | green | red | cut |
+|---|---|---|---|---|
+| pre-C29 (≤ 23:45Z 08-08) | 107 | 3 | 95 | 8 |
+| post-C29 | 9 | **0** | 7 | 2 |
+
+⚠️ **C29 cannot raise the green rate — it moves runs red→cut, and neither is green.** It buys honesty,
+not convergence. Any future rate must state its regime; a single percentage over all 116 describes a
+machine that no longer exists.
+
+### 9.2 REFUTED: the reds are not ~349 independent 1%-flakes
+
+The premise carried into this session — *"~349 suites each with a small independent per-run failure
+probability p; 2.6% implies p ≈ 1%; the lever is per-suite reliability under load"* — does not survive
+the failing lists. Across the last 15 stamps the identity does **not** churn:
+
+- `tests/boot-resume-launch.bats` — **8 appearances** (18:32, 20:23, 21:02, 23:07, 01:18, 02:51, 03:57, 05:58)
+- `scripts/git-identity-lint.sh` — 4 · `tests/cc-authbrowser.bats` — 4 · everything else ≤ 2
+
+One named suite in over half the sweeps is a **repeat offender**, not a 1% independent draw. The
+binomial framing predicts a fresh random subset each run; the data shows the same file. Sizing a
+load-insensitivity programme off `p ≈ 1%` would be parameter motion against a distribution that
+isn't there — the failure `postland-verify.sh:507` already names.
+
+### 9.3 Every `boot-resume-launch.bats` conviction predates its own fix
+
+`6d815386` ("the daemon-context arm was decided by a 20s bet on an idle box") is the fix for exactly
+the `BRL_TIMEOUT_S=20` channel §8 filed on `423947ccdb96`. It was committed **06:19:57Z**. Containment
+test (`git merge-base --is-ancestor 6d815386 <tree>`) over every tree that convicted the suite:
+
+```
+bf73e18a80b0  does NOT contain 6d815386      639931322893  does NOT contain 6d815386
+df651e20dac1  does NOT contain 6d815386      7789d8da9898  CONTAINS 6d815386   ← in flight now
+```
+
+**Not one conviction was measured against the fixed tree.** The sweep that started 06:44:44Z
+(`7789d8da9898`, 352 suites) is the first, and it was still running at 06:46Z. So the correct next
+action is to **read that stamp, not to design anything** — the dominant red may already be closed and
+merely unmeasured. (Memory: *scan-revision-predates-the-fix*; the plan's own §8 warns the same way.)
+
+### 9.4 `retries=0` is TWO populations, and neither is an unrun ladder
+
+The inbound brief read `retries=0` as *"the tree was convicted on a 1-of-1 sample with the flake
+ladder never running"* and cited 23:52:30Z / 23:56:47Z / 00:13:29Z. Sorting all 22 `retries=0` rows by
+their `failing` entry splits them cleanly:
+
+- **`failing=[scripts/*-lint.sh]`** (08-02 → 08-09, incl. all three cited rows, all four of which name
+  `scripts/git-identity-lint.sh`) — a **prelint** red. `run_target` (`postland-verify.sh:1940-1946`)
+  short-circuits: *"FAIL FAST … 138 suites cannot change that verdict … run_s/retries≈0 is itself the
+  tell that this was a lint red, not a corpus red."* **Designed, documented, correct** — the ladder is
+  a per-*file* flake check and a whole-tree lint has no per-file sample to take. Not a defect; nothing
+  to fix. Note the real consequence instead: a prelint red **skips the corpus entirely**, so those
+  four runs never had a chance to be green.
+- **`failing=[tests/]`** (07-26 → 07-30, the literal directory) — the TAP-regex stall, already filed as
+  item **`75df8db2c884`** with a live session on it. Not this item's work.
+
+The two share a number and nothing else. Chasing the recent rows with the stall fix would reproduce
+nothing, because the stall population ends 2026-07-30.
+
+### 9.5 What the next session should NOT do
+
+Do not re-architect for load-insensitivity off the 2.6% figure, do not enlarge `BRL_TIMEOUT_S` (§5's
+rejected row still binds), and do not treat a prelint `retries=0` as a bug. Read the `7789d8da9898`
+stamp first; it is the only measurement that can tell whether the remaining convict is still a
+convict. `deploy-live` was **not** deadlocked at the time of writing — lag 21 commits against
+`CC_DEPLOY_MAX_LAG_COMMITS=25`, live HEAD 3.25h old against a 6h budget — so a REFUSED line here is
+inside budget and is *not* the 2026-07-30 deadlock shape (items `08d2f8651ccd` / `16f0abd6e9bd`).
