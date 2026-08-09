@@ -14,16 +14,52 @@
 # disjoint: a spawn can still fail to start for reasons that have nothing to do with typing — a
 # logged-out account, a usage-limit refusal at first token, a reaped cwd, a binary that moved.
 #
-# THREE OUTCOMES, NOT TWO — and the third is the whole point (same contract as
+# THREE OUTCOMES, NOT TWO — and everything after the third is the whole point (same contract as
 # handoff-fire.sh:verify_engagement, deliberately, so consumers learn ONE exit-code vocabulary):
 #
-#   0  RUNNING  — the agent process exists. It started.
+#   0  RUNNING  — the agent process exists AND is not sitting on a modal. It started, and it is
+#                 free to proceed.
 #   1  ABSENT   — no such process, and no evidence of why. Died, or never launched.
 #   2  PARKED   — no such process AND a pane is sitting at a shell prompt showing a launch that
 #                 died. This is knowable in SECONDS and names its own remedy; folding it into 1
 #                 loses the diagnosis. Callers MUST branch on 2 explicitly.
 #   3  OFFBOX   — the subject is a DECLARED off-box (cloud) session, so this box's process table is
 #                 structurally unable to answer the question. A NON-VERDICT, not a severity.
+#   4  WEDGED   — the process EXISTS and is inert on a blocking modal. The exact inverse of 2, and
+#                 the state this file used to report as 0 RUNNING — see below.
+#
+# ── WHY 4 EXISTS: LIVENESS IS NOT PROGRESS, AND 0 WAS ANSWERING THE WRONG QUESTION (plan §9.5) ───
+# A fresh session in a project whose `.mcp.json` declares an unapproved server renders "New MCP
+# server found in this project: …" and BLOCKS. That is a live `claude.exe` doing no work: `ps` says
+# healthy, `agent_pid` below finds it, and this file said `✓ RUNNING`. Every state 1/2/3 models an
+# agent that is NOT in the process table; 4 is the one where it is, which is why no amount of
+# sharpening the process oracle could ever have reached it. The plan filed it as a follow-on rather
+# than forcing it through with the tool's own author absent, precisely because a new member of a
+# shared exit vocabulary lands in every consumer's `*)` arm (memory:
+# new-enum-member-falls-into-fail-closed-default) — so it arrives here WITH its second consumer
+# taught, never as a local edit.
+#
+# The oracle is `hooks/lib/pane-modal.sh`, shared verbatim with handoff-fire.sh so the enumerated
+# dialog strings exist in exactly ONE place; read its header before touching a pattern. It fails
+# OPEN in every direction — no kitty, no socket, no python3, no pane found, an unreadable screen, a
+# missing lib — and an open failure yields 0 RUNNING, i.e. exactly the answer this file gave before
+# the state existed. A verdict this file cannot reach is never worse than the one it used to give.
+#
+# ── THE FOLD RANK IS EXPLICIT, AND IS NOT THE NUMERIC ORDER ──────────────────────────────────────
+# `--all` reports the worst member. That used to be `max(rc)`, which silently made "highest number"
+# mean "worst" — so the ordering principle lived nowhere and the NEXT member would inherit the top
+# rank by arithmetic accident. It is now a table, and the principle it encodes is stated once:
+#
+#     RUNNING  <  ABSENT  <  PARKED  <  WEDGED  <  OFFBOX
+#        0            1         2         4          3
+#
+# ABSENT < PARKED < WEDGED orders by SPECIFICITY of diagnosis, not by severity — WEDGED is the most
+# specific of the three (it names a live pid, a named dialog, and a one-keystroke remedy) and it is
+# the one a caller is most likely to mis-read as healthy, since it is literally the state that read
+# as green until now. OFFBOX stays on top because it is the only NON-VERDICT in the set: a wave
+# containing a question this box could not ask must not report as a wave whose members were all
+# answered (memory: gate-never-ran-vs-gate-red). No existing input changes verdict — 4 did not
+# exist, so nothing that used to fold to 3 can now fold to 4.
 #
 # ── WHY 3 EXISTS, AND WHY IT OUTRANKS THE OTHERS (CLOUD_OBSERVABILITY.md §5.2, liar #1) ──────────
 # A session running in an Anthropic-managed VM shares no kernel and no process table with this box.
@@ -86,7 +122,10 @@ while [ $# -gt 0 ]; do
     --interval) INTERVAL="${2:-1}"; shift 2 ;;
     --quiet|-q) QUIET=1; shift ;;
     --all) ALL=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    # Bounded by the SHEBANG-to-`set` span, never a line count. `2,40p` was correct when the header
+    # was 40 lines and silently truncated mid-sentence the moment a state was added to it — a help
+    # window whose correctness depends on nobody editing the file above it.
+    -h|--help) sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'; exit 0 ;;
     -*) printf 'cc-spawn-verify: unknown option %s\n' "$1" >&2; exit 64 ;;
     *) NAMES+=("$1"); shift ;;
   esac
@@ -108,6 +147,70 @@ else
   [ -n "$CC_CLOUD" ] || { [ -x "$HOME/.claude/bin/cc-cloud" ] && CC_CLOUD="$HOME/.claude/bin/cc-cloud"; }
   [ -n "$CC_CLOUD" ] || { [ -x "$(dirname "$0")/cc-cloud" ] && CC_CLOUD="$(dirname "$0")/cc-cloud"; }
 fi
+
+# ── THE MODAL ENUMERATION (see "WHY 4 EXISTS") ───────────────────────────────────────────────────
+# Shared verbatim with scripts/handoff-fire.sh. Resolution order mirrors the cc-cloud block above,
+# with the repo-relative path FIRST rather than last: this file is a per-file symlink into the
+# checkout, so a lib added in the same commit is present beside it immediately, while the installed
+# ~/.claude/hooks/lib/ copy only appears on the next install.sh glob (bin/cc-notify:199 names the
+# same deploy-lag trap). Absent lib ⇒ no wedge oracle ⇒ 0 RUNNING, exactly the pre-4 behaviour.
+#
+# `if` blocks, never `[ … ] && …` — this file is `set -e`, and its own fold comment already names
+# that shape as the one that quietly inverts a guard. A source-guard that aborted the script when
+# the lib was ABSENT would turn the fail-open design into a fail-dead one.
+#
+# CC_PANE_MODAL_LIB is the same `+set` seam handoff-fire.sh uses for this lib, and it is what lets a
+# test exercise the ABSENT-lib path: `CC_PANE_MODAL_LIB=` disables the oracle outright. Without an
+# off switch the repo-relative candidate always resolves and the fail-open branch would be untested
+# — i.e. the branch that decides whether a missing deploy degrades or breaks.
+CC_MODAL_LIB=""
+if [ -n "${CC_PANE_MODAL_LIB+set}" ]; then
+  if [ -f "${CC_PANE_MODAL_LIB}" ]; then CC_MODAL_LIB="$CC_PANE_MODAL_LIB"; fi
+else
+  for _c in "$(dirname "$0")/../hooks/lib/pane-modal.sh" \
+            "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/pane-modal.sh" \
+            "$HOME/.claude/hooks/lib/pane-modal.sh"; do
+    if [ -f "$_c" ]; then CC_MODAL_LIB="$_c"; break; fi
+  done
+fi
+if [ -n "$CC_MODAL_LIB" ]; then
+  # shellcheck source=../hooks/lib/pane-modal.sh
+  # shellcheck disable=SC1091  # runtime-resolved; the ship gate runs shellcheck without -x
+  . "$CC_MODAL_LIB"
+fi
+
+# ── THE KITTY LOOKUP — ONE resolver, TWO pane oracles ────────────────────────────────────────────
+# Hoisted out of parked_evidence when the wedge oracle arrived, so this file does not carry two
+# spellings of the same RPC (plan §8.3's standing "the predicate is now in THREE files" risk, in
+# miniature). Resolution is byte-identical to what parked_evidence shipped with — deliberately NOT
+# widened to bin/cc-kitty-bin's absolute-path candidates, which would make a previously fail-open
+# caller start finding kitty and is a behaviour change this item did not ask for.
+#
+# CC_KITTY_BIN uses the `+set` seam, so `CC_KITTY_BIN=` genuinely disables both oracles. That is
+# what makes a test hermetic against the operator's live fleet: PATH-prepending a stub directory
+# does NOT remove the real `kitten` further down PATH, so before this seam existed a suite could
+# reach 20 live panes while its own comment claimed there was no kitty.
+if [ -n "${CC_KITTY_BIN+set}" ]; then
+  KITTY_BIN="$CC_KITTY_BIN"
+else
+  KITTY_BIN="$(command -v kitten 2>/dev/null || command -v kitty 2>/dev/null || true)"
+fi
+
+kitty_ls() { # → the window tree as JSON on stdout, empty if kitty cannot answer
+  local sock
+  [ -n "$KITTY_BIN" ] || return 0
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  if [ -n "$sock" ]; then "$KITTY_BIN" @ --to "$sock" ls 2>/dev/null || true
+  else "$KITTY_BIN" @ ls 2>/dev/null || true; fi
+}
+
+kitty_text() { # $1=pane-id → that pane's PLAIN visible text (no --ansi; see pane-modal.sh's contract)
+  local sock
+  [ -n "$KITTY_BIN" ] || return 0
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  if [ -n "$sock" ]; then "$KITTY_BIN" @ --to "$sock" get-text --match "id:$1" 2>/dev/null || true
+  else "$KITTY_BIN" @ get-text --match "id:$1" 2>/dev/null || true; fi
+}
 
 # is_offbox <name> → 0 iff the subject is a DECLARED, unretired cloud session.
 # Fails CLOSED toward the ordinary local verdict: no cc-cloud, an unreadable state dir, or an
@@ -160,12 +263,8 @@ agent_pid() { # $1=name → echoes pid(s) of genuine agent processes, empty if n
 # what died is the launch command itself. That makes the diagnosis specific to the spawn we asked
 # about and immune to unrelated shells.
 parked_evidence() { # $1=agent-name → echoes a reason and returns 0 if THIS agent's launch died
-  local name="$1" kb sock out
-  kb="$(command -v kitten 2>/dev/null || command -v kitty 2>/dev/null || true)"
-  [ -n "$kb" ] || return 1
-  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
-  if [ -n "$sock" ]; then out="$("$kb" @ --to "$sock" ls 2>/dev/null || true)"
-  else out="$("$kb" @ ls 2>/dev/null || true)"; fi
+  local name="$1" out
+  out="$(kitty_ls)"
   [ -n "$out" ] || return 1
   command -v python3 >/dev/null 2>&1 || return 1
 
@@ -188,7 +287,7 @@ for w in d:
   local id text found=""
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    text="$("$kb" @ ${sock:+--to "$sock"} get-text --match "id:$id" 2>/dev/null || true)"
+    text="$(kitty_text "$id")"
     [ -n "$text" ] || continue
     # Must name THIS agent — the dead launch line still carries `--agent-name <n>`.
     printf '%s' "$text" | grep -qF -- "--agent-name $name" || continue
@@ -212,8 +311,68 @@ for w in d:
   return 0
 }
 
-verify_one() { # $1=name → 0 running / 1 absent / 2 parked / 3 offbox
-  local name="$1" waited=0 pids
+# ── IS THE RUNNING AGENT ACTUALLY FREE TO PROCEED? (the 4 WEDGED oracle) ─────────────────────────
+# Runs ONLY once presence is already proven, so it can never establish presence — the file's
+# process-first rule is unchanged, and this is a second consultation of pane state for the same
+# reason parked_evidence is the first: to EXPLAIN a fact the process table has already settled.
+#
+# THE JOIN IS ARGV POSITION, NOT PID. `foreground_processes` is a sampled process GROUP, so the
+# agent's pid is not guaranteed to be the one kitty reports for its window at the instant we look;
+# joining on the pid would make the answer depend on that sample. Matching `--agent-name <n>` as an
+# argv PAIR with a claude argv[0] is the SAME discriminator agent_pid uses, so the two oracles agree
+# by construction rather than by coincidence, and the `pgrep -f matches briefs` failure that this
+# file already paid for once cannot come back through a second door.
+#
+# FAILS OPEN, IN EVERY DIRECTION — no lib, no kitty, no python3, no matching window, a blank screen,
+# an unenumerated dialog. Every one of those yields "not wedged" ⇒ 0 RUNNING ⇒ precisely the verdict
+# this file gave before the state existed. A blind wedge oracle can never convict a healthy agent.
+wedge_evidence() { # $1=agent-name → echoes "<slug> — pane id=<id>" and returns 0 if inert on a modal
+  local name="$1" out ids id text slug
+  command -v pane_modal_reason >/dev/null 2>&1 || return 1
+  out="$(kitty_ls)"
+  [ -n "$out" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  ids="$(printf '%s' "$out" | AGENT_NAME="$name" python3 -c '
+import json, os, posixpath, sys
+want = os.environ["AGENT_NAME"]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+def is_agent(argv):
+    # argv[0] must BE claude (a brief can contain any text; it cannot occupy argv[0]), and the flag
+    # must be its own list element with the name as the NEXT one.
+    if not argv or "claude" not in posixpath.basename(argv[0]):
+        return False
+    for i, a in enumerate(argv[:-1]):
+        if a == "--agent-name" and argv[i + 1] == want:
+            return True
+    return False
+for w in d:
+    for t in w.get("tabs", []):
+        for win in t.get("windows", []):
+            for p in (win.get("foreground_processes") or []):
+                if is_agent(p.get("cmdline") or []):
+                    print(win.get("id"))
+                    break
+' 2>/dev/null || true)"
+  [ -n "$ids" ] || return 1
+
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    text="$(kitty_text "$id")"
+    [ -n "$text" ] || continue
+    slug="$(printf '%s' "$text" | pane_modal_reason || true)"
+    [ -n "$slug" ] || continue
+    printf '%s — pane id=%s\n' "$slug" "$id"
+    return 0
+  done <<< "$ids"
+  return 1
+}
+
+verify_one() { # $1=name → 0 running / 1 absent / 2 parked / 3 offbox / 4 wedged
+  local name="$1" waited=0 pids wedge
   # FIRST, before the clock: a declared off-box session can never appear in the local process
   # table, so waiting for it is spending $TIMEOUT to arrive at a wrong answer.
   if is_offbox "$name"; then
@@ -224,6 +383,16 @@ verify_one() { # $1=name → 0 running / 1 absent / 2 parked / 3 offbox
   while :; do
     pids="$(agent_pid "$name" || true)"
     if [ -n "$pids" ]; then
+      # Presence is settled; the remaining question is whether it can PROCEED. Checked here rather
+      # than after the loop because the loop RETURNS on the first sighting — a check placed after it
+      # would be unreachable on the only path that reaches it.
+      if wedge="$(wedge_evidence "$name")"; then
+        say "✗ WEDGED   $name (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ $//')) — the process"
+        say "           exists and is INERT on a blocking dialog: $wedge"
+        say "           $(pane_modal_remedy "${wedge%% *}")"
+        say "           ps says healthy and no hook has fired, which is why nothing else reports it."
+        return 4
+      fi
       say "✓ RUNNING  $name (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ $//'))"
       return 0
     fi
@@ -242,19 +411,38 @@ verify_one() { # $1=name → 0 running / 1 absent / 2 parked / 3 offbox
   return 1
 }
 
-# Worst-verdict wins, so a wave is only green when EVERY member is running. PARKED (2) outranks
-# ABSENT (1) because it is the more specific diagnosis, not because it is more severe. OFFBOX (3)
-# outranks both because it is a NON-VERDICT: the wave is not verified-green, and folding it down
-# into 0 would be this file claiming an answer it did not get.
+# Worst-verdict wins, so a wave is only green when EVERY member is running. The ORDER is the table
+# in the header, and it is spelled out here rather than inferred from `max(rc)` — which is what this
+# fold used to be, and which quietly meant "the highest exit code is the worst outcome". That held
+# only by arithmetic luck up to 3, and the very next member (4 WEDGED) breaks it: WEDGED is a
+# verdict and OFFBOX is a NON-VERDICT, so OFFBOX must stay on top no matter what number it wears
+# (memory: new-enum-member-falls-into-fail-closed-default — a new member lands in every derivation's
+# default arm, and `max()` IS a default arm).
 #
+# An unmapped code sorts ABOVE every mapped one but below OFFBOX's non-verdict: an outcome this
+# table has not been taught is, by definition, one nobody has reasoned about — it must never fold
+# down into green, and it must never impersonate the abstain.
+rank_of() { # $1=exit code → its position in RUNNING < ABSENT < PARKED < WEDGED < OFFBOX
+  case "$1" in
+    0) printf 0 ;;   # RUNNING
+    1) printf 1 ;;   # ABSENT
+    2) printf 2 ;;   # PARKED
+    4) printf 3 ;;   # WEDGED
+    3) printf 5 ;;   # OFFBOX — the only NON-VERDICT, and therefore the top
+    *) printf 4 ;;   # unmapped: louder than every verdict, quieter than the abstain
+  esac
+}
+
 # `rc=0; verify_one … || rc=$?` — NOT `verify_one … || rc=$?` on one line, and never a trailing
 # `[ … ] && worst=…` as the last statement of the loop body: under `set -e` a false test there
 # makes the body's exit status non-zero. Both are the shapes that quietly invert a guard.
 worst=0
+worst_rank=0
 for n in "${NAMES[@]}"; do
   rc=0
   verify_one "$n" || rc=$?
-  if [ "$rc" -gt "$worst" ]; then worst="$rc"; fi
+  r="$(rank_of "$rc")"
+  if [ "$r" -gt "$worst_rank" ]; then worst_rank="$r"; worst="$rc"; fi
   if [ "$ALL" != 1 ]; then break; fi
 done
 exit "$worst"

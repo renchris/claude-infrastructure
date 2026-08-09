@@ -62,7 +62,7 @@ hazard is that three components do not go silent — they convert *"not on this 
 
 | Component | Line | What it does with a healthy cloud session |
 | --- | --- | --- |
-| `bin/cc-spawn-verify` | `:89-97` | argv scan of the **local** process table ⇒ exit 1 `ABSENT`, "Died, or never launched". Callers are told at `:24` to branch on that three-state vocabulary. |
+| `bin/cc-spawn-verify` | `:89-97` | argv scan of the **local** process table ⇒ exit 1 `ABSENT`, "Died, or never launched". Callers are told at `:24` to branch on that three-state vocabulary. *(That vocabulary has since grown a FIFTH member — exit 4 `WEDGED`, backlog `75c2e3e2bde7` — and the rank note below applies to it.)* |
 | `bin/cc-board` | `:126-141` | a registry row with no local telemetry whose pid fails `kill -0` prints as **`DIED-UNRENDERED`** — a fabricated death verdict from a pid that is simply not on this box. |
 | `scripts/team-orphan-reaper.sh` | `:61-70` | treats a failed `kill -0` as *"POSITIVE evidence of death"* and **archives the team**. Destructive, on a 600 s launchd timer. |
 
@@ -966,6 +966,19 @@ The gate the rest waited on. `cc-cloud is-offbox` had existed since the reconcil
 | `bin/cc-spawn-verify` | exit 1 `ABSENT` — "Died, or never launched" | exit **3 `OFFBOX`**, a fourth verdict in the exit-code vocabulary |
 | `bin/cc-board` | `DEAD` (telemetry loop) · `DIED-UNRENDERED` and **`NO-RENDER?`** (registry join) | `OFFBOX` on all three |
 | `scripts/team-orphan-reaper.sh` | archive, on a 600s launchd timer | KEEP + log, checked **before** `lead_liveness` |
+
+> **A FIFTH member arrived 2026-08-09 (backlog `75c2e3e2bde7`), and it changed how the `--all` fold
+> is written — read this before adding a sixth.** `cc-spawn-verify` now also resolves exit **4
+> `WEDGED`** (the agent process EXISTS and is inert on a startup modal). The fold used to be
+> `max(rc)`, i.e. "the highest exit code is the worst outcome" — a rule that held only by arithmetic
+> luck up to 3 and breaks at 4, because `OFFBOX` must stay on top: it is the set's only NON-VERDICT,
+> and a wave carrying a question this box could not ask must never report as one whose members were
+> all answered. The rank is now an explicit table (`rank_of`) reading
+> `RUNNING < ABSENT < PARKED < WEDGED < OFFBOX`, with an unmapped code sorting above every verdict
+> and below the abstain. **The `OFFBOX`-outranks-everything property this section established is
+> therefore now asserted by a test rather than by the choice of integer** —
+> `tests/cc-spawn-verify.bats` "the fold RANK, not max(rc)". `4` rather than a renumber because 3 is
+> landed and published here; two meanings behind one number is strictly worse than a gap.
 
 Three things about the shape of the fix that are worth more than the fix:
 

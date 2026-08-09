@@ -41,6 +41,12 @@ setup() {
   hf_bounded() { "$@"; }
   eval "$(grep -E '^FIRE_PARKED_RE=' "$HF")"
   eval "$(sed -n '/^pane_parked_reason() {/,/^}/p' "$HF")"
+  # The FOURTH state's oracle + the enumeration it delegates to. Sourced rather than re-stated: the
+  # dialog strings must have exactly one edit site, and tests/pane-modal.bats is what pins them
+  # against the shipping binary. Extracting a copy here would let the two drift and both stay green.
+  # shellcheck source=../hooks/lib/pane-modal.sh
+  . "$REPO/hooks/lib/pane-modal.sh"
+  eval "$(sed -n '/^pane_wedge_reason() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^it2_paste_submit() {/,/^}/p' "$HF")"
@@ -208,6 +214,138 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
   run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
   [ "$status" -eq 1 ]
   [ -s "$SENDS" ]
+}
+
+# ---- the FOURTH STATE: claude STARTED, and stopped on a modal (backlog 75c2e3e2bde7) -----------
+#
+# The exact inverse of everything above. PARKED means the shell refused the launch, so no session
+# exists and the remedy is "clear the pane and re-fire". WEDGED means the session booted and is
+# holding on a dialog, where that remedy DESTROYS a live session. Both are silence on disk, both
+# leave a live pane, and `ps` cannot tell them apart — only the screen carries the difference.
+
+modal_screen() {
+  screen \
+    "│ New MCP server found in this project: ms365          │" \
+    "│ 1. Use this MCP server                               │" \
+    "│ 3. Continue without using this MCP server            │"
+}
+
+@test "wedged: the MCP-approval dialog is named" {
+  modal_screen
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "mcp-trust-modal" ]
+}
+
+@test "the two oracles do not overlap: a shell wedge is PARKED and not wedged" {
+  screen "zsh: correct 'go' to 'god' [nyae]? "
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -ne 0 ]
+}
+
+@test "the two oracles do not overlap: a modal is wedged and not PARKED" {
+  # Load-bearing in the direction the caller branches on: were the modal to also satisfy
+  # FIRE_PARKED_RE, verify_engagement would short-circuit to 2 first and print "clear the pane,
+  # then re-fire" at a pane holding a live session.
+  modal_screen
+  run pane_parked_reason "$IT2" "$PANE"
+  [ "$status" -ne 0 ]
+}
+
+@test "NOT wedged: an unreadable/empty screen is UNKNOWN, never wedged (fails open)" {
+  : > "$SCREEN"
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -ne 0 ]
+}
+
+@test "NOT wedged: missing it2 bin or pane id is a clean no-op" {
+  modal_screen
+  run pane_wedge_reason "" "$PANE"
+  [ "$status" -ne 0 ]
+  run pane_wedge_reason "$IT2" ""
+  [ "$status" -ne 0 ]
+}
+
+@test "FAIL-OPEN: the modal lib absent ⇒ never wedged, and never an error" {
+  # The deploy-lag branch. handoff-fire.sh guards its source, so an un-globbed hooks/lib leaves
+  # pane_modal_reason undefined — that must cost the verdict, not the fire.
+  modal_screen
+  unset -f pane_modal_reason
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -ne 0 ]
+}
+
+@test "verify_engagement: a wedged pane returns 4 (not 1, not 2) and names the modal" {
+  modal_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
+  [ "$status" -eq 4 ]
+}
+
+@test "verify_engagement: ABSTAINS — a wedged pane is never re-sent the brief" {
+  # THE SAFETY INVARIANT THIS STATE EXISTS FOR, and it is stronger than the parked one. A startup
+  # dialog is a single-key prompt, so the paste's own bytes become ANSWERS — and the two dialogs
+  # reachable here are workspace-trust and MCP-approval, i.e. the ones the research classifies as
+  # security boundaries that must reach a human. Proven by ABSENCE of any send.
+  export CC_FIRE_COMPOSER_GATE=off
+  modal_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" 'brief with $(id -un) in it'
+  [ "$status" -eq 4 ]
+  [ ! -s "$SENDS" ]
+}
+
+@test "verify_engagement: the abstain holds on the PRE-RESEND path too (timeout 0)" {
+  # The guard above and this one are DIFFERENT LINES, and only this configuration reaches the
+  # second. A red-proof found it: deleting the pre-resend abstain entirely left the whole suite
+  # green, because at any non-zero timeout the in-loop check returns 4 on the first iteration and
+  # the post-loop guard is never evaluated. An invariant no test can reach is an invariant nobody
+  # is holding — and the path this exercises is the live one whenever the loop times out on a pane
+  # that has only just rendered its dialog.
+  export CC_FIRE_COMPOSER_GATE=off
+  FIRE_ENGAGE_TIMEOUT=0
+  modal_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" 'brief with $(id -un) in it'
+  [ "$status" -eq 4 ]
+  [ ! -s "$SENDS" ]
+}
+
+@test "RED-PROOF: plan prose naming a dialog is not evidence of a wedge" {
+  # The defect prior art cfdd9fc3 actually shipped, in this file's own idiom: an agent reading the
+  # plan that documents these dialogs has their text on screen. Note this screen carries the header
+  # AND an option — the conjunction alone does NOT refuse it, and this exact fixture is what proved
+  # that while the suite was being written. The ANCHOR is what refuses it.
+  screen \
+    "§9.2 — each spawned session renders New MCP server found in this project and BLOCKS there" \
+    "the operator answered 1. Use this MCP server, which is session-scoped and persists nothing"
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "POSITIVE CONTROL: without the anchor that same prose really would fire" {
+  # Proves the test above discriminates rather than passing vacuously. `.*` in front of each pattern
+  # re-permits a mid-line match — the exact equivalent of stripping the `^` from FIRE_PARKED_RE in
+  # this file's sibling control above. Same screen, same call; only the anchoring differs.
+  screen \
+    "§9.2 — each spawned session renders New MCP server found in this project and BLOCKS there" \
+    "the operator answered 1. Use this MCP server, which is session-scoped and persists nothing"
+  # shellcheck disable=SC2034  # read by pane_modal_reason, sourced from hooks/lib/pane-modal.sh
+  CC_MODAL_MCP_HEADER=".*New MCP server found"
+  # shellcheck disable=SC2034  # same — the seam's consumer is in the lib, not in this file
+  CC_MODAL_MCP_OPTION=".*Use this MCP server"
+  run pane_wedge_reason "$IT2" "$PANE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "mcp-trust-modal" ]
+}
+
+@test "verify_engagement: engagement still wins over a modal-looking screen (0 beats 4)" {
+  # Same authority rule as the parked case: the disk oracle owns SUCCESS, the pane oracle only ever
+  # short-circuits a failure. An agent that engaged and later rendered dialog text is not wedged.
+  { printf '{"type":"user","message":{"role":"user","content":"hi MARK ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}\n'
+  } > "$PROJ/p/s.jsonl"
+  modal_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
+  [ "$status" -eq 0 ]
 }
 
 @test "verify_engagement: engagement still wins over a parked-looking screen (0 beats 2)" {
