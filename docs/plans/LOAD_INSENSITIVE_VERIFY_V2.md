@@ -442,6 +442,20 @@ reminder that a commit message is the author's *intent*, never evidence. Had tha
 at face value the search would have moved past the one commit that did it. **When a commit denies
 being the culprit, that denial is the cheapest thing in the investigation to test: two runs.**
 
+⚠️ **Calibration of "deterministic", recorded against this session's own claim.** Outside postland
+the assertion is **red 4 of 4** — two 25-file corpus prefixes, once standalone under `-f` (exactly
+what the ladder runs), once at `d022242d` — against **green 1 of 1** at `d022242d^`. That is what
+justified fixing it. But the **05:58Z stamp on `bf73e18a80b0` convicted `boot-resume-launch` ALONE**,
+so cc-authbrowser evidently passed in that corpus run, and no flake row was written for it either.
+So the honest word is **"reproducible on demand"**, not "deterministic in every corpus run" — the
+landed commit message says the latter and is one notch stronger than the evidence. The fix is
+unaffected either way (the assertion asserted a verdict the subject no longer produces, and green-at-
+parent/red-at-commit is a clean two-sided control), but the residual is a real open question: *what
+makes the POSITIVE CONTROL pass in a corpus run at all?* The likeliest answer is the state the test
+inherits at its line 505 `--start` — whether our own browser ends up on the leased base port or on a
+fallback changes which branch line 508 takes — and that is exactly the sort of precondition a test
+should assert rather than inherit. Worth one measurement before anyone re-derives it from scratch.
+
 ⚠️ **This is a FOURTH channel of §3's inversion, and it points the opposite way from the other three.**
 Channels 1-3 are tests that consult ambient machine state. This one is a test that consulted a
 **stale contract**: the subject's verdict moved and one assertion stayed behind, so it stopped
