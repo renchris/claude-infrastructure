@@ -553,6 +553,16 @@ re-run the same invocation several times, before anything is concluded about the
 | Hypothesis | Test | Result |
 | --- | --- | --- |
 | A linked git **worktree** breaks the CLI's repo/GitHub detection (its `.git` is a file, not a dir) | same create from the main checkout | **REFUTED** — identical failure |
+
+🚨 **This row was RIGHT, and a later section of this same document re-raised the hypothesis it had
+already killed.** §S5.2 filed the worktree story as `SUSPECTED, NOT ESTABLISHED` — against a table,
+six hundred lines up, recording the *same* hypothesis tested the *same* way and refuted. §S5.3
+(2026-08-09) then re-refuted it a third time, with an instrument. The repo already knows the rule
+for two oracles in contradiction (`[[spec-named-mechanism-may-be-prose-only]]`: one is stale, and
+the shipping side wins) — the gap is that the rule was only ever applied ACROSS artifacts, never
+WITHIN one. A long plan document is not one oracle; it is a stack of them at different dates, and a
+new finding has to be checked against its own file's refuted list before it is filed as open. Cost
+of not doing that here: a measurement re-run twice and a remedy prescribed for a dead cause.
 | The marker set tells you which accounts can create | `next2.linked` exists; its create fell back to bundle mode | **REFUTED** — the marker is a progress log, not a capability |
 
 **Re-measure with** (both arms; the control first, and never skip it):
@@ -819,8 +829,14 @@ Two findings matter more than the number:
    **It gates G5 whichever explanation wins.** This repo's standing rule is that every concurrent
    writer session gets its own worktree, and Agent Teams isolate teammates in worktrees by
    construction. So the *default* configuration for firing cloud work is exactly the one that failed
-   here. `handoff-fire.sh --cloud` must fire the create from the **main checkout** — or measure this
+   here. ~~`handoff-fire.sh --cloud` must fire the create from the **main checkout**~~ — or measure this
    properly first — rather than inheriting the caller's worktree cwd and hoping.
+
+   🚨 **REFUTED 2026-08-09 — the worktree was never the variable, and the prescribed remedy would
+   have fixed nothing. → §S5.3.** The strike-through above is the load-bearing part: firing from the
+   main checkout is a change with a cost (every cloud fire would have to leave the caller's tree)
+   bought against a cause that does not exist. Both halves of the asymmetry dissolved on measurement —
+   the main checkout fails with the *identical* error, and the worktree creates successfully.
 
 **What the instrument itself cost, recorded because it is the transferable part.** The probe landed
 at `66ef4d8c` with no test suite and **four** stacked defects, each of which alone made a measurement
@@ -859,6 +875,86 @@ of theirs. Three things worth carrying:
 All five are fixed and pinned by `tests/cloud-ceiling-probe.bats` (18 tests, RED-verified at 9
 failures before the first fix). A fourth outcome, `refused-harness`, now sits **ahead of** the quota
 arm, so a fault in our own rig can never be published as a property of the fleet.
+
+#### S5.3 · The worktree discriminator — SETTLED 2026-08-09, and the cause is bundle SIZE, not cwd
+
+**The command, free, spends nothing** (this is the half §S5.2 could not have run, because it did not
+know the bundle was reproducible locally):
+
+```bash
+scripts/cloud-bundle-probe.sh --measure                       # FREE — rebuilds the real artifact
+scripts/cloud-bundle-probe.sh --ab --account <a> --rounds N --confirm   # live, interleaved arms
+scripts/cloud-bundle-probe.sh --report
+```
+Ledger: `~/.claude/autonomy/cloud/bundle-probe.jsonl`, every row carrying `run`, `arm` and `cwd`.
+
+**VERDICT: the worktree hypothesis is REFUTED, on two independent legs.**
+
+*Leg 1 — mechanism, measured for free.* The CLI's bundle is built by plain `git bundle create`, so
+the artifact it uploads can be rebuilt locally and weighed. The tier arithmetic, read out of the
+2.1.220 binary: `sizeBytes = size-pack × 1024`, cap `104857600` (100 MiB), `--all` unless
+`sizeBytes > cap`, then `HEAD` unless `sizeBytes > 3×cap`, then a squashed root.
+
+| cwd | `.git` | size-pack | tier | bundle |
+|---|---|---|---|---|
+| `.worktrees/cloud-hardening` | **file** (89 B gitdir pointer) | 119,522,304 | head | **99,778,280 B (95% of cap)** |
+| `~/Development/claude-infrastructure` | **directory** | 119,522,304 | head | **99,712,572 B (95% of cap)** |
+
+`size-pack` is a property of the **object store**, and a linked worktree *shares* it — its `.git`
+file points at `<main>/.git/worktrees/<name>`, whose `objects` is the common dir. So both cwds take
+the same tier and upload bundles differing by **0.07%**. The proposed mechanism — "a bundle upload
+walking a `.git` that is a pointer" — cannot operate: the pointer is resolved by git before a single
+byte is bundled.
+
+*Leg 2 — the live A/B, interleaved so a transient window cannot land on one arm.*
+
+| round | `wt` (worktree) | `main` (main checkout) |
+|---|---|---|
+| 1 | `Bundle upload failed: Socket is closed after 3 attempts` | **the identical refusal** |
+| 2 | created | created |
+| 3 | created | created |
+
+Failures cluster by **round**, not by cwd. Both halves of §S5.2's asymmetry dissolved: the main
+checkout fails with the same error, and the worktree creates. Totals across this session, one
+account, 11 fires: `wt` 2 created / 2 refused, `main` 3 created / 1 refused — and the earlier
+3-of-3-vs-0-of-1 is what a ~50%-reliable step looks like at n=4.
+
+**What is actually wrong: a ~95 MiB upload with 3 retries, riding at 95% of a 100 MiB cap.** That is
+marginal by construction, which is exactly why it presents as intermittent and why it invites a
+cause-of-the-week. The GitHub sentence in the refusal is not evidence of a broken link either — the
+CLI appends `. Please setup GitHub on https://claude.ai/code` to a **transport** failure whenever a
+GitHub remote was detected, which is how §S5.2 read a 95 MiB timeout as a §6.5 linking regression.
+
+**Why the bundle exists at all, and the one lever that removes it.** The create path bundles only
+when it cannot use a GitHub source. The branch is `x = appInstalled`, from a preflight
+`GET /api/oauth/organizations/{org}/code/repos/{owner}/{repo}` → `status.app_installed`. When the
+Claude **GitHub App is installed on the repository**, the session is created with a
+`git_repository` source and **no bundle is uploaded at all** — the 95 MiB step, and this whole
+failure class, disappears. When it is not, the CLI falls back to seeding from local HEAD.
+⚠️ **This also resolves the §S5a contradiction left open** ("the VM clones from the pushed remote"
+vs "it uploads a bundle"): both are true, on the two branches of this one conditional.
+
+**So the remedy for G5 is a RETRY, plus getting off bundle mode — not a cwd change.**
+`handoff-fire.sh --cloud` inheriting the caller's worktree is fine and needs no change; what it
+needs is to not treat the first `Bundle upload failed` as terminal. Measured this session, a
+retry-until-created loop reached a session on attempt 2 of 4 twice over.
+
+⚠️ **Not established, and named rather than smoothed over:** whether this repo's App preflight fails
+*deterministically* (App not installed) or *transiently* is not separated here. The two produce the
+same bundle fallback, and the deterministic instrument for it — calling the preflight endpoint
+directly — needs the account's OAuth token out of the Keychain, which this session was correctly
+blocked from reading. `gh` cannot answer it either (listing App installations needs an
+App-authorised token; ours returns 403).
+
+**The size positive control was DESIGNED AND NOT RUN, and the reason is methodological.** A
+one-commit repo whose bundle is kilobytes is the arm that would make size *causal* rather than
+merely *implicated*. A fresh directory stops on Claude Code's folder-trust prompt and never reaches
+a create — costing nothing, yielding nothing. Both ways past it disqualify it as a control:
+`--dangerously-skip-permissions` makes the arm differ from `wt`/`main` in something other than
+bundle size, and pre-seeding `hasTrustDialogAccepted` is a read-modify-write of an account
+`.claude.json` a live session may be writing. It is `--arms wt,main,small`, opt-in, behind one
+interactive trust of the control directory. Until it runs, "size is the cause" is a **mechanism plus
+a refuted alternative**, not a demonstrated dose-response.
 
 #### S5.1 · Cloud observability — DONE (backlog `191d4d056c98`, 2026-08-07)
 
