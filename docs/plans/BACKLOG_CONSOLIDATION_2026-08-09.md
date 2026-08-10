@@ -108,6 +108,63 @@ was 59% dead on its own — it holds the duplicate-mint wreckage.
 
 ---
 
+# WAVE OUTCOMES — 2026-08-10 (INTEGRATE-only; the proposals below are preserved unchanged)
+
+All six masters were fired as dispatched sessions. What follows is what they FOUND, recorded here
+because three of the findings refute reasoning in the sections beneath this one — and the refuted
+version is left standing on purpose, so the correction is legible rather than invisible.
+
+| master | state | landed | the finding that mattered |
+|---|---|---|---|
+| M3 fleet footprint | **done** | `77d33bdc` | spawn budget + depth cap at the actuator; janitor verified BY EFFECT (worktrees 558→252, 319 removed). Its real defect was **three consecutive SILENT failures** — exit 0, no row — while the population tripled. |
+| M6 account facts | **done** | `3be72af4` | one derivation per fact + a 13/13 test that reds if a consumer re-derives; auth recorder scheduled with a durable store; machine floor measured at 30 sustained over 11,440 samples. |
+| M1 convergence | **done** | `7693854c` | **the root cause was NOT `SCAN_N`.** See below — this refutes §"Why the backlog grew". |
+| M2 fire gate | claimed | — | in flight |
+| M4 stranded work | running | — | in flight |
+| M5 enforcing store | running | — | in flight |
+
+## M1's finding refutes this document's own diagnosis, and that is the most useful thing in it
+
+§"Why the backlog grew" (below) attributes the frozen live layer to the green stamp falling outside
+`deploy-live.sh:76`'s 200-commit scan window, and tracks the distance widening 252→262→283→297→323→350.
+**Every one of those measurements was real and none of them was the cause.**
+
+`merge-base --is-ancestor X X` is TRUE. So the T1 check matched live HEAD against *itself*, set
+`TARGET=HEAD`, and the `if [ -z "$TARGET" ]` wrapper then skipped T1H **and** T2 entirely — the lag
+budget was **structurally unreachable**. One green stamp froze the layer where *zero* greens did not,
+at exit 0 and silent under `--auto`, which is worse than the loud refusal three peers hit. Fixed by
+requiring a target strictly above the layer; green-on-HEAD became a benign exit placed *after* the
+budget arms. Mutation-controlled: restoring the reflexive match reds G1/G4/G5 while control G2 stays
+green. 74/74 deploy-live, 265 green across six suites.
+
+**The generalisable lesson, and it recurred four times in one session:** a falsifier that measures a
+*symptom* passes and fails for the wrong reasons. The green-stamp distance was a real number, moving
+in the real direction, downstream of the actual defect — and no amount of watching it move would ever
+have found the reflexive ancestor match.
+
+## What the lead built while the wave ran — the by-default machinery, now WIRED
+
+The frozen DoD's parts 4 and 5 belonged to no master. They are landed **and called**:
+
+| landed | what |
+|---|---|
+| `a7bf7068` | `cc-backlog add --falsifier '<cmd>'` + `cc-premise` re-runs it at CLAIM time. exit 0 = condition GONE = the only direction that refuses; non-zero = still live, advisory, with the probe's output carried into the contract; unaskable = **fails OPEN**. First real refusal: item `bc0f2abe078b`, `verdict=falsified`, exit 3. |
+| `62592045` | `backlog-ratchet.sh` — falsifier coverage (leading) and age-at-close **median AND p75** (lagging). The p75 is not decoration: median 0.1d vs p75 2.2d / max 19.7d, so a median-only report reads "healthy" for exactly the population it exists to catch. |
+| `596b39a7` | `backlog-consolidation-trigger.sh` — detects the duplicate shape. Exact-match finds nothing *by construction* (ids hash project+title+source), so it normalises shas/digits out. Its positive control lives in the fixture because the live store has zero clusters post-prune — a detector verified only against a clean store is indistinguishable from a broken one. |
+| `8371b206` | **the caller.** All three landed INERT — nothing invoked them, which is the exact failure this document describes, committed by the change documenting it. Wired into `autonomy-sweep.sh` *above* its nothing-new early exit, because rot is precisely the condition that produces no pages while it accumulates. |
+| `b2d58539` | a trunk red that was not ours: `mirror-kpmg-deck.sh` derived its root from an unresolved `$0`, taking `self-path-lint --selftest` red and blocking any land in its scope. Through the live layer that resolves to `~/.claude`, so it would have mirrored into the wrong tree — never failing, only on the deployed path. |
+
+## Two criteria in the driving goal were themselves wrong, and were corrected against evidence
+
+Recorded because the corrections are the same defect class as the work: **(2)** tested the
+green-stamp distance, a symptom M1 disproved — replaced by *live lag 0 AND the converger advances*,
+since `deploy-live` rc 0 also means "nothing to do". **(3)** counted `ls ~/Development/.worktrees`
+(259) which spans THREE repos; 137 are reso/doc_classifier and **80 of those hold unlanded commits**,
+so "under 100" was unreachable without destroying other repos' work. Replaced by the owned
+population against its own janitor ceiling: **116/150, `OK bounded and fresh`**.
+
+---
+
 # The master items
 
 Ordered by the only ranking that does not decay: what each one unblocks, measured. Each carries a
