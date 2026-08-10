@@ -3,12 +3,20 @@
 # on another account: audit + salvage bundle + transcript transplant + launch.
 #
 # Usage: lr-handoff.sh [--target next|next2|next3|next4|auto] [--model opus|fable]
+#                      [--effort low|medium|high|xhigh|max]
 #                      [--sid SID] [--config-dir DIR] [--cwd PATH]
 #                      [--context FILE] [--launch|--print-only]
 #                      [--no-transplant] [--keep-source] [--force]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
+#
+# --effort: a handoff CONTINUES one session, so the successor must be able to keep the
+# effort the source was running at. Without this flag `--model fable` hardcoded
+# `--effort high` and a Fable-5-at-MAX session silently transplanted DOWN to high —
+# the model was preserved and the reasoning tier was not, which is the half nobody
+# checks because the statusline still says "Fable 5". Omitted ⇒ prior behaviour exactly
+# (fable ⇒ high; opus ⇒ lr-fire-resume's account-derived default).
 # Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error.
 set -euo pipefail
 
@@ -85,12 +93,13 @@ lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
 
 
 LR="$HOME/.claude/scripts/limit-recover"
-TARGET="auto" MODEL="opus" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+TARGET="auto" MODEL="opus" EFFORT="" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --effort) EFFORT="$2"; shift 2 ;;
     --sid) SID="$2"; shift 2 ;;
     --config-dir) CFG="$2"; shift 2 ;;
     --cwd) CWD="$2"; shift 2 ;;
@@ -104,6 +113,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+# Reject an unknown effort HERE rather than let it reach the launcher. %q already makes the
+# value inert as source, so this is not a quoting defence — it is a liveness one: the binary
+# refuses an unrecognised --effort at startup, and that refusal would land in a freshly spawned
+# pane on the transplanted session, i.e. after the transcript has already moved accounts.
+case "$EFFORT" in
+  ""|low|medium|high|xhigh|max) ;;
+  *) echo "lr-handoff: --effort must be low|medium|high|xhigh|max (got '$EFFORT')" >&2; exit 2 ;;
+esac
 CFG="${CFG/#\~/$HOME}"
 
 # --- account routing --------------------------------------------------------
@@ -233,7 +250,10 @@ mv "$LAUNCHER" "$LAUNCHER.sh" && LAUNCHER="$LAUNCHER.sh"
 # is also what keeps the header comments below un-escapable.
 FIRE_ARGV=("$LR/lr-fire-resume.sh" "$TARGET" "${WT_TOP:-$CWD}" "$SID")
 [[ -n "$BRANCH" ]] && FIRE_ARGV+=(--branch "$BRANCH")
-[[ "$MODEL" == "fable" ]] && FIRE_ARGV+=(--model claude-fable-5 --effort high)
+[[ "$MODEL" == "fable" ]] && FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
+# The opus path passes no --model, so lr-fire-resume derives model AND effort from the account
+# label. An explicit --effort must still reach it, or the flag would be silently fable-only.
+[[ "$MODEL" != "fable" && -n "$EFFORT" ]] && FIRE_ARGV+=(--effort "$EFFORT")
 FIRE_ARGV+=(--prompt "$INGEST_PROMPT")
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
