@@ -726,3 +726,142 @@ deploying"** — confirmed empirically this session when the classifier refused 
   than the verdict: `RSTART+14` for a 14-**character** prefix that is 16 **bytes** (BSD awk indexes
   bytes), and `seq 0 -1` counting *downward* and emitting two values where a C-style loop runs zero
   times. Both cost a control its teeth while the verdict still read green.
+
+---
+
+## RE-MEASURED 2026-08-10 — the gate now says REAP and the ACTUATOR refuses. Two corrections above.
+
+Operator observation: ten "subagents" (`tri-landgate … tri-tail`) resident hours after finishing,
+each offering `new task? /clear to save <N>k tokens` (157.8k–233.1k, ~1.94M total). Investigated as
+"why don't subagents close". **It is not a subagent problem and it is not a gate problem.** Every
+link below is measured on this box, 2026-08-10.
+
+### Two corrections to the sections above
+
+1. **`⛔ NOT LIVE` (§2026-08-04) is STALE — the fix deployed.** That section's own falsifier,
+   `grep -c tree-scope ~/.claude/scripts/reap-guard.sh`, was written as proof-of-not-live at **0**.
+   It now reads **10**, and the caller passes the flag too (`teammate-auto-shutdown.sh:894`). The
+   shared checkout advanced to `a23e7f96` (6 behind trunk). The per-file attribution fix is live and
+   is doing exactly its job — see link 3.
+2. **The population is PANES, not in-process subagents.** The originating hypothesis was that
+   nothing closes an in-process subagent because the teardown estate assumes "a pane with a pid and
+   a tty, and a subagent has neither". Refuted by argv: each is a full `claude.exe` with
+   `--agent-id tri-X@session-e5d3628d --agent-name tri-X --team-name session-e5d3628d`, parented by
+   `bin/cc-pane-runner` under a kitty `kitten run-shell`, **with a tty** (ttys008–ttys017). Passing
+   `name:` to the Agent tool registers a TEAM MEMBER on the pane backend (as
+   `bin/cc-agent-harvest`'s header already states) — so this estate is the right shape, and this is
+   a fourth face of the M3 invariant (`66ef300dd0b4`, *no component owns its own teardown*), not a
+   new mechanism's territory.
+
+### The chain, every link measured
+
+| # | Link | Verdict |
+|---|---|---|
+| 1 | 10 named agents spawned → 10 kitty panes, 10 `claude.exe`, ~600–650 MB RSS each (**~6.2 GB**) | — |
+| 2 | TeammateIdle fired; `teammate-auto-shutdown.sh` ran | ✓ |
+| 3 | per-file attribution: *"shared cwd is dirty, but NOTHING this member wrote is — a sibling's dirt is not its own"* | ✓ **the 2026-08-04 fix working** |
+| 4 | `reap-guard decide` → `{"decision":"REAP","reason_kind":"finished"}` at age ≈ 800–950 s | ✓ **gate approved** |
+| 5 | checkpoint ref + fallback patch written | ✓ |
+| 6 | `it2-kitty` close → **`rc=67` — "composer state is UNKNOWN"** | ✗ **TERMINAL** |
+| 7 | no retry, no escalation, no reclaim. 5 h 10 m later all ten alive | ✗ |
+
+So the close path is not refusing on the tree, on WHO, or on liveness. It gets a clean `REAP` and
+then **the actuator declines**, every time: `grep -c 'rc=67' ~/.claude/logs/teammate-lifecycle.log`
+→ **71**. The `teammate-reap-alarm` reads this correctly and has been shouting it —
+*"close path ran 10 time(s) · panes closed: 0 · 10 resident (10 stale) · 0 departed"*.
+
+### Why the composer guard refuses 100% of agent panes — and why it is a THREE-state question
+
+`bin/it2-kitty` § composer_state (`:530-560`) bounds the composer by the **last two horizontal
+rules** on screen: `body = lines[rules[-2]+1 : rules[-1]]`, then requires `❯` in `body[0]`. With
+`len(rules) < 2` it yields `body = []` and prints `UNKNOWN` (because `alt=True`), which `:775-798`
+fail-closes into `exit 67`.
+
+The captured snapshot for window 31 is the whole story — the pane is **idle with no composer box at
+all**, and carries only the single labelled rule:
+
+```
+✻ Sautéed for 13m 14s
+  ✘ Auto-update failed · Try claude doctor or npm i -g @anthropic-ai/claud…
+─────────────────────────────────────────────── @tri-landgate ──
+```
+
+One rule ⇒ `body = []` ⇒ `UNKNOWN` ⇒ refuse. **An agent pane has no composer because nobody types
+at it**, so the guard — written 2026-08-07 to protect an *operator's* unsent text after a real
+pane-theft incident — refuses precisely the panes that structurally cannot hold operator text, and
+refuses them unconditionally. This is `abstain-rule-can-retire-the-common-case` exactly: the
+question has **three** states, not two —
+
+| state | meaning | correct answer |
+|---|---|---|
+| composer box present, glyph run has non-dim content | real unsent text | **refuse (67)** — unchanged |
+| composer box present, only dim placeholder | empty | close |
+| **no composer box rendered at all** (`len(rules) < 2`) | nothing to steal | **close** — today: refuse |
+
+— and the third is collapsed into the first. `guard-refusal-fires-on-its-own-harness` is the same
+lesson from the other side: the guard is keyed on *"can I read this pane?"* (a location question)
+rather than on *"could closing it destroy text?"* (the dangerous effect).
+
+### The fix, scoped so it cannot weaken the guard (handed to M3, not shipped here)
+
+Split the `UNKNOWN` arm on a predicate `composer_state` already computes: `len(rules) < 2` means no
+composer box was **rendered**, which is structurally different from a box that was rendered and
+could not be **read**. Return the former as `NO-COMPOSER` and let `:777` treat it like `NO-TUI`;
+leave a rendered-but-unreadable box on `UNKNOWN → 67`. That preserves every case the 2026-08-07
+incident was about (a real composer holding real text) and unblocks the only population that can
+never be in that case.
+
+**Not implemented in this pass, deliberately.** Two reasons, both from this file: the population is
+panes, which is M3's declared domain (`66ef300dd0b4`) and shipping a rival closer next to a working
+one is the error this doc has recorded four times; and §*"Why four subsequent fixes each looked
+correct and moved nothing"* is a standing warning that a fifth plausible one-liner is the failure
+mode here, not the remedy. The predicate above is stated precisely so M3 need not re-derive it, and
+so it can be **RED-first**: a control must reproduce `rc=67` on a live agent pane *before* the
+change, because the condition is intermittent-looking (the 2026-08-04 A/B passed only because the
+tree happened to be clean at that moment — same trap, one layer down).
+
+### Bound: none. This is unbounded retention, not designed and not harness-reclaimed.
+
+All three refutations offered at intake were checked:
+
+- **Designed retention?** Partly — `name:` does make a persistent member addressable by
+  `SendMessage`, and that much is documented. But the shutdown path exists, ran, and *approved the
+  close*; nothing about `rc=67` is designed. Retention past a `REAP` verdict is a defect.
+- **Harness reclaim on some boundary?** None exists. The only harness affordance is cosmetic: the
+  `idle-return-hint` in `claude.exe`, gated on `CLAUDE_CODE_IDLE_TOKEN_THRESHOLD` (default `1e5`)
+  and `CLAUDE_CODE_IDLE_THRESHOLD_MINUTES` (default `75`), which renders
+  `new task? /clear to save <N> tokens` and emits `tengu_idle_return_action`. It is a
+  **notification**, not a reclaim — no timer closes anything.
+- **Is the token number real?** Yes, with a caveat worth stating. It is
+  `contextTokens = YA(FT(messages))` — that process's live message list, so it is genuine resident
+  context, corroborated by ~600–650 MB RSS per process. But it is *potential* re-send cost: nothing
+  is billed while idle. The **incurred** cost is memory and pane/tty exhaustion — ~6.2 GB and 10
+  windows — not 1.94M tokens of spend.
+
+### Falsifier (re-runnable; this section is refuted when it prints nothing)
+
+```sh
+ps -axo etime=,command= | grep -- '--agent-id .*@session-' | grep -v grep   # resident agent panes
+grep -c 'rc=67' ~/.claude/logs/teammate-lifecycle.log                       # actuator refusals
+```
+
+Both non-empty/non-zero ⇒ still broken. Box-wide at time of writing: **12 resident agent panes**,
+**71** `rc=67` refusals.
+
+### Residue — named, not absorbed
+
+- **`hooks/subagent-stop.sh` is inert.** It landed (`8c591f87`) as the first consumer of the
+  harness's `SubagentStop` event, but `SubagentStop` **is not a wired event** in `settings.json`
+  (present: PreToolUse, PostToolUse, SessionStart, SessionEnd, Stop, UserPromptSubmit, Notification,
+  PermissionRequest, TeammateIdle, WorktreeCreate, TaskCompleted, PreCompact). The binary supports
+  it. Nothing calls the hook. Separate item; it is telemetry, not a closer, so it is not on this
+  chain's critical path.
+- **No team config was ever written for `session-e5d3628d`** — absent from both `~/.claude/teams/`
+  and `~/.claude-next/teams/`, and not in `_archive`; no `config.json` on the box names
+  `tri-landgate`. `teammate-auto-shutdown` still closed the right pane (it fell back to the
+  `PPID-forensic` path, logging `pane=[31]`), but `team-orphan-reaper.sh` iterates `$TEAMS_DIR/*`
+  and is therefore **structurally blind to this team**, as is `cc-agent-harvest`. It would have
+  abstained anyway — the lead (pid 98361) is alive — so it is not this incident's cause, but it is a
+  live blind spot in the backstop tier.
+- **Reclaiming the ten is operator-owned.** Agents are classifier-blocked from closing panes (this
+  file, §*NOT LIVE*, confirmed again this session). Filed rather than attempted.
