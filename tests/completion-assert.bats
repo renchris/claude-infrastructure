@@ -48,6 +48,24 @@ setup() {
   # W2 hermeticity, same class: wrap-ledger's custody counter resolves the repo's bin/cc-custody,
   # whose store defaults under the operator's $HOME. Empty fixture dir = counted zero.
   export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
+  # LIVE-PEER-OWNED hermeticity, and the same class a third time: that term reads the cc-registry,
+  # so leaving it unfixtured makes every test here a function of which OTHER sessions are running
+  # (~50 live rows on this box). Empty fixture dir = no peer = the strict disposition these tests
+  # were written against.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+}
+
+# Reap the fake peers the LIVE-PEER-OWNED tests spawn. Reading the pid list from a FILE, not a
+# variable: each @test body is its own subshell, so a variable set there is gone by the time this
+# runs.
+teardown() {
+  [ -f "$BATS_TEST_TMPDIR/pids" ] || return 0
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    kill "$p" 2>/dev/null || true
+    wait "$p" 2>/dev/null || true
+  done < "$BATS_TEST_TMPDIR/pids"
 }
 
 # clean repo, HEAD == origin/main (landed)
@@ -739,6 +757,60 @@ PY
   [ "$status" -eq 0 ]
   # no transcript => no close-tell either; the point is it must never EXONERATE on ignorance
   ! grep -q 'exonerated' "$COMPLETION_IDL"
+}
+
+# ── LIVE-PEER-OWNED (2026-08-03): the 📦 state the escape hatch could not express ────────────────
+# End-to-end over the same conviction the unit suite pins in tests/peer-owned.bats: session
+# claude-infrastructure-323 — read-only research turn, clean tree, ZERO files written — blocked 3/3
+# for two commits made by claude-infrastructure-234, which was still running. Its only compliant
+# answers were to land a live peer's commits from the shared checkout (the dfacccd data-loss
+# incident .claude/CLAUDE.md forbids) or to stay blocked forever.
+# The CONTROL is the whole point: with the peer DEAD the same close still fires, because that is the
+# /handoff + --recycle successor, whose job IS to land what it inherited.
+
+# `>/dev/null 2>&1` on the background job: these run inside `$( )`, and a command substitution
+# returns when the captured pipe closes, not when the child exits — an inherited pipe hangs it for
+# the full sleep (measured while writing tests/peer-owned.bats).
+_ca_live_pid() { sleep 300 >/dev/null 2>&1 & local p=$!
+  printf '%s\n' "$p" >> "$BATS_TEST_TMPDIR/pids"; printf '%s' "$p"; }
+# REAPED, not merely killed: an unreaped zombie still answers `kill -0` with rc 0, so a "dead" peer
+# fixtured without the wait is read as alive (MEMORY.md kill-on-reaped-child-fails-fast-path-hides-it).
+_ca_dead_pid() { sleep 300 >/dev/null 2>&1 & local p=$!
+  kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; printf '%s' "$p"; }
+_ca_reg() { # <paneUUID> <pid> <startedAt_epoch> <cwd> <session_id>
+  jq -nc --arg u "$1" --arg n "claude-peer-$1" --arg c "$4" --arg s "$5" \
+         --argjson p "$2" --argjson t "$(( $3 * 1000 ))" \
+    '{paneUUID:$u,name:$n,cwd:$c,account:"a",pid:$p,startedAt:$t,session_id:$s}' \
+    > "$CC_REGISTRY_DIR/$1.json"
+}
+
+@test "LIVE-PEER-OWNED: a write-free close over a still-live peer's commits must NOT block" {
+  w="$(_ca_repo pown config/kitty.conf)"
+  _ca_reg 234 "$(_ca_live_pid)" "$(( $(date +%s) - 3600 ))" "$w" peer-234
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/pown.jsonl")"
+  run bash -c "printf '{\"session_id\":\"S9\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q '"decision":"block"' || false
+  # the IDL must name the STATE, not merely say clean — an exoneration is a decision, not a non-event
+  grep -q 'unlanded-live-peer-owned' "$COMPLETION_IDL"
+}
+
+@test "LIVE-PEER-OWNED CONTROL: the SAME close with the peer DEAD still convicts (successor lands)" {
+  w="$(_ca_repo pdead config/kitty.conf)"
+  _ca_reg 234 "$(_ca_dead_pid)" "$(( $(date +%s) - 3600 ))" "$w" peer-234
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/pdead.jsonl")"
+  run bash -c "printf '{\"session_id\":\"S10\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
+}
+
+@test "LIVE-PEER-OWNED CONTROL: a live peer does NOT launder a commit this session DID write" {
+  w="$(_ca_repo pmine config/kitty.conf)"
+  _ca_reg 234 "$(_ca_live_pid)" "$(( $(date +%s) - 3600 ))" "$w" peer-234
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/pmine.jsonl" "$w/config/kitty.conf")"
+  run bash -c "printf '{\"session_id\":\"S11\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
 }
 
 # ── LANDED ≠ LIVE: the 🚀 rung the guard was never taught (face 4) ──
