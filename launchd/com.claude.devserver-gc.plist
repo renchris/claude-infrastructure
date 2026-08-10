@@ -16,11 +16,14 @@
   :40 past the hour — off both worktree-gc (04:15) and reso's reaper (03:15), so no sweep is reading
   a process table another sweep is actively changing.
 
-  OBSERVE-ONLY BY DEFAULT. There is deliberately no DEVGC_ACT in this plist, so the runner takes its
-  `--dry-run` branch: it logs exactly which servers it WOULD reap and kills nothing. Turning that
-  into a real reaper is a one-line edit the operator makes after reading a few days of the log —
-  arming an unattended process that kills their running dev servers is their decision, not an
-  agent's. (Same split as com.claude.compressor-sentinel, whose CC_SENTINEL_ACT is likewise absent.)
+  ARMED 2026-08-10 (operator ratification "ratify all except cold-compile", decision packet
+  99637eaee7b9): DEVGC_ACT=1 exported below, so the runner takes its real-reap branch. It shipped
+  OBSERVE-ONLY BY DEFAULT (no DEVGC_ACT ⇒ `--dry-run`: logs which servers it WOULD reap, kills
+  nothing) because arming an unattended process that kills running dev servers is the operator's
+  decision, not an agent's — that decision has now been made and recorded. Dry-run evidence before
+  arming: clean (keeps live-owner servers; would have reaped the ownerless spawner at 03:40 on
+  2026-08-09, 27 min before that night's second storm). (Same split as
+  com.claude.compressor-sentinel, whose CC_SENTINEL_ACT was likewise armed 2026-08-09.)
 
   `bash -c` (not a bare ProgramArguments path) because launchd expands neither ~ nor $HOME inside
   ProgramArguments. Standard*Path cannot take $HOME at all, hence the literals. The runner hardens
@@ -42,7 +45,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>exec "$HOME/.claude/scripts/devserver-gc-run.sh"</string>
+        <string>export DEVGC_ACT=1; exec "$HOME/.claude/scripts/devserver-gc-run.sh"</string>
     </array>
 
     <key>StartCalendarInterval</key>
