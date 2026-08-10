@@ -2416,6 +2416,22 @@ if [ -z "$_OI_LIB" ] || ! . "$_OI_LIB"; then
   exit 1
 fi
 
+# W2 CUSTODY passthrough (CLOSE_INTEGRITY) — best-effort by contract: custody bookkeeping must
+# never gate a fire or a close. Absent binary ⇒ silent no-op (the ADD-not-live window); failures
+# swallowed. The DEBT side is recorded at fire time, the DISCHARGE at self-close; consumers count
+# the open set (bin/cc-custody header has the model).
+_hf_custody() {
+  local bin=""
+  for bin in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-custody" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" \
+             "$HOME/.claude/bin/cc-custody"; do
+    [ -x "$bin" ] && break; bin=""
+  done
+  [ -n "$bin" ] || return 0
+  "$bin" "$@" >/dev/null 2>&1 || true
+  return 0
+}
+
 # sc_announce_before_retire — the F-1 actuator. Kept a FUNCTION rather than inline in the self-close
 # preflight so it is drivable on its own: the self-close path ahead of it resolves pane identity,
 # teammate liveness and the origin class, none of which this decision depends on, and a test that had
@@ -4798,6 +4814,23 @@ MSG
       fi
     fi
   fi
+  # COMMITTED ≠ LANDED (CLOSE_INTEGRITY W2). The dirty gate above protects UNCOMMITTED work; the
+  # measured top loss class sits one store later — wave members retiring on committed-but-unlanded
+  # branches nobody revisits (62 content-stranded commits over 21 branches in 5 wave-day spikes,
+  # report-census §1.2). Deliberately a WARNING, not a refusal: a peer may legitimately hand its
+  # branch to the originator, and an unretireable peer is a worse failure than an unannounced one
+  # (the F-1 argument below). Loud, and it names the branch so the ping can carry it.
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _sc_trunk="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
+    [ -n "$_sc_trunk" ] || { git rev-parse --verify -q origin/main >/dev/null 2>&1 && _sc_trunk="origin/main"; }
+    if [ -n "$_sc_trunk" ]; then
+      _sc_ahead="$(git rev-list --count "$_sc_trunk"..HEAD 2>/dev/null || echo 0)"
+      case "$_sc_ahead" in ''|*[!0-9]*) _sc_ahead=0 ;; esac
+      if [ "$_sc_ahead" -gt 0 ]; then
+        echo "⚠ self-close: $_sc_ahead commit(s) on $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?') are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
+      fi
+    fi
+  fi
   # ── F-1: ANNOUNCE BEFORE RETIRE — MECHANICAL, NOT A PARENTHETICAL (2026-08-09) ─────────────────
   # The SELF-RETIRE trailer enforces durability (the dirty-tree refusal directly above) and ordering
   # (retire is step 2), but the announce was PROSE — "When your work is finished (and you have pinged
@@ -4826,6 +4859,11 @@ MSG
   # --no-notify opts out, matching the succession announce it sits beside. Best-effort throughout: a
   # close must never die on its own bookkeeping.
   [ "$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$SC_SID" "$FIRED_DIR" "${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+  # W2 CUSTODY: discharge the originator's open custody row for this fire — the marker on our own
+  # stamp is the join key (the same one adoption proves identity by). Best-effort; a close never
+  # dies on its bookkeeping, and a marker-less schema-1 stamp simply discharges nothing.
+  _sc_cmk="$(jq -r '.marker // ""' "$FIRED_DIR/$SC_SID.json" 2>/dev/null || true)"
+  [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk"
   SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
@@ -7605,6 +7643,16 @@ else
       # fire right before the "→ fired" summary (the same trap noted at the stranded-account line).
       if [ "$WANT_SELF_RETIRE" = 1 ]; then
         mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "$LAUNCH_DIR" "$FIRING_SID" "$PROMPT_FILE"
+      fi
+      # W2 CUSTODY (CLOSE_INTEGRITY): a fire that armed a back-channel OWES a return — record the
+      # debt where the ORIGINATOR's ledger can count it (keyed on the FIRING cwd, not the target
+      # worktree). This is the term that makes a dispatched wave a ledger fact instead of an
+      # invisible in-flight state (generator G1; the census's wave-abandonment signature).
+      # ENGAGE_VERIFY=0 fires skip it — no confirmed pane reaches this branch there; bounded, stated.
+      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ]; then
+        _hf_custody open --cwd "$PWD" --target "$SPAWNED_PANE" \
+          --marker "${FIRE_MARKER:-}" --slug "${NB_SLUG:-}" \
+          --notify-back "$NB_ARMED_TARGET" --originator-pane "${FIRING_SID:-}"
       fi
       # P0-15: publish the fired pane under its role so role-addressed pings reach it.
       if [ -n "$AS_ROLE" ] && [ -n "$SPAWNED_PANE" ]; then write_role "$CC_ROLES_DIR" "$AS_ROLE" "$SPAWNED_PANE"; fi
