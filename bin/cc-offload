@@ -1,0 +1,566 @@
+#!/usr/bin/env bash
+# cc-offload — ONE command to run work in Anthropic's cloud VMs instead of on this box.
+#
+#   cc-offload setup                       is this box able to offload at all? (grades, repairs, platters)
+#   cc-offload up --task <file|-> [-n N]    fire cloud session(s) and declare them
+#   cc-offload ls [--all] [--json]          the board — one honest row per declared session
+#   cc-offload watch [--pane] [-i S]        the same board, live, optionally in its own kitty pane
+#   cc-offload say <id|all> "<message>"     the here→cloud arm (QUEUED, never "delivered")
+#   cc-offload land [--all] [--dry-run]     bring finished cloud branches home
+#   cc-offload open <id>                    the operator escalation path — the web UI
+#   cc-offload gc [--state S]               retire declarations that are terminally dead
+#
+# WHY THIS EXISTS. Every piece of the cloud path already worked and NONE of it was reachable
+# without knowing five tool names, one env var whose value must be the literal string `on`, and
+# which of two exit codes means "a session is burning quota that nothing local can see". This is
+# the entrypoint over them; it owns no state and re-derives no verdict.
+#
+# ── COMPOSITION, NOT REIMPLEMENTATION ────────────────────────────────────────────────────────────
+# Each verb delegates to the tool that already owns that job, and adopts its answer verbatim:
+#   setup  → cc-cloud preflight · claude-accounts --route · websetup state dir
+#   up     → handoff-fire.sh --cloud   (which owns create+retry+declare via scripts/lib/cloud-create.sh)
+#   ls     → cc-cloud list --json --state   (the state function is cc-cloud's; §4 of the plan)
+#   say    → cc-notify --cloud         (which owns account routing and the queued-vs-read refusal)
+#   land   → scripts/cloud-reconcile.sh
+# THE RULE THIS FILE MUST NOT BREAK: never re-derive a verdict a sibling already computes. This
+# repo has paid for that twice — a checker holding its own stale copy convicted a green asset, and
+# two sibling auditors over one population disagreed because only one modelled a state. So `ls`
+# calls `--state` and PRINTS WHAT IT GETS; there is no local notion of alive here.
+#
+# ── THE FOUR HONESTY INVARIANTS, each one already paid for ───────────────────────────────────────
+# 1. UNKNOWN RENDERS AS UNKNOWN, never as a gap. An empty cell in a table of live sessions reads as
+#    absence, and absence is exactly the ambiguity this whole subsystem is organised against.
+# 2. `say` REPORTS QUEUED. `{ok:true}` from the API means the message was accepted onto a queue, not
+#    that a session read it. cc-notify already refuses `--receipt` off-box (exit 7); this must never
+#    dress that refusal up as success.
+# 3. `up` EXIT 11 IS LOUDER THAN A FAILURE. 10 = nothing was created (safe to retry). 11 = a live
+#    session exists that nothing local can observe, address or reap. Auto-retrying 11 spends quota
+#    on a second invisible session, so this verb never retries and always prints the hand-declare.
+# 4. THE GITHUB APP IS UNGRADEABLE FROM HERE, and `setup` says so rather than guessing. Measured
+#    2026-08-10: every installation endpoint needs a GitHub App JWT or an installation token, and
+#    `gh` holds an OAuth (`gho_`) token — a credential CLASS wall, not a missing scope. The one
+#    user-token path (`/orgs/<org>/installations`, needs admin:org) cannot apply because the repo is
+#    user-owned. The check-suites proxy can only ever PROVE PRESENT; its silence proves nothing, so
+#    it is reported as UNKNOWN-with-a-proxy and never as absent.
+#
+# ── WHAT THIS CANNOT DO, so it is not re-proposed ────────────────────────────────────────────────
+# There is no cloud→here push. The VM has no route to this box; the only channel it is guaranteed is
+# the git remote it cloned from, so the return arm is `git ls-remote` polling (`ls`) and `land`.
+# Do not try to symmetrise it — the asymmetry is the network topology, not a gap.
+#
+# READ-ONLY EXCEPT WHERE NAMED: `up` (spends quota), `say` (spends quota), `land` (moves refs),
+# `gc` (retires declarations). Everything else only reads.
+#
+# Exit: 0 ok · 1 the verb's own failure · 2 usage · 3 a precondition is not met (setup grades it).
+
+set -uo pipefail
+
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _t="$(readlink "$_self")"
+  case "$_t" in /*) _self="$_t" ;; *) _self="$(cd -- "$(dirname -- "$_self")" && pwd -P)/$_t" ;; esac
+done
+BINDIR="$(cd -- "$(dirname -- "$_self")" && pwd -P)"
+ROOT="$(cd -- "$BINDIR/.." && pwd -P)"
+
+# ── seams: every external tool is overridable so the suite never touches the real fleet ──────────
+CLOUD_BIN="${CC_OFFLOAD_CLOUD_BIN:-}"
+[ -n "$CLOUD_BIN" ] || { for c in "$BINDIR/cc-cloud" "$HOME/.claude/bin/cc-cloud" "$(command -v cc-cloud 2>/dev/null || true)"; do
+  [ -n "$c" ] && [ -x "$c" ] && { CLOUD_BIN="$c"; break; }; done; }
+NOTIFY_BIN="${CC_OFFLOAD_NOTIFY_BIN:-}"
+[ -n "$NOTIFY_BIN" ] || { for c in "$BINDIR/cc-notify" "$HOME/.claude/bin/cc-notify" "$(command -v cc-notify 2>/dev/null || true)"; do
+  [ -n "$c" ] && [ -x "$c" ] && { NOTIFY_BIN="$c"; break; }; done; }
+FIRE_BIN="${CC_OFFLOAD_FIRE_BIN:-$ROOT/scripts/handoff-fire.sh}"
+RECONCILE_BIN="${CC_OFFLOAD_RECONCILE_BIN:-$ROOT/scripts/cloud-reconcile.sh}"
+ACCOUNTS_BIN="${CC_OFFLOAD_ACCOUNTS_BIN:-}"
+[ -n "$ACCOUNTS_BIN" ] || { for c in "$HOME/bin/claude-accounts" "$BINDIR/claude-accounts" "$(command -v claude-accounts 2>/dev/null || true)"; do
+  [ -n "$c" ] && [ -x "$c" ] && { ACCOUNTS_BIN="$c"; break; }; done; }
+SPLIT_BIN="${CC_OFFLOAD_KITTY_SPLIT:-$BINDIR/kitty-split-launch.sh}"
+WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
+REPO="${CC_OFFLOAD_REPO:-$ROOT}"
+# The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
+# scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
+CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
+
+# ── colour: explicit truecolor only. NEVER SGR-2 — it collapses to invisible on dark themes, and
+#    this output is data the operator is hunting through (claude-accounts:1424, cc-where:48). ─────
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${CC_OFFLOAD_NOCOLOR:-0}" = 0 ]; then
+  C_OK=$'\033[38;2;107;243;133m'; C_BAD=$'\033[38;2;255;107;107m'; C_WARN=$'\033[38;2;255;217;89m'
+  C_HEAD=$'\033[38;2;138;180;248m'; C_META=$'\033[38;2;150;150;160m'; C_BLD=$'\033[1m'; C_OFF=$'\033[0m'
+else
+  C_OK='' C_BAD='' C_WARN='' C_HEAD='' C_META='' C_BLD='' C_OFF=''
+fi
+
+CLOUD_STATE="${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}"
+APP_MARK="$CLOUD_STATE/github-app.observed"
+FIRE_LOG="${CC_OFFLOAD_FIRE_LOG:-${TMPDIR:-/tmp}/cc-offload-fire.$$.log}"
+FIRE_FIFO="$FIRE_LOG.fifo"
+
+# The GitHub-App verdict is BEHAVIOURAL and it is only ever written by a real create (§12.2).
+# One direction only: a bundle refusal PROVES absent. Nothing here ever writes `present` from
+# silence — that is the inference this whole subsystem exists to refuse.
+app_mark() {
+  mkdir -p "$CLOUD_STATE" 2>/dev/null || return 0
+  printf 'verdict=%s\nts=%s\nsource=create took the bundle path (no git_repository source)\n' \
+    "$1" "$(date +%s)" >"$APP_MARK" 2>/dev/null || true
+}
+
+die()  { printf '%s\n' "cc-offload: $*" >&2; exit 2; }
+note() { printf '%s\n' "$*" >&2; }
+have_cloud() { [ -n "$CLOUD_BIN" ] && [ -x "$CLOUD_BIN" ]; }
+
+usage() {
+  sed -n '2,12p' "$_self" | sed 's/^# \{0,1\}//'
+  printf '\n  Full contract: %s\n' "$_self"
+  exit "${1:-0}"
+}
+
+# ── the state palette. cc-cloud owns the vocabulary; this only colours it. ───────────────────────
+state_colour() {
+  case "$1" in
+    ALIVE|LANDED)          printf '%s' "$C_OK" ;;
+    BOOTING)               printf '%s' "$C_WARN" ;;
+    NOT-STARTED|STALLED|ABANDONED) printf '%s' "$C_BAD" ;;
+    *)                     printf '%s' "$C_META" ;;   # UNKNOWN and anything cc-cloud grows later
+  esac
+}
+
+age_human() {
+  local s="${1:-0}"
+  [ "$s" -lt 60 ] 2>/dev/null && { printf '%ds' "$s"; return; }
+  [ "$s" -lt 3600 ] && { printf '%dm' "$((s/60))"; return; }
+  [ "$s" -lt 86400 ] && { printf '%dh' "$((s/3600))"; return; }
+  printf '%dd' "$((s/86400))"
+}
+
+# ═══ ls ══════════════════════════════════════════════════════════════════════════════════════════
+# Sourced ENTIRELY from `cc-cloud list --json --state`. NDJSON, one object per line — never `jq '.[]'`
+# (an array is not what it emits), and ZERO declarations prints ZERO bytes rather than `[]`.
+cmd_ls() {
+  local show_all=0 as_json=0 quiet=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) show_all=1; shift ;;
+      --json) as_json=1; shift ;;
+      --quiet) quiet=1; shift ;;
+      -h|--help) usage 0 ;;
+      *) die "ls: unknown argument '$1'" ;;
+    esac
+  done
+  have_cloud || { note "cc-offload: cc-cloud not found — the declaration store is unreadable."; return 3; }
+
+  local raw
+  raw="$("$CLOUD_BIN" list --json --state 2>/dev/null)"
+  # A sensor that could not run must not degrade to "nothing declared".
+  if [ -z "$raw" ] && ! "$CLOUD_BIN" list --json >/dev/null 2>&1; then
+    note "cc-offload: cc-cloud list failed — this is UNKNOWN, not an empty fleet."
+    return 1
+  fi
+
+  if [ "$as_json" = 1 ]; then
+    [ -n "$raw" ] || return 0
+    if [ "$show_all" = 1 ]; then printf '%s\n' "$raw"
+    else printf '%s\n' "$raw" | jq -c 'select(.retired != true)'; fi
+    return 0
+  fi
+
+  local rows
+  rows="$(printf '%s\n' "$raw" | jq -r --argjson all "$show_all" '
+      select($all == 1 or .retired != true)
+      | [ (.id // "-"), (.state // "UNKNOWN"), ((.age_s // 0)|tostring),
+          (if .account == "" or .account == null then "?" else .account end),
+          (.branch // "-"), (if .url == "" or .url == null then "https://claude.ai/code" else .url end),
+          (if .retired == true then "retired" else "" end) ] | @tsv' 2>/dev/null)"
+
+  if [ -z "$rows" ]; then
+    [ "$quiet" = 1 ] || printf '%s(no cloud sessions declared — nothing is running off-box)%s\n' "$C_META" "$C_OFF"
+    return 0
+  fi
+
+  printf '%s%-26s %-12s %-6s %-7s %-34s %s%s\n' "$C_HEAD" \
+    SESSION STATE AGE ACCOUNT BRANCH ACTION "$C_OFF"
+  local id st age acct br url ret sc n_live=0 n_done=0 n_dead=0 n_unk=0
+  while IFS=$'\t' read -r id st age acct br url ret; do
+    [ -n "$id" ] || continue
+    sc="$(state_colour "$st")"
+    # LANDED is terminal-GOOD and must not be tallied as "working" — a finished session stops
+    # pushing, which is exactly why cc-cloud checks C3 before C4.
+    case "$st" in
+      ALIVE|BOOTING) n_live=$((n_live+1)) ;;
+      LANDED)        n_done=$((n_done+1)) ;;
+      UNKNOWN|'')    n_unk=$((n_unk+1)) ;;
+      *)             n_dead=$((n_dead+1)) ;;
+    esac
+    local action='-'
+    case "$st" in
+      NOT-STARTED|STALLED|ABANDONED) action="open $url" ;;
+      LANDED)                        action="cc-offload land" ;;
+      ALIVE|BOOTING)                 action="cc-offload say ${id} '…'" ;;
+    esac
+    [ -n "$ret" ] && action="retired"
+    printf '%-26.26s %s%-12s%s %-6s %-7.7s %-34.34s %s%s%s\n' \
+      "$id" "$sc" "$st" "$C_OFF" "$(age_human "$age")" "$acct" "$br" "$C_META" "$action" "$C_OFF"
+  done <<<"$rows"
+
+  [ "$quiet" = 1 ] || printf '%s%d working · %d landed · %d need you · %d UNKNOWN (a sensor could not run — never a verdict)%s\n' \
+    "$C_META" "$n_live" "$n_done" "$n_dead" "$n_unk" "$C_OFF"
+  return 0
+}
+
+# ═══ setup ═══════════════════════════════════════════════════════════════════════════════════════
+# Grades every precondition. Three verdicts, never two: PASS · FAIL (blocking, with the one command
+# that fixes it) · UNKNOWN (could not be measured — reported, never guessed into either).
+SETUP_FAIL=0
+row() { # row <PASS|FAIL|UNKN|INFO> <label> <detail> [action]
+  local v="$1" label="$2" detail="$3" action="${4:-}" mark col
+  case "$v" in
+    PASS) mark='✓'; col="$C_OK" ;;
+    FAIL) mark='✗'; col="$C_BAD"; SETUP_FAIL=$((SETUP_FAIL+1)) ;;
+    UNKN) mark='?'; col="$C_WARN" ;;
+    *)    mark='·'; col="$C_META" ;;
+  esac
+  printf '  %s%s%s %-22s %s\n' "$col" "$mark" "$C_OFF" "$label" "$detail"
+  [ -n "$action" ] && printf '      %s→ %s%s\n' "$C_META" "$action" "$C_OFF"
+  return 0
+}
+
+cmd_setup() {
+  [ "${1:-}" = "-h" ] && usage 0
+  printf '%s%sCAN THIS BOX OFFLOAD?%s  %s(preconditions, graded from live reads)%s\n\n' \
+    "$C_BLD" "$C_HEAD" "$C_OFF" "$C_META" "$C_OFF"
+
+  # R1 — a binary that can actually create. 2.1.114 has no --cloud; it classifies as refused-harness.
+  if [ -x "$CLOUD_CLAUDE" ]; then
+    local v; v="$("$CLOUD_CLAUDE" --version 2>/dev/null | head -1)"
+    case "$v" in
+      2.1.2[2-9]*|2.[2-9]*|[3-9].*) row PASS "create binary" "${v:-?} — $CLOUD_CLAUDE" ;;
+      '')  row UNKN "create binary" "present but --version did not answer: $CLOUD_CLAUDE" \
+             "run it by hand; do NOT infer support from --help (it is blind to hidden flags)" ;;
+      *)   row FAIL "create binary" "$v has no --cloud verb — $CLOUD_CLAUDE" \
+             "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>" ;;
+    esac
+  else
+    row FAIL "create binary" "not executable: $CLOUD_CLAUDE" \
+      "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>"
+  fi
+
+  # R2 — can a fire from here be OBSERVED at all? cc-cloud owns this question.
+  if have_cloud; then
+    local pf rc
+    pf="$("$CLOUD_BIN" preflight --repo "$REPO" 2>&1)"; rc=$?
+    if [ "$rc" = 0 ]; then row PASS "observability" "$(printf '%s' "$pf" | tail -1)"
+    else row FAIL "observability" "$(printf '%s' "$pf" | tail -1)" "cc-cloud preflight --repo $REPO"; fi
+  else
+    row FAIL "observability" "cc-cloud not found" "./install.sh"
+  fi
+
+  # R3 — account routing. The router is the arbiter; never re-rank from score_* fields.
+  if [ -n "$ACCOUNTS_BIN" ]; then
+    local acct rc2
+    acct="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"; rc2=$?
+    case "$rc2" in
+      0) row PASS "account routing" "→ $acct" ;;
+      2) row FAIL "account routing" "nothing routable by policy (quota/window)" "claude-accounts --readout" ;;
+      3) row UNKN "account routing" "the fleet could not be SEEN — not the same as exhausted" "claude-accounts --fresh" ;;
+      *) row FAIL "account routing" "router exit $rc2" "claude-accounts --readout" ;;
+    esac
+  else
+    row FAIL "account routing" "claude-accounts not found" "./install.sh"
+  fi
+
+  # R4 — per-account web link (the CLI↔GitHub connection; NOT the repo App install).
+  if [ -d "$WEBSETUP_STATE" ]; then
+    local linked; linked="$(find "$WEBSETUP_STATE" -name '*.linked' -exec basename {} .linked \; 2>/dev/null | sort | tr '\n' ' ')"
+    if [ -n "$linked" ]; then row PASS "accounts linked" "${linked% }"
+    else row FAIL "accounts linked" "no account is linked to claude.ai/code" \
+      "scripts/cloud-websetup-drive.sh --all"; fi
+  else
+    row UNKN "accounts linked" "no websetup state dir at $WEBSETUP_STATE" \
+      "scripts/cloud-websetup-drive.sh --status"
+  fi
+
+  # R5 — the GitHub App. UNGRADEABLE from here; see invariant 4 in the header.
+  local proxy=''
+  if command -v gh >/dev/null 2>&1; then
+    proxy="$(gh api "/repos/:owner/:repo/commits/HEAD/check-suites" \
+              --jq '[.check_suites[].app.slug]|unique|join(",")' 2>/dev/null)"
+  fi
+  local app_verdict=''
+  [ -f "$APP_MARK" ] && app_verdict="$(sed -n 's/^verdict=//p' "$APP_MARK" | head -1)"
+  case "$proxy:$app_verdict" in
+    *claude*:*)
+      row PASS "GitHub App on repo" "proven present — a claude check-suite exists" ;;
+    *:absent)
+      # Blocking, and this is the only row here whose evidence had to be BOUGHT: a create attempt.
+      row FAIL "GitHub App on repo" "PROVEN ABSENT — a live create took the ~95 MiB bundle path against a 100 MiB cap" \
+        "install it on this repo (GUI consent, yours to give): https://github.com/apps/claude" ;;
+    *)
+      row UNKN "GitHub App on repo" "NOT DETECTABLE read-only (gh holds an OAuth token; the installation API needs an App JWT)" \
+        "no create has been observed yet — 'cc-offload up' settles it, since only a bundle refusal proves absence" ;;
+  esac
+
+  # R6 — the return path can move refs home.
+  if [ -x "$RECONCILE_BIN" ]; then row PASS "return path" "$RECONCILE_BIN"
+  else row FAIL "return path" "missing: $RECONCILE_BIN" "./install.sh"; fi
+
+  # R7 — informational only: neither gates a fire.
+  if [ -n "${KITTY_WINDOW_ID:-}" ]; then row INFO "kitty pane" "window $KITTY_WINDOW_ID — 'watch --pane' can split here"
+  else row INFO "kitty pane" "not in kitty — 'watch' still runs inline"; fi
+  [ "${CC_CLOUD_RECONCILE:-on}" = off ] \
+    && row FAIL "reconciler" "CC_CLOUD_RECONCILE=off — every check would pass VACUOUSLY" "unset CC_CLOUD_RECONCILE" \
+    || row INFO "reconciler" "on"
+
+  printf '\n'
+  if [ "$SETUP_FAIL" = 0 ]; then
+    printf '%s%s✓ READY — cc-offload up --task <file> will create and declare a cloud session.%s\n' \
+      "$C_BLD" "$C_OK" "$C_OFF"
+    return 0
+  fi
+  printf '%s%s✗ NOT READY — %d blocking row(s) above, each with its own fix.%s\n' \
+    "$C_BLD" "$C_BAD" "$SETUP_FAIL" "$C_OFF"
+  return 3
+}
+
+# ═══ up ══════════════════════════════════════════════════════════════════════════════════════════
+# Delegates the whole create to handoff-fire.sh --cloud, which owns the pty allocator, the bounded
+# retry (~50-75% per attempt — the retry is what produces a session at all) and the declare.
+cmd_up() {
+  local task='' n=1 account='auto' dry='' i
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) task="${2:-}"; shift 2 ;;
+      --task=*) task="${1#*=}"; shift ;;
+      -n|--count) n="${2:-1}"; shift 2 ;;
+      --account) account="${2:-auto}"; shift 2 ;;
+      --dry-run) dry='--dry-run'; shift ;;
+      -h|--help) usage 0 ;;
+      *) die "up: unknown argument '$1'" ;;
+    esac
+  done
+  [ -n "$task" ] || die "up: --task <file|-> is required (the brief the cloud session executes)"
+  case "$n" in ''|*[!0-9]*) die "up: -n must be a positive integer" ;; esac
+  [ "$n" -ge 1 ] || die "up: -n must be >= 1"
+
+  local pf
+  if [ "$task" = "-" ]; then
+    pf="$(mktemp "${TMPDIR:-/tmp}/cc-offload-task-XXXXXX")" || return 1
+    cat >"$pf"
+  elif [ -f "$task" ]; then
+    pf="$task"
+  else
+    die "up: no such task file: $task"
+  fi
+  [ -s "$pf" ] || die "up: the task file is empty — a cloud session with no brief does nothing"
+  [ -x "$FIRE_BIN" ] || { note "cc-offload: fire path missing: $FIRE_BIN"; return 3; }
+
+  # The create bundles the CALLER'S cwd, not a flag. Chdir so it is always the repo, never a
+  # transient worktree the operator happens to be sitting in.
+  local rc=0 fired=0
+  for ((i=1; i<=n; i++)); do
+    [ "$n" -gt 1 ] && printf '%s— fire %d/%d —%s\n' "$C_META" "$i" "$n" "$C_OFF"
+    # CC_FIRE_CLOUD must be the literal string `on`; `1`/`true` refuse with exit 2. Typing
+    # `cc-offload up` IS the opt-in this gate exists to require, so it is set here explicitly.
+    # Tee'd through an OWNED pipe, never `2> >(tee …)`: a process substitution's pid is unreachable
+    # ($! names the previous job) and nothing waits for it, so the grep below would race the writer
+    # and read a truncated log. mkfifo + a plain background job is waitable, so the artifact is
+    # complete before it is classified.
+    mkfifo "$FIRE_FIFO" 2>/dev/null || : >"$FIRE_LOG"
+    if [ -p "$FIRE_FIFO" ]; then
+      tee "$FIRE_LOG" <"$FIRE_FIFO" >&2 & local tee_pid=$!
+      ( cd "$REPO" && CC_FIRE_CLOUD=on "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_FIFO"
+      rc=$?
+      wait "$tee_pid" 2>/dev/null
+      rm -f "$FIRE_FIFO"
+    else
+      ( cd "$REPO" && CC_FIRE_CLOUD=on "$FIRE_BIN" --cloud --prompt-file "$pf" --account "$account" $dry ) 2>"$FIRE_LOG"
+      rc=$?
+      cat "$FIRE_LOG" >&2
+    fi
+    case "$rc" in
+      0)  fired=$((fired+1)) ;;
+      2)  note "cc-offload: the fire path refused the cloud opt-in (exit 2) — CC_FIRE_CLOUD was not honoured."; break ;;
+      9)  note "cc-offload: capacity gate refused (exit 9) — no account has headroom. Try: claude-accounts --readout"; break ;;
+      10) note "cc-offload: no session was created (exit 10). NOTHING is running — safe to retry."
+          # A bundle refusal is the ONE reliable GitHub-App detector (§12.2): the CLI only bundles
+          # when it has no `git_repository` source, i.e. when the App is absent. Record it, because
+          # this evidence costs a create attempt and `setup` must not have to spend another one.
+          grep -q 'refused-bundle\|Bundle upload failed' "$FIRE_LOG" 2>/dev/null && app_mark absent
+          ;;
+      11) printf '%s%s⚠ EXIT 11 — a cloud session IS LIVE and is NOT declared.%s\n' "$C_BLD" "$C_BAD" "$C_OFF" >&2
+          note "It is spending quota where no local instrument can see, address or reap it."
+          note "Recover it with the cc-cloud declare line the fire printed above. Not retrying."
+          break ;;
+      *)  note "cc-offload: fire exited $rc"; break ;;
+    esac
+  done
+
+  [ "$task" = "-" ] && rm -f "$pf"
+  if [ "$fired" -gt 0 ]; then
+    printf '\n%s%d session(s) created and declared.%s Watch them: %scc-offload ls%s\n' \
+      "$C_OK" "$fired" "$C_OFF" "$C_BLD" "$C_OFF"
+    return 0
+  fi
+  return "$rc"
+}
+
+# ═══ say ═════════════════════════════════════════════════════════════════════════════════════════
+# The here→cloud arm. QUEUED is the strongest claim available and this verb never exceeds it.
+cmd_say() {
+  local target="${1:-}" msg="${2:-}"
+  [ -n "$target" ] || die "say: <id|all> is required"
+  [ -n "$msg" ] || die "say: a message is required"
+  [ -n "$NOTIFY_BIN" ] || { note "cc-offload: cc-notify not found — the send arm is unavailable."; return 3; }
+
+  local ids
+  if [ "$target" = all ]; then
+    have_cloud || { note "cc-offload: cc-cloud not found."; return 3; }
+    ids="$("$CLOUD_BIN" list --json --state 2>/dev/null \
+           | jq -r 'select(.retired != true) | select(.state == "ALIVE" or .state == "BOOTING") | .id')"
+    [ -n "$ids" ] || { note "cc-offload: no ALIVE or BOOTING session to send to."; return 1; }
+  else
+    ids="$target"
+  fi
+
+  local id rc worst=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    "$NOTIFY_BIN" --cloud "$id" "$msg"
+    rc=$?
+    case "$rc" in
+      0) printf '%s✓ QUEUED%s → %s %s(queued is not read — no off-box cursor exists)%s\n' \
+           "$C_OK" "$C_OFF" "$id" "$C_META" "$C_OFF" ;;
+      3) printf '%s✗ %s — undeclared or retired; refusing to claim a send about it%s\n' "$C_BAD" "$id" "$C_OFF" ;;
+      4) printf '%s✗ %s — no usable claude binary (target UNVERIFIED, message NOT sent)%s\n' "$C_BAD" "$id" "$C_OFF" ;;
+      5) printf '%s✗ %s — the owning account has no resolvable config dir%s\n' "$C_BAD" "$id" "$C_OFF" ;;
+      8) printf '%s✗ %s — the API refused (reason above)%s\n' "$C_BAD" "$id" "$C_OFF" ;;
+      124) printf '%s? %s — INTERRUPTED mid-send; check %s/<id>.sends before re-sending%s\n' \
+           "$C_WARN" "$id" "${CC_CLOUD_STATE:-$HOME/.claude/autonomy/cloud}" "$C_OFF" ;;
+      *) printf '%s✗ %s — cc-notify exit %s%s\n' "$C_BAD" "$id" "$rc" "$C_OFF" ;;
+    esac
+    [ "$rc" != 0 ] && worst="$rc"
+  done <<<"$ids"
+  return "$worst"
+}
+
+# ═══ watch ═══════════════════════════════════════════════════════════════════════════════════════
+cmd_watch() {
+  local interval=15 in_pane=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i|--interval) interval="${2:-15}"; shift 2 ;;
+      --pane) in_pane=1; shift ;;
+      -h|--help) usage 0 ;;
+      *) die "watch: unknown argument '$1'" ;;
+    esac
+  done
+  case "$interval" in ''|*[!0-9]*) die "watch: --interval must be an integer (seconds)" ;; esac
+  [ "$interval" -ge 5 ] || die "watch: --interval below 5s hammers git ls-remote for no new information"
+
+  if [ "$in_pane" = 1 ]; then
+    [ -n "${KITTY_WINDOW_ID:-}" ] || { note "cc-offload: --pane needs kitty (no KITTY_WINDOW_ID); running inline instead."; in_pane=0; }
+  fi
+  if [ "$in_pane" = 1 ]; then
+    [ -x "$SPLIT_BIN" ] || { note "cc-offload: $SPLIT_BIN missing"; return 3; }
+    # Delegated so the anchor discipline (--match/--next-to/--source-window) stays in ONE place —
+    # a bare `kitty @ launch` splits whatever tab kitty last focused, not the calling pane.
+    "$SPLIT_BIN" --location vsplit --cwd "$REPO" --title "cloud" --keep-focus \
+      -- "$_self" watch --interval "$interval"
+    return $?
+  fi
+
+  # ANSI home + erase-display, matching cc-queue --watch: no alternate screen, so scrollback and
+  # ^C both behave exactly as the operator expects.
+  while :; do
+    printf '\033[H\033[2J'
+    printf '%s%s  cc-offload watch %ss  (^C to exit)%s\n\n' "$C_META" "$(date '+%H:%M:%S')" "$interval" "$C_OFF"
+    cmd_ls
+    sleep "$interval"
+  done
+}
+
+# ═══ land ════════════════════════════════════════════════════════════════════════════════════════
+cmd_land() {
+  local all=0 dry='' extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      --dry-run) dry='--dry-run'; shift ;;
+      --include-undeclared) extra+=(--include-undeclared); shift ;;
+      -h|--help) usage 0 ;;
+      *) die "land: unknown argument '$1'" ;;
+    esac
+  done
+  [ -x "$RECONCILE_BIN" ] || { note "cc-offload: $RECONCILE_BIN missing"; return 3; }
+
+  if [ "$all" = 0 ]; then
+    printf '%sBranches the cloud has pushed home:%s\n' "$C_HEAD" "$C_OFF"
+    "$RECONCILE_BIN" --list
+    local rc=$?
+    [ "$rc" = 0 ] && printf '\n%sLand them:%s cc-offload land --all\n' "$C_META" "$C_OFF"
+    return "$rc"
+  fi
+  CONFIRM=1 "$RECONCILE_BIN" --all $dry "${extra[@]+"${extra[@]}"}"
+}
+
+# ═══ open ════════════════════════════════════════════════════════════════════════════════════════
+cmd_open() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "open: <id> is required"
+  have_cloud || { note "cc-offload: cc-cloud not found."; return 3; }
+  local url
+  url="$("$CLOUD_BIN" show "$id" 2>/dev/null | sed -n 's/^url=//p' | head -1)"
+  [ -n "$url" ] || url="https://claude.ai/code/$id"
+  printf '%s\n' "$url"
+  command -v open >/dev/null 2>&1 && open "$url"
+  return 0
+}
+
+# ═══ gc ══════════════════════════════════════════════════════════════════════════════════════════
+# Retires declarations whose state is TERMINAL. Destructive-ish (a retired id stops being
+# reconciled, and the three local oracles stop treating it as off-box), so it needs CONFIRM=1.
+cmd_gc() {
+  local states='NOT-STARTED ABANDONED'
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --state) states="${2:-}"; shift 2 ;;
+      -h|--help) usage 0 ;;
+      *) die "gc: unknown argument '$1'" ;;
+    esac
+  done
+  have_cloud || { note "cc-offload: cc-cloud not found."; return 3; }
+  local filter ids
+  filter="$(printf '%s' "$states" | tr ' ' '\n' | jq -R . | jq -sc .)"
+  ids="$("$CLOUD_BIN" list --json --state 2>/dev/null \
+         | jq -r --argjson want "$filter" 'select(.retired != true) | select(.state as $s | $want | index($s)) | .id')"
+  [ -n "$ids" ] || { printf '%snothing to retire (states: %s)%s\n' "$C_META" "$states" "$C_OFF"; return 0; }
+
+  local n; n="$(printf '%s\n' "$ids" | grep -c .)"
+  if [ "${CONFIRM:-0}" != 1 ]; then
+    printf '%s%d declaration(s) are terminally dead (%s):%s\n' "$C_WARN" "$n" "$states" "$C_OFF"
+    printf '%s\n' "$ids" | sed 's/^/  /'
+    printf '\n%sRetire them:%s CONFIRM=1 cc-offload gc\n' "$C_META" "$C_OFF"
+    return 0
+  fi
+  local id done_n=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    "$CLOUD_BIN" retire --id "$id" >/dev/null 2>&1 && done_n=$((done_n+1))
+  done <<<"$ids"
+  printf '%s✓ retired %d declaration(s).%s\n' "$C_OK" "$done_n" "$C_OFF"
+  return 0
+}
+
+# ═══ dispatch ════════════════════════════════════════════════════════════════════════════════════
+case "${1:-ls}" in
+  setup) shift; cmd_setup "$@" ;;
+  up)    shift; cmd_up "$@" ;;
+  ls|list|board) shift; cmd_ls "$@" ;;
+  watch) shift; cmd_watch "$@" ;;
+  say|send) shift; cmd_say "$@" ;;
+  land)  shift; cmd_land "$@" ;;
+  open)  shift; cmd_open "$@" ;;
+  gc)    shift; cmd_gc "$@" ;;
+  -h|--help|help) usage 0 ;;
+  --json) shift; cmd_ls --json "$@" ;;
+  *) die "unknown verb '$1' (try: cc-offload --help)" ;;
+esac

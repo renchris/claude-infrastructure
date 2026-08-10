@@ -1422,3 +1422,102 @@ VM's push credentials, which §7.4 already showed are restricted (a cloud VM can
 *(The declaration is deliberately left un-retired: `NOT-STARTED` with a recover URL is a true
 statement, and retiring it would stop the three abstaining oracles treating the id as off-box while
 the session may still exist. It costs one row.)*
+
+---
+
+## 12 · The one command — `bin/cc-offload` (2026-08-10)
+
+Everything §1–§11 built worked and **none of it was reachable**. Offloading one item required
+knowing five tool names, one env var whose value must be the literal string `on`, and which of two
+adjacent exit codes means *a session is burning quota that nothing local can see*. That is not a
+usability complaint — an entrypoint nobody can drive is
+`[[conclusion-must-reach-the-enforcing-store]]` in its purest form: eleven sessions were fired
+across §7.5 and §11, and the capability never entered the operator's hands.
+
+`bin/cc-offload` is the entrypoint over the existing parts. **It owns no state and computes no
+verdict.** Suite: `tests/cc-offload.bats`, 31 tests.
+
+| verb | delegates to | what it adds |
+| --- | --- | --- |
+| `setup` | `cc-cloud preflight` · `claude-accounts --route` · websetup state | grades 8 preconditions PASS/FAIL/**UNKNOWN**, each FAIL carrying its own one-line fix |
+| `up --task <f> [-n N]` | `handoff-fire.sh --cloud` | supplies the literal `on` opt-in, chdirs so the bundle is the repo, maps exit 10/11 to what the operator must do |
+| `ls` (default) | `cc-cloud list --json --state` | the board — state verbatim from the arbiter, coloured, never re-derived |
+| `watch [--pane]` | itself + `kitty-split-launch.sh` | live redraw; `--pane` puts the board in its own kitty split |
+| `say <id\|all>` | `cc-notify --cloud` | fans out to live sessions; reports **QUEUED**, never delivered |
+| `land [--all]` | `cloud-reconcile.sh` | read-only by default; `--all` supplies `CONFIRM=1` |
+| `open` · `gc` | `cc-cloud show` · `retire` | the escalation URL; retiring terminally-dead declarations behind `CONFIRM=1` |
+
+**The design rule, and the only one that matters here:** never re-derive a verdict a sibling already
+computes. This repo has paid for that twice — a checker holding its own stale copy convicted a green
+asset (`[[uniform-error-ratio-indicts-the-model]]`), and two sibling auditors over one population
+disagreed because only one modelled a state (`[[sibling-auditors-must-share-the-state-model]]`). So
+`ls` calls `--state` and prints what it gets; a test pins that by feeding it a state string
+cc-offload has never heard of and asserting it survives to the output.
+
+### 12.1 · The laundering defects, which are the only ones available to a composer
+
+cc-offload cannot be *wrong* — its siblings own every answer. It can only take an honest refusal and
+re-emit it as success. Each of the four is pinned by a test with a positive control:
+
+- **A sensor that could not run must not degrade to "nothing is there."** `cc-cloud list --json`
+  prints **zero bytes** for an empty store, so an empty read is ambiguous *by construction*. Reading
+  it as "no sessions" reports a healthy silent fleet while N sessions burn quota —
+  `[[lookup-miss-is-not-absence]]`. cc-offload re-probes and returns UNKNOWN with exit 1.
+- **UNKNOWN renders as the word UNKNOWN.** A blank cell in a table of live sessions reads as
+  absence, which is the exact ambiguity §4 exists to refuse.
+- **A queue ack is never a read.** `say` prints `QUEUED` and the reason; `--receipt` stays
+  cc-notify's exit 7. `[[claimed-outcome-vs-checked-outcome]]`.
+- **Exit 11 is louder than a failure and is never retried.** 10 = nothing exists (safe). 11 = a live
+  session nothing local can observe, address or reap. A retry buys a *second* invisible session, so
+  `-n 3` fires exactly once on an 11 — pinned by counting stub invocations.
+
+### 12.2 · The GitHub App became measurable — one-directionally, and the fire is what measured it
+
+§11.4 filed the App install as the next step. Two things are now settled.
+
+**It is NOT detectable read-only, and the wall is a credential CLASS, not a missing scope**
+(measured 2026-08-10). Every installation endpoint refuses a `gh` token: `/repos/:owner/:repo/
+installation` → 401 *"A JSON web token could not be decoded"* (needs an App JWT); `/user/
+installations` → 403 *"must authenticate with an access token authorized to a GitHub App"*. `gh`
+holds a `gho_` **OAuth** token, so no scope reaches those. The one user-token path GitHub documents
+— `GET /orgs/{org}/installations`, needing `admin:org` — **cannot apply**: `renchris/
+claude-infrastructure` is owned by a **User**, and GitHub ships no user-account analogue. The
+check-suites proxy can only ever prove *present*; its silence proves nothing, so `setup` reports
+UNKNOWN and never asserts absence from it.
+
+**But a create settles it, one-directionally, and one did.** The CLI bundles only when it has no
+`git_repository` source — so `refused-bundle` **proves** the App is absent, while any other refusal
+says nothing about it. Live fire through `cc-offload up`, account `next4`, 2026-08-10 06:34Z:
+
+```
+attempt 1/3 → refused-bundle · attempt 2/3 → refused-bundle · attempt 3/3 → refused-bundle
+Error: Bundle upload failed: Socket is closed after 3 attempts. Please setup GitHub on https://claude.ai/code
+exit 10 — NOTHING is running, safe to retry
+```
+
+Three for three, where §S5.3 measured ~50-75% per attempt and §11.1 reached a session on attempt 2.
+The bundle is ~95 MiB against a 100 MiB cap: **marginal by construction**, which is why the rate
+moves. `up` therefore writes `~/.claude/autonomy/cloud/github-app.observed` on a bundle refusal and
+`setup` reads it, so the evidence — which cost a create attempt — is bought once. The marker is
+written **only** in that direction; a test pins the negative control by changing the refusal reason
+to `refused-quota` and asserting no marker appears.
+
+**Consequence for the whole plan: this is the ONE blocker, and it is operator-only.** It is a GUI
+consent flow on the operator's own GitHub account, filed as `cc-backlog needs` `87619d846d88` rather
+than described here. Installing it removes the upload from the create path entirely *and* gives the
+VM an authenticated remote to push to — i.e. it addresses both §11.4's open halves at once. Until
+then `setup` exits 3 and says so in one line, which is the honest state: this box **cannot** offload
+yet, and it now names why in the first command an operator runs.
+
+### 12.3 · What is still not closed
+
+- **The round trip remains unproven** (§11.4 unchanged) — no `claude/*` ref has ever appeared, and
+  today's fire never reached a session to try. What today adds is the *cause*: bundle mode, proven,
+  rather than inferred from silence.
+- **§11.3's empty `paths=` residual is untouched**, so a landed cloud branch still reads ELIGIBLE
+  forever. `cc-offload land` inherits it; the honest fix still needs the cloud→here channel that
+  §9.1 says cannot exist.
+- **`gc` is new surface, not a new verdict.** It retires only what `cc-cloud` already classifies
+  terminal (`NOT-STARTED`/`ABANDONED`), behind `CONFIRM=1`. 17 of the 19 live declarations are
+  probe/fire junk from §7.5's eleven sessions; retiring them is one command but it is the
+  operator's, because a retired id stops being reconciled.
