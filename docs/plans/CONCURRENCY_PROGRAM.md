@@ -1801,3 +1801,43 @@ any `DISARMED` line is an abort. Kill switch: `CC_SENTINEL=off`.
   to be activity-dependent — the 1.6 load figure most of all — so an at-rest pty ratio is presumed
   optimistic until measured under load.
 - D7 satisfied by *proposing* gate terms. Decided means landed, or waived in writing.
+
+---
+
+## S6-DOD-V2 · D1 re-specified — headroom, not a stress ramp (2026-08-10, operator correction)
+
+🚨 **S6-DOD's D1 was WRONG and is superseded.** It required ramping to 150 and sustaining 30 minutes
+— a deliberate stress test on a box that had taken six kernel panics that same day. The operator
+rejected it in one line: *"Pressure testing us to crash is not the solution."* They are right, on
+three counts, and the reasoning generalises beyond this plan:
+
+1. **It validates by approaching the failure boundary.** The goal is "150 without lag or crash"; a
+   criterion that drives toward the crash to prove the crash won't happen is self-defeating. The
+   sentinel cannot even backstop it — `claude` is excluded from the SIGSTOP cohort by construction.
+2. **It costs the operator their working fleet.** The ramp's resources come from live sessions and
+   the operator's browsers. Passing D1 as written meant quiescing real work to benchmark.
+3. **It measures the wrong quantity.** The ceiling is not a fixed number to discover — it is a
+   *function of per-session cost*. Measured this session: available memory fell 29.04 → 3.94 GB as
+   the fleet worked. **Ten ACTIVE sessions consumed ~22 GB (~2.2 GB each) while a RESIDENT session
+   costs 232 MB — a 10× gap.** The binding variable is active-session cost, and no ramp changes it.
+
+### D1-V2 — demonstrate headroom, verify under natural growth
+
+| | Criterion | Check |
+|---|---|---|
+| **D1a** | **Measured per-session cost supports 150 with ≥25% margin**: `150 × active_cost + baseline ≤ 0.75 × 64 GB` | `capacity-ramp.sh stat` sampled across a normal working day |
+| **D1b** | **Natural growth to 40 concurrent** — reached by ordinary fleet use, never by synthetic spawning — holds ≥30 min with `seg_pct` < 15%, load/core within ceiling, and no panic | the existing sensors; nothing is spawned to satisfy this |
+| **D1c** | **The trend extrapolates safely**: cost/session at 40 is flat or falling vs at 10 | two `stat` samples at different fleet sizes |
+
+**D1a is the real work and it is Wave B's**, not a test's: 2.2 GB per active session is what must come
+down. At 232 MB (the resident figure) 150 fits in 35 GB with room; at 2.2 GB it needs 330 GB and no
+amount of testing changes that. **The path to 150 is reducing per-session cost until 150 fits with
+margin — then it is simply never reached, because the box has the headroom.**
+
+`capacity-ramp.sh` is retained for `stat`/`breach` (cheap, read-only sensors, used by D1a/D1c). Its
+`up` verb is now **diagnostic only** — for a deliberate, operator-authorised experiment on a quiesced
+box, never an acceptance gate. **No criterion in this plan requires spawning sessions to pass.**
+
+**The generalisable lesson, recorded because it cost a whole session:** an acceptance test that must
+approach the failure mode to prove safety is mis-specified. Prove the *margin* instead, and let the
+real workload occupy it.
