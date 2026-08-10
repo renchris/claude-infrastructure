@@ -269,3 +269,57 @@ EOF
   [ "$status" -eq 2 ]
   [[ "$output" == *"--effort must be"* ]]
 }
+
+# --- 10/11/12: THE MODEL REACHES THE SUCCESSOR, AND ITS DEFAULT IS NOT A CONSTANT --------------
+# Same family as 7/8, one level worse. `--effort` demoted the reasoning tier; the opus path demoted
+# the MODEL GENERATION: lr-fire-resume defaulted `model="claude-opus-4-8"` and nothing on the opus
+# path ever overrode it (lr-handoff appended --model only on the fable branch, and the account map
+# sets one only for a fable account), so every non-fable transplant resumed on a previous-generation
+# model while the SSOT had said `opus_latest: claude-opus-5` since 2026-07-25. Invisible, again:
+# nothing in the resumed pane announces which model it came up on.
+#
+# The cure is a SINGLE COPY of that perishable fact, so the assertions split accordingly: the opus
+# path must emit NO model id (test 11 — the SSOT decides, tests/lr-fire-resume-model-ssot.bats owns
+# that half), and a caller pinning a generation must still be able to (test 10).
+
+@test "10. an explicit claude-* model id is passed through verbatim" {
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0010-0000-0000-0000-000000000010" "$BATS_TEST_TMPDIR/repo" --model claude-opus-5
+  [ "$status" -eq 0 ]
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"argv[6]=<--model>"* ]] || false
+  [[ "$output" == *"argv[7]=<claude-opus-5>"* ]] || false
+  # and it did NOT pick up the fable branch's forced effort
+  [[ "$output" != *"<high>"* ]]
+}
+
+@test "11. --model opus emits NO model id — the SSOT is the only copy" {
+  # The load-bearing NEGATIVE. Naming an id here would put a second copy of a perishable fact in the
+  # tree, and the first copy is exactly what pinned every non-fable transplant to Opus 4.8.
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0011-0000-0000-0000-000000000011" "$BATS_TEST_TMPDIR/repo" --model opus
+  [ "$status" -eq 0 ]
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"--model"* ]] || false
+  [[ "$output" != *"claude-opus"* ]]
+}
+
+@test "12. a mistyped model LABEL is refused before anything is transplanted" {
+  # Same liveness argument as test 9: `opus5` is not a model id, and the binary's refusal would land
+  # in a freshly spawned pane AFTER the transcript had already moved accounts. It does not enumerate
+  # valid ids — that list is perishable, and hardcoding one is the defect this change is about.
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0012-0000-0000-0000-000000000012" "$BATS_TEST_TMPDIR/repo" --model opus5
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--model must be"* ]]
+}
