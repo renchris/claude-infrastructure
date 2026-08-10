@@ -146,6 +146,25 @@ tests/tsv-field-collapse.bats
 # postland-verify.bats below, and re-admissible if it ever gets faster.
 tests/worktree-gc-infra.bats
 
+# ── FOURTH SEEDING — a THIRD exclusion class: hostile to the runner itself ───────────────────────
+# Actions run 31371884433 (trunk 77656a65). Shard 6 died with **exit 143 — SIGTERM** immediately
+# after tests/pkill-scope.bats reported GREEN, taking the 34 suites behind it with it and folding
+# the whole run to a short 304-of-338. The suite passed its own assertions and then killed the
+# process running it.
+#
+# That is neither of the two classes above. It is not machine-coupled (it passes) and it is not too
+# slow (15s). It is HOSTILE TO A SHARDED RUNNER: this repo's own land docs record that
+# `pkill -f bats…` SIGKILLs every concurrent gate on the box because every bats command line
+# contains the same string, and a CI runner is just another box where that is true. A suite whose
+# subject is process-killing cannot share a process tree with a runner that has more work queued.
+# The per-suite `timeout` gives each suite its own process group and does NOT help here — a pattern
+# match on a command line crosses process groups by design, which is the whole point of the tool
+# under test.
+# run 31371884433: shard SIGTERM (143) immediately after this suite, 34 suites lost
+tests/pkill-scope.bats
+# run 31371884433: notok=1
+tests/live-session-registry-atomic.bats
+
 # ── the land and verify machinery itself ─────────────────────────────────────────────────────────
 # These are the subjects that OWN the on-box verdict, so excluding them from the off-box second
 # opinion costs the least of anything here — the on-box corpus is where their claim belongs.
