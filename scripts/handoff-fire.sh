@@ -234,17 +234,29 @@ set -euo pipefail
 # itself and keep the literal only as a fallback.
 #   Override for tests: CC_EVAL_BIN=/path/to/claude
 _resolve_eval_bin() {
-  local from_zshrc=""
-  # The `claude()` launcher's exec line is the single source of truth for which build a
-  # successor actually runs. Last match wins (later definitions shadow earlier ones in zsh).
-  # Match only the path SUFFIX, never the "$HOME" prefix: the prefix is spelled
-  # three different ways in practice ($HOME, ~, absolute) and grepping for one of
-  # them would silently miss the other two. The suffix is invariant.
-  local suffix
-  [ -r "$HOME/.zshrc" ] && suffix="$(grep -oE '/\.claude-[0-9]+/node_modules/\.bin/claude' "$HOME/.zshrc" 2>/dev/null | tail -1)"
-  [ -n "${suffix:-}" ] && from_zshrc="$HOME$suffix"
-  if [ -n "$from_zshrc" ] && [ -x "$from_zshrc" ]; then printf '%s' "$from_zshrc"; return; fi
-  printf '%s' "$HOME/.claude-219/node_modules/.bin/claude"
+  # ONE resolver, not a second reading of the same file. This used to re-implement the
+  # ~/.zshrc parse inline, and being a SECOND implementation is what made it wrong in two
+  # different ways at once: it took the LAST zshrc match where bin/cc-claude-bin takes the
+  # first, and its fallback literal had rotted to ~/.claude-219 while the launcher ran 220 —
+  # the identical drift the comment above warns about, reproduced inside the fix for it.
+  # bin/cc-claude-bin is fail-closed and prints nothing when no rung resolves, so an empty
+  # result falls through to the derived-from-zshrc path below and then to the newest
+  # ~/.claude-NNN on disk. No version literal survives in this function, deliberately: a
+  # literal here can only ever be a copy of a number that lives somewhere else.
+  local resolver out _d
+  _d="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _d=""
+  for resolver in ${_d:+"$_d/../bin/cc-claude-bin"} "$HOME/.claude/bin/cc-claude-bin"; do
+    [ -x "$resolver" ] || continue
+    out="$("$resolver" 2>/dev/null)" || out=""
+    if [ -n "$out" ] && [ -x "$out" ]; then printf '%s' "$out"; return; fi
+  done
+  # Resolver unreachable (a stripped $HOME with no repo beside it). Deliberately NOT a second
+  # ~/.zshrc parse: re-reading the launcher here is precisely what made this function a rival
+  # implementation, and the two parsers disagreed on tie-break (first match vs last). Probe the
+  # filesystem instead — a different question, so it cannot silently answer the first one wrong.
+  local newest
+  newest="$(ls -d "$HOME"/.claude-[0-9]* 2>/dev/null | sed 's/.*\.claude-//' | sort -n | tail -1)"
+  printf '%s' "$HOME/.claude-${newest:-0}/node_modules/.bin/claude"
 }
 BIN="${CC_EVAL_BIN:-$(_resolve_eval_bin)}"
 # NOTE: deliberately NO top-level `[ -x "$BIN" ] || exit` here. The first version of this
