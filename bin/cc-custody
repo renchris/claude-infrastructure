@@ -85,7 +85,12 @@ _files_for() { # $1=cwd-or-empty → prints the file list (existing only)
 
 cmd="${1:-}"; shift 2>/dev/null || true
 CWD="" TARGET="" MARKER="" SLUG="" NB="" OP="" WHY="" WANT_OPEN=0 WANT_JSON=0 TOKEN=""
-case "$cmd" in return|abandon) TOKEN="${1:-}"; { [ -n "$TOKEN" ] && [ "${TOKEN#--}" = "$TOKEN" ]; } && shift ;; esac
+# A flag where the token should be is a MALFORMED call, not a token (review #5: `return --cwd X`
+# used to adopt "--cwd" as the token and rc-0 "no OPEN row matches" — a silent non-discharge).
+case "$cmd" in return|abandon)
+  TOKEN="${1:-}"
+  case "$TOKEN" in --*) TOKEN="" ;; ''|*) [ -n "$TOKEN" ] && shift ;; esac ;;
+esac
 while [ $# -gt 0 ]; do
   case "$1" in
     --cwd) shift; CWD="${1:-}" ;;

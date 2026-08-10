@@ -257,7 +257,7 @@ _ca_assignee() {
 }
 
 _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell
-  local lib rc out
+  local lib rc
   lib="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
   [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
     lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
