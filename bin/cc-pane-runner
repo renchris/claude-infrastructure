@@ -97,6 +97,38 @@ _fallback() {
 # on one would page a pane that is behaving exactly as intended. The verb is matched, not the whole
 # line, so a `--append-system-prompt` that merely MENTIONS claude cannot arm it.
 #
+# ── `claude.exe` IS THE TEAMMATE SPELLING, AND OMITTING IT LEFT TEAM PANES UNWATCHED ─────────────
+# Backlog `bc50117059ac` (spawn start-ack) ranks the un-acked spawn surfaces by who survives to
+# notice: handoff successor FIRST, then TEAM PANES, subagents last. The handoff arm has been
+# fail-closed since 0a4c8c9c (handoff-fire.sh:verify_engagement, exit 1 on all three failure
+# verdicts). The team-pane arm reached this gate and fell out of it.
+#
+# Agent-Teams teammate panes arrive here through the FILE delivery mode below — Claude Code splits
+# first and sends the command afterwards — so a teammate's launch command IS transported by this
+# runner and DOES reach this function. It simply never matched: the verb is `claude.exe`, and
+# `claude-*` does not match a dot. Two independent measurements name that spelling as the teammate
+# population, not a variant of it:
+#   · scripts/capacity-alarm.sh:583 — sessions launch under TWO DISJOINT spellings,
+#     `.../claude-code/bin/claude.exe` (measured ≡ exactly the `--agent-id` teammate set) and
+#     `.../node_modules/.bin/claude` (the interactive launcher). Measured intersection: ZERO.
+#   · hooks/lib/agent-identity.sh:14 — the measured 2.1.220 teammate argv is
+#     `claude.exe --agent-id <n>@session-<t> --agent-name <n> --team-name <t> …`.
+# So the incumbent set covered the launcher family and nothing else, and the surface the backlog
+# item ranks SECOND was the one surface with no watchdog at all.
+#
+# WHAT THE WATCHDOG CAN AND CANNOT SEE HERE, stated because it is NOT the same as for a launcher
+# pane. cc-wedge-watch is a conjunction: WEDGED := NOT engaged(assistant turn) AND NOT ui_up(screen).
+# For a teammate its FIRST axis is structurally blind — an assignee pane has no cc-registry row at
+# all (134/134, hooks/lib/lead-crash-watchdog.sh:596), so cc_engaged_pane returns 1 with
+# `no-registry-row` every time (hooks/lib/engagement.sh:99-105 — a clean, reasoned abstain, not an
+# error). The verdict therefore rests entirely on the SUPPRESSOR: a healthy teammate renders CC's
+# composer/auto-mode footer and reads ENGAGED via `proof=ui-anchor`; a teammate that died at the
+# shell or stalled on a startup modal renders neither and pages. That is the designed degradation
+# (the conjunction exists so either axis alone cannot convict), but it means the anchor set is
+# load-bearing on this path — `cc-wedge-watch --calibrate` is the guard that it still matches the
+# live fleet, and it exits 3 when 0 of N panes match (memory: control-calibrated-to-implementation-
+# decays; the prescribed `? for shortcuts` anchor measured 0/23 live four days after it was written).
+#
 # BLAST RADIUS. A side-car must fail no wider than itself (memory:
 # addon-failure-exceeds-its-blast-radius). Everything below is unset-safe, non-fatal, backgrounded,
 # and — load-bearing in a pane launcher — has all three fds redirected to /dev/null. A background
@@ -107,9 +139,14 @@ _arm_wedge_watch() { # $1=the command about to run
   [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
 
   # The launch VERB: strip a leading `nocorrect`, take the first word, then its basename.
+  # `claude.exe` is listed as an EXACT spelling, not as `claude.*`: the two families above are the
+  # two that were measured, and a wildcard here would annex any future `claude.<anything>` — a probe,
+  # a wrapper, a shim — into a pager that has no business watching it (memory:
+  # denylist-enumerates-spellings-not-the-class — widening past the evidence is the twin defect of
+  # missing a spelling, and this gate has now made both mistakes once).
   local _v="${1#nocorrect }"; _v="${_v%% *}"; _v="${_v##*/}"
   case "$_v" in
-    claude|claude[0-9]|claude-*|fable|fable[0-9]|cc) ;;
+    claude|claude[0-9]|claude-*|claude.exe|fable|fable[0-9]|cc) ;;
     *) return 0 ;;
   esac
 
