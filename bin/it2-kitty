@@ -519,8 +519,37 @@ sys.exit(0)' 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
 # falls straight back to UNKNOWN. And a composer that IS rendered is unaffected in every direction:
 # text still reads NON-EMPTY and is still refused, on an agent pane exactly as on any other. This
 # branch only ever converts "I could not find a composer region" into "there is provably none".
-composer_state() {          # -> NON-EMPTY | EMPTY | NO-TUI | AGENT-PANE | UNKNOWN (stdout, always 0)
-  local id="$1" meta cols alt agent txt
+#
+# THE FINISHED-AGENT EXTENSION (2026-08-10, docs/research/memory-econ-rearchitecture-2026-08-10/
+# terminal-layer.md §5). The two proofs above shipped and still refused every pane they were written
+# for: measured over 276 refusal snapshots, 212 (77%) carry ZERO rule lines, because a FINISHED agent
+# pane stops painting its footer altogether — so `len(rules) == 1` is structurally unreachable for
+# exactly the population teardown must close. Live census 2026-08-10: kitty windows 98-112, all 15
+# workers of the memory-econ wave, argv-proven agents, screens reading `✻ Brewed for 27s` and nothing
+# else. Two new passing states, each POSITIVELY proven and each strictly narrower than the refusal
+# it replaces:
+#   AGENT-NO-BOX — an argv-proven agent pane painting NO rule at all AND no ❯ anywhere on screen.
+#                  The composer is only ever drawn inside a box (this function's own `body =
+#                  lines[rules[-2]+1:rules[-1]]` assumes it), so no box plus no glyph is proof there
+#                  is nothing to lose. The argv proof is kept — §5.2 recommends the blanket
+#                  zero-rules rule and that is one step too wide: the rule threshold is
+#                  `max(20, cols//2)`, and window 149 measured a real labelled composer rule at 18
+#                  glyphs on a 28-column pane, so "zero rules" alone is a WIDTH artifact, not proof
+#                  of absence. A modal still draws its own ≥2 borders and still reaches UNKNOWN.
+#   DEAD-PANE    — the screen could not be read at all (blank or failed get-text) AND kitty's process
+#                  table proves no CC process is left in the pane. A composer buffer lives ONLY in
+#                  that process's memory, so once it exits the text is already gone and a refusal
+#                  protects nothing. Proven POSITIVELY, never by absence (memory:probe-that-acts-on-
+#                  absence-must-confirm-presence): the list must be NON-EMPTY, since an empty one is
+#                  kitty declining to answer rather than "nothing is running".
+composer_state() {          # -> NON-EMPTY | EMPTY | NO-TUI | AGENT-PANE | AGENT-NO-BOX | DEAD-PANE | UNKNOWN
+  local id="$1" meta cols alt agent dead txt
+  # shellcheck disable=SC2016  # the python must reach the interpreter VERBATIM — no shell expansion
+  # is wanted here, which is exactly what SC2016 reports. Values cross by ENVIRONMENT (WANT_ID) so a
+  # window id can never be interpolated into the program text. The directive is needed only after
+  # this block grew a 4th field; shellcheck flags the string extent, not any `$` in the body (the
+  # body of the second block has none at all). The hazard this construct DOES carry — an apostrophe
+  # closing the quote — is pinned by tests/it2-kitty-composer-guard.bats and not by SC2016.
   meta="$(kt ls --match "id:$id" 2>/dev/null | WANT_ID="$id" python3 -c '
 import json, os, re, sys
 want = os.environ["WANT_ID"]
@@ -548,20 +577,62 @@ for p in rows[0].get("foreground_processes") or []:
         elif a.startswith("--agent-name="):
             agent = a.split("=", 1)[1]
     break
+# PROOF OF DEATH for the DEAD-PANE state, 4th field. Read from the same table as PROOF 1, so it
+# cannot disagree with it. Three ways a pane OBJECTS to being called dead, and it takes only one:
+#   · argv[0] IS the CC binary — `.bin/claude` on operator panes, `bin/claude.exe` on subagent ones
+#     (terminal-layer.md S6 trap a: matching one spelling read cc=0 on every operator pane);
+#   · any LATER argv token names it, which is how a wrapper that execs or spawns CC is seen —
+#     `bash cc-close-attrib …/.bin/claude …` is the live shape on this box;
+#   · argv[0] is a process that can hide a GRANDCHILD from this list entirely. Window 5 runs
+#     `expect -c "spawn -noecho env … claude"` and the real CC appears NOWHERE in it (S6 trap b),
+#     so an expect-wrapped live pane would otherwise read DEAD. Refusing on the wrapper is the only
+#     answer available, because the evidence needed to acquit it is not in the table.
+# A bare substring test was tried first and REJECTED: every pane on this box runs
+# `bash …/claude-infrastructure/bin/cc-pane-runner`, so the repo path name itself matched on every
+# pane and made this arm permanently inert — safe-direction, but a state that can never be reached.
+# `procs and` is the positive-presence half: an empty list is kitty declining to answer, and it is
+# also the default in the test suite, so reading it as death would silently convert every
+# RPC-failure assertion into a close (memory:probe-that-acts-on-absence-must-confirm-presence).
+# NB: NO APOSTROPHE may appear anywhere in this block, comments included. It is embedded in a
+# single-quoted python3 -c argument, so one stray U+0027 closes that quote and hands the remainder
+# of the program to the shell. That fails at RUNTIME as "bad substitution" while `bash -n` still
+# parses the file clean, and composer_state then returns the empty string, which matches no case
+# arm — so EVERY pane refuses and the suite still shows green on every assertion that expects a
+# refusal. Measured here 2026-08-10 (a "repo-apostrophe-s" in this very comment caused it); the
+# two blocks above are apostrophe-free for the same reason. tests/ pins it with a lint.
+CC_EXE   = ("claude", "claude.exe")
+SPAWNERS = ("expect", "script", "ssh", "tmux", "screen", "sudo", "su", "nohup", "setsid", "env")
+def _hosts_cc(p):
+    argv = [str(a) for a in (p.get("cmdline") or [])]
+    if not argv:
+        return False
+    base = os.path.basename(argv[0])
+    return (base in CC_EXE or base in SPAWNERS
+            or any(os.path.basename(a) in CC_EXE for a in argv[1:]))
+procs = rows[0].get("foreground_processes") or []
+dead = "DEAD" if procs and not any(_hosts_cc(p) for p in procs) else "-"
 # An identity test against False, NOT a truthiness test: a payload MISSING in_alternate_screen
 # must read as "a TUI may be up" (⇒ UNKNOWN ⇒ refuse), never as "no TUI" (⇒ allow). Only kitty
 # explicitly saying False buys the permissive branch.
-print("%s %s %s" % (rows[0].get("columns") or 0,
-                    rows[0].get("in_alternate_screen") is not False,
-                    agent if agent and " " not in agent else "-"))' 2>/dev/null)" \
+print("%s %s %s %s" % (rows[0].get("columns") or 0,
+                       rows[0].get("in_alternate_screen") is not False,
+                       agent if agent and " " not in agent else "-",
+                       dead))' 2>/dev/null)" \
     || { printf 'UNKNOWN'; return 0; }
   [ -n "$meta" ] || { printf 'UNKNOWN'; return 0; }     # pane gone, RPC failed, or ambiguous match
   # `read`, not ${meta##* } — a third field would otherwise be handed back as `alt` and every pane
   # would read as "no TUI", i.e. the guard silently deleted rather than extended.
-  cols=""; alt=""; agent=""
-  read -r cols alt agent <<<"$meta"
-  txt="$(kt get-text --match "id:$id" --ansi 2>/dev/null)" || { printf 'UNKNOWN'; return 0; }
-  [ -n "$txt" ] || { printf 'UNKNOWN'; return 0; }      # a blank read proves nothing
+  cols=""; alt=""; agent=""; dead=""
+  read -r cols alt agent dead <<<"$meta"
+  # THE UNREADABLE ARM. Both exits below used to be an unconditional UNKNOWN; they now consult the
+  # liveness field FIRST and abstain exactly as before unless death is positively proven. A missing
+  # or malformed 4th field leaves `dead` empty, which is not "DEAD" — fail-closed by construction.
+  txt="$(kt get-text --match "id:$id" --ansi 2>/dev/null)" \
+    || { [ "$dead" = DEAD ] && printf 'DEAD-PANE' || printf 'UNKNOWN'; return 0; }
+  # A blank read proves nothing about a LIVE pane — but on a pane whose CC process is gone there is
+  # no process memory left for a composer to live in, so it proves the only thing that matters.
+  [ -n "$txt" ] || { [ "$dead" = DEAD ] && printf 'DEAD-PANE' || printf 'UNKNOWN'; return 0; }
+  # shellcheck disable=SC2016  # same construct, same reason as the block above.
   printf '%s' "$txt" | COLS="$cols" ALT="$alt" AGENT="${agent:--}" python3 -c '
 import os, re, sys
 SGR = re.compile("\x1b\\[([0-9;:]*)m")
@@ -598,7 +669,13 @@ if not body or "❯" not in plain(body[0]):
     # EXACTLY one rule, carrying the footer label of THIS agent. A modal-occluded pane draws its own
     # box borders (≥2 rules) and so can never reach here; a two-rule pane with no ❯ stays UNKNOWN.
     agent_pane = (agent != "-" and len(rules) == 1 and ("@" + agent) in flat[rules[0]])
-    print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))
+    # …and the FINISHED form of the same pane, which paints no footer at all (77% of all refusals).
+    # `not any("❯")` is the second proof and it is what makes zero-rules safe: a composer that is
+    # rendered but whose rules fell under the max(20, cols//2) floor on a narrow pane still shows
+    # its glyph, so this abstains there instead of destroying it.
+    no_box = (agent != "-" and len(rules) == 0 and not any("❯" in l for l in flat))
+    passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")
+    print(passing if (alt and passing) else ("UNKNOWN" if alt else "NO-TUI"))
     raise SystemExit
 seen = content = False
 for line in body:
@@ -829,7 +906,7 @@ else:
     if [ "${CC_CLOSE_COMPOSER_GUARD:-on}" = on ]; then
       _cstate="$(composer_state "$SESSION")"
       case "$_cstate" in
-        EMPTY|NO-TUI|AGENT-PANE) : ;;
+        EMPTY|NO-TUI|AGENT-PANE|AGENT-NO-BOX|DEAD-PANE) : ;;
         *)
           # PRESERVE FIRST, REFUSE SECOND. A snapshot taken after the close is worth nothing, and
           # this is the only moment the text still exists anywhere. Best-effort by design: a failed
