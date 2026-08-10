@@ -1,0 +1,215 @@
+name: hermetic
+
+# THE SECOND GREEN PRODUCER (backlog b4f93c9fa73c · docs/plans/DEPLOY_LANE_GROUND_UP.md §1.5).
+#
+# The on-box verifier is the SOLE owner of the full-suite claim and it emits 0.17 greens/day against
+# 63 commits/day — 3 greens in 128 stamps. This workflow does not try to be a second verifier; it
+# runs the HERMETIC PARTITION (scripts/offbox-partition.sh) on a machine nobody is using, and can
+# therefore acquit the machine-independent part of the tree per commit instead of per fortnight.
+#
+# WHAT IT MAY CONCLUDE. GREEN or nothing. A subset that cannot see the machine-coupled suites has no
+# standing to CONVICT a tree, only to acquit what it actually ran — so this job's conclusion is
+# deliberately BINARY, and a non-green here is never written anywhere the deploy lane reads as a red.
+# It never gates a land: /ship does not consult it, by construction.
+#
+# WHY macos-latest AND NOT ubuntu. Measured over the executable text of all 376 suites: 312 are
+# plausible on macOS against 224 on Linux. The 88-suite gap is not machine-coupling, it is BSD
+# userland — `date -v/-r/-j` (48 suites), `stat -f` (14), `sed -i ''` (3). Running on Linux would
+# make the partition smaller for reasons that have nothing to do with hermeticity, and would spend
+# the project's time porting date flags rather than producing greens. LAND_PIPELINE_V2 §8 rejected
+# off-box CI because "a macOS runner proves a different machine" — which is exactly right FOR THE
+# VERDICT, and exactly the point for a second opinion.
+#
+# THE NOISE HAZARD, NAMED. Because a new suite lands INSIDE the partition by default, a genuinely
+# machine-coupled new suite reds this workflow on the land that adds it. That is the intended bill
+# (see scripts/offbox-partition.sh § THE COST OF THAT DIRECTION) — but a check that is red on every
+# commit carries the same zero bits as one that cannot fire, which this repo has paid for before.
+# The `census` job is the answer: it runs the EXCLUDED suites too, so the partition line is
+# continuously re-measured in both directions rather than curated once and left to rot.
+
+on:
+  push:
+    branches: ['main', 'wt-**', 'offbox-**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      census:
+        description: 'Run the CENSUS (every tests/*.bats, partition or not) instead of the partition'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One verdict per ref. A superseded commit's verdict is not wrong, it is just about a tree nobody
+# will deploy — and letting them pile up would spend the macOS concurrency the newest commit needs.
+concurrency:
+  group: hermetic-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A per-suite bound, not a job bound. An overrun is a CUT — a non-verdict that withholds an
+  # acquittal — so this number can never convict anyone's code (scripts/offbox-run.sh § R6).
+  CC_OFFBOX_SUITE_BOUND_S: '180'
+
+jobs:
+  partition:
+    runs-on: ubuntu-latest
+    outputs:
+      count: ${{ steps.p.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          set -euo pipefail
+          bash scripts/offbox-partition.sh lint
+          n="$(bash scripts/offbox-partition.sh list | grep -c . || true)"
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          {
+            echo "### hermetic partition"
+            echo
+            bash scripts/offbox-partition.sh lint
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  suite:
+    needs: partition
+    runs-on: macos-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false          # every shard's evidence is wanted, especially when one is red
+      matrix:
+        shard: [1, 2, 3, 4, 5]  # 5 = the free-tier macOS concurrency ceiling; more would queue
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Suites build their own fixture repos, but the lint/gate suites read this checkout's
+          # history. A shallow clone makes those fail for a reason that is about the clone.
+          fetch-depth: 0
+
+      - name: install bats 1.13.0 (pinned to the on-box version)
+        run: |
+          set -euo pipefail
+          # Pinned, not `brew install bats-core`: the verdict must be comparable with the on-box
+          # verifier's, and every stamp it writes records bats 1.13.0. A runner that silently moved
+          # to a newer bats would make an off-box red un-reproducible on the box that has to fix it.
+          git clone --depth 1 --branch v1.13.0 https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+          bats --version
+
+      - name: install GNU timeout, and ONLY GNU timeout
+        run: |
+          set -euo pipefail
+          # 487 references to `timeout` and 19 to `gtimeout` across the corpus; macOS ships neither.
+          # Homebrew's gnubin directory is deliberately NOT put on PATH — it would also shadow sed,
+          # date and stat with their GNU versions, and 62 suites depend on the BSD spellings. The
+          # box under test has exactly this shape: GNU timeout/gdate present, gsed ABSENT.
+          brew install coreutils
+          mkdir -p /usr/local/gnubin
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" /usr/local/gnubin/timeout
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" /usr/local/gnubin/gtimeout
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/date"    /usr/local/gnubin/gdate
+          echo "/usr/local/gnubin" >> "$GITHUB_PATH"
+
+      - name: tool inventory (evidence, not decoration)
+        run: |
+          # A suite that reds because a tool is missing is a CUT wearing a red's clothes. Printing
+          # the inventory is what lets a reader tell those apart without re-running anything.
+          for t in bats timeout gtimeout jq python3 git shellcheck zsh perl shasum sqlite3 node; do
+            printf '%-12s %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo MISSING)"
+          done
+          printf '%-12s %s\n' 'bash' "$(/bin/bash --version | head -1)"
+          sw_vers
+
+      - name: run shard ${{ matrix.shard }}
+        env:
+          CC_OFFBOX_LOGDIR: ${{ runner.temp }}/logs
+        run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/out"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.census }}" = "true" ]; then
+            bash scripts/offbox-run.sh census --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
+          else
+            bash scripts/offbox-run.sh shard ${{ matrix.shard }} 5 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
+          fi
+
+      - name: shard summary
+        if: always()
+        run: |
+          f="${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
+          [ -r "$f" ] || { echo "shard produced no TSV"; exit 0; }
+          {
+            echo "### shard ${{ matrix.shard }}"
+            echo
+            echo '| state | suites |'
+            echo '|---|---|'
+            awk -F'\t' '!/^#/ && NF>=6 {c[$2]++} END {for (s in c) printf "| %s | %d |\n", s, c[s]}' "$f"
+            echo
+            echo '<details><summary>not-green suites</summary>'
+            echo
+            echo '```'
+            awk -F'\t' '!/^#/ && NF>=6 && $2!="green" {printf "%-52s %-6s ok=%-4s notok=%-3s %ss\n", $1,$2,$3,$4,$6}' "$f"
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offbox-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/out/
+            ${{ runner.temp }}/logs/
+          if-no-files-found: warn
+          retention-days: 14
+
+  verdict:
+    needs: [partition, suite]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: offbox-shard-*
+          path: shards
+          merge-multiple: true
+
+      - name: fold the shards into one verdict
+        id: fold
+        run: |
+          set -uo pipefail
+          # A census run folds against a partition it deliberately exceeds, so its fold is evidence
+          # rather than a verdict; it is reported and never allowed to mint a green.
+          v="$(bash scripts/offbox-run.sh verdict shards 2>/dev/null || echo '{"verdict":"cut","suites":0}')"
+          echo "$v" > offbox-verdict.json
+          echo "verdict=$(printf '%s' "$v" | python3 -c 'import json,sys; print(json.load(sys.stdin)["verdict"])')" >> "$GITHUB_OUTPUT"
+          {
+            echo "### off-box verdict"
+            echo
+            echo '```json'
+            printf '%s\n' "$v"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$v"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offbox-verdict
+          path: offbox-verdict.json
+          retention-days: 90
+
+      - name: the conclusion IS the verdict
+        run: |
+          # This job's success/failure is the whole API the on-box puller consumes
+          # (scripts/offbox-green-pull.sh reads it through the check-runs endpoint). It is BINARY on
+          # purpose: this producer may emit a green or emit nothing, and `red` vs `cut` is a
+          # distinction it has no standing to publish as a claim about the tree.
+          if [ "${{ steps.fold.outputs.verdict }}" = "green" ] \
+             && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "GREEN — the hermetic partition is clean off-box"
+            exit 0
+          fi
+          echo "NOT GREEN (${{ steps.fold.outputs.verdict }}) — no off-box green is produced for this tree"
+          echo "This never blocks a land and is never read as a red by the deploy lane."
+          exit 1
