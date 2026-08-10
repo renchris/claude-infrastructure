@@ -197,7 +197,9 @@ cmd_census() { # [<i> <n>] [--out FILE] — sharded exactly like the partition, 
   case "${1:-}" in [0-9]*) i="$1"; n="${2:?census: shard index needs a count}"; shift 2 ;; esac
   local out=/dev/stdout
   [ "${1:-}" = "--out" ] && { out="${2:?--out needs a path}"; }
-  local all; all="$( cd "$ROOT" && ls tests/*.bats 2>/dev/null | LC_ALL=C sort )"
+  # `find`, not `ls` (SC2012) — and it also matches how offbox-partition.sh and postland-verify.sh
+  # enumerate the corpus, so the census and the partition cannot disagree about what a suite is.
+  local all; all="$( cd "$ROOT" && find tests -maxdepth 1 -type f -name '*.bats' 2>/dev/null | LC_ALL=C sort )"
   if [ -n "$i" ]; then
     [ "$i" -ge 1 ] && [ "$i" -le "$n" ] || die "census: shard index $i out of range 1..$n" 2
     printf '%s\n' "$all" | awk -v i="$i" -v n="$n" 'NR % n == (i % n)' | run_list "$out"
@@ -334,6 +336,9 @@ cmd_selftest() {
     # F6f THE $HOME PROBE IS LIVE — a suite that reads $HOME must see the fixture, not the runner's
     # home. Without this control the empty-HOME oracle could be silently absent and every case above
     # would still pass.
+    # shellcheck disable=SC2016  # the single quotes are the POINT: $HOME must expand INSIDE the
+    # generated suite at bats runtime, not here. Only the %s — the outer $HOME this run must differ
+    # from — is substituted now.
     printf '@test "home is fixtured" { [ "$HOME" != "%s" ]; [ ! -d "$HOME/.claude" ]; }\n' "$HOME" \
       > "$tmp/tests/homeprobe.bats"
     printf '#!/bin/bash\nprintf "tests/homeprobe.bats\\n"\n' > "$tmp/part-home.sh"
