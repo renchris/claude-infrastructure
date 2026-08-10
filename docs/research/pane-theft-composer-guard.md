@@ -457,3 +457,129 @@ between `get-text` and `close-window` is still lost, because kitty has no atomic
 Trading an unbounded window for a 50 ms one is the right deal, not a claim of impossibility. §4's
 open items also stand — in particular the guard is **kitty-only**; on iTerm2 every close would take
 the `UNKNOWN` branch and refuse, so an iTerm2 implementation is required before it can ship there.
+
+---
+
+## 7 · THREE STATES WAS ALSO ONE TOO FEW — the guard refused every subagent pane (2026-08-10)
+
+§6.1 recorded that a two-state abstain rule deleted the main path of a three-state question. The
+same defect recurred one level out, and this time it was not self-close that broke but **subagent
+teardown**, fleet-wide.
+
+### 7.1 · The observation
+
+Ten research subagents (`tri-landgate` … `tri-tail`) delivered their files and went idle. Five hours
+and sixteen minutes later all ten were still resident. Not as sidebar entries — as **real child
+processes**:
+
+```
+pid=93647 rss=633MB elapsed=05:16:47 cpu=5:42  claude.exe --agent-id tri-landgate@session-e5d3628d …
+… ten of them …
+n=10 totalRSS=5.9 GB
+```
+
+Each had burned ~5 min of CPU and stopped. The sidebar's `new task? /clear to save 233.1k tokens` is
+the harness's own `idle-return-hint` (`tengu_idle_return_action`), gated on
+`CLAUDE_CODE_IDLE_TOKEN_THRESHOLD` (100k) and `CLAUDE_CODE_IDLE_THRESHOLD_MINUTES` (75) — and it is
+rendered **inside the agent pane itself**, which is why it appears in the screen snapshots below.
+
+### 7.2 · Nothing was missing. Everything fired, and was refused
+
+`TeammateIdle` is registered in all four config dirs. `teammate-auto-shutdown.sh` ran, checkpointed
+each member to `refs/wip/<name>/LAST` with a `/tmp` fallback patch, correctly attributed the shared
+worktree's dirt to siblings rather than to the member — and then asked for the close **160 times**:
+
+```
+✗ pane close FAILED (rc=67) for 32 (tri-dispatch): it2-kitty: refusing to close window 32 —
+  composer state is UNKNOWN. … an unreadable pane is not an empty one — so this refuses rather
+  than guesses.
+```
+
+So the finding is not "nothing closes subagents". It is that **the last gate in a correct chain
+convicted the one population that provably has nothing to lose.**
+
+### 7.3 · Why — a CC agent pane has no composer at all
+
+The live screen of window 32, read through the guard's own `get-text`:
+
+```
+✻ Baked for 15m 50s
+  new task? /clear to save 233.1k to…
+───────────────────── @tri-dispatch ──
+```
+
+**One** rule line. `rules = [4]`, so `len(rules) >= 2` fails, `body` is `[]`, `in_alternate_screen`
+is `True`, and §6.1's split hands it `UNKNOWN` — the arm written for *"a permission modal occludes
+the composer"*. There is no composer to occlude. CC never draws one in an agent pane, so the
+operator could not have typed into it.
+
+Measured across **all 20 live kitty windows**, and the separation is total:
+
+| population | n | rules | verdict |
+|---|---|---|---|
+| foreground argv carries `--agent-id` | 10 | exactly 1 | `UNKNOWN` ⇒ **refused** |
+| everything else | 10 | 2 (8 composer pairs) / 0 (2 shell prompts) | resolved ⇒ allowed |
+
+This is `memory:abstain-rule-can-retire-the-common-case` a second time, and
+`memory:guard-refusal-fires-on-its-own-harness`: a fail-closed guard convicting the fleet it serves.
+
+### 7.4 · The fourth state — `AGENT-PANE`, on two independent proofs
+
+Landed in `bin/it2-kitty` `composer_state()`. Both proofs are read through the **same `kt()` call the
+close travels** (`memory:make-the-actuator-the-arbiter` — never a second channel):
+
+1. **Process identity**, from kitty's own `foreground_processes`: a `claude`/`claude.exe` binary whose
+   argv carries `--agent-id`, yielding the `--agent-name`. A non-claude process merely *mentioning*
+   the flag does not qualify — argv carries whole briefs (`memory:pgrep-f-matches-agent-briefs`).
+2. **Screen shape**, from the same `get-text`: **exactly one** rule line, carrying `@<that name>`.
+
+Conjunct 2 is what keeps §3.5's residual risk closed rather than widened. CC draws its permission
+modals with box-drawing borders, so an occluded pane reads **≥2** rule lines with no `❯` in the body
+and falls straight back to `UNKNOWN`. And the branch is strictly subordinate to `NON-EMPTY`: a
+rendered composer holding text is refused on an agent pane exactly as anywhere else. It only ever
+converts *"I could not find a composer region"* into *"there is provably none"*.
+
+A second, quieter defect came with it: `meta` grew a third field, and the old
+`alt="${meta##* }"` would have handed the **agent name** back as `alt`. That never equals `"True"`,
+so every pane in the fleet would have read `NO-TUI` and closed — a guard deleted by a parse rather
+than by a decision. It has its own red-on-mutation control, and the modal-pane assertion is what
+catches it.
+
+### 7.5 · Verification
+
+28/28 in `tests/it2-kitty-composer-guard.bats` (6 new assertions, 3 new per-site mutation controls);
+76 green across the five sibling `it2-kitty` suites. The mutants include **the pre-fix script
+itself**, so the control replays the real artifact rather than an approximation
+(`memory:control-must-replay-the-real-artifact`).
+
+Live A/B against the ten stuck panes, with only the destructive `close-window` intercepted — the
+reads and the decision path are the real ones:
+
+| window | kind | pre-fix | fixed |
+|---|---|---|---|
+| 32, 36, 41 | agent | refused (67, `UNKNOWN`) | **allowed** |
+| 29, 47, 49, 52 | other | allowed | allowed |
+| 9999 (nonexistent) | — | refused (67, `UNKNOWN`) | refused (67, `UNKNOWN`) |
+
+The last row is the one that makes the table mean anything: the live control **can** still fail.
+
+### 7.6 · What this is NOT, and where it belongs
+
+Three refutations were required before building, and all three resolved against the "it is designed"
+reading:
+
+- **Retention is a harness feature, but reclamation is not.** A completed subagent stays addressable
+  so a lead can continue it. The harness's *only* reclamation affordance is the `idle-return-hint`
+  telling a **human** to type `/clear`. There is no timer, no boundary, no eviction — 5 h 16 m of
+  measured residency is the evidence.
+- **Nothing reclaimed them.** Not compaction, not session end, not an idle timer.
+- **The token figure understates rather than overstates.** `contextTokens` is computed live from the
+  agent's own message array, so it is real — but it is that agent's own window, costing nothing
+  further unless resumed. The *actual* cost is 5.9 GB of RSS in ten processes, which no token label
+  mentions.
+
+This belongs to master item `66ef300dd0b4` (M3, *the fleet bounds its own footprint*) — it is the
+same invariant, and a subagent is not a fourth face of it but a **pane M3 already owns whose actuator
+was refusing**. No rival mechanism is introduced here; one branch of one predicate is corrected.
+It is unrelated to `5bb6555f22df` (a subagent taking its lead's work lease) and to `c163f42390a3`
+(peer panes with no cc-fired stamp), which share the population but not the cause.
