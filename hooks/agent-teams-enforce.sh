@@ -103,6 +103,136 @@ else
     >> "${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
 fi
 
+# ── SPAWN BUDGET + DEPTH CAP ──────────────────────────────────────────────────────────────────
+# The fleet-footprint invariant: NO COMPONENT OWNS ITS OWN TEARDOWN, so nothing bounds a fan-out
+# either. One historical dispatch reached 224 Agent spawns / 167 sessions with no cap ANYWHERE —
+# and that horde is the measured ignition of the kernel watchdog panics (4 in 7 days to
+# 2026-08-09; docs/research/crash-rootcause-2026-08-09.md §1). A panic destroys every live
+# session at once, so this is the highest-blast-radius gate in the tree.
+#
+# WHY HERE, AND WHY ABOVE EVERY ALLOW PATH. This is THE actuator: the one PreToolUse hook on the
+# Agent tool, already registered, so the cap goes live on the trunk fast-forward rather than
+# waiting behind a C10 operator step (the inertness generator — an advisory cap is exactly what
+# let 224 spawns happen). It sits above the read-only-type skip (Explore|Plan|…) and above both
+# research branches ON PURPOSE: a 224-wide fan-out is overwhelmingly *research* subagents, so a
+# cap placed below those skips would be blind to the only shape that has ever caused the harm.
+#
+# TWO TERMS, AND ONLY ONE OF THEM IS LOAD-BEARING TODAY.
+#
+#  1. BUDGET, keyed on `.session_id`. MEASURED 2026-08-09: an in-process Agent subagent does NOT
+#     get its own session_id — its transcript rows and its PostToolUse audit lines both carry the
+#     LEAD's id (`~/.claude/logs/bash-execution.log` tags a subagent's Bash calls with the lead's
+#     sid). That makes a session-keyed counter aggregate lead + every descendant into ONE bucket,
+#     which is useless for a depth and exactly right for a budget: the whole fan-out charges the
+#     same account, so 224 is reachable only by spending 224. This term binds unconditionally.
+#
+#  2. DEPTH, derived from `.transcript_path`. The harness ALREADY computes it: a subagent's
+#     transcript lives at <session-dir>/subagents/agent-<id>.jsonl beside an
+#     agent-<id>.meta.json carrying {"agentType","toolUseId","spawnDepth"}. So depth is a READ,
+#     not an invention — `CC_SPAWN_DEPTH`-style env propagation (never measured, and vacuous if
+#     the env does not cross the spawn) is not needed. The ONE unknown is whether a nested hook
+#     invocation is handed the SUBAGENT's transcript_path or the LEAD's. Nothing in this repo
+#     logs transcript_path, so it cannot be answered from disk today.
+#
+#     That unknown is INSTRUMENTED, NEVER ASSUMED. Every evaluation writes one IDL row carrying
+#     the observed transcript shape and derived depth, so the first real nested spawn after this
+#     lands answers the question permanently, in a store, with no further probe. If the answer is
+#     "the lead's path", this term is silently inert — and the rows say so out loud rather than
+#     letting a depth cap be believed into existence. The budget term is unaffected either way.
+#     (memory: sensor-default-off-makes-blindness-the-shipping-path — one value must never mean
+#     both "answered no" and "could not ask", so basis is `depth-read` vs `depth-unavailable`.)
+#
+# REFUSAL IS HARD, NOT BOUNDED — deliberately UNLIKE capacity-admit above. That gate bounds its
+# refusals because memory pressure is transient and a wave must never be permanently blocked by a
+# reading. A spawn budget is the opposite: it bounds a quantity the caller chose, and a budget
+# that expires into an admit is not a budget. This follows the shape already proven in
+# hooks/frontier-spawn-gate.sh:52-63 (per-session cap, hard refusal, "do NOT retry"). Attempts
+# are charged, not admissions — a model re-trying a denied spawn in a loop IS the pathology, so a
+# retry storm must reach the wall faster, never slower.
+_sb_sid="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+_sb_tp="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
+_sb_state="${CC_SPAWN_STATE_DIR:-$HOME/.claude/autonomy/spawn-budget}"
+_sb_idl="${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+_sb_max="${CC_SPAWN_MAX_PER_SESSION:-60}"
+_sb_maxdepth="${CC_SPAWN_MAX_DEPTH:-2}"
+
+# Every validator failure ADMITS (capacity-admit's convention, :301-306) — a gate that cannot
+# read its own configuration must not become a fleet-wide refusal.
+case "$_sb_max"      in ''|*[!0-9]*) _sb_max=60 ;; esac
+case "$_sb_maxdepth" in ''|*[!0-9]*) _sb_maxdepth=2 ;; esac
+
+# Derive depth. A path matching */subagents/agent-*.jsonl IS a subagent transcript; its sibling
+# meta.json carries the harness's own spawnDepth. Anything else reads as the top level.
+_sb_depth=0; _sb_basis=depth-unavailable
+case "$_sb_tp" in
+  */subagents/agent-*.jsonl)
+    _sb_meta="${_sb_tp%.jsonl}.meta.json"
+    if [ -r "$_sb_meta" ]; then
+      _sb_d="$(jq -r '.spawnDepth // empty' "$_sb_meta" 2>/dev/null)"
+      case "$_sb_d" in ''|*[!0-9]*) : ;; *) _sb_depth="$_sb_d"; _sb_basis=depth-read ;; esac
+    fi
+    # A subagent transcript whose meta is unreadable still proves we are BELOW the top level.
+    [ "$_sb_basis" = depth-unavailable ] && { _sb_depth=1; _sb_basis=depth-inferred; }
+    ;;
+  ?*) _sb_basis=depth-toplevel ;;
+esac
+
+_sb_row() { # <verdict> <detail>  — one row per return path, no silent branch
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+         --arg sid "${_sb_sid:-?}" --arg v "$1" --arg b "$_sb_basis" --arg d "$2" \
+         --arg tp "$_sb_tp" --argjson dep "${_sb_depth:-0}" \
+    '{ts:$ts,hook:"spawn-budget",sid:$sid,disposition:(if $v=="refuse" then "refused" else "admitted" end),
+      reason:"spawn-budget",gate:"spawn-budget",verdict:$v,basis:$b,caller:"agent-tool",
+      what:"subagent spawn",depth:$dep,transcript:$tp,detail:$d}' \
+    >> "$_sb_idl" 2>/dev/null || true
+}
+
+if [ "${CC_SPAWN_GATE:-on}" = off ]; then
+  _sb_row admit "gate-off"
+elif [ -z "$_sb_sid" ]; then
+  # No session identity ⇒ nothing to key a budget on ⇒ admit, loudly. Never a silent pass.
+  _sb_row admit "no-session-id — spawn UNGATED for budget"
+else
+  mkdir -p "$_sb_state" 2>/dev/null
+  # Bound the store in place: a counter file per session accumulates forever otherwise, which is
+  # the same never-retired-residue defect this whole effort exists to close. 7 days is well past
+  # any single session's life.
+  find "$_sb_state" -name '*.count' -type f -mtime +7 -delete 2>/dev/null || true
+
+  _sb_safe="$(printf '%s' "$_sb_sid" | tr -c 'A-Za-z0-9._-' '_')"
+  _sb_file="$_sb_state/$_sb_safe.count"
+  _sb_n=0; [ -f "$_sb_file" ] && _sb_n="$(cat "$_sb_file" 2>/dev/null)"
+  case "$_sb_n" in ''|*[!0-9]*) _sb_n=0 ;; esac
+  _sb_n=$((_sb_n + 1))
+  printf '%s\n' "$_sb_n" > "$_sb_file" 2>/dev/null || true
+
+  if [ "$_sb_depth" -ge "$_sb_maxdepth" ]; then
+    _sb_row refuse "depth $_sb_depth >= cap $_sb_maxdepth"
+    jq -n --argjson dep "$_sb_depth" --arg cap "$_sb_maxdepth" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("SPAWN DEPTH CAP — this agent is already \($dep) level(s) deep and the cap is \($cap). A subagent spawning a subagent is how one dispatch reached 224 spawns / 167 sessions, which is the measured ignition of the kernel watchdog panics that destroy every live session at once. DO NOT retry and do NOT re-word the prompt — depth is read from the harness own spawnDepth, not from your text. Instead: RETURN your findings to the agent that spawned you and let IT decide whether to fan out further; that agent has budget you do not. If this genuinely needs one more level, the parent must spawn it. Override for one spawn: CC_SPAWN_MAX_DEPTH=<n>. Rule: master item 66ef300dd0b4 (fleet footprint).")
+      }
+    }'
+    exit 0
+  fi
+
+  if [ "$_sb_n" -gt "$_sb_max" ]; then
+    _sb_row refuse "budget $_sb_n/$_sb_max"
+    jq -n --argjson n "$_sb_n" --arg cap "$_sb_max" '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: ("SPAWN BUDGET EXHAUSTED — this session has attempted \($n) agent spawns against a cap of \($cap). The budget is charged per SESSION and an in-process subagent shares its lead session id, so every descendant of this session spends the same account: the number above is the whole tree, which is exactly the quantity that reached 224 and panicked the box. DO NOT retry in a loop — attempts are charged, not admissions, so a retry storm only reaches the wall faster. Instead: do the remaining work SERIALLY on this agent, or narrow the fan-out to the few axes that actually change the answer, or hand the rest to a fresh dispatched session (scripts/handoff-fire.sh) which carries its own budget. Override for this session: CC_SPAWN_MAX_PER_SESSION=<n>. Rule: master item 66ef300dd0b4 (fleet footprint).")
+      }
+    }'
+    exit 0
+  fi
+
+  _sb_row admit "budget $_sb_n/$_sb_max depth $_sb_depth/$_sb_maxdepth"
+fi
+
 # Teammate spawns (team_name set) MUST use a Max-plan auto-mode-allowlisted model.
 # Allowlist is read from the SSOT (~/.claude/model-config.yaml
 # .auto_mode_allowlist.non_firstParty_max — claude-opus-4-8 as of 2026-06-09) so

@@ -161,7 +161,13 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   [[ "$output" == *"Background subagents cannot write code"* ]] || false
   # and the absence is recorded in the ledger rather than printed on stderr (see case 28)
   [ -f "$BATS_TEST_TMPDIR/iso-idl.jsonl" ]
-  [ "$(jq -r '.basis' "$BATS_TEST_TMPDIR/iso-idl.jsonl")" = "absent" ]
+  # SELECT THIS CASE'S OWN ROW. The bare `jq -r '.basis'` this replaces spanned the WHOLE ledger
+  # and only ever worked because capacity-admit was its sole writer — so the first hook to record a
+  # second row (the spawn-budget term, 66ef300dd0b4) made it compare "absent\n<other>" to "absent"
+  # and reddened a case about a subject that had not changed. That is a tripwire for someone else's
+  # correct addition, not a guard (memory: assertion-span-must-equal-its-subject). Keyed on the
+  # gate, it now also cannot be SATISFIED by another writer's row, which the old form could.
+  [ "$(jq -r 'select(.gate=="capacity-admit") | .basis' "$BATS_TEST_TMPDIR/iso-idl.jsonl")" = "absent" ]
 }
 
 @test "25 reso-resume-one is UNGATEABLE in its own body — and the residue is stated, not hidden" {
