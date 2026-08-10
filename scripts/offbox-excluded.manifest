@@ -96,6 +96,30 @@ tests/unattended-path-lint.bats
 # run 31362043861: notok=1
 tests/subshell-cleanup-lint.bats
 
+# ── SECOND SEEDING — the suites the truncated shards had been HIDING ─────────────────────────────
+# Actions run 31363422123, the first run after the `</dev/null` fix. 347 of 347 expected suites ran
+# (the first census reached only 306), 339 green, 8 red, 0 non-verdicts. These 8 are all in the
+# stretch of shards 1, 4 and 9 that the stdin-eating suites had swallowed, so they had never been
+# executed off-box at all — a reminder that the first census's 26 reds were never the whole list,
+# only the part a truncated run could see.
+# HINT (not verified): pane/fleet/session-registry state and the Darwin QoS band.
+# run 31363422123: notok=1
+tests/handoff-fired-cwd-index.bats
+# run 31363422123: notok=3
+tests/handoff-selfclose-pane-identity.bats
+# run 31363422123: notok=2
+tests/handoff-fire-capacity-gate.bats
+# run 31363422123: notok=3
+tests/session-register-reclaim.bats
+# run 31363422123: notok=1, and it burned the full 120s bound doing it
+tests/cc-await-ping.bats
+# run 31363422123: notok=1
+tests/qos-chokepoint.bats
+# run 31363422123: notok=1
+tests/bats-assert-liveness.bats
+# run 31363422123: notok=5
+tests/suggest-filter.bats
+
 # ── the land and verify machinery itself ─────────────────────────────────────────────────────────
 # These are the subjects that OWN the on-box verdict, so excluding them from the off-box second
 # opinion costs the least of anything here — the on-box corpus is where their claim belongs.
