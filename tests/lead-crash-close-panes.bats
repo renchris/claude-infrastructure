@@ -242,7 +242,7 @@ calls() { wc -l < "$TD_LOG" | tr -d ' '; }
   [[ "$output" == *"no pane / in-process"* ]] || false
 }
 
-@test "(ix-b) the PRODUCER never emits an empty TSV field — `read` would shift the columns left" {
+@test "(ix-b) the PRODUCER never emits an empty TSV field — \`read\` would shift the columns left" {
   # Fixture-shape parity: assert what harvest_team_reports LITERALLY writes, not a hand-made row.
   # An in-process member has no pane; an empty column there would be coalesced away by
   # `IFS=$'\t' read`, so the reader would take state="HARVESTED" as the PANE and tear down a

@@ -233,7 +233,7 @@ idl_field() { # $1=jq path → newline-separated values, in order
   [ "$(jq -rs 'map(.verdict) | sort | join(",")' "$CC_ADMIT_IDL")" = "admit,refuse" ]
 }
 
-@test "14 rows stay slurpable when `what` carries quotes/newlines (the malformed-line class)" {
+@test "14 rows stay slurpable when \`what\` carries quotes/newlines (the malformed-line class)" {
   # ONE malformed line aborts the cc-audit `jq -rs` slurp, which then reads as "no records" and
   # silently flips the abstain alarm GREEN. Every field is jq-encoded for exactly this.
   bash -c '. "$1"; cc_capacity_admit c14 "$(printf '"'"'a"b\nc\\d'"'"')"' _ "$LIB" >/dev/null
