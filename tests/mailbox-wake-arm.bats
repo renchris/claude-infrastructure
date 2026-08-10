@@ -40,6 +40,12 @@ setup() {
   PANE="AAAAAAAA-1111-2222-3333-444444444444"
   SESS="11111111-aaaa-bbbb-cccc-000000000001"
   export ITERM_SESSION_ID="w0t0p0:$PANE"
+
+  # HEADLESS-GUARD SEAM — every legacy test models the INTERACTIVE dispatch the adapter was proven
+  # on. Without this pin the guard walks the REAL process tree: green when bats runs under an
+  # operator's interactive claude ancestor, red under launchd — the polarity trap of
+  # MEMORY.md hermetic-in-stubs-not-in-interpreter. Guard-specific tests override per-case.
+  export CC_WAKE_ARM_HARNESS_ARGV="/fixture/.claude-220/node_modules/.bin/claude --permission-mode auto --model claude-opus-5"
 }
 
 # Install a fake watcher that records its argv and exits with the code this test is about.
@@ -155,4 +161,34 @@ run_arm() { # [session_id]
   # whichever bound binds first must be OURS, so we exit through the clean silent path rather than
   # being reaped mid-watch (the 2026-07-29 probe never established that the harness spares it)
   grep -q 'timeout 14340' "$ARGV" || false
+}
+
+# ── HEADLESS ONE-SHOT GUARD ──────────────────────────────────────────────────────────────────────
+# asyncRewake is honored only when `isInteractive || hasStreamingInput` (2.1.220 dispatch gate). In
+# a one-shot `claude -p`, the hook is dispatched SYNC — arming there would block session birth for
+# the full watch. These pin all three branches of the guard; the interactive branch is exercised by
+# every legacy test above via the setup seam.
+
+@test "GUARD: one-shot print harness (claude -p) → NO watcher, silent exit 0" {
+  fake_ping 0 "mail that must never be consumed"
+  export CC_WAKE_ARM_HARNESS_ARGV="/fixture/bin/claude -p summarize the logs"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "GUARD: print WITH --input-format stream-json arms (streaming input keeps async dispatch)" {
+  fake_ping 2 ""
+  export CC_WAKE_ARM_HARNESS_ARGV="/fixture/bin/claude -p --input-format stream-json --output-format stream-json"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+}
+
+@test "GUARD: unresolvable dispatch mode (seam set-but-empty) → SKIP, never a possibly-sync watch" {
+  fake_ping 0 "mail"
+  export CC_WAKE_ARM_HARNESS_ARGV=""
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
 }

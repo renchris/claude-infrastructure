@@ -587,4 +587,90 @@ failure.
 > watcher — nearly every fired peer session does — then use
 > `~/.claude/hooks/session-continue.sh set "<the ONE next step>"`, which is ours, is unaffected, and
 > was already the sanctioned actuator for the 🔧 state.
+>
+> *(2026-08-10: this rule is now ENFORCED and mostly obsolete — see § RESOLUTION below. The
+> validate-bash chokepoint refuses the arm under a live goal, the nags stopped instructing it, and
+> the birth watcher covers idle wake without entering the task registry.)*
+
+---
+
+# RESOLUTION DEPLOYED 2026-08-10 — /goal works out of the box; the conflict set was three-deep
+
+**Operator directive (via `/goal`, 2026-08-10): sessions sat idle with an active `/goal` — resolve
+the claude-infrastructure conflict and deploy live.** The compensating control above made the skip
+LOUD; this pass removes the causes. Three distinct mechanisms were putting a goal-armed session
+idle, and all three are ours to fix:
+
+## R1 — the parked watcher (the § RESOLVED mechanism), now removed at every producer
+
+The deferral itself is CC's and stays. What changed is that **nothing of ours creates the standing
+deferrer any more**:
+
+| Surface | Before | Now |
+|---|---|---|
+| `mailbox-drain.sh` nag (SessionStart / UserPromptSubmit) | instructed `cc-await-ping … run_in_background=true` unconditionally | **goal-aware**: with a LIVE goal it warns AGAINST arming and carries no arm command (`hooks/lib/goal-state.sh`, one shared predicate) |
+| `session-continue.sh` WAKE FLOOR | **blocked the stop** and instructed the arm — the instruction-injector | fourth abstain state: a LIVE goal IS the wake path; stands down, spends no budget |
+| the model's own habit (CLAUDE.md § Agent Teams recipe) | armed it anyway | **chokepoint deny** in `validate-bash.sh`: background `cc-await-ping` under a LIVE goal is refused with the mechanism + the goal-safe alternative in the reason (command-position match, so a bg `rg cc-await-ping` is untouched; fail-open on any read failure) |
+| idle wake coverage | only the model-armed watcher | **migration 0007 registered**: `mailbox-wake-arm.sh` arms at birth as an asyncRewake hook — a hook-engine Promise, **not a task-registry entry** (read from the binary: `bip()` @237768400 tracks it in a module Set and wakes via a synthesized task-notification), so it wakes an idle session WITHOUT deferring the goal |
+
+The goal-live predicate is `hooks/lib/goal-state.sh :: goal_live_condition` — last `goal_status`
+ATTACHMENT with `met==false` and not `failed` (the § sentinel dictionary; prose-decoy filtered).
+
+**0007 shipped with a new guard it turned out to need.** The 2.1.220 dispatch gate is
+`(e.async || e.asyncRewake && K) && !d` with `K = isInteractive || hasStreamingInput`
+(`_n`/`r2r` @225500254). In a one-shot `claude -p`, K is FALSE — the hook would run
+**synchronously and block session birth for the full ~4 h watch**, for every headless probe and
+daemon on the box. `mailbox-wake-arm.sh` now resolves the harness's own argv (first claude/node
+ancestor; `CC_WAKE_ARM_HARNESS_ARGV` is the test seam, set-but-empty = provably unresolvable) and
+SKIPS on one-shot print mode — and on anything it cannot resolve, because under-arming restores the
+status quo while over-arming wedges a birth.
+
+## R2 — the shared consecutive-block cap force-ends autonomous goal runs at 8
+
+Read out of the binary (@233098–233156) and corroborated in the corpus:
+
+- An UNMET goal evaluation yields a `blockingError` — the same currency as every operator Stop
+  hook's block — and each blocked stop increments ONE counter, `stopHookBlockingCount`.
+- Past `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default **8**) the harness "overrid[es] and end[s] turn":
+  the session goes idle with the goal still armed and `met:false`. **25 transcripts across the five
+  config dirs carry that override message.** Infra blocks (session-continue 🔧, completion-assert)
+  spend the same budget, so a goal session on this box saw fewer than 8 goal iterations per wake.
+- The counter resets per external stimulus (user message / task-notification wake), so the cap is
+  "consecutive autonomous continuations per wake" — exactly the /goal operating regime.
+
+**Fix:** `bin/claude-latest` — the funnel every launcher exec's through — defaults
+`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=50` when unset (operator override always wins; the binary's own
+cap message names this env var as the sanctioned lever). 50 keeps a runaway bound; every blocking
+hook we own also carries its own tighter latch (`CLAUDE_CONTINUE_MAX`, damping).
+
+## R3 — the commonest succession silently dropped the goal
+
+§3.4 measured that a goal dies with its session and `--recycle` re-arms only if the caller re-passes
+`--goal`; the Open item called inheritance a design question. The operator's 2026-08-09 directive
+("**`--goal` is part of that recipe, not an option**", CLAUDE.md § Agent Teams) settles it:
+**`handoff-fire.sh --recycle` now INHERITS the predecessor's LIVE goal by default** —
+`goal_live_for_sid` (nested-projects resolution, prose-decoy-proof) + `inherit_recycle_goal`
+(explicit `--goal` wins · `CC_RECYCLE_GOAL_INHERIT=0` opts out · terminal goal inherits nothing ·
+inherited conditions re-run `check_goal_arm`, so a multi-line condition is refused loudly, never
+armed corrupt). Re-arm still happens only after engagement is proven, via the existing `arm_goal`.
+
+## What deliberately did NOT change
+
+- `check_slash_head` — untouched, still pinned by its red-if-weakened test.
+- CC's deferral — correct; we removed our standing occupier instead of defeating the judge.
+- `goal-inert-watch.sh` — still the backstop sensor (migration 0005 registered; its dir list gained
+  `~/.claude-next`, which 0007 had and 0005 had silently omitted). Residual deferrers it still
+  catches: a long background subagent/workflow parked across an idle — a correct deferral, but now a
+  visible one.
+- CLAUDE.md § Agent Teams' `cc-await-ping` line — left as-is deliberately (the file was under
+  active operator edit 2026-08-10); the runtime guard corrects a goal-armed lead with a teaching
+  deny, which is the chokepoint the memory rule prescribes anyway.
+
+## Suites
+
+`goal-state.bats` 10/10 (new) · `validate-bash-goal-guard.bats` 8/8 (new) · `wake-floor.bats` +3
+(goal abstain, met-goal discriminator, zero-budget-spend) · `mailbox-drain.bats` +2 (goal-aware
+nag both directions) · `mailbox-wake-arm.bats` 15/15 (+3 headless-guard) ·
+`handoff-goal-arm.bats` 27/27 (+9 inheritance) · `claude-latest-stderr.bats` +1 (cap default +
+override).
 
