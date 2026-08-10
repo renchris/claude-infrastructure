@@ -338,7 +338,7 @@ blocks a false-done against the live ledger; `operator-readout.sh` renders the o
 manual-steps close block from disk truth — pure `systemMessage`, never a block).
 The agent runs the git/gate reads itself, so the ledger reports facts, not self-report.
 
-**Two of those Stop arms make this SELF-CERTIFYING, so the operator never has to ask "are we good
+**Three of those Stop arms make this SELF-CERTIFYING, so the operator never has to ask "are we good
 to close?"** (operator crux 2026-08-01 — they were re-asking at every close, because a negative
 gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
 
@@ -355,6 +355,32 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   `session-continue.sh clear` spends that budget outright when the dirt is deliberately parked.
   This is what makes 🔧 "not the case in the first place" — reaching idle on your own loose end is
   now a mechanism failure, not a discipline failure.
+- **The floors + the origin close contract** *(CLOSE_INTEGRITY 2026-08-10 — built after an 8-agent
+  recon measured the residual leak: 58% of stops assert nothing, so every message-shaped arm was
+  blind to a SILENT close; 53/60 recent session-ends were voluntary clean exits; 62 commits sat
+  content-stranded across 21 abandoned-wave branches, and deaths were 0.34% — the decision layer,
+  not the mechanics, was what failed).* Three mechanical arms close it:
+  **(1) The SHIP FLOOR** (`session-continue.sh`): idling silently on 📦/🚀 work YOU wrote blocks
+  once per HEAD-sha (≤`CC_SHIP_FLOOR_MAX`=2/session) — `/ship` it, converge it, or park it
+  EXPLICITLY (`clear` + name the park in the close). Attribution-gated (`session_unlanded_mine` —
+  never a nudge over a sibling's commits), assignee/terminating/kill-switch exempt.
+  **(2) CUSTODY** (`bin/cc-custody`): a fire that arms `--notify-back` records a DEBT keyed on the
+  firing cwd; the peer's self-close discharges it. Open custody folds into the ledger as 🔧 — the
+  ✅ certificate is mechanically unreachable over an unreturned wave — contradicts any done-claim
+  (completion-assert), and keeps the originator wakeable (the wake floor treats open custody like
+  pending mail). *Awaiting ARMED is the legitimate non-close state; "done" is not.* Collect →
+  land → `cc-custody return <marker|slug>`; supersede → `cc-custody abandon <token> --why …`.
+  **(3) THE ORIGIN PYRAMID CLOSE** (completion-assert D6 + `hooks/lib/close-shape.sh` — ONE code
+  path with `/wrap`): an ORIGIN session (no fired-peer stamp — `hooks/lib/origin-identity.sh`)
+  closing genuine completion (✅/👤) after real written work must END with the operator's two
+  standing answers, mechanically matched: `Complication:` / `Solution:` / `Outcome:` (one line
+  each, minimal Pyramid form) + `Good to close: yes — complete, durable, deployed live, no loose
+  ends; follow-on: <filed ids|none>` — an honest `Good to close: no — <what remains + who owns
+  it>` also satisfies (the contract is that the question is ANSWERED; hedging stays D3's defect).
+  Latched + capped with the other arms; assignees and fired peers are exempt (their close is the
+  lead's harvest / the notify-back ping). The frozen DoD now survives the worktree hop too —
+  repo-identity keyed via `hooks/lib/dod-path.sh` (new captures) with lossless per-toplevel legacy
+  fallback — so a successor on a fresh worktree inherits the real scope instead of a blank one.
 
 **Freeze the DoD at intake.** The first time a task will write tracked files, restate the user's
 ask as one line — **`Scope (frozen): …`** (in the plan, else inline). Close-time completeness is
