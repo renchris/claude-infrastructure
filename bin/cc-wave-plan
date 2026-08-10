@@ -17,6 +17,16 @@
 #   account already carrying sessions from prior waves is de-prioritized. ≤ CC_WAVE_MAX_PER_ACCT (default 2)
 #   items/account/wave is retained as the cliff bound — no account under that cap anywhere = cliff.
 #
+# URGENCY (W2-B, the DEMAND half of M7): the flat cap above is urgency-BLIND — it allowances an account
+#   whose weekly quota strands in <24h exactly like one with six idle days, so a wave cannot concentrate
+#   where quota is about to be lost. EXACTLY ONE account per plan — the TOP-RANKED account that is BEHIND
+#   (its `weekly_need_pct_per_day` exceeds its measured `burn_wk_ppd`) — is capped at
+#   min(CC_WAVE_MAX_PER_ACCT_URGENT, KMAX − k_eff) instead, floor 0; every other account keeps the flat
+#   cap. A row missing EITHER field carries no urgency claim (a missing measurement is not urgency) and
+#   an unreadable KMAX means no bound, so both degrade to flat — the widening is never unbounded and
+#   never inferred. It is also never SILENT: the applied allowance renders on stdout (text) or stderr
+#   (--json) and lands in the IDL detail, because a widening nobody can see is the alarm-polarity defect.
+#
 # LIVE SOURCES (never hardcoded — memory: frontier-window-ssot-discipline):
 #   · `claude-accounts --rank general` → ranked "name score" lines (best first) — healthy set + tie-break.
 #   · `claude-accounts --json`         → .window.deadline (straddle guard) + .rows[].k (live session counts,
@@ -49,12 +59,22 @@
 #       default) · 4 = capped | capacity · 5 = auth · 6 = unknown. One IDL record per invocation.
 # Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN,
 #       CC_WAVE_IDL, CC_WAVE_ORACLE_TIMEOUT_S, CC_WAVE_TIMEOUT_BIN (set-but-empty ⇒ force "absent"),
-#       CC_WAVE_VERDICT_LANE (v1 ⇒ the pre-v2 path verbatim: one exit 4, no evidence, no bound).
+#       CC_WAVE_VERDICT_LANE (v1 ⇒ the pre-v2 path verbatim: one exit 4, no evidence, no bound),
+#       CC_WAVE_MAX_PER_ACCT_URGENT (≤ CC_WAVE_MAX_PER_ACCT ⇒ urgency off, byte-identical plans),
+#       CLAUDE_ACCOUNTS_JSON (the SSOT accounts.json the router's KMAX is read from — the SAME env
+#       override claude-accounts itself honours, so a test pins ONE file for both sides).
 set -uo pipefail
 
 ACCOUNTS_BIN_DEFAULT="claude-accounts"
 ROUTE_BIN_DEFAULT="cc-route"
 MAX_PER_ACCT="${CC_WAVE_MAX_PER_ACCT:-2}"
+# W2-B — the URGENT per-account allowance (the demand half of M7). The flat cap above is
+# urgency-BLIND: it hands an account whose weekly quota strands in <24h exactly the same 2 slots
+# as one with six idle days. ONE account per wave — the top-ranked account whose weekly NEED
+# outruns its measured recent BURN — may take up to this many, bounded by KMAX − its live charge.
+# KILL SWITCH: set this at or below CC_WAVE_MAX_PER_ACCT and the urgency path is never evaluated
+# at all (not even read) — plans are byte-identical to the flat lane.
+URGENT_PER_ACCT="${CC_WAVE_MAX_PER_ACCT_URGENT:-4}"
 GUARD_MIN="${CC_WAVE_FABLE_GUARD_MIN:-30}"
 # Per-item worktree root. Only ever composed into the fire_line TEMPLATE — this script creates
 # nothing (cc-dispatch, the actuator, provisions the path warm before it fires).
@@ -283,7 +303,7 @@ window_mins_to_close() {
 # placed on it THIS wave). Each item lands on the account minimising RLOAD+RCOUNTS, so a wave round-robins
 # across the set AND an account already loaded from prior waves is de-prioritised — the fix for the
 # greedy-fill concentration bug where one top-ranked account absorbed every wave (operator, 2026-07-19).
-RANKED=(); RCOUNTS=(); RLOAD=()
+RANKED=(); RCOUNTS=(); RLOAD=(); RCAP=()
 RANK_NONE=0; RANK_BAD=0
 load_ranks() {
   local bin line name score
@@ -305,7 +325,7 @@ load_ranks() {
     [ "$name" = none ] && { RANK_NONE=1; continue; }               # the CLI's no-candidate sentinel
     case "$line" in *' '*) score="${line#* }" ;; *) RANK_BAD=1; continue ;; esac
     case "$score" in ''|*[!0-9.]*) RANK_BAD=1; continue ;; esac    # field 2 must be the numeric score
-    RANKED+=("$name"); RCOUNTS+=(0); RLOAD+=(0)
+    RANKED+=("$name"); RCOUNTS+=(0); RLOAD+=(0); RCAP+=("$MAX_PER_ACCT")
   done <<EOF
 $RANK_RAW
 EOF
@@ -417,15 +437,105 @@ load_live_counts() {
     RLOAD[i]="$k"
   done
 }
+# ── W2-B: the URGENT per-account allowance ────────────────────────────────────────────────────────
+# ssot_kmax → the router's KMAX from the SSOT accounts.json, or empty. Read from the SAME file the
+# producer reads and via the SAME env override (CLAUDE_ACCOUNTS_JSON, claude-accounts:127) so the two
+# sides can never disagree about which file is authoritative — and so a test pins ONE path for both.
+# KMAX is deliberately NOT taken from `--json`: that payload does not carry it (only s_cut rides at
+# top level, claude-accounts:2756-2760), and inventing a fallback constant here is exactly the
+# "hardcoding 85 in prose that silently diverges" failure that comment exists to prevent.
+ssot_kmax() {
+  local f k
+  f="${CLAUDE_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"
+  [ -r "$f" ] || return 1
+  k="$(jq -r '.router.KMAX // empty' "$f" 2>/dev/null)" || return 1
+  case "${k:-}" in ''|*[!0-9]*) return 1 ;; esac      # absent / non-integer ⇒ NO bound ⇒ no urgency
+  echo "$k"
+}
+
+# apply_urgency → raises RCAP for AT MOST ONE account: the top-ranked BEHIND one. Everything about
+# this is fail-soft toward the flat cap, because every degradation direction here is a WIDENING and a
+# widening taken on absent data is a widening taken on a guess:
+#   · knob at/below the flat cap  ⇒ never evaluated (the kill switch — not even the SSOT is read)
+#   · no --json snapshot / no KMAX ⇒ flat (the bound is what keeps the allowance honest)
+#   · a row missing EITHER pace field ⇒ that account makes NO urgency claim. "Missing measurement"
+#     and "not behind" must reach the same place; treating absence as urgency is how a silent
+#     widening would ship on the day the utilization series thins out.
+# BEHIND is the producer's own predicate (measured < needed, claude-accounts:1396) — re-derived here
+# only because --json emits the two terms and not the verdict; no threshold is invented.
+# k_eff mirrors claude-accounts:1219-1221 for the same reason: k_work when the sweep could measure
+# it, else the pane census (absence degrades to the STRICTER count, never to zero), plus phantoms.
+URG_ACCT=""; URG_NEED=""; URG_BURN=""; URG_KEFF=""; URG_KMAX=""; URG_CAP=""
+apply_urgency() {
+  [ "$URGENT_PER_ACCT" -gt "$MAX_PER_ACCT" ] || return 0        # kill switch: unset/equal ⇒ flat lane
+  [ "${#RANKED[@]}" -gt 0 ] || return 0
+  [ -n "$ACCT_JSON" ] || return 0
+  local kmax tsv acct need burn keff head cap i
+  kmax="$(ssot_kmax)" || return 0
+  # ONE jq pass, in RANK ORDER: the ranked names go in as data, so "top-ranked BEHIND" is decided
+  # where the numbers are (need/burn are floats — bash cannot compare them) rather than by a shell
+  # loop that would have to shell out per account anyway.
+  tsv="$(printf '%s' "$ACCT_JSON" | jq -r --arg ranked "${RANKED[*]}" '
+      . as $j
+      | ($ranked | split(" ") | map(select(. != ""))) as $order
+      | [ $order[]
+          | . as $a
+          | (($j.rows // []) | map(select(.acct == $a)) | first)
+          | select(. != null)
+          | select((.weekly_need_pct_per_day | type) == "number")
+          | select((.burn_wk_ppd            | type) == "number")
+          | select(.weekly_need_pct_per_day > .burn_wk_ppd)
+          | [ .acct,
+              (.weekly_need_pct_per_day * 10 | round / 10 | tostring),
+              (.burn_wk_ppd             * 10 | round / 10 | tostring),
+              ( ( if (.k_work | type) == "number" then .k_work else (.k // 0) end )
+                + (.k_phantom // 0) | tostring ) ]
+        ] | first | select(. != null) | @tsv' 2>/dev/null)" || return 0
+  [ -n "$tsv" ] || return 0
+  IFS=$'\t' read -r acct need burn keff <<EOF
+$tsv
+EOF
+  case "${keff:-}" in ''|*[!0-9]*) return 0 ;; esac
+  head=$(( kmax - keff ))                                       # what the concurrency ceiling leaves
+  cap="$URGENT_PER_ACCT"; [ "$head" -lt "$cap" ] && cap="$head"
+  [ "$cap" -lt 0 ] && cap=0                                     # a FULL account gets nothing, urgent or not
+  for i in "${!RANKED[@]}"; do
+    [ "${RANKED[$i]}" = "$acct" ] || continue
+    RCAP[i]="$cap"
+    URG_ACCT="$acct"; URG_NEED="$need"; URG_BURN="$burn"; URG_KEFF="$keff"; URG_KMAX="$kmax"; URG_CAP="$cap"
+    return 0
+  done
+  return 0
+}
+
+# urgency_line → the one-line disclosure, or empty. A widening that renders nowhere is indistinguishable
+# from no widening at all — the whole point of the alarm being POSITIVE here (memory: alarm-polarity).
+urgency_line() {
+  [ -n "$URG_ACCT" ] || return 1
+  printf 'urgency: %s is BEHIND (needs %s%%/d, recent %s%%/d) → allowance %s this wave (flat %s; KMAX %s − live %s)' \
+    "$URG_ACCT" "$URG_NEED" "$URG_BURN" "$URG_CAP" "$MAX_PER_ACCT" "$URG_KMAX" "$URG_KEFF"
+}
+
+# wave_capacity → Σ per-account caps. The capacity wall's message used to multiply the flat cap by the
+# account count; with one account possibly carrying a different cap that product is no longer the
+# capacity, and a wall that misstates the bound it enforced is unactionable.
+wave_capacity() {
+  local i t=0
+  for i in "${!RCAP[@]}"; do t=$(( t + RCAP[i] )); done
+  echo "$t"
+}
+
 # place_item → sets PLACED_ACCT to the LEAST-LOADED ranked account with per-wave headroom (RLOAD+RCOUNTS
-# minimal, RCOUNTS < MAX), rank breaking ties: RANKED is best-first and the strict `<` keeps the earliest
+# minimal, RCOUNTS < its cap), rank breaking ties: RANKED is best-first and the strict `<` keeps the earliest
 # account at the running minimum. rc=1 when every account is at the per-wave cap (→ cliff). MUST set a
 # global (not echo) — a command-substitution caller runs in a subshell and would lose the RCOUNTS bump.
+# The cap is PER ACCOUNT (RCAP[i]) since W2-B, not the one flat MAX_PER_ACCT — placement ORDER is
+# untouched by that: the urgent account is still chosen by least-load, it just stops being skipped sooner.
 PLACED_ACCT=""
 place_item() {
   local i eff best_i=-1 best_load=""
   for i in "${!RANKED[@]}"; do
-    [ "${RCOUNTS[$i]}" -lt "$MAX_PER_ACCT" ] || continue     # skip accounts already at the per-wave cap
+    [ "${RCOUNTS[$i]}" -lt "${RCAP[$i]}" ] || continue        # skip accounts already at their per-wave cap
     eff=$(( RLOAD[i] + RCOUNTS[i] ))
     if [ -z "$best_load" ] || [ "$eff" -lt "$best_load" ]; then best_load="$eff"; best_i="$i"; fi
   done
@@ -529,6 +639,7 @@ cmd_plan() {
   # first also means a genuine wall costs zero cc-route calls.
   load_ranks
   load_live_counts
+  apply_urgency          # W2-B: at most ONE account's cap is raised, from the same snapshot
 
   # Decide the Fable STRADDLE once (window state is uniform across the wave).
   local has_frontier=0 i
@@ -542,7 +653,7 @@ cmd_plan() {
   # Spread-place every item (all-or-nothing: any overflow walls, never a partial plan).
   local accts=()
   for i in "${!ids[@]}"; do
-    place_item || cliff wave-overflow "wave of $n items exceeds capacity (${#RANKED[@]} accounts × ${MAX_PER_ACCT}/acct all capped)"
+    place_item || cliff wave-overflow "wave of $n items exceeds capacity (${#RANKED[@]} accounts, $(wave_capacity) slot(s) total$([ -n "$URG_ACCT" ] && echo " incl. ${URG_ACCT}'s urgent ${URG_CAP}") — all capped)"
     accts+=("$PLACED_ACCT")
   done
 
@@ -589,16 +700,24 @@ cmd_plan() {
   done
 
   local n_accts; n_accts="$(echo "$seen_accts" | wc -w | tr -d ' ')"
+  # The urgent allowance rides the SAME record as the placement it changed — a widening whose only
+  # trace is the plan's shape is not auditable after the fact.
+  local urg_detail=""; urg_detail="$(urgency_line)" || urg_detail=""
+  [ -n "$urg_detail" ] && urg_detail="; $urg_detail"
   if [ "$any_fb" -eq 1 ]; then
-    idl abstained "fable-straddle-fallback: frontier items → Opus (window guard ${GUARD_MIN}m); placed $n across $n_accts accounts"
+    idl abstained "fable-straddle-fallback: frontier items → Opus (window guard ${GUARD_MIN}m); placed $n across $n_accts accounts$urg_detail"
   else
-    idl fired "placed $n items across $n_accts accounts"
+    idl fired "placed $n items across $n_accts accounts$urg_detail"
   fi
 
   if [ "$as_json" -eq 1 ]; then
+    # stdout is the machine plan and stays pure JSON, so the disclosure goes to stderr — it must
+    # exist on BOTH surfaces, or --json becomes the lane where a widening is silent.
+    [ -n "$URG_ACCT" ] && echo "cc-wave-plan: $(urgency_line)" >&2
     printf '%s\n' "${objs[@]}" | jq -s '.'
   else
     echo "cc-wave-plan: $n items placed across $n_accts account(s)$([ "$any_fb" -eq 1 ] && echo ' — Fable straddle fallback active')"
+    [ -n "$URG_ACCT" ] && echo "  $(urgency_line)"
     for i in "${!ids[@]}"; do
       memo_get "${slots[$i]}"
       printf '  %-14s %-14s → %-16s @ %-5s on %s\n' "${ids[$i]}" "${slots[$i]}" "$R_MODEL" "$R_EFF" "${accts[$i]}"
@@ -688,6 +807,14 @@ jq -cn --arg s "$slot" --arg m "$model" --arg a stub --arg e "$eff" --arg r "$re
 STUB
   chmod +x "$tmp/route-stub"; export CC_WAVE_ROUTE_BIN="$tmp/route-stub"
 
+  # SSOT fixture for the W2-B urgency bound. PINNED, not ambient: KMAX is a new input to this tool
+  # and the box's real accounts.json is operator-tunable (it has already been hand-raised 4→8), so an
+  # unpinned read would let a live constant decide a suite's verdict — the exact fixture-surface rule
+  # M7 landed on (ACCOUNT_ROUTING_V2 §13: a new ambient input is a new fixture surface for the suites
+  # that drive it).
+  printf '{"router":{"KMAX":8}}\n' > "$tmp/accounts-ssot.json"
+  export CLAUDE_ACCOUNTS_JSON="$tmp/accounts-ssot.json"
+
   check() { # <label> <want-rc> <cmd...>
     local label="$1" want="$2"; shift 2
     "$@" >/dev/null 2>&1; rc=$?
@@ -761,6 +888,53 @@ STUB
   # A 5 tie → best rank A). Reproduces the operator scenario: the heaviest account (B) is left alone.
   check "spread: least-loaded-first across live seeds (A=5,B=6,C=4 -> C then A)" 0 \
     bash -c "STUB_RANK='acctA acctB acctC' STUB_ROWS='[{\"acct\":\"acctA\",\"k\":5},{\"acct\":\"acctB\",\"k\":6},{\"acct\":\"acctC\",\"k\":4}]' CC_WAVE_MAX_PER_ACCT=2 '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"}]' --json | jq -e '(.[0].account==\"acctC\") and (.[1].account==\"acctA\")'"
+
+  # (u) W2-B — the URGENT per-account allowance (the DEMAND half of M7). Every check below is a PAIR
+  # against the same wave: the only variable is whether the top-ranked account's weekly need outruns
+  # its measured burn. A widening asserted only by "it placed" would also pass against a tool that
+  # simply raised the flat cap for everyone, so the kill-switch and fail-soft arms are what make the
+  # urgent lane distinguishable from a blanket one.
+  #   acctA ranks first and is BEHIND (needs 20%/d, burning 3%/d); acctB is AHEAD (4 vs 9).
+  #   With KMAX=8 and acctA's live charge at 1, its allowance is min(4, 8−1)=4 while acctB stays at 2,
+  #   so a 5-item wave that flat-caps at 2×2=4 slots now fits.
+  export URG_BEHIND='[{"acct":"acctA","k":1,"k_work":1,"k_phantom":0,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
+  # Same accounts, same loads, NO pace fields — the shape a thin utilization series actually produces.
+  export URG_NOFIELDS='[{"acct":"acctA","k":1},{"acct":"acctB","k":0}]'
+  # Same urgency claim, but acctA's live charge is 5 (k_work 4 + 1 phantom) ⇒ KMAX−k_eff = 3 binds
+  # BELOW the knob's 4. Both terms of k_eff are exercised: drop the phantom and the clamp reads 4.
+  export URG_CLAMP='[{"acct":"acctA","k":5,"k_work":4,"k_phantom":1,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
+  # The one shape where urgency must take AWAY: an account already AT the concurrency ceiling. Its
+  # charge is 8 PHANTOMS against a census of 0 — deliberately, and the deliberateness is the test.
+  # Spending the ceiling as `k:8` would have let the ORDINARY load penalty (RLOAD) explain the same
+  # placement, so the check would have passed identically against a tool with no floor at all
+  # (verified: it did). k=0 leaves the load seeds tied, so only the floor can move the items.
+  export URG_FULL='[{"acct":"acctA","k":0,"k_work":0,"k_phantom":8,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
+  export URG_IT5='[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"}]'
+  export URG_IT6='[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"},{"id":"6","slot":"lead"}]'
+
+  check "urgency: top-ranked BEHIND acct takes 4 -> a 5-item wave that flat-caps at 4 PLACES" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" '$SELF' --items \"\$URG_IT5\" --json"
+  check "urgency: it is the URGENT acct that absorbed them (acctA 3, acctB 2 — B is still capped)" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" '$SELF' --items \"\$URG_IT5\" --json 2>/dev/null | jq -e '([.[]|select(.account==\"acctA\")]|length)==3 and ([.[]|select(.account==\"acctB\")]|length)==2'"
+  check "urgency: KILL SWITCH (urgent==flat) -> the SAME wave walls at capacity" 4 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" CC_WAVE_MAX_PER_ACCT_URGENT=2 '$SELF' --items \"\$URG_IT5\""
+  check "urgency: rows with NO pace fields make no claim -> same wave walls (fail-soft to flat)" 4 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_NOFIELDS\" '$SELF' --items \"\$URG_IT5\""
+  check "urgency: an unreadable SSOT (no KMAX) is NO bound -> no widening, the wave walls" 4 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" CLAUDE_ACCOUNTS_JSON='$tmp/nope.json' '$SELF' --items \"\$URG_IT5\""
+  check "urgency: KMAX - k_eff CLAMPS the allowance to 3 (k_work 4 + phantom 1) -> 6 items wall" 4 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_CLAMP\" '$SELF' --items \"\$URG_IT6\""
+  check "urgency: …and 5 items still place under that clamp (the bound binds, it does not veto)" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_CLAMP\" '$SELF' --items \"\$URG_IT5\" --json"
+  check "urgency: an acct AT KMAX gets nothing (floor 0) -> both items land on acctB" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_FULL\" '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"},{\"id\":\"2\",\"slot\":\"lead\"}]' --json 2>/dev/null | jq -e 'all(.[]; .account==\"acctB\")'"
+  check "urgency: the widening RENDERS on stdout (acct, need vs burn, allowance) — never silent" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" '$SELF' --items \"\$URG_IT5\" 2>/dev/null | grep -q 'urgency: acctA is BEHIND (needs 20%/d, recent 3%/d) → allowance 4'"
+  check "urgency: --json keeps stdout PURE json and discloses on stderr instead" 0 \
+    bash -c "STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_BEHIND\" '$SELF' --items \"\$URG_IT5\" --json 2>'$tmp/urg.err' | jq -e 'length==5' >/dev/null && grep -q 'urgency: acctA is BEHIND' '$tmp/urg.err'"
+  check "urgency: the flat lane renders NOTHING (the alarm carries a bit only if it can be absent)" 0 \
+    bash -c "! STUB_RANK='acctA acctB' STUB_ROWS=\"\$URG_NOFIELDS\" '$SELF' --items '[{\"id\":\"1\",\"slot\":\"lead\"}]' 2>&1 | grep -q urgency:"
+  unset URG_BEHIND URG_NOFIELDS URG_CLAMP URG_FULL URG_IT5 URG_IT6
 
   # (a) QUOTA CLIFF — rank empty, and wave-exceeds-capacity; both exit 4 with NO plan on stdout.
   check "cliff: empty rank -> exit 4" 4 bash -c "STUB_RANK='' '$SELF' --items '[{\"id\":\"a\",\"slot\":\"lead\"}]'"

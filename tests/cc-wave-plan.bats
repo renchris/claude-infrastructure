@@ -14,7 +14,10 @@ setup() {
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  WP="$REPO/bin/cc-wave-plan"
+  # CC_WAVE_PLAN_UNDER_TEST — the RED-PROOF seam, mirroring tests/cc-wave-plan-verdict.bats. Point it
+  # at a pristine binary (`git archive origin/main bin/cc-wave-plan | tar -x -C <tmp>`) to re-run the
+  # proof that the W2-B urgency tests below actually FAIL pre-change, rather than asserting they did.
+  WP="${CC_WAVE_PLAN_UNDER_TEST:-$REPO/bin/cc-wave-plan}"
   C="$BATS_TEST_TMPDIR/case"
   mkdir -p "$C/bin"
 
@@ -72,19 +75,40 @@ jq -cn --arg s "$slot" --arg m "$model" --arg a stub --arg e "$eff" --arg r "$re
 STUB
   chmod +x "$C/bin/claude-accounts" "$C/bin/cc-route"
 
+  # W2-B — the SSOT accounts.json the urgent allowance reads KMAX from. PINNED, not ambient: KMAX is
+  # operator-tunable (hand-raised 4→8 already) and this suite does NOT fixture $HOME, so an unpinned
+  # read would let a live constant decide these verdicts. Same env override claude-accounts honours
+  # (claude-accounts:127), so both sides can only ever mean one file. (ACCOUNT_ROUTING_V2 §13's rule:
+  # a new ambient input to a CLI is a new fixture surface for every suite that drives it.)
+  printf '{"router":{"KMAX":8}}\n' > "$C/accounts-ssot.json"
+  export CLAUDE_ACCOUNTS_JSON="$C/accounts-ssot.json"
+
   export CC_WAVE_ACCOUNTS_BIN="$C/bin/claude-accounts" CC_WAVE_ROUTE_BIN="$C/bin/cc-route" \
          CC_WAVE_IDL="$C/idl.jsonl"
+
+  # W2-B urgency fixtures. acctA ranks first and is BEHIND (needs 20%/d, burning 3%/d); acctB is
+  # AHEAD (4 vs 9) and keeps the flat cap. With KMAX=8 and acctA charged 1, its allowance is
+  # min(4, 8−1) = 4, so a 5-item wave that flat-caps at 2×2 = 4 slots fits.
+  URG_BEHIND='[{"acct":"acctA","k":1,"k_work":1,"k_phantom":0,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
+  # The same two accounts with NO pace fields — the shape a thin utilization series actually emits.
+  URG_NOFIELDS='[{"acct":"acctA","k":1},{"acct":"acctB","k":0}]'
+  # Same urgency claim, acctA charged 5 (k_work 4 + 1 phantom) ⇒ KMAX−k_eff = 3 binds BELOW the knob.
+  URG_CLAMP='[{"acct":"acctA","k":5,"k_work":4,"k_phantom":1,"weekly_need_pct_per_day":20.0,"burn_wk_ppd":3.0},{"acct":"acctB","k":0,"k_work":0,"k_phantom":0,"weekly_need_pct_per_day":4.0,"burn_wk_ppd":9.0}]'
+  IT5='[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"}]'
+  IT6='[{"id":"1","slot":"lead"},{"id":"2","slot":"lead"},{"id":"3","slot":"lead"},{"id":"4","slot":"lead"},{"id":"5","slot":"lead"},{"id":"6","slot":"lead"}]'
 }
 
 # ── (a) selftest contract ─────────────────────────────────────────────────────────────────────────────
-@test "selftest passes and runs all 63 checks (a zero-check suite must not 'pass')" {
-  # 29 → 63: the S3/S4 verdict + bounded-oracle cases. Bound-dependent checks print `skip` and are
-  # counted separately, so a box without timeout(1) reports fewer `ok` lines rather than silently
-  # passing a hollow suite — hence >= on a floor that still fails a collapsed run.
+@test "selftest passes and runs all 74 checks (a zero-check suite must not 'pass')" {
+  # 29 → 63 → 74: the S3/S4 verdict + bounded-oracle cases, then W2-B's urgency pairs. Bound-dependent
+  # checks print `skip` and are counted separately, so a box without timeout(1) reports fewer `ok`
+  # lines rather than silently passing a hollow suite — hence a FLOOR, not an `-eq`: an exact count
+  # reds on the suite's own growth and catches no regression at all (memory:
+  # exact-count-assertion-tripwires-its-own-subject). The floor tracks the 11 bound-dependent checks.
   run "$WP" selftest
   [ "$status" -eq 0 ]
   n_ok="$(printf '%s' "$output" | grep -c '^  ok ')"
-  [ "$n_ok" -ge 52 ]
+  [ "$n_ok" -ge 63 ]
   ! printf '%s' "$output" | grep -q '^  FAIL'
 }
 
@@ -160,6 +184,75 @@ STUB
   run "$WP" --items '[{"id":"1","slot":"lead"}]' --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0].account=="acctB"'
+}
+
+# ── W2-B: the URGENT per-account allowance (the DEMAND half of M7) ────────────────────────────────
+# The flat cap is urgency-BLIND: it allowances an account whose weekly quota strands in <24h exactly
+# like one with six idle days, so a wave cannot concentrate where quota is about to be lost (the live
+# 2026-08-10 snapshot: next3 had to burn 11% in under a day and a wave handed it the same 2 slots as
+# an account with a 6-day runway). Each test below is a PAIR on one wave with ONE variable changed —
+# a "it placed 5 items" assertion alone would pass equally against a tool that simply raised the flat
+# cap for everybody, which is the widening this must NOT be.
+
+@test "urgency (a): the top-ranked BEHIND account takes the urgent allowance; others stay flat" {
+  export STUB_RANK='acctA acctB' STUB_ROWS="$URG_BEHIND"
+  # stdout ONLY: bats' `run` merges stderr, and the disclosure line below would then be parsed as
+  # part of the plan. Asserting the two surfaces separately is the point — one is the machine plan.
+  plan="$("$WP" --items "$IT5" --json 2>/dev/null)"      # flat-capped this wave walls at 2×2=4 slots
+  # acctA (BEHIND) absorbs 3; acctB is AHEAD and still stops at the flat 2 — the allowance is not
+  # a blanket raise. (3 not 4 because placement is still least-loaded: acctA carries 1 live session.)
+  echo "$plan" | jq -e '([.[]|select(.account=="acctA")]|length)==3'
+  echo "$plan" | jq -e '([.[]|select(.account=="acctB")]|length)==2'
+  # …and it is never SILENT: --json keeps stdout pure, so the disclosure is on stderr (contract 4).
+  run bash -c "STUB_RANK='acctA acctB' STUB_ROWS='$URG_BEHIND' '$WP' --items '$IT5' --json 2>&1 1>/dev/null"
+  printf '%s' "$output" | grep -q 'urgency: acctA is BEHIND (needs 20%/d, recent 3%/d) → allowance 4'
+}
+
+@test "urgency (b): absent burn/need fields are a missing MEASUREMENT, not urgency → flat everywhere" {
+  # The fail-soft direction that matters: a thin utilization series must not widen anything. Same
+  # accounts, same loads, same wave — only the two pace fields are gone.
+  export STUB_RANK='acctA acctB' STUB_ROWS="$URG_NOFIELDS"
+  run "$WP" --items "$IT5"
+  [ "$status" -eq 4 ]
+  tail -1 "$CC_WAVE_IDL" | jq -e 'select(.verdict=="capacity")'
+  # the negative control for (a)'s disclosure: no widening ⇒ nothing rendered (alarm polarity)
+  run bash -c "STUB_RANK='acctA acctB' STUB_ROWS='$URG_NOFIELDS' '$WP' --items '[{\"id\":\"1\",\"slot\":\"lead\"}]' 2>&1"
+  ! printf '%s' "$output" | grep -q 'urgency:' || false
+}
+
+@test "urgency (c): the allowance is CLAMPED by KMAX − k_eff (k_work + phantoms), never past it" {
+  # acctA is BEHIND and the knob says 4, but its live charge is 5 of KMAX 8 → 3 is what it may take.
+  export STUB_RANK='acctA acctB' STUB_ROWS="$URG_CLAMP"
+  run "$WP" --items "$IT6"
+  [ "$status" -eq 4 ]                                    # 3+2 = 5 slots < 6 items — the clamp binds
+  # and the bound BINDS rather than vetoes: the same wave one item smaller places exactly.
+  plan="$("$WP" --items "$IT5" --json 2>/dev/null)"
+  echo "$plan" | jq -e '([.[]|select(.account=="acctA")]|length)==3'
+  run bash -c "STUB_RANK='acctA acctB' STUB_ROWS='$URG_CLAMP' '$WP' --items '$IT5' --json 2>&1 1>/dev/null"
+  printf '%s' "$output" | grep -q 'allowance 3 this wave (flat 2; KMAX 8 − live 5)'
+}
+
+@test "urgency (d): the kill switch is BYTE-IDENTICAL — knobs unset/equal reproduce the flat plan" {
+  # Two arms, because "identical" has two ways to be true for the wrong reason. Arm 1: with nobody
+  # BEHIND the armed lane must change nothing at all. Arm 2 is the load-bearing one — on the fixture
+  # that DOES trigger the widening, killing the knob must reproduce the plan the tool emits when the
+  # urgency data is absent entirely, byte for byte. An arm-1-only test would pass against a tool
+  # whose kill switch does nothing.
+  # `|| true` on every capture: three of these four runs are the WALL (exit 4) and bats runs under
+  # `set -e`, so an unguarded assignment would abort the test before it compared anything.
+  armed="$(STUB_RANK='acctA acctB' STUB_ROWS="$URG_NOFIELDS" "$WP" --items "$IT5" --json 2>&1 || true)"
+  killed="$(STUB_RANK='acctA acctB' STUB_ROWS="$URG_NOFIELDS" CC_WAVE_MAX_PER_ACCT_URGENT=2 \
+              "$WP" --items "$IT5" --json 2>&1 || true)"
+  [ "$armed" = "$killed" ]
+  [ -n "$armed" ]                                        # not two empty strings comparing equal
+
+  behind_killed="$(STUB_RANK='acctA acctB' STUB_ROWS="$URG_BEHIND" CC_WAVE_MAX_PER_ACCT_URGENT=2 \
+                     "$WP" --items "$IT5" --json 2>&1 || true)"
+  [ "$behind_killed" = "$armed" ]
+  # positive control: ARMED on the same BEHIND fixture is a DIFFERENT outcome, so the equality above
+  # is the kill switch working and not the fixture being inert on both sides.
+  behind_armed="$(STUB_RANK='acctA acctB' STUB_ROWS="$URG_BEHIND" "$WP" --items "$IT5" --json 2>&1 || true)"
+  [ "$behind_armed" != "$armed" ]
 }
 
 @test "straddle: Fable window within guard → Opus fallback with reason, NO fable id in the plan" {
