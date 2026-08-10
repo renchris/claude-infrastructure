@@ -2392,77 +2392,29 @@ ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effor
 # auto-reaped. An operator's shell launch, `claude -w`, a --recycle continuation and a
 # --no-self-retire fire all leave no marker, and nothing anywhere infers one from session state —
 # so a session cannot earn the marker by behaving like a worker.
-# ---- THE cwd INDEX (item 1467ea1dad4f) --------------------------------------------------------
-# THE DEFECT. The stamp store is keyed on the pane id, and the pane id is VOLATILE: a resume, a
-# crash-recreate or a kitty restart renumbers the pane and orphans its stamp under the old id.
-# Measured 2026-08-07: pane 353 was found holding pane 351's orphaned stamp, and the lookup a
-# self-closing session makes — `$FIRED_DIR/$my_pane.json` — simply MISSES. A miss is then read as
-# "this session was never fired", which is the strongest possible wrong answer: it is the origin
-# gate's REFUSE verdict, and the pane that earned the right to retire is told it never had it.
-#
-# THE DURABLE KEY IS cwd, for the reasons fired_stamp_tenancy already states in its own header — the
-# same writer records it, the closing pane knows its own with certainty without asking iTerm2 or the
-# process table, and it is INDEPENDENT of the id namespace that is the entire defect. An id CHANGE
-# moves the pane and keeps the cwd; an id REUSE keeps the number and changes the cwd.
-#
-# WHY AN INDEX AND NOT A RE-KEY OF THE STORE. Twenty-plus test files and thirteen readers construct
-# `$FIRED_DIR/<pane>.json` directly, and mark_fired_peer's own header declares the record
-# ADDITIVE-ONLY because bin/cc-reaper keys auto-reap on that exact path. Renaming the file would be
-# a rebuild of a contract this item has no mandate to touch. So the RECORD stays pane-keyed and
-# single, and only the LOOKUP gains a durable key — one pointer per cwd, holding a pane id.
-#
-# WHY A SUBDIRECTORY, AND WHY THAT IS LOAD-BEARING. Three readers enumerate this store with
-# `for f in "$FIRED_DIR"/*.json` and treat the FILENAME as a pane id: bin/cc-classify:406,
-# selfclose_inventory_warn below, and scripts/desk-invariant.sh:288 (which takes max-mtime and feeds
-# the winner to heal_role as a pane). A second .json beside the records would be picked up by all
-# three — desk-invariant would repoint the desk role at a hash. A glob does not recurse, so
-# `by-cwd/` is invisible to every one of them by construction rather than by their cooperation.
-#
-# WHY A POINTER AND NOT A COPY. A copy is a second copy of mutable state, and record_close_succession
-# writes `closedAt` to exactly one path — so the twin would keep `closedAt:null` forever and every
-# liveness test that reads it (hf_pane_agent_owned, the kitty anchor picker, find_open_stamp_for_cwd)
-# would read a spent stamp as OPEN. The pointer holds no state that can diverge.
-_fired_cwd_key() { # $1=cwd → echoes a stable filesystem-safe key, or nothing
-  local d="${1:-}" r
-  [ -n "$d" ] || return 0
-  # Resolve first: macOS hands out /tmp and /private/tmp for one directory and a worktree can be
-  # reached through a symlink, so an unresolved path would mint two keys for one cwd — the same
-  # normalisation fired_stamp_tenancy applies before comparing.
-  r="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
-  [ -n "$r" ] || return 0
-  printf '%s' "$r" | shasum -a 256 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
-}
-
-write_fired_cwd_index() { # $1=fired-dir $2=pane $3=cwd → best-effort, always 0
-  local dir="${1:-}" pane="${2:-}" cwd="${3:-}" key idx tmp
-  [ -n "$dir" ] && [ -n "$pane" ] && [ -n "$cwd" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  key="$(_fired_cwd_key "$cwd")"; [ -n "$key" ] || return 0
-  idx="$dir/by-cwd"
-  mkdir -p "$idx" 2>/dev/null || return 0
-  tmp="$idx/.$key.$$"
-  # LAST WRITER WINS, deliberately. Two peers in one cwd is the collision this cannot resolve, and
-  # the index is not the authority — every consumer re-validates against the pane-keyed RECORD and
-  # falls back to the directory scan when the pointer does not check out. So a wrong pointer costs a
-  # scan, never a wrong verdict (make-the-actuator-the-arbiter: the record is the arbiter).
-  if jq -n --arg paneUUID "$pane" --arg cwd "$cwd" --arg at "$(_iso_now)" \
-        '{paneUUID:$paneUUID, cwd:$cwd, indexedAt:$at}' > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-    mv -f "$tmp" "$idx/$key.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  else
-    rm -f "$tmp" 2>/dev/null
-  fi
-  return 0
-}
-
-read_fired_cwd_index() { # $1=fired-dir $2=cwd → echoes the pane id, or nothing
-  local dir="${1:-}" cwd="${2:-}" key f
-  [ -n "$dir" ] && [ -n "$cwd" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  key="$(_fired_cwd_key "$cwd")"; [ -n "$key" ] || return 0
-  f="$dir/by-cwd/$key.json"
-  [ -s "$f" ] || return 0
-  jq -r '.paneUUID // ""' "$f" 2>/dev/null || true
-}
+# ---- ORIGIN-IDENTITY LIB (CLOSE_INTEGRITY W1) --------------------------------------------------
+# _fired_cwd_key / write_fired_cwd_index / read_fired_cwd_index / fired_stamp_tenancy moved
+# VERBATIM — with their full design commentary — to hooks/lib/origin-identity.sh, so Stop hooks can
+# source the SAME state model this dispatcher enforces instead of minting a third divergent copy
+# (sibling-auditors-must-share-the-state-model; the second copy is bin/cc-classify:413). Resolve
+# $0's own symlink FIRST: the live copy is ~/.claude/scripts/handoff-fire.sh -> the checkout, and a
+# BRAND-NEW lib has no ~/.claude/hooks/lib symlink until install.sh runs — resolving through the
+# checkout finds it on the same fast-forward that delivers this file (the completion-assert.sh:102
+# pattern; an added file gets no converge budget).
+_OI_LIB=""
+for _oi_c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../hooks/lib/origin-identity.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/origin-identity.sh" \
+             "$HOME/.claude/hooks/lib/origin-identity.sh"; do
+  [ -f "$_oi_c" ] && { _OI_LIB="$_oi_c"; break; }
+done
+# shellcheck source=../hooks/lib/origin-identity.sh
+# shellcheck disable=SC1090,SC1091
+if [ -z "$_OI_LIB" ] || ! . "$_OI_LIB"; then
+  # Fail LOUD: every subcommand here reads or writes the stamp store, and running without its
+  # oracle would silently regress to the pre-tenancy state model. A CLI may refuse; a hook may not.
+  echo "!! handoff-fire: cannot source hooks/lib/origin-identity.sh — the stamp/tenancy oracle is unavailable" >&2
+  exit 1
+fi
 
 # sc_announce_before_retire — the F-1 actuator. Kept a FUNCTION rather than inline in the self-close
 # preflight so it is drivable on its own: the self-close path ahead of it resolves pane identity,
@@ -2594,55 +2546,14 @@ mark_fired_peer() { # $1=fired-dir $2=fired-pane $3=cwd $4=firing-pane [$5=promp
   return 0
 }
 
-# ---- STAMP TENANCY (2026-08-05, item aba6bcbff6de) ---------------------------------------------
-# The origin gate below used to ask ONE question of the stamp: is the file non-empty. cc-classify —
-# which the gate's own comment names as its model — has never been satisfied with that: its
-# fired_peer() requires the stamp to be TENANCY-VALID, because "the stamp is pane-keyed and never
-# expired, so a later session reusing a previously-fired pane inherited the stale self-retiring
-# contract" (bin/cc-classify:378, rule 2, 2026-07-24). Two sibling auditors over one state with two
-# state models: the reaper refuses to reap a pane the self-killer will happily close.
-#
-# WHY IT BECAME REACHABLE. Under iTerm2 the id is a 128-bit UUID and collision is not a thing, so
-# the weaker predicate was safe by accident, not by design. Kitty ids are SMALL INTEGERS AND KITTY
-# REUSES THEM: measured 2026-08-05, ~/.claude/cc-fired held numeric stamps at 33…497 while the
-# live kitty instance was handing out ids 2–37 — the counter had reset past a range already carrying
-# open stamps, and id 33 was simultaneously a live window and an open stamp. That is a stale stamp
-# authorising a live pane's suicide, which is the FALSE POSITIVE polarity: the item that filed this
-# named it as the more dangerous one, and it is — refusing to close costs an idle pane the operator
-# closes by hand, while closing wrongly is a watched pane vanishing (memory
-# handoff-succession-legibility). The repo's own test proved the gap before this change: a stamp
-# dated ten days earlier, for cwd /tmp, passed the gate from an unrelated directory.
-#
-# THE ORACLE IS cwd, NOT startedAt. cc-classify compares the registry row's startedAt against
-# firedAt+boot-max; self-close cannot, because the registry row a fire writes is PROVISIONAL and
-# carries no startedAt until the session promotes it (measured on this pane: the row was
-# {provisional:true} with no startedAt for the first ~40s of its life). cwd is better here on every
-# axis that matters: the SAME writer records it (mark_fired_peer, above), the closing pane knows its
-# own with certainty and without asking iTerm2, the registry or the process table — and it is
-# INDEPENDENT of the id namespace that is the entire defect. It also happens to be the field that
-# survives the mirror failure: an id CHANGE (resume, crash-recreate, kitty restart) moves the pane
-# and keeps the cwd, while an id REUSE keeps the number and changes the cwd.
-#
-# CALIBRATED TO ABSTAIN. Only a POSITIVE REFUTATION — both paths resolve, and they differ — returns
-# `stale`. Everything unresolvable (no jq, no cwd field, a worktree since removed) returns `unknown`,
-# which the gate treats exactly as it treated every stamp before this change. So this can only ever
-# REFUSE a close that used to be allowed in the one case it can actually prove, and it never invents
-# a new refusal on a path it merely cannot see. CC_SELFCLOSE_TENANCY=0 disables it outright (R8).
-fired_stamp_tenancy() { # $1=stamp-path $2=this-pane-cwd → echoes absent|valid|stale|unknown
-  local stamp="${1:-}" here="${2:-}" want got
-  [ -n "$stamp" ] && [ -s "$stamp" ] || { printf 'absent'; return 0; }
-  [ "${CC_SELFCLOSE_TENANCY:-1}" != 0 ] || { printf 'unknown'; return 0; }
-  command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
-  want="$(jq -r '.cwd // ""' "$stamp" 2>/dev/null || true)"
-  [ -n "$want" ] || { printf 'unknown'; return 0; }
-  # Resolve BOTH sides the same way. macOS hands out /tmp and /private/tmp for one directory, and a
-  # worktree path can be reached through a symlink, so a raw string compare would manufacture a
-  # mismatch and refuse a genuine peer. An unresolvable side is `unknown`, never `stale`.
-  want="$(cd "$want" 2>/dev/null && pwd -P)" || true
-  got="$(cd "${here:-.}" 2>/dev/null && pwd -P)" || true
-  [ -n "$want" ] && [ -n "$got" ] || { printf 'unknown'; return 0; }
-  if [ "$want" = "$got" ]; then printf 'valid'; else printf 'stale'; fi
-}
+# ---- STAMP TENANCY — moved to hooks/lib/origin-identity.sh (sourced above) ---------------------
+# fired_stamp_tenancy lives in the lib with its full design commentary (item aba6bcbff6de), and is
+# EXTENDED there with a fifth state, `spent` (closedAt set): a completed self-close uses the
+# contract up, so a reused kitty id in the same cwd no longer reads `valid` and inherits a
+# self-retiring contract it was never granted (CLOSE_INTEGRITY W1; report-seams §1b named the
+# hole). The origin gate below gains a spent arm — a genuine retry of an interrupted close proves
+# itself by the fire marker in its own transcript, the same discriminator adoption uses.
+# CC_SELFCLOSE_TENANCY=0 still restores the pre-tenancy answer for every state.
 
 # find_open_stamp_for_cwd — the DIAGNOSTIC half, and deliberately not an authorisation path.
 # When no stamp exists under this pane's id, the id may have CHANGED under a session that really was
@@ -4719,6 +4630,32 @@ USAGE
 !! Override (deliberate, loud, almost never right):  --allow-origin-close
 USAGE
     exit 2
+  fi
+  # ---- SPENT stamp (CLOSE_INTEGRITY W1): the contract under this id was already used up ---------
+  # Two ways to hold one, and the fire MARKER separates them: (a) the SAME peer retrying after
+  # record_close_succession ran but the physical close failed — its own transcript carries the
+  # marker, so the retry proceeds; (b) kitty reused a retired peer's id for a NEW session in the
+  # same worktree — no marker in its transcript, and before this arm existed the stamp read `valid`
+  # and handed the new tenant a self-retiring contract it was never granted (report-seams §1b, the
+  # silent hole in the origin invariant). Same proof chain as adoption; same abstain-toward-refusal
+  # calibration — a schema-1 stamp has no marker, so it refuses, with the documented override.
+  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = spent ]; then
+    SC_SPENT_MARKER="$(jq -r '.marker // ""' "$SC_FIRED_STAMP" 2>/dev/null || true)"
+    if [ -n "$SC_SPENT_MARKER" ] && fired_marker_is_mine "$SC_SPENT_MARKER" "$SC_SID"; then
+      echo "→ spent stamp accepted for RETRY: closedAt is set for pane $SC_SID, but this session's own transcript carries the fire marker — same peer, interrupted close. Proceeding." >&2
+    else
+      cat >&2 <<USAGE
+!! self-close REFUSED: the fired-peer stamp for pane $SC_SID is SPENT (closedAt already set).
+!!   stamp $SC_FIRED_STAMP
+!!   A completed self-close already used this contract up. The commonest way to hold a spent
+!!   stamp is kitty REUSING a retired peer's window id for a brand-new session in the same
+!!   worktree — which makes this an ORIGIN session, and an origin session never retires itself.
+!!   (A genuine retry of an interrupted close proves itself by the fire marker in its own
+!!   transcript; this session's transcript does not carry it.)
+!! Override (deliberate, loud, almost never right):  --allow-origin-close
+USAGE
+      exit 2
+    fi
   fi
   if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
     # An id CHANGE orphans a real peer's stamp under its old id (resume / crash-recreate / kitty
