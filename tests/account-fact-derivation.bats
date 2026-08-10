@@ -39,7 +39,20 @@ setup() {
   export RESOLVER="$REPO/bin/cc-claude-bin"
   export SSOT="$REPO/accounts.json"
   export HF="$REPO/scripts/handoff-fire.sh"
+  # Hermetic $HOME, plus the absolute-/tmp and bare-name seams that fixturing $HOME does NOT
+  # redirect: an absolute default is not under $HOME, and a bare tool name is executed off the
+  # operator's PATH (tests/cc-relogin-status.bats fixtured $HOME from birth and still counted the
+  # operator's live pending approvals and ran their deployed claude-accounts once per test).
+  export REAL_HOME="$HOME"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
 }
+
+# The three eval-bin cases assert agreement ON THIS BOX, so they need the real ~/.zshrc and the
+# real ~/.claude-NNN dirs — that is the claim, not an accident. Everything else stays fixtured.
+live() { env HOME="$REAL_HOME" "$@"; }
 
 # Load either extensionless tool as a module without running its CLI (both are __main__-guarded).
 LOADCA='
@@ -59,8 +72,8 @@ importlib.machinery.SourceFileLoader("cr", os.environ["CR_BIN"]).exec_module(cr)
 # ---- fact 1: the eval binary ------------------------------------------------------------------
 
 @test "eval-bin: claude-accounts derives the same path as bin/cc-claude-bin" {
-  want="$("$RESOLVER")" || { echo "resolver itself failed"; false; }
-  run python3 -c "$LOADCA"'
+  want="$(live "$RESOLVER")" || { echo "resolver itself failed"; false; }
+  run live python3 -c "$LOADCA"'
 print(ca.resolve_claude_bin("/nonexistent/fallback-that-must-lose"))'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$output" = "$want" ] || {
@@ -68,7 +81,7 @@ print(ca.resolve_claude_bin("/nonexistent/fallback-that-must-lose"))'
 }
 
 @test "eval-bin: handoff-fire.sh derives the same path as bin/cc-claude-bin" {
-  want="$("$RESOLVER")" || { echo "resolver itself failed"; false; }
+  want="$(live "$RESOLVER")" || { echo "resolver itself failed"; false; }
   # Rebuild the function in a tree shaped like the repo (scripts/ beside bin/) so its
   # BASH_SOURCE-relative lookup is exercised, not bypassed.
   mkdir -p "$BATS_TEST_TMPDIR/t/scripts" "$BATS_TEST_TMPDIR/t/bin"
@@ -76,7 +89,7 @@ print(ca.resolve_claude_bin("/nonexistent/fallback-that-must-lose"))'
   sed -n '/^_resolve_eval_bin()/,/^}/p' "$HF" > "$BATS_TEST_TMPDIR/t/scripts/f.sh"
   [ -s "$BATS_TEST_TMPDIR/t/scripts/f.sh" ] || {
     echo "could not extract _resolve_eval_bin from $HF"; false; }
-  run bash -c 'source "$1"; _resolve_eval_bin' _ "$BATS_TEST_TMPDIR/t/scripts/f.sh"
+  run live bash -c 'source "$1"; _resolve_eval_bin' _ "$BATS_TEST_TMPDIR/t/scripts/f.sh"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$output" = "$want" ] || {
     echo "handoff-fire resolved '$output' but cc-claude-bin says '$want'"; false; }
@@ -99,7 +112,7 @@ print(ca.resolve_claude_bin("/nonexistent/fallback-that-must-lose"))'
   # It is a fallback, not the answer, so it is NOT pinned equal to the live resolver — demanding
   # that would re-create the coupling this work removed. But a fallback pointing at a DELETED
   # directory is a real failure on the degraded path, and that is what this catches.
-  run python3 -c '
+  run live python3 -c '
 import json, os, sys
 p = os.path.expanduser(json.load(open(os.environ["SSOT"]))["claude_bin"])
 sys.exit(0 if os.access(p, os.X_OK) else f"accounts.json claude_bin is not executable: {p}")'
