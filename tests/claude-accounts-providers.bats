@@ -25,6 +25,15 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export CA_BIN="$REPO/bin/claude-accounts"
 
+  # --- HOME fixtured FIRST, before anything can read it. load_providers() falls back to
+  #     ~/.claude/providers.json when CC_PROVIDERS_JSON is unset, and probe_provider() reads
+  #     ~-relative auth paths — so an unfixtured suite would consult the OPERATOR's real registry
+  #     and real credentials, and its verdict would depend on which backends they happen to have
+  #     logged into. That is the whole hermeticity failure: the tests would still pass, for
+  #     reasons that have nothing to do with the code under test.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude"
+
   # --- terminal pinned: no colour, no width games, no inherited multiplexer identity
   export TERM=dumb
   export NO_COLOR=1

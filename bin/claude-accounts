@@ -2863,15 +2863,13 @@ def main():
     if "-h" in args or "--help" in args:
         print(__doc__)
         return
-    cfg = load_cfg()
-    fresh = "--fresh" in args
-    # --relogin-status is a read-only status surface: it reports what the renewal loop should
-    # do, so it must never perform an account operation itself as a side effect of being read.
-    no_heal = "--no-heal" in args or "--relogin-status" in args
-
-    # --agents: the provider section ALONE. Deliberately returns before get_data() — provider rows
-    # need no keychain read, no usage endpoint and no lock, so asking "what else can I route to"
-    # must never block behind a 4-account sweep or force one.
+    # --agents: the provider section ALONE, and deliberately the FIRST branch — it returns before
+    # load_cfg(), before the keychain, before the usage endpoint and before the lock. Two reasons,
+    # and the second is the one that bit: (1) asking "what else can I route to" must never block
+    # behind a 4-account sweep or force one; (2) it must not require a Claude accounts.json to
+    # exist at all. Placed after load_cfg() this exited non-zero the moment $HOME was fixtured,
+    # which is exactly how a hermetic test found it — a provider question depending on Claude
+    # config is a coupling, not a convenience.
     if "--agents" in args:
         provs = [probe_provider(p) for p in load_providers()]
         if "--json" in args:
@@ -2883,6 +2881,12 @@ def main():
             return
         print("\n".join(lines).lstrip("\n"))
         return
+
+    cfg = load_cfg()
+    fresh = "--fresh" in args
+    # --relogin-status is a read-only status surface: it reports what the renewal loop should
+    # do, so it must never perform an account operation itself as a side effect of being read.
+    no_heal = "--no-heal" in args or "--relogin-status" in args
 
     if "--relogin-info" in args:
         if args.index("--relogin-info") + 1 >= len(args):
