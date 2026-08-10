@@ -184,6 +184,59 @@ From Anthropic's Opus 5 prompting guide, both directly applicable to condition t
 This **corrects** the producer census's open question: `boot-resume` and `lr-fire-resume`, which
 resume the SAME session id, do **not** need re-arming. Only a new-session-id succession does.
 
+### 4.7 What the measured corpus does and does not support — read this before trusting § 4.1–4.5
+
+Census of **every goal ever armed on this box**: 4 real transcript stores (`~/.claude-next/projects`
+is a *symlink* to `~/.claude/projects` — a naive 5-dir sweep double-counts), 7,936 transcripts, 1,074
+uuid-deduped `goal_status` attachment records → **352 sessions, 380 goal instances, 364 distinct
+conditions**, 2026-07-03 → 2026-08-10.
+
+**Three results that constrain how strongly the ruleset above may be stated:**
+
+1. **The condition string does NOT determine the outcome.** A byte-identical 299-char condition fired
+   into two sessions 8 minutes apart gave **71 evaluations / never met** in one and **64 / met** in
+   the other. A 1,647-char condition across four sessions split 2 met / 2 never met. So § 4.1–4.5 are
+   **mechanism-derived, not corpus-validated** — they say what the judge *can* adjudicate, which is a
+   necessary condition, not a sufficient one.
+2. **Length does not predict success.** The pooled signal (median 307 chars for met vs 1,063 for
+   never-met) is a **provenance confound**: 96 of the 380 instances are the historical
+   *handoff-fire prefix-trap* — fires where a `/goal`-headed payload made the ENTIRE brief the
+   condition (they still carry the literal engagement-marker comment). Those are huge and
+   structurally unjudgeable: 2% ever evaluated, 1% met. Controlling to operator-typed goals (n=252),
+   the met rate is **flat across every length band** — <200ch 57%, 200-400 52%, 400-800 43%,
+   800-1600 45%, 1600-4000 46% — and single-line 50% vs multi-line 45%. **"Keep it short" is not a
+   supported rule.** The pointer tail in § 5 is justified by the cap and by orienting a fresh
+   context, never by an efficacy claim.
+3. **Nothing has ever hit the 4,000-char cap** — n=380, min 14, median 492, max **3,951**. And the
+   transcript oracle is structurally blind here: an over-cap `/goal` is rejected and never writes a
+   `goal_status` record, so this zero cannot be read as "the cap never binds".
+
+**The one signal that is strong: evaluation count is the health metric, not met/unmet.**
+**82% of every goal ever met (116/141) was met on its FIRST evaluation**, and the met rate collapses
+monotonically with re-reads — 1 eval 97% · 2 evals 80% · 3-4 evals 78% · 5-9 evals 40% · ≥10 evals
+**27%**. A goal the judge has to keep re-reading is grinding, not converging.
+
+**The dominant failure is not phrasing — it is inertness.** **216 of 380 goals (57%) were never
+judged once.** 196 of 352 sessions armed a goal, emitted only the sentinel, and then kept working a
+**median of 222 more assistant turns** (p75 503, max 1,470) with the judge never running. That is
+§ 7's mechanism, and it means **any wording change optimises only the 43% the mechanism reaches.**
+
+**The anti-example, and it is ours.** The single `failed:true` record on this box:
+
+> `continue until 100.00 complete and correct at 100th percentile absolute perfection implementation`
+
+97 characters. It ran **45 iterations over 27.6 hours and 390,885 tokens** before the judge ruled it
+`impossible`. No measurable end state, no check, no constraint — three for three against § 4.1, and
+short, which is exactly why brevity is not the rule. Its neighbours in the grinder list have the same
+shape: *"exhaustively, recursively, maximally extract all value…"* (31 evals), and a 299-char
+"boil the ocean / raise all boats … 100.00/100.00" (71 evals over 44 hours).
+
+**A weak signal worth naming, not relying on:** on the ever-evaluated denominator (n=164), conditions
+opening with `investigate` are 39% of met vs 4% of never-met; `drive` is 5% of met vs 30% of
+never-met. n(never-met)=23 — suggestive only. The plausible reading is that *investigate* names a
+deliverable that lands in the transcript (R1), while *drive* names an activity with no printable
+terminal state.
+
 ## 5 · The canonical template
 
 ```
