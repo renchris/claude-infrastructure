@@ -254,9 +254,14 @@ _resolve_eval_bin() {
   # ~/.zshrc parse: re-reading the launcher here is precisely what made this function a rival
   # implementation, and the two parsers disagreed on tie-break (first match vs last). Probe the
   # filesystem instead — a different question, so it cannot silently answer the first one wrong.
-  local newest
-  newest="$(ls -d "$HOME"/.claude-[0-9]* 2>/dev/null | sed 's/.*\.claude-//' | sort -n | tail -1)"
-  printf '%s' "$HOME/.claude-${newest:-0}/node_modules/.bin/claude"
+  local d n newest=0
+  for d in "$HOME"/.claude-[0-9]*; do
+    [ -d "$d" ] || continue
+    n="${d##*/.claude-}"
+    case "$n" in *[!0-9]*) continue ;; esac
+    [ "$n" -gt "$newest" ] && newest="$n"
+  done
+  printf '%s' "$HOME/.claude-${newest}/node_modules/.bin/claude"
 }
 BIN="${CC_EVAL_BIN:-$(_resolve_eval_bin)}"
 # NOTE: deliberately NO top-level `[ -x "$BIN" ] || exit` here. The first version of this

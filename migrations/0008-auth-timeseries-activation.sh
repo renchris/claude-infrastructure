@@ -60,7 +60,7 @@ for f in "$PLIST" "$ACTIVATE" "$REPO/tools/auth/auth-timeseries.sh"; do
   fi
 done
 
-if ! grep -q "^$LABEL[[:space:]]*|" "$REPO/launchd/fleet.manifest" 2>/dev/null; then
+if ! grep -q "^${LABEL}[[:space:]]*|" "$REPO/launchd/fleet.manifest" 2>/dev/null; then
   echo "0008: $LABEL is not declared in launchd/fleet.manifest — install.sh would print it as" >&2
   echo "      UNDECLARED and never activate it. Declare it before filing an activation step." >&2
   exit 1
