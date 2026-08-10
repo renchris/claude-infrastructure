@@ -76,6 +76,35 @@ mk_suite() {
     > "$FIX/$1/zz-fixture.bats"
 }
 
+# THE THIRD STATE, for the two cases below that lint the REAL tree. The lint answers 0 (clean) and
+# 1 (a leak / a stuck ratchet) — and 2, which is not an answer at all: "UNUSABLE — a predicate
+# failed to run … Re-run when the box is quieter; do not 'fix' any suite on it." Asserting `-eq 0`
+# collapses that third state onto the second, which is this repo's own gate-never-ran-is-not-
+# gate-red rule broken by the suite that proves the ratchet.
+#
+# It is REACHED, not theoretical: deploy-live.sh runs this file post-deploy at `nice -n 19` beside a
+# full corpus, and the lint's pure predicates lose forks there (scripts/host-suites.manifest § CAUSE
+# — CORRECTED 2026-07-29, measured at loadavg 15-48; ed4e6c6a's 3x retry reserves exit 2 for a box
+# that cannot fork a grep three times running). That is how backlog 1807b8c02c85 was filed: one
+# `not ok`, over a tree measured clean at the same sha before and after, reported to the operator as
+# "the LIVE layer is advanced and FAILING host suites". deploy-live already refuses to make this
+# mistake about its OWN bound (rc 124 ⇒ CUT, never RED); so does the sibling host suite
+# tests/deploy-parity-live.bats:50, which skips its exit 3 for the same reason in the same lane.
+# This file was the one that never learned it.
+#
+# NARROW BY CONSTRUCTION — it keys on the machine-state REASON, never on exit 2. The lint's other
+# exit-2 reasons are structural and must stay RED: a bad ROOT ("not a directory") is exactly how
+# f37a84cf was caught — `dirname "$0"` resolved to ~/.claude, which has no tests/ — and this
+# post-deploy wrapper is what caught it; a blind rule-4 extractor is the calibration-free control
+# that stops a broken extractor reading as a clean bill. Abstaining on the whole non-zero class
+# would retire both, so the match is an allowlist of the ONE retryable reason and every unknown
+# reason still fails. Both halves are proved by the control case below.
+skip_if_unrunnable() {
+  [ "$status" -eq 2 ] || return 0
+  printf '%s\n' "$output" | grep -q 'failed to run' || return 0
+  skip "NON-VERDICT: the lint could not run a predicate on this box (exit 2) — a fact about the machine, not a claim about the tree"
+}
+
 @test "the real tree is CLEAN (exit 0) — the embedded allowlist matches HEAD, nightly stays green" {
   # Rules 1-4 judge the tree here: 1-3 are on by default and rule 4 is switched on by name. Rules 5
   # and 6 stay OFF (setup() pins them, for the reason recorded there) — their real-tree guarantee is
@@ -83,8 +112,33 @@ mk_suite() {
   # backlog b59eb997d035 is the standing lesson that the one assertion here which lints the WHOLE
   # TREE mid-suite passes standalone, fails in-suite, and alone kept 14 green stamps red.
   CC_HERM_SELFTEST_RULE=on run bash "$LINT"
+  skip_if_unrunnable
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'test-hermeticity-lint: clean'
+}
+
+@test "the third state DISCRIMINATES: a lost fork abstains, a bad ROOT still REDs" {
+  # The control for skip_if_unrunnable, and it has to prove BOTH directions — a guard that only ever
+  # widens is how detection disappears without anything naming the loss.
+  #
+  # (a) THE RETRYABLE FORM IS REACHABLE. A `grep` that cannot run is precisely what fork exhaustion
+  # looks like to the lint's pure predicates, so stub one onto PATH for the length of one run.
+  # Without this the guard is unfalsifiable: dead code nobody has ever seen fire, guarding the one
+  # case that files a backlog packet against the operator's tree.
+  mkdir -p "$FIX/stub"
+  { echo '#!/bin/bash'; echo 'exit 2'; } > "$FIX/stub/grep"; chmod +x "$FIX/stub/grep"
+  mk_suite quiet 'export HOME="$BATS_TEST_TMPDIR/home"'
+  PATH="$FIX/stub:$PATH" run bash "$LINT" "$FIX/quiet"
+  [ "$status" -eq 2 ] || false
+  printf '%s\n' "$output" | grep -q 'failed to run' || false
+
+  # (b) THE TOO-WIDE HALF. A bad ROOT also exits 2, but for a STRUCTURAL reason that must stay RED —
+  # f37a84cf shipped a `dirname "$0"` that resolved to ~/.claude, which has no tests/, and this
+  # post-deploy wrapper is what caught it. So the phrase the guard keys on must be ABSENT here; if
+  # this assertion ever has to be relaxed, the guard has grown into the abstain that hides that bug.
+  run bash "$LINT" "$FIX/definitely-absent"
+  [ "$status" -eq 2 ] || false
+  [ "$(printf '%s\n' "$output" | grep -c 'failed to run')" -eq 0 ] || false
 }
 
 @test "--selftest is GREEN and every discriminating case is exercised" {
@@ -334,6 +388,7 @@ mk_suite() {
 
 @test "the real tree is clean under ALL ratchets and the summary reports every count" {
   CC_HERM_SELFTEST_RULE=on run bash "$LINT"
+  skip_if_unrunnable        # the other whole-tree case — same third state, same reason
   [ "$status" -eq 0 ] || false
   echo "$output" | grep -q 'grandfathered (\$HOME)' || false
   echo "$output" | grep -q 'grandfathered (capacity gate)' || false
