@@ -828,3 +828,83 @@ and false at 329 (sleep is now ~45%; the band-taxable share went 6% → 55%). Th
 `scripts/cycle-time-census.sh` — the criterion with population and denominator pinned, three-state,
 refusing to call "within" on majority-censored data, with `tests/cycle-time-census.bats` carrying two
 controls that each red when their exclusion is removed. Re-read it; do not re-derive it by hand.
+
+### 2026-08-10 — §1.5's FIRST revisit trigger, resolved: open, and YES — the second producer is built
+
+`b4f93c9fa73c` (off-box CI for the hermetic subset) is **closed as BUILT**, the opposite verdict to
+its sibling two days earlier, and on the same kind of evidence: a measurement, not a preference.
+
+**The blocker §1.5's own sharpening named is gone, because the partition now exists.** That entry
+(`:807-809`) said this item's premise *"requires a hermetic partition that does not exist yet, so
+the partition is the prerequisite, not the CI"* — correct, and it also observed that
+`host-suites.manifest` partitions on **host-coupling** (3 files), which is a different question.
+`scripts/offbox-partition.sh` answers the second question, as a **set difference** copied from that
+manifest's frozen contract for its stated reason: `tests/*.bats` MINUS `host-suites.manifest` MINUS
+`scripts/offbox-excluded.manifest`, total by construction, with a NEW suite landing **inside** the
+partition so coverage can never narrow silently.
+
+**The rate gap, measured on both sides.** On-box: **3 greens in 128 stamps** (107 red, 17 cut, 1
+hung) — the 0.17/day this plan built T2 to survive. Off-box on `macos-latest`, run `31363422123`:
+**339 of 347 suites green in 54 minutes**, 8 red, **0 non-verdicts**. This is not R-A ("make the
+verifier fast enough") relitigated — R-A was refused because a 10× speedup still leaves the rate
+gap. A second producer does not need to be faster; it runs **in parallel, on a machine nobody is
+using, over a corpus that excludes the machine-coupled suites**, which is why it can acquit per
+commit where the verifier acquits per fortnight.
+
+**What it may conclude, and the line it may not cross.** GREEN or nothing. A subset blind to the
+machine-coupled suites can acquit what it ran and has no standing to convict, so a non-green writes
+nothing and no consumer can read a red from it. The load-bearing consequence is where the green is
+STORED: measured before anything was written, **no consumer of `postland/stamps/` reads any field
+but `.verdict`**, there is **no producer attribution anywhere in that record**, and although the
+record carries `suites`, **nothing checks it** (`tests/deploy-live.bats:33` deploys a two-field
+stamp). A hermetic-subset green dropped into `stamps/` would therefore have become a **T1 target by
+file drop** — R3 weakened with no code change and nothing to review. So it goes to
+`postland/offbox/`, `deploy-live.sh` grows a reader that demands the narrower claim be *spelled*
+(`verdict:"green"` **and** `scope:"offbox-hermetic"`), and it is spent in exactly one place:
+
+| Tier | Evidence | Behaviour |
+|---|---|---|
+| **T1** | full-corpus green, descendant of live HEAD | advance, silent — unchanged |
+| **T1H** *(new)* | off-box green over the hermetic subset **and no on-box RED** on that tree | advance, bannered with the scope named. **No lag budget** |
+| **T2** | no red at all — the *absence* of evidence | advance past the budget, loud + a page |
+| **T3** | every candidate red | refuse + page |
+
+T1H is deliberately **not** gated on T2's budget: that budget exists because T2 advances on absence
+and must wait until staleness outweighs having no proof, whereas T1H advances on a positive result,
+and putting a proven tree behind the same clock reproduces the freeze this rebuild existed to end.
+The `no on-box RED` conjunct is the one that keeps it sound — the hermetic subset is *defined* by
+excluding the machine-coupled suites, so an on-box red saw exactly what this producer structurally
+cannot. `CC_DEPLOY_OFFBOX=off` restores the T1/T2/T3 ladder byte-for-byte.
+
+**Two defects found in the building, both generalizable, and neither found by inspection.**
+
+- **The empty-`$HOME` control fired before CI ever ran.** On this box the bare name `bats`
+  PATH-resolves to `~/.claude/bin/cc-bats`, an admission wrapper that **creates
+  `$HOME/.claude/state/bats-roots.d`** — measured side by side against one empty `$HOME`, where real
+  bats leaves it absent. The harness would have been writing into the very fixture home it created
+  to prove nothing writes there, and cc-bats' load *refusals* — "not a test result" by its own
+  documentation — would have entered the corpus as suite outcomes. Neither happens on a runner;
+  both happen to a human reproducing a CI red locally, which is precisely when the two must agree.
+- **A suite that reads stdin ate the rest of its shard's suite list.** Shards 1, 4 and 9 stopped
+  after 3, 25 and 17 of their 37-38 suites, each immediately after a stdin-reading suite; the step
+  **exited 0** and its log simply ended. 306 suites ran where 373 were expected, and **nothing
+  detected it except the fold's short-count rule** — written for a dropped matrix job, it caught a
+  defect one layer beneath. `postland-verify.sh:2189` and `ship-land.sh:875` both already carry
+  `</dev/null` for this exact reason: **the answer was in the tree twice and still had to be
+  rediscovered in CI.** The regression control is non-vacuous — reverting the one redirect
+  reproduces the symptom exactly, one row reported instead of two.
+
+  It also cost a **wrong intermediate conclusion worth recording**: the first census's 26 reds read
+  as "the machine-coupled set", and they were not — they were the part a *truncated* run could see.
+  The repaired run surfaced 8 more suites that had never executed off-box at all. A short
+  measurement read as a complete one, twice in one item.
+
+**What is NOT claimed.** The 35 off-box exclusions are seeded on **measurement, not attribution**:
+each entry records the `notok` count a named run observed, and where the subject makes the cause
+obvious it is marked a HINT. That bar is lower than `host-suites.manifest`'s on purpose, and the
+manifest header states why — a suite listed there leaves *the* tree verdict and the land smoke,
+while a suite listed here still runs in the on-box corpus and every existing gate, and leaves only
+a second opinion that did not exist before today. An over-broad entry loses coverage that never
+existed; a missing entry stops the producer producing for anyone. `offbox-run.sh census` runs the
+excluded suites too, so the line is re-measured in both directions rather than curated once —
+without that arm this is an exemption list that only grows.

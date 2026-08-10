@@ -42,17 +42,16 @@ prevents a future contributor from "fixing" the hook to block it.
 
 ## CI
 
-Repo has no CI wired today. A minimal workflow (Ubuntu latest + `bash` + `jq`)
-would run this suite on every PR. Template:
+Two workflows exist (this section claimed "no CI wired today" until 2026-08-10, which had been
+false since `449fdfde` landed `diagrams.yml` on 2026-07-28):
 
-```yaml
-# .github/workflows/test.yml
-name: test
-on: [push, pull_request]
-jobs:
-  hook-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: hooks/tests/validate-bash.test.sh
-```
+- `.github/workflows/diagrams.yml` — fails if a rendered SVG has drifted from its `.mmd` source.
+- `.github/workflows/hermetic.yml` — runs the **hermetic partition** of the `tests/*.bats` corpus
+  on `macos-latest`, as a second green producer for the deploy lane
+  (`docs/plans/DEPLOY_LANE_GROUND_UP.md`, 2026-08-10). Partition:
+  `scripts/offbox-partition.sh`; runner: `scripts/offbox-run.sh`.
+
+**This suite is not in either.** `hooks/tests/validate-bash.test.sh` is the pre-bats standalone
+harness, and `hermetic.yml` runs `tests/*.bats` only. Adding it is a one-line step in
+`hermetic.yml`, not a new workflow — the template that used to live here would have created a
+third one.
