@@ -855,3 +855,81 @@ a surface M7 did not touch:
 fired `--account auto` so the M7 router routes them — the implementation wave IS the demand that
 burns next3's stranding 11% tonight, and the fires are the first production exercise of the
 `--assign` ledger. Origin (this session) holds custody + review; leads return via notify-back.
+
+### §14.2 W2-B — DONE (2026-08-10, `f6b6c4e5`)
+
+**Scope (frozen):** `bin/cc-wave-plan`'s flat per-account cap (`CC_WAVE_MAX_PER_ACCT=2`) becomes
+urgency-aware — the TOP-ranked account whose weekly need outruns its measured recent burn may take
+up to `CC_WAVE_MAX_PER_ACCT_URGENT` (default 4) tracks, never past `KMAX − k_eff`; every other
+account keeps the flat cap. Kill switch: knob at/below the flat cap ⇒ byte-identical plans.
+
+**Why this is the DEMAND half of M7.** §13 made the ROUTER urgency-aware: a fire now picks the
+account whose quota is about to strand. It left the WAVE allowancer urgency-blind, so the two halves
+disagreed — a wave still handed the expiring account exactly the 2 slots it handed an account with a
+six-day runway. §13's own evidence run is the case: `next3` had to burn 11% in under 24h, and no
+amount of correct *ranking* moves more than 2 items onto it in one wave. Ranking decides WHERE the
+next item goes; the cap decides HOW MANY can go there at all, and only the second one can concentrate
+a wave where quota is about to be lost.
+
+**The design — one raised cap, four ways to refuse it.** `RCAP[i]` replaces the single
+`MAX_PER_ACCT` in `place_item`; `apply_urgency()` raises exactly one entry. Placement ORDER is
+untouched — the urgent account is still chosen by least-load and still de-prioritised while it is
+carrying sessions; it just stops being *skipped* sooner. Every degradation path lands on the flat cap,
+because each one is a widening and a widening on absent data is a widening on a guess:
+
+| Refusal | Why it degrades to flat, not to urgent |
+|---|---|
+| knob ≤ flat cap | the kill switch — the SSOT is not even read, so the lane is provably inert |
+| no `--json` snapshot, or `.router.KMAX` unreadable | the bound is what keeps the allowance honest; unbounded widening is not the smaller error |
+| a row missing EITHER `weekly_need_pct_per_day` or `burn_wk_ppd` | a missing MEASUREMENT is not urgency. These are exactly the fields §13 documents as absent on a thin series, so "absent ⇒ urgent" would have shipped a silent widening the first quiet day |
+| `KMAX − k_eff ≤ 0` | floor 0: an account at the concurrency ceiling gets nothing, urgent or not |
+
+BEHIND is the producer's own predicate (measured < needed, `claude-accounts:1396`) and `k_eff` mirrors
+`claude-accounts:1219-1221` (k_work where the sweep could measure it, else the pane census — absence
+degrades to the STRICTER count — plus phantoms). Both are re-derived in the consumer only because
+`--json` emits the terms and not the verdicts; no threshold is invented here.
+
+**KMAX is read from the SSOT file, not from `--json`.** `--json` carries `s_cut` at top level but not
+`KMAX`, and `bin/claude-accounts` is read-only for this change. So `cc-wave-plan` reads
+`.router.KMAX` from `${CLAUDE_ACCOUNTS_JSON:-~/.claude/accounts.json}` — the same path and the same
+env override the producer itself honours (`claude-accounts:127`), so the two sides cannot disagree
+about which file is authoritative and one env var fixtures both. A missing or non-integer value is no
+bound at all and therefore no urgency, never a hardcoded 8 (the constant is operator-tunable and has
+already been hand-raised 4→8 once).
+
+**The widening is never silent** (alarm polarity). One line names the account, need vs burn, the
+allowance and the terms that bounded it — on stdout in text mode, on stderr under `--json` so the
+machine plan stays pure — and it rides the IDL `fired`/`abstained` detail so the decision is auditable
+after the fact. The capacity wall's message now states Σ per-account caps rather than
+`accounts × flat`, which stopped being the capacity it enforced.
+
+**Verified:** 21/21 `tests/cc-wave-plan.bats` (4 new urgency cases) + 74/74 in-binary selftest (11 new
+urgency checks) + 27/27 `tests/cc-wave-plan-verdict.bats` + 12/12 `tests/cc-dispatch.bats` +
+`test-hermeticity-lint` and shellcheck clean. RED-proof re-runnable through the
+`CC_WAVE_PLAN_UNDER_TEST` seam (added here, mirroring the verdict suite): against `origin/main`'s
+binary the (a)/(c)/(d) cases FAIL and (b) passes — correctly, since (b) asserts the fail-soft, which
+is pre-change behaviour. The selftest carries its own control: `CC_WAVE_MAX_PER_ACCT_URGENT=2`
+reddens exactly the six positive urgency checks and no others.
+
+**Learnings.**
+- **A widening test can pass against a tool that has no widening.** The floor-0 case was first
+  fixtured with the full account at `k:8`, and it passed identically against a build with no floor —
+  the ORDINARY load penalty (`RLOAD`, seeded from the same `k`) explained the placement on its own.
+  Spending the ceiling as 8 PHANTOMS against a census of 0 leaves the load seeds tied, so only the
+  floor can move the items. The tell was running the kill-switch control and finding that check still
+  green (memory: `control-must-replay-the-real-artifact` — the control has to be able to fail).
+- **Byte-identity needs a positive control on the same fixture.** "Armed == killed" is trivially true
+  on a fixture nobody is BEHIND on, so the kill-switch test asserts it on the fixture that DOES
+  trigger the widening and then asserts armed ≠ killed there — otherwise it passes against a kill
+  switch that does nothing.
+- **A new SSOT read is a new fixture surface** — the §13 learning, hit again one section later.
+  `tests/cc-wave-plan.bats` does not fixture `$HOME` (the verdict suite does), so it would have read
+  the operator's live `accounts.json` and let a hand-tunable constant decide its verdicts. Pinned via
+  `CLAUDE_ACCOUNTS_JSON` in `setup()`.
+
+**§14.2 Remainders:** R14-1 the allowance is a per-wave cap, not a per-wave TARGET — least-load
+placement still spreads first, so an urgent account reaches its 4 only when the wave is large enough
+to exhaust the others. Whether urgency should also bias placement ORDER (a load *discount*, not just
+a higher ceiling) is a separate change with its own kill switch. R14-2 exactly one account per plan
+may hold the allowance; a fleet with two accounts expiring inside the same day is not expressible
+today, and deliberately so — a second urgent account is a second widening and wants its own evidence.
