@@ -582,7 +582,21 @@ installed_somewhere() {
   # searched rather than a fixed prefix list because npx/claude/ruff live in per-shell fnm and
   # framework directories whose names carry a pid — no static list can enumerate them, and dropping
   # them would silently narrow the lint.
-  reachable_on "${PATH}:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin" "$1"
+  #
+  # /usr/sbin:/sbin ARE in the static suffix, and their absence was a real blind spot rather than an
+  # oversight of taste. This predicate answers "does this box install such a binary at all", so a NO
+  # DROPS the finding — which makes it the one place where a too-narrow PATH removes true positives
+  # silently. The inherited PATH is the caller's, and the callers that matter run lean: ship-land's
+  # gate PATH carries no /sbin, so `md5` (a /sbin-only stock binary) read as "installed nowhere" and
+  # every /sbin-only finding was dropped before it could be reported. That is the lint's own founding
+  # example — tests/cc-queue.bats hashing with a bare `md5` that resolves nowhere on either scheduled
+  # runner — made invisible to the lint by the environment it is gated from. It surfaced as
+  # `--selftest` FAILING 2/23 (cases 14 and 17, both /sbin-only fixtures) for any caller without
+  # /sbin, and passing 23/23 for one with it: a detector whose verdict came from the invoker's
+  # environment instead of from the tree. These two are stock macOS locations, as static and
+  # enumerable as the /usr/local/bin already here — the fnm/pid argument above is why the INHERITED
+  # PATH stays in the union, and is not a reason to omit the fixed directories it may lack.
+  reachable_on "${PATH}:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/sbin:/sbin:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin" "$1"
 }
 
 # File-level guard detection. `command -v X` / `type -p X` / `hash X` anywhere in the file means the
@@ -1078,6 +1092,17 @@ PLIST
   newtree t17; mkrunner t17 "/usr/bin:/bin"
   mk t17 tests/a.bats 'run md5 -q "$f"'
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17" >/dev/null 2>&1 ); expect 1 "$?" 'the bats `run` wrapper hid a bare binary from the scanner'
+
+  # 17b. RED on the SAME fixture with /sbin stripped from the CALLER's PATH — the detector's verdict
+  #      must come from the tree, never from whoever invoked it. `installed_somewhere` searches the
+  #      inherited PATH and a NO there DROPS the finding, so a lean caller silently deletes true
+  #      positives: ship-land's gate PATH carries no /sbin, and cases 14/17 above duly reported
+  #      "want 1, got 0" on every land while passing for an interactive shell that had it. The two
+  #      cases were already RED-proof; what they could not see is that they were only RED for SOME
+  #      invokers. Re-running one of them under an explicitly hostile PATH is what pins that, and it
+  #      fails on the revision before /usr/sbin:/sbin joined the static suffix.
+  ( PATH="/usr/bin:/bin" CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/t17" >/dev/null 2>&1 )
+  expect 1 "$?" 'a caller PATH without /sbin silently dropped a /sbin-only finding'
 
   # 18. GREEN — prose AFTER an arithmetic expansion nested in a command substitution. This replays
   #     hooks/dispatch-assert.sh:222-225 in two lines: `$((` used to be stepped over without a push,
