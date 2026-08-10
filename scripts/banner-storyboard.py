@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""banner-storyboard.py — ten candidate micro-events, storyboarded so they can be picked by looking.
+"""banner-storyboard.py — eleven candidate micro-events, storyboarded so they can be picked by looking.
 
 WHY THIS FILE EXISTS. The banner's beats were being chosen from prose. Prose hides the two things
 that actually decide a beat: whether the sprite can perform it at all, and what it costs the loop.
@@ -9,7 +9,7 @@ sliver, the WEAKEST move despite the largest travel) — and the ranking is invi
 and obvious in a frame. So this emits frames.
 
 WHAT IT IS NOT. Not an animation, not a build input, and it does not touch tools/banner/gen.py. It
-is a decision surface: ten beats, four to six frames each, every frame drawn from the real geometry
+is a decision surface: eleven beats, four to six frames each, every frame drawn from the real geometry
 in scripts/clawd-sprite.py rather than from a redrawn approximation. If a pose is not in that
 module's quoted pose table, it cannot appear here either — which is the point. THE ASK's blink is
 the single exception in the whole page and it is labelled as one, because the honest way to add a
@@ -27,7 +27,7 @@ WHAT IT ASSERTS, so the page cannot lie:
   * _label_fits()        — a label that would overflow its frame fails the build instead of the
                            review.
 
-  scripts/banner-storyboard.py                       # all ten, to a temp dir, prints the path
+  scripts/banner-storyboard.py                       # all eleven, to a temp dir, prints the path
   scripts/banner-storyboard.py --out /tmp/storyboards --open
   scripts/banner-storyboard.py --only noticing,landing
 """
@@ -83,7 +83,7 @@ LBL_Y = FH - 12
 LBL_PX = 6.0  # measured advance width of the 10 px mono label, for the overflow assert
 CLEAR_CELLS = 2  # minimum clear plate between two creatures, in cells of the larger one
 
-# ── every paint is a class, so one stylesheet themes ten SVGs ───────────────────────────────────
+# ── every paint is a class, so one stylesheet themes eleven SVGs ────────────────────────────────
 # The body orange is the one literal: #D77757 is correct in both schemes and is the whole reason
 # the composition can only afford one saturated subject.
 SVG_CSS = """
@@ -192,6 +192,25 @@ def letter(px: float, x: float, y: float) -> str:
     return cells(
         [(cx, cy) for cx in range(2) for cy in range(2)], px, x, y, "pp"
     ) + cells([(0, 0), (1, 1)], px, x, y, "pf")
+
+
+def mail(px: float, x: float, y: float, rightward: bool, tail: int = 2) -> str:
+    """One message IN FLIGHT, with its direction readable from a still frame.
+
+    The trail is not decoration and it is not invented here — it is `star()`'s idiom, quoted: "the
+    tail steps back up the path it came down, so the direction of travel is legible from a still
+    frame". A storyboard frame is by definition still, so a message drawn without one is a message
+    with no direction, and a beat whose entire claim is TWO-WAY cannot afford that.
+
+    `tail=0` is the landed state: a message that has arrived is no longer travelling, and leaving
+    the trail on after it lands would say it is still moving.
+    """
+    d = -1 if rightward else 1
+    trail = "".join(
+        cells([(0, 0)], px * 0.6, x + d * (i + 1) * px * 1.7, y + px * 0.6, "pf")
+        for i in range(tail)
+    )
+    return trail + letter(px, x, y)
 
 
 def cake(px: float, x: float, y: float) -> str:
@@ -497,7 +516,7 @@ class Variant:
     frames: tuple[Frame, ...]
 
 
-# ── the ten beats ───────────────────────────────────────────────────────────────────────────────
+# ── the eleven beats ────────────────────────────────────────────────────────────────────────────
 
 RX = 96.0  # a beat whose subject is BEHIND the walker frames it right of centre
 W_BIG = Creature(BIG, AX)
@@ -509,6 +528,41 @@ R_LEFT = Creature(BIG, RX, "look-left")
 R_DROP = Creature(BIG, RX, dy=BIG)  # one cell down: the only "loss" cue the sprite has
 FOOT = 99.0  # the lattice print under the walker's leading foot
 CAKE_X = 113.0  # mid clear band: 6 px off the walker, 4 px off the visitor
+
+# ── two creatures on one plate: the pair is CENTRED, not the walker (operator, 2026-07-30) ──────
+# "if clawd summons someone he should probably move left positioned so that the new clawd can be
+# right positioned such that its centered and not super right heavy".
+#
+# The defect is structural rather than cosmetic, which is why it needs its own coordinates instead
+# of a nudge: every other beat has ONE subject and `AX` is where that subject belongs, so a beat
+# that adds a second creature to the RIGHT of `AX` inherits a mark chosen for a composition it is
+# no longer in. Held at `AX`, the pair spans 30..190 of a 200-wide frame — 30 px of plate on the
+# left, 10 px on the right, and the run of empty plate behind the summoner is what reads as "super
+# right heavy".
+#
+# So the SUMMONER MOVES. The pair is treated as one object and centred: 16..184, 16 px of margin on
+# each side, mid-point exactly FW/2. That is the operator's own prescription — A steps left so B
+# has somewhere to arrive — and it costs nothing, because both creatures are pinned in screen space
+# for the whole beat and neither is authored onto the scrolling strip.
+#
+# The clear band widens to 36 px as a consequence, not as a choice: centring a 77 px walker and a
+# 55 px visitor inside 200 px leaves exactly that much between them. It is comfortably over the
+# 14 px `_check_clear` floor, and it is the band every prop in these beats is handed across.
+SUM_AX = 16.0  # the summoner, two BIG cells LEFT of its walking mark
+SUM_BX = 129.0  # the visitor: pair spans 16..184, margins 16 / 16
+SUM_GAP_X = 105.0  # mid clear band — where a 2-cell prop sits centred
+SUM_CAKE_X = 102.0  # the same band, for the 3-cell prop
+S_BIG = Creature(BIG, SUM_AX)
+S_RIGHT = Creature(BIG, SUM_AX, "look-right")
+S_VIS = Creature(SML, SUM_BX, "look-left")
+
+# The two mail lanes. They are separated VERTICALLY because the clear band is 36 px and two props
+# cannot pass side by side inside it without colliding; 22 px of separation is over twice the 10 px
+# prop, which is the distance below which the pair reads as one message stuttering rather than as
+# two messages crossing.
+MAIL_HI_Y = BASE - 52  # outbound lane, A → B
+MAIL_LO_Y = BASE - 30  # inbound lane,  B → A
+M_PEER = Creature(SML, SUM_BX, "look-left")
 
 
 @dataclass(frozen=True)
@@ -538,7 +592,8 @@ BEATS: tuple[Beat, ...] = (
         "is load-bearing, not decoration: it is what converts an unexplained spawn into a caused "
         "one, and a creature fading in from nothing is exactly the origin-less entrance this spec "
         "spent pages deleting.",
-        behaviour="A sparkle bursts in the clear band and the binary's own SMALLER clawd is "
+        behaviour="The walker STEPS LEFT off its walking mark, and that step is what makes room: a "
+        "sparkle bursts in the clear band it just opened and the binary's own SMALLER clawd is "
         "standing in it. The walker looks right and hands a pale letter across the gap; the "
         "visitor hands back a cake. Both keep striding the whole time — nobody stops.",
         exit_="The visitor poofs. A self-removal is a stronger goodbye than a wave (and is what a "
@@ -558,35 +613,40 @@ BEATS: tuple[Beat, ...] = (
         "same beat) but it is not what the sketch asked for, and O1-a needs no cake at all. Note "
         "too that the poof REPLACES the "
         "visitor rather than covering it — a burst drawn over a body that is still there reads as "
-        "damage, not as a departure.",
+        "damage, not as a departure. COMPOSITION (operator, 2026-07-30): the summoner now steps "
+        "LEFT before the visitor arrives, so the PAIR is centred rather than the walker — see "
+        "SUM_AX. Held at the walking mark the two of them crowded the right edge with a run of "
+        "empty plate behind, and the step is free because both are screen-pinned for the beat.",
         frames=(
             Frame("walks the record", 1, (W_BIG,)),
             Frame(
-                "hat on · sparkle",
+                "left · hat on · sparkle",
                 1,
-                (W_RIGHT,),
-                front=hat(BIG, AX) + burst(4, 128, BASE - 34, 4),
+                (S_RIGHT,),
+                front=hat(BIG, SUM_AX) + burst(4, SUM_BX - 7, BASE - 34, 4),
             ),
-            Frame("a SMALLER clawd stands", 1, (W_RIGHT, V_SML), front=hat(BIG, AX)),
+            Frame(
+                "a SMALLER clawd stands", 1, (S_RIGHT, S_VIS), front=hat(BIG, SUM_AX)
+            ),
             Frame(
                 "the brief, across the gap",
                 1,
-                (W_RIGHT, V_SML),
-                front=hat(BIG, AX) + letter(6, GAP_X, BASE - 40),
+                (S_RIGHT, S_VIS),
+                front=hat(BIG, SUM_AX) + letter(6, SUM_GAP_X, BASE - 40),
             ),
             Frame(
                 "the cake comes back",
                 1,
-                (Creature(BIG, AX, "look-right", dy=-2 * BIG), V_SML),
-                front=hat(BIG, AX, dy=-2 * BIG) + cake(6, CAKE_X, BASE - 46),
+                (Creature(BIG, SUM_AX, "look-right", dy=-2 * BIG), S_VIS),
+                front=hat(BIG, SUM_AX, dy=-2 * BIG) + cake(6, SUM_CAKE_X, BASE - 46),
             ),
             Frame(
                 "it poofs · A keeps it",
                 1,
-                (W_BIG,),
-                front=hat(BIG, AX)
-                + cake(6, CAKE_X, BASE - 46)
-                + burst(5, BX + 27, BASE - 25, 5),
+                (S_BIG,),
+                front=hat(BIG, SUM_AX)
+                + cake(6, SUM_CAKE_X, BASE - 46)
+                + burst(5, SUM_BX + 27, BASE - 25, 5),
             ),
         ),
     ),
@@ -1139,6 +1199,66 @@ BEATS: tuple[Beat, ...] = (
             Frame("the stars remain", 1, (W_BIG,), back=keepout() + constellation(0)),
         ),
     ),
+    Beat(
+        key="mail",
+        name="TWO-WAY MAIL",
+        status="NEW · operator-requested (2026-07-30) · unbuilt",
+        reach="no code needed",
+        cause="Two live sessions have to reach each other with no human relaying between them. One "
+        "writes into the other's mailbox; the other answers. The answer is the point — a system "
+        "that can only broadcast is not two sessions talking, it is one session announcing.",
+        behaviour="A pale message leaves the walker travelling RIGHT, riding HIGH. Before it lands, "
+        "a second message leaves the peer travelling LEFT, riding LOW — and for one frame both are "
+        "in the air at once, crossing. Each carries a short trail, so which way it is going is "
+        "readable from a frozen frame. Neither creature stops.",
+        exit_="Both land, both are read, both keep striding. No residue on the strip and nothing "
+        "left in either lane — an inbox that still shows mail after the beat is a bug, not a state.",
+        mech="The cross-session mail path: `cc-notify` writes into the peer's mailbox and the "
+        "peer's own drain reads it out. The failure this beat is drawn from is real and it is "
+        "exactly a two-way failure — the WRITER and the READER keyed on different boxes (the pane's "
+        "versus the session's), so lines were written and not one was delivered. Both keys are now "
+        "armed. A single arrow cannot depict that class of bug; two independent lanes can.",
+        cost_tag="rate: free · screen-pinned",
+        cost="Zero. Both creatures are pinned in screen space and keep striding, so there is no "
+        "rate modulation and nothing is authored onto the scrolling strip. The props are the "
+        "cheapest on the page — a 2 x 2 letter is the one prop this file has already measured as "
+        '"trivially legible at 838 px" — and the beat is five sub-beats, not six.',
+        note="THE CROSSING FRAME IS THE WHOLE BEAT. A send followed by a reply reads as one channel "
+        "used twice; two messages passing each other at different heights reads as two channels, "
+        "and that is the only difference between this beat and a beat that already exists. So the "
+        "staging spends its middle frame on the crossing and nothing else. "
+        "THE ONE THING TO RULE ON: the peer is drawn SMALLER, because `_check_clear` refuses two "
+        "same-size clawds on one plate and the source's art direction allows only one saturated "
+        "orange subject. That rule was written for a parent and its subagent, and here it works "
+        "against the beat — a smaller peer reads as a CHILD, which is the summoning's relationship, "
+        "not this one. Two peer sessions are equals. So this beat cannot be built as drawn without "
+        "either overturning the one-subject rule for it, or finding a second way to say 'peer' that "
+        "is not size — a matched stride phase and a shared eye-line are the candidates, and both "
+        "are cheaper than a second orange.",
+        frames=(
+            Frame("two sessions, striding", 1, (S_BIG, M_PEER)),
+            Frame(
+                "A sends → · rides high",
+                1,
+                (S_RIGHT, M_PEER),
+                front=mail(5, 102, MAIL_HI_Y, True, tail=1),
+            ),
+            Frame(
+                "BOTH in the air · crossing",
+                1,
+                (S_RIGHT, M_PEER),
+                front=mail(5, 112, MAIL_HI_Y, True) + mail(5, 100, MAIL_LO_Y, False),
+            ),
+            Frame(
+                "each has the other's",
+                1,
+                (S_RIGHT, M_PEER),
+                front=mail(5, 116, MAIL_HI_Y, True, tail=0)
+                + mail(5, 96, MAIL_LO_Y, False, tail=0),
+            ),
+            Frame("read · both stride on", 1, (S_BIG, M_PEER)),
+        ),
+    ),
 )
 
 # ── emit ────────────────────────────────────────────────────────────────────────────────────────
@@ -1288,7 +1408,7 @@ footer{color:var(--sb-dim);font-size:12px;border-top:1px solid var(--sb-stroke);
 """
 
 LEDGE = (
-    "Ten candidates, four to six frames each, every frame drawn from the extracted 11 x 8 sprite in "
+    "Eleven candidates, four to six frames each, every frame drawn from the extracted 11 x 8 sprite in "
     "<code>scripts/clawd-sprite.py</code> — so nothing on this page is a move the creature cannot "
     "actually make. <em>The whole vocabulary is a body hop (21 px at the 838 px render), an eye "
     "shift (10.5 px), and an arm rise that has the most travel and the worst legibility.</em> Shape "
@@ -1358,10 +1478,10 @@ def index_html(beats: tuple[Beat, ...]) -> str:
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Ten candidate micro-events — banner storyboard</title>"
+        "<title>Eleven candidate micro-events — banner storyboard</title>"
         f"<style>{css}</style></head><body><div class='wrap'>"
         "<div class='top'><div>"
-        "<h1>Ten candidate micro-events — <b>pick by looking</b></h1>"
+        "<h1>Eleven candidate micro-events — <b>pick by looking</b></h1>"
         f"<p class='lede'>{LEDGE}</p></div>"
         "<button id='t' type='button'>theme</button></div>"
         "<div class='calls'>"
@@ -1382,7 +1502,7 @@ def index_html(beats: tuple[Beat, ...]) -> str:
         "<p><b>3 &#183; idle &#8594; event &#8594; idle is not a new rule.</b> It is the spec's own "
         "&#8805;65%-empty-air requirement, plus per-type duty &#8804;4%, aggregate &#8804;25%, and "
         "no type recurring inside 60 s. Measured v5a fails it at 88.1% aggregate duty, so the "
-        "constraint is already the binding one — these ten are candidates to choose FROM, never a "
+        "constraint is already the binding one — these eleven are candidates to choose FROM, never a "
         "set to ship together.</p></div>"
         "<div class='legend'>"
         "<span><b>rate N</b> top-right of every frame — the world's scroll rate. "
@@ -1421,7 +1541,7 @@ def main() -> int:
         "--out", type=pathlib.Path, help="output directory (default: a temp dir)"
     )
     ap.add_argument(
-        "--only", help="comma-separated beat keys to emit (default: all ten)"
+        "--only", help="comma-separated beat keys to emit (default: all eleven)"
     )
     ap.add_argument("--open", action="store_true", help="open the index page when done")
     a = ap.parse_args()
