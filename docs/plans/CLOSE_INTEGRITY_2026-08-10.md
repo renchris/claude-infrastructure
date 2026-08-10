@@ -1,6 +1,21 @@
 ---
-status: in-progress
+status: complete
 ---
+
+**DONE (2026-08-10, this session).** All four waves built + tested in `.worktrees/close-integrity`:
+plan `0bde7c17` · W1 origin-identity+spent `277323b8` · close-shape `c51ad0ed` · W2 cc-custody+
+producers `46770378` · W2b ship-floor + custody consumers `8b8d6ac3` · W3 dod-path `83e64569` ·
+W4 wrap.md `089a114b` + CLAUDE.md `9ea3f7c0`. Suites green this session: origin-identity 17 ·
+fired-cwd-index 19 (test 10 un-redded — was red on pristine trunk) · 6× selfclose + fire-engagement
++ lifecycle · cc-custody 9 · ship-floor 10 · wake-floor 44 · session-continue+telemetry+wrap-ledger
+95→70 (incl. 3 custody) · completion-assert FULL 73/73 (incl. 6 D6 + 1 custody) · dod-path 7.
+Follow-ons FILED: custody v1.1 `d29b73103189` · cc-classify unification `dcf58e1ba056` · G3
+attribution `68fdc99b17c7`. Tasks corrected from measurement: #70, #141 (both rewritten to their
+surviving true forms). Key learnings: the leak was the DECISION layer (58% of stops assert
+nothing; deaths 0.34%); wave-abandonment is the loss signature (62 commits / 21 branches / 5
+spikes); a first-writer-seeds DoD migration was rejected for an unbounded shadow window — two read
+sources instead; the spent-stamp retry needs the marker proof or a reused kitty id inherits a
+self-retiring contract.
 
 # CLOSE INTEGRITY — sessions must not end before complete + landed + live
 
