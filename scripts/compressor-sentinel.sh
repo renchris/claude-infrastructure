@@ -109,12 +109,67 @@ SNAP_ARGV_MAX="${CC_SENTINEL_SNAP_ARGV_MAX:-400}" # per-ROW argv cap in chars; 0
 SNAP_AGG_N="${CC_SENTINEL_SNAP_AGG_N:-15}"       # executables in the coarse by-executable total
 TICKS=0                                          # 0 = run forever; >0 bounds a smoke/test run
 
+# ── PANIC ATTRIBUTION (master 66ef300dd0b4 — "the next death is attributable") ─────────────────
+# WHAT IS MISSING TODAY. When this box dies, nothing survives to say WHY. Measured 2026-08-09:
+#   · A kernel panic writes NO crash row at all. hooks/lead-crash-watchdog.sh writes the ledger
+#     from a daemon that the panic kills with everything else — the ledger's last row is 04:03:39,
+#     fifteen minutes BEFORE panic #6 at 04:18:59, and there is nothing after it.
+#   · 132 of 171 rows in claude-crashes.jsonl read cause:"abrupt-unknown" with an empty
+#     stderr_log — 77% unattributed, because the two things it joins on (a close-record and a
+#     stderr file) are both written by processes a group SIGKILL takes down first.
+#   · The kernel DID write the answer, and nothing in this repo has ever read it. A repo-wide grep
+#     for `.panic` finds no parser: jetsam_near_death() globs JetsamEvent-*.ips only. Meanwhile
+#     panic-full-2026-08-09-034124 carries the verdict in its first lines — "Compressor Info: 32%
+#     of compressed pages limit (OK) and 100% of segments limit (BAD) with 66 swapfiles" — and a
+#     per-process table below them: 780 "node, 13 "claude.exe, 1 "WindowServer. That is the
+#     culprit, named and counted, by the kernel, at the moment of death.
+#   · And macOS is deleting it. Five panics have occurred; THREE files remain — the Jul-30/31 pair
+#     has already rotated away, and docs/research/crash-rootcause-2026-08-09.md §5.3 predicted
+#     exactly that. So the evidence for the 5th panic will be gone before anyone asks about the 6th.
+#
+# WHAT THIS DOES. One bounded read of the newest panic report at STARTUP, distilled to one JSONL
+# row in a store WE own. It never re-records the same panic (keyed on the report's own basename),
+# so it is idempotent across restarts and its ledger is a panic history, not a boot history.
+#
+# WHY AT STARTUP OF *THIS* DAEMON, AND NOT A NEW JOB. A panic reader is only ever useful in the
+# minutes after a reboot, and this is the only instrument on the box guaranteed to run then:
+# com.claude.compressor-sentinel is KeepAlive + RunAtLoad, so it starts before anything else this
+# repo owns. A dedicated launchd job would need a C10 operator step and would sit in the
+# pending-activation queue where such things rot — the inertness generator. An edit to a file that
+# already runs rides its existing per-file symlink and goes live on the trunk fast-forward.
+#
+# WHY IT IS SAFE AT STARTUP. It is read-only, bounded (head -c on a 6.5 MB report, never a full
+# scan), wrapped so any failure is recorded rather than raised, and it can never delay the loop by
+# more than one bounded read. A post-mortem that could stop the sensor from starting would be
+# trading the next death's evidence for this one's.
+#
+# THE STATES ARE KEPT DISTINCT, because "no panic" and "could not read one" are different facts and
+# a single value for both is what makes a blind sensor read healthy (memory:
+# sensor-default-off-makes-blindness-the-shipping-path):
+#   scanned    a panic was found, parsed, and recorded
+#   already    the newest panic is already in our ledger — nothing to do
+#   none       the panic directory is readable and holds no report: genuinely no panic
+#   unreadable the directory or file could not be read — we do NOT know, and say so
+PANIC_DIRS="${CC_PANIC_DIRS:-/Library/Logs/DiagnosticReports}"
+PANIC_LEDGER="${CC_PANIC_LEDGER:-$HOME/.claude/logs/panic-attribution.jsonl}"
+PANIC_SCAN="${CC_PANIC_SCAN:-on}"
+# THE BOUND MUST COVER THE WHOLE TABLE OR THE CENSUS INVERTS. Sized at 2 MB first, on the reasoning
+# that "the table is well inside it". Measured against the live 6.5 MB report, that bound returned
+# `bash=33 node=21` — i.e. it named BASH as the top process, when the true full-file census is
+# node=780, xpcproxy=152, bash=90, claude.exe=13. The truncation does not degrade the answer, it
+# REVERSES it, and a reversed culprit is worse than no culprit. macOS caps a panic report well under
+# this, so the bound is a runaway guard rather than a working limit — and when it IS reached, the
+# census says so in census_source rather than quietly reporting a biased ranking.
+PANIC_HEAD_BYTES="${CC_PANIC_HEAD_BYTES:-16000000}"
+TICKS_PANIC_ONLY=0
+
 while [ $# -gt 0 ]; do
   if   [ "$1" = "--ticks" ]; then
     TICKS="${2:-}"
     case "$TICKS" in ''|*[!0-9]*) echo "compressor-sentinel.sh: --ticks needs a non-negative integer" >&2; exit 64 ;; esac
     shift
   elif [ "$1" = "--once" ];  then TICKS=1
+  elif [ "$1" = "--panic-scan" ]; then TICKS_PANIC_ONLY=1
   elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0
   else echo "compressor-sentinel.sh: unknown arg '$1'" >&2; exit 64
@@ -512,6 +567,109 @@ write_page() { # <ts> <why> <headline> <detail>
     printf 're-run:   %s\n' "$0"
   } > "$PAGE" 2>/dev/null || true
 }
+
+# ── panic attribution: read the kernel's own verdict before it is rotated away ────────────────────
+# The kernel already named the culprit; the only defect is that nobody reads it. Two facts are
+# extracted, and they are the two that a post-mortem has always had to be reconstructed by hand:
+#   VERDICT — the `Compressor Info:` line from panicString. It states the kill axis outright
+#             ("100% of segments limit (BAD)") and it is the discriminator every other rung on
+#             this box is blind to: headroom, swap and memory-pressure all read HEALTHY at death.
+#   CENSUS  — the per-process table macOS embeds in a `panic-full` report, counted by comm. On
+#             2026-08-09 that reads node=780, claude.exe=13 — which is the whole argument that the
+#             fleet is the VICTIM and a dev-server worker pool is the killer, recoverable in one
+#             command instead of the multi-hour manual trace it took the first time.
+# A `panic-base+socd` report (366 KB) carries the verdict and NO process table, and a failed
+# stackshot can strip the table from a `panic-full` too. `census_source` records which it was, so
+# an absent census is never mistaken for a census of zero.
+panic_newest() { # → path of the most recently modified *.panic across PANIC_DIRS, or empty
+  # `find` + an explicit mtime sort rather than `ls -1t` (SC2012; the gate lints at info severity).
+  # `stat -f '%m %N'` is BSD, `-c` is GNU — both are tried so this is not silently Darwin-only.
+  # Sorting numerically descending on the epoch reproduces `ls -t` exactly, without parsing ls.
+  local d rows=""
+  for d in ${PANIC_DIRS//:/ }; do
+    [ -d "$d" ] || continue
+    rows="$rows$(
+      { find "$d" -maxdepth 1 -type f -name '*.panic' -exec stat -f '%m %N' {} + \
+          || find "$d" -maxdepth 1 -type f -name '*.panic' -exec stat -c '%Y %n' {} + ; } 2>/dev/null
+    )
+"
+  done
+  printf '%s' "$rows" | grep -v '^$' | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+
+panic_scan() {
+  mkdir -p "$(dirname "$PANIC_LEDGER")" 2>/dev/null || true
+  local any_dir=0 d
+  for d in ${PANIC_DIRS//:/ }; do [ -d "$d" ] && any_dir=1; done
+  if [ "$any_dir" = 0 ]; then
+    printf 'panic-scan: unreadable (no panic directory among %s)\n' "$PANIC_DIRS" >&2
+    return 3
+  fi
+
+  local f; f="$(panic_newest)"
+  if [ -z "$f" ]; then printf 'panic-scan: none\n' >&2; return 0; fi
+
+  local base; base="$(basename "$f")"
+  if [ -f "$PANIC_LEDGER" ] && grep -qF "\"report\":\"$base\"" "$PANIC_LEDGER" 2>/dev/null; then
+    printf 'panic-scan: already recorded (%s)\n' "$base" >&2
+    return 0
+  fi
+  if [ ! -r "$f" ]; then
+    printf 'panic-scan: unreadable (%s)\n' "$base" >&2
+    return 3
+  fi
+
+  # BOUNDED read. A panic-full is 6.5 MB and this runs at daemon startup; head -c keeps it a fixed
+  # cost. The verdict lives in the first lines and the process table well inside the bound.
+  local body; body="$(head -c "$PANIC_HEAD_BYTES" "$f" 2>/dev/null)" || body=""
+
+  local verdict when uptime csrc census
+  verdict="$(printf '%s' "$body" | grep -ao 'Compressor Info:[^\\"]*' | head -1)"
+  when="$(printf '%s' "$body" | grep -ao '"timestamp":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  uptime="$(printf '%s' "$body" | grep -ao 'uptime[^,]*' | head -1)"
+
+  # The anchor is `"procname":"<comm>"`, READ OUT OF THE REAL REPORT rather than guessed. The first
+  # draft of this counted every quoted token and "found" a process table in a panic-base+socd report
+  # that provably has none — census_source read `report-process-table` over a census of JSON keys
+  # (`bug_type=2 socId=1`). That is the failure this field exists to make impossible, and it got
+  # past a reading of the code; only opening the artifact caught it. Verified on the live pair:
+  # panic-full-2026-08-09-034124 yields node/claude.exe; panic-base+socd-2026-08-09-041859 yields
+  # nothing at all, which is the correct answer for a report that carries no table.
+  census="$(printf '%s' "$body" \
+    | grep -ao '"procname":"[^"]\{1,40\}"' \
+    | sed 's/.*:"//; s/"$//' | sort | uniq -c | sort -rn | head -12 \
+    | awk '{printf "%s%s=%s", (NR>1?" ":""), $2, $1}')"
+  if [ -z "$census" ]; then
+    csrc="absent-no-process-table"
+  else
+    csrc="report-process-table"
+    # A census taken over a truncated report ranks by whatever fitted, which measured as an
+    # INVERTED culprit (bash over node). Say so rather than let the ranking be believed.
+    local sz; sz="$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo 0)"
+    case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+    [ "$sz" -gt "$PANIC_HEAD_BYTES" ] && csrc="report-process-table-TRUNCATED"
+  fi
+
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+         --arg report "$base" --arg pts "${when:-unknown}" --arg v "${verdict:-unknown}" \
+         --arg up "${uptime:-unknown}" --arg c "${census:-}" --arg cs "$csrc" \
+         --arg path "$f" \
+    '{ts:$ts,kind:"panic",report:$report,panicked_at:$pts,verdict:$v,uptime:$up,
+      census:$c,census_source:$cs,path:$path,
+      note:"recorded by compressor-sentinel at startup; macOS rotates the source report away"}' \
+    >> "$PANIC_LEDGER" 2>/dev/null || return 3
+
+  printf 'panic-scan: recorded %s — %s\n' "$base" "${verdict:-<no compressor line>}" >&2
+  return 0
+}
+
+if [ "$TICKS_PANIC_ONLY" = "1" ]; then
+  panic_scan; exit $?
+fi
+# NEVER let the post-mortem stop the sensor from starting: a reader for the LAST death must not
+# cost the evidence for the NEXT one.
+[ "$PANIC_SCAN" = "off" ] || panic_scan || true
 
 # ── main loop ─────────────────────────────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$LOG")" "$(dirname "$SNAP")" 2>/dev/null || true
