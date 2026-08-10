@@ -91,7 +91,13 @@ for _t in "$HOME"/.claude-2*/node_modules/@anthropic-ai/claude-code/bin/claude.e
   _sz="$(wc -c <"$_t" 2>/dev/null | tr -d ' ')"; case "$_sz" in ''|*[!0-9]*) _sz=0 ;; esac
   [ "$_sz" -lt 1000000 ] && continue
   _checked=$(( _checked + 1 ))
-  strings -a "$_t" 2>/dev/null | grep -q 'asyncRewake' || _bad="${_bad}${_t} "
+  # grep -aq DIRECTLY on the binary — never `strings | grep -q`. Measured 2026-08-10: under this
+  # file's `set -o pipefail`, grep -q exits at the first match, strings dies of SIGPIPE (141), and
+  # pipefail converts the SUCCESSFUL match into a refusal — this precondition refused BOTH healthy
+  # tracks on its first live run (the field provably present: grep -ac = 5). A -q reader early-exits
+  # by design, so it must own the read, not sit behind a pipe (kin of MEMORY.md
+  # verification-harness-vacuous-pass-traps: `bats|tail` = the PIPE's rc).
+  LC_ALL=C grep -aq 'asyncRewake' "$_t" 2>/dev/null || _bad="${_bad}${_t} "
 done
 if [ -n "$_bad" ]; then
   printf '0007: NOT registered — these installed tracks do NOT carry asyncRewake: %s\n' "$_bad" >&2
