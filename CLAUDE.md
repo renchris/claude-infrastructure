@@ -159,10 +159,10 @@ cc-await-ping "${ITERM_SESSION_ID##*:}"      # Bash run_in_background — event-
 documented by Anthropic (<https://code.claude.com/docs/en/goal>) and its condition wants three parts:
 **one measurable end state · the check that proves it · the constraint that must hold**. The evaluator
 is a separate TOOL-LESS model that re-judges after every turn and sees only what the session has
-PRINTED — so a condition resting on state the session never prints can never clear, and a condition
-naming an activity rather than an end state never terminates. A goal also dies with its session, so a
-recycle must re-arm it. Template + the three narrow exceptions → `commands/handoff.md` § Autonomous
-fire item 1.
+surfaced — assistant prose or a `tool_result`, so a command the session RUNS counts, but state it
+never surfaces at all is unreachable and the goal can never clear. A condition naming an activity
+rather than an end state never terminates. A goal also dies with its session, so a recycle must
+re-arm it. Template + the four narrow exceptions → `commands/handoff.md` § Autonomous fire item 1.
 
 Teammates remain correct **inside** such a session (that session is then the lead of its own team),
 and on the lead itself only when a wave's members must be synthesised against each other immediately
