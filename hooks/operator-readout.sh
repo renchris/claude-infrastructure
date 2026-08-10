@@ -126,6 +126,38 @@ IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 ACT_DIR="${CC_ACTIVATION_DIR:-$HOME/.claude/autonomy/pending-activation}"
 DEC_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
 BLG_FILE="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}"
+
+# ── backlog-fold cache (scaling-bottlenecks-2026-08-09 §5 P0-3, item d1b453ddf16e) ────────────
+# `cc-backlog list --json` folds the whole 2+ MB append-only JSONL through ~60 jq forks and was
+# 92% of the measured 3.7 s p50 Stop-path lag — paid at EVERY turn end by EVERY session. The
+# store is ONE append-only file, so (mtime,size) is an EXACT invalidator: every add/claim/done/
+# needs appends and moves both, and the next read misses. No TTL, no staleness window — the key
+# design the withdrawn wrap-ledger memo was re-scoped to (04-occupancy-b.md §6); it is sound
+# here because ONE file carries the whole fold, unlike the ledger's multi-store fingerprint.
+# Cache is box-shared by construction: the key embeds the store's identity, never the session's.
+blg_list_cached() {  # $1 = cc-backlog binary · $2.. = `list` args; stdout = its output
+  local bin="$1"; shift
+  local dir="${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.$UID}"
+  local key out tmp
+  key="$(stat -f '%m-%z' "$BLG_FILE" 2>/dev/null || true)"
+  if [ -z "$key" ]; then "$bin" list "$@" 2>/dev/null; return 0; fi   # unstattable store → live
+  # (mtime,size) is exact for THIS store because it is append-only (only `compact` rewrites,
+  # and compaction changes size); the path is in the key so distinct stores can never collide.
+  key="$key-$BLG_FILE-$*"; key="${key//[^A-Za-z0-9._-]/_}"
+  out="$dir/$key"
+  if [ -s "$out" ]; then cat "$out" 2>/dev/null && return 0; fi
+  mkdir -p "$dir" 2>/dev/null || { "$bin" list "$@" 2>/dev/null; return 0; }
+  tmp="$(mktemp "$dir/.w.XXXXXX" 2>/dev/null)" || { "$bin" list "$@" 2>/dev/null; return 0; }
+  "$bin" list "$@" 2>/dev/null > "$tmp" || true
+  if [ -s "$tmp" ]; then
+    mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"
+    cat "$out" 2>/dev/null || true
+  else
+    rm -f "$tmp"                                    # tool produced nothing → cache nothing
+  fi
+  find "$dir" -type f -mmin +240 -delete 2>/dev/null || true   # bound the dir (miss path only)
+}
+
 SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
 # A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
 # states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
@@ -374,7 +406,7 @@ render_block() {
     done
   fi
   if [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
-    "$blg" list --blocked --json 2>/dev/null | jq -r --arg sid "$SID" '
+    blg_list_cached "$blg" --blocked --json | jq -r --arg sid "$SID" '
       .[]?
       | (.title // "" | gsub("[\n\t]"; " ") | .[0:60]) as $t
       | (.needs // "" | gsub("[\n\t]"; " ") | .[0:90]) as $n
@@ -403,7 +435,7 @@ render_block() {
     q_proj="$(basename "$q_proj")"
   fi
   if [ -n "$q_proj" ] && [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
-    Q_N="$("$blg" list --open --json 2>/dev/null \
+    Q_N="$(blg_list_cached "$blg" --open --json \
       | jq --arg p "$q_proj" '[ .[]? | select(.status=="open" and .project==$p) ] | length' \
           2>/dev/null || echo 0)"
     case "$Q_N" in ''|*[!0-9]*) Q_N=0 ;; esac

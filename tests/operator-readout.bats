@@ -22,6 +22,10 @@ setup() {
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_BACKLOG_BIN="$BACKLOG"
+  # per-test fold-cache dir: the cache keys on (mtime,size,path) of the store, and fixture
+  # stores are REWRITTEN (not appended) — same-second same-size rewrites would alias across
+  # tests through the global default dir. Isolation per test removes the class.
+  export CC_ORB_BLG_CACHE_DIR="$BATS_TEST_TMPDIR/blg-cache"
   export WRAP_LEDGER_BIN="$REPO/scripts/wrap-ledger.sh"
   export WRAP_TRUNK="origin/main"
   # point the shared checkout at an EMPTY fixture by default → no deploy-lag step
@@ -673,6 +677,11 @@ mk4() { # the live shape, scaled down: N activations + N class-C decisions + N b
 _stub_backlog() {  # $1 = the JSON array `list --blocked --json` must emit
   printf '%s\n' "$1" > "$BATS_TEST_TMPDIR/blocked.json"
   export STUB_BLOCKED="$BATS_TEST_TMPDIR/blocked.json"
+  # Production invariant, mirrored: the fold is a pure function of the append-only store — any
+  # status change APPENDS to backlog.jsonl. The blg cache keys on the store's (mtime,size), so a
+  # stub whose OUTPUT changes while the store stands still is a state production cannot reach;
+  # append a byte here so every stub change is a store change, exactly as in the real ledger.
+  printf '\n' >> "$CC_BACKLOG_FILE"
   cat > "$BATS_TEST_TMPDIR/cc-backlog-stub" <<'EOS'
 #!/bin/bash
 # only two reads exist in the renderer: the blocked fold and the open-queue count.
@@ -773,7 +782,7 @@ hookrun_sid() { # $1=session_id $2=cwd
   printf '%s' "$msg" | head -1 | grep -q 'OPERATOR ▸ 1 step(s) are yours · ✅ live on trunk' || false
   printf '%s' "$msg" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-6' || false
   # control: the SAME repo with no session-filed step is silent, so the fire came from `yours`
-  : > "$STUB_BLOCKED"; printf '[]\n' > "$STUB_BLOCKED"
+  _stub_backlog "[]"       # through the helper, so the store-append invariant holds (blg cache)
   export CC_OPREADOUT_STATE_DIR="$BATS_TEST_TMPDIR/state2"
   [ -z "$(hookrun_sid S6 "$w")" ]
 }
@@ -981,4 +990,49 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   [ -f "$argv" ]
   grep -q -- '--offline' "$argv" || false
   grep -q -- '--dry-run' "$argv" || false
+}
+
+# ── blg_list_cached — the backlog-fold cache (scaling-bottlenecks-2026-08-09 §5 P0-3) ─────────
+
+@test "blg cache: two reads of an unchanged store fold once; an append re-folds" {
+  fn="$BATS_TEST_TMPDIR/fn.sh"
+  sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
+  [ -s "$fn" ]   # extraction anchor still present — renames must update this test
+  stub="$BATS_TEST_TMPDIR/blg-stub"
+  printf '#!/bin/bash\necho x >> "$COUNT_FILE"\necho "[{\\"id\\":\\"i1\\"}]"\n' > "$stub"
+  chmod +x "$stub"
+  export COUNT_FILE="$BATS_TEST_TMPDIR/count"; : > "$COUNT_FILE"
+  store="$BATS_TEST_TMPDIR/blg-cache-store.jsonl"; printf '{"a":1}\n' > "$store"
+  run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json; blg_list_cached '$stub' --blocked --json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"id":"i1"'*'"id":"i1"'* ]] || false # both reads returned the fold
+  [ "$(wc -l < "$COUNT_FILE" | tr -d ' ')" = "1" ]  # ONE underlying fold for two reads
+  printf '{"a":2}\n' >> "$store"                    # append moves (mtime,size) → exact miss
+  run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$COUNT_FILE" | tr -d ' ')" = "2" ]
+}
+
+@test "blg cache: distinct list args never share an entry" {
+  fn="$BATS_TEST_TMPDIR/fn.sh"
+  sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
+  stub="$BATS_TEST_TMPDIR/blg-stub2"
+  printf '#!/bin/bash\nshift\necho "ARGS:$*"\n' > "$stub"; chmod +x "$stub"
+  store="$BATS_TEST_TMPDIR/blg-args-store.jsonl"; printf '{"a":1}\n' > "$store"
+  run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json; blg_list_cached '$stub' --open --json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ARGS:--blocked --json"* ]] || false
+  [[ "$output" == *"ARGS:--open --json"* ]]
+}
+
+@test "blg cache: a failing tool caches nothing and yields empty (matches the uncached contract)" {
+  fn="$BATS_TEST_TMPDIR/fn.sh"
+  sed -n '/^blg_list_cached()/,/^}/p' "$HOOK" > "$fn"
+  stub="$BATS_TEST_TMPDIR/blg-stub3"
+  printf '#!/bin/bash\nexit 1\n' > "$stub"; chmod +x "$stub"
+  store="$BATS_TEST_TMPDIR/blg-fail-store.jsonl"; printf '{"a":1}\n' > "$store"
+  run bash -c "BLG_FILE='$store'; . '$fn'; blg_list_cached '$stub' --blocked --json"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ -z "$(find "$CC_ORB_BLG_CACHE_DIR" -type f ! -name '.w.*' 2>/dev/null)" ]
 }
