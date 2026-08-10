@@ -115,6 +115,49 @@ check_real_flag() {
   fi
 }
 
+# ── LIVE-/goal guard: a PARKED background watcher disables an armed /goal ─────────────────────────
+# CC's Stop handler deletes the /goal Stop hook at any Stop where the task registry holds a
+# non-terminal local_bash task, then restores it in a `finally` — the registry always LOOKS healthy
+# while the goal is silently skipped (measured on 2.1.220; docs/research/goal-in-handoff-2026-08-08.md
+# § RESOLVED). `cc-await-ping` armed via Bash(run_in_background) is exactly such a task, parked for
+# hours by design — and CLAUDE.md § Agent Teams instructs that arm, so a goal-armed session
+# sabotages its own goal unless the act's own tool call is gated
+# (MEMORY.md enforcement-must-live-at-the-chokepoint). Scope, deliberately narrow: ONLY
+# cc-await-ping + run_in_background:true + a LIVE goal. A foreground cc-await-ping (cc-wait's use)
+# is terminal by the time any Stop happens; an ordinary background build/subagent settles and its
+# completion re-invokes the model — both are correct deferrals, untouched. Fail OPEN on any read
+# failure: a false deny would strand a goal-less session's only wake path.
+# COMMAND-POSITION, not substring: a background `rg 'cc-await-ping' …` is a search that settles in
+# seconds, not a parked watcher — substring matching would deny it and teach a falsehood. The two
+# real arm spellings every instruction site uses are the bare name in first position and a path
+# ending in bin/cc-await-ping; a compound-command evasion merely falls open, which is this guard's
+# declared fail direction. (MEMORY.md denylist-enumerates-spellings: match what GOVERNS, here the
+# executed token, never the byte-string.)
+_gg_hit=0
+_gg_first="${CMD%%[[:space:]]*}"
+case "$_gg_first" in *cc-await-ping) _gg_hit=1 ;; esac
+[[ "$CMD" == *bin/cc-await-ping* ]] && _gg_hit=1
+if [[ "$_gg_hit" == 1 ]]; then
+  _gg_bg="$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)"
+  if [[ "$_gg_bg" == "true" ]]; then
+    _gg_tp="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
+    _gg_lib="$LIB_DIR/goal-state.sh"
+    [[ -f "$_gg_lib" ]] || _gg_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
+    [[ -f "$_gg_lib" ]] || _gg_lib="$HOME/.claude/hooks/lib/goal-state.sh"
+    if [[ -f "$_gg_lib" ]]; then
+      # shellcheck source=lib/goal-state.sh
+      # shellcheck disable=SC1091  # runtime-resolved fallback chain
+      source "$_gg_lib" 2>/dev/null || true
+    fi
+    if command -v goal_live_condition >/dev/null 2>&1; then
+      _gg_cond="$(goal_live_condition "$_gg_tp" 2>/dev/null)" || _gg_cond=""
+      if [[ -n "$_gg_cond" ]]; then
+      deny "A /goal is LIVE in this session (\"${_gg_cond:0:120}\"), and a PARKED background watcher would silently disable it: Claude Code skips /goal evaluation at every Stop while a non-terminal background Bash exists (the registry is restored afterwards, so nothing ever looks wrong). Do not arm cc-await-ping here. You are not deaf without it — the goal blocks your stops, so you keep taking turns and mailbox-drain delivers peer mail at every turn boundary; the birth watcher (mailbox-wake-arm, asyncRewake) also wakes a genuinely idle session WITHOUT entering the task registry. If you need a cross-turn continuation lever, use: ~/.claude/hooks/session-continue.sh set \"<next step>\" — it is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
+      fi
+    fi
+  fi
+fi
+
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,

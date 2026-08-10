@@ -348,6 +348,34 @@ an embedded newline that must not leak into the operator line"
   [ "$msg" = "ABSENT" ] || false   # a per-turn human line would bury the operator's own output
 }
 
+# ── GOAL-AWARE NAG (2026-08-10) — never instruct the arm that disables a LIVE /goal ──────────────
+# CC skips /goal evaluation at any Stop where a non-terminal background Bash exists
+# (docs/research/goal-in-handoff-2026-08-08.md § RESOLVED). The cc-await-ping arm this nag used to
+# hand every unwatched session is exactly such a task — so with a goal live, the nudge must WARN
+# AGAINST arming, and must not carry a pasteable arm command at all.
+
+@test "goal-aware: LIVE /goal ⇒ the nudge warns AGAINST arming (no arm command, no run_in_background)" {
+  T="$BATS_TEST_TMPDIR/goal-t.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish the rollout"}}\n' > "$T"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [ "$ctx" != "null" ] || false
+  printf '%s' "$ctx" | grep -q 'do NOT arm' || false
+  ! printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
+  ! printf '%s' "$ctx" | grep -q 'cc-await-ping --timeout' || false
+}
+
+@test "goal-aware DISCRIMINATOR: a MET goal restores the ordinary arm nudge (last record wins)" {
+  T="$BATS_TEST_TMPDIR/goal-t.jsonl"
+  { printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish"}}\n'
+    printf '{"type":"attachment","attachment":{"type":"goal_status","met":true,"condition":"finish","iterations":1}}\n'
+  } > "$T"
+  run bash -c 'printf "{\"transcript_path\":\"%s\"}" "$1" | "$0" prompt' "$DRAIN" "$T"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'run_in_background=true' || false
+}
+
 @test "RED-PROOF: the pre-fix drain from origin/main emits NOTHING on an empty unwatched inbox" {
   local old="$BATS_TEST_TMPDIR/pre"; mkdir -p "$old"
   git -C "$REPO" archive origin/main hooks | tar -x -C "$old" || skip "origin/main unavailable"

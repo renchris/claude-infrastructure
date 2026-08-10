@@ -56,6 +56,19 @@ _lib="$_scd/lib/mailbox-pending.sh"
 # shellcheck disable=SC1091
 . "$_lib" 2>/dev/null || exit 0
 
+# goal-state lib (LIVE-/goal predicate). The wake-path nag below must never instruct the exact arm
+# that DISABLES an armed /goal (CC skips goal evaluation at any Stop with a non-terminal background
+# Bash — docs/research/goal-in-handoff-2026-08-08.md). Optional: absent → the nag keeps its
+# pre-goal-aware form.
+_glib="$_scd/lib/goal-state.sh"
+[ -f "$_glib" ] || _glib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
+[ -f "$_glib" ] || _glib="$HOME/.claude/hooks/lib/goal-state.sh"
+if [ -f "$_glib" ]; then
+  # shellcheck source=lib/goal-state.sh
+  # shellcheck disable=SC1091
+  . "$_glib" 2>/dev/null || true
+fi
+
 command -v jq >/dev/null 2>&1 || exit 0
 
 # ── M1 (v2): READ the stdin JSON instead of discarding it ─────────────────────────────────────────
@@ -69,6 +82,7 @@ _stdin_json="$(cat 2>/dev/null || true)"
 own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
 own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
+own_tp="$(printf '%s' "$_stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
 # THE PANE IS STILL REQUIRED — it is how this hook knows WHICH container it is in, and the alias trail
 # is keyed on it. A missing/garbage pane is the one unrecoverable case (exit 0, as before).
@@ -257,8 +271,22 @@ mailbox_wake_armed "$own_uuid" && _watched=1
 # ${ITERM_SESSION_ID##*:}, which is the SAME expression cc-notify uses to resolve a target, and it
 # then covers that key's whole set (lib → mailbox_keyset). There is no longer an id here to get wrong.
 _armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-14400} --interval 15"
-[ "$_watched" = 1 ] || nudge="
+# GOAL-AWARE (2026-08-10, docs/research/goal-in-handoff-2026-08-08.md § RESOLUTION). With a LIVE
+# /goal, the arm this nag used to instruct is the exact act that disables the goal: a parked
+# background Bash makes CC skip /goal evaluation at every Stop, silently. A goal-driven session is
+# not deaf unarmed either — an unmet evaluation blocks the stop, so the session keeps taking turns
+# and this very hook drains its mail at each boundary. So: warn AGAINST arming instead of for it.
+_goal_cond=""
+if command -v goal_live_condition >/dev/null 2>&1; then
+  _goal_cond="$(goal_live_condition "$own_tp" 2>/dev/null)" || _goal_cond=""
+fi
+if [ -n "$_goal_cond" ]; then
+  [ "$_watched" = 1 ] || nudge="
+(correct here — do NOT arm one: a /goal is LIVE, and Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, so a parked cc-await-ping would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces.)"
+else
+  [ "$_watched" = 1 ] || nudge="
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
+fi
 
 # EMPTY INBOX — nothing to deliver, but this is still a boundary at which we can see the session has
 # no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
