@@ -16,20 +16,31 @@
 # `merge --ff-only TARGET` (never origin/main) → run install.sh (idempotent) → POST-DEPLOY HOST
 # CHECKS (§4.3) → report the un-stamped commits still queued above the deployed tip.
 #
-# TARGET SELECTION IS TWO-TIER WITH A BLOCKED FLOOR (DEPLOY_LANE_GROUND_UP §2.2). A single
+# TARGET SELECTION IS THREE-TIER WITH A BLOCKED FLOOR (DEPLOY_LANE_GROUND_UP §2.2, + T1H from
+# backlog b4f93c9fa73c). A single
 # green-only tier deadlocks BY CONSTRUCTION: the verifier emits 0.17 greens/day while trunk moves
 # ~63 commits/day, so the green pointer permanently LAGS, and the moment any other writer advances
 # live HEAD past it (~/.claude is per-file symlinks, so every land does) the target is history and
 # this script refuses forever. Measured 2026-08-07: 534 identical refusals, launchd runs=276 every
 # one exit 1, live layer 91 commits stale, ZERO pages. The green gate is NOT deleted — it answers a
 # named incident (the raw `git pull --ff-only` above) — it is given a DEGRADATION PATH:
-#   T1 VERIFIED  newest GREEN tree that is a DESCENDANT of live HEAD → advance, silent (unchanged)
-#   T2 DEGRADED  T1 empty AND lag past budget → newest commit above live HEAD carrying no RED
-#                stamp → advance under a LOUD banner + a page recording the unverified advance
-#   T3 BLOCKED   every commit above live HEAD is RED → refuse + page ("trunk is red all the way
-#                down" is real information; the old single tier could not tell it from "no stamps")
-# Stamp semantics under T2, applying R6 where the land path already honors it: absent ⇒ eligible ·
-# cut/hung ⇒ eligible (a NON-VERDICT is not a red) · red ⇒ ineligible, walk back one commit.
+#   T1  VERIFIED  newest GREEN tree that is a DESCENDANT of live HEAD → advance, silent (unchanged)
+#   T1H HERMETIC  T1 empty → newest commit above live HEAD whose tree carries an OFF-BOX green over
+#                 the hermetic subset AND no on-box RED → advance under a banner NAMING the reduced
+#                 scope. No lag budget: T1H advances on a POSITIVE result, so making it wait on a
+#                 clock the way T2 must would hold a proven tree hostage. The `no on-box RED`
+#                 conjunct is load-bearing — the machine-coupled suites are exactly this producer's
+#                 blind spot, so an on-box red saw something it structurally cannot.
+#   T2  DEGRADED  T1 and T1H empty AND lag past budget → newest commit above live HEAD carrying no
+#                 RED stamp → advance under a LOUD banner + a page recording the unverified advance
+#   T3  BLOCKED   every commit above live HEAD is RED → refuse + page ("trunk is red all the way
+#                 down" is real information; the old single tier could not tell it from "no stamps")
+# Stamp semantics under T1H and T2, applying R6 where the land path already honors it: absent ⇒
+# eligible · cut/hung ⇒ eligible (a NON-VERDICT is not a red) · red ⇒ ineligible, walk back one.
+# WHY T1H EXISTS AT ALL: T1's producer emits 0.17 greens/day, so the healthy silent path is
+# unreachable in practice and every advance has to come through T2's absence-of-evidence door. T1H
+# is a SECOND producer for the same ladder — same fail-closed shape, positive evidence, narrower
+# claim, and it says so out loud on every advance rather than passing itself off as T1.
 #
 # --auto (LAND_PIPELINE_V2 §4.3) makes the same fail-closed decision AUTONOMOUSLY, on a launchd
 # tick every 600s. Three deltas, all of them consequences of running 144×/day unattended:
@@ -71,6 +82,17 @@ set -uo pipefail
 DEPLOY_REPO="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
 POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 STAMPS_DIR="$POSTLAND_DIR/stamps"
+# The SECOND green producer's store, deliberately NOT $STAMPS_DIR (backlog b4f93c9fa73c). Every
+# consumer of stamps/ reads `.verdict` and nothing else — no producer field exists there and the
+# `suites` scope field is checked by nobody — so a hermetic-SUBSET green written into stamps/ would
+# be indistinguishable from a full-corpus one and would silently become a T1 target. Separate
+# directory, separate reader, separate tier: T1H below is the ONE place the weaker claim is spent.
+OFFBOX_DIR="${CC_OFFBOX_STAMPS:-$POSTLAND_DIR/offbox}"
+OFFBOX_PULL_BIN="${CC_OFFBOX_PULL_BIN:-$DEPLOY_REPO/scripts/offbox-green-pull.sh}"
+OFFBOX_PULL_BOUND_S="${CC_DEPLOY_OFFBOX_PULL_S:-60}"
+# T1H's kill switch, same shape and spellings as CC_DEPLOY_DEGRADE. Off ⇒ the ladder is exactly the
+# T1/T2/T3 it was before this producer existed.
+OFFBOX="${CC_DEPLOY_OFFBOX:-on}"
 POSTLAND_BIN="${CC_POSTLAND_BIN:-$DEPLOY_REPO/scripts/postland-verify.sh}"
 PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 SCAN_N="${CC_DEPLOY_SCAN:-200}"
@@ -197,6 +219,30 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
     return 1
   fi
   grep -qE '"verdict"[[:space:]]*:[[:space:]]*"red"' "$1" 2>/dev/null
+}
+
+# T1H's eligibility test — a THIRD reader, for the same reason is_red is a second one: is_green sits
+# on the DEFAULT path and must not be reshaped to serve a weaker caller.
+#
+# IT CHECKS THE SCOPE, WHICH is_green DOES NOT. The on-box store has no producer field and no
+# consumer that checks corpus scope, so `verdict:"green"` there means whatever the writer meant. Here
+# the claim is explicitly narrower, so the reader demands the narrower claim be SPELLED: a record
+# must say BOTH `verdict:"green"` AND `scope:"offbox-hermetic"`. A record that says only the first —
+# a full-corpus stamp copied into this directory, or a future producer with a different scope — is
+# NOT eligible. Without that clause this reader would accept any green from any producer that ever
+# learns to write here, which is the conflation the separate directory exists to prevent.
+is_offbox_green() { # <offbox-stamp-file>
+  [ -f "$1" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+    sys.exit(0 if d.get("verdict") == "green" and d.get("scope") == "offbox-hermetic" else 1)
+except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
+    return 1
+  fi
+  grep -qE '"verdict"[[:space:]]*:[[:space:]]*"green"' "$1" 2>/dev/null \
+    && grep -qE '"scope"[[:space:]]*:[[:space:]]*"offbox-hermetic"' "$1" 2>/dev/null
 }
 
 # ── post-deploy HOST checks (§4.3) ───────────────────────────────────────────────────────────────
@@ -479,6 +525,22 @@ elif [ "$LAG_HOURS" -gt "$MAX_LAG_HOURS" ]; then
   LAG_TRIP="${LAG_HOURS}h since the live commit was authored (budget ${MAX_LAG_HOURS}h)"
 fi
 
+# ── PULL THE OFF-BOX VERDICT, BOUNDED AND FAIL-OPEN (backlog b4f93c9fa73c) ───────────────────────
+# GitHub cannot write to this machine, so the second producer's last mile is a pull, and this is the
+# only scheduled thing that runs often enough to be it (144x/day) without adding a launchd job — an
+# addition that would be C10 and operator-gated, i.e. a producer parked behind a manual step.
+# EVERY failure here is a no-op: the puller exits 0 on a missing gh, a locked keychain, no network,
+# a rate limit or an unparseable response, and this call is bounded on top of the puller's own two
+# bounds. Skipped under --offline, which is decision-only by contract and must touch no network.
+if [ "$OFFLINE" -eq 0 ] && [ -x "$OFFBOX_PULL_BIN" ]; then
+  case "$OFFBOX" in
+    off|OFF|0|no|NO|false|FALSE) : ;;
+    # gate_bounded: the bound is the point — a hung pull must never become a deploy refusal, so the
+    # rc is discarded deliberately rather than checked.
+    *) bounded "$OFFBOX_PULL_BOUND_S" "$OFFBOX_PULL_BIN" --quiet >/dev/null 2>&1 || true ;;
+  esac
+fi
+
 TARGET=""; UNSTAMPED=0; BANNER=""; TIER=""; GREEN_SHA=""; RED_WALKED=0
 if [ ! -d "$STAMPS_DIR" ]; then
   # The verification net is not active yet. Deploying is a decision, not a default.
@@ -572,12 +634,48 @@ EOF
       RMSG="no GREEN stamp among the newest $SCAN_N commits of origin/main"
     fi
 
+    # ── T1H · HERMETICALLY VERIFIED — positive evidence, narrower scope (backlog b4f93c9fa73c) ────
+    # Sits between T1 and T2 because it is strictly more evidence than T2 and strictly less than T1:
+    #   T1  a FULL-corpus green on this tree           → advance, silent
+    #   T1H an OFF-BOX green over the HERMETIC subset,  → advance, BANNERED (the scope is named)
+    #       and no on-box RED on the same tree
+    #   T2  no red at all, i.e. the ABSENCE of evidence → advance, LOUD + a page
+    #
+    # NOT GATED ON THE LAG BUDGET, and that is the deliberate difference from T2. T2's budget exists
+    # because T2 advances on absence — it must wait until staleness outweighs having no proof at all.
+    # T1H advances on a POSITIVE result, so making it wait for the same budget would hold a proven
+    # tree hostage to a clock, and produce exactly the freeze this whole rebuild was for.
+    #
+    # THE `is_red` CONJUNCT IS LOAD-BEARING, NOT BELT-AND-BRACES. The hermetic subset is defined by
+    # excluding the machine-coupled suites, so those failures are precisely its blind spot. If the
+    # on-box verifier has actually judged this tree RED, it saw something this producer cannot, and
+    # the off-box acquittal must not overrule it. Absent / cut / hung stay eligible, per R6 — the
+    # same reading is_red already gives T2.
+    if [ -z "$TARGET" ] && [ "$LAG_COMMITS" -gt 0 ]; then
+      case "$OFFBOX" in
+        off|OFF|0|no|NO|false|FALSE) : ;;
+        *)
+          while IFS=' ' read -r sha tree; do
+            [ -n "$sha" ] || continue
+            [ -n "$tree" ] || continue
+            if is_offbox_green "$OFFBOX_DIR/$tree.json" && ! is_red "$STAMPS_DIR/$tree.json"; then
+              TARGET="$sha"; TIER=T1H
+              BANNER="HERMETIC deploy — $RMSG; taking ${sha:0:12}, acquitted OFF-BOX over the hermetic subset only (the machine-coupled suites are NOT covered by this verdict)"
+              break
+            fi
+          done <<EOF
+$(g log --format='%H %T' -n "$SCAN_N" "$HEAD_SHA..origin/main" 2>/dev/null)
+EOF
+          ;;
+      esac
+    fi
+
     # ── T2 · DEGRADED — authorised by the LAG, never by the reason ────────────────────────────────
     # Three preconditions, and the third is not redundant: with LAG_COMMITS=0 there is nothing above
     # live HEAD to degrade TO, while LAG_HOURS keeps climbing on a quiet trunk — so without it the
     # hours budget would fire forever against an empty candidate list and report T3's "trunk is red
     # all the way down" about a trunk that is simply already deployed.
-    if [ "$LAG_COMMITS" -gt 0 ] && [ -n "$LAG_TRIP" ]; then
+    if [ -z "$TARGET" ] && [ "$LAG_COMMITS" -gt 0 ] && [ -n "$LAG_TRIP" ]; then
       case "$DEGRADE" in
         off|OFF|0|no|NO|false|FALSE) : ;;   # the kill switch: strict green-only gate, freeze included
         *)
