@@ -1742,3 +1742,29 @@ every request — so a regression is convicted for asking the wrong endpoint, no
 the wrong thing. The two halves of the pair are pinned by separate fixtures; a single
 "acceptance failed" test would go green the moment the tool stopped reading whichever half the
 fixture did not move.
+
+⚠️ **THE LAST STEP IS NOT `cc-offload land`, AND THAT IS A POLICY WALL RATHER THAN A BUG.** The VM
+authors its commit as `noreply@anthropic.com`, which is not a GitHub account — so it renders as a
+permanently unattributed grey user, and this repo's identity gate refuses to push such a range on
+purpose. `cc-offload land` therefore cannot finish a cloud round trip here, and the way it fails is
+misleading: the identity block prints as *guidance* and the run then exits **7 (push non-ff)**, so it
+reads as an ordinary land race and invites a retry that can never succeed. It was retried twice
+before the identity line was read.
+
+The landing move is a **cherry-pick onto your own branch, re-authored, with the provenance in
+trailers** (`Cloud-session:` / `Original-commit:` / `Original-branch:` — *not* `Co-authored-by:`,
+which the commit-msg hook blocks as an AI-authorship trailer). The VM's original branch and sha stay
+on origin, so nothing is lost, and the history reads as a person's. Landed that way as `8e625e7b`.
+
+⚠️ Second trap on that path: a failed land leaves a **rebased local branch of the same name in the
+shared checkout**, and the next `cc-offload land` refuses it as *"diverged, or checked out in a
+worktree"* rather than re-fetching. Deleting that stale local ref is safe — origin still holds the
+original — but a reconciler that cannot self-heal from its own failed attempt will keep reporting a
+second, different failure for a first-failure cause.
+
+**Where this arm stops today:** the work lands on **trunk**, not on the live `~/.claude` layer. The
+two files this changed (`scripts/cloud-create-api.py`, `bin/cc-offload`) are per-file symlinks into
+the shared checkout, which sits 15 commits behind trunk, and `deploy-live.sh` is fail-closed —
+*"no GREEN tree is a DESCENDANT of live HEAD"*. That is the already-filed bootstrap circle
+(`3df911c0470e`, `7d6b462a468c`), not anything this section introduced, and a raw fast-forward is
+recorded as the wrong remedy (`04470b5d` — it wedges deploy and resets both legs of the alarm).
