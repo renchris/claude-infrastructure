@@ -243,3 +243,217 @@ field() { # <key> → the value from the verdict line
 @test "the label is DECLARED in launchd/fleet.manifest (a plist without a row reds cc-fleet)" {
   grep -q '^com.claude.worktree-gc-infra *|' "$REPO_ROOT/launchd/fleet.manifest"
 }
+
+# ── EFFECT, NOT EXIT CODE (master 66ef300dd0b4 — fleet footprint) ────────────────
+# The wrapper already refuses to call lock contention a success. These pin the same instinct on
+# the quantity that actually matters: `verdict=ok removed=65 kept=126` was TRUE on 2026-08-06 and
+# the population was 558 three days later, so a sweep's own numbers cannot stand in for the count.
+# Every case below fixtures the worktree root, so none of them reads the real box.
+
+# The shared root holds THREE repos' worktrees and only ours are reapable here, so `pop_root` sets
+# the FOOTPRINT and `own_root` sets how many of them git reports as OURS. Keeping them separate is
+# the whole point of the correction: a ceiling on the total alarmed on a healthy box for 142
+# directories this janitor cannot touch.
+own_root() { # <n> — make the stubbed git report n registered worktrees under the fixtured root
+  cat > "$BIN/git" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$GITARGV"
+if [ "\$*" = "${CC_WTGC_INFRA_REPO:-x} worktree list --porcelain" ] || case "\$*" in *"worktree list"*) true ;; *) false ;; esac; then
+  i=0; while [ "\$i" -lt $1 ]; do echo "worktree $CC_WTGC_INFRA_WT_ROOT/w\$i"; i=\$((i+1)); done
+fi
+exit 0
+EOF
+  chmod +x "$BIN/git"
+}
+
+pop_root() { # <n> — a fixtured worktree root holding n directories
+  export CC_WTGC_INFRA_WT_ROOT="$BATS_TEST_TMPDIR/wtroot"
+  rm -rf "$CC_WTGC_INFRA_WT_ROOT"; mkdir -p "$CC_WTGC_INFRA_WT_ROOT"
+  local i=0; while [ "$i" -lt "$1" ]; do mkdir -p "$CC_WTGC_INFRA_WT_ROOT/w$i"; i=$((i+1)); done
+}
+
+@test "population is on EVERY verdict row, including the ones that swept nothing" {
+  pop_root 4
+  mkdir -p "$(dirname "$DISABLED")"; touch "$DISABLED"
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'verdict=disabled' "$LAST"
+  grep -q 'pop=4' "$LAST"          # the row that read healthy for three days now carries the count
+}
+
+@test "population counts DIRECTORIES, not the janitor's registrations" {
+  pop_root 6
+  run bash "$SUT"
+  grep -q 'pop=6' "$LAST"
+}
+
+@test "a sweep that leaves the population over the ceiling is over-ceiling, NEVER ok" {
+  pop_root 9; own_root 9
+  export CC_WTGC_INFRA_CEILING=5
+  run bash "$SUT"
+  [ "$status" -eq 3 ]
+  grep -q 'verdict=over-ceiling' "$LAST"
+  grep -q 'pop_after=9' "$LAST"
+  ! grep -q 'verdict=ok' "$LAST" || false
+}
+
+# THE CORRECTION, pinned. The root is shared; a total over the ceiling that is entirely OTHER
+# repos' worktrees is reported and NOT alarmed on — this janitor cannot reap them, and an alarm
+# over something it cannot act on is the polarity defect that fires forever and carries no bits.
+@test "over-ceiling judges OUR worktrees, never the shared root's foreign ones" {
+  pop_root 9; own_root 1
+  export CC_WTGC_INFRA_CEILING=5
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'verdict=ok' "$LAST"
+  grep -q 'pop=9' "$LAST"
+  grep -q 'pop_owned=1' "$LAST"
+  grep -q 'pop_foreign=8' "$LAST"      # the footprint is still REPORTED, just not alarmed on
+}
+
+@test "the same sweep UNDER the ceiling is a plain ok carrying the before/after delta" {
+  pop_root 3
+  export CC_WTGC_INFRA_CEILING=50
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'verdict=ok' "$LAST"
+  grep -q 'pop_before=3' "$LAST"
+  grep -q 'pop_delta=0' "$LAST"
+}
+
+# The ceiling must be a CEILING, not a target: worktree-gc.sh legitimately KEEPs live, dirty and
+# owned trees, so an alarm that fires at the normal resting count carries no bits at all
+# (memory: alarm-polarity-and-attention-budget). This is that alarm's negative control.
+@test "over-ceiling does not fire in observe mode (a dry run removes nothing by construction)" {
+  pop_root 9
+  export CC_WTGC_INFRA_CEILING=5 WTGC_OBSERVE=1
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'verdict=ok' "$LAST"
+}
+
+@test "a previous run that died mid-sweep is REPORTED, not silently self-healed away" {
+  pop_root 2
+  mkdir -p "$HOME/.claude/state/worktree-gc-infra.lock"
+  echo 999999 > "$HOME/.claude/state/worktree-gc-infra.lock/pid"      # above PID_MAX ⇒ never live
+  echo "2026-08-08 04:15:00" > "$HOME/.claude/state/worktree-gc-infra.lock/started"
+  run bash "$SUT"
+  grep -q 'prev=died-mid-sweep' "$LAST"
+  grep -q 'prev_pid=999999' "$LAST"
+  grep -q 'prev_started=2026-08-08' "$LAST"
+}
+
+@test "a CLEAN previous run leaves no death note (the positive control for the rung above)" {
+  pop_root 2
+  run bash "$SUT"
+  ! grep -q 'died-mid-sweep' "$LAST" || false
+}
+
+@test "missed windows are measured from the last row's AGE — absence leaves no row to read" {
+  pop_root 2
+  mkdir -p "$(dirname "$LAST")"
+  echo "2026-08-06 04:15:00  verdict=ok" > "$LAST"
+  touch -t 202608060415 "$LAST"
+  export CC_WTGC_INFRA_STALE_HOURS=1
+  run bash "$SUT"
+  grep -q 'missed_windows_h=' "$LAST"
+}
+
+# 2026-08-07 exactly: reso's 03:15 sweep ran past 04:15, this one exited `skipped`, and the next
+# chance was 24 hours away. A bounded backoff recovers that night; unbounded would be a spin.
+@test "janitor-lock contention is RETRIED, and the contended-attempt count is recorded" {
+  pop_root 2
+  stub_gc 0 'worktree-gc: another pass holds /tmp/x.lock — skipping (no concurrent worktree mutation).'
+  export CC_WTGC_INFRA_LOCK_RETRIES=3 CC_WTGC_INFRA_LOCK_BACKOFF=0
+  run bash "$SUT"
+  [ "$(grep -c . "$ARGV")" -eq 3 ]                 # invoked 3x, not once
+  grep -q 'verdict=skipped' "$LAST"
+  grep -q 'lock_attempts=3' "$LAST"
+}
+
+@test "the retry is BOUNDED — a permanently held lock can never become a spin" {
+  pop_root 2
+  stub_gc 0 'worktree-gc: another pass holds /tmp/x.lock — skipping (no concurrent worktree mutation).'
+  export CC_WTGC_INFRA_LOCK_RETRIES=2 CC_WTGC_INFRA_LOCK_BACKOFF=0
+  run bash "$SUT"
+  [ "$(grep -c . "$ARGV")" -eq 2 ]
+}
+
+@test "only CONTENTION is retried — a real janitor error falls straight through" {
+  pop_root 2
+  stub_gc 3 'worktree-gc: no liveness oracle'
+  export CC_WTGC_INFRA_LOCK_RETRIES=3 CC_WTGC_INFRA_LOCK_BACKOFF=0
+  run bash "$SUT"
+  [ "$(grep -c . "$ARGV")" -eq 1 ]
+  grep -q 'verdict=blind' "$LAST"
+}
+
+# ── --assert: the on-demand effect read ─────────────────────────────────────────
+@test "--assert is READ-ONLY: it sweeps nothing, takes no lock and writes no verdict row" {
+  pop_root 2
+  run bash "$SUT" --assert
+  [ ! -f "$ARGV" ]                                  # janitor never invoked
+  [ ! -e "$HOME/.claude/state/worktree-gc-infra.lock" ]
+  [ ! -f "$LAST" ]
+}
+
+@test "--assert is OK only when the population is bounded AND the verdict is fresh" {
+  pop_root 3
+  export CC_WTGC_INFRA_CEILING=50
+  mkdir -p "$(dirname "$LAST")"; echo "x verdict=ok" > "$LAST"
+  run bash "$SUT" --assert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK bounded and fresh"* ]]
+}
+
+@test "--assert BREACHES on an over-ceiling population" {
+  pop_root 9; own_root 9
+  export CC_WTGC_INFRA_CEILING=5
+  mkdir -p "$(dirname "$LAST")"; echo "x verdict=ok" > "$LAST"
+  run bash "$SUT" --assert
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"BREACH our worktrees 9 > ceiling 5"* ]]
+}
+
+@test "--assert reports the foreign share but does not breach on it" {
+  pop_root 9; own_root 2
+  export CC_WTGC_INFRA_CEILING=5
+  mkdir -p "$(dirname "$LAST")"; echo "x verdict=ok" > "$LAST"
+  run bash "$SUT" --assert
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(ours=2 foreign=7)"* ]]
+}
+
+# A stale sensor is NOT a healthy one. This is the exact state the box was in for three days.
+@test "--assert BREACHES on a stale verdict even when the population is fine" {
+  pop_root 3
+  export CC_WTGC_INFRA_CEILING=50 CC_WTGC_INFRA_STALE_HOURS=1
+  mkdir -p "$(dirname "$LAST")"; echo "x verdict=ok" > "$LAST"; touch -t 202608060415 "$LAST"
+  run bash "$SUT" --assert
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"the janitor is not running"* ]]
+}
+
+# "Never ran" and "ran and was fine" must not share an exit code — one value meaning both
+# "answered no" and "could not ask" is what fabricated 80/156 findings elsewhere in this repo.
+@test "--assert BREACHES when the janitor has NEVER recorded a verdict" {
+  pop_root 3
+  export CC_WTGC_INFRA_CEILING=50
+  run bash "$SUT" --assert
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"has never demonstrably run"* ]]
+}
+
+# The regression the kill-switch case caught (2026-08-09): pop_owned needs `git worktree list`,
+# and a switch whose whole promise is inertness must not start shelling out because a new field
+# wanted a number. The rows that fire before the run commits to sweeping say pop_owned=n-a — an
+# honest "not measured", never a 0 that would read as "we own none of them".
+@test "the kill switch stays git-free, and its row says n-a rather than a fake 0" {
+  pop_root 4
+  mkdir -p "$(dirname "$DISABLED")"; touch "$DISABLED"
+  run bash "$SUT"
+  [ ! -f "$GITARGV" ]                     # the contract tests/worktree-gc-infra.bats:79 pins
+  grep -q 'pop=4' "$LAST"
+  grep -q 'pop_owned=n-a' "$LAST"
+  ! grep -q 'pop_owned=0' "$LAST" || false
+}

@@ -30,6 +30,105 @@ LOCK="$HOME/.claude/state/worktree-gc-infra.lock"
 OBSERVE="${WTGC_OBSERVE:-0}"
 FETCH_BOUND="${CC_WTGC_INFRA_FETCH_BOUND:-300}"
 
+# ── EFFECT, NOT EXIT CODE (master 66ef300dd0b4 — fleet footprint) ────────────────────────────────
+# This wrapper already refuses to call lock contention a success, which is the right instinct
+# applied to the wrong quantity: `verdict=ok removed=65 kept=126` reports what the JANITOR SAID,
+# and nothing anywhere reads what the janitor DID. Measured 2026-08-09, that gap ran for three
+# days in a row and no rung of this file noticed:
+#
+#   2026-08-06 04:15  verdict=ok ... removed=65 kept=126        ← last completed sweep
+#   2026-08-07 04:15  verdict=skipped reason=janitor-lock-held  ← surrendered for a FULL DAY
+#   2026-08-08 04:15  (lock dir created, pid written, NO verdict line ever) ← died mid-sweep, silent
+#   2026-08-09 04:15  (nothing at all — the box panicked in this very window)
+#   2026-08-09 22:00  TRUE POPULATION 558 directories / 427 registered
+#
+# Every one of those is exit 0 or no row at all, so the fleet's only staleness sensor read HEALTHY
+# while the population it exists to bound more than tripled. That population is not cosmetic: it
+# is one end of the spawn/teardown invariant whose other end is a 224-agent fan-out, and the
+# kernel watchdog panicked this box 4 times in 7 days.
+#
+# So four rungs are added here, all of them reading FACTS ABOUT THE WORLD rather than about this
+# script's own return value, and all of them inside THIS ALREADY-SCHEDULED FILE — a new launchd
+# job would be a C10 operator step, and this repo's pending-activation queue is where such things
+# rot (the inertness generator). An edit rides the existing per-file symlink and goes live on the
+# trunk fast-forward; an added file would not.
+#
+#   1. POPULATION, before and after, from the filesystem — `pop_before`/`pop_after`/`pop_delta`.
+#   2. `verdict=over-ceiling` — the sweep RAN, exited 0, and the count is STILL over the ceiling.
+#      Today that state is indistinguishable from a healthy `ok`; it is the one that was true.
+#   3. PREVIOUS-RUN DEATH. The lock's dead-holder self-heal currently erases the evidence that a
+#      run died mid-sweep. It now reports it (`prev=died-mid-sweep`) before clearing — which is
+#      how the 2026-08-08 death becomes attributable instead of theoretical.
+#   4. MISSED WINDOWS. A calendar job that never fired leaves no row by construction, so absence
+#      has to be measured from the LAST row's age, not from a row's contents.
+#
+# The ceiling is a CEILING, not a target: worktree-gc.sh legitimately KEEPs live, dirty, unlanded
+# and owned trees (108 of them at this measurement), so a number near that is normal and only a
+# multiple of it is news. An alarm that fires every night carries exactly as many bits as one that
+# cannot fire (memory: alarm-polarity-and-attention-budget).
+#
+# ⚠ THE CEILING BINDS `pop_owned`, NOT `pop` — AND THAT DISTINCTION WAS FOUND BY THE FIRST SWEEP,
+# NOT BY DESIGN. The root ~/Development/.worktrees is SHARED: three repos keep worktrees in it and
+# only this repo's are ours to reap. Measured right after the 2026-08-09 sweep took the population
+# 558 → 246: claude-infrastructure 104, reso-management-app 69, doc_classifier 60. A ceiling on the
+# TOTAL therefore reported BREACH on a box whose janitor had just done its job perfectly, for 142
+# directories this job cannot touch — an alarm firing over something it cannot act on, which is the
+# exact polarity defect the paragraph above warns about, committed one paragraph later.
+#
+# So both numbers are reported and only the actionable one is judged. `pop` stays on every row
+# because the FOOTPRINT is the thing that panicked the box and it does not care which repo minted
+# it; `pop_foreign` makes a total that grows without our doing greppable and attributable to the
+# repo that owns it — reso runs its own reaper at 03:15 and its population is its own alarm's job.
+CEILING="${CC_WTGC_INFRA_CEILING:-150}"
+WT_ROOT="${CC_WTGC_INFRA_WT_ROOT:-$HOME/Development/.worktrees}"
+STALE_H="${CC_WTGC_INFRA_STALE_HOURS:-48}"
+LOCK_RETRIES="${CC_WTGC_INFRA_LOCK_RETRIES:-3}"
+LOCK_BACKOFF="${CC_WTGC_INFRA_LOCK_BACKOFF:-120}"
+case "$CEILING"      in ''|*[!0-9]*) CEILING=150 ;; esac
+case "$STALE_H"      in ''|*[!0-9]*) STALE_H=48 ;; esac
+case "$LOCK_RETRIES" in ''|*[!0-9]*) LOCK_RETRIES=3 ;; esac
+case "$LOCK_BACKOFF" in ''|*[!0-9]*) LOCK_BACKOFF=120 ;; esac
+
+# The population is the DIRECTORY count, deliberately not `git worktree list`. A registration is
+# the janitor's own bookkeeping; a directory is what occupies the disk, and the two disagree —
+# measured the same day, 558 on disk against 427 registered in this repo. Counting registrations
+# would let a whole unowned population stay invisible to its own alarm, which is the shape of
+# defect this rung exists to end.
+population() {
+  # `find`, not `ls | wc -l`: SC2012, and the gate lints at info severity. -mindepth/-maxdepth 1
+  # counts the root's own entries and nothing beneath them, which is what a worktree population is.
+  local n; n="$(find "$WT_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')" || true
+  case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# What THIS janitor governs: worktrees this repo has registered under the shared root. Counted
+# from git rather than from the directory listing, because ownership is precisely what a listing
+# cannot tell you — and ownership is what makes a breach actionable.
+# EVERY reader here must return a NUMBER, never an empty string. Both of these feed `$(( ))`
+# subtractions, and under `set -u` an empty operand is a hard syntax error that would take the
+# whole run down — turning an unreadable git into a dead janitor rather than a reported unknown.
+# `grep -c` prints 0 and exits 1 on no match (hence `|| true`), but a missing git binary or a cut
+# pipeline yields nothing at all, and that is the case the normalisation covers.
+population_owned() {
+  local n
+  n="$("$GIT_BIN" -C "$REPO" worktree list --porcelain 2>/dev/null \
+        | sed -n 's#^worktree ##p' | grep -c "^$WT_ROOT/")" || true
+  case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# Hours since the last verdict of ANY kind. `date -r` is BSD; GNU needs -c. Unknown ⇒ empty, and
+# every consumer below treats empty as "do not claim", never as "fine".
+last_row_age_h() {
+  [ -f "$LAST" ] || return 0
+  local m now
+  m="$(date -r "$LAST" +%s 2>/dev/null || stat -c %Y "$LAST" 2>/dev/null)" || return 0
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  now="$(date +%s)"
+  echo $(( (now - m) / 3600 ))
+}
+
 mkdir -p "$STATE" "$(dirname "$LOG")" "$(dirname "$LOCK")" 2>/dev/null
 ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -58,10 +157,35 @@ ts="$(date '+%Y-%m-%d %H:%M:%S')"
 #   verdict=error     anything else, INCLUDING an unrecognised rc. rc is carried verbatim.
 #                     A new worktree-gc.sh exit code lands here rather than in a success arm
 #                     (new-enum-member-falls-into-fail-closed-default).                exit = rc
+#   verdict=over-ceiling  the sweep RAN and exited 0, and the population is STILL over
+#                     CC_WTGC_INFRA_CEILING. The janitor is working as designed and is being
+#                     OUT-PRODUCED — every KEEP is legitimate, so this is never fixed by making
+#                     the janitor more aggressive; it is fixed upstream, where the worktrees are
+#                     minted. Distinct from `ok` precisely because `ok` is what it read while the
+#                     count tripled.                                                    exit 3
+PREV_NOTE=""      # carried into whatever verdict fires, so a prior death is never lost
+# THE KILL SWITCH MEANS DO NOTHING, AND `pop_owned` COSTS A GIT CALL. The ownership count needs
+# `git worktree list`, and tests/worktree-gc-infra.bats:79 pins the contract that a disabled or
+# preflight-failed run touches git ZERO times. That test caught this as a real regression: a
+# switch whose whole promise is inertness must not start shelling out because a new field wanted
+# a number. So the git-derived half is OFF until the run has actually committed to sweeping, and
+# the rows that fire before then carry `pop_owned=n-a` — an honest "not measured", never a 0 that
+# would read as "we own none of them".
+OWNED_MODE="skip"
 verdict() { # <verdict> <exit-code> [k=v ...]
   local v="$1" rc="$2"; shift 2
   local line="$ts  verdict=$v observe=$OBSERVE"
   [ "$#" -gt 0 ] && line="$line $*"
+  # POPULATION ON EVERY ROW, including the failure rows. A `skipped` or `error` row that does not
+  # carry the count is exactly the row that read healthy for three days.
+  _vp="$(population)"
+  if [ "$OWNED_MODE" = "read" ]; then
+    _vo="$(population_owned)"
+    line="$line pop=$_vp pop_owned=$_vo pop_foreign=$(( _vp - _vo )) ceiling=$CEILING"
+  else
+    line="$line pop=$_vp pop_owned=n-a pop_foreign=n-a ceiling=$CEILING"
+  fi
+  [ -n "$PREV_NOTE" ] && line="$line $PREV_NOTE"
   line="$line rc=$rc"
   printf '%s\n' "$line" > "$LAST" 2>/dev/null
   printf '%s\n' "$line" >> "$LOG" 2>/dev/null
@@ -72,6 +196,33 @@ verdict() { # <verdict> <exit-code> [k=v ...]
   exit "$rc"
 }
 
+# ── `--assert`: READ THE EFFECT, ON DEMAND, WITHOUT SWEEPING. ────────────────────────────────────
+# The DoD this rung answers to is "verify by effect (count before/after), NEVER by the reaper's own
+# exit code", and a nightly row satisfies that only for whoever reads the log at 04:15. This is the
+# same three facts any time anyone asks: the true population, the age of the last verdict, and what
+# that last verdict actually was. It sweeps nothing, takes no lock and writes no row, so it is safe
+# to call from a close, a hook, or a human's terminal.
+#
+# Exit codes are the verdict: 0 = bounded and fresh · 3 = breached (over ceiling, or the sensor
+# itself is stale/absent, which is NOT the same as healthy and must never read as 0).
+if [ "${1:-}" = "--assert" ]; then
+  _p="$(population)"; _o="$(population_owned)"; _a="$(last_row_age_h)"; _l="$(cat "$LAST" 2>/dev/null)"
+  printf 'population=%s (ours=%s foreign=%s) ceiling=%s last_verdict_age_h=%s\n' \
+    "$_p" "$_o" "$(( _p - _o ))" "$CEILING" "${_a:-unknown}"
+  printf 'last_row=%s\n' "${_l:-<none — the janitor has never recorded a verdict>}"
+  _bad=0
+  # The shared root holds other repos' worktrees; only ours are reapable here, so only ours are
+  # judged. A foreign total that grows is reported, never alarmed on — reso owns its own reaper.
+  [ "$_o" -gt "$CEILING" ] && { printf 'BREACH our worktrees %s > ceiling %s\n' "$_o" "$CEILING"; _bad=1; }
+  if [ -z "$_a" ]; then
+    printf 'BREACH the janitor has no verdict row at all — it has never demonstrably run\n'; _bad=1
+  elif [ "$_a" -gt "$STALE_H" ]; then
+    printf 'BREACH last verdict is %sh old (stale > %sh) — the janitor is not running\n' "$_a" "$STALE_H"; _bad=1
+  fi
+  [ "$_bad" = 0 ] && printf 'OK bounded and fresh\n'
+  exit $(( _bad * 3 ))
+fi
+
 # ── Kill switch. Observe mode is read-only, so it is not gated by the switch: the switch stops the
 #    janitor from REMOVING things, and observe removes nothing by construction. ───────────────────
 if [ "$OBSERVE" = "0" ] && [ -f "$DISABLED" ]; then
@@ -80,6 +231,30 @@ fi
 
 [ -f "$GC_SH" ] || verdict error 1 "stage=preflight reason=gc-script-missing"
 [ -d "$REPO" ]  || verdict error 1 "stage=preflight reason=repo-missing"
+
+OWNED_MODE="read"   # past the kill switch and preflight: this run is going to sweep, git is fair game
+
+# ── MISSED WINDOWS. A StartCalendarInterval job that never fires writes nothing, so its absence
+#    is unobservable from the log's CONTENTS and can only be measured from the last row's AGE.
+#    2026-08-09's 04:15 window is the live case: the box was panicking in it, so there is no row
+#    to find. Recorded, never acted on — a missed window self-heals at the next fire, and the
+#    reason it matters is that it explains a population, not that it needs a remedy tonight.
+_age_h="$(last_row_age_h)"
+if [ -n "$_age_h" ] && [ "$_age_h" -gt "$STALE_H" ]; then
+  PREV_NOTE="missed_windows_h=$_age_h"
+fi
+
+# ── PREVIOUS-RUN DEATH. A run killed mid-sweep (SIGKILL, a panic, a reboot) never reaches its
+#    trap, so it leaves the lock dir behind holding a pid that is now dead. The self-heal below
+#    correctly clears it — and in doing so DESTROYS the only evidence that a run died, which is
+#    why 2026-08-08's death was invisible. Read it before clearing.
+if [ -d "$LOCK" ]; then
+  _lp="$(cat "$LOCK/pid" 2>/dev/null)"
+  if [ -n "$_lp" ] && ! kill -0 "$_lp" 2>/dev/null; then
+    _lstarted="$(cat "$LOCK/started" 2>/dev/null)"
+    PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }prev=died-mid-sweep prev_pid=$_lp${_lstarted:+ prev_started=$_lstarted}"
+  fi
+fi
 
 # ── Wrapper-level singleton (atomic mkdir, dead-holder self-heal). Distinct from worktree-gc.sh's
 #    own CC_WTGC_LOCK, which is deliberately left at its default so this sweep and reso's 03:15 one
@@ -98,8 +273,14 @@ if [ "$OBSERVE" = "0" ]; then
   fi
   [ "$LOCK_HELD" = "1" ] || verdict skipped 0 "reason=wrapper-lock-unobtainable"
   echo "$$" > "$LOCK/pid" 2>/dev/null
+  # The breadcrumb the next run reads to attribute a mid-sweep death (see PREVIOUS-RUN DEATH
+  # above). Written INSIDE the lock so it is removed with it on a clean exit — its presence beside
+  # a dead pid is therefore proof of an unclean one, never of an ordinary finish.
+  printf '%s\n' "$ts" > "$LOCK/started" 2>/dev/null
   trap 'rm -rf "$LOCK" 2>/dev/null' EXIT INT TERM
 fi
+
+POP_BEFORE="$(population)"
 
 # ── FETCH FIRST. Landedness is `git cherry origin/main <branch>`; a stale remote-tracking ref makes
 #    landed branches read as unlanded. That direction fails SAFE (a KEEP, never a wrongful delete)
@@ -141,11 +322,28 @@ export CC_WTGC_TRUNK="origin/main"
 #     idle-looking while genuinely in use.
 export CC_WTGC_EXCLUDE="$REPO:$HOME/.claude/autonomy/postland"
 
-if [ "$OBSERVE" = "1" ]; then
-  out="$(bash "$GC_SH" --dry-run --prune-branches 2>&1)"; rc=$?
-else
-  out="$(bash "$GC_SH" --prune-branches 2>&1)"; rc=$?
-fi
+# RETRY THE JANITOR LOCK RATHER THAN SURRENDERING FOR A DAY. reso's sweep owns 03:15 and this one
+# owns 04:15; they share worktree-gc.sh's own CC_WTGC_LOCK by design, so an hour of separation is
+# the entire margin. When reso's sweep runs long, this one exits `skipped` and the NEXT chance is
+# 24 hours away — which is what 2026-08-07 was, and a whole day of accrual is a high price for a
+# few minutes of overlap. A bounded backoff costs nothing when the lock is free (the first attempt
+# wins) and recovers the night when it is not. It is bounded, so it can never become a spin.
+_attempt=0
+while : ; do
+  if [ "$OBSERVE" = "1" ]; then
+    out="$(bash "$GC_SH" --dry-run --prune-branches 2>&1)"; rc=$?
+  else
+    out="$(bash "$GC_SH" --prune-branches 2>&1)"; rc=$?
+  fi
+  # Only the contention case is retryable. Every other rc is a real verdict and falls straight
+  # through — a retry loop over a genuine error is how a bounded gate becomes a storm.
+  printf '%s\n' "$out" | grep -q 'another pass holds' || break
+  _attempt=$((_attempt + 1))
+  [ "$_attempt" -ge "$LOCK_RETRIES" ] && break
+  sleep "$LOCK_BACKOFF"
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+done
+[ "$_attempt" -gt 0 ] && PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }lock_attempts=$_attempt"
 
 {
   echo "===== $ts  worktree-gc-infra (observe=$OBSERVE repo=$REPO) ====="
@@ -169,7 +367,18 @@ case "$rc" in
     # The word splitting is the POINT here, hence the disable.
     # shellcheck disable=SC2046
     set -- $(printf '%s\n' "$summary" | tr -cd '0-9 \n')
-    verdict ok 0 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0}"
+    # THE EFFECT ASSERTION. Everything above this line is the janitor's own account of itself;
+    # this is the only rung that reads the world. `removed=65 kept=126` was a true sentence on
+    # 2026-08-06 and the population was 558 three days later, so the summary's numbers cannot
+    # stand in for the count — they describe one sweep, and the count is a running balance.
+    _pop_after="$(population)"
+    _delta=$(( POP_BEFORE - _pop_after ))
+    _eff="pop_before=$POP_BEFORE pop_after=$_pop_after pop_delta=$_delta"
+    _owned_after="$(population_owned)"
+    if [ "$OBSERVE" = "0" ] && [ "$_owned_after" -gt "$CEILING" ]; then
+      verdict over-ceiling 3 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
+    fi
+    verdict ok 0 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
     ;;
   3) verdict blind 3 "reason=no-liveness-oracle" ;;
   4) verdict error 4 "reason=disposal-preservation-unverified" ;;
