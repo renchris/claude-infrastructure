@@ -161,6 +161,11 @@ tests/worktree-gc-infra.bats
 # match on a command line crosses process groups by design, which is the whole point of the tool
 # under test.
 # run 31371884433: shard SIGTERM (143) immediately after this suite, 34 suites lost
+# ⚠ THIS ENTRY'S REASON MAY ALREADY BE DISSOLVED. scripts/offbox-run.sh now ignores SIGTERM for the
+# duration of a shard, precisely so a process-killing suite costs its own row and nothing else. The
+# entry stays until a census MEASURES it surviving — re-admitting it on the strength of a fix rather
+# than a measurement is how a list starts carrying claims nobody checked. Run the census, and if
+# this suite comes back green, delete these three lines.
 tests/pkill-scope.bats
 # run 31371884433: notok=1
 tests/live-session-registry-atomic.bats

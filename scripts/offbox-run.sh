@@ -110,7 +110,11 @@ run_one() {
   mkdir -p "$home/tmp"
   # CWD is the repo root, matching how scripts/postland-verify.sh runs the corpus: suites resolve
   # sibling paths relative to the checkout, so running from anywhere else changes what is under test.
-  out="$(cd "$ROOT" && env -i \
+  # `trap - TERM` RESTORES the default disposition for the suite: run_list ignores SIGTERM to survive
+  # a process-killing suite (see § THE RUNNER IGNORES SIGTERM), and an ignored disposition is
+  # inherited across exec — leaving it set would make the suite immune to its own `timeout`, which
+  # is the bound that keeps a wedged suite from eating the job.
+  out="$(cd "$ROOT" && trap - TERM && env -i \
         HOME="$home" \
         TMPDIR="$home/tmp" \
         PATH="${PATH}" \
@@ -144,6 +148,28 @@ run_one() {
   printf '%s %s %s %s %s\n' "$state" "$ok" "$notok" "$rc" "$el"
 }
 
+# ── THE RUNNER IGNORES SIGTERM, BECAUSE SOME SUITES KILL PROCESSES FOR A LIVING ──────────────────
+# MEASURED twice on trunk. Run 31371884433: shard 6 exited **143 (SIGTERM)** the instant after
+# tests/pkill-scope.bats reported GREEN, losing the 34 suites behind it. Run 31373386826: shard 10
+# died the same way at tests/cc-reaper.bats. The suites pass their own assertions and then kill the
+# process running them — this repo's own land docs record the mechanism, that `pkill -f bats…`
+# reaches every bats process on a box because they all share a command-line substring, and a CI
+# runner is simply another box where that is true.
+#
+# A PROCESS GROUP DOES NOT HELP, which is why this is a trap and not an isolation trick: the
+# per-suite `timeout` already gives each suite its own group, and a kill that selects by command
+# line — or by a pid a reaper discovered — crosses groups by design. That is the point of the tools
+# under test, so the runner cannot out-isolate them; it can only decline to die.
+#
+# THE COST, STATED: this shard will not honour a SIGTERM-based cancellation. That is bounded by the
+# job's own `timeout-minutes`, which escalates to SIGKILL, so the worst case is a cancelled job
+# taking its full timeout instead of stopping promptly. Against that: a lost shard is 34 suites of
+# evidence AND a short fold that refuses the whole run's green, so the trade is heavily one-sided.
+#
+# THE PAYOFF BEYOND SURVIVAL: with the trap, the hostile suite's own row still gets written, so the
+# TSV NAMES it instead of ending mid-file. Each of the two measured instances above cost a ~25-minute
+# diagnose-land-rerun cycle to identify from a log tail; after this they identify themselves.
+#
 # THE SUITE LIST ARRIVES ON STDIN, SO EVERY CHILD MUST BE SEALED OFF FROM IT — see the `</dev/null`
 # in run_one. MEASURED on the first real CI run (2026-08-10, run 31362043861): shards 1, 4 and 9
 # stopped after 3, 25 and 17 suites of their 37-38, each one immediately after a suite that reads
@@ -154,6 +180,8 @@ run_one() {
 # on their bats invocation for this exact reason — the answer was in the tree twice, and this file
 # had to rediscover it in CI.
 run_list() {
+  # shellcheck disable=SC2064  # intentional: ignore TERM for the whole loop, restored per suite.
+  trap '' TERM
   local out="${1:-/dev/stdout}"; shift
   local tmo; tmo="$(resolve_timeout)" || die "no timeout(1) or gtimeout(1) on PATH — refusing to run unbounded (a hung shard reports nothing at all)" 2
 
@@ -356,6 +384,35 @@ cmd_selftest() {
     got="$(CC_OFFBOX_ROOT="$tmp" CC_OFFBOX_PARTITION="$tmp/part-stdin.sh" CC_OFFBOX_SUITE_BOUND_S=30 \
            bash "$SELF" all 2>/dev/null | awk -F'\t' '$1 ~ /^tests\// {n++} END {print n+0}')"
     chk "F6g a stdin-reading suite does not eat the rest of the shard list" 2 "$got"
+
+    # F6h A SUITE THAT SIGTERMS ITS RUNNER MUST NOT TRUNCATE THE RUN. The regression control for the
+    # two measured trunk losses (pkill-scope, cc-reaper), each of which cost a whole shard. The
+    # fixture walks its OWN ancestor chain and TERMs it — scoped to this process tree, so unlike a
+    # bare `pkill -f` it cannot reach a concurrent runner on the same box. A runner without the
+    # `trap '' TERM` reports ONE row instead of two.
+    # COLLECT the ancestor chain first, THEN kill from the TOP DOWN. Killing upward as you walk is
+    # what the first version did and it made this control VACUOUS: hops 1-3 are the suite's own bats
+    # processes, so TERMing them killed the walker before it ever reached the runner at hop 5-6, and
+    # the control passed against a runner with no trap at all. Measured — real and mutant both
+    # reported 2 rows until the order was reversed.
+    cat > "$tmp/tests/aa-killer.bats" <<'KILLER'
+@test "terminates its own runner" {
+  p=$PPID
+  chain=""
+  for _ in 1 2 3 4 5 6 7; do
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    [ -n "$p" ] && [ "$p" -gt 1 ] || break
+    chain="$p $chain"          # prepend ⇒ farthest ancestor ends up FIRST
+  done
+  for q in $chain; do kill -TERM "$q" 2>/dev/null || true; done
+  true
+}
+KILLER
+    printf '@test "after the killer" { true; }\n' > "$tmp/tests/zz-after-killer.bats"
+    printf '#!/bin/bash\nprintf "tests/aa-killer.bats\\ntests/zz-after-killer.bats\\n"\n' > "$tmp/part-kill.sh"
+    got="$(CC_OFFBOX_ROOT="$tmp" CC_OFFBOX_PARTITION="$tmp/part-kill.sh" CC_OFFBOX_SUITE_BOUND_S=30 \
+           bash "$SELF" all 2>/dev/null | awk -F'\t' '$1 ~ /^tests\// {n++} END {print n+0}')"
+    chk "F6h a suite that SIGTERMs its runner does not truncate the run" 2 "$got"
   else
     printf 'ok   F6 SKIPPED — no bats/timeout on PATH (classifier not exercised)\n'
   fi
