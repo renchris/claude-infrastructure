@@ -135,7 +135,7 @@ by default). Four consequences, and they are the whole authoring discipline:
 
 | # | Rule | Because |
 |---|---|---|
-| **R1** | The evidence must be **text the session PRINTED**. | `tools:[]` — no file read, no git, no CI. A criterion true on disk but never printed is unjudgeable. |
+| **R1** | The evidence must be **in the message array** — assistant prose **or** a `tool_result` block. Raw command stdout counts. | `tools:[]` — the judge cannot go and look. A criterion true on disk and never surfaced is unreachable; one the session *ran* is adjudicable. |
 | **R2** | Prefer a **quotable artifact string** (`0 failures`, `exit 0`, a sha) over a state of affairs. **Heuristic, not a mechanism requirement** — see the caveat below. | The pass shape is `"<quote evidence from the transcript that satisfies the condition>"`. |
 | **R3** | **Fail-closed on ambiguity.** Vague ⇒ blocked, never passed. | The default verdict is hard-coded `insufficient evidence in transcript`. |
 
@@ -231,9 +231,15 @@ conditions**, 2026-07-03 → 2026-08-10.
    `goal_status` record, so this zero cannot be read as "the cap never binds".
 
 **The one signal that is strong: evaluation count is the health metric, not met/unmet.**
-**82% of every goal ever met (116/141) was met on its FIRST evaluation**, and the met rate collapses
-monotonically with re-reads — 1 eval 97% · 2 evals 80% · 3-4 evals 78% · 5-9 evals 40% · ≥10 evals
-**27%**. A goal the judge has to keep re-reading is grinding, not converging.
+**82% of every goal ever met (116/141) was met on its FIRST evaluation**, and the met rate falls hard
+with re-reads: **96.7% (1 eval) → 79.2% (2-4) → 40.0% (5-9) → 26.7% (≥10)**. A goal the judge has to
+keep re-reading is grinding, not converging.
+
+*(Stated in coarse buckets deliberately. The fine-grained series is **not** monotone — it is flat
+2→3 and rises 6→8 — on cells holding one or two instances. An independent re-census of the same
+corpus put the never-evaluated share at 55.1% of conditions / 57.0% of sessions against the 56.8% /
+55.7% above; the two agree within a point, and the disagreement is dedup/retraction handling, not
+the finding.)*
 
 **The dominant failure is not phrasing — it is inertness.** **216 of 380 goals (57%) were never
 judged once.** 196 of 352 sessions armed a goal, emitted only the sentinel, and then kept working a

@@ -214,9 +214,11 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > **Why the check is the non-negotiable part:** the evaluator is a separate, TOOL-LESS small/fast
   > model (Haiku by default) that re-runs after every turn and sees only what the session has surfaced
   > in the conversation. Anthropic: *"It doesn't run commands or read files independently, so write the
-  > condition as something Claude's own output can demonstrate."* A criterion resting on file, DB, or
-  > remote state the session never PRINTS is structurally unjudgeable — the goal then never clears and
-  > the session cannot stop.
+  > condition as something Claude's own output can demonstrate."* The judge reads the whole message
+  > array, so a **`tool_result` counts** — raw command stdout is evidence, which is why Anthropic's own
+  > example works: *"'All tests in `test/auth` pass' works because Claude runs the tests and the result
+  > lands in the transcript for the evaluator to read."* What is unreachable is state the session never
+  > SURFACES at all — the goal then never clears and the session cannot stop.
   > **The template:**
   > `--goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <path>'`
   > That trailing pointer is the ONLY part our previous template had. `'<one-line objective> — full
