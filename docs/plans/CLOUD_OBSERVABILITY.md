@@ -1683,3 +1683,62 @@ in this document.
 ⚠️ **Do not validate this by firing more `--cloud` creates.** Fifteen sessions exist; the marginal
 one teaches nothing. The next create should be the two-call sequence, and its FIRST check is the
 pair above — read from `GET /v1/code/sessions/<id>` (§13.1), before any brief is sent.
+
+### 13.4 · ✅ CLOSED — both axes at once, and one round trip landed (2026-08-10)
+
+`session_01QEiWYuB1ygLLcVwCQJoUZE`, created on next4 by the two-call sequence, read
+`environment_kind: anthropic_cloud` **and** `config.sources: 1` on the first attempt — the first
+session in this document's history to hold both. It then did the work on a real machine and pushed
+`claude/fire-20260810T174949Z-50819-1` (`bd67e747`) to origin, which `cc-offload land` brought home.
+The round trip is closed end to end: **create → run off-box → push → land.**
+
+**A real VM is a different ENDPOINT, not a different flag** — that is why §13.3's "one field" framing
+was the last thing standing in the way. `environment_kind` is not settable on
+`POST /v1/code/sessions` at all; that endpoint's `bridge:{}` *is* the environment. The binary's own
+cloud path (`teleportToRemote`) posts somewhere else entirely:
+
+| | bridge create (§13.3, landed `a0bb74c5`) | cloud create (this section) |
+| --- | --- | --- |
+| endpoint | `POST /v1/code/sessions` | **`POST /v1/sessions`** |
+| context key | `config` | **`session_context`** |
+| environment | `bridge:{}` | **`environment_id: env_…`** (top level) |
+| `anthropic-beta` | `oauth-2025-04-20` | **`ccr-byoc-2025-07-29`** |
+| result | `sources:1`, `environment_kind:bridge` | `sources:1`, `environment_kind:anthropic_cloud` |
+
+and the environment id comes from `GET /v1/environment_providers` — **which already held one**:
+`env_01AEW7TUe4BctTyPqozNvRRG`, kind `anthropic_cloud`, created 2026-06-12. So the
+`POST /v1/environment_providers/cloud/create` call §13.3 pointed at was never needed live. It is
+still implemented and still tested, because the list is what decides: reuse before create, since an
+environment is a durable org-level object and minting one per session would leave a pile behind.
+
+**The acceptance pair is now a GATE IN THE CODE, not a discipline.** `cloud-create-api.py` reads the
+session back through §13.1's sensor after every create and exits **5** — naming the id on stderr,
+printing nothing on stdout — when either half is missing. That ordering is what makes it worth
+having: `events:[]` on the create means the brief is *not* spent until the pair has passed, so a
+half-right session costs a create and nothing else. `--verify <id>` exposes the same check
+read-only, and it **prints both halves rather than a verdict**, because every failure this section
+records was one-of-two and a bare pass/fail cannot say which one went.
+
+Verified live on the two known-bad states before it was trusted: two `--cloud`-created sessions read
+`anthropic_cloud` + `0` sources → exit 5. The instrument was confirmed against the failure it exists
+to catch, not only against the success.
+
+**What the VM said about itself** — `docs/research/cloud-vm-roundtrip-2026-08-10.md` is the session's
+own first-person testimony, and it is the first description of that environment in this repo written
+by something that was inside it. Three facts there are load-bearing for anything built on this arm
+and are recorded here so they are not re-derived:
+
+- **The clone is SHALLOW — `git rev-list --count HEAD` = 50.** Any brief whose work walks past 50
+  commits (a merge-base against an old branch, a blame through the truncation, an
+  `origin/main..HEAD` range assuming a shared root) will fail or, worse, answer wrong.
+- **There is no `gh` CLI.** GitHub reaches the VM only through MCP tools scoped to one repository.
+- **A remote-tracking ref is seeded at provision time and does not mean the remote has the branch.**
+  `git branch -r` listed the session's own branch while `git push --dry-run` still called it
+  `[new branch]`. Reading that ref as proof of a push is exactly the false-positive `cc-offload ls`
+  is organised against.
+
+Coverage: `tests/cloud-create-api-env.bats` (17), hermetic against a stub API server that records
+every request — so a regression is convicted for asking the wrong endpoint, not merely for printing
+the wrong thing. The two halves of the pair are pinned by separate fixtures; a single
+"acceptance failed" test would go green the moment the tool stopped reading whichever half the
+fixture did not move.
