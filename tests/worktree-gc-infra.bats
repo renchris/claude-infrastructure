@@ -457,3 +457,100 @@ pop_root() { # <n> — a fixtured worktree root holding n directories
   grep -q 'pop_owned=n-a' "$LAST"
   ! grep -q 'pop_owned=0' "$LAST" || false
 }
+
+# ── STRANDED VALUE (M4, backlog 0328e7cc5742) ────────────────────────────────────────────────────
+# The KEEP side of the janitor had no counter-pressure: "unlanded ⇒ KEEP" is correct and is what
+# stops finished work being deleted, but it is also an accumulator, and `kept=112` reports a
+# worktree kept because it holds 17 unlanded patches identically to one kept because a session is
+# live in it. These pin the balance being REPORTED and, past a ceiling, being called a breach.
+# L1 still holds: git is stubbed, so these assert the WRAPPER's arithmetic and never real branches.
+
+# <n-branches> [dup] — a git stub that answers the three calls stranded_scan actually makes.
+# `dup` makes branch 2 carry branch 1's exact shas, which is the case that made a per-branch sum
+# report 111 for 95 real patches on the live checkout.
+stub_git_stranded() {
+  local n="$1" dup="${2:-}"
+  cat > "$BIN/git" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$GITARGV"
+args=("\$@"); [ "\${args[0]}" = "-C" ] && args=("\${args[@]:2}")
+case "\${args[0]}" in
+  rev-parse)
+    case "\${args[*]}" in *origin/main*) exit ${TRUNK_RC:-0} ;; esac; exit 0 ;;
+  worktree)
+    for i in \$(seq 1 $n); do printf 'worktree /w/b%s\nbranch refs/heads/b%s\n\n' "\$i" "\$i"; done; exit 0 ;;
+  cherry)
+    b="\${args[2]}"; src="\${b##*/}"
+    [ -n "$dup" ] && [ "\$src" = "b2" ] && src=b1
+    for i in \$(seq 1 3); do printf '+ %s%s\n' "\$src" "\$i"; done; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$BIN/git"
+}
+
+@test "the verdict row carries the stranded balance the KEEP side accumulates" {
+  pop_root 5
+  stub_git_stranded 4
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'stranded_patches=12' "$LAST"        # 4 branches x 3 unique shas
+  grep -q 'stranded_branches=4' "$LAST"
+  grep -q 'stranded_ceiling=40' "$LAST"
+}
+
+@test "stranded patches are counted by UNIQUE sha — a duplicate branch is not a second strand" {
+  pop_root 5
+  stub_git_stranded 3 dup                      # b2 carries b1's exact shas
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'stranded_patches=6' "$LAST"         # 3 branches, but only b1+b3's 6 unique shas
+  grep -q 'stranded_branches=3' "$LAST"
+  # RED-PROOF: a per-branch SUM would have said 9 here, and would breach a ceiling nobody crossed.
+  ! grep -q 'stranded_patches=9' "$LAST" || false
+}
+
+@test "past the ceiling the sweep is a stranded-over-ceiling BREACH, not a clean ok" {
+  pop_root 5
+  export CC_WTGC_STRANDED_CEILING=5
+  stub_git_stranded 4                          # 12 unique > 5
+  run bash "$SUT"
+  [ "$status" -eq 3 ]
+  grep -q 'verdict=stranded-over-ceiling' "$LAST"
+}
+
+# The paired keep-rule (L3): a ceiling that fired on any population would carry no bits at all.
+@test "RED-PROOF: the same 12 patches UNDER the ceiling stay verdict=ok" {
+  pop_root 5
+  export CC_WTGC_STRANDED_CEILING=50
+  stub_git_stranded 4
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'verdict=ok' "$LAST"
+  ! grep -q 'stranded-over-ceiling' "$LAST" || false
+}
+
+# `git cherry` of 0 means LANDED; an ABSENT trunk means the question could not be asked. One value
+# for both is the fabrication mode this repo has already paid for, so unmeasurable is n-a, and n-a
+# never breaches — an alarm nobody can action is worse than no alarm.
+@test "an unresolvable trunk reports n-a and never breaches on a question it could not ask" {
+  pop_root 5
+  export CC_WTGC_STRANDED_CEILING=1
+  TRUNK_RC=1 stub_git_stranded 4
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q 'stranded_patches=n-a' "$LAST"
+  ! grep -q 'stranded-over-ceiling' "$LAST" || false
+}
+
+# Same contract as pop_owned's n-a arm, re-pinned for the new field: stranded_scan is a per-branch
+# `git cherry` loop, so an ungated row would make the DISABLED janitor the most git-expensive path
+# in the file — inertness is the kill switch's entire promise.
+@test "the kill switch stays git-free even with the stranded field on the row" {
+  pop_root 4
+  mkdir -p "$(dirname "$DISABLED")"; touch "$DISABLED"
+  run bash "$SUT"
+  [ ! -f "$GITARGV" ]
+  grep -q 'stranded_patches=n-a' "$LAST"
+  ! grep -q 'stranded_patches=0' "$LAST" || false
+}
