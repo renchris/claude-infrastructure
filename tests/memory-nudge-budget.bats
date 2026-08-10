@@ -290,8 +290,10 @@ mkskewed() {
   # are safe only while something fails when they drift. This is that something.
   nudge="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/memory-nudge.sh")"
   gate="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/hooks/lib/memory-index-budget.sh")"
+  rotor="$(grep -c 'MEMORY_INDEX_LIMIT:-24985' "$REPO/bin/cc-memory-rotate")"
   [ "$nudge" -eq 1 ]
   [ "$gate" -eq 1 ]
+  [ "$rotor" -eq 1 ]
   # And no THIRD spelling anywhere in the executable surface. Counted in a loop, not
   # with `grep -vc`: grep exits 1 on a zero count, so the healthy case would abort the
   # test under errexit and read as a failure of the thing it is asserting is fine.
@@ -299,9 +301,106 @@ mkskewed() {
   others=0
   for f in $list; do
     case "$f" in
-      */memory-nudge.sh|*/memory-index-budget.sh) ;;
+      */memory-nudge.sh|*/memory-index-budget.sh|*/cc-memory-rotate) ;;
       *) others=$(( others + 1 )) ;;
     esac
   done
   [ "$others" -eq 0 ]
+}
+
+# ── actuation: the nudge ROTATES before it advises (2026-08-10) ───────────────
+# Twelve hand-compactions in 14 days proved advisory text cannot hold the line;
+# cc-memory-rotate mechanizes the operator-approved cold split and this hook is
+# its fleet-wide call site. Rotation runs on every over-threshold prompt
+# regardless of the advisory damping; the 🚨 now means rotation COULD NOT help.
+
+# A rotor-shaped fixture: a real */memory/ dir with typed, aged topic files.
+mkmemdir() {  # mkmemdir <name> <entries> <hookbytes> → path to MEMORY.md
+  local name="$1" n="$2" hb="$3" d i pad
+  d="$BATS_TEST_TMPDIR/$name/memory"; mkdir -p "$d"
+  pad="$(head -c "$hb" /dev/zero | tr '\0' x)"
+  printf '# Memory — fixture\n' >"$d/MEMORY.md"
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    printf -- '- [e%02d](e%02d.md) — %s\n' "$i" "$i" "$pad" >>"$d/MEMORY.md"
+    printf -- '---\nname: e%02d\ndescription: d\nmetadata:\n  type: project\n---\nbody\n' "$i" >"$d/e$(printf '%02d' "$i").md"
+    touch -t 202601011200 "$d/e$(printf '%02d' "$i").md"
+    i=$((i + 1))
+  done
+  printf '%s' "$d/MEMORY.md"
+}
+
+rotate_env() {  # small, hand-countable budgets for the actuation tests
+  export MEMORY_INDEX_LIMIT=3000 MEMORY_ROTATE_AT=1500 MEMORY_ROTATE_TARGET=1000
+  export MEMORY_ROTATE_TAIL_GUARD=1 MEMORY_ROTATE_MIN_KEEP=2 MEMORY_ROTATE_MIN_AGE_DAYS=7
+  export MEMORY_ROTATE_BIN="$REPO/bin/cc-memory-rotate"
+}
+
+@test "actuation is independent of advisory cadence: prompt 1 rotates the file and stays silent" {
+  rotate_env
+  idx="$(mkmemdir act1 20 140)"                  # ~3.2 KB: over the 3000 B limit itself
+  [ "$(wc -c <"$idx" | tr -d ' ')" -gt 3000 ]
+  run fire s-act1 "$idx"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                               # damped prompt: no advisory...
+  [ "$(wc -c <"$idx" | tr -d ' ')" -le 1000 ]    # ...but the index was healed on disk
+  ls "$(dirname "$idx")"/archive/MEMORY_ARCHIVE_*-COLD.md >/dev/null
+}
+
+@test "rotation on an advisory slot reports the post-rotation state, not the breach" {
+  rotate_env
+  idx="$(mkmemdir act2 20 140)"
+  run bash -c "printf '{\"session_id\":\"s-act2\",\"cwd\":\"/x\"}' \
+    | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$idx' bash '$HOOK'"
+  out="$(printf '%s' "$output" | ctx)"
+  hasnt "$out" '🚨'                              # the breach never reaches the model
+  has "$out" 'AUTO-ROTATED'
+  has "$out" 'MEMORY INDEX BUDGET (live)'
+  has "$out" 'restore = paste the line back'
+}
+
+@test "rotation that cannot clear the breach keeps the alarm and names the verdict" {
+  rotate_env
+  d="$BATS_TEST_TMPDIR/act3/memory"; mkdir -p "$d"
+  printf '# Memory — fixture\n' >"$d/MEMORY.md"
+  pad="$(head -c 140 /dev/zero | tr '\0' x)"
+  for i in $(seq -w 1 20); do                    # dangling links: nothing is eligible
+    printf -- '- [g%s](g%s.md) — %s\n' "$i" "$i" "$pad" >>"$d/MEMORY.md"
+  done
+  run fire s-act3 "$d/MEMORY.md"
+  out="$(printf '%s' "$output" | ctx)"
+  starts "$out" '🚨'
+  has "$out" 'could NOT clear'
+  has "$out" 'verdict=exhausted'
+}
+
+@test "band-pressure exhaustion is the designed steady state: healthy message, no failure note" {
+  rotate_env
+  d="$BATS_TEST_TMPDIR/act5/memory"; mkdir -p "$d"
+  printf '# Memory — fixture\n' >"$d/MEMORY.md"
+  pad="$(head -c 120 /dev/zero | tr '\0' x)"
+  for i in $(seq -w 1 12); do                    # dangling: nothing eligible at any stage
+    printf -- '- [g%s](g%s.md) — %s\n' "$i" "$i" "$pad" >>"$d/MEMORY.md"
+  done
+  sz="$(wc -c <"$d/MEMORY.md" | tr -d ' ')"
+  [ "$sz" -ge 1500 ]
+  [ "$sz" -lt 3000 ]                             # over ROTATE_AT, under the LIMIT
+  run bash -c "printf '{\"session_id\":\"s-act5\",\"cwd\":\"/x\"}' \
+    | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$d/MEMORY.md' bash '$HOOK'"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" 'MEMORY INDEX BUDGET (live)'
+  hasnt "$out" 'could NOT clear'
+  hasnt "$out" '🚨'
+}
+
+@test "an unresolvable rotor degrades to the alarm with an unavailability note" {
+  rotate_env
+  export MEMORY_ROTATE_BIN="$BATS_TEST_TMPDIR/no-such-rotor"
+  idx="$(mkmemdir act4 20 140)"
+  before="$(wc -c <"$idx" | tr -d ' ')"
+  run fire s-act4 "$idx"
+  out="$(printf '%s' "$output" | ctx)"
+  starts "$out" '🚨'
+  has "$out" 'Auto-rotation unavailable'
+  [ "$(wc -c <"$idx" | tr -d ' ')" -eq "$before" ]
 }

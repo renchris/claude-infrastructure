@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# cc-memory-rotate — the deterministic ACTUATOR for the MEMORY.md loader budget: when the
+# auto-loaded index nears its read limit, move the least-load-bearing, closed-out index lines
+# VERBATIM to the cold record, restoring headroom with no model and no human in the loop.
+#
+# ── WHY AN ACTUATOR, NOT A BETTER NAG ────────────────────────────────────────────────────────
+# The loader reads MEMORY.md up to a hard byte limit (24,985 B) and SILENTLY DROPS THE TAIL —
+# the newest entries. Between 2026-07-25 and 2026-08-07 this index was hand-compacted at least
+# TWELVE times (memory/archive/ holds every pre-compaction snapshot, size in the filename) and
+# re-breached every time. The reason is arithmetic, not discipline: insertion is machine-speed
+# (sessions mint 7–19 entries/day at ~244 B/line, through Edit AND through Bash `>>` appends
+# the PreToolUse byte-gate never sees — one caught live 2026-08-10T07:51Z), while removal was
+# human-speed (a /compact-memory pass with per-line judgment). At the measured ~0.5–2 KB/day
+# growth, the sanctioned "done" of ~2.5 KB headroom is 1–5 DAYS of runway — the daily "index
+# is full" nag was that arithmetic's steady state. No compaction can buy weeks of room under a
+# fixed ~25 KB cap; the only durable quiet is a mechanism that restores headroom as fast as
+# sessions consume it. `hooks/memory-nudge.sh` invokes this on every prompt (fleet-wide), so
+# whichever door grew the file, the next prompt anywhere rotates it back under budget.
+#
+# ── WHAT IT DOES ─────────────────────────────────────────────────────────────────────────────
+# Mechanizes the operator-approved cold split (2026-07-30, commands/compact-memory.md § the
+# two-tier hot/cold split): at/over ROTATE_AT, move ELIGIBLE `- [...](file.md) — hook` lines,
+# oldest-first by topic mtime, into archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md until the
+# index is at/under TARGET. Lines move VERBATIM under a dated boundary comment; topic files
+# are never touched; restore = paste the line back. This is the reversible, byte-budget-
+# authorized class — NOT the lossy PROPOSE-ONLY half of /compact-memory (shortening and
+# dedupe stay human-gated there).
+#
+# ── WHAT IT REFUSES TO MOVE (protection, in evaluation order) ────────────────────────────────
+#   the newest TAIL_GUARD index lines        — the tail is what the loader drops when over;
+#                                              rotation must restore it, never eat it
+#   unparseable lines · dangling links       — report, never touch (compact-memory: a dangling
+#                                              link is reported, never auto-removed)
+#   lines containing PINNED                  — explicit opt-out
+#   type feedback|user|reference (topic      — operator directives + tooling entrypoints stay
+#     frontmatter) or that name prefix         hot (selection rule, 2026-07-30). The frontmatter
+#                                              stamp for feedback/reference YIELDS at breach
+#                                              pressure (index >= LIMIT) — see the two-stage
+#                                              note at protect_reason; the name convention and
+#                                              user-type never yield.
+#   live-pending markers (DEFERRED, NOT      — an open tail is live state (SAFE-AUTO marker
+#     pushed, pending, gated on, BLOCKED,      list); over-matching PROTECTS, so the error
+#     backlog, word-bounded open)              direction is keep
+#   graph hubs: >=4 inbound [[links]]        — load-bearing in the graph
+#   young: topic mtime < MIN_AGE_DAYS        — mtime, not birthtime: corrections bump mtime,
+#                                              so an old-but-ACTIVE rule stays hot
+#   MIN_KEEP floor on the remaining count
+#
+# ── SAFETY SHAPE ─────────────────────────────────────────────────────────────────────────────
+# COLD is written idempotently (a line already present is not duplicated) and VERIFIED
+# line-by-line BEFORE the index is rewritten, so a crash between the two leaves at worst a
+# duplicate in the record, never a lost line. The index rewrite is temp+rename with a stat
+# re-check and bounded retry — a sibling session's append between our read and our write
+# restarts the cycle instead of being clobbered. The lock is mkdir-based (macOS has no
+# flock(1)); stale locks (>180 s) are reclaimed. Every exit prints ONE parseable `verdict=`
+# token on stdout (MEMORY.md claimed-outcome-vs-checked-outcome) and rotations append to
+# archive/.rotate.log. A side-car must never fail wider than itself: any unexpected state is
+# verdict=error with the index untouched.
+#
+# Usage: cc-memory-rotate <path-to-.../memory/MEMORY.md> [--dry-run] [--verbose]
+# Env:   MEMORY_INDEX_LIMIT (24985) · MEMORY_ROTATE_AT (LIMIT-1500) · MEMORY_ROTATE_TARGET
+#        (LIMIT-4000) · MEMORY_ROTATE_MIN_KEEP (40) · MEMORY_ROTATE_TAIL_GUARD (15) ·
+#        MEMORY_ROTATE_MIN_AGE_DAYS (7) · MEMORY_ROTATE_TEST_PRE_COMMIT (test seam, eval'd
+#        before each commit attempt's stat re-check — lets a suite exercise the contended path)
+# Exit:  0 noop/rotated/dry-run · 2 error · 3 locked/contended · 4 exhausted
+set -euo pipefail
+export LC_ALL=C   # byte semantics everywhere: ${#s}, wc -c, sort — the loader limit is BYTES
+
+VERBOSE=0; DRYRUN=0; INDEX=""
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRYRUN=1 ;;
+    --verbose) VERBOSE=1 ;;
+    -*) printf 'verdict=error reason=unknown-flag flag=%s\n' "$a"; exit 2 ;;
+    *)  INDEX="$a" ;;
+  esac
+done
+
+vlog() { if [ "$VERBOSE" -eq 1 ]; then printf '%s\n' "$*" >&2; fi; }
+
+# Same discriminator as memory-index-budget.sh: only a loader-read project-memory index is in
+# scope — a repo file merely named MEMORY.md has no read limit to protect.
+case "$INDEX" in
+  */memory/MEMORY.md) : ;;
+  *) printf 'verdict=error reason=not-a-memory-index path=%s\n' "${INDEX:-<none>}"; exit 2 ;;
+esac
+if [ ! -f "$INDEX" ] || [ ! -r "$INDEX" ] || [ ! -w "$INDEX" ]; then
+  printf 'verdict=error reason=unreadable-or-unwritable\n'; exit 2
+fi
+DIR=$(cd "$(dirname "$INDEX")" && pwd -P)
+INDEX="$DIR/MEMORY.md"
+
+LIMIT="${MEMORY_INDEX_LIMIT:-24985}"
+case "$LIMIT" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-limit\n'; exit 2 ;; esac
+ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
+TARGET="${MEMORY_ROTATE_TARGET:-$(( LIMIT - 4000 ))}"
+MIN_KEEP="${MEMORY_ROTATE_MIN_KEEP:-40}"
+TAIL_GUARD="${MEMORY_ROTATE_TAIL_GUARD:-15}"
+MIN_AGE_DAYS="${MEMORY_ROTATE_MIN_AGE_DAYS:-7}"
+for v in "$ROTATE_AT" "$TARGET" "$MIN_KEEP" "$TAIL_GUARD" "$MIN_AGE_DAYS"; do
+  case "$v" in ''|*[!0-9]*) printf 'verdict=error reason=non-numeric-config\n'; exit 2 ;; esac
+done
+if [ "$TARGET" -ge "$ROTATE_AT" ]; then
+  printf 'verdict=error reason=target-not-below-rotate-at\n'; exit 2
+fi
+
+fsize() { wc -c <"$1" | tr -d ' '; }
+fstat() { stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1"; }
+fmtime() { stat -f %m -- "$1" 2>/dev/null || stat -c %Y -- "$1" 2>/dev/null || echo ""; }
+
+SIZE=$(fsize "$INDEX")
+if [ "$SIZE" -lt "$ROTATE_AT" ]; then
+  printf 'verdict=noop size=%s rotate_at=%s\n' "$SIZE" "$ROTATE_AT"; exit 0
+fi
+
+# Sanity bound: a dir this command was never designed for is a refusal, not a bigger job.
+NMD=$(find "$DIR" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')
+if [ "$NMD" -gt 5000 ]; then printf 'verdict=error reason=dir-too-large n=%s\n' "$NMD"; exit 2; fi
+
+LOCK="$DIR/.rotate.lock.d"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  NOW=$(date +%s)
+  LM=$(fmtime "$LOCK"); [ -n "$LM" ] || LM=$NOW
+  if [ $(( NOW - LM )) -gt 180 ] && rmdir "$LOCK" 2>/dev/null && mkdir "$LOCK" 2>/dev/null; then
+    vlog "reclaimed stale lock"
+  else
+    printf 'verdict=locked\n'; exit 3
+  fi
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+TAB=$(printf '\t')
+NOW=$(date +%s)
+MIN_AGE_S=$(( MIN_AGE_DAYS * 86400 ))
+
+# protect_reason <ordinal> <line> <topicfile-or-empty> [stage] → echoes a reason, or nothing
+#
+# TWO-STAGE PRESSURE MODEL for the type protection. The operator-approved rule protects
+# "feedback operator-directives and reference tooling entrypoints" — but the frontmatter
+# `type:` stamp is a session SELF-REPORT and measurably does not track that semantic:
+# 2026-08-10, 76 of 105 live entries carried type feedback/reference while only 12 bore the
+# deliberate feedback-/reference- NAME convention; the other 64 were agent-derived lessons
+# (one kill(2)-semantics lesson was stamped `reference`). Honoring the stamp absolutely made
+# the rotor verdict=exhausted on the exact index it was built to heal. So: stage 1 (normal
+# pressure) honors the stamp; stage 2 — armed ONLY when the index is at/over the loader LIMIT,
+# where the alternative is the loader silently dropping the NEWEST entries — lets the
+# unprefixed stamp yield. The name convention, user type, PINNED, markers, hubs, young, tail
+# and the floor never yield at any stage.
+protect_reason() {
+  local j="$1" ln="$2" f="$3" stage="${4:-1}" nm t inb mt
+  if [ "$j" -ge "$TAIL_FROM" ]; then echo tail; return 0; fi
+  if [ -z "$f" ]; then echo unparseable; return 0; fi
+  if [ ! -f "$DIR/$f" ]; then echo dangling; return 0; fi
+  case "$ln" in *PINNED*) echo pinned; return 0 ;; esac
+  nm="${f%.md}"
+  case "$nm" in feedback-*|reference-*|user-*) echo type; return 0 ;; esac
+  t=$(awk 'NR<=12 && /^[[:space:]]*type:[[:space:]]*/ {sub(/^[[:space:]]*type:[[:space:]]*/,""); print $1; exit}' "$DIR/$f" 2>/dev/null || true)
+  case "$t" in
+    user) echo type; return 0 ;;
+    feedback|reference) if [ "$stage" -eq 1 ]; then echo type; return 0; fi ;;
+  esac
+  if printf '%s' "$ln" | grep -qiE 'DEFERRED|NOT pushed|pending|gated on|BLOCKED|backlog|(^|[^[:alnum:]])open([^[:alnum:]]|$)'; then
+    echo marker; return 0
+  fi
+  mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+  if [ $(( NOW - mt )) -lt "$MIN_AGE_S" ]; then echo young; return 0; fi
+  inb=$(grep -lF -- "[[${nm}]]" "$DIR"/*.md 2>/dev/null | grep -cv "/${f}\$" || true)
+  case "$inb" in ''|*[!0-9]*) inb=0 ;; esac
+  if [ "$inb" -ge 4 ]; then echo hub; return 0; fi
+  return 0
+}
+
+ATTEMPT=0
+while :; do
+  ATTEMPT=$(( ATTEMPT + 1 ))
+  if [ "$ATTEMPT" -gt 3 ]; then printf 'verdict=contended attempts=3\n'; exit 3; fi
+
+  SNAP=$(fstat "$INDEX")
+  SIZE=$(fsize "$INDEX")
+  if [ "$SIZE" -lt "$ROTATE_AT" ]; then
+    printf 'verdict=noop size=%s rotate_at=%s\n' "$SIZE" "$ROTATE_AT"; exit 0
+  fi
+
+  # Read the whole file (bash-3.2-safe: no mapfile). `|| [ -n ]` keeps a final
+  # newline-less line; the rebuild below re-normalizes with one \n per line.
+  LINES=(); NL=0
+  while IFS= read -r _l || [ -n "$_l" ]; do LINES[NL]="$_l"; NL=$(( NL + 1 )); done <"$INDEX"
+
+  # Census the entry lines. The link parse is ANCHORED at line start and takes the FIRST
+  # `](...)` group — a greedy match extracts prose from any hook that contains parentheses
+  # (measured on this live index: 42 of 105 lines would mis-parse; the trap
+  # commands/compact-memory.md documents for E2 harvesting).
+  ENTRY_LNO=""; ENTRY_FILES=""; NENT=0
+  i=0
+  while [ "$i" -lt "$NL" ]; do
+    case "${LINES[$i]}" in
+      "- ["*)
+        if [[ "${LINES[$i]}" =~ ^-\ \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\) ]]; then
+          ENTRY_FILES="$ENTRY_FILES${BASH_REMATCH[1]}$TAB"
+        else
+          ENTRY_FILES="$ENTRY_FILES$TAB"
+        fi
+        ENTRY_LNO="$ENTRY_LNO$i$TAB"
+        NENT=$(( NENT + 1 )) ;;
+    esac
+    i=$(( i + 1 ))
+  done
+  if [ "$NENT" -eq 0 ]; then printf 'verdict=error reason=no-entries\n'; exit 2; fi
+  if [ "$NENT" -gt 1000 ]; then printf 'verdict=error reason=too-many-entries n=%s\n' "$NENT"; exit 2; fi
+  TAIL_FROM=$(( NENT - TAIL_GUARD ))
+  if [ "$TAIL_FROM" -lt 0 ]; then TAIL_FROM=0; fi
+
+  # Does the header already point at the cold tier? (PROTECTED section of compact-memory.md:
+  # archived topics must stay discoverable from the auto-loaded surface.)
+  HAVE_PTR=0
+  if grep -q 'archive/MEMORY_ARCHIVE' "$INDEX"; then HAVE_PTR=1; fi
+  PTR_LINE="<!-- cold tier: archive/MEMORY_ARCHIVE_*-COLD.md — auto-rotated by cc-memory-rotate near the ${LIMIT} B read limit; restore = paste the line back -->"
+
+  # Classify → eligible list "mtime<TAB>lineno<TAB>file", oldest mtime first. Stage-1 type
+  # keeps also record their ordinal, so breach pressure can re-judge exactly that set.
+  K_TAIL=0; K_PARSE=0; K_DANGLING=0; K_PIN=0; K_TYPE=0; K_MARK=0; K_YOUNG=0; K_HUB=0
+  ELIG=""; TYPEKEPT=""
+  j=0
+  # iterate the two parallel TAB-joined lists
+  REST_LNO="$ENTRY_LNO"; REST_F="$ENTRY_FILES"
+  while [ "$j" -lt "$NENT" ]; do
+    li="${REST_LNO%%"$TAB"*}"; REST_LNO="${REST_LNO#*"$TAB"}"
+    f="${REST_F%%"$TAB"*}";    REST_F="${REST_F#*"$TAB"}"
+    r=$(protect_reason "$j" "${LINES[$li]}" "$f")
+    if [ -n "$r" ]; then
+      case "$r" in
+        tail) K_TAIL=$((K_TAIL+1));; unparseable) K_PARSE=$((K_PARSE+1));;
+        dangling) K_DANGLING=$((K_DANGLING+1));; pinned) K_PIN=$((K_PIN+1));;
+        type) K_TYPE=$((K_TYPE+1))
+              mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+              TYPEKEPT="$TYPEKEPT$mt$TAB$j$TAB$li$TAB$f
+";;
+        marker) K_MARK=$((K_MARK+1));;
+        young) K_YOUNG=$((K_YOUNG+1));; hub) K_HUB=$((K_HUB+1));;
+      esac
+      vlog "keep [$r] ${f:-<line $li>}"
+    else
+      mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+      ELIG="$ELIG$mt$TAB$li$TAB$f
+"
+    fi
+    j=$(( j + 1 ))
+  done
+
+  # Select oldest-first until the projected size reaches TARGET (the pointer line, if it must
+  # be added, is part of the projection so the shrink guarantee stays honest).
+  PROJ=$SIZE
+  if [ "$HAVE_PTR" -eq 0 ]; then PROJ=$(( PROJ + ${#PTR_LINE} + 1 )); fi
+  MOVE_LNOS=""; MOVED=0; REMAIN=$NENT
+  if [ -n "$ELIG" ]; then
+    SORTED=$(printf '%s' "$ELIG" | sort -t "$TAB" -k1,1n -k3,3)
+  else
+    SORTED=""
+  fi
+  while IFS="$TAB" read -r _mt li f; do
+    if [ -z "${li:-}" ]; then continue; fi
+    if [ "$PROJ" -le "$TARGET" ]; then break; fi
+    if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
+    PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+    MOVE_LNOS="$MOVE_LNOS $li"
+    MOVED=$(( MOVED + 1 )); REMAIN=$(( REMAIN - 1 ))
+    vlog "move $f (mtime $_mt)"
+  done <<EOF
+$SORTED
+EOF
+
+  # ── Breach pressure: stage 2 ───────────────────────────────────────────────────────────────
+  # Only when the index is at/over the loader LIMIT itself and the stage-1 pool could not reach
+  # the target. The stage-1 pool always drains first; stage 2 re-judges only the stage-1 type
+  # keeps (unprefixed self-stamped entries), and every other protection still binds there.
+  STAGE2=0
+  if [ "$PROJ" -gt "$TARGET" ] && [ "$SIZE" -ge "$LIMIT" ] && [ -n "$TYPEKEPT" ]; then
+    ELIG2=""
+    while IFS="$TAB" read -r mt j2 li f; do
+      if [ -z "${li:-}" ]; then continue; fi
+      r2=$(protect_reason "$j2" "${LINES[$li]}" "$f" 2)
+      if [ -z "$r2" ]; then
+        ELIG2="$ELIG2$mt$TAB$li$TAB$f
+"
+      fi
+    done <<EOF
+$TYPEKEPT
+EOF
+    if [ -n "$ELIG2" ]; then
+      SORTED2=$(printf '%s' "$ELIG2" | sort -t "$TAB" -k1,1n -k3,3)
+      while IFS="$TAB" read -r _mt li f; do
+        if [ -z "${li:-}" ]; then continue; fi
+        if [ "$PROJ" -le "$TARGET" ]; then break; fi
+        if [ "$REMAIN" -le "$MIN_KEEP" ]; then break; fi
+        PROJ=$(( PROJ - ${#LINES[$li]} - 1 ))
+        MOVE_LNOS="$MOVE_LNOS $li"
+        MOVED=$(( MOVED + 1 )); STAGE2=$(( STAGE2 + 1 )); REMAIN=$(( REMAIN - 1 ))
+        vlog "move [stage2] $f (mtime $_mt)"
+      done <<EOF
+$SORTED2
+EOF
+    fi
+  fi
+
+  if [ "$MOVED" -eq 0 ]; then
+    printf 'verdict=exhausted size=%s kept: tail=%s type=%s hub=%s young=%s marker=%s dangling=%s pinned=%s unparseable=%s min_keep=%s\n' \
+      "$SIZE" "$K_TAIL" "$K_TYPE" "$K_HUB" "$K_YOUNG" "$K_MARK" "$K_DANGLING" "$K_PIN" "$K_PARSE" "$MIN_KEEP"
+    exit 4
+  fi
+
+  if [ "$DRYRUN" -eq 1 ]; then
+    printf 'verdict=dry-run moved=%s stage2=%s before=%s after_projected=%s\n' "$MOVED" "$STAGE2" "$SIZE" "$PROJ"
+    exit 0
+  fi
+
+  # ── COLD first, verified, idempotent — then the index ──────────────────────────────────────
+  YEAR=$(date +%Y); MON=$(date +%m)
+  HALF=1; if [ "${MON#0}" -gt 6 ]; then HALF=2; fi
+  COLD="$DIR/archive/MEMORY_ARCHIVE_${YEAR}-H${HALF}-COLD.md"
+  mkdir -p "$DIR/archive"
+  [ -f "$COLD" ] || : >"$COLD"
+  # Stage the block first, append once: the idempotency greps must read a COLD that this
+  # same rotation is not concurrently appending to (SC2094's hazard class).
+  BLOCK=$(printf '\n<!-- auto-rotated %s by cc-memory-rotate: %s entries, oldest-eligible-first by topic mtime; index %s B (rotate_at %s, target %s) -->' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$SIZE" "$ROTATE_AT" "$TARGET")
+  for li in $MOVE_LNOS; do
+    if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
+      BLOCK="$BLOCK
+${LINES[$li]}"
+    fi
+  done
+  printf '%s\n' "$BLOCK" >>"$COLD"
+  for li in $MOVE_LNOS; do
+    if ! grep -qxF -- "${LINES[$li]}" "$COLD"; then
+      printf 'verdict=error reason=cold-verify-failed\n'; exit 2
+    fi
+  done
+
+  TMP=$(mktemp "$DIR/.MEMORY.md.rotate.XXXXXX")
+  {
+    i=0
+    if [ "$HAVE_PTR" -eq 0 ]; then
+      case "${LINES[0]}" in "- ["*) printf '%s\n' "$PTR_LINE" ;; esac
+    fi
+    while [ "$i" -lt "$NL" ]; do
+      case " $MOVE_LNOS " in
+        *" $i "*) : ;;
+        *) printf '%s\n' "${LINES[$i]}" ;;
+      esac
+      if [ "$i" -eq 0 ] && [ "$HAVE_PTR" -eq 0 ]; then
+        case "${LINES[0]}" in "- ["*) : ;; *) printf '%s\n' "$PTR_LINE" ;; esac
+      fi
+      i=$(( i + 1 ))
+    done
+  } >"$TMP"
+
+  # Test seam: lets the suite mutate the index here and prove the contended path is real.
+  if [ -n "${MEMORY_ROTATE_TEST_PRE_COMMIT:-}" ]; then eval "$MEMORY_ROTATE_TEST_PRE_COMMIT"; fi
+
+  # A sibling wrote between our read and now → drop this attempt's tmp and re-run selection
+  # on the fresh file rather than clobbering their append.
+  if [ "$(fstat "$INDEX")" != "$SNAP" ]; then rm -f "$TMP"; continue; fi
+
+  NEWSZ=$(fsize "$TMP")
+  if [ "$NEWSZ" -ge "$SIZE" ]; then rm -f "$TMP"; printf 'verdict=error reason=would-not-shrink\n'; exit 2; fi
+  chmod 644 "$TMP"
+  mv -f "$TMP" "$INDEX"
+  printf 'verdict=rotated moved=%s stage2=%s before=%s after=%s cold=%s\n' "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$COLD"
+  printf '%s verdict=rotated moved=%s stage2=%s before=%s after=%s attempt=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$MOVED" "$STAGE2" "$SIZE" "$NEWSZ" "$ATTEMPT" >>"$DIR/archive/.rotate.log" 2>/dev/null || true
+  exit 0
+done

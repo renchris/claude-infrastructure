@@ -59,6 +59,22 @@ printf '%s' "$COUNT" > "$CF"
 # cwd-keyed slug is the fallback for a non-repo cwd.
 slugify() { printf '%s' "$1" | tr '/.' '--'; }
 
+# Deref through the live symlink (this file IS ~/.claude/hooks/memory-nudge.sh when invoked
+# live) so a sibling binary resolves in the CHECKOUT, where it exists the moment the trunk
+# fast-forwards — same load-bearing pattern as backup-before-write.sh's _mib_deref: an
+# underefed dirname would miss a newly-ADDED sibling until a deploy links it, and fail open
+# silently (MEMORY.md deployed-layer-bootstrap-circle / the LIVE_ADDS budget rule).
+_mn_deref() {
+  local p="$1" t n=0
+  readlink -f "$p" 2>/dev/null && return 0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 
@@ -90,6 +106,54 @@ BUDGET_CTX=""
 if [ -n "$MEM" ] && [ -f "$MEM" ]; then
   TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
   N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
+
+  # ── ACTUATE, then advise (2026-08-10). Twelve hand-compactions in 14 days proved advisory
+  # text cannot hold this line: insertion is machine-speed (Edit appends, plus Bash `>>`
+  # appends the PreToolUse byte-gate never sees — one caught live 2026-08-10T07:51Z), while
+  # removal was human-speed. cc-memory-rotate mechanizes the operator-approved cold split
+  # (2026-07-30, compact-memory.md § two-tier hot/cold); this hook fires fleet-wide on every
+  # prompt, so whichever door grew the file, the next prompt anywhere rotates it back under
+  # budget. Actuation runs on EVERY over-threshold prompt regardless of the nudge's damping
+  # cadence below — advisory cadence and actuation are different duties. After this, the 🚨
+  # branch means rotation COULD NOT clear it — an alarm that fires on breaches it could have
+  # fixed itself carries no bits (MEMORY.md alarm-polarity-and-attention-budget).
+  ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
+  ROTATE_NOTE=""
+  if [ -n "$TOTAL" ] && [ "$TOTAL" -ge "$ROTATE_AT" ] 2>/dev/null; then
+    RB="${MEMORY_ROTATE_BIN:-}"
+    if [ -z "$RB" ]; then
+      for c in "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/../bin/cc-memory-rotate" \
+               "$CFG/bin/cc-memory-rotate"; do
+        if [ -x "$c" ]; then RB="$c"; break; fi
+      done
+    fi
+    PRE_TOTAL="$TOTAL"
+    if [ -n "$RB" ] && [ -x "$RB" ]; then
+      RV=$("$RB" "$MEM" 2>/dev/null) || RV="${RV:-verdict=error}"
+      case "$RV" in
+        verdict=rotated*|verdict=noop*)
+          if [ "${RV#verdict=rotated}" != "$RV" ]; then
+            ROTATE_NOTE=" AUTO-ROTATED to hold the read limit (${RV#verdict=rotated }): moved lines are VERBATIM in the cold record — restore = paste the line back."
+          fi
+          TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
+          N=$(grep -c '^- \[' "$MEM" 2>/dev/null || echo 0)
+          ;;
+        *)
+          # In the pressure band under the LIMIT an exhausted rotor is the designed steady
+          # state (stage 2 arms only at breach) — not a failure; note it only when the index
+          # is actually breached and rotation was its remedy.
+          if [ "$PRE_TOTAL" -ge "$LIMIT" ] 2>/dev/null; then
+            ROTATE_NOTE=" Auto-rotation ran and could NOT clear it (${RV:-no verdict})."
+          fi
+          ;;
+      esac
+    else
+      if [ "$PRE_TOTAL" -ge "$LIMIT" ] 2>/dev/null; then
+        ROTATE_NOTE=" Auto-rotation unavailable: cc-memory-rotate not resolvable from this hook."
+      fi
+    fi
+  fi
+
   if [ -n "$TOTAL" ] && [ "${N:-0}" -gt 0 ] 2>/dev/null; then
     # Measure the ENTRY lines only: the file also carries a header/provenance block,
     # and folding that fixed cost into a per-entry average overstates every hook.
@@ -133,7 +197,7 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       else
         LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${HOOK_TARGET} B target), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B). The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       LINE_BUDGET=$(( HEADROOM - PFX_AVG ))
@@ -150,7 +214,7 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       LINE_COST=$(( PFX_AVG + HOOK_AVG + 1 ))
       [ "$LINE_COST" -gt 0 ] || LINE_COST=1
       FITS=$(( HEADROOM / LINE_COST ))
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently. ${FILING}"
+      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} B across $N entries — ${HEADROOM} B of headroom: ~${FITS} entry slots left at the ${LINE_COST} B/line this index is ACTUALLY written at (${SLOTS} only if every existing entry were first rewritten to the ${HOOK_TARGET} B target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} B of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} B (hard cap this append: ${LINE_BUDGET} B). Past ${LIMIT} B the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${FILING}"
     fi
   fi
 fi

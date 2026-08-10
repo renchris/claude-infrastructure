@@ -315,7 +315,10 @@ with 6 KB of pure slack sitting untouched in the hooks. The measurement is what 
 split, on the pass you are running.
 
 **The procedure** (operator-approved 2026-07-30; the lever every subsequent pass has used —
-07-30 149→111 @ 22.4 KB, then 07-31, 08-01, 08-05 105→92 @ 22.7 KB):
+07-30 149→111 @ 22.4 KB, then 07-31, 08-01, 08-05 105→92 @ 22.7 KB. **Mechanized 2026-08-10:**
+`bin/cc-memory-rotate` runs this procedure automatically at the byte trigger, invoked from
+`hooks/memory-nudge.sh` on every prompt; `cc-memory-rotate <index> --dry-run --verbose` previews a
+selection. A manual pass through these steps is now only for what the rotor's protections refuse):
 
 1. Move whole entries **VERBATIM** into `archive/MEMORY_ARCHIVE_<YEAR>-H<half>-COLD.md`. Nothing is
    deleted, no line is rewritten, every topic file stays on disk untouched. **Restore = paste the
@@ -416,6 +419,25 @@ Consequences for how you run this command:
   one, and its cost (two full hand-audited passes, 2026-07-26 and 07-29) is the argument for the
   cheaper rule. Fixing it at the write surface is out of this command's scope — the nudge that
   prompts the append (`hooks/memory-nudge.sh`) is where a budget would have to bind.
+- **RESOLVED 2026-08-10 — the treadmill is now machine-driven.** `bin/cc-memory-rotate` mechanizes
+  the two-tier hot/cold split (§ above): `hooks/memory-nudge.sh` invokes it on every prompt,
+  fleet-wide, once the index reaches LIMIT−1500 B, rotating the oldest eligible lines VERBATIM to
+  `archive/MEMORY_ARCHIVE_<Y>-H<h>-COLD.md` until LIMIT−4000 B. The selection protections are
+  enforced in code with a suite pinning each one: feedback/user/reference types and name prefixes,
+  PINNED, pending markers, ≥4-inbound `[[link]]` hubs, topic mtime <7 days, the newest 15 index
+  lines, a 40-entry floor, dangling links untouched. ⚠️ The frontmatter `type:` stamp is a session
+  SELF-REPORT and measurably does not track this section's semantic (2026-08-10: 76/105 entries
+  stamped feedback/reference, only 12 bearing the deliberate name convention — the rest agent
+  lessons), so the rotor runs a two-stage pressure model: the stamp is honored normally and YIELDS
+  only at breach pressure (index ≥ the loader limit, where the alternative is the loader silently
+  dropping the newest entries); the name convention, user type, and every other protection never
+  yield. Why a machine: TWELVE hand-passes in 14 days
+  each bought only days of room, because insertion is machine-speed — including Bash `>>` appends
+  the PreToolUse byte-gate structurally cannot see (one caught live 2026-08-10T07:51Z) — so removal
+  had to be machine-speed too. The 🚨 nag now means rotation itself FAILED and carries the rotor's
+  `verdict=` token. This command remains the QUALITY pass: shortening, dedupe, the orphan sweep,
+  and every lossy edit stay human-gated here — the rotor never rewrites a line, only moves whole
+  ones reversibly (restore = paste the line back).
 
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
