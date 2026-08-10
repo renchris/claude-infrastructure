@@ -168,6 +168,82 @@ live_pid() { sed -n 's/^pid=//p' "$CC_PANE_HOME/$1/meta" | head -1; }
   [ ! -f "$canary" ]
 }
 
+# ── the child's IDENTITY in its own environment ───────────────────────────────────────────
+#
+# ORACLE CHOICE, and it is the load-bearing decision in this block: every assertion below reads
+# the child's OWN SELF-REPORT (it echoes its env into out.log), never `ps eww -p <pid>`.
+#
+# A `ps`-based test would be VACUOUS here, and vacuous in the direction that passes. MEASURED
+# 2026-08-10 on macOS 15.6.1: `ps` exposes a process's environment only for user-land binaries
+# (node: 77 env tokens) and hides it entirely for Apple-signed platform binaries (`/bin/sleep`,
+# Identifier=com.apple.sleep: 0 tokens — and a `cp` of it stays hidden, because the signature is
+# embedded and copying preserves it). These tests spawn `/bin/sh`, so a `ps` oracle would report
+# "ITERM_SESSION_ID absent" for a child that HAS it, and would therefore go green against a
+# reverted fix. The child telling us what it sees cannot fail that way.
+
+@test "spawn EXPORTS CC_PANE_ID, and it is the child's OWN id" {
+  # Until this landed, CC_PANE_ID was read by 21 files in this repo and exported by none, so the
+  # seam's own key existed in no process's environment and a headless agent could not name itself.
+  local id
+  id="$("$CP" spawn -- /bin/sh -c 'echo "SEEN=[${CC_PANE_ID-<unset>}]"; sleep 5')"
+  [ -n "$id" ]
+  sleep 1
+  grep -qF "SEEN=[$id]" "$CC_PANE_HOME/$id/out.log" || false
+}
+
+@test "spawn does NOT leak the SPAWNER's ITERM_SESSION_ID into the agent" {
+  # THE DANGEROUS HALF. `exec` inherits the spawner's environment, so a headless agent fired from
+  # a pane-hosted session used to carry the SPAWNER's pane id. Every class-B scraper — the ones
+  # answering "which pane is process X in?" from X's own env — then resolved the agent to the
+  # spawner's pane, and hooks/teammate-auto-shutdown.sh resolves a pane IN ORDER TO CLOSE IT.
+  # The plan predicted a false NEGATIVE here; the truth was a confident WRONG answer.
+  local id
+  export ITERM_SESSION_ID="w0t0p0:SPAWNER-PANE-77"
+  id="$("$CP" spawn -- /bin/sh -c 'echo "ISID=[${ITERM_SESSION_ID-<unset>}]"; sleep 5')"
+  [ -n "$id" ]
+  sleep 1
+  grep -qF 'ISID=[<unset>]' "$CC_PANE_HOME/$id/out.log" || false
+  # and the spawner's pane id appears NOWHERE in what the child saw
+  ! grep -qF 'SPAWNER-PANE-77' "$CC_PANE_HOME/$id/out.log" || false
+}
+
+@test "POSITIVE CONTROL: the oracle really can see an inherited variable" {
+  # Without this, the test above is indistinguishable from one whose echo never ran. An unrelated
+  # variable must survive into the child, proving the self-report reflects real inheritance and
+  # that ITERM_SESSION_ID's absence is a DELETION rather than a broken fixture.
+  local id
+  export CC_HEADLESS_CONTROL_VAR="INHERITED-OK-4242"
+  id="$("$CP" spawn -- /bin/sh -c 'echo "CTL=[${CC_HEADLESS_CONTROL_VAR-<unset>}]"; sleep 5')"
+  [ -n "$id" ]
+  sleep 1
+  grep -qF 'CTL=[INHERITED-OK-4242]' "$CC_PANE_HOME/$id/out.log" || false
+}
+
+# DELIBERATELY NOT A TEST: "the identity is set inside the subshell, so the SPAWNER's own
+# environment is never mutated."
+#
+# It was written, it passed, and it was removed for passing for the wrong reason. `spawn` runs as a
+# SUBPROCESS of the suite, and a child process cannot mutate its parent's environment under any
+# implementation — so the assertion is guaranteed by the process boundary, not by the subshell it
+# claims to be testing. RED-PROVEN vacuous: a mutant hoisting `export CC_PANE_ID="$id"` OUT of the
+# subshell (leaking it into the whole of `v_spawn`) left the suite fully GREEN.
+#
+# Keeping it would have inflated the count with an assertion nothing can falsify, which is the exact
+# shape §6.10/§7.10/§8.8 record — a green signal that is green because nothing is looking. The
+# subshell stays in the subject (it is still the correct way to scope the two variables); what is
+# gone is the pretence that this suite proves it.
+
+@test "an agent can reach its OWN inbox from inside itself, using only CC_PANE_ID" {
+  # The functional payoff, and the prerequisite for anything that DRAINS a headless inbox: before
+  # the export the agent had no way to name its own registry row, so `send`'s durable delivery had
+  # no reachable consumer from the agent's side.
+  local id
+  id="$("$CP" spawn -- /bin/sh -c 'test -f "$CC_PANE_HOME/$CC_PANE_ID/inbox" && echo REACHED; sleep 5')"
+  [ -n "$id" ]
+  sleep 1
+  grep -qF 'REACHED' "$CC_PANE_HOME/$id/out.log" || false
+}
+
 # ── address / send ────────────────────────────────────────────────────────────────────────
 
 @test "address resolves a live id and refuses an unknown one" {

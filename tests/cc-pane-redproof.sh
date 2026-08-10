@@ -166,6 +166,42 @@ check "list-trusts-the-registry-not-the-OS" bin/cc-pane-headless \
       printf '"'"'%s\n'"'"' "$id"' \
   'reaps dead rows on read'
 
+# ── the child's identity (2026-08-10) ─────────────────────────────────────────────────────
+# Three mutants, because the fix has two INDEPENDENT halves plus a wrong-value case, and a single
+# mutant deleting the whole line would not tell us which half any test is actually holding.
+
+# Half 1 gone: the agent is spawned with no identity of its own. CC_PANE_ID returns to being a key
+# that 21 files read and nothing ever writes.
+check "identity-never-exported" bin/cc-pane-headless \
+  '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+      >"$dir/out.log" 2>&1 </dev/null &' \
+  '( cd "$cwd" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+  'EXPORTS CC_PANE_ID'
+
+# Half 2 gone: the spawner's pane id leaks into the agent again, so every class-B scraper resolves
+# a headless agent to the SPAWNER's pane — and teammate-auto-shutdown resolves a pane to CLOSE it.
+check "spawner-pane-leaks-into-the-agent" bin/cc-pane-headless \
+  '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+      >"$dir/out.log" 2>&1 </dev/null &' \
+  '( cd "$cwd" && export CC_PANE_ID="$id" && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+  'does NOT leak the SPAWNER'
+
+# Exported, but NOT the child's own id. Pins that the test compares against the RETURNED id rather
+# than merely asserting the variable is non-empty — non-emptiness is not provenance.
+check "identity-exported-but-wrong-value" bin/cc-pane-headless \
+  '( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+      >"$dir/out.log" 2>&1 </dev/null &' \
+  '( cd "$cwd" && export CC_PANE_ID="hdl-0000000000000000" && unset ITERM_SESSION_ID && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &' \
+  'it is the child'"'"'s OWN id'
+
+# NOT A MUTANT, and the reason is recorded in tests/cc-pane-headless.bats next to the test it
+# retired: hoisting `export CC_PANE_ID="$id"` OUT of the subshell leaves the suite GREEN, because
+# `spawn` is a SUBPROCESS of the suite and no implementation can mutate the parent's environment
+# from there. The mutation is sound and the claim is real; it is simply not observable from
+# outside the process, so a "caught" line here would have to come from a test that cannot fail.
+# Left as a comment rather than deleted, so the next person does not re-derive it (memory:
+# work-item-remedy-can-become-forbidden).
+
 echo
 printf 'RED-PROOF: %d caught · %d weak\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

@@ -692,11 +692,21 @@ reading **X's** environment:
 
 Today they work because **iTerm2 itself** sets `ITERM_SESSION_ID` in the target's environment. They
 keep working untouched. But a **headless** agent has `CC_PANE_ID` and no `ITERM_SESSION_ID`, so
-every one of these scrapers silently finds nothing and *skips the session* — a false negative, not
-an error. Making them accept either key is correct and small, but it is fleet-wide
+~~every one of these scrapers silently finds nothing and *skips the session* — a false negative, not
+an error.~~ Making them accept either key is correct and small, but it is fleet-wide
 headless-awareness (T3 territory), not the mechanical rename T1 was scoped to, and
 `teammate-auto-shutdown.sh` is high-traffic machinery with its own extensive suite. Filed rather
 than smuggled in.
+
+> ⚠ **The struck sentence is FALSIFIED, and it was wrong in the dangerous direction — see §10.**
+> The premise "a headless agent has `CC_PANE_ID` and no `ITERM_SESSION_ID`" describes the intended
+> contract, not what the code did. `cc-pane-headless spawn` ran `exec "$@"`, which **inherits the
+> spawner's environment**, so a headless agent fired from a pane-hosted session carried the
+> **spawner's** `ITERM_SESSION_ID` and no `CC_PANE_ID` at all. These scrapers therefore did not
+> find nothing — they found the **spawner's pane** and returned it confidently. `teammate-auto-
+> shutdown.sh` resolves a pane *in order to close it*. Fixed at the producer in §10; the consumer
+> half (teach the four sites to prefer `CC_PANE_ID`) stays filed here, and is only now non-inert,
+> because until §10 landed nothing in the fleet ever exported the key they would be reading.
 
 ### 6.10 Three test defects the LAND GATE caught that 658 green tests did not
 
@@ -1325,3 +1335,132 @@ consumed / pane vanished) failing loud with named diagnostics.
 unbounded background consumer, so the mutant that broke arming *hung* the suite instead of failing it
 — two minutes of a red-proof run spent proving nothing. A harness whose failure mode is a hang cannot
 report the thing it exists to report. Bounded, then the mutant convicted three tests cleanly.
+
+---
+
+## 10. P2 residue — the headless agent had NO identity, and inherited the SPAWNER's (2026-08-10)
+
+**Scope (frozen).** Close §8.4's *"`CC_PANE_ID` itself is still never exported by anything"* and the
+half of §2/P2's "not yet true" list that reads *"the class-B env-scrapers of §6.9 still cannot see a
+headless agent"*. Producer side only; the consumer half stays filed (below).
+
+### 10.1 The finding — the plan's own risk statement was wrong in the DANGEROUS direction
+
+§7.9 predicted that class-B scrapers would meet a headless agent and *"silently find nothing and skip
+the session — a false negative, not an error."* **Measured, and it is not what happens.**
+`bin/cc-pane-headless:119` spawned the agent as `( cd "$cwd" && exec "$@" )`, and `exec` **inherits
+the spawner's environment**. So:
+
+| What the plan assumed the agent's env holds | What it actually held |
+|---|---|
+| `CC_PANE_ID` = its own id · no `ITERM_SESSION_ID` | **no `CC_PANE_ID` at all** · `ITERM_SESSION_ID` = **the spawner's pane** |
+
+Measured directly, by having the child report its own environment:
+
+```
+$ ITERM_SESSION_ID=w0t0p0:SPAWNER-PANE-77 cc-pane-headless spawn -- node …
+  headless agent's own minted id : hdl-b078a2ee174a6ff8
+  ITERM_SESSION_ID in its env    : w0t0p0:SPAWNER-PANE-77      ← the SPAWNER's pane
+  CC_PANE_ID in its env          : <absent>
+```
+
+⇒ the four class-B scrapers (`desk-arm-live.sh:103`, `desk-recycle-invariant.sh:146`,
+`teammate-auto-shutdown.sh:356`, `cc-reconcile:169`) did not fail to answer *"which pane is this
+agent in?"* — **they answered the spawner's pane, confidently.** `teammate-auto-shutdown.sh` resolves
+a pane *in order to close it*, so the failure mode is closing the wrong pane, not skipping a session.
+A false negative costs a missed reap; this cost the spawner's pane. **Fixing the scrapers first —
+the order §7.9 implies — would also have shipped INERT**, because nothing in the fleet exported the
+key they would have been taught to read.
+
+### 10.2 The fix — both halves are load-bearing, and they fail differently
+
+`bin/cc-pane-headless:119` now spawns as
+`( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" )` — both assignments
+inside the existing subshell, so they scope to the spawned agent and not to the rest of `v_spawn`.
+*(The **calling** process is protected by the process boundary, not by these parentheses — `spawn`
+is a subprocess of whoever invoked it. That distinction is why §10.4 retired a test which claimed
+the subshell was what kept the caller clean.)*
+
+- **`export CC_PANE_ID="$id"`** — the seam's own key had **21 readers and zero writers** across
+  `bin/ scripts/ hooks/`. It now exists in a real process's environment for the first time.
+- **`unset ITERM_SESSION_ID`** — converts a confidently wrong pane into an honest absence. This is
+  the safety half: it restores exactly the false-negative §7.9 *described*, which is the fail-closed
+  behaviour, while `CC_PANE_ID` supplies the correct answer under the correct key.
+
+**Functional payoff, and the reason this is P2's blocker and not cosmetics:** an agent can now reach
+its own registry row from inside itself (`"$CC_PANE_HOME/$CC_PANE_ID/inbox"`, asserted live). Before
+this, `send`'s durable delivery had **no reachable consumer on the agent's side** — the agent could
+not name its own inbox. Anything that *drains* a headless inbox (§2/P2's other "not yet true" item)
+was unbuildable until this landed.
+
+### 10.3 The instrument lesson — `ps` env visibility is a function of CODE SIGNATURE
+
+This nearly convicted four healthy production files. A positive control was built on `/bin/sleep`,
+`ps eww -p <pid>` returned **zero** env tokens for it, and the reading generalised to *"`ps eww -p`
+is universally blind on macOS 15, so every class-B scraper is already broken."* **That conclusion was
+false**, and the real production line recovers `ITERM_SESSION_ID=w0t0p0:70` from live Claude panes
+with 55 env tokens visible.
+
+Measured on macOS 15.6.1, same launcher, same env, one variable changed:
+
+| Subject | `codesign -dv` | env tokens via `ps eww -p` |
+|---|---|---|
+| `/bin/sleep` | `Identifier=com.apple.sleep` | **0 — hidden** |
+| `cp` of `/bin/sleep` | signature is embedded, so still Apple | **0 — hidden** |
+| `node` (user-installed) | `Identifier=node`, `flags=0x10000(runtime)` | **77 — visible** |
+
+⇒ **macOS hides a process's environment from `ps` for Apple platform binaries and exposes it for
+user-installed ones.** A control built from `/bin/sleep`, `/bin/echo` or `/usr/bin/true` is
+*structurally incapable* of showing an env var, so it reports "blind" whatever the truth is — the
+`control-must-replay-the-real-artifact` class, where the control cannot fail the same way the subject
+does. Real agents are `node`, so production was never in the hidden population.
+
+**Consequence for the tests in §10.4, and it is not a stylistic choice:** they assert via the child's
+**own self-report** into `out.log`, never via `ps`. The suite spawns `/bin/sh` — an Apple binary — so
+a `ps`-based oracle would read "ITERM_SESSION_ID absent" for a child that *has* it, and would go
+**green against a reverted fix**. Two further contamination traps hit while measuring, both the
+`pgrep-f-matches-agent-briefs` shape: `env VAR=val cmd` puts the marker in **argv**, and the Bash
+tool's own `zsh -c '<script>'` carries the whole script text in *its* argv, so an unfiltered
+`grep -c` counted the probe's own source as evidence.
+
+### 10.4 Verification
+
+`tests/cc-pane-headless.bats` **23/23 green**, 4 new: the export · the non-leak · a positive control
+proving the oracle can see an inherited variable at all · inbox reachability. `tests/cc-pane-redproof.sh`
+**15/15 caught · 0 weak**, with 3 added — export deleted · `unset` deleted · exported-but-wrong-value.
+The third pins that the test compares against the **returned id** rather than merely asserting
+non-emptiness, because non-emptiness is not provenance.
+
+**A fifth test was written, passed, and was REMOVED for passing for the wrong reason** — worth
+recording because the suite would have shipped one more green line than it earned. The claim was
+*"the identity is set inside the subshell, so the SPAWNER's own environment is never mutated."* A
+mutant hoisting `export CC_PANE_ID="$id"` **out** of the subshell left the suite **fully green**:
+`spawn` runs as a SUBPROCESS of the suite, and no child can mutate its parent's environment under
+any implementation, so the assertion was guaranteed by the process boundary rather than by the
+subshell it named. The mutation is sound; the property is simply not observable from outside the
+process. Both the test and its mutant are now comments explaining that, so it is not re-derived.
+
+**One latent flake was fixed before it could fire, and it is this repo's recurring class.** The
+retired test's first cut asserted `CC_PANE_ID = <unset>` against **whatever the developer's shell
+happened to carry** — a verdict that is a function of *where* the suite runs (§8.8 defect 1). It
+would have gone red for a real reason that had nothing to do with the subject: run the suite from
+inside a headless agent, and `CC_PANE_ID` is now exported *by this very change*.
+
+### 10.5 Still open — named, not dropped
+
+1. **The consumer half — FILED as backlog `0f796daa0c76`.** The four class-B sites should prefer
+   `CC_PANE_ID` and fall back to `ITERM_SESSION_ID`. It is small and now **non-inert** (the key
+   exists), but it lands in T3 territory and `teammate-auto-shutdown.sh` closes panes, so it is not
+   smuggled in here: Follow-On Gate **F2 fails** (the consumer side was not verified this session)
+   and **F3 is questionable** (pane-closing is an escalation surface). Post-fix the sites are
+   fail-closed — they see absence, not a wrong pane — which is why this is an improvement to make
+   deliberately rather than an outage to patch.
+2. **Kitty re-synthesis residue.** `unset` removes the variable from the agent's own environment, but
+   `KITTY_WINDOW_ID` is still inherited, and §8.4 records that a login `zsh` re-synthesizes
+   `ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID"` from it. A headless agent that starts a **login
+   shell** can therefore re-acquire the spawner's kitty window id. `KITTY_WINDOW_ID` was left alone
+   deliberately: it is the **terminal-dispatch** variable that all four divert predicates key on
+   (§8.3), so clearing it would change which backend the agent's own `cc-pane` calls resolve to — a
+   much wider blast radius than the identity fix. Class-A consumers are already immune (`CC_PANE_ID`
+   wins the `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}` precedence); only class-B scrapers would see the
+   re-synthesized value, and item 1 is their durable defence.
