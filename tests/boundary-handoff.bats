@@ -21,13 +21,62 @@ setup() {
   # own tests, which enable it explicitly and assert the reason.
   export CC_BOUNDARY_T_FREEWIN=0
   mkdir -p "$CC_TELEMETRY_DIR"
-  # a committed repo standing in for the session's cwd, marked gate-green at HEAD
-  WD="$BATS_TEST_TMPDIR/wd"; mkdir -p "$WD"
-  git -C "$WD" init -q
-  git -C "$WD" config user.email t@t; git -C "$WD" config user.name t
-  echo seed > "$WD/f.txt"; git -C "$WD" add -A; git -C "$WD" commit -qm init
-  HEAD="$(git -C "$WD" rev-parse HEAD)"
+  # A committed repo standing in for the session's cwd, marked gate-green at HEAD — AND GIVEN A REAL
+  # UPSTREAM TRUNK, which is load-bearing rather than tidy.
+  #
+  # Until 2026-08-09 this fixture was a bare `git init` with no remote, and setup()'s comment above
+  # claimed "the fixture repo is clean + landed — RUNG=✅". That held only because wrap-ledger had a
+  # bug: a repo with NO trunk read "Clean & landed", the abstain sitting under the arm that asserts
+  # it. eb67d6ac fixed that — nothing can be proven landed against a trunk that does not exist — so
+  # the same fixture now yields `RUNG=🔧 … no upstream trunk resolved, so landing is UNPROVEN`. The
+  # premise died with the bug it depended on, and the free-win fire case went red on trunk (postland
+  # 2026-08-09 14:12 and 22:39, C29-corroborated across load windows) while the hook under test was
+  # entirely healthy.
+  #
+  # SCOPE OF THE DAMAGE, MEASURED RATHER THAN ASSUMED. The obvious worry is that the neighbouring
+  # DIRTY-TREE safety case went vacuous too — it asserts SILENCE, and a fixture that can never fire
+  # is silent for free. Checked by mutation, and it did NOT: that case survives because two
+  # independent guards each suppress it (the general `dirty-tree` abstain at hooks/
+  # boundary-handoff.sh:315 and the RUNG check in free_win_now), so killing either alone leaves it
+  # green and killing BOTH reds it — which is correct redundancy for "a dirty tree must never fire",
+  # not a hole. Only the fire case was actually broken. The control below exists anyway, because the
+  # premise it names is what nothing asserted (memory: stale-assertion-becomes-an-inverted-guard).
+  WD="$BATS_TEST_TMPDIR/wd"
+  ORIGIN="$BATS_TEST_TMPDIR/origin.git"
+  git init -q --bare "$ORIGIN"
+  git -c init.defaultBranch=main clone -q "$ORIGIN" "$WD" 2>/dev/null
+  git -C "$BATS_TEST_TMPDIR/wd" symbolic-ref HEAD refs/heads/main
+  echo seed > "$WD/f.txt"
+  git -C "$BATS_TEST_TMPDIR/wd" add -A
+  # Transient identity, not `git config`: `git -C "" config …` is a documented no-op that drops the
+  # TEST identity into whatever repo the process is standing in (the 2026-08-05 leak that re-authored
+  # 9 commits here and 214 on reso — scripts/git-identity-lint.sh).
+  git -C "$BATS_TEST_TMPDIR/wd" -c user.email=t@t -c user.name=t commit -qm init
+  git -C "$BATS_TEST_TMPDIR/wd" push -q -u origin main
+  HEAD="$(git -C "$BATS_TEST_TMPDIR/wd" rev-parse HEAD)"
   printf '%s' "$HEAD" > "$WD/.git/gate-green"
+}
+
+# POSITIVE CONTROL for the fixture's own premise. Every ✅-ledger case below is conditioned on this
+# repo computing RUNG=✅ and NOTHING asserted it — which is precisely how the premise rotted under the
+# suite (one case red, one case silently vacuous) without a single test naming the reason. Asserting
+# it once here means the next change to wrap-ledger's rung rules fails with the cause attached,
+# instead of surfacing as a mystery red in a test whose name is about context percentages.
+@test "PREMISE: the fixture repo genuinely computes RUNG=✅ (else the free-win cases are vacuous)" {
+  local w=""
+  for c in "$REPO/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+    # `if`, not `[ … ] && { … }`: the latter is and-absorbed under errexit and reads as a DEAD
+    # assertion to scripts/bats-assert-liveness-lint (it blocked this land, correctly — the shape
+    # is indistinguishable from an assertion that can never fail).
+    if [ -x "$c" ]; then w="$c"; break; fi
+  done
+  [ -n "$w" ] || { echo "no wrap-ledger.sh found — the free-win arm cannot be tested at all"; false; }
+  run bash -c "cd '$WD' && bash '$w' --machine"
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q '^RUNG=✅' || {
+    echo "fixture is NOT ✅ — the free-win fire case will red and the dirty-tree case will pass vacuously:"
+    echo "$output" | grep -E '^(RUNG|READOUT|TRUNK|DIRTY|UNLANDED|GATE)='
+    false; }
 }
 
 mk_btel() { # $1=sid $2=used_pct [$3=ts]
