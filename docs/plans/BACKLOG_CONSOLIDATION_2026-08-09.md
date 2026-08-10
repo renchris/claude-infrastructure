@@ -203,6 +203,73 @@ from the citation graph (142 edges, already computable); (4) worktree base-fresh
 **Falsifier:** `cc-premise check <any stale id>` returns a freshness verdict derived from a re-run
 falsifier, not from filing-time prose.
 
+### M2 — LANDED 2026-08-10 (`a7bf7068` · `ae5ff79d` · `8c67b17c`)
+
+Falsifier PASSES: `cc-premise check bc0f2abe078b` → `verdict=falsified`, rc 3, from a command re-run
+against today's tree. All four ordered arms are in, plus the plan-open title decay (`82a6c1894384`).
+
+| # | Arm | Where | Landed |
+|---|---|---|---|
+| 1 | `--falsifier` at write, re-run at claim | `cc-backlog add`, `cc-premise` | `a7bf7068` |
+| 1b | DERIVED falsifier for `source=="plan-open"` | `cc-premise` | `8c67b17c` |
+| 2 | cluster-as-dispatch-unit | `cc-dispatch` decision pass | `ae5ff79d` |
+| 3 | derived rank | `cc-dispatch` `order_dispatchable` | `ae5ff79d` |
+| 4 | worktree base-freshness | `cc-dispatch` `warm_worktree` + the pre-existing-dir path | `ae5ff79d` |
+| — | plan-open TITLE re-derivation (`82a6c1894384`) | `cc-premise contract` | `8c67b17c` |
+
+**Re-measured at start, and three of the plan's numbers had moved** — record them, because the
+design was argued from the old ones:
+
+- The store is **1584 items / 259 open / 110 blocked**, not 460. Priority and severity fields: still
+  **0**, so the FIFO diagnosis holds exactly.
+- **Clustering saves 3 admissions today, not 17.** The 18-row `deploy-parity` pile that motivates
+  the design is `blocked`, and blocked items were already filtered at dispatch step 1. One
+  multi-member cluster survives in the open set (4 rows, the MEMORY.md-index condition). The arm is
+  a standing guard against a pile re-forming, not a fix for a pile now in the queue.
+- **In-degree must be counted over the WHOLE fold**, not the open set: open-vs-open yields 20 edges
+  over 16 items where the full fold yields **101 edges over 68 of 259** — a 5x collapse, because a
+  citation is nearly always written INTO a `done` or `blocked` record. The narrower version would
+  have looked like a working signal.
+
+**Rank is lexicographic, not weighted** — thrash > land-rail > in-degree > recurrence > oldest ts.
+Coefficients nobody can defend are indistinguishable from arbitrary ones; a strict precedence is
+arguable one clause at a time. Effect on the live queue: **249 of 259 items change position**, the
+largest single move being 178 places.
+
+**Two corrections the cluster key cost, both kept as comments because both are the rule:**
+`[0-9a-f]{7,40}` also matches "defaced" and "cabbage", so a hex run must carry a digit; and keying
+on the normalised title unconditionally made every UNTITLED row share one key and collapse into one
+cluster (8 existing v2 assertions went red, correctly — the absence of a discriminator is not
+evidence of sameness). An inferred cluster now needs three surviving alphabetic tokens AND two
+distinct raw titles: the inference is only licensed when a MEASUREMENT is what split the rows, which
+byte-identical titles disprove. A declared `--condition` bypasses that bar.
+
+**Freshness had two holes, not one.** A reused `wt-<id>` branch was checked out at its old tip with
+the base never consulted, so the `fetch` above it bought nothing; and a pre-existing worktree
+directory short-circuited provisioning entirely, so `warm_worktree`'s guard could not see it by
+construction. Both now read three states and only a PROVEN-stale tree refuses. A stale branch
+carrying nothing is fast-forwarded; one carrying commits is refused and the item reopened — never
+rebased or deleted, because an unattended dispatcher must not destroy work it did not create.
+
+**A latent defect in `a7bf7068` surfaced and is fixed:** `cmd_contract` gated on `verdict=="clear"`,
+so a STILL-LIVE stored falsifier's output was dropped from the worker's brief — the one channel this
+file's header calls the enforcing store — although `run_falsifier`'s docstring promises it rides
+there. The gate is now `lines`. The same read restored `falsified` to the sweep report, where it was
+in `BLOCKING` but had no bucket and so could not be counted.
+
+**Not taken, filed instead:** `--falsifier` emission from `postland-verify` and `deploy-live`
+(`d0a1bb8717cf`). Both generators live in `scripts/postland-verify.sh` / `scripts/deploy-live.sh`,
+owned by the concurrently-running M1 (`3b22efbc2340`). The `needs` generator (107 rows) has no
+machine oracle at all — its `--run` command PERFORMS the operator step, so running it as a probe
+would execute the thing it was meant to test.
+
+**Verification.** 24 new tests (12 `cc-dispatch-firegate.bats`, each paired against the pre-M2
+artifact recovered by `git archive` from `a7bf7068`; 12 `cc-premise-plan-open.bats`, mutation-checked
+— the derived arm inert reds 3, the snapshot inert reds 2). 156 pre-existing tests still green
+across 7 dispatch suites and 2 premise suites; in-script selftest 168/0. Every arm has a kill switch
+(`CC_DISPATCH_RANK` / `_CLUSTER` / `_WT_FRESH`, `CC_PREMISE_PLAN_SNAPSHOT`) and fails open to the
+incumbent behaviour.
+
 ## M3 — The fleet bounds its own footprint, so the box stops panicking
 
 **Absorbs:** `M-panes-1`, `M-panes-2`, `M-tail-1`, `M-memhooks-C3`, the immortal-worktree half of
