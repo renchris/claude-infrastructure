@@ -7649,7 +7649,11 @@ else
       # worktree). This is the term that makes a dispatched wave a ledger fact instead of an
       # invisible in-flight state (generator G1; the census's wave-abandonment signature).
       # ENGAGE_VERIFY=0 fires skip it — no confirmed pane reaches this branch there; bounded, stated.
-      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ]; then
+      # SELF-RETIRE fires only (review #5): a --no-self-retire peer has no stamp ⇒ no marker ⇒ can
+      # never reach the self-close discharge, so its row would be deterministically stale — until
+      # custody v1.1 adds the ping-receipt discharger, that debt is not recorded rather than
+      # recorded unretirably.
+      if [ -n "${NB_ARMED_TARGET:-}" ] && [ -n "${SPAWNED_PANE:-}" ] && [ "${WANT_SELF_RETIRE:-0}" = 1 ]; then
         _hf_custody open --cwd "$PWD" --target "$SPAWNED_PANE" \
           --marker "${FIRE_MARKER:-}" --slug "${NB_SLUG:-}" \
           --notify-back "$NB_ARMED_TARGET" --originator-pane "${FIRING_SID:-}"

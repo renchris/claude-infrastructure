@@ -174,8 +174,13 @@ fired_stamp_tenancy() { # $1=stamp-path $2=this-pane-cwd → echoes absent|valid
 #                                            not missing; cwd finds it, the marker proves it)
 #   · absent otherwise                     → origin
 #   · unreadable pane/cwd both empty       → unknown    (nothing was asked; consumer abstains)
+# ⚠ KILL-SWITCH COUPLING (review 2026-08-10 #9): CC_SELFCLOSE_TENANCY=0 makes fired_stamp_tenancy
+#   answer `unknown` for EVERY stamp, and `unknown` maps to `origin` here — so disabling tenancy to
+#   debug a self-close incident also subjects every fired peer to the close contract (bounded ≤cap
+#   each, latched; annoying, never unsafe). Deliberate: one switch, one state model — a private
+#   read for this consumer would be the two-copies drift this lib exists to end.
 oi_origin_class() {
-  local pane="${1:-}" cwd="${2:-}" tp="${3:-}" dir state rec marker idxpane scwd closed
+  local pane="${1:-}" cwd="${2:-}" tp="${3:-}" dir state marker idxpane scwd closed
   dir="$(oi_fired_dir)"
   if [ -z "$pane" ] && [ -z "$cwd" ]; then printf 'unknown'; return 0; fi
   state="absent"

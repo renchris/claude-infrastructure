@@ -19,6 +19,11 @@ setup() {
   export ITERM_SESSION_ID="w0t0p0:BBBBBBBB-1111-2222-3333-444444444444"
   # Isolate the floor under test: the mechanical arm and the wake floor have their own suites.
   export CC_MECH_CONTINUE=0 CC_WAKE_FLOOR=0
+  # THE SUITE MUST NOT BE A FUNCTION OF WHO RUNS IT (review 2026-08-10 #2, the completion-assert:26
+  # lesson verbatim): the assignee oracle reads the RUNNING process's ancestry, so an agent-spawned
+  # runner is itself "an assignee" and the floor abstains — 4/10 cases red purely by runner. The
+  # missing-file override yields the stub ("not an assignee"), which is these fixtures' truth.
+  export AGENT_IDENTITY_LIB="$BATS_TEST_TMPDIR/no-such-agent-identity.sh"
   # A REAL repo so HEAD moves when the one-shot-per-sha bound needs it to.
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
   ( cd "$CWD" && git init -q \

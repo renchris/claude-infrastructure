@@ -125,6 +125,7 @@ case "${1:-}" in
 esac
 
 # ---- Stop-hook actuation mode (no recognized arg; JSON on stdin) ----------------
+SC_LED_CACHE=""   # one wrap-ledger sample per Stop, shared mechanical-arm → ship-floor (review #7)
 input=$(cat 2>/dev/null || printf '{}')
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 [ -n "$cwd" ] || cwd="$PWD"
@@ -283,11 +284,22 @@ fi
 # team-config cross-confirmation that closes the argv-in-a-brief false positive) lives with the code.
 # Resolution mirrors the idl-log.sh tiering below: $0's own symlink first, so a brand-new lib is
 # found on the same fast-forward that delivers this hook, before install.sh has run.
-_ailib="$_scd/lib/agent-identity.sh"
-[ -f "$_ailib" ] || { _ait="$0"; [ -L "$_ait" ] && _ait="$(readlink "$_ait")"
-  _ailib="$(cd "$(dirname "$_ait")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
-[ -f "$_ailib" ] || _ailib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
-[ -f "$_ailib" ] || _ailib="$HOME/.claude/hooks/lib/agent-identity.sh"
+# AGENT_IDENTITY_LIB is a HARD override, deliberately not the head of the fallback chain — the
+# completion-assert.sh:236 pattern, added here for the same measured reason (review 2026-08-10 #2):
+# the assignee oracle reads the RUNNING PROCESS's ancestry, so any suite driving this hook from an
+# agent-spawned runner IS "a confirmed/unknown assignee" and every floor abstains — 4/10 ship-floor
+# cases red purely by who ran them. Pointing the override at a missing file yields the stub
+# ("not an assignee"), which is the fixture's truth. Without the seam the suite is unpinnable: the
+# $0-first chain always finds the real lib.
+if [ -n "${AGENT_IDENTITY_LIB:-}" ]; then
+  _ailib="$AGENT_IDENTITY_LIB"
+else
+  _ailib="$_scd/lib/agent-identity.sh"
+  [ -f "$_ailib" ] || { _ait="$0"; [ -L "$_ait" ] && _ait="$(readlink "$_ait")"
+    _ailib="$(cd "$(dirname "$_ait")" 2>/dev/null && pwd)/lib/agent-identity.sh"; }
+  [ -f "$_ailib" ] || _ailib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/agent-identity.sh"
+  [ -f "$_ailib" ] || _ailib="$HOME/.claude/hooks/lib/agent-identity.sh"
+fi
 # FAIL-SAFE: no lib ⇒ define a stub that says "not an assignee". That is the SAME direction the
 # abstain already takes on no evidence (never abstain on ignorance), so a missing lib cannot
 # silently disarm the floor for the whole fleet — it degrades to exactly the pre-abstain behaviour.
@@ -569,8 +581,11 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   # shellcheck disable=SC1091
   . "$swlib" 2>/dev/null || return 1
 
-  # Ledger first: it is the cheap read, and a non-🔧 rung ends this immediately. 📦 must NOT fire —
-  # committed-but-unlanded is operator-readout's surface and the ship policy's business, not a loop.
+  # Ledger first: it is the cheap read, and a non-🔧 rung ends this immediately. The bare-📦 SILENT
+  # idle is no longer waved through wholesale — that is the SHIP FLOOR's bounded job below (the
+  # 2026-08-10 recon convicted the old blanket refusal as the load-bearing leak); this arm still
+  # owns only 🔧. The ledger output is CACHED for the ship floor (review #7: two full wrap-ledger
+  # runs — git forks + a cc-decide fork each — per unarmed idle Stop, on a chain measured 3688ms).
   local wrap led rung
   wrap="${WRAP_LEDGER_BIN:-}"
   if [ -z "$wrap" ]; then
@@ -581,6 +596,7 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   [ -n "$wrap" ] && [ -f "$wrap" ] || return 1
   led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
   [ -n "$led" ] || return 1
+  SC_LED_CACHE="$led"
   rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
   [ "$rung" = "🔧" ] || return 1
 
@@ -671,14 +687,19 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   wf_teardown_marked && return 0
 
   local wrap led rung ahead shas trunk
-  wrap="${WRAP_LEDGER_BIN:-}"
-  if [ -z "$wrap" ]; then
-    for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
-      [ -f "$wrap" ] && break
-    done
+  # Reuse the mechanical arm's ledger read when it got that far (review #7 — the two floors run in
+  # ONE Stop invocation, so a shared sample is the same read, not a stale one).
+  led="${SC_LED_CACHE:-}"
+  if [ -z "$led" ]; then
+    wrap="${WRAP_LEDGER_BIN:-}"
+    if [ -z "$wrap" ]; then
+      for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+        [ -f "$wrap" ] && break
+      done
+    fi
+    [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
+    led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
   fi
-  [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
-  led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
   [ -n "$led" ] || return 0
   rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
   case "$rung" in "📦"|"🚀") : ;; *) return 0 ;; esac
@@ -730,7 +751,7 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   shas="$(printf '%s' "$led" | grep -E '^SHAS=' | head -1 | cut -d= -f2-)"
   local reason
   if [ "$rung" = "📦" ]; then
-    reason="📦 SHIP FLOOR — you are going idle on committed-but-unlanded work YOU wrote (${ahead:-?} commit(s): ${shas:-?}). Committed ≠ landed: a branch only this machine can see is one crash or forgotten worktree from lost — the measured top loss class (62 stranded commits across 21 abandoned-wave branches). Apply the ship policy NOW: /ship it (auto-fire by default; where THIS repo's own CLAUDE.md says landing spends money, offer it and park instead). If this park is DELIBERATE, run \`~/.claude/hooks/session-continue.sh clear\` and name the park in your close. (ship floor $(( pcnt + 1 ))/${maxs})"
+    reason="📦 SHIP FLOOR — you are going idle on committed-but-unlanded work YOU wrote (${ahead:-?} commit(s): ${shas:-?}). Committed ≠ landed: a branch only this machine can see is one crash or forgotten worktree from lost — the measured top loss class (62 stranded commits across 21 abandoned-wave branches). Apply the ship policy NOW: /ship it (auto-fire by default; where THIS repo's own CLAUDE.md says landing spends money, offer it and park instead). If this park is DELIBERATE, say so in your close — this floor is already spent for the current commit and re-fires at most once per NEW commit (≤${maxs}/session). (ship floor $(( pcnt + 1 ))/${maxs})"
   else
     reason="🚀 SHIP FLOOR — your landed work is NOT live: the enforcing store has breached its converge budget, so the machine still runs the old bytes. Run the converger NOW — \`bash \$(git rev-parse --show-toplevel)/scripts/deploy-live.sh\` — then re-read the ledger (\`/wrap\`). If the converger refuses, file it (\`cc-backlog needs\`) and close on 👤 — never sit on 🚀 and never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
   fi

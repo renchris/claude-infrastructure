@@ -83,3 +83,10 @@ setup() {
   [ "$status" -eq 0 ]
   [ "$output" = 0 ]
 }
+
+@test "MALFORMED: return with a flag where the token should be is an ERROR, never a silent rc-0 non-discharge" {
+  "$BIN" open --cwd "$WT_A" --target 42 --marker M-9 --slug wave9
+  run "$BIN" return --cwd "$WT_A"
+  [ "$status" -ne 0 ]
+  [ "$("$BIN" count --open --cwd "$WT_A")" = 1 ]
+}
