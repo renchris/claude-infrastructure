@@ -39,6 +39,10 @@ setup() {
   # indicts the fixture, never the subject (memory: uniform-error-ratio-indicts-the-model).
   export ALT=true                                # in_alternate_screen for the stub window
   export LS_RC=0 TEXT_RC=0                       # force RPC failures
+  # foreground_processes for the stub window. Default EMPTY — the AGENT-PANE branch must be
+  # unreachable unless a test positively supplies an agent argv, or every assertion in this file
+  # would be silently running against the permissive branch.
+  export FG_JSON='[]'
 
   cat > "$BIN/kitty" <<'SH'
 #!/bin/bash
@@ -46,7 +50,7 @@ printf '%s\n' "$*" >> "$KITTY_ARGV"
 for a in "$@"; do
   if [ "$a" = "ls" ]; then
     [ "${LS_RC:-0}" = 0 ] || exit "$LS_RC"
-    printf '[{"id":1,"tabs":[{"id":1,"windows":[{"id":300,"columns":100,"in_alternate_screen":%s,"is_focused":false,"pid":1,"cwd":"/tmp","foreground_processes":[]}]}]}]\n' "${ALT:-true}"
+    printf '[{"id":1,"tabs":[{"id":1,"windows":[{"id":300,"columns":100,"in_alternate_screen":%s,"is_focused":false,"pid":1,"cwd":"/tmp","foreground_processes":%s}]}]}]\n' "${ALT:-true}" "${FG_JSON:-[]}"
     exit 0
   fi
   if [ "$a" = "get-text" ]; then
@@ -202,6 +206,89 @@ attempts(){ local n; n="$(grep -c 'close-window' "$KITTY_ARGV" 2>/dev/null)" || 
   closed
 }
 
+# ── …including the SUBAGENT pane, the fourth state (2026-08-10) ──────────────────────────
+#
+# A CC agent pane paints one rule — its `──── @name ──` footer — and no composer at all. That is
+# `len(rules) < 2`, which lands in the UNKNOWN arm written for a modal-occluded composer, so the
+# guard refused every one of them: measured 10/10 live agent windows refused (rc 67) while 10/10
+# non-agent windows resolved, and ten finished `claude.exe` children survived 5 h 16 m holding
+# 5.9 GB. The branch below is the correction, and it takes TWO independent proofs — an agent argv
+# in kitty's process table, AND that same agent name in the single rule on screen. Each proof has
+# its own negative control, because either alone would exempt panes it must not.
+
+AGENT_FG='[{"cmdline":["/opt/claude/bin/claude.exe","--agent-id","tri-dispatch@session-e5d3628d","--agent-name","tri-dispatch","--agent-type","general-purpose"]},{"cmdline":["/bin/bash","/x/bin/cc-pane-runner"]}]'
+# The real shape of window 32, 2026-08-10 00:28Z (~/.claude/logs/composer-snapshots): a status line
+# and ONE labelled footer rule. Widened to the stub window's 100 columns — the rule must clear
+# `max(20, cols//2)` glyphs or it is not counted as a rule at all, and the pane reads as zero rules
+# rather than one, which is a DIFFERENT refusal wearing the same exit code.
+agent_rule()   { printf '%s @%s ──' "$(printf '─%.0s' $(seq 1 60))" "${1:-tri-dispatch}"; }
+agent_screen() { printf '%s\n' "✻ Baked for 15m 50s" "$(agent_rule "${1:-tri-dispatch}")" > "$SCREEN"; }
+
+@test "a finished SUBAGENT pane closes — one labelled rule, no composer, nothing to lose" {
+  ALT=true; FG_JSON="$AGENT_FG"; agent_screen
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "CONTROL: the same screen WITHOUT an agent argv is still refused" {
+  # Proof 1 alone. Without this, the branch would read as "one rule ⇒ close", which exempts every
+  # unreadable pane in the fleet — the guard deleted rather than extended.
+  ALT=true; FG_JSON='[]'; agent_screen
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: an agent argv whose footer names a DIFFERENT pane is refused" {
+  # Proof 2 alone. The screen must corroborate the process table; a stale or mismatched read is
+  # exactly the wrong-window hazard the identity pin exists for, one layer down.
+  ALT=true; FG_JSON="$AGENT_FG"; agent_screen "some-other-agent"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "an agent pane that DOES hold typed text is refused exactly like any other" {
+  # The branch only ever converts "no composer region found" into "there is provably none". A
+  # rendered composer with real text is NON-EMPTY on an agent pane too, and NON-EMPTY always wins.
+  ALT=true; FG_JSON="$AGENT_FG"
+  printf '%s\n%s\n%s\n' \
+    "$(agent_rule tri-dispatch)" \
+    "$(printf '\033[m❯%swords a person typed into an agent pane' "$NBSP")" \
+    "$RULE" > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+  # …and refused as NON-EMPTY, not as UNKNOWN. Both exit 67, so the status line alone cannot tell a
+  # branch that is correctly subordinate from a fixture that never reached it.
+  echo "$output" | grep -qi 'only in this process'
+}
+
+@test "a MODAL-occluded agent pane is refused — its own borders make a second rule" {
+  # This is why the branch demands exactly ONE rule. CC draws permission modals with box-drawing
+  # borders, so an occluded pane reads >=2 rules with no composer glyph and falls back to UNKNOWN.
+  ALT=true; FG_JSON="$AGENT_FG"
+  printf '%s\n%s\n%s\n%s\n' \
+    "$(agent_rule tri-dispatch)" \
+    "$RULE" "  Do you want to proceed?  1. Yes  2. No" "$RULE" > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+  echo "$output" | grep -qi 'could not be read'   # UNKNOWN, i.e. the agent proof did NOT apply
+}
+
+@test "a NON-claude process carrying --agent-id is not an agent pane" {
+  # The argv[0] basename is half of proof 1. Without it any process that merely MENTIONS the flag
+  # — a grep, an editor holding this very file — would exempt the pane it runs in
+  # (memory: pgrep-f-matches-agent-briefs: argv carries whole briefs).
+  ALT=true; agent_screen
+  FG_JSON='[{"cmdline":["/usr/bin/vim","bin/it2-kitty","--agent-id","tri-dispatch@x","--agent-name","tri-dispatch"]}]'
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
 # ── the escape hatch, and the flag that must NOT be one ──────────────────────────────────
 
 @test "CC_CLOSE_COMPOSER_GUARD=off bypasses — the drift/e2e harnesses need it" {
@@ -262,11 +349,34 @@ open(sys.argv[2], "w").write(src.replace(a, b))' "$SHIM" "$m" || return 1
 }
 
 @test "CONTROL: without the NO-TUI split, the shell-prompt pane is refused" {
-  local m; m="$(mutate 'print("UNKNOWN" if alt else "NO-TUI")' 'print("UNKNOWN")')"
+  # Anchor moved 2026-08-10 when the AGENT-PANE state was added to this same print. It failed LOUD
+  # ("anchor not unique") rather than silently passing, which is the META test above doing its job.
+  local m; m="$(mutate 'print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))' 'print("UNKNOWN")')"
   ALT=false; printf 'chrisren@host ~ %% \n' > "$SCREEN"
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]           # the mutant breaks self-close — so the real assertion tests it
   [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: without the AGENT-PANE branch, the finished subagent pane is refused" {
+  # The defect as it shipped: this exact mutant IS the pre-2026-08-10 script, and under it the ten
+  # tri-* panes were refused 160 times while their processes held 5.9 GB.
+  local m; m="$(mutate 'print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))' 'print("UNKNOWN" if alt else "NO-TUI")')"
+  ALT=true; FG_JSON="$AGENT_FG"; agent_screen
+  run "$m" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: reading the agent field back as \`alt\` deletes the guard for every pane" {
+  # `meta` grew a third field, so the old `alt="${meta##* }"` would hand the AGENT name back as
+  # `alt`. That never equals "True", so every pane reads NO-TUI and closes — a guard silently
+  # deleted by a parse, not by a decision. The modal pane is the one that proves it.
+  local m; m="$(mutate 'read -r cols alt agent <<<"$meta"' 'alt="${meta##* }"')"
+  ALT=true; FG_JSON='[]'; printf 'Do you want to proceed?\n 1. Yes\n 2. No\n' > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 0 ]            # the mutant DESTROYS an unreadable pane — the parse is load-bearing
+  closed
 }
 
 @test "CONTROL: without dim-awareness, CC's placeholder blocks the close" {
