@@ -1,0 +1,161 @@
+OK   f82a43651c00 PRUNE Both halves refuted. (a) The item's own date list ends Jul 31; it was filed Aug 9, so the phenomenon had already self-te
+OK   95422d3518bc PRUNE 437ccc0b "feat(cc-notify): route the cloud send to the session's owning account" (08-08 03:58) names this id in its body
+OK   e820dbfde7d2 PRUNE The prescribed script does not exist in either store: not in live ~/.claude/autonomy/pending-activation/ (31- is absent)
+OK   fdf4161aeb28 PRUNE git ls-tree origin/main docs/activation/pending-activation/ lists 05-ship-rail-push-allow-activate.sh. The repo copy exi
+OK   ef73328d0c8b PRUNE Same read: BOTH named scripts are on trunk — 05-ship-rail-push-allow-activate.sh and 13-mailbox-gc-activate.sh. Live-onl
+OK   d46bb5fbdb8f PRUNE The recurrence guard was BUILT. hooks/activation-watch.sh carries MIRROR_REL="docs/activation/pending-activation" (:55),
+OK   97148f9ea7e2 PRUNE The sanctioned mechanism this item proposes already shipped as scripts/esc-exempt.manifest (landed bf5f8519, 2026-08-02)
+OK   0af4fc51f097 MERGE → 08ba1e3dccc2 (role cluster canonical). Same defect, and its stated fact has decayed one step further: it reports cc-ro
+OK   2dd61967cf64 MERGE → 08ba1e3dccc2. Its "cc-notify EXITS 0 on unresolvable" clause is REFUTED (exit 3, bin/cc-notify:694); everything else d
+OK   20ea2eed4e3e MERGE → 08ba1e3dccc2. Carry forward its unique and load-bearing finding: registry rows carry NO role field at all (paneUUID/na
+OK   fbb636e0201b MERGE → 08ba1e3dccc2. Same defect, thinner. Carry forward: every terminal completion-push records ALARM(UNRESOLVED) instead of
+OK   aedf7f6ac6df MERGE → 5deb4418a648. Identical claim ("consult the lease before minting a session"), same refutation applies (f61c1eaaba05: a
+OK   eb37a3c12cb4 MERGE → 5deb4418a648. Its headline is REFUTED by 6f24f9c49e3e: dispatch fired at 149789b69fc4 EXACTLY ONCE (dispatch-fires.log
+OK   26897c0e94d0 MERGE → c163f42390a3. Its diagnosis "the wave writes ONE stamp for the whole wave" is refuted by the code — mark_fired_peer is
+OK   3de96166b05b MERGE → c163f42390a3. Same defect, better repro (panes 850/851, marker HANDOFF-ENGAGE-68859-1786225862-25237 present in the pr
+OK   fd7ba0bbc359 MERGE → c163f42390a3, and this one carries the constraint the whole master item must respect. It already refutes three prior c
+OK   798ab27d8116 PRUNE Remedy already on origin/main since 9f6d5a0d (2026-07-21) "feat(s6): bootstrap review cells surface the s5 winner as a p
+OK   bf313fdd7a3a MERGE → canonical 6a8df00b9b52. Identical subject (delete Azure RG rg-dcl18-validate after WORM age-out); 6a8df00b9b52 carries
+OK   e34a0e48833e PRUNE branch cc-001759-77337 does not exist (git branch -a: no match); .mcp.json still absent from origin/main — nothing can l
+OK   735283f4fa69 PRUNE git config core.bare = false on the shared checkout today; the ff-only misattribution premise is gone
+OK   4e3de50ec183 MERGE canonical 3df911c0470e — same deploy-live refusal, older mechanism text (29911f22 setup-token loader)
+OK   1e463de97b5d PRUNE this item IS a disproof record, and it re-verifies today: git diff origin/main -- hooks/completion-assert.sh is empty on
+OK   d5534a171556 PRUNE its whole deliverable was gate_admit load-admission — DELETED by land-pipeline-v2 ("It is deleted, not tuned", ship-land
+OK   8b90c69e0edd PRUNE KILLED vs HUNG are distinct terminal states now: a "verdict":"hung" stamp exists, classify_hang routes it, and flakes.js
+OK   a0718a5d78b3 PRUNE landed and content-verified: tests/pkill-scope.bats + the pkill clause of scripts/test-hermeticity-lint.sh are on trunk;
+OK   9478505449a2 PRUNE a stale-precondition RECORD whose content I re-verified; its ask is 35de32d78364's operator decision, not separate work
+OK   0fa7d7512a3c PRUNE checkout is 0 ahead of origin/main today (rev-list --left-right --count origin/main...HEAD = 19 0); the stranded kitty c
+OK   8255aa85cb26 PRUNE the shared checkout carries ZERO unlanded commits today (0 ahead); a6d5c5f2/e65d7adb are gone from HEAD
+OK   4169969836ac PRUNE hooks/backup-before-write.sh is CLEAN today; hooks/lib/read-before-write-parity.sh is untracked, and deploy-live.sh:364 
+OK   5ab388498ef3 PRUNE all 8 named pids (33674 5037 20398 67253 73968 82819 91568 88701) are dead — kill -0 on every one
+OK   3847d83eef1a MERGE canonical 3df911c0470e; break-step 26-deploy-gate-unblock is satisfied per 1572de03463c
+OK   16f0abd6e9bd MERGE canonical 3df911c0470e — same refusal, sha 3725e543 superseded (last-green is now 71e96bcb)
+OK   3c4083af1397 MERGE canonical 3df911c0470e; its stated cause (target BEHIND live HEAD ⇒ anti-rollback) is refuted — last-green IS an ancesto
+OK   b59eb997d035 PRUNE the ':22 real tree is CLEAN' case is gone from tests/test-hermeticity-lint.bats (setup now dogfoods rule 1), and runner.
+OK   c13dad7d5dbe PRUNE BOTH prescribed fixes landed: install.sh skips a label "executing right now, not reloaded" (:700-703) and issues a CONDI
+OK   1572de03463c MERGE canonical 3df911c0470e — trunk is still not green, which is exactly this item's stated unblock condition
+OK   4f12ec722bad MERGE canonical 3df911c0470e; its evidence is superseded (live HEAD moved, verifier converging 114→33 today)
+OK   525ec16e7124 PRUNE tests/deploy-parity-live.bats reads ok in today's deploy.log post-deploy host checks; sha 3e423b762e60 is 4 days old and
+OK   f271cd880295 PRUNE same host-check evidence; 7ded71b83209 ancestor, 2026-08-05
+OK   8028ce79f5b9 PRUNE same host-check evidence; d6394732c994 ancestor, 2026-08-02
+OK   dda10a298842 PRUNE cited sha e7e2ea9445b3 is NOT an ancestor of origin/main (never landed) AND the suite is green in today's host checks
+OK   27ac5a5b258f PRUNE same host-check evidence; e9cabc46698d ancestor, 2026-08-05
+OK   a31d1fe3de3d MERGE canonical 50af9e4a4258 (the revert actuator cannot act); its sha 57e162494c10 is not even an ancestor of trunk
+OK   2f53940bd969 MERGE canonical 50af9e4a4258 — byte-identical triplet with e0ef8d3baae6/11baa19409bc, minted by the per-EVENT key at postland-
+OK   e0ef8d3baae6 MERGE canonical 50af9e4a4258 — same triplet
+OK   11baa19409bc MERGE canonical 50af9e4a4258 — same triplet
+OK   02319b04b35f MERGE canonical 50af9e4a4258; d25c4dd47384 is 729 commits behind trunk
+OK   56fba3527563 PRUNE fixed by 707319a2 ("three test identity writes could re-author every worktree"); runner.log 2026-08-09T23:49:27Z records
+OK   2cb1a174c5bd PRUNE same class, same evidence — git-identity-lint is clean whole-tree on today's tree
+OK   bb78d6fca79f PRUNE cited sha a1743ffebd35 is NOT an ancestor of origin/main, and tests/bats-assert-liveness.bats appears in no stamp since
+OK   a8651e2f385c MERGE canonical cb6701bf2217 — this IS the launchd-PATH class (sysctl unreachable ⇒ SKIPPED); e6de2e15 is 524 behind and the s
+OK   c6a031ebd588 PRUNE d25c4dd47384 is 729 commits behind trunk and tests/cc-pane.bats appears in no stamp since; the ratchet it names is not c
+OK   4c23468bdaea PRUNE fixed on trunk 2026-08-09 by 670d93f2 ("a stale assertion demanded the one remedy…") — the suite's newest commit postdat
+OK   4b22325d29af PRUNE deploy-parity cohort — see Summary §1 (last recurrence 2026-07-28; fixed by dee7031a)
+OK   7f987616606b PRUNE deploy-parity cohort
+OK   92cb8d1483fa PRUNE deploy-parity cohort
+OK   f0152b0cef9b PRUNE deploy-parity cohort
+OK   b8cd08a7b7ed PRUNE deploy-parity cohort
+OK   592fa4d06256 PRUNE deploy-parity cohort
+OK   52774cd54d16 PRUNE deploy-parity cohort
+OK   39f7d520f5ba PRUNE deploy-parity cohort
+OK   0163a0d31517 PRUNE deploy-parity cohort
+OK   8422cd51c9a4 PRUNE deploy-parity cohort
+OK   99752779e916 PRUNE deploy-parity cohort
+OK   e58a281f7b84 PRUNE deploy-parity cohort
+OK   d5ead4c27b87 PRUNE deploy-parity cohort (the id the other 16 were hand-blocked onto)
+OK   c21daa45eea5 PRUNE deploy-parity cohort
+OK   5210fcc8c4c4 PRUNE deploy-parity cohort
+OK   e3a48705cd6c PRUNE deploy-parity cohort
+OK   9c16bc69f9b0 PRUNE deploy-parity cohort
+OK   b187766fafbd PRUNE deploy-parity cohort
+OK   d5a0cfc1686e PRUNE 4b3b6b010e6c is 291 behind trunk; tests/fire-engagement.bats appears in no stamp since 2026-08-07
+OK   c3aeefe393f1 PRUNE f60b7ca2 cohort — filed 2026-08-09 from a run verifying a commit 247 behind trunk; suite absent from every stamp after t
+OK   1b7f0279c720 PRUNE f60b7ca2 cohort — same
+OK   9b19d4392eb5 PRUNE f60b7ca2 cohort — same
+OK   13a0befd7acd PRUNE f60b7ca2 cohort — same
+OK   07603db55a30 MERGE canonical 8b2de5bc0f3b — same suite (kitty-recovery-launch), and that item proves it reproduces on clean origin/main, wh
+OK   21032726df58 PRUNE pid 82053 is dead (kill -0 fails); the verifier now running is pid 85038 from the live path
+OK   eea1070e386e MERGE canonical d0945db40dcd — same file, same fixture-vs-guard contradiction, different assertion
+OK   e65d45027b3d PRUNE premise consumed: 124 stamps have been written since, 3 of them green; the §7 embargo question is answered by the green-
+OK   e097421ab166 MERGE canonical 7c05d45796d8 — identical ask (a CLAUDE_CONFIG_DIR rule in test-hermeticity-lint), and the rule numbering it ci
+OK   af08d04ef450 PRUNE RULE 6 (the INHERITED-VALUE seam, test-hermeticity-lint.sh:187-206) IS shape 5c, and it explicitly argues why it is a si
+OK   a03198ee0232 PRUNE fixed: in_allowlist (:1243-1249) now three-states rc 0/1/>1 with a bounded retry, and the selftest at :2335-2338 positiv
+OK   423947ccdb96 MERGE canonical 02d413c9f382 — same suite (boot-resume-launch), and that item carries the live recurrence evidence
+OK   e5bfe6d0af02 PRUNE fixed: tests/handoff-fire-kitty.bats now documents and implements the CONDITIONAL drain — "drain only when the script is
+OK   55c70e890f6b MERGE canonical 8f50584fdfe1 — same conclusion (contention, not a broken tree) with weaker numbers; the green-rate item carrie
+OK   e90959ed6f75 PRUNE core.bare is false today; the ff-only death at deploy-live.sh:367 cannot occur from this cause
+OK   08bb6d205d63 PRUNE the shared checkout is NOT diverged — 19 behind, 0 ahead, fast-forwardable; no destructive reset is needed
+OK   74f624d1fb98 MERGE canonical 6110fc45141e — one surface (worktree handover hygiene at claim time); this is the foreign-staged-files face, 6
+OK   7021e89884df PRUNE Every load-bearing fact refuted. Filed at "27,810 B / 132 entries; the per-hook budget to reach 17.1 KB is 52 B, BELOW t
+OK   c302a3af457c PRUNE Same refutation, stated as "the index is ENTRY-COUNT-bound, not hook-length-bound … at 128 entries the floor is ~17 KB w
+OK   ae2321e411a8 PRUNE The CPU dimension landed. scripts/capacity-alarm.sh now has read_load() at :751 reading vm.loadavg field 1 and hw.ncpu; 
+OK   c9cad66730b1 PRUNE Already done. Both live config dirs register ~/.claude/hooks/curl-gate-scope.sh on PreToolUse/Bash — the scoped shim, no
+OK   894cf4b2ba03 PRUNE The distinction it exists to preserve is landed in the subject's own header. bin/cc-await-ping:18 documents --timeout as
+OK   a39d623f5381 PRUNE permission already landed: Bash(kitten @ send-text:) present in BOTH .claude/settings.json:6 and ~/.claude/settings.json
+OK   9cfd3fb7a6a6 PRUNE duplicate of a39d623f5381 — same permission, already present; /tmp/allow-kitten-sendtext.sh no longer exists.
+OK   71a0edb3630d PRUNE the ~20 panes are gone: 0 live claude with cwd wt-149789b69fc4, 0 cc-registry rows naming it, box rebooted 12h56m ago. (
+OK   df9454d4a542 PRUNE same, wt-191d4d056c98: 0 live cwds, 0 registry rows. Panes 351/353/354/356/357/358 and the keeper 352 are all gone.
+OK   4d37a4dca4f6 PRUNE same, wt-13d56549ece8: 0 live cwds; pane 460 is not among the 17 live panes.
+OK   c17369964b30 PRUNE that origin pane is not among the 17 live panes; the cloud-2way successor's worktree survives but no session holds it.
+OK   0dc334a97dc0 PRUNE premise fully refuted — iTerm2 is not running on this box; registry row 56A3C488 absent.
+OK   b2787f38dd80 PRUNE premise fully refuted — iTerm2 not running, fleet migrated to kitty. "154% CPU / 8.4GB after 14d uptime" cannot be true 
+OK   54ef90be1459 PRUNE premise refuted — claude-accounts now reports ➤ fable → next2 · Fable 0% ↻5d10h · weekly 9%, i.e. Fable IS routable, so 
+OK   62023c187144 PRUNE the fix LANDED. scripts/lib/worker-claim-gate.sh:328 now has a status=done) arm inside verdict=noop-status that REFUSES 
+OK   16618dfe7574 PRUNE fix LANDED (ab6b99ef fix(cc-await-ping): one cached pid convicted a live pane). _owner_dead() (bin/cc-await-ping:414) no
+OK   a116d60af388 PRUNE fix LANDED and names this item id in the shipped code: _veto "its cwd is held by a LIVE session under a DIFFERENT pane i
+OK   5b77e20d9db6 PRUNE explicitly refuted on trunk. 3c123bfc docs(await-ping): exit 144 is an EXTERNAL process-group SIGTERM — not SIGURG; bin/
+OK   258dddc54a02 PRUNE the discriminator it existed to run is moot — the cause is settled (kill -TERM -<pgid> → 144 with si_pid captured, per t
+OK   5996271339eb PRUNE superseded, and landing it now would be a regression. 937772ee fix(recycle): the probe typed on "I can't find CC" — and 
+OK   8452b79a0d6f PRUNE refuted on both sides it claimed were inert: wired in ~/.claude/settings.json:828 (Stop) and :868 (UserPromptSubmit); ~/
+OK   7b6aca24df81 PRUNE 3451b711 feat(reaper): garbage arm is an ancestor of trunk; garbage_sweep() at bin/cc-reaper:310 is default-ENABLED (CC_
+OK   a6841526a14c PRUNE the one-off is moot: pane 702's row no longer names pid 60701/session ba3e84eb (it now names 33728 / cca8d930), and pane
+OK   bc39703acc44 PRUNE launchctl list → 48326 0 com.claude.compressor-sentinel. The daemon is loaded and running (pid live, last exit 0). ddaca
+OK   950b7eb56e1f PRUNE all three PIDs gone: ps -p 56229/40742/68996 → no such process. Panes already closed.
+OK   c306d4bc2d2f MERGE canonical = fc06e9597fa7. Same branch cc-225947-27025 (39 unique commits vs origin/main, patch-id count re-measured toda
+OK   13ee8c06f088 MERGE canonical = 75782bed15f8. Three separate "run /deploy" rows for ONE fact: origin/release is 396 behind origin/main.
+OK   a44eef543cfa MERGE canonical = d56a874d9441. Identical question (does PROD share the caption-vs-figure clock split), filed 8 min apart.
+OK   60a2151c632e PRUNE lsof -nP -iTCP:3890 -sTCP:LISTEN → nothing listening. Server already dead.
+OK   986f6d8f9ce2 MERGE canonical = fc06e9597fa7. Same branch cc-225947-27025.
+OK   085969b7c597 MERGE canonical = cfe6a6fb68fe. Six rows for one file.
+OK   eddb9dcda64f MERGE canonical = cfe6a6fb68fe (its 20.5KB is 3.9KB stale).
+OK   3824dbfdf50a MERGE canonical = cfe6a6fb68fe (its 24411 B is the closest to today's 24367 B, but cfe6a6fb68fe carries the correct method and
+OK   3475190464aa PRUNE the question it exists to settle is answered: studio60 is IN lib/config/tenants.ts:435 on fly-iad (104c4f352 feat(tenant
+OK   14e142267a7a PRUNE it exists only as PROOF for 610586f8aeb7, which is dead (see below). A proof of a retired defect retires with it.
+OK   1925a3a280e4 PRUNE answered by execution, not by probe: TENANT_PROVISIONING_100P.md:709 records ashburn-group @ iad created Healthy AND par
+OK   710523a7b155 PRUNE fixed exactly as prescribed. 9da394a9c fix(rum): ashburn-group measured every region but its own re-keyed both maps on T
+OK   97a7e59d310e MERGE canonical = 191dbe7e4c42. Same OAuth, stated generically.
+OK   499f6fb39fc1 PRUNE item 1a226422cb37 does NOT appear in backlog-open.json → it is no longer open/blocked. The unblock it asks for is moot.
+OK   d88419ba8149 PRUNE its own NEEDS block was the whole item, and that fix LANDED: 82eb4aeaa perf(gate): unstarve the design gate — drop taskp
+OK   b73444703901 PRUNE fixed, same day, with the item's own measurements quoted back: 3c9ddecdd fix(bsm): W22 — the header collides on iPhone, 
+OK   54feb11e2537 PRUNE every number is refuted. Live claude-infrastructure checkout: origin/main..HEAD = 0 (not "diverged by 2"), HEAD..origin/
+OK   414e94838423 PRUNE pid 695 is now WorldClockWidget — the Claude session is gone and the pid recycled. (Root cause fd7ba0bbc359 remains open
+OK   0200998590e7 PRUNE pid 726 gone. Same class as 414e94838423.
+OK   1e7a412553ac PRUNE the main checkout is clean (only an untracked probe-tmp.mjs); no heat-v2 direction-B rail-spine change is dirty anywhere
+OK   eb49f2e89e46 MERGE canonical = cfe6a6fb68fe.
+OK   abc1143aa2d1 MERGE canonical = cfe6a6fb68fe.
+OK   61b8ca278257 PRUNE fixed exactly as the item predicted it would be. scripts/lib/dns-automation.ts now has findLiveCNAME() (:166) and delete
+OK   d83a44fcf68f PRUNE fixed, and locked against regression. scripts/setup/provision-venue.ts:198 now reads "NO deployTarget FIELD — deliberate
+OK   e5d1f1a3f88a MERGE canonical = 75782bed15f8. Its migration detail (0083 guest_claim CREATE, 0084 bottle_order + row_version, the mid-shift 
+OK   a8fc24de2909 PRUNE RULED. docs/plans/BOTTLE_SERVICE_MOTION_GROUND_UP.md:3397 — | W13 card sweep | A — soft · row … | retires variants B C D
+OK   3b056cc9d9c6 PRUNE superseded by five landed header waves that re-derived the trade from scratch: 4d99e30ba (W23 gap becomes a number), fea
+OK   610586f8aeb7 PRUNE the defect's precondition was removed wholesale. 04be75cd6 feat(land): v2 fast land lane — lock-free CAS, gate off the l
+OK   21c6b3ab5532 PRUNE refuted by its OWN evidence field. Its cited sha ad2bd973bdf47 resolves in reso to docs(research): tmux debug-logging cl
+OK   b99fcc4a9db6 PRUNE all three files are ON origin/main: src/app/(guest)/t/[claimToken]/_lib/order.ts, _lib/view-motion.ts, __tests__/order.t
+OK   9f684129d020 MERGE canonical = 1dca461d4b90. Same ask (install Claude GitHub App on
+OK   fc775c86145b MERGE canonical = 11c25d8f7c55. Same subject (why /handoff stopped using /goal); its
+OK   49cfd01dd5eb PRUNE FIXED, and it landed the day BEFORE the item was filed. 09aca05b (2026-08-08
+OK   91a29f4806fe PRUNE the CONTENT landed. 7edc3b5b is not an ancestor of origin/main, but
+OK   28ad16b4f9fa PRUNE LANDED. hooks/lib/session-writes.sh exists on trunk, and hooks/completion-assert.sh
+OK   6053ebd74b52 PRUNE Premise refuted by live read. The item's own verification step is grep -c operator-readout ~/.claude-next/settings.json 
+OK   97e4d0e74340 PRUNE Refuted in place, by the same plan. CONCURRENCY_PROGRAM.md §S6.3 carries a 2026-08-09 correction directly beneath the pa
+OK   2f12ba8a0e3b MERGE Canonical: 96fe7b1687a0. Same operator act (connect GitHub in the Claude Code web app at claude.ai/code → settings), sam
+OK   971995a07b05 PRUNE Fixed by 3cb4fd28 (2026-08-09 01:18 PDT): mk now expands @OSA@ on the way to disk; osa-bounds AC22 21ok/1notok -> 22ok/0
+OK   fe21305312ec PRUNE BOTH cures landed: tests/cc-inbox-guard.bats setup() now installs a default CC_INBOX_GUARD_IT2 stub (:31-33), and bin/cc
+OK   043c2e5fcc7e MERGE -> 7174eb206d25. Premise refuted: the suite is 12 tests, not 11, and both cited assertions now match the shipped chords 
+OK   a40afaee8d9c MERGE -> 26d4010f1b22. Same file, same class, same fix: case 16's bare sleep 0.5 survives at tests/teammate-auto-shutdown.bats
+OK   6783af2685ba PRUNE Fixed by 707319a2 (2026-08-08 17:17 PDT, "three test identity writes could re-author every worktree on the box"). tests/
+OK   b3c4e8d9e041 PRUNE Fixed: tests/session-continue.bats now pins HOME (:17) AND exports the seams the hook actually reads — CONTINUE_IDL (:39
+OK   c6f8553e16d5 PRUNE Fixed by 3cb4fd28, which names this id in its trailer ("Filed as c6f8553e16d5") and reports the exact counters the item 
+OK   c2930ed4f50a PRUNE Fixed by 911ccc8e (2026-08-09 01:15 PDT). G1's census floor and G4/G5's build_slg_probe anchored on bats_green(){, delet
+OK   149789b69fc4 PRUNE Fully discharged, in two steps. All six ORIGINALLY named files are clear on trunk — bin/cc-reaper, hooks/validate-bash.s
