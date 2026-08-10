@@ -99,12 +99,25 @@ print(ca.resolve_claude_bin("/nonexistent/fallback-that-must-lose"))'
   # The anti-recurrence assertion. Both sites HAD one; both were wrong. A literal here can only
   # ever be a copy of a number that lives in ~/.zshrc, so the rule is that none may exist —
   # including as a "fallback", which is exactly what rotted last time.
+  # `! A || { diag; false; }`, never `A && { diag; false; }`: the latter is and-absorbed under
+  # bats' errexit, so this whole case would have PASSED with a version literal sitting in both
+  # files. A detector that cannot fire is a green light — which is precisely the class of defect
+  # this suite exists to catch, reproduced inside it. The mutation control below is not optional.
   fn="$(sed -n '/^_resolve_eval_bin()/,/^}/p' "$HF" | grep -v '^[[:space:]]*#')"
-  echo "$fn" | grep -qE '\.claude-[0-9]+' && {
+  ! echo "$fn" | grep -qE '\.claude-[0-9]+' || {
     echo "handoff-fire.sh:_resolve_eval_bin has re-grown a version literal:"; echo "$fn"; false; }
   fn2="$(sed -n '/^def resolve_claude_bin/,/^def load_cfg/p' "$CA_BIN" | grep -v '^[[:space:]]*#')"
-  echo "$fn2" | grep -qE '\.claude-[0-9]+"' && {
+  ! echo "$fn2" | grep -qE '["'"'"'][~/]*\.claude-[0-9]+/' || {
     echo "claude-accounts:resolve_claude_bin has re-grown a version literal"; false; }
+
+  # POSITIVE CONTROL — prove both arms can FAIL. A negative assertion whose condition is already
+  # false cannot distinguish "revived" from "always passes", and both arms above are negative.
+  planted='  printf "%s" "$HOME/.claude-219/node_modules/.bin/claude"'
+  echo "$planted" | grep -qE '\.claude-[0-9]+' || {
+    echo "POSITIVE CONTROL FAILED: the shell arm does not fire on a planted literal"; false; }
+  planted2='    return "~/.claude-219/node_modules/.bin/claude"'
+  echo "$planted2" | grep -qE '["'"'"'][~/]*\.claude-[0-9]+/' || {
+    echo "POSITIVE CONTROL FAILED: the python arm does not fire on a planted literal"; false; }
   true
 }
 
@@ -315,7 +328,7 @@ print("OK")'
         && sed 's/[[:space:]]*#.*$//' "$f" 2>/dev/null \
            | grep -E 'zshrc' \
            | grep -qE -- '-o[EPi]*[[:space:]]|--only-matching|sed[[:space:]]+-n' \
-        && echo "$f"
+        && echo "$f" || false
     done
   }
   bad=0
