@@ -36,14 +36,15 @@ setup() {
   WT="$BATS_TEST_TMPDIR/wt-abc"; mkdir -p "$WT"
   OTHER="$BATS_TEST_TMPDIR/wt-other"; mkdir -p "$OTHER"
 
-  # Extract exactly the units under test plus the two collaborators they call.
+  # Extract exactly the units under test plus the two collaborators they call. The cwd-index +
+  # tenancy family moved to hooks/lib/origin-identity.sh (CLOSE_INTEGRITY W1) and is sourced from
+  # the REAL lib file — the same bytes production sources — while the fire-path-coupled functions
+  # are still sed-extracted from the dispatcher.
   LIBSH="$BATS_TEST_TMPDIR/lib.sh"
   {
     echo '_iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }'
     echo "CC_PROJECTS_DIRS='$CC_PROJECTS_DIRS'"
-    sed -n '/^_fired_cwd_key() {/,/^}/p'            "$HF"
-    sed -n '/^write_fired_cwd_index() {/,/^}/p'     "$HF"
-    sed -n '/^read_fired_cwd_index() {/,/^}/p'      "$HF"
+    cat "$REPO_ROOT/hooks/lib/origin-identity.sh"
     sed -n '/^mark_fired_peer() {/,/^}/p'           "$HF"
     sed -n '/^find_open_stamp_for_cwd() {/,/^}/p'   "$HF"
     sed -n '/^record_close_succession() {/,/^}/p'   "$HF"
@@ -157,8 +158,14 @@ idx_count() { local n=0 f; for f in "$CC_FIRED_DIR"/by-cwd/*.json; do [ -f "$f" 
   [ "$(jq -r '.closedAt' "$CC_FIRED_DIR/351.json")" != null ]
   [ "$(jq -r '.succession.kind' "$CC_FIRED_DIR/351.json")" = adopted ]
   [ "$(jq -r '.succession.successorPane' "$CC_FIRED_DIR/351.json")" = 353 ]
-  # a second pane in the same worktree finds nothing left to adopt
-  register 355 sid-355; transcript sid-355 'x MARK-2 y'
+  # a second pane in the same worktree finds nothing left to adopt. Its transcript deliberately
+  # does NOT carry the marker: production guarantees the marker rides exactly ONE composed prompt
+  # (fired_marker_is_mine's own header), so a second session "proving" the same marker is an
+  # impossible world — the pre-fix version fabricated it and pinned the mechanism's inability to
+  # distinguish it, which is why this case was RED on pristine trunk (verified 2026-08-10). The
+  # spent-orphan invariant it names is still fully exercised: 351 is CLOSED (asserted above), the
+  # scan skips it, and the open ADOPTED record cannot be claimed without the marker proof.
+  register 355 sid-355; transcript sid-355 'an unrelated session with no marker'
   run bash -c "cd '$WT'; . '$LIBSH'; adopt_orphan_stamp '$CC_FIRED_DIR' '$WT' 355"
   [ "$status" -eq 1 ]
 }
