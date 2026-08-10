@@ -435,17 +435,24 @@ cmd_up() {
   return "$rc"
 }
 
-# ── the API create: the ONLY path that produces a pushable session ───────────────────────────────
-# `claude --cloud` always uploads a BUNDLE, and a bundled session is created with `sources: []`, so
-# the VM's git proxy has no authorized repository and REFUSES to inject a push credential. Measured
-# 2026-08-10 on two sessions minutes apart: the CLI create → `sources: []` → push 403; this create →
-# `sources:[{type:git_repository,…}]`. The work still gets done either way — it just cannot come
-# home, which is the failure mode this whole tool exists to make impossible.
+# ── the API create: the ONLY path that produces a session that both RUNS off-box and can PUSH ────
+# TWO AXES, and for three weeks every create we had got exactly one of them (§13.3/§13.4):
+#   · `claude --cloud`           → a real VM, but `sources: []` — the git proxy has no authorized
+#                                  repository, refuses to inject a push credential, and the work is
+#                                  done, committed, and stranded in a container that is reclaimed.
+#   · POST /v1/code/sessions     → `sources: 1`, but `environment_kind: bridge` — a bridge session
+#     with `bridge:{}`             executes on a CONNECTED CLIENT, i.e. THIS BOX, so it offloads
+#                                  nothing. Measured: `working / disconnected / 0 output tokens` for
+#                                  35+ minutes, never a turn. That state does NOT look like an error.
+# scripts/cloud-create-api.py now does the two-call sequence — resolve an `anthropic_cloud`
+# environment, then create against it — and REFUSES (exit 5) unless the session reads back with both
+# halves. `up` therefore never hands out an id that can only half work.
 #
-# THREE STEPS, and the order is forced: create (carrying the repo) → declare (so every local oracle
-# treats the id as off-box) → deliver the brief (the send arm, which is already proven). The brief
-# is NOT part of the create: the create makes an addressable session, `cc-notify --cloud` is what
-# gives it work.
+# THREE STEPS, and the order is forced: create (carrying the repo AND the environment) → declare (so
+# every local oracle treats the id as off-box) → deliver the brief (the send arm, which is already
+# proven). The brief is NOT part of the create, and that separation is load-bearing rather than
+# tidy: the acceptance pair is checked between step 1 and step 3, so a half-right session costs a
+# create and never a brief.
 cmd_up_api() {
   local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
   local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
@@ -499,7 +506,7 @@ cmd_up_api() {
       rc=11; break
     fi
     fired=$((fired+1))
-    printf '%s✓%s %s on %s — repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
+    printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"
   done
 
@@ -510,7 +517,7 @@ cmd_up_api() {
       printf '\n%s%d session(s) WOULD be created (dry run — no quota spent, nothing exists).%s\n' \
         "$C_META" "$fired" "$C_OFF"
     else
-      printf '\n%s%d session(s) created with the repo attached — their pushes can reach origin.%s\n' \
+      printf '\n%s%d session(s) on real VMs with the repo attached — they run off-box AND can push home.%s\n' \
         "$C_OK" "$fired" "$C_OFF"
     fi
     return 0
