@@ -52,7 +52,10 @@ if [ ! -x "$HOOK_FILE" ]; then
   exit 1
 fi
 
-for dir in "$HOME"/.claude "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
+# ~/.claude-next added 2026-08-10: it exists, carries the sibling Stop hooks, and launches live
+# sessions — its omission here (present in 0007's list) was exactly the silent half-coverage this
+# migration's own header warns about.
+for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
   f="$dir/settings.json"
   [ -f "$f" ] || continue
 

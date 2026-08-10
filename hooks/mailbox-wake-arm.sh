@@ -43,8 +43,54 @@ set -uo pipefail
 
 [ "${CC_WAKE_ARM:-1}" != 0 ] || exit 0
 
+# ── HEADLESS ONE-SHOT GUARD (2026-08-10) ─────────────────────────────────────────────────────────
+# asyncRewake is honored ONLY when the session is interactive or has streaming input. Read out of
+# the 2.1.220 binary: the dispatch gate is `(e.async || e.asyncRewake && K) && !d` with
+# `K = !_n() || r2r()` where `_n() = !Mt.isInteractive` and `r2r() = Mt.hasStreamingInput`. In a
+# plain one-shot `claude -p`, K is FALSE — the hook is dispatched SYNCHRONOUSLY, and the ~4 h watch
+# below would BLOCK SESSION BIRTH for every headless probe and daemon on the box. A one-shot needs
+# no idle wake anyway: it runs one turn and exits.
+#
+# Oracle: the harness process's OWN argv — the first claude/node ancestor — the only place print
+# mode is visible from inside a hook (MEMORY.md version-identity-is-the-running-process). Test
+# seam: CC_WAKE_ARM_HARNESS_ARGV substitutes the argv without walking ps.
+#
+# FAIL DIRECTION — cannot resolve an ancestor ⇒ SKIP (exit 0). A skipped arm restores the
+# pre-registration status quo (the nag + boundary drain still exist); a wrongly-armed SYNC watch
+# wedges a session birth for hours. Under-arming is recoverable, over-arming is not.
+#
+# (The guard runs AFTER the stdin read below — every exit path must have consumed the payload
+# first, per this file's SIGPIPE discipline.)
+
 # ── stdin: fully consumed so the harness never SIGPIPEs, whether or not we use it ────────────────
 _stdin="$(cat 2>/dev/null || true)"
+
+# `+x` not `:-`: SET-but-EMPTY means "provably unresolvable" and is honored verbatim, so a test can
+# exercise the fail-closed branch without fixturing ps (the cc-await-ping IT2_BIN `${VAR-}` pattern —
+# a test that cannot turn the oracle off cannot prove the fail-closed direction exists).
+if [ "${CC_WAKE_ARM_HARNESS_ARGV+x}" = x ]; then
+  _harness="$CC_WAKE_ARM_HARNESS_ARGV"
+else
+  _harness=""
+  _anc="$PPID"; _hops=0
+  while [ -n "$_anc" ] && [ "$_anc" != 1 ] && [ "$_hops" -lt 6 ]; do
+    _cmdline="$(ps -o command= -p "$_anc" 2>/dev/null || true)"
+    case "$_cmdline" in
+      *claude*|*node*) _harness="$_cmdline"; break ;;
+    esac
+    _anc="$(ps -o ppid= -p "$_anc" 2>/dev/null | tr -d ' ' || true)"
+    _hops=$(( _hops + 1 ))
+  done
+fi
+[ -n "$_harness" ] || exit 0   # unresolvable dispatch mode → skip (under-arm, never wedge)
+case " $_harness " in
+  *" -p "*|*" --print "*)
+    case "$_harness" in
+      *--input-format*stream-json*) : ;;  # streaming input ⇒ K true ⇒ async dispatch is honored
+      *) exit 0 ;;                        # one-shot print ⇒ SYNC dispatch ⇒ arming would block birth
+    esac
+    ;;
+esac
 
 _sid=""
 if command -v jq >/dev/null 2>&1; then

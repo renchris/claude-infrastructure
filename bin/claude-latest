@@ -336,6 +336,19 @@ validate_or_recover
 
 export DISABLE_AUTOUPDATER=1
 
+# /goal + autonomous-continuation runway (2026-08-10, docs/research/goal-in-handoff-2026-08-08.md
+# § RESOLUTION). The harness force-ends a turn after CLAUDE_CODE_STOP_HOOK_BLOCK_CAP consecutive
+# hook-blocked stops (binary default 8) — and an UNMET /goal evaluation is itself such a block, on
+# the SAME counter every operator Stop hook (session-continue 🔧, completion-assert, the goal's own
+# evaluator) increments. At 8, a goal-driven autonomous run dies mid-goal with "overriding and
+# ending turn" (measured: 25 transcripts across the five config dirs carry that override). 50 keeps
+# a real runaway bound — each blocking hook we own also carries its own tighter latch
+# (CLAUDE_CONTINUE_MAX, damping, budget files) — while giving /goal genuine autonomous runway.
+# Respect any operator/env override; 0 (cap disabled) is honored as an explicit choice.
+if [[ -z "${CLAUDE_CODE_STOP_HOOK_BLOCK_CAP:-}" ]]; then
+  export CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=50
+fi
+
 # --- Per-session stderr capture (crash forensics) -----------------------------
 # A hard crash (JS heap OOM, JSC/bun abort, an internal limit, a fatal during
 # /compact) prints its final diagnostic to stderr and then the process is gone —

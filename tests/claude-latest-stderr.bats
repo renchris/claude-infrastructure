@@ -38,6 +38,22 @@ mk_stub() { # $1=exitcode  $2=stderr-line(optional)
   [[ "$output" == *"STUB-STDOUT HELLO"* ]]
 }
 
+@test "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: defaulted to 50 (/goal runway); an operator override wins" {
+  # The harness force-ends a turn after N consecutive hook-blocked stops (binary default 8), and an
+  # UNMET /goal evaluation is such a block — docs/research/goal-in-handoff-2026-08-08.md
+  # § RESOLUTION. The launcher is the one funnel every session passes through, so the default must
+  # be visible in the exec'd binary's environment, and an explicit operator value must survive.
+  {
+    echo '#!/bin/bash'
+    echo 'echo "CAP=${CLAUDE_CODE_STOP_HOOK_BLOCK_CAP:-unset}"'
+    echo 'exit 0'
+  } > "$BIN/claude"; chmod +x "$BIN/claude"
+  run bash "$LAUNCHER"
+  [[ "$output" == *"CAP=50"* ]] || false
+  run env CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=8 bash "$LAUNCHER"
+  [[ "$output" == *"CAP=8"* ]] || false
+}
+
 @test "stderr is captured to a per-pid log" {
   mk_stub 1 "FATAL-HEAP-OOM"
   run bash "$LAUNCHER" X
