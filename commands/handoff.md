@@ -246,6 +246,17 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   >   judge may return `impossible:true`, which CLEARS the goal and marks it failed. Merely vague ⇒ no
   >   such mercy: it block-loops until `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8), then the turn
   >   ends anyway. Neither is a session that did the work.
+  > **📉 THE ANTI-EXAMPLE IS OURS, and it is SHORT — so brevity is not the rule.** The only
+  > `failed:true` goal on this box: `continue until 100.00 complete and correct at 100th percentile
+  > absolute perfection implementation` — 97 chars, **45 evaluations over 27.6 hours and 390,885
+  > tokens**, then the judge ruled it `impossible`. No end state, no check, no constraint. Measured
+  > across all 380 goals ever armed here, length does NOT predict success (met rate is flat 43-57%
+  > across every band once the prefix-trap fires are excluded); what predicts it is whether the judge
+  > can close on the FIRST read — **82% of every goal ever met was met on evaluation #1, and the met
+  > rate falls to 27% at ≥10 evaluations.** A goal being re-judged is grinding, not converging: check
+  > with bare `/goal`, and if the iteration count is climbing, the condition is the problem.
+  > **One honesty caveat:** these rules say what the judge CAN adjudicate, which is necessary, not
+  > sufficient — byte-identical conditions have produced opposite verdicts in different sessions.
   > **When NOT to arm a goal** — four exceptions, all narrow: a **standing-role** session with no
   > terminal state (the **desk**, `desk-invariant.sh` respawns) — "hold the desk role" can never become
   > true, so the Stop hook would refuse every stop until it hit the harness block cap · a **`--cloud`**
