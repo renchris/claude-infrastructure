@@ -47,14 +47,14 @@ fx() { # run the partition script against the fixture tree
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 3 ]
   printf '%s\n' "$output" | grep -qxF 'tests/c.bats'
-  ! printf '%s\n' "$output" | grep -qxF 'tests/a.bats'
+  ! printf '%s\n' "$output" | grep -qxF 'tests/a.bats' || false
   ! printf '%s\n' "$output" | grep -qxF 'tests/b.bats'
 }
 
 @test "2: CONTROL — de-listing a suite re-admits it (the difference is real, not incidental)" {
   printf 'tests/b.bats\n' > "$FX/scripts/offbox-excluded.manifest"
   run fx list
-  ! printf '%s\n' "$output" | grep -qxF 'tests/b.bats'
+  ! printf '%s\n' "$output" | grep -qxF 'tests/b.bats' || false
   : > "$FX/scripts/offbox-excluded.manifest"
   run fx list
   printf '%s\n' "$output" | grep -qxF 'tests/b.bats'
@@ -139,7 +139,7 @@ fx() { # run the partition script against the fixture tree
   printf '# a comment\n\n   tests/b.bats   \n# another\n' > "$FX/scripts/offbox-excluded.manifest"
   run fx list
   [ "$status" -eq 0 ]
-  ! printf '%s\n' "$output" | grep -qxF 'tests/b.bats'
+  ! printf '%s\n' "$output" | grep -qxF 'tests/b.bats' || false
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 4 ]
 }
 
