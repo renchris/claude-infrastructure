@@ -381,7 +381,10 @@ parity_axis() { # → the live-vs-repo SSOT finding (axis 2), empty when the two
     "$( [ -n "$lag" ] && [ "$lag" != 0 ] && printf ' (this checkout is %s commit(s) BEHIND its trunk — every finding below is live-vs-checkout, so read it with that in mind)' "$lag" )")"
   if [ "${#undep[@]}" -gt 0 ]; then
     out="$out"$'\n'"  UNDEPLOYED-MIRROR — committed ON TRUNK but absent from this checkout, i.e. DEPLOY LAG, not a missing commit: $(join_names "${undep[@]}")"
-    # THE SANCTIONED ADVANCE, never a raw ff (ship.md:98). This line used to render
+    # THE SANCTIONED ADVANCE, never a raw ff (.claude/commands/ship.md:112, "Never raw-ff the shared
+    # checkout" — the old `ship.md:98` pointer was DEAD: commands/ship.md is 55 lines and the
+    # doctrine lives in the PROJECT copy. A backlog item cited the dead pointer verbatim off this
+    # comment, so it was propagating). This line used to render
     # `git -C $root merge --ff-only origin/main` as a ▶ runnable step on EVERY SessionStart, which
     # is the one command the deploy doctrine forbids: a bare ff advances the FILES but creates no
     # symlinks, so a brand-new tracked file lands unlinked and silently does nothing, and it skips
