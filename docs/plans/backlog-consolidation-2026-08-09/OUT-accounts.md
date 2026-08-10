@@ -132,3 +132,71 @@ cd ~/Development/claude-infrastructure && grep -q 'usage_credits' ~/.claude/acco
 6. **Refuted-by-live-state check, as instructed:** nothing in this slice asserts an account is logged out, expiring, or that the Fable window has a deadline. `~/.claude/model-config.yaml:119-124` confirms `end: "2099-12-31"` (sentinel) and `active: true` "PERMANENTLY". `39aae25d401b` correctly *already* says "all 4 are healthy now, so cc-relogin's gate would refuse" — the live state confirms rather than refutes it. The one thing the live state *did* refute is `01487ffd8417`'s "next3 (0 live sessions)" — next3 now has 4, and next2 is the idle account.
 
 7. **`f82a43651c00` is my only PRUNE and the only one resting partly on a probe rather than a git read.** The keychain probes were `security find-generic-password -s <name> -a chrisren` (existence only, no `-w`, no secret read) against both spellings from `bin/claude-accounts:190-194`. If you want a second confirmation before dropping it, the cheap one is re-reading `docs/research/forced-relogin-rootcause-2026-08-02.md` §4's premise against a fresh probe — but the item's own date list ending Jul 31 is independent and sufficient.
+
+---
+
+## RESOLUTION — MASTER M6 (backlog `b22e519e06cb`), 2026-08-10
+
+Landed as three commits. **Three verdicts above were already stale when this triage was written**,
+and are corrected here rather than edited in place, so the record of what was believed on 08-09
+survives alongside what was true.
+
+### Corrections to the verdicts above
+
+- **`9d514681fb84` — the 72/168 dead band was ALREADY CLOSED.** The verdict at line 28 cites
+  `bin/claude-accounts:2056`, `bin/cc-relogin:65` and `:645`; none of those match any line in the
+  tree, and have not since `26d5c893 fix(relogin): the renewal window is one SSOT constant, not
+  three`. Both programs now read `accounts.json:relogin_trigger_h`, three fallbacks are each
+  guarded by a read of that one key and documented "must stay equal", and
+  `tests/cc-relogin-status.bats:220` re-proves the agreement with a deliberately non-default
+  120.0 so a subject that hardcoded 168 in either program fails. Dead band width: 0.
+  *Residual, and it is a different item:* `--login-status` still pre-filters at `login_warn_h`=72
+  (`bin/claude-accounts:2271`); `cc-relogin-poll` compensates via `--window-h` and announces
+  `WINDOW_CAPPED` on a binary too old to accept it. Announced, not silent.
+- **The `handoff-fire.sh` auth-state drift was ALREADY FIXED**, by `8eb83ed1`. It reads the CLI's
+  own `.auth_actionable` and fails closed on version skew. The premise "a hand-copied auth-state
+  list in handoff-fire.sh has drifted to 3 of 5" is true history, not current state.
+  **But the same defect had migrated:** `bin/cc-relogin:57-59` still carried its own copy, and it
+  was FIVE states where the CLI's `ACTIONABLE_AUTH` is six — it never learned `probe-error`, so an
+  account whose probe raised read as "nothing actionable" to the relogin gate. Fixed in `eebba5bd`.
+- **`37a0b651bcce`'s "three spellings" was right, and its recommended remedy was the wrong one.**
+  The parked branch `fix/accounts-eval-bin-resolver` cherry-picks cleanly (verified), but its tip
+  makes `claude-accounts` a FOURTH derivation — its own regex, its own `tail`-style last-match
+  tie-break — rather than collapsing onto `bin/cc-claude-bin`. Taking it would have added a rival
+  parser inside the fix for rival parsers. Not taken; `claude-accounts` and `handoff-fire.sh` both
+  consume the resolver instead, and the branch can be retired.
+
+### What landed
+
+| DoD | Commit | What |
+|---|---|---|
+| 1 | `eebba5bd` | Eval binary, auth-state vocabulary and live-session count each collapsed to one derivation. `tests/account-fact-derivation.bats` — 13 cases that red when a consumer re-derives instead of reads, including a one-fixture-to-both-counters parity test (the subsystem had none) and a rival-parser detector carrying its own positive control. |
+| 2 | `bdfb3d30` | `auth-timeseries.sh` gained `--once` + a durable store; plist, `fleet.manifest` row (`staged`), both rotation registrations, and `migrations/0008` (c10) filing the operator's arming step. |
+| 3 | `f82ceffe` | `record_utilization` stops discarding the per-account measurement every sweep already takes; `scripts/pool-floor.sh` computes the floor; the spend guard gets an SSOT field and can go red. §S5b records the number. |
+
+### Two undercounts fixed in `concurrency()`, worth naming separately
+
+Both were silent and both were in the direction that OPENS the rotation gate rather than degrading
+it (`run()` refuses only on `k != 0`): the observed config dir was rstripped but the lookup keys
+were not, so an account written with a trailing slash scored 0 live sessions forever; and the
+`~/.claude` mirror rule was assigned rather than `setdefault`, so an account whose `config_dir`
+*is* `~/.claude` had its sessions credited elsewhere — or dropped, when no `.claude-next` account
+existed.
+
+### Still open, and correctly so
+
+- **`2203b8190752`, `d5842487233e`** — operator-only web actions with no CLI path (read a cloud
+  transcript; mint the routine bearer token). Untouched, per Note 1's own recommendation that they
+  belong in a cloud cluster.
+- **`f3e662d4e2a8`** — no target session count decided. It needs the pool floor, which is
+  INSUFFICIENT-DATA until the new series spans a weekly window, and two of its three inputs are the
+  operator-only actions above. §S5b states this explicitly rather than leaving it implied.
+- **`01487ffd8417` (E1), `39aae25d401b` (E3)** — both spend a real browser Authorize and E3 spends
+  one real re-auth. No account is inside 20 days. The recorder they need is now scheduled-and-staged,
+  which was the stated precondition ("schedule the sampler BEFORE touching either probe").
+- **`791345455b58`** (pipefail allowlist, 16 entries) and **`14bcdfee2eb8`** (Execution-Locus gate)
+  — neither is an account fact; Notes 2 and 4 already argue they belong in other clusters. Not in
+  M6's frozen DoD.
+- **`80e6637dfd9e`** (effort default `max` vs launcher `high`) — a two-spelling drift, but the fix
+  is a *value* change to what every routing reader quotes, with a live assertion in
+  `tests/effort-parity.bats` that moves with it. Named, not silently folded in.
