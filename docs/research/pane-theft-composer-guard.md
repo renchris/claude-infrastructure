@@ -583,3 +583,21 @@ same invariant, and a subagent is not a fourth face of it but a **pane M3 alread
 was refusing**. No rival mechanism is introduced here; one branch of one predicate is corrected.
 It is unrelated to `5bb6555f22df` (a subagent taking its lead's work lease) and to `c163f42390a3`
 (peer panes with no cc-fired stamp), which share the population but not the cause.
+
+### 7.7 · Falsifier
+
+Ledger item `d40d148d0333`. Re-validates itself against live state rather than against this prose —
+the mechanism must be present, its controls must be green, and the fleet must actually be bounded:
+
+```sh
+R=~/Development/claude-infrastructure
+grep -q 'AGENT-PANE' "$R/bin/it2-kitty" \
+  && /Users/chrisren/.claude/bin/cc-bats "$R/tests/it2-kitty-composer-guard.bats" >/dev/null \
+  && [ "$(ps -eo etimes=,command= | awk '/claude\.exe --agent-id/ && $1 > 21600' | wc -l | tr -d ' ')" = 0 ]
+```
+
+The third clause is the one that can go red on a healthy-looking tree: 21600 s is the repo's
+owned-wait ceiling, and a research subagent resident past it is the original defect regardless of
+which branch let it happen. The first two alone would pass on the very tree this was found on, since
+`teammate-auto-shutdown.sh` was already correct there — a mechanism assertion cannot see an outcome
+(`teammate-reap-alarm.sh` is the standing instrument for exactly that distinction).
