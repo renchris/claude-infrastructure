@@ -250,6 +250,10 @@ printf '%s\n' "$1" >> "$CC_SPY_LOG"
 case "$1" in
   *host-red*) printf 'not ok 1 - boom\nnot ok 2 - boom2\n'; exit 1 ;;
   *host-cut*) exit 124 ;;                 # OUR bound firing: non-zero naming ZERO tests
+  # OUR bound firing on a suite that had ALREADY named failures — the TRUNCATED run. `host-cut`
+  # above only ever covered the tidy shape (killed before any test finished); a real long suite is
+  # killed MID-CORPUS, having emitted whatever it reached.
+  *host-trunc*) printf 'not ok 1 - reached\nnot ok 2 - reached\n'; exit 124 ;;
   # A suite that PASSES while unprefixed stderr splices into its stream: rc 0, one real `ok`, and
   # four C30 shapes that merely OPEN with `not ok`. The worst case for a loose grammar — a green
   # live layer paged and backlogged as RED.
@@ -278,6 +282,7 @@ seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/ma
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-two.bats"
   printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-red.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-cut.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-trunc.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-torn.bats"
   printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-tsplice.bats"
   printf '%s\n' "$1" > "$SHARED/scripts/host-suites.manifest"
@@ -449,6 +454,37 @@ tests/absent.bats'
   # which would make this assertion pass for the wrong reason. `[ ]` keeps it live under errexit.
   [ "$(find "$PAGES" -name 'deploy-host-red-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
   [ ! -s "$CC_BACKLOG_LOG" ]
+}
+
+# ── A RUN WE KILLED IS A NON-VERDICT EVEN WHEN IT NAMED FAILURES FIRST ───────────────────────────
+# `notok > 0` was tested BEFORE `rc == 124`, so a suite our own bound killed mid-corpus was reported
+# RED — paged, and filed as a backlog item a worker is then dispatched to chase. Two things make
+# that wrong, and the second is why it matters more than the first:
+#   1. The failures were observed under exactly the contention that made the bound fire. That is the
+#      load-sensitivity scripts/host-suites.manifest documents at length (rc=2 fork exhaustion
+#      fabricating a leak) — the failures least entitled to be believed, not the most.
+#   2. The failing SET is a function of WHERE THE KILL LANDED, not of the tree. The backlog title
+#      carries that count, and cc-backlog mints its event key from project+title+source — so one
+#      unresolved condition mints a NEW item every time load shifts the truncation point. That is
+#      the same non-idempotency the sha-in-the-title fix above removed, arriving by another door.
+# MEASURED 2026-08-10 on tests/test-hermeticity-lint.bats, which is how this was found: 52/52 green
+# in a clean tree at 272s against a 300s bound, and 6 of 6 host runs CUT. The one time it ever
+# "spoke" it produced backlog cb9980e4b0e5, `HOST RED: tests/test-hermeticity-lint.bats(2)` — a
+# truncated run promoted to a claim about a tree that was green.
+# The reached failures are NAMED in the log line rather than discarded: a non-verdict must not also
+# be a silence. The too-strong direction is held by the two `host-red` cases above — an ORDINARY
+# named failure (rc 1) must still page and still file.
+@test "host TRUNCATED: our bound firing AFTER named failures is a CUT, never a RED" {
+  auto_setup
+  seed_host_suites 'tests/host-trunc.bats'
+  stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CUT  tests/host-trunc.bats"* ]] || false
+  [[ "$output" == *"2 named failure(s)"* ]] || false    # not discarded — a non-verdict is not a silence
+  [[ "$output" != *"RED  tests/"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-host-red-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  [ ! -s "$CC_BACKLOG_LOG" ]                            # no item for a worker to chase
 }
 
 # ── A LINE THAT ONLY OPENS WITH `not ok` IS NOT A NAMED FAILURE ──────────────────────────────────
