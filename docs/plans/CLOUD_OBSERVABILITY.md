@@ -1562,3 +1562,53 @@ hangs on. Filed rather than described.
 *(`cc-offload setup` reads `✓ READY` and that is honest — every precondition it can measure is
 green. READY is a statement about the FIRE path, which is now genuinely unblocked end to end; it
 has never claimed the round trip, and §4's whole discipline is that the two are different facts.)*
+
+### 12.5 · ANSWERED — the VM executed perfectly and the PUSH was policy-denied. `sources=[]`
+
+The operator opened `session_018YsHzozWKCzxx5cifEQw1L` in the web UI. **The session had done the
+whole brief.** It created `docs/cloud-roundtrip-proof.md` with the three specified lines, committed
+it as `0625681`, added the remote itself (its clone had **no remotes at all**), and ran the exact
+push it was told to. The push returned:
+
+```
+remote: access denied by the git proxy: renchris/claude-infrastructure is not in this
+session's authorized repository set, so the proxy will not inject a credential for it.
+To fix, add the repository to the session's sources.
+fatal: unable to access 'https://github.com/renchris/claude-infrastructure.git/': 403
+```
+
+Exit 128 — **a policy denial, not a network failure**, so no retry can move it. The session's own
+root cause, corroborated from inside: it was created with **`sources=[]`** (bundle upload, no GitHub
+source), so the proxy's authorized-repository set is *empty*. Its probes found the proxy-injected
+token authenticates as `renchris` but 403s on every repo-scoped API path, the `add_repo` tool is not
+loaded (`CLAUDE_CODE_DISABLE_BUILTIN_ANTMCP=1`), and the control-plane session endpoints reject both
+local tokens — **so a session cannot self-authorize from inside.**
+
+🚨 **This retires §12.4's live hypothesis, and the correction matters more than the finding.**
+§12.4 offered two suspects — "push credentials, **or the VM not executing the brief at all**" — and
+weighted them by §7.5's *"eleven sessions, zero actions"*. The execute-side suspicion was **wrong**,
+and it was wrong for an instructive reason: **every instrument this box owns is a ref-watcher, so
+"did not push" and "did not run" produce byte-identical evidence here.** Thirteen sessions were read
+as inert when at least this one worked correctly and was refused at the last step. That is
+`[[lookup-miss-is-not-absence]]` at the scale of a whole subsystem — a silent channel was read as a
+silent worker, for three days.
+
+🚨 **And the App install was necessary but NOT sufficient — the create must ATTACH the repo.**
+§12.4 inferred from a clean first-try create that the source had become `git_repository`. It had
+not: the App is installed on the repo, and this create *still* ran `sources=[]`. Installing the App
+grants the *account* access; it does not put the repository into a *session's* source set. The two
+are different objects and only the second one authorizes the proxy. The create call is what must
+carry the repo.
+
+**→ NEXT, and it is the first step in this document with a named, verified target.** Attach
+`renchris/claude-infrastructure` to the create as a GitHub source (clone mode), then re-fire. The
+mechanism is *not* a documented CLI flag — `--cloud` is hidden from `--help` entirely, and a strings
+sweep of the 2.1.220 binary surfaced no `--cloud`-scoped source option (the `--repo` hits are `gh`
+argument parsing and plugin-marketplace sources, both unrelated). The known-good path is the web
+UI's **New**-session flow, which is where a repo source is chosen. So the open question is narrow
+and mechanical: **what does the CLI create need in order to send a non-empty `sources`?** Filed.
+
+*(One casualty worth recording: commit `0625681` exists only inside that container and the session
+says it "will strand when this container is reclaimed". It is a 3-line proof file, so the loss is
+nil — but it is the first concrete instance of the class §11.3 warned about, and a real work item
+lost this way would be unrecoverable.)*
