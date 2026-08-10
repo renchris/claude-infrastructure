@@ -206,7 +206,7 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$(st_of "$id2")" = open ]
 }
 
-@test "--force is rejected on any event other than reopen/claim (never silently ignored)" {
+@test "--force is rejected on any event other than reopen/unblock/claim (never silently ignored)" {
   guard_env
   id=$(bash "$CB" add --project /r --title T --source S)
   run bash "$CB" done "$id" --evidence ref:1 --force
@@ -214,6 +214,81 @@ st_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   echo "$output" | grep -q -- '--force'
   run bash "$CB" block "$id" --needs "operator: x" --force
   [ "$status" -eq 2 ]
+}
+
+# ── THE RE-OPEN EFFECT: unblock is the other spelling of reopen (backlog d6d8b259235d + 62daeb7d4463)
+# Status is a last-transition-wins fold, so `unblock` and `reopen` both resolve to "open" — which IS
+# cc-dispatch's fire predicate. Only `reopen` was guarded. The tests below are the reopen guards
+# above, re-run through the verb that never had them, and each one RED-proves against the measured
+# incident rather than a hypothetical: 1a226422cb37 landed with content-verified evidence at
+# 2026-08-08T02:00:24Z, was unblocked at 03:21:48Z, folded back to "open", and its owner found it
+# live 4 h later. The capability tests matter as much as the refusals — `blocked → open` is the whole
+# legitimate use of unblock and the transition scripts/thrash-block-recover.sh drives on every run.
+
+@test "unblock of a DONE item is REFUSED (rc 4), appends NOTHING, stays done — the 1a226422cb37 shape" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  # `done` is quoted for the same reason the suite quotes it elsewhere: unquoted it parses as the
+  # loop keyword and shellcheck aborts on the construct (SC1010).
+  bash "$CB" "done" "$id" --evidence "d8329e766 landed + content-verified" >/dev/null
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" unblock "$id"
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'terminal'
+  echo "$output" | grep -q 'd8329e766'         # the refusal SHOWS what already landed
+  echo "$output" | grep -q -- '--force'        # …and names the deliberate override
+  # the refusal names the verb ACTUALLY attempted — handing back "reopen" here would send the
+  # operator to a different transition than the one they ran.
+  echo "$output" | grep -q 'cc-backlog unblock'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]   # append-only ledger untouched
+  [ "$(st_of "$id")" = "done" ]
+}
+
+@test "unblock --force DOES return a done item to open (the guard allows its own cure)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" "done" "$id" --evidence ref:1 >/dev/null
+  run bash "$CB" unblock "$id" --force
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "unblock of a LIVE claim is REFUSED (rc 4) — the double-dispatch bug, other spelling" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-$$" >/dev/null       # $$ is alive
+  before="$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')"
+  run bash "$CB" unblock "$id"
+  [ "$status" -eq 4 ]
+  echo "$output" | grep -qi 'live'
+  [ "$(wc -l < "$CC_BACKLOG_FILE" | tr -d ' ')" -eq "$before" ]
+  [ "$(st_of "$id")" = claimed ]                           # worker keeps its item
+}
+
+@test "unblock of a DEAD claim needs no --force (symmetry with reopen's recovery path)" {
+  guard_env
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" claim "$id" --by "$HOST-2147483647" >/dev/null   # dead pid
+  run bash "$CB" unblock "$id"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
+}
+
+@test "THE CAPABILITY: unblock of a BLOCKED item still works, and of an OPEN one is a benign no-op" {
+  guard_env
+  # blocked → open: the only legitimate use of the verb, and thrash-block-recover.sh's write path.
+  # If this ever goes red the guard has deleted the capability instead of the defect.
+  id=$(bash "$CB" add --project /r --title T --source S)
+  bash "$CB" block "$id" --needs "operator: set key" >/dev/null
+  run bash "$CB" unblock "$id"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id")" = open ]
+  # open → open: two peers servicing the same "lift the block" ticket. Benign, so it must not be
+  # turned into an error — spending a refusal on a no-op teaches callers to reach for --force.
+  id2=$(bash "$CB" add --project /r --title U --source S)
+  run bash "$CB" unblock "$id2"
+  [ "$status" -eq 0 ]
+  [ "$(st_of "$id2")" = open ]
 }
 
 # ── claim done-guard: THE ACTUATOR IS THE ARBITER (backlog dadc3c2410aa, measured 2026-08-05) ────
@@ -1967,13 +2042,23 @@ lease_pristine() {
   [ "$(status_of lease00000a7)" = claimed ]
 }
 
-@test "lease: --force is still rejected on every verb but reopen and claim" {
+@test "lease: --force is still rejected on every verb but reopen, unblock and claim" {
   rec '{"id":"lease00000a8","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L8"}'
   # `done` is quoted for the same reason cc-backlog's own dispatch table quotes it: unquoted, it
   # parses as the loop keyword and shellcheck aborts on the construct (SC1010).
   run bash "$CB" "done" lease00000a8 --evidence sha --force
   [ "$status" -eq 2 ]
-  printf '%s' "$output" | grep -q 'force applies only to reopen and claim'
+  printf '%s' "$output" | grep -q 'force applies only to reopen, unblock and claim'
+
+  # BOTH DIRECTIONS, deliberately. The rejection half alone cannot tell a correctly-grown allowlist
+  # from one that grew by accident: `unblock` joined it when unblock learned the re-open-effect
+  # guards, and a guard with no escape hatch is one the operator can only route around by editing
+  # the ledger by hand. So the accept half is pinned too (memory:
+  # guard-proxy-fails-in-both-directions).
+  rec '{"id":"lease00000a9","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"L9"}'
+  rec '{"id":"lease00000a9","ts":"2026-01-01T00:01:00Z","event":"block","needs":"an operator step"}'
+  run bash "$CB" unblock lease00000a9 --force
+  [ "$status" -eq 0 ]
 }
 
 # ── THE LEASE'S SECOND ORACLE (backlog 9887dbe5ef5c) ──────────────────────────────────────────────
