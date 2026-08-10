@@ -217,14 +217,15 @@ print("OK")' || { echo "$output"; false; }
   for i in $(seq 1 12); do
     printf '{"ts":"2026-08-01T00:%02d:00Z","verdict":"OK","sessions":25,"swap_used_mb":0}\n' "$i" >> "$CC_CAP_LOG"
   done
-  : > "$CC_UTIL_LOG"
-  printf '{"ts":"2026-08-01T00:00:00+00:00","acct":"next","k":5,"weekly_pct":10,"stale":false}\n' >> "$CC_UTIL_LOG"
-  # a bigger k, but the weekly window was SATURATED — not evidence the pool sustains it
-  printf '{"ts":"2026-08-05T00:00:00+00:00","acct":"next","k":99,"weekly_pct":100,"stale":false}\n' >> "$CC_UTIL_LOG"
-  # a bigger k, but the row is INHERITED — not a measurement
-  printf '{"ts":"2026-08-06T00:00:00+00:00","acct":"next","k":50,"weekly_pct":20,"stale":true}\n' >> "$CC_UTIL_LOG"
-  printf '{"ts":"2026-08-09T00:00:00+00:00","acct":"next","k":8,"weekly_pct":30,"stale":false}\n' >> "$CC_UTIL_LOG"
-  printf '{"ts":"2026-08-09T00:00:00+00:00","acct":"next3","k":6,"weekly_pct":40,"stale":false}\n' >> "$CC_UTIL_LOG"
+  {
+    printf '{"ts":"2026-08-01T00:00:00+00:00","acct":"next","k":5,"weekly_pct":10,"stale":false}\n'
+    # a bigger k, but the weekly window was SATURATED — not evidence the pool sustains it
+    printf '{"ts":"2026-08-05T00:00:00+00:00","acct":"next","k":99,"weekly_pct":100,"stale":false}\n'
+    # a bigger k, but the row is INHERITED — not a measurement
+    printf '{"ts":"2026-08-06T00:00:00+00:00","acct":"next","k":50,"weekly_pct":20,"stale":true}\n'
+    printf '{"ts":"2026-08-09T00:00:00+00:00","acct":"next","k":8,"weekly_pct":30,"stale":false}\n'
+    printf '{"ts":"2026-08-09T00:00:00+00:00","acct":"next3","k":6,"weekly_pct":40,"stale":false}\n'
+  } > "$CC_UTIL_LOG"
   run bash "$FLOOR" --json
   [ "$status" -eq 0 ] || { echo "a full span should produce a verdict: $output"; false; }
   echo "$output" | python3 -c '
