@@ -249,6 +249,90 @@ agent_screen() { printf '%s\n' "✻ Baked for 15m 50s" "$(agent_rule "${1:-tri-d
   [ "$(attempts)" = "0" ]
 }
 
+# ── …and its FINISHED form, which paints no footer at all (2026-08-10) ───────────────────
+#
+# The branch above shipped and still refused every pane it was written for. A finished agent pane
+# stops painting its rule ENTIRELY, so `len(rules) == 1` is unreachable for exactly the population
+# teardown must close: 212 of 276 refusal snapshots carry zero rules, and the live census of
+# 2026-08-10 found kitty windows 98-112 — all 15 workers of the memory-econ wave, argv-proven
+# agents, ~6.2 GB — stranded on it. Note what this is NOT: the screen reads fine and is non-blank.
+# That distinguishes it from DEAD-PANE below, which is the unreadable case.
+
+# The live shape of window 98, read from kitty 2026-08-10: no rule, no glyph, real bytes.
+finished_screen() {
+  printf '%s\n' "" "✻ Brewed for 27s" "      new task? /clear to save 262.4k tokens" "" > "$SCREEN"
+}
+
+@test "a FINISHED agent pane painting no rule at all closes — the 98-112 shape" {
+  ALT=true; FG_JSON="$AGENT_FG"; finished_screen
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "CONTROL: the same zero-rule screen WITHOUT an agent argv is refused" {
+  # The argv proof is retained deliberately. The research doc's §5.2 recommends the BLANKET
+  # zero-rules rule; that is one step too wide, and the test below says why in measurements.
+  ALT=true; FG_JSON='[]'; finished_screen
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: zero rules but a VISIBLE ❯ is refused — narrow panes lose their rules, not their text" {
+  # Why "no rules" alone cannot mean "no composer": the rule threshold is max(20, cols//2), and
+  # window 149 measured a real labelled composer rule at 18 glyphs on a 28-column pane. Below ~20
+  # columns BOTH rules fall under the floor and a pane holding live text reads as zero rules. The
+  # glyph is what survives that, so the glyph is the second proof.
+  ALT=true; FG_JSON="$AGENT_FG"
+  printf '%s\n' "──── @tri-dispatch ──" "$(printf '\033[m❯%sdraft nobody sent yet' "$NBSP")" "────" > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+# ── the UNREADABLE pane, split on whether its CC process is still there ───────────────────
+#
+# A composer buffer lives ONLY in the CC process's memory (that is this whole file's premise), so
+# once that process exits there is nothing left for a refusal to protect. This arm is what makes
+# the guard's answer to "I cannot read the screen" depend on whether anything is still running.
+
+DEAD_FG='[{"cmdline":["/bin/zsh","-l","-i"]},{"cmdline":["/bin/bash","/x/claude-infrastructure/bin/cc-pane-runner"]}]'
+LIVE_FG='[{"cmdline":["/bin/bash","/x/bin/cc-close-attrib","/x/.claude-220/node_modules/.bin/claude","--effort","max"]}]'
+EXPECT_FG='[{"cmdline":["expect","-c","set timeout 240\nspawn -noecho env DISABLE_AUTOUPDATER=1 cc-launch"]}]'
+
+@test "a BLANK read on a pane whose CC process is GONE closes — the text died with it" {
+  ALT=true; FG_JSON="$DEAD_FG"; : > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "a failed get-text on a pane whose CC process is GONE closes too" {
+  ALT=true; FG_JSON="$DEAD_FG"; TEXT_RC=1 run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "CONTROL: a blank read on a pane whose CC process is ALIVE is still refused" {
+  # The half the goal names explicitly: dead-agent panes close, live ones do not. `cc-close-attrib`
+  # is argv[0] here and the CC binary is a later token — the live shape on this box, and the reason
+  # the test is not a basename match.
+  ALT=true; FG_JSON="$LIVE_FG"; : > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: an expect-WRAPPED pane is refused — its CC is a grandchild, absent from the table" {
+  # S6 trap b, measured on window 5. Nothing in this argv proves CC is running, and that is exactly
+  # why it must not be called dead: the acquitting evidence is not in the table to be read.
+  ALT=true; FG_JSON="$EXPECT_FG"; : > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
 @test "an agent pane that DOES hold typed text is refused exactly like any other" {
   # The branch only ever converts "no composer region found" into "there is provably none". A
   # rendered composer with real text is NON-EMPTY on an agent pane too, and NON-EMPTY always wins.
@@ -341,6 +425,40 @@ open(sys.argv[2], "w").write(src.replace(a, b))' "$SHIM" "$m" || return 1
   printf '%s' "$m"
 }
 
+@test "META: a refusal always NAMES a state — an empty verdict matches no arm and refuses silently" {
+  # The defect this file shipped with for one edit, 2026-08-10. A single apostrophe in a python
+  # COMMENT closed the surrounding python3 -c '…' quote, so the interpreter call died at runtime
+  # with "bad substitution" while `bash -n` still parsed the file clean. composer_state then
+  # returned the EMPTY STRING, which matches no case arm — so every pane refused, and every
+  # assertion in this file that expects a refusal stayed GREEN. Only the close assertions failed,
+  # and a suite with fewer of those would have shipped it. The verdict is now asserted to be a
+  # named state, which is a property of the MECHANISM rather than of any one quoting mistake.
+  ALT=true; FG_JSON='[]'; printf 'Do you want to proceed?\n 1. Yes\n 2. No\n' > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  echo "$output" | grep -qE 'composer state is (NON-EMPTY|UNKNOWN)\.'
+}
+
+@test "META: no embedded python block contains an apostrophe — it would close its own quote" {
+  # The lint for the same class, keyed on the construct rather than the symptom. Every python3 -c
+  # block in the subject must be apostrophe-free for its whole length, comments included.
+  run python3 -c '
+import re, sys
+src = open(sys.argv[1]).read()
+bad = []
+for m in re.finditer(r"python3 -c \x27", src):
+    end = src.index("\x27", m.end())
+    blk = src[m.end():end]
+    # A block that ended EARLY is the failure itself: the next non-space char after the closing
+    # quote is then ordinary program text rather than a shell continuation.
+    for i, line in enumerate(blk.split("\n")):
+        if "\x27" in line:
+            bad.append(line.strip()[:70])
+print("\n".join(bad))
+sys.exit(1 if bad else 0)' "$SHIM"
+  [ "$status" -eq 0 ] || { echo "apostrophe inside an embedded python block: $output"; false; }
+}
+
 @test "META: a mutant that changes nothing is rejected, not silently run" {
   # The control's own control. Without this, a stale anchor degrades every mutation test below into
   # a green that proves the subject works — the opposite of what it claims to prove.
@@ -351,7 +469,7 @@ open(sys.argv[2], "w").write(src.replace(a, b))' "$SHIM" "$m" || return 1
 @test "CONTROL: without the NO-TUI split, the shell-prompt pane is refused" {
   # Anchor moved 2026-08-10 when the AGENT-PANE state was added to this same print. It failed LOUD
   # ("anchor not unique") rather than silently passing, which is the META test above doing its job.
-  local m; m="$(mutate 'print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))' 'print("UNKNOWN")')"
+  local m; m="$(mutate 'print(passing if (alt and passing) else ("UNKNOWN" if alt else "NO-TUI"))' 'print("UNKNOWN")')"
   ALT=false; printf 'chrisren@host ~ %% \n' > "$SCREEN"
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]           # the mutant breaks self-close — so the real assertion tests it
@@ -361,18 +479,66 @@ open(sys.argv[2], "w").write(src.replace(a, b))' "$SHIM" "$m" || return 1
 @test "CONTROL: without the AGENT-PANE branch, the finished subagent pane is refused" {
   # The defect as it shipped: this exact mutant IS the pre-2026-08-10 script, and under it the ten
   # tri-* panes were refused 160 times while their processes held 5.9 GB.
-  local m; m="$(mutate 'print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))' 'print("UNKNOWN" if alt else "NO-TUI")')"
+  local m; m="$(mutate 'passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")' 'passing = "AGENT-NO-BOX" if no_box else ""')"
   ALT=true; FG_JSON="$AGENT_FG"; agent_screen
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]
   [ "$(attempts)" = "0" ]
 }
 
+@test "CONTROL: without the zero-rule branch, the FINISHED agent pane is refused" {
+  # The defect as it shipped TODAY: the labelled-rule branch landed 2026-08-10 and this mutant IS
+  # that script, under which windows 98-112 were stranded holding ~6.2 GB.
+  local m; m="$(mutate 'passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")' 'passing = "AGENT-PANE" if agent_pane else ""')"
+  ALT=true; FG_JSON="$AGENT_FG"; finished_screen
+  run "$m" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: without the ❯ half of no_box, a narrow pane's live draft is destroyed" {
+  # Per-site: no_box has TWO conjuncts and the test above only exercises one. Cutting the glyph
+  # check leaves "zero rules ⇒ close", which is §5.2's blanket form — and it destroys text.
+  local m; m="$(mutate 'no_box = (agent != "-" and len(rules) == 0 and not any("❯" in l for l in flat))' 'no_box = (agent != "-" and len(rules) == 0)')"
+  ALT=true; FG_JSON="$AGENT_FG"
+  printf '%s\n' "──── @tri-dispatch ──" "$(printf '\033[m❯%sdraft nobody sent yet' "$NBSP")" "────" > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 0 ]            # the mutant DESTROYS it — the glyph conjunct is load-bearing
+  closed
+}
+
+@test "CONTROL: without the DEAD-PANE arm, a blank read on a dead pane is refused forever" {
+  local m; m="$(mutate '[ -n "$txt" ] || { [ "$dead" = DEAD ] && printf '"'"'DEAD-PANE'"'"' || printf '"'"'UNKNOWN'"'"'; return 0; }' '[ -n "$txt" ] || { printf '"'"'UNKNOWN'"'"'; return 0; }')"
+  ALT=true; FG_JSON="$DEAD_FG"; : > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: without \`procs and\`, an EMPTY process list reads as death and closes a live pane" {
+  # The positive-presence half. kitty answering with no processes is not evidence that none are
+  # running, and an empty list is this suite's default — so this mutant turns every RPC-failure
+  # assertion above into a close.
+  local m; m="$(mutate 'dead = "DEAD" if procs and not any(_hosts_cc(p) for p in procs) else "-"' 'dead = "DEAD" if not any(_hosts_cc(p) for p in procs) else "-"')"
+  ALT=true; FG_JSON='[]'; : > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 0 ]            # the mutant destroys an unreadable pane it knows nothing about
+  closed
+}
+
+@test "CONTROL: without the SPAWNERS set, the expect-wrapped live pane reads DEAD and closes" {
+  local m; m="$(mutate 'or base in SPAWNERS' 'or False')"
+  ALT=true; FG_JSON="$EXPECT_FG"; : > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 0 ]            # the mutant destroys window 5's live session
+  closed
+}
+
 @test "CONTROL: reading the agent field back as \`alt\` deletes the guard for every pane" {
   # `meta` grew a third field, so the old `alt="${meta##* }"` would hand the AGENT name back as
   # `alt`. That never equals "True", so every pane reads NO-TUI and closes — a guard silently
   # deleted by a parse, not by a decision. The modal pane is the one that proves it.
-  local m; m="$(mutate 'read -r cols alt agent <<<"$meta"' 'alt="${meta##* }"')"
+  local m; m="$(mutate 'read -r cols alt agent dead <<<"$meta"' 'alt="${meta##* }"')"
   ALT=true; FG_JSON='[]'; printf 'Do you want to proceed?\n 1. Yes\n 2. No\n' > "$SCREEN"
   run "$m" session close -f -s 300
   [ "$status" -eq 0 ]            # the mutant DESTROYS an unreadable pane — the parse is load-bearing
