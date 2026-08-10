@@ -23,8 +23,10 @@
 #            history is the product here, and truncating it would be deleting the artifact
 #            to save its index.
 #
-#   NOT pruned: `plans/` itself. Declared UNBOUNDED-BY-DESIGN in the growth-coverage SSOT with
-#   that reason, rather than silently left uncovered.
+#   NOT pruned: `plans/` itself. Classified in the growth-coverage SSOT rather than silently left
+#   uncovered — as `ignore=` (CC harness plan-mode scratch, versioned into plan-history by the
+#   hook), NOT `unbounded-by-design=`, which is what `plan-history` carries. This comment claimed
+#   the latter until 2026-08-10; the SSOT is the authority, so it was the comment that was wrong.
 #
 # Env (tests): CC_PLAN_MANIFEST · CC_PLAN_HISTORY_REPO · CC_PLAN_KEEP_PER_PLAN
 #   · CC_PLAN_MAX_AGE_DAYS · CC_PLAN_PRUNE_LOG.  bash-3.2 safe, no eval, never `set -e`.
