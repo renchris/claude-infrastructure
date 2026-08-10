@@ -221,6 +221,49 @@ log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; defaul
     >> "$IDL" 2>/dev/null || true
 }
 
+# ── 2b. BACKLOG HEALTH — measured EVERY sweep, deliberately ABOVE the nothing-new early exit ──────
+# The two backlog-health tools landed inert: a7bf7068 gave items a falsifier and 596b39a7 gave the
+# duplicate-cluster shape a detector, and NOTHING invoked either. That is the exact failure this
+# repo keeps rediscovering — a conclusion parked where no enforcing store reads it — committed by
+# the change that was documenting it. This block is the caller.
+#
+# WHY ABOVE THE EARLY EXIT: `total_new -eq 0` is the COMMON case, and backlog rot is precisely the
+# condition that produces no pages and no alarms while it accumulates. Wiring health below that gate
+# would measure it only on sweeps that already had other news — i.e. never, on a quiet store that is
+# quietly rotting.
+#
+# The trigger FILES rather than prints (its `--file` writes ONE condition-keyed row), so a crossed
+# threshold reaches the operator through the item machinery that already exists — the readout, the
+# ledger, dispatch — instead of a log line nobody opens. Nothing here alters $total_new or the exit
+# below: a filed item surfaces on its own terms, on the NEXT sweep, which keeps this block free of
+# any say in whether the desk is woken tonight.
+#
+# BEST-EFFORT, but never `|| true` on its own: swallowing the code would make a broken detector
+# indistinguishable from a clean store (memory: claimed-outcome-vs-checked-outcome). Each rc is
+# captured and journalled, so "the detector could not run" and "the store is healthy" stay apart.
+# `set -e` is not in force here (line 44 is `set -uo pipefail`), so a non-zero cannot abort the sweep.
+_sw="${BASH_SOURCE[0]}"
+while [ -L "$_sw" ]; do
+  _swd="$(cd "$(dirname "$_sw")" && pwd)"; _sw="$(readlink "$_sw")"
+  case "$_sw" in /*) ;; *) _sw="$_swd/$_sw" ;; esac
+done
+_SWEEP_DIR="$(cd "$(dirname "$_sw")" && pwd)"
+_trigger="$_SWEEP_DIR/backlog-consolidation-trigger.sh"
+_ratchet="$_SWEEP_DIR/backlog-ratchet.sh"
+# SELF-CONTAINED BOUND, not sweep_bounded(). That helper and its TIMEOUT_BIN are defined ~100 lines
+# BELOW this point, and bash resolves a function only at call time — so calling it here would exit
+# 127 "command not found". With no `set -e` that is SILENT, and rc 127 would have been journalled
+# below as if it were the detector's own verdict: a broken caller reading exactly like a clean store.
+# Caught before landing; the block is placed high on purpose (see above), so it brings its own bound.
+_tmo="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+_bounded() { if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 5 60 "$@"; else "$@"; fi; }
+_trig_rc="skipped"; _rat_rc="skipped"
+if [ -x "$_trigger" ]; then _bounded bash "$_trigger" --file >/dev/null 2>&1; _trig_rc=$?; fi
+if [ -x "$_ratchet" ]; then _bounded bash "$_ratchet" --assert >/dev/null 2>&1; _rat_rc=$?; fi
+log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
+  '{consolidation_trigger_rc:$t, ratchet_rc:$r,
+    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean)"}')"
+
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0
