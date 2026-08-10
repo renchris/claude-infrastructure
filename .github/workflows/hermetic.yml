@@ -222,6 +222,32 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$v"
 
+          # PASTE-READY CURE. The maintenance loop for this producer is "a new machine-coupled suite
+          # reds it until one line lands in the manifest", and that loop is only cheap if the red
+          # hands you the line. Transcribing suite names out of a log is where the entries lose
+          # their evidence — which is the one thing every entry in that file is required to carry.
+          python3 - "$v" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          try:
+              d = json.loads(sys.argv[1])
+          except Exception:
+              sys.exit(0)
+          bad = list(d.get("failing") or []) + list(d.get("nonverdict_suites") or [])
+          if not bad:
+              sys.exit(0)
+          run = "${{ github.run_id }}"
+          print("\n#### cure: paste into `scripts/offbox-excluded.manifest`\n")
+          print("Each line carries the measurement that justifies it — that is the manifest's contract.\n")
+          print("```text")
+          for s in bad:
+              print("# run %s: not green off-box" % run)
+              print(s)
+          print("```")
+          print("\nBefore pasting, ask whether the suite is machine-coupled or genuinely broken: this list")
+          print("is seeded on measurement, not attribution, and an entry is cheap to delete once")
+          print("`offbox-run.sh census` shows the suite passing again.")
+          PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -120,6 +120,32 @@ tests/bats-assert-liveness.bats
 # run 31363422123: notok=5
 tests/suggest-filter.bats
 
+# ── THIRD SEEDING — the STEADY-STATE case, and the reason it is worth naming separately ──────────
+# Actions run 31369960469, the first run on TRUNK (sha 018381c6). 345 of 345 ran; 338 green, 6 red,
+# 1 cut. None of these 7 appeared in the two branch-tree runs above: trunk had simply moved on, and
+# every suite it gained landed INSIDE the partition by default, exactly as designed.
+#
+# This is the maintenance loop, and it is the honest ongoing cost of defaulting new suites IN: a
+# machine-coupled suite reds the producer on the land that adds it, until one line appears here.
+# The alternative — defaulting new suites OUT — costs the thing that cannot be recovered, because a
+# suite silently absent from the partition looks exactly like a suite that passed. The job summary
+# now prints a paste-ready block for precisely this, so curing it is a copy rather than a transcription.
+# run 31369960469: notok=3
+tests/account-fact-derivation.bats
+# run 31369960469: notok=1, 72s
+tests/compressor-sentinel.bats
+# run 31369960469: notok=1
+tests/pool-floor.bats
+# run 31369960469: notok=1
+tests/rotate-autonomy-logs.bats
+# run 31369960469: notok=1
+tests/session-end-gc-lock.bats
+# run 31369960469: notok=1
+tests/tsv-field-collapse.bats
+# run 31369960469: CUT at the 120s bound — a non-verdict, not a red. Excluded on COST, like
+# postland-verify.bats below, and re-admissible if it ever gets faster.
+tests/worktree-gc-infra.bats
+
 # ── the land and verify machinery itself ─────────────────────────────────────────────────────────
 # These are the subjects that OWN the on-box verdict, so excluding them from the off-box second
 # opinion costs the least of anything here — the on-box corpus is where their claim belongs.
