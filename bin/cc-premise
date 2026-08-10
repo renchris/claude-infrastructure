@@ -179,10 +179,14 @@ POSTLAND_FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_POSTLAND_FALSIFIER", "on
 # are different claims (a wedge is a property of the tree; an AUTO-REVERT row is a record of an act)
 # and neither is refuted by "the suite went green", so they fall through to the incumbent signals.
 RE_POSTLAND_RED = re.compile(r"^post-land RED:\s+(.+)\s+@\s+([0-9a-f]{7,40})\s*$")
-# ONE suite file, never a directory. postland-verify has genuinely filed `FAILING=(tests/)` when its
-# TAP grammar could not attribute a failure (postland-verify.sh:1050-1067), and a directory has no
-# single corpus membership to check — so it must reach this arm as "cannot tell", not as a subject.
 RE_BATS_PATH = re.compile(r"^tests/[^\s/]+\.bats$")
+# THE UNATTRIBUTED SUBJECT. postland-verify genuinely files `FAILING=(tests/)` when its TAP grammar
+# cannot pin the failure on a file (postland-verify.sh:1050-1067) — 9 such items in the live store.
+# It is not a file, so none of the per-file span questions apply; the subject IS the whole tree
+# corpus, and a full-corpus green is TOTAL evidence over it. That makes it the one subject whose span
+# needs no membership check at all: the verifier only ever runs the tree corpus, so a RED it filed
+# can only have come from there, and the green covers exactly the same set.
+RE_CORPUS_PATH = re.compile(r"^tests/?$")
 
 # A file path cited in a premise. Conservative on purpose: a bare word with a slash is not a
 # path claim, so this wants a real extension or a known top-level dir of this repo.
@@ -664,7 +668,14 @@ def _postland_red(ent):
     # `<file>::<test name>` — the file is everything before the FIRST `::`; bats test names may
     # themselves contain colons, so splitting once from the left is the only safe reading.
     path = m.group(1).split("::", 1)[0].strip()
-    if not RE_BATS_PATH.match(path):
+    if not (RE_BATS_PATH.match(path) or RE_CORPUS_PATH.match(path)):
+        # Everything else falls through as "cannot tell", and the live store's remaining shapes are
+        # PRELINT reds — `scripts/<meta-lint>.sh::<violation>`. A green does imply those passed (a
+        # prelint red SKIPS the corpus, postland-verify.sh:469-470), but the span clause for one is
+        # membership of that script in the PRELINTS array AT the green's tree, and that array is a
+        # bash literal inside the verifier. Parsing it out of a historical file version to decide
+        # whether to retract a live lint violation is exactly the brittleness this arm exists to
+        # avoid, so they are left to the incumbent signals. Filed rather than guessed.
         return None
     return path, m.group(2)
 
@@ -777,18 +788,26 @@ def run_derived_postland_falsifier(item_id, ent):
     # facts, and only `_git_rc` can tell them apart at all.
     if _git_rc(["merge-base", "--is-ancestor", redsha, lg]) != 0:
         return None
-    excl = _host_suites_at(lg)
-    if excl is None or path in excl:
-        return None
-    if _git_rc(["cat-file", "-e", "%s:%s" % (lg, path)]) != 0:
-        return None
+    # THE SPAN CLAUSE, and the unattributed subject is the one case that needs none of it: `tests/`
+    # IS the corpus, so a full-corpus green covers it by definition. Every FILE subject still has to
+    # prove the green actually ran it.
+    if RE_CORPUS_PATH.match(path):
+        subject = ("the whole tree corpus (this RED named no single suite — postland-verify could "
+                   "not attribute it)")
+    else:
+        excl = _host_suites_at(lg)
+        if excl is None or path in excl:
+            return None
+        if _git_rc(["cat-file", "-e", "%s:%s" % (lg, path)]) != 0:
+            return None
+        subject = "%s  (in the tree corpus at %s, not a host suite)" % (path, lg[:12])
     return "falsified", [
         "DERIVED FALSIFIER — this item stores no probe of its own, so its premise was re-asked "
         "another way: it claims %s was RED at %s, and postland-verify has since run the FULL corpus "
         "green at %s, which contains that commit. This is a read of the post-land ledger JUST NOW, "
         "not a re-run of the suite and not an inference from the item's own words."
         % (path, redsha[:12], lg[:12]),
-        "  suite:      %s  (in the tree corpus at %s, not a host suite)" % (path, lg[:12]),
+        "  suite:      %s" % subject,
         "  red at:     %s" % redsha[:12],
         "  last-green: %s  (postland-verify, %s)" % (lg[:12], POSTLAND_DIR),
         "Close it citing this read (cc-backlog done %s --evidence \"premise-retracted: %s was RED at "

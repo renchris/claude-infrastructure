@@ -39,14 +39,19 @@ setup() {
   # ── the fixture repo ───────────────────────────────────────────────────────────────────────────
   # Three commits on one line: BASE ← RED ← GREEN. `last-green` points at GREEN, so RED is an
   # ancestor of it and the arm should refuse; a fourth commit AFTER green gives the primary control.
-  GITR="$TMP/repo"; mkdir -p "$GITR/tests"
+  GITR="$TMP/repo"; mkdir -p "$GITR/tests" "$GITR/scripts"
   git -C "$GITR" init -q -b main
   git -C "$GITR" config user.email t@t; git -C "$GITR" config user.name t
   git -C "$GITR" config commit.gpgsign false
   printf 'base\n' > "$GITR/tests/suite-a.bats"
   printf 'base\n' > "$GITR/tests/host-suite.bats"
+  # The prelint scripts must EXIST at last-green, or the prelint test below passes for the wrong
+  # reason: the file-existence span clause would abstain on their absence and the subject filter it
+  # means to pin would carry no load. Measured — without these two files, accepting `scripts/` as a
+  # subject left that test green.
+  printf 'lint\n' > "$GITR/scripts/test-walltime-lint.sh"
+  printf 'lint\n' > "$GITR/scripts/git-identity-lint.sh"
   git -C "$GITR" add -A; git -C "$GITR" commit -qm base
-  BASE="$(git -C "$GITR" rev-parse HEAD)"
   printf 'red\n' >> "$GITR/tests/suite-a.bats"
   git -C "$GITR" add -A; git -C "$GITR" commit -qm red
   RED="$(git -C "$GITR" rev-parse HEAD)"
@@ -219,13 +224,48 @@ green_manifest() {
   [ "$status" -eq 3 ]
 }
 
-# postland-verify has genuinely filed `FAILING=(tests/)` when its TAP grammar could not attribute a
-# failure. A directory has no single corpus membership, so it must read as "cannot tell".
-@test "a DIRECTORY instead of a suite -> does NOT refuse" {
+# THE UNATTRIBUTED SUBJECT. postland-verify genuinely files `FAILING=(tests/)` when its TAP grammar
+# cannot pin the failure on a file — 9 such items in the live store. It is the ONE subject that needs
+# no span check: `tests/` IS the corpus, the verifier only ever runs the tree corpus, so a RED it
+# filed can only have come from there and the green covers exactly the same set.
+@test "the UNATTRIBUTED subject 'tests/' is refuted by a full-corpus green" {
   id="$(add "post-land RED: tests/ @ $RED" postland-verify)"
+  run "$PREMISE" check "$id"
+  [ "$status" -eq 3 ]
+  [ "$(verdict "$output")" = falsified ]
+  # it must NOT claim a suite it cannot name — the contract has to say the RED was unattributed.
+  printf '%s' "$output" | grep -q "could not attribute"
+}
+
+# …and the span clause it skips must still be skipped for the RIGHT reason: a host manifest naming
+# suites cannot make the corpus subject unaskable, because the subject is the corpus the green ran.
+@test "the unattributed subject is unaffected by the host manifest" {
+  green_manifest 'tests/host-suite.bats'
+  id="$(add "post-land RED: tests/ @ $RED" postland-verify)"
+  run "$PREMISE" check "$id"
+  [ "$status" -eq 3 ]
+}
+
+# The ancestry clause still binds it — an unattributed RED filed after the green is live work.
+@test "the unattributed subject filed AFTER last-green -> does NOT refuse" {
+  id="$(add "post-land RED: tests/ @ $LATER" postland-verify)"
   run "$PREMISE" check "$id"
   [ "$status" -eq 0 ]
   refute_match "$output" "verdict=falsified"
+}
+
+# THE PRELINT SHAPE stays out, deliberately. A green DOES imply the prelints passed (a prelint red
+# skips the corpus), but the span clause for one is membership of that script in the PRELINTS bash
+# array AT the green's tree — parsing that out of a historical file version to retract a live lint
+# violation is the brittleness this arm exists to avoid. Backlogged, not guessed.
+@test "a PRELINT red (scripts/<lint>.sh) is not a subject this arm judges" {
+  a="$(add "post-land RED: scripts/test-walltime-lint.sh::  RATCHET  some-suite.bats has no future absolute date now @ $RED" postland-verify)"
+  b="$(add "post-land RED: scripts/git-identity-lint.sh::  IDENTITY a suite wrote git user.* @ $RED" postland-verify)"
+  for id in "$a" "$b"; do
+    run "$PREMISE" check "$id"
+    [ "$status" -eq 0 ]
+    refute_match "$output" "verdict=falsified"
+  done
 }
 
 @test "another PROJECT's item -> does NOT refuse (its shas are not this checkout's)" {
