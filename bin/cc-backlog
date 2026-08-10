@@ -1209,9 +1209,8 @@ cmd_transition() {
     # through. ONLY exit 3 blocks; every other exit code, including a crash, proceeds. Starving the
     # queue on a sensor failure is the worse error (I6).
     if [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
-      local pself pbin prc pout
-      pself="$0"; [ -L "$pself" ] && pself="$(readlink "$pself")"
-      pbin="${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$pself")" 2>/dev/null && pwd)/cc-premise}"
+      local pbin prc pout
+      pbin="$(premise_bin)"
       if [ -x "$pbin" ]; then
         pout="$("$pbin" check "$id" 2>&1)"; prc=$?
         if [ "$prc" -eq 3 ]; then
@@ -1370,7 +1369,73 @@ cmd_transition() {
       + (if $force == 1     then {force:true}         else {} end)
       + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
+  # (7) THE RE-ADMISSION RE-READ (2026-08-10, backlog f46261b23ec2). `unblock` is the one transition
+  # that returns an item to cc-dispatch's fire predicate with nothing re-reading what it says. That
+  # would be survivable if a block were a neutral pause. It is the opposite: blocked items sit
+  # LONGEST, so they are precisely the ones whose evidence has most likely been discharged in the
+  # meantime — measured on 149789b69fc4, whose six named files were all cured 39 minutes after filing
+  # and which was re-admitted seven days later carrying the identical list, unchanged.
+  #
+  # ADVISORY, NEVER A GATE, and each half is deliberate:
+  #   · it runs AFTER the record is appended and its exit code is discarded, so no way of failing to
+  #     read a premise can fail the transition — the fail-open rule guard (5) states, with the stakes
+  #     raised, because this verb is a RECOVERY path;
+  #   · `blocked → open` is the whole legitimate use of unblock and the transition
+  #     scripts/thrash-block-recover.sh drives on every run. Guarding it would delete a capability
+  #     rather than a defect (memory: guard-universalization-deletes-a-capability-silently), and the
+  #     filing item asked for precisely this shape — "fail-OPEN with the staleness surfaced rather
+  #     than refusing".
+  #
+  # WHAT IT BUYS OVER GUARD (5), which asks the identical question of the identical predicate: THE
+  # AUDIENCE. At claim time the reader is the worker and the answer rides its brief, which is what
+  # stops a false `done`. Here the reader is whoever is DECIDING to re-admit — and an item closed at
+  # this moment never costs a dispatch slot at all.
+  #
+  # SCOPED TO `unblock`, not to every re-admitting event. `reopen` folds to "open" too, but it is
+  # overwhelmingly machine traffic — cc-dispatch self-releasing a fire it could not make, reap
+  # returning a dead worker's claim — where there is no deciding reader to inform and the volume
+  # would make this ambient. Unblock is the deliberate one.
+  #
+  # It honours CC_BACKLOG_PREMISE_GATE: same predicate, same binary, one switch. An operator who has
+  # turned cc-premise off in this tool means it.
+  if [ "$event" = unblock ] && [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
+    local ubin uout
+    ubin="$(premise_bin)"
+    if [ -x "$ubin" ]; then
+      # stderr only: `check` puts the contract there and `verdict=` on stdout, and stdout here is the
+      # `echo "$id"` contract every caller captures. `2>&1 >/dev/null` is ordered so the capture takes
+      # stderr and the verdict line is dropped — reversing the two would swallow the contract and
+      # publish the verdict into the caller's id.
+      uout="$("$ubin" check "$id" 2>&1 >/dev/null)" || true
+      if [ -n "$uout" ]; then
+        { printf 'cc-backlog unblock: %s is back in the dispatch wave — RE-READ ITS EVIDENCE FIRST\n' "$id"
+          printf '%s\n' "$uout" | sed 's/^/  /'
+          printf '  Nothing above blocked this unblock; it is what the next worker will be told.\n'
+          printf '  If the condition is already discharged, close it now rather than spending a\n'
+          printf '  dispatch slot on it:  cc-backlog done %s --evidence "<the commit that cured it>"\n' "$id"
+        } >&2
+      fi
+    fi
+  fi
   echo "$id"
+}
+
+# premise_bin → the cc-premise that SHIPS WITH THIS cc-backlog. Never $PATH, never $HOME.
+#
+# ONE implementation, because there are now two callers — guard (5), which refuses on rc 3, and the
+# re-admission re-read above, which only advises. Two copies of this resolution would be two answers
+# to "which cc-premise", and they diverge exactly where it costs most: a worktree under test, or a
+# land not yet fast-forwarded, where one caller finds the co-versioned sibling and the other silently
+# finds nothing and fails open forever. That failure looks identical to "there was nothing to report"
+# (memory: sibling-auditors-must-share-the-state-model).
+#
+# The order is cc-dispatch's and cc-premise's own `_resolve_helper` order, for their reason: this
+# file and bin/cc-premise live in ONE repo and deploy together as per-file symlinks, so the sibling
+# next to the resolved $0 is guaranteed to be the matching version.
+premise_bin() {
+  local self
+  self="$0"; [ -L "$self" ] && self="$(readlink "$self")"
+  printf '%s' "${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$self")" 2>/dev/null && pwd)/cc-premise}"
 }
 
 # cmd_needs "<operator-only step>" [--run "<cmd>"] [--project P] [--session SID]
