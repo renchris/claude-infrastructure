@@ -14,6 +14,24 @@
 #   --prompt-file F     REQUIRED. File whose content is auto-submitted as the session's first
 #                       message via `launcher "$(cat F)"`. Content arrives VERBATIM — command
 #                       substitution output is never re-expanded (only trailing newlines strip).
+#   --goal COND         MESSAGE 2, and the SECOND flag on purpose: it is listed here, beside the
+#                       payload it pairs with, because a reader who pipes this help to `head` must
+#                       not miss it. (It sat ~150 lines down until 2026-08-10, and a fire that had
+#                       read `--help | head -60` put its goal INSIDE the payload instead — where it
+#                       is inert prose. Discoverability was the whole defect; nothing else changed.)
+#                       Arm a `/goal COND` Stop-hook goal in the fired session AFTER
+#                       engagement is proven, as a SEPARATE submission — never as the payload's
+#                       head. This is the supported way to get a goal into a fire: the payload gate
+#                       (check_slash_head) still refuses a slash-headed brief, because one message
+#                       cannot be both. COND is ONE line, <=4000 chars, and must not itself start
+#                       with '/' — all three are refused pre-fire. Also re-armed across --recycle
+#                       (a goal is session-scoped and dies with its session — measured 2026-08-08).
+#                       NEVER fails the fire: the brief has already landed and been proven to
+#                       engage, so a failed arming leaves a working session that simply has no goal.
+#                       The result is READ BACK from the fired session's own transcript and printed
+#                       as `goal-arm verdict=set|unverified|abstained` (also a handoffs.jsonl row).
+#                       Keep COND a POINTER, not the brief: '<objective> — full brief in the prompt
+#                       above; DoD at <path>'. Env equivalent: FIRE_GOAL.
 #   --account A         next|next2|next3|next4|auto (default auto). auto = live-limit ranking
 #                       via `claude-accounts --rank` (5h/weekly/Fable headroom + resets + live
 #                       session spread; fable ranking when --model fable). Degrades to the
@@ -147,19 +165,7 @@
 #                       no distinct originator). DEGRADES, never fails: a headless fire with no
 #                       firing pane silently skips it — only an EXPLICIT --notify-back errors.
 #                       --no-notify-back opts out for a deliberate one-way fire.
-#   --goal COND         MESSAGE 2. Arm a `/goal COND` Stop-hook goal in the fired session AFTER
-#                       engagement is proven, as a SEPARATE submission — never as the payload's
-#                       head. This is the supported way to get a goal into a fire: the payload gate
-#                       (check_slash_head) still refuses a slash-headed brief, because one message
-#                       cannot be both. COND is ONE line, <=4000 chars, and must not itself start
-#                       with '/' — all three are refused pre-fire. Also re-armed across --recycle
-#                       (a goal is session-scoped and dies with its session — measured 2026-08-08).
-#                       NEVER fails the fire: the brief has already landed and been proven to
-#                       engage, so a failed arming leaves a working session that simply has no goal.
-#                       The result is READ BACK from the fired session's own transcript and printed
-#                       as `goal-arm verdict=set|unverified|abstained` (also a handoffs.jsonl row).
-#                       Keep COND a POINTER, not the brief: '<objective> — full brief in the prompt
-#                       above; DoD at <path>'. Env equivalent: FIRE_GOAL.
+#                       (--goal is documented at the TOP of this Options block, beside --prompt-file.)
 #   --self-retire       DEFAULT for non-recycle fires. Append a SELF-RETIRE directive to the prompt
 #   --no-self-retire    copy: the fired PEER drives its trivial pre-authorized tail, then runs
 #                       `self-close --terminal` on its OWN pane instead of idling. --notify-back
