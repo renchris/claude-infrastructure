@@ -183,10 +183,18 @@ cmd_all() {
 # HONEST in the direction a green producer is blind to: an excluded suite that passes off-box run
 # after run has lost its reason to be excluded, and only a run that INCLUDES it can say so. Never
 # gating; its output is evidence for the next edit to the manifest.
-cmd_census() {
+cmd_census() { # [<i> <n>] [--out FILE] — sharded exactly like the partition, or whole if unsharded
+  local i="" n=""
+  case "${1:-}" in [0-9]*) i="$1"; n="${2:?census: shard index needs a count}"; shift 2 ;; esac
   local out=/dev/stdout
   [ "${1:-}" = "--out" ] && { out="${2:?--out needs a path}"; }
-  ( cd "$ROOT" && ls tests/*.bats 2>/dev/null ) | LC_ALL=C sort | run_list "$out"
+  local all; all="$( cd "$ROOT" && ls tests/*.bats 2>/dev/null | LC_ALL=C sort )"
+  if [ -n "$i" ]; then
+    [ "$i" -ge 1 ] && [ "$i" -le "$n" ] || die "census: shard index $i out of range 1..$n" 2
+    printf '%s\n' "$all" | awk -v i="$i" -v n="$n" 'NR % n == (i % n)' | run_list "$out"
+  else
+    printf '%s\n' "$all" | run_list "$out"
+  fi
 }
 
 cmd_verdict() {

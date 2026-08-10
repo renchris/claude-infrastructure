@@ -50,7 +50,7 @@ concurrency:
 env:
   # A per-suite bound, not a job bound. An overrun is a CUT — a non-verdict that withholds an
   # acquittal — so this number can never convict anyone's code (scripts/offbox-run.sh § R6).
-  CC_OFFBOX_SUITE_BOUND_S: '180'
+  CC_OFFBOX_SUITE_BOUND_S: '120'
 
 jobs:
   partition:
@@ -74,11 +74,15 @@ jobs:
   suite:
     needs: partition
     runs-on: macos-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     strategy:
       fail-fast: false          # every shard's evidence is wanted, especially when one is red
       matrix:
-        shard: [1, 2, 3, 4, 5]  # 5 = the free-tier macOS concurrency ceiling; more would queue
+        # 10 shards against a 5-wide macOS concurrency ceiling: they run in two waves, and a
+        # SMALLER shard is what keeps a pathological suite inside the job timeout. A job killed by
+        # timeout uploads nothing at all — `if: always()` does not survive a cancelled job — so
+        # shard size is the real bound on how much evidence one bad suite can destroy.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,9 +131,9 @@ jobs:
           set -uo pipefail
           mkdir -p "${{ runner.temp }}/out"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.census }}" = "true" ]; then
-            bash scripts/offbox-run.sh census --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
+            bash scripts/offbox-run.sh census ${{ matrix.shard }} 10 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
           else
-            bash scripts/offbox-run.sh shard ${{ matrix.shard }} 5 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
+            bash scripts/offbox-run.sh shard ${{ matrix.shard }} 10 --out "${{ runner.temp }}/out/shard-${{ matrix.shard }}.tsv"
           fi
 
       - name: shard summary
