@@ -17,13 +17,30 @@
 #
 # The durable invariants locked down here:
 #   1. NO repo script uses the banned `with default profile command "…"` form — the whole bug class;
-#   2. the two limit-recover fire paths use the create-then-`write text` form instead;
+#   2. the two limit-recover fire paths CREATE A BARE PANE and put the command in afterwards;
 #   3. the repair tool for panes created BEFORE the fix exists, is executable, and fails OPEN when
 #      the iterm2 python module is absent (it is a convenience, never a gate).
 #
 # Invariant 1 is a source-shape guard on purpose: the failure is invisible at fire time (the pane
 # launches correctly — only a LATER ⌘D misbehaves), so no runtime assertion in the fire path can
 # catch it. The banned string is the whole signal.
+#
+# ── INVARIANT 2 RE-ANCHORED 2026-08-10 (these two tests were STALE, not red) ───────────────────────
+# Invariant 2 used to be spelled as a grep for a literal `tell newPane to write text "exec …"` —
+# i.e. it pinned the create-then-`write text` SPELLING, not the property. 5fff9df6 then split create
+# from type at all three spawn sites, for a defect of its own (backlog 270106134cc8): `write text`
+# appends the newline itself, so the combined form EXECUTED the line before anything could confirm
+# it arrived intact, and a line mangled by a freshly-starting zsh could park the pane forever on an
+# unanswerable `zsh: correct … [nyae]?` — unattended, from a LaunchAgent. The command now goes in
+# through osa_type_verified (scripts/lib/cc-type-verified.sh), which types WITHOUT submitting,
+# echo-verifies against a per-attempt nonce, and only then sends the bare CR.
+#
+# So the subject moved toward safety and the assertion stayed behind. Left alone it stops being
+# stale and starts GUARDING THE BUG — it would redden any future land and read as a demand to go
+# back to the blind single-shot send. Both sides carry an incident; the side with the LATER one, and
+# the one whose failure is silent and unattended, wins. The assertions below therefore pin the
+# PROPERTY invariant 2 always meant: the surface is created BARE (no `command "…"` rider — that is
+# what ⌘D would copy), and the command arrives as a separate, verified step.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -45,26 +62,40 @@ setup() {
   [ -z "$output" ]
 }
 
-@test "lr-handoff split fires via create-then-write-text, not a profile command" {
+@test "lr-handoff split creates a BARE pane, then types the launcher as a verified second step" {
   run grep -q 'set newPane to (split vertically with default profile)' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
-  run grep -q 'tell newPane to write text "exec /bin/bash \$LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
+  # The split returns the new pane's id so the command can be addressed at it afterwards; without
+  # this the type step has nowhere to go and the site would have to fold back into the banned form.
+  run grep -q 'return id of newPane' "$REPO/scripts/limit-recover/lr-handoff.sh"
+  [ "$status" -eq 0 ]
+  run grep -qF 'osa_type_verified "$NEWPANE" "exec /bin/bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
 }
 
-@test "lr-handoff window fallback fires via create-then-write-text" {
+@test "lr-handoff window fallback creates a BARE window, then types the launcher verified" {
   run grep -q 'set newWin to (create window with default profile)' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
+  run grep -qF 'osa_type_verified "$WINPANE" "exec /bin/bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
+  [ "$status" -eq 0 ]
 }
 
-@test "lr-reset-poller spawn_gui fires via create-then-write-text" {
-  run grep -q 'set newWin to (create window with default profile)' "$REPO/scripts/limit-recover/lr-reset-poller.sh"
+@test "lr-reset-poller spawn_gui creates a BARE window, then types the launcher verified" {
+  run grep -qF "-e 'set newWin to (create window with default profile)'" "$REPO/scripts/limit-recover/lr-reset-poller.sh"
   [ "$status" -eq 0 ]
-  run grep -qF 'to write text \"exec /bin/bash $1\"' "$REPO/scripts/limit-recover/lr-reset-poller.sh"
+  run grep -qF "-e 'return id of (current session of newWin)'" "$REPO/scripts/limit-recover/lr-reset-poller.sh"
+  [ "$status" -eq 0 ]
+  run grep -qF 'osa_type_verified "$pane" "exec /bin/bash $1"' "$REPO/scripts/limit-recover/lr-reset-poller.sh"
   [ "$status" -eq 0 ]
   # The AppleScript must stay in ARGV (multi -e), not stdin: tests/lr-reset-poller.bats' stub reads
-  # "$*", so a heredoc would silently blind its three GUI-spawn assertions.
-  run grep -qF "osascript >/dev/null 2>&1 \\" "$REPO/scripts/limit-recover/lr-reset-poller.sh"
+  # "$*", so a heredoc would silently blind its three GUI-spawn assertions. The call is bounded
+  # through lrp_bounded (osa-bounds AC22) — the shape moved, the ARGV property did not.
+  # The trailing backslash is a line continuation in the SUBJECT, so it is matched as data via -F.
+  # Spelled with a variable rather than inline, and DOUBLE-quoted: single quotes cannot express a
+  # lone backslash without shellcheck reading it as an attempted escape (SC1003), while "\\" is
+  # unambiguously one character to both.
+  bslash="\\"
+  run grep -qF "lrp_bounded osascript 2>/dev/null $bslash" "$REPO/scripts/limit-recover/lr-reset-poller.sh"
   [ "$status" -eq 0 ]
 }
 

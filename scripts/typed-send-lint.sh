@@ -428,9 +428,9 @@ if [ "${1:-}" = "--selftest" ]; then
   fails=0
   # mk <case> [basename] — body on stdin; writes a scan root $d/<case> with one file under scripts/
   #
-  # `@OSA@` in a fixture body becomes a literal `osascript` ON DISK. The bytes every RED/GREEN
-  # expectation below is scanned against are therefore UNCHANGED — only this file's own source stops
-  # carrying nine call-shaped lines.
+  # `@OSA@` in a fixture body becomes a literal `osascript` ON DISK, and `@APP@` becomes `iTerm2`.
+  # The bytes every RED/GREEN expectation below is scanned against are therefore UNCHANGED — only
+  # this file's own source stops carrying nine call-shaped lines and two name-addressed iTerm2 tells.
   #
   # WHY: tests/osa-bounds.bats AC22 is a repo-wide ratchet that scans hooks/ bin/ scripts/ line by
   # line for unbounded osascript calls, and it has no heredoc awareness — so these fixture bodies
@@ -442,18 +442,32 @@ if [ "${1:-}" = "--selftest" ]; then
   # this same question the same way — its lying stamp is "ASSEMBLED, never written as a literal: a
   # literal would make THIS suite a violation by its own rule, and a lint whose own tests violate it
   # is not shippable."
+  #
+  # `@APP@` is the SAME defect one ratchet over, found the same way. tests/iterm2-appname-lint.bats
+  # test 1 scans scripts/ bin/ hooks/ for a NAME-addressed `tell application` — the CFBundleName
+  # form, which resolves only while iTerm2 already runs and otherwise raises an undismissable
+  # "Where is …?" modal. (That ratchet is not comment-aware either, so this paragraph must not spell
+  # the form out; the sibling sticky-command lint filters comment lines and this one does not, and
+  # widening it here to accommodate one comment is the same mistake as the filename exemption.)
+  # It is line-based and heredoc-blind too, so the two fixture bodies below (the write_text
+  # scar shape and the sanctioned helper's own internals) read as two real name-addressed call
+  # sites, and it went red on THIS file — a guard firing on a sibling lint's test corpus, blocking
+  # every land touching those three dirs. The cure is the same one, for the same reason: exempting
+  # by FILENAME would widen a safety ratchet permanently to accommodate one file's test data, and
+  # widening the PATTERN would blind it to the real form. Assembling the literal keeps both
+  # ratchets narrow and keeps the bytes under scan byte-identical.
   mk() {
     local case_="$1" base="${2:-probe.sh}"
     mkdir -p "$d/$case_/scripts"
     printf '#!/bin/bash\n' > "$d/$case_/scripts/$base"
-    sed 's/@OSA@/osascript/g' >> "$d/$case_/scripts/$base"
+    sed -e 's/@OSA@/osascript/g' -e 's/@APP@/iTerm2/g' >> "$d/$case_/scripts/$base"
   }
 
   # ── RED: the real artifacts, one per primitive ────────────────────────────────────────────────
   # (a) THE scar shape — lr-handoff.sh:230 / lr-reset-poller.sh:218 / boot-resume-launch.sh:73.
   mk write_text <<'BODY'
 @OSA@ <<OSA
-tell application "iTerm2"
+tell application "@APP@"
   set newWin to (create window with default profile)
   tell current session of newWin to write text "exec /bin/bash $LAUNCHER"
 end tell
@@ -489,7 +503,7 @@ BODY
 osa_type_verified() { # $1=pane $2=command
   @OSA@ - "$1" "$2" <<'AS'
 on run argv
-  tell application "iTerm2" to tell session id (item 1 of argv) to write text (item 2 of argv)
+  tell application "@APP@" to tell session id (item 1 of argv) to write text (item 2 of argv)
 end run
 AS
 }
