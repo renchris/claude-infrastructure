@@ -764,8 +764,13 @@ The item that surfaced it was itself an instance: `HOST RED: tests/test-hermetic
 bda59c54, over a tree that is 52/52 green. That suite has NEVER produced a host verdict — CUT on 6
 of 6 runs — because the 300s bound was a bench number and this runner is `ProcessType Background`
 (PRI 4) + `Nice 10` + `nice -n 19`. Measured back to back on this box, one `--selftest`: 70s utility
-band vs 252s under `taskpolicy -c background`, a 3.6x band tax; the suite is 272s utility ⇒ ~980s in
-the band that runs it. Bound raised to 1800s. **The general lesson for anything added to
+band vs 252s under `taskpolicy -c background`, a 3.6x band tax; the suite is 272s utility.
+**Scaling by that tax predicted ~980s and was 1.4x optimistic — the end-to-end run, issuing the
+exact command host_checks issues, took 1399s wall (52/52 green, load 9-22).** A band tax is not a
+constant you may multiply through; it moves with contention, and this box has been seen at load
+15-48. Bound raised to 3600s (2.6x the realistically-loaded figure); 1800s, which this amend
+originally carried, was only 1.29x it — enough to look fixed and enough for one spike to restore the
+permanent non-verdict. **The general lesson for anything added to
 `scripts/host-suites.manifest`: a bound below a suite's band-adjusted runtime does not bound that
 suite, it deletes it** — and nothing says so, which is why this ran 12 days. That silence is the one
 half NOT closed here: a per-suite consecutive-CUT counter for the host lane (postland-verify already

@@ -113,12 +113,18 @@ MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
 # (PRI 4), Nice 10, LowPriorityIO — and puts `nice -n 19` on top of that. MEASURED on this box, one
 # `test-hermeticity-lint.sh --selftest` back to back at load ~9-11: 70s in the utility band, 252s
 # under `taskpolicy -c background`. A 3.6x band tax. tests/test-hermeticity-lint.bats is 272s in the
-# utility band (52/52 green, 234s of it three --selftest invocations), so ~980s in the band that
-# actually runs it — and it was CUT on 6 of 6 host runs, never once producing the post-deploy
-# verdict scripts/host-suites.manifest admits it for. A bound structurally below its suite's runtime
-# does not bound that suite, it DELETES it: the sensor is default-off and every artifact the
-# operator reads looks identical to a healthy one.
-# 1800 is ~1.8x the measured band figure, so an ordinary load spike does not re-open the hole. What
+# utility band (52/52 green, 234s of it three --selftest invocations) — and it was CUT on 6 of 6
+# host runs, never once producing the post-deploy verdict scripts/host-suites.manifest admits it
+# for. A bound structurally below its suite's runtime does not bound that suite, it DELETES it: the
+# sensor is default-off and every artifact the operator reads looks identical to a healthy one.
+# THE FIGURE IS THE END-TO-END RUN, NOT THE EXTRAPOLATION — and the difference is why this says
+# 3600. Scaling the utility-band total by the per-selftest tax predicted ~980s; the same command
+# this function issues (`timeout -k 10 <bound> taskpolicy -c background nice -n 19 bats <suite>`,
+# from $DEPLOY_REPO, stdin closed) actually took **1399s** wall, 52/52 green, at load 9-22. The
+# extrapolation was 1.4x optimistic, because the band tax is not a constant you may multiply
+# through — it moves with contention, and this box has been observed at load 15-48. 1800 would have
+# been 1.29x the real figure: enough to look fixed, and enough for one load spike to put the sensor
+# straight back to a permanent non-verdict. 3600 is 2.6x a REALISTICALLY-LOADED measurement. What
 # it costs is deploy CADENCE, never deploy safety: host_checks runs AFTER the advance and never
 # blocks, never rolls back, never changes the exit code, so a long host phase cannot touch the
 # deploy that already happened — it can only delay the NEXT one.
@@ -134,7 +140,7 @@ MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
 # load, not correctness.
 # The hang this bound exists to contain is still contained — and its known cause was removed at the
 # source by the `</dev/null` at the invocation site below.
-HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-1800}"
+HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-3600}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
 # ── CONSECUTIVE-CUT COUNTER, PER SUITE (2026-08-10, backlog 75463ef0d0f9) ────────────────────────
 # R6 is what makes a cut safe: a non-verdict is a claim about the MACHINE, never about the tree, so
