@@ -2,6 +2,15 @@
 # migration-class: c10
 # migration-step: register hooks/mailbox-wake-arm.sh as an asyncRewake SessionStart hook so every session is inbox-armed at birth with no model action — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0007-mailbox-wake-arm-registration.sh
+# migration-subject: ~/.claude/hooks/mailbox-wake-arm.sh
+# migration-verify: jq -e '[.hooks.SessionStart[].hooks[]? | select(.command == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and all(.[]; .asyncRewake == true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e '[.hooks.SessionStart[].hooks[]? | select(.command == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and any(.[]; .asyncRewake != true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+#
+# The verifier asserts the COMMAND *and* `asyncRewake`, and the conflict oracle is what separates the
+# two ways this can be absent. Registering the command WITHOUT the field does not merely fail to arm:
+# the harness would run this hook SYNCHRONOUSLY at every session birth and block it for the full
+# 14400s timeout — strictly worse than never registering. That is `overridden`, not `not-delivered`,
+# and it needs the opposite fix (repair the entry, not add one).
 #
 # 0007 — the registration half of arming-by-construction.
 # Subject: hooks/mailbox-wake-arm.sh · tests/mailbox-wake-arm.bats (12/12, 2 mutants killed)

@@ -2,6 +2,8 @@
 # migration-class: c10
 # migration-step: register hooks/coldcompile-admit.sh as a PreToolUse(Bash) hook so cold compiles are admission-serialised — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0006-coldcompile-admit-registration.sh
+# migration-subject: ~/.claude/hooks/coldcompile-admit.sh
+# migration-verify: jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(. == "~/.claude/hooks/coldcompile-admit.sh")' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 #
 # 0006 — the registration half of Wave C's cold-compile admission serializer.
 # Subject: hooks/coldcompile-admit.sh · bin/cc-ignition-gate · config/coldcompile.patterns

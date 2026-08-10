@@ -2,6 +2,8 @@
 # migration-class: c10
 # migration-step: the per-account auth recorder is built + wired but NOT armed — arming it loads a LaunchAgent and needs one hand-run keychain-ACL check from a non-tty context, which only you can do
 # migration-run: CONFIRM=1 bash ~/Development/claude-infrastructure/docs/activation/pending-activation/35-auth-timeseries-activate.sh
+# migration-subject: ~/Library/LaunchAgents/com.claude.auth-timeseries.plist
+# migration-verify: launchctl list 2>/dev/null | grep -q com.claude.auth-timeseries
 #
 # WHY THIS IS A MIGRATION AND NOT JUST A PENDING-ACTIVATION SCRIPT
 # ─────────────────────────────────────────────────────────────────────────────────────────────
