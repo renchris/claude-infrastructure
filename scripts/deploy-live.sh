@@ -913,6 +913,55 @@ EOF
       asay "already deployed — live layer is at the newest deployable commit ${HEAD_SHA:0:12} ($LAG_COMMITS un-stamped commit(s) above)"
       exit 0
     fi
+
+    # ── GREEN-BEHIND HEAD, INSIDE BUDGET · the benign WAIT (2026-08-10, backlog 2e7fe6fd5b7c) ─────
+    # The clause above gave ONE face of "nothing above the layer is proven" its in-budget exit: the
+    # green sitting exactly ON live HEAD. The other faces fell through to the refusal below, and the
+    # commonest of them is the one a previous T2 leaves behind — a DEGRADED advance moves the layer
+    # without minting a green for where it landed, so the newest green ends up strictly BEHIND live
+    # HEAD. That state is not a rollback hazard and not a freeze; it is the same wait, wearing a
+    # different diagnosis.
+    #
+    # MEASURED, and it is what dispatched this item: live HEAD 5f63cdc1 with the newest green
+    # ed095d4b one step behind it, lag 24 commit(s) / 5h against a 25 / 6h budget — inside on BOTH
+    # axes — refused, wrote a page reading "the live layer is FROZEN until a tree verifies green",
+    # and exited 1. Nothing was frozen: the budget had not tripped and T2 would have degraded of its
+    # own accord within the hour. The page was false, and a human wave was dispatched onto it.
+    #
+    # THE COST IS THE ONE §T1-at-tip ALREADY NAMES 130 LINES UP: `die` exits 1, so the lane spends
+    # its healthy steady state emitting refusals (144/day) and pinning launchctl's last exit code at
+    # 1 — after which the next REAL refusal is indistinguishable from the noise. That reasoning was
+    # never specific to an empty candidate set; it applies verbatim to every in-budget wait.
+    #
+    # WHAT IS DELIBERATELY *NOT* WIDENED, because each would delete a capability:
+    #   · PAST the budget ($LAG_TRIP set) stays the loud refusal + page. A freeze must stay a freeze.
+    #   · DEGRADE off is the operator electing a strict green-only gate, so T2 can never fire and
+    #     this wait has nothing to wait FOR. Exiting 0 would convert their deliberate strictness
+    #     into permanent silence, so that path keeps refusing.
+    #   · The DIAGNOSIS is not dropped — $RMSG is carried into the message, so "the newest green is
+    #     BEHIND live HEAD" (i.e. the layer is running unverified bytes) is still stated every time.
+    #     This is a WAIT, not an all-clear, and it must not read as one.
+    #   · NO GREEN ANYWHERE ($GREEN_SHA empty) is EXCLUDED, and that exclusion is the load-bearing
+    #     half. The three faces are not interchangeable: green-at-head means the layer runs PROVEN
+    #     bytes, green-behind means the net is demonstrably ALIVE (it produced that green) so a
+    #     green above is plausibly coming — but no green in the whole $SCAN_N window is the
+    #     VERIFIER-INERT condition, where the net may simply be dead. That is not a wait, it is the
+    #     alarm, and it stays loud for the same reason the no-stamps-dir path does at the top of
+    #     this ladder (absence-is-loud, R9). Widening to it broke four T1H controls that pin the
+    #     budget out at 999/999 — they were right: with nothing above ever verifying and no green
+    #     below to prove the producer works, "wait for the budget" is waiting for nothing.
+    #     `$GREEN_SHA` is precisely the discriminator, being set by T1's walk on the first green it
+    #     sees whether or not that green was deployable.
+    case "$DEGRADE" in
+      off|OFF|0|no|NO|false|FALSE) : ;;
+      *)
+        if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && [ -n "$GREEN_SHA" ]; then
+          [ "$AUTO" -eq 1 ] && damp_clear
+          asay "waiting — $RMSG; lag $LAG_COMMITS commit(s) / ${LAG_HOURS}h, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
+          exit 0
+        fi
+        ;;
+    esac
   fi
 
   if [ -z "$TARGET" ]; then

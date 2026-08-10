@@ -164,13 +164,28 @@ advance_origin() { # <name...>
 # two-tier rebuild exists to remove. It now pins the half that IS still correct — inside the staleness
 # budget the lane still refuses — and its PAST-BUDGET sibling (L2, at the foot of this file) pins the
 # other half against the identical fixture, so the pair is a clean A/B on exactly one variable.
-@test "WITHIN BUDGET: newest green is BEHIND the live HEAD ⇒ still refuses, tree unmoved" {
+#
+# FLIPPED 2026-08-10 (backlog 2e7fe6fd5b7c), and the A/B pair with L2 is intact — only the in-budget
+# arm's verdict changed, from `refuse` to `wait`. The 2026-08-07 narrowing kept the refusal because
+# the face it was fixing was the lag-0 one; it never asked whether an in-budget refusal was itself
+# the defect. It is. MEASURED on the live box: live HEAD 5f63cdc1 with the newest green ed095d4b one
+# step behind it, lag 24 commit(s) / 5h against a 25 / 6h budget — inside on BOTH axes — refused and
+# wrote a page reading "the live layer is FROZEN until a tree verifies green", which dispatched a
+# work item onto a state that was not frozen, had not tripped its budget, and would degrade through
+# T2 of its own accord within the hour. `die` exiting 1 through the healthy steady state is the same
+# cost the at-tip fix names at deploy-live.sh:790 — the lane pinned at exit 1 until a real refusal
+# is indistinguishable from the noise. The two assertions that carry the SUBJECT are unchanged: the
+# tree must not move, and the diagnosis must still be stated.
+@test "WITHIN BUDGET: newest green is BEHIND the live HEAD ⇒ WAITS (exit 0), tree unmoved" {
   deadlock                                      # green behind live HEAD; trunk 2 ahead
   before="$(git -C "$SHARED" rev-parse HEAD)"
   run dl                                        # default budget 25 commits / 6h — 2 commits is inside it
-  [ "$status" -eq 1 ]
-  echo "$output" | grep -q "DESCENDANT of live HEAD"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "DESCENDANT of live HEAD"   # the diagnosis survives the benign exit
+  echo "$output" | grep -qv "REFUSED"
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  # and no page is minted for a state that is inside its own budget — the page IS the false alarm
+  [ -z "$(ls -A "$PAGES" 2>/dev/null)" ]
 }
 
 @test "install.sh is invoked on a successful deploy" {
@@ -694,7 +709,7 @@ pending() { # <repo-relative> — unlinked BY DESIGN; the assert reports it, nob
 dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
             CC_PAGES_DIR="$PAGES" CC_DEPLOY_PARITY_ASSERT="$ASSERT" /bin/bash "$DL" "$@"; }
 
-@test "refresh runs on the GREEN-BEHIND REFUSAL — the exit that made it dead code (2026-07-30)" {
+@test "refresh runs on the GREEN-BEHIND non-advance — the exit that made it dead code (2026-07-30)" {
   seed_parity 1
   miss hooks/brand-new.sh
   stamp HEAD                                     # the newest green is the commit already live...
@@ -708,12 +723,22 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   # was dead code below the advance, asserted by [ -L "$DEST" ]. So keep that intact and put the
   # fixture back on the path it means to exercise: trunk one commit ahead, green behind live HEAD,
   # inside the T2 budget ⇒ a genuine, still-correct refusal.
+  #
+  # EXIT CODE UPDATED 2026-08-10 (backlog 2e7fe6fd5b7c) — the SUBJECT is untouched and the test is
+  # not weakened. That in-budget green-behind state is now a WAIT (exit 0) rather than a refusal;
+  # this test's own comment above already says its subject was never the exit code, and the exit
+  # code is only the vehicle for reaching a NON-ADVANCING path. It still reaches one: the tree does
+  # not move, and [ -L "$DEST" ] — the actual 2026-07-30 regression guard — is unchanged and still
+  # the assertion that would fail if link_refresh ever fell below the advance again. It cannot: the
+  # call sits UNCONDITIONALLY at deploy-live.sh:630, ahead of the fetch and of the whole tier
+  # ladder, which is why every early return in this lane has one of these tests.
   advance_origin c                               # trunk moves again; the layer stays ⇒ lag 1
+  before="$(git -C "$SHARED" rev-parse HEAD)"
   run dlp
-  [ "$status" -eq 1 ]
-  # The refusal is unchanged in POLARITY — still fail-closed — but no longer claims a rollback:
-  # the target is an ancestor, so `--ff-only` would exit 0 without moving anything (§1.7). Lag is 1
-  # commit, far inside the 25-commit budget, so T2 cannot authorise a degrade and this is a refusal.
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]   # non-advancing: the path this test needs
+  # The diagnosis is unchanged — the lane still names the green-behind state, it just no longer
+  # spends a refusal on a lag of 1 commit that is far inside the 25-commit budget.
   echo "$output" | grep -q "DESCENDANT of live HEAD"
   [ -L "$DEST" ]                                 # ...yet the link now exists anyway
   [ "$(readlink "$DEST")" = "$SHARED/hooks/brand-new.sh" ]
@@ -1364,4 +1389,72 @@ offbox_stamp() { # <rev> [scope] — write an off-box GREEN for that rev's TREE
   [ "$status" -ne 0 ] || false
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
   [[ "$output" == *"red all the way down"* ]] || false
+}
+
+# ── J · INSIDE THE BUDGET IS A WAIT, ON EVERY FACE OF IT (2026-08-10, backlog 2e7fe6fd5b7c) ────────
+# G (above) gave the green-AT-head state its benign in-budget exit. It has a SIBLING FACE that G did
+# not reach: the newest green sitting strictly BEHIND live HEAD — the shape a previous DEGRADED (T2)
+# advance leaves behind, because a degraded deploy moves the layer without minting a green for where
+# it landed. Both faces say the same thing about the only question this lane answers — "is anything
+# above the layer proven?" — and the answer is no in both. But only one had an exit: green-at-head
+# exits 0 and waits, green-behind fell through T1/T1H/T2 to T3's `die`.
+#
+# MEASURED on the live box 2026-08-10T19:5xZ, and it is what dispatched this item: live HEAD
+# 5f63cdc1 with the newest green ed095d4b one step behind it, lag 24 commit(s) / 5h against a budget
+# of 25 / 6h — INSIDE both budgets on both axes — and the lane refused, wrote a
+# `deploy-blocked-*.page` reading "the live layer is FROZEN until a tree verifies green", and exited
+# 1. Every clause of that page was wrong about the state: nothing was frozen, the budget had not
+# tripped, and T2 would have degraded of its own accord an hour later. It is the SAME defect class
+# G was built for and the SAME cost the at-tip fix names at deploy-live.sh:790 — a lane pinned at
+# exit 1 through its healthy steady state, where the next REAL refusal is indistinguishable from
+# the noise.
+#
+# THE IN-BUDGET ARM ITSELF is not re-tested here — it is the "WITHIN BUDGET … ⇒ WAITS" test above,
+# flipped in place against the shared `deadlock()` fixture, and its past-budget sibling L2 is the
+# other half of that A/B. Re-rolling the same fixture under a J label would have given this file two
+# spellings of one assertion, and the pair would then drift apart on whichever one a later change
+# happened to touch. What J adds is only what nothing else holds: the three exclusions below, each
+# of which is a capability the fix is close enough to delete that it must be pinned.
+
+@test "J1 past the budget with trunk RED all the way down: green-BEHIND refuses LOUDLY, not exit 0" {
+  # G5's sibling on this face. A genuine freeze must stay a freeze — T2 finds only red, so T3
+  # refuses, and the benign wait must not swallow it.
+  deadlock
+  stamp origin/main red
+  stamp "origin/main~1" red
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 1 999
+  [ "$status" -ne 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [[ "$output" == *"red all the way down"* ]] || false
+}
+
+@test "J2 NO green anywhere inside the budget still REFUSES — absence is the alarm, not a wait" {
+  # The face deliberately left OUT of the wait, and the load-bearing exclusion. green-behind proves
+  # the producer WORKS (it minted that green), so a green above is plausibly coming and waiting is
+  # honest. No green in the whole scan window is the VERIFIER-INERT condition, where the net may
+  # simply be dead — waiting quietly there is the exact failure mode the loudness exists for.
+  # Identical to the deadlock fixture except that the one green stamp is never written, so the pair
+  # is a clean A/B on the presence of a green and nothing else.
+  commit_push b; git -C "$SHARED" push -q origin main
+  advance_origin c d
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 25 999                                    # the same in-budget lag the wait exits 0 on
+  [ "$status" -ne 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [[ "$output" == *"REFUSED"* ]] || false
+}
+
+@test "J3 with the degrade kill switch OFF the in-budget wait REFUSES — a wait that cannot end" {
+  # CC_DEPLOY_DEGRADE=off is the operator electing a strict green-only gate, which means T2 can
+  # never fire and "wait for the budget" is waiting for something that will never arrive. Exiting 0
+  # there would convert their deliberate strictness into permanent silence.
+  deadlock
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_MAX_LAG_COMMITS=25 CC_DEPLOY_MAX_LAG_HOURS=999 CC_DEPLOY_DEGRADE=off \
+          /bin/bash "$DL"
+  [ "$status" -ne 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [[ "$output" == *"REFUSED"* ]] || false
 }
