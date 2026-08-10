@@ -136,8 +136,18 @@ by default). Four consequences, and they are the whole authoring discipline:
 | # | Rule | Because |
 |---|---|---|
 | **R1** | The evidence must be **text the session PRINTED**. | `tools:[]` — no file read, no git, no CI. A criterion true on disk but never printed is unjudgeable. |
-| **R2** | Name a **quotable artifact string** (`0 failures`, `exit 0`, a sha), not a state of affairs. | A pass must quote the satisfying text. |
+| **R2** | Prefer a **quotable artifact string** (`0 failures`, `exit 0`, a sha) over a state of affairs. **Heuristic, not a mechanism requirement** — see the caveat below. | The pass shape is `"<quote evidence from the transcript that satisfies the condition>"`. |
 | **R3** | **Fail-closed on ambiguity.** Vague ⇒ blocked, never passed. | The default verdict is hard-coded `insufficient evidence in transcript`. |
+
+> ⚠️ **R2 is weaker than it first reads, and the difference matters.** The prompt asks the judge to
+> quote *"specific text from the transcript **whenever possible**"* — transcript text, hedged, not an
+> artifact string, and the schema (`ok`/`reason`/`impossible`) imposes no artifact constraint. The
+> assistant's own prose IS admissible evidence: the prompt says *"the assistant claiming the goal is
+> impossible is evidence, not proof"* — a caution about the **impossible** verdict specifically,
+> with no counterpart for the *met* verdict. Hence § 4.3's corollary: **a condition satisfiable by
+> assertion is satisfiable by assertion.** R2 is therefore advice for making a pass *unambiguous*,
+> not a rule the mechanism enforces. Stated as a hard requirement it would be the analyst's
+> inference dressed as a finding.
 | **R4** | The proof must be **recent**. | The transcript is truncated to ~50% of the *evaluator's* window, most-recent-kept, with a banner telling the judge to answer *insufficient evidence* if the proof may be in the omitted prefix. Evidence printed at turn 3 of a long run is gone. |
 
 ### 4.3 Two failure modes of a bad condition, and they are not the same
@@ -146,9 +156,18 @@ by default). Four consequences, and they are the whole authoring discipline:
   "impossible":true}`, which **clears the goal and marks it failed** (`tengu_goal_failed`). A real
   escape hatch. The judge is explicitly told not to take the assistant's word for it: *"the assistant
   claiming the goal is impossible is evidence, not proof."*
-- **Merely vague** → no such mercy. It block-loops until `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default
-  **8**) and then the turn ends regardless. The goal neither clears nor is met; it just stops
-  mattering.
+- **Merely vague** → no such mercy, and the cap does **not** rescue it.
+  `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default **8**) bounds *consecutive blocks within one turn* — it
+  ends the TURN, not the GOAL. The hook stays registered, so the next turn blocks again. That is
+  exactly how a 97-char condition reached **45 iterations over 27.6 hours** (§ 4.7): it hit the cap
+  repeatedly and kept coming back.
+
+  The cap is also not the only exit — five paths end a Stop evaluation, and mistaking one for all of
+  them is how "vague conditions terminate at 8" becomes false: (1) `impossible:true`, reachable at
+  **any** iteration including the first; (2) a max-turns bound, tested *before* the cap; (3) any
+  judge failure — API error, JSON parse, schema mismatch — which routes to a non-blocking error and
+  the turn simply completes; (4) the background-work deferral, which removes the hook so the judge
+  never runs at all (§ 7); (5) the cap. Only (1) and a genuine `ok:true` actually clear the goal.
 
 **Corollary a template must respect:** a condition satisfiable *by assertion* is satisfiable by
 assertion. Nothing in the judge's prompt tells it to discount the agent's claim that the goal IS met
@@ -319,6 +338,47 @@ findings filed rather than fixed here, both outside this scope:
 | Commit | Change |
 |---|---|
 | `facb0fcb` | `--goal` becomes the default across every copyable fire template: the six recipes in `commands/handoff.md`, the two hooks that inject a fire template into model context (`plan-agent-teams-default.sh`, `validate-plan-structure.sh`), `skills/plan-{conventions,update}/SKILL.md`, and `CLAUDE.md`'s locus-S recipe. Item 1 rewritten around Anthropic's three-part recipe, the four judge-derived rules, and the exclusion list. |
+
+## 9 · Adversarial verification — what it killed
+
+Every load-bearing claim above was handed to an independent refuter told to default to REFUTED unless
+it could reproduce the evidence with its own commands. Three came back refuted, and all three were
+right. They are recorded here because each is a defect this repo has a memory for.
+
+**9.1 "The recycle re-arm path has never fired in production" — REFUTED, and it was a denominator
+error.** The ledger holds a `goal-arm` row at `2026-08-09T05:27:13Z`, `verdict:"set"` (pasted AND
+read back), pane 700, with `firing_sid:null, account:null`. That null pair is a **recycle signature,
+mechanically forced**: `emit_goal_event` stamps `${FIRING_SID:-}`/`${CHOSEN:-}`, neither is ever
+exported, and the recycle path is a detached re-exec taking 8 positionals — an unexported variable
+cannot cross it. Corroboration: 0 of 137 fire-class rows have a null `firing_sid`, and no fire row
+for pane 700 exists at all. The reasoning error: the `recycle-engaged` class and the
+`goal_requested` field both landed in `1637c816` **18h39m after** the recycle re-arm capability
+landed in `9adbae03` — so the 5 all-false `recycle-engaged` rows do not span the subject's lifetime
+and can say nothing about whether it ever fired. (`positive-control-the-denominator`.) The 5% number
+itself reproduces exactly; only the never-fired conclusion was wrong. Corrected in the plan doc.
+
+**9.2 "A vague condition block-loops until the cap" — REFUTED on the quantifier.** The cap bounds
+consecutive blocks *within one turn*, and there are five exits, not one. Folded into § 4.3 above,
+where it now strengthens the point rather than weakening it: the cap is why the 45-iteration
+anti-example kept coming back rather than stopping.
+
+**9.3 "There is no synthesis seam for a default condition" — REFUTED, and this is the useful one.**
+A durable, cwd-keyed frozen-DoD store already exists: `hooks/dod-persist.sh get` resolves
+`${WRAP_DOD_DIR:-~/.claude/autonomy/dod}/<shasum(git-toplevel)>.md` and prints the newest
+`Scope (frozen):` line, taking **`$PWD` as its entire input**, degrading as empty-output-exit-0. The
+refuter ran it live here: 430 chars, exit 0; the store holds 64 files. And the seam is already
+half-built — **`hooks/waiting-recycle.sh:969` computes `dod_carry="$(dod-persist.sh get)"` and then
+fires `--recycle` at `:1129` with no `--goal`**, in the same function.
+
+**We did not wire it, and the reason is § 4.1.** A `Scope (frozen):` line is an *objective* — it has
+no stated check. Auto-synthesising a goal from one would mass-produce exactly the check-less
+conditions § 4.7 shows grinding (the 45-eval and 71-eval cases are that shape). The correct
+mechanism is narrower and is **inheritance, not synthesis**: on `--recycle`, read the predecessor's
+*live* condition from its own transcript (last `goal_status` sentinel with `met:false` — the oracle
+`goal_armed_for_pane` already implements) and re-arm THAT, since it was written to the recipe by
+whoever set it. That is a change to `scripts/handoff-fire.sh`'s recycle path plus tests, and it is
+filed rather than rushed at the end of this session — the fire path is load-bearing and carries 45+
+tests.
 
 **Deliberately NOT changed:** the no-nudge decision in `scripts/handoff-fire.sh`. A "you forgot
 `--goal`" warning would have fired on ~97% of fires; the operator directive changed the *norm*, not
