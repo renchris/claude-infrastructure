@@ -1612,3 +1612,74 @@ and mechanical: **what does the CLI create need in order to send a non-empty `so
 says it "will strand when this container is reclaimed". It is a 3-line proof file, so the loss is
 nil — but it is the first concrete instance of the class §11.3 warned about, and a real work item
 lost this way would be unrecoverable.)*
+
+---
+
+## 13 · The control plane is reachable, and the last gap is ONE field (2026-08-10)
+
+Three things this document called impossible or undetectable turned out to be neither. All were
+recovered from the 2.1.220 binary's own request code and then **verified live against the API**, so
+none of this is inference. Landed `a0bb74c5` (`scripts/cloud-create-api.py`, `cc-offload up --via api`).
+
+### 13.1 · A cloud session IS readable from this box — §9.1's asymmetry is narrower than stated
+
+`GET /v1/code/sessions/<id>` (OAuth bearer + `anthropic-version` + `x-organization-uuid`) returns the
+session's live record: `config.sources`, `status_bucket`, `worker_status`, `connection_status`,
+token usage, and a `post_turn_summary`. On the failed round trip it read, in the session's own words:
+
+```
+config.sources: []
+post_turn_summary.status_detail: "brief completed; push blocked by policy (403 — repo not in session sources)"
+```
+
+That is the cloud→here arm §9.1 says cannot exist. **The correction is precise, not a reversal:**
+there is still no *push* from the VM to this box, and the VM's transcript is still not a local file
+— but the CONTROL PLANE is pollable, and it carries a real verdict rather than a ref-watcher's
+guess. `cc-cloud`'s state function currently infers liveness from `git ls-remote` alone; it now has a
+strictly better sensor available. (Not yet wired — named here so it is not re-derived.)
+
+### 13.2 · The GitHub App IS detectable read-only — §12.2's "credential class wall" was half wrong
+
+`GET /api/oauth/organizations/<org>/code/repos/<owner>/<repo>` → **HTTP 200** with full repo metadata
+(the CLI's own probe, logged as *"Checking GitHub app installation for …"*). §12.2 concluded "NOT
+DETECTABLE read-only" after every **GitHub** endpoint refused an OAuth token. True, and irrelevant:
+the detector is on **Anthropic's** side, keyed on the same token we already hold. The lesson is the
+one this repo keeps paying for — *a negative result is scoped to the instrument you pointed*, and
+"undetectable" was really "undetectable via GitHub's API".
+
+⚠️ Its failure mode is fail-closed: the CLI returns `{appInstalled:false}` on any error, with the
+comment *"assuming app not installed"* — so a transient failure reads exactly like an absent App.
+
+### 13.3 · 🚨 The last gap is ONE field: `environment_kind`
+
+The create takes `config.sources`, and supplying it works — but **which environment the session runs
+in is a separate axis, and the two known creates each get exactly one of the two things needed**:
+
+| create | `config.sources` | `environment_kind` | executes where |
+| --- | --- | --- | --- |
+| `claude --cloud "<prompt>"` | **`[]`** — bundle upload | `anthropic_cloud` | a real VM ✅ — but its push is 403 |
+| `POST /v1/code/sessions` + `bridge:{}` | **1 · `git_repository`** ✅ | **`bridge`** | a **connected client — THIS BOX** ❌ |
+
+Measured side by side on two live sessions. So the API create solved the push and silently gave up
+the whole point: a `bridge` session offloads **nothing**, because the CPU it burns is ours. Sitting
+at `working / connection_status: disconnected / 0 output tokens` for 35+ minutes is what "waiting for
+a driver that will never attach" looks like — and note it does **not** look like an error.
+
+**→ NEXT, and it is now a two-call sequence rather than an open question.** The binary carries a
+cloud environment provider — `POST /v1/environment_providers/cloud/create`, with the literals
+`anthropic_cloud`, `Default - trusted network access`, `/home/user`, `python 3.11`, `node 20`,
+`ccr-byoc-2025-07-29` beside it. So:
+
+1. `POST /v1/environment_providers/cloud/create` → an `env_…` id of kind `anthropic_cloud`
+2. `POST /v1/code/sessions` with that environment **and** `config.sources` — i.e. today's body with
+   the environment named instead of `bridge:{}`
+3. deliver the brief with the already-proven send arm (`cc-notify --cloud`)
+
+The acceptance test is one line and needs no judgment: the created session must read
+`environment_kind: anthropic_cloud` **AND** `len(config.sources) == 1`. Every prior attempt got one
+or the other; nothing until now could even state the pair, because `environment_kind` was not a term
+in this document.
+
+⚠️ **Do not validate this by firing more `--cloud` creates.** Fifteen sessions exist; the marginal
+one teaches nothing. The next create should be the two-call sequence, and its FIRST check is the
+pair above — read from `GET /v1/code/sessions/<id>` (§13.1), before any brief is sent.
