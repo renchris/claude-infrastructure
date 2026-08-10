@@ -831,6 +831,45 @@ second_window() { run bash "$SUT" --run-if-needed; }
   run jq -r '.verdict' "$s"; [ "$output" = "red" ]
 }
 
+# ── C13h the zero-not-ok branch must NAME the rc, not just assert "truncated" ────────────────────
+# The verdict was never wrong here — a truncated run is a cut, and C13 above pins that. What was
+# missing is the CAUSE. Branch (a) returned above the rc ladder that branch (c) has always had, so
+# every truncation logged one fixed string and threw the rc away. MEASURED 2026-08-10: nine
+# consecutive sweeps logged `zero not-ok in a non-zero run - truncated` with no rc, while the
+# runner's own stderr file carried `Killed: 9` twelve times — an EXTERNAL signal death, which is the
+# opposite finding from our own bound firing, and the log could not tell them apart. Diagnosing it
+# required an lsof against a live run. These two pin the discrimination, not the wording.
+@test "C13h: a SIGNAL-KILLED run (rc 137, ZERO not-ok) names the signal — still cut, never red" {
+  fake="$BATS_TEST_TMPDIR/bats-sigkill"
+  # rc 137 = 128+9: what bash reports when SIGKILL reaps the corpus (a peer, the OOM killer — not us).
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 137\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  s="$CC_POSTLAND_DIR/stamps/$tree.json"
+  [ -f "$s" ]
+  run jq -r '.verdict' "$s"; [ "$output" = "cut" ]                 # unchanged: signal death is a cut
+  grep -q 'KILLED by signal 9' "$CC_POSTLAND_DIR/runner.log"       # …and the cause is now RECOVERABLE
+}
+
+# THE CONTROL, and it is the half that makes the test above mean anything: rc 1 must NOT claim a
+# signal. Without this, hardcoding the SIGKILL string into the branch would pass C13h — the exact
+# vacuous pass the old fixed message already was.
+@test "C13h control: rc 1 with ZERO not-ok names the plain rc — it must NOT invent a signal" {
+  fake="$BATS_TEST_TMPDIR/bats-rc1"
+  printf '#!/bin/bash\n[ "$1" = --version ] && { echo "Bats 1.13.0"; exit 0; }\nexit 1\n' > "$fake"
+  chmod +x "$fake"
+  tree="$(origin_tree)"
+  run env CC_POSTLAND_BATS="$fake" bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"; [ "$output" = "cut" ]
+  # `run` + an explicit status test, NOT a bare `! grep`: bash exempts a negated command from
+  # errexit, so `! grep -q …` can never fail a bats test — the assertion would be DEAD and this
+  # control, whose entire job is to be able to fail, would be the vacuous pass it exists to catch.
+  run grep -q 'KILLED by signal' "$CC_POSTLAND_DIR/runner.log"
+  [ "$status" -ne 0 ]                                   # must NOT invent a signal on a plain rc 1
+  grep -q 'the run exited 1' "$CC_POSTLAND_DIR/runner.log"
+}
+
 # ── C13c the NAME-CARRY branch must ask WHOSE bound fired ────────────────────────────────────────
 # The LAST 124-blind site in the SUT, and the twin of C23 one function away. C13's cut guard keys on
 # `notok == 0`; the name-carry branch beneath it (C13b — `not ok` present, no `# (in test file …)`)
