@@ -52,7 +52,17 @@ command -v jq >/dev/null 2>&1 || { printf 'jq missing — cannot measure (fail-o
 # title away. `[0-9a-f]{7,40}` is deliberately greedy about shas; it also eats hex-looking words like
 # "added", which is acceptable here because the key is only ever compared against other keys built
 # the same way — it never has to be read back or resolved.
+#
+# `cell` pads the two non-numeric cells: the fold defaults an absent project to "" (line below), and
+# tab is IFS-whitespace, so an empty project cell collapses the run and shifts the TITLE into the
+# project column with a blank title after it — the same defect this repo pinned in cc-backlog's own
+# `list` render (tests/tsv-field-collapse.bats §2). It is reachable today: `cc-backlog add` without
+# --project mints exactly such an item, and .key groups on the project, so a cluster of them is a
+# cluster of empty cells. gsub also flattens a tab/newline pasted into a title, which would widen
+# the row into cells the reader has no variables for.
 clusters="$(jq -rs --argjson th "$THRESHOLD" '
+  def cell(ph): (if . == null then "" else . end) | tostring
+                | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
   (reduce .[] as $r ({};
      .[$r.id] //= {title: ($r.title // ""), project: ($r.project // ""), status: "open"}
    | (if ($r.event // "") == "done"   then .[$r.id].status = "done"
@@ -63,7 +73,7 @@ clusters="$(jq -rs --argjson th "$THRESHOLD" '
   | map(.key = (.project + "|" + (.title | ascii_downcase
         | gsub("[0-9a-f]{7,40}"; "<sha>") | gsub("[0-9]+"; "<n>") | .[0:90])))
   | group_by(.key) | map(select(length >= $th)) | sort_by(-length)
-  | map("\(length)\t\(.[0].project)\t\(.[0].title[0:110])") | .[]
+  | map("\(length)\t\(.[0].project | cell("-"))\t\(.[0].title[0:110] | cell("-"))") | .[]
 ' "$BACKLOG" 2>/dev/null)"
 
 n_clusters=0

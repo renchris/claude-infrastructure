@@ -183,12 +183,21 @@ cmd_ls() {
     return 0
   fi
 
+  # `//` substitutes for null/false and NEVER for a present-but-empty string, so `(.id // "-")` on a
+  # declaration whose id is "" emitted an EMPTY first cell — and tab is IFS-whitespace, so the read
+  # below collapses the run and shifts every later column LEFT (docs/research/TSV_FIELD_COLLAPSE…).
+  # Four cells were empty-reachable that way (id · state · age_s · branch) and none is last. `cell`
+  # keys on emptiness, which is the distinction `//` cannot make.
+  # The retired cell is DELIBERATELY left raw: it is LAST, where an empty value assigns "" without
+  # shifting anything, and the reader needs that empty back (`[ -n "$ret" ]` is the retired predicate).
   local rows
   rows="$(printf '%s\n' "$raw" | jq -r --argjson all "$show_all" '
+      def cell(ph): (if . == null then "" else . end) | tostring
+                    | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
       select($all == 1 or .retired != true)
-      | [ (.id // "-"), (.state // "UNKNOWN"), ((.age_s // 0)|tostring),
-          (if .account == "" or .account == null then "?" else .account end),
-          (.branch // "-"), (if .url == "" or .url == null then "https://claude.ai/code" else .url end),
+      | [ (.id | cell("-")), (.state | cell("UNKNOWN")), (.age_s | cell("0")),
+          (.account | cell("?")),
+          (.branch | cell("-")), (.url | cell("https://claude.ai/code")),
           (if .retired == true then "retired" else "" end) ] | @tsv' 2>/dev/null)"
 
   if [ -z "$rows" ]; then
