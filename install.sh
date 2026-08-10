@@ -434,6 +434,15 @@ if $IS_GLOBAL; then
   # divergence structurally impossible.
   echo "Model-config SSOT → $CONFIG_DIR/model-config.yaml"
   link_file "$REPO_DIR/model-config.yaml" "$CONFIG_DIR/model-config.yaml"
+
+  # Provider registry — the NON-Claude agent backends behind `claude-accounts --agents`.
+  # Symlinked for the same reason as the two above, and TRACKED in git (unlike accounts.json,
+  # which is gitignored because it holds real email addresses): this file holds no secrets, only
+  # verified facts about what each backend rides and what it bills. Those facts are exactly what
+  # must survive in history — a cost verdict that lives only on one machine gets re-litigated,
+  # and the whole point of the registry is that a SKIP stays skipped for a recorded reason.
+  echo "Provider registry → $CONFIG_DIR/providers.json"
+  link_file "$REPO_DIR/providers.json" "$CONFIG_DIR/providers.json"
 fi
 
 # --- Scripts ---

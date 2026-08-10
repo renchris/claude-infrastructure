@@ -1,0 +1,128 @@
+{
+  "_what": "SSOT for NON-Claude agent backends — the provider half of the /accounts question. Deployed as a symlink at ~/.claude/providers.json (install.sh), read by bin/claude-accounts to render an ADDITIVE provider section. Deliberately a separate file from accounts.json: that file declares itself SSOT for the 4 Claude Max accounts and every field in it is Anthropic-specific (keychain_account, oauth_client_id, usage_endpoint, token_endpoint). Grafting providers in there would have made its own _what false.",
+
+  "_why_this_exists": "/accounts could answer 'which of my 4 Claude Max accounts has headroom' but not 'what agent capacity do I have across all my plans', which is the question that actually governs routing once more than one vendor's plan is held. See docs/plans/MULTI_PROVIDER_PLANS.md.",
+
+  "_the_detection_rule": "🚨 ROUTABILITY IS NOT PRESENCE. Three facts are independent: (1) a binary is on PATH, (2) it is authenticated, (3) it has a NON-INTERACTIVE agent mode. Only (3) decides whether this fleet can route work to it, and it is the one a naive detector skips. Measured 2026-08-10: grok-wiki's picker reported Antigravity `ready` on the strength of `command -v antigravity` alone — but that binary is the VS Code editor launcher (its --help is byte-for-byte VS Code's: --install-extension, --user-data-dir, --add-mcp) and has NO exec/agent/headless subcommand at all. It can never be routed to, whatever its auth says. Hence `headless` below: a provider with headless:null is NOT a backend and renders as such, however healthy it looks.",
+
+  "_the_cost_rule": "🚨 ASK WHAT IT BILLS, NOT WHAT IT CAN LOG INTO. `bills_outside_plan` is the gate, and it is a DIFFERENT question from `plan`. Measured 2026-08-10: Pi's README lists 'Anthropic Claude Pro/Max' under Subscriptions — true about authentication, silent about billing — while the same package's docs/providers.md states third-party harness usage 'draws from extra usage and is billed per token, not against Claude plan limits'. A subscription LOGIN LIST answers only whether auth works; it will never volunteer the meter. Any provider whose answer here is true, or UNKNOWN, is documented and SKIPPED — never wired, never signed up for. Cross-check against accounts.json spend.usage_credits_authorized before ever flipping one to false.",
+
+  "_provenance": "Every row was established from a live read on 2026-08-10 and carries the command in `established_by`. A field that could not be measured is null and renders UNKNOWN — never a guess.",
+
+  "providers": [
+    {
+      "name": "codex",
+      "label": "Codex CLI",
+      "vendor": "OpenAI",
+      "bin": "codex",
+      "version_args": ["--version"],
+      "headless": "codex exec",
+      "in_scope": true,
+      "plan": "ChatGPT Plus",
+      "plan_source": "chatgpt_plan_type claim in ~/.codex/auth.json id_token",
+      "bills_outside_plan": false,
+      "auth": {"kind": "json_file", "path": "~/.codex/auth.json",
+               "ready_when": "tokens.access_token present and OPENAI_API_KEY empty",
+               "api_key_field": "OPENAI_API_KEY"},
+      "model_pin": {"path": "~/.codex/config.toml", "key": "model", "effort_key": "model_reasoning_effort"},
+      "proven_by": "codex exec prints `model: <id>` in its own header and the agent echoes it back",
+      "established_by": "codex doctor → stored auth mode chatgpt · stored API key false · websocket HTTP 101 to wss://chatgpt.com/backend-api",
+      "notes": "Model catalog cached at ~/.codex/models_cache.json and STAMPED with the client_version that wrote it — compare against the running CLI before trusting it (see _stale_catalog_rule)."
+    },
+    {
+      "name": "pi-codex",
+      "label": "Pi · Codex backend",
+      "vendor": "earendil-works (harness) → OpenAI (model)",
+      "bin": "pi",
+      "version_args": ["--version"],
+      "headless": "pi --print",
+      "in_scope": true,
+      "plan": "ChatGPT Plus",
+      "plan_source": "package docs/providers.md § OpenAI Codex — 'Requires ChatGPT Plus or Pro subscription'",
+      "bills_outside_plan": false,
+      "auth": {"kind": "cmd_json", "cmd": ["pi", "auth", "check", "--provider", "openai", "--json", "--no-refresh"],
+               "ready_when": "status == ready"},
+      "model_pin": null,
+      "proven_by": null,
+      "established_by": "npm view @earendil-works/pi-coding-agent → 0.84.1 MIT; pi auth check --provider openai --json --no-refresh",
+      "notes": "SECOND HARNESS, NOT ADDED CAPACITY — rides the SAME ChatGPT Plus subscription the Codex CLI already rides, so its usage competes for one quota. Model pin is null because pi gates its model catalog behind auth (pi --list-models → 'No models available. Use /login'), and pi ships no headless login: `pi auth` only prints/checks, `/login` is interactive-mode only, and its credential store is its own (it does NOT inherit Codex's tokens)."
+    },
+    {
+      "name": "pi-claude",
+      "label": "Pi · Claude backend",
+      "vendor": "earendil-works (harness) → Anthropic (model)",
+      "bin": "pi",
+      "version_args": ["--version"],
+      "headless": "pi --print",
+      "in_scope": false,
+      "skip_reason": "COST GATE FAIL — bills per token outside the Max plan",
+      "plan": "Claude Pro/Max (auth works, usage does NOT draw on the plan)",
+      "plan_source": "package docs/providers.md § Claude Pro/Max",
+      "bills_outside_plan": true,
+      "auth": {"kind": "cmd_json", "cmd": ["pi", "auth", "check", "--provider", "anthropic", "--json", "--no-refresh"],
+               "ready_when": "status == ready"},
+      "model_pin": null,
+      "proven_by": null,
+      "established_by": "docs/providers.md: 'Third-party harness usage draws from extra usage and is billed per token, not against Claude plan limits' × accounts.json spend.usage_credits_authorized=false",
+      "notes": "🚨 DO NOT `/login` this provider from pi. It authenticates against a plan we hold and then spends OUTSIDE it, through the extra-usage meter this fleet's standing policy does not authorize. Present in this registry precisely so the refusal is visible and survives the next person who reads only Pi's README."
+    },
+    {
+      "name": "antigravity",
+      "label": "Antigravity",
+      "vendor": "Google",
+      "bin": "antigravity",
+      "version_args": ["--version"],
+      "headless": null,
+      "in_scope": false,
+      "skip_reason": "NOT AN AGENT BACKEND — the binary is the VS Code editor launcher, no non-interactive mode",
+      "plan": null,
+      "plan_source": null,
+      "bills_outside_plan": null,
+      "auth": {"kind": "json_file", "path": "~/.gemini/oauth_creds.json", "ready_when": "refresh_token present"},
+      "model_pin": null,
+      "proven_by": null,
+      "established_by": "antigravity --help → pure VS Code option surface (--install-extension, --user-data-dir, --add-mcp); no exec/agent/headless subcommand",
+      "notes": "Authenticated as a Google account (shares ~/.gemini/oauth_creds.json), but its plan/tier is UNKNOWN: the id_token carries no plan claim and no tier string exists anywhere under ~/.gemini. Moot rather than merely unmeasured — headless:null already settles routability."
+    },
+    {
+      "name": "gemini",
+      "label": "Gemini CLI",
+      "vendor": "Google",
+      "bin": "gemini",
+      "version_args": ["--version"],
+      "headless": "gemini --prompt",
+      "in_scope": false,
+      "skip_reason": "DEFERRED — plan tier UNKNOWN, so the cost gate cannot clear it",
+      "plan": null,
+      "plan_source": "not establishable from disk: free Code Assist individual vs a paid Google AI subscription look identical in ~/.gemini",
+      "bills_outside_plan": null,
+      "auth": {"kind": "json_file", "path": "~/.gemini/oauth_creds.json", "ready_when": "refresh_token present"},
+      "model_pin": {"path": "~/.gemini/settings.json", "key": "model.name"},
+      "proven_by": null,
+      "established_by": "~/.gemini/settings.json → auth.selectedType oauth-personal, model.name gemini-3-pro-preview; printenv → GEMINI_API_KEY/GOOGLE_API_KEY/GOOGLE_CLOUD_PROJECT all unset",
+      "notes": "Found installed and unaccounted for — a 7th backend the original six-backend plan did not list. No metered path is wired (no API key anywhere), and the access token expired 2026-02-23 with a refresh token still present. UNKNOWN plan ⇒ SKIP per the cost rule, not because it looks expensive."
+    },
+    {
+      "name": "grok",
+      "label": "Grok CLI",
+      "vendor": "xAI",
+      "bin": "grok",
+      "version_args": ["--version"],
+      "headless": null,
+      "in_scope": false,
+      "skip_reason": "COST GATE FAIL — API-key-only, and we hold no xAI plan",
+      "plan": null,
+      "plan_source": null,
+      "bills_outside_plan": true,
+      "auth": null,
+      "model_pin": null,
+      "proven_by": null,
+      "established_by": "npm view @xai/grok-cli and @x-ai/grok-cli → 404 (no official xAI CLI on npm); @vibe-kit/grok-cli@0.0.34 README requires a Grok API key from X.AI against https://api.x.ai/v1",
+      "notes": "Not installed and must not be. Every community CLI is API-key-only against the metered xAI endpoint; there is no subscription/OAuth login path, and this fleet holds neither SuperGrok nor xAI credit. Pi CAN log into an xAI subscription (docs/providers.md § xAI) — irrelevant while no such subscription is held, and listed here so that stays a deliberate answer rather than a rediscovery."
+    }
+  ],
+
+  "_stale_catalog_rule": "🚨 UPDATE THE CLI BEFORE READING ITS MODEL LIST. A model catalog cached on disk can simultaneously hide newer models AND be unreadable by an older client. Measured 2026-08-10: ~/.codex/models_cache.json was stamped client_version 0.142.2 and listed 5 models — omitting gpt-5.6-sol, the model config.toml ALREADY pinned. Running the updated 0.147.0 client refreshed it to 8 and revealed gpt-5.6-sol (priority 1), gpt-5.6-terra (2), gpt-5.6-luna (3). Reading first yields a confidently wrong answer about what 'latest' even is. Pi ships this discipline as `pi update --models`.",
+
+  "_pin_proof_rule": "🚨 A CONFIG WRITE IS NOT A PIN. A --model/--reasoning flag passed through a wrapper can be silently ignored — no error, just quietly worse output — while the provider's own config file governs. A pin counts as PROVEN only when the agent was RUN and reported its own model id back (codex exec prints `model: gpt-5.6-sol` in its header and the agent echoes it). `proven_by` records how; a null there means UNPROVEN and renders as such."
+}
