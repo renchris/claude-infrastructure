@@ -64,21 +64,31 @@ setup() {
 }
 
 # write_transcript <first-user-text> [later-user-text] — a minimal CC transcript for $SID.
+#
+# THE FIXTURE WRITES THE NESTED LAYOUT, AND THAT IS THE POINT. Claude Code stores transcripts at
+# <root>/projects/<project-slug>/<sid>.jsonl — counted on this box, 0 flat vs 3148 nested. Every
+# lookup here used to test `$pdir/<sid>.jsonl` directly and therefore matched nothing in production,
+# while its suites passed because their fixtures wrote the flat path the code was looking for. A
+# fixture that agrees with the bug proves the bug (memory: control-must-replay-the-real-artifact).
+# The "flat layout" test below is the control that keeps the fast path honest.
+TJ_DIR() { printf '%s/-Users-chrisren-Development-fixture' "$CC_PROJECTS_DIRS"; }
 write_transcript() {
   local first="$1" later="${2:-}"
-  : > "$CC_PROJECTS_DIRS/$SID.jsonl"
+  mkdir -p "$(TJ_DIR)"
+  : > "$(TJ_DIR)/$SID.jsonl"
   # An isMeta turn FIRST, so the suite also pins that the extraction skips the harness's own injected
   # context blocks — ".[0]" must be the BRIEF, not a SessionStart hook's payload.
   jq -nc --arg t "session context injected by a hook" \
-    '{type:"user", isMeta:true, message:{content:$t}}' >> "$CC_PROJECTS_DIRS/$SID.jsonl"
-  jq -nc --arg t "$first" '{type:"user", message:{content:$t}}' >> "$CC_PROJECTS_DIRS/$SID.jsonl"
-  jq -nc '{type:"assistant", message:{content:[{type:"text",text:"working"}]}}' >> "$CC_PROJECTS_DIRS/$SID.jsonl"
-  [ -n "$later" ] && jq -nc --arg t "$later" '{type:"user", message:{content:$t}}' >> "$CC_PROJECTS_DIRS/$SID.jsonl"
+    '{type:"user", isMeta:true, message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
+  jq -nc --arg t "$first" '{type:"user", message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
+  jq -nc '{type:"assistant", message:{content:[{type:"text",text:"working"}]}}' >> "$(TJ_DIR)/$SID.jsonl"
+  [ -n "$later" ] && jq -nc --arg t "$later" '{type:"user", message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
   return 0
 }
 
 load_proof_fn() {
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^fired_contract_in_my_brief() {/,/^}/p' "$HF")"
   SELF_RETIRE_CONTRACT_HEADING="$HEADING"
 }
@@ -162,6 +172,49 @@ $HEADING
 @test "proof REFUSED: no transcript for this pane (nothing was asked ⇒ nothing is proven)" {
   load_proof_fn
   ! fired_contract_in_my_brief "$PANE" || { echo "proved a contract with no transcript at all"; false; }
+}
+
+# ── the LAYOUT the resolver must actually survive ────────────────────────────────────────────────
+
+@test "layout: transcript_for_sid finds the NESTED path CC really writes" {
+  # 0 flat vs 3148 nested, counted across all five account roots on this box. This is the assertion
+  # whose absence let every marker-proof chain in this file be inert in production for as long as it
+  # existed — adoption and the spent-stamp retry arm included — while their suites stayed green.
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
+  mkdir -p "$(TJ_DIR)"; : > "$(TJ_DIR)/$SID.jsonl"
+  [ "$(transcript_for_sid "$SID")" = "$(TJ_DIR)/$SID.jsonl" ] \
+    || { echo "nested transcript NOT found — the real layout is unreachable"; false; }
+}
+
+@test "layout: the FLAT fast path still resolves, and is preferred" {
+  # The one stat that costs nothing. Keeping it is what makes the find a fallback rather than a
+  # replacement, so no caller or fixture that really is flat changes behaviour.
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
+  : > "$CC_PROJECTS_DIRS/$SID.jsonl"
+  mkdir -p "$(TJ_DIR)"; : > "$(TJ_DIR)/$SID.jsonl"
+  [ "$(transcript_for_sid "$SID")" = "$CC_PROJECTS_DIRS/$SID.jsonl" ] \
+    || { echo "flat path not preferred: $(transcript_for_sid "$SID")"; false; }
+}
+
+@test "layout: an unknown sid resolves to NOTHING, and a sid can never be a path fragment" {
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
+  [ -z "$(transcript_for_sid "no-such-session")" ] || { echo "invented a transcript"; false; }
+  [ -z "$(transcript_for_sid "../../etc/passwd")" ] || { echo "a sid escaped its directory"; false; }
+}
+
+@test "layout: fired_marker_is_mine (adoption's proof) works over the NESTED layout too" {
+  # The pre-existing caller. Its breakage is why the origin gate's adoption path and its spent-stamp
+  # retry arm could never fire — the same one-level-too-shallow lookup, in the function whose header
+  # calls the transcript "the PROOF channel".
+  eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^fired_marker_is_mine() {/,/^}/p' "$HF")"
+  write_transcript "TASK.
+
+<!-- handoff-fire engagement marker: $MARKER (ignore) -->"
+  fired_marker_is_mine "$MARKER" "$PANE" || { echo "adoption's proof channel is inert"; false; }
+  ! fired_marker_is_mine "HANDOFF-ENGAGE-someone-else" "$PANE" \
+    || { echo "proved a marker that is not in the transcript"; false; }
 }
 
 # ── the REPAIR itself: the stamp the fire owed is written, and marked as a repair ─────────────────
