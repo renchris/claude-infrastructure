@@ -32,13 +32,15 @@ live directory is a working git repo, and replacing its files with symlinks woul
 history that is the only copy of the graph. It needs a deliberate decision about whether that
 history is worth keeping before anything is moved.
 
-Until then this mirror is refreshed by hand. Re-run it with:
+Until then, refresh it with one command:
 
-    cd ~/.claude/skills/kpmg-deck
-    git ls-files | grep -v '\.pptx$' | while read -r f; do
-      mkdir -p <checkout>/skills/kpmg-deck/"$(dirname "$f")"
-      cp "$f" <checkout>/skills/kpmg-deck/"$f"
-    done
+    bash scripts/mirror-kpmg-deck.sh            # copy the working repo in, regenerate HISTORY.md
+    bash scripts/mirror-kpmg-deck.sh --check    # report drift, write nothing, exit 1 if stale
 
-A mirror that has to be refreshed by hand will go stale, and this paragraph is the only thing
-saying so — which is the honest state, not a recommendation.
+**The script exists because the first mirror was taken by hand and went stale inside ten
+minutes** — the very next commit to the working repo touched `SKILL.md` and this copy did not
+move. A mirror nobody can refresh in one command is a mirror that silently stops being one.
+
+`--check` is the honest half: it is the only thing that will ever tell you this directory has
+drifted, and nothing runs it automatically. If that matters, wire it into a gate; until someone
+does, the mirror is exactly as current as the last person who ran the script.

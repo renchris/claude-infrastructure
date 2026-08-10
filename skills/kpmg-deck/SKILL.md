@@ -152,7 +152,7 @@ carries the geometry; the four things worth knowing before you pick an archetype
 | 2–4 ring gauges | `key_findings(headline, [(value, gloss, group)])` | **max 4.** Colour-code by stream, not index |
 | A full colour field | `full_field(headline, standfirst=, body=)` | cover · quote · methodology · closing ONLY |
 | A claim + a figure | `exhibit(title, build, source=, takeaway=)` | title states the finding; source always |
-| 2–5 parallel points | `points_slide(title, [(label, desc), …])` | **max 5** |
+| 2–5 parallel points | `points_slide(title, [(label, desc), …])` | code cap 5, **fits 3** |
 | An ordered sequence | `process(title, [(label, desc), …])` | 2–5 steps |
 | 2–4 big numbers | `metrics(title, [(value, label, caption), …])` | **max 4** |
 | Two things contrasted | `versus(title, lt, [..], rt, [..])` | max 5 each side |
@@ -372,6 +372,13 @@ literals silently stops matching the firm's material the next time the palette m
 **There is no bullet function.** `points_slide` uses labelled rows separated by hairlines, capped
 at five. The cap is the feature: beyond about four items a list stops being retained, and a
 six-item list is a grouping that wants a level.
+
+⚠️ **Its code cap and its actual capacity are different numbers, and the smaller one binds.** The
+cap of five is editorial. What fits is **three** — the rows share whatever the headline and any
+standfirst leave behind, and four rows need about 298pt against a region of about 263pt. Ask for
+four and `rows()` raises with both figures rather than drawing them on top of each other. The cap
+tells you when a list has stopped being a list; the geometry tells you when it has stopped
+fitting, and it speaks first.
 
 **Charts have no gridlines, no axis lines and no legend.** Direct labelling only. A legend makes
 the reader bounce between the key and the marks; a label beside its own bar does not.

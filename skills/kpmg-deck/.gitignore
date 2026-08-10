@@ -4,3 +4,8 @@ examples/*.pptx
 examples/render*/
 __pycache__/
 *.pyc
+
+# Stale build artifact tracked before the ignore below existed. showcase.py now writes to
+# examples/, which is already ignored; this root copy was last built by a version of the file
+# that no longer runs (it called cover(), which raises).
+/showcase.pptx
