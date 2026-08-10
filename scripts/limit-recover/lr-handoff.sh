@@ -6,7 +6,7 @@
 #                      [--effort low|medium|high|xhigh|max]
 #                      [--sid SID] [--config-dir DIR] [--cwd PATH]
 #                      [--context FILE] [--launch|--print-only]
-#                      [--no-transplant] [--keep-source] [--force]
+#                      [--no-transplant] [--keep-source] [--force] [--close-source]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
@@ -17,7 +17,15 @@
 # the model was preserved and the reasoning tier was not, which is the half nobody
 # checks because the statusline still says "Fable 5". Omitted ⇒ prior behaviour exactly
 # (fable ⇒ high; opus ⇒ lr-fire-resume's account-derived default).
-# Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error.
+#
+# --close-source: after the fire, retire THIS pane into the successor via
+# `handoff-fire.sh self-close --successor <id> --transplanted-source`. Without it the source pane
+# survives the transplant as a HUSK — a window over a transcript that moved to another account and
+# will never produce another turn, indistinguishable from live work. Requires --launch and a real
+# transplant (the close is admitted on the tombstone lr-transplant writes). If the successor's pane
+# id could not be captured, NOTHING is closed: the command is printed and the exit is 3.
+#
+# Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error, 3 fired-but-not-closed.
 set -euo pipefail
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
@@ -94,7 +102,7 @@ lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
 
 LR="$HOME/.claude/scripts/limit-recover"
 TARGET="auto" MODEL="opus" EFFORT="" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0
+CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
@@ -109,10 +117,26 @@ while [[ $# -gt 0 ]]; do
     --no-transplant) NO_TRANSPLANT=1; shift ;;
     --keep-source) KEEP_SOURCE=1; shift ;;
     --force) FORCE=1; shift ;;
+    --close-source) CLOSE_SOURCE=1; shift ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+# --close-source retires THIS pane once the successor is carrying the session. Both of its
+# preconditions are decidable here, before any work is done, and both are incoherence rather than
+# bad luck — so refuse now rather than fire and fail at the end.
+if [[ $CLOSE_SOURCE -eq 1 ]]; then
+  # Nothing was fired ⇒ no successor exists ⇒ there is nothing for the close to hand off to.
+  if [[ $LAUNCH -ne 1 || $PRINT_ONLY -eq 1 ]]; then
+    echo "lr-handoff: --close-source needs --launch (and not --print-only) — closing this pane with nothing fired strands the work" >&2; exit 2
+  fi
+  # handoff-fire's transplanted-source class is admitted on the TOMBSTONE lr-transplant writes. With
+  # --no-transplant there is no transplant and no tombstone, so the close would be refused there —
+  # correctly, and only after this pane had already fired. Say so now.
+  if [[ $NO_TRANSPLANT -eq 1 ]]; then
+    echo "lr-handoff: --close-source is incompatible with --no-transplant — the close is admitted on the transplant tombstone, which --no-transplant never writes" >&2; exit 2
+  fi
+fi
 # Reject an unknown effort HERE rather than let it reach the launcher. %q already makes the
 # value inert as source, so this is not a quoting defence — it is a liveness one: the binary
 # refuses an unrecognised --effort at startup, and that refusal would land in a freshly spawned
@@ -312,6 +336,16 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   # 2026-07-25 sticky-command incident has no analogue to re-create there.
   OWN_PANE="${ITERM_SESSION_ID##*:}"
   FIRED=""
+  # NEW_PANE — the id of the pane this fire CREATED, empty until one is known. FIRED keeps its
+  # existing meaning untouched (a status: "split" or empty, read by the announcement branch below);
+  # this is a second variable rather than a richer FIRED precisely so no existing consumer changes.
+  #
+  # Every arm below already had the id in its hand and threw it away: kitty prints the new window id
+  # on stdout and the call redirected it to /dev/null; the two AppleScript arms already `return id of`
+  # the new session because osa_type_verified has to address it. Nothing new is asked of any
+  # terminal — the id is simply kept. It is what --close-source hands to `self-close --successor`,
+  # and an empty NEW_PANE is what makes that path REFUSE rather than close this pane blind.
+  NEW_PANE=""
   IN_KITTY=0
   if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then IN_KITTY=1; fi
   # An explicit socket is explicit intent (bin/it2-kitty:197) — honor it even with no kitty env.
@@ -338,10 +372,19 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
     # run; refuse the split rather than let --match fall through to the operator's ACTIVE window.
     case "$OWN_PANE" in
       ''|*[!0-9]*) FIRED="" ;;
-      *) lrh_kitty launch --type=window --location=vsplit \
+      *) if KID="$(lrh_kitty launch --type=window --location=vsplit \
            --match "window_id:$OWN_PANE" --next-to "id:$OWN_PANE" --cwd=current \
-           -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 \
-           && { FIRED="split"; command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$OWN_PANE"; } ;;
+           -- /bin/bash "$LAUNCHER" 2>/dev/null)"; then
+           FIRED="split"
+           # `kitty @ launch` prints the new window id, and only that, on success. Accept it ONLY as
+           # a bare integer: kitty's id space is integers, so anything else is a diagnostic or a
+           # future format change, and passing that on as a pane id would send self-close hunting a
+           # pane that never existed. A rejected id is not a failed fire — the split stands, and
+           # --close-source refuses instead of closing blind.
+           KID="$(printf '%s' "$KID" | tr -d '[:space:]')"
+           case "$KID" in ''|*[!0-9]*) ;; *) NEW_PANE="$KID" ;; esac
+           command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$OWN_PANE"
+         fi ;;
     esac
   elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split iterm2 "" "${PWD:-}" "lr-handoff osascript split-vertically anchor:$OWN_PANE"
@@ -374,14 +417,21 @@ OSA
     # through to the new-window path below rather than reporting a fire that never engaged.
     if [[ -n "$NEWPANE" ]] && osa_type_verified "$NEWPANE" "exec /bin/bash $LAUNCHER"; then
       FIRED="split"
+      # Only on the VERIFIED branch. An unverifiable pane is one the launcher may never have reached,
+      # and handing it to self-close as a successor would name a husk as the continuation.
+      NEW_PANE="$NEWPANE"
     fi
   fi
   if [[ "$FIRED" == "split" ]]; then
     echo "lr-handoff: fired split pane (right of invoking pane) on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   elif [[ $IN_KITTY -eq 1 ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-handoff fallback os-window"
-    lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" >/dev/null 2>&1 \
-      || { echo "lr-handoff: kitty launch failed — run manually: $LAUNCHER" >&2; }
+    if KID="$(lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" 2>/dev/null)"; then
+      KID="$(printf '%s' "$KID" | tr -d '[:space:]')"
+      case "$KID" in ''|*[!0-9]*) ;; *) NEW_PANE="$KID" ;; esac
+    else
+      echo "lr-handoff: kitty launch failed — run manually: $LAUNCHER" >&2
+    fi
     echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
   else
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-handoff fallback create-window"
@@ -396,6 +446,7 @@ OSA
 )
     WINPANE="$(printf '%s' "$WINPANE" | tr -d '[:space:]')"
     if [[ -n "$WINPANE" ]] && osa_type_verified "$WINPANE" "exec /bin/bash $LAUNCHER"; then
+      NEW_PANE="$WINPANE"      # verified branch only — same reason as the split arm above
       echo "lr-handoff: no invoking pane / split failed — fired new iTerm2 window on '$TARGET' (manual fallback: $LAUNCHER)" >&2
     else
       echo "lr-handoff: iTerm2 launch failed — run manually: $LAUNCHER" >&2
@@ -407,3 +458,50 @@ else
 fi
 
 echo "$BUNDLE"
+
+# ── --close-source: retire THIS pane, now that the successor is carrying the session ──────────────
+# The transplant already moved the session to another account and the fire above put a successor on
+# it. What is left here is a HUSK: a pane over a transcript that has been handed off, which will
+# never produce another turn but is indistinguishable from live work in the operator's window.
+#
+# The close goes through handoff-fire.sh self-close and NOTHING ELSE. Never `it2 session close`,
+# never raw osascript, never a typed /exit: a pane the operator watches must not vanish without its
+# continuation being visible, and self-close is the only path that verifies the successor is alive
+# AND engaged, announces the succession into the successor's own transcript, and focuses it after the
+# close. --transplanted-source is the class this qualifies under; --allow-origin-close is NOT used
+# and must not be, and --successor-assume-engaged is deliberately not passed — a transplant whose
+# successor never woke is the one failure this close must not walk past.
+#
+# NO PANE ID ⇒ NO CLOSE. Every arm above captures the id it created, but a kitty that answered with
+# something other than an integer, or an AppleScript pane whose typed launcher could not be verified,
+# leaves NEW_PANE empty. There is then no successor to name, and a close on an unnamed successor is
+# exactly the vanishing pane the succession contract exists to prevent — so print the command the
+# operator can run once they know the pane, and exit non-zero. The fire itself already happened and
+# is reported above; this failure is about the CLOSE, not the recovery.
+if [[ $CLOSE_SOURCE -eq 1 ]]; then
+  # CC_HANDOFF_FIRE_BIN is a TEST SEAM, in the same shape as cc-type-verified.sh's CC_OSASCRIPT_BIN
+  # and this file's CC_TERM_KITTY: without it a test of --close-source would resolve the REAL
+  # handoff-fire.sh beside this script and actually arm a close. Resolution ladder otherwise
+  # unchanged: beside-script → $CLAUDE_CONFIG_DIR → ~/.claude.
+  HF="${CC_HANDOFF_FIRE_BIN:-}"
+  [[ -n "$HF" ]] || HF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../handoff-fire.sh"
+  [[ -f "$HF" ]] || HF="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh"
+  [[ -f "$HF" ]] || HF="$HOME/.claude/scripts/handoff-fire.sh"
+  if [[ -z "${NEW_PANE:-}" ]]; then
+    { echo "lr-handoff: --close-source could NOT identify the pane it created — this pane stays OPEN."
+      echo "lr-handoff: the recovery itself fired; only the close is unresolved. Find the successor's"
+      echo "lr-handoff: pane id, then run:"
+      echo "  $HF self-close --successor <successor-pane-id> --transplanted-source"
+    } >&2
+    exit 3
+  fi
+  if [[ ! -x "$HF" ]]; then
+    { echo "lr-handoff: --close-source cannot reach handoff-fire.sh (looked beside this script, in \$CLAUDE_CONFIG_DIR/scripts, and in ~/.claude/scripts)."
+      echo "lr-handoff: this pane stays OPEN. Run the close by hand once it is reachable:"
+      echo "  <handoff-fire.sh> self-close --successor $NEW_PANE --transplanted-source"
+    } >&2
+    exit 3
+  fi
+  echo "lr-handoff: --close-source — retiring this pane into successor $NEW_PANE via handoff-fire self-close" >&2
+  exec "$HF" self-close --successor "$NEW_PANE" --transplanted-source
+fi
