@@ -29,15 +29,31 @@
 # both at one file proves the producer↔consumer contract end-to-end.
 set -uo pipefail
 
-# ── DoD path — IDENTICAL resolution to wrap-ledger.sh (the consumer) ──
-dod_file_for() {  # $1 = cwd
-  if [ -n "${WRAP_DOD_FILE:-}" ]; then printf '%s' "$WRAP_DOD_FILE"; return; fi
-  local dir top hash
-  dir="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
-  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1")"
-  hash="$(printf '%s' "$top" | shasum 2>/dev/null | cut -c1-16)"
-  printf '%s/%s.md' "$dir" "${hash:-unknown}"
-}
+# ── DoD path — the SHARED lib (CLOSE_INTEGRITY W3): repo-identity key, legacy read-fallback ──
+# Was an inline path-hash formula duplicated in wrap-ledger.sh behind a MUST-match comment — and
+# path-keying meant a fresh worktree started on a BLANK scope contract (generator G2). Both sides
+# now source hooks/lib/dod-path.sh; the inline fallback below preserves the exact legacy formula
+# for a live layer that has not yet linked the new lib (an ADD gets no converge budget).
+_dpd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_dplib="$_dpd/lib/dod-path.sh"
+[ -f "$_dplib" ] || { _dpt="$0"; [ -L "$_dpt" ] && _dpt="$(readlink "$_dpt")"
+  _dplib="$(cd "$(dirname "$_dpt")" 2>/dev/null && pwd)/lib/dod-path.sh"; }
+[ -f "$_dplib" ] || _dplib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/dod-path.sh"
+[ -f "$_dplib" ] || _dplib="$HOME/.claude/hooks/lib/dod-path.sh"
+# shellcheck source=lib/dod-path.sh
+# shellcheck disable=SC1090,SC1091
+if ! . "$_dplib" 2>/dev/null; then
+  dod_path_for() {  # legacy fallback — byte-equivalent to the pre-W3 formula, read==write
+    local dir top hash
+    if [ -n "${WRAP_DOD_FILE:-}" ]; then printf '%s' "$WRAP_DOD_FILE"; return; fi
+    dir="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
+    top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$1")"
+    hash="$(printf '%s' "$top" | shasum 2>/dev/null | cut -c1-16)"
+    printf '%s/%s.md' "$dir" "${hash:-unknown}"
+  }
+  dod_read_files() { local f; f="$(dod_path_for "$1" read)"; [ -f "$f" ] && printf '%s\n' "$f"; return 0; }
+fi
+dod_file_for() { dod_path_for "$1" write; }   # the canonical path — where new captures go
 
 # ── newest "Scope (frozen): …" line already recorded in the durable file ──
 last_recorded_scope() { grep -aoE 'Scope \(frozen\):.*' "$1" 2>/dev/null | tail -1; }
@@ -82,7 +98,7 @@ case "${1:-}" in
     scope="${2:-}"
     [ -n "$scope" ] || { printf 'usage: dod-persist.sh set "<Scope (frozen): DoD>"\n' >&2; exit 2; }
     case "$scope" in *"Scope (frozen):"*|*"Scope (grown):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
-    f="$(dod_file_for "$PWD")"
+    f="$(dod_path_for "$PWD" write)"
     if [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; then
       printf 'unchanged → %s\n' "$f"; exit 0
     fi
@@ -94,7 +110,17 @@ case "${1:-}" in
   get)
     # Print the current frozen DoD line for a cwd — SSOT read for the /handoff + waiting-recycle
     # DoD-carry (T-P4-4). Empty output (exit 0) = no DoD recorded yet; callers degrade gracefully.
-    last_recorded_scope "$(dod_file_for "${2:-$PWD}")"; exit 0 ;;
+    # W3: two read sources — the repo-key store (new captures) wins; this toplevel's legacy file
+    # answers only when the new store has no scope yet.
+    _g=""
+    while IFS= read -r _gf; do
+      [ -n "$_gf" ] || continue
+      _g="$(last_recorded_scope "$_gf")"
+      [ -n "$_g" ] && break
+    done <<GETEOF
+$(dod_read_files "${2:-$PWD}")
+GETEOF
+    printf '%s\n' "$_g"; exit 0 ;;
 esac
 
 # ── Hook modes (JSON on stdin; dispatch by hook_event_name) ──
@@ -106,9 +132,18 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 
 case "$event" in
   SessionStart)
-    f="$(dod_file_for "$cwd")"
-    [ -f "$f" ] || exit 0                        # no durable DoD → nothing to re-inject
-    content="$(cat "$f" 2>/dev/null || true)"
+    # W3: inject BOTH read sources (repo-key store first, then this toplevel's legacy) — the
+    # lossless half of the migration: per-toplevel history keeps injecting exactly where it always
+    # did, while every worktree of the repo now shares the repo-key captures.
+    content=""
+    while IFS= read -r _sf; do
+      [ -n "$_sf" ] && [ -f "$_sf" ] || continue
+      content="${content}$(cat "$_sf" 2>/dev/null || true)
+
+"
+    done <<SSEOF
+$(dod_read_files "$cwd")
+SSEOF
     [ -n "$content" ] || exit 0
     framed="Durable frozen DoD for this worktree — re-injected across recycle/compaction as the completeness baseline (a19 HOP A). Every 'Scope (frozen):' line below is binding, and every 'Scope (grown): +<item>' line extends it (Follow-On Gate F1-F4 PASS — already authorized, do NOT re-ask); do NOT narrow scope or declare done until ALL of it is met.
 
@@ -120,7 +155,7 @@ $content"
     case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
     trigger="$(printf '%s' "$input" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
     { [ -n "$tp" ] && [ -f "$tp" ]; } || exit 0
-    f="$(dod_file_for "$cwd")"
+    f="$(dod_path_for "$cwd" write)"
     scope="$(extract_scope "$tp")"
     if [ -n "$scope" ]; then
       if ! { [ -f "$f" ] && [ "$scope" = "$(last_recorded_scope "$f")" ]; }; then   # stale/absent only
