@@ -87,6 +87,39 @@ Hourly poll · renew at **T−7d** (not the 72 h warn — that converts one frag
 ~168 hourly chances to catch a `k==0` window) · escalate at **T−48h** if no window was ever
 caught. Success is silent; failure is loud.
 
+### The renewal window is ONE constant with THREE consumers
+
+`accounts.json` `relogin_trigger_h` (168 h). It is deliberately **not** `login_warn_h` (72 h):
+those answer different questions — `login_warn_h` is *how much lead time a human needs*,
+`relogin_trigger_h` is *how many k==0 chances the unattended executor gets*.
+
+| Consumer | Role | Reads it as |
+|---|---|---|
+| `claude-accounts --relogin-status` | renders `DUE` + `NEXT ACTION: cc-relogin <acct>` | the DUE band |
+| `cc-relogin-poll` | picks who is attempted this tick | `--login-status --window-h` + the candidate filter |
+| `cc-relogin` | the gate that decides whether to act | accepts inside it |
+
+**They drifted once, and three green suites could not see it** (2026-07-29, backlog
+`9d514681fb84`). Each surface owned its own constant: the board used 168 h, the executor still
+gated on `login_warn_h`=72 h. Measured on `next` at T−88.74 h — the board rendered `DUE` and
+printed `NEXT ACTION: cc-relogin next`; that exact command exited **2 REFUSED — "no re-auth
+needed"**. A **96-hour dead band** (72 h→168 h) in which the prescribed command could not run,
+with no `--force` and only the `CC_RELOGIN_WARN_H` env seam to cross it. Latent second half: the
+poller invokes `cc-relogin` *bare*, so on activation 96 of its declared 168 hourly chances would
+have been spent on a gate that could not say yes — defeating the very reason the window is 7 days.
+
+Every suite passed throughout, because each tested its own surface alone. The regression guard is
+therefore **behavioural, not numeric**: `tests/cc-relogin-status.bats` takes the board's own
+`next_action` string and **executes it**, at a deliberately non-default window, so a constant
+re-hardcoded in *either* program fails a test instead of passing on a coincidence of defaults.
+
+**Rejected: "render an ADVISORY state for 72–168 h and reserve DUE for ≤72 h."** It fixes the
+incoherence by breaking the surface that was right. The board's 168 h mirrors the poller's declared
+attempt window, which §5 above justifies; narrowing `DUE` to 72 h would contradict the cadence this
+runbook activates. It also would not touch the dead band at all — the poller reads
+`--login-status --window-h`, never `--relogin-status`, so its 96 wasted hours would survive intact.
+The odd surface out was the actuator, so the actuator is what moved.
+
 Watch it with:
 ▶ `claude-accounts --relogin-status`
 ▶ `cc-blockers`   (a `relogin-blocked` row carries the exact runnable recovery command)

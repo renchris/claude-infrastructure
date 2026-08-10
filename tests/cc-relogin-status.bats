@@ -170,6 +170,84 @@ sg() { # append a safeguard-blocked row (the pre-existing kind): <ts> <pane> <na
   echo "$output" | grep -q 'cc-relogin next2'
 }
 
+# ---- coherence: the board's own NEXT ACTION must be a command the executor accepts -----------
+# The board RENDERS a threshold; cc-relogin ACTS on one. Both were individually tested and
+# individually correct, and nothing tested them together — so they drifted, and the drift was
+# invisible to two green suites. Measured 2026-07-29 on `next` at T-88.74h: this board rendered
+# DUE and printed "NEXT ACTION: cc-relogin next"; that exact command exited 2 REFUSED "no re-auth
+# needed", because its gate still used login_warn_h=72 while the board used the T-7d attempt
+# window. A 96-hour dead band in which the prescribed command could not run.
+#
+# The fix SSOT'd the window (accounts.json relogin_trigger_h) and this test is what holds it:
+# it does not assert a number, it EXECUTES the board's own next_action string. It is therefore
+# keyed on the MECHANISM (one shared window) rather than on today's value — the SSOT below is
+# deliberately set to a NON-default 120h, so a subject that hardcoded 168 in EITHER program
+# fails one of the two arms instead of passing on a coincidence of defaults.
+relogin_stubs() { # stub cc-relogin's external seams; the row carries <hours> to the executor
+  export CC_RELOGIN_TMP="$D" CC_RELOGIN_LOG="$D/cc-relogin-exec.log"
+  export CC_RELOGIN_ACCOUNTS_BIN="$D/stub-accounts-exec" CC_RELOGIN_PS_BIN="$D/stub-ps-exec"
+  export CC_RELOGIN_SECURITY_BIN="$D/stub-security-exec" CC_RELOGIN_AUTHBROWSER_BIN="$D/stub-ab"
+  cat > "$D/stub-accounts-exec" <<STUB
+#!/usr/bin/env bash
+if [[ "\$*" == *--relogin-info* ]]; then
+  echo '{"name":"next","config_dir":"$D/cfg-next","launcher":"claude-next","email":"e@x.test",
+   "dia_profile":"C","dia_profile_dir":"/p","keychain_service":"svc","keychain_state":"present",
+   "claude_bin":"$D/stub-claude-exec","oauth_scopes":"user:profile","has_refresh_token":true}'
+  exit 0
+fi
+echo '{"window":{},"cached":false,"rows":[{"acct":"next","email":"e@x.test",
+ "launcher":"claude-next","k":0,"auth":"ok","login_expires_at":"2026-08-01T00:00:00Z",
+ "login_expires_h":$1}]}'
+STUB
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/stub-ps-exec"        # ps: no live sessions
+  printf '#!/usr/bin/env bash\necho {}\n' > "$D/stub-security-exec"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/stub-ab"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/stub-claude-exec"
+  chmod +x "$D"/stub-accounts-exec "$D"/stub-ps-exec "$D"/stub-security-exec \
+           "$D"/stub-ab "$D"/stub-claude-exec
+}
+
+ssot_trigger() { # rewrite the scratch SSOT's renewal window — BOTH programs read this one key
+  python3 - "$CA_CFG" "$1" <<'PY'
+import json, sys
+p = sys.argv[1]
+cfg = json.load(open(p))
+cfg["relogin_trigger_h"] = float(sys.argv[2])
+json.dump(cfg, open(p, "w"))
+PY
+}
+
+@test "coherence: DUE's prescribed command is one cc-relogin ACCEPTS (the 2026-07-29 dead band)" {
+  ssot_trigger 120.0
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+100h"}]'   # 72 < 100 < 120
+  run "$CA_BIN" --relogin-status --json
+  [ "$status" -eq 1 ]
+  [ "$(echo "$output" | jq -r '.rows[0].state')" = "DUE" ]
+  action="$(echo "$output" | jq -r '.rows[0].next_action')"
+  [ "$action" = "cc-relogin next" ]
+  # Run the board's OWN string — not a re-typed approximation of it. `next_action` is the
+  # contract; anything else would test a command the operator was never given.
+  relogin_stubs 100
+  run env -u CC_RELOGIN_WARN_H bash -c \
+    "cd '$REPO' && exec bin/${action} --dry-run --json"
+  [ "$status" -eq 0 ]                              # 0 PROVEN(dry-run), NOT 2 REFUSED
+  [ "$(echo "$output" | jq -r .result)" = "dry-run" ]
+}
+
+@test "coherence, other direction: outside the SSOT window the board prescribes nothing AND the executor refuses" {
+  # The control. Without it the arm above would also pass a subject whose gate simply never
+  # refuses. Same account, same suite, one hour past the SAME shared window.
+  ssot_trigger 120.0
+  seed '[{"acct":"next","auth":"ok","login_expires_at":"+130h"}]'   # 130 > 120
+  run "$CA_BIN" --relogin-status --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.rows[0].state')" = "OK" ]
+  [ "$(echo "$output" | jq -r '.rows[0].next_action')" = "-" ]     # no command is prescribed
+  relogin_stubs 130
+  run env -u CC_RELOGIN_WARN_H bash -c "cd '$REPO' && exec bin/cc-relogin next --dry-run --json"
+  [ "$status" -eq 2 ]                              # and the executor agrees: nothing to do
+}
+
 @test "ESCALATED: inside the 48h escalation window → exit 2" {
   seed '[{"acct":"next3","auth":"ok","login_expires_at":"+12h"}]'
   run "$CA_BIN" --relogin-status
