@@ -108,7 +108,33 @@ case "$MAX_LAG_HOURS"   in ''|*[!0-9]*) MAX_LAG_HOURS=6 ;; esac
 DAMP_FILE="$POSTLAND_DIR/deploy-auto.damp"
 DAMP_WINDOW_S="${CC_DEPLOY_DAMP_S:-86400}"
 MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
-HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-300}"
+# SIZED FROM THE BAND THIS RUNNER EXECUTES IN, NOT FROM A BENCH (2026-08-10, backlog cb9980e4b0e5).
+# 300s was a bench number. host_checks runs under com.claude.deploy-live — ProcessType Background
+# (PRI 4), Nice 10, LowPriorityIO — and puts `nice -n 19` on top of that. MEASURED on this box, one
+# `test-hermeticity-lint.sh --selftest` back to back at load ~9-11: 70s in the utility band, 252s
+# under `taskpolicy -c background`. A 3.6x band tax. tests/test-hermeticity-lint.bats is 272s in the
+# utility band (52/52 green, 234s of it three --selftest invocations), so ~980s in the band that
+# actually runs it — and it was CUT on 6 of 6 host runs, never once producing the post-deploy
+# verdict scripts/host-suites.manifest admits it for. A bound structurally below its suite's runtime
+# does not bound that suite, it DELETES it: the sensor is default-off and every artifact the
+# operator reads looks identical to a healthy one.
+# 1800 is ~1.8x the measured band figure, so an ordinary load spike does not re-open the hole. What
+# it costs is deploy CADENCE, never deploy safety: host_checks runs AFTER the advance and never
+# blocks, never rolls back, never changes the exit code, so a long host phase cannot touch the
+# deploy that already happened — it can only delay the NEXT one.
+# THIS SCRIPT HAS NO RUN LOCK — checked, not assumed, because a longer host phase is only safe if
+# something serialises the ticks. What serialises them is launchd, on the timer path only:
+# launchd.plist(5) StartInterval, verbatim — "If the job is running during an interval firing, that
+# interval firing will likewise be missed." com.claude.deploy-live is StartInterval 600, so the
+# ticks queue rather than overlap however long the host phase runs.
+# The path launchd does NOT cover is scripts/deploy-now.sh (`deploy-live.sh --force`, agent- or
+# desk-fired), which can land inside a running host phase. That was already true at 300s; this
+# widens the window it can land in. It is survivable for the same reason as above: by then the
+# advance is done and host_checks is a read-only `bats` run over $DEPLOY_REPO, so the overlap costs
+# load, not correctness.
+# The hang this bound exists to contain is still contained — and its known cause was removed at the
+# source by the `</dev/null` at the invocation site below.
+HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-1800}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
 
 DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0; OFFLINE=0
@@ -296,8 +322,25 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     # R6: a NAMED failure is the only red. rc alone is blind — bats masks a load-kill behind its
     # own pipefail'd pipeline and exits non-zero naming zero tests. That is CUT: a non-verdict
     # about the machine, never a claim about the tree, and it must never page as a failure.
-    if [ "$notok" -gt 0 ]; then      red="$red $s($notok)"; say "  RED  $s — $notok failing"
-    elif [ "$rc" -eq 124 ];  then    cut="$cut $s";         say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired (no verdict)"
+    #
+    # OUR BOUND IS TESTED FIRST, and that ordering is the rule, not a detail (2026-08-10, backlog
+    # cb9980e4b0e5). `notok > 0` used to be tested first, so a suite this script KILLED mid-corpus
+    # was reported RED off whatever it had emitted before the kill. A killed run is a non-verdict
+    # about the machine by the same R6 reasoning that covers rc-124-naming-nothing — and worse
+    # here, because the failing SET is a function of where the kill landed, so the `$s($notok)`
+    # title below (cc-backlog's event key is project+title+source) mints a NEW item every time load
+    # moves the truncation point. That is the sha-in-the-title non-idempotency, by another door.
+    # Found on tests/test-hermeticity-lint.bats: 52/52 green in a clean tree at 272s against this
+    # 300s bound, 6 of 6 host runs CUT, and the one RED it ever produced was a truncated run
+    # claiming a green tree was broken. The reached failures are NAMED in the line — a non-verdict
+    # must not also be a silence — but they do not page and do not file.
+    if [ "$rc" -eq 124 ]; then
+      cut="$cut $s"
+      if [ "$notok" -gt 0 ]
+        then say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired after $notok named failure(s) (truncated: no verdict)"
+        else say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired (no verdict)"
+      fi
+    elif [ "$notok" -gt 0 ]; then    red="$red $s($notok)"; say "  RED  $s — $notok failing"
     elif [ "$rc" -ne 0 ];    then    cut="$cut $s";         say "  CUT  $s — rc=$rc naming 0 tests (no verdict)"
     else                                                    say "  ok   $s"
     fi
