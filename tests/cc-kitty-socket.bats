@@ -36,11 +36,15 @@ EOF
 }
 
 mksock() { # bind a real unix socket at $1 (a plain file must NOT count as a socket)
-  python3 - "$1" <<'PY'
-import socket, sys
-s = socket.socket(socket.AF_UNIX)
-s.bind(sys.argv[1])
-PY
+  # THE BIND IS RELATIVE, AND THAT IS THE WHOLE POINT (item e1d43f93da19; this file is the 4th site
+  # of that one defect, found 2026-08-09 by censusing the class instead of the file). Darwin caps
+  # sun_path at 104 bytes against THE STRING HANDED TO bind(2), not the file's location, and $T here
+  # is $BATS_TEST_TMPDIR — launchd's 49-byte TMPDIR plus postland's own 21-byte postland-run.XXXXXX
+  # plus this suite's test names. Absolute, that overran the cap ONLY inside postland, so the suite
+  # hand-checked green and still appeared in three postland reds. chdir + bind the basename spends
+  # 10 bytes and lands the socket at the same absolute path.
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$1"
+  [ -S "$1" ]
 }
 
 @test "no sockets at all -> rc 4, no output" {

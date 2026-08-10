@@ -461,7 +461,14 @@ if [ -n "${CC_POSTLAND_PRELINTS+set}" ]; then
   # shellcheck disable=SC2206  # deliberate word-splitting: the seam is a space-separated list
   PRELINTS=($CC_POSTLAND_PRELINTS)
 else
-  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh scripts/subshell-cleanup-lint.sh)
+  # test-afunix-path-lint joined 2026-08-09, and THIS VERIFIER IS THE REASON IT EXISTS: an absolute
+  # AF_UNIX bind is green everywhere except inside this run, because the 104-byte sun_path cap is
+  # blown by this script's own $TMPDIR/postland-run.XXXXXX prefix (:1050,:1104) plus the test's name.
+  # It kept tests/boot-resume-launch.bats in 17 of 17 reds across 40h while every hand-check said
+  # green — including the re-run command this file PRINTS, which uses a short /tmp/pv-repro and so
+  # exonerates the very file it is meant to convict. Correct that a prelint red skips the corpus: a
+  # corpus verdict under that condition is a statement about path lengths, not about the tree.
+  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh scripts/subshell-cleanup-lint.sh scripts/test-afunix-path-lint.sh)
 fi
 # 600s, raised from 60s (2026-07-30): a bound must fit what it BOUNDS, in the band it actually runs
 # in. 60s was sized for a foreground ~3s lint and left no room for the band the launchd job imposes,

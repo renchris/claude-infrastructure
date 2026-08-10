@@ -1385,6 +1385,40 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── AF_UNIX absolute-bind ratchet (2026-08-09) ────────────────────────────────────────────────
+  # Same own-scope contract as the ratchets around it, for the blocker class with the WORST possible
+  # polarity: a fixture that binds an AF_UNIX socket by absolute path is green in every hand-check
+  # and red only inside postland-verify, whose TMPDIR is ~70 bytes longer — and postland's own
+  # printed re-run command uses a short /tmp path, so the operator's repro EXONERATES the file.
+  # Measured: tests/boot-resume-launch.bats sat in 17 of 17 postland reds across 40h, no green stamp
+  # existed for that whole window, and deploy-live refused every sweep — so nothing that landed on
+  # trunk reached the live ~/.claude layer. Two prior sessions each fixed the files in front of them
+  # (item e1d43f93da19 fixed two on 2026-08-06) and neither could see the other two.
+  #
+  # It belongs HERE for the reason its siblings document: enforced only by its own suite it is
+  # post-hoc DETECTION, and gate-select maps that suite from exactly one edge — the lint — so ADDING
+  # a fixture never selects it (memory: enforcement-must-live-at-the-chokepoint). Sub-second, a pure
+  # grep, and it names file and line to the session that wrote them.
+  AFUNIX_LINT="${SHIP_LAND_AFUNIX_LINT:-scripts/test-afunix-path-lint.sh}"
+  if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$AFUNIX_LINT" ]]; then
+    local aown=""
+    if [[ "${SHIP_LAND_AFUNIX_OWN_SCOPE:-on}" != "off" ]]; then
+      aown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
+    fi
+    echo "→ gate: AF_UNIX absolute-bind ratchet (104-byte sun_path bombs in fixtures)" >&2
+    CC_AFUNIX_OWN="$aown" "$AFUNIX_LINT" tests >&2; local arc=$?
+    if [[ "$arc" -eq 2 ]]; then
+      echo "⛔ gate: afunix-path-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      gate_red afunix
+      return 1
+    elif [[ "$arc" -ne 0 ]]; then
+      echo "✗ gate: AF_UNIX RED — a fixture THIS LAND CHANGES binds a socket by absolute path." >&2
+      echo "  It will pass for you and red the whole tree inside postland; the fix is named above." >&2
+      gate_red afunix
+      return 1
+    fi
+  fi
+
   # ── git-identity escape ratchet (2026-08-05) ──────────────────────────────────────────────────
   # Same own-scope contract as the two ratchets above, for a blocker class whose blast radius is the
   # widest of the three: `git -C ""` is a documented NO-OP, so a fixture doing

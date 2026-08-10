@@ -105,6 +105,29 @@ setup() {
   echo "$output" | grep -q "CMD:"
 }
 
+# A REAL AF_UNIX socket, asserted — a plain file would make the two cases below vacuous.
+#
+# THE BIND IS RELATIVE, AND THAT IS THE WHOLE POINT (postland RED 2026-08-08..09, 17 consecutive
+# sweeps). Darwin caps sun_path at 104 bytes, and the cap applies to THE STRING HANDED TO bind(2) —
+# not to the file's absolute location. Binding the absolute path charged the whole $BATS_TEST_TMPDIR
+# prefix against a budget the fixture does not control, and this file's two longest test NAMES are
+# part of that prefix. So the suite read 11/11 green in every hand-check — including the re-run
+# command postland itself prints, which uses a SHORT /tmp/pv-repro — and went red on tests 9 and 10
+# inside postland, whose corpus TMPDIR is launchd's 49-byte /var/folders/… plus 21 bytes of
+# postland-run.XXXXXX (scripts/postland-verify.sh:1050,1104). chdir + bind the basename spends 10
+# bytes instead of ~130 and changes nothing else: the socket file still lands at the same absolute
+# path, and `[ -S ]` still asserts it there.
+#
+# THIS IS THE THIRD AND FOURTH SITE OF ONE DEFECT. tests/kitty-socket-address.bats and
+# tests/handoff-fire-kitty-daemon.bats already carry this exact fix and this exact comment
+# (item e1d43f93da19, postland RED 2026-08-06); this file and tests/cc-kitty-socket.bats were
+# missed because a per-file fix cannot see its own class. The invariant is asserted corpus-wide by
+# scripts/test-afunix-path-lint.sh so a fifth site cannot land silently.
+mksock() {
+  /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$1"
+  [ -S "$1" ]
+}
+
 # ── DAEMON-CONTEXT DISPATCH (2026-08-07). Under launchd there is no terminal env at all, and
 # until this date the fall-through was the iTerm2 arm + `open -a iTerm` — which RESURRECTED
 # iTerm2 behind a kitty-fleet operator (03:51:18 that morning, 6 sessions fired into it while
@@ -115,10 +138,7 @@ setup() {
 @test "daemon context (no terminal env) + live kitty socket -> kitty arm" {
   unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID CC_TERM_KITTY_TO KITTY_LISTEN_ON
   mkdir -p "$BATS_TEST_TMPDIR/sock"
-  python3 - "$BATS_TEST_TMPDIR/sock/kitty-42" <<'PY'
-import socket, sys
-socket.socket(socket.AF_UNIX).bind(sys.argv[1])
-PY
+  mksock "$BATS_TEST_TMPDIR/sock/kitty-42"
   cat > "$BATS_TEST_TMPDIR/ps" <<'EOF'
 #!/bin/bash
 pid=""; col=""
@@ -145,10 +165,7 @@ EOF
 @test "POSITIVE CONTROL: the resolver's wall-clock budget is REACHED (a crushed one loses the kitty arm)" {
   unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID CC_TERM_KITTY_TO KITTY_LISTEN_ON
   mkdir -p "$BATS_TEST_TMPDIR/sock"
-  python3 - "$BATS_TEST_TMPDIR/sock/kitty-42" <<'PY'
-import socket, sys
-socket.socket(socket.AF_UNIX).bind(sys.argv[1])
-PY
+  mksock "$BATS_TEST_TMPDIR/sock/kitty-42"
   cat > "$BATS_TEST_TMPDIR/ps" <<'EOF'
 #!/bin/bash
 pid=""; col=""
