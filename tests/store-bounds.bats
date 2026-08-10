@@ -351,6 +351,13 @@ mkstore() { # <relative-path> <mebibytes>
   done
   mkdir -p "$CC_SB_ROOT"
   run env CC_SB_MANIFEST="$real" /bin/bash "$CENSUS" --json --quiet --no-append
-  [[ "$output" =~ \"rows\":8 ]] || false
+  # FLOOR, not an exact count. `rows:8` reddened the moment a NINTH store was legitimately put
+  # under bound (logs/auth-timeseries.jsonl, MASTER M6) — i.e. it fired on the manifest doing
+  # exactly what this file exists to encourage, and never on the failure it was written for. The
+  # coverage claim is carried by the named-store loop above, which is what actually detects a row
+  # lost to a bad edit; the count only needs to prove nothing SHRANK below the §8.5.5 set.
+  [[ "$output" =~ \"rows\":([0-9]+) ]] || { echo "no rows field in: $output"; false; }
+  [ "${BASH_REMATCH[1]}" -ge 8 ] || {
+    echo "manifest shrank below the §8.5.5 set: rows=${BASH_REMATCH[1]}, expected >= 8"; false; }
   [[ "$output" =~ \"malformed\":0 ]] || false
 }

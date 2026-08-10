@@ -43,3 +43,4 @@ session-index.db|96|9|retention backlogged b0d889846885
 state/session-index.db.bak-*|1|9|stale backup — delete candidate, operator call
 logs/cc-reaper.log|16|4|rotate
 history.jsonl|16|-|rotate
+logs/auth-timeseries.jsonl|32|-|rotate: already in rotate-autonomy-logs.sh DEFAULT_TARGETS (25 MiB, keep 8) — a breach here means the rotator is not running, not that the store is misbehaving
