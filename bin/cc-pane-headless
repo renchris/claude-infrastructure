@@ -116,7 +116,35 @@ v_spawn() {
   # NO generated shell anywhere: argv is exec'd directly as "$@" and is only ever SERIALISED for
   # the human-readable record, never re-parsed or re-executed. That removes the whole
   # json-quoting-is-not-shell-quoting injection class by construction.
-  ( cd "$cwd" && exec "$@" ) >"$dir/out.log" 2>&1 </dev/null &
+  #
+  # THE CHILD'S IDENTITY IS SET HERE, and both halves are load-bearing:
+  #
+  #   export CC_PANE_ID="$id"   — until this line, `CC_PANE_ID` was READ by 21 files in this repo
+  #                               and EXPORTED by none, so the seam's own key never existed in any
+  #                               process's environment. A headless agent could not name itself,
+  #                               and its inbox ("$dir/inbox") was unreachable from inside the agent.
+  #
+  #   unset ITERM_SESSION_ID    — the DANGEROUS half. `exec` inherits the spawner's environment, so
+  #                               a headless agent fired from a pane-hosted session carried the
+  #                               SPAWNER's `ITERM_SESSION_ID`. MEASURED 2026-08-10: spawning with
+  #                               ITERM_SESSION_ID=w0t0p0:SPAWNER-PANE-77 produced a child whose env
+  #                               reported exactly that, so every class-B scraper — the ones that
+  #                               answer "which pane is process X in?" by reading X's environment
+  #                               (scripts/desk-arm-live.sh:103, scripts/desk-recycle-invariant.sh:146,
+  #                               hooks/teammate-auto-shutdown.sh:356, bin/cc-reconcile:169) —
+  #                               resolved a headless agent to the SPAWNER's pane.
+  #
+  #                               The plan (TERMINAL_AGNOSTIC_L3_L4.md §7.9) predicted those scrapers
+  #                               would "silently find nothing and skip the session — a false
+  #                               negative, not an error." That was wrong in the dangerous direction:
+  #                               the answer was not missing, it was CONFIDENTLY WRONG, and
+  #                               teammate-auto-shutdown.sh resolves a pane IN ORDER TO CLOSE IT.
+  #                               Unsetting converts a wrong pane into an honest absence, and
+  #                               CC_PANE_ID supplies the right answer under the correct key.
+  #
+  # Both run INSIDE the subshell, so the parent's own environment is never mutated.
+  ( cd "$cwd" && export CC_PANE_ID="$id" && unset ITERM_SESSION_ID && exec "$@" ) \
+      >"$dir/out.log" 2>&1 </dev/null &
   pid=$!
   pstart="$(pstart_of "$pid")"
 
