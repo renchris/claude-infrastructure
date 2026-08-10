@@ -753,3 +753,71 @@ a real dark dependency rather than a hypothetical one.
 | R-10 | **The executor's remaining blocker is now `cc-authbrowser`, not the oracle** (§11.2). Phase 2 ran unattended once, 2026-07-30T21:36, and died at `cc-authbrowser <acct> --start` with exit 4 (BROWSER-FAILED) — the transcript was kept at `/tmp/cc-relogin-next.out` and has since been reaped. With `f001ae29` in place a jitter-only phase 1 now correctly falls through to phase 2, so this leg will be reached far more often; if it still cannot start a browser, the automation escalates honestly instead of claiming success, which is strictly better but still not a renewal. **Read at the next window (`next`/`next4` 2026-08-30):** a `BROWSER-FAILED` vs a `PROVEN` in `~/.claude/logs/cc-relogin.log`, and whether `E3` now emits `moved=jitter` where it used to emit `yes`. | 7 | Needs a real cliff to exercise, and `cc-authbrowser`'s exit 4 has no captured transcript to diagnose from — the failure must be reproduced, not inferred. |
 | R-11 | **The F16 `REQUIRED → dl=NOW` rule fires on accounts that need nothing.** On 2026-08-03 `next2` was escalated and attempted twice at "T-0h" while holding **674.6 h** (28 days) of cliff; `cc-relogin` refused both with *"no re-auth needed — healthy (auth=stale …)"*. The `--login-status` sweep had classified it REQUIRED via `login_fixable`, and F16 resolves a REQUIRED row with no parseable deadline to NOW. `7c7a6676` stops the repeat-paging (one row per cycle, not per tick), but the **first** row is still raised on an account the actuator immediately declares healthy. The structural question is that escalation is deliberately written BEFORE the attempt (so a hung attempt cannot swallow it) and nothing RETRACTS it when the attempt refutes it. | 7 | The escalate-first ordering is correct and load-bearing; adding a retraction path is a real design change to the class-C board's contract, not a one-liner, and it belongs with row 10 (which renders the board). |
 | R-7 | **A campaign-wide question this row can only raise, not answer:** the F14 defect class — *a test fixture more parseable than the producer it claims to model* — is invisible to every gate we have. `hours_secs` had **zero** effective coverage while its suite reported 33 passing tests. Worth a sweep: for every stub that renders a sibling tool's output, does it emit that tool's LITERAL formatting? | 1 (owns `run_gate`) / campaign | Out of row 7's scope; row 7 fixed its own two instances. A lint is conceivable (compare a stub's emitted shape against the producer's formatter) but is a real design problem, not a one-liner. |
+
+## §13 M7 — utilization-maximizing routing (2026-08-10, operator /goal)
+
+**Scope (frozen):** tweak `/handoff` × `/accounts` so concurrent WORKING sessions spread instead
+of piling onto one account's 5h window, AND the account whose weekly quota expires soonest
+relative to its remaining usage is exhausted first — the fleet was stranding weekly quota at
+reset. Execution locus: **L** (lead-inline — one coupled scoring change in one binary + its
+suites; no independent parallel units).
+
+**The evidence (one live snapshot exhibits every defect).** 2026-08-10T08:13Z: `next3` held the
+fleet's soonest-expiring quota — weekly 81%, reset 27.8h, ~19% about to strand — and was
+EXCLUDED from routing (`k=28 ≥ KMAX=8`) while its 5h window sat at 60%: `k` counts PANES
+(mostly idle desks), not burn. Every fire inside the 90s rank-cache TTL then took rank[0] =
+`next2` (weekly 13%, reset 5 DAYS out). By 09:53Z the inversion had run to its terminal state:
+next3 5h-capped at 100% carrying 36 sessions while three accounts with 5-6-day runways sat
+nearly idle. The pile-up and the under-exhaustion are one defect seen from two ends. Linear
+urgency was also indifferent exactly where it mattered: `0.19/27.3 ≈ 0.87/122.3`.
+
+**The four terms** (all in `bin/claude-accounts`, all fail-soft to pre-M7 behavior on missing
+data, each kill-switched):
+
+| Term | What it does | Kill |
+|---|---|---|
+| `URGENCY_EXP` (γ=2) | `score = headroom / T**γ` — deadline-DOMINANT: the required rate weighted by how soon it stops being achievable ("prioritize exhausting the most immediate expiry, especially when remaining is large for the time left" — the operator's sentence as algebra). γ=1 is byte-identical prior math. | `CC_ROUTE_URGENCY_EXP=1` |
+| `k_work` | WORKING sessions (transcripts written ≤10min, `working_concurrency()`, realpath-deduped, 2s walk budget → `None` → census fallback) replace the pane census in KMAX/KF. Census keeps display + heal's k==0 gate. | `CC_ROUTE_KWORK=off` |
+| phantoms | `--assign <acct>` appended by handoff-fire at pick time (`~/.claude/logs/account-assignments.jsonl`, self-pruned at 400 lines + rotate-autonomy-logs backstop); counted as +1 working session for 15min at RANK time — burst fires walk down the ranking inside the cache TTL. | `CC_ROUTE_ASSIGN=off` |
+| 5h projection | SF evaluated at `session_pct + measured burn × lookahead` (burn from the utilization series' newest ≤1.5h pair; lookahead capped at the 5h reset). Soften-ONLY by construction — can cost a tie, can never trip an exclusion or halt the fleet. | `CC_ROUTE_PROJ=off` |
+
+Plus the **pace surface** (the goal's own metric): `pace to 100%: <acct> N%/d over <T> (recent
+M%/d — BEHIND)` in the table + readout footers; `weekly_need_pct_per_day` + `burn_wk_ppd` in
+`--json`. BEHIND only when measured < needed — no invented thresholds.
+
+**Contracts unchanged:** `--route`/`--rank` stdout shapes, exit 0/2/3 classification,
+`no-fable-limit` entitlement semantics, cliff terms and yield, the get_data test anchor. New SSOT
+keys are OPTIONAL (`R.get` defaults) — an un-migrated accounts.json routes identically minus M7.
+
+**Verified:** 113 tests green across 6 suites (core +8 M7 tests incl. the frozen snapshot as a
+fixture: γ=2 routes it to next3, γ=1 provably inverts; census-fallback; phantom demote/exclude;
+projection reset-cap; ledger TTL/prune/malformed; `--assign` CLI) + new
+`tests/handoff-fire-assign.bats` (call-site wiring: fires on commit, silent on
+dry/recycle/explicit-launcher/hermetic-harness, advisory-never-fatal).
+
+**Learnings.**
+- **The kmax raise (4→8, §11) treated the symptom of a category error.** The counter was raised
+  because it "sees ALL live sessions" — the honest fix was that a pane census is a CEILING on
+  burn, not a measure of it. Charging `k_work` un-excludes the account the goal most needs
+  burned while capping true pile-up harder (8 WORKING sessions is a real cap; 8 panes never was).
+- **A rank served from a cache needs a write-side decrement or bursts defeat any scoring.** No
+  scoring function fixes same-rows→same-answer; the fire itself must charge the account
+  (`--assign`), and over-counting during the phantom/real overlap (~13min) errs toward MORE
+  spread — the safe direction.
+- **M7 made every CLI invocation a reader of two live series** (utilization, assignments), which
+  instantly un-hermeticized 2 CLI suites whose fixtures reuse real account names (core test 26
+  inherited the REAL fleet's burn rates and flipped its ordering). `CC_UTIL_LOG`/`CC_ASSIGN_LOG`
+  pins in setup() + env-overridable paths. Rule: a new ambient input to a CLI is a new fixture
+  surface for every suite that drives it.
+- **A separate live defect on this box corrupted the build itself** (filed to backlog): text
+  passing through the agent Bash tool's zsh gets the bare token `b``a``t``s` rewritten to the
+  cc-bats wrapper path — measured corrupting a heredoc-written test literal in tests/ AND /tmp,
+  and the operator's own transplant context file. Write/Edit tools bypass the shell and are
+  immune (this section is written by one). Workaround adopted: never write file content through
+  shell heredocs.
+
+**§13 Remainders:** R13-1 dashboard `live` column still renders the pane census only — k_work is
+--json-only until a display slot is designed (82-col budget). R13-2 `pool-floor.sh` should
+eventually feed a measured per-session burn coefficient into the projection (today: account's own
+recent rate). R13-3 non-handoff-fire spawners (none known: cc-dispatch fires THROUGH
+handoff-fire) that grow a direct launch path must add the same `--assign` call.

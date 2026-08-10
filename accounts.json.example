@@ -28,7 +28,7 @@
     "credits_authorized": false
   },
   "router": {
-    "_": "Scoring constants for picking which account to route work to when more than one exists. Sane defaults; tune only if you've measured your own routing needs.",
+    "_": "Scoring constants for picking which account to route work to when more than one exists. Sane defaults; tune only if you've measured your own routing needs. The last four are OPTIONAL (code defaults match): URGENCY_EXP = deadline exponent (score = headroom/T^g; higher makes the soonest weekly reset dominate — use-it-or-lose-it; 1 = linear), KWORK_WINDOW_MIN = transcript-mtime minutes that count a session as WORKING (the router charges working sessions, not open panes), ASSIGN_TTL_MIN = minutes a fire-time `--assign` counts as a phantom working session (burst fires spread instead of stacking on the top pick), PROJ_LOOKAHEAD_H = hours the 5h-safety term projects measured burn ahead (capped at the 5h reset).",
     "S_CUT": 0.85,
     "S_SOFT": 0.5,
     "SF_FLOOR": 0.05,
@@ -39,7 +39,11 @@
     "NO_RESET_H": 168.0,
     "WEEKLY_FLOOR": 0.005,
     "FABLE_FLOOR": 0.02,
-    "JB_BONUS": 1.25
+    "JB_BONUS": 1.25,
+    "URGENCY_EXP": 2.0,
+    "KWORK_WINDOW_MIN": 10,
+    "ASSIGN_TTL_MIN": 15,
+    "PROJ_LOOKAHEAD_H": 1.0
   },
   "accounts": [
     {
