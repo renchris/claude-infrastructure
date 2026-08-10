@@ -73,16 +73,16 @@ setup() {
 # The "flat layout" test below is the control that keeps the fast path honest.
 TJ_DIR() { printf '%s/-Users-chrisren-Development-fixture' "$CC_PROJECTS_DIRS"; }
 write_transcript() {
-  local first="$1" later="${2:-}"
-  mkdir -p "$(TJ_DIR)"
-  : > "$(TJ_DIR)/$SID.jsonl"
-  # An isMeta turn FIRST, so the suite also pins that the extraction skips the harness's own injected
-  # context blocks — ".[0]" must be the BRIEF, not a SessionStart hook's payload.
-  jq -nc --arg t "session context injected by a hook" \
-    '{type:"user", isMeta:true, message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
-  jq -nc --arg t "$first" '{type:"user", message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
-  jq -nc '{type:"assistant", message:{content:[{type:"text",text:"working"}]}}' >> "$(TJ_DIR)/$SID.jsonl"
-  [ -n "$later" ] && jq -nc --arg t "$later" '{type:"user", message:{content:$t}}' >> "$(TJ_DIR)/$SID.jsonl"
+  local first="$1" later="${2:-}" tj
+  mkdir -p "$(TJ_DIR)"; tj="$(TJ_DIR)/$SID.jsonl"
+  {
+    # An isMeta turn FIRST, so the suite also pins that the extraction skips the harness's own
+    # injected context blocks — ".[0]" must be the BRIEF, not a SessionStart hook's payload.
+    jq -nc --arg t "session context injected by a hook" '{type:"user", isMeta:true, message:{content:$t}}'
+    jq -nc --arg t "$first" '{type:"user", message:{content:$t}}'
+    jq -nc '{type:"assistant", message:{content:[{type:"text",text:"working"}]}}'
+    [ -n "$later" ] && jq -nc --arg t "$later" '{type:"user", message:{content:$t}}'
+  } > "$tj"
   return 0
 }
 
@@ -90,7 +90,9 @@ load_proof_fn() {
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^transcript_for_sid() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^fired_contract_in_my_brief() {/,/^}/p' "$HF")"
-  SELF_RETIRE_CONTRACT_HEADING="$HEADING"
+  # EXPORTED, not merely set: it is read by the sed-extracted subject above, which shellcheck
+  # cannot see into — the same reason every fixture global below is exported.
+  export SELF_RETIRE_CONTRACT_HEADING="$HEADING"
 }
 
 # ── A. the CONSUMER: what counts as proof ────────────────────────────────────────────────────────
@@ -225,7 +227,7 @@ $HEADING
   eval "$(sed -n '/^fired_stamp_tenancy() {/,/^}/p' "$REPO_SRC/hooks/lib/origin-identity.sh")"
   [ ! -e "$CC_FIRED_DIR/$PANE.json" ] || { echo "fixture already stamped — the test proves nothing"; false; }
 
-  FIRE_MARKER="$MARKER" NB_ARMED_TARGET="ORIGIN-PANE-77"
+  export FIRE_MARKER="$MARKER" NB_ARMED_TARGET="ORIGIN-PANE-77"   # read by mark_fired_peer
   mark_fired_peer "$CC_FIRED_DIR" "$PANE" "$PWD" "" ""
   jq --arg at "$(_iso_now)" '. + {repairedAt:$at, repairedFrom:"brief-contract"}' \
      "$CC_FIRED_DIR/$PANE.json" > "$BATS_TEST_TMPDIR/r.json"
@@ -257,10 +259,12 @@ run_cleanup() { ( set +e; false; fire_cleanup ) > "$1" 2>&1 || true; }
   local wt="$BATS_TEST_TMPDIR/wt-live"
   mkdir -p "$wt"
 
-  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-live"
-  REPO="$BATS_TEST_TMPDIR"; SPAWNED_PANE=""; FIRE_LIVE_PANE="$PANE"
-  REG_DIR="$CC_REGISTRY_DIR"; FIRED_DIR="$CC_FIRED_DIR"; LAUNCH_DIR="$wt"; CMD="claude"
-  FIRING_SID="ORIGIN-PANE"; PROMPT_FILE=""; WANT_SELF_RETIRE=1
+  # EXPORTED: these are the fire_cleanup fixture, read by the sed-extracted
+  # fire_cleanup/ensure_registration/mark_fired_peer rather than by anything lexically here.
+  export FIRE_CLEAN_DONE=0 FIRE_CLEAN_POOL="" FIRE_CLEAN_WT="$wt" FIRE_CLEAN_BRANCH="wt-live"
+  export REPO="$BATS_TEST_TMPDIR" SPAWNED_PANE="" FIRE_LIVE_PANE="$PANE"
+  export REG_DIR="$CC_REGISTRY_DIR" FIRED_DIR="$CC_FIRED_DIR" LAUNCH_DIR="$wt" CMD="claude"
+  export FIRING_SID="ORIGIN-PANE" PROMPT_FILE="" WANT_SELF_RETIRE=1
   run_cleanup "$BATS_TEST_TMPDIR/live.out"
 
   [ -f "$CC_FIRED_DIR/$PANE.json" ] \
@@ -276,9 +280,11 @@ run_cleanup() { ( set +e; false; fire_cleanup ) > "$1" 2>&1 || true; }
   local wt="$BATS_TEST_TMPDIR/wt-cold"
   mkdir -p "$wt"
 
-  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-cold"
-  REPO="$BATS_TEST_TMPDIR"; SPAWNED_PANE=""; FIRE_LIVE_PANE=""
-  REG_DIR="$CC_REGISTRY_DIR"; FIRED_DIR="$CC_FIRED_DIR"
+  # EXPORTED: these are the fire_cleanup fixture, read by the sed-extracted
+  # fire_cleanup/ensure_registration/mark_fired_peer rather than by anything lexically here.
+  export FIRE_CLEAN_DONE=0 FIRE_CLEAN_POOL="" FIRE_CLEAN_WT="$wt" FIRE_CLEAN_BRANCH="wt-cold"
+  export REPO="$BATS_TEST_TMPDIR" SPAWNED_PANE="" FIRE_LIVE_PANE=""
+  export REG_DIR="$CC_REGISTRY_DIR" FIRED_DIR="$CC_FIRED_DIR"
   run_cleanup "$BATS_TEST_TMPDIR/cold.out"
 
   [ ! -f "$CC_FIRED_DIR/$PANE.json" ] || { echo "stamped a pane that was never created"; false; }
@@ -296,10 +302,12 @@ run_cleanup() { ( set +e; false; fire_cleanup ) > "$1" 2>&1 || true; }
   local wt="$BATS_TEST_TMPDIR/wt-noreclose"
   mkdir -p "$wt"
 
-  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-noreclose"
-  REPO="$BATS_TEST_TMPDIR"; SPAWNED_PANE=""; FIRE_LIVE_PANE="$PANE"
-  REG_DIR="$CC_REGISTRY_DIR"; FIRED_DIR="$CC_FIRED_DIR"; LAUNCH_DIR="$wt"; CMD="claude"
-  FIRING_SID="ORIGIN-PANE"; PROMPT_FILE=""; WANT_SELF_RETIRE=1; FIRE_FAILED_CLOSE_PANE=1
+  # EXPORTED: these are the fire_cleanup fixture, read by the sed-extracted
+  # fire_cleanup/ensure_registration/mark_fired_peer rather than by anything lexically here.
+  export FIRE_CLEAN_DONE=0 FIRE_CLEAN_POOL="" FIRE_CLEAN_WT="$wt" FIRE_CLEAN_BRANCH="wt-noreclose"
+  export REPO="$BATS_TEST_TMPDIR" SPAWNED_PANE="" FIRE_LIVE_PANE="$PANE"
+  export REG_DIR="$CC_REGISTRY_DIR" FIRED_DIR="$CC_FIRED_DIR" LAUNCH_DIR="$wt" CMD="claude"
+  export FIRING_SID="ORIGIN-PANE" PROMPT_FILE="" WANT_SELF_RETIRE=1 FIRE_FAILED_CLOSE_PANE=1
   run_cleanup "$BATS_TEST_TMPDIR/noreclose.out"
 
   ! grep -q "HF_CLOSE_CALLED" "$BATS_TEST_TMPDIR/noreclose.out" \
