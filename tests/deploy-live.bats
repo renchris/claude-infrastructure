@@ -1130,3 +1130,75 @@ offbox_stamp() { # <rev> [scope] — write an off-box GREEN for that rev's TREE
   [ "$status" -eq 0 ]
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
 }
+
+# ── G · A GREEN ON LIVE HEAD IS A STATE, NOT A TARGET (2026-08-10, backlog 3b22efbc2340) ──────────
+# `merge-base --is-ancestor X X` is TRUE, so T1's ancestry test used to match live HEAD against
+# ITSELF and set TARGET=HEAD. Everything below T1 is wrapped in `if [ -z "$TARGET" ]`, so that one
+# reflexive match skipped T1H and T2 entirely and made the lag budget STRUCTURALLY UNREACHABLE:
+# once the layer sat on any green tree the lane said "already deployed" and exited 0 however far
+# trunk ran ahead — and under --auto that path is SILENT by design. One green FROZE the layer where
+# zero greens did not, which is strictly worse than the loud refusal it replaced.
+# G1/G2 are a discriminating PAIR: identical shape, the only difference is whether HEAD is green.
+# Before the fix G1 failed and G2 passed, so the pair indicts the reflexive match and nothing else.
+
+@test "G1 a green ON live HEAD does NOT freeze the ladder — T2 still degrades past the budget" {
+  advance_origin b c d
+  stamp HEAD green                               # the live layer's OWN tree is green
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 2 999                                  # lag 3 > budget 2 ⇒ T2 is authorised
+  [ "$status" -eq 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" != "$before" ] || false
+  [ "$(git -C "$SHARED" rev-list --count HEAD..origin/main)" -eq 0 ] || false
+  [[ "$output" == *"DEGRADED deploy"* ]] || false
+  # the refusal text names the real state, not a rollback hazard that is not present
+  [[ "$output" == *"newest GREEN tree IS live HEAD"* ]] || false
+}
+
+@test "G2 CONTROL — the identical shape with NO green anywhere degrades too (so G1 is not vacuous)" {
+  advance_origin b c d
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 2 999
+  [ "$status" -eq 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" != "$before" ] || false
+  [[ "$output" == *"DEGRADED deploy"* ]] || false
+}
+
+@test "G3 INSIDE the budget a green on HEAD is still the benign 'already deployed' exit 0" {
+  # The state the fix must NOT convert into a refusal: green on the layer, a few unstamped commits
+  # above, lag well inside budget. Exit 0, no advance, and it still says "already deployed".
+  advance_origin b c
+  stamp HEAD green
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 25 999
+  [ "$status" -eq 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [[ "$output" == *"already deployed"* ]] || false
+  [[ "$output" == *"2 un-stamped commit(s) above"* ]] || false
+}
+
+@test "G4 T1H OUTRANKS the green-on-HEAD rest state — a proven tree deploys, budget or not" {
+  # Ordering proof: the benign exit sits AFTER T1H, so positive off-box evidence above the layer
+  # still advances instead of being swallowed by "already deployed". Budget deliberately wide open.
+  advance_origin b c
+  stamp HEAD green
+  offbox_stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 999 999
+  [ "$status" -eq 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ] || false
+  [[ "$output" == *"HERMETIC deploy"* ]] || false
+}
+
+@test "G5 past the budget with trunk RED all the way down: green-on-HEAD refuses LOUDLY, not exit 0" {
+  # The freeze is still a freeze — the fix must not launder it into silence. Everything above the
+  # layer is red, so T2 finds nothing and T3 refuses with a page, despite HEAD being green.
+  advance_origin b c
+  stamp HEAD green
+  stamp origin/main red
+  stamp "origin/main~1" red
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 1 999
+  [ "$status" -ne 0 ] || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+  [[ "$output" == *"red all the way down"* ]] || false
+}

@@ -541,7 +541,7 @@ if [ "$OFFLINE" -eq 0 ] && [ -x "$OFFBOX_PULL_BIN" ]; then
   esac
 fi
 
-TARGET=""; UNSTAMPED=0; BANNER=""; TIER=""; GREEN_SHA=""; RED_WALKED=0
+TARGET=""; UNSTAMPED=0; BANNER=""; TIER=""; GREEN_SHA=""; RED_WALKED=0; GREEN_AT_HEAD=""
 if [ ! -d "$STAMPS_DIR" ]; then
   # The verification net is not active yet. Deploying is a decision, not a default.
   if [ "$BOOTSTRAP" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
@@ -587,7 +587,22 @@ else
       # BEHIND live HEAD is history, not lag — bin/cc-blockers:425 says exactly that in its own
       # comment — so selecting it as TARGET only to be refused 60 lines later is what turned a
       # transient miss into an ABSORBING state: the same target, refused identically, 534 times.
-      if g merge-base --is-ancestor "$HEAD_SHA" "$sha" >/dev/null 2>&1; then
+      # A GREEN ON LIVE HEAD IS A STATE, NOT A TARGET (2026-08-10, backlog 3b22efbc2340).
+      # `merge-base --is-ancestor X X` is TRUE, so this test used to match HEAD against ITSELF,
+      # set TARGET=HEAD, and — because everything below is wrapped in `if [ -z "$TARGET" ]` —
+      # skip T1H and T2 entirely. The lag budget then became STRUCTURALLY UNREACHABLE: once the
+      # live layer sat on any green tree, the lane reported "already deployed" and exited 0 no
+      # matter how far trunk ran ahead, and under --auto that path is SILENT by design. Measured
+      # with a fixture pair: green-on-HEAD + 30 commits above (budget 25) ⇒ no advance, lag stays
+      # 30, exit 0; the identical case with NO green anywhere ⇒ T2 degrades and converges to 0.
+      # So one green FROZE the layer where zero greens did not — strictly worse than the loud
+      # refusal it replaced, because exit 0 reads as healthy.
+      # The fix is the STRICT half of the same ancestry test: a target must be ABOVE the layer.
+      # HEAD-is-green is remembered instead, and spent below as the benign no-advance exit — the
+      # message and exit code that state is entitled to, once T1H and T2 have had their turn.
+      if [ "$sha" = "$HEAD_SHA" ]; then
+        GREEN_AT_HEAD=1; break                  # nothing above was green; below is history
+      elif g merge-base --is-ancestor "$HEAD_SHA" "$sha" >/dev/null 2>&1; then
         TARGET="$sha"; UNSTAMPED="$scanned"; TIER=T1; break
       fi
     fi
@@ -619,14 +634,27 @@ EOF
     # inside this branch. LAG_COMMITS is the same precondition T2 already relies on 15 lines below.
     if [ "$LAG_COMMITS" -eq 0 ]; then
       [ "$AUTO" -eq 1 ] && damp_clear
-      asay "at trunk tip ${HEAD_SHA:0:12} — nothing above the live layer to deploy"
+      # Two spellings of one empty candidate set, kept distinct because the evidence differs: with
+      # a green ON the layer this is the VERIFIED steady state, without one it is merely the tip.
+      # Both are exit 0; conflating them would drop the only positive fact the lane ever reports.
+      if [ -n "$GREEN_AT_HEAD" ]; then
+        asay "already deployed — live layer is at the newest deployable commit ${HEAD_SHA:0:12} (0 un-stamped commit(s) above)"
+      else
+        asay "at trunk tip ${HEAD_SHA:0:12} — nothing above the live layer to deploy"
+      fi
       exit 0
     fi
 
     # T1 missed, in one of two states. WHICH one is a diagnosis for the page and the operator; the
     # policy below is identical either way, so the tier logic never branches on it again.
     RSTEM="deploy-blocked"
-    if [ -n "$GREEN_SHA" ]; then
+    if [ -n "$GREEN_AT_HEAD" ]; then
+      # The newest green IS the live layer, so "no green descendant" is true but reads as a
+      # rollback hazard; the real state is that nothing ABOVE has verified yet. Only reachable
+      # past the lag budget (inside it, the benign exit below returns first).
+      RKEY="green-at-head:${HEAD_SHA:0:12}"
+      RMSG="the newest GREEN tree IS live HEAD ${HEAD_SHA:0:12}; none of the $LAG_COMMITS commit(s) above it has verified"
+    elif [ -n "$GREEN_SHA" ]; then
       RKEY="green-behind:${GREEN_SHA:0:12}"
       RMSG="no GREEN tree is a DESCENDANT of live HEAD ${HEAD_SHA:0:12} (the newest one, ${GREEN_SHA:0:12}, is BEHIND it — deploying that would report a deploy that never happened)"
     else
@@ -703,6 +731,21 @@ EOF
           fi
           ;;
       esac
+    fi
+
+    # ── GREEN-ON-HEAD, INSIDE BUDGET · the benign no-advance exit ────────────────────────────────
+    # Reached only after T1H and T2 have both declined, which is the whole point of moving this
+    # state down here: it used to be decided ABOVE the ladder (T1 matching HEAD against itself),
+    # which is what made the budget unreachable. Ordering it last means a positive off-box verdict
+    # (T1H, which carries no lag budget) still deploys a proven tree instead of resting on
+    # "already deployed", and a tripped budget still degrades through T2.
+    # LAG_TRIP empty is the guard: inside the budget this is the healthy steady state and exit 0
+    # is honest. PAST the budget it is a freeze, and the refusal path below says so with a page —
+    # so the one green on the layer can no longer buy unlimited silence.
+    if [ -z "$TARGET" ] && [ -n "$GREEN_AT_HEAD" ] && [ -z "$LAG_TRIP" ]; then
+      [ "$AUTO" -eq 1 ] && damp_clear
+      asay "already deployed — live layer is at the newest deployable commit ${HEAD_SHA:0:12} ($LAG_COMMITS un-stamped commit(s) above)"
+      exit 0
     fi
   fi
 
