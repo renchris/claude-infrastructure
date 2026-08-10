@@ -340,7 +340,8 @@ $HOME/.claude/logs/capacity-alarm.jsonl
 $HOME/.claude/logs/compressor-sentinel.jsonl
 $HOME/.claude/logs/compressor-sentinel-snap.log
 $HOME/.claude/logs/pane-spawns.jsonl
-$HOME/.claude/logs/auth-timeseries.jsonl"
+$HOME/.claude/logs/auth-timeseries.jsonl
+$HOME/.claude/logs/account-utilization.jsonl"
 
 # capacity-alarm.jsonl joined 2026-07-31, in the SAME commit that took its sampler from 600 s to
 # 60 s. It had never been a target because at 144 rows/day it was not going anywhere; at 1,440
