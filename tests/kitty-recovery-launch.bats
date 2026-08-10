@@ -70,10 +70,26 @@ STUB
 
   # osascript stub — records argv AND (heredoc/`-` callers) stdin. Prints OSA_OUT on stdout, which
   # is how lr-handoff's FIRED capture sees a successful split.
+  #
+  # THE ECHO-VERIFY ARM (added 2026-08-10). Both iTerm2 arms below stopped at "a pane exists" until
+  # 5fff9df6 split create from type: the launcher now goes in through osa_type_verified, which types
+  # WITHOUT submitting, reads the pane's visible contents back, and sends the CR only if the line it
+  # typed is on screen (scripts/lib/cc-type-verified.sh). A stub that answers every call with the
+  # same OSA_OUT can never satisfy that read-back, so the verify fails, FIRED stays empty, and both
+  # iTerm2 kill-switch tests fail for a reason that is purely fixture: the subject is fine.
+  # Recognise the read-back call by its own last statement and echo the wire back — the helper
+  # anchors on a per-attempt nonce it MINTS, so this can only be satisfied by the text the subject
+  # actually typed on THIS attempt, never by a canned string. Trailing argv of that call is
+  # <sid> <wire> <presettle> <settle>, so the wire is the third from the end.
   cat > "$STUB/osascript" <<'STUB'
 #!/bin/bash
 printf 'ARGV: %s\n' "$*" >> "${OSA_LOG:?}"
 if [ "$#" -eq 0 ] || [ "${1:-}" = "-" ]; then cat >> "$OSA_LOG"; fi
+if [ "${OSA_TYPE_FAIL:-0}" != 1 ]; then
+  case " $* " in
+    *"return (contents of s)"*) printf '%s\n' "${@: -3:1}"; exit 0 ;;
+  esac
+fi
 [ -n "${OSA_OUT:-}" ] && printf '%s\n' "$OSA_OUT"
 [ "${OSA_FAIL:-0}" = 1 ] && exit 1
 exit 0
@@ -88,6 +104,16 @@ STUB
   # inherited from the operator's own window can never decide a verdict here.
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
+  # PIN THE MACHINE, for the same reason the terminal is pinned above. boot-resume-launch.sh runs
+  # cc_capacity_admit (scripts/lib/capacity-admit.sh) before it launches anything, and refuses above
+  # 2.0 loadavg per core — so its three tests below go red BY LOAD on a busy box while the subject is
+  # perfectly healthy. Measured 2026-08-10: green run after green run in isolation, then three
+  # simultaneous failures inside a 228-test sweep that was itself driving the load, and no failure at
+  # all on pristine trunk in the same order. That reads exactly like a regression in the diff and is
+  # not one — the corpus was deciding a verdict on machine state. Same pin and same reasoning as
+  # tests/handoff-orphaned-assignee.bats' CC_FIRE_CAPACITY_GATE; capacity-admit's own behaviour has
+  # its own coverage in tests/capacity-admit.bats, which is where that gate is exercised ON.
+  export CC_ADMIT_GATE=off
   export PATH="$STUB:$PATH"
 }
 
@@ -186,6 +212,23 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   echo "$output" | grep -q 'fired split pane'
 }
 
+# The CONTROL for the test above. Its verdict now depends on the osascript stub's read-back arm
+# answering the echo-verify, so that arm must be able to say NO — otherwise the stub grants every
+# fire a pass and "fired split pane" stops carrying information. OSA_TYPE_FAIL=1 makes the read-back
+# silent (the pane's screen never shows the typed line), which is exactly the mangled-line case
+# osa_type_verified exists for: the CR is never sent, FIRED stays empty, and the split must NOT be
+# announced as fired.
+@test "lr-handoff: a pane whose typed line cannot be verified is never announced as fired" {
+  mk_handoff_fixture
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="split" OSA_TYPE_FAIL=1
+  run fire "khan0009-0000-0000-0000-000000000009"
+  [ "$status" -eq 0 ]
+  grep -q 'split vertically with default profile' "$OSA_LOG"   # it was still ATTEMPTED
+  gone_out 'fired split pane'
+  [ ! -s "$KITTY_LOG" ]
+}
+
 # ── lr-reset-poller.sh — spawn_gui ────────────────────────────────────────────────────────────────
 
 # Sourcing the poller whole is not an option (it polls and can fire resumes), so the spawn seam is
@@ -202,6 +245,18 @@ load_spawn_gui() {
   eval "$(sed -n '/^lrp_bounded() {/,/^}/p' "$POLLER")"
   eval "$(sed -n '/^lrp_kitty() {/,/^}/p' "$POLLER")"
   eval "$(sed -n '/^spawn_gui() {/,/^}/p' "$POLLER")"
+  # Extracting ONE function drops the top-level preamble with it, and since 5fff9df6 the iTerm2 arm
+  # depends on two pieces of that preamble: the sourced osa_type_verified, and the LRP_TYPE_VERIFIED
+  # flag it sets. Without them spawn_gui takes its "verified typing unavailable ⇒ refuse the GUI
+  # path" branch and returns 1 — a REAL and deliberate behaviour, reached here only because the
+  # fixture is incomplete, which is the extracted-function trap this file's own NOTE warns about.
+  # Reproduce the preamble rather than stub the helper, so the assertions below still run against
+  # the real echo-verify (answered by the osascript stub's read-back arm in setup()).
+  # shellcheck source=../scripts/lib/cc-type-verified.sh
+  # shellcheck disable=SC1091
+  . "$REPO/scripts/lib/cc-type-verified.sh"
+  # shellcheck disable=SC2034  # read by the eval-extracted spawn_gui above, which shellcheck cannot see
+  LRP_TYPE_VERIFIED=1
 }
 
 @test "lr-reset-poller: inside kitty spawn_gui opens a kitty OS-window running the launcher" {
@@ -232,11 +287,17 @@ load_spawn_gui() {
 
 @test "lr-reset-poller: the kill switch restores the iTerm2 spawn verbatim (kitty untouched)" {
   export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  # The create call RETURNS the new session's id since 5fff9df6 — the command is addressed at that
+  # id afterwards, so a stub answering with nothing is now "the window could not be made".
+  export OSA_OUT="w0t0p1:5F1E0000-DEAD-BEEF-0000-000000000008"
   load_spawn_gui
   run spawn_gui "/tmp/lr-launch-fixture.sh"
   [ "$status" -eq 0 ]
   grep -q 'create window with default profile' "$OSA_LOG"
   grep -q 'com.googlecode.iterm2' "$OSA_LOG"
+  # …and the launcher went in as a SEPARATE verified step, not as a rider on the create.
+  grep -q 'exec /bin/bash /tmp/lr-launch-fixture.sh' "$OSA_LOG"
+  gone 'with default profile command' "$OSA_LOG"
   [ ! -s "$KITTY_LOG" ]
 }
 
