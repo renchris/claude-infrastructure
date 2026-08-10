@@ -37,10 +37,48 @@
 #                                                                  it never started work on; NOT
 #                                                                  counted as thrash (see SELF-RELEASE)
 #   block   <id> --needs "<operator-only step>"                  → status "blocked"
-#   unblock <id>                                                 → back to "open"
+#   unblock <id> [--by <sid>] [--force]                          → back to "open"; REFUSED on a
+#                                                                 done-latched item or a live claim,
+#                                                                 exactly as `reopen` is
+#                                                                 (see RE-OPEN EFFECT)
 #   needs   "<step>" [--run C] [--project P] [--session S]       → file it ALREADY blocked; echoes the id
 #   reap    [--dry-run]                                          → stale-claim maintenance sweep
 #   compact [--older-than-days N]                                (default N=30)
+#
+# ── RE-OPEN EFFECT (2026-08-10, backlog d6d8b259235d + 62daeb7d4463) ───────────────────────────
+# Status is a last-transition-wins FOLD, so `reopen` and `unblock` are two spellings of ONE effect:
+# the fold resolves to "open", and "open" is cc-dispatch's fire predicate. They were guarded very
+# differently — `reopen` refused a terminal item and a live claim (rc 4, both with the incident that
+# earned them); `unblock` refused nothing at all and was reachable by any caller.
+#
+# Measured hermetically, with the control that makes it a fact about the mechanism (both verbs, same
+# store, same two shapes):
+#     unblock over a DONE item      → rc 0, status done    → open      (silently un-completed)
+#     reopen  over a DONE item      → rc 4 REFUSED, status stays done  ← the control
+#     unblock over a LIVE claim     → rc 0, status claimed → open      (no liveness call at all)
+#     reopen  over that LIVE claim  → rc 4 REFUSED, status stays claimed
+#
+# Both halves had already been paid for in this store. 1a226422cb37 landed at 2026-08-08T02:00:24Z
+# with content-verified evidence, was unblocked at 03:21:48Z, folded to "open", and its owner found
+# it live 4 h later and had to re-assert `done`. And on 2026-08-07 a batch run unblocked 30+ items
+# in consecutive seconds from 19:45:11Z, returning thrash-blocked work to the wave; items resumed
+# the identical claim→reopen cycle within hours.
+#
+# NOBODY MISUSED THE TOOL, which is why this is code and not a rule. Both incidents were serviced as
+# ordinary "lift the block so the owner can close it" tickets, filed on the reasonable-but-false
+# premise that `blocked` gates `done` — it does not (a `done` is accepted while blocked; verified
+# twice), so that whole class of ticket was unnecessary in the first place. And the natural-language
+# remedy the reports asked for — "re-read the block reason before unblocking" — is not a predicate a
+# machine can check. The STATE the item is in is. So that is what is gated, and the guard is keyed on
+# the EFFECT rather than the verb, because a guard that enumerates spellings gets out-run by the next
+# one (memory: denylist-enumerates-spellings-not-the-class).
+#
+# WHAT IS DELIBERATELY NOT GUARDED: `blocked → open`, the whole and only legitimate use of unblock,
+# and the transition scripts/thrash-block-recover.sh drives on every recovery run. Guarding it would
+# have deleted the capability instead of the defect (memory:
+# guard-universalization-deletes-a-capability-silently). `open → open` is likewise untouched — a
+# duplicate unblock from two peers servicing the same ticket is benign, and turning it into an error
+# would spend a refusal on a no-op.
 #
 # ── VENUE (2026-08-07, backlog 191d4d056c98) ────────────────────────────────────────────────────
 # A claim may carry `--venue local|cloud`. It names WHERE the worker runs, and it exists for exactly
@@ -849,11 +887,13 @@ cmd_transition() {
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
   fi
-  # --force overrides the reopen guards, the claim LEASE and the claim DONE-GUARD, and nothing else
-  # — on any other event it is an ERROR, never silently ignored (a flag that no-ops reads as though
-  # it worked).
-  if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != claim ]; then
-    printf 'cc-backlog %s: --force applies only to reopen and claim\n' "$event" >&2; return 2
+  # --force overrides the re-open-effect guards (reopen AND unblock), the claim LEASE and the claim
+  # DONE-GUARD, and nothing else — on any other event it is an ERROR, never silently ignored (a flag
+  # that no-ops reads as though it worked). `unblock` is in the list because it now carries those
+  # guards; a guard with no escape hatch is one the operator can only route around by hand-editing
+  # the ledger, which is the one thing this store must never invite.
+  if [ "$force" -eq 1 ] && [ "$event" != reopen ] && [ "$event" != unblock ] && [ "$event" != claim ]; then
+    printf 'cc-backlog %s: --force applies only to reopen, unblock and claim\n' "$event" >&2; return 2
   fi
   # --venue is claim-only and CLOSED-SET. Both halves matter. Claim-only, because the venue is a
   # property of the worker that took the item, and the only record naming a worker is the claim.
@@ -934,9 +974,23 @@ cmd_transition() {
       return 4
     fi
   fi
-  # REOPEN GUARDS (see the header block) — refuse a resurrection of terminal work and a yank of a
-  # live claim. Both are rc 4 and both name the exact `--force` escape in the refusal.
-  if [ "$event" = reopen ] && [ "$force" -eq 0 ]; then
+  # RE-OPEN-EFFECT GUARDS (see RE-OPEN EFFECT in the header) — refuse a resurrection of terminal
+  # work and a yank of a live claim. Both are rc 4 and both name the exact `--force` escape.
+  #
+  # THE PREDICATE IS THE EFFECT, NOT THE VERB. `reopen` and `unblock` are different words for one
+  # outcome: the fold resolves to "open", which IS cc-dispatch's fire predicate. Guarding only the
+  # verb named "reopen" left the other spelling of the same act completely unguarded, and the store
+  # measured both halves of the cost (2026-08-08, items 62daeb7d4463 + d6d8b259235d):
+  #   · unblock over a DONE item silently UN-COMPLETED it — 1a226422cb37 landed and content-verified
+  #     at 02:00:24Z, unblocked 03:21:48Z, folded back to "open", and its owner found it live 4 h
+  #     later on a routine re-check. `reopen` refuses that exact shape, with an essay about why.
+  #   · unblock over a LIVE claim yanks it with no liveness call at all — the 2026-07-20 double-fire
+  #     incident, reachable through the one verb that never learned about it.
+  # Nobody misused the tool in either case: both were serviced as ordinary "lift the block" tickets.
+  # A rule that says "re-read the block reason first" cannot be checked by a machine; the state the
+  # item is actually IN can be, so that is what is gated. `blocked → open` — the whole and only
+  # legitimate use of unblock, and the one scripts/thrash-block-recover.sh drives — is untouched.
+  if { [ "$event" = reopen ] || [ "$event" = unblock ]; } && [ "$force" -eq 0 ]; then
     local cur cstatus cby cev cts
     cur="$(item_json "$id")"
     cstatus="$(printf '%s' "$cur" | jq -r '.status   // ""' 2>/dev/null)"
@@ -944,24 +998,28 @@ cmd_transition() {
     if [ "$cstatus" = "done" ]; then
       cev="$(printf '%s' "$cur" | jq -r 'if (.evidence // "") == "" then "<none>" else .evidence end' 2>/dev/null)"
       cts="$(printf '%s' "$cur" | jq -r '.lastTs // "?"' 2>/dev/null)"
-      { printf 'cc-backlog reopen: REFUSED — %s is TERMINAL (done %s)\n' "$id" "$cts"
+      { printf 'cc-backlog %s: REFUSED — %s is TERMINAL (done %s)\n' "$event" "$id" "$cts"
         printf '  evidence: %s\n' "$cev"
         printf '  Re-opening completed work puts it back in the dispatch wave and burns a worker\n'
-        printf '  session re-doing what already landed (incident 2026-07-20, a60d62a215f1).\n'
+        printf '  session re-doing what already landed (incident 2026-07-20, a60d62a215f1;\n'
+        printf '  the unblock spelling of it, 2026-08-08, 1a226422cb37 / 62daeb7d4463).\n'
         printf '  If the work genuinely regressed, or the completion was premature, say so explicitly:\n'
-        printf '      cc-backlog reopen %s --force\n' "$id"
+        printf '      cc-backlog %s %s --force\n' "$event" "$id"
       } >&2
       return 4
     fi
     local cvenue; cvenue="$(printf '%s' "$cur" | jq -r '.venue // "local"' 2>/dev/null)"
     if [ "$cstatus" = claimed ] && [ -n "$cby" ] && [ "$cby" != "$by" ] && claimer_live "$cby" "${cvenue:-local}"; then
-      { printf 'cc-backlog reopen: REFUSED — %s is claimed by %s, which is still LIVE\n' "$id" "$cby"
+      { printf 'cc-backlog %s: REFUSED — %s is claimed by %s, which is still LIVE\n' "$event" "$id" "$cby"
         printf '  A live claim returned to "open" is re-dispatchable: the next cc-dispatch tick\n'
         printf '  claims it and spawns a SECOND worker onto work already in progress. That is the\n'
         printf '  2026-07-20 incident exactly (reopened 33 min into a live claim, re-claimed 15 s later).\n'
+        # `reopen` is LITERAL in this line, whichever verb was attempted: releasing a live claim is
+        # what reopen --by is FOR, and unblock is not a synonym for it. Echoing "$event" here would
+        # hand the caller back the verb that just failed, dressed as the remedy.
         printf '  The claimer releases its own claim with:  cc-backlog reopen %s --by %s\n' "$id" "$cby"
         printf '  A DEAD claimer needs no force — cc-backlog reap reopens it once it goes stale.\n'
-        printf '  To override deliberately:  cc-backlog reopen %s --force\n' "$id"
+        printf '  To override deliberately:  cc-backlog %s %s --force\n' "$event" "$id"
       } >&2
       return 4
     fi
