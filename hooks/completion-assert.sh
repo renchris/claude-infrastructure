@@ -21,6 +21,11 @@
 #       "park-and-ask-to-ship" close FIRES; the desk drives the land, it does not hold for it.
 #   Because the matcher is broad but GATED on ground-truth facts, a TRUE-complete close (clean ∧
 #   landed-by-content ∧ no remainder) abstains no matter how confidently it says "done".
+#   ATTRIBUTION runs before the dirty/unlanded terms convict: `session_dirty_mine` /
+#   `session_unlanded_mine` ask whether the facts are THIS session's work, and the unlanded term
+#   additionally recognises LIVE-PEER-OWNED (hooks/lib/peer-owned.sh) — a still-running peer's
+#   commits in a shared checkout, which this session must NOT land. Neither weakens the ledger;
+#   both ask a second, independent question about ownership. See those blocks below.
 #
 # ── ARM 2 — OPERATOR SURFACE (2026-08-01): the close the operator cannot ACT on ──
 # The ledger arm above is blind to a whole class of bad close, because git says ✅ and it IS ✅:
@@ -86,7 +91,8 @@
 # Env seams (tests): COMPLETION_STATE_DIR · COMPLETION_IDL · COMPLETION_MAX · WRAP_LEDGER_BIN ·
 #   CC_BACKLOG_BIN (arm 2 D1 — tests stub it; the real binary is resolved when unset) ·
 #   SESSION_WRITES_LIB / ORIGIN_IDENTITY_LIB / CLOSE_SHAPE_LIB / CC_FIRED_DIR / CC_CLOSE_SHAPE
-#   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch)
+#   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch) ·
+#   PEER_OWNED_LIB / CC_REGISTRY_DIR (LIVE-PEER-OWNED attribution — see the block at that term)
 set -uo pipefail
 
 STATE_DIR="${COMPLETION_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/completion-assert}"
@@ -322,6 +328,46 @@ _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot 
   return 2
 }
 
+# ── LIVE-PEER-OWNED: the 📦 state this guard could not express (2026-08-03) ──────────────────────
+# `_ca_mine unlanded` asks "did I write these paths?", and its rc 2 — "cannot tell" — is exactly
+# where a read-only session in the SHARED checkout lands: it wrote nothing, so there is no
+# intersection to compute, so it stays convicted. Measured: session claude-infrastructure-323 (a
+# read-only research turn, clean tree, ZERO files written) was blocked 3/3 for two commits, 7h and
+# 10h old, made by claude-infrastructure-234 — still alive, ~17h into its own run. Neither answer
+# the guard accepts was available: "/ship to land it" is the shared-checkout land .claude/CLAUDE.md
+# forbids by name (incident 2026-07-11, dfacccd — five files rebase-dropped by a concurrent land
+# while `rev-list origin/main..HEAD` read 0), and GENUINE above enumerates credential / sudo /
+# destructive-migration / external-info / value-fork, so peer-ownership has no spelling there
+# (MEMORY.md denylist-enumerates-spellings-not-the-class). The guard was not wrong about the git
+# facts — it was missing a state, and the only compliant close was a rule violation.
+#
+# hooks/lib/peer-owned.sh answers the SECOND question, exactly as session-writes.sh answers the
+# first: not "are these facts real" but "whose are they". It never re-derives UNLANDED and never
+# touches a RUNG — the ledger still computes 📦 and operator-readout still renders it, because the
+# commits really are unlanded. What is withheld is only the demand that THIS session act on them.
+# The discriminator is LIVENESS, not age: a `/handoff` or `--recycle` successor inherits a DEAD
+# predecessor's commits and must still land them, so it is still convicted; only a still-running
+# peer's work is peer-owned. See that file for the full conjunction.
+#
+# GATED ON rc 2 ALONE, and that is load-bearing. rc 0 means this session provably wrote a path in
+# the unlanded diff — positive self-evidence must never be overridden by evidence about someone
+# else, so the peer question is not even asked there. rc 1 has already exonerated. So this can only
+# convert a subset of "cannot tell" into a positive verdict; it cannot weaken a conviction the
+# existing attribution had already made.
+_ca_peer_owned() {   # stdout: `<peer>#<pid>` on rc 0
+  local lib
+  lib="${PEER_OWNED_LIB:-$_cascd/lib/peer-owned.sh}"
+  [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+    lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/peer-owned.sh"; }
+  [ -f "$lib" ] || lib="$CFG/hooks/lib/peer-owned.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/peer-owned.sh"
+  [ -f "$lib" ] || return 2
+  # shellcheck source=lib/peer-owned.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 2
+  peer_owned_unlanded "$CWD" "$(lfield TRUNK)" "$SID" "$TP"
+}
+
 contra=0; facts=""; _ca_exon=""
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
@@ -330,8 +376,14 @@ if [ "$DIRTY" -eq 1 ]; then
 fi
 if [ "$UNLANDED" -eq 1 ]; then
   _ca_mine unlanded; _ca_u=$?
-  if [ "$_ca_u" -eq 1 ]; then _ca_exon="${_ca_exon}unlanded-not-mine "
-  else contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "; fi
+  _ca_peer=""
+  if [ "$_ca_u" -eq 1 ]; then
+    _ca_exon="${_ca_exon}unlanded-not-mine "
+  elif [ "$_ca_u" -eq 2 ] && _ca_peer="$(_ca_peer_owned)" && [ -n "$_ca_peer" ]; then
+    _ca_exon="${_ca_exon}unlanded-live-peer-owned:${_ca_peer} "
+  else
+    contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "
+  fi
 fi
 [ "$REMAINDER" -gt 0 ]  && { contra=1; facts="${facts}${REMAINDER} frozen-DoD item(s) remain; "; }
 # W2 CUSTODY — a done-claim over UNRETURNED dispatched work is the wave-abandonment close itself
