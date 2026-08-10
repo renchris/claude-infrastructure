@@ -27,9 +27,29 @@ name: hermetic
 # The `census` job is the answer: it runs the EXCLUDED suites too, so the partition line is
 # continuously re-measured in both directions rather than curated once and left to rot.
 
+# ── THE TRIGGER IS A SCHEDULE ON main, NOT A PUSH, AND THAT IS A MEASUREMENT ─────────────────────
+# Measured on the first green run (31364482150): 339 suites, ~49 minutes wall, 10 jobs against the
+# free tier's 5-wide macOS concurrency, so a run occupies the whole ceiling for two waves. Trunk
+# moves ~63 commits/day — one every ~23 minutes. Per-push on main therefore has no good setting:
+# with `cancel-in-progress` almost every run is killed by the next push before it can finish and the
+# producer produces nearly nothing; without it, 63 × 49min of 5-wide work queues into a backlog that
+# is permanently hours behind the tip, which is the same staleness this whole lane exists to end.
+#
+# A schedule dissolves the dilemma because of WHAT THE CONSUMER ACTUALLY NEEDS. deploy-live's T1H
+# does not want a verdict per commit; it wants a RECENT GREEN THAT IS A DESCENDANT OF LIVE HEAD.
+# One completed run per hour against the current tip delivers that ~24×/day, against the on-box
+# producer's measured 0.17/day. A per-commit verdict would be a nicer artifact and a worse producer.
+#
+# Push still fires on TOPIC branches, where cancelling superseded runs is right and where the
+# workflow itself gets iterated.
 on:
+  schedule:
+    # Hourly. Deliberately not tighter than the ~49min measured run: a cadence shorter than the run
+    # queues runs behind each other, and a queued run is a verdict about a tree that has already
+    # been superseded.
+    - cron: '17 * * * *'
   push:
-    branches: ['main', 'wt-**', 'offbox-**']
+    branches: ['wt-**', 'offbox-**']
   pull_request:
   workflow_dispatch:
     inputs:
@@ -43,9 +63,11 @@ permissions:
 
 # One verdict per ref. A superseded commit's verdict is not wrong, it is just about a tree nobody
 # will deploy — and letting them pile up would spend the macOS concurrency the newest commit needs.
+# A SCHEDULED run is never cancelled, though: it is the producer, and the whole point of the cadence
+# above is that each one gets to finish. `cancel-in-progress` is an expression for exactly that.
 concurrency:
-  group: hermetic-${{ github.ref }}
-  cancel-in-progress: true
+  group: hermetic-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 env:
   # A per-suite bound, not a job bound. An overrun is a CUT — a non-verdict that withholds an
