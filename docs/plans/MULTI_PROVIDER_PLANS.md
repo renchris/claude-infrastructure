@@ -82,6 +82,50 @@ by an old client simultaneously — `~/.codex/models_cache.json` failed to parse
 the CLI was updated; the refresh then revealed `gpt-5.6-sol`/`terra`/`luna`. **Update the CLI
 first, then read its model list.** Reading the list first gives a confidently wrong answer.
 
+### W1 RESULT — verified inventory (measured 2026-08-10, live reads only)
+
+Every cell below was established by running the command in its row. A cell that could not be
+measured reads `UNKNOWN` and says which command failed to establish it.
+
+| # | Backend | Authenticated? | Which plan | Bills outside that plan? | In scope | Command that established it |
+|---|---|---|---|---|---|---|
+| 1 | **Codex CLI** 0.147.0 | ✅ yes | **ChatGPT Plus** | **No** — `stored API key false`, transport is `wss://chatgpt.com/backend-api` | ✅ **IN** | `codex doctor` → `stored auth mode chatgpt` · `stored API key false` · websocket `HTTP 101`; `chatgpt_plan_type:"plus"` decoded from `~/.codex/auth.json` id_token |
+| 2 | **Claude Code** 2.1.220 | ✅ yes, all 4 | **4× Claude Max** | **No** — OAuth via keychain, `usage_credits_authorized:false` guards PAYG | ✅ **IN** (already) | `claude-accounts --login-status` → exit 0 (silent = its contract); `--readout` renders 4 rows; version from `~/.claude-220/node_modules/.bin/claude --version` |
+| 3 | **Antigravity** 1.107.0 | ✅ yes (Google OAuth, `ichris96@hotmail.com`) | **UNKNOWN** | **UNKNOWN** | ❌ **OUT — no headless mode** | `antigravity --help` → pure VS Code option surface (`--install-extension`, `--user-data-dir`, `--add-mcp`); **no exec/agent/headless subcommand exists**. Auth shared from `~/.gemini/oauth_creds.json`; id_token carries **no** plan/tier claim, and `grep -rE '"(tier\|plan\|subscription)"' ~/.gemini/` returns nothing |
+| 4 | **Grok CLI** | ❌ not installed | **none held** | **YES — metered xAI API** | ❌ **OUT — cost gate** | `npm view @xai/grok-cli` / `@x-ai/grok-cli` → **404, no official xAI CLI on npm**. Community `@vibe-kit/grok-cli@0.0.34` README: *"Get your Grok API key from X.AI"*, endpoint `https://api.x.ai/v1`, flag `-k, --api-key`. **No OAuth/subscription login path exists** |
+| 5 | **Pi · Codex backend** | ❌ not installed | **ChatGPT Plus** (held) | **No** | ✅ **IN — install** | `npm view @earendil-works/pi-coding-agent` → `0.84.1`, MIT, published 2026-08-07, bin `pi`. README § Providers & Models, **Subscriptions:** `OpenAI ChatGPT Plus/Pro (Codex)` |
+| 6 | **Pi · Claude backend** | ❌ not installed | **Claude Max** (held ×4) | **No** | ✅ **IN — install** | same package; README **Subscriptions:** `Anthropic Claude Pro/Max`. Auth via `pi` → `/login` → select provider |
+| 7 | **Gemini CLI** 0.29.5 *(7th backend — not in the original six)* | ✅ yes, but token stale | **UNKNOWN** (free Code Assist individual vs paid Google AI — not establishable from disk) | **No metered path wired** — every API-key env var is unset | ⚠️ **DEFER** — plan tier UNKNOWN | `~/.gemini/settings.json` → `auth.selectedType: "oauth-personal"`, `model.name: "gemini-3-pro-preview"`; `printenv` → `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`GOOGLE_CLOUD_PROJECT` all unset; `oauth_creds.json` access_token expired **2026-02-23** (refresh_token present) |
+
+**Verdict: 3 backends IN (Codex, Claude Code, Pi ×2 = 4 routable agents), 2 OUT, 1 DEFERRED.**
+Nothing was signed up for; no payment details were entered anywhere.
+
+**Finding that corrects the plan's own premise — Antigravity is not an agent backend at all.**
+The plan (and grok-wiki's picker) counted six *agent backends*. Antigravity's `--help` is byte-for-byte
+a VS Code launcher: it opens the editor GUI and has no non-interactive invocation path. So it cannot
+be routed to from claude-infrastructure whatever its plan turns out to be — its auth question is
+**moot, not merely unmeasured**. This is the *"a binary exists on PATH"* → *"it is an agent backend"*
+conflation: grok-wiki reported `ready` on the strength of `command -v antigravity` alone. Three
+separate facts — **binary present**, **authenticated**, **has a headless agent mode** — and only the
+third decides routability. W3's detector must test the third, never the first.
+
+**Landmine 1 reproduced live, not taken on faith.** `~/.codex/models_cache.json` on disk was written
+by the OLD client (`client_version: 0.142.2`) and listed 5 models — **not including `gpt-5.6-sol`,
+the very model already pinned in `config.toml`**. Running the 0.147.0 client refreshed it to 8 and
+revealed `gpt-5.6-sol` (priority 1, `visibility: list`), `gpt-5.6-terra` (2), `gpt-5.6-luna` (3).
+Reading the list before updating would have concluded the pin was invalid. Order is load-bearing.
+
+**Note for W2 — Pi ships this discipline as a command:** `pi update --models` forces a catalog
+refresh, so the landmine-1 order (update CLI → refresh catalog → read list → pin) is executable
+rather than manual.
+
+**A subscription window inside a token is a snapshot, not a live entitlement.** Codex's id_token
+carries `chatgpt_subscription_active_until: 2025-12-05`, stamped at the last interactive login
+(`auth_time` = 2025-12-01) — eight months stale, while the token itself was refreshed 2026-08-10.
+The live proof of entitlement is the successful `HTTP 101` handshake to the ChatGPT backend, not the
+embedded date. Same shape as the Claude login-cliff lesson in `accounts.json § _login`: a refresh
+renews the access token and does **not** restate the subscription claim.
+
 ## W2 — Update every in-scope CLI to latest + pin latest model
 
 Only for backends W1 cleared. Per backend: update the CLI, refresh its model list, pin the best
@@ -123,3 +167,19 @@ it? Weigh against the renderer rule — there must remain exactly ONE renderer p
 - **2026-08-10** — Plan created. Codex CLI updated 0.142.2 → 0.147.0 and pinned to `gpt-5.6-sol` @
   `xhigh` (verified live). Six backends inventoried; Pi (×2) identified as the zero-marginal-cost
   gap. Grok CLI and Antigravity flagged for the W1 cost gate. No other change landed yet.
+- **2026-08-10 — W1 DONE.** All six backends verified from live reads (+ a 7th, Gemini CLI, found
+  installed and folded in). Verdict **3 IN / 2 OUT / 1 DEFERRED**; nothing signed up for.
+  Learnings that change later waves:
+  (a) **Antigravity is not an agent backend** — its CLI is the VS Code launcher, no headless mode,
+  so W3's detector must test *"has a non-interactive agent mode"*, never *"binary is on PATH"*
+  (the exact conflation that made grok-wiki report it `ready`).
+  (b) **Landmine 1 reproduced live** — the on-disk model cache was written by the old client and
+  omitted the very model already pinned; only the updated client's refresh revealed it.
+  (c) **Pi clears the cost gate on primary-source evidence** — its README lists ChatGPT **Plus**/Pro
+  and Claude Pro/**Max** as subscription logins, and we hold Plus + 4× Max. The plan's original
+  wording ("ChatGPT Plus/Pro") left open whether Plus specifically qualified; it does.
+  (d) **Grok has no official CLI on npm at all** (`@xai/*`, `@x-ai/*` → 404) and every community
+  one is API-key-only against `api.x.ai` ⇒ SKIP, documented, never signed up for.
+  (e) **A subscription window embedded in a token is a stale snapshot** — Codex's id_token claims a
+  window that closed 2025-12-05 while the account is demonstrably live; entitlement is proven by
+  the transport handshake, not the claim.
