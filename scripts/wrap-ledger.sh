@@ -209,19 +209,40 @@ if [ -f "$GATE_FILE" ]; then
 fi
 
 # ── Frozen-DoD remainder (unchecked "- [ ]" items). Absent ⇒ reported, never silently ✅. ──
-DOD_FILE="${WRAP_DOD_FILE:-}"
-if [ -z "$DOD_FILE" ]; then
-  DOD_DIR="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
-  TOP="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")"
-  DHASH="$(printf '%s' "$TOP" | shasum 2>/dev/null | cut -c1-16)"
-  DOD_FILE="$DOD_DIR/${DHASH:-unknown}.md"
+# Resolution = hooks/lib/dod-path.sh (CLOSE_INTEGRITY W3): repo-identity key with legacy
+# path-hash read-fallback, shared with the producer so the two cannot drift. The inline fallback
+# preserves the exact legacy formula for a live layer that has not yet linked the lib.
+_wl_dplib="$(dirname "$0")/../hooks/lib/dod-path.sh"
+[ -f "$_wl_dplib" ] || { _wl_dpt="$0"; [ -L "$_wl_dpt" ] && _wl_dpt="$(readlink "$_wl_dpt")"
+  _wl_dplib="$(cd "$(dirname "$_wl_dpt")" 2>/dev/null && pwd)/../hooks/lib/dod-path.sh"; }
+[ -f "$_wl_dplib" ] || _wl_dplib="$HOME/.claude/hooks/lib/dod-path.sh"
+# shellcheck source=../hooks/lib/dod-path.sh
+# shellcheck disable=SC1090,SC1091
+if [ -f "$_wl_dplib" ] && . "$_wl_dplib" 2>/dev/null && command -v dod_read_files >/dev/null 2>&1; then
+  # DOD_FILE names where NEW captures go (the "expected" path in the absent-message); the READ is
+  # over BOTH sources — repo-key store + this toplevel's legacy file — summed, lossless.
+  DOD_FILE="$(dod_path_for "$PWD" write)"
+  _WL_DOD_SOURCES="$(dod_read_files "$PWD")"
+else
+  DOD_FILE="${WRAP_DOD_FILE:-}"
+  if [ -z "$DOD_FILE" ]; then
+    DOD_DIR="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"
+    TOP="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")"
+    DHASH="$(printf '%s' "$TOP" | shasum 2>/dev/null | cut -c1-16)"
+    DOD_FILE="$DOD_DIR/${DHASH:-unknown}.md"
+  fi
+  _WL_DOD_SOURCES=""; [ -f "$DOD_FILE" ] && _WL_DOD_SOURCES="$DOD_FILE"
 fi
 DOD="absent"; REMAINDER=0
-if [ -f "$DOD_FILE" ]; then
+while IFS= read -r _wl_df; do
+  [ -n "$_wl_df" ] && [ -f "$_wl_df" ] || continue
   DOD="present"
-  REMAINDER="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$DOD_FILE" 2>/dev/null || echo 0)"
-  case "$REMAINDER" in ''|*[!0-9]*) REMAINDER=0 ;; esac
-fi
+  _wl_r="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$_wl_df" 2>/dev/null || echo 0)"
+  case "$_wl_r" in ''|*[!0-9]*) _wl_r=0 ;; esac
+  REMAINDER=$((REMAINDER + _wl_r))
+done <<WLDOD
+$_WL_DOD_SOURCES
+WLDOD
 
 # ── Operator-only steps THIS SESSION filed (the 👤 rung) ──
 # Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > unresolvable ("").
