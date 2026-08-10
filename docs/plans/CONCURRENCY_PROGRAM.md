@@ -500,6 +500,62 @@ it). Closing that would need heredoc- and array-aware parsing in bash, whose own
 silent. So: a SECOND uninstrumented spawn added to an ALREADY-instrumented file is a notice, not a
 block. The notice names the file and line.
 
+##### S4.2a · …and the whole feature shipped INERT, because a close cannot see an added file — CLOSED (backlog `99b715f31a98`, 2026-08-09)
+
+S4.2's own landing is what found this. Twenty instrumented spawn sites landed, the close read
+`✅`, and **not one row was ever written**: `scripts/lib/pane-spawn-log.sh` is a NEW file, the live
+checkout was 7 commits behind, and every `command -v cc_log_pane_spawn` guard short-circuited to
+nothing. `wrap-ledger.sh` had looked straight at it and reported `BEHIND 7, within budget (25)`.
+
+**The budget was right about the wrong kind of change.** `~/.claude/{hooks,hooks/lib,commands,
+scripts,bin}` are dirs of PER-FILE symlinks into the live checkout, so the two kinds of landed
+change have two different deployment states, and only one of them is a *timing* state:
+
+| landed change | at lag N the box has… | what the lag IS |
+|---|---|---|
+| an **EDIT** | the file, at its older version — it rides the link that already exists | genuinely converging; the fast-forward alone makes it current, which is what a budget is for |
+| an **ADD** | nothing. No link, and no tree it can reach — consumers resolve sibling-first INTO that checkout | not stale, **absent**; and the guard forms (`[ -f x ] && . x`, `command -v fn && fn`) are SILENT skips, so the feature is a no-op rather than an error |
+
+So `🚀` gained a third cause: `LIVE_ADDS` > 0 breaches at lag ≥ 1, **with no budget**. It is a TREE
+diff (live tree vs HEAD tree, `--diff-filter=A`), which is the inertness question stated directly —
+it needs no second stat against the live worktree, it spans the whole lag rather than the tip, and a
+path the live layer already got another way is correctly not counted. Run in THIS repo, because the
+live repo may never have fetched our HEAD; a live sha we cannot resolve reads `?` and changes
+nothing, the same law as `LIVE_SRC=unknown`.
+
+Three decisions worth not re-litigating:
+
+1. **No path filter.** Restricting to the linked runtime dirs would raise the signal — a new
+   `docs/` page is never "run" — but it is a SECOND model of the deployed surface beside
+   `deploy-parity-assert.sh`'s, and a filter is a strictly-*stronger* suppressor: wrong, it silences
+   a real breach (`cost-gate-must-be-strictly-weaker`). `LIVE_ADDS` is emitted so a consumer can
+   refine without re-forking git.
+2. **This is not `deploy-parity-assert.sh`'s existence leg again.** That leg compares LIVE against
+   CHECKOUT and is structurally blind here: when the checkout is behind, *both* sides lack the file
+   and it correctly reports parity. The missing question was CHECKOUT vs TRUNK.
+3. **It does not become an always-fires alarm.** 28.5% of the last 200 trunk commits add a file
+   (measured), the state ends when the live layer carries them, and CLAUDE.md already has the AGENT
+   run the converger and re-read — so a healthy box self-clears it inside one close. The bound moved
+   from structural to behavioural, and `operator-readout.sh`'s comment claiming the structural one
+   was corrected rather than left to guard a false premise.
+
+**The sibling auditors were taught the cause, not just the rung.** `completion-assert.sh` and
+`operator-readout.sh` both consume `RUNG=🚀` and then pick a sentence; both said "PAST its converge
+budget", which is *false* at a lag of 1. Both now branch on `LIVE_ADDS`, and a ledger that emits no
+`LIVE_ADDS` at all still renders the budget cause — the case that caught a real bug in this diff:
+`case "${adds:-0}"` defaults the *expansion* and leaves the variable empty, so the old-ledger path
+rendered "— NEW file(s) absent" with a blank count.
+
+**The fixtures were the other half.** `advance_trunk`, `commit_aged` and `mkrepo_landed_not_live` all
+created NEW files, so every existing budget assertion would have passed for the added-file reason
+instead — the control decaying into a vacuous one. They now EDIT; `advance_trunk_adding` is the
+deliberate add lever. Tests: 41 (`wrap-ledger`, +5) · 65 (`operator-readout`, +2) · 59
+(`completion-assert`, +1). Five mutants, each attributed to named tests: breach arm → 23/24 · `?`
+guards → 25/26 · tip-only span → 24 · readout sentence → 23 · `--full` row → 23. The `?` mutant is
+why test 25 asserts **empty stderr**: dropping the guard changes no verdict (`[ ? -gt 0 ]` exits 2,
+which an `if` reads as false) and only makes bash print `integer expression expected` from inside a
+Stop hook — an untested site otherwise, and the next simplification deletes it.
+
 ### S5 · Scale beyond this box — the only route to ~100
 
 **100 local sessions is arithmetically unreachable**: 511 MB/session × 100 = **51.1 GB of 64 GB**,

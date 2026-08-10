@@ -384,9 +384,16 @@ fi
 if [ "$RUNG" = "🚀" ]; then
   _ca_miglost="$(lfield MIG_FAILED)"; case "$_ca_miglost" in ''|*[!0-9]*) _ca_miglost=0 ;; esac
   _ca_livelag="$(lfield LIVE_LAG)";   case "$_ca_livelag" in ''|*[!0-9]*) _ca_livelag="?" ;; esac
+  # LIVE_ADDS names the THIRD cause (2026-08-09): the lag contains files that are ABSENT from the
+  # live layer, not merely stale. Same consume-don't-re-derive law as the rung itself — the ledger
+  # decided the breach, this only picks which true sentence to say. Non-numeric ⇒ 0 ⇒ the budget
+  # wording, which is what the ledger fell back to as well, so the two auditors cannot disagree.
+  _ca_adds="$(lfield LIVE_ADDS)";     case "$_ca_adds"    in ''|*[!0-9]*) _ca_adds=0 ;; esac
   contra=1
   if [ "$_ca_miglost" -gt 0 ]; then
     facts="${facts}LANDED BUT NOT LIVE — ${_ca_miglost} migration(s) could not reach the enforcing store, so the machine is not running this yet; "
+  elif [ "$_ca_adds" -gt 0 ]; then
+    facts="${facts}LANDED BUT NOT LIVE — ${_ca_adds} NEW file(s) in the landed diff are ABSENT from the live layer (~/.claude is per-file symlinks, so an added file has no link and every \`command -v\`/\`[ -f ]\` consumer guard silently skips it — the feature is a no-op, not a stale one), and no converge budget covers an add (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
   else
     facts="${facts}LANDED BUT NOT LIVE — the live layer is ${_ca_livelag} commit(s) behind and PAST its converge budget, so the machine still runs the old bytes (converge: bash ~/Development/claude-infrastructure/scripts/deploy-live.sh); "
   fi

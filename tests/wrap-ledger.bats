@@ -414,10 +414,31 @@ mk_live() {
 # advance trunk by $1 commits (committed AND pushed, so the session itself stays ✅-eligible), then
 # let the live clone SEE them without moving its own HEAD — exactly the deploy lag this rung reads.
 # The fetch is the fixture's job: the ledger is pure-read and never fetches.
+#
+# IT EDITS AN EXISTING FILE AND NEVER ADDS ONE (2026-08-09). An ADD breaches at lag 1 with NO budget,
+# so the original fixture — which wrote a fresh adv$i.txt per commit — would make every budget
+# assertion below fire for the added-file reason instead: #2 ("within budget ⇒ ✅") would simply go
+# red, and #3/#4 would stay green while testing a lever they do not name. That is the control
+# decaying into a vacuous one (MEMORY.md control-calibrated-to-implementation-decays). The edit case
+# is the one the budget actually governs, so this is now the honest control for it, and
+# advance_trunk_adding below is the deliberate lever for the other kind.
 advance_trunk() {
   local n="$1" i=1
   while [ "$i" -le "$n" ]; do
-    echo "adv$i" > "adv$i.txt"; git add "adv$i.txt"; git commit -q -m "advance $i"
+    echo "adv$i" >> base.txt; git add base.txt; git commit -q -m "advance $i"
+    i=$((i + 1))
+  done
+  git push -q origin main
+  git -C "$WRAP_LIVE_REPO" fetch -q origin
+}
+
+# the ADD lever: $1 commits that each ADD a NEW tracked path. Identical LAG to advance_trunk, and a
+# categorically different deployment state — ~/.claude is per-file symlinks, so a file that did not
+# exist has no link and is not in the live checkout at all, which is why no budget may cover it.
+advance_trunk_adding() {
+  local n="$1" i=1
+  while [ "$i" -le "$n" ]; do
+    echo "new$i" > "newfile$i.txt"; git add "newfile$i.txt"; git commit -q -m "add $i"
     i=$((i + 1))
   done
   git push -q origin main
@@ -425,11 +446,13 @@ advance_trunk() {
 }
 
 # commit + push with a COMMITTER date $1 seconds in the past — the TIME-budget lever, isolated from
-# the commit-count lever (one commit of lag is far under the 25-commit default).
+# the commit-count lever (one commit of lag is far under the 25-commit default) AND from the
+# added-file lever (it appends to a tracked file; a fresh aged.txt would have breached on the ADD
+# and left the time budget untested).
 commit_aged() {
   local age="$1" ts
   ts=$(( $(date +%s) - age ))
-  echo aged > aged.txt; git add aged.txt
+  echo aged >> base.txt; git add base.txt
   GIT_AUTHOR_DATE="$ts +0000" GIT_COMMITTER_DATE="$ts +0000" git commit -q -m "aged work"
   git push -q origin main
 }
@@ -451,6 +474,7 @@ mk_failed_migration() {
   [ "$(field "$output" LIVE)" = "1" ]
   [ "$(field "$output" LIVE_SRC)" = "ok" ]
   [ "$(field "$output" LIVE_SHA)" = "$(git rev-parse HEAD)" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]   # emitted on every path, so consumers never guess
 }
 
 # ── 2. behind but WITHIN budget ⇒ still ✅, with the fact attached (the alarm-polarity bound) ──
@@ -464,11 +488,119 @@ mk_failed_migration() {
   [ "$(field "$output" LIVE)" = "0" ]
   [ "$(field "$output" LIVE_SRC)" = "behind" ]
   [ "$(field "$output" LIVE_LAG)" = "1" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]   # an EDIT — the only kind the budget is entitled to cover
   run bash "$LEDGER"                       # the one line says it out loud, and is still ONE line
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
   printf '%s' "$output" | grep -qi "converging"
   ! printf '%s' "$output" | grep -q "🚀" || false
+}
+
+# ── 2b. THE PAIRED OPPOSITE — the same lag of ONE commit, but the commit ADDS a file ⇒ 🚀 ──
+# The defect this closes (backlog 99b715f31a98): #2 above and this test differ in exactly one
+# variable — the KIND of change in the lag — and the ledger used to answer both with the ✅ of #2.
+# Measured for real on scripts/lib/pane-spawn-log.sh: "BEHIND 7, within budget (25)", a plain OK,
+# and every `command -v cc_log_pane_spawn` call site short-circuiting to nothing. An edit at lag N
+# runs OLD; an add at lag N does not run at all, because ~/.claude is per-file symlinks and the file
+# is in no tree the box can reach.
+@test "live behind by ONE ADDING commit ⇒ RUNG=🚀 even deep inside the budget" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_LAG)" = "1" ]     # 1 ≤ 25, and seconds old — NEITHER budget tripped
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -q "🚀"
+  printf '%s' "$output" | grep -qi "NEW file"
+  # the two sentences that would be FALSE here, pinned as absent: within-budget lag is not
+  # "converging" when the file is missing, and the budget is not what tripped.
+  ! printf '%s' "$output" | grep -qi "converging" || false
+  ! printf '%s' "$output" | grep -qi "past its converge budget" || false
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -q "ABSENT"
+  ! printf '%s' "$output" | grep -q "PAST budget" || false
+  printf '%s' "$output" | grep -qi "deploy-live"
+}
+
+# ── 2c. THE SPAN — an add ANYWHERE in the lag, not only at the tip ──
+# The read is a TREE diff (live tree vs HEAD tree), so a file added three commits ago and never
+# touched since is still absent from the live layer and still counted. A tip-only check would have
+# read 0 here and re-shipped the defect for every landing that is not the newest commit.
+@test "an ADD buried under later edits still counts ⇒ RUNG=🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  advance_trunk_adding 1
+  advance_trunk 2                             # two pure edits on top; the add is no longer the tip
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_LAG)" = "3" ]
+  [ "$(field "$output" LIVE_ADDS)" = "1" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ── 2d. FAIL-OPEN: a live sha THIS repo cannot read is `?`, and `?` never manufactures a rung ──
+# The added-file set is computed here, against our own object store, because the live repo may never
+# have fetched our HEAD. The converse gap is this one: a live layer sitting on a commit we have
+# never seen. That question was asked and NOT answered, so it must fall through to the budget and
+# leave the pre-existing verdict untouched — the same law as LIVE_SRC=unknown. Without the guard the
+# `-gt` would be a hard error thrown from inside a Stop hook.
+@test "live layer on a sha this repo lacks ⇒ LIVE_ADDS=?, budget decides, never a manufactured 🚀" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  # a divergent commit that exists ONLY in the live clone — never pushed, so $WORK cannot resolve it
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
+  echo live-only >> "$WRAP_LIVE_REPO/base.txt"
+  git -C "$WRAP_LIVE_REPO" add base.txt
+  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only commit"
+  advance_trunk_adding 1                      # …and OUR side adds a file, which would breach if read
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_SRC)" = "behind" ]
+  [ "$(field "$output" LIVE_ADDS)" = "?" ]
+  [ "$(field "$output" RUNG)" = "✅" ]        # within budget, and the add could not be established
+  ! printf '%s' "$output" | grep -q "^RUNG=🚀" || false
+  run bash "$LEDGER" --full
+  printf '%s' "$output" | grep -qi "UNRESOLVED"
+  # STDERR MUST BE EMPTY, and this is the assertion that makes the `!= "?"` guards load-bearing.
+  # Dropping them does NOT change any verdict — `[ ? -gt 0 ]` exits 2, which an `if` reads as false,
+  # so the budget still decides — it only makes bash print `integer expression expected` FROM INSIDE
+  # A STOP HOOK, on every close, for a state that is not an error at all. Without this line the
+  # guards are an untested site (MEMORY.md per-site-mutation-attributes-coverage) and the next
+  # simplification deletes them.
+  bash "$LEDGER" --machine >/dev/null 2>"$BATS_TEST_TMPDIR/err.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err.txt" ]
+}
+
+# ── 2e. `?` composed with a REAL budget breach: the rung fires, on the budget's reason, quietly ──
+# The unresolvable case must not just decline to breach — it must stay out of the way of the breach
+# somebody else raises. This is the path that reaches the readout and next-verb compares (a `?` on
+# a 🚀 close), which the test above cannot reach because its rung is ✅.
+@test "LIVE_ADDS=? with the lag PAST budget ⇒ 🚀 on the BUDGET reason, stderr clean" {
+  ok_state
+  WRAP_LIVE_REPO="$(mk_live)"; export WRAP_LIVE_REPO
+  export WRAP_LIVE_BUDGET_COMMITS=1
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.email tester@example.com
+  git -C "${WRAP_LIVE_REPO:?live repo path required}" config user.name tester
+  echo live-only >> "$WRAP_LIVE_REPO/base.txt"
+  git -C "$WRAP_LIVE_REPO" add base.txt
+  git -C "$WRAP_LIVE_REPO" commit -q -m "live-only commit"
+  advance_trunk 3                             # edits only; 3 > 1 ⇒ the COMMIT budget is what trips
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LIVE_ADDS)" = "?" ]
+  [ "$(field "$output" RUNG)" = "🚀" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -qi "past its converge budget"
+  ! printf '%s' "$output" | grep -qi "NEW file" || false
+  bash "$LEDGER" --full >/dev/null 2>"$BATS_TEST_TMPDIR/err2.txt"
+  [ ! -s "$BATS_TEST_TMPDIR/err2.txt" ]
 }
 
 # ── 3. past the COMMIT budget ⇒ 🚀, and the next-verb points at the converger ──
@@ -518,8 +650,10 @@ mk_failed_migration() {
 }
 
 # ── 6. THE no-op guarantee for every other repo: a different origin URL ⇒ n-a, rung UNCHANGED ──
-# The fixture is deliberately set to 🚀 twice over — HEAD is 2h old AND a migration has failed — so
-# a gate that failed to hold would be caught here rather than passing vacuously.
+# The fixture is deliberately set to 🚀 THREE times over — HEAD is 2h old, a migration has failed,
+# AND the tree carries a file added since base — so a gate that failed to hold would be caught here
+# rather than passing vacuously. The third loading is the 2026-08-09 cause: it must be as unreachable
+# from a foreign repo as the other two, and it is computed one branch deeper, so it needs its own.
 @test "live repo with a DIFFERENT origin URL ⇒ LIVE_SRC=n-a, RUNG unchanged, MIG not even counted" {
   ok_state
   local foreign_origin="$BATS_TEST_TMPDIR/foreign.git" foreign="$BATS_TEST_TMPDIR/foreign-live"
@@ -531,11 +665,13 @@ mk_failed_migration() {
   echo other > "$foreign/other.txt"; git -C "$foreign" add other.txt; git -C "$foreign" commit -q -m other
   export WRAP_LIVE_REPO="$foreign"
   mk_failed_migration
+  echo brandnew > brandnew.txt; git add brandnew.txt; git commit -q -m "adds a file"; git push -q origin main
   commit_aged 7200
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_SRC)" = "n-a" ]
   [ "$(field "$output" MIG_FAILED)" = "0" ]
+  [ "$(field "$output" LIVE_ADDS)" = "0" ]   # not counted — never even asked in a foreign repo
   [ "$(field "$output" RUNG)" = "✅" ]
   ! printf '%s' "$output" | grep -q "^RUNG=🚀" || false
   run bash "$LEDGER" --full
@@ -588,11 +724,13 @@ mk_failed_migration() {
 # a repo with a different origin, or pointed at something unreadable. Those three are every state a
 # non-live-layer repo can be in, and if any of them moved the one line, the rung would be reachable
 # from a normal close in another repo — the property the whole change lives or dies on.
-# The fixture is LOADED FOR 🚀 — HEAD committed 2h ago (time budget blown) AND a migration has
-# FAILED — so a gate that leaked in any of the three states moves at least one of these readouts.
+# The fixture is LOADED FOR 🚀 — HEAD committed 2h ago (time budget blown), a migration has FAILED,
+# AND the tree carries a newly ADDED file (the 2026-08-09 no-budget cause) — so a gate that leaked in
+# any of the three states moves at least one of these readouts.
 @test "foreign repo: readout is BYTE-IDENTICAL with and without WRAP_LIVE_REPO (🚀 unreachable)" {
   ok_state
   mk_failed_migration
+  echo brandnew > brandnew.txt; git add brandnew.txt; git commit -q -m "adds a file"; git push -q origin main
   commit_aged 7200
   local a b c
 

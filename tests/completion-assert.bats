@@ -56,9 +56,13 @@ mkrepo_landed() {
 # wrap-ledger's applicability gate — so it is a CLONE OF THE SAME ORIGIN, not an unrelated repo.
 # The caller sets WRAP_LIVE_REPO + WRAP_LIVE_BUDGET_COMMITS: an export in here would die with the
 # `$( )` subshell this helper is invoked from.
+# The landed work EDITS base.txt rather than adding a file (2026-08-09): an ADD breaches with NO
+# budget, so a fixture that added one would satisfy the FIRE case without WRAP_LIVE_BUDGET_COMMITS=0
+# ever mattering — the budget lever untested, and the test still green. mkrepo_landed_not_live_adding
+# below is the deliberate lever for the other kind.
 mkrepo_landed_not_live() { # <tag> → echoes the session repo; live clone at $BATS_TEST_TMPDIR/live-<tag>
   local w; w="$(mkrepo_landed "$1")"
-  ( cd "$w" || exit 1; echo y > y.txt; git add y.txt; git commit -q -m "landed work"; git push -q origin main ) >/dev/null 2>&1
+  ( cd "$w" || exit 1; echo y >> base.txt; git add base.txt; git commit -q -m "landed work"; git push -q origin main ) >/dev/null 2>&1
   # CLONE AFTER THE PUSH, then step HEAD back. Order is load-bearing: wrap-ledger deliberately does
   # NOT fetch (its law is pure-read), so it measures lag against the live repo's LAST-FETCHED trunk
   # ref. Cloning first leaves that ref stale, LIVE_LAG reads 0, no breach — the first draft of this
@@ -746,6 +750,27 @@ PY
   run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
   [ "$status" -eq 0 ]
   if printf '%s' "$output" | /usr/bin/grep -q '"decision":"block"'; then return 1; fi
+}
+
+# ── the ADDED-FILE cause: the same close, a budget nowhere near tripping, and it must STILL fire ──
+# The measured hole (backlog 99b715f31a98): a landing that ADDS a file is not stale on the live
+# layer, it is ABSENT — ~/.claude is per-file symlinks, so there is no link and every `command -v` /
+# `[ -f ]` consumer guard silently skips. The default budget (25 commits / 60 min) is an EDIT's
+# budget and cannot cover it. This guard consumes RUNG=🚀, so the test is that the ledger's added-file
+# breach reaches the guard at all — and that the fact it states names the right cause.
+@test "🚀 ADDED FILE: a landing that ADDS a file convicts at lag 1, INSIDE the default budget" {
+  local w; w="$(mkrepo_landed bl4)"
+  ( cd "$w" || exit 1; echo n > newthing.sh; git add newthing.sh; git commit -q -m "adds a file"; git push -q origin main ) >/dev/null 2>&1
+  git clone -q "$BATS_TEST_TMPDIR/o-bl4.git" "$BATS_TEST_TMPDIR/live-bl4" >/dev/null 2>&1
+  git -C "$BATS_TEST_TMPDIR/live-bl4" checkout -q --detach origin/main~1 >/dev/null 2>&1
+  export WRAP_LIVE_REPO="$BATS_TEST_TMPDIR/live-bl4"
+  unset WRAP_LIVE_BUDGET_COMMITS          # the DEFAULT 25 — nothing near tripping at a lag of 1
+  run run_ca "$(mkfix "✅ Complete & live on trunk — safe to close, nothing unsaved.")" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'LANDED BUT NOT LIVE'
+  printf '%s' "$output" | /usr/bin/grep -q 'NEW file'
+  # the sentence the pre-2026-08-09 code would have said here, and which is FALSE at a lag of 1
+  if printf '%s' "$output" | /usr/bin/grep -q 'PAST its converge budget'; then return 1; fi
 }
 
 @test "🚀 CONTROL: an unrelated live repo (different origin) must NOT convict — fail-open" {

@@ -443,9 +443,19 @@ render_block() {
         # new-enum-member-falls-into-fail-closed-default names: an unhandled rung leaves `state`
         # EMPTY, so the block would render a header with no state — the ledger would have computed
         # the one fact the operator needs and the renderer would have silently dropped it.
-        lag="$(lf LIVE_LAG)"; migf="$(lf MIG_FAILED)"
+        # THREE causes, not two (2026-08-09). An added file breaches at lag 1 with the lag still
+        # INSIDE the budget, so the budget wording would attach a false reason to a true rung — and
+        # it is the reason that tells the operator what broke: absent, not old.
+        lag="$(lf LIVE_LAG)"; migf="$(lf MIG_FAILED)"; adds="$(lf LIVE_ADDS)"
+        # NOT `case "${adds:-0}"` — that defaults the EXPANSION and leaves the variable empty, so a
+        # ledger with no LIVE_ADDS line fell through to `[ "" != "0" ]`, which is TRUE, and rendered
+        # "— NEW file(s) absent" with a blank count over a lag the operator never got told about.
+        # Caught by the no-LIVE_ADDS case below; normalise the VARIABLE, then test it.
+        case "$adds" in ''|*[!0-9]*) adds=0 ;; esac
         if [ "${migf:-0}" != "0" ]; then
           state="🚀 landed, NOT live — ${migf} migration(s) FAILED; the enforcing store never took this → bash scripts/deploy-migrations.sh --status"
+        elif [ "$adds" != "0" ]; then
+          state="🚀 landed, NOT live — ${adds} NEW file(s) absent from the live layer; every consumer guard on them silently skips → bash scripts/deploy-live.sh"
         else
           state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget → bash scripts/deploy-live.sh"
         fi ;;
@@ -534,9 +544,16 @@ render_block() {
   done < "$steps_file"
   TOTAL="$total"
   # 🚀 joins 📦 in the fire predicate. Both are "the value is not where it needs to be" states with a
-  # runnable next step, and 🚀 is bounded BY CONSTRUCTION — it cannot fire inside the converge budget
-  # — so it stays rare rather than becoming another always-fires alarm. A 🚀 that did not fire the
-  # block would be the whole face-4 measurement computed and then not shown to anyone.
+  # runnable next step. A 🚀 that did not fire the block would be the whole face-4 measurement
+  # computed and then not shown to anyone.
+  # WHAT BOUNDS IT (restated 2026-08-09, because the old wording — "bounded BY CONSTRUCTION; it
+  # cannot fire inside the converge budget" — stopped being true and would have quietly guarded a
+  # false premise): the ADDED-FILE cause fires at lag 1, well inside the budget, because an added
+  # file is ABSENT from the live layer rather than stale and no budget makes an absent file present.
+  # The bound is now behavioural, not structural: 28.5% of trunk commits add a file, the state ends
+  # the moment the live layer carries them, and CLAUDE.md has the AGENT run the converger and
+  # re-read — so on a healthy box it self-clears within one close. It stands only while a converger
+  # outage does, which is precisely the news this block exists to carry.
   if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ]; then rm -f "$steps_file"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the

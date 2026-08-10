@@ -91,6 +91,25 @@
 #   conclusion into settings.json / a plist / PATH) trips 🚀 immediately, with no budget: no tick
 #   clears it, so it is not a timing artifact.
 #
+#   …BUT THE BUDGET IS AN EDIT'S BUDGET, AND AN ADD IS NOT AN EDIT (2026-08-09, backlog
+#   99b715f31a98). Both sentences above — "converging", "it will be current in a tick" — are true
+#   only of a file that ALREADY HAS ITS LINK. ~/.claude/{hooks,hooks/lib,commands,scripts,bin} are
+#   real dirs of PER-FILE symlinks (deploy-parity-assert.sh's existence leg states the same fact for
+#   its own question), so an EDITED file rides its link: at lag N the box runs that file's OLDER
+#   version, degraded but present, and the fast-forward alone makes it current. A file the landed
+#   diff ADDS is not stale — it is ABSENT. There is no link, and every consumer that resolves it
+#   sibling-first into the checkout misses too. The guard forms in this tree are `[ -f x ] && . x`
+#   and `command -v fn >/dev/null && fn …`, both of which are SILENT skips, so the feature does not
+#   fail — it does not exist. That is inert at lag 1, and no number of commits or minutes makes it
+#   less so. Measured: scripts/lib/pane-spawn-log.sh landed with 20 instrumented spawn sites; this
+#   ledger read "BEHIND 7, within budget (25)" and rendered a plain OK while every
+#   `command -v cc_log_pane_spawn` call site short-circuited to nothing.
+#   So LIVE_ADDS > 0 breaches at lag ≥ 1, with no budget. It does NOT become an always-fires alarm:
+#   28.5% of the last 200 trunk commits add a file (measured), the breach lasts only until the live
+#   layer carries them, and CLAUDE.md's own 🚀 disposition has the AGENT run the converger and
+#   re-read — so a healthy box self-clears it within one close. It persists exactly as long as a
+#   real converger outage does, which is the state it exists to report.
+#
 #   LADDER POSITION: 📦 and 🚀 are the two "the value is not where it needs to be" rungs, in store
 #   order branch → trunk → live, so 🚀 sits directly below 📦. 👤 asks a different question (the
 #   OPERATOR's queue) and ranks below both.
@@ -314,6 +333,10 @@ MIG_DIR="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}/failed"
 # LIVE=1 iff the live layer is VERIFIED at/above HEAD. LIVE_SRC carries why: ok · behind · n-a
 # (positively inapplicable) · unknown (could not read) · skip (not computed — a worse rung governs).
 LIVE=0; LIVE_SRC="skip"; LIVE_SHA=""; LIVE_LAG=0; MIG_FAILED=0; LIVE_BREACH=0
+# LIVE_ADDS = paths HEAD carries that the live layer's tree does not — the inert-new-file count.
+# `?` is its own state: the live sha could not be read HERE, so the question was asked and not
+# answered. 0 alongside LIVE_SRC=skip/n-a/unknown means "not counted", which those already say.
+LIVE_ADDS=0
 
 # Count failed-migration records with ZERO forks — this is a Stop-hook path, and `ls | grep -c`
 # spends two processes to answer what a glob already knows. An unmatched glob stays literal in
@@ -373,6 +396,29 @@ compute_live_layer() {
     LIVE=1; LIVE_SRC="ok"
   else
     LIVE_SRC="behind"
+    # ── ADDED FILES: the lag no budget may excuse (see the header). ──
+    # A TREE diff, not a commit walk: --diff-filter=A between the live layer's tree and HEAD's tree
+    # IS the question "which paths does HEAD have that the live layer does not", which is the
+    # inertness question itself. It needs no second stat against the live worktree, and a path the
+    # live layer already acquired by another route (rebase, cherry-pick, a branch that landed first)
+    # is correctly NOT listed — a commit walk over the range would have counted it anyway.
+    # NO PATH FILTER, deliberately. Restricting to the linked runtime dirs would raise the signal —
+    # a new docs/ page is never "run" — but it is a SECOND model of the deployed surface beside
+    # deploy-parity-assert.sh's, and a filter is a strictly-stronger suppressor: getting it wrong
+    # SILENCES a real breach (MEMORY.md cost-gate-must-be-strictly-weaker). Erring loud is the
+    # direction this rung is for, and LIVE_ADDS is emitted so a consumer can refine without a fork.
+    # Run in THIS repo: HEAD is ours by construction, whereas the live repo may never have fetched
+    # it (the same reason --is-ancestor is asked of the live side and not of ours). A linked worktree
+    # shares the object store and a separate clone holds any sha at/below trunk, so the live sha is
+    # readable here in both topologies; when it is not, say `?` and change NOTHING — an unresolvable
+    # sensor never manufactures a rung, exactly as LIVE_SRC=unknown does one branch up.
+    if git cat-file -e "${LIVE_SHA}^{commit}" 2>/dev/null; then
+      _adds="$(_bounded "${WRAP_LIVE_TIMEOUT_S:-5}" git diff --diff-filter=A --name-only "$LIVE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+      LIVE_ADDS="$(printf '%s' "$_adds" | grep -c . 2>/dev/null || echo 0)"
+      case "$LIVE_ADDS" in ''|*[!0-9]*) LIVE_ADDS=0 ;; esac
+    else
+      LIVE_ADDS="?"
+    fi
   fi
 
   # A FAILED migration is the converger saying it ran and could NOT put a landed conclusion into its
@@ -394,7 +440,11 @@ compute_live_layer() {
   if [ "$MIG_FAILED" -gt 0 ]; then
     LIVE_BREACH=1
   elif [ "$LIVE_SRC" = "behind" ]; then
-    if [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ] || [ "$age_s" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
+    # An ADD gets NO budget (header). `?` is not a number and must never breach — it falls through
+    # to the budget arms, leaving the pre-2026-08-09 verdict exactly as it was.
+    if [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
+      LIVE_BREACH=1
+    elif [ "$LIVE_LAG" -gt "$LIVE_BUDGET_COMMITS" ] || [ "$age_s" -gt "$((LIVE_BUDGET_MIN * 60))" ]; then
       LIVE_BREACH=1
     fi
   fi
@@ -466,8 +516,13 @@ else
     # 🚀 outranks 👤: "the machine is not running this yet" is a fact about the work itself, where an
     # operator step is a fact about someone's queue.
     RUNG="🚀"
+    # Three CAUSES, three sentences. The added-file cause needs its own or the line asserts
+    # "past its converge budget" over a lag that is comfortably INSIDE it — a false statement, and
+    # the operator's next move differs from a merely-stale layer: the file is missing, not old.
     if [ "$MIG_FAILED" -gt 0 ]; then
       READOUT="🚀 Landed but NOT live — ${MIG_FAILED} migration(s) could not reach the enforcing store; the machine is not running this yet."
+    elif [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then
+      READOUT="🚀 Landed but NOT live — ${LIVE_ADDS} NEW file(s) are absent from the live layer, so every consumer guard on them silently skips; no budget covers an added file."
     else
       READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget; the machine is not running this yet."
     fi
@@ -498,6 +553,7 @@ emit_machine() {
   printf 'LIVE_SRC=%s\n' "$LIVE_SRC"
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
   printf 'LIVE_LAG=%s\n' "$LIVE_LAG"
+  printf 'LIVE_ADDS=%s\n' "$LIVE_ADDS"
   printf 'MIG_FAILED=%s\n' "$MIG_FAILED"
   printf 'GATE=%s\n' "$GATE"
   printf 'DOD=%s\n' "$DOD"
@@ -529,9 +585,15 @@ emit_full() {
   printf 'Unlanded(content): %s\n' "$( [ "$UNLANDED" -eq 1 ] && printf 'YES — /ship to land (else lost)' || printf 'no — landed' )"
   # The store one edge past trunk. Reported on its own row because "landed" and "running" are two
   # different claims and a ledger that conflates them is how a conclusion ships inert.
+  # The BEHIND verdict is three-valued, not two: an added file breaches with the lag still inside
+  # the budget, so "PAST budget" would be a false reason attached to a true rung.
+  local behind_why="within budget (${LIVE_BUDGET_COMMITS})"
+  if [ "$LIVE_ADDS" = "?" ]; then behind_why="${behind_why} · added-file check UNRESOLVED"
+  elif [ "$LIVE_ADDS" -gt 0 ]; then behind_why="${LIVE_ADDS} NEW file(s) ABSENT — no budget covers an add"
+  elif [ "$LIVE_BREACH" -eq 1 ]; then behind_why="PAST budget"; fi
   local live_disp; case "$LIVE_SRC" in
     ok)      live_disp="at/above HEAD ($(printf '%s' "$LIVE_SHA" | cut -c1-8))" ;;
-    behind)  live_disp="BEHIND — ${LIVE_LAG} commit(s), $( [ "$LIVE_BREACH" -eq 1 ] && printf 'PAST budget' || printf 'within budget (%s)' "$LIVE_BUDGET_COMMITS" )" ;;
+    behind)  live_disp="BEHIND — ${LIVE_LAG} commit(s), ${behind_why}" ;;
     n-a)     live_disp="n/a (this repo is not the live layer's source)" ;;
     unknown) live_disp="unknown (live repo unreadable — not counted)" ;;
     *)       live_disp="not counted (a worse rung governs)" ;;
@@ -565,7 +627,10 @@ rung_next() {
     "⛔") printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)' ;;
     "🔧") printf 'continue → finish · run-gate · commit (explicit paths)' ;;
     "📦") printf '/ship to land (verified net-positive work is drivable — not a hold)' ;;
-    "🚀") printf 'bash scripts/deploy-live.sh — the converger is behind its budget; the conclusion is landed but inert' ;;
+    "🚀") printf 'bash scripts/deploy-live.sh — %s; the conclusion is landed but inert' \
+            "$( if [ "$LIVE_ADDS" != "?" ] && [ "$LIVE_ADDS" -gt 0 ]; then \
+                  printf '%s NEW file(s) never reached the live layer' "$LIVE_ADDS"; \
+                else printf 'the converger is behind its budget'; fi )" ;;
     "👤") printf 'surface the OPERATOR block — %s step(s) are the operator'"'"'s (my side is done)' "$YOURS" ;;
     "✅") printf 'complete — nothing to do' ;;
     *)    printf 'model-state (📤) overrides — surface it' ;;
