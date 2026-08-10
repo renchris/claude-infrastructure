@@ -250,6 +250,13 @@ printf '%s\n' "$1" >> "$CC_SPY_LOG"
 case "$1" in
   *host-red*) printf 'not ok 1 - boom\nnot ok 2 - boom2\n'; exit 1 ;;
   *host-cut*) exit 124 ;;                 # OUR bound firing: non-zero naming ZERO tests
+  # A suite that PASSES while unprefixed stderr splices into its stream: rc 0, one real `ok`, and
+  # four C30 shapes that merely OPEN with `not ok`. The worst case for a loose grammar — a green
+  # live layer paged and backlogged as RED.
+  *host-torn*) printf 'not ok\nnot ok3 squashed\nnot okay then\nnot okcorpus: 3 suites\n'
+               printf 'ok 1 - fine\n'; exit 0 ;;
+  # …and the control: the same splice around ONE genuine verdict, which must still page.
+  *host-tsplice*) printf 'not okay then\nnot ok 1 - boom\nnot okcorpus: 3 suites\n'; exit 1 ;;
   *)          printf 'ok 1 - fine\n'; exit 0 ;;
 esac
 SPY
@@ -271,6 +278,8 @@ seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/ma
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-two.bats"
   printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-red.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-cut.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-torn.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-tsplice.bats"
   printf '%s\n' "$1" > "$SHARED/scripts/host-suites.manifest"
   git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m host-suites
   git -C "$SHARED" push -q origin main
@@ -440,6 +449,41 @@ tests/absent.bats'
   # which would make this assertion pass for the wrong reason. `[ ]` keeps it live under errexit.
   [ "$(find "$PAGES" -name 'deploy-host-red-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
   [ ! -s "$CC_BACKLOG_LOG" ]
+}
+
+# ── A LINE THAT ONLY OPENS WITH `not ok` IS NOT A NAMED FAILURE ──────────────────────────────────
+# R6's "a NAMED failure is the only red" is enforced here by `grep -c '^not ok'`, and that spelling
+# does not implement the rule it is quoting: TAP spells a result `not ok <N> <desc>`, so without the
+# <N> the pattern also counts a line truncated mid-write and any unprefixed stderr that happens to
+# open with those bytes — routine here, since the suite is captured `2>&1`. postland-verify fixed
+# its own three readers (C30, TAP_NOTOK_RE); this lane kept the loose one. Consequence is narrower
+# than the land gate's exit 6 but not nothing: host_checks pages AND files a backlog item, so a
+# GREEN live layer mints a finding that a worker is then dispatched to chase.
+@test "host TORN TAP: a PASSING suite whose stream carries torn 'not ok' bytes is ok, not RED" {
+  auto_setup
+  seed_host_suites 'tests/host-torn.bats'
+  stamp origin/main
+  run dla
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok   tests/host-torn.bats"* ]] || false
+  [[ "$output" != *"RED"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-host-red-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+  [ ! -s "$CC_BACKLOG_LOG" ]                     # no page, and no item for a worker to chase
+}
+
+@test "host TORN CONTROL: ONE real 'not ok 1' inside the same splice still pages as RED" {
+  # The too-strong direction. A grammar tightened past the point where it sees a genuine failure
+  # has deleted the check, not fixed it — and this lane fails silently when that happens, because
+  # host_checks never blocks and never changes the exit code.
+  auto_setup
+  seed_host_suites 'tests/host-tsplice.bats'
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dla
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RED  tests/host-tsplice.bats — 1 failing"* ]] || false   # EXACTLY one, not three
+  [ -f "$PAGES/deploy-host-red-$(printf '%.12s' "$want").page" ]
+  grep -q 'post-deploy HOST RED' "$CC_BACKLOG_LOG"
 }
 
 @test "manifest MISSING ⇒ host checks skipped silently, bats never invoked at all" {
