@@ -26,7 +26,25 @@ setup() {
   # A stub keeps the breach path reachable; the breach tests never launch it, because they abort.
   export CC_RAMP_BIN=/bin/echo
 }
-teardown() { rm -rf "$TMP"; }
+teardown() {
+  # Reclaim anything a rotted breach arm managed to launch. `down` kills only this script's own
+  # tracked pids, so on the green path (no pidfile) it is an instant no-op.
+  bash "$SCRIPT" down >/dev/null 2>&1 || true
+  rm -rf "$TMP"
+}
+
+# NEVER capture `up` through bats' `run`. `run` reads the subject's output from a PIPE, and a breach
+# arm that rots lets `up` LAUNCH — its `sleep 7200` fifo-holder inherits that pipe and keeps it open,
+# so the test HANGS FOR TWO HOURS instead of going red. Measured 2026-08-10 while building the
+# control for the ceiling test below: the mutant subject wedged the suite rather than failing it,
+# which would burn the post-land runner's whole budget on a non-verdict. Capturing to a FILE gives
+# the grandchildren something other than the pipe, so the parent's exit status is the verdict and a
+# rotted arm reds immediately (verified: status 0, not 3, returned at once).
+run_up() {
+  status=0
+  bash "$SCRIPT" up "$@" >"$TMP/up.out" 2>&1 || status=$?
+  output="$(cat "$TMP/up.out")"
+}
 
 @test "usage: no verb exits 64 and names the stages" {
   run bash "$SCRIPT"
@@ -44,7 +62,8 @@ teardown() { rm -rf "$TMP"; }
 
 @test "up REFUSES when the memory floor already breaches (the ramp's only backstop)" {
   # Floor set absurdly high => breach holds now => up must abort before launching anything.
-  CC_RAMP_FLOOR_GB=999999 run bash "$SCRIPT" up 1
+  export CC_RAMP_FLOOR_GB=999999
+  run_up 1
   [ "$status" -eq 3 ]
   [[ "$output" == *"ABORT"* ]] || false
   [[ "$output" == *"D6 memory"* ]] || false
@@ -52,7 +71,16 @@ teardown() { rm -rf "$TMP"; }
 }
 
 @test "up REFUSES when the segment ceiling already breaches" {
-  CC_RAMP_SEG_MAX=-1 run bash "$SCRIPT" up 1     # any seg_pct >= -1 => breach
+  # PIN THE SIBLING AXIS INERT. breach() evaluates D6 memory BEFORE D3 segments and returns on the
+  # first hit, so leaving the memory floor at its 8GB default lets the operator's live vm_stat decide
+  # which arm this test reaches. Measured 2026-08-10 at avail=7.17GB: the D6 arm won, `status` was
+  # still 3 — so the exit-code assertion passed for the WRONG reason — and the output said
+  # "D6 memory", never "D3 segments". That is the whole of post-land RED 3e09830ca503, and it is why
+  # the bisect could name no culprit (the floor commit was not green either): the failure is ambient
+  # load, not a regression. FLOOR_GB=0 is unconditionally inert (avail is never < 0), which leaves D3
+  # as the only reachable arm.
+  export CC_RAMP_SEG_MAX=-1 CC_RAMP_FLOOR_GB=0   # any seg_pct >= -1 => breach
+  run_up 1
   [ "$status" -eq 3 ]
   [[ "$output" == *"D3 segments"* ]]
 }
@@ -96,6 +124,24 @@ teardown() { rm -rf "$TMP"; }
   CC_RAMP_FLOOR_GB=999999 CC_RAMP_PIDFILE="$TMP/mut-pids.txt" run bash "$MUT" breach
   # With the floor comparison dead, an impossible floor no longer breaches => exit 0, not 1.
   [ "$status" -eq 0 ] || { echo "mutation did not change behaviour — the test is not pinning the floor"; return 1; }
+}
+
+@test "MUTATION: neutering the segment check makes the ceiling refusal test pass wrongly" {
+  # The D3 arm is its OWN site and needs its own mutant. The floor mutant above cannot go red when
+  # this comparison rots, and until the ceiling test pinned the memory floor inert it was reaching
+  # the D6 arm on any loaded box — i.e. the one arm nothing else covers had a guard that could not
+  # reliably reach it.
+  MUT="$TMP/mut-seg.sh"
+  sed 's|awk -v s="$s" -v m="$SEG_MAX" .BEGIN{exit !(s+0 >= m+0)}. |false |' "$SCRIPT" > "$MUT"
+  bash -n "$MUT" || { echo "mutant is malformed — it would red everything and prove nothing"; return 1; }
+  grep -q 'D3 segments' "$MUT" || { echo "sed over-matched: the mutant lost the D3 arm entirely"; return 1; }
+  ! grep -q 'exit !(s+0 >= m+0)' "$MUT" || skip "sed anchor missed; nothing mutated"
+  # Control FIRST: the real script must breach under this env, or a status change proves nothing.
+  CC_RAMP_SEG_MAX=-1 CC_RAMP_FLOOR_GB=0 run bash "$SCRIPT" breach
+  [ "$status" -eq 1 ] || { echo "control failed: the unmutated script does not breach here"; return 1; }
+  CC_RAMP_SEG_MAX=-1 CC_RAMP_FLOOR_GB=0 CC_RAMP_PIDFILE="$TMP/mut-pids.txt" run bash "$MUT" breach
+  # With the segment comparison dead, an impossible ceiling no longer breaches => exit 0, not 1.
+  [ "$status" -eq 0 ] || { echo "mutation did not change behaviour — the test is not pinning the ceiling"; return 1; }
 }
 
 @test "MUTATION: replacing tracked-pid kill with a pattern kill would hit the sibling" {
