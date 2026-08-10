@@ -781,3 +781,117 @@ tbr() { run env bash -c '. "$1"; top_by_rss "$2" "$3"' _ "$D/lib.sh" "$1" "$2" <
   run env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_SNAP_TOPN=5 bash "$S" --ticks 1
   [ "$status" -eq 0 ] || false
 }
+
+# ── PANIC ATTRIBUTION (master 66ef300dd0b4 — "the next death is attributable") ───
+# A kernel panic writes NO crash row: the ledger's writer is a daemon the panic kills, so
+# claude-crashes.jsonl's last row predates panic #6 by 15 minutes and 132 of 171 rows read
+# cause:"abrupt-unknown". The kernel meanwhile writes the answer into a *.panic report that nothing
+# in this repo has ever parsed — and macOS is rotating those away (3 of 5 remain). These cases pin
+# the reader against BOTH real report shapes, fixtured, never against /Library.
+#
+# Fixtures are byte-shaped like the live reports, verified against them on 2026-08-09:
+#   panic-full      → carries `"procname":"<comm>"` runs  → a census
+#   panic-base+socd → carries the verdict and NO table    → census_source must say so
+panic_fixture_full() { # <dir> <name>
+  mkdir -p "$1"
+  { printf '{"bug_type":"210","timestamp":"2026-08-09 03:41:24.00 -0700"}\n'
+    printf '{"panicString":"panic(cpu 3): watchdog timeout: no checkins from watchdogd in 94 seconds\\n'
+    printf 'Compressor Info: 32%% of compressed pages limit (OK) and 100%% of segments limit (BAD) with 68 swapfiles and OK swap space\\n"'
+    local i=0
+    while [ "$i" -lt 7 ]; do printf ',"p%s":{"procname":"node","pageFaults":1}' "$i"; i=$((i+1)); done
+    printf ',"q0":{"procname":"claude.exe","pageFaults":1}'
+    printf ',"q1":{"procname":"bash","pageFaults":1}}\n'
+  } > "$1/$2"
+}
+panic_fixture_base() { # <dir> <name> — verdict, but NO process table
+  mkdir -p "$1"
+  { printf '{"bug_type":"210","timestamp":"2026-08-09 04:18:59.00 -0700"}\n'
+    printf '{"panicString":"panic(cpu 3): watchdog timeout\\n'
+    printf 'Compressor Info: 32%% of compressed pages limit (OK) and 100%% of segments limit (BAD) with 66 swapfiles and OK swap space\\n"}\n'
+  } > "$1/$2"
+}
+scan() { CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/panic.jsonl" bash "$S" --panic-scan; }
+
+@test "panic reader: extracts the kernel's own kill-axis verdict" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  run scan
+  [ "$status" -eq 0 ] || false
+  jq -e '.verdict | test("100% of segments limit \\(BAD\\)")' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.panicked_at == "2026-08-09 03:41:24.00 -0700"' "$D/panic.jsonl" >/dev/null || false
+}
+
+# The culprit, counted by the kernel. This is the whole argument that the CC fleet is the VICTIM
+# and a dev-server worker pool is the killer — recoverable in one command instead of the multi-hour
+# manual trace it took the first time.
+@test "panic reader: censuses the process table by procname, ranked" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  run scan
+  jq -e '.census_source == "report-process-table"' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.census | startswith("node=7")' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.census | test("claude.exe=1")' "$D/panic.jsonl" >/dev/null || false
+}
+
+# The negative control, and the reason census_source exists. The FIRST draft of this reader counted
+# every quoted token and "found" a process table in a panic-base+socd report that provably has none
+# — census_source read `report-process-table` over a census of JSON keys (bug_type=2 socId=1). It
+# got past a reading of the code; only opening the real artifact caught it.
+@test "panic reader: a report with NO process table says so — never a census of JSON keys" {
+  panic_fixture_base "$D/panics" "panic-base+socd-2026-08-09-041859.000.panic"
+  run scan
+  [ "$status" -eq 0 ] || false
+  jq -e '.census_source == "absent-no-process-table"' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.census == ""' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.verdict | test("segments limit")' "$D/panic.jsonl" >/dev/null || false   # verdict still read
+  ! jq -e '.census | test("bug_type")' "$D/panic.jsonl" >/dev/null || false
+}
+
+# Truncation does not degrade the ranking, it REVERSES it: measured against the live 6.5 MB report,
+# a 2 MB bound returned `bash=33 node=21` and named the wrong culprit. A reversed culprit is worse
+# than no culprit, so the bound being reached is DECLARED.
+@test "panic reader: a truncated read is declared, never a quietly biased ranking" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  export CC_PANIC_HEAD_BYTES=400
+  run scan
+  jq -e '.census | test("node")' "$D/panic.jsonl" >/dev/null || false   # positive control: a census WAS taken
+  jq -e '.census_source == "report-process-table-TRUNCATED"' "$D/panic.jsonl" >/dev/null || false
+}
+
+@test "panic reader: the same panic is recorded ONCE, however often the daemon restarts" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  scan >/dev/null 2>&1; scan >/dev/null 2>&1; scan >/dev/null 2>&1
+  [ "$(grep -c . "$D/panic.jsonl")" -eq 1 ] || false
+}
+
+@test "panic reader: a NEW panic after a recorded one is appended (the paired act-rule)" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  scan >/dev/null 2>&1
+  sleep 1; panic_fixture_base "$D/panics" "panic-base+socd-2026-08-09-041859.000.panic"
+  scan >/dev/null 2>&1
+  [ "$(grep -c . "$D/panic.jsonl")" -eq 2 ] || false
+}
+
+# "No panic has happened" and "I could not look" are DIFFERENT facts. One exit code for both is
+# what makes a blind sensor read healthy (memory: sensor-default-off-makes-blindness-the-shipping-path).
+@test "panic reader: no panic report is exit 0; an unreadable directory is exit 3" {
+  mkdir -p "$D/panics"
+  run scan
+  [ "$status" -eq 0 ] || false
+  [ ! -f "$D/panic.jsonl" ] || false
+  CC_PANIC_DIRS="$D/nonexistent" CC_PANIC_LEDGER="$D/panic.jsonl" run bash "$S" --panic-scan
+  [ "$status" -eq 3 ] || false
+}
+
+# A reader for the LAST death must never cost the evidence for the NEXT one.
+@test "panic reader: a failing scan cannot stop the sensor from starting" {
+  export CC_PANIC_DIRS="$D/nonexistent"
+  run env CC_SENTINEL_LOG="$D/s.jsonl" bash "$S" --once
+  [ "$status" -eq 0 ] || false
+  [ -s "$D/s.jsonl" ] || false     # positive control: the tick still produced a row
+}
+
+@test "panic reader: CC_PANIC_SCAN=off skips it entirely" {
+  panic_fixture_full "$D/panics" "panic-full-2026-08-09-034124.0002.panic"
+  export CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/panic.jsonl" CC_PANIC_SCAN=off
+  run env CC_SENTINEL_LOG="$D/s.jsonl" bash "$S" --once
+  [ ! -f "$D/panic.jsonl" ] || false
+}
