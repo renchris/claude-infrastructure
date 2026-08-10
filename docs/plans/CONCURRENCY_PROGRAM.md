@@ -1760,3 +1760,44 @@ headless precondition PASSES (§S6.7-MEASURED: no pty, all six hooks fire, mail 
 so the substrate remains open **on render's account**, blocked on two comms gaps — `cc-registry` is
 keyed on a pane UUID, so peers are told a live headless session is dead; and nothing wakes an idle
 headless session.
+
+---
+
+## S6-DOD · Definition of Done for "150+ concurrent, no lag, no crash"
+
+The completion predicate for the S6 program. Written to be **falsifiable and machine-checkable**, so
+a `/goal` Stop hook can judge it and a session cannot talk its way past it.
+
+🚨 **The standing failure mode this DoD exists to prevent: every 150-session number in this program
+is an 8× EXTRAPOLATION from a 19-session sample.** The largest count ever observed on this box is
+**19**. No amount of further modelling closes that gap — only a ramp does. **A model is not a
+capability; D1 is the only criterion that cannot be satisfied by analysis.**
+
+### The eight criteria
+
+| # | Criterion | Check |
+|---|---|---|
+| **D1** | **150 concurrent sessions sustained ≥30 min**, reached by a staged ramp **19 → 40 → 80 → 150** | `cc-sessions` count; abort the ramp on any breach below |
+| **D2** | **No kernel panic** during the ramp or the following 24 h | `ls /Library/Logs/DiagnosticReports/*.panic` — count unchanged |
+| **D3** | **`seg_pct` < 15%** at every sample (the sentinel's own trip level) | `compressor-sentinel.jsonl` `.pct`; this is the crash predictor, not free bytes |
+| **D4** | **Load within the gate's ceiling** at 150 — or the gate re-termed (D7) and its new predicate green | `sysctl -n vm.loadavg` ÷ `hw.ncpu` |
+| **D5** | **Distinct in-use ptys < 450** of `kern.tty.ptmx_max`, **and the ratio re-measured under ACTIVE load** | `ps -axo tty= \| grep '^ttys' \| sort -u \| wc -l` — node-count is an upper bound, do not use it here |
+| **D6** | **Memory holds**: reclaimable never below the alarm floor; swap growth < 100 MB/s | `vm_stat`, `sysctl vm.swapusage` sampled through the ramp |
+| **D7** | **Wave D decided** — admission keys on ACTIVE concurrency and the memory term can actually bind — **or explicitly waived in writing** | `grep -c compressor_segment scripts/lib/capacity-admit.sh` > 0, or a recorded waiver |
+| **D8** | **Wave C proven under a real cold compile** at ≥80 resident: `seg_pct` stays < 15% | deliberate `next dev` cold compile during the ramp |
+
+### Abort and rollback
+
+The ramp aborts on ANY of D2–D6 breaching, at any stage, and does not proceed to the next stage.
+The `compressor-sentinel` SIGSTOP actuator (armed 2026-08-09, 40 MB floor, cap 400) is the backstop
+and **must stay armed for the whole ramp** — its line must read `actuator: SIGSTOPped N process(es)`;
+any `DISARMED` line is an abort. Kill switch: `CC_SENTINEL=off`.
+
+### What does NOT count as done
+
+- Any projection, model, or arithmetic **without a completed D1 ramp**. This is the whole point.
+- A stage that "held" while the sentinel was disarmed, or while `seg_pct` was unread.
+- D5 satisfied from an at-rest pty sample. Every other per-session figure in this program turned out
+  to be activity-dependent — the 1.6 load figure most of all — so an at-rest pty ratio is presumed
+  optimistic until measured under load.
+- D7 satisfied by *proposing* gate terms. Decided means landed, or waived in writing.
