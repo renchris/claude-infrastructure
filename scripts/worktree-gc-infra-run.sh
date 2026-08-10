@@ -89,6 +89,40 @@ case "$STALE_H"      in ''|*[!0-9]*) STALE_H=48 ;; esac
 case "$LOCK_RETRIES" in ''|*[!0-9]*) LOCK_RETRIES=3 ;; esac
 case "$LOCK_BACKOFF" in ''|*[!0-9]*) LOCK_BACKOFF=120 ;; esac
 
+# ── STRANDED VALUE — the balance the KEEP side has never been counted against (M4, 0328e7cc5742)
+# The paragraph above says worktree-gc.sh "legitimately KEEPs live, dirty, UNLANDED and owned
+# trees", and that is true and correct: gate 6 refuses to remove a worktree whose branch still
+# holds unlanded commits, `bin/cc-reaper`'s work_landed() refuses on the same patch-id test, and
+# `scripts/branch-reaper.sh` deletes only merged branches with `-d`. Nothing here weakens any of
+# that — deleting finished work is the failure this repo already engineered out.
+#
+# But the invariant is ONE-SIDED, and that is what this rung adds. "Unlanded ⇒ KEEP" has no
+# counter-pressure: a branch nobody lands is kept FOREVER, and `kept=126` reports it in the same
+# integer as a worktree kept because a session is live inside it. So the safe direction is also
+# an accumulator, and the balance is invisible by construction — the only reason anyone has ever
+# known the number is that a human summed it by hand. Measured that way 2026-08-10: 95 unlanded
+# patches across 31 registered worktree branches in this repo, the oldest 16 days old. None of it
+# was ever at risk of deletion. All of it was at risk of never landing, which is the same loss
+# arriving by a slower road — a worktree reaped after its branch is forgotten, or a machine that
+# simply never runs the work.
+#
+# So the janitor now reports the value it is HOLDING, on every row, beside the footprint it
+# already reports. A breach is not a reason to reap anything; it is a reason to LAND.
+#
+# ⚠ `git cherry` is the only correct instrument, and its two failure modes both bite here:
+#   · `git rev-list --count <trunk>..<branch>` reads 455 for a branch holding 8 real patches —
+#     it counts the TRUNK's own commits since the fork. Patch-id equivalence is the question.
+#   · `git cherry` output of ZERO means LANDED, not "the command did nothing" — indistinguishable
+#     from outside, so '+' rows are counted explicitly and a git failure yields n-a, never 0.
+# Counted by UNIQUE sha across branches: three worktrees here held byte-identical commit sets
+# (a re-created worktree keeps the old branch), so a per-branch sum reports 111 for 95 real
+# patches and would breach a ceiling on arithmetic nobody did.
+STRANDED_CEILING="${CC_WTGC_STRANDED_CEILING:-40}"
+STRANDED_BOUND="${CC_WTGC_STRANDED_BOUND:-120}"
+STRANDED_TRUNK="${CC_WTGC_STRANDED_TRUNK:-origin/main}"
+case "$STRANDED_CEILING" in ''|*[!0-9]*) STRANDED_CEILING=40 ;; esac
+case "$STRANDED_BOUND"   in ''|*[!0-9]*) STRANDED_BOUND=120 ;; esac
+
 # The population is the DIRECTORY count, deliberately not `git worktree list`. A registration is
 # the janitor's own bookkeeping; a directory is what occupies the disk, and the two disagree —
 # measured the same day, 558 on disk against 427 registered in this repo. Counting registrations
@@ -116,6 +150,38 @@ population_owned() {
         | sed -n 's#^worktree ##p' | grep -c "^$WT_ROOT/")" || true
   case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
+}
+
+# stranded_scan → "<unique-patches> <branches>", or "n-a n-a" when it cannot be measured.
+# Same contract as the readers above: a NUMBER or an explicit unknown, never an empty string
+# (both feed a `[ ]` numeric test, and an unknown must never be mistaken for a healthy 0).
+# The trunk ref must EXIST — an absent origin/main would make every branch read fully unlanded
+# and manufacture a breach out of a missing fetch. Bounded by wall clock: the scan is one
+# `git cherry` per registered branch (measured 6.7s over 117 branches, but it grows with the
+# population it is watching), and a janitor that hangs is strictly worse than one reporting n-a.
+stranded_scan() {
+  local deadline shas n_br=0 b out
+  "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$STRANDED_TRUNK" >/dev/null 2>&1 \
+    || { printf 'n-a n-a'; return 0; }
+  deadline=$(( $(date +%s) + STRANDED_BOUND ))
+  shas=""
+  while read -r b; do
+    [ -n "$b" ] || continue
+    if [ "$(date +%s)" -ge "$deadline" ]; then printf 'n-a n-a'; return 0; fi
+    out="$("$GIT_BIN" -C "$REPO" cherry "$STRANDED_TRUNK" "$b" 2>/dev/null | awk '/^\+ /{print $2}')" || true
+    [ -n "$out" ] || continue
+    n_br=$(( n_br + 1 ))
+    shas="$shas$out
+"
+  done <<EOF
+$("$GIT_BIN" -C "$REPO" worktree list --porcelain 2>/dev/null | awk '/^branch /{print substr($0,19)}' | sort -u)
+EOF
+  # UNIQUE shas: duplicate branches hold byte-identical commits (see the header note).
+  # `grep -c .` prints 0 and exits 1 on empty input, hence the `|| true` + normalisation.
+  local n_pt
+  n_pt="$(printf '%s' "$shas" | sort -u | grep -c .)" || true
+  case "${n_pt:-}" in ''|*[!0-9]*) n_pt=0 ;; esac
+  printf '%s %s' "$n_pt" "$n_br"
 }
 
 # Hours since the last verdict of ANY kind. `date -r` is BSD; GNU needs -c. Unknown ⇒ empty, and
@@ -178,12 +244,21 @@ verdict() { # <verdict> <exit-code> [k=v ...]
   [ "$#" -gt 0 ] && line="$line $*"
   # POPULATION ON EVERY ROW, including the failure rows. A `skipped` or `error` row that does not
   # carry the count is exactly the row that read healthy for three days.
+  # STRANDED rides the SAME OWNED_MODE gate as pop_owned, and that is not tidiness — the kill
+  # switch's whole promise is inertness, and tests/worktree-gc-infra.bats pins `[ ! -f GITARGV ]`
+  # on the disabled path. `stranded_scan` is a per-branch `git cherry` loop, so putting it on an
+  # ungated row would make a DISABLED janitor the single most git-expensive path in the file —
+  # the exact regression the pop_owned n-a arm was written to prevent, committed one field later.
+  # Pre-sweep rows therefore say n-a: an honest "not measured", never a 0 that reads as "none".
   _vp="$(population)"
   if [ "$OWNED_MODE" = "read" ]; then
     _vo="$(population_owned)"
+    _vs="$(stranded_scan)"
     line="$line pop=$_vp pop_owned=$_vo pop_foreign=$(( _vp - _vo )) ceiling=$CEILING"
+    line="$line stranded_patches=${_vs%% *} stranded_branches=${_vs##* } stranded_ceiling=$STRANDED_CEILING"
   else
     line="$line pop=$_vp pop_owned=n-a pop_foreign=n-a ceiling=$CEILING"
+    line="$line stranded_patches=n-a stranded_branches=n-a stranded_ceiling=$STRANDED_CEILING"
   fi
   [ -n "$PREV_NOTE" ] && line="$line $PREV_NOTE"
   line="$line rc=$rc"
@@ -207,13 +282,24 @@ verdict() { # <verdict> <exit-code> [k=v ...]
 # itself is stale/absent, which is NOT the same as healthy and must never read as 0).
 if [ "${1:-}" = "--assert" ]; then
   _p="$(population)"; _o="$(population_owned)"; _a="$(last_row_age_h)"; _l="$(cat "$LAST" 2>/dev/null)"
+  _s="$(stranded_scan)"; _sp="${_s%% *}"; _sb="${_s##* }"
   printf 'population=%s (ours=%s foreign=%s) ceiling=%s last_verdict_age_h=%s\n' \
     "$_p" "$_o" "$(( _p - _o ))" "$CEILING" "${_a:-unknown}"
+  printf 'stranded=%s unlanded patch(es) across %s branch(es) ceiling=%s\n' "$_sp" "$_sb" "$STRANDED_CEILING"
   printf 'last_row=%s\n' "${_l:-<none — the janitor has never recorded a verdict>}"
   _bad=0
   # The shared root holds other repos' worktrees; only ours are reapable here, so only ours are
   # judged. A foreign total that grows is reported, never alarmed on — reso owns its own reaper.
   [ "$_o" -gt "$CEILING" ] && { printf 'BREACH our worktrees %s > ceiling %s\n' "$_o" "$CEILING"; _bad=1; }
+  # A stranded breach is a LANDING backlog, not a reaping one — different verb, same exit code, so
+  # a caller that only reads rc still learns "something needs doing". n-a is unknown ⇒ never a breach.
+  case "$_sp" in
+    ''|*[!0-9]*) printf 'stranded balance UNMEASURABLE (no %s, or the scan exceeded %ss)\n' \
+                   "$STRANDED_TRUNK" "$STRANDED_BOUND" ;;
+    *) [ "$_sp" -gt "$STRANDED_CEILING" ] && {
+         printf 'BREACH %s unlanded patch(es) held across %s branch(es) > ceiling %s — LAND them (/ship per branch); reaping will not clear this\n' \
+           "$_sp" "$_sb" "$STRANDED_CEILING"; _bad=1; } ;;
+  esac
   if [ -z "$_a" ]; then
     printf 'BREACH the janitor has no verdict row at all — it has never demonstrably run\n'; _bad=1
   elif [ "$_a" -gt "$STALE_H" ]; then
@@ -378,6 +464,19 @@ case "$rc" in
     if [ "$OBSERVE" = "0" ] && [ "$_owned_after" -gt "$CEILING" ]; then
       verdict over-ceiling 3 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
     fi
+    # STRANDED BREACH — ranked BELOW the footprint breach deliberately. pop_owned is what panicked
+    # this box; stranded value costs nothing at runtime and is a backlog problem, not a machine one.
+    # It is its own verdict rather than a note because the remedy has a different actor and a
+    # different verb: over-ceiling means REAP, stranded-over-ceiling means LAND. n-a never breaches
+    # (an unmeasurable balance is unknown, and unknown must not fire an alarm nobody can action).
+    _vsw="$(stranded_scan)"; _vsw_p="${_vsw%% *}"
+    case "$_vsw_p" in
+      ''|*[!0-9]*) : ;;
+      *) if [ "$OBSERVE" = "0" ] && [ "$_vsw_p" -gt "$STRANDED_CEILING" ]; then
+           verdict stranded-over-ceiling 3 \
+             "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
+         fi ;;
+    esac
     verdict ok 0 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
     ;;
   3) verdict blind 3 "reason=no-liveness-oracle" ;;
