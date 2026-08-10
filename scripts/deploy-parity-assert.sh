@@ -266,8 +266,11 @@ pending=0
 
 # STAGED-PENDING is a THIRD state between "linked" and "drift", and it is the repo's own design:
 # a settings-wired hook is deliberately left UNLINKED until its staged activation script runs, so
-# that the missing link IS the visible signal that the wiring is pending (deploy-link-parity.sh:17,
-# scripts/deploy-now.sh — "it never creates a link ... auto-linking would erase that signal").
+# that the missing link IS the visible signal that the wiring is pending (deploy-link-parity.sh:17 —
+# "it never creates a link ... auto-linking would erase that signal"). scripts/deploy-now.sh carried
+# that sentence too until it became a thin front-end onto deploy-live.sh; the design outlived it,
+# because deploy-live's link_refresh consumes THIS leg's MISSING verdict, so the PENDING files
+# `continue`d below are exactly why an auto-linking deploy path can exist without erasing the signal.
 # This leg had no such notion and reported every unlinked tracked file as MISSING ⇒ DRIFT ⇒ exit 1,
 # which convicts the live layer for obeying the design. That made every staged activation a
 # permanent false RED: measured 2026-07-30 at 5d85e916, where this assert reported 7 MISSING while
