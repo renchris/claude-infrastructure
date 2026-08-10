@@ -18,24 +18,42 @@
 # answer, the kill switch. A suite asserting only the positives would go green on an arm that
 # appends its block to every brief in the store.
 #
-# THE STAMP CONTROL IS THE LOAD-BEARING ONE. The item's timestamp becomes `git log --since=<ts>`,
-# and git does NOT fail on a date it cannot parse — it ignores the filter and returns the whole
-# history. Delete RE_ISO_TS and a garbage stamp stops meaning "say nothing" and starts meaning
-# "report every commit that ever touched this file", which is a fabricated finding wearing the exact
-# shape of a real one.
+# THE STAMP CONTROL IS THE LOAD-BEARING ONE, and it is not the obvious one — see the note on the
+# LOOSE STAMP test. One stamp is read TWICE, by two different parsers: Python computes the age
+# against the floor from it, and git takes it as `--since=`. Garbage is the harmless case, because
+# both refuse it. The shapes that bite are the ones BOTH accept and read DIFFERENTLY, because a
+# stamp neither parser flags is the one that produces a confident sentence counting commits over a
+# window that is not the window the age was measured from.
+#
+# The last half of this file covers the other question the arm raises — not "is the answer right"
+# but WHO IS ASKED IT AND WHEN — at `cc-backlog unblock`, the one transition that re-admits an item
+# to the dispatch wave with nothing re-reading what it says.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CP="$REPO/bin/cc-premise"
+  CB="$REPO/bin/cc-backlog"
   # $HOME first: cc-premise defaults its store under $HOME, so an unfixtured suite would read the
   # operator's live ledger (memory: unfixtured-sensor-executes-the-deployed-subject). The explicit
   # CC_BACKLOG_FILE beside it says WHICH store this suite means.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
+  export CC_BACKLOG_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  export CC_BACKLOG_KICK=off
+  export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/dispatch-kick"
   # EXPLICITLY EMPTY, not unset: an unset variable defaults to cc-premise's own checkout, and these
   # assertions would then depend on this repo's real history.
   export CC_PREMISE_REPO=
   : > "$CC_BACKLOG_FILE"
+}
+
+# blocked <id> <title> <ts> — an item filed and then blocked, i.e. the exact population the
+# re-admission tests are about. Written as records rather than driven through the verbs so the
+# filing STAMP is under this file's control; `add` would stamp it at now and no age test could exist.
+blocked() {
+  add "$1" "$2" "$3"
+  printf '{"id":"%s","ts":"%s","event":"block","needs":"an operator step"}\n' "$1" "$3" \
+    >> "$CC_BACKLOG_FILE"
 }
 
 # `! cmd` is exempt from errexit in bash, so a negative written that way only fails as the LAST line
@@ -295,4 +313,98 @@ verdict() { printf '%s' "$1" | sed -n 's/^verdict=//p'; }
   [ "$status" -eq 0 ]
   [ "$(verdict "$output")" = clear ]
   refute_match "$output" "EVIDENCE AGE"
+}
+
+# ── the re-admission re-read: cc-backlog unblock (backlog f46261b23ec2) ──────────────────────────
+#
+# The arm above answers the question; this half decides WHO IS ASKED IT AND WHEN. `unblock` is the
+# one transition that returns an item to cc-dispatch's fire predicate without anything re-reading
+# what it says, and blocked items are the ones that have sat longest — so it is the transition where
+# stale evidence is most likely and least visible. Everything below is advisory by construction: the
+# assertions pair "it speaks" with "and the transition still happened anyway".
+
+@test "unblock SURFACES the contract, and the transition still succeeds" {
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  blocked 1a1a1a1a1a1a "the reader in scripts/target.sh is unpadded" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" scripts/target.sh "fix(target): pad the reader at the emitter"
+
+  run --separate-stderr "$CB" unblock 1a1a1a1a1a1a
+  [ "$status" -eq 0 ]
+  # STDOUT IS THE ID CONTRACT and every caller captures it. The advisory must not reach it, and
+  # neither must cc-premise's `verdict=` line — which is what the `2>&1 >/dev/null` ORDER buys. The
+  # reversed spelling `>/dev/null 2>&1` captures nothing and this test's stderr half goes silent;
+  # a bare `2>&1` publishes the verdict into the advisory, which the last assertion catches.
+  [ "$output" = "1a1a1a1a1a1a" ]
+  printf '%s' "$stderr" | grep -q "RE-READ ITS EVIDENCE FIRST"
+  printf '%s' "$stderr" | grep -q "EVIDENCE AGE"
+  printf '%s' "$stderr" | grep -q "pad the reader at the emitter"
+  refute_match "$stderr" "verdict="
+  # …and it ADVISED, it did not gate: the fold is open, which is the whole point of the verb.
+  run "$CB" list --all --json
+  [ "$(printf '%s' "$output" | jq -r '.[0].status')" = open ]
+}
+
+@test "unblock is SILENT when the premise has nothing to say" {
+  # The ambience control. Without it the advisory could print its header unconditionally and every
+  # assertion above would still pass, on a channel that says the same thing about every item and so
+  # says nothing about any of them (memory: alarm-polarity-and-attention-budget).
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  blocked 3c3c3c3c3c3c "the reader in scripts/untouched.sh is unpadded" "$(ts_ago 5d)"
+
+  run --separate-stderr "$CB" unblock 3c3c3c3c3c3c
+  [ "$status" -eq 0 ]
+  [ "$output" = "3c3c3c3c3c3c" ]
+  refute_match "$stderr" "RE-READ ITS EVIDENCE"
+}
+
+@test "REOPEN does not carry it — the machine paths would make this ambient" {
+  # `reopen` folds to "open" exactly as unblock does, so the scoping is a decision, not an accident:
+  # it is overwhelmingly cc-dispatch self-releasing a fire it could not make and reap returning a
+  # dead worker's claim, where there is no deciding reader to inform. This pins the decision so a
+  # later "make it consistent" cannot quietly flood those paths.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  add 1a1a1a1a1a1a "the reader in scripts/target.sh is unpadded" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" scripts/target.sh "fix(target): pad the reader at the emitter"
+
+  run --separate-stderr "$CB" reopen 1a1a1a1a1a1a
+  [ "$status" -eq 0 ]
+  refute_match "$stderr" "RE-READ ITS EVIDENCE"
+}
+
+@test "CC_BACKLOG_PREMISE_GATE=off silences the re-read, same switch as the claim gate" {
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  blocked 1a1a1a1a1a1a "the reader in scripts/target.sh is unpadded" "$(ts_ago 5d)"
+  commit_at "$r" "$(ts_ago 2d)" scripts/target.sh "fix(target): pad the reader at the emitter"
+
+  CC_BACKLOG_PREMISE_GATE=off run --separate-stderr "$CB" unblock 1a1a1a1a1a1a
+  [ "$status" -eq 0 ]
+  [ "$output" = "1a1a1a1a1a1a" ]
+  refute_match "$stderr" "RE-READ ITS EVIDENCE"
+}
+
+@test "FAIL-OPEN: a cc-premise that is absent, or that crashes, cannot fail the unblock" {
+  # THE STAKES CLAUSE. unblock is a RECOVERY verb — scripts/thrash-block-recover.sh drives it to pull
+  # work back out of the operator-only `blocked` state — so an advisory that could break it would
+  # convert a sensor failure into a permanently un-recoverable queue. Both shapes are asserted: no
+  # binary at all, and a binary that exits non-zero with nothing useful to say.
+  r="$(mkrepo)"
+  export CC_PREMISE_REPO="$r"
+  crasher="$BATS_TEST_TMPDIR/crasher"
+  printf '#!/bin/sh\nexit 9\n' > "$crasher"; chmod +x "$crasher"
+
+  blocked 1a1a1a1a1a1a "the reader in scripts/target.sh is unpadded" "$(ts_ago 5d)"
+  CC_BACKLOG_PREMISE_BIN="$BATS_TEST_TMPDIR/no-such-cc-premise" run "$CB" unblock 1a1a1a1a1a1a
+  [ "$status" -eq 0 ]
+  [ "$output" = "1a1a1a1a1a1a" ]
+
+  blocked 2b2b2b2b2b2b "the reader in scripts/target.sh is unpadded" "$(ts_ago 5d)"
+  CC_BACKLOG_PREMISE_BIN="$crasher" run "$CB" unblock 2b2b2b2b2b2b
+  [ "$status" -eq 0 ]
+  [ "$output" = "2b2b2b2b2b2b" ]
+  run "$CB" list --all --json
+  [ "$(printf '%s' "$output" | jq -r 'map(select(.id=="2b2b2b2b2b2b"))[0].status')" = open ]
 }
