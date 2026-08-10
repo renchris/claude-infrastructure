@@ -93,7 +93,7 @@ lineno() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
   [ "$gate" -lt "$jqexit" ]
 }
 
-@test "03 stdin is drained ONCE, above the gate — a second `cat` would read an empty pipe" {
+@test "03 stdin is drained ONCE, above the gate — a second \`cat\` would read an empty pipe" {
   input="$(lineno "$HOOK" '^INPUT=\$(cat)')"
   gate="$(lineno "$HOOK" 'cc_worker_claim_admit edit-boundary')"
   [ -n "$input" ]; [ "$input" -lt "$gate" ]

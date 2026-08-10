@@ -268,7 +268,7 @@ load_spawn_gui() {
   [ ! -s "$OSA_LOG" ]
 }
 
-@test "lr-reset-poller: a kitty spawn failure returns 1 so `auto` still falls through to tmux (LR-m)" {
+@test "lr-reset-poller: a kitty spawn failure returns 1 so \`auto\` still falls through to tmux (LR-m)" {
   in_kitty 31
   export KITTY_FAIL=1
   load_spawn_gui
