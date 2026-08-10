@@ -527,14 +527,39 @@ cmd_land() {
 
 # ═══ open ════════════════════════════════════════════════════════════════════════════════════════
 cmd_open() {
-  local id="${1:-}"
+  local id="${1:-}" no_launch=0
+  [ "${2:-}" = "--print" ] && no_launch=1
   [ -n "$id" ] || die "open: <id> is required"
   have_cloud || { note "cc-offload: cc-cloud not found."; return 3; }
-  local url
-  url="$("$CLOUD_BIN" show "$id" 2>/dev/null | sed -n 's/^url=//p' | head -1)"
+  local decl url acct
+  decl="$("$CLOUD_BIN" show "$id" 2>/dev/null)"
+  url="$(printf '%s\n' "$decl" | sed -n 's/^url=//p' | head -1)"
+  acct="$(printf '%s\n' "$decl" | sed -n 's/^account=//p' | head -1)"
   [ -n "$url" ] || url="https://claude.ai/code/$id"
+
+  # 🚨 NEVER HAND OVER A BARE CLOUD URL. A session id is scoped to the account that CREATED it
+  # (§10.2), and the web UI's failure mode for the wrong account is
+  #   "This session could not be found. It may have been deleted, or you may not have access."
+  # — indistinguishable from a session that never existed. Measured 2026-08-10: a bare URL was
+  # handed over, opened under a different account, and read as a deleted session. That is the same
+  # law as the /login rule (every re-login instruction names the MAILBOX it authenticates): an
+  # identity-scoped link without its identity is a trap, not a link.
+  if [ -n "$acct" ]; then
+    local email profile
+    email="$(jq -r --arg a "$acct" '.accounts[]? | select(.name==$a) | .email // empty' \
+             "$HOME/.claude/accounts.json" 2>/dev/null | head -1)"
+    profile="$(jq -r --arg a "$acct" '.accounts[]? | select(.name==$a) | .dia_profile // empty' \
+             "$HOME/.claude/accounts.json" 2>/dev/null | head -1)"
+    printf '%saccount %s%s%s%s%s\n' "$C_META" "$C_OFF" "$C_BLD" "$acct" "$C_OFF" \
+      "${email:+ — $email}${profile:+ (browser profile $profile)}"
+    printf '%s⚠ this link resolves ONLY while signed in as that account; any other account is told\n' "$C_WARN"
+    printf '  "This session could not be found", which is NOT evidence the session is gone.%s\n' "$C_OFF"
+  else
+    printf '%s⚠ this declaration names no owning account, so the account this link needs is UNKNOWN.%s\n' \
+      "$C_WARN" "$C_OFF"
+  fi
   printf '%s\n' "$url"
-  command -v open >/dev/null 2>&1 && open "$url"
+  [ "$no_launch" = 1 ] || { command -v open >/dev/null 2>&1 && open "$url"; }
   return 0
 }
 
