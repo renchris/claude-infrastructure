@@ -243,6 +243,7 @@ nightly() { # runs the nightly with every other check stubbed green
 auto_setup() {
   export CC_SPY_LOG="$BATS_TEST_TMPDIR/bats.spy"
   export CC_BACKLOG_LOG="$BATS_TEST_TMPDIR/backlog.spy"
+  export CC_FLIP_CTL="$BATS_TEST_TMPDIR/flip.ctl"     # steers tests/host-flip.bats (see the SPY)
   SPY="$BATS_TEST_TMPDIR/bats-spy"; BLSPY="$BATS_TEST_TMPDIR/backlog-spy"
   cat > "$SPY" <<'SPY'
 #!/bin/bash
@@ -261,6 +262,14 @@ case "$1" in
                printf 'ok 1 - fine\n'; exit 0 ;;
   # …and the control: the same splice around ONE genuine verdict, which must still page.
   *host-tsplice*) printf 'not okay then\nnot ok 1 - boom\nnot okcorpus: 3 suites\n'; exit 1 ;;
+  # STEERED by a control file, so ONE suite can change verdict between ticks. Every branch above is
+  # keyed on the suite NAME and is therefore constant for all time, which cannot exercise a rule
+  # about CONSECUTIVE outcomes — "a verdict clears the streak" needs the same suite to cut, then
+  # pass. Default 124 (cut) so a test that never writes the control file still gets a cut.
+  *host-flip*) fc="$(cat "$CC_FLIP_CTL" 2>/dev/null || true)"
+               case "$fc" in ''|*[!0-9]*) fc=124 ;; esac
+               case "$fc" in 0) printf 'ok 1 - fine\n' ;; 1) printf 'not ok 1 - boom\n' ;; esac
+               exit "$fc" ;;
   *)          printf 'ok 1 - fine\n'; exit 0 ;;
 esac
 SPY
@@ -285,6 +294,7 @@ seed_host_suites() { # <manifest-body> — commit suites+manifest onto origin/ma
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-trunc.bats"
   printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-torn.bats"
   printf '#!/usr/bin/env bats\n@test "x" { false; }\n' > "$SHARED/tests/host-tsplice.bats"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$SHARED/tests/host-flip.bats"
   printf '%s\n' "$1" > "$SHARED/scripts/host-suites.manifest"
   git -C "$SHARED" add -A; git -C "$SHARED" commit -q -m host-suites
   git -C "$SHARED" push -q origin main
@@ -520,6 +530,123 @@ tests/absent.bats'
   [[ "$output" == *"RED  tests/host-tsplice.bats — 1 failing"* ]] || false   # EXACTLY one, not three
   [ -f "$PAGES/deploy-host-red-$(printf '%.12s' "$want").page" ]
   grep -q 'post-deploy HOST RED' "$CC_BACKLOG_LOG"
+}
+
+# ── THE CONSECUTIVE-CUT COUNTER, PER SUITE (backlog 75463ef0d0f9) ────────────────────────────────
+# R6 makes a single cut safe by refusing to call it a failure. Nothing then made a PERMANENT cut
+# unsafe: tests/test-hermeticity-lint.bats reached no verdict on 6 of 6 host runs across 12 days
+# against a bound below its runtime, and every artifact an operator reads was indistinguishable from
+# a healthy lane. One correct `CUT` line per run, forever, carries the same zero bits as an alarm
+# that always fires. Ported from scripts/postland-verify.sh (CUT_MAX/CUT_COOLOFF) with the key
+# changed from the TREE to the SUITE — see the per-suite test below, which is the whole change.
+tick() { # <name> [ENV=VAL…] — one full deploy: a new deployable commit, stamped, then --auto
+  local nm="$1"; shift
+  # Advance ONLY once the clone has caught up. seed_host_suites deliberately leaves HEAD behind
+  # origin/main (the suites arrive WITH the advance, as in life), so the first tick deploys that
+  # seeded commit — committing on a behind-HEAD would diverge and the push would be rejected.
+  if [ "$(git -C "$SHARED" rev-parse HEAD)" = "$(git -C "$SHARED" rev-parse origin/main)" ]; then
+    advance_origin "$nm"
+  fi
+  stamp origin/main
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+          CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= "$@" \
+          /bin/bash "$DL" --auto
+  [ "$status" -eq 0 ] || { echo "tick $nm exited $status: $output"; false; }
+}
+# host_cut_page slugs the suite path with `tr -c 'A-Za-z0-9._-' '-'`: tests/host-cut.bats becomes
+# tests-host-cut.bats. Spelled out rather than derived, so a change to the slugging is a RED here.
+cutpage() { printf '%s/deploy-host-cut-tests-host-%s.bats.page' "$PAGES" "$1"; }
+
+@test "host CUT counter: silent below CUT_MAX, then ONE page + backlog naming the suite" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  tick t1                                          # cut 1/3 — the default CUT_MAX, pinned here
+  [ ! -f "$(cutpage cut)" ]
+  tick t2                                          # cut 2/3
+  [ ! -f "$(cutpage cut)" ]                        # a page before CUT_MAX is the alarm-polarity bug
+  [ ! -s "$CC_BACKLOG_LOG" ]
+  tick t3                                          # cut 3/3 ⇒ news
+  [ -f "$(cutpage cut)" ]
+  head -1 "$(cutpage cut)" | grep -qE '^[0-9]+$'   # page-file contract: epoch first (autonomy-sweep)
+  grep -q 'tests/host-cut.bats' "$(cutpage cut)"
+  grep -q '3 consecutive deploys' "$(cutpage cut)"
+  grep -q 'do not bisect' "$(cutpage cut)"         # HONEST: a cut is never a claim about the tree
+  grep -q 'post-deploy HOST CUT (no verdict): tests/host-cut.bats' "$CC_BACKLOG_LOG"
+  [[ "$output" == *"PAGE tests/host-cut.bats"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-host-red-*.page' | wc -l | tr -d ' ')" -eq 0 ]  # still not a RED
+}
+
+# THE CHANGE OF KEY, and the only test that can see it. postland tracks ONE streak on the tree
+# because it runs one corpus per sweep; the host lane runs N independent suites against one live
+# layer, so a tree-keyed port would have any green neighbour clear the streak of a suite that is
+# cutting forever — which is precisely the shape that went unnoticed (the hermeticity wrapper cut on
+# every run while tests/deploy-parity-live.bats passed on every run, in the same tick).
+@test "host CUT counter is PER SUITE: a green neighbour never clears a cutting suite's streak" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats
+tests/host-ok.bats'
+  tick t1; tick t2; tick t3
+  [ -f "$(cutpage cut)" ]                          # the cutting suite still reaches CUT_MAX…
+  [ ! -f "$(cutpage ok)" ]                         # …and the green one never pages at all
+  [ "$(grep -c 'tests/host-ok.bats' "$CC_SPY_LOG")" -eq 3 ]   # it kept running every tick
+}
+
+@test "a VERDICT clears the streak: cut,cut,ok,cut,cut never reaches CUT_MAX" {
+  auto_setup
+  seed_host_suites 'tests/host-flip.bats'
+  tick t1; tick t2                                 # 2 cuts — one short
+  printf '0\n' > "$CC_FLIP_CTL"; tick t3           # a VERDICT (ok) ⇒ streak cleared, row dropped
+  [[ "$output" == *"ok   tests/host-flip.bats"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/postland/host-cuts" ]  # cleared by writing NO row, never a 0 row
+  printf '124\n' > "$CC_FLIP_CTL"; tick t4; tick t5
+  [ ! -f "$(cutpage flip)" ]                       # 2+2 is not 4: consecutive, not cumulative
+  tick t6                                          # …and the third IN A ROW still pages
+  [ -f "$(cutpage flip)" ]
+}
+
+# A RED is a verdict, and it already has its own channel two tests up. Counting it here would page
+# the same suite a second time under a headline asserting the opposite ("NO claim was produced").
+@test "a RED every deploy feeds the RED channel only — never the cut counter" {
+  auto_setup
+  seed_host_suites 'tests/host-red.bats'
+  tick t1; tick t2; tick t3
+  [ ! -f "$(cutpage red)" ]
+  ! grep -q 'HOST CUT' "$CC_BACKLOG_LOG" || false
+  grep -q 'post-deploy HOST RED' "$CC_BACKLOG_LOG"
+}
+
+# CUT_MAX and the COOL-OFF are one mechanism, not two. The cool-off is this lane's only damping —
+# its RED page is sha-keyed and so is naturally per-deploy, but a cut page keyed on the suite would
+# otherwise be rewritten every 600s tick forever, which is the 570-near-duplicate-pages defect
+# hooks/lib/page-damp.sh was built for. It buys the load back too: a suite that provably is not
+# reaching a verdict stops being fed a full HOST_TIMEOUT_S of a loaded box every tick.
+@test "past CUT_MAX the suite is SKIPPED (spoken, with its remaining time), not re-run" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  tick t1; tick t2; tick t3
+  [ "$(grep -c 'tests/host-cut.bats' "$CC_SPY_LOG")" -eq 3 ]
+  before="$(stat -f %m "$(cutpage cut)")"
+  tick t4
+  [ "$(grep -c 'tests/host-cut.bats' "$CC_SPY_LOG")" -eq 3 ]   # NOT run a 4th time
+  [[ "$output" == *"cut cool-off: 3 consecutive non-verdicts"* ]] || false
+  [[ "$output" == *"s left)"* ]] || false           # bounded and spoken, never a silent skip
+  [ "$(stat -f %m "$(cutpage cut)")" = "$before" ]  # and the page is NOT re-sent while suppressed
+}
+
+@test "cool-off EXPIRED ⇒ the suite runs again and the finding re-asserts at n+1" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  tick t1; tick t2; tick t3
+  # 0 is the documented disable — `elapsed -lt 0` is never true — so this tick sees an EXPIRED
+  # cool-off by construction, without sleeping or hand-editing the state file it is testing.
+  tick t4 CC_DEPLOY_HOST_CUT_COOLOFF=0
+  [ "$(grep -c 'tests/host-cut.bats' "$CC_SPY_LOG")" -eq 4 ]
+  grep -q '4 consecutive deploys' "$(cutpage cut)"  # re-asserted: an unchanging page reads as resolved
+  # …and the BACKLOG key did not move with the count. cc-backlog mints its event key from
+  # project+title+source, so an `n` in the title would mint a fresh item per cool-off for one
+  # unresolved finding — the same non-idempotency the sha-in-the-title fix removed.
+  [ "$(sort -u "$CC_BACKLOG_LOG" | wc -l | tr -d ' ')" -eq 1 ]
+  ! grep -qE '[0-9]+ consecutive|[0-9]{12}' "$CC_BACKLOG_LOG"
 }
 
 @test "manifest MISSING ⇒ host checks skipped silently, bats never invoked at all" {

@@ -136,6 +136,39 @@ MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
 # source by the `</dev/null` at the invocation site below.
 HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-1800}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+# ── CONSECUTIVE-CUT COUNTER, PER SUITE (2026-08-10, backlog 75463ef0d0f9) ────────────────────────
+# R6 is what makes a cut safe: a non-verdict is a claim about the MACHINE, never about the tree, so
+# it must not page as a failure. What R6 does not supply is the other half — a suite that reaches no
+# verdict on EVERY deploy is not a machine event any more, it is a sensor that has stopped being one,
+# and by R6 alone it looks identical to a healthy one on every artifact an operator reads. Measured:
+# tests/test-hermeticity-lint.bats was CUT on 6 of 6 host runs across 12 days against a bound
+# structurally below its runtime (cb9980e4b0e5), and nothing anywhere said so. The deploy log said
+# `CUT` six times, correctly, one line per run — and one correct line per run, forever, is the
+# alarm-polarity defect: a message that appears at the same rate whether or not anything is wrong.
+#
+# The counter is the fix and it is a straight port of scripts/postland-verify.sh's (CUT_MAX /
+# CUT_COOLOFF, :527) with ONE change of key: postland tracks a single streak on the TREE, because it
+# runs one corpus per sweep and a new tree is a new subject. The host lane runs N INDEPENDENT suites
+# against one live layer, so the streak that means anything here is PER SUITE — one suite cutting
+# forever while its neighbours stay green is exactly the case that went unnoticed, and a tree-keyed
+# streak cannot see it (any neighbour's verdict would clear it).
+#
+# BOTH KNOBS ARE PORTED, because they are one mechanism and not two. CUT_MAX decides when a streak
+# becomes news; the COOL-OFF is what stops that news being re-sent every tick — the same job
+# hooks/lib/page-damp.sh does for the pagers that have one, and this lane has no damping of its own
+# (its RED page is sha-keyed, so it is naturally per-deploy). Without it a suite past CUT_MAX
+# re-pages every 600s tick forever, which is the 570-near-duplicate-pages defect page-damp.sh
+# records, rebuilt here. Damping by cool-off also collects the second prize: a suite that provably
+# is not reaching a verdict stops being fed a full HOST_TIMEOUT_S of a loaded box every tick.
+# The suppression is BOUNDED and SPOKEN — the skip is `say`n with its remaining time on every tick
+# it fires, and when it expires the suite runs again and re-pages if it cuts again, so an unresolved
+# condition re-asserts about twice an hour rather than never (page-damp.sh's own TTL rule).
+# 0 disables either half without a separate kill switch: COOLOFF=0 ⇒ `elapsed -lt 0` is never true.
+HOST_CUTS="$POSTLAND_DIR/host-cuts"                              # rows: "<suite> <consecutive-n> <epoch>"
+HOST_CUT_MAX="${CC_DEPLOY_HOST_CUT_MAX:-3}"                      # consecutive cuts on ONE suite before paging
+HOST_CUT_COOLOFF="${CC_DEPLOY_HOST_CUT_COOLOFF:-1800}"           # ...and before that suite is run again
+case "$HOST_CUT_MAX"     in ''|*[!0-9]*) HOST_CUT_MAX=3 ;; esac
+case "$HOST_CUT_COOLOFF" in ''|*[!0-9]*) HOST_CUT_COOLOFF=1800 ;; esac
 
 DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0; OFFLINE=0
 while [ "$#" -gt 0 ]; do
@@ -276,8 +309,65 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
 # tests/<name>.bats per line, `#` comments. MISSING manifest ⇒ EMPTY set ⇒ skip silently — the
 # verifier's side of the same contract reads a missing manifest as "run everything", so the two
 # halves stay total by construction and neither ever needs hand-syncing.
+host_cut_row() { # <suite> → its prior "<consecutive-n> <epoch>", or "0 0" when it has no streak
+  local p pn pts
+  # `[ -f ]` FIRST. Redirections are applied left to right, so `< "$HOST_CUTS" 2>/dev/null` opens the
+  # input BEFORE stderr is silenced — a missing file therefore prints the shell's own "No such file
+  # or directory" into the launchd log on every run before the first cut. Control flow is fine
+  # either way; the noise reads like a failure in the one log an operator scans. Same trap, same
+  # fix, same reason as scripts/postland-verify.sh cut_bump.
+  if [ -f "$HOST_CUTS" ]; then
+    while read -r p pn pts || [ -n "${p:-}" ]; do
+      [ "${p:-}" = "$1" ] || continue
+      case "${pn:-}"  in ''|*[!0-9]*) pn=0 ;; esac
+      case "${pts:-}" in ''|*[!0-9]*) pts=0 ;; esac
+      printf '%s %s' "$pn" "$pts"; return 0
+    done < "$HOST_CUTS"
+  fi
+  printf '0 0'
+}
+host_in_cut_cooloff() { # <suite> — 0 = still cooling off, so do not run it this tick
+  local row pn pts
+  row="$(host_cut_row "$1")"; pn="${row%% *}"; pts="${row##* }"
+  [ "$pn" -ge "$HOST_CUT_MAX" ] || return 1
+  [ "$(( $(date +%s) - pts ))" -lt "$HOST_CUT_COOLOFF" ]
+}
+host_cut_page() { # <suite> <n> <deployed-sha> — an HONEST page: names no test, asks for no bisect
+  local pf slug
+  slug="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')"
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  # Keyed on the SUITE, never on the sha — the opposite of the RED page below, and deliberately so.
+  # A red is a claim ABOUT A TREE, so its page is per-deploy and shows the current one. A cut is a
+  # claim about the machine and says nothing whatever about the tree, so a sha in this name would
+  # mint a fresh file every tick for one unchanging finding — which is also what defeats
+  # autonomy-sweep's is_new damping, since a never-before-seen path is always new.
+  pf="$PAGES_DIR/deploy-host-cut-$slug.page"
+  { date +%s
+    printf 'post-deploy HOST CUT (no verdict) — %s has reached NO verdict on %s consecutive deploys\n' "$1" "$2"
+    printf 'live layer: %.12s\n' "$3"
+    printf 'NOT a test failure — do not bisect, and do not read this suite as passing.\n'
+    printf 'It emitted no result line matching "^not ok <N>", or our %ss bound fired: either way NO\n' "$HOST_TIMEOUT_S"
+    printf 'claim about the live layer was produced, and none has been for %s deploys running.\n' "$2"
+    printf 'Causes in the order they have actually occurred here: the bound sits below the suite'"'"'s\n'
+    printf 'runtime IN THIS LAUNCHD BAND (cb9980e4b0e5 — a 3.6x tax on the bench figure); the box is\n'
+    printf 'starved; the suite wedges. Time it in the band before re-sizing anything.\n'
+    printf 're-run:  cd %s && time %s %s\n' "$DEPLOY_REPO" "${BATS_BIN:-bats}" "$1"
+    printf 'cool-off: this suite is skipped for %ss, then run again — it re-pages if it cuts again.\n' "$HOST_CUT_COOLOFF"
+  } > "$pf" 2>/dev/null || true
+  say "  PAGE $1 — $2 consecutive non-verdicts · $pf"
+  # SAME KEYING RULE AS THE RED BACKLOG BELOW, for the same reason: cc-backlog mints its event key
+  # from project+title+source, so the title carries the SUITE and nothing else. `$2` here grows by
+  # one every cool-off, and a sha changes every deploy — either in the title would mint a new item
+  # per tick for one unresolved finding, which is exactly the defect that produced 5 items for one
+  # finding on 2026-08-05. stderr is NOT swallowed: the DONE-GUARD announces a re-file of an
+  # already-closed key there and deliberately does not reopen it.
+  [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
+    --title "post-deploy HOST CUT (no verdict): $1" \
+    --project claude-infrastructure --source deploy-live >/dev/null
+  return 0
+}
 host_checks() { # <deployed-sha> — never blocks, never rolls back, never changes the exit code
-  local sha="$1" line s tap rc notok n=0 red="" cut="" pf
+  local sha="$1" line s tap rc notok n=0 red="" cut="" pf iscut row cn newcuts=""
   [ -r "$MANIFEST" ] || return 0
   # Build a list (bash 3.2: no mapfile). Suite paths are repo-relative and space-free by contract.
   local SUITES; SUITES=()
@@ -295,6 +385,18 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   fi
   say "post-deploy host checks: ${#SUITES[@]} suite(s) from ${MANIFEST##*/}, against the LIVE layer"
   for s in "${SUITES[@]}"; do
+    iscut=0
+    # COOL-OFF IS TESTED BEFORE THE ABSENT CHECK, and that ordering carries the state. A suite
+    # skipped here is the one case that must CARRY ITS ROW FORWARD UNCHANGED — including the epoch,
+    # which is what the remaining cool-off is measured from. Every other outcome below writes no row
+    # at all, which is how the streak is cleared and how the file prunes itself (see the write).
+    if host_in_cut_cooloff "$s"; then
+      row="$(host_cut_row "$s")"
+      say "  skip $s (cut cool-off: ${row%% *} consecutive non-verdicts, $(( HOST_CUT_COOLOFF - ($(date +%s) - ${row##* }) ))s left)"
+      newcuts="$newcuts$s $row
+"
+      continue
+    fi
     if [ ! -f "$DEPLOY_REPO/$s" ]; then say "  skip $s (absent in the deployed tree)"; continue; fi
     n=$((n + 1))
     # `</dev/null` — THE $BATS_BIN INVOCATION SITE (the resolution at the top of this file is not
@@ -335,16 +437,37 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     # claiming a green tree was broken. The reached failures are NAMED in the line — a non-verdict
     # must not also be a silence — but they do not page and do not file.
     if [ "$rc" -eq 124 ]; then
-      cut="$cut $s"
+      cut="$cut $s"; iscut=1
       if [ "$notok" -gt 0 ]
         then say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired after $notok named failure(s) (truncated: no verdict)"
         else say "  CUT  $s — bound ${HOST_TIMEOUT_S}s fired (no verdict)"
       fi
     elif [ "$notok" -gt 0 ]; then    red="$red $s($notok)"; say "  RED  $s — $notok failing"
-    elif [ "$rc" -ne 0 ];    then    cut="$cut $s";         say "  CUT  $s — rc=$rc naming 0 tests (no verdict)"
+    elif [ "$rc" -ne 0 ];    then    cut="$cut $s"; iscut=1; say "  CUT  $s — rc=$rc naming 0 tests (no verdict)"
     else                                                    say "  ok   $s"
     fi
+    # A VERDICT CLEARS THE STREAK — and clearing is spelled "write no row", never "write 0". Both
+    # RED and ok land here, because the streak counts NON-VERDICTS and a red is a verdict: a suite
+    # failing every deploy is already the RED channel's finding, and counting it here would page it
+    # a second time under a headline that says the opposite ("no claim was produced").
+    if [ "$iscut" -eq 1 ]; then
+      row="$(host_cut_row "$s")"; cn=$(( ${row%% *} + 1 ))
+      newcuts="$newcuts$s $cn $(date +%s)
+"
+      [ "$cn" -ge "$HOST_CUT_MAX" ] && host_cut_page "$s" "$cn" "$sha"
+    fi
   done
+  # WRITTEN ONCE, FROM THIS TICK ONLY — the file is rebuilt rather than edited, so it prunes itself:
+  # a suite that reached a verdict, vanished from the deployed tree, or left the manifest simply has
+  # no row and starts from zero next time it cuts. That is why there is no TTL and no reaper here.
+  # Note where this sits: ABOVE the `[ -n "$red" ] || return 0` below, because the common tick has
+  # no red at all and an early return would drop every streak the loop just counted.
+  if [ -n "$newcuts" ]; then
+    mkdir -p "${HOST_CUTS%/*}" 2>/dev/null || true
+    printf '%s' "$newcuts" > "$HOST_CUTS" 2>/dev/null || true
+  else
+    rm -f "$HOST_CUTS" 2>/dev/null || true
+  fi
   [ -n "$cut" ] && say "host-checks: non-verdict (cut) suites —$cut"
   [ -n "$red" ] || return 0
 
