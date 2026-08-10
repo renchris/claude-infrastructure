@@ -526,7 +526,14 @@ regress() {
     for rn in "${REDS[@]}"; do
       rf="$(outfile "$rn")"; [ -n "$rf" ] && [ -s "$rf" ] || continue
       printf -- '--- %s ---\n' "$rn" >> "$pf"
-      { grep -E '^not ok' "$rf" 2>/dev/null || tail -15 "$rf"; } | tail -15 >> "$pf"
+      # The <N> is what makes a line a RESULT (TAP: `not ok <N> <desc>`). Without it this also
+      # quoted anything that merely OPENS with those four bytes — a line truncated mid-write, or an
+      # unprefixed stderr splice, both routine in a capture taken 2>&1. Two costs, and the second is
+      # the one that hurts: the page's 15-line budget gets spent on noise, AND the `|| tail -15`
+      # fallback that exists for precisely this case never fires, because the loose grep "succeeded".
+      # Same spelling as scripts/postland-verify.sh TAP_NOTOK_RE (C30), scripts/ship-land.sh and
+      # scripts/deploy-live.sh — pinned equal by tests/tap-grammar-parity.bats.
+      { grep -aE '^not ok [0-9]+' "$rf" 2>/dev/null || tail -15 "$rf"; } | tail -15 >> "$pf"
     done
     # Bars and non-verdicts go on the page too — visible, but never inside the RED count. Reading
     # "RED (12)" when nine of the twelve were bars/cuts is what made eight nights unactionable.
@@ -556,9 +563,17 @@ selftest() {
   local d; d="$(mktemp -d "${TMPDIR:-/tmp}/nightly-reg-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d' '${RUNDIR:-/nonexistent}'" EXIT   # keep the capture dir cleaned too
-  mkdir -p "$d/pages" "$d/goodtests" "$d/badtests" "$d/plists" "$d/emptygl"
+  mkdir -p "$d/pages" "$d/goodtests" "$d/badtests" "$d/torntests" "$d/plists" "$d/emptygl"
   printf '#!/usr/bin/env bats\n@test "pass" { true; }\n' > "$d/goodtests/ok.bats"
   printf '#!/usr/bin/env bats\n@test "fail" { false; }\n' > "$d/badtests/no.bats"
+  # A failing suite whose stream ALSO carries torn/spliced bytes. File-level output is written by
+  # bats OUTSIDE any test, so it reaches the capture UNPREFIXED (measured: twice — the gather pass
+  # and the exec pass), which is exactly the injection shape hooks/session-register.sh:347 names.
+  cat > "$d/torntests/no.bats" <<'TORN'
+#!/usr/bin/env bats
+printf 'not ok\nnot ok3 squashed\nnot okay then\nnot okcorpus: 3 suites\n' >&2
+@test "fail" { false; }
+TORN
   cp "$REPO/launchd/com.claude.team-orphan-reaper.plist" "$d/plists/good.plist" 2>/dev/null \
     || printf '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict/></plist>\n' > "$d/plists/good.plist"
   printf '<plist><dict><string>2>&1 raw ampersand</string></dict></plist>\n' > "$d/plists/bad.plist"
@@ -585,7 +600,21 @@ selftest() {
   [ -f "$d/pages/nightly-regression.page" ] && okp "red-bats: page file written to pages/" || badp "red-bats: no page written"
   grep -q 'RED' "$d/redb.log" && okp "red-bats: regression.log records RED" || badp "red-bats: log missing RED"
   head -1 "$d/pages/nightly-regression.page" | grep -qE '^[0-9]+$' && okp "page: first line is an epoch (convention-compatible)" || badp "page: first line not an epoch"
-  grep -q 'not ok' "$d/pages/nightly-regression.page" && okp "red-bats: page quotes the FAILING detail, not just the name" || badp "red-bats: page carries no failing detail"
+  grep -qE '^not ok [0-9]+' "$d/pages/nightly-regression.page" && okp "red-bats: page quotes the FAILING detail, not just the name" || badp "red-bats: page carries no failing detail"
+  rm -f "$d/pages/nightly-regression.page"
+
+  # red path (bats) with a TORN stream: the detail must be the RESULT lines, never the splice.
+  # The page is the only thing a human reads at 04:00 to decide what broke; filling its 15-line
+  # budget with bytes that merely OPEN like a verdict spends the whole budget on noise, and — worse
+  # — the `|| tail -15` fallback that exists for exactly this case never fires, because the loose
+  # grep "succeeded". Same grammar as the two lanes above (scripts/ship-land.sh, scripts/deploy-live.sh).
+  run_inv "$d/pages" "$d/redt.log" "$d/torntests" "$d/plists/good.plist"; local trc=$?
+  [ "$trc" -ne 0 ] && okp "red-torn: nonzero exit" || badp "red-torn: exit 0 on a failing suite"
+  grep -qE '^not ok [0-9]+' "$d/pages/nightly-regression.page" \
+    && okp "red-torn: page still quotes the REAL result line" || badp "red-torn: page lost the real detail"
+  grep -qE '^not (okay|okcorpus|ok3)' "$d/pages/nightly-regression.page" \
+    && badp "red-torn: page quotes SPLICED bytes as though they were verdicts" \
+    || okp "red-torn: page carries no spliced non-verdict lines"
   rm -f "$d/pages/nightly-regression.page"
 
   # red path (plutil): deliberately-bad fixture plist → page + RED

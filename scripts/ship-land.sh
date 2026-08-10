@@ -1103,9 +1103,29 @@ tap_named_failures() {  # $1=log $2=known test count ("" or 0 ⇒ unknown) $3=su
   # was built to remove (f8e40b4c577d / 9c5d0ba74e79) in a narrower form: not a cut with NO signal,
   # but a cut that MANUFACTURES one — which is worse, because the zero-not-ok rule cannot see it.
   #
-  # TWO LEGS, and they are cut separately so neither can hide the other's regression:
+  # THREE LEGS, cut separately so no one of them can hide another's regression. Leg 0 comes FIRST
+  # because the other two only ever run on lines it has already admitted:
+  #
+  # LEG 0 — THE GRAMMAR. TAP spells a result `not ok <N> <desc>`, and the <N> is the ONLY thing
+  # separating a RESULT from arbitrary text that opens with those four bytes. Arbitrary text is
+  # ROUTINE in this stream: gate_bats captures 2>&1, so an unprefixed stderr write splices straight
+  # in (hooks/session-register.sh:347 names one such injector by name), and a suite killed mid-write
+  # truncates a line wherever the buffer happened to end. Measured on /usr/bin/grep (BSD
+  # 2.6.0-FreeBSD) AND ugrep 7.5.0 (the operator's own interactive PATH), four shapes count 1 under
+  # the old `^not ok` and 0 here:
+  #     `not ok` · `not ok3 squashed` · `not okay then` · `not okcorpus: 3 suites`
+  #   -E  the <N> needs a repeat operator, so this cannot stay a BRE.
+  #   -a  the count must not change with WHICH grep is on PATH — ugrep reads a NUL-carrying TAP as
+  #       EMPTY without it, which would resurrect the same disagreement from the other side.
+  # SAME SPELLING as scripts/postland-verify.sh TAP_NOTOK_RE (C30) and scripts/deploy-live.sh;
+  # tests/tap-grammar-parity.bats pins all four equal. Deliberately NOT sourced from a shared lib:
+  # ~/.claude is per-file symlinks, so a NEW lib file is absent from the live layer until
+  # deploy-live converges, and a `[ -f lib ] && . lib` guard would silently fall back to the loose
+  # grammar on exactly the boxes that run a land. The `sig=` line in run_scoped_suite stays loose on
+  # purpose: it is a human-readable signature for the flake ledger, never a discriminator, and a
+  # torn line is honest evidence there.
   local log="$1" known="${2:-0}" f="${3:-the suite}" n plan
-  n="$(grep -c '^not ok' "$log" 2>/dev/null || true)"; n="${n:-0}"
+  n="$(grep -acE '^not ok [0-9]+' "$log" 2>/dev/null || true)"; n="${n:-0}"
   [[ "$n" -eq 0 ]] && { printf '0\n'; return 0; }
   # LEG A — THE COLLECTOR NAMING ITSELF. Exact upstream literal, and gated on being the SOLE
   # `not ok`: the gather aborts before any test runs, so this line can never legitimately share a

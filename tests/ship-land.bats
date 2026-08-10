@@ -1206,6 +1206,18 @@ case "\$(cat "$CUT_MODE" 2>/dev/null)" in
       : > "$BATS_TEST_TMPDIR/ep-done"; echo "1..88"; exit 1         # re-run's plan is TRUTHFUL, so
     fi                                                              # its not-ok is a real verdict
     echo "1..88"; echo "not ok 3 a genuine failure"; exit 1 ;;
+  torn)                                   # A TORN / SPLICED TAP AND NOTHING ELSE — all four C30
+    printf 'not ok\n'                     # shapes, none of them a RESULT LINE (no <N> ⇒ no test ever
+    printf 'not ok3 squashed\n'           # completed). No plan line either, so BOTH artifact legs
+    printf 'not okay then\n'              # are inert by construction: leg A needs n==1 plus its own
+    printf 'not okcorpus: 3 suites\n'     # literal, leg B needs two plans to disagree. The GRAMMAR
+    exit 1 ;;                             # is the only thing between this and "your diff is red".
+  torn-real)                              # THE OTHER DIRECTION: the same splice AROUND a genuine
+    printf 'not okay then\n'              # verdict. Tightening must not eat this — a well-formed
+    printf '1..1\n'                       # result line is a failing test whatever else the stream
+    printf 'not ok 1 a genuine failure\n' # carries, and a grammar that loses it fails in the one
+    printf 'not okcorpus: 3 suites\n'     # direction this split may never fail in. (NO BACKTICKS in
+    exit 1 ;;                             # this heredoc — it is unquoted; they run as substitution.)
 esac
 if [ ! -f "$BATS_TEST_TMPDIR/cut-done" ]; then
   : > "$BATS_TEST_TMPDIR/cut-done"; exit 1                    # cut ONCE, then green on the re-run
@@ -1378,6 +1390,48 @@ EOF
   grep -q '"smoke":"red"' "$LAND_LOG"
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- ep.sh)" ]            # fail-closed: nothing landed
+}
+
+# ──── A LINE THAT MERELY OPENS WITH THE BYTES IS NOT A VERDICT ───────────────────────────────
+# The THIRD form of the same defect, after c605a2e (rc is not a verdict) and the two artifact legs
+# above (a harness line is not a verdict). Both of those still ask `grep -c '^not ok'` what happened,
+# and that question is wrong: TAP spells a result `not ok <N> <desc>`, and the <N> is the ONLY thing
+# separating a result from arbitrary text that starts with those four bytes. Arbitrary text is
+# ROUTINE in this stream — gate_bats captures `2>&1`, so an unprefixed stderr write splices straight
+# in (hooks/session-register.sh:347 documents one such injector by name), and a suite we kill
+# mid-write truncates a line wherever the buffer ended. postland-verify closed this in its own three
+# readers (C30, TAP_NOTOK_RE); the land lane kept the loose spelling, where the consequence is worse
+# — not a mis-filed backlog item but exit 6, "a VERDICT about your diff: fix it, do not retry".
+# Measured on /usr/bin/grep (BSD 2.6.0-FreeBSD) AND ugrep 7.5.0 (the operator's interactive PATH):
+# all four shapes count 1 under `^not ok`, 0 under `^not ok [0-9]+`.
+@test "smoke TORN TAP: four lines that only OPEN with 'not ok' are a CUT, not a verdict" {
+  cut_fixture
+  echo torn > "$CUT_MODE"                                 # every run: the splice, no result line
+  landable feat/torn tn.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # NOT 6 — nothing failed, so nothing blocks
+  [ "$(echo "$output" | grep -c "smoke RED")" -eq 0 ]
+  echo "$output" | grep -q "smoke PARTIAL"                # cut twice ⇒ a non-verdict, and it lands
+  grep -q '"smoke":"partial"' "$LAND_LOG"
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- tn.sh)" ]
+}
+
+@test "smoke TORN CONTROL: a REAL 'not ok 1' inside the same splice still blocks" {
+  # The too-strong direction, and it is the one that matters: a grammar tightened until it stops
+  # seeing failures has not fixed the discriminator, it has deleted it. One dimension differs from
+  # the test above — a single well-formed result line amid the same garbage — and it must still
+  # cost the land.
+  cut_fixture
+  echo torn-real > "$CUT_MODE"
+  landable feat/torn-real tr.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                     # a real verdict, unsoftened
+  echo "$output" | grep -q "smoke RED"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tr.sh)" ]            # fail-closed: nothing landed
 }
 
 @test "smoke: a suite cut with the budget SPENT gets no re-run — the 1s floor cannot earn a verdict" {

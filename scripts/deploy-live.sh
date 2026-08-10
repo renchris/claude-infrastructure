@@ -238,7 +238,14 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
     # Nothing pipes into this script and its four while-read loops are all fed from files, so no
     # stdin in use is lost.
     tap="$( cd "$DEPLOY_REPO" && bounded "$HOST_TIMEOUT_S" nice -n 19 "$BATS_BIN" "$s" </dev/null 2>&1 )"; rc=$?
-    notok="$(printf '%s\n' "$tap" | grep -c '^not ok' 2>/dev/null || true)"
+    # THE <N> IS WHAT MAKES A LINE A RESULT. TAP spells a result `not ok <N> <desc>`; without the
+    # <N> this also counted a line truncated mid-write and any unprefixed stderr opening with those
+    # four bytes — routine, since the suite above is captured 2>&1. Measured on /usr/bin/grep (BSD,
+    # what launchd's PATH resolves) and ugrep 7.5.0: `not ok`, `not ok3 x`, `not okay x` and
+    # `not okcorpus: …` each count 1 under `^not ok` and 0 here. Same spelling as
+    # scripts/postland-verify.sh TAP_NOTOK_RE (C30) and scripts/ship-land.sh — pinned equal by
+    # tests/tap-grammar-parity.bats. `-a` so the count cannot change with which grep is on PATH.
+    notok="$(printf '%s\n' "$tap" | grep -acE '^not ok [0-9]+' 2>/dev/null || true)"
     case "$notok" in ''|*[!0-9]*) notok=0 ;; esac
     # R6: a NAMED failure is the only red. rc alone is blind — bats masks a load-kill behind its
     # own pipefail'd pipeline and exits non-zero naming zero tests. That is CUT: a non-verdict
