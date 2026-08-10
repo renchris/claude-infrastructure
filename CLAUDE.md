@@ -150,9 +150,19 @@ fired and awaited, with the lead holding ≥50% of its window for deciding:
 
 ```
 scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt --worktree <branch> \
-    --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right
+    --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right \
+    --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <plan path>'
 cc-await-ping "${ITERM_SESSION_ID##*:}"      # Bash run_in_background — event-driven wake
 ```
+
+**`--goal` is part of that recipe, not an option** (operator directive 2026-08-09). `/goal` is
+documented by Anthropic (<https://code.claude.com/docs/en/goal>) and its condition wants three parts:
+**one measurable end state · the check that proves it · the constraint that must hold**. The evaluator
+is a separate TOOL-LESS model that re-judges after every turn and sees only what the session has
+PRINTED — so a condition resting on state the session never prints can never clear, and a condition
+naming an activity rather than an end state never terminates. A goal also dies with its session, so a
+recycle must re-arm it. Template + the three narrow exceptions → `commands/handoff.md` § Autonomous
+fire item 1.
 
 Teammates remain correct **inside** such a session (that session is then the lead of its own team),
 and on the lead itself only when a wave's members must be synthesised against each other immediately

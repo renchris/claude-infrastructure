@@ -295,12 +295,15 @@ this line pointed at `memory/PHASE_0_TEMPLATE.md`, which has never existed on th
 | Wave 2 | **S** — dispatched session | — |
 | Wave 3 | **T** — in-session teammates | [one line: why the lead must synthesise these immediately] |
 
-**S** = `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>`, lead arms
+**S** = `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable
+end state> — proven by <the command the session runs and prints>; do not <constraint>'`, lead arms
 `cc-await-ping <lead-uuid>` in the background. **T** = `Agent({name, …})`. **L** = lead edits inline.
-S is the DEFAULT for every implementation wave — see the `plan-conventions` skill for why.
+S is the DEFAULT for every implementation wave — see the `plan-conventions` skill for why, and
+`--goal` is part of the S recipe: the evaluator is tool-less and judges only what the session PRINTS.
 
 **Lead context budget**: reserve ≥50% of the lead's window for decisions.
-**Succession point**: the lead recycles (`handoff-fire.sh --recycle`) at the end of Wave [N].
+**Succession point**: the lead recycles (`handoff-fire.sh --recycle --goal '<same condition>'`) at the
+end of Wave [N] — a goal dies with its session, so a recycle that omits it silently drops the goal.
 
 ### Pre-Flight Checklist
 
