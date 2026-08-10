@@ -406,6 +406,40 @@ EOF
 
 # ══ dispatch ════════════════════════════════════════════════════════════════════════════════════
 
+@test "open never hands over a bare URL — it carries the account the link is scoped to" {
+  # Measured 2026-08-10: a bare cloud URL was handed to the operator, opened under a different
+  # account, and the web UI answered "This session could not be found. It may have been deleted,
+  # or you may not have access." — indistinguishable from a session that never existed. A session
+  # id is scoped to its CREATING account (§10.2), so an identity-scoped link without its identity
+  # is a trap. Same law as: every /login instruction names the mailbox it authenticates.
+  mkdir -p "$HOME/.claude"
+  cat >"$HOME/.claude/accounts.json" <<'EOF'
+{"accounts":[{"name":"next3","email":"who@example.com","dia_profile":"Claude3"}]}
+EOF
+  cat >"$STUBDIR/cc-cloud" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-cloud $*" >>"$CALLS"
+[ "$1" = show ] && { echo "account=next3"; echo "url=https://claude.ai/code/$2"; }
+EOF
+  chmod +x "$STUBDIR/cc-cloud"
+  run "$SUT" open session_abc --print
+  [ "$status" -eq 0 ]
+  [[ "$output" == *next3* ]] || false
+  [[ "$output" == *who@example.com* ]] || false
+  [[ "$output" == *"could not be found"* ]] || false   # names the wrong-account failure mode
+  [[ "$output" == *"https://claude.ai/code/session_abc"* ]] || false
+
+  # POSITIVE CONTROL for the other arm: an undeclared account must say UNKNOWN, never go silent —
+  # a bare URL with no warning is exactly the trap this test exists to prevent.
+  cat >"$STUBDIR/cc-cloud" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = show ] && { echo "url=https://claude.ai/code/$2"; }
+EOF
+  chmod +x "$STUBDIR/cc-cloud"
+  run "$SUT" open session_abc --print
+  [[ "$output" == *UNKNOWN* ]] || false
+}
+
 @test "an unknown verb refuses with usage rather than doing something adjacent" {
   run "$SUT" frobnicate
   [ "$status" -eq 2 ]
