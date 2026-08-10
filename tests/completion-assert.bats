@@ -41,6 +41,13 @@ setup() {
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s" "${CC_BACKLOG_STUB_JSON-[]}"' 'exit "${CC_BACKLOG_STUB_RC:-0}"' > "$CCB_STUB"
   chmod +x "$CCB_STUB"
   export CC_BACKLOG_BIN="$CCB_STUB"
+  # D6 hermeticity: the origin oracle reads the fired-peer stamp store; without this pin a
+  # write-recording ✅ fixture would read the REAL ~/.claude/cc-fired for whatever pane id the
+  # harness happens to run in — the suite-is-a-function-of-who-runs-it class again.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"; mkdir -p "$CC_FIRED_DIR"
+  # W2 hermeticity, same class: wrap-ledger's custody counter resolves the repo's bin/cc-custody,
+  # whose store defaults under the operator's $HOME. Empty fixture dir = counted zero.
+  export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
 }
 
 # clean repo, HEAD == origin/main (landed)
@@ -875,4 +882,92 @@ CA_BLOCKED_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin
   run run_ca "$(mkfix "All complete — nothing to do.")" "$BATS_TEST_TMPDIR" "blk-cap"
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"capped:1>=1"' "$COMPLETION_IDL"
+}
+
+# ── D6 — the ORIGIN Pyramid-close contract (CLOSE_INTEGRITY W1) ─────────────────────────────────
+# The one close every other arm waves through: ledger ✅, real written work, a close-shaped
+# message — and the operator's two standing questions (Complication/Solution/Outcome + an explicit
+# good-to-close verdict) unanswered. D6 owns exactly that gap; everything it abstains on is a
+# stated policy, and each abstain direction below is pinned.
+
+_d6_tr() { # $1=out $2=final-text $3..=paths the session wrote
+  local out="$1" text="$2"; shift 2
+  python3 - "$out" "$text" "$@" <<'PY'
+import json, sys
+out, text, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
+rows = [{"type":"user","message":{"content":"go"}}]
+for p in paths:
+    rows.append({"type":"assistant","message":{"content":[
+        {"type":"tool_use","name":"Edit","input":{"file_path":p}}]}})
+rows.append({"type":"assistant","message":{"content":[{"type":"text","text":text}]}})
+open(out,"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
+PY
+  printf '%s' "$out"
+}
+
+@test "D6 FIRE: origin + landed ✅ + real writes + close-tell, shape missing ⇒ block names the contract" {
+  local w; w="$(mkrepo_landed d6f)"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6f.jsonl" "Everything is done and landed on trunk." "$w/base.txt")"
+  run run_ca "$tr" "$w" "d6-sess-1"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'Origin-session close contract'
+  printf '%s' "$output" | grep -q 'Complication:'
+  grep -q '"arm":"shape"' "$COMPLETION_IDL"
+}
+
+@test "D6 CONTROL: the SAME fixture with the full shape present ⇒ ABSTAIN ledger-clean" {
+  local w; w="$(mkrepo_landed d6c)"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6c.jsonl" "✅ Complete & live on trunk.
+Complication: silent closes passed every rail.
+Solution: a D6 arm in completion-assert, landed abc123.
+Outcome: origin closes now answer the operator's two questions.
+Good to close: yes — complete, durable, deployed live, no loose ends; follow-on: none." "$w/base.txt")"
+  run run_ca "$tr" "$w" "d6-sess-2"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q '"decision":"block"'; then echo "blocked: $output" >&2; false; fi
+}
+
+@test "D6 ABSTAIN: a FIRED PEER (valid stamp for this pane+cwd) is exempt — its close is the ping" {
+  local w; w="$(mkrepo_landed d6p)"
+  export ITERM_SESSION_ID="w0t0p0:42"
+  jq -n --arg c "$w" '{paneUUID:"42", cwd:$c, selfRetire:true, closedAt:null}' > "$CC_FIRED_DIR/42.json"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6p.jsonl" "Everything is done and landed on trunk." "$w/base.txt")"
+  run run_ca "$tr" "$w" "d6-sess-3"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'Origin-session close contract'; then false; fi
+}
+
+@test "D6 ABSTAIN: a WRITE-FREE session is never forced into a work-close shape" {
+  local w; w="$(mkrepo_landed d6w)"
+  run run_ca "$(mkfix "Everything requested is done — nothing left to do.")" "$w" "d6-sess-4"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'Origin-session close contract'; then false; fi
+}
+
+@test "D6 SEAM: CC_CLOSE_SHAPE=0 disables the arm outright" {
+  local w; w="$(mkrepo_landed d6k)"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6k.jsonl" "Everything is done and landed on trunk." "$w/base.txt")"
+  CC_CLOSE_SHAPE=0 run_ca "$tr" "$w" "d6-sess-5" > "$BATS_TEST_TMPDIR/d6k.out"
+  if grep -q '"decision":"block"' "$BATS_TEST_TMPDIR/d6k.out"; then false; fi
+}
+
+@test "D6 on 👤: operator-steps rung with shape missing ⇒ the contract still fires" {
+  local w; w="$(mkrepo_landed d6y)"
+  export CC_BACKLOG_STUB_JSON='[{"session":"d6-sess-6","title":"restart Cursor"}]'
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/d6y.jsonl" "My side is done and landed; one step is filed for you." "$w/base.txt")"
+  run run_ca "$tr" "$w" "d6-sess-6"
+  unset CC_BACKLOG_STUB_JSON
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'Origin-session close contract'
+}
+
+# ── W2 CUSTODY — a done-claim over unreturned dispatched work is the wave-abandonment close ─────
+@test "custody: 'done' over 2 unreturned dispatches on a clean landed tree ⇒ FIRE naming them" {
+  local w; w="$(mkrepo_landed cust)"
+  STUB="$BATS_TEST_TMPDIR/cust-stub"; printf '%s\n' '#!/usr/bin/env bash' 'echo 2' > "$STUB"; chmod +x "$STUB"
+  export CC_CUSTODY_BIN="$STUB"
+  run run_ca "$(mkfix "Everything requested is done — the wave is running and I'm finished here.")" "$w" "cust-sess-1"
+  unset CC_CUSTODY_BIN
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'dispatched session(s) have NOT returned'
 }

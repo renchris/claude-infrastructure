@@ -319,6 +319,36 @@ count_blocking_decisions() {
   fi
 }
 
+# ── W2 CUSTODY — dispatched work in flight (CLOSE_INTEGRITY; generator G1) ──────────────────────
+# Every other term here is a function of LOCAL git state, so an originator whose work is mid-flight
+# in dispatched /handoff sessions read ✅ by construction — the wave-abandonment generator (62
+# content-stranded commits across 21 branches in 5 wave-day spikes; 111 of 115 worktrees with no
+# live session). bin/cc-custody records the debt at fire time (notify-back armed ⇒ a return is
+# owed) and the discharge at self-close; this term COUNTS the open set for THIS cwd and folds it
+# into the rung: open custody on an otherwise-✅ tree is 🔧 — in-flight dispatched work IS a loose
+# end, and the ✅ certificate must not render over it. Awaiting ARMED is the legitimate non-close
+# state (session-continue's wake floor enforces the armed half); "safe to close" is not.
+# CUSTODY_SRC: cwd (counted; the v1 key — a shared cwd shares the view, per-session worktrees make
+# it exact) · none (no binary — most repos/machines; not counted) · error (unreadable store) ·
+# skip (not computed — a worse rung already governs). Fail-OPEN like YOURS/BLOCKED: an unreadable
+# custody store never manufactures a rung.
+CUSTODY_OPEN=0; CUSTODY_SRC="skip"
+count_open_custody() {
+  local bin n
+  if [ -n "${CC_CUSTODY_BIN:-}" ]; then bin="$CC_CUSTODY_BIN"
+  else
+    for bin in "$(dirname "$0")/../bin/cc-custody" "$HOME/.claude/bin/cc-custody" \
+               "$(command -v cc-custody 2>/dev/null || true)"; do
+      [ -n "$bin" ] && [ -x "$bin" ] && break; bin=""
+    done
+  fi
+  [ -n "$bin" ] && [ -x "$bin" ] || { CUSTODY_OPEN=0; CUSTODY_SRC="none"; return 0; }
+  n="$(_bounded "${WRAP_CUSTODY_TIMEOUT_S:-5}" "$bin" count --open --cwd "$PWD" 2>/dev/null)" \
+    || { CUSTODY_OPEN=0; CUSTODY_SRC="error"; return 0; }
+  case "$n" in ''|*[!0-9]*) CUSTODY_OPEN=0; CUSTODY_SRC="error"; return 0 ;; esac
+  CUSTODY_OPEN="$n"; CUSTODY_SRC="cwd"
+}
+
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
 LIVE_REPO="${WRAP_LIVE_REPO:-$HOME/Development/claude-infrastructure}"
 LIVE_BUDGET_COMMITS="${WRAP_LIVE_BUDGET_COMMITS:-25}"
@@ -494,12 +524,19 @@ elif [ "$REMAINDER" -gt 0 ]; then
 elif [ "$UNLANDED" -eq 1 ]; then
   RUNG="📦"; READOUT="📦 Done, but only on a branch (${AHEAD} commit(s) unlanded) — /ship to land it (else lost)."
 else
-  # ✅-eligible on the git facts. ONLY here do the operator-step count and the live-layer read
-  # matter — on the 🔧/📦 paths neither can change the answer, so neither is ever paid for (cost
-  # discipline: Stop hook, every close; both report SRC=skip there, so "not counted" stays
-  # distinguishable from "counted zero"). A missing trunk means "landed" is unproven, so neither 👤
-  # nor 🚀 — both of which ASSERT landed — is computed there, AND the no-trunk rung is ranked ahead
-  # of every remaining arm (see below): the carve-out has to cover all three, not two.
+  # ✅-eligible on the git facts. ONLY here do the custody count, the operator-step count and the
+  # live-layer read matter — on the 🔧/📦 paths none can change the answer, so none is ever paid
+  # for (cost discipline: Stop hook, every close; each reports SRC=skip there, so "not counted"
+  # stays distinguishable from "counted zero"). A missing trunk means "landed" is unproven, so
+  # neither 👤 nor 🚀 — both of which ASSERT landed — is computed there, AND the no-trunk rung is
+  # ranked ahead of every remaining arm (see below): the carve-out has to cover all three, not two.
+  count_open_custody
+  if [ "$CUSTODY_OPEN" -gt 0 ]; then
+    # In-flight dispatched work outranks every remaining arm INCLUDING no-trunk: the originator's
+    # own tree being clean/landed says nothing while its wave has not returned, and the ✅
+    # certificate (which needs RUNG=✅) must be unreachable here mechanically, not by discipline.
+    RUNG="🔧"; READOUT="🔧 Loose ends — ${CUSTODY_OPEN} dispatched session(s) have NOT returned (cc-custody list --open --cwd .); await them ARMED (cc-await-ping), then collect+land and \`cc-custody return\` — or \`cc-custody abandon <token> --why …\`."
+  else
   if [ -n "$TRUNK" ]; then compute_live_layer; count_operator_steps; fi
   if [ -z "$TRUNK" ]; then
     # No trunk resolved ⇒ UNLANDED=0 is a DEFAULT, not a measurement: nothing was ever compared, so
@@ -539,6 +576,7 @@ else
     # wins the single line; this one still reaches every consumer via LIVE_SRC/LIVE_LAG below.
     RUNG="✅"; READOUT="✅ Complete & landed — live layer converging (${LIVE_LAG} commit(s) behind; within the converge budget)."
   fi
+  fi   # closes the CUSTODY_OPEN branch (its 🔧 arm above short-circuits this whole chain)
 fi
 
 emit_machine() {
@@ -559,6 +597,8 @@ emit_machine() {
   printf 'DOD=%s\n' "$DOD"
   printf 'DOD_FILE=%s\n' "$DOD_FILE"
   printf 'REMAINDER=%s\n' "$REMAINDER"
+  printf 'CUSTODY_OPEN=%s\n' "$CUSTODY_OPEN"
+  printf 'CUSTODY_SRC=%s\n' "$CUSTODY_SRC"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
   printf 'BLOCKED=%s\n' "$BLOCKED"
@@ -600,6 +640,13 @@ emit_full() {
   esac
   [ "$MIG_FAILED" -gt 0 ] && live_disp="${live_disp} · ${MIG_FAILED} FAILED migration(s) — conclusion never reached its enforcing store"
   printf 'Live layer:     %s\n' "$live_disp"
+  local custody_disp; case "$CUSTODY_SRC" in
+    cwd)   custody_disp="$( [ "$CUSTODY_OPEN" -gt 0 ] && printf '%s dispatched session(s) NOT returned — cc-custody list --open --cwd .' "$CUSTODY_OPEN" || printf 'none open for this cwd' )" ;;
+    none)  custody_disp="not tracked (no cc-custody binary)" ;;
+    error) custody_disp="unknown — custody store unreadable (not counted)" ;;
+    *)     custody_disp="not counted (a worse rung governs)" ;;
+  esac
+  printf 'Dispatched:     %s\n' "$custody_disp"
   local yours_disp; case "$YOURS_SRC" in
     none)  yours_disp="unknown — session id unresolvable (not counted)" ;;
     error) yours_disp="unknown — backlog unreadable (not counted)" ;;

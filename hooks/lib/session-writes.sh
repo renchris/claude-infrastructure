@@ -274,3 +274,42 @@ EOF
   [ "$hit" -eq 1 ] && return 0
   return 1
 }
+
+# session_unlanded_mine <transcript_path> <repo_dir> <trunk_ref>
+#   The commit-side twin of session_dirty_mine (CLOSE_INTEGRITY W2b): do the commits ahead of
+#   <trunk_ref> touch anything THIS session wrote?  rc: 0 mine · 1 not mine · 2 cannot-tell.
+#
+#   EXTRACTED from hooks/completion-assert.sh's `_ca_mine unlanded` branch — verbatim algorithm —
+#   because session-continue's ship floor asks the SAME question, and two inline copies of a
+#   load-bearing intersection is how they rot apart (the third-copy trap agent-identity.sh names).
+#   The canonicalisation story from that branch holds here and is load-bearing, not tidy:
+#   `git rev-parse --show-toplevel` answers PHYSICALLY, the transcript records paths LOGICALLY
+#   (macOS /tmp→/private/tmp; this repo's live layer is symlinks), so both sides go through
+#   _sw_canon or the intersection reads empty FOREVER — a fail-GREEN defect only the "a commit this
+#   session DID write must still convict" control catches.
+session_unlanded_mine() {
+  local tp="${1:-}" dir="${2:-}" trunk="${3:-}" out rc top f
+  [ -n "$trunk" ] || return 2
+  command -v git >/dev/null 2>&1 || return 2
+  out="$(session_writes_paths "$tp")"; rc=$?
+  [ "$rc" -eq 2 ] && return 2
+  [ "$rc" -eq 1 ] && return 1
+  top="$(cd "$dir" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  [ -n "$top" ] || return 2
+  top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$top")"
+  local _p canon=""
+  while IFS= read -r _p; do
+    [ -n "$_p" ] || continue
+    canon="${canon}$(_sw_canon "$_p")"$'\n'
+  done <<EOF
+$out
+EOF
+  out="$canon"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s\n' "$out" | grep -qxF "$top/$f" && return 0
+  done <<EOF
+$( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"..HEAD 2>/dev/null )
+EOF
+  return 1
+}
