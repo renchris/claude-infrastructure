@@ -969,7 +969,7 @@ not part of the argument above.
 | **Operator surface** | [`cc-board`](bin/cc-board) · [`cc-blockers`](bin/cc-blockers) · [`cc-do`](bin/cc-do) · [`operator-readout.sh`](hooks/operator-readout.sh) | [§3](#it-pages-you-only-when-a-human-must-decide) |
 | **Decision queue** | [`cc-decide`](bin/cc-decide) | — a STOP-ASK with no human present writes a packet that survives a recycle, instead of idling in context |
 | **Hooks** | [`hooks/`](hooks) · [`settings.example.json`](settings-templates/settings.example.json) | [§3](#3-autonomy-is-bounded) |
-| **Landing** | [`ship-land.sh`](scripts/ship-land.sh) · [`/ship`](commands/ship.md) | [§5](#5-the-whole-system-deploys-from-git) |
+| **Landing** | [`ship-land.sh`](scripts/ship-land.sh) · `/ship` — [this repo's fail-closed override](.claude/commands/ship.md), and [the global one](commands/ship.md) it replaces here | [§5](#5-the-whole-system-deploys-from-git) |
 | **Verification** | [`postland-verify.sh`](scripts/postland-verify.sh) · [`tests/`](tests) · [`test-hermeticity-lint.sh`](scripts/test-hermeticity-lint.sh) | [§5](#held-to-ground-truth) |
 | **Live deploy** | [`deploy-live.sh`](scripts/deploy-live.sh) · [`migrations/`](migrations) | [§5](#5-the-whole-system-deploys-from-git) |
 | **Close ledger** | [`wrap-ledger.sh`](scripts/wrap-ledger.sh) · [`/wrap`](commands/wrap.md) · [`completion-assert.sh`](hooks/completion-assert.sh) | [§3](#3-autonomy-is-bounded) |
