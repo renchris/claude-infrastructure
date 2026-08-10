@@ -232,9 +232,12 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > (`docs/research/goal-condition-best-practice-2026-08-09.md` § 4):
   > - **The judge FAILS CLOSED and must QUOTE.** Its system prompt hard-codes *"If the transcript does
   >   not contain clear evidence that the condition is satisfied, return `{"ok": false, "reason":
-  >   "insufficient evidence in transcript"}`"*, and a pass must quote the satisfying text. So name a
-  >   **quotable artifact string** — `0 failures`, `exit 0`, a sha — not a state of mind. Ambiguity
-  >   costs a block, never a pass.
+  >   "insufficient evidence in transcript"}`"*, and the pass shape wants a quote of the satisfying
+  >   text. So prefer a **quotable artifact string** — `0 failures`, `exit 0`, a sha — over a state of
+  >   mind. Ambiguity costs a block, never a pass. (The quote instruction is hedged *"whenever
+  >   possible"* and the assistant's own prose is admissible, so this is what makes a pass
+  >   UNAMBIGUOUS, not a rule the mechanism enforces — which is exactly why a condition satisfiable
+  >   by assertion is satisfiable by assertion, and why the *check* clause carries the weight.)
   > - **The proof must be RECENT.** The judge is handed the transcript truncated to ~50% of ITS context
   >   window, most-recent-kept, with a banner instructing it to answer *insufficient evidence* if the
   >   proof may be in the omitted prefix. Evidence printed once at turn 3 of a long run is gone —
@@ -242,10 +245,13 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > - **Never put a `$` in the condition.** It is run through the slash-command variable substituter
   >   first, so `$ARGUMENTS`, `$1`, `$2` are silently rewritten with the hook-input JSON. Write
   >   `npm test exits 0`, never `$(npm test)`.
-  > - **A bad condition has two distinct failure modes.** Self-contradictory or unachievable ⇒ the
-  >   judge may return `impossible:true`, which CLEARS the goal and marks it failed. Merely vague ⇒ no
-  >   such mercy: it block-loops until `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8), then the turn
-  >   ends anyway. Neither is a session that did the work.
+  > - **A bad condition has two distinct failure modes, and the cap rescues neither.**
+  >   Self-contradictory or unachievable ⇒ the judge may return `impossible:true`, which CLEARS the
+  >   goal and marks it failed — reachable at any iteration. Merely vague ⇒ no such mercy:
+  >   `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8) bounds *consecutive blocks in ONE turn*, so it
+  >   ends the turn and leaves the hook registered — the next turn blocks again. That is how the
+  >   97-char anti-example below reached 45 iterations over 27.6 hours. Neither is a session that did
+  >   the work.
   > **📉 THE ANTI-EXAMPLE IS OURS, and it is SHORT — so brevity is not the rule.** The only
   > `failed:true` goal on this box: `continue until 100.00 complete and correct at 100th percentile
   > absolute perfection implementation` — 97 chars, **45 evaluations over 27.6 hours and 390,885

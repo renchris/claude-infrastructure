@@ -201,7 +201,7 @@ make `--goal` the documented DEFAULT for new-task fires with that template baked
 
 **The gap Phase 1 left, measured.** Phase 1 built `--goal`, tested it 18 ways, and proved it in live
 panes. Adoption then sat at **3 of 60** field-carrying fire rows (5%), with **zero** automated
-producers and **zero** recycles ever re-arming. Not a discipline failure: `--goal` lived in prose
+producers passing the flag. Not a discipline failure: `--goal` lived in prose
 while **all 26 copyable fire templates omitted it**, and a producer copies the recipe. A flag
 documented only beside a recipe that omits it is, to a copying producer, a flag that does not exist.
 
