@@ -344,18 +344,20 @@ cmd_setup() {
 # Delegates the whole create to handoff-fire.sh --cloud, which owns the pty allocator, the bounded
 # retry (~50-75% per attempt — the retry is what produces a session at all) and the declare.
 cmd_up() {
-  local task='' n=1 account='auto' dry='' i
+  local task='' n=1 account='auto' dry='' i via="${CC_OFFLOAD_VIA:-api}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) task="${2:-}"; shift 2 ;;
       --task=*) task="${1#*=}"; shift ;;
       -n|--count) n="${2:-1}"; shift 2 ;;
       --account) account="${2:-auto}"; shift 2 ;;
+      --via) via="${2:-api}"; shift 2 ;;
       --dry-run) dry='--dry-run'; shift ;;
       -h|--help) usage 0 ;;
       *) die "up: unknown argument '$1'" ;;
     esac
   done
+  case "$via" in api|cli) ;; *) die "up: --via must be 'api' or 'cli', got '$via'" ;; esac
   [ -n "$task" ] || die "up: --task <file|-> is required (the brief the cloud session executes)"
   case "$n" in ''|*[!0-9]*) die "up: -n must be a positive integer" ;; esac
   [ "$n" -ge 1 ] || die "up: -n must be >= 1"
@@ -370,6 +372,13 @@ cmd_up() {
     die "up: no such task file: $task"
   fi
   [ -s "$pf" ] || die "up: the task file is empty — a cloud session with no brief does nothing"
+
+  if [ "$via" = api ]; then
+    cmd_up_api "$pf" "$n" "$account" "$dry"
+    local arc=$?
+    [ "$task" = "-" ] && rm -f "$pf"
+    return "$arc"
+  fi
   [ -x "$FIRE_BIN" ] || { note "cc-offload: fire path missing: $FIRE_BIN"; return 3; }
 
   # The create bundles the CALLER'S cwd, not a flag. Chdir so it is always the repo, never a
@@ -421,6 +430,89 @@ cmd_up() {
   if [ "$fired" -gt 0 ]; then
     printf '\n%s%d session(s) created and declared.%s Watch them: %scc-offload ls%s\n' \
       "$C_OK" "$fired" "$C_OFF" "$C_BLD" "$C_OFF"
+    return 0
+  fi
+  return "$rc"
+}
+
+# ── the API create: the ONLY path that produces a pushable session ───────────────────────────────
+# `claude --cloud` always uploads a BUNDLE, and a bundled session is created with `sources: []`, so
+# the VM's git proxy has no authorized repository and REFUSES to inject a push credential. Measured
+# 2026-08-10 on two sessions minutes apart: the CLI create → `sources: []` → push 403; this create →
+# `sources:[{type:git_repository,…}]`. The work still gets done either way — it just cannot come
+# home, which is the failure mode this whole tool exists to make impossible.
+#
+# THREE STEPS, and the order is forced: create (carrying the repo) → declare (so every local oracle
+# treats the id as off-box) → deliver the brief (the send arm, which is already proven). The brief
+# is NOT part of the create: the create makes an addressable session, `cc-notify --cloud` is what
+# gives it work.
+cmd_up_api() {
+  local pf="$1" n="$2" account="$3" dry="$4" i rc=0 fired=0
+  local api="${CC_OFFLOAD_CREATE_API:-$ROOT/scripts/cloud-create-api.py}"
+  [ -f "$api" ] || { note "cc-offload: missing $api"; return 3; }
+
+  # The router is the arbiter — never re-rank accounts here.
+  if [ "$account" = auto ]; then
+    [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
+    [ -n "$account" ] && [ "$account" != auto ] || { note "cc-offload: no routable account"; return 9; }
+  fi
+  # owner/name from the remote, portably. NOT a lazy-quantifier regex: BSD sed has no `+?` and the
+  # first attempt died with "repetition-operator operand invalid" — a GNU-ism that would have been
+  # silently fine on Linux CI and broken on every machine this actually runs on.
+  local remote_url repo_slug
+  remote_url="$(cd "$REPO" 2>/dev/null && git remote get-url origin 2>/dev/null)"
+  remote_url="${remote_url%.git}"
+  repo_slug="$(printf '%s' "$remote_url" | awk -F'[/:]' 'NF>1{print $(NF-1)"/"$NF}')"
+  [ -n "$repo_slug" ] || { note "cc-offload: cannot derive owner/name from origin"; return 3; }
+
+  for ((i=1; i<=n; i++)); do
+    local br; br="claude/fire-$(date -u +%Y%m%dT%H%M%SZ)-$$-$i"
+    if [ -n "$dry" ]; then
+      printf '%s-- DRY RUN: would create on %s, repo %s, branch %s%s\n' "$C_META" "$account" "$repo_slug" "$br" "$C_OFF"
+      python3 "$api" --account "$account" --branch "$br" --repo "$repo_slug" --dry-run >/dev/null || return 1
+      fired=$((fired+1)); continue
+    fi
+    # STDOUT IS THE ID; STDERR IS THE DIAGNOSIS. Never `2>&1` here: this captured both, so a single
+    # warning line on stderr silently became part of the session id, and the declare that followed
+    # keyed on a multi-line string that addresses nothing. Caught by the suite, not by reading.
+    local sid errf; errf="$(mktemp "${TMPDIR:-/tmp}/cc-offload-create.XXXXXX")"
+    sid="$(python3 "$api" --account "$account" --branch "$br" --repo "$repo_slug" \
+             --title "cc-offload: $(basename "$pf")" 2>"$errf")"; rc=$?
+    sid="${sid%%$'\n'*}"          # belt and braces: the id is the FIRST line, never a blob
+    if [ "$rc" != 0 ] || [ -z "$sid" ]; then
+      note "cc-offload: create failed — $(tr '\n' ' ' <"$errf" | cut -c1-300)"
+      rm -f "$errf"; [ "$rc" = 0 ] && rc=1; break
+    fi
+    rm -f "$errf"
+
+    # Declare BEFORE delivering: an undeclared id is unobservable, and cc-notify refuses to claim a
+    # send about one (exit 3). Carry the owning account or the send goes out unrouted.
+    "$CLOUD_BIN" declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO" \
+      --url "https://claude.ai/code/$sid" --item "cc-offload $(basename "$pf")" >/dev/null 2>&1 \
+      || { note "cc-offload: created $sid but DECLARE FAILED — it is live and unobservable"; rc=11; break; }
+
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
+    local drc=$?
+    if [ "$drc" != 0 ]; then
+      note "cc-offload: $sid created+declared but the brief did NOT queue (cc-notify exit $drc)."
+      note "  Retry just the delivery: cc-notify --cloud $sid \"\$(cat $pf)\""
+      rc=11; break
+    fi
+    fired=$((fired+1))
+    printf '%s✓%s %s on %s — repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
+    printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"
+  done
+
+  if [ "$fired" -gt 0 ]; then
+    # A dry run creates nothing, and saying "created" would be the exact false-success this file
+    # spends its whole header refusing elsewhere.
+    if [ -n "$dry" ]; then
+      printf '\n%s%d session(s) WOULD be created (dry run — no quota spent, nothing exists).%s\n' \
+        "$C_META" "$fired" "$C_OFF"
+    else
+      printf '\n%s%d session(s) created with the repo attached — their pushes can reach origin.%s\n' \
+        "$C_OK" "$fired" "$C_OFF"
+    fi
     return 0
   fi
   return "$rc"
