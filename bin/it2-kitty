@@ -492,10 +492,37 @@ sys.exit(0)' 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
 #
 # CC_CLOSE_COMPOSER_GUARD=off is for the drift/e2e harnesses only. `-f` does NOT bypass it: every
 # automated caller passes -f, so an -f exemption would be a guard that never runs.
-composer_state() {                       # -> NON-EMPTY | EMPTY | NO-TUI | UNKNOWN (stdout, always 0)
-  local id="$1" meta cols alt txt
+# ── …AND THE FOURTH STATE: A SUBAGENT PANE HAS NO COMPOSER BY CONSTRUCTION (2026-08-10) ──────────
+# The three-state model above meets a FOUR-state world, and the missing state is the one the fleet
+# spawns most. A CC agent pane (`claude.exe --agent-id <name>@<team>`) paints ONE rule — its
+# `──── @name ──` footer — and no composer at all: no ❯, no rule PAIR. So `len(rules) >= 2` fails,
+# `body` is empty, `alt` is True, and it lands in the UNKNOWN arm, which was written for "a
+# permission modal occludes the composer". The pane it fires on is the one population that provably
+# holds no operator draft — the operator never typed there, because CC never rendered a box to type
+# into. This is memory:abstain-rule-can-retire-the-common-case a second time, and
+# memory:guard-refusal-fires-on-its-own-harness: a fail-closed guard convicting its own fleet.
+#
+# MEASURED 2026-08-10 across all 20 live kitty windows, and the separation is total: 10/10 windows
+# whose foreground argv carries `--agent-id` read exactly ONE rule ⇒ UNKNOWN ⇒ refused; 10/10
+# others resolve (8 composer pairs, 2 shell prompts). Cost of the refusal: ten `claude.exe` child
+# processes surviving 5 h 16 m past their own completion, 5.9 GB RSS, each already checkpointed by
+# teammate-auto-shutdown.sh — which tried to close them 160 times and was refused every time
+# (rc 67, `~/.claude/logs/teammate-lifecycle.log`).
+#
+# TWO INDEPENDENT PROOFS, both read through the SAME kt() call the close travels
+# (memory:make-the-actuator-the-arbiter) — never one:
+#   1. PROCESS identity, from kitty's own table: a foreground process named claude* carrying
+#      `--agent-id`, whose `--agent-name` gives the expected footer label.
+#   2. SCREEN shape, from the same get-text: EXACTLY one rule line, and it carries `@<that name>`.
+# Conjunct 2 is what keeps the modal case refused rather than exempted. CC draws its permission
+# modals with box-drawing borders, so an occluded pane reads ≥2 rule lines, no ❯ in the body, and
+# falls straight back to UNKNOWN. And a composer that IS rendered is unaffected in every direction:
+# text still reads NON-EMPTY and is still refused, on an agent pane exactly as on any other. This
+# branch only ever converts "I could not find a composer region" into "there is provably none".
+composer_state() {          # -> NON-EMPTY | EMPTY | NO-TUI | AGENT-PANE | UNKNOWN (stdout, always 0)
+  local id="$1" meta cols alt agent txt
   meta="$(kt ls --match "id:$id" 2>/dev/null | WANT_ID="$id" python3 -c '
-import json, os, sys
+import json, os, re, sys
 want = os.environ["WANT_ID"]
 try:
     d = json.load(sys.stdin)
@@ -505,16 +532,37 @@ except Exception:
     sys.exit(1)
 if len(rows) != 1:
     sys.exit(1)
+# PROOF 1 of the AGENT-PANE branch. Both halves are required: an argv carrying --agent-id, on a
+# process actually named claude*, and it must yield the --agent-name that PROOF 2 matches against
+# the footer. Anything short of a name is "-", i.e. not an agent pane — never a permissive default.
+agent = "-"
+for p in rows[0].get("foreground_processes") or []:
+    argv = [str(a) for a in (p.get("cmdline") or [])]
+    if not argv or "--agent-id" not in " ".join(argv):
+        continue
+    if not re.match(r"claude(\.exe)?$", os.path.basename(argv[0])):
+        continue
+    for i, a in enumerate(argv):
+        if a == "--agent-name" and i + 1 < len(argv):
+            agent = argv[i + 1]
+        elif a.startswith("--agent-name="):
+            agent = a.split("=", 1)[1]
+    break
 # An identity test against False, NOT a truthiness test: a payload MISSING in_alternate_screen
 # must read as "a TUI may be up" (⇒ UNKNOWN ⇒ refuse), never as "no TUI" (⇒ allow). Only kitty
 # explicitly saying False buys the permissive branch.
-print("%s %s" % (rows[0].get("columns") or 0, rows[0].get("in_alternate_screen") is not False))' 2>/dev/null)" \
+print("%s %s %s" % (rows[0].get("columns") or 0,
+                    rows[0].get("in_alternate_screen") is not False,
+                    agent if agent and " " not in agent else "-"))' 2>/dev/null)" \
     || { printf 'UNKNOWN'; return 0; }
   [ -n "$meta" ] || { printf 'UNKNOWN'; return 0; }     # pane gone, RPC failed, or ambiguous match
-  cols="${meta%% *}"; alt="${meta##* }"
+  # `read`, not ${meta##* } — a third field would otherwise be handed back as `alt` and every pane
+  # would read as "no TUI", i.e. the guard silently deleted rather than extended.
+  cols=""; alt=""; agent=""
+  read -r cols alt agent <<<"$meta"
   txt="$(kt get-text --match "id:$id" --ansi 2>/dev/null)" || { printf 'UNKNOWN'; return 0; }
   [ -n "$txt" ] || { printf 'UNKNOWN'; return 0; }      # a blank read proves nothing
-  printf '%s' "$txt" | COLS="$cols" ALT="$alt" python3 -c '
+  printf '%s' "$txt" | COLS="$cols" ALT="$alt" AGENT="${agent:--}" python3 -c '
 import os, re, sys
 SGR = re.compile("\x1b\\[([0-9;:]*)m")
 def plain(s): return SGR.sub("", s)
@@ -536,6 +584,8 @@ try:
 except ValueError:
     cols = 0
 alt   = os.environ.get("ALT") == "True"
+# PROOF 2 of the AGENT-PANE branch — "-" (the not-an-agent sentinel) can never satisfy it.
+agent = os.environ.get("AGENT") or "-"
 lines = sys.stdin.read().split("\n")
 flat  = [plain(l) for l in lines]
 # A rule may EMBED a label ("──── @agent-name ──"), so COUNT the glyphs; a whole-line anchored
@@ -545,7 +595,11 @@ thresh = max(20, cols // 2) if cols else 20
 rules  = [i for i, l in enumerate(flat) if l.count("─") >= thresh]
 body   = lines[rules[-2] + 1:rules[-1]] if len(rules) >= 2 else []
 if not body or "❯" not in plain(body[0]):
-    print("UNKNOWN" if alt else "NO-TUI"); raise SystemExit
+    # EXACTLY one rule, carrying the footer label of THIS agent. A modal-occluded pane draws its own
+    # box borders (≥2 rules) and so can never reach here; a two-rule pane with no ❯ stays UNKNOWN.
+    agent_pane = (agent != "-" and len(rules) == 1 and ("@" + agent) in flat[rules[0]])
+    print("AGENT-PANE" if (alt and agent_pane) else ("UNKNOWN" if alt else "NO-TUI"))
+    raise SystemExit
 seen = content = False
 for line in body:
     for ch, dim in walk(line):
@@ -775,7 +829,7 @@ else:
     if [ "${CC_CLOSE_COMPOSER_GUARD:-on}" = on ]; then
       _cstate="$(composer_state "$SESSION")"
       case "$_cstate" in
-        EMPTY|NO-TUI) : ;;
+        EMPTY|NO-TUI|AGENT-PANE) : ;;
         *)
           # PRESERVE FIRST, REFUSE SECOND. A snapshot taken after the close is worth nothing, and
           # this is the only moment the text still exists anywhere. Best-effort by design: a failed
