@@ -1944,6 +1944,23 @@ mk_get()        { sed -n "s/^$2=//p" "$CC_POSTLAND_DIR/reverts/$1" | head -1; }
   [ "$(inert_pages_n)" = "1" ]                           # ...and it PAGED rather than skipping mute
   run grep -c 'reason=retry-budget-spent' "$CC_POSTLAND_DIR/runner.log"
   [ "$output" = "1" ]
+  # ...and BOTH terminal surfaces name the SUITE the veto was for (2026-08-10, item 50af9e4a4258).
+  # A page and a durable item that carry only a sha, a reason and a count cannot be adjudicated: the
+  # first question — is it still red? — is unaskable, and the archaeology it forces is exactly what
+  # made an unattributed RED unactionable one arm over. Live proof that the omission inverts the
+  # remedy: f60b7ca220ee's suite was fixed FORWARD, so by the time a human read the item the revert
+  # it argued for would have deleted a live dependency.
+  #
+  # DERIVED from the marker, never a literal. A hardcoded 'tests/bad.bats' would keep passing if the
+  # fixture's culprit file were renamed — the same vacuity as a control that cannot fail — so the
+  # marker field is asserted first (it is the producer's own record) and then required to appear in
+  # both surfaces. Fail the first assertion and the other two are known to be measuring nothing.
+  ftest="$(mk_get "$culprit" failing)"
+  [ "$ftest" = "tests/bad.bats" ]                        # control: the producer recorded a suite...
+  run grep -cF "$ftest" "$CC_PAGES_DIR/postland-revert-inert-${culprit:0:12}.page"
+  [ "$output" -ge 1 ]                                    # ...the page names it...
+  run grep -cF "AUTO-REVERT INERT (retry-budget-spent): $ftest @ ${culprit:0:12}" "$REC/cc-backlog.argv"
+  [ "$output" = "1" ]                                    # ...and so does the one that survives a green
   # BOUNDARY CONTROL at the other side: the identical state with one more unit of budget ATTEMPTS.
   # Without this the test would pass just as well against an actuator that never retries at all.
   rm -f "$CC_POSTLAND_DIR/stamps"/*.json
