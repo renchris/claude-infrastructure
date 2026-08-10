@@ -856,6 +856,96 @@ fired `--account auto` so the M7 router routes them — the implementation wave 
 burns next3's stranding 11% tonight, and the fires are the first production exercise of the
 `--assign` ledger. Origin (this session) holds custody + review; leads return via notify-back.
 
+### §14.1 W2-A — DONE (2026-08-10)
+
+**Scope (frozen):** on `handoff-fire.sh --recycle`, when the pane's CURRENT account is
+non-routable, relaunch the SAME pane on the account `claude-accounts --route general` names
+instead — fail-soft to same-account, kill-switched, tested, landed via the project `/ship`.
+
+**Shipped the NON-ROUTABLE half only, deliberately — the delta from §14's bullet is the one thing
+to read here.** That bullet specifies "non-routable-**or-pressured** (excluded, or route names
+another account and current k_eff/5h pressure exceeds it materially)"; the fired brief narrowed v1
+to exclusion alone and named the reason, so that is what shipped. Pressure short of exclusion —
+a hot 5h window, a soonest-expiring week — needs a MAGNITUDE ("materially" is a threshold nobody
+has measured), and a magnitude judged against headroom belongs with M7's scoring terms in
+`claude-accounts`, not in a caller whose only input is a boolean. Filed as R14A-1.
+
+**The gap, and why M7 could not close it.** M7 taught the FIRE path to spread. A recycle is not a
+fire: the pre-pass derives `ACCOUNT` from the pane's own `$CLAUDE_CONFIG_DIR` and nothing
+reconsiders it, so the relaunch carries the incumbent launcher BY CONSTRUCTION — making the
+fleet's commonest seam the one path that could never SHRINK a pile-up.
+
+**The design.** One marker-delimited function, `recycle_repick()` (`scripts/handoff-fire.sh`, its
+own suite extracts and executes it the way `handoff-fire-assign.bats` drives the M7 `--assign`
+block), called from the recycle pre-pass **inside the `auto`-account arm only** — an explicit
+`--account`/`--launcher` is the operator's choice and is never second-guessed. It re-picks IFF the
+kill switch is on · `--route general` exits 0 · it names an account ≠ current · **and the current
+account is named in that call's stderr exclusion map** (`claude-accounts: general excluded —
+<acct>=<reason>`). On a re-pick the launcher comes from the generated SSOT map (swapping the NAME
+is the whole change — no launch line is composed), the launch dir is `pre_trust`ed under the NEW
+config dir, and the account is charged `--assign <new> --src recycle-repick`.
+
+| Fail-soft path | Result |
+|---|---|
+| `CC_RECYCLE_REPICK=off` | returns before any router call — the code path is never consulted |
+| `--model claude-fable-5` | never re-picked: Fable is a separate entitlement (`--route fable`, `no-fable-limit`) the general lane cannot answer for |
+| explicit `--account` / `--launcher` | never re-picked (the call sits inside the `auto` arm) |
+| route exits 2 (nothing routable) or 3 (data unreadable) | keep |
+| winner == current, or empty/`none` stdout | keep |
+| current account absent from the exclusion map | keep |
+| router absent, or `perl exec` fails (exits 0, empty stdout — measured) | keep |
+| router names an account the generated map does not declare | DECLINED loudly — `launcher_for()` would otherwise HALT the fire on `!! unknown account`, turning a routing nicety into a dead recycle |
+| under bats with no opt-in `CC_ACCOUNTS_BIN` stub | returns before any call (the rule `pre_fire_account_sweep` and the M7 `--assign` block already enforce) |
+
+Bounded with `perl -e 'alarm 25; exec @ARGV'` (`probe_account`'s idiom) — unlike the fire path's
+own `--rank`, because the failure modes differ: a fire that stalls on a dark endpoint has not yet
+cost anything, while a recycle that stalls has already been CHOSEN as the cheap disposition and is
+holding a pane that would otherwise be working.
+
+**Contracts unchanged.** `claude-accounts` is read-only here — no flag, exit code or stdout shape
+changed. §14's must-still-pass list holds: the engagement scan and `/goal` re-arm are
+account-agnostic by construction (the watcher resolves the successor's transcript across
+`CC_PROJECTS_DIRS`, all five account dirs), and `pre_trust` now covers the re-pick alongside the
+`RECYCLE_RELOC` arm it was modelled on. The M7 fire-time `--assign` block still skips `RECYCLE=1`,
+so a re-picked account is charged exactly once.
+
+**Verified:** `tests/handoff-recycle-repick.bats` 1..17 (1 re-picks · 8 must not · 4 fail-soft
+edges · 3 call-site wiring assertions the extraction cannot see · 1 extraction control) + the four
+named regression suites — 113 ok, 0 red across all six.
+
+**Learnings.**
+- **A fired session's base is a SNAPSHOT, so a design record written after the fire is
+  unreachable from it.** The brief said "§14 (W2-A) — read it FIRST"; §14 was absent from the
+  worktree, which was 13 commits behind `origin/main`, where it had since landed. The session
+  built against the brief's own four-clause contract and wrote a §14 that then CONFLICTED with the
+  real one at rebase — the near-miss being an INTEGRATE-never-overwrite violation reached by
+  nobody's mistake. Cheap fix, worth making the habit: when a brief cites a doc section that is not
+  there, `git fetch && git log origin/main -- <path>` before concluding it does not exist.
+- **Per-site mutation earned its keep, and one site came back AMBIENT.** Nine mutants run against
+  a throwaway copy; eight redden their own site's test. The ninth — deleting the `command -v $bin`
+  guard — does NOT, because `perl -e 'alarm N; exec @ARGV' /no/such/bin` exits **0 with empty
+  stdout AND empty stderr** on this box, so the block's `[ -z "$out" ]` arm reaches the identical
+  outcome. The test says so in its own body rather than banking a green it did not earn. (Two of
+  the nine sed expressions were malformed and silently replayed the UNMUTATED file — all-green,
+  which reads exactly like "the test does not catch this". A `diff -q` applied-check and a
+  `bash -n` well-formedness check now gate every mutant: a malformed mutant is a NON-VERDICT, and a
+  non-verdict announced as a pass is the trap.)
+- **Account names are prefixes of each other, so the exclusion parse is anchored per field.**
+  `next` is a prefix of `next2/3/4`; a substring test over the exclusion map convicts a perfectly
+  routable pane on its SIBLING's exclusion. Split on `; ` first, then anchor `^<acct>=`. The mutant
+  that swaps the anchor for a substring reddens three tests.
+- **"The running session proves the dir is trusted" is a claim about a CONFIG DIR, not a
+  directory.** The same-dir recycle skips `pre_trust` on exactly that reasoning — sound until the
+  ACCOUNT changes underneath it, at which point the proof sits in the OLD account's `.claude.json`
+  while the successor reads the NEW one. The same workspace-trust stall `RECYCLE_RELOC` was fixed
+  for, reached from the other axis.
+
+**§14.1 Remainders:** R14A-1 pressure-short-of-exclusion (§14's "or-pressured" half) is deliberately
+unshipped — it needs a measured magnitude and M7's scoring terms, not a boolean in a caller.
+R14A-2 a Fable recycle is never re-picked; doing so needs the `--route fable` lane and its
+entitlement semantics. R14A-3 `pre_fire_account_sweep` is still skipped for recycles, so a re-pick
+cannot land on an account a headless relogin would have healed.
+
 ### §14.2 W2-B — DONE (2026-08-10, `f6b6c4e5`)
 
 **Scope (frozen):** `bin/cc-wave-plan`'s flat per-account cap (`CC_WAVE_MAX_PER_ACCT=2`) becomes
