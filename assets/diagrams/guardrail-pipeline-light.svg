@@ -79,10 +79,10 @@ wrong worktree · unsanctioned push" data-shape="rectangle">
   <rect x="326.3219999999999" y="585.8095000000001" width="105.67599999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
   <text x="379.15999999999985" y="604.2595000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">the tool call</text>
 </g>
-<g class="node" data-id="Post" data-label="PostToolUse — 11 hooks
+<g class="node" data-id="Post" data-label="PostToolUse — 12 hooks
 plan version · bash log · context watch" data-shape="rectangle">
   <rect x="289.8416666666666" y="661.168" width="267.9549999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="423.81916666666655" y="688.068" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="423.81916666666655" dy="-3.9000000000000012">PostToolUse — 11 hooks</tspan><tspan x="423.81916666666655" dy="16.900000000000002">plan version · bash log · context watch</tspan></text>
+  <text x="423.81916666666655" y="688.068" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="423.81916666666655" dy="-3.9000000000000012">PostToolUse — 12 hooks</tspan><tspan x="423.81916666666655" dy="16.900000000000002">plan version · bash log · context watch</tspan></text>
 </g>
 <g class="node" data-id="Stop" data-label="Stop
 11 hooks" data-shape="diamond">
