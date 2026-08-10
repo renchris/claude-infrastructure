@@ -1698,6 +1698,80 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   [ "$output" = "1" ]
 }
 
+# ── C31 the culprit must be IN the trunk the revert is taken from (item a31d1fe3de3d) ───────────
+# A $BATS_BIN wrapper that fires the LAND-LANE RACE exactly once, mid-sweep, then delegates to the
+# real bats. The timing is the whole fixture: --run-if-needed captures target=origin/main at entry
+# and auto_revert re-fetches only after the corpus, the ladder and the bisect are done, so a rewrite
+# that lands in between orphans the sha the sweep is standing on. Rewriting from the test BEFORE the
+# sweep would simply make the sweep capture the new trunk and the test would pass vacuously.
+# The twin is the culprit's OWN tree on the culprit's OWN parent — the same patch under a different
+# sha, which is what a rebase-land produces and is why `--is-ancestor` is the discriminator rather
+# than any diff of content.
+# It RECORDS the twin it minted. The test reads its preconditions from that record and never from
+# live origin/main: an UNGUARDED auto_revert lands its revert and moves trunk a second time, so a
+# precondition read after the sweep describes the SUT's own response rather than the race — it
+# holds only in the arm that already passed, and the control then dies on a precondition instead of
+# on a claim, proving nothing. Measured, not theorised: the first mutation run of this test failed
+# exactly there.
+orphan_culprit_bats() {   # <culprit> → echoes the wrapper's path
+  local real; real="$(command -v bats)"
+  { printf '#!/bin/bash\n'
+    printf 'if [ ! -e "%s" ]; then\n' "$REC/orphaned"
+    printf '  tw="$(git -C "%s" commit-tree "%s^{tree}" -p "%s~1" -m "re-landed by the land lane")"\n' "$R" "$1" "$1"
+    printf '  git -C "%s" push -qf origin "$tw:main"\n' "$R"
+    printf '  printf "%%s" "$tw" > "%s"\n' "$REC/orphaned"
+    printf 'fi\n'
+    printf 'exec "%s" "$@"\n' "$real"
+  } > "$STUB/bats-orphan"
+  chmod +x "$STUB/bats-orphan"
+  printf '%s' "$STUB/bats-orphan"
+}
+# Everything under auto_revert reverts FROM origin/main, and nothing checked the culprit was
+# REACHABLE from there. Live on this box: the 2026-08-01T04:29Z run measured 86774743ffcd, not an
+# ancestor of trunk (its patch is in trunk as fa78e662); the bisect off it named 57e162494c10, also
+# not in trunk (in trunk as 28949c7b, with five commits on top including the current last-green
+# 71e96bcbc825). `git revert` asked a tree that never had that commit applied from that parent to
+# un-apply it — rc 90, revert=none, and a page prescribing the same impossible revert by hand.
+#
+# rc 90 is the MILD outcome and must not be read as the guard's purpose: the conflict is the only
+# thing that stopped it. A culprit whose lines have not moved reverts CLEANLY and the land lane puts
+# it on trunk — 47a5350498ee is the live proof (not in trunk, revert APPLIED, rc 6 at the land step
+# only). THE POSITIVE CONTROL IS PRE-EXISTING AND NOT OPTIONAL: C20 above lands a revert off an
+# ordinary in-trunk culprit, so a guard that over-fired — refusing every culprit, or failing closed
+# on a healthy tip — reddens C20 rather than passing quietly here.
+@test "C31: a culprit orphaned by a rebase-land is refused before the revert lane is entered" {
+  ship_stub
+  culprit="$(arv_red)"
+  CC_POSTLAND_BATS="$(orphan_culprit_bats "$culprit")"; export CC_POSTLAND_BATS
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS — facts about the RACE, read from the twin the wrapper recorded. Every one of
+  # these was true when auto_revert made its decision, and stays true whatever the SUT did next.
+  twin="$(cat "$REC/orphaned" 2>/dev/null || true)"
+  [ -n "$twin" ]                                                  # the wrapper fired
+  [ "$(git -C "$R" rev-parse "$twin^{tree}")" = "$(git -C "$R" rev-parse "$culprit^{tree}")" ]
+  run git -C "$R" merge-base --is-ancestor "$culprit" "$twin"      # a TWIN, not a rewind: same tree...
+  [ "$status" -ne 0 ]                                             # ...and the culprit is off that trunk
+  # CLAIM 1: refused, with the token that names why — not the generic skip, and not rc 90.
+  run grep -c 'AUTOREVERT verdict=skipped reason=culprit-not-in-trunk' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
+  # CLAIM 2: refused BEFORE anything was attempted. No marker means the retry ladder records no
+  # attempt against a culprit nothing tried to revert, so the budget stays with the real ones.
+  [ ! -f "$CC_POSTLAND_DIR/reverts/$culprit" ]
+  # CLAIM 3: the revert lane was never entered at all — no branch, no page, no land.
+  run git -C "$R" branch --list "postland-revert-${culprit:0:12}"
+  [ -z "$output" ]
+  [ "$(rev_pages_n)" = "0" ]
+  [ ! -f "$REC/ship.argv" ]
+  # CLAIM 4 — THE HARM ITSELF, and the reason rc 90 must not be read as this guard's purpose. In
+  # this fixture the reverse patch applies CLEANLY (the twin carries the culprit's tree, so the file
+  # the culprit added is right there to delete), so without the guard the revert lands and takes the
+  # patch off trunk — the f323b427 shape. Trunk must still carry it, and trunk must still be the
+  # twin rather than a revert commit pushed on top of it.
+  run git -C "$R" cat-file -e "origin/main:tests/bad.bats"
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$R" rev-parse origin/main)" = "$twin" ]
+}
+
 # The rc-90 remedy is the ONE that asks the operator for hand-work — resolving a revert conflict —
 # and it used to park that work at $WT_ROOT/wt-revert-manual, inside the glob
 # reap_stale_worktrees deletes (`wt-run-*` -o `wt-revert-*`, older than WT_STALE_S). That reaper is

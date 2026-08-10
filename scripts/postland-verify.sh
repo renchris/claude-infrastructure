@@ -1830,9 +1830,44 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
   [ -n "$REPO_SHIP" ] && [ -x "$REPO_SHIP" ] \
     || { log "AUTOREVERT verdict=skipped reason=no-land-lane ($REPO_SHIP) culprit=$c12"; return 1; }
 
-  REVERTS_THIS_RUN=$((REVERTS_THIS_RUN+1))               # counted at ATTEMPT, so the cap bounds attempts
+  # ── GUARD: THE CULPRIT MUST BE IN THE TRUNK WE ARE ABOUT TO REVERT FROM (2026-08-09, item a31d1fe3de3d)
+  # Everything below reverts FROM origin/main — `worktree add … origin/main`, then `git revert $c`.
+  # Nothing until now checked that $c is REACHABLE from there, and it is routinely not: the sweep
+  # captures `target=origin/main` at entry and the corpus then runs for the better part of an hour,
+  # during which the land lane REBASES. A branch that lands in that window re-writes the shas the
+  # sweep is standing on, so the captured target is orphaned and every commit the bisect can name
+  # off it is a PRE-REBASE sha whose patch reached trunk under a DIFFERENT one.
+  #
+  # Measured, not reasoned (this box, item a31d1fe3de3d): the 2026-08-01T04:29Z run measured
+  # 86774743ffcd, which is not an ancestor of origin/main — its patch is in trunk as fa78e662. The
+  # bisect off it named 57e162494c10, also not in trunk; ITS patch is in trunk as 28949c7b, with
+  # five commits built on top including 71e96bcbc825, the current last-green. `git revert` then
+  # asked a tree that never had 57e162494c10 applied from that parent to un-apply it — conflict,
+  # rc 90, revert=none, and a page whose remedy re-runs the same impossible revert by hand.
+  #
+  # rc 90 is the MILD outcome. The conflict is what stopped it; a culprit whose lines happen not to
+  # have moved reverts CLEANLY and the land lane puts it on trunk — reverting a patch by CONTENT
+  # while trunk carries a different-sha twin, on a premise nothing checked. That is the f323b427
+  # shape (2026-08-06, a correct cc-queue fix reverted, permanent red restored, re-landed by
+  # 12549d8b), reached by a different route: there the walk convicted an innocent commit, here the
+  # walk is internally sound and the HISTORY it walked is the thing that is no longer trunk.
+  # 47a5350498ee is the live proof this half is reachable — not in trunk, and its revert APPLIED.
+  #
+  # So the ancestry test is not a conflict predictor and must not be read as one: it decides whether
+  # reverting is a MEANINGFUL operation against this trunk at all. Refuse before the budget is spent
+  # and before any marker is written — nothing was attempted, so nothing should be recorded as an
+  # attempt. The fetch moves up here because the guard must test the SAME tip the revert will use.
   bounded 120 git -C "$REPO" fetch origin main >/dev/null 2>&1 || true
   tip="$(git -C "$REPO" rev-parse origin/main 2>/dev/null || true)"
+  # Two distinct not-permitted states, two distinct tokens: an unresolvable trunk ref is a BLIND
+  # instrument, a resolved one that does not contain $c is a PROVEN non-ancestor. Collapsing them
+  # would report the blind case as a finding about the culprit.
+  [ -n "$tip" ] \
+    || { log "AUTOREVERT verdict=skipped reason=no-trunk-ref culprit=$c12 (origin/main unresolvable — cannot prove the premise)"; return 1; }
+  git -C "$REPO" merge-base --is-ancestor "$c" "$tip" 2>/dev/null \
+    || { log "AUTOREVERT verdict=skipped reason=culprit-not-in-trunk culprit=$c12 tip=$(sha12 "$tip") (orphaned by a rebase-land; its patch is in trunk under another sha — revert it there, or fix FORWARD)"; return 1; }
+
+  REVERTS_THIS_RUN=$((REVERTS_THIS_RUN+1))               # counted at ATTEMPT, so the cap bounds attempts
   # PROVISIONAL marker, written BEFORE the work and rewritten after it. The retry budget must count
   # attempts STARTED, exactly as REVERTS_THIS_RUN does one line above: this path spends up to
   # 120s+120s+SHIP_TO under a launchd job that really does get pkill'd (that is what a CUT is), and a
