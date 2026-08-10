@@ -129,7 +129,13 @@ RE_SELF_DUP = re.compile(
 
 # The verdicts that REFUSE a claim (exit 3). Everything else advises and proceeds. Kept as one
 # tuple so the gate, the report and the tests can never disagree about which is which.
-BLOCKING = ("superseded", "self-duplicate")
+BLOCKING = ("superseded", "self-duplicate", "falsified")
+
+# How long a stored falsifier may run before we give up on it. A probe is meant to be a cheap
+# question ("does this file still exist", "is this suite still red"); anything slower is not a
+# probe and must not hold a claim hostage. On timeout we fail OPEN — see run_falsifier.
+FALSIFIER_TIMEOUT_S = int(os.environ.get("CC_PREMISE_FALSIFIER_TIMEOUT", "20"))
+FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_FALSIFIER", "on").lower() not in ("off", "0", "no")
 
 # A file path cited in a premise. Conservative on purpose: a bare word with a slash is not a
 # path claim, so this wants a real extension or a known top-level dir of this repo.
@@ -180,7 +186,14 @@ def build_index(recs):
         parts = [r.get(k) or "" for k in ("title", "needs", "evidence")]
         text = " ".join(p for p in parts if p)
         ent = idx.setdefault(rid, {"text": "", "first_ts": r.get("ts") or "", "title": "",
-                                   "project": "", "notes": []})
+                                   "project": "", "notes": [], "falsifier": ""})
+        # LAST-WRITE-WINS, deliberately unlike `notes` below. A falsifier is not a claim whose
+        # history matters — it is the CURRENT way to ask "is this condition still live", so a later
+        # record correcting it is strictly better than an earlier one. The per-record accretion that
+        # `notes` needs would be actively wrong here: re-running a probe its owner already replaced
+        # is how you resurrect a condition that was retired for a reason.
+        if r.get("falsifier"):
+            ent["falsifier"] = r["falsifier"]
         if text:
             ent["text"] = (ent["text"] + " " + text).strip()
             # PER-RECORD, WITH ITS OWN TIMESTAMP. Two measured reasons this cannot collapse to one
@@ -377,6 +390,64 @@ def cited_paths(text):
     return out[:12]  # a contract is read by a human; an unbounded list is not read at all
 
 
+def run_falsifier(item_id, ent):
+    """Re-ask the item's own question against TODAY's tree. Returns (verdict, lines) or None.
+
+    None means "this signal has nothing to say" — no falsifier stored, disabled, or the probe
+    could not be run — and the caller falls through to the prose signals as before.
+
+    THE CONTRACT IS DELIBERATELY ASYMMETRIC, and it is the whole design:
+
+      exit 0     the condition is GONE. Only this blocks (verdict `falsified`).
+      non-zero   the condition is STILL LIVE. Advisory only; the item proceeds, and the probe's
+                 own output rides the contract so the worker starts from today's symptom rather
+                 than the filing-day one.
+      anything else (timeout, missing shell, exception) — FAIL OPEN, return None.
+
+    Why exit 0 is the blocking direction and not the reverse: a falsifier answers "is this still
+    needed?", and the cheap, safe default for an unreadable answer must be "assume yes, let the
+    work proceed". Inverting it would let a broken probe silently retire live work — the failure
+    this file's header calls out as an unread premise being "I could not tell", never "finished".
+
+    Bounded three ways so a probe cannot become the next outage: a hard timeout, no shell state
+    inherited beyond the environment, and a truncated capture (a probe that prints a megabyte is
+    still just answering yes or no).
+    """
+    if not FALSIFIER_ENABLED:
+        return None
+    cmd = (ent.get("falsifier") or "").strip()
+    if not cmd:
+        return None
+    try:
+        p = subprocess.run(
+            ["/bin/sh", "-c", cmd],
+            capture_output=True, text=True,
+            timeout=FALSIFIER_TIMEOUT_S,
+            cwd=REPO or None,
+        )
+    except Exception:
+        # Timeout, missing shell, unreadable cwd — all identical from here: we could not ask.
+        return None
+
+    out = ((p.stdout or "") + (p.stderr or "")).strip().replace("\n", " ")[:300]
+    if p.returncode == 0:
+        return "falsified", [
+            "FALSIFIER PASSED — this item's own re-run check says the condition it was filed for "
+            "is GONE. It exited 0 just now, against today's tree, not at filing time.",
+            "  probe: %s" % cmd,
+            "  output: %s" % (out or "(silent)"),
+            "Close it citing this run (cc-backlog done %s --evidence \"falsifier passed: %s\"). "
+            "If you believe the probe is wrong, fix the PROBE — do not work around it, or the "
+            "next reader inherits the same false verdict." % (item_id, cmd),
+        ]
+    return "clear", [
+        "Falsifier re-run just now: STILL LIVE (exit %d) — this premise is current, not merely "
+        "unrefuted. Start from this output, not from the filing-day description." % p.returncode,
+        "  probe: %s" % cmd,
+        "  output: %s" % (out or "(silent)"),
+    ]
+
+
 def assess(item_id, idx):
     """The predicate. Returns (verdict, contract_lines)."""
     ent = idx.get(item_id)
@@ -385,6 +456,22 @@ def assess(item_id, idx):
 
     lines, verdict = [], "clear"
     text = ent["text"]
+
+    # (0) THE FALSIFIER RUNS FIRST, and it outranks every prose signal below — because it is the
+    # only one that is a MEASUREMENT rather than a claim. Everything else in this function reads
+    # words somebody wrote at filing time; this re-asks the question against today's tree. When a
+    # re-run says the condition is gone, no amount of confident prose beneath it should be able to
+    # send a worker at it.
+    fals = run_falsifier(item_id, ent)
+    if fals is not None:
+        fverdict, flines = fals
+        if fverdict == "falsified":
+            return fals
+        # STILL-LIVE is advisory ONLY, and must not short-circuit. Returning here would let a
+        # healthy probe SUPPRESS the self-duplicate and superseded checks below — a signal that
+        # says "the condition is real" is no evidence that the ITEM is the right place to work it,
+        # and the two questions are independent. Carry the output forward and keep asking.
+        lines.extend(flines)
 
     # (a) THIS item declares itself redundant. Strongest signal in the store and the cheapest to
     # act on: the canonical sibling is named, so the reader is never left guessing what survives.

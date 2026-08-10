@@ -739,7 +739,7 @@ project_default() {
 }
 
 cmd_add() {
-  local project="" title="" dod="" source="" condition=""
+  local project="" title="" dod="" source="" condition="" falsifier=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -748,6 +748,11 @@ cmd_add() {
       --dod-ref)   dod="${1:-}";       [ $# -gt 0 ] && shift ;;
       --source)    source="${1:-}";    [ $# -gt 0 ] && shift ;;
       --condition) condition="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # NOT part of the id hash, on purpose. The falsifier is HOW you ask whether this item is
+      # still needed; it is not WHICH item this is. Hashing it would re-mint a row every time
+      # someone improved the probe — precisely the per-measurement re-keying that --condition
+      # exists to kill (see the CONDITION KEY note above).
+      --falsifier) falsifier="${1:-}"; [ $# -gt 0 ] && shift ;;
       *) printf 'cc-backlog add: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
@@ -804,8 +809,10 @@ cmd_add() {
   fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
      --arg title "$title" --arg dod "$dod" --arg source "$source" --arg condition "$condition" \
+     --arg falsifier "$falsifier" \
      '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}
-      + (if $condition == "" then {} else {condition:$condition} end)' \
+      + (if $condition == "" then {} else {condition:$condition} end)
+      + (if $falsifier == "" then {} else {falsifier:$falsifier} end)' \
      >> "$BACKLOG"
   echo "$id"
 }
