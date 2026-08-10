@@ -273,7 +273,7 @@ Each criterion names the exact command whose output proves it. Narration does no
 | **AC9** ✅ **MET — SUPERSEDES the ❌ below, which is STALE (re-read 2026-07-31)**. The ❌ was assigned by the §7.0 sweep on 2026-07-30 and was true *then*; the §11 completion wave built M4 hours later (§11.12), and the sweep was never re-run. Disk, this tree: `grep -c 'watchdog-census' bin/cc-reaper` → **6** (the sweep recorded 0); `ls tests/watchdog-census.bats` → **PRESENT** (the sweep recorded "No such file"); the ledger reads at `bin/cc-reaper:1146` (`n_spawn=$(grep -cF 'spawned watchdog daemon' …)`). Suite green this session: **12/12 ok, 0 not-ok**, reconciled against its `1..12` header. ~~❌ NOT MET — M4 shipped nothing~~ | Watchdog census balances, with a positive control (R6) | `cc-reaper --watchdog-census` → `spawned/live/exited/lost` + a `control=OK` line proving the detector fires. **Evidence 2026-07-30:** `grep -c watchdog-census bin/cc-reaper` → **0**; `ls tests/watchdog-census.bats` → *No such file or directory*; `grep -rn 'watchdog[-_]census\|WATCHDOG_CENSUS' bin/ scripts/ hooks/ tests/` → **0 hits** (`bin/cc-reaper` itself exists, 65193 B, and contains no `census` / `--watchdog` token at all). **Missing:** the whole M4 leg — the `--watchdog-census` subcommand, the spawned/live/exited/lost ledger, the `control=OK` positive control, and the `CC_WATCHDOG_CENSUS=off` kill switch §8 already declares | ledger off by **~102**, no census exists |
 | **AC10** ✅ **MET — SUPERSEDES the ⚠ below, which is STALE (re-read 2026-07-31)**. Note [b]'s complaint was exact and is now answered: the daemon's poll of the **LEAD** — not just its own identity record — pins pid+lstart. `hooks/lead-crash-watchdog.sh:849-855` `lead_alive()` does `kill -0` **then** compares `ps -o lstart= -p "$p"` against the pinned value, with the DST-safe three-state degradation (§11.11); `:813` records the change in its own words — *"The check here used to be a bare `kill -0 \"$pid\"`"*; `:743` states the invariant. `grep -c lstart` → **11** (was 4, all of which note [b] correctly discounted as the daemon's own record). ~~⚠ PARTIAL — the read passes on code this row did not write; the poll it names is unchanged (note [b])~~ | Watchdog liveness uses pid+lstart (R5) | `grep -c 'lstart' hooks/lead-crash-watchdog.sh` → `>0`; RED-proof asserts a recycled-PID fixture is classified dead. **Evidence 2026-07-30:** count = **4** — so the read as written passes — but all four sit in the daemon's **own** identity check (`daemon_alive()` at `:718`, `WATCHDOG_START` at `:1008`), and `git blame -L 705,725` attributes 100% of them to sibling commit `2f62ee62` *"single-instance guard + one-handler-per-death"* (2026-07-29 17:48), not to this row. **The liveness this AC names — the daemon's poll of the LEAD — is still a bare `kill -0 "$pid"` at `hooks/lead-crash-watchdog.sh:761`** (base `6ce912b3` line 630; the `:601` cited in R5/M4). The recycled-PID RED-proof at `tests/lead-crash-watchdog.bats:301-311` exists but `git blame -L 301,311` → **11/11 lines `2f62ee626`**, and it asserts the *daemon-record* path (a recycled pid must not suppress the spawn), never the lead-liveness classification. **Missing:** pid+lstart on the lead poll, and a RED-proof that a recycled **lead** pid is classified dead | bare `kill -0`, line 601 |
 | **AC11** ✅ **MET via its successor AC22 — SUPERSEDES the ❌ below, which is STALE (re-read 2026-07-31)**. M5 shipped in the §11 wave: `hooks/lib/osa.sh` exists on trunk and the bare sites were converted. Note [c] was right that the criterion's *own* grep is miscalibrated, so AC22 (§11.4) carries the corrected predicate and `tests/osa-bounds.bats` makes it a **standing** test rather than a one-time read — **22/22 ok, 0 not-ok**, reconciled against `1..22` (2026-08-06; was 14/14 when written — the count moves whenever the predicate is recalibrated, so read §11.4's miscalibration table for the current one rather than trusting this figure). ⚠ That predicate was miscalibrated a **second** time and was RED on trunk when this session opened — it convicted `sup_bounded 10 osascript` (`scripts/lead-supervisor.sh:159`), a genuinely bounded call, because the exemption required the wrapper to sit *immediately* before `osascript`. Fixed + two mutant-RED-proved controls (`47c68a1c`). ~~❌ NOT MET — M5 shipped nothing; the read never reached `0` (note [c])~~ | 0 unbounded `osascript` sites in `hooks/` (R7) | `grep -rn '^[^#]*osascript' hooks/ \| grep -vE 'timeout\|_osa\|TB' \| wc -l` → `0`. **Evidence 2026-07-30:** the read returns **2**, not 0 — and returns the **same 2** against the pristine base tree (`git archive 6ce912b3 hooks/` → identical count), i.e. this row moved it by zero. Both residual hits are non-invocations (note [c]), so no *unbounded* osascript CALL survives in `hooks/` — but that was already true at base, from the pre-existing per-caller helpers `nty_osa` / `lcw_osa` / `wrc_osa` landed by `7774734a` (2026-07-26), which predates this row. **Missing:** M5 itself — the one sourced helper and the conversion of the bare sites. Repo-wide the same read returns **33** (`hooks/ bin/ scripts/`), including genuinely unbounded calls at `scripts/handoff-fire.sh:2218,2224,3341,3348` (`osascript -e 'delay …'`), `bin/screenshot-to-clipboard.sh:18`, `bin/dia-cdp-launch.sh:322` | **31** repo-wide |
-| **AC12** ✅ **MET** | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable. **Evidence 2026-07-30:** `launchctl list \| grep capacity-alarm` → `-	0	com.claude.capacity-alarm` (loaded; last exit 0), plist present at `~/Library/LaunchAgents/com.claude.capacity-alarm.plist`. Live run → `live sessions 20 · reclaimable headroom 28.77 GB · swap used 0.00 MB · est. room ~46 more · **VERDICT: OK**` (rc=0). `--selftest` → `OK / WARN / ALARM / ALARM-on-swap>0 / NO-DATA` each reached with `control OK`, closing `capacity-alarm: selftest GREEN (4 rungs + no-data reachable)` | unstated -> OK@29.3 GB headroom |
+| **AC12** ✅ **MET** | Session ceiling stated + alarmed (M6) | `scripts/capacity-alarm.sh` -> 4-rung verdict; swap-used>0 => ALARM; `--selftest` proves every rung reachable. **Evidence 2026-07-30:** `launchctl list \| grep capacity-alarm` → `-	0	com.claude.capacity-alarm` (loaded; last exit 0), plist present at `~/Library/LaunchAgents/com.claude.capacity-alarm.plist`. Live run → `live sessions 20 · reclaimable headroom 28.77 GB · swap used 0.00 MB · est. room ~46 more · **VERDICT: OK**` (rc=0). `--selftest` → `OK / WARN / ALARM / ALARM-on-swap>0 / NO-DATA` each reached with `control OK`, closing `capacity-alarm: selftest GREEN (4 rungs + no-data reachable)`. **⟶ AMENDED 2026-08-09 (item `a615d309c182`) — the ladder is SEVEN rungs, and this row was the doc's only record of it.** The 2026-07-30 evidence above stands as taken; three rungs have been added since and rung 1 was redefined, so read the "4-rung" description as historical. Live now: rung 5 compressor SEGMENTS (≥45% WARN / ≥70% ALARM, the 2026-07-30 panic axis) · **rung 6 terminal-coalition process count (≥500 WARN / ≥700 ALARM, the 2026-07-31 panic axis — see §12.3.1 for its derivation)** · rung 7 load-average PER CORE (≥1.5 WARN / ≥2.5 ALARM, and explicitly UNCALIBRATED: 2.53/core was fatal 2026-08-05 while 5.98/core survived). Rung 1 is now swap **GROWTH** over a window, not swap level — a level latches, a delta cannot. **Re-read 2026-08-09:** `CC_CAP_SELFTEST=1 bash scripts/capacity-alarm.sh` → `capacity-alarm: selftest GREEN (7 rungs + no-data + census + coalition + load reachable)` (rc=0); live run → `terminal coalition: 63 procs in kitty  (warn >=500 / alarm >=700)`, `VERDICT: OK` | unstated -> OK@29.3 GB headroom |
 | **AC13** ✅ **MET** | Row 13 exists in the map with plan link + landed shas | `grep -c 'MACHINE_CAPACITY_V2' docs/plans/GROUND_UP_REBUILD_MAP.md` → `>0`. **Evidence 2026-07-30:** count = **1**, at `docs/plans/GROUND_UP_REBUILD_MAP.md:30`, and the row carries both halves the criterion asks for — the plan link `[MACHINE_CAPACITY_V2.md](MACHINE_CAPACITY_V2.md)` and landed shas `b9fc76b0` (design) · `5370b2ff` (activation) · `fa8f15a8` (fan-out) · `8160416b` (close-out) · `bfe4da1e` (§9.7 census fix) | absent |
 
 ### 7.0 Status sweep — every AC marked from disk (2026-07-30)
@@ -1536,6 +1536,80 @@ things there change this section's assumptions:
   60 s (1 in 38 — a fleet-wide ceiling would kill typechecks and ship-land), against **0 of 233**
   simple search commands exceeding even 30 s. The existing compound-command refusal is what makes
   that zero real. A new table row costs the same measurement.
+
+### 12.3.1 The alarm now COUNTS that population — rung 6, and the denominator it was derived from
+
+§12.3 above is about **prevention** ("no spawn gate can see it") and locates the answer at the Bash
+tool boundary. **Detection** was the other half, and it landed separately as a new rung rather than
+a widened old one: `scripts/capacity-alarm.sh` rung 6 counts processes under the controlling
+terminal coalition (`34ae6ea1`). It is recorded here because this doc's only description of the
+ladder said *"4-rung verdict"* (AC12, §7.0) — and a plan that under-states its own instrument is
+exactly how a rung later gets retuned without anyone re-reading the denominator it came from.
+
+**Why it is NOT part of rung 4.** They count different nouns, and 2026-07-31 proved the difference
+is fatal. That box died with the iTerm2 coalition holding **139.5 GiB — 89.6% of all process
+memory — across 1,002 child processes**, while iTerm2 *itself* held 983 MB. Rung 4 (per-process
+footprint) read 1.64 GB and was **correct**: no single process was large. A per-process ceiling is
+blind to a population explosion *by construction*, so the mass is counted as a population or it is
+not counted at all. macOS rolls coalition memory up to the owning app, which is also why the
+operator's out-of-memory modal blamed the terminal for what we had launched inside it
+([[gui-memory-dialog-blames-the-coalition-host]]).
+
+**Thresholds are DERIVED, not chosen** — `docs/research/panic-iterm2-coalition-2026-07-31.md` §7,
+over 39 CoalitionMemory samples of cid 640 spanning 6h22m of that boot:
+
+| statistic | value |
+|---|---|
+| min / median | 24 / 226 |
+| **max, healthy** | **353** |
+| samples > 400 | **0** |
+| **fatal sample** | **1002** (2.84× the healthy max) |
+
+**WARN 500 / ALARM 700** is 1.42× / 1.98× the observed healthy maximum: zero false positives across
+the whole boot, and the fatal sample clears both by a wide margin. Do not adjust these without
+re-deriving against a fresh series ([[published-figure-decays-with-its-source]] — figures in this
+repo have gone stale inside 36 hours).
+
+**Controls, both directions and non-vacuous** (re-run 2026-08-09, every row `control OK`):
+`1002 → ALARM` · `700 → ALARM` · `500 → WARN` · `499 → OK` · **`353 → OK`** · `? → OK`. That 353
+row *is* the no-false-positive claim made executable — setting `COAL_WARN=300` turns the selftest
+RED rather than letting the fleet discover the retune the expensive way. An unreadable `ps` is
+**SKIPPED**, never a fabricated healthy 0 (rung 3's standing policy), and a subset invariant
+(1 ≤ procs ≤ process table) catches a miscounting tree walk instead of letting it skip silently —
+live today: `coalition kitty=63 procs, within 1..823`. The rung reports the **largest** coalition,
+never the sum: two terminals at 300 each is a different and benign state from one at 600, and the
+threshold was derived against a single coalition.
+
+**Seams:** `CC_CAP_COAL_WARN` (default 500) · `CC_CAP_COAL_ALARM` (default 700) · `CC_CAP_PS` (stub
+the tree walk). Each row carries `coal_procs` / `coal_app` / `coal_warn` / `coal_alarm` in the JSONL,
+so a future regression is visible in the log itself and not only in an aggregate verdict that looks
+plausible either way.
+
+**The cadence is part of the instrument, and it had to change too.** At `StartInterval` 600 this
+rung would have made the event *visible* without making the sampler *fast enough to precede it*:
+the 2026-07-31 box went from a genuinely healthy sample to dead inside ONE interval (the last row
+was OK and 20m23s stale; the row due mid-event never landed, and every field in it was true when
+taken). The interval is now **60 s**, measured at 0.73 s/tick ≈ 1.2% of one core. Against that
+event's own growth rate (~68 procs/min off a 257 baseline) 60 s yields rung-6 WARN at ~3.6 min and
+ALARM at ~6.5 min against death at ~11–12 min — roughly five minutes of ALARM where 600 s produced
+none. `tests/capacity-alarm-launchd-path.bats` pins the interval, because a number living in a
+plist while its reasoning lives in a script header is precisely how a cadence silently regresses.
+
+**Ladder as of 2026-08-09 — seven rungs, max-combined** (the verdict is the WORST rung, never the
+last evaluated, so a new term can only ever RAISE a verdict, never mask an existing one):
+
+| # | rung | WARN / ALARM | note |
+|---|---|---|---|
+| 1 | swap **GROWTH** in a window | — / `SWAP_DELTA_MB` | redefined from swap *level*: a level latches, a delta cannot |
+| 2 | reclaimable headroom | `WARN_GB` / `ALARM_GB` | the one instrument the verdict cannot exist without |
+| 3 | kernel pressure level | ≥2 / ≥4 | the kernel's own LEADING indicator |
+| 4 | per-proc phys outlier | > `PROC_WARN_GB` / — | the leak term; counts INDIVIDUALS |
+| 5 | compressor SEGMENTS | ≥45% / ≥70% | the 2026-07-30 panic axis |
+| **6** | **terminal-coalition procs** | **≥500 / ≥700** | **the 2026-07-31 panic axis; counts the POPULATION** |
+| 7 | load-average PER CORE | ≥1.5 / ≥2.5 | the scheduler axis — **UNCALIBRATED**: 2.53/core was fatal 2026-08-05, 5.98/core survived ([[threshold-must-separate-fatal-from-survived]]) |
+
+Verified 2026-08-09 from disk, not recalled: `CC_CAP_SELFTEST=1 bash scripts/capacity-alarm.sh` →
+`capacity-alarm: selftest GREEN (7 rungs + no-data + census + coalition + load reachable)`, rc=0.
 
 ### 12.4 `boot-resume.sh` is a LATENT bomb — do not activate before §12.2 lands
 
