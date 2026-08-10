@@ -821,3 +821,37 @@ dry/recycle/explicit-launcher/hermetic-harness, advisory-never-fatal).
 eventually feed a measured per-session burn coefficient into the projection (today: account's own
 recent rate). R13-3 non-handoff-fire spawners (none known: cc-dispatch fires THROUGH
 handoff-fire) that grow a direct launch path must add the same `--assign` call.
+
+## §14 M7 wave 2 — the two ends M7 routing does not reach (2026-08-10, same /goal)
+
+**Why a wave 2.** Post-M7 live read (11:0xZ fresh sweep): next3 5h **0%** (window rolled), weekly
+**89%** with **23.7h** to reset, **k=36 panes, k_work=0** — the router now puts next3 on top
+(0.11/23.2² beats everything ~4×), but routing orders a queue nobody is enqueuing into, and
+recycles pin their pane's account by construction. The pile-up and the under-exhaustion each have
+a surface M7 did not touch:
+
+- **W2-A `handoff-fire --recycle` account re-pick (the drain).** A recycle relaunches THE SAME
+  pane with the SAME launcher (CMD composed at handoff-fire.sh:6279 from `$LAUNCHER`), so an
+  account's pile can never shrink at the fleet's commonest seam — the idle free-win recycle. A
+  recycle is a FRESH session continuing from DISK (worktree + plan + DoD are account-agnostic;
+  no --resume), so account identity is not sticky for correctness — only for auth/launcher
+  mechanics. Change: on recycle, consult `claude-accounts --route general`; when the pane's
+  CURRENT account is non-routable-or-pressured (excluded, or route names another account and
+  current k_eff/5h pressure exceeds it materially), compose the relaunch on the ROUTED account's
+  launcher; `--assign` the new account; fail-soft to same-account on any doubt; kill switch
+  `CC_RECYCLE_REPICK` (default on). Must-still-pass: recycle engagement scan (multi-account
+  transcript resolve already exists, :298), goal re-arm (arm_goal after engage), pre_trust for
+  the new config dir (RECYCLE_RELOC arm at :7608 is precedent).
+- **W2-B urgency-aware per-account wave bounds (the demand).** `cc-wave-plan` caps every account
+  at a flat `CC_WAVE_MAX_PER_ACCT=2` (bin/cc-wave-plan:57) — the urgent-underburned account gets
+  the same allowance as a runway-rich one, so a wave cannot concentrate where quota strands.
+  Change: derive per-account allowance from the rank it already parses (:293) + the M7 --json
+  fields (weekly_need_pct_per_day / burn, k_work, KMAX): the TOP account whose need outruns its
+  measured recent burn may take up to `CC_WAVE_MAX_PER_ACCT_URGENT` (default 4, never past
+  KMAX−k_eff); everything else keeps the flat 2. Kill switch: unset/equal knobs ⇒ byte-identical
+  today's plan.
+
+**Execution locus: S ×2** — two dispatched sessions (this doc §14 is their shared design record),
+fired `--account auto` so the M7 router routes them — the implementation wave IS the demand that
+burns next3's stranding 11% tonight, and the fires are the first production exercise of the
+`--assign` ledger. Origin (this session) holds custody + review; leads return via notify-back.
