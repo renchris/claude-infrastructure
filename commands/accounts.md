@@ -169,6 +169,48 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    `<kind>` must be exactly `general` or `fable` — the CLI rejects anything else rather than
    silently returning the general pick.
 
+## Non-Claude agent backends (the provider section)
+
+`/accounts` answers two questions now. The table above answers *"which of my 4 Claude Max accounts
+has headroom"*. The provider section answers *"what else can I route to, and does using it cost
+money outside a plan I already hold"*.
+
+`claude-accounts --readout` **appends it automatically** — same single-renderer rule, so paste the
+whole thing verbatim exactly as before. `--agents` prints that section alone (add `--json` for the
+rows as data; `--no-agents` returns the historical Claude-only readout). `--agents` deliberately
+skips the keychain read and the usage sweep, so it costs nothing and cannot be blocked by a
+4-account sweep.
+
+Registry SSOT: `~/.claude/providers.json` (separate from `accounts.json`, which declares itself the
+SSOT for the Claude accounts and whose every field is Anthropic-specific).
+
+**Reading the table — three columns carry the judgment:**
+
+- **`routable`** — ✅ only when the backend has a **non-interactive agent mode** *and* cleared the
+  cost gate. 🚨 **Presence is not routability.** Antigravity is installed, authenticated, and on
+  `PATH`, and is still ✖: its binary is the VS Code editor launcher with no headless mode, so no
+  work can ever be sent to it. grok-wiki's picker reported it `ready` on `command -v` alone. When a
+  row is not ✅, the bullet under the table names *which* gate it failed — trust that bullet over
+  the shape of the row.
+- **`bills outside it?`** — the cost gate, and a **different question from `plan`**. A backend can
+  authenticate against a subscription we hold and still meter separately: `pi-claude` logs into
+  Claude Pro/Max and then bills per token through *extra usage*, which
+  `accounts.json spend.usage_credits_authorized=false` forbids. A **YES** row is documented so the
+  refusal survives the next reader — never wire one, never `/login` it.
+- **`model pinned`** — `✓proven` means the agent was **run** and reported that model id back
+  (`codex exec` prints `model: gpt-5.6-sol` in its header). `⚠unproven` means a config file says so
+  and nothing has confirmed it. A `--model`/`--reasoning` flag through a wrapper can be silently
+  ignored — no error, just quietly worse output — so treat `⚠unproven` as *not yet a pin*.
+
+**UNKNOWN is a real value here, not a gap to fill.** A cell that could not be measured says
+`UNKNOWN` and the provider is skipped on that basis. Do not resolve one by inferring from a
+vendor's marketing; re-measure, or leave it.
+
+**Before adding a provider,** measure the three independent facts separately — binary present /
+authenticated / has a headless mode — and answer *what does using it BILL* from a source that
+discusses billing. A subscription **login list** only ever answers whether auth works. Full
+measurements and the reasoning: `docs/plans/MULTI_PROVIDER_PLANS.md` § W1 RESULT.
+
 ## Consumers (do not duplicate their logic here)
 
 - `/handoff` (`scripts/handoff-fire.sh --account auto`) consumes
