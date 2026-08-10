@@ -380,6 +380,7 @@ WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
+RECYCLE_REPICK_FROM=""                           # W2-A: set to the OLD account when a recycle re-picks
 # G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
 # WHICH TERMS capacity_gate() evaluates, so it is a gate input and must be parsed before the gate.
 CLOUD=0
@@ -5381,6 +5382,89 @@ env_account() { # reverse of cfg_dir: THIS session's account from its own CLAUDE
   [ -n "$name" ] && echo "$name" || return 1
 }
 
+# ---- W2-A: recycle account re-pick (ACCOUNT_ROUTING_V2 §14) ----------------------------------
+# A recycle relaunches THIS pane with THIS pane's OWN launcher by construction — the pre-pass below
+# derives ACCOUNT from $CLAUDE_CONFIG_DIR and nothing ever reconsiders it. So the cheapest and
+# commonest succession on this box, the idle free-win recycle, was the one path that could never
+# SHRINK a pile-up: every recycled pane went straight back onto the account it was already on.
+# Measured 2026-08-10 (§13's own snapshot, seen one hour later): 36 sessions on next3 — 5h-capped
+# at 100%, router-EXCLUDED — while three accounts with 5-6 day runways sat nearly idle. M7 taught
+# the FIRE path to spread; this teaches the RECYCLE path not to un-spread it.
+#
+# Deliberately the NARROW half of that: re-pick only when the router says the current account is
+# not routable AT ALL — i.e. it is named in `--route`'s stderr exclusion map (`5h-cutoff`,
+# `kmax-concurrency`, `weekly-exhausted`, a login-cliff drain, …). Pressure SHORT of exclusion — a
+# hot 5h window, the soonest-expiring week — deliberately stays put in v1: moving a pane off a
+# merely-warm account is a routing-POLICY judgment and belongs with M7's scoring terms, where it
+# can be scored against headroom, not here where the only input is a boolean.
+#
+# Fail-soft in every direction, because the alternative to a re-pick is not a failure — it is
+# exactly today's byte-identical relaunch. Kill switch, absent router, non-zero exit (2 = nothing
+# routable, 3 = data unreadable), an unchanged winner, a name the account map does not declare, or
+# a hermetic harness without an opt-in stub: each returns nothing and the caller keeps its launcher.
+recycle_repick() { # $1 = the pane's CURRENT account → replacement account on stdout, or nothing
+  local cur="$1" bin="${CC_ACCOUNTS_BIN:-claude-accounts}" errf out new reason exline rc=0
+  [ -n "$cur" ] || return 0
+  # The exclusion map is parsed with `sed -n "s/^${cur}=//p"`, so an account name carrying regex
+  # metacharacters would be interpreted rather than matched. Every real name is [a-z0-9]; anything
+  # else is a map we do not understand, and the safe answer to that is the incumbent launcher.
+  case "$cur" in *[!A-Za-z0-9_-]*) return 0 ;; esac
+  case "${CC_RECYCLE_REPICK:-on}" in off|0|false|no) return 0 ;; esac
+  # Fable rides a SEPARATE entitlement (`--route fable`; a missing scoped limit is `no-fable-limit`,
+  # an entitlement fact, not headroom). Consulting the GENERAL lane for a frontier pane could hand
+  # back an account whose Fable access the API then rejects — so a frontier recycle is left exactly
+  # where it is. Widening this needs the fable lane, not a looser guard.
+  [ "${MODEL:-}" = "claude-fable-5" ] && return 0
+  # The rule pre_fire_account_sweep and the M7 --assign block already enforce: a hermetic suite that
+  # reaches this must never poll the operator's real router nor append to their real ledger.
+  if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then return 0; fi
+  command -v "$bin" >/dev/null 2>&1 || return 0
+  errf="$(mktemp "${TMPDIR:-/tmp}/handoff-repick-XXXXXX")" || return 0
+  # BOUNDED, unlike the fire path's own --rank call, because the failure mode differs: a fire that
+  # stalls on a dark endpoint has not yet cost anything, while a recycle that stalls has already
+  # been chosen as the CHEAP disposition and is holding a pane that would otherwise be working.
+  # perl alarm survives exec (macOS has no GNU timeout) — the same idiom probe_account uses.
+  if command -v perl >/dev/null 2>&1; then
+    out="$(perl -e 'alarm 25; exec @ARGV' "$bin" --route general 2>"$errf")" || rc=$?
+  else
+    out="$("$bin" --route general 2>"$errf")" || rc=$?
+  fi
+  if [ "$rc" != 0 ] || [ -z "$out" ] || [ "$out" = none ]; then rm -f "$errf"; return 0; fi
+  new="$(printf '%s\n' "$out" | sed -n '1p' | tr -d '[:space:]')"
+  if [ -z "$new" ] || [ "$new" = "$cur" ]; then rm -f "$errf"; return 0; fi
+  # `claude-accounts: general excluded — next3=kmax-concurrency; next=5h-cutoff`. The prefix is
+  # stripped by SHAPE rather than by the literal separator, so the em-dash never has to survive a
+  # round trip through this file to keep the parse working. `sed -n '1p'` and not `head -1`:
+  # pipefail turns a SIGPIPE'd producer into a non-zero pipeline, and this runs under `set -e`.
+  exline="$(sed -n 's/^claude-accounts: [a-z]* excluded[^A-Za-z0-9]*//p' "$errf" | sed -n '1p')"
+  rm -f "$errf"
+  # Split on `; ` FIRST and anchor the whole field: `next` is a prefix of `next2/3/4`, so a
+  # substring test would read a next3 exclusion as convicting next and move a perfectly routable
+  # pane. The `=` is what makes the anchor exact.
+  reason="$(printf '%s' "$exline" | tr ';' '\n' | sed 's/^[[:space:]]*//' \
+            | sed -n "s/^${cur}=//p" | sed -n '1p')"
+  [ -n "$reason" ] || return 0                   # current account is routable — keep it (v1 scope)
+  # SSOT check, not a naming one: launcher_for()/cfg_dir() below will HALT the fire on an account
+  # the generated map does not declare (`!! unknown account`), which would turn a routing nicety
+  # into a dead recycle. Ask the map first and decline instead. Skipped when the map is not loaded
+  # (the extracted-block harness), where there is nothing to disagree with.
+  if command -v cc_acct_dir_for_name >/dev/null 2>&1; then
+    cc_acct_dir_for_name "$new" >/dev/null 2>&1 || {
+      echo "⚠ recycle re-pick DECLINED: router named '$new' but the account map declares no config dir for it — staying on $cur" >&2
+      return 0
+    }
+  fi
+  # Charge the new account the same phantom the fire path charges (M7), so a burst of recycles
+  # walks DOWN the ranking instead of all reading the same ≤90s-cached rows and stacking onto one
+  # winner — the exact defect --assign was built for. Advisory: a lost append costs one phantom.
+  # A dry run launches nothing, so it charges nothing.
+  if [ "${DRY:-0}" = 0 ]; then
+    "$bin" --assign "$new" --src recycle-repick >/dev/null 2>&1 || true
+  fi
+  echo "♻ recycle RE-PICK: $cur → $new — $cur is NOT routable ($reason); router: claude-accounts --route general (kill switch: CC_RECYCLE_REPICK=off)" >&2
+  printf '%s\n' "$new"
+}
+
 # ---- recycle mode pre-pass: exit + relaunch in the CURRENT pane ------------------------------
 # WHY exit+relaunch, not /clear + queued payload (the 2026-07-03 catnav incident): CC's message
 # queue is TYPE-ASYMMETRIC — built-in slash commands hold until the calling turn ends, but plain
@@ -5452,6 +5536,13 @@ if [ "$RECYCLE" = 1 ]; then
   if [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
     ACCOUNT="$(env_account)" \
       || { echo "!! --recycle: can't derive this session's account from CLAUDE_CONFIG_DIR='${CLAUDE_CONFIG_DIR:-}' — pass --account or --launcher" >&2; exit 1; }
+    # W2-A: this pane's own account is the DEFAULT, not the verdict. An EXPLICIT --account or
+    # --launcher is the operator's choice and is never second-guessed — hence this sits inside the
+    # `auto` arm, the one place the account was inferred rather than asked for. Everything after
+    # this point (launcher_for, config_dir_for_launcher, ARGS, CMD) reads $ACCOUNT through the
+    # generated SSOT map, so swapping the NAME here is the whole change: no launch line is composed.
+    _repick="$(recycle_repick "$ACCOUNT" || true)"
+    if [ -n "$_repick" ]; then RECYCLE_REPICK_FROM="$ACCOUNT"; ACCOUNT="$_repick"; fi
   fi
 fi
 
@@ -7605,7 +7696,14 @@ elif [ "$RECYCLE" = 1 ]; then
   # trusted. A RELOCATING recycle lands somewhere this run just provisioned, which has never been
   # trusted for this config dir, so without this the relaunched pane stalls at the workspace-trust
   # dialog with the brief sitting unread behind it — indistinguishable from a dead relaunch.
-  [ "$RECYCLE_RELOC" = 1 ] && pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
+  #
+  # …and "the running session proves it" is a claim about a CONFIG DIR, not about a directory. A
+  # W2-A re-pick keeps the dir and changes the account, so the trust record the incumbent session
+  # proves lives in the OLD account's .claude.json and the successor reads the NEW one — the same
+  # stall, reached from the other axis. Either half of the change needs the write.
+  if [ "$RECYCLE_RELOC" = 1 ] || [ -n "${RECYCLE_REPICK_FROM:-}" ]; then
+    pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
+  fi
   recycle_fire
 else
   # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).
