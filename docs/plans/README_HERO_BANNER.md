@@ -14,7 +14,9 @@ the comparison, and the recommendation.
 > **LANDED 2026-07-30 (`1c54e73c`).** The frozen scope below is met: `v6c-dusk-line` is in the README
 > header. What it took first — two lying instruments, a half-applied operator ruling, and three beats
 > whose entrances and exits did not exist — is recorded in `BANNER_NARRATIVE_SPEC.md` § v8. Still
-> open and named there: the subtitle's 7.42 CSS px, banner height, WebKit.
+> open and named there: the subtitle's 7.42 CSS px and banner height — **both art-direction calls on
+> the operator's own page, offered and not taken.** WebKit was the third and is **CLOSED 2026-08-09**:
+> it ticks, so all three engines are measured (§ S24).
 
 **Scope (frozen):** design a 1080p60, awwwards-calibre animated Claude-mascot banner for the
 README header. Prototype **at least three mediums** (animated SVG · moving ASCII · raster),
@@ -867,9 +869,92 @@ both schemes                                all three beats read in dark AND lig
   ruled co-presence semantically wrong — a session is never co-present with its peers — but that
   deletes v6b's whole identity, so it is surfaced rather than taken. One line in `RARE_EVENTS`
   reverses the demotion; removing them from `ALWAYS_EMITTED` and `art.events` completes the deletion.
-- **WebKit is still unprobed.** Chromium and — as of S17, landed by a sibling session while this work
-  was in flight — Firefox are both covered. S17 matters more to these beats than to anything before
-  them: the world clock is expressed **entirely in CSS `@keyframes`**, with no SMIL anywhere, so
-  "does a CSS-only VectorImage ever join Firefox's refresh driver" is the difference between three
-  beats and three static frames for every Firefox reader. It ticks. Any future beat added here
-  inherits that dependency, and `scripts/banner-firefox-probe.py` is what re-checks it.
+- ~~**WebKit is still unprobed.**~~ **CLOSED 2026-08-09 — it ticks. All three engines are now
+  measured.** Chromium always was; Firefox was covered by S17, landed by a sibling session while this
+  work was in flight. S17 matters more to these beats than to anything before them: the world clock is
+  expressed **entirely in CSS `@keyframes`**, with no SMIL anywhere, so "does a CSS-only VectorImage
+  ever join the engine's refresh driver" is the difference between three beats and three static frames
+  for that engine's entire readership. Any future beat added here inherits that dependency on all
+  three, and `scripts/banner-firefox-probe.py` / `scripts/banner-webkit-probe.py` are what re-check it.
+  See § S24 for what the WebKit answer cost to establish.
+
+---
+
+## S24 · The last engine answers yes — WebKit ticks (2026-08-09)
+
+**RESULT: CSS `@keyframes` DOES advance in WebKit-as-image.** Every Safari and every iOS reader gets
+the four beats, not a still. That closes the engine question outright: Chromium ✓, Firefox ✓
+(S17), WebKit ✓, and the banner needs no SMIL re-expression.
+
+```text
+probe  shot A   shot B   uniform   verdict
+css    RED      BLUE       100%    ANIMATES — clock ticks
+smil   RED      BLUE       100%    ANIMATES — clock ticks     ← positive control
+```
+
+Measured on **macOS 15.6.1 (24G90), system WebKit build 20621**. The version is recorded because a
+finding about an engine is only true of the build it was measured on — the same reason the published
+p95 in `context-econ` had to be re-derived rather than quoted.
+
+**The engine under test is the SYSTEM one, deliberately.** `~/Library/Caches/ms-playwright/webkit-2227`
+exists and would have been the easy target, but it is a WebKit built by the Playwright project and no
+reader has it. `tools/banner/webkit-probe.swift` binds **`WKWebView`** — the framework this macOS
+ships and Safari loads — so the verdict is about the engine readers actually run. `safaridriver` was
+the other candidate and was dropped: `--diagnose` hung past a 120 s bound, and enabling it is an
+operator step (it needs authentication) for no gain over WKWebView.
+
+**The shape is inherited from the Firefox probe, and it is not negotiable** — same question, so the
+fixtures are **imported from `banner-firefox-probe.py`, not retyped**. A second copy of the fixture
+would let the two engines' verdicts drift apart while still reading as comparable, which is the
+"third copy of the same fact" this repo has already been bitten by (§ S21).
+
+- A single screenshot cannot answer it: compositing the t=0 value proves the animation was *applied*,
+  never that the clock *advances*.
+- Two page loads cannot answer it: the timeline anchors at load (S16), so both land at t≈0 and a
+  static engine produces the same pair as a ticking one.
+- So: **one document, two snapshots inside its lifetime**, at 400 ms and 1600 ms, straddling a hard
+  step flip at 1000 ms of a 2000 ms period — 400 ms of margin either side, so neither sample sits
+  near a boundary where a frame either way would be defensible.
+
+### Why "identical frames" needed three guards, not one
+
+`ANIMATES` is only worth something because the probe was shown returning the other answer.
+`--self-test` is **4/4**, each case keyed on its **own reason** rather than on a non-zero exit — an
+unrelated earlier failure counterfeits that, the trap `banner-gate-redproof.py` already exists to
+avoid:
+
+| case | required | why it exists |
+|---|---|---|
+| `static-rect` | reads **STATIC**, not ANIMATES | **the one that matters.** Without it, `ANIMATES` is what the probe would say either way, and the live result is unfalsifiable — the recorded reason `--virtual-time-budget` was *deleted* rather than kept as a mode that always agreed |
+| `off-palette` | refuses: `off-palette` | a frame uniformly some colour the fixture never authors is not the fixture, so its equality is not evidence |
+| `half-drawn` | refuses: `not-uniform` | a half-drawn render compares equal to itself too, and would report STATIC for a healthy engine — a broken instrument whose answer is a *believable finding* rather than an obvious error |
+| `absent-page` | harness `verdict != OK` | when the instrument does not run it must say so; a bare exit 0 from a tool that measured nothing reads as a result |
+
+Three further things the build had to get right, each of which would have produced a *plausible*
+wrong answer rather than a visible break:
+
+- **Read the histogram, not one pixel.** A single-pixel sample cannot tell a fully painted frame from
+  one painted only where the sample landed. The fixture is one flat rect, so ~uniformity is a fact
+  worth asserting; both live frames read **100%**.
+- **Classify by distance, never equality.** macOS colour-manages, so a round-tripped pixel need not be
+  bit-exact. Red and blue stay separated by a vast margin, so nearest-of-palette with a ceiling is
+  both tolerant and unambiguous.
+- **The snapshot needs a window that is actually drawn.** A `WKWebView` that never reaches the screen
+  snapshots blank — and a blank pair compares EQUAL, i.e. reports "static" for a healthy engine. The
+  window is ordered front without activating; the uniformity guard is the backstop if it ever fails
+  anyway.
+
+**One Swift constraint, already recorded elsewhere in this repo and re-paid here:** the harness must be
+**compiled** (`swiftc -O`), never `swift webkit-probe.swift` — the identical note at the head of
+`tools/terminal-bench/window-film.swift`. It also cannot be written as top-level code closing over
+`guard`-bound values: a class body cannot capture them, so the sample times are threaded through
+`init` and held as properties.
+
+### Verified this session, not recalled
+
+```text
+banner-webkit-probe.py                4/4 self-test guards fire, each for its own reason
+banner-webkit-probe.py                css ANIMATES · smil ANIMATES (control) · 100% uniform
+engine                                macOS 15.6.1 (24G90), system WebKit 20621
+banner-storyboard.py (rescued)        10 beats · 55 frames, generated clean
+```

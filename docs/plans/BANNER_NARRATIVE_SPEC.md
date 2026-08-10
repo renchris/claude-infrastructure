@@ -1500,7 +1500,12 @@ both schemes              t=0, the three beats, dark and light, inspected at 838
   taste call, still the operator's, still offered.
 - **`.rTurn` is emitted on every sprite with no `@keyframes` anywhere.** Dead markup, consistent with
   the recorded finding that the sprite is bilaterally symmetric so a turn-around is a visual no-op.
-- **WebKit is still unprobed.** Chromium and Firefox are covered.
+- ~~**WebKit is still unprobed.**~~ **CLOSED 2026-08-09 — it ticks.** Chromium, Firefox and now
+  WebKit are all covered: CSS `@keyframes` advances in WebKit-as-image, so Safari and iOS readers get
+  the beats rather than a still, and no SMIL re-expression is needed. Measured on macOS 15.6.1
+  (24G90), system WebKit 20621, via `scripts/banner-webkit-probe.py` (self-test 4/4 — it can report
+  STATIC, which is what makes the ANIMATES verdict mean anything). Full account: `README_HERO_BANNER.md`
+  § S24.
 
 ## THE SKY GETS ITS TWO OCCURRENCES — a meteor and a constellation (2026-07-30)
 
@@ -1704,5 +1709,6 @@ enforcement), `banner-verify.sh` 6/6 on `v6c-dusk-line`, `banner-gate-redproof.p
 
 **What this does NOT touch, named so it is not mistaken for closed:** the moon-crescent re-derivation
 (§ above), the WebKit probe, the subtitle font-size and the banner height all remain exactly as their
-sections leave them. This land closes the *cause/behaviour/exit* question — that every surviving
+sections leave them. *(The WebKit probe was subsequently closed on 2026-08-09 — see above and
+`README_HERO_BANNER.md` § S24. The other three stand.)* This land closes the *cause/behaviour/exit* question — that every surviving
 micro-event declares its three acts and cannot silently stop doing so — and nothing else.
