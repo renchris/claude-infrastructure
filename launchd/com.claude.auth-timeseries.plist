@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.auth-timeseries — MASTER M6 (backlog b22e519e06cb), DoD 2. Every 5 min: sample each
+  account's keychain credential state into a durable append store.
+
+  WHY A JOB AT ALL. tools/auth/auth-timeseries.sh has been on trunk since 2ec33a27 and it is a
+  good instrument — it is the only thing that can see a refresh-token ROTATION or the moment a
+  credential goes EMPTY, which is what a forced logout looks like from outside. But it was
+  MANUAL and TIME-BOUNDED: a 6-hour ad-hoc run to a caller-supplied path. Nothing scheduled it,
+  no durable per-account store accumulated, and so every observation died with the session that
+  made it. The forced-logout investigation could only ever be run in retrospect, on an event
+  that had already left no trace. This is the thing that fires it.
+
+  WHY --once AND NOT KeepAlive. The script loops internally for its whole duration. Under
+  StartInterval the unmodified script would start a fresh 6-hour process every tick and pile
+  them up. --once makes ONE sample batch the unit of work and lets launchd own the cadence,
+  which is also what makes the cadence auditable from this file instead of from an argument
+  somebody typed once.
+
+  READ-ONLY, PROVEN BY READING IT. Per tick: 12 `/usr/bin/security find-generic-password` reads
+  (6 rows x 2 — one attribute dump for the write time, one -w for the payload) and one
+  `ps -wwEo command=` sweep. NO network call of any kind. NO `security add`/`-U`/`delete`, no
+  token refresh, no `claude` invocation, no config-dir write. The ONLY mutation in the entire
+  script is the `>>` append to its own store. It never emits a token value — only sha256[:12]
+  prefixes, so a rotation is visible without the secret being.
+
+  🚨 THE KEYCHAIN-ACL CAVEAT, AND WHY IT IS NAMED HERE RATHER THAN DISCOVERED LATER.
+  `security find-generic-password -w` is subject to the item's ACL. Under launchd there is no
+  interactive session to answer an "allow access" dialog, so if /usr/bin/security is not already
+  trusted for these items the call fails — and the script's deliberate `2>/dev/null` (one
+  unreadable item must not abort the batch) would render that denial as a clean run of NO_ITEM
+  rows, i.e. a FALSE "the credential is gone" on every account at once. That is the worst
+  possible failure for this particular instrument, because NO_ITEM is the exact signal it exists
+  to detect. Two defences: (1) the operator activation script hand-runs one --once batch from a
+  non-tty context BEFORE arming, and refuses to arm on anything but OK rows; (2) the script now
+  exits 3 (NO-DATA) when a --once batch appends ZERO rows, so a total ACL denial is a non-zero
+  exit rather than a silent success. A partial denial still needs (1) — hence the gate.
+  (Non-zero here is a DESIGNED verdict, per daemon-fleet-v2: do not "fix" it to always exit 0.)
+
+  COST AND GROWTH. 6 rows/tick at ~300 B. At StartInterval 300 that is ~0.5 MB/day, reaching the
+  25 MiB rotation threshold in ~50 days. 300 s rather than the investigation's 60 s deliberately:
+  the question this store answers is "when did the credential change", and mdat (the keychain
+  item's own write time) is recorded on every row, so the SAMPLE rate bounds detection latency
+  while the WRITE time stays exact regardless. 60 s would buy 5x the rows for no extra precision
+  on the fact that matters. Registered in scripts/rotate-autonomy-logs.sh DEFAULT_TARGETS and in
+  config/store-bounds.manifest, both — the two rotation mechanisms are independent and a store
+  wants both.
+
+  IT NEVER REFUSES ANYTHING — it records and exits. Verdicts: 0 sampled / 3 NO-DATA.
+
+  🚨 THE SUBJECT IS NOT IN THE LIVE LAYER YET, AND THAT IS DELIBERATE — READ BEFORE ARMING.
+  The script's home is tools/auth/auth-timeseries.sh, and `tools/` is NOT deployed: there is no
+  ~/.claude/tools, and ~/.claude/scripts/auth-timeseries.sh does not exist today. The live layer
+  is reached by PER-FILE symlinks, so a file that is merely ADDED to the repo has no link and is
+  absent from every path the box can reach — an `exec` against it fails, and a `[ -f x ] &&`
+  guard elsewhere would skip it silently. The ProgramArguments path above is therefore a
+  PROMISE the activation script keeps: 35-auth-timeseries-activate.sh creates that symlink (and
+  refuses to arm if it cannot), which is the same shape 23-qos-census-activate.sh uses. Do not
+  bootstrap this label by hand without creating the link first.
+
+  C10: the OPERATOR loads it. Declared `staged` in launchd/fleet.manifest, so install.sh will
+  copy the plist and deliberately NOT activate it; migrations/0008-auth-timeseries-activation.sh
+  files the operator step. Kill switches after load: `launchctl bootout gui/$UID/com.claude.auth-timeseries`,
+  or AUTH_TS_OUT to redirect the store.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.auth-timeseries</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/auth-timeseries.sh" --once</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>      <string>Background</string>
+    <key>LowPriorityIO</key>    <true/>
+    <key>Nice</key>             <integer>10</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/auth-timeseries.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/auth-timeseries.err.log</string>
+</dict>
+</plist>

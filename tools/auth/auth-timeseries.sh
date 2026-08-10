@@ -9,20 +9,40 @@
 #     thundering-herd race: N sessions each rotating what the others hold)
 #   * when does a credential go EMPTY?               (= the forced logout)
 #
-# Usage: auth-timeseries.sh <out.jsonl> [interval_s] [duration_s]
+# Usage:
+#   auth-timeseries.sh --once [out.jsonl]                  ONE sample batch, then exit
+#   auth-timeseries.sh <out.jsonl> [interval_s] [duration_s]   ad-hoc run (the original contract)
+#
+# WHY --once EXISTS. This was a manual, time-bounded instrument: a 6-hour ad-hoc run to a
+# caller-supplied path, which nothing scheduled and which accumulated into no durable store. So
+# the thing it was built to catch — a forced logout — left no trace once the session watching for
+# it ended, and every observation died with its observer. The fix is a schedule, and a scheduled
+# job cannot be a process that runs for six hours: under StartInterval, overlapping 6-hour
+# samplers pile up until the box is carrying dozens of them. --once makes one batch the unit of
+# work and lets launchd own the cadence. The looping contract is untouched for existing callers.
+#
+# THE STORE is ${AUTH_TS_OUT:-$HOME/.claude/logs/auth-timeseries.jsonl} — appended, never
+# truncated, rotated by scripts/rotate-autonomy-logs.sh and bounded by config/store-bounds.manifest.
+# A positional path still wins, so an investigation can still sample to its own scratch file
+# without polluting the durable series.
 set -uo pipefail
-OUT="${1:?out.jsonl}"; INT="${2:-60}"; DUR="${3:-21600}"
-KC_ACCT=chrisren
+ONCE=0
+[ "${1:-}" = "--once" ] && { ONCE=1; shift; }
+OUT="${1:-${AUTH_TS_OUT:-$HOME/.claude/logs/auth-timeseries.jsonl}}"; INT="${2:-60}"; DUR="${3:-21600}"
+mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
+KC_ACCT="${AUTH_TS_KC_ACCT:-chrisren}"
 declare -a DIRS=(
-  "next:/Users/chrisren/.claude-next"
-  "next2:/Users/chrisren/.claude-secondary"
-  "next3:/Users/chrisren/.claude-tertiary"
-  "next4:/Users/chrisren/.claude-quaternary"
-  "default:/Users/chrisren/.claude"
+  "next:$HOME/.claude-next"
+  "next2:$HOME/.claude-secondary"
+  "next3:$HOME/.claude-tertiary"
+  "next4:$HOME/.claude-quaternary"
+  "default:$HOME/.claude"
 )
 svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"; }
 
 END=$(( $(date +%s) + DUR ))
+rows_now() { if [ -f "$OUT" ]; then wc -l < "$OUT" 2>/dev/null || echo 0; else echo 0; fi; }
+BEFORE=$(rows_now)
 while [ "$(date +%s)" -lt "$END" ]; do
   TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for row in "${DIRS[@]}" "unsuffixed:"; do
@@ -85,5 +105,23 @@ else:
                    sub=o.get("subscriptionType"))
 print(json.dumps(rec))' >> "$OUT" 2>/dev/null
   done
+  [ "$ONCE" = 1 ] && break
   sleep "$INT"
 done
+
+# A scheduled sampler that samples NOTHING must say so. Every failure inside the loop is
+# swallowed by `2>/dev/null` — deliberately, so one unreadable keychain item cannot abort the
+# batch — which means silence is indistinguishable from success unless something counts. Under
+# launchd there is additionally no interactive session to answer a keychain ACL prompt, and that
+# denial is exactly the failure that would otherwise render as a clean run of NO_ITEM rows.
+# Exit 3 = NO-DATA, an honest non-verdict, following the qos-census precedent that a non-zero
+# exit can be the DESIGNED outcome for a census. Only on --once: a long ad-hoc run keeps its
+# original always-0 contract.
+if [ "$ONCE" = 1 ]; then
+  AFTER=$(rows_now)
+  if [ "$AFTER" -le "$BEFORE" ]; then
+    echo "auth-timeseries: NO-DATA — appended 0 rows to $OUT (keychain ACL under launchd?)" >&2
+    exit 3
+  fi
+fi
+exit 0

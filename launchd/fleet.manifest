@@ -292,6 +292,7 @@ com.claude.devserver-gc           | run    | 3600 | auto | 13 | 33-devserver-gc-
 # contain that capture and should be cherry-picked rather than rewritten).
 # NOT in scope, deliberately: com.reso.* / gl.reso.* belong to another project, and
 # adobe/google/razer/homebrew/git are third-party — this board must not answer for them.
+com.claude.auth-timeseries          | staged | 300  | ~/.claude/logs/auth-timeseries.jsonl | -  | 35-auth-timeseries-activate.sh
 com.chrisren.autonomy-sweep        | run    | 300  | auto | 5  | 18-fleet-activate.sh
 com.chrisren.cc-reaper             | run    | 300  | auto | 4  | 18-fleet-activate.sh
 com.chrisren.restic-claude-archive | run    | 0    | auto | 12 | 18-fleet-activate.sh
