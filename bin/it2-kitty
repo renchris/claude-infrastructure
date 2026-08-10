@@ -663,7 +663,29 @@ flat  = [plain(l) for l in lines]
 # regex mis-reads a labelled agent pane as having no composer at all. Half the pane width is the
 # floor, never below 20.
 thresh = max(20, cols // 2) if cols else 20
-rules  = [i for i, l in enumerate(flat) if l.count("─") >= thresh]
+# …but the LABEL EATS GLYPHS, and on a narrow pane it eats enough of them to hide the rule from a
+# raw count. Measured 2026-08-10 on window 106 mid-sweep: closing its siblings reflowed it to 25
+# columns, where its footer "──────────── @r-stores ──" carries just 14 glyphs against a floor of
+# 20 — so the pane read ZERO rules and fell to UNKNOWN while plainly painting a rule and an EMPTY
+# composer. Seven of the fifteen panes this fix exists for flipped into that state as the first
+# eight closed, i.e. the bug HIDES ITSELF until the layout moves.
+# The second form measures the rule the way a reader does: the whole line, label included, against
+# the same threshold — but ONLY for a line that is nothing BUT box-drawing and a single @token, so
+# no line of prose can ever qualify. This cannot loosen the guard in any direction: detecting more
+# rules can only move a pane OUT of UNKNOWN and into a state that is READ (EMPTY, NON-EMPTY, or the
+# two-proof AGENT-PANE), and NON-EMPTY still refuses. It restores the landed AGENT-PANE branch on
+# the panes it was written for rather than adding any new permissive path.
+def is_rule(l):
+    if l.count("─") >= thresh:
+        return True
+    s = l.strip()
+    if "─" not in s:
+        return False
+    label = s.replace("─", "").strip()
+    if label and not re.fullmatch(r"@[\w.-]+", label):
+        return False
+    return len(s) >= thresh
+rules  = [i for i, l in enumerate(flat) if is_rule(l)]
 body   = lines[rules[-2] + 1:rules[-1]] if len(rules) >= 2 else []
 if not body or "❯" not in plain(body[0]):
     # EXACTLY one rule, carrying the footer label of THIS agent. A modal-occluded pane draws its own

@@ -38,6 +38,7 @@ setup() {
   # fail, which the guard correctly reads as UNKNOWN. That failure is UNIFORM across the suite and so
   # indicts the fixture, never the subject (memory: uniform-error-ratio-indicts-the-model).
   export ALT=true                                # in_alternate_screen for the stub window
+  export WCOLS=100                               # pane width; narrow panes are a state of their own
   export LS_RC=0 TEXT_RC=0                       # force RPC failures
   # foreground_processes for the stub window. Default EMPTY — the AGENT-PANE branch must be
   # unreachable unless a test positively supplies an agent argv, or every assertion in this file
@@ -50,7 +51,7 @@ printf '%s\n' "$*" >> "$KITTY_ARGV"
 for a in "$@"; do
   if [ "$a" = "ls" ]; then
     [ "${LS_RC:-0}" = 0 ] || exit "$LS_RC"
-    printf '[{"id":1,"tabs":[{"id":1,"windows":[{"id":300,"columns":100,"in_alternate_screen":%s,"is_focused":false,"pid":1,"cwd":"/tmp","foreground_processes":%s}]}]}]\n' "${ALT:-true}" "${FG_JSON:-[]}"
+    printf '[{"id":1,"tabs":[{"id":1,"windows":[{"id":300,"columns":%s,"in_alternate_screen":%s,"is_focused":false,"pid":1,"cwd":"/tmp","foreground_processes":%s}]}]}]\n' "${WCOLS:-100}" "${ALT:-true}" "${FG_JSON:-[]}"
     exit 0
   fi
   if [ "$a" = "get-text" ]; then
@@ -291,6 +292,50 @@ finished_screen() {
   [ "$(attempts)" = "0" ]
 }
 
+# ── the NARROW pane, where the footer label eats the rule (2026-08-10) ────────────────────
+#
+# Measured on window 106 DURING the sweep this fix enabled: closing its eight siblings reflowed it
+# from 45 to 25 columns, where its footer "──────────── @r-stores ──" carries 14 glyphs against a
+# floor of max(20, cols//2) = 20. The pane read ZERO rules and fell to UNKNOWN while plainly
+# painting a rule and an EMPTY composer — so the bug HID ITSELF until the layout moved, and seven
+# of the fifteen target panes flipped into it mid-sweep. The rule detector now measures the whole
+# line, label included, for a line that is nothing but box-drawing and one @token.
+
+# Verbatim from kitty, window 106 at 25 columns, 2026-08-10.
+narrow_screen() {
+  printf '%s\n' "" "✻ Baked for 42s" "  new task? /clear to s…" \
+    "──────────── @tri-dispatch ──" "$(printf '\033[m❯%s' "$NBSP")" "" > "$SCREEN"
+}
+
+@test "a NARROW agent pane whose label eats its rule still resolves — 25 columns, empty composer" {
+  ALT=true; WCOLS=25; FG_JSON="$AGENT_FG"; narrow_screen
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "CONTROL: a narrow pane holding TEXT is still refused — the detector reads, it does not permit" {
+  # Detecting more rules must never mean closing more panes. Same width, same eaten rule, text in
+  # the composer: this must read NON-EMPTY and refuse, naming that arm rather than UNKNOWN.
+  ALT=true; WCOLS=25; FG_JSON="$AGENT_FG"
+  printf '%s\n' "──────────── @tri-dispatch ──" \
+    "$(printf '\033[m❯%shalf-typed thought' "$NBSP")" "─────────────────────────" > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+  echo "$output" | grep -qi 'only in this process'
+}
+
+@test "CONTROL: a PROSE line carrying box-drawing is not promoted to a rule" {
+  # The label form accepts only box-drawing plus one @token. Without that clause any long line with
+  # a dash in it becomes a rule, and rule pairs are what the composer body is read BETWEEN.
+  ALT=true; WCOLS=25; FG_JSON='[]'
+  printf '%s\n' "── and then it said ──────" "$(printf '\033[m❯%sdraft' "$NBSP")" "── so I replied ──────────" > "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
 # ── the UNREADABLE pane, split on whether its CC process is still there ───────────────────
 #
 # A composer buffer lives ONLY in the CC process's memory (that is this whole file's premise), so
@@ -504,6 +549,26 @@ sys.exit(1 if bad else 0)' "$SHIM"
   printf '%s\n' "──── @tri-dispatch ──" "$(printf '\033[m❯%sdraft nobody sent yet' "$NBSP")" "────" > "$SCREEN"
   run "$m" session close -f -s 300
   [ "$status" -eq 0 ]            # the mutant DESTROYS it — the glyph conjunct is load-bearing
+  closed
+}
+
+@test "CONTROL: without the labelled-rule form, the narrow agent pane is refused" {
+  # The state seven live panes were in mid-sweep. This mutant IS the script as it stood one commit
+  # ago, and under it they stay stranded.
+  local m; m="$(mutate '    return len(s) >= thresh' '    return False')"
+  ALT=true; WCOLS=25; FG_JSON="$AGENT_FG"; narrow_screen
+  run "$m" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "CONTROL: without the @token restriction, prose becomes a rule and a draft is destroyed" {
+  # Per-site: is_rule has a shape clause and a length clause, and the test above only covers one.
+  local m; m="$(mutate '    if label and not re.fullmatch(r"@[\w.-]+", label):' '    if False:')"
+  ALT=true; WCOLS=25; FG_JSON='[]'
+  printf '%s\n' "── and then it said ──────" "$(printf '\033[m\033[38:2:153:153:153m❯%s\033[22;2;39mPress up to edit queued messages' "$NBSP")" "── so I replied ──────────" > "$SCREEN"
+  run "$m" session close -f -s 300
+  [ "$status" -eq 0 ]            # the mutant reads BETWEEN two prose lines and calls the pane empty
   closed
 }
 
