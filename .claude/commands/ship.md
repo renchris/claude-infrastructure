@@ -39,6 +39,12 @@ a tuning problem, so the verdict moved off the land path instead.
   on the 600s cycle. Past it — `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, HEAD older than
   `WRAP_LIVE_BUDGET_MIN`, or a FAILED migration — `wrap-ledger.sh` computes **`🚀 Landed but NOT
   live`**, and that is the rung to emit: converge with `bash scripts/deploy-live.sh`, then re-read.
+- **The budget covers an EDIT, and your land may not be one.** `~/.claude` is per-file symlinks
+  into the live checkout: an edited file rides its link and runs OLD until the fast-forward, but a
+  file your diff ADDS has no link and is absent from every tree the box can reach — each
+  `[ -f x ] && . x` / `command -v fn` guard on it silently skips, so the feature is a no-op, not a
+  stale one. `LIVE_ADDS` > 0 therefore breaches at a lag of **1**, with no budget (2026-08-09,
+  backlog `99b715f31a98`). If your land adds a file, expect `🚀` and converge it.
   This repo IS the live layer's source, so it is the one repo where "landed" and "running" can
   diverge for weeks (measured: 104 commits, eight correct analyses that changed nothing). Re-read
   the ledger after the land rather than asserting `✅ Complete & live on trunk` from the push.

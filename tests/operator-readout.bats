@@ -880,6 +880,42 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   true
 }
 
+@test "🚀: ADDED files are reported as the cause instead of the budget" {
+  w="$(mkrepo_landed rocketadd)"
+  run env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" \
+    WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=1" "LIVE_ADDS=3" "MIG_FAILED=0")" \
+    bash "$HOOK" --render "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '3 NEW file' || { echo "the added files were not named: $output"; false; }
+  printf '%s' "$output" | grep -q 'deploy-live.sh' || { echo "no runnable step: $output"; false; }
+  # A lag of 1 is deep INSIDE the converge budget, so the budget sentence would be a false reason
+  # attached to a true rung — and it is the reason that tells the operator the file is missing, not
+  # merely old (backlog 99b715f31a98).
+  ! printf '%s' "$output" | grep -q 'PAST its converge budget' \
+    || { echo "reported the budget for an added-file breach: $output"; false; }
+  true
+}
+
+# a ledger with NO LIVE_ADDS field at all — the pre-2026-08-09 shape, and the one a live layer that
+# is itself behind still emits. It must fall to the budget sentence, not to an empty or malformed
+# one (MEMORY.md new-enum-member-falls-into-fail-closed-default).
+@test "🚀: a ledger that emits no LIVE_ADDS still renders the budget cause" {
+  w="$(mkrepo_landed rocketold)"
+  run env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" \
+    WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=41" "MIG_FAILED=0")" \
+    bash "$HOOK" --render "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '41 commit' || { echo "the lag was not named: $output"; false; }
+  ! printf '%s' "$output" | grep -q 'NEW file' || { echo "invented an added-file cause: $output"; false; }
+  true
+}
+
 @test "🚀: a FAILED migration is reported as the cause instead of the lag" {
   w="$(mkrepo_landed rocketmig)"
   run env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \

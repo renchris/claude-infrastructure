@@ -47,13 +47,19 @@ The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > �
 |---|---|---|
 | 🔧 | dirty tree ∨ gate stale on HEAD ∨ frozen-DoD remainder > 0 | **continue** — finish · run-gate · commit (explicit paths) |
 | 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — and per §Session Close's ship policy you FIRE it yourself in every repo except `reso-management-app`, where each land bills an Amplify + Fly deploy so it stays the operator's call |
-| 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or HEAD older than `WRAP_LIVE_BUDGET_MIN`), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
+| 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — `LIVE_ADDS` > 0 (the lag contains files the live layer does not have AT ALL: **no budget**, breaches at lag 1), or the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or HEAD older than `WRAP_LIVE_BUDGET_MIN`), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
 | 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block — **not computed on this pull path**, see above |
 | ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
 
 `🚀` **is** fully computed on this pull path, unlike `👤`: it reads the live checkout's git state plus
-the migrations ledger, needing no session id. It is BUDGETED — lag *inside* the converge budget is a
-normal `✅` carrying a converging note, so the rung fires on a breach, not at every close after a land.
+the migrations ledger, needing no session id. It is BUDGETED **for an EDIT** — lag *inside* the
+converge budget is a normal `✅` carrying a converging note, so the rung does not fire at every close
+after a land. **An ADD is not budgeted at all.** `~/.claude` is per-file symlinks into the live
+checkout, so an edited file rides its link and merely runs OLD at lag N, while a file the landed diff
+ADDS has no link and is in no tree the box can reach: every `[ -f x ] && . x` / `command -v fn` guard
+silently skips, and the feature is a no-op rather than a stale one. `LIVE_ADDS` > 0 therefore breaches
+at lag 1 (2026-08-09, backlog `99b715f31a98` — measured on `scripts/lib/pane-spawn-log.sh`, where this
+ledger read "BEHIND 7, within budget (25)" over a feature that was doing nothing at all).
 
 Two rungs the ledger CANNOT derive from git — they are model-state you overlay when true, and
 they dominate the fact rung:

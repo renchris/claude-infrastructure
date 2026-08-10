@@ -455,8 +455,18 @@ news. It names ONE drivable action — `bash <repo>/scripts/deploy-live.sh` — 
 it**, so unlike the `gate-green` rung it replaces it cannot become an unreachable ✅. If the
 converger refuses, that refusal is an event with a culprit: file it (`cc-backlog needs`) and the
 rung resolves to `👤`. Computed by `scripts/wrap-ledger.sh` (`LIVE`, `LIVE_SRC`, `LIVE_LAG`,
-`MIG_FAILED`); a repo that is not the live layer's source reports `LIVE_SRC=n-a` and nothing about
-its close changes.
+`LIVE_ADDS`, `MIG_FAILED`); a repo that is not the live layer's source reports `LIVE_SRC=n-a` and
+nothing about its close changes.
+🚨 **But the budget is an EDIT's budget, and an ADD gets none** (2026-08-09, backlog
+`99b715f31a98`). The live layer is reached by PER-FILE symlinks, so an edited file rides its link
+and merely runs its older version until the fast-forward — degraded, present, converging, which is
+exactly what a budget is for. A file the landed diff **ADDS** is not stale, it is **absent**: no
+link, in no tree the box can reach, and every consumer guard on it (`[ -f x ] && . x`,
+`command -v fn && fn …`) is a *silent* skip — so the feature is a no-op, not an error. Measured on
+`scripts/lib/pane-spawn-log.sh`: the ledger read `BEHIND 7, within budget (25)`, rendered a plain
+OK, and all twenty instrumented call sites did nothing. `LIVE_ADDS` > 0 therefore breaches at a lag
+of **1**. Read it the way the mechanism reads: *a land that adds a file is not live until the
+converger runs*, whatever the commit count says.
 `👤` vs `✅` is the second one (*mine done ≠ yours done*), added 2026-08-01 after a close read
 `✅ Complete & live on trunk` at line 1 and revealed "two things remain yours" in its second-to-last
 paragraph. The operator had already decided to close at line 1. **`👤` counts only steps THIS SESSION
