@@ -876,6 +876,16 @@ The `no on-box RED` conjunct is the one that keeps it sound — the hermetic sub
 excluding the machine-coupled suites, so an on-box red saw exactly what this producer structurally
 cannot. `CC_DEPLOY_OFFBOX=off` restores the T1/T2/T3 ladder byte-for-byte.
 
+**The trigger is a SCHEDULE, and that is a measurement rather than a preference.** The green run
+took **~49 minutes** across 10 jobs against the free tier's **5-wide macOS concurrency**, so one run
+occupies the whole ceiling for two waves; trunk moves a commit every ~23 minutes. Per-push on `main`
+has no good setting — *with* `cancel-in-progress` almost every run is killed before it finishes and
+the producer produces nearly nothing, and *without* it 63 runs/day queue into a backlog permanently
+hours behind the tip, which is the staleness this lane exists to end. The dilemma dissolves once you
+ask what the consumer needs: T1H does not want a verdict per commit, it wants **a recent green that
+is a descendant of live HEAD**. Hourly against the tip delivers that ~24×/day against the on-box
+producer's 0.17/day. A per-commit verdict would be a nicer artifact and a worse producer.
+
 **Two defects found in the building, both generalizable, and neither found by inspection.**
 
 - **The empty-`$HOME` control fired before CI ever ran.** On this box the bare name `bats`
