@@ -1239,6 +1239,31 @@ retry_once() { # <file> <testname> <tmpdir> → rc of ONE re-run (124 = OUR boun
   ( cd "$WORKTREE" && TMPDIR="$td" bounded "$RETRY_TO" "${RETRY_QOS[@]}" "$BATS_BIN" "$f" ) </dev/null >/dev/null 2>&1 || rc=$?
   return "$rc"
 }
+# WHY AN rc IS NOT A VERDICT ABOUT THE TREE — ONE ladder, read by BOTH no-pair branches below.
+# It used to live inside branch (c) only, so branch (a) — zero `not ok` at all, which is what a run
+# killed before any test COMPLETES looks like, i.e. the commonest truncation — returned above it and
+# kept the generic default, discarding the rc. That is the single most diagnostic fact a cut has:
+# MEASURED 2026-08-10, nine consecutive sweeps logged `zero not-ok in a non-zero run - truncated`
+# with no rc and no cause, while this runner's own stderr file carried `Killed: 9` TWELVE times
+# alongside six `Terminated: 15` (ours — the stall watcher). The verdict was right both times (cut,
+# never red) and the CAUSE was unrecoverable from the log, so diagnosing it took an lsof against a
+# live run. Signal-death and our own bound are opposite findings — one says "a peer killed us", the
+# other "a test is slow" — and a default naming neither sends every reader to the wrong one.
+rc_why() { # <rc> → why this rc says nothing about the tree
+  if   [ "$1" -eq 124 ]; then printf 'our own bound cut the run'
+  elif [ "$1" -gt 128 ]; then printf 'the run was KILLED by signal %s (machine pressure, not the tree)' "$(( $1 - 128 ))"
+  elif [ "$1" -eq 126 ] || [ "$1" -eq 127 ]; then printf 'the run could not execute (rc %s)' "$1"
+  # WORDING IS LOAD-BEARING: this says "ADMISSION DEFERRAL", never the bare token R-E-F-U-S-E-D.
+  # permission-gate-lint treats that token as a guard-refusal VERB (`s ~ /REFUSED/`, substring,
+  # inside strings too) and would count this message-assignment as an unbounded permission gate
+  # on an actuation path. It is not one — nothing here refuses; cc-bats did, and this arm only
+  # NAMES it, after which the cut path logs and retries next sweep. Declaring a `gate_bounded:`
+  # budget for a gate that does not exist would launder a false positive into a real exemption.
+  # "Deferral" is also cc-bats' own word for it ("this is a DEFERRAL, not a test result").
+  elif [ "$1" -eq 75 ]; then printf '%s' "the run hit cc-bats' ADMISSION DEFERRAL (rc 75, EX_TEMPFAIL) — NOTHING RAN. This runner exports CC_BATS_MAX_ROOTS=0 to be exempt, so seeing this means the exemption did not reach the child"
+  else printf 'the run exited %s — not a tree verdict (bats says 0=pass, 1=fail)' "$1"
+  fi
+}
 classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1/3 = flake, 124 = no verdict
   # <rc> is the CORPUS run's exit code, and it is load-bearing for case (c) below: without it this
   # function cannot tell a failure of the tree from a run we killed ourselves. Defaults to 1 (bats'
@@ -1275,7 +1300,17 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
     #       own `STALL … at test 0 — cutting the run`, minting a backlog item that pointed at a
     #       DIRECTORY. `retries=0` is the tell — (b) returns before the ladder can run.
     notok="$(tap_notok "$1")"                   # THE one grammar (C30) — tap_done's, exactly
-    if [ "$notok" -eq 0 ]; then CUT=1; return 0; fi
+    if [ "$notok" -eq 0 ]; then
+      CUT=1
+      # NAME THE rc HERE TOO. A cut with no attributable pair AND no completed failure is the
+      # commonest truncation there is, and it was the one shape that recorded nothing about its own
+      # cause. rc 0 is not reachable (the caller only calls on non-zero), so every value that lands
+      # here has a reading in rc_why — including bats' own 1, which on a zero-not-ok TAP means the
+      # run died before writing a verdict rather than that a test failed.
+      CUT_WHY="zero not-ok in a non-zero run — $(rc_why "$tap_rc")"
+      log "corpus TRUNCATED — $CUT_WHY; no test completed and failed, so nothing is proven (cut, not red)"
+      return 0
+    fi
     case "$tap_rc" in
       0|1) ;;                                   # the only two codes that speak about the tree
       *)   CUT=1                                # 124 / >128 signal / 126 / 127 ⇒ nothing proven
@@ -1283,19 +1318,8 @@ classify_failures() { # <tapfile> <rc> — retry ladder: >=2/3 = REPRODUCIBLE, 1
            [ -n "$FAILTEST" ] || FAILTEST="(unattributed)"
            # Name WHICH non-verdict fired, for the same reason C23 does: a fixed message would
            # misattribute a SIGKILL to our timeout and send the next reader hunting a slow test.
-           if   [ "$tap_rc" -eq 124 ]; then why="our own bound cut the run"
-           elif [ "$tap_rc" -gt 128 ]; then why="the run was KILLED by signal $(( tap_rc - 128 )) (machine pressure, not the tree)"
-           elif [ "$tap_rc" -eq 126 ] || [ "$tap_rc" -eq 127 ]; then why="the run could not execute (rc $tap_rc)"
-           # WORDING IS LOAD-BEARING: this says "ADMISSION DEFERRAL", never the bare token R-E-F-U-S-E-D.
-           # permission-gate-lint treats that token as a guard-refusal VERB (`s ~ /REFUSED/`, substring,
-           # inside strings too) and would count this message-assignment as an unbounded permission gate
-           # on an actuation path. It is not one — nothing here refuses; cc-bats did, and this arm only
-           # NAMES it, after which the cut path logs and retries next sweep. Declaring a `gate_bounded:`
-           # budget for a gate that does not exist would launder a false positive into a real exemption.
-           # "Deferral" is also cc-bats' own word for it ("this is a DEFERRAL, not a test result").
-           elif [ "$tap_rc" -eq 75 ]; then why="the run hit cc-bats' ADMISSION DEFERRAL (rc 75, EX_TEMPFAIL) — NOTHING RAN. This runner exports CC_BATS_MAX_ROOTS=0 to be exempt, so seeing this means the exemption did not reach the child"
-           else why="the run exited $tap_rc — not a tree verdict (bats says 0=pass, 1=fail)"
-           fi
+           # ONE ladder with branch (a) above — see rc_why's header for why it was hoisted out.
+           why="$(rc_why "$tap_rc")"
            CUT_WHY="unattributable not-ok (${FAILTEST}) in a run that reached no verdict — $why"
            log "corpus UNPROVEN — $why; the one unattributable not-ok proves nothing (cut, not red)"
            return 0 ;;
