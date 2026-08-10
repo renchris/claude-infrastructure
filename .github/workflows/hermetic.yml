@@ -108,11 +108,15 @@ jobs:
           # date and stat with their GNU versions, and 62 suites depend on the BSD spellings. The
           # box under test has exactly this shape: GNU timeout/gdate present, gsed ABSENT.
           brew install coreutils
-          mkdir -p /usr/local/gnubin
-          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" /usr/local/gnubin/timeout
-          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" /usr/local/gnubin/gtimeout
-          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/date"    /usr/local/gnubin/gdate
-          echo "/usr/local/gnubin" >> "$GITHUB_PATH"
+          # $RUNNER_TEMP, not /usr/local: the arm64 macOS image does not grant the runner user write
+          # access to /usr/local (measured — `mkdir: /usr/local/gnubin: Permission denied`), and a
+          # sudo'd system dir would be a worse answer for a per-job PATH shim anyway.
+          gnubin="$RUNNER_TEMP/gnubin"
+          mkdir -p "$gnubin"
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" "$gnubin/timeout"
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/timeout" "$gnubin/gtimeout"
+          ln -sf "$(brew --prefix coreutils)/libexec/gnubin/date"    "$gnubin/gdate"
+          echo "$gnubin" >> "$GITHUB_PATH"
 
       - name: tool inventory (evidence, not decoration)
         run: |
