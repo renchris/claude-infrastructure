@@ -387,6 +387,16 @@ CLOUD=0
 CLOUD_OPTIN="${CC_FIRE_CLOUD:-off}"              # default-off; `on` enables --cloud on this box
 FIRE_GOAL="${FIRE_GOAL:-}"                       # --goal: MESSAGE 2, armed AFTER engagement (arm_goal)
 SPAWNED_PANE="" ENGAGE_VERIFY=0 FIRE_MARKER=""
+# FIRE_LIVE_PANE — a pane that is PROVABLY ALIVE but that the fire abandoned before $SPAWNED_PANE was
+# assigned. fire_cleanup's landed/not-landed discriminator is $SPAWNED_PANE, which every spawn arm sets
+# only AFTER the launch succeeds — so a failure between "the pane exists" and that assignment is
+# misread as "no pane landed", and the cleanup then deletes the worktree out from under a live session
+# and writes it neither a registry row nor a stamp. This is the fallback that arm reads (item
+# c163f42390a3): set ONLY on a positively-observed survival, never on an unverified close.
+FIRE_LIVE_PANE=""
+# The self-retire contract's heading — ONE definition, written into the fired brief by the trailer
+# block and read back by fired_contract_in_my_brief as proof of the contract. See both call sites.
+SELF_RETIRE_CONTRACT_HEADING='## ON COMPLETION — SELF-RETIRE (do NOT idle)'
 # ---- V2 LIFECYCLE RECORD (SESSION_LIFECYCLE_V2.md §5) -----------------------------------------
 # THE INVERSION: row 2 owns the lifecycle ACTIONS but used to own almost none of the FACTS about
 # them, re-deriving every answer from foreign state at read time (row 4's registry row, the process
@@ -2685,6 +2695,78 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
   return 1
 }
 
+# fired_contract_in_my_brief — the LAST-RESORT proof that this pane is a fired peer, read from the one
+# artifact a fire can neither forge nor lose: THE BRIEF IT WAS FIRED WITH.
+# $1=self-pane → 0 proven / 1 not proven. Never exits non-zero fatally.
+# OUT-PARAMS on success (the MFP_SKIP_REASON pattern, for the same reason: the caller needs two values
+# and re-deriving either at the call site would be a second copy of this parse):
+#   FCB_MARKER      the fire marker found in the brief — the repaired stamp's proof field
+#   FCB_NOTIFYBACK  the back-channel address the brief armed, or empty
+#
+# WHY IT EXISTS (item c163f42390a3). The stamp is BOOKKEEPING, written by the firing process after the
+# fact; the pane's fired-peer status is a FACT about the pane, established the moment it ingested a
+# composed brief. Those two come apart whenever a fire lands a live, engaged peer and then aborts
+# before mark_fired_peer — and the abort paths are many and are not exotic. Measured on this repo's own
+# dispatcher, 2026-08-10: cc-dispatch fired item c163f42390a3, the session registered at 17:45:49
+# ("basis":"dispatcher hand-over"), and 23 s LATER the fire exited rc=1 announcing
+# `Closed the untyped pane 165 — NOTHING launched`. The pane was neither closed nor nothing: it was
+# already running the item. No stamp, no handoffs.jsonl row, and under the origin gate no way home.
+# Corroborating the WRITE-miss (rather than a deletion): of the fourteen panes in the filed evidence,
+# the seven unstamped ones carry NEITHER <pane>.json NOR <pane>.prompt, and BOTH stamp deleters
+# (cc-reaper clear_fired_marker + its stale-tenancy GC) remove only the .json and leave the sidecar.
+#
+# THE ORACLE IS THE CONTRACT, NOT THE RECEIPT. handoff-fire appends the self-retire trailer to a COPY
+# of the prompt and embeds a per-fire engagement marker in that same copy, then auto-submits it. So a
+# session whose FIRST USER MESSAGE carries both was, by construction, composed AND fired by
+# handoff-fire with the self-retire contract armed. This reads the original where the stamp is a copy.
+#
+# BOTH TOKENS, AND ONLY IN THE FIRST USER MESSAGE. Each half alone is reachable by a session that is
+# NOT a self-retiring peer, so neither alone may authorise anything:
+#   · the trailer alone — a paste-only /handoff hands the operator the ORIGINAL prompt file, which by
+#     construction carries no marker; an operator who pastes a brief must not thereby license a close.
+#   · the marker alone — EVERY real fire carries one, including `--no-self-retire` fires, whose entire
+#     point is that they may not retire.
+#   · either token ANYWHERE in the transcript — a session that merely DISCUSSES the mechanism matches.
+#     The session that drove this very item quotes the trailer verbatim while investigating it. That
+#     is memory pgrep-f-matches-agent-briefs in its purest form: transcripts carry whole briefs, so a
+#     content grep counts every session that MENTIONS the subject. First user message only; nothing
+#     said later in the conversation gets a vote.
+# CC_SELFCLOSE_BRIEF_CONTRACT=0 disables the path outright (R8 kill switch), like its sibling classes.
+fired_contract_in_my_brief() { # $1=self-pane → 0 proven / 1 not
+  local pane="${1:-}" mysid pdir tj brief marker nb
+  FCB_MARKER="" FCB_NOTIFYBACK=""            # deliberately NOT local — read by the caller
+  [ "${CC_SELFCLOSE_BRIEF_CONTRACT:-1}" != 0 ] || return 1
+  [ -n "$pane" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  mysid="$(cc_sid_for_pane "$pane")"
+  [ -n "$mysid" ] || return 1
+  tj=""
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -f "$pdir/$mysid.jsonl" ] && { tj="$pdir/$mysid.jsonl"; break; }
+  done
+  [ -n "$tj" ] || return 1
+  # The same extraction bin/cc-recover-safeguard uses to recover a brief — one reader, one shape.
+  # `isMeta` excludes the harness's own injected turns, which is what makes ".[0]" the BRIEF and not a
+  # SessionStart hook's context block.
+  brief="$(jq -rc -s 'map(select(.type=="user" and (.isMeta != true))) | .[0] // empty
+            | (.message.content | if type=="string" then . else ([.[]? | select(.type=="text") | .text] | join("\n")) end)' \
+          "$tj" 2>/dev/null || true)"
+  [ -n "$brief" ] || return 1
+  case "$brief" in *"$SELF_RETIRE_CONTRACT_HEADING"*) ;; *) return 1 ;; esac
+  # `|| true` INSIDE the substitution is load-bearing under `set -euo pipefail`: a grep that matches
+  # nothing exits 1, pipefail propagates it out of the pipeline, and the assignment would kill the
+  # script SILENTLY — the same trap the back-channel registry lookup documents at its own sed.
+  marker="$(printf '%s' "$brief" | grep -oE 'HANDOFF-ENGAGE-[A-Za-z0-9._-]+' | tail -1 || true)"
+  [ -n "$marker" ] || return 1
+  # The back-channel address, so the repaired stamp can carry it and sc_announce_before_retire can
+  # ENFORCE the ping rather than merely having asked for it in prose. Absent ⇒ empty ⇒ the announce
+  # arm stands down exactly as it does for a fire that armed no back-channel.
+  nb="$(printf '%s' "$brief" | sed -n 's/^## BACK-CHANNEL — ping the originator (\(.*\))$/\1/p' | tail -1 || true)"
+  FCB_MARKER="$marker" FCB_NOTIFYBACK="$nb"
+  return 0
+}
+
 # adopt_orphan_stamp — re-key an orphaned record onto THIS pane, so everything downstream keeps
 # working unchanged. record_close_succession, cc-reaper's auto-reap and cc-classify are all
 # pane-id-keyed; handing them a re-keyed record is what makes this a two-function change instead of
@@ -4839,6 +4921,64 @@ USAGE
       exit 2
     fi
   fi
+  # ---- STAMP REPAIR (item c163f42390a3): the stamp was never WRITTEN, and that is not "never fired"
+  # THE FIFTH ADMISSIBLE CLASS, and the one the other four imply. Adoption above recovers a stamp that
+  # EXISTS under a stale id; this recovers the case where mark_fired_peer never ran at all — a fire that
+  # landed a live, engaged peer and then aborted before its own bookkeeping. Measured 2026-08-10 on this
+  # repo's dispatcher: the item that produced this change was driven to done by a session that
+  # registered as its worker and whose fire had exited rc=1 claiming it had closed the pane.
+  #
+  # WHY IT IS AUTOMATIC AND NOT A FLAG, unlike --orphaned-assignee / --transplanted-source. Those two
+  # name a CATEGORY the caller knows and the machine cannot see; the caller asserts it and the checks
+  # establish it. Here the evidence is entirely SELF-CONTAINED and machine-checkable from the session's
+  # own first user message — there is nothing for a caller to assert. And a flag would land on exactly
+  # the wrong party: the whole defect is that a dispatched peer does not know its stamp is missing, so
+  # requiring it to pass a flag it has no way to know it needs reproduces the trap one level up.
+  #
+  # IT DOES NOT WIDEN THE GATE, and this is the load-bearing claim. It runs ONLY on `absent` (never
+  # `stale`, never `spent` — both mean a stamp for this id EXISTS and says something, and reaching past
+  # it would hand one pane two contradictory contracts), ONLY after adoption has already failed, and
+  # ONLY on proof that handoff-fire itself composed this brief AND armed the self-retire contract in it
+  # (fired_contract_in_my_brief's header states why one token alone is never enough). An operator's own
+  # session cannot satisfy it: a paste-only bridge carries no fire marker, and a `--no-self-retire` fire
+  # carries no trailer. This is the "name the category, do not widen the escape hatch" rule the
+  # transplanted-source block states — the category here is *the stamp is missing, the contract is not*.
+  #
+  # IT REPAIRS RATHER THAN EXEMPTS, which is why it is better than --allow-origin-close even where the
+  # override would "work". The override closes a pane and leaves the record wrong forever; every
+  # downstream consumer keyed on the stamp — cc-reaper's auto-reap, cc-classify's operator-vs-peer call,
+  # custody's discharge, record_close_succession — stays blind. Writing the record the fire owed makes
+  # all of them correct, and it restores the ANNOUNCE the item named as the override's worst property:
+  # the brief's own back-channel address goes onto the stamp, so sc_announce_before_retire enforces the
+  # ping instead of the pane vanishing unannounced. ONE writer for the format throughout
+  # (mark_fired_peer); the provenance fields are additive on top, exactly as adopt_orphan_stamp does.
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ] \
+     && fired_contract_in_my_brief "$SC_SID"; then
+    SC_FIRED_DIR_R="${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"
+    # mark_fired_peer reads these two as globals. self-close is a terminal subcommand — no fire runs
+    # after this point in the process — so setting them here cannot leak into a later fire.
+    FIRE_MARKER="$FCB_MARKER" NB_ARMED_TARGET="$FCB_NOTIFYBACK"
+    mark_fired_peer "$SC_FIRED_DIR_R" "$SC_SID" "$PWD" "" ""
+    if [ -s "$SC_FIRED_DIR_R/$SC_SID.json" ]; then
+      # Additive provenance, so a stamp written by REPAIR is never mistaken for one written by a fire.
+      SC_RTMP="$SC_FIRED_DIR_R/.$SC_SID.repair.$$"
+      if jq --arg at "$(_iso_now)" '. + {repairedAt:$at, repairedFrom:"brief-contract"}' \
+           "$SC_FIRED_DIR_R/$SC_SID.json" > "$SC_RTMP" 2>/dev/null && [ -s "$SC_RTMP" ]; then
+        mv -f "$SC_RTMP" "$SC_FIRED_DIR_R/$SC_SID.json" 2>/dev/null || rm -f "$SC_RTMP" 2>/dev/null
+      else
+        rm -f "$SC_RTMP" 2>/dev/null
+      fi
+      # LEGIBILITY (R10), the standard every other self-authorising path here holds itself to: a pane
+      # that changes its own authorisation says so, to stderr AND the close log, never only in-pane.
+      echo "→ fired-peer stamp REPAIRED: pane $SC_SID had NO stamp, but its own first user message carries the self-retire contract and the fire marker $FCB_MARKER — handoff-fire composed and fired this brief, and the fire aborted before writing its record." >&2
+      echo "   Wrote $SC_FIRED_DIR_R/$SC_SID.json (cwd $PWD${FCB_NOTIFYBACK:+, back-channel $FCB_NOTIFYBACK}). This is a REPAIR, not an override: cc-reaper, cc-classify and the announce-before-retire check now all see this peer correctly." >&2
+      SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
+    else
+      # The writer declined — say WHY, from the writer's own reason rather than a guess re-derived
+      # here (item 890cd862b965). The refusal below then stands, with the cause named.
+      echo "⚠ fired-peer stamp repair FAILED for pane $SC_SID — ${MFP_SKIP_REASON:-cause unknown (the writer reported no reason)}" >&2
+    fi
+  fi
   if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
     # An id CHANGE orphans a real peer's stamp under its old id (resume / crash-recreate / kitty
     # renumber). Name it when we can find it: the refusal stands either way, but "no stamp anywhere"
@@ -4865,6 +5005,11 @@ USAGE
 USAGE
     fi
     cat >&2 <<USAGE
+!!   Nor does this session's own brief carry the contract: the stamp-repair path (item c163f42390a3)
+!!   re-derives fired-peer status from the FIRST USER MESSAGE when both the self-retire trailer and a
+!!   handoff-fire engagement marker are in it — a fire composes both together, so their absence here
+!!   is positive evidence that no fire composed this session's brief. That is the same conclusion the
+!!   missing stamp reaches, arrived at from the opposite direction.
 !! If work remains, hand it forward instead:  handoff-fire.sh --recycle   (continue in place)
 !! Override (deliberate, loud, almost never right):  --allow-origin-close
 USAGE
@@ -6180,7 +6325,11 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
     # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not a shell expansion
     {
       printf '\n'
-      printf '## ON COMPLETION — SELF-RETIRE (do NOT idle)\n'
+      # THE HEADING IS A SHARED CONSTANT, not a literal repeated at two sites. fired_contract_in_my_brief
+      # matches this exact string in a fired session's own first user message as the last-resort proof of
+      # the self-retire contract, so an edit here that did not reach the checker would silently retire the
+      # recovery path while leaving it green (memory: control-calibrated-to-implementation-decays).
+      printf '%s\n' "$SELF_RETIRE_CONTRACT_HEADING"
       printf '%s\n' 'You are a fired PEER session: the desk drives you to DONE and you CLOSE YOURSELF — you are'
       printf '%s\n' 'NOT an idle human-in-the-loop pane. ANNOUNCE, then retire — the ping is a STEP, not a'
       printf '%s\n' 'courtesy: self-close checks whether this pane ever pinged the address it was fired with,'
@@ -6263,11 +6412,19 @@ fi
 # path, not wt-pool-N); that one is an ordinary cold worktree and is removed like one.
 FIRE_CLEAN_WT="" FIRE_CLEAN_BRANCH="" FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0
 fire_cleanup() {
-  local _rc=$? _slot=""
+  local _rc=$? _slot="" _pane=""
   [ "$FIRE_CLEAN_DONE" = 1 ] && return 0
   FIRE_CLEAN_DONE=1
   [ "$_rc" = 0 ] && return 0                     # a successful fire owns everything it claimed
-  if [ -z "${SPAWNED_PANE:-}" ]; then
+  # THE DISCRIMINATOR IS "does a live pane exist", NOT "did the fire finish". $SPAWNED_PANE is assigned
+  # only after a launch SUCCEEDS, so every failure between pane creation and that assignment used to
+  # land in the arm below — which deletes the worktree and returns the pool slot, i.e. it acts on
+  # "nothing was created" while a session is running in the thing it is deleting. $FIRE_LIVE_PANE is
+  # set only where a pane's survival was POSITIVELY observed (see restore_focus_or_fail), so consulting
+  # it here can only ever move a case from "destroy the resources" to "register and stamp the pane",
+  # never the reverse (item c163f42390a3).
+  _pane="${SPAWNED_PANE:-${FIRE_LIVE_PANE:-}}"
+  if [ -z "$_pane" ]; then
     if [ -n "$FIRE_CLEAN_POOL" ] && [ -d "$FIRE_CLEAN_POOL" ]; then
       case "$(basename "$FIRE_CLEAN_POOL")" in
         wt-pool-[0-9]*) _slot="${FIRE_CLEAN_POOL##*wt-pool-}" ;;
@@ -6301,18 +6458,22 @@ fire_cleanup() {
     fi
   else
     # A pane IS live and task-less. Make it VISIBLE to the reaper/board; never silently reap it.
-    FIRE_REG_TIMEOUT=0 ensure_registration "$REG_DIR" "$SPAWNED_PANE" \
-      "$(basename "${LAUNCH_DIR:-fire}")-${SPAWNED_PANE%%-*}" "${LAUNCH_DIR:-}" "${CMD:-}" || true
+    FIRE_REG_TIMEOUT=0 ensure_registration "$REG_DIR" "$_pane" \
+      "$(basename "${LAUNCH_DIR:-fire}")-${_pane%%-*}" "${LAUNCH_DIR:-}" "${CMD:-}" || true
     if [ "${WANT_SELF_RETIRE:-0}" = 1 ]; then
-      mark_fired_peer "$FIRED_DIR" "$SPAWNED_PANE" "${LAUNCH_DIR:-}" "${FIRING_SID:-}" "${PROMPT_FILE:-}" || true
-      echo "→ fire-cleanup: task-less pane $SPAWNED_PANE made VISIBLE (registry row + fired-peer marker) — cc-reaper can GC it" >&2
+      mark_fired_peer "$FIRED_DIR" "$_pane" "${LAUNCH_DIR:-}" "${FIRING_SID:-}" "${PROMPT_FILE:-}" || true
+      echo "→ fire-cleanup: task-less pane $_pane made VISIBLE (registry row + fired-peer marker) — cc-reaper can GC it, and it can self-close if it turns out to be running" >&2
     else
-      echo "⚠ fire-cleanup: task-less pane $SPAWNED_PANE registered but NOT auto-reapable (--no-self-retire leaves no fired-peer marker, by design) — close it by hand: it2 session close -f -s $SPAWNED_PANE" >&2
+      echo "⚠ fire-cleanup: task-less pane $_pane registered but NOT auto-reapable (--no-self-retire leaves no fired-peer marker, by design) — close it by hand: it2 session close -f -s $_pane" >&2
     fi
     if [ -n "$FIRE_CLEAN_WT" ]; then
       echo "⚠ fire-cleanup: worktree $FIRE_CLEAN_WT KEPT — the pane is live in it and may engage late. Once you are sure it is dead: git -C ${REPO:-.} worktree remove --force $FIRE_CLEAN_WT && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
     fi
-    if [ "${FIRE_FAILED_CLOSE_PANE:-0}" = 1 ]; then
+    # NOT reachable via $FIRE_LIVE_PANE, deliberately. That variable is set exactly where a close has
+    # ALREADY been attempted and the pane positively survived it, so re-issuing the same close here
+    # would be a second attempt at a thing that just refused or failed — and on the refusal branch
+    # (anchor / not-agent-owned) it is refusing for a reason that has not changed.
+    if [ "${FIRE_FAILED_CLOSE_PANE:-0}" = 1 ] && [ -n "${SPAWNED_PANE:-}" ]; then
       echo "→ fire-cleanup: FIRE_FAILED_CLOSE_PANE=1 — closing the task-less pane $SPAWNED_PANE" >&2
       # mode=spawn: this pane was created by THIS run seconds ago, so it cannot carry a fired-peer
       # marker yet and the ownership test would refuse a legitimate self-clean. The anchor
@@ -7058,9 +7219,29 @@ restore_focus_or_fail() {
   # invariant is what matters here: `before` (the operator's focus) and `newid` must never be the
   # same pane, and if a future refactor ever lets them converge, hf_close_pane refuses instead of
   # destroying the very pane whose focus it failed to restore.
-  hf_close_pane "$newid" restore-focus-or-fail spawn || true
+  # READ THE VERDICT THE CLOSER ALREADY COMPUTED. `|| true` used to discard it, and the next line
+  # asserted the close as fact — the exact claimed-outcome-vs-checked-outcome shape hf_close_pane's own
+  # body warns about thirty lines into itself, reproduced by its caller. hf_close_pane already
+  # post-reads the pane and returns 1 on STILL-PRESENT (and 2 on a refusal, which closes nothing at
+  # all), so the truth was available and thrown away. Measured cost, 2026-08-10, item c163f42390a3:
+  # this printed "Closed the untyped pane 165 — NOTHING launched" about a pane that was already a
+  # registered, engaged session running its item. The fire then exited 1, and because $SPAWNED_PANE is
+  # assigned only on the success path, fire_cleanup took its "no pane landed" arm — so a live peer got
+  # no registry row, NO STAMP (hence no way to ever self-close), and its worktree was queued for
+  # deletion underneath it. `|| _rc=$?` is set -e-safe.
+  local _rfc=0
+  hf_close_pane "$newid" restore-focus-or-fail spawn || _rfc=$?
   echo "!! FOCUS-STOLEN ($label): could not restore the operator's focus ($before) after the fire." >&2
-  echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
+  if [ "$_rfc" = 0 ]; then
+    echo "   Closed the untyped pane $newid — NOTHING launched (C1: a background fire must not move focus)." >&2
+  else
+    # Hand the id to fire_cleanup so its landed/not-landed arm sees a pane it otherwise cannot know
+    # about. Set ONLY here, on a positively-reported survival — an `unverified` close returns 0 above
+    # and is deliberately NOT treated as survival (that non-verdict is what would make every iTerm2
+    # close look like a leak).
+    FIRE_LIVE_PANE="$newid"
+    echo "   Pane $newid is STILL ALIVE (close $([ "$_rfc" = 2 ] && echo REFUSED || echo FAILED)) — it may already be a running session. It is being REGISTERED and STAMPED rather than abandoned, and its worktree is KEPT; close it by hand once you have checked it: it2 session close -f -s $newid" >&2
+  fi
   echo "   Pass --follow to intentionally land your view on the continuation, else re-fire." >&2
   return 1
 }
