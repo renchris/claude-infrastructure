@@ -42,6 +42,13 @@ Usage:
       `*` on inherited numbers, flags-as-bullets) lives here in code, so it can be tested
       and cannot drift from the CLI table. commands/accounts.md keeps only the judgment:
       how to INTERPRET a stale row, an exclusion, or a cliff.
+      Appends the provider section unless --no-agents.
+  claude-accounts --agents            NON-Claude agent backends only (registry:
+      ~/.claude/providers.json). Needs no keychain read, no usage sweep and no lock, so it
+      answers "what else can I route to" without paying for a 4-account sweep. Add --json for
+      the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
+      has a headless agent mode — because only the third decides routability, and a presence
+      check silently skips it (an editor launcher on PATH is not an agent backend).
   claude-accounts --route general|fable   best account name (bare, on stdout)
   claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
   claude-accounts --assign ACCT [--src S] record one fire-time assignment (M7). Called by the
@@ -113,6 +120,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -2651,6 +2659,205 @@ def render_relogin_status(rows: list, args: list, trigger_h: float = RELOGIN_TRI
     return code
 
 
+# ---------------------------------------------------------------------------
+# Provider surface (non-Claude agent backends).
+#
+# ADDITIVE BY CONSTRUCTION. The Claude rows, the router footer, the --json field names, the
+# --rank/--route/--login-status exit codes and the readout's columns are consumed by four callers
+# and pinned by tests/claude-accounts-core.bats, so nothing below reshapes any of them: this is a
+# SEPARATE SECTION with its own table, a new `providers` key alongside the existing --json ones,
+# and a new flag. A provider registry that cannot be read yields [] and the Claude surface renders
+# exactly as it did before — the dashboard must never go dark because a second vendor's file moved.
+#
+# WHY IT LIVES HERE and not in a sibling `cc-agents`: render_readout's own docstring records that
+# it exists to BE the single renderer, having replaced ~200 lines of prose in commands/accounts.md
+# that made the model rebuild the table by hand. A second program rendering "what agent capacity do
+# I have" would recreate precisely the drift that function was written to delete. One renderer per
+# artifact — so render_providers() below is the ONLY place provider rows are formatted, and both
+# entry points (--readout appends it, --agents prints it alone) call that one function.
+# ---------------------------------------------------------------------------
+
+PROVIDERS_JSON_DEFAULT = "~/.claude/providers.json"
+
+
+def load_providers(path=None):
+    """Read the provider registry. Absent or malformed ⇒ [], never an exception.
+
+    The Claude dashboard is the load-bearing surface; a provider registry is an accessory to it.
+    An accessory that can take the whole readout down with a JSON typo would be a worse trade than
+    not having it, so every failure here degrades to "no provider section" (same discipline as
+    cache_read's non-dict → miss).
+    """
+    p = os.path.expanduser(path or os.environ.get("CC_PROVIDERS_JSON") or PROVIDERS_JSON_DEFAULT)
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    provs = d.get("providers") if isinstance(d, dict) else None
+    return provs if isinstance(provs, list) else []
+
+
+def _provider_pin(pr):
+    """The model actually pinned on disk, read from the provider's OWN config.
+
+    Never the registry's opinion of what should be pinned: the whole point of the pin-proof rule
+    is that a config file governs and a remembered value does not.
+    """
+    mp = pr.get("model_pin")
+    if not isinstance(mp, dict) or not mp.get("path"):
+        return None
+    p = os.path.expanduser(mp["path"])
+    try:
+        if p.endswith(".toml"):
+            txt = open(p).read()
+
+            def grab(key):
+                m = re.search(r'^\s*%s\s*=\s*"([^"]+)"' % re.escape(key), txt, re.M)
+                return m.group(1) if m else None
+
+            model = grab(mp.get("key") or "model")
+            eff = grab(mp["effort_key"]) if mp.get("effort_key") else None
+            return f"{model} @ {eff}" if (model and eff) else model
+        with open(p) as f:
+            cur = json.load(f)
+        for part in (mp.get("key") or "").split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+        return cur if isinstance(cur, str) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def probe_provider(pr, timeout_s=8.0):
+    """One provider → its LIVE state, merged onto its registry facts.
+
+    Three separate questions, deliberately not collapsed (see providers.json _the_detection_rule):
+    `installed` (binary on PATH), `auth_state` (credentials usable), and `routable` (the registry's
+    `headless` field — does a non-interactive agent mode exist at all). Only the third decides
+    whether this fleet can send work there, and it is the one a presence check silently skips.
+    """
+    out = dict(pr)
+    exe = shutil.which(pr.get("bin") or "") if pr.get("bin") else None
+    out["installed"] = bool(exe)
+    out["exe"] = exe
+    out["version"] = None
+    out["pinned_model"] = _provider_pin(pr) if exe else None
+    # routable = has a headless mode AND the registry cleared it on cost. in_scope already
+    # encodes the cost verdict, so a cost-failed provider can never render as routable.
+    out["routable"] = bool(pr.get("headless")) and bool(pr.get("in_scope"))
+
+    if not exe:
+        out["auth_state"] = "absent"
+        return out
+
+    try:
+        r = subprocess.run([exe] + list(pr.get("version_args") or ["--version"]),
+                           capture_output=True, text=True, timeout=timeout_s)
+        lines = [ln.strip() for ln in ((r.stdout or "") + (r.stderr or "")).splitlines() if ln.strip()]
+        out["version"] = lines[0] if lines else None
+    except (OSError, subprocess.SubprocessError):
+        out["version"] = None
+
+    a = pr.get("auth")
+    if not isinstance(a, dict):
+        out["auth_state"] = "unknown"
+        return out
+
+    if a.get("kind") == "json_file":
+        try:
+            with open(os.path.expanduser(a.get("path") or "")) as f:
+                d = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            out["auth_state"] = "unreadable"
+        else:
+            # An API key present is not a health state — it is a BILLING state, and the one the
+            # cost gate cares about, so it gets its own label rather than folding into "ok".
+            akf = a.get("api_key_field")
+            if akf and str(d.get(akf) or "").strip():
+                out["auth_state"] = "api-key"
+            else:
+                blob = d.get("tokens") if isinstance(d.get("tokens"), dict) else d
+                blob = blob if isinstance(blob, dict) else {}
+                out["auth_state"] = "ok" if any(blob.get(k) for k in
+                                                ("access_token", "refresh_token")) else "logged-out"
+    elif a.get("kind") == "cmd_json":
+        cmd = list(a.get("cmd") or [])
+        exe2 = shutil.which(cmd[0]) if cmd else None
+        if not exe2:
+            out["auth_state"] = "absent"
+        else:
+            try:
+                r = subprocess.run([exe2] + cmd[1:], capture_output=True, text=True,
+                                   timeout=timeout_s)
+                j = json.loads((r.stdout or "").strip() or "{}")
+                st = j.get("status")
+                out["auth_state"] = "ok" if st == "ready" else (j.get("reason") or st or "not-ready")
+            except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+                out["auth_state"] = "unreadable"
+    else:
+        out["auth_state"] = "unknown"
+    return out
+
+
+def render_providers(provs):
+    """Provider rows → finished markdown lines. THE single renderer for this section.
+
+    Returns a list of lines rather than printing, so --readout can append it and --agents can
+    print it alone without a second formatter existing anywhere.
+    """
+    if not provs:
+        return []
+    out = ["", "**Agent backends beyond Claude** — registry `~/.claude/providers.json`",
+           "",
+           "| backend | routable | version | auth | plan | bills outside it? | model pinned |",
+           "|---|---|---|---|---|---|---|"]
+    skips = []
+    for p in provs:
+        label = p.get("label") or p.get("name") or "?"
+        # Reason precedence matters: a provider can fail several ways at once, and naming the
+        # wrong one is worse than naming none. The registry's own skip_reason is authoritative
+        # when it exists — Grok has no headless mode measured AND fails the cost gate, and
+        # rendering "no headless mode" there would misreport WHY it is not wired.
+        if p.get("routable"):
+            route = "✅"
+        elif p.get("skip_reason"):
+            route = "⊘ skipped"
+        elif not p.get("headless"):
+            route = "✖ no headless mode"
+        else:
+            route = "⊘ skipped"
+        ver = p.get("version") or ("—" if p.get("installed") else "not installed")
+        auth = {"ok": "ok", "absent": "—", "api-key": "🚨 API key (metered)"}.get(
+            p.get("auth_state"), p.get("auth_state") or "UNKNOWN")
+        plan = p.get("plan") or "UNKNOWN"
+        b = p.get("bills_outside_plan")
+        bills = "🚨 **YES**" if b is True else ("no" if b is False else "UNKNOWN")
+        pin = p.get("pinned_model") or "—"
+        if p.get("pinned_model") and p.get("proven_by"):
+            pin += " ✓proven"
+        elif p.get("pinned_model"):
+            pin += " ⚠unproven"
+        out.append(f"| {label} | {route} | {ver} | {auth} | {plan} | {bills} | {pin} |")
+        if not p.get("in_scope") and p.get("skip_reason"):
+            skips.append(f"⊘ `{p.get('name')}` — {p['skip_reason']}")
+
+    for s in skips:
+        out.append("- " + s)
+
+    routable = [p for p in provs if p.get("routable")]
+    ready = [p for p in routable if p.get("auth_state") == "ok"]
+    out.append("")
+    out.append(f"➤ non-Claude backends ready now: **{len(ready)} of {len(routable)} routable** "
+               f"({len(provs)} known)")
+    # The distinction the whole registry exists to preserve: a backend riding a subscription we
+    # ALREADY hold is capacity; one that bills per token is a meter, and it is never rendered as
+    # though it were the same thing.
+    if any(p.get("bills_outside_plan") for p in provs):
+        out.append("- 🚨 rows marked **YES** bill OUTSIDE a plan we hold — not wired, by policy "
+                   "(`accounts.json spend.usage_credits_authorized=false`)")
+    return out
+
+
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -2661,6 +2868,21 @@ def main():
     # --relogin-status is a read-only status surface: it reports what the renewal loop should
     # do, so it must never perform an account operation itself as a side effect of being read.
     no_heal = "--no-heal" in args or "--relogin-status" in args
+
+    # --agents: the provider section ALONE. Deliberately returns before get_data() — provider rows
+    # need no keychain read, no usage endpoint and no lock, so asking "what else can I route to"
+    # must never block behind a 4-account sweep or force one.
+    if "--agents" in args:
+        provs = [probe_provider(p) for p in load_providers()]
+        if "--json" in args:
+            print(json.dumps({"providers": provs}, indent=2))
+            return
+        lines = render_providers(provs)
+        if not lines:
+            print("no provider registry (~/.claude/providers.json) — Claude-only fleet")
+            return
+        print("\n".join(lines).lstrip("\n"))
+        return
 
     if "--relogin-info" in args:
         if args.index("--relogin-info") + 1 >= len(args):
@@ -2756,8 +2978,12 @@ def main():
         # s_cut is config, not per-account state, so it rides at top level once. Emitted so
         # consumers read the routing cutoff as DATA instead of hardcoding 85 in prose that
         # silently diverges the day the SSOT constant changes.
+        # `providers` rides alongside the existing keys — window/cached/s_cut/rows keep their
+        # names, shapes and meanings, because four callers and 61 pinned tests read them. A
+        # consumer that has never heard of providers is unaffected by an extra sibling key.
         print(json.dumps({"window": wj, "cached": cached,
-                          "s_cut": cfg["router"]["S_CUT"], "rows": rows}, indent=2))
+                          "s_cut": cfg["router"]["S_CUT"], "rows": rows,
+                          "providers": [probe_provider(p) for p in load_providers()]}, indent=2))
         return
 
     if "--login-status" in args:
@@ -2892,6 +3118,14 @@ def main():
 
     if "--readout" in args:
         render_readout(rows, cfg, win, cached)
+        # APPENDED, never interleaved: the Claude table and its router footer render byte-identical
+        # to before, then the provider section follows as its own block. An empty or unreadable
+        # registry appends nothing, so the canonical readout degrades to exactly its old output.
+        # `--no-agents` exists for a caller that wants the historical readout verbatim.
+        if "--no-agents" not in args:
+            lines = render_providers([probe_provider(p) for p in load_providers()])
+            if lines:
+                print("\n".join(lines))
         return
 
     # human table
