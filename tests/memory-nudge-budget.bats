@@ -100,6 +100,32 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   hasnt "$out" 'more than the'
 }
 
+# The recoverable-bytes figure must be DERIVED from the live file, never measured against the
+# hardcoded 115. 1676a681 fixed this one position over (the CEILING); the LEVER kept the constant,
+# so it over-claimed recovery on exactly the branch that fires when the index is already breached.
+# 100 entries x 250 B hooks: the allowance this index affords is 204 B, so the honest recovery is
+# 100 x (250-204) = 4600 B, not the 100 x (250-115) = 13500 B the constant reports. RED on the
+# pre-fix hook, which emits '115 B one-governing-rule target' and '~13500 B' for this same fixture.
+@test "recoverable bytes are DERIVED from the live index, not measured against the 115 constant" {
+  run fire s-derived "$(mkindex 100 250)"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" '204 B allowance this index actually affords'
+  has "$out" 'recovers ~4600 B'
+  hasnt "$out" '115 B one-governing-rule target'
+  hasnt "$out" '13500'
+}
+
+# The 115 constant is not deleted — it is demoted to a FLOOR, so it still governs a CROWDED index
+# where the derived allowance falls below one governing rule. 190 x 130 B derives 96 B; claiming
+# recovery down to 96 B would promise hooks shorter than a sentence, so the floor holds at 115 and
+# the verdict stays BOTH-levers (pinned by s-lev3 above). This asserts the floor is what bound it.
+@test "the 115 target survives as a FLOOR when the derived allowance falls below it" {
+  run fire s-floor "$(mkindex 190 130)"
+  out="$(printf '%s' "$output" | ctx)"
+  has "$out" '115 B allowance'
+  hasnt "$out" '96 B allowance'
+}
+
 @test "alarm carries the one-in-one-out rule and keeps the lossy half human-gated" {
   run fire s-rule "$(mkindex 100 250)"
   out="$(printf '%s' "$output" | ctx)"
