@@ -187,3 +187,54 @@ below (INTEGRATE, never overwrite).
   the research doc. 3 verified in real panes. 4 spec corrected same-diff. 5 own branch, project-local
   `/ship`. **Filed, not fixed (out of scope):** `recycle_engaged` path (b) has the same root-vs-nested
   transcript-resolution confusion — `cc-backlog 7176bda11a8d`.
+
+---
+
+## Phase 2 — the mechanism shipped and nothing used it (2026-08-09/10)
+
+**Operator ask:** *"research Anthropic's best practice for what constitutes as the best /goal prompt,
+ensure that our /handoff makes it clear to use /goal when it's appropriate to […] this should be the
+default for almost all newly created and initial prompted sessions."*
+
+**Scope (frozen):** establish what makes the best `/goal` condition from sources rather than taste;
+make `--goal` the documented DEFAULT for new-task fires with that template baked in; land it.
+
+**The gap Phase 1 left, measured.** Phase 1 built `--goal`, tested it 18 ways, and proved it in live
+panes. Adoption then sat at **3 of 60** field-carrying fire rows (5%), with **zero** automated
+producers and **zero** recycles ever re-arming. Not a discipline failure: `--goal` lived in prose
+while **all 26 copyable fire templates omitted it**, and a producer copies the recipe. A flag
+documented only beside a recipe that omits it is, to a copying producer, a flag that does not exist.
+
+**The headline finding — `/goal` is officially documented and we had not read it.**
+<https://code.claude.com/docs/en/goal> carries a normative section *"Write an effective condition"*:
+one measurable end state · a stated check · constraints that matter. **Phase 1's own template fails
+it.** `'<one-line objective> — full brief in the prompt above; DoD at <path>'` has no end state and
+no check, and the evaluator is a separate TOOL-LESS model that judges only what the session PRINTS —
+so it had nothing to read a verdict off. That template was ours, and it was the wrong shape.
+
+**What the binary added that no doc states** (judge system prompt, 2.1.220): it fails CLOSED
+(`insufficient evidence in transcript` is the hard-coded default), a pass must QUOTE the satisfying
+text, the transcript is TRUNCATED to ~50% of the evaluator's window so the proof must be recent, and
+a `$` in a condition is silently rewritten by the slash-command variable substituter. Two failure
+modes, not one: `impossible:true` clears the goal marked failed; merely-vague block-loops to
+`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (8) and stops mattering.
+
+**Two Phase-1-era conclusions corrected.** (a) A goal DOES survive session `--resume` —
+`restoreGoalFromTranscript` re-registers it from the last `goal_status` attachment — so only a NEW
+session id needs re-arming; `boot-resume` and `lr-fire-resume` do not. (b) The "armed goals are inert
+on this box" reading is **refuted**: 47 of 86 armed goals (55%) evaluated at least once, and 4 of 12
+live sessions held a deferring `local_bash`. Bursty, not structural.
+
+**Landed:** `facb0fcb` (the default across every copyable template — six recipes, the two hooks that
+inject a fire template into model context, both plan skills, `CLAUDE.md`), `f62e4135` (the ruleset +
+worked templates + the exclusion list, in `docs/research/goal-condition-best-practice-2026-08-09.md`).
+
+**Deliberately NOT changed:** the no-nudge decision. A "you forgot `--goal`" warning would fire on
+~97% of fires; the operator changed the NORM, not the alarm's polarity. The ledger rate stays the
+detector.
+
+**Filed, not fixed (out of scope):** the `asyncRewake` companion fix that would keep the wake path AND
+let goals evaluate (written, tested, one staged migration `0007` from live) · `goal-inert-watch.sh`
+has never fired because its registration sits unapplied in staged migration `0005` · that hook has a
+third blind spot — `cip()` drops `isBackgrounded:false` tasks while CC's predicate reads
+`taskRegistry.all()`, so a FOREGROUND bash defers a goal invisibly to it.
