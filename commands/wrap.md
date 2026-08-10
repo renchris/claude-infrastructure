@@ -46,7 +46,7 @@ The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > �
 | Rung | Fact that produced it | Your next verb |
 |---|---|---|
 | 🔧 | dirty tree ∨ gate stale on HEAD ∨ frozen-DoD remainder > 0 | **continue** — finish · run-gate · commit (explicit paths) |
-| 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — and per §Session Close's ship policy you FIRE it yourself in every repo except `reso-management-app`, where each land bills an Amplify + Fly deploy so it stays the operator's call |
+| 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — auto-fired by default in every repo per §Session Close's ship policy; held back to an OFFER only where the TARGET repo's own `CLAUDE.md` says landing spends money (a perishable fact this file deliberately does not restate — read that repo's `CLAUDE.md` + its status tool; the old reso hardcode here went stale in three days) |
 | 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — `LIVE_ADDS` > 0 (the lag contains files the live layer does not have AT ALL: **no budget**, breaches at lag 1), or the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or HEAD older than `WRAP_LIVE_BUDGET_MIN`), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
 | 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block — **not computed on this pull path**, see above |
 | ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
@@ -78,3 +78,16 @@ unverifiable — freeze one (`~/.claude/autonomy/dod/<hash>.md`) rather than ass
 
 Machine consumers (Stop hooks) call `scripts/wrap-ledger.sh --machine` and parse the
 `RUNG=` / `DIRTY=` / `UNLANDED=` / `REMAINDER=` / `DOD=` lines.
+
+## Origin final close — the Pyramid contract (CLOSE_INTEGRITY W1, 2026-08-10)
+
+When this is an ORIGIN session (operator-started — no fired-peer stamp; `hooks/lib/origin-identity.sh
+oi_origin_class`) closing GENUINE completion (rung ✅/👤) after real written work, the close message
+must end with the operator's two standing answers. Render the skeleton from the ONE source and fill
+it — never restate it from memory (push and pull share this code path; completion-assert D6 blocks a
+shape-missing close, latched + capped):
+
+!`bash -c '. ~/.claude/hooks/lib/close-shape.sh 2>/dev/null || . "$(git rev-parse --show-toplevel 2>/dev/null)/hooks/lib/close-shape.sh"; close_shape_template' 2>/dev/null || true`
+
+Line 1 stays wrap-ledger's rung readout, verbatim. An honest `Good to close: no — <what remains +
+who owns it>` satisfies the contract; a hedged both-ways answer does not (D3 owns that defect).
