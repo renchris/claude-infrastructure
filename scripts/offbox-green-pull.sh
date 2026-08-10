@@ -41,6 +41,12 @@ POSTLAND_DIR="${CC_POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
 OFFBOX_DIR="${CC_OFFBOX_STAMPS:-$POSTLAND_DIR/offbox}"
 GH_BIN="${CC_OFFBOX_GH:-gh}"
 JOB_NAME="${CC_OFFBOX_JOB:-verdict}"
+# The ref to walk. `origin/main` is the only ref the deploy lane can ever deploy FROM, so it is the
+# only one that matters in production — but the seam exists because the alternative is a script whose
+# single most important path (does a real green actually make it into the store?) can be exercised
+# for the first time only after it has landed. That is the bootstrap circle this repo has paid for
+# elsewhere (memory: deployed-layer-bootstrap-circle), and one variable breaks it.
+REF="${CC_OFFBOX_REF:-origin/main}"
 LIMIT="${CC_OFFBOX_PULL_LIMIT:-40}"
 # Two bounds, because one does not cover the other: CALL_BOUND_S caps a single hung API call, and
 # TOTAL_BOUND_S caps the loop that makes many of them. A per-call bound multiplied across a loop is
@@ -112,7 +118,7 @@ cmd_pull() {
   command -v "$GH_BIN" >/dev/null 2>&1 || bail_open "no '$GH_BIN' on PATH"
   local NWO; NWO="$(nwo)" || bail_open "origin is not a github.com remote"
 
-  g fetch -q origin main 2>/dev/null || true
+  g fetch -q origin "${REF#origin/}" 2>/dev/null || true
 
   local deadline=$(( $(date +%s) + TOTAL_BOUND_S ))
   local n_new=0 n_seen=0 n_pending=0 sha tree verdict
@@ -140,7 +146,7 @@ cmd_pull() {
       *) : ;;   # failure ⇒ write NOTHING. This producer may acquit; it may not convict.
     esac
   done <<EOF
-$(g log --format='%H %T' -n "$LIMIT" origin/main 2>/dev/null)
+$(g log --format='%H %T' -n "$LIMIT" "$REF" 2>/dev/null)
 EOF
 
   say "scanned $n_seen commit(s): $n_new new green(s), $n_pending still running"
