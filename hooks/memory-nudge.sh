@@ -101,7 +101,8 @@ fi
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
 LIMIT="${MEMORY_INDEX_LIMIT:-24985}"   # 24.4 KiB harness read limit
-HOOK_TARGET="${MEMORY_HOOK_TARGET:-115}"  # the compact-memory 'one governing rule' length
+HOOK_TARGET="${MEMORY_HOOK_TARGET:-115}"  # the compact-memory 'one governing rule' length — a FLOOR, not a target (see EFF_TARGET)
+HEADROOM_TARGET="${MEMORY_HEADROOM_TARGET:-2500}"  # compact-memory's "done" = ~2.5 KB under the limit
 BUDGET_CTX=""
 if [ -n "$MEM" ] && [ -f "$MEM" ]; then
   TOTAL=$(wc -c <"$MEM" 2>/dev/null | tr -d ' ') || TOTAL=""
@@ -188,14 +189,36 @@ if [ -n "$MEM" ] && [ -f "$MEM" ]; then
       # falls INSIDE that entry and no start offset is past the limit.
       case "$DROPPED" in ''|*[!0-9]*|0) DROPPED=1 ;; esac
       # Which lever can actually reach the target? Say so — do not make the reader derive it.
+      #
+      # DERIVE the allowance; never assert it (2026-08-10, backlog 7e2df754d0b8). 1676a681 fixed
+      # exactly this bug one position over — MAXN was computed at the aspirational 115 B and read as
+      # runway — but RECOVER kept the constant, so the LEVER verdict stayed derived-from-nothing.
+      # 115 is the OUTPUT of (limit - headroom_target - header - Sigma_prefix - N)/N on one day's
+      # file, not an input: it re-derives to 154 B at N=95 and 171 B at N=98. At N=95 with a 151 B
+      # hook average every hook is INSIDE its allowance and 0 B is recoverable, yet the constant
+      # reported ~3.6 KB of phantom excess and announced "hook LENGTH is the binding lever" — on the
+      # branch that fires only when the index is already breached, i.e. exactly when the reader most
+      # needs the true lever (MEMORY.md memory-index-compaction-economics).
+      #
+      # HOOK_TARGET keeps its job, but as a FLOOR rather than a target, so the constant can only ever
+      # make us claim LESS: above it, the derived allowance governs (hooks already inside it recover
+      # nothing); below it, we refuse to claim recovery that would require hooks shorter than one
+      # governing rule — the spec calls ~67 B/entry "below one sentence" and unreachable, so a cut
+      # to there is not a lever, it is a promise no honest pass can keep.
+      # PFX already carries one newline per entry (sed emits a line per line), and ENTRY_B carries
+      # them too, so TOTAL = header + PFX + Sigma_hook exactly — subtracting N again would double-
+      # count the newlines and understate the allowance by 1 B/entry.
+      DERIVED=$(( (LIMIT - HEADROOM_TARGET - (TOTAL - ENTRY_B) - PFX) / N ))
+      EFF_TARGET="$HOOK_TARGET"
+      [ "$DERIVED" -gt "$EFF_TARGET" ] 2>/dev/null && EFF_TARGET="$DERIVED"
       RECOVER=0
-      [ "$HOOK_AVG" -gt "$HOOK_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - HOOK_TARGET) ))
+      [ "$HOOK_AVG" -gt "$EFF_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - EFF_TARGET) ))
       if [ "$RECOVER" -ge "$OVER" ]; then
-        LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} B against the ${HOOK_TARGET} B one-governing-rule target, so shortening the $N existing hooks recovers ~${RECOVER} B — more than the ${OVER} B needed, and it deletes no rules."
+        LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} B against the ${EFF_TARGET} B allowance this index actually affords, so shortening the $N existing hooks recovers ~${RECOVER} B — more than the ${OVER} B needed, and it deletes no rules."
       elif [ "$RECOVER" -gt 0 ]; then
-        LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} B to the ${HOOK_TARGET} B target recovers only ~${RECOVER} B of the ${OVER} B needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
+        LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} B to the ${EFF_TARGET} B allowance recovers only ~${RECOVER} B of the ${OVER} B needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
       else
-        LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${HOOK_TARGET} B target), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
+        LEVER="hooks are already at ${HOOK_AVG} B (at/under the ${EFF_TARGET} B allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
       BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} B vs the ${LIMIT} B loader limit (over by ${OVER} B).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} B (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${FILING}"
     else
