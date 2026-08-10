@@ -938,7 +938,7 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   echo "$output" | grep -q 'no already-fetched origin/main' || false
 }
 
-@test "the T1/T2 ladders read sha+tree from ONE process, not a rev-parse fork per commit" {
+@test "the T1/T1H/T2 ladders read sha+tree from ONE process, not a rev-parse fork per commit" {
   # A performance change to the SELECTION path is a correctness risk, so this pins the mechanism the
   # behaviour tests above exercise: 200 x `rev-parse <sha>^{tree}` measured 2.233s against 0.011s
   # for `git log --format`, and that 200x IS the whole cost of an evaluation — the lane runs 144x/day
@@ -948,9 +948,15 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   # of this test counted the old pattern anywhere in the file and went red on deploy-live.sh's OWN
   # comment explaining the removal: a guard that forbids NAMING the defect you fixed also deletes
   # its provenance, and a text guard that cannot tell code from a comment fails in both directions.
+  # FLOOR + A PINNED ZERO, not an exact count. This assertion was `-eq 2` and went red the moment a
+  # THIRD ladder (T1H) was added that uses the one-process read CORRECTLY — an exact count over a
+  # population that is expected to grow can only fire on its own subject's growth, never on the
+  # regression it was written for (memory: exact-count-assertion-tripwires-its-own-subject). The
+  # property is "every ladder uses the cheap read AND no ladder forks per commit", so the floor
+  # tracks the ladders that exist and the zero is what actually guards the defect.
   run grep -c "^[^#]*log --format='%H %T'" "$DL"
   [ "$status" -eq 0 ]
-  [ "$output" -eq 2 ]                                   # exactly the two ladders, T1 and T2
+  [ "$output" -ge 3 ]                                   # T1, T1H and T2 — at least one per ladder
   run grep -c '^[^#]*rev-parse "\$sha^{tree}"' "$DL"
   [ "$output" -eq 0 ]                                   # and the per-commit fork is gone from the code
 }
@@ -980,4 +986,147 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   [ "$status" -eq 0 ]
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
   [ -f "$INSTALL_LOG" ]
+}
+
+# ── T1H · the SECOND green producer's tier (backlog b4f93c9fa73c) ────────────────────────────────
+# The off-box store is a SEPARATE directory from stamps/ on purpose: no consumer of stamps/ reads
+# any field but .verdict, so a subset green written there would silently become a T1 target. These
+# tests are the RED-controls for that separation and for the tier's two conjuncts.
+
+offbox_stamp() { # <rev> [scope] — write an off-box GREEN for that rev's TREE
+  local tree; tree="$(git -C "$SHARED" rev-parse "$1^{tree}")"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox"
+  printf '{"verdict":"green","tree":"%s","scope":"%s","producer":"github-actions"}\n' \
+    "$tree" "${2:-offbox-hermetic}" > "$BATS_TEST_TMPDIR/postland/offbox/$tree.json"
+}
+
+@test "H1 T1H advances on an OFF-BOX green with NO lag budget tripped, and names the reduced scope" {
+  advance_origin b c
+  offbox_stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 999 999                                # both budgets pinned OUT — T2 cannot fire
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [[ "$output" == *"HERMETIC deploy"* ]] || false
+  [[ "$output" == *"machine-coupled suites are NOT covered"* ]] || false
+  [[ "$output" != *"DEGRADED deploy"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-degraded-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "H2 CONTROL — with the off-box stamp REMOVED the identical setup refuses" {
+  # Without this, H1 proves only that the lane advanced, not that the OFF-BOX STAMP is why.
+  advance_origin b c
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 999 999
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  [[ "$output" != *"HERMETIC deploy"* ]] || false
+}
+
+@test "H3 an on-box RED on the same tree BLOCKS T1H — the subset must not overrule what it cannot see" {
+  advance_origin b c
+  offbox_stamp origin/main
+  stamp origin/main red                          # the on-box verifier judged this very tree RED
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 999 999
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  [[ "$output" != *"HERMETIC deploy"* ]] || false
+}
+
+@test "H3b CONTROL — a CUT on that tree does NOT block T1H (R6: a non-verdict is not a red)" {
+  advance_origin b c
+  offbox_stamp origin/main
+  stamp origin/main cut
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dlb 999 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
+  [[ "$output" == *"HERMETIC deploy"* ]] || false
+}
+
+@test "H4 a green WITHOUT scope:offbox-hermetic is NOT eligible for T1H" {
+  # The conflation the separate directory exists to prevent, tested at the reader: a full-corpus
+  # shaped record ({"verdict":"green"}) dropped into offbox/ must not be spendable as T1H.
+  advance_origin b c
+  local tree; tree="$(git -C "$SHARED" rev-parse "origin/main^{tree}")"
+  mkdir -p "$BATS_TEST_TMPDIR/postland/offbox"
+  printf '{"verdict":"green","tree":"%s"}\n' "$tree" > "$BATS_TEST_TMPDIR/postland/offbox/$tree.json"
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlb 999 999
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+}
+
+@test "H4b CONTROL — the same record WITH the scope field is eligible" {
+  advance_origin b c
+  offbox_stamp origin/main
+  run dlb 999 999
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HERMETIC deploy"* ]] || false
+}
+
+@test "H5 T1 still WINS over T1H — a full-corpus green outranks a subset one" {
+  advance_origin b c
+  stamp "origin/main~1"                          # b: FULL green, a descendant of live HEAD
+  offbox_stamp origin/main                       # c: off-box green, newer
+  want="$(git -C "$SHARED" rev-parse "origin/main~1")"
+  run dlb 999 999
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]        # b, not the newer off-box c
+  [[ "$output" != *"HERMETIC deploy"* ]] || false
+}
+
+@test "H6 T1H OUTRANKS T2 — positive evidence beats absence, and no degraded page is written" {
+  advance_origin b c
+  offbox_stamp "origin/main~1"                   # b is off-box green; c is unstamped everywhere
+  want="$(git -C "$SHARED" rev-parse "origin/main~1")"
+  run dlb 0 0                                    # budget wide open: T2 would take the TIP c
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]        # b — T1H's choice, not T2's tip
+  [[ "$output" == *"HERMETIC deploy"* ]] || false
+  [ "$(find "$PAGES" -name 'deploy-degraded-*.page' 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "H7 CC_DEPLOY_OFFBOX=off restores the previous ladder exactly (a switch that cannot kill is not one)" {
+  advance_origin b c
+  offbox_stamp origin/main
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 CC_DEPLOY_OFFBOX=off \
+      /bin/bash "$DL"
+  [ "$status" -ne 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ]
+  [[ "$output" != *"HERMETIC"* ]] || false
+}
+
+@test "H8 the puller is BOUNDED — a hanging pull cannot become a deploy refusal" {
+  # The add-on rule: a side-car must fail no wider than itself. A pull that hangs must cost the lane
+  # its bound and nothing else — not the evaluation, and not the advance.
+  advance_origin b c
+  offbox_stamp origin/main
+  local stub="$BATS_TEST_TMPDIR/hang-pull.sh"
+  printf '#!/bin/bash\nsleep 30\n' > "$stub"; chmod +x "$stub"
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  local t0 t1
+  t0="$(date +%s)"
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
+      CC_OFFBOX_PULL_BIN="$stub" CC_DEPLOY_OFFBOX_PULL_S=2 \
+      /bin/bash "$DL"
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ]                                       # the hang did NOT refuse the deploy
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]         # and did NOT stop the advance
+  [ "$(( t1 - t0 ))" -lt 20 ]                                # bounded well under the stub's 30s
+}
+
+@test "H9 an ABSENT puller is a no-op, not an error — the lane runs unchanged without it" {
+  advance_origin b c
+  offbox_stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
+      CC_OFFBOX_PULL_BIN="$BATS_TEST_TMPDIR/does-not-exist" /bin/bash "$DL"
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]
 }
