@@ -222,18 +222,33 @@ false-negative class. Two known instances:
 If either file ever gains `set -e` on the wrong path, or a new large-variable producer appears, the
 lint will not catch it.
 
-**Landing history — three attempts, three different causes (all diagnosed):**
+**Landing history — three failed attempts, then the land:**
 
 | # | Result | Cause |
 |---|---|---|
 | 1 | `SHIP_EXIT=6` | **Real gate-red in our own file** — a hardcoded `skipped=4` vs a sibling's newly-landed 6th default. Fixed `295851a`, sabotage-proven. The CAS re-gate caught a composed-tree defect neither branch had alone. |
 | 2 | `SHIP_EXIT=6` | **458 ok, 0 fail** — `bats` SIGKILLed (`Killed: 9`) under load 47. Not OOM (67% mem free), not proc-cap (9%), no repo `pkill`. Cause unattributed; saturation is the fleet-wide explanation. |
 | 3 | stopped by us | Fleet coordinator called a fleet-wide landing storm and asked all sessions to stand down. |
+| 4 | **LANDED `3dcac1f3`** (2026-08-09, on `origin/main`) | 20 files: the 22 live sites, `pipefail-sigpipe-lint.sh` + its 16-file allowlist, `tests/pipefail-sigpipe-lint.bats`, and the `run_gate` wiring in `ship-land.sh`. |
 
 **Triage rule earned here — an exit 6 has (at least) three distinct causes.** Grep the log
 before attributing: `'✗ gate: bats RED'` **with** `^not ok` lines = a real test failure;
 the same message with **zero** `^not ok` plus `Killed:` = an external kill under load, not
 code; a land-lock failure never presents as "bats RED" at all.
+
+**A landed remedy whose ledger row stays open re-dispatches as a phantom.** Row 4 landed on
+2026-08-09, but backlog `791345455b58` was left `claimed`, so the dispatcher kept firing workers at
+it. Each one arrived to a tree where the remedy was already present and complete, had nothing to
+commit, and could therefore only produce an *empty* land — which the rails report as a land failure
+(`spawn-fail` / rebase exit 5), not as "nothing to do". Two such cycles were recorded on the row as
+`persistent thrash … the worker cannot land`, an accusation aimed at the worker for a condition
+none of them could fix. **The land is not the last step; closing the row is** — evidence, re-verified
+2026-08-10: lint `--selftest` 24/24 both directions, the real lint clean from both the repo root and
+the live `~/.claude` path, `tests/pipefail-sigpipe-lint.bats` 14/14, and the three
+highest-consequence sites (`bin/cc-cloud` trailer gate, `hooks/git-worktree-guard.sh` cwd leg,
+`scripts/wrap-ledger.sh` `git cherry`) confirmed fixed on `origin/main` by content. The one
+deliberate deferral, `scripts/cloud-ceiling-probe.sh:167-168`, is carried separately as backlog
+`130814a95132` and is correctly **not** part of this row.
 
 **Two caveats to carry:**
 
