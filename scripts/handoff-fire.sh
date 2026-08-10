@@ -2676,22 +2676,53 @@ find_open_stamp_for_cwd() { # $1=fired-dir $2=cwd $3=self-pane → echoes "<pane
 # ⇒ the caller refuses exactly as it did before this existed. So this can only ever ADMIT a close
 # that used to be refused in the one case it can actually prove, and it never invents an admission
 # on a path it merely cannot see. CC_SELFCLOSE_ADOPT=0 disables it outright (R8).
+# transcript_for_sid — the ONE resolver from a CC session id to its transcript file.
+# $1=session-id → echoes the path, or nothing. Always rc 0.
+#
+# WHY IT EXISTS, AND WHY IT IS A FIX RATHER THAN A TIDY-UP (item c163f42390a3, measured 2026-08-10).
+# Every caller here used to test `$pdir/<sid>.jsonl` directly, on the stated reasoning that "the sid
+# names the transcript, so this is one open per account instead of a find+grep". The premise is right
+# and the PATH is wrong: Claude Code stores transcripts one level deeper, under a per-project slug —
+# `<root>/projects/<project-slug>/<sid>.jsonl`. Counted across all five account roots on this box:
+# **0 flat, 3148 nested**. So the direct test could never match, and every proof chain built on it was
+# inert in production while passing its suites, because the fixtures wrote the flat layout the code
+# was looking for (memory: control-must-replay-the-real-artifact — a fixture that agrees with the bug
+# proves the bug). That silently disabled BOTH stamp-recovery paths the origin gate documents:
+# adoption of an orphaned stamp, and the spent-stamp retry arm.
+#
+# THE COST OBJECTION DOES NOT SURVIVE THE CORRECTION. What the old comment priced was a `find + grep`
+# over CONTENT (4.6 GB, ~40 s). This is a bounded NAME lookup at a fixed depth — no file is opened —
+# and it is exactly what bin/cc-reaper's find_transcript and bin/cc-recover-safeguard already do for
+# the same question. The flat probe is kept FIRST because it costs one stat and keeps any caller or
+# fixture that really is flat working unchanged.
+transcript_for_sid() { # $1=session-id → echoes path or nothing
+  local sid="${1:-}" pdir f
+  [ -n "$sid" ] || return 0
+  case "$sid" in */*) return 0 ;; esac          # never let a sid become a path fragment
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -f "$pdir/$sid.jsonl" ] && { printf '%s' "$pdir/$sid.jsonl"; return 0; }
+  done
+  # shellcheck disable=SC2086
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] || continue
+    f="$(find "$pdir" -mindepth 2 -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1 || true)"
+    [ -n "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 0
+}
+
 fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not proven
-  local marker="${1:-}" pane="${2:-}" mysid pdir
+  local marker="${1:-}" pane="${2:-}" mysid tj
   [ -n "$marker" ] && [ -n "$pane" ] || return 1
   # The registry row is the only thing that maps THIS pane to a CC session id. A provisional row
   # carries none (measured: 10 of 19 live rows), and cc_sid_for_pane's second source heals exactly
   # that case — but when both come up empty there is no transcript to check and no proof to be had.
   mysid="$(cc_sid_for_pane "$pane")"
   [ -n "$mysid" ] || return 1
-  # Direct file test, not a tree-wide content grep: the sid names the transcript, so this is one
-  # open per account instead of a find+grep over CC_PROJECTS_DIRS (5 dirs / 4.6 GB measured, ~40s
-  # unscoped — the cost engagement_seen had to add an mtime window to survive).
-  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
-  for pdir in $CC_PROJECTS_DIRS; do
-    [ -f "$pdir/$mysid.jsonl" ] || continue
-    grep -qF -- "$marker" "$pdir/$mysid.jsonl" 2>/dev/null && return 0
-  done
+  tj="$(transcript_for_sid "$mysid")"
+  [ -n "$tj" ] || return 1
+  grep -qF -- "$marker" "$tj" 2>/dev/null && return 0
   return 1
 }
 
@@ -2733,18 +2764,16 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
 #     said later in the conversation gets a vote.
 # CC_SELFCLOSE_BRIEF_CONTRACT=0 disables the path outright (R8 kill switch), like its sibling classes.
 fired_contract_in_my_brief() { # $1=self-pane → 0 proven / 1 not
-  local pane="${1:-}" mysid pdir tj brief marker nb
+  local pane="${1:-}" mysid tj brief marker nb
   FCB_MARKER="" FCB_NOTIFYBACK=""            # deliberately NOT local — read by the caller
   [ "${CC_SELFCLOSE_BRIEF_CONTRACT:-1}" != 0 ] || return 1
   [ -n "$pane" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   mysid="$(cc_sid_for_pane "$pane")"
   [ -n "$mysid" ] || return 1
-  tj=""
-  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
-  for pdir in $CC_PROJECTS_DIRS; do
-    [ -f "$pdir/$mysid.jsonl" ] && { tj="$pdir/$mysid.jsonl"; break; }
-  done
+  # transcript_for_sid, never a hand-rolled path: the flat `$pdir/<sid>.jsonl` shape this used to
+  # assume matches NOTHING on a real box (0 flat vs 3148 nested, measured) — see its header.
+  tj="$(transcript_for_sid "$mysid")"
   [ -n "$tj" ] || return 1
   # The same extraction bin/cc-recover-safeguard uses to recover a brief — one reader, one shape.
   # `isMeta` excludes the harness's own injected turns, which is what makes ".[0]" the BRIEF and not a

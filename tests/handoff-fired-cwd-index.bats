@@ -49,6 +49,7 @@ setup() {
     sed -n '/^find_open_stamp_for_cwd() {/,/^}/p'   "$HF"
     sed -n '/^record_close_succession() {/,/^}/p'   "$HF"
     sed -n '/^cc_sid_for_pane() {/,/^}/p'           "$HF"
+    sed -n '/^transcript_for_sid() {/,/^}/p'        "$HF"
     sed -n '/^fired_marker_is_mine() {/,/^}/p'      "$HF"
     sed -n '/^adopt_orphan_stamp() {/,/^}/p'        "$HF"
   } > "$LIBSH"
@@ -56,6 +57,11 @@ setup() {
   # (memory control-must-replay-the-real-artifact).
   grep -q '^adopt_orphan_stamp() {' "$LIBSH"
   grep -q '^_fired_cwd_key() {' "$LIBSH"
+  # transcript_for_sid is fired_marker_is_mine's transcript resolver, and a MISSING extraction is a
+  # 127 under `set -e`, not a visible error — the trap this file's own subject warns about. Assert it
+  # is here, so the day someone drops the line the suite says WHY rather than failing four adoption
+  # cases with an empty `run` output.
+  grep -q '^transcript_for_sid() {' "$LIBSH"
 }
 
 # fire <pane> <cwd> [marker] — stamp a peer the way the real fire path does.
