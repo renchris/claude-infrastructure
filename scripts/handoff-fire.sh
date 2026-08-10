@@ -33,8 +33,14 @@
 #                       Keep COND a POINTER, not the brief: '<objective> — full brief in the prompt
 #                       above; DoD at <path>'. Env equivalent: FIRE_GOAL.
 #   --account A         next|next2|next3|next4|auto (default auto). auto = live-limit ranking
-#                       via `claude-accounts --rank` (5h/weekly/Fable headroom + resets + live
-#                       session spread; fable ranking when --model fable). Degrades to the
+#                       via `claude-accounts --rank` (M7: deadline-dominant urgency — the account
+#                       whose weekly quota expires soonest relative to what is left outranks, so
+#                       expiring quota is exhausted instead of stranding — × 5h-safety projected
+#                       at measured burn × WORKING-session spread (k_work, not the pane census)
+#                       + fire-time phantoms; fable ranking when --model fable). Each non-dry,
+#                       non-recycle fire records `claude-accounts --assign <acct>` post-pick, so
+#                       a burst of fires walks down the ranking inside the 90s rank cache TTL
+#                       instead of stacking onto one account's 5h window. Degrades to the
 #                       trailing-5h transcript-activity proxy ONLY when live limits are
 #                       unreadable; halts (never fires blind) when limits say NO account is
 #                       routable. Static hint orders are retired — they went stale in 48h.
@@ -5643,6 +5649,23 @@ else
     CHOSEN="$(printf '%s\n' "$NAMES" | head -1)"
   fi
   LAUNCHER="$(launcher_for "$CHOSEN")"
+fi
+
+# ---- fire-time assignment feedback (ACCOUNT_ROUTING_V2 M7) -------------------------------------
+# The rank above reads a ≤90s-cached sweep, and no sweep can see THIS session until it engages
+# and burns — so every fire inside that window saw the same rows, took the same rank[0], and
+# stacked onto one account's 5h window (measured 2026-08-10: 4 concurrent fires, one account).
+# Recording the CHOICE gives the router the decrement the cache cannot: `--assign` charges the
+# account one phantom working session for ~ASSIGN_TTL_MIN, so the NEXT fire walks down the
+# ranking. Advisory, never fatal — a lost append degrades spread by one phantom, never a fire.
+# Skipped: --dry-run (nothing launches) · --recycle (same account, no NET new session — and the
+# recycle path exits above before reaching here; the guard is belt+braces) · explicit --launcher
+# (no account NAME to charge; rare, mostly harness paths) · under bats without an opt-in stub —
+# the same rule pre_fire_account_sweep enforces, because a hermetic suite that reaches the pick
+# must never append to the operator's real ledger.
+if [ "$DRY" = 0 ] && [ "$RECYCLE" = 0 ] && [ -n "$CHOSEN" ] && [ "$CHOSEN" != "(explicit launcher)" ] \
+   && { [ -z "${BATS_TEST_TMPDIR:-}" ] || [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" = 1 ]; }; then
+  "$CC_ACCOUNTS_BIN" --assign "$CHOSEN" --src handoff-fire >/dev/null 2>&1 || true
 fi
 
 # Fable is window-gated: warn (not block — the hard gate is the API rejection) when the SSOT says

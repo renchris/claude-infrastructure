@@ -31,6 +31,12 @@ setup() {
   export CLAUDE_ACCOUNTS_JSON="$CA_CFG"
   export CLAUDE_ACCOUNTS_LASTGOOD="$CA_LEDGER"
   export YAML="$BATS_TEST_TMPDIR/model-config.yaml"
+  # M7 hermeticity: every CLI invocation now READS the utilization series (apply_burn) and the
+  # assignment ledger (apply_assignments). The fixture uses real account names, so without these
+  # pins a CLI test inherits the REAL fleet's burn rates and phantom fires — test 26's ordering
+  # flipped exactly that way. Pin both into the sandbox; module-level cases pass path= explicitly.
+  export CC_UTIL_LOG="$BATS_TEST_TMPDIR/util-series.jsonl"
+  export CC_ASSIGN_LOG="$BATS_TEST_TMPDIR/assign-ledger.jsonl"
   rm -f "$CA_LEDGER" "$CACHE"
   python3 - "$CA_CFG" "$CACHE" "$CA_SSOT" "$YAML" <<'PY'
 import json, sys
@@ -1413,4 +1419,203 @@ assert "is the pick, but its login EXPIRED" in out, out
 assert "login exp" not in render(500.0).lower(), render(500.0)
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]]
+}
+
+# ---- router M7: utilization-pressure terms (spread + exhaust-by-deadline) ---------------------
+# Every fixture here is the FROZEN 2026-08-10 live snapshot that motivated M7: next3 held the
+# fleet's soonest-expiring quota (weekly 81%, reset 27.8h) and was excluded on a 28-pane census
+# while its 5h window sat at 60%; next2 (weekly 13%, reset 122.8h) won every fire.
+
+@test "router M7: deadline-dominant urgency routes the strand case to the expiring account; γ=1 restores linear" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_URGENCY_EXP", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+n3 = row(acct="next3", session_pct=60, session_reset_h=4.1, weekly_pct=81,
+         weekly_reset_h=27.8, k=28, k_work=2)
+n2 = row(acct="next2", session_pct=18, session_reset_h=1.8, weekly_pct=13,
+         weekly_reset_h=122.8, k=0, k_work=0)
+s3, w3 = ca.score_general(n3, cfg); s2, w2 = ca.score_general(n2, cfg)
+assert w3 is None and w2 is None, (w3, w2)
+# the goal, as an ordering: the account whose quota strands TOMORROW outranks the one with
+# 5 days of runway — even carrying 60% 5h usage and 2 working sessions
+assert s3 > s2, (s3, s2)
+# γ=1 is the exact pre-M7 linear form, and under it the ordering INVERTS — pinning both that
+# the kill switch works and that the old math had the defect M7 names
+os.environ["CC_ROUTE_URGENCY_EXP"] = "1"
+l3 = ca.score_general(n3, cfg)[0]; l2 = ca.score_general(n2, cfg)[0]
+assert l2 > l3, (l2, l3)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: the router charges WORKING sessions, with the pane census as fail-closed fallback" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_URGENCY_EXP", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+# 28 idle panes are not burn: routable with 2 working sessions
+assert ca._excluded(row(k=28, k_work=2), R) is None
+# 8 WORKING sessions are the pile-up KMAX exists for
+assert ca._excluded(row(k=2, k_work=R["KMAX"]), R) == "kmax-concurrency"
+# an old cache row (no k_work) degrades to the STRICTER census, never to zero
+assert ca._excluded(row(k=R["KMAX"], k_work=None), R) == "kmax-concurrency"
+assert ca.k_eff(row(k=5, k_work=None)) == 5
+# kill switch restores census charging even when k_work is present
+os.environ["CC_ROUTE_KWORK"] = "off"
+assert ca._excluded(row(k=R["KMAX"], k_work=0), R) == "kmax-concurrency"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: fire-time phantoms demote inside the cache TTL and can exclude at KMAX" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_URGENCY_EXP", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+base = ca.score_general(row(k_work=0), cfg)[0]
+burst = ca.score_general(row(k_work=0, k_phantom=3), cfg)[0]
+assert burst < base, (burst, base)
+# phantoms count toward the concurrency cap: a burst can fill an account to KMAX
+assert ca._excluded(row(k_work=6, k_phantom=2), R) == "kmax-concurrency"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: assignment ledger — record, TTL expiry, malformed lines, prune" {
+  run python3 -c "$LOAD"'
+import json, os, time
+os.environ.pop("CC_ROUTE_ASSIGN", None); os.environ.pop("CC_ROUTE_ASSIGN_TTL_MIN", None)
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "assign.jsonl")
+assert ca.record_assignment(cfg, "next3", src="test", path=p) is None
+assert ca.record_assignment(cfg, "next3", path=p) is None
+assert ca.record_assignment(cfg, "next2", path=p) is None
+with open(p, "a") as f:
+    f.write(json.dumps({"t": time.time() - 3600, "acct": "next3"}) + "\n")  # expired
+    f.write("not json\n")                                                    # malformed
+    f.write(json.dumps({"acct": "next3"}) + "\n")                            # no stamp
+c = ca.assignment_counts(cfg, path=p)
+assert c == {"next3": 2, "next2": 1}, c
+# rows carry the live counts (apply_assignments is what main() runs per invocation)
+rows = [dict(acct="next3"), dict(acct="next2"), dict(acct="next")]
+ca.ASSIGN_PATH, keep = p, ca.ASSIGN_PATH
+try:
+    ca.apply_assignments(rows, cfg)
+finally:
+    ca.ASSIGN_PATH = keep
+assert [r["k_phantom"] for r in rows] == [2, 1, 0], rows
+# kill switch: the reader goes silent, spread degrades to pre-M7
+os.environ["CC_ROUTE_ASSIGN"] = "off"
+assert ca.assignment_counts(cfg, path=p) == {}
+os.environ.pop("CC_ROUTE_ASSIGN")
+# prune: crossing the threshold rewrites to the newest half, then growth resumes — so after
+# threshold+1 more appends the file is far below the total ever written and never above the
+# threshold by more than the appends since the last cut (exact-count assertions here would
+# tripwire on their own growth — exact-count-assertion memo)
+appended = ca.ASSIGN_PRUNE_LINES + 1
+for i in range(appended):
+    assert ca.record_assignment(cfg, "next2", path=p) is None
+n = sum(1 for _ in open(p))
+assert n < appended, (n, appended)                    # a prune happened
+assert n <= ca.ASSIGN_PRUNE_LINES, (n, ca.ASSIGN_PRUNE_LINES)  # and the bound holds
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: 5h projection softens at measured burn, capped at the window reset; soften-only" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_URGENCY_EXP", "CC_ROUTE_KWORK", "CC_ROUTE_ASSIGN", "CC_ROUTE_PROJ",
+          "CC_ROUTE_PROJ_LOOKAHEAD_H"):
+    os.environ.pop(v, None)
+# 18% now, burning 50%/h with 2h of window left: projects to 68% inside the 1h lookahead
+soft = ca._soft(row(session_pct=18, session_reset_h=2.0, burn_5h_ph=0.5, k=0, k_work=0), R)
+base = ca._soft(row(session_pct=18, session_reset_h=2.0, k=0, k_work=0), R)
+assert soft < base <= 1.0, (soft, base)
+# the reset caps the projection: 12min of runway accrues 0.1, not a full lookahead
+capped = ca._soft(row(session_pct=18, session_reset_h=0.2, burn_5h_ph=0.5, k=0, k_work=0), R)
+assert capped == base, (capped, base)
+# soften-only BY CONSTRUCTION: projection must never trip the 5h-cutoff exclusion
+assert ca._excluded(row(session_pct=50, session_reset_h=3.0, burn_5h_ph=5.0), R) is None
+# kill switch
+os.environ["CC_ROUTE_PROJ"] = "off"
+assert ca._soft(row(session_pct=18, session_reset_h=2.0, burn_5h_ph=0.5, k=0, k_work=0), R) == base
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: apply_burn derives rates from the utilization series; a rolled window reads as unknown" {
+  run python3 -c "$LOAD"'
+import json, os, time
+from datetime import datetime, timezone, timedelta
+p = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util.jsonl")
+now = datetime.now(timezone.utc)
+def w(mins_ago, acct, sp, wp, stale=False):
+    with open(p, "a") as f:
+        f.write(json.dumps({"ts": (now - timedelta(minutes=mins_ago)).isoformat(),
+                            "acct": acct, "session_pct": sp, "weekly_pct": wp,
+                            "stale": stale}) + "\n")
+w(24 * 60, "next3", 5, 10)          # 24h ago — weekly span anchor
+w(30, "next3", 10, 24)              # 30min ago
+w(0, "next3", 40, 25)               # now: 5h 10→40 over 30min = 0.6/h; weekly 10→25 over 24h
+w(30, "next2", 80, 50)
+w(0, "next2", 10, 50)               # 5h fell 80→10: the window ROLLED — no rate
+w(30, "next4", 10, 10, stale=True)  # stale rows carry no measurement
+w(0, "next4", 40, 10)
+rows = [dict(acct="next3"), dict(acct="next2"), dict(acct="next4")]
+ca.apply_burn(rows, cfg, samples=ca._util_tail(path=p))
+r3, r2, r4 = rows
+assert abs(r3["burn_5h_ph"] - 0.6) < 0.05, r3
+assert abs(r3["burn_wk_ppd"] - 15.0) < 1.0, r3
+assert "burn_5h_ph" not in r2, r2
+assert "burn_5h_ph" not in r4, r4   # one sample after the stale drop = no pair
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "router M7: pace line — need per account soonest-first, recent rate only when measured" {
+  run python3 -c "$LOAD"'
+n3 = row(acct="next3", weekly_pct=81, weekly_reset_h=27.8)
+n2 = row(acct="next2", weekly_pct=13, weekly_reset_h=122.8, burn_wk_ppd=9.0)
+line = ca.pace_line([n2, n3])
+assert line.startswith("pace to 100%: next3 "), line     # soonest reset first, regardless of input order
+assert "next2 17%/d" in line, line
+assert "recent 9%/d — BEHIND" in line, line              # measured < needed ⇒ flagged
+assert "recent" not in line.split("·")[0], line          # no series span for next3 ⇒ no claim
+# no data ⇒ no line (a pace line over nothing would render at every error state)
+assert ca.pace_line([row(weekly_pct=None), row(weekly_reset_h=None)]) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--assign CLI: appends one ledger row and never sweeps; unknown account exits 64" {
+  local ledger="$BATS_TEST_TMPDIR/assign-cli.jsonl"
+  # the fixture endpoint is unreachable — if --assign tried a sweep this would hang/fail loudly
+  CC_ASSIGN_LOG="$ledger" run python3 "$CA_BIN" --assign next3 --src harness
+  [ "$status" -eq 0 ] || { echo "rc=$status out=$output"; false; }
+  [ -z "$output" ] || { echo "rc=$status out=$output"; false; }
+  run python3 - "$ledger" <<'PY'
+import json, sys, time
+rows = [json.loads(l) for l in open(sys.argv[1])]
+assert len(rows) == 1, rows
+r = rows[0]
+assert r["acct"] == "next3" and r["src"] == "harness", r
+assert isinstance(r["t"], float) and abs(time.time() - r["t"]) < 60, r
+assert "ts" in r, r
+print("OK")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  CC_ASSIGN_LOG="$ledger" run python3 "$CA_BIN" --assign nosuch
+  [ "$status" -eq 64 ]
+  [[ "$output" == *"--assign requires an account name"* ]] || { echo "$output"; false; }
+  # the bad call must not have appended
+  [ "$(wc -l < "$ledger")" -eq 1 ]
 }

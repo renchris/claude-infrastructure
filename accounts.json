@@ -37,7 +37,7 @@
     "credits_authorized": false
   },
   "router": {
-    "_": "Verified scoring constants (design->judge->5 adversarial verifiers, 2026-07-04; see resume-sessions REFERENCE.md section 6). KMAX raised 4 -> 8 on 2026-07-10: the old counter only saw --resume sessions (k<=1); the fixed counter sees ALL live sessions (observed 5-6 on primary accounts as deliberate operator practice), so KMAX=4 would have hard-excluded the priority accounts.",
+    "_": "Verified scoring constants (design->judge->5 adversarial verifiers, 2026-07-04; see resume-sessions REFERENCE.md section 6). KMAX raised 4 -> 8 on 2026-07-10: the old counter only saw --resume sessions (k<=1); the fixed counter sees ALL live sessions (observed 5-6 on primary accounts as deliberate operator practice), so KMAX=4 would have hard-excluded the priority accounts. M7 additions 2026-08-10 (ACCOUNT_ROUTING_V2 M7, all OPTIONAL — code defaults match): URGENCY_EXP = deadline exponent (score = headroom/T^g; 1 restores linear — the live 2026-08-10 snapshot scored {19% left, resets 27.8h} BELOW {87% left, resets 122h} under linear, starving the expiring account); KWORK_WINDOW_MIN = transcript-mtime minutes that count a session as WORKING (k_work replaces the pane census in KMAX/KF — census read k=28 on an account whose 5h window sat at 60%, i.e. panes are not burn); ASSIGN_TTL_MIN = minutes a fire-time --assign counts as a phantom working session (burst fires spread inside the 90s cache TTL instead of stacking on rank[0]); PROJ_LOOKAHEAD_H = hours SF projects 5h burn ahead (capped at the 5h reset; soften-only).",
     "S_CUT": 0.85,
     "S_SOFT": 0.5,
     "SF_FLOOR": 0.05,
@@ -48,7 +48,11 @@
     "NO_RESET_H": 168.0,
     "WEEKLY_FLOOR": 0.005,
     "FABLE_FLOOR": 0.02,
-    "JB_BONUS": 1.25
+    "JB_BONUS": 1.25,
+    "URGENCY_EXP": 2.0,
+    "KWORK_WINDOW_MIN": 10,
+    "ASSIGN_TTL_MIN": 15,
+    "PROJ_LOOKAHEAD_H": 1.0
   },
   "accounts": [
     {

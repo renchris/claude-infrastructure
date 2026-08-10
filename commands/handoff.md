@@ -343,7 +343,10 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
 
 **2 · Account → launcher.** Explicit user choice wins. Else `--account auto` ranks by **live
 limits**: `claude-accounts --rank general|fable` (fable when `--model fable`) — real 5h/weekly/
-Fable headroom, reset urgency, and live session spread from the oauth usage endpoint, shared-cached
+Fable headroom, DEADLINE-DOMINANT reset urgency (M7: headroom/T², so the account whose weekly
+quota expires soonest relative to what is left outranks — use-it-or-lose-it), working-session
+spread (k_work + fire-time phantoms, not the pane census), and projected 5h safety — all from
+the oauth usage endpoint, shared-cached
 90s so waves don't stampede it (SSOT: `~/.claude/accounts.json`; dashboard: `/accounts`). If the
 rank says NO account is routable (policy: exhausted/cutoff/window), the fire HALTS — never fire
 blind. Only when live limits are UNREADABLE (tool/endpoint down) does it degrade to the trailing-5h
@@ -495,12 +498,15 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
 - One `/tmp/fire-<slug>.txt` + one script call per track, invoked back-to-back serially. Serial calls
   are NOT a bottleneck: each call only does the racy `git worktree add` (fast, race-safe when serial);
   the ~16-19s `pnpm install`s run INSIDE the panes and overlap — wall-clock ≈ one setup, not N.
-- **Account spread is the lead's job, not `--account auto`'s:** auto ranks per call from a 90s
-  shared cache and cannot see tracks that haven't STARTED yet, so a rapid wave on auto would pile
-  every track onto the same top-ranked account. Rank once — `claude-accounts --rank general` (or
-  any `--dry-run` prints it) — then assign explicitly round-robin down that ranking, ≤2 tracks per
-  account. If a track rate-limits mid-flight, `/exit` and relaunch the SAME worktree on another
-  account (no rework; the worktree is account-agnostic).
+- **`--account auto` self-spreads a wave now (M7, 2026-08-10)** — the old rule here ("spread is
+  the lead's job; a rapid wave on auto piles every track onto the same top-ranked account") was
+  true of the 90s-cache blindness and is retired: every non-dry fire records
+  `claude-accounts --assign <acct>` at pick time, and the router charges those phantoms as
+  working sessions for ~15min, so back-to-back auto fires walk DOWN the ranking by themselves
+  (and the ranking itself now charges WORKING sessions, not the pane census, softened by
+  projected 5h burn). Explicit round-robin remains fine for pinning a wave's shape by hand, but
+  it is no longer load-bearing. If a track rate-limits mid-flight, `/exit` and relaunch the SAME
+  worktree on another account (no rework; the worktree is account-agnostic).
 - **Surfaces at wave scale:** every surface (`--split-right`/`--split-down`/`--tab`) anchors to the
   pane you fired from (via `$ITERM_SESSION_ID`), so the whole wave lands in YOUR window. Consecutive
   `--split-right` calls build a teammate-grid there — comfortable to ~3-4 panes; beyond that give each

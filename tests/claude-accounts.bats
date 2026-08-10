@@ -19,6 +19,11 @@ setup() {
   export CACHE="$BATS_TEST_TMPDIR/cache.json"
   export CLAUDE_ACCOUNTS_JSON="$CA_CFG"
   export CLAUDE_ACCOUNTS_LASTGOOD="$CA_LEDGER"
+  # M7: CLI invocations read the utilization series + assignment ledger (apply_burn /
+  # apply_assignments); the fixture reuses real account names, so unpinned paths inherit the
+  # REAL fleet's rates. Same pins as claude-accounts-core.bats setup().
+  export CC_UTIL_LOG="$BATS_TEST_TMPDIR/util-series.jsonl"
+  export CC_ASSIGN_LOG="$BATS_TEST_TMPDIR/assign-ledger.jsonl"
   rm -f "$CA_LEDGER" "$CACHE"
   # scratch SSOT: one account whose config_dir hashes to a keychain service that does not exist
   # ⇒ read_creds returns no-keychain-item ⇒ logged-out, fully offline + deterministic.
