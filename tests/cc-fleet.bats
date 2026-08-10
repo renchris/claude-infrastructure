@@ -576,8 +576,16 @@ STUB
   # the coverage loop is the only leg that catches it, and it can only fire POST-land — the smoke
   # mostly reads `smoke:"skipped"` under R7 load-shed, and `gate-select.sh --direct` naming this
   # suite was never the gap either. postland-verify → backlog caught it exactly as designed.
-  if [ "$n" != 28 ]; then
-    echo "manifest declares $n labels, expected 28 — if a plist was legitimately added or retired,"
+  # 29 since 2026-08-10: com.claude.auth-timeseries (MASTER M6, backlog b22e519e06cb, `staged`) —
+  # plist, manifest row and this count in ONE commit, which is the shape the paragraphs above keep
+  # asking for. Note what that costs and what it buys: because the count moved WITH the addition,
+  # this suite is GREEN on the landing commit, so postland-verify has nothing to catch and no
+  # backlog row is minted. The three entries above each describe the net catching a miss; this one
+  # is the case where the net never had to fire, and it is only distinguishable from "the check is
+  # asleep" because the coverage loop below runs over the same manifest and would red on a plist
+  # with no row. Do NOT read a quiet ratchet as a weak one.
+  if [ "$n" != 29 ]; then
+    echo "manifest declares $n labels, expected 29 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
