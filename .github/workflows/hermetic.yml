@@ -235,8 +235,15 @@ jobs:
           # (scripts/offbox-green-pull.sh reads it through the check-runs endpoint). It is BINARY on
           # purpose: this producer may emit a green or emit nothing, and `red` vs `cut` is a
           # distinction it has no standing to publish as a claim about the tree.
-          if [ "${{ steps.fold.outputs.verdict }}" = "green" ] \
-             && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+          # GREEN iff the fold says green — no second predicate. An earlier version also required
+          # `event_name != workflow_dispatch`, meaning to stop a CENSUS minting a green; it instead
+          # made every manual re-run unable to go green even when the partition was clean, which is
+          # the one thing an operator re-runs it for. The census cannot mint a green on its own
+          # merits anyway: it runs the excluded suites too, and those are excluded because they are
+          # not green. If a census ever DOES come back all-green, that is a superset of the
+          # partition passing, which legitimately implies the subset passed — a real green, and the
+          # signal that the exclusion list has rotted and should shrink.
+          if [ "${{ steps.fold.outputs.verdict }}" = "green" ]; then
             echo "GREEN — the hermetic partition is clean off-box"
             exit 0
           fi
