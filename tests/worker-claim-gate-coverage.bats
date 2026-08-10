@@ -25,11 +25,29 @@
 # went RED; case 02 was re-run with the gate block moved BELOW the state-file early exit and went
 # RED while every other case stayed green — so it observes position, not presence. Case 05's
 # mutation control is inline.
+#
+# RED-PROOF for the SECOND enforcement point, cases 09-13 (recorded 2026-08-10, backlog
+# 5deb4418a648), by the same two mutations applied to hooks/agent-teams-enforce.sh:
+#   M1 the invocation commented out         → 09, 10, 13 RED   (11, 12 green — they test other axes)
+#   M2 the whole block moved BELOW the       → 10 RED, 09 green — so 10 observes POSITION, with the
+#      capacity term, call left intact          call fully present: gate 113→187 vs capacity 183→79
+#   M3 the deny sentence reworded            → 11, 13 RED
+# M1 is what CAUGHT case 10's first draft, which used a bare `lineno … 'cc_worker_claim_admit
+# agent-tool'` and stayed GREEN against a commented-out call — the same non-call-matching-a-call
+# error case 01 records, arriving one hook later. The predicate is now anchored to a statement start.
+# Case 12's predicate was likewise caught by its own first run: it asserted `"basis":"absent"` (JSON)
+# against a file that writes `basis:"absent"` (jq object construction), and went RED on the subject
+# it was meant to certify.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LIB="$REPO/scripts/lib/worker-claim-gate.sh"
   HOOK="$REPO/hooks/check-edit-boundary.sh"
+  # The SECOND enforcement point (backlog 5deb4418a648). HOOK stops a duplicate corrupting the
+  # worktree; HOOK2 stops it spending the fleet. Both are already-registered hooks — HOOK on
+  # PreToolUse|Write|Edit|MultiEdit, HOOK2 on PreToolUse|Agent — so neither needed a settings.json
+  # entry, which is the C10 hand-step that leaves gates rotting in the activation queue.
+  HOOK2="$REPO/hooks/agent-teams-enforce.sh"
   DETECT="$REPO/hooks/session-register.sh"
   # HERMETIC $HOME even though every case here only READS the tree. The subjects default their state
   # dir, IDL and cc-backlog resolution to $HOME, so any case added later that actually RUNS one of
@@ -158,6 +176,117 @@ lineno() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
     [ "$(grep -c "_cc_wclaim_emit refuse $basis" "$LIB")" -eq 0 ]
   done
   grep -A2 'verdict=noop-live-claimer\*)' "$LIB" >/dev/null
+}
+
+@test "09 the SPAWN surface carries the gate too — the cost this item measured is fan-out, not writes" {
+  # WHY A SECOND POINT. The write gate (cases 01-03) is blind to the whole cost until after it is
+  # paid: a worker orients BEFORE it edits, so a duplicate's subagents are all spawned upstream of
+  # its first Write. The 2026-08-07 lineage reconstructed from logs/pane-spawns.jsonl is three
+  # generations and 91+ sessions in ONE worktree; the filed item's own cost line is "one full worker
+  # slot plus its subagents". Same library, same lease, second consumer.
+  [ -f "$HOOK2" ]
+  # A REAL INVOCATION, by the same predicate case 01 uses and for the same reason — the `command -v`
+  # existence probe must not be able to satisfy it.
+  [ "$(grep -cE '^[[:space:]]*cc_worker_claim_admit [a-z]' "$HOOK2")" -ge 1 ]
+  grep -q 'command -v cc_worker_claim_admit' "$HOOK2"
+  # ALREADY REGISTERED, never a new file (the C10 / pending-activation argument, verbatim from 01)
+  grep -qE 'PreToolUse hook on Agent tool|Matcher: *Agent' "$HOOK2"
+  # a DISTINCT caller id from the write gate: the caller keys the admit cache, and one shared key
+  # would let a cached write-admit silently vouch for a spawn (and vice versa)
+  grep -q 'cc_worker_claim_admit agent-tool' "$HOOK2"
+  [ "$(grep -c 'cc_worker_claim_admit edit-boundary' "$HOOK2")" -eq 0 ]
+}
+
+@test "10 the spawn gate runs BEFORE the capacity term and before every policy exit" {
+  # POSITION, not presence — case 02's lesson on the other hook. This one has a specific ordering
+  # claim to defend: the duplicate term must precede the CAPACITY term, because capacity's refusal
+  # is TRANSIENT ("shed and retry") while this one is TERMINAL ("stand down"). A duplicate handed
+  # the transient sentence is told to come back, when the correct answer is that it must never run.
+  # ANCHORED ON A REAL CALL, not on any mention. A first draft used a bare
+  # `lineno "$HOOK2" 'cc_worker_claim_admit agent-tool'` and stayed GREEN when the invocation was
+  # commented out — the mutation control below found it. A position case that a `#` satisfies is
+  # measuring the position of a comment, which is case 01's lesson arriving one hook later. The
+  # pattern requires the call to begin its own statement, so a leading `#` cannot be absorbed.
+  gate="$(lineno "$HOOK2" '^[[:space:]]*cc_worker_claim_admit agent-tool')"
+  cap="$(lineno "$HOOK2" '^[[:space:]]*if ! CC_ADMIT_LOAD_TERM=off cc_capacity_admit')"
+  budget="$(lineno "$HOOK2" '_sb_max=')"
+  [ -n "$gate" ]; [ -n "$cap" ]; [ -n "$budget" ]
+  [ "$gate" -lt "$cap" ]
+  [ "$gate" -lt "$budget" ]
+  # and it must sit BELOW the single stdin drain, or it reads an empty pipe (case 03's property)
+  input="$(lineno "$HOOK2" '^INPUT=\$(cat)')"
+  [ -n "$input" ]; [ "$input" -lt "$gate" ]
+  [ "$(grep -c '^INPUT=\$(cat)' "$HOOK2")" -eq 1 ]
+}
+
+@test "11 the spawn refusal uses the deny schema and names a drivable action" {
+  block="$(sed -n "/DUPLICATE WORKER — subagent spawn refused/p" "$HOOK2")"
+  [ -n "$block" ]
+  printf '%s' "$block" | grep -q 'DO NOT retry'
+  printf '%s' "$block" | grep -q 'self-close'
+  printf '%s' "$block" | grep -q 'CC_WCLAIM_GATE=off'
+  # the deny verdict itself, in the PreToolUse schema
+  grep -q 'permissionDecision: *"deny"' "$HOOK2"
+}
+
+@test "12 an ABSENT library leaves the Agent hook's OTHER guards armed, and says so in the ledger" {
+  # The fall-through contract (case 08) applied to the second point. An unreachable library must not
+  # be able to disarm the model allowlist / brief cap / depth cap that share this hook.
+  grep -q 'command -v cc_worker_claim_admit' "$HOOK2"
+  refute_match "$(grep -A3 'for _wcg in' "$HOOK2")" 'exit 1'
+  first="$(grep -A1 'for _wcg in' "$HOOK2" | head -1)"
+  printf '%s' "$first" | grep -q 'dirname "\$_ateh_wcg_self"'
+  # and inertness is LOUD IN THE LEDGER — a silent admit is how a gate ships dead
+  refute_match "$(grep -A6 'command -v cc_worker_claim_admit' "$HOOK2")" 'echo .*UNGATED.*>&2'
+  # jq OBJECT-CONSTRUCTION form, not JSON: the keys are bare in the source (`basis:"absent"`), and a
+  # `"basis":"absent"` predicate matches the emitted line but not the file that emits it. Anchored on
+  # the gate name so it cannot be satisfied by the capacity term's own absent-row beside it.
+  grep -q 'gate:"worker-claim-gate",verdict:"admit",basis:"absent",caller:"agent-tool"' "$HOOK2"
+}
+
+@test "13 END-TO-END: the Agent hook actually DENIES a spawn from a session that lacks the lease" {
+  # The only case in this suite that RUNS a hook. Cases 09-12 prove the call is present and placed;
+  # this proves the whole chain executes — hook -> library -> actuator verdict -> deny JSON. It is
+  # the difference the suite header names: a correct decision behind a dead branch is
+  # indistinguishable from no decision at all.
+  wt="$BATS_TEST_TMPDIR/wt/wt-aaaaaaaaaaaa"; mkdir -p "$wt"
+  fake="$BATS_TEST_TMPDIR/fake-backlog"
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; aaaaaaaaaaaa is held by Chriss-MacBook-Pro-3-999999, which is LIVE"
+exit 4
+EOF
+  chmod +x "$fake"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"prompt\":\"research the thing\",\"subagent_type\":\"Explore\"}}' | bash '$HOOK2'"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecision')" = "deny" ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q 'DUPLICATE WORKER'
+
+  # CONTROL 1 — the SAME hook, the SAME payload, with the lease held BY THIS SESSION: must ADMIT.
+  # Without this the deny above could be an unconditional refusal of every Agent call in a wt- dir.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: verdict=noop-already-ours"
+exit 0
+EOF
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$wt\",\"session_id\":\"s1\",\"tool_input\":{\"prompt\":\"research the thing\",\"subagent_type\":\"Explore\"}}' | bash '$HOOK2'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 2 — a session that is NOT in a dispatch worktree is not our population at all, whatever
+  # the ledger would have said. This is the forkless not-a-worker branch, and it is the one that
+  # keeps the gate off the hot path for every ordinary session on the box.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; held by someone-else, which is LIVE"
+exit 4
+EOF
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" \
+      bash -c "printf '%s' '{\"cwd\":\"$BATS_TEST_TMPDIR\",\"session_id\":\"s1\",\"tool_input\":{\"prompt\":\"research the thing\",\"subagent_type\":\"Explore\"}}' | bash '$HOOK2'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
 }
 
 @test "08 an ABSENT library falls through — it must not disarm the hook's other guard" {

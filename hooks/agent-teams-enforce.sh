@@ -29,6 +29,110 @@ PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // empty')
 SUBAGENT_TYPE=$(echo "$INPUT" | jq -r '.tool_input.subagent_type // empty')
 MODEL=$(echo "$INPUT" | jq -r '.tool_input.model // empty')
 
+# ── DUPLICATE-WORKER ADMISSION ────────────────────────────────────────────────────────────────
+# The SECOND consumer of the duplicate-worker lease (backlog 5deb4418a648). The first
+# (hooks/check-edit-boundary.sh, PreToolUse|Write|Edit|MultiEdit) stops a duplicate from CORRUPTING
+# the worktree. This one stops it from SPENDING THE FLEET — a different cost, on an earlier event.
+#
+# WHY A SECOND POINT AT ALL. scripts/lib/worker-claim-gate.sh sited itself at the write because the
+# repo's own incident log says *"the collision becomes real when either starts writing"*. That is
+# true of damage to the REPO and false of damage to the BUDGET, and the budget is what the filed
+# item measures: *"one full worker slot plus its subagents"*, on a duplicate that *"spawned 5
+# analysis subagents before detecting the duplication"*. The gate's own header records the extreme
+# of the same shape — *"the population arrived by Agent-tool fan-out instead — 224 spawns over 3
+# generations"*. Fan-out PRECEDES the first write in a worker's normal order (orient, then edit), so
+# a write-only gate is by construction blind to the whole cost until after it has been paid.
+#
+# WHY HERE AND NOT AT THE FIRE — the filed item blamed the dispatcher, and the journals acquit it.
+# Reconstructed 2026-08-10 from the surviving logs of the 2026-08-07 incident on item 149789b69fc4:
+# `logs/dispatch-fires.log` holds exactly ONE record for that item (22:20:54Z, pid 17968, matching
+# its single ledger claim at 22:20:16Z), and `cc-fired/by-cwd/` was never overwritten, so nothing
+# re-entered handoff-fire's front door for that worktree. One claim, one fire, one worker. What the
+# item counted as a second dispatch — "worker 13189 fired 22:20:40Z (+24s)" — is that same worker's
+# own process start, i.e. fire latency, not a second fire.
+#
+# The duplicates were a RECURSIVE TEAMMATE CASCADE. `logs/pane-spawns.jsonl` records the lineage:
+# the dispatched worker (claude 13189, pane 499) split six panes; one of those (claude 51435) split
+# six more; one of THOSE became the item's "worker 34512" at 22:28:27Z, which split five more —
+# three generations, 91+ full CLI sessions in ONE worktree in ~38 minutes. Every row carries
+# `chain:"it2-kitty"`, bare, where a real fire stamps `chain:"handoff-fire.sh>it2-kitty"`: these
+# spawns go around the door that does the claim bookkeeping. That is the item's own sentence — "the
+# lease cannot refuse what never calls claim" — with the actor corrected from the dispatcher to the
+# Agent tool, which is the surface this hook already sits on.
+#
+# WHY THE TWO CAPS BELOW CANNOT SEE IT, though they were built for the same 224-spawn blow-up.
+# `CC_SPAWN_MAX_DEPTH` reads the harness's own `spawnDepth` and `CC_SPAWN_MAX_PER_SESSION` charges a
+# per-SESSION counter — and every step of this cascade crosses a session boundary. A pane-backed
+# teammate is a new CLI session: it has no parent agent meta, so it "reads as the top level" (:238)
+# at depth 0, with a fresh budget of 60. Both counters RESET at exactly the edge the cascade
+# traverses, so 91 sessions can each stay perfectly inside a cap of 2 and 60. The item lease does
+# not reset — it is one id across all 91 — which is why identity is the instrument that sees this
+# and quantity is not. The caps bound one lineage's width; this bounds whether the lineage was ever
+# entitled to exist.
+#
+# The consequence is that the recursion terminates at generation 2: the lease HOLDER still fans out
+# normally (it reclaims as `noop-already-ours`), and every session it spawns into its own worktree
+# is refused the moment IT tries to fan out further. Deliberately not stronger — refusing the
+# holder's own first generation would break ordinary Agent Teams use, and the runaway measured here
+# is the recursion, not the first fan-out.
+#
+# Keying on the lease rather than on a list of spawn sites is also what keeps this from becoming a
+# denylist over spellings of "a session arrives" (memory `denylist-enumerates-spellings-not-the-
+# class`): a same-day census found four other paths that fire with no claim, and the largest
+# producer has no shell file to patch at all, because it is the model calling `Agent`. Every arrival
+# path, present and future, converges on one observable — a session running in `wt-<id>` that does
+# not hold the lease — and that is what the library already keys on.
+#
+# WHY IT PRECEDES THE CAPACITY TERM BELOW, which is otherwise this hook's first act:
+#   · COST — the not-a-worker branch is forkless by construction (parameter expansion only), and
+#     the overwhelming majority of Agent calls on this box are not in a dispatch worktree. Capacity
+#     forks to measure the machine. Cheapest correct refusal first.
+#   · TRUTH — capacity's refusal is TRANSIENT ("shed and retry, it releases on budget expiry"); this
+#     one is TERMINAL ("you are the duplicate, stand down"). Handing a duplicate the transient
+#     sentence tells it to come back, when the correct answer is that it must never run. The
+#     identity fact outranks the resource fact, so it is answered first.
+#
+# NO REFUSAL BUDGET, inherited deliberately from the library and NOT from capacity-admit beside it:
+# a capacity refusal denies a machine state that admitting can relieve, whereas admitting here MINTS
+# the second worker this exists to prevent. The bound lives in the lease (incumbent dies, or
+# `cc-backlog reap` ages the claim out), which is the only thing that knows when the fact stops
+# being true. Same resolution order and same fall-through contract as the capacity term below —
+# symlink-resolved sibling FIRST, so the term goes live on the trunk fast-forward rather than
+# waiting behind a deploy it cannot trigger (the deployed-layer-bootstrap-circle).
+_ateh_wcg_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+for _wcg in "$(dirname "$_ateh_wcg_self")/../scripts/lib/worker-claim-gate.sh" \
+            "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/worker-claim-gate.sh" \
+            "${HOME:-}/.claude/scripts/lib/worker-claim-gate.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  [ -f "$_wcg" ] && . "$_wcg" 2>/dev/null && break
+done
+if command -v cc_worker_claim_admit >/dev/null 2>&1; then
+  _ateh_cwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+  [ -n "$_ateh_cwd" ] || _ateh_cwd="$PWD"
+  CC_WCLAIM_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')" \
+    cc_worker_claim_admit agent-tool "$_ateh_cwd" "${SUBAGENT_TYPE:-subagent} spawn" || {
+      jq -n --arg r "$(cc_worker_claim_reason)" \
+            --arg i "$(cc_worker_claim_item)" \
+            --arg h "$(cc_worker_claim_holder)" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: ("DUPLICATE WORKER — subagent spawn refused. This session does not hold the lease on item \($i). \($r). Another LIVE session (\($h)) is doing this work right now, and fanning out multiplies the duplication instead of discovering it: one dispatch that fanned out from a duplicate reached 224 spawns over 3 generations, and a second reached 5 analysis subagents before it noticed it was the third worker on one item. DO NOT retry, and DO NOT re-word the prompt — the refusal is a FACT about a live lease, not a throttle, and it is read from your working directory, not from your text. STAND DOWN: stop work, and retire this pane with `$HOME/.claude/scripts/handoff-fire.sh self-close --terminal` (it refuses a dirty tree, which is the intended safety). If you believe the incumbent is DEAD, do not force it — the lease self-releases the moment its claimer dies or `cc-backlog reap` ages it out, and the next spawn is then admitted automatically. Override for this session only: CC_WCLAIM_GATE=off. Rule: backlog 5deb4418a648, docs/plans/CONCURRENCY_PROGRAM.md#s4.")
+        }
+      }'
+      exit 0
+    }
+else
+  # Inertness is LOUD, never a silent admit — and LOUD MEANS THE LEDGER, verbatim from the capacity
+  # term's reasoning below: this hook runs on EVERY Agent call, so stderr would be noise that gets
+  # tuned out, and it would corrupt this hook's own JSON contract (bats merges stderr into $output).
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+    '{ts:$ts,hook:"worker-claim-gate",sid:"?",disposition:"abstained",reason:"duplicate-worker",
+      gate:"worker-claim-gate",verdict:"admit",basis:"absent",caller:"agent-tool",
+      what:"subagent spawn",detail:"scripts/lib/worker-claim-gate.sh unreachable — spawn UNGATED for duplicate workers"}' \
+    >> "${CC_WCLAIM_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
+fi
+
 # ── MACHINE-CAPACITY ADMISSION ────────────────────────────────────────────────────────────────
 # MACHINE_CAPACITY_V2 §12.1 measured the coverage of the one hardware term in the tree and found
 # the `Agent` tool BYPASSES it — and named that the one that matters most: *"it is the highest-
