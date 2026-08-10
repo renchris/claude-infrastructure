@@ -126,11 +126,21 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
 
 # ── G1 — the census ──────────────────────────────────────────────────────────────────────────────
 
-@test "G1: EVERY bats execution site in all seven runners redirects stdin — census is FLOORED" {
+@test "G1: EVERY bats execution site in all EIGHT runners redirects stdin — census is FLOORED" {
   # The behavioural arms prove the property at four sites; this proves COVERAGE at all of them, and
   # it is the arm that fails when a NEW call site is added without a redirect. Comment lines are
   # excluded throughout: each of these files now carries a rationale that names both `bats` and
   # `</dev/null`, and a census that counted its own explanation would be self-congratulatory.
+  #
+  # THE EIGHTH RUNNER, added 2026-08-10 (backlog b4f93c9fa73c). scripts/offbox-run.sh is the off-box
+  # corpus runner, and it is in this census because it shipped WITHOUT the redirect and CI proved the
+  # hazard is real rather than screened-clean: three matrix shards stopped after 3, 25 and 17 of their
+  # 37-38 suites, each immediately after a stdin-reading suite that ate the rest of the shard's suite
+  # list out of the runner's own `while read` pipe. The step exited 0 and its log simply ended.
+  # It is the first CONFIRMED instance of this class here — the seven above were screened and came
+  # back clean — and it moves the exposure once more. Not the daemon's stdin (launchd hands
+  # /dev/null), and not only an agent session's socket fd 0: ANY runner that feeds itself a work list
+  # on a pipe is exposed to its own children, with no launchd and no session involved at all.
   #
   # FLOORED PER FILE, not merely non-empty. A rename (`$BATS_BIN`, `$SUITE`, a renamed helper) would
   # empty the grep and make the "every matched line has the redirect" test pass over zero lines —
@@ -146,6 +156,7 @@ strip_redirect() {   # stdin = artifact text → stdout = mutant
     "scripts/respawn-safety-gate.sh|bats tests/cc-respawn.bats|1" \
     "scripts/limit-reset-safety-gate.sh|bats \"\$SUITE\"|1" \
     "scripts/deploy-live.sh|\"\$BATS_BIN\" \"\$s\"|1" \
+    "scripts/offbox-run.sh|\"\$BATS_BIN\" \"\$suite\"|1" \
   ; do
     f="${spec%%|*}"; anchor="${spec#*|}"; floor="${anchor##*|}"; anchor="${anchor%|*}"
     [ -f "$REPO/$f" ] || { bad="$bad"$'\n'"$f: ABSENT from this worktree"; continue; }
