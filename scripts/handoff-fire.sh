@@ -176,6 +176,7 @@
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
 #              [--dirty-owner successor] [--successor-assume-engaged] [--allow-dirty] [--dry-run]
+#              [--transplanted-source]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
 #                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
 #                       types /exit (INTERRUPTS any in-flight turn and exits in seconds — E2E
@@ -207,6 +208,16 @@
 #                       loses nothing because the owner survives). --allow-dirty stays the
 #                       blunt override (un-persisted work may be lost). NEVER pair with
 #                       --recycle (the recycled pane IS the continuation).
+#                       --transplanted-source declares the FOURTH admissible class: this pane's
+#                       SESSION was transplanted to another account by lr-transplant.sh and the
+#                       named --successor is now carrying it, so the source pane is a husk over a
+#                       session that lives elsewhere. Operator-launched, so it has no fired-peer
+#                       stamp and the origin gate would refuse it. The flag NAMES the class; it
+#                       cannot confer it — admission needs a live --successor (never --terminal),
+#                       this session's transplant TOMBSTONE on disk, its .handed_off_to pointing
+#                       at a DIFFERENT config dir, and the split-brain lock still held. Any miss
+#                       falls through to the origin gate and REFUSES.
+#                       Kill switch: CC_TRANSPLANT_SOURCE_CLOSE=0 disables the path entirely.
 #   land (--branch NAME | --worktree PATH) [--repo P] [--trunk B] [--dry-run]
 #                       DESK-LOCAL LAND (cc-backlog c06778fd13a7). Land a worktree's committed,
 #                       gate-green work onto origin/<trunk> via the sanctioned scripts/ship-land.sh,
@@ -4465,7 +4476,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -4477,6 +4488,7 @@ if [ "${1:-}" = "self-close" ]; then
     --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
     --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
     --orphaned-assignee) SC_ORPHANED_ASSIGNEE=1; shift ;;
+    --transplanted-source) SC_TRANSPLANTED_SOURCE=1; shift ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -4605,6 +4617,144 @@ USAGE
     echo "→ orphaned-assignee close AUTHORIZED: $SC_ASSIGNEE_ID · lead ${SC_ORIGINATOR:0:8} confirmed DEAD (registry row present, pid gone)" >&2
     echo "→ its work survives the close: worktree $(pwd) · transcript recoverable by agentName '${SC_ASSIGNEE_ID%%@*}' (transcripts outlive pane close)" >&2
   fi
+  # ---- TRANSPLANTED-SOURCE PATH — the FOURTH admissible class ------------------------------------
+  # THE CATEGORY. A limit/login-cliff recovery moves a session to another account: lr-transplant.sh
+  # copies the transcript into the target config dir, takes a split-brain lock, and leaves a
+  # TOMBSTONE beside the original. The successor is then fired on the new account and carries the
+  # work. What remains behind is a pane whose SESSION IS SOMEWHERE ELSE — a husk that will never
+  # produce another turn, sitting in the operator's window looking exactly like live work.
+  #
+  # It is a genuinely NEW class, not a fired peer and not an origin session. The origin gate's oracle
+  # is the fired-peer stamp, and a transplant source has none: it was launched by the operator, which
+  # is precisely why the transplant was needed. So the gate reads `origin` and refuses — correctly,
+  # on the evidence it has, and wrongly on the facts.
+  #
+  # WHY NOT --allow-origin-close. That override exists, is documented "deliberate, loud, almost never
+  # right", and would work. It is still the wrong instrument, for the same reason the orphaned-
+  # assignee row above gives: the gate's whole purpose is to stop a close with no continuation, and
+  # this close HAS one — a named, alive, engaged successor holding the transplanted session. Reaching
+  # for the override would spend a safety gate on a case that can PROVE it is safe, and would leave
+  # the class unnamed for the next caller. Name the category; do not widen the escape hatch.
+  #
+  # ADMISSIBLE ONLY WITH ALL SIX. Each is evidence the flag cannot manufacture, and any miss falls
+  # THROUGH to the origin gate — which then refuses exactly as it does today. Nothing here weakens it.
+  #   (0) CC_TRANSPLANT_SOURCE_CLOSE=0 disables the path entirely (R8 kill switch), same as
+  #       CC_ORPHAN_ASSIGNEE_CLOSE for the row above.
+  #   (1) --transplanted-source — the flag names the category; the checks below establish it.
+  #   (2) a named --successor, NEVER --terminal. The entire justification is that the session is
+  #       being CARRIED. `--terminal` asserts nothing continues, which for a transplanted source is
+  #       false on its face: the session it is a husk of is running on another account right now.
+  #   (3) the TOMBSTONE for THIS session exists and parses, with a non-empty .handed_off_to. This is
+  #       lr-transplant's own record of the move (lr-transplant.sh:93), written only after the copy
+  #       verified sha-identical — so it is the transplant's completion certificate, not its intent.
+  #   (4) .handed_off_to is a DIFFERENT config dir than this pane's own. A tombstone pointing back at
+  #       our own account is not a move; closing on it would retire a session nothing else carries.
+  #   (5) the split-brain lock the tombstone names still exists. The lock is what makes "one
+  #       transplant owner per session uuid" true (lr-transplant.sh:60-69); if it is gone the move
+  #       has been released or superseded and this pane's claim to be a husk is no longer supported.
+  #
+  # The successor-ENGAGEMENT gate is NOT re-implemented here — self-close already runs it for every
+  # close, and it is the strongest evidence in the whole path (pane alive + claude on its tty + a
+  # real assistant turn in its transcript). This class deliberately does not pass
+  # --successor-assume-engaged either: a transplant whose successor never woke up is the one failure
+  # this close must not walk past.
+  if [ "$SC_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_SOURCE_CLOSE:-1}" != 0 ]; then
+    if [ -n "$SC_ORIGIN_CLASS" ]; then
+      echo "!! self-close REFUSED: --transplanted-source and --orphaned-assignee name DIFFERENT classes; pass one." >&2
+      exit 2
+    fi
+    # (2) a carried session, never an end-of-line.
+    if [ "$SC_TERMINAL" = 1 ] || [ -z "$SC_SUCCESSOR" ]; then
+      { echo "!! self-close REFUSED: --transplanted-source needs --successor <pane-uuid>, and never --terminal."
+        echo "!!   The class asserts this pane is a husk over a session that MOVED — so something is"
+        echo "!!   carrying it, and that something has to be named and proven alive. --terminal says the"
+        echo "!!   opposite. If nothing is carrying it, this is not a transplanted source."
+      } >&2
+      exit 2
+    fi
+    # (3) this session's own transplant tombstone.
+    SC_TS_SID="${CLAUDE_CODE_SESSION_ID:-}"
+    if [ -z "$SC_TS_SID" ]; then
+      { echo "!! self-close REFUSED: --transplanted-source, but \$CLAUDE_CODE_SESSION_ID is unset."
+        echo "!!   The tombstone is keyed on the SESSION uuid, not the pane id — without it there is"
+        echo "!!   nothing to look up, and a pane id would answer a different question."
+      } >&2
+      exit 2
+    fi
+    SC_TS_CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # GLOB the project dirs rather than re-deriving the slug from $PWD. lr-transplant.sh does not
+    # encode a path either — it finds the transcript by globbing projects/*/<sid>.jsonl and takes the
+    # slug from what it found (lr-transplant.sh:41-51). Re-implementing the encoding here would be a
+    # SECOND oracle for the producer's own key, free to drift from it; and the sid is a globally
+    # unique uuid, so the glob is exact. More than one hit is pathological, and refused rather than
+    # picked from — the same call lr-transplant makes on a duplicated transcript.
+    SC_TOMBSTONE="" SC_TS_DUPES=0
+    for _sc_ts in "$SC_TS_CFG"/projects/*/"$SC_TS_SID".HANDOFF.json; do
+      [ -f "$_sc_ts" ] || continue
+      [ -z "$SC_TOMBSTONE" ] || SC_TS_DUPES=1
+      SC_TOMBSTONE="$_sc_ts"
+    done
+    unset _sc_ts
+    if [ "$SC_TS_DUPES" = 1 ]; then
+      echo "!! self-close REFUSED: more than one transplant tombstone for session ${SC_TS_SID:0:8} under $SC_TS_CFG/projects — disambiguate by hand." >&2
+      exit 2
+    fi
+    if [ -z "$SC_TOMBSTONE" ]; then
+      { echo "!! self-close REFUSED: --transplanted-source, but session ${SC_TS_SID:0:8} has NO transplant tombstone."
+        echo "!!   looked for: $SC_TS_CFG/projects/*/$SC_TS_SID.HANDOFF.json"
+        echo "!!   lr-transplant.sh writes that file only after the copy verified sha-identical. No"
+        echo "!!   tombstone means no completed transplant, so this pane is not a husk — it is an"
+        echo "!!   ORIGIN session, and it stays up. This flag names a CATEGORY; it cannot confer one."
+      } >&2
+      exit 2
+    fi
+    if ! jq -e . "$SC_TOMBSTONE" >/dev/null 2>&1; then
+      echo "!! self-close REFUSED: transplant tombstone $SC_TOMBSTONE is not valid JSON — an unreadable record is not evidence." >&2
+      exit 2
+    fi
+    SC_TS_TO="$(jq -r '.handed_off_to // empty' "$SC_TOMBSTONE" 2>/dev/null || true)"
+    if [ -z "$SC_TS_TO" ]; then
+      echo "!! self-close REFUSED: transplant tombstone $SC_TOMBSTONE has no .handed_off_to — it does not say where the session went." >&2
+      exit 2
+    fi
+    # (4) it really moved OFF this account.
+    if [ "${SC_TS_TO%/}" = "${SC_TS_CFG%/}" ]; then
+      { echo "!! self-close REFUSED: the tombstone hands this session off to THIS SAME config dir ($SC_TS_CFG)."
+        echo "!!   That is not a transplant, so nothing else is carrying the session and closing here"
+        echo "!!   would retire it outright."
+      } >&2
+      exit 2
+    fi
+    # (5) the split-brain lock still held.
+    SC_TS_LOCK="$(jq -r '.lock // empty' "$SC_TOMBSTONE" 2>/dev/null || true)"
+    if [ -z "$SC_TS_LOCK" ] || [ ! -f "$SC_TS_LOCK" ]; then
+      { echo "!! self-close REFUSED: the transplant's split-brain lock is gone (${SC_TS_LOCK:-<none named in the tombstone>})."
+        echo "!!   That lock is what makes 'one transplant owner per session uuid' true. Without it the"
+        echo "!!   move has been released or superseded, and this pane's claim to be a husk over it no"
+        echo "!!   longer holds. Re-establish the transplant, or close this pane by hand."
+      } >&2
+      exit 2
+    fi
+    SC_ORIGIN_CLASS="transplanted-source"
+    # LEGIBILITY (R10), the same standard the orphaned-assignee row holds itself to: a pane that
+    # changes its own authorisation says so, to stderr AND the close log, never only in-pane.
+    echo "→ transplanted-source close AUTHORIZED: session ${SC_TS_SID:0:8} was handed off to $SC_TS_TO (lock $SC_TS_LOCK still held)" >&2
+    echo "→ its work survives the close: the session continues on the successor pane $SC_SUCCESSOR, which is verified ALIVE and ENGAGED below before anything is typed here" >&2
+  fi
+  # ONE derivation of "this pane established a named admissible class", read by the adoption step and
+  # by BOTH refusal branches below. Deliberately not three copies of `!= "assignee"`: a class added
+  # at one site and missed at another is the correctly-placed-wrongly-narrow failure, and it fails
+  # SILENTLY — the new class would simply be refused by whichever branch still spelled the old test,
+  # which reads identically to "the preconditions did not hold".
+  # The two REFUSAL sites are each pinned behaviourally (one test per branch, each reddening alone
+  # under a per-site revert). The ADOPTION site is not, and measurably cannot be: reverting it to the
+  # old spelling changes nothing observable, because adoption only ever REPLACES an absent stamp with
+  # a valid one and this class is already past the gate either way. It is a consistency fix, so it is
+  # pinned STRUCTURALLY instead — the suite asserts all three sites read this one predicate.
+  case "$SC_ORIGIN_CLASS" in
+    assignee|transplanted-source) SC_CLASS_EXEMPT=1 ;;
+    *)                            SC_CLASS_EXEMPT=0 ;;
+  esac
   # THREE states, not two (see fired_stamp_tenancy above). `absent` and `stale` both refuse, but they
   # are different facts and the pre-existing message could only state one of them: a live pane that
   # inherited a REUSED kitty id would have been told it is "an ORIGIN session", which is a
@@ -4619,7 +4769,7 @@ USAGE
   # Only on `absent`, deliberately. `stale` means a stamp for THIS id exists and names a different
   # cwd — a live id-reuse tenant, the false positive the tenancy check was built for — and reaching
   # past it to adopt a second record would hand one pane two contradictory contracts.
-  if [ "$SC_STAMP_STATE" = absent ] && [ "$SC_ORIGIN_CLASS" != "assignee" ]; then
+  if [ "$SC_STAMP_STATE" = absent ] && [ "$SC_CLASS_EXEMPT" = 0 ]; then
     SC_ADOPTED_FROM="$(adopt_orphan_stamp "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}" "$PWD" "$SC_SID")" || SC_ADOPTED_FROM=""
     if [ -n "$SC_ADOPTED_FROM" ]; then
       # LEGIBILITY (R10), same standard the orphaned-assignee path holds itself to: a pane that
@@ -4629,7 +4779,7 @@ USAGE
       SC_STAMP_STATE="$(fired_stamp_tenancy "$SC_FIRED_STAMP" "$PWD")"
     fi
   fi
-  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = stale ]; then
     SC_STAMP_CWD="$(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
     SC_STAMP_AT="$(jq -r '.firedAt // "?"' "$SC_FIRED_STAMP" 2>/dev/null || echo '?')"
     cat >&2 <<USAGE
@@ -4655,7 +4805,16 @@ USAGE
   # and handed the new tenant a self-retiring contract it was never granted (report-seams §1b, the
   # silent hole in the origin invariant). Same proof chain as adoption; same abstain-toward-refusal
   # calibration — a schema-1 stamp has no marker, so it refuses, with the documented override.
-  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = spent ]; then
+  #
+  # CLASS-GATED like its two siblings (rebase resolution 2026-08-10, and a real decision rather than
+  # a textual one). `spent` is the SAME phenomenon as `stale` — kitty reusing a pane id — read
+  # through a different field, and a named admissible class establishes its authorisation from
+  # evidence that has nothing to do with the fired-peer stamp: an orphaned assignee from its dead
+  # lead, a transplanted source from its own tombstone, a different config dir and a live lock. A
+  # stamp some PREVIOUS tenant of this pane id spent says nothing about either, so refusing on it
+  # would deny a close that can prove itself, on irrelevant evidence. Exempting it here is what keeps
+  # the three branches answering one question.
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = spent ]; then
     SC_SPENT_MARKER="$(jq -r '.marker // ""' "$SC_FIRED_STAMP" 2>/dev/null || true)"
     if [ -n "$SC_SPENT_MARKER" ] && fired_marker_is_mine "$SC_SPENT_MARKER" "$SC_SID"; then
       echo "→ spent stamp accepted for RETRY: closedAt is set for pane $SC_SID, but this session's own transcript carries the fire marker — same peer, interrupted close. Proceeding." >&2
@@ -4673,7 +4832,7 @@ USAGE
       exit 2
     fi
   fi
-  if [ "$SC_ORIGIN_CLASS" != "assignee" ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
+  if [ "$SC_CLASS_EXEMPT" = 0 ] && [ "${SC_ALLOW_ORIGIN_CLOSE:-0}" != 1 ] && [ "$SC_STAMP_STATE" = absent ]; then
     # An id CHANGE orphans a real peer's stamp under its old id (resume / crash-recreate / kitty
     # renumber). Name it when we can find it: the refusal stands either way, but "no stamp anywhere"
     # and "your stamp is at 28.json" send the operator to completely different remedies, and only one
