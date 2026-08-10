@@ -1054,7 +1054,8 @@ silently rendering as ambient.
 
 **STORYBOARD ONLY — drawn frames, NOT animation.** The other seven — THE GUARD, THE NOTICING, THE
 INDEX (constellation), THE LANDING, THE WALL, NOTHING LOST, THE LANE, THE ADVANCE — exist as
-storyboards, not as built beats. `scripts/banner-storyboard.py` → 10 beats, 55 frames. Every frame is
+storyboards, not as built beats. `scripts/banner-storyboard.py` → 11 beats, 60 frames (ten as of
+2026-07-29; TWO-WAY MAIL was added 2026-08-10 — see § OPERATOR FEEDBACK, 2026-07-30). Every frame is
 drawn from the extracted 11 × 8 sprite, so none of them is a move the creature cannot make, but **a
 storyboard is a proposal and nothing on that page animates.**
 
@@ -1712,3 +1713,71 @@ enforcement), `banner-verify.sh` 6/6 on `v6c-dusk-line`, `banner-gate-redproof.p
 sections leave them. *(The WebKit probe was subsequently closed on 2026-08-09 — see above and
 `README_HERO_BANNER.md` § S24. The other three stand.)* This land closes the *cause/behaviour/exit* question — that every surviving
 micro-event declares its three acts and cannot silently stop doing so — and nothing else.
+
+## OPERATOR FEEDBACK, 2026-07-30 — transcribed here because that is why half of it was never done
+
+Five points, given against the storyboard render. **Three were fixed in `tools/banner/gen.py` within
+about fifteen hours. Two were never touched at all, and the discriminator was not difficulty — it
+was whether the point got written down.** The feedback lived only in
+`~/.claude/autonomy/feedback/banner-storyboard-feedback-2026-07-30.md`, which is untracked runtime
+state; a repo-wide grep for points 3 and 5 returns nothing. Points 1, 2 and 4 happened to be
+restated inside commit bodies as they were fixed, so they acquired a home in the tree. The other two
+had none, and nothing that reads this repo could see them. **That is the whole failure mode, and
+this section is the fix for it** — the feedback now lives where the build does.
+
+Verbatim, then disposition:
+
+1. *"The stick in the ground moving is confusing -- i dont know what that is clawd is jumping over"*
+   → **DONE.** `322937a8` widened the barrier 7 → 18 px; `e66ee00d` re-timed the hop out of all three
+   beats and took `POST_H` 72 → 120 so the arm comes down *across the path* rather than onto the
+   floor. `assert_hop_clear_of_stopped_world` (`gen.py:1562`) now refuses a hop beside a beat, in its
+   own words, because "beside THE REFUSAL's barrier it reads as clearing a hurdle". The ambiguity was
+   removed by deleting the jump, not by labelling the post.
+2. *"…isnt clear that his hat is a magician hat, i dont see his magician wand or spell casting, and
+   the second clawd giving back something isnt clear what that is either"*
+   → **DONE**, all three halves. The hat is a stepped cone with a band and an over-wide brim
+   (`HAT_CONE_ROWS`, `gen.py:3621`), gate-enforced against the cap reading (`gen.py:4296`). The wand
+   is drawn *out of the sleeve* rather than switched on (`gen.py:4463`), flicks, and sparks off the
+   tip into the summoning burst. The returned object stopped being a cake — `_result()`
+   (`gen.py:4331`) is "the SAME document that went out, returned green", and its docstring records
+   the operator's own complaint as the reason.
+3. *"i dont see any mail 2-way being sent in any micro event either that or separate"*
+   → **STORYBOARDED, NOT BUILT.** Nothing in the repo drew a peer answering a peer: THE LETTER is
+   one-way by hard constraint (the sender is never drawn), and THE SUMMONING's envelope is a parent
+   dispatching a subagent. Now `scripts/banner-storyboard.py` → `TWO-WAY MAIL`. It is a proposal, per
+   this document's own live/storyboard/still split. **It carries one question that must be answered
+   before it can be built:** `_check_clear` and the source's one-saturated-subject rule refuse two
+   same-size clawds, so the peer is drawn smaller — and a smaller peer reads as a *child*, which is
+   the summoning's relationship, not this one. Either that rule is overturned for this beat, or
+   "peer" has to be said without using size (matched stride phase and a shared eye-line are the
+   candidates, and both are cheaper than a second saturated orange).
+4. *"I dont see our stars being Opus 5 beautiful dynamic and opacity/flickering changing/twinkling
+   for depth"*
+   → **DONE.** `31ed0731`. The machinery was alive; the amplitude was losing to render scale — a
+   `.70` floor on a `0.34` star at 838 px is a swing of a tenth of a level on one pixel. Floors went
+   to `.44–.60`, the cap 18 → 48, the rates 4 → 6, each star carrying its own negative phase. Depth
+   is carried by amplitude multiplying the magnitude tier and by a horizon gate, so the field nearest
+   the wordmark stays still. **Residual, unclosed:** no gate asserts any of it. The only guard,
+   `assert_twinkle_tables_paired`, checks table lengths — the floors could drift back to `.70` and
+   the build would stay green, which is exactly how this shipped the first time.
+5. *"if clawd summons someone he should probably move left positioned so that the new clawd can be
+   right positioned such that its centered and not super right heavy"*
+   → **HALF DONE — storyboard only; the live banner needs an operator ruling.** In
+   `banner-storyboard.py` the summoner now steps left and the pair is centred (16..184 of 200), with
+   the step visible in frame 2 rather than silent.
+   **In the shipped banner it is not fixable without a ruling, and the arithmetic is why.** On
+   `v6c-dusk-line` the pair spans 1096..1680 — centre 1388 against a frame centre of 960, so it sits
+   **428 px right of centre with margins of 4.6 : 1**, the worst-composed of the four variants (the
+   others are incidentally near-centred). The obvious fix — let A walk left during the beat — is
+   barred by this document's own § "Should clawd move between right, middle and left?": *"Excursion
+   speed must read as clearly slower than the ground scroll."* A must be in place before the brief
+   hands across at 5.6 s, giving it 2.2 s to cover 428 px = **195 px/s against a 96 px/s ground**,
+   i.e. twice the scroll rate in the wrong direction. Slowing it to legal speed means it is still
+   sliding while the exchange happens.
+   So the only remaining lever is v6c's **resting anchor**, and that same section calls the anchor
+   *"a per-candidate decision, not a global one"* — v6c is right of centre deliberately, to balance
+   the moon at x=250. Moving it left to centre the pair un-balances every second of the loop in which
+   there is no second creature, which is most of them. **That trade is the operator's, not the
+   implementer's**, and it is filed rather than guessed. The precedent worth knowing: the GREETING
+   emote hit this exact problem and solved it by moving the resident statically (`cx=120.0`,
+   `emotes_world.py:706`) — for a *cropping* reason, and it was never carried back to `rSummon`.
