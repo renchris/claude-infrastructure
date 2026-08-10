@@ -40,6 +40,8 @@ setup() {
     sed -n '/^check_goal_arm() {/,/^}/p'      "$HF"
     sed -n '/^check_slash_head() {/,/^}/p'    "$HF"
     sed -n '/^goal_armed_for_pane() {/,/^}/p' "$HF"
+    sed -n '/^goal_live_for_sid() {/,/^}/p'   "$HF"
+    sed -n '/^inherit_recycle_goal() {/,/^}/p' "$HF"
     sed -n '/^arm_goal() {/,/^}/p'            "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
   bash -n "$BATS_TEST_TMPDIR/units.sh" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
@@ -252,5 +254,86 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
   [ "$status" -eq 1 ]
   printf 'TASK — ship it.\n\nSTEP 3: /goal is armed separately.\n' > "$BATS_TEST_TMPDIR/q.md"
   run check_slash_head "$BATS_TEST_TMPDIR/q.md"
+  [ "$status" -eq 0 ]
+}
+
+# ── 5 · RECYCLE GOAL INHERITANCE (2026-08-10) ────────────────────────────────────────────────────
+# A goal is session-scoped and dies with the /exit a recycle types (§3.4 of the research doc), and
+# the wave recipe now REQUIRES a goal on every fired session — so a --recycle with no --goal
+# inherits the predecessor's LIVE condition. These pin the oracle (goal_live_for_sid) and every
+# branch of the decision (inherit_recycle_goal).
+
+_write_terminal_goal_transcript() { # $1=sid — armed then ACHIEVED: nothing live to inherit
+  { jq -cn '{type:"attachment",attachment:{type:"goal_status",met:false,sentinel:true,condition:"old"}}'
+    jq -cn '{type:"attachment",attachment:{type:"goal_status",met:true,condition:"old",iterations:2}}'
+  } > "$PDIR/$1.jsonl"
+}
+
+@test "goal_live_for_sid reads a LIVE condition from the NESTED per-cwd transcript" {
+  _write_goal_transcript "sid-live-1" "land wave 5 — proven by ship-land verdict"
+  run goal_live_for_sid "sid-live-1"
+  [ "$status" -eq 0 ]
+  [ "$output" = "land wave 5 — proven by ship-land verdict" ]
+}
+
+@test "goal_live_for_sid returns NOTHING for a terminal goal (met — last record wins)" {
+  _write_terminal_goal_transcript "sid-done-1"
+  run goal_live_for_sid "sid-done-1"
+  [ "$status" -eq 1 ]
+}
+
+@test "goal_live_for_sid is not fooled by PROSE about goals (no attachment ⇒ no goal)" {
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"a goal_status with met false is the arm marker"}]}}\n' > "$PDIR/sid-prose-1.jsonl"
+  run goal_live_for_sid "sid-prose-1"
+  [ "$status" -eq 1 ]
+}
+
+@test "inherit: empty FIRE_GOAL + live predecessor goal ⇒ inherited verbatim" {
+  _write_goal_transcript "sid-inh-1" "finish the audit — proven by the gate summary"
+  FIRE_GOAL=""
+  inherit_recycle_goal "sid-inh-1"
+  [ "$FIRE_GOAL" = "finish the audit — proven by the gate summary" ]
+}
+
+@test "inherit: an EXPLICIT --goal always wins over the predecessor's" {
+  _write_goal_transcript "sid-inh-2" "the old contract"
+  FIRE_GOAL="the operator's new contract"
+  inherit_recycle_goal "sid-inh-2"
+  [ "$FIRE_GOAL" = "the operator's new contract" ]
+}
+
+@test "inherit: CC_RECYCLE_GOAL_INHERIT=0 opts out entirely" {
+  _write_goal_transcript "sid-inh-3" "should never be read"
+  FIRE_GOAL=""
+  CC_RECYCLE_GOAL_INHERIT=0 inherit_recycle_goal "sid-inh-3"
+  [ -z "$FIRE_GOAL" ]
+}
+
+@test "inherit: a TERMINAL predecessor goal inherits nothing" {
+  _write_terminal_goal_transcript "sid-inh-4"
+  FIRE_GOAL=""
+  inherit_recycle_goal "sid-inh-4"
+  [ -z "$FIRE_GOAL" ]
+}
+
+@test "inherit: a condition the paste path cannot carry is REFUSED, loudly, never armed corrupt" {
+  # A multi-line condition would submit at its first CR, stranding the rest in the composer —
+  # check_goal_arm refuses it pre-fire, and inheritance must land in the same refusal.
+  # Built with jq: the value must carry a REAL newline behind a single valid JSONL line — a raw
+  # printf '\n' would break the line and make the transcript unreadable instead (a different test).
+  jq -cn '{type:"attachment",attachment:{type:"goal_status",met:false,sentinel:true,condition:"line one\nline two"}}' \
+    > "$PDIR/sid-inh-5.jsonl"
+  FIRE_GOAL=""
+  run inherit_recycle_goal "sid-inh-5"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'NOT inherited' || false
+  # and the mutation direction: FIRE_GOAL must be EMPTY afterwards in the calling shell too
+  inherit_recycle_goal "sid-inh-5"
+  [ -z "$FIRE_GOAL" ]
+}
+
+@test "inherit: never fails the recycle (unknown sid ⇒ rc 0, FIRE_GOAL untouched)" {
+  FIRE_GOAL=""
+  run inherit_recycle_goal "sid-that-never-existed"
   [ "$status" -eq 0 ]
 }

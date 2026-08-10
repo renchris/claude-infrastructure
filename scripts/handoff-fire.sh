@@ -3384,6 +3384,62 @@ EOF
   return 1
 }
 
+# GOAL INHERITANCE oracle (2026-08-10). Reads the PREDECESSOR session's transcript and prints its
+# LIVE goal condition — the last goal_status ATTACHMENT with met==false and not failed. Twin of
+# hooks/lib/goal-state.sh::goal_live_condition (the SSOT for the record dictionary); duplicated
+# here deliberately: this file resolves the transcript BY SID across CC_PROJECTS_DIRS with the same
+# nested-project `find` goal_armed_for_pane uses, and adding a cross-tree source seam to the fire
+# path is a worse trade than 15 mirrored lines. grep narrows first (a bare jq over a multi-MB
+# transcript per recycle is real money); type=="attachment" then drops the assistant's own PROSE
+# about goals (measured: 6 grep hits where the truth was 1).
+goal_live_for_sid() { # $1=sid → prints the LIVE condition; rc 1 = none (or terminal, or unreadable)
+  local sid="${1:-}" pdir hit rec
+  [ -n "$sid" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+  for pdir in $CC_PROJECTS_DIRS; do
+    [ -d "$pdir" ] || continue
+    while IFS= read -r hit; do
+      [ -n "$hit" ] || continue
+      rec="$(grep -a 'goal_status' "$hit" 2>/dev/null | jq -rc --slurp '
+        [ .[] | select(.type=="attachment") | .attachment | select(.type=="goal_status") ] | last // empty' 2>/dev/null)" || continue
+      [ -n "$rec" ] || continue
+      # LAST record wins in both directions: a terminal goal (met/failed/cleared) inherits nothing,
+      # and this transcript IS the answer — stop searching other dirs either way.
+      if [ "$(printf '%s' "$rec" | jq -r '(.met // false) or (.failed // false)' 2>/dev/null)" = "false" ]; then
+        printf '%s' "$rec" | jq -r '.condition // ""'
+        return 0
+      fi
+      return 1
+    done <<EOF
+$(find "$pdir" -name "$sid.jsonl" -type f 2>/dev/null)
+EOF
+  done
+  return 1
+}
+
+# The inheritance DECISION, one function so the recycle path stays one call and the suite can pin
+# every branch. Mutates FIRE_GOAL; always 0 (inheritance must never fail a recycle). Explicit
+# --goal wins · CC_RECYCLE_GOAL_INHERIT=0 opts out · terminal/absent predecessor goal → no-op · an
+# inherited condition re-runs the SAME pre-arm validation as a passed one, because the paste path
+# cannot carry what check_goal_arm refuses (a multi-line condition submits at its first CR).
+inherit_recycle_goal() { # $1=predecessor-sid → always 0
+  local _inh_cond
+  [ -z "${FIRE_GOAL:-}" ] || return 0
+  [ "${CC_RECYCLE_GOAL_INHERIT:-1}" != 0 ] || return 0
+  [ -n "${1:-}" ] || return 0
+  _inh_cond="$(goal_live_for_sid "$1")" || return 0
+  [ -n "$_inh_cond" ] || return 0
+  FIRE_GOAL="$_inh_cond"
+  if check_goal_arm; then
+    echo "→ goal INHERITED from predecessor $1 — re-arming on the successor after engagement: $(printf '%.100s' "$_inh_cond")"
+  else
+    echo "⚠ predecessor holds a LIVE goal but its condition fails pre-arm validation — NOT inherited; re-arm it yourself with /goal in the relaunched session" >&2
+    FIRE_GOAL=""
+  fi
+  return 0
+}
+
 # MESSAGE 2. Never fails the fire — see FAIL-CLOSED above. Always 0.
 arm_goal() { # $1=it2-bin $2=pane $3=condition → always 0; prints a parseable verdict
   local it2="${1:-}" pane="${2:-}" cond="${3:-}" t=0
@@ -7231,6 +7287,17 @@ recycle_fire() {
   # runs, the row may already have been rewritten by the relaunched session, which would make the
   # ROW-CHANGE signal compare a value against itself and never witness a change).
   rcy_old_sid="$(cc_sid_for_pane "$SID")"
+  # GOAL INHERITANCE (2026-08-10). A goal is a SESSION-SCOPED Stop hook and dies with the /exit
+  # this recycle is about to type (measured 2026-08-08: successor transcript carries zero
+  # goal_status while the predecessor's goal was never cleared) — and the wave recipe now REQUIRES
+  # a goal on every fired session (CLAUDE.md § Agent Teams, operator directive 2026-08-09). So the
+  # commonest succession on this box was exactly the one that silently dropped its goal. Default:
+  # a --recycle with no --goal INHERITS the predecessor's LIVE condition; an explicit --goal wins;
+  # CC_RECYCLE_GOAL_INHERIT=0 opts out; a terminal goal (met/failed/cleared) inherits nothing. An
+  # inherited condition re-runs the same pre-arm validation as a passed one — a condition the paste
+  # path cannot carry (multi-line: the CR submits at the first line) is refused HERE, loudly, not
+  # armed corrupt.
+  inherit_recycle_goal "$rcy_old_sid"
   pin_term_verdict_for_watcher
   # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
   # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
