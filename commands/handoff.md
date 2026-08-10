@@ -228,6 +228,24 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > CONDITION; message 1 already carries the detail with no cap.
   > **One goal per session**, and it starts a turn immediately — the condition itself is delivered as
   > the directive, so it must read as an instruction as well as a predicate.
+  > **🔬 Four rules the docs do NOT state, read off the judge's own prompt in the 2.1.220 binary**
+  > (`docs/research/goal-condition-best-practice-2026-08-09.md` § 4):
+  > - **The judge FAILS CLOSED and must QUOTE.** Its system prompt hard-codes *"If the transcript does
+  >   not contain clear evidence that the condition is satisfied, return `{"ok": false, "reason":
+  >   "insufficient evidence in transcript"}`"*, and a pass must quote the satisfying text. So name a
+  >   **quotable artifact string** — `0 failures`, `exit 0`, a sha — not a state of mind. Ambiguity
+  >   costs a block, never a pass.
+  > - **The proof must be RECENT.** The judge is handed the transcript truncated to ~50% of ITS context
+  >   window, most-recent-kept, with a banner instructing it to answer *insufficient evidence* if the
+  >   proof may be in the omitted prefix. Evidence printed once at turn 3 of a long run is gone —
+  >   re-print the check near the end.
+  > - **Never put a `$` in the condition.** It is run through the slash-command variable substituter
+  >   first, so `$ARGUMENTS`, `$1`, `$2` are silently rewritten with the hook-input JSON. Write
+  >   `npm test exits 0`, never `$(npm test)`.
+  > - **A bad condition has two distinct failure modes.** Self-contradictory or unachievable ⇒ the
+  >   judge may return `impossible:true`, which CLEARS the goal and marks it failed. Merely vague ⇒ no
+  >   such mercy: it block-loops until `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (default 8), then the turn
+  >   ends anyway. Neither is a session that did the work.
   > **When NOT to arm a goal** — four exceptions, all narrow: a **standing-role** session with no
   > terminal state (the **desk**, `desk-invariant.sh` respawns) — "hold the desk role" can never become
   > true, so the Stop hook would refuse every stop until it hit the harness block cap · a **`--cloud`**
