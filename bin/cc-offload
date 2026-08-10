@@ -105,6 +105,25 @@ app_mark() {
     "$1" "$(date +%s)" >"$APP_MARK" 2>/dev/null || true
 }
 
+# …and it must be RETRACTABLE, because the whole point of writing it is to make the operator go
+# install the App — so the marker's own success condition is what makes it stale. Measured
+# 2026-08-10: a fire refused 3/3 on bundle and wrote `absent`; the operator installed the App
+# minutes later; the very next create succeeded on attempt 1 with no bundle refusal, and `setup`
+# went on asserting PROVEN ABSENT off a file nothing could retract. That is
+# [[parked-blocker-obsoleted-by-later-fix]] with the sign flipped — a blocker record outliving the
+# fix it existed to provoke.
+#
+# THE RETRACTION IS NOT A FLIP. A clean create does NOT prove the App is present: §11.1's fire
+# reached a session on attempt 2 WITH bundling, so `created` alone cannot discriminate the two
+# sources. What a bundle-free create does establish is that the ABSENT evidence no longer holds —
+# so the marker is REMOVED and setup falls back to UNKNOWN. Weakening a claim on contrary evidence
+# is always sound; strengthening one on its absence is the error this file is organised against.
+app_unmark() {
+  [ -f "$APP_MARK" ] || return 0
+  rm -f "$APP_MARK" 2>/dev/null || true
+  note "cc-offload: this create never bundled, so the recorded 'App absent' no longer holds — retracted to UNKNOWN."
+}
+
 die()  { printf '%s\n' "cc-offload: $*" >&2; exit 2; }
 note() { printf '%s\n' "$*" >&2; }
 have_cloud() { [ -n "$CLOUD_BIN" ] && [ -x "$CLOUD_BIN" ]; }
@@ -377,7 +396,11 @@ cmd_up() {
       cat "$FIRE_LOG" >&2
     fi
     case "$rc" in
-      0)  fired=$((fired+1)) ;;
+      0)  fired=$((fired+1))
+          # A create that never bundled retracts a recorded `absent` (see app_unmark: retraction,
+          # never a flip to `present`).
+          grep -q 'refused-bundle\|Bundle upload failed' "$FIRE_LOG" 2>/dev/null || app_unmark
+          ;;
       2)  note "cc-offload: the fire path refused the cloud opt-in (exit 2) — CC_FIRE_CLOUD was not honoured."; break ;;
       9)  note "cc-offload: capacity gate refused (exit 9) — no account has headroom. Try: claude-accounts --readout"; break ;;
       10) note "cc-offload: no session was created (exit 10). NOTHING is running — safe to retry."

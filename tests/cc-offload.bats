@@ -306,6 +306,32 @@ EOF
   [ ! -f "$CC_CLOUD_STATE/github-app.observed" ]
 }
 
+@test "a create that never bundles RETRACTS a recorded absent, and never flips it to present" {
+  # The marker's own success condition is what makes it stale: it exists to send the operator to
+  # install the App, so the install is guaranteed to obsolete it. Measured 2026-08-10 — 3/3 bundle
+  # refusals wrote `absent`, the App went in minutes later, and setup kept asserting PROVEN ABSENT.
+  mkdir -p "$CC_CLOUD_STATE"
+  printf 'verdict=absent\nts=1\n' >"$CC_CLOUD_STATE/github-app.observed"
+  echo "task" >"$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_CLOUD_STATE/github-app.observed" ] || false   # retracted …
+  run "$SUT" ls --json
+  [[ "$output" != *"verdict=present"* ]] || false           # … but NEVER flipped to present
+
+  # NEGATIVE CONTROL: a create that DID bundle leaves the absent verdict standing.
+  printf 'verdict=absent\nts=1\n' >"$CC_CLOUD_STATE/github-app.observed"
+  cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "fire optin=${CC_FIRE_CLOUD:-UNSET} $*" >>"$CALLS"
+echo "cloud-create: attempt 1/3 hit refused-bundle — retrying" >&2
+exit 0
+EOF
+  chmod +x "$STUBDIR/handoff-fire.sh"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  grep -q 'verdict=absent' "$CC_CLOUD_STATE/github-app.observed" || false
+}
+
 @test "setup FAILS when the reconciler kill-switch is off (every check would pass vacuously)" {
   local fake="$BATS_TEST_TMPDIR/newclaude"
   printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
