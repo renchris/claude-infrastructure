@@ -438,6 +438,54 @@ Consequences for how you run this command:
   `verdict=` token. This command remains the QUALITY pass: shortening, dedupe, the orphan sweep,
   and every lossy edit stay human-gated here — the rotor never rewrites a line, only moves whole
   ones reversibly (restore = paste the line back).
+- 🚨 **SCOPE CORRECTION 2026-08-10 (pass 2, backlog `7e2df754d0b8`): the rotor holds the BREACH
+  line, it does not hold the BAND — and the band is where this command still earns its keep.**
+  The bullet above reads as though the hand pass is retired. Measured on the live index with a
+  path-conforming fixture, the rotor has three distinct behaviours and only one of them moves a
+  byte:
+
+  | index size | verdict | moved |
+  |---|---|---|
+  | 22,906 B (under the trigger) | `noop size=22906 rotate_at=23485` | 0 |
+  | 23,939 B (**the pressure band**, ≥ LIMIT−1500 and < LIMIT) | `exhausted … min_keep=40` | **0** |
+  | 25,219 B (breach, ≥ LIMIT) | `rotated moved=10 stage2=10` | 10 → 23,344 B |
+
+  **Its trigger is LIMIT−1500 but its only effective stage arms at LIMIT**, so across that 1,500 B
+  band it returns `exhausted` and moves nothing — every entry is held by a protection
+  (`tail=15 type=78 hub=8 young=26 marker=1 min_keep=40`). That is the design working, not a bug:
+  the `type:` stamp is only allowed to yield at breach pressure. But `hooks/memory-nudge.sh` also
+  suppresses the note for an `exhausted` verdict below the limit (correctly — it is the designed
+  steady state), so **the band is crossed silently and nothing but this command can clear it.**
+  Note also where the breach case LANDS: 23,344 B, i.e. back just under its own trigger and
+  2,359 B short of its `LIMIT−4000` target, because it exhausts its eligible set first. So even
+  after a breach rotation the index re-enters the band within a few appends.
+  **Read the division this way:** the rotor is the floor that stops the loader silently dropping
+  entries; the ~2.5 KB headroom that buys actual runway is still produced by a quality pass. Do not
+  close a band-state index as "the machine has it" — measure, and if the verdict is `exhausted`,
+  the lever is yours.
+- **This pass (2026-08-10 pass 2), for the record.** Intake 23,828 B / 112 entries, headroom 1,157 B
+  against the 2,500 B done target ⇒ a pass was authorized. Three-state check re-derived from the live
+  file: hook avg **127 B** vs a derived budget of **115 B**, slack **+16** ⇒ **LENGTH binds**, with
+  1,635 B of excess. ⚠️ Note the derived budget landed on *exactly* 115 here — the constant was
+  accidentally right at this N, so this index's own excess figure did not mislead, and the constant's
+  defect had to be demonstrated at N=95 and N=100 instead. **A constant agreeing with the derivation
+  once is not evidence it is a constant**; re-derive anyway, which is the whole rule.
+  🚨 And derive it correctly: `PFX` (a `sed | wc -c` over the entries) already carries one newline
+  per entry, and so does `ENTRY_B`, so `TOTAL = header + PFX + Σhook` exactly. Subtracting `N` again
+  "for the newlines" double-counts them and understates the allowance by 1 B/entry — the identity is
+  worth asserting before you trust either side of the comparison.
+  Lever: 76 hand-authored line rewrites + 12 retitles, **24,080 → 22,468 B, headroom 2,517 B**
+  (a sibling appended one entry mid-pass, folded in), 0 entries lost, 0 hooks grew, 1 genuine orphan re-indexed
+  (`prescribed-repro-weaker-than-the-harness.md`). Index-only-fact audit: **11 first-pass flags, 0
+  real** — every one a format variant (`20/21` vs `20-of-21`, `80/156` vs separate `80` and `156`)
+  or a paraphrase (`MISSING` vs "a word NOT in it"), which is the fourth consecutive pass where the
+  second detector pass carried the whole verdict. Also swept: 4 broken `[[wiki-links]]` whose
+  targets matched an existing file name and were therefore defects, not forward-references
+  (`actuator-is-the-arbiter`, `landing-remedy-with-surviving-symptom`, `landing-safety-tooling`,
+  `control-decays-vs-its-subject`); 9 remaining broken targets match no file and are legitimate
+  forward-references. A sibling appended one entry mid-pass and was folded in, not clobbered — the
+  compare-and-swap on the file's md5 is what proves it (fifth consecutive pass to observe a
+  concurrent write).
 
 ## PROTECTED
 - Any entry/line tagged `(PINNED)` is skipped entirely (explicit opt-out; mirrors hermes pin-to-protect).
