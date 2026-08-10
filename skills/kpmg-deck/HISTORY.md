@@ -5,6 +5,42 @@ which has no remote; this file carries its history's reasoning so the mirror is 
 state with no account of how it got there.
 
 ```
+cb34574  2026-08-10  fix(kpmg-deck): stop tracking the mirror's own files, which had looped back into the source
+    Adding this package to the claude-infrastructure checkout had a consequence I did not
+    predict: that repo's deploy step symlinks new checkout files into the live layer, so
+    HISTORY.md and MIRROR.md — which are ABOUT the mirror and belong to it — appeared inside
+    this working repo as symlinks pointing back at the checkout. The next 'git add -A' here
+    committed them.
+
+    The loop then broke the thing that created it. The mirror script walks 'git ls-files', so it
+    tried to copy HISTORY.md from the checkout to a path that resolves to the same file; cp
+    refused, and under 'set -e' the script aborted mid-copy, leaving verify.py unsynced while
+    reporting nothing. A sync tool that fails silently at the first file is worse than no sync
+    tool.
+
+    Untracked and ignored here. The symlinks themselves are the deploy step's business and are
+    left alone; what was wrong was this repo claiming to own them.
+
+
+33b0a1e  2026-08-10  docs(kpmg-deck): check_siblings says what it cannot see, so it stops being read as the verdict
+    I described this check as counting ARCHETYPE NAMES. It does not, and the correction matters
+    more than the compliment: it clusters on the POSITION AND SIZE of the largest type on each
+    page, read from the XML. That is a geometric proxy, not a name — but it is a proxy on ONE
+    feature, and the blind spot is the one that let six indistinguishable slides ship.
+
+    Three things it cannot do, now stated in the docstring and in the warning itself:
+     * it cannot tell two distinct pages sharing a headline position from two pages that are
+       literally the same picture — on the deck with six duplicates its only complaint was that
+       some position carried 26%, which was true and was not the finding;
+     * it never errors, so a duplicated page cannot fail a build through this path;
+     * it says nothing about ink, colour, imagery or anything below the headline.
+
+    check_monotony reads the renders, errors on near-duplicates, and its shape-share arm
+    supersedes this ceiling. Both are kept: this one needs no render and catches the coarse case
+    early, that one is the verdict. The warning now says so, because a gate that is trusted past
+    its evidence is worse than one that is ignored.
+
+
 e44bd33  2026-08-10  docs(kpmg-deck): points_slide's cap and its capacity are different numbers
     SKILL.md's archetype table said 'max 5' and its own sizing table, two sections later, said
     three rows fit. Both were true and they contradict: five is the EDITORIAL cap, and what the

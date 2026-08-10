@@ -9,3 +9,9 @@ __pycache__/
 # examples/, which is already ignored; this root copy was last built by a version of the file
 # that no longer runs (it called cover(), which raises).
 /showcase.pptx
+
+# Written by the MIRROR in claude-infrastructure and symlinked back here by its deploy step.
+# They describe the mirror, not this repo, and tracking them here made a loop: the mirror script
+# read them from `git ls-files` and then refused to copy a file onto itself.
+/HISTORY.md
+/MIRROR.md

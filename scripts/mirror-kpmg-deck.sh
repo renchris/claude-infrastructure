@@ -42,10 +42,19 @@ CHECK=0
 
 cd "$SRC"
 DRIFT=0
+FAILED=0
 
-# Tracked TEXT files only. Build output (*.pptx) is excluded: it is regenerable and binary.
+# Tracked TEXT files only. Two exclusions, both learned the hard way:
+#   *.pptx      build output -- regenerable and binary.
+#   symlinks    the deploy step symlinks THIS directory's own HISTORY.md and MIRROR.md back into
+#               the live layer, so they can appear in the working repo's `git ls-files`. Copying
+#               one would mean copying a file onto itself; cp refuses, and under `set -e` that
+#               aborted the whole sync at the first file while reporting success. A sync tool
+#               that dies silently on file one is worse than no sync tool.
 while IFS= read -r f; do
   case "$f" in *.pptx) continue ;; esac
+  [ -L "$SRC/$f" ] && continue
+  [ "$SRC/$f" -ef "$DST/$f" ] && continue
   if [ "$CHECK" = 1 ]; then
     if ! cmp -s "$SRC/$f" "$DST/$f" 2>/dev/null; then
       echo "DRIFT  $f"
@@ -53,7 +62,10 @@ while IFS= read -r f; do
     fi
   else
     mkdir -p "$DST/$(dirname "$f")"
-    cp "$SRC/$f" "$DST/$f"
+    if ! cp "$SRC/$f" "$DST/$f"; then
+      echo "mirror-kpmg-deck: FAILED to copy $f" >&2
+      FAILED=1
+    fi
   fi
 done < <(git ls-files)
 
@@ -85,4 +97,5 @@ fi
   echo '```'
 } > "$DST/HISTORY.md"
 
+[ "$FAILED" = 0 ] || { echo "mirror-kpmg-deck: one or more files did not copy -- mirror is INCOMPLETE" >&2; exit 1; }
 echo "mirror-kpmg-deck: refreshed $(git ls-files | grep -vc '\.pptx$') files -> skills/kpmg-deck/"

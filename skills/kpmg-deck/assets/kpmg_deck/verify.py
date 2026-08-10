@@ -932,6 +932,22 @@ def check_siblings(path: str, report: Report, *, max_share: float = 0.20) -> Non
     archetypes themselves place their own headline, so two `statement()` pages cannot disagree.
     What this catches is one archetype being used for most of the deck, which is a content
     problem wearing a layout costume.
+
+    WHAT IT CANNOT SEE, STATED SO NOBODY READS IT AS THE MONOTONY GATE. It clusters on ONE
+    feature -- the position and size of the largest type on the page -- read from the XML. That
+    is cheap, needs no render, and is blind in a way that matters:
+
+      * It cannot tell two DISTINCT pages that share a headline position from two pages that are
+        LITERALLY THE SAME PICTURE. A deck once shipped with six indistinguishable slides and
+        this check's only complaint was that some position carried 26% of the deck -- true, and
+        not the finding.
+      * It never ERRORS. At its worst it is a warning, so a duplicated page cannot fail a build
+        through this path.
+      * It says nothing about ink, colour, imagery or composition below the headline.
+
+    `check_monotony` is the one that decides. It reads the RENDERS, errors on near-duplicate
+    pages, and its shape-share arm supersedes the ceiling here. Keep both: this one runs without
+    a render and catches the coarse case early; that one is the verdict.
     """
     report.checked.append("layout diversity")
     prs = Presentation(path)
@@ -971,7 +987,10 @@ def check_siblings(path: str, report: Report, *, max_share: float = 0.20) -> Non
                 f"one layout (headline {size:g}pt at {left / EMU_PER_POINT:.0f}, "
                 f"{top / EMU_PER_POINT:.0f}pt) carries {len(slides)} of {total} slides "
                 f"({share:.0%}), over the {max_share:.0%} ceiling. KPMG's largest repeat "
-                f"across a comparable deck is 1-2 pages (4-9%).",
+                f"across a comparable deck is 1-2 pages (4-9%). This clusters on HEADLINE "
+                f"POSITION ONLY and cannot see whether those pages are actually alike -- "
+                f"`check_monotony` reads the renders and is the verdict; run it with a render "
+                f"directory before acting on this.",
             )
 
 
