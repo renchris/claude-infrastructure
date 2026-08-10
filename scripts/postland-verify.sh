@@ -1746,7 +1746,28 @@ mk_field() { printf '%s' "$(sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1)"; }
 # that survives a green, which is what "page on FAILED revert" has to mean here: the page a FAILED
 # attempt already wrote is deletable, while the disarm it announced was not.
 revert_inert() { # <culprit> <c12> <reason> <detail>
-  local c="$1" c12="$2" reason="$3" detail="$4" pf="$PAGES/postland-revert-inert-$2.page" fresh=1
+  local c="$1" c12="$2" reason="$3" detail="$4" pf="$PAGES/postland-revert-inert-$2.page" fresh=1 ftest
+  # WHICH SUITE the veto was for, recovered from the marker — the one fact that makes this item
+  # ADJUDICABLE, and the one every INERT surface used to drop (2026-08-10, item 50af9e4a4258).
+  # This is the asymmetry red_actions already fixed for the RED item ("ONE rendering of the failing
+  # NAME for all three artifacts"), reproduced in the terminal arm: the page and the backlog item
+  # named a sha, a reason and a count, while `failing=` sat only in the marker on disk. A durable
+  # item nobody can act on without archaeology is the unattributed-RED defect wearing a new label.
+  #
+  # Measured on the item that forced this. Title: "culprit f60b7ca220ee — the veto cannot actuate,
+  # 3 of 3 attempts, none landed (last exit 90)". Nothing in it says WHAT was red, so the first
+  # question an adjudicator has — is it still red? — cannot even be asked. With the name, it is one
+  # `git log` away: `tests/boot-resume-launch.bats` was fixed FORWARD by 612784f8 (Darwin caps
+  # sun_path against the string handed to bind(2), not the resulting path), trunk went green on
+  # ed095d4b, and the veto's inertness stopped being a capability loss. The name also inverts the
+  # remedy — `git revert f60b7ca2` still conflicts today AND would delete bin/cc-kitty-socket, a
+  # live dependency — so the surface that omitted it was the surface arguing for a destructive fix.
+  #
+  # Read from the marker rather than threaded through revert_rearm's signature: the marker IS the
+  # record of what the spent attempts were about, and both call sites are reached only from inside
+  # `[ -f "$mk" ]`, so it is present by construction. `tests/` matches FAILING's own sentinel for a
+  # pre-C26 marker that predates the field — a stale spelling, never a silent empty.
+  ftest="$(mk_field "$REVERTS/$c" failing)"; [ -n "$ftest" ] || ftest="tests/"
   # DAMPED ON THE PAGE FILE. A terminal skip is re-reached on EVERY later sweep that convicts the
   # same culprit — b3f728858a6f would have filed 8 items in 2.5 days — and an alarm that fires every
   # sweep carries the same zero bits as one that cannot fire at all (memory: alarm-polarity). The
@@ -1755,17 +1776,19 @@ revert_inert() { # <culprit> <c12> <reason> <detail>
   [ -f "$pf" ] && fresh=0
   { now_epoch
     printf 'post-land AUTO-REVERT is INERT for this culprit @ %s\n' "$(now_iso)"
-    printf 'culprit: %s\n' "$c12"
+    printf 'culprit: %s (failing %s)\n' "$c12" "$ftest"
     printf 'reason:  %s — %s\n' "$reason" "$detail"
     printf 'the veto did NOT actuate; trunk keeps whatever verdict it has and deploy stays pinned.\n'
+    printf 'first:   is %s still red on trunk? a green there makes this moot — fixed FORWARD, and the\n' "$ftest"
+    printf '         revert may by now be FORBIDDEN (its files moved on) rather than merely stale.\n'
     printf 'do:      %s status ; sed -n 1,20p %s/%s\n' "$SELF" "$REVERTS" "$c"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
   if [ "$fresh" -eq 1 ]; then
     [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
-      --title "post-land AUTO-REVERT INERT ($reason): culprit $c12 — the veto cannot actuate, $detail" \
+      --title "post-land AUTO-REVERT INERT ($reason): $ftest @ $c12 — the veto cannot actuate, $detail; check $ftest is still red before reverting" \
       --project claude-infrastructure --source postland-verify >/dev/null 2>&1
-    notify "Claude post-land AUTO-REVERT INERT" "$c12 — $reason; see $pf"
+    notify "Claude post-land AUTO-REVERT INERT" "$c12 — $reason on $ftest; see $pf"
   fi
   log "AUTOREVERT verdict=skipped reason=$reason culprit=$c12 terminal=1 fresh=$fresh ($detail)"
 }
