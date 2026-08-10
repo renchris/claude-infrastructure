@@ -94,11 +94,37 @@ measured reads `UNKNOWN` and says which command failed to establish it.
 | 3 | **Antigravity** 1.107.0 | ✅ yes (Google OAuth, `ichris96@hotmail.com`) | **UNKNOWN** | **UNKNOWN** | ❌ **OUT — no headless mode** | `antigravity --help` → pure VS Code option surface (`--install-extension`, `--user-data-dir`, `--add-mcp`); **no exec/agent/headless subcommand exists**. Auth shared from `~/.gemini/oauth_creds.json`; id_token carries **no** plan/tier claim, and `grep -rE '"(tier\|plan\|subscription)"' ~/.gemini/` returns nothing |
 | 4 | **Grok CLI** | ❌ not installed | **none held** | **YES — metered xAI API** | ❌ **OUT — cost gate** | `npm view @xai/grok-cli` / `@x-ai/grok-cli` → **404, no official xAI CLI on npm**. Community `@vibe-kit/grok-cli@0.0.34` README: *"Get your Grok API key from X.AI"*, endpoint `https://api.x.ai/v1`, flag `-k, --api-key`. **No OAuth/subscription login path exists** |
 | 5 | **Pi · Codex backend** | ❌ not installed | **ChatGPT Plus** (held) | **No** | ✅ **IN — install** | `npm view @earendil-works/pi-coding-agent` → `0.84.1`, MIT, published 2026-08-07, bin `pi`. README § Providers & Models, **Subscriptions:** `OpenAI ChatGPT Plus/Pro (Codex)` |
-| 6 | **Pi · Claude backend** | ❌ not installed | **Claude Max** (held ×4) | **No** | ✅ **IN — install** | same package; README **Subscriptions:** `Anthropic Claude Pro/Max`. Auth via `pi` → `/login` → select provider |
+| 6 | **Pi · Claude backend** | ❌ not installed, **and must stay that way** | Claude Pro/Max auth works, but usage does **not** draw on the plan | **🚨 YES — per-token "extra usage"** | ❌ **OUT — cost gate FAIL** | `docs/providers.md` § Claude Pro/Max (shipped inside the installed package): *"Third-party harness usage draws from **extra usage** and is **billed per token, not against Claude plan limits**."* Cross-checked against `~/.claude/accounts.json` → `spend.usage_credits_authorized: false` |
 | 7 | **Gemini CLI** 0.29.5 *(7th backend — not in the original six)* | ✅ yes, but token stale | **UNKNOWN** (free Code Assist individual vs paid Google AI — not establishable from disk) | **No metered path wired** — every API-key env var is unset | ⚠️ **DEFER** — plan tier UNKNOWN | `~/.gemini/settings.json` → `auth.selectedType: "oauth-personal"`, `model.name: "gemini-3-pro-preview"`; `printenv` → `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`GOOGLE_CLOUD_PROJECT` all unset; `oauth_creds.json` access_token expired **2026-02-23** (refresh_token present) |
 
-**Verdict: 3 backends IN (Codex, Claude Code, Pi ×2 = 4 routable agents), 2 OUT, 1 DEFERRED.**
+**Verdict: 3 routable agents IN (Codex CLI, Claude Code, Pi·Codex), 3 OUT, 1 DEFERRED.**
 Nothing was signed up for; no payment details were entered anywhere.
+
+**🚨 The correction this gate exists to catch — `pi-claude` FAILS, and the README is why it nearly
+didn't.** Row 6 first read ✅ IN on the strength of Pi's README, which lists under **Subscriptions:**
+`Anthropic Claude Pro/Max` — a true statement about *authentication*, and silent about *billing*.
+The package's own `docs/providers.md` supplies the missing half: *"Third-party harness usage draws
+from extra usage and is **billed per token, not against Claude plan limits**."* So `pi-claude`
+authenticates against a plan we hold and then spends money **outside** it — the exact shape the
+frozen scope forbids. This repo already had the standing answer on disk: `accounts.json` →
+`spend.usage_credits_authorized: false`, whose own note calls any nonzero `extra_usage.used_credits`
+*"a BREACH to surface, not a stat to render"*. **Verdict: SKIP, do not wire, do not `/login claude`
+from pi.**
+
+**Why:** "which subscriptions can this tool log into" and "what does using it bill" are two
+different questions, and a subscription *login list* answers only the first. The gate has to ask
+the second explicitly, of a source that discusses billing — a feature list will never volunteer it.
+Had the README been the only source consulted, this session would have wired a per-token meter into
+a fleet whose standing policy is that per-token spend is unauthorised.
+
+**Consequence — Pi's headline value collapses under the gate, and the plan should say so.** The plan
+called Pi *"the highest-value gap … two more agent backends at zero marginal subscription cost"*.
+After measurement, exactly one of the two survives, and it is the one with the least to add:
+`pi-codex` rides **the same ChatGPT Plus subscription the Codex CLI already rides**, so it is an
+*alternative harness over capacity we already have*, not new capacity. The backend that would have
+added genuinely new capacity — Claude-backed — is precisely the one that bills outside the plan.
+Pi is still worth having installed (a second harness, MIT, `--print` non-interactive mode, its own
+skills/extensions), but it is **not** a capacity win, and `/accounts` must not imply it is.
 
 **Finding that corrects the plan's own premise — Antigravity is not an agent backend at all.**
 The plan (and grok-wiki's picker) counted six *agent backends*. Antigravity's `--help` is byte-for-byte
@@ -183,3 +209,26 @@ it? Weigh against the renderer rule — there must remain exactly ONE renderer p
   (e) **A subscription window embedded in a token is a stale snapshot** — Codex's id_token claims a
   window that closed 2025-12-05 while the account is demonstrably live; entitlement is proven by
   the transport handshake, not the claim.
+- **2026-08-10 — W1 CORRECTED after installing Pi (same day, before any wiring).** Row 6
+  (`pi-claude`) flipped ✅ IN → ❌ **OUT**. The README's subscription list is an *authentication*
+  list; the package's `docs/providers.md` states the *billing* term — Claude Pro/Max via a
+  third-party harness bills **per token from extra usage, not against plan limits** — which
+  `accounts.json spend.usage_credits_authorized:false` forbids. **Lesson: ask what it BILLS, not
+  just what it can LOG INTO, and ask a source that discusses billing.** Net effect: Pi contributes
+  one backend (`pi-codex`), riding the same ChatGPT Plus the Codex CLI already uses, so it is a
+  second harness rather than added capacity. The plan's "highest-value gap" framing does not
+  survive measurement.
+- **2026-08-10 — W2.** `@earendil-works/pi-coding-agent@0.84.1` installed globally
+  (`--ignore-scripts`; the package has no install scripts, only `prepublishOnly`, so the flag is
+  harmless). Codex CLI already latest (0.147.0) + pinned (`gpt-5.6-sol` @ `xhigh`) + **proven by
+  invocation**. Claude Code deliberately NOT touched: its version is governed by this repo's own
+  `cc-version-audit` / MANIFEST discipline and it is the binary running this session — bumping it
+  from inside a plan about provider inventory would be scope-metastasis.
+  **⛔ `pi-codex`'s model pin is BLOCKED on an operator-only step:** `pi` ships no headless login
+  (`pi auth` only *prints/checks*; `/login` is interactive-mode only), its credential store is its
+  own (`pi auth check --provider openai` → `credentials_not_configured` — it does **not** inherit
+  Codex's tokens), and **the model catalog itself is gated behind auth** (`pi --list-models` → *"No
+  models available. Use /login"*). So the latest model cannot be read, let alone pinned or proven,
+  until the operator runs `pi` → `/login` → **OpenAI Codex**. Transplanting Codex's tokens into
+  `~/.pi/agent/auth.json` by hand was rejected: improvising an auth path around a vendor's own
+  login flow is exactly the unproven-mechanism risk this plan's landmines warn about.
