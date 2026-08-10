@@ -2,7 +2,7 @@
 # lr-handoff.sh — package a limit-interrupted session for zero-loss continuation
 # on another account: audit + salvage bundle + transcript transplant + launch.
 #
-# Usage: lr-handoff.sh [--target next|next2|next3|next4|auto] [--model opus|fable]
+# Usage: lr-handoff.sh [--target next|next2|next3|next4|auto] [--model opus|fable|claude-<id>]
 #                      [--effort low|medium|high|xhigh|max]
 #                      [--sid SID] [--config-dir DIR] [--cwd PATH]
 #                      [--context FILE] [--launch|--print-only]
@@ -17,6 +17,11 @@
 # the model was preserved and the reasoning tier was not, which is the half nobody
 # checks because the statusline still says "Fable 5". Omitted ⇒ prior behaviour exactly
 # (fable ⇒ high; opus ⇒ lr-fire-resume's account-derived default).
+#
+# --model: `opus` and `fable` are LABELS. `opus` passes NO model id downstream — lr-fire-resume
+# resolves it from the model-config SSOT (versions.opus_latest), so there is exactly one copy of that
+# perishable fact in the tree. A `claude-*` id is passed through verbatim, for a caller pinning a
+# generation the current default is not.
 #
 # --close-source: after the fire, retire THIS pane into the successor via
 # `handoff-fire.sh self-close --successor <id> --transplanted-source`. Without it the source pane
@@ -144,6 +149,15 @@ fi
 case "$EFFORT" in
   ""|low|medium|high|xhigh|max) ;;
   *) echo "lr-handoff: --effort must be low|medium|high|xhigh|max (got '$EFFORT')" >&2; exit 2 ;;
+esac
+# Same liveness argument for --model: `opus` and `fable` are LABELS this script maps, anything else
+# is passed through as a literal model id. Requiring the `claude-` prefix rejects a mistyped label
+# (`opus5`, `sonnet`) HERE, rather than as a binary startup refusal in a freshly spawned pane — i.e.
+# after the transcript has already moved accounts. It deliberately does not enumerate ids: that list
+# is perishable, and hardcoding one is the defect this whole change is about.
+case "$MODEL" in
+  opus|fable|claude-*) ;;
+  *) echo "lr-handoff: --model must be opus|fable or an explicit claude-* model id (got '$MODEL')" >&2; exit 2 ;;
 esac
 CFG="${CFG/#\~/$HOME}"
 
@@ -274,10 +288,25 @@ mv "$LAUNCHER" "$LAUNCHER.sh" && LAUNCHER="$LAUNCHER.sh"
 # is also what keeps the header comments below un-escapable.
 FIRE_ARGV=("$LR/lr-fire-resume.sh" "$TARGET" "${WT_TOP:-$CWD}" "$SID")
 [[ -n "$BRANCH" ]] && FIRE_ARGV+=(--branch "$BRANCH")
-[[ "$MODEL" == "fable" ]] && FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
-# The opus path passes no --model, so lr-fire-resume derives model AND effort from the account
-# label. An explicit --effort must still reach it, or the flag would be silently fable-only.
-[[ "$MODEL" != "fable" && -n "$EFFORT" ]] && FIRE_ARGV+=(--effort "$EFFORT")
+case "$MODEL" in
+  fable)
+    FIRE_ARGV+=(--model claude-fable-5 --effort "${EFFORT:-high}")
+    ;;
+  opus)
+    # The opus path passes no --model ON PURPOSE: lr-fire-resume resolves it from the model-config
+    # SSOT (versions.opus_latest). Naming an id here would put a SECOND copy of a perishable fact in
+    # the tree, and the first copy is exactly what silently pinned every non-fable transplant to Opus
+    # 4.8 for weeks after the Opus 5 flip. An explicit --effort must still reach it, or the flag
+    # would be silently fable-only.
+    if [[ -n "$EFFORT" ]]; then FIRE_ARGV+=(--effort "$EFFORT"); fi
+    ;;
+  *)
+    # An explicit model id, passed through verbatim — a caller pinning a specific generation (a
+    # session being moved that was NOT on the current default) must be able to say so.
+    FIRE_ARGV+=(--model "$MODEL")
+    if [[ -n "$EFFORT" ]]; then FIRE_ARGV+=(--effort "$EFFORT"); fi
+    ;;
+esac
 FIRE_ARGV+=(--prompt "$INGEST_PROMPT")
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash

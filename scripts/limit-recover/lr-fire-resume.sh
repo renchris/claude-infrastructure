@@ -24,7 +24,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cfg="" model="claude-opus-4-8" effort="max"
+# ── the OPUS default is RESOLVED from the SSOT, never a local constant ────────────────────────────
+# This line read `model="claude-opus-4-8"` and the opus path never overrode it: lr-handoff appends
+# --model only on the fable branch, and the account map sets a model only when CC_ACCT_IS_FABLE=1.
+# So EVERY non-fable transplant resumed on Opus 4.8 while ~/.claude/model-config.yaml has said
+# `opus_latest: claude-opus-5` since 2026-07-25. That is a MODEL-GENERATION downgrade, and it is
+# invisible: nothing in the resumed pane announces which model it came up on, and the operator's
+# constraint for a moved session is that it returns at the SAME model and effort. Same family as the
+# effort demotion one commit earlier, one level worse.
+#
+# FAIL CLOSED, for the reason this file already gives at the binary resolution below: a resume that
+# cannot name what it is resuming ON must not silently pick something else. That is precisely how a
+# stale constant survives — the fallback is what makes the wrong answer look like a working one.
+# Only reached when nothing has already decided the model (a fable account, or an explicit --model),
+# so an unreadable SSOT cannot break a resume that never needed it. Seam: LR_MODEL_CONFIG.
+lr_resolve_opus_model() { # → opus_latest from the model-config SSOT on stdout, or empty
+  local cfgfile="${LR_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}" v
+  [ -f "$cfgfile" ] || return 1
+  # Scoped to the `versions:` block and stopping at the next top-level key: `opus_latest` must not be
+  # answered by a same-named key under some other section, and `opus_prior` (claude-opus-4-8 — the
+  # very id this replaces) sits on the NEXT line, so an unanchored grep would re-create the bug.
+  v="$(awk '
+    /^versions:/ { f = 1; next }
+    f && /^[^[:space:]#]/ { exit }
+    f && /^[[:space:]]+opus_latest:[[:space:]]/ { print $2; exit }
+  ' "$cfgfile" 2>/dev/null | tr -d "\"' ")"
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+cfg="" model="" effort="max"
 # Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
 # shellcheck source=/dev/null
 for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
@@ -43,6 +72,16 @@ case "$ACCT" in
 esac
 [[ -n "$MODEL" ]] && model="$MODEL"
 [[ -n "$EFFORT" ]] && effort="$EFFORT"
+# Nothing above decided a model ⇒ this is the opus path, and its default comes from the SSOT.
+if [[ -z "$model" ]]; then
+  model="$(lr_resolve_opus_model)" || model=""
+  if [[ -z "$model" ]]; then
+    echo "✗ lr-fire-resume: cannot resolve versions.opus_latest from ${LR_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}." >&2
+    echo "  Refusing to guess: a resume on an unnamed model generation is the silent downgrade this check exists to stop." >&2
+    echo "  Pass the model explicitly (--model claude-opus-5), or repair the SSOT." >&2
+    exit 1
+  fi
+fi
 [[ -d "$cfg" ]] || { echo "lr-fire-resume: config dir $cfg missing" >&2; exit 2; }
 
 # Recreate a reaped worktree when a branch is known (reso-resume-one logic).
