@@ -44,6 +44,7 @@ Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl} — the sam
 cc-backlog uses, so a fixtured test and the live desk read the same way.
 """
 
+import datetime
 import json
 import os
 import re
@@ -149,6 +150,41 @@ PLAN_SNAPSHOT_ENABLED = os.environ.get("CC_PREMISE_PLAN_SNAPSHOT", "on").lower()
 # printed beside the shown count, so a truncation is never silent (memory: alarm-polarity — a cap
 # that hides its own existence reads as "this is everything").
 PLAN_REMAINING_MAX = 8
+
+# ── the EVIDENCE-AGE arm ─────────────────────────────────────────────────────────────────────────
+# How old an item's description must be before churn under its cited files is worth reporting. A
+# file touched an hour after filing is ordinary traffic and says nothing; the class this arm exists
+# for is an item that SAT.
+#
+# THE FLOOR IS WHAT KEEPS THIS FROM BECOMING AMBIENT, and it was set from a measurement rather than
+# picked. Over the 320 live (open/blocked/claimed) items of this project on 2026-08-10, the arm's
+# predicate fires on: no floor 97 (30%) · ≥1d 74 (23%) · ≥2d 56 (18%) · ≥7d 27 (8%). 24h keeps it a
+# finding rather than a line every brief carries — an alarm that always fires carries the same zero
+# bits as one that cannot (memory: alarm-polarity-and-attention-budget).
+STALE_AFTER_S = int(os.environ.get("CC_PREMISE_STALE_AFTER_S", str(24 * 3600)))
+# Turns off ONLY this arm. It is advisory and cannot refuse anything, so unlike the falsifier
+# switches this one exists purely so an operator who finds it noisy can silence it without
+# silencing a gate.
+EVIDENCE_CHURN_ENABLED = os.environ.get("CC_PREMISE_EVIDENCE_CHURN", "on").lower() not in (
+    "off", "0", "no"
+)
+# Commits shown. The TOTAL is always printed beside it, for the same reason PLAN_REMAINING_MAX
+# prints its own: a cap that hides its own existence reads as "this is everything".
+CHURN_COMMITS_MAX = 6
+# ONE stamp is used twice — to compute the age against the floor HERE, and as `git log --since=`
+# THERE — so the two readers must agree on what instant it names, and for anything but the exact
+# shape the ledger writes they do not. Measured 2026-08-10: `2026-08-05T1:2:3Z` is accepted by BOTH
+# (Python's strptime is lenient about zero-padding; git's approxidate parser takes it too), and a
+# stamp both accept is exactly the one nothing downstream flags — so a divergence between their two
+# readings would surface as a confident sentence counting commits over a window that is not the
+# window the age was measured from. Garbage is the harmless case and was measured too:
+# `--since=not-a-timestamp` returns ZERO commits, so it fails silent on its own.
+#
+# Hence the format is checked before it is trusted, and the check is deliberately stricter than
+# strptime rather than equal to it: a stamp outside the one shape both parsers have been verified to
+# read identically DISABLES this arm. Narrowing to silence is always available; a wrong number is
+# not recoverable.
+RE_ISO_TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 # ── the `postland-verify` RED arm ────────────────────────────────────────────────────────────────
 # Where postland-verify keeps its ledger. CC_POSTLAND_DIR is the PRODUCER's own knob
@@ -478,6 +514,97 @@ def cited_paths(text):
         seen.add(p)
         out.append(p)
     return out[:12]  # a contract is read by a human; an unbounded list is not read at all
+
+
+def _age_seconds(ts):
+    """Seconds since an ISO8601-Z stamp, or None if it is not one we are willing to trust.
+
+    None disables the caller's arm entirely — see RE_ISO_TS for why an unreadable stamp must narrow
+    this arm to silence rather than hand git a filter it will silently ignore.
+    """
+    if not ts or not RE_ISO_TS.match(ts):
+        return None
+    try:
+        filed = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc
+        )
+    except ValueError:
+        return None
+    return (datetime.datetime.now(datetime.timezone.utc) - filed).total_seconds()
+
+
+def evidence_churn_lines(ent, present_paths):
+    """Has TRUNK MOVED UNDER the files this item cites, since the day its evidence was written?
+
+    THE DEFECT THIS EXISTS FOR (backlog f46261b23ec2), measured rather than hypothesised. An item's
+    evidence is frozen at `add` and nothing re-reads it. 149789b69fc4 named six unpadded TSV readers
+    at 2026-07-31T17:36:44Z; 68e17e2a discharged exactly those six THIRTY-NINE MINUTES later; the
+    item was auto-blocked for thrash, unblocked seven days on, and re-dispatched with the original
+    file list verbatim. `block`/`unblock` AMPLIFIES this rather than pausing it — blocked items sit
+    longest, so they are precisely the ones whose evidence has most likely been discharged, and
+    unblock is the one transition that re-admits an item to the wave without re-reading anything.
+
+    WHY THE PATH ARM ABOVE CANNOT SEE IT, which is why this is a second arm and not a tweak to the
+    first. `cited_paths` + `cat-file -e` asks WHERE A POINTER RESOLVES, and all six of those files
+    were at their cited locations then and still are. They were discharged by a change to their
+    CONTENTS — two by padding an emitter, four by reviewed exemption lines in a bats file. Run
+    against the live store before this arm existed, `cc-premise check f46261b23ec2` returned
+    `verdict=clear` with an EMPTY contract: the item whose entire content is "my evidence is stale"
+    reported a clean premise. A pointer check cannot answer a content question.
+
+    ADVISORY, AND NEVER A VERDICT. A commit touching a cited file is not proof the premise is dead —
+    it is the reason to go read that commit. Setting `suspect` would tag a healthy live item in the
+    sweep report as a dead-pointer finding, a different and false claim (the same reasoning
+    `cmd_contract` gives for not minting a fourth verdict), and refusing would strand real work. The
+    item's own filed remedy asks for exactly this shape: "fail-OPEN with the staleness surfaced in
+    the brief rather than refusing".
+
+    `present_paths` COMES FROM THE CALLER, deliberately. The path arm has already resolved every
+    cited path against trunk; re-resolving them here would double the `cat-file` cost of every claim
+    AND let the two arms drift into reporting one file under two headings. It receives only the
+    paths that resolved through `cat-file` — a bare basename the path arm cleared via the trunk
+    basename set has no known directory, so it is not a usable pathspec and is honestly excluded.
+
+    SILENT UNLESS IT HAS SOMETHING TO SAY: no resolvable cited path, an item younger than the floor,
+    an unparseable stamp, git not answering, nothing landed in the window — all return [], never a
+    fabricated finding. The same discipline `_git_usable` enforces for the arms above it.
+    """
+    if not EVIDENCE_CHURN_ENABLED or not present_paths:
+        return []
+    ts = ent.get("first_ts") or ""
+    age = _age_seconds(ts)
+    if age is None or age < STALE_AFTER_S:
+        return []
+    # Two bounded reads rather than one unbounded one. The COUNT is the headline number, so it has
+    # to be exact — deriving it from a `-n`-capped list would silently report the cap as the total,
+    # which is the very "a cap that hides itself" failure CHURN_COMMITS_MAX prints its way out of.
+    total = _git(["rev-list", "--count", "--since=" + ts, "origin/main", "--"] + present_paths)
+    if not total or not total.isdigit() or total == "0":
+        return []
+    log = _git(["log", "--since=" + ts, "--format=%h %ad %s", "--date=short",
+                "-n", str(CHURN_COMMITS_MAX), "origin/main", "--"] + present_paths)
+    if not log:
+        return []  # counted but unlistable ⇒ we could not actually read them ⇒ say nothing
+    shown = [ln for ln in log.splitlines() if ln.strip()]
+    if not shown:
+        return []
+    n = int(total)
+    return [
+        "EVIDENCE AGE — THIS DESCRIPTION IS %d DAY(S) OLD AND NOTHING HAS RE-READ IT SINCE. It was "
+        "written at %s, and %d commit(s) have landed on the file(s) it cites in that window, so its "
+        "cure may already be on trunk. Measured precedent: 149789b69fc4 named six files, 68e17e2a "
+        "discharged all six 39 MINUTES later, and it was re-dispatched 7 days on with the same list."
+        % (int(age // 86400), ts, n),
+        "  cited: %s" % ", ".join(present_paths),
+        "  landed since%s:" % ("" if len(shown) >= n
+                               else " — showing %d of %d" % (len(shown), n)),
+    ] + ["    %s" % ln[:140] for ln in shown] + [
+        "READ THOSE COMMITS BEFORE RE-DERIVING ANYTHING. If they already discharged this condition, "
+        "THE DISCHARGE IS THE DELIVERABLE: close this item citing the commit that did it. If the "
+        "condition is still live but against a DIFFERENT set of files than the ones named above, "
+        "that different set IS the work — re-file it and say so, because closing on the old list is "
+        "a FALSE done over a guard that is still red."
+    ]
 
 
 def run_falsifier(item_id, ent):
@@ -988,9 +1115,10 @@ def assess(item_id, idx):
                     "change is on trunk by CONTENT before concluding anything." % (sha, state)
                 )
 
-        gone = []
+        gone, present = [], []
         for p in cited_paths(text):
             if _git(["cat-file", "-e", "origin/main:" + p]) is not None:
+                present.append(p)  # a usable pathspec — the evidence-age arm below reads these
                 continue
             # A BARE BASENAME IS NOT A PATH. `deploy-live.sh` lives at `scripts/deploy-live.sh`, so
             # resolving it as a repo-root path fails and reports a live file as missing — which is
@@ -1008,6 +1136,13 @@ def assess(item_id, idx):
                 "CITED PATH(S) not at that location on origin/main: %s — moved, renamed, or never "
                 "landed. Confirm before acting." % ", ".join(gone[:6])
             )
+
+        # (c) …and the question neither arm above can ask. Both of those resolve a POINTER; this
+        # asks whether trunk MOVED UNDER the files this item cites since its evidence was written.
+        # Advisory only: it appends lines and deliberately never touches `verdict`, exactly as the
+        # plan-open snapshot does, so BLOCKING gains no member and `sweep`'s buckets (which key on
+        # `verdict != "clear"`) are untouched.
+        lines.extend(evidence_churn_lines(ent, present))
 
     return verdict, lines
 
