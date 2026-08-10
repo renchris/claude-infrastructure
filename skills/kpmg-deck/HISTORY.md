@@ -1,0 +1,405 @@
+# kpmg-deck — commit history of the working repo
+
+This directory is a MIRROR. The working repo is `~/.claude/skills/kpmg-deck`, which has
+its own git history and no remote; this file carries that history's reasoning so the
+mirror is not just the current state with no account of how it got there.
+
+```
+ceadcd9  2026-08-10  fix(kpmg-deck): a window holding an image is still a window
+    check_device_mix hit a picture, set 'carries a photograph', and continued straight past the 
+    ratio test — so window STYLE 3, the image-holding shape, was counted as a photograph and
+    never as a window. Style 3 is the characteristic use; p.74 calls style 2, the type-holding
+    shape, the least characteristic one.
+
+    The effect ran backwards from the gate's purpose. Moving the course deck's six section
+    dividers from style 2 to style 3 — which is the correction this gate exists to encourage —
+    made its reported window share FALL from 16% to 2%, and the warning then told the author to
+    add windows they had just added. Measured: seven style-3 windows at ratio 1.40 and 21%
+    coverage, every one invisible to the check.
+
+    Both decks now report their true figures: the course deck 16% (7/43), the proof deck 20%
+    (7/35), up from 2% and 14%. Neither deck changed; only the measurement did.
+
+    Worth stating the general shape, because this is the second time this project has hit it: an 
+    instrument that under-reports the thing it is meant to encourage does not fail loudly. It
+    agrees with you about the direction and lies about the distance.
+
+
+6c49520  2026-08-10  docs(kpmg-deck): what each archetype actually holds, measured
+    Every archetype computes its content region from what the headline and standfirst leave
+    behind, so 'how many items fit' has no fixed answer — and finding out cost about a dozen
+    build cycles on a 35-page deck. The numbers are now written down: blocks holds 2,
+    points_slide holds 3, rows as a statement support holds 2, a window subhead holds one line.
+
+    Two traps recorded because neither is guessable:
+
+    The shortfall moves PERVERSELY with headline length in window(). The headline is sized to
+    FILL the window, so a longer headline trips the shrink loop and ends up occupying LESS total
+    height than a short one — which means 'shorten the headline' can make the subhead fit less
+    often. The archetype now reserves the subhead first so the bug is gone, but the shape
+    generalises: wherever one element is sized to consume the space, the other's failure will
+    not respond as expected.
+
+    A near-miss shows up as a line SLICED IN HALF, not as a missing line. The frame overflows
+    its coloured block while remaining a valid frame, check_overflow measures the frame, and
+    every gate reports clean while the render shows the last line cut by the block's edge. If a
+    page looks subtly wrong and verify is green, look there first.
+
+
+f494f52  2026-08-10  feat(kpmg-deck): the proof deck covers the book, not just the part we got wrong
+    Asked whether the deck was an exemplary COVERING showcase of the guidelines, audited it
+    against the book's eight sections and it was not. Two whole sections sat at zero: Logo (19
+    pages) and Strategy & voice (21 pages) — 40 of 137, nearly a third of the book, absent.
+    Colour proportion, skin tone, the furniture rule and brand-in-action were missing too. The
+    deck argued its case well and covered roughly half its subject.
+
+    Fifteen pages added, and every one is a rule the book states rather than filler:
+
+      Logo        the mark is the organisation speaking · clear space is the whole logo again ·
+                 the six prohibitions, in the book's own words on the house quote page · the
+    logo
+                 and the footer never appear together · why this deck carries no logo
+     Colour      two blues carry two thirds of the system, with the 2-3% cap on the other three
+     Window      a subject may cover it 40-80%, across two sides at most, one window per page
+     Imagery     a person is blended back over the colour, at 40-60% on Normal
+     Voice       three principles as pairs of bounds · the four-pair insight checklist · the
+    book
+                 rejects the instructional register, which is what a course deck writes by
+    default
+     In action   the same system at four sizes · nothing here is a template
+     System      eleven years and two books, on a time axis
+
+    TWO THINGS THE MONOTONY GATE CAUGHT ON MY OWN DECK, and the second is the more useful. It
+    named a real repeat -- two pages built from the same giant '1x' figure with three leaders,
+    one for the logo's clear space and one for the window's geometry. Same unit, and I had made
+    it the same picture. That page is now blocks.
+
+    It also clustered ten pages that carry ten genuinely different exhibits -- a timeline, two 
+    tables, two versus, two metric rows, a stacked bar. I looked at all ten before acting: what
+    they share is the house skeleton, which is roughly a third of every page's ink and is
+    deliberate. So the limit is recorded in check_monotony rather than tuned away, and the
+    threshold is untouched: a ceiling moved to make the current deck pass measures nothing.
+
+    Also converts the gradients page to a window that shows BOTH sanctioned ramps -- support on
+    the ground, primary in the window -- because stating that rule on a white page was the
+    weaker version of the same slide. Two gradients, one page, no caption needed.
+
+
+e22aa87  2026-08-10  fix(kpmg-deck): cover() was dead, and its error pointed at the two wrong repairs
+    Reported by the imagery teammate and reproduced: every cover() call in the package raised, 
+    including examples/showcase.py, so the archetype SKILL.md listed as 'the opening' had not
+    worked since GRADIENT_ADJACENCY was narrowed to the book's two ramps.
+
+    The guard is correct and the archetype is the problem. cover() builds KPMG Blue #00338D -> 
+    Cobalt #1E49E2, measured off four real KPMG report covers. p.46 permits exactly two
+    gradients and says 'do not create new gradients', so a faithful reproduction of a real cover
+    is still a page the current brand forbids -- the same lesson S7 recorded about the four
+    sampled adjacency pairs, arriving again from the other direction.
+
+    WHAT IS ACTUALLY FIXED HERE IS THE FAILURE MODE, NOT THE FAILURE. It raised deep inside 
+    set_gradient with '00338D/1E49E2 is not a measured adjacent pair... pass unchecked=True if
+    this is deliberate'. A reader lands on that believing they have hit an over-tight guard, and
+    both obvious repairs -- widen GRADIENT_ADJACENCY, or pass unchecked=True -- re-commit the
+    exact error the guard exists to prevent. It now raises at the top of the method, names the
+    supersession, points at window() and window_image(), and says in as many words not to widen
+    the set. A refusal that misdirects the next author is worse than no refusal.
+
+    The measurement survives in the docstring because it is still true and still used: KPMG
+    covers run 97% ink on a full-bleed field, never a flat brand colour. showcase.py moves to
+    window() and builds again; SKILL.md's archetype table no longer offers a method that cannot
+    run.
+
+
+abda067  2026-08-10  feat(kpmg-deck): p.92's depth ramp, which is a separate axis from the blend recipe
+    The book prints four treatments along a bar captioned 'gradient increasing depth/darkness'
+    and states that each is approved. Only the blend recipes were built, so the ramp was carried
+    as an open item rather than as code.
+
+    Depth is orthogonal to the recipe -- the recipe decides how the colour meets the image, the 
+    depth decides how much of the image survives it -- which is why it is its own argument
+    rather than four more mode strings. 'moderate' is the stated recipe untouched, so the
+    default changes nothing for any existing caller.
+
+    The fourth step is the interesting one and it is NOT an image treatment: 'opaque' describes
+    the style-3 composition, where the gradient sits at full opacity BEHIND a neutral image
+    rather than over it. Passing depth='opaque' therefore raises and says where that page
+    actually comes from, which is Deck.window_image(). A silent fourth level would have taught
+    the opposite of what the page says.
+
+    The two step sizes are OURS -- the page describes the levels in words and gives no numbers
+    -- and they are labelled as inferred at the constant, in the docstring, and on the proof
+    deck's source line. That distinction is the one this project keeps getting burned by.
+
+
+bf78e3e  2026-08-10  feat(kpmg-deck): the proof deck, and the six identical slides it exposed
+    proof.py is twenty pages arguing that the FY22 system is a gradient ground, one window and
+    type, built on that system so it can be judged beside the book's own pages rather than
+    beside our rules. Read only its headlines, in order, and they carry the argument without the
+    slides.
+
+    It found more than it demonstrated. Every structural refusal committed alongside it —
+    window()'s subhead, blocks()'s body, rows()'s rows, nav_strip on a dark ground,
+    key_findings' ring colours
+    — was found by writing this deck and looking at the render, not by reading the code.
+
+    course.py's six hand-off pages were one page printed six times: same archetype, same
+    standfirst, same body, a headline differing by a single digit. Each visualization asks a
+    different question, so each page now states its own and takes the archetype that argues it —
+    versus for the three ingredients, blocks for the two runs, points_slide for the one-word
+    change, process for the four runs that earn a skill, a full field for the ten translations.
+    No figures were invented: every number those exercises produce is computed live in the
+    browser, and a slide quoting one would be claiming what it cannot verify.
+
+    Both decks now pass with zero errors across fifteen checks. Both save beside their own
+    script rather than into the caller's cwd, which had been dropping an untracked pptx at the
+    repo root.
+
+
+30d09d4  2026-08-10  docs(kpmg-deck): the process, on the FY22 book rather than on a report family
+    references/composition.md is the file SKILL.md tells an agent to read when judging a layout,
+    and it did not contain the word 'window' — the name of the brand's central graphic device. 
+    brand-kit.md mentioned FY22 once. Both were written from 95 rendered pages of one report
+    family plus the 2015 brand book, and the March 2022 guidelines supersede that outright.
+
+    SKILL.md now states the system in one line before the archetype table — a gradient ground,
+    one window, and type — with the four things worth knowing before choosing an archetype, the
+    imagery API and its three approved treatments, the new exhibit forms and what each argues,
+    and the two new gates.
+
+    One correction is worth calling out because it cost a build. SKILL.md gave 'median 10 words'
+    for a headline, measured off 160 press releases and correct for press releases. Measured off
+    real KPMG SLIDES, display headlines run 2-12 words, median 3, and the constraint is
+    typographic rather than editorial: 48-60pt type will not hold ten words and the archetypes
+    compute the rest of the page from what the headline leaves behind. Written at fifteen words
+    you do not get a wrapped headline, you get a body box with negative height. Every headline
+    in the proof deck had to be re-cut to discover that.
+
+
+ecfe142  2026-08-10  feat(kpmg-deck): read the renders, because the gate was counting the wrong thing
+    check_siblings counts archetype NAMES and warns when one exceeds a fifth of the deck.
+    statement, split and points_slide are three different names that draw one picture, so the
+    reference deck shipped with SIX literally indistinguishable pages — 9, 16, 21, 26, 34 and
+    42, differing by a single digit in the headline — and every gate reported it clean.
+
+    check_monotony opens the PNGs instead. Near-duplicate pages are an ERROR, because two copies
+    of one composition is not a rhythm, it is a stutter; one visual shape carrying more than a
+    quarter of the deck is a warning that names the slides. On the reference deck it reported
+    the two duplicate groups at grayscale RMS 3.2 and 4.4 against 9.0 for the closest genuinely
+    distinct pair in the same deck, which is the separation that makes the threshold a
+    measurement rather than a guess.
+
+    check_device_mix reports grounds and devices against the nine KPMG-authored slides on p.113, 
+    warning-only and deliberately loose: those nine were composed to demonstrate range, so a
+    real engagement deck is legitimately narrower and this can never be an error. What it is
+    worth reading for is a device at ZERO — which is how the proof deck's author found it was
+    using the window on one page in eighteen, the exact defect the whole exercise exists to fix.
+
+
+cd2adb6  2026-08-10  feat(kpmg-deck): seven exhibit forms, because the vocabulary was the supply-side of the monotony
+    Rendered the 43-slide reference deck and looked at every page: roughly thirty interior pages 
+    were the same shape — eyebrow, two-tone headline, two or three columns of 9pt body, a blue 
+    closing line — and the entire graphic vocabulary across all 43 amounted to one bar chart, a 
+    handful of ring gauges, two code blocks and two contrast panels. A deck cannot be re-cut
+    onto other devices if the other devices do not exist.
+
+    Added timeline, flow_diagram, annotated_figure (components) and unit_grid, stacked_bar, 
+    waterfall, matrix_2x2 (charts). Each states in its docstring what argument it makes and when 
+    not to use it, which is the part that keeps them from becoming decoration: matrix_2x2 says
+    the axes must be things a reader can disagree with, and that every item landing in one
+    quadrant means the axes were chosen to produce that answer and the exhibit should be cut.
+
+    unit_grid earns its place against a percentage whenever the denominator is small and real —
+    '6 of the book's 9 slides' lands where '67%' does not.
+
+    Two fixes to existing behaviour, both found by the new proof deck. rows() divided its region
+    by the item count and let the result go to or below zero, stacking text boxes with negative
+    height on one another; it now raises with the measured minimum, the region it was given, and
+    what each row actually got. nav_strip treated only a dark PANEL as dark, so on a slide whose
+    whole ground is dark every tab took the grey it uses on white and the strip went out at
+    #666666 on #0C233C, 2.77:1 — the ground is the outer condition and the panel is a local
+    exception to a light one.
+
+    That second one had never fired because no exhibit had been built on Ground.DARK before.
+
+
+8626872  2026-08-10  feat(kpmg-deck): imagery — the device the engine was missing, and the refusals it needs
+    The FY22 brand book spends thirteen pages on how an image is treated and four more inside
+    the window section, and `add_picture` was being used here for exactly one thing: the logo.
+    Six of the nine KPMG-authored slides the book prints on p.113 carry a photograph. A deck
+    with no imagery is not a restrained version of that system, it is a different one — which is
+    the whole of why a correct palette kept reading as a blue theme.
+
+    imagery.py bakes the treatment in Pillow because OOXML shape fills have no blend modes: the 
+    book's recipes are Overlay at 65%, or Soft Light at 100% with the same gradient again in 
+    Multiply at 40%, and the only alternative to compositing them is a translucent flat
+    rectangle, which is a duotone by another name. Neutral tone is the step BEFORE the overlay,
+    not an alternative to it — the book prints the un-neutralised version as its failure case.
+
+    Three archetypes consume it: window_image (style 3), image_field, image_split. window_image 
+    refuses support_ground, because p.82 permits only the Purple/Cobalt gradient, KPMG Blue or 
+    Cobalt behind that style and rules out Pacific/Light Blue by name, as it overweights the
+    light blues against the p.44 proportions. Type over a treated image measures its colour off
+    the treated pixels rather than declaring one.
+
+    synthetic_field's `ribbon` renders a shaded object rather than a field. p.104 makes
+    abstraction a first-class hero category with stated criteria, and the operative one is 'the
+    shape should have mass and volume — something you could pick up and hold'. A gradient field
+    cannot pass that at any level of polish, because the test is whether the image depicts a
+    thing: so the ribbon carries a surface normal per pixel, one fixed light with a Blinn
+    specular, and a depth buffer so it occludes itself where it crosses. load_source() takes
+    licensed photography in the same slot with no other change.
+
+    Two refusals added while building the proof deck, both the same defect. window()'s subhead
+    and blocks()'s body were computed as whatever the headline left over, and both could go
+    NEGATIVE — a text box whose bottom sits above its own top, valid XML, invisible to every
+    check but the geometry one, drawn by PowerPoint over whatever is beneath. window() now
+    reserves the subhead's height BEFORE sizing the headline; before that the shortfall moved
+    perversely with headline length, because a longer headline trips the shrink loop and ends up
+    occupying less total height than a short one. blocks() now asserts the promise its own
+    comment already made: a body that will not fit at the 14pt floor is an overfull block, and
+    it used to say so and ship it anyway.
+
+    key_findings filtered its ring colours to those legal on the page. The ring colour also sets
+    the value label, which is type, and the dataviz palette is not chosen for that — Pacific is
+    a good chart colour and measures 2.29:1 on white, so cycling it unfiltered put a 34pt
+    numeral on the page at a ratio the package refuses everywhere else.
+
+
+62cb5b7  2026-08-09  fix(kpmg-deck): the rhythm reference is per genre — a deck was being judged against a report
+    
+
+b2fdb04  2026-08-09  fix(kpmg-deck): the window is measured in logo heights, sized off height, and placed below the logo
+    
+
+53e9c54  2026-08-09  fix(kpmg-deck): the solid ground is KPMG Blue — Cobalt was never a flat field
+    
+
+23f5b86  2026-08-09  docs(kpmg-deck): Arial is the body face, not the headline face — and three deviations were compliance
+    
+
+b30a465  2026-08-09  fix(kpmg-deck): eight colours are reserved for data — one was painting shipped slides
+    
+
+c03936e  2026-08-09  test(kpmg-deck): the repair dialog no library validator can see — assert the skeleton parts exist
+    
+
+7ce93e4  2026-08-09  fix(kpmg-deck): mark the 2015 system superseded — two brand generations were shipping side by side
+    
+
+440ed32  2026-08-09  feat(kpmg-deck): the window — FY22's own device, and two gradients instead of the thirty pairs I inferred
+    
+
+93302fc  2026-08-09  feat(kpmg-deck): the ramp is the split, eleven years on — gradients, cross-family rotation and a display measure
+    
+
+1987e3d  2026-08-09  feat(kpmg-deck): the course deck as Group 3 — a cover and six dividers the brand book specifies
+    
+
+efee751  2026-08-09  feat(kpmg-deck): the Group 3 archetypes and the second grid — two column systems, split by genre, conflict recorded
+    
+
+469e488  2026-08-09  feat(kpmg-deck): the two-colour page grammar — 30 legal pairs, not 42, and white is illegal on two of them
+    
+
+dfbfe6e  2026-08-08  fix(kpmg-deck): the showcase found four defects the course deck happened to miss
+    `showcase.py` is every archetype once, and running it after the rebuild is what caught them
+    — the proof deck exercises 8 of the 13 archetypes and none of these paths.
+
+    - cover() sized the staircase steps from the scale without measuring, so a long
+     title ran 76pt past its own box and over the byline. It now fits each step
+     through the scale, capped at two lines: a staircase step that takes three has
+     stopped being a step.
+    - key_findings() laid rings in two columns. At KPMG's 10.5pt gloss that is their
+     own page; at our 18pt it leaves 58pt of measure — four characters a line. One
+     ring per row, cap cut from six to four, and the error message says why.
+    - check_contrast failed the oversized quotation glyph at 2.95:1, half a hundredth
+     under the large-text floor. The glyph is measured KPMG — Pacific on Cobalt, a
+     fixed-size device on five pages — and it carries no reading load. Exempted
+     narrowly: one run, no alphanumerics, display size only.
+    - versus() and quote() produced pages under the 8% ink floor. The density gate
+     caught its own reference deck, which is the gate working.
+
+    SKILL.md's archetype table documented the old signatures and would have sent the next caller
+    straight into the failure this rebuild exists to fix. It now leads with the three-elements
+    rule and states the three invariants that were got wrong before they were measured: colour
+    marks a change of voice and never a section, interior headlines are flush left and two-tone,
+    and a panel carries a figure and a gloss rather than a headline.
+
+    course.pptx: 0 errors, 0 warnings across 12 checks. showcase.pptx: 0 errors.
+
+
+7d708d5  2026-08-08  feat(kpmg-deck): the architecture, not the atoms — measured geometry, running chrome, and a page that cannot be empty
+    The engine had correct KPMG colour and no KPMG architecture. Median 69 characters a page
+    against KPMG's 2,275-2,422; 28 of 37 pages under 8% ink where ~2% of 62 real KPMG pages are,
+    and their one instance is a back cover. A colour-only fix was already built and measured:
+    cobalt reached 28.6% against KPMG's own 14.4-16.7 while a third of pages stayed near-empty.
+    A coloured void is still a void.
+
+    Built to docs/research/KPMG-SYSTEM-2026-08-08/BUILD-SPEC.md, C1-C13.
+
+    GEOMETRY (C2). margin_x 78.5pt -> 56.693 (20mm, 884 measured spans; 78.5 appears nowhere in
+    95 pages), gutter 12 -> 19.843 (7mm), margin_top 47.5 -> 85.04 (the measured headline
+    cap-top), margin_bottom -> 48.19. Columns stay at 12: spans of four then reproduce KPMG's
+    3-column module to a worst residual of 0.20pt. Added cover_margin (72.0, the cover is the
+    one page that does not use the body margin), nav_band and footer_band.
+
+    TWO CHANGES THAT WERE KNOWN WRONG. section() drew a 46% cobalt panel; KPMG's section openers
+    are WHITE WORKING PAGES and their colour fields are reserved for the cover, an attributed
+    quote, methodology and the closing. Colour marks a change of VOICE, never a change of
+    section — the category error survived the last rebuild and only the hue changed. And
+    stepped_headline() gave the strong colour to the LONGEST line; KPMG's rule is positional and
+    invariant — line 1 navy, every remaining line cobalt, always ending cobalt, flush left. The
+    staircase is a COVER-only move. We had the step everywhere and the two-tone nowhere.
+
+    ARCHITECTURE. _head_col1 puts the headline in column one with content beside it, which is
+    what 60% of measured pages do and what we did not have at all; the standfirst hangs from the
+    content bottom line, as theirs does. Running chrome: nav_strip + footer, against a footer
+    that was 6.6pt wide — one digit — where KPMG's is 845pt. Four new archetypes (split,
+    quote_panel, key_findings, full_field), ring gauges with the value arc proud of the track,
+    the Pacific quote glyph (measured 60.02 x 49.41pt, five recurrences — the docstring calling
+    it "clip art with a typographic alibi" was refuted), stat cards, contrast pairs, code 
+    blocks. Deleted section_numeral: a 400pt ghosted numeral appears nowhere in 95 pages, and
+    leaving it in the module is how a removed device comes back.
+
+    TYPE (C8). LINE_SPACING was ~15% looser than its own comments claimed, because PowerPoint
+    multiplies the FONT's line height, not the point size. Retuned against pitch/cap, which is
+    what the eye reads: 1.29 on headlines against KPMG's 1.30, from a measured 1.73.
+
+    THE GATE THAT WAS MISSING. verify.check_overflow re-measures every text frame against its
+    own box. It found 23 overflows the day it was added, on a deck that passed every other check
+    — an overflowing text frame is valid XML, on the slide, in the palette, above the type
+    floor, and PowerPoint just draws the extra lines over whatever is beneath them. Also
+    check_rhythm (fails any page under 8% ink, reads the render because ink coverage is not in
+    the XML) and an INVERTED check_siblings: it used to warn on layouts used ONCE, when the real
+    defect is one layout carrying 38% of the deck against KPMG's 4-9%.
+
+    Behind those: body(strict=False) now steps the size down instead of overflowing silently,
+    two_tone_headline takes a string and MEASURES the split rather than taking a guessed
+    target_chars, and text insets default to 0 so a box's left edge is its ink's left edge —
+    7.2pt of invisible literal was offsetting every measured coordinate in the package.
+
+    Verify: 0 errors, 0 warnings across 12 checks.
+
+
+5fc56b3  2026-08-08  feat(kpmg-deck): the brand-driven pptx engine, as built and as corrected
+    A python-pptx engine that composes decks from a brand data file rather than a template.
+    Theme part rewritten so schemeClr references resolve to brand; text measured against real
+    font metrics before it is written; colour chosen by the ground a component sits on; a closed
+    archetype set; mechanical gates plus a mandatory render-and-look loop.
+
+    KNOWN INCOMPLETE, and the reason this snapshot exists. Measured against 95 pages of five
+    current KPMG decks, the output reads as a generic blue template: median 69 characters per
+    page against KPMG's 2,275-2,422, and 28 of 37 pages under 8% ink where ~2% of real KPMG
+    pages are. Colour is not the defect; a colour-only fix was built and proved insufficient.
+
+    BUILD-SPEC.md in lakehouse-lecture/docs/research/KPMG-SYSTEM-2026-08-08/ holds C1-C13,
+    ranked, each tied to a file and function. C1 gates the rest.
+
+    Two changes made in this snapshot are known WRONG against later measurement and must be
+    reverted as part of C4/C5: section dividers were given cobalt panels
+    (KPMG's are white; colour signals someone else speaking, not a section break), and
+    stepped_headline colours the longest line (KPMG's rule is positional -- line 1 navy, the
+    rest cobalt, flush left; the staircase is cover-only).
+
+
+```

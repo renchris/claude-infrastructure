@@ -1,0 +1,36 @@
+{
+ "1": [
+  "It is two jumps, not one.",
+  "An agent is a harness and a model. You do not build one.",
+  "Point, never copy. A copy drifts the moment you make it.",
+  "The editor is for reading. The terminal is where the work happens."
+ ],
+ "2": [
+  "Local files are the easy half. The rest of your work issues you a token.",
+  "The same statement, twice. Nothing about the risk changed.",
+  "Give it less than you hold \u2014 and keep three things out of one session.",
+  "MCP is a standard, not a capability. Not having one blocks nothing."
+ ],
+ "3": [
+  "Degradation starts at the first token, not at a threshold.",
+  "Reset when the work resolves, not at a percentage."
+ ],
+ "4": [
+  "It was trained on the best.",
+  "Front-loading is the cheaper path."
+ ],
+ "5": [
+  "Stop being asked about the safe things.",
+  "Anything an agent has to re-derive is technical debt.",
+  "The best agent file is no file.",
+  "A skill is earned, never authored.",
+  "The model is not learning."
+ ],
+ "6": [
+  "You do not orchestrate your own engineering system. You ask for it.",
+  "A session is per task. A passing thought is a task.",
+  "If you can put it into words, you can be an AI engineer.",
+  "Every rung is how many you can hold in mind.",
+  "Ten people. Ten translations."
+ ]
+}
