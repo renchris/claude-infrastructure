@@ -137,6 +137,19 @@ BLOCKING = ("superseded", "self-duplicate", "falsified")
 FALSIFIER_TIMEOUT_S = int(os.environ.get("CC_PREMISE_FALSIFIER_TIMEOUT", "20"))
 FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_FALSIFIER", "on").lower() not in ("off", "0", "no")
 
+# The plan-open arms (the DERIVED falsifier and the remaining-work snapshot below) share the
+# falsifier kill switch and timeout above — a derived probe is still a probe, and an operator who
+# turns falsification off must not be left with one still running. This second switch turns off ONLY
+# the advisory snapshot, which is the half that can be noisy without ever being wrong.
+PLAN_SNAPSHOT_ENABLED = os.environ.get("CC_PREMISE_PLAN_SNAPSHOT", "on").lower() not in (
+    "off", "0", "no"
+)
+# How many not-DONE plan sections ride the contract. Same reasoning as `cited_paths`'s [:12] and the
+# corrector list's [:3]: a contract a human will not read is not a contract. The TOTAL is always
+# printed beside the shown count, so a truncation is never silent (memory: alarm-polarity — a cap
+# that hides its own existence reads as "this is everything").
+PLAN_REMAINING_MAX = 8
+
 # A file path cited in a premise. Conservative on purpose: a bare word with a slash is not a
 # path claim, so this wants a real extension or a known top-level dir of this repo.
 RE_PATH = re.compile(
@@ -186,7 +199,8 @@ def build_index(recs):
         parts = [r.get(k) or "" for k in ("title", "needs", "evidence")]
         text = " ".join(p for p in parts if p)
         ent = idx.setdefault(rid, {"text": "", "first_ts": r.get("ts") or "", "title": "",
-                                   "project": "", "notes": [], "falsifier": ""})
+                                   "project": "", "notes": [], "falsifier": "",
+                                   "source": "", "dodRef": ""})
         # LAST-WRITE-WINS, deliberately unlike `notes` below. A falsifier is not a claim whose
         # history matters — it is the CURRENT way to ask "is this condition still live", so a later
         # record correcting it is strictly better than an earlier one. The per-record accretion that
@@ -194,6 +208,18 @@ def build_index(recs):
         # is how you resurrect a condition that was retired for a reason.
         if r.get("falsifier"):
             ent["falsifier"] = r["falsifier"]
+        # SOURCE and DODREF, folded LAST-NON-EMPTY-WINS — deliberately cc-backlog's OWN fold rule
+        # (`dodRef: ($r.dodRef // $p.dodRef // "")`, bin/cc-backlog:634) rather than the first-wins
+        # rule `title`/`project` get below. The derived plan probe added further down has to agree
+        # with cc-dispatch's dispatcher-side plan-open gate (bin/cc-dispatch:862-904), and that gate
+        # reads the FOLD (`cc-backlog list --all --json`). Two guards over one item that disagree
+        # about WHICH plan it points at is precisely the drift this one-implementation file exists to
+        # prevent. Today only the `add` event carries either field, so the two rules coincide; this
+        # keeps them coinciding if a later event ever starts carrying one.
+        if r.get("source"):
+            ent["source"] = r["source"]
+        if r.get("dodRef"):
+            ent["dodRef"] = r["dodRef"]
         if text:
             ent["text"] = (ent["text"] + " " + text).strip()
             # PER-RECORD, WITH ITS OWN TIMESTAMP. Two measured reasons this cannot collapse to one
@@ -448,6 +474,197 @@ def run_falsifier(item_id, ent):
     ]
 
 
+def _resolve_helper(env_var, name):
+    """The CO-VERSIONED sibling first, then the deployed layer. None ⇒ could not resolve ⇒ fail open.
+
+    Same order and the same reason as cc-dispatch's own resolution of find-plan.sh
+    (bin/cc-dispatch:854-866): cc-premise and scripts/ live in ONE repo and deploy together as
+    per-file symlinks that track the checkout, so `$(dirname $(realpath __file__))/../scripts/<name>`
+    is GUARANTEED to be the version that matches the running cc-premise. Resolving via $HOME first
+    skews them the moment cc-premise runs from a tree the deployed helper has not caught up to (a
+    worktree under test, a land not yet fast-forwarded) — the newer verb reads as an unknown argument
+    on the stale copy and the arm silently fails open forever, which is the worst kind of failure
+    because it looks exactly like "nothing to report".
+
+    The override is EXPLICIT-EMPTY-DISABLES, matching CC_PREMISE_REPO: a suite that must pin an arm
+    inert says so by exporting the variable empty, never by hoping the default misses.
+    """
+    override = os.environ.get(env_var)
+    if override is not None:
+        return override if (override and os.access(override, os.X_OK)) else None
+    try:
+        here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    except OSError:
+        here = ""
+    for cand in (os.path.join(here, "scripts", name) if here else "",
+                 os.path.join(os.path.expanduser("~"), ".claude", "scripts", name)):
+        if cand and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _plan_dodref(ent):
+    """The item's dodRef IFF this is a `plan-open` item pointing at a file that exists — else None.
+
+    SCOPED TO source=="plan-open" ON PURPOSE, and this is the load-bearing half of the design, taken
+    verbatim from cc-dispatch:842-846 so the two gates cannot disagree. A terminal dodRef is NOT
+    evidence about a HUMAN-filed item: it falsifies only an item whose whole reason for existing was
+    that the plan was open. The live scan behind that comment found `791345455b58` — a real 358-site
+    pipefail defect whose source is `relogin-verify-…` and which merely CITES a complete plan as its
+    DoD. Keying on "the dodRef plan is complete" alone would silently close it.
+    """
+    if (ent.get("source") or "") != "plan-open":
+        return None
+    dod = (ent.get("dodRef") or "").strip()
+    if not dod or not os.path.isfile(dod):
+        return None  # a code ref, a deleted plan, a relative path we cannot anchor ⇒ fail OPEN
+    return dod
+
+
+def run_derived_plan_falsifier(item_id, ent):
+    """The falsifier a `plan-open` item never had one stored for. Returns (verdict, lines) or None.
+
+    WHY THIS EXISTS AT ALL — the gate was real but PARTIAL. cc-discover's C2 critic mints one item
+    per plan that `find-plan.sh --list-open` reports, so the item's entire claim is "this plan is
+    still open"; that claim is a snapshot and nothing re-reads it. cc-dispatch has enforced it since
+    2026-07-31, but only at the DISPATCHER, so every other claimer — the desk, a peer session, a
+    worker claiming by hand — bypasses it entirely. That is the same hole cc-backlog's guard (5)
+    comment names as the reason to fold a predicate into the TRANSITION (bin/cc-backlog:1126-1129).
+    Deriving it here totalizes it at the actuator: one predicate, every claimer.
+
+    IT IS THE NO-STORED-PROBE FALLBACK, NEVER AN OVERRIDE. `assess` consults it only when
+    `run_falsifier` returned None. A stored probe is the item owner's own question about their own
+    condition; the plan's frontmatter is a coarser proxy, and a proxy must never outrank the
+    measurement it stands in for.
+
+    THE VERDICT TOKEN IS `falsified`, NOT A NEW ONE. BLOCKING, cc-backlog's guard (5) (which
+    discriminates on rc 3) and every existing test therefore need no new enum member — a new one
+    would land in each consumer's `*)` arm and be silently re-derived as something else (memory:
+    new-enum-member-falls-into-fail-closed-default). The CONTRACT prose is what tells a reader this
+    was DERIVED rather than re-run, so a measured probe and an inferred one can never read alike.
+
+    FAIL-OPEN ON EVERY OTHER ANSWER, and the list is exhaustive: `open`, `in-progress`, `unknown`,
+    exit 2 (find-plan.sh's own "I could not read the file"), an unresolvable helper, a dodRef that is
+    not a file, a timeout, any exception. All return None and fall through exactly as before. An
+    unread premise is "I could not tell", never "it is finished".
+    """
+    if not FALSIFIER_ENABLED:
+        return None
+    dod = _plan_dodref(ent)
+    if dod is None:
+        return None
+    findplan = _resolve_helper("CC_PREMISE_FINDPLAN_BIN", "find-plan.sh")
+    if not findplan:
+        return None
+    try:
+        p = subprocess.run(
+            [findplan, "--status", dod],
+            capture_output=True, text=True, timeout=FALSIFIER_TIMEOUT_S,
+        )
+    except Exception:
+        return None
+    # exit 2 is find-plan.sh's DECLARED "could not read the file at all" (scripts/find-plan.sh:19-22)
+    # and it prints `unknown` on stdout while doing so. Keying on the exit code rather than on that
+    # word is what keeps "the frontmatter says unknown" and "I could not ask" from collapsing into
+    # one branch — they are the same string and different facts (memory: lookup-miss-is-not-absence).
+    if p.returncode != 0:
+        return None
+    lines_out = (p.stdout or "").strip().splitlines()
+    status = lines_out[0].strip() if lines_out else ""
+    if status not in ("complete", "superseded"):
+        return None
+    return "falsified", [
+        "DERIVED FALSIFIER — this item stores no probe of its own, so its premise was re-asked "
+        "another way: it was minted solely because a plan was OPEN, and that plan is now %s. "
+        "This is a read of the plan's frontmatter JUST NOW, not a re-run of any stored command and "
+        "not an inference from the item's own words." % status,
+        "  plan:   %s" % dod,
+        "  status: %s  (find-plan.sh --status, this run)" % status,
+        "Close it citing this read (cc-backlog done %s --evidence \"premise-retracted: %s is %s "
+        "(source=plan-open; no code verified by this retraction)\"). If the plan's frontmatter is "
+        "WRONG, fix the FRONTMATTER — working around it leaves the next reader the same false "
+        "verdict, and cc-dispatch's own gate reads the identical field."
+        % (item_id, dod, status),
+    ]
+
+
+def plan_remaining_lines(ent):
+    """A STILL-OPEN plan's not-DONE sections, read just now. Advisory only; [] when it cannot ask.
+
+    THE DECAY THIS ANSWERS (backlog 82a6c1894384). When the plan is still open the derived falsifier
+    above says nothing — correctly, the work is live — but the item's TITLE is still the plan's H1 as
+    it read on the day the item was minted, and NOTHING re-reads it. Measured: `a50e6ab779e8` sat
+    open for twelve days titled "advance README hero banner — an animated Claude mascot for the
+    header" long after that banner landed; the plan was genuinely still open, so every other signal
+    in this file passes while the item's own words describe finished work. A worker reads the TASK
+    line, not the plan.
+
+    So the remedy is not a refusal — it is telling the worker that the line above it is a SNAPSHOT
+    and handing it today's remaining sections instead.
+
+    NEVER BLOCKS AND NEVER INVENTS. This returns lines only; the verdict is whatever the other
+    signals said. If plan-phase-scan.sh cannot be resolved or run, exits non-zero, emits
+    unparseable JSON, or reports no not-DONE section, this emits NOTHING — silence, never a
+    fabricated finding. The same discipline `_git_usable` enforces for the git arms: a sensor that
+    cannot read must report nothing, never assert.
+    """
+    if not PLAN_SNAPSHOT_ENABLED:
+        return []
+    dod = _plan_dodref(ent)
+    if dod is None:
+        return []
+    scan = _resolve_helper("CC_PREMISE_PLANSCAN_BIN", "plan-phase-scan.sh")
+    if not scan:
+        return []
+    try:
+        p = subprocess.run(
+            [scan, dod], capture_output=True, text=True, timeout=FALSIFIER_TIMEOUT_S
+        )
+        if p.returncode != 0:
+            return []
+        doc = json.loads(p.stdout or "")
+        sections = doc.get("sections") or []
+    except Exception:
+        return []
+    if not isinstance(sections, list):
+        return []
+
+    # LEVEL 1 IS EXCLUDED, and it is not a style choice. plan-phase-scan.sh emits the document's H1
+    # as a section spanning the WHOLE file (measured on CONCURRENCY_PROGRAM.md: start_line 5,
+    # end_line 1899, status PENDING) — it is the plan's title, not a unit of remaining work, and
+    # listing it would put the very snapshot-title this arm exists to distrust back at the top of
+    # its own remedy.
+    rem = [s for s in sections
+           if isinstance(s, dict)
+           and s.get("status") in ("PENDING", "IN_PROGRESS")
+           and (s.get("level") or 0) > 1
+           and (s.get("title") or "").strip()]
+    if not rem:
+        return []
+
+    shown = rem[:PLAN_REMAINING_MAX]
+    out = [
+        "PLAN-OPEN SNAPSHOT — THE TASK LINE ABOVE IS NOT A DESCRIPTION OF REMAINING WORK. This item "
+        "was minted from the plan's heading on the day it was discovered and nothing has re-read it "
+        "since; the plan is still open, so the title can name work that finished long ago (measured: "
+        "a50e6ab779e8 read \"advance README hero banner\" for twelve days after that banner landed). "
+        "What the plan itself still carries, read just now with plan-phase-scan.sh:",
+        "  plan: %s" % dod,
+        "  %d of %d section(s) not DONE%s:"
+        % (len(rem), len(sections),
+           "" if len(shown) == len(rem) else " — showing the first %d" % len(shown)),
+    ]
+    for s in shown:
+        out.append("    [%s] %s" % (s.get("status"), " ".join(str(s["title"]).split())[:110]))
+    out.append(
+        "Scope the work to those sections, not to the title. A container heading reads PENDING until "
+        "its own heading is marked, so some of these may hold only finished children — check the "
+        "plan. If they are ALL finished, the plan's frontmatter is the stale thing: say so and close "
+        "this item citing that, rather than re-deriving landed work."
+    )
+    return out
+
+
 def assess(item_id, idx):
     """The predicate. Returns (verdict, contract_lines)."""
     ent = idx.get(item_id)
@@ -463,6 +680,12 @@ def assess(item_id, idx):
     # re-run says the condition is gone, no amount of confident prose beneath it should be able to
     # send a worker at it.
     fals = run_falsifier(item_id, ent)
+    if fals is None:
+        # …and when the item stores no probe, a `plan-open` item still HAS a question that can be
+        # re-asked: its plan's own status. STORED WINS — this is reached only on None, never on a
+        # stored probe's "still live", because a proxy must not outrank the measurement it stands in
+        # for. See run_derived_plan_falsifier.
+        fals = run_derived_plan_falsifier(item_id, ent)
     if fals is not None:
         fverdict, flines = fals
         if fverdict == "falsified":
@@ -472,6 +695,13 @@ def assess(item_id, idx):
         # says "the condition is real" is no evidence that the ITEM is the right place to work it,
         # and the two questions are independent. Carry the output forward and keep asking.
         lines.extend(flines)
+
+    # (0b) THE PLAN IS STILL OPEN, so nothing above refused — but the TITLE the worker is about to
+    # read is a discovery-time snapshot of the plan's H1 that nothing re-reads. Advisory ONLY: it
+    # appends lines and deliberately does not touch `verdict`, so `check` still exits 0 and no new
+    # member joins BLOCKING. Reached only when the derived falsifier did NOT fire (that path returns
+    # above), which is exactly the case where the item is live and the worker needs today's scope.
+    lines.extend(plan_remaining_lines(ent))
 
     # (a) THIS item declares itself redundant. Strongest signal in the store and the cheapest to
     # act on: the canonical sibling is named, so the reader is never left guessing what survives.
@@ -572,10 +802,30 @@ def cmd_check(item_id):
 
 def cmd_contract(item_id):
     """The brief-injectable block. Silent when there is nothing to say — a contract that fires
-    on every item is one the worker learns to skip."""
+    on every item is one the worker learns to skip.
+
+    ⚠️ THE GATE IS `lines`, NOT `verdict`, and that changed here (2026-08-10). The old condition
+    also suppressed the block whenever the verdict read `clear` — which sounds equivalent and is
+    not: `assess` produces lines on two paths that leave the verdict `clear` on purpose. A STILL-LIVE
+    stored falsifier is one (run_falsifier's own docstring promises "the probe's own output rides the
+    contract", and it did not — `check` printed it to stderr while `contract`, the channel this
+    file's header calls THE ENFORCING STORE FOR A WORKER, dropped it). The plan-open snapshot is the
+    other, and it is advisory by construction, so keying on the verdict would have made it
+    permanently unreachable in the one place it is meant to be read.
+
+    Two alternatives were rejected. Minting a fourth non-blocking verdict would put a new enum member
+    into every consumer's `*)` arm — cc-backlog's guard (5), sweep's fixed bucket keys — where it is
+    silently re-derived as something else (memory: new-enum-member-falls-into-fail-closed-default).
+    Forcing the arm to set `suspect` would tag a healthy live item in the sweep report as a
+    dead-pointer finding, which is a different and false claim.
+
+    The "never fires on every item" property is preserved BY the change, not despite it: an item with
+    no signal produces no lines, so it is still silent. BLOCKING is untouched, and no verdict's exit
+    code moves.
+    """
     idx = build_index(load_records())
-    verdict, lines = assess(item_id, idx)
-    if verdict in ("clear", "unknown") or not lines:
+    _verdict, lines = assess(item_id, idx)
+    if not lines:
         sys.exit(0)
     sys.stdout.write(CONTRACT_HEADER + "\n")
     for ln in lines:
@@ -694,6 +944,12 @@ def cmd_sweep(as_json):
         "done": len(done),
         "superseded": buckets.get("superseded", []),
         "self_duplicate": buckets.get("self-duplicate", []),
+        # `falsified` IS in BLOCKING, and it was missing from this report — so the report enumerated
+        # two of the three verdicts that refuse a claim and read as if it had listed them all. That
+        # is exactly the report/gate drift this file's header says one shared predicate exists to
+        # prevent, and it stops being harmless now that a `plan-open` item can reach `falsified` with
+        # no stored probe of its own. Added rather than left to the reader's memory of BLOCKING.
+        "falsified": buckets.get("falsified", []),
         "corrected": buckets.get("corrected", []),
         "suspect": buckets.get("suspect", []),
         "dupes_of_done": dupes,
@@ -710,6 +966,7 @@ def cmd_sweep(as_json):
     w("\n  REFUSED at claim (exit 3):\n")
     w("    superseded     — another item retracts this one WHOLE : %d\n" % len(report["superseded"]))
     w("    self-duplicate — this item names its own canonical sib: %d\n" % len(report["self_duplicate"]))
+    w("    falsified      — a probe (stored or derived) says GONE : %d\n" % len(report["falsified"]))
     w("  ALLOWED, contract rides the brief:\n")
     w("    corrected      — a sub-claim refuted, work still live : %d\n" % len(report["corrected"]))
     w("    suspect        — a cited sha/path no longer resolves  : %d\n" % len(report["suspect"]))
@@ -718,6 +975,7 @@ def cmd_sweep(as_json):
     w("  dupes-of-done (same condition, numbers stripped)  : %d  (%d closed AFTER this item)\n"
       % (len(dupes), sum(1 for d in dupes if d["closed_after_this"])))
     for key, label in (("superseded", "SUPERSEDED"), ("self_duplicate", "SELF-DUPLICATE"),
+                       ("falsified", "FALSIFIED"),
                        ("corrected", "CORRECTED"), ("suspect", "SUSPECT")):
         rows = report[key]
         if not rows:
