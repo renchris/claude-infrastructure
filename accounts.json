@@ -14,6 +14,11 @@
   "claude_bin": "~/.claude-220/node_modules/.bin/claude",
   "model_config_ssot": "~/.claude/model-config.yaml",
   "dia_local_state": "~/Library/Application Support/Dia/User Data/Local State",
+  "_spend": "The pay-as-you-go guard, and the ONLY thing standing between pool exhaustion and a bill. usage_credits_authorized is the operator's standing answer to \"may this fleet spend beyond the four Max subscriptions\" — false means extra-usage credits are NOT sanctioned, so any nonzero extra_usage.used_credits on any account is a BREACH to surface, not a stat to render. It lives here because it lived nowhere: the guard existed only as a backlog row, with no field, no assertion and no test, which is the advisory-behind-a-diode failure — a standing cost guard that can only be remembered is one that will be forgotten while the meter runs. Note the unit trap the endpoint sets: extra_usage.used_credits is in CENTS (a reading of 17691 rendered as $176.91 in the web Usage panel), and credits_on is the TOGGLE, NOT a proxy for whether money moved \u2014 the same account read credits_on=false with $176.91 already spent. So the breach keys on SPEND, never on the toggle.",
+  "spend": {
+    "usage_credits_authorized": false,
+    "breach_note": "flip to true only on an explicit operator decision, and say why in the commit"
+  },
   "cache_file": "/tmp/claude-accounts-cache.json",
   "cache_ttl_s": 90,
   "_lock": "lock_wait_s = how long a caller waits for the single-flight lock before serving a grace-TTL cache instead of blocking (the holder can own it for minutes: 4 accounts x keychain + 90s heal + retry ladders). cache_grace_s = the widened TTL used ONLY on that degrade path. --fresh NEVER degrades — handoff-fire relies on it forcing a live sweep with auto-heal.",

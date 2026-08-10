@@ -1055,6 +1055,62 @@ the quota arm, exactly as `refused-harness` was placed ahead of it for the same 
 failure must never reach the quota patterns at all. Implemented in `scripts/cloud-bundle-probe.sh`
 and to be adopted by `cloud-ceiling-probe.sh`.
 
+#### S5b · The FLOOR — MEASURED 2026-08-10, because the ceiling never was (backlog `b22e519e06cb`, MASTER M6)
+
+**The measured machine floor is 30 concurrent sessions.** Not a target, not an estimate: the largest
+session count this box sustained across ten consecutive 60-second samples with the capacity alarm's
+own verdict reading `OK` **and** zero swap in use. Derived from 11,421 samples spanning 268 hours in
+`~/.claude/logs/capacity-alarm.jsonl`; 5,190 of those samples were healthy; the peak ever observed is
+46, and 46 is deliberately **not** the number — one sample proves the box briefly held 46, not that it
+carries it. Re-derive, never quote: `bash scripts/pool-floor.sh` (`--json` for the record). The figure
+moves with the fleet and with the hardware, and a published percentile in this repo has gone stale
+inside 36 hours before.
+
+**Why a floor at all, when every prior attempt reached for a ceiling.** §S5-CEILING, §S5.2 and §S5.4
+are three successive findings that the ceiling is not obtainable: the OAuth usage endpoint returns
+`percent` and `resets_at` and no entitlement anywhere, the vendor publishes no per-account concurrent
+cap (§S5 line 654 marks it UNVERIFIED), and the one experiment that probed the boundary is void — an
+account at 100% weekly created cloud sessions normally, so weekly quota does not gate create and the
+`--control` arm measured nothing. §S5.4's verdict is that no replacement control is reachable. A
+ceiling this program cannot measure has absorbed three sections; a floor is obtainable, falsifiable by
+a single counter-example, and is the number a scheduler actually consumes. Only lower bounds publish.
+
+**The POOL floor is still INSUFFICIENT-DATA, and that is now a matter of elapsed time rather than of
+instrumentation.** It was not merely unmeasured — it was *unmeasurable*, and the reason is worth
+recording because it is this program's own defect rather than the vendor's: every live `claude-accounts`
+sweep already measures per-account 5h %, weekly %, Fable % and live session count, and then **discards
+them**. `/tmp/claude-accounts-cache.json` is a single-slot overwrite carrying exactly one prior sample;
+`~/.claude/logs/claude-accounts-lastgood.json` is overwritten per account. Depth one. So this box
+produced the entire input to the pool question continuously for months and retained none of it, while
+the question sat open across three sections. `bin/claude-accounts:record_utilization` now appends that
+same already-paid-for measurement to `~/.claude/logs/account-utilization.jsonl` on every live sweep —
+no extra network call, no extra quota, no new daemon, because the expensive part was already paid for
+by whoever asked. `scripts/pool-floor.sh` computes the pool floor from it once the series spans a full
+weekly window (168 h, since `weekly_all` is the binding limit), and reports INSUFFICIENT-DATA with the
+shortfall until then rather than a number with a caveat — a floor published from four days would be
+quoted for months after the caveat was lost.
+
+**What the pool floor will be, mechanically, so nobody has to re-derive the definition:** per account,
+the largest live session count observed while that account's weekly window was under 100% and the row
+was not inherited; summed across the four. A sum of per-account floors, because the pool is four
+independent limits rather than one — the conservative composition.
+
+🚨 **NO TARGET SESSION COUNT IS DECIDED HERE, and that is deliberate.** The ~100 goal at line 47 is an
+operator aspiration; converting it into a committed target is a *value* call about how much of a
+four-subscription pool to spend, and it needs the pool floor that does not exist yet. Two of the three
+inputs are also still operator-gated web actions with no CLI path: the routine bearer token (mintable
+only in the web UI, shown once) and the first observation of a cloud session in any state other than
+`NOT-STARTED`. Deciding a number now would be an estimate wearing a measurement's clothes, in a section
+whose whole subject is that this program has done that three times.
+
+**The spend guard is no longer a memo.** `accounts.json:spend.usage_credits_authorized` is the
+operator's standing answer to "may this fleet spend past the four subscriptions", and
+`claude-accounts --readout` now renders unsanctioned extra-usage spend as a **breach** rather than as
+the same neutral bullet it used for sanctioned spend. Previously the guard existed only as a backlog
+row — no SSOT field, no assertion, no test — which is the advisory-behind-a-diode failure applied to
+the one thing standing between pool exhaustion and a bill. It keys on SPEND, never on the toggle: an
+account has read `credits_on=false` with $176.91 already on the meter. Pinned by `tests/pool-floor.bats`.
+
 #### S5.5 · T2 (one real round trip) and T3 (token load) — BLOCKED, on a wall that is now named
 
 **T3 is blocked ON T2, and T2 is blocked on a session that never executes.** Recorded plainly

@@ -1254,6 +1254,65 @@ def cache_read(cfg, want_heal=False, grace_s=None):
     return None
 
 
+UTIL_PATH = os.path.join(HOME, ".claude", "logs", "account-utilization.jsonl")
+UTIL_MIN_INTERVAL_S = 300
+
+
+def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
+    """Append one row per account per LIVE sweep — the series nothing was keeping.
+
+    Every live sweep already measures the four numbers a capacity question needs (per-account
+    5h %, weekly %, Fable %, and k live sessions) and then throws them away: the /tmp cache is a
+    single-slot overwrite carrying exactly ONE prior sample, and the last-good ledger is
+    overwritten per account. So the box has produced this data continuously for months and
+    retained a depth of one, which is why "how many concurrent sessions does the four-
+    subscription pool sustain" has no answer that is not a guess.
+
+    This costs NOTHING to collect. It rides the sweep that already happened — no extra network
+    call, no extra quota, no new daemon — because the expensive part (four OAuth usage fetches)
+    is already paid for by whoever asked. That is the whole design: the cheapest recorder is the
+    one that stops discarding a measurement, not one that takes a new one.
+
+    Only on the fresh-sweep path, and rate-limited to one batch per min_interval_s, so a desk
+    hammering --fresh cannot turn this into its own growth problem (~4 rows / 5 min worst case).
+
+    BLAST RADIUS: a side-car must fail no wider than itself. Every error is swallowed — this is
+    a recorder bolted onto the tool the whole fleet routes with, and a full disk or a bad
+    permission must degrade the SERIES, never break `claude-accounts --route`.
+    """
+    path = path or UTIL_PATH
+    try:
+        if time.time() - os.stat(path).st_mtime < min_interval_s:
+            return 0
+    except OSError:
+        pass                                    # absent store: first write
+    ts = datetime.now(timezone.utc).isoformat()
+    n = 0
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            for r in rows:
+                if r.get("session_pct") is None and r.get("weekly_pct") is None:
+                    continue                    # a failed probe carries no measurement
+                f.write(json.dumps({
+                    "ts": ts, "acct": r.get("acct"), "k": r.get("k"),
+                    "session_pct": r.get("session_pct"), "weekly_pct": r.get("weekly_pct"),
+                    "fable_pct": r.get("fable_pct"),
+                    "session_reset_at": r.get("session_reset_at"),
+                    "weekly_reset_at": r.get("weekly_reset_at"),
+                    "credits_on": r.get("credits_on"), "credits_used": r.get("credits_used"),
+                    "auth": r.get("auth"),
+                    # inherited/errored rows are KEPT and flagged, never dropped: a gap in the
+                    # series is indistinguishable from a quiet period, and the analysis needs to
+                    # tell "we could not measure" from "nothing was happening".
+                    "stale": bool(r.get("stale_quota") or r.get("error")),
+                }, separators=(",", ":")) + "\n")
+                n += 1
+    except OSError:
+        return 0
+    return n
+
+
 def cache_write(cfg, payload):
     tmp = cfg["cache_file"] + f".{os.getpid()}.tmp"
     try:
@@ -1387,6 +1446,7 @@ def get_data(cfg, fresh=False, no_heal=False):
         prev = _prev_snapshot(cfg)
         win = frontier_window(cfg)
         rows = collect(cfg, no_heal=no_heal, prev=prev)
+        record_utilization(rows)
         wj = {"active": win["active"], "end": win["end"], "permanent": win.get("permanent", False),
               # permanent is carried explicitly: without it a null deadline cannot be told
               # apart from "the SSOT deadline was unparseable" by any --json consumer.
@@ -1771,9 +1831,24 @@ def render_readout(rows, cfg, win, cached):
             notes.append(f"○ `{acct}` — Fable exhausted")
         # ¢ keys on SPEND, not on the toggle: an account read credits_on=false with $176.91
         # already spent. And the dollar field, never credits_used — that one is in CENTS.
+        #
+        # BREACH vs STAT. This used to render the same neutral bullet whether or not the spend
+        # was sanctioned, which made it a number to read past rather than a guard that can go
+        # red — the standing cost guard existed only as a backlog row, with no SSOT field and
+        # nothing that could fail. accounts.json:spend.usage_credits_authorized is now the
+        # operator's standing answer, so unsanctioned spend states that it is unsanctioned.
         if (r.get("credits_used") or 0) > 0:
-            notes.append(f"¢ `{acct}` — ${r.get('credits_used_usd', 0.0):.2f} extra-usage spend "
-                         f"(toggle currently {'on' if r.get('credits_on') else 'off'})")
+            authorized = bool((cfg.get("spend") or {}).get("usage_credits_authorized"))
+            usd = r.get("credits_used_usd", 0.0)
+            if authorized:
+                notes.append(f"¢ `{acct}` — ${usd:.2f} extra-usage spend "
+                             f"(toggle currently {'on' if r.get('credits_on') else 'off'}) "
+                             f"— authorized in accounts.json:spend")
+            else:
+                notes.append(f"🚨 `{acct}` — **${usd:.2f} extra-usage spend and it is NOT "
+                             f"authorized** (accounts.json:spend.usage_credits_authorized=false; "
+                             f"toggle currently {'on' if r.get('credits_on') else 'off'}). This "
+                             f"is the four-subscription pool being spent past, as money.")
         if a not in ("ok", None):
             notes.append(f"○ `{acct}` — auth `{a}`"
                          + (f" → {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
