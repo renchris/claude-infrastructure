@@ -75,13 +75,13 @@ _fakebin() {
   rm -f "$CC_PROVIDERS_JSON"
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no provider registry"* ]]
+  [[ "$output" == *"no provider registry"* ]] || false
 
   # malformed — the accessory must not be able to take the surface down
   printf '{ this is not json' > "$CC_PROVIDERS_JSON"
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no provider registry"* ]]
+  [[ "$output" == *"no provider registry"* ]] || false
 
   # a valid registry whose `providers` is the wrong TYPE is also a miss, not a traceback
   printf '{"providers": "nope"}' > "$CC_PROVIDERS_JSON"
@@ -105,11 +105,11 @@ JSON
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
   # it IS installed and it IS authenticated — both must show, so the row is not simply blank
-  [[ "$output" == *"9.9.9"* ]]
-  [[ "$output" == *"ok"* ]]
+  [[ "$output" == *"9.9.9"* ]] || false
+  [[ "$output" == *"ok"* ]] || false
   # ...and it must STILL not be routable
-  [[ "$output" != *"| EditorLike | ✅"* ]]
-  [[ "$output" == *"NOT AN AGENT BACKEND"* ]]
+  [[ "$output" != *"| EditorLike | ✅"* ]] || false
+  [[ "$output" == *"NOT AN AGENT BACKEND"* ]] || false
   [[ "$output" == *"0 of 0 routable"* ]]
 }
 
@@ -127,7 +127,7 @@ JSON
 
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"| EditorLike | ✅"* ]]
+  [[ "$output" == *"| EditorLike | ✅"* ]] || false
   [[ "$output" == *"1 of 1 routable"* ]]
 }
 
@@ -141,10 +141,10 @@ JSON
 
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" != *"| Harness · Claude | ✅"* ]]   # a headless mode alone does NOT clear it
-  [[ "$output" == *"YES"* ]]                       # the billing cell is loud
-  [[ "$output" == *"COST GATE FAIL"* ]]
-  [[ "$output" == *"bill OUTSIDE a plan we hold"* ]]
+  [[ "$output" != *"| Harness · Claude | ✅"* ]] || false # a headless mode alone does NOT clear it
+  [[ "$output" == *"YES"* ]] || false              # the billing cell is loud
+  [[ "$output" == *"COST GATE FAIL"* ]] || false
+  [[ "$output" == *"bill OUTSIDE a plan we hold"* ]] || false
   [[ "$output" == *"0 of 0 routable"* ]]
 }
 
@@ -159,7 +159,7 @@ JSON
 
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"COST GATE FAIL"* ]]
+  [[ "$output" == *"COST GATE FAIL"* ]] || false
   [[ "$output" != *"no headless mode"* ]]
 }
 
@@ -188,7 +188,7 @@ JSON
 
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"UNKNOWN"* ]]
+  [[ "$output" == *"UNKNOWN"* ]] || false
   [[ "$output" == *"not installed"* ]]
 }
 
@@ -202,8 +202,8 @@ JSON
 
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"some-model-9"* ]]
-  [[ "$output" == *"unproven"* ]]
+  [[ "$output" == *"some-model-9"* ]] || false
+  [[ "$output" == *"unproven"* ]] || false
 
   # ...and PROVEN once the registry records how it was proven by invocation
   _registry '[{"name":"pinned","label":"Pinned","bin":"pinned",
@@ -213,7 +213,7 @@ JSON
                "model_pin":{"path":"'"$BATS_TEST_TMPDIR"'/settings.json","key":"model.name"}}]'
   run "$CA_BIN" --agents
   [ "$status" -eq 0 ]
-  [[ "$output" == *"proven"* ]]
+  [[ "$output" == *"proven"* ]] || false
   [[ "$output" != *"unproven"* ]]
 }
 
@@ -226,11 +226,11 @@ JSON
                "in_scope":true,"plan":"HeldPlan","bills_outside_plan":false,
                "model_pin":{"path":"'"$BATS_TEST_TMPDIR"'/settings.json","key":"model.name"}}]'
   run "$CA_BIN" --agents
-  [[ "$output" == *"first-model"* ]]
+  [[ "$output" == *"first-model"* ]] || false
 
   printf '{"model": {"name": "second-model"}}' > "$BATS_TEST_TMPDIR/settings.json"
   run "$CA_BIN" --agents
-  [[ "$output" == *"second-model"* ]]
+  [[ "$output" == *"second-model"* ]] || false
   [[ "$output" != *"first-model"* ]]
 }
 
