@@ -278,6 +278,56 @@ STUB
   grep -q -- "--label claude4" "$ARMED"
 }
 
+@test "arming: a TEAM pane arms — claude.exe is the measured teammate spelling (bc50117059ac)" {
+  # THE REGRESSION THIS PINS. Backlog bc50117059ac ranks the un-acked spawn surfaces by who survives
+  # to notice: handoff successor first (fail-closed since 0a4c8c9c), then TEAM PANES. Team panes
+  # reached this gate and fell out of it — the verb is `claude.exe` and `claude-*` does not match a
+  # dot, so every Agent-Teams teammate launched with NO wedge watchdog at all.
+  #
+  # `claude.exe` is not a guess: capacity-alarm.sh:583 measured it as EXACTLY the `--agent-id`
+  # teammate set, disjoint from the launcher family (intersection ZERO), and agent-identity.sh:14
+  # records the same argv shape from the live 2.1.220 fleet.
+  eval "$(sed -n '/^_arm_wedge_watch() {/,/^}/p' "$REPO/bin/cc-pane-runner")"
+  export KITTY_WINDOW_ID=999999
+  ARMED="$BATS_TEST_TMPDIR/armed.txt"
+  cat > "$HOME/.claude/bin/cc-wedge-watch" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ARMED"
+STUB
+  chmod +x "$HOME/.claude/bin/cc-wedge-watch"
+
+  # The command as Claude Code delivers it: an absolute path to the agent binary plus the three
+  # flags that identify a teammate. The basename is what the gate sees.
+  _arm_wedge_watch "/Users/x/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id n@session-t --agent-name n --team-name t"
+  sleep 0.3
+  [ -f "$ARMED" ]
+  grep -q -- "--pane 999999" "$ARMED"
+  grep -q -- "--label claude.exe" "$ARMED"
+}
+
+@test "arming CONTROL: the widened gate can still REFUSE — a mention is not a verb" {
+  # The mutation guard on the fix above. Adding a spelling to a gate is one edit away from widening
+  # it into an argv match, and this gate's whole contract is "the verb is matched, not the whole
+  # line". Both cases below name claude.exe and must NOT arm: one in the arguments, one as a
+  # neighbouring spelling the evidence never covered (memory: denylist-enumerates-spellings-not-
+  # the-class). If this goes green by accident the gate has stopped being a verb gate.
+  eval "$(sed -n '/^_arm_wedge_watch() {/,/^}/p' "$REPO/bin/cc-pane-runner")"
+  export KITTY_WINDOW_ID=999999
+  ARMED="$BATS_TEST_TMPDIR/armed.txt"
+  cat > "$HOME/.claude/bin/cc-wedge-watch" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ARMED"
+STUB
+  chmod +x "$HOME/.claude/bin/cc-wedge-watch"
+
+  run _arm_wedge_watch "bash cc-close-attrib /usr/lib/claude.exe --agent-name n"
+  [ "$status" -eq 0 ]
+  run _arm_wedge_watch "claude.py --probe"
+  [ "$status" -eq 0 ]
+  sleep 0.2
+  [ ! -f "$ARMED" ]
+}
+
 @test "arming: the kill switch and an absent pane id are both silent no-ops" {
   eval "$(sed -n '/^_arm_wedge_watch() {/,/^}/p' "$REPO/bin/cc-pane-runner")"
   ARMED="$BATS_TEST_TMPDIR/armed.txt"
