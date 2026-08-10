@@ -1,0 +1,14 @@
+# G2-hostile — 3 missing dimensions
+
+**Premise correction (free):** the lock is NOT machine-wide — keyed per shared-git-dir (`scripts/land-lock.sh:38-45`), i.e. machine-wide *per repo*. Congestion ⇒ 15 sessions concentrating on ONE repo. Re-weights the batching candidate; voids any cross-repo throughput math.
+
+**1. The censored tail — wedge/failure pathology vs queue depth.** Every wait/congestion axis measures COMPLETED lands; the verdict flips on what never completed. `LAND_LOCK_WAIT=3600` = queue 1h then give up (silent 📦-forever); `LAND_LOCK_TTL=1200` = a wedged holder blocks all peers 20min before reap — ONE wedge + retries explains "3 peers, 1h8m" with zero throughput problem. If the tail is wedge/retry pathology, a queue daemon makes it WORSE (adds a wedgeable singleton); if genuine depth, batching helps. Nothing in the decomposition distinguishes them.
+Check: `grep -oE 'exit=[0-9]+|reap|timeout|gave.up' ~/.claude/land.log | sort | uniq -c` (exit 5/7 clustering + reap events vs clean waits).
+
+**2. Off-box writers already bypass the lock.** Cloud sessions PUSH (`docs/plans/CLOUD_OBSERVABILITY.md:89-94` — remote-ref advance is their only heartbeat). A /tmp flock cannot serialize a VM's push: those pushes surface locally as unattributed exit-7 non-ff retries, and their branches add landing demand. An architecture whose serialization point is one machine's /tmp is wrong the day one writer is remote — the durable point is the REMOTE (server-side/push-keyed). The census axis counts only local branches/worktrees; this population is invisible to it.
+Check: `git ls-remote --heads origin | wc -l` vs local census; land.log exit=7 events vs cloud-push timestamps.
+
+**3. Async lands orphan their failures — the close-certificate contract.** The obvious replacement (queued/async landing) reintroduces exactly what ship-by-default was built to kill: session closes with the land queued; it later exits 5 (rebase conflict) or 6 (red gate) — and the owner context is DEAD. Bors pings a live author; here there is none. And `wrap-ledger.sh` computes 📦/✅ from `trunk..HEAD` at close — under async every close reads 📦, killing the self-certifying `✅ SAFE TO CLOSE`. No axis prices failure-ownership-after-session-death, and it is the constraint that disqualifies most merge-queue SOTA here.
+Check: land.log exit-5/6 rate (= the orphan rate an async design must staff); `grep -n 'trunk\.\.' scripts/wrap-ledger.sh`.
+
+**On the lead's candidates:** batching — CONFIRMED, sharper: demand is policy-manufactured (ship-at-every-close directive), so the cheapest lever is the close protocol (land-on-recycle / N-commit batch), a CLAUDE.md change, not architecture. Gates-in-lock / resource contention — largely DISSOLVED by v2 (`ship-land.sh:23-40`: statics+smoke unlocked, heavy suites on the background verifier); #1's check is what remains of it.
