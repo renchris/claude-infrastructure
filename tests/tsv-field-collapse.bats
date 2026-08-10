@@ -473,6 +473,42 @@ JSON
   refute_grep '^HOLD'
 }
 
+@test "backlog-consolidation-trigger: a cluster with an empty project keeps its title in the TITLE column" {
+  # `cc-backlog add` without --project mints items whose project folds to "", and .key groups ON the
+  # project — so a cluster of them is a cluster of empty cells, and the threshold guarantees at
+  # least $th of them before anything renders. Cell 1 is a jq array LENGTH and cell 3 is LAST, so
+  # `.project` is the only empty-reachable non-final cell, and it is the one that bites.
+  local B="$C/backlog.jsonl" i
+  for i in 1 2 3 4 5; do
+    printf '{"id":"cluster%s","ts":"2026-08-01T00:00:00Z","event":"add","project":"","title":"EMPTYPROJTITLE"}\n' "$i"
+  done > "$B"
+  run env CC_BACKLOG_FILE="$B" bash "$REPO/scripts/backlog-consolidation-trigger.sh" --threshold 5
+  [ "$status" -eq 0 ]
+  # origin/main renders "  5x  [EMPTYPROJTITLE]  " — the title in the PROJECT column, title blank.
+  printf '%s' "$output" | grep -q '5x  \[-\]  EMPTYPROJTITLE'
+  refute_grep '\[EMPTYPROJTITLE\]'
+}
+
+@test "cc-offload ls: a declaration with an empty state still renders its own columns" {
+  # `(.state // "UNKNOWN")` substitutes for null and NEVER for "", so an empty state emitted an
+  # empty cell. Four cells were empty-reachable that way (id · state · age_s · branch) and none is
+  # last. This one is not merely a shifted render: `read -r id st age acct br url ret` left `ret`
+  # unset, and origin/main dies on `[: next2: integer expression expected` then `next2: unbound
+  # variable` — the tally line never prints at all.
+  mkdir -p "$C/bin"
+  printf '#!/bin/bash\ncat "$CC_FIXTURE_ROWS"\n' > "$C/bin/cc-cloud"; chmod +x "$C/bin/cc-cloud"
+  printf '%s\n' '{"id":"sess-keep","state":"","age_s":12,"account":"next2","branch":"claude/x","url":"https://u"}' \
+    > "$C/rows.ndjson"
+  run env CC_FIXTURE_ROWS="$C/rows.ndjson" CC_OFFLOAD_CLOUD_BIN="$C/bin/cc-cloud" \
+      bash "$REPO/bin/cc-offload" ls
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'sess-keep .*UNKNOWN'
+  printf '%s' "$output" | grep -q 'next2'
+  # the tally is the line the crash swallowed, so its presence is what proves the row survived
+  printf '%s' "$output" | grep -q '1 UNKNOWN'
+  refute_grep 'unbound variable'
+}
+
 # ─── §3 · the repo-wide guard ──────────────────────────────────────────────────────────────────
 
 # Files that read TSV with `IFS=$'\t' read` but legitimately carry no padding def. Each needs a
