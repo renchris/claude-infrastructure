@@ -176,6 +176,18 @@ kill_switch_active() {
 _mbxlib="$_scd/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+# goal-state lib (LIVE-/goal predicate). The wake floor below must never instruct the exact arm
+# that DISABLES an armed /goal (CC skips goal evaluation at any Stop with a non-terminal
+# background Bash — docs/research/goal-in-handoff-2026-08-08.md). Optional: absent → the floor
+# keeps its pre-goal-aware behaviour.
+_goalslib="$_scd/lib/goal-state.sh"
+[ -f "$_goalslib" ] || _goalslib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
+[ -f "$_goalslib" ] || _goalslib="$HOME/.claude/hooks/lib/goal-state.sh"
+if [ -f "$_goalslib" ]; then
+  # shellcheck source=lib/goal-state.sh
+  # shellcheck disable=SC1091
+  . "$_goalslib" 2>/dev/null || true
+fi
 _ouid="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _ouid="${_ouid##*:}"
 # KEEP THE RAW PANE KEY. The canonicalisation below deliberately rewrites $_ouid to the SESSION-keyed
 # mailbox key — right for every mailbox read, wrong for the teardown marker, which is PANE-keyed (and
@@ -373,6 +385,27 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
 
   pend="$(mailbox_pending_count "$_ouid" 2>/dev/null || echo 0)"
   case "$pend" in ''|*[!0-9]*) pend=0 ;; esac
+
+  # ── FOURTH STATE: a LIVE /goal ⇒ the goal IS the wake path, and the watcher would DISABLE it ─────
+  # CC deletes the /goal Stop hook at any Stop where a non-terminal background Bash exists, then
+  # silently restores it (measured on 2.1.220 — docs/research/goal-in-handoff-2026-08-08.md
+  # § RESOLVED). The `cc-await-ping` arm this floor instructs is exactly such a task, parked for 4 h
+  # — so this block used to be the INSTRUCTION-INJECTOR that made armed goals inert fleet-wide. A
+  # goal-driven session is not deaf while unarmed either: an unmet evaluation blocks the stop, the
+  # session keeps taking turns, and mailbox-drain delivers pending mail at every boundary those
+  # turns produce. Placed before the state-file write: an abstain must not consume a budget attempt.
+  if command -v goal_live_condition >/dev/null 2>&1; then
+    local _wf_tp _wf_goal=""
+    _wf_tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+    if _wf_goal="$(goal_live_condition "$_wf_tp" 2>/dev/null)" && [ -n "$_wf_goal" ]; then
+      printf 'session-continue: wake floor ABSTAINS (a /goal is LIVE — a parked watcher would make CC skip its evaluation; the goal itself keeps this session awake).\n' >&2
+      if [ "$pend" -gt 0 ]; then
+        jq -nc --arg m "ℹ Wake floor stood down (a /goal is live — a parked background watcher would disable it); ${pend} pending message(s) will surface at the next turn boundary the goal forces." \
+          '{systemMessage:$m}' 2>/dev/null || true
+      fi
+      return 0
+    fi
+  fi
 
   # ── THIRD STATE: terminating / lead-owned ⇒ this gate does not APPLY (see the block above) ────────
   # PLACED HERE, before the state file is written: an abstain must not consume a budget attempt, or a

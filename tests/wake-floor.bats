@@ -421,6 +421,43 @@ actuate_err() { printf '{"cwd":"%s","session_id":"%s","transcript_path":""}' "$C
   printf '%s' "$output" | jq -r .systemMessage | grep -q '2 message(s) are still unread' || false
 }
 
+# ── (C) a LIVE /goal ⇒ the goal IS the wake path; the floor must not instruct its own sabotage ────
+# CC deletes the /goal Stop hook at any Stop where a non-terminal background Bash exists
+# (docs/research/goal-in-handoff-2026-08-08.md § RESOLVED) — the exact watcher this floor
+# instructs. This block used to be the instruction-injector that made armed goals inert fleet-wide.
+
+goal_tx() { # a transcript whose LAST goal_status is a LIVE arm marker
+  p="$BATS_TEST_TMPDIR/goal-tx-$BATS_TEST_NUMBER.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"drive the rollout to landed"}}\n' > "$p"
+  printf '%s' "$p"
+}
+
+@test "(C) a LIVE /goal ⇒ the floor stands down (the arm it instructs would disable the goal)" {
+  run actuate sidA "$(goal_tx)"
+  [ "$status" -eq 0 ]
+  ! blocked "$output" || false
+}
+
+@test "DISCRIMINATOR (C): a MET goal is no goal — the floor still blocks" {
+  p="$BATS_TEST_TMPDIR/goal-met.jsonl"
+  { printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"x"}}\n'
+    printf '{"type":"attachment","attachment":{"type":"goal_status","met":true,"condition":"x","iterations":1}}\n'
+  } > "$p"
+  run actuate sidA "$p"
+  blocked "$output" || false
+}
+
+@test "(C) the goal abstain spends NO budget attempt and says so visibly with mail pending" {
+  mail 1
+  run actuate sidA "$(goal_tx)"
+  ! blocked "$output" || false
+  printf '%s' "$output" | jq -r .systemMessage | grep -q 'goal' || false
+  [ ! -f "$CC_MAILBOX_DIR/$U.wakefloor" ]            # nothing written ⇒ nothing spent
+  # …and the same session, once its goal is gone, still meets a floor with a full budget.
+  run actuate sidA
+  blocked "$output" || false
+}
+
 # Pinned, never a moving ref: once this lands on origin/main a floating control IS the fixed tree and
 # the proof inverts into a vacuous pass.
 CC_ASSIGNEE_ABSTAIN_SHA="${CC_ASSIGNEE_ABSTAIN_SHA:-638fba76}"
