@@ -79,6 +79,7 @@ usage: registration-state.sh [--json] [--only <name-substring>]
     verdict=not-staged      ledger says run, but the arm was never written
     verdict=not-delivered   arm on disk, nothing registered/sourced it
     verdict=overridden      a different value is set at the same key
+    verdict=partial         live in SOME config dirs and absent from others
     verdict=unverifiable    the migration declares no oracle (counted separately, never a pass)
 EOF
   exit 2
@@ -110,6 +111,30 @@ ledger_state() {
   printf 'absent'
 }
 
+# config_dirs — every config dir whose settings.json a session can actually be launched against.
+#
+# WHY THIS IS NOT JUST $HOME/.claude. The declared verifiers read
+# ${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json — ONE file — while the registration migrations
+# deliberately write four or five, because those files are separate REAL files rather than symlinks
+# into the checkout and were measured already divergent (0007's own header: 35 940 / 35 270 / 35 929
+# / 35 947 B). So a registration present in ~/.claude and absent from ~/.claude-tertiary satisfied
+# the verifier and read `registered`, while every session launched against tertiary was unarmed.
+# That is the SAME silent half-coverage 0007 exists to abolish, reproduced one level up in the thing
+# that checks it — a sibling auditor modelling fewer states than its subject
+# (MEMORY.md sibling-auditors-must-share-the-state-model).
+#
+# An EXPLICIT CC_CLAUDE_DIR still wins and is the only dir consulted: it is how the suite fixtures
+# this, and honouring it keeps the check answerable about one named config on purpose.
+config_dirs() {
+  local d found=""
+  if [ -n "${CC_CLAUDE_DIR:-}" ]; then printf '%s\n' "$CC_CLAUDE_DIR"; return; fi
+  for d in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary \
+           "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
+    [ -f "$d/settings.json" ] && { printf '%s\n' "$d"; found=1; }
+  done
+  [ -n "$found" ] || printf '%s\n' "$HOME/.claude"
+}
+
 n_reg=0 n_staged=0 n_fail=0 n_unver=0
 rows=""
 
@@ -136,9 +161,31 @@ for f in "$MIG_DIR"/[0-9]*.sh; do
     verdict="unverifiable"; why="declares no '# migration-verify:'"
     n_unver=$((n_unver + 1))
   else
-    if bash -c "$verify" >/dev/null 2>&1; then
-      verdict="registered"; why="verifier exit 0"
+    # Run the DECLARED verifier once per config dir, pointing it at that dir. The declaration needs
+    # no change: it already reads ${CC_CLAUDE_DIR:-...}, so setting that var per iteration re-aims
+    # the same oracle rather than introducing a second one.
+    n_dirs=0 n_ok=0 missing=""
+    while IFS= read -r _cd; do
+      [ -n "$_cd" ] || continue
+      n_dirs=$((n_dirs + 1))
+      if CC_CLAUDE_DIR="$_cd" bash -c "$verify" >/dev/null 2>&1; then
+        n_ok=$((n_ok + 1))
+      else
+        missing="$missing $(basename "$_cd")"
+      fi
+    done <<EOF
+$(config_dirs)
+EOF
+
+    if [ "$n_ok" -gt 0 ] && [ "$n_ok" -eq "$n_dirs" ]; then
+      verdict="registered"; why="verifier exit 0 in all $n_dirs config dir(s)"
       n_reg=$((n_reg + 1))
+    elif [ "$n_ok" -gt 0 ]; then
+      # Present in some configs and absent from others. This is a FAILING state, not a softer
+      # "registered": whether a session gets the arm then depends on which config dir it launched
+      # against, so the same box is simultaneously armed and unarmed and neither reading is wrong.
+      verdict="partial"; why="live in $n_ok of $n_dirs config dir(s) — missing:$missing"
+      n_fail=$((n_fail + 1))
     elif [ -n "$conflict" ] && bash -c "$conflict" >/dev/null 2>&1; then
       verdict="overridden"; why="a different value is set at the same key"
       n_fail=$((n_fail + 1))

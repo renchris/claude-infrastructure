@@ -130,3 +130,96 @@ settings_with() {
   run bash "$SUT"
   [[ "$output" != *"verdict=registered migration=0017-real"* ]]
 }
+
+# ── MULTI-CONFIG COVERAGE ────────────────────────────────────────────────────────────────────────
+# The declared verifiers read ONE settings.json, while the registration migrations deliberately
+# write four or five separate REAL files that were measured already divergent. A registration
+# present in ~/.claude and absent from ~/.claude-tertiary therefore satisfied the verifier and read
+# `registered`, while every session launched against tertiary was unarmed — the same silent
+# half-coverage the migration exists to abolish, reproduced in the check itself.
+
+# settings.json for an arbitrary config dir suffix, carrying the named commands
+settings_in() {
+  local suffix="$1"; shift
+  local cmds="" c
+  for c in "$@"; do cmds="$cmds{\"type\":\"command\",\"command\":\"$c\"},"; done
+  mkdir -p "$HOME/.claude$suffix"
+  printf '{"hooks":{"SessionStart":[{"hooks":[%s]}]}}' "${cmds%,}" > "$HOME/.claude$suffix/settings.json"
+}
+
+# the verifier every multi-dir case declares — deliberately the SAME spelling the real migrations
+# use, so these cases exercise the production oracle rather than a convenience variant
+verify_armed() {
+  printf '%s' 'jq -e '"'"'[.hooks.SessionStart[].hooks[]?.command] | any(. == "~/.claude/hooks/armed.sh")'"'"' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null'
+}
+
+@test "partial: live in one config dir and absent from another is a FAILING state, not registered" {
+  unset CC_CLAUDE_DIR
+  # shellcheck disable=SC2088  # literal ~ on purpose: settings.json stores the tilde UNEXPANDED.
+  settings_in ""      "~/.claude/hooks/armed.sh"
+  settings_in "-next"
+  touch "$HOME/.claude/armed.sh"
+  mk_mig 0010-armed c10 "$HOME/.claude/armed.sh" "$(verify_armed)"
+  ledger 0010-armed staged
+  run bash "$SUT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict=partial migration=0010-armed"* ]]
+}
+
+@test "partial names WHICH config dir is missing, because that is the whole repair instruction" {
+  unset CC_CLAUDE_DIR
+  # shellcheck disable=SC2088  # literal ~ on purpose.
+  settings_in ""          "~/.claude/hooks/armed.sh"
+  settings_in "-tertiary"
+  touch "$HOME/.claude/armed.sh"
+  mk_mig 0010-armed c10 "$HOME/.claude/armed.sh" "$(verify_armed)"
+  ledger 0010-armed staged
+  run bash "$SUT"
+  [[ "$output" == *"missing: .claude-tertiary"* ]]
+}
+
+@test "registered requires EVERY config dir, and says how many it proved" {
+  unset CC_CLAUDE_DIR
+  # shellcheck disable=SC2088  # literal ~ on purpose.
+  settings_in ""      "~/.claude/hooks/armed.sh"
+  # shellcheck disable=SC2088  # literal ~ on purpose: a disable covers only the NEXT line, and this
+  # is the second config dir, so it needs its own — the first annotation does not reach it.
+  settings_in "-next" "~/.claude/hooks/armed.sh"
+  touch "$HOME/.claude/armed.sh"
+  mk_mig 0010-armed c10 "$HOME/.claude/armed.sh" "$(verify_armed)"
+  ledger 0010-armed staged
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"in all 2 config dir(s)"* ]]
+}
+
+@test "an EXPLICIT CC_CLAUDE_DIR still scopes the check to exactly that one config" {
+  # This is what keeps the rest of this suite hermetic, so it is pinned rather than assumed.
+  # shellcheck disable=SC2088  # literal ~ on purpose.
+  settings_in ""      "~/.claude/hooks/armed.sh"
+  settings_in "-next"
+  export CC_CLAUDE_DIR="$HOME/.claude"
+  touch "$HOME/.claude/armed.sh"
+  mk_mig 0010-armed c10 "$HOME/.claude/armed.sh" "$(verify_armed)"
+  ledger 0010-armed staged
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"in all 1 config dir(s)"* ]]
+}
+
+@test "MUTATION CONTROL: collapsing the loop back to one dir makes the partial case read registered" {
+  # Without this, every green above is consistent with a script that never gained the multi-dir
+  # loop at all — the partial fixture would simply pass on ~/.claude and report registered.
+  unset CC_CLAUDE_DIR
+  # shellcheck disable=SC2088  # literal ~ on purpose.
+  settings_in ""      "~/.claude/hooks/armed.sh"
+  settings_in "-next"
+  touch "$HOME/.claude/armed.sh"
+  mk_mig 0010-armed c10 "$HOME/.claude/armed.sh" "$(verify_armed)"
+  ledger 0010-armed staged
+  mutant="$BATS_TEST_TMPDIR/mutant.sh"
+  sed 's/^config_dirs() {/config_dirs() { printf "%s\\n" "$HOME\/.claude"; return;/' "$SUT" > "$mutant"
+  bash -n "$mutant"
+  run bash "$mutant"
+  [[ "$output" == *"verdict=registered migration=0010-armed"* ]]
+}
