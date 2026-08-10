@@ -1,8 +1,8 @@
 flowchart TB
-    Repo["claude-infrastructure<br/>1,174 files · one reviewable history"]
+    Repo["claude-infrastructure<br/>1,301 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · code SYMLINKED<br/>auth + settings per-account"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
-    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>52 tools · 21 daemons · statusline"]
+    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>68 tools · 21 daemons · statusline"]
     classDef src fill:@gold-bg,stroke:@gold-fg,color:@text
     classDef dep fill:@blue-bg,stroke:@blue-fg,color:@text
     class Repo src

@@ -4,12 +4,12 @@
 
 ### `~/.claude` becomes a system you deploy — and the sessions become the schedulers.
 
-[![sessions](https://img.shields.io/badge/sessions-7%2C472-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
-[![hooks](https://img.shields.io/badge/hooks-78%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
-[![tests](https://img.shields.io/badge/bats%20tests-4%2C802-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
+[![sessions](https://img.shields.io/badge/sessions-7%2C939-d4af37?style=flat-square&labelColor=161b22)](#4-nothing-a-session-did-dies-with-it)
+[![hooks](https://img.shields.io/badge/hooks-79%20across%2012%20events-d4af37?style=flat-square&labelColor=161b22)](#3-autonomy-is-bounded)
+[![tests](https://img.shields.io/badge/bats%20tests-7%2C065-d4af37?style=flat-square&labelColor=161b22)](#5-the-whole-system-deploys-from-git)
 [![accounts](https://img.shields.io/badge/accounts-4%20isolated-d4af37?style=flat-square&labelColor=161b22)](#2-parallel-work-cannot-collide)
 
-[**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**6 · The next ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) · [**Install**](#install)
+[**1 · Sessions run each other**](#1-sessions-run-each-other) · [**2 · No collisions**](#2-parallel-work-cannot-collide) · [**3 · Bounded autonomy**](#3-autonomy-is-bounded) · [**4 · Nothing is lost**](#4-nothing-a-session-did-dies-with-it) · [**5 · Deploys from git**](#5-the-whole-system-deploys-from-git) · [**6 · The next ceiling**](#6-the-ceiling-is-the-interface-not-the-machine) · [**Install**](#install) · [**Map**](#map--where-everything-lives) · [**Glossary**](#glossary--the-words-this-repo-uses)
 
 </div>
 
@@ -19,9 +19,9 @@ the two share one git index, one binary, and one operator's attention. **So how 
 once, safely, unattended?**
 
 Make `~/.claude` a *deployment* of a git repo — and make the sessions themselves the schedulers.
-That is this repo: **1,174 tracked files, ~256,000 lines** of first-party code (vendored code and
-generated assets excluded), held to ground truth by a **4,802-test** bats suite and exercised across
-**7,472 sessions**.
+That is this repo: **1,301 tracked files, ~373,000 lines** of first-party work (vendored code and
+generated assets excluded), held to ground truth by a **7,065-test** bats suite and exercised across
+**7,939 sessions**.
 
 <div align="center">
 
@@ -35,7 +35,7 @@ generated assets excluded), held to ground truth by a **4,802-test** bats suite 
 |---|---|---|
 | **1** | [**Sessions run each other**](#1-sessions-run-each-other) | You are no longer the scheduler. Sessions open, message, and retire one another — and page you only when a human must decide. |
 | **2** | [**Parallel work cannot collide**](#2-parallel-work-cannot-collide) | A worktree per writer, an account per lane, and exactly one machine-wide lock on landing. |
-| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 78 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
+| **3** | [**Autonomy is bounded**](#3-autonomy-is-bounded) | 79 hooks on 12 lifecycle events refuse the calls that lose work — including a false "done". |
 | **4** | [**Nothing a session did dies with it**](#4-nothing-a-session-did-dies-with-it) | Every Write, plan, task and transcript outlives the pane that made it. |
 | **5** | [**The whole system deploys from git**](#5-the-whole-system-deploys-from-git) | No drift, no un-reviewable machine state, and an update that can't break a running session. |
 
@@ -267,12 +267,12 @@ Full evidence and the migration plan: [`docs/research/terminal-for-30-panes-2026
 
 ## 3. Autonomy is bounded
 
-**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 82 hook scripts; the live config wires **78 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
+**Every prompt, tool call and turn-ending passes through hooks that can refuse it.** This repo ships 90 hook scripts; the live config wires **79 hook entries across 12 lifecycle events**. All exit 0 by default — a hook failure never blocks a tool — *except* deliberate `PreToolUse` denials and fact-bound `Stop` blocks.
 
 <!-- Diagram source: assets/diagrams/guardrail-pipeline.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/guardrail-pipeline-dark.svg">
-  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then eleven PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
+  <img src="assets/diagrams/guardrail-pipeline-light.svg" alt="A prompt passes through six UserPromptSubmit hooks that deliver mail and nudges, then reaches Claude. Each tool call passes fourteen PreToolUse hooks: a refused call never runs, blocked by 41 deny rules, dangerous bash patterns, a wrong worktree, or an unsanctioned push; an allowed call proceeds with every Write backed up first, then twelve PostToolUse hooks record the plan version, bash log and context watch before returning to Claude. When the turn tries to end, eleven Stop hooks check it: if the live git ledger disagrees the turn is sent back to Claude, and only a genuinely finished turn is allowed to end.">
 </picture>
 
 <details>
@@ -286,7 +286,7 @@ flowchart TB
     M --> Pre{"PreToolUse<br/>14 hooks"}
     Pre -->|"refused"| No["the call never runs<br/>41 deny rules · dangerous bash<br/>wrong worktree · unsanctioned push"]
     Pre -->|"allowed · Write backed up first"| Tool["the tool call"]
-    Tool --> Post["PostToolUse — 11 hooks<br/>plan version · bash log · context watch"]
+    Tool --> Post["PostToolUse — 12 hooks<br/>plan version · bash log · context watch"]
     Post --> M
     M --> Stop{"Stop<br/>11 hooks"}
     Stop -->|"the live git ledger disagrees"| M
@@ -327,9 +327,9 @@ PreToolUse (14)       validate-bash · backup-before-write (OVERWRITE GUARD) · 
                       rm-safe-allowlist · check-edit-boundary · plan-agent-teams-default · frontier-spawn-gate ·
                       cc-unattended-ask-guard · keychain-guard · curl-gate · enforce-email-formatting ·
                       ship-rail-push-allow · qos-rewrite
-PostToolUse (11)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
+PostToolUse (12)      post-file-edit · plan-index-update · plan-version-commit · plan-pin-session · validate-plan-structure ·
                       log-bash · task-mutation-index · teammate-checkpoint · waiting-recycle · relay-verbatim ·
-                      cc-permission-beacon
+                      cc-permission-beacon · mailbox-drain (post-tool — the mechanical wake path)
 Stop (11)             completion-assert (blocks a false "done") · operator-readout · session-continue · boundary-handoff ·
                       anti-deference-nudge · dispatch-assert · teammate-checkpoint · cache-expiry-tracker · notify ·
                       session-beat · cc-permission-beacon
@@ -375,7 +375,7 @@ Teammate models must be on the account's auto-mode allowlist, or the spawn silen
 | **Every file version** | [`backup-before-write.sh`](hooks/backup-before-write.sh) stamps a backup before every Write/Edit — nanosecond+PID names (parallel-agent-safe), sidecar `.path` files for basename collisions, atomic `mktemp`+`mv` restore, capped at 10/file — but only **3** for `*.sh`, the file type this repo is mostly made of — with a 30-day TTL by [`prune-backups.sh`](scripts/prune-backups.sh) | [`restore-file`](scripts/restore-file.sh) `<path>` · `--diff` · `--pick N` · `--recent 10` |
 | **Every plan revision** | [`plan-version-commit.sh`](hooks/plan-version-commit.sh) writes two layers: an append-only `MANIFEST.jsonl` (timestamp, session, SHA256, line count) and full snapshots in a separate git repo | `cd ~/.claude/plan-history && git log` |
 | **Every task list** | Claude Code uses UUID task dirs and ignores `CLAUDE_CODE_TASK_LIST_ID`; [`setup-task-symlinks.sh`](hooks/setup-task-symlinks.sh) detects the active list at SessionStart, symlinks it to `.claude-tasks/_current/`, and generates a readable `TASKS.md` beside it | `.claude-tasks/TASKS.md` |
-| **Every conversation** | SQLite FTS5 index — 2,198 sessions, kept self-maintaining by three hooks: a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses. Retention drops rows whose transcript Claude Code has since deleted, so a hit is always openable | `claude-search "<query>"` · `--fzf` · `--stats` |
+| **Every conversation** | SQLite FTS5 index — 3,001 sessions, kept self-maintaining by three hooks: a crash-safe stub at SessionStart, rich metadata at SessionEnd, and a 60-second sweep daemon catching misses. Retention drops rows whose transcript Claude Code has since deleted, so a hit is always openable | `claude-search "<query>"` · `--fzf` · `--stats` |
 | **Every interrupted session** | A killed session is not a lost one — the transcript stays resumable. [`resume-sessions`](skills/resume-sessions/SKILL.md) is the runbook: it finds resumable transcripts across all four account stores, dedups the `.claude`/`.claude-next` mirror, and ranks by each transcript's **internal** max timestamp — never file mtime, because a bulk mirror touch is not activity. [`lr-select.py`](scripts/limit-recover/lr-select.py) then consolidates to **one session per worktree** (the same selector `lr-reset-poller.sh` and `boot-resume.sh` consult, so all three paths obey one policy) — without it, a project with a long history resurrects proportionally many sessions: 14 for one project, 39 live sessions and zero free RAM, 2026-07-21. Panes anchor to the *calling* pane via [`kitty-split-launch.sh`](bin/kitty-split-launch.sh), never wherever kitty's focus drifted | `/resume-sessions` |
 
 ```bash
@@ -395,7 +395,7 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- Diagram source: assets/diagrams/deploy-model.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/deploy-model-dark.svg">
-  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,174 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
+  <img src="assets/diagrams/deploy-model-light.svg" alt="The claude-infrastructure repo — 1,301 files under one reviewable history — deploys three ways. install.sh symlinks hooks, commands and scripts into the primary ~/.claude, so editing the live hook is editing the repo. install.sh --config-dir installs the same system into the four billing-isolated account directories; as deployed those directories symlink the code surfaces back to the primary, and isolate only their own auth and settings. Global surfaces — ~/bin tools, LaunchAgents and the statusline — are copied, and sync.sh pulls hand-edits back.">
 </picture>
 
 <details>
@@ -404,10 +404,10 @@ Session search is its own project: **[claude-session-search](https://github.com/
 <!-- mermaid-fence: assets/diagrams/deploy-model.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
 flowchart TB
-    Repo["claude-infrastructure<br/>1,174 files · one reviewable history"]
+    Repo["claude-infrastructure<br/>1,301 files · one reviewable history"]
     Repo &lt;--&gt;|"install.sh · SYMLINK<br/>editing the live hook IS editing the repo"| Prim["~/.claude<br/>hooks · commands · scripts"]
     Repo -->|"--config-dir · code SYMLINKED<br/>auth + settings per-account"| Alt["~/.claude-secondary … 4<br/>4 billing-isolated accounts"]
-    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>52 tools · 21 daemons · statusline"]
+    Repo -->|"COPY<br/>sync.sh pulls hand-edits back"| Glob["~/bin · LaunchAgents<br/>68 tools · 21 daemons · statusline"]
     classDef src fill:#2b2410,stroke:#d4af37,color:#e6edf3
     classDef dep fill:#0d1d2e,stroke:#58a6ff,color:#e6edf3
     class Repo src
@@ -442,8 +442,8 @@ The symlink rule came from a failure: on 2026-07-03 a *copied* `handoff-fire.sh`
 └── projects/                    # per-project memory + transcripts
 
 ~/.claude-versions/   current -> 2.1.114      # atomically-symlinked installs
-~/bin/                claude-latest · claude-update · claude-versions   (the 52 cc-* fleet tools live in ~/.claude/bin)
-~/Library/LaunchAgents/   25 daemons — dispatcher · discovery · reapers · regression · search · …
+~/bin/                claude-latest · claude-update · claude-versions   (the 68 cc-* fleet tools live in ~/.claude/bin)
+~/Library/LaunchAgents/   21 daemons installed, 17 loaded — dispatcher · reapers · verifier · deploy · search · …
 ```
 
 </details>
@@ -507,7 +507,7 @@ Running processes survive `rm -rf` of their own version via POSIX vnode semantic
 
 ### Held to ground truth
 
-**4,802 bats tests across 273 files (71,622 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim). A nightly full-suite regression daemon is declared but **staged, not loaded** — `com.claude.nightly-regression` is absent from `launchctl list`, and `launchd/fleet.manifest` marks it `staged`. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
+**7,065 bats tests across 380 files (112,248 lines)** prove every tree — continuously by the background verifier ([`postland-verify.sh`](scripts/postland-verify.sh), the sole owner of the full-suite claim). A nightly full-suite regression daemon is declared but **staged, not loaded** — `com.claude.nightly-regression` is absent from `launchctl list`, and `launchd/fleet.manifest` marks it `staged`. Diagrams have their own guard: `npm run diagrams:check` fails CI if a rendered SVG or an embedded mermaid fence has drifted from its `.mmd` source.
 
 ---
 
@@ -950,6 +950,99 @@ It also takes **two routes for one sequence**, for a measured reason. The linked
 **Rebuilding the banner.** It is generated, never hand-drawn: `python3 tools/banner/gen.py --out assets/banner`. The generator refuses to emit rather than ship a subtly wrong asset — periods that do not divide the master loop, a loop whose first and last frame differ, a stride that drifts out of lock with the ground it walks on. Verify one with `scripts/banner-verify.sh <asset> --period <P>` (six checks, all able to fail; the hero loop is `--period 240`), and prove every beat is actually VISIBLE with `scripts/banner-beat-ink.py assets/banner/v6*.svg` — it renders each beat whole and again with that beat suppressed, and requires a real pixel difference at the README's own 838 px width. That gate exists because every other one is structural: a meteor trail once shipped painting **zero pixels** — a horizontal path's bounding box has no height, so the gradient filling it was never drawn — and the markup parsed, the animation was singular and the loop still sealed shut. Sabotage every gate at once with `scripts/banner-gate-redproof.py` (37 cases, each required to fire on its own message). **The animated SVG is the deliverable, not a fallback** — GitHub serves it through camo as an image, and CSS animations inside an SVG loaded as an image do run, which is why the inline asset is vector.
 
 </details>
+
+---
+
+### Map — where everything lives
+
+**Sections 1-6 argue the design; this table is the index to it.** Every subsystem, the file you
+would actually open, and the section that explains it — `—` means the subsystem is deliberately
+not part of the argument above.
+
+| Subsystem | Entry point | Explained in |
+|---|---|---|
+| **Firing & handoff** | [`scripts/handoff-fire.sh`](scripts/handoff-fire.sh) · [`/handoff`](commands/handoff.md) | [§1](#1-sessions-run-each-other) |
+| **Peer messaging** | [`cc-notify`](bin/cc-notify) · [`cc-await-ping`](bin/cc-await-ping) · [`mailbox-drain.sh`](hooks/mailbox-drain.sh) | [§1](#a-message-is-a-file-not-a-keystroke) |
+| **Registry & reaping** | [`cc-sessions`](bin/cc-sessions) · [`cc-reaper`](bin/cc-reaper) · [`cc-classify`](bin/cc-classify) | [§1](#1-sessions-run-each-other) |
+| **Work ledger & dispatch** | [`cc-backlog`](bin/cc-backlog) · [`cc-dispatch`](bin/cc-dispatch) | — the autonomy spine: launchd wakes the dispatcher, it pulls open items, places each on an account with quota, and fires |
+| **Off-box execution** | [`cc-cloud`](bin/cc-cloud) | — one honest verdict per declared cloud session, read entirely from the repo side |
+| **Operator surface** | [`cc-board`](bin/cc-board) · [`cc-blockers`](bin/cc-blockers) · [`cc-do`](bin/cc-do) · [`operator-readout.sh`](hooks/operator-readout.sh) | [§3](#it-pages-you-only-when-a-human-must-decide) |
+| **Decision queue** | [`cc-decide`](bin/cc-decide) | — a STOP-ASK with no human present writes a packet that survives a recycle, instead of idling in context |
+| **Hooks** | [`hooks/`](hooks) · [`settings.example.json`](settings-templates/settings.example.json) | [§3](#3-autonomy-is-bounded) |
+| **Landing** | [`ship-land.sh`](scripts/ship-land.sh) · [`/ship`](commands/ship.md) | [§5](#5-the-whole-system-deploys-from-git) |
+| **Verification** | [`postland-verify.sh`](scripts/postland-verify.sh) · [`tests/`](tests) · [`test-hermeticity-lint.sh`](scripts/test-hermeticity-lint.sh) | [§5](#held-to-ground-truth) |
+| **Live deploy** | [`deploy-live.sh`](scripts/deploy-live.sh) · [`migrations/`](migrations) | [§5](#5-the-whole-system-deploys-from-git) |
+| **Close ledger** | [`wrap-ledger.sh`](scripts/wrap-ledger.sh) · [`/wrap`](commands/wrap.md) · [`completion-assert.sh`](hooks/completion-assert.sh) | [§3](#3-autonomy-is-bounded) |
+| **Accounts & quota** | [`claude-accounts`](bin/claude-accounts) · `accounts.json` · [`cc-relogin`](bin/cc-relogin) | [§2](#2-parallel-work-cannot-collide) |
+| **Limit recovery** | [`scripts/limit-recover/`](scripts/limit-recover) · [`/limit-recover`](commands/limit-recover.md) | [§4](#4-nothing-a-session-did-dies-with-it) |
+| **Terminal & panes** | [`cc-pane`](bin/cc-pane) · [`it2-wrapper`](bin/it2-wrapper) · [`it2-kitty`](bin/it2-kitty) · [`kitty-setup.sh`](scripts/kitty-setup.sh) | [§6](#so-the-question-stopped-being-which-one--it-runs-on-both) |
+| **Capacity & QoS** | [`capacity-alarm.sh`](scripts/capacity-alarm.sh) · [`cc-cpubound`](bin/cc-cpubound) | [§6](#the-machine-is-not-the-constraint) |
+| **Backups & history** | [`backup-before-write.sh`](hooks/backup-before-write.sh) · [`restore-file.sh`](scripts/restore-file.sh) · [`plan-version-commit.sh`](hooks/plan-version-commit.sh) | [§4](#4-nothing-a-session-did-dies-with-it) |
+| **Audit trail** | [`cc-idl`](bin/cc-idl) | — a tamper-evident hash chain over every autonomous decision |
+| **Version manager** | [`claude-latest`](bin/claude-latest) · `claude-update` · `claude-versions` | [§5](#an-update-cant-break-a-running-session) |
+
+<details>
+<summary><b>What lives in each directory of this repo</b></summary>
+
+<br>
+
+| Directory | Holds | Size |
+|---|---|---|
+| [`bin/`](bin) | the fleet tools you type — `cc-*` plus the account launchers | 86 files, 68 of them `cc-*` |
+| [`hooks/`](hooks) | one script per lifecycle refusal or record | 90 scripts; 79 wired across 12 events |
+| [`scripts/`](scripts) | orchestration — fire, land, verify, deploy, recover | 192 files |
+| [`commands/`](commands) | slash commands (`/ship`, `/handoff`, `/wrap`, `/desk`, …) | 19 |
+| [`skills/`](skills) · [`agents/`](agents) | loadable capabilities · custom subagent definitions | 15 · 4 |
+| [`tests/`](tests) | the bats corpus that gates every land | 380 files, 7,065 tests |
+| [`migrations/`](migrations) | idempotent converge steps for machine state | 8 |
+| [`launchd/`](launchd) | daemon definitions — dispatcher, reapers, verifier, search | 28 plists (21 installed, 17 loaded) |
+| [`config/`](config) · [`settings-templates/`](settings-templates) | deny rules, hook roster, `kitty.conf`, QoS patterns | 9 · 3 |
+| [`lib/`](lib) | shared shell libraries + the generated account map | 19 |
+| [`docs/`](docs) | plans, and the research each decision actually came from | 380 |
+| [`tools/`](tools) · [`assets/`](assets) | generators (banner, timeline, benchmarks) · their generated output | 26 · 86 |
+| [`vendor/`](vendor) | third-party code, kept separate from every count above | 89 |
+
+</details>
+
+### Glossary — the words this repo uses
+
+<details>
+<summary><b>19 terms that appear above and mean something specific here</b></summary>
+
+<br>
+
+| Term | Here it means |
+|---|---|
+| **fire** | launch a *new* session in a new pane, briefed and auto-submitted — [`handoff-fire.sh`](scripts/handoff-fire.sh) |
+| **recycle** | relaunch **this** pane in place with a fresh context; the same worktree or a new one |
+| **handoff** | a fire whose purpose is succession — the successor must be *verified engaged* before the origin closes |
+| **desk** | the standing orchestrator session: the default recipient of peer mail and the operator's console |
+| **peer / role** | any addressable session; a role name resolves to a pane through [`cc-registry`](bin/cc-notify) rather than a pid |
+| **land** | merge onto `origin/main` through [`/ship`](commands/ship.md) — never a bare `git push` |
+| **deploy / live layer** | advance the checkout `~/.claude` symlinks into. **Landed is not live** |
+| **gate-green** | the stamp that says a *specific trunk tree* passed the full corpus; `deploy-live.sh` moves for nothing else |
+| **the rungs** | the seven close states — ⛔ blocked · 📤 handoff · 🔧 loose ends · 📦 parked · 🚀 landed-not-live · 👤 yours · ✅ live — computed from live git reads by [`wrap-ledger.sh`](scripts/wrap-ledger.sh) |
+| **frozen DoD** | the scope restated at intake; completeness is a diff against it, never a fresh judgment |
+| **backlog item** | one durable unit of work in the append-only ledger — claimed by a session, never by a person |
+| **dispatch** | the launchd-woken loop that turns open backlog items into fired sessions |
+| **capacity gate** | the load-per-core check that refuses to fire rather than deepen a queue |
+| **account slot** | one billing-isolated config dir (`~/.claude-secondary` …) — auth and settings only; the code is shared |
+| **login cliff** | `refreshTokenExpiresAt` — a wall no refresh moves, so it needs a human `/login`, unlike a quota reset |
+| **worktree** | one writer's own checkout; two writers sharing a git index is the collision [§2](#2-parallel-work-cannot-collide) exists to prevent |
+| **beacon** | the notifier that fires when a session is *blocked on you* — the thing that replaces watching panes |
+| **reap** | conclude a session is gone and release what it held; a claim of death always names its evidence |
+| **IDL** | the append-only autonomy journal, hash-chained by [`cc-idl`](bin/cc-idl) so an entry cannot be rewritten |
+
+</details>
+
+<!-- Map + Glossary derived 2026-08-10 from the DeepWiki (Devin) generated wiki for this repo — 59 pages
+     crawled and reconciled against the tree; every entry point above was existence-checked before it
+     was written. Figures published in this README are measured, not remembered:
+       files/lines   git ls-files | grep -vE '^(vendor|assets|node_modules)/' | (wc -l; xargs wc -l | tail -1)
+       tests         git ls-files 'tests/*.bats' | xargs grep -h '^@test' | wc -l
+       hooks         python3 -c "…sum over ~/.claude/settings.json .hooks[*][].hooks"
+       sessions      find ~/.claude*/projects -name '*.jsonl' | wc -l
+     Re-run them before editing any number here; they drift within days. -->
 
 <div align="center">
 <sub>Structure of this README derived with the full Minto Pyramid Principle — audit trail in <a href="docs/research/README-rewrite-2026-07-28.pyramid-worklog.md"><code>docs/research/README-rewrite-2026-07-28.pyramid-worklog.md</code></a>, and <a href="docs/research/README-section6.pyramid-worklog.md"><code>README-section6.pyramid-worklog.md</code></a> for §6</sub>
