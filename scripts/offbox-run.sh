@@ -117,7 +117,7 @@ run_one() {
         TERM=dumb \
         LC_ALL=C \
         CC_OFFBOX=1 \
-        "$tmo" -k 10 "$SUITE_BOUND_S" "$BATS_BIN" "$suite" 2>&1)"
+        "$tmo" -k 10 "$SUITE_BOUND_S" "$BATS_BIN" "$suite" </dev/null 2>&1)"
   rc=$?
   el=$(( $(date +%s) - start ))
 
@@ -144,6 +144,15 @@ run_one() {
   printf '%s %s %s %s %s\n' "$state" "$ok" "$notok" "$rc" "$el"
 }
 
+# THE SUITE LIST ARRIVES ON STDIN, SO EVERY CHILD MUST BE SEALED OFF FROM IT — see the `</dev/null`
+# in run_one. MEASURED on the first real CI run (2026-08-10, run 31362043861): shards 1, 4 and 9
+# stopped after 3, 25 and 17 suites of their 37-38, each one immediately after a suite that reads
+# stdin — the suite consumed the REST OF THE SHARD LIST out of this loop's pipe. The step exited 0
+# and its log simply ended, so the failure looked like nothing at all; only the fold's short-count
+# rule caught it (306 ran against 373 expected ⇒ `cut`, never a green over what reported).
+# `scripts/postland-verify.sh:2189` and `scripts/ship-land.sh:875` both already carry `</dev/null`
+# on their bats invocation for this exact reason — the answer was in the tree twice, and this file
+# had to rediscover it in CI.
 run_list() {
   local out="${1:-/dev/stdout}"; shift
   local tmo; tmo="$(resolve_timeout)" || die "no timeout(1) or gtimeout(1) on PATH — refusing to run unbounded (a hung shard reports nothing at all)" 2
@@ -331,6 +340,17 @@ cmd_selftest() {
     got="$(CC_OFFBOX_ROOT="$tmp" CC_OFFBOX_PARTITION="$tmp/part-home.sh" CC_OFFBOX_SUITE_BOUND_S=30 \
            bash "$SELF" all 2>/dev/null | awk -F'\t' '$1 ~ /^tests\// {print $2}')"
     chk "F6f the empty-\$HOME probe is actually applied" green "$got"
+
+    # F6g A SUITE THAT READS STDIN MUST NOT TRUNCATE THE RUN. The regression control for the defect
+    # that cost three shards on the first real CI run: the suite list arrives on this loop's stdin,
+    # so a child that reads stdin eats the remainder and the loop ends CLEANLY at exit 0. Two suites
+    # here, the first a stdin-eater — a runner without `</dev/null` reports ONE row instead of two.
+    printf '@test "eats stdin" { cat >/dev/null; }\n' > "$tmp/tests/aa-stdin-eater.bats"
+    printf '@test "after" { true; }\n'                 > "$tmp/tests/zz-after-eater.bats"
+    printf '#!/bin/bash\nprintf "tests/aa-stdin-eater.bats\\ntests/zz-after-eater.bats\\n"\n' > "$tmp/part-stdin.sh"
+    got="$(CC_OFFBOX_ROOT="$tmp" CC_OFFBOX_PARTITION="$tmp/part-stdin.sh" CC_OFFBOX_SUITE_BOUND_S=30 \
+           bash "$SELF" all 2>/dev/null | awk -F'\t' '$1 ~ /^tests\// {n++} END {print n+0}')"
+    chk "F6g a stdin-reading suite does not eat the rest of the shard list" 2 "$got"
   else
     printf 'ok   F6 SKIPPED — no bats/timeout on PATH (classifier not exercised)\n'
   fi
