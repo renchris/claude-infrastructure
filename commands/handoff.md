@@ -197,17 +197,51 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
 
 - **Dynamic Workflows / ultracode:** prepend the word `ultracode` to the payload's first line when the
   receiving session should use multi-agent Workflow orchestration. Prompt-level keyword only — no CLI flag.
-- **`/goal` — pass `--goal "<condition>"`, and NEVER put it in the payload.** The brief and the goal
-  are TWO SUBMISSIONS, and `handoff-fire.sh` sends both: message 1 is the payload exactly as always
-  (plain-text-headed, no cap), message 2 is a short `/goal <condition>` bracketed-pasted into the
-  pane once engagement is PROVEN. It re-arms across `--recycle`, refuses a multi-line / slash-headed
+- 🚨 **`/goal` — `--goal "<condition>"` is the DEFAULT on every new-task fire, not an opt-in.** Pass it
+  unless the fire is on the *When NOT to arm a goal* list below; NEVER put it in the payload. The brief
+  and the goal are TWO SUBMISSIONS, and `handoff-fire.sh` sends both: message 1 is the payload exactly
+  as always (plain-text-headed, no cap), message 2 is a short `/goal <condition>` bracketed-pasted into
+  the pane once engagement is PROVEN. It re-arms across `--recycle`, refuses a multi-line / slash-headed
   / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained`
   read back from the fired session's own transcript — never a claim. A failed arming leaves a
   session that has its brief and is working; it can never leave a goal with no brief.
-  > **Write the condition as a POINTER, not the brief:**
-  > `--goal '<one-line objective> — full brief in the prompt above; DoD at <path>'`, where `<path>` is
-  > a committed plan/research doc (`docs/plans/*.md`) or a `/tmp/<slug>-brief.md` on the same machine.
-  > The 4000-char cap is on the CONDITION, and message 1 already carries the detail with no cap.
+  > **📗 WRITE THE CONDITION TO ANTHROPIC'S RECIPE — it is documented, and our old template failed it.**
+  > `/goal` has an official page (<https://code.claude.com/docs/en/goal>) whose normative section is
+  > titled *"Write an effective condition"*. A condition that holds up across many turns has **three
+  > parts**: **one measurable end state** (a test result, a build exit code, a file count, an empty
+  > queue) · **a stated check** — how the session should PROVE it (`npm test` exits 0, `git status` is
+  > clean) · **constraints that matter** — what must not change on the way there.
+  > **Why the check is the non-negotiable part:** the evaluator is a separate, TOOL-LESS small/fast
+  > model (Haiku by default) that re-runs after every turn and sees only what the session has surfaced
+  > in the conversation. Anthropic: *"It doesn't run commands or read files independently, so write the
+  > condition as something Claude's own output can demonstrate."* A criterion resting on file, DB, or
+  > remote state the session never PRINTS is structurally unjudgeable — the goal then never clears and
+  > the session cannot stop.
+  > **The template:**
+  > `--goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <path>'`
+  > That trailing pointer is the ONLY part our previous template had. `'<one-line objective> — full
+  > brief in the prompt above; DoD at <path>'` names an objective with **no end state and no check**, so
+  > the evaluator has nothing to read a verdict off. Keep the pointer as the TAIL — it costs ~60 chars
+  > and orients a fresh context — but LEAD with the end state and the check.
+  > **Bound a long run inside the condition text; there is no flag for it:** append `or stop after N
+  > turns`, which the evaluator adjudicates from the conversation. The 4000-char cap is on the
+  > CONDITION; message 1 already carries the detail with no cap.
+  > **One goal per session**, and it starts a turn immediately — the condition itself is delivered as
+  > the directive, so it must read as an instruction as well as a predicate.
+  > **When NOT to arm a goal** — four exceptions, all narrow: a **standing-role** session with no
+  > terminal state (the **desk**, `desk-invariant.sh` respawns) — "hold the desk role" can never become
+  > true, so the Stop hook would refuse every stop until it hit the harness block cap · a **`--cloud`**
+  > fire, which has no local pane composer, so `arm_goal` can only abstain · a **throwaway
+  > harness-measurement** session (`cc-upgrade-gate` spawns, `scripts/cloud-*-probe.sh`) whose objective
+  > belongs to the operator running the probe, not to the session · a session whose only "done" is a
+  > decision the OPERATOR must make, since the goal's own directive is *"do not pause to ask the user
+  > what to do"*. The through-line: **no reachable end state ⇒ no goal.** That is the same test as the
+  > recipe's first part, applied in the negative.
+  > ⚠️ **`--probe` is NOT one of them.** On `handoff-fire.sh` it means *headlessly liveness-probe the
+  > account before firing* (§ item 3's Fable rows) — a pre-flight on the ACCOUNT, not a throwaway
+  > session. A `--probe` fire is ordinary work and takes a goal like any other.
+  > **A plain continuation is not an exception either** — a recycle mints a NEW session id and a goal
+  > dies with its session, so a continuation is precisely the case that must RE-arm.
   > **🚨 A SLASH-COMMAND-HEADED PAYLOAD IS STILL REFUSED, and `--goal` does not change that.**
   > `check_slash_head` was universalized (item `c89b9c7b1526`, 2026-07-31) from "only an over-cap
   > `/goal`" to "ANY leading slash command (`/goal`, `/research`, `/ship`, `/wrap`, a custom `/x`)".
@@ -252,13 +286,23 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   > jq -rs '[.[]|select(.class=="goal-arm")] | group_by(.verdict)
   >         | map({(.[0].verdict): length}) | add' ~/.claude/logs/handoffs.jsonl   # ← and its outcomes
   > ```
-  > **A goal-less fire is NOT warned about, deliberately.** Measured the day this landed: 139 fire
-  > rows over the ledger's 41h window, 4 goal-arm rows — so a "you forgot `--goal`" nudge would fire
-  > on ~97% of fires, nearly all of them legitimate plain continuations. An alarm that always fires
-  > carries the same zero bits as one that never fires, and it trains everyone to read past the next
-  > real one. The countable row is the remedy: a *rate* can be checked once and cheaply, and a rate
-  > falling 20%→3% is loud in a way 137 individually-unremarkable fires never were.
-- Omit both for a plain continuation prompt.
+  > **A goal-less fire is still NOT warned about, and that stays true even now the default flipped.**
+  > Measured the day the ledger field landed: 139 fire rows over a 41h window, 4 goal-arm rows — a
+  > "you forgot `--goal`" nudge would have fired on ~97% of fires. An alarm that always fires carries
+  > the same zero bits as one that never fires, and it trains everyone to read past the next real one.
+  > The countable row is the remedy: a *rate* is checkable once and cheaply, and a rate moving is loud
+  > in a way 137 individually-unremarkable fires never were.
+  > **What changed 2026-08-09 is the NORM, not the alarm** (operator directive: a goal "should be the
+  > default for almost all newly created and initial prompted sessions"). The reason adoption sat at
+  > **3 of 60** field-carrying fire rows — 5%, with ZERO automated producer and ZERO of the 26 copyable
+  > fire templates in `commands/`, `skills/`, `hooks/` and `docs/templates/` passing the flag — was
+  > never that anyone ignored a warning. It is that `--goal` lived in prose beside recipes that omitted
+  > it, and a producer copies the recipe. The fix is therefore upstream of any alarm: **the recipes
+  > carry it** (above), and the two hooks that inject a fire template into model context carry it too.
+  > Re-check the rate with the two queries above; treat a fall back toward 5% as the regression signal.
+- Omit the `ultracode` keyword for a plain continuation prompt. **Do NOT omit `--goal`** — a
+  continuation is a NEW session, and a goal dies with the session that set it, so a continuation is
+  the case that must re-arm rather than the case that may skip.
 
 **2 · Account → launcher.** Explicit user choice wins. Else `--account auto` ranks by **live
 limits**: `claude-accounts --rank general|fable` (fable when `--model fable`) — real 5h/weekly/
@@ -393,12 +437,17 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 ```bash
 # typical: fresh track, auto account, Opus@max, split pane in the current view (⌘D-style default).
 # --follow = you're watching this /handoff → raise + land your view on it (drop it for a background fire).
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --follow
-# a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below:
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down --follow
+# --goal is the DEFAULT (§ item 1): end state + the CHECK that proves it + what must not change.
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --follow \
+  --goal 'tests/<suite>.bats is green and the change is landed on origin/main — proven by printing the bats summary with 0 failures and `git ls-tree origin/main -- <path>`; do not weaken any existing gate; full brief in the prompt above, DoD at docs/plans/<PLAN>.md'
+# a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below.
+# --probe liveness-probes the ACCOUNT before firing; it is not a throwaway, so it takes a goal too.
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down --follow \
+  --goal '<derivation question> answered with a named mechanism and a file:line for each claim — proven by pasting the verdict table into the transcript; do not edit any tracked file; full brief in the prompt above'
 # --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab" —
 # a non-default surface, so record WHY with --surface-reason (silences the split-right advisory)
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --follow --surface-reason "overflow: window already ~4+ panes"
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --follow --surface-reason "overflow: window already ~4+ panes" \
+  --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <plan path>'
 ```
 
 **6 · Waves — N parallel handoffs (THE high-value case).** A fire request covers EVERY track in the
@@ -427,9 +476,13 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
 ```bash
 # 3-track wave: rank once, spread explicitly, splits for the first two, tab for the third.
 # --follow on each: an operator-initiated wave lands its grid in your view (drop it for a background wave).
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4 --follow
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3 --follow
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --follow --surface-reason "overflow: 3rd track"
+# Each track gets its OWN goal — one measurable end state per track, never one goal describing the wave.
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4 --follow \
+  --goal 'the auth path has no unauthenticated route left — proven by pasting the route audit output and `pnpm test auth` exiting 0; do not change the session schema; full brief in the prompt above, DoD at docs/plans/WSFA.md § sec'
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3 --follow \
+  --goal 'every price is read from one source and `pnpm typecheck` exits 0 — proven by pasting both command outputs; do not touch the auth path (another track owns it); full brief in the prompt above, DoD at docs/plans/WSFA.md § money'
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --follow --surface-reason "overflow: 3rd track" \
+  --goal 'the three rival designs are scored against the named criteria with a single recommendation — proven by pasting the scored table; do not implement anything; full brief in the prompt above, DoD at docs/plans/WSFA.md § design'
 ```
 
 **Fire guardrails:** the gate is READINESS, not an explicit ask — firing is the default close of

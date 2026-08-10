@@ -123,7 +123,7 @@ elif [ "$IS_IMPL" = true ] && [ "$HAS_LOCUS" = false ]; then
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse",
-    "additionalContext": "⚠️ EXECUTION LOCUS MISSING [${BASENAME}]: Phase 0 is present but no wave declares WHERE it runs, so every wave defaults to the lead's own context — the one resource a long-horizon plan cannot refill. Add an Execution Locus row per wave: S = dispatched session (\`handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>\`, the DEFAULT, needs no justification) | T = in-session teammates (their output lands in the LEAD's window — justify in one line) | L = lead-inline (justify in one line). Also state the lead's context budget + succession point. Rule: skills/plan-conventions/SKILL.md § Execution locus."
+    "additionalContext": "⚠️ EXECUTION LOCUS MISSING [${BASENAME}]: Phase 0 is present but no wave declares WHERE it runs, so every wave defaults to the lead's own context — the one resource a long-horizon plan cannot refill. Add an Execution Locus row per wave: S = dispatched session (\`handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>'\`, the DEFAULT, needs no justification — --goal is the default on every wave fire, since the goal evaluator is tool-less and judges only what the session PRINTS) | T = in-session teammates (their output lands in the LEAD's window — justify in one line) | L = lead-inline (justify in one line). Also state the lead's context budget + succession point. Rule: skills/plan-conventions/SKILL.md § Execution locus."
   }
 }
 EOF

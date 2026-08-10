@@ -58,9 +58,15 @@ absorbs the work**.
 
 | Locus | Mechanism | Whose context pays | Use when |
 |---|---|---|---|
-| **S · dispatched session** (DEFAULT) | `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid>`, lead arms `cc-await-ping` in background | the CHILD's — the lead pays only for the brief it wrote and a one-line completion ping | **every implementation wave.** Needs no justification. |
+| **S · dispatched session** (DEFAULT) | `handoff-fire.sh --prompt-file <brief> --worktree <br> --notify-back <lead-uuid> --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>'`, lead arms `cc-await-ping` in background | the CHILD's — the lead pays only for the brief it wrote and a one-line completion ping | **every implementation wave.** Needs no justification. |
 | **T · teammates** | `Agent({name, …})` in-session | the LEAD's — every teammate report, shutdown exchange, and the whole merge loop land in the lead's window | members must be synthesised against each other *immediately* AND their combined output is small |
 | **L · lead-inline** | the lead edits the files itself | the LEAD's, in full | the wave is ONE file's control flow and is genuinely unsplittable (precedent: `docs/plans/SESSION_LIFECYCLE_V2.md` — *"lead-only, no teammates … disjoint file ownership is unconstructible here"*) |
+
+**`--goal` is part of the S recipe, not an extra** (2026-08-09). One measurable end state per wave,
+with the check that proves it and the constraint that must hold — because the goal evaluator is a
+separate TOOL-LESS model judging only what the session PRINTS. *"Wave 3 is done"* is unjudgeable;
+*"`bats tests/x.bats` prints 0 failures"* is not. A goal dies with its session, so a wave that
+recycles must re-arm it. Full rule + template: `commands/handoff.md` § Autonomous fire item 1.
 
 **T and L each need ONE line of justification in the plan. S never needs a reason.** Naming the
 locus is mandatory even when it is S: an unnamed locus resolves to L in practice, because writing
