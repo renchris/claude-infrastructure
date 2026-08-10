@@ -273,7 +273,7 @@ Step 0 + reconcile + present the audit and the recommended plan. No re-runs, no 
 (read-only turn). Use before deciding wait-vs-handoff, or to inspect any session:
 `lr-audit.py --config-dir <dir> --session <sid> --cwd <path>` works cross-account.
 
-## Mode: handoff [next|next2|next3|next4|auto] [opus|fable]
+## Mode: handoff [next|next2|next3|next4|auto] [opus|fable] [effort]
 
 Continue NOW on another account with zero loss (validated: transplanted sessions resume with full
 conversational context; new turns land in the target account's store).
@@ -286,8 +286,14 @@ conversational context; new turns land in the target account's store).
 3. Fire:
    ```bash
    ~/.claude/scripts/limit-recover/lr-handoff.sh --target <arg-or-auto> --model <opus|fable> \
+     --effort <the effort THIS session is running at> \
      --context /tmp/lr-context-$CLAUDE_CODE_SESSION_ID.md --launch
    ```
+   **`--effort` is not optional in practice: a handoff continues ONE session, so the successor
+   must be the same reasoning tier, not merely the same model.** Omitted, `--model fable` falls
+   back to `--effort high` and the opus path to lr-fire-resume's account default — so a session
+   running Fable 5 at `max` transplants DOWN to `high` while its statusline still reads "Fable 5",
+   which is why nobody catches it. Read your own tier off the statusline (or `/effort`) and pass it.
    This audits + salvages into a bundle, copies the transcript + session dir (workflow journals
    included) + task list into the target account under the SAME uuid, sha-verifies, writes the
    split-brain lock + source tombstone, and fires the resume in a **split pane to the RIGHT of

@@ -218,3 +218,54 @@ EOF
   [ ! -e "$BATS_TEST_TMPDIR/tick-marker" ]
   [[ "$output" == *'argv[5]=<wip`touch${IFS}tick-marker`>'* ]]
 }
+
+# --- 7/8: EFFORT REACHES THE SUCCESSOR ---------------------------------------------------------
+# A handoff CONTINUES one session on another account, so the reasoning tier is part of what has
+# to survive the move. `--model fable` used to hardcode `--effort high`, silently demoting a
+# Fable-5-at-MAX session — the kind of loss nothing notices, because the successor's statusline
+# still reads "Fable 5". Test 4 above pins the DEFAULT (high) and these two pin the OVERRIDE, one
+# per emitting site: the flag is set on two different branches and a test of only the fable one
+# would call the opus branch covered while it stayed inert.
+
+@test "7. --effort overrides the fable default rather than appending a second flag" {
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0007-0000-0000-0000-000000000007" "$BATS_TEST_TMPDIR/repo" --model fable --effort max
+  [ "$status" -eq 0 ]
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ]
+  # argc unchanged from test 4: an override, not an extra pair. Two --effort flags would be
+  # last-wins in the binary and would hide a wrong default forever.
+  [[ "$output" == *"argc=11"* ]] || false
+  [[ "$output" == *"argv[8]=<--effort>"* ]] || false
+  [[ "$output" == *"argv[9]=<max>"* ]] || false
+  [[ "$output" != *"<high>"* ]]
+}
+
+@test "8. --effort also reaches the opus path, which passes no --model at all" {
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0008-0000-0000-0000-000000000008" "$BATS_TEST_TMPDIR/repo" --effort xhigh
+  [ "$status" -eq 0 ]
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"argc=9"* ]] || false
+  [[ "$output" != *"--model"* ]] || false
+  [[ "$output" == *"argv[6]=<--effort>"* ]] || false
+  [[ "$output" == *"argv[7]=<xhigh>"* ]]
+}
+
+@test "9. an unrecognised --effort is refused before anything is transplanted" {
+  # The launcher is %q-quoted, so this is a liveness guard, not a quoting one: an effort the
+  # binary rejects would surface as a dead pane AFTER the transcript had already moved accounts.
+  mkrepo "$BATS_TEST_TMPDIR/repo" "feat/ordinary"
+  run gen "lrhq0009-0000-0000-0000-000000000009" "$BATS_TEST_TMPDIR/repo" --effort maximum
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--effort must be"* ]]
+}
