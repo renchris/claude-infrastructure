@@ -56,8 +56,16 @@
 #   UNKNOWN ≠ 0 and ≠ cliff — an unresolvable/hung/unparseable oracle admits AT MOST 1, with
 #     reason "live-count-unknown" and live_workers:null. Conservative, yet never 0-forever (a dead
 #     oracle must not stall the queue) and never the full ceiling (never a blind fire).   S4 / R4
-#   ORDER — thrash-count ASCENDING (this id's `failed` records in the IDL), then oldest ts, so an
-#     item that repeatedly fails to spawn SINKS instead of starving the queue head.       S7 / F10
+#   ORDER — thrash-count ASCENDING (this id's `failed` records in the IDL), then the DERIVED RANK
+#     (land-rail > citation in-degree > recurrence), then oldest ts, so an item that repeatedly
+#     fails to spawn SINKS instead of starving the queue head.                            S7 / F10
+#   CLUSTER — a slot is spent per CLUSTER, not per ROW: the first member of a cluster admits and
+#     every later member defers with reason "cluster-sibling", so N rows naming one root cause take
+#     ONE worker and the freed slots go to different work. DEFER, never close.       M2 / 1b00d62958a6
+#   FRESH TREE — a worker is never fired into a tree that provably predates the base: a reused
+#     `wt-<id>` branch is fast-forwarded when it carries nothing and REFUSED when it carries commits,
+#     and a pre-existing worktree directory is checked before the fire.               M2 / 1b00d62958a6
+#     Both read three states — fresh | stale | unknown — and only a PROVEN-stale tree refuses.
 #   SINGLETON — one ADMISSION at a time behind a `mkdir` lock pinned by pid|lstart (`kill -0` alone
 #     wedges forever on a recycled pid). A pass that finds a LIVE holder still DECIDES (the journal
 #     is a pure read), records {action:"skipped", reason:"pass-in-flight"} alongside its decisions,
@@ -150,6 +158,10 @@
 #   CC_DISPATCH_LOCK_DIR     (default: <dir of CC_DISPATCH_IDL>/dispatch.lock)  the S6 pass lock
 #   CC_DISPATCH_DECIDE_ONLY  (default: off)  on ⇒ decisions only: zero claims/spawns/pages
 #   CC_DISPATCH_LANE         (default: v2)   v1 ⇒ the incumbent path verbatim (whole-rebuild switch)
+#   CC_DISPATCH_RANK         (default: on)   off ⇒ no derived rank; order reverts to thrash+oldest
+#   CC_DISPATCH_CLUSTER      (default: on)   off ⇒ a slot per ROW again, not per cluster
+#   CC_DISPATCH_WT_FRESH     (default: on)   off ⇒ reuse a wt- branch / pre-existing tree unchecked
+#   CC_DISPATCH_WT_BASE      (default: the repo's own origin/HEAD, else origin/main)
 #   (CC_BACKLOG_FILE flows through to the backlog bin unchanged — tests point it at a temp jsonl.)
 set -uo pipefail
 
@@ -591,15 +603,157 @@ thrash_map() {
     || echo '{}'
 }
 
-# order_dispatchable <items-json> <thrash-json> → the same array under the S7 key: thrash ASC, then
-# oldest timestamp. `lastTs` is what cc-backlog's fold carries (an untouched item's lastTs IS its add
-# ts); `.ts` is honored first for hand-authored/stub shapes. jq's sort_by is STABLE, so items with
-# equal keys — every item in a fleet with no failures and no timestamps — keep their input order,
-# which is what leaves the v1 assertions behaviourally intact.
+# ── M2 FIRE GATE: DERIVED RANK + CLUSTER (backlog 1b00d62958a6) ───────────────────────────────────
+# The ordering below used to be thrash-then-oldest, and that was not a poor choice among options: the
+# backlog schema carries NO priority and NO severity field, so FIFO-oldest-first was the only order
+# the store could express. Measured 2026-08-09, the cost of that: the six master items that FIX the
+# ordering sat at queue positions 294-299 of 305, because they were the newest things filed. The fix
+# for the ordering was last in the ordering, and the wave had to be fired by hand.
+#
+# So rank is DERIVED — read from the store's own shape every pass, never typed by a human and never
+# stored. Nothing here can go stale, because nothing here is remembered. Three signals, and they are
+# applied LEXICOGRAPHICALLY rather than as a weighted sum: a weighted sum needs coefficients nobody
+# can defend, and the first reader to disagree with them has no way to tell a tuned weight from an
+# arbitrary one. A strict precedence is arguable on its merits, one clause at a time.
+#
+#   1. thrash ASC      (unchanged, still first) — an item that keeps failing to spawn must SINK.
+#   2. land-rail DESC  — `postland-verify` / `deploy-live` items mean the LAND RAIL ITSELF is red.
+#                        Everything else in the queue lands through that rail, so a blocker on it
+#                        dominates: work admitted ahead of it may not be landable at all. Measured
+#                        live 2026-08-10: 5 of 259 open items. Deliberately keyed on the two machine
+#                        generators' `source` and not on title prose — a generator's own name is a
+#                        fact about which rail filed the row, and prose is what this whole effort
+#                        exists to stop trusting.
+#   3. in-degree DESC  — how many OTHER items in the ledger cite this item's 12-hex id. A measured
+#                        proxy for "closing this retires or unblocks others". Measured live: 101
+#                        edges differentiating 68 of 259 open items (26%), max in-degree 5.
+#                        ⚠️ COUNTED OVER THE WHOLE LEDGER, not over the open set, and the difference
+#                        decides whether this signal exists at all: restricted to open-vs-open the
+#                        same store yields 20 edges over 16 items — a 5x collapse, because most
+#                        citations are written INTO a `done` or `blocked` record ("supersedes X",
+#                        "DUPLICATE of blocked Y"). An in-degree computed only over dispatchable
+#                        rows would have been a near-flat signal that looked like it was working.
+#   4. recurrence DESC — how many live rows share this item's cluster (below). A condition observed
+#                        N times is a standing defect, not an incident.
+#   5. oldest ts       — the incumbent key, kept LAST so equal-rank items are still drained FIFO.
+#
+# jq's sort_by is STABLE and every new term is 0 for a stub item with no citations, no cluster and no
+# generator source, so a fixture fleet sorts exactly as it did before this change — which is what
+# leaves the v1 assertions behaviourally intact.
+
+# cluster_expr — the jq expression for an item's CLUSTER KEY, used by both the rank map and the
+# ordering so the two can never disagree about what a cluster is.
+#
+# `condition` when the filer set one (that flag already exists and already re-keys the id — see
+# cc-backlog's CONDITION KEY note), otherwise the title with every MEASUREMENT normalised out.
+#
+# ⚠️ THIS STRIPS SHAS AND `_norm_title` IN cc-premise DELIBERATELY DOES NOT, and the asymmetry is the
+# load-bearing part. There, normalising a sha out MERGES ledger rows and destroys 17 of 18 distinct
+# post-land findings. Here nothing is merged and nothing is closed: a cluster sibling is DEFERRED for
+# one pass, keeps its row, keeps its evidence, and is admitted the moment the representative
+# finishes. The cost of a false merge is one item waiting a tick; the cost of no merge is N workers
+# firing at one root cause. Different blast radius, so a different rule.
+#
+# The hex run must contain at least one DIGIT. A bare `[0-9a-f]{7,40}` also matches ordinary English
+# built from those letters — "defaced", "cabbage" — and a title that lost a word would cluster with
+# unrelated work (memory: denylist-enumerates-spellings-not-the-class: write the rule against the
+# CLASS). A sha carries digits; a word does not. Verified against both spellings before landing.
+#
+# ⚠️ AN EMPTY KEY MEANS "DOES NOT CLUSTER", and that guard is load-bearing rather than defensive. The
+# first cut keyed every item on its normalised title unconditionally, which made two items with NO
+# title — every stub in the fixtures, and any row filed with an empty one — share the key `p norm:` and
+# collapse into one cluster. Eight existing v2 assertions went red, and they were right to: the
+# absence of a discriminator is not evidence of sameness (memory: lookup-miss-is-not-absence), and a
+# dispatcher reading it that way declines a slot to unrelated work for as long as the representative
+# runs. So a title-derived key is minted only when something SURVIVES normalisation — at least three
+# alphabetic tokens. A title whose every distinguishing token was a measurement normalises to `#`s
+# and punctuation, discriminates nothing, and correctly clusters with nothing.
+cond_expr='(if ((.condition // "") != "") then ((.project // "") + " cond:" + .condition) else "" end)'
+# shellcheck disable=SC2016  # a jq PROGRAM, not a shell string: `$n` is jq's own variable
+# binding, and shell expansion here would be the defect rather than the fix.
+norm_expr='(((.title // "") | ascii_downcase
+             | gsub("\\b(?=[0-9a-f]{7,40}\\b)[0-9a-f]*[0-9][0-9a-f]*\\b"; "#")
+             | gsub("[0-9]+(\\.[0-9]+)?"; "#")
+             | gsub("\\s+"; " ") | .[0:160]) as $n
+            | (if (([$n | scan("[a-z]{2,}")] | length) >= 3)
+               then ((.project // "") + " norm:" + $n) else "" end))'
+# The LOOSE key — condition first, else the normalised title. This is what RECURRENCE counts, because
+# recurrence only nudges an ordering. ADMISSION uses the stricter form built in order_dispatchable
+# (see DISTINCT RAW TITLES there): a gate may refuse a slot, so it must clear a higher bar than a
+# ranking term that can only move an item a few places.
+cluster_expr="(( ${cond_expr} ) as \$c | (if \$c != \"\" then \$c else ( ${norm_expr} ) end))"
+
+# rank_map <backlog-bin> <dispatchable-json> → {"<id>": {"land":0|1,"in":N,"recur":N}}, or {} when it
+# cannot be computed. ALWAYS fail-open to {}: every term then reads 0 and the order collapses to the
+# incumbent thrash-then-oldest, which is a working dispatcher, not a stalled one.
+#
+# THE SECOND `list --all` IS DELIBERATE. `live_workers` already makes one, and threading its JSON out
+# would be cheaper — but that function's contract is "a count, or '' for UNKNOWN", the third state the
+# whole ceiling rests on, and it is pinned by tests. Growing it a second product to save 1.7s inside a
+# decision phase budgeted at 5 minutes trades a load-bearing contract for nothing.
+rank_map() {
+  local b="$1" all out
+  [ -n "$b" ] || { echo '{}'; return 0; }
+  all="$("$b" list --all --json 2>/dev/null)" || { echo '{}'; return 0; }
+  out="$(printf '%s' "$all" | jq -c --argjson d "$2" '
+      if type != "array" then error("not an array") else . end
+    | . as $all
+    # in-degree over EVERY record in the fold, open or not — see the comment block above.
+    | ( [ $all[] | . as $it
+          | ([$it.title, $it.evidence, $it.needs, $it.dodRef, $it.condition, $it.source]
+             | map(. // "") | join(" "))
+          | [ match("\\b[0-9a-f]{12}\\b"; "g").string ] | unique
+          | map(select(. != $it.id)) | map({to: .}) ] | add // [] ) as $edges
+    | ( [ $edges[].to ] | group_by(.) | map({key: .[0], value: length}) | from_entries ) as $indeg
+    # recurrence counts the LIVE rows only (open + blocked + claimed): a condition whose every row
+    # is `done` is not recurring, it is finished.
+    | ( [ $all[] | select(.status != "done") | '"$cluster_expr"' | select(. != "") ]
+        | group_by(.) | map({key: .[0], value: length}) | from_entries ) as $recur
+    | [ $d[] | { key: .id, value: {
+          land:  (if ((.source // "") == "postland-verify" or (.source // "") == "deploy-live")
+                  then 1 else 0 end),
+          in:    ($indeg[.id] // 0),
+          recur: (($recur['"$cluster_expr"'] // 1) - 1) } } ]
+    | from_entries' 2>/dev/null)" || out=""
+  printf '%s' "$out" | jq -e 'type=="object"' >/dev/null 2>&1 || out='{}'
+  printf '%s\n' "$out"
+}
+
+# order_dispatchable <items-json> <thrash-json> <rank-json> → the same array under the S7 key, now
+# with the derived rank above interposed between thrash and timestamp, and each item carrying its
+# `_cluster` key for the admission loop. `lastTs` is what cc-backlog's fold carries (an untouched
+# item's lastTs IS its add ts); `.ts` is honored first for hand-authored/stub shapes.
 order_dispatchable() {
-  printf '%s' "$1" | jq -c --argjson th "$2" \
-    '[ .[] | . + {_thrash: ($th[.id] // 0)} ]
-     | sort_by(._thrash, (.ts // .lastTs // "")) | map(del(._thrash))'
+  local rk="${3:-}"; [ -n "$rk" ] || rk='{}'
+  printf '%s' "$1" | jq -c --argjson th "$2" --argjson rk "$rk" '
+      [ .[] | . + {_thrash: ($th[.id] // 0),
+                   _land:   ($rk[.id].land  // 0),
+                   _in:     ($rk[.id].in    // 0),
+                   _recur:  ($rk[.id].recur // 0),
+                   _kc: '"$cond_expr"', _kn: '"$norm_expr"', _rawt: (.title // "")} ] as $items
+    # ── DISTINCT RAW TITLES — the bar an INFERRED cluster must clear before it may cost a slot ─────
+    # A `--condition` key is a filer DECLARING two rows to be one piece of work, and it is honoured
+    # unconditionally. A title-derived key is this file INFERRING it, and the inference is only ever
+    # licensed by one thing: a MEASUREMENT in the title moved, so the id hash (project+title+source)
+    # minted a second row for one condition. That licence is absent when the raw titles are
+    # byte-identical — then a measurement is NOT what separated them, something else did, and this
+    # normaliser has no evidence about what. Two such rows cannot even exist in the live store (same
+    # project+title+source ⇒ same hash ⇒ one id), so refusing to infer here costs nothing real and
+    # removes the one way an inferred cluster could starve unrelated work.
+    #
+    # Found by the cross-project fairness assertion in tests/cc-dispatch-projects.bats, whose fixture
+    # seeds every item of a project with the identical title `work for <proj>` — a pair the id rule
+    # forbids, which collapsed to one cluster and admitted one item where the test wanted two. The
+    # test was right and the key was too eager (memory: stale-assertion-becomes-an-inverted-guard —
+    # check which side has the incident before assuming the assertion is the stale one).
+    | ( [ $items[] | select(._kn != "") | {k: ._kn, t: ._rawt} ] | group_by(.k)
+        | map({key: .[0].k, value: ([.[].t] | unique | length)}) | from_entries ) as $distinct
+    | [ $items[] | . + {_cluster:
+          (if   ._kc != ""                                 then ._kc
+           elif ._kn != "" and (($distinct[._kn] // 0) >= 2) then ._kn
+           else "" end)} ]
+    | sort_by([._thrash, -._land, -._in, -._recur, (.ts // .lastTs // "")])
+    | map(del(._thrash, ._land, ._in, ._recur, ._kc, ._kn, ._rawt))'
 }
 
 # ── S6: singleton, skip-not-queue ─────────────────────────────────────────────────────────────────
@@ -662,6 +816,29 @@ lock_acquire() {
 # resolved from the item's own project (conf `repo=` → CC_DISPATCH_REPO for the pinned project only
 # → the ~/Development/<project> convention) and an unresolvable one REFUSES — the caller reopens the
 # item with a recorded failure, which is a visible thrash rather than a silent mis-fire.
+# ── M2: A PROVABLY FRESH TREE (backlog 1b00d62958a6) ──────────────────────────────────────────────
+# wt_base_state <repo> <ref> <base> → `fresh` | `stale` | `unknown`. Always exit 0; the WORD is the
+# verdict, so a caller can never mistake a failed probe for an answer.
+#
+# THREE STATES, NOT TWO, and that is the whole reason this is a function rather than an inline
+# `merge-base --is-ancestor`. `--is-ancestor` exits 0 for yes, 1 for no, and something else for "I
+# could not evaluate that" — a missing ref, a corrupt object, no repo. Collapsing the third into `no`
+# is exactly the failure cc-premise measured on its own path arm: a sensor that cannot READ reported
+# ABSENT and fabricated 80 findings (memory: lookup-miss-is-not-absence). So both refs are resolved
+# first as a positive control, and only rc 1 from a probe that ran convicts.
+wt_base_state() {
+  local repo="$1" ref="$2" base="$3" rc
+  git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null 2>&1 || { echo unknown; return 0; }
+  git -C "$repo" rev-parse --verify --quiet "$ref"  >/dev/null 2>&1 || { echo unknown; return 0; }
+  git -C "$repo" merge-base --is-ancestor "$base" "$ref" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0) echo fresh ;;
+    1) echo stale ;;
+    *) echo unknown ;;
+  esac
+  return 0
+}
+
 warm_worktree() {
   local wt="$1" wproj="${2:-$PROJECT}" br repo base
   repo="$(project_repo "$wproj")"
@@ -678,7 +855,42 @@ warm_worktree() {
   br="$(basename "$wt")"
   git -C "$repo" fetch origin -q 2>/dev/null || echo "cc-dispatch: fetch failed — basing off last-fetched $base" >&2
   # Reuse the branch if it already exists (a re-dispatch after a failed spawn must not hard-fail).
+  #
+  # ⚠️ THE REUSE PATH IGNORED THE BASE ENTIRELY, which made the fetch one line up buy nothing. It
+  # checks out the OLD branch tip, so a `wt-<id>` branch left behind by a failed spawn days ago hands
+  # the next worker a tree cut from a trunk that has since moved — and nothing says so. The worker
+  # writes a correct change against a stale base and discovers it at LAND time, as a conflict, in
+  # someone else's session. That is the "provably fresh tree" clause of this item.
+  #
+  # Two sub-cases, and they must not be treated alike:
+  #   · the branch carries NO commits of its own ⇒ it is a leftover, not work. Fast-forward it onto
+  #     the freshly-fetched base and proceed. Nothing can be lost: there is nothing on it.
+  #   · the branch carries commits ⇒ that is somebody's work, possibly unlanded. REFUSE, and let the
+  #     caller reopen the item with a recorded failure. This file's own doctrine, three comments up:
+  #     a visible thrash rather than a silent mis-fire. Deleting or rebasing it here would be a
+  #     destructive act taken by an unattended dispatcher over work it did not create.
+  # `unknown` proceeds, like every other sensor failure in this file (I6): starving the queue on an
+  # unreadable probe is the worse error. Kill switch CC_DISPATCH_WT_FRESH=off restores the incumbent.
   if git -C "$repo" show-ref --verify --quiet "refs/heads/$br"; then
+    local bstate uniq
+    bstate=fresh
+    [ "${CC_DISPATCH_WT_FRESH:-on}" != off ] \
+      && bstate="$(wt_base_state "$repo" "refs/heads/$br" "$base")"
+    if [ "$bstate" = stale ]; then
+      uniq="$(git -C "$repo" rev-list --count "$base..refs/heads/$br" 2>/dev/null || echo unknown)"
+      if [ "$uniq" = 0 ]; then
+        if ! git -C "$repo" branch -f "$br" "$base" >/dev/null 2>&1; then
+          # `branch -f` refuses a branch checked out in ANOTHER worktree — a stale registration for
+          # this same id. Refusing here is right: we cannot make it fresh and must not fire into it.
+          echo "cc-dispatch: refusing $wt — branch $br is behind $base and could not be fast-forwarded (checked out elsewhere?); \`git -C $repo worktree prune\` then retry" >&2
+          return 1
+        fi
+        echo "cc-dispatch: $br was behind $base with no commits of its own — fast-forwarded to $base" >&2
+      else
+        echo "cc-dispatch: refusing $wt — branch $br is NOT based on $base and carries $uniq commit(s) of its own; land or delete it before re-dispatch (\`git -C $repo log $base..$br\`)" >&2
+        return 1
+      fi
+    fi
     git -C "$repo" worktree add "$wt" "$br" >/dev/null 2>&1 || return 1
   else
     git -C "$repo" worktree add "$wt" -b "$br" "$base" >/dev/null 2>&1 || return 1
@@ -916,12 +1128,16 @@ dispatch() { # <dry|run|decide>
   # v2 replaces the raw FIFO slice below with: order by the fairness key → read the live-worker count
   # through the bounded oracle → journal a verdict for EVERY dispatchable item → hand ONLY the admit
   # set to the planner. The v1 slice is kept verbatim under CC_DISPATCH_LANE=v1.
-  local ordered admit_n
+  local ordered admit_n admitted_ids=""
   if [ "$v2" -eq 1 ]; then
-    local th reason_admit="" di=0 pos vverdict vreason did
+    local th rk reason_admit="" di=0 pos vverdict vreason did
     th="$(thrash_map)"
     printf '%s' "$th" | jq -e 'type=="object"' >/dev/null 2>&1 || th='{}'
-    ordered="$(order_dispatchable "$dispatchable" "$th")"
+    # the derived rank (M2 fire gate). {} on any failure ⇒ every term reads 0 ⇒ the incumbent
+    # thrash-then-oldest order, which is why this can never make the pass worse than it was.
+    rk='{}'
+    if [ "${CC_DISPATCH_RANK:-on}" != off ]; then rk="$(rank_map "$backlog" "$dispatchable")"; fi
+    ordered="$(order_dispatchable "$dispatchable" "$th" "$rk")"
     # ordering is a FAIRNESS optimisation, never a correctness dependency: if the sort produced
     # anything but an array (a jq failure, a shape surprise), fall back to the unordered set rather
     # than dropping the pass — a pass that decides nothing is the outage this rebuild is fixing.
@@ -952,12 +1168,47 @@ dispatch() { # <dry|run|decide>
     # the decision journal — one record per dispatchable item, in queue order. The queue is ONE
     # cross-project queue under the S7 key, so `position` is a fleet-wide rank and the per-record
     # `project` is what tells a reader which project a rank belongs to.
-    local dproj
-    while IFS="$(printf '\t')" read -r did dproj; do
+    #
+    # ── THE CLUSTER IS THE DISPATCH UNIT (M2, backlog 1b00d62958a6) ────────────────────────────────
+    # Admission used to be `position <= admit_n`, which spends one slot per ROW. Rows are not the
+    # unit of work: 18 `tests/deploy-parity.bats` post-land rows differing only by sha are ONE root
+    # cause, and slicing the head of the queue fires 18 workers at it. So a slot is spent per
+    # CLUSTER — the first member admits, every later member of that same cluster DEFERS with its own
+    # reason, and the slot it would have burned goes to different work instead.
+    #
+    # DEFER, NEVER CLOSE, and that is what makes an aggressive cluster key safe: the sibling keeps
+    # its row, keeps its evidence, and is admitted on a later pass once the representative is no
+    # longer live. Nothing is merged and nothing is retracted here — cc-backlog's `--condition` lease
+    # is the mechanism that decides two rows are one piece of work, and this only declines to spend
+    # two slots in one tick.
+    #
+    # ⚠️ MEASURED SMALL TODAY, AND THAT IS THE HONEST NUMBER: over the live store on 2026-08-10 the
+    # open population holds ONE multi-member cluster (4 rows, the MEMORY.md-index condition), so this
+    # saves 3 admissions right now — not 17. The 18-row deploy-parity pile that motivates the design
+    # is `blocked`, and blocked items were already filtered out at step 1. This is a standing guard
+    # against a pile re-forming, not a fix for a pile that is currently in the queue; a reader
+    # comparing it against the design note should get that from the code, not from a surprise.
+    #
+    # bash 3.2 (this box) has NO associative arrays, so membership is a newline-delimited string
+    # matched with `grep -Fxq` — an exact WHOLE-LINE match, because a cluster key is free text and a
+    # substring test would merge a key into any longer key containing it.
+    local dproj dclus taken_clusters="" n_admit=0
+    while IFS="$(printf '\t')" read -r did dproj dclus; do
       [ -n "$did" ] || continue
       pos=$((di + 1)); di=$((di + 1))
-      if [ "$pos" -le "$admit_n" ]; then
-        vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1))
+      if [ -n "$dclus" ] && [ "${CC_DISPATCH_CLUSTER:-on}" != off ] \
+         && printf '%s' "$taken_clusters" | grep -Fxq -- "$dclus"; then
+        # A sibling of an item ALREADY ADMITTED THIS PASS. Capacity-independent, like the done-guard
+        # skip: it would defer at any free_slots, so it must not be reported as `at-ceiling` — that
+        # reason feeds cc-blockers' SATURATED premise gate, which counts it as evidence the fleet is
+        # full, and a cluster deferral is evidence of nothing of the kind.
+        vverdict=defer; vreason="cluster-sibling"; DEFERRED=$((DEFERRED + 1))
+      elif [ "$n_admit" -lt "$admit_n" ]; then
+        vverdict=admit; vreason="$reason_admit"; ADMITTED=$((ADMITTED + 1)); n_admit=$((n_admit + 1))
+        admitted_ids="$admitted_ids$did
+"
+        [ -n "$dclus" ] && taken_clusters="$taken_clusters$dclus
+"
       else
         vverdict=defer; DEFERRED=$((DEFERRED + 1))
         # pass-in-flight outranks at-ceiling, which outranks capacity (slots existed, this item is
@@ -973,10 +1224,16 @@ dispatch() { # <dry|run|decide>
         else                               vreason="capacity"; fi
       fi
       [ "$mode" = dry ] || idl_decision "$did" "$vverdict" "$pos" "$vreason" "$dproj"
-    done < <(printf '%s' "$ordered" | jq -r '.[] | "\(.id // "")\t\(.project // "")"')
+    done < <(printf '%s' "$ordered" | jq -r '.[]
+      | "\(.id // "")\t\(.project // "")\t\((._cluster // "") | gsub("[\\t\\n\\r]"; " "))"')
+    # The cluster rides a TSV field, so it is scrubbed of tabs/newlines at the source rather than
+    # trusted: a title is free text and one stray tab would shift every later field silently.
 
+    # admit_n is the CAPACITY bound; n_admit is what was actually spent after cluster collapse, and
+    # the two differ exactly when a sibling was declined a slot. Report the spent one — a PLAN line
+    # that says "4 admit" while the wave holds 2 is the claimed-vs-checked defect in miniature.
     [ "$mode" = dry ] && printf 'PLAN: %s dispatchable · ceiling=%s live=%s free_slots=%s → %s admit, %s defer\n' \
-      "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$admit_n" "$((count - admit_n))"
+      "$count" "$CEILING" "${LIVE_RAW:-unknown}" "$FREE_SLOTS" "$n_admit" "$((count - n_admit))"
 
     # 3a0. S6 — NO LOCK, so the journal above IS the whole product of this pass. Returning HERE, and
     # not at step 0, is the A2 fix: every dispatchable item now has a verdict from this pass, which
@@ -1020,8 +1277,19 @@ dispatch() { # <dry|run|decide>
   # wave is exactly the admit set (free_slots items, already ordered by the S7 key), so it is bounded
   # by CEILING <= total concurrency. Same protection against the false cliff, now with the surplus
   # RECORDED as deferrals rather than silently re-sliced every tick.
+  #
+  # M2: the wave is now the set the decision loop ACTUALLY ADMITTED, not the head slice `[0:admit_n]`.
+  # Those two were the same expression only while admission was positional; once a cluster sibling can
+  # be declined a slot mid-slice, a head slice would silently re-add the very row the journal just
+  # recorded as `cluster-sibling` — a wave that contradicts its own decision records. Selecting by id
+  # keeps the journal and the wave one artifact, and it PRESERVES QUEUE ORDER because the select runs
+  # over `ordered`.
   if [ "$v2" -eq 1 ]; then
-    wave="$(printf '%s' "$ordered" | jq -c --argjson k "$admit_n" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
+    local admit_json
+    admit_json="$(printf '%s' "$admitted_ids" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
+      || admit_json='[]'
+    wave="$(printf '%s' "$ordered" | jq -c --argjson a "$admit_json" \
+      '[ .[] | select(.id as $i | $a | index($i)) | {id, slot: (.slot // "lead")} ]')"
   else
     wave="$(printf '%s' "$dispatchable" | jq -c --argjson k "$MAX_SPAWN" '[ .[0:$k][] | {id, slot: (.slot // "lead")} ]')"
   fi
@@ -1292,6 +1560,32 @@ dispatch() { # <dry|run|decide>
     if [ -n "$wcwd" ] && [ ! -d "$wcwd" ] && ! warm_worktree "$wcwd" "$iproj"; then
       local wsr; wsr="$(self_release "$id" worktree-fail)"
       FAILED=$((FAILED + 1)); idl failed "$id: worktree provision failed (reopened${wsr})"; continue
+    fi
+    # M2 — THE SECOND FRESHNESS HOLE, and the one with no fetch in front of it at all. The line above
+    # provisions only when the path is ABSENT; an already-present `wt-<id>` directory short-circuits
+    # the whole of warm_worktree, so it is fired into with no fetch, no base read, and an arbitrarily
+    # old HEAD. warm_worktree's own guard cannot see this case by construction — it is never called.
+    # Same three-state discipline: only a PROVEN-stale tree refuses; `unknown` fires, as every sensor
+    # failure in this file does.
+    if [ -n "$wcwd" ] && [ -d "$wcwd" ] && [ "${CC_DISPATCH_WT_FRESH:-on}" != off ]; then
+      local wrepo wbase wstate
+      wrepo="$(project_repo "$iproj")" || wrepo=""
+      if [ -n "$wrepo" ] && git -C "$wrepo" rev-parse --git-dir >/dev/null 2>&1; then
+        wbase="${CC_DISPATCH_WT_BASE:-}"
+        if [ -z "$wbase" ]; then
+          wbase="$(git -C "$wrepo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+          [ -n "$wbase" ] || wbase="origin/main"
+        fi
+        git -C "$wrepo" fetch origin -q 2>/dev/null || true
+        wstate="$(wt_base_state "$wcwd" HEAD "$wbase")"
+        if [ "$wstate" = stale ]; then
+          echo "cc-dispatch: refusing to fire into $wcwd — its HEAD does not contain $wbase (pre-existing worktree, never re-based)" >&2
+          local wsr2; wsr2="$(self_release "$id" worktree-fail)"
+          FAILED=$((FAILED + 1))
+          idl failed "$id: pre-existing worktree $wcwd is behind $wbase — not fired (reopened${wsr2})"
+          continue
+        fi
+      fi
     fi
 
     # b. spawn → on non-zero, reopen the claim (leave it for the next run).
