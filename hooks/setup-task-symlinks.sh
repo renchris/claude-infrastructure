@@ -90,9 +90,31 @@ if [ -f "$INDEX" ]; then
     done
 fi
 
-# Generate _summary.json for ALL task list directories
+# Generate _summary.json — ONLY where staleness is provable (scaling-bottlenecks-2026-08-09
+# §5 P0-2, item a7eebe63d0d0). Unconditionally regenerating all ~2,155 dirs (97% empty)
+# measured ~4 s CPU / ~800 forks per session start and was killed by this hook's own
+# settings timeout:5 with the work discarded every time — the fleet's single largest hook.
+# Pure-bash guard, zero forks for an unchanged dir: regenerate only when (a) a task json is
+# newer than the summary (covers in-place TaskUpdate rewrites), (b) tasks exist with no
+# summary, or (c) the dir emptied AFTER its summary was written (deletion moves dir mtime;
+# the regen writes the summary into the dir, so post-regen the two are equal and it skips).
+# CC_TASKS_SUMMARY_FORCE=1 bypasses the guard (also the test suite's mutation control).
 for dir in "$TASKS_DIR"/*/; do
     [ ! -d "$dir" ] && continue
+    summary="${dir}_summary.json"
+    stale=0 has_task=0
+    for tj in "$dir"*.json; do
+        [ -e "$tj" ] || continue
+        case "$tj" in */_summary.json) continue ;; esac
+        has_task=1
+        if [ ! -f "$summary" ] || [ "$tj" -nt "$summary" ]; then stale=1; break; fi
+    done
+    if [ "$has_task" -eq 0 ]; then
+        [ -f "$summary" ] || continue
+        [ "$dir" -nt "$summary" ] && stale=1
+    fi
+    [ "${CC_TASKS_SUMMARY_FORCE:-0}" = "1" ] && stale=1
+    [ "$stale" -eq 1 ] || continue
     regenerate_summary "$dir"
 done
 
