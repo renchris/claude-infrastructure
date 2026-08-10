@@ -10,6 +10,10 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LEDGER="$REPO/scripts/wrap-ledger.sh"
+  # W2 hermeticity: the custody counter resolves the repo's own bin/cc-custody, whose store
+  # defaults under $HOME — unfixtured, every test here would read the OPERATOR's live custody
+  # ledger (the suite-is-a-function-of-who-runs-it class). An empty fixture dir = counted zero.
+  export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
   WORK="$BATS_TEST_TMPDIR/work"
   git init -q --bare "$ORIGIN"
@@ -1164,4 +1168,50 @@ missing_from_ladder() {
   local say; say="$(field "$output" READOUT)"
   ! printf '%s' "$say" | grep -qi "landed" || false
   printf '%s' "$say" | grep -qi "unproven"
+}
+
+# ── W2 CUSTODY — dispatched work in flight folds into the rung (CLOSE_INTEGRITY G1) ─────────────
+# An originator whose wave has not returned must not read ✅ (the certificate rides RUNG=✅), and
+# a custody store that is absent/unreadable must never manufacture a rung (fail-OPEN like YOURS).
+
+_cust_repo() { # $1=tag → echoes a clean landed repo (HEAD == origin/main)
+  local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
+  git init -q --bare "$o"; git clone -q "$o" "$w" 2>/dev/null
+  ( cd "$w" && git checkout -q -b main && echo x > f && git add f \
+    && git -c user.email=t@e.com -c user.name=t commit -q -m c && git push -q -u origin main ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+_cust_stub() { # $1=name $2=body-line → echoes an executable stub path
+  local s="$BATS_TEST_TMPDIR/$1"
+  printf '%s\n' '#!/usr/bin/env bash' "$2" > "$s"; chmod +x "$s"; printf '%s' "$s"
+}
+
+@test "custody: open dispatches on an otherwise-✅ tree ⇒ RUNG 🔧 + CUSTODY keys" {
+  local w; w="$(_cust_repo cust)"
+  local STUB BSTUB; STUB="$(_cust_stub cust-stub 'echo 2')"; BSTUB="$(_cust_stub b-stub 'echo []')"
+  run bash -c "cd '$w' && CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=🔧'
+  printf '%s' "$output" | grep -q '^CUSTODY_OPEN=2'
+  printf '%s' "$output" | grep -q '^CUSTODY_SRC=cwd'
+  printf '%s' "$output" | grep -q 'dispatched session(s) have NOT returned'
+}
+
+@test "custody CONTROL: count 0 ⇒ the ✅ path is untouched (SRC=cwd, counted zero)" {
+  local w; w="$(_cust_repo cust0)"
+  local STUB BSTUB; STUB="$(_cust_stub cust0-stub 'echo 0')"; BSTUB="$(_cust_stub b0-stub 'echo []')"
+  run bash -c "cd '$w' && CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=✅'
+  printf '%s' "$output" | grep -q '^CUSTODY_OPEN=0'
+  printf '%s' "$output" | grep -q '^CUSTODY_SRC=cwd'
+}
+
+@test "custody fail-OPEN: an erroring custody binary never manufactures a rung (SRC=error)" {
+  local w; w="$(_cust_repo custE)"
+  local STUB BSTUB; STUB="$(_cust_stub custE-stub 'exit 3')"; BSTUB="$(_cust_stub bE-stub 'echo []')"
+  run bash -c "cd '$w' && CC_CUSTODY_BIN='$STUB' CC_DECIDE_BIN='$BSTUB' CC_BACKLOG_BIN='$BSTUB' WRAP_TRUNK=origin/main bash '$BATS_TEST_DIRNAME/../scripts/wrap-ledger.sh' --machine"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^RUNG=✅'
+  printf '%s' "$output" | grep -q '^CUSTODY_SRC=error'
 }

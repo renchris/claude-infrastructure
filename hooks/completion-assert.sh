@@ -84,7 +84,9 @@
 #   B-3 one IDL {fired|abstained:<reason>} line per invocation.
 #
 # Env seams (tests): COMPLETION_STATE_DIR · COMPLETION_IDL · COMPLETION_MAX · WRAP_LEDGER_BIN ·
-#   CC_BACKLOG_BIN (arm 2 D1 — tests stub it; the real binary is resolved when unset)
+#   CC_BACKLOG_BIN (arm 2 D1 — tests stub it; the real binary is resolved when unset) ·
+#   SESSION_WRITES_LIB / ORIGIN_IDENTITY_LIB / CLOSE_SHAPE_LIB / CC_FIRED_DIR / CC_CLOSE_SHAPE
+#   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch)
 set -uo pipefail
 
 STATE_DIR="${COMPLETION_STATE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/state/completion-assert}"
@@ -307,43 +309,15 @@ _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot 
     dirty)
       session_dirty_mine "$TP" "$CWD" >/dev/null 2>&1; return $? ;;
     unlanded)
-      # Do the unlanded commits touch anything this session wrote? Compare ABSOLUTE paths:
-      # git name-only is repo-relative, the transcript is absolute (see the lib's note).
-      out="$(session_writes_paths "$TP" 2>/dev/null)"; rc=$?
-      [ "$rc" -eq 2 ] && return 2
-      [ "$rc" -eq 1 ] && return 1
-      # CANONICALISE BOTH SIDES. `git rev-parse --show-toplevel` answers with the PHYSICAL
-      # path; the transcript records the path as the tool was given it (LOGICAL). On macOS
-      # /tmp -> /private/tmp and /var -> /private/var, and this repo's live layer is symlinks,
-      # so the two spellings of one file never compare equal and the intersection reads empty
-      # FOREVER — i.e. it would exonerate everything and silently disable the guard.
-      # This is the identical trap session_dirty_mine already documents; hand-rolling the
-      # comparison here re-introduced it, and only the CONTROL test ("a commit this session
-      # DID write must still convict") caught it. Fail-green defects need a control, not a check.
-      local top; top="$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 2
-      [ -n "$top" ] || return 2
-      top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$top")"
-      local _p _d _b _phys canon=""
-      while IFS= read -r _p; do
-        [ -n "$_p" ] || continue
-        _d="$(dirname "$_p")"; _b="$(basename "$_p")"
-        _phys="$(cd "$_d" 2>/dev/null && pwd -P 2>/dev/null)"
-        canon="${canon}${_phys:-$_d}/${_b}
-"
-      done <<CANON
-$out
-CANON
-      out="$canon"
+      # DELEGATED to session_unlanded_mine (CLOSE_INTEGRITY W2b) — session-continue's ship floor
+      # asks the SAME question, and two inline copies of this intersection is how they drift. The
+      # canonicalisation story (physical-vs-logical paths; the fail-green trap only the "a commit
+      # this session DID write must still convict" control caught) moved to the lib fn with the
+      # algorithm, verbatim. An absent fn (stale live lib) is cannot-tell — stay strict.
+      command -v session_unlanded_mine >/dev/null 2>&1 || return 2
       local trunk; trunk="$(lfield TRUNK)"
       case "$trunk" in ''|none) return 2 ;; esac
-      local f
-      while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        printf '%s\n' "$out" | grep -qxF "$top/$f" && return 0
-      done <<EOF
-$( cd "$top" 2>/dev/null && git diff --name-only "$trunk"..HEAD 2>/dev/null )
-EOF
-      return 1 ;;
+      session_unlanded_mine "$TP" "$CWD" "$trunk" >/dev/null 2>&1; return $? ;;
   esac
   return 2
 }
@@ -360,6 +334,12 @@ if [ "$UNLANDED" -eq 1 ]; then
   else contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "; fi
 fi
 [ "$REMAINDER" -gt 0 ]  && { contra=1; facts="${facts}${REMAINDER} frozen-DoD item(s) remain; "; }
+# W2 CUSTODY — a done-claim over UNRETURNED dispatched work is the wave-abandonment close itself
+# (generator G1): the tree can be spotless while the session's real work is mid-flight in fired
+# peers. CONSUME the ledger's count, never re-derive (make-the-actuator-the-arbiter); wrap-ledger
+# computes it on the ✅-eligible path, which is exactly where a clean-tree done-claim lands.
+CUSTODY="$(lfield CUSTODY_OPEN)"; case "$CUSTODY" in ''|*[!0-9]*) CUSTODY=0 ;; esac
+[ "$CUSTODY" -gt 0 ] && { contra=1; facts="${facts}${CUSTODY} dispatched session(s) have NOT returned (custody open — collect+synthesize+land their work then \`cc-custody return <marker|slug>\`, or \`cc-custody abandon <token> --why …\`; awaiting them ARMED via cc-await-ping is a valid non-close state, but 'done' is not); "; }
 
 # ── LANDED ≠ LIVE — the 🚀 rung this guard could not see (2026-08-07) ────────────────────────────
 # Face 4 landed the rung in scripts/wrap-ledger.sh, but this hook was never taught it, and every
@@ -581,11 +561,74 @@ while IFS= read -r ca_l; do
   ca_prev="$ca_t"
 done <<< "$MSG"
 
+# ── D6 — ORIGIN PYRAMID-CLOSE CONTRACT (CLOSE_INTEGRITY W1; operator /goal 2026-08-09) ──────────
+# The operator's two standing close questions — Pyramid complication/solution/outcome + an explicit
+# good-to-close verdict — existed only as prose discipline, and the IDL shows 58% of stops assert
+# nothing at all (no-close-tell, 13.5h window), so the one close that mattered could end without
+# them. This arm fires ONLY on the terminal states where every other arm has nothing left to
+# demand: a close-shaped message (the gate above), ledger ✅/👤, no contradiction, POSITIVE write
+# evidence, in an ORIGIN session. Everything else abstains, each for a stated reason:
+#   · confirmed assignee   → a teammate pane has no operator reading its close
+#   · fired peer           → its close is the notify-back ping; this contract is the operator's
+#   · write-free session   → research/Q&A must never be forced into a work-close shape (the
+#                            dispatched-wave lead with an empty write footprint is W2 custody's
+#                            business — a ledger fact, not a shape demand)
+#   · contra=1 / worse rung → the ledger arm already blocks with the drivable action; the shape
+#                            demand belongs at the TRUE close, not stacked before it
+# Matcher + template + reason live in hooks/lib/close-shape.sh (ONE code path; /wrap pulls the
+# same — final-response-shaping M4), and the reason deliberately does not restate D1/D3/D4.
+# Origin verdict: hooks/lib/origin-identity.sh oi_origin_class — contract polarity (unproven peer
+# ⇒ origin), pane-id first with the by-cwd+marker fallback that survives the measured
+# resume-loses-$ITERM_SESSION_ID case. Bounds: shares the latch-set + COMPLETION_MAX cap verbatim
+# with every other arm. CC_CLOSE_SHAPE=0 disables the arm outright (R8).
+d6=0; _d6_missing=""
+if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra" -eq 0 ] \
+   && { [ "$RUNG" = "✅" ] || [ "$RUNG" = "👤" ]; } && ! _ca_assignee; then
+  _d6_ok=1
+  # POSITIVE write evidence only (rc 0). rc 1 (none recorded) and rc 2 (cannot tell) both skip:
+  # unlike the conviction arms, a shape DEMAND must not rest on ignorance.
+  _d6_swl="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
+  [ -f "$_d6_swl" ] || { _d6_t="$0"; [ -L "$_d6_t" ] && _d6_t="$(readlink "$_d6_t")"
+    _d6_swl="$(cd "$(dirname "$_d6_t")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$_d6_swl" ] || _d6_swl="$CFG/hooks/lib/session-writes.sh"
+  [ -f "$_d6_swl" ] || _d6_swl="$HOME/.claude/hooks/lib/session-writes.sh"
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1090,SC1091
+  { [ -f "$_d6_swl" ] && . "$_d6_swl" 2>/dev/null && session_writes_paths "$TP" >/dev/null 2>&1; } || _d6_ok=0
+  if [ "$_d6_ok" -eq 1 ]; then
+    _d6_oil="${ORIGIN_IDENTITY_LIB:-$_cascd/lib/origin-identity.sh}"
+    [ -f "$_d6_oil" ] || { _d6_t="$0"; [ -L "$_d6_t" ] && _d6_t="$(readlink "$_d6_t")"
+      _d6_oil="$(cd "$(dirname "$_d6_t")" 2>/dev/null && pwd)/lib/origin-identity.sh"; }
+    [ -f "$_d6_oil" ] || _d6_oil="$CFG/hooks/lib/origin-identity.sh"
+    [ -f "$_d6_oil" ] || _d6_oil="$HOME/.claude/hooks/lib/origin-identity.sh"
+    # shellcheck source=lib/origin-identity.sh
+    # shellcheck disable=SC1090,SC1091
+    if [ -f "$_d6_oil" ] && . "$_d6_oil" 2>/dev/null; then
+      _d6_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _d6_pane="${_d6_pane##*:}"
+      [ "$(oi_origin_class "$_d6_pane" "$CWD" "$TP")" = origin ] || _d6_ok=0
+    else
+      _d6_ok=0
+    fi
+  fi
+  if [ "$_d6_ok" -eq 1 ]; then
+    _d6_shl="${CLOSE_SHAPE_LIB:-$_cascd/lib/close-shape.sh}"
+    [ -f "$_d6_shl" ] || { _d6_t="$0"; [ -L "$_d6_t" ] && _d6_t="$(readlink "$_d6_t")"
+      _d6_shl="$(cd "$(dirname "$_d6_t")" 2>/dev/null && pwd)/lib/close-shape.sh"; }
+    [ -f "$_d6_shl" ] || _d6_shl="$CFG/hooks/lib/close-shape.sh"
+    [ -f "$_d6_shl" ] || _d6_shl="$HOME/.claude/hooks/lib/close-shape.sh"
+    # shellcheck source=lib/close-shape.sh
+    # shellcheck disable=SC1090,SC1091
+    if [ -f "$_d6_shl" ] && . "$_d6_shl" 2>/dev/null; then
+      if ! close_shape_ok "$MSG"; then d6=1; _d6_missing="$(close_shape_missing "$MSG")"; fi
+    fi
+  fi
+fi
+
 # An exoneration is a REAL decision, not a non-event: it is the difference between "the ledger
 # was clean" and "the ledger was dirty but none of it was mine". Distinguish them in the IDL or
 # the next person debugging a missed conviction cannot tell which happened.
 [ "$contra" -eq 1 ] || [ "$d1" -eq 1 ] || [ "$d2" -eq 1 ] || [ "$d3" -eq 1 ] || [ "$d4" -eq 1 ] \
-  || [ "$d5" -eq 1 ] || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
+  || [ "$d5" -eq 1 ] || [ "$d6" -eq 1 ] || abstain "ledger-clean${_ca_exon:+:exonerated:${_ca_exon% }}"
 
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -613,6 +656,7 @@ arm=""
 [ "$d4" -eq 1 ] && arm="${arm:+$arm+}offer"
 [ "$d2" -eq 1 ] && arm="${arm:+$arm+}fence"
 [ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
+[ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
 log_idl fired "false-done" \
   "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{facts:$facts,rung:$rung,arm:$arm,count:$count,max:$max}')"
@@ -624,6 +668,7 @@ reason=""
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), FILED (\`cc-backlog needs\` for an operator-only step, \`cc-backlog add\` for agent work — so it renders as one counted line), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. 'Say the word' is not a disposition. Drive it, or file it — then re-close."
 [ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all — it is a question to ask or a step to file."
+[ "$d6" -eq 1 ] && reason="${reason:+$reason }$(close_shape_reason "$RUNG" "$_d6_missing")"
 [ "$d2" -eq 1 ] && reason="${reason:+$reason }Your close shows a command as bare prose, with no code styling, so the operator cannot tell it from the paragraph around it. Put a marker line of its own first (\"▶ Run this:\"), then the ONE command as an inline-code span on the next line — that renders blue on every wrapped row and starts no row with chrome, so a drag-copy yields exactly the command. Do NOT use a \`\`\`bash fence (renders plain white — a bare command has no syntax to colour) or a blockquote (its rule character lands in the paste). A close shows a command ONLY if you are asking the operator to run it — one you would then tell them to ignore must not appear at all."
 [ "$contra" -eq 1 ] || reason="Completion-assert: $reason"
 reason="$reason (completion-assert $((N+1))/${MAX})"

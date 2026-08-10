@@ -407,6 +407,22 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
     fi
   fi
 
+  # W2 CUSTODY (CLOSE_INTEGRITY): open dispatched work is a wake-relevant fact exactly like pending
+  # mail — the ping that discharges it arrives through the same inbox, so an originator idling DEAF
+  # over open custody is the wave-abandonment generator itself (62 stranded commits, 5 wave-day
+  # spikes). Best-effort count; absent binary (the ADD-not-live window) or any failure ⇒ 0.
+  # (Composes with the /goal abstain above: a goal-driven originator is already kept awake by the
+  # goal itself, which is a stronger wake path than any watcher.)
+  local cust=0 _cb=""
+  for _cb in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../bin/cc-custody" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-custody" "$HOME/.claude/bin/cc-custody"; do
+    [ -x "$_cb" ] && break; _cb=""
+  done
+  if [ -n "$_cb" ]; then
+    cust="$("$_cb" count --open --cwd "$cwd" 2>/dev/null || echo 0)"
+    case "$cust" in ''|*[!0-9]*) cust=0 ;; esac
+  fi
+
   # ── THIRD STATE: terminating / lead-owned ⇒ this gate does not APPLY (see the block above) ────────
   # PLACED HERE, before the state file is written: an abstain must not consume a budget attempt, or a
   # session that was merely an assignee for a while would arrive at a genuine unarmed idle with its
@@ -438,9 +454,10 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
     fi
   fi
 
-  # Fire on the first idle of the session, or any idle where mail is actually waiting. Otherwise a
-  # session that already declined once is left alone.
-  [ "$cnt" -eq 0 ] || [ "$pend" -gt 0 ] || return 0
+  # Fire on the first idle of the session, any idle where mail is actually waiting, or any idle
+  # while dispatched work from this cwd has not returned (custody open ⇒ the originator's one job
+  # while waiting is to be wakeable). Otherwise a session that already declined once is left alone.
+  [ "$cnt" -eq 0 ] || [ "$pend" -gt 0 ] || [ "$cust" -gt 0 ] || return 0
 
   maxa="${CC_WAKE_FLOOR_MAX:-2}"; case "$maxa" in ''|*[!0-9]*) maxa=2 ;; esac
   ttl="${CC_WAKE_FLOOR_TTL_S:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
@@ -486,6 +503,9 @@ It blocks until a line lands in your inbox, prints it, and exits — and that ex
 
 Re-arm after every wake: the watcher removes its own heartbeat when it exits, so once it has woken you, you are deaf again until you arm a new one."
   [ "$pend" -gt 0 ] && reason="📬 ${pend} message(s) are pending in your inbox RIGHT NOW.
+
+${reason}"
+  [ "$cust" -gt 0 ] && reason="🧵 ${cust} dispatched session(s) fired from this cwd have NOT returned (cc-custody list --open --cwd .). You are their ORIGINATOR — their completion pings arrive through this inbox, so idling deaf is how a wave gets abandoned. Await them armed; when one reports, collect + synthesize + land its work, then \`cc-custody return <marker-or-slug>\` (or \`cc-custody abandon <token> --why …\` if superseded).
 
 ${reason}"
   jq -nc --arg r "$reason" --arg m "🔔 Wake floor: arming this session's inbox watcher (no wake path was armed)." \
@@ -622,14 +642,118 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   return 0
 }
 
+# ── SHIP FLOOR (CLOSE_INTEGRITY W2b) — silent 📦/🚀 idles were the load-bearing leak ─────────────
+# The mechanical arm's own header (above) says "📦 must NOT fire — committed-but-unlanded is
+# operator-readout's surface and the ship policy's business, not a loop." The 2026-08-10 recon's
+# verdict is that this decision IS the gap the fleet keeps bleeding through: the ship policy had no
+# actuator, 58% of stops assert nothing (`no-close-tell` is completion-assert's modal outcome), so
+# a session idling on committed-unlanded work passed every rail — 53/60 recent closes were clean
+# exit-0 on sessions that simply chose to end, and the operator's close of a done-looking pane was
+# the last domino, not the generator (report-adversarial candidate 2; report-census wave-abandonment).
+# This floor reverses that decision in BOUNDED form, not as a loop:
+#   · fires ONCE per HEAD-sha (a new commit deserves one fresh nudge), ≤ CC_SHIP_FLOOR_MAX/session
+#   · 📦 only when the unlanded commits contain THIS session's OWN writes — the #105 sibling-dirt
+#     lesson applied to commits; attribution rc≠0 or oracle absent ⇒ abstain, never nudge on
+#     ignorance. 🚀 only with positive write evidence this session (a repo-wide converger outage
+#     must not nudge every idle session — alarm polarity).
+#   · assignee / terminating abstain (the lead owns an assignee's merge; a teardown is not an idle)
+#   · kill-switch honoured; budget exhaustion is silent (operator-readout still renders 📦/🚀)
+# Seams: CC_SHIP_FLOOR (0 disables) · CC_SHIP_FLOOR_MAX · WRAP_LEDGER_BIN · SESSION_WRITES_LIB
+ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on rc 0). Never fails.
+  [ "${CC_SHIP_FLOOR:-1}" = 1 ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  kill_switch_active && return 0
+  local _sf_aid _sf_c
+  if _sf_aid="$(agent_assignee_argv)" && [ -n "$_sf_aid" ]; then
+    agent_team_member_confirms "$_sf_aid"; _sf_c=$?
+    { [ "$_sf_c" -eq 0 ] || [ "$_sf_c" -eq 2 ]; } && return 0
+  fi
+  wf_teardown_marked && return 0
+
+  local wrap led rung ahead shas trunk
+  wrap="${WRAP_LEDGER_BIN:-}"
+  if [ -z "$wrap" ]; then
+    for wrap in "$_scd/../scripts/wrap-ledger.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+      [ -f "$wrap" ] && break
+    done
+  fi
+  [ -n "$wrap" ] && [ -f "$wrap" ] || return 0
+  led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+  [ -n "$led" ] || return 0
+  rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
+  case "$rung" in "📦"|"🚀") : ;; *) return 0 ;; esac
+
+  # Attribution oracle — the shared lib, resolved through $0's own symlink first (a brand-new fn
+  # must be reachable on the same fast-forward that delivers this hook).
+  local swlib
+  swlib="${SESSION_WRITES_LIB:-$_scd/lib/session-writes.sh}"
+  [ -f "$swlib" ] || { local _st="$0"; [ -L "$_st" ] && _st="$(readlink "$_st")"
+    swlib="$(cd "$(dirname "$_st")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$swlib" ] || swlib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/session-writes.sh"
+  [ -f "$swlib" ] || swlib="$HOME/.claude/hooks/lib/session-writes.sh"
+  [ -f "$swlib" ] || return 0
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1091
+  . "$swlib" 2>/dev/null || return 0
+  if [ "$rung" = "📦" ]; then
+    command -v session_unlanded_mine >/dev/null 2>&1 || return 0
+    trunk="$(printf '%s' "$led" | grep -E '^TRUNK=' | head -1 | cut -d= -f2-)"
+    { [ -n "$trunk" ] && [ "$trunk" != none ]; } || return 0
+    session_unlanded_mine "$TP_MECH" "$cwd" "$trunk" >/dev/null 2>&1 || return 0
+  else
+    command -v session_writes_paths >/dev/null 2>&1 || return 0
+    session_writes_paths "$TP_MECH" >/dev/null 2>&1 || return 0
+  fi
+
+  # One shot per HEAD-sha + a per-session cap, in one sidecar. A same-sid same-sha re-idle is
+  # silent; a new commit re-arms; a successor session gets a fresh budget.
+  local sfile line psid psha pcnt maxs head_sha
+  head_sha="$(cd "$cwd" 2>/dev/null && git rev-parse HEAD 2>/dev/null || echo '?')"
+  sfile="${f}.ship"; maxs="${CC_SHIP_FLOOR_MAX:-2}"; case "$maxs" in ''|*[!0-9]*) maxs=2 ;; esac
+  psid=""; psha=""; pcnt=0
+  if [ -f "$sfile" ]; then
+    line="$(cat "$sfile" 2>/dev/null || true)"
+    psid="$(printf '%s' "$line" | cut -d' ' -f1)"
+    psha="$(printf '%s' "$line" | cut -d' ' -f2)"
+    pcnt="$(printf '%s' "$line" | cut -d' ' -f3)"
+    case "$pcnt" in ''|*[!0-9]*) pcnt=0 ;; esac
+    [ "$psid" = "${cur_sid:-?}" ] || { pcnt=0; psha=""; }
+  fi
+  [ "$psha" = "$head_sha" ] && return 0
+  if [ "$pcnt" -ge "$maxs" ]; then
+    printf 'session-continue: ship floor budget spent (%s/%s) — allowing stop on %s.\n' "$pcnt" "$maxs" "$rung" >&2
+    return 0
+  fi
+  printf '%s %s %s' "${cur_sid:-?}" "$head_sha" "$(( pcnt + 1 ))" > "$sfile" 2>/dev/null || true
+
+  ahead="$(printf '%s' "$led" | grep -E '^AHEAD=' | head -1 | cut -d= -f2-)"
+  shas="$(printf '%s' "$led" | grep -E '^SHAS=' | head -1 | cut -d= -f2-)"
+  local reason
+  if [ "$rung" = "📦" ]; then
+    reason="📦 SHIP FLOOR — you are going idle on committed-but-unlanded work YOU wrote (${ahead:-?} commit(s): ${shas:-?}). Committed ≠ landed: a branch only this machine can see is one crash or forgotten worktree from lost — the measured top loss class (62 stranded commits across 21 abandoned-wave branches). Apply the ship policy NOW: /ship it (auto-fire by default; where THIS repo's own CLAUDE.md says landing spends money, offer it and park instead). If this park is DELIBERATE, run \`~/.claude/hooks/session-continue.sh clear\` and name the park in your close. (ship floor $(( pcnt + 1 ))/${maxs})"
+  else
+    reason="🚀 SHIP FLOOR — your landed work is NOT live: the enforcing store has breached its converge budget, so the machine still runs the old bytes. Run the converger NOW — \`bash \$(git rev-parse --show-toplevel)/scripts/deploy-live.sh\` — then re-read the ledger (\`/wrap\`). If the converger refuses, file it (\`cc-backlog needs\`) and close on 👤 — never sit on 🚀 and never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
+  fi
+  log_idl fired "ship-floor" "$(jq -cn --arg r "$rung" --arg a "${ahead:-?}" --argjson n "$(( pcnt + 1 ))" --argjson m "$maxs" \
+    '{rung:$r,ahead:$a,count:$n,max:$m}' 2>/dev/null)"
+  jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
+  return 1
+}
+
 # No sentinel → the agent did NOT request continuation → the session is going IDLE. This is the one
-# transition the wake floor guards; a sentinel-blocked stop is not idle, so it needs no floor.
+# transition the floors guard; a sentinel-blocked stop is not idle, so it needs no floor.
+# Floor order: mechanical 🔧 (uncommitted own writes) → ship floor (📦/🚀 own work) → wake floor
+# (reachability). At most ONE floor emits per Stop — the hook prints a single JSON object.
 if [ ! -f "$f" ]; then
   rm -f "${f}.count" "${f}.sid" 2>/dev/null
   if ! mechanical_arm; then
+    if ! _sf_json="$(ship_floor)"; then
+      printf '%s' "$_sf_json"
+      exit 0      # decision:block travels in the JSON; the hook itself always exits 0
+    fi
     if ! _wf_json="$(wake_floor)"; then
       printf '%s' "$_wf_json"
-      exit 0      # decision:block travels in the JSON; the hook itself always exits 0
+      exit 0
     fi
     [ -n "${_wf_json:-}" ] && printf '%s' "$_wf_json"
     exit 0
