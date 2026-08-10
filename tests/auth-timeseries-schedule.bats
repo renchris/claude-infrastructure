@@ -193,7 +193,7 @@ print("OK")'
   # install.sh activates only what the manifest declares `run`; an undeclared label is never
   # activated and prints UNDECLARED. staged is the honest state here — built, decision pending —
   # because arming needs the operator's keychain-ACL check.
-  run grep -E "^$LABEL[[:space:]]*\|" "$REPO/launchd/fleet.manifest"
+  run grep -E "^${LABEL}[[:space:]]*\|" "$REPO/launchd/fleet.manifest"
   [ "$status" -eq 0 ] || { echo "$LABEL is not declared in launchd/fleet.manifest"; false; }
   [[ "$output" == *"| staged "* ]] || { echo "expected expect=staged, got: $output"; false; }
   [[ "$output" == *"$STORE_REL"* ]] || {
