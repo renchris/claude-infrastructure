@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# cc-custody — dispatched-work custody ledger (CLOSE_INTEGRITY W2; generator G1).
+#
+# THE GAP THIS CLOSES (recon report-adversarial G1 + report-census §1.2, 2026-08-10): every close
+# rung is a function of LOCAL git state, so an origin/lead session whose work is IN FLIGHT in
+# dispatched /handoff sessions reads ✅/read-only by construction and every Stop rail correctly
+# waves it through. dispatch-assert is discharged by the FIRE itself; nothing ever asserts the
+# RETURN was collected. The damage signature matches exactly: 62 content-stranded commits across
+# 21 branches in 5 wave-day spikes — "a wave fans out, some members land, the lead's context ends,
+# and the unlanded members are never revisited" (111 of 115 worktrees had no live session).
+#
+# THE MODEL. One APPEND-ONLY jsonl per originator-cwd:
+#   ${CC_CUSTODY_DIR:-~/.claude/autonomy/custody}/<cwd-key>.jsonl
+# cwd-key = _fired_cwd_key from hooks/lib/origin-identity.sh — the SAME normalisation the
+# fired-peer store uses, so the two stores cannot disagree about what a cwd is. Rows:
+#   {ts, kind:open|return|abandon, cwd, originatorPane, targetPane, marker, slug, notifyBack, why}
+# An OPEN row is discharged by a later return/abandon row matching its MARKER (unique per fire —
+# the engagement marker), falling back to slug+targetPane for marker-less fires. Append-only means
+# a crashed writer can never corrupt an existing verdict; the open-set is derived at read time.
+#
+# PRODUCERS: scripts/handoff-fire.sh `open`s beside the fire (notify-back armed ⇒ a return is
+#   owed) and `return`s from sc_announce_before_retire; hooks/mailbox-drain.sh `return`s on a
+#   received HANDOFF-PING. All best-effort — custody bookkeeping must never break a fire or close.
+# CONSUMERS: scripts/wrap-ledger.sh (CUSTODY_OPEN=), hooks/completion-assert.sh (a done-claim over
+#   open custody is a contradiction), hooks/session-continue.sh wake floor (idle + open custody +
+#   no armed watcher ⇒ arm the watcher), hooks/operator-readout.sh (renders the line).
+# POLARITY: cwd-keyed v1 — two sessions sharing one cwd share a custody view (CUSTODY_SRC=cwd says
+#   so). Per-session worktrees (the rollout) make cwd unique in steady state; over-counting a
+#   sibling's dispatch costs a bounded, latched block, while a per-pane key would silently DROP
+#   custody across the measured resume-loses-pane-id case. Chosen deliberately.
+#
+# Env seams (tests): CC_CUSTODY_DIR · (lib) CC_FIRED_DIR unused here.
+set -uo pipefail
+
+CUSTODY_DIR="${CC_CUSTODY_DIR:-$HOME/.claude/autonomy/custody}"
+
+_die() { printf 'cc-custody: %s\n' "$1" >&2; exit "${2:-2}"; }
+
+command -v jq >/dev/null 2>&1 || _die "jq not found" 3
+
+# _fired_cwd_key comes from the shared lib — resolve through $0's own symlink first (the live copy
+# is ~/.claude/bin/cc-custody -> the checkout; a brand-new lib has no live symlink until install).
+_OI_LIB=""
+for _c in "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../hooks/lib/origin-identity.sh" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/origin-identity.sh" \
+          "$HOME/.claude/hooks/lib/origin-identity.sh"; do
+  [ -f "$_c" ] && { _OI_LIB="$_c"; break; }
+done
+# shellcheck source=../hooks/lib/origin-identity.sh
+# shellcheck disable=SC1090,SC1091
+{ [ -n "$_OI_LIB" ] && . "$_OI_LIB"; } || _die "cannot source origin-identity lib (cwd keying unavailable)" 3
+
+_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
+
+_row() { # kind cwd originatorPane targetPane marker slug notifyBack why → one compact json line
+  jq -nc --arg ts "$(_now)" --arg kind "$1" --arg cwd "$2" --arg op "$3" --arg tp "$4" \
+         --arg marker "$5" --arg slug "$6" --arg nb "$7" --arg why "$8" \
+    '{ts:$ts, kind:$kind, cwd:$cwd}
+     + (if $op     == "" then {} else {originatorPane:$op} end)
+     + (if $tp     == "" then {} else {targetPane:$tp}     end)
+     + (if $marker == "" then {} else {marker:$marker}     end)
+     + (if $slug   == "" then {} else {slug:$slug}         end)
+     + (if $nb     == "" then {} else {notifyBack:$nb}     end)
+     + (if $why    == "" then {} else {why:$why}           end)'
+}
+
+# jq program deriving the OPEN set from one-or-more jsonl streams. Key = marker when present,
+# else "slug|targetPane". Latest verdict per key wins; only kind==open survives.
+_OPEN_JQ='
+  [ inputs ]
+  | map(. + {k: (if (.marker // "") != "" then ("m:"+.marker) else ("s:"+(.slug//"")+"|"+(.targetPane//"")) end)})
+  | group_by(.k) | map(sort_by(.ts) | last) | map(select(.kind == "open"))
+'
+
+_files_for() { # $1=cwd-or-empty → prints the file list (existing only)
+  local cwd="${1:-}" key f
+  if [ -n "$cwd" ]; then
+    key="$(_fired_cwd_key "$cwd")"; [ -n "$key" ] || return 0
+    f="$CUSTODY_DIR/$key.jsonl"; [ -f "$f" ] && printf '%s\n' "$f"
+  else
+    for f in "$CUSTODY_DIR"/*.jsonl; do [ -f "$f" ] && printf '%s\n' "$f"; done
+  fi
+  return 0
+}
+
+cmd="${1:-}"; shift 2>/dev/null || true
+CWD="" TARGET="" MARKER="" SLUG="" NB="" OP="" WHY="" WANT_OPEN=0 WANT_JSON=0 TOKEN=""
+case "$cmd" in return|abandon) TOKEN="${1:-}"; { [ -n "$TOKEN" ] && [ "${TOKEN#--}" = "$TOKEN" ]; } && shift ;; esac
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cwd) shift; CWD="${1:-}" ;;
+    --target) shift; TARGET="${1:-}" ;;
+    --marker) shift; MARKER="${1:-}" ;;
+    --slug) shift; SLUG="${1:-}" ;;
+    --notify-back) shift; NB="${1:-}" ;;
+    --originator-pane) shift; OP="${1:-}" ;;
+    --why) shift; WHY="${1:-}" ;;
+    --open) WANT_OPEN=1 ;;
+    --json) WANT_JSON=1 ;;
+    *) _die "unknown arg: $1" ;;
+  esac
+  shift 2>/dev/null || true
+done
+
+case "$cmd" in
+  open)
+    [ -n "$CWD" ] && [ -n "$TARGET" ] || _die "open needs --cwd and --target"
+    key="$(_fired_cwd_key "$CWD")"; [ -n "$key" ] || _die "cwd does not resolve: $CWD"
+    mkdir -p "$CUSTODY_DIR" 2>/dev/null || _die "cannot create $CUSTODY_DIR" 3
+    _row open "$CWD" "$OP" "$TARGET" "$MARKER" "$SLUG" "$NB" "" >> "$CUSTODY_DIR/$key.jsonl" \
+      || _die "append failed" 3
+    ;;
+  return|abandon)
+    [ -n "$TOKEN" ] || _die "$cmd needs a <marker-or-slug> token"
+    [ "$cmd" = abandon ] && [ -z "$WHY" ] && _die "abandon needs --why"
+    matched=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      m="$(jq -nc --arg t "$TOKEN" "$_OPEN_JQ"' | map(select(.marker == $t or .slug == $t)) | first // empty' \
+             "$f" 2>/dev/null || true)"
+      [ -n "$m" ] && { matched="$m"; matched_file="$f"; break; }
+    done <<EOF
+$(_files_for "$CWD")
+EOF
+    if [ -n "$matched" ]; then
+      _row "$cmd" \
+        "$(printf '%s' "$matched" | jq -r '.cwd // ""')" "$OP" \
+        "$(printf '%s' "$matched" | jq -r '.targetPane // ""')" \
+        "$(printf '%s' "$matched" | jq -r '.marker // ""')" \
+        "$(printf '%s' "$matched" | jq -r '.slug // ""')" "" "$WHY" >> "$matched_file" \
+        || _die "append failed" 3
+    else
+      # Best-effort by design: a peer returning after its originator's store was pruned must not
+      # fail its own close path. Loud on stderr, rc 0.
+      printf 'cc-custody: no OPEN row matches %s — nothing discharged\n' "$TOKEN" >&2
+    fi
+    ;;
+  list)
+    files="$(_files_for "$CWD")"
+    [ -n "$files" ] || { [ "$WANT_JSON" -eq 1 ] && printf '[]\n' || :; exit 0; }
+    if [ "$WANT_OPEN" -eq 1 ]; then
+      # shellcheck disable=SC2086
+      out="$(cat $files 2>/dev/null | jq -nc "$_OPEN_JQ" 2>/dev/null || printf '[]')"
+    else
+      # shellcheck disable=SC2086
+      out="$(cat $files 2>/dev/null | jq -nc '[ inputs ]' 2>/dev/null || printf '[]')"
+    fi
+    if [ "$WANT_JSON" -eq 1 ]; then printf '%s\n' "$out"
+    else printf '%s' "$out" | jq -r '.[] | [.ts, .kind, (.slug // "-"), (.targetPane // "-"), (.marker // "-")] | @tsv' 2>/dev/null || true
+    fi
+    ;;
+  count)
+    [ "$WANT_OPEN" -eq 1 ] || _die "count supports --open only"
+    files="$(_files_for "$CWD")"
+    [ -n "$files" ] || { printf '0\n'; exit 0; }
+    # shellcheck disable=SC2086
+    cat $files 2>/dev/null | jq -nc "$_OPEN_JQ"' | length' 2>/dev/null || _die "store unreadable" 3
+    ;;
+  *) _die "usage: cc-custody open --cwd <dir> --target <pane> [--marker M] [--slug S] [--notify-back NB] [--originator-pane P]
+       cc-custody return|abandon <marker-or-slug> [--cwd <dir>] [--why <text>]
+       cc-custody list [--open] [--cwd <dir>] [--json]
+       cc-custody count --open [--cwd <dir>]" ;;
+esac
+exit 0
