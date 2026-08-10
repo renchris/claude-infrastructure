@@ -77,6 +77,7 @@ echo "cc-cloud $*" >>"$CALLS"
 case "$1" in
   list) cat "$CLOUD_ROWS" ;;
   preflight) echo "PREFLIGHT PASS." ;;
+  declare) echo "declared" ;;
   retire) echo "retired $3" ;;
   show) echo "url=https://claude.ai/code/$2" ;;
   *) exit 2 ;;
@@ -204,7 +205,7 @@ EOF
 @test "up passes the opt-in as the literal string 'on'" {
   # CC_FIRE_CLOUD=1 or =true are REFUSED by the fire path with exit 2. Only `on` works.
   echo "do the thing" >"$BATS_TEST_TMPDIR/task.txt"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt" --via cli
   [ "$status" -eq 0 ]
   grep -q '^fire optin=on ' "$CALLS"
   grep -q -- '--cloud' "$CALLS"
@@ -215,7 +216,7 @@ EOF
   # 11 means a session is spending quota that nothing local can see, address or reap. Retrying it
   # buys a SECOND invisible session. With -n 3 the fire must be invoked exactly once.
   echo "task" >"$BATS_TEST_TMPDIR/task.txt"
-  FIRE_RC=11 run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt" -n 3
+  FIRE_RC=11 run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt" --via cli -n 3
   [ "$status" -eq 11 ]
   [[ "$output" == *"IS LIVE"* ]] || [[ "$output" == *"EXIT 11"* ]] || false
   [ "$(grep -c '^fire ' "$CALLS")" -eq 1 ]
@@ -223,21 +224,21 @@ EOF
 
 @test "up on exit 10 says nothing is running — the safe-to-retry case" {
   echo "task" >"$BATS_TEST_TMPDIR/task.txt"
-  FIRE_RC=10 run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt"
+  FIRE_RC=10 run "$SUT" up --task "$BATS_TEST_TMPDIR/task.txt" --via cli
   [ "$status" -eq 10 ]
   [[ "$output" == *"NOTHING is running"* ]]
 }
 
 @test "up refuses an empty brief" {
   : >"$BATS_TEST_TMPDIR/empty.txt"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/empty.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/empty.txt" --via cli
   [ "$status" -eq 2 ]
   [[ "$output" == *empty* ]] || false
   ! grep -q '^fire ' "$CALLS"
 }
 
 @test "up refuses a missing task file rather than firing blind" {
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/nope.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/nope.txt" --via cli
   [ "$status" -eq 2 ]
   ! grep -q '^fire ' "$CALLS"
 }
@@ -289,7 +290,7 @@ echo "!! cloud fire: REFUSED — refused-bundle" >&2
 exit 10
 EOF
   chmod +x "$STUBDIR/handoff-fire.sh"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   [ -f "$CC_CLOUD_STATE/github-app.observed" ]
   grep -q 'verdict=absent' "$CC_CLOUD_STATE/github-app.observed"
 
@@ -302,7 +303,7 @@ echo "!! cloud fire: REFUSED — refused-quota" >&2
 exit 10
 EOF
   chmod +x "$STUBDIR/handoff-fire.sh"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   [ ! -f "$CC_CLOUD_STATE/github-app.observed" ]
 }
 
@@ -313,7 +314,7 @@ EOF
   mkdir -p "$CC_CLOUD_STATE"
   printf 'verdict=absent\nts=1\n' >"$CC_CLOUD_STATE/github-app.observed"
   echo "task" >"$BATS_TEST_TMPDIR/t.txt"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   [ "$status" -eq 0 ]
   [ ! -f "$CC_CLOUD_STATE/github-app.observed" ] || false   # retracted …
   run "$SUT" ls --json
@@ -328,7 +329,7 @@ echo "cloud-create: attempt 1/3 hit refused-bundle — retrying" >&2
 exit 0
 EOF
   chmod +x "$STUBDIR/handoff-fire.sh"
-  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via cli
   grep -q 'verdict=absent' "$CC_CLOUD_STATE/github-app.observed" || false
 }
 
@@ -438,6 +439,66 @@ EOF
   chmod +x "$STUBDIR/cc-cloud"
   run "$SUT" open session_abc --print
   [[ "$output" == *UNKNOWN* ]] || false
+}
+
+@test "up --via api creates, declares, THEN delivers — and never delivers to an undeclared id" {
+  # The order is forced. cc-notify refuses to claim a send about an undeclared target (exit 3), and
+  # a session that exists but is undeclared is quota burning where no local instrument can see it.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print(" ".join(sys.argv[1:]), file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare --id session_apitest' "$CALLS" || false
+  grep -q 'cc-notify --cloud session_apitest' "$CALLS" || false
+  # declare must precede the send in the recorded order
+  [ "$(grep -n 'cc-cloud declare' "$CALLS" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n 'cc-notify --cloud' "$CALLS" | head -1 | cut -d: -f1)" ] || false
+}
+
+@test "up --via api derives owner/name portably (no GNU-only lazy quantifier)" {
+  # The first implementation used `sed -E 's#…([^/]+/[^/]+?)…'`, which BSD sed rejects outright
+  # with "repetition-operator operand invalid" — green on Linux CI, dead on every Mac that runs it.
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin git@github.com:acme/widget.git
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+open(__import__("os").environ["CALLS"],"a").write("api "+" ".join(sys.argv[1:])+"\n")
+print("session_x")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  grep -q -- '--repo acme/widget' "$CALLS" || false
+}
+
+@test "up --via rejects anything but api or cli" {
+  echo x >"$BATS_TEST_TMPDIR/t.txt"
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --via bundle
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must be"* ]] || false
+}
+
+@test "up --via api --dry-run says WOULD, never created" {
+  echo x >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/acme/widget.git
+  # A python stub, because cc-offload invokes it with `python3` — a bash stub named .py dies with
+  # SyntaxError and the test then measures the stub, not the subject.
+  printf '#!/usr/bin/env python3\nraise SystemExit(0)\n' >"$STUBDIR/create-api.py"
+  chmod +x "$STUBDIR/create-api.py"
+  CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *WOULD* ]] || false
+  ! grep -q 'cc-cloud declare' "$CALLS"
 }
 
 @test "an unknown verb refuses with usage rather than doing something adjacent" {
