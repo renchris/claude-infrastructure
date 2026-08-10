@@ -232,3 +232,42 @@ it? Weigh against the renderer rule — there must remain exactly ONE renderer p
   until the operator runs `pi` → `/login` → **OpenAI Codex**. Transplanting Codex's tokens into
   `~/.pi/agent/auth.json` by hand was rejected: improvising an auth path around a vendor's own
   login flow is exactly the unproven-mechanism risk this plan's landmines warn about.
+- **2026-08-10 — W3 DONE** (`513224f9`). Provider section shipped **inside** `bin/claude-accounts`,
+  not as a sibling `cc-agents`. **Open design question from the plan, now decided with evidence:**
+  `render_readout`'s own docstring records that it exists *to be* the single renderer, having
+  replaced ~200 lines of prose in `commands/accounts.md` that made the model rebuild the table by
+  hand — so a second program rendering "what agent capacity do I have" would recreate precisely the
+  drift that function was written to delete. `render_providers()` is therefore the ONE formatter,
+  and both entry points (`--readout` appends, `--agents` prints alone) call it.
+  Registry is a **separate tracked file** `providers.json` (symlinked to `~/.claude/providers.json`
+  by `install.sh`): `accounts.json` declares itself SSOT for the 4 Claude Max accounts and is
+  gitignored for real emails, so provider facts would have been both misplaced and unversioned
+  there — and the cost verdicts are exactly what must survive in history, so a SKIP stays skipped
+  for a recorded reason.
+  **Contract held:** Claude rows, router footer, `--json` field names and the
+  `--rank`/`--route`/`--login-status` exit codes untouched; `providers` rides as a sibling key;
+  `--no-agents` returns the historical readout; an unreadable registry appends nothing.
+  **110 tests green across 5 suites, 0 failures.**
+- **2026-08-10 — W4 DONE** (`7962af94`). `commands/accounts.md` extended additively;
+  `tests/claude-accounts-providers.bats` = 10 tests with TERM/NO_COLOR/provider-API-key env and
+  **PATH itself** pinned in `setup()` (so `installed` is decided by the fixture, never by what the
+  developer has globally). **Mutation-verified:** swapping the routability rule for `bool(exe)` —
+  the presence-equals-routable defect — turns tests 2 and 4 red while the positive control (test 3)
+  stays green, so the suite discriminates for the stated reason instead of passing vacuously.
+
+## Remaining / known open
+
+1. **⛔ `pi-codex` is installed and cleared but UNAUTHENTICATED** — operator-only browser OAuth
+   (`pi` → `/login` → **OpenAI Codex**). Filed: backlog `c85038c4434f`. Until it runs, `pi` has no
+   model catalog, so W2's pin+prove cannot complete for this backend. **Do NOT select
+   `Claude Pro/Max` in that menu** (per-token extra-usage billing — see the W1 correction).
+2. **Gemini CLI plan tier UNKNOWN** — free Code Assist individual and a paid Google AI subscription
+   are indistinguishable from disk. Resolving it needs an authenticated Google account check the
+   operator owns. Until then it stays DEFERRED, which is the cost gate working, not a gap.
+3. **`~/.claude/providers.json` symlink is dangling until this branch lands** — it points at the
+   shared checkout, where the file only appears on the fast-forward. Degrades to "no provider
+   registry" meanwhile (pinned by test 1). *A file a diff ADDS is absent, not stale — it gets no
+   converge budget; re-verify the link resolves after landing.*
+4. **Antigravity's plan stays UNKNOWN by design.** Its routability is already settled by the
+   absence of a headless mode, so measuring the tier would change no decision — recorded rather
+   than chased.
