@@ -2499,6 +2499,28 @@ verb_status() {
 }
 
 # ════ selftest — RED-provable, fixture-scoped, zero side effects outside the temp dir ═════════════
+#
+# ── HERMETICITY vs A LIVE DAEMON (backlog 9a34c9b9865a) ──────────────────────────────────────────
+# The item filed against this block asked for two things. The first was already true, and the second
+# is refuted by measurement; both are recorded here because an item whose premise is not written
+# down where the code lives gets re-minted from the same observation.
+#
+# "The green-path assertions read a shared $STATE the daemon mutates." NO. run_fixture has passed
+# CC_POSTLAND_DIR="$d/state" since this file was born (95438bbb, 2026-07-25) and every assertion
+# reads a LITERAL "$d/…" path, never $STATE/$STAMPS/$LASTGREEN. That was already the shape at the
+# revision live on the day of the incident (6147ab21, 2026-07-26), so the mechanism the item names
+# could not have produced the failure it was filed for, and its prescribed fix is a no-op. What
+# replaced it is the sandbox-completeness assertion below: the claim "the fixture cannot reach real
+# state" stops being a thing a reader verifies by inspection and becomes a thing that goes RED.
+#
+# "Activation should refuse-or-pause while the daemon holds the lock." REJECTED — the remedy is
+# worse than the flake. Measured 2026-08-09 from this host's own stamps: corpus runs take 2231-4454s
+# against the plist's StartInterval of 300, so the real lock is held ≳91% of the time. `refuse` is
+# therefore an activation gate that fails ~9 times in 10 for a reason unrelated to the tree, and
+# `pause` is a wait of up to ~74 minutes inside an interactive activation script. A gate that cannot
+# pass is the same defect as one that cannot fail. What the incident actually needed was
+# ATTRIBUTION — the operator could not tell a real red from a concurrent one — so that is what the
+# failure summary now prints, as evidence, never as a gate.
 PASS=0; FAIL=0
 # shellcheck disable=SC2317
 okp()  { printf '  ok   %-52s\n' "$1"; PASS=$((PASS+1)); }
@@ -2525,10 +2547,19 @@ selftest() {
     # No admission env any more: v2 has no load wait to disable (§4.2.3). POSTLAND_AUTOREVERT=off —
     # the selftest proves VERDICT logic, and a fixture must never be able to push a revert; the
     # auto-revert guards are asserted structurally below and behaviourally in tests/.
+    #
+    # CC_GIT_IDENTITY_TEST=1 + CC_GIT_IDENTITY_EMAIL declare the FIXTURE's identity to be the
+    # sanctioned one for the duration (the same sealed seam tests/git-identity-guard.bats uses;
+    # production never sets it). Without it identity_snap_ok measures the fixture's
+    # pv@selftest.local against the OPERATOR's real address, calls the fixture's own baseline
+    # unsanctioned, and takes the DROP branch — so the leak case below could only ever exercise
+    # "drop", never "restore", and the restore assertion went red for a reason that had nothing to
+    # do with the tree. Both branches are now reachable and both are asserted.
     env POSTLAND_VERIFY="${POSTLAND_VERIFY:-on}" POSTLAND_AUTOREVERT=off \
         CC_POSTLAND_DIR="$d/state" CC_POSTLAND_REPO="$d/src" \
         CC_POSTLAND_WT_ROOT="$d/cells" CC_PAGES_DIR="$d/pages" CC_IDL="$d/idl.jsonl" \
         CC_BACKLOG_BIN=/usr/bin/true CC_POSTLAND_NOTIFY=/usr/bin/true CC_POSTLAND_NOTIFY_BIN=/usr/bin/true \
+        CC_GIT_IDENTITY_TEST=1 CC_GIT_IDENTITY_EMAIL=pv@selftest.local \
         CC_POSTLAND_LANDLOG="$d/land.log" "$SELF" "$@"
   }
   fixture_land green; green_sha="$(git -C "$d/src" rev-parse HEAD)"
@@ -2665,8 +2696,11 @@ selftest() {
   grep -q 'shared-config-identity' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "identity: the stamp NAMES the leak, not just 'some suite failed'" \
     || badp "identity: stamp does not name shared-config-identity"
+  # RESTORE, specifically — not merely "cleaned". The run-start value here is SANCTIONED (run_fixture
+  # declares it through the sealed seam), which is the only condition under which restoring is a
+  # repair at all; the poisoned-baseline case below is the other half.
   [ "$(git -C "$d/src" config --local --get user.email 2>/dev/null)" = "pv@selftest.local" ] \
-    && okp "identity: the repo config was RESTORED to its run-start value" \
+    && okp "identity: a SANCTIONED run-start value is restored after a leak" \
     || badp "identity: repo config left poisoned ($(git -C "$d/src" config --local --get user.email 2>/dev/null))"
   # POSITIVE CONTROL — remove the leak suite and the same tree must go back to GREEN, so none of the
   # three above can be passing because the fixture was red for some unrelated reason.
@@ -2677,6 +2711,34 @@ selftest() {
   grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "identity: a clean corpus is unaffected by the assertion (control)" \
     || badp "identity: the assertion reds a clean corpus — it convicts on something else"
+
+  # ── AN INHERITED unsanctioned identity is DROPPED, and the run is NOT convicted for it ───────────
+  # The 2026-08-08 pair of fixes, asserted on the path that actually executes them. "Restore the
+  # run-start value" was the RECURRENCE ENGINE: a sweep that starts while .git/config already holds
+  # the poison snapshots it and faithfully writes it back, which is why the 08-05 fix "landed" and
+  # the operator still saw the wrong author on GitHub three days later. Two properties have to hold
+  # together, and each is the other's control:
+  #   DROPPED  — else the poison is pinned forever by the guard built to remove it.
+  #   NOT RED  — this run INHERITED the fault; convicting the commit that happened to be under test
+  #              would launder someone else's red into this land's verdict, and a red here reaches
+  #              red_actions, which can auto-revert an innocent commit.
+  # Only this ONE drop branch is pinned: identity_resident_guard runs ahead of the abstain gate
+  # (before run_target takes IDENTITY_SNAP), so on the --run-if-needed path a snapshot can only ever
+  # be absent-or-sanctioned by the time identity_assert compares it. Asserting the other drop branch
+  # from here would pin a path this verb cannot reach.
+  git -C "$d/src" config user.email poison@leak.local
+  printf '#!/bin/bash\necho inherited\n' > "$d/src/inherited.sh"
+  fixture_land "a run that INHERITS an unsanctioned identity it did not write"
+  run_fixture --run-if-needed >/dev/null 2>&1
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  [ -z "$(git -C "$d/src" config --local --get-regexp '^user\.' 2>/dev/null)" ] \
+    && okp "identity: an INHERITED unsanctioned identity is dropped, not re-applied" \
+    || badp "identity: the poisoned baseline SURVIVED the run ($(git -C "$d/src" config --local --get user.email 2>/dev/null)) — restore-to-snapshot is pinning it"
+  grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "identity: the run that inherited it is NOT convicted for it" \
+    || badp "identity: a run was convicted for an identity it inherited (that red can auto-revert)"
+  git -C "$d/src" config user.email pv@selftest.local      # back to the sanctioned baseline
+  git -C "$d/src" config user.name pv-selftest
 
   # ── the prelint wiring, and the argument contract that makes it safe ─────────────────────────────
   grep -qE 'PRELINTS=\(.*git-identity-lint\.sh' "$SELF" \
@@ -2732,6 +2794,50 @@ selftest() {
   [ -x "$(dirname "$SELF")/subshell-cleanup-lint.sh" ] \
     && okp "prelint: subshell-cleanup-lint is executable (prelint_check gates on -x)" \
     || badp "prelint: subshell-cleanup-lint is NOT executable — the slot would skip it silently"
+
+  # ── SANDBOX COMPLETENESS — the fixture may not reach anything the daemon owns ────────────────────
+  # The item this closes (9a34c9b9865a) asserted the fixture was reading real state. It was not — but
+  # nothing PROVED it wasn't, so the claim had to be re-established by hand every time somebody asked.
+  # This is that proof, and it is RED-provable in the direction that actually rots: a NEW knob is
+  # added with a $HOME-rooted default, run_fixture is not updated, and from then on one more of the
+  # fixture's paths silently resolves into the operator's live tree. The frontier is deliberately
+  # "$HOME-rooted default" — knobs defaulting to $STATE or $REPO are already inside the sandbox
+  # because those two are overridden, and demanding an override for all ~40 tuning knobs would red on
+  # bounds that are inherited on purpose.
+  local rf knob knobs escapes=""
+  rf="$(awk '/^  run_fixture\(\) \{/,/^  \}/' "$SELF")"
+  # The prefix is stripped EXACTLY, never with a greedy `.*{`: $LANDLOG's default is nested
+  # (`${CC_POSTLAND_LANDLOG:-${LAND_LOG:-$HOME/…}}`) and a greedy strip walks to the LAST brace,
+  # yielding the INNER name — which then "passes" only because `CC_POSTLAND_LANDLOG=` happens to
+  # contain `LAND_LOG=` as a substring, while the outer knob that actually governs goes unchecked.
+  # shellcheck disable=SC2016  # a literal search pattern: the $s must NOT expand here
+  knobs="$(grep -oE '="\$\{(CC_|POSTLAND_)[A-Z0-9_]+:-[^"]*\$HOME' "$SELF" \
+             | sed -e 's/^="\$[{]//' -e 's/:-.*//' | sort -u)"
+  # Fed by here-doc, not a pipeline: a `while read` on the right of a `|` runs in a SUBSHELL and
+  # every $escapes append is discarded when it exits, so the check would report clean whatever it
+  # found. Same idiom identity_assert uses to walk its snapshot, for the same reason.
+  while IFS= read -r knob; do
+    [ -n "$knob" ] || continue
+    printf '%s' "$rf" | grep -q "$knob=" || escapes="$escapes $knob"
+  done <<EOF
+$knobs
+EOF
+  # An extraction that yields nothing reports EVERY knob as escaping rather than passing vacuously —
+  # if run_fixture is ever reshaped out from under that awk range, this must fail loud, not silent.
+  [ -z "$escapes" ] \
+    && okp "sandbox: every \$HOME-rooted path knob is overridden by run_fixture" \
+    || badp "sandbox: run_fixture does NOT override:$escapes — the fixture reaches the live tree"
+
+  # ── ATTRIBUTION, NEVER A GATE (see the hermeticity note above) ───────────────────────────────────
+  # Read-only, failure-only, and it changes no verdict: the one thing the 2026-07-26 operator could
+  # not do was tell "this tree is red" from "a full corpus run was chewing the box underneath me".
+  # $LOCK here is the PARENT's, i.e. the real one — the fixture's own lock lives under $d.
+  if [ "$FAIL" -gt 0 ] && [ -d "$LOCK" ]; then
+    printf '  note: the live verifier held %s (pid %s) while this ran — concurrency does not change\n' \
+      "$LOCK" "$(cat "$LOCK/pid" 2>/dev/null || echo '?')"
+    printf '        a verdict here (the fixture is sandboxed, asserted above), but it does change\n'
+    printf '        how long it took, so weigh any TIMING-shaped failure against it.\n'
+  fi
 
   echo "postland-verify selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
