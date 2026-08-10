@@ -555,7 +555,7 @@ deployed HEAD > 60 min ⇒ surface). Both read disk only. land.log keeps one lin
 |---|---|
 | 40-min gates × N sessions saturate the box | corpus runs 0 times per land; once per verifier cycle, background band |
 | P(green)≈2.3% monolith false-reds | verifier per-suite + retry ladder (49.9%→ higher w/ fresh wt); land path has no corpus to fail |
-| Load-kill → CUT misread RED → dispatcher retry loop | land smoke: cut ⇒ proceed; verifier keeps CUT/HUNG non-verdicts; nothing retries a corpus per land |
+| Load-kill → CUT misread RED → dispatcher retry loop | land smoke: cut ⇒ proceed; verifier keeps CUT/HUNG non-verdicts; nothing retries a corpus per land — **host lane joined only 2026-08-10** (§4.3 AMEND: it read `notok` before `rc==124`, so this row over-claimed for 2 weeks) |
 | Admission sleep (2h/run; 5-gate self-starvation) | deleted both sides: smoke SKIPS under load; verifier never admission-waits (QoS band instead) |
 | In-lock full gate ⇒ 3h36m lock holders | nothing heavy may enter the lock (statics+push only, 5–15s hold) |
 | Unbounded fork (cc-inbox-guard) hangs gates for days | R5 absolute bounds per step; verifier HUNG state already isolates + names the wedging file |
@@ -749,6 +749,27 @@ lane, content-verified. First attempt exited 6 because the smoke CAUGHT A REAL D
 landing range (the NEVER-ACTIVATED alarm firing in fixtured voids — fixed with the evidence
 gate + pinned, 1ef916b6); second attempt landed in ~2.5 min total. The pipeline validated
 itself on its own landing. Land latency at target on first production use.
+
+**§4.3 AMEND (2026-08-10, backlog cb9980e4b0e5 — landed):** the §5 row "Load-kill → CUT misread
+RED → dispatcher retry loop" was answered in the LAND and VERIFIER lanes and NOT in the host lane,
+where the same mode was still live. `host_checks` tested `notok > 0` before `rc == 124`, so a suite
+deploy-live itself killed mid-corpus was reported RED off whatever it had emitted before the kill,
+paged, and filed as a backlog item — the retry loop, one lane over. Worse than a stray page: the
+failing SET is a function of where the kill landed, and cc-backlog keys on project+title+source, so
+one condition mints a new item every time load moves the truncation point (the sha-in-the-title
+non-idempotency, by another door). Fixed by testing our own bound first; the reached failures are
+NAMED in the log line so a non-verdict is not also a silence.
+
+The item that surfaced it was itself an instance: `HOST RED: tests/test-hermeticity-lint.bats(2)` at
+bda59c54, over a tree that is 52/52 green. That suite has NEVER produced a host verdict — CUT on 6
+of 6 runs — because the 300s bound was a bench number and this runner is `ProcessType Background`
+(PRI 4) + `Nice 10` + `nice -n 19`. Measured back to back on this box, one `--selftest`: 70s utility
+band vs 252s under `taskpolicy -c background`, a 3.6x band tax; the suite is 272s utility ⇒ ~980s in
+the band that runs it. Bound raised to 1800s. **The general lesson for anything added to
+`scripts/host-suites.manifest`: a bound below a suite's band-adjusted runtime does not bound that
+suite, it deletes it** — and nothing says so, which is why this ran 12 days. That silence is the one
+half NOT closed here: a per-suite consecutive-CUT counter for the host lane (postland-verify already
+has the shape at `scripts/postland-verify.sh:527`, `CUT_MAX`) is filed as backlog 75463ef0d0f9.
 
 **Bootstrap residue (ordered):**
 1. Two PEER postland runners (pre-v2 code, wt-readme-pyramid copy) held the singleton lock
