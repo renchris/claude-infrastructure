@@ -152,6 +152,53 @@ def log_event(msg):
         pass
 
 
+def resolve_claude_bin(fallback):
+    """The eval binary comes from bin/cc-claude-bin, never from a copy of the pin.
+
+    accounts.json's `claude_bin` used to BE the answer, and on 2026-08-09 it was measured
+    wrong: it pinned ~/.claude-219 (2.1.219) while `claude()` in ~/.zshrc launched
+    ~/.claude-220. Four call sites read it — probe_account()'s certification, heal()'s
+    headless grant, and cc-relogin's two login legs — so account certification and the
+    relogin gate were both describing a build no session runs. That is verbatim the
+    recurrence scripts/handoff-fire.sh:225-228 documents from the ~/.claude-183-vs-219 week:
+    a hardcoded path CANNOT hold this invariant, because the party holding it is the one
+    party that cannot detect the drift.
+
+    So the literal is demoted to a FALLBACK for a stripped environment (no resolver on
+    disk, a hermetic $HOME with no ~/.zshrc). The resolver is fail-closed and prints
+    nothing on failure, so an empty result falls through to the literal rather than
+    silently blanking the key -- every consumer here already handles a missing binary with
+    a message, and none of them can handle an empty path.
+
+    tests/account-fact-derivation.bats asserts this agrees with bin/cc-claude-bin and with
+    scripts/handoff-fire.sh, which is the whole point: one derivation, checked.
+    """
+    override = os.environ.get("CC_CLAUDE_BIN")
+    if override:
+        return os.path.expanduser(override)
+    # __file__ is UNDEFINED when this source is executed via `python3 -c` — which is exactly how
+    # tests/claude-accounts-core.bats drives the --login-status e2e cases (it string-patches the
+    # source and re-executes it). Reaching for it unguarded raised NameError inside load_cfg,
+    # i.e. every invocation on that path died with an empty stdout. globals().get, not a bare
+    # reference, and the live layer as the second candidate.
+    here = globals().get("__file__")
+    cands = []
+    if here:
+        cands.append(os.path.join(os.path.dirname(os.path.realpath(here)), "cc-claude-bin"))
+    cands.append(os.path.expanduser("~/.claude/bin/cc-claude-bin"))
+    for resolver in cands:
+        if not os.access(resolver, os.X_OK):
+            continue
+        try:
+            p = subprocess.run([resolver], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        derived = (p.stdout or "").strip()
+        if p.returncode == 0 and derived:
+            return derived
+    return fallback
+
+
 def load_cfg():
     try:
         with open(CFG_PATH) as f:
@@ -162,6 +209,7 @@ def load_cfg():
         a["config_dir"] = os.path.expanduser(a["config_dir"])
     for k in ("claude_bin", "model_config_ssot", "dia_local_state"):
         cfg[k] = os.path.expanduser(cfg[k])
+    cfg["claude_bin"] = resolve_claude_bin(cfg["claude_bin"])
     _validate_router(cfg)
     return cfg
 
@@ -285,9 +333,19 @@ def concurrency(cfg):
     CLAUDE_CONFIG_DIR — or ~/.claude, which is the stable `claude-prev` track's dir — counts
     toward 'next': .claude mirrors .claude-next. Headless one-shots (-p/--print) are skipped."""
     counts = {a["name"]: 0 for a in cfg["accounts"]}
-    by_dir = {a["config_dir"]: a["name"] for a in cfg["accounts"]}
-    mirror_next = next((a["name"] for a in cfg["accounts"] if a["config_dir"].endswith(".claude-next")), None)
-    by_dir[os.path.join(HOME, ".claude")] = mirror_next
+    # rstrip("/") on the KEYS as well as on the observed dir. The observed side has always been
+    # rstripped (below), the key side was not, so a config_dir written with a trailing slash in
+    # accounts.json could never match anything and that account scored 0 live sessions forever —
+    # silently, in the undercount direction, which is the direction that OPENS the rotation gate.
+    by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
+    mirror_next = next((a["name"] for a in cfg["accounts"]
+                        if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
+    # setdefault, not assignment: an account whose config_dir IS ~/.claude owns that key. Plain
+    # assignment overwrote it with mirror_next — or with None when no .claude-next account
+    # exists — so that account's own sessions were credited elsewhere or dropped entirely.
+    # ~/.claude mirrors .claude-next only when nothing more specific claims it.
+    if mirror_next is not None:
+        by_dir.setdefault(os.path.join(HOME, ".claude"), mirror_next)
     try:
         out = subprocess.run(["ps", "-wwEo", "command="], capture_output=True, text=True,
                              timeout=10).stdout

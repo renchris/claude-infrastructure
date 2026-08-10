@@ -54,9 +54,36 @@ EXIT_CONSENT_GATE = 7
 RESULT_BY_EXIT = {0: "proven", 1: "error", 2: "refused", 3: "headless-exhausted",
                   4: "browser-failed", 5: "unverified", 6: "fallback-required",
                   7: "consent-gate"}
-# auth states a relogin can actually fix (claude-accounts row["auth"] vocabulary).
+# DEGRADED-PATH FALLBACK ONLY — the live verdict is row["auth_actionable"], which
+# claude-accounts computes and exports per row (bin/claude-accounts:903-904). Read that, never
+# this.
+#
+# WHY THIS IS NOT THE ANSWER ANY MORE. These two tuples were a hand-copy of
+# claude-accounts' own ACTIONABLE_AUTH/LOGIN_FIXABLE, and being a copy it had already gone
+# wrong in the direction copies always go: claude-accounts' ACTIONABLE_AUTH is SIX states,
+# this one was five — `probe-error` was never added here when it was added there. An account
+# whose probe raised therefore read as "nothing actionable" to cc-relogin while the CLI
+# classed it as needing an operator action. That is the identical defect handoff-fire.sh was
+# fixed for (its copy matched 3 of 5), and it survived here because nothing compared the two.
+#
+# Kept, rather than deleted, for ONE reason: §2 version tolerance. A claude-accounts too old
+# to emit `auth_actionable` must still get a verdict, and an empty tuple would silently
+# answer "nothing is ever actionable" — the fail-open direction, on a gate whose whole job is
+# to notice a broken account. So the copy remains as an announced degrade, and
+# tests/account-fact-derivation.bats asserts it still equals the CLI's own tuples. When it
+# drifts again, that test reds instead of an account quietly going unfixed.
 LOGIN_FIXABLE = ("logged-out", "token-invalid", "no-oauth-blob", "login-required")
-AUTH_ACTIONABLE = LOGIN_FIXABLE + ("keychain-error",)
+AUTH_ACTIONABLE = LOGIN_FIXABLE + ("keychain-error", "probe-error")
+
+
+def auth_actionable(row: dict[str, Any]) -> tuple[bool, str]:
+    """-> (verdict, degrade_note|""). The CLI owns the predicate; this only consumes it."""
+    v = row.get("auth_actionable")
+    if isinstance(v, bool):
+        return v, ""
+    return (row.get("auth") in AUTH_ACTIONABLE,
+            " [DEGRADED: this claude-accounts emits no auth_actionable — verdict from "
+            "cc-relogin's fallback state list, which may lag the CLI's]")
 
 
 def _env(name: str, default: str) -> str:
@@ -253,8 +280,9 @@ def need_relogin(row: dict[str, Any], info: dict[str, Any]) -> tuple[bool, str]:
     silently reported as "nothing to do".
     """
     auth = row.get("auth")
-    if auth in AUTH_ACTIONABLE:
-        return True, f"auth={auth}"
+    actionable, degraded = auth_actionable(row)
+    if actionable:
+        return True, f"auth={auth}{degraded}"
     if row.get("login_expired") is True:
         return True, "login_expired"
     hours = row.get("login_expires_h")
