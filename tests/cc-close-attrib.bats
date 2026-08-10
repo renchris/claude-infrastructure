@@ -5,14 +5,15 @@
 # signal; the watchdog then turns that record into an attributed cause (clean-exit vs
 # killed-oom-or-force vs binary-crash vs error-exit) instead of "abrupt-unknown".
 #
-# Coverage: (i) exit-code + argv passthrough · (ii) exit_code/signal record fields (0, 1,
-# 139-via-SIGSEGV) · (iii) stderr reaches the caller's fd2 AND the tail is captured ·
-# (iv) secret-bearing lines stripped from the tail · (v) unwritable records dir fails open
-# (session runs, exit code preserved, no crash) · (vi) watchdog joins a fixture close-record
-# → enrichment fields + clean-exit/binary-crash classification, outranks jetsam, no-record
-# falls through to existing behavior · (vii) the DURABLE per-pid stderr log (eval-track crash
-# forensics): full untruncated text, watchdog-joinable name, survives a hard kill that writes
-# no close-record at all, no litter on a clean exit, honours the kill switch, bounded.
+# Coverage: (i) exit-code + argv passthrough · (ii) exit_code/signal record fields (0, 1, the
+# 139 crash code, and a real signal death) · (iii) stderr reaches the caller's fd2 AND the tail
+# is captured · (iv) secret-bearing lines stripped from the tail · (v) unwritable records dir
+# fails open (session runs, exit code preserved, no crash) · (vi) watchdog joins a fixture
+# close-record → enrichment fields + clean-exit/binary-crash classification, outranks jetsam,
+# no-record falls through to existing behavior · (vii) the DURABLE per-pid stderr log (eval-track
+# crash forensics): full untruncated text, watchdog-joinable name, survives a hard kill that
+# writes no close-record at all, no litter on a clean exit, honours the kill switch, bounded ·
+# (ix) the suite-wide lock that keeps (ii)'s fixtures out of the operator's crash-report store.
 #
 # (vii) exists because the eval track (claude-next/-2/-3/-4, claude-fable*, claude-desk*, all
 # handoff-fire spawns) execs the 2.1.219 binary through THIS wrapper and never through
@@ -82,11 +83,30 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
 }
 
 # ── (ii) exit_code / signal record fields ───────────────────────────────────────────────────
-@test "record carries exit_code/signal for clean, error, and SIGSEGV exits" {
+# The 139 case is a plain `exit 139`, NOT the `kill -SEGV $$` it used to be. write_record derives
+# the entire signal field arithmetically — `rsig=$(( rcode - 128 ))`, bin/cc-close-attrib:118 —
+# from the status `wait` hands back, and bash returns 139 identically for a SEGV death and for
+# `exit 139`, so the record under assertion is byte-identical either way. What the real signal
+# added was a real macOS crash report: /bin/bash dying on SIGSEGV makes ReportCrash write an .ips
+# into ~/Library/Logs/DiagnosticReports on EVERY run (measured 2026-08-09: one run of this file =
+# exactly +1, 31→32), and com.claude.postland-verify runs this suite on every land. So the fixture
+# was a daily litter generator inside the one directory the fleet's crash forensics reads, and it
+# had already corrupted a census: docs/research/panic-compressor-2026-08-05.md §8 found 35 of 104
+# .ips were this single line's output — "it litters real crash reports daily and polluted this
+# census". An instrument must not write into the evidence store another instrument reads.
+#
+# The real-signal path is NOT surrendered in the trade — the sT case below dies of a genuine
+# SIGTERM, so `wait` must still yield a true 128+n rather than an exit status that merely looks
+# like one. macOS only crash-reports the EXC_CRASH signals; measured on 15.6.1, SEGV(11) and
+# QUIT(3) each write an .ips while TERM(15) writes none over 3 runs, so SIGTERM buys that
+# coverage at zero cost to the operator's crash store. (ix) locks the choice suite-wide.
+@test "record carries exit_code/signal for clean, error, crash-code, and signal-killed exits" {
   local s0="$BATS_TEST_TMPDIR/s0" s1="$BATS_TEST_TMPDIR/s1" s9="$BATS_TEST_TMPDIR/s9"
+  local sT="$BATS_TEST_TMPDIR/sT"
   mk_stub "$s0" 'exit 0'
   mk_stub "$s1" 'exit 1'
-  mk_stub "$s9" 'kill -SEGV $$'
+  mk_stub "$s9" 'exit 139'
+  mk_stub "$sT" 'kill -TERM $$'
 
   run bash "$WRAP" "$s0"
   [ "$status" -eq 0 ]
@@ -100,7 +120,13 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   run bash "$WRAP" "$s9"
   [ "$status" -eq 139 ]
   grep -q '"exit_code":139,' "$(rec)"
-  grep -q '"signal":"11",'   "$(rec)"                  # 139 = 128 + SIGSEGV(11)
+  grep -q '"signal":"11",'   "$(rec)"                  # 139 = 128 + SIGSEGV(11) — binary-crash
+
+  # a REAL signal death, so 128+n is derived from an actual kill and not from an exit status
+  run bash "$WRAP" "$sT"
+  [ "$status" -eq 143 ]
+  grep -q '"exit_code":143,' "$(rec)"
+  grep -q '"signal":"15",'   "$(rec)"                  # 143 = 128 + SIGTERM(15)
 }
 
 # ── (iii) stderr passthrough AND capture ────────────────────────────────────────────────────
@@ -333,4 +359,27 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
   [ "$status" -eq 7 ]                        # the child's code survives the reap path
   [ $((t1 - t0)) -lt 15 ]                    # pre-fix this is ~25s (the orphan's lifetime)
   grep -q '"exit_code":7,' "$(rec)"          # and the record was written BEFORE the tee reap
+}
+
+# ── (ix) the lock on (ii)'s trade — suite-wide, because the defect's home is "any .bats". macOS
+# writes a real .ips into the operator's ~/Library/Logs/DiagnosticReports for the EXC_CRASH
+# signals (measured on 15.6.1: SEGV and QUIT each do; TERM, INT and KILL do not), and
+# com.claude.postland-verify runs this corpus on every land — so ONE fixture that self-kills with
+# a crash-reporting signal is a daily-litter generator inside the directory crash triage reads.
+# Reintroduction is silent by construction: the fixture goes green and the whole cost lands in a
+# DIFFERENT tool's evidence, which is why it took a panic census to notice the first one at all.
+# Nothing else in the suite fires one today (verified across all 374 .bats files), so this scan
+# is a lock, not a migration. It stays scoped to tests/ deliberately: production code sending a
+# crash signal to a hung process is a legitimate way to MAKE a report, and only a fixture
+# manufactures crash evidence as a side effect of proving something unrelated.
+@test "(ix) no test fixture kills itself with a crash-reporting signal" {
+  local re='kill[[:space:]]+((-s[[:space:]]+)?-?(QUIT|ILL|TRAP|ABRT|EMT|FPE|BUS|SEGV|SYS)|-(3|4|5|6|7|8|10|11|12))'
+  # Full-line comments are documentation, not fixtures — (ii)'s note names the retired
+  # `kill -SEGV $$` verbatim, and the file that retired it must not be convicted by its own
+  # explanation. The path:lineno: anchor keeps the filter from eating a real match that merely
+  # carries a trailing comment.
+  run bash -c "grep -rnE '$re' '$REPO/tests' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'"
+  # 1 = the inner grep selected nothing, which is the only passing state. 0 = a live fixture; 2 =
+  # grep could not read the tree, and a scan that did not RUN must never read as a clean scan.
+  [ "$status" -eq 1 ] || { echo "crash-reporting-signal fixture(s): ${output:-<grep error $status>}"; false; }
 }
