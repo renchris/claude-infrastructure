@@ -1,1 +1,109 @@
-# seed — entries land after the census run
+# OFF-BOX EXCLUSIONS — the suites the hermetic partition leaves out.
+#
+# FORMAT (frozen contract, copied from scripts/host-suites.manifest): plain text, one
+# `tests/<name>.bats` per line, `#` comments and blank lines ignored. Consumer:
+#   scripts/offbox-partition.sh   partition = tests/*.bats MINUS host-suites.manifest MINUS THIS
+# The partition is a SET DIFFERENCE, so it is total by construction and never hand-synced: a NEW
+# suite lands INSIDE the partition and must earn its way out with a line here and a reason.
+#
+# ── WHAT AN EXCLUSION COSTS HERE, AND WHY THE BAR IS LOWER THAN host-suites.manifest's ───────────
+# Removing a suite from `host-suites.manifest` removes it from THE tree verdict and from the land
+# smoke — that manifest's header records the bill exactly once: 151 tests excluded from both for a
+# property not one of them had. THIS list cannot do that. The suites below still run in the on-box
+# corpus, in `/ship`'s smoke, and in every existing gate, unchanged. All an entry here does is keep
+# a suite out of a SECOND, ADDITIVE opinion that did not exist at all before 2026-08-10.
+# So the bar is not "proven machine-coupled" — it is "does not yet produce a usable off-box signal".
+# The direction of the mistake matters: an over-broad entry here loses coverage that never existed,
+# while a missing entry stops the producer producing anything for everyone. Neither is free, and the
+# census arm below is what keeps the first from becoming permanent.
+#
+# ── EVERY ENTRY IS A MEASUREMENT, NOT A JUDGEMENT ────────────────────────────────────────────────
+# Seeded from the FIRST real off-box run — GitHub Actions run 31362043861, macos-latest, 2026-08-10,
+# 306 suites executed: 279 green, 26 red, 1 cut. Each entry records the `notok` count that run
+# observed. That is deliberately the whole justification: a cause ("this needs iTerm2") is a
+# hypothesis, and this repo has paid for seeding an exclusion list from a conflated cause before.
+# Where the subject makes the cause obvious it is named as a HINT and marked as one; nothing here
+# claims a cause was verified.
+#
+# ── THE LIST IS RE-MEASURED, NOT CURATED ─────────────────────────────────────────────────────────
+# `scripts/offbox-run.sh census` runs EVERY suite, excluded ones included, so an entry that has
+# started passing off-box shows up as passing and can be deleted. That is the upward half. The
+# downward half is in `offbox-partition.sh lint`: a stale entry (no such suite) and an entry already
+# granted by host-suites.manifest are both RED. Without the census arm this file would be an
+# exemption list that only ever grows, which is precisely what a ratchet must never become.
+#
+# ── HOW TO DELETE A LINE ─────────────────────────────────────────────────────────────────────────
+# Run the census, confirm the suite is green off-box, delete its line and its comment in one commit.
+# Nothing else is needed: the partition widens by set difference on the next run.
+
+# ── terminal-emulator surface — these drive or assert a live iTerm2/kitty ────────────────────────
+# HINT (not verified): a hosted runner has no terminal application at all.
+# run 31362043861: notok=1
+tests/it2-wrapper.bats
+# run 31362043861: notok=2
+tests/iterm-sticky-command.bats
+# run 31362043861: notok=1
+tests/iterm2-appname-lint.bats
+# run 31362043861: notok=5
+tests/kitty-recovery-launch.bats
+# run 31362043861: notok=2
+tests/handoff-selfclose-kitty-identity.bats
+
+# ── launchd / Darwin QoS / sysctl surface ────────────────────────────────────────────────────────
+# HINT (not verified): a hosted runner has no loaded launchd agents and a different scheduler band.
+# run 31362043861: notok=2
+tests/capacity-alarm-launchd-path.bats
+# run 31362043861: notok=1
+tests/capacity-admit.bats
+# run 31362043861: notok=1
+tests/capacity-ramp.bats
+# run 31362043861: notok=4
+tests/idle-slope-sweep.bats
+# run 31362043861: notok=1
+tests/qos-rewrite.bats
+# run 31362043861: notok=1
+tests/boot-resume.bats
+# run 31362043861: notok=2
+tests/unattended-sysctl-path.bats
+# run 31362043861: notok=1
+tests/watchdog-census.bats
+
+# ── the operator's live state — sessions, panes, inbox, dispatch, accounts ───────────────────────
+# HINT (not verified): these read a running fleet; a runner has none.
+# run 31362043861: notok=4
+tests/operator-readout.bats
+# run 31362043861: notok=1
+tests/cc-inbox-guard.bats
+# run 31362043861: notok=1
+tests/cc-reconcile.bats
+# run 31362043861: notok=1
+tests/task-quality-gate.bats
+# run 31362043861: notok=16 (0 ok — the whole suite)
+tests/cc-dispatch-v2.bats
+# run 31362043861: notok=19 (0 ok — the whole suite)
+tests/session-index-sweep.bats
+# run 31362043861: notok=11 (0 ok — the whole suite)
+tests/session-index-end-first-prompt.bats
+# run 31362043861: notok=1
+tests/handoff-fire-completion-push.bats
+
+# ── host toolchain assumptions ───────────────────────────────────────────────────────────────────
+# HINT (not verified): these assert a specific interpreter/tool layout on this box.
+# run 31362043861: notok=1
+tests/python-deps.bats
+# run 31362043861: notok=2
+tests/unattended-path-lint.bats
+# run 31362043861: notok=1
+tests/subshell-cleanup-lint.bats
+
+# ── the land and verify machinery itself ─────────────────────────────────────────────────────────
+# These are the subjects that OWN the on-box verdict, so excluding them from the off-box second
+# opinion costs the least of anything here — the on-box corpus is where their claim belongs.
+# run 31362043861: notok=40
+tests/ship-land.bats
+# run 31362043861: notok=10
+tests/postland-verify-bisect-bound.bats
+# run 31362043861: CUT at the 120s per-suite bound (its own header records ~50 min solo on-box).
+# NOT a red — it named zero failing tests. It is here because a suite measured in TENS OF MINUTES
+# cannot be part of a per-commit second opinion, which is a statement about cost, not correctness.
+tests/postland-verify.bats
