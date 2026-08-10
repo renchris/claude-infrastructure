@@ -150,6 +150,40 @@ PLAN_SNAPSHOT_ENABLED = os.environ.get("CC_PREMISE_PLAN_SNAPSHOT", "on").lower()
 # that hides its own existence reads as "this is everything").
 PLAN_REMAINING_MAX = 8
 
+# ── the `postland-verify` RED arm ────────────────────────────────────────────────────────────────
+# Where postland-verify keeps its ledger. CC_POSTLAND_DIR is the PRODUCER's own knob
+# (scripts/postland-verify.sh:96), read here on purpose so a fixtured postland run and this
+# predicate can never end up reading different stores — the same reasoning BACKLOG's resolution
+# gives. CC_PREMISE_POSTLAND_DIR overrides it for a suite that must point only THIS arm elsewhere.
+POSTLAND_DIR = os.environ.get(
+    "CC_PREMISE_POSTLAND_DIR",
+    os.environ.get(
+        "CC_POSTLAND_DIR", os.path.join(os.path.expanduser("~"), ".claude/autonomy/postland")
+    ),
+)
+# Turns off ONLY this arm; the shared CC_PREMISE_FALSIFIER=off still disables it with the others.
+POSTLAND_FALSIFIER_ENABLED = os.environ.get("CC_PREMISE_POSTLAND_FALSIFIER", "on").lower() not in (
+    "off", "0", "no"
+)
+# `post-land RED: <file>[::<test name>] @ <sha12>` — postland-verify.sh:2084/2140's shape.
+#
+# THE TRAILING `@ <sha>` IS THE LAST ONE, NOT THE FIRST, and that is why the group is greedy. A real
+# title in the store is `post-land RED: tests/cc-kitty-socket.bats::one live kitty socket resolves to
+# unix:<path> @ f60b7ca220ee` — the bats test NAME routinely contains `@`, `:` and spaces, so a
+# non-greedy or `[^@]*` reading splits on a separator inside the test description and hands this arm
+# a sha that is really part of a sentence. Anchoring on `$` and letting `.+` backtrack is what makes
+# the LAST ` @ <hex>` win.
+#
+# CASE-SENSITIVE ON `RED` DELIBERATELY: the producer emits exactly that, and the sibling shapes it
+# also emits — `post-land HUNG:` and `post-land AUTO-REVERT …` — must NOT parse here. Their premises
+# are different claims (a wedge is a property of the tree; an AUTO-REVERT row is a record of an act)
+# and neither is refuted by "the suite went green", so they fall through to the incumbent signals.
+RE_POSTLAND_RED = re.compile(r"^post-land RED:\s+(.+)\s+@\s+([0-9a-f]{7,40})\s*$")
+# ONE suite file, never a directory. postland-verify has genuinely filed `FAILING=(tests/)` when its
+# TAP grammar could not attribute a failure (postland-verify.sh:1050-1067), and a directory has no
+# single corpus membership to check — so it must reach this arm as "cannot tell", not as a subject.
+RE_BATS_PATH = re.compile(r"^tests/[^\s/]+\.bats$")
+
 # A file path cited in a premise. Conservative on purpose: a bare word with a slash is not a
 # path claim, so this wants a real extension or a known top-level dir of this repo.
 RE_PATH = re.compile(
@@ -318,6 +352,32 @@ def _git(args):
     except (OSError, subprocess.SubprocessError):
         return None
     return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else None
+
+
+def _git_rc(args):
+    """The EXIT CODE of a bounded git read. None iff git could not be ASKED at all.
+
+    `_git` above returns None for both "git answered, and the answer is no" and "git could not be
+    asked", which is exactly the conflation `_git_usable` was built to stop. That is harmless for the
+    arms that only want stdout, but `merge-base --is-ancestor` and `cat-file -e` ANSWER IN THE EXIT
+    CODE — their whole result is the thing `_git` throws away. Reading them through `_git` would make
+    "this commit is not an ancestor" and "there is no git here" the same value, and this arm would
+    then be unable to tell a live RED from an unreadable repo (memory: lookup-miss-is-not-absence).
+
+    Callers still fail OPEN on every non-zero: the distinction buys an honest branch, not a verdict.
+    """
+    if not REPO:
+        return None
+    try:
+        p = subprocess.run(
+            ["git", "-C", REPO] + args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.returncode
 
 
 _GIT_USABLE = []  # one-slot cache
@@ -588,6 +648,157 @@ def run_derived_plan_falsifier(item_id, ent):
     ]
 
 
+def _postland_red(ent):
+    """(suite_path, red_sha) IFF this is a `postland-verify` RED item naming ONE suite — else None.
+
+    SCOPED TO source=="postland-verify" ON PURPOSE, for the reason `_plan_dodref` is scoped to
+    plan-open: the words "post-land RED" in a HUMAN's title are a description of a symptom, not a
+    machine claim keyed to a commit, and closing one because trunk later went green would retract a
+    person's finding on evidence that never spoke to it.
+    """
+    if (ent.get("source") or "") != "postland-verify":
+        return None
+    m = RE_POSTLAND_RED.match((ent.get("title") or "").strip())
+    if not m:
+        return None
+    # `<file>::<test name>` — the file is everything before the FIRST `::`; bats test names may
+    # themselves contain colons, so splitting once from the left is the only safe reading.
+    path = m.group(1).split("::", 1)[0].strip()
+    if not RE_BATS_PATH.match(path):
+        return None
+    return path, m.group(2)
+
+
+def _last_green():
+    """postland-verify's last-green COMMIT sha, or None when it cannot be read or is not a sha."""
+    try:
+        with open(os.path.join(POSTLAND_DIR, "last-green")) as fh:
+            sha = fh.read().strip()
+    except OSError:
+        return None
+    return sha if re.fullmatch(r"[0-9a-f]{7,40}", sha) else None
+
+
+def _host_suites_at(ref):
+    """The host-manifest exclusion set AS IT STOOD AT ref. None ⇒ could not ask.
+
+    READ AT THE GREEN'S OWN TREE, not at HEAD, because the partition is what decides WHICH suites
+    that green actually ran — and the manifest moves. Reading today's copy would judge a months-old
+    green by a corpus it never had.
+
+    An ABSENT manifest is the EMPTY set by the manifest's own frozen contract
+    (scripts/host-suites.manifest:8-10 — "A missing manifest means EMPTY: the verifier then runs
+    everything"). That is a real answer, not a failure, which is why existence is probed separately
+    from the read: collapsing the two would turn "the corpus was everything" into "I could not ask"
+    and silently retire this arm on every tree predating the manifest.
+    """
+    spec = "%s:scripts/host-suites.manifest" % ref
+    rc = _git_rc(["cat-file", "-e", spec])
+    if rc is None:
+        return None          # git could not be asked
+    if rc != 0:
+        return set()         # git answered: no manifest at that tree ⇒ the corpus was everything
+    blob = _git(["show", spec])
+    if blob is None:
+        return None
+    out = set()
+    for ln in blob.splitlines():
+        ln = ln.split("#", 1)[0].strip()
+        if ln:
+            out.add(ln)
+    return out
+
+
+def run_derived_postland_falsifier(item_id, ent):
+    """The falsifier a `post-land RED` item never had one stored for. (verdict, lines) or None.
+
+    THE DECAY THIS ANSWERS — the item this arm was built for, and the measurement in it. A
+    `post-land RED: <suite> @ <sha>` item's entire claim is "this suite fails at THAT commit". That
+    is a snapshot of a commit that trunk has since moved past, and nothing re-read it. Measured on
+    `a3f4cc262e1c` (`tests/cc-relogin-status.bats @ 873e646b5d5a`): the remedy landed as
+    `87f0f51c03b0` **6 minutes 40 seconds** after the RED was recorded, and a worker was still
+    dispatched onto the item THREE DAYS later. cc-premise even keeps the sha in the title on purpose
+    (`_norm_title`, §S3 finding 3) so each RED stays distinct work — but nothing ever asked that sha
+    whether it was still the tip's problem.
+
+    WHY IT READS last-green INSTEAD OF RE-RUNNING THE SUITE. The obvious probe — run the suite now —
+    is the wrong one twice over. It cannot fit the bound (`FALSIFIER_TIMEOUT_S` is 20s; the corpus is
+    measured in hours and one suite alone runs ~50 min), so a bound honest enough to hold it would
+    hold a claim hostage, and a bound that fits would make the arm a permanent non-verdict (memory:
+    bound-must-fit-the-band-not-the-bench). More basically it would re-derive an answer the producer
+    has ALREADY recorded: postland-verify advances `last-green` only on a full corpus pass. So this
+    reads that ledger, exactly as the plan arm reads `find-plan.sh --status` rather than re-judging a
+    plan. Cost is three git reads and one open().
+
+    THE PREDICATE, and every clause of it is load-bearing:
+
+        the RED commit is an ANCESTOR of last-green   ⇒ a tree CONTAINING the red commit has since
+                                                        run the whole corpus green
+        AND that suite was IN the corpus at last-green ⇒ the green's span actually covers it
+
+    The second clause is not belt-and-braces. The tree corpus is `tests/*.bats` MINUS
+    scripts/host-suites.manifest, so a green is silent about a host suite by construction, and a
+    green cannot speak about a file that did not exist yet. Retracting on ancestry alone would assert
+    a verdict over a suite the run never executed (memory: assertion-span-must-equal-its-subject).
+
+    FAIL-OPEN ON EVERYTHING ELSE, exhaustively: another project's item, a title this arm cannot
+    parse, a directory instead of a suite, no last-green file, an unresolvable sha, git unusable, a
+    RED that is NOT an ancestor (the ordinary live case — trunk has not gone green past it yet), an
+    unreadable manifest, a suite absent at last-green. All None, all proceeding exactly as before.
+
+    THE VERDICT TOKEN IS `falsified`, reusing the existing BLOCKING member rather than minting one —
+    a new token would land in each consumer's `*)` arm and be silently re-derived as something else
+    (memory: new-enum-member-falls-into-fail-closed-default). The CONTRACT prose is what distinguishes
+    a derived retraction from a measured one.
+    """
+    if not FALSIFIER_ENABLED or not POSTLAND_FALSIFIER_ENABLED:
+        return None
+    red = _postland_red(ent)
+    if red is None:
+        return None
+    path, redsha = red
+    # The git arms only speak about THIS repo — a cross-project item cites another checkout's shas
+    # and resolving them here manufactures a finding (the same scoping `assess` applies below).
+    if (ent.get("project") or "") not in ("", "claude-infrastructure"):
+        return None
+    if not _git_usable():
+        return None
+    lg = _last_green()
+    if lg is None:
+        return None
+    # Both refs must RESOLVE before either is compared — the positive control that separates "git
+    # answered no" from "git was never able to answer", without which an unreadable object reads as
+    # a clean negative and this arm goes quietly inert.
+    if _git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % lg]) is None:
+        return None
+    if _git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % redsha]) is None:
+        return None
+    # rc 1 (not an ancestor) and rc None (could not ask) both fail open — but they are different
+    # facts, and only `_git_rc` can tell them apart at all.
+    if _git_rc(["merge-base", "--is-ancestor", redsha, lg]) != 0:
+        return None
+    excl = _host_suites_at(lg)
+    if excl is None or path in excl:
+        return None
+    if _git_rc(["cat-file", "-e", "%s:%s" % (lg, path)]) != 0:
+        return None
+    return "falsified", [
+        "DERIVED FALSIFIER — this item stores no probe of its own, so its premise was re-asked "
+        "another way: it claims %s was RED at %s, and postland-verify has since run the FULL corpus "
+        "green at %s, which contains that commit. This is a read of the post-land ledger JUST NOW, "
+        "not a re-run of the suite and not an inference from the item's own words."
+        % (path, redsha[:12], lg[:12]),
+        "  suite:      %s  (in the tree corpus at %s, not a host suite)" % (path, lg[:12]),
+        "  red at:     %s" % redsha[:12],
+        "  last-green: %s  (postland-verify, %s)" % (lg[:12], POSTLAND_DIR),
+        "Close it citing this read (cc-backlog done %s --evidence \"premise-retracted: %s was RED at "
+        "%s; full corpus green at %s which contains it (source=postland-verify; no code verified by "
+        "this retraction)\"). If the suite is red AGAIN today that is a NEW commit's RED and belongs "
+        "in a NEW item — postland-verify keys them by sha on purpose — not in this one."
+        % (item_id, path, redsha[:12], lg[:12]),
+    ]
+
+
 def plan_remaining_lines(ent):
     """A STILL-OPEN plan's not-DONE sections, read just now. Advisory only; [] when it cannot ask.
 
@@ -686,6 +897,13 @@ def assess(item_id, idx):
         # stored probe's "still live", because a proxy must not outrank the measurement it stands in
         # for. See run_derived_plan_falsifier.
         fals = run_derived_plan_falsifier(item_id, ent)
+    if fals is None:
+        # …and a `post-land RED` item has one too: whether trunk has since gone green PAST the commit
+        # it was filed against. Reached only on None for the same reason — a stored probe is the
+        # item's own question and outranks any derived proxy. The two derived arms are mutually
+        # exclusive by source (plan-open vs postland-verify), so their order between themselves
+        # carries no meaning; both must stay strictly below the stored one.
+        fals = run_derived_postland_falsifier(item_id, ent)
     if fals is not None:
         fverdict, flines = fals
         if fverdict == "falsified":
