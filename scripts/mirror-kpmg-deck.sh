@@ -22,7 +22,19 @@
 set -euo pipefail
 
 SRC="${KPMG_DECK_SRC:-$HOME/.claude/skills/kpmg-deck}"
-DST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/skills/kpmg-deck"
+
+# RESOLVE $0 THROUGH ITS SYMLINKS BEFORE DERIVING THE ROOT. ~/.claude/{scripts,hooks,bin}/ are
+# per-file symlinks into this checkout, so through the live layer `dirname "$0"/..` is ~/.claude —
+# which has no skills/ of the repo's shape. The script would not FAIL; it would mirror into the
+# wrong tree, and only when invoked through the deployed layer, so a worktree run looks fine.
+# No `readlink -f`: GNU-only, and this box is BSD. Canonical loop: _resolve_self() in ship-land.sh.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _d="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
+done
+DST="$(cd "$(dirname "$_self")/.." && pwd)/skills/kpmg-deck"
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
