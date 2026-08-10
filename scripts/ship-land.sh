@@ -1879,6 +1879,61 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── TSV field-collapse ratchet (backlog e146d30857b4) ─────────────────────────────────────────
+  # Same own-scope contract as the ratchets around it. Tab is IFS-WHITESPACE, so `IFS=<tab> read`
+  # collapses a run of delimiters: an empty cell does not read back empty, it shifts every later
+  # column LEFT, silently, exit 0. Producers must guarantee non-empty cells at the EMITTER.
+  #
+  # It belongs HERE, and this class is the cleanest proof of the rule its siblings state. The
+  # convention HAS had a repo-wide assertion since 2026-07-25 — tests/tsv-field-collapse.bats §3 —
+  # and that suite blocked NONE of the lands that broke it: it re-reddened three times with a
+  # completely different offender set each time and zero overlap between them (six discharged by
+  # 68e17e2a on 2026-07-31; six more landed by 2026-08-07, five of them AFTER that discharge; two
+  # more by 2026-08-10). gate-select's `cited_only` (:280) is why — a DIRECT edge needs the path in
+  # the suite's EXECUTABLE text, and the guard named files only inside its exemption heredoc, so a
+  # BRAND-NEW script is named nowhere, its failure is exonerable-as-adjacent, and the land passes.
+  # Measured on a planted offender before this block existed: `gate-select --direct` on the land
+  # that ADDS an unpadded reader returns ZERO hits for tsv-field-collapse.bats. A suite that can
+  # only fail after the offender has landed is post-hoc DETECTION
+  # (memory: enforcement-must-live-at-the-chokepoint); the gate is the only place that reaches the
+  # author who is adding the reader. Sub-second, a pure grep, and it names file and line.
+  #
+  # NO --selftest LEG HERE, unlike chromium-bundle/permission-gate, and the omission is the
+  # considered choice rather than a gap. Their shape — "selftest fails ⇒ gate_red ⇒ every land
+  # blocked until someone fixes the detector" — is a STANDING state on the actuation path, which is
+  # exactly what permission-gate-lint's own doctrine forbids without a declared budget. This land
+  # met that gate live: `permission-gate-lint --selftest` went stale and refused the land on its own
+  # detector's health, not on this tree. Adding a fourth instance and declaring a bound I could not
+  # honestly name would be laundering. The claim it protects is already enforced where it belongs:
+  # tests/tsv-field-collapse.bats runs `--selftest` and requires exit 0, and that suite names
+  # scripts/tsv-pad-lint.sh in its EXECUTABLE text — so it is a DIRECT suite of any land that
+  # touches the lint, which is the only land that can break its discrimination. Same reasoning as
+  # own-scope one paragraph up: never convert one broken thing into a refusal of every author.
+  TSVPAD_LINT="${SHIP_LAND_TSVPAD_LINT:-scripts/tsv-pad-lint.sh}"
+  if [[ -x "$TSVPAD_LINT" ]]; then
+    local tsvown=""
+    if [[ "${SHIP_LAND_TSVPAD_OWN_SCOPE:-on}" != "off" ]]; then
+      # The pathspec must list every population the lint judges (bin/ hooks/ scripts/), or a land
+      # adding an unpadded reader to a dir the pathspec misses yields an own-set without it, the
+      # lint reports it advisory, and the rule is detection again. Same widening the git-identity
+      # block documents. A docs-only land still yields an EMPTY own-set and blocks on nothing.
+      tsvown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
+    fi
+    echo "→ gate: TSV field-collapse ratchet (an IFS=tab reader whose producer can emit an empty cell)" >&2
+    CC_TSVPAD_OWN="$tsvown" "$TSVPAD_LINT" . >&2; local trc=$?
+    if [[ "$trc" -eq 2 ]]; then
+      echo "⛔ gate: tsv-pad-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
+      gate_red tsv-pad
+      return 1
+    elif [[ "$trc" -ne 0 ]]; then
+      echo "✗ gate: TSV field-collapse RED — a file THIS LAND CHANGES reads IFS=tab TSV with nothing" >&2
+      echo "  guaranteeing a non-empty cell. Pad at the EMITTER (the read side cannot be repaired);" >&2
+      echo "  the file, the line and the \`def cell(ph)\` to paste are named above." >&2
+      gate_red tsv-pad
+      return 1
+    fi
+  fi
+
   # ── .bats shellcheck ratchet (backlog 19a44d4e2e75) ───────────────────────────────────────────
   # Fifth deterministic blocker class, same own-scope contract as the four above — with one
   # difference that is the whole point: the own-set is LINE-scoped, not file-scoped.

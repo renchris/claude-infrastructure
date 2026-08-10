@@ -511,64 +511,52 @@ JSON
 
 # ─── §3 · the repo-wide guard ──────────────────────────────────────────────────────────────────
 
-# Files that read TSV with `IFS=$'\t' read` but legitimately carry no padding def. Each needs a
-# REASON, and a reviewed exemption is cheaper than re-deriving the analysis at every future edit.
-# Format: <path>|<reason>
-tsv_exemptions() {
-  cat <<'EOF'
-bin/cc-blockers|already padded on feat/relogin-observability (0dac237) — that stream owns the file; a second fix here would only conflict
-bin/cc-reaper|all three reads take pid<TAB>lstart[<TAB>etime] rows whose cell 1 is structurally non-empty: the .daemon writer (hooks/lead-crash-watchdog.sh:1155) prints "$!", and wd_daemon_table's awk builds cell 2 from a format string with LITERAL spaces between lstart's five components, so that cell holds at least four spaces even when every component is empty — and space is not in IFS here, so it does not collapse. lstart/etime are last
-hooks/session-index-sweep.sh|consumer only; its producer (session_index_extract_enriched) pads at the emitter. The file is being rewritten on fix/infra-perfection, which deletes both reads
-hooks/validate-bash.sh|both non-final cells come from rm_argv_scan's python emitter (hooks/lib/is-true-flag.sh, `"%d\t%d\t%s" % (1 if recursive else 0, 1 if force else 0, safe)`), so they are always exactly "0" or "1" — a %d of a bool cannot be empty. The only variable-content cell is the rm target, which is LAST. Both call sites share that one producer
-scripts/lead-deathwatch.sh|reads a watch-file and the kqueue helper's output — neither is a jq producer, and both emit fixed-arity rows
-scripts/desk-recycle-invariant.sh|resolve_desk guarantees all three cells non-empty before printing (cfg falls back to the CC default root; an empty cwd returns 1)
-scripts/relogin-probes/e1-concurrent-logins.sh|producer REFUSES on an empty identity field rather than emitting one (all four are required), so non-empty is guaranteed at the source instead of padded — the same discharge as desk-recycle-invariant above
-scripts/cloud-ceiling-probe.sh|both reads (:339 control, :376 ramp) consume fire_one, whose every exit emits a 2-cell row whose cell 1 is an OUTCOME LITERAL: classify_outcome returns exactly one of created / refused-quota / refused-other (:187-192, three unconditional printfs, no empty-reachable branch), and fire_one's two early exits print the literal `refused-other\t…` themselves (:258, :259). So cell 1 cannot be empty at any of the three sources. Cell 2 is the free-text message and is LAST, where an empty value assigns "" without shifting anything — and `read -r oc msg` has exactly two vars, so msg absorbs any tabs the message itself contains. Same discharge as e1-concurrent-logins and store-bounds-census above: non-empty guaranteed at the source rather than padded
-scripts/scratchpad-reaper.sh|the jq producer CAN emit an empty cell ([(.pid // ""), (.session_id // "")]), but both cells are existence-TESTED on the line after the read ([ -n "$rpid" ] && [ -n "$rsid" ] || continue) — so an empty cell discards the row identically with or without the shift, and the reaper's live-set cannot change. Keyed on that test, not on proximity
-scripts/store-bounds-census.sh|parse_manifest REFUSES to emit an OK row when any of its four fields is empty — it prints a BAD row instead ([ -z "${g:-}" ] || [ -z "${cap:-}" ] || … → BAD), so no OK row can carry an empty cell. The BAD rows are 2-field and only counted, never destructured. Same discharge as e1-concurrent-logins above
-scripts/wrap-ledger.sh|count FIRST, free text LAST — and the code says so at the emitter. The one read (count_blocking_decisions) consumes a single `@tsv` row built as [ (length|tostring), (what_plain or "") ]: cell 1 is the length of a jq array rendered as a string, which cannot be empty, and it is additionally digit-VALIDATED on the next line (case "${n:-}" in ''|*[!0-9]*) → error). The only empty-reachable cell is the operator's own prose, which is LAST, so nothing a human types into a decision packet can shift the field the ⛔ rung branches on
-scripts/unattended-path-lint.sh|both reads (:757 hooks, :804 launchd) share ONE producer, scan_shell's python emitter at :512 — `print("%s\t%d\t%s" % (path, lineno, word))`. Cell 1 is an argv path scan_shell was called with (non-empty by construction — an empty argv element names no file) and cell 2 is a %d of an int, which cannot be empty. The only variable-content cell is the extracted word, which is LAST and is existence-tested first thing in both loops ([ -n "$w" ] || continue). Same discharge as hooks/validate-bash.sh above, which shares the %d/%s-with-trailing-variable shape
-scripts/thrash-block-recover.sh|producer REFUSES on an empty id (`select(($last.id // "") != "")`, added with this exemption) rather than emitting one, so cell 1 is non-empty at the source. Cell 2 is a literal "RECOVER"/"HOLD" from an if/else, and cells 3-5 are `|tostring` of array LENGTHS — none can be empty. Both reads (:135 render, :159 apply) share that one jq. Same discharge as e1-concurrent-logins and store-bounds-census above
-scripts/branch-reaper.sh|the one read (:77, restore mode) consumes the manifest THIS script writes at :146 — printf '%s\t%s\n' "$b" "$sha", exactly two cells — and :145 drops any target whose refs/heads/$b does not rev-parse, so an empty name never reaches the writer and $sha is that verified output. A tab cannot widen the row into a third cell either: git check-ref-format rejects \t in a ref name. Belt-and-braces at the reader, since a manifest is a file a human can edit — :78 existence-tests BOTH cells and continues, so every degenerate 2-field row is discarded identically with or without the shift and `git branch` cannot run on a shifted pair
-EOF
-}
+# THE RECOGNIZER AND THE REVIEWED EXEMPTION TABLE NOW LIVE IN scripts/tsv-pad-lint.sh, and these
+# cases DRIVE that file rather than re-implementing it (2026-08-10, backlog e146d30857b4). Every
+# exemption line moved across VERBATIM — nothing about the rule changed; where it is ENFORCED did.
+#
+# Why it had to move: this suite could only ever fail AFTER an unpadded reader landed. gate-select's
+# `cited_only` (:280) requires a DIRECT edge's evidence to live in a suite's EXECUTABLE text, and
+# this file named offenders only inside its exemption heredoc — so a BRAND-NEW script was named
+# nowhere, its failure was exonerable-as-adjacent, and the land passed. The guard consequently
+# re-reddened three times with a completely different offender set each time and ZERO overlap
+# between them (six on 2026-07-31, six more by 2026-08-07, two more on 2026-08-10) — the measurement
+# that says per-file remediation is a treadmill rather than a run of bad luck. The lint runs at the
+# land gate itself, own-scoped, so it blocks the author who introduces the reader and nobody else.
+#
+# Keeping ONE recognizer is the point. Two auditors over one population that can disagree is its own
+# defect class, and here the drift would have been invisible: this suite would have stayed green
+# while the gate judged something else (memory: sibling-auditors-must-share-the-state-model).
 
 @test "guard: every file reading IFS=tab TSV either pads at the emitter or is a reviewed exemption" {
-  cd "$REPO"
-  unpadded=""
-  for f in $(grep -rlF "IFS=\$'\t' read" bin hooks scripts 2>/dev/null | sort); do
-    # A file participates in the convention if it PADS at its own emitter (`def cell(ph):` /
-    # `def cell:` / the python `_cell` helper) or if it is a pure CONSUMER that UN-PADS what an
-    # upstream emitter padded (session_index_unpad / a local unpad()). Either is a deliberate,
-    # greppable statement that the author considered the collapse; neither is accidental.
-    if grep -qE 'def cell(\(ph\))?:|def _cell' "$f"; then continue; fi
-    if grep -qE 'session_index_unpad|unpad\(\)|TSV_PAD' "$f"; then continue; fi
-    # Other spellings of the SAME guarantee. This guard exists to catch UNPADDED readers, not to
-    # enforce one house style, so the recognizer accepts any emitter that provably fills empties:
-    #   norm()/dash()   bin/cc-relogin-poll — awk right-fills to n fields, "-" for empty, dash un-pads
-    #   ${var:--}       hooks/lead-crash-watchdog.sh — writes "-" for an absent cell and compares
-    #                   back to "-" on read (its own comment describes this exact collapse)
-    # Both were flagged here first and turned out to be correct; the recognizer was the thing wrong.
-    if grep -qE '^norm\(\)|^dash\(\)' "$f"; then continue; fi
-    if grep -qE '\$\{[A-Za-z_][A-Za-z0-9_]*:--\}' "$f"; then continue; fi
-    if tsv_exemptions | grep -q "^$f|"; then continue; fi
-    unpadded="$unpadded $f"
-  done
-  [ -z "$unpadded" ] || printf 'unpadded TSV reader(s) with no reviewed exemption:%s\n' "$unpadded" >&2
-  [ -z "$unpadded" ]
+  # 0 clean · 1 violation, offenders named in $output · 2 NON-VERDICT (bad root / broken scan),
+  # which is why this asserts -eq 0 and not -ne 1: a lint that could not run has proved nothing.
+  run bash "$REPO/scripts/tsv-pad-lint.sh" "$REPO"
+  [ "$status" -eq 0 ]
 }
 
 @test "guard: every exemption still names a file that exists and still reads IFS=tab TSV" {
+  # The ratchet's other direction, same lint: a stale line reds the run above. A clean tree cannot
+  # show that the arm still FIRES, so this drives the lint's own fixtures, which plant all three
+  # stale shapes (file gone · no longer reads TSV · no reason) and require each to go red.
+  run bash "$REPO/scripts/tsv-pad-lint.sh" --selftest
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'both stale-exemption shapes'
+}
+
+@test "guard: the lint's assembled marker finds exactly the readers a literal grep finds" {
+  # The lint builds `IFS=$'\t' read` with printf instead of writing it, so it does not match its own
+  # scan — which makes the spelling a construction, and a construction can be wrong. Its --selftest
+  # cannot catch that: those fixtures are written FROM the same variable, so a corrupted marker
+  # produces corrupted fixtures and every case still passes (measured — a mutant spelling it
+  # `IFS=$'QQt' read` scored a clean 19/19). The cross-check therefore has to come from an
+  # INDEPENDENT spelling, and this file can hold one safely: tests/ is outside the scanned dirs.
   cd "$REPO"
-  stale=""
-  while IFS='|' read -r path reason; do
-    [ -n "$path" ] || continue
-    if [ ! -f "$path" ]; then stale="$stale $path(missing)"; continue; fi
-    grep -qF "IFS=\$'\t' read" "$path" || stale="$stale $path(no-longer-reads-tsv)"
-    [ -n "$reason" ] || stale="$stale $path(no-reason)"
-  done < <(tsv_exemptions)
-  [ -z "$stale" ] || printf 'stale exemption(s):%s\n' "$stale" >&2
-  [ -z "$stale" ]
+  mine="$(grep -rlF "IFS=\$'\t' read" bin hooks scripts 2>/dev/null | sort | grep -c .)"
+  [ "$mine" -gt 0 ]                       # a literal that finds nothing would make this vacuous
+  run bash "$REPO/scripts/tsv-pad-lint.sh" "$REPO"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "clean — $mine reader(s)"
 }
 
 @test "guard: no padding sentinel is ever left in a tracked source file as a raw byte" {
