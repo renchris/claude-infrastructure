@@ -2,6 +2,9 @@
 # migration-class: c10
 # migration-step: repoint the PreToolUse/Bash curl-gate.py registration at the scoped shim (settings.json is the live permission surface — C10, yours)
 # migration-run: CONFIRM=1 bash ~/Development/claude-infrastructure/docs/activation/pending-activation/26-curl-gate-scope-activate.sh
+# migration-subject: ~/.claude/hooks/curl-gate-scope.sh
+# migration-verify: jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("curl-gate-scope"))' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("curl-gate\\.py")) and (any(test("curl-gate-scope")) | not)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 #
 # 0002 — the doc's own §4 item 3, converted from a rotting queue entry into a filed, named,
 # once-paged operator step.

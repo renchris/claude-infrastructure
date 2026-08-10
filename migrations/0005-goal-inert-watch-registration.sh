@@ -2,6 +2,8 @@
 # migration-class: c10
 # migration-step: register hooks/goal-inert-watch.sh as a Stop hook so a SKIPPED /goal stops being silent — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0005-goal-inert-watch-registration.sh
+# migration-subject: ~/.claude/hooks/goal-inert-watch.sh
+# migration-verify: jq -e '[.hooks.Stop[]?.hooks[]?.command] | any(. == "~/.claude/hooks/goal-inert-watch.sh")' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 #
 # 0005 — the registration half of the goal-inertness sensor.
 # Subject: hooks/goal-inert-watch.sh · tests/goal-inert-watch.bats (14/14)
