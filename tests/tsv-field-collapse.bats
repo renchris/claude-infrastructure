@@ -559,6 +559,62 @@ JSON
   printf '%s' "$output" | grep -q "clean — $mine reader(s)"
 }
 
+@test "guard: WIRED — ship-land's gate block invokes the lint" {
+  # Enforcement by this suite alone is the post-hoc detection this whole change exists to replace,
+  # so the wiring IS part of the claim, not an implementation detail
+  # (memory: enforcement-must-live-at-the-chokepoint). Same case the sibling ratchets pin.
+  grep -q 'tsv-pad-lint.sh' "$REPO/scripts/ship-land.sh" || {
+    echo "the lint is not wired into ship-land.sh — enforcement by this suite alone is detection, not a gate"
+    false
+  }
+}
+
+@test "guard: the lint is executable (a non-executable gate is a silently skipped gate)" {
+  # ship-land guards the block with `[[ -x "$TSVPAD_LINT" ]]`, so losing the bit does not fail loudly
+  # — it steps over the gate, and every land then goes green on a check that never ran.
+  [ -x "$REPO/scripts/tsv-pad-lint.sh" ] || {
+    echo "scripts/tsv-pad-lint.sh is not executable — ship-land's [[ -x ]] guard would step over it"
+    false
+  }
+}
+
+@test "guard: the lint's verdict does not depend on the caller's CWD" {
+  # scripts/nightly-regression.sh globs scripts/*lint*.sh and runs --selftest where supported, so
+  # this file is picked up with no registration — but launchd sets no WorkingDirectory, so the
+  # nightly reaches it with CWD=/. A ROOT derived from an unresolved $0, or a relative default,
+  # would make the nightly's copy scan nothing and report clean (memory: gate-default-decides-
+  # failure-direction). Both entry points are pinned, from the directory the nightly actually uses.
+  run bash -c "cd / && bash '$REPO/scripts/tsv-pad-lint.sh' --selftest"
+  [ "$status" -eq 0 ]
+  run bash -c "cd / && bash '$REPO/scripts/tsv-pad-lint.sh'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'reader(s) under'      # it really scanned, it did not no-op green
+}
+
+@test "guard: the padding the RED message prescribes is a shape the recognizer ACCEPTS" {
+  # A rule and the message that explains it rot INDEPENDENTLY, and a lint that prints a fix it would
+  # itself reject is worse than one that prints nothing (memory: prescribed-remedy-worse-than-the-bug,
+  # work-item-remedy-can-become-forbidden). So this drives the round trip rather than comparing two
+  # literals: it lifts the prescription out of the lint's OWN refusal, pastes it into the file that
+  # earned that refusal, and requires the verdict to flip.
+  local t="$C/prescribed"
+  mkdir -p "$t/scripts"
+  cat > "$t/scripts/z.sh" <<'SH'
+#!/bin/bash
+while IFS=$'\t' read -r a b c; do :; done
+SH
+  run env CC_TSVPAD_EXEMPTIONS="" bash "$REPO/scripts/tsv-pad-lint.sh" "$t"
+  [ "$status" -eq 1 ]
+  local fix
+  fix="$(printf '%s' "$output" | grep -F 'def cell(ph):')"
+  [ -n "$fix" ]
+  # as CODE, not as a comment: the recognizer greps whole files, so pasting the fix into a comment
+  # would pass without exercising anything. This is the house shape (bin/cc-backlog's CELL=…).
+  printf 'JQPROG=%s\n' "'$fix'" >> "$t/scripts/z.sh"
+  run env CC_TSVPAD_EXEMPTIONS="" bash "$REPO/scripts/tsv-pad-lint.sh" "$t"
+  [ "$status" -eq 0 ]
+}
+
 @test "guard: no padding sentinel is ever left in a tracked source file as a raw byte" {
   # The sentinel belongs in a shell $'\037' / jq $pad / python "\x1f" literal — never as a raw
   # control byte pasted into source, which is invalid inside a JSON string literal for jq.
