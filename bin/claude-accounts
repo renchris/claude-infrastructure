@@ -78,6 +78,19 @@ Usage:
       One row per account: state (OK|DUE|ESCALATED|UNKNOWN) · login_expires_at · hours · the
       last cc-relogin attempt (from the poller's log) · the exact next command. Cache-first
       and NEVER heals — a recurring check must not sweep both oauth endpoints every tick.
+      TWO WINDOWS, ONE FACT — do not confuse this with --login-status above. That one answers
+      "how much lead time does a HUMAN need" and is gated at login_warn_h (72h). This one
+      answers "when should the unattended executor start trying" and is gated at the
+      RENEWAL-ATTEMPT window, accounts.json `relogin_trigger_h` (168h) — wider because
+      cc-relogin can only act at a k==0 moment and needs ~168 hourly chances at one. So an
+      account can be DUE here and absent from --login-status; that is the two surfaces
+      answering their own questions, not a contradiction.
+      DUE IS A PROMISE: `next_action` is only printed for a band cc-relogin will ACCEPT.
+      That is why the window is SSOT'd rather than owned here — when it was a local constant
+      the two drifted (2026-07-29) and this board printed "NEXT ACTION: cc-relogin next" for
+      72-168h while that command exited 2 REFUSED "no re-auth needed". The agreement is
+      re-proved by EXECUTING this field in tests/cc-relogin-status.bats, not by asserting a
+      number in two places.
       Exit: 0 all clear · 1 a renewal is DUE · 2 ESCALATED/overdue · 3 DETECTION-UNAVAILABLE.
       Version tolerance: the login_expires_* fields are not on every build, and a build that
       cannot see them reports UNKNOWN + a loud stderr line — never a confident wrong "OK".
@@ -2053,7 +2066,13 @@ def render_table(rows, cfg, win, cached, prev=None):
 # fragile attempt becomes ~168 chances to catch a k==0 window, and escalates at T-48h — loud
 # BEFORE the deadline, never after. Read-only by construction: this surface never heals, never
 # forces a sweep, and never touches a credential.
-RELOGIN_TRIGGER_H = 7 * 24
+# The attempt window is SSOT'd in accounts.json (relogin_trigger_h), not owned here: this board
+# only RENDERS the state, while cc-relogin-poll schedules inside it and cc-relogin's gate decides
+# whether to act inside it. A constant owned by the renderer is a constant the actuator can drift
+# from — measured 2026-07-29, when this board rendered DUE + "NEXT ACTION: cc-relogin next" for
+# 72-168h while cc-relogin still gated on login_warn_h=72 and exited 2 REFUSED. This default is
+# the fallback for a config that predates the key, and MUST stay equal to cc-relogin's.
+RELOGIN_TRIGGER_H_DEFAULT = 7 * 24
 RELOGIN_ESCALATE_H = 48
 RELOGIN_POLL_LOG = os.environ.get(
     "CC_RELOGIN_POLL_LOG", os.path.join(HOME, ".claude", "logs", "cc-relogin-poll.log"))
@@ -2103,7 +2122,7 @@ def relogin_last_attempt(acct: str, path: str = "") -> dict:
     return hit
 
 
-def relogin_row(r: dict) -> dict:
+def relogin_row(r: dict, trigger_h: float = RELOGIN_TRIGGER_H_DEFAULT) -> dict:
     """One account's renewal state, derived ONLY from fields actually present on this build."""
     acct = r["acct"]
     at, h = r.get("login_expires_at"), r.get("login_expires_h")
@@ -2119,8 +2138,8 @@ def relogin_row(r: dict) -> dict:
         state, reason = "UNKNOWN", "login_expires_at without login_expires_h — cannot age it"
     elif h <= RELOGIN_ESCALATE_H:
         state, reason = "ESCALATED", f"T-{h:.0f}h — inside the {RELOGIN_ESCALATE_H}h escalation window"
-    elif h <= RELOGIN_TRIGGER_H:
-        state, reason = "DUE", f"T-{h:.0f}h — inside the {RELOGIN_TRIGGER_H // 24}d attempt window"
+    elif h <= trigger_h:
+        state, reason = "DUE", f"T-{h:.0f}h — inside the {trigger_h / 24:.0f}d attempt window"
     else:
         state, reason = "OK", f"T-{h:.0f}h"
     last = relogin_last_attempt(acct)
@@ -2133,9 +2152,9 @@ def relogin_row(r: dict) -> dict:
                             if state == "UNKNOWN" else f"cc-relogin {acct}")}
 
 
-def render_relogin_status(rows: list, args: list) -> int:
+def render_relogin_status(rows: list, args: list, trigger_h: float = RELOGIN_TRIGGER_H_DEFAULT) -> int:
     """Render the board (plain always — a machine surface) and return the process exit code."""
-    out = [relogin_row(r) for r in rows]
+    out = [relogin_row(r, trigger_h) for r in rows]
     worst = next((s for s in RELOGIN_PRECEDENCE if any(o["state"] == s for o in out)), "OK")
     code = RELOGIN_EXIT[worst]
     blind = [o["acct"] for o in out if o["state"] == "UNKNOWN"]
@@ -2218,7 +2237,8 @@ def main():
     # Before the generic --json branch: `--relogin-status --json` is its own shape, not the
     # dashboard's rows.
     if "--relogin-status" in args:
-        sys.exit(render_relogin_status(rows, args))
+        sys.exit(render_relogin_status(
+            rows, args, float(cfg.get("relogin_trigger_h", RELOGIN_TRIGGER_H_DEFAULT))))
 
     if "--json" in args:
         for r in rows:

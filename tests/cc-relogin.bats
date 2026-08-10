@@ -228,7 +228,80 @@ EOF
   mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 10; mk_creds
   run "$C" next3 --dry-run --json
   [ "$status" -eq 0 ]
-  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=10 <= warn 72.0" ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=10 <= renewal window 72.0" ]
+}
+
+# ---- the renewal window is SSOT'd, not the human warn constant --------------------------------
+# The gate's window is accounts.json `relogin_trigger_h`, NOT `login_warn_h`. Gating on the latter
+# opened a 96-hour dead band (measured 2026-07-29 on `next` at T-88.74h): `--relogin-status`
+# rendered DUE and printed "NEXT ACTION: cc-relogin next" across 72-168h while this executor
+# exited 2 REFUSED "no re-auth needed", and cc-relogin-poll — which invokes us BARE — would have
+# spent 96 of its declared 168 hourly k==0 chances on a gate that could not say yes.
+#
+# These arms deliberately UNSET CC_RELOGIN_WARN_H (setup pins it at 72 for every other test), so
+# they measure the DEFAULT — the value the poller and a bare operator command actually get.
+# ssot_cfg writes only the key under test: a fixture carrying the whole SSOT would pass even if
+# the subject read some other field.
+ssot_cfg() { # [trigger_h] — omit for a config that predates the key
+  if [ $# -eq 0 ]; then echo '{"login_warn_h": 72.0}' > "$D/accounts.json"
+  else printf '{"login_warn_h": 72.0, "relogin_trigger_h": %s}\n' "$1" > "$D/accounts.json"; fi
+  export CLAUDE_ACCOUNTS_JSON="$D/accounts.json"
+}
+
+@test "dead band: mid-band (88.74h) is INSIDE the SSOT renewal window → gate passes" {
+  ssot_cfg 168.0
+  mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 88.74; mk_creds
+  run env -u CC_RELOGIN_WARN_H "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=88.74 <= renewal window 168.0" ]
+}
+
+@test "control: the SAME hour REFUSES when the SSOT window is narrowed to the warn constant" {
+  # The other direction. Without this, the arm above would also pass a subject that ignored the
+  # SSOT and hardcoded a wide window — it proves the number is READ, not merely widened.
+  ssot_cfg 72.0
+  mk_info all true; mk_fresh all ok "2026-08-01T00:00:00Z" 88.74
+  run env -u CC_RELOGIN_WARN_H "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'no re-auth needed'
+  [ ! -f "$D/claude-calls" ]
+}
+
+# Failure direction: the narrow window is the bug, so an unreadable SSOT must widen, not cap.
+# Every real safety gate (k==0, the heal lock, verify-by-effect) is untouched by this number.
+# One arm per fault — the stub serves per-CALL fixtures (info.N/fresh.N) and its counter persists
+# across `run` inside a @test, so a second invocation here would read a fixture that is not there
+# and fail for a reason that has nothing to do with the SSOT.
+@test "SSOT absent → falls back to 168, never to the 72h warn window" {
+  mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 88.74; mk_creds
+  export CLAUDE_ACCOUNTS_JSON="$D/no-such-accounts.json"
+  run env -u CC_RELOGIN_WARN_H "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=88.74 <= renewal window 168.0" ]
+}
+
+@test "SSOT malformed → falls back to 168, never to the 72h warn window" {
+  mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 88.74; mk_creds
+  echo '{ this is not json' > "$D/accounts.json"; export CLAUDE_ACCOUNTS_JSON="$D/accounts.json"
+  run env -u CC_RELOGIN_WARN_H "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=88.74 <= renewal window 168.0" ]
+}
+
+@test "SSOT present but the key is absent (config predates it) → 168" {
+  ssot_cfg
+  mk_info all true; mk_fresh 1 ok "2026-08-01T00:00:00Z" 88.74; mk_creds
+  run env -u CC_RELOGIN_WARN_H "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .need_reason)" = "login_expires_h=88.74 <= renewal window 168.0" ]
+}
+
+@test "CC_RELOGIN_WARN_H still overrides the SSOT (the documented one-off crossing)" {
+  ssot_cfg 168.0
+  mk_info all true; mk_fresh all ok "2026-08-01T00:00:00Z" 88.74
+  run env CC_RELOGIN_WARN_H=72 "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'no re-auth needed'
 }
 
 @test "§2 degraded detection: no login_* fields and nothing else wrong → REFUSED, loudly" {

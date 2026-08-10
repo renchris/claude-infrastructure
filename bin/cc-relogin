@@ -18,9 +18,17 @@ cannot move the very state they measure.
 
 Exit: 0 PROVEN · 1 ERROR · 2 REFUSED · 3 HEADLESS-EXHAUSTED · 4 BROWSER-FAILED ·
 5 UNVERIFIED · 6 FALLBACK-REQUIRED · 7 CONSENT-GATE (retained, never emitted).
+The gate accepts inside the RENEWAL-ATTEMPT window (accounts.json `relogin_trigger_h`, 168h),
+NOT inside the human warn window (`login_warn_h`, 72h) — the two surfaces that drive this
+executor (`claude-accounts --relogin-status` and `cc-relogin-poll`) both work off the former,
+and gating on the latter opened a 96-hour dead band in which the board prescribed a command
+this one refused. See the RENEW_WINDOW_H_DEFAULT note below.
+
 Test-injection env: CC_RELOGIN_{ACCOUNTS_BIN,TMP,WARN_H,DEADLINE_EPSILON_H,PS_BIN,
-SECURITY_BIN,AUTHBROWSER_BIN,LOG}. Identity (claude binary, config dir, email, scopes) comes
-ONLY from `claude-accounts --relogin-info`; scopes are passed verbatim, NEVER widened.
+SECURITY_BIN,AUTHBROWSER_BIN,LOG} + CLAUDE_ACCOUNTS_JSON (the SSOT this reads the window
+from — the same one claude-accounts reads). Identity (claude binary, config dir, email,
+scopes) comes ONLY from `claude-accounts --relogin-info`; scopes are passed verbatim,
+NEVER widened.
 """
 from __future__ import annotations
 
@@ -61,10 +69,40 @@ TMP = _env("CC_RELOGIN_TMP", "/tmp")
 PS_BIN = _env("CC_RELOGIN_PS_BIN", "ps")
 SECURITY_BIN = _env("CC_RELOGIN_SECURITY_BIN", "/usr/bin/security")
 LOG_PATH = _env("CC_RELOGIN_LOG", os.path.join(HOME, ".claude", "logs", "cc-relogin.log"))
+ACCOUNTS_JSON = _env("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
+# The RENEWAL-ATTEMPT window, and deliberately NOT login_warn_h. This gate used to default to 72 —
+# the human warning constant — while the two surfaces that DRIVE this executor both work off the
+# T-7d attempt window: `claude-accounts --relogin-status` renders DUE inside 168h and prints
+# "NEXT ACTION: cc-relogin <acct>", and cc-relogin-poll asks `--login-status --window-h 168` and
+# then invokes us bare. The mismatch was a 96-hour DEAD BAND (measured 2026-07-29 on next at
+# T-88.74h): the board prescribed a command that exited 2 REFUSED "no re-auth needed", and — once
+# the launchd cadence is activated — 96 of the poller's declared 168 hourly chances to catch a
+# k==0 window would be spent on a gate that could not say yes. The window's whole purpose is those
+# chances (docs/runbooks/RELOGIN_ACTIVATION.md §5), so capping it here defeated the design.
+#
+# Read from the SAME SSOT claude-accounts reads (accounts.json relogin_trigger_h) so the two
+# cannot drift again; CC_RELOGIN_WARN_H still overrides for tests and one-offs. An unreadable or
+# malformed SSOT falls back to the contract default rather than to 72: the failure direction must
+# be the WIDER window, because the narrow one is the bug, and every real safety gate that follows
+# (k==0, the heal lock, verify-by-effect) is untouched by this number.
+RENEW_WINDOW_H_DEFAULT = 168.0
+
+
+def _ssot_renew_window_h() -> float:
+    """relogin_trigger_h from accounts.json; the contract default when unreadable."""
+    try:
+        with open(ACCOUNTS_JSON) as f:
+            v = float(json.load(f).get("relogin_trigger_h", RENEW_WINDOW_H_DEFAULT))
+        return v if v >= 0 else RENEW_WINDOW_H_DEFAULT
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return RENEW_WINDOW_H_DEFAULT
+
+
+_warn_override = os.environ.get("CC_RELOGIN_WARN_H")
 try:
-    WARN_H = float(_env("CC_RELOGIN_WARN_H", "72"))
+    WARN_H = float(_warn_override) if _warn_override else _ssot_renew_window_h()
 except ValueError:
-    WARN_H = 72.0
+    WARN_H = _ssot_renew_window_h()
 # How far the login deadline must move before it counts as RENEWED. Not hygiene — the oracle. A
 # refresh grant re-expresses a FIXED wall as a countdown from a fresh Date.now(), so it always
 # nudges the absolute stamp; 12h sits ~4 orders of magnitude above that jitter and 52x below the
@@ -221,7 +259,7 @@ def need_relogin(row: dict[str, Any], info: dict[str, Any]) -> tuple[bool, str]:
         return True, "login_expired"
     hours = row.get("login_expires_h")
     if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours <= WARN_H:
-        return True, f"login_expires_h={hours} <= warn {WARN_H}"
+        return True, f"login_expires_h={hours} <= renewal window {WARN_H}"
     if any(k in row for k in ("login_expired", "login_expires_h", "login_expires_at")):
         return False, f"healthy (auth={auth}, login_expires_h={hours})"
     if info.get("keychain_state") != "present":

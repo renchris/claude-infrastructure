@@ -50,7 +50,7 @@
 # CC_RELOGIN_POLL_DEADLINE_EPSILON_H (12, same-cycle tolerance; 0 = exact match).
 set -uo pipefail
 
-JSON=0 DRYRUN=0 TRIG_DAYS=7 ESC_HOURS=48
+JSON=0 DRYRUN=0 TRIG_DAYS="" ESC_HOURS=48
 while [ $# -gt 0 ]; do case "$1" in
   --json)           JSON=1; shift ;;
   --dry-run)        DRYRUN=1; shift ;;
@@ -60,9 +60,32 @@ while [ $# -gt 0 ]; do case "$1" in
   -h|--help)        sed -n '2,12p;29,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "cc-relogin-poll: unknown arg $1 (usage: cc-relogin-poll [--json] [--dry-run] [--once] [--trigger-days N] [--escalate-hours N])" >&2; exit 1 ;;
 esac; done
-case "$TRIG_DAYS" in ''|*[!0-9]*) echo "cc-relogin-poll: --trigger-days needs a non-negative integer" >&2; exit 1 ;; esac
+if [ -n "$TRIG_DAYS" ]; then
+  case "$TRIG_DAYS" in ''|*[!0-9]*) echo "cc-relogin-poll: --trigger-days needs a non-negative integer" >&2; exit 1 ;; esac
+fi
 case "$ESC_HOURS" in ''|*[!0-9]*) echo "cc-relogin-poll: --escalate-hours needs a non-negative integer" >&2; exit 1 ;; esac
 command -v jq >/dev/null || { echo "cc-relogin-poll: jq required" >&2; exit 1; }
+
+# ── the attempt window is SSOT'd, not owned here ───────────────────────────────────────────────
+# This poller is the THIRD consumer of one fact: `claude-accounts --relogin-status` renders DUE
+# inside the window, `cc-relogin`'s gate accepts inside it, and this decides who gets attempted.
+# They drifted once (2026-07-29) and the drift was invisible to three individually-green suites:
+# the board prescribed `cc-relogin <acct>` across 72-168h and that command exited 2 REFUSED, so
+# 96 of the 168 hourly k==0 chances this window exists to buy would have been spent on a gate
+# that could not say yes. A default hardcoded here is a default that can drift from the gate it
+# feeds, so it is read from the same accounts.json key both other programs read.
+# HOURS, not days, is the internal unit: the SSOT is in hours and rounding to whole days would
+# silently narrow (100h -> 4d = 96h) or — worse — widen past what cc-relogin will accept.
+# --trigger-days stays the operator override and keeps its integer-day contract.
+TRIG_H_DEFAULT=168
+if [ -n "$TRIG_DAYS" ]; then
+  TRIG_H=$((TRIG_DAYS * 24))
+else
+  _ssot="${CLAUDE_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"
+  TRIG_H="$(jq -r '(.relogin_trigger_h // empty) | numbers | floor' "$_ssot" 2>/dev/null)"
+  case "$TRIG_H" in ''|*[!0-9]*) TRIG_H="$TRIG_H_DEFAULT" ;; esac
+  TRIG_DAYS=$((TRIG_H / 24))
+fi
 
 LOG="${CC_RELOGIN_POLL_LOG:-$HOME/.claude/logs/cc-relogin-poll.log}"
 STATE_DIR="${CC_RELOGIN_POLL_STATE_DIR:-$HOME/.claude/autonomy/relogin-poll}"
@@ -202,7 +225,7 @@ if [ "$LS_ADVERTISED" = 1 ]; then
   # that from a verdict.
   LS_WINDOW=""
   case "$ACCT_HELP" in
-    *--window-h*) LS_WINDOW="$((TRIG_DAYS * 24))" ;;
+    *--window-h*) LS_WINDOW="$TRIG_H" ;;
     *) WINDOW_CAPPED="--window-h unsupported on this claude-accounts — detection is capped at its login_warn_h, NOT the declared T-${TRIG_DAYS}d" ;;
   esac
   if [ -n "$LS_WINDOW" ]; then
@@ -296,7 +319,7 @@ if [ "$DETECT" = unavailable ]; then
 fi
 
 # ── select: inside the T−trigger window, nearest deadline first, AT MOST ONE per tick ────────
-TRIG_EPOCH=$((NOW + TRIG_DAYS * 86400))
+TRIG_EPOCH=$((NOW + TRIG_H * 3600))
 CAND="$(printf '%s' "$ROWS" | awk -F'\t' -v lim="$TRIG_EPOCH" 'NF>=2 && $1!="" && $2 ~ /^-?[0-9]+$/ && $2+0 <= lim' \
         | sort -t$'\t' -k2,2n)"
 NCAND="$(printf '%s' "$CAND" | grep -c . || true)"

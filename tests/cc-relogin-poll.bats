@@ -625,6 +625,59 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
   [ "$(ncalls)" -eq 0 ] || false
 }
 
+# ── M2b: the window is SSOT'd (accounts.json relogin_trigger_h), not hardcoded here ────────────
+# This poller is the third consumer of one fact — the board renders DUE inside the window, THIS
+# decides who is attempted, and cc-relogin's gate decides whether to act. They drifted once
+# (2026-07-29): the board prescribed `cc-relogin <acct>` across 72-168h while that command exited
+# 2 REFUSED, so 96 of the 168 k==0 chances this window exists to buy were unreachable. A constant
+# hardcoded here can drift from the gate it feeds, so it is read from the same key both other
+# programs read. These arms use a NON-DEFAULT 120h: at the default they would pass on a
+# coincidence of constants and prove nothing about the read.
+ssot_trigger_h() { # write a scratch SSOT carrying only the key under test
+  printf '{"login_warn_h": 72.0, "relogin_trigger_h": %s}\n' "$1" > "$D/accounts.json"
+  export CLAUDE_ACCOUNTS_JSON="$D/accounts.json"
+}
+
+@test "M2b: the SSOT window is what the poller asks for and filters on" {
+  ssot_trigger_h 120
+  mk next3 100 0                  # inside 120h
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  grep -q -- '--window-h 120' "$D/ls.argv" || false     # asked for the SSOT's window, not 168
+  json | jq -e '.candidates==1 and .acct=="next3"' >/dev/null || false
+}
+
+@test "M2b CONTROL: an account past the SSOT window is NOT due (the read is a filter, not a widen)" {
+  ssot_trigger_h 120
+  mk next3 130 0                  # outside 120h, but inside the hardcoded 168 it replaced
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  json | jq -e '.candidates==0 and .action=="none"' >/dev/null || false
+  [ "$(ncalls)" -eq 0 ] || false
+}
+
+@test "M2b: --trigger-days still overrides the SSOT" {
+  ssot_trigger_h 120
+  mk next3 100 0
+  build ls
+  run "$P" --trigger-days 7 --json
+  [ "$status" -eq 0 ] || false
+  grep -q -- '--window-h 168' "$D/ls.argv" || false     # the flag wins over the SSOT
+  json | jq -e '.candidates==1' >/dev/null || false
+}
+
+@test "M2b: a malformed SSOT falls back to 168, never to the 72h warn window" {
+  echo '{ not json' > "$D/accounts.json"; export CLAUDE_ACCOUNTS_JSON="$D/accounts.json"
+  mk next3 100 0
+  build ls
+  run "$P" --json
+  [ "$status" -eq 0 ] || false
+  grep -q -- '--window-h 168' "$D/ls.argv" || false
+  json | jq -e '.candidates==1' >/dev/null || false
+}
+
 @test "M2 FAIL-SOFT: on a build without --window-h the cap is LOUD, never a silent nothing-due" {
   mk next3 100 0
   build ls-narrow                 # --login-status only: the shape deployed while the checkout lags
