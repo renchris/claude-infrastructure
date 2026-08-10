@@ -1521,3 +1521,44 @@ yet, and it now names why in the first command an operator runs.
   terminal (`NOT-STARTED`/`ABANDONED`), behind `CONFIRM=1`. 17 of the 19 live declarations are
   probe/fire junk from §7.5's eleven sessions; retiring them is one command but it is the
   operator's, because a retired id stops being reconciled.
+
+### 12.4 · The App went in, the create got clean — and the session STILL never pushed
+
+§11.4 named the decisive experiment and said the result would be *"meaningful in a way today's is
+not"*. It has now been run, and it is.
+
+The operator installed the Claude GitHub App on the repo at ~07:10Z. The immediately following fire,
+same command, same brief, account `next3`:
+
+| | before the App (06:34Z) | after the App (07:12Z) |
+| --- | --- | --- |
+| create | `refused-bundle` **3/3** | **`session_018YsHzozWKCzxx5cifEQw1L` on attempt 1**, no bundle |
+| `git ls-remote --heads origin 'claude/*'` | 0 | **0** |
+| terminal verdict | `NOT-STARTED — no ref after 15m` | **`NOT-STARTED — no ref after 15m`** |
+
+**The create half is fixed and the execute half is untouched.** Bundle mode is now *eliminated* as
+the cause rather than merely suspected: the upload is gone, the create is clean and first-try, the
+App is independently confirmed present (a `claude` check-suite now appears on trunk — the proxy's
+one sound direction, §12.2), and the ref count did not move. §11.4's fallback suspect is therefore
+promoted to the live hypothesis: **the VM's push credentials** (§7.4 already showed a cloud VM
+cannot write `refs/cc/*`), or the VM not executing the brief at all.
+
+🚨 **And that is now the SAME finding as §7.5's, which makes it the generator-class one.** Thirteen
+sessions have been created across this document; **zero have ever acted.** Two distinct create
+blockers have been found and fixed — the ceiling probe's, then bundle mode — and neither moved the
+number, because neither was ever the binding constraint. The scarce thing was never a session id;
+it is an **observed cloud execution**, and this box structurally cannot see one (§9.1's asymmetry:
+the send arm delivers, `{ok:true}` means queued, and the reply lands in a transcript no local
+instrument can open).
+
+**→ NEXT, and it is deliberately NOT another fire.** Two creates bought the same verdict today;
+a third buys it again. The next step is the first one that could produce *new* information, and it
+is operator-shaped because only the web UI can see inside a session: **open
+`https://claude.ai/code/session_018YsHzozWKCzxx5cifEQw1L` and read what it did** — whether it ran
+the brief, whether it attempted the push, and what it saw. That single observation discriminates
+"never executed" from "executed and could not push", which is the fork every remaining hypothesis
+hangs on. Filed rather than described.
+
+*(`cc-offload setup` reads `✓ READY` and that is honest — every precondition it can measure is
+green. READY is a statement about the FIRE path, which is now genuinely unblocked end to end; it
+has never claimed the round trip, and §4's whole discipline is that the two are different facts.)*
