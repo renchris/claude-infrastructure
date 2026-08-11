@@ -540,6 +540,40 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
   '{settings_drift_rc:$d,
     note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
+# ── 2d. CLOUD RETURN — the only detached poller a cloud fire can have ─────────────────────────────
+# A cloud session finishing has no way to reach this box: no pane, no pid, no transcript, and the
+# VM has no route home except the git remote it cloned from. So SOMETHING local has to notice, land
+# the result and wake the originator — and it cannot be the originator, because a goal-armed session
+# may not hold a backgrounded watcher at all (Claude Code skips /goal evaluation while any
+# non-terminal background Bash exists, and hooks/validate-bash.sh denies the park outright). This
+# job is loaded, runs every 300 s, and is not a session, which is exactly the shape that gap needs.
+#
+# ABOVE THE nothing-new EARLY EXIT, for the same reason as 2b/2c and more sharply: a finished cloud
+# session produces NO page and NO alarm — it is silent by construction — so wiring the return below
+# that gate would run it only on sweeps that already had other news, i.e. never on the quiet fleet
+# where the work is actually sitting.
+#
+# THE BOUND IS 240 s, UNDER THIS JOB'S OWN 300 s CADENCE, and that is deliberate rather than
+# generous: a land can outlast a sweep, so the pass is single-flight (it takes a lock and a second
+# pass exits 4) and idempotent (a killed run resumes on the next tick). A bound that exceeded the
+# cadence would let two passes overlap on the same branch, which is the one thing the lock exists
+# to prevent.
+#
+# rc is CAPTURED, never `|| true`: 0 = the pass completed, 4 = another pass held the lock (normal,
+# not a fault), 124 = the bound cut a land mid-flight (the next tick resumes it), anything else is a
+# broken rail — and collapsing those into one would make a dead return path read exactly like a
+# quiet one, which is the failure this whole block exists to end.
+_cloudret="$_SWEEP_DIR/cloud-return.sh"
+_cloudret_rc="skipped"
+if [ -x "$_cloudret" ]; then
+  if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 240 bash "$_cloudret" --sweep >/dev/null 2>&1
+  else bash "$_cloudret" --sweep >/dev/null 2>&1; fi
+  _cloudret_rc=$?
+fi
+log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
+  '{cloud_return_rc:$c,
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = bound cut it, next tick resumes; skipped = tool absent (NOT clean)"}')"
+
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0

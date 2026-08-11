@@ -189,6 +189,59 @@ it burns quota, produces a plausible-looking wrong answer against missing histor
 
 ---
 
+## 6 · W2 — the management rails, built (2026-08-11)
+
+**A cloud fire is now a managed fire.** Rows 1-3 and 5-6 of §2's gap table are closed; row 4 (the
+refusal→VM routing loop) is W3 and only its return-side artifact is built here.
+
+| Gap | Closed by | Where the mechanism lives |
+|---|---|---|
+| 1 · no wake on completion | `scripts/cloud-return.sh` → `cc-notify <pane>` | the launchd sweep, never the originator |
+| 2 · no custody | `cc-offload up` → `cc-custody open` at the fire | marker = the session id; discharged only on a content-verified land |
+| 3 · no goal | `--goal` / `--goal-probe` on the declaration | evaluated FROM THIS SIDE, never inside the VM |
+| 4 · refusals do not route back | *(W3)* — but `<id>.land-refused` is written, and the originator is woken with the failure | the seam, left deliberately |
+| 5 · `say` refuses on a stale binary | `c13be247` — both call sites carry the binary default | falsifier retracted |
+| 6 · landed results read ELIGIBLE forever | `82bb38f4` + `12819616` — `cc-cloud fill-paths`, called after a land | falsifier retracted |
+
+**The two decisions that were not obvious.**
+
+🚨 **`worker_status: idle` PROVES NOTHING, and the completion rule had to be built around that.**
+Measured against the live control plane on 2026-08-11: a session that finished 14 hours earlier and
+a session fired **4 minutes** earlier both read `worker_status: idle` / `status_bucket: review_ready`.
+Idle is the between-turns state as much as the finished state — structurally the same trap as the
+harness's own `idleReason`, which is painted "finished" at every Stop. A return keyed on that flag
+alone would cut a live session off mid-flight and land a half-finished branch, which is worse than
+never returning. So RETURN-READY is a **conjunction of three independent facts**: the VM has pushed
+(cc-cloud's verdict), the worker is not running (the *trigger*), and the pushed sha has been **quiet
+for 180 s** — the third being the axis that is independent of the flag, which is the only reason it
+carries any weight.
+
+🚨 **The poller cannot be the originator, and this is a hard constraint rather than a preference.**
+A goal-armed session may not hold a backgrounded watcher at all: Claude Code skips `/goal` evaluation
+while any non-terminal background Bash exists, and `hooks/validate-bash.sh` denies the park outright.
+So the poller lives in **launchd** — `scripts/autonomy-sweep.sh` (com.chrisren.autonomy-sweep, loaded,
+300 s) calls `cloud-return.sh --sweep`, **above** the nothing-new early exit, because a finished cloud
+session produces no page and no alarm and would otherwise be measured only on sweeps that already had
+other news. The wake itself rides the same v2 inbox transport a local peer uses.
+
+**The sweep's population is what the sweep armed.** `--sweep` acts only on declarations carrying
+`notify_back` or `custody`. Twenty-plus pre-W2 declarations exist on this box, several with pushed,
+never-landed branches; sweeping those would be the script deciding unattended that a three-day-old
+stranded branch belongs on trunk. `--id` still lands one a person names.
+
+**What is guarded, and what it cost to find.** Every arm that could launder a false completion is
+pinned: an unreadable control plane abstains; a lander that reports success while landing nothing is
+caught by the content check, with custody and the backlog item both left OPEN over it; a refused land
+does not latch, so the next sweep retries. Two defects were found by the suite rather than by reading
+— a fill whose missing-tool branch returned 0 *silently* (a caller muting its callee's non-verdict),
+and a wiring test that grepped the phrase `nothing-new`, which appears in three comments **above** the
+exit it names, so it measured a sentence and convicted a correct call site.
+
+⚠️ **A goal probe runs with cwd = the declared repo, which is a working tree somebody else owns.**
+Write probes against the trunk ref (`git show origin/main:<path> | grep -q …`), not the working tree:
+a bare `grep -q X path` grades whatever happens to be checked out, and grep's exit 2 (no such file) is
+indistinguishable here from a real miss — so a probe can read NOT-MET over work that landed perfectly.
+
 ## Status log
 
 - **2026-08-11** — plan opened. Arm proven end-to-end (create + land + 4 items landed); pipeline

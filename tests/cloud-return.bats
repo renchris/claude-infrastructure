@@ -326,3 +326,35 @@ seen_at() { # <epoch>
   run "$SUT" --nonsense
   [ "$status" -eq 2 ]
 }
+
+# ══ THE CALLER ══════════════════════════════════════════════════════════════════════════════════
+# This repo's most-repeated defect is a correct tool with ZERO CALLERS — a7bf7068's falsifier
+# emitter, 596b39a7's cluster detector and settings-drift-assert.sh all landed inert, and the last
+# one had been correct-and-uncalled for its entire life. A return path nothing invokes is exactly
+# that shape: every arm above would stay green while no cloud session was ever returned. These two
+# arms assert the WIRING, and they are structural on purpose — running the real 300 s sweep here
+# would cost more than the suite it lives in.
+
+@test "autonomy-sweep INVOKES cloud-return --sweep (a return path nothing calls returns nothing)" {
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  grep -q 'cloud-return.sh' "$sweep"
+  grep -q -- '--sweep' "$sweep"
+}
+
+@test "…and it is called ABOVE the nothing-new early exit, where a quiet fleet still reaches it" {
+  # A finished cloud session produces no page and no alarm — it is silent by construction — so a
+  # call site below `total_new -eq 0` would run only on sweeps that already had other news, which
+  # on a quiet store is never. Same placement rule, and same reason, as the backlog-health block.
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  # Both anchors are CODE, not prose. The first cut of this test grepped the phrase "nothing-new",
+  # which appears in three COMMENTS above the exit it names — so it measured a sentence and reported
+  # the call site as too late. Anchor on the mechanism: the assignment that names the tool, and the
+  # `total_new` test that IS the early exit.
+  local call_line exit_line
+  call_line="$(grep -n 'cloud-return.sh' "$sweep" | head -1 | cut -d: -f1)"
+  exit_line="$(grep -n 'total_new" -eq 0' "$sweep" | head -1 | cut -d: -f1)"
+  [ -n "$call_line" ] && [ -n "$exit_line" ]
+  [ "$call_line" -lt "$exit_line" ]
+}
