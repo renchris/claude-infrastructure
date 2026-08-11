@@ -1,0 +1,13 @@
+# 10 · Red-team of the synthesis — verdict
+
+**VERDICT: DENTS — no core claim breaks; three weaknesses survive.**
+
+Verified at origin: the 507 refutation (`scaling-bottlenecks-2026-08-09/08-platform-terms.md:96-97` — 5,073 ps-RSS ÷ 10, no attribution; `census-fleet.md:384-401`), all five daemon-rejection grounds (mutex `06-daemon-multiplex.md` §3.3/§7.1; #926; 6.05 s `05-transports.md:212`; SSE broadcast `06` §4), and every spot-checked number (2,384/0 calls, 79 worktrees, fnm 12,105/55,631, 0.39%, #45880). The fleet-mix attack FAILS: reso-dominance makes the daemon WORSE (serial queue ≈100% utilization at 100×1 call/min, `06:318-321`; one browser/process) while zero-entry/B2 are share-invariant — "the fix is the stanza" survives.
+
+**D1 — The headline overrides its own artifact, unadjudicated.** 07's verdict: "KEEP-SCOPED … lifecycle unchanged", "Correct scope already" (`07-server-verdicts.md:105,117`), usage "heavily used and accelerating" (53/73 invokers ≤7 d). Synthesis §5.1 deletes the stanza citing 07 §C1-C2; §7 adjudicates 06-vs-others but never 07-vs-H. Invoking dirs are ~24 scattered ephemeral worktrees (`07:244-247`) — "gate to the QA dirs" has no stable target; opt-in friction lands on the hottest measured MCP workflow while the free wins alone recover ~60% of each chain. Survives only because opt-in + reso-owner parity confirmation are retained.
+
+**D2 — "Hosting share 9-16%, three censuses" is partly a denominator artifact.** 12% = 4/33 where 33 = 15 sessions + 18 teammates (`census-fleet.md:387`; one "host" is subagent 73566); 9% = 3/32, same mixed population (01 counted 19+13=32 that night and rules claude.exe NOT sessions, `01-census-trees.md:104-120`). Session-only share ≈ 16-20% ⇒ at-150 MCP ≈ 5-10 GB, not 5-7. Same defect in session footprint: 249 MB (`08` §0, 227.7-267.1) vs 353 MB (`01` §8, 267-442) — non-overlapping same-night ranges blended into "37-53 GB"; MCP is 10-19% of session cost, not "~10%". Verdict-neutral, but two §2 rows assert convergence the artifacts don't show.
+
+**D3 — Claim 2 measures residency while its own corpus puts MCP inside the killer mechanism.** The 08-09 panic window's 2,248 MB×4 renderers were puppeteer under chrome-devtools-mcp — "budget browser cost as an EVENT … ~2.4 GB burst" (`census-fleet.md:417-419`); renderer peak 412 vs 52 MB (`01` §9); 13 chains ≈ 4 GB per reso wave (`session-cost.md:111`). The adopted remedies happen to also kill the burst face; the "5-7 GB, not first-order" framing never names it.
+
+Minor: rejection ground 4 credits zero-entry with spill-invisibility that `08` §6 grants only to remote — H's local-CDP capability still cliffs off-box.
