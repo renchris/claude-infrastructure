@@ -23,33 +23,61 @@ TASKS_INDEX="${CC_TASKS_INDEX:-$CC_CONFIG_DIR/tasks-index.json}"
 # non-project context), falls back to global-most-recent.
 #   Args: $1 = project dir (default $CLAUDE_PROJECT_DIR), $2 = index (default $TASKS_INDEX)
 # Prints the task list ID (directory basename), or empty string if none found.
+# PERFORMANCE (DESK_ROUTER_AND_STARTUP_V1 W0). This function used to fork one `jq` per
+# task-list DIRECTORY, each re-reading the WHOLE index, plus `basename` + `ls -t` + `head`
+# + `stat` per directory — ~2,400 dirs × a 136 KB index ≈ 21 s to select ~25 entries. It is
+# on the SessionStart critical path via setup-task-symlinks.sh, whose own `timeout: 5` then
+# killed the hook mid-flight and DISCARDED the work (`_current`, `.active-list-id` and
+# TASKS.md are all written after this call), every session start, every project, every
+# config dir, including every /clear. Rewritten to ONE index read plus pure-bash mtime
+# comparison: measured 21.2 s -> 0.09 s on the live store, identical answer.
+#
+# Two invariants the rewrite deliberately preserves, because the tests pin them:
+#   * The DIRECTORY GLOB stays the iteration order, and the index is only a membership
+#     test. Reordering to the index's key order would change which list wins an mtime tie
+#     (jq object order is insertion order, not the glob's collation).
+#   * `-nt` is strictly-newer, exactly like the previous `-gt` on stat mtimes, so the
+#     earliest candidate in glob order still wins a tie.
+# The membership set is a |-delimited string, not `declare -A`: the shebang is /bin/bash,
+# which on macOS is 3.2.57 with no associative arrays (same reason as session-end.sh:161).
 find_active_list() {
     local proj="${1:-${CLAUDE_PROJECT_DIR:-}}"
     local index="${2:-$TASKS_INDEX}"
-    local best="" best_time=0
+    local best="" best_file="" dir listid tj mapped_set=""
+
+    if [ -n "$proj" ]; then
+        # Unmapped lists and a missing index ⇒ no match (never a global fallback).
+        [ -f "$index" ] || { echo ""; return 0; }
+        local mapped
+        mapped=$(jq -r --arg p "$proj" \
+                   '.taskLists | to_entries[] | select(.value.project == $p) | .key' \
+                   "$index" 2>/dev/null)
+        [ -n "$mapped" ] || { echo ""; return 0; }
+        while IFS= read -r listid; do
+            [ -n "$listid" ] && mapped_set="${mapped_set}|${listid}|"
+        done <<EOF
+$mapped
+EOF
+    fi
+
     for dir in "$TASKS_DIR"/*/; do
         [ ! -d "$dir" ] && continue
-        local listid
-        listid=$(basename "$dir")
-        # Project scoping: skip lists not mapped to this project.
+        listid="${dir%/}"; listid="${listid##*/}"
         if [ -n "$proj" ]; then
-            local mapped=""
-            [ -f "$index" ] && mapped=$(jq -r --arg k "$listid" '.taskLists[$k].project // ""' "$index" 2>/dev/null)
-            [ "$mapped" = "$proj" ] || continue
+            case "$mapped_set" in
+                *"|$listid|"*) : ;;
+                *) continue ;;
+            esac
         fi
-        # Any numeric .json files? (task files are 1.json, 2.json, etc.)
-        local latest
-        # SC2012: filenames are controlled (numeric N.json) → ls -t is the simplest
-        # portable mtime sort; find has no BSD-portable -printf mtime ordering.
-        # shellcheck disable=SC2012
-        latest=$(ls -t "$dir"/[0-9]*.json 2>/dev/null | head -1)
-        [ -z "$latest" ] && continue
-        local mtime
-        mtime=$(stat -f %m "$latest" 2>/dev/null || echo "0")
-        if [ "$mtime" -gt "$best_time" ]; then
-            best_time=$mtime
-            best=$listid
-        fi
+        # Task files are 1.json, 2.json, … — `-nt` is a shell builtin, so the whole
+        # newest-file scan costs zero forks.
+        for tj in "$dir"[0-9]*.json; do
+            [ -e "$tj" ] || continue
+            if [ -z "$best_file" ] || [ "$tj" -nt "$best_file" ]; then
+                best_file="$tj"
+                best="$listid"
+            fi
+        done
     done
     echo "$best"
 }

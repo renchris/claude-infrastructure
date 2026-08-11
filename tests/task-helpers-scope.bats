@@ -69,6 +69,54 @@ add_map() {
   [ "$output" = "listB" ]                      # newest, unfiltered
 }
 
+# ── find_active_list invariants the W0 single-index-read rewrite must preserve ──────
+# The seven cases above pass on BOTH the pre-W0 (one jq fork per directory) and the
+# rewritten (one index read + pure-bash `-nt`) implementation, so on their own they
+# credit the rewrite with nothing. These three pin the axes the rewrite actually moved.
+
+@test "find_active_list picks the NEWEST of several lists mapped to the SAME project" {
+  # No case above gives one project more than one list, so max-selection WITHIN a
+  # project — the whole point of the mtime scan — was untested.
+  mk_list listA 202601010000 pending
+  mk_list listB 202606150000 pending
+  mk_list listC 202603010000 pending
+  add_map listA "$PA" projA
+  add_map listB "$PA" projA
+  add_map listC "$PA" projA
+  run find_active_list "$PA" "$CC_TASKS_INDEX"
+  [ "$output" = "listB" ]
+}
+
+@test "an mtime tie resolves by DIRECTORY GLOB order, not index key order" {
+  # The rewrite reads the index once and uses it as a membership test only, keeping the
+  # glob as the iteration order. An implementation that iterated the index's own keys
+  # instead would return listB here, because jq preserves insertion order and listB is
+  # inserted first. `-nt` is strictly-newer, so the first candidate in glob order wins.
+  mk_list listA 202601010000 pending
+  mk_list listB 202601010000 pending          # identical mtime
+  add_map listB "$PA" projA                   # inserted into the index FIRST
+  add_map listA "$PA" projA
+  [ "$(jq -r '.taskLists | keys_unsorted | .[0]' "$CC_TASKS_INDEX")" = "listB" ]
+  run find_active_list "$PA" "$CC_TASKS_INDEX"
+  [ "$output" = "listA" ]
+}
+
+@test "a mapped list whose DIRECTORY is gone is skipped, not returned" {
+  # Real condition, not hypothetical: setup-task-symlinks.sh carries its own prune loop
+  # precisely because index entries outlive their directories.
+  # HONEST COVERAGE NOTE: unlike the two cases above, this one is NOT mutation-proven —
+  # it survived both single-fault mutants tried (index-order iteration; oldest-wins),
+  # because bash's `-nt` already reports an existing file as newer than a missing one,
+  # so a real list beats a phantom on ordering alone. It takes a two-fault rewrite
+  # (iterate the index AND drop the -e guard, with no real list mapped) to return
+  # listGone. Kept as a documented invariant guard, not as evidence.
+  mk_list listA 202601010000 pending
+  add_map listA "$PA" projA
+  add_map listGone "$PA" projA                # indexed, never created on disk
+  run find_active_list "$PA" "$CC_TASKS_INDEX"
+  [ "$output" = "listA" ]
+}
+
 @test "--all-open rollup lists every project's open task lists" {
   mk_list listA 202601010000 pending
   mk_list listB 202601020000 in_progress
