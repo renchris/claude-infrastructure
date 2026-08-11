@@ -58,6 +58,9 @@ construction, so the reach arm would answer REACHABLE to everything — and `--a
 
 Verbs:
   assess <id> [--json]    the decision for ONE item. Never writes. exit 0 always.
+  label <id>              assess ONE item and WRITE the decision. The only way to record a route
+                          for a row `run` skips (it is open-only, because routing informs a
+                          dispatch and blocked work reaches none).
   run [--apply] [--json] [--project P] [--limit N]
                           decide over every OPEN item. DRY BY DEFAULT — prints the plan and the
                           counts; `--apply` writes the labels via `cc-backlog venue`.
@@ -273,6 +276,30 @@ def cmd_assess(item_id, as_json):
     sys.exit(0)
 
 
+def cmd_label(item_id):
+    """Assess ONE item and WRITE its decision. The companion to `assess`, and the only way to
+    record a routing decision for a row `run` does not consider.
+
+    `run` is open-only because routing exists to inform a dispatch and blocked work reaches none —
+    that default is right and is not relaxed here. But a BLOCKED row is still a real classification
+    a reader may want persisted (the whole GitHub class in this store is operator-blocked, so it is
+    invisible to every `run`), and the alternative to this verb is a human composing the record by
+    hand from the assess output — which is a second producer, mint-your-own-why, with no guarantee
+    it matches what the predicate said. Same decide(), same actuator, one item.
+    """
+    idx = build_index()
+    d = decide(item_id, idx)
+    if d["token"] == CE.UNKNOWN_ITEM:
+        sys.stderr.write("cc-venue label: %s is not in the ledger\n" % item_id)
+        sys.exit(3)
+    ok, msg = write_label(item_id, d["venue"], why_of(d))
+    sys.stdout.write("%s → %s\n  %s\n" % (item_id, d["venue"], why_of(d)))
+    if not ok:
+        sys.stderr.write("cc-venue label: NOT written — %s\n" % msg)
+        sys.exit(4)
+    sys.exit(0)
+
+
 def cmd_run(argv):
     apply_ = "--apply" in argv
     as_json = "--json" in argv
@@ -403,6 +430,11 @@ def main():
             sys.stderr.write("cc-venue assess: <id> is required\n")
             sys.exit(2)
         cmd_assess(rest[0], "--json" in rest)
+    elif verb == "label":
+        if not rest:
+            sys.stderr.write("cc-venue label: <id> is required\n")
+            sys.exit(2)
+        cmd_label(rest[0])
     elif verb == "run":
         cmd_run(rest)
     else:

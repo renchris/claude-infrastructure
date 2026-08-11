@@ -293,3 +293,29 @@ EOF
   [ "$(plan_of "$id")" = cloud ] \
     || { echo "the gate suppressed a write the actuator would have taken"; false; }
 }
+
+@test "21 label routes ONE item, including a row run skips — same decide(), same actuator" {
+  mkrepo
+  local id; id="$(add "open a pull request against the upstream repo")"
+  "$CB" block "$id" --needs "an operator has to own this" >/dev/null 2>&1
+  # `run` is open-only and must stay so: routing exists to inform a dispatch, and blocked work
+  # reaches none. Pinned here rather than assumed, because `label` only earns its place if the
+  # default it works around is real.
+  run "$CV" run --json
+  echo "$output" | jq -e --arg i "$id" '[.decisions[].id] | index($i) | not' >/dev/null \
+    || { echo "run should skip blocked work: $output"; false; }
+
+  run "$CV" label "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(plan_of "$id")" = local ] || { echo "$(plan_of "$id")"; false; }
+  [[ "$(why_of "$id")" == "ineligible-github: "* ]] || { echo "$(why_of "$id")"; false; }
+  # …and the why is BYTE-IDENTICAL to what assess computed: one producer, not two.
+  [ "$(why_of "$id")" = "$("$CV" assess "$id" --json | jq -r .why)" ] \
+    || { echo "label and assess disagree — that is a second producer"; false; }
+}
+
+@test "22 label on an unknown id is rc 3, not a silent no-op" {
+  mkrepo
+  run "$CV" label nosuchid0000
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+}
