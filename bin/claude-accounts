@@ -1891,7 +1891,15 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None):
                             f"{_fresh_lock_wait_s(cfg):.0f}s: a live holder is wedged.")
                     time.sleep(0.15)
         if not fresh:
-            c = cache_read(cfg, want_heal=not no_heal)
+            # grace_s=max_age, NOT the default TTL. This post-lock re-read exists to catch the
+            # case where another caller swept while we waited, but it must honour the SAME
+            # staleness bound the caller asked for. Passing no bound here meant `--max-age 30`
+            # was silently upgraded to the 90s default the moment the first read missed — which
+            # made the keep-warm producer a NO-OP: every tick found a <90s cache at this line,
+            # reported "served-cache", and never refreshed, so the cache expired anyway and the
+            # daemon's entire job went undone while it logged success. Measured on --max-age 0,
+            # which served a 15s cache instead of sweeping.
+            c = cache_read(cfg, want_heal=not no_heal, grace_s=max_age)
             if c:
                 return c["rows"], c["window"], True, c.get("prev")
         prev = _prev_snapshot(cfg)
@@ -3016,6 +3024,36 @@ def main():
     # do, so it must never perform an account operation itself as a side effect of being read.
     no_heal = "--no-heal" in args or "--relogin-status" in args
 
+    if "--keepwarm" in args:
+        # PRODUCER for com.claude.accounts-keepwarm. Its whole job is to keep the shared cache
+        # inside its TTL so that readers on the interactive launch path (--max-wait 0) find
+        # something to serve instead of abstaining.
+        #
+        # A FLAG, not a new scripts/*.sh, and that is a deployment fact rather than taste:
+        # ~/.claude/bin/claude-accounts already exists as a symlink into the checkout, so a flag
+        # is an EDIT that rides it and converges on the trunk fast-forward. A new script file is
+        # an ADD with no symlink — absent from every path the box can reach — so the plist's
+        # ProgramArguments would point at nothing and the job would fail every single tick.
+        #
+        # REFRESH-AHEAD, not refresh-on-expiry. Sweeping only once the cache has already expired
+        # leaves a hole: with StartInterval 60 against a 90s TTL, a tick at t=60 sees age 60 (<90,
+        # no sweep) and the next is at t=120 — so the cache is stale for the whole t=90..120
+        # window and every reader in it abstains. Passing `--max-age <interval/2>` makes the
+        # producer refresh while the cache is still valid, which is the only arrangement where a
+        # consumer never sees an expired one.
+        #
+        # Deliberately NOT --no-heal: cache_read refuses a no-heal payload to a heal-wanting
+        # caller whenever any row is BAD_AUTH, so a no-heal producer would poison the cache for
+        # every other consumer exactly on the day one account is logged out — the day it matters.
+        t0 = time.time()
+        rows, _wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,
+                                                max_age=max_age)
+        age = _quota_age_s(cfg)
+        print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
+              f"age_s={age if age is not None else '-'} "
+              f"took_ms={int((time.time() - t0) * 1000)}")
+        return
+
     if "--relogin-info" in args:
         if args.index("--relogin-info") + 1 >= len(args):
             sys.exit("claude-accounts: --relogin-info requires an account name")
@@ -3074,8 +3112,13 @@ def main():
     # text or its indentation silently turns that patch into a no-op and the test then exercises a
     # different program than it claims to. That is why FreshLockWedged is handled at the __main__
     # entry instead of wrapped around this call. Keep it byte-identical.
-    rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal,
-                                      max_wait=max_wait, max_age=max_age)
+    # 🚨 SOURCE-PATCH ANCHOR — keep this call on ONE line, verbatim.
+    # tests/claude-accounts-core.bats replaces this exact string to inject fixture rows. A literal
+    # replace of a string that is no longer there is a SILENT no-op: the patch does not apply, the
+    # test runs the unpatched program against live data, and it fails for a reason that has nothing
+    # to do with what it is testing. Reformatting this across two lines did exactly that (2026-08-10)
+    # — the same trap the FreshLockWedged handler at the bottom of this file already documents.
+    rows, wj, cached, prev = get_data(cfg, fresh, no_heal, max_wait, max_age)
     mark_self(rows, cfg)                          # per-invocation: MUST be after the cache read
     refresh_login_countdown(rows)                 # ditto — a cached countdown is a stale one
     apply_assignments(rows, cfg)                  # ditto — phantoms must act INSIDE the cache TTL
