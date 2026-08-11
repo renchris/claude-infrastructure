@@ -167,3 +167,9 @@ it burns quota, produces a plausible-looking wrong answer against missing histor
   absent. Gaps enumerated from live failures, not speculation; filed `4f2eaa26ae83`,
   `6ad6ec4121d2`, `a435e3987fbf`. Cost measured for the cloud arm; local arm deliberately unmeasured.
   Next: W1 (venue producer, local session) + W2 (management rails) concurrently.
+- **2026-08-11 (dispatch)** — W1 fired → pane 347 / next3 / worktree `w1-venue-producer`; W2 fired →
+  pane 348 / next2 / worktree `w2-cloud-rails`; W4 fired → pane 349 / next3 / worktree `w4-cost-ab`.
+  All three goal-armed (verified from their own transcripts) with custody open against the lead
+  (pane 345). W2 owns the three filed gap items; W4 measures §4's open question. W3 holds for W2's
+  return path. One fire-lint lesson: a brief that NAMES the notify binary without a resolvable
+  target is refused (F3) — reference the rail generically, the fire materializes the trailer.
