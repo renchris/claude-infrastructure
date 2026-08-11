@@ -19,6 +19,43 @@ Status: DESIGN 2026-07-28 · owner session e891e080 · branch `land-pipeline-v2`
 > the hold). **Read that doc before re-opening any land-congestion question here**; it also
 > re-grades this plan's §7 acceptance and flags §8's merge-queue rejection ground as decayed.
 
+### Implementation wave 2026-08-10/11 — what landed, and one audit figure that is now false
+
+Shepherded from pane 113 (session ff519bfd, recycled onto next4). Landed and content-verified
+(`git ls-tree origin/main` present + `git diff <sha> origin/main` empty on every changed path —
+never a commit count, which reads 0 after a sibling rebase and proves nothing):
+
+| Item | Landed | Measured outcome |
+|---|---|---|
+| P1 empty-the-mutex | `145fab7d` | in-lock hold **72s → 3s**; sweep+reap moved post-release, reap made atomic (reap-mutex + generation recheck, H2 unweakened), in-lock fetch/push bounded, 640-branch fixture |
+| P6 converge-completeness | `52761c20` + `4b5d1412` | parity covers **all 19** install.sh classes (was 5), incl. the `~/.claude/CLAUDE.md` cp leg; UNGATED verdict files; copy-classes get detection only, deliberately never an `ln -sf` |
+| P5 **R7 arm only** | `863089e5` | deploy refusal escalates on repetition instead of damping forever; 13 tests measured RED pre-fix; a quiet-half control proves a low-count refusal still stays silent |
+
+🚨 **§2.E's scan-window figure is FALSIFIED — do not inherit it.** The audit says the newest
+on-trunk green sits **320 commits down** vs `SCAN_N=200`, concluding T1 is *structurally blind*.
+Replayed 2026-08-11 against the real 147-stamp store, the newest green sits at **depth 12 —
+inside the window**. The famine is real but its culprit is **verifier-lag**, not scan-window
+blindness, and the landed R7 escalation reports it that way (`culprit=verifier-lag`) rather than
+asserting the audit's number. A remedy keyed on "widen `SCAN_N`" would aim at the wrong
+mechanism. (Related: P7's own erratum corrects §2.I/§3-P7, where the lane searched for a
+checkpoint collector *by spelling* and recorded its absence as fact — one already existed at
+`hooks/teammate-checkpoint.sh:153-248`.)
+
+**The live layer is operator-gated, not merely lagging.** P1's mutex fix is on trunk but the
+fleet still pays the old hold, because `deploy-live.sh` refuses: no GREEN tree descends from live
+HEAD. That is the bootstrap circle already filed and BLOCKED twice — `3df911c0470e` and
+`54b1c02d7872` — both needing the same one-time forced advance past the fail-closed gate, and
+both recording that a **raw fast-forward is explicitly not the move** (`04470b5d`: it wedges
+deploy and resets both alarm legs). ⚠️ Both items' texts have since rotted on the numbers (they
+name live HEAD `dec39a391362` / `ed095d4b`; the layer has moved on) — re-measure before acting,
+never quote them. The irony is load-bearing: the escalation built to page on this famine cannot
+page until the layer it exists to unblock advances.
+
+Remaining, serialized by file ownership of `scripts/ship-land.sh`: **P4** (loud lifecycle) in
+flight; then **P3** (blob-sha statics memo) → **P2** (shift-left statics + own-diff blocking-leak
+audit) → **P0** (self-measurement). Briefs for P3/P2/P0 are written but deliberately unfired —
+each must read the *current* `ship-land.sh`, since every predecessor reshapes it.
+
 ---
 
 ## Phase 0 — Agent Team Orchestration
