@@ -109,7 +109,9 @@ BINDIR="${CC_PARITY_BINDIR:-$HOME/bin}"
 # Tools that MUST be symlinks into the repo (drift is structurally impossible once linked).
 STRICT_TOOLS="${CC_PARITY_STRICT:-claude-accounts}"
 # Tools deployed as copies — compared by content; a difference is drift, not an error.
-COPY_TOOLS="${CC_PARITY_COPY:-claude-latest claude-update claude-versions browsermcp-wrapper.sh claude-kimi}"
+# browsermcp-wrapper.sh left this list when the server was retired (2026-08-11) — a parity list that
+# names a file the repo no longer ships reports drift forever, which is how a guard stops being read.
+COPY_TOOLS="${CC_PARITY_COPY:-claude-latest claude-update claude-versions claude-kimi}"
 
 drift=0
 noverdict=0

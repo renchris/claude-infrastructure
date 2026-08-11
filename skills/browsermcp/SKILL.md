@@ -1,10 +1,19 @@
 ---
 name: browsermcp
 description: >-
-  Browser-automation setup + tooling reference — BrowserMCP (primary) and the agent-browser CLI (fallback), plus the Vercel knowledge-skill pointers. Load when automating a browser (navigating, clicking, filling forms, taking screenshots, extracting page data) or when BrowserMCP tools fail. Covers the mcp__browsermcp__* tool list and the navigate → snapshot → use-ref → click/type workflow, the wrapper-script + Chrome-extension setup, the .mcp.json project config, and the troubleshooting decision tree (tools unavailable after /compact → start a fresh session; wrapper script fails → remove + re-add the server; extension not connecting → reinstall, pin, connect per tab); the agent-browser CLI commands for when MCP is unavailable; and the react-best-practices / vercel-design-guidelines auto-triggering knowledge skills. Triggers: "automate the browser", "take a screenshot of the page", "fill this form", "navigate to", BrowserMCP tool errors, "No such tool available" for browser tools. This is the MCP-primary path (prefer BrowserMCP over Playwright); NOT the standalone agent-browser skill (the CLI fallback this skill points to when MCP is unavailable).
+  Browser-automation setup + tooling reference — RETIRED SERVER, LIVE DECISION TREE: the BrowserMCP server was eliminated 2026-08-11 and the agent-browser CLI is now the primary path; the mcp__browsermcp__* sections below are history. Load when automating a browser (navigating, clicking, filling forms, taking screenshots, extracting page data) or when BrowserMCP tools fail. Covers the mcp__browsermcp__* tool list and the navigate → snapshot → use-ref → click/type workflow, the wrapper-script + Chrome-extension setup, the .mcp.json project config, and the troubleshooting decision tree (tools unavailable after /compact → start a fresh session; wrapper script fails → remove + re-add the server; extension not connecting → reinstall, pin, connect per tab); the agent-browser CLI commands for when MCP is unavailable; and the react-best-practices / vercel-design-guidelines auto-triggering knowledge skills. Triggers: "automate the browser", "take a screenshot of the page", "fill this form", "navigate to", BrowserMCP tool errors, "No such tool available" for browser tools. This is the MCP-primary path (prefer BrowserMCP over Playwright); NOT the standalone agent-browser skill (the CLI fallback this skill points to when MCP is unavailable).
 ---
 
-## BrowserMCP
+> 🚨 **BrowserMCP was RETIRED on 2026-08-11.** No `mcp__browsermcp__*` tool exists in any session any
+> more — the server is gone from every config site and `bin/browsermcp-wrapper.sh` is `git rm`'d. It
+> was not merely unused but unusable: **0 invocations across 3,504 transcripts / 30 days**, upstream
+> frozen 2025-04-11, and a port-9009 `kill -9` singleton that makes per-session spawning invalid by
+> construction. **Use the `agent-browser` CLI** (§ agent-browser below) — or attach
+> `chrome-devtools-mcp --browserUrl` to a running Chrome when a task genuinely needs the MCP tool
+> surface (skills: `dia-agent`, `autonomous-authenticated-web-access`). Everything in the next
+> section is kept as history: it is how the tool surface was shaped, not what you can call today.
+
+## BrowserMCP (historical — server retired 2026-08-11)
 
 Use BrowserMCP (not Playwright) for browser automation:
 
