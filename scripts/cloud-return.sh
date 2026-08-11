@@ -385,35 +385,56 @@ handle() { # <row-json> → prints outcome lines
 }
 
 # ── the pass ─────────────────────────────────────────────────────────────────────────────────────
+# 🚨 THE ADMISSION READ IS DISK-ONLY, AND IT COMES FIRST. `cc-cloud list` without `--state` performs
+# no probe at all; `poll` and `--state` each cost a bounded `git ls-remote` PER DECLARATION (20 s
+# apiece). The first cut polled before deciding whether it had anything to do, so a box with 40
+# historical declarations and ZERO managed ones spent minutes of network per pass — and inside
+# tests/autonomy-sweep.bats, which runs the real sweep once per test, that turned a 2-minute suite
+# into an unfinishable one. Deciding on disk that there is nothing to do costs one directory read.
 lock_acquire || { warn "another pass holds the lock — skipping (this is single-flight by design)"; exit 4; }
 printf '%s\n' "$(now)" >"$LOCK/at" 2>/dev/null
 trap 'lock_release' EXIT INT TERM
 
-# cc-cloud's `poll` is the ONLY writer of the push-history sidecar, and step 3 above cannot decide
-# anything without it. Calling the owner's mutator is the whole point — a local copy of "has this
-# sha moved" would be a second opinion about the one fact this rail turns on.
-"$CLOUD_BIN" poll >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
-
-ROWS="$("$CLOUD_BIN" list --json --state 2>/dev/null)"
-if [ -z "$ROWS" ]; then
+INVENTORY="$("$CLOUD_BIN" list --json 2>/dev/null)"
+if [ -z "$INVENTORY" ]; then
   say "(no cloud sessions declared)"
   exit 0
 fi
 
 if [ "$MODE" = one ]; then
-  ROW="$(printf '%s\n' "$ROWS" | jq -c --arg i "$ONE" 'select(.id == $i)' 2>/dev/null | head -1)"
-  [ -n "$ROW" ] || { warn "no declaration for '$ONE'"; exit 2; }
+  WANT="$(printf '%s\n' "$INVENTORY" | jq -c --arg i "$ONE" 'select(.id == $i)' 2>/dev/null | head -1)"
+  [ -n "$WANT" ] || { warn "no declaration for '$ONE'"; exit 2; }
+else
+  # The MANAGED population — see "THE SWEEP'S POPULATION IS WHAT THE SWEEP ARMED" above.
+  WANT="$(printf '%s\n' "$INVENTORY" | jq -c 'select(.retired != true)
+    | select((.notify_back // "") != "" or (.custody // "") != "")' 2>/dev/null)"
+  if [ -z "$WANT" ]; then
+    say "(no MANAGED cloud declarations — a fire opts in by recording notify_back/custody at declare time)"
+    exit 0
+  fi
+fi
+
+# Only now — with a non-empty population — does the network get touched. `poll` is the ONLY writer
+# of the push-history sidecar and step 3 cannot decide anything without it; calling the owner's
+# mutator is the point, since a local copy of "has this sha moved" would be a second opinion about
+# the one fact this rail turns on.
+"$CLOUD_BIN" poll >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
+
+ROWS="$("$CLOUD_BIN" list --json --state 2>/dev/null)"
+[ -n "$ROWS" ] || { warn "the state read returned nothing after a non-empty inventory — abstaining"; exit 0; }
+
+# Re-select the same ids from the STATE-bearing rows: the admission decision was made on disk, and
+# the verdicts have to come from the arbiter that probes.
+IDS="$(printf '%s\n' "$WANT" | jq -r '.id')"
+MANAGED="$(printf '%s\n' "$ROWS" | jq -c --argjson want "$(printf '%s\n' "$IDS" | jq -R . | jq -sc .)" \
+  'select(.id as $i | $want | index($i))' 2>/dev/null)"
+if [ "$MODE" = one ]; then
+  ROW="$(printf '%s\n' "$MANAGED" | head -1)"
+  [ -n "$ROW" ] || { warn "no state row for '$ONE'"; exit 2; }
   handle "$ROW"
   exit 0
 fi
-
-# The MANAGED population — see "THE SWEEP'S POPULATION IS WHAT THE SWEEP ARMED" above.
-MANAGED="$(printf '%s\n' "$ROWS" | jq -c 'select(.retired != true)
-  | select((.notify_back // "") != "" or (.custody // "") != "")' 2>/dev/null)"
-if [ -z "$MANAGED" ]; then
-  say "(no MANAGED cloud declarations — a fire opts in by recording notify_back/custody at declare time)"
-  exit 0
-fi
+[ -n "$MANAGED" ] || { say "(no MANAGED cloud declarations)"; exit 0; }
 
 N=0
 while IFS= read -r ROW; do
