@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # CLOUD BACKLOG PIPELINE — cc-backlog drained end-to-end through Anthropic cloud VMs
@@ -404,6 +404,36 @@ structural wiring arms (a hermetic suite cannot see whether anything CALLS the s
   (pane 345). W2 owns the three filed gap items; W4 measures §4's open question. W3 holds for W2's
   return path. One fire-lint lesson: a brief that NAMES the notify binary without a resolvable
   target is refused (F3) — reference the rail generically, the fire materializes the trailer.
+- **2026-08-11 (close) — BUILT; §5 acceptance 22/22 against live state** (runner output in the
+  lead's transcript). W1 landed `30e9b189b`: 48 cloud labels / 254 recorded refusals across 8
+  classes on real items; its promoted-bucket audit caught the plan's own rejected brief
+  (`7c6ff16259a0` → the `ineligible-offbox-lane` class). The lead's blind 27-item adjudication
+  then caught 2 producer mislabels → 3 spellings + 6 lookalike-paired tests landed `c459b9ebc`,
+  both items relabeled on the trail — the standing audit is real, run it each wave. W2 landed the
+  rails (custody-at-fire · goal on the declaration judged from this side · wake over the v2 inbox
+  · auto-land · mark-done), demonstrated on two REAL round trips; falsifiers for `6ad6ec4121d2` /
+  `a435e3987fbf` exit 0 on trunk; all three gap items done. W3 landed the refusal loop
+  (`3c9511849`…`8bd23b371`): a real hermeticity red routed to the causing VM, which pushed the
+  lint's own remedy 56 s later; re-land content-verified; 46/46. W4 measured §4's open question —
+  cloud ≈0.81× local price-weighted, parity trending cloud-cheaper, and the a priori case was
+  backwards both ways (the local preamble out-caches the VM's whole session; "spares the lead" is
+  a property of dispatch, not of cloud — cloud is a CAPACITY choice).
+  **Integration findings only the first real fire could produce, all fixed + landed:** the
+  dispatcher's cloud leg was the deprecated CLI create — it delivered NO brief (sessions sat
+  NOT-STARTED forever) and the follow-up declare OVERWROTE the leg's correct declaration with the
+  worktree as branch, so the reconcile watched a branch the VM would never push; and every
+  dispatcher fire was born OUTSIDE the sweep's managed population (no custody/notify-back on the
+  declaration). Fixes: the cloud actuator is now `cc-offload up --via api` (`04bde65ee`), the
+  declare carries item+custody+account+notify-back with custody opened at the fire (`7fa0f1197`),
+  and cloud_declare ADOPTS an existing declaration rather than re-declaring (a late re-declare
+  would also re-probe the push baseline). Fire #1 (`session_01YcTifmgrKh`, item `38de29ec5e59`)
+  is preserved as the forensic stray; its claim self-released clean. Five admission-clogging
+  stale items were retired on the actuator's own premise-refuted verdicts — refused-but-open
+  items burn the whole admission budget every pass (follow-on class, filed by the machinery's
+  own IDL rows). **Operator policy, filed:** the launchd dispatcher runs `CC_FIRE_CLOUD` off, so
+  autonomous cloud spend is opt-in — flipping it is the one decision that turns the pipeline's
+  cron arm fully on. Landed-not-live tail: lag 16/1h inside the 25/6h budget; W3's added route
+  script rides the next converge (`d28f79099ec9`).
 - **2026-08-11** — **W4 DONE.** §4's one unmeasured question is measured: the same brief ran n=2 per
   arm (cloud VM vs local dispatched session, same account, same model) and cloud came in at 0.72×
   local cache reads / 0.82× cache writes / 1.09× output — ≈0.81× price-weighted, but inside the
