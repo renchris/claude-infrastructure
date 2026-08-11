@@ -242,6 +242,48 @@ systematically disagree about the same output, that disagreement is itself the d
 
 ## Status log
 
+- **2026-08-11** — **W3 DONE. VERDICT: REJECT** `gpt-5.6-sol` for `roles.research_adversarial`.
+  Full verdict + every table: `docs/research/codex-probe-w3-verdict-2026-08-11.md`. Recorded in
+  `~/.claude/model-routing-freewin-probe.md` as **T4** (live dotfile, not repo-tracked — nothing to
+  land there). `model-config.yaml` NOT touched; W4 owns the encoding, and on REJECT the encoding is
+  the written rejection.
+  **The one number:** over 36 anchored ground-truth defects, **not one was caught by a Codex arm and
+  neither Claude arm** — at every vote threshold including the ≥1-judge union ceiling. Claude-only
+  = 3. Recall A 9 · B 9 · C 10 · D 13 of 36. Union: A alone 9 · A∪B 11 · A∪C 12 · A∪B∪C 12 ·
+  **A∪D 14** · A∪D∪B **14 (+0)**. Codex is *contained*, not complementary — the plan's REJECT row,
+  reached on the family union rather than on the incumbent alone (against Fable ALONE it is not a
+  subset: B finds 2 and C finds 3 that A misses — but arm D finds every one of them).
+  **Panel:** blind 4-judge mixed-vendor (2× `claude-opus-5`@max, 2× `gpt-5.6-sol`@xhigh),
+  per-(judge,brief) label permutation, all 144 label→arm bindings verified byte-identical
+  post-hoc, default-to-refute, cites checked against the real tree. 36/36 cells scored.
+  **Per-vendor agreement — the mandated first-class result, and it did not land where expected.**
+  On the anchored scoring the vendors agree 98% cross vs 99% within (−1 pp) with **no own-family
+  favouritism in either direction** — so the table the verdict rests on is judge-vendor-independent.
+  The split is entirely on the *unscored/citation* axis, where Codex judges refute 49–69 claims per
+  Codex arm and Anthropic judges refute 2–3. **The decorrelation this probe measured is at the
+  JUDGING layer, not the finding layer**, and a single-vendor panel would have reported one of those
+  readings as a confident number without knowing the other existed.
+  **Mechanical fact under that split** (measured independently of both panels): of 1,420 quoted code
+  lines across all 36 outputs, **zero are absent from the file — no arm fabricated code, Codex
+  included**. But 33–40% of Codex's quoted lines sit >3 lines from the number it cites (Claude arms
+  4–5%), degrading sharply above ~600-line files. Cheap fix if re-probed: line-numbered input.
+  **Robust to the W2 scar** — dropping cp-01 + cp-02 for all arms (the reconstructed arm-C pair, and
+  cp-01 is arm C's best brief) leaves Codex-only at 0 and D ahead of A. Including them is the choice
+  that favours the candidate; it still loses.
+  **Corpus bias stated, not benefited from:** briefs are `MEMORY.md` defects a Claude model already
+  missed once, which tilts the field toward the candidate. It had the friendly field and returned no
+  unique coverage.
+  **W2 constraints honoured:** arm C is a real tier (C>B 7/9, 1.76×) but `ultra`'s relation to the
+  enum's `max` is **UNESTABLISHED** — the W2 table's "max reasoning" wording is refuted and is not
+  relied on here; isolation is *evidence* none of the arms read the repo, not proof none could; cost
+  stays DIRECTIONAL and **no $/finding figure was computed**.
+  🚨 **Follow-on, filed as T5 in the routing ledger — the frontier premium is unearned in this slot
+  and inverted.** Cost anchor `claude-opus-5`@max beat incumbent `claude-fable-5`@xhigh on recall
+  (13 v 9), pairwise non-overlap (5 v 1), unique hits (2 v 0) and citation accuracy (96% v 93%), at
+  half the price. **Not equal-effort** (the arms ran the efforts the ladder assigns them), so this
+  cannot separate "Opus 5 > Fable 5" from "max > xhigh" — the premium is *undemonstrated*, not
+  disproven. T5 = re-run A vs D at matched effort over this same frozen corpus; the corpus, harness
+  and judging pipeline all already exist.
 - **2026-08-11** — **W2 DONE.** 36/36 runs (4 arms × 9 briefs), all `ok:true`, verbatim outputs +
   `index.json` at `tests/fixtures/codex-probe/runs/`, landed `5673145d`. Nothing scored — that is W3.
   Run conditions in `runs/README.md`; read it before judging. Three things W3 must carry:
