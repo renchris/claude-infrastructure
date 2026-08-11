@@ -51,8 +51,16 @@ if [[ "$TASK_SUBJECT" == *"Phase 0"* ]]; then
   [[ -x "$VERIFY_SCRIPT" ]] || VERIFY_SCRIPT="$HOME/Development/reso-management-app/scripts/team/verify-team.sh"
   if [[ -x "$VERIFY_SCRIPT" ]]; then
     log "Phase 0 task detected — running verify-team.sh for $TEAM_NAME"
-    VERIFY_OUTPUT=$("$VERIFY_SCRIPT" "$TEAM_NAME" 2>&1 || true)
-    VERIFY_EXIT=$?
+    # `VERIFY_OUTPUT=$(cmd || true); VERIFY_EXIT=$?` CANNOT FAIL: `|| true` makes the
+    # assignment itself succeed, so $? was always 0 and the rejection branch below was
+    # unreachable — a verify-team.sh exiting non-zero over missing worktrees logged
+    # "verify passed" and let the Phase 0 task complete. The if-form keeps the command's
+    # own status while still not tripping errexit.
+    if VERIFY_OUTPUT=$("$VERIFY_SCRIPT" "$TEAM_NAME" 2>&1); then
+      VERIFY_EXIT=0
+    else
+      VERIFY_EXIT=$?
+    fi
     if [ "$VERIFY_EXIT" -ne 0 ]; then
       log "PHASE 0 VERIFY FAILED for $TEAM_NAME (exit $VERIFY_EXIT) — blocking task"
       echo "QUALITY GATE FAILED: Phase 0 verification failed for team $TEAM_NAME. Fix worktrees / settings / branches before marking Phase 0 task complete:" >&2
