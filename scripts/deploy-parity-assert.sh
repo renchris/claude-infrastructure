@@ -117,6 +117,86 @@ ungated=0
 unverified=0
 report() { printf '  %-9s %-22s %s\n' "$1" "$2" "$3"; }
 
+# ── PER-CLASS ACCOUNTING (2026-08-10, P6) ───────────────────────────────────────────────────────
+# The legs below report PER FILE, which is right for acting on a miss and useless for answering the
+# question this script exists to answer: "is every class install.sh deploys actually covered?". The
+# 5-of-19 hole (§2.E) survived five sessions of readers precisely because a per-file report over a
+# 5-class pathspec is INDISTINGUISHABLE from a per-file report over a 19-class one when both are
+# clean — absence of a row for `agents/*.md` reads exactly like parity for `agents/*.md`. The table
+# renders every class WITH ITS COUNTS, so an unenumerated class shows up as a class that is not
+# there rather than as silence. One row per class; the counts are the evidence.
+#
+# bash 3.2 (the BSD box) has no associative arrays, so rows accumulate as TAB-delimited text and are
+# folded once at render time, in first-seen order.
+CLS_ROWS=""
+cls_row() {   # <class-label> <live|miss|pending>
+  [ -n "$1" ] || return 0
+  CLS_ROWS="$CLS_ROWS$1	$2
+"
+}
+cls_table() {
+  [ -n "$CLS_ROWS" ] || return 0
+  printf '\n  class parity (install.sh deploy classes · tracked ⇒ live)\n'
+  printf '%s' "$CLS_ROWS" | awk -F'\t' '
+    $1 == "" { next }
+    { if (!(($1) in seen)) { seen[$1]=1; order[++n]=$1 }
+      t[$1]++; if ($2=="live") l[$1]++; else if ($2=="pending") p[$1]++; else m[$1]++ }
+    END { for (i=1; i<=n; i++) { c=order[i]
+            s = (m[c]+0 > 0) ? "MISS" : ((p[c]+0 > 0) ? "PEND" : "ok")
+            printf("  %-9s %-22s %d tracked · %d live · %d missing%s\n",
+                   s, c, t[c], l[c]+0, m[c]+0,
+                   (p[c]+0 > 0) ? sprintf(" · %d staged-pending", p[c]) : "") } }'
+}
+
+# ── FILING: a verdict that only PRINTS reaches nobody (2026-08-10, P6) ──────────────────────────
+# The UNGATED provenance finding has printed on every tick for weeks and filed nothing, so it lives
+# only in a log nobody folds into a close: measured 601 refusals with zero escalation. A finding
+# that is not in a STORE is not surfaced — the same law the close protocol states for operator-only
+# steps ("prose is where it gets buried"). These file into cc-backlog, the sanctioned store, which a
+# renderer already reads.
+#
+# THREE PROPERTIES, each one load-bearing:
+#  1. SUBJECT DISCIPLINE — filing runs on the DERIVED path only, exactly like the provenance leg. A
+#     fixture that declares CC_PARITY_REPO is exempt by construction, so no hermetic case can write
+#     into the operator's real ledger. CC_PARITY_FILE=1/0 forces it (set-but-EMPTY honoured as
+#     unset), which is how the hermetic cases drive this at all.
+#  2. DAMPED BY CONDITION KEY — the trigger is a recurring STATE, not an event, so the filed TITLE
+#     carries no sha/timestamp/count. cc-backlog's id is a hash of project+title+source, so a
+#     constant title IS the condition key: a re-file is idempotent on the same id. (`needs` has no
+#     --condition flag; a stable title reaches the same place without reaching into another tool's
+#     argument parser.) The local marker below then stops us SHELLING OUT 144×/day and stops the
+#     DONE-GUARD from re-announcing on stderr into deploy.log at every tick.
+#  3. FAILS NO WIDER THAN ITSELF — every path returns 0. This function can never set `drift`, change
+#     an exit code, or block link_refresh's consumption of the MISSING lines. A parity leg that
+#     could break the advance path would be a converger that stops convergence.
+# FILED_DIR is bound once $LIVE is resolved (it defaults under it); declared here only so `set -u`
+# cannot trip on a use before that binding.
+FILED_DIR=""
+FILE_TTL_MIN="${CC_PARITY_FILE_TTL_MIN:-360}"            # 6h: re-assert a standing condition, do not spam
+BACKLOG_BIN_P="${CC_PARITY_BACKLOG_BIN-$HOME/.claude/bin/cc-backlog}"
+file_need() {   # <condition-slug> <operator-facing step sentence>   → always 0
+  local slug="$1" step="$2" marker
+  [ -n "$slug" ] && [ -n "$step" ] || return 0
+  if [ -n "${CC_PARITY_FILE:-}" ]; then
+    [ "$CC_PARITY_FILE" = 1 ] || return 0
+  elif [ -n "${CC_PARITY_REPO:-}" ]; then
+    return 0                       # a declared fixture subject never writes to a real store
+  fi
+  [ -n "$BACKLOG_BIN_P" ] && [ -x "$BACKLOG_BIN_P" ] || return 0
+  marker="$FILED_DIR/$slug"
+  # Damped: a marker younger than the TTL means this condition was filed recently and the row is
+  # already open. `find -mmin` rather than stat(1) — BSD and GNU stat disagree on every flag.
+  if [ -f "$marker" ] && [ -z "$(find "$marker" -mmin "+$FILE_TTL_MIN" 2>/dev/null)" ]; then
+    return 0
+  fi
+  mkdir -p "$FILED_DIR" 2>/dev/null || return 0
+  if "$BACKLOG_BIN_P" needs "$step" --project claude-infrastructure >/dev/null 2>&1; then
+    : > "$marker" 2>/dev/null || true
+    report "FILED" "($slug)" "operator-owned step filed to cc-backlog — it renders at the next close"
+  fi
+  return 0
+}
+
 # A stamp is green iff its JSON says so. COPIED VERBATIM from deploy-live.sh:135 on purpose: the
 # provenance leg below asserts the postcondition of deploy-live's OWN target choice, so the two must
 # agree on what "green" means or they become two auditors over one population with different state
@@ -242,17 +322,35 @@ for tool in $STRICT_TOOLS; do
 done
 
 # ── EXISTENCE PARITY: every tracked runtime file has a RESOLVING live counterpart ───────────────
-# The (subdir, glob) set below mirrors install.sh 1:1 — hooks/*.sh, hooks/lib/*.sh, commands/*.md,
-# scripts/*.sh (top level only), scripts/limit-recover/* (all types), bin/cc-*, skills/<name>/* (one
-# level: install.sh:197 globs "$skilldir"* and links regular files only). Anything install.sh does
-# not link is deliberately NOT asserted, so this can never demand a link that install.sh would not
-# create. Live path is always $LIVE/<same relative path> (install.sh preserves the subdir).
+# The (subdir, glob) set below mirrors install.sh 1:1 — hooks/*.sh, hooks/*.py, hooks/lib/*.sh,
+# commands/*.md, agents/*.md, lib/*.{sh,zsh} (top level only), scripts/*.sh (top level only),
+# scripts/lib/*.sh, scripts/limit-recover/* (all types), bin/cc-*, bin/desk-*, skills/<name>/* (one
+# level: install.sh globs "$skilldir"* and links regular files only), the two root-config SSOTs
+# (model-config.yaml, providers.json), and vendor/<plugin>/ as ONE DIRECTORY link. Anything
+# install.sh does not link is deliberately NOT asserted, so this can never demand a link that
+# install.sh would not create. Live path is always $LIVE/<same relative path> (install.sh preserves
+# the subdir) — that invariant is what lets deploy-live.sh's link_refresh consume the MISSING lines
+# verbatim, and it holds for every SYMLINK class. It does NOT hold for install.sh's COPY classes,
+# which is why those get their own leg below and never an `ln -sf` line.
 # skills/ was MISSING from this leg until 2026-07-28 and the omission was live: skills/video-
 # understanding landed 07-27 with no live symlink at all while this assert still returned 0 — the
 # per-file-symlink class with the most new files was the one class nothing checked.
-# NOT included: top-level lib/. It is tracked, but install.sh has NO lib leg (its only lib glob is
-# hooks/lib/*.sh, already covered by the `hooks` pathspec), and asserting a link install.sh would
-# never create is exactly the false demand this comment's first rule forbids.
+#
+# WIDENED 2026-08-10 (P6, docs/research/land-architecture-100p-2026-08-10.md §2.E). The pathspec was
+# `hooks commands scripts bin skills` — 5 of install.sh's ~19 deploy classes — and deploy-live's
+# link_refresh consumes ONLY this leg's output, so the tick-driven ADD-repair was scoped to exactly
+# those five. Everything else (agents/, lib/, vendor/, bin/desk-*, hooks/*.py, scripts/lib/*.sh, the
+# root-config SSOTs) reached the live layer only when `install.sh` ran, and install.sh runs only
+# after a SUCCESSFUL advance — a lane that had refused 601 consecutive times on the measured host.
+# A brand-new file in any of those classes was therefore inert until a green stamp released the
+# lane: not stale-but-present (which is what a lag budget is for) but ABSENT, and every consumer
+# guard on it (`[ -f x ] && . x`, `command -v fn && fn`) a silent skip. Measured in parity on
+# 2026-08-10 across all classes, so this widening is a latent hole closed, not an outage repaired.
+#
+# The prior version of this comment ended "NOT included: top-level lib/ … install.sh has NO lib leg".
+# That was true when written and FALSE from 931641a4 onward (install.sh:360 globs lib/*.zsh and
+# lib/*.sh). A rule stated as a permanent fact about another file rots the moment that file changes,
+# so the enumeration is now pinned against install.sh's own loops by a test rather than by prose.
 LIVE="${CC_PARITY_LIVE:-$HOME/.claude}"
 PENDING_DIRS="${CC_PARITY_PENDING:-$REPO/docs/activation/pending-activation:$LIVE/autonomy/pending-activation}"
 # Post-land verification stamps, keyed by TREE sha (deploy-live.sh's contract). Read-only here.
@@ -261,6 +359,10 @@ STAMPS="${CC_PARITY_STAMPS:-$LIVE/autonomy/postland/stamps}"
 # the operator relocates it — a reader that hardcodes a writer's default silently stops seeing the
 # writer. CC_PARITY_PAGES is the fixture seam, matching every other CC_PARITY_* above. Read-only.
 PAGES="${CC_PARITY_PAGES:-${CC_PAGES_DIR:-$LIVE/autonomy/pages}}"
+# Damping markers for file_need() above — under $LIVE so a fixture live root isolates them with
+# everything else, and so the operator's own damping state is co-located with the deploy state it
+# describes rather than in /tmp (which a reboot wipes, turning a damper into a re-filer).
+FILED_DIR="${CC_PARITY_FILED_DIR:-$LIVE/autonomy/parity-filed}"
 missing=0
 pending=0
 
@@ -310,7 +412,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
   # Proved 2026-07-29 with `.git` a DANGLING gitfile — exactly what a linked worktree becomes once its
   # main .git is gone: `[ -e "$REPO/.git" ]` passes, ls-files fails, and the assert returned 0 against
   # a deliberately EMPTY live root. Recorded as a non-verdict, never as parity.
-  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills 2>/dev/null)"; then
+  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json 2>/dev/null)"; then
     report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
     noverdict=1
     _tracked=""
@@ -320,33 +422,104 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
     [ -n "$rel" ] || continue
     # NOTE: in a `case` pattern `*` also matches `/`, so each deeper-path exclusion must precede the
     # shallower pattern it would otherwise be swallowed by. Order here is load-bearing.
+    # `cls` is the install.sh class this path belongs to; it feeds the per-class table below, so a
+    # class that is enumerated but never counted cannot hide (want=0 rows are counted as "not
+    # deployed by install.sh" and simply never appear).
+    cls=""
     case "$rel" in
-      hooks/lib/*.sh)            want=1 ;;
+      hooks/lib/*.sh)            want=1; cls='hooks/lib/*.sh' ;;
       hooks/*/*)                 want=0 ;;   # no other hooks/ subdir is deployed
-      hooks/*.sh)                want=1 ;;
+      hooks/*.sh)                want=1; cls='hooks/*.sh' ;;
+      # install.sh:272 globs hooks/*.py too — settings.json wires curl-gate.py and
+      # enforce-email-formatting.py BY PATH, so an unlinked python hook is a wiring that resolves to
+      # nothing. This leg matched only *.sh, so the class install.sh added in 2026-07-25 was never
+      # asserted by the check that exists to catch exactly that omission.
+      hooks/*.py)                want=1; cls='hooks/*.py' ;;
       commands/*/*)              want=0 ;;
-      commands/*.md)             want=1 ;;
+      commands/*.md)             want=1; cls='commands/*.md' ;;
+      # agents/ — NAME-invoked surfaces (`subagent_type: "deep-research"`) with zero grep-able
+      # callers, so an unlinked agent file is a spawn that silently resolves to nothing.
+      # install.sh:271 states the hazard in its own words: "a brand-new tracked file is not linked at
+      # all, however current the checkout."
+      agents/*/*)                want=0 ;;
+      agents/*.md)               want=1; cls='agents/*.md' ;;
+      # top-level lib/ — install.sh:360 globs lib/*.zsh AND lib/*.sh (both extensions are
+      # load-bearing: .zsh for zsh-only libs, .sh for the bash/zsh-portable ones a bats suite
+      # sources). Subdirs (lib/cc-upgrade-gate/) are NOT globbed and must not be demanded.
+      lib/*/*)                   want=0 ;;
+      lib/*.sh|lib/*.zsh)        want=1; cls='lib/*.{sh,zsh}' ;;
       scripts/limit-recover/*/*) want=0 ;;
-      scripts/limit-recover/*)   want=1 ;;
+      scripts/limit-recover/*)   want=1; cls='scripts/limit-recover/*' ;;
+      # scripts/lib/*.sh is its own install.sh loop (:475) and must precede the scripts/*/* catch-all
+      # that would otherwise swallow it — the ordering hazard this block's first note names.
+      scripts/lib/*/*)           want=0 ;;
+      scripts/lib/*.sh)          want=1; cls='scripts/lib/*.sh' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only
-      scripts/*.sh)              want=1 ;;
-      bin/cc-*/*)                want=0 ;;
-      bin/cc-*)                  want=1 ;;
+      scripts/*.sh)              want=1; cls='scripts/*.sh' ;;
+      # bin/desk-* is a SEPARATE glob in install.sh:621, added because the cc-* glob does not cover
+      # it and nothing else linked it: ~/.claude/bin/desk-register did not exist at all while
+      # commands/desk.md's first step invoked it.
+      bin/cc-*/*|bin/desk-*/*)   want=0 ;;
+      bin/cc-*)                  want=1; cls='bin/cc-*' ;;
+      bin/desk-*)                want=1; cls='bin/desk-*' ;;
       skills/*/*/*)              want=0 ;;   # install.sh links skills/<name>/<file>, one level only
-      skills/*/*)                want=1 ;;
+      skills/*/*)                want=1; cls='skills/*/*' ;;
+      # Root-config SSOTs, each its own install.sh line (:436, :445) rather than a loop. accounts.json
+      # is deliberately ABSENT: install.sh:428 links it, but it is gitignored (it holds real email
+      # addresses), so it can never appear in a tracked-file listing and asserting it here would
+      # demand a link over a file this leg cannot see.
+      model-config.yaml|providers.json) want=1; cls='root SSOT (link)' ;;
+      # vendor/ is a DIRECTORY-link class, deliberately not per-file (install.sh:546 — a per-file
+      # loop "would silently fail to link every BRAND-NEW file on the next re-vendor"). Handled by
+      # its own loop below; per-file demands here would contradict install.sh outright.
+      vendor/*)                  want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
     # -e follows symlinks on purpose: a link whose target is gone is as dead as no link at all.
-    [ -e "$LIVE/$rel" ] && continue
+    if [ -e "$LIVE/$rel" ]; then cls_row "$cls" live; continue; fi
     # Unlinked BY DESIGN while its staged activation is un-run — reported, never counted as drift.
     _act="$(pending_owner "$rel")"
     if [ -n "$_act" ]; then
       report "PENDING" "$rel" "unlinked BY DESIGN — staged: $_act"
+      cls_row "$cls" pending
       pending=$((pending + 1))
       continue
     fi
     printf 'MISSING: ln -sf %s %s\n' "$REPO/$rel" "$LIVE/$rel"
+    cls_row "$cls" miss
+    missing=$((missing + 1))
+    drift=1
+  done <<EOF
+$_tracked
+EOF
+
+  # ── vendor/<plugin>/ — ONE DIRECTORY symlink per plugin, never per-file ────────────────────────
+  # install.sh:546-565 links the DIRECTORY (`ln -sfn $REPO/vendor/<n> $LIVE/vendor/<n>`) precisely so
+  # a re-vendor cannot leave new files unlinked. Emitting `ln -sf` here rather than `ln -sfn` is
+  # correct and NOT a divergence: deploy-live's link_refresh only ever acts on a dest that failed
+  # `-e`, and with no existing dest the two spellings are identical. `-n` matters only when the dest
+  # is already a dir symlink being RE-pointed, which is exactly the non-monotone case this leg never
+  # reports and link_refresh never performs.
+  # Derived from the tracked listing (not a `vendor/*/` glob) so an untracked scratch dir under
+  # vendor/ can never manufacture a demand — the same subject discipline as every leg above.
+  _vseen=""
+  while IFS= read -r rel; do
+    case "$rel" in vendor/*/*) ;; *) continue ;; esac
+    _vn="${rel#vendor/}"; _vn="${_vn%%/*}"
+    [ -n "$_vn" ] || continue
+    case " $_vseen " in *" $_vn "*) continue ;; esac
+    _vseen="$_vseen $_vn"
+    if [ -e "$LIVE/vendor/$_vn" ]; then cls_row 'vendor/*/ (dir link)' live; continue; fi
+    _act="$(pending_owner "vendor/$_vn")"
+    if [ -n "$_act" ]; then
+      report "PENDING" "vendor/$_vn" "unlinked BY DESIGN — staged: $_act"
+      cls_row 'vendor/*/ (dir link)' pending
+      pending=$((pending + 1))
+      continue
+    fi
+    printf 'MISSING: ln -sf %s %s\n' "$REPO/vendor/$_vn" "$LIVE/vendor/$_vn"
+    cls_row 'vendor/*/ (dir link)' miss
     missing=$((missing + 1))
     drift=1
   done <<EOF
@@ -378,6 +551,132 @@ fi
 # into "nobody remembers this is un-run". It is a fact about the queue, never a verdict on parity.
 if [ "$pending" -ne 0 ]; then
   printf '\ndeploy-parity-assert: %s file(s) staged-pending (unlinked BY DESIGN, activation un-run) — not drift.\n' "$pending" >&2
+fi
+
+# ── FOURTH LEG: COPY CLASSES — what install.sh deploys by cp, never by ln ───────────────────────
+# The existence leg above asserts SYMLINK classes and hands each miss to deploy-live's link_refresh
+# as a literal `ln -sf`. Five install.sh classes are COPIES, and for them that remedy is not merely
+# unhelpful, it is the bug: install.sh:289 records that githooks shipped as symlinks for six hours
+# and calls it "a critical bug" — a link into the working tree dangles on any branch switch in the
+# shared checkout, and git fails OPEN on a dangling hook, so the gate silently stops existing. So
+# these are reported under their OWN verdict tokens and are DELIBERATELY never emitted as
+# `MISSING: ln -sf`: the tick-driven repairer must not be able to convert a copy class into a link.
+# Their remedy is ./install.sh, at operator cadence, which is where it already lives.
+#
+# What that costs, stated plainly: these classes get DETECTION, not tick-driven repair. That is the
+# honest half of P6 — the advance-gated converger still owns them — and it is a strict improvement
+# on the prior state, where they had neither.
+#
+# Seams (all fixture-drivable, all "set-but-EMPTY ⇒ skip this class" so a non-global or alt-config
+# deployment can turn off a class that does not apply to it rather than read a false miss):
+#   CC_PARITY_GITHOOKS — colon-separated hook dirs (default: the checkout's own + ~/.git-template)
+#   CC_PARITY_LAUNCHD  — LaunchAgents dir (default: ~/Library/LaunchAgents)
+copy_verdict() {   # <label> <src> <dest> — reports, sets drift/noverdict. Never emits an ln -sf line.
+  local label="$1" src="$2" dest="$3"
+  [ -f "$src" ] || return 0                 # not in this checkout ⇒ nothing to assert
+  if [ ! -e "$dest" ]; then
+    report "COPYMISS" "$label" "deployed by cp, and it is NOT there → run ./install.sh"
+    cls_row "$label" miss; drift=1; return 0
+  fi
+  same_file "$src" "$dest"
+  case $? in
+    0) cls_row "$label" live ;;
+    1) report "COPYSTALE" "$label" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh"
+       cls_row "$label" miss; drift=1 ;;
+    *) report "NOVERDICT" "$label" "diff could not run (3 tries) — no claim either way"
+       cls_row "$label" live; noverdict=1 ;;
+  esac
+  return 0
+}
+copy_verdict 'statusline.sh'   "$REPO/statusline.sh"   "$LIVE/statusline.sh"
+copy_verdict 'bin/it2-wrapper' "$REPO/bin/it2-wrapper" "$LIVE/bin/it2"
+
+# githooks/ — dest is the CHECKOUT'S OWN hook dir plus the clone template, neither of them under
+# $LIVE, so this class breaks the "$LIVE/<same rel>" invariant twice over. install.sh's foreign-hook
+# rule is mirrored exactly: a hook that is NOT ours (no content marker) is left alone by install.sh,
+# so demanding parity over it would be a false demand this script could never satisfy.
+GITHOOK_DIRS="${CC_PARITY_GITHOOKS-}"
+if [ -z "${CC_PARITY_GITHOOKS+set}" ]; then
+  _ghc="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [ -n "$_ghc" ] && GITHOOK_DIRS="$_ghc/hooks"
+  GITHOOK_DIRS="${GITHOOK_DIRS:+$GITHOOK_DIRS:}$HOME/.git-template/hooks"
+fi
+_gh_ours() { grep -q 'cc-git-identity-gate\|commit-msg — reject' "$1" 2>/dev/null; }
+_gh_one() {   # <src> <dest>
+  if [ -e "$2" ] && ! _gh_ours "$2"; then
+    report "FOREIGN" "githooks/*" "$2 is a foreign hook — install.sh leaves it alone, so neither do we"
+    return 0
+  fi
+  copy_verdict 'githooks/*' "$1" "$2"
+}
+if [ -n "$GITHOOK_DIRS" ] && [ -d "$REPO/githooks" ]; then
+  _rest="$GITHOOK_DIRS"
+  while [ -n "$_rest" ]; do
+    _d="${_rest%%:*}"; if [ "$_rest" = "$_d" ]; then _rest=""; else _rest="${_rest#*:}"; fi
+    [ -n "$_d" ] || continue
+    for _gh in "$REPO"/githooks/*; do
+      [ -f "$_gh" ] || continue
+      _gh_one "$_gh" "$_d/$(basename "$_gh")"
+    done
+    # pre-merge-commit is pre-commit's body under git's OTHER name for the merge path; without it a
+    # `git merge`/`git pull` commit is ungated by hook name alone (install.sh:326).
+    [ -f "$REPO/githooks/pre-commit" ] && _gh_one "$REPO/githooks/pre-commit" "$_d/pre-merge-commit"
+  done
+fi
+
+# launchd/*.plist — COPIES into ~/Library/LaunchAgents. EXISTENCE and CONTENT only: activation is
+# manifest-gated (DAEMON_FLEET_V2 §4.1) and is emphatically not this script's business. Nothing here
+# calls launchctl, reads the override db, or has any opinion about whether a job is loaded — a
+# parity assert that could bootout a daemon would be a far larger hazard than the drift it detects.
+LAUNCHD_DIR="${CC_PARITY_LAUNCHD-$HOME/Library/LaunchAgents}"
+if [ -n "$LAUNCHD_DIR" ] && [ -d "$REPO/launchd" ]; then
+  for _pl in "$REPO"/launchd/*.plist; do
+    [ -f "$_pl" ] || continue
+    copy_verdict 'launchd/*.plist' "$_pl" "$LAUNCHD_DIR/$(basename "$_pl")"
+  done
+fi
+
+# ── ~/.claude/CLAUDE.md — the highest-consequence live file, and the last one with no sensor ─────
+# It is read as USER MEMORY by every session on this machine, so a divergence changes how every
+# agent behaves — and until now nothing measured it. It sat outside all three legs above: the
+# existence leg's pathspec never included it, it is a real file rather than a symlink (deliberately:
+# a link into the repo would break across branch switches), and the provenance leg says nothing
+# about content. §2.E of the P6 investigation recorded it as "no converger and no detection"; the
+# tree corrects half of that — install.sh:583-587 DOES have a cp leg — but that leg runs only after
+# a successful advance, i.e. it was famine-blocked for the same 601 refusals as everything else.
+# So: no TICK-DRIVEN converger, and, until this leg, no detection at all. It was in parity when
+# measured only because a session had hand-synced it 34 minutes earlier.
+#
+# DETECTION ONLY, by explicit decision (P6 brief). Copying it here is refused for a reason that is
+# not squeamishness: the DIRECTION is a judgment. The project's own rule is that a land in this repo
+# must be followed by hand-applying the same edits to the live file, so a divergence can equally
+# mean "the repo advanced" or "the live file holds an edit not yet committed", and a converger that
+# guessed would silently destroy operator work in the second case. That makes it genuinely
+# operator-owned, which is the only thing that licenses a `needs` row rather than just doing it.
+if [ -f "$REPO/CLAUDE.md" ]; then
+  if [ ! -e "$LIVE/CLAUDE.md" ]; then
+    report "CLAUDEMD" "CLAUDE.md" "the live global instructions are ABSENT → run ./install.sh"
+    cls_row 'CLAUDE.md (copy)' miss; drift=1
+    # The tilde is PROSE — this string is a sentence an operator reads in a backlog row, not a path
+    # anything expands. SC2088 cannot tell those apart; spelling it $HOME here would put a literal
+    # /Users/... into the ledger and make the row machine-specific.
+    # shellcheck disable=SC2088
+    file_need "claude-md-absent" \
+      "~/.claude/CLAUDE.md is absent — deploy the global instructions (repo claude-infrastructure/CLAUDE.md); no session is reading them"
+  else
+    same_file "$REPO/CLAUDE.md" "$LIVE/CLAUDE.md"
+    case $? in
+      0) cls_row 'CLAUDE.md (copy)' live ;;
+      1) report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo — every session reads the live copy"
+         cls_row 'CLAUDE.md (copy)' miss; drift=1
+         # Deliberately no sha/count in the title: the trigger is a standing STATE, so the constant
+         # title is the condition key (see file_need). A count would mint a new row on every edit.
+         file_need "claude-md-diverged" \
+           "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge, and which side is authoritative is your call (diff them; the live copy is what every session actually reads)" ;;
+      *) report "NOVERDICT" "CLAUDE.md" "diff could not run (3 tries) — no claim either way"
+         cls_row 'CLAUDE.md (copy)' live; noverdict=1 ;;
+    esac
+  fi
 fi
 
 # ── THIRD LEG: DEPLOY PROVENANCE — HOW the live checkout reached the commit it is on ────────────
@@ -460,6 +759,18 @@ if [ "$do_provenance" = 1 ] && [ -e "$REPO/.git" ]; then
       report "UNGATED" "(provenance)" "HEAD advanced OUTSIDE deploy-live — $_how"
       ungated=1
       drift=1
+      # PRINTING IS NOT SURFACING (2026-08-10, P6). This verdict is the one thing that can see an
+      # ungated advance at all — link_refresh cleans up its symptom on a 600s timer, so the cause is
+      # invisible everywhere else — and for weeks it did nothing but print into a log, beside 601
+      # deploy refusals that also escalated to nobody. Five prior sessions each read "drift at its
+      # historical minimum" and closed. A finding that reaches no store reaches no close.
+      # Operator-owned because the remedy is a HABIT, not a command: the fix is that sessions stop
+      # hand-pulling in the shared checkout (8 of 15 live sessions were cwd'd there, in violation of
+      # the project rule). No `--run` is offered — there is no command that repairs this, and the
+      # remedy that LOOKS like one (another ff) is the cause. Same rule the remedy block below
+      # states: a prescription that undoes the state the script just reported is worse than none.
+      file_need "deploy-ungated-advance" \
+        "sessions are advancing the shared checkout by hand (a raw git pull/merge outside deploy-live) — that skips the deploy gate AND install.sh, so brand-new tracked files land unlinked and silently do nothing; the fix is that sessions work in their own worktree, not a command to run"
     fi
   fi
   # CONTENT. After a sanctioned advance HEAD's TREE carries a green stamp BY CONSTRUCTION — that is
@@ -583,6 +894,14 @@ if [ "$ungated" -ne 0 ] || [ "$unverified" -ne 0 ]; then
   printf '  Check which is live:  grep -c CC_DEPLOY_DEGRADE %s/scripts/deploy-live.sh\n' "$HOME/.claude" >&2
   printf '  A raw ff is not a workaround for a red corpus — it IS this finding.\n' >&2
 fi
+
+# THE CLASS TABLE, rendered last so it summarises everything above it. On stdout, like every other
+# report line: deploy-live's link_refresh consumes ONLY lines matching `^MISSING: ln -sf `, so this
+# cannot perturb the repair path (a test pins that). It is emitted on EVERY run, including a clean
+# one — that is the point. A per-file report says nothing about a class it was never told to
+# enumerate, so "no rows for agents/*.md" and "agents/*.md is in parity" looked identical for the
+# whole time the 5-of-19 hole was open. A class that is not in this table is a class nothing checks.
+cls_table
 
 # ORDER IS THE DOCTRINE: a NAMED failure outranks a non-verdict. Real drift was actually observed on
 # some tool, so it is reported as drift even if a different tool's comparison could not run — the

@@ -532,11 +532,34 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
 # (tests/deploy-parity.bats:315 pins that hazard). install.sh therefore stays exactly where it is,
 # on the advance path only, at operator cadence.
 #
-# The safe partition is the assert's OWN output: `MISSING: ln -sf <src> <dest>` is emitted only at
-# deploy-parity-assert.sh:310, AFTER by-design-PENDING files have `continue`d at :308 — so MISSING
-# is by construction the set that belongs to nobody else. Consuming that verdict rather than
-# re-deriving the want-list here is deliberate: two auditors over one population that do not share a
-# state model disagree, and that divergence is how this whole class of bug survives.
+# The safe partition is the assert's OWN output: `MISSING: ln -sf <src> <dest>` is emitted only
+# AFTER by-design-PENDING files have `continue`d — so MISSING is by construction the set that
+# belongs to nobody else. Consuming that verdict rather than re-deriving the want-list here is
+# deliberate: two auditors over one population that do not share a state model disagree, and that
+# divergence is how this whole class of bug survives.
+#
+# THE UNIVERSE THIS REPAIRS IS THE ASSERT'S, AND IT WIDENED 2026-08-10 (P6,
+# docs/research/land-architecture-100p-2026-08-10.md §2.E). No code changed here, and that is the
+# point of consuming a verdict instead of re-deriving one — but the SCOPE changed underneath, so a
+# reader of this block should not have to go and diff another file to learn it. The assert's
+# pathspec was `hooks commands scripts bin skills`, i.e. 5 of install.sh's ~19 deploy classes; it
+# now enumerates every SYMLINK class install.sh globs (adding agents/, top-level lib/, hooks/*.py,
+# scripts/lib/*.sh, bin/desk-*, the root-config SSOTs, and vendor/ as one dir link per plugin).
+# Before that, a brand-new file in any of those classes reached the live layer only when install.sh
+# ran — i.e. only after a SUCCESSFUL advance, on a lane measured refusing 601 consecutive times. It
+# did not land degraded, it landed ABSENT, and every consumer guard on it (`[ -f x ] && . x`) is a
+# silent skip. This function is the only thing on the machine that repairs that without an advance.
+#
+# WHAT IT MUST NOT REPAIR, and why the grep is the whole safety argument: install.sh's COPY classes
+# (githooks/, launchd/*.plist, statusline.sh, bin/it2-wrapper→bin/it2, CLAUDE.md) are now asserted
+# too, under their own COPYMISS/COPYSTALE/CLAUDEMD tokens — deliberately NOT the `MISSING: ln -sf`
+# spelling. install.sh:289 records why: githooks shipped as symlinks for six hours and it is called
+# "a critical bug", because a link into the working tree dangles on any branch switch in the shared
+# checkout and git fails OPEN on a dangling hook, so the gate silently stops existing. This loop
+# consumes one line shape and creates symlinks; the copy classes are kept out of that shape at the
+# producer, not filtered here, so there is nothing for a future edit of this function to get wrong.
+# Both directions are pinned by tests (deploy-live.bats: a new class IS repaired · a COPYMISS is
+# NOT; deploy-parity.bats: no copy-class finding ever prints an ln -sf line).
 PARITY_ASSERT="${CC_DEPLOY_PARITY_ASSERT-$DEPLOY_REPO/scripts/deploy-parity-assert.sh}"
 
 link_refresh() { # never fails, never changes the exit code, never touches a PENDING file
