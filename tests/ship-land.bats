@@ -901,7 +901,11 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "0 direct suite"
   [ ! -s "$BATS_ARGV" ]                                      # bats never invoked at all
-  grep -q '"smoke":"none"' "$LAND_LOG"
+  # P0 section 3: the CAUSE, not the class. This assertion and the four below used to be the
+  # identical `"smoke":"none"` — five tests pinning five different causes with one
+  # indistinguishable token, which is the defect in miniature: the suite could not have caught a
+  # land taking the WRONG no-smoke branch, because every branch attested the same string.
+  grep -q '"smoke":"none-nodirect"' "$LAND_LOG"
   grep -q '"smoke_n":0' "$LAND_LOG"
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- sn.sh)" ]               # lint-only land still lands
@@ -922,7 +926,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   echo "$output" | grep -q "missing/not executable"
   echo "$output" | grep -q "verifier proves this tree"
   [ ! -s "$BATS_ARGV" ]                                      # …and never widens: ZERO bats runs
-  grep -q '"smoke":"none"' "$LAND_LOG"
+  grep -q '"smoke":"none-noselector"' "$LAND_LOG"
   git fetch -q origin main
   [ -n "$(git ls-tree origin/main -- sns.sh)" ]              # and the land completes
 }
@@ -939,7 +943,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "cannot decide"
   [ ! -s "$BATS_ARGV" ]                                      # no corpus, no single suite, nothing
-  grep -q '"smoke":"none"' "$LAND_LOG"
+  grep -q '"smoke":"none-undecided"' "$LAND_LOG"
 }
 
 @test "smoke: HOST-manifest suites are excluded — the partition binds the land lane too" {
@@ -1004,7 +1008,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   [ "$status" -eq 0 ]
   [ ! -s "$BATS_ARGV" ]
   echo "$output" | grep -q "0 direct suite"
-  grep -q '"smoke":"none"' "$LAND_LOG"
+  grep -q '"smoke":"none-nodirect"' "$LAND_LOG"
 }
 
 @test "lane: unknown SHIP_LAND_LANE ⇒ exit 2; SHIP_LAND_GATE_SCOPE still validated for back-compat" {
@@ -1063,7 +1067,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   grep -q "\"tree\":\"$(git rev-parse 'HEAD^{tree}')\"" "$LAND_LOG"
   grep -q "\"base\":\"$base\"" "$LAND_LOG"
   grep -q '"gate_scope":"fast"' "$LAND_LOG"                  # the LANE, not the dead scope
-  grep -qE '"smoke":"(green|red|partial|skipped|none)"' "$LAND_LOG"
+  grep -qE '"smoke":"(green|red|partial|skipped|none-[a-z]+)"' "$LAND_LOG"
   grep -qE '"smoke_n":[0-9]+' "$LAND_LOG"
   grep -qE '"smoke_s":[0-9]+' "$LAND_LOG"
   grep -qE '"net":"(live|inert|none)"' "$LAND_LOG"
@@ -1087,7 +1091,7 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   grep -q '"exit":6' "$LAND_LOG"
-  grep -q '"red":"shellcheck"' "$LAND_LOG"
+  grep -qE '"red":"[^"]*shellcheck' "$LAND_LOG"   # a fire-ordered LIST, not one arm — see gate_red
 }
 
 @test "attest-red: a smoke RED names the failing SUITE — §9's literal ask" {
@@ -2066,6 +2070,11 @@ add_suite() {   # $1=branch $2=suite basename $3=setup() body
   # The whole point: it fails BEFORE the ~1700-test run, so the author sees it in seconds rather
   # than at test ~1706 of a gate that contention usually kills first.
   [ ! -s "$BATS_ARGV" ]
+  # P0 section 3: and the ledger now says WHY no smoke ran. This arm `return 1`s straight out of
+  # run_gate, so the smoke phase was never REACHED — a different fact from "0 suites mapped", and
+  # until the split they were the same token. 305 of the 735 `none` rows in the live store are
+  # exit-6 rows, i.e. this cause.
+  grep -q '"smoke":"none-unreached"' "$LAND_LOG"
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- tests/leak.bats)" ] # never reached trunk
 }
@@ -2464,7 +2473,7 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   [ "$(echo "$output" | grep -c 'HOME. isolated')" -eq 0 ]           # …and gate_home_setup…
   [ "$(echo "$output" | grep -c 'isolation skipped')" -eq 0 ]        # …was never REACHED at all
   [ "$(find "$SHIP_LAND_GATE_HOME_ROOT" -maxdepth 1 -name 'gate-home.*' | grep -c .)" -eq 0 ]
-  grep -q '"smoke":"none"' "$LAND_LOG"
+  grep -q '"smoke":"none-locked"' "$LAND_LOG"
 }
 
 @test "in-lock POSITIVE CONTROL: the SAME fixture unlocked DOES clone and DOES smoke" {
@@ -2633,4 +2642,159 @@ iso_home_fixture() {  # force REAL $HOME isolation, cheaply — the spy needs th
   # …and the proof it was ever there: the very same land filed its failure inbox, which is gated
   # on having held the marker (see land_failure_inbox).
   [ -n "$(git for-each-ref --format='%(refname)' refs/land/failed/)" ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# P0 — THE PIPELINE MEASURES ITSELF (land-architecture-100p-2026-08-10 §5 P0, §2.B)
+#
+# Two defects, one instrument. (1) land.log had NO end-to-end duration field, so v2's own
+# acceptance criterion — "land latency p50 <= 30s, p99 <= 3 min, read from land.log" — was
+# structurally unverifiable from the artifact it names. (2) Five terminal exits wrote NO row at
+# all: measured on the live store the day this landed, 14 days of ship-land rows carry only exits
+# 0, 3, 6 and 143, so a land could die in five ways that left the instrument reading "never
+# attempted" rather than "died".
+#
+# ONE TEST PER EXIT, never one for the class. An exit whose row was never FORCED is unproven, and
+# the five differ in which process writes the row (outer / locked child), whether the trap or an
+# explicit call does it, and whether anything already attested — i.e. they exercise different
+# mechanism, not different instances of one.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "P0 attest: a landed row carries total_s + the gate_rounds/gate_s/arms/statics split" {
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  landable feat/p0-fields p0f.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  # total_s is THE field the acceptance criterion needs and the one that did not exist.
+  grep -qE '"total_s":[0-9]+' "$LAND_LOG"
+  # The split exists because §5.P3 measured the fifteen ratchet arms at ~112s of a 127-137s
+  # re-round: one opaque total cannot separate "re-gated three times" from "the remote hung".
+  grep -qE '"gate_rounds":[1-9][0-9]*' "$LAND_LOG"        # a land that gated MUST report >= 1
+  grep -qE '"gate_s":[0-9]+' "$LAND_LOG"
+  grep -qE '"gate_arms_s":[0-9]+' "$LAND_LOG"
+  grep -qE '"gate_statics_s":[0-9]+' "$LAND_LOG"
+  grep -q '"stage":"land"' "$LAND_LOG"                    # a terminal outcome, not a re-round
+}
+
+@test "P0 attest: the phase split is INTERNALLY CONSISTENT — statics + arms never exceed the gate" {
+  # The cheap invariant that catches the whole class of boundary-stamp bugs (a phase closed against
+  # the wrong start, a stamp left over from a previous round, an early return crediting the arms
+  # with a gate that never reached them). It cannot be satisfied by writing zeros: gate_rounds is
+  # asserted >= 1 above, and a red gate is asserted to close its arms below.
+  scope_fixture
+  stub_selector "" "tests/a.bats"
+  landable feat/p0-consistent p0c.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  row="$(grep '"tool":"ship-land"' "$LAND_LOG" | tail -1)"
+  g="$(echo "$row" | sed 's/.*"gate_s":\([0-9]*\).*/\1/')"
+  a="$(echo "$row" | sed 's/.*"gate_arms_s":\([0-9]*\).*/\1/')"
+  s="$(echo "$row" | sed 's/.*"gate_statics_s":\([0-9]*\).*/\1/')"
+  t="$(echo "$row" | sed 's/.*"total_s":\([0-9]*\).*/\1/')"
+  [ "$(( a + s ))" -le "$g" ]                             # the phases are INSIDE the gate…
+  [ "$g" -le "$t" ]                                       # …and the gate is inside the land
+}
+
+@test "P0 exit 2 attests: a dirty tree leaves a row saying so, not silence" {
+  on_branch_with feat/p0-dirty p0d.txt clean
+  echo dirty >> p0d.txt
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  [ -s "$LAND_LOG" ]                                      # RED pre-fix: the file did not exist
+  grep -q '"exit":2' "$LAND_LOG"
+  grep -q '"tool":"ship-land"' "$LAND_LOG"
+}
+
+@test "P0 exit 2 attests: an unknown LANE is a typo an operator can make, and it now records one" {
+  # The refusal used to fire at a top-level line that runs BEFORE the traps are installed and
+  # before attest_land is even defined — the one exit code reachable by typo was structurally
+  # incapable of attesting. The check moved to dispatch; the refusal itself is unchanged.
+  landable feat/p0-lane p0l.sh
+
+  run env SHIP_LAND_LANE=bogus bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "unknown SHIP_LAND_LANE"
+  grep -q '"exit":2' "$LAND_LOG"
+}
+
+@test "P0 exit 4 attests: a shared-checkout refusal is a land that died, not a land that never ran" {
+  git checkout -q -b not-a-session-branch main
+  printf 'x\n' > p0s.txt && git add p0s.txt && git commit -q -m "chore: p0s"
+
+  run env SHIP_LAND_SHARED_CHECKOUT="$WORK" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 4 ]
+  grep -q '"exit":4' "$LAND_LOG"
+}
+
+@test "P0 exit 7 attests: a sibling beat us to the push, and the ledger says which land lost" {
+  printf '#!/bin/sh\n[ "$1" = "refs/heads/main" ] && { echo "simulated non-ff" >&2; exit 1; }\nexit 0\n' > "$ORIGIN/hooks/update"
+  chmod +x "$ORIGIN/hooks/update"
+  on_branch_with feat/p0-nonff p0n.txt hello
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 7 ]
+  grep -q '"exit":7' "$LAND_LOG"
+  # WRITTEN BY THE LOCKED CHILD, and exactly once. The outer propagates the child's code, so a
+  # naive "attest at every exit" would have written this row twice — once in each process — and
+  # doubled a code's share of the exit histogram. The cross-process latch is what prevents it.
+  # Counted over ship-land rows ONLY: land-lock writes its own row to the same store carrying the
+  # SAME exit code, so a bare `grep -c` here would count the mutex's row as a duplicate of ours —
+  # the two-record-types trap gate-red-census.sh opens with, reproduced inside its own suite.
+  [ "$(grep '"tool":"ship-land"' "$LAND_LOG" | grep -c '"exit":7')" -eq 1 ]
+}
+
+@test "P0 exit 6 attests IN THE FALLBACK LANE — the in-lock re-gate's red was the silent one" {
+  # The unlocked gate-red already attested; the in-lock fallback's did not, and that lane fires
+  # exactly under sustained contention, i.e. when the fleet can least afford an unexplained land.
+  # SHIP_LAND_GATE_ROUNDS=0 is the documented way in.
+  scope_fixture                                          # a real tests/ tree, so the smoke has a cause
+  stub_selector "" "tests/a.bats"
+  git checkout -q -b feat/p0-fallback-red main
+  printf '#!/usr/bin/env bash\nfoo=$(echo hi\necho "$foo\n' > broken.sh   # shellcheck cannot pass this
+  git add broken.sh && git commit -q -m "feat: broken"
+
+  run env SHIP_LAND_GATE_ROUNDS=0 bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  grep -q '"exit":6' "$LAND_LOG"
+  [ "$(grep '"tool":"ship-land"' "$LAND_LOG" | grep -c '"exit":6')" -eq 1 ]   # one land, one row — not one per process
+  # The red still attributes its arm, and the gate still closes its own clock on the way out: an
+  # arm that `return 1`s straight out of run_gate must not leave the measurement open (which would
+  # attest gate_s:0 for a gate that ran).
+  grep -qE '"red":"[^"]*shellcheck' "$LAND_LOG"           # a fire-ordered LIST, not one arm
+  grep -qE '"gate_rounds":[1-9][0-9]*' "$LAND_LOG"
+  # The statics do NOT fail-fast (they collect, so one cycle names every finding), so this gate
+  # DID reach the smoke phase — and was refused there by the never-in-lock invariant. That is a
+  # different cause from the fail-fast arms above, and the split is what lets the two be told
+  # apart at all: pre-P0 both, and three others, attested the identical `none`.
+  grep -q '"smoke":"none-locked"' "$LAND_LOG"
+}
+
+@test "P0 the precheck STILL writes no land.log row — the trap must not break P2's contract" {
+  # The regression this whole mechanism could plausibly cause. --precheck is not a land attempt and
+  # counting it as one poisons the denominator the census reports; the new EXIT-trap attestation
+  # fires on paths nobody enumerated, so the suppression is asserted on a RED precheck (the case
+  # that exits non-zero and would therefore reach the trap).
+  git checkout -q -b feat/p0-precheck main
+  printf '#!/usr/bin/env bash\nfoo=$(echo hi\necho "$foo\n' > pbroken.sh
+  git add pbroken.sh && git commit -q -m "feat: pbroken"
+
+  run bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 6 ]
+  [ ! -s "$LAND_LOG" ]                                    # no row at all, red or green
+
+  # …and the case the line above does NOT cover, which is the one a naive implementation gets
+  # wrong. main_precheck REPLACES the land traps with its own, so by the time it runs, the new
+  # attestation arm is already unreachable — a mutant that deletes the suppression entirely still
+  # passes the assertion above (verified). A precheck can exit BEFORE that swap, though: the
+  # LANE/SCOPE refusal fires at dispatch, with the land traps live and the attest arm armed. That
+  # is why the suppression is decided by an argv scan on the script's FIRST lines rather than by
+  # main_precheck — and this is the assertion that can tell the difference.
+  run env SHIP_LAND_LANE=bogus bash "$SHIPLAND" --precheck --trunk main
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q "unknown SHIP_LAND_LANE"
+  [ ! -s "$LAND_LOG" ]
 }

@@ -502,3 +502,54 @@ EOF
   # selection decided the corpus tier (deleted) and `lint` gated a degrade-to-FULL (deleted).
   [ "$(grep -cv '^--direct' "$BATS_TEST_TMPDIR/sel-argv")" -eq 0 ]
 }
+
+@test "P0 exit 42 attests: the stale re-round is a ROW, marked non-terminal, and lands once" {
+  # THE STALENESS INSTRUMENT (land-architecture-100p §5 P0, §2.B). P(exit-42 | wait>0) — 49% over
+  # 14d rising to 86% over 3d — had to be reconstructed by hand from the LOCK ledger, because the
+  # TOOL ledger recorded nothing at all for a stale round. Measured on the live store the day this
+  # landed: 14 days of ship-land rows contain ZERO exit-42s, while the lock rows contain 74 stale
+  # re-rounds in the last day alone. And the lock ledger can only ever see the rounds that QUEUED,
+  # which is precisely the wrong half — §2.B found the WAIT-FREE staleness column to be the rising
+  # one (4→6→4→15→21 across 08-06..08-10).
+  #
+  # stage:"round" is the load-bearing half of the fix. A stale round is an INTERNAL signal — the
+  # same land continues — so its row must not enter any rate's denominator; without the marker,
+  # adding these rows would have silently DILUTED the gate-red rate by however often siblings
+  # happened to move the trunk, i.e. the instrument would have improved its own headline number.
+  echo 1 > "$MOVER_ARMED"                                           # one sibling land, mid-gate
+  our_branch feat/p0-stale p0stale.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "STALE GATE"
+
+  rounds="$(grep '"tool":"ship-land"' "$LAND_LOG" | grep -c '"stage":"round"')"
+  [ "$rounds" -eq 1 ]                                               # RED pre-fix: zero rows existed
+  grep '"stage":"round"' "$LAND_LOG" | grep -q '"exit":42'
+  # …and exactly one TERMINAL row for the same land, so the two are distinguishable and a reader
+  # counting lands does not count this one twice.
+  [ "$(grep '"tool":"ship-land"' "$LAND_LOG" | grep -c '"stage":"land"')" -eq 1 ]
+  grep '"stage":"land"' "$LAND_LOG" | grep -q '"exit":0'
+
+  # The terminal row's gate_rounds counts BOTH gates — the measurement survives the locked re-exec
+  # and the re-round, which is the whole reason it is carried in the environment rather than
+  # recomputed. A re-derived counter would have reported 1 here and hidden the second gate's cost.
+  grep '"stage":"land"' "$LAND_LOG" | grep -qE '"gate_rounds":2'
+}
+
+@test "P0 exit 42: the round row is written with the mutex ALREADY RELEASED" {
+  # The constraint P1 paid a whole session for: nothing heavy may enter the lock, and an instrument
+  # that bought its visibility inside the mutex would be paying in the currency it measures. The
+  # stale-gate exit fires while the lock is HELD, so the row is deliberately written by the outer
+  # process after land-lock returns — the locked child adds not one fork to that path.
+  #
+  # Asserted structurally rather than by timing: the attest call for stage "round" must not appear
+  # inside main_locked. A wall-clock assertion here would be a load-dependent test of a 3s hold.
+  sl="$REPO/scripts/ship-land.sh"
+  ml="$(awk '/^main_locked\(\)/{print NR; exit}' "$sl")"
+  nx="$(awk -v s="$ml" 'NR>s && /^[a-z_]+\(\) \{/{print NR; exit}' "$sl")"
+  [ -n "$ml" ] && [ -n "$nx" ]
+  [ "$(awk -v a="$ml" -v b="$nx" 'NR>a && NR<b' "$sl" | grep -c 'attest_land .*"round"')" -eq 0 ]
+  # …and it DOES appear in the outer loop, so this is a placement assertion and not a vacuous one.
+  [ "$(grep -c 'attest_land .*"round"' "$sl")" -eq 1 ]
+}
