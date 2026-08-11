@@ -1530,14 +1530,22 @@ dispatch() { # <dry|run|decide>
       local pcontract="" pbin
       pbin="${CC_DISPATCH_PREMISE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-premise}"
       [ -x "$pbin" ] && pcontract="$("$pbin" contract "$id" 2>/dev/null || true)"
+      # The desk back-channel is briefed as `--role desk`, NOT `$(cat ~/.claude/cc-roles/desk)`
+      # (2026-08-10, backlog 08ba1e3dccc2). Both are role-indirection and payload-lint accepts either,
+      # but they fail DIFFERENTLY when the role is unset — which is its standing state here, since a
+      # desk-less fleet is a supported configuration (see cc-reaper + lead-supervisor, 2026-08-01).
+      # `$(cat …)` resolves in the WORKER's shell, so an unset role collapses the address to "" before
+      # cc-notify sees it, and the worker is told its registry holds no such target. `--role desk` hands
+      # the role name to the resolver intact, so the worker is told the role is unset and where its file
+      # lives. Same delivery, an actionable diagnosis instead of a misdirected one.
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         ${pcontract:+"$pcontract"} \
         "Rails: $rails" \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
-        "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify the desk role (cat ~/.claude/cc-roles/desk). Do NOT reopen an operator-gated item — that re-cycles it." \
-        "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify the desk with the blocker." \
+        "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it." \
+        "If blocked on info or a decision instead (not an operator step): cc-backlog reopen $id and cc-notify --role desk \"<the blocker>\"." \
         > "$pfile"; then
         # --by $SID: this is a SELF-RELEASE of the claim we took two lines up. cc-backlog's
         # live-claim reopen guard refuses a FOREIGN reopen of a live claim (and $SID — our own
