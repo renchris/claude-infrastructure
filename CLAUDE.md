@@ -116,7 +116,7 @@ Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE neve
 
 ## Browser Automation
 
-Browser automation — navigate / click / fill / screenshot / extract — uses **BrowserMCP, not Playwright**. Setup/tools/troubleshooting (or on "No such tool available" for browser tools) → the **browsermcp** skill: the `mcp__browsermcp__*` tool list + navigate→snapshot→ref→click workflow, wrapper + Chrome-extension setup, `.mcp.json` config, the troubleshooting decision tree, the `agent-browser` CLI fallback, and the auto-triggering `react-best-practices` / `vercel-design-guidelines` knowledge skills. Auto-loads on any browser-automation task.
+Browser automation — navigate / click / fill / screenshot / extract — uses the **`agent-browser` CLI, not Playwright and no longer BrowserMCP** (retired 2026-08-11: 0 invocations / 3,504 transcripts / 30 d, upstream frozen 2025-04-11, port-9009 `kill -9` singleton; every config site cleared and the wrapper `git rm`'d). Setup/tools/troubleshooting (or on "No such tool available" for browser tools) → the **browsermcp** skill, which still owns the decision tree and the auto-triggering `react-best-practices` / `vercel-design-guidelines` knowledge skills — read its `mcp__browsermcp__*` sections as history, not as an available tool surface. When a task needs the richer MCP tool surface rather than the CLI, attach `chrome-devtools-mcp --browserUrl` to a running Chrome (skills: **dia-agent**, **autonomous-authenticated-web-access**) instead of spawning a browser server per session.
 
 ---
 
