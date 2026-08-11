@@ -175,7 +175,10 @@ PYEOF
 }
 
 @test "ship-land runs it, own-scoped, with a kill switch" {
-  grep -q 'CC_AFUNIX_OWN=' "$REPO/scripts/ship-land.sh" || false
+  # Anchored on the own_run ROUTING, not on the assignment spelling — see the note in
+  # tests/test-hermeticity-lint.bats. `CC_AFUNIX_OWN=` was true until the P2 own-scope work made
+  # own_run() the single reader of the kill switch and the variable name an ARGUMENT.
+  grep -q 'own_run AFUNIX CC_AFUNIX_OWN' "$REPO/scripts/ship-land.sh" || false
   grep -q 'SHIP_LAND_AFUNIX_OWN_SCOPE' "$REPO/scripts/ship-land.sh" || false
   grep -q 'test-afunix-path-lint.sh' "$REPO/scripts/ship-land.sh" || false
 }

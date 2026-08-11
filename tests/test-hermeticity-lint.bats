@@ -264,7 +264,14 @@ skip_if_unrunnable() {
 }
 
 @test "own-scope: ship-land passes its OWN diff and the kill switch restores strictness" {
-  grep -q 'CC_HERM_OWN=' "$REPO/scripts/ship-land.sh" || false
+  # The anchor is the ROUTING, not the assignment spelling. This was `CC_HERM_OWN=` until the P2
+  # own-scope work routed all thirteen arms through own_run(), which passes the variable NAME as an
+  # ARGUMENT (`own_run HERM CC_HERM_OWN "$own" …`) so the `=` vanished and this went red over a
+  # refactor that strengthened the very contract it pins. Keyed on the own_run pair it survives the
+  # next re-spelling, and it still fails loudly if the arm is ever un-wired from own_run — which is
+  # what would actually break the contract, since own_run is now the single reader of the kill
+  # switch below. own_run's own three-state semantics are pinned in tests/gate-ownscope-leak.bats.
+  grep -q 'own_run HERM CC_HERM_OWN' "$REPO/scripts/ship-land.sh" || false
   grep -q "SHIP_LAND_HERM_OWN_SCOPE" "$REPO/scripts/ship-land.sh" || false
   # the own-set must come from the landing RANGE, never from the working tree
   grep -q 'git diff --name-only "\$range" -- .tests/\*\.bats' "$REPO/scripts/ship-land.sh" || false

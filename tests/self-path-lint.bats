@@ -219,7 +219,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"'
     || { echo "ship-land.sh does not reference the lint — it is detection, not a gate"; false; }
   grep -q 'SELFPATH_LINT.*--selftest' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
-  grep -q 'CC_SELFPATH_OWN=' "$REPO/scripts/ship-land.sh" \
+  # Anchored on the own_run ROUTING, not on the assignment spelling — see the note in
+  # tests/test-hermeticity-lint.bats. `CC_SELFPATH_OWN=` was true until the P2 own-scope work made
+  # own_run() the single reader of the kill switch and the variable name an ARGUMENT.
+  grep -q 'own_run SELFPATH CC_SELFPATH_OWN' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate does not pass an own-set — a whole-tree block is a fleet-wide hard stop"; false; }
 }
 
