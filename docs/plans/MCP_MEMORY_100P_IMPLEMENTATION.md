@@ -266,6 +266,87 @@ staged (if wired) shown in `deploy-migrations` output. **DoD:** four items close
 **Constraint:** the actuator change ships OBSERVE-FIRST if any doubt — census fix immediately, actuator
 target-selection behind one tick of logged would-reap before arming (the devserver-gc precedent).
 
+### W4 OUTCOME (2026-08-11) — item 1 landed `273df7cd`; item 3 decided, not deferred
+
+**The root cause was not the one the wave was briefed on, and the brief's prescribed fix was right for
+one site and wrong for three.** `ps` widens only its LAST column. The census (`pid=,ppid=,rss=,comm=`)
+has comm last, so its value is COMPLETE and its spaces split — `$4` basenames to `Application` and the
+row drops, exactly as briefed, and rebuilding `$4..NF` is exact there. But `select_stop_targets`,
+`select_break_parents` and `cc-ignition-gate` put comm BEFORE `args=`, where **ps truncates it to a
+fixed 16 characters** — `/Users/chrisren/`, `/Library/Applica`, `endpointsecurity`, all exactly 16,
+measured live. There the basename was not split, it was **absent**: no real node install has a path
+that short, so the cohort test could match nothing but a process whose comm was literally `node`.
+argv[0] is no escape either — it carries the same spaced path and splits identically (measured: 0 hits).
+A "rebuild the fields" there would have swallowed args.
+
+comm-last and args-last cannot both hold in one read. The split: **args stays LAST** (every exclusion
+sees a complete argv) · **ppid attribution stays in that one table** (what the old one-instant comment
+was really protecting) · only the **name** comes from an adjacent comm-last read, via a new `exe_table`
+that is now the single node-ness predicate for all three consumers. Lead-imposed conditions, all met:
+the recycle hazard the second read opens is guarded by requiring the two tables to **agree on PPID**
+(a pid reused between them must reproduce its predecessor's parent to get through), and
+UNIDENTIFIABLE ⇒ NEVER ACTED ON in both directions.
+
+🚨 **THE MOST TRANSFERABLE FINDING — a safety rail that had never once worked.** The actuator excluded
+claude twice over "by construction": `base == "claude.exe" || base == "claude"` on the comm, and
+`args ~ /claude/` on the argv. The comm half was **dead from the day it was written**, for the same
+16-char truncation: `/Users/chrisren/.claude-next/local/node_modules/.bin/claude` reaches that test as
+`/Users/chrisren/`, basename empty. **Only the argv test had ever protected an operator's session from
+SIGSTOP**, and nothing could have revealed it, because the cohort test upstream was equally blind — the
+predicate never reached a live process, so a redundant rail and an absent one were indistinguishable.
+*The general form: a defence whose upstream selector is blind cannot be observed failing. Two rails
+written for one hazard are one rail until something proves each of them fires on its own.* Repairing
+the census re-armed all of it at once, which is why the class-test and the observe rung were
+non-negotiable in the same diff.
+
+**OBSERVE-FIRST, run on the live box before arming** (`CC_SENTINEL_ACT=observe`, a new rung — the one
+this actuator lacked on 2026-08-09, when the only way to learn what the predicate would touch was to
+arm it). Live plist values (floor 40960 kB, cap 400), `prev_census` deliberately EMPTY so every node
+process counts as brand-new burst — the worst case:
+
+```
+### exe_table rows: 1261  · node-named: 4
+WOULD-STOP: (none)
+  pid=14588   excluded_by: mcp=MCP-CLASS   pid=49988   excluded_by: mcp=MCP-CLASS
+  pid=85282   excluded_by: mcp=MCP-CLASS   pid=95588   excluded_by: mcp=MCP-CLASS
+WOULD-STOP parent: (none)
+### POSITIVE CONTROL — same live table plus ONE synthetic innocent node proc:
+  WOULD-STOP pid=999001 900000 node
+```
+
+All four live node processes are MCP chains and all four are excluded; the positive control proves the
+selector is live rather than inert, so "(none)" is the exclusion firing. The plist stays
+`CC_SENTINEL_ACT=stop` — disarming a guard that exists to prevent kernel panics would be a protection
+regression, and the observe tick is the evidence the brief asked for, not a mode to ship in.
+
+**Item 3 — coldcompile: WIRE, and it is already wired as far as an agent may wire it. The open question
+is a re-aim, not wire-or-retire.** `migrations/0006-coldcompile-admit-registration.sh` exists, is class
+`c10`, and by design STAGES rather than executes — it files to `cc-backlog needs` (`f30fa039f98f`) and
+waits on the one-time C10 rescope ratification (`b09f54e9e080`). `MACHINE_CAPACITY_V2.md` has NOT
+superseded it: that plan is about Darwin QoS bands and never mentions ignition or cold compiles at all.
+What HAS moved is more specific — decision packet `99637eaee7b9`, actioned by the operator 2026-08-10:
+*"ratify all except the cold-compile hook, then ratify 0006 after the re-aim lands"*, with the re-aim
+filed as `9362e80a999f` (the PreToolUse(Bash) chokepoint misses the Aug-9 storm shape: mass
+invalidation of a long-lived `next-server` driven by fleet Edit/Write calls). So the research's
+"leans wire-it" and the alternative "retire the arm" are both wrong: it is wire-after-re-aim, decided
+one day after the research snapshot. `e3fb627bc57a` is closed as superseded by `9362e80a999f`.
+
+🚨 **And the re-aim's premise now needs re-checking, because part of the gap it names was this wave's
+bug.** The gate's TERM 2 — the burst census — exists precisely for that storm shape: an old
+`next-server` whose etime is hours, which TERM 1's settle window can never match, so *"only the process
+count tells"*. That count was **structurally 0**. Control on the live box, same instant, same fixture:
+
+```
+PRE-FIX : clear node_n=0        (origin/main cc-ignition-gate)
+POST-FIX: clear node_n=4
+```
+
+The term built to catch the Aug-9 shape had never been able to count a single fnm- or homebrew-installed
+node. How much of "the chokepoint misses that shape" was chokepoint PLACEMENT and how much was this
+blindness is now an open question on `9362e80a999f`, and it should be answered before the re-aim is
+designed — a re-aim scoped against a measurement taken through a dead instrument would be aimed at the
+wrong thing.
+
 ## W5 · end-state verification sweep (lead-inline)
 
 1. Re-run the census one-liner fleet-wide: expected zero unrequested chains; whatever chains exist are pinned,
