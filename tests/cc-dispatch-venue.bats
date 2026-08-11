@@ -211,35 +211,35 @@ code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "
 # where the plan becomes an argument — including the two ways that seam could be wrong in a way
 # nothing downstream would notice.
 
-@test "14 the plan MUTATES THE ARGV rather than setting the venue directly" {
-  # The load-bearing property of the whole G5 design: `fire_venue` reads the array that will
-  # ACTUALLY RUN. If the seam assigned `venue=cloud` itself, the label would be derived from the
-  # PLAN instead of from the fire, and a plan that failed to become an argument would produce a
-  # claim asserting a venue nothing was launched into — the mislabel-that-reads-as-a-verdict this
-  # suite exists to prevent. So: the injection appends to fire_args, and `venue` is still assigned
-  # from fire_venue AFTER it.
+@test "14 the venue is a SELECTION between actuators, and one variable feeds both the claim and the launch" {
+  # Rewritten 2026-08-11 (fire-#1 forensics). The old design mutated the argv (`fire_args+=(--cloud)`)
+  # and re-read it, because the local spawn was the only actuator. The cloud actuator is now
+  # `cc-offload up` — the managed create — so the venue is a SELECTION, and G5's rule survives in
+  # its new shape: the claim label and the actuator branch read the SAME `venue` variable, so the
+  # label cannot disagree with what launches.
   code_of "$DISPATCH"
-  grep -q 'fire_args+=(--cloud)' "$CODE" \
-    || { echo "the plan never reaches the argv"; false; }
+  grep -q 'CC_DISPATCH_OFFLOAD_BIN' "$CODE" \
+    || { echo "no cloud actuator seam — the deprecated leg is the only path again"; false; }
+  grep -q 'up --via api --task' "$CODE" \
+    || { echo "the cloud actuator is not the managed create"; false; }
   grep -q 'venue="$(fire_venue "${fire_args\[@\]}")"' "$CODE" \
-    || { echo "the venue is no longer derived from the argv that will run"; false; }
-  # …and the ORDER holds: the injection is above the read, else it lands too late to be seen.
-  local inj rd
-  inj="$(grep -n 'fire_args+=(--cloud)' "$CODE" | head -1 | cut -d: -f1)"
-  rd="$(grep -n 'venue="$(fire_venue' "$CODE" | head -1 | cut -d: -f1)"
-  [ "$inj" -lt "$rd" ] || { echo "injection at $inj is AFTER the read at $rd"; false; }
+    || { echo "a hand-authored --cloud fire_line lost its meaning (legacy escape gone)"; false; }
+  # ORDER: the selection is decided above the actuator branch, else the branch reads an unset venue.
+  local sel br
+  sel="$(grep -n 'venue=cloud$' "$CODE" | head -1 | cut -d: -f1)"
+  br="$(grep -n 'if \[ "$venue" = cloud \]; then' "$CODE" | head -1 | cut -d: -f1)"
+  [ -n "$sel" ] && [ -n "$br" ] && [ "$sel" -lt "$br" ] \
+    || { echo "selection at ${sel:-∅} is not above the actuator branch at ${br:-∅}"; false; }
 }
 
-@test "15 the duplicate check is fire_venue itself, never a substring test over the argv" {
-  # `--venue` is a closed set at the actuator precisely so a loose match cannot hand it a
-  # well-formed string derived from the wrong fire (case 3). A `case " ${fire_args[*]} " in
-  # *" --cloud "*)` guard here would re-introduce exactly that substring matching one line above
-  # the function that refuses it.
+@test "15 the cloud actuator receives the SAME composed brief, item and account the local fire carried" {
+  # The brief is extracted from the argv that would actually run (`--prompt-file`'s value), never
+  # re-derived — the same one-source rule the old argv-reader enforced, applied to the new actuator.
   code_of "$DISPATCH"
-  ! grep -q 'fire_args\[\*\]' "$CODE" \
-    || { echo "an argv SUBSTRING test appeared beside the element-exact reader"; false; }
-  grep -q '\[ "$(fire_venue "${fire_args\[@\]}")" = cloud \] || fire_args+=(--cloud)' "$CODE" \
-    || { echo "the duplicate check must reuse the one element-exact reader"; false; }
+  grep -q -- '"$_fa_prev" = "--prompt-file"' "$CODE" \
+    || { echo "the brief is not extracted from the fire argv"; false; }
+  grep -q -- '--task "$cloud_pf" --account "$acct" --item "$id"' "$CODE" \
+    || { echo "the managed create is missing the brief, the routed account, or the item"; false; }
 }
 
 @test "16 the BOX OPT-IN outranks the plan, and an unhonoured plan is journalled" {
@@ -259,9 +259,9 @@ code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "
   # Without this they could all be passing because their greps cannot go red.
   code_of "$DISPATCH"
   local mutant="$BATS_TEST_TMPDIR/mutant-p"
-  sed -e 's/fire_args+=(--cloud)/fire_args+=(--local)/' \
+  sed -e 's/up --via api --task/up --via cli --task/' \
       -e 's/CC_FIRE_CLOUD:-off/CC_FIRE_ALWAYS:-on/' "$CODE" > "$mutant"
-  ! grep -q 'fire_args+=(--cloud)' "$mutant" || false
+  ! grep -q 'up --via api --task' "$mutant" || false
   ! grep -q 'CC_FIRE_CLOUD:-off' "$mutant" || false
 }
 
@@ -309,4 +309,26 @@ code_of() { CODE="$BATS_TEST_TMPDIR/code.txt"; grep -v '^[[:space:]]*#' "$1" > "
   run bash -c ". '$LIB'; export STUB_CUST_RC=1; cloud_declare item9 '$CAP' feat/m"
   [ "$status" -eq 0 ]
   [[ "$output" == *"custody NOT OPENED"* ]] || { echo "$output"; false; }
+}
+
+@test "18 a cc-offload-managed fire is ADOPTED — no re-declare, no second custody, real branch preserved" {
+  # The overwrite this pins against: fire #1's correct declaration (branch claude/fire-…) was
+  # replaced by a re-declare naming the WORKTREE, so the reconcile watched a branch the VM would
+  # never push — and a late re-declare would also re-probe the remote baseline after the push.
+  printf '✓ session_a1 on next2 — anthropic_cloud VM, repo ATTACHED, branch claude/fire-1\n  managed: custody OPEN (marker session_a1) · wakes 345\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' wt-item9"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"adopted session_a1"* ]] || { echo "$output"; false; }
+  [ -z "$(declared)" ] || { echo "RE-DECLARED over the fire path's record: $(declared)"; false; }
+  [ -z "$(custodied)" ] || { echo "custody opened TWICE: $(custodied)"; false; }
+}
+
+@test "19 a legacy-leg fire is ADOPTED with custody, and the undelivered brief is LOUD" {
+  printf 'declared session_b2 (branch claude/fire-2 on origin) — it is now observable\n' > "$CAP"
+  run lib "cloud_declare item9 '$CAP' wt-item9"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"adopted session_b2"* ]] || { echo "$output"; false; }
+  [ -z "$(declared)" ] || { echo "RE-DECLARED over the leg's record: $(declared)"; false; }
+  custodied | grep -q 'open .*--marker session_b2'
+  [[ "$output" == *"NO BRIEF DELIVERED"* ]] || { echo "$output"; false; }
 }
