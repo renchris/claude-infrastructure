@@ -457,11 +457,34 @@ step rather than testing it.
 
 | | before | after |
 |---|---|---|
-| all open rows | 6 / 461 = **1.3%** | 169 / 473 = **35.7%** |
-| dispatchable rows (`status=="open"`) | — | 168 / 299 = **56.2%** |
+| all open rows | 6 / 461 = **1.3%** | 154 / 474 = **32.5%** |
+| dispatchable rows (`status=="open"`) | — | 153 / 300 = **51.0%** |
 
-The denominator moved 461 → 473 during the pass: sibling sessions kept filing. Both figures are
-`cc-backlog list --open --json` read through the **deployed** binary, not the worktree copy.
+The denominator moved 461 → 474 during the pass: sibling sessions kept filing. Both figures are
+`cc-backlog list --open --json` read through the **deployed** binary, not the worktree copy. They are
+the **post-adversarial** numbers — coverage peaked at 35.7% and was cut back to 32.5% by the pass
+below, which is the direction that should be trusted: a probe removed for being undiscriminating is
+coverage that was never real.
+
+**THE ADVERSARIAL PASS, and it changed the answer.** Every one of the 26 force-stored probes was
+re-read against its item's title by a reviewer briefed to REFUTE and to default to refuted. **16 of
+26 were refuted** — and the lead's own 5-item spot check had caught only 1 of them, because it
+sampled for the failure mode already found (a downstream symptom) and missed the commoner one:
+
+> **the grep was already true at filing.** `918e9bac60b6`'s lint landed 2026-08-06 and the item was
+> filed 08-10; `80e6637dfd9e`'s `default: high` landed 8 days before its item; `8e07e87770ce`'s
+> string entered the file 5 minutes before. A probe that was already passing on filing day
+> discriminates **nothing** — it would have retracted the item the moment it was written. It is not
+> weak coverage, it is anti-coverage: it reads as a checked item and is a guaranteed false retraction.
+
+The second refuted class is the **half-fix**: `d40d148d0333` and `594dcaa4e976` state a two-part
+condition (code branch present AND no resident idle agent process) and the probe covered only the
+code half — which landed 2 minutes before filing, while rc=67 refusals continued for another day.
+`d0a1bb8717cf` is the sharpest: its grep matched the *rare* generator sites while the dominant one
+(`postland-verify:2249`, the "post-land RED" filer) still stores no probe at all.
+
+All 16 were **cleared**, not rewritten — `--clear` is what made that possible, and it is why the flag
+exists. 10 survive as genuine retractions.
 
 **The re-run is live, and one IDL row proves it.** Of 75 `premise refuted` rows (4 distinct items),
 **6 belong to `bc0f2abe078b`, whose refusal came from a stored probe re-run**, verified by running
@@ -492,11 +515,21 @@ than re-implementing its fold, and is RED-proven against the pre-fix code.
 
 **Standing exclusions, named rather than silently dropped.** Five probes that shell out to `bats`
 were not stored: each would take a `cc-bats` execution root on every claim, contending with the
-ceiling (2 roots) that deferred this session's own test runs three times. 23 probes were stored with
-`--force` — they exit 0 now, so the verb refuses them by default. They are **not** closed here: the
-disproof is the deliverable, and the claim-time refusal hands the next reader the probe, the run, and
-the `done --evidence` line to close with. Closing 23 items on second-hand evidence would be the
-weaker move.
+ceiling (2 roots) that deferred this session's own test runs three times. The **10 surviving**
+force-stored probes exit 0 now, so the verb refuses them by default. They are **not** closed here:
+the disproof is the deliverable, and the claim-time refusal hands the next reader the probe, the run,
+and the `done --evidence` line to close with. Closing them on second-hand evidence would be the
+weaker move — and the adversarial pass is exactly why: 16 of 26 such "evidence" claims did not
+survive a reader briefed to refute them.
+
+**The generalisable rule this pass earned.** A falsifier must be able to distinguish the fix, not
+merely agree with the world. Two screens, and only the first was built in:
+
+1. *Does it pass now?* — the verb's own exit-0 refusal. Catches the ambiguous probe.
+2. **Did it already pass on the day the item was filed?** — nothing checks this, and it is the
+   commoner failure by 8 instances to 2. A probe is only coverage if it would have FAILED at filing
+   time. The cheap mechanical form is `git log -S<token> --before=<item lastTs>`: a token already in
+   the tree at filing cannot be the remedy's signature.
 
 **Still open, and not caused by this pass.** `deploy-live.sh` refuses to converge the live layer (no
 green tree descends from live HEAD); lag was 12 commits, inside the 25-commit / 6h degrade budget,
