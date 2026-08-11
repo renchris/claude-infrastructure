@@ -267,13 +267,26 @@ fi
 #     #31977), and removing it would delete a guard that is right rather than wrong. But it must
 #     never be cited as the reason a fan-out is bounded in depth.
 #
-#     WHERE THE GENERATION BOUND ACTUALLY LIVES, therefore: the 224-spawn / 167-session / 3-
-#     generation runaway crossed SESSION boundaries via pane splits executed as ordinary Bash
-#     (`logs/pane-spawns.jsonl`: 324 rows with a bare `chain:"it2-kitty"`). Neither term here can
-#     see that — depth has no population, and the budget resets at exactly the edge the cascade
-#     traverses. The lease is what spans it, so the bound is a third consumer of
-#     scripts/lib/worker-claim-gate.sh on the surface the spawns cross: hooks/validate-bash.sh
-#     § DUPLICATE-WORKER PANE-SPAWN ADMISSION, landed with this note.
+#     WHERE THE GENERATION BOUND ACTUALLY LIVES, therefore: neither term here can see the 224-spawn
+#     / 167-session / 3-generation runaway — depth has no population, and the budget resets at
+#     exactly the edge the cascade traverses (every step MINTED A NEW CLI SESSION). The lease is
+#     what spans that edge, so the bound is a worker-claim-gate consumer on the surface the spawns
+#     cross. THAT SURFACE IS THIS ONE, AND THE BOUND IS THE `cc_worker_claim_admit agent-tool` CALL
+#     BELOW (834fa840).
+#
+#     ⚠️ CORRECTED 2026-08-11 (backlog 6f24f9c49e3e). This paragraph shipped saying the runaway
+#     "crossed SESSION boundaries via pane splits executed as ordinary Bash" and sent the reader to
+#     hooks/validate-bash.sh § DUPLICATE-WORKER PANE-SPAWN ADMISSION for the bound. Both halves were
+#     wrong. The 324 bare `chain:"it2-kitty"` rows are not Bash-invoked splits: a bare chain says
+#     only that handoff-fire.sh was absent, and Claude Code's own teammate-pane backend invokes
+#     `it2-kitty` DIRECTLY for any Agent call carrying a name/team_name. Measured over the cascade
+#     window: 187 named Agent calls vs 180 such spawns, ~1:1 per minute; ZERO Bash calls invoking a
+#     pane tool across all 167 transcripts; ancestry `it2-kitty ← claude` with no tool shell between
+#     (179/180), against `kitty-split-launch.sh ← zsh ← claude` 16/16 as the same log's positive
+#     control. So the fan-out this hook refuses IS the generational edge, and the validate-bash.sh
+#     term — which is a real guard on a real, smaller population — could not have seen this cascade.
+#     Full evidence and the re-derivation commands live in that block's § WHICH SURFACE THE CASCADE
+#     ACTUALLY CROSSED. Case 13 of tests/worker-claim-gate-coverage.bats red-proofs the call below.
 #
 # REFUSAL IS HARD, NOT BOUNDED — deliberately UNLIKE capacity-admit above. That gate bounds its
 # refusals because memory pressure is transient and a wave must never be permanently blocked by a

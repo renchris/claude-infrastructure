@@ -159,10 +159,15 @@ if [[ "$_gg_hit" == 1 ]]; then
 fi
 
 # ── DUPLICATE-WORKER PANE-SPAWN ADMISSION ────────────────────────────────────────────────────────
-# The THIRD consumer of the duplicate-worker lease (backlog f2617b0480df), and the first one on the
-# surface where the measured runaway actually happened. The other two are
+# The THIRD consumer of the duplicate-worker lease (backlog f2617b0480df). The other two are
 # hooks/check-edit-boundary.sh (PreToolUse|Write|Edit — stops a duplicate CORRUPTING the worktree)
 # and hooks/agent-teams-enforce.sh (PreToolUse|Agent — stops it SPENDING the fleet on subagents).
+#
+# ⚠️ THIS TERM DID NOT BOUND THE 2026-08-07 CASCADE, AND THIS BLOCK USED TO SAY IT DID (corrected
+# 2026-08-11, backlog 6f24f9c49e3e). The claim it carried — "the first one on the surface where the
+# measured runaway actually happened" — is false: that cascade never touched Bash. See § WHICH
+# SURFACE THE CASCADE ACTUALLY CROSSED below for the measurement and for this term's real (non-empty,
+# smaller) population. The term stays; only the attribution was wrong.
 #
 # WHY A THIRD POINT AT ALL — because neither of the first two can see the cascade they were built
 # for. Measured 2026-08-11 against the full IDL history (985k rows, 2026-08-08 → 2026-08-11):
@@ -171,7 +176,12 @@ fi
 #   Agent tool, in-process depth   CC_SPAWN_MAX_DEPTH=2         43            NO — empty population
 #   Agent tool, per-session count  CC_SPAWN_MAX_PER_SESSION=60  43            NO — counter resets
 #   Write/Edit, lease identity     worker-claim-gate            793           after the fact
-#   Bash → pane spawn              (none)                       —             THIS IS THE ACTUATOR
+#   Agent tool, lease identity     worker-claim-gate            6             YES — THE ACTUAL BOUND
+#   Bash → pane spawn              (none)                       —             ungated → this term
+#
+# The last two rows are CORRECTED (2026-08-11, backlog 6f24f9c49e3e). This table shipped with
+# "Bash → pane spawn / THIS IS THE ACTUATOR" and no Agent-lease row at all, and it had the two
+# backwards — see below.
 #
 # The depth term's population is EMPTY BY HARNESS CONSTRUCTION, which resolves the open unknown
 # recorded at hooks/agent-teams-enforce.sh — see the note landed there in the same commit. All 43
@@ -182,19 +192,55 @@ fi
 # SESSION, so 91+ sessions each sat perfectly inside a cap of 60 (memory
 # `counter-resets-at-the-boundary-the-runaway-crosses`).
 #
-# And the sessions were minted HERE. `logs/pane-spawns.jsonl` records 324 spawns carrying a bare
-# `chain:"it2-kitty"` where a real fire stamps `chain:"handoff-fire.sh>it2-kitty"` — i.e. a pane
-# split executed as an ordinary Bash command, going around the door that does the claim
-# bookkeeping. That is the item's own sentence, "the lease cannot refuse what never calls claim",
-# with the actor located: not the dispatcher, not the Agent tool, but `Bash`. Nothing on this
-# surface consulted the lease before this term; the seven registered PreToolUse|Bash hooks are curl
-# scope, this validator, worktree guard, keychain, rm allowlist, ship-rail push and qos rewrite.
+# ── WHICH SURFACE THE CASCADE ACTUALLY CROSSED (corrected 2026-08-11, backlog 6f24f9c49e3e) ──────
+# THE SUPERSEDED CLAIM, kept because the inference is the instructive part: "the sessions were
+# minted HERE — `logs/pane-spawns.jsonl` records 324 spawns carrying a bare `chain:"it2-kitty"`
+# where a real fire stamps `chain:"handoff-fire.sh>it2-kitty"`, i.e. a pane split executed as an
+# ordinary Bash command ... not the dispatcher, not the Agent tool, but `Bash`."
 #
-# THE CONSEQUENCE IS A GENERATION BOUND, which is what the item asked for and what a depth cap on
-# the wrong surface could not give. The lease HOLDER still spawns normally; every session it puts
-# into that worktree is refused the moment IT tries to spawn further. The recursion therefore
-# terminates at generation 2 — deliberately not stronger, because refusing the holder's own
-# fan-out would break ordinary dispatch, and the runaway measured here is the recursion.
+# The premise is true and the conclusion does not follow. A bare chain means only that
+# handoff-fire.sh was NOT in the call path. It does not name what WAS, and "Bash" was assumed, never
+# read. What actually spawns those panes is Claude Code's own teammate-pane backend: an `Agent` call
+# carrying a `name`/`team_name` invokes `it2-kitty` DIRECTLY (memory `vendor-gate-may-be-an-env-var`
+# — that backend gates on ITERM_SESSION_ID + `command -v it2`, no handshake), so no handoff-fire.sh
+# appears in the chain and no Bash tool call exists to gate.
+#
+# Five legs, all from the 2026-08-07T22:00–23:30Z window, the cascade itself:
+#   1. VOLUME MATCHES THE AGENT TOOL, NOT BASH — 187 Agent/Task calls carrying a name/team_name vs
+#      180 bare-chain `it2-kitty` spawns, tracking ~1:1 minute by minute across the whole window.
+#   2. THERE ARE NO BASH SPAWNS TO COUNT — all 167 cascade transcripts hold 34 Bash calls naming a
+#      pane tool, and every one is `self-close`, a `sed`/`grep` READ of handoff-fire.sh, or
+#      `cc-backlog needs`. Not one invokes `it2-kitty`, `kitty-split-launch.sh` or `cc-respawn`.
+#   3. THE PROCESS TREE EXCLUDES A TOOL SHELL — those rows record ancestry `it2-kitty ← claude`
+#      (ppid_comm=claude, 179/180). A Bash tool call cannot produce that: it runs the command under
+#      the tool's own shell, which necessarily sits between.
+#   4. THE SAME LOG CARRIES ITS OWN POSITIVE CONTROL — `chain:"kitty-split-launch.sh"` rows, which
+#      ARE session-invoked, show exactly the shape leg 3 says is missing: `←zsh←claude`, 16/16. So
+#      the discriminator is a property of the log, not of how this analysis chose to read it.
+#   5. `detail` records `argv:0` — the backend splits with no arguments; a session driving a pane
+#      tool from Bash passes some.
+#
+# WHERE THE GENERATION BOUND ACTUALLY LIVES: hooks/agent-teams-enforce.sh, whose `cc_worker_claim_admit
+# agent-tool` term (834fa840) sits on PreToolUse|Agent — the surface legs 1-5 identify. The lease
+# HOLDER's fan-out is admitted, so gen 0 → gen 1 proceeds normally; every session it puts in that
+# worktree is a duplicate, so ITS Agent calls are refused and the recursion terminates at
+# generation 2. That is end-to-end red-proofed by case 13 of tests/worker-claim-gate-coverage.bats
+# ("the Agent hook actually DENIES a spawn from a session that lacks the lease"), with a control so
+# the deny cannot be an unconditional refusal of every Agent call in a wt- dir. 🚨 DO NOT DELETE
+# THAT TERM AS REDUNDANT WITH THIS ONE — this one would not have seen the cascade at all.
+#
+# WHAT THIS TERM IS STILL FOR, measured rather than assumed (the whole defect above was an unmeasured
+# population): a session running a pane tool from Bash is a real, non-empty, and much smaller class —
+# all-time 91 rows have `claude` in their ancestry under a session-invoked chain (72 handoff-fire.sh*,
+# 16 kitty-split-launch.sh, 3 lr-handoff.sh), against 368 handoff-fire.sh* rows fired headless by
+# launchd/cron and 296 lr-reset-poller.sh. Every `self-close` among them is exempt by construction
+# below. So this term closes a genuine hole on a surface nothing else gates — it is simply not the
+# hole the 2026-08-07 blow-up went through.
+#
+# RE-DERIVE, DO NOT TRUST, THESE FIGURES (memory `published-figure-decays-with-its-source`; the
+# transcript corpus is the perishable half):
+#   jq -r 'select(.chain=="it2-kitty")|.ancestry' ~/.claude/logs/pane-spawns.jsonl | head
+#   ls ~/.claude-quaternary/projects/*wt-149789b69fc4/*.jsonl | wc -l
 #
 # WHY IN THIS HOOK — it is ALREADY registered on PreToolUse|Bash, so the term goes live on the
 # trunk fast-forward instead of waiting behind a settings.json C10 operator step in the activation
