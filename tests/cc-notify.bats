@@ -929,8 +929,17 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   [[ "$output" == *"verdict=cloud-queued"* ]] || false
   [[ "$output" == *"queued=1"* ]] || false
   [[ "$output" == *"recorded=1"* ]] || false
-  # §9.2 step 2, verbatim: the transport is `claude -p <msg> --cloud <id> --output-format json`.
-  grep -qF -- "-p hello off-box --cloud $CLOUD_ID --output-format json" "$CLOUD_LOG"
+  # §9.2 step 2: the transport is `claude -p <msg> --cloud <id> --output-format json`. Asserted as
+  # three ADJACENCIES rather than one contiguous argv string, because this test's subject is §9.2's
+  # transport — not the sender's MCP hygiene. The contiguous form spanned both, and ff49e1e36 (which
+  # correctly inserted `--strict-mcp-config` between `-p <msg>` and `--cloud`) reded THIS test with a
+  # message about the cloud send, for a diff that had nothing to do with one (backlog 9d901bc3d582).
+  # Each grep is still exact: an adjacency proves the value reached the flag it belongs to, so a
+  # dropped message, a swapped id, or a lost --output-format all still fail. The flag itself has its
+  # own test below, where an MCP-hygiene change belongs.
+  grep -qF -- "-p hello off-box" "$CLOUD_LOG"
+  grep -qF -- "--cloud $CLOUD_ID" "$CLOUD_LOG"
+  grep -qF -- "--output-format json" "$CLOUD_LOG"
   # §9.2 step 3: the send is recorded in the declaration's sidecar, WITH the returned url — the only
   # handle by which anyone can later go and look at what the session did with the message.
   [ -f "$CC_CLOUD_STATE/$CLOUD_ID.sends" ]
@@ -939,6 +948,31 @@ secs() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $((
   # QUEUED, never "delivered": the word this tool reserves for a message a live reader will drain is
   # not available for a queue ack.
   [[ "$output" != *"delivered to inbox"* ]] || false
+}
+
+# MCP HYGIENE, on BOTH transport call sites (eece54939e7f / ff49e1e36). The sender is a transport: it
+# hands a message to a cloud session and exits, calling no tool, so every stdio server the caller's cwd
+# would give it is pure startup latency paid per ping. ff49e1e36 shipped the flag with no test of its
+# own — the only thing that broke when it landed was the §9.2 argv assertion above, which is why that
+# one now stops at the transport's own tokens and this one owns the flag.
+#
+# TWO sends, because cc-notify has TWO exec sites (routed via CLAUDE_CONFIG_DIR, and unrouted) and a
+# green suite over one of them credits neither: the fixtures' default declaration carries no account,
+# so every other --cloud test here reaches only the unrouted site. Deleting the flag from one site
+# alone must fail this test.
+@test "--cloud: BOTH transport sites pass --strict-mcp-config — the sender calls no tool" {
+  # site 2: no owning account in the declaration ⇒ the unrouted exec
+  declare_cloud
+  run "$NOTIFY" --cloud "$CLOUD_ID" "unrouted"
+  [ "$status" -eq 0 ]
+  grep -qF -- "-p unrouted --strict-mcp-config --cloud $CLOUD_ID" "$CLOUD_LOG"
+  # site 1: a declared owning account ⇒ the CLAUDE_CONFIG_DIR-routed exec
+  write_accounts
+  declare_cloud_acct session_01ROUTEDMCP owner
+  run "$NOTIFY" --cloud session_01ROUTEDMCP "routed"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"routing to owning account 'owner'"* ]] || false
+  grep -qF -- "-p routed --strict-mcp-config --cloud session_01ROUTEDMCP" "$CLOUD_LOG"
 }
 
 @test "--cloud: {ok:false} exits non-zero carrying the API's OWN reason, never a bare failure" {
