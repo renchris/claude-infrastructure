@@ -1106,6 +1106,69 @@ deadlock() { # the MEASURED live state: the only green is BEHIND live HEAD, and 
   [ "$(cat "$SHARED/untouched.txt")" = "peer edit" ]       # still the peer's, still uncommitted
 }
 
+@test "L8c an UNTRACKED file at a path the advance ADDS blocks BY NAME — never moved, never deleted" {
+  # THE THIRD CAUSE (2026-08-11). merge_blockers() skips `??` and said so on the claim "untracked
+  # cannot block a --ff-only" — false. Proven in a throwaway repo: an untracked file sitting where
+  # the advance ADDS a tracked one gives "The following untracked working tree files would be
+  # overwritten by merge" and exit 1. Pre-fix this test reaches the post-merge shrug ("BOTH named
+  # causes RULED OUT"), which is the live symptom: deploy.log carries two of those, unexplained,
+  # because git's stderr was discarded. The remedy half matters as much as the detection half — an
+  # untracked file exists ONLY in this checkout, so no land, branch or stash can bring one back.
+  advance_origin newfile                         # trunk ADDS newfile.txt; the layer stays put
+  stamp origin/main                              # T1 has a green descendant — not a tier test
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  printf 'peer scratch, tracked by nobody\n' > "$SHARED/newfile.txt"   # the collision
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNTRACKED COLLISION"* ]] || false        # its OWN class, not the dirty one
+  [[ "$output" != *"RULED OUT"* ]] || false                  # …named BEFORE the merge, not shrugged at after
+  [[ "$output" == *"newfile.txt"* ]] || false                # …naming the blocking path
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]                          # the tree did not move
+  [ "$(cat "$SHARED/newfile.txt")" = "peer scratch, tracked by nobody" ]      # the file is UNTOUCHED
+  [ -f "$PAGES/deploy-untracked-collision.page" ]
+  grep -q 'never moves or deletes' "$PAGES/deploy-untracked-collision.page"
+  [ ! -f "$INSTALL_LOG" ]                        # and nothing downstream of the merge ran
+}
+
+@test "L8d an untracked file OUTSIDE the advance's added set does NOT block (no over-refusal)" {
+  # The mirror of L8b, and it guards the same failure mode from the other side: the live checkout
+  # carries 22 untracked paths on an ordinary day, so an arm that refused on ANY untracked file would
+  # trade the green-stamp freeze for an untracked-file freeze and wedge the lane permanently.
+  advance_origin b                               # b adds b.txt and nothing else
+  stamp origin/main
+  printf 'scratch\n' > "$SHARED/unrelated-scratch.txt"
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  run dl
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ]         # it advanced anyway
+  [ "$(cat "$SHARED/unrelated-scratch.txt")" = "scratch" ]   # still there, still untracked
+}
+
+@test "L8e a merge failure NO pre-flight models reports GIT'S OWN words, never a shrug" {
+  # The generic half of the same defect, and the one that covers the causes this lane will never
+  # model. `>/dev/null 2>&1` discarded git's stderr, then the arm below told the operator "read git
+  # status by hand" — asking them to re-derive what it had just deleted. index.lock is the realistic
+  # instance rather than a contrived one: the live checkout is SHARED and its reflog shows a second
+  # actor fast-forwarding it, so a concurrent git holding the lock is the standing explanation for
+  # the two unexplained "RULED OUT" refusals in deploy.log.
+  #
+  # It also pins the new oracle's FAIL-OPEN contract: read-tree -n hits the same lock and dies
+  # "fatal: Unable to create …", which is NOT the untracked pattern, so untracked_blockers must
+  # yield nothing and let the merge speak. An oracle that guessed a class from an unparsed error
+  # would refuse here under the wrong name.
+  advance_origin b
+  stamp origin/main
+  base="$(git -C "$SHARED" rev-parse HEAD)"
+  touch "$SHARED/.git/index.lock"                # a concurrent git in the shared checkout
+  run dl
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"GIT SAID"* ]] || false                   # git's own words reached the operator…
+  [[ "$output" == *"index.lock"* ]] || false                 # …naming a cause no pre-flight here models
+  [[ "$output" != *"UNTRACKED COLLISION"* ]] || false        # the new oracle failed OPEN, not into a wrong class
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$base" ]
+  [ ! -f "$INSTALL_LOG" ]
+}
+
 @test "L9 the launchd job execs even when the ~/.claude symlink is ABSENT (59 exec failures)" {
   P="$REPO/launchd/com.claude.deploy-live.plist"
   run plutil -lint "$P"
