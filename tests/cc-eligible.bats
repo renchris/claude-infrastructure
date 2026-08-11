@@ -213,3 +213,46 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   run "$CE" frobnicate
   [ "$status" -eq 2 ] || { echo "$output"; false; }
 }
+
+# ── the lead-audit spellings (2026-08-11): each pinned on the REAL item's phrasing that exposed
+# it, each paired with a lookalike that must stay eligible ──────────────────────────────────────
+
+@test "VERSIONED CONFIG DIR: .claude-219/.claude-220 is this box, refused" {
+  local id; id="$(add aud "asyncRewake ABSENT from installed .claude-219/.claude-220 binaries tonight — re-verify the field name on current binaries")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-box"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"versioned-config-dir"* || "$output" == *"installed-binaries"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "VERSIONED CONFIG DIR lookalike: .claude-plans and claude-infrastructure are repo words, eligible" {
+  local id; id="$(add aud "move the plan into .claude-plans and cite the claude-infrastructure README")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "INSTALLED BINARIES: a claim about what an installed binary contains is a read of this box" {
+  local id; id="$(add aud "the flag is absent because the binaries were installed without it")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"installed-binaries"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "INSTALLED BINARIES lookalike: 'binary format' with no install claim stays eligible" {
+  local id; id="$(add aud "document the binary format of the journal header")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "CC BINARY VERSION: adjudicating 2.1.NNN build behavior is this box's installs" {
+  local id; id="$(add aud "its claim 2.1.220 IS 3.4x worse per session than 2.1.219 is FALSE — a time-confounded comparison")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"cc-binary-version"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "CC BINARY VERSION lookalike: a two-digit patch or a section number stays eligible" {
+  local id; id="$(add aud "bump the dep to 2.1.22 and renumber section 2.1.2 of the doc")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}

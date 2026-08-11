@@ -188,6 +188,25 @@ BOX = [
     ("claude1", r"\bclaude1\b"),                          # 492b95cbac72, 48e14163e78a
     ("claude-exe", r"\bclaude\.exe\b"),                   # e78107996dea (a process on this box)
     ("start-latency", r"\bstart[- ]latency\b"),           # 492b95cbac72
+    # ── FOUND BY THE LEAD'S BLIND-ADJUDICATION DIFF (2026-08-11, the first standing audit) ─────
+    # W1's close named auditing the promoted bucket a STANDING duty, not a one-time pass. The
+    # first post-land audit diffed the lead's 27-item blind triage (written before this producer
+    # existed) against the labels; the two disagreements were both cloud labels, and both hid box
+    # state in spellings this list lacked. Measured before adding: the whole cloud bucket (48)
+    # exposes exactly these two items and no others; `transcript`/`telemetry` were candidates and
+    # stayed OUT (zero cloud instances — no hunch entries). Both items' texts are pinned in the
+    # suite.
+    #
+    # THE INSTALLED BINARY FAMILY. `.claude-219`, `.claude-220`, `.claude-next`, the knowledge
+    # mirrors — versioned config/install dirs that exist only on this disk; and any claim about
+    # what an INSTALLED binary contains ("asyncRewake ABSENT from installed … binaries") is a
+    # read of this box, not of the repo. The version-string spelling is the same family from the
+    # other side: adjudicating 2.1.NNN build behavior ("2.1.220 IS 3.4x worse per session") is a
+    # statement about builds installed and measured HERE — a VM has neither the builds nor the
+    # sessions.
+    ("versioned-config-dir", r"\.claude-(?:\d+|next\d*|secondary|tertiary)\b"),  # 7d8e44dd5822
+    ("installed-binaries", r"\binstalled\b.{0,40}\bbinar(?:y|ies)\b|\bbinar(?:y|ies)\b.{0,20}\binstalled\b"),  # 7d8e44dd5822
+    ("cc-binary-version", r"\b2\.1\.\d{3}\b"),            # bbad96d163ab
 ]
 
 OFFBOX_LANE = [
