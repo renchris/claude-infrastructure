@@ -391,6 +391,45 @@ board therefore needs a **narrow (≤76 col) variant**, not the chat table.
 
 ---
 
+## 3b. Wave outcomes (2026-08-11)
+
+| Wave | State | Landed | Independently re-verified by the lead on trunk |
+|---|---|---|---|
+| **W0** | DONE | `222e0f0fe` (4 commits) | hook 28.699 s → 0.598 s; differential 60 pairs / 0 mismatches |
+| **W1** | DONE | `da9b186f0` | `claude-accounts-core.bats` **77/77 exit 0** |
+| **W3a** | DONE | `34da0847f d5768fad1 26dc3ab94 ab8c07fd0` (+`44ba61199`) | `claude-launcher-router.bats` **21/21 exit 0** (15 pre-existing + 6 new) |
+| **W2** | DONE | `a77faa729` | core + statusline-identity **100/100 exit 0** (81 + 19) |
+| **W3b** | IN FLIGHT | — | board hook · narrow renderer · migration 0011 |
+
+**Deviations, each with its reason — none is a silent narrowing:**
+
+- **W1:** the `DESK_*` constants are range-validated via a new `ROUTER_OPTIONAL_RANGES` map rather
+  than added to `ROUTER_KEYS`. `ROUTER_KEYS` is a REQUIRED list and `~/.claude/accounts.json` is a
+  symlink into a checkout that LAGS the code during a land, so a required key would `sys.exit`
+  every consumer at once. M7's own constants are absent from it for the same reason.
+- **W3a:** D3 is **NARROWED, not closed** — no release verb exists in `claude-accounts`, so the
+  charge is deferred behind a settle window (`CC_LAUNCH_ASSIGN_SETTLE_S`, 5 s) and a *slow* refusal
+  still charges. Documented in the code.
+- **W3a refutes R8 on a detail:** the "byte-identical" overclaim exists ONLY at
+  `lib/claude-launcher.zsh:29`. R8's claim that `migrations/0009:38` also carries it is FALSE, so
+  nothing in `migrations/` needed to move.
+
+🚨 **REMAINING CONVERGENCE — `statusline.sh` IS A COPY SURFACE.** The `(3)` → `(next3)` change is
+**INERT until `./install.sh` runs**, and `deploy-live.sh` deliberately does NOT repair copy classes.
+`bin/claude-accounts`, `commands/accounts.md`, `hooks/*` and `lib/*` are per-file symlinks and go
+live on the checkout fast-forward. So the close-out sequence is: `deploy-live.sh` (symlink classes)
+**AND** `./install.sh` (copy classes) **AND** `install.sh --config-dir <dir> --wire-hooks` × 5 for
+the new board hook, then `deploy-parity-assert.sh` — reading 3 as NO VERDICT, never as 0.
+
+**Process finding worth more than the diff:** `handoff-fire.sh`'s INC-4 engagement detector gave a
+FALSE NEGATIVE twice (panes 379, 384 — both declared "never engaged … TASK-LESS", both then did
+their whole wave correctly). Its printed recovery is a warm re-fire into the SAME worktree, which
+put two sessions on `bin/claude-accounts` for W1; only the sibling's own duplicate-detection (pane
+381 stood down without writing a byte) prevented a clobber. **The prescribed remedy is more
+damaging than the symptom.** Filed `87626e1593c3`.
+
+---
+
 ## 4. Open decisions for the operator
 
 **D-A. Should `accounts[0].launcher` flip `claude` → `claude1`?** Migration `0009-start-latency-router`
