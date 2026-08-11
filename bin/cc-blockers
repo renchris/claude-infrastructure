@@ -215,6 +215,7 @@ LAUNCHCTL_BIN="${CC_BLOCKERS_LAUNCHCTL_BIN:-/bin/launchctl}"   # READ-ONLY subco
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hooks/cc-permission-beacon.sh + lead-supervisor.sh
 BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
 REAP_ALARM_SH="${CC_REAP_ALARM_SH:-$HOME/.claude/scripts/teammate-reap-alarm.sh}"
+WTGC_ASSERT_SH="${CC_WTGC_ASSERT_SH:-$HOME/.claude/scripts/worktree-gc-infra-run.sh}"
 # The cross-session comms registry, keyed by paneUUID and carrying `session_id` — the join that lets
 # a pending beacon name an ACTUAL iTerm2 pane instead of an opaque uuid. Same file cc-sessions reads.
 CC_REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
@@ -928,6 +929,44 @@ teammate_reap_rows() { # → one JSON object per line (possibly none)
     "$REAP_ALARM_SH" "$REAP_ALARM_SH" "$now"
 }
 
+# (e2) JANITOR-STALE — the READING half of the worktree janitor, and it exists for the same reason
+# permission-pending below it does: the sensor was built and nothing consumed it. `worktree-gc-infra-run.sh
+# --assert` answers three questions on demand (true population · age of the last verdict · what that
+# verdict was) and exits 3 when the population breached its ceiling OR the janitor itself has gone
+# stale/never run. Measured 2026-08-10: repo-wide, its ONLY callers were its own bats file. A janitor
+# that silently stops running is invisible precisely when it matters — the population grows and no
+# row anywhere says so — which is the "sensor built, never read" shape this file already carries two
+# instances of.
+#
+# BOUNDED, and fails no wider than itself. --assert's stranded scan is allowed up to
+# CC_WTGC_STRANDED_BOUND (120 s by default) — unusable on a board that renders interactively — so the
+# call caps that scan at 3 s AND wraps the whole thing in `timeout` where one exists. Every failure
+# mode is SILENCE, never a row: absent/non-executable script, timeout, empty output, or any rc that
+# is not the documented 0/3. A new exit code must land in the no-premise arm, never be read as a
+# breach: rc 3 is the only value that means "breached", and anything else is evidence we do not have.
+janitor_stale_rows() { # → one JSON object per line (possibly none)
+  local now out rc age detail
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ -x "$WTGC_ASSERT_SH" ] || return 0                                # not deployed ⇒ no premise
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(CC_WTGC_STRANDED_BOUND=3 timeout 20 "$WTGC_ASSERT_SH" --assert 2>/dev/null)"; rc=$?
+  else
+    out="$(CC_WTGC_STRANDED_BOUND=3 "$WTGC_ASSERT_SH" --assert 2>/dev/null)"; rc=$?
+  fi
+  [ -n "$out" ] || return 0
+  [ "$rc" = 3 ] || return 0        # 0 = bounded and fresh (silence); anything else = no verdict
+  # The BREACH lines ARE the detail — --assert already words each one, so re-deriving them here
+  # would be a second renderer that can disagree with the sensor it is quoting.
+  detail="$(printf '%s\n' "$out" | grep '^BREACH ' | sed 's/^BREACH //' | paste -sd '; ' - 2>/dev/null)"
+  [ -n "$detail" ] || return 0     # rc 3 with no BREACH line is incoherent ⇒ assert nothing
+  age="$(printf '%s\n' "$out" | sed -n 's/.*last_verdict_age_h=\([0-9]*\).*/\1/p' | head -1)"
+  printf '{"kind":"janitor-stale","state":"ALARM","detail":"%s","subject":"%s","last_verdict_age_h":%s,"recover_cmd":"%s","ts":%s}\n' \
+    "$(printf '%s' "$detail" | sed 's/\\/\\\\/g; s/"/\\"/g')" \
+    "worktree-gc-infra" "${age:-null}" \
+    "bash $WTGC_ASSERT_SH --assert" "$now"
+}
+
 # (f) PERMISSION-PENDING — the READING half of the beacon, and the reason this exists is that it was
 # missing. `beacon-inert` above only ever asked "is the beacon WIRED", answering with the presence of
 # the directory: `[ -d "$PERMPEND_DIR" ] && return 0`. That was the ONLY consumption of PERMPEND_DIR
@@ -1196,7 +1235,7 @@ land_holder_rows() {
   bash "$ll" --alarms 2>/dev/null || true
 }
 
-ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; janitor_stale_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1319,10 +1358,12 @@ nf="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $FLEET_SEL] | length" 2>/dev/null 
 # "is the daemon in its declared state" — and the whole lesson of the nine-day outage is that those
 # are different questions. Every mechanism in this path was in its declared state throughout.
 REAP_SEL='select(.kind=="teammate-reap")'
+JANITOR_SEL='select(.kind=="janitor-stale")'
 # NOT `nr` — that name is already the RELOGIN-BLOCKED count at :1094, and taking it here
 # silently emptied the relogin table and flipped the board to its all-clear line. An added
 # alarm that suppresses an existing one is the worst possible version of this change.
 ntr="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $REAP_SEL] | length" 2>/dev/null || echo 0)"
+njs="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $JANITOR_SEL] | length" 2>/dev/null || echo 0)"
 # ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
 # Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
 # exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
@@ -1401,6 +1442,16 @@ if [ "${ntr:-0}" != 0 ]; then
   { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ]; } && echo
   echo "TEAMMATE-REAP — the idle-close path is not closing panes (run the command to see why):"
   alarm_table "$REAP_SEL" "$ALARMS_JSON" 34
+fi
+
+# JANITOR-STALE — the worktree janitor breached its ceiling, or stopped demonstrably running. Until
+# now `worktree-gc-infra-run.sh --assert` had no caller but its own bats file, so a janitor that
+# quietly stopped was invisible exactly while the population it bounds kept growing. The subject
+# words each BREACH line; this only relays them, so the board and the sensor cannot disagree.
+if [ "${njs:-0}" != 0 ]; then
+  { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ] || [ "${ntr:-0}" != 0 ]; } && echo
+  echo "JANITOR-STALE — the worktree janitor is breached or not running (run the command for the full read):"
+  alarm_table "$JANITOR_SEL" "$ALARMS_JSON" 34
 fi
 
 if [ "${n:-0}" != 0 ]; then
