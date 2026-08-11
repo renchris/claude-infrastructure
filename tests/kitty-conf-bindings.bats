@@ -23,6 +23,17 @@
 # its own mutant control. An assertion here that reads `close_window` is not merely stale; it is
 # asserting the destructive state the config exists to prevent.
 #
+# GREEN HERE HAS BEEN SHOWN TO MEAN SOMETHING. This file has twice been rebaselined onto a conf
+# that moved under it, and a rebaselined suite can go green by asserting nothing — so on 2026-08-10
+# every asserted site was mutation-checked: one one-line mutation of config/kitty.conf per site
+# (drop the map, drop `splits` from enabled_layouts, restore kitty's 2.0 drag tolerance, set
+# drag_threshold 0, contest a chord with a duplicate binding), each run against a throwaway repo
+# skeleton holding a COPY of this file, and positive-controlled by running the unmutated copy
+# first. Every one of them turned this suite red except the single documented survivor recorded at
+# the ⌘⌥⇧O test. Re-derive it that way rather than trusting this paragraph, and never repair a red
+# here by relaxing an assertion to match the conf — that is the move that produced both rebaselines
+# (backlog 7174eb206d25: a vanished symptom does not void the item).
+#
 # Assertions are `[ ]` / `|| false`. `[[ ]]` and `(( ))` are errexit-EXEMPT in bats and would be
 # silently DEAD anywhere but a body's last line (memory: bats-dead-assertions-errexit-exemptions).
 
@@ -178,6 +189,14 @@ main()
   # detach_tab is on ⌘⌥⇧O, not ⌘⌃O: the ⌘⌃ chords were retired wholesale (1d507193) to keep the
   # arrow-family shape ⌘⌥ = neighbour, ⌘⇧ = move, ⌘⌥⇧ = move to edge. Probing the retired chord
   # reads n=0 and an empty definition, which fails as a missing binding rather than a moved one.
+  #
+  # THE ABSENCE OF ⌘⌃O IS DELIBERATELY NOT ASSERTED, and this is the one mutation the suite lets
+  # live: re-adding `map cmd+ctrl+o detach_tab ask` to the conf leaves every test here green. That
+  # is correct scope, not a hole. The retirement was a keymap-SHAPE choice — the conf's own reason
+  # at §4b is "⌃ is unused by hand here", with all three O-chords probed FREE — so a returning ⌘⌃O
+  # is a redundant second route to an action that still works, not the silent destructive inversion
+  # the ⌘⇧D and ⌘W guards exist for. An absence assertion would instead go red the next time ⌘⌃ is
+  # deliberately used for anything, i.e. it would be a tripwire on the conf's own next change.
   echo "$output" | grep -qx 'cmd_opt_o_last=detach_window' || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_opt_shift_o_last=detach_tab ask' || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_opt_o_n=1' || { echo "$output"; false; }
