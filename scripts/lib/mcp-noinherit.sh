@@ -94,7 +94,14 @@ cc_mcp_noinherit_args() {
 
   if [ -n "$pass" ]; then
     CC_MCP_NOINHERIT_REASON="project .mcp.json stdio servers OFF; ${srv_count} user-scope server(s) preserved via $pass"
-    CC_MCP_NOINHERIT_ARGS="--strict-mcp-config --mcp-config $pass"
+    # `--mcp-config=<path>`, NEVER `--mcp-config <path>`. The option is VARIADIC: in the space form
+    # it keeps consuming following words, so the fire's own prompt — a bare positional in every
+    # interactive launch shape — is swallowed as a SECOND config path. Measured 2026-08-11: a real
+    # fire died at `Invalid MCP configuration: Failed to read file: ENAMETOOLONG` with the whole
+    # brief where a filename should be, and the pane sat at a shell with no session in it. It is
+    # invisible to a `-p` test, because there the prompt follows a flag that takes a value and is
+    # never a loose positional — which is exactly why the first version of this shipped green.
+    CC_MCP_NOINHERIT_ARGS="--strict-mcp-config --mcp-config=$pass"
   else
     # No passthrough buildable (no user-scope servers, no jq, unreadable config). Still compose the
     # isolation — the stdio chain is the cost this exists to remove — and SAY that the http servers

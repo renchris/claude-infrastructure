@@ -64,12 +64,30 @@ teardown() {
   source "$LIB"
   cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
   [[ "$CC_MCP_NOINHERIT_ARGS" == *"--strict-mcp-config"* ]]
-  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config"* ]]
-  pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config }"
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]]
+  pass="${CC_MCP_NOINHERIT_ARGS##*--mcp-config=}"
   [ -f "$pass" ]
   # the two http servers survive, the stdio one is filtered out — the whole point of the passthrough
   run jq -r '.mcpServers | keys | join(",")' "$pass"
   [ "$output" = "motion,motion-plus" ]
+}
+
+@test "the passthrough uses --mcp-config=VALUE — the space form eats the prompt" {
+  # REGRESSION, not styling. `--mcp-config` is variadic: `--mcp-config <path> "<prompt>"` consumes
+  # the prompt as a second config path, and a real fire died on it with ENAMETOOLONG while every
+  # `-p`-shaped test stayed green (a `-p` prompt is never a loose positional). Assert the shape at
+  # the composer AND at the typed line, because only the typed line has a bare positional.
+  # shellcheck source=/dev/null
+  source "$LIB"
+  cc_mcp_noinherit_args "$CFG" "$BRIEF_PLAIN"
+  [[ "$CC_MCP_NOINHERIT_ARGS" != *"--mcp-config "* ]]
+  [[ "$CC_MCP_NOINHERIT_ARGS" == *"--mcp-config="* ]]
+
+  run timeout 300 bash "$FIRE" --prompt-file "$BRIEF_PLAIN" --dry-run --account next2
+  [ "$status" -eq 0 ]
+  cmd="$(printf '%s\n' "$output" | grep '^command:')"
+  [[ "$cmd" == *"--mcp-config="* ]]
+  [[ "$cmd" != *"--mcp-config "* ]]
 }
 
 @test "POSITIVE CONTROL: a brief that declares browser work leaves the servers ON" {
