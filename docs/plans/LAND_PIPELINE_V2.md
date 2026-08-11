@@ -12,6 +12,13 @@ activation consolidated to one operator command; tests green; landed via project
 
 Status: DESIGN 2026-07-28 · owner session e891e080 · branch `land-pipeline-v2`
 
+> **Audited at fleet scale 2026-08-10** — `docs/research/land-architecture-100p-2026-08-10.md`
+> (10-lane wave, all evidence in its sibling dir). Verdict: this architecture **CERTIFIED**
+> (lock 0.7-4.8% util; residency law kills the queue class); seven implementation gaps filed as
+> `land-arch-*` backlog items — the largest: stranded-sweep runs INSIDE the land mutex (~90% of
+> the hold). **Read that doc before re-opening any land-congestion question here**; it also
+> re-grades this plan's §7 acceptance and flags §8's merge-queue rejection ground as decayed.
+
 ---
 
 ## Phase 0 — Agent Team Orchestration
