@@ -1556,10 +1556,31 @@ dispatch() { # <dry|run|decide>
       # cc-notify sees it, and the worker is told its registry holds no such target. `--role desk` hands
       # the role name to the resolver intact, so the worker is told the role is unset and where its file
       # lives. Same delivery, an actionable diagnosis instead of a misdirected one.
+      # THE STALENESS RAIL (backlog 6110fc45141e), and why it rides the brief even though the fire
+      # is now gated. On 2026-08-08 a worker was fired into a worktree 735 commits behind trunk. The
+      # post-land RED it carried reproduced FAITHFULLY there — the fix had landed on trunk eight days
+      # earlier and was simply absent from that tree — so the failure was live, the file matched the
+      # item, the diagnosis was correct, and the diff would have REVERTED two landed generalisations
+      # with a commit message confidently explaining why. Every ordinary check passed. Only an
+      # explicit `git show origin/main:<path>` caught it.
+      #
+      # The fire-time gates (warm_worktree + the pre-existing-dir arm above, and handoff-fire's own
+      # hf_freshness_gate) make a STALE TREE the thing that cannot happen. This is the other half,
+      # and it is not redundant with them: the tree can be perfectly fresh and the ITEM still be
+      # stale — filed against a sha whose cure landed while the row sat in the queue. Both failures
+      # end the same way, in a diff that reverts trunk, and only one of them is a git question. So
+      # the worker is told to re-check at CONSUMPTION rather than trust what it was handed, which is
+      # the same rule the evidence-freshness sibling (f46261b23ec2) proposes for the item's TEXT.
+      #
+      # NO BACKTICKS ANYWHERE IN THIS LIST — these are double-quoted shell strings, so a backtick
+      # would command-substitute at compose time and write its OUTPUT into the worker's brief.
+      local staleness_rail
+      staleness_rail="FIRST STEP — read what this item cites on TRUNK, never in your own tree. Run: git -C $irepo fetch origin -q && git rev-list --count HEAD..origin/main (0 means your tree IS trunk; anything else means every file you are about to read predates it), then 'git show origin/main:<path>' for each file the item names, and check the cited sha against origin/main with 'git log --oneline <sha>..origin/main -- <path>'. A post-land RED reproduces FAITHFULLY in a stale tree, and against a fix that already landed, so a correct-looking diagnosis can produce a diff that REVERTS trunk (cc-backlog 6110fc45141e). If the cure is already on trunk, the item is DONE — close it with that sha as evidence rather than re-deriving it."
       if ! printf '%s\n' \
         "TASK — ${title:-backlog item $id} — cc-backlog item $id (project $iproj, repo $irepo)." \
         "DoD ref: ${dod:-none}. Scope (frozen): drive this ONE item to finished-verified-landed." \
         ${pcontract:+"$pcontract"} \
+        "$staleness_rail" \
         "Rails: $rails" \
         "On completion: cc-backlog done $id --evidence \"<landed sha>\"." \
         "If blocked on an OPERATOR-only step (a key, a launchctl bootout, any human action you cannot do): cc-backlog block $id --needs \"<the exact step>\" — this PARKS the item OUT of the dispatch wave (no re-dispatch loop, no burned worker slot) until the operator acts, then cc-notify --role desk \"<the step>\". Do NOT reopen an operator-gated item — that re-cycles it." \

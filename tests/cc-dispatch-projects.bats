@@ -340,6 +340,38 @@ mkrepo() {
   grep -q 'land ONLY via the project-local /ship' "$C/brief-proj-c-1.txt" || false
 }
 
+# ── the brief tells the worker to re-check the item against TRUNK before it reads anything ───────
+@test "brief: the FIRST STEP is a content check against origin/main — a stale premise reads green in a stale tree" {
+  # BACKLOG 6110fc45141e. A worker was fired into a worktree 735 commits behind trunk; the post-land
+  # RED it carried reproduced FAITHFULLY there, because the fix had landed on trunk eight days
+  # earlier and was absent from that tree. Failure live, file matched, diagnosis correct — and the
+  # diff would have REVERTED two landed generalisations. The fire-time gates now make the STALE TREE
+  # impossible; this rail covers the half that is not a git question at all: a tree that is perfectly
+  # fresh while the ITEM is stale, its cure having landed while the row sat in the queue. Both end in
+  # a diff that reverts trunk, so the worker is told to re-check at CONSUMPTION either way.
+  seed_items proj-b:1
+  local rb; rb="$(mkrepo proj-b)"; conf "proj-b  repo=$rb"
+  fresh; CC_DISPATCH_CEILING=6 "$DISP" --once >/dev/null 2>&1
+
+  grep -q 'FIRST STEP — read what this item cites on TRUNK, never in your own tree' "$C/brief-proj-b-1.txt" || false
+  # the exact command, and the item's OWN repo in it — a rail naming no command is a wish
+  grep -q "git -C $rb fetch origin -q && git rev-list --count HEAD..origin/main" "$C/brief-proj-b-1.txt" || false
+  grep -q "git show origin/main:<path>" "$C/brief-proj-b-1.txt" || false
+  # and the disposition when the check FIRES: close it on trunk's sha, never re-derive the cure
+  grep -q 'If the cure is already on trunk, the item is DONE' "$C/brief-proj-b-1.txt" || false
+  # NO BACKTICK EXECUTED AT COMPOSE TIME: these lines are double-quoted shell strings, so a backtick
+  # in the rail would have substituted a COMMAND and written its output into the worker's brief.
+  ! grep -q '`' "$C/brief-proj-b-1.txt" || false
+
+  # RED: the pre-change tree composes the same brief with no such step, so a worker reads its own
+  # tree first and has nothing telling it not to. PINNED to proj-b, because that tree dispatches
+  # only the pinned project (test 1) — without the pin it would compose nothing and the absence
+  # assertion below would pass for the wrong reason.
+  fresh; CC_DISPATCH_PROJECT=proj-b CC_DISPATCH_CEILING=6 "$PRISTINE" --once >/dev/null 2>&1
+  [ -s "$C/brief-proj-b-1.txt" ] || false           # positive control: it DID compose a brief
+  ! grep -q 'FIRST STEP' "$C/brief-proj-b-1.txt" || false
+}
+
 # ── one queue: cross-project fairness under the existing S7 key ───────────────────────────────────
 @test "one queue: the OLDEST item wins across projects — a long-undrained foreign item outranks the incumbent's whole queue" {
   # proj-b's items are seeded FIRST, so they carry the oldest ts — this is the live shape: the 5
