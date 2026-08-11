@@ -255,12 +255,40 @@ it? Weigh against the renderer rule — there must remain exactly ONE renderer p
   the presence-equals-routable defect — turns tests 2 and 4 red while the positive control (test 3)
   stays green, so the suite discriminates for the stated reason instead of passing vacuously.
 
+- **2026-08-10 — W2 COMPLETE for `pi-codex`** (`4fc31b61`), after the operator ran the browser
+  OAuth. Login left `defaultModel: gpt-5.5` / `defaultThinkingLevel: medium` — **not** the latest
+  model and below the Codex CLI's `xhigh`. Pinned to `gpt-5.6-sol` @ `xhigh` (same priority-1 pick
+  as the Codex CLI), other settings keys preserved.
+
+  🚨 **LANDMINE 2 REFINED — the plan's own wording is not quite right, and this run proved it.**
+  The plan says to prove a pin by *"running the agent and reading the model it reports back"*.
+  Asked for its own model id, `pi` answered **`gpt-5.4`** — neither the new pin nor the prior
+  default. **The pin was correct and the self-report was wrong.** Pi's own session record
+  (`~/.pi/agent/sessions/**/*.jsonl`) for that same invocation reads
+  `model=gpt-5.6-sol · provider=openai-codex · thinkingLevel=xhigh`, reproduced on a second run.
+  **A model's claim about its own identity is generated text and can simply be false** — it is not
+  a measurement. What proves a pin is the **HARNESS's** record of what it sent. `codex exec`
+  satisfies the plan's wording only incidentally: its `model:` line is a header the CLI prints
+  *before the model speaks*, so it was never the model's self-report in the first place.
+  **Rule going forward: ask the harness (header, session record, request log), never the agent.**
+  A backend offering neither gets `proven_by: null` and renders `⚠unproven` — an honest non-verdict
+  beats a confident wrong one.
+
+  **Two provider ids in the registry were wrong and are fixed.** The `pi-codex` auth probe used
+  `openai` — that is the **API-KEY** provider and returns `credentials_not_configured` *forever*,
+  so the row would have rendered unauthenticated no matter how many times anyone logged in. The
+  **subscription** provider is `openai-codex`. Anthropic is **asymmetric**: a single id
+  (`anthropic`) serves both its API key and its subscription OAuth, so a `ready` there does not say
+  which credential is behind it — the `pi-claude` billing verdict is unchanged either way, but the
+  ambiguity is now recorded rather than assumed away.
+
 ## Remaining / known open
 
-1. **⛔ `pi-codex` is installed and cleared but UNAUTHENTICATED** — operator-only browser OAuth
-   (`pi` → `/login` → **OpenAI Codex**). Filed: backlog `c85038c4434f`. Until it runs, `pi` has no
-   model catalog, so W2's pin+prove cannot complete for this backend. **Do NOT select
-   `Claude Pro/Max` in that menu** (per-token extra-usage billing — see the W1 correction).
+1. ~~**⛔ `pi-codex` UNAUTHENTICATED**~~ — **RESOLVED 2026-08-10.** Operator ran the browser OAuth;
+   `pi auth check --provider openai-codex` → `status: ready, authType: oauth` (subscription, no API
+   key). Catalog refreshed, pinned to `gpt-5.6-sol` @ `xhigh`, proven against pi's own session
+   record (`4fc31b61`). Backlog `c85038c4434f` closed. Both routable backends now render
+   `auth ok` + `✓proven`.
 2. **Gemini CLI plan tier UNKNOWN** — free Code Assist individual and a paid Google AI subscription
    are indistinguishable from disk. Resolving it needs an authenticated Google account check the
    operator owns. Until then it stays DEFERRED, which is the cost gate working, not a gap.
