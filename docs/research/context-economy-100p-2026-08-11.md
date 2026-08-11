@@ -67,6 +67,25 @@ The death band is a cliff, not a gradient: of 18 sessions reaching ≥800K peak 
 
 **Shortest fix:** add `TOK_K="${CC_BOUNDARY_TOK_K:-700}"` beside the existing size axis and fire on `.input_tokens ≥ TOK_K × 1000`, with a +50K re-arm dimension in the existing latch. Window-independent, telemetry-shaped data already written, no new producer. It would have been in range for 4 of the 5 deaths. **Effort: ~30 lines, ≤1 h.**
 
+> 🚨 **G2's REMEDY IS REFUTED — do not implement `TOK_K`** (measured 2026-08-11 at implementation time).
+> The *finding* above is true; the *remedy* does not follow from it. Live census of `/tmp/cc-telemetry`:
+> **47 of 47 sessions run `window=1000000`, and `used_pct` equals `input_tokens ÷ window` in all 47**
+> (0 rows off by >2 pp; highest live occupancy `used_pct 70 / input_tokens 702450`). With a uniform
+> window, `TOK_K=700` **is** `used_pct=70` — the "new absolute axis" is an algebraic restatement of the
+> existing one, and `T=73` is strictly *stricter*: it fires at 730K, **before** the 800K death band.
+> `boundary-handoff.sh:52` had already recorded this exact objection to `input_tokens` ("an algebraic
+> restatement of used_pct, NOT a size signal"), and the analysis above re-derived past it.
+>
+> **The deaths were never a threshold problem.** `T=73` would have fired for every one of them. They
+> died because the rail could not fire *at all* — `gate-not-green-at-head` suppressed it, which is G1.
+> Fixing G1 covers the death band; `TOK_K` would add a second name for the same trigger and a second
+> thing to keep in sync. *(Generalisable: a true statistic beside a wrong cause manufactures
+> corroboration — cf. memory `wrong-cause-corroborated-by-true-metric`. The distinguishing question was
+> one command: are the windows actually uniform?)*
+>
+> Revisit only if a heterogeneous window appears here — and note a 200K-window session would hit `T=73`
+> at 146K absolute, early but harmless, since this rail only ever advises.
+
 ### G3 — There is no net at the ceiling, and it was switched off against the fleet's own ratified decision.
 
 `"autoCompactEnabled": false` is set in **all five** settings roots — I read them this turn (`~/.claude`, `.claude-next`, `.claude-secondary`, `.claude-tertiary`, `.claude-quaternary`) — and is shipped in `settings-templates/settings.example.json:14`. The running binary's default is `true`. The repo's own decision record says the opposite: `docs/research/SESSION_AUTONOMY_RESEARCH.md:138` D-F — *"Never disable auto-compact (survival backstop)"*. `autoCompactWindow` (documented range 100,000–1,000,000, a **brake position, not a window size** — exactly the lever the operator's policy permits) is set nowhere. [MEASURED, this turn]

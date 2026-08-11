@@ -53,12 +53,12 @@
 #   • transcript bytes ≥ SIZE_MB   ⇒ fire the advisory
 #   • process RSS      ≥ RSS_MB    ⇒ fire the advisory
 # BOTH axes may fire here, unlike waiting-recycle where RSS is page-only. The difference is real, not an
-# inconsistency: this hook has NO auto-exec — it advises the model at a committed+green boundary and the
+# inconsistency: this hook has NO auto-exec — it advises the model at a COMMITTED boundary and the
 # model decides. waiting-recycle can EXEC a recycle, and auto-recycling the fleet on an RSS number whose
 # dangerous level is unproven would be a hazard. Same signal, different power, because the blast radius
 # differs.
 # DELIBERATE NON-COVERAGE: a size fire still requires FRESH telemetry, because this hook reads `.cwd`
-# and `.config_dir` from it for the committed+green gates and the latch key. So a session whose
+# and `.config_dir` from it for the committed gate and the latch key. So a session whose
 # telemetry writer has DIED is not covered here — waiting-recycle's size axis is (it reads bytes from
 # the file directly and needs telemetry only for the pid). Named rather than left as a silent hole.
 # The B-2 latch carries a THIRD re-arm dimension for this: size is MONOTONIC, so a size-triggered
@@ -89,7 +89,8 @@
 # "0 IDL records / never evaluates" concern above is RESOLVED (that note is now historical). All 53
 # abstained, but every reason is a HEALTHY condition-not-met (52× below-threshold, 1× no-telemetry)
 # with 0 fired → the hook is healthy-DORMANT, not inert; the fire path is intact and simply had no
-# session cross the 73% boundary at a committed + green Stop. The C3 `wiring-inert` discovery critic
+# session cross the 73% boundary at a committed Stop (gate-green was DEMOTED to a reported field on
+#      2026-08-11 — gating on it had made this rail unfireable). The C3 `wiring-inert` discovery critic
 # that filed the item alarms on disposition==abstained==100% over N≥10 REGARDLESS of reason, so a
 # rarely-firing advisory hook is a structural false positive there (systemic follow-on backlogged).
 # Residual (operator/C10, live settings.json): ~/.claude also keeps a redundant obj-1 copy at the old
@@ -316,10 +317,29 @@ head="$(git -C "$cwd" rev-parse HEAD 2>/dev/null || true)"
 gitdir="$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null || true)"
 case "$gitdir" in /*) ;; *) gitdir="$cwd/$gitdir" ;; esac
 
-# ── (a) committed + green + no live teammates — never advise handoff on an UNPROVEN-green tree ──
+# ── (a) committed + no live teammates. gate-green is REPORTED, never gating — see below ──
 [ -z "$(git -C "$cwd" status --porcelain 2>/dev/null)" ] || abstain "dirty-tree"
+# gate-green DEMOTED to a reported field 2026-08-11. Only the background postland-verify daemon can
+# advance that marker; the land path structurally cannot. Abstaining on it made this rail UNFIREABLE:
+# measured over the IDL, 1,341 evaluations across 296 sessions produced ZERO fires, and nothing
+# downstream of this line had ever executed. 150 of those abstains were `gate-not-green-at-head` on
+# sessions ALREADY past the fill threshold — eligible sessions silenced by a stamp they cannot move.
+# The marker read 62 commits behind HEAD, and it lives in the shared common gitdir, so every worktree
+# read the same stale value.
+#
+# The sibling `scripts/wrap-ledger.sh:528-544` already demoted it for exactly this reason, citing
+# CLAUDE.md's own rule — "waiting on a trunk-wide stamp you do not control is not diligence, it is a
+# hang". That fix landed the same day the free-win arm landed HERE, into the copy that kept the
+# abstain. This is the same fix, applied to the copy that was missed.
+#
+# What still gates is `dirty-tree` above: locally verifiable, and the half that actually protects a
+# handoff. The gate's real state rides the fired IDL row and the advisory text, so a not-green tree is
+# REPORTED to the model rather than silently suppressing the advice.
 green="$(cat "$gitdir/gate-green" 2>/dev/null || true)"
-[ "$green" = "$head" ] || abstain "gate-not-green-at-head"
+if   [ -z "$green" ];        then gate_state="absent"
+elif [ "$green" = "$head" ]; then gate_state="green"
+else                              gate_state="behind:${green:0:8}"
+fi
 busy=0
 while IFS= read -r w; do
   [ -n "$w" ] && [ -f "$w/.teammate-busy" ] && busy=1
@@ -386,8 +406,9 @@ log_idl fired "past-boundary" \
   "$(jq -cn --argjson used "$used" --argjson threshold "$T" --arg head "${head:0:8}" \
       --argjson burn "$burn_x100" --argjson fc "$forecast_min" --argjson early "$early" --arg conv "${conv_age:-}" \
       --argjson osz "$over_size" --argjson orss "$over_rss" --argjson sf "$size_fired" \
+      --arg gate "$gate_state" \
       '{used_pct:$used,threshold:$threshold,head:$head,burn_x100:$burn,forecast_min:$fc,early:($early==1),conv_age_s:$conv,
-        over_size:($osz==1),over_rss:($orss==1),axis:(if $sf==1 then "size" elif $early==1 then "forecast" else "fill" end)}')"
+        over_size:($osz==1),over_rss:($orss==1),gate_green:$gate,axis:(if $sf==1 then "size" elif $early==1 then "forecast" else "fill" end)}')"
 if [ "$size_fired" = 1 ]; then
   if [ "$over_size" = 1 ] && [ "$over_rss" = 1 ]; then why="this session is OVERSIZE on both axes — transcript ${tx_mb}MB (≥ ${SIZE_MB}MB) and process RSS ${rss_mb}MB (≥ ${RSS_MB}MB) — at only ${used}% context"
   elif [ "$over_size" = 1 ];                        then why="this session's TRANSCRIPT is ${tx_mb}MB (≥ ${SIZE_MB}MB) at only ${used}% context — a size problem your context fill cannot show you"
@@ -399,9 +420,9 @@ else
   why="context ${used}% ≥ ${T}%"
 fi
 if [ "$size_fired" = 1 ]; then
-  reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Neither compaction nor waiting fixes this: only a NEW SESSION resets a transcript or a process. Run the /handoff rails now. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill or +${SIZE_REARM_MB}MB transcript growth.)"
 else
-  reason="⚑ Boundary reached — ${why} at a committed + green boundary (HEAD ${head:0:8}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+  reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 fi
 if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
   reason="${reason}

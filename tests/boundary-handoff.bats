@@ -128,12 +128,49 @@ fired() { echo "$1" | grep -q '"decision":"block"'; }
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"dirty-tree"' "$CC_IDL"
 }
-@test "safety unchanged: gate-not-green abstains at 75%" {
+# REVERSED 2026-08-11. This test used to assert `gate-not-green ⇒ abstain` under the heading "safety
+# unchanged". That was never safety: gate-green can only be advanced by the background postland-verify
+# daemon, so gating on it made this rail UNFIREABLE — 1,341 evaluations across 296 sessions, zero fires,
+# 150 of the abstains landing on sessions already past the fill threshold. A test pinning the behaviour
+# the subject was changed to remove becomes a guard for the defect, so it is inverted here rather than
+# deleted: the contract is now FIRE, and REPORT the gate's real state instead of suppressing the advice.
+@test "gate-not-green FIRES at 75% and reports the stale marker rather than suppressing" {
   printf 'stale-sha' > "$WD/.git/gate-green"
   mk_btel b6 75
   run drive b6
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]                                  # it advises — the old contract emitted nothing
+  echo "$output" | grep -q '"decision":"block"'
+  echo "$output" | grep -q 'gate-green: behind:stale-sh'   # state carried into the advisory text
+  echo "$output" | grep -qv 'committed + green'     # and it no longer ASSERTS a greenness it lacks
+  grep -q '"disposition":"fired"' "$CC_IDL"
+  grep -q '"gate_green":"behind:stale-sh' "$CC_IDL" # ...and onto the IDL row, so it stays measurable
+}
+@test "gate-green ABSENT is reported as absent, not silently treated as green" {
+  rm -f "$WD/.git/gate-green"
+  mk_btel b6a 75
+  run drive b6a
+  [ "$status" -eq 0 ]; [ -n "$output" ]
+  echo "$output" | grep -q 'gate-green: absent'
+  grep -q '"gate_green":"absent"' "$CC_IDL"
+}
+@test "a green marker at HEAD still reads green — the demotion did not delete the signal" {
+  mk_btel b6b 75
+  run drive b6b
+  [ "$status" -eq 0 ]; [ -n "$output" ]
+  echo "$output" | grep -q 'gate-green: green'
+  grep -q '"gate_green":"green"' "$CC_IDL"
+}
+# The dirty-tree gate is the locally-verifiable half and MUST still bind — otherwise this change
+# widened the fire condition past what it intended. (Mutant: if the demotion had removed both gates,
+# this test fails.)
+@test "demoting gate-green did NOT weaken the dirty-tree gate" {
+  printf 'stale-sha' > "$WD/.git/gate-green"
+  echo dirt >> "$WD/f.txt"
+  mk_btel b6c 75
+  run drive b6c
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q "gate-not-green" "$CC_IDL"
+  grep -q '"reason":"dirty-tree"' "$CC_IDL"
 }
 @test "safety unchanged: stale telemetry abstains" {
   mk_btel b7 75 "$(( $(date +%s) - 100000 ))"
@@ -239,7 +276,7 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   mk_btel s5 88
   run drive s5; fired "$output"                             # +13 ≥ 10 → fill re-arm still works
 }
-@test "size: the axis never bypasses the safety gates — dirty tree / not-green still abstain" {
+@test "size: the axis never bypasses the DIRTY-TREE gate — but gate-green only reports (2026-08-11)" {
   export CC_BOUNDARY_SIZE_MB=1
   echo dirt > "$WD/dirty.txt"
   mk_btel s6 40
@@ -247,10 +284,15 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"dirty-tree"' "$CC_IDL"
   git -C "$WD" checkout -- . 2>/dev/null; rm -f "$WD/dirty.txt"
+  # Second half REVERSED with the gate-green demotion: a stale marker no longer suppresses the size
+  # advisory. The dirty-tree half above is the gate that genuinely protects a handoff and still binds;
+  # gate-green is a stamp the session cannot advance, so gating on it only ever silenced eligible work.
   printf 'not-the-head' > "$WD/.git/gate-green"
   run drive s6 "$(mk_tx_size 1)"
-  [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q '"reason":"gate-not-green-at-head"' "$CC_IDL"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  echo "$output" | grep -q 'gate-green: behind:not-the-'
+  grep -qv '"reason":"gate-not-green-at-head"' "$CC_IDL"
 }
 @test "size: both bars at 0 disable the axis, and the abstain still RECORDS what it measured" {
   export CC_BOUNDARY_SIZE_MB=0 CC_BOUNDARY_RSS_MB=0
