@@ -611,10 +611,30 @@ deferrer any more**:
 | `mailbox-drain.sh` nag (SessionStart / UserPromptSubmit) | instructed `cc-await-ping … run_in_background=true` unconditionally | **goal-aware**: with a LIVE goal it warns AGAINST arming and carries no arm command (`hooks/lib/goal-state.sh`, one shared predicate) |
 | `session-continue.sh` WAKE FLOOR | **blocked the stop** and instructed the arm — the instruction-injector | fourth abstain state: a LIVE goal IS the wake path; stands down, spends no budget |
 | the model's own habit (CLAUDE.md § Agent Teams recipe) | armed it anyway | **chokepoint deny** in `validate-bash.sh`: background `cc-await-ping` under a LIVE goal is refused with the mechanism + the goal-safe alternative in the reason (command-position match, so a bg `rg cc-await-ping` is untouched; fail-open on any read failure) |
+| the model's own habit, **hand-rolled** (2026-08-11, backlog `0e021a9d68e3`) | **ungated — the asymmetry**: `cc-await-ping` was refused while a raw `Bash(run_in_background)` poller with the identical effect went straight through | the same deny, **widened from one tool to the park-by-construction CLASS**: an event-polling loop (`while`/`until` + `sleep`), a follow-mode `tail`, an explicit `sleep N` ≥ `CC_GOAL_BG_SLEEP_SECS` (120), or `cc-await-ping` in any segment's command position |
 | idle wake coverage | only the model-armed watcher | **migration 0007 registered**: `mailbox-wake-arm.sh` arms at birth as an asyncRewake hook — a hook-engine Promise, **not a task-registry entry** (read from the binary: `bip()` @237768400 tracks it in a module Set and wakes via a synthesized task-notification), so it wakes an idle session WITHOUT deferring the goal |
 
 The goal-live predicate is `hooks/lib/goal-state.sh :: goal_live_condition` — last `goal_status`
 ATTACHMENT with `met==false` and not `failed` (the § sentinel dictionary; prose-decoy filtered).
+
+**The 2026-08-11 measurement that added row 5 (lead pane 248).** A lead holding a live `/goal` over
+a five-wave program received 8 HANDOFF-PINGs; every one reached the inbox event-driven and none
+entered its context until the operator typed — four `(Checking in)` round-trips over ~2 h. `ps`
+named the deferrer: pid 46038, `until /usr/bin/grep -qE '^→ fired:|ABORT|refus' <file>; do sleep 10;
+done`, backgrounded and still alive. That same session HAD been refused when it tried to arm
+`cc-await-ping`, which is the whole finding: the protection sat on one door while the other stood
+open, and the open one is the one an agent reaches for reflexively. Two decisions are written into
+the guard rather than defaulted — **deny, not warn** (an advisory over every backgrounded command
+would fire on 20-second builds where there is no action to take), and **shape, not existence**
+(duration is what governs but is unknowable at PreToolUse, so the predicate is the structural proxy
+for unbounded duration; residual parkers are deliberately left to the Stop-side
+`goal-inert-watch.sh`, which reads CC's own `background_tasks` and sees every one of them). One
+line on the second defect, which is not the guard's to fix: that monitor could never exit either —
+its predicate matched only the success token `^→ fired:` while the fire it watched wrote
+`!! FIRE FAILED`. A watcher whose exit predicate cannot match the failure path parks forever.
+Red-proof: the new suite run against the pre-fix `origin/main` hook is 5-of-16 RED, and the four
+"passes silently" controls are green on BOTH trees — they are the only assertions that could tell a
+discriminating guard from one that always fires.
 
 **0007 shipped with a new guard it turned out to need.** The 2.1.220 dispatch gate is
 `(e.async || e.asyncRewake && K) && !d` with `K = isInteractive || hasStreamingInput`

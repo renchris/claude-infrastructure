@@ -122,38 +122,114 @@ check_real_flag() {
 # § RESOLVED). `cc-await-ping` armed via Bash(run_in_background) is exactly such a task, parked for
 # hours by design — and CLAUDE.md § Agent Teams instructs that arm, so a goal-armed session
 # sabotages its own goal unless the act's own tool call is gated
-# (MEMORY.md enforcement-must-live-at-the-chokepoint). Scope, deliberately narrow: ONLY
-# cc-await-ping + run_in_background:true + a LIVE goal. A foreground cc-await-ping (cc-wait's use)
+# (MEMORY.md enforcement-must-live-at-the-chokepoint). A foreground cc-await-ping (cc-wait's use)
 # is terminal by the time any Stop happens; an ordinary background build/subagent settles and its
 # completion re-invokes the model — both are correct deferrals, untouched. Fail OPEN on any read
 # failure: a false deny would strand a goal-less session's only wake path.
+#
+# ── WIDENED 2026-08-11 FROM ONE TOOL TO THE CLASS (backlog 0e021a9d68e3) ────────────────────────
+# THE ASYMMETRY, measured on lead pane 248 the same day. A lead holding a live /goal over a
+# five-wave program received 8 HANDOFF-PINGs; every one reached the inbox event-driven and NONE
+# entered its context until the operator typed — four `(Checking in)` round-trips over ~2 h. `ps`
+# named the cause: a still-alive `Bash(run_in_background)` monitor, pid 46038,
+# `until /usr/bin/grep -qE '^→ fired:|ABORT|refus' <file>; do sleep 10; done`. Not cc-await-ping —
+# a hand-rolled poller with the identical effect. The guard sat on ONE door (this session was in
+# fact REFUSED when it tried to arm cc-await-ping) while the other stood open, and the open one is
+# the one an agent reaches for reflexively. (That monitor also could never exit — its predicate
+# matched only the success token `^→ fired:` while the fire it watched wrote `!! FIRE FAILED`; a
+# watcher whose exit predicate cannot match the failure path parks forever. Separate defect, worth
+# knowing, not what this guard fixes.)
+#
+# DENY, NOT WARN — decided, not defaulted. A non-blocking advisory over every backgrounded command
+# under a live goal would fire on 20-second builds where there is no action to take, i.e. an alarm
+# that says as little as one that never fires (MEMORY.md alarm-polarity-and-attention-budget). The
+# cases this DOES match have a cure, and the deny states it. Delivery also matters: `deny` is the
+# one PreToolUse channel measured to reach the model here (this hook's own tests), and an
+# `allow`+additionalContext emitted mid-file would additionally SKIP every danger pattern below it.
+#
+# SHAPE, NOT EXISTENCE — and the reason is that duration is what governs, but duration is not
+# knowable at PreToolUse. So the predicate is the structural proxy for UNBOUNDED duration: a
+# command whose own termination is not bounded by the work it does. Three members, each a class and
+# not a spelling (MEMORY.md denylist-enumerates-spellings-not-the-class):
+#   · an event-polling loop — `while`/`until` with a `sleep` in the body: waits on an EXTERNAL
+#     event, so nothing it does can end it. This is the measured incident verbatim.
+#   · a follow-mode `tail` (-f/-F/--follow): terminates never, by definition.
+#   · an explicit park — `sleep N`, N ≥ CC_GOAL_BG_SLEEP_SECS (default 120): the duration is stated
+#     in the command itself, which is the one place duration IS readable. `sleep 5` is not the
+#     hazard and stays silent.
+#   · plus cc-await-ping, the original term, now matched by command position in ANY segment.
+# `for` loops are deliberately EXCLUDED: their trip count is bounded by their own list, so they are
+# a different (self-terminating) shape. A bg `pnpm build`, a bg test run, a bg subagent — all
+# settle and re-invoke the model — stay untouched.
+#
+# RESIDUAL COVERAGE IS DELIBERATE, because the compensating control already exists at the other
+# end: hooks/goal-inert-watch.sh fires at Stop, reads CC's OWN background_tasks payload, and says
+# so when an armed goal is actually being skipped. That watcher sees every parker including the
+# ones no static classifier can name. So this gate does not need to be exhaustive — it needs to be
+# PRECISE, and to fail open into a Stop-side alarm rather than into silence.
+#
 # COMMAND-POSITION, not substring: a background `rg 'cc-await-ping' …` is a search that settles in
-# seconds, not a parked watcher — substring matching would deny it and teach a falsehood. The two
-# real arm spellings every instruction site uses are the bare name in first position and a path
-# ending in bin/cc-await-ping; a compound-command evasion merely falls open, which is this guard's
-# declared fail direction. (MEMORY.md denylist-enumerates-spellings: match what GOVERNS, here the
-# executed token, never the byte-string.)
-_gg_hit=0
-_gg_first="${CMD%%[[:space:]]*}"
-case "$_gg_first" in *cc-await-ping) _gg_hit=1 ;; esac
-[[ "$CMD" == *bin/cc-await-ping* ]] && _gg_hit=1
-if [[ "$_gg_hit" == 1 ]]; then
-  _gg_bg="$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)"
-  if [[ "$_gg_bg" == "true" ]]; then
-    _gg_tp="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
-    _gg_lib="$LIB_DIR/goal-state.sh"
-    [[ -f "$_gg_lib" ]] || _gg_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
-    [[ -f "$_gg_lib" ]] || _gg_lib="$HOME/.claude/hooks/lib/goal-state.sh"
-    if [[ -f "$_gg_lib" ]]; then
-      # shellcheck source=lib/goal-state.sh
-      # shellcheck disable=SC1091  # runtime-resolved fallback chain
-      source "$_gg_lib" 2>/dev/null || true
-    fi
-    if command -v goal_live_condition >/dev/null 2>&1; then
-      _gg_cond="$(goal_live_condition "$_gg_tp" 2>/dev/null)" || _gg_cond=""
-      if [[ -n "$_gg_cond" ]]; then
-      deny "A /goal is LIVE in this session (\"${_gg_cond:0:120}\"), and a PARKED background watcher would silently disable it: Claude Code skips /goal evaluation at every Stop while a non-terminal background Bash exists (the registry is restored afterwards, so nothing ever looks wrong). Do not arm cc-await-ping here. You are not deaf without it — the goal blocks your stops, so you keep taking turns and mailbox-drain delivers peer mail at every turn boundary; the birth watcher (mailbox-wake-arm, asyncRewake) also wakes a genuinely idle session WITHOUT entering the task registry. If you need a cross-turn continuation lever, use: ~/.claude/hooks/session-continue.sh set \"<next step>\" — it is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
-      fi
+# seconds, not a parked watcher — substring matching would deny it and teach a falsehood. The
+# command is split on its own separators (`;` `|` `&` `&&` `||`, newline) and each segment is
+# judged by its FIRST token, so `cd x && cc-await-ping …` is caught while the search is not. (This
+# replaces an earlier `*bin/cc-await-ping*` substring term, which existed only to catch the
+# compound spelling and would have denied a bg grep for that literal path.)
+#
+# Rollback knob: CC_GOAL_BG_SLEEP_SECS (park threshold, seconds). Tests:
+# tests/validate-bash-goal-guard.bats.
+_gg_shape=""
+_gg_bg="$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)"
+if [[ "$_gg_bg" == "true" ]]; then
+  # (1) whole-command shape — a poll loop's `sleep` lives in a body the segment splitter would
+  #     tear apart, so this one is judged over the intact command.
+  if [[ "$CMD" =~ (^|[^[:alnum:]_])(while|until)[[:space:]] ]] \
+     && [[ "$CMD" =~ (^|[^[:alnum:]_])sleep[[:space:]] ]]; then
+    _gg_shape="an event-polling loop (while/until + sleep) — it ends only when something OUTSIDE it happens"
+  fi
+  # (2) command-POSITION shapes, one judgment per segment.
+  if [[ -z "$_gg_shape" ]]; then
+    # Pure parameter expansion, no fork: this hook is on the hottest path in the system (every
+    # Bash tool call), and the header already records ~18% of the chain lost to exactly this kind
+    # of convenience `$( … )`. Two-char operators first, else `&&` would be split by `&`.
+    _gg_flat="${CMD//&&/$'\n'}"; _gg_flat="${_gg_flat//||/$'\n'}"
+    _gg_flat="${_gg_flat//;/$'\n'}"; _gg_flat="${_gg_flat//|/$'\n'}"
+    _gg_flat="${_gg_flat//&/$'\n'}"
+    while IFS= read -r _gg_seg; do
+      read -r _gg_w1 _gg_a1 _ <<<"$_gg_seg"
+      [[ -n "$_gg_w1" ]] || continue
+      case "$_gg_w1" in
+        *cc-await-ping)
+          _gg_shape="a cc-await-ping arm"; break ;;
+        sleep|*/sleep)
+          if [[ "$_gg_a1" =~ ^[0-9]+$ ]] && (( _gg_a1 >= ${CC_GOAL_BG_SLEEP_SECS:-120} )); then
+            _gg_shape="an explicit ${_gg_a1}s park (sleep)"; break
+          fi ;;
+        tail|*/tail)
+          if [[ "$_gg_seg" =~ (^|[[:space:]])(-[a-zA-Z]*[fF][a-zA-Z]*|--follow)([[:space:]=]|$) ]]; then
+            _gg_shape="a follow-mode tail — it never terminates on its own"; break
+          fi ;;
+      esac
+    done <<<"$_gg_flat"
+  fi
+fi
+# The goal read is LAST and only here: it greps a transcript that can be multiple MB, and this hook
+# fires on EVERY Bash tool call. The shape classifier above is a strictly-narrower necessary
+# condition, never a restatement of the goal predicate (MEMORY.md cost-gate-must-be-strictly-weaker),
+# so a bg build never pays for it and a goal-less session is never read twice.
+if [[ -n "$_gg_shape" ]]; then
+  _gg_tp="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  _gg_lib="$LIB_DIR/goal-state.sh"
+  [[ -f "$_gg_lib" ]] || _gg_lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/goal-state.sh"
+  [[ -f "$_gg_lib" ]] || _gg_lib="$HOME/.claude/hooks/lib/goal-state.sh"
+  if [[ -f "$_gg_lib" ]]; then
+    # shellcheck source=lib/goal-state.sh
+    # shellcheck disable=SC1091  # runtime-resolved fallback chain
+    source "$_gg_lib" 2>/dev/null || true
+  fi
+  if command -v goal_live_condition >/dev/null 2>&1; then
+    _gg_cond="$(goal_live_condition "$_gg_tp" 2>/dev/null)" || _gg_cond=""
+    if [[ -n "$_gg_cond" ]]; then
+      deny "A /goal is LIVE in this session (\"${_gg_cond:0:120}\"), and this backgrounded command is ${_gg_shape}, which would silently disable it: Claude Code skips /goal evaluation at every Stop while a non-terminal background Bash exists (the registry is restored afterwards, so nothing ever looks wrong). Do not park a background watcher here. You are not deaf without it — the goal blocks your stops, so you keep taking turns and mailbox-drain delivers peer mail at every turn boundary; the birth watcher (mailbox-wake-arm, asyncRewake) also wakes a genuinely idle session WITHOUT entering the task registry. If you need a cross-turn continuation lever, use: ~/.claude/hooks/session-continue.sh set \"<next step>\" — it is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
     fi
   fi
 fi
