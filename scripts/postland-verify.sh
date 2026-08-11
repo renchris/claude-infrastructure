@@ -1879,8 +1879,12 @@ revert_inert() { # <culprit> <c12> <reason> <detail>
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
   if [ "$fresh" -eq 1 ]; then
+    # The page above already names the FIRST question a reader must ask — "is $ftest still red on
+    # trunk? a green there makes this moot" — and until now nothing ever asked it. That question IS
+    # --falsify-red, so the item now carries it and cc-premise re-asks it at claim time.
     [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
       --title "post-land AUTO-REVERT INERT ($reason): $ftest @ $c12 — the veto cannot actuate, $detail; check $ftest is still red before reverting" \
+      --falsifier "$(fals_red "$ftest" "$c")" \
       --project claude-infrastructure --source postland-verify >/dev/null 2>&1
     notify "Claude post-land AUTO-REVERT INERT" "$c12 — $reason on $ftest; see $pf"
   fi
@@ -2029,8 +2033,12 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
     printf 'land_exit=%s\n' "$rc"
   } > "$mk" 2>/dev/null || true
 
+  # A landed revert and a failed one share this premise: $file was broken by $c. Whichever way the
+  # attempt went, a full-corpus green that CONTAINS $c settles it — the revert worked, someone fixed
+  # forward, or the suite left the corpus. That is one meaning, and --falsify-red is how it is asked.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
     --title "post-land AUTO-REVERT $outcome: $file @ $c12 (revert ${rev:-none} on $br)" \
+    --falsifier "$(fals_red "$file" "$c")" \
     --project claude-infrastructure --source postland-verify >/dev/null 2>&1   # sha defeats wasDone
   sid="$(author_sid "$c")"
   [ -n "$sid" ] && [ -x "$NOTIFY_BIN" ] \
@@ -2230,8 +2238,15 @@ hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM 
       "$REPO" "$(sha12 "$sha")" "${TIMEOUT_BIN:-timeout} $FILE_TO bats" "$file"
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
+  # THE PROBE TAKES $sha, THE COMMIT — never the $tree in the title. --falsify-red compares against
+  # last-green with `merge-base --is-ancestor`, which only speaks about commits; handing it a tree
+  # sha makes `rev-parse <tree>^{commit}` fail and the probe answers "could not ask" on every single
+  # run — a falsifier that is inert by construction, which is the one outcome indistinguishable from
+  # never having emitted one. A wedged suite also keeps the corpus from ever going green, so this
+  # correctly stays at "still live" for exactly as long as the hang does.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
     --title "post-land HUNG: $file wedged at $WEDGE_AT @ $(sha12 "$tree") — un-stubbed external seam, timeout-wrap it (NOT a peer pkill)" \
+    --falsifier "$(fals_red "$file" "$sha")" \
     --project claude-infrastructure --source postland-verify >/dev/null 2>&1   # tree defeats wasDone
   notify "Claude post-land HUNG" "$file wedges at $WEDGE_AT — un-stubbed seam, see $pf"
   sid="$(author_sid "$sha")"
@@ -2598,6 +2613,92 @@ cut_page() { # <sha> <tree> <n> — an HONEST page: names no test, asks for no b
     printf 'env:     %s\n' "$ENV_FP"
   } > "$pf" 2>/dev/null || true
 }
+# fals_red <suite> <sha> → the STORED FALSIFIER string for an item about <suite> breaking at <sha>.
+#
+# Addressed at the LIVE layer rather than at $SELF, and left with `$HOME` UNEXPANDED: cc-premise runs
+# the stored string through `/bin/sh -c`, so it resolves at probe time. $SELF here is whichever
+# checkout ran the verifier — routinely a detached worktree — and baking that path into a record that
+# outlives the run would pin the probe to a directory that gets reaped, leaving the item carrying a
+# falsifier that can only ever answer "could not ask". This file is an existing per-file symlink, so
+# `--falsify-red` reaches the live layer on the ordinary fast-forward; no new link is needed.
+#
+# Both arguments are single-quoted for the SECOND parse. A suite path with a space would otherwise
+# re-split at probe time and the probe would answer confidently about the wrong subject.
+fals_sq()  { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+fals_red() { # <suite> <sha> → the probe string, or rc 1 when either half is missing
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  # shellcheck disable=SC2016  # $HOME must NOT expand here — see the header comment below.
+  # The output is a STORED STRING that cc-premise later runs through `/bin/sh -c`, so the expansion
+  # belongs at probe time. Expanding it now would bake this run's home into a durable ledger record.
+  printf '"$HOME/.claude/scripts/postland-verify.sh" --falsify-red %s %s' \
+    "$(fals_sq "$1")" "$(fals_sq "$2")"
+}
+
+# ── --falsify-red <suite> <sha> — THE STORED FALSIFIER this script hands to its own items ────────
+# Every backlog item this file mints about a commit that broke the corpus (AUTO-REVERT INERT,
+# AUTO-REVERT <outcome>, HUNG) now carries `cc-backlog add --falsifier "<this verb>"`, and cc-premise
+# re-runs it at CLAIM time. Its contract (bin/cc-premise run_falsifier) is asymmetric and this verb
+# is written to it: exit 0 means the premise is GONE and the claim is refused; every non-zero means
+# "still live", advisory only. So exit 0 is the only load-bearing answer here.
+#
+# EXACTLY ONE SUCCESS STATE: a tree CONTAINING the accused commit has since run the FULL corpus
+# green, and that green's span actually covered this suite. Every other reachable state — including
+# every state where the question could not be asked at all — is non-zero, split into 1 (asked,
+# answered no) and 2 (could not ask) for a human reading it by hand. The split is legibility only:
+# cc-premise reads both as "still live", which is the safe direction, because an unread premise is
+# "I could not tell" and never "finished".
+#
+# WHY IT READS last-green RATHER THAN RE-RUNNING THE SUITE, which is the obvious probe and the wrong
+# one twice over. It cannot fit the bound (cc-premise gives a probe 20s; one suite alone runs ~50min
+# in this band), so a probe honest enough to hold it would hold a claim hostage and a probe that fits
+# would be a permanent non-verdict wearing a measurement's clothes (memory:
+# bound-must-fit-the-band-not-the-bench). And it would re-derive an answer this script has ALREADY
+# recorded: last-green advances only on a full-corpus pass.
+#
+# THE SPAN CLAUSE IS NOT BELT-AND-BRACES. The corpus is tests/*.bats MINUS the host manifest, so a
+# green is silent about a host suite by construction and cannot speak about a file that did not exist
+# yet. Retracting on ancestry alone would assert a verdict over a suite the run never executed
+# (memory: assertion-span-must-equal-its-subject) — so those cases exit 2, not 0.
+#
+# NOT EMITTED ON `post-land RED:` ITEMS, deliberately. That population already has a DERIVED
+# falsifier in cc-premise (run_derived_postland_falsifier) computing this same predicate in Python,
+# and cc-premise's composition rule is that a STORED probe outranks a derived one. Storing an equal
+# probe there would shadow a tested, documented arm and buy nothing but a second implementation to
+# keep in sync. These three item classes have no derived arm at all — that is where a stored probe
+# is the difference between a re-run and no question being asked.
+verb_falsify_red() { # <suite-path|tests/> <red-sha> → 0 retracted · 1 still live · 2 could not ask
+  local path="${1:-}" redsha="${2:-}" lg lgc redc
+  [ -n "$path" ] && [ -n "$redsha" ] || return 2
+  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || return 2
+  lg="$(cat "$LASTGREEN" 2>/dev/null || true)"
+  case "$lg" in ''|*[!0-9a-f]*) return 2 ;; esac
+  [ "${#lg}" -ge 7 ] || return 2
+  # BOTH refs must RESOLVE before either is compared — the positive control that separates "git
+  # answered no" from "git was never able to answer". Without it an unreadable object reads as a
+  # clean negative and this verb goes quietly inert while still returning a confident number.
+  lgc="$(git -C "$REPO" rev-parse --verify --quiet "$lg^{commit}" 2>/dev/null || true)"
+  redc="$(git -C "$REPO" rev-parse --verify --quiet "$redsha^{commit}" 2>/dev/null || true)"
+  [ -n "$lgc" ] && [ -n "$redc" ] || return 2
+  # The ordinary LIVE case: trunk has not gone green past the accused commit yet.
+  git -C "$REPO" merge-base --is-ancestor "$redc" "$lgc" >/dev/null 2>&1 || return 1
+  # The unattributed subject needs no span clause: `tests/` IS the corpus, so a full-corpus green
+  # covers it by definition. Every FILE subject has to prove the green actually ran it.
+  case "$path" in
+    tests|tests/) return 0 ;;
+  esac
+  # A host suite is EXCLUDED from the corpus, so the green never executed it and cannot speak about
+  # it. An ABSENT manifest is the EMPTY set by the manifest's own frozen contract, not a failure —
+  # but an unreadable one at that ref is "could not ask", and the two must not collapse.
+  if git -C "$REPO" cat-file -e "$lgc:$MANIFEST_REL" >/dev/null 2>&1; then
+    local mf
+    mf="$(git -C "$REPO" show "$lgc:$MANIFEST_REL" 2>/dev/null)" || return 2
+    printf '%s\n' "$mf" | sed 's/#.*//' | tr -d '[:blank:]' | grep -qxF "$path" && return 2
+  fi
+  # The suite must have EXISTED at the green — a green cannot vouch for a file it never saw.
+  git -C "$REPO" cat-file -e "$lgc:$path" >/dev/null 2>&1 || return 2
+  return 0
+}
+
 verb_is_green() { # <sha> — exit 0 green-stamped, 1 not
   local tree sha
   sha="$(git -C "$REPO" rev-parse "${1:-}^{commit}" 2>/dev/null || true)"
@@ -3074,13 +3175,23 @@ EOF
 }
 
 usage() {
-  echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | --selftest]"
+  echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | --falsify-red <suite> <sha> | --selftest]"
+  echo "  --falsify-red: the STORED FALSIFIER on this script's own backlog items — 0 = a full-corpus green contains that commit AND covered that suite (premise gone) · 1 = still live · 2 = could not ask"
   echo "  kill switches: POSTLAND_VERIFY=off (inert) · POSTLAND_AUTOREVERT=off (verify+page, never push)"
   echo "  revert retry : POSTLAND_REVERT_RETRY_MAX=$REVERT_RETRY_MAX · POSTLAND_REVERT_RETRY_DECAY_S=$REVERT_RETRY_DECAY_S (a revert that never landed re-arms; one that landed never does)"
   echo "  state: $STATE   ·   host partition: $MANIFEST_REL   ·   header comment = full design notes"
 }
 
 main() {
+  # DISPATCHED ABOVE THE KILL SWITCH, AND ABOVE ensure_dirs/the cleanup trap — both halves are
+  # load-bearing. This verb is a pure read that mints nothing, so it needs neither. More sharply:
+  # the kill switch below exits 0, and under the falsifier contract exit 0 MEANS "the premise is
+  # gone, refuse the claim". Leaving `--falsify-red` beneath it would make `POSTLAND_VERIFY=off`
+  # silently retract every item this script ever filed — a kill switch that reads as a verdict, and
+  # the exact two-meanings-for-exit-0 defect this verb was written to avoid.
+  if [ "${1:-}" = "--falsify-red" ]; then
+    shift; verb_falsify_red "${1:-}" "${2:-}"; exit $?
+  fi
   if [ "${POSTLAND_VERIFY:-on}" = "off" ]; then            # runtime read — instant, side-effect-free
     printf 'postland-verify: DISABLED (POSTLAND_VERIFY=off)\n' >&2
     exit 0
@@ -3094,6 +3205,7 @@ main() {
     --run)      shift; do_run_one "${1:-}" ;;
     bisect)     shift; verb_bisect "$@" ;;
     is-green)   shift; verb_is_green "${1:-}" ;;
+    # --falsify-red is dispatched ABOVE, before the kill switch; it can never reach this case.
     status)     verb_status ;;
     --selftest) selftest ;;
     -h|--help)  usage ;;

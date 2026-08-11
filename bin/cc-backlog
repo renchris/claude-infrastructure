@@ -788,6 +788,23 @@ fold() { # [--strict] — handed to valid_records; `set -o pipefail` carries its
         # dropped on the way to `list --json` — and a consumer that cannot see the key an item was
         # deduped on cannot tell a recurring state from a one-off event.
         condition: ($r.condition // $p.condition // ""),
+        # THE RE-RUN CHECK AN ITEM CARRIES — named here for the same whitelist reason as `condition`
+        # and `run`/`session` above, and it was NOT, which made the field invisible to every consumer
+        # of this fold from the day it landed. cc-premise reads the RAW records, so its re-run always
+        # worked; `list --json` is what everything else reads, so `[.[]|select(.falsifier)]|length`
+        # answered 0 over a store that already held probes. A field a producer writes and the
+        # canonical projection drops cannot be told apart from a field no producer writes — and that
+        # is exactly how this mechanism read as zero coverage while being fully wired.
+        #
+        # LAST-NON-EMPTY-WINS ($r first), matching the same fold rule cc-premise applies to this
+        # field (bin/cc-premise build_index): a falsifier is not history, it is the CURRENT way to
+        # ask whether the condition still holds, so a later record correcting it must win. First-wins
+        # here would make the two readers disagree about which probe an item actually carries.
+        #
+        # (No apostrophes in this block: the whole fold is a single-quoted shell string, so one would
+        # close it and the next brace reads as bash — see the same warning under `venue` below. This
+        # comment was written with them and bash -n pointed straight at the line.)
+        falsifier: ($r.falsifier // $p.falsifier // ""),
         by:       ($r.by       // $p.by       // ""),
         evidence: ($r.evidence // $p.evidence // ""),
         needs:    ($r.needs    // $p.needs    // ""),
@@ -1550,7 +1567,7 @@ premise_bin() {
   printf '%s' "${CC_BACKLOG_PREMISE_BIN:-$(cd "$(dirname "$self")" 2>/dev/null && pwd)/cc-premise}"
 }
 
-# cmd_needs "<operator-only step>" [--run "<cmd>"] [--project P] [--session SID]
+# cmd_needs "<operator-only step>" [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]
 #
 # One-line filing of a step ONLY THE OPERATOR can do — see the `needs` paragraph in the header for
 # why this verb exists at all. Composition, not a third writer: cmd_add mints the item, then
@@ -1568,11 +1585,22 @@ premise_bin() {
 # The positional step is BOTH the item title and the `--needs` prose: they are the same sentence,
 # and asking the caller to write it twice is the friction this verb removes.
 cmd_needs() {
-  local step="" run="" project="" session=""
+  local step="" run="" project="" session="" falsifier=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --run)     run="${1:-}";     [ $# -gt 0 ] && shift ;;
+      # PASS-THROUGH, AND NO DEFAULT — the one generator of the four that deliberately emits nothing
+      # unless a caller hands it a real check. The other three (postland-verify, deploy-live,
+      # cc-discover) know their own oracle and emit it automatically; an operator step does not have
+      # one in general, and there is no honest way to synthesise it. `--run` is NOT that check: it is
+      # the command that PERFORMS the step, so running it as a probe would DO the work rather than
+      # ask whether it is still needed, and its exit 0 would mean "I just did it" — the two-meanings
+      # defect at its worst, since it also has a side effect.
+      #
+      # An absent falsifier is honest. An ambiguous one lies, and it lies in the reporting-done
+      # direction, which is why silence is the default here and a fabricated probe is not.
+      --falsifier) falsifier="${1:-}"; [ $# -gt 0 ] && shift ;;
       --project) project="${1:-}"; [ $# -gt 0 ] && shift ;;
       --session) session="${1:-}"; [ $# -gt 0 ] && shift ;;
       --*) printf 'cc-backlog needs: unknown arg %s\n' "$key" >&2; return 2 ;;
@@ -1590,7 +1618,7 @@ cmd_needs() {
   done
   [ -n "$step" ] || {
     { printf 'cc-backlog needs: "<operator-only step>" is required\n'
-      printf '  usage: cc-backlog needs "<step>" [--run "<cmd>"] [--project P] [--session SID]\n'
+      printf '  usage: cc-backlog needs "<step>" [--run "<cmd>"] [--falsifier "<probe>"] [--project P] [--session SID]\n'
     } >&2
     return 2
   }
@@ -1601,12 +1629,15 @@ cmd_needs() {
 
   # cmd_add's stdout is the id and must NOT reach ours twice — capture it, echo once at the end.
   # Its stderr (the already-DONE warning) is deliberately left flowing to the caller.
+  # Built as an array for the same reason the transition args below are: an unquoted
+  # ${falsifier:+--falsifier "$falsifier"} word-splits a probe with spaces back apart, and a probe is
+  # a shell command line — spaces are the norm, not the exception.
   local id rc
-  if [ -n "$project" ]; then
-    id="$(cmd_add --project "$project" --title "$step" --source needs)"; rc=$?
-  else
-    id="$(cmd_add --title "$step" --source needs)"; rc=$?
-  fi
+  local -a aargs
+  aargs=(--title "$step" --source needs)
+  [ -n "$project" ]   && aargs=(--project "$project" "${aargs[@]}")
+  [ -n "$falsifier" ] && aargs=("${aargs[@]}" --falsifier "$falsifier")
+  id="$(cmd_add "${aargs[@]}")"; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   [ -n "$id" ] || { printf 'cc-backlog needs: add returned no id\n' >&2; return 2; }
 
@@ -2184,7 +2215,13 @@ cmd_list() {
            | select($proj == "" or .project == $proj)
            | (if (.run     // "") == "" then del(.run)     else . end)
            | (if (.session // "") == "" then del(.session) else . end)
-           | (if (.condition // "") == "" then del(.condition) else . end) )'
+           | (if (.condition // "") == "" then del(.condition) else . end)
+           # OMITTED WHEN EMPTY, and this one is not cosmetic like its siblings. The canonical
+           # coverage question is `select(.falsifier)`, and in jq the EMPTY STRING IS TRUTHY — so a
+           # ""-carrying key would make every item in the store answer "yes, it has a probe". The
+           # metric would read 100% the day the field became visible, over a store where nothing had
+           # one. `has("falsifier")` and `select(.falsifier)` must agree, which needs the key absent.
+           | (if (.falsifier // "") == "" then del(.falsifier) else . end) )'
     return 0
   fi
   fold | jq -r --arg mode "$mode" --arg proj "$projfilter" --arg pad "$TSV_PAD" "$CELL"'

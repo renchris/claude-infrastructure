@@ -44,6 +44,67 @@ EOF
   exit 1
 fi
 
+# ── --falsify — THE STORED FALSIFIER carried by every `plan-open` backlog item ────────────────────
+# cc-discover's C2 critic mints one item per plan that `find-plan.sh --list-open` reports, so the
+# item's whole claim is "this plan still holds work to advance". That claim is a discovery-time
+# snapshot and nothing re-read it; this verb is what re-asks it. `cc-backlog add --falsifier` stores
+# this invocation on the item and cc-premise re-runs it at CLAIM time (bin/cc-premise run_falsifier):
+# exit 0 means the premise is GONE and the claim is refused, any non-zero means "still live",
+# advisory only. Exit 0 is therefore the only load-bearing answer.
+#
+# ONE QUESTION, ONE SUCCESS STATE: does this plan still hold work to advance? Exit 0 = no. The two
+# ways of reaching it are two kinds of EVIDENCE for that single answer, not two different answers —
+# a terminal plan holds no work by its own declaration, and an open plan whose every section is DONE
+# holds none in fact. Exit 1 = it still holds work. Exit 2 = could not ask (absent file, a scan that
+# would not run, a scan that found no sections at all in a file that is supposed to be a plan).
+#
+# THE ORDER IS THE POINT, and clause (a) is why this is safe to store at all. cc-premise's
+# composition rule is that a STORED probe outranks its DERIVED arms — so an emitted probe SHADOWS
+# `run_derived_plan_falsifier`, which retracts on terminal frontmatter alone. A probe testing only
+# remaining sections would therefore have silently REMOVED that retraction (memory:
+# cost-gate-must-be-strictly-weaker, inverted: a fast path must never be weaker than what it
+# shadows). Reading the frontmatter FIRST makes this verb a strict superset of the arm it shadows,
+# and clause (b) is pure addition on top.
+#
+# CLAUSE (b) IS WHAT BACKLOG 82a6c1894384 ASKED FOR. An item's TITLE is the plan's H1 as it read on
+# discovery day: measured, `a50e6ab779e8` sat open for twelve days titled "advance README hero
+# banner" long after that banner shipped, because the plan was still legitimately open and every
+# other signal passed. Re-deriving from the plan's REMAINING work dissolves that item; re-reading its
+# status never could.
+#
+# LEVEL 1 IS EXCLUDED for the same reason cc-premise's plan_remaining_lines excludes it: this scanner
+# emits the document's H1 as a section spanning the whole file, so it is the plan's title rather than
+# a unit of remaining work — counting it would make every plan permanently unfalsifiable.
+if [[ "$FORMAT" == "--falsify" ]]; then
+  [[ -f "$FILE" ]] || exit 2
+  # (a) THE PLAN'S OWN DECLARATION. Keyed on find-plan.sh's EXIT CODE, not on the word it prints:
+  # it prints `unknown` on stdout while exiting 2 to say "I could not read the file at all", so the
+  # frontmatter saying `unknown` and the reader failing are the same string and different facts
+  # (memory: lookup-miss-is-not-absence). An unresolvable helper falls through to (b), never to 0.
+  _fp_bin="$(dirname "${BASH_SOURCE[0]}")/find-plan.sh"
+  if [[ -x "$_fp_bin" ]]; then
+    if _fp_st="$("$_fp_bin" --status "$FILE" 2>/dev/null)"; then
+      case "${_fp_st%%$'\n'*}" in
+        complete|superseded) exit 0 ;;
+      esac
+    fi
+  fi
+  # (b) WHAT THE PLAN ITSELF STILL CARRIES. Re-entered through this same file so there is exactly
+  # one section parser; a second, looser one here is how the probe and the report start disagreeing.
+  _fs_json="$("${BASH_SOURCE[0]}" "$FILE" json 2>/dev/null)" || exit 2
+  # THE POSITIVE CONTROL. Without it, "the scanner emitted nothing I recognise" and "every section
+  # is DONE" are the same absence of a match — and the first would retract a live plan on the
+  # strength of a parser that had failed. A file with zero sections is a non-answer, never a green.
+  _fs_n="$(printf '%s\n' "$_fs_json" | grep -c '"start_line":' 2>/dev/null || true)"
+  case "$_fs_n" in ''|*[!0-9]*) exit 2 ;; esac
+  [[ "$_fs_n" -gt 0 ]] || exit 2
+  if printf '%s\n' "$_fs_json" \
+     | grep -qE '"level": ([2-9]|[1-9][0-9]+), "status": "(PENDING|IN_PROGRESS)"'; then
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ ! -f "$FILE" ]]; then
   echo "error: file not found: $FILE" >&2
   exit 1
