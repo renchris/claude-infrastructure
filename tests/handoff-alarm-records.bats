@@ -25,6 +25,13 @@ setup() {
   # refuses a net-new fire above 2.0/core and this box lives above that (red-by-LOAD, not by
   # subject), so the gate is pinned off for the whole file rather than per test.
   export CC_FIRE_CAPACITY_GATE=off
+  # The three non-$HOME seams handoff-fire.sh reaches for. Fixturing $HOME does not redirect an
+  # ABSOLUTE /tmp default, nor a BARE NAME the subject then executes off the operator's PATH — so
+  # without these the suite would read the operator's live account-sweep stamp and could run their
+  # deployed claude-accounts. Absent paths are the right value: these sensors fail open on one.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/bin/no-such-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   FIRE="$REPO/scripts/handoff-fire.sh"
   [ -f "$FIRE" ] || skip "handoff-fire.sh not found at $FIRE"
