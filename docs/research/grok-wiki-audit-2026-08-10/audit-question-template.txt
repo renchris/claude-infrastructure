@@ -1,0 +1,22 @@
+Audit ONLY the hooks/ directory of this repository for the highest-impact improvements a maintainer
+should make next. You may and should read anything else in the repo (tests/, scripts/, bin/, docs/)
+as CONTEXT — in particular, before claiming a gap in test coverage you MUST search the whole repo
+(tests/*.bats and tests/*.test.sh) for a suite covering that file. Do not assume a file is untested.
+
+Report exactly three categories:
+(1) DESIGN FLAWS — architecture that forces recurring defects, not one-off bugs. Name the recurrence.
+(2) LATENT BUGS — code paths that are wrong but not yet observed to fail. Prioritise guards, gates,
+    validators and error handlers that cannot fire, fail open, or swallow their own failure signal.
+(3) VERIFICATION GAPS — tests that would still pass if the subject they test were broken.
+
+For every finding you MUST give:
+  - exact file:line
+  - the concrete failure scenario: specific inputs or system state -> wrong outcome
+  - blast radius (what else breaks) and likelihood (what has to be true for it to fire)
+  - for any coverage claim: the exact search you ran that found no covering test
+
+Rank all findings by blast radius x likelihood, highest first.
+
+Do NOT report: style, formatting, naming, TODOs, missing docs, or dependency versions.
+Do NOT report anything you cannot ground in a specific line of code you actually read.
+If you are unsure whether something is a defect, say so explicitly rather than asserting it.
