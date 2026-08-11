@@ -1,5 +1,13 @@
 #!/bin/bash
-# gate-red-census.sh — how often does a land's own gate refuse it, and WHICH arm did the refusing.
+# gate-red-census.sh — the land pipeline's census: what a land COSTS, how often its own gate
+# refuses it, which arm did the refusing, and how much of the work is thrown away as stale.
+#
+# SCOPE NOTE (P0, 2026-08-11). This started as the gate-red panel alone (P2) and now renders every
+# question land.log can answer, because land.log is ONE store and a second reader of it would be a
+# second authority on the same rows — the exact defect one renderer exists to prevent. It is NOT
+# merged with scripts/cycle-time-census.sh and should not be: that tool reads a different store
+# (the postland STAMP directory) about a different subject (the VERIFIER lane's cycle time), and
+# neither calls the other. Two stores, two subjects, two tools; one renderer each.
 #
 # WHY THIS EXISTS. The gate-red rate is the single number that says whether the land pipeline is
 # serving the author or fighting them, and until now it was no document's and no tool's first-class
@@ -46,6 +54,32 @@
 #      line that is not JSON cannot be classified as an invocation, so it is counted and reported
 #      OUTSIDE the population; an invocation whose `exit` is missing or non-integer IS an invocation,
 #      so it stays in the denominator and lands in no exit bucket.
+#
+#   5. A `stage`:"round" ROW IS NOT AN ATTEMPT (P0). ship-land now attests its stale-gate re-rounds,
+#      which are INTERNAL signals — the same land continues — so pooling them would have DILUTED
+#      every rate here by however often siblings happened to move the trunk, i.e. the new
+#      instrument would have improved this tool's own headline number by adding rows. They are
+#      excluded from the population and reported in their own panel. ABSENT `stage` reads as
+#      "land", so every pre-P0 row keeps the classification it already had (memory:
+#      new-enum-member-falls-into-fail-closed-default).
+#
+# WHAT A LAND COSTS (P0 panels). land.log carried no duration at all until 2026-08-11, so v2's own
+# acceptance criterion ("land latency p50 <= 30s, p99 <= 3 min — measure it, do not narrate it")
+# named an artifact that could not answer it, and the published figures drifted unrefuted in two
+# directions at once (README said the mutex hold was 5-15s, ship.md said 84-302s; the store said
+# neither). Three panels close it, and each prints its own COVERAGE rather than a bare percentile,
+# because these fields have a birthday and the population that carries them grows one land at a
+# time (memory: published-figure-decays-with-its-source):
+#
+#   LAND LATENCY   total_s percentiles, split by outcome. A refused land and a landed one answer
+#                  different questions and their medians are minutes apart; pooling them produces a
+#                  number that describes no actual experience.
+#   GATE COST      gate_rounds, and where gate_s went (arms vs statics). §5.P3 measured the fifteen
+#                  ratchet arms at ~112s of a 127-137s re-round, so this is the panel that says
+#                  whether a slow land was re-gated or merely gated.
+#   STALENESS      P(stale | waited) and the WAIT-FREE staleness column, which §2.B found to be the
+#                  rising one — the lock ledger can only see rounds that QUEUED, so the tool-side
+#                  round rows are the half that was structurally invisible.
 #
 # CAUSES ARE MENTIONS, NOT A PARTITION. GATE_RED_WHY is a comma-joined, fire-ordered list, so one
 # land can name several arms (`shellcheck,hermeticity`) and the per-arm counts sum to MORE than the
@@ -160,6 +194,7 @@ if birth_s is None:
 #   non-invocation     — anything else that parsed. Lock rows, both schemas. Excluded, and counted.
 #   unparseable JSON   — cannot be classified at all, so it cannot be in the population. Counted.
 rows, non_inv, bad_json, lines_total = [], 0, 0, 0
+lock_rows = []
 if os.path.exists(log):
     with open(log, 'r') as fh:
         for line in fh:
@@ -174,17 +209,26 @@ if os.path.exists(log):
                 continue
             if not isinstance(d, dict) or d.get('tool') != 'ship-land':
                 non_inv += 1
+                # Kept as well as counted: the STALENESS panel's denominator is the lock ledger's
+                # wait column, which lives only here. They stay OUT of the invocation population —
+                # the header's trap 1 is precisely that they are shaped like one.
+                if isinstance(d, dict) and ('wait_s' in d or 'hold_s' in d):
+                    lock_rows.append(d)
                 continue
             rows.append(d)
 
 # ---- classify each invocation --------------------------------------------------------------------
-recs = []
+def num(d, k):
+    """An int field, or None. bool is an int subclass in python and would pass silently."""
+    v = d.get(k)
+    return v if (isinstance(v, int) and not isinstance(v, bool)) else None
+
+recs, round_recs = [], []
 for d in rows:
     e = d.get('exit')
-    # bool is an int subclass in python and would silently pass as an exit code.
     exit_ok = isinstance(e, int) and not isinstance(e, bool)
     ts = d.get('ts') if isinstance(d.get('ts'), str) else None
-    recs.append({
+    r = {
         'ts':      ts,
         't':       epoch(ts) if ts else None,
         'exit':    e if exit_ok else None,
@@ -192,17 +236,35 @@ for d in rows:
         'red':     d.get('red'),
         'has_red': 'red' in d,
         'smoke':   d.get('smoke'),
-    })
+        # P0 fields. ABSENT is the pre-2026-08-11 state and is carried as None all the way to the
+        # panels, which report coverage rather than substituting a zero — a missing duration read
+        # as 0s would make the pipeline look instantaneous for its entire recorded history.
+        'total_s':        num(d, 'total_s'),
+        'gate_rounds':    num(d, 'gate_rounds'),
+        'gate_s':         num(d, 'gate_s'),
+        'gate_arms_s':    num(d, 'gate_arms_s'),
+        'gate_statics_s': num(d, 'gate_statics_s'),
+    }
+    # ABSENT stage ⇒ "land": every row written before P0 is a terminal outcome, which is what every
+    # rate in this tool already assumed. A default of "round" would retroactively empty the store.
+    (round_recs if d.get('stage') == 'round' else recs).append(r)
 
 # Newest-first ordering is by ts; an UNDATED row cannot be ordered, so it sorts to the front rather
 # than being dropped — --window may exclude it, no other read may.
 recs.sort(key=lambda r: (r['t'] is not None, r['t'] or 0))
+round_recs.sort(key=lambda r: (r['t'] is not None, r['t'] or 0))
 if window > 0:
     recs = recs[-window:]
+    # The round rows are windowed by TIME to the surviving population rather than by count: they
+    # are not attempts, so "the newest N rounds" would be a different window from "the newest N
+    # lands" and the two panels would silently describe different periods.
+    if recs and recs[0]['t'] is not None:
+        round_recs = [r for r in round_recs if r['t'] is None or r['t'] >= recs[0]['t']]
 
 if days_arg:
     cutoff = now_s - float(days_arg) * 86400.0
     recs = [r for r in recs if r['t'] is not None and r['t'] >= cutoff]
+    round_recs = [r for r in round_recs if r['t'] is not None and r['t'] >= cutoff]
     win_days = [float(days_arg)]
 else:
     win_days = [1.0, 3.0, 14.0]
@@ -317,7 +379,102 @@ for r in recs:
     smoke[k] = smoke.get(k, 0) + 1
 smoke_list = sorted(smoke.items(), key=lambda kv: (-kv[1], kv[0]))
 smoke_carried = sum(v for k, v in smoke.items() if k != 'absent')
-quiet = smoke.get('none', 0) + smoke.get('skipped', 0)
+# PREFIX, not equality. P0 split `none` into six causes, and this line — the tool's own "83% of
+# lands run no test of their own diff" headline — would have kept matching only the bare legacy
+# token and reported the quiet fraction COLLAPSING to the skipped column as the new rows arrived.
+# A consumer that keys on an enum's spelling breaks the moment the enum grows; keying on the class
+# is what makes the growth additive (memory: new-enum-member-falls-into-fail-closed-default).
+def is_quiet(k):
+    return k == 'none' or k.startswith('none-') or k == 'skipped'
+quiet = sum(v for k, v in smoke.items() if is_quiet(k))
+# The breakdown the split bought: which CAUSE the quiet lands had. `none` (bare) is the pre-P0
+# population and is reported as its own row — it is an absence of attribution, not a cause.
+smoke_causes = sorted(((k, v) for k, v in smoke.items() if k == 'none' or k.startswith('none-')),
+                      key=lambda kv: (-kv[1], kv[0]))
+
+# ---- P0 panels ------------------------------------------------------------------------------------
+def pctile(vals, p):
+    """Nearest-rank-with-interpolation over a SORTED copy. Empty ⇒ None, never 0."""
+    if not vals:
+        return None
+    v = sorted(vals)
+    if len(v) == 1:
+        return float(v[0])
+    k = (len(v) - 1) * (p / 100.0)
+    f = int(k)
+    c = min(f + 1, len(v) - 1)
+    return float(v[f]) + (float(v[c]) - float(v[f])) * (k - f)
+
+def latency(pop, field='total_s'):
+    """Percentiles + the coverage they rest on. A percentile over 3 of 400 rows is not a
+    measurement of the pipeline, it is a measurement of the instrument's age, so `n` and the
+    carried fraction ride WITH the numbers rather than in a footnote."""
+    vals = [r[field] for r in pop if r[field] is not None]
+    return {
+        'n': len(pop), 'carried': len(vals),
+        'coverage': (len(vals) / float(len(pop))) if pop else None,
+        'p50': pctile(vals, 50), 'p90': pctile(vals, 90), 'p99': pctile(vals, 99),
+        'max': float(max(vals)) if vals else None,
+    }
+
+# SPLIT BY OUTCOME, never pooled. A refused land (exit 6) stops at the gate; a landed one pays the
+# gate AND a fetch, a rebase, a lock round-trip and a content-verify. Their medians answer
+# different questions, and v2's acceptance criterion is about the SUCCESSFUL path.
+lat_landed = latency([r for r in recs if r['exit'] == 0])
+lat_red    = latency([r for r in recs if r['exit'] == 6])
+lat_all    = latency(recs)
+
+gate_pop   = [r for r in recs if r['gate_rounds'] is not None]
+rounds_hist = {}
+for r in gate_pop:
+    rounds_hist[str(r['gate_rounds'])] = rounds_hist.get(str(r['gate_rounds']), 0) + 1
+gate_cost = {
+    'n': len(recs), 'carried': len(gate_pop),
+    'coverage': (len(gate_pop) / float(len(recs))) if recs else None,
+    'rounds_hist': rounds_hist,
+    'multi_round': sum(1 for r in gate_pop if (r['gate_rounds'] or 0) > 1),
+    'gate_s':         latency(gate_pop, 'gate_s'),
+    'gate_arms_s':    latency(gate_pop, 'gate_arms_s'),
+    'gate_statics_s': latency(gate_pop, 'gate_statics_s'),
+}
+
+# ---- STALENESS ------------------------------------------------------------------------------------
+# TWO INDEPENDENT SENSORS, deliberately reported side by side rather than summed.
+#   lock side  — every LOCK row that resolved (exit != -1) carries wait_s and the wrapped command's
+#                exit, so P(exit-42 | wait>0) is computable here and was the audit's headline. Its
+#                blind spot is structural: it can only see rounds that took the mutex.
+#   tool side  — the stage:"round" rows P0 added. Every re-round, queued or not, and therefore the
+#                only view of the WAIT-FREE column §2.B measured as the rising one.
+lock_recs = []
+for d in lock_rows:
+    ts = d.get('ts') if isinstance(d.get('ts'), str) else None
+    lock_recs.append({'t': epoch(ts) if ts else None, 'wait_s': num(d, 'wait_s'),
+                      'exit': num(d, 'exit'), 'event': d.get('event')})
+
+def staleness(cut):
+    pop = [r for r in lock_recs
+           if r['t'] is not None and r['t'] >= cut and r['exit'] is not None and r['exit'] != -1
+           and r['wait_s'] is not None]
+    waited = [r for r in pop if r['wait_s'] > 0]
+    free   = [r for r in pop if r['wait_s'] == 0]
+    sw = sum(1 for r in waited if r['exit'] == 42)
+    sf = sum(1 for r in free if r['exit'] == 42)
+    tool_rounds = sum(1 for r in round_recs if r['t'] is not None and r['t'] >= cut)
+    lands = sum(1 for r in recs if r['t'] is not None and r['t'] >= cut)
+    return {
+        'lock_n': len(pop), 'waited': len(waited), 'stale_given_waited': sw,
+        'p_stale_given_waited': (sw / float(len(waited))) if waited else None,
+        'wait_free': len(free), 'stale_wait_free': sf,
+        'p_stale_wait_free': (sf / float(len(free))) if free else None,
+        'tool_rounds': tool_rounds, 'lands': lands,
+        'rounds_per_land': (tool_rounds / float(lands)) if lands else None,
+    }
+
+stale_windows = []
+for d in win_days:
+    m = staleness(now_s - d * 86400.0)
+    m['label'] = ('%gd' % d)
+    stale_windows.append(m)
 
 def pctf(x):
     return '   n/a' if x is None else ('%5.1f%%' % (100.0 * x))
@@ -359,6 +516,11 @@ if as_json:
         'smoke': smoke,
         'smoke_quiet_n': quiet,
         'smoke_field_carried': smoke_carried,
+        'smoke_none_causes': [{'cause': c, 'n': n} for c, n in smoke_causes],
+        'round_rows': len(round_recs),
+        'land_latency': {'landed': lat_landed, 'gate_red': lat_red, 'all': lat_all},
+        'gate_cost': gate_cost,
+        'staleness': stale_windows,
     }, sort_keys=True))
     sys.exit(code)
 
@@ -414,10 +576,62 @@ for k, n in hist_list:
 print('')
 print('  SMOKE STATE — the headline\'s own evidence. "reds are statics" holds only if smoke rarely ran.')
 for k, n in smoke_list:
-    print('      %-12s %5d   %s' % (k, n, pctf(n / float(len(recs))) if recs else '   n/a'))
-print('      none+skipped: %d/%d of all invocations (%s) · %d/%d of those carrying the field (%s)'
+    print('      %-16s %5d   %s' % (k, n, pctf(n / float(len(recs))) if recs else '   n/a'))
+print('      none*+skipped: %d/%d of all invocations (%s) · %d/%d of those carrying the field (%s)'
       % (quiet, len(recs), pctf(quiet / float(len(recs))) if recs else '   n/a',
          quiet, smoke_carried, pctf(quiet / float(smoke_carried)) if smoke_carried else '   n/a'))
+if smoke_causes:
+    print('      WHY no smoke ran — one token per cause since 2026-08-11. A bare `none` is a row from')
+    print('      before the split: an absence of attribution, never a sixth cause.')
+    for c, n in smoke_causes:
+        print('        %-16s %5d' % (c, n))
+
+def secs(x):
+    return '    n/a' if x is None else ('%6.0fs' % x)
+
+print('')
+print('  LAND LATENCY — total_s, end to end. THE field v2\'s acceptance criterion names and the store')
+print('  did not carry until 2026-08-11, which is why "p50 <= 30s" was never once checked against it.')
+print('  Landed and refused are never pooled: they are different journeys, minutes apart.')
+print('    %-10s %14s   %7s %7s %7s   %s' % ('outcome', 'carried/rows', 'p50', 'p90', 'p99', 'coverage'))
+for lbl, m in (('landed', lat_landed), ('gate-red', lat_red), ('all', lat_all)):
+    print('    %-10s %6d /%6d   %7s %7s %7s   %s'
+          % (lbl, m['carried'], m['n'], secs(m['p50']), secs(m['p90']), secs(m['p99']),
+             pctf(m['coverage'])))
+if lat_all['carried'] < min_n:
+    print('    coverage is under the %d-row floor — these are the instrument\'s first rows, not a rate.'
+          % min_n)
+
+print('')
+print('  GATE COST — where a land\'s seconds went. The arms dominate by construction (§5.P3 measured')
+print('  the fifteen ratchet arms at ~112s of a 127-137s re-round), so a total alone cannot say')
+print('  whether a slow land was RE-gated or merely gated.')
+print('    gate_rounds carried on %d/%d rows (%s) · %d land(s) gated more than once'
+      % (gate_cost['carried'], gate_cost['n'], pctf(gate_cost['coverage']), gate_cost['multi_round']))
+if rounds_hist:
+    print('      rounds:  %s'
+          % ('  '.join('%s×%d' % (k, rounds_hist[k]) for k in sorted(rounds_hist, key=lambda x: int(x)))))
+for lbl, key in (('gate_s', 'gate_s'), ('  of which arms', 'gate_arms_s'), ('  of which statics', 'gate_statics_s')):
+    m = gate_cost[key]
+    print('      %-18s p50 %s  p90 %s  max %s' % (lbl, secs(m['p50']), secs(m['p90']), secs(m['max'])))
+
+print('')
+print('  STALENESS — work the pipeline threw away. A waiter queued during a successful hold is by')
+print('  construction gating against a base the holder is about to move, so it acquires, discovers')
+print('  staleness in seconds, discards its gate and re-rounds. TWO sensors, never summed: the lock')
+print('  ledger sees only rounds that QUEUED; the tool-side round rows see every one.')
+print('    %-7s %22s   %22s   %s'
+      % ('window', 'P(stale | waited)', 'P(stale | NO wait)', 'rounds/land (tool side)'))
+for m in stale_windows:
+    print('    %-7s %8d /%6d %6s   %8d /%6d %6s   %8s  (%d rounds, %d lands)'
+          % (m['label'], m['stale_given_waited'], m['waited'], pctf(m['p_stale_given_waited']),
+             m['stale_wait_free'], m['wait_free'], pctf(m['p_stale_wait_free']),
+             ('n/a' if m['rounds_per_land'] is None else '%.2f' % m['rounds_per_land']),
+             m['tool_rounds'], m['lands']))
+print('    The wait-FREE column is the one to watch: it is push-RATE pressure, not lock contention,')
+print('    and it is invisible to the lock ledger\'s own utilization figure.')
+if not any(m['tool_rounds'] for m in stale_windows):
+    print('    tool-side rounds are 0 — either nothing went stale, or these rows predate 2026-08-11.')
 print('')
 print('verdict=%s' % verdict)
 if verdict == 'NO-VERDICT':

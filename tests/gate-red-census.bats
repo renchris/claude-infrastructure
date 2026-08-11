@@ -311,3 +311,186 @@ lock_evented() {
   run "$CENSUS" --days notanumber
   [ "$status" -eq 2 ]
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# P0 PANELS — land latency, gate cost, staleness. Same discipline as the four controls above: each
+# fixture makes a NAIVE reading print a DIFFERENT NUMBER, not a differently-labelled one.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A P0-era invocation: carries stage + the duration fields.
+# p0land <hours-ago> <exit> <total_s> <gate_rounds> <gate_s> <arms_s> <statics_s> [stage] [smoke]
+p0land() {
+  printf '{"ts":"%s","tool":"ship-land","repo":"/r","branch":"b","exit":%s,"stage":"%s","smoke":"%s","red":"","total_s":%s,"gate_rounds":%s,"gate_s":%s,"gate_arms_s":%s,"gate_statics_s":%s}\n' \
+    "$(ago "$1")" "$2" "${8-land}" "${9-none-nodirect}" "$3" "$4" "$5" "$6" "$7" >> "$LAND_LOG"
+}
+
+# A LOCK row with a wait and an outcome — the staleness panel's only denominator.
+# lock_wait <hours-ago> <wait_s> <exit>
+lock_wait() {
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"release","wait_s":%s,"hold_s":3,"exit":%s,"depth":0,"pid":3}\n' \
+    "$(ago "$1")" "$2" "$3" >> "$LAND_LOG"
+}
+
+@test "CONTROL: a stage:round row is NOT an attempt (pooling it reads 33% not 50%)" {
+  # THE trap P0 created and this census had to absorb in the same diff. ship-land now attests its
+  # stale-gate re-rounds, which are internal signals — the same land continues. Pooled, they would
+  # have DILUTED the gate-red rate by however often siblings happened to move the trunk: the new
+  # instrument would have improved this tool's headline number by adding rows, which is the one
+  # direction a measurement must never move on its own.
+  for _ in 1 2 3 4 5; do land 2 6 'shellcheck'; done
+  for _ in 1 2 3 4 5; do land 2 0 ''; done                 # 5/10 = 50%
+  for _ in 1 2 3 4 5; do p0land 2 42 4 1 1 0 1 round; done  # +5 rounds ⇒ a naive 5/15 = 33%
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"invocations": 10'* ]] || false
+  [[ "$output" == *'"round_rows": 5'* ]] || false
+  [[ "$output" == *'"rate": 0.5'* ]] || false
+  run "$CENSUS"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"50.0%"* ]] || false
+  [[ "$output" != *"33.3%"* ]] || false
+}
+
+@test "CONTROL: an ABSENT stage is a land, never a round (defaulting the other way empties the store)" {
+  # Every row written before 2026-08-11 has no `stage`, which is 1,678 of the live store. Reading
+  # the absence as anything but "land" would retroactively delete the entire history this tool
+  # exists to read — the fail direction of a new enum member, in its most expensive form.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do land 2 6 'shellcheck'; done
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"invocations": 10'* ]] || false
+  [[ "$output" == *'"round_rows": 0'* ]] || false
+}
+
+@test "CONTROL: a MISSING total_s is coverage, never a zero (a zero reads as an instant pipeline)" {
+  # The whole store predates the field. Substituting 0 for absent would report p50=0s — a pipeline
+  # that lands instantaneously — and it would do so with maximum confidence, over 1,678 rows.
+  for _ in 1 2 3 4 5 6 7 8; do land 2 0 ''; done            # eight pre-P0 rows, no total_s
+  p0land 2 0 40 1 30 28 2                                   # …and two that carry it
+  p0land 2 0 60 1 50 48 2
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)[\"land_latency\"][\"landed\"]
+assert d[\"n\"]==10, d
+assert d[\"carried\"]==2, d
+assert d[\"p50\"]==50.0, d          # the median of 40 and 60 — NOT of eight zeros and them
+assert abs(d[\"coverage\"]-0.2)<1e-9, d
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+}
+
+@test "land latency is SPLIT by outcome — a refused land and a landed one are different journeys" {
+  # A gate-red stops at the gate; a land pays the gate AND a fetch, a rebase, a lock round-trip and
+  # a content-verify. Pooled, the median describes no experience anyone actually had, and v2's
+  # acceptance criterion is about the SUCCESSFUL path specifically.
+  p0land 2 0 100 1 40 38 2
+  p0land 2 0 100 1 40 38 2
+  p0land 2 6 10 1 8 7 1
+  p0land 2 6 10 1 8 7 1
+  # The MIN_N floor is about whether a RATE is a measurement; these four rows are a fixture for the
+  # arithmetic of the split, so the floor is lowered through its documented seam rather than padded
+  # around with filler rows that would obscure which numbers the assertions are reading.
+  export GATE_RED_CENSUS_MIN_N=1
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)[\"land_latency\"]
+assert d[\"landed\"][\"p50\"]==100.0, d
+assert d[\"gate_red\"][\"p50\"]==10.0, d
+assert d[\"all\"][\"p50\"]==55.0, d      # the pooled figure exists, and belongs to NEITHER lane
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+}
+
+@test "gate cost separates the ARMS from the statics, and counts re-gated lands" {
+  # §5.P3's finding, made legible per land: the statics are ~2% and the fifteen ratchet arms are
+  # ~88% of a re-round, so a panel reporting one gate total would hide the only term worth acting on.
+  p0land 2 0 200 2 150 140 10
+  p0land 2 0 100 1 60 56 4
+  export GATE_RED_CENSUS_MIN_N=1        # see the note in the latency test above
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+g=json.load(sys.stdin)[\"gate_cost\"]
+assert g[\"multi_round\"]==1, g
+assert g[\"rounds_hist\"]=={\"1\":1,\"2\":1}, g
+assert g[\"gate_arms_s\"][\"max\"]==140.0, g
+assert g[\"gate_statics_s\"][\"max\"]==10.0, g
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+}
+
+@test "P(stale | waited) and the WAIT-FREE column are computed apart, never as one rate" {
+  # §2.B's finding: staleness given a WAIT is the lock-contention story (49%/14d rising to 86%/3d),
+  # and the wait-FREE column is the RISING one — push-rate pressure, a different mechanism with a
+  # different remedy. A single pooled "staleness rate" would move for either reason and name
+  # neither. The fixture makes them disagree: 3/4 waited are stale, 1/6 wait-free are.
+  lock_wait 2 30 42; lock_wait 2 20 42; lock_wait 2 10 42; lock_wait 2 5 0
+  lock_wait 2 0 42
+  for _ in 1 2 3 4 5; do lock_wait 2 0 0; done
+  for _ in 1 2 3 4 5 6 7 8 9 10; do land 2 0 ''; done       # keep the census above its floor
+  run "$CENSUS" --days 1 --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+s=json.load(sys.stdin)[\"staleness\"][0]
+assert s[\"waited\"]==4 and s[\"stale_given_waited\"]==3, s
+assert abs(s[\"p_stale_given_waited\"]-0.75)<1e-9, s
+assert s[\"wait_free\"]==6 and s[\"stale_wait_free\"]==1, s
+assert abs(s[\"p_stale_wait_free\"]-(1/6.0))<1e-9, s
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+}
+
+@test "a QUEUED lock row (exit -1) is not an outcome and cannot enter the staleness denominator" {
+  # land-lock writes a row at ACQUIRE-START carrying exit -1, precisely so a non-terminal row is
+  # distinguishable. Counting it would inflate the wait population with waits that have not
+  # resolved — and every one of them would score as "not stale", quieting the rate.
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"queued","wait_s":0,"hold_s":0,"exit":-1,"depth":1,"pid":9}\n' \
+    "$(ago 2)" >> "$LAND_LOG"
+  lock_wait 2 30 42
+  for _ in 1 2 3 4 5 6 7 8 9 10; do land 2 0 ''; done
+  run "$CENSUS" --days 1 --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+s=json.load(sys.stdin)[\"staleness\"][0]
+assert s[\"lock_n\"]==1, s
+assert s[\"waited\"]==1 and s[\"wait_free\"]==0, s
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+}
+
+@test "the quiet-smoke fraction matches the none-* CLASS, not the bare token" {
+  # THE consumer defect this diff had to fix in the same breath as creating it. This tool's own
+  # headline evidence — "reds are statics, because smoke rarely ran" — was computed as
+  # smoke=='none' plus smoke=='skipped'. P0 split `none` into six causes, so an unchanged census
+  # would have watched its quiet fraction COLLAPSE toward the skipped column as the new rows
+  # arrived, and read a coverage improvement that never happened.
+  land 2 0 '' 'none'                                  # the legacy token, still counted
+  land 2 0 '' 'none-nodirect'
+  land 2 0 '' 'none-locked'
+  land 2 0 '' 'none-unreached'
+  land 2 0 '' 'none-noselector'
+  land 2 0 '' 'none-undecided'
+  land 2 0 '' 'none-nosuites'
+  land 2 0 '' 'skipped'
+  land 2 0 '' 'green'
+  land 2 0 '' 'partial'
+  run "$CENSUS" --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"smoke_quiet_n": 8'* ]] || false          # 7 none* + 1 skipped, NOT 2
+  run "$CENSUS"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WHY no smoke ran"* ]] || false
+  [[ "$output" == *"none-unreached"* ]] || false
+}
