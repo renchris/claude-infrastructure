@@ -249,6 +249,60 @@ future_ts() { date -u -v+2d +%Y-%m-%dT%H:%M:%SZ; }
   [ "$(verdict "$output")" = clear ]
 }
 
+@test "a UUID is not two shas — a session id does not read as a dead pointer" {
+  # THE MEASURED DEFECT. `\b[0-9a-f]{7,40}\b` shreds `7868b45e-ce67-4ac1-a8dd-0bc670bf7fa6` at the
+  # hyphens into `7868b45e` and `0bc670bf7fa6`, and both were announced as absent commits — on the
+  # very item filed to report it. A transcript under ~/.claude-tertiary/ is absent from git BY
+  # CONSTRUCTION, so this is a finding that can never be anything but false.
+  r="$(mkrepo)"; export CC_PREMISE_REPO="$r"
+  add 4d4d4d4d4d4d "measured on session 7868b45e-ce67-4ac1-a8dd-0bc670bf7fa6 (6.2MB transcript)"
+  run "$CP" check 4d4d4d4d4d4d
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  refute_match "$output" "7868b45e"
+  refute_match "$output" "0bc670bf7fa6"
+}
+
+@test "a naming word BOUND to the token suppresses it — an unbound twin still speaks" {
+  # The fragment cited alone, which the UUID test cannot reach: item 311062ef8e9a's body says
+  # "MEASURED on sid 7868b45e" with no UUID anywhere. Only the bound noun discriminates.
+  r="$(mkrepo)"; export CC_PREMISE_REPO="$r"
+  add 5e5e5e5e5e5e "MEASURED on sid 7868b45e: the oracle is per-SESSION"
+  run "$CP" check 5e5e5e5e5e5e
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = clear ]
+  # THE PAIRED CONTROL, and it is the half that matters. Suppression sized to "any 8-hex token
+  # looks like an id" would silence the arm entirely, and this suite would go green on a sensor
+  # that reports nothing (memory: per-site-mutation-attributes-coverage). The SAME token, unbound,
+  # must still be resolved and still be convicted.
+  add 6f6f6f6f6f6f "the fix in 7868b45e was reverted"
+  run "$CP" check 6f6f6f6f6f6f
+  [ "$status" -eq 0 ]
+  [ "$(verdict "$output")" = suspect ]
+  printf '%s' "$output" | grep -q "7868b45e"
+}
+
+@test "a token with no git word is HEDGED, not called a sha — and one with a git word is not" {
+  # The false signal this arm was reported for is the WORD "SHA": the advice that follows was
+  # generically correct, but it points a worker at "premise refuted" for evidence that was never
+  # in git. What cannot be classified must concede it, and 75 of 182 live findings are that case.
+  r="$(mkrepo)"; export CC_PREMISE_REPO="$r"
+  add 7a7a7a7a7a7a "run-control=1d9a6a21 came back red"
+  run "$CP" check 7a7a7a7a7a7a
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "CITED HEX TOKEN 1d9a6a21"
+  printf '%s' "$output" | grep -q "IGNORE THIS LINE"
+  # …and the confident wording is still REACHABLE. Without this half the fix could equally have
+  # been "hedge everything", which throws away the arm's signal on a real dead pointer.
+  add 8b8b8b8b8b8b "the commit 1d9a6a21 never landed"
+  run "$CP" check 8b8b8b8b8b8b
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q "CITED SHA 1d9a6a21"
+  refute_match "$output" "CITED HEX TOKEN"
+  # BOTH wordings keep the rebase advice — it was correct before this change and is unaffected.
+  printf '%s' "$output" | grep -q "lands by REBASE"
+}
+
 @test "FAIL-OPEN: an unreadable store answers unknown and exits 0, never blocks" {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/does-not-exist.jsonl"
   run "$CP" check aaaaaaaaaaaa

@@ -84,6 +84,39 @@ REPO = os.environ.get("CC_PREMISE_REPO", _default_repo())
 RE_ID = re.compile(r"\b[0-9a-f]{12}\b")
 RE_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
 
+# A BACKLOG ID IS NOT THE ONLY NON-GIT HEX IN THIS FLEET, and the two below are the ones RE_SHA
+# cannot tell from a sha on shape alone. Both suppress; both are STRUCTURAL, never a guess.
+#
+# 1. A session/task id is a UUID — `7868b45e-ce67-4ac1-a8dd-0bc670bf7fa6` — and `\b…\b` SHREDS IT
+#    AT THE HYPHENS into `7868b45e` and `0bc670bf7fa6`: two sha-shaped tokens that resolve to
+#    nothing and are absent from git BY CONSTRUCTION. Membership in a full UUID standing in the
+#    same text is a disproof, not a heuristic, so it may suppress. 28 of 225 live findings.
+RE_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+
+# 2. …and the fragment cited ALONE, which (1) cannot reach: the item that earned this fix says
+#    "MEASURED on sid 7868b45e" with no UUID anywhere in its body. Only the naming word placed
+#    ON the token discriminates, so this is BOUND — `sid 7868b45e`, `arm-df1308af96473054`,
+#    `session=abc1234` — and deliberately NOT a proximity window. A window inherits the wrong
+#    noun in a sentence citing several ids, which is the exact mistake the refutation predicate
+#    above had to be rebuilt to undo (370 hits where 24 were real). 21 of 225 live findings.
+#    `lead` earns its place and `peer` is DENIED one, which is the difference between a measured
+#    list and a plausible one. Over the live store `lead <hex>` occurs 4 times and every one is a
+#    session id (`goal-verify-lead 0d8b00dc`, `content-verified by lead 04b81cf8`); `peer <hex>`
+#    occurs twice and one of them, `composed cleanly with peer 469e654`, RESOLVES ON TRUNK. Two
+#    words that read as equally id-ish, and only one of them may silence the arm.
+RE_ID_BOUND = re.compile(
+    r"\b(?:sid|session|transcript|task|backlog|uuid|pane|marker|arm|lease|lead)s?\b"
+    r"[ \t]*[-_=:#]?[ \t]*$", re.I)
+
+# A git word ADJACENT to the token. THIS ONE IS WEAK AND MAY NOT SUPPRESS — it only chooses
+# wording; see `sha_context`. 115 of 225 live findings have no context word either way and are
+# mostly REAL shas (`origin/main=ea36393c`, `remedy already on origin/main since 9f6d5a0d`), so a
+# rule that required a positive word before speaking would silence the arm's main population —
+# the too-strong half of a guard that fails in both directions.
+RE_SHA_WORD = re.compile(
+    r"commit|\bsha\b|landed|revert|cherry|rebase|fixup|blame|ancestor|origin/|\bHEAD\b"
+    r"|\bbranch|\btrunk", re.I)
+
 # REFUTATION vs CITATION — and this had to be rebuilt once, which is the whole lesson.
 #
 # The first cut matched "a refuting verb within 120 chars of the id". Measured against the live
@@ -449,22 +482,65 @@ def _git_usable():
 
 
 def cited_shas(text, known_ids):
-    """SHA-shaped tokens that are NOT backlog ids and not decimal — deduped, order preserved.
+    """SHA-shaped tokens that are NOT some other kind of id, and not decimal — order preserved.
 
     The id test is a PREFIX test, not exact match, and that is not pedantry: a 7-8 char run of an
     id is itself sha-shaped, so `fdf4161` (the citing item's OWN id, appearing as the branch name
     `ship/backup-fdf4161`) and `f72db4e3` both read as git shas under an exact-match filter and
     resolve to nothing — manufacturing two dead-pointer findings out of two self-references.
+
+    THE LEDGER IS NOT THE ONLY ID SPACE, which is what this had to learn. Filtering only against
+    backlog ids left every SESSION id sha-shaped, so the arm announced a live transcript under
+    `~/.claude-tertiary/projects/` as a dead commit: reading item 311062ef8e9a it emitted
+    `CITED SHA 7868b45e: no such object here (absent)` — a false signal pointing a worker at
+    "premise refuted" for an item whose evidence was never in git to begin with. It reproduced on
+    the very item filed to report it, whose title quotes the UUID (RE_UUID above).
+
+    SUPPRESSION IS RESERVED FOR A DISPROOF. Both filters answer "this token is a DIFFERENT id",
+    never "this token feels unlikely" — a hex run inside a UUID, or one a naming word is bound
+    to. The weak signal (a git word nearby) is not consulted here at all; it only picks wording
+    at the emit site, because requiring it before speaking would suppress 115 of 225 live
+    findings, most of them real (memory: guard-proxy-fails-in-both-directions).
+
+    A TOKEN IS JUDGED OVER ALL ITS OCCURRENCES, and the tie goes to speaking. `sid 7868b45e`
+    early and `commit 7868b45e` late is one token bound once and free once; suppressing on the
+    first occurrence alone would let a citation's position decide whether git gets asked.
     """
-    seen, out = set(), []
-    for tok in RE_SHA.findall(text):
-        if tok in seen or tok.isdigit():
+    uuid_parts = set()
+    for m in RE_UUID.finditer(text):
+        uuid_parts.update(p for p in m.group(0).split("-") if len(p) >= 7)
+
+    free, order = {}, []
+    for m in RE_SHA.finditer(text):
+        tok = m.group(0)
+        if tok.isdigit() or tok in uuid_parts:
             continue
         if any(i.startswith(tok) for i in known_ids):
             continue
-        seen.add(tok)
-        out.append(tok)
-    return out
+        if tok not in free:
+            free[tok] = False
+            order.append(tok)
+        if not RE_ID_BOUND.search(text[max(0, m.start() - 40):m.start()]):
+            free[tok] = True
+    return [t for t in order if free[t]]
+
+
+def sha_context(text, tok):
+    """Does a git word sit ADJACENT to this token anywhere it appears? WEAK — wording only.
+
+    This picks between two sentences and NOTHING else. It may not gate the git lookup and may not
+    suppress a finding: measured over the live store, 115 of 225 dead-pointer findings carry no
+    context word in either direction, and the samples are overwhelmingly genuine shas cited bare
+    (`origin/main=ea36393c content-verified`, `run-control=1d9a6a21`). A weak discriminator is
+    allowed to choose how confidently we speak; only a structural one is allowed to silence us.
+
+    Both sides of the token, because a sha is as often introduced by what FOLLOWS it
+    (`1895b0e4 on branch wt-…`) as by what precedes it (`landed 9f6d5a0d`).
+    """
+    for m in RE_SHA.finditer(text):
+        if m.group(0) == tok and RE_SHA_WORD.search(text[max(0, m.start() - 60):m.end() + 40]):
+            return True
+    return False
 
 
 def resolve_sha(sha):
@@ -1144,12 +1220,28 @@ def assess(item_id, idx):
         if bad:
             if verdict == "clear":
                 verdict = "suspect"
+            # TWO SENTENCES, BECAUSE "IT IS A SHA" IS ITSELF A CLAIM. `cited_shas` has already
+            # dropped the tokens provably belonging to another id space; what survives is a mix of
+            # real dead pointers and hex the check simply cannot classify, and calling the second
+            # kind a SHA is the false signal this arm was reported for. The confident wording is
+            # earned by an adjacent git word and the fallback concedes what it does not know —
+            # both carry the rebase advice, which was correct all along.
             for sha, state in bad:
-                lines.append(
-                    "CITED SHA %s: no such object here (%s). This repo lands by REBASE, so a dead "
-                    "pointer does NOT mean the change is undone — check whether the described "
-                    "change is on trunk by CONTENT before concluding anything." % (sha, state)
-                )
+                if sha_context(text, sha):
+                    lines.append(
+                        "CITED SHA %s: no such object here (%s). This repo lands by REBASE, so a "
+                        "dead pointer does NOT mean the change is undone — check whether the "
+                        "described change is on trunk by CONTENT before concluding anything."
+                        % (sha, state)
+                    )
+                else:
+                    lines.append(
+                        "CITED HEX TOKEN %s does not resolve as a commit here (%s) — if it is a "
+                        "session, task or backlog id rather than a sha, IGNORE THIS LINE. If it "
+                        "is a sha: this repo lands by REBASE, so a dead pointer does NOT mean the "
+                        "change is undone — check whether the described change is on trunk by "
+                        "CONTENT before concluding anything." % (sha, state)
+                    )
 
         gone, present = [], []
 
