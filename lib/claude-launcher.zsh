@@ -37,14 +37,16 @@ _cc_launcher_map() {
   (( ${+functions[cc_acct_dir_for_name]} ))
 }
 
-# _cc_route_config_dir → sets _CC_ROUTED_DIR ('' = stay pinned) and _CC_ROUTE_NOTE (one short line).
-# NEVER fails, NEVER blocks, NEVER prints on its own — the caller decides what the operator sees.
+# _cc_route_config_dir → sets _CC_ROUTED_DIR ('' = stay pinned) and _CC_ROUTE_NOTE (one short line),
+# plus _CC_ROUTE_ACCT / _CC_ROUTE_BIN for the caller's charge.
+# NEVER fails, NEVER blocks, NEVER prints on its own, and — since the charge moved out — NEVER
+# writes: it is a pure decision. The caller decides what the operator sees and what gets recorded.
 _cc_route_config_dir() {
   emulate -L zsh
   # Every local declared ONCE, at the top: a bare `local x` on a name that is already local PRINTS
   # `x=''` to stdout, so a helper re-declaring one and captured with $( ) hands back a garbage path.
   local bin acct rc dir note
-  _CC_ROUTED_DIR='' _CC_ROUTE_NOTE=''
+  _CC_ROUTED_DIR='' _CC_ROUTE_NOTE='' _CC_ROUTE_ACCT='' _CC_ROUTE_BIN=''
   case "${CC_CLAUDE_ROUTE:-on}" in
     off|0|false) _CC_ROUTE_NOTE='routing off (CC_CLAUDE_ROUTE)'; return 0 ;;
   esac
@@ -77,11 +79,53 @@ _cc_route_config_dir() {
   [[ -d "$dir" ]] || { _CC_ROUTE_NOTE="pinned — '$acct' dir absent"; return 0 }
   _CC_ROUTED_DIR="$dir"
   _CC_ROUTE_NOTE="routed → $acct"
-  # Charge the phantom the router reads back at invocation time, so a burst of launches walks DOWN
-  # the ranking instead of every one of them reading the same cache and stacking on rank[0].
-  # Backgrounded and fully detached: spread is advisory, and a launcher must never wait on a ledger
-  # append. Same ledger `--assign` writes — one store, never a second truth.
-  ( "$bin" --assign "$acct" --src claude-launcher >/dev/null 2>&1 & ) 2>/dev/null
+  _CC_ROUTE_ACCT="$acct"
+  _CC_ROUTE_BIN="$bin"
+}
+
+# _cc_charge_on_commit <bin> <acct> → arms the phantom charge, sets _CC_LAUNCH_SENTINEL.
+#
+# The charge itself is unchanged in purpose: the router reads its own assignments back at
+# invocation time, so a burst of launches walks DOWN the ranking instead of every one of them
+# reading the same 90 s cache and stacking on rank[0]. It writes the same ledger `--assign` writes
+# — one store, never a second truth.
+#
+# 🚨 WHAT MOVED, AND WHY. It used to fire inside _cc_route_config_dir, at DECISION time — one gate
+# too early. `record_assignment`'s own contract in bin/claude-accounts reads "called by the consumer
+# that COMMITS to launching a NEW session", and the launcher was not that consumer: the pinned body
+# runs `_cc_route_check` AFTER the router hands off, and refuses the launch outright when a worktree
+# claim fails (~/.zshrc:456-457). The account was then carrying a 15-minute phantom (ASSIGN_TTL_MIN)
+# for a session that never existed — skewing the very spread math the charge exists to protect.
+#
+# Mechanism: a sentinel file the CALLER deletes the moment the pinned body returns. A refused launch
+# returns without ever exec'ing, so the sentinel is gone before the settle window elapses and nothing
+# is charged; a launch that reached the binary is still running, so the charge lands.
+#
+# HONEST LIMIT — this NARROWS D3, it does not close it. The discriminator is time, so a refusal that
+# is itself slow (a worktree fetch that times out past the window) still charges. Widening the window
+# trades that against the burst-spread the charge exists for, which is why it is a knob rather than a
+# constant: CC_LAUNCH_ASSIGN_SETTLE_S, and 0 restores the immediate pre-fix charge.
+_cc_charge_on_commit() {
+  emulate -L zsh
+  local settle sent
+  _CC_LAUNCH_SENTINEL=''
+  settle="${CC_LAUNCH_ASSIGN_SETTLE_S:-5}"
+  # Detached in every branch: spread is advisory, and a launcher must never wait on a ledger append.
+  if [[ "$settle" == 0 ]]; then
+    ( "$1" --assign "$2" --src claude-launcher >/dev/null 2>&1 & ) 2>/dev/null
+    return 0
+  fi
+  sent="${TMPDIR:-/tmp}/.cc-launch-charge.$$.$RANDOM"
+  # A tmpdir we cannot write is not a reason to lose the spread signal: fall back to charging now,
+  # which is exactly the behaviour this replaces, rather than to charging never.
+  : > "$sent" 2>/dev/null || {
+    ( "$1" --assign "$2" --src claude-launcher >/dev/null 2>&1 & ) 2>/dev/null
+    return 0
+  }
+  _CC_LAUNCH_SENTINEL="$sent"
+  ( sleep "$settle"
+    [[ -e "$sent" ]] && "$1" --assign "$2" --src claude-launcher >/dev/null 2>&1
+    rm -f "$sent" ) >/dev/null 2>&1 &!
 }
 
 # ── the split ──────────────────────────────────────────────────────────────────────────────────
@@ -116,7 +160,7 @@ _cc_install_router() {
 
   claude() {
     emulate -L zsh
-    local _arg _resume=0
+    local _arg _resume=0 _rc=0
     for _arg in "$@"; do
       case "$_arg" in --resume|--resume=*|-r|--continue|-c) _resume=1; break ;; esac
     done
@@ -127,11 +171,20 @@ _cc_install_router() {
       _cc_route_config_dir
       if [[ -n "$_CC_ROUTED_DIR" ]]; then
         [[ -t 2 ]] && print -u2 "◆ ${_CC_ROUTE_NOTE}"
-        # Prefix assignment, deliberately NOT `export`: it scopes the pin to exactly this call and
-        # leaves the caller's environment untouched, so a later launch in the same shell re-routes
-        # instead of inheriting a stale account.
-        CLAUDE_CONFIG_DIR="$_CC_ROUTED_DIR" _claude_pinned "$@"
-        return
+        _cc_charge_on_commit "$_CC_ROUTE_BIN" "$_CC_ROUTE_ACCT"
+        # The sentinel is dropped the instant the pinned body RETURNS — including when it refuses,
+        # and including on an interrupt, which is why it is an `always` block rather than a line
+        # after the call.
+        {
+          # Prefix assignment, deliberately NOT `export`: it scopes the pin to exactly this call
+          # and leaves the caller's environment untouched, so a later launch in the same shell
+          # re-routes instead of inheriting a stale account.
+          CLAUDE_CONFIG_DIR="$_CC_ROUTED_DIR" _claude_pinned "$@"
+          _rc=$?
+        } always {
+          [[ -n "$_CC_LAUNCH_SENTINEL" ]] && rm -f "$_CC_LAUNCH_SENTINEL"
+        }
+        return $_rc
       fi
       # Fell back. Say so — an inert router and a router that legitimately chose the pinned
       # account are indistinguishable in silence, which is how a dark feature survives for weeks.
