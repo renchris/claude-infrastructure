@@ -101,6 +101,52 @@ status_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id=
   [ "$(fals_of "$ID")" = "test -e $PRESENT" ]
 }
 
+# ── --clear, and the reason it cannot be an omitted key ──────────────────────────────────────────
+#
+# A probe can be wrong with NO correct replacement available: `eef88daa030a`'s item is "the deploy
+# converger refuses every land, no green tree descends from live HEAD", its probe asked only whether
+# one commit had reached the checkout, and the mechanism-true alternative (`deploy-live --dry-run`)
+# has two success states. So the honest end state is NO probe, and something has to be able to
+# express that.
+
+@test "--clear retires a stored probe" {
+  bash "$CB" falsify "$ID" --probe "test -e $MISSING"
+  run bash "$CB" falsify "$ID" --clear
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "" ]
+  printf '%s' "$output" | grep -q "CLEARED"
+  # The refusal message must SAY what it deleted — a clear with no record of the old probe makes an
+  # accidental clear unrecoverable from the operator's screen.
+  printf '%s' "$output" | grep -q "test -e $MISSING"
+}
+
+@test "BOTH readers agree the probe is gone — not just list --json" {
+  bash "$CB" falsify "$ID" --probe "test -e $MISSING"
+  bash "$CB" falsify "$ID" --clear
+  # This is the assertion the whole flag turns on. cc-backlog's fold clears on "" because jq's `//`
+  # treats only null and false as falsy; cc-premise folded on TRUTHINESS and so would have SKIPPED
+  # the clearing record and gone on running the deleted probe — invisibly, since `list --json` shows
+  # none. A divergence in exactly that direction is the worst available outcome.
+  [ "$(fals_of "$ID")" = "" ]
+  # Asked through cc-premise ITSELF rather than by re-implementing its fold here: a second copy of
+  # the rule is exactly how the two readers drifted apart in the first place.
+  out=$(CC_BACKLOG_FILE="$CC_BACKLOG_FILE" python3 "$REPO/bin/cc-premise" check "$ID" 2>&1)
+  [ "$(printf '%s' "$out" | grep -c 'FALSIFIER PASSED')" -eq 0 ]
+  [ "$(printf '%s' "$out" | grep -c 'Falsifier re-run just now')" -eq 0 ]
+}
+
+@test "--clear on an item with no probe is a no-op that still succeeds" {
+  run bash "$CB" falsify "$ID" --clear
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$ID")" = "" ]
+}
+
+@test "--clear and --probe together are refused" {
+  run bash "$CB" falsify "$ID" --clear --probe "test -e $MISSING"
+  [ "$status" -eq 2 ]
+  [ "$(fals_of "$ID")" = "" ]
+}
+
 # ── refusals ─────────────────────────────────────────────────────────────────────────────────────
 
 @test "unknown id is refused (rc 3), not silently created" {

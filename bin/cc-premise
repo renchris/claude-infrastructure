@@ -313,8 +313,20 @@ def build_index(recs):
         # record correcting it is strictly better than an earlier one. The per-record accretion that
         # `notes` needs would be actively wrong here: re-running a probe its owner already replaced
         # is how you resurrect a condition that was retired for a reason.
-        if r.get("falsifier"):
-            ent["falsifier"] = r["falsifier"]
+        #
+        # PRESENCE, NOT TRUTHINESS — and the two are a real fork, not a style choice. An explicit
+        # `falsifier:""` is how `cc-backlog falsify --clear` RETIRES a probe that turned out to read
+        # a downstream symptom instead of its item's mechanism. Keyed on truthiness
+        # (`if r.get("falsifier")`) that record is skipped and the OLD probe stays live HERE, while
+        # cc-backlog's own fold — `($r.falsifier // $p.falsifier)`, where jq's `//` passes "" through
+        # because only null and false are falsy there — DOES clear it. The two readers would then
+        # disagree in the worst possible direction: `list --json` reports no probe while this file
+        # goes on retracting claims with the probe its owner deleted, invisibly (memory:
+        # sibling-auditors-must-share-the-state-model). No producer writes an empty falsifier by
+        # accident — `add` and `needs` both omit the key when it is empty — so an empty string
+        # arriving here always means someone said "remove this".
+        if "falsifier" in r:
+            ent["falsifier"] = r["falsifier"] or ""
         # SOURCE and DODREF, folded LAST-NON-EMPTY-WINS — deliberately cc-backlog's OWN fold rule
         # (`dodRef: ($r.dodRef // $p.dodRef // "")`, bin/cc-backlog:634) rather than the first-wins
         # rule `title`/`project` get below. The derived plan probe added further down has to agree

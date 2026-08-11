@@ -1795,7 +1795,7 @@ cmd_link() {
 # reason: "I could not ask" must never read as "the answer was no".
 cmd_falsify() {
   local id="${1:-}"; [ $# -gt 0 ] && shift
-  local probe="" force=0 norun=0
+  local probe="" force=0 norun=0 clear=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --probe|--falsifier) shift; probe="${1:-}"; [ $# -gt 0 ] && shift ;;
@@ -1803,10 +1803,35 @@ cmd_falsify() {
       # --no-run stores WITHOUT the exit-0 screen. For a suite pinning the write path, and for a
       # probe whose subject is legitimately unavailable at write time (a daemon that is down now).
       --no-run) norun=1; shift ;;
+      # --clear RETIRES a probe. It exists because "replace it" is not always available: a probe can
+      # be wrong in a way that has NO correct replacement. Measured on `eef88daa030a`, whose item is
+      # "the deploy converger refuses every land, because no green tree descends from live HEAD" and
+      # whose probe asked only whether ONE commit had reached the checkout — it passed while the
+      # converger was declining, twice, minutes earlier. The mechanism-true replacement would be
+      # `deploy-live.sh --dry-run`, and that returns 0 for "the deadlock is resolved" AND for "at
+      # trunk tip, nothing to deploy" — two success states, so the honest probe is NONE. Without
+      # this the only options were to leave a lying probe in place or invent a second one.
+      --clear)  clear=1; shift ;;
       *) printf 'cc-backlog falsify: unknown arg %s\n' "$1" >&2; return 2 ;;
     esac
   done
-  [ -n "$id" ]    || { printf 'cc-backlog falsify: <id> is required\n' >&2; return 2; }
+  [ -n "$id" ] || { printf 'cc-backlog falsify: <id> is required\n' >&2; return 2; }
+  if [ "$clear" -eq 1 ]; then
+    [ -z "$probe" ] || { printf 'cc-backlog falsify: --clear and --probe are mutually exclusive\n' >&2; return 2; }
+    ensure_file
+    has_id "$id" || { printf 'cc-backlog falsify: unknown id %s\n' "$id" >&2; return 3; }
+    local had
+    had="$(item_json "$id" | jq -r '.falsifier // ""' 2>/dev/null)"
+    [ -n "$had" ] || { printf 'cc-backlog falsify: %s carries no probe; nothing to clear\n' "$id" >&2; echo "$id"; return 0; }
+    # The EXPLICIT empty string, never an omitted key: both folds key the clear on the field being
+    # PRESENT and empty (cc-backlog `($r.falsifier // $p.falsifier)` passes "" through because jq's
+    # `//` treats only null and false as falsy; cc-premise `if "falsifier" in r`). Omitting the key
+    # would simply carry the old probe forward in both readers.
+    jq -nc --arg id "$id" --arg ts "$(now_iso)" \
+       '{id:$id, ts:$ts, event:"falsify", falsifier:""}' >> "$BACKLOG"
+    printf 'cc-backlog falsify: CLEARED %s (was: %s)\n' "$id" "$had" >&2
+    echo "$id"; return 0
+  fi
   [ -n "$probe" ] || {
     { printf 'cc-backlog falsify: --probe "<sh one-liner>" is required\n'
       printf '  usage: cc-backlog falsify <id> --probe "<cmd>" [--force] [--no-run]\n'
