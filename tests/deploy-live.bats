@@ -796,6 +796,45 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
   [ ! -e "$DEST" ]
 }
 
+# ── THE WIDENED UNIVERSE (2026-08-10, P6) ────────────────────────────────────────────────────────
+# The assert's pathspec grew from 5 of install.sh's ~19 deploy classes to every SYMLINK class, and
+# because this function consumes a VERDICT rather than re-deriving a want-list, that widening needed
+# no code here. These two tests are what makes that claim checkable rather than asserted: the first
+# proves a newly-covered class is repaired by the same generic path (no per-class logic exists, and
+# none may be added), and the second proves the classes install.sh deploys by COPY can never be
+# converted into symlinks by this loop — install.sh:289 calls exactly that "a critical bug", since a
+# link into the working tree dangles on any branch switch and git fails OPEN on a dangling hook.
+@test "refresh repairs a NEWLY-COVERED class (agents/) through the same generic path" {
+  seed_parity 1
+  mkdir -p "$SHARED/agents"
+  miss agents/deep-research.md                   # NAME-invoked surface, zero grep-able callers
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$DEST" ]
+  [ "$(readlink "$DEST")" = "$SHARED/agents/deep-research.md" ]
+  echo "$output" | grep -q "link-refresh: 1 live link"
+}
+
+@test "refresh NEVER acts on a COPY-class finding — COPYMISS is not an ln -sf line" {
+  seed_parity 1
+  miss hooks/genuine-link.sh; REAL="$DEST"
+  # The copy-class verdicts as the assert actually spells them. If a future edit ever widened the
+  # grep — or the assert ever emitted a copy class as `MISSING: ln -sf` — this test is what reds.
+  {
+    printf '  COPYMISS  statusline.sh          deployed by cp, and it is NOT there\n'
+    printf '  COPYSTALE launchd/*.plist        copy DIFFERS from repo\n'
+    printf '  CLAUDEMD  CLAUDE.md              live global instructions DIVERGE\n'
+  } >> "$PARITY_OUT"
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  [ -L "$REAL" ]                                 # the genuine symlink gap IS repaired...
+  [ ! -e "$LIVE/statusline.sh" ]                 # ...and no copy class is touched, in any direction
+  [ ! -e "$LIVE/CLAUDE.md" ]
+  echo "$output" | grep -q "link-refresh: 1 live link"
+}
+
 @test "--dry-run previews the refresh and creates NO link" {
   seed_parity 1
   miss hooks/preview-only.sh

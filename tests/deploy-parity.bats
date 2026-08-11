@@ -246,19 +246,29 @@ _track() { git -C "$CC_PARITY_REPO" add -A >/dev/null 2>&1; }   # ls-files reads
   done
 }
 
+# CORRECTED 2026-08-10 (P6). This case used to seed `lib/thing.sh` with the comment "top-level lib/
+# — install.sh has NO lib leg", and to require exit 0 over it. That was true when written and became
+# FALSE at 931641a4, which added install.sh:360 `for zlib in "$REPO_DIR"/lib/*.zsh
+# "$REPO_DIR"/lib/*.sh`. From that commit on, this test was pinning the ABSENCE of a check the tree
+# needed — a stale assertion inverted into a guard for the bug, and it stayed green for weeks
+# because the fixture's clean exit 0 is indistinguishable from the correct one. lib/ moved to the
+# case below that demands it; what remains here is only what install.sh genuinely does not glob.
 @test "existence: files install.sh does NOT link are never asserted (no false demands)" {
   _livefix
-  mkdir -p "$CC_PARITY_REPO"/{hooks/other,commands/sub,scripts/sub,scripts/limit-recover/deep,bin/cc-dir,skills/a-skill/refs,lib}
+  mkdir -p "$CC_PARITY_REPO"/{hooks/other,commands/sub,scripts/sub,scripts/limit-recover/deep,bin/cc-dir,skills/a-skill/refs,lib/sub,agents/sub}
   printf 'x\n' > "$CC_PARITY_REPO/hooks/README.md"                  # hooks/*.md — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/hooks/other/nested.sh"            # hooks/<subdir>/ — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/commands/sub/nested.md"           # commands/<subdir>/ — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/scripts/sub/nested.sh"            # scripts/ is top-level only
   printf 'x\n' > "$CC_PARITY_REPO/scripts/limit-recover/deep/x.sh"  # limit-recover is top-level only
   printf 'x\n' > "$CC_PARITY_REPO/bin/cc-dir/nested"                # bin/cc-*/ subdir — not a file link
-  printf 'x\n' > "$CC_PARITY_REPO/bin/other-tool"                   # bin/ non-cc-* — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/bin/other-tool"                   # bin/ non-cc-*, non-desk-* — not globbed
   printf 'x\n' > "$CC_PARITY_REPO/skills/a-skill/refs/deep.md"      # skills/<name>/<subdir>/ — one level only
   printf 'x\n' > "$CC_PARITY_REPO/skills/stray.md"                  # a file directly in skills/ — not a skill dir
-  printf 'x\n' > "$CC_PARITY_REPO/lib/thing.sh"                     # top-level lib/ — install.sh has NO lib leg
+  printf 'x\n' > "$CC_PARITY_REPO/lib/sub/nested.sh"                # lib/<subdir>/ — install.sh globs lib/ top-level only
+  printf 'x\n' > "$CC_PARITY_REPO/lib/notes.md"                     # lib/*.md — only *.sh and *.zsh are globbed
+  printf 'x\n' > "$CC_PARITY_REPO/agents/sub/nested.md"             # agents/<subdir>/ — not globbed
+  printf 'x\n' > "$CC_PARITY_REPO/agents/notes.txt"                 # agents/*.md only
   _track
   run "$ASSERT"
   [ "$status" -eq 0 ]
@@ -676,4 +686,375 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   [ -n "$a" ]
   [ -n "$b" ]
   [ "$a" = "$b" ]
+}
+
+# ══ CLASS COMPLETENESS — every install.sh deploy class, not five of them (2026-08-10, P6) ════════
+# docs/research/land-architecture-100p-2026-08-10.md §2.E measured the hole: the existence leg's
+# pathspec was `hooks commands scripts bin skills`, deploy-live's link_refresh consumes ONLY this
+# leg's output, so the tick-driven ADD-repair covered 5 of install.sh's ~19 classes. The rest —
+# agents/, lib/, vendor/, bin/desk-*, hooks/*.py, scripts/lib/*.sh, the root-config SSOTs — reached
+# the live layer only when install.sh ran, and install.sh runs only after a SUCCESSFUL advance, a
+# lane that had refused 601 consecutive times. A file in those classes did not land degraded; it
+# landed ABSENT, and every consumer guard on it (`[ -f x ] && . x`) is a silent skip.
+#
+# WHY THE HOLE SURVIVED FIVE SESSIONS OF READERS, and what these tests therefore have to prove: a
+# per-file report over a 5-class pathspec is INDISTINGUISHABLE from one over a 19-class pathspec
+# whenever both are clean. "No rows about agents/*.md" reads exactly like "agents/*.md is in
+# parity". So it is not enough to assert that a clean run stays clean — each new class gets a
+# fixture that makes it RED, which is the only control that can tell coverage from silence.
+
+@test "class: every SYMLINK class install.sh globs is asserted — one RED per class" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO"/{hooks,agents,lib,scripts/lib,bin}
+  printf 'x\n' > "$CC_PARITY_REPO/hooks/curl-gate.py"          # hooks/*.py — settings.json wires it BY PATH
+  printf 'x\n' > "$CC_PARITY_REPO/agents/deep-research.md"     # agents/*.md — NAME-invoked, zero grep-able callers
+  printf 'x\n' > "$CC_PARITY_REPO/lib/config-mirror.zsh"       # lib/*.zsh
+  printf 'x\n' > "$CC_PARITY_REPO/lib/cc-resume-shell.sh"      # lib/*.sh — both extensions are load-bearing
+  printf 'x\n' > "$CC_PARITY_REPO/scripts/lib/pane-spawn-log.sh"  # the file that PROVED the ADD gap
+  printf 'x\n' > "$CC_PARITY_REPO/bin/desk-register"           # bin/desk-* — its own install.sh glob
+  printf 'x\n' > "$CC_PARITY_REPO/model-config.yaml"           # root SSOT
+  printf 'x\n' > "$CC_PARITY_REPO/providers.json"              # root SSOT
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  # Per-CLASS, not a total: a single count would go green again the moment one class regressed and
+  # another gained a file. Each line is the exact remedy deploy-live's link_refresh consumes.
+  for f in hooks/curl-gate.py agents/deep-research.md lib/config-mirror.zsh lib/cc-resume-shell.sh \
+           scripts/lib/pane-spawn-log.sh bin/desk-register model-config.yaml providers.json; do
+    [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/$f $CC_PARITY_LIVE/$f"* ]] || false
+  done
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 8 ]
+}
+
+@test "class: the same eight files linked live ⇒ clean, exit 0 (the RED above was not a false demand)" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO"/{hooks,agents,lib,scripts/lib,bin} \
+           "$CC_PARITY_LIVE"/{hooks,agents,lib,scripts/lib,bin}
+  for f in hooks/curl-gate.py agents/deep-research.md lib/config-mirror.zsh lib/cc-resume-shell.sh \
+           scripts/lib/pane-spawn-log.sh bin/desk-register model-config.yaml providers.json; do
+    printf 'x\n' > "$CC_PARITY_REPO/$f"
+    ln -sfn "$CC_PARITY_REPO/$f" "$CC_PARITY_LIVE/$f"
+  done
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+# vendor/ is the one SYMLINK class that is not per-file. install.sh:546 links the DIRECTORY on
+# purpose — "a per-file loop would silently fail to link every BRAND-NEW file on the next re-vendor"
+# — so a per-file demand here would contradict install.sh and could never be satisfied.
+@test "vendor: an unlinked plugin ⇒ ONE directory-level ln -sf, never one per file" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/vendor/codex-security/skills"
+  printf 'x\n' > "$CC_PARITY_REPO/vendor/codex-security/README.md"
+  printf 'x\n' > "$CC_PARITY_REPO/vendor/codex-security/skills/a.md"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/vendor/codex-security $CC_PARITY_LIVE/vendor/codex-security"* ]] || false
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 1 ]
+  [[ "$output" != *"vendor/codex-security/README.md"* ]]
+}
+
+@test "vendor: the plugin dir linked ⇒ clean, and its files are never demanded individually" {
+  _livefix
+  mkdir -p "$CC_PARITY_REPO/vendor/codex-security" "$CC_PARITY_LIVE/vendor"
+  printf 'x\n' > "$CC_PARITY_REPO/vendor/codex-security/README.md"
+  ln -sfn "$CC_PARITY_REPO/vendor/codex-security" "$CC_PARITY_LIVE/vendor/codex-security"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+# ══ COPY CLASSES — detected, and DELIBERATELY not repairable by the tick ═════════════════════════
+# install.sh:289 records what happens when a copy class becomes a link: githooks shipped as symlinks
+# for six hours and it is called "a critical bug" — a link into the working tree dangles on any
+# branch switch in the shared checkout, and git fails OPEN on a dangling hook, so the gate silently
+# stops existing. deploy-live's link_refresh consumes `^MISSING: ln -sf ` and creates symlinks, so
+# the ONLY thing standing between it and that bug is that these findings never use that spelling.
+# That is the single most important assertion in this section, and every case below re-checks it.
+_copyfix() {   # a fixture whose copy classes are all present + identical, so a case isolates ONE
+  _livefix
+  export CC_PARITY_GITHOOKS="$BATS_TEST_TMPDIR/ghdir"
+  export CC_PARITY_LAUNCHD="$BATS_TEST_TMPDIR/agents"
+  mkdir -p "$CC_PARITY_GITHOOKS" "$CC_PARITY_LAUNCHD" "$CC_PARITY_REPO/githooks" \
+           "$CC_PARITY_REPO/launchd" "$CC_PARITY_LIVE/bin"
+  printf 'statusline v1\n' > "$CC_PARITY_REPO/statusline.sh"
+  cp "$CC_PARITY_REPO/statusline.sh" "$CC_PARITY_LIVE/statusline.sh"
+  printf 'it2 v1\n' > "$CC_PARITY_REPO/bin/it2-wrapper"
+  cp "$CC_PARITY_REPO/bin/it2-wrapper" "$CC_PARITY_LIVE/bin/it2"
+  printf '# cc-git-identity-gate\n' > "$CC_PARITY_REPO/githooks/pre-commit"
+  cp "$CC_PARITY_REPO/githooks/pre-commit" "$CC_PARITY_GITHOOKS/pre-commit"
+  cp "$CC_PARITY_REPO/githooks/pre-commit" "$CC_PARITY_GITHOOKS/pre-merge-commit"
+  printf '<plist/>\n' > "$CC_PARITY_REPO/launchd/com.claude.thing.plist"
+  cp "$CC_PARITY_REPO/launchd/com.claude.thing.plist" "$CC_PARITY_LAUNCHD/com.claude.thing.plist"
+  _track
+}
+
+@test "copy: a fully-deployed set of copy classes ⇒ clean, exit 0" {
+  _copyfix
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"COPYMISS"* ]] || false
+  [[ "$output" != *"COPYSTALE"* ]]
+}
+
+@test "copy: an ABSENT copy ⇒ COPYMISS + drift, and NEVER an ln -sf line" {
+  _copyfix
+  rm "$CC_PARITY_LIVE/statusline.sh"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYMISS"* ]] || false
+  [[ "$output" == *"statusline.sh"* ]] || false
+  # THE LOAD-BEARING HALF: link_refresh must not be handed a way to turn a copy into a symlink.
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+@test "copy: a STALE copy ⇒ COPYSTALE + drift, and still never an ln -sf line" {
+  _copyfix
+  printf 'it2 v0\n' > "$CC_PARITY_LIVE/bin/it2"       # the renamed dest: bin/it2-wrapper → bin/it2
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYSTALE"* ]] || false
+  [[ "$output" == *"it2-wrapper"* ]] || false
+  [[ "$output" != *"MISSING: ln -sf"* ]]
+}
+
+@test "copy: an absent launchd plist ⇒ COPYMISS, and nothing here ever calls launchctl" {
+  _copyfix
+  rm "$CC_PARITY_LAUNCHD/com.claude.thing.plist"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYMISS"* ]] || false
+  [[ "$output" == *"launchd/*.plist"* ]] || false
+  # Activation is manifest-gated (DAEMON_FLEET_V2 §4.1) and emphatically not this script's business:
+  # a parity assert able to bootout a daemon would be a far larger hazard than the drift it detects.
+  # Pinned as TEXT, not as behaviour — a test that had to observe a launchctl call would have to
+  # risk one. Both spellings, because `launchctl` and a $LAUNCHCTL_BIN indirection are the two ways
+  # this could ever reach the real one. COMMENTS ARE STRIPPED FIRST: this assertion failed on its
+  # own subject's comment (the paragraph explaining that nothing calls launchctl contains the word),
+  # which is the same class as a lint aborting on a comment that opens with its own directive name.
+  if sed 's/#.*//' "$ASSERT" | grep -qE 'launchctl|LAUNCHCTL_BIN'; then false; fi
+}
+
+@test "copy: a FOREIGN git hook is left alone — install.sh's own rule, so not drift" {
+  _copyfix
+  printf '#!/bin/sh\n# somebody else hook\n' > "$CC_PARITY_GITHOOKS/pre-commit"
+  run "$ASSERT"
+  # install.sh:314 refuses to clobber a hook without our content marker, so demanding parity over it
+  # would be a false demand nothing could satisfy — the same rule the existence leg's first comment
+  # states: never assert a deployment install.sh would not perform.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"FOREIGN"* ]]
+}
+
+@test "copy: SET-EMPTY seams turn a class off (a class that cannot be scoped is not seamed)" {
+  _copyfix
+  rm "$CC_PARITY_LAUNCHD/com.claude.thing.plist"
+  # Spelled '' rather than a bare `=`: the empty value is the POINT of this test (the seam's
+  # set-but-empty contract), and shellcheck reads a bare `VAR= cmd` as a probable typo.
+  CC_PARITY_LAUNCHD='' run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"launchd"* ]]
+}
+
+# ══ ~/.claude/CLAUDE.md — the highest-consequence live file, previously unsensed ══════════════════
+# §2.E: "no converger and no detection". Half of that is corrected by the tree — install.sh:583-587
+# DOES have a cp leg — but that leg runs only on a successful advance, so it was famine-blocked with
+# everything else, and nothing measured the file at all. It read in-parity when investigated only
+# because a session had hand-synced it 34 minutes earlier.
+_mdfix() {
+  _copyfix
+  printf 'global rules v1\n' > "$CC_PARITY_REPO/CLAUDE.md"
+  cp "$CC_PARITY_REPO/CLAUDE.md" "$CC_PARITY_LIVE/CLAUDE.md"
+  _track
+}
+
+@test "CLAUDE.md: identical ⇒ no finding, exit 0" {
+  _mdfix
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"CLAUDEMD"* ]]
+}
+
+@test "CLAUDE.md: ONE diverged byte ⇒ CLAUDEMD + drift, exit 1" {
+  _mdfix
+  # ONE byte, and deliberately not a trailing newline: `$(cat f)` strips those, so a newline-only
+  # divergence would make the non-vacuity check below pass for the wrong reason (it did, first run).
+  printf 'global rules v1 \n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDEMD"* ]] || false
+  [[ "$output" == *"DIVERGE"* ]] || false
+  # DETECTION ONLY, by decision: the direction is a judgment (the project rule is that a land here
+  # is followed by hand-applying the same edits live, so a divergence can equally mean "the repo
+  # advanced" or "the live file holds an uncommitted edit"). A converger that guessed would destroy
+  # operator work in the second case — which is also exactly why it is legitimately operator-owned.
+  [[ "$output" != *"MISSING: ln -sf"* ]] || false
+  [ "$(cat "$CC_PARITY_LIVE/CLAUDE.md")" != "$(cat "$CC_PARITY_REPO/CLAUDE.md")" ]
+}
+
+@test "CLAUDE.md: an ABSENT live copy ⇒ CLAUDEMD + drift (no session is reading the rules)" {
+  _mdfix
+  rm "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDEMD"* ]] || false
+  [[ "$output" == *"ABSENT"* ]]
+}
+
+# ══ FILING — a verdict that only PRINTS reaches nobody ════════════════════════════════════════════
+# The UNGATED finding printed on every 600s tick for weeks and filed nothing; five sessions read
+# "drift at its historical minimum" and closed over it. These cases pin the three properties the
+# filing has to have, and the first one is a safety property, not a feature.
+_filefix() {   # a stub cc-backlog that records its argv; nothing here can reach the real ledger
+  export CC_PARITY_BACKLOG_BIN="$BATS_TEST_TMPDIR/cc-backlog"
+  export CC_PARITY_FILED_DIR="$BATS_TEST_TMPDIR/filed"
+  FILED_LOG="$BATS_TEST_TMPDIR/filed.log"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\necho id-0000\n' "$FILED_LOG" > "$CC_PARITY_BACKLOG_BIN"
+  chmod +x "$CC_PARITY_BACKLOG_BIN"
+}
+
+@test "filing: a DECLARED fixture subject files NOTHING by default (no test can reach the real ledger)" {
+  _mdfix
+  _filefix
+  printf 'diverged\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"                       # CC_PARITY_FILE unset, CC_PARITY_REPO declared ⇒ never files
+  [ "$status" -eq 1 ]
+  [ ! -f "$FILED_LOG" ]
+  [[ "$output" != *"FILED"* ]]
+}
+
+@test "filing: a diverged CLAUDE.md files an operator-owned cc-backlog needs row" {
+  _mdfix
+  _filefix
+  printf 'diverged\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [ -f "$FILED_LOG" ]
+  grep -q 'needs' "$FILED_LOG"
+  grep -q 'CLAUDE.md' "$FILED_LOG"
+  [[ "$output" == *"FILED"* ]]
+}
+
+@test "filing: the UNGATED provenance verdict FILES, it no longer only prints" {
+  _livefix
+  _filefix
+  git -C "$CC_PARITY_REPO" commit -q --allow-empty -m base
+  # A ref-named ff is the ungated shape: deploy-live always reflogs a resolved SHA.
+  git -C "$CC_PARITY_REPO" checkout -q -b side
+  git -C "$CC_PARITY_REPO" commit -q --allow-empty -m side
+  git -C "$CC_PARITY_REPO" checkout -q - 2>/dev/null || git -C "$CC_PARITY_REPO" checkout -q main
+  git -C "$CC_PARITY_REPO" merge --ff-only side -q
+  CC_PARITY_FILE=1 CC_PARITY_PROVENANCE=1 run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNGATED"* ]] || false
+  [ -f "$FILED_LOG" ]
+  grep -q 'shared checkout' "$FILED_LOG"
+  # No `--run`: there is no command that repairs this, and the one that LOOKS like it (another ff)
+  # is the cause. The script's own remedy block states that rule; this pins it at the filing too.
+  if grep -q -- '--run' "$FILED_LOG"; then false; fi
+}
+
+@test "filing: DAMPED by condition key — a second run inside the TTL does not re-file" {
+  _mdfix
+  _filefix
+  printf 'diverged\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  # The trigger is a standing STATE, and this assert runs on a 600s tick: an undamped filer would
+  # shell out 144×/day and re-announce cc-backlog's DONE-GUARD into deploy.log every time.
+  [ "$(wc -l < "$FILED_LOG" | tr -d ' ')" -eq 1 ]
+}
+
+@test "filing: the damper EXPIRES — a standing condition is re-asserted, not silenced forever" {
+  _mdfix
+  _filefix
+  printf 'diverged\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  [ "$(wc -l < "$FILED_LOG" | tr -d ' ')" -eq 1 ]
+  # Age the marker rather than zeroing the TTL: `find -mmin +0` means "older than one whole minute",
+  # so a TTL of 0 does NOT expire a marker written seconds ago and the test would have proved the
+  # opposite of what it claims. Backdating exercises the real TTL arithmetic instead of a
+  # special-cased boundary. A damper with no expiry is indistinguishable from a detector that fired
+  # once and died — the alarm-becomes-furniture failure this repo has paid for before.
+  touch -t 202001010000 "$CC_PARITY_FILED_DIR/claude-md-diverged"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  [ "$(wc -l < "$FILED_LOG" | tr -d ' ')" -eq 2 ]
+}
+
+@test "filing: a BROKEN cc-backlog fails no wider than itself — the verdict and exit code stand" {
+  _mdfix
+  _filefix
+  printf '#!/bin/bash\nexit 7\n' > "$CC_PARITY_BACKLOG_BIN"     # the store is down
+  printf 'diverged\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  # A parity leg that could take down the run would be a converger that stops convergence: the
+  # finding still reports, the exit code is still the drift verdict, and no marker is written (so
+  # the next tick retries rather than believing a file that never happened).
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDEMD"* ]] || false
+  [[ "$output" != *"FILED"* ]] || false
+  [ ! -f "$CC_PARITY_FILED_DIR/claude-md-diverged" ]
+}
+
+# ══ THE TABLE — the render that makes an unenumerated class visible ══════════════════════════════
+@test "class table: renders one row per class WITH counts, on a clean run too" {
+  _copyfix
+  mkdir -p "$CC_PARITY_REPO/agents" "$CC_PARITY_LIVE/agents"
+  printf 'x\n' > "$CC_PARITY_REPO/agents/a.md"
+  ln -sfn "$CC_PARITY_REPO/agents/a.md" "$CC_PARITY_LIVE/agents/a.md"
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  # Emitted on a CLEAN run specifically: silence about a class and parity for a class looked
+  # identical for the whole time the 5-of-19 hole was open, so the counts are the evidence.
+  [[ "$output" == *"class parity"* ]] || false
+  [[ "$output" == *"agents/*.md"* ]] || false
+  [[ "$output" == *"1 tracked · 1 live · 0 missing"* ]] || false
+  [[ "$output" == *"launchd/*.plist"* ]]
+}
+
+@test "class table: a missing file marks ITS class MISS and leaves the others ok" {
+  _copyfix
+  mkdir -p "$CC_PARITY_REPO/agents" "$CC_PARITY_LIVE/agents"
+  printf 'x\n' > "$CC_PARITY_REPO/agents/a.md"          # tracked, never linked
+  _track
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -qE '^  MISS +agents/\*\.md +1 tracked · 0 live · 1 missing'
+  printf '%s\n' "$output" | grep -qE '^  ok +launchd/\*\.plist'
+}
+
+# ANTI-ROT. The enumeration in the assert is a hand-maintained mirror of install.sh's own loops, and
+# the previous version of that mirror went stale silently for weeks (install.sh gained a lib leg at
+# 931641a4; the assert and one of these tests both went on asserting it had none). Prose cannot hold
+# that invariant, so the tree holds it: every directory install.sh globs must appear in the assert's
+# pathspec. Deliberately a SUBSET check on directories, not an exact class-by-class equality — the
+# spellings differ legitimately (install.sh globs, the assert case-matches) and a test demanding
+# identical text would just be re-typed on every edit until someone deleted it.
+@test "anti-rot: every REPO_DIR directory install.sh deploys appears in the assert's pathspec" {
+  spec="$(sed -n 's/.*git -C "\$REPO" ls-files -- \(.*\) 2>\/dev\/null.*/\1/p' "$ASSERT")"
+  [ -n "$spec" ]
+  # install.sh's own loop heads, e.g. `for agent in "$REPO_DIR"/agents/*.md`
+  dirs="$(grep -oE 'for [a-z_]+ in "\$REPO_DIR"/[a-z]+' "$REPO_ROOT/install.sh" \
+          | sed 's|.*/||' | sort -u)"
+  [ -n "$dirs" ]
+  for d in $dirs; do
+    # githooks and launchd are COPY classes: they are asserted by the copy leg, which reads the repo
+    # directly rather than through ls-files, and they must never enter the pathspec whose output
+    # link_refresh turns into symlinks.
+    # Written as `[ = ]` rather than a `githooks|launchd)` case label deliberately:
+    # scripts/unattended-path-lint.sh reads the second arm of an ALTERNATION label as a command
+    # position and reported "`launchd` is unreachable on ... PATH (bare)" over this very line, which
+    # took the land gate red. The lint already suppresses a plain single-word case label; the
+    # alternation form is the gap. Filed rather than fixed here — that file has its own owner.
+    if [ "$d" = githooks ] || [ "$d" = launchd ]; then
+      grep -q "REPO/$d" "$ASSERT" || false
+    else
+      case " $spec " in *" $d "*) ;; *) false ;; esac
+    fi
+  done
 }
