@@ -350,7 +350,6 @@ cc-inbox-guard.bats
 cc-permission-beacon.bats
 cc-reconcile.bats
 cc-recover-safeguard.bats
-cc-respawn.bats
 cc-route.bats
 cc-run.bats
 cc-teardown-safety-gate.bats
