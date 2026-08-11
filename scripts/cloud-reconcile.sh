@@ -52,9 +52,29 @@
 # never 0-with-no-candidates. A caller that read a sensor failure as an empty fleet would report the
 # cloud landing path healthy at exactly the moment it went blind.
 #
+# THE IDENTITY WALL, AND WHY THE TRANSLATION LIVES HERE. A cloud VM authors its commits as
+# `noreply@anthropic.com`, which resolves to no GitHub account, so githooks/pre-push REFUSES the
+# push — on purpose (docs/research/git-identity-leak-2026-08-05.md). That refusal is correct and is
+# not the thing to weaken. What was broken is that it arrived UNNAMED: the hook's block prints as
+# *guidance* on git's stderr and ship-land then exits 7 (push non-ff), so a permanent policy wall
+# read as an ordinary sibling race and invited a retry that could never succeed. It was retried
+# twice before the identity line was read (docs/plans/CLOUD_OBSERVABILITY.md §13.4).
+# So the translation belongs at the ONE place that knows a range came from a cloud VM — here,
+# between the fetch and the land. The transform is the one the gate itself prescribes
+# (githooks/pre-push:125, `--reset-author` over the range) and provenance is PRESERVED rather than
+# thrown away, in trailers on every rewritten commit:
+#     Cloud-session: <declaration id> · Original-commit: <pre-rewrite sha> · Original-branch: <name>
+# NOT `Co-authored-by:` — githooks/commit-msg blocks AI-authorship trailers, and a rewrite that
+# trips it fails EVERY commit in the range. The composed message is put through the repo's OWN
+# commit-msg hook before it is written, so that predicate has one arbiter rather than a copy here.
+# The remote's branch and shas are left untouched, so nothing is lost: this re-attributes the
+# authorship of the commits that go on OUR trunk, and the VM's originals stay where they were.
+#
 # EXITS. 0 ok · 64 usage · 65 refusal (no CONFIRM · branch absent from the remote · retired) ·
 #   69 SENSOR FAILED (remote unreachable — never read as absence) · 70 at least one branch failed
-#   to land. Per-branch failures are REPORTED and the remaining branches still run: a lander exit is
+#   to land — which now includes "the range needed re-authoring and could not be re-authored", a
+#   per-branch failure like any other rather than a new exit code its callers would not read.
+#   Per-branch failures are REPORTED and the remaining branches still run: a lander exit is
 #   a statement about ONE branch, and aborting the sweep on it would let one bad branch strand every
 #   other cloud result behind it. desk-land's own codes are surfaced verbatim per branch
 #   (0 landed · 2 dirty/preflight · 3 escalation-PARK · 5 rebase-conflict · 6 gate-red · 7 push
@@ -221,14 +241,189 @@ trunk_arg() {  # <trunk-ref> → the bare branch name ship-land's --trunk wants 
 # with `git show-ref --verify refs/heads/<branch>` and a remote-only branch fails that. The fetch is
 # deliberately NOT forced: a `+` refspec would silently overwrite a local branch of the same name,
 # and a divergence there is a finding to surface, not a conflict to resolve unattended.
-fetch_branch() {  # <repo> <branch> → 0 ok, 1 could not
-  "$GIT_BIN" -C "$1" fetch -q "$REMOTE" "refs/heads/$2:refs/heads/$2" >/dev/null 2>&1
+#
+# …EXCEPT WHEN THE DIVERGENCE IS OUR OWN RESIDUE, which is the case this refusal actually met. A
+# failed land leaves a rebased — and now, a re-authored — local head of that name behind, so the
+# NEXT run refused with "diverged, or checked out in a worktree" and reported a first-failure cause
+# as a second, different one. No amount of retrying cleared it; deleting the ref by hand did.
+# A reconciler that cannot self-heal from its own leftovers is not idempotent, and the re-author
+# below GUARANTEES the leftovers, so this is not an optional convenience.
+#
+# The heal is narrow and the two cases are told apart, because merging them into one string is
+# exactly what made the diagnosis wrong:
+#   * CHECKED OUT somewhere → still refuse. Someone owns that worktree; this is a real conflict.
+#   * NOT checked out, and a `claude/*` branch → origin is the authority for a cloud branch (the VM
+#     pushed it and nothing local may add to it), so reset the local ref to the remote and say so.
+# Deliberately NOT widened past the cloud prefix: for a hand-made `feat/*` branch a diverged local
+# head may be the only copy of someone's work, and the refusal there is correct.
+worktree_holding() {  # <repo> <branch> → the worktree path with that branch checked out (else empty)
+  # Same porcelain read as desk-land.sh:130 — one shape for one question, so the two can never
+  # disagree about whether a branch is checked out.
+  "$GIT_BIN" -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$2" '
+    /^worktree /{wt=substr($0,10)}
+    /^branch /{ if(substr($0,8)==b){print wt; exit} }'
+}
+
+FETCH_DETAIL=""
+fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed) · 1 refused · 2 cannot
+  local repo="$1" b="$2" wt
+  FETCH_DETAIL=""
+  "$GIT_BIN" -C "$repo" fetch -q "$REMOTE" "refs/heads/$b:refs/heads/$b" >/dev/null 2>&1 && return 0
+
+  # A fetch can fail for reasons that have nothing to do with a local head, and healing on those
+  # would be acting on an absence. Confirm the stale ref is actually there before touching anything
+  # (memory: probe-that-acts-on-absence-must-confirm-presence).
+  if ! "$GIT_BIN" -C "$repo" show-ref --verify --quiet "refs/heads/$b"; then
+    FETCH_DETAIL="the fetch of '$b' failed and there is NO local branch of that name to blame — the remote refused it, or it vanished from '$REMOTE' between the listing and now."
+    return 2
+  fi
+
+  wt="$(worktree_holding "$repo" "$b")"
+  if [ -n "$wt" ]; then
+    FETCH_DETAIL="local '$b' is CHECKED OUT in a worktree ($wt) — a real conflict someone owns. NOT forcing: land it from there, or remove that worktree, then re-run."
+    return 1
+  fi
+
+  # Scoped by restating the DISCOVERY filter rather than a second literal: $PREFIX is the one place
+  # that decides what a cloud branch is, so this can never widen without discovery widening first.
+  # Unreachable today by construction (candidates() emits nothing else, and --land refuses a branch
+  # that is not among them) — kept because "the remote is the authority" is true only of a branch a
+  # VM pushed, and for a hand-made one a diverged local head can be the only copy of that work.
+  case "refs/heads/$b" in
+    "$PREFIX"*) ;;
+    *) FETCH_DETAIL="local '$b' has diverged from '$REMOTE' and is not a cloud branch ($PREFIX*), so the remote is NOT presumed to be its authority. NOT forcing."
+       return 1 ;;
+  esac
+
+  if "$GIT_BIN" -C "$repo" fetch -q --force "$REMOTE" "refs/heads/$b:refs/heads/$b" >/dev/null 2>&1; then
+    FETCH_DETAIL="healed: local '$b' had diverged and is checked out nowhere — residue of an earlier failed attempt — so it was reset to '$REMOTE', which is the authority for a cloud branch."
+    return 0
+  fi
+  FETCH_DETAIL="local '$b' has diverged, is checked out nowhere, and even a forced re-fetch from '$REMOTE' failed. This is not the stale-residue case."
+  return 2
 }
 
 diff_size() {  # <repo> <trunk-ref> <branch> → changed-file count (large sentinel if undecidable)
   local n
   n="$("$GIT_BIN" -C "$1" diff --name-only "$2...refs/heads/$3" 2>/dev/null | wc -l | tr -d ' ')" || n=""
   case "$n" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' "$n" ;; esac
+}
+
+# ── the identity translation (see "THE IDENTITY WALL" in the header) ─────────────────────────
+git_ident_email() {  # <repo> → the author email git ITSELF would use (empty ⇒ none resolvable)
+  # `git var GIT_AUTHOR_IDENT`, never `git config user.email`: the same arbiter githooks/pre-commit
+  # settled on after measuring that a config read sees two of the five inputs to the effective
+  # author. Re-deriving it differently here would be a second predicate that can disagree with the
+  # commit it is about to make (memory: make-the-actuator-the-arbiter).
+  local id
+  id="$("$GIT_BIN" -C "$1" var GIT_AUTHOR_IDENT 2>/dev/null)" || return 1
+  case "$id" in *"<"*">"*) ;; *) return 1 ;; esac
+  id="${id#*<}"
+  printf '%s' "${id%%>*}"
+}
+
+msg_hook_refuses() {  # <repo> <msg-file> → 0 the repo's OWN commit-msg hook refuses this message
+  # The trailer names are chosen to clear githooks/commit-msg, and that constraint is invisible in
+  # the strings themselves — so it is CHECKED by the hook rather than restated as a regex here. One
+  # predicate, one arbiter: if someone later reaches for `Co-authored-by:`, this refuses before a
+  # single commit object is written, instead of the whole range failing later somewhere else.
+  local repo="$1" f="$2" hook
+  hook="$("$GIT_BIN" -C "$repo" rev-parse --git-path hooks/commit-msg 2>/dev/null)" || return 1
+  case "$hook" in /*) ;; *) hook="$repo/$hook" ;; esac
+  [ -x "$hook" ] || return 1                       # no hook installed ⇒ nothing refuses
+  ( cd "$repo" && "$hook" "$f" ) >/dev/null 2>&1 && return 1
+  return 0
+}
+
+REAUTH_DETAIL=""
+reauthor_branch() {  # <repo> <trunk-ref> <branch> <decl-id> → 0 ok (rewritten OR not needed) · 1 no
+  local repo="$1" trunk="$2" b="$3" id="$4"
+  local want base sha ae ce tree new f n=0 total=0 date
+  local -a ta=()
+  REAUTH_DETAIL=""
+
+  want="$(git_ident_email "$repo")" || want=""
+  if [ -z "$want" ]; then
+    REAUTH_DETAIL="'$repo' has no effective git identity (\`git var GIT_AUTHOR_IDENT\`), so there is nothing to re-author TO."
+    return 1
+  fi
+  base="$("$GIT_BIN" -C "$repo" merge-base "$trunk" "refs/heads/$b" 2>/dev/null)" || base=""
+  if [ -z "$base" ]; then
+    REAUTH_DETAIL="no merge-base between '$trunk' and '$b' — the range to re-author cannot be bounded, and rewriting an unbounded history is never the right move."
+    return 1
+  fi
+
+  # NOT NEEDED is the common case for a branch a person pushed, and it must stay a strict no-op: a
+  # gratuitous rewrite would change the shas of work that was already attributable, for nothing.
+  # BOTH fields, because a rebase rewrites the committer and keeps the author (githooks/pre-push:26).
+  while IFS='|' read -r sha ae ce; do
+    [ -n "$sha" ] || continue
+    [ "$ae" = "$want" ] && [ "$ce" = "$want" ] && continue
+    n=$((n + 1))
+  done <<EOF
+$("$GIT_BIN" -C "$repo" log --reverse --format='%H|%ae|%ce' "$base..refs/heads/$b" 2>/dev/null)
+EOF
+  [ "$n" -gt 0 ] || return 0
+
+  if [ -n "$("$GIT_BIN" -C "$repo" rev-list --merges "$base..refs/heads/$b" 2>/dev/null)" ]; then
+    REAUTH_DETAIL="the range $base..$b contains a MERGE commit and this replay is linear-only, so it would flatten one side. A cloud VM pushes a linear branch; this one did not, which is itself the finding. Re-author it by hand and re-run."
+    return 1
+  fi
+
+  # The replay is `git commit-tree`, not a rebase: it needs no checkout, no index and no working
+  # tree, so it cannot touch the shared checkout's HEAD, and it carries each ORIGINAL TREE across
+  # byte-exact — a cherry-pick replay can conflict and would leave a half-finished rebase behind in
+  # a repo other sessions are using. The identity comes from the same resolution `--reset-author`
+  # uses (config → GIT_AUTHOR_*), and the ORIGINAL AUTHOR DATE is carried over, which
+  # `--reset-author` would have discarded: when the VM did the work is provenance too.
+  f="$(mktemp "${TMPDIR:-/tmp}/cloud-reauthor.XXXXXX")" || {
+    REAUTH_DETAIL="could not create a temporary file to compose the rewritten messages."
+    return 1
+  }
+  new="$base"
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    tree="$("$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$sha^{tree}" 2>/dev/null)" || tree=""
+    if [ -z "$tree" ]; then
+      REAUTH_DETAIL="could not read the tree of $sha."
+      rm -f "$f"; return 1
+    fi
+    if ! "$GIT_BIN" -C "$repo" log -1 --format=%B "$sha" > "$f" 2>/dev/null; then
+      REAUTH_DETAIL="could not read the commit message of $sha."
+      rm -f "$f"; return 1
+    fi
+    ta=(--trailer "Original-commit: $sha" --trailer "Original-branch: $b")
+    [ -n "$id" ] && ta=(--trailer "Cloud-session: $id" "${ta[@]}")
+    if ! "$GIT_BIN" -C "$repo" interpret-trailers --in-place "${ta[@]}" "$f" 2>/dev/null; then
+      REAUTH_DETAIL="could not append the provenance trailers to the message of $sha."
+      rm -f "$f"; return 1
+    fi
+    if msg_hook_refuses "$repo" "$f"; then
+      REAUTH_DETAIL="this repo's OWN commit-msg hook REFUSES the message this rewrite composed for $sha — the trailers carry something it blocks (an AI-authorship trailer such as \`Co-authored-by: Claude\` is the case it exists for). NOTHING was written; fix the trailers, not the hook."
+      rm -f "$f"; return 1
+    fi
+    date="$("$GIT_BIN" -C "$repo" log -1 --format=%aI "$sha" 2>/dev/null)" || date=""
+    new="$(GIT_AUTHOR_DATE="$date" "$GIT_BIN" -C "$repo" commit-tree "$tree" -p "$new" -F "$f" 2>/dev/null)" || new=""
+    if [ -z "$new" ]; then
+      REAUTH_DETAIL="git commit-tree failed while replaying $sha."
+      rm -f "$f"; return 1
+    fi
+    total=$((total + 1))
+  done <<EOF
+$("$GIT_BIN" -C "$repo" rev-list --reverse "$base..refs/heads/$b" 2>/dev/null)
+EOF
+  rm -f "$f"
+
+  if [ "$total" -eq 0 ]; then
+    REAUTH_DETAIL="the range read as $n mis-authored commit(s) and then replayed none — the two reads disagree, so nothing was written."
+    return 1
+  fi
+  if ! "$GIT_BIN" -C "$repo" update-ref -m "cloud-reconcile: re-authored $b for the git-identity gate" "refs/heads/$b" "$new" 2>/dev/null; then
+    REAUTH_DETAIL="replayed $total commit(s) but could not move refs/heads/$b onto them."
+    return 1
+  fi
+  REAUTH_DETAIL="re-authored $total commit(s) as <$want> ($n of them were unattributable); provenance in Cloud-session / Original-commit / Original-branch trailers, and '$REMOTE' still holds the originals."
+  return 0
 }
 
 land_one() {  # <branch> — classify() must have run for it. → 0 landed, else the lander's code
@@ -275,8 +470,15 @@ EOF
     RETIRED) die 65 "'$TARGET' — $C_DETAIL. A retired declaration is terminal; not landing it." ;;
     LANDED)  echo "· $TARGET — $C_DETAIL; nothing to land."; exit 0 ;;
   esac
-  fetch_branch "$C_REPO" "$TARGET" \
-    || die 65 "could not fetch '$TARGET' into $C_REPO as a local head (diverged local branch of the same name, or it is checked out in a worktree). NOT forcing — resolve it and re-run."
+  rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
+  [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
+  [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "✗ $TARGET — NOT landed. This range is authored by someone GitHub cannot attribute, so githooks/pre-push would refuse the push (and ship-land would report that refusal as exit 7, an ordinary push race, which is why it is caught HERE). It could not be re-authored: $REAUTH_DETAIL" >&2
+    exit 70
+  fi
+  [ -n "$REAUTH_DETAIL" ] && echo "→ $TARGET — $REAUTH_DETAIL"
   rc=0; land_one "$TARGET" || rc=$?
   if [ "$rc" -eq 0 ]; then echo "✓ $TARGET — landed via $LAND_BIN."; exit 0; fi
   echo "✗ $TARGET — lander exited $rc." >&2
@@ -297,11 +499,20 @@ while IFS= read -r b || [ -n "$b" ]; do
       fi
       ;;
   esac
-  if ! fetch_branch "$C_REPO" "$b"; then
-    echo "✗ $b — could not fetch into $C_REPO as a local head (diverged, or checked out in a worktree). NOT forcing." >&2
+  rc=0; fetch_branch "$C_REPO" "$b" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "✗ $b — could not bring it into $C_REPO as a local head: $FETCH_DETAIL" >&2
     FAILED=$((FAILED + 1))
     continue
   fi
+  [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "✗ $b — NOT landed. Its commits are authored by someone GitHub cannot attribute, so githooks/pre-push would refuse the push (reported by ship-land as exit 7, an ordinary push race — which is why it is caught HERE). It could not be re-authored: $REAUTH_DETAIL" >&2
+    FAILED=$((FAILED + 1))
+    continue
+  fi
+  [ -n "$REAUTH_DETAIL" ] && echo "→ $b — $REAUTH_DETAIL"
   SIZED="$SIZED$(diff_size "$C_REPO" "$C_TRUNK" "$b")$TAB$b
 "
 done <<EOF

@@ -135,6 +135,217 @@ STUB
     /usr/bin/grep '^ARGS=' "$LAND_STUB_LOG" 2>/dev/null \
       | sed -n 's/.*--branch \([^ ]*\).*/\1/p'
   }
+
+  # ── identity-wall fixtures ─────────────────────────────────────────────────────────────────
+  # A cloud VM authors as `noreply@anthropic.com`, which resolves to no GitHub account. The
+  # fixture repo's own identity is t@e.com (setup above), so "the operator" here IS t@e.com and
+  # "the VM" is anything else — the suite pins the RELATION the subject checks, never the
+  # operator's real address, which lives only in githooks/*.
+  VM_EMAIL="noreply@anthropic.com"
+
+  push_branch_as() {  # $1=branch  $2=file-count  $3=author email  [$4=committer email]
+    local b="$1" n="${2:-1}" em="${3:-t@e.com}" cm="${4:-}" i w
+    [ -n "$cm" ] || cm="$em"
+    w="$D/w-$(printf '%s' "$b" | tr / -)"
+    git -C "$REPO" worktree add -q -b "$b" "$w" main
+    i=1
+    while [ "$i" -le "$n" ]; do
+      printf 'c%s\n' "$i" > "$w/f$i.txt"
+      i=$((i + 1))
+    done
+    git -C "$w" add -A
+    GIT_COMMITTER_EMAIL="$cm" GIT_COMMITTER_NAME=cloud \
+      git -C "$w" -c user.email="$em" -c user.name=cloud commit -q -m "work $b"
+    git -C "$w" push -q origin "HEAD:refs/heads/$b"
+    # As push_branch: a cloud branch exists ONLY on the remote.
+    git -C "$REPO" worktree remove --force "$w"
+    git -C "$REPO" branch -q -D "$b"
+    rm -rf "$w"
+    true
+  }
+
+  remote_sha() { git -C "$REPO" ls-remote origin "refs/heads/$1" 2>/dev/null | awk '{print $1}'; }
+  local_sha()  { git -C "$REPO" rev-parse --verify --quiet "refs/heads/$1" 2>/dev/null; }
+
+  # Mint a DIVERGENT local head with no worktree and no checkout — the residue an earlier failed
+  # land leaves behind. commit-tree because the shared checkout must never be checked out.
+  stale_local_head() {  # $1=branch
+    local t c
+    t="$(git -C "$REPO" log -1 --format=%T main)"
+    c="$(git -C "$REPO" -c user.email=t@e.com -c user.name=tester commit-tree "$t" -p main -m "residue of a failed land")"
+    git -C "$REPO" update-ref "refs/heads/$1" "$c"
+  }
+
+  install_msg_hook() {  # $1=the grep -E pattern the fixture hook refuses
+    local h
+    h="$(git -C "$REPO" rev-parse --git-path hooks)"
+    case "$h" in /*) ;; *) h="$REPO/$h" ;; esac
+    mkdir -p "$h"
+    { echo '#!/usr/bin/env bash'
+      printf 'if grep -qE %s "$1"; then echo "fixture commit-msg: BLOCKED" >&2; exit 1; fi\n' "'$1'"
+      echo 'exit 0'
+    } > "$h/commit-msg"
+    chmod +x "$h/commit-msg"
+  }
+}
+
+# ── DEFECT 1 · the identity wall ─────────────────────────────────────────────────────────────
+@test "a VM-authored range is re-authored before the land, and the trailers carry the REAL shas" {
+  push_branch_as claude/vm 1 "$VM_EMAIL"
+  decl cloud-vm claude/vm
+  orig="$(remote_sha claude/vm)"
+  [ -n "$orig" ]
+
+  CONFIRM=1 run cr --land claude/vm
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/vm$'
+
+  # Both identity fields, on every commit in the range: a replay that fixed only the author would
+  # read clean here and still be refused by githooks/pre-push (its §BOTH FIELDS).
+  bad="$(git -C "$REPO" log --format='%ae|%ce' main..refs/heads/claude/vm | /usr/bin/grep -cv '^t@e.com|t@e.com$' || true)"
+  [ "$bad" = 0 ]
+
+  # The rewrite happened at all — POSITIVE CONTROL for the count above, which reads 0 over an
+  # empty range just as happily as over a clean one.
+  n="$(git -C "$REPO" rev-list --count main..refs/heads/claude/vm)"
+  [ "$n" = 1 ]
+  [ "$(local_sha claude/vm)" != "$orig" ]
+
+  # Provenance, and it must name the PRE-rewrite sha rather than anything derivable after the fact.
+  msg="$(git -C "$REPO" log -1 --format=%B refs/heads/claude/vm)"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-commit: $orig"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-branch: claude/vm"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Cloud-session: cloud-vm"
+  # …and NOT the spelling githooks/commit-msg blocks.
+  printf '%s\n' "$msg" | /usr/bin/grep -qi 'co-authored-by' && false
+
+  # HONEST, NOT LAUNDERED: the content is byte-identical and the VM's original is still on the
+  # remote, so nothing about who did the work has been destroyed.
+  [ "$(git -C "$REPO" log -1 --format=%T refs/heads/claude/vm)" = "$(git -C "$REPO" log -1 --format=%T "$orig")" ]
+  [ "$(remote_sha claude/vm)" = "$orig" ]
+}
+
+@test "a range ALREADY authored by the operator is not rewritten — no gratuitous history churn" {
+  push_branch claude/mine 1
+  push_branch_as claude/theirs 1 "$VM_EMAIL"
+  decl cloud-m claude/mine
+  decl cloud-t claude/theirs
+  mine_orig="$(remote_sha claude/mine)"
+  theirs_orig="$(remote_sha claude/theirs)"
+
+  CONFIRM=1 run cr --all
+  [ "$status" -eq 0 ]
+
+  # Untouched: same sha, and no trailer bolted onto a message that never needed one.
+  [ "$(local_sha claude/mine)" = "$mine_orig" ]
+  git -C "$REPO" log -1 --format=%B refs/heads/claude/mine | /usr/bin/grep -qi 'Original-commit' && false
+
+  # POSITIVE CONTROL, same run, same fixture: the VM-authored sibling IS rewritten, so "not
+  # rewritten" cannot pass because the rewrite is broken for everything.
+  [ "$(local_sha claude/theirs)" != "$theirs_orig" ]
+  git -C "$REPO" log -1 --format=%B refs/heads/claude/theirs | /usr/bin/grep -qx "Original-commit: $theirs_orig"
+}
+
+@test "an author-clean but COMMITTER-dirty range is still re-authored — an author-only scan misses it" {
+  # githooks/pre-push §BOTH FIELDS: a rebase rewrites the committer and keeps the author, and 2 of
+  # the 95 unattributable commits it measured are exactly this shape. ship-land rebases on every
+  # land, so this is the shape a cloud branch acquires on the way through, not a contrived one.
+  push_branch_as claude/committer 1 t@e.com "$VM_EMAIL"
+  decl cloud-c claude/committer
+  orig="$(remote_sha claude/committer)"
+  [ "$(git -C "$REPO" log -1 --format=%ae "$orig")" = "t@e.com" ]
+  [ "$(git -C "$REPO" log -1 --format=%ce "$orig")" = "$VM_EMAIL" ]
+
+  CONFIRM=1 run cr --land claude/committer
+  [ "$status" -eq 0 ]
+  [ "$(local_sha claude/committer)" != "$orig" ]
+  [ "$(git -C "$REPO" log -1 --format=%ce refs/heads/claude/committer)" = "t@e.com" ]
+}
+
+@test "githooks/commit-msg REJECTS the Co-authored-by spelling and ACCEPTS the trailers the rewrite writes" {
+  # THE GUARD ON THE GUARD. The trailer names above are chosen to clear this hook, and that
+  # constraint is invisible in the strings themselves — so it is pinned here. A rewrite that
+  # reached for `Co-authored-by:` would fail EVERY commit in the range.
+  hook="$ROOT/githooks/commit-msg"
+  [ -x "$hook" ]
+  m="$D/msg.txt"
+
+  printf 'work claude/x\n\nCloud-session: cloud-1\nOriginal-commit: 0123456789abcdef\nOriginal-branch: claude/x\n' > "$m"
+  run bash "$hook" "$m"
+  [ "$status" -eq 0 ]
+
+  # POSITIVE CONTROL for that pass: the banned spelling off the same hook, same fixture.
+  printf 'work claude/x\n\nCo-authored-by: Claude <noreply@anthropic.com>\n' > "$m"
+  run bash "$hook" "$m"
+  [ "$status" -ne 0 ]
+  echo "$output" | /usr/bin/grep -q 'AI-authorship trailer'
+}
+
+@test "the rewrite is put through the repo's OWN commit-msg hook — a refusal writes NOTHING and lands nothing" {
+  push_branch_as claude/hooked 1 "$VM_EMAIL"
+  decl cloud-h claude/hooked
+  orig="$(remote_sha claude/hooked)"
+
+  # Stand in for githooks/commit-msg by refusing a trailer this rewrite actually emits: the arm
+  # under test is "the hook is consulted", not which words it happens to ban today.
+  install_msg_hook 'Original-branch:'
+
+  CONFIRM=1 run cr --land claude/hooked
+  [ "$status" -eq 70 ]
+  echo "$output" | /usr/bin/grep -q 'commit-msg'
+  [ ! -s "$LAND_STUB_LOG" ]
+  # Nothing half-written: the local head is still the VM's own commit.
+  [ "$(local_sha claude/hooked)" = "$orig" ]
+
+  # POSITIVE CONTROL: with the hook out of the way the identical branch re-authors and lands.
+  h="$(git -C "$REPO" rev-parse --git-path hooks)"; case "$h" in /*) ;; *) h="$REPO/$h" ;; esac
+  rm -f "$h/commit-msg"
+  CONFIRM=1 run cr --land claude/hooked
+  [ "$status" -eq 0 ]
+  landed_branches | /usr/bin/grep -q '^claude/hooked$'
+  [ "$(local_sha claude/hooked)" != "$orig" ]
+}
+
+# ── DEFECT 2 · a failed land poisons its own retry ───────────────────────────────────────────
+@test "a stale same-name local branch checked out NOWHERE is healed, and the land proceeds" {
+  push_branch_as claude/retry 1 "$VM_EMAIL"
+  decl cloud-r claude/retry
+  orig="$(remote_sha claude/retry)"
+  stale_local_head claude/retry
+  [ "$(local_sha claude/retry)" != "$orig" ]
+  # The residue really is the blocker: an unforced fetch of the remote head refuses it.
+  git -C "$REPO" fetch -q origin "refs/heads/claude/retry:refs/heads/claude/retry" && false
+
+  CONFIRM=1 run cr --land claude/retry
+  [ "$status" -eq 0 ]
+  echo "$output" | /usr/bin/grep -q 'healed'
+  landed_branches | /usr/bin/grep -q '^claude/retry$'
+  # Healed TO THE REMOTE, then re-authored off it — the residue's tree is gone.
+  [ "$(git -C "$REPO" log -1 --format=%T refs/heads/claude/retry)" = "$(git -C "$REPO" log -1 --format=%T "$orig")" ]
+}
+
+@test "a stale local branch that IS checked out in a worktree still refuses — with a DIFFERENT message" {
+  push_branch_as claude/owned 1 "$VM_EMAIL"
+  decl cloud-o claude/owned
+  stale_local_head claude/owned
+  git -C "$REPO" worktree add -q "$D/wt-owned" claude/owned
+
+  CONFIRM=1 run cr --land claude/owned
+  [ "$status" -eq 65 ]
+  [ ! -s "$LAND_STUB_LOG" ]
+  # The two cases shared ONE string, which is why a first failure was diagnosed as a second,
+  # different one. This arm is that they are now distinguishable in both directions.
+  echo "$output" | /usr/bin/grep -q 'CHECKED OUT'
+  echo "$output" | /usr/bin/grep -q "$D/wt-owned"
+  echo "$output" | /usr/bin/grep -q 'healed' && false
+
+  # POSITIVE CONTROL: remove the worktree and the SAME branch off the SAME fixture heals instead.
+  git -C "$REPO" worktree remove --force "$D/wt-owned"
+  CONFIRM=1 run cr --land claude/owned
+  [ "$status" -eq 0 ]
+  echo "$output" | /usr/bin/grep -q 'healed'
+  echo "$output" | /usr/bin/grep -q 'CHECKED OUT' && false
+  true
 }
 
 # ── discovery ────────────────────────────────────────────────────────────────────────────────
