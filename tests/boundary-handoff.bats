@@ -318,6 +318,80 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   run drive fw1
   [ "$status" -eq 0 ]; fired "$output"
 }
+# ── ATTRIBUTION (2026-08-11) ──────────────────────────────────────────────────────────────────────
+# The case above is why the defect survived: it asserts that the arm FIRES and never reads what it
+# SAID. A free-win trigger used to set the same `early` flag the forecast tier sets, so the shipped
+# advisory read "context 41% BURNING toward the 88% auto-compact wall — forecast ≤-1min at the
+# observed rate" (-1 is the UNKNOWN sentinel: it quoted a rate it had failed to measure) and filed
+# axis:"forecast" on the IDL row, making free-win fires permanently uncountable. Found by a positive
+# control against the deployed hook, not by this suite. These cases read the text and the row.
+@test "free-win: the advisory says FREE WIN and names --recycle — not the forced-drain wording" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw1a 43
+  run drive fw1a
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "FREE WIN"
+  echo "$output" | grep -q -- "--recycle"
+  # the three MISATTRIBUTIONS that shipped, each pinned so it cannot come back
+  ! echo "$output" | grep -q "BURNING" || false     # not the forecast tier
+  ! echo "$output" | grep -q -- "-1min" || false    # never quote an unmeasured forecast
+  ! echo "$output" | grep -q "before auto-compaction"   # nothing is urgent at 43%
+}
+@test "free-win: the IDL row carries axis=freewin + the rung that authorised it" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw1b 43
+  run drive fw1b
+  [ "$status" -eq 0 ]; fired "$output"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary")
+      | .axis=="freewin" and .freewin==true and .early==false and .freewin_rung=="✅"' >/dev/null
+}
+# The forecast tier must keep its OWN attribution — a fix that relabels every sub-T fire as free-win
+# would pass the two cases above and be just as wrong in the other direction.
+@test "free-win: a genuine forecast-early fire is still axis=forecast, with the arm live" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw1c 60
+  mk_bhist fw1c 50 60 300            # burning → forecast 14min, and 60 ≥ T_MIN
+  run drive fw1c
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "BURNING"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="forecast" and .early==true and .freewin==false' >/dev/null
+}
+# ── S6 CONVERSATION-HOLD — suppression HERE, wording at the urgent tiers ───────────────────────────
+# CLAUDE.md § Context Stewardship rules a live exchange a ⏸ HOLD. A free-win fire mid-exchange would
+# append its own "do NOT cut it" to a recycle advisory — advice that retracts itself — and worse, it
+# would STAMP THE LATCH, silencing the next +10% of fill and costing the genuinely-idle boundary that
+# follows. Suppressing keeps the arm armed for that boundary.
+@test "free-win: an exchange in flight SUPPRESSES the free-win advisory (⏸ Hold, not wording)" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw5 43
+  run drive fw5 "$(mk_btx 30)"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'freewin-conversation-hold:30s<900s' "$CC_IDL"
+}
+@test "free-win: the suppressed fire did NOT burn the latch — the next idle boundary still fires" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw6 43
+  run drive fw6 "$(mk_btx 30)"; [ -z "$output" ]      # suppressed mid-exchange
+  run drive fw6                                        # same fill, same HEAD, exchange gone
+  [ "$status" -eq 0 ]; fired "$output"                 # a stamped latch would have silenced this
+  echo "$output" | grep -q "FREE WIN"
+}
+@test "free-win: an OLD exchange does not suppress — the hold is about a LIVE one" {
+  export CC_BOUNDARY_T_FREEWIN=35 CC_BOUNDARY_CONV_S=100
+  mk_btel fw7 43
+  run drive fw7 "$(mk_btx 2000)"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+# The urgent tier keeps the OPPOSITE contract: at ≥73 the wall arrives whether or not the operator is
+# mid-sentence, so it fires and re-words. (Mutant: a suppression written into the shared path instead
+# of the freewin branch reds this.)
+@test "the ≥73 tier still FIRES during an exchange — suppression is scoped to the free-win arm" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw8 75
+  run drive fw8 "$(mk_btx 30)"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "exchange is in flight"
+}
 @test "free-win: 34% is below the floor → still abstains (the floor is real)" {
   export CC_BOUNDARY_T_FREEWIN=35
   mk_btel fw2 34
@@ -339,4 +413,35 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   run drive fw4
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q 'below-threshold:43<73' "$CC_IDL"
+}
+
+# ── DIAGNOSABILITY OF THE SILENCE (2026-08-11) ────────────────────────────────────────────────────
+# Every abstain below the static T used to record only `below-threshold:41<73` — so "the ledger said
+# no" and "the arm never ran" produced byte-identical evidence, which is the dormancy this rail exists
+# to escape (memory: positive-control-the-denominator). Measured over the live IDL at the time of the
+# fix: 383 evaluations sat at used ≥ 35 and every one of them recorded only the 73 it was never going
+# to meet. The abstain now carries the verdict that declined, and these cases pin the three classes
+# apart — asked-and-refused, could-not-ask, and below-the-floor.
+@test "diagnosability: a DIRTY tree at 43% records the RUNG that declined, not a bare threshold" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  echo uncommitted > "$WD/dirty.txt"
+  mk_btel fw9 43
+  run drive fw9
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  # asked, and told no — the rung is on the record, so this silence is attributable
+  grep -q 'below-threshold:43<73;freewin=🔧' "$CC_IDL"
+}
+@test "diagnosability: 34% records below-floor — could not ask, distinct from a refusal" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  mk_btel fw10 34
+  run drive fw10
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'below-threshold:34<73;freewin=below-floor' "$CC_IDL"
+}
+@test "diagnosability: a disabled arm records off — not a rung it never read" {
+  export CC_BOUNDARY_T_FREEWIN=0
+  mk_btel fw11 43
+  run drive fw11
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q 'below-threshold:43<73;freewin=off' "$CC_IDL"
 }
