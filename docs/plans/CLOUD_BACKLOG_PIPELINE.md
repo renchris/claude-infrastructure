@@ -237,6 +237,45 @@ does not latch, so the next sweep retries. Two defects were found by the suite r
 and a wiring test that grepped the phrase `nothing-new`, which appears in three comments **above** the
 exit it names, so it measured a sentence and convicted a correct call site.
 
+### 6.1 · Demonstrated on two REAL round trips — and the second one is why there were two
+
+| clause (§5) | evidence |
+|---|---|
+| 3 · custody opens at fire | `cc-custody count --open` = 1 the instant `up` returned, marker = the session id, both runs |
+| 4 · a goal armed + evaluated | `goal=` / `goal_probe=` on the declaration; verdict `MET` computed from THIS side, both runs |
+| 5 · completion WOKE the originator | `HANDOFF-PING cloud/<id>: LANDED+VERIFIED …` arrived in pane 348's inbox as CONTEXT, un-typed |
+| 7 · landed, content-verified, item done | `docs/research/cloud-w2-return-rails-2026-08-11.md` blob `deee981d` on `origin/main`; `e9a745a7ffb9` done; custody 0 |
+
+Run 1 `session_013H8jXq…` (next), run 2 `session_017ga3J7…` (next3). The landed commits are authored
+`Chris Ren <ren.chris@outlook.com>` carrying `Cloud-session:` / `Original-commit:` /
+`Original-branch:` — the identity wall translated, not weakened.
+
+**Four defects that only a live round trip could produce**, every one of them an instrument reporting
+something adjacent to the truth:
+
+1. **The post-hoc fill was self-defeating.** The range is bounded at the merge-base with the trunk,
+   so the moment the land succeeds the branch IS on trunk and the range is empty. It refused over a
+   branch that had just landed a file. `fill-paths` now splits `--print` (derive while ahead) from
+   `--set` (write after), and an already-landed branch NAMES that cause instead of reporting a bare
+   emptiness. **The suite missed it because its lander stub never advanced trunk** — a control that
+   does not replay the real post-land artifact cannot fail the way production does.
+2. **The rail called the DEPLOYED copy of its own sibling.** `cc-cloud` was resolved from the
+   declared repo (the shared checkout) and `~/.claude/bin`, which symlinks into it — 8 commits
+   behind — so a freshly-landed reconciler got `unknown arg fill-paths`. A rail must call the
+   siblings it shipped with, or every fix is hostage to the converger.
+3. **A test suite could land a branch.** `tests/autonomy-sweep.bats` runs the real sweep once per
+   test and `postland-verify` runs that suite from a throwaway worktree — measured: FOUR concurrent
+   `cloud-return --sweep` passes against the operator's LIVE store, racing the backlog ledger and
+   re-pinging the originator. Every other block in that sweep is a pure read; this one acts. The
+   stanza is now gated on the UNRESOLVED `$0` being the deployed path (resolving it follows the
+   symlink back into the checkout and erases the only difference there is).
+4. **A land CUT by a bound was filed as a gate REFUSAL.** The 240 s bound — chosen "to stay under
+   the 300 s cadence" — killed a healthy land that `ship-land` itself described as
+   `verdict=killed signal=SIGTERM … nothing was proven about the tree`, and the return path wrote a
+   refusal artifact, woke the originator with "LAND REFUSED", and pointed W3 at a routing job that
+   does not exist. A bound smaller than what it bounds can only convict. Now 900 s, with 124/137/143
+   and the lander's own killed token abstaining.
+
 ⚠️ **A goal probe runs with cwd = the declared repo, which is a working tree somebody else owns.**
 Write probes against the trunk ref (`git show origin/main:<path> | grep -q …`), not the working tree:
 a bare `grep -q X path` grades whatever happens to be checked out, and grep's exit 2 (no such file) is
