@@ -1082,3 +1082,84 @@ Good to close: yes — complete, durable, deployed live, no loose ends; follow-o
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q '"decision":"block"'
 }
+
+# ── DIRTY ATTRIBUTION: the sibling's-dirt conviction (2026-08-11) ────────────────────────────────
+# MEASURED twice — session 44dc8891 in wt-149789b69fc4 ("dirty tree (4 file(s))", backlog
+# ce91e9583df1) and session a1dd4283 in wt-592061637f80 ("dirty tree (8 file(s))" for files staged
+# by a PRIOR session, backlog 9be5e66e1c34). Both wrote nothing; both were told to drive a sibling's
+# in-flight work to done, which is the G4 violation CLAUDE.md forbids by name. `_ca_mine dirty`
+# answers rc 2 for them (a write-free transcript is not innocence), and rc 2 convicts — so the
+# ordering term supplies the positive evidence instead. See hooks/lib/peer-owned.sh
+# § THE DIRTY TERM'S ORDERING PROOF for why ordering, and why there is no liveness term.
+
+_ca_tr_ts() { # $1=out $2=first-record epoch $3..=paths the session wrote
+  local out="$1" ts="$2"; shift 2
+  python3 - "$out" "$ts" "$@" <<'PY'
+import json, sys, time
+out, ts, paths = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + ".000Z"
+rows = [{"type":"user","timestamp":iso,"message":{"content":"go"}}]
+for p in paths:
+    rows.append({"type":"assistant","timestamp":iso,"message":{"content":[
+        {"type":"tool_use","name":"Edit","input":{"file_path":p}}]}})
+rows.append({"type":"assistant","timestamp":iso,"message":{"content":[
+    {"type":"text","text":"✅ Complete — all done."}]}})
+open(out,"w").write("\n".join(json.dumps(r) for r in rows)+"\n")
+PY
+  printf '%s' "$out"
+}
+
+# clean + landed, then dirtied — so DIRTY is the ONLY ledger contradiction under test.
+_ca_dirty_repo() { # <tag> → echoes the worktree, with base.txt modified
+  local w; w="$(mkrepo_landed "$1")"
+  echo "sibling in-flight edit" >> "$w/base.txt"
+  printf '%s' "$w"
+}
+
+_ca_touch_at() { # <epoch> <file>
+  local s; s="$(date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null)"
+  touch -t "$s" "$2"
+}
+
+@test "dirty attribution: dirt that PREDATES this session ⇒ ABSTAIN (the measured conviction)" {
+  local w tr now; w="$(_ca_dirty_repo dpa1)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 7200 ))" "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpa1.jsonl" "$(( now - 3600 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]
+  ! fired "$output" || false
+  grep -q 'dirty-predates-session' "$COMPLETION_IDL"
+}
+
+# THE CONTROL THE FIX LIVES OR DIES BY: dirt made after this session started is the case the guard
+# exists for, and it is where a Bash `sed -i` with no tool_use record lands.
+@test "dirty attribution CONTROL: dirt made AFTER the session started ⇒ still FIRES" {
+  local w tr now; w="$(_ca_dirty_repo dpa2)"; now="$(date +%s)"
+  _ca_touch_at "$now" "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpa2.jsonl" "$(( now - 3600 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'dirty tree'
+}
+
+# GATED ON rc 2 ALONE. A session that provably wrote the dirty path is rc 0 — positive self-evidence
+# — and the ordering term must never be consulted, let alone override it. Backdating the mtime here
+# is deliberate: it makes the ordering term WANT to exonerate, so the gate is the only thing that
+# can keep this red-if-broken.
+@test "dirty attribution CONTROL: a path this session DID write still convicts, old mtime or not" {
+  local w tr now; w="$(_ca_dirty_repo dpa3)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 7200 ))" "$w/base.txt"
+  tr="$(_ca_tr_ts "$BATS_TEST_TMPDIR/dpa3.jsonl" "$(( now - 3600 ))" "$w/base.txt")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+# THE 9 FIXTURES STAY STRICT. Every pre-existing transcript here is built by mkfix/_ca_tr, which
+# record no `.timestamp`, so the session start is unresolvable ⇒ cannot-tell ⇒ convict, exactly as
+# before this term existed. That is what keeps the widening from reaching them.
+@test "dirty attribution CONTROL: a transcript with NO timestamp stays strict ⇒ FIRES" {
+  local w now; w="$(_ca_dirty_repo dpa4)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 7200 ))" "$w/base.txt"
+  run run_ca "$(mkfix "Done. Complete — nothing left to do.")" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+}

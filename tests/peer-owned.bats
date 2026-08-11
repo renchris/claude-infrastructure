@@ -218,3 +218,129 @@ po() { # <repo> <session_id> <transcript>
   po "$w" mine-323 "$(_po_tx "$BATS_TEST_TMPDIR/empty.jsonl" "$T_OLDSESS")"
   [ "$status" -eq 2 ]
 }
+
+# ── dirt_predates_session — the 🔧 term's ordering proof (2026-08-11) ─────────────────────────────
+# Reproduces the measured conviction of a write-free session over a sibling's dirty tree (backlog
+# ce91e9583df1, cause-isolated in 9be5e66e1c34) and pins the controls that keep it from becoming a
+# blanket exoneration. As with the peer term above, the fix is fail-GREEN by construction — it
+# withholds a block — so the REFUTING cases carry the weight, not the positive one.
+
+# A landed, clean repo. The tests dirty it themselves so each owns the mtimes it asserts on.
+# The identity is passed transiently (`-c`) rather than written with `git config`: these fixtures
+# are throwaway clones, and the repo-wide ban on untargeted identity writes exists because this
+# checkout's ~100 linked worktrees share one .git/config.
+_po_clean_repo() { # <tag> → echoes the worktree
+  local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
+  git init -q --bare "$o"; git clone -q "$o" "$w" 2>/dev/null
+  git -C "$w" checkout -q -b main
+  # TWO tracked files, because the deletion control below needs a deleted path AND a surviving
+  # old one in the same status stream — with only base.txt, deleting it empties the population and
+  # the test would pass through the `n == 0` branch instead of the branch it names (measured: that
+  # exact fixture let the "deletion treated as old" mutant survive the screen).
+  echo base > "$w/base.txt"; echo second > "$w/second.txt"; git -C "$w" add -A
+  git -C "$w" -c user.email=t@e.com -c user.name=t commit -q -m base >/dev/null 2>&1
+  git -C "$w" push -q -u origin main >/dev/null 2>&1
+  printf '%s' "$w"
+}
+
+# `touch -t` takes a wall-clock stamp, not an epoch — `touch -d @epoch` is GNU-only. BSD `date -r`
+# first (this fleet is macOS), GNU `date -d @…` second.
+_po_touch_at() { # <epoch> <file>
+  local s; s="$(date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S 2>/dev/null)"
+  [ -n "$s" ] || return 1
+  touch -t "$s" "$2"
+}
+
+dps() { # <repo> <session_id> <transcript>
+  run bash -c ". '$LIB'; dirt_predates_session '$1' '$2' '$3'"
+}
+
+# THE MEASURED CASE: session 44dc8891 wrote nothing; the 4 dirty files were a sibling's, already on
+# disk when it started. The ordering fact settles it without any liveness question.
+@test "the incident: every dirty path predates this session's start ⇒ exonerated" {
+  local w; w="$(_po_clean_repo dps1)"
+  echo sibling >> "$w/base.txt"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/base.txt"
+  dps "$w" mine-1 "$(_po_tx "$BATS_TEST_TMPDIR/dps1.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=1,* ]]
+}
+
+# THE CONTROL THAT MATTERS MOST — dirt made after this session started is exactly the case the
+# guard exists for, and the Bash residue (`sed -i`, a heredoc) lands here with no tool_use record.
+@test "CONTROL: dirt stamped AFTER the session started ⇒ refuted, the guard still convicts" {
+  local w; w="$(_po_clean_repo dps2)"
+  echo mine >> "$w/base.txt"
+  _po_touch_at "$(( T_NEWSESS + 60 ))" "$w/base.txt"
+  dps "$w" mine-2 "$(_po_tx "$BATS_TEST_TMPDIR/dps2.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 1 ]
+}
+
+# ONE new path among old ones must convict the whole tree: the ledger's DIRTY term is binary, so a
+# per-path exoneration that ignored the newest file would clear a real loose end.
+@test "CONTROL: one new path among several old ones ⇒ refuted" {
+  local w; w="$(_po_clean_repo dps3)"
+  echo a >> "$w/base.txt"; echo b > "$w/old-untracked.txt"; echo c > "$w/new-untracked.txt"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/base.txt"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/old-untracked.txt"
+  _po_touch_at "$(( T_NEWSESS + 60 ))"   "$w/new-untracked.txt"
+  dps "$w" mine-3 "$(_po_tx "$BATS_TEST_TMPDIR/dps3.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 1 ]
+}
+
+# Same-second equality is REFUTED, not exonerated: mtime granularity is one second, so `==` cannot
+# tell "written just before the session" from "written by it".
+@test "CONTROL: an mtime EQUAL to the session start is refuted, not exonerated" {
+  local w; w="$(_po_clean_repo dps4)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$T_NEWSESS" "$w/base.txt"
+  dps "$w" mine-4 "$(_po_tx "$BATS_TEST_TMPDIR/dps4.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 1 ]
+}
+
+# -uall: git's DEFAULT untracked mode collapses a wholly untracked directory to one record (`?? d/`),
+# whose mtime is the DIRECTORY's. A new file in a new directory would then be judged on the dir and
+# could read as old — the fail-GREEN trap session_dirty_mine documents, arriving here by a new route.
+@test "CONTROL: a NEW file inside a NEW untracked directory is seen and refutes" {
+  local w; w="$(_po_clean_repo dps5)"
+  mkdir -p "$w/fresh"; echo n > "$w/fresh/mine.ts"
+  _po_touch_at "$(( T_NEWSESS + 60 ))" "$w/fresh/mine.ts"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/fresh"
+  dps "$w" mine-5 "$(_po_tx "$BATS_TEST_TMPDIR/dps5.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 1 ]
+}
+
+# A DELETION has no mtime. Treating an absent file as ancient is how this would exonerate a session
+# that had just `rm`'d something, so it is cannot-tell.
+# THE OLD FILE BESIDE IT IS THE WHOLE POINT of the fixture. With the deletion alone the population
+# is empty and rc 2 arrives from the `n == 0` branch, so the test passes whether or not the deletion
+# is handled — vacuously. With a surviving old path, skipping the deletion instead of abstaining
+# yields rc 0 (exonerate), which is the failure this control is named for.
+@test "CONTROL: a deleted tracked file ⇒ cannot-tell, never 'old'" {
+  local w; w="$(_po_clean_repo dps6)"
+  rm -f "$w/base.txt"
+  echo old >> "$w/second.txt"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/second.txt"
+  dps "$w" mine-6 "$(_po_tx "$BATS_TEST_TMPDIR/dps6.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 2 ]
+}
+
+# An empty population cannot produce a verdict — returning 0 over no dirty paths would manufacture
+# an exoneration (MEMORY.md cap-whose-population-is-empty).
+@test "CONTROL: a CLEAN tree ⇒ cannot-tell, not an exoneration" {
+  local w; w="$(_po_clean_repo dps7)"
+  dps "$w" mine-7 "$(_po_tx "$BATS_TEST_TMPDIR/dps7.jsonl" "$T_NEWSESS")"
+  [ "$status" -eq 2 ]
+}
+
+# Ignorance never exonerates: with no timestamp in the transcript and no registry row, the session
+# start is unresolvable and the term must abstain rather than guess.
+@test "CONTROL: unresolvable session start ⇒ cannot-tell" {
+  local w; w="$(_po_clean_repo dps8)"
+  echo sibling >> "$w/base.txt"
+  _po_touch_at "$(( T_NEWSESS - 3600 ))" "$w/base.txt"
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}' \
+    > "$BATS_TEST_TMPDIR/dps8.jsonl"
+  dps "$w" mine-8 "$BATS_TEST_TMPDIR/dps8.jsonl"
+  [ "$status" -eq 2 ]
+}

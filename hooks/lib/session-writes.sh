@@ -9,8 +9,17 @@
 #   (B) session-continue's MECHANICAL 🔧 arm must distinguish "I left my own work uncommitted"
 #       from "a sibling session dirtied the shared checkout". Without that split it would loop
 #       forever on someone else's dirt — the infinite-loop-wearing-diligence's-clothes case
-#       CLAUDE.md § Session Close names by name, and the live defect already filed as task #105
-#       ("completion-assert convicts worktree sessions for a sibling's dirty tree").
+#       CLAUDE.md § Session Close names by name.
+#       THAT SPLIT IS NOT COMPLETION-ASSERT'S, and reading this line as though it were cost a
+#       worker a wrong first hypothesis (2026-08-11). session-continue arms only on rc 0 —
+#       positive evidence the dirt is MINE — so rc 1 and rc 2 both mean "do not block" there.
+#       completion-assert asks the mirror question and needs rc 1, so for it the two are opposite
+#       dispositions, and its `_ca_mine` deliberately downgrades a write-free rc 1 to rc 2.
+#       That is what convicted write-free sessions over a sibling's dirty tree — backlog
+#       ce91e9583df1 (measured, 4 files) and 9be5e66e1c34 (cause-isolated, 8 files), fixed
+#       2026-08-11 by hooks/lib/peer-owned.sh § THE DIRTY TERM'S ORDERING PROOF, not by changing
+#       anything here. (The pointer this line used to carry, "task #105", names no item in the
+#       backlog store; these two ids are the real record.)
 #
 # THE SOURCE IS THE TRANSCRIPT, NOT A NEW STORE. The Stop payload already carries
 # `transcript_path`, and every Write/Edit/MultiEdit/NotebookEdit tool_use in it records the path it

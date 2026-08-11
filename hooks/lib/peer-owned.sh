@@ -306,3 +306,118 @@ peer_owned_unlanded() {
   printf '%s\n' "$peer"
   return 0
 }
+
+# ── THE DIRTY TERM'S ORDERING PROOF (2026-08-11) ─────────────────────────────────────────────────
+# Everything above answers the 📦 question — whose are these UNLANDED COMMITS. The 🔧 term of
+# completion-assert.sh has the identical defect and never got an answer, so it convicted on facts it
+# had not attributed. Measured twice, independently:
+#   · 2026-08-07, session 44dc8891 in worktree wt-149789b69fc4: ZERO Write/Edit tool calls, yet the
+#     Stop hook emitted "the LIVE ledger contradicts it — dirty tree (4 file(s))" and demanded the
+#     session drive a SIBLING's in-flight work to done (backlog ce91e9583df1).
+#   · 2026-08-08, session a1dd4283 in worktree wt-592061637f80: "dirty tree (8 file(s))", for 8
+#     files staged by a PRIOR session before this one started (backlog 9be5e66e1c34, which isolated
+#     the cause).
+# THE CAUSE IS NOT A BUG IN session-writes.sh — that oracle answers rc 1 = NOT MINE for both. It is
+# completion-assert.sh's `_ca_mine`, which DOWNGRADES that rc 1 to rc 2 unless the session is a
+# confirmed Agent-Teams assignee ("EXONERATE ONLY ON POSITIVE EVIDENCE": a write-free transcript is
+# not innocence, because the work may have gone through Bash — `sed -i`, a heredoc — which the
+# oracle cannot see by construction). That rule is CORRECT and must not be widened: the same
+# docstring records that exonerating every write-free session silently disabled 9 fixtures.
+#
+# So this supplies the missing POSITIVE evidence instead, and it is the ordering argument (1a)
+# already uses: a session cannot have modified a file that was last modified before the session
+# existed. That is an ordering fact no tool residue can defeat — a `sed -i` this session ran would
+# stamp an mtime AFTER its start, so the Bash residue cannot be laundered through it.
+#
+# ── WHY THERE IS NO (1b) HERE ────────────────────────────────────────────────────────────────────
+# (1b) closes the commit case by scanning the transcript's Bash strings for commit-producing verbs,
+# which works only because that verb set is small and stable. The set of commands that DIRTY a tree
+# is not: a redirect, a build, a package install, any script the session ran. Enumerating it would
+# be the denylist-enumerates-spellings-not-the-class defect (MEMORY.md), so ordering is the only
+# sound proof this term gets.
+#
+# ── WHY THERE IS NO LIVENESS TERM HERE, THOUGH THE SIBLING ABOVE TURNS ON ONE ────────────────────
+# Liveness discriminates for COMMITS because a dead predecessor's unlanded commits really do become
+# the successor's to land — /ship is the sanctioned rail for exactly that, so "nobody else will land
+# these" is a reason to convict. UNCOMMITTED work has no such rail and the asymmetry is a rule, not
+# a preference: CLAUDE.md G4 forbids sweeping another session's changes into a commit whether or not
+# that session still lives. There is no dead-author case in which this session should commit the
+# dirt, so a liveness term could only withhold exonerations it has no reason to withhold. Its
+# absence is the design, not an omission.
+#
+# ── KNOWN COVERAGE RESIDUE (named, not silently absorbed) ────────────────────────────────────────
+#   · Dirt created AFTER this session started, by a live sibling, stays CONVICTED. It has to: this
+#     session could equally have made it through Bash, and per the paragraph above there is no
+#     bounded verb set that would exclude that. The measured cases are both the older-dirt shape.
+#   · A DELETION has no mtime to read, so it is cannot-tell (rc 2), never "old". Treating an absent
+#     file as ancient is how this would exonerate a session that had just `rm`'d something.
+#   · `_po_session_start` takes the MIN of the transcript's first record and the registry's
+#     startedAt. That is the safe direction here too, and for the opposite reason it is safe above:
+#     an EARLIER start means FEWER files predate it, i.e. fewer exonerations, i.e. stricter.
+
+# _po_mtime <file> → mtime epoch on stdout, rc 0; rc 1 unreadable/non-numeric
+#   BSD `stat -f` first (this fleet is macOS), GNU `stat -c` second. GNU's `-f` means --file-system
+#   and can EXIT 0 while printing something that is not an mtime, so the fallback is chosen on the
+#   VALUE being numeric rather than on the exit status — an rc-only chain would accept that garbage.
+_po_mtime() {
+  local f="${1:-}" m
+  [ -n "$f" ] || return 1
+  m="$(stat -f %m "$f" 2>/dev/null)"
+  case "$m" in ''|*[!0-9]*) m="$(stat -c %Y "$f" 2>/dev/null)" ;; esac
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$m"
+}
+
+# dirt_predates_session <repo_dir> <my_session_id> <transcript_path>
+#   "Was every dirty path in this tree last modified BEFORE this session started?"
+#   stdout on rc 0 = a whitespace-free evidence string for the caller's IDL.
+#   rc: 0 all dirt predates this session · 1 refuted (something is at-or-after its start)
+#       · 2 cannot-tell   (see THREE STATES above)
+dirt_predates_session() {
+  local dir="${1:-}" sid="${2:-}" tp="${3:-}"
+  local top start porcf rec rel abs mt newest=0 n=0 skip_next=0 rc=0
+
+  command -v git >/dev/null 2>&1 || return 2
+  [ -n "$dir" ] || return 2
+
+  top="$(cd "$dir" 2>/dev/null && _po_bounded 5 git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  [ -n "$top" ] || return 2
+
+  start="$(_po_session_start "$tp" "$sid")" || return 2
+  case "$start" in ''|*[!0-9]*) return 2 ;; esac
+
+  # -z + core.quotePath=false + -uall, and the output goes to a FILE — every one of those is the
+  # lesson session_dirty_mine already paid for and documents at length: command substitution strips
+  # the NUL delimiters, git's default untracked mode collapses a new directory to one record so its
+  # files are never seen, and a path with a space is emitted quoted. Diverging from that shape here
+  # would give the two readers of one porcelain stream different ideas of what a dirty path is.
+  porcf="$(mktemp "${TMPDIR:-/tmp}/po-porc.XXXXXX" 2>/dev/null)" || return 2
+  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$porcf" 2>/dev/null; then
+    rm -f "$porcf" 2>/dev/null; return 2
+  fi
+
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    # A rename/copy emits `XY NEW<NUL>OLD<NUL>` — the OLD path arrives as its own bare record with
+    # no status prefix, so consume it explicitly rather than letting the 3-char strip mangle it.
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in [RC]*) skip_next=1 ;; esac
+    rel="${rec:3}"
+    [ -n "$rel" ] || continue
+    abs="$top/$rel"
+    if ! mt="$(_po_mtime "$abs")"; then rc=2; break; fi   # deletion / unreadable ⇒ cannot tell
+    n=$(( n + 1 ))
+    if [ "$mt" -gt "$newest" ]; then newest="$mt"; fi
+    # STRICTLY BEFORE. Same-second equality is refuted, not exonerated: mtime granularity is one
+    # second here, so `==` cannot distinguish "written just before the session" from "written by it".
+    if [ "$mt" -ge "$start" ]; then rc=1; break; fi
+  done < "$porcf"
+  rm -f "$porcf" 2>/dev/null
+
+  [ "$rc" -eq 0 ] || return "$rc"
+  # No records at all ⇒ the tree is not dirty, so there is nothing to attribute and no verdict to
+  # give. Returning 0 here would manufacture an exoneration out of an empty population.
+  [ "$n" -gt 0 ] || return 2
+  printf 'paths=%s,newest=%s,start=%s\n' "$n" "$newest" "$start"
+  return 0
+}
