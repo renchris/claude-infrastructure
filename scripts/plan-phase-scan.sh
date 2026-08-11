@@ -75,6 +75,17 @@ fi
 # LEVEL 1 IS EXCLUDED for the same reason cc-premise's plan_remaining_lines excludes it: this scanner
 # emits the document's H1 as a section spanning the whole file, so it is the plan's title rather than
 # a unit of remaining work — counting it would make every plan permanently unfalsifiable.
+# 🚨 IT PRINTS `FALSIFIED` ON SUCCESS, AND THE STORED PROBE TESTS THAT WORD RATHER THAN THE EXIT
+# CODE. Measured 2026-08-11, during this change's own convergence window. This script's second
+# positional is a FORMAT with a silent default: any value that is not `--markdown` falls through to
+# the JSON branch, which exits 0. So an OLDER deployed copy handed `--falsify` does not reject it —
+# it prints a section dump and returns 0, and under the falsifier contract exit 0 MEANS "the premise
+# is gone, refuse the claim". A session running the NEW cc-discover against a not-yet-converged
+# ~/.claude would therefore mint plan-open items that retract themselves on first read.
+# `--falsify-red` and `--falsify-host` do not have this hole: their scripts dispatch on a closed verb
+# set and an unknown one exits non-zero, which fails in the safe direction. This one defaults, so the
+# affirmative token is what makes the answer unforgeable by an older binary (memory:
+# version-identity-is-the-running-process-not-the-launcher).
 if [[ "$FORMAT" == "--falsify" ]]; then
   [[ -f "$FILE" ]] || exit 2
   # (a) THE PLAN'S OWN DECLARATION. Keyed on find-plan.sh's EXIT CODE, not on the word it prints:
@@ -85,7 +96,7 @@ if [[ "$FORMAT" == "--falsify" ]]; then
   if [[ -x "$_fp_bin" ]]; then
     if _fp_st="$("$_fp_bin" --status "$FILE" 2>/dev/null)"; then
       case "${_fp_st%%$'\n'*}" in
-        complete|superseded) exit 0 ;;
+        complete|superseded) echo FALSIFIED; exit 0 ;;
       esac
     fi
   fi
@@ -102,6 +113,7 @@ if [[ "$FORMAT" == "--falsify" ]]; then
      | grep -qE '"level": ([2-9]|[1-9][0-9]+), "status": "(PENDING|IN_PROGRESS)"'; then
     exit 1
   fi
+  echo FALSIFIED
   exit 0
 fi
 

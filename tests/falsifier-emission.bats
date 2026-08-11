@@ -128,6 +128,37 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "plan-open: an OLDER deployed plan-phase-scan.sh cannot forge a retraction" {
+  # THE VERSION-SKEW HOLE, pinned. plan-phase-scan.sh takes FORMAT as a second positional with a
+  # silent default, so a copy predating --falsify prints a section dump and EXITS 0 — which the
+  # falsifier contract reads as "premise gone". The stand-in below is exactly that behaviour, and the
+  # emitted probe must call it STILL LIVE, not retract the item it just minted.
+  d="$BATS_TEST_TMPDIR/skew"; mkdir -p "$d"
+  printf -- '---\nstatus: open\n---\n\n# A Plan\n\n## Phase 1\n' > "$d/PLAN.md"
+  cat > "$d/findplan" <<EOF
+#!/bin/sh
+[ "\$1" = "--list-open" ] || exit 2
+printf 'OPEN | proj | %s | A Plan\n' "$d/PLAN.md"
+EOF
+  chmod +x "$d/findplan"
+  CC_DISCOVER_PROJECT=proj CC_DISCOVER_FINDPLAN="$d/findplan" "$DISCOVER" --once >/dev/null 2>&1
+  probe="$("$BACKLOG_BIN" list --all --json | jq -r '[.[]|select(.source=="plan-open")][0].falsifier')"
+
+  # The PRE-`--falsify` behaviour, reproduced: unknown second positional ⇒ JSON on stdout, exit 0.
+  printf '#!/bin/sh\necho "{\\"sections\\": []}"\nexit 0\n' > "$HOME/.claude/scripts/plan-phase-scan.sh"
+  chmod +x "$HOME/.claude/scripts/plan-phase-scan.sh"
+  run /bin/sh -c "$probe"
+  [ "$status" -ne 0 ] || false          # a 0 here is a live plan retracted by a stale binary
+
+  # POSITIVE CONTROL — the same probe against the REAL scanner still retracts a finished plan, so
+  # the guard above is not passing merely because the probe can never say yes.
+  ln -sf "$PLANSCAN" "$HOME/.claude/scripts/plan-phase-scan.sh"
+  ln -sf "$REPO/scripts/find-plan.sh" "$HOME/.claude/scripts/find-plan.sh"
+  printf -- '---\nstatus: open\n---\n\n# A Plan\n\n## Phase 1 DONE\n' > "$d/PLAN.md"
+  run /bin/sh -c "$probe"
+  [ "$status" -eq 0 ]
+}
+
 @test "postland-verify: the three no-derived-arm sites build a probe carrying suite AND commit" {
   # The emission sites call fals_red; assert the string it produces, since driving a real
   # AUTO-REVERT/HUNG episode would need a broken trunk. The probe's own behaviour is §2's job.
