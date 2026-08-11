@@ -14,6 +14,9 @@
 setup() {
     unset KITTY_WINDOW_ID ITERM_SESSION_ID
     export IT2_WRAPPER_NO_KITTY=1
+    # curl-gate.py appends to AUDIT_LOG = Path.home()/".reso"/"curl-audit.jsonl", so an
+    # unfixtured run writes into the operator's real audit trail on every probe.
+    export HOME="${BATS_TEST_TMPDIR}/home"; mkdir -p "$HOME"
     REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
 
     FAKE_ROOT="${BATS_TEST_TMPDIR}/reso-primary"
