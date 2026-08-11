@@ -363,24 +363,52 @@ _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot 
 # else, so the peer question is not even asked there. rc 1 has already exonerated. So this can only
 # convert a subset of "cannot tell" into a positive verdict; it cannot weaken a conviction the
 # existing attribution had already made.
-_ca_peer_owned() {   # stdout: `<peer>#<pid>` on rc 0
+# Resolution chain shared by BOTH ownership terms below. Factored rather than copied: the second
+# consumer arrived 2026-08-11 and a duplicated four-fallback chain is how the two would end up
+# sourcing different files on a half-deployed live layer.
+_ca_po_source() {   # rc 0 sourced · rc 1 no lib
   local lib
   lib="${PEER_OWNED_LIB:-$_cascd/lib/peer-owned.sh}"
   [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
     lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/peer-owned.sh"; }
   [ -f "$lib" ] || lib="$CFG/hooks/lib/peer-owned.sh"
   [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/peer-owned.sh"
-  [ -f "$lib" ] || return 2
+  [ -f "$lib" ] || return 1
   # shellcheck source=lib/peer-owned.sh
   # shellcheck disable=SC1091
-  . "$lib" 2>/dev/null || return 2
+  . "$lib" 2>/dev/null || return 1
+}
+
+_ca_peer_owned() {   # stdout: `<peer>#<pid>` on rc 0
+  _ca_po_source || return 2
   peer_owned_unlanded "$CWD" "$(lfield TRUNK)" "$SID" "$TP"
+}
+
+# ── THE SAME SECOND QUESTION, FOR THE 🔧 TERM (2026-08-11, backlog ce91e9583df1 / 9be5e66e1c34) ──
+# The dirty term had no attribution escape at all. `_ca_mine dirty` answers rc 2 for every session
+# that recorded no file-edit tool_use and is not a confirmed assignee — deliberately, because a
+# write-free transcript is not innocence — and rc 2 convicts. So a session that correctly wrote
+# nothing was told its close was a false-done over a SIBLING's in-flight dirt, and the only
+# compliant answer was to commit that dirt, which CLAUDE.md G4 forbids by name. Measured twice
+# (4 files / 8 files; see hooks/lib/peer-owned.sh § THE DIRTY TERM'S ORDERING PROOF).
+#
+# GATED ON rc 2 ALONE, exactly as the peer term above is, and for the same reason: rc 0 is positive
+# self-evidence that a dirty path is this session's own, and no argument about ordering may override
+# it. rc 1 has already exonerated. So this can only convert a subset of "cannot tell" into a verdict.
+# A stale live lib without the function is cannot-tell, never a silent pass.
+_ca_dirt_predates() {   # stdout: `paths=N,newest=…,start=…` on rc 0
+  _ca_po_source || return 2
+  command -v dirt_predates_session >/dev/null 2>&1 || return 2
+  dirt_predates_session "$CWD" "$SID" "$TP"
 }
 
 contra=0; facts=""; _ca_exon=""
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
+  _ca_dp=""
   if [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
+  elif [ "$_ca_d" -eq 2 ] && _ca_dp="$(_ca_dirt_predates)" && [ -n "$_ca_dp" ]; then
+    _ca_exon="${_ca_exon}dirty-predates-session:${_ca_dp} "
   else contra=1; facts="${facts}dirty tree (${DIRTY_N} file(s)); "; fi
 fi
 if [ "$UNLANDED" -eq 1 ]; then
