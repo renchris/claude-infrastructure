@@ -207,7 +207,11 @@ ts="$(date '+%Y-%m-%d %H:%M:%S')"
 #
 #   verdict=ok        the sweep RAN and worktree-gc.sh printed its summary. removed/disposed/
 #                     branches/refusals carry that summary's numbers verbatim.        exit 0
-#   verdict=disabled  kill switch present; nothing was attempted.                     exit 0
+#   verdict=disabled  a kill switch is present; nothing was swept. TWO switches can produce this
+#                     row and the field says which: `switch=$DISABLED` is THIS wrapper's file flag
+#                     (checked in preflight — nothing is attempted at all, not even a fetch), while
+#                     `switch=janitor env=…|file=…` is worktree-gc.sh's own CC_WTGC_DISABLE, read
+#                     back off its output after this run has already fetched.        exit 0
 #   verdict=skipped   the sweep did NOT run, by design and harmlessly — another pass holds the
 #                     janitor's own lock (worktree-gc.sh:324 exits 0 with no summary). Deliberately
 #                     NOT `ok`: `ok removed=0` would be indistinguishable from a clean sweep that
@@ -443,6 +447,19 @@ summary="$(printf '%s\n' "$out" | grep -m1 '^worktree-gc: removed ')"
 case "$rc" in
   0)
     if [ -z "$summary" ]; then
+      # THE JANITOR'S OWN KILL SWITCH, read from the janitor rather than re-tested here. It has one
+      # too now (worktree-gc.sh CC_WTGC_DISABLE / CC_WTGC_DISABLE_FILE), and a disabled janitor
+      # exits 0 printing no summary — which lands in the arm two lines down as `error
+      # stage=parse`, i.e. an operator who used the switch would be paged by this file every
+      # night for using it (new-nonverdict-state-strands-its-consumers). The predicate is NOT
+      # duplicated up in preflight beside $DISABLED: the janitor is the arbiter of its own switch,
+      # and a copy of its rule here would be a second oracle to keep in sync
+      # (make-the-actuator-the-arbiter). Cost of parsing instead: this run has already fetched.
+      if printf '%s\n' "$out" | grep -q '^worktree-gc: verdict=disabled'; then
+        _jsw="$(printf '%s\n' "$out" \
+          | sed -n 's/^worktree-gc: verdict=disabled[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)"
+        verdict disabled 0 "switch=janitor ${_jsw:-unknown}"
+      fi
       if printf '%s\n' "$out" | grep -q 'another pass holds'; then
         verdict skipped 0 "reason=janitor-lock-held"
       fi

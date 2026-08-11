@@ -103,8 +103,15 @@
 #   worktree-gc.sh --prune-branches     # also delete landed worktree-less branches (-d only)
 #   worktree-gc.sh --dispose-abandoned  # also reap the DISPOSE class (branch always preserved)
 #   worktree-gc.sh --warrant <path> --reason '<why>'   # record oracle 3 for ONE path, then exit
+#   CC_WTGC_DISABLE=1 worktree-gc.sh    # KILL SWITCH: exits 0 having inspected and mutated nothing
 #
 # Env seams (all optional; the CC_WTGC_* bins exist so bats can fixture the oracles):
+#   CC_WTGC_DISABLE       KILL SWITCH. Unset or `0` is the only ENABLED reading; any other value
+#                         disables, and the pass exits 0 printing `verdict=disabled` — no git call,
+#                         no lock, no warrant, no removal.
+#   CC_WTGC_DISABLE_FILE  the same switch as a FILE, for the paths an env var cannot reach: a
+#                         launchd job inherits no shell environment (default:
+#                         ~/.claude/autonomy/worktree-gc.disabled). Set it EMPTY to ignore the file.
 #   CC_WTGC_EXCLUDE       colon-separated paths never touched (also covers nested worktrees)
 #   CC_WTGC_REPO          repo to sweep (default: the repo containing $PWD)
 #   CC_WTGC_TRUNK         landedness base (default: origin/main)
@@ -171,6 +178,51 @@ if [ -z "$WARRANT_PATH" ] && [ -n "$WARRANT_REASON" ]; then
   echo "worktree-gc: --reason is only meaningful with --warrant" >&2
   echo "$USAGE" >&2
   exit 2
+fi
+
+# ── KILL SWITCH. Checked HERE — after argv validation, above everything else — because "disabled"
+#    has to mean NOTHING HAPPENED, and every line below is already something happening: the config
+#    block shells out to `git rev-parse` (and decides the exit-2 "not inside a git repository"
+#    refusal), the warrant writer appends a TSV record, the mutex mkdir's a lock directory. A
+#    switch checked any lower would have already run git, already written, or already refused for
+#    the wrong reason. Disabled works outside a repo too, which is the property that proves the
+#    placement rather than merely asserting it.
+#
+#    TWO SPELLINGS, because neither one alone covers every path this reaper is reached by:
+#      · the ENV var covers a shell, a session, a wrapper that exports it, and the invocation
+#        hooks/git-worktree-guard.sh tells the operator to type three times (:6, :40, :57) —
+#        the one path no wrapper flag can ever gate.
+#      · the FILE covers what an env var structurally cannot: com.claude.worktree-gc-infra is a
+#        launchd job, and launchd jobs inherit no shell environment, so `export CC_WTGC_DISABLE=1`
+#        is invisible to the 04:15 sweep. The file lives on the disk that job runs from, so one
+#        `touch` stops every path (conclusion-must-reach-the-enforcing-store).
+#    The wrappers keep their own file flags (worktree-gc-infra.disabled, reso's equivalent): belt
+#    and braces on a destructive surface, and they stop the work earlier — before the fetch.
+#
+#    UNSET or `0` is the ONLY enabled reading. `1`, `true`, `false`, `off`, a typo — all disable,
+#    because this gate's ambiguity must resolve toward NOT REMOVING THINGS
+#    (gate-default-decides-failure-direction). `$HOME` is deliberately unguarded: with HOME unset
+#    this line aborts the script, which is also the safe direction — the alternative, an empty
+#    default that never matches, would silently sweep on (addon-failure-exceeds-its-blast-radius).
+DISABLE_FILE="${CC_WTGC_DISABLE_FILE-$HOME/.claude/autonomy/worktree-gc.disabled}"
+DISABLED_BY=""
+case "${CC_WTGC_DISABLE:-}" in
+  ''|0) ;;
+  *)    DISABLED_BY="env=CC_WTGC_DISABLE" ;;
+esac
+if [ -z "$DISABLED_BY" ] && [ -n "$DISABLE_FILE" ] && [ -f "$DISABLE_FILE" ]; then
+  DISABLED_BY="file=$DISABLE_FILE"
+fi
+if [ -n "$DISABLED_BY" ]; then
+  # `verdict=disabled` is a PARSEABLE TOKEN, not prose. scripts/worktree-gc-infra-run.sh reads this
+  # exact line to file its own `verdict=disabled` row; without it, a disabled janitor exits 0
+  # printing no summary line, and that wrapper's rc-0 arm files `error stage=parse
+  # reason=no-summary-line` — a false alarm every night for as long as the switch is on
+  # (new-nonverdict-state-strands-its-consumers; claimed-outcome-vs-checked-outcome).
+  echo "worktree-gc: verdict=disabled $DISABLED_BY — nothing inspected, nothing mutated."
+  echo "worktree-gc: clear that switch to re-enable. For ONE read-only look without clearing it:"
+  echo "worktree-gc:   CC_WTGC_DISABLE=0 CC_WTGC_DISABLE_FILE='' bash scripts/worktree-gc.sh --dry-run"
+  exit 0
 fi
 
 GIT_BIN="${CC_WTGC_GIT:-git}"
