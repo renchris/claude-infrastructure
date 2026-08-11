@@ -59,6 +59,33 @@ EOF
   chmod +x "$STUB/top"
 }
 
+# Build a stub `top` whose SECOND sample ALSO carries a kitty row (and a decoy `kitten`, which the
+# exact-match rule must never fold into kitty). Separate from make_top on purpose: the ten tests
+# above pin the iTerm2-era arithmetic and must keep reading a kitty-free fleet.
+make_top_kitty() { # $1=iterm_cpu $2=kitty_cpu $3=ws_cpu $4=indexing_cpu
+  cat > "$STUB/top" <<EOF
+#!/bin/bash
+cat <<'BLOCK'
+Processes: 100 total, 2 running, 98 sleeping, 500 threads
+PID    COMMAND          %CPU
+999    iTerm2           1.0
+600    kitty            1.0
+371    WindowServer     1.0
+555    mds_stores       1.0
+BLOCK
+cat <<'BLOCK'
+Processes: 100 total, 2 running, 98 sleeping, 500 threads
+PID    COMMAND          %CPU
+999    iTerm2           $1
+600    kitty            $2
+371    WindowServer     $3
+555    mds_stores       $4
+888    kitten           50.0
+BLOCK
+EOF
+  chmod +x "$STUB/top"
+}
+
 make_osascript() { # $1=panes (or "fail")
   if [ "$1" = "fail" ]; then
     printf '#!/bin/bash\nexit 1\n' > "$STUB/osascript"
@@ -290,4 +317,89 @@ EOF
   [ -f "$CENSUS" ] || false
   run bash -c "sed 's/#.*//' '$CENSUS' | grep -nE 'top .*-n 0|top .*-n0'"
   [ "$status" -ne 0 ] || false
+}
+
+# ── THE TERMINAL THE FLEET ACTUALLY RENDERS IN (2026-08-11) ───────────────────────────────────────
+# 09-adv-constants.md §2 / 02-render.md §6 D1: the render SUM matched iTerm2 + WindowServer only,
+# while every pane on the box is drawn by kitty — so the instrument was blind to exactly the
+# per-pane term its 3.5-core alarm exists to catch, and under-read by 23-26% live.
+
+@test "(xx) kitty CPU is IN the render sum — the fleet's real terminal is counted" {
+  # iTerm2 0.0 (it is gone), kitty 90.0, WindowServer 60.0 ⇒ 150.0% ⇒ 1.50 cores.
+  # Kitty-blind, the same fleet reads 0.60 — the live 2026-08-09 shape exactly.
+  make_top_kitty 0.0 90.0 60.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"render_cores\":1.50 ]] || false
+  [[ "$output" =~ \"kitty_cpu_pct\":90.0 ]] || false
+  # the decoy: top's COMMAND column also carries `kitten` at 50.0%. EXACT match, never substring —
+  # folding the short-lived helpers into kitty would inflate the sum to 2.00.
+  ! [[ "$output" =~ \"render_cores\":2.00 ]] || false
+}
+
+@test "(xxi) MUTATION CONTROL for (xx): deleting the kitty arm makes the sum under-read again" {
+  # Guards the guard. Without this, (xx) could pass on a script that hard-codes 1.50 or that counts
+  # kitty into a field nothing sums. The mutant is syntax-checked first: a malformed mutant reds
+  # everything, which reads as maximal coverage while proving nothing.
+  MUT="$BATS_TEST_TMPDIR/mut-kitty-blind.sh"
+  sed '/if (cmd == "kitty")/d' "$CENSUS" > "$MUT"
+  bash -n "$MUT" || { echo "mutant is malformed — it would red everything and prove nothing"; return 1; }
+  ! grep -q 'if (cmd == "kitty")' "$MUT" || skip "sed anchor missed; nothing mutated"
+  make_top_kitty 0.0 90.0 60.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  # CONTROL FIRST — the real script must read 1.50 here, or a difference proves nothing.
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --json --no-append
+  [[ "$output" =~ \"render_cores\":1.50 ]] || { echo "control failed: unmutated census does not read 1.50"; return 1; }
+  run env PATH="$STUB:$PATH" /bin/bash "$MUT" --json --no-append
+  [[ "$output" =~ \"render_cores\":0.60 ]] || { echo "mutation changed nothing — (xx) is not pinning the kitty arm"; return 1; }
+  ! [[ "$output" =~ \"render_cores\":1.50 ]] || false
+}
+
+@test "(xxii) WindowServer is split out as a SHARED compositor term, not billed to the terminal" {
+  # 02-render.md §6 D2: WindowServer is the whole-desktop compositor (4 displays ≈ 52 Mpx, browser
+  # at 73% CPU concurrently). Only 0.002-0.009 cores/pane of it is the terminal's. render_cores
+  # still sums both — the alarm floors were calibrated against that total — but the row must say
+  # which half is which, so nobody sheds panes at a browser.
+  make_top_kitty 0.0 90.0 60.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --json --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ \"terminal_cores\":0.90 ]] || false
+  [[ "$output" =~ \"compositor_cores\":0.60 ]] || false
+  [[ "$output" =~ \"compositor_attrib\":\"shared-desktop-not-terminal-only\" ]] || false
+  # and the two halves must reconstruct the published total — an annotation that does not add up is
+  # a second wrong number, not a fix
+  [[ "$output" =~ \"render_cores\":1.50 ]] || false
+}
+
+@test "(xxiii) the human readout names the compositor share as SHARED" {
+  # The jsonl is for machines; the operator reads the block. An honest field with a lying line above
+  # it is still a lying instrument.
+  make_top_kitty 0.0 90.0 60.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --no-append
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ "terminal cores" ]] || false
+  [[ "$output" =~ "compositor cores" ]] || false
+  [[ "$output" =~ "SHARED" ]] || false
+  [[ "$output" =~ "iTerm2 / kitty / WS" ]] || false
+}
+
+@test "(xxiv) top consumer can be kitty — the platter never points at an app that is not running" {
+  # Pre-fix, iTerm2 was the only terminal in the comparison, so on a kitty fleet the shed platter
+  # said "top consumer is iTerm2" at 0.0% while kitty drew everything.
+  make_top_kitty 0.0 90.0 60.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --json --no-append
+  [[ "$output" =~ \"top_consumer\":\"kitty\" ]] || false
+  [[ "$output" =~ \"top_consumer_pct\":90.0 ]] || false
+}
+
+@test "(xxv) when WindowServer wins it is named SHARED on the page, with panes named as NOT the lever" {
+  # 340% WS against 20% kitty ⇒ 3.60 cores ⇒ ALARM (floor 3.5), with the compositor on top. The page
+  # must not send the operator to close panes at a browser and four 5K displays.
+  make_top_kitty 0.0 20.0 340.0 1.0; make_osascript 56; make_ps "  1 0 10:00 /sbin/launchd"
+  run env PATH="$STUB:$PATH" /bin/bash "$CENSUS" --quiet
+  [ "$status" -eq 2 ] || false
+  [ -f "$CC_PAGES_DIR/render-census.page" ] || false
+  run cat "$CC_PAGES_DIR/render-census.page"
+  [[ "$output" == *"WindowServer(shared)"* ]] || false
+  [[ "$output" =~ "panes are NOT the lever" ]] || false
+  [[ "$output" == *"compositor (WindowServer, SHARED)"* ]] || false
 }

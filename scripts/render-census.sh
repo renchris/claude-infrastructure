@@ -3,9 +3,38 @@
 #
 # WHY (row 13 M8, MACHINE_CAPACITY_V2.md §11.3). Every capacity mechanism this row built so far
 # governs memory or batch CPU. The measured truth (§11.2 gu13-live axis) is that neither is the
-# stable floor: TUI render — iTerm2 + WindowServer — draws 1.76-1.91 cores and NEVER MOVES, while
-# the batch and indexing classes swing. A consumer that large with nothing watching it is the same
-# unalarmed-ceiling defect capacity-alarm.sh was built to close, one class over.
+# stable floor: TUI render — the terminal (iTerm2/kitty) + WindowServer — draws 1.76-1.91 cores and
+# NEVER MOVES, while the batch and indexing classes swing. A consumer that large with nothing
+# watching it is the same unalarmed-ceiling defect capacity-alarm.sh was built to close, one class
+# over.
+#
+# 🚨 THE RENDER SUM COUNTS kitty (added 2026-08-11, closing the FIFTH instrument artifact).
+# scaling-bottlenecks-2026-08-09/09-adv-constants.md §2 and 02-render.md §6 D1 measured this file
+# summing `iTerm2` + `WindowServer` ONLY while the fleet renders in KITTY: live, the census printed
+# `iTerm2/WindowServer: 0.0% / 33.2% → 0.33 cores` in the same minute an independent `top -l 2 -s 5`
+# read WindowServer 31.8-35.0% PLUS kitty 9.8-11.6% — a 23-26% under-read. The asymmetry is what
+# made it an artifact rather than a nit: the WindowServer share it DID see is the pane-INDEPENDENT
+# baseline, and the kitty share it could not see is the per-pane term the 3.5-core alarm exists to
+# catch. This file's *pane* arm was given a kitty branch on 2026-07-31 (:228-244); its *CPU* arm was
+# not, so two halves of one instrument disagreed about which terminal exists. They now agree.
+#
+# 🚨 WindowServer IS A SHARED DESKTOP TERM AND IS LABELLED AS ONE (same date, 02-render.md §6 D2).
+# WindowServer is the whole-desktop compositor, not a terminal component. Measured concurrently on
+# this box: `Dia 13.7% + Browser Helper 45.4% + Browser Helper 14.3%` against 4 displays totalling
+# ~52 Mpx (3× DELL S2725QC 5K@60 + built-in). 02-render.md §2 bounds the part actually attributable
+# to terminal draw at 0.002-0.009 cores/pane — i.e. 0.02-0.07 cores for 8 heavy panes — against a
+# 0.20-0.42-core FLAT term that would read identically with zero panes open. Charging 100% of it to
+# "terminal render" inflates the terminal's share with work the terminal did not do, and it is not
+# a conservative error: it is the term that made the kitty-blind number look plausible (the two
+# defects pushed in OPPOSITE directions).
+#   The fix here is the ANNOTATE arm of 02-render.md §6, not a re-keying of the alarm: render_cores
+#   still sums terminal+compositor, so the WARN/ALARM floors keep the calibration they were derived
+#   against, but the emitted row and the human output now split
+#       terminal_cores   = iTerm2 + kitty        ← the part panes can actually move
+#       compositor_cores = WindowServer          ← SHARED: displays + browser + every other client
+#   and say so at every render site. Re-keying the alarm onto terminal_cores alone would need
+#   thresholds re-derived from a measured degradation point, which no document has; publishing a
+#   number under a name that lies is what this change exists to stop.
 #
 # THIS IS AN ALARM, NOT A GATE. Identical stance to capacity-alarm.sh, for the same measured reason:
 #   · NEVER refuses, blocks, queues, sleeps, or polls-until-clear. It reports and exits (R1).
@@ -24,8 +53,9 @@
 #     CPU number can never come from two different instruments. `pgrep -n iTerm2` was tried and
 #     returned EMPTY on this box with iTerm2 plainly live (macOS pgrep matches a truncated argv).
 #   · top's COMMAND column truncates (~15-16 chars: `iTermServer-3.6.`). The names this file
-#     matches — iTerm2, WindowServer, mdworker_shared (15) — all fit whole. Matching is EXACT on
-#     the command field, never a substring, so `iTermServer` can never be counted as `iTerm2`.
+#     matches — iTerm2, kitty, WindowServer, mdworker_shared (15) — all fit whole. Matching is
+#     EXACT on the command field, never a substring, so `iTermServer` can never be counted as
+#     `iTerm2`, and the short-lived `kitten` helpers can never be counted as `kitty`.
 #
 # WHAT THE INDEXING COLUMN IS FOR (§11.9(3)). M8b's premise was FALSIFIED: the ~/.claude* dirs are
 # already index-excluded by the dot-prefix rule, `.metadata_never_index` is dead on this OS, and the
@@ -115,7 +145,7 @@ rc_bounded() { # $1=seconds, rest=command — rc 124 on expiry, which every call
 TOP_BOUND="$(awk -v s="$SAMPLE_S" 'BEGIN{printf "%d", s*3+10}')"
 TOP_OUT="$(rc_bounded "$TOP_BOUND" top -l 2 -s "$SAMPLE_S" -stats pid,command,cpu 2>/dev/null || true)"
 
-# One awk pass over the second sample. Emits: iterm_pid iterm_cpu ws_cpu idx_cpu rows
+# One awk pass over the second sample. Emits: iterm_pid iterm_cpu kitty_cpu ws_cpu idx_cpu rows
 # `command` is joined from fields 2..NF-1 so a name containing spaces cannot shift the CPU column.
 RENDER_FIELDS="$(printf '%s\n' "$TOP_OUT" | awk '
   /^Processes:/ { blk++; next }
@@ -127,26 +157,40 @@ RENDER_FIELDS="$(printf '%s\n' "$TOP_OUT" | awk '
     for (i = 2; i < NF; i++) cmd = (cmd == "" ? $i : cmd " " $i)
     rows++
     if (cmd == "iTerm2")       { ipid = $1; icpu += cpu }
+    if (cmd == "kitty")        { kcpu += cpu }
     if (cmd == "WindowServer") { wcpu += cpu }
     if (cmd == "mds" || cmd == "mds_stores" || cmd == "mdworker" || \
         cmd == "mdworker_shared" || cmd == "corespotlightd") xcpu += cpu
   }
-  END { printf "%s %.1f %.1f %.1f %d", (ipid == "" ? "0" : ipid), icpu+0, wcpu+0, xcpu+0, rows+0 }
+  END { printf "%s %.1f %.1f %.1f %.1f %d", (ipid == "" ? "0" : ipid), icpu+0, kcpu+0, wcpu+0, xcpu+0, rows+0 }
 ' 2>/dev/null || true)"
 
-ITERM_PID=""; ITERM_CPU=""; WS_CPU=""; IDX_CPU=""; TOP_ROWS=0
+ITERM_PID=""; ITERM_CPU=""; KITTY_CPU=""; WS_CPU=""; IDX_CPU=""; TOP_ROWS=0
 if [ -n "$RENDER_FIELDS" ]; then
-  # shellcheck disable=SC2086  # deliberate word-split of the 5-field awk output
+  # shellcheck disable=SC2086  # deliberate word-split of the 6-field awk output
   set -- $RENDER_FIELDS
-  ITERM_PID="${1:-0}"; ITERM_CPU="${2:-}"; WS_CPU="${3:-}"; IDX_CPU="${4:-}"; TOP_ROWS="${5:-0}"
+  ITERM_PID="${1:-0}"; ITERM_CPU="${2:-}"; KITTY_CPU="${3:-}"; WS_CPU="${4:-}"
+  IDX_CPU="${5:-}"; TOP_ROWS="${6:-0}"
 fi
 
 # NO-DATA is keyed on the SAMPLE, not on the reading. top running fine on a box where iTerm2 happens
 # not to be live is a legitimate 0.00 cores; top failing to produce a second sample asserts nothing.
 # Conflating those two would let a broken instrument report the healthiest possible number.
-RENDER_CORES=""
+#
+# THE SPLIT (02-render.md §6 D2). render_cores keeps summing BOTH classes so the WARN/ALARM floors
+# retain the calibration they were derived against — but the two halves are also emitted on their
+# own, because only one of them is a terminal cost the operator's shed levers can move:
+#   terminal_cores   iTerm2 + kitty   — panes move this
+#   compositor_cores WindowServer     — SHARED whole-desktop compositor (displays + browser + …);
+#                                       0.20-0.42 cores of it is flat and would read the same with
+#                                       zero panes open. Only 0.002-0.009 cores/pane of it is the
+#                                       terminal's.
+RENDER_CORES=""; TERM_CORES="null"; COMP_CORES="null"
 if [ "${TOP_ROWS:-0}" -gt 0 ] 2>/dev/null; then
-  RENDER_CORES="$(awk -v a="${ITERM_CPU:-0}" -v b="${WS_CPU:-0}" 'BEGIN{printf "%.2f", (a+b)/100}')"
+  RENDER_CORES="$(awk -v a="${ITERM_CPU:-0}" -v k="${KITTY_CPU:-0}" -v b="${WS_CPU:-0}" \
+    'BEGIN{printf "%.2f", (a+k+b)/100}')"
+  TERM_CORES="$(awk -v a="${ITERM_CPU:-0}" -v k="${KITTY_CPU:-0}" 'BEGIN{printf "%.2f", (a+k)/100}')"
+  COMP_CORES="$(awk -v b="${WS_CPU:-0}" 'BEGIN{printf "%.2f", b/100}')"
 fi
 IDX_CORES="null"
 [ -n "$IDX_CPU" ] && IDX_CORES="$(awk -v a="$IDX_CPU" 'BEGIN{printf "%.2f", a/100}')"
@@ -282,9 +326,14 @@ case "$MDW_SPAWNS" in ''|*[!0-9]*) MDW_SPAWNS=0 ;; esac
 # ── top consumer by name (the platter needs a NAME, not a number) ─────────────────────────────────
 TOP_NAME="unknown"; TOP_PCT="0.0"
 if [ "${TOP_ROWS:-0}" -gt 0 ] 2>/dev/null; then
-  TOP_FIELDS="$(awk -v i="${ITERM_CPU:-0}" -v w="${WS_CPU:-0}" -v x="${IDX_CPU:-0}" 'BEGIN{
+  # kitty competes here too, else the census names iTerm2 (typically 0.0%) as the top consumer on a
+  # kitty fleet — the platter would then point the operator's shed levers at an app that is not
+  # running. WindowServer keeps the `(shared)` suffix wherever it wins: it is the desktop
+  # compositor, so naming it bare invites the reader to shed panes at a browser and four displays.
+  TOP_FIELDS="$(awk -v i="${ITERM_CPU:-0}" -v k="${KITTY_CPU:-0}" -v w="${WS_CPU:-0}" -v x="${IDX_CPU:-0}" 'BEGIN{
     n="iTerm2"; v=i+0
-    if (w+0 > v) { n="WindowServer"; v=w+0 }
+    if (k+0 > v) { n="kitty"; v=k+0 }
+    if (w+0 > v) { n="WindowServer(shared)"; v=w+0 }
     if (x+0 > v) { n="indexing-class"; v=x+0 }
     printf "%s %.1f", n, v
   }')"
@@ -302,8 +351,9 @@ case "$VERDICT" in
 esac
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-JSON="$(printf '{"ts":"%s","verdict":"%s","render_cores":%s,"iterm_cpu_pct":%s,"windowserver_cpu_pct":%s,"hot_thread_pct":%s,"hot_thread_share":%s,"hot_thread_src":"ps-M-lifetime-avg","panes":%s,"sessions":%s,"indexing_cores":%s,"indexing_cpu_pct":%s,"mdworker_spawns_in_window":%s,"top_consumer":"%s","top_consumer_pct":%s,"sample_s":%s,"top_rows":%s,"warn_cores":%s,"alarm_cores":%s}' \
-  "$TS" "$VERDICT" "${RENDER_CORES:-null}" "${ITERM_CPU:-null}" "${WS_CPU:-null}" \
+JSON="$(printf '{"ts":"%s","verdict":"%s","render_cores":%s,"terminal_cores":%s,"compositor_cores":%s,"compositor_attrib":"shared-desktop-not-terminal-only","iterm_cpu_pct":%s,"kitty_cpu_pct":%s,"windowserver_cpu_pct":%s,"hot_thread_pct":%s,"hot_thread_share":%s,"hot_thread_src":"ps-M-lifetime-avg","panes":%s,"sessions":%s,"indexing_cores":%s,"indexing_cpu_pct":%s,"mdworker_spawns_in_window":%s,"top_consumer":"%s","top_consumer_pct":%s,"sample_s":%s,"top_rows":%s,"warn_cores":%s,"alarm_cores":%s}' \
+  "$TS" "$VERDICT" "${RENDER_CORES:-null}" "$TERM_CORES" "$COMP_CORES" \
+  "${ITERM_CPU:-null}" "${KITTY_CPU:-null}" "${WS_CPU:-null}" \
   "$HOT_PCT" "$HOT_SHARE" "$PANES" "$SESSIONS" "$IDX_CORES" "${IDX_CPU:-null}" \
   "$MDW_SPAWNS" "$TOP_NAME" "$TOP_PCT" "$SAMPLE_S" "${TOP_ROWS:-0}" "$WARN_CORES" "$ALARM_CORES")"
 
@@ -326,13 +376,18 @@ if [ "${CC_RENDER_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
       date +%s 2>/dev/null || echo 0
       printf 'render %s — TUI render drawing %s cores (budget %s, alarm %s)\n' \
         "$VERDICT" "${RENDER_CORES:-?}" "$WARN_CORES" "$ALARM_CORES"
+      printf 'terminal (iTerm2+kitty): %s cores  ·  compositor (WindowServer, SHARED): %s cores\n' \
+        "$TERM_CORES" "$COMP_CORES"
       printf 'top consumer: %s at %s%%  ·  panes: %s  ·  sessions: %s  ·  indexing: %s cores\n' \
         "$TOP_NAME" "$TOP_PCT" "$PANES" "$SESSIONS" "$IDX_CORES"
       printf 'shed it — in order of measured effect:\n'
       printf '  1. bin/cc-reaper --watchdog-census    (retire orphaned watchdogs + their panes)\n'
       printf '  2. /handoff the idle sessions          (each closed pane stops being drawn)\n'
-      printf '  3. top consumer is %s — if that is iTerm2, pane COUNT is the lever;\n' "$TOP_NAME"
+      printf '  3. top consumer is %s — if that is iTerm2 or kitty, pane COUNT is the lever;\n' "$TOP_NAME"
       printf '     scripts/iterm2-perf-parity.sh reports which render knobs are still adrift.\n'
+      printf '     If it is WindowServer, panes are NOT the lever: that is the whole-desktop\n'
+      printf '     compositor — displays and browsers dominate it and shedding panes moves it\n'
+      printf '     only 0.002-0.009 cores/pane (02-render.md §2).\n'
       printf 'This is an ALARM, not a gate: it never refuses a spawn. See MACHINE_CAPACITY_V2.md §11.3 M8.\n'
       printf 're-run:  %s\n' "$0"
     } > "$PAGE" 2>/dev/null || true
@@ -344,7 +399,9 @@ fi
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "render-census — $TS"
   echo "  render cores:           ${RENDER_CORES:-?}   (warn >=${WARN_CORES} · alarm >=${ALARM_CORES})"
-  echo "  iTerm2 / WindowServer:  ${ITERM_CPU:-?}% / ${WS_CPU:-?}%   (top -l 2 second sample)"
+  echo "    terminal cores:       ${TERM_CORES}   (iTerm2 + kitty — the part panes move)"
+  echo "    compositor cores:     ${COMP_CORES}   (WindowServer — SHARED desktop: displays + browser + all clients)"
+  echo "  iTerm2 / kitty / WS:    ${ITERM_CPU:-?}% / ${KITTY_CPU:-?}% / ${WS_CPU:-?}%   (top -l 2 second sample)"
   echo "  iTerm2 hot thread:      ${HOT_PCT}% (share ${HOT_SHARE} — ps -M lifetime avg, not sample)"
   echo "  panes / sessions:       ${PANES} / ${SESSIONS}"
   echo "  indexing class:         ${IDX_CORES} cores · ${MDW_SPAWNS} mdworker spawns in ${SAMPLE_S}s"
