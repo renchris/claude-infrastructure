@@ -96,6 +96,10 @@ STUB
   export IT2_WRAPPER_NO_KITTY=1
   export PATH="$STUB:$PATH"
 
+  # The session registry — the binding --source-pane is admitted on. Fixtured (never the operator's
+  # live ~/.claude/cc-registry) through the same env seam handoff-fire reads.
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+
   # --target next2 is validated against the generated account map, which resolves to a $HOME-relative
   # config dir and requires it to EXIST — so the fixture must provide it or every fire dies on
   # "bad target" before reaching any spawn arm.
@@ -273,6 +277,19 @@ no_raw_teardown() {
   grep -q -- 'self-close --successor w0t0p1:AAAA-SPLIT --transplanted-source' "$HF_LOG"
 }
 
+@test "DEFAULT PATH BYTE-IDENTICAL: a self-close carries the same four words it always has" {
+  # The remote form below APPENDS to this invocation, so the risk it introduces is that the ordinary
+  # case — a session closing ITSELF — quietly starts carrying something new. Asserted as EQUALITY on
+  # the whole recorded argv rather than as `grep -q` + absences: a grep for the four words passes on
+  # a line that also carries a fifth, which is exactly the drift this must catch.
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="w0t0p1:AAAA-SPLIT"
+  fire_tx "clos0018-0000-0000-0000-000000000018" --close-source
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HF_LOG")" = "self-close --successor w0t0p1:AAAA-SPLIT --transplanted-source" ] \
+    || { echo "argv drifted: $(cat "$HF_LOG")"; false; }
+}
+
 @test "the close NEVER passes --successor-assume-engaged or --allow-origin-close" {
   # Both would work and both are wrong. --allow-origin-close spends a safety gate on a case that can
   # prove it is safe; --successor-assume-engaged skips the assistant-turn check, and a transplant
@@ -288,4 +305,92 @@ no_raw_teardown() {
   gone 'allow-origin-close' "$HF_LOG"
   gone 'successor-assume-engaged' "$HF_LOG"
   gone 'terminal' "$HF_LOG"
+}
+
+# ── 5. --source-pane: retiring a pane OTHER than the invoker ─────────────────────────────────────
+#
+# THE CASE THE FLAG EXISTS FOR, measured 2026-08-10. Three sessions were transplanted off next3
+# while next3 sat at 100% of its 5-hour window. A session at its limit CANNOT EXECUTE A TURN, so it
+# cannot run the command that retires it — the recovery has to be driven from a THIRD pane, where
+# --close-source alone closes the DRIVER. So the flag was not used and three husk panes were left
+# standing: the operator asked for this behaviour explicitly and did not get it.
+#
+# WHY THE NAIVE VERSION WAS CORRECTLY REFUSED, and what makes this one safe: letting a caller assert
+# "pane P holds session X" with nothing tying P to X retires an innocent pane that merely got named.
+# The registry row is the tie, from an independent producer (hooks/session-start.sh) and with an
+# existing consumer (handoff-fire's successor_pin reads the SAME row to prove the successor half of
+# this very close). Every test below but the first is a REFUSAL, because a binding nothing can fail
+# is not a binding.
+
+reg_row() { # $1=pane · $2=session_id (omit for a row that names none)
+  if [ -n "${2:-}" ]; then
+    printf '{"paneUUID":"%s","name":"n","cwd":"%s","account":"claude-tertiary","pid":4242,"session_id":"%s"}\n' \
+      "$1" "$BATS_TEST_TMPDIR/plain" "$2" > "$CC_REGISTRY_DIR/$1.json"
+  else
+    printf '{"paneUUID":"%s","name":"n","cwd":"%s","account":"claude-tertiary","pid":4242}\n' \
+      "$1" "$BATS_TEST_TMPDIR/plain" > "$CC_REGISTRY_DIR/$1.json"
+  fi
+}
+
+@test "--source-pane: a registry row naming the transplanted session admits closing ANOTHER pane" {
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="w0t0p1:AAAA-SPLIT"
+  local sid="clos0013-0000-0000-0000-000000000013"
+  reg_row "w0t0p9:HUSK" "$sid"
+  fire_tx "$sid" --close-source --source-pane "w0t0p9:HUSK"
+  [ "$status" -eq 0 ]
+  # The pair is what handoff-fire re-checks; passing only the pane would let the registry supply
+  # whatever session that pane happens to hold, which is not a check.
+  grep -q -- "self-close --successor w0t0p1:AAAA-SPLIT --transplanted-source --source-pane w0t0p9:HUSK --source-session $sid" "$HF_LOG"
+  gone 'allow-origin-close' "$HF_LOG"
+  gone 'successor-assume-engaged' "$HF_LOG"
+  no_raw_teardown
+}
+
+@test "CONTROL A: the row names a DIFFERENT session — refused, and refused BEFORE the fire" {
+  # The whole hazard in one test. Without the binding this pane id would simply be passed through
+  # and a live, unrelated session retired. The refusal also lands before any work: a transplant that
+  # has already moved the transcript cannot be un-fired by a later refusal.
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="w0t0p1:AAAA-SPLIT"
+  reg_row "w0t0p9:HUSK" "SOMEONE-ELSE-0000-0000-000000000000"
+  fire_tx "clos0014-0000-0000-0000-000000000014" --close-source --source-pane "w0t0p9:HUSK"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"does NOT hold session clos0014"* ]] || { echo "$output"; false; }
+  [ ! -s "$HF_LOG" ]
+  [ ! -s "$OSA_LOG" ]
+  no_raw_teardown
+}
+
+@test "CONTROL B: no registry row for that pane — refused, nothing closed" {
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="w0t0p1:AAAA-SPLIT"
+  fire_tx "clos0015-0000-0000-0000-000000000015" --close-source --source-pane "w0t0p9:NOROW"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"has no session-registry row"* ]] || { echo "$output"; false; }
+  [ ! -s "$HF_LOG" ]
+  [ ! -s "$OSA_LOG" ]
+  no_raw_teardown
+}
+
+@test "CONTROL C: the row exists but names no session_id — refused, never guessed at" {
+  # A row without one records that a pane exists, not which session lives in it. successor_pin
+  # refuses the same row for the same reason one gate later (handoff-fire.sh:2192).
+  export KITTY_WINDOW_ID=31 IT2_WRAPPER_NO_KITTY=1
+  export ITERM_SESSION_ID="w0t0p0:31" OSA_OUT="w0t0p1:AAAA-SPLIT"
+  reg_row "w0t0p9:HUSK"
+  fire_tx "clos0016-0000-0000-0000-000000000016" --close-source --source-pane "w0t0p9:HUSK"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"names no .session_id"* ]] || { echo "$output"; false; }
+  [ ! -s "$HF_LOG" ]
+  [ ! -s "$OSA_LOG" ]
+  no_raw_teardown
+}
+
+@test "--source-pane without --close-source is refused: it names the pane the close would retire" {
+  reg_row "w0t0p9:HUSK" "clos0017-0000-0000-0000-000000000017"
+  fire_tx "clos0017-0000-0000-0000-000000000017" --source-pane "w0t0p9:HUSK"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs --close-source"* ]] || { echo "$output"; false; }
+  [ ! -s "$HF_LOG" ]
 }

@@ -7,6 +7,7 @@
 #                      [--sid SID] [--config-dir DIR] [--cwd PATH]
 #                      [--context FILE] [--launch|--print-only]
 #                      [--no-transplant] [--keep-source] [--force] [--close-source]
+#                      [--source-pane PANE-ID]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
@@ -22,6 +23,13 @@
 # resolves it from the model-config SSOT (versions.opus_latest), so there is exactly one copy of that
 # perishable fact in the tree. A `claude-*` id is passed through verbatim, for a caller pinning a
 # generation the current default is not.
+#
+# --source-pane <id>: with --close-source, retire THAT pane instead of this one — the form the
+# overnight case actually needs. A session at 100% of its window cannot execute a turn, so the husk
+# cannot run its own close and the recovery is driven from a third pane; --close-source alone there
+# would close the driver. Admitted ONLY when ~/.claude/cc-registry/<id>.json independently names the
+# same session id being transplanted (--sid). Missing row, no .session_id, or a different session
+# REFUSES — the caller states the pairing, the registry proves it.
 #
 # --close-source: after the fire, retire THIS pane into the successor via
 # `handoff-fire.sh self-close --successor <id> --transplanted-source`. Without it the source pane
@@ -108,6 +116,7 @@ lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
 LR="$HOME/.claude/scripts/limit-recover"
 TARGET="auto" MODEL="opus" EFFORT="" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0
+SOURCE_PANE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
@@ -123,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --keep-source) KEEP_SOURCE=1; shift ;;
     --force) FORCE=1; shift ;;
     --close-source) CLOSE_SOURCE=1; shift ;;
+    --source-pane) SOURCE_PANE="$2"; shift 2 ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
@@ -140,6 +150,41 @@ if [[ $CLOSE_SOURCE -eq 1 ]]; then
   # correctly, and only after this pane had already fired. Say so now.
   if [[ $NO_TRANSPLANT -eq 1 ]]; then
     echo "lr-handoff: --close-source is incompatible with --no-transplant — the close is admitted on the transplant tombstone, which --no-transplant never writes" >&2; exit 2
+  fi
+fi
+# --source-pane retires a pane OTHER than this one. THE CASE THE FLAG EXISTS FOR (measured
+# 2026-08-10): three sessions were transplanted off next3 while next3 sat at 100% of its 5-hour
+# window. A session at its limit cannot execute a turn, so it cannot run the command that closes it
+# — the transplant has to be driven from a THIRD pane, where --close-source alone would have closed
+# the DRIVER. It was not used, and three husk panes were left standing.
+#
+# THE BINDING, and why the naive version of this flag was correctly refused: letting a caller assert
+# "pane P holds session X" with nothing tying P to X closes an innocent pane that merely got named.
+# The evidence already exists and already has a consumer — ~/.claude/cc-registry/<pane>.json, written
+# by hooks/session-start.sh, carries that pane's own session_id, and handoff-fire's successor_pin
+# reads exactly this row to prove the SUCCESSOR half of this same close. So the pairing is checked,
+# never asserted: the row for P must name the sid being transplanted.
+#
+# THIS COPY IS AN ADVANCE CHECK, NOT THE GATE. handoff-fire.sh re-runs it at the close and is the
+# arbiter (a predicate re-implemented outside its actuator drifts from it — so this one deliberately
+# reads the SAME row, the SAME field, and refuses on the SAME three states). Its only job is the one
+# the two preconditions above already do: a mismatch is decidable now, and refusing now costs a
+# message, while refusing at the end costs a transplant that has already moved the transcript.
+if [[ -n "$SOURCE_PANE" ]]; then
+  if [[ $CLOSE_SOURCE -ne 1 ]]; then
+    echo "lr-handoff: --source-pane names the pane --close-source should retire, so it needs --close-source" >&2; exit 2
+  fi
+  LRH_REG="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$SOURCE_PANE.json"
+  if [[ ! -f "$LRH_REG" ]]; then
+    echo "lr-handoff: --source-pane $SOURCE_PANE has no session-registry row ($LRH_REG) — that row is the only thing tying a named pane to the session it holds, so there is nothing here to prove this is the transplanted session's pane" >&2; exit 2
+  fi
+  command -v jq >/dev/null 2>&1 || { echo "lr-handoff: --source-pane needs jq to read $LRH_REG — unreadable evidence is not evidence" >&2; exit 2; }
+  LRH_REG_SID="$(jq -r '.session_id // empty' "$LRH_REG" 2>/dev/null || true)"
+  if [[ -z "$LRH_REG_SID" ]]; then
+    echo "lr-handoff: the registry row for pane $SOURCE_PANE names no .session_id — it records that a pane exists, not which session lives in it" >&2; exit 2
+  fi
+  if [[ "$LRH_REG_SID" != "$SID" ]]; then
+    echo "lr-handoff: REFUSED — pane $SOURCE_PANE does NOT hold session ${SID:0:8}; the registry says it holds ${LRH_REG_SID:0:8} ($LRH_REG). Closing it would retire a live session that merely got named." >&2; exit 2
   fi
 fi
 # Reject an unknown effort HERE rather than let it reach the launcher. %q already makes the
@@ -520,16 +565,24 @@ if [[ $CLOSE_SOURCE -eq 1 ]]; then
     { echo "lr-handoff: --close-source could NOT identify the pane it created — this pane stays OPEN."
       echo "lr-handoff: the recovery itself fired; only the close is unresolved. Find the successor's"
       echo "lr-handoff: pane id, then run:"
-      echo "  $HF self-close --successor <successor-pane-id> --transplanted-source"
+      echo "  $HF self-close --successor <successor-pane-id> --transplanted-source${SOURCE_PANE:+ --source-pane $SOURCE_PANE --source-session $SID}"
     } >&2
     exit 3
   fi
   if [[ ! -x "$HF" ]]; then
     { echo "lr-handoff: --close-source cannot reach handoff-fire.sh (looked beside this script, in \$CLAUDE_CONFIG_DIR/scripts, and in ~/.claude/scripts)."
       echo "lr-handoff: this pane stays OPEN. Run the close by hand once it is reachable:"
-      echo "  <handoff-fire.sh> self-close --successor $NEW_PANE --transplanted-source"
+      echo "  <handoff-fire.sh> self-close --successor $NEW_PANE --transplanted-source${SOURCE_PANE:+ --source-pane $SOURCE_PANE --source-session $SID}"
     } >&2
     exit 3
+  fi
+  # THE DEFAULT PATH IS UNCHANGED, byte for byte: with no --source-pane this is the same exec with
+  # the same four words it has always had. The remote form APPENDS the pair handoff-fire admits the
+  # other pane on, and nothing else — same subcommand, same class flag, still never
+  # --allow-origin-close and still never --successor-assume-engaged.
+  if [[ -n "$SOURCE_PANE" ]]; then
+    echo "lr-handoff: --close-source — retiring pane $SOURCE_PANE (registry-bound to session ${SID:0:8}) into successor $NEW_PANE via handoff-fire self-close" >&2
+    exec "$HF" self-close --successor "$NEW_PANE" --transplanted-source --source-pane "$SOURCE_PANE" --source-session "$SID"
   fi
   echo "lr-handoff: --close-source — retiring this pane into successor $NEW_PANE via handoff-fire self-close" >&2
   exec "$HF" self-close --successor "$NEW_PANE" --transplanted-source

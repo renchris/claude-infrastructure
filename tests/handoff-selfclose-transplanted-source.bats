@@ -72,11 +72,21 @@ done
 [ -n "$uuid" ] && printf '%s' "TTY-$uuid"
 exit 0
 SH
-  # only `git rev-parse --is-inside-work-tree` is hit — report "not a work tree" so the dirty-tree
-  # guard is skipped, hermetically and independently of this test's CWD.
+  # git, per DIRECTORY. The default answer is still "not a work tree", so the dirty-tree guard is
+  # skipped hermetically and independently of this test's CWD, exactly as before. What is new is that
+  # the answer is keyed on the directory `-C` names (or $PWD when it names none): a marker file makes
+  # one tree a CLEAN work tree and another a DIRTY one, which is what lets a test tell "the guard read
+  # the SOURCE pane's worktree" from "the guard read the driver's". No marker anywhere ⇒ every
+  # pre-existing test sees byte-identical behaviour.
   cat > "$SHIM/git" <<'SH'
 #!/usr/bin/env bash
-[ "${1:-}" = rev-parse ] && exit 1
+dir=""
+if [ "${1:-}" = "-C" ]; then dir="${2:-}"; shift 2; fi
+[ -n "$dir" ] || dir="$PWD"
+case "${1:-}" in
+  rev-parse) [ -f "$dir/.GITDIRTY" ] || [ -f "$dir/.GITCLEAN" ] || exit 1; exit 0 ;;
+  status)    [ -f "$dir/.GITDIRTY" ] && printf ' M tracked-file\n'; exit 0 ;;
+esac
 exit 0
 SH
   # TWO distinct ps forms, and the shim must not conflate them (same split as the assignee suite):
@@ -86,7 +96,8 @@ SH
   # teammates" — which is what every test here but the class-exclusivity one wants.
   PS_ARGV_DIR="$BATS_TEST_TMPDIR/argv"; mkdir -p "$PS_ARGV_DIR"
   PS_COMM_DIR="$BATS_TEST_TMPDIR/comm"; mkdir -p "$PS_COMM_DIR"
-  export PS_ARGV_DIR PS_COMM_DIR
+  PS_PIDS_DIR="$BATS_TEST_TMPDIR/pids"; mkdir -p "$PS_PIDS_DIR"
+  export PS_ARGV_DIR PS_COMM_DIR PS_PIDS_DIR
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
 tty="" pid="" want=""
@@ -94,12 +105,31 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -t) tty="${2:-}"; shift 2 ;;
     -p) pid="${2:-}"; shift 2 ;;
-    -o) case "${2:-}" in command=) want=argv ;; comm=) want=comm ;; esac; shift 2 ;;
+    -o) case "${2:-}" in command=) want=argv ;; comm=) want=comm ;; tty=) want=tty ;; pid=) want=pidlist ;; esac; shift 2 ;;
+    -axo) want=ptree; shift 2 ;;
     *)  shift ;;
   esac
 done
 if [ "$want" = argv ] && [ -n "$tty" ]; then
   [ -f "$PS_ARGV_DIR/$tty" ] && cat "$PS_ARGV_DIR/$tty"
+  exit 0
+fi
+if [ "$want" = pidlist ] && [ -n "$tty" ]; then
+  # `ps -o pid= -t <tty>` — pane_cc_state's roots. Empty by default (a tty we cannot read ⇒
+  # `unknown`, the fail-safe verdict), so only a test that plants a pid changes any behaviour.
+  [ -f "$PS_PIDS_DIR/$tty" ] && cat "$PS_PIDS_DIR/$tty"
+  exit 0
+fi
+if [ "$want" = ptree ]; then
+  # `ps -axo pid=,ppid=` — the closure pane_cc_state walks from those roots.
+  [ -n "${PS_PTREE:-}" ] && printf '%s\n' "$PS_PTREE"
+  exit 0
+fi
+if [ "$want" = tty ]; then
+  # `ps -o tty= -p <pids>` — what own_ancestry_ttys reads to decide whether a pane is THIS
+  # session's. Silent unless a test opts in, so the default posture stays pane_ownership=unknown
+  # (which verify_self_pane deliberately does not refuse) exactly as before this arm existed.
+  [ -n "${PS_TTY_OUT:-}" ] && printf '%s\n' "$PS_TTY_OUT"
   exit 0
 fi
 if [ "$want" = comm ] && [ -n "$pid" ]; then
@@ -368,11 +398,13 @@ spent_stamp() {
   # into the blunt override. The override's own uses are unchanged and stay countable.
   run grep -c 'SC_ALLOW_ORIGIN_CLOSE' "$HF"
   [ "$status" -eq 0 ]
-  # 1 init + 1 argparse + 3 refusal branches (stale · spent · absent) — the pre-existing set, with
-  # `spent` arriving from trunk's CLOSE_INTEGRITY work, not from this class. THIS CLASS ADDS NONE,
-  # which is the whole assertion. Was 4 before that landed; bumped at the rebase, deliberately and
-  # against the diff, never to make a red go away.
-  [ "$output" = "5" ] || { echo "allow-origin-close usages moved: $output (expected 5)"; false; }
+  # 1 init + 1 argparse + 4 refusal branches (stale · spent · absent-repairable · absent) — the
+  # pre-existing set, with `spent` arriving from trunk's CLOSE_INTEGRITY work and the SECOND `absent`
+  # branch from the stamp-REPAIR work (item c163f42390a3) that landed after it. THIS CLASS ADDS NONE,
+  # which is the whole assertion. Was 4, then 5; bumped to 6 deliberately and against the diff —
+  # measured on pristine origin/main, where this test was already RED and the repair branch at :5011
+  # is the sixth usage. Never bumped to make a red go away.
+  [ "$output" = "6" ] || { echo "allow-origin-close usages moved: $output (expected 6)"; false; }
   # and the new path never mentions it
   run bash -c "sed -n '/TRANSPLANTED-SOURCE PATH/,/^  fi\$/p' '$HF' | grep -c 'ALLOW_ORIGIN_CLOSE'"
   [ "$output" = "0" ] || { echo "the transplanted-source block reaches for the override"; false; }
@@ -391,9 +423,259 @@ spent_stamp() {
   # half-added case: taking either side wholesale gives a green rebase and a gate where one branch
   # still asks the old single-class question. Bump the count deliberately when a site is added, never
   # to make a red go away.
+  # 3 → 4 (`spent`, CLOSE_INTEGRITY) → 5 (the stamp-REPAIR refusal at :5011, item c163f42390a3, which
+  # landed WITHOUT bumping this literal and left the suite red on trunk — measured on pristine
+  # origin/main before this change). Bumped against that diff, having read the site.
   run grep -c '"\$SC_CLASS_EXEMPT" = 0' "$HF"
-  [ "$output" = "4" ] || { echo "expected 4 class-gated sites reading the predicate, got $output"; false; }
+  [ "$output" = "5" ] || { echo "expected 5 class-gated sites reading the predicate, got $output"; false; }
   # and no site still spells the old single-class test
   run grep -c 'SC_ORIGIN_CLASS" != "assignee"' "$HF"
   [ "$output" = "0" ] || { echo "a class-gated site still tests only for 'assignee'"; false; }
+}
+
+# ── 8. THE REMOTE FORM — the husk cannot close ITSELF (item c5d25ebe630b) ────────────────────────
+#
+# THE CASE THE WHOLE CLASS WAS BUILT FOR, and the one it could not reach. Measured 2026-08-10: three
+# sessions were transplanted off next3 while next3 sat at 100% of its 5-hour window. A session at its
+# limit CANNOT EXECUTE A TURN, so it can never run the command that retires it — the recovery is
+# driven from a THIRD pane, and `self-close` there closes the DRIVER. So the flag was not used and
+# three husk panes were left standing.
+#
+# WHAT MAKES NAMING ANOTHER PANE SAFE, given that verify_self_pane refuses exactly that. The gate
+# under it is not "is this pane mine" — that is a PROXY for *does this pane hold the session this
+# close is about*, and the process tree is only ever evidence a session has about ITSELF. For a pane
+# the caller merely names it proves nothing (not-mine is equally true of the husk and of a bystander),
+# which is why an unbacked assertion would retire an innocent pane. The registry row is independent
+# evidence of the pairing, from a producer with no stake in this close (hooks/session-start.sh) and
+# with an existing consumer (successor_pin reads the same row for the successor half of this close).
+#
+# EVERY TEST BELOW BUT THE FIRST IS A REFUSAL, and the last three prove the six preconditions still
+# bind in remote mode ON THE SOURCE SESSION'S OWN EVIDENCE — its tombstone, found across the accounts,
+# and the config dir derived from where that tombstone sits, never the driver's env.
+
+remote_setup() {   # the driver is a DIFFERENT account and a DIFFERENT session than the husk
+  SRC_CFG="$CLAUDE_CONFIG_DIR"
+  DRIVER_CFG="$BATS_TEST_TMPDIR/cfg-driver"; mkdir -p "$DRIVER_CFG/projects"
+  export CC_PROJECTS_DIRS="$SRC_CFG/projects $DRIVER_CFG/projects"
+  export CLAUDE_CONFIG_DIR="$DRIVER_CFG"
+  # If ANY of the six preconditions still read the invoker's env, this sid is what they would find —
+  # a session with no tombstone anywhere. Admission below therefore proves the source's own sid was
+  # used, rather than merely that the path ran.
+  export CLAUDE_CODE_SESSION_ID="dr1v3r00-0000-4000-8000-000000000000"
+}
+
+src_row() {        # $1 = the session the registry says lives in the source pane (omit ⇒ no such field)
+  if [ -n "${1:-}" ]; then
+    printf '{"paneUUID":"%s","cwd":"%s","account":"claude-tertiary","pid":4242,"session_id":"%s"}\n' \
+      "$SRC_PANE" "${SRC_ROW_CWD:-$PWD}" "$1" > "$CC_REGISTRY_DIR/$SRC_PANE.json"
+  else
+    printf '{"paneUUID":"%s","cwd":"%s","account":"claude-tertiary","pid":4242}\n' \
+      "$SRC_PANE" "${SRC_ROW_CWD:-$PWD}" > "$CC_REGISTRY_DIR/$SRC_PANE.json"
+  fi
+}
+
+close_remote() {   # NOTE: no --session-id — the source pane is named by --source-pane alone
+  run bash "$HF" self-close --dry-run --source-pane "$SRC_PANE" --source-session "$SESS" "$@"
+}
+
+@test "remote: the registry row binds pane→session, and the class is ADMITTED on the SOURCE's evidence" {
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [[ "$output" == *"is PROVEN to hold session ${SESS:0:8} by its registry row"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"transplanted-source close AUTHORIZED"* ]] || { echo "$output"; false; }
+  # The sid in the authorisation is the SOURCE's, not the driver's — the env-vs-argument proof.
+  [[ "$output" == *"session ${SESS:0:8} was handed off to $TARGET_CFG"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"dr1v3r00"* ]] || { echo "the driver's own session leaked into the close: $output"; false; }
+  # and it got there without the blunt override, exactly like the local form
+  [[ "$output" != *"--allow-origin-close"* ]] || { echo "$output"; false; }
+}
+
+@test "remote CONTROL: the row names a DIFFERENT session — REFUSED, nothing closed" {
+  # The hazard the naive version of this flag was correctly refused over: an unbacked "pane P holds
+  # session X" retires a live session that merely got named.
+  mk_transplant
+  src_row "9999ffff-0000-4000-8000-999999999999"
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"does NOT hold session ${SESS:0:8}"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"the registry says that pane holds 9999ffff"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"AUTHORIZED"* ]] || { echo "$output"; false; }
+}
+
+@test "remote CONTROL: no registry row for the named pane — REFUSED" {
+  mk_transplant
+  rm -f "$CC_REGISTRY_DIR/$SRC_PANE.json"
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no session-registry row for pane $SRC_PANE"* ]] || { echo "$output"; false; }
+}
+
+@test "remote CONTROL: the row carries no .session_id — REFUSED, never guessed at" {
+  mk_transplant
+  src_row
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"names no .session_id"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: --source-pane is admissible ONLY with --transplanted-source" {
+  # Without the class this would be a general-purpose 'close that pane', which self-close is
+  # deliberately not: the justification for closing someone else's pane is that it is a husk over a
+  # session being carried elsewhere, and only the class establishes that.
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  close_remote --successor "$SUCCESSOR"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"admissible ONLY with --transplanted-source"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: the pane and the session are a PAIR — half of it is refused" {
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  run bash "$HF" self-close --dry-run --source-pane "$SRC_PANE" --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"are a PAIR"* ]] || { echo "$output"; false; }
+  run bash "$HF" self-close --dry-run --source-session "$SESS" --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"are a PAIR"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: --source-pane and --session-id both name the pane to close — refused, not merged" {
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  run bash "$HF" self-close --dry-run --session-id "$SRC_PANE" \
+      --source-pane "$SRC_PANE" --source-session "$SESS" --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"both name the pane to close"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: precondition (4) reads the config dir the TOMBSTONE sits in, not the driver's" {
+  # The tombstone hands the session back to the SOURCE account — not a transplant, so nothing is
+  # carrying it. A build that compared .handed_off_to against the DRIVER's config dir would see two
+  # different paths and admit this close, retiring a session outright. That is what this reddens on.
+  mk_transplant "$CLAUDE_CONFIG_DIR"
+  src_row "$SESS"
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"hands this session off to THIS SAME config dir"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: precondition (5) still binds — a released split-brain lock refuses the close" {
+  mk_transplant
+  rm -f "$LOCK"
+  src_row "$SESS"
+  remote_setup
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"split-brain lock is gone"* ]] || { echo "$output"; false; }
+}
+
+@test "remote CONTROL: the tombstone is found by SEARCHING the accounts, not by luck" {
+  # Drop the source account from the search list and the same fixture must refuse. Without this the
+  # admission test could be passing on a build that still globbed one config dir and happened to be
+  # pointed at the right one.
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  export CC_PROJECTS_DIRS="$DRIVER_CFG/projects"
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"has NO transplant tombstone"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"looked for: $DRIVER_CFG/projects/*/$SESS.HANDOFF.json"* ]] || { echo "$output"; false; }
+}
+
+@test "remote: the self-identity gate is REPLACED by the binding — a not-mine pane is not refused" {
+  # THE SITE THIS PINS, and why the skip is a correctness fix rather than a shortcut. verify_self_pane
+  # asks the process tree "is this pane mine". For a pane the caller NAMES that answer is always
+  # not-mine — equally for the husk and for a bystander — so the gate cannot distinguish them, and it
+  # does not merely refuse: on a DEFAULTED id it ADOPTS, rewriting the target to the pane this
+  # process actually lives in. Left in place, the remote form would therefore retarget itself at the
+  # DRIVER and close the pane running the recovery, which is the whole defect inverted.
+  #
+  # The default fixture cannot show this: with no tty answer own_ancestry_ttys is empty,
+  # pane_ownership returns `unknown`, and `unknown` is deliberately not a refusal — so the gate is a
+  # no-op either way and a mutant that re-enables it reddens nothing. PS_TTY_OUT supplies the
+  # ancestry tty, which makes the verdict a real not-mine.
+  mk_transplant
+  src_row "$SESS"
+  remote_setup
+  export PS_TTY_OUT="ttys999"                 # this process's tty — NOT the source pane's
+  close_remote --successor "$SUCCESSOR" --transplanted-source
+  [[ "$output" == *"transplanted-source close AUTHORIZED"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"is NOT this session's pane"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"self-identity CORRECTED"* ]] || { echo "the gate retargeted the close at the driver: $output"; false; }
+}
+
+@test "CONTROL: the LOCAL form still runs the self-identity gate on that same fixture" {
+  # The test above must not be readable as "the gate was deleted". Same PS_TTY_OUT, same pane, no
+  # --source-pane: the gate runs, reads not-mine, and refuses — so the skip is scoped to the class
+  # and the ordinary path is untouched.
+  mk_transplant
+  export PS_TTY_OUT="ttys999"
+  close --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is NOT this session's pane"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"AUTHORIZED"* ]] || { echo "$output"; false; }
+}
+
+# ── 9. THE CWD-SCOPED GUARDS FOLLOW THE SUBJECT, NOT THE CALLER ──────────────────────────────────
+#
+# The dirty-tree refusal asks "is the tree of the session about to evaporate holding un-persisted
+# work". It asked it of $PWD — the same tree only while the closer IS the closed. A driver mid-edit
+# is the NORMAL state of the pane driving a recovery, so left alone this guard would refuse most
+# real remote closes over perfectly clean husks; and a genuinely dirty husk would pass on the
+# driver's cleanliness. The two tests below drive both directions from the same fixture, which is
+# what makes them a pair rather than one assertion stated twice.
+#
+# Reaching the guard at all needs the successor gate satisfied, which is why this section carries
+# more fixture than the rest: a pid on the successor's tty, a process tree that reaches it, and a
+# `comm` that reads as CC. --successor-assume-engaged skips ONLY the transcript half; it is passed
+# here because this section is about the guard BELOW that gate, and the lr-handoff contract that
+# forbids the flag is asserted in its own suite.
+
+successor_is_live() {
+  printf '5150\n' > "$PS_PIDS_DIR/TTY-$SUCCESSOR"
+  export PS_PTREE="5150 1"
+  printf 'claude\n' > "$PS_COMM_DIR/5150"
+}
+
+@test "remote: the dirty guard reads the SOURCE pane's worktree — a dirty DRIVER does not block it" {
+  DRIVER_WT="$BATS_TEST_TMPDIR/driver-wt"; mkdir -p "$DRIVER_WT"; : > "$DRIVER_WT/.GITDIRTY"
+  SRC_WT="$BATS_TEST_TMPDIR/src-wt";       mkdir -p "$SRC_WT";    : > "$SRC_WT/.GITCLEAN"
+  mk_transplant
+  SRC_ROW_CWD="$SRC_WT" src_row "$SESS"
+  remote_setup
+  successor_is_live
+  cd "$DRIVER_WT"
+  close_remote --successor "$SUCCESSOR" --transplanted-source --successor-assume-engaged
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"refusing self-close: dirty git tree"* ]] || { echo "$output"; false; }
+  # …and the close it planned is on the SOURCE pane. This is also the assertion that the retarget
+  # survived pane resolution: the default one line under it substitutes THIS process's own pane for
+  # an empty value, so a lost retarget prints (or closes) the driver instead.
+  [[ "$output" == *"pane:      $SRC_PANE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"the SOURCE pane's own worktree $SRC_WT"* ]] || { echo "$output"; false; }
+}
+
+@test "remote CONTROL: a dirty SOURCE worktree DOES block it — the guard was moved, not removed" {
+  # Without this the test above would be equally green on a build that simply deleted the guard.
+  DRIVER_WT="$BATS_TEST_TMPDIR/driver-wt"; mkdir -p "$DRIVER_WT"; : > "$DRIVER_WT/.GITCLEAN"
+  SRC_WT="$BATS_TEST_TMPDIR/src-wt";       mkdir -p "$SRC_WT";    : > "$SRC_WT/.GITDIRTY"
+  mk_transplant
+  SRC_ROW_CWD="$SRC_WT" src_row "$SESS"
+  remote_setup
+  successor_is_live
+  cd "$DRIVER_WT"
+  close_remote --successor "$SUCCESSOR" --transplanted-source --successor-assume-engaged
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refusing self-close: dirty git tree in $SRC_WT"* ]] || { echo "$output"; false; }
 }
