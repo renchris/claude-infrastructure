@@ -447,7 +447,20 @@ dirt_landed() { # <path> → 0 iff EVERY dirty path is byte-identical on $TRUNK;
   # ship-backup-reap.sh's predicate, including its bias: ANY uncertainty KEEPS. This function only
   # ever removes the dirty rung's VETO; every liveness/ownership gate below it still runs, and the
   # removal itself needs --dispose-landed-dirt on top.
-  local path="$1" porc ent st p tb wb
+  #
+  # TWO COPIES, NOT ONE — the INDEX is the second, and `hash-object` on the working file is blind to
+  # it (ruled 2026-08-11 while disposing this class over the live fleet, backlog 82dfe711cd09). The
+  # 32 candidates were unanimous — one artifact set (the recycle-banner four), staged `A ` in 30 and
+  # untracked in 2, every blob byte-identical to origin/main — so the hole below fired ZERO times and
+  # is LATENT, not active. It is still a hole in a destroying predicate: at status `AM`/`MM` the index
+  # holds a blob the working file does not, `clear_redundant_dirt`'s `git reset` drops it, and it is
+  # then reachable from no ref and prunable. That is precisely the "staged bytes sit on no ref" trap
+  # this whole class was filed for — the working file's copy is simply not the copy at risk.
+  # The rule is REACHABILITY, never equality-with-trunk: a plain unstaged edit (` M`) legitimately
+  # carries an index blob equal to HEAD and unequal to trunk, and demanding trunk there would KEEP
+  # every such tree forever. So a staged blob passes iff it is the trunk's or this HEAD's — HEAD
+  # because the branch is preserved by every removal path here, which is what makes it durable.
+  local path="$1" porc ent st p tb wb ib hb
   DIRT_BLOCKER=""
   porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" || { DIRT_BLOCKER="status unreadable"; return 1; }
   while IFS= read -r ent; do
@@ -465,6 +478,14 @@ dirt_landed() { # <path> → 0 iff EVERY dirty path is byte-identical on $TRUNK;
     wb="$("$GIT_BIN" -C "$path" hash-object -- "$path/$p" 2>/dev/null)"
     [ -n "$wb" ] || { DIRT_BLOCKER="unhashable: $p"; return 1; }
     [ "$wb" = "$tb" ] || { DIRT_BLOCKER="differs from $TRUNK: $p"; return 1; }
+    # `ls-files -s` prints `<mode> <sha> <stage>\t<path>`; unmerged entries would print several rows,
+    # and those already returned above. An untracked path has no index entry at all ⇒ nothing staged
+    # ⇒ nothing this rung can lose, and the empty read correctly skips it.
+    ib="$("$GIT_BIN" -C "$path" ls-files -s -- "$p" 2>/dev/null | awk 'NR==1{print $2}')"
+    if [ -n "$ib" ] && [ "$ib" != "$tb" ]; then
+      hb="$("$GIT_BIN" -C "$path" rev-parse --verify --quiet "HEAD:$p" 2>/dev/null)"
+      [ "$ib" = "$hb" ] || { DIRT_BLOCKER="staged bytes on no ref: $p"; return 1; }
+    fi
   done <<EOF
 $porc
 EOF

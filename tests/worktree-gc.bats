@@ -1085,3 +1085,33 @@ trunk_add() {
   echo "$output" | grep -q "DRY-RUN — nothing was mutated"
   has_wt "$p"
 }
+
+# ── The INDEX is the second copy, and the working file's hash cannot see it ──────────────────────
+# The discriminator set above ranges entirely over the WORKING FILE, so it is uniformly blind to the
+# one place a "staged-but-never-committed" byte can hide from `hash-object`: an index entry the
+# working file no longer matches. This PAIR is the axis, and the mild half is the load-bearing one —
+# a gate keyed on "index equals trunk" would pass the RED below and silently retire every ordinary
+# unstaged edit with it, so the pair proves reachability, not equality.
+@test "RED PROOF: a STAGED blob on no ref is KEPT, even though the working file matches trunk" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-staged feat/staged x.md SECRET)"
+  git -C "$p" add x.md                       # index: SECRET — on no ref anywhere
+  printf '%s' hello > "$p/x.md"              # working file: byte-identical to trunk ⇒ `AM`
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP    $p"
+  echo "$output" | grep -q "staged bytes on no ref: x.md"
+  has_wt "$p"
+}
+
+@test "an index entry equal to HEAD is REACHABLE — a plain unstaged edit still disposes" {
+  trunk_add f trunkver                       # f is tracked at the branch HEAD, holding `a`
+  p="$(dirt_wt wt-unstaged feat/unstaged f trunkver)"
+  # ` M`: index still holds HEAD's `a` — unequal to trunk, but durable on the preserved branch.
+  [ "$(git -C "$p" ls-files -s -- f | awk '{print $2}')" = "$(git -C "$p" rev-parse HEAD:f)" ]
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "dispose-dirt  $p"
+  run has_wt "$p"
+  [ "$status" -ne 0 ]
+}
