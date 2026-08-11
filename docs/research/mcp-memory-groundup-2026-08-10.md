@@ -88,18 +88,33 @@ vs true 9/1.3 GB — `09` fact 2).
   worktree copies** — one tracked file sets the marginal cost of every session that cds into a reso
   worktree (`08` §0). `browsermcp` sits user-scope in `~/.claude.json`, which **no fleet session
   reads** — live-but-orphaned config, not lazy loading (`01` §4).
-- **Spawn semantics.** The stdio node chain starts **eagerly at session start** (~1 min in,
-  measured live: session etime 10:22 vs chain 09:24; `01` §4); no lazy-stdio flag exists on 2.1.220
-  (feature requests #26666/#38365/#18497/#13805 open; the 221+ discovery cache is remote-only —
-  binary-string verified; `08` §3.B). The **browser** is the lazy half (+196-470 MB only on first
-  browser tool call). Tool-schema deferral (ToolSearch) removes the schema token cost but not the
-  process. Headless/`-p`, SDK, and cloud sessions load project `.mcp.json` **without approval
-  prompts** (`05` §2) — so worker sessions pay eagerly too.
+- **Spawn semantics — now probe-proven (`04`, delivered post-land; controlled fake-server probes).**
+  A stdio server in scope spawns **550-822 ms after launch, before the first model turn, on BOTH
+  2.1.220 and 2.1.114** — `initialize` + `tools/list` complete in the same window whether or not the
+  prompt ever mentions the tool (`04` Runs A/B/H; corroborates `01` §4's live observation); no
+  lazy-stdio path exists (feature requests #26666/#38365/#18497/#13805 open; the 221+ discovery
+  cache is remote-only). Spawn is independent of handshake success (a server that never answers
+  `initialize` still spawns; the session proceeds past it as `pending` — startup never blocks).
+  The **browser** is the lazy half (+196-470 MB on first browser tool call). Tool-schema deferral
+  moves **tokens only** — measured: the process, handshake, and full tool list are paid ~10 s before
+  the model fetches one schema (`04` §6). **The sharpest operational edge is the headless approval
+  BYPASS** (`04` Runs E/E2 + docs-verbatim): `-p`/SDK/cloud sessions start **every** project
+  `.mcp.json` stdio server, *approval list irrelevant* — even servers absent from
+  `enabledMcpjsonServers` spawn; the only mode-independent block is `disabledMcpjsonServers`, the
+  per-fire controls are `--strict-mcp-config`/`--setting-sources`. So every wave-fired headless
+  session in a reso worktree pays unconditionally. Also measured: orderly exit tears servers down
+  (SIGINT → +100 ms SIGTERM → SIGKILL — **a wild orphan MCP process therefore indicts a crashed
+  session, never a clean exit**), and a stdio server that dies mid-session is NEVER auto-reconnected
+  (HTTP/SSE are) — one more axis where stdio loses to the remote shape.
 - **The fan-out multiplier.** In-process Task subagents share the parent's MCP clients and add no
-  process (`01` §5, `05` §5). **Separate-process teammates (`claude.exe --agent-id`) bootstrap from
-  their cwd like any session** — observed live in the corpus hosting a full 4-process stack
-  (`census-fleet.md:400`); today's 13 teammates showed zero only because they all sat in MCP-free
-  cwds. A 12-member wave in a reso worktree ≈ 13 chains ≈ 4.0 GB
+  process — now **probe-proven**, not just observed: `04` Run G shows exactly one server process for
+  the whole run, with the subagent's `tools/call` flowing through the parent's single client.
+  **Separate-process teammates (`claude.exe --agent-id`) bootstrap from their cwd like any
+  session** — observed live in the corpus hosting a full 4-process stack (`census-fleet.md:400`),
+  and mechanically implied by the headless loading rule (`04` §4 E/E2: headless processes load
+  project scope unconditionally); today's 13 teammates showed zero only because they all sat in
+  MCP-free cwds (`04` §8.3 correctly marks its own teammate probe as the one unmeasured slot — the
+  corpus observation stands). A 12-member wave in a reso worktree ≈ 13 chains ≈ 4.0 GB
   (`session-cost.md:111`). This is a *fan-out* cost, not a resident cost — and it is the second
   real MCP lever.
 - **Enforcement blindness (audited at file:line, `03` §A-B).** The goal's "no budget counted" is
@@ -274,9 +289,11 @@ spill-invisibility wording in rejection ground 4 is corrected.
 
 ## 8 · OPEN / uncertainties (named)
 
-- `04-spawn-semantics.md` (controlled eager/lazy probe + scope-rule formalization) pending at
-  synthesis time; census + binary evidence already establish eager-at-start and no-lazy-stdio on
-  2.1.220 — integrate on arrival, expected corroborative.
+- ~~`04-spawn-semantics.md` pending~~ — **DELIVERED post-land and integrated** (§3 rewritten from
+  its probes): fully corroborative on eager/no-lazy/deferral-is-tokens-only, plus the headless
+  approval bypass and the measured teardown ladder. Its one named gap: a teammate process in a
+  stdio-configured repo was not probed directly (the corpus's observed instance +
+  the headless loading rule carry that claim; one paid teammate-in-reso probe would close it).
 - Whether 2.1.221's discovery cache eliminates the startup *connection* or only the wait (`08`
   §11); moot for zero-entry, decisive for any future daemon.
 - The hosting share (9-16%) is a work-in-flight snapshot, entirely cwd-determined; a reso-heavy
