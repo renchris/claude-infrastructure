@@ -13,10 +13,37 @@ setup() {
   D="$BATS_TEST_TMPDIR"
 }
 
-@test "POSITIVE CONTROL: catches the REAL pre-fix cc-blockers predicate recovered from git" {
-  # The exact artifact, not a reconstruction: the newest commit of bin/cc-blockers whose alarm still
-  # tested `[ "$red" -eq "$seen" ]` AND carried no suppression marker. If no such commit is reachable
-  # the control cannot run, and a control that cannot run must SKIP loudly, never pass.
+# THE BASELINE IS VENDORED, so this control can no longer be SKIPPED (2026-08-11, grok-wiki tests
+# shard candidate 3, backlog 9ea31151dd94). It used to be recovered from history on every run, and
+# `[ -n "$sha" ] || skip` was the only thing standing between "no baseline reachable" and a green
+# suite. Measured, not argued: `git clone --depth 1` of this repo leaves ONE commit touching
+# bin/cc-blockers, the three-condition selector returns empty, and the strongest control in this
+# file silently does not run while `bats tests/alarm-polarity-lint.bats` reports ok. A positive
+# control that can decline to run is exactly the vacuous pass this repo keeps re-learning.
+#
+# WHY GZIPPED and not a plain checked-in script: it is an 881-line shell file from 2026-07-29 with a
+# deliberate defect in it. Dropped into the tree as a *.sh it re-enters is_shell_file() and with it
+# every one of the land gate's shell ratchets — shellcheck, bash -n, unguarded-kill, afunix,
+# pipefail-sigpipe, git-identity — as NEW findings owned by whoever lands it. A gzip stream matches
+# no shebang and no extension, so the artifact is preserved byte-for-byte without conscripting a
+# historical file into today's rules. The `-n` on gzip drops the timestamp, so the blob is
+# reproducible from the same input.
+#
+# It cannot be doctored: the sha256 below pins the plaintext, and the separate cross-check test
+# asserts the fixture is byte-identical to what git holds whenever history CAN answer.
+PREFIX_SHA=39ebcd072289d02678f4efc79abc1f111970e98b
+PREFIX_SHA256=98181e53bf76153bfaa8f053a3c979563848ee446e8af38991f7df688d84a0eb
+
+prefix_baseline() {   # → $D/prefix, from the vendored artifact; never consults history
+  gunzip -c "$REPO/tests/fixtures/cc-blockers-prefix-39ebcd07.gz" > "$D/prefix"
+  [ "$(shasum -a 256 "$D/prefix" | cut -d' ' -f1)" = "$PREFIX_SHA256" ] || false
+}
+
+@test "POSITIVE CONTROL: catches the REAL pre-fix cc-blockers predicate (vendored — never skipped)" {
+  # The exact artifact, not a reconstruction: bin/cc-blockers at 39ebcd07, the newest commit whose
+  # alarm still tested `[ "$red" -eq "$seen" ]` AND carried no suppression marker. That commit was
+  # selected by the three-condition walk preserved verbatim in the cross-check below — the selector's
+  # reasoning is still live, it just no longer holds the power to silence this control.
   #
   # THE SECOND CONDITION IS LOAD-BEARING and was missing on the first cut, which broke this control on
   # the VERY NEXT commit to bin/cc-blockers. The predicate string SURVIVES in the fixed file — the
@@ -32,14 +59,7 @@ setup() {
   # the alarm was ALREADY FIXED. That proves "the lint recognises the shape", not "the lint would have
   # caught the original bug", which is what this control claims. Measured: without it the selector
   # picked f1451bcf, whose cc-blockers contains `notgreen` six times.
-  sha="$(cd "$REPO" && git log --format=%H -- bin/cc-blockers | while read -r c; do
-           b="$(git show "$c:bin/cc-blockers" 2>/dev/null)" || continue
-           if printf '%s' "$b" | grep -q '"\$red" -eq "\$seen"' \
-              && ! printf '%s' "$b" | grep -q 'alarm-polarity-ok' \
-              && ! printf '%s' "$b" | grep -q 'notgreen'; then echo "$c"; break; fi
-         done)"
-  [ -n "$sha" ] || skip "no pre-fix baseline reachable in history"
-  (cd "$REPO" && git show "$sha:bin/cc-blockers") > "$D/prefix"
+  prefix_baseline
   # HARNESS SELF-CHECK, the same discipline statusline-identity.bats uses: prove the baseline really
   # is the unfixed implementation before believing anything the lint says about it. A bad extraction
   # must not be able to make this control pass.
@@ -50,6 +70,28 @@ setup() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -q 'POLARITY' || false
   echo "$output" | grep -q '`red` is incremented ONLY on a named failure' || false
+}
+
+@test "the vendored baseline IS the git artifact — byte-identical to the commit the selector picks" {
+  # The rot guard on the fixture, and the only place history is still consulted. THIS may skip: on a
+  # shallow clone git genuinely cannot answer, and a cross-check that cannot run is not a control
+  # that silently passed — the control above already ran, unconditionally, on the pinned bytes.
+  #
+  # The selector is preserved verbatim from the original control because its reasoning is still what
+  # justifies the pin: it must land on 39ebcd07 and on nothing else. If a future commit to
+  # bin/cc-blockers re-introduces the unfixed shape, this test goes RED rather than quietly
+  # re-baselining, which is the failure mode a history-derived baseline had by construction.
+  sha="$(cd "$REPO" && git log --format=%H -- bin/cc-blockers | while read -r c; do
+           b="$(git show "$c:bin/cc-blockers" 2>/dev/null)" || continue
+           if printf '%s' "$b" | grep -q '"\$red" -eq "\$seen"' \
+              && ! printf '%s' "$b" | grep -q 'alarm-polarity-ok' \
+              && ! printf '%s' "$b" | grep -q 'notgreen'; then echo "$c"; break; fi
+         done)"
+  [ -n "$sha" ] || skip "shallow/pruned history — the fixture stands on its pinned sha256 instead"
+  [ "$sha" = "$PREFIX_SHA" ] || false
+  prefix_baseline
+  (cd "$REPO" && git show "$sha:bin/cc-blockers") > "$D/fromgit"
+  cmp "$D/prefix" "$D/fromgit" || false
 }
 
 @test "the CURRENT declared alarm set is clean (the fix holds, and the suppression is explained)" {
