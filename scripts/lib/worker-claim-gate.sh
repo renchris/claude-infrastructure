@@ -307,6 +307,27 @@ cc_worker_claim_admit() { # $1=caller $2=cwd $3=what → 0 admit / 9 refuse
       CC_WCLAIM_REASON="worker-claim-gate: REFUSING $what — $detail"
       _cc_wclaim_emit refuse measured "$caller" "$what" "$detail" "$item" "$CC_WCLAIM_HOLDER"
       return 9 ;;
+    *verdict=noop-live-worktree*)
+      # THE SAME REFUSAL, reached by the second oracle. The incumbent's `<host>-<pid>` is a spent
+      # SHELL, but another session's process tree is cwd'd in this item's worktree, so the ledger
+      # kept the lease where it was (bin/cc-backlog `foreign_wait`, backlog f61c1eaaba05).
+      #
+      # ITS OWN ARM, NOT THE `*)` FALLBACK — and the fallback is why this is load-bearing rather
+      # than cosmetic. `*)` here is fail-OPEN by design (an unreadable oracle is not evidence of a
+      # duplicate), so a new refusal spelling left unhandled would be silently upgraded into an
+      # ADMIT: the ledger would refuse the re-key and this gate would wave the duplicate through
+      # anyway, which is strictly worse than never having added the oracle (memory:
+      # new-nonverdict-state-strands-its-consumers).
+      #
+      # The §9 bound argument above carries over unchanged, term for term: the occupying tree exits
+      # ⇒ the next evaluation reclaims and ADMITS; the claim ages past LIVE_CLAIM_MAX_S ⇒ `reap`
+      # releases it; CC_WCLAIM_GATE=off; and the refused worker is told to self-close rather than
+      # spin. No second bound is minted here.
+      CC_WCLAIM_HOLDER="$(printf '%s' "$out" | sed -n 's/.*is held by \([^,]*\), whose process is gone.*/\1/p' | head -1)"
+      detail="$item's worktree is held by another live session (lease recorded to ${CC_WCLAIM_HOLDER:-an earlier worker}); this session is $ident"
+      CC_WCLAIM_REASON="worker-claim-gate: REFUSING $what — $detail"
+      _cc_wclaim_emit refuse measured "$caller" "$what" "$detail" "$item" "$CC_WCLAIM_HOLDER"
+      return 9 ;;
     *verdict=reclaimed*|*verdict=noop-already-ours*)
       [ -n "$cfile" ] && printf '%s\n' "$(date +%s 2>/dev/null || echo 0)" > "$cfile" 2>/dev/null || true
       CC_WCLAIM_REASON="worker-claim-gate: ADMIT — $ident holds the claim on $item"
