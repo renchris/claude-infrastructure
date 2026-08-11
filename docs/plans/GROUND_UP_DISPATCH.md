@@ -380,6 +380,27 @@ filed into a store whose dispatcher owns an atomic capacity gate that refuses be
 (`rc 9`), which is the right actuator for a load decision — strictly better than a hand-fire into
 load 14 from a pane that is about to close. **The fire is armed, not skipped.**
 
+🚨 **AND THE SAME DEFECT CAUGHT THIS SESSION'S OWN FIX, ONE LAYER FURTHER OUT — filed as
+`cc-backlog d1da53644f96`.** Having just moved the reconcile instruction into the payload so it would
+reach a worker, the obvious last check was whether it *does*. It does not. `cc-dispatch` composes a
+worker's prompt from **title + dodRef**, and every dodRef in this campaign — mine and both
+auto-generated ones — is an **absolute path into the SHARED CHECKOUT**, which the fail-closed deploy
+autopilot deliberately holds at the last GREEN-stamped commit. Measured minutes after the land: the
+checkout sat **17 commits behind `origin/main`**, and `grep -c "STEP -1 — RECONCILE"` at the dodRef
+path returned **0** while the identical path on trunk returned 1. **A correction can be landed,
+content-verified on trunk, and still never reach the worker it was written for** — the third instance
+of one generator in one session (runbook→coordinator, wave-log→payload, trunk→checkout), and the
+first one where the gap is *by design*: the autopilot is fail-closed on purpose, so this is not a bug
+to fix by advancing the checkout (that is deploying by hand past the gate). Fix belongs in the
+composer — resolve dodRef against the worker's own fresh worktree, or emit
+`git show origin/main:<path>` in the brief, or stamp the brief with the checkout's lag.
+**Why row 6 is armed correctly anyway:** `f5b31e05b0f7`'s TITLE carries the operative instruction
+self-containedly — *"re-run each AC against origin/main and mark MET/FAILS/SUPERSEDED before
+designing anything, then land `docs/plans/GUARDRAIL_HOOKS_V2.md`"* — and the title lives in
+`backlog.jsonl`, which has no lag. The payload enrichment arrives when the checkout converges.
+**Design rule earned: put the load-bearing instruction in the STORE-RESIDENT field, and let the file
+carry the detail** — the field the dispatcher reads verbatim is the only one guaranteed current.
+
 ### 🚨 2026-08-07 — THE CAMPAIGN HAS BEEN DORMANT 8 DAYS, AND "OPEN ROW" NO LONGER MEANS "NEEDS A REBUILD"
 
 Coordinator cycle run from a dispatch worker (`cc-backlog 1af414fbe229`), not from the standing
