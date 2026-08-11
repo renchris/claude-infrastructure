@@ -334,6 +334,34 @@ premise-FALSE / premise-TRUE / COULD-NOT-ASK, and `assert_state` pins **exit 0 t
 alone** — so a probe that ever reaches 0 from a still-live or unanswerable state fails loudly rather
 than defaulting into the success arm.
 
+**Two defects the convergence window itself exposed, both landed** — and both are the same shape as
+the emission bug: a mechanism that is present, wired, and silently answering the wrong question.
+
+- **A stale deployed scanner could forge a retraction** (`93ae4c40`). `plan-phase-scan.sh` takes its
+  FORMAT as a second positional with a silent default, so a copy predating `--falsify` does not
+  reject the flag — it prints a section dump and **exits 0**, which the falsifier contract reads as
+  "premise gone, refuse the claim". cc-discover and the scanner are per-file symlinks advanced by ONE
+  fast-forward and so cannot skew in the steady state; a session running the NEW cc-discover from a
+  worktree while `~/.claude` has not converged CAN, and it would mint plan-open items that retract
+  themselves on first read. `--falsify` now prints `FALSIFIED` and the emitted probe tests that WORD,
+  so an older binary answers "still live" — the safe direction. `--falsify-red` and `--falsify-host`
+  never had the hole: their scripts dispatch on a closed verb set, and an unknown verb exits non-zero.
+- **The refusal row named the verdict and never the signal** (`94b054d1`). `verdict=premise-refuted`
+  is written both for a probe RE-RUN that exited 0 (a measurement against today's tree) and for
+  another item DECLARING this one obsolete (filing-time prose). Measured on the live ledger: **51
+  such rows, not one saying which.** So the re-run mechanism was unobservable from outside no matter
+  how often it fired — the same defect as an unread premise, one layer up. `claim_excerpt` now
+  appends the contract's own headline marker verbatim (`-oE`, never paraphrased); an absent marker
+  means an absent clause, because a row that cannot name its cause must say nothing rather than
+  assert the commonest one.
+
+**Measured after landing.** Coverage went **0 → 7** on the live store, and the jump is only partly
+new emission: five of those seven items ALREADY carried probes in the raw records and were invisible
+because the fold dropped the field. A live `cc-backlog claim` on one was refused with
+`verdict=premise-refuted` citing `FALSIFIER PASSED — it exited 0 just now, against today's tree`, and
+a freshly minted `plan-open` item carrying the emitted probe re-ran it to a STILL-LIVE verdict with
+today's 14-of-16 not-DONE sections in place of its filing-day title.
+
 **Filed, not done:** the 430 pre-existing `plan-open` items (9 of them open) can never gain a probe —
 `cc-backlog add` is idempotent on project+title+source, so a re-add of an existing key returns the id
 and writes nothing. Backfilling needs a verb that appends a falsifier to an EXISTING item, and the
