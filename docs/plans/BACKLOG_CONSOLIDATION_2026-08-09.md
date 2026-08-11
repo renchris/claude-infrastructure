@@ -429,3 +429,78 @@ action, or a value judgment. They belong in the `👤` rendered block, not in a 
 
 M3 → M1 → M2 → M4 → M5 → M6. M3 first because a panic costs every live session; M1 before M2 because
 a gate that admits correctly into a pipeline that cannot converge still changes nothing.
+
+## CURRENCY (2026-08-11) — concurrency was fixed; what the dispatcher fires was still triaged against yesterday's tree
+
+**The gap, and why it could not close itself.** `a7bf7068` added `--falsifier` and made `cc-premise`
+re-run it at claim; `fe6ebd0f` / `e20fd010` / `94b054d1` made the four generators emit one at add
+time and fixed the reader (the field was missing from `cc-backlog list --json`'s whitelist fold, so
+five items already carrying probes were invisible to every count). Emission was fixed **going
+forward**. The ~450 rows already in the store were not merely un-backfilled — they were
+**unreachable**: `cmd_add` resolves the id, hits `has_id`, and returns rc 0 *before* it writes
+anything, so `add --falsifier` aimed at an existing row is a silent, successful no-op. There was no
+writer that could reach them. Measured at the start of the pass: **461 open, 6 with a probe, 1.3%**.
+
+**What landed.** `cc-backlog falsify <id> --probe` (`3206c955`) — an event-agnostic `event:"falsify"`
+record, shaped so it lands in the CARRY-FORWARD arm of every existing fold rather than in someone's
+`*)` default. Plus `signal=<verdict>` on the claim-time refusal line, because `cc-dispatch` builds
+its IDL row from `claim_excerpt` (head -1, 200 chars) and every refusal therefore read identically.
+Then `--clear` + a cc-premise fold fix (`60a8f0cc`) — see the false retraction below.
+
+**The backfill.** Ten workers proposed a probe per item over the 259 open `claude-infrastructure`
+rows, each executing its own probe and reporting the exit code; the lead re-ran all 156 from the
+*stored string* (0 mismatches — this is what catches a probe whose unescaped `$` expands and turns
+an intended non-zero into a silent exit 0). 103 items got **no probe, deliberately**: investigations,
+design calls, multi-part conditions where a single token would retract the unfinished half. The
+`needs` class gets none by design — no machine oracle exists, and `--run` *performs* the operator
+step rather than testing it.
+
+| | before | after |
+|---|---|---|
+| all open rows | 6 / 461 = **1.3%** | 169 / 473 = **35.7%** |
+| dispatchable rows (`status=="open"`) | — | 168 / 299 = **56.2%** |
+
+The denominator moved 461 → 473 during the pass: sibling sessions kept filing. Both figures are
+`cc-backlog list --open --json` read through the **deployed** binary, not the worktree copy.
+
+**The re-run is live, and one IDL row proves it.** Of 75 `premise refuted` rows (4 distinct items),
+**6 belong to `bc0f2abe078b`, whose refusal came from a stored probe re-run**, verified by running
+`cc-premise check` on it and reading its own words — *"FALSIFIER PASSED … It exited 0 just now,
+against today's tree, not at filing time"*. The other 69 rows are the old declared-obsolescence path
+(`verdict=superseded`). That classification had to be re-derived by hand, item by item, because the
+row itself could not say which arm fired. **That is exactly what `signal=` removes**, and it is the
+more durable half of this change: `signal=falsified` means a probe executed just now,
+`signal=superseded` means another item's filing-time prose declared this one dead.
+
+**THE FALSE RETRACTION, found by using the verb on the same day it landed.** `eef88daa030a`'s item is
+*"the deploy converger REFUSES every land, because no green tree descends from live HEAD"*. Its
+proposed probe was `git merge-base --is-ancestor baaf0117546b HEAD` — whether **one** commit had
+reached the checkout. It exits 0. But `scripts/deploy-live.sh` was run twice during this very pass
+and declined **both times**, with that condition fully intact. A downstream symptom, not the
+mechanism the title names — the same two-success-state shape this plan's own landmine section warns
+about, in the same subsystem.
+
+There was no correct replacement to write: the mechanism-true probe is `deploy-live.sh --dry-run`,
+and that returns 0 for *"the deadlock is resolved"* **and** for *"at trunk tip, nothing to deploy"*.
+So the honest end state is **no probe**, and the verb could only overwrite. Hence `--clear`, whose
+real content is the *spelling*: an explicit `falsifier:""`. The two readers folded that differently
+and in the worst possible direction — `cc-backlog`'s `($r.falsifier // $p.falsifier)` passes `""`
+through and clears, while `cc-premise` keyed on **truthiness** and skipped the record, so
+`list --json` would report no probe while cc-premise went on retracting claims with the one its owner
+deleted, invisibly. cc-premise now folds on **presence**. The control asks cc-premise itself rather
+than re-implementing its fold, and is RED-proven against the pre-fix code.
+
+**Standing exclusions, named rather than silently dropped.** Five probes that shell out to `bats`
+were not stored: each would take a `cc-bats` execution root on every claim, contending with the
+ceiling (2 roots) that deferred this session's own test runs three times. 23 probes were stored with
+`--force` — they exit 0 now, so the verb refuses them by default. They are **not** closed here: the
+disproof is the deliverable, and the claim-time refusal hands the next reader the probe, the run, and
+the `done --evidence` line to close with. Closing 23 items on second-hand evidence would be the
+weaker move.
+
+**Still open, and not caused by this pass.** `deploy-live.sh` refuses to converge the live layer (no
+green tree descends from live HEAD); lag was 12 commits, inside the 25-commit / 6h degrade budget,
+and this diff adds no file to the live layer, so nothing here is inert. That refusal is the
+anti-rollback gate working and is already filed ~20 times over (`22200e4962d0` quotes the identical
+message; `b79591064f75` and `16c864bd34a8` are about the `🚀` rung being unreachable for exactly this
+reason). No new duplicate was filed.
