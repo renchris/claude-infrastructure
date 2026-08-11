@@ -301,6 +301,63 @@ candidate dominates it on any criterion without losing on another:
 - **`~/.claude/CLAUDE.md` — the highest-consequence live file — has no converger and no
   detection**: real file, no install.sh leg, excluded from the parity pathspec; in parity only
   because a session hand-synced it 34 minutes before measurement.
+#### P6 IMPLEMENTED 2026-08-10 — and one premise above is corrected by the tree
+
+Built in `scripts/deploy-parity-assert.sh` (+ a comment-only widening note in `deploy-live.sh`'s
+`link_refresh`, which needed no code change — consuming a verdict instead of re-deriving a want-list
+is exactly why the scope could widen underneath it). Tests: `tests/deploy-parity.bats` 42 → 64,
+`tests/deploy-live.bats` 84 → 86.
+
+1. **Every install.sh SYMLINK class is now enumerated**, so `link_refresh` repairs all of them on the
+   600s tick: added `agents/*.md`, top-level `lib/*.{sh,zsh}`, `hooks/*.py`, `scripts/lib/*.sh`,
+   `bin/desk-*`, the root SSOTs (`model-config.yaml`, `providers.json`), and `vendor/<plugin>/` as
+   ONE dir link per plugin (never per-file — install.sh:546 links the directory on purpose).
+   Repair stays monotone/create-only, unchanged. `accounts.json` is deliberately absent: install.sh
+   links it, but it is gitignored, so a tracked-file listing structurally cannot see it.
+   *Two classes the §2.E table did not name were also missing and are now covered:* `hooks/*.py`
+   (settings.json wires `curl-gate.py` and `enforce-email-formatting.py` BY PATH) and
+   `scripts/lib/*.sh` — the latter is the very directory holding `pane-spawn-log.sh`, the file whose
+   silent no-op produced the `LIVE_ADDS` rule. The want-list matched `scripts/*.sh` and
+   `scripts/limit-recover/*`, and `scripts/lib/…` fell into the `scripts/*/*` want=0 arm.
+2. **install.sh's COPY classes are detected, deliberately not tick-repaired**: `githooks/*`,
+   `launchd/*.plist`, `statusline.sh`, `bin/it2-wrapper`→`bin/it2`, `CLAUDE.md`, under their own
+   `COPYMISS`/`COPYSTALE`/`CLAUDEMD` tokens. They must never use the `MISSING: ln -sf` spelling:
+   install.sh:289 records that githooks shipped as symlinks for six hours and calls it "a critical
+   bug" (a link into the working tree dangles on any branch switch, and git fails OPEN on a dangling
+   hook). So these classes gain detection, not convergence — the honest half of P6.
+3. **A per-class table renders on every run, clean or not.** This is why the hole survived five
+   sessions of readers: a per-file report over a 5-class pathspec is indistinguishable from one over
+   a 19-class pathspec whenever both are clean, so "no rows about `agents/*.md`" read exactly like
+   "`agents/*.md` is in parity". Live at implementation: 19 classes, all in parity.
+4. **The UNGATED verdict now FILES** a `cc-backlog needs` row instead of only printing, damped by a
+   condition key (a constant title — the trigger is a standing STATE, so cc-backlog's event key IS
+   the condition key — plus a TTL marker so the 600s tick does not shell out 144×/day). No `--run`
+   is offered: there is no command that repairs it, and the one that looks like it (another ff) is
+   the cause. Filing runs on the DERIVED path only (same subject discipline as the provenance leg),
+   is `CC_PARITY_FILE`-seamed, and returns 0 on every path — a parity leg that could break the
+   advance is a converger that stops convergence.
+
+🚨 **PREMISE CORRECTED — `~/.claude/CLAUDE.md` DOES have an install.sh leg.** §2.E above says "no
+install.sh leg"; install.sh:583-587 has had a `diff`-guarded `cp` since before this investigation.
+The finding's substance survives intact and the correction sharpens it: the file had no *tick-driven*
+converger and no detection *at all*, because its one converger sits on the advance path and was
+famine-blocked with everything else. So the P6 build adds the missing half — detection (a parity row
++ a `cc-backlog needs` row when diverged) — and explicitly does NOT auto-write the live file. The
+direction is a judgment, not a mechanism: this repo's own rule is that a land here is followed by
+hand-applying the same edits live, so a divergence can equally mean "the repo advanced" or "the live
+file holds an uncommitted edit", and a converger that guessed would destroy operator work in the
+second case. That is also the only thing that licenses an operator-owned `needs` row rather than
+just doing it. **Follow-on decision, unresolved:** whether to make the live copy derived-only
+(forbidding hand edits) and converge it on the tick — which is a policy change to how the global
+instructions are edited, not a script change.
+
+**Also corrected, in the tree rather than the doc:** `tests/deploy-parity.bats` carried
+`printf 'x' > lib/thing.sh  # top-level lib/ — install.sh has NO lib leg` and required exit 0 over
+it. True when written, FALSE from 931641a4 (which added install.sh:360's `lib/*.zsh` + `lib/*.sh`
+loop) — so for weeks a test was pinning the ABSENCE of a check the tree needed, and stayed green
+because a clean fixture exit 0 is indistinguishable from a correct one. The enumeration is now held
+against install.sh's own loop heads by an anti-rot test rather than by prose.
+
 - **Sensor blind spots**: a session whose cwd IS the root checkout gets `LIVE=1` by tautology
   (`merge-base --is-ancestor HEAD HEAD`), and `compute_live_layer` runs only on the ✅-eligible
   path — so the population doing the ungated pulls is exactly the one the 🚀 rung cannot
@@ -503,6 +560,6 @@ P5's launchd half is already the operator-owned C10 `70dff02dcf4a`.
 | P3 statics memo | blob-sha-keyed verdict cache, re-round runs ratchets only | re-round cost ≤10s at load; exit-42 rounds stop costing full gates |
 | P4 loud lifecycle | trap+attest; in-flight marker read by wrap-ledger/completion-assert; waiter registry; orphan-holder page; verb allowlist; failure inbox (`refs/land/failed` + backlog row) | zero silent land deaths; zero mid-flight 📦 convictions; a dead author's failed land renders at the next close |
 | P5 verifier share | fire `70dff02dcf4a` (repo half now; C10 half stays operator-owned); R7 escalation arm | verifier p50 <2h; ≥1 green/day; deploy T1 advances without hand-pulls |
-| P6 converge completeness | extend link-refresh classes; CLAUDE.md parity leg; UNGATED verdict files | `LIVE_ADDS` breach impossible for any install.sh class; hand-pull rate → 0 |
+| P6 converge completeness | ~~extend link-refresh classes; CLAUDE.md parity leg; UNGATED verdict files~~ **DONE 2026-08-10** (see §2.E "P6 IMPLEMENTED") | `LIVE_ADDS` breach impossible for any install.sh **symlink** class ✓ · CLAUDE.md sensed ✓ · UNGATED files ✓ · hand-pull rate → 0 *(pending — the filed row is the escalation, not the cure)* |
 | P7 population policy | checkpoints retention + KEEP-ladder content question + `--assert` consumer | packed-refs stops monotone growth; stale-residue worktrees ≤10 |
 | P0 self-measurement | attestation fields + census panels | v2 §7 renders as a computed verdict |
