@@ -87,17 +87,44 @@ lint() {
 
   # Own-scope: block only on files THIS land changes; the rest stay advisory, so one author's
   # omission never becomes every author's hard stop.
-  local own="${CC_CHROMIUM_OWN:-}" blocking=0
+  #
+  # THREE STATES, and `${VAR:-}` could only ever express two (land-architecture-100p §5 P2).
+  # UNSET means no caller asked for scoping ⇒ strict, everything blocks. SET-BUT-EMPTY means a
+  # caller DID scope and this land touches none of bin/ hooks/ scripts/ tools/ — a docs-only land,
+  # a launchd-only land — so NOTHING of theirs is here and nothing may block. `${CC_CHROMIUM_OWN:-}`
+  # collapsed those two into "strict", which is the exact taxing leak this arm's own-scope exists
+  # to prevent: measured on a fixture, a land with an empty own-set was refused over a SIBLING's
+  # offending file, in the direction where the author has nothing to fix. ship-land ALWAYS exports
+  # the variable, so set-but-empty is the common case, not a corner. Every sibling lint that got
+  # this right (self-path, pane-spawn, permission-gate, tsv-pad, unattended-path) uses `+set`;
+  # this was the one that did not. tests/gate-ownscope-leak.bats pins all three states.
+  local own="" own_scoped=0 blocking=0
+  if [ -n "${CC_CHROMIUM_OWN+set}" ]; then own_scoped=1; own="$CC_CHROMIUM_OWN"; fi
   echo "✗ CHROMIUM-BUNDLE: a screenshot path launches the full Chromium.app bundle." >&2
   printf '%s\n' "$rows" | while IFS= read -r r; do echo "    $r" >&2; done
   echo "  Fix: source scripts/lib/cc-common.sh and use" >&2
   echo "       CHROME=\"\$(resolve_headless_chrome \"\${BANNER_CHROME:-}\")\"" >&2
   echo "  The bundle registers with LaunchServices on every launch and strobes the operator's Dock." >&2
 
-  if [ -n "$own" ]; then
+  if [ "$own_scoped" = "1" ]; then
+    # The FILE field of every row, once, so the membership test below is a fixed-string equality
+    # rather than a regex built from a path (a path carrying a regex metacharacter matched the
+    # wrong rows, or none, in the previous form).
+    local row_files
+    row_files="$(printf '%s\n' "$rows" | sed 's/:.*//')"
+    # An EMPTY own-set falls straight through this loop with blocking=0 — which is the point: the
+    # caller scoped, and nothing of theirs is here. The loop is skipped rather than special-cased
+    # so there is exactly one place that decides, and the empty case cannot drift away from it.
     while IFS= read -r o; do
       [ -z "$o" ] && continue
-      printf '%s\n' "$rows" | grep -q "^$o:" && blocking=1
+      # -F -x on the FILE field, not a regex on the row: the own-entry used to be interpolated
+      # into `grep -q "^$o:"`, so a path containing a regex metacharacter matched the wrong rows
+      # (or none). Fixed-string equality is what the sibling lints already use.
+      # DRAINED (`grep … >/dev/null`, never `grep -q`): under the `set -o pipefail` at the top of
+      # this file an early-exiting consumer takes SIGPIPE on the producer's next write and pipefail
+      # promotes 141 over grep's 0 — the condition then reads FALSE on a MATCH, which here would
+      # silently restore the very leak this block was rewritten to close.
+      printf '%s\n' "$row_files" | grep -Fx -- "$o" >/dev/null 2>&1 && blocking=1
     done <<< "$own"
     [ "$blocking" -eq 1 ] || { echo "  (advisory only — none of these files are in this land's diff)" >&2; return 0; }
   fi
@@ -112,9 +139,22 @@ if [ "${1:-}" = "--selftest" ]; then
   # rc <expected> <label> -- runs `lint` in a subshell and compares its EXIT CODE. Written as an
   # explicit `|| rc=$?` capture rather than `[ $? -eq N ]`, so the assertion cannot be silently
   # reading the exit status of some intervening command.
+  #
+  # THE FOURTH ARGUMENT IS A THREE-STATE, and it used to be two. It defaulted to `""` and set
+  # CC_CHROMIUM_OWN unconditionally, so every "strict" case in this selftest was actually running
+  # the SET-BUT-EMPTY state — and passed only because the lint conflated the two the same way.
+  # A control that encodes the defect cannot catch it: this harness asserted "unscoped ⇒ blocks"
+  # while never once running unscoped. Absent 4th arg now means genuinely UNSET.
+  #   (omitted) → UNSET: nobody scoped ⇒ strict, everything may block
+  #   ""        → SET-BUT-EMPTY: a caller scoped and owns nothing here ⇒ nothing may block
+  #   "a/b.sh"  → SET: only that file may block
   expect_rc() {
-    local want="$1" label="$2" root="$3" own="${4:-}" got=0
-    ( CC_CHROMIUM_OWN="$own" lint "$root" >/dev/null 2>&1 ) || got=$?
+    local want="$1" label="$2" root="$3" got=0
+    if [ "$#" -ge 4 ]; then
+      ( CC_CHROMIUM_OWN="$4" lint "$root" >/dev/null 2>&1 ) || got=$?
+    else
+      ( unset CC_CHROMIUM_OWN; lint "$root" >/dev/null 2>&1 ) || got=$?
+    fi
     [ "$got" -eq "$want" ] || fail "$label (wanted rc=$want, got rc=$got)"
   }
 
@@ -140,9 +180,11 @@ done'
   mkdir -p "$d/empty"
   expect_rc 2 "a root with no source dirs did not exit 2" "$d/empty"
 
-  # Own-scope: a finding OUTSIDE the own-set is advisory (0); INSIDE it blocks (1).
+  # Own-scope, all three states — the middle one is the leak this arm shipped with
+  # (land-architecture-100p §5 P2) and the reason the harness above had to grow a third state.
   expect_rc 0 "an out-of-scope finding blocked" "$d/red" "scripts/other.sh"
   expect_rc 1 "an in-scope finding did not block" "$d/red" "scripts/probe.sh"
+  expect_rc 0 "a SET-BUT-EMPTY own-set blocked — a docs-only land refused over a sibling's file" "$d/red" ""
 
   echo "chromium-bundle-lint --selftest: OK"
   exit 0

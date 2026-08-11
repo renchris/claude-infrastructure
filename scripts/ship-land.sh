@@ -3,6 +3,28 @@
 # (was prose in .claude/commands/ship.md a model could skip or paraphrase).
 #
 #   scripts/ship-land.sh [--trunk <branch>] [--dry-run]
+#   scripts/ship-land.sh --precheck [--working] [--trunk <branch>] [--fetch]   (P2 shift-left)
+#
+# --precheck is the SHIFT-LEFT entry point (land-architecture-100p §5 P2). It runs THE SAME
+# run_gate() this script lands with — same function, same lints, same own-scope sets, same
+# gate_red arms — against the same range, in the author's own worktree, taking NO lock, writing
+# NO land.log row, touching NO ref, and reaching NO network unless asked. Exit 0 = the land gate
+# would go green on this tree; 6 = it would go RED (and it names the arm); 9 = GATE-KILLED.
+#   --working  gate the WORKING TREE (base..worktree, uncommitted edits included) instead of
+#              base..HEAD — the true commit-time position, for use before/while committing.
+#   --fetch    refresh origin/<trunk> first (default: offline, using the local ref).
+# WHAT IT COVERS, stated plainly because the honest scope is the point: statics (shellcheck /
+# `bash -n` / py_compile) AND all fifteen ratchet arms — which are ~112s of the land gate's
+# 127-137s (§5.P3), i.e. the expensive part, not the cheap 2%. It does NOT run the bats smoke
+# phase; smoke is already `none`/`skipped` on **84.8%** of the invocations that record the field
+# (measured 2026-08-11 by scripts/gate-red-census.sh over 1,651 invocations — §2.B's "89%" is the
+# same finding taken by hand, and the tool is now the citable source), so its absence here cannot
+# move the red rate this entry point exists to pre-empt. A precheck-green tree can still be reddened
+# at land time by smoke, or by a ratchet arm whose input a SIBLING's land changed between the two
+# runs — precheck is a strictly EARLIER read of the same predicate, never a substitute verdict.
+# IT CANNOT SHADOW THE LAND GATE: nothing in the land path reads any precheck output, and
+# --precheck sets no state a land consults (see main_precheck, and tests/gate-precheck.bats,
+# which asserts a red tree stays red at land time after a precheck of the same tree).
 #
 # v2 — THE INVERSION (docs/plans/LAND_PIPELINE_V2.md §1/§4.1). The full corpus NEVER runs
 # per-land. v1 proved the whole suite before every push; measured, that frame cannot work on
@@ -900,6 +922,13 @@ postland_net_live() {  # sets NET_STATE=live|inert|none. ALWAYS returns 0 — ne
 # "nothing heavy may EVER enter the land-lock" (see run_gate) — the invariant the v1 in-lock full
 # gate broke, producing a 3h36m lock holder and the multi-day land jam.
 IN_LAND_LOCK="${IN_LAND_LOCK:-0}"
+# GATE_PRECHECK is the SECOND reason run_gate may skip the bats phase, and it is deliberately a
+# SEPARATE flag from IN_LAND_LOCK rather than a reuse of it. Reusing IN_LAND_LOCK would have been
+# one character cheaper and would have made a precheck claim, in every message it prints and every
+# branch it takes, that it holds the machine-wide land-lock — which is false, and it is exactly
+# the kind of overloaded token that turns a later reader's correct inference into a wrong one.
+# The two are read TOGETHER at the one place a suite can start; neither is a superset of the other.
+GATE_PRECHECK="${GATE_PRECHECK:-0}"
 # ---- THE CEILING IS DERIVED FROM THE BOX, NOT A CONSTANT (2026-08-08) --------------------------
 # WHAT WAS WRONG: the default was the literal `8`, and on this 10-core box that is 0.8/core — a
 # ceiling the machine is essentially never under. Measured consequence in ~/.claude/land.log:
@@ -1325,6 +1354,14 @@ run_smoke() {  # $1=range → 0 = PROCEED · 1 = RED (a named failure in a direc
     echo "→ gate[locked]: statics + ratchets only — no bats inside the land-lock (v2 invariant)." >&2
     return 0
   fi
+  # The precheck's declared scope (see the header): statics + all fifteen ratchet arms, no smoke.
+  # Stated as its own branch and its own message so a precheck can never be mistaken, in a log or
+  # by a reader, for a land that happened to select zero suites — SMOKE_STATE stays "none" for both
+  # and only this line distinguishes them.
+  if [[ "$GATE_PRECHECK" = "1" ]]; then
+    echo "→ gate[precheck]: statics + ratchets only — the smoke phase is the land's, not the precheck's." >&2
+    return 0
+  fi
 
   if [[ ! -x "$GATE_SELECT" ]]; then
     # v1 read this as FULL (fail-closed toward a 40-minute corpus). In v2 "fail-closed toward more
@@ -1616,6 +1653,38 @@ stamp_gate_green() {  # gate-green asserts "the FULL suite proved THIS tree" —
   git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green" 2>/dev/null || true
 }
 
+# own_run <ARM> <CC_VAR> <own-set> <cmd…> → the lint's rc, with the own-set handed over CORRECTLY.
+#
+# WHAT THIS FIXES (land-architecture-100p §5 P2). Every ratchet arm below carried the same two
+# lines — `local own=""` guarded by `[[ "${SHIP_LAND_<ARM>_OWN_SCOPE:-on}" != "off" ]]`, then an
+# unconditional `CC_<ARM>_OWN="$own" "$LINT"` — and the pair does the OPPOSITE of what all
+# thirteen of their comments say. The lints read THREE states, and the caller could only ever
+# produce two of them:
+#     UNSET          nobody scoped ⇒ strict, the whole tree may block
+#     SET-BUT-EMPTY  a caller scoped and owns nothing here ⇒ nothing may block
+#     SET            only these files may block
+# Setting the documented kill switch (`SHIP_LAND_HERM_OWN_SCOPE=off`, whose own comment reads
+# "restores whole-tree blocking") left `own` empty and STILL exported the variable — so the lint
+# saw SET-BUT-EMPTY and blocked on NOTHING. The escape hatch for a leaking arm silently DISABLED
+# that arm instead of tightening it, which is strictly worse than having no switch: an operator
+# reaching for it in an incident gets a green gate and believes they got a stricter one (memory:
+# prescribed-remedy-worse-than-the-bug, and guard-proxy-fails-in-both-directions).
+#
+# Routing every arm through one function also retires thirteen copies of the switch read. The
+# switch is now consulted in exactly ONE place, so an arm added later cannot get it wrong by
+# copying a neighbour — which is how all thirteen came to share the defect. `${!sw:-on}` is
+# indirect expansion, bash 3.2 safe (verified on 3.2.57).
+own_run() {
+  local sw="SHIP_LAND_${1}_OWN_SCOPE" var="$2" val="$3"; shift 3
+  if [[ "${!sw:-on}" = "off" ]]; then
+    # STRICT, and it must be the ABSENCE of the variable rather than an empty one — that is the
+    # whole distinction above. The subshell is what makes `unset` local to this call.
+    ( unset "$var"; "$@" )
+  else
+    ( export "$var=$val"; "$@" )
+  fi
+}
+
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0 HERM_LINT SELFPATH_LINT
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
@@ -1730,8 +1799,18 @@ run_gate() {  # $1=range → 0 green / 1 red
     # by the postland net, which passes no own-set.
     local own=""
     if [[ "${SHIP_LAND_HERM_OWN_SCOPE:-on}" != "off" ]]; then
-      # Basenames are matched, so a path form is fine. Failure to resolve the range yields an EMPTY
-      # own-set, which the lint treats as STRICT — the fail-closed direction, never fail-open.
+      # Basenames are matched, so a path form is fine.
+      #
+      # CORRECTED 2026-08-11 (land-architecture-100p §5 P2). This comment used to read "Failure to
+      # resolve the range yields an EMPTY own-set, which the lint treats as STRICT — the fail-closed
+      # direction, never fail-open." Both halves are false, and the same claim had been copied into
+      # four sibling arms. `in_own` reads a SET-BUT-EMPTY own-set as "nothing is mine ⇒ block on
+      # nothing" (test-hermeticity-lint.sh:1288 `[ -n "$2" ] || return 1`), so a failed `git diff`
+      # fails OPEN, not closed. The direction is a deliberate trade rather than a bug — a docs-only
+      # land must not be judged by a corpus it did not touch, and that is the SAME state — but a
+      # comment asserting the opposite is what stops the next author from noticing the exposure.
+      # The strict state is reachable only by NOT setting the variable at all, which is what
+      # own_run() above now does for the `=off` kill switch.
       #
       # THE PATHSPEC IS THE GATE'S SCOPE, and it must list every population the lint judges. It was
       # `tests/*.bats` alone until rule 4 (embedded selftests) landed, whose population is the TOOL
@@ -1745,7 +1824,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     echo "→ gate: test-hermeticity ratchet (before bats — seconds, and it names the file)" >&2
     local herm_rc=0
-    CC_HERM_OWN="$own" "$HERM_LINT" tests >&2 || herm_rc=$?
+    own_run HERM CC_HERM_OWN "$own" "$HERM_LINT" tests >&2 || herm_rc=$?
     # 2 is the lint's NON-VERDICT: a predicate that could not run, or a scan that found nothing to
     # judge. It says NOTHING about this tree, so it must not be dressed up as one — that is the
     # exact conflation gate_nonzero_code() exists to keep apart, and the lint's own message ends
@@ -1785,7 +1864,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       wown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
     fi
     echo "→ gate: wall-clock time-bomb ratchet (future absolute dates in fixtures)" >&2
-    if ! CC_WALLTIME_OWN="$wown" "$WALL_LINT" tests >&2; then
+    if ! own_run WALL CC_WALLTIME_OWN "$wown" "$WALL_LINT" tests >&2; then
       echo "✗ gate: wall-clock RED — a fixture THIS LAND CHANGES seeds a future absolute date." >&2
       echo "  Seed relative to now instead; the file and dates are named above." >&2
       gate_red walltime
@@ -1814,7 +1893,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       aown="$(git diff --name-only "$range" -- 'tests/*.bats' 2>/dev/null || true)"
     fi
     echo "→ gate: AF_UNIX absolute-bind ratchet (104-byte sun_path bombs in fixtures)" >&2
-    CC_AFUNIX_OWN="$aown" "$AFUNIX_LINT" tests >&2; local arc=$?
+    own_run AFUNIX CC_AFUNIX_OWN "$aown" "$AFUNIX_LINT" tests >&2; local arc=$?
     if [[ "$arc" -eq 2 ]]; then
       echo "⛔ gate: afunix-path-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
       echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
@@ -1862,7 +1941,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     echo "→ gate: git-identity escape ratchet (a fixture identity that can land in the caller's repo)" >&2
     local gitid_rc=0
-    CC_GITID_OWN="$gown" "$GITID_LINT" >&2 || gitid_rc=$?
+    own_run GITID CC_GITID_OWN "$gown" "$GITID_LINT" >&2 || gitid_rc=$?
     if (( gitid_rc == 2 )); then
       echo "⛔ gate: git-identity-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
       echo "  Nothing is wrong with the files named above (if any). Re-run /ship when the box is quieter." >&2
@@ -1911,7 +1990,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red utc-stamp-selftest
       return 1
     fi
-    if ! CC_UTC_OWN="$uown" "$UTC_LINT" >&2; then
+    if ! own_run UTC CC_UTC_OWN "$uown" "$UTC_LINT" >&2; then
       echo "✗ gate: UTC-stamp RED — a file THIS LAND CHANGES stamps a literal Z from a local clock." >&2
       echo "  Add -u to the date call (or emit %z instead of Z); the file and lines are named above." >&2
       gate_red utc-stamp
@@ -1960,7 +2039,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       return 1
     fi
     local pf_rc=0
-    CC_PIPEFAIL_OWN="$pown" "$PF_LINT" >&2 || pf_rc=$?
+    own_run PIPEFAIL CC_PIPEFAIL_OWN "$pown" "$PF_LINT" >&2 || pf_rc=$?
     if (( pf_rc == 2 )); then
       echo "⛔ gate: pipefail-sigpipe-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about" >&2
       echo "  your tree. Nothing is wrong with the files named above (if any)." >&2
@@ -2075,7 +2154,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red self-path-selftest
       return 1
     fi
-    if ! CC_SELFPATH_OWN="$spown" "$SELFPATH_LINT" >&2; then
+    if ! own_run SELFPATH CC_SELFPATH_OWN "$spown" "$SELFPATH_LINT" >&2; then
       echo "✗ gate: self-path RED — a file THIS LAND CHANGES derives a path via '..' from an" >&2
       echo "  unresolved \$0/\$BASH_SOURCE. Resolve the symlinks first (_resolve_self above); the" >&2
       echo "  file and lines are named above." >&2
@@ -2121,7 +2200,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     # gate_bounded: THE AUTHOR'S OWN DIFF — see the marker above; CC_PSC_OWN carries the same
     # per-land scope into the lint, so an advisory finding outside the diff prints and never blocks.
-    if ! CC_PSC_OWN="$psown" "$PSPAWN_LINT" >&2; then
+    if ! own_run PSPAWN CC_PSC_OWN "$psown" "$PSPAWN_LINT" >&2; then
       echo "✗ gate: pane-spawn coverage RED — a file THIS LAND CHANGES creates a terminal surface" >&2
       echo "  and never calls cc_log_pane_spawn (scripts/lib/pane-spawn-log.sh). Add the row, or the" >&2
       echo "  log's 'no row ⇒ not from this tree' inference is false; the lines are named above." >&2
@@ -2170,7 +2249,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red unattended-path-selftest
       return 1
     fi
-    if ! CC_UNATTENDED_OWN="$upown" "$UNATTENDED_LINT" >&2; then
+    if ! own_run UNATTENDED CC_UNATTENDED_OWN "$upown" "$UNATTENDED_LINT" >&2; then
       echo "✗ gate: unattended-path RED — a file THIS LAND CHANGES invokes a binary by bare name that" >&2
       echo "  is unreachable on the PATH it will actually run with. Resolve it absolutely, or harden" >&2
       echo "  PATH at the top of the file; the file, line and binary are named above." >&2
@@ -2224,7 +2303,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red permission-gate-selftest
       return 1
     fi
-    if ! CC_PERMGATE_OWN="$pgown" "$PERMGATE_LINT" >&2; then
+    if ! own_run PERMGATE CC_PERMGATE_OWN "$pgown" "$PERMGATE_LINT" >&2; then
       echo "✗ gate: permission-gate RED — a file THIS LAND CHANGES gained a guard-refusal on an" >&2
       echo "  actuation path with no declared bound (or its ratchet line is stale). Give the gate a" >&2
       echo "  budget whose expiry converts the standing state into an EVENT, then declare it with a" >&2
@@ -2263,7 +2342,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red chromium-bundle-selftest
       return 1
     fi
-    if ! CC_CHROMIUM_OWN="$cbown" "$CHROMIUM_LINT" >&2; then
+    if ! own_run CHROMIUM CC_CHROMIUM_OWN "$cbown" "$CHROMIUM_LINT" >&2; then
       echo "✗ gate: chromium-bundle RED — a file THIS LAND CHANGES takes screenshots through the" >&2
       echo "  full Chromium.app bundle, which strobes the operator's Dock once per launch. Use" >&2
       echo "  resolve_headless_chrome from scripts/lib/cc-common.sh; the file is named above." >&2
@@ -2313,7 +2392,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       tsvown="$(git diff --name-only "$range" -- 'bin/*' 'hooks/*' 'scripts/*' 2>/dev/null || true)"
     fi
     echo "→ gate: TSV field-collapse ratchet (an IFS=tab reader whose producer can emit an empty cell)" >&2
-    CC_TSVPAD_OWN="$tsvown" "$TSVPAD_LINT" . >&2; local trc=$?
+    own_run TSVPAD CC_TSVPAD_OWN "$tsvown" "$TSVPAD_LINT" . >&2; local trc=$?
     if [[ "$trc" -eq 2 ]]; then
       echo "⛔ gate: tsv-pad-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
       echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
@@ -2361,9 +2440,16 @@ run_gate() {  # $1=range → 0 green / 1 red
     local bown=""
     if [[ "${SHIP_LAND_BATS_SC_OWN_SCOPE:-on}" != "off" ]]; then
       # Failure to resolve the range yields an EMPTY own-set, which means "I wrote no line" ⇒
-      # nothing blocks. That is the correct degradation HERE and the opposite of the siblings':
-      # their strict fallback is free because their corpus is clean, whereas a strict whole-tree
-      # run of this lint is 164 findings, i.e. a guaranteed outage on every land.
+      # nothing blocks.
+      #
+      # CORRECTED 2026-08-11 (land-architecture-100p §5 P2): this used to add "and the opposite of
+      # the siblings': their strict fallback is free because their corpus is clean". That is wrong
+      # about the siblings. Measured across all thirteen lints, TWELVE degrade permissive on a
+      # set-but-empty own-set exactly as this one does (`${VAR+set}` + `[ -n "$2" ] || return 1`);
+      # only chromium-bundle degraded strict, and that was the leak fixed in this same diff. So
+      # this arm's degradation is the HOUSE RULE, not an exception to it. What IS distinctive here
+      # is the magnitude of the alternative: a strict whole-tree run of this lint is 164 findings,
+      # i.e. a guaranteed outage on every land, where a sibling's strict run is clean.
       bown="$("$SC_BATS_LINT" --own-lines "$range" 2>/dev/null || true)"
       [[ -n "$bown" ]] && echo "→ gate: bats-shellcheck own-scope — blocking on $(printf '%s\n' "$bown" | grep -c .) changed line(s); pre-existing findings advisory." >&2
     fi
@@ -2374,7 +2460,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       gate_red bats-shellcheck-selftest
       return 1
     fi
-    if ! CC_BATS_SC_OWN="$bown" "$SC_BATS_LINT" tests >&2; then
+    if ! own_run BATS_SC CC_BATS_SC_OWN "$bown" "$SC_BATS_LINT" tests >&2; then
       echo "✗ gate: bats-shellcheck RED — a line THIS LAND WROTE carries a shellcheck finding," >&2
       echo "  or a suite it touches aborts shellcheck entirely. Both are named above." >&2
       gate_red bats-shellcheck
@@ -2444,6 +2530,10 @@ run_gate() {  # $1=range → 0 green / 1 red
         # The never-in-lock invariant binds in BOTH lanes. The kill switch restores the v1 PROOF,
         # never the v1 lock pathology (a 3h36m holder while every other lander queued behind it).
         echo "→ gate[v1/locked]: statics + ratchets only — no bats inside the land-lock, in either lane." >&2
+      elif [[ "$GATE_PRECHECK" = "1" ]]; then
+        # The precheck's scope is lane-independent for the same reason: it is a claim about WHICH
+        # PHASE runs, and the v1 kill switch changes only which phase the SMOKE step expands into.
+        echo "→ gate[v1/precheck]: statics + ratchets only — the corpus is the land's, not the precheck's." >&2
       else
         direct="$("$GATE_SELECT" --direct "$range" ${EXTRA_RANGE:+"$EXTRA_RANGE"} 2>/dev/null || true)"
         [[ "$direct" = "FULL" ]] && direct=""   # "cannot decide" ⇒ exonerate nothing is unknown
@@ -2684,18 +2774,169 @@ main_locked() {
 
 # ---- outer phase (preflight → launch locked child) -------------------------
 
+# ---- P2 SHIFT-LEFT: the commit-time entry point ----------------------------
+#
+# THE DEFECT (land-architecture-100p §5 P2, §2.B): gate-red is 27%/14d → 39%/3d → 45% on the last
+# day of ship-land invocations, and 89% of those invocations run no smoke at all, so the reds are
+# STATICS AND RATCHETS. Each one is an agent-side diagnose-fix-rerun loop that NEVER TAKES THE
+# LOCK — invisible to the lock ledger by construction — and each round costs a full 127-137s gate
+# preceded by a fetch and a rebase. The verdict was reachable in the author's own tree, seconds
+# after the edit, for the whole time it was instead being discovered at the land.
+#
+# THE ONE DESIGN RULE, and everything below follows from it: THIS IS NOT A SECOND AUTHORITY.
+# It does not re-implement the rules, does not summarise them, does not pre-filter them. It calls
+# run_gate — the same function, on the same range, with the same globals — and reports what it
+# says. A separate implementation of a gate's rules is the defect this repo has paid for
+# repeatedly (memory: enforcement-must-live-at-the-chokepoint), and a pre-filter that reuses the
+# gate's own boundary rule can SHADOW it (memory: cost-gate-must-be-strictly-weaker). The
+# shadowing proof here is structural rather than argued: there is no boundary rule to reuse,
+# because the precheck decides nothing the land re-reads.
+#
+#   · It writes NO land.log row. A precheck is not a land attempt, and counting it as one would
+#     poison the very denominator the P2 census panel reports (scripts/gate-red-census.sh).
+#   · It claims no in-flight marker, writes no backup ref, files no failure-inbox row, takes no
+#     lock, pushes nothing, and never rebases — so no land, its own or a sibling's, can observe
+#     that it ran.
+#   · The ONE thing it shares with a land is the P3 statics memo, and that sharing is exact rather
+#     than approximate: gate-memo keys a verdict on the blob sha plus the checker's version and
+#     records ONLY rc 0, so a precheck can hand a land a green it re-derived from identical bytes
+#     with an identical checker, and can never hand it a red or suppress one. A precheck of a RED
+#     tree records nothing at all. tests/gate-precheck.bats pins that direction.
+main_precheck() {  # $1=trunk $2=working(0|1) $3=fetch(0|1)
+  local TRUNK="$1" WORKING="$2" DO_FETCH="$3" BASE RANGE rc code
+  PRECHECK_INDEX=""
+  # The land traps are disarmed: every one of them exists to make a DYING LAND legible (attest the
+  # kill, file the inbox row, release the marker), and a precheck that fired them on Ctrl-C would
+  # write a land.log row for a land that never started — manufacturing exactly the phantom the
+  # lifecycle work exists to prevent. gate_home_teardown is the only unwind this path can owe, and
+  # it is idempotent and refuses to remove anything it did not create.
+  trap - TERM HUP INT EXIT
+  trap 'gate_home_teardown' EXIT
+  LIFECYCLE_ROLE="precheck"
+  GATE_PRECHECK=1
+  IN_LAND_LOCK=0
+
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+
+  # OFFLINE BY DEFAULT, and that is the point of the entry point rather than a corner cut: a
+  # commit-time check an author runs ten times an hour must cost seconds and must work on a plane.
+  # The consequence is stated rather than hidden — the base is the local origin ref, so a precheck
+  # gates against the trunk as this worktree last saw it, and the land gates against the trunk as
+  # it is. --fetch closes that gap when the author wants it closed.
+  if [[ "$DO_FETCH" = "1" ]]; then
+    git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ precheck: fetch failed — using the local origin/$TRUNK" >&2
+  fi
+  BASE="$(git merge-base "origin/$TRUNK" HEAD 2>/dev/null || true)"
+  if [[ -z "$BASE" ]]; then
+    echo "✗ precheck: cannot find a merge-base with origin/$TRUNK — is '$TRUNK' the right trunk? (use --trunk)" >&2
+    exit 2
+  fi
+
+  if [[ "$WORKING" = "1" ]]; then
+    # A BARE REV, not a range, and every consumer in run_gate already handles it: `git diff <rev>`
+    # compares that rev to the WORKING TREE, so uncommitted and staged edits are in scope. This is
+    # the true commit-time position — the author has not committed yet. `${range%%..*}` in the
+    # smoke phase yields the rev itself, so the union-scope derivation degrades correctly too.
+    RANGE="$BASE"
+
+    # UNTRACKED FILES MUST BE IN SCOPE, and the first version of this entry point missed them —
+    # caught by the land gate on this commit's own diff, which is the best possible way to find it.
+    # `git diff` reports only files git already knows about, so a BRAND-NEW file was invisible to
+    # every own-set the gate builds. That is not a corner: a new file is the commonest thing an
+    # author has in hand at commit time, and it made the precheck green on a tree the land then
+    # refused — the precise "clears a tree the land will refuse" failure this entry point exists to
+    # rule out. Measured live: tests/gate-precheck.bats was untracked, precheck said GREEN, the land
+    # said RED on that file's missing $HOME fixture.
+    #
+    # `git add -N` makes them visible to `git diff` — but the author's index is THEIRS, and a check
+    # that stages things behind their back is a side effect, not a check. So the intent-to-add goes
+    # into a THROWAWAY COPY of the index which every git command in the gate then reads through
+    # GIT_INDEX_FILE. The real index is never opened for writing; a partially staged tree survives
+    # untouched; and the copy dies with the process (see the trap above, extended here).
+    local pc_idx real_idx untracked
+    real_idx="$(git rev-parse --git-path index 2>/dev/null || true)"
+    untracked="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+    if [[ -n "$untracked" && -n "$real_idx" && -f "$real_idx" ]]; then
+      pc_idx="$(mktemp "${TMPDIR:-/tmp}/ship-land-precheck-index.XXXXXX")" || pc_idx=""
+      if [[ -n "$pc_idx" ]] && cp "$real_idx" "$pc_idx" 2>/dev/null; then
+        PRECHECK_INDEX="$pc_idx"
+        trap 'gate_home_teardown; [[ -n "${PRECHECK_INDEX:-}" ]] && rm -f "$PRECHECK_INDEX"' EXIT
+        export GIT_INDEX_FILE="$pc_idx"
+        # -N only: records the PATH, never the content, so nothing here can be committed by
+        # accident even if this index were somehow reused.
+        printf '%s\n' "$untracked" | while IFS= read -r u; do
+          [[ -n "$u" ]] && git add -N -- "$u" 2>/dev/null
+        done
+        echo "  including $(printf '%s\n' "$untracked" | grep -c .) untracked file(s) via a throwaway index (yours is untouched)." >&2
+      else
+        # NAMED, never silent: a precheck that quietly skipped the new files would be reporting on
+        # a tree the author does not have.
+        echo "⚠ precheck: could not build a scratch index, so UNTRACKED files are NOT gated here." >&2
+        echo "  git add them (or commit) and re-run, or the land may still red on a file this missed." >&2
+      fi
+    fi
+  else
+    RANGE="$BASE..HEAD"
+    if [[ -z "$(git rev-list "$RANGE" 2>/dev/null)" ]]; then
+      echo "✓ precheck: nothing to gate — origin/$TRUNK already contains HEAD. (Use --working to gate uncommitted edits.)"
+      exit 0
+    fi
+  fi
+
+  echo "→ precheck: the LAND GATE's statics + ratchets, run here — no lock, no push, no land.log row." >&2
+  if [[ "$WORKING" = "1" ]]; then
+    echo "  range: $RANGE (base → WORKING TREE; uncommitted and staged edits included)" >&2
+  else
+    echo "  range: $RANGE (base → HEAD; add --working to include uncommitted edits)" >&2
+  fi
+  rc=0
+  run_gate "$RANGE" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    # THE SAME TRANSLATION THE LAND USES, character for character — gate_nonzero_code is what
+    # splits a claim about the TREE (6) from a claim about the MACHINE (9). Re-deriving that split
+    # here would be the second authority the header forbids, in the one place it would matter most.
+    code="$(gate_nonzero_code "at precheck")"
+    echo "✗ precheck: this tree would RED the land gate — arm(s): ${GATE_RED_WHY:-unattributed}." >&2
+    echo "  Fix it here, in seconds, instead of discovering it after a fetch + rebase + full gate." >&2
+    exit "$code"
+  fi
+  echo "✓ precheck: statics + all ratchet arms GREEN on $RANGE."
+  echo "  This is the land gate's own verdict on this tree, minus the bats smoke phase (which the"
+  echo "  land runs, and which is none/skipped on ~85% of lands — scripts/gate-red-census.sh)."
+  echo "  A sibling landing before you can still move a repo-wide arm's input; re-run /ship as usual."
+  exit 0
+}
+
 main_outer() {
-  local DRY_RUN=0 TRUNK=""
+  local DRY_RUN=0 TRUNK="" PRECHECK=0 WORKING=0 DO_FETCH=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) DRY_RUN=1; shift ;;
+      --precheck) PRECHECK=1; shift ;;
+      --working) WORKING=1; shift ;;
+      --fetch) DO_FETCH=1; shift ;;
       --trunk) TRUNK="${2:-}"; shift 2 ;;
       --trunk=*) TRUNK="${1#--trunk=}"; shift ;;
-      -h|--help) sed -n '2,30p' "$SELF"; exit 0 ;;
+      -h|--help) sed -n '2,48p' "$SELF"; exit 0 ;;
       *) echo "✗ ship-land: unknown argument '$1'" >&2; exit 2 ;;
     esac
   done
   [[ -z "$TRUNK" ]] && TRUNK="$(detect_trunk)"
+
+  # REFUSED rather than silently ignored: --working and --fetch are precheck-only, and a land that
+  # accepted them would be accepting an instruction it does not honour. That is the shape a later
+  # reader mis-reads as "I asked for the working tree to be gated and it was".
+  if [[ "$PRECHECK" != "1" ]] && { [[ "$WORKING" = "1" ]] || [[ "$DO_FETCH" = "1" ]]; }; then
+    echo "✗ ship-land: --working / --fetch are --precheck options; a land always gates its committed range and always fetches." >&2
+    exit 2
+  fi
+  # DISPATCHED HERE, before the first refusal below, and every one of them is deliberately skipped:
+  # the shared-checkout refusal guards a PUSH (a precheck cannot push, and the shared checkout is
+  # exactly where an author who has not made a worktree yet is standing — refusing them the cheap
+  # check would send them to the expensive one); the dirty-tree refusal guards a LAND of unreviewed
+  # bytes, whereas a dirty tree is the precheck's whole subject under --working.
+  if [[ "$PRECHECK" = "1" ]]; then main_precheck "$TRUNK" "$WORKING" "$DO_FETCH"; fi
 
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"

@@ -91,9 +91,20 @@ run_leg() {
   body="$(extract_leg)"
   # If the anchors stop matching, the leg was moved or renamed — that must go RED here rather than
   # silently reduce these four cases to a no-op.
-  printf '%s' "$body" | grep -q 'CC_PERMGATE_OWN=' \
+  # The anchor is the VARIABLE NAME, not the assignment spelling. It was `CC_PERMGATE_OWN=` until
+  # the P2 own-scope work routed all thirteen arms through own_run(), which passes the name as an
+  # ARGUMENT (`own_run PERMGATE CC_PERMGATE_OWN "$pgown" …`) so the `=` vanished — and this anchor
+  # correctly went red rather than silently reducing the four cases below to a no-op, which is what
+  # it is for. Keyed on the name, it survives the next re-spelling too.
+  printf '%s' "$body" | grep -q 'CC_PERMGATE_OWN' \
     || { echo "could not extract the leg from ship-land.sh — anchors no longer match"; return 9; }
   { printf '%s\n' '#!/bin/bash' 'set -uo pipefail' 'GATE_RED=0' 'range="AAA..BBB"'
+    # own_run is EXTRACTED from ship-land.sh rather than re-implemented here: the leg now invokes
+    # the lint through it, and a harness that stubbed its own version would be testing the stub's
+    # env handling instead of the gate's. Undefined it is a command-not-found — swallowed by the
+    # 2>/dev/null below — so the stub would never run at all and all four cases would report
+    # GATE_RED=0 rc=0, a uniform false pass of exactly the shape the header above warns about.
+    sed -n '/^own_run() {/,/^}/p' "$REPO/scripts/ship-land.sh"
     # STUB gate_red — without it cases 22/23 could never pass. The leg does not assign GATE_RED
     # directly; it calls ship-land's gate_red helper (ship-land.sh:223, used by all 27 ratchet
     # arms). Unstubbed that is a command-not-found, swallowed by the 2>/dev/null on the harness
@@ -421,7 +432,11 @@ fi'
     || { echo "ship-land.sh does not reference the lint — it is detection, not a gate"; false; }
   grep -q 'PERMGATE_LINT.*--selftest' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
-  grep -q 'CC_PERMGATE_OWN=' "$REPO/scripts/ship-land.sh" \
+  # Keyed on the VARIABLE NAME, not the assignment spelling — this read `CC_PERMGATE_OWN=` until the
+  # P2 own-scope work routed all thirteen arms through own_run(), which passes the name as an
+  # ARGUMENT, and it correctly went red on a change that kept the wiring and moved only its shape.
+  # Case 24 below is what actually proves the own-set ARRIVES; this one proves it is referenced.
+  grep -q 'CC_PERMGATE_OWN' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate does not pass an own-set — a whole-set block is a fleet-wide hard stop"; false; }
 }
 

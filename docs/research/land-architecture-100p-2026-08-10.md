@@ -657,3 +657,144 @@ blob key, applied where the population is. That needs a file-locality proof per 
 already fails it for one) and touches ~15 gate scripts, so it is a **separate item, not a silent
 widening of this one**. The prerequisite for it is a mechanical read-set declaration per lint, which
 is also what would make finding 3's superset claim checkable instead of asserted.
+
+### §5.P2 — the per-arm own-diff blocking audit, and what shifting left actually shifts
+
+*(Implementation note, 2026-08-11, backlog 46eb9be14249. INTEGRATE-only: §5's P2 row states the
+target; this is what the fifteen arms were measured to do.)*
+
+**Shipped, three parts.**
+
+1. **`scripts/ship-land.sh --precheck`** — the commit-time entry point. It is a dispatch verb on
+   ship-land itself, so it calls the identical `run_gate()` on the identical range; there is no
+   second implementation of any rule and therefore no second authority to disagree. It takes no
+   lock, writes no `land.log` row, claims no in-flight marker, writes no backup ref, files no
+   inbox row, never rebases, and is offline by default. `--working` gates the WORKING TREE
+   (`git diff <base>` with a bare rev), which is the position an author is actually in at commit
+   time and the one `--dry-run` structurally cannot reach — `--dry-run` refuses a dirty tree and
+   rebases the branch before gating, and a check that rewrites your history is not a commit-time
+   check. Pinned by `tests/gate-precheck.bats`.
+2. **`scripts/gate-red-census.sh`** — the rate, its causes, and its denominators, rendered.
+3. **Three own-diff blocking leaks fixed**, plus the caller-side own-scope mechanism.
+
+**Part 1's honest scope, per §5.P3's first finding.** The precheck runs the statics AND all
+fifteen ratchet arms — ~112s of the land gate's 127-137s, i.e. the expensive part, not the cheap
+2%. It does NOT run the /Users/chrisren/.claude/bin/cc-bats smoke phase. That is a deliberate line and it is stated in the tool's
+own output, not only in its header: smoke is already `none`/`skipped` on **84.8%** of the
+invocations that record the field (`gate-red-census.sh`, 1,651 invocations, 2026-08-11 — §2.B's
+"89%" is the same finding taken by hand; the tool is now the citable source, and the two differ
+only in how they treat the 20.8% of rows predating the `smoke` field), so its absence cannot move
+the red rate the entry point exists to pre-empt, while
+including it would have made the check cost a corpus. Measured cost of a full precheck on this
+worktree: **3m35s**, against a land round that costs the same gate PLUS a fetch, a rebase, an
+attested exit-6 row, a failure-inbox row, and a lock round-trip — and that cannot be run before
+the commit exists at all.
+
+**The entry point's own first defect, found by the land gate on this very commit — and worth
+recording because it is the failure mode the whole design is supposed to exclude.** `--working`
+was built on `git diff <base>`, which reports only files git already knows about. A **brand-new,
+untracked file was therefore invisible to every own-set the gate builds** — and a new file is the
+commonest thing an author has in hand at commit time. Measured live: `tests/gate-precheck.bats`
+was untracked, `--precheck --working` said **GREEN**, and the land then said **RED** on that
+file's missing `$HOME` fixture. That is precisely the *clears a tree the land will refuse*
+direction, i.e. a second authority disagreeing with the first, arriving through the data the two
+were reading rather than through the rules they applied — the identity tests all passed because
+they compared verdicts over the same *visible* population. The fix makes the untracked files
+visible via `git add -N` into a **throwaway copy of the index** (`GIT_INDEX_FILE`), so every git
+command in the gate sees them and the author's real index is never opened for writing; a
+partially staged tree survives untouched. Pinned by a regression test that also asserts the file
+is still untracked afterwards. If the scratch index cannot be built, the precheck says so out
+loud rather than silently reporting on a tree the author does not have.
+
+**Part 3, the audit.** Every arm was read for the same question — *can a finding on a file this
+land did not touch contribute to a non-zero exit?* — and every answer was then exercised with a
+per-arm mutant (`tests/gate-ownscope-leak.bats`, 17 tests): one fixture tree carrying a violation
+of THAT arm's rule and nothing else, asserted in every reachable own-state, including the states
+that must still block. A suite that only proved "does not block" would pass against a deleted
+ratchet.
+
+The mechanism is three states, and every leak was a collapse of two of them:
+
+| | own-set | meaning | required behaviour |
+|---|---|---|---|
+| UNSET | no caller scoped | strict | the whole tree may block |
+| SET-BUT-EMPTY | a caller scoped, owns nothing here | a docs-only / launchd-only / commands-only land | **nothing** may block |
+| SET | a caller scoped | these files are mine | only these may block |
+
+ship-land ALWAYS exports the variable, so SET-BUT-EMPTY is the common case, not a corner — and a
+lint spelling its presence test `${CC_X_OWN:-}` cannot express it.
+
+| # | arm | verdict | evidence |
+|---|---|---|---|
+| 1 | test-hermeticity | does not leak | all ten blocking counters increment inside `in_own`; verdict is their sum (`:1580`). Latent: the own-set is basenamed (`:1289`), so a same-named file in another dir would block — **no basename collisions exist in the tree today** (checked across `bin/ scripts/ hooks/ tests/`) |
+| 2 | wall-clock | does not leak | `bombs`/`stuck` inside `in_own`; verdict `:153`. Own-set population = judged population = `tests/*.bats`, so the basename collapse is 1:1 |
+| 3 | AF_UNIX | does not leak | `bad`/`stuck` inside `in_own`; verdict `:175`. Same 1:1 population |
+| 4 | git-identity | does not leak | `bad`/`stuck` inside `in_own`; verdict `:335`. Same latent basename vector as arm 1, no live collisions |
+| 5 | UTC-stamp | does not leak | `bad`/`stuck` inside `in_own`; verdict `:155`. Matches the PATH, not the basename — which is why ship-land strips the leading component (`:1904`). Separate defect filed, see below |
+| 6 | pipefail-SIGPIPE | **LEAKED — FIXED** | `${CC_PIPEFAIL_OWN:-}` (`:327`) — two-state. Measured pre-fix: empty own-set ⇒ rc 1 over a sibling's file |
+| 7 | /Users/chrisren/.claude/bin/cc-bats dead-assertion | does not leak | no own-set at all: ship-land hands it an explicit file list, and the lint cannot judge a file it was not given. The tightest of the fifteen |
+| 8 | script-dir self-path | does not leak | `bad` AND the stuck-ratchet half both inside `in_own` (`:346-365`); verdict `:400` |
+| 9 | pane-spawn coverage | does not leak | exactly one `rc=1` site (`:147`), reached only past the own-scope `continue`. Reads no state outside the repo |
+| 10 | unattended-PATH | **LEAKED — FIXED** | the stuck-ratchet `return 1` (`:896`) consulted neither `$own` nor `$have_own`. Measured pre-fix: rc 1 in **all three** own-states, including one naming a different file |
+| 11 | permission-gate | does not leak | `bad`/`stuck` inside `in_own`; verdict `:475` |
+| 12 | chromium-bundle | **LEAKED — FIXED** | `${CC_CHROMIUM_OWN:-}` (`:90`) — two-state, same defect as arm 6. Its own `--selftest` **encoded the defect**: the harness defaulted the own-set to `""` and set the variable unconditionally, so every case labelled "strict" was in fact running SET-BUT-EMPTY and passing only because the lint conflated them the same way. A control that encodes the defect cannot catch it |
+| 13 | TSV field-collapse | does not leak | `bad`/`stuck` inside `in_own`; verdict `:258`. Its basename leg is deliberately over-wide and documented (`:64-67`) — that direction costs a loud nameable refusal, not a silent pass |
+| 14 | .bats shellcheck | does not leak | LINE-scoped; `bad` inside `in_own` and the scanned set is pre-narrowed to suites carrying an own line (`:627-641`). Its one file-scoped path — an UNANALYZABLE suite whose shellcheck run aborted — is argued at `:62-71` and is a deliberate exception, not a leak |
+| 15 | unguarded-kill | **by design, not a leak** | strict whole-corpus, no own-set. Declared at `ship-land.sh:2425-2429` with its reason (the introducing commit swept the corpus to zero, so the strictest rule is the free one) and a named release. Its correctness rests on an unenforced runtime invariant — baseline stays 0 — which is filed, not fixed: weakening it would lower the bar, which P2 forbids |
+
+**The caller side had a fourteenth defect, and it was the escape hatch itself.** All thirteen
+env-scoped arms read `[[ "${SHIP_LAND_<ARM>_OWN_SCOPE:-on}" != "off" ]]` to decide whether to
+BUILD the own-set, then exported `CC_<ARM>_OWN="$own"` **unconditionally**. Setting the documented
+kill switch — whose own comment reads *"restores whole-tree blocking"* — therefore left the set
+empty and still exported it, so the lint saw SET-BUT-EMPTY and blocked on **nothing**. The escape
+hatch for a leaking arm silently DISABLED that arm. All thirteen now route through one
+`own_run()` helper that `unset`s the variable on `=off`; the switch is consulted in exactly one
+place, so a later arm cannot get it wrong by copying a neighbour, which is how all thirteen came
+to share one defect. Two sibling suites pinned the OLD spelling (`grep -q 'CC_PERMGATE_OWN='`,
+`grep -q 'CC_BATS_SC_OWN='`) and went red on a change that kept the wiring and moved only its
+shape — the assertions working, not failing. Both are now keyed on the variable NAME, and
+permission-gate's leg-execution harness extracts `own_run` from ship-land rather than stubbing its
+own, since an undefined `own_run` there is a command-not-found swallowed by the harness's
+`2>/dev/null`, which would have made all four of its mutation cases pass vacuously.
+
+**§5.P3's two named leads, resolved.**
+- *unattended-path also judges `settings.json`* — **REFUTED, the lead is stale.** Every
+  `settings.json` occurrence in that lint is a comment, and `:686-698` records that intersecting
+  the population with the live settings.json was **removed** precisely because it made the verdict
+  a function of the operator's machine rather than of the tree. `hook_population` is `ls hooks/*.sh`
+  and nothing else.
+- *pipefail's pathspec lists `docs/*`* — **confirmed, and not a leak.** The lint's own filter
+  accepts `*.sh|*.bats|bin/*|hooks/*|scripts/*`, so `docs/*` in the pathspec can only widen the
+  OWN-SET, never the judged population.
+- *a third arm whose declared scope disagrees with what it judges* — **none found.** Judged
+  population ⊆ ship-land pathspec was verified for all fifteen under the default environment.
+  Two unread widening SEAMS would break that if anyone ever set them — `CC_PERMGATE_SET` and
+  `CC_TSVPAD_DIRS` move a judged population without moving the pathspec. Filed.
+
+**What the fix does NOT claim.** The spec's "gate-red ≤10%/day within two weeks" is a trailing
+outcome no single session can observe, and it is not claimed here. What is claimed is mechanism
+plus a baseline the census now renders, so the claim becomes checkable later by re-running one
+command instead of reconstructing it by hand.
+
+**Filed rather than fixed, with reasons** — each is a real finding, none is an own-diff blocking
+leak, and pulling them in would have been scope metastasis on a file three siblings had just
+landed into:
+1. **Nine arms collapse a lint's exit 2 (could-not-run) into `gate_red` (your tree is bad).** This
+   is the NON-VERDICT class that `5e53e629` fixed for two arms (afunix, tsv-pad) — a machine
+   condition arriving as an author-fixable red. `permission-gate-lint` and `bats-shellcheck-lint`
+   both go to real lengths to *produce* a distinguishable 2 that the caller then discards.
+2. **`pipefail-sigpipe-lint`'s exit 2 is unreachable on the `--scan` path** (`hits="$(scan)" ||
+   true` swallows the subshell's exit), so ship-land's `pf_rc == 2` → `GATE_KILLED` branch is dead
+   code, and an unusable scan root produces exit 1 with a *fabricated* "you fixed a grandfathered
+   site" report.
+3. **`utc-stamp-lint`'s driver collapses `lint_dir`'s return 2 into `rc=1`** (`:238`) — a scan root
+   with nothing to judge reads as "your tree is bad". Unreachable in this repo today (all three
+   roots are non-empty), latent otherwise.
+4. **`bats-assert-liveness` fails OPEN on every non-verdict** — ship-land reads its stdout, not its
+   exit code, so a missing `python3` or a traceback reads as GREEN. Deliberate and commented, but
+   it is the opposite direction from its four neighbours and worth an explicit decision.
+5. **`unattended-path-lint`'s finding set is a function of the caller's live `$PATH`** — with the
+   stuck-ratchet now own-scoped its blocking channel is closed, but "author's worktree green,
+   landing box red" remains reachable from an inventory difference alone.
+6. **The basename-collapse vector in arms 1, 4, 5 and 13** — latent today (no collisions in the
+   tree), and it fails toward blocking, so it would surface as a loud nameable refusal.
