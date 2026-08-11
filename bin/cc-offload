@@ -536,6 +536,21 @@ cmd_up_api() {
 
 # ═══ say ═════════════════════════════════════════════════════════════════════════════════════════
 # The here→cloud arm. QUEUED is the strongest claim available and this verb never exceeds it.
+#
+# 🚨 THE BINARY DEFAULT IS THE SAME ONE `up` CARRIES, AND ITS ABSENCE MADE THIS VERB DEAD (backlog
+# 6ad6ec4121d2, measured 2026-08-11). cc-notify's `--cloud` transport resolves a claude binary from
+# `command -v claude` when CC_CLAUDE_BIN is unset — and on this box `claude` is a SHELL FUNCTION, so
+# a script never sees it; the pinned 2.1.114 that a PATH lookup can find has no `--cloud` verb at
+# all. `cmd_up_api` already defaulted that variable to $CLOUD_CLAUDE for exactly this reason, so the
+# create+brief path worked while the STEERING arm — the one thing that makes a running cloud session
+# addressable mid-flight — refused with exit 4 until it was pinned by hand.
+# (This prose deliberately does NOT spell the parameter-expansion token itself: the item's stored
+# falsifier COUNTS that token in this file, and a comment satisfying the count would retract the
+# item while the code stayed broken.)
+# One default in one file, two call sites: an env default that only one of two callers sets is not
+# a default, it is a hidden precondition on the other. (memory: invariant-can-live-in-an-absent-token
+# — the invariant here lives in a token that is ABSENT at this call site, so no reader of either
+# line can see the difference.)
 cmd_say() {
   local target="${1:-}" msg="${2:-}"
   [ -n "$target" ] || die "say: <id|all> is required"
@@ -555,7 +570,7 @@ cmd_say() {
   local id rc worst=0
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    "$NOTIFY_BIN" --cloud "$id" "$msg"
+    CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$id" "$msg"
     rc=$?
     case "$rc" in
       0) printf '%s✓ QUEUED%s → %s %s(queued is not read — no off-box cursor exists)%s\n' \
