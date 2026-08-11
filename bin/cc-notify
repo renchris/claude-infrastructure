@@ -546,10 +546,14 @@ if [ "$CLOUD_GIVEN" = 1 ]; then
   # here too rather than inherited — an inherited terminal is exactly the difference between a
   # measured call and an untested one.
   CLOUD_ERR="$(mktemp "${TMPDIR:-/tmp}/cc-notify-cloud.XXXXXX" 2>/dev/null || printf '/tmp/cc-notify-cloud.%s' "$$")"
+  # `--strict-mcp-config` (eece54939e7f): this local process is a TRANSPORT — it hands a message to
+  # a cloud session and exits. It calls no tool, so every stdio server the caller's cwd would give it
+  # is startup latency on a delivery path, paid per ping. The cloud session's own servers are its
+  # business and are unaffected by a flag on the sender.
   if [ -n "$CLOUD_CFG" ]; then
-    CLOUD_OUT="$(CLAUDE_CONFIG_DIR="$CLOUD_CFG" "$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+    CLOUD_OUT="$(CLAUDE_CONFIG_DIR="$CLOUD_CFG" "$CLOUD_CLAUDE" -p "$MSG" --strict-mcp-config --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
   else
-    CLOUD_OUT="$("$CLOUD_CLAUDE" -p "$MSG" --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
+    CLOUD_OUT="$("$CLOUD_CLAUDE" -p "$MSG" --strict-mcp-config --cloud "$CLOUD_ID" --output-format json 2>"$CLOUD_ERR" </dev/null)"; CLOUD_RC=$?
   fi
   CLOUD_ERRTXT="$(cat "$CLOUD_ERR" 2>/dev/null || true)"; rm -f "$CLOUD_ERR" 2>/dev/null || true
 

@@ -113,7 +113,13 @@ FIFO="$WORK/in.fifo"; rm -f "$FIFO"; mkfifo "$FIFO" || exit 2
 PTY_BEFORE=$(pty_count)
 SID=$(/usr/bin/uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]')
 
+# `--strict-mcp-config` (eece54939e7f): a precondition probe must measure the CLI, not whatever
+# `.mcp.json` sits in the cwd it was launched from. Without it the probe inherits a repo's stdio
+# servers — startup latency and RSS that belong to the repo, attributed to the probe — and the
+# measurement silently changes with the directory. Same reason this suite unsets terminal-shaped
+# env: an unfixtured axis is the one that goes latent.
 "$CLAUDE_BIN" -p \
+  --strict-mcp-config \
   --settings "$WORK/probe-settings.json" \
   --model "$MODEL" \
   --input-format stream-json --output-format stream-json --verbose \

@@ -249,6 +249,22 @@
 #                       stranded-sweep, rollback, land.log) is unchanged. Delegates to the sibling
 #                       scripts/desk-land.sh (run `handoff-fire.sh land --help` for its full contract).
 #   --extra "ARGS"      Extra CLI args typed before the prompt (e.g. --extra "--permission-mode plan").
+#   --with-mcp          Let the fired session load the target repo's PROJECT `.mcp.json` stdio
+#                       servers. DEFAULT IS OFF: a fire composes `--strict-mcp-config` plus a
+#                       `--mcp-config` passthrough carrying the target account's USER-scope
+#                       non-stdio servers, so the session keeps its http servers (they cost no
+#                       process) and starts no project stdio chain it never asked for. Measured
+#                       2026-08-11 on 2.1.220: an unflagged fire into a repo with an approved
+#                       project stdio server starts that server (312 MB for reso's chrome-devtools),
+#                       and `-p`/headless starts it even UNAPPROVED (04-spawn-semantics Runs E/E2).
+#                       Auto-disarmed when the brief itself declares MCP/browser work (a `mcp__`
+#                       tool name, browsermcp, chrome-devtools, agent-browser) — that fire needs the
+#                       servers, so the default fails OPEN rather than breaking the work.
+#                       NOT a teammate control: a teammate's launch argv is an enumerated set
+#                       (--agent-id/--agent-name/--team-name/--agent-color/--parent-session-id
+#                       /--permission-mode/--effort/--model) with no MCP flag in it, so nothing here
+#                       reaches an `Agent({name})` spawn — that needs `disabledMcpjsonServers` in the
+#                       scope's settings, which blocks in every mode. See tests/mcp-no-inherit.bats.
 #   --dry-run           Print the ranked accounts + composed command + surface; execute nothing.
 #
 # Neither --cwd nor --worktree: the launcher self-routes (at the reso PRIMARY root
@@ -392,6 +408,7 @@ REPO="$DEFAULT_REPO" REPO_EXPLICIT=0 REPO_SRC="default (cwd is not a git repo)"
 WTROOT="$HOME/Development/.worktrees" BASE="origin/main"
 SURFACE="split-right" SURFACE_EXPLICIT=0 SURFACE_REASON="" PROBE=0 DRY=0 IN_PLACE=0 EXTRA="" RECYCLE=0 SESSION_ID=""
 NOTIFY_BACK="" NOTIFY_BACK_EXPLICIT=0 NOTIFY_BACK_OPT_OUT=0 SELF_RETIRE=1 AS_ROLE="" FOLLOW=0
+WITH_MCP=0                                       # --with-mcp: opt back INTO project .mcp.json stdio servers
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 RECYCLE_REPICK_FROM=""                           # W2-A: set to the OLD account when a recycle re-picks
 # G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
@@ -5671,6 +5688,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --no-self-retire) SELF_RETIRE=0; shift ;;
   --as-role)     AS_ROLE="${2:?--as-role needs a value}"; shift 2 ;;
   --extra)       EXTRA="${2:?--extra needs a value}"; shift 2 ;;
+  --with-mcp)    WITH_MCP=1; shift ;;
   --follow)      FOLLOW=1; shift ;;
   --dry-run)     DRY=1; shift ;;
   -h|--help)     usage ;;
@@ -6087,6 +6105,12 @@ pre_trust() { # $1=launch dir  $2=config dir
 # ---- liveness probe (headless, same binary the launchers exec) ------------------------------
 # One probe per decision; writes a tiny session into the account's projects dir (cwd /tmp).
 # perl alarm survives exec → SIGALRM kills a hung probe (macOS has no GNU timeout).
+# `--strict-mcp-config` (eece54939e7f): this probe answers "is this account usable" and calls no
+# tool at all, so every MCP server it starts is pure latency and pure RAM. The `cd /tmp` below
+# already keeps it out of a repo's `.mcp.json` today — but that is an accident of cwd, not a
+# property of the probe, and it holds only while /tmp carries no such file. The flag makes the
+# probe's cost independent of wherever it happens to run. Note it does NOT need the user-scope
+# passthrough the fired session gets: a session that will never call a tool loses nothing.
 probe_account() { # $1=account → 0 pass; prints rejection class on fail
   local dir out probe_model="claude-haiku-4-5"
   [ "$MODEL" = "claude-fable-5" ] && probe_model="claude-fable-5"
@@ -6098,6 +6122,7 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
   dir="$(cfg_dir "$1")"
   if out="$(cd /tmp && CLAUDE_CONFIG_DIR="$dir" DISABLE_AUTOUPDATER=1 \
       perl -e 'alarm 90; exec @ARGV' "$BIN" -p 'Reply with exactly: ok' \
+      --strict-mcp-config \
       --model "$probe_model" --max-turns 1 --output-format json 2>&1)" \
      && printf '%s' "$out" | grep -q '"is_error":false'; then
     return 0
@@ -6373,6 +6398,39 @@ fi
 # ---- compose the typed command ---------------------------------------------------------------
 ARGS=""
 [ -n "$EFFORT" ] && ARGS="$ARGS --effort $EFFORT"
+
+# MCP no-inherit (eece54939e7f). Composed BEFORE --model/--extra so the flags a reader is used to
+# seeing at the end of the line stay at the end. The reason string is printed by the dry run and by
+# the fire itself — a control that changes what a session can reach must never be silent.
+MCP_ARGS=""
+if [ "$WITH_MCP" = 1 ]; then
+  MCP_REASON="--with-mcp: project .mcp.json servers left ON"
+else
+  # shellcheck source=/dev/null
+  for _CC_MNI in "$(dirname "$0")/lib/mcp-noinherit.sh" "$HOME/.claude/scripts/lib/mcp-noinherit.sh"; do
+    [ -f "$_CC_MNI" ] && { . "$_CC_MNI"; break; }
+  done
+  if command -v cc_mcp_noinherit_args >/dev/null 2>&1; then
+    # $CHOSEN is an account name on every routed fire, but reads "(explicit launcher)" when the
+    # caller pinned one — a value cfg_dir cannot resolve. Falling back to THIS session's config dir
+    # is right rather than merely safe: user-scope servers are per-account config, and all four
+    # accounts on this box carry the same two http servers, so the passthrough is identical. Without
+    # the fallback every --launcher fire would silently lose its http servers.
+    _MCP_CFG="$(cfg_dir "${CHOSEN:-}" 2>/dev/null || true)"
+    [ -n "$_MCP_CFG" ] || _MCP_CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Called directly, NOT in `$(…)` — it returns its decision in globals precisely because a
+    # subshell would swallow the reason (see the library header).
+    cc_mcp_noinherit_args "$_MCP_CFG" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}"
+    MCP_ARGS="${CC_MCP_NOINHERIT_ARGS:-}"
+    MCP_REASON="${CC_MCP_NOINHERIT_REASON:-}"
+  else
+    # The library is a separate file, so it can be absent on a live layer that has not converged yet
+    # (LIVE_ADDS: a symlink farm reaches an ADDED file only after the converger runs). Absent ⇒ the
+    # fire behaves exactly as it did before this change, and says so.
+    MCP_REASON="mcp-noinherit lib unreachable — project servers left ON (pre-change behaviour)"
+  fi
+fi
+[ -n "$MCP_ARGS" ] && ARGS="$ARGS $MCP_ARGS"
 if [ -n "$MODEL" ]; then
   if [ "$EXPLICIT_LAUNCHER" = 1 ]; then
     # Explicit launcher may pin a different model (e.g. the stable `claude-prev` track) — always
@@ -8062,6 +8120,7 @@ if [ "$DRY" = 1 ]; then
   [ -n "$RANKED" ] && { echo "account ranking (${RANK_SRC:-unknown source}):"; printf '%s\n' "$RANKED" | while read -r a c; do echo "  $a  $c"; done; }
   echo "account:  ${CHOSEN:-auto}"
   echo "launcher: $LAUNCHER"
+  echo "mcp:      ${MCP_REASON:-(undecided)}"
   if [ "$RECYCLE" = 1 ]; then
     echo "surface:  (recycle — this pane: $SID)"
     echo "chain:    arm watcher (setsid-detached, heartbeat-verified) → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (CR nudges @60/150/300s) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"

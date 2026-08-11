@@ -132,6 +132,82 @@ separate-process `claude.exe --agent-id` teammates bootstrap from their cwd (cor
 **DoD:** controls landed + tested; probe result recorded in the plan; `eece54939e7f` closed.
 **Constraint:** never widen to blocking http servers (they cost nothing) — scope is stdio project servers only.
 
+### Task 1 probe — DONE 2026-08-11, closing 04's named gap: **teammates DO inherit, and no per-fire flag can reach them**
+
+Measured on 2.1.220 against a fake logging stdio server (`tests/fixtures/mcp-noinherit/fake-stdio-server.py`)
+declared in a project `.mcp.json`, with each START line self-attributing by recording its PARENT's argv.
+
+| arm | result |
+|---|---|
+| `Agent({name})` teammate, server UNAPPROVED | **no spawn** — and this is the trap, not the answer |
+| `Agent({name})` teammate, server APPROVED | **spawns its own server process** — fake-server pid 47669 whose ppid 46888 IS the `claude.exe --agent-id w3probe2@…` process |
+| teammate process shape | separate OS process, `cwd` = the parent session's cwd, launched `cd <cwd> && env … claude.exe --agent-id …` |
+| parent's `--strict-mcp-config` reaching a teammate | **no** — read from the binary, the spawn argv is an enumerated set: `--agent-id --agent-name --team-name --agent-color --parent-session-id [--plan-mode-required] [--agent-type] [--permission-mode --effort --model]`. No MCP flag exists in it to inherit |
+| env-carried MCP kill-switch | **none exists** — the only MCP env lever in the binary is `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS` (plugin scope, not project) |
+
+**Why the first row nearly became a wrong verdict.** The unapproved arm returned zero spawns, which reads
+as *"teammates don't inherit project MCP — nothing to fix."* It is instead the approval gate doing its job:
+`claude mcp list` in the same cwd reported `⏸ Pending approval` for the same server, i.e. the teammate had
+read the file and declined. Granting approval flipped the result immediately. A separate-process teammate
+is therefore an ORDINARY session for MCP purposes — approval-gated like an interactive one, unlike `-p`
+which ignores approval entirely — and reso, which sets `enableAllProjectMcpServers: true`, is precisely the
+configuration where every teammate starts its own chrome-devtools. That matches the corpus observation this
+gap came from (`census-fleet.md:400`; 2 of 5 live chains belonging to teammates in one worktree) and it
+means the 13-chains-per-wave multiplier is real rather than inferred.
+
+**Consequence for the targeting question the probe existed to answer:** per-fire flags cover fired
+SESSIONS only. Teammates are reachable exclusively through `disabledMcpjsonServers` in the scope's
+settings (Task 3) — which is why that task stopped being a nice-to-have floor and became the only
+teammate control that exists.
+
+### Tasks 2-4 — DONE 2026-08-11
+
+**The flag the plan proposed above is the one form that must NOT be used.** Three candidates measured
+against one project stdio server plus the account's real user-scope http servers:
+
+| control | project stdio | user-scope http | project settings/hooks |
+|---|---|---|---|
+| (none) | STARTED | connected | loaded |
+| `--setting-sources user,local` | blocked | connected | **DROPPED** |
+| `--strict-mcp-config` | blocked | **DROPPED** | loaded |
+| `--strict-mcp-config --mcp-config <user-scope passthrough>` | blocked | connected | loaded ← **shipped** |
+
+`--setting-sources` excluding project also excludes a repo's `.claude/settings.json`, and reso's carries
+`hooks` and `permissions` — so that form would silently disarm a repo's own hooks in every fired session,
+a blast radius far outside this wave. Bare `--strict-mcp-config` empties the server list entirely, taking
+the http servers W3's own constraint protects (an http server holds no local process, so blocking it saves
+nothing). The shipped control re-adds the target account's user-scope non-stdio servers through
+`--mcp-config`, which is what makes it surgical.
+
+- `scripts/lib/mcp-noinherit.sh` (NEW) — one composer, `cc_mcp_noinherit_args`. Default ON; auto-disarms
+  when the brief names an MCP tool or browser server (`mcp__…`, browsermcp, chrome-devtools, agent-browser,
+  claude-in-chrome) so a fire is never broken by its own isolation; `CC_MCP_NOINHERIT=off` kill-switch.
+  It returns its decision in GLOBALS, not on stdout: the first wiring used `$( … )`, whose subshell
+  swallowed the reason and shipped a dry run reading `mcp: (undecided)` with the flags correctly composed.
+- `scripts/handoff-fire.sh` — `--with-mcp` opt-out; composition wired into the typed command; the decision
+  printed as an `mcp:` line in the dry run. Also `probe_account()` now runs `--strict-mcp-config` (it calls
+  no tool; its `cd /tmp` immunity was an accident of cwd, not a property of the probe).
+- `scripts/headless-precondition-probe.sh`, `bin/cc-notify` (cloud transport) — same one-flag fix.
+- `.claude/settings.json` — `disabledMcpjsonServers: ["chrome-devtools","browsermcp"]`, the mode-independent
+  floor for this repo and its worktrees. Measured: this key in PROJECT scope takes a headless session's own
+  stdio STARTs 1 → 0 while the http servers stay connected, and it is the only control a teammate obeys.
+- `tests/mcp-no-inherit.bats` — 8 tests, hermetic by default, plus an opt-in LIVE arm
+  (`CC_MCP_LIVE_PROBE=1`) that runs a real `claude -p` against the fake server and asserts the unflagged
+  control spawns BEFORE asserting the flagged one does not. A mutant run (`CC_MCP_NOINHERIT=off`) kills
+  4 of the 8, so the guards are not vacuous.
+
+**Sites deliberately NOT changed** (a silent cap reads as coverage):
+- `hooks/session-start.sh:74` — `claude mcp list`, a flagless child CLI that health-starts every approved
+  stdio server on every session start, then exits. It is a spawn site and it was previously unnamed, but
+  its whole purpose is counting connected servers, so `--strict-mcp-config` would make it report 0 forever.
+  It belongs to W4's `aac347ddc003` (the probe is inert anyway — bare `command -v claude`). Its START lines
+  are why the bats live arm attributes by parent argv instead of counting.
+- `boot-resume.sh` · `lead-supervisor.sh` · `lr-handoff.sh` · `lr-reset-poller.sh` · `land-lock.sh` ·
+  `cloud-ceiling-probe.sh` · `cc-reaper` · `cc-offload` · `cc-resume-resolve` · `cc-backlog` ·
+  `cc-reconcile` · `cc-cloud` · `cc-relogin` · `claude-accounts` — enumerated from the brief's starting
+  list and re-greped; their `claude -p` occurrences are all PROSE (comments, help text, printf fixtures),
+  not live call sites. Nothing to flag.
+
 ## W4 · enforcement/accounting (backlogs `819839ed24b3` · `ef28f9bb11e6` · `e3fb627bc57a` · `aac347ddc003`)
 
 **The riskiest wave — a SIGSTOP actuator's selection predicate.** All file:line refs verified 2026-08-10
