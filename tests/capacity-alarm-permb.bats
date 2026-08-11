@@ -9,8 +9,9 @@
 # prose promised this number could never be wrong in.
 #
 # The properties, in priority order:
-#   1. The figure INCLUDES the descendants (a) — proven against the REAL pre-fix artifact from
-#      origin/main, not against a mutant of this file, so the control provably fails pre-fix.
+#   1. The figure INCLUDES the descendants (a) — proven against the REAL pre-fix artifact replayed
+#      from a PINNED sha, not against a mutant of this file, so the control provably fails pre-fix.
+#      The pin is a sha and not `origin/main` precisely because the fix landed there; see case (a).
 #   2. A corrupt ppid chain under-counts rather than spins (b) — the one shared walk's cycle cap.
 #   3. An explicit override still wins (c).
 #   4. No live session ⇒ the DOCUMENTED fallback, SAID SO in the row, no divide-by-zero, and the row
@@ -125,9 +126,18 @@ run_alarm() { # $1 = script path; rest = extra env assignments
 
 @test "(a) POSITIVE CONTROL — the per-session figure includes the tree's DESCENDANTS (pre-fix: it cannot)" {
   mk_ps_stub
-  # The REAL pre-fix artifact, replayed from origin/main — not a mutant of this test file, and not a
+  # The REAL pre-fix artifact, replayed from git — not a mutant of this test file, and not a
   # hand-edited copy. If this suite ever passes against BOTH versions, the control is vacuous.
-  git -C "$REPO" show origin/main:scripts/capacity-alarm.sh > "$BATS_TEST_TMPDIR/pre.sh"
+  #
+  # PINNED SHA, NOT `origin/main` (fixed 2026-08-11, backlog 39c255ca7bab). The pin used to be the
+  # moving ref, which is correct for exactly as long as the fix is UNLANDED. The moment 54555bed1
+  # landed, `origin/main:scripts/capacity-alarm.sh` became the POST-fix file, so this case began
+  # asserting that the fixed script still carries the constant it deleted — a control that
+  # invalidates itself by succeeding at its own purpose. It failed loudly (the good direction: the
+  # marker grep is what caught it, not a silent 750==750 vacuous pass), but it failed FOREVER.
+  # 73f4a4ec1 is 54555bed1^ and is an ancestor of trunk, so this replay is immutable.
+  PRE_SHA=73f4a4ec1c31587b40cb5c7216b77e3bd17ac61f
+  git -C "$REPO" show "$PRE_SHA:scripts/capacity-alarm.sh" > "$BATS_TEST_TMPDIR/pre.sh"
   [ -s "$BATS_TEST_TMPDIR/pre.sh" ] || false
   grep -q 'CC_CAP_PER_SESSION_MB:-636' "$BATS_TEST_TMPDIR/pre.sh" || false
 
