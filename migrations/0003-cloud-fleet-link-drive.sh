@@ -2,6 +2,7 @@
 # migration-class: c10
 # migration-step: re-link any Claude account whose CLI→GitHub link is missing, so cloud sessions can be created from it (drives a TUI in a real pane — C10, yours)
 # migration-run: bash ~/Development/claude-infrastructure/scripts/cloud-websetup-drive.sh --all
+# migration-verify: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/scripts/cloud-websetup-drive.sh" --status | awk 'NR>1{n++; if ($2 != "linked") bad=1} END{exit (n>0 && !bad) ? 0 : 1}'
 #
 # 0003 — the cloud fleet's ONE operator-owned step, filed where a renderer will surface it.
 #
@@ -28,6 +29,38 @@
 # link can lapse on a revoked token, and a new account starts unlinked. The step is the standing
 # answer to "cloud creates just started failing on one account"; its remedy travels with it and is
 # re-read at consumption, so it cannot rot into a step whose premise died.
+#
+# ── THE ORACLE (added 2026-08-11), AND THE ONE THING IT DOES NOT PROVE ───────────────────────────
+# The verifier calls THIS SCRIPT'S OWN `--status`, which is a pure read of the state dir needing no
+# terminal, repo or binary. It deliberately does not re-derive the account list in jq: `--status`
+# enumerates accounts through accounts_query(), the SSOT reader R1 exists to keep single, and a
+# second enumeration in a header is exactly the drift R1 names — an account added or re-homed would
+# leave the header answering about a fleet that no longer exists. The awk arm requires at least one
+# row (`n>0`) as well as every row reading `linked`: an unreadable accounts.json prints the header
+# line and nothing else, and a rule that passed on an empty population would report a fleet-wide
+# green for the one input state that means "I could not ask" (MEMORY.md cap-whose-population-is-
+# empty). Controlled both ways before landing: all four marked ⇒ 0, `next` unmarked (today) ⇒ 1,
+# empty map ⇒ 1, stateless seam ⇒ 1.
+#
+# THE FALSE NEGATIVE IS DELIBERATE AND HARMLESS; THE FALSE POSITIVE IS THE ONE TO KNOW ABOUT. The
+# markers are the CLI-side record, not the link itself — the header above already records them
+# lying by omission (`next` linked, no marker). That direction is safe here: a missing marker makes
+# the verifier fail, and registration-state.sh then reports `staged-pending`, which is the truthful
+# reading of a c10 whose operator step is outstanding. The unsafe direction is a marker that
+# outlives its link (a revoked token), which reads `registered` over a fleet that can no longer
+# create cloud sessions. Nothing on disk can distinguish that: the only un-fakeable proof is
+# `--verify <name>`, which spends a real cloud session, so it must never be an oracle a readout runs
+# — a checker that draws subscription quota every render is worse than the blindness it closes.
+# Read `registered` here as "every account is RECORDED linked", never as "every link was proven".
+#
+# WHY NO `# migration-conflict:`. There is a cheap wrong value available — a `.linked` marker naming
+# an account accounts.json no longer knows — but declaring it would trade a real signal for a
+# cosmetic one. registration-state.sh consults the conflict arm ONLY when the verifier has failed
+# everywhere, so a stale marker for a departed account would convert today's truthful
+# `staged-pending` (a PASS: `next` genuinely awaits the operator) into `overridden`, a FAILING state
+# that reddens the whole check and buries the step that actually needs doing
+# (MEMORY.md alarm-polarity-and-attention-budget). The wrong value that would deserve the arm — a
+# lapsed link — is precisely the one no local read can see.
 #
 # PROMOTION IS A ONE-WORD DIFF, as with 0002: if the drive ever grows a genuinely headless path —
 # no pane, no typing — `c10` becomes `mechanical` on line 2 and the converger takes it over.
