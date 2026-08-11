@@ -1416,6 +1416,40 @@ dispatch() { # <dry|run|decide>
     # an UNLABELLED dispatcher claim, which is precisely the deadlocking claim this fixes — the fix
     # would go silently inert exactly when it is needed (memory:
     # sensor-default-off-makes-blindness-the-shipping-path). Fail-closed and visible.
+    # G5-P — THE SEAM WHERE THE DECISION PLUGS IN (W1, docs/plans/CLOUD_BACKLOG_PIPELINE.md).
+    # Everything below this block was built and tested with ZERO PRODUCERS: `fire_venue` read an
+    # argv that no caller ever put `--cloud` into, so the whole cloud lane was reachable only by
+    # hand. bin/cc-venue now writes `venuePlan` onto open rows and THIS is where the plan becomes
+    # an argument — the ONE place a fire is composed.
+    #
+    # IT MUTATES THE ARGV, IT DOES NOT SET THE VENUE. That distinction is the whole design of the
+    # three functions above: `fire_venue` reads the array that will ACTUALLY RUN, because that is
+    # the one source which cannot disagree with what was launched. Injecting the flag and then
+    # letting fire_venue derive the label from it keeps that property exactly; assigning
+    # `venue=cloud` here directly would re-create the mislabel-that-reads-as-a-verdict this file
+    # was written to prevent. The `!= cloud` guard is fire_venue itself, so the duplicate check is
+    # element-exact too rather than a substring test over "${fire_args[*]}".
+    #
+    # THE BOX OPT-IN OUTRANKS THE PLAN, and the fail-direction is deliberate. handoff-fire ships
+    # `--cloud` DEFAULT-OFF and refuses with exit 2 unless CC_FIRE_CLOUD=on, because an off-box
+    # fire spends an ACCOUNT's rate limit rather than this box's cores. If this block injected the
+    # flag regardless, every cloud-labelled item on a box without the opt-in would become a FIRE
+    # FAILURE — a producer that strands exactly the work it routed. So the plan is honoured only
+    # where the actuator would accept it, and an unhonoured plan is JOURNALLED rather than
+    # silently dropped: the item fires locally, which is always allowed and never wrong, and the
+    # IDL says why. The claim label stays truthful either way, since it is read off the argv.
+    local plan_venue
+    plan_venue="$(printf '%s' "$items" \
+      | jq -r --arg i "$id" 'map(select(.id == $i)) | first | .venuePlan // ""' 2>/dev/null)" \
+      || plan_venue=""
+    if [ "$plan_venue" = cloud ]; then
+      if [ "${CC_FIRE_CLOUD:-off}" = on ]; then
+        [ "$(fire_venue "${fire_args[@]}")" = cloud ] || fire_args+=(--cloud)
+      else
+        idl skipped "$id: venue=cloud PLANNED but not honoured — CC_FIRE_CLOUD is '${CC_FIRE_CLOUD:-off}' (needs 'on') on this box, so the off-box actuator would refuse; fired LOCALLY instead"
+      fi
+    fi
+
     local venue claim_args
     venue="$(fire_venue "${fire_args[@]}")"
     claim_args=(claim "$id" --by "$SID" --role dispatcher)
