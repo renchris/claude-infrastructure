@@ -222,6 +222,51 @@ HOST_CUT_COOLOFF="${CC_DEPLOY_HOST_CUT_COOLOFF:-1800}"           # ...and before
 case "$HOST_CUT_MAX"     in ''|*[!0-9]*) HOST_CUT_MAX=3 ;; esac
 case "$HOST_CUT_COOLOFF" in ''|*[!0-9]*) HOST_CUT_COOLOFF=1800 ;; esac
 
+# ── --falsify-host <suite> — THE STORED FALSIFIER this script hands to its own items ─────────────
+# Handled FIRST, before the arg loop and before anything fetches, merges, deploys or writes: it is a
+# pure read that cc-premise re-runs on every claim of a `post-deploy HOST RED` / `HOST CUT` item this
+# script filed. Its contract (bin/cc-premise run_falsifier) is asymmetric — exit 0 means the premise
+# is GONE and the claim is refused, every non-zero means "still live", advisory only — so exit 0 is
+# the only load-bearing answer and it is placed where nothing else in this file can produce one.
+#
+# EXACTLY ONE SUCCESS STATE, and a deliberately NARROW one: the live layer no longer runs this suite
+# at all — it left the manifest, or it is absent from the deployed tree. host_checks skips both, so
+# the finding cannot recur; that is one meaning reached two ways, not two meanings.
+#
+# WHY NOT THE OBVIOUS PROBE — re-run the suite, call a green a retraction. It does not fit the bound:
+# cc-premise gives a probe 20s and a host suite is bounded here at CC_DEPLOY_HOST_TIMEOUT_S (3600s
+# default), so a probe honest enough to run one would hold a claim hostage and a probe that fits
+# would time out every time — a permanent non-verdict wearing a measurement's clothes (memory:
+# bound-must-fit-the-band-not-the-bench).
+#
+# AND WHY NOT THE HOST_CUTS LEDGER, which looks like postland-verify's last-green and is not. That
+# file records only NON-verdicts and is rebuilt per tick, so "this suite has no row" is reachable
+# from "it passed", "no deploy has run since" and "the file was pruned to nothing" — three states,
+# one reading, and the middle one is a FALSE retraction. An ambiguous falsifier is worse than none
+# because it reports done; this verb answers the narrow question it can answer instead of guessing
+# the wide one. There is no host-green ledger to read — if one is ever written, THAT is the probe.
+if [ "${1:-}" = "--falsify-host" ]; then
+  _fh_suite="${2:-}"
+  [ -n "$_fh_suite" ] || exit 2                       # nothing named ⇒ could not ask
+  [ -r "$MANIFEST" ]  || exit 2                       # unreadable manifest ⇒ could not ask.
+  # NOT exit 0: an ABSENT manifest is the EMPTY set by the manifest's own contract, which would make
+  # every host suite read as "no longer run" and retract every item this script has ever filed. That
+  # is the emptiness reading the same partition contract makes safe for the VERIFIER and catastrophic
+  # here, so the two consumers deliberately part company on it.
+  # Same normalisation as host_checks' own manifest read — comment strip, whitespace strip — so the
+  # probe and the producer can never disagree about what counts as a row.
+  _fh_in=1
+  while IFS= read -r _fh_line || [ -n "$_fh_line" ]; do
+    _fh_line="${_fh_line%%#*}"
+    _fh_line="$(printf '%s' "$_fh_line" | tr -d '[:space:]')"
+    [ -n "$_fh_line" ] || continue
+    [ "$_fh_line" = "$_fh_suite" ] && { _fh_in=0; break; }
+  done < "$MANIFEST"
+  [ "$_fh_in" -eq 0 ] || exit 0                       # left the manifest ⇒ the live layer stopped running it
+  [ -f "$DEPLOY_REPO/$_fh_suite" ] || exit 0          # absent in the deployed tree ⇒ host_checks skips it
+  exit 1                                              # still in the population ⇒ the finding can still be live
+fi
+
 DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0; OFFLINE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -581,6 +626,32 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
 # tests/<name>.bats per line, `#` comments. MISSING manifest ⇒ EMPTY set ⇒ skip silently — the
 # verifier's side of the same contract reads a missing manifest as "run everything", so the two
 # halves stay total by construction and neither ever needs hand-syncing.
+# fals_host <suite> → the STORED FALSIFIER string for an item about ONE host suite (see the
+# --falsify-host block at the top of this file for the predicate and why it is the narrow one).
+fals_sq()   { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+fals_host() {
+  [ -n "${1:-}" ] || return 1
+  # shellcheck disable=SC2016  # $HOME must NOT expand here — see the --falsify-host block above.
+  # The output is a STORED STRING that cc-premise later runs through `/bin/sh -c`, so the expansion
+  # belongs at probe time, not at write time. Expanding it now would bake this machine's home into
+  # a durable ledger record.
+  printf '"$HOME/.claude/scripts/deploy-live.sh" --falsify-host %s' "$(fals_sq "$1")"
+}
+# fals_host_set "<red>" → a probe for a SINGLE-suite failing set, and deliberately NOTHING for a
+# wider one. `$red` arrives as host_checks built it — a leading space, then ` <suite>(<n>)` per
+# failing suite — so this strips the counts, and emits only when exactly one name survives. A set of
+# two cannot be answered by a probe about one of them, and answering it anyway is the "exit 0 means
+# two different things" defect with extra steps.
+fals_host_set() {
+  local cleaned n
+  cleaned="$(printf '%s' "${1:-}" | sed 's/([0-9]*)//g')"
+  # shellcheck disable=SC2086  # deliberate split on whitespace: this is counting words, not paths
+  set -- $cleaned
+  n=$#
+  [ "$n" -eq 1 ] || return 1
+  fals_host "$1"
+}
+
 host_cut_row() { # <suite> → its prior "<consecutive-n> <epoch>", or "0 0" when it has no streak
   local p pn pts
   # `[ -f ]` FIRST. Redirections are applied left to right, so `< "$HOST_CUTS" 2>/dev/null` opens the
@@ -633,8 +704,13 @@ host_cut_page() { # <suite> <n> <deployed-sha> — an HONEST page: names no test
   # per tick for one unresolved finding, which is exactly the defect that produced 5 items for one
   # finding on 2026-08-05. stderr is NOT swallowed: the DONE-GUARD announces a re-file of an
   # already-closed key there and deliberately does not reopen it.
+  # The item's own re-run check, stored with it (see --falsify-host at the top of this file). `$HOME`
+  # is left UNEXPANDED: cc-premise runs the stored string through `/bin/sh -c`, so it resolves at
+  # probe time rather than pinning the record to whatever tree deployed. The suite is single-quoted
+  # for that second parse.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
     --title "post-deploy HOST CUT (no verdict): $1" \
+    --falsifier "$(fals_host "$1")" \
     --project claude-infrastructure --source deploy-live >/dev/null
   return 0
 }
@@ -766,8 +842,16 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
   # it always shows the CURRENT tree), the BACKLOG is per-finding (one unresolved finding, one item).
   # stderr is NOT swallowed: cc-backlog's DONE-GUARD announces a re-file of an already-closed key
   # there and deliberately does not reopen it, so hiding it would turn a regression into silence.
+  # ONE SUITE OR NONE, and the guard is the point. This title's key is the failing SET, which is
+  # frequently more than one suite — and "have they ALL left the host population" is a different
+  # question from the one --falsify-host answers, so asking it of the first name would retract a
+  # multi-suite finding on evidence about one of its members. A set of one is the only case where the
+  # probe's subject and the item's subject are the same thing; every wider set gets no falsifier,
+  # which is the honest answer rather than a confident wrong one. fals_host strips the `(N)` failure
+  # count that host_checks appends, since that is a measurement and not part of the path.
   [ -x "$BACKLOG_BIN" ] && "$BACKLOG_BIN" add \
     --title "post-deploy HOST RED:$red" \
+    --falsifier "$(fals_host_set "$red")" \
     --project claude-infrastructure --source deploy-live >/dev/null
   return 0
 }

@@ -85,6 +85,15 @@ resolve_helper() {
   return 1
 }
 
+# sq <string> → the string as ONE single-quoted /bin/sh word, embedded quotes and all.
+#
+# A stored falsifier is TEXT that a shell will re-parse later, so anything interpolated into it has
+# to survive that second parse. A bare "$path" reads fine here and re-splits at probe time the moment
+# a plan lives under a directory with a space — the probe then runs against a truncated path, gets
+# "file not found", and answers with an exit code that MEANS something. Escaping is not politeness
+# here; it is the difference between a check and a confident wrong answer.
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
 # backlog_count → number of append-only records (lines) in the store, 0 if absent. A NEW
 # add appends exactly one line; a deduped add appends zero → the delta is the new-add signal.
 backlog_count() {
@@ -111,13 +120,31 @@ abstain() { # <critic> <reason>
 
 # add_candidate <title> <project> <dod-ref> <source>
 #   prints the candidate; rc 0 = a NEW backlog record appeared · 1 = dedup/fail · 2 = dry-run.
+# add_candidate <title> <project> <dod-ref> <source> [falsifier]
+#
+# THE OPTIONAL 5th ARG IS THE ITEM'S OWN RE-RUN CHECK. Without one, every item this file mints is a
+# SNAPSHOT with no way back: the critic asked its question on discovery day and nothing ever asked it
+# again, so an item outlives the condition that justified it and a worker is dispatched at finished
+# work. Passing a probe here stores it on the item (`cc-backlog add --falsifier`), and cc-premise
+# re-runs it at CLAIM time — exit 0 refuses the claim, non-zero proceeds and carries today's output
+# to the worker instead of the filing-day description.
+#
+# EMPTY IS A FIRST-CLASS ANSWER and stays the default for every critic that has no cheap unambiguous
+# oracle. A probe whose exit 0 is reachable from "the condition is resolved" AND from "the condition
+# does not apply here" reports DONE over a live premise; that is strictly worse than asking nothing,
+# so a critic that cannot distinguish the two passes nothing and this stays a plain `add`.
 add_candidate() {
-  local title="$1" project="$2" dod="$3" source="$4" n0 n1
+  local title="$1" project="$2" dod="$3" source="$4" falsifier="${5:-}" n0 n1
+  local -a aargs
   printf 'candidate [%s] %s  (project=%s)\n' "$source" "$title" "$project"
   RUN_CANDS=$((RUN_CANDS + 1))
   [ "$DRY_RUN" -eq 1 ] && return 2
   n0="$(backlog_count)"
-  if ! "$BACKLOG_BIN" add --title "$title" --project "$project" --dod-ref "$dod" --source "$source" >/dev/null 2>&1; then
+  aargs=(add --title "$title" --project "$project" --dod-ref "$dod" --source "$source")
+  # Array-built: a probe is a shell command line, so it contains spaces by construction and an
+  # unquoted ${falsifier:+…} expansion would word-split it back into separate arguments.
+  [ -n "$falsifier" ] && aargs=("${aargs[@]}" --falsifier "$falsifier")
+  if ! "$BACKLOG_BIN" "${aargs[@]}" >/dev/null 2>&1; then
     idl_log "$source" failed "cc-backlog add nonzero: $title"
     return 1
   fi
@@ -180,7 +207,22 @@ critic_plan_open() {
     if [ "${CC_DISCOVER_PLAN_SCOPE:-project}" != all ] && [ "$proj" != "$PROJECT" ]; then
       continue
     fi
-    add_candidate "advance $title" "$proj" "$path" "plan-open"; rc=$?
+    # THE ITEM'S OWN RE-RUN CHECK, stored with it. This critic's entire claim is "this plan still
+    # holds work to advance", and until now nothing re-asked it: measured, `a50e6ab779e8` sat open
+    # for twelve days titled "advance README hero banner" long after that banner shipped, because
+    # the plan was still legitimately open and every other signal therefore passed (backlog
+    # 82a6c1894384). `--falsify` re-derives from the plan's REMAINING SECTIONS, which dissolves that
+    # item; re-reading its status word never could.
+    #
+    # ADDRESSED AT THE LIVE LAYER, NOT AT $SELF's sibling, and that is the durable half. cc-discover
+    # runs from whichever checkout invoked it — routinely a worktree — so baking THIS tree's absolute
+    # path into a record that outlives the run would pin the probe to a directory that gets GC'd, and
+    # the item would carry a falsifier that can only ever answer "could not ask". `$HOME` is left
+    # UNEXPANDED on purpose: cc-premise runs the stored string through `/bin/sh -c`, so it resolves
+    # at probe time on whatever machine reads it. plan-phase-scan.sh is an existing per-file symlink,
+    # so `--falsify` reaches the live layer on the ordinary fast-forward — no new link is needed.
+    add_candidate "advance $title" "$proj" "$path" "plan-open" \
+      "\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
   done < <("$bin" --list-open 2>/dev/null)
   emit_critic_result plan-open "$added" "$cands"

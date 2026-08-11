@@ -270,6 +270,76 @@ across 7 dispatch suites and 2 premise suites; in-script selftest 168/0. Every a
 (`CC_DISPATCH_RANK` / `_CLUSTER` / `_WT_FRESH`, `CC_PREMISE_PLAN_SNAPSHOT`) and fails open to the
 incumbent behaviour.
 
+### M2 follow-on — EMISSION: the generators now feed the mechanism (`087d4198c594`, 2026-08-11)
+
+`a7bf7068` built the re-run and nothing fed it. Six days later
+`cc-backlog list --all --json | jq '[.[]|select(.falsifier)]|length'` still read **0** over 1670
+items, and all 84 `premise refuted` rows in the IDL were the older declared-obsolescence path — an
+item explicitly retracted by another item, never a probe re-run. The field existed, the caller
+existed, the tests passed, and the coverage was zero because emission was left to a later pass.
+
+**The invisible half, and it is the finding.** The zero was not only under-emission. `falsifier` was
+never added to `cc-backlog`'s `list --json` **whitelist fold**, so the canonical projection every
+consumer reads — including the item's own success check above — **dropped the field on the way out.**
+cc-premise reads the RAW records, which is why its re-run always worked and why nothing noticed.
+A field a producer writes and the canonical projection silently drops cannot be told apart from a
+field no producer writes. Both halves had to be fixed for either to be measurable. The empty case is
+`del(.falsifier)` rather than `""`, because **jq treats the empty string as truthy** — a ""-carrying
+key would have made the coverage metric read 100% the moment the field became visible.
+
+| Generator | Emits | Probe, and its ONE success state |
+|---|---|---|
+| `cc-discover` C2 `plan-open` | always | `plan-phase-scan.sh <plan> --falsify` — 0 ⇔ the plan holds no work to advance (terminal frontmatter, **or** zero not-DONE sections above level 1) |
+| `postland-verify.sh` × 3 sites | AUTO-REVERT INERT · AUTO-REVERT `<outcome>` · HUNG | `postland-verify.sh --falsify-red <suite> <sha>` — 0 ⇔ a full-corpus green CONTAINS that commit **and** its span covered that suite |
+| `deploy-live.sh` × 2 sites | HOST CUT · HOST RED (single-suite sets only) | `deploy-live.sh --falsify-host <suite>` — 0 ⇔ the live layer no longer runs that suite at all |
+| `cc-backlog needs` | **nothing, by design** | pass-through `--falsifier` for a caller that has a real check; an operator step has no machine oracle and `--run` PERFORMS the step |
+
+**Four places the obvious probe was refused, each for a measured reason** — this is the item's real
+content, since every one of them would have shipped an exit 0 with two meanings:
+
+- **`post-land RED:` gets NO stored probe.** That population already has a DERIVED arm in cc-premise
+  computing the same last-green predicate, and cc-premise's composition rule is that a stored probe
+  OUTRANKS a derived one. Storing an equal probe there shadows a tested arm and buys a second
+  implementation to keep in sync. The three sites with no derived arm are where a probe is the
+  difference between a re-run and no question at all.
+- **Neither postland nor deploy-live RE-RUNS the suite.** cc-premise bounds a probe at 20s; one
+  corpus suite runs ~50 min and a host suite is bounded at 3600s. A probe honest enough to hold one
+  would hold a claim hostage; one that fits is a permanent non-verdict wearing a measurement's
+  clothes.
+- **deploy-live does not read `HOST_CUTS` either**, though it looks like postland's `last-green`.
+  That file records only NON-verdicts and is rebuilt per tick, so "no row" is reachable from "it
+  passed", "no deploy has run since" and "pruned to nothing" — and the middle one is a false
+  retraction. The narrow question it CAN answer is the one it asks. There is no host-green ledger;
+  if one is ever written, that is the better probe.
+- **A multi-suite HOST RED set gets nothing.** The item's premise is about the SET; answering it
+  with evidence about one member is the same defect wearing a helpful face.
+
+**Two would-be silent retractions, caught by writing the state table first.** `POSTLAND_VERIFY=off`
+exits 0, and under the falsifier contract exit 0 MEANS "premise gone" — beneath that arm, one env
+var would have retracted every item postland-verify ever filed, so `--falsify-red` dispatches ABOVE
+the kill switch. And an ABSENT host manifest is the EMPTY set by the partition contract, which is
+safe for the VERIFIER and catastrophic here (every host suite would read as "no longer run"), so
+`--falsify-host` reports "could not ask" on it. The two consumers part company on that emptiness
+deliberately.
+
+**The plan-open probe reads the frontmatter FIRST**, which is what makes it safe to store at all: an
+emitted probe shadows `run_derived_plan_falsifier`, so a probe testing only remaining sections would
+have silently REMOVED a retraction that already worked. Clause (a) makes it a strict superset;
+clause (b) — re-deriving from the plan's REMAINING sections — is what `82a6c1894384` asked for, and
+it dissolves the "advance README hero banner" class of item that every other signal passes.
+
+**Verification.** `tests/falsifier-emission.bats`, 14/14. §2 is the DoD's third clause implemented as
+a state matrix: each probe is driven through its full reachable state space, every state is labelled
+premise-FALSE / premise-TRUE / COULD-NOT-ASK, and `assert_state` pins **exit 0 to premise-FALSE
+alone** — so a probe that ever reaches 0 from a still-live or unanswerable state fails loudly rather
+than defaulting into the success arm.
+
+**Filed, not done:** the 430 pre-existing `plan-open` items (9 of them open) can never gain a probe —
+`cc-backlog add` is idempotent on project+title+source, so a re-add of an existing key returns the id
+and writes nothing. Backfilling needs a verb that appends a falsifier to an EXISTING item, and the
+status fold reads an unknown event as `open`, so a naive `event:"falsifier"` record would reopen done
+work. Out of scope here (this item is emission at ADD time); filed as its own row.
+
 ## M3 — The fleet bounds its own footprint, so the box stops panicking
 
 **Absorbs:** `M-panes-1`, `M-panes-2`, `M-tail-1`, `M-memhooks-C3`, the immortal-worktree half of
