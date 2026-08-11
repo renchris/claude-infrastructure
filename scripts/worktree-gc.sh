@@ -909,6 +909,13 @@ process_record() {
   if [ -n "$dirty_porc" ]; then
     if [ "$DISPOSE_LANDED_DIRT" = "0" ]; then
       echo "DIRT?   $path [$branch] — dirty but every dirty path is byte-identical on $TRUNK — pass --dispose-landed-dirt to reap"
+      # The BLAST RADIUS at DECISION time, exactly as the DISPOSE class reports it. Every TRACKED
+      # path here is provably on the trunk, so the only thing a removal actually destroys is the
+      # gitignored content — and git records that nowhere else, so if this line does not print it,
+      # nothing ever will. Measured 2026-08-10: 12 of 12 sampled candidates carry some (node_modules/,
+      # .claude-tasks/, .ruff_cache/ — regenerable, but that is the reader's call to make, not ours).
+      _dirt_ign="$(ignored_inventory "$path")"
+      [ -n "$_dirt_ign" ] && echo "        └ gitignored content a disposal would destroy: $_dirt_ign"
       N_DIRT_CAND=$((N_DIRT_CAND + 1))
       return 0
     fi
@@ -937,6 +944,9 @@ process_record() {
     # So instead of overriding the refusal, REMOVE ITS CAUSE: every dirty path here is proven
     # byte-identical to the trunk, so restoring it loses nothing, and a tree that does not come out
     # clean is one we never understood — git then refuses on its own and we KEEP.
+    # Read the blast radius BEFORE removal — afterwards the directory is gone and the answer is
+    # unrecoverable, the same reason dispose_record() reads it first.
+    _dirt_ign="$(ignored_inventory "$path")"
     if ! clear_redundant_dirt "$path"; then
       echo "KEEP    $path [$branch] — could not clear proven-redundant dirt ($DIRT_BLOCKER)"
       N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
@@ -944,6 +954,7 @@ process_record() {
     fi
     if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
       echo "dispose-dirt  $path [$branch] — dirt redundant with $TRUNK (re-proven at act time) · idle · landed"
+      [ -n "$_dirt_ign" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $_dirt_ign"
       N_DIRT_REMOVED=$((N_DIRT_REMOVED + 1))
       printf '%s\n' "$branch" >> "$REMOVED_BR"
     else
