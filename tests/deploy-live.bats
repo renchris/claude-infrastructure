@@ -1497,3 +1497,212 @@ offbox_stamp() { # <rev> [scope] — write an off-box GREEN for that rev's TREE
   [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
   [[ "$output" == *"REFUSED"* ]] || false
 }
+
+# ── R7 · a fail-closed path must ESCALATE on repetition (backlog f495d5374c01, §5 row P5) ─────────
+# The lane was measured refusing 601 consecutive times with ZERO escalations: subject+state damping
+# makes one refusal quiet (correct) and then makes every subsequent one quiet FOREVER (the defect).
+# Every test below fixes one half of that — the loud half past the threshold, and the quiet half
+# below it. Both, or the guard is only half-proven (memory: guard-proxy-fails-in-both-directions).
+
+R7_REF="" # set in r7_setup — the streak file the script writes
+
+r7_setup() {
+  auto_setup
+  R7_REF="$BATS_TEST_TMPDIR/postland/deploy-refusals"
+}
+
+dlr() { # deploy-live --auto with the R7 knobs pinned and every side channel spied
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+      CC_DEPLOY_MAX_LAG_COMMITS="${R7_LAGC:-999}" CC_DEPLOY_MAX_LAG_HOURS="${R7_LAGH:-999}" \
+      CC_DEPLOY_REFUSE_MAX="${R7_MAX:-3}" CC_DEPLOY_REFUSE_COOLOFF="${R7_COOL:-21600}" \
+      CC_DEPLOY_SCAN="${R7_SCAN:-200}" CC_DEPLOY_BLIND_SCAN="${R7_BLIND:-2000}" \
+      CC_DEPLOY_DEGRADE="${R7_DEGRADE:-on}" PATH="${R7_PATH:-$PATH}" \
+      /bin/bash "$DL" --auto "$@"
+}
+
+r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded above, budget NOT tripped
+  advance_origin b c d                  # three commits above the live layer, none stamped
+}
+
+@test "R7 THE DEFECT: a refusal that REPEATS past the threshold escalates — it is not damped forever" {
+  # PRE-FIX THIS IS RED. Before this arm, tick 1 pages and every tick after it is byte-for-byte
+  # silent at any repetition count (601 measured on the live host). The assertion that fails is the
+  # one on the LATER ticks: no ESCALATED token, no backlog row, ever.
+  r7_setup; r7_famine
+  run dlr; [ "$status" -eq 1 ]                       # tick 1 — loud (the damp's first page)
+  [[ "$output" != *"ESCALATED"* ]] || false          # ...but NOT an escalation: once is not repetition
+  run dlr; [ "$status" -eq 1 ]; [ -z "$output" ]     # tick 2 — damped silent, correctly
+  run dlr; [ "$status" -eq 1 ]                       # tick 3 == REFUSE_MAX — repetition IS the signal
+  [[ "$output" == *"ESCALATED verdict=escalated"* ]] || false
+  [[ "$output" == *"class=no-green"* ]] || false
+  [[ "$output" == *"n=3"* ]] || false
+  # …and it reached the store that OUTLIVES the run and that the operator block renders.
+  grep -q "needs" "$CC_BACKLOG_LOG" || false
+  grep -q "deploy lane refusing on repeat" "$CC_BACKLOG_LOG" || false
+}
+
+@test "R7 THE QUIET HALF: below the threshold NOTHING is emitted — one refusal is the lane working" {
+  # The control for the test above. A guard proven in one direction only is half a guard: an
+  # escalation that fired on every refusal would carry exactly as many bits as one that never fires.
+  r7_setup; r7_famine
+  R7_MAX=99                                          # unreachable in this test's tick budget
+  run dlr; [ "$status" -eq 1 ]                       # the ONE loud refusal, as before
+  [[ "$output" != *"ESCALATED"* ]] || false
+  for _ in 1 2 3 4 5; do run dlr; [ "$status" -eq 1 ]; [ -z "$output" ] || false; done
+  [ ! -f "$CC_BACKLOG_LOG" ] || ! grep -q "deploy lane refusing on repeat" "$CC_BACKLOG_LOG" || false
+  [ -z "$(find "$PAGES" -name 'deploy-refusal-escalation-*' 2>/dev/null)" ] || false
+  # ...and the counter WAS running the whole time, so the silence is a budget and not a broken arm.
+  [ "$(awk '{print $2}' "$R7_REF")" -eq 6 ] || false
+}
+
+@test "R7 the STRUCTURAL-BLINDNESS case is its OWN culprit, never 'the verifier is red'" {
+  # §2.E's measured shape: the newest on-trunk GREEN sat 320 commits down against SCAN_N=200, so the
+  # ladder could not see a green that EXISTED. Reporting that as a red verifier sends the operator
+  # to fix the wrong machine. SCAN_N=2 here reproduces it at fixture scale.
+  #
+  # PATH IS PINNED TO /usr/bin:/bin, AND THAT PIN IS THE TEST'S SHARPEST ASSERTION. The probe's
+  # first spelling used `awk -v list=…`, which macOS /usr/bin/awk (BWK) REFUSES when the value
+  # carries newlines — rc 2, no output, so the blindness verdict could never fire under launchd,
+  # whose PATH has no homebrew. It went green here anyway, on a homebrew awk this suite happened to
+  # resolve. Unpinned, this test asserts a property of whoever's PATH ran it
+  # (memory: hermetic-in-stubs-not-in-interpreter).
+  r7_setup
+  advance_origin b c d
+  stamp HEAD                                         # green at depth 4 of origin/main…
+  R7_SCAN=2 R7_PATH=/usr/bin:/bin                    # …and the ladder only ever looks 2 deep
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"culprit=scan-window-blind"* ]] || false
+  [[ "$output" == *"green_depth=4"* ]] || false
+  [[ "$output" == *"scan_n=2"* ]] || false
+  grep -q "OUTSIDE the scan window" "$CC_BACKLOG_LOG" || false
+  # the page says WHY raising the scan is not loosening the gate — the operator's first objection
+  grep -q "does NOT loosen the gate" "$PAGES/deploy-refusal-escalation-scan-window-blind.page" || false
+}
+
+@test "R7 CONTROL: with NO green anywhere the same repetition is a FAMINE, not blindness" {
+  # The discriminator between the two culprits is the existence of a green outside the window. This
+  # is the identical tick sequence with that one fact removed — if the probe ever degenerated into
+  # "always blame the window", this test goes red and the one above would not.
+  r7_setup; r7_famine
+  R7_SCAN=2
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"culprit=verifier-famine"* ]] || false
+  [[ "$output" == *"green_depth=-"* ]] || false
+  [[ "$output" != *"scan-window-blind"* ]] || false
+  grep -q "verifier famine" "$CC_BACKLOG_LOG" || false
+}
+
+@test "R7 a green the ladder SAW but cannot deploy is verifier-LAG, never famine" {
+  # Caught in the live replay BEFORE this landed, and it is the reason lag and famine are two
+  # culprits. Against the real store the refusal read "the newest GREEN tree IS live HEAD; none of
+  # the 11 commit(s) above it has verified" while the escalation beneath it said "no GREEN tree
+  # anywhere in the newest 2000 commits". One artifact, two lines, and the FALSE one named the
+  # culprit. Where the ladder's own evidence and the probe's silence disagree, the ladder wins.
+  r7_setup
+  stamp HEAD                                         # a green sits exactly ON the live layer…
+  advance_origin b c                                 # …and nothing above it has verified
+  # Past the budget AND with the degrade switch off: the operator's documented strict green-only
+  # gate, which is the one configuration where this state is a refusal rather than a T2 advance
+  # (the same shape tests G5 and J1 already pin).
+  R7_LAGC=0 R7_DEGRADE=off
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"class=green-at-head"* ]] || false
+  [[ "$output" == *"culprit=verifier-lag"* ]] || false
+  [[ "$output" != *"famine"* ]] || false
+  grep -q "nothing ABOVE the live layer has verified" "$CC_BACKLOG_LOG" || false
+  grep -q "the producer is alive" "$PAGES/deploy-refusal-escalation-verifier-lag.page" || false
+}
+
+@test "R7 a RED trunk is a THIRD culprit — the gate working, not a gate to fix" {
+  r7_setup
+  advance_origin b c
+  stamp origin/main red; stamp origin/main~1 red     # every candidate above the layer is RED
+  R7_LAGC=0                                          # past the budget ⇒ T2 runs, walks back, finds none
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"culprit=trunk-red"* ]] || false
+  [[ "$output" == *"class=trunk-red"* ]] || false
+  grep -q "RED all the way down" "$CC_BACKLOG_LOG" || false
+}
+
+@test "R7 no stamps dir escalates as VERIFIER-INERT, and only after it has repeated" {
+  r7_setup; r7_famine
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dlr; [[ "$output" != *"ESCALATED"* ]] || false
+  run dlr; run dlr
+  [[ "$output" == *"culprit=verifier-inert"* ]] || false
+  [[ "$output" == *"class=no-stamps-dir"* ]] || false
+}
+
+@test "R7 the re-assertion is BOUNDED BOTH WAYS: damped inside the cool-off, loud again past it" {
+  # Unbounded damping IS the bug being fixed, so an escalation that fired once and then went quiet
+  # forever would have rebuilt it one level up. It must re-assert — and not 144x/day either.
+  r7_setup; r7_famine
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"ESCALATED"* ]] || false
+  run dlr; [ -z "$output" ] || false                  # inside the cool-off: quiet
+  # Age the last-escalation stamp past the window. Seeded RELATIVE to now and read back from the
+  # script's own file, so this test cannot drift from the format or rot with the calendar.
+  read -r c n f _ < "$R7_REF"
+  printf '%s %s %s %s\n' "$c" "$n" "$f" "$(( $(date +%s) - 30000 ))" > "$R7_REF"
+  run dlr
+  [[ "$output" == *"ESCALATED"* ]] || false
+  [[ "$output" == *"n=5"* ]] || false                 # the streak kept counting through the silence
+}
+
+@test "R7 a HEALTHY ADVANCE clears the streak — recovery then re-failure is not pre-escalated" {
+  r7_setup; r7_famine
+  run dlr; run dlr                                    # streak = 2, one below the threshold
+  [ "$(awk '{print $2}' "$R7_REF")" -eq 2 ] || false
+  stamp origin/main
+  run dlr; [ "$status" -eq 0 ]                        # advances
+  [ ! -f "$R7_REF" ] || false                         # cleared with the damp, in one place
+  advance_origin e                                    # a NEW famine begins
+  run dlr; [[ "$output" != *"ESCALATED"* ]] || false  # …at 1, not at 3
+}
+
+@test "R7 a CHANGE of culprit restarts the streak — a different machine is different news" {
+  r7_setup; r7_famine
+  rm -rf "$BATS_TEST_TMPDIR/postland"
+  run dlr; run dlr                                    # no-stamps-dir, streak 2
+  [ "$(awk '{print $1" "$2}' "$R7_REF")" = "no-stamps-dir 2" ] || false
+  mkdir -p "$STAMPS"                                  # the class CHANGES to no-green
+  run dlr
+  [ "$(awk '{print $1" "$2}' "$R7_REF")" = "no-green 1" ] || false
+  [[ "$output" != *"ESCALATED"* ]] || false           # inheriting the old count would page here
+}
+
+@test "R7 the backlog title carries NO volatile digits — one condition is one item, not one per tick" {
+  # cc-backlog's event key is a hash of project+title+source, so a count or a sha in the title mints
+  # a NEW blocked item every cool-off for ONE unresolved finding (5 items for 1 finding, 2026-08-05).
+  r7_setup; r7_famine
+  run dlr; run dlr; run dlr
+  read -r c n f _ < "$R7_REF"
+  printf '%s %s %s %s\n' "$c" "$n" "$f" "$(( $(date +%s) - 30000 ))" > "$R7_REF"
+  run dlr
+  [ "$(grep -c "deploy lane refusing on repeat" "$CC_BACKLOG_LOG")" -eq 2 ] || false
+  [ "$(grep "deploy lane refusing on repeat" "$CC_BACKLOG_LOG" | sort -u | wc -l | tr -d ' ')" -eq 1 ] || false
+}
+
+@test "R7 a DECISION-ONLY call never moves the counter (--dry-run and --offline are not ticks)" {
+  # The streak is a fact about the unattended lane. An operator asking for a verdict, or the platter
+  # asking with --offline, must not push the machine toward a page it did not cause.
+  r7_setup; r7_famine
+  run dlr --dry-run; [ ! -f "$R7_REF" ] || false
+  run dlr --offline; [ ! -f "$R7_REF" ] || false
+  run dl;            [ ! -f "$R7_REF" ] || false      # …and neither does a non---auto run
+  run dlr;           [ -f "$R7_REF" ] || false        # positive control: a real tick DOES
+}
+
+@test "R7 the escalation cannot break the lane — a hostile backlog binary changes nothing" {
+  # memory: addon-failure-exceeds-its-blast-radius. A side-car that kills the deploy run is worse
+  # than the silence it replaces, so the escalation is proven to fail no wider than itself.
+  r7_setup; r7_famine
+  printf '#!/bin/bash\nexit 9\n' > "$BLSPY"; chmod +x "$BLSPY"
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  run dlr; run dlr; run dlr
+  [ "$status" -eq 1 ] || false                        # the refusal's own exit code, unchanged
+  [[ "$output" == *"ESCALATED"* ]] || false
+  [[ "$output" == *"item=none"* ]] || false           # CHECKED, not claimed: the filing did not happen
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+}

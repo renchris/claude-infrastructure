@@ -73,6 +73,10 @@
 #      trips FIRST · CC_DEPLOY_DEGRADE (on; off|0|no|false ⇒ T2 disabled = the strict green-only
 #      gate, i.e. exactly the pre-2026-08-07 behaviour, freeze included) ·
 #      CC_DEPLOY_DAMP_S · CC_HOST_MANIFEST · CC_DEPLOY_HOST_TIMEOUT_S · CC_BACKLOG_BIN ·
+#      CC_DEPLOY_REFUSE_MAX (6) / CC_DEPLOY_REFUSE_COOLOFF (21600) / CC_DEPLOY_BLIND_SCAN (2000) —
+#      R7's repetition escalation: consecutive same-class refusals before it becomes news, the
+#      bounded re-assertion interval, and the DIAGNOSTIC-ONLY window the structural-blindness probe
+#      reads (it selects no target and widens no gate) ·
 #      CC_DEPLOY_BATS_BIN / CC_DEPLOY_TIMEOUT_BIN (UNSET ⇒ resolved; SET-EMPTY ⇒ disabled) ·
 #      CC_DEPLOY_PARITY_ASSERT (UNSET ⇒ scripts/deploy-parity-assert.sh; SET-EMPTY ⇒ refresh off) ·
 #      CC_DEPLOY_MIGRATIONS (UNSET ⇒ scripts/deploy-migrations.sh; SET-EMPTY ⇒ migration converge off).
@@ -142,6 +146,48 @@ MANIFEST="${CC_HOST_MANIFEST:-$DEPLOY_REPO/scripts/host-suites.manifest}"
 # source by the `</dev/null` at the invocation site below.
 HOST_TIMEOUT_S="${CC_DEPLOY_HOST_TIMEOUT_S:-3600}"
 BACKLOG_BIN="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+# ── R7 · A FAIL-CLOSED PATH MUST ESCALATE ON REPETITION (2026-08-10, backlog f495d5374c01) ───────
+# The damping above is correct and it is also the whole defect. Subject+state damping makes ONE
+# refusal quiet — right, because a single fail-closed refusal is the lane working. What it never
+# had is an upper bound: the same reason, damped, re-asserts a page every DAMP_WINDOW_S into
+# $PAGES_DIR and NOTHING ELSE EVER HAPPENS, at any repetition count. Measured on this host
+# 2026-08-10: 601 consecutive refusals, last sanctioned advance 9h earlier, zero escalations —
+# and the standing audit grades R7 "EXTEND" on exactly that (DEPLOY_LANE_GROUND_UP §1.5;
+# land-architecture-100p-2026-08-10 §2.E). A refusal that repeats 601 times is not a refusal any
+# more, it is an outage nobody is paged for.
+#
+# REPETITION IS THE SIGNAL, and it is counted on the CLASS, never on the damp key. Three of the
+# five refusal keys carry a sha (`green-behind:<sha>`, `green-at-head:<sha>`, `trunk-red:<sha>`),
+# so a moving tip mints a fresh key — a streak keyed on RKEY would reset every time trunk moved,
+# i.e. precisely during the famine it exists to measure. The class is the part before the `:`.
+#
+# WHAT IT ESCALATES TO IS THE POINT (memory: conclusion-must-reach-the-enforcing-store). A page in
+# $PAGES_DIR is where this condition has been sitting for 601 ticks; the operator block renders
+# `cc-backlog needs`, so that is the store. The page stays — it carries the detail — but it is no
+# longer the only surface.
+#
+# BUDGETED PER CLASS, both directions (memory: alarm-polarity-and-attention-budget): below
+# REFUSE_MAX nothing at all is emitted (the quiet half — one refusal must stay silent), and past it
+# the escalation re-asserts at most once per REFUSE_COOLOFF rather than every 600s tick. The
+# cool-off is bounded, never unbounded, because unbounded damping IS the bug being fixed. Any
+# healthy outcome clears the streak (folded into damp_clear, so a new healthy exit cannot forget
+# to), and a CHANGE of class restarts it at 1 — a different culprit is different news.
+#
+# 0 disables either half without a separate kill switch, same convention as HOST_CUT_*.
+REFUSALS_FILE="$POSTLAND_DIR/deploy-refusals"                 # one line: "<class> <n> <first> <last-esc>"
+REFUSE_MAX="${CC_DEPLOY_REFUSE_MAX:-6}"                       # consecutive refusals before it is news
+REFUSE_COOLOFF="${CC_DEPLOY_REFUSE_COOLOFF:-21600}"           # ...and before the same news re-asserts
+# The STRUCTURAL-BLINDNESS probe's window, and it is a DIAGNOSTIC ONLY — it never selects a target
+# and never widens the gate. SCAN_N stays exactly what it was; this asks a different question about
+# the same history: "is the ladder blind to a green that EXISTS?" Measured 2026-08-10: the newest
+# on-trunk green sat 320 commits down against SCAN_N=200, so the lane could not have seen a green
+# even in a week where the verifier produced one. That is a DIFFERENT culprit from an honestly-red
+# verifier and must never be reported as the same thing (§2.E).
+BLIND_SCAN="${CC_DEPLOY_BLIND_SCAN:-2000}"
+LAST_ADVANCE="$POSTLAND_DIR/deploy-last-advance"              # "<epoch> <sha>" — OUR advances only
+case "$REFUSE_MAX"     in ''|*[!0-9]*) REFUSE_MAX=6 ;; esac
+case "$REFUSE_COOLOFF" in ''|*[!0-9]*) REFUSE_COOLOFF=21600 ;; esac
+case "$BLIND_SCAN"     in ''|*[!0-9]*) BLIND_SCAN=2000 ;; esac
 # ── CONSECUTIVE-CUT COUNTER, PER SUITE (2026-08-10, backlog 75463ef0d0f9) ────────────────────────
 # R6 is what makes a cut safe: a non-verdict is a claim about the MACHINE, never about the tree, so
 # it must not page as a failure. What R6 does not supply is the other half — a suite that reaches no
@@ -227,7 +273,227 @@ damp_ok() { # <state-key>
   printf '%s\n%s\n' "$now" "$key" > "$DAMP_FILE" 2>/dev/null || true
   return 0
 }
-damp_clear() { rm -f "$DAMP_FILE" 2>/dev/null || true; }
+# A healthy outcome re-arms BOTH channels, and they are cleared in ONE place deliberately: the
+# refusal streak is the damp's upper bound, so a new healthy exit added later cannot re-arm one and
+# silently leave the other counting. (This is the mechanism behind "sticky only while the STATE
+# holds" — recovery→re-failure must be loud immediately on both.)
+damp_clear() { rm -f "$DAMP_FILE" "$REFUSALS_FILE" 2>/dev/null || true; }
+
+# ── R7 · repetition-keyed escalation ─────────────────────────────────────────────────────────────
+# EVERY function below is best-effort and CANNOT change the lane's decision, its exit code, or the
+# refusal it decorates (memory: addon-failure-exceeds-its-blast-radius). A side-car that kills the
+# deploy run is worse than the silence it replaces, so every command here is `|| true`-guarded, no
+# `die` is reachable from any of them, and they all return 0.
+
+# The GREEN tree shas the on-box store holds. Read with one `grep`, not one is_green fork per file:
+# this is a DIAGNOSIS, not the gate, and is_green's python3 path would be ~130 forks. `-exec … +` is
+# ARG_MAX-safe. It uses the same textual fallback is_green itself falls back to when python3 is
+# absent, so the two readers cannot disagree about what the word "green" is.
+green_tree_shas() {
+  [ -d "$STAMPS_DIR" ] || return 0
+  find "$STAMPS_DIR" -maxdepth 1 -name '*.json' \
+       -exec grep -lE '"verdict"[[:space:]]*:[[:space:]]*"green"' {} + 2>/dev/null \
+    | sed 's|.*/||; s|\.json$||' 2>/dev/null || true
+}
+
+# → the 1-based DEPTH in origin/main of the newest commit whose tree carries a green stamp, within
+# BLIND_SCAN commits; empty when there is none. `> SCAN_N` is the structural-blindness verdict.
+# ONE git process + one awk, both bounded by -n: this runs only at escalation time, but a probe that
+# could hang would still be a probe that can wedge a 600s job.
+#
+# 🚨 THE LIST ARRIVES AS A FILE, NEVER AS `awk -v`, AND THAT IS AN INTERPRETER FACT, NOT A STYLE
+# CHOICE (measured 2026-08-10 on this box, in the replay that dispatched this comment). macOS
+# /usr/bin/awk is BWK awk, and it REFUSES a literal newline inside a `-v` assignment —
+# `awk: newline in string 65bafc6e48… at source line 1`, rc 2, no output. The first spelling of this
+# probe used `-v list="$shas"`, and it was therefore STRUCTURALLY DEAD under launchd: always empty,
+# so every escalation would have reported "no green anywhere" and the structural-blindness culprit
+# — the entire point of this arm — could never once have fired. It went green in the bats suite,
+# because that PATH resolves a homebrew awk that accepts it. A test that never pins the interpreter
+# cannot see this class of bug at all (memory: hermetic-in-stubs-not-in-interpreter), which is why
+# the blindness test now runs with PATH=/usr/bin:/bin.
+blind_green_depth() {
+  local shas
+  shas="$(green_tree_shas)"
+  [ -n "$shas" ] || return 0
+  # Two-file awk: FNR==NR loads the green set from the first input, then FNR on the second IS the
+  # depth. Portable to BWK awk, gawk and mawk alike, and it never puts data in the program text.
+  g log --format=%T -n "$BLIND_SCAN" origin/main 2>/dev/null \
+    | awk 'FNR==NR { if ($0 != "") m[$0]=1; next } m[$0] { print FNR; exit }' \
+          <(printf '%s\n' "$shas") - 2>/dev/null || true
+}
+
+# → "<hours>" since our last sanctioned advance, or the literal "unknown". UNKNOWN IS REPORTED, NEVER
+# GUESSED (memory: lookup-miss-is-not-absence): the marker records only advances THIS lane made, so
+# its absence means "we have never advanced since the marker existed" — which is not the same fact as
+# the age of live HEAD's commit, and is not the same fact as an ungated hand-pull having moved the
+# checkout (§2.E path B). Conflating any of those three would put a number on the page that reads
+# authoritative and is about a different event.
+last_advance_hours() {
+  local ts now
+  [ -r "$LAST_ADVANCE" ] || { printf 'unknown'; return 0; }
+  ts="$(awk '{print $1; exit}' "$LAST_ADVANCE" 2>/dev/null || true)"
+  case "${ts:-}" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  [ "$now" -ge "$ts" ] || { printf 'unknown'; return 0; }
+  printf '%s' "$(( (now - ts) / 3600 ))"
+}
+
+# The CULPRIT, which is the whole reason this is not just a louder page. "The lane refuses" is a
+# symptom shared by five different machines being broken; the escalation names WHICH.
+#   scan-window-blind  a green EXISTS on trunk but sits deeper than SCAN_N — the ladder cannot see
+#                      it. NOT a verifier problem at all; the verifier did its job.
+#   trunk-red          the verifier judged every candidate RED. Honest evidence, honestly acted on.
+#   verifier-lag       a green exists and the ladder SAW it, but it is at/below the live layer and
+#                      nothing ABOVE has verified. The producer is alive and behind.
+#   verifier-famine    no green anywhere within BLIND_SCAN — the producer is not merely behind, it
+#                      is not producing (0.17 greens/day vs ~142 commits/day is the measured shape).
+#   verifier-inert     the net is not active at all (no stamps dir).
+#   peer-wip-wedge     a peer session's uncommitted work in the shared checkout blocks every ff.
+#
+# verifier-lag AND verifier-famine ARE SEPARATE BECAUSE THEIR PROSE IS SEPARATE, and collapsing them
+# printed a falsehood — caught in the live replay before this landed. Against today's real store the
+# refusal reads "the newest GREEN tree IS live HEAD; none of the 11 commit(s) above it has verified",
+# and the escalation underneath it said "no GREEN tree anywhere in the newest 2000 commits". Both
+# lines in one artifact, one of them false, and the false one is the one naming the culprit. A
+# probe's ABSENCE of a match and the ladder's OWN evidence are different instruments; where they
+# disagree the escalation must not pick the blinder one (memory: wrong-cause-corroborated-by-true-
+# metric).
+refusal_culprit() { # <class> → "<culprit> <green-depth|->"
+  local class="$1" depth=""
+  case "$class" in
+    no-stamps-dir) printf 'verifier-inert -';  return 0 ;;
+    dirty-tree)    printf 'peer-wip-wedge -';  return 0 ;;
+    trunk-red)     printf 'trunk-red -';       return 0 ;;
+  esac
+  depth="$(blind_green_depth)"
+  case "${depth:-}" in ''|*[!0-9]*) depth="" ;; esac
+  if [ -n "$depth" ] && [ "$depth" -gt "$SCAN_N" ]; then
+    printf 'scan-window-blind %s' "$depth"; return 0
+  fi
+  # THE LADDER'S OWN EVIDENCE OUTRANKS THE PROBE'S SILENCE. green-at-head / green-behind ARE the
+  # ladder saying it found a green and could not deploy it, so a green demonstrably exists whatever
+  # the probe returns — that is verifier-lag, never famine. Only `no-green` (T1 walked $SCAN_N and
+  # saw none) may be read as famine, and then only when the wider probe agrees.
+  case "$class" in
+    green-at-head|green-behind) printf 'verifier-lag %s' "${depth:--}" ;;
+    *) if [ -n "$depth" ]; then printf 'verifier-lag %s' "$depth"
+       else                     printf 'verifier-famine -'; fi ;;
+  esac
+}
+
+# The stable operator-facing sentence per culprit. NO VOLATILE DIGITS: cc-backlog's event key is a
+# hash of project+title+source, so a count or a sha in the title would mint a NEW blocked item every
+# cool-off for ONE unresolved condition — the defect that produced 5 items for 1 finding on
+# 2026-08-05, recorded at host_cut_page above. The magnitudes go in the page and the log token.
+refusal_escalate() { # <class> <msg> <n> <first-epoch> <now>
+  local class="$1" msg="$2" n="$3" first="$4" now="$5"
+  local cw culprit depth title run pf streak_h adv_h id=""
+  cw="$(refusal_culprit "$class")"; culprit="${cw%% *}"; depth="${cw##* }"
+  streak_h=$(( (now - first) / 3600 ))
+  adv_h="$(last_advance_hours)"
+  case "$culprit" in
+    scan-window-blind)
+      title="deploy lane refusing on repeat: the newest GREEN on trunk is OUTSIDE the scan window (structural blindness, not a red verifier)"
+      run="CC_DEPLOY_SCAN=$(( depth + 50 )) bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+    trunk-red)
+      title="deploy lane refusing on repeat: trunk is RED all the way down above the live layer"
+      run="bash $DEPLOY_REPO/scripts/postland-verify.sh --help" ;;
+    verifier-inert)
+      title="deploy lane refusing on repeat: the post-land verification net is not active"
+      run="CONFIRM=1 bash $DEPLOY_REPO/docs/activation/pending-activation/14-land-pipeline-v2-activate.sh" ;;
+    peer-wip-wedge)
+      title="deploy lane refusing on repeat: uncommitted work in the shared checkout wedges every advance"
+      run="git -C $DEPLOY_REPO status --porcelain" ;;
+    verifier-lag)
+      title="deploy lane refusing on repeat: the verifier is alive but nothing ABOVE the live layer has verified"
+      run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+    *)
+      title="deploy lane refusing on repeat: no GREEN tree is being produced fast enough to deploy (verifier famine)"
+      run="bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline" ;;
+  esac
+
+  mkdir -p "$PAGES_DIR" 2>/dev/null || true
+  pf="$PAGES_DIR/deploy-refusal-escalation-$culprit.page"
+  { date +%s
+    printf 'deploy-live ESCALATION — this refusal has REPEATED %s times, it is not a pause\n' "$n"
+    printf 'culprit: %s   ·   reason class: %s   ·   streak: %sh   ·   last sanctioned advance: %s\n' \
+      "$culprit" "$class" "$streak_h" "$(if [ "$adv_h" = unknown ]; then printf 'UNKNOWN (this lane has recorded none)'; else printf '%sh ago' "$adv_h"; fi)"
+    printf 'refusal as the lane states it: %s\n' "$msg"
+    case "$culprit" in
+      scan-window-blind)
+        printf 'THE VERIFIER IS NOT THE PROBLEM. A GREEN tree exists on origin/main at depth %s,\n' "$depth"
+        printf 'and the ladder only ever looks at the newest CC_DEPLOY_SCAN=%s commits — so it cannot\n' "$SCAN_N"
+        printf 'see a green that is really there. Raising the scan does NOT loosen the gate (a green\n'
+        printf 'stamp is still required); it only lets the gate see the evidence that already exists.\n' ;;
+      trunk-red)
+        printf 'The verifier HAS judged, and its verdict is red on every candidate. This is the gate\n'
+        printf 'working: the thing to fix is trunk, not this lane. Do not bypass with --force.\n' ;;
+      verifier-lag)
+        printf 'A GREEN tree DOES exist%s — the producer is alive. What it has not done is verify\n' \
+          "$(if [ "$depth" != "-" ]; then printf ' (depth %s on trunk)' "$depth"; fi)"
+        printf 'anything ABOVE the live layer, so there is nothing this gate is allowed to advance TO.\n'
+        printf 'The fix is verifier THROUGHPUT, not this lane: it is behind trunk, not broken.\n' ;;
+      verifier-famine)
+        printf 'No GREEN tree anywhere in the newest %s commits of trunk. The gate is not wrong, its\n' "$BLIND_SCAN"
+        printf 'PRODUCER is not keeping up — measured shape: 0.17 greens/day against ~142 commits/day.\n' ;;
+      verifier-inert)
+        printf 'No stamps dir at all: nothing has ever been able to verify. The net needs activating.\n' ;;
+      peer-wip-wedge)
+        printf 'A peer session has uncommitted tracked work in the shared checkout. This lane never\n'
+        printf 'stashes or discards it — commit or stash it there and the next tick advances.\n' ;;
+    esac
+    printf 'this escalation re-asserts at most once per %ss while the condition holds.\n' "$REFUSE_COOLOFF"
+    printf 'next: %s\n' "$run"
+  } > "$pf" 2>/dev/null || true
+
+  # The store that OUTLIVES the run and that the operator block actually renders. stderr is not
+  # swallowed: cc-backlog's DONE-GUARD announces a re-file of an already-closed key there.
+  if [ -x "$BACKLOG_BIN" ]; then
+    id="$("$BACKLOG_BIN" needs "$title" --run "$run" --project claude-infrastructure 2>/dev/null || true)"
+    id="$(printf '%s' "$id" | tr -d '[:space:]')"
+  fi
+
+  # A PARSEABLE verdict token, never a claimed outcome (memory: claimed-outcome-vs-checked-outcome).
+  # `item=` is the CHECKED half: it is the id cc-backlog actually returned, so a filing that silently
+  # failed reads `item=none` here instead of being swallowed by the `|| true` that guards it.
+  say "ESCALATED verdict=escalated culprit=$culprit class=$class n=$n streak_h=$streak_h last_advance_h=$adv_h green_depth=${depth:--} scan_n=$SCAN_N item=${id:-none} page=$pf"
+  return 0
+}
+
+# Count this refusal, and escalate only when the repetition itself is the news.
+refusal_bump() { # <class> <human-message>
+  local class="$1" msg="$2" pclass="" pn=0 pfirst=0 plast=0 n first last now
+  # --auto ONLY: the streak is a fact about the unattended 144x/day lane. An operator running this
+  # by hand, or any --dry-run/--offline decision-only call, must not move a counter that pages.
+  [ "$AUTO" -eq 1 ] || return 0
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  [ "$REFUSE_MAX" -gt 0 ] || return 0
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  if [ -r "$REFUSALS_FILE" ]; then
+    read -r pclass pn pfirst plast < "$REFUSALS_FILE" 2>/dev/null || true
+  fi
+  case "${pn:-}"     in ''|*[!0-9]*) pn=0 ;; esac
+  case "${pfirst:-}" in ''|*[!0-9]*) pfirst=0 ;; esac
+  case "${plast:-}"  in ''|*[!0-9]*) plast=0 ;; esac
+  if [ "${pclass:-}" = "$class" ]; then
+    n=$((pn + 1)); first="$pfirst"; last="$plast"
+  else
+    n=1; first="$now"; last=0          # a DIFFERENT culprit is different news — restart at 1
+  fi
+  [ "$first" -gt 0 ] || first="$now"
+  mkdir -p "$POSTLAND_DIR" 2>/dev/null || true
+  # THE QUIET HALF. Below the threshold this function's entire observable effect is this line —
+  # no page, no backlog row, no log token. One refusal is the lane working, and it stays silent.
+  if [ "$n" -lt "$REFUSE_MAX" ] || [ "$((now - last))" -lt "$REFUSE_COOLOFF" ]; then
+    printf '%s %s %s %s\n' "$class" "$n" "$first" "$last" > "$REFUSALS_FILE" 2>/dev/null || true
+    return 0
+  fi
+  printf '%s %s %s %s\n' "$class" "$n" "$first" "$now" > "$REFUSALS_FILE" 2>/dev/null || true
+  refusal_escalate "$class" "$msg" "$n" "$first" "$now" || true
+  return 0
+}
 
 # ── absolute-path binary resolution (launchd's PATH has no Homebrew — where both of these live) ──
 _resolve_bin() { # <name…> → first executable absolute path
@@ -744,6 +1010,11 @@ if [ ! -d "$STAMPS_DIR" ]; then
       # Damped: this state persists until an operator runs the activation, i.e. potentially for
       # days at 144 ticks/day. Page once per window; the cc-blockers VERIFIER-INERT alarm is the
       # standing surface (absence-is-loud, R9) — the page is the edge, not the level.
+      # COUNTED BEFORE THE DAMP IS CONSULTED, and that ordering is the fix. The damp decides whether
+      # to SPEAK; the counter measures how long we have been silent. Putting the bump inside the
+      # damped branch would count once per 24h window and never reach any threshold — the same
+      # unbounded silence, wearing a counter.
+      refusal_bump no-stamps-dir "no stamps dir ($STAMPS_DIR) — the post-land verification net is not active"
       if damp_ok "no-stamps-dir:$STAMPS_DIR"; then
         mkdir -p "$PAGES_DIR" 2>/dev/null || true
         { date +%s
@@ -994,6 +1265,10 @@ EOF
   fi
 
   if [ -z "$TARGET" ]; then
+    # R7: counted on the CLASS (the part of RKEY before the `:`), before the damp is consulted.
+    # Three of these keys carry a sha, so the key itself is not a streak — a moving tip would reset
+    # it on every land, i.e. throughout the exact famine this measures.
+    refusal_bump "${RKEY%%:*}" "$RMSG"
     # Under --auto this refusal is damped on the REASON, not the tip: a moving tip with no green
     # is one persistent state, and keying the page on the tip would mint a fresh page per land.
     if [ "$AUTO" -eq 1 ] && ! damp_ok "$RKEY"; then exit 1; fi
@@ -1055,6 +1330,10 @@ fi
 BLOCKERS="$(merge_blockers "$HEAD_SHA" "$TARGET")"
 if [ -n "$BLOCKERS" ]; then
   BLOCKER_LIST="$(printf '%s\n' "$BLOCKERS" | tr '\n' ' ')"
+  # R7: the same repeat-forever shape as the ladder's refusal, and it is counted for the same
+  # reason. The class carries no file list — the SET of blocking files changes as peers work, so a
+  # streak keyed on it would reset while the wedge itself persisted.
+  refusal_bump dirty-tree "DIRTY TREE — the advance to ${TARGET:0:12} rewrites tracked path(s) carrying UNCOMMITTED local changes: $BLOCKER_LIST"
   if [ "$AUTO" -eq 1 ] && ! damp_ok "dirty-tree:$BLOCKER_LIST"; then exit 1; fi
   mkdir -p "$PAGES_DIR" 2>/dev/null || true
   { date +%s
@@ -1101,6 +1380,17 @@ if ! g merge --ff-only "$TARGET" >/dev/null 2>&1; then
   die "git merge --ff-only ${TARGET:0:12} FAILED in $DEPLOY_REPO with BOTH named causes RULED OUT (no dirty tracked path inside the advance's own path set; HEAD carries no commit missing from trunk) — read \`git -C $DEPLOY_REPO status\` by hand"
 fi
 say "deployed ${HEAD_SHA:0:12} → ${TARGET:0:12}: $(g log -1 --pretty=%s "$TARGET" 2>/dev/null)"
+
+# R7's clock. Written ONLY here, i.e. only after a merge that really moved the tree, so it records
+# SANCTIONED advances and nothing else — deliberately not the age of live HEAD's commit (a different
+# fact) and deliberately not whatever moved the checkout last (§2.E path B is an ungated hand-pull,
+# and counting it would let the workaround hide the outage it is masking). Absent ⇒ the escalation
+# reports `unknown`, never a substitute number.
+# ⚠️ Post-merge, so per the banner above this write is INERT on the deploy that delivers it: the
+# first advance after this lands is made by the pre-merge copy and records nothing. One deploy late,
+# by construction, and the escalation says `unknown` until then rather than inventing a figure.
+mkdir -p "$POSTLAND_DIR" 2>/dev/null || true
+printf '%s %s\n' "$(date +%s 2>/dev/null || echo 0)" "$TARGET" > "$LAST_ADVANCE" 2>/dev/null || true
 
 # T2 only: the page records that an UNVERIFIED advance OCCURRED, and is written AFTER the merge so
 # it can never claim one that did not. Sha-keyed and overwritten, like every per-deploy page here.
