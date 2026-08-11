@@ -1163,3 +1163,75 @@ _ca_touch_at() { # <epoch> <file>
   run run_ca "$(mkfix "Done. Complete — nothing left to do.")" "$w"
   [ "$status" -eq 0 ]; fired "$output"
 }
+
+# ── DIRTY ATTRIBUTION, SECOND AXIS: the residue the ordering term names (2026-08-12) ─────────────
+# Ordering only ever reaches dirt OLDER than the session, and its own residue note says the rest
+# "has to" stay convicted. MEASURED 2026-08-11 that residue is the live case: session
+# claude-infrastructure-387 (backlog 76e444a40188), a read-only ORIGIN turn with zero file-edit
+# records, blocked 3 of 3 over a sibling's in-flight work made 38 minutes INTO its run — in a
+# checkout whose .claude/CLAUDE.md forbids committing, so no close it could write was accepted.
+# The exoneration is earned on the SECOND axis instead: the mtime falls in a gap between this
+# session's Bash execution windows, so no command of its own could have produced it.
+# See hooks/lib/peer-owned.sh § THE SAME QUESTION ON A SECOND AXIS.
+
+# Like _ca_tr_ts, but with a distinct LAST record and explicit Bash execution windows.
+#   --win A B  a Bash tool_use at A paired with its tool_result at B   ·  --bg A B  the same,
+#   backgrounded. The two timestamps must differ: a transcript whose records all share one stamp
+#   brackets nothing, which is exactly why every fixture built by _ca_tr_ts above stays strict.
+_ca_tr_exec() { # <out> <first_ts> <last_ts> [--win A B | --bg A B]...
+  local out="$1"; shift
+  python3 - "$out" "$@" <<'PY'
+import json, sys, time
+out, first, last, args = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]
+def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t))) + ".000Z"
+rows = [{"type": "user", "timestamp": iso(first), "message": {"content": "go"}}]
+for n, i in enumerate(range(0, len(args), 3)):
+    tid, inp = "t%d" % n, {"command": "git status"}
+    if args[i] == "--bg":
+        inp["run_in_background"] = True
+    rows.append({"type": "assistant", "timestamp": iso(args[i + 1]), "message": {"content": [
+        {"type": "tool_use", "id": tid, "name": "Bash", "input": inp}]}})
+    rows.append({"type": "user", "timestamp": iso(args[i + 2]), "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}})
+rows.append({"type": "assistant", "timestamp": iso(last), "message": {"content": [
+    {"type": "text", "text": "✅ Complete — all done."}]}})
+open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+  printf '%s' "$out"
+}
+
+@test "dirty attribution: dirt in a GAP between this session's commands ⇒ ABSTAIN (the ORIGIN case)" {
+  local w tr now; w="$(_ca_dirty_repo dxa1)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 1800 ))" "$w/base.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dxa1.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))" --win "$(( now - 600 ))" "$(( now - 595 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]
+  ! fired "$output" || false
+  grep -q 'dirty-outside-session-exec' "$COMPLETION_IDL"
+}
+
+# THE CONTROL THIS AXIS LIVES OR DIES BY, and it is where the Bash blind spot actually lands: a
+# `sed -i` leaves no tool_use record of the WRITE, but it cannot run outside its own command's
+# window, so the mtime is inside one and the guard must still convict.
+@test "dirty attribution CONTROL: dirt stamped INSIDE an execution window ⇒ still FIRES" {
+  local w tr now; w="$(_ca_dirty_repo dxa2)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 2398 ))" "$w/base.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dxa2.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'dirty tree'
+}
+
+# A detached command outlives the window the whole argument rests on, so one such record anywhere
+# abstains for the entire session. Same fixture as the ABSTAIN case above but for the flag — so the
+# flag is the only thing that can keep this red-if-broken.
+@test "dirty attribution CONTROL: a backgrounded Bash call ⇒ still FIRES" {
+  local w tr now; w="$(_ca_dirty_repo dxa3)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 1800 ))" "$w/base.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dxa3.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --bg "$(( now - 2400 ))" "$(( now - 2395 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+}

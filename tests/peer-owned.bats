@@ -344,3 +344,198 @@ dps() { # <repo> <session_id> <transcript>
   dps "$w" mine-8 "$BATS_TEST_TMPDIR/dps8.jsonl"
   [ "$status" -eq 2 ]
 }
+
+# ── dirt_outside_session_execution — the residue the ordering proof named (2026-08-12) ───────────
+# The subject answers "was every dirty path stamped while this session was demonstrably executing
+# NOTHING?".  It exists because ordering only ever covers dirt OLDER than the session, and the
+# measured ORIGIN conviction (claude-infrastructure-387, backlog 76e444a40188) was the other shape:
+# a live sibling's work made 38 minutes INTO a zero-write read-only run.
+#
+# REPLAYED AGAINST THE REAL ARTEFACT before these fixtures were written — session 387's own
+# transcript, truncated to its state at the third Stop block: dirt stamped 23:10:00Z (a gap) ⇒ rc 0,
+# the same transcript with dirt stamped 23:17:12Z (inside a real 3-second window) ⇒ rc 1.
+# Every control below is a way this could become a blanket exoneration, which is the only direction
+# that matters: like its siblings the fix is fail-GREEN — it withholds a block.
+
+# A transcript with a controlled first/last record and EXPLICIT Bash execution windows.
+#   --win A B   a Bash tool_use at A paired with its tool_result at B
+#   --open A    a Bash tool_use at A with NO tool_result (interrupt/kill ⇒ an open window)
+#   --bg A B    a --win whose input carries run_in_background: true
+#   --write P   a file-edit tool_use, i.e. the session is no longer write-free
+_po_tx_exec() { # <out> <first_ts> <last_ts> [--win A B | --open A | --bg A B | --write P]...
+  local out="$1"; shift
+  python3 - "$out" "$@" <<'PY'
+import json, sys, time
+out, first, last, args = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]
+def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t))) + ".000Z"
+def rec(ts, content): return {"type": "assistant", "timestamp": iso(ts),
+                              "message": {"content": [content]}}
+rows = [{"type": "user", "timestamp": iso(first), "message": {"content": "go"}}]
+i = n = 0
+while i < len(args):
+    kind = args[i]
+    if kind == "--write":
+        rows.append(rec(first, {"type": "tool_use", "name": "Edit",
+                                "input": {"file_path": args[i + 1]}}))
+        i += 2
+        continue
+    n += 1
+    tid = "t%d" % n
+    bg = (kind == "--bg")
+    inp = {"command": "git status"}
+    if bg:
+        inp["run_in_background"] = True
+    rows.append(rec(args[i + 1], {"type": "tool_use", "id": tid, "name": "Bash", "input": inp}))
+    if kind == "--open":
+        i += 2
+        continue
+    rows.append({"type": "user", "timestamp": iso(args[i + 2]), "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}})
+    i += 3
+rows.append(rec(last, {"type": "text", "text": "✅ Complete — all done."}))
+open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+  printf '%s' "$out"
+}
+
+dox() { # <repo> <transcript>
+  run bash -c ". '$LIB'; dirt_outside_session_execution '$1' '$2'"
+}
+
+# THE MEASURED CASE: a read-only ORIGIN session, no file-edit record anywhere, and a sibling's dirt
+# stamped in a gap between two of its commands. Ordering cannot help — the dirt is NEWER than the
+# session — so this is the only term that can reach it.
+@test "the residue case: dirt stamped between this session's commands ⇒ exonerated" {
+  local w tr; w="$(_po_clean_repo dox1)"
+  echo sibling >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox1.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))" --win "$(( NOW - 600 ))" "$(( NOW - 595 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=1,windows=2,* ]]
+}
+
+# THE CONTROL THE TERM LIVES OR DIES BY — clause (3). This is where a Bash `sed -i` lands: it leaves
+# no tool_use record of the WRITE, but it cannot run outside its own command's window, so the mtime
+# falls inside one and the guard must still convict.
+@test "CONTROL: dirt stamped INSIDE an execution window ⇒ refuted, the guard still convicts" {
+  local w tr; w="$(_po_clean_repo dox2)"
+  echo mine >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 2398 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox2.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# A tool_use with no tool_result (interrupt, kill, a session that died mid-command) is an OPEN
+# window running to +∞, never a skipped one — the miss direction of a skip is exoneration.
+@test "CONTROL: a Bash call with NO tool_result is an open window ⇒ refuted" {
+  local w tr; w="$(_po_clean_repo dox3)"
+  echo mine >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 600 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox3.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --open "$(( NOW - 1200 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# Clause (2), upper bound: a transcript is evidence only about the interval it spans. Dirt stamped
+# after its last record postdates every window it can enumerate ⇒ cannot-tell, never "a gap".
+@test "CONTROL: dirt stamped AFTER the last record ⇒ cannot-tell" {
+  local w tr; w="$(_po_clean_repo dox4)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 5 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox4.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 600 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# Clause (2), lower bound — and this is the /compact case, not a corner: a compaction truncates the
+# early records, so the region before the first one is one this file can say NOTHING about. (Dirt
+# there is dirt_predates_session's question, and it answers rc 0 on exactly this shape.)
+@test "CONTROL: dirt stamped BEFORE the first record ⇒ cannot-tell" {
+  local w tr; w="$(_po_clean_repo dox5)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 7200 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox5.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# Clause (1). A session that wrote ANYTHING has an intersection for session_dirty_mine to compute,
+# and this term must never pre-empt it — the written path is deliberately not the dirty one, so only
+# the clause can keep this from exonerating.
+@test "CONTROL: a session with any file-edit record ⇒ cannot-tell, never this term's business" {
+  local w tr; w="$(_po_clean_repo dox6)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox6.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))" --write /tmp/elsewhere.txt)"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# Clause (4). A detached command outlives its window, so the whole time argument stops holding —
+# ONE such record anywhere in the transcript is enough to abstain for the entire session.
+@test "CONTROL: a backgrounded Bash call anywhere ⇒ cannot-tell for the whole session" {
+  local w tr; w="$(_po_clean_repo dox7)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox7.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bg "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# The DIRTY term is binary, so one reachable path must convict the whole tree — a per-path
+# exoneration that ignored it would clear a real loose end.
+@test "CONTROL: one path inside a window among several outside ⇒ refuted" {
+  local w tr; w="$(_po_clean_repo dox8)"
+  echo a >> "$w/base.txt"; echo b > "$w/gap.txt"; echo c > "$w/inside.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  _po_touch_at "$(( NOW - 1700 ))" "$w/gap.txt"
+  _po_touch_at "$(( NOW - 2398 ))" "$w/inside.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox8.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# A deletion has no mtime. THE OLD FILE BESIDE IT IS THE POINT of the fixture, exactly as in the
+# ordering term's twin: with the deletion alone the population is empty and rc 2 arrives from the
+# `n == 0` branch, so the test would pass whether or not the deletion is handled.
+@test "CONTROL: a deleted tracked file ⇒ cannot-tell, never a gap" {
+  local w tr; w="$(_po_clean_repo dox9)"
+  rm -f "$w/base.txt"
+  echo x >> "$w/second.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/second.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox9.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# An empty population manufactures an exoneration out of nothing (MEMORY.md
+# cap-whose-population-is-empty).
+@test "CONTROL: a CLEAN tree ⇒ cannot-tell, not an exoneration (execution term)" {
+  local w tr; w="$(_po_clean_repo dox10)"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/dox10.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# THE 9 FIXTURES STAY STRICT, by the same mechanism the ordering term relies on: a transcript with
+# no `.timestamp` anywhere brackets nothing, so clause (2) can never be satisfied.
+@test "CONTROL: a transcript with NO timestamps ⇒ cannot-tell" {
+  local w; w="$(_po_clean_repo dox11)"
+  echo x >> "$w/base.txt"
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}' \
+    > "$BATS_TEST_TMPDIR/dox11.jsonl"
+  dox "$w" "$BATS_TEST_TMPDIR/dox11.jsonl"
+  [ "$status" -eq 2 ]
+}
