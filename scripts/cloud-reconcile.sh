@@ -494,12 +494,33 @@ EOF
 # exactly, and the classification that consumes it is the NEXT run's, not this one's. Filling before
 # the land would make this run's own `classify` read LANDED for a branch that has not landed yet.
 # bin/cc-cloud owns the derivation — this is a caller, not a second implementation.
+# 🚨 RESOLVED FROM THIS SCRIPT'S OWN TREE FIRST, and that ordering is the whole point. The first
+# cut looked in "$REPO/bin/cc-cloud" — the DECLARED repo, which defaults to the shared checkout —
+# and then $HOME/.claude/bin, which is a symlink INTO that same checkout. On the first live managed
+# round trip the checkout was 8 commits behind trunk, so a freshly-landed cloud-reconcile called a
+# cc-cloud that predated the verb it needed and got `unknown arg fill-paths`. A rail must call the
+# siblings it SHIPPED WITH; reaching for the deployed copy makes every fix hostage to the converger.
 CLOUD_BIN="${CLOUD_RECONCILE_CLOUD_BIN:-}"
 if [ -z "$CLOUD_BIN" ]; then
-  for _c in "$REPO/bin/cc-cloud" "$HOME/.claude/bin/cc-cloud"; do
+  for _c in "$(dirname "$SELF")/../bin/cc-cloud" "$REPO/bin/cc-cloud" "$HOME/.claude/bin/cc-cloud"; do
     [ -x "$_c" ] && { CLOUD_BIN="$_c"; break; }
   done
 fi
+# Derive the set WHILE THE BRANCH IS STILL AHEAD OF TRUNK. After the land the branch's commits are
+# on trunk, so the range against the trunk is empty and the derivation can only refuse — measured
+# live, and the reason `fill-paths` grew a --print/--set split.
+PENDING_PATHS=""
+derive_paths() {  # <decl-id> — sets PENDING_PATHS (empty ⇒ nothing derivable, and that stays honest)
+  local id="$1" rc=0
+  PENDING_PATHS=""
+  [ -n "$id" ] || return 0
+  [ -n "$CLOUD_BIN" ] && [ -x "$CLOUD_BIN" ] || return 0
+  PENDING_PATHS="$("$CLOUD_BIN" fill-paths --id "$id" --print 2>/dev/null)" || rc=$?
+  PENDING_PATHS="${PENDING_PATHS%%$'\n'*}"
+  [ "$rc" -eq 0 ] || PENDING_PATHS=""
+  return 0
+}
+
 fill_paths() {  # <decl-id> — best-effort, never fatal to a land that already succeeded
   local id="$1" rc=0 out
   [ -n "$id" ] || return 0
@@ -511,7 +532,14 @@ fill_paths() {  # <decl-id> — best-effort, never fatal to a land that already 
     printf '! %s — cc-cloud not found, so the path set was NOT filled; this result will read ELIGIBLE again next sweep.\n' "$id" >&2
     return 0
   fi
-  out="$("$CLOUD_BIN" fill-paths --id "$id" 2>&1)" || rc=$?
+  if [ -n "$PENDING_PATHS" ]; then
+    out="$("$CLOUD_BIN" fill-paths --id "$id" --set "$PENDING_PATHS" 2>&1)" || rc=$?
+  else
+    # No pre-land derivation to write. Try the direct form anyway: for a branch that somehow is
+    # still ahead of trunk it succeeds, and where it cannot it names WHY (already-landed vs
+    # delete-only), which the caller then prints. Never a silent skip.
+    out="$("$CLOUD_BIN" fill-paths --id "$id" 2>&1)" || rc=$?
+  fi
   # Reported either way. A silent failure here is invisible until the NEXT sweep re-attempts the
   # same finished branch, which is exactly the symptom this fill exists to remove — so "the fill
   # could not run" must not look like "the fill ran".
@@ -568,6 +596,7 @@ EOF
   rc=0; fetch_branch "$C_REPO" "$TARGET" || rc=$?
   [ "$rc" -eq 0 ] || die 65 "could not bring '$TARGET' into $C_REPO as a local head — $FETCH_DETAIL"
   [ -n "$FETCH_DETAIL" ] && echo "→ $TARGET — $FETCH_DETAIL"
+  derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$TARGET" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "✗ $TARGET — NOT landed. This range is authored by someone GitHub cannot attribute, so githooks/pre-push would refuse the push (and ship-land would report that refusal as exit 7, an ordinary push race, which is why it is caught HERE). It could not be re-authored: $REAUTH_DETAIL" >&2
@@ -605,6 +634,7 @@ while IFS= read -r b || [ -n "$b" ]; do
     continue
   fi
   [ -n "$FETCH_DETAIL" ] && echo "→ $b — $FETCH_DETAIL"
+  derive_paths "$C_ID"
   rc=0; reauthor_branch "$C_REPO" "$C_TRUNK" "$b" "$C_ID" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "✗ $b — NOT landed. Its commits are authored by someone GitHub cannot attribute, so githooks/pre-push would refuse the push (reported by ship-land as exit 7, an ordinary push race — which is why it is caught HERE). It could not be re-authored: $REAUTH_DETAIL" >&2

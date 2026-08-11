@@ -295,16 +295,50 @@ decl_set() { # <file> <key> <value>
   return 0
 }
 
+# 🚨 THE DERIVATION AND THE WRITE ARE SEPARABLE, AND THEY MUST BE — measured 2026-08-11 on the first
+# live managed round trip. The range is bounded at the merge-base with the TRUNK, so the moment the
+# land succeeds the branch's commits ARE on trunk, `merge-base(trunk, ref) == ref`, and the range is
+# EMPTY. A post-hoc fill is therefore self-defeating in exactly the case it exists for: it read
+# "adds or modifies no file" over a branch that had just landed one, and refused (correctly, since
+# writing an empty set is the bug it was built to remove).
+# So a caller that lands does BOTH halves at the right moments: `--print` while the branch is still
+# ahead of trunk, and `--set` once the land has succeeded. `--id` alone stays the right call for a
+# branch that has NOT landed yet, and it now NAMES this cause rather than reporting a bare emptiness.
+# The suite missed this because its lander stub never advanced trunk — a control that does not
+# replay the real post-land artifact cannot fail the way production does
+# (memory: control-must-replay-the-real-artifact).
 cmd_fill_paths() {
-  local id="" all=0 force=0 rc=0 worst=0 n_filled=0
+  local id="" all=0 force=0 rc=0 worst=0 n_filled=0 print_only=0 set_to="" have_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) id="${2:-}"; shift 2 ;;
       --all) all=1; shift ;;
       --force) force=1; shift ;;
+      --print) print_only=1; shift ;;
+      --set) set_to="${2:-}"; have_set=1; shift 2 ;;
       *) echo "cc-cloud fill-paths: unknown arg $1" >&2; return 2 ;;
     esac
   done
+  if [ "$have_set" -eq 1 ]; then
+    [ -n "$id" ] || { echo "cc-cloud fill-paths: --set needs --id" >&2; return 2; }
+    [ -f "$STATE/$id.decl" ] || { echo "cc-cloud fill-paths: no such declaration: $id" >&2; return 1; }
+    # The never-empty rule binds here too: a caller whose derivation came back empty must not be
+    # able to launder that into a written empty set through the other door.
+    [ -n "$set_to" ] || { echo "cc-cloud fill-paths: refusing to write an EMPTY path set for $id (not assertable is not the same as landed)" >&2; return 4; }
+    # The newline guard is written as a LITERAL, for the reason `cmd_declare` records ten lines
+    # further down and this arm re-learned the hard way: `$(printf '\n')` strips the very newline it
+    # is testing for and collapses to "", so the pattern becomes *""* and matches EVERY input — a
+    # guard that rejects everything reads exactly like a guard that works, and it refused the first
+    # real path set it was ever handed.
+    local NL='
+'
+    case "$set_to" in *"$NL"*) echo "cc-cloud fill-paths: newline in the path set" >&2; return 2 ;; esac
+    decl_set "$STATE/$id.decl" paths "$set_to" || return 1
+    decl_set "$STATE/$id.decl" paths_src "caller-derived-pre-land" || true
+    decl_set "$STATE/$id.decl" paths_at "$(now)" || true
+    printf '✓ %s — paths=%s (derived before the land, written after it)\n' "$id" "$set_to"
+    return 0
+  fi
   [ -n "$id" ] || [ "$all" -eq 1 ] || { echo "cc-cloud fill-paths: --id <id> or --all is required" >&2; return 2; }
 
   local one f repo trunk remote branch cur out ref cand
@@ -313,7 +347,7 @@ cmd_fill_paths() {
     f="$STATE/$one.decl"
     [ -f "$f" ] || { echo "cc-cloud fill-paths: no such declaration: $one" >&2; worst=1; continue; }
     cur="$(dfield "$f" paths)"
-    if [ -n "$cur" ] && [ "$force" -eq 0 ]; then
+    if [ -n "$cur" ] && [ "$force" -eq 0 ] && [ "$print_only" -eq 0 ]; then
       printf '· %s — paths already declared (%s); not overwriting (--force to re-derive)\n' "$one" "$cur"
       continue
     fi
@@ -335,10 +369,19 @@ cmd_fill_paths() {
     fi
     out="$(branch_paths "$repo" "$trunk" "$ref")"; rc=$?
     if [ "$rc" -ne 0 ]; then
-      printf '✗ %s — %s\n' "$one" "$PATHS_DETAIL" >&2
+      # NAME THE COMMONEST CAUSE. An empty range over a branch that has ALREADY landed is not the
+      # same fact as a delete-only branch, and reporting them identically is what made the first
+      # live failure read as "the VM wrote nothing" instead of "you asked too late".
+      if [ "$rc" -eq 4 ] && "$GIT_BIN" -C "${repo:-.}" merge-base --is-ancestor "$ref" "$trunk" 2>/dev/null; then
+        printf '✗ %s — %s is ALREADY on %s, so the range against the trunk is empty. The path set has to be derived BEFORE the land (fill-paths --print) and written after it (--set).\n' \
+          "$one" "$ref" "$trunk" >&2
+      else
+        printf '✗ %s — %s\n' "$one" "$PATHS_DETAIL" >&2
+      fi
       [ "$worst" -lt "$rc" ] && worst="$rc"
       continue
     fi
+    if [ "$print_only" -eq 1 ]; then printf '%s\n' "$out"; continue; fi
     decl_set "$f" paths "$out" || { echo "cc-cloud fill-paths: could not write $f" >&2; worst=1; continue; }
     decl_set "$f" paths_src "vm-commits:$ref" || true
     decl_set "$f" paths_at "$(now)" || true
@@ -985,6 +1028,32 @@ do_selftest() {
   _st_rc "a delete-only range REFUSES rather than writing an empty path set" 4 \
     cmd_fill_paths --id delonly
   _st_kv "…and it leaves paths= empty, which stays honestly 'not assertable'" "" delonly paths
+  # ── --print / --set: the split the FIRST LIVE ROUND TRIP forced ──────────────────────────────
+  # The range is bounded at the merge-base with the trunk, so after a successful land the branch is
+  # an ancestor of trunk, the range is EMPTY, and a post-hoc derivation can only refuse. These arms
+  # pin both halves and the diagnosis that tells them apart from a genuinely empty branch.
+  cmd_declare --id printme --branch claude/fill --remote "$_ST_D/remote.git" --repo "$_ST_D/work" \
+    --trunk trunkref >/dev/null 2>&1
+  if [ "$(cmd_fill_paths --id printme --print 2>/dev/null)" = "docs/added.md" ]; then
+    _ST_PASS=$((_ST_PASS + 1)); printf 'ok   --print derives without writing\n'
+  else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL --print did not derive the expected set\n'; fi
+  _st_kv "…and --print left the declaration untouched" "" printme paths
+  cmd_fill_paths --id printme --set "docs/added.md" >/dev/null 2>&1
+  _st_kv "--set writes what the caller derived before the land" "docs/added.md" printme paths
+  _st_rc "--set REFUSES an empty set — the never-empty rule binds through this door too" 4 \
+    cmd_fill_paths --id printme --set ""
+  # THE LIVE FAILURE, as its own arm: a branch already on trunk must be told apart from an empty one.
+  cmd_declare --id landedalready --branch claude/fill --remote "$_ST_D/remote.git" --repo "$_ST_D/work" \
+    --trunk claude/fill >/dev/null 2>&1
+  # CAPTURE, THEN MATCH — never `cmd | grep -q`. Under `pipefail` (line 136) the pipeline adopts the
+  # PRODUCER's non-zero, so a grep that matched perfectly still read FALSE because fill-paths exits
+  # 4 on the very refusal being asserted. That is the repo's own pipefail/SIGPIPE ratchet class,
+  # met here from the inside.
+  _la_out="$(cmd_fill_paths --id landedalready 2>&1)"
+  if printf '%s' "$_la_out" | grep -q 'ALREADY on'; then
+    _ST_PASS=$((_ST_PASS + 1)); printf 'ok   an already-landed branch NAMES that cause, not a bare emptiness\n'
+  else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL an already-landed branch reported as merely empty (got: %s)\n' "$_la_out"; fi
+
   # An unresolvable ref is 'cannot tell' (2), never a write.
   cmd_declare --id noref --branch claude/never-pushed --remote "$_ST_D/remote.git" --repo "$_ST_D/work" >/dev/null 2>&1
   _st_rc "an unresolvable branch is 'cannot tell', never an empty fill" 2 cmd_fill_paths --id noref
