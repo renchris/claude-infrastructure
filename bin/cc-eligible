@@ -53,13 +53,55 @@ on (2,304 commits across 199 branches that exist nowhere but this disk) is local
 worker that cannot see the branches cannot bank them — but under a token that says which half is
 the problem, so a reader is not sent looking for a browser.
 
+── THE MEASURED ARM: HISTORY REACH (2026-08-11, W1 of docs/plans/CLOUD_BACKLOG_PIPELINE.md) ────
+Everything above this line is a SPELLING. This arm is a MEASUREMENT, and it exists because the
+plan's §3 names the shallow clone as "the single biggest determinant of cloud-suitability" and a
+spelling cannot express it: an item that says `git show 2ac85e49` names no local-only state at
+all, reads ELIGIBLE under every list in this file, and fails off-box because the VM's clone is
+grafted at 50 commits and cannot see that object
+(docs/research/cloud-vm-shallow-clone-blast-radius-2026-08-11.md).
+
+The measurement is one set membership, not a walk:
+
+  horizon = the newest CLOUD_DEPTH commits of the trunk the VM would clone.
+  a cited sha is REACHABLE iff it resolves to a commit AND that commit is in the horizon.
+
+The inference that makes this sound is containment, and it is the reason a NON-resolving sha is
+NOT a refusal here: THIS clone is full and the VM's is a subset of it, so an object absent from
+the full clone is absent from the VM's too — but it is equally absent from the repo, i.e. it is a
+DEAD POINTER, which is cc-premise's subject and not a venue question. Refusing on it here would
+convict every item that cites a 12-hex BACKLOG ID (the store is full of them) of needing deep
+history. So: resolves + outside the horizon ⇒ refuse; does not resolve ⇒ this arm is silent.
+
+🚨 THE SHALLOW GUARD — keyed on the DANGEROUS EFFECT, not on "am I somewhere unusual" (memory:
+guard-refusal-fires-on-its-own-harness). The dangerous effect is a venue=cloud label MINTED FROM A
+TRUNCATED CLONE: if the measuring repo is itself grafted at 50 commits, then every sha it can
+resolve is inside its own 50-commit horizon by construction, the arm answers REACHABLE to
+everything, and it is silently over-permissive in exactly the direction that burns quota. So the
+oracle reports `shallow` and REFUSES TO CERTIFY, and `cc-venue` will not write a cloud label
+without a certification. That is also what makes "a cloud VM must never build the venue rule"
+mechanical rather than a rule in a document: a VM's clone is shallow, so the producer abstains
+there by measurement.
+
+The GATE stays fail-open on every unmeasurable state (`no-repo`, `shallow`, `no-horizon`) — a
+claim must never be starved by an instrument outage, which is this file's founding rule. The
+PRODUCER fails closed on the same states. Those are not in tension: the gate can only ever REFUSE
+work that is already claimable locally, while the producer is the thing that PROMOTES work into a
+venue where a wrong answer cannot be seen.
+
 Verbs:
   check <id>       `verdict=<token>` on line 1, reasons on stderr. exit 3 iff INELIGIBLE.
   explain <id>     the human-readable reason, on stdout. always exit 0.
+  why <id> [--json]  the FULL assessment — every class that fired, plus the history certification.
+                   `check` reports ONE token because its only channel is `head -1`; a producer
+                   needs all of them, and needs them structured. always exit 0.
   sweep [--json]   the census over every non-done item — one implementation, two consumers.
 
 Store: JSONL at ${CC_BACKLOG_FILE:-~/.claude/autonomy/backlog.jsonl} — the same resolution
 cc-backlog and cc-premise use, so a fixtured test and the live desk read the same way.
+Repo:  ${CC_ELIGIBLE_REPO} → else $HOME/Development/<project>, which is cc-dispatch's own
+       project_repo convention — so the venue arm and the worktree provisioner can never disagree
+       about which tree an item's project means.
 """
 
 import json
@@ -106,6 +148,114 @@ BOX = [
     ("this-machine", r"\bthis machine\b"),
     ("this-box", r"\bthis box\b"),
     ("reboot", r"\breboots?\b"),
+    # THE LIVE LAYER — added 2026-08-11 (W1). The plan's §3 states it outright: `~/.claude` DOES
+    # NOT EXIST on the VM. It is the enforcing store this whole repo deploys INTO — a farm of
+    # per-file symlinks into a checkout on this disk — so "converge it", "it is stale", "delete
+    # the spent scripts from it" is box work in the strictest sense: the artifact under discussion
+    # is not in the repo at all. Measured before adding, as this file's header requires: 77 of 485
+    # non-done items name it, 25-ish of them in the ELIGIBLE bucket, i.e. this is the largest
+    # single class the spelling list was missing.
+    ("live-layer", r"\blive layer\b"),
+    ("dot-claude", r"~/\.claude\b|\$HOME/\.claude\b"),
+    ("deploy-live", r"\bdeploy-live\b"),
+    # ── FOUND BY READING THE PROMOTED BUCKET (2026-08-11, W1) ──────────────────────────────────
+    # Every entry below came out of auditing what `cc-venue run` actually proposed to send, which
+    # is this file saying its own instrument works: the ELIGIBLE bucket is where a missed spelling
+    # does damage, and a producer made that bucket finally worth reading. None was added on a hunch;
+    # each is followed by the item that exposed it.
+    #
+    # THIS KERNEL AND ITS PROCESS TABLE. BOX already claims "state that exists only in this kernel"
+    # as its scope; these are the words that scope is actually written in. A Linux microVM cannot
+    # deliver, observe or reason about a Darwin signal, a jetsam band or a sysctl, and — the silent
+    # half — it will happily write code that looks like it does.
+    ("signal", r"\bsig(?:term|kill|cont|stop|hup)\b"),   # b38279c10c55, 477f0b771ec3
+    ("jetsam", r"\bjetsam\b"),                            # 7b762bcbbe11
+    ("macos", r"\bmac ?os\b|\bdarwin\b"),                 # 7b762bcbbe11 (memorystatus_control)
+    ("sysctl", r"\bsysctl\b"),                            # 6a82c9405b9e
+    # A LIVE TICK OF A LOCAL DAEMON. The item that exposed this says it outright — its logic is
+    # already proven by bats and what is unproven is "the deployed reach", which is a claim about
+    # this box that no test in a VM can settle.
+    ("live-tick", r"\blive tick\b"),                      # 9f69e13fc2e0
+    ("runner-log", r"\brunner\.log\b"),                   # 9f69e13fc2e0
+    # THE SESSION MACHINERY. Same rationale the `hook` entry above is included under, verbatim: a
+    # VM can write the change and can never learn whether it fires. Spawning, a teammate inheriting
+    # a cwd, a self-close, and the Bash-tool text layer are all events of a LIVE Claude Code
+    # session, and this repo has exactly one machine that has them.
+    ("spawn", r"\bspawn(?:s|ed|ing)?\b"),                 # e43e95c0ad18
+    ("teammate", r"\bteammates?\b|\bassignees?\b"),       # d4fa449e3895
+    ("self-close", r"\bself-close\b"),                    # d4fa449e3895
+    ("tool-layer", r"\bbash[- ]tool\b|\bzsh layer\b"),    # 6bfd83f03c3a, 1d20ff5ee344
+    ("claude1", r"\bclaude1\b"),                          # 492b95cbac72, 48e14163e78a
+    ("claude-exe", r"\bclaude\.exe\b"),                   # e78107996dea (a process on this box)
+    ("start-latency", r"\bstart[- ]latency\b"),           # 492b95cbac72
+]
+
+OFFBOX_LANE = [
+    # ── THE LANE CANNOT MODIFY ITSELF ─────────────────────────────────────────────────────────
+    # A class the plan HAD to have and nothing here expressed, found the only way it could be — by
+    # reading what the producer proposed. `7c6ff16259a0` is the brief CLOUD_BACKLOG_PIPELINE.md §2
+    # names as the one REJECTED OUTRIGHT by hand triage, and it sat in the first cloud bucket this
+    # producer ever printed. It is invisible to every list above: its span never says handoff-fire,
+    # never says pane, never says launchd. It says "off-box payload", "cc-cloud preflight",
+    # "unblock the cloud lane".
+    #
+    # The rule is the same circularity the plan applies to W1 itself ("a cloud VM building its own
+    # admission rule is a circular dependency"), generalised one step: A SESSION THIS LANE CREATED
+    # CANNOT VERIFY A CHANGE TO THE LANE. If the change is wrong, the failure mode is that the fire
+    # does not happen, or happens into an invented branch, or pushes nothing — and every one of
+    # those is invisible from inside the session that the broken lane was supposed to produce. It
+    # is not a statement about difficulty; it is that the observer and the subject are the same
+    # object.
+    #
+    # `venue` is in the list for the sharpest case of all: it would refuse an item asking to edit
+    # THIS FILE. `e15a743e12ba` ("shrink the off-box exclusion list with a census run") is exactly
+    # that item, and it was in the same bucket.
+    ("off-box", r"\boff[- ]?box\b"),
+    ("cloud-lane", r"\bcloud lane\b"),
+    ("cc-cloud", r"\bcc-cloud\b"),
+    ("cc-offload", r"\bcc-offload\b"),
+    ("cloud-session", r"\bcloud vms?\b|\bcloud sessions?\b"),
+    ("venue", r"\bvenue\b"),
+]
+
+SPAWN_RAIL = [
+    # THE FLEET'S SPAWN RAIL — its own class rather than a member of BOX, because the plan's
+    # hand-triage singled it out as the one brief REJECTED OUTRIGHT: `7c6ff16259a0` patches
+    # scripts/handoff-fire.sh, "strands real work box-wide if wrong" in its own words
+    # (CLOUD_BACKLOG_PIPELINE.md §2). The file is ordinary repo text — a VM can edit it perfectly —
+    # and that is exactly the trap: the edit is cheap, the VERIFICATION is a live fire on this box,
+    # and a wrong one takes every session on the machine with it. Refusing costs the tap 7 items
+    # (measured over the eligible bucket); the alternative cost is the fleet.
+    #
+    # NARROW ON PURPOSE. `cc-dispatch`, `self-close` and the rest of the dispatch stack are NOT
+    # here: they are repo scripts with repo-level tests, and widening a denylist on a hunch is how
+    # the tap starves (this file's header, and memory: denylist-enumerates-spellings-not-the-class).
+    # Spaced as well as hyphenated: `ce2bf742216d` says "handoff fire queue" and was promoted to
+    # cloud by the hyphen-only form — the same subject under the spelling a human types.
+    ("handoff-fire", r"\bhandoff[- ]fire(?:\.sh)?\b"),
+    ("spawn-rail", r"\bspawn rail\b"),
+]
+
+GITHUB = [
+    # NEEDS GITHUB BEYOND THE ONE CLONED REPO. §3: "No `gh` CLI. GitHub reaches the VM only through
+    # MCP tools scoped to one repository. Anything needing a PR is out." So the class is not "a PR"
+    # — it is every reach past the single `git_repository` source the create wired in: a pull
+    # request, an org or repo SETTING, the web console, the CLI.
+    #
+    # THREE OF THESE FIVE FIRE ZERO TIMES over the live store today, and they ship anyway. That is
+    # this file's design, not an oversight: `sweep` prints "never fired" for a dead spelling, so a
+    # zero is VISIBLE and can be read as either "the class is empty" or "the word is wrong" — a
+    # spelling omitted until it is needed is instead a silent hole on the day it is (memory:
+    # sensor-default-off-makes-blindness-the-shipping-path). `github` is the one that fires (4).
+    #
+    # `PR` is the only CASE-SENSITIVE pattern in this file — `(?-i:...)` locally undoes the re.I
+    # every pattern here is compiled with. Lowercased, `\bpr\b` is a two-letter token that appears
+    # in ordinary prose and in flag fragments, and this list's whole job is to not refuse the store.
+    ("pull-request", r"\bpull requests?\b"),
+    ("pr", r"(?-i:\bPRs?\b)"),
+    ("gh-cli", r"\bgh (?:pr|issue|api|repo|auth|run|workflow)\b|\bgh CLI\b"),
+    ("github", r"\bgithub\b"),
+    ("github-app", r"\bgithub app\b"),
 ]
 
 VISUAL = [
@@ -121,6 +271,15 @@ VISUAL = [
     ("render", r"\brender(?:s|ed|ing)?\b"),
     ("pixel", r"\bpixels?\b"),
     ("banner", r"\bbanners?\b"),
+    # The Chrome DevTools Protocol — a browser this box drives, not a library
+    # (found in the promoted bucket: e09a075539f5, a CDP consent dialog that re-pops).
+    ("cdp", r"\bcdp\b"),
+    # A console, a click, a UI: the same failure as `screenshot` — a worker "verifies" an
+    # interaction it never had (found in the promoted bucket: f3c1781db2ba, a provisioning
+    # console driven by one click). `UI` is case-sensitive for the reason `PR` is: lowercased it
+    # is a two-letter token that appears inside ordinary prose.
+    ("ui", r"(?-i:\bUI\b)"),
+    ("click", r"\bclicks?\b"),
 ]
 
 BANKING = [
@@ -137,16 +296,40 @@ BANKING = [
 # runs widest-first: an item that says both "launchd" and "render" is box work whose remedy happens
 # to be visible, not design work. The alternative — reporting every class — makes the verdict token
 # unparseable by a `head -1` consumer, which is the only channel cc-dispatch has.
+#
+# THE TWO SELF-REFERENTIAL CLASSES COME FIRST, ahead of the widest one, because they are the only
+# entries whose wrong answer is not confined to the item. A bad edit to the spawn rail strands every
+# session on the box; a bad edit to the off-box lane strands the mechanism that would have reported
+# it. So when an item is both lane work and box work, the reader must be sent to the lane.
 CLASSES = [
+    ("ineligible-offbox-lane", "THE OFF-BOX LANE ITSELF — the lane cannot verify a change to itself", OFFBOX_LANE),
+    ("ineligible-spawn-rail", "THE FLEET'S SPAWN RAIL — verified only by a live fire on this box", SPAWN_RAIL),
     ("ineligible-box", "anything about THIS BOX — local-only state a VM cannot see", BOX),
     ("ineligible-visual", "VISUAL/DESIGN — needs the local browser + dev server", VISUAL),
     ("ineligible-branch-banking", "BRANCH BANKING — the corpus exists only on this disk", BANKING),
+    ("ineligible-github", "NEEDS GITHUB beyond the one cloned repo — no gh CLI off-box", GITHUB),
 ]
 CLASSES = [(v, d, [(t, re.compile(p, re.I)) for t, p in pats]) for v, d, pats in CLASSES]
 
+# THE MEASURED CLASS. Not in CLASSES because CLASSES is the spelling table and `classify()` over it
+# is PURE — no I/O, no git, no ledger — which is what makes this file's fail-open rule enforceable
+# in one place. This verdict is produced by `assess()`, which owns the arm that can fail.
+#
+# LAST in refusal order, deliberately. Every entry above it names a WORD a human can read in the
+# title and act on; this one names a property of the graph. When an item is both, the spelling is
+# the more actionable sentence to lead with — and `why` reports both regardless.
+DEEP_HISTORY = "ineligible-deep-history"
+
+# Every refusing verdict with its one-line description, spelling-backed and measured alike. The
+# census renders from THIS, not from CLASSES, so a measured class cannot be invisible in the report
+# that exists to find what the classifier misses.
+SWEEP_ROWS = [(v, d) for v, d, _p in CLASSES] + [
+    (DEEP_HISTORY, "NEEDS HISTORY the shallow cloud clone cannot see (measured)"),
+]
+
 # The verdicts that REFUSE (exit 3). One tuple so the gate, the census and the tests can never
 # disagree about which is which — cc-premise's BLOCKING, same reason.
-BLOCKING = tuple(v for v, _d, _p in CLASSES)
+BLOCKING = tuple(v for v, _d, _p in CLASSES) + (DEEP_HISTORY,)
 
 # The uncertainty verdicts. Both exit 0. They are SEPARATE tokens because they mean different
 # things to whoever reads the census: "no such item" is a caller bug, "unreadable store" is an
@@ -220,26 +403,256 @@ def build_index(recs):
     return idx
 
 
-def classify(text):
-    """(verdict, description, [matched tokens]) for a span of specification text.
+def classify_all(text):
+    """[{verdict, description, tokens}] for EVERY spelling class that fired, in refusal order.
 
     Pure — no I/O, no ledger, no git. Everything that can fail lives in the callers, which is what
-    makes the fail-open rule enforceable in one place.
+    makes the fail-open rule enforceable in one place. The primitive, so that `classify` (one
+    token, for the gate) and `assess_full` (all of them, for the producer) cannot drift into two
+    readings of the same table.
     """
+    out = []
     for verdict, desc, pats in CLASSES:
         hits = [tok for tok, rx in pats if rx.search(text)]
         if hits:
-            return verdict, desc, hits
+            out.append({"verdict": verdict, "description": desc, "tokens": hits})
+    return out
+
+
+def classify(text):
+    """(verdict, description, [matched tokens]) — the FIRST class that fires, or eligible."""
+    hits = classify_all(text)
+    if hits:
+        return hits[0]["verdict"], hits[0]["description"], hits[0]["tokens"]
     return "eligible", "repo-only work — no local-only state named", []
 
 
+# ── THE HISTORY HORIZON ────────────────────────────────────────────────────────────────────────
+# 50 is the MEASURED depth of a real cloud clone, not a policy choice
+# (cloud-vm-shallow-clone-blast-radius-2026-08-11.md §1: `git rev-list --count HEAD` → 50,
+# `--is-shallow-repository` → true). Overridable so a test can pin a tiny horizon and so a change
+# on the provisioning side has one place to land.
+CLOUD_DEPTH = 50
+try:
+    CLOUD_DEPTH = int(os.environ.get("CC_ELIGIBLE_HISTORY_DEPTH") or CLOUD_DEPTH)
+except ValueError:
+    pass
+
+# 7 is git's floor for an abbreviation here (2034 objects on the VM ⇒ `%h` yields 7), 40 is a full
+# sha. Word-boundaried and lowercase-only: an upper-case hex run is not how this repo writes a sha,
+# and `[0-9a-f]{7,40}` unanchored would match inside longer identifiers.
+HEX = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+GIT_TIMEOUT_S = 20
+
+
+class HistoryOracle:
+    """Can a cloud clone of <repo> SEE the commits this item cites?
+
+    One instance per repo per process. Everything is lazy and memoised, because `check` runs inside
+    cc-backlog's claim path and must not pay for a census it does not need.
+
+    `state` is the certification and it has four values, three of which are "I could not tell":
+      ok          — a full clone, a resolvable trunk, a horizon of CLOUD_DEPTH commits.
+      no-repo     — no directory, or not a git repo, or git is unusable.
+      shallow     — THE GUARD. This clone is itself grafted, so its horizon is its whole visible
+                    history and every resolvable sha would read REACHABLE. It cannot certify.
+      no-horizon  — a repo, unshallow, but neither origin/<trunk> nor HEAD resolves.
+    """
+
+    def __init__(self, repo, depth=None):
+        self.repo = repo
+        self.depth = CLOUD_DEPTH if depth is None else depth
+        self.state = None
+        self.ref = ""
+        self.horizon = set()
+        self._resolved = {}
+
+    def _git(self, args):
+        try:
+            p = subprocess.run(
+                ["git", "-C", self.repo] + args,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=GIT_TIMEOUT_S,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if p.returncode != 0:
+            return None
+        return p.stdout.decode("utf-8", "replace")
+
+    def certify(self):
+        """state, computed once. Never raises — an oracle that throws would reach the claim path."""
+        if self.state is not None:
+            return self.state
+        if not self.repo or not os.path.isdir(self.repo):
+            self.state = "no-repo"
+            return self.state
+        if self._git(["rev-parse", "--git-dir"]) is None:
+            self.state = "no-repo"
+            return self.state
+        # THE GUARD, before the horizon: a shallow clone answers `rev-list -n 50` perfectly well.
+        shallow = self._git(["rev-parse", "--is-shallow-repository"])
+        if shallow is not None and shallow.strip() == "true":
+            self.state = "shallow"
+            return self.state
+        for ref in ("origin/main", "origin/master", "HEAD"):
+            out = self._git(["rev-list", "-n", str(self.depth), ref])
+            if out and out.split():
+                self.ref, self.horizon = ref, set(out.split())
+                self.state = "ok"
+                return self.state
+        self.state = "no-horizon"
+        return self.state
+
+    def resolve_many(self, tokens):
+        """Populate the token→sha cache in ONE `cat-file --batch-check`.
+
+        Called with the whole store's tokens by `sweep` and with one item's by `check`, so the
+        process count is bounded by the number of CALLERS rather than by the number of shas.
+
+        Output is matched to input BY ORDER, never by parsing the echoed line: git echoes the
+        original request verbatim for `missing`/`ambiguous` (i.e. WITH the `^{commit}` suffix) and
+        the resolved sha for a hit, so the two shapes share no field to key on.
+        """
+        want = [t for t in tokens if t not in self._resolved]
+        if not want:
+            return
+        want = sorted(set(want))
+        try:
+            p = subprocess.run(
+                ["git", "-C", self.repo, "cat-file", "--batch-check"],
+                input="".join(t + "^{commit}\n" for t in want).encode(),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=GIT_TIMEOUT_S,
+            )
+            lines = p.stdout.decode("utf-8", "replace").splitlines()
+        except (OSError, subprocess.SubprocessError):
+            lines = []
+        for tok, line in zip(want, lines):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "commit":
+                self._resolved[tok] = parts[0]          # a real commit
+            elif len(parts) >= 2 and parts[-1] == "ambiguous":
+                self._resolved[tok] = "ambiguous"
+            else:
+                self._resolved[tok] = None              # not an object here: a backlog id, or dead
+        for tok in want:                                # a short read must not re-shell every call
+            self._resolved.setdefault(tok, None)
+
+    def unreachable(self, text):
+        """[(token, why)] for every cited sha a cloud clone of this repo could NOT see.
+
+        Empty on every uncertified state — silence, not a false all-clear: `certify()` is what a
+        caller reads to tell "nothing to refuse" from "I could not look".
+        """
+        if self.certify() != "ok":
+            return []
+        toks = HEX.findall(text)
+        if not toks:
+            return []
+        self.resolve_many(toks)
+        out, seen = [], set()
+        for t in toks:
+            if t in seen:
+                continue
+            seen.add(t)
+            sha = self._resolved.get(t)
+            if sha is None:
+                continue                                # not a commit here ⇒ not this arm's subject
+            if sha == "ambiguous":
+                # An abbreviation that matches more than one object cannot be certified either way,
+                # and §4 of the blast-radius doc names exactly this: a 7-char sha minted on a VM is
+                # a lookup key that may not survive resolution against a full clone. Conservative,
+                # because the asymmetry in this file's header points here — stranding is
+                # recoverable, a confident worker on invisible history is not.
+                out.append((t, "ambiguous abbreviation — cannot certify reach"))
+            elif sha not in self.horizon:
+                out.append((t, "resolves to %s, outside the newest %d commits of %s"
+                            % (sha[:12], self.depth, self.ref)))
+        return out
+
+
+def repo_for(project):
+    """The tree an item's project means. cc-dispatch's project_repo convention, deliberately.
+
+    `CC_ELIGIBLE_REPO` is a single global override and is therefore only honoured as the answer for
+    EVERY project — it is used by the tests and by a caller that already knows it holds one repo.
+    A projectless item gets "", which certifies `no-repo` and refuses to promote rather than
+    silently measuring against whatever tree this process happens to sit in.
+    """
+    override = os.environ.get("CC_ELIGIBLE_REPO")
+    if override:
+        return override
+    if not project:
+        return ""
+    return os.path.join(os.path.expanduser("~"), "Development", project)
+
+
+_ORACLES = {}
+
+
+def oracle_for(project):
+    repo = repo_for(project)
+    if repo not in _ORACLES:
+        _ORACLES[repo] = HistoryOracle(repo)
+    return _ORACLES[repo]
+
+
 def assess(item_id, idx):
-    """(verdict, description, tokens, title) — the predicate, over a built index."""
+    """(verdict, description, tokens, title) — the predicate, over a built index.
+
+    The SPELLING arms run first and short-circuit: they are pure and free, the measured arm shells
+    out to git, and an item already refused for naming `launchd` gains nothing from a horizon read.
+    `assess_full` is the verb-facing form that runs both regardless.
+    """
+    full = assess_full(item_id, idx)
+    return full["verdict"], full["description"], full["tokens"], full["title"]
+
+
+def assess_full(item_id, idx, measure=True):
+    """The whole assessment, as a dict — every class that fired plus the history certification.
+
+    `check` collapses this to one token because `head -1` is its only channel; `cc-venue` needs all
+    of it, and needs it from THIS function rather than from a second implementation, which is the
+    whole reason this file exists (one predicate, a gate and a report that cannot drift).
+    """
     ent = idx.get(item_id)
     if ent is None:
-        return UNKNOWN_ITEM, "no such item in %s" % BACKLOG, [], ""
-    verdict, desc, hits = classify(ent["text"])
-    return verdict, desc, hits, ent["title"]
+        return {
+            "id": item_id, "verdict": UNKNOWN_ITEM, "description": "no such item in %s" % BACKLOG,
+            "tokens": [], "title": "", "project": "", "classes": [],
+            "history": {"state": "not-measured", "repo": "", "ref": "", "depth": CLOUD_DEPTH,
+                        "unreachable": []},
+        }
+    text = ent["text"]
+    classes = classify_all(text)
+
+    orc = oracle_for(ent.get("project", ""))
+    hist = {"state": "not-measured", "repo": orc.repo, "ref": "", "depth": orc.depth,
+            "unreachable": []}
+    if measure:
+        hist["state"] = orc.certify()
+        hist["ref"] = orc.ref
+        bad = orc.unreachable(text)
+        hist["unreachable"] = [{"sha": t, "why": w} for t, w in bad]
+        if bad:
+            classes.append({
+                "verdict": DEEP_HISTORY,
+                "description": "NEEDS HISTORY the %d-commit cloud clone cannot see" % orc.depth,
+                "tokens": [t for t, _w in bad],
+            })
+
+    if classes:
+        first = classes[0]
+        return {
+            "id": item_id, "verdict": first["verdict"], "description": first["description"],
+            "tokens": first["tokens"], "title": ent["title"], "project": ent.get("project", ""),
+            "classes": classes, "history": hist,
+        }
+    return {
+        "id": item_id, "verdict": "eligible",
+        "description": "repo-only work — no local-only state named", "tokens": [],
+        "title": ent["title"], "project": ent.get("project", ""), "classes": [], "history": hist,
+    }
 
 
 REFUSAL_NOTE = (
@@ -248,6 +661,15 @@ REFUSAL_NOTE = (
     "  refused. If the classification is wrong, the spelling that fired is named above: fix\n"
     "  bin/cc-eligible's list rather than forcing past it, so the next item of this shape is\n"
     "  classified correctly too."
+)
+
+DEEP_HISTORY_NOTE = (
+    "The sha(s) named above RESOLVE in this clone and lie outside the newest commits a cloud VM's\n"
+    "  shallow clone carries, so an off-box `git show`/`log -S`/`blame` on them answers from a\n"
+    "  single boundary commit — completely, confidently and WRONG\n"
+    "  (docs/research/cloud-vm-shallow-clone-blast-radius-2026-08-11.md §3 S1). There is no\n"
+    "  spelling list to correct here: claim it LOCALLY, or INLINE what the item needs from that\n"
+    "  history into the brief so the worker never has to walk for it."
 )
 
 
@@ -266,7 +688,11 @@ def cmd_check(item_id):
         sys.stderr.write("OFF-BOX INELIGIBLE — %s\n" % desc)
         sys.stderr.write("  item : %s %s\n" % (item_id, title[:120]))
         sys.stderr.write("  named: %s\n" % ", ".join(hits))
-        sys.stderr.write("  " + REFUSAL_NOTE + "\n")
+        # The MEASURED class gets its own note. The spelling note ends by telling the reader to fix
+        # the list, and there is no list here — sending them to edit an array over a git
+        # measurement is an instruction that cannot be carried out, which is how a correct refusal
+        # gets forced past instead of understood (memory: work-item-citation-refutes-its-own-remedy).
+        sys.stderr.write("  " + (DEEP_HISTORY_NOTE if verdict == DEEP_HISTORY else REFUSAL_NOTE) + "\n")
     elif verdict == UNKNOWN_ITEM:
         sys.stderr.write("cc-eligible: %s — fail-open\n" % desc)
     sys.exit(3 if verdict in BLOCKING else 0)
@@ -283,6 +709,44 @@ def cmd_explain(item_id):
     if verdict == "eligible":
         w("  ⚠️ 'eligible' means NO SPELLING IN THE LIST FIRED, which is weaker than 'this is\n"
           "     repo-only work'. The list enumerates spellings, not the class. Read the title.\n")
+    sys.exit(0)
+
+
+HISTORY_NOTE = {
+    "ok": "certified against a FULL clone — the horizon is real",
+    "no-repo": "NOT CERTIFIED: no readable git repo for this project — reach is unknown",
+    "shallow": "NOT CERTIFIED: the measuring clone is ITSELF shallow, so its horizon is its whole "
+               "visible history and every sha would read reachable — it cannot certify",
+    "no-horizon": "NOT CERTIFIED: repo present but no trunk ref resolves — reach is unknown",
+    "not-measured": "not measured",
+}
+
+
+def cmd_why(item_id, as_json):
+    """The FULL assessment. Always exit 0 — this verb reports, it never gates.
+
+    Separate from `check` because the two have different consumers and therefore different shapes:
+    `check` speaks to a `head -1` reader inside a claim and must say ONE thing; `cc-venue` has to
+    record a why that a human can read six weeks later and a `jq` can parse today.
+    """
+    full = assess_full(item_id, build_index(load_records()))
+    if as_json:
+        sys.stdout.write(json.dumps(full, indent=2) + "\n")
+        sys.exit(0)
+    w = sys.stdout.write
+    w("%s  %s\n" % (full["id"], full["title"][:120]))
+    w("  verdict : %s\n" % full["verdict"])
+    w("  project : %s\n" % (full["project"] or "(none)"))
+    if full["classes"]:
+        for c in full["classes"]:
+            w("  refused : %-27s %s\n" % (c["verdict"], ", ".join(c["tokens"])))
+    else:
+        w("  refused : (nothing fired)\n")
+    h = full["history"]
+    w("  history : %s — %s\n" % (h["state"], HISTORY_NOTE.get(h["state"], "")))
+    w("            repo=%s ref=%s depth=%s\n" % (h["repo"] or "(none)", h["ref"] or "-", h["depth"]))
+    for u in h["unreachable"]:
+        w("            %s — %s\n" % (u["sha"], u["why"]))
     sys.exit(0)
 
 
@@ -320,15 +784,40 @@ def cmd_sweep(as_json):
     idx = build_index(load_records())
     nd = [i for i in items if i.get("status") != "done"]
 
+    # PRE-WARM the history oracles: one `cat-file --batch-check` per repo for the WHOLE store,
+    # instead of one per item. Without it a 485-item census is 485 subprocesses on a hot path that
+    # a desk report runs routinely; with it the process count is the number of distinct projects.
+    by_project = defaultdict(list)
+    for it in nd:
+        ent = idx.get(it["id"])
+        if ent:
+            by_project[ent.get("project", "")].append(ent["text"])
+    for proj, texts in by_project.items():
+        orc = oracle_for(proj)
+        if orc.certify() == "ok":
+            toks = set()
+            for t in texts:
+                toks.update(HEX.findall(t))
+            orc.resolve_many(toks)
+
     buckets = defaultdict(list)
     tokens = Counter()
+    horizons = {}
     for it in nd:
-        verdict, _desc, hits, _title = assess(it["id"], idx)
-        buckets[verdict].append({
+        full = assess_full(it["id"], idx)
+        buckets[full["verdict"]].append({
             "id": it["id"], "status": it.get("status"),
-            "title": (it.get("title") or "")[:120], "tokens": hits,
+            "title": (it.get("title") or "")[:120], "tokens": full["tokens"],
         })
-        tokens.update(hits)
+        # SPELLINGS ONLY. The measured class's "tokens" are cited SHAs, and folding those into this
+        # counter would put a few dozen one-off hex strings alongside `pane×100` and — worse — make
+        # the "never fired" line below (which is the instrument for finding a WRONG word) read
+        # against a vocabulary that is not a vocabulary.
+        if full["verdict"] != DEEP_HISTORY:
+            tokens.update(full["tokens"])
+        h = full["history"]
+        if h["repo"]:
+            horizons[h["repo"]] = {"state": h["state"], "ref": h["ref"], "depth": h["depth"]}
 
     report = {
         "non_done": len(nd),
@@ -336,6 +825,10 @@ def cmd_sweep(as_json):
         "counts": {v: len(buckets.get(v, [])) for v in
                    list(BLOCKING) + ["eligible", UNKNOWN_ITEM, UNKNOWN_STORE]},
         "tokens": dict(tokens.most_common()),
+        # The certification, per repo. A census whose deep-history bucket reads 0 means one of two
+        # opposite things — nothing cites old history, or nothing could be measured — and only this
+        # block tells them apart (memory: sensor-default-off-makes-blindness-the-shipping-path).
+        "horizons": horizons,
         "eligible": buckets.get("eligible", []),
         "ineligible": {v: buckets.get(v, []) for v in BLOCKING},
     }
@@ -345,8 +838,11 @@ def cmd_sweep(as_json):
 
     w = sys.stdout.write
     w("cc-eligible sweep — %d non-done items · store %s\n" % (len(nd), BACKLOG))
+    for repo, h in sorted(horizons.items()):
+        w("  horizon: %-52s %s (ref=%s depth=%s)\n"
+          % (repo, h["state"], h["ref"] or "-", h["depth"]))
     w("\n  REFUSED off-box (exit 3 at `cc-backlog claim --venue cloud`):\n")
-    for v, desc, _p in CLASSES:
+    for v, desc in SWEEP_ROWS:
         w("    %-27s %-58s : %d\n" % (v, desc[:58], len(buckets.get(v, []))))
     w("  ALLOWED off-box:\n")
     w("    %-27s %-58s : %d\n"
@@ -361,7 +857,7 @@ def cmd_sweep(as_json):
         if never:
             w("  never fired (a dead spelling is not a clean store — it may be the wrong word): %s\n"
               % ", ".join(never))
-    for v, _desc, _p in CLASSES:
+    for v, _desc in SWEEP_ROWS:
         rows = buckets.get(v, [])
         if not rows:
             continue
@@ -384,11 +880,14 @@ def main():
         sys.stdout.write(__doc__)
         sys.exit(0)
     verb, rest = argv[0], argv[1:]
-    if verb in ("check", "explain"):
+    if verb in ("check", "explain", "why"):
         if not rest:
             sys.stderr.write("cc-eligible %s: <id> is required\n" % verb)
             sys.exit(2)
-        (cmd_check if verb == "check" else cmd_explain)(rest[0])
+        if verb == "why":
+            cmd_why(rest[0], "--json" in rest)
+        else:
+            (cmd_check if verb == "check" else cmd_explain)(rest[0])
     elif verb == "sweep":
         cmd_sweep("--json" in rest)
     else:
