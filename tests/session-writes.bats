@@ -382,3 +382,95 @@ PY
   run bash -c ". '$bad'; session_dirty_mine '$t' '$W' >/dev/null 2>&1; echo \$?"
   [ "$output" -eq 1 ] || false
 }
+
+# ── LIVENESS_DETECTOR_FAILNEG (2026-08-11) — candidate instance #6, CONFIRMED ────────────────────
+# session_unlanded_mine had NO tests at all, which is exactly why its defect survived: the git read
+# sat inside a heredoc'd command substitution, so its exit status was structurally unobservable, and
+# every failure (unresolvable ref, the 5 s _sw_bounded expiry, any git error) fell through to
+# `return 1` = "not mine". Both consumers convert rc 1 into "safe to close" —
+# hooks/completion-assert.sh:398 sets `_ca_exon="unlanded-not-mine"` (the false-done guard stops
+# blocking) and hooks/session-continue.sh returns 0 (the SHIP FLOOR never fires) — while rc 2 is
+# documented as "cannot-tell — stay strict". So a git read that merely timed out let a session close
+# ✅ over unlanded work, silently and in the fail-GREEN direction.
+#
+# Independently convicted twice: by the codex adversarial screen
+# (docs/research/codex-probe-screen-2026-08-10/screen-session-writes.md) and by this item's own
+# derivation sweep, from two different search axes.
+
+sum_rc() { bash -c ". '$LIB'; session_unlanded_mine '$1' '$2' '$3' >/dev/null 2>&1; echo \$?"; }
+
+unlanded_repo() { # $1=dir — a repo whose HEAD is one commit ahead of origin/main, touching src/mine.ts
+  repo "$1"
+  ( cd "${1:?}" || exit 1
+    echo change > src/mine.ts; git add -A; git commit -q -m "unlanded work" ) >/dev/null 2>&1
+}
+
+@test "FAILNEG POSITIVE CONTROL: an unlanded commit touching a path THIS session wrote is mine (0)" {
+  # Without this passing, every assertion below is vacuous — the oracle has to WORK before its
+  # failure modes mean anything.
+  unlanded_repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/u1.jsonl" "$W/src/mine.ts")"
+  [ "$(sum_rc "$t" "$W" origin/main)" -eq 0 ] || false
+}
+
+@test "FAILNEG POSITIVE CONTROL: an unlanded commit touching only a SIBLING's path is not-mine (1)" {
+  # The genuine negative must survive the fix — this is what stops it becoming always-cannot-tell.
+  unlanded_repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/u2.jsonl" "$W/src/theirs.ts")"
+  [ "$(sum_rc "$t" "$W" origin/main)" -eq 1 ] || false
+}
+
+@test "FAILNEG NEGATIVE CONTROL: an UNRESOLVABLE trunk ref is cannot-tell (2), never not-mine (1)" {
+  unlanded_repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/u3.jsonl" "$W/src/mine.ts")"
+  [ "$(sum_rc "$t" "$W" nosuchref)" -eq 2 ] || false
+}
+
+@test "FAILNEG REGRESSION PIN (not a discriminating control): a TIMING-OUT git diff is cannot-tell (2)" {
+  # HONESTY LABEL. This test passes against the PRE-FIX lib too — measured, by reverting
+  # hooks/lib/session-writes.sh to HEAD and running this test alone (rc 0, "ok 1"). So it does NOT
+  # discriminate and it is NOT evidence for the fix; the discriminating evidence for this defect is
+  # the unresolvable-ref control above plus the mutation below, both of which go red pre-fix.
+  #
+  # It also does not reproduce the screen doc's measured claim for this trigger — that report
+  # (docs/research/codex-probe-screen-2026-08-10/screen-session-writes.md) records "git shimmed so
+  # diff --name-only sleeps 30 s → returns after 5.2 s with rc 1 (expected 2)". In THIS harness the
+  # pre-fix code answers 2. I did not find the cause, and the difference is most likely in the shim
+  # (what exactly is intercepted, and whether the killed child leaves the substitution empty or the
+  # enclosing subshell non-zero) rather than in the subject. Recorded rather than smoothed over: the
+  # bad-ref trigger is independently confirmed defective and is what the fix is justified by.
+  #
+  # Kept because it PINS the post-fix contract against future regression, which is a real job — just
+  # not the job of proving this change was needed.
+  unlanded_repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/u4.jsonl" "$W/src/mine.ts")"
+  local shim="$BATS_TEST_TMPDIR/shimbin" real; mkdir -p "$shim"; real="$(command -v git)"
+  { printf '#!/bin/bash\n'
+    printf '# pass through everything except the one read under test, which hangs past the bound\n'
+    printf 'if [ "$1" = diff ]; then sleep 30; exit 0; fi\n'
+    printf 'exec %s "$@"\n' "$real"
+  } > "$shim/git"
+  chmod +x "$shim/git"
+  # THE CONTROL'S OWN CONTROL. If the shim broke git outright, session_unlanded_mine would return 2
+  # from the rev-parse guard instead of from the bounded read, and this test would pass while proving
+  # nothing — a vacuous pass of exactly the kind this whole item is about. Assert passthrough first.
+  run bash -c "PATH='$shim:\$PATH'; git -C '$W' rev-parse --show-toplevel"
+  [ "$status" -eq 0 ] || false
+  # …and the bound must actually be enforceable here: without a `timeout` binary _sw_bounded runs the
+  # command unbounded, so this scenario is not the one the test names. macOS ships none by default.
+  if ! command -v timeout >/dev/null 2>&1; then skip "no timeout(1) — _sw_bounded cannot bound, scenario unreachable"; fi
+  run bash -c "PATH='$shim:\$PATH'; . '$LIB'; session_unlanded_mine '$t' '$W' origin/main >/dev/null 2>&1; echo \$?"
+  [ "$output" -eq 2 ] || false
+}
+
+@test "FAILNEG MUTATION: reverting the failure conversion to not-mine makes both controls FAIL" {
+  # A control that cannot fail proves nothing. One line back to the pre-fix polarity reproduces the
+  # exact fail-green the consumers act on.
+  local mut="$BATS_TEST_TMPDIR/lib-mut.sh"
+  sed 's|rm -f "$difff" 2>/dev/null; return 2|rm -f "$difff" 2>/dev/null; return 1|' "$LIB" > "$mut"
+  grep -qF 'rm -f "$difff" 2>/dev/null; return 1' "$mut" || false   # the mutant really mutated
+  unlanded_repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/u5.jsonl" "$W/src/mine.ts")"
+  run bash -c ". '$mut'; session_unlanded_mine '$t' '$W' nosuchref >/dev/null 2>&1; echo \$?"
+  [ "$output" -eq 1 ] || false   # ← the bug: a failed read EXONERATING the close
+}

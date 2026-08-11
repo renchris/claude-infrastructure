@@ -152,6 +152,99 @@ STUB
   grep -q "$ORIG" "$CC_MAILBOX_DIR/.sent/$PANE"
 }
 
+# ── LIVENESS_DETECTOR_FAILNEG (2026-08-11) — instances 1 and 4 ───────────────────────────────────
+# The suite above has four tests labelled CONTROL and none of them could fail on the real defect,
+# because every fixture uses ONE string ($ORIG) for both the armed address and the recorded target.
+# In production those are two different spellings: the stamp carries the address as ARMED (a
+# project-qualified session name, "claude-infrastructure-6") while cc-notify recorded only what that
+# name RESOLVED to (the pane id, "6"). The fixture was vacuous on exactly the axis that fails.
+#
+# Taken from the operator's LIVE store, four days after the incident: cc-fired/11.json holds
+# notifyBack="claude-infrastructure-6"; mailbox/.sent/11 holds two real delivered sends, both recorded
+# as bare "6" — the two pings instance 1 says the pane sent and the detector denied.
+
+@test "FAILNEG NEGATIVE CONTROL: the MEASURED instance — alias armed, send recorded under the resolved id — now reads PINGED" {
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6 claude-infrastructure-6\n2026-08-09T15:27:47-0700 6 claude-infrastructure-6\n' \
+    > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"this pane pinged"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ]              # and it does NOT announce over a real ping
+}
+
+@test "FAILNEG POSITIVE CONTROL: a genuinely silent peer is STILL caught (the fix is not always-yes)" {
+  # The mandatory other direction. This pane DID send — to someone else — in the NEW format, so the
+  # negative is definite rather than merely unanswerable, and must still produce the UNREPORTED announce.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-10T09:00:00-0700 99 claude-infrastructure-99\n' > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NO ping was ever sent"* ]] || false
+  grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "FAILNEG THIRD STATE: a LEGACY record (resolved id only) is UNKNOWN, never 'never pinged'" {
+  # Every .sent file already on disk is in this format. Calling it "never pinged" would re-commit the
+  # defect against the store's own history.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6\n' > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"predates the both-spellings format"* ]] || false
+  [[ "$output" != *"NO ping was ever sent"* ]] || false
+  grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
+  ! grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "FAILNEG THIRD STATE: an UNREADABLE send record is UNKNOWN, never 'never pinged'" {
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6 claude-infrastructure-6\n' > "$MDIR/.sent/$PANE"
+  chmod 000 "$MDIR/.sent/$PANE"
+  if [ -r "$MDIR/.sent/$PANE" ]; then skip "running as a user that ignores mode 000"; fi
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  chmod 644 "$MDIR/.sent/$PANE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could NOT BE READ"* ]] || false
+  [[ "$output" != *"NO ping was ever sent"* ]] || false
+}
+
+@test "FAILNEG MUTATION: restoring the substring grep makes the legacy control assert the ORIGINAL bug" {
+  # A control that cannot fail proves nothing. Rebuild the function with the PRE-FIX read (the
+  # substring grep over the whole line) and replay the REAL pre-fix artifact — the legacy record. The
+  # mutant must produce the exact false negative this item was filed about.
+  a="$(grep -n '^      awk -v want=' "$BATS_TEST_TMPDIR/fn.sh" | cut -d: -f1)"
+  [ -n "$a" ]
+  b="$(awk -v s="$a" 'NR>s && /\$sent"$/ { print NR; exit }' "$BATS_TEST_TMPDIR/fn.sh")"
+  [ -n "$b" ]
+  { sed -n "1,$((a-1))p" "$BATS_TEST_TMPDIR/fn.sh"
+    printf '      grep -qF "$nb" "$sent" 2>/dev/null\n'
+    sed -n "$((b+1)),\$p" "$BATS_TEST_TMPDIR/fn.sh"
+  } > "$BATS_TEST_TMPDIR/fn-mut.sh"
+  # shellcheck source=/dev/null
+  . "$BATS_TEST_TMPDIR/fn-mut.sh"                       # redefines sc_announce_before_retire
+
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6\n' > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [[ "$output" == *"NO ping was ever sent"* ]] || false  # ← the bug, reproduced on demand
+  [[ "$output" != *"predates the both-spellings format"* ]] || false
+}
+
+@test "FAILNEG: cc-notify records BOTH spellings when they differ, and one when they do not" {
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox3"; mkdir -p "$CC_MAILBOX_DIR"
+  # A bare uuid target resolves to itself ⇒ one token, no redundant duplicate.
+  run env ITERM_SESSION_ID="w0t0p0:$PANE" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg3" \
+    "$REPO/bin/cc-notify" --mailbox-only "$ORIG" "HANDOFF-PING test: done"
+  [ "$(awk 'NR==1{print NF}' "$CC_MAILBOX_DIR/.sent/$PANE")" = 2 ]
+  grep -q "$ORIG" "$CC_MAILBOX_DIR/.sent/$PANE"
+}
+
 @test "F-1: the .sent record cannot be mistaken for an inbox (leading dot is refused as a box key)" {
   # `.sent/` sits beside the existing `.alias/` and `.watchers/` dirs. _mbx_valid_uuid refuses any key
   # beginning with `.`, which is what keeps this out of the box namespace BY CONSTRUCTION rather than

@@ -2063,8 +2063,56 @@ assistant_turn_in() { # $1=transcript jsonl → 0 a content-bearing assistant tu
   grep -q '"type":"assistant"' "$f"   # jq-less fallback: still a turn-check, never mere existence
 }
 
-engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 not
-  local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid scan_win=""
+# INGESTION, as distinct from the marker merely being SOMEWHERE in the file (2026-08-11).
+# This is the discriminator that makes engagement_seen's state 3 safe, and without it that state would
+# be actively dangerous. Both of these put the marker in the transcript:
+#   · a pane that received the brief as a USER MESSAGE and is simply slow to take its first turn —
+#     alive, working, and a re-fire over it is the duplicate-work incident (instances 2/3/5);
+#   · a pane whose first prompt was REJECTED (the /goal >4000-char cap), which lands the brief in
+#     ATTACHMENT/SYSTEM rows and then idles FOREVER — a re-fire is exactly what it needs.
+# Reporting the second as "ingested, do not re-fire" would strand a permanently dead session, so
+# state 3 requires the marker in a record whose type is `user` — which is precisely the durable
+# artifact the DoD names ("the session's transcript contains a user message carrying the brief").
+# No jq ⇒ 1: state 3 is withheld rather than guessed, degrading to the pre-existing behaviour.
+marker_in_user_record() { # $1=transcript jsonl $2=marker → 0 the brief arrived as a user message / 1 not
+  local f="$1" m="$2"
+  [ -s "$f" ] && [ -n "$m" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [ "$(jq -rn --arg m "$m" 'first(inputs
+                              | select(.type == "user"
+                                       and (((.message.content? // .content? // "") | tostring) | contains($m)))
+                              | "1")' "$f" 2>/dev/null)" = 1 ]
+}
+
+# FOUR outcomes, and the third one is the fix (2026-08-11, LIVENESS_DETECTOR_FAILNEG instances 2/3/5):
+#   0 = ENGAGED — a transcript carries the marker AND shows a content-bearing assistant turn
+#   1 = NO EVIDENCE — every read SUCCEEDED and found nothing; the honest definite-so-far negative
+#   2 = CANNOT TELL — a read itself FAILED (the enumeration errored, or a grep could not read a file)
+#   3 = INGESTED, NOT YET RUNNING — the marker IS in a transcript, but no assistant turn yet
+#
+# WHY 3 EXISTS, AND WHY IT IS THE WHOLE POINT. Instances 2, 3 and 5 were panes that had ingested the
+# brief — their transcripts held it as a user message — and were merely slow to produce a first
+# assistant turn on a box at load 13-24. The old two-valued return reported all of that as the same
+# `1` a never-born pane gets, and the caller's remedy for `1` is "re-fire". So the detector told the
+# operator to re-fire work that was already running: two sessions in one worktree, a duplicated paid
+# model grid, a collision on one index.json. This file's own fire_cleanup header (see the FIRE-FAILED
+# resource cleanup block) already describes that harm exactly — "the operator is told to re-fire; the
+# orphan meanwhile engages; two live sessions on one task" — so the remedy was understood as prose
+# while the verdict it depends on stayed wrong. State 3 is what makes that prose actionable.
+#
+# WHY THE READS ARE NO LONGER SWALLOWED. The old marker scan was a `$( find … -exec grep … )` INSIDE
+# A HEREDOC. A command substitution in a heredoc body has no observable exit status — the value is
+# interpolated and the rc is discarded — so a failed enumeration, an unreadable file or a killed grep
+# produced an empty list, the loop body never ran, and control fell through to `return 1`. A read that
+# FAILED and a search that genuinely found nothing were therefore the same answer. That is the exact
+# structure hooks/lib/session-writes.sh:312 was independently convicted of; it is the shape this whole
+# item is about, and it is why the enumeration is now a plain redirect whose rc is tested, and why the
+# per-file grep rc is inspected (0 hit · 1 miss · ≥2 READ ERROR) instead of being collapsed to truthiness.
+#
+# The mtime window makes the per-file loop affordable: measured on this box, -mmin -240 cuts a 1705-file
+# projects dir to 23 candidates, so the extra forks are bounded by the window, not by history.
+engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane → 0 engaged / 1 none / 2 cannot-tell / 3 ingested-not-running
+  local pdir="$1" marker="$2" regdir="$3" pane="$4" hit rsid scan_win="" list grc ingested=0 readerr=0 found=0
   ENGAGE_PROOF="" ENGAGE_TRANSCRIPT=""    # R12 — every success names the oracle that produced it
   # mtime-scope the marker scan (see CC_ENGAGE_SCAN_WINDOW above — 71% of the DoD metric was this
   # grep). Built as a variable because it must expand to TWO find operands or to nothing at all.
@@ -2076,28 +2124,53 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane �
   # the marker therefore never hits the resume false-negative (cc-backlog 93a9f880b6fe); a caller
   # that passes "" is left with path (b) alone and its registry dependency.
   if [ -n "$marker" ] && [ -d "$pdir" ]; then
-    while IFS= read -r hit; do
-      [ -n "$hit" ] || continue
-      assistant_turn_in "$hit" && { ENGAGE_PROOF="marker"; ENGAGE_TRANSCRIPT="$hit"; return 0; }
-    done <<EOF
-$(
-      # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
-      find "$pdir" -name '*.jsonl' -type f $scan_win -exec grep -lF -- "$marker" {} + 2>/dev/null)
-EOF
+    list="$(mktemp "${TMPDIR:-/tmp}/cc-engage-scan.XXXXXX" 2>/dev/null)" || return 2
+    # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
+    if find "$pdir" -name '*.jsonl' -type f $scan_win -print > "$list" 2>/dev/null; then
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        grep -qF -- "$marker" "$hit" 2>/dev/null; grc=$?
+        if [ "$grc" -eq 0 ]; then
+          if assistant_turn_in "$hit"; then
+            # BREAK, never `rm` here: the loop is READING $list, and removing it inside the read is
+            # the SC2094 shellcheck blocks on. One cleanup site, after the read, is also just clearer.
+            ENGAGE_PROOF="marker"; ENGAGE_TRANSCRIPT="$hit"; found=1; break
+          fi
+          # The brief is here and has not RUN yet — and a "no" to running is emphatically not a "no"
+          # to arriving. But only a USER-record arrival earns state 3; see marker_in_user_record.
+          marker_in_user_record "$hit" "$marker" && { ingested=1; ENGAGE_TRANSCRIPT="$hit"; }
+        elif [ "$grc" -ge 2 ]; then
+          readerr=1                      # grep could not READ this file — a miss it is not
+        fi
+      done < "$list"
+    else
+      readerr=1                          # the enumeration itself failed — we scanned nothing
+    fi
+    rm -f "$list"
+    [ "$found" = 1 ] && return 0
   fi
   # (b) a cc-registry row's (non-null) session_id NAMES a transcript — that transcript must show an
   #     assistant turn too. The row alone is the SessionStart hook's own output: pure birth.
+  #     BIRTH IS NOT INGESTION, so this path deliberately does NOT set `ingested`: a born-but-never-run
+  #     transcript is the genuine cold-fire race and must keep returning the definite negative.
   if [ -n "$pane" ] && [ -n "$regdir" ] && [ -f "$regdir/$pane.json" ] && command -v jq >/dev/null 2>&1; then
     rsid="$(jq -r '.session_id // empty' "$regdir/$pane.json" 2>/dev/null)"
     if [ -n "$rsid" ] && [ -d "$pdir" ]; then
-      while IFS= read -r hit; do
-        [ -n "$hit" ] || continue
-        assistant_turn_in "$hit" && { ENGAGE_PROOF="registry:$rsid"; ENGAGE_TRANSCRIPT="$hit"; return 0; }
-      done <<EOF
-$(find "$pdir" -name "$rsid.jsonl" -type f 2>/dev/null)
-EOF
+      list="$(mktemp "${TMPDIR:-/tmp}/cc-engage-reg.XXXXXX" 2>/dev/null)" || return 2
+      if find "$pdir" -name "$rsid.jsonl" -type f -print > "$list" 2>/dev/null; then
+        while IFS= read -r hit; do
+          [ -n "$hit" ] || continue
+          assistant_turn_in "$hit" && { ENGAGE_PROOF="registry:$rsid"; ENGAGE_TRANSCRIPT="$hit"; found=1; break; }
+        done < "$list"
+      else
+        readerr=1
+      fi
+      rm -f "$list"
+      [ "$found" = 1 ] && return 0
     fi
   fi
+  [ "$readerr" = 1 ] && return 2
+  [ "$ingested" = 1 ] && return 3
   return 1
 }
 
@@ -2127,17 +2200,32 @@ EOF
 verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=resend-text → 0/1/2/4
   local pdir="$1" marker="$2" regdir="$3" pane="$4" it2="$5" resend="$6"
   local timeout="${FIRE_ENGAGE_TIMEOUT:-120}" retry="${FIRE_ENGAGE_RETRY:-60}" interval="${FIRE_ENGAGE_INTERVAL:-3}"
-  local t=0
+  local t=0 esrc=0
   ENGAGE_PARKED=""
   ENGAGE_WEDGED=""
+  ENGAGE_UNSURE=""
   while [ "$t" -lt "$timeout" ]; do
-    engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    esrc=0; engagement_seen "$pdir" "$marker" "$regdir" "$pane" || esrc=$?   # `|| rc=$?` is set -e-safe
+    [ "$esrc" -eq 0 ] && return 0
+    # STICKY, because these are facts about the past: once a transcript has been seen carrying the
+    # brief, a later poll that cannot re-read it does not un-ingest it.
+    [ "$esrc" -eq 3 ] && ENGAGE_UNSURE="ingested-not-yet-running"
+    [ "$esrc" -eq 2 ] && [ -z "$ENGAGE_UNSURE" ] && ENGAGE_UNSURE="scan-failed"
     ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_PARKED" ] && return 2
     ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_WEDGED" ] && return 4
     /bin/sleep "$interval"; t=$((t + interval))
   done
+  # ABSTAIN FROM THE RE-SEND when the brief is already IN the session (2026-08-11). The re-send exists
+  # to recover a LOST prompt; typing it into a session that demonstrably holds it is not a recovery,
+  # it is the duplicate-work generator this item was filed about — the pane ends up with the brief
+  # twice and the caller is still told the fire failed. Same abstain-rather-than-act polarity as the
+  # PARKED and WEDGED gates below, for the same reason: act only on a state you actually established.
+  if [ "$ENGAGE_UNSURE" = ingested-not-yet-running ]; then
+    echo "⚠ fired session has INGESTED the brief but shown no assistant turn within ${timeout}s — NOT re-sending (it already has the prompt); reporting cannot-tell" >&2
+    return 5
+  fi
   # ABSTAIN rather than re-send into a shell. The re-send pastes the WHOLE BRIEF and then sends CR;
   # if the pane is still a shell that brief is executed as a script — verified hazards in real brief
   # prose: `$(…)`/backticks RUN (`echo "the file is $(id -un)"` → `chrisren`), a bare `*` glob makes
@@ -2160,7 +2248,10 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   fi
   t=0
   while [ "$t" -lt "$retry" ]; do
-    engagement_seen "$pdir" "$marker" "$regdir" "$pane" && return 0
+    esrc=0; engagement_seen "$pdir" "$marker" "$regdir" "$pane" || esrc=$?
+    [ "$esrc" -eq 0 ] && return 0
+    [ "$esrc" -eq 3 ] && ENGAGE_UNSURE="ingested-not-yet-running"
+    [ "$esrc" -eq 2 ] && [ -z "$ENGAGE_UNSURE" ] && ENGAGE_UNSURE="scan-failed"
     ENGAGE_PARKED="$(pane_parked_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_PARKED" ] && return 2
     # The re-typed brief can itself CAUSE this: a session that boots into a trust dialog swallows
@@ -2170,6 +2261,12 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
     [ -n "$ENGAGE_WEDGED" ] && return 4
     /bin/sleep "$interval"; t=$((t + interval))
   done
+  # THE WINDOW EXPIRED. What that licenses depends on what the reads actually established:
+  #   · a read FAILED, or the brief was seen ingested ⇒ 5, CANNOT TELL. Absence of evidence inside a
+  #     window is not evidence of absence, and this is the branch that used to launder it into one.
+  #   · every read SUCCEEDED and found nothing ⇒ 1, the definite negative. Nothing was ever born:
+  #     the genuine INC-4 cold-fire race, which MUST still be caught (that is the positive control).
+  [ -n "$ENGAGE_UNSURE" ] && return 5
   return 1
 }
 
@@ -2181,7 +2278,16 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
 # never-run transcript (cold-fire auto-submit race / /goal-length rejection) fails. 0 = engaged ·
 # 1 = process-alive-but-never-engaged OR the transcript is unresolvable/unreadable from this account
 # (fail-closed — --successor-assume-engaged is the documented escape for the unreadable case).
-successor_engaged() { # $1=registry-dir $2=successor-pane → 0 engaged / 1 not
+#
+# TAUGHT THE NEW STATES DELIBERATELY, AND DELIBERATELY STILL FAIL-CLOSED (2026-08-11). engagement_seen
+# now returns 2 (cannot tell) and 3 (ingested, not yet running) as well as 0/1, and `&& return 0`
+# admits only 0 — so all three non-engaged states keep failing this gate, unchanged. That is correct
+# HERE and it is not an oversight: this is a GATE ON RETIRING A PANE, not a report. Its own docstring
+# already says a born-but-never-run transcript must fail, and state 3 IS born-but-never-run. Widening
+# it would let a pane retire into a successor that has not started — trading a false negative that
+# costs an inspection for a false positive that loses a session. The asymmetry runs the other way from
+# verify_engagement's, which is why the same oracle gets a different consumer rule.
+successor_engaged() { # $1=registry-dir $2=successor-pane → 0 engaged / 1 not (2/3 from the oracle also fail-closed here)
   local regdir="$1" pane="$2" pdir
   [ -n "$pane" ] && [ -n "$regdir" ] || return 1
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
@@ -2495,8 +2601,28 @@ _hf_custody() {
 # teammate liveness and the origin class, none of which this decision depends on, and a test that had
 # to satisfy all of them to reach one stamp read would be testing the wrong thing.
 # Always returns 0 — see the call site for why this must never be able to refuse a close.
+#
+# THREE VERDICTS, NOT TWO (2026-08-11, LIVENESS_DETECTOR_FAILNEG instances 1 and 4). Two defects were
+# stacked on the single `grep -qF` this used to do, and they are different in kind:
+#
+#   (a) THE SPELLING. `$nb` is the address as ARMED at fire time — a project-qualified session name
+#       ("claude-infrastructure-6"). cc-notify's send record held only what that name RESOLVED to
+#       (the pane id, "6"). A substring grep for the long spelling inside a file holding the short
+#       one can only MISS. No window, no load: a deterministic false negative, reproduced from the
+#       operator's live store four days later (stamp 11.json ↔ .sent/11, two real delivered sends).
+#       Fixed on the WRITER side — cc-notify now records both spellings — and read here as a
+#       WHOLE-FIELD match, never a substring: `grep -qF 6` would also match the timestamp.
+#
+#   (b) THE READ THAT FAILS. An unreadable record and an empty one took the same branch, so "I could
+#       not read the store" was announced to the originator as "this peer never pinged you" — the
+#       exact absence-of-evidence-as-evidence-of-absence shape this whole item exists to remove.
+#       A failed read is now its OWN verdict with its OWN message, and it does NOT accuse the peer.
+#
+# What is deliberately NOT a cannot-tell: an ABSENT or EMPTY record file. cc-notify appends one line
+# per successful enqueue, so with the store working, nothing recorded means nothing was sent. Keeping
+# that DEFINITE is what preserves the positive control — a genuinely silent peer must still be caught.
 sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-effort, always 0
-  local pane="${1:-}" dir="${2:-}" mdir="${3:-}" stamp nb sent
+  local pane="${1:-}" dir="${2:-}" mdir="${3:-}" stamp nb sent verdict rc
   [ -n "$pane" ] && [ -n "$dir" ] && [ -n "$mdir" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   stamp="$dir/$pane.json"
@@ -2506,8 +2632,48 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-eff
   # the mechanism quiet on an ordinary fire, so it carries information when it does speak.
   [ -n "$nb" ] || return 0
   sent="$mdir/.sent/$pane"
-  if [ -s "$sent" ] && grep -qF "$nb" "$sent" 2>/dev/null; then
+  verdict=not-sent
+  if [ -s "$sent" ]; then
+    if [ -r "$sent" ]; then
+      # Fields 2..NF are the target spellings (resolved, and as-given when they differ); field 1 is
+      # the timestamp. awk's own rc is the point: 0/1/3 are ANSWERS, anything else is a failed read.
+      #
+      # rc 3 = LEGACY RECORD, and it is the transitional honesty term. Lines written before the
+      # both-spellings fix carry only the RESOLVED key, so when the armed address is an alias they
+      # cannot answer the question either way: the single field might BE what that alias resolved to,
+      # or might not. Calling that "never pinged" would re-commit this item's own defect against the
+      # store's own history — every .sent file already on disk is in the old format. So a no-match
+      # over a legacy line is cannot-tell, while a no-match over a NEW line (which carries the
+      # as-given spelling whenever it differs) stays the definite negative the positive control needs.
+      awk -v want="$nb" '
+        { for (i = 2; i <= NF; i++) if ($i == want) { hit = 1; exit } }
+        NF <= 2 { legacy = 1 }
+        END { exit(hit ? 0 : (legacy ? 3 : 1)) }
+      ' "$sent"
+      rc=$?
+      case "$rc" in 0) verdict=sent ;; 1) verdict=not-sent ;; 3) verdict=legacy-record ;; *) verdict=unreadable ;; esac
+    else
+      verdict=unreadable
+    fi
+  fi
+  if [ "$verdict" = sent ]; then
     echo "→ announce-before-retire: this pane pinged $nb — proceeding"
+    return 0
+  fi
+  if [ "$verdict" = unreadable ] || [ "$verdict" = legacy-record ]; then
+    # Distinct exit path, distinct wording. The originator still gets told — it must never be left
+    # waiting — but it is told the question could not be ANSWERED, not that the peer stayed silent.
+    if [ "$verdict" = legacy-record ]; then
+      echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) predates the both-spellings format — it holds only resolved ids, so whether one of them IS $nb is UNKNOWN, not answered. Announcing that, rather than accusing the peer of silence." >&2
+    else
+      echo "⚠ announce-before-retire: fired with --notify-back $nb and this pane's send record ($sent) could NOT BE READ — so whether it pinged is UNKNOWN, not answered. Announcing that, rather than accusing the peer of silence." >&2
+    fi
+    if "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --mailbox-only "$nb" \
+         "HANDOFF-PING (auto, status unverified): peer $pane is retiring NOW. Its send record could not answer whether it already pinged you, so its status is UNVERIFIED — this is NOT a claim that it stayed silent. Its work is committed (self-close refuses a dirty tree); check your inbox for an earlier ping from it before re-driving its work." >/dev/null 2>&1; then
+      echo "→ announce-before-retire: unknown-status announce delivered to $nb"
+    else
+      echo "⚠ announce-before-retire: unknown-status announce to $nb FAILED — retiring anyway, but the originator has NOT been told." >&2
+    fi
     return 0
   fi
   echo "⚠ announce-before-retire: fired with --notify-back $nb but NO ping was ever sent from this pane. Announcing on its behalf so the originator is not left waiting on an event that never comes." >&2
@@ -8629,6 +8795,28 @@ else
       emit_handoff_telemetry 0 || true
       goal_unreachable pane-wedged || true
       exit 1
+    elif [ "$ENGAGE_RC" = 5 ]; then
+      # NOT A FAILURE VERDICT — the absence of a non-verdict is what this whole item was filed about
+      # (LIVENESS_DETECTOR_FAILNEG instances 2/3/5). Three properties distinguish this branch from the
+      # `never engaged` one below, and all three are load-bearing:
+      #   · it does NOT tell the operator to re-fire. Re-firing over a live session is what produced
+      #     two sessions in one worktree, a duplicated paid model grid and one clobbered index.json.
+      #   · it names the EVIDENCE it does have, so the claim is auditable rather than a shrug.
+      #   · it exits on its own code (6), so a caller can branch on "unproven" without string-matching.
+      # It still exits NON-ZERO: engagement was not proven, so "→ fired" must not be printed, and the
+      # fire_cleanup trap keeps the worktree and grants the pane its registry row + fired-peer marker
+      # (the visibility half) exactly as it does for a real miss.
+      if [ "${ENGAGE_UNSURE:-}" = ingested-not-yet-running ]; then
+        echo "!! ENGAGEMENT UNPROVEN (cannot tell) — ${SPAWNED_PANE:-<pane?>} HAS the brief: its transcript carries the fire marker, but no assistant turn appeared within the window. On a loaded box that is a SLOW START, not a dead pane." >&2
+        echo "   Do NOT re-fire and do NOT clear the pane — it is holding the prompt and will almost certainly run it. The brief was deliberately NOT re-sent, so the session has exactly one copy." >&2
+      else
+        echo "!! ENGAGEMENT UNPROVEN (cannot tell) — the engagement scan itself FAILED for ${SPAWNED_PANE:-<pane?>} (a transcript enumeration or read errored), so whether it engaged is UNKNOWN. This is not a report that it did not." >&2
+        echo "   Do NOT re-fire on this verdict alone — check the pane before acting." >&2
+      fi
+      echo "   Check it directly: the pane is registered and its worktree is kept." >&2
+      emit_handoff_telemetry 0 || true
+      goal_unreachable engagement-unproven || true
+      exit 6
     else
       echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"

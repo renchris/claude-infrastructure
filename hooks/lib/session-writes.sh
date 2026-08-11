@@ -288,7 +288,7 @@ EOF
 #   _sw_canon or the intersection reads empty FOREVER — a fail-GREEN defect only the "a commit this
 #   session DID write must still convict" control catches.
 session_unlanded_mine() {
-  local tp="${1:-}" dir="${2:-}" trunk="${3:-}" out rc top f
+  local tp="${1:-}" dir="${2:-}" trunk="${3:-}" out rc top f hit=0
   [ -n "$trunk" ] || return 2
   command -v git >/dev/null 2>&1 || return 2
   out="$(session_writes_paths "$tp")"; rc=$?
@@ -305,11 +305,44 @@ session_unlanded_mine() {
 $out
 EOF
   out="$canon"
+  # THE DIFF GOES TO A FILE, NEVER A HEREDOC'D COMMAND SUBSTITUTION (2026-08-11,
+  # LIVENESS_DETECTOR_FAILNEG candidate instance #6; independently convicted by the codex adversarial
+  # screen, docs/research/codex-probe-screen-2026-08-10/screen-session-writes.md).
+  #
+  # This read used to be `done <<EOF\n$( … git diff … )\nEOF`. A command substitution inside a heredoc
+  # body has NO observable exit status — the value is interpolated and the rc is discarded — so an
+  # unresolvable $trunk, the 5 s _sw_bounded expiry, or any git error produced an EMPTY list, the loop
+  # body never ran, and control fell through to `return 1` = "not mine". That is a lookup MISS reported
+  # as an ABSENCE, against this file's own header doctrine ("a miss is not an absence … rc 2
+  # cannot-tell") and its own docstring three lines up ("rc: 0 mine · 1 not mine · 2 cannot-tell").
+  #
+  # It is a behavioural defect, not a comment inaccuracy, because the rc is consumed verbatim as a
+  # verdict and rc 1 EXONERATES where rc 2 stays strict: hooks/completion-assert.sh:398 turns rc 1 into
+  # `_ca_exon="unlanded-not-mine"` (the false-done guard stops blocking) and hooks/session-continue.sh
+  # turns it into `return 0` (the SHIP FLOOR never fires). So a git read that merely timed out let a
+  # session close ✅ over unlanded work — silently, in the fail-GREEN direction.
+  #
+  # The idiom is the sibling's, deliberately: session_dirty_mine above runs the same class of read
+  # through a tempfile with an explicit `|| return 2`. This was the one git read in the file whose
+  # failure was not converted, and that asymmetry is what settled the intent.
+  local difff
+  difff="$(mktemp "${TMPDIR:-/tmp}/sw-diff.XXXXXX" 2>/dev/null)" || return 2
+  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"..HEAD ) >"$difff" 2>/dev/null; then
+    rm -f "$difff" 2>/dev/null; return 2
+  fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    printf '%s\n' "$out" | grep -qxF "$top/$f" && return 0
-  done <<EOF
-$( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"..HEAD 2>/dev/null )
-EOF
+    # A HERESTRING, not `printf | grep`: under a consumer that sets `-o pipefail` (completion-assert.sh
+    # and session-continue.sh both do), grep -q short-circuiting on an early match makes printf die of
+    # SIGPIPE and pipefail hands back 141 for a match that DID occur — the same fail-negative direction,
+    # reached from the other end. No pipe, no SIGPIPE. (The sibling at :269 still has that shape; it is
+    # measured to need ~64 KB / ~2400 written paths, and is named in the write-up rather than changed
+    # here, so this diff stays attributable to the read it is fixing.)
+    # BREAK, never `rm` here: the loop is READING $difff, and removing it inside the read is the
+    # SC2094 the land gate blocks on. One cleanup site after the read — the sibling's shape too.
+    grep -qxF "$top/$f" <<<"$out" && { hit=1; break; }
+  done < "$difff"
+  rm -f "$difff" 2>/dev/null
+  [ "$hit" -eq 1 ] && return 0
   return 1
 }

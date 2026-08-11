@@ -860,18 +860,48 @@ MSG_1LINE="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
 # namespace by construction — `_mbx_valid_uuid` refuses any key beginning with `.`, so this can never
 # be mistaken for an inbox. Best-effort and always 0: a send that succeeded must never be reported as
 # failed because its audit line could not be written.
-_record_send() { # <resolved-target-key>
-  local sdir="$MAILBOX_DIR/.sent"
+#
+# RECORD BOTH SPELLINGS — the RESOLVED key AND the address AS THE CALLER GAVE IT (2026-08-11,
+# LIVENESS_DETECTOR_FAILNEG instance 1/4). Recording only the resolved key made this store
+# unanswerable for the one question it exists to answer. The asker is `self-close`, and what IT
+# holds is the stamp's `notifyBack` — the address as ARMED AT FIRE TIME, which is a project-qualified
+# session NAME ("claude-infrastructure-6"). This function recorded what that name RESOLVED to (the
+# pane id, "6"). So the reader searched for "claude-infrastructure-6" in a file containing "6" and
+# missed — every time, deterministically, with no window and no load involved.
+#
+# Reproduced from the operator's LIVE store four days after the fact: stamp 11.json carries
+# notifyBack="claude-infrastructure-6" while .sent/11 holds two real delivered sends, both recorded
+# as bare "6" — the two pings instance 1 says the pane sent and the detector denied.
+#
+# Re-RESOLVING the alias at read time was the alternative and is strictly worse: resolution is live
+# (a name resolves through the registry onto a LIVE pane), so by the time a peer retires, the
+# originator may be gone and the name unresolvable — the reader would then fail to confirm a ping
+# that provably happened, which is the same false negative wearing a different cause. A record that
+# carries both spellings is answerable forever, because it is a fact about the past rather than a
+# lookup against the present.
+_record_send() { # <resolved-target-key> [<target-as-given>]
+  local sdir="$MAILBOX_DIR/.sent" given
   [ -n "${own_uuid:-}" ] || return 0
   case "$own_uuid" in ''|*[!A-Za-z0-9._-]*|.*) return 0 ;; esac
   mkdir -p "$sdir" 2>/dev/null || return 0
-  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "${1:-}" >> "$sdir/$own_uuid" 2>/dev/null || true
+  # The record is whitespace-delimited and the reader compares WHOLE fields, so a spelling carrying
+  # whitespace would split into two fields and match neither. Collapse it rather than drop it.
+  given="$(printf '%s' "${2:-}" | tr -s ' \t' '__')"
+  # Omit a redundant third field rather than writing the same token twice: the reader scans every
+  # field from 2 on, so one token is enough when both spellings agree, and a duplicate would only
+  # make the record harder to read by eye.
+  [ -n "$given" ] && [ "$given" = "${1:-}" ] && given=""
+  printf '%s %s%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "${1:-}" "${given:+ $given}" \
+    >> "$sdir/$own_uuid" 2>/dev/null || true
   return 0
 }
 mailbox_write() {
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 1
   printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md" || return 1
-  _record_send "$uuid"
+  # Pass the address AS GIVEN alongside the resolved key — see _record_send's header. A --role send
+  # is recorded under its role spelling for the same reason: whoever asks later holds the spelling
+  # they used, not the one the resolver produced.
+  _record_send "$uuid" "$( [ "$ROLE_GIVEN" = 1 ] && printf 'role:%s' "$ROLE" || printf '%s' "$TARGET" )"
 }
 if ! mailbox_write; then
   # A message that cannot even be persisted must NOT read as delivered — LOUD, never a silent drop.

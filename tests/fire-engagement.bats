@@ -30,6 +30,7 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^marker_in_user_record() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^check_slash_head() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^ensure_registration() {/,/^}/p' "$HF")"
@@ -133,6 +134,65 @@ STUB
   printf '{"paneUUID":"%s","session_id":null}\n' "$PANE" > "$REG/$PANE.json"
   run engagement_seen "$PROJ" "MARKER-ABSENT" "$REG" "$PANE"
   [ "$status" -eq 1 ]
+}
+
+# ---- LIVENESS_DETECTOR_FAILNEG (2026-08-11) — instances 2, 3 and 5 --------------------------
+# All three were panes that HAD ingested the brief and were slow to take a first assistant turn on a
+# box at load 13-24. The two-valued oracle reported that as the same `1` a never-born pane gets, and
+# the caller's remedy for `1` is "re-fire" — so the detector manufactured a duplicate session on one
+# worktree, a duplicated paid model grid, and a collision on one index.json.
+#
+# The tests directly above are the reason state 3 is gated on a USER record rather than on the marker
+# being anywhere in the file: a rejected /goal also puts the marker in the transcript, and that pane
+# idles forever and genuinely DOES need the re-fire those tests protect.
+
+@test "FAILNEG NEGATIVE CONTROL: the MEASURED instance — brief ingested as a user message, no assistant turn yet -> 3 (cannot tell), NOT 1" {
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"user","message":{"role":"user","content":"the brief MARKER-XYZ body"}}\n' > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 3 ]
+}
+
+@test "FAILNEG POSITIVE CONTROL: a genuinely never-born fire is STILL the definite negative (1)" {
+  # The INC-4 cold-fire race must keep being caught — this is what stops the fix being always-yes.
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"user","message":{"role":"user","content":"someone else entirely"}}\n' > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 1 ]
+}
+
+@test "FAILNEG: a rejected /goal (marker in attachment rows only) stays 1 — it idles forever and DOES need the re-fire" {
+  mkdir -p "$PROJ/proj"
+  { printf '{"type":"attachment","content":"the brief MARKER-XYZ ok"}\n'
+    printf '{"type":"system","content":"Goal condition is limited to 4000 characters"}\n'
+  } > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 1 ]
+}
+
+@test "FAILNEG THIRD STATE: an unreadable projects tree is 2 (cannot tell), never 1" {
+  mkdir -p "$PROJ/locked"
+  printf '{"type":"user","message":{"role":"user","content":"MARKER-XYZ"}}\n' > "$PROJ/locked/s.jsonl"
+  chmod 000 "$PROJ/locked/s.jsonl"
+  if [ -r "$PROJ/locked/s.jsonl" ]; then chmod 644 "$PROJ/locked/s.jsonl"; skip "user ignores mode 000"; fi
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  chmod 644 "$PROJ/locked/s.jsonl"
+  [ "$status" -eq 2 ]
+}
+
+@test "FAILNEG MUTATION: collapsing state 3 back into 1 makes the instance control FAIL" {
+  # A control that cannot fail proves nothing. Rebuild the oracle with the pre-fix collapse — the
+  # ingested branch reporting the definite negative — and assert the measured instance goes wrong.
+  sed -e 's/^  \[ "\$ingested" = 1 \] && return 3$/  [ "$ingested" = 1 ] \&\& return 1/' \
+    <(sed -n '/^engagement_seen() {/,/^}/p' "$HF") > "$BATS_TEST_TMPDIR/es-mut.sh"
+  grep -q 'ingested" = 1 \] && return 1' "$BATS_TEST_TMPDIR/es-mut.sh"   # the mutant really mutated
+  # shellcheck source=/dev/null
+  . "$BATS_TEST_TMPDIR/es-mut.sh"
+
+  mkdir -p "$PROJ/proj"
+  printf '{"type":"user","message":{"role":"user","content":"the brief MARKER-XYZ body"}}\n' > "$PROJ/proj/s.jsonl"
+  run engagement_seen "$PROJ" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 1 ]        # ← the bug, reproduced on demand: "never engaged" over a live session
 }
 
 # ---- ff2d6609a33e: the slash-command HEAD guard ----------------------------------------------
