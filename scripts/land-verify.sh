@@ -47,6 +47,40 @@ if [[ -z "${LOCAL_REF}" ]]; then
   [[ -z "${LOCAL_REF}" ]] && LOCAL_REF="HEAD"
 fi
 
+# A range that does not RESOLVE must never read as a clean land. The `git diff --name-only`
+# below ran inside a process substitution with stderr suppressed and its exit status
+# unobservable, so an unresolvable range yielded zero paths and fell through to the success
+# line: `land-verify.sh definitely-not-a-rev..also-not-a-rev` printed
+# "✓ 0 path(s) present + content-identical" and exited 0 (measured 2026-08-10). This is the
+# step ship-land uses to PROVE a land reached the trunk — this repo verifies by CONTENT
+# precisely because a commit count lies — so "I could not look" was certifying "I looked and
+# it was fine". Resolve both endpoints up front and fail closed.
+_range_endpoint_check() {
+  git rev-parse --verify --quiet "${1}^{commit}" >/dev/null 2>&1 && return 0
+  echo "✗ land-verify: range endpoint '${1}' does not resolve to a commit — cannot verify" >&2
+  echo "  (an unenumerable range is a NON-VERDICT, never a clean land)" >&2
+  exit 2
+}
+case "${RANGE}" in
+  *..*)
+    _lhs="${RANGE%%..*}"; _rhs="${RANGE##*..}"
+    _range_endpoint_check "${_lhs:-HEAD}"
+    _range_endpoint_check "${_rhs:-HEAD}"
+    ;;
+  *) _range_endpoint_check "${RANGE}" ;;
+esac
+
+# Enumerate into a file so the diff's own exit status is observable — a process
+# substitution discards it, which is the other half of the fail-open above.
+_paths="$(mktemp -t landverify.XXXXXX)" || {
+  echo "✗ land-verify: could not create a scratch file — cannot verify" >&2; exit 2; }
+trap 'rm -f "${_paths}"' EXIT
+if ! git diff --name-only -z "${RANGE}" > "${_paths}" 2>/dev/null; then
+  echo "✗ land-verify: 'git diff ${RANGE}' failed — cannot enumerate the landed range" >&2
+  echo "  (an unenumerable range is a NON-VERDICT, never a clean land)" >&2
+  exit 2
+fi
+
 misses=""
 checked=0
 while IFS= read -r -d '' path; do
@@ -71,7 +105,7 @@ while IFS= read -r -d '' path; do
 "
     fi
   fi
-done < <(git diff --name-only -z "${RANGE}" 2>/dev/null)
+done < "${_paths}"
 
 if [[ -n "${misses}" ]]; then
   echo "✗ land-verify: content NOT fully landed on ${TRUNK_REF} (local ${LOCAL_REF}):" >&2
