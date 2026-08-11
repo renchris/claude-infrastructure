@@ -619,28 +619,6 @@ OSA
 mark_surfaced_seen() { # forget the records — ONLY ever called on a proven delivery
   printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
 }
-# The BANNER damping store (D2). Deliberately NOT .seen: a banner is a transient toast with no read
-# receipt, so the record stays visible to the session render / cc-escalations until something
-# actually proves a read. This is what un-forces the 2026-08-01 trade (banner ⇒ seen), which was
-# only ever made because no damping store existed — with one, storm-avoidance no longer costs the
-# record. Keyed by record BASENAME per the frozen interface.
-mark_surfaced_bannered() {
-  printf '%s' "$SURFACED" | while IFS= read -r rec; do
-    [ -n "$rec" ] && { : > "$SEEN_DIR/$(basename "$rec").bannered" 2>/dev/null || true; }
-  done
-}
-count_unbannered() { # → how many surfaced records have never been on a banner
-  local rec n=0
-  while IFS= read -r rec; do
-    [ -n "$rec" ] || continue
-    [ -f "$SEEN_DIR/$(basename "$rec").bannered" ] && continue
-    n=$((n + 1))
-  done <<EOF
-$SURFACED
-EOF
-  printf '%s' "$n"
-}
-
 # ── r2 damping (D2) ───────────────────────────────────────────────────────────────────────────────
 # A `.bannered` marker is DELIBERATELY a different store from `.seen`, and the distinction is the
 # whole reason r2 can be safe: a banner proves only that something was PUT IN FRONT OF a human, never

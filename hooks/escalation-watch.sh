@@ -73,6 +73,7 @@ fmt_age() { # <seconds> → "3m" / "2h 5m" / "4d" — pure arithmetic, no forks
 
 emit() { # <context-string> — SessionStart additionalContext, the activation-watch.sh mechanism
   if [ -n "$JQ" ]; then
+    # shellcheck disable=SC2016  # $c is a jq variable bound by --arg, not a shell expansion
     "$JQ" -cn --arg c "$1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
   else
     printf '%s\n' "$1"   # SessionStart also injects plain stdout as context (frontier-status precedent)
