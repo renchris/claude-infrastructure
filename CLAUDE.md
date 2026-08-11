@@ -152,8 +152,23 @@ fired and awaited, with the lead holding ≥50% of its window for deciding:
 scripts/handoff-fire.sh --prompt-file /tmp/fire-<phase>.txt --worktree <branch> \
     --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right \
     --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <plan path>'
+# ONLY IF NO /goal IS LIVE IN *THIS* PANE — see the 🚨 below:
 cc-await-ping "${ITERM_SESSION_ID##*:}"      # Bash run_in_background — event-driven wake
 ```
+
+🚨 **That last line is CONDITIONAL — omit it whenever a `/goal` is live in the FIRING pane** (a wave
+lead is usually itself a goal-armed session firing sub-waves, so this is the common case, not the
+exotic one). Claude Code deletes the goal's Stop hook at every Stop while any non-terminal
+background Bash exists and restores it in a `finally`, so the registry reads healthy before and
+after and is wrong only *during* — the one moment nothing can observe. The armed goal simply never
+evaluates again: measured 2 h / ~12 turns / **0** evaluations, with no log the operator ever sees.
+`hooks/validate-bash.sh` now DENIES a backgrounded park under a live goal, so a lead that copies
+this block verbatim is refused at the tool call. **You are not deaf without the watcher** — the goal
+blocks your stops, so you keep taking turns and `mailbox-drain` delivers peer mail at every turn
+boundary, and `mailbox-wake-arm` (asyncRewake, migration 0007) wakes a genuinely idle session
+*without* entering the task registry. Goal-safe cross-turn lever:
+`~/.claude/hooks/session-continue.sh set "<next step>"`. Mechanism read out of the binary →
+`docs/research/goal-in-handoff-2026-08-08.md` § RESOLVED.
 
 **`--goal` is part of that recipe, not an option** (operator directive 2026-08-09). `/goal` is
 documented by Anthropic (<https://code.claude.com/docs/en/goal>) and its condition wants three parts:

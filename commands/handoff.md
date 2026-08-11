@@ -606,6 +606,11 @@ plan + v2 anti-keystroke redesign: `docs/plans/TWO_WAY_SESSION_COMMS_PLAN.md`).
 disposition emission MUST carry an `R-PING: awaiting <before|during|after> ping from <slug>` clause
 until the ping lands — and the firing session pairs it with a background `cc-await-ping <own-uuid>`
 so the discharge is event-driven (its `--timeout` is the fallback wake), never a poll-and-hope.
+⚠️ **Unless a `/goal` is live in the FIRING pane — then arm NOTHING** (`hooks/validate-bash.sh`
+denies it): a non-terminal background Bash makes CC skip goal evaluation at every Stop, silently and
+restorably. A goal-armed lead is already awake at every turn boundary via `mailbox-drain`, and
+`mailbox-wake-arm` (asyncRewake) covers genuine idleness without entering the task registry.
+Detail: `docs/research/goal-in-handoff-2026-08-08.md` § RESOLVED.
 Pass the UUID EXPLICITLY even though it defaults: the disposition helper attributes the watcher to
 this session by matching the uuid on the process cmdline — a bare watcher is invisible to it. The
 three companion CLIs (in `~/.claude/bin/`, on PATH):
@@ -629,7 +634,9 @@ three companion CLIs (in `~/.claude/bin/`, on PATH):
   silently vanishes.
 - **`cc-await-ping [<uuid>]`** — the modal-safe PULL complement AND the idle-WAKE. Launch via
   `Bash(run_in_background)` when going idle (after a `--notify-back` fire, or as a monitoring desk's standing
-  listener); it polls the shared `.seen` cursor — firing IMMEDIATELY on mail already pending at arm time
+  listener) — **never while a `/goal` is live in this pane; that combination disables the goal and is
+  denied at the tool call** (§ R-PING below, and `docs/research/goal-in-handoff-2026-08-08.md`
+  § RESOLVED); it polls the shared `.seen` cursor — firing IMMEDIATELY on mail already pending at arm time
   (v2 F6a; the old `wc -l` baseline missed exactly that line) — and on a new line prints it (advancing the
   cursor) then exits, so the harness's task-completion notification re-invokes you with the mail in the
   notification body. It beats a `<uuid>.watching` heartbeat each poll so `cc-notify`/`cc-announce` can
@@ -677,7 +684,7 @@ rest. A pending mailbox line means an unprocessed ping: process it, `--ack`, re-
 
 | Code | Holds the session open when | Discharges when | Then |
 |---|---|---|---|
-| **R-PING** | awaiting a back-channel from fired session(s) `<slug…>` — *before* (about to fire more tracks), *during* (decision-gate / blocker pings), or *after* (completion ping) the peer's run. Armed by `--notify-back` (§ item 8); pair with a background `cc-await-ping` so discharge is event-driven, its `--timeout` the fallback wake | the ping lands — or the timeout fires: check fired-pane liveness via `cc-sessions`; a DEAD peer escalates to R-DECIDE (the user rules on the lost track) | process the ping → re-emit disposition |
+| **R-PING** | awaiting a back-channel from fired session(s) `<slug…>` — *before* (about to fire more tracks), *during* (decision-gate / blocker pings), or *after* (completion ping) the peer's run. Armed by `--notify-back` (§ item 8); pair with a background `cc-await-ping` so discharge is event-driven, its `--timeout` the fallback wake — but NOT under a live `/goal` (it would disable the goal; the goal's own stop-blocking already keeps you awake) | the ping lands — or the timeout fires: check fired-pane liveness via `cc-sessions`; a DEAD peer escalates to R-DECIDE (the user rules on the lost track) | process the ping → re-emit disposition |
 | **R-USER** | the user is mid-conversation / a reply is plausibly incoming — their LAST message is unanswered, or they said "stay open" | their message is handled and no new reason opened; or they say "close it" / go idle after an offered close | re-emit |
 | **R-DECIDE** | a NAMED open decision / STOP-ASK only the user can rule on | the user rules | act on the ruling → re-emit |
 | **R-WORK** | NAMED current or follow-on work THIS session owns (not delegated to a fired track) | the work is done, verified, committed | re-emit |
