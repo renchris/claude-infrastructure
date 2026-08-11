@@ -563,16 +563,38 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
 # not a fault), 124 = the bound cut a land mid-flight (the next tick resumes it), anything else is a
 # broken rail — and collapsing those into one would make a dead return path read exactly like a
 # quiet one, which is the failure this whole block exists to end.
+#
+# 🚨 ONLY THE DEPLOYED COPY MAY ACT, and this guard was bought at full price. Every other block here
+# is a pure read, so running this script from a checkout has always been harmless. This one LANDS
+# BRANCHES, MARKS BACKLOG ITEMS DONE AND SPENDS QUOTA — and `tests/autonomy-sweep.bats` executes the
+# real sweep once per test, while `postland-verify` runs that suite from a throwaway worktree of the
+# landed tree. Measured 2026-08-11, minutes after the wiring landed: FOUR concurrent
+# `cloud-return --sweep` passes out of `~/.claude/autonomy/postland/wt-run-54668/`, acting on the
+# operator's live declaration store, racing each other for the backlog ledger (one `done` won, the
+# others were refused) and re-pinging the originator on every pass.
+# The invocation PATH is the discriminator, and it is exact: launchd runs
+# `~/.claude/scripts/autonomy-sweep.sh` (the deployed symlink), while a suite or a verifier worktree
+# runs the checkout's own path. `$0` is read UNRESOLVED for exactly this reason — resolving it would
+# follow the deployed symlink back into the checkout and erase the only difference there is.
+# A skipped call is LOGGED with its reason, never silent: "not the deployed copy" and "the tool is
+# absent" are different facts, and neither is "the fleet is quiet".
 _cloudret="$_SWEEP_DIR/cloud-return.sh"
 _cloudret_rc="skipped"
-if [ -x "$_cloudret" ]; then
+_cc_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+case "$0" in
+  "$_cc_cfg"/*) _cloudret_deployed=1 ;;
+  *)            _cloudret_deployed=0 ;;
+esac
+if [ "$_cloudret_deployed" != 1 ]; then
+  _cloudret_rc="skipped-not-deployed"
+elif [ -x "$_cloudret" ]; then
   if [ -n "$_tmo" ] && [ -x "$_tmo" ]; then "$_tmo" -k 10 240 bash "$_cloudret" --sweep >/dev/null 2>&1
   else bash "$_cloudret" --sweep >/dev/null 2>&1; fi
   _cloudret_rc=$?
 fi
 log_idl cloud-return "$(jq -cn --arg c "$_cloudret_rc" \
   '{cloud_return_rc:$c,
-    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = bound cut it, next tick resumes; skipped = tool absent (NOT clean)"}')"
+    note:"0 = pass completed (per-session outcomes in the cloud return ledger); 4 = another pass held the lock; 124 = bound cut it, next tick resumes; skipped = tool absent (NOT clean); skipped-not-deployed = a checkout/suite copy, which may never land, mark done or spend quota"}')"
 
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
