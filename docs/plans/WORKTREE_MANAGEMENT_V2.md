@@ -348,6 +348,12 @@ scheduled destructive job)**, **AC-4/5/6 (verdict tokens + oracle function-verif
 
 ## §8 — AC-7 SHIPPED, 2026-08-11 (§§0-7 untouched; backlog `d605fd2f4635`)
 
+**Landed:** `56bb1e29` (switch + consumer + tests) · `a9690b35` (this section).
+*The `76012dca` in `a9690b35`'s own commit message is a DEAD reference — it was the feat commit's
+sha before `ship-land.sh`'s last-moment rebase onto a trunk that moved during the gate. A commit
+message cannot cite a sibling's sha when the land path rebases; only the plan doc can carry it,
+because only the plan doc is still writable afterwards.*
+
 **AC-7 is MET.** Its own named read, run and quoted:
 
 ```
