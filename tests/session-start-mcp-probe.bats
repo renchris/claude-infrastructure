@@ -290,6 +290,89 @@ run_hook() { run bash "$HOOK" <<< '{}'; }
   [[ "$output" == *"no claude binary resolved"* ]] || false
 }
 
+# ─── (h) the probe is off the SessionStart critical path (W0.2 stale-while-revalidate) ─────────
+# Every test above runs with a FRESH fixtured $HOME, so there is never a cache and they all take
+# the inline-probe path — which is why they stay valid unchanged, and also why none of them
+# exercises the cache. These do.
+
+@test "(h) a FRESH cache is served without spawning the CLI at all" {
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run_hook                                          # populates the cache
+  [ "$status" -eq 0 ] || false
+  [ -f "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" ] || false
+  rm -f "$CHILD_ENV"                                # the CLI's own footprint
+  run_hook                                          # second start
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"MCP: 1 server(s) connected"* ]] || false
+  # The load-bearing assertion: the child never ran. This is the whole point of the change.
+  [ ! -f "$CHILD_ENV" ] || false
+  [[ "$output" == *"[cached "* ]] || false          # and the age is visible, never implied
+}
+
+@test "(h-b) POSITIVE CONTROL — with the cache removed, the same fixture DOES spawn the CLI" {
+  # Without this, (h)'s absence assertion would also pass if the fixture were simply broken.
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run_hook
+  rm -f "$CHILD_ENV" "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+  run_hook
+  [ "$status" -eq 0 ] || false
+  [ -f "$CHILD_ENV" ] || false                      # it really can run
+  [[ "$output" == *"MCP: 1 server(s) connected"* ]] || false
+  [[ "$output" != *"[cached "* ]] || false          # a live answer is not labelled cached
+}
+
+@test "(h-c) a cache older than MAX_AGE is NOT served — it degrades to a live probe" {
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run_hook
+  # Rewrite the record with an ancient stamp, keeping a DIFFERENT count so we can tell which
+  # answer was used.
+  printf 'v1\t1\tok\t99\t0\t\n' > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+  rm -f "$CHILD_ENV"
+  run_hook
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *"99 server"* ]] || false         # the ancient answer was refused
+  [[ "$output" == *"MCP: 1 server(s) connected"* ]] || false
+  [ -f "$CHILD_ENV" ] || false                      # and it probed for real
+}
+
+@test "(h-d) a probe that COULD NOT ASK is never cached — the failure does not go sticky" {
+  # Caching an UNKNOWN would hide a genuinely broken probe behind the TTL.
+  mk_ps "/bin/bash /some/harness"                   # nothing resolvable
+  run_hook
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"MCP: UNKNOWN"* ]] || false
+  [ ! -f "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" ] || false
+}
+
+@test "(h-e) a corrupt or truncated cache record is treated as ABSENT, not as a partial answer" {
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  for bad in 'garbage' 'v1	notanumber	ok	1	0	' 'v2	1	ok	1	0	' 'v1	1	unknown	0	0	x'; do
+    printf '%s\n' "$bad" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+    rm -f "$CHILD_ENV"
+    run_hook
+    [ "$status" -eq 0 ] || false
+    [[ "$output" == *"MCP: 1 server(s) connected"* ]] || false   # answered from a live probe
+    [ -f "$CHILD_ENV" ] || false
+  done
+}
+
+@test "(h-f) the background refresher writes the cache and emits no stdout" {
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run bash "$HOOK" --refresh-mcp-cache
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false                                    # no JSON, no session line
+  [ -f "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" ] || false
+  grep -q '^v1	' "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" || false
+  # and it must NOT have logged a session start (that would inflate the fleet's own session census)
+  ! grep -q 'Session started in' "$HOME/.claude/logs/sessions.log" || false
+}
+
 # ─── (g) the hook's other duties are untouched ─────────────────────────────────────────────────
 
 @test "(g) the effort-env tripwire still rides the same single JSON object" {
