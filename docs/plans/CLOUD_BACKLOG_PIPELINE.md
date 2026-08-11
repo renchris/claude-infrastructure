@@ -28,7 +28,7 @@ read the history that justifies the exclusions. W1 is a local dispatched session
 
 | Wave | Locus | Deliverable | Depends on |
 |---|---|---|---|
-| **W1 · venue producer** | S (local) | something labels an item `venue=cloud\|local` against the VM's real constraints | — |
+| **W1 · venue producer** ✅ DONE | S (local) | something labels an item `venue=cloud\|local` against the VM's real constraints | — |
 | **W2 · management rails** | S | custody + wake + goal + auto-land for a cloud session | — (parallel with W1) |
 | **W3 · refusal loop** | S | a land refusal routes back to the session that caused it | W2 |
 | **W4 · cost A/B** | S | the same brief run local vs cloud, both arms measured | — (parallel) |
@@ -266,3 +266,55 @@ indistinguishable here from a real miss — so a probe can read NOT-MET over wor
   suites were executed here: 10/9/9/9 tests, all green). Doc:
   `docs/research/cloud-local-cost-ab-2026-08-11.md`. Open follow-on named there: task-size
   sensitivity at the 50K-output end.
+
+- **2026-08-11 — W1 LANDED. §5 clause 1 is met: something decides, and it refuses correctly.**
+  `bin/cc-venue` is the producer §2 says shipped with zero of. It writes `venuePlan`/`venueWhy` onto
+  open rows; `bin/cc-dispatch` reads the plan at the one seam a fire is composed and appends
+  `--cloud` to the argv, so `fire_venue` still derives the label from what actually ran.
+
+  **The decision is four questions, not a lookup.** `bin/cc-eligible` — imported as a module, never
+  re-derived, so the report and the claim-time refusal are one code object — answers three of them:
+  its spelling classes, a MEASURED history arm, and whether this box can certify at all. The fourth
+  is `cc-premise`, re-run at decision time.
+
+  **The measured arm.** A cited sha is reachable iff it resolves AND sits inside the newest 50
+  commits of the trunk a VM would clone. A sha that does NOT resolve is deliberately silent — this
+  clone is full and the VM's is a subset, so a non-resolving token is a dead pointer or a 12-hex
+  backlog id, and convicting on it would refuse most of the store.
+
+  **The guard is keyed on the effect, so the circularity constraint in Phase 0 is mechanical rather
+  than remembered.** A grafted clone has every resolvable sha inside its own horizon by
+  construction, so the arm would answer REACHABLE to everything. `certify()` returns `shallow` and
+  the producer will not mint a cloud label without `ok`. On a VM that fires automatically.
+
+  **Gate fails OPEN, producer fails CLOSED, and both are right.** The gate must never starve a
+  claim on a missing file, and a wrong INELIGIBLE only leaves an item where it already is. The
+  producer promotes work into a venue where a wrong answer cannot be SEEN, so every uncertainty
+  routes local with the reason recorded.
+
+  **What reading the promoted bucket found, which is the result worth carrying forward.** The first
+  `cc-venue run` ever printed contained **`7c6ff16259a0` — the brief §2 names as REJECTED
+  OUTRIGHT.** It is invisible to every spelling: its span never says handoff-fire, pane or launchd.
+  It says "off-box payload", "cc-cloud preflight", "unblock the cloud lane". That produced
+  `ineligible-offbox-lane` — *the lane cannot verify a change to itself*, the same circularity
+  Phase 0 applies to W1, generalised one step — which also catches `e15a743e12ba`, an item asking to
+  edit the venue rule itself. Sixteen further spellings came out of the same read (this kernel's
+  signals/jetsam/sysctl, a live daemon tick, the session machinery, CDP). **The anti-goal was
+  reachable with the classifier as first written; auditing the output is what closed it, and that
+  audit is a standing duty, not a one-time pass.**
+
+  Measured on the live store (302 open): **48 cloud · 254 local across 8 recorded reasons** —
+  `ineligible-box` 155, `ineligible-spawn-rail` 24, `ineligible-branch-banking` 25,
+  `ineligible-visual` 16, `ineligible-deep-history` 15, `ineligible-offbox-lane` 10,
+  `premise-falsified`/`suspect`/`superseded` 9. The GitHub class (`ineligible-github`) is real but
+  every member is operator-`blocked`, hence `cc-venue label <id>` for rows `run` skips.
+
+  71 bats cases across `cc-eligible-history` · `cc-backlog-venue-plan` · `cc-venue` ·
+  `cc-dispatch-venue`, every refusal paired with a control that must stay eligible.
+
+  **Not done here, and named rather than implied:** W1 is decision-side only. No cloud session was
+  created; the round trip is the lead's integration pass after W1+W2. `--cloud` remains
+  default-off per box (`CC_FIRE_CLOUD`), and the dispatcher honours a cloud plan only where that
+  actuator would accept it — a cloud-labelled item on a box without the opt-in fires LOCALLY and
+  the IDL records the unhonoured plan, rather than becoming a fire failure that strands exactly the
+  work the producer routed.
