@@ -294,6 +294,124 @@ LOCKED" ]
   [ "$hold" -le 2 ]                             # pre-fix: ≥ 3 (the gate ran inside the hold)
 }
 
+@test "in-lock net is BOUNDED: a hung push ⇒ exit 10 (MACHINE), not a red, and nothing lands" {
+  # The other half of "the lock covers the race window and nothing else": the window is a fetch, a
+  # push and a verify, and two of those talk to a remote that can simply stop answering. land-lock
+  # NEVER reaps a live holder (H2, deliberate), so an unbounded in-lock push hung on an
+  # unresponsive remote is not a slow land — it is a machine-wide wedge with no self-recovery, and
+  # every other lander on the box queues behind it until a human notices.
+  #
+  # The verdict matters as much as the bound. A bound firing is the ABSENCE of an answer, so it is
+  # evidence about the network, never about the tree: it must be the machine class (exit 10, like
+  # the gate's 9), never a red (6). Collapsing a machine fact into a code verdict is what turned a
+  # 2026-07-26 load spike into a re-block/retry runaway.
+  realgit="$(command -v git)"
+  cat > "$SHIMDIR/git" <<EOF
+#!/bin/bash
+# Everything forwards verbatim; only \`push\` hangs — so the pipeline reaches the lock normally and
+# the bound is what stops it, rather than a broken git failing somewhere earlier.
+case "\$1" in push) sleep 30 ;; esac
+exec "$realgit" "\$@"
+EOF
+  chmod +x "$SHIMDIR/git"
+  export SHIP_LAND_NET_TIMEOUT_S=1
+
+  our_branch feat/hungpush hung.sh
+  backup="ship/backup-$(git rev-parse --short HEAD)"
+
+  run bash "$SHIPLAND" --trunk main
+  # The shim's hang is 30s, not infinite, deliberately: in production the pre-fix hold lasts as
+  # long as the remote sulks, but a fixture that reproduced THAT would wedge the suite instead of
+  # failing it. Bounded, a regression lands after 30s and this reads status 0 — measured.
+  [ "$status" -eq 10 ]
+  echo "$output" | grep -q "MACHINE"
+  [[ "$output" != *"GATE RED"* ]] || false          # a bound firing is never a claim about the tree
+
+  rm -f "$SHIMDIR/git"; hash -r                     # real git again (hash -r: bash caches the path)
+  grep -q '"exit":10' "$LAND_LOG"
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- hung.sh)" ]    # nothing landed…
+  git show-ref --verify --quiet "refs/heads/$backup" # …and the rollback point is intact
+  [ -z "$(git status --porcelain)" ]                # …on a clean tree
+  [ ! -d "$LAND_LOCK_DIR/lock.d" ]                  # …with the mutex RELEASED, not wedged
+}
+
+@test "many refs: the hold EXCLUDES the sweep — 640 branches, ~7s of sweep, hold_s ≤ 2" {
+  # THE BLIND SPOT THE TEST ABOVE LEAVES, and the reason an 87s median hold survived a suite that
+  # asserts hold_s ≤ 2 on every land. "hold-time collapse" runs on a ~2-branch fixture, where
+  # stranded-sweep costs milliseconds — so it passed identically whether the sweep was inside the
+  # mutex or outside it. It measured the GATE's exclusion and nothing else. In production the same
+  # sweep is O(497 refs) at 59-62s and was ~90% of the hold, growing with every branch anyone
+  # creates: the assertion was true, the number was small, and the defect was invisible.
+  #
+  # So this fixture pays the O(refs) cost for real — 600 plain branches plus 40 carrying a file
+  # that never landed (the sweep's flagging path, which is the expensive one) ⇒ a ~7s sweep. Built
+  # with plumbing, not 640 checkouts: ~120 forks instead of ~1800.
+  #
+  # TWO assertions, and the second is the one that cannot be argued with:
+  #   · hold_s ≤ 2 while the sweep costs ~7s — RED pre-fix, where the hold necessarily EXCEEDS it.
+  #   · land.log ORDERING — land-lock writes its line AT RELEASE and ship-land writes its attest
+  #     AFTER the sweep, into the same file. Pre-fix the attest is inside the hold, so it lands
+  #     FIRST; post-fix the release line does. That is a proof of ordering with no clock in it.
+  # No smoke_fixture: this fixture has no tests/, so the smoke is skipped and the ~7s the land
+  # spends is the sweep and only the sweep — nothing else can be blamed for the hold.
+  main_sha="$(git rev-parse main)"
+
+  # 600 branches pointing at main: cheap for us, one `git cherry` each for the sweep.
+  for i in $(seq 1 600); do printf 'create refs/heads/wip/b%s %s\n' "$i" "$main_sha"; done \
+    | git update-ref --stdin
+
+  # 40 branches each carrying a commit whose new path is ABSENT from the trunk — the class the
+  # sweep actually reports, so this fixture exercises the reporting path and not just the walk.
+  # The tree is main's tree PLUS the new file: a tree containing only the new file would show
+  # base.txt as deleted, base.txt is present on trunk, and `all_absent` would go 0 — flagging
+  # nothing and making the whole fixture vacuous.
+  (
+    export GIT_INDEX_FILE="$BATS_TEST_TMPDIR/fixture-index"
+    git read-tree main
+    for i in $(seq 1 40); do
+      blob="$(printf 'stranded %s\n' "$i" | git hash-object -w --stdin)"
+      git update-index --add --cacheinfo "100644,$blob,stranded-$i.txt"
+      tree="$(git write-tree)"
+      c="$(git commit-tree "$tree" -p "$main_sha" -m "stranded $i")"
+      printf 'create refs/heads/wip/s%s %s\n' "$i" "$c"
+    done
+  ) | git update-ref --stdin
+
+  [ "$(git for-each-ref --format='%(refname:short)' refs/heads/ | wc -l | tr -d ' ')" -ge 641 ]
+
+  our_branch feat/manyref manyref.sh
+  backup="ship/backup-$(git rev-parse --short HEAD)"
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+
+  # 1. The hold excludes the sweep.
+  hold="$(grep '"wait_s"' "$LAND_LOG" | tail -1 | sed -E 's/.*"hold_s":([0-9]+).*/\1/')"
+  [ -n "$hold" ]
+  [ "$hold" -le 2 ]
+
+  # 2. The ordering, with no clock in it: release BEFORE attest.
+  rel="$(grep -n '"wait_s"' "$LAND_LOG" | tail -1 | cut -d: -f1)"
+  att="$(grep -n '"tool":"ship-land"' "$LAND_LOG" | grep '"verify":"ok"' | tail -1 | cut -d: -f1)"
+  [ -n "$rel" ]                                # both lines must EXIST before comparing them —
+  [ -n "$att" ]                                # separate assertions: `&&` absorbs the first's red
+  [ "$rel" -lt "$att" ]                        # pre-fix: the attest is INSIDE the hold ⇒ rel > att
+
+  # NON-VACUITY. Every assertion above would also pass if the sweep had silently not run at all —
+  # which is precisely how a "we moved it out" change could pass by deleting it instead.
+  echo "$output" | grep -qE 'across 6[0-9][0-9] branch\(es\)'   # it really walked the 640
+  grep -q '"sweep":"review"' "$LAND_LOG"       # …and the attestation field still populates
+
+  # The reap is post-release too, and still discharges the rollback ref.
+  run git show-ref --verify --quiet "refs/heads/$backup"
+  [ "$status" -ne 0 ]
+
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- manyref.sh)" ]
+}
+
 @test "true concurrency: two real landers race → both land, both contents verified, zero drops" {
   # End-to-end (no injected mover): two ship-land processes on one mutex, overlapping gates
   # (2s shim sleep). Whichever loses the CAS re-gates and re-lands. The 2026-07-11 guarantee

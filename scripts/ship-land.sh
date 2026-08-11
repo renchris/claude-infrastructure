@@ -32,9 +32,14 @@
 #         tree IS the pushed tree → `git push HEAD:<trunk>` (non-ff ⇒ exit 7) → land-verify.sh
 #         (content-verify, IN the lock, after the push) → on a content-drop, BOUNDED AUTO-RETRY
 #         + ROLLBACK (T-P9-7) up to SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict
-#         rolls back (rebase --abort) ⇒ exit 5, retries exhausted ⇒ clean tree + exit 8 →
-#         stranded-sweep (exit 1 ⇒ REVIEW, surfaced, never auto-recovered) → self-attesting
-#         land.log line.
+#         rolls back (rebase --abort) ⇒ exit 5, retries exhausted ⇒ clean tree + exit 8. Every
+#         in-lock fetch/push is bounded by timeout(1); a bound firing is a MACHINE verdict
+#         (exit 10, retryable), never a red — see git_net.
+#       → THE LOCK RELEASES HERE, and the rest runs in the outer process, unlocked: backup-ref
+#         reap → stranded-sweep (exit 1 ⇒ REVIEW, surfaced, never auto-recovered) → self-attesting
+#         land.log line → post-land verifier kick. Both of those were INSIDE the mutex until
+#         2026-08-10 and were ~90% of an 87s median hold, for work the lock does not protect;
+#         see post_release_finish for why moving them out is sound rather than merely faster.
 #   → rounds exhausted (sustained contention): in-lock re-gate of STATICS ONLY. NOTHING HEAVY
 #     MAY EVER ENTER THE LOCK, in EITHER lane — the lock covers the race window (a 5-15s hold),
 #     never a proof. SHIP_LAND_GATE_ROUNDS=0 goes straight there. Both in-lock gate call sites
@@ -76,7 +81,9 @@
 # 3 escalation PARK · 4 shared-checkout refusal · 5 rebase conflict (initial OR an auto-retry
 # rebase, the latter rolled back) · 6 GATE RED · 7 push non-ff · 8 content-verify failed after
 # exhausting the bounded auto-retries · 9 GATE-KILLED (now rare — only LANE=v1's corpus can earn
-# it). 42 is INTERNAL (locked child → outer-loop stale-gate signal); it never escapes ship-land.
+# it) · 10 IN-LOCK NET TIMEOUT (a fetch/push inside the mutex exceeded SHIP_LAND_NET_TIMEOUT_S —
+# a MACHINE verdict like 9, retryable, nothing proven, tree clean). 42 is INTERNAL (locked child →
+# outer-loop stale-gate signal); it never escapes ship-land.
 #
 # 6 vs 9 — a VERDICT vs a NON-VERDICT, and the distinction is load-bearing (backlog 9c5d0ba74e79):
 # 6 says "the gate ran and this tree is red" — a claim about YOUR CODE, actionable, do not retry
@@ -114,7 +121,9 @@
 # · SHIP_LAND_ALLOW_SHARED=1 · SHIP_LAND_ESC_RE (EFFECT class — exemptible) ·
 # SHIP_LAND_ESC_RE_SECRET (DISCLOSURE class — never exemptible) · SHIP_LAND_ESC_EXEMPT_FILE
 # (default scripts/esc-exempt.manifest) · SHIP_LAND_DECISIONS_DIR · LAND_LOG ·
-# LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
+# LAND_LOCK_DIR (see land-lock.sh) · SHIP_LAND_NET_TIMEOUT_S (default 60 — the bound on every
+# IN-LOCK fetch/push; SHIP_LAND_TIMEOUT_BIN= disables bounding entirely) ·
+# SHIP_LAND_VERIFY_RETRIES (default 2; 0 = single-shot,
 # the pre-T-P9-7 kill switch) · SHIP_LAND_GATE_ROUNDS (default 3; 0 = straight to the in-lock
 # statics re-gate) · SHIP_LAND_GATE_SCOPE / SHIP_LAND_GATE_POLICY / SHIP_LAND_GATE_SELECT ·
 # SHIP_LAND_HERM_LINT · SHIP_LAND_WALL_LINT (ratchet paths; default the landing tree's own) ·
@@ -273,6 +282,43 @@ _resolve_timeout() {
 if [[ -n "${SHIP_LAND_TIMEOUT_BIN+set}" ]]; then TIMEOUT_BIN="$SHIP_LAND_TIMEOUT_BIN"
 else TIMEOUT_BIN="$(_resolve_timeout || true)"; fi
 NICE_BIN="$(command -v nice 2>/dev/null || true)"
+
+# ---- R5 applied to the LOCK ITSELF: bounding the in-lock network ------------
+# The mutex exists to cover the fetch→push→verify race window, so an UNBOUNDED net call inside it
+# is the one failure that turns a sub-second hold into an indefinite machine-wide wedge. It is not
+# hypothetical and it is not self-healing: land-lock NEVER reaps a live holder (its H2 rule, chosen
+# deliberately — a silently-dropped commit costs more than a wedged wait), so a `git push` hung on
+# an unresponsive remote stops EVERY lander on this box until a human notices. Every in-lock net op
+# therefore runs under timeout(1).
+#
+# A TIMEOUT IS A MACHINE VERDICT (exit 10), never a gate red — the same split 6 vs 9 already draws
+# for the gate, for the same reason: a bound firing is the ABSENCE of an answer from the remote, so
+# it is evidence about the box and the network, not about the tree. Retrying is the correct response
+# to 10 and the wrong response to 6. Ordinary non-zero keeps each call site's existing semantics —
+# a timeout is not a failure, and collapsing them would recode a non-ff rejection (exit 7, "a
+# sibling beat you") as "retry", which is how a load spike became a code failure in 2026-07-26.
+# Kill switch: SHIP_LAND_TIMEOUT_BIN= (empty) ⇒ unbounded, the same seam the smoke already honors.
+NET_TIMEOUT_S="${SHIP_LAND_NET_TIMEOUT_S:-60}"
+NET_TIMED_OUT=0
+git_net() {  # <git args…> → git's rc; sets NET_TIMED_OUT=1 IFF the bound fired
+  NET_TIMED_OUT=0
+  local rc
+  if [[ -n "$TIMEOUT_BIN" && -x "$TIMEOUT_BIN" ]]; then
+    "$TIMEOUT_BIN" -k 10 "$NET_TIMEOUT_S" git "$@"; rc=$?
+    # timeout(1): 124 = the bound fired; 137 = the `-k` SIGKILL landed after it refused to die.
+    [[ "$rc" -eq 124 || "$rc" -eq 137 ]] && NET_TIMED_OUT=1
+  else
+    git "$@"; rc=$?
+  fi
+  return "$rc"
+}
+
+net_timeout_abort() {  # $1=the op, as the operator would type it  $2=base for the attest  $3=note
+  echo "⛔ ship-land: in-lock \`git $1\` exceeded ${NET_TIMEOUT_S}s and was killed — the remote never answered. That is a claim about the MACHINE and the network, NOT about your tree: nothing was proven, gate-green is untouched, the branch and the backup ref ship/backup-* are intact, and the tree is clean. $3 Re-run /ship (exit 10)." >&2
+  attest_refs "$2"
+  attest_land "n/a" "n/a" "clean" 10
+  exit 10
+}
 
 # ---- the escalation surface, as TWO classes ---------------------------------
 # The two halves of the old single regex answer different questions, so they cannot share a scope:
@@ -500,6 +546,143 @@ rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never ex
   # clean-tree guarantee on the retry-exhaustion path where nothing was mid-flight. Our commits and
   # the ship/backup-* ref are left intact either way; rollback undoes only a half-applied replay.
   git rebase --abort >/dev/null 2>&1 || true
+}
+
+# ---- EMPTYING THE MUTEX: the locked child → outer-process handover ----------
+# 2026-08-10 (land-architecture-100p §2.A / §5 P1). stranded-sweep (measured 59-62s, O(497 refs)
+# and growing with every branch anyone ever creates) and ship-backup-reap used to run INSIDE the
+# land-lock. They were ~90% of an 87s median hold, for work the lock does not protect — the thing
+# the lock actually exists for, land-verify, is 0.485s. Every other lander on the box queued behind
+# a sweep that had nothing to do with the race window, and the cost grew monotonically with the
+# ref count, so the mutex got worse every week on its own.
+#
+# BOTH MOVE OUT, and the move is sound because NEITHER reads live trunk state that the lock could
+# stabilise. This is the whole correctness argument, so it is stated per tool rather than asserted:
+#   · ship-backup-reap's predicate is (backup-ref, LANDED_HEAD) and NOTHING else. Its own header
+#     is explicit that it must never re-read origin/<trunk> — against a drifted trunk the same
+#     predicate misclassifies 437 of 739 refs — so it was already written to be independent of when
+#     it runs relative to a sibling's land. Releasing the lock first cannot change one bit of it.
+#   · stranded-sweep is REVIEW-only advisory (exit 1 is a prompt, not a verdict) and re-fetches the
+#     trunk itself. A sibling advancing the trunk after our release can only ADD content to it, and
+#     the sweep flags a commit only when ALL its paths are ABSENT from the trunk — so a later read
+#     is monotone in the SAFE direction: it can flag fewer commits, never more, and never ours.
+# What it cannot do is drop the attestation: `sweep=` still populates, because the outer process
+# performs the attest after the sweep, exactly as the locked child used to.
+#
+# The child hands over the facts the outer cannot recompute. Most it could (HEAD is shared — same
+# worktree), but the FALLBACK lane's gate facts are the child's alone: there the gate ran in the
+# child, so LANE/SELECTED_N/SMOKE_*/NET_STATE exist only there, and an outer that re-derived them
+# from its own unset globals would attest a smoke nobody ran. One file, whitelisted keys, removed
+# on read.
+post_state_path() {  # $1=key — inside the git dir: never the worktree, never tracked, never /tmp
+  local gc; gc="$(git rev-parse --git-common-dir 2>/dev/null || echo .git)"
+  case "$gc" in /*) ;; *) gc="$(cd "$gc" 2>/dev/null && pwd || echo "$gc")" ;; esac
+  printf '%s/ship-land-post-%s' "$gc" "$1"
+}
+
+post_state_write() {  # $1=landed_head — the locked child's entire handover
+  local f="${SHIP_LAND_POST_STATE:-}"
+  [[ -n "$f" ]] || return 0
+  {
+    printf 'LANDED_HEAD=%s\n'  "$1"
+    printf 'ATTEST_HEAD=%s\n'  "${ATTEST_HEAD:-?}"
+    printf 'ATTEST_BASE=%s\n'  "${ATTEST_BASE:-?}"
+    printf 'ATTEST_TREE=%s\n'  "${ATTEST_TREE:-?}"
+    printf 'LANE=%s\n'         "${LANE}"
+    printf 'SELECTED_N=%s\n'   "${SELECTED_N:--1}"
+    printf 'SMOKE_STATE=%s\n'  "${SMOKE_STATE:-none}"
+    printf 'SMOKE_N=%s\n'      "${SMOKE_N:-0}"
+    printf 'SMOKE_S=%s\n'      "${SMOKE_S:-0}"
+    printf 'NET_STATE=%s\n'    "${NET_STATE:-none}"
+    printf 'GATE_RED=%s\n'     "${GATE_RED:-0}"
+    printf 'GATE_RED_WHY=%s\n' "${GATE_RED_WHY:-}"
+  } > "$f" 2>/dev/null || true
+}
+
+post_state_read() {  # $1=file — one explicit arm per key: no `eval`, so a corrupted or hand-edited
+                     # handover can only be IGNORED, never executed.
+  local line k v
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      LANDED_HEAD)  LANDED_HEAD="$v"  ;;
+      ATTEST_HEAD)  ATTEST_HEAD="$v"  ;;
+      ATTEST_BASE)  ATTEST_BASE="$v"  ;;
+      ATTEST_TREE)  ATTEST_TREE="$v"  ;;
+      LANE)         LANE="$v"         ;;
+      SELECTED_N)   SELECTED_N="$v"   ;;
+      SMOKE_STATE)  SMOKE_STATE="$v"  ;;
+      SMOKE_N)      SMOKE_N="$v"      ;;
+      SMOKE_S)      SMOKE_S="$v"      ;;
+      NET_STATE)    NET_STATE="$v"    ;;
+      GATE_RED)     GATE_RED="$v"     ;;
+      GATE_RED_WHY) GATE_RED_WHY="$v" ;;
+    esac
+  done < "$1"
+}
+
+post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock ALREADY RELEASED.
+  # No-op unless the locked child left a handover, i.e. unless a real land happened. The child's
+  # other exit-0 paths (nothing-to-land, --dry-run, a drop that self-healed because a sibling
+  # landed our content) attest for themselves and write no handover, and must not be re-attested.
+  local f="${SHIP_LAND_POST_STATE:-}"
+  [[ -n "$f" && -s "$f" ]] || return 0
+  post_state_read "$f"
+  rm -f "$f" 2>/dev/null || true
+  local TRUNK="$1"
+
+  # --- discharge the rollback ref (STRANDED_EXPOSURE_2026-07-26 §8.2) ---
+  # THE ONLY PLACE THIS REF MAY BE DELETED, and it is reachable only past the locked child's
+  # content-verify — i.e. only once land-verify has proven this head's content is on the trunk.
+  # That is exactly the ref's release condition: it exists to roll back a land that went wrong, and
+  # this land did not. Left undeleted (the behaviour until 2026-07-26) every SUCCESSFUL land
+  # permanently added a branch pinning the PRE-rebase commits, whose patch-ids no dedupe can
+  # collapse onto their landed twins — so the "stranded" exposure metric grew monotonically with
+  # landing volume, 70 of 81 orphan-carrying branches being these refs. The reaper re-proves the
+  # ref's OWN content against $LANDED_HEAD before deleting (never against origin/$TRUNK, which a
+  # sibling can advance under us), and KEEPS it on any doubt.
+  # Ordered before the sweep purely as hygiene — the sweep walks every ref in refs/heads, so a ref
+  # whose purpose is already discharged should not be in that walk. It is NOT a correctness fix for
+  # the sweep: stranded-sweep only reports a commit whose paths are ALL absent from the trunk, so it
+  # would not have flagged a ref we just landed.
+  # `|| true` is load-bearing: a land that has already content-verified must never be turned red by
+  # its own cleanup. Kill switch: SHIP_BACKUP_REAP=off.
+  if [[ -n "${SHIP_LAND_BACKUP_REF:-}" && -x "$BACKUP_REAP" ]]; then
+    "$BACKUP_REAP" reap "$SHIP_LAND_BACKUP_REF" "$LANDED_HEAD" || true
+  fi
+
+  local sweep_out sweep_rc sweep_field
+  sweep_out="$("$STRANDED_SWEEP" "$TRUNK" 2>&1)"; sweep_rc=$?
+  if [[ "$sweep_rc" -eq 0 ]]; then
+    sweep_field="clean"
+    echo "✓ ship-land: stranded-sweep clean."
+  else
+    sweep_field="review"
+    echo "⚠ ship-land: stranded-sweep flags commit(s) for REVIEW — peer WIP is expected on a multi-session box; recover ONLY your own dropped work, NEVER cherry-pick peer WIP onto $TRUNK:" >&2
+    printf '%s\n' "$sweep_out" >&2
+  fi
+
+  attest_land "ok" "$sweep_field" "clean" 0
+
+  # --- post-land verification (async, detached) ---
+  # THE HANDOFF OF THE VERDICT, and in v2 it carries the whole correctness argument: this land
+  # proved statics + a smoke over its own diff and nothing more, so the FULL suite is re-proven
+  # off the critical path — queue the landed head and hand it to postland-verify.sh. This kick is
+  # the FAST path (a fresh land is verified in seconds, not at the next tick); the launchd
+  # StartInterval is only the backstop for a land that died before reaching this line.
+  # start_new_session is MANDATORY — nohup/disown children share our process group and are reaped
+  # by the harness's group SIGKILL.
+  # Guarded: absent verifier (or POSTLAND_VERIFY=off) is a no-op, never a land failure.
+  if [[ "${POSTLAND_VERIFY:-on}" != "off" && -x "$SCRIPT_DIR/postland-verify.sh" ]]; then
+    local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+    mkdir -p "$pdir" 2>/dev/null || true
+    printf '%s\n' "$LANDED_HEAD" > "$pdir/queue" 2>/dev/null || true
+    python3 -c 'import subprocess,sys; subprocess.Popen([sys.argv[1],"--run-if-needed"],start_new_session=True)' \
+      "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
+  fi
+
+  echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
+  return 0
 }
 
 detect_trunk() {
@@ -2150,7 +2333,12 @@ main_locked() {
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
 
   echo "→ ship-land[locked]: last-moment fetch origin/$TRUNK" >&2
-  git fetch origin "$TRUNK" 2>/dev/null || echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2
+  # BOUNDED (see git_net). A fetch that ERRORS keeps the old warn-and-proceed — the CAS below then
+  # compares against a possibly-stale trunk and the push is still fail-closed (non-ff ⇒ exit 7). A
+  # fetch that HANGS is a different animal: it holds the machine-wide mutex forever, so it aborts.
+  git_net fetch origin "$TRUNK" 2>/dev/null \
+    || { [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "fetch origin $TRUNK" "${GATE_BASE:-?}" "Nothing was pushed."
+         echo "⚠ ship-land: fetch failed — using local origin/$TRUNK" >&2; }
 
   local LAND_BASE
   if [[ -n "$GATE_BASE" ]]; then
@@ -2206,13 +2394,25 @@ main_locked() {
 
   attest_refs "$LAND_BASE"
   LANDED_HEAD="$(git rev-parse HEAD)"
-  if ! git push origin "HEAD:$TRUNK" >&2; then
+  if ! git_net push origin "HEAD:$TRUNK" >&2; then
+    # A TIMED-OUT push is the one case where the outcome is genuinely UNKNOWN — the remote may have
+    # taken it. Which is fine and needs no reconciliation here: nothing is deleted, the tree is
+    # clean, and a re-run's preflight fetch decides it (already landed ⇒ "nothing to land"; not
+    # landed ⇒ pushed again). Reading it as a non-ff rejection instead would be a claim about a
+    # sibling that we have no evidence for.
+    [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
+      "Whether the remote took the push is UNKNOWN; the next /ship re-fetches and decides — it will land it, or find it already there."
     echo "✗ ship-land: push to origin/$TRUNK REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify. Backup ref intact." >&2
     exit 7
   fi
 
   while :; do
-    git fetch origin "$TRUNK" 2>/dev/null || true
+    # BOUNDED, and here a timeout must ABORT rather than fall through: land-verify would then read a
+    # stale origin/$TRUNK, fail, and drive a spurious rebase+re-push loop — manufacturing a
+    # content-drop verdict out of a network hang, inside the lock.
+    git_net fetch origin "$TRUNK" 2>/dev/null \
+      || { [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "fetch origin $TRUNK" "$LAND_BASE" \
+             "The push already succeeded; the next /ship will find it landed or re-verify it."; }
     if "$LAND_VERIFY" "$LAND_BASE..$LANDED_HEAD" "origin/$TRUNK" "$LANDED_HEAD"; then
       break   # ✓ every landed path present + content-identical on the trunk — landed for real
     fi
@@ -2251,7 +2451,9 @@ main_locked() {
 
     attest_refs "$LAND_BASE"
     LANDED_HEAD="$(git rev-parse HEAD)"
-    if ! git push origin "HEAD:$TRUNK" >&2; then
+    if ! git_net push origin "HEAD:$TRUNK" >&2; then
+      [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
+        "Whether the remote took this re-push is UNKNOWN; the next /ship re-fetches and decides."
       # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
       # verify fails (our head is not on the trunk) and drives another bounded reconcile; the attempt
       # counter still terminates a persistently-rejecting remote.
@@ -2259,57 +2461,12 @@ main_locked() {
     fi
   done
 
-  # --- discharge the rollback ref (STRANDED_EXPOSURE_2026-07-26 §8.2) ---
-  # THE ONLY PLACE THIS REF MAY BE DELETED, and it is reachable only past the `break` above — i.e.
-  # only once land-verify has proven this head's content is on the trunk. That is exactly the
-  # ref's release condition: it exists to roll back a land that went wrong, and this land did not.
-  # Left undeleted (the behaviour until now) every SUCCESSFUL land permanently added a branch
-  # pinning the PRE-rebase commits, whose patch-ids no dedupe can collapse onto their landed twins —
-  # so the "stranded" exposure metric grew monotonically with landing volume, 70 of 81 orphan-
-  # carrying branches being these refs. The reaper re-proves the ref's OWN content against
-  # $LANDED_HEAD before deleting (never against origin/$TRUNK, which a sibling can advance under
-  # us), and KEEPS it on any doubt.
-  # Ordered before the sweep purely as hygiene — the sweep walks every ref in refs/heads, so a ref
-  # whose purpose is already discharged should not be in that walk. It is NOT a correctness fix for
-  # the sweep: stranded-sweep only reports a commit whose paths are ALL absent from the trunk, so it
-  # would not have flagged a ref we just landed.
-  # `|| true` is load-bearing: a land that has already content-verified must never be turned red by
-  # its own cleanup. Kill switch: SHIP_BACKUP_REAP=off.
-  if [[ -n "${SHIP_LAND_BACKUP_REF:-}" && -x "$BACKUP_REAP" ]]; then
-    "$BACKUP_REAP" reap "$SHIP_LAND_BACKUP_REF" "$LANDED_HEAD" || true
-  fi
-
-  local sweep_out sweep_rc sweep_field
-  sweep_out="$("$STRANDED_SWEEP" "$TRUNK" 2>&1)"; sweep_rc=$?
-  if [[ "$sweep_rc" -eq 0 ]]; then
-    sweep_field="clean"
-    echo "✓ ship-land: stranded-sweep clean."
-  else
-    sweep_field="review"
-    echo "⚠ ship-land: stranded-sweep flags commit(s) for REVIEW — peer WIP is expected on a multi-session box; recover ONLY your own dropped work, NEVER cherry-pick peer WIP onto $TRUNK:" >&2
-    printf '%s\n' "$sweep_out" >&2
-  fi
-
-  attest_land "ok" "$sweep_field" "clean" 0
-
-  # --- post-land verification (async, detached) ---
-  # THE HANDOFF OF THE VERDICT, and in v2 it carries the whole correctness argument: this land
-  # proved statics + a smoke over its own diff and nothing more, so the FULL suite is re-proven
-  # off the critical path — queue the landed head and hand it to postland-verify.sh. This kick is
-  # the FAST path (a fresh land is verified in seconds, not at the next tick); the launchd
-  # StartInterval is only the backstop for a land that died before reaching this line.
-  # start_new_session is MANDATORY — nohup/disown children share our process group and are reaped
-  # by the harness's group SIGKILL.
-  # Guarded: absent verifier (or POSTLAND_VERIFY=off) is a no-op, never a land failure.
-  if [[ "${POSTLAND_VERIFY:-on}" != "off" && -x "$SCRIPT_DIR/postland-verify.sh" ]]; then
-    local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
-    mkdir -p "$pdir" 2>/dev/null || true
-    printf '%s\n' "$LANDED_HEAD" > "$pdir/queue" 2>/dev/null || true
-    python3 -c 'import subprocess,sys; subprocess.Popen([sys.argv[1],"--run-if-needed"],start_new_session=True)' \
-      "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
-  fi
-
-  echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
+  # --- THE LAND IS PROVEN. Everything left is cleanup + bookkeeping, so the mutex ends HERE. ---
+  # Hand the facts to the outer process and exit: land-lock's EXIT trap releases the moment we do,
+  # and post_release_finish (see its header) runs the backup-ref reap, the stranded-sweep, the
+  # attest and the post-land kick with NO lock held. That is the whole of P1 — the hold now covers
+  # the race window this function opened it for, and nothing else.
+  post_state_write "$LANDED_HEAD"
   exit 0
 }
 
@@ -2400,6 +2557,16 @@ main_outer() {
   export SHIP_LAND_BACKUP_REF
   git branch -f "$SHIP_LAND_BACKUP_REF" HEAD >/dev/null 2>&1 || true
 
+  # --- the locked child's handover slot (see post_state_write) ---
+  # Keyed on THIS process, so two worktrees of one repo landing concurrently cannot collide on it
+  # (they share a git common dir but never a pid). Removed at both ends — here in case a pid was
+  # recycled onto a dead land's file, and again by post_release_finish on read. The prune covers
+  # the only leak left: this process killed between the child's write and our read.
+  SHIP_LAND_POST_STATE="$(post_state_path "$$")"
+  export SHIP_LAND_POST_STATE
+  rm -f "$SHIP_LAND_POST_STATE" 2>/dev/null || true
+  find "$(dirname "$SHIP_LAND_POST_STATE")" -maxdepth 1 -name 'ship-land-post-*' -mtime +1 -delete 2>/dev/null || true
+
   # --- optimistic rounds: the gate runs UNLOCKED (parallel across sessions); the lock holds
   #     ONLY fetch-compare → push → content-verify. A stale gate (exit 42: a sibling
   #     landed mid-gate) releases the lock and re-gates the new final tree out here — and in v2
@@ -2418,7 +2585,9 @@ main_outer() {
            SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
     "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
-    [[ "$rc" -ne 42 ]] && exit "$rc"   # landed (0) or a real failure (incl. land-lock's 75) — propagate
+    # THE LOCK IS RELEASED THE INSTANT THAT RETURNS. Cleanup + attest run here, unlocked.
+    if [[ "$rc" -eq 0 ]]; then post_release_finish "$TRUNK"; exit 0; fi
+    [[ "$rc" -ne 42 ]] && exit "$rc"   # a real failure (incl. land-lock's 75) — propagate
     echo "↻ ship-land: optimistic round ${round}/${ROUNDS} invalidated (sibling land mid-gate) — re-gating the new final tree unlocked." >&2
   done
 
@@ -2428,7 +2597,14 @@ main_outer() {
   #     movement, so this round cannot be invalidated; the difference from v1 is that it now
   #     costs seconds instead of the 3h36m lock hold that jammed the fleet. ---
   [[ "$ROUNDS" -gt 0 ]] && echo "→ ship-land: ${ROUNDS} optimistic round(s) exhausted — falling back to the in-lock STATICS-only re-gate (guaranteed progress; nothing heavy enters the lock)." >&2
-  exec "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
+  # NOT `exec` any more, deliberately: exec'ing away left no outer process to run the post-release
+  # phase, so this lane would have kept the sweep inside the lock — the exact defect, surviving in
+  # the one lane that only fires under sustained contention, i.e. when the fleet can least afford
+  # an 87s hold. Same handover, same finish, one process deeper.
+  "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
+  rc=$?
+  [[ "$rc" -eq 0 ]] && post_release_finish "$TRUNK"
+  exit "$rc"
 }
 
 # ---- dispatch --------------------------------------------------------------

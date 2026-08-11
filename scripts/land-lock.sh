@@ -25,7 +25,8 @@
 #
 # Kill switch:  LAND_SERIALIZE=off scripts/land-lock.sh -- <cmd>   → run <cmd> unlocked.
 # Tunables:     LAND_LOCK_TTL (empty/wedged-reap age, default 1200s) ·
-#               LAND_LOCK_WAIT (max queue wait, default 3600s).
+#               LAND_LOCK_WAIT (max queue wait, default 3600s) ·
+#               LAND_LOCK_REAP_TTL (abandoned reap-mutex age, default 30s — see reap_and_claim).
 # Telemetry:    one JSON line per landing appended to ${LAND_LOG:-~/.claude/land.log}
 #               {ts, repo, branch, wait_s, hold_s, exit, pid}.
 #
@@ -50,6 +51,7 @@ fi
 HASH="$(printf '%s' "${LOCK_KEY}" | shasum | cut -c1-12)"
 LOCK_PARENT="${LAND_LOCK_DIR:-/tmp/land-lock-${HASH}}"
 LOCK="${LOCK_PARENT}/lock.d"
+REAP_LOCK="${LOCK_PARENT}/reap.d"   # serializes REAPERS only — never the lock itself
 
 # Introspection: print the resolved lock dir this repo/worktree maps to, then exit.
 # Pure read (runs before any mkdir) so it never litters /tmp. Works in any serialize mode.
@@ -60,6 +62,7 @@ fi
 LOG="${LAND_LOG:-${HOME}/.claude/land.log}"
 TTL="${LAND_LOCK_TTL:-1200}"        # empty/wedged-holder reap age (s)
 WAIT_MAX="${LAND_LOCK_WAIT:-3600}"  # max seconds to queue for the lock before giving up
+REAP_TTL="${LAND_LOCK_REAP_TTL:-30}"  # abandoned reap-mutex age (s) — the section is milliseconds
 POLL=2
 mkdir -p "${LOCK_PARENT}"
 mkdir -p "$(dirname "${LOG}")" 2>/dev/null || true
@@ -91,17 +94,22 @@ write_owner() {
 
 # REAP RULE — correctness core; DIVERGES from reso deliberately (acceptance gate 3).
 # A LIVE holder pid is NEVER reaped, even past TTL: a silently-dropped commit costs more
-# than a wedged-lock wait, and LAND_SERIALIZE=off is the escape hatch.
-try_acquire() {
-  mkdir "${LOCK}" 2>/dev/null && { write_owner; return 0; }
-  local holder stale age rec_lstart cur_lstart
+# than a wedged-lock wait, and LAND_SERIALIZE=off is the escape hatch. (H2.)
+#
+# FACTORED OUT of try_acquire so reap_and_claim can RE-RUN it, unchanged, inside the reap
+# mutex: ONE predicate, two call sites, so the re-check can never drift from the check that
+# authorised the reap (memory: actuator-is-the-arbiter — never re-implement a gate's predicate
+# outside it).
+lock_is_stale() {  # 0 = reapable · 1 = live, hold off
+  local holder age rec_lstart cur_lstart
   holder="$(cat "${LOCK}/pid" 2>/dev/null || true)"
   age="$(( $(date +%s) - $(stat -f %m "${LOCK}" 2>/dev/null || echo 0) ))"
-  stale=0
   if [[ -z "${holder}" ]]; then
     # mkdir'd but pid not yet written — a real owner mid-acquire; grace 5s, else TTL.
-    { [[ "${age}" -ge 5 ]] || [[ "${age}" -gt "${TTL}" ]]; } && stale=1
-  elif kill -0 "${holder}" 2>/dev/null; then
+    { [[ "${age}" -ge 5 ]] || [[ "${age}" -gt "${TTL}" ]]; } && return 0
+    return 1
+  fi
+  if kill -0 "${holder}" 2>/dev/null; then
     # pid is alive — but under load a DEAD holder's pid can be RECYCLED to a new process,
     # which kill -0 alone cannot detect (it flaked exactly this way, wedging every landing:
     # 2026-07-25). Verify identity by start-time: a recycled pid belongs to a different
@@ -109,19 +117,63 @@ try_acquire() {
     # (memory: periodic-job-self-overlap — kill -0 alone is insufficient under pid reuse).
     rec_lstart="$(cat "${LOCK}/lstart" 2>/dev/null || true)"
     cur_lstart="$(ps -o lstart= -p "${holder}" 2>/dev/null || true)"
-    if [[ -n "${rec_lstart}" && "${rec_lstart}" != "${cur_lstart}" ]]; then
-      stale=1                                        # pid REUSED (lstart mismatch) → original holder DEAD → reap
-    else
-      stale=0                                        # same live process (lstart matches / none recorded) → NEVER stale
-    fi
-  else
-    stale=1                                          # holder pid DEAD → reap immediately
+    [[ -n "${rec_lstart}" && "${rec_lstart}" != "${cur_lstart}" ]] && return 0   # pid REUSED → holder DEAD
+    return 1                                         # same live process → H2: NEVER stale
   fi
-  if [[ "${stale}" = "1" ]]; then
+  return 0                                           # holder pid DEAD → reap immediately
+}
+
+# GENERATION — the identity of the lock object we JUDGED, so a reaper can prove inside the reap
+# mutex that it is deleting that same dead holder and not a live one that replaced it. pid+lstart
+# alone are not enough (a reaped-and-recreated lock can carry an identical empty pid file), so the
+# inode is in the token: `rm -rf` + `mkdir` always yields a NEW directory.
+lock_generation() {
+  printf '%s|%s|%s' \
+    "$(cat "${LOCK}/pid" 2>/dev/null || true)" \
+    "$(cat "${LOCK}/lstart" 2>/dev/null || true)" \
+    "$(stat -f %i "${LOCK}" 2>/dev/null || echo 0)"
+}
+
+# ATOMIC REAP. `rm -rf "${LOCK}"; mkdir "${LOCK}"` was NOT atomic and could not be made so by
+# ordering alone: two acquirers that both judged the lock dead both removed it and both recreated
+# it — 3 simultaneous holders reproduced (land-architecture-100p-2026-08-10 §2.H), i.e. the mutex
+# silently stopped being a mutex in exactly the crash-recovery case it exists for. A rename-claim
+# does not fix it either: A renames the dead lock away and recreates it, and B's rename then
+# carries off A's LIVE lock. Two things together make it atomic:
+#   1. A REAP MUTEX (${REAP_LOCK}) serializes reapers, so at most one deletes at a time.
+#   2. A GENERATION + staleness RE-CHECK inside it: the lock must still be the same object we
+#      judged AND must still be stale by the same rule. Anything else ⇒ abort, touch nothing,
+#      re-observe on the next poll.
+# (2) is what closes the window (1) alone leaves — the loser wakes, sees the winner's LIVE lock,
+# and queues, which is the correct outcome rather than a second reap.
+# H2 is strictly strengthened, never weakened: this path can only ever reap FEWER locks than
+# before, and a live holder now has to survive two independent liveness reads instead of one.
+reap_and_claim() {  # $1 = the generation token observed when we judged it stale
+  local gen="$1" rc=1 rage
+  if ! mkdir "${REAP_LOCK}" 2>/dev/null; then
+    # A reaper killed mid-section would wedge every future reap on this box, so the reap mutex has
+    # its own TTL. The section is milliseconds (a couple of stats, an rm, a mkdir), so anything
+    # older than REAP_TTL is abandoned rather than working. Losing this race is harmless: we just
+    # return and re-observe.
+    rage="$(( $(date +%s) - $(stat -f %m "${REAP_LOCK}" 2>/dev/null || date +%s) ))"
+    [[ "${rage}" -gt "${REAP_TTL}" ]] && rm -rf "${REAP_LOCK}" 2>/dev/null
+    return 1
+  fi
+  if [[ "$(lock_generation)" = "${gen}" ]] && lock_is_stale; then
     rm -rf "${LOCK}"
-    mkdir "${LOCK}" 2>/dev/null && { write_owner; return 0; }
+    # A plain acquirer can still win the gap between the rm and this mkdir — that is a legitimate
+    # fresh owner, so failing here means "wait", never "try harder".
+    mkdir "${LOCK}" 2>/dev/null && { write_owner; rc=0; }
   fi
-  return 1
+  rmdir "${REAP_LOCK}" 2>/dev/null || true
+  return "${rc}"
+}
+
+try_acquire() {
+  mkdir "${LOCK}" 2>/dev/null && { write_owner; return 0; }
+  local gen; gen="$(lock_generation)"    # BEFORE the verdict, so the token names what we judged
+  lock_is_stale || return 1
+  reap_and_claim "${gen}"
 }
 
 WAIT_START="$(date +%s)"
