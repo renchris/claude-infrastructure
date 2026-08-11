@@ -97,6 +97,59 @@ survived a first look. Strong candidates (each already has a commit and a writte
    good finder from a model that always reports something. False-positive rate is half the verdict
    in a verification slot, and the substitution harness does not measure it at all.
 
+### W1 outcome (2026-08-10) — DELIVERED, and control 3 cost more than controls 1 and 2 combined
+
+Corpus at `tests/fixtures/codex-probe/` — **9 briefs, 7 defective + 2 clean**, `manifest.json` plus
+one `briefs/<id>.md` per brief. Ids are opaque (`cp-01`…`cp-09`) because the id appears in the brief;
+the descriptive title lives in the manifest only. Mechanism spread, one brief each: a denylist
+enumerating spellings · an exact-count assertion tripwiring its own suite's growth · a `verdict=OK`
+certifying a precondition never measured · an assertion whose span is the whole repo · a page whose
+success is the notifier's exit code rather than its delivery verdict · a lookup miss in the wrong
+namespace booked as proven absence · a spawn time read from a registry that by construction cannot
+hold it.
+
+**Controls, as built.** Control 2 is *checked, not asserted*: every brief body is extracted
+byte-for-byte from its `pre_fix_ref`, and `verify-corpus.sh` re-extracts and diffs. Control 1 is
+pinned **by construction** — a brief is a self-contained text artifact (no repo, no suite, no lint,
+no docs, no history, no execution), and each record's `sibling_axis_pinned` names the specific
+sibling that would otherwise leak. Two are worth knowing: `cp-04`'s defect is stated almost verbatim
+in `docs/research/terminal-for-30-panes-2026-07-31.md`, and `cp-02`'s assertion goes visibly red the
+moment the suite is RUN. Three siblings are **anti-leaks** — the pre-fix test suites for `cp-01`,
+`cp-06` and `cp-08` each *certify the defect as intended behaviour*, so a reviewer who found them
+would be argued out of the finding.
+
+🚨 **The finding that changes how W1 should have been scoped: "nobody ever fixed it" is not evidence
+a file is sound.** Clean briefs were first selected on the only mechanical basis available — zero
+subsequent commits to the path. Candidates were then put through an independent adversarial pass over
+the same defect classes the corpus scores. **Eleven of thirteen were convicted** — several on scored
+classes, one on a defect already sitting in this repo's own red-team notes as an open MED-HIGH
+finding, and one on an argument-parsing bug that spins forever at 100% CPU on a documented flag. Two
+further candidates were rejected for **disclosure** rather than defects: both were post-fix twins of
+`cp-01`, one narrating `cp-01`'s defect outright in its own comments and the other sharing its
+subject matter, either of which would prime that brief in a single-context run.
+
+The two survivors are `scripts/pool-floor.sh` (`cp-03`) and `tests/pane-modal.bats` (`cp-07`). The
+surviving basis for `clean` is therefore **screened and not convicted**, recorded per record in
+`screen`, and a screen only clears a candidate if it *executed* rather than reasoned — both survivors
+were cleared by running the subject against real data and independently reimplementing the thing
+under test. `cp-03` additionally carries a `known_findings_not_scored` entry: the screen disclosed one
+real-but-inert imprecision, with an explicit instruction that an arm reporting it must be CREDITED,
+not scored as a false positive.
+
+Consequence for W3, and it is not a footnote: at an 11-in-13 base rate, a model reporting a defect on
+a clean brief may well be **right**. The judge must adjudicate every such finding against the code
+rather than trust the label.
+
+**Two run-time requirements W2 must honour, or the controls collapse.** (a) An arm gets the brief and
+nothing else — no repo, no tools, no network; an arm that can `git log` the subject finds the fix.
+(b) **One brief per fresh context** — nine briefs in one session makes a finding on brief N depend on
+briefs 1..N-1.
+
+**Gated, not just checked.** `tests/codex-probe-corpus.bats` pulls the checker onto the land gate,
+with RED controls for an in-fence edit, an out-of-fence append, and an unreachable ref. The
+out-of-fence mutant earned its keep immediately: the first checker compared only the fenced region
+and stayed green while a line was appended after it.
+
 ---
 
 ## W2 — Run the grid
@@ -180,6 +233,11 @@ systematically disagree about the same output, that disagreement is itself the d
 
 ## Status log
 
+- **2026-08-10** — **W1 DONE.** Frozen corpus at `tests/fixtures/codex-probe/` — 9 briefs (7 defective
+  + 2 clean), 36 anchored ground-truth entries, every `pre_fix_ref` resolving and every brief body
+  proven byte-identical to its ref. Gated by `tests/codex-probe-corpus.bats`. Detail + the
+  clean-brief finding in the W1 outcome section above. **W2 must run each brief in a fresh context
+  with no repo access** — both are stated there, and both are load-bearing. W2 not started.
 - **2026-08-10** — Plan created. Not started. Predecessor `MULTI_PROVIDER_PLANS.md` complete: Codex
   CLI 0.147.0 pinned `gpt-5.6-sol` @ `xhigh` (proven), `pi-codex` authenticated on ChatGPT Plus,
   `/accounts --agents` renders provider state. Codex weekly window measured at 11–12% used with a
