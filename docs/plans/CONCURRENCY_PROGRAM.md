@@ -1298,6 +1298,24 @@ remaining for bursts       ≈ 19 GB      vs a measured 372-proc wave ≈ 23 GB
 ⇒ **At 150 resident there is no room for even ONE unbounded cold compile.** Burst bounding is not an
 optimisation on this path, it is a precondition.
 
+> **S6.2 MCP row (added 2026-08-10 — `docs/research/mcp-memory-groundup-2026-08-10.md`).** The budget
+> above has no MCP term, and the figure that circulated to fill the gap — *"~507 MB/session … ~49 GB
+> at 150 — forecloses 150-resident"* (`scaling-bottlenecks-2026-08-09/08-platform-terms.md:96-102`) —
+> was an **aggregate misread as a marginal** (`ps -A` RSS ÷ session count, no attribution, in the
+> instrument its own sibling axis banned) and is refuted 8× down by three independent same-day
+> censuses. The measured row: **0 B for ~85-90% of sessions; ~280-340 MB footprint per HOSTING
+> session** (9-16% host — a per-project config fact, all reso-cwd, driven by ONE `.mcp.json` stanza
+> inherited across ~79 worktrees) **plus 196-470 MB of browser only while one is actually launched
+> ⇒ ~5-7 GB at 150** if the share holds. Remedy re-ranked: **not a shared daemon** (rejected on five
+> measured grounds — process-global tool mutex, one-browser-per-process binding, activity-leak
+> concentration, cloud-lane degradation, and the >6 s restart window that permanently strands every
+> session started inside it) — instead **zero-entry scoping of the reso stanza, npx-wrapper drop +
+> version pin, telemetry-watchdog off, per-entry heap cap, teammate/subagent no-inherit, and
+> tree-based `PER_MB` accounting** (capacity-alarm derives its constant from session ROOTS only;
+> true tree ≈ 681 MB/session today). One overlap caveat before anyone re-adds an MCP term here:
+> the 340 MB arrival marginal (≤180 s differential window) may already CONTAIN a hosting session's
+> chain (spawns ~53 s after init) — never bill 340 + MCP additively without resolving it.
+
 ### S6.3 · Phase A — make idle sessions free  ⟵ 🚨 **CLOSED, NOTHING BUILT — PREMISE REFUTED. See S6-UPDATE.**
 
 > Wave A (`fb62d4a0`, `64bc5d47`, `docs/research/idle-session-occupancy-2026-08-09.md`) measured an
