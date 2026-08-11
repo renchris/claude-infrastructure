@@ -65,9 +65,18 @@ versions:
 #      default claude-opus-4-8 → claude-opus-5.
 #   3. move the opus-4-8 ROLES below → claude-opus-5: lead_default, default_teammate,
 #      teammate_mechanical, teammate_research, research_worker, frontier_access.fallback.
-#   4. RE-SWEEP effort (see effort_defaults § opus5): Opus 5's own default is `high`, NOT
-#      max — `max` over-thinks + self-correction/re-verification loops; medium/low are
-#      STRONGER than on 4.8. Our global default:max is WRONG-SIGNED for Opus 5.
+#   4. ✅ DONE 2026-08-01 (cb7f8e3fa) — RE-SWEEP effort (see effort_defaults § opus5): Opus 5's
+#      own default is `high`, NOT max — `max` over-thinks + self-correction/re-verification
+#      loops; medium/low are STRONGER than on 4.8. Our global default:max WAS WRONG-SIGNED for
+#      Opus 5. cb7f8e3fa flipped effort_defaults.default max→high AND settings_floor xhigh→high
+#      AND wired bin/cc-route's lead/fallback slots through a new ssot_effort() (they hardcoded
+#      eff=max, so the SSOT was documentation, not an input). Leave this step's TEXT intact —
+#      only the ✅ is new. Why the marker matters: an unmarked done step reads as an open
+#      to-do, and this one MINTED A FALSE BACKLOG ITEM — 80e6637dfd9e ("default:max is stale
+#      … so the SSOT tells readers max while claude() passes high") was filed 2026-08-09, EIGHT
+#      DAYS after its own cure landed, and dispatched a worker to re-derive a fix already on
+#      trunk. Mark a checklist step the moment it executes; the cost of not doing so is a
+#      diff that reverts trunk (cc-backlog 6110fc45141e is the same class).
 #   5. re-run claude-lint-models; spot-check one teammate's live model (silent-demotion).
 # Until then: Opus 5 IS usable via explicit non-auto `--model claude-opus-5` sessions and
 # the API directly; the frontier tier (Fable 5) and all Fable roles are UNCHANGED.
@@ -395,7 +404,11 @@ effort_defaults:
   # are STRONGER on Opus 5 than any prior Opus. Lowering effort does NOT reliably shorten the
   # VISIBLE response — prompt for concision explicitly. ⇒ when opus_latest becomes the active
   # model, RE-SWEEP effort_defaults.default (max is wrong-signed for Opus 5) per docs/research/
-  # OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md. Starting points:
+  # OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md.
+  # ✅ THAT RE-SWEEP IS DONE — 2026-08-01, cb7f8e3fa: `default` is `high` (see the key above,
+  # which carries the full rationale + the model-scoped Opus-4.8 certification kept as history).
+  # This directive is retained as the RATIONALE for the current value, NOT as an open action.
+  # Starting points:
   opus5_default: high                       # coding / agentic / lead — Opus 5's own API default
   opus5_capability_sensitive: xhigh         # hardest long-horizon agentic (set max_tokens ≥64k)
   opus5_coding_agentic: medium              # FrontierCode peaks here; test medium vs high per task
