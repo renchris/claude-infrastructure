@@ -279,6 +279,57 @@ sent_count() { if [ -f "$IT2_LOG" ]; then grep -c '^SEND' "$IT2_LOG"; else echo 
   [ "$status" -eq 3 ]
 }
 
+# ── EMPTY POSITIONAL TARGET ≠ UNKNOWN TARGET (2026-08-10, backlog 08ba1e3dccc2) ───────────────────
+# `cc-notify "$(cat ~/.claude/cc-roles/desk)" "<msg>"` is the sanctioned back-channel form, and when
+# the role is unset the substitution collapses the address to "" in the CALLER's shell. That empty
+# string used to reach the registry resolver, miss (an empty name can only ever miss), and come back
+# as reason=no-such-target + "the registry … holds no live session by that name … try: cc-notify
+# --list" — a true statement about the wrong subsystem, which is how a worker completion rotted into
+# inbox-guard/390.escalated with nobody able to name the cause.
+@test "an EMPTY positional target reports reason=empty-target, NOT a registry miss" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  run "$NOTIFY" "$(cat "$CC_ROLES_DIR/desk" 2>/dev/null)" "worker completion report"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"reason=empty-target"* ]] || false
+  [[ "$output" == *"enqueued=0"* ]] || false
+  # The misdiagnosis this test exists to keep out: the registry is not the fault and must not be blamed.
+  [[ "$output" != *"reason=no-such-target"* ]] || false
+  [[ "$output" != *"try: cc-notify --list"* ]] || false
+  [ -z "$(ls -A "$CC_MAILBOX_DIR")" ]
+}
+
+@test "the empty-target diagnostic names the role file as the producer and --role as the cure" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  run "$NOTIFY" "" "x"
+  [[ "$output" == *"$CC_ROLES_DIR/<role>"* ]] || false          # where the empty address came from
+  [[ "$output" == *"cc-notify --role <name>"* ]] || false        # the form that self-diagnoses instead
+}
+
+@test "the empty-target diagnostic lists the roles that ARE set (and says so when none are)" {
+  export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"; mkdir -p "$CC_ROLES_DIR"
+  run "$NOTIFY" "" "x"
+  [[ "$output" == *"NO role is set"* ]] || false                 # desk unset AND nothing else set
+  printf '%s\n' "$UUID" > "$CC_ROLES_DIR/orchestrator"           # one role set, desk still unset
+  : > "$CC_ROLES_DIR/operator"                                   # empty → unset to the resolver
+  printf '   \n'      > "$CC_ROLES_DIR/scribe"                   # whitespace-only → also unset
+  run "$NOTIFY" "" "x"
+  [[ "$output" == *"roles that ARE set"* ]] || false
+  [[ "$output" == *"orchestrator"* ]] || false
+  # role_uuid is the arbiter, so an empty/whitespace-only file must NOT be advertised as addressable.
+  [[ "$output" != *"operator"* ]] || false
+  [[ "$output" != *"scribe"* ]] || false
+}
+
+# THE CONTROL for the partition above: a non-empty unknown target must still be no-such-target. This
+# is the case payload-lint.sh:63 and handoff-fire.sh:6295 document by name (`cc-notify 776 …`), so an
+# empty-target arm wide enough to swallow it would break both of those contracts silently.
+@test "a NON-empty unknown target still reports no-such-target (empty-target did not widen)" {
+  run "$NOTIFY" 776 "x"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"reason=no-such-target"* ]] || false
+  [[ "$output" != *"reason=empty-target"* ]] || false
+}
+
 @test "a send to a pane with a .forward lands in the SUCCESSOR's box, not the dead one" {
   local DEAD="DEADBEEF-1111-2222-3333-444444444444"
   printf '%s\n' "$UUID" > "$CC_MAILBOX_DIR/$DEAD.forward"    # DEAD self-closed → UUID (live) continues

@@ -697,6 +697,50 @@ if [ -n "$ROLE" ]; then
 elif [ "$ROLE_GIVEN" = 1 ]; then
   echo "cc-notify: --role needs a role name (e.g. --role desk)" >&2; usage >&2; exit 2
 else
+  # EMPTY POSITIONAL TARGET is its own failure, never "unknown target" (2026-08-10, backlog 08ba1e3dccc2).
+  # `cc-notify "$(cat ~/.claude/cc-roles/desk)" "<msg>"` is THE sanctioned back-channel form: cc-dispatch
+  # briefs every worker with it, payload-lint accepts it as role-indirection, and handoff-fire prescribes
+  # it in its own fix-the-payload message. When the role is UNSET, `cat` yields nothing and the address is
+  # gone before cc-notify is even entered — the whole target collapses to "". That empty string then went
+  # to the registry resolver, missed (an empty name can only ever miss), and was reported as
+  # `reason=no-such-target … the registry is readable and holds no live session by that name … try:
+  # cc-notify --list`. Every word of that is about the REGISTRY, and the registry is not the fault — the
+  # role file is. `--list` can never explain that cc-roles/<role> is empty, so an automated page died
+  # pointing its reader at the wrong subsystem, which is how a worker completion rotted into
+  # inbox-guard/390.escalated with nobody able to name the cause (memory: lookup-miss-is-not-absence ·
+  # wrong-cause-corroborated-by-true-metric). A lookup MISS and an address that was never supplied are
+  # different failures, and only the second is cured by setting a role.
+  #
+  # verdict + rc are DELIBERATELY UNCHANGED (unresolvable / 3): consumers partition on those two
+  # (cc-reaper + lead-supervisor's REACHED/RECORDED/REFUSED), and nothing outside this file and its own
+  # suite parses `reason=`. Only the reason token and the prose become truthful. A NON-empty unknown
+  # target still yields no-such-target — the case payload-lint.sh:63 and handoff-fire.sh:6295 document.
+  if [ -z "$TARGET" ]; then
+    verdict unresolvable reason=empty-target "target="
+    echo "cc-notify: the target is EMPTY — nothing was addressed, so nothing was enqueued." >&2
+    echo "  An empty address is what \`cc-notify \"\$(cat $ROLES_DIR/<role>)\" …\` produces when that role" >&2
+    echo "  is UNSET: the command substitution yields nothing and the address is gone before this point." >&2
+    echo "  This is NOT a registry miss — do not go looking for it in cc-notify --list." >&2
+    # Which roles ARE addressable — arbitrated by role_uuid itself rather than a second copy of its
+    # predicate, so a whitespace-only file reads unset here exactly as it does to the resolver
+    # (memory: make-the-actuator-the-arbiter).
+    _rset=""
+    if [ -d "$ROLES_DIR" ]; then
+      for _rf in "$ROLES_DIR"/*; do
+        [ -f "$_rf" ] || continue
+        _rn="$(basename "$_rf")"
+        role_uuid "$_rn" >/dev/null 2>&1 && _rset="${_rset:+$_rset }$_rn"
+      done
+    fi
+    if [ -n "$_rset" ]; then
+      echo "  roles that ARE set in $ROLES_DIR: $_rset" >&2
+    else
+      echo "  NO role is set in $ROLES_DIR — there is no role address to reach at all." >&2
+    fi
+    echo "  Address the ROLE, not its contents: \`cc-notify --role <name> …\` resolves at SEND time and" >&2
+    echo "  reports reason=role-unset when the role is empty, instead of collapsing to an empty address." >&2
+    exit 3
+  fi
   uuid="$(resolve "$TARGET")"; _rrc=$?
   case "$_rrc" in
     0) : ;;
