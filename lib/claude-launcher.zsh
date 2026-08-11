@@ -28,12 +28,20 @@
 #
 # Kill switch: CC_CLAUDE_ROUTE=off restores byte-identical pinned behaviour.
 
-# The generated account-name -> config-dir map (SSOT: accounts.json). Sourced lazily and guarded:
-# routing is a convenience, and a missing map must degrade to the pinned default, never to an error.
+# The generated account-name -> config-dir map (SSOT: accounts.json). Guarded: routing is a
+# convenience, and a missing map must degrade to the pinned default, never to an error.
+#
+# RE-SOURCED AT USE TIME, never cached for the life of the shell. The map is a projection of the
+# SSOT and the SSOT changes: a pane that routed once would otherwise hold that snapshot for days,
+# so regenerating the map (adding, removing or re-homing an account) would reach NEW SHELLS ONLY.
+# A *removed* account is the bad case — the router may still name it, the stale in-memory map still
+# declares a dir, the dir still exists, and the launch lands on a decommissioned account with no
+# warning. Same shape as ~/.zshrc's `_cc_lib` (re-source, then ask whether the function is really in
+# scope), inlined rather than called so this lib carries no dependency on an untracked rc function.
+# Fail-open like _cc_lib: an unreadable file with the function already in scope is still usable.
 _cc_launcher_map() {
-  (( ${+functions[cc_acct_dir_for_name]} )) && return 0
-  [[ -r "$HOME/.claude/lib/account-map.generated.sh" ]] || return 1
-  source "$HOME/.claude/lib/account-map.generated.sh" 2>/dev/null || return 1
+  [[ -r "$HOME/.claude/lib/account-map.generated.sh" ]] &&
+    source "$HOME/.claude/lib/account-map.generated.sh" 2>/dev/null
   (( ${+functions[cc_acct_dir_for_name]} ))
 }
 
