@@ -188,7 +188,16 @@ disp() { tail -1 "$C/idl.jsonl" | jq -r '.disposition'; }
   # rename there goes red HERE instead of silently un-exempting the desk — the failure mode is a
   # worktree leaked per respawn, which no other assertion in this suite can see.
   grep -q -- '--in-place)    IN_PLACE=1;' "$REPO/scripts/handoff-fire.sh"
-  grep -qF 'PREFIX="CLAUDE_ISOLATION_SKIP=1 "' "$REPO/scripts/handoff-fire.sh"
+  # THE SPAN IS THE TOKEN IN ITS OWN BRANCH, NOT THE WHOLE PREFIX STRING (2026-08-11). This was an
+  # exact-literal `PREFIX="CLAUDE_ISOLATION_SKIP=1 "`, so it went red the moment 088875158 added a
+  # legitimate CO-TENANT to the same prefix (`CC_ACCOUNT_PINNED=1`, pinning the account by env rather
+  # than by launcher name). Nothing about the exemption changed; the assertion simply spanned more
+  # than its subject, and a trunk red that indicts no diff blocks EVERY lander in this repo — one
+  # took the whole gate red four commits later, for a diff that touched no isolation line at all.
+  # Anchored on the IN_PLACE branch and the token, so a RENAME or a DELETED branch — the failure this
+  # test exists to catch — still reds here, while a new co-tenant does not.
+  grep -qE '^\[ "\$IN_PLACE" = 1 \] && PREFIX=".*CLAUDE_ISOLATION_SKIP=1 ?"' \
+    "$REPO/scripts/handoff-fire.sh"
 }
 
 @test "isolation: CANNED_CWD still defaults to the shared root and is still overridable" {
