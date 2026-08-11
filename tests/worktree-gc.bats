@@ -52,6 +52,12 @@ setup() {
   # Ownership oracle 3 — explicit dispose warrants. ABSENT by default (not merely empty), so the
   # no-warrant KEEP is the resting state and no test disposes on a warrant it did not write.
   WTS="$BATS_TEST_TMPDIR/warrants.tsv"
+
+  # THE KILL SWITCH IS AMBIENT BY DESIGN — an operator who has disabled the reaper has it exported
+  # in the shell they run this suite from, and every test below would then pass VACUOUSLY against a
+  # janitor that exits at line 1. Unset it here so each test states its own switch position. The
+  # FILE half needs no unsetting: its default resolves under the fixtured $HOME set above.
+  unset CC_WTGC_DISABLE CC_WTGC_DISABLE_FILE
 }
 
 # team <dir> <member> — record a team at <dir> (relative to TEAMS) whose roster names <member>.
@@ -201,6 +207,95 @@ has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
   [ -d "$p" ]
   has_br feat/dry
   echo "$output" | grep -q "would remove"
+}
+
+# ── The kill switch (AC-7). Every case below is paired with an act-rule, because a switch is one
+#    `exit 0` away from being indistinguishable from a janitor that simply never works.
+#    The switch's promise is INERTNESS, so the assertions are about what did NOT happen: no removal,
+#    no lock, no warrant record, and — the one that pins the placement rather than the behaviour —
+#    no git call at all.
+
+@test "KILL SWITCH: CC_WTGC_DISABLE=1 removes nothing, calls git ZERO times, exits 0" {
+  p="$(wt wt-kill feat/kill)"
+  GITARGV="$BATS_TEST_TMPDIR/git.argv"
+  GSHIM="$BATS_TEST_TMPDIR/gitshim"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %s\nexec /usr/bin/env git "$@"\n' "$GITARGV" > "$GSHIM"
+  chmod +x "$GSHIM"
+  CC_WTGC_DISABLE=1 CC_WTGC_GIT="$GSHIM" run_gc --prune-branches --dispose-abandoned
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled env=CC_WTGC_DISABLE'
+  [ -d "$p" ]                 # the baseline REMOVE candidate is untouched
+  has_br feat/kill
+  [ ! -f "$GITARGV" ]         # never shelled out — the switch sits above the config block
+  [ ! -d "$LOCK" ]            # and above the mutex, so it takes no lock either
+}
+
+@test "KILL SWITCH RED-PROOF: CC_WTGC_DISABLE=0 is ENABLED — the same worktree IS removed" {
+  # The paired act-rule AND the value-semantics discriminator in one: a switch that read every
+  # setting as "disabled" would pass the test above while being a permanently broken janitor.
+  p="$(wt wt-kill feat/kill)"
+  CC_WTGC_DISABLE=0 run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  ! echo "$output" | grep -q 'verdict=disabled' || false
+}
+
+@test "KILL SWITCH: the FILE at its default path disables a run that exports nothing" {
+  # The property launchd depends on: a scheduled job inherits no shell environment, so the env var
+  # alone could never reach the 04:15 sweep. $HOME is fixtured, so this is the real default path.
+  p="$(wt wt-killf feat/killf)"
+  mkdir -p "$HOME/.claude/autonomy"
+  : > "$HOME/.claude/autonomy/worktree-gc.disabled"
+  run_gc
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "verdict=disabled file=$HOME/.claude/autonomy/worktree-gc.disabled"
+  [ -d "$p" ]
+  # …and removing the file re-enables it (the act-rule — the switch is not a one-way latch).
+  rm -f "$HOME/.claude/autonomy/worktree-gc.disabled"
+  run_gc
+  [ ! -d "$p" ]
+}
+
+@test "KILL SWITCH: CC_WTGC_DISABLE_FILE= (explicitly empty) ignores the file half" {
+  # The documented one-invocation bypass. Without it an operator cannot even look, because the
+  # switch deliberately gates --dry-run too.
+  p="$(wt wt-killb feat/killb)"
+  mkdir -p "$HOME/.claude/autonomy"
+  : > "$HOME/.claude/autonomy/worktree-gc.disabled"
+  # `=''` not `=` — the empty value is the POINT here (the script's `${VAR-default}` treats set-
+  # but-empty as "no file switch"), and the bare form is indistinguishable from a typo to a reader
+  # and to shellcheck (SC1007).
+  CC_WTGC_DISABLE=0 CC_WTGC_DISABLE_FILE='' run_gc --dry-run
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]                                   # --dry-run still removes nothing
+  echo "$output" | grep -q "would remove"       # but it DID run — the bypass reached the plan
+}
+
+@test "KILL SWITCH gates the WARRANT WRITER — the mutation that lives above the mutex" {
+  # --warrant appends a TSV record and exits before the lock and before every gate, so a switch
+  # placed at the sweep would have let a disabled janitor keep writing dispose authorisations.
+  p="$(abandoned_wt wt-killw feat/killw)"
+  CC_WTGC_DISABLE=1 run_gc --warrant "$p" --reason "kill-switch test"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled'
+  [ ! -f "$WTS" ]
+  # Act-rule: the same command with the switch off DOES write the record.
+  run_gc --warrant "$p" --reason "kill-switch test"
+  [ "$status" -eq 0 ]
+  grep -q "kill-switch test" "$WTS"
+}
+
+@test "KILL SWITCH is above the repo resolution — it works where the janitor cannot even start" {
+  # Pins the PLACEMENT, not the behaviour: outside a repo the config block exits 2 ("not inside a
+  # git repository"). Disabled must mean nothing happened, never a different refusal.
+  NOTREPO="$BATS_TEST_TMPDIR/notrepo"; mkdir -p "$NOTREPO"
+  run env CC_WTGC_REPO="$NOTREPO" CC_WTGC_DISABLE=1 bash "$GC"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'verdict=disabled'
+  # Act-rule: the same invocation without the switch is the exit-2 refusal.
+  run env CC_WTGC_REPO="$NOTREPO" bash "$GC"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'not inside a git repository'
 }
 
 @test "--prune-branches deletes a landed, worktree-less branch with -d" {

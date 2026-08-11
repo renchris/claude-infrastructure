@@ -186,6 +186,51 @@ field() { # <key> → the value from the verdict line
   [ "$(field verdict)" = "error" ]
 }
 
+@test "the JANITOR's own kill switch is a disabled row here, never the parse error above it" {
+  # worktree-gc.sh gained CC_WTGC_DISABLE, and a disabled janitor exits 0 printing no summary —
+  # which is exactly the shape the test above files as `error`. Without this arm, an operator who
+  # used the janitor's switch would be paged by the cron every night for having used it.
+  stub_gc 0 'worktree-gc: verdict=disabled env=CC_WTGC_DISABLE — nothing inspected, nothing mutated.'
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "disabled" ]
+  [ "$(field switch)" = "janitor" ]
+  grep -q 'env=CC_WTGC_DISABLE' "$LAST"
+}
+
+@test "the janitor's FILE switch reaches the same row, carrying which switch fired" {
+  stub_gc 0 'worktree-gc: verdict=disabled file=/x/worktree-gc.disabled — nothing inspected, nothing mutated.'
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "disabled" ]
+  grep -q 'file=/x/worktree-gc.disabled' "$LAST"
+}
+
+@test "CONTRACT: the disabled arm matches what the REAL janitor prints, not a hand-written guess" {
+  # L1 stubs the janitor everywhere — which means the ONLY thing joining these two files is a
+  # string literal, and a typo on either side leaves BOTH suites green while the nightly row reads
+  # `error` (second-transport / ambient-E2E: an arm nothing exercises end-to-end). So replay the
+  # REAL artifact. The janitor's disabled path is the one path that is safe to run for real here:
+  # it exits 0 above its first git call, so it can touch no repo, no lock and no worktree — which
+  # is the property under test, asserted by running it rather than by trusting it.
+  real="$(CC_WTGC_DISABLE=1 bash "$REPO_ROOT/scripts/worktree-gc.sh" 2>&1 | head -1)"
+  printf '%s\n' "$real" | grep -q 'verdict=disabled'
+  stub_gc 0 "$real"
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "disabled" ]
+  [ "$(field switch)" = "janitor" ]
+}
+
+@test "RED-PROOF: the disabled arm keys on the TOKEN, not on the word 'disabled' anywhere in output" {
+  # A janitor that merely MENTIONS the word — a KEEP reason, a future message — must still be an
+  # error when it printed no summary. The arm greps an anchored `worktree-gc: verdict=disabled`.
+  stub_gc 0 'worktree-gc: KEEP wt-x (owner disabled the team)'
+  run bash "$SUT"
+  [ "$status" -eq 1 ]
+  [ "$(field verdict)" = "error" ]
+}
+
 @test "the janitor's REFUSAL (rc 3, no liveness oracle) surfaces as verdict=blind" {
   stub_gc 3 'worktree-gc: no liveness oracle available'
   run bash "$SUT"
