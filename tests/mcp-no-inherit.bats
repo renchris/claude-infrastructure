@@ -174,6 +174,7 @@ proj,server,log=sys.argv[1],sys.argv[2],sys.argv[3]
 json.dump({"mcpServers":{"w3probe":{"command":"python3","args":[server,log,"bats"]}}},
           open(proj+"/.mcp.json","w"),indent=2)
 PY
+  # shellcheck disable=SC2086  # $extra is raw flag TEXT ("" or "--strict-mcp-config") and MUST word-split
   ( cd "$proj" && CLAUDE_CONFIG_DIR="$CC_MCP_PROBE_CFG" timeout 180 "$CC_MCP_PROBE_BIN" \
       -p 'x' $extra --output-format json </dev/null >/dev/null 2>&1 || true )
   # Attribute by the recorded PARENT COMMAND, never by a bare count: a SessionStart hook in this
