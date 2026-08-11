@@ -27,6 +27,15 @@
 #   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
 #                                                                  condition group (the lease's
 #                                                                  population); --force to re-key
+#   falsify <id> --probe "<cmd>" [--force] [--no-run]            → attach a re-run check to an
+#                                                                  EXISTING row. `add --falsifier`
+#                                                                  CANNOT: add returns early on a
+#                                                                  known id, so it is a silent
+#                                                                  no-op there. The probe is RUN
+#                                                                  before it is stored, and one
+#                                                                  that exits 0 against a live row
+#                                                                  is REFUSED (rc 5) — exit 0 is
+#                                                                  the RETRACTING direction.
 #   dups    [--project P] [--json] [--mode dodref|title|family|all]
 #                                                                → REPORT candidate duplicate rows.
 #                                                                  THREE keys, because a dodRef-less
@@ -1343,11 +1352,29 @@ cmd_transition() {
       if [ -x "$pbin" ]; then
         pout="$("$pbin" check "$id" 2>&1)"; prc=$?
         if [ "$prc" -eq 3 ]; then
-          # `verdict=premise-refuted` rides LINE 1: rc 4 now has FOUR causes and cc-dispatch can
-          # only see this through `claim_excerpt` (head -1, 200 chars). It discriminates POSITIVELY
-          # on each skip-worthy token, so a missing token degrades to the lease's FAILED path — the
-          # incumbent behaviour, never a new hole (memory: new-enum-member-falls-into-fail-closed).
-          { printf 'cc-backlog claim: REFUSED verdict=premise-refuted — %s\n' "$id"
+          # WHICH SIGNAL REFUTED IT, carried onto line 1 beside the verdict. cc-dispatch's IDL row
+          # is built from `claim_excerpt` (head -1, 200 chars), so before this every refusal read
+          # `premise refuted` and NOTHING ELSE — a row could not be told apart from the next one.
+          # That blindness is exactly what made "are any of these refusals a re-run?" unanswerable
+          # from the store: measured 2026-08-11, all 74 rows were indistinguishable, so the only way
+          # to know was to re-run cc-premise by hand and read its prose. `signal=falsified` says a
+          # probe was EXECUTED just now and returned "the condition is gone"; `signal=superseded`
+          # and `signal=self-duplicate` say another item's filing-time PROSE declared it obsolete.
+          # Same facts, now legible without re-deriving them (memory: claimed-outcome-vs-checked).
+          #
+          # PARSED BY THE TOKEN, NOT BY POSITION, and that is not fussiness. cc-premise writes
+          # `verdict=` to STDOUT and its contract to STDERR; `2>&1` merges them, and stdout is
+          # block-buffered when captured while stderr is not — so the verdict lands LAST here, not
+          # first. A `sed -n 1p` would have read the contract header and reported `unknown` on every
+          # refusal, silently (memory: read-the-diff-not-the-commit-subject: read what the mechanism
+          # emits, never where you expect it). Unparseable ⇒ `unknown`, never a guess.
+          local psignal
+          psignal="$(printf '%s\n' "$pout" | sed -n 's/^verdict=\(.*\)$/\1/p' | tail -1)"
+          # Appended AFTER the existing token, never in place of it: cc-dispatch:1445 discriminates
+          # with `${cexc#*verdict=premise-refuted}`, a substring test that an appended field cannot
+          # break and a replaced one would.
+          { printf 'cc-backlog claim: REFUSED verdict=premise-refuted signal=%s — %s\n' \
+              "${psignal:-unknown}" "$id"
             printf '%s\n' "$pout" | sed 's/^/  /'
             printf '  This item was not refused for being in progress or finished — its PREMISE no\n'
             printf '  longer holds. THE DISPROOF IS THE DELIVERABLE: file it (cc-backlog add, naming\n'
@@ -1727,6 +1754,128 @@ cmd_link() {
      --argjson force "$force" \
      '{id:$id, ts:$ts, event:"link", condition:$condition}
       + (if $force == 1 then {force:true} else {} end)' >> "$BACKLOG"
+  echo "$id"
+}
+
+# cmd_falsify <id> --probe "<sh one-liner>" [--force] [--no-run]
+#   ATTACH a re-run check to an item that ALREADY EXISTS. rc 0 ok · 2 usage · 3 unknown id
+#   · 4 terminal item · 5 the probe says the item is already dead (see THE EXIT-0 REFUSAL).
+#
+# WHY THIS VERB HAD TO EXIST AT ALL, and it is not a convenience. `add --falsifier` can only ever
+# attach a probe to a row it is CREATING: cmd_add resolves the id, hits `has_id`, and returns the id
+# with rc 0 *before* it writes anything — the idempotency contract cc-discover depends on. So an
+# `add --falsifier` aimed at an existing row is a silent, rc-0, no-op. That is why a7bf7068 could
+# make the four generators emit probes GOING FORWARD and still leave the ~450 rows already in the
+# store permanently uncovered: there was no writer that could reach them. Measured 2026-08-11 before
+# this verb landed — 461 open rows, 6 carrying a probe, 1.3%.
+#
+# THE RECORD IS EVENT-AGNOSTIC ON PURPOSE. It writes `event:"falsify"` and NO status field, and both
+# readers already fold it correctly without being taught the new member: `fold` above carries status
+# through its `else ($p.status // "open")` arm, and cc-premise's build_index keys the falsifier on
+# `if r.get("falsifier")` over ALL records rather than on an event whitelist. That is the whole
+# reason a new event is safe here — a member that lands in someone's `*)` arm is the recurring defect
+# (memory: new-enum-member-falls-into-fail-closed-default), so the member was chosen to land in the
+# CARRY-FORWARD arm of every existing fold instead.
+#
+# LAST-WRITE-WINS, matching both folds: re-falsifying an item CORRECTS its probe. A falsifier is not
+# history, it is the current way to ask whether the condition still holds.
+#
+# THE EXIT-0 REFUSAL — the guard that makes storing self-verifying, and the reason this verb RUNS
+# the probe before it stores it. run_falsifier's contract is deliberately asymmetric: non-zero is
+# advisory (the item proceeds), exit 0 RETRACTS. So a probe that is merely wrong-and-useless costs
+# nothing, and a probe that exits 0 for the wrong reason silently retires live work — one direction
+# is free, the other is the only way this mechanism can do harm. Storing a probe that exits 0 RIGHT
+# NOW, against a row that is still open, is therefore refused: either the probe is ambiguous (the
+# `deploy-live.sh --dry-run` shape — 0 for "resolved" AND 0 for "nothing to do"), or the item is
+# genuinely already finished, and the correct write for that is `done --evidence`, not a probe that
+# will retract it on someone else's claim. --force stores it anyway and says so.
+#
+# A probe we could NOT run (no timeout binary, the bound expired, an unreadable repo) is stored with
+# a WARNING rather than refused — identical to run_falsifier's own fail-open, and for the same
+# reason: "I could not ask" must never read as "the answer was no".
+cmd_falsify() {
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local probe="" force=0 norun=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --probe|--falsifier) shift; probe="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --force)  force=1; shift ;;
+      # --no-run stores WITHOUT the exit-0 screen. For a suite pinning the write path, and for a
+      # probe whose subject is legitimately unavailable at write time (a daemon that is down now).
+      --no-run) norun=1; shift ;;
+      *) printf 'cc-backlog falsify: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ]    || { printf 'cc-backlog falsify: <id> is required\n' >&2; return 2; }
+  [ -n "$probe" ] || {
+    { printf 'cc-backlog falsify: --probe "<sh one-liner>" is required\n'
+      printf '  usage: cc-backlog falsify <id> --probe "<cmd>" [--force] [--no-run]\n'
+      printf '  The probe answers ONE question: is the condition this item was filed for GONE?\n'
+      printf '    exit 0    ⇒ GONE. This RETRACTS the item at claim time.\n'
+      printf '    non-zero  ⇒ still live. Advisory only; its output rides the claim contract.\n'
+      printf '  It must have EXACTLY ONE success state and test the MECHANISM, not a symptom\n'
+      printf '  downstream of it. Where a check cannot tell "resolved" from "not applicable",\n'
+      printf '  store NOTHING — an absent falsifier is honest, an ambiguous one lies.\n'
+    } >&2
+    return 2
+  }
+  ensure_file
+  has_id "$id" || { printf 'cc-backlog falsify: unknown id %s\n' "$id" >&2; return 3; }
+
+  local cur status
+  cur="$(item_json "$id")"
+  status="$(printf '%s' "$cur" | jq -r '.status // ""' 2>/dev/null)"
+  if [ "$status" = "done" ]; then
+    { printf 'cc-backlog falsify: REFUSED — %s is DONE; a probe on terminal work can never fire.\n' "$id"
+      printf '  cc-premise only re-runs a falsifier on the claim path, which a done item never\n'
+      printf '  reaches. If this work regressed:  cc-backlog reopen %s --force\n' "$id"
+    } >&2
+    return 4
+  fi
+
+  # THE SCREEN. Bounded exactly as run_falsifier bounds it (same default, same env override), and
+  # resolved the same way cc-type-verified.sh resolves it — a `timeout` that is not on PATH under
+  # launchd must degrade to "could not ask", never to an unbounded probe holding this verb open.
+  local rc="" to=""
+  if [ "$norun" -eq 0 ]; then
+    local c
+    for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+             /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+      [ -n "$c" ] && [ -x "$c" ] && { to="$c"; break; }
+    done
+    if [ -n "$to" ]; then
+      local root; root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+      ( cd "$root" 2>/dev/null && "$to" "${CC_PREMISE_FALSIFIER_TIMEOUT:-20}" /bin/sh -c "$probe" ) \
+        >/dev/null 2>&1
+      rc=$?
+      # 124 is the bound expiring, not a verdict — the probe never answered.
+      [ "$rc" -eq 124 ] && rc=""
+    fi
+  fi
+
+  if [ -n "$rc" ] && [ "$rc" -eq 0 ] && [ "$force" -eq 0 ]; then
+    { printf 'cc-backlog falsify: REFUSED — this probe exits 0 RIGHT NOW, against a %s item.\n' "$status"
+      printf '  id %s\n' "$id"
+      printf '  probe: %s\n' "$probe"
+      printf '  Exit 0 means "the condition is GONE", so stored as-is this would RETRACT the item on\n'
+      printf '  the next claim. Exactly one of two things is true, and neither is "store it":\n'
+      printf '    (a) the probe is AMBIGUOUS — it also exits 0 for "not applicable" / "no input" /\n'
+      printf '        "nothing to do". Narrow it until exit 0 has one meaning, or store nothing.\n'
+      printf '    (b) the item is genuinely already finished. Then CLOSE it, do not probe it:\n'
+      printf '        cc-backlog done %s --evidence "<what resolved it>"\n' "$id"
+      printf '  To store it deliberately anyway:  cc-backlog falsify %s --probe ... --force\n' "$id"
+    } >&2
+    return 5
+  fi
+
+  jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg probe "$probe" \
+     '{id:$id, ts:$ts, event:"falsify", falsifier:$probe}' >> "$BACKLOG"
+
+  if [ -z "$rc" ] && [ "$norun" -eq 0 ]; then
+    printf 'cc-backlog falsify: WARNING — stored WITHOUT screening; the probe could not be run\n' >&2
+    printf '  (%s). "Could not ask" is not "the answer was no" — read it yourself before trusting it.\n' \
+      "$([ -n "$to" ] && printf 'bound expired' || printf 'no timeout binary resolvable')" >&2
+  fi
   echo "$id"
 }
 
@@ -3358,6 +3507,10 @@ case "${1:-}" in
   # dispatchable — and a kick would in fact be backwards here: the whole point of a link is to make
   # ONE of the joined rows undispatchable. `dups` is a pure read.
   link)    shift; cmd_link "$@" ;;
+  # NO dispatch_kick, same reasoning as `link`: a falsify record writes no status, so it cannot make
+  # an item newly dispatchable — and if anything it makes one LESS dispatchable, since the probe it
+  # attaches may retract the item on the very next claim.
+  falsify) shift; cmd_falsify "$@" ;;
   dups)    shift; cmd_dups "$@" ;;
   # `backfill --apply` writes only `link` records, via cmd_link — same reasoning as `link` above:
   # a link cannot make an item newly dispatchable, so a kick would be backwards.
