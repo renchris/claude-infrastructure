@@ -1657,6 +1657,23 @@ dispatch() { # <dry|run|decide>
       local pcontract="" pbin
       pbin="${CC_DISPATCH_PREMISE_BIN:-$(cd "$(dirname "$_self")" 2>/dev/null && pwd)/cc-premise}"
       [ -x "$pbin" ] && pcontract="$("$pbin" contract "$id" 2>/dev/null || true)"
+      # …and a SUPERSESSION finding is additionally PRINTED and JOURNALLED, unlike the rest of the
+      # contract. The brief alone is not enough for this one class: it says a sibling row may
+      # already hold this item's fix, i.e. that dispatching at all may have been the mistake — and
+      # the only reader who can act on THAT is whoever is watching the wave, who never sees the
+      # worker's prompt file. Journalled for the same reason the done-guard's skips are: an
+      # unrecorded near-miss cannot be counted later (backlog 0c5d47c863bf — the incident it was
+      # filed for cost a full worker session, and nothing in the store said so).
+      #
+      # NOT A SKIP. cc-dispatch keeps dispatching: supersession is a judgement the worker makes
+      # with the contract in hand, and retracting the item here would re-create the plan-open
+      # gate's failure mode on a heuristic that is right about 1 candidate in 2, not 1 in 1.
+      if [ -n "$pcontract" ] && [ "${pcontract#*POSSIBLE SUPERSESSION}" != "$pcontract" ]; then
+        local psup
+        psup="$(printf '%s\n' "$pcontract" | sed -n 's/.*\(POSSIBLE SUPERSESSION.*\)/\1/p' | head -1)"
+        echo "cc-dispatch: $id — possible supersession, dispatching WITH the contract: ${psup:-POSSIBLE SUPERSESSION}" >&2
+        idl note "$id: possible supersession — a sibling closed after this item was filed and its landed diff touched a file this item cites; the worker is briefed to adjudicate before working"
+      fi
       # The desk back-channel is briefed as `--role desk`, NOT `$(cat ~/.claude/cc-roles/desk)`
       # (2026-08-10, backlog 08ba1e3dccc2). Both are role-indirection and payload-lint accepts either,
       # but they fail DIFFERENTLY when the role is unset — which is its standing state here, since a
