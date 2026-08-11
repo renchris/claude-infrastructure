@@ -490,10 +490,31 @@ exists. 10 survive as genuine retractions.
 **6 belong to `bc0f2abe078b`, whose refusal came from a stored probe re-run**, verified by running
 `cc-premise check` on it and reading its own words — *"FALSIFIER PASSED … It exited 0 just now,
 against today's tree, not at filing time"*. The other 69 rows are the old declared-obsolescence path
-(`verdict=superseded`). That classification had to be re-derived by hand, item by item, because the
-row itself could not say which arm fired. **That is exactly what `signal=` removes**, and it is the
-more durable half of this change: `signal=falsified` means a probe executed just now,
-`signal=superseded` means another item's filing-time prose declared this one dead.
+(`verdict=superseded`). That classification had to be re-derived by hand, item by item, because those
+rows do not say which arm fired.
+
+⚠️ **CORRECTION — the sentence that used to stand here was wrong about the tree, and the mistake is
+the instructive part.** It read *"that is exactly what `signal=` removes"*, i.e. that this session
+first closed the gap. It did not. **`94b054d1` had already closed it**, on trunk, before this pass
+began: its `claim_excerpt` appends `· cause: <marker>` to the IDL row, discriminating **four** states
+(`FALSIFIER PASSED` · `DERIVED FALSIFIER` · `DECLARES ITSELF A DUPLICATE` · `SUPERSEDED BY`) — finer
+than the two-state `signal=` added here. Its commit subject even says so: *"the refusal row named the
+verdict and never the signal that produced it."*
+
+How the claim survived being written: `94b054d1` was **landed but not yet live** while the ledger was
+being measured. Every row examined at 09:08 came from the pre-`94b054d1` dispatcher and genuinely
+carried no cause; the first row with one appears at **13:16:06Z** (`bc0f2abe078b … · cause: FALSIFIER
+PASSED`). So the observation was true of the ROWS and false of the MECHANISM — and this plan's own
+brief compounded it by summarising `94b054d1` as the whitelist-fold fix alone. Reading a commit
+through someone's summary instead of its diff is the repo's own standing lesson
+(memory: `read-the-diff-not-the-commit-subject`), and it cost a duplicated mechanism here.
+
+What `signal=` is actually worth, stated at its real size: it is **not harmful** (`cause` is grepped
+from the whole stderr file, not from line 1, and line 1 runs ~80 of its 200-char bound, so nothing is
+truncated) and it is **narrower than advertised** — a complement for the DIRECT-caller path, where a
+worker or a human runs `cc-backlog claim` and no dispatcher is present to extract a cause. On the
+dispatcher path it is redundant with a better mechanism. The real deliverables of this session are
+`falsify` and `--clear`, not this.
 
 **THE FALSE RETRACTION, found by using the verb on the same day it landed.** `eef88daa030a`'s item is
 *"the deploy converger REFUSES every land, because no green tree descends from live HEAD"*. Its
