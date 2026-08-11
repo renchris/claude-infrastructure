@@ -53,6 +53,32 @@ proved only `rc=0 with no DB` and could not distinguish "failed to bootstrap" fr
 shard scope, and one more was retracted after verification, so the base rate of a raw finding being
 real is well under 100%.
 
+**Tests shard adjudicated (3 of the 8), 2026-08-11 — all three CONFIRMED, none disproved.** Backlog
+`9ea31151dd94`; landed `fe6540a6` · `28a8fba9` · `90f7be7e`. Each was adjudicated by running the
+pre-fix artifact on the failing input, per rule 2 below:
+
+| Lead | Pre-fix observed | Post-fix |
+|---|---|---|
+| `ship-land.sh` gated the .bats ratchet on `command -v shellcheck` | on a genuinely shellcheck-less PATH with a .bats-only diff: **`gate GREEN`, exit 0**, the word never printed | `⛔ … could not RUN (exit 2) — a NON-VERDICT`, exit 9 |
+| the two `tests/*redproof*` harnesses were a manual sidecar | outside their own bodies both names appear **only in comments and plan docs** — nothing ran either | `--check-anchors` on every `bats tests/*.bats`, + a glob CENSUS |
+| `alarm-polarity-lint.bats` positive control was history-derived | in a `--depth 1` clone: **`ok 1 POSITIVE CONTROL … # skip`** | baseline vendored + sha256-pinned; cannot skip |
+
+Two lessons the shard itself did not contain, both paid for at the land gate:
+
+- **A verifier fix is judged by the sibling verifiers.** The land gate refused this work twice on
+  grounds no local run had raised — an unpinned shape-5a seam in the new suite, and
+  `permission-gate-lint` going stale because rewriting two legs into the house's rc-capture form
+  moved them out of its `negated()` shape (`ship-land.sh` 17 → 15, the ratchet's *downward* half).
+  Neither is visible from the file you are editing.
+- **The trap in rule 1's own file bit twice.** A comment line beginning with the linter's name
+  parses as a malformed directive and silently stops analysis of the WHOLE file. It happened once in
+  `ship-land.sh` and once in `bats-shellcheck-lint.bats` — i.e. inside the suite whose entire job is
+  to ratchet that class. Run the lint over your own diff before believing a green.
+
+**Still open from the sweep:** `d96fe0f575d1` (scripts, 5) unverified; `5d6dcbe8d462` filed —
+`scripts/banner-gate-redproof.py` is the same unwired-red-proof class as the two fixed above
+(nightly's step-4 globs both end in `.sh`; it is a `.py`), deferred as banner-subsystem scope.
+
 ## The two rules that earned their keep
 
 1. **Fix the chokepoint, not just the subject.** `settings.json` invokes `curl-gate-scope.sh`, which
