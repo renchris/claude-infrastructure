@@ -127,6 +127,57 @@ condition. It **gates nothing**, so measurement (b)'s 98% false-positive rate co
 a report it is exactly the review queue where the duplicate is visible, and `link` is the one-line
 answer. The signal that was too weak to be a gate is strong enough to be a hint.
 
+### P5 — the key was a field most rows do not carry (2026-08-11, backlog `7ff1b6f5ddbb`)
+
+P1–P4 all work, and between them they still could not reach the population they were built for,
+because **both halves keyed on something optional**. Measured over the live ledger on 2026-08-11:
+
+- **`dups` was blind to 77% of live work.** 206 of 269 live rows carry no `dodRef` at all, so the
+  P4 detector's grouping key does not exist on them. The family this was filed about —
+  `memory-index-over-budget` — is entirely inside that blind spot.
+- **`link` fires only when a human notices.** SEVEN link records exist in the ledger's whole
+  history, six written inside eleven seconds on 2026-08-08T04:14 by one hand-driven sweep. Nothing
+  backfills, so a row filed before its family had a condition never joins it. `2b6cc6a5116a` was
+  dispatched 2026-08-08T04:08 — two days after the condition key landed — and joined by hand six
+  minutes later. That same family still had two live orphans nobody had linked (`cf6eb3e47b12`,
+  `152e9cacc8aa`), which is what this item found.
+
+`dups` therefore gained two more keys for the dodRef-less population, and `backfill` turns the
+second into the `link` it implies. **P4's conclusion is unchanged and is why `backfill` still asks:**
+it dry-runs by default and writes only under `--apply`, because a wrong join is strictly worse than
+a missed one — `link` feeds the P2 lease, so a false join REFUSES a live worker onto work that is
+not duplicated, and nothing downstream reports the move.
+
+**What the measurement changed about the design.** The obvious implementation — group dodRef-less
+rows by title similarity — was built and REJECTED against its own numbers. Two natural formulations
+both put the two *known* true positives at the corpus median:
+
+| signal | true positives | corpus p50 / p90 |
+|---|---|---|
+| IDF-weighted containment over all title words | 0.325 / 0.305 | 0.239 / 0.333 |
+| containment of the condition slug's own vocabulary | 0.442 / 0.442 | 0.424 / 0.591 |
+| **IDF-weighted containment over IDENTIFIERS only** | **0.659 / 0.456** | **0.080 / 0.264** |
+
+(The first two rows are the rejected prototypes; the third is what the shipped scorer prints, with
+its smoothed `log((N+1)/(df+0.5))` — the unsmoothed form returns 0 for a token every row carries,
+which is a rounding detail on the live ledger and a zeroed denominator on a 3-row fixture.)
+
+This ledger is one voice writing about one machine, so prose is shared by everything and cannot
+discriminate; what a row is *about* — `memory.md`, `cc-backlog`, `postland-verify.sh` — can. Two
+floors ship together (`shared >= 3`, `frac >= 0.40`) because the fraction alone is a
+small-denominator trap: three live rows scored a perfect 1.0 on ONE shared identifier each. Both
+floors together select, out of 182 live orphans, exactly the two true positives and nothing else.
+Both are flags, because these are thresholds over a living corpus (memory:
+`published-figure-decays-with-its-source`).
+
+**The second key reports zero live groups, and that is deliberate rather than inert.** Normalised-
+title identity targets the post-land scanner's `… @ <sha>` rows — 57 open on 2026-08-09 per sibling
+item `b0b83b6c5845`, down to 5 unrelated rows two days later. The population aged out between the
+filing and the fix (memory: `scan-revision-predates-the-fix`), so its ability to group is pinned on
+a fixture replaying that incident sha for sha, not on the live store. **The mint side of
+`b0b83b6c5845` — teaching `postland-verify.sh` to file with `--condition` — is NOT done here;** it
+belongs to M-landgate-2 and is what would make that key load-bearing again.
+
 ## Considered and rejected: filtering sibling-held rows at the PULL
 
 A sibling-held row is admitted, wave-planned, and only then refused at the claim, so it consumes one

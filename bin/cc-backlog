@@ -27,9 +27,15 @@
 #   link    <id> --condition <slug> [--force]                    → join an EXISTING row to a
 #                                                                  condition group (the lease's
 #                                                                  population); --force to re-key
-#   dups    [--project P] [--json]                               → REPORT candidate duplicate rows
-#                                                                  (same project+dodRef, live, not
-#                                                                  already linked). Gates nothing.
+#   dups    [--project P] [--json] [--mode dodref|title|family|all]
+#                                                                → REPORT candidate duplicate rows.
+#                                                                  THREE keys, because a dodRef-less
+#                                                                  family is invisible to the first
+#                                                                  (see DUP KEYS). Gates nothing.
+#   backfill [--project P] [--json] [--apply]                    → propose — or with --apply, write —
+#                                                                  the `link` that joins a pre-fix
+#                                                                  row to an EXISTING condition
+#                                                                  group (see BACKFILL)
 #   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER;
 #                                                                 refused while the incumbent is live
 #                                                                 (claimer OR its worktree, minus the
@@ -250,6 +256,87 @@
 # concurrent pass slips between the read and the append. `claim` already holds the fold one step
 # before the append (memory: make-the-actuator-the-arbiter, and cc-dispatch's own step 5a: "THE
 # ACTUATOR IS THE ARBITER … this caller must not re-implement").
+#
+# ── DUP KEYS + BACKFILL (2026-08-11, backlog 7ff1b6f5ddbb) ─────────────────────────────────────
+# The block above ships `dups` keyed on project+dodRef, and `link` as the verb that joins two rows.
+# Both work. Neither could reach the population that needed them most, for the same reason twice:
+# THE KEY IS A FIELD MOST ROWS DO NOT CARRY. Measured 2026-08-11 over the live ledger — 206 of 269
+# live rows carry NO dodRef at all, so `dups` was structurally blind to 77% of live work, and the
+# 187 dodRef-less claude-infrastructure rows include the exact family this item was filed about.
+#
+# And `link` only ever joined rows a HUMAN noticed: 7 link records exist in the ledger's whole
+# history, six of them written inside eleven seconds on 2026-08-08T04:14 by one hand-driven sweep.
+# `2b6cc6a5116a` was dispatched 2026-08-08T04:08 — two days after the condition key landed — and
+# joined by hand six minutes later. Nothing backfills, so every row filed before its family had a
+# condition stays outside the lease forever, and the lease governs a population of one per group
+# (verified: every live condition slug has exactly n=1).
+#
+# So `dups` gets two more keys for the dodRef-less population, and `backfill` turns the second one
+# into the `link` it implies. THE PRECISION OF EACH WAS MEASURED, not assumed — the ground truth is
+# `memory-index-over-budget`, a family of 8 rows joined by that 2026-08-08 hand sweep, which still
+# had TWO live orphans nobody linked (cf6eb3e47b12, 152e9cacc8aa).
+#
+# KEY 2 — `title`: NORMALISED-TITLE IDENTITY among dodRef-less live rows. Drop every token carrying
+# a DIGIT and compare what is left. This is `valid_condition`'s rule applied per token rather than
+# per slug, and that is the point: the header above establishes that a title re-keys itself when it
+# carries a measurement or a sha, so stripping exactly what a condition slug may not contain leaves
+# the condition-shaped skeleton of the title. Called, never restated (memory:
+# sibling-auditors-must-share-the-state-model). High precision by construction — the titles must be
+# word-for-word identical modulo their per-event tokens.
+#
+# IT HAS A SIBLING, AND THE OVERLAP IS DELIBERATE. scripts/backlog-consolidation-trigger.sh already
+# normalises shas and digits out of titles before grouping, and is already wired into
+# autonomy-sweep.sh. It is NOT the same question, and the difference is the threshold: it groups at
+# >= 5 rows, truncates the title to 90 chars, and FILES one condition-keyed "time to consolidate"
+# item — an alarm about a PILE. This key groups at >= 2 over the full title and hands the reader the
+# rows themselves, because the incident that earned the condition lease was a PAIR (97f16b6709fa /
+# 6078392359ac) and a threshold of 5 would never have seen it. Two readings of one shape, kept
+# cross-referenced here and there so the next reader does not re-derive either
+# (memory: inventory-before-building, sibling-auditors-must-share-the-state-model).
+#
+# THIS KEY REPORTS ZERO GROUPS ON TODAY'S LIVE LEDGER, AND THAT IS NOT INERTNESS. Its population is
+# the post-land scanner's, named by sibling item b0b83b6c5845: four rows for one dead leak, titles
+# identical but for a trailing `@ <sha>`, and 57 open rows carrying the shape on 2026-08-09. Two
+# days later that is down to 5 live sha-suffixed rows, all of them different work — the population
+# aged out between the filing and the fix (memory: scan-revision-predates-the-fix). A key that
+# cannot be shown to fire is indistinguishable from one that cannot fire at all, so its ability to
+# group is pinned on a FIXTURE replaying that incident's shape, not on the live store
+# (tests/cc-backlog-dups-family.bats).
+#
+# KEY 3 — `family`: does a dodRef-less, condition-LESS live row belong to a condition group that
+# ALREADY EXISTS? This is the one that fires today, and the one `backfill` acts on. Scoring is
+# IDF-weighted containment of the row's identifiers in the group's identifiers, over the whole
+# ledger as the document corpus.
+#
+# IDENTIFIERS, NOT WORDS — and this was measured twice wrong first. Two natural formulations both
+# put the two KNOWN true positives at the corpus MEDIAN, i.e. inside the noise:
+#     IDF-weighted containment over all title words   → 0.325 / 0.305   vs p50 0.239, p90 0.333
+#     containment of the SLUG's own vocabulary        → 0.442 / 0.442   vs p50 0.424, p75 0.591
+# A threshold catching either would have fired on 40–70 of 183 rows: an alarm over a third of the
+# ledger carries no bits (memory: alarm-polarity-and-attention-budget). The reason is that this
+# ledger is one voice writing about one machine, so PROSE is shared by everything and cannot
+# discriminate. What does discriminate is what a row is ABOUT — dotted filenames, hyphenated
+# compounds, slash paths (`memory.md`, `cc-backlog`, `postland-verify.sh`). Restricted to that token
+# space the same measure separates cleanly: 0.659 / 0.456 against p90 0.264, p95 0.338 — the numbers
+# the SHIPPED (smoothed) scorer prints, not the prototype's.
+#
+# TWO FLOORS, because the fraction alone is a small-denominator trap. Three rows scored a perfect
+# 1.0 on ONE shared identifier each (`per-member`, `handoff-fire`) — a fraction of a singleton is
+# not evidence. Requiring shared ≥ 3 AND frac ≥ 0.40 selects, out of 182 live orphans, exactly the
+# two true positives and nothing else. Both are flags (--min-shared / --min-frac), because these
+# are thresholds over a LIVING corpus and the numbers above have a half-life (memory:
+# published-figure-decays-with-its-source).
+#
+# COST, so nobody wires this where it does not belong: on the live 7.5k-record store the default
+# (all three keys) takes ~6.8 s against ~2.2 s for `--mode dodref` alone — the identifier scorer is
+# O(orphans x clusters). Fine for a human report or a 300 s sweep tick; NOT fine in a PreToolUse
+# hook or anything on the per-command path.
+#
+# STILL A REPORT, AND `backfill` STILL ASKS. The header above concludes "NO AUTOMATIC KEY IS SOUND"
+# and that survives here: 100% precision on one family is not 100% precision, and a wrong `link`
+# is strictly worse than a missed one — it feeds claim guard (6), which REFUSES dispatch, so a
+# false join parks real work with nothing downstream reporting the move. `backfill` therefore
+# DRY-RUNS by default and writes only under `--apply`.
 #
 # KICK ON WRITE (S5): a successful `add` fires ONE debounced, detached `cc-dispatch --decide` pass
 # so new work gets a decision in seconds instead of waiting out the launchd interval. Strictly
@@ -1626,18 +1713,67 @@ cmd_link() {
 # always fires carries no bits (memory: alarm-polarity-and-attention-budget). Rows that ALREADY
 # share a condition are excluded for the same reason: they are answered, and re-reporting an
 # answered group trains the reader to skip the list.
-cmd_dups() {
-  local project="" json=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --project) shift; project="${1:-}"; [ $# -gt 0 ] && shift ;;
-      --json)    json=1; shift ;;
-      *) printf 'cc-backlog dups: unknown arg %s\n' "$1" >&2; return 2 ;;
-    esac
-  done
-  ensure_file
-  local groups
-  groups="$(fold | jq -c --arg p "$project" '
+#
+# THREE KEYS since 2026-08-11 (backlog 7ff1b6f5ddbb, see DUP KEYS in the header). `dodref` is the
+# block above, unchanged. `title` and `family` exist because 206 of 269 live rows carry no dodRef,
+# so the block above could not see 77% of live work — including the family that earned this fix.
+# DEFAULT IS `all`: the complaint was blindness, and a second key hidden behind an opt-in flag ships
+# that blindness as the default path (memory: sensor-default-off-makes-blindness-the-shipping-path).
+
+# family_ids_jq — the token space and the score, shared verbatim by `dups --mode family` and
+# `backfill` so the report and the writer can never disagree about what a match IS
+# (memory: sibling-auditors-must-share-the-state-model, make-the-actuator-the-arbiter).
+#
+# IDF IS SMOOTHED — log((N+1)/(df+0.5)), not log(N/df). The unsmoothed form returns exactly 0 for a
+# token carried by EVERY row, which on the live ledger is a rounding detail and on a 3-row fixture
+# zeroes the denominator and drops every candidate. The suite would then pass while measuring
+# nothing (memory: verification-harness-vacuous-pass-traps).
+# shellcheck disable=SC2016  # the single quotes are the POINT: $all/$df/$N/$o/$ct are JQ variables,
+# and any bash expansion here would substitute them away before jq ever sees the program.
+family_ids_jq='
+  def ids: [ scan("[A-Za-z_][A-Za-z0-9_]*(?:[./-][A-Za-z0-9_]+)+") ]
+    | map(ascii_downcase) | unique;
+  [ .[] | {id, project, status, title, cond:(.condition//""), dod:(.dodRef//""),
+           t:(.title|ids)} ] as $all
+  | ($all | map(.t) | flatten | group_by(.) | map({key:.[0], value:length}) | from_entries) as $df
+  | ($all | length) as $N
+  | def idf($t): ((($N + 1) / ((($df[$t]) // 0) + 0.5)) | log);
+    # LABELS COME FROM EVERY STATUS. A done sibling still defines the family vocabulary, and an
+    # orphan matching a fully-closed family is a RECURRENCE — precisely what a condition key is for.
+    ($all | map(select(.cond != "")) | group_by([.project, .cond])
+          | map({project:.[0].project, cond:.[0].cond, members:length,
+                 t:([ .[].t ] | flatten | unique)})) as $clusters
+  # ORPHANS ARE LIVE ONLY, and carry neither a dodRef (that is key 1) nor a condition (already
+  # joined). A row with no identifiers at all is unscoreable, not a match: it abstains.
+  | [ $all[]
+      | select((.status == "open") or (.status == "claimed"))
+      | select(.dod == "" and .cond == "")
+      | select($p == "" or .project == $p)
+      | . as $o | select(($o.t | length) > 0)
+      | ($o.t | map(idf(.)) | add) as $den | select($den > 0)
+      | [ $clusters[] | select(.project == $o.project)
+          | (.t) as $ct
+          | ([ $o.t[] | select(IN($ct[])) ]) as $sh
+          | {cond, members, shared:$sh, n:($sh|length),
+             frac: ((($sh | map(idf(.)) | add // 0) / $den) * 1000 | round / 1000)} ]
+      | map(select(.n >= $ms and .frac >= $mf)) | select(length > 0)
+      | {id:$o.id, project:$o.project, status:$o.status, title:$o.title,
+         cands:(sort_by(-.frac))} ]
+  | sort_by(- .cands[0].frac)'
+
+# family_json <project> <min_shared> <min_frac> → the match array (also `backfill`'s input).
+family_json() {
+  fold | jq -c --arg p "$1" --argjson ms "$2" --argjson mf "$3" "$family_ids_jq"
+}
+
+# Both floors are numbers over a LIVING corpus, so they are flags: the separation measured on
+# 2026-08-11 (2 hits in 182 orphans, both true) has a half-life, and a threshold nobody can move
+# without editing the file is one nobody re-measures (memory: published-figure-decays-with-its-source).
+valid_num() { case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; *) return 0 ;; esac; }
+
+# KEY 1 — same project+dodRef among live rows (the original detector, behaviour unchanged).
+dups_dodref() {
+  fold | jq -c --arg p "$1" '
     [ .[]
       | select((.status == "open") or (.status == "claimed"))
       | select((.dodRef // "") != "")
@@ -1648,18 +1784,199 @@ cmd_dups() {
     # absent conditions still report: that is precisely the un-joined case.
     | map(select([ .[] | .condition // "" ] | unique | (length > 1 or .[0] == "")))
     | map({project: .[0].project, dodRef: .[0].dodRef,
-           items: [ .[] | {id, status, condition: (.condition // ""), title} ]})')"
-  if [ "$json" -eq 1 ]; then printf '%s\n' "$groups"; return 0; fi
-  local n; n="$(printf '%s' "$groups" | jq 'length')"
-  if [ "$n" -eq 0 ]; then echo "cc-backlog dups: no candidate duplicate groups."; return 0; fi
-  printf '%s' "$groups" | jq -r '.[]
-    | "── \(.project)  \(.dodRef)",
-      (.items[] | "   \(.id)  \(.status)\(if .condition == "" then "" else "  [" + .condition + "]" end)  \(.title[0:96])"),
-      ""'
-  printf 'cc-backlog dups: %s candidate group(s) — same project+dodRef, live, not joined.\n' "$n"
-  printf '  These are CANDIDATES, not duplicates: a plan doc'"'"'s parallel phases share a dodRef too.\n'
-  printf '  If two rows ARE one piece of work, join them so only one can be dispatched:\n'
-  printf '      cc-backlog link <id> --condition <slug>   # both rows, same slug\n'
+           items: [ .[] | {id, status, condition: (.condition // ""), title} ]})'
+}
+
+# KEY 2 — identical NORMALISED title among dodRef-LESS live rows. Every token carrying a digit is
+# dropped, which is `valid_condition`'s own rule applied per token: what survives is the
+# condition-shaped skeleton of the title, so a family that re-keyed itself on a measurement or a
+# trailing `@ <sha>` collapses back to one group. A title with no digit-free tokens at all
+# normalises to "" and is dropped — it would otherwise group every such row together.
+dups_title() {
+  fold | jq -c --arg p "$1" '
+    def normtitle: ascii_downcase | [ splits("[^a-z0-9]+") ]
+      | map(select(test("^[a-z]+$"))) | join(" ");
+    [ .[]
+      | select((.status == "open") or (.status == "claimed"))
+      | select((.dodRef // "") == "")
+      | select($p == "" or .project == $p)
+      | {id, project, status, title, condition: (.condition // ""), norm: (.title | normtitle)} ]
+    | map(select(.norm != ""))
+    | group_by([.project, .norm])
+    | map(select(length > 1))
+    | map(select([ .[] | .condition ] | unique | (length > 1 or .[0] == "")))
+    | map({project: .[0].project, norm: .[0].norm,
+           items: [ .[] | {id, status, condition, title} ]})'
+}
+
+cmd_dups() {
+  local project="" json=0 mode=all min_shared=3 min_frac=0.40
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project)    shift; project="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --json)       json=1; shift ;;
+      --mode)       shift; mode="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --min-shared) shift; min_shared="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --min-frac)   shift; min_frac="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog dups: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  case "$mode" in
+    dodref|title|family|all) ;;
+    *) printf 'cc-backlog dups: --mode must be dodref|title|family|all (got "%s")\n' "$mode" >&2
+       return 2 ;;
+  esac
+  if ! valid_num "$min_shared" || ! valid_num "$min_frac"; then
+    printf 'cc-backlog dups: --min-shared and --min-frac must be numbers\n' >&2; return 2
+  fi
+  ensure_file
+  local groups='[]' tgroups='[]' fam='[]'
+  if [ "$mode" = dodref ] || [ "$mode" = all ]; then groups="$(dups_dodref "$project")"; fi
+  if [ "$mode" = title  ] || [ "$mode" = all ]; then tgroups="$(dups_title  "$project")"; fi
+  if [ "$mode" = family ] || [ "$mode" = all ]; then
+    fam="$(family_json "$project" "$min_shared" "$min_frac")"
+  fi
+
+  # ONE JSON SHAPE ON EVERY MODE — an object keyed by the three keys, so a consumer never has to
+  # infer which key produced a bare array. This REPLACES the pre-2026-08-11 shape (the dodRef array
+  # alone); `--mode dodref --json | jq .dodref` is that array. Safe to change because `dups` had no
+  # programmatic caller in the tree — verified by grep, and the header's own §DUP KEYS records why.
+  if [ "$json" -eq 1 ]; then
+    jq -nc --argjson d "$groups" --argjson t "$tgroups" --argjson f "$fam" \
+      '{dodref: $d, title: $t, family: $f}'
+    return 0
+  fi
+
+  local nd nt nf
+  nd="$(printf '%s' "$groups"  | jq 'length')"
+  nt="$(printf '%s' "$tgroups" | jq 'length')"
+  nf="$(printf '%s' "$fam"     | jq 'length')"
+  if [ "$nd" -eq 0 ] && [ "$nt" -eq 0 ] && [ "$nf" -eq 0 ]; then
+    echo "cc-backlog dups: no candidate duplicate groups."; return 0
+  fi
+
+  if [ "$nd" -gt 0 ]; then
+    printf '%s' "$groups" | jq -r '.[]
+      | "── \(.project)  \(.dodRef)",
+        (.items[] | "   \(.id)  \(.status)\(if .condition == "" then "" else "  [" + .condition + "]" end)  \(.title[0:96])"),
+        ""'
+    printf 'dodref: %s group(s) — same project+dodRef, live, not joined.\n' "$nd"
+    printf '  These are CANDIDATES, not duplicates: a plan doc'"'"'s parallel phases share a dodRef too.\n\n'
+  fi
+  if [ "$nt" -gt 0 ]; then
+    printf '%s' "$tgroups" | jq -r '.[]
+      | "── \(.project)  [title] \(.norm[0:72])",
+        (.items[] | "   \(.id)  \(.status)\(if .condition == "" then "" else "  [" + .condition + "]" end)  \(.title[0:96])"),
+        ""'
+    printf 'title: %s group(s) — identical titles once every digit-bearing token is dropped.\n' "$nt"
+    printf '  A measurement or a trailing sha in the title is what minted these as separate ids.\n\n'
+  fi
+  if [ "$nf" -gt 0 ]; then
+    printf '%s' "$fam" | jq -r '.[]
+      | "── \(.project)  \(.id)  \(.status)",
+        "   \(.title[0:96])",
+        (.cands[] | "   → [\(.cond)]  frac=\(.frac) shared=\(.n) of \(.members) member(s): \(.shared|join(", ")[0:70])"),
+        ""'
+    printf 'family: %s live row(s) with no condition that match an EXISTING condition group.\n' "$nf"
+    printf '  Scored in identifier space (floors: shared>=%s, frac>=%s). backfill proposes the link.\n\n' \
+      "$min_shared" "$min_frac"
+  fi
+  printf 'If two rows ARE one piece of work, join them so only one can be dispatched:\n'
+  printf '    cc-backlog link <id> --condition <slug>   # both rows, same slug\n'
+}
+
+# cmd_backfill [--project P] [--json] [--apply] [--min-shared N] [--min-frac F]
+#
+# The half of this item that `dups` alone cannot be: a report changes nothing, and the ledger's
+# whole link history is SEVEN records, six of them written by one hand inside eleven seconds. A row
+# filed before its family had a condition therefore stays outside the lease forever unless a human
+# happens to look — which is exactly how 2b6cc6a5116a got dispatched two days after the condition
+# key landed, and joined by hand six minutes after that.
+#
+# ONE CANDIDATE ONLY. A row whose top two clusters BOTH clear the floors is ambiguous, and an
+# ambiguous auto-join is the failure that costs most: `link` feeds claim guard (6), so a wrong join
+# REFUSES a live worker onto work that is not duplicated, and nothing downstream reports the move.
+# Ambiguity abstains here and is listed for a human instead (memory:
+# abstain-belongs-on-the-branch-the-case-reaches).
+#
+# DRY-RUN IS THE DEFAULT, and `--apply` is the whole write surface. The header above concludes NO
+# AUTOMATIC KEY IS SOUND; the measurement that set these floors is 2 hits in 182 orphans on ONE
+# day's ledger, which is evidence for a review queue and not for an unattended writer.
+#
+# --apply DELEGATES TO cmd_link — never a hand-rolled append. That is what keeps the digit rule,
+# the already-linked refusal, and the idempotent no-op identical here and at `link` (memory:
+# make-the-actuator-the-arbiter). A row already on another condition is REFUSED by cmd_link (rc 4)
+# and reported as skipped: this verb never passes --force.
+cmd_backfill() {
+  local project="" json=0 apply=0 min_shared=3 min_frac=0.40
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project)    shift; project="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --json)       json=1; shift ;;
+      --apply)      apply=1; shift ;;
+      --min-shared) shift; min_shared="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --min-frac)   shift; min_frac="${1:-}"; [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-backlog backfill: unknown arg %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  if ! valid_num "$min_shared" || ! valid_num "$min_frac"; then
+    printf 'cc-backlog backfill: --min-shared and --min-frac must be numbers\n' >&2; return 2
+  fi
+  ensure_file
+  local fam props ambig np na
+  fam="$(family_json "$project" "$min_shared" "$min_frac")"
+  props="$(printf '%s' "$fam" | jq -c '[ .[] | select((.cands|length) == 1)
+            | {id, project, status, title, cond:.cands[0].cond,
+               frac:.cands[0].frac, n:.cands[0].n} ]')"
+  ambig="$(printf '%s' "$fam" | jq -c '[ .[] | select((.cands|length) > 1)
+            | {id, title, conds:[.cands[].cond]} ]')"
+  np="$(printf '%s' "$props" | jq 'length')"
+  na="$(printf '%s' "$ambig" | jq 'length')"
+
+  if [ "$json" -eq 1 ] && [ "$apply" -eq 0 ]; then
+    jq -nc --argjson p "$props" --argjson a "$ambig" '{proposed: $p, ambiguous: $a}'
+    return 0
+  fi
+
+  if [ "$np" -eq 0 ] && [ "$na" -eq 0 ]; then
+    echo "cc-backlog backfill: nothing to join — no un-conditioned live row matches an existing group."
+    return 0
+  fi
+
+  if [ "$apply" -eq 0 ]; then
+    printf '%s' "$props" | jq -r '.[]
+      | "── \(.id)  \(.status)  \(.title[0:88])",
+        "   → cc-backlog link \(.id) --condition \(.cond)      # frac=\(.frac) shared=\(.n)",
+        ""'
+    [ "$na" -gt 0 ] && printf '%s' "$ambig" | jq -r '.[]
+      | "── \(.id)  AMBIGUOUS — matches \(.conds|join(", ")); joining is yours to decide",
+        "   \(.title[0:88])",
+        ""'
+    printf 'cc-backlog backfill: %s proposed, %s ambiguous. DRY RUN — nothing was written.\n' "$np" "$na"
+    printf '  Review the titles above, then write them:  cc-backlog backfill --apply\n'
+    return 0
+  fi
+
+  # --apply. Every outcome is printed with a verdict token, because a link that cmd_link REFUSED is
+  # not the same event as one it wrote, and a silent count would conflate them
+  # (memory: claimed-outcome-vs-checked-outcome).
+  local linked=0 skipped=0 row id cond rc
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    id="$(printf '%s' "$row"   | jq -r '.id')"
+    cond="$(printf '%s' "$row" | jq -r '.cond')"
+    if cmd_link "$id" --condition "$cond" >/dev/null 2>&1; then
+      linked=$((linked + 1))
+      printf 'verdict=linked      %s → [%s]\n' "$id" "$cond"
+    else
+      rc=$?
+      skipped=$((skipped + 1))
+      printf 'verdict=skipped-rc%s %s → [%s] (cmd_link refused; re-run cc-backlog link to see why)\n' \
+        "$rc" "$id" "$cond"
+    fi
+  done < <(printf '%s' "$props" | jq -c '.[]')
+  [ "$na" -gt 0 ] && printf 'verdict=ambiguous   %s row(s) matched >1 group and were NOT joined.\n' "$na"
+  printf 'cc-backlog backfill: %s linked, %s skipped, %s ambiguous.\n' "$linked" "$skipped" "$na"
 }
 
 # Every path prints a structured `verdict=<token>`: the caller is a fail-open hook whose exit code
@@ -3005,6 +3322,9 @@ case "${1:-}" in
   # ONE of the joined rows undispatchable. `dups` is a pure read.
   link)    shift; cmd_link "$@" ;;
   dups)    shift; cmd_dups "$@" ;;
+  # `backfill --apply` writes only `link` records, via cmd_link — same reasoning as `link` above:
+  # a link cannot make an item newly dispatchable, so a kick would be backwards.
+  backfill) shift; cmd_backfill "$@" ;;
   done)    shift; cmd_transition "done" "$@" ;;
   reopen)  shift; cmd_transition reopen "$@" ;;
   block)   shift; cmd_transition block "$@" ;;

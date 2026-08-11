@@ -204,18 +204,25 @@ link_pair() {
 }
 
 # ── dups: a report, never a gate ──────────────────────────────────────────────────────────────────
+#
+# `--json` EMITS AN OBJECT since 2026-08-11 (backlog 7ff1b6f5ddbb), not the bare array these three
+# tests were written against. `dups` grew two more grouping keys for the dodRef-LESS population —
+# 206 of 269 live rows carry no dodRef, so this key alone was blind to 77% of live work — and one
+# self-describing shape beats a bare array whose producing key a consumer has to infer.
+# The assertions below are otherwise UNCHANGED: they still pin exactly the dodRef behaviour they
+# always pinned, now addressed as `.dodref`. tests/cc-backlog-dups-family.bats pins the new keys.
 
 @test "dups reports two live rows sharing project+dodRef" {
   add_pair
   run bash "$CB" dups --json
-  [ "$(printf '%s' "$output" | jq 'length')" -eq 1 ]
-  [ "$(printf '%s' "$output" | jq '.[0].items|length')" -eq 2 ]
+  [ "$(printf '%s' "$output" | jq '.dodref|length')" -eq 1 ]
+  [ "$(printf '%s' "$output" | jq '.dodref[0].items|length')" -eq 2 ]
 }
 
 @test "dups DROPS a group once its rows are joined — an answered group is not re-reported" {
   add_pair; link_pair
   run bash "$CB" dups --json
-  [ "$(printf '%s' "$output" | jq 'length')" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq '.dodref|length')" -eq 0 ]
 }
 
 @test "dups ignores terminal rows: a finished plan is not a standing alarm" {
@@ -225,7 +232,7 @@ link_pair() {
   # shipped dispatch table quotes it for the same reason (`cmd_transition "done"`).
   bash "$CB" "done" "$A" --evidence abc123 >/dev/null
   run bash "$CB" dups --json
-  [ "$(printf '%s' "$output" | jq 'length')" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq '.dodref|length')" -eq 0 ]
 }
 
 @test "dups gates NOTHING — the rows it names are still claimable" {
