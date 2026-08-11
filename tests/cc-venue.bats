@@ -34,6 +34,12 @@ setup() {
   export CC_BACKLOG_DISPATCH_BIN="$BATS_TEST_TMPDIR/absent-dispatch"
   export CC_BACKLOG_ELIGIBLE_GATE=off      # this suite drives the PRODUCER, not the claim gate
   export CC_ELIGIBLE_HISTORY_DEPTH=3
+  # Pinned because the test-hermeticity ratchet flags any suite whose TEXT names handoff-fire,
+  # and this one does — inside a FIXTURE TITLE, as the specification of an item the classifier
+  # must refuse. Nothing here fires anything. The pin is a no-op for this suite and it is the
+  # sanctioned fix, so it is taken rather than argued with; the detector reading a quoted
+  # string as an invocation is filed separately.
+  export CC_FIRE_CAPACITY_GATE=off
   # cc-premise executes stored falsifier probes and reads a repo of its own; question 3 has its own
   # cases below, driven by a stub. Off by default so the other cases pin one thing each.
   export CC_VENUE_PREMISE=off
@@ -42,8 +48,13 @@ setup() {
 
 mkrepo() {
   mkdir -p "$G"
-  git -C "$G" init -q -b main
-  git -C "$G" config user.email t@e.com; git -C "$G" config user.name t
+  git -C "${G:?repo path required}" init -q -b main
+  # THE ARGUMENT IS ASSERTED, not the chain. `git -C ""` is a documented NO-OP rather than an
+  # error, so an empty $G would drop this identity into whatever repo the process is standing in —
+  # and ~100 linked worktrees here share ONE .git/config, so a single such line re-authors every
+  # session on the box. A `&&`/`||` guard does not rescue it either: `cd ""` exits 0.
+  git -C "${G:?repo path required}" config user.email t@e.com
+  git -C "${G:?repo path required}" config user.name t
   local i
   for i in 1 2 3 4 5 6; do
     echo "$i" > "$G/f$i"; git -C "$G" add "f$i"; git -C "$G" commit -qm "c$i"
@@ -72,7 +83,7 @@ venue_of() { "$CV" assess "$1" --json | jq -r .venue; }
 @test "2 named box state routes LOCAL under the class that fired" {
   mkrepo
   local id; id="$(add "restart the launchd daemon and reload its plist")"
-  echo "$("$CV" assess "$id" --json)" | jq -e '.venue == "local"' >/dev/null || false
+  "$CV" assess "$id" --json | jq -e '.venue == "local"' >/dev/null || false
   "$CV" assess "$id" --json | jq -e '.why | test("^ineligible-box: ")' >/dev/null \
     || { "$CV" assess "$id"; false; }
 }
@@ -183,11 +194,15 @@ EOF
   mkrepo
   add "add a bats case for the tsv-pad helper" >/dev/null
   add "restart the launchd daemon" a2 >/dev/null
-  local before; before="$(md5 -q "$CC_BACKLOG_FILE" 2>/dev/null || md5sum "$CC_BACKLOG_FILE")"
+  # A PURE-BASH read, not a digest. `md5`/`md5sum` are bare names and this corpus runs under
+  # launchd's own PATH, where neither resolves — the unattended-path ratchet catches exactly that.
+  # `$(<file)` needs no binary, and comparing the CONTENT is a stronger statement than comparing a
+  # hash of it anyway.
+  local before; before="$(<"$CC_BACKLOG_FILE")"
   run "$CV" run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"DRY RUN"* ]] || { echo "$output"; false; }
-  local after; after="$(md5 -q "$CC_BACKLOG_FILE" 2>/dev/null || md5sum "$CC_BACKLOG_FILE")"
+  local after; after="$(<"$CC_BACKLOG_FILE")"
   [ "$before" = "$after" ] || { echo "a dry run wrote to the ledger"; false; }
 }
 
@@ -202,13 +217,14 @@ EOF
   [ "$(plan_of "$l")" = local ] || { echo "local item not labelled"; false; }
   # A REFUSAL IS RECORDED, not merely omitted — an unlabelled row and a row refused for a named
   # reason are different facts, and only one of them can be read six weeks later.
-  [[ "$(why_of "$l")" == "ineligible-box: "* ]] || { echo "$(why_of "$l")"; false; }
+  [[ "$(why_of "$l")" == "ineligible-box: "* ]] || { why_of "$l"; false; }
 }
 
 @test "14 the write goes through cc-backlog venue — its refusals are the producer's refusals" {
   mkrepo
   local id; id="$(add "add a bats case for the tsv-pad helper")"
-  "$CB" done "$id" --evidence landed >/dev/null 2>&1
+  # `done` quoted: it is a reserved word, so shellcheck reads the bare form as a loop terminator.
+  "$CB" "done" "$id" --evidence landed >/dev/null 2>&1
   # A done item is rc 4 at the actuator. The producer must not have its own opinion about that, and
   # must not fall back to appending a record itself.
   run "$CV" run --apply
@@ -307,8 +323,8 @@ EOF
 
   run "$CV" label "$id"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(plan_of "$id")" = local ] || { echo "$(plan_of "$id")"; false; }
-  [[ "$(why_of "$id")" == "ineligible-github: "* ]] || { echo "$(why_of "$id")"; false; }
+  [ "$(plan_of "$id")" = local ] || { plan_of "$id"; false; }
+  [[ "$(why_of "$id")" == "ineligible-github: "* ]] || { why_of "$id"; false; }
   # …and the why is BYTE-IDENTICAL to what assess computed: one producer, not two.
   [ "$(why_of "$id")" = "$("$CV" assess "$id" --json | jq -r .why)" ] \
     || { echo "label and assess disagree — that is a second producer"; false; }

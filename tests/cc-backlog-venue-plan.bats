@@ -34,6 +34,12 @@ setup() {
   # The eligibility gate shells out to git for the measured arm; this suite is about the WRITE path
   # and must not depend on a repo existing.
   export CC_BACKLOG_ELIGIBLE_GATE=off
+  # Pinned because the test-hermeticity ratchet flags any suite whose TEXT names handoff-fire,
+  # and this one does — inside a FIXTURE TITLE, as the specification of an item the classifier
+  # must refuse. Nothing here fires anything. The pin is a no-op for this suite and it is the
+  # sanctioned fix, so it is taken rather than argued with; the detector reading a quoted
+  # string as an invocation is filed separately.
+  export CC_FIRE_CAPACITY_GATE=off
 }
 
 add() { "$CB" add --title "$1" --project probe --source "${2:-s}"; }
@@ -131,7 +137,8 @@ lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   run "$CB" venue nosuchid0000 --venue cloud --why "x: y"
   [ "$status" -eq 3 ] || { echo "$output"; false; }
   local id; id="$(add "finished work")"
-  "$CB" done "$id" --evidence "landed" >/dev/null 2>&1
+  # `done` quoted: it is a reserved word, so shellcheck reads the bare form as a loop terminator.
+  "$CB" "done" "$id" --evidence "landed" >/dev/null 2>&1
   run "$CB" venue "$id" --venue cloud --why "x: y"
   [ "$status" -eq 4 ] || { echo "$output"; false; }
   [[ "$output" == *"DONE"* ]] || { echo "$output"; false; }
