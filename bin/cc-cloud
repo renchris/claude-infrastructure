@@ -4,6 +4,7 @@
 #
 #   cc-cloud preflight [--repo P] [--branch B]       can a fire HERE be observed at all? exit 1 = no
 #   cc-cloud declare --id <id> --branch <b> [opts]   register a session BEFORE firing it
+#   cc-cloud fill-paths --id <id> | --all            fill `paths=` POST-HOC from the VM's own commits
 #   cc-cloud retire  --id <id>                       terminal; the id stops being reconciled
 #   cc-cloud poll                                    advance the last-seen sidecar (the ONLY mutator)
 #   cc-cloud is-offbox <id>                          exit 0 iff <id> is declared and not retired
@@ -233,6 +234,123 @@ landed() { # <repo> <trunk-ref> <comma-separated-paths> → 0 landed, 1 not, 2 c
   return 0
 }
 
+# ── fill-paths — the POST-HOC path set, derived from the VM's own commits ────────────────────────
+# THE DEFECT THIS CLOSES (backlog a435e3987fbf; CLOUD_OBSERVABILITY.md §13.5 closing ⚠️). `landed()`
+# above returns "not landed" on an EMPTY path list by design — nothing declared means landedness is
+# not assertable — and `cc-offload up` declares `paths=` empty, because at fire time the dispatcher
+# does not know what the VM will write. So every cloud result read ELIGIBLE forever: C3 could never
+# fire, `cc-offload land --all` re-attempted finished work on every sweep, and the re-attempt was
+# harmless only because the lander itself noticed ("origin/main already contains HEAD").
+#
+# THE FIX IS A FILL, NOT A WIDER `landed()`. Weakening landed() to "empty ⇒ landed" would convert
+# every unobservable session into a finished one — the exact absence-is-evidence inversion this file
+# exists to refuse. What was actually missing is the DATA: after the VM has pushed, its own commits
+# state the path set exactly, so the answer is derivable and there is no need to have predicted it.
+#
+# TWO RULES, and both are load-bearing:
+#   1. DELETIONS ARE EXCLUDED (`--diff-filter=d`, i.e. drop D). A path the branch DELETES is in its
+#      diff and is by construction absent from the trunk tree after a perfect land, so including it
+#      would manufacture a declaration that can never read LANDED — the same never-satisfiable
+#      verdict this change exists to remove, re-created from the other side.
+#   2. AN EMPTY RESULT IS NEVER WRITTEN. A delete-only branch (or a range that cannot be bounded)
+#      leaves `paths=` untouched and exits non-zero, so "not assertable" stays honest instead of
+#      becoming a silent empty write that reads exactly like the bug.
+# The range is bounded at the merge-base with the trunk: an unbounded `--name-only` over the whole
+# history would claim every file the repo has ever had.
+PATHS_DETAIL=""
+branch_paths() { # <repo> <trunk-ref> <ref> → 0 + comma-list on stdout · 2 cannot tell · 4 empty set
+  local repo="$1" trunk="$2" ref="$3" base out
+  PATHS_DETAIL=""
+  [ -n "$repo" ] && [ -d "$repo" ] || { PATHS_DETAIL="no readable repo"; return 2; }
+  "$GIT_BIN" -C "$repo" rev-parse --verify --quiet "$ref" >/dev/null 2>&1 || {
+    PATHS_DETAIL="'$ref' does not resolve in $repo — fetch the branch first"; return 2; }
+  base="$("$GIT_BIN" -C "$repo" merge-base "$trunk" "$ref" 2>/dev/null)" || base=""
+  [ -n "$base" ] || { PATHS_DETAIL="no merge-base between $trunk and $ref — the range cannot be bounded"; return 2; }
+  out="$("$GIT_BIN" -C "$repo" diff --name-only --diff-filter=d "$base" "$ref" 2>/dev/null)" || {
+    PATHS_DETAIL="git diff --name-only failed over $base..$ref"; return 2; }
+  # A path containing a comma would be split by the reader's own separator, and a quoted path
+  # (core.quotepath) is not a path at all. Neither is silently dropped: they make the fill abstain.
+  case "$out" in *,*|*'"'*) PATHS_DETAIL="a changed path contains a comma or is quoted; the declaration's comma-separated list cannot represent it"; return 2 ;; esac
+  out="$(printf '%s' "$out" | tr '\n' ',' | sed 's/,$//')"
+  [ -n "$out" ] || { PATHS_DETAIL="the range adds or modifies NO file (delete-only, or empty) — landedness by content is not assertable for it"; return 4; }
+  printf '%s' "$out"
+  return 0
+}
+
+# Rewrite ONE key in a declaration, atomically, preserving every other line and its order. `declare`
+# is the only other writer and it writes the whole file, so a partial-write here would be the one
+# way this store could be corrupted — hence temp + mv rather than an in-place edit.
+decl_set() { # <file> <key> <value>
+  local f="$1" k="$2" v="$3" tmp line wrote=0
+  tmp="$f.tmp.$$"
+  : >"$tmp" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$k="*) printf '%s=%s\n' "$k" "$v" >>"$tmp"; wrote=1 ;;
+      *)      printf '%s\n' "$line" >>"$tmp" ;;
+    esac
+  done < "$f"
+  [ "$wrote" -eq 1 ] || printf '%s=%s\n' "$k" "$v" >>"$tmp"
+  mv "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+cmd_fill_paths() {
+  local id="" all=0 force=0 rc=0 worst=0 n_filled=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --id) id="${2:-}"; shift 2 ;;
+      --all) all=1; shift ;;
+      --force) force=1; shift ;;
+      *) echo "cc-cloud fill-paths: unknown arg $1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$id" ] || [ "$all" -eq 1 ] || { echo "cc-cloud fill-paths: --id <id> or --all is required" >&2; return 2; }
+
+  local one f repo trunk remote branch cur out ref cand
+  while IFS= read -r one; do
+    [ -n "$one" ] || continue
+    f="$STATE/$one.decl"
+    [ -f "$f" ] || { echo "cc-cloud fill-paths: no such declaration: $one" >&2; worst=1; continue; }
+    cur="$(dfield "$f" paths)"
+    if [ -n "$cur" ] && [ "$force" -eq 0 ]; then
+      printf '· %s — paths already declared (%s); not overwriting (--force to re-derive)\n' "$one" "$cur"
+      continue
+    fi
+    repo="$(dfield "$f" repo)"
+    remote="$(dfield "$f" remote)"; [ -n "$remote" ] || remote="origin"
+    branch="$(dfield "$f" branch)"
+    trunk="$(dfield "$f" trunk)"; [ -n "$trunk" ] || trunk="origin/main"
+    # The LOCAL head first, then the remote-tracking ref. The local one is what the lander fetched
+    # and re-authored, so after a land it is the range that actually went to trunk; the tracking ref
+    # is the fallback for a branch that has been fetched but not landed.
+    ref=""
+    for cand in "refs/heads/$branch" "refs/remotes/$remote/$branch"; do
+      "$GIT_BIN" -C "${repo:-.}" rev-parse --verify --quiet "$cand" >/dev/null 2>&1 && { ref="$cand"; break; }
+    done
+    if [ -z "$ref" ]; then
+      printf '✗ %s — neither refs/heads/%s nor refs/remotes/%s/%s resolves in %s; nothing derived (paths left EMPTY, which stays honest)\n' \
+        "$one" "$branch" "$remote" "$branch" "${repo:-.}" >&2
+      worst=2; continue
+    fi
+    out="$(branch_paths "$repo" "$trunk" "$ref")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '✗ %s — %s\n' "$one" "$PATHS_DETAIL" >&2
+      [ "$worst" -lt "$rc" ] && worst="$rc"
+      continue
+    fi
+    decl_set "$f" paths "$out" || { echo "cc-cloud fill-paths: could not write $f" >&2; worst=1; continue; }
+    decl_set "$f" paths_src "vm-commits:$ref" || true
+    decl_set "$f" paths_at "$(now)" || true
+    n_filled=$((n_filled + 1))
+    printf '✓ %s — paths=%s (from %s, deletions excluded)\n' "$one" "$out" "$ref"
+  done <<EOF
+$([ -n "$id" ] && printf '%s\n' "$id" || ids)
+EOF
+  [ "$all" -eq 1 ] && printf 'fill-paths: %d filled.\n' "$n_filled"
+  return "$worst"
+}
+
 # O3 is version-gated and the gate is MEASURED, never assumed: the `Claude-Session:` trailer exists
 # in 2.1.220 (default on, emitted for web and Remote Control sessions) and does NOT exist in the
 # pinned 2.1.114. A design that hardcoded "the trailer is available" would be wrong on the very
@@ -376,6 +494,7 @@ do_check() {
 cmd_declare() {
   local id="" branch="" remote="origin" repo="$ROOT" paths="" trunk="" url="" surface="" item="" account=""
   local boot="" stall="" life="" f base="" brc=0
+  local notify_back="" goal="" goal_probe="" custody=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --id)      id="${2:-}"; shift 2 ;;
@@ -393,6 +512,24 @@ cmd_declare() {
       # is recorded at declaration time or it is unrecoverable, exactly like the declaration itself.
       --account) account="${2:-}"; shift 2 ;;
       --item)    item="${2:-}"; shift 2 ;;
+      # ── THE MANAGEMENT FIELDS (W2). A cloud fire had no return path into the machinery that
+      # manages local work: no wake, no custody, no goal (CLOUD_BACKLOG_PIPELINE.md §2 rows 1-3).
+      # All three are properties of the FIRE, so they are recorded where the fire's other
+      # unrecoverable facts are — here, at declaration time — for the same reason the account is:
+      # nothing downstream can reconstruct them, and the return path runs in a different process
+      # minutes or hours later.
+      #   --notify-back  the ORIGINATOR's pane uuid. The wake target; without it a completion has
+      #                  nowhere to land and the originator can only poll.
+      #   --goal         the measurable end state, in words, evaluated from THIS side.
+      #   --goal-probe   the command that DECIDES it (exit 0 = met). Optional: with no probe the
+      #                  end state is the landed-by-content verdict, which is the default goal of
+      #                  every cloud fire and needs no restating.
+      #   --custody      the custody marker this fire opened, so the return path can discharge the
+      #                  exact debt rather than guessing at one.
+      --notify-back) notify_back="${2:-}"; shift 2 ;;
+      --goal)        goal="${2:-}"; shift 2 ;;
+      --goal-probe)  goal_probe="${2:-}"; shift 2 ;;
+      --custody)     custody="${2:-}"; shift 2 ;;
       --boot)    boot="${2:-}"; shift 2 ;;
       --stall)   stall="${2:-}"; shift 2 ;;
       --life)    life="${2:-}"; shift 2 ;;
@@ -408,7 +545,13 @@ cmd_declare() {
   # positive control.
   local NL='
 '
-  case "$branch$remote$paths$url$account" in *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;; esac
+  # Every free-text field is guarded, not just the ones that existed when the guard was written: a
+  # newline in ANY value breaks the `key=value` store's one-line-per-field invariant, and a guard
+  # that enumerates the fields it knows about gets out-run by the next field added (memory:
+  # denylist-enumerates-spellings-not-the-class).
+  case "$branch$remote$paths$url$account$notify_back$goal$goal_probe$custody" in
+    *"$NL"*) echo "cc-cloud declare: newline in a field" >&2; return 2 ;;
+  esac
   mkdir -p "$STATE" || return 1
 
   # BASELINE (migrated from cc-cloud-watch `record`). Probe the remote ONCE, now, so that "the
@@ -435,6 +578,10 @@ cmd_declare() {
     [ -n "$surface" ] && printf 'surface=%s\n' "$surface"
     [ -n "$account" ] && printf 'account=%s\n' "$account"
     [ -n "$item" ]    && printf 'item=%s\n' "$item"
+    [ -n "$notify_back" ] && printf 'notify_back=%s\n' "$notify_back"
+    [ -n "$goal" ]        && printf 'goal=%s\n' "$goal"
+    [ -n "$goal_probe" ]  && printf 'goal_probe=%s\n' "$goal_probe"
+    [ -n "$custody" ]     && printf 'custody=%s\n' "$custody"
     is_num "$boot"  && printf 'boot_s=%s\n' "$boot"
     is_num "$stall" && printf 'stall_s=%s\n' "$stall"
     is_num "$life"  && printf 'life_s=%s\n' "$life"
@@ -670,6 +817,14 @@ cmd_list() {
         "$(jesc "$id")" "$(jesc "$branch")" "$(jesc "$remote")" "$(jesc "$item")" \
         "$(is_num "$dat" && printf '%s' "$dat" || printf 'null')" "$age"
       printf '"account":"%s",' "$(jesc "$(dfield "$f" account)")"
+      # The management fields ride the SAME projection as everything else. A consumer that had to
+      # open the .decl itself would be a second reader of this store with its own parser — the
+      # shape that has already cost this repo a checker holding a stale copy of what it audits
+      # (memory: uniform-error-ratio-indicts-the-model). One call to the owning tool, or none.
+      printf '"paths":"%s","notify_back":"%s","goal":"%s","goal_probe":"%s","custody":"%s","item_id":"%s",' \
+        "$(jesc "$(dfield "$f" paths)")" "$(jesc "$(dfield "$f" notify_back)")" \
+        "$(jesc "$(dfield "$f" goal)")" "$(jesc "$(dfield "$f" goal_probe)")" \
+        "$(jesc "$(dfield "$f" custody)")" "$(jesc "$(dfield "$f" item)")"
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
         "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
         "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"
@@ -774,6 +929,76 @@ do_selftest() {
   _st_rc "preflight REFUSES a repo with no remote at all" 1 \
     cmd_preflight --repo "$_ST_D/remote.git" --branch feat/x
 
+  # ── FILL-PATHS (backlog a435e3987fbf). Real commits in a real repo: the whole claim is about
+  # what `git diff --name-only` returns over a real range, so a stub would test the stub.
+  #
+  # THE TRUNK IN THIS FIXTURE CARRIES THE CONTENT UNDER A DIFFERENT SHA, on purpose. That is what a
+  # real cloud land looks like — cloud-reconcile RE-AUTHORS, so the sha the VM pushed is never the
+  # sha that lands — and a fixture whose trunk simply contained the branch would prove landedness
+  # by ancestry and never exercise the by-content rule this whole file is built on.
+  # Branch names are created from SHAs rather than assumed (`main` vs `master` is an init default,
+  # not a fact about this repo), so the fixture cannot go red on someone else's git config.
+  (
+    cd "$_ST_D/work" || exit 1
+    seed="$("$GIT_BIN" rev-parse HEAD)"
+    "$GIT_BIN" branch trunkref "$seed"
+    "$GIT_BIN" checkout -q -b claude/fill "$seed"
+    mkdir -p docs
+    printf 'x\n' > docs/added.md
+    printf 'y\n' > doomed.md
+    "$GIT_BIN" add -A && "$GIT_BIN" -c user.email=t@t -c user.name=t commit -q -m "add two"
+    "$GIT_BIN" rm -q doomed.md
+    "$GIT_BIN" -c user.email=t@t -c user.name=t commit -q -m "delete one"
+    # the "landed" trunk: same CONTENT, independent history — the re-author case
+    "$GIT_BIN" checkout -q -b landedtrunk "$seed"
+    mkdir -p docs && printf 'x\n' > docs/added.md
+    "$GIT_BIN" add -A && "$GIT_BIN" -c user.email=t@t -c user.name=t commit -q -m "landed by a re-author"
+    "$GIT_BIN" checkout -q -b claude/delonly landedtrunk
+    "$GIT_BIN" rm -q docs/added.md
+    "$GIT_BIN" -c user.email=t@t -c user.name=t commit -q -m "delete only"
+    "$GIT_BIN" checkout -q "$seed"
+  ) >/dev/null 2>&1
+  cmd_declare --id fillme --branch claude/fill --remote "$_ST_D/remote.git" --repo "$_ST_D/work" \
+    --trunk trunkref >/dev/null 2>&1
+  cmd_fill_paths --id fillme >/dev/null 2>&1
+  _st_kv() { # <name> <expected> <id> <key>
+    local got; got="$(dfield "$STATE/$3.decl" "$4")"
+    if [ "$got" = "$2" ]; then _ST_PASS=$((_ST_PASS + 1)); printf 'ok   %s\n' "$1"
+    else _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL %s (want "%s", got "%s")\n' "$1" "$2" "$got"; fi
+  }
+  _st_kv "fill-paths derives the path set from the branch's own commits" "docs/added.md" fillme paths
+  # THE TRAP, pinned as its own arm: a DELETED path is in the diff and is absent from trunk after a
+  # perfect land, so including it would manufacture a declaration that can never read LANDED.
+  if [ "$(dfield "$STATE/fillme.decl" paths)" = "docs/added.md" ]; then
+    _ST_PASS=$((_ST_PASS + 1)); printf 'ok   a DELETED path is excluded (it could never be content-present on trunk)\n'
+  else
+    _ST_FAIL=$((_ST_FAIL + 1)); printf 'FAIL a deleted path leaked into paths= — that declaration can never read LANDED\n'
+  fi
+  # An existing declaration is not overwritten without --force …
+  cmd_fill_paths --id fillme >/dev/null 2>&1
+  _st_kv "an already-filled declaration is not silently re-derived" "docs/added.md" fillme paths
+  # … and the EMPTY case never writes. A delete-only range must leave paths= alone and refuse.
+  cmd_declare --id delonly --branch claude/delonly --remote "$_ST_D/remote.git" --repo "$_ST_D/work" \
+    --trunk landedtrunk >/dev/null 2>&1
+  _st_rc "a delete-only range REFUSES rather than writing an empty path set" 4 \
+    cmd_fill_paths --id delonly
+  _st_kv "…and it leaves paths= empty, which stays honestly 'not assertable'" "" delonly paths
+  # An unresolvable ref is 'cannot tell' (2), never a write.
+  cmd_declare --id noref --branch claude/never-pushed --remote "$_ST_D/remote.git" --repo "$_ST_D/work" >/dev/null 2>&1
+  _st_rc "an unresolvable branch is 'cannot tell', never an empty fill" 2 cmd_fill_paths --id noref
+
+  # THE POINT OF THE WHOLE CHANGE, asserted end-to-end: a finished cloud session whose content is on
+  # trunk reads ELIGIBLE-forever before the fill and LANDED after it. Both halves off ONE fixture,
+  # because "LANDED after" proves nothing without "not LANDED before" — and the declaration is made
+  # BEFORE the push, so the pre-fill verdict is the live-session ALIVE this defect actually hid
+  # behind, not the never-booted BOOTING that would pass for the wrong reason.
+  cmd_declare --id landedcheck --branch claude/fill --remote "$_ST_D/remote.git" --repo "$_ST_D/work" \
+    --trunk landedtrunk >/dev/null 2>&1
+  "$GIT_BIN" -C "$_ST_D/work" push -q "$_ST_D/remote.git" refs/heads/claude/fill:refs/heads/claude/fill >/dev/null 2>&1
+  _st_expect "before the fill, a finished session reads ALIVE forever (paths empty ⇒ not assertable)" ALIVE landedcheck
+  cmd_fill_paths --id landedcheck >/dev/null 2>&1
+  _st_expect "after the fill, its content on the trunk ref reads LANDED" LANDED landedcheck
+
   printf '%s\n' "--- $_ST_PASS passed, $_ST_FAIL failed"
   [ "$_ST_FAIL" -eq 0 ]
 }
@@ -782,6 +1007,7 @@ do_selftest() {
 case "${1:-}" in
   preflight)  shift; cmd_preflight "$@"; exit $? ;;
   declare)    shift; cmd_declare "$@"; exit $? ;;
+  fill-paths) shift; cmd_fill_paths "$@"; exit $? ;;
   retire)     shift; cmd_retire "$@"; exit $? ;;
   poll)       shift; cmd_poll "$@"; exit $? ;;
   is-offbox)  shift; cmd_is_offbox "${1:-}"; exit $? ;;
@@ -790,7 +1016,7 @@ case "${1:-}" in
   --selftest) do_selftest; exit $? ;;
   -h|--help)  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   --json|--table|--check) ;;
-  "")  echo "cc-cloud: pick a verb (preflight|declare|retire|poll|is-offbox|show|list|--json|--table|--check|--selftest)" >&2; exit 2 ;;
+  "")  echo "cc-cloud: pick a verb (preflight|declare|fill-paths|retire|poll|is-offbox|show|list|--json|--table|--check|--selftest)" >&2; exit 2 ;;
   *)   echo "cc-cloud: unknown arg $1" >&2; exit 2 ;;
 esac
 
