@@ -136,14 +136,113 @@ selftest() {
   CC_DRIFT_DIRS="$d/h1 $d/h2" "$SELF" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 1 ] && okp "a missing Stop hook → exit 1 (DRIFT)" || badp "missing Stop hook not caught"
 
+  # ── --file: the three outcomes, each RED-provable ───────────────────────────────────────────────
+  # A stub cc-backlog records argv instead of writing the real store, so the selftest asserts WHAT
+  # would be filed — not merely that something was attempted. A stub that always succeeded would let
+  # a broken filing call pass, so the recorded argv is checked for the condition key that makes the
+  # row single (without it every sweep mints a new item, the defect this whole mode exists to avoid).
+  local stub="$d/stub-backlog" log="$d/filed.argv"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" >> "%s"\nexit 0\n' "$log" > "$stub"; chmod +x "$stub"
+
+  # (1) agreement → files NOTHING and exits 0. The case that must stay silent: a detector that filed
+  # on a clean fleet would carry the same zero bits as one that never fires.
+  : > "$log"
+  out="$(CC_DRIFT_DIRS="$d/a $d/b $d/c" CC_BACKLOG_BIN="$stub" "$SELF" --file 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && okp "--file on agreement → exit 0" || badp "--file on agreement exited $rc"
+  [ ! -s "$log" ] && okp "--file on agreement files NOTHING" || badp "--file filed over a clean fleet"
+  # exit 0 + an empty filing log is NOT enough to prove agreement was reported AS agreement: a
+  # mutant that routes rc 0 into the non-verdict arm is silent and exits 0 too, yet tells the
+  # operator the fleet could not be measured. It survived until this line existed. Assert the
+  # VERDICT, not just the side effects.
+  case "$out" in
+    *NON-VERDICT*) badp "--file called a clean fleet a NON-VERDICT" ;;
+    *GREEN*)       okp "--file on agreement reports GREEN, not a non-verdict" ;;
+    *)             badp "--file on agreement reported neither GREEN nor a non-verdict" ;;
+  esac
+
+  # (2) drift → files exactly one condition-keyed row, exit 1
+  : > "$log"
+  CC_DRIFT_DIRS="$d/x $d/y $d/z" CC_BACKLOG_BIN="$stub" "$SELF" --file >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 1 ] && okp "--file on drift → exit 1" || badp "--file on drift exited $rc"
+  grep -qxF 'settings-drift-across-config-dirs' "$log" \
+    && okp "--file passes the condition key (one row, not one per run)" \
+    || badp "--file filed WITHOUT --condition — would mint a row per sweep"
+  # `--` before the pattern: without it grep parses a leading-dash pattern as its own option and
+  # dies usage-style, which `|| badp` would have reported as a missing falsifier — a test bug
+  # wearing a subject bug's clothes.
+  grep -qxF -- '--falsifier' "$log" \
+    && okp "--file attaches the falsifier (the row self-closes)" || badp "--file filed with no falsifier"
+  grep -q 'MISSING in: z' "$log" \
+    && okp "--file names the divergent dir in the title" || badp "--file title does not name the dir"
+
+  # (3) NON-VERDICT → files nothing AND does not report green. Forced by an unwritable TMPDIR, which
+  # makes the inner assert's mktemp fail (exit 3). This is the arm that keeps "the checker could not
+  # look" distinct from "the fleet is clean" — the confusion that makes a dead detector read healthy.
+  : > "$log"
+  TMPDIR=/nonexistent/no-such-dir CC_DRIFT_DIRS="$d/x $d/y $d/z" CC_BACKLOG_BIN="$stub" \
+    "$SELF" --file >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 0 ] && okp "--file on a non-verdict does NOT report green (exit $rc)" \
+                  || badp "--file reported green when the comparison could not run"
+  [ ! -s "$log" ] && okp "--file on a non-verdict files NOTHING" || badp "--file filed on a non-verdict"
+
   echo "settings-drift-assert --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
-  echo "settings-drift-assert --selftest: GREEN — agreement passes; deny/hook divergence + missing-dir all caught; path variants normalized."
+  echo "settings-drift-assert --selftest: GREEN — agreement passes; deny/hook divergence + missing-dir all caught; path variants normalized; --file is silent on agreement, condition-keyed + falsified on drift, and files nothing on a non-verdict."
 }
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+BACKLOG_BIN="${CC_BACKLOG_BIN:-$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")/bin/cc-backlog}"
+
+# ── --file: make the verdict REACH somebody ───────────────────────────────────────────────────────
+# This checker was complete, correct and INERT for its whole life: measured 2026-08-11 it had zero
+# callers — not wired in any of the 5 settings.json, not invoked by any live launchd job — while the
+# drift it names was live in .claude-next (backlog 4ce34a4f703c). Printing to a terminal nobody is
+# watching is not detection. `--file` writes ONE condition-keyed backlog row, so the verdict lands in
+# the store the readout, the ledger and dispatch already read.
+#
+# CONDITION-KEYED, not a fresh row per run: the title carries a live count, so an unkeyed `add` would
+# mint a new item on every sweep and reproduce one layer down the exact rot this repo keeps filing.
+# The falsifier IS this script in --assert mode, whose rc 0 means the dirs agree — so the row closes
+# itself the moment the drift is fixed, with no human marking it done.
+#
+# THREE OUTCOMES, NOT TWO. rc 1 is drift; rc 0 is agreement; anything else (no jq, mktemp failure,
+# fewer than two readable config dirs) is a NON-VERDICT — the checker could not look. A non-verdict
+# must neither file (a bogus item over a store nobody measured) nor report green (the failure mode
+# that makes a broken detector indistinguishable from a clean fleet). It is passed through as its own
+# exit code and says so.
+file_mode() {
+  local out rc n dirs
+  out="$("$SELF" --assert 2>&1)"; rc=$?
+  printf '%s\n' "$out"
+
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -ne 1 ]; then
+    printf 'settings-drift-assert --file: NON-VERDICT (exit %d) — the comparison could not run, so nothing was filed and nothing is claimed clean.\n' "$rc" >&2
+    return "$rc"
+  fi
+
+  [ -x "$BACKLOG_BIN" ] || {
+    printf 'settings-drift-assert --file: cannot file — no cc-backlog at %s (the drift above stands unrecorded)\n' "$BACKLOG_BIN" >&2
+    return 1
+  }
+
+  n="$(printf '%s\n' "$out" | grep -c '^DRIFT ' 2>/dev/null | tr -d ' ')"
+  # the divergent dirs, deduped — the operator's first question is always "which account runs looser"
+  dirs="$(printf '%s\n' "$out" | sed -n 's/.*missing in://p' | tr ' ' '\n' \
+          | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+
+  "$BACKLOG_BIN" add --project claude-infrastructure \
+    --source settings-drift-assert \
+    --condition settings-drift-across-config-dirs \
+    --falsifier "$SELF --assert" \
+    --title "${n} guardrail(s) wired in some config dirs but MISSING in: ${dirs:-unknown} — the fleet picks a config dir by account at fire time, so what a session may do depends on which account fired it. Run \`$SELF\` for the named lines. Fixing it edits settings.json (C10) — stage a migration, never an in-place edit. The falsifier on this row IS the detector, so this item closes itself when the dirs agree." \
+    >/dev/null 2>&1 && printf 'settings-drift-assert --file: filed/updated the condition-keyed drift item.\n'
+  return 1
+}
+
 case "${1:-}" in
   --selftest) selftest ;;
+  --file)     file_mode ;;
   ""|--assert) assert ;;
-  *) printf 'settings-drift-assert: unknown arg %s (use --assert | --selftest)\n' "$1" >&2; exit 2 ;;
+  *) printf 'settings-drift-assert: unknown arg %s (use --assert | --file | --selftest)\n' "$1" >&2; exit 2 ;;
 esac
