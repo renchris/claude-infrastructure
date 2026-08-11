@@ -221,8 +221,18 @@ critic_plan_open() {
     # UNEXPANDED on purpose: cc-premise runs the stored string through `/bin/sh -c`, so it resolves
     # at probe time on whatever machine reads it. plan-phase-scan.sh is an existing per-file symlink,
     # so `--falsify` reaches the live layer on the ordinary fast-forward — no new link is needed.
+    #
+    # 🚨 IT TESTS THE WORD, NOT THE EXIT CODE, and that is a version-skew guard rather than a style
+    # choice. plan-phase-scan.sh takes its FORMAT as a second positional with a silent default, so an
+    # OLDER deployed copy handed `--falsify` does not reject it — it prints a section dump and exits
+    # 0, which the falsifier contract reads as "the premise is GONE, refuse the claim". This file and
+    # that one are per-file symlinks advanced by ONE fast-forward, so they cannot skew in the steady
+    # state; a session running THIS cc-discover from a worktree while ~/.claude has not converged CAN
+    # (measured 2026-08-11, in this change's own convergence window). Requiring the affirmative token
+    # makes an older binary answer "still live" — the safe direction — instead of retracting the item
+    # it just minted.
     add_candidate "advance $title" "$proj" "$path" "plan-open" \
-      "\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify"; rc=$?
+      "[ \"\$(\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify 2>/dev/null)\" = FALSIFIED ]"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
   done < <("$bin" --list-open 2>/dev/null)
   emit_critic_result plan-open "$added" "$cands"
