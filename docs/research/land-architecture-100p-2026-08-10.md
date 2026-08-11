@@ -598,9 +598,62 @@ P5's launchd half is already the operator-owned C10 `70dff02dcf4a`.
 |---|---|---|
 | P1 empty-the-lock | time the in-lock block end-to-end, then move sweep+reap post-release | hold p50 ≤5s (from 87s); wait p90 ≤5s; staleness-given-wait falls toward the wait-free floor |
 | P2 shift-left statics | expose the land statics as a commit-time entry point + red-rate census panel | gate-red ≤10%/day within two weeks |
-| P3 statics memo | blob-sha-keyed verdict cache, re-round runs ratchets only | re-round cost ≤10s at load; exit-42 rounds stop costing full gates |
+| P3 statics memo | ~~blob-sha-keyed verdict cache, re-round runs ratchets only~~ **STATICS HALF DONE 2026-08-10** (`scripts/lib/gate-memo.sh`); **arm half NOT DONE, deliberately** — see §5.P3 below | ~~re-round cost ≤10s at load~~ **NOT MET, and not reachable this way**: statics 2.15-2.27s → 0.14s ✓, but the whole re-round is 127-137s and the ratchet arms are ~112s of it |
 | P4 loud lifecycle | trap+attest; in-flight marker read by wrap-ledger/completion-assert; waiter registry; orphan-holder page; verb allowlist; failure inbox (`refs/land/failed` + backlog row) | zero silent land deaths; zero mid-flight 📦 convictions; a dead author's failed land renders at the next close |
 | P5 verifier share | fire `70dff02dcf4a` (repo half now; C10 half stays operator-owned); R7 escalation arm | verifier p50 <2h; ≥1 green/day; deploy T1 advances without hand-pulls |
 | P6 converge completeness | ~~extend link-refresh classes; CLAUDE.md parity leg; UNGATED verdict files~~ **DONE 2026-08-10** (see §2.E "P6 IMPLEMENTED") | `LIVE_ADDS` breach impossible for any install.sh **symlink** class ✓ · CLAUDE.md sensed ✓ · UNGATED files ✓ · hand-pull rate → 0 *(pending — the filed row is the escalation, not the cure)* |
 | P7 population policy | ~~checkpoints retention~~ (DROPPED — already exists and runs, §2.I ERRATUM) + KEEP-ladder content question (`--dispose-landed-dirt`, per-dirty-path `ls-tree` identity) + `--assert` consumer (`cc-blockers` kind `janitor-stale`) | 36 of 84 dirty worktrees become reapable; a janitor that stops running surfaces on the board instead of silently |
 | P0 self-measurement | attestation fields + census panels | v2 §7 renders as a computed verdict |
+
+### §5.P3 — what the statics memo actually bought, and why the ratchet half is filed rather than shipped
+
+*(Implementation note, 2026-08-10. INTEGRATE-only: the row above is struck, not deleted, because
+the target it states is the thing this note refutes.)*
+
+**Shipped**: `scripts/lib/gate-memo.sh` — per-file verdicts for shellcheck / `bash -n` / py_compile
+keyed on the blob sha **plus the checker's own version**, so a ShellCheck upgrade invalidates rather
+than carrying a verdict it no longer means. Every unknown re-runs: a miss, a corrupt body, an
+unreadable entry, a superseded version, and any red. Only rc 0 is ever recorded, so a red is never
+replayed from cache and a corrupt store cannot manufacture one. Pinned by `tests/land-gate-memo.bats`
+(9 tests), RED-proofed against a naive control memo (`tests/fixtures/gate-memo-naive.sh`) that keys on
+path alone — the control fails exactly the invalidation, corruption and dirty-tree tests and passes
+the rest, which is what attributes each test to a mechanism.
+
+**The item's premise does not survive measurement.** P3 says the re-round waste is re-proving the
+statics. Measured on this worktree:
+
+| | cost |
+|---|---|
+| statics phase, re-round — **before → after** | **2.15-2.27s → 0.14s** (3 samples each; 0 files sent to the checker) |
+| whole gate, cold | 149s |
+| whole gate, re-round | 127-137s |
+| the fifteen ratchet arms inside it | ~112s (~88s main runs + ~24s `--selftest` preambles) |
+
+So the statics were ~2% of a re-round. The memo retires them completely and the **≤10s target is
+untouched** — it was never reachable by memoizing statics.
+
+**The arm half is left alone, per the item's own "where an arm cannot be keyed soundly, say so".**
+Three findings, in order of how much they bind:
+
+1. **An arm's verdict is not file-local**, so the blob key does not transfer. `test-hermeticity`
+   rule 4 asks whether two tools name the *same* scratch path — a property of a PAIR of files, so
+   no per-file verdict exists for either one to cache.
+2. **The arm-level key the item prescribes has a measured ceiling below the target.** Keying an arm
+   on (lint blob + scanned-set state) lets a re-round skip it only when the sibling's delta missed
+   that arm's population entirely — true for **35-46% of the last 200 lands** per arm, and **27%**
+   against a whole-tree-minus-prose population. That retires one to two re-rounds in five
+   completely and does nothing for the rest.
+3. **The population declaration it would key on is not a superset today.** The natural source is
+   each arm's own-scope pathspec, maintained under a stated invariant ("THE PATHSPEC IS THE GATE'S
+   SCOPE, and it must list every population the lint judges"). Two counter-examples found by
+   reading the lints: `unattended-path-lint` also judges `settings.json`, which its pathspec does
+   not list, and pipefail's pathspec lists `docs/*` — so neither the declared spec nor
+   "tree minus prose" is reliably a superset. Keying on a non-superset is precisely the
+   stale-verdict generator the item forbids, and an unsound memo on a repo-wide arm is worse than
+   the seconds it saves.
+
+**What would actually reach ≤10s** is per-file memoization *inside* each lint's scan loop — the same
+blob key, applied where the population is. That needs a file-locality proof per lint (finding 1
+already fails it for one) and touches ~15 gate scripts, so it is a **separate item, not a silent
+widening of this one**. The prerequisite for it is a mechanical read-set declaration per lint, which
+is also what would make finding 3's superset claim checkable instead of asserted.

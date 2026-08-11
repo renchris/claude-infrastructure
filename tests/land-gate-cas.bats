@@ -72,6 +72,18 @@ setup() {
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
         2>/dev/null || true
   export CC_GATE_MAX_LOAD=0            # never shed: a fixture's smoke must not depend on `uptime`
+  # THIS SUITE MEASURES LOCK TOPOLOGY, AND ITS INSTRUMENT IS A shellcheck-INVOCATION COUNTER.
+  # The P3 statics memo (scripts/lib/gate-memo.sh) deliberately stops re-invoking shellcheck on a
+  # re-round whose files are byte-identical — which is exactly the redundancy it exists to remove,
+  # and exactly what would make "gate runs = shim lines" read low here. It also probes
+  # `shellcheck --version` once per gate to salt its key, which would read high. Both are correct
+  # behaviour and neither is what these tests are about, so the memo is pinned OFF: the observer
+  # then counts one line per gate invocation again, as it did when it was written. The memo's own
+  # behaviour — carrying, invalidating, and its failure direction — is pinned by
+  # tests/land-gate-memo.bats, which owns that question and instruments it separately.
+  # (Repo memory: control-calibrated-to-implementation-decays — key the control on the MECHANISM
+  # it is testing, not on an implementation detail of a neighbouring one.)
+  export SHIP_LAND_MEMO=off
 
   GATE_OBS="$BATS_TEST_TMPDIR/gate-obs"
   MOVER_ARMED="$BATS_TEST_TMPDIR/mover-armed"    # content = max sibling lands to inject

@@ -578,6 +578,31 @@ INFLIGHT_FILE=""         # non-empty ⇒ THIS process claimed the worktree's in-
 # shellcheck source=/dev/null
 [[ -r "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh" ]] && . "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh"
 
+# P3 (963bbebe7c9a): the blob-sha-keyed statics memo. The path is an override for the same reason
+# every SHIP_LAND_*_LINT above is one — so a test can substitute a NAIVE control memo and prove
+# which assertion each mechanism is carrying (tests/fixtures/gate-memo-naive.sh). Default is the
+# real library; an override that does not resolve degrades to the stubs below, never to a green.
+MEMO_LIB="${SHIP_LAND_MEMO_LIB:-${SCRIPT_DIR}/lib/gate-memo.sh}"
+# shellcheck source=/dev/null
+[[ -r "$MEMO_LIB" ]] && . "$MEMO_LIB"
+# DEGRADE-TO-THE-OLD-GATE STUBS. `memo_partition` decides WHICH FILES the linters are handed, so an
+# absent lib would not merely disable an optimisation — the call site becomes `command not found`,
+# the todo lists come back EMPTY, and the gate would skip shellcheck entirely and call it green.
+# That is the exact fail direction the memo exists to forbid, so the degraded path is written out
+# rather than assumed: with no lib every file is "unproven", every check runs, and the gate behaves
+# exactly as it did before P3. Same reason the sourcing above is `-r`-guarded rather than required.
+if ! declare -F memo_partition >/dev/null 2>&1; then
+  # shellcheck disable=SC2034,SC2329  # MEMO_OK is read by the lib's consumers; these stubs are
+  # invoked only on the lib-absent path, which is exactly why they cannot be proven called here.
+  memo_init() { MEMO_OK=0; return 1; }
+  # shellcheck disable=SC2329
+  memo_file_hit() { return 1; }
+  memo_file_record() { return 0; }
+  memo_partition() { shift; printf '%s\n' "$@"; }
+  memo_count() { :; }
+  memo_summary() { return 0; }
+fi
+
 inflight_claim() {  # 0 = claimed · refuses (exit 11) when a LIVE land already owns this worktree
   local f live pid age
   command -v land_inflight_path >/dev/null 2>&1 || return 0   # lib absent ⇒ no marker, today's behaviour
@@ -1611,18 +1636,63 @@ run_gate() {  # $1=range → 0 green / 1 red
     is_python_file "$p" && pyfiles+=("$p")
   done < <(git diff --name-only -z "$range" 2>/dev/null)
 
+  # P3: the per-file statics memo. shellcheck / `bash -n` / py_compile are pure functions of ONE
+  # file's bytes, so a verdict keyed on the blob sha (plus the checker's own version — see
+  # gate-memo.sh's salt) is exact, not approximate. On a re-round only the sibling's files are
+  # unknown; ours were proven a round ago and are byte-identical.
+  #
+  # SUBSETTING IS SOUND HERE and that is a property of the invocation, not an assumption: this gate
+  # calls shellcheck WITHOUT -x, so it follows no `source` and each file is judged in isolation —
+  # running it over half the set gives every file the same verdict as running it over all of them.
+  # (The repo's `# shellcheck source=/dev/null` directives are SC1091 suppressions, not follows.)
+  # If -x is ever added, this memo must key on the sourced files too; tests/land-gate-memo.bats
+  # states that dependency.
+  memo_init || true
+  local sc_todo=() bn_todo=() py_todo=()
   if [[ ${#shellfiles[@]} -gt 0 ]]; then
-    echo "→ gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s)" >&2
-    # No subject: shellcheck judges the whole set in one call, so naming one file would be a guess.
-    shellcheck "${shellfiles[@]}" >&2 || { echo "✗ gate: shellcheck RED" >&2; rc=1; gate_red shellcheck; }
-    for p in "${shellfiles[@]}"; do
-      bash -n "$p" 2>&1 >&2 || { echo "✗ gate: bash -n RED: $p" >&2; rc=1; gate_red bash-n "$p"; }
+    while IFS= read -r p; do [[ -n "$p" ]] && sc_todo+=("$p"); done < <(memo_partition shellcheck ${shellfiles[@]+"${shellfiles[@]}"})
+    while IFS= read -r p; do [[ -n "$p" ]] && bn_todo+=("$p"); done < <(memo_partition bash-n ${shellfiles[@]+"${shellfiles[@]}"})
+  fi
+  if [[ ${#pyfiles[@]} -gt 0 ]]; then
+    while IFS= read -r p; do [[ -n "$p" ]] && py_todo+=("$p"); done < <(memo_partition py_compile ${pyfiles[@]+"${pyfiles[@]}"})
+  fi
+
+  if [[ ${#shellfiles[@]} -gt 0 ]]; then
+    echo "→ gate: shellcheck + bash -n on ${#shellfiles[@]} shell file(s) (${#sc_todo[@]} unproven / ${#bn_todo[@]} unparsed — the rest carried by blob sha)" >&2
+    if [[ ${#sc_todo[@]} -gt 0 ]]; then
+      # No subject: shellcheck judges the whole set in one call, so naming one file would be a guess.
+      if shellcheck "${sc_todo[@]}" >&2; then
+        # Recorded ONLY on a whole-set green. A red says nothing about WHICH file was clean, so
+        # nothing is recorded and every one of them re-runs next round — the safe direction, and
+        # the reason a red is never replayed from cache.
+        for p in "${sc_todo[@]}"; do memo_file_record shellcheck "$p"; done
+      else
+        # The trailing `;` on the next line is LOAD-BEARING, not style: tests/ship-land.bats builds
+        # its attest-red mutant by sed'ing that exact literal, and asserts the anchor matches
+        # EXACTLY ONCE. So reformatting the line disarms the mutant — and restating the literal
+        # anywhere else in this file, including in a comment like this one, breaks the count the
+        # other way. Both failure modes were hit while landing P3.
+        echo "✗ gate: shellcheck RED" >&2; rc=1; gate_red shellcheck;
+      fi
+    fi
+    for p in ${bn_todo[@]+"${bn_todo[@]}"}; do
+      if bash -n "$p" 2>&1 >&2; then memo_file_record bash-n "$p"
+      else echo "✗ gate: bash -n RED: $p" >&2; rc=1; gate_red bash-n "$p"; fi
     done
   fi
   if [[ ${#pyfiles[@]} -gt 0 ]]; then
-    echo "→ gate: py_compile on ${#pyfiles[@]} python file(s) (incl. extensionless-by-shebang)" >&2
-    python3 -m py_compile "${pyfiles[@]}" >&2 || { echo "✗ gate: py_compile RED" >&2; rc=1; gate_red py_compile; }
+    echo "→ gate: py_compile on ${#pyfiles[@]} python file(s) (${#py_todo[@]} unproven; incl. extensionless-by-shebang)" >&2
+    if [[ ${#py_todo[@]} -gt 0 ]]; then
+      if python3 -m py_compile "${py_todo[@]}" >&2; then
+        for p in "${py_todo[@]}"; do memo_file_record py_compile "$p"; done
+      else
+        echo "✗ gate: py_compile RED" >&2; rc=1; gate_red py_compile
+      fi
+    fi
   fi
+  memo_count $(( ${#shellfiles[@]} * 2 + ${#pyfiles[@]} - ${#sc_todo[@]} - ${#bn_todo[@]} - ${#py_todo[@]} )) \
+             $(( ${#sc_todo[@]} + ${#bn_todo[@]} + ${#py_todo[@]} ))
+  memo_summary
 
   # ── test-hermeticity ratchet — BEFORE the bats block, in EVERY scope (~1s) ──────────────────
   # The ratchet already existed, but ONLY as tests/test-hermeticity-lint.bats, which made it
