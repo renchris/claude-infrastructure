@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.accounts-keepwarm — keep the shared account cache inside its TTL, so the interactive
+  launch path finds something to serve instead of abstaining.
+
+  WHY IT EXISTS. `claude` routes with `--route interactive --max-wait 0 --max-age 600`: it may
+  serve the cache or abstain, and may never sweep, take the single-flight lock, or heal — because
+  the sweeper's documented worst case is MINUTES and its floor behind a wedged holder is 240s then
+  exit 5, and none of that may ever sit in front of an operator pressing Enter. The cost of that
+  guarantee is that when the cache is cold the router abstains and the launcher falls back to the
+  pinned account. This job keeps the cache warm so abstention is rare rather than routine.
+
+  WHY IT LIVES IN launchd/staged/ AND NOT launchd/. A plist in launchd/ is COPIED to
+  ~/Library/LaunchAgents by install.sh, and macOS loads agents there at the next login — so
+  `expect = staged` in fleet.manifest suppresses `launchctl bootstrap` NOW but does not stop the
+  copy from arming the job at next login. launchd/staged/ is outside install.sh's non-recursive
+  glob, so this job cannot start until the operator deliberately installs it.
+
+  StartInterval 60, and the arithmetic is the point. cache_ttl_s is 90 (accounts.json) and a warm
+  sweep measures 1.85-2.53s, so worst-case age at a consumer is 60 + 2.5 = 62.5s — a 27.5s margin
+  under the TTL. 75s was rejected: it leaves 12.5s, which is less than the variance ONE fetch_usage
+  retry introduces (+1s sleep, up to a 12s timeout), so a single retried account would put the
+  producer over the TTL and hand the miss to a consumer. Fleet precedent for 60s:
+  com.claude.session-search-sweep and com.claude.capacity-alarm.
+
+  --max-age 30 is REFRESH-AHEAD, not refresh-on-expiry, and it is load-bearing. Sweeping only once
+  the cache has expired leaves a hole: a tick at t=60 would see age 60 (<90, no sweep) and the next
+  is at t=120, so the cache is stale for the whole t=90..120 window and every reader in it abstains.
+  Refreshing at age>30 means the cache is never expired when a consumer arrives.
+
+  IT SWEEPS WITH HEAL, DELIBERATELY. cache_read refuses a no-heal payload to a heal-wanting caller
+  whenever any row is BAD_AUTH, so a --no-heal producer would poison the cache for every other
+  consumer precisely on the day an account is logged out — the day it matters most.
+
+  THE RISK THIS CARRIES, NAMED. ~1.4k sweeps/day against the OAuth usage endpoint. A 429 is classed
+  as a transient poll-throttle and sets row["error"], an errored row reads as data-unavailable, and
+  cc-route turns that into exit 3 = fire-blind refusal for DISPATCHED work. So a misconfigured or
+  over-frequent producer could degrade the fleet in a way that looks nothing like a latency feature.
+  If throttling appears, lengthen StartInterval before anything else, and read
+  ~/.claude/logs/claude-accounts.log — the 429 branch is instrumented.
+
+  Kill: launchctl bootout gui/$(id -u)/com.claude.accounts-keepwarm
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude.accounts-keepwarm</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/bin/claude-accounts" --keepwarm --max-age 30</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>60</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/chrisren/.claude/logs/accounts-keepwarm.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/chrisren/.claude/logs/accounts-keepwarm.err.log</string>
+</dict>
+</plist>

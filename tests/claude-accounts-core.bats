@@ -1245,11 +1245,12 @@ due = datetime.now(timezone.utc) + timedelta(hours=50)
 stamp = due.isoformat()
 assert "." in stamp and stamp.endswith("+00:00"), stamp
 src = open(sys.argv[1]).read().replace(
-    'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
+    'rows, wj, cached, prev = get_data(cfg, fresh, no_heal, max_wait, max_age)',
     'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude3",\n'
     '         "login_expires_h": 50.0, "login_fixable": False,\n'
     '         "login_expires_at": "' + stamp + '"}]\n'
     '    wj, cached, prev = {}, False, None')
+assert src != open(sys.argv[1]).read(), "source patch did not apply — the anchor moved"
 p = subprocess.run([sys.executable, "-c", src, "--login-status"], capture_output=True, text=True)
 f = p.stdout.strip().split("\t")
 assert len(f) == 6, f
@@ -1293,10 +1294,11 @@ PY
   CLAUDE_ACCOUNTS_JSON="$CA_CFG" run python3 - "$CA_BIN" <<'PY'
 import importlib.machinery, importlib.util, os, subprocess, sys, time
 src = open(sys.argv[1]).read().replace(
-    'rows, wj, cached, prev = get_data(cfg, fresh=fresh, no_heal=no_heal)',
+    'rows, wj, cached, prev = get_data(cfg, fresh, no_heal, max_wait, max_age)',
     'rows = [{"acct": "next3", "auth": "ok", "launcher": "claude3",\n'
     '         "login_expires_h": 500.0, "login_expires_at": "2099-01-01T00:00:00+00:00",\n'
     '         "login_fixable": False}]\n    wj, cached, prev = {}, False, None')
+assert src != open(sys.argv[1]).read(), "source patch did not apply — the anchor moved"
 p = subprocess.run([sys.executable, "-c", src, "--login-status"], capture_output=True, text=True)
 assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
 assert p.stdout.strip() == "", p.stdout

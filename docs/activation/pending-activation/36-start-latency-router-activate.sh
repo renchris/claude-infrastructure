@@ -88,5 +88,28 @@ else
   die "claude1 did not pin account 1 — the zshrc line is in place but the lib is not behaving; revert with the backups above"
 fi
 
+# ---- step 5: the keep-warm producer (optional but strongly recommended) ------------------------
+# Without it the router abstains whenever the cache has rolled, which means `claude` falls back to
+# the pinned account most of the time — correct, but the feature is then mostly inert.
+PLIST_SRC="$REPO/launchd/staged/com.claude.accounts-keepwarm.plist"
+PLIST_DST="$HOME/Library/LaunchAgents/com.claude.accounts-keepwarm.plist"
+if [ "${KEEPWARM:-1}" = 0 ]; then
+  say "keep-warm SKIPPED (KEEPWARM=0) — routing will abstain to the pinned account when the cache is cold"
+elif launchctl print "gui/$(id -u)/com.claude.accounts-keepwarm" >/dev/null 2>&1; then
+  say "keep-warm already loaded — leaving it alone"
+else
+  [ -r "$PLIST_SRC" ] || die "$PLIST_SRC missing"
+  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.claude/logs"
+  cp "$PLIST_SRC" "$PLIST_DST"
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null || launchctl load "$PLIST_DST" 2>/dev/null || true
+  if launchctl print "gui/$(id -u)/com.claude.accounts-keepwarm" >/dev/null 2>&1; then
+    say "keep-warm LOADED (StartInterval 60, refresh-ahead --max-age 30)"
+  else
+    say "keep-warm copy in place but NOT loaded — load it with:"
+    say "  launchctl bootstrap gui/$(id -u) $PLIST_DST"
+  fi
+fi
+
 say "DONE. Open a NEW shell (or: source $ZSHRC) — claude1 = account 1, bare claude routes."
 say "Kill switch if it ever misbehaves:  export CC_CLAUDE_ROUTE=off"
+say "Stop the warmer:  launchctl bootout gui/$(id -u)/com.claude.accounts-keepwarm"
