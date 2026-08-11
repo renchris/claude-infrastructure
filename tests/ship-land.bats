@@ -2116,6 +2116,44 @@ add_assert() {   # $1=branch $2=suite basename $3=the FIRST (non-final) statemen
   [ "$status" -eq 0 ]
   [ "$(echo "$output" | grep -c 'dead-assertion RED')" -eq 0 ]
 }
+
+@test "dead-assertion: SHED-PROOF — it still reds with the smoke SKIPPED (backlog e38d68f0c3c2)" {
+  # THE PLACEMENT PROPERTY, and the one the three tests above cannot see. setup() exports
+  # CC_GATE_MAX_LOAD=0 for the whole suite, so every one of them runs with shedding OFF — they
+  # prove the ratchet FIRES, never that it fires in a phase shedding cannot drop. Move the
+  # DEAD_LINT block from run_gate's ratchet position (ship-land.sh:1588) down past run_smoke's
+  # `load_above_ceiling` early return and all three stay GREEN, while the ratchet silently becomes
+  # a no-op on exactly the busy box it is needed on. Mutation-proved in both directions.
+  #
+  # That is not hypothetical: it is the state doc §10g measured on 2026-07-29, when the class's
+  # only enforcement lived in tests/bats-assert-liveness.bats — a SMOKE suite — and trunk carried
+  # 25 dead assertions while every land exited GREEN over `smoke:"skipped"`. A ratchet is only as
+  # enforcing as the phase that executes it, so the phase is what this test pins.
+  dead_fixture
+  export CC_GATE_MAX_LOAD=0.0001        # unsatisfiable ⇒ every land below sheds its smoke entirely
+
+  # THE PROPERTY first, because it refuses and therefore leaves trunk untouched for the control.
+  add_assert feat/shed-dead dead.bats '[[ 1 -eq 2 ]]'
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]                                    # a REAL verdict, with the smoke shed
+  echo "$output" | grep -q 'dead-assertion RED'
+  echo "$output" | grep -q 'dead.bats'
+  [ ! -s "$BATS_ARGV" ]
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- tests/dead.bats)" ]
+
+  # CONTROL — and it is what makes the assertion above non-vacuous rather than a second copy of
+  # test 1. A ceiling that silently failed to bite would leave the ratchet running in an UNSHED
+  # gate, the exit 6 would prove nothing about placement, and a relocated lint would still pass.
+  # So: same ceiling, a land the ratchet has no quarrel with, and the smoke must be SKIPPED.
+  git checkout -q main
+  stub_selector "" "tests/a.bats"                        # ≥1 direct suite ⇒ the shed check is REACHED
+  landable feat/shed-control sc.sh
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'smoke SKIPPED'               # the shed genuinely fired at this ceiling
+  [ ! -s "$BATS_ARGV" ]                                  # …and no suite ran, in either land
+}
 # ════ LANE=v1 CORPUS — the kill switch, kept exercised so it cannot rot ════════════════════════
 # SHIP_LAND_LANE=v1 restores the pre-inversion full-corpus gate for one release. It is an ENV
 # switch rather than a revert because a revert would itself need the gate — the bootstrap deadlock

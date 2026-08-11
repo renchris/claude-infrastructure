@@ -617,3 +617,74 @@ fails the test on iterations 3-11; it needs an `if`, not a ` || false`.
 Two lints landed here are deliberately placed *outside* that phase, in the statics block that always
 runs: `bats-shellcheck-lint` and its `--selftest`. The corpus invariant they assert is a grep, not a
 suite, for the same reason.
+
+---
+
+## 11. Closing `e38d68f0c3c2` — every premise had been fixed, and the fix was unpinned (2026-08-10)
+
+The item was worked twelve days after it was filed. **All three of its premises were false by then**,
+each retired by a different session, and none of those sessions closed the item. Re-measured here at
+`origin/main` with trunk's own analyzer:
+
+| The item's premise (2026-07-29) | Measured 2026-08-10 | Retired by |
+|---|---|---|
+| trunk carries **25 dead assertions** | **0** across 406 suites | `47a53504` (07-30) — revived 23 + a 24th hidden by an escaped quote |
+| the ratchet has **no enforcing path** | an own-scope lint in the land gate | `4a33679c` (07-31) — the ratchet became a LAND gate |
+| smoke is **shed at ceiling 8** | ceiling is derived, `hw.ncpu × 8` = **80** here | `f86ac0cc` (08-08) — "sized for the corpus v2 deleted" |
+
+The 15 named revivals are all present, `backup-prune-identity.bats:67` included — restructured to the
+`if` §10g prescribed, carrying a comment naming `47a53504` as the commit that first broke it by
+appending ` || false` to a for-loop guard. The §9b warning was read and heeded.
+
+### What was actually still open — the placement was never pinned
+
+`4a33679c` put the check where §10g argued it belonged: `ship-land.sh` `run_gate()`, in the ratchets
+block (line 1588), which returns before the smoke call (line 2059). Shedding lives inside `run_smoke`,
+so the lint is shed-proof **by construction**. Nothing asserted that, and construction is not a
+contract — §10g's whole finding is that *a ratchet is only as enforcing as the phase that executes it*,
+and that phase was held by nothing but a line number.
+
+`tests/ship-land.bats` carries three dead-assertion tests, and all three are **structurally blind** to
+the placement: `setup()` exports `CC_GATE_MAX_LOAD=0` — shedding off — for the entire suite. They
+prove the ratchet *fires*, never that it fires in a phase shedding cannot drop. The dedicated shed
+tests (§`shed:`) are unit tests of `load_above_ceiling` and never run a land. So the two halves of the
+2026-07-29 defect were each covered and their *intersection* was not.
+
+That gap is not theoretical, because shedding is still live. Skip rate by day from `land.log`:
+
+| | 08-05 | 08-06 | 08-07 | 08-08 | 08-09 | 08-10 |
+|---|---:|---:|---:|---:|---:|---:|
+| lands | 50 | 65 | 103 | 111 | 108 | 158 |
+| smoke skipped | 32 | 31 | 41 | 48 | 15 | 6 |
+
+`f86ac0cc` cut it from ~43% to ~4% — it did not end it. Roughly one land in twenty-five still gates
+with no suite of its diff executed, so a lint that drifted back into that phase would go silently
+inert on exactly the busy box it exists for, and the trunk-at-25 state would rebuild itself.
+
+### The fix: one shed-proof test, mutation-proved in both directions
+
+`tests/ship-land.bats` — *"dead-assertion: SHED-PROOF — it still reds with the smoke SKIPPED"*. It
+sets `CC_GATE_MAX_LOAD=0.0001` (unsatisfiable ⇒ always shed), lands a diff whose changed suite carries
+a non-final `[[ ]]`, and requires exit 6. Its **control is the load-bearing half**: a second land at
+the same ceiling must print `smoke SKIPPED`, because a ceiling that silently failed to bite would
+leave the ratchet running in an unshed gate and the exit 6 would say nothing about placement. The
+property runs first, so its refusal leaves trunk untouched for the control.
+
+Proved by relocating the lint rather than by asserting it passes — the mutant guards the `DEAD_LINT`
+block with `! load_above_ceiling`, i.e. exactly "the lint lives after the shed early-return":
+
+| Tree | tests 1-3 (existing) | SHED-PROOF (new) |
+|---|---|---|
+| real | ok | **ok** |
+| mutant — lint in the shed-able phase | **ok, all three** | **not ok** — `[ "$status" -eq 6 ]`, land exited 0 |
+
+The mutant lands the dead assertion on trunk with a green gate. Three tests written specifically for
+this ratchet cannot see it; the new one fails on the exact assertion, for the exact reason.
+
+**The generalisable half** is not about bats at all. Three sessions fixed three real defects and the
+item stayed open, because each fixed a *symptom* it could see and none owned the *conjunction* the
+item actually named. An item whose premises are all individually retired is not thereby resolved —
+and the residue, here, was the only part that could regress: **a fix that is correct by construction
+and unasserted is one refactor from being the original defect again.** Re-measure an item's premises
+before working it; when they are stale, the question is not "is it done" but "what did the fixes leave
+unpinned".
