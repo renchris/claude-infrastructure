@@ -658,6 +658,17 @@ Measured on this box with one ruler — [`scripts/terminal-bench.sh`](scripts/te
 
 **cmux does not dominate kitty either**: it wins the console axis — it ships, natively, the *shape* of the exception surface described below — and has not been run under load at all.
 
+#### And the RAM-efficient harness is not a terminal at all
+
+[jcode](https://github.com/1jehuang/jcode) (Rust, MIT, ~17k stars) advertises **+10.4 MB per added session against Claude Code's +212.7 MB**, which reads like the answer to a memory ceiling. It was evaluated 2026-08-11 and **ruled out** — the full 22-agent due diligence is in [`docs/research/jcode-due-diligence-2026-08-11.md`](docs/research/jcode-due-diligence-2026-08-11.md). Four reasons, any one sufficient:
+
+- **It replaces Claude Code, not kitty.** jcode is a harness that runs *inside* a terminal — its own `docs/TERMINAL_CAPABILITIES.md` is a matrix of kitty and iTerm2 quirks to survive, a document only a guest process writes. §6's HOLD on terminal migration is not engaged by it.
+- **Its Claude path impersonates Claude Code to Anthropic.** Same OAuth `client_id`, `User-Agent: claude-cli/…`, the `claude-code-20250219` beta header, and an injected *"You are Claude Code, Anthropic's official CLI for Claude"* system block; jcode's own `OAUTH.md` states the API rejects OAuth requests without it. Anthropic prohibits consumer-plan OAuth tokens in other products. **The exposure is not a bill — it is the four Max subscriptions the fleet runs on**, and jcode's default `Auto` credential mode falls back to a metered API key on OAuth failure with only a log line.
+- **It optimises the axis with headroom.** Resident memory ranks **fifth** of five binding constraints on this box ([`bottleneck-refute.md`](docs/research/memory-econ-rearchitecture-2026-08-10/bottleneck-refute.md)); what refuses a session today is router `KMAX=8×4=32` and a dispatcher ceiling of 6. Its marginal figure is Linux `/proc/smaps_rollup` PSS on cold, ~4.5 s-old sessions — **no macOS/arm64 number exists** from the vendor, this fleet, or any third party.
+- **It cannot touch the Model Context Protocol term.** The shared pool is daemon-only, jcode's own guidance requires stateful browser servers to be `shared:false` — so the saving on the one server that costs anything is 0 MB — and it is stdio-only, silently skipping the HTTP servers that already cost zero processes.
+
+What would reopen it: a measured macOS footprint under real context load, and a lane that draws on **no** Max plan. The one slot worth trialling is the opposite of a migration — jcode's headless swarm worker as an Agent-Team *assignee* runtime on a non-Claude provider, which needs none of the 81 hook commands across 12 event types that the interactive lane would have to rebuild.
+
 #### So the question stopped being "which one" — it runs on both
 
 **iTerm2 and kitty are both first-class**, and the same session machinery — Agent Teams, handoff, recycling, two-way comms, teardown — runs on either. One command wires the second one:
