@@ -825,6 +825,8 @@ cmd_list() {
         "$(jesc "$(dfield "$f" paths)")" "$(jesc "$(dfield "$f" notify_back)")" \
         "$(jesc "$(dfield "$f" goal)")" "$(jesc "$(dfield "$f" goal_probe)")" \
         "$(jesc "$(dfield "$f" custody)")" "$(jesc "$(dfield "$f" item)")"
+      printf '"repo":"%s","trunk":"%s",' \
+        "$(jesc "$(dfield "$f" repo)")" "$(jesc "$(dfield "$f" trunk)")"
       printf '"base_probe":"%s","base_sha":"%s","last_sha":"%s","last_seen_at":%s,"url":"%s",' \
         "$bprobe" "$(jesc "$base")" "$(jesc "$lsha")" \
         "$(is_num "$lsince" && printf '%s' "$lsince" || printf 'null')" "$(jesc "$url")"

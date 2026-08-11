@@ -2,7 +2,8 @@
 # cc-offload — ONE command to run work in Anthropic's cloud VMs instead of on this box.
 #
 #   cc-offload setup                       is this box able to offload at all? (grades, repairs, platters)
-#   cc-offload up --task <file|-> [-n N]    fire cloud session(s) and declare them
+#   cc-offload up --task <file|-> [-n N]    fire cloud session(s), declared + MANAGED
+#          [--goal T] [--goal-probe C] [--notify-back P] [--item ID] [--unmanaged]
 #   cc-offload ls [--all] [--json]          the board — one honest row per declared session
 #   cc-offload watch [--pane] [-i S]        the same board, live, optionally in its own kitty pane
 #   cc-offload say <id|all> "<message>"     the here→cloud arm (QUEUED, never "delivered")
@@ -76,6 +77,9 @@ ACCOUNTS_BIN="${CC_OFFLOAD_ACCOUNTS_BIN:-}"
 [ -n "$ACCOUNTS_BIN" ] || { for c in "$HOME/bin/claude-accounts" "$BINDIR/claude-accounts" "$(command -v claude-accounts 2>/dev/null || true)"; do
   [ -n "$c" ] && [ -x "$c" ] && { ACCOUNTS_BIN="$c"; break; }; done; }
 SPLIT_BIN="${CC_OFFLOAD_KITTY_SPLIT:-$BINDIR/kitty-split-launch.sh}"
+CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
+[ -n "$CUSTODY_BIN" ] || { for c in "$BINDIR/cc-custody" "$HOME/.claude/bin/cc-custody" "$(command -v cc-custody 2>/dev/null || true)"; do
+  [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
 WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
 REPO="${CC_OFFLOAD_REPO:-$ROOT}"
 # The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
@@ -352,6 +356,23 @@ cmd_setup() {
 # ═══ up ══════════════════════════════════════════════════════════════════════════════════════════
 # Delegates the whole create to handoff-fire.sh --cloud, which owns the pty allocator, the bounded
 # retry (~50-75% per attempt — the retry is what produces a session at all) and the declare.
+#
+# ── W2: A CLOUD FIRE IS A MANAGED FIRE ───────────────────────────────────────────────────────────
+# Before this, `up` returned an id and nothing else: no wake on completion, no custody (so a
+# `✅ SAFE TO CLOSE` was reachable with a cloud session mid-flight — the close-integrity mechanism
+# was blind to off-box work), and no goal (nothing re-judged it against an end state). Those are the
+# three things a LOCAL handoff-fire arms at the moment it fires, and the reason they must be armed
+# HERE is that none of them can be reconstructed later: the originator's pane, the goal, and the
+# custody debt are facts about the FIRE, and by the time the VM finishes, minutes or hours later,
+# the process that knew them is gone.
+#   custody  → cc-custody open, keyed on the firing cwd, marker = the session id. The return path
+#              discharges it on a content-verified land; until then the originator cannot close.
+#   goal     → recorded on the declaration and evaluated FROM THIS SIDE (the landed-by-content
+#              verdict, or a probe). A goal inside the VM would be unreadable here — the VM cannot
+#              run our hooks — and a goal keyed on the VM's own prose would be unfalsifiable.
+#   wake     → the notify-back pane, delivered by scripts/cloud-return.sh over the same v2 inbox
+#              transport a local peer uses. The originator never polls.
+UP_GOAL='' UP_GOAL_PROBE='' UP_NOTIFY_BACK='' UP_ITEM='' UP_UNMANAGED=0
 cmd_up() {
   local task='' n=1 account='auto' dry='' i via="${CC_OFFLOAD_VIA:-api}"
   while [ $# -gt 0 ]; do
@@ -362,10 +383,30 @@ cmd_up() {
       --account) account="${2:-auto}"; shift 2 ;;
       --via) via="${2:-api}"; shift 2 ;;
       --dry-run) dry='--dry-run'; shift ;;
+      # ── THE MANAGEMENT ARMS (W2) ────────────────────────────────────────────────────────────
+      --goal) UP_GOAL="${2:-}"; shift 2 ;;
+      --goal-probe) UP_GOAL_PROBE="${2:-}"; shift 2 ;;
+      --notify-back) UP_NOTIFY_BACK="${2:-}"; shift 2 ;;
+      --item) UP_ITEM="${2:-}"; shift 2 ;;
+      --unmanaged) UP_UNMANAGED=1; shift ;;
       -h|--help) usage 0 ;;
       *) die "up: unknown argument '$1'" ;;
     esac
   done
+
+  # A fire is MANAGED BY DEFAULT — that is the whole of W2. The wake target defaults to the firing
+  # pane, exactly as scripts/handoff-fire.sh's --notify-back does, so an operator who types nothing
+  # extra still gets the return path. `--unmanaged` is the deliberate opt-out, and it is spelled as
+  # a flag rather than as "leave it blank" so an UNMANAGED fire is a decision in the argv rather
+  # than an accident of environment.
+  if [ "$UP_UNMANAGED" = 0 ] && [ -z "$UP_NOTIFY_BACK" ]; then
+    UP_NOTIFY_BACK="${ITERM_SESSION_ID##*:}"
+  fi
+  if [ "$UP_UNMANAGED" = 1 ]; then UP_NOTIFY_BACK=''
+  elif [ -z "$UP_NOTIFY_BACK" ]; then
+    note "cc-offload: no pane to wake (ITERM_SESSION_ID is unset) — this fire is FIRE-AND-FORGET."
+    note "  Pass --notify-back <pane-uuid|role> to get a completion ping, or --unmanaged to mean it."
+  fi
   case "$via" in api|cli) ;; *) die "up: --via must be 'api' or 'cli', got '$via'" ;; esac
   [ -n "$task" ] || die "up: --task <file|-> is required (the brief the cloud session executes)"
   case "$n" in ''|*[!0-9]*) die "up: -n must be a positive integer" ;; esac
@@ -502,10 +543,27 @@ cmd_up_api() {
     rm -f "$errf"
 
     # Declare BEFORE delivering: an undeclared id is unobservable, and cc-notify refuses to claim a
-    # send about one (exit 3). Carry the owning account or the send goes out unrouted.
-    "$CLOUD_BIN" declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO" \
-      --url "https://claude.ai/code/$sid" --item "cc-offload $(basename "$pf")" >/dev/null 2>&1 \
+    # send about one (exit 3). Carry the owning account or the send goes out unrouted — and carry
+    # the management fields, because nothing downstream can reconstruct them (see the W2 block above).
+    local -a dargs=(declare --id "$sid" --branch "$br" --account "$account" --repo "$REPO"
+                    --url "https://claude.ai/code/$sid" --custody "$sid")
+    if [ -n "$UP_ITEM" ]; then dargs+=(--item "$UP_ITEM"); else dargs+=(--item "cc-offload $(basename "$pf")"); fi
+    [ -n "$UP_NOTIFY_BACK" ] && dargs+=(--notify-back "$UP_NOTIFY_BACK")
+    [ -n "$UP_GOAL" ]        && dargs+=(--goal "$UP_GOAL")
+    [ -n "$UP_GOAL_PROBE" ]  && dargs+=(--goal-probe "$UP_GOAL_PROBE")
+    "$CLOUD_BIN" "${dargs[@]}" >/dev/null 2>&1 \
       || { note "cc-offload: created $sid but DECLARE FAILED — it is live and unobservable"; rc=11; break; }
+
+    # CUSTODY OPENS AT THE FIRE, not at the return. The debt is what makes `✅ SAFE TO CLOSE`
+    # mechanically unreachable while this session is in flight, so it has to exist from the instant
+    # the session does — an originator that closed in the gap is exactly the hole this closes.
+    # Best-effort in the same sense handoff-fire's is: custody bookkeeping must never break a fire.
+    if [ -n "$CUSTODY_BIN" ]; then
+      "$CUSTODY_BIN" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
+        --slug "cloud-$sid" ${UP_NOTIFY_BACK:+--notify-back "$UP_NOTIFY_BACK"} \
+        ${ITERM_SESSION_ID:+--originator-pane "${ITERM_SESSION_ID##*:}"} >/dev/null 2>&1 \
+        || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
+    fi
 
     CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" "$NOTIFY_BIN" --cloud "$sid" "$(cat "$pf")" >/dev/null 2>&1
     local drc=$?
@@ -517,6 +575,14 @@ cmd_up_api() {
     fired=$((fired+1))
     printf '%s✓%s %s on %s — anthropic_cloud VM, repo ATTACHED, branch %s\n' "$C_OK" "$C_OFF" "$sid" "$account" "$br"
     printf '  view   : https://claude.ai/code/%s\n  observe: cc-offload ls\n  land   : cc-offload land\n' "$sid"
+    # State what is ARMED, in the same breath as the id. An unmanaged fire that looks identical to a
+    # managed one is how "it returned an id and nothing else" stayed invisible for as long as it did.
+    if [ -n "$UP_NOTIFY_BACK" ]; then
+      printf '  managed: custody OPEN (marker %s) · wakes %s on completion · goal: %s\n' \
+        "$sid" "$UP_NOTIFY_BACK" "${UP_GOAL:-<default: landed by content>}"
+    else
+      printf '  %sUNMANAGED: custody OPEN but NOTHING will be woken — collect it yourself.%s\n' "$C_WARN" "$C_OFF"
+    fi
   done
 
   if [ "$fired" -gt 0 ]; then

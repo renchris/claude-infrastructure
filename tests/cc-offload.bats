@@ -514,6 +514,81 @@ EOF
   [[ "$output" == *"must be"* ]] || false
 }
 
+# ══ up — the W2 management arms (custody · goal · wake) ═════════════════════════════════════════
+# Each of these pins a fact that CANNOT be reconstructed after the fire: the originator's pane, the
+# goal, and the custody debt are properties of the moment of firing, and by the time the VM finishes
+# the process that knew them is gone. A test that only checked the id would pass on the exact
+# fire-and-forget behaviour W2 exists to end.
+
+_api_fixture() { # the create stub + a git remote, shared by the arms below
+  echo "brief" >"$BATS_TEST_TMPDIR/t.txt"
+  mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
+  git -C "$CC_OFFLOAD_REPO" remote add origin https://github.com/renchris/claude-infrastructure.git 2>/dev/null
+  cat >"$STUBDIR/create-api.py" <<'EOF'
+#!/usr/bin/env python3
+import sys
+print(" ".join(sys.argv[1:]), file=sys.stderr)
+print("session_apitest")
+EOF
+  chmod +x "$STUBDIR/create-api.py"
+  cat >"$STUBDIR/cc-custody" <<'EOF'
+#!/usr/bin/env bash
+echo "cc-custody $*" >>"$CALLS"
+exit "${CUSTODY_RC:-0}"
+EOF
+  chmod +x "$STUBDIR/cc-custody"
+  export CC_OFFLOAD_CUSTODY_BIN="$STUBDIR/cc-custody"
+  export CC_OFFLOAD_CREATE_API="$STUBDIR/create-api.py"
+}
+
+@test "up OPENS CUSTODY at the fire, keyed on the session id" {
+  # Not at the return: a close during the flight is the hole, so the debt must exist from the
+  # instant the session does.
+  _api_fixture
+  ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-custody open .*--target cloud:session_apitest' "$CALLS" || false
+  grep -q 'cc-custody open .*--marker session_apitest' "$CALLS" || false
+}
+
+@test "up arms the wake target and the goal ON THE DECLARATION, where the return path can read them" {
+  _api_fixture
+  ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 \
+    --goal "the memo is on trunk" --goal-probe "test -f x" --item deadbeef1234
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare .*--notify-back PANE-UUID' "$CALLS" || false
+  grep -q 'cc-cloud declare .*--goal the memo is on trunk' "$CALLS" || false
+  grep -q 'cc-cloud declare .*--goal-probe test -f x' "$CALLS" || false
+  # the backlog id must reach the declaration verbatim — the return path marks THAT item done
+  grep -q 'cc-cloud declare .*--item deadbeef1234' "$CALLS" || false
+  [[ "$output" == *"managed: custody OPEN"* ]] || false
+}
+
+@test "up defaults the wake target to the FIRING pane — managed is the default, not an option" {
+  _api_fixture
+  ITERM_SESSION_ID="w0t0p9:DEFAULTED-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-cloud declare .*--notify-back DEFAULTED-UUID' "$CALLS" || false
+}
+
+@test "--unmanaged is the explicit opt-out, and SAYS so rather than looking like a managed fire" {
+  # POSITIVE CONTROL for the arm above: the same fixture, the same pane, one flag — and no wake
+  # target reaches the declaration. An unmanaged fire that printed identically to a managed one is
+  # how fire-and-forget stayed invisible.
+  _api_fixture
+  ITERM_SESSION_ID="w0t0p9:DEFAULTED-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 --unmanaged
+  [ "$status" -eq 0 ]
+  ! grep -q 'declare .*--notify-back' "$CALLS" || false
+  [[ "$output" == *UNMANAGED* ]] || false
+}
+
+@test "a custody failure is SURFACED and never silently downgrades the fire to fire-and-forget" {
+  _api_fixture
+  CUSTODY_RC=3 ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]                       # a fire is not aborted by bookkeeping …
+  [[ "$output" == *"close-integrity arm is NOT armed"* ]] || false   # … but it is never silent
+}
+
 @test "up --via api --dry-run says WOULD, never created" {
   echo x >"$BATS_TEST_TMPDIR/t.txt"
   mkdir -p "$CC_OFFLOAD_REPO" && git -C "$CC_OFFLOAD_REPO" init -q 2>/dev/null
