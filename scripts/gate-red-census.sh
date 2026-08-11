@@ -449,6 +449,7 @@ lock_recs = []
 for d in lock_rows:
     ts = d.get('ts') if isinstance(d.get('ts'), str) else None
     lock_recs.append({'t': epoch(ts) if ts else None, 'wait_s': num(d, 'wait_s'),
+                      'hold_s': num(d, 'hold_s'),
                       'exit': num(d, 'exit'), 'event': d.get('event')})
 
 def staleness(cut):
@@ -461,7 +462,13 @@ def staleness(cut):
     sf = sum(1 for r in free if r['exit'] == 42)
     tool_rounds = sum(1 for r in round_recs if r['t'] is not None and r['t'] >= cut)
     lands = sum(1 for r in recs if r['t'] is not None and r['t'] >= cut)
+    # THE HOLD, rendered so the published figure has a re-run instead of a re-derivation. README
+    # said 5-15s and ship.md said 84-302s while the store said neither, for weeks, because the
+    # number lived only in prose — the decay mode a figure with no tool behind it always takes.
+    holds = [r['hold_s'] for r in pop if r['hold_s'] is not None]
     return {
+        'hold_n': len(holds), 'hold_p50': pctile(holds, 50), 'hold_p90': pctile(holds, 90),
+        'hold_p99': pctile(holds, 99), 'hold_max': (float(max(holds)) if holds else None),
         'lock_n': len(pop), 'waited': len(waited), 'stale_given_waited': sw,
         'p_stale_given_waited': (sw / float(len(waited))) if waited else None,
         'wait_free': len(free), 'stale_wait_free': sf,
@@ -630,6 +637,18 @@ for m in stale_windows:
              m['tool_rounds'], m['lands']))
 print('    The wait-FREE column is the one to watch: it is push-RATE pressure, not lock contention,')
 print('    and it is invisible to the lock ledger\'s own utilization figure.')
+print('    MUTEX HOLD — the figure README and ship.md each published a different wrong value for.')
+print('    %-7s %8s   %8s %8s %8s %8s' % ('window', 'holds', 'p50', 'p90', 'p99', 'max'))
+for m in stale_windows:
+    print('    %-7s %8d   %8s %8s %8s %8s'
+          % (m['label'], m['hold_n'], secs(m['hold_p50']), secs(m['hold_p90']),
+             secs(m['hold_p99']), secs(m['hold_max'])))
+print('    The p99 tail is the in-lock fallback lane (statics + ratchets under the mutex, ~112s per')
+print('    §5.P3) — visible per land in gate_rounds/gate_s, not merely as an unexplained tail.')
+print('    A window that SPANS a change to the hold pools two mechanisms and describes neither:')
+print('    P1 (145fab7d, 2026-08-11T01:32Z) moved the sweep + reap out of the mutex and the same')
+print('    measure went from p50 61s / max 6771s to p50 3s. Prefer the shortest window with n above')
+print('    the floor, and say which window a published figure came from.')
 if not any(m['tool_rounds'] for m in stale_windows):
     print('    tool-side rounds are 0 — either nothing went stale, or these rows predate 2026-08-11.')
 print('')

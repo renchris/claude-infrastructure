@@ -494,3 +494,35 @@ print(\"ok\")"' _ "$output"
   [[ "$output" == *"WHY no smoke ran"* ]] || false
   [[ "$output" == *"none-unreached"* ]] || false
 }
+
+@test "the MUTEX HOLD is rendered, over completed holds only — the figure two docs got wrong" {
+  # README published "5-15s" and ship.md published "84-302s" for the same number, for weeks, and
+  # neither matched the store. That is the decay mode of a figure whose only home is prose: nothing
+  # could refute it more cheaply than an investigation. It is a panel now, so the next reading is a
+  # re-run. A QUEUED row (exit -1) carries hold_s 0 and must not enter the percentile — it would
+  # pull the median toward zero exactly when the box is most contended, i.e. quietest when it
+  # matters most, which is this suite's standing failure direction.
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"queued","wait_s":0,"hold_s":0,"exit":-1,"depth":1,"pid":9}\n' \
+    "$(ago 2)" >> "$LAND_LOG"
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"queued","wait_s":0,"hold_s":0,"exit":-1,"depth":1,"pid":9}\n' \
+    "$(ago 2)" >> "$LAND_LOG"
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"release","wait_s":0,"hold_s":100,"exit":0,"depth":0,"pid":4}\n' \
+    "$(ago 2)" >> "$LAND_LOG"
+  printf '{"ts":"%s","repo":"/r","branch":"b","event":"release","wait_s":0,"hold_s":200,"exit":0,"depth":0,"pid":5}\n' \
+    "$(ago 2)" >> "$LAND_LOG"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do land 2 0 ''; done
+  run "$CENSUS" --days 1 --json
+  [ "$status" -eq 0 ]
+  run bash -c 'printf "%s" "$1" | python3 -c "
+import json,sys
+s=json.load(sys.stdin)[\"staleness\"][0]
+assert s[\"hold_n\"]==2, s              # the two QUEUED rows are not holds
+assert s[\"hold_p50\"]==150.0, s        # …and pooling them would read 50.0
+assert s[\"hold_max\"]==200.0, s
+print(\"ok\")"' _ "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok"* ]] || false
+  run "$CENSUS" --days 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MUTEX HOLD"* ]] || false
+}
