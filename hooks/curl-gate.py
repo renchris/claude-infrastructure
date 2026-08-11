@@ -36,6 +36,42 @@ from urllib.parse import urlparse
 PROJECT_ROOT = "/Users/chrisren/Development/reso-management-app"
 AUDIT_LOG = Path.home() / ".reso" / "curl-audit.jsonl"
 
+# How far up from cwd to look for a worktree's `.git` pointer. Bounded so a
+# pathological cwd can never turn this hook into an unbounded filesystem walk.
+_SCOPE_WALK_MAX = 12
+
+
+def in_project_scope(cwd: str) -> bool:
+    """True when `cwd` is inside the reso project, including its linked worktrees.
+
+    `cwd.startswith(PROJECT_ROOT)` alone is NOT sufficient: reso's worktrees are
+    created under ~/Development/.worktrees/, which shares no prefix with
+    PROJECT_ROOT. Measured 2026-08-10: 64 live reso worktrees sat outside the
+    prefix, so every curl rule — pipe-to-shell, IMDS/private hosts, unsafe TLS,
+    file://, sensitive uploads — exited 0 with no decision in all of them.
+
+    A linked worktree's `.git` is a FILE holding `gitdir: <main>/.git/worktrees/<name>`;
+    a primary checkout's `.git` is a DIRECTORY. Walking up until one of those is
+    found tells us which repo owns `cwd` without shelling out to git.
+    """
+    if cwd.startswith(PROJECT_ROOT):
+        return True
+    try:
+        here = Path(cwd)
+        for cand in [here, *here.parents][:_SCOPE_WALK_MAX]:
+            marker = cand / ".git"
+            if marker.is_file():
+                first = marker.read_text(errors="replace").split("\n", 1)[0].strip()
+                if first.startswith("gitdir:"):
+                    return first.split(":", 1)[1].strip().startswith(PROJECT_ROOT)
+                return False
+            if marker.is_dir():
+                return False  # a primary checkout, and not PROJECT_ROOT
+    except OSError:
+        return False
+    return False
+
+
 # Hostnames that allow read-only methods (GET, HEAD) without prompt.
 READ_HOSTS = {
     "harbour.reso.gl",
@@ -405,13 +441,18 @@ def main() -> None:
     if tool_name != "Bash":
         sys.exit(0)
 
-    # Project-aware: only gate inside reso-management-app
-    if not cwd.startswith(PROJECT_ROOT):
+    cmd_trim = cmd.strip()
+    # Quick filter: only inspect commands containing curl (top-level or piped).
+    # This runs BEFORE the scope test on purpose: the scope test may touch the
+    # filesystem (linked-worktree resolution below), and this hook fires on every
+    # single Bash call. Ordering it first keeps that cost on curl commands only.
+    if "curl" not in cmd_trim:
         sys.exit(0)
 
-    cmd_trim = cmd.strip()
-    # Quick filter: only inspect commands containing curl (top-level or piped)
-    if "curl" not in cmd_trim:
+    # Project-aware: only gate inside reso-management-app — INCLUDING its linked
+    # worktrees, which live OUTSIDE PROJECT_ROOT (~/Development/.worktrees/), so a
+    # prefix test alone left the gate inert exactly where the work happens.
+    if not in_project_scope(cwd):
         sys.exit(0)
 
     # Only gate if curl appears as a command (not just a string literal)
