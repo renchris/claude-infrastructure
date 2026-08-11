@@ -400,6 +400,23 @@ fi
 # --dispose-abandoned is deliberately NOT passed: the DISPOSE class needs an operator-recorded
 # ownership decision, and a nightly cron is exactly the wrong place to infer one. The class is
 # still CLASSIFIED and printed by the janitor, so it stays visible in this log.
+#
+# --dispose-landed-dirt is a DIFFERENT class and its withholding has a different reason, so it gets
+# its own switch rather than riding on the one above. That rationale — "needs an operator-recorded
+# OWNERSHIP decision" — does not apply here: this class infers no ownership at all, it proves that
+# every dirty path is byte-identical to the trunk, and a worktree whose dirt is redundant is the
+# same object as the clean+idle+landed ones this cron ALREADY removes nightly.
+#
+# It still ships OFF, for one reason that is about timing rather than safety: 32 candidates exist
+# right now, the janitor has never once printed this class, and the first run after the switch flips
+# would remove all of them in the same night — before anyone has read a single line of evidence
+# about it. Every one of those directories also carries gitignored content (node_modules/,
+# .claude-tasks/, .ruff_cache/ — regenerable, but destroyed all the same), which the janitor now
+# reports per candidate. So the nightly log accrues the evidence first and the switch is flipped
+# against it, deliberately. Flip with WTGC_DISPOSE_LANDED_DIRT=1 (or in the plist); the class is
+# CLASSIFIED, counted and blast-radius-reported every night regardless, so this cannot go inert.
+DISPOSE_LANDED_DIRT="${WTGC_DISPOSE_LANDED_DIRT:-0}"
+case "$DISPOSE_LANDED_DIRT" in 1) GC_DIRT_FLAG="--dispose-landed-dirt" ;; *) GC_DIRT_FLAG="" ;; esac
 export CC_WTGC_REPO="$REPO"
 export CC_WTGC_TRUNK="origin/main"
 # EXCLUDE — colon-separated, also covering nested worktrees.
@@ -420,10 +437,13 @@ export CC_WTGC_EXCLUDE="$REPO:$HOME/.claude/autonomy/postland"
 # wins) and recovers the night when it is not. It is bounded, so it can never become a spin.
 _attempt=0
 while : ; do
+  # ${GC_DIRT_FLAG:+...} — an EMPTY switch must expand to NO argument at all, never to an empty
+  # string, which worktree-gc.sh's own flag loop would reject as `unknown flag ''` and turn the
+  # whole nightly sweep into an exit-2 no-op.
   if [ "$OBSERVE" = "1" ]; then
-    out="$(bash "$GC_SH" --dry-run --prune-branches 2>&1)"; rc=$?
+    out="$(bash "$GC_SH" --dry-run --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} 2>&1)"; rc=$?
   else
-    out="$(bash "$GC_SH" --prune-branches 2>&1)"; rc=$?
+    out="$(bash "$GC_SH" --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} 2>&1)"; rc=$?
   fi
   # Only the contention case is retryable. Every other rc is a real verdict and falls straight
   # through — a retry loop over a genuine error is how a bounded gate becomes a storm.

@@ -95,6 +95,38 @@ field() { # <key> → the value from the verdict line
   grep -q -- '--prune-branches' "$ARGV"
 }
 
+# ── --dispose-landed-dirt: OFF by default, and its OFF state must pass NO argument ───────────────
+# The switch ships off on purpose (32 candidates exist and the janitor has never printed the class,
+# so the first ON night would remove all of them before anyone read a line of evidence). What these
+# pin is that BOTH states are well-formed — the off state especially, because an empty switch that
+# expanded to an empty STRING would reach worktree-gc.sh's flag loop as `unknown flag ''` and turn
+# the entire nightly sweep into an exit-2 no-op. A default that silently disables the whole janitor
+# is a far worse bug than the feature it was guarding.
+@test "landed-dirt disposal is OFF by default and passes NO empty argument" {
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
+  ! grep -q -- '--dispose-landed-dirt' "$ARGV" || false
+  # the off state must not smuggle an empty arg in: the recorded argv is exactly the one flag
+  [ "$(tr -s ' ' '\n' < "$ARGV" | grep -c .)" -eq 1 ]
+}
+
+@test "WTGC_DISPOSE_LANDED_DIRT=1 passes the flag through (the RED-PROOF of the default)" {
+  export WTGC_DISPOSE_LANDED_DIRT=1
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q -- '--dispose-landed-dirt' "$ARGV"
+  grep -q -- '--prune-branches' "$ARGV"
+}
+
+@test "the flag rides alongside --dry-run in observe mode, never instead of it" {
+  export WTGC_OBSERVE=1 WTGC_DISPOSE_LANDED_DIRT=1
+  run bash "$SUT"
+  [ "$status" -eq 0 ]
+  grep -q -- '--dry-run' "$ARGV"
+  grep -q -- '--dispose-landed-dirt' "$ARGV"
+}
+
 # ── observe mode ─────────────────────────────────────────────────────────────────────────────────
 
 @test "WTGC_OBSERVE=1 passes --dry-run and takes no lock; live mode passes neither" {
