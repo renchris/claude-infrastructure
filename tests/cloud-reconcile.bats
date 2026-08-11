@@ -86,10 +86,25 @@ while [ $# -gt 0 ]; do
   case "$1" in --branch) b="${2:-}"; shift 2 ;; --branch=*) b="${1#--branch=}"; shift ;; *) shift ;; esac
 done
 case " ${LAND_STUB_FAIL:-} " in *" $b "*) exit 6 ;; esac
+# 🚨 THE STUB ADVANCES origin/main, because the REAL lander does. Without this it left the world in
+# a pre-land state, and every arm downstream graded a branch that was still ahead of trunk — which
+# is how a post-hoc `fill-paths` shipped green and then refused on the first live round trip, where
+# the landed branch was already an ancestor of trunk and the range was empty (memory:
+# control-must-replay-the-real-artifact). Content-identical, sha-different: the reconciler
+# re-authors, so a fast-forward here would also prove landedness by ancestry rather than by content.
+if [ "${LAND_STUB_NO_ADVANCE:-0}" != 1 ] && [ -n "${LAND_STUB_REPO:-}" ]; then
+  tree="$(git -C "$LAND_STUB_REPO" rev-parse "refs/heads/$b^{tree}" 2>/dev/null)" || tree=""
+  if [ -n "$tree" ]; then
+    new="$(git -C "$LAND_STUB_REPO" commit-tree "$tree" -p origin/main -m "landed by a re-author" 2>/dev/null)"
+    [ -n "$new" ] && git -C "$LAND_STUB_REPO" push -q origin "$new:refs/heads/main" 2>/dev/null
+    git -C "$LAND_STUB_REPO" fetch -q origin 2>/dev/null
+  fi
+fi
 exit 0
 STUB
   chmod +x "$LAND_STUB"
   export CLOUD_RECONCILE_LAND_BIN="$LAND_STUB"
+  export LAND_STUB_REPO="$REPO"
   export CLOUD_RECONCILE_REPO="$REPO"
 
   have_subject() {   # RED-proof legibility: name the absence instead of dying on 127
@@ -680,13 +695,9 @@ Claude-Session: https://claude.ai/code/session_01ZZ"
   [[ "$output" == *"claude/twice"*ELIGIBLE* ]] || false
   run env CONFIRM=1 CLOUD_RECONCILE_CLOUD_BIN="$ROOT/bin/cc-cloud" bash "$CR" --land claude/twice
   [ "$status" -eq 0 ]
-  # the stub does not really push to origin/main, so make the content present there the way a real
-  # land does — by CONTENT, under a different sha (the reconciler re-authors; the pushed sha never
-  # lands, and a checker written against it reads "not landed" on a perfect land).
-  tree="$(git -C "$REPO" rev-parse "refs/heads/claude/twice^{tree}")"
-  new="$(git -C "$REPO" commit-tree "$tree" -p origin/main -m "landed by a re-author")"
-  git -C "$REPO" push -q origin "$new:refs/heads/main"
-  git -C "$REPO" fetch -q origin
+  # The stub advanced origin/main by content under a different sha, exactly as the real lander's
+  # re-author does — so this second read is over the REAL post-land world, where the branch is
+  # already an ancestor of trunk and only a set derived BEFORE the land could have been written.
   run bash "$CR" --list
   [[ "$output" == *"claude/twice"*LANDED* ]] || false
 }
