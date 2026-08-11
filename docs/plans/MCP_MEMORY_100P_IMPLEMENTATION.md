@@ -347,6 +347,44 @@ blindness is now an open question on `9362e80a999f`, and it should be answered b
 designed — a re-aim scoped against a measurement taken through a dead instrument would be aimed at the
 wrong thing.
 
+**Item 2 — PER_MB tree derivation, landed `b5fa476a`.** The frozen 636 counted session tree ROOTS and
+charged every descendant to nobody. Now derived live from whole-tree RSS, reusing
+`read_coalition_procs`' existing parent[]/depth-64 walk — one walk in the file, asserted by a test so a
+future caller cannot quietly fork it. Live tick: **865 MB/session (`per_session_mb_src":"derived"`,
+17,303 MB over 20 trees), against the constant's 636** — i.e. the old figure overstated remaining
+headroom by ~34% (41 more sessions, not the 55 the constant implied). Every state names its own source
+(derived / override / fallback), because this file has already shipped the other version of that defect
+twice (`${SWAP_MB:-0}` rendering a dead sysctl as a healthy 0; `"est_room_sessions":?` making the one
+row that said "the instrument broke" the one row no JSON parser could read).
+
+**Item 4 — inert MCP probe, landed `e3509eb6`, and the briefed root cause was wrong in the direction
+that matters.** `command -v claude` did NOT fail on the hook's PATH: measured over
+`~/.claude/logs/sessions.log`, **7,022 of 8,636 sessions logged an MCP Status line**. It resolved — to
+`~/Library/pnpm/claude`, the stock pnpm install at **2.0.5**, while the session that fired the hook was
+**2.1.220**. Side by side the same minute: stale binary 2 servers, running binary 6. The four
+claude.ai session-connected servers were structurally invisible, and the sensor fed `MCP: 2 server(s)`
+into every session's additionalContext as fact. *A "never ran" sensor is loud; a sensor answering
+confidently from the wrong subject is not, and it had been doing so for 81% of all sessions.* The
+resolution now ends at the PPID's own binary and deliberately has **no bare `command -v claude` rung**.
+The second half: "could not ask" and "answered zero" no longer share one value.
+
+⚠️ **Its cost, stated because W3 named it.** The probe still shells out to `claude mcp list`, so it
+still spawns one MCP chain per session start — ~2.6 s median, 2.89 s worst on a clean bench. Accepted,
+because the alternative (reading config) cannot answer a *connectivity* question at all, and because
+this is strictly better than what it replaces: the old loop had **no ceiling whatsoever** (3 unbounded
+CLI spawns + 3 s backoff), and the probe is now bounded twice, per-attempt and whole-probe. The bound
+itself is a lesson: the first value written was 5 s and a live fixtured run refuted it **inside the
+hour** at 10.5 s — a clean-bench median is not the band on a box also running sibling sessions and a
+bats corpus.
+
+**Wave verification (all run this turn):** `compressor-sentinel` 82/82 · `ignition-gate-census` 9/9 ·
+`capacity-alarm-permb` 6/6 · `capacity-alarm` 37/37 (unchanged) · `session-start-mcp-probe` 14/14.
+Every suite's control replays the REAL pre-fix artifact from `origin/main`, never a mutant of its own
+test file. **Filed, not folded:** `09f087a7f3d8` — `scripts/terminal-bench.sh:167` carries the same
+comm-split defect (`split($2,a,"/")` over a comm-LAST read), so an fnm-installed binary is never found
+by name and the bench silently measures nothing; one-line fix, but it needs a fixture that does not
+exist yet, which is why it did not join the frozen four.
+
 ## W5 · end-state verification sweep (lead-inline)
 
 1. Re-run the census one-liner fleet-wide: expected zero unrequested chains; whatever chains exist are pinned,
