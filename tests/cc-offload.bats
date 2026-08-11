@@ -86,6 +86,11 @@ EOF
   cat >"$STUBDIR/cc-notify" <<'EOF'
 #!/usr/bin/env bash
 echo "cc-notify $*" >>"$CALLS"
+# The ENVIRONMENT is part of this call's contract, not decoration: cc-notify's --cloud transport
+# resolves its claude binary from CC_CLAUDE_BIN and falls back to `command -v claude`, which on the
+# real box finds a shell function (invisible) or the pinned 2.1.114 (no --cloud verb). A stub that
+# recorded only argv could not tell a working call from the dead one backlog 6ad6ec4121d2 names.
+echo "cc-notify-env CC_CLAUDE_BIN=${CC_CLAUDE_BIN-UNSET}" >>"$CALLS"
 exit "${NOTIFY_RC:-0}"
 EOF
   cat >"$STUBDIR/handoff-fire.sh" <<'EOF'
@@ -191,6 +196,28 @@ EOF
   grep -q 'cc-notify --cloud session_alive ping' "$CALLS"
   ! grep -q 'session_dead' "$CALLS" || false # NOT-STARTED is not a live target …
   ! grep -q 'session_gone' "$CALLS"        # … and retired never is
+}
+
+@test "say pins the SAME claude binary default that up carries — the steering arm's dead-by-default" {
+  # backlog 6ad6ec4121d2. `up` passed CC_CLAUDE_BIN="${CC_CLAUDE_BIN:-$CLOUD_CLAUDE}" and `say` did
+  # not, so the create+brief path worked and the mid-flight steering arm exited 4 (no usable claude
+  # binary) until it was pinned by hand. The assertion is on the ENV of the call, because that is
+  # where the whole difference lives — both call sites print identical argv.
+  export CC_CLOUD_CREATE_BIN="$BATS_TEST_TMPDIR/claude-220"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$CC_CLOUD_CREATE_BIN"; chmod +x "$CC_CLOUD_CREATE_BIN"
+  run "$SUT" say session_alive "steer"
+  [ "$status" -eq 0 ]
+  grep -q "cc-notify-env CC_CLAUDE_BIN=$CC_CLOUD_CREATE_BIN" "$CALLS"
+  ! grep -q 'cc-notify-env CC_CLAUDE_BIN=UNSET' "$CALLS" || false
+}
+
+@test "say does not OVERRIDE an explicit CC_CLAUDE_BIN — the default is a floor, not a clamp" {
+  # POSITIVE CONTROL for the arm above: `:-` must keep the caller's own choice. A `=` there would
+  # pin every send to the create binary and silently defeat the seam the suite itself relies on.
+  export CC_CLAUDE_BIN="$BATS_TEST_TMPDIR/mine"
+  run "$SUT" say session_alive "steer"
+  [ "$status" -eq 0 ]
+  grep -q "cc-notify-env CC_CLAUDE_BIN=$BATS_TEST_TMPDIR/mine" "$CALLS"
 }
 
 @test "say all with nothing live refuses rather than reporting success" {
