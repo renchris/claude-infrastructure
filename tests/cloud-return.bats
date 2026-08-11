@@ -358,3 +358,22 @@ seen_at() { # <epoch>
   [ -n "$call_line" ] && [ -n "$exit_line" ] || false
   [ "$call_line" -lt "$exit_line" ]
 }
+
+@test "the sweep's call is GATED to the deployed copy — a suite may never land a branch" {
+  # Bought at full price on 2026-08-11: tests/autonomy-sweep.bats runs the real sweep once per test,
+  # postland-verify runs that suite from a throwaway worktree of the landed tree, and four
+  # concurrent passes landed against the operator's LIVE declaration store, raced the backlog ledger
+  # and re-pinged the originator. Every other block in that script is a pure read; this one acts.
+  local sweep="${BATS_TEST_DIRNAME}/../scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh absent"
+  grep -q 'CLAUDE_CONFIG_DIR' "$sweep"
+  grep -q 'skipped-not-deployed' "$sweep"
+  # The gate must key on the UNRESOLVED $0: the deployed path is a SYMLINK into the checkout, so a
+  # resolved path is identical in both cases and the discriminator disappears.
+  local gate_line res_line
+  gate_line="$(grep -n 'case "\$0" in' "$sweep" | head -1 | cut -d: -f1)"
+  [ -n "$gate_line" ]
+  # …and it must precede the invocation it guards.
+  res_line="$(grep -n 'cloud-return.sh --sweep' "$sweep" | head -1 | cut -d: -f1)"
+  [ -z "$res_line" ] || [ "$gate_line" -lt "$res_line" ]
+}
