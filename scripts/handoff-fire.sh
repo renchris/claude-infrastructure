@@ -182,7 +182,7 @@
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
 #              [--dirty-owner successor] [--successor-assume-engaged] [--allow-dirty] [--dry-run]
-#              [--transplanted-source]
+#              [--transplanted-source] [--source-pane UUID --source-session UUID]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
 #                       Teams assignee pattern for peer sessions. Arms the watcher FIRST, then
 #                       types /exit (INTERRUPTS any in-flight turn and exits in seconds — E2E
@@ -224,6 +224,19 @@
 #                       at a DIFFERENT config dir, and the split-brain lock still held. Any miss
 #                       falls through to the origin gate and REFUSES.
 #                       Kill switch: CC_TRANSPLANT_SOURCE_CLOSE=0 disables the path entirely.
+#                       --source-pane UUID --source-session UUID  retire a pane OTHER than this
+#                       one — the ONLY form that reaches the case the class was built for. A
+#                       session at 100% of its window cannot execute a turn, so the husk cannot run
+#                       its own close; the transplant is driven from a third pane, and self-close
+#                       there would close the DRIVER. Admissible only WITH --transplanted-source,
+#                       never with --session-id, and only when the session registry independently
+#                       binds the two: cc-registry/<source-pane>.json must name exactly
+#                       <source-session>. Mismatch / missing row / row without .session_id all
+#                       REFUSE — a caller may not assert the pairing, only state it for checking.
+#                       All six preconditions above then bind on the SOURCE session's own evidence
+#                       (its tombstone, found across CC_PROJECTS_DIRS; its config dir derived from
+#                       where that tombstone sits), and the cwd-scoped dirty guard reads the source
+#                       pane's worktree from its registry row rather than the driver's.
 #   land (--branch NAME | --worktree PATH) [--repo P] [--trunk B] [--dry-run]
 #                       DESK-LOCAL LAND (cc-backlog c06778fd13a7). Land a worktree's committed,
 #                       gate-green work onto origin/<trunk> via the sanctioned scripts/ship-land.sh,
@@ -4595,6 +4608,7 @@ fi
 if [ "${1:-}" = "self-close" ]; then
   shift
   SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
+  SC_SOURCE_PANE="" SC_SOURCE_SESSION="" SC_REMOTE_SOURCE=0 SC_SUBJ_CWD=""
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
     --successor)   SC_SUCCESSOR="${2:?--successor needs a pane uuid}"; shift 2 ;;
@@ -4607,6 +4621,8 @@ if [ "${1:-}" = "self-close" ]; then
     --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
     --orphaned-assignee) SC_ORPHANED_ASSIGNEE=1; shift ;;
     --transplanted-source) SC_TRANSPLANTED_SOURCE=1; shift ;;
+    --source-pane)    SC_SOURCE_PANE="${2:?--source-pane needs a pane uuid}"; shift 2 ;;
+    --source-session) SC_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
@@ -4635,7 +4651,106 @@ if [ "${1:-}" = "self-close" ]; then
   # kitty box exited 1 having done nothing and could never obey its own self-retire instruction; its
   # pane and worktree leaked until an operator reaped them.
   pin_term_verdict_for_watcher
+  # ---- REMOTE TRANSPLANTED SOURCE (item c5d25ebe630b) — the husk cannot close ITSELF ------------
+  # THE CASE THIS EXISTS FOR, measured 2026-08-10. Three sessions were transplanted off next3 while
+  # next3 sat at 100% of its 5-hour window. A session at its limit CANNOT EXECUTE A TURN, so it can
+  # never run the command that retires it — and the transplant therefore has to be driven from a
+  # THIRD pane. `self-close` is by construction the invoker's own pane, so driving it from there
+  # would have closed the DRIVER. It was not used; three husk panes were left standing.
+  #
+  # WHY IT IS SAFE TO NAME ANOTHER PANE HERE, when verify_self_pane below refuses exactly that. The
+  # gate under it is not "is this pane mine" — that is a PROXY. The real question both forms ask is
+  # *does the pane about to be closed actually hold the session this close is about*, and the
+  # process tree is simply the only evidence a session has about ITSELF. For a pane the caller
+  # merely NAMES, the process tree proves nothing (it will say not-mine for the husk and for an
+  # innocent bystander alike, which is why letting the caller assert the pairing unbacked would
+  # close a pane that got named by mistake). The registry row IS that evidence, from an independent
+  # producer: hooks/session-start.sh writes ~/.claude/cc-registry/<pane>.json at session start with
+  # the pane's own session_id, and successor_pin (:2182) already treats it as proof for the
+  # successor half of this very close. So the pairing is PROVEN, not asserted:
+  #   the caller states BOTH halves (--source-pane P, --source-session X) and the registry row for
+  #   P must independently name X. A mismatch, a missing row, or a row with no session_id REFUSES.
+  # Nothing here widens the ordinary path: this runs only when --source-pane is passed, only
+  # alongside --transplanted-source (whose six preconditions all still bind, below, on the SOURCE
+  # session's own tombstone rather than the driver's), and the default env-lookup path reaches
+  # verify_self_pane byte-for-byte as before.
+  if [ -n "$SC_SOURCE_PANE" ] || [ -n "$SC_SOURCE_SESSION" ]; then
+    if [ -z "$SC_SOURCE_PANE" ] || [ -z "$SC_SOURCE_SESSION" ]; then
+      { echo "!! self-close REFUSED: --source-pane and --source-session are a PAIR; got only one."
+        echo "!!   The pane id alone would let the registry supply the session it names, which is not"
+        echo "!!   a check — it is the caller believing whatever that pane happens to hold. The"
+        echo "!!   session id alone names no pane to close. Both, cross-checked, is the evidence."
+      } >&2
+      exit 2
+    fi
+    if [ "$SC_TRANSPLANTED_SOURCE" != 1 ]; then
+      { echo "!! self-close REFUSED: --source-pane is admissible ONLY with --transplanted-source."
+        echo "!!   Closing a pane that is not the caller's is justified by exactly one fact: that pane"
+        echo "!!   is a husk over a session which MOVED and is being carried elsewhere. Without the"
+        echo "!!   class — and the tombstone, the different config dir and the live lock that"
+        echo "!!   establish it — this would be a general-purpose 'close that pane', which self-close"
+        echo "!!   is deliberately not."
+      } >&2
+      exit 2
+    fi
+    if [ "$SC_SID_EXPLICIT" = 1 ]; then
+      echo "!! self-close REFUSED: --source-pane and --session-id both name the pane to close; pass one." >&2
+      exit 2
+    fi
+    SC_SRC_ROW="$REG_DIR/$SC_SOURCE_PANE.json"
+    if [ ! -f "$SC_SRC_ROW" ]; then
+      { echo "!! self-close REFUSED: no session-registry row for pane $SC_SOURCE_PANE ($SC_SRC_ROW)."
+        echo "!!   That row is the ONLY thing tying a named pane to the session it holds. Without it"
+        echo "!!   this close would be acting on the caller's word about someone else's pane."
+      } >&2
+      exit 2
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "!! self-close REFUSED: --source-pane needs jq to read the registry row, and jq is not on PATH. Unreadable evidence is not evidence." >&2
+      exit 2
+    fi
+    SC_SRC_ROW_SID="$(jq -r '.session_id // empty' "$SC_SRC_ROW" 2>/dev/null || true)"
+    if [ -z "$SC_SRC_ROW_SID" ]; then
+      { echo "!! self-close REFUSED: the registry row for pane $SC_SOURCE_PANE names no .session_id."
+        echo "!!   row: $SC_SRC_ROW"
+        echo "!!   A row without one records that a pane exists, not which session lives in it — so"
+        echo "!!   it cannot support the pairing this close turns on. (successor_pin refuses the same"
+        echo "!!   row for the same reason, one gate later.)"
+      } >&2
+      exit 2
+    fi
+    if [ "$SC_SRC_ROW_SID" != "$SC_SOURCE_SESSION" ]; then
+      { echo "!! self-close REFUSED: pane $SC_SOURCE_PANE does NOT hold session ${SC_SOURCE_SESSION:0:8}."
+        echo "!!   the registry says that pane holds ${SC_SRC_ROW_SID:0:8} (row $SC_SRC_ROW)"
+        echo "!!   This is the whole point of the check: a caller naming the wrong pane — a stale id,"
+        echo "!!   a typo, a pane recycled since the transplant — would otherwise retire a live"
+        echo "!!   session that merely got named. Nothing was typed and nothing was closed."
+      } >&2
+      exit 2
+    fi
+    SC_SID="$SC_SOURCE_PANE"
+    SC_REMOTE_SOURCE=1
+    # The SUBJECT of every cwd-scoped guard below is the pane being CLOSED, not the driver running
+    # this. The registry row carries it; empty (an older row) leaves those guards exactly as they
+    # are, reading the caller's cwd — degraded to today's behaviour, never silently skipped.
+    SC_SUBJ_CWD="$(jq -r '.cwd // empty' "$SC_SRC_ROW" 2>/dev/null || true)"
+    [ -d "$SC_SUBJ_CWD" ] || SC_SUBJ_CWD=""
+    # LEGIBILITY (R10): a close that swaps its own identity proof says which proof it used.
+    echo "→ remote transplanted-source close: pane $SC_SOURCE_PANE is PROVEN to hold session ${SC_SOURCE_SESSION:0:8} by its registry row $SC_SRC_ROW — the self-identity gate is REPLACED by that binding, not skipped" >&2
+    if [ -n "$SC_SUBJ_CWD" ]; then
+      echo "→ cwd-scoped guards (dirty tree) will read the SOURCE pane's own worktree $SC_SUBJ_CWD, not this pane's" >&2
+    fi
+  fi
   SC_SID="${SC_SID:-$(self_pane_id)}"
+  # THE TARGET IS RE-ASSERTED AFTER RESOLUTION, not merely assigned before it. Everything below acts
+  # on $SC_SID — the watcher types /exit into that pane and the close closes it — and the default
+  # one line up silently substitutes THIS PROCESS'S OWN pane whenever the value is empty. So a remote
+  # close whose retarget failed to survive to here would not fail: it would quietly close the DRIVER,
+  # which is precisely the defect this path exists to fix, inverted. One comparison, fails closed.
+  if [ "$SC_REMOTE_SOURCE" = 1 ] && [ "$SC_SID" != "$SC_SOURCE_PANE" ]; then
+    echo "!! self-close REFUSED: the remote target did not survive pane resolution — asked for $SC_SOURCE_PANE, about to act on ${SC_SID:-<unresolved>}. Refusing rather than closing the wrong pane." >&2
+    exit 2
+  fi
   [ -n "$SC_SID" ] || { echo "!! self-close needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
   # ---- SELF-IDENTITY GATE (item 71909cbeee08) — prove the pane is OURS before anything acts on it.
   # FIRST, ahead of every gate below, because all of them key on $SC_SID: the fired-peer stamp is
@@ -4644,8 +4759,15 @@ if [ "${1:-}" = "self-close" ]; then
   # settled after those have already reasoned about it is not a gate, it is a footnote.
   # See the pane_ownership / verify_self_pane headers (:1253) for the oracle, the three verdicts,
   # and why `unknown` must not refuse.
-  verify_self_pane "$SC_SID" "$SC_SID_EXPLICIT" self-close || exit 2
-  SC_SID="$HF_VERIFIED_PANE"
+  # REPLACED, never skipped, and only for the remote class: the block above proved the pane holds
+  # the named session from an INDEPENDENT producer's record, which is the question this gate asks
+  # and the process tree cannot answer about a pane the caller merely names. Leaving it in place
+  # would not merely be redundant — on a DEFAULTED id it ADOPTS, so it would rewrite the target from
+  # the husk to the pane THIS process lives in and close the driver: the defect inverted.
+  if [ "$SC_REMOTE_SOURCE" = 0 ]; then
+    verify_self_pane "$SC_SID" "$SC_SID_EXPLICIT" self-close || exit 2
+    SC_SID="$HF_VERIFIED_PANE"
+  fi
   # SUCCESSION STATEMENT (mandatory). A pane close is operator-visible surface: 3× on 2026-07-13
   # a close with no declared continuation read as "the handoff killed our session" — twice a real
   # stranding (pre-setsid recycle watcher), once a PERFECT succession whose successor was simply
@@ -4791,7 +4913,12 @@ USAGE
       exit 2
     fi
     # (3) this session's own transplant tombstone.
-    SC_TS_SID="${CLAUDE_CODE_SESSION_ID:-}"
+    # REMOTE (--source-pane): "this session" is the SOURCE pane's session, not the driver's. Taking
+    # $CLAUDE_CODE_SESSION_ID here would look up the tombstone of the pane that is STAYING OPEN — a
+    # session with no tombstone at all, so the class would refuse every remote close; and were the
+    # driver itself mid-transplant, it would admit the close on the WRONG session's evidence. The
+    # sid used is the one the registry row above proved that pane holds.
+    if [ "$SC_REMOTE_SOURCE" = 1 ]; then SC_TS_SID="$SC_SOURCE_SESSION"; else SC_TS_SID="${CLAUDE_CODE_SESSION_ID:-}"; fi
     if [ -z "$SC_TS_SID" ]; then
       { echo "!! self-close REFUSED: --transplanted-source, but \$CLAUDE_CODE_SESSION_ID is unset."
         echo "!!   The tombstone is keyed on the SESSION uuid, not the pane id — without it there is"
@@ -4806,20 +4933,35 @@ USAGE
     # SECOND oracle for the producer's own key, free to drift from it; and the sid is a globally
     # unique uuid, so the glob is exact. More than one hit is pathological, and refused rather than
     # picked from — the same call lr-transplant makes on a duplicated transcript.
+    # REMOTE: the source session lives on ANOTHER ACCOUNT by definition — that is what made it a
+    # transplant — so its tombstone is not under the driver's config dir. Search every account's
+    # projects dir, which is the SAME move (and the same list) self-close already makes to resolve a
+    # SUCCESSOR's transcript for the engagement gate (:313): the account is unknown here and the sid
+    # is a globally-unique UUID, so the glob is exact wherever it lands. $SC_TS_CFG is then DERIVED
+    # from where it was found, which is what keeps precondition (4) honest below.
+    if [ "$SC_REMOTE_SOURCE" = 1 ]; then SC_TS_ROOTS="$CC_PROJECTS_DIRS"; else SC_TS_ROOTS="$SC_TS_CFG/projects"; fi
     SC_TOMBSTONE="" SC_TS_DUPES=0
-    for _sc_ts in "$SC_TS_CFG"/projects/*/"$SC_TS_SID".HANDOFF.json; do
-      [ -f "$_sc_ts" ] || continue
-      [ -z "$SC_TOMBSTONE" ] || SC_TS_DUPES=1
-      SC_TOMBSTONE="$_sc_ts"
+    # shellcheck disable=SC2086  # deliberate word-split: CC_PROJECTS_DIRS is a space-separated list
+    for _sc_pd in $SC_TS_ROOTS; do
+      for _sc_ts in "$_sc_pd"/*/"$SC_TS_SID".HANDOFF.json; do
+        [ -f "$_sc_ts" ] || continue
+        [ -z "$SC_TOMBSTONE" ] || SC_TS_DUPES=1
+        SC_TOMBSTONE="$_sc_ts"
+      done
     done
-    unset _sc_ts
+    unset _sc_ts _sc_pd
+    # The config dir the tombstone was found under IS the source account's own — pure string
+    # arithmetic on the path the glob matched, never a re-derivation of the account map. Only in
+    # remote mode: locally $SC_TS_CFG is this pane's config dir and must stay exactly that.
+    if [ "$SC_REMOTE_SOURCE" = 1 ] && [ -n "$SC_TOMBSTONE" ]; then SC_TS_CFG="${SC_TOMBSTONE%/projects/*}"; fi
     if [ "$SC_TS_DUPES" = 1 ]; then
-      echo "!! self-close REFUSED: more than one transplant tombstone for session ${SC_TS_SID:0:8} under $SC_TS_CFG/projects — disambiguate by hand." >&2
+      echo "!! self-close REFUSED: more than one transplant tombstone for session ${SC_TS_SID:0:8} under: $SC_TS_ROOTS — disambiguate by hand." >&2
       exit 2
     fi
     if [ -z "$SC_TOMBSTONE" ]; then
       { echo "!! self-close REFUSED: --transplanted-source, but session ${SC_TS_SID:0:8} has NO transplant tombstone."
-        echo "!!   looked for: $SC_TS_CFG/projects/*/$SC_TS_SID.HANDOFF.json"
+        # shellcheck disable=SC2086  # deliberate word-split: space-separated list of projects dirs
+        for _sc_pd in $SC_TS_ROOTS; do echo "!!   looked for: $_sc_pd/*/$SC_TS_SID.HANDOFF.json"; done; unset _sc_pd
         echo "!!   lr-transplant.sh writes that file only after the copy verified sha-identical. No"
         echo "!!   tombstone means no completed transplant, so this pane is not a husk — it is an"
         echo "!!   ORIGIN session, and it stays up. This flag names a CATEGORY; it cannot confer one."
@@ -5134,18 +5276,27 @@ USAGE
   # SHARED-CHECKOUT REALITY (23:02 2026-07-13): the dirt in cwd may be a LIVE successor's
   # in-flight work, not this session's — --dirty-owner successor asserts exactly that (owner
   # verified alive above), keeping --allow-dirty for the genuinely lossy override.
-  if [ "$SC_ALLOW_DIRTY" = 0 ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # SUBJECT, not location (item c5d25ebe630b). This guard asks "is the tree of the session about to
+  # evaporate holding un-persisted work" — and it asked it of $PWD, which is the same tree only
+  # while the closer IS the closed. Under --source-pane they are different processes in different
+  # worktrees, and reading the driver's tree fails BOTH ways: a driver mid-edit (the normal state of
+  # the pane driving a recovery) would be refused a close over a perfectly clean husk, and a genuinely
+  # dirty husk would pass on the driver's cleanliness. sc_git reads the SOURCE pane's own cwd from
+  # its registry row; with no remote pane (every ordinary close) SC_SUBJ_CWD is empty and this is
+  # `git` verbatim.
+  sc_git() { if [ -n "${SC_SUBJ_CWD:-}" ]; then git -C "$SC_SUBJ_CWD" "$@"; else git "$@"; fi; }
+  if [ "$SC_ALLOW_DIRTY" = 0 ] && sc_git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     # --untracked-files=no (2026-07-20): the refusal exists to stop a close from evaporating
     # UNCOMMITTED work — that means TRACKED modifications. An untracked file survives the close
     # untouched on disk, and in a shared checkout it is usually a SIBLING's scratch litter, not
     # ours; counting it made a finished session permanently unable to self-close (the pile-up
     # this fix ends). --allow-dirty remains for the genuinely lossy override.
-    if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
+    if [ -n "$(sc_git status --porcelain --untracked-files=no 2>/dev/null | head -1)" ]; then
       if [ "$SC_DIRTY_OWNER" = "successor" ]; then
-        echo "→ dirty tree in $(pwd) asserted owned by successor $SC_SUCCESSOR (verified alive) — the close loses nothing; proceeding"
+        echo "→ dirty tree in ${SC_SUBJ_CWD:-$(pwd)} asserted owned by successor $SC_SUCCESSOR (verified alive) — the close loses nothing; proceeding"
       else
         cat >&2 <<MSG
-!! refusing self-close: dirty git tree in $(pwd) — commit/stash first, or:
+!! refusing self-close: dirty git tree in ${SC_SUBJ_CWD:-$(pwd)} — commit/stash first, or:
 !!   --dirty-owner successor  the dirt is the SUCCESSOR's in-flight work on this shared checkout
 !!                            (requires --successor; verified-alive owner survives the close)
 !!   --allow-dirty            blunt override — un-persisted work may be lost
@@ -5160,14 +5311,17 @@ MSG
   # report-census §1.2). Deliberately a WARNING, not a refusal: a peer may legitimately hand its
   # branch to the originator, and an unretireable peer is a worse failure than an unannounced one
   # (the F-1 argument below). Loud, and it names the branch so the ping can carry it.
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    _sc_trunk="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
-    [ -n "$_sc_trunk" ] || { git rev-parse --verify -q origin/main >/dev/null 2>&1 && _sc_trunk="origin/main"; }
+  # SAME SUBJECT as the dirty guard, through the same accessor (item c5d25ebe630b). Two checks over
+  # ONE population must not disagree about which population that is: left on $PWD, a remote close
+  # would refuse on the husk's uncommitted work while warning about the DRIVER's unlanded branch.
+  if sc_git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    _sc_trunk="$(sc_git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
+    [ -n "$_sc_trunk" ] || { sc_git rev-parse --verify -q origin/main >/dev/null 2>&1 && _sc_trunk="origin/main"; }
     if [ -n "$_sc_trunk" ]; then
-      _sc_ahead="$(git rev-list --count "$_sc_trunk"..HEAD 2>/dev/null || echo 0)"
+      _sc_ahead="$(sc_git rev-list --count "$_sc_trunk"..HEAD 2>/dev/null || echo 0)"
       case "$_sc_ahead" in ''|*[!0-9]*) _sc_ahead=0 ;; esac
       if [ "$_sc_ahead" -gt 0 ]; then
-        echo "⚠ self-close: $_sc_ahead commit(s) on $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?') are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
+        echo "⚠ self-close: $_sc_ahead commit(s) on $(sc_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?') are NOT landed on $_sc_trunk — committed ≠ landed. /ship first if the land is yours; otherwise your ping MUST name this branch so the originator collects it (wave abandonment is the measured top loss class)." >&2
       fi
     fi
   fi
