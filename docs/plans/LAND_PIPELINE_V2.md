@@ -41,15 +41,26 @@ mechanism. (Related: P7's own erratum corrects §2.I/§3-P7, where the lane sear
 checkpoint collector *by spelling* and recorded its absence as fact — one already existed at
 `hooks/teammate-checkpoint.sh:153-248`.)
 
-**The live layer is operator-gated, not merely lagging.** P1's mutex fix is on trunk but the
-fleet still pays the old hold, because `deploy-live.sh` refuses: no GREEN tree descends from live
-HEAD. That is the bootstrap circle already filed and BLOCKED twice — `3df911c0470e` and
-`54b1c02d7872` — both needing the same one-time forced advance past the fail-closed gate, and
-both recording that a **raw fast-forward is explicitly not the move** (`04470b5d`: it wedges
-deploy and resets both alarm legs). ⚠️ Both items' texts have since rotted on the numbers (they
-name live HEAD `dec39a391362` / `ed095d4b`; the layer has moved on) — re-measure before acting,
-never quote them. The irony is load-bearing: the escalation built to page on this famine cannot
-page until the layer it exists to unblock advances.
+**The live layer is operator-gated, not merely lagging.** `deploy-live.sh` refuses to advance: no
+GREEN tree descends from live HEAD. That is the bootstrap circle already filed and BLOCKED twice —
+`3df911c0470e` and `54b1c02d7872` — both needing the same one-time forced advance past the
+fail-closed gate, and both recording that a **raw fast-forward is explicitly not the move**
+(`04470b5d`: it wedges deploy and resets both alarm legs). The irony is load-bearing: the
+escalation built to page on this famine cannot page until the layer it exists to unblock advances.
+
+⚠️ **Every live-layer number in this section decays within the hour — re-measure, never quote.**
+Measured 2026-08-11: live HEAD `145fab7d`, **14** commits behind trunk, **5 of them ADDS** (and per
+CLAUDE.md an ADD breaches at a lag of 1, because an added file has no symlink and every consumer
+guard on it is a *silent* skip). So **P1's mutex fix IS live** — `145fab7d` is P1's own commit, and
+the fleet is already paying the 3s hold, not the 87s one. What is *not* live is everything above
+it, including P6's parity coverage and P5's R7 escalation. The two blocked items are staler still,
+naming live HEAD `dec39a391362` and `ed095d4b`.
+
+**This paragraph is its own worked example.** Its first version said "P1's mutex fix is on trunk but
+the fleet still pays the old hold" — false when written, because it quoted a `7adc3c93` reading I
+had taken an hour earlier and never refreshed, in the very passage warning that these figures rot.
+The rule this earns: a live-layer claim must carry the measurement that produced it *in the same
+edit*, or it must not be made.
 
 Remaining, serialized by file ownership of `scripts/ship-land.sh`: **P4** (loud lifecycle) in
 flight; then **P3** (blob-sha statics memo) → **P2** (shift-left statics + own-diff blocking-leak
