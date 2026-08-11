@@ -402,3 +402,60 @@ item_done_by() { # $1=title $2=holder → id, and makes wt-<id>
   [ "$status" -eq 0 ]
   refute_match "$output" 'REFUSING'
 }
+
+# ── 23 · THE SECOND ORACLE'S REFUSAL MUST SURVIVE THE TRIP (backlog f61c1eaaba05) ──────────────
+# `cc-backlog reclaim` gained a second oracle: a `<host>-<pid>` incumbent whose pid is spent but
+# whose WORKTREE holds another session's process tree keeps the lease, and the ledger says so with a
+# NEW token, `verdict=noop-live-worktree`. This gate's `*)` arm is fail-OPEN by design, so a new
+# refusal spelling left unwired would be silently upgraded into an ADMIT — the ledger would refuse
+# the re-key and the gate would wave the duplicate through anyway, which is strictly worse than not
+# adding the oracle at all (memory: new-nonverdict-state-strands-its-consumers).
+#
+# A STUB producer, deliberately: cc-backlog.bats already pins the oracle end-to-end against real
+# occupancy. What is unpinned — and what actually broke in the analogous case this file's test 01
+# was written for — is whether the token reaches an executable consumer.
+wclaim_stub_verdict() { # $1=verdict line → points the gate's ledger seam at a stub emitting it
+  printf '#!/bin/bash\nprintf "%%s\\n" "%s"\n' "$1" > "$BATS_TEST_TMPDIR/stubccb"
+  chmod +x "$BATS_TEST_TMPDIR/stubccb"
+  export CC_WCLAIM_BACKLOG_BIN="$BATS_TEST_TMPDIR/stubccb"
+}
+
+@test "23 a WORKTREE-live incumbent REFUSES — the new token must not fall into the fail-open arm" {
+  mkdir -p "$BATS_TEST_TMPDIR/wt-abcdef012345"
+  wclaim_stub_verdict "cc-backlog reclaim: verdict=noop-live-worktree abcdef012345 is held by $HOST-$DEADPID, whose process is gone but whose WORKTREE IS LIVE: live process cwd in /w/wt-abcdef012345 belonging to another session (3 proc: 11 22 33)"
+  run admit "$BATS_TEST_TMPDIR/wt-abcdef012345"
+  [ "$status" -eq 9 ]
+  printf '%s' "$output" | grep -q 'REFUSING'
+  # The holder is PARSED OUT of the ledger's own sentence, and the sentence differs from
+  # noop-live-claimer's ("whose process is gone", not "which is LIVE") — so the extractor is its own
+  # and an empty holder here would mean a silently mis-copied pattern.
+  printf '%s' "$output" | grep -q "$HOST-$DEADPID"
+  refute_match "$output" 'ADMIT'
+}
+
+@test "24 that refusal is NEVER cached — it must dissolve the instant the worktree empties" {
+  # The admit arm writes a TTL marker; this arm must not, or a worker refused once would stay refused
+  # for the whole TTL after the occupying session exited. Behavioural, not a file check: the second
+  # evaluation must go back to the ledger and refuse again on its own evidence.
+  mkdir -p "$BATS_TEST_TMPDIR/wt-abcdef012346"
+  wclaim_stub_verdict "cc-backlog reclaim: verdict=noop-live-worktree abcdef012346 is held by $HOST-$DEADPID, whose process is gone but whose WORKTREE IS LIVE: live process cwd in /w belonging to another session (1 proc: 11)"
+  run admit "$BATS_TEST_TMPDIR/wt-abcdef012346"
+  [ "$status" -eq 9 ]
+  # No TTL marker was minted. Written as a plain assertion, never `… || true`: a check that cannot
+  # fail certifies nothing (memory: verification-harness-vacuous-pass-traps). This is the first call
+  # in the test, so an entry here could only have come from this refusal.
+  [ -z "$(ls -A "$CC_WCLAIM_STATE_DIR" 2>/dev/null || true)" ]
+  # …and once the worktree empties, the SAME gate admits — the §9 bound, exercised.
+  wclaim_stub_verdict "cc-backlog reclaim: verdict=reclaimed abcdef012346 by $HOST-$$ (was $HOST-$DEADPID)"
+  run admit "$BATS_TEST_TMPDIR/wt-abcdef012346"
+  [ "$status" -eq 0 ]
+}
+
+@test "25 the token has a CONSUMER THAT ACTS in scripts/lib, not just a producer in bin/" {
+  # The census test 01 makes for noop-live-claimer, for the token added on top of it. A verdict that
+  # exists only in the producer is the exact shape 01 was written after.
+  run grep -rl 'noop-live-worktree' "$REPO/scripts/lib"
+  [ "$status" -eq 0 ]
+  grep -q 'noop-live-worktree' "$REPO/bin/cc-backlog"
+  grep -q 'noop-live-worktree' "$REPO/hooks/session-register.sh"
+}

@@ -2199,3 +2199,178 @@ lease_env() {
   printf '%s' "$output" | grep -q 'WORKTREE IS LIVE'
   [ "$(status_of leasewt00005)" = claimed ]              # and the incumbent still holds it
 }
+
+# ── RECLAIM'S SECOND ORACLE (backlog f61c1eaaba05) ───────────────────────────────────────────────
+# `claim` was unified with `reap` on the two-oracle rule above; `reclaim` — the verb every dispatched
+# worker actually goes through (hooks/session-register.sh, scripts/lib/worker-claim-gate.sh) — was
+# left on oracle 1 alone. The same `<host>-<pid>` rotation therefore displaced an incumbent through
+# it, and in production it did: on 149789b69fc4, SEVEN workers re-keyed one lease inside 90 s.
+#
+# The oracle CANNOT be `owned_wait`: reclaim's callers run from inside `wt-<id>` by construction, so
+# the unfiltered probe counts the caller (measured: 8 self-procs in an empty worktree). The subject
+# here is `foreign_wait` — the same S1b occupancy signal with the caller's own process tree
+# subtracted — so these tests come in pairs, and the DISCRIMINATING pair is
+# "self-occupied ⇒ re-keys" against "foreign-occupied ⇒ refuses" over the SAME fixture shape.
+RECLAIM_WT_BASE_SHA="4b5d1412"
+
+reclaim_wt_pristine() {
+  local d="$BATS_TEST_TMPDIR/reclaim-wt-pristine"
+  mkdir -p "$d"
+  git -C "$REPO" archive "$RECLAIM_WT_BASE_SHA" bin/cc-backlog 2>/dev/null | tar -x -C "$d"
+  [ -s "$d/bin/cc-backlog" ] || { echo "cannot recover pristine cc-backlog @ $RECLAIM_WT_BASE_SHA" >&2; return 1; }
+  printf '%s' "$d/bin/cc-backlog"
+}
+
+# foreign_cwd_fixture <id> — a live process occupying wt-<id> that is NOT in this test's process
+# tree. The DOUBLE FORK is the entire point and not a stylistic choice: `cwd_wait_fixture`'s worker
+# is a CHILD of the test, so `foreign_wait` correctly subtracts it as the caller's own and a test
+# built on it would certify the opposite of what it claims. Re-parenting to pid 1 makes it a genuine
+# stranger (memory: fixture-shape-parity-with-real-producer — the real strangers are other sessions,
+# which share no ancestor below the terminal). Sets FOREIGN_PID.
+foreign_cwd_fixture() {
+  local wt="$CC_BACKLOG_WT_ROOT/wt-$1" deadline
+  unset CC_BACKLOG_LSOF_BIN                 # real occupancy is the subject; a stub certifies nothing
+  export CC_BACKLOG_ORACLE_TIMEOUT_S=30     # the SUT runs a full-system scan — see cwd_wait_fixture
+  mkdir -p "$wt"
+  ( ( cd "$wt" && exec sleep "$FIXTURE_LIFETIME_S" ) & ) &
+  # FAIL LOUD, and assert the fixture's OWN contract (re-parented, i.e. actually foreign) rather than
+  # merely that something is there. A fixture that returned on timeout, or that returned a process
+  # still inside our tree, would make every downstream verdict ambiguous.
+  FOREIGN_PID=""
+  deadline=$(( SECONDS + FIXTURE_BARRIER_S ))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    FOREIGN_PID="$(/usr/sbin/lsof -a -d cwd -w -t -- "$wt" 2>/dev/null | while read -r p; do
+                     [ "$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')" = "1" ] && echo "$p"; done | head -1)"
+    [ -n "$FOREIGN_PID" ] && return 0
+    sleep 0.2
+  done
+  echo "fixture broken: no re-parented (ppid 1) occupant ever became observable in $wt" >&2
+  return 1
+}
+foreign_cwd_cleanup() {
+  # `|| true` guards the STATUS, not just the noise. The occupant is re-parented to pid 1, so it is
+  # nobody's child here and cannot be `wait`ed like owned_wait_cleanup's: if it was already reaped,
+  # `kill` returns 1, and under bats' errexit the last command of an AND-list is NOT exempt — a test
+  # green on its own merits would go red, and only under the load that makes reaping likely
+  # (memory: kill-on-reaped-child-fails-fast-path-hides-it).
+  [ -n "${FOREIGN_PID:-}" ] && { kill "$FOREIGN_PID" 2>/dev/null || true; }
+  FOREIGN_PID=""; return 0
+}
+
+@test "reclaim: a PROVEN-DEAD holder whose worktree holds ANOTHER SESSION is refused — the lease is not a coin flip" {
+  local HOST before; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  foreign_cwd_fixture rekeywt0001
+  rec '{"id":"rekeywt0001","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW1"}'
+  rec "{\"id\":\"rekeywt0001\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+  before="$(wc -l < "$CC_BACKLOG_FILE")"
+
+  run bash "$CB" reclaim rekeywt0001 --by "$HOST-$$"
+  foreign_cwd_cleanup
+  [ "$status" -eq 0 ]                                        # a no-op, not an error — reclaim's contract
+  printf '%s' "$output" | grep -q 'verdict=noop-live-worktree'
+  printf '%s' "$output" | grep -q 'belonging to another session'
+  # A no-op appends NOTHING, and the incumbent still holds it.
+  [ "$(wc -l < "$CC_BACKLOG_FILE")" -eq "$before" ]
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="rekeywt0001")|.by')" = "$HOST-2147483647" ]
+}
+
+@test "reclaim: RED — the pre-change binary RE-KEYS that same trail, which is the 149789b69fc4 storm" {
+  # Replayed from the real pre-change artifact, never a hand-typed approximation (memory:
+  # control-must-replay-the-real-artifact). Nothing else can refuse this trail: the item is not
+  # done-latched, it carries no dispatcher role, and oracle 1 is genuinely RIGHT that 2147483647 is
+  # dead — so a green here would mean the fixture is doing the guard's work.
+  local HOST old; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  foreign_cwd_fixture rekeywt0002
+  rec '{"id":"rekeywt0002","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW2"}'
+  rec "{\"id\":\"rekeywt0002\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  old="$(reclaim_wt_pristine)"
+  run bash "$old" reclaim rekeywt0002 --by "$HOST-$$"
+  foreign_cwd_cleanup
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'         # displaced a live worker
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="rekeywt0002")|.by')" = "$HOST-$$" ]
+}
+
+@test "reclaim: the caller's OWN tree in the worktree is NOT an incumbent — the guard must not eat its harness" {
+  # THE DISCRIMINATING CONTROL, and the reason `owned_wait` could not simply be called here. Same
+  # fixture the `claim` test two screens up uses to force a REFUSAL — but there the occupant is a
+  # stranger to the caller, and here it is the caller's own descendant. If self-subtraction is ever
+  # removed this test fails, and it fails in the direction that matters: reclaim's production callers
+  # are ALWAYS inside wt-<id>, so a guard blind to that refuses every hand-over forever (memory:
+  # guard-refusal-fires-on-its-own-harness).
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  cwd_wait_fixture rekeywt0003                 # a real occupant — and a CHILD of this test
+  rec '{"id":"rekeywt0003","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW3"}'
+  rec "{\"id\":\"rekeywt0003\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  # THE PREMISE FIRST, and the order is load-bearing. `claim` — which asks the UNFILTERED oracle —
+  # must refuse this very trail, proving the occupancy is real and observable; only then is the
+  # delta between the two verbs ownership alone (memory: positive-control-the-denominator). Run
+  # AFTER the reclaim it would be measuring a different trail: the re-key sets `by` to this test's
+  # own LIVE pid, so `claim` would refuse at oracle 1 ("which is LIVE") and oracle 2 — the thing
+  # under test — would never be reached. A refused claim appends nothing, so the trail is untouched.
+  local run_claim; run_claim="$(bash "$CB" claim rekeywt0003 --by "third-party" 2>&1 || true)"
+  printf '%s' "$run_claim" | grep -q 'WORKTREE IS LIVE'
+
+  run bash "$CB" reclaim rekeywt0003 --by "$HOST-$$"
+  owned_wait_cleanup
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="rekeywt0003")|.by')" = "$HOST-$$" ]
+}
+
+@test "reclaim: a DISPATCHER hand-over is still exempt, even with another session in the worktree" {
+  # The exemption 5d6cb758 added must survive the new oracle, or the deadlock it cured comes back:
+  # cc-dispatch claims under its own live pid and the worker it fired would be refused by the very
+  # lease that exists to serve it. The oracle is placed INSIDE the same `role != dispatcher` arm, and
+  # this is the assertion that keeps it there.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  foreign_cwd_fixture rekeywt0004
+  rec '{"id":"rekeywt0004","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW4"}'
+  rec "{\"id\":\"rekeywt0004\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\",\"role\":\"dispatcher\"}"
+
+  run bash "$CB" reclaim rekeywt0004 --by "$HOST-$$"
+  foreign_cwd_cleanup
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'dispatcher hand-over'
+  [ "$(bash "$CB" list --all --json | jq -r '.[]|select(.id=="rekeywt0004")|.by')" = "$HOST-$$" ]
+}
+
+@test "reclaim: an EMPTY worktree still re-keys — occupancy is the only delta, not the worktree's existence" {
+  # The non-vacuity control for the new oracle: a genuinely dead worker must stay re-keyable, or a
+  # crashed session strands its item and the guard becomes an off switch on the whole hand-over path.
+  # The worktree EXISTS and the probe ANSWERS that nobody is in it — a real rc-1 verdict.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  mkdir -p "$CC_BACKLOG_WT_ROOT/wt-rekeywt0005"
+  rec '{"id":"rekeywt0005","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW5"}'
+  rec "{\"id\":\"rekeywt0005\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" reclaim rekeywt0005 --by "$HOST-$$"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+}
+
+@test "reclaim: a caller with NO <host>-<pid> anchor ABSTAINS and proceeds — unchanged, not silently hardened" {
+  # A session-id / UUID claimer supplies no pid to subtract, so the caller cannot be told apart from
+  # an occupant and `foreign_wait` returns UNRESOLVED. rc 2 must PROCEED: reclaim's refusal is read by
+  # worker-claim-gate as "stand down", so abstaining toward refusal would convict a live worker on
+  # evidence nobody gathered — the inverse of `claim`, which hands work OUT and abstains toward
+  # refusing. The shape is real (cc-backlog claims by session id elsewhere), so this pins that the
+  # change is scoped to the identity shape it is about.
+  local HOST; HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  lease_env
+  foreign_cwd_fixture rekeywt0006
+  rec '{"id":"rekeywt0006","ts":"2026-01-01T00:00:00Z","event":"add","project":"/r","title":"RW6"}'
+  rec "{\"id\":\"rekeywt0006\",\"ts\":\"2026-01-01T00:00:00Z\",\"event\":\"claim\",\"by\":\"$HOST-2147483647\"}"
+
+  run bash "$CB" reclaim rekeywt0006 --by "6c135981-cacf-4527-acd2-000000000000"
+  foreign_cwd_cleanup
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'verdict=reclaimed'
+}

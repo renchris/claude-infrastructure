@@ -305,6 +305,12 @@ reclaim_worker_item() {
     *verdict=noop-already-ours*)  reclaim_idl noop             "already ours" "$item" ;;
     *verdict=noop-status*)        reclaim_idl noop             "not claimed" "$item" ;;
     *verdict=noop-live-claimer*)  reclaim_idl noop             "incumbent live" "$item" ;;
+    # The incumbent's PID is spent but its WORKTREE is not — another session's process tree occupies
+    # wt-<item>, so the lease stays where it is (bin/cc-backlog `foreign_wait`). Its own arm rather
+    # than the `*)` fallback: unparsed is a wiring fault and this is a measured verdict, and the two
+    # must stay countable apart or the guard is unfalsifiable in production (memory:
+    # claimed-outcome-vs-checked-outcome).
+    *verdict=noop-live-worktree*) reclaim_idl noop             "worktree held by another session" "$item" ;;
     *verdict=unknown-id*)         return 0 ;;                  # a wt-<hex> dir that is not an item
     *)                            reclaim_idl abstained        "unparsed: ${out%%$'\n'*}" "$item" ;;
   esac

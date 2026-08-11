@@ -30,7 +30,10 @@
 #   dups    [--project P] [--json]                               → REPORT candidate duplicate rows
 #                                                                  (same project+dodRef, live, not
 #                                                                  already linked). Gates nothing.
-#   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER
+#   reclaim <id> --by <worker-identity>                          → re-key a live claim to its WORKER;
+#                                                                 refused while the incumbent is live
+#                                                                 (claimer OR its worktree, minus the
+#                                                                 caller's own process tree)
 #   done    <id> --evidence <ref>
 #   reopen  <id> [--by <sid>] [--force]
 #           [--self-release spawn-fail|compose-fail|worktree-fail]  → the CLAIMER releasing a claim
@@ -322,6 +325,28 @@
 # durable identity that fixes this is the WORKTREE (memory: argv-is-sampling-cwd-is-durable), and
 # keying the PREDICATE on it costs one call where re-keying every writer's identity would be a schema
 # change across every claim producer for no additional safety. Full rationale at guard (5) below.
+#
+# …AND THE UNIFICATION MISSED THE VERB THE WORKERS USE (2026-08-11, backlog f61c1eaaba05). The
+# paragraph above unified `claim` with `reap` and stopped there. `reclaim` — the verb every
+# dispatched worker actually goes through, via session-register.sh and worker-claim-gate.sh — kept
+# oracle 1 alone, so the identical `<host>-<pid>` rotation displaced an incumbent through it.
+# MEASURED against ONE hermetic store (dead pid claim, live process cwd'd in wt-<id>):
+#     claim   → REFUSED rc 4, "whose process is gone but whose WORKTREE IS LIVE"   ← positive control
+#     reclaim → verdict=reclaimed rc 0, incumbent displaced                        ← the leak
+# In production that is not a corner: on 149789b69fc4, SEVEN distinct workers re-keyed one lease
+# inside 90 s (22:56:39-22:57:45Z), and every verdict was TRUTHFUL — each arrival found the previous
+# arrival's pid already spent. The gate never malfunctioned; it was answering the wrong question.
+# So `reclaim` now asks a second oracle too — but it CANNOT be `owned_wait`, because reclaim's
+# callers run from inside `wt-<id>` by construction and the unfiltered oracle counts them: measured
+# 8 self-procs in an otherwise empty worktree, i.e. a permanent refusal built from the guard's own
+# harness (memory: guard-refusal-fires-on-its-own-harness). `foreign_wait` is `procs_cwd_under`
+# minus the caller's own process tree — same signal, same S1b, ownership subtracted.
+#
+# This also RETIRES the remedy the sibling items proposed. 5deb4418a648 ("gate the FIRE on the same
+# lease the worker would take") cannot work: at fire time the lease legitimately answers dead,
+# because the dispatcher's own claim is `<host>-$$` and it exits — the fire gate would read the same
+# truthful "not live" every arriving duplicate read, and admit for the same reason. The fix has to
+# be at the moment of DISPLACEMENT, on evidence that outlives a shell, which is what this is.
 #
 # WHAT IT IS NOT. Not a lock: nothing is held, nothing must be released, and no path can wedge on
 # it. The lease IS the fold — a CAS against the item's current `(status, by)` at append time — so it
@@ -1731,6 +1756,61 @@ cmd_reclaim() {
     printf 'cc-backlog reclaim: verdict=noop-live-claimer %s is held by %s, which is LIVE\n' "$id" "$cby"
     return 0
   fi
+  # SECOND ORACLE — the item's WORKTREE, minus this caller. Oracle 1 has just declined to refuse,
+  # so the next line DISPLACES the incumbent; this is the last point at which that can be stopped.
+  #
+  # WHY ORACLE 1 ALONE IS A COIN FLIP (2026-08-11, backlog f61c1eaaba05). `claimer_live` on a
+  # `<host>-<pid>` claim is `kill -0` on a SHELL, and shells rotate while the work does not — the
+  # same sentence `claim`'s guard (5) already carries, twenty lines of essay deep, because it cost
+  # ~20 min of duplicated work on e1ce92772859. `claim` and `reap` were unified on that lesson;
+  # `reclaim` was not, and it is the verb the workers actually go through. MEASURED against ONE
+  # hermetic store — dead `<host>-<pid>` incumbent, live process cwd'd in its worktree:
+  #     claim   → REFUSED rc 4  "whose process is gone but whose WORKTREE IS LIVE"   ← the control
+  #     reclaim → verdict=reclaimed rc 0, incumbent displaced                        ← the leak
+  # The control is what makes the second line a property of the VERB and not of the probe (memory:
+  # positive-control-the-denominator). In production this is not rare: on 149789b69fc4 SEVEN
+  # workers re-keyed the same lease inside 90 s, every verdict truthful, because each arrival found
+  # the previous arrival's pid already spent. A lease that refuses a duplicate only while the
+  # holder's pid happens to be breathing is a race, not a lease.
+  #
+  # `foreign_wait`, NOT `owned_wait` — the caller is inside the worktree by construction, so the
+  # unfiltered oracle convicts its own harness (measured: 8 self-procs with nobody else there; see
+  # that function's header).
+  #
+  # rc 0 ONLY may refuse, and this is the MIRROR of `claim`'s rule rather than a copy of it, because
+  # the two verbs point opposite ways. `claim` HANDS OUT work, so it abstains toward refusal — a
+  # non-verdict there means leave the incumbent alone. `reclaim` re-keys a lease to the worker
+  # that is demonstrably HERE, and its refusal is consumed by worker-claim-gate as "stand down": an
+  # unresolved probe that refused would tell a live worker it is a duplicate on evidence nobody
+  # gathered, and would make worker-keying inert exactly when the probe is starved — which is the
+  # trade oracle 1's own rc-2 comment above already rejects in writing. So rc 1 and rc 2 both
+  # proceed, and only positive evidence of ANOTHER session stops the hand-over.
+  #
+  # COST is gated by position: reached only for an item already `claimed`, by somebody else, that we
+  # are about to take. `foreign_wait` short-circuits on an absent wt-<id> before it forks lsof, and
+  # the dispatcher hand-over never reaches this block at all.
+  if [ "$crole" != dispatcher ] && [ -n "$cby" ]; then
+    # The anchor is the caller's own identity, parsed the same way `claimer_live` parses a claim —
+    # one spelling of "<host>-<pid>" in this file, so a shape that takes the `kill -0` path there
+    # takes the self-subtraction path here. Any other shape yields no anchor and `foreign_wait`
+    # abstains, which is today's behaviour unchanged.
+    local rhost rpid ranchor=""
+    rhost="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+    rpid="${by##*-}"
+    if [ "$by" = "$rhost-$rpid" ] && [[ "$rpid" =~ ^[0-9]+$ ]]; then ranchor="$rpid"; fi
+    local rforeign rfrc
+    rforeign="$(foreign_wait "$id" "$rvenue" "$ranchor")"; rfrc=$?
+    if [ "$rfrc" -eq 0 ]; then
+      # A DISTINCT token, wired into both consumers in the same diff. The generic `*)` arm of
+      # scripts/lib/worker-claim-gate.sh is fail-OPEN by design, so a new refusal spelling left
+      # unhandled would be silently converted into an ADMIT — the refusal would exist here and
+      # evaporate at the only place it actuates (memory: new-enum-member-falls-into-fail-closed-
+      # default, inverted; new-nonverdict-state-strands-its-consumers).
+      printf 'cc-backlog reclaim: verdict=noop-live-worktree %s is held by %s, whose process is gone but whose WORKTREE IS LIVE: %s\n' \
+        "$id" "$cby" "$rforeign"
+      return 0
+    fi
+  fi
   # NO role field is written — see bound (3) above. This is the line that makes the exemption
   # one-shot; it is a deliberate omission, not an oversight.
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg by "$by" --arg venue "$rvenue" \
@@ -2146,6 +2226,149 @@ procs_cwd_under() {
     /^n/ { n = substr($0, 2); if (under(n, d) || under(n, pd)) print p }' | sort -u
   # EXPLICIT, not the pipeline's rc: under `set -o pipefail` a hiccup in awk/sort would otherwise
   # surface as rc 1 or 2 and be misread as a liveness verdict. The probe ran; that is what rc 0 means.
+  return 0
+}
+
+# foreign_wait <id> <venue> <anchor-pid> — is the item's worktree occupied by SOMEBODY ELSE'S
+# process tree? The self-aware sibling of `owned_wait`, and the ONLY oracle `reclaim` may ask.
+#
+# THREE-VALUED, matching claimer_live and owned_wait:
+#   rc 0  FOREIGN     a live process outside the caller's own tree occupies wt-<id>; reason echoed.
+#   rc 1  NONE        the probe RAN and every occupant is the caller's own. A real verdict.
+#   rc 2  UNRESOLVED  the probe could not run, or there is no anchor to subtract. A NON-VERDICT.
+#
+# WHY `owned_wait` CANNOT BE CALLED HERE, MEASURED (2026-08-11, backlog f61c1eaaba05). `reclaim`'s
+# two production callers refuse to run unless cwd is `wt-<the item's own id>` (session-register.sh,
+# scripts/lib/worker-claim-gate.sh) — so the caller is ALWAYS inside the population owned_wait
+# counts. Against a hermetic worktree with NOBODY else in it, `claim` (which does call owned_wait)
+# invoked from inside wt-<id> reported:
+#     evidence: live process cwd in .../wt-bbbbbbbb2222 (8 proc)   → REFUSED, rc 4
+# All eight are the caller's own: cc-backlog, its command-substitution subshells, the invoking
+# shell. Wiring owned_wait into `reclaim` would therefore refuse EVERY hand-over, permanently, on
+# evidence consisting entirely of the guard's own harness — the exact shape of memory
+# guard-refusal-fires-on-its-own-harness (and of the `role` term twenty lines below, added after a
+# live dispatcher deadlocked the worker it had just fired). The occupancy signal is right; the
+# unfiltered population is what makes it unusable from the inside.
+#
+# `owned_wait`'s S1 (argv naming the worktree) and S2 (land lock) are deliberately NOT consulted.
+# S1 is structurally blind to a dispatched worker anyway (its own header: the launcher's argv is
+# spent, cwd is what survives), and S2 would fire on a land THIS caller is running. S1b — cwd
+# occupancy — is the signal that actually sees a worker, so it is the one that is filtered and
+# reused; `procs_cwd_under` is CALLED, never restated (memory: make-the-actuator-the-arbiter).
+#
+# MINE, precisely — two relations, and both are needed:
+#   · DESCENDANT  walking up from an occupant reaches the anchor or this very process. Covers the
+#                 worker's own shells, gates, watchdogs, and cc-backlog's own subshells.
+#   · SELF/ANCESTOR  the occupant IS the anchor, is this process, or is one of their ancestors.
+#                 Covers the launcher shell that cd'd into the worktree and then spawned us.
+# The ancestor set is matched EXACTLY and never walked THROUGH: two unrelated sessions under one
+# terminal share every ancestor above the `claude` process, so treating a shared ancestor as
+# transitive proof of ownership would mark every sibling worker as mine — the false negative that
+# would put this oracle right back where owned_wait is.
+#
+# BOTH anchors, not just the identity's. `--by <host>-<pid>` names the caller's durable claude pid,
+# which is the right anchor — but session-register invokes this DOUBLE-DETACHED (`( … & ) &`), so
+# once the intermediate exits the cc-backlog process is reparented away from that pid and its own
+# subshells stop being its descendants. Anchoring on `$$` as well keeps the guard off its own
+# harness in exactly the invocation shape production uses. A caller whose `by` is NOT `<host>-<pid>`
+# shaped supplies no anchor at all; that is rc 2 (see the call site), never a conviction.
+#
+# ONE `ps` fork for the whole tree, not a walk per pid. The per-pid walk is the house pattern
+# (hooks/session-register.sh) but costs up to 12 forks EACH, and this runs on a box whose measured
+# working loadavg is 30-50 — a 50-occupant storm would be 600 forks inside a session-start hook.
+# One snapshot answers every ancestry question (memory: fork-cost-proxies-and-mid-session-siblings).
+foreign_wait() {
+  local id="$1" venue="${2:-local}" anchor="${3:-}" wt; wt="$(item_worktree "$id")"
+
+  # VENUE GATE — the same rule as claimer_live's and owned_wait's, and it must be here for the same
+  # reason: a worker off-box has no local worktree BY CONSTRUCTION, so "nobody occupies it" is not a
+  # fact about that worker (memory: sibling-auditors-must-share-the-state-model).
+  if [ "$venue" != local ]; then
+    printf 'worker runs off-box (venue %s) — the worktree occupancy oracle does not cover that venue' "$venue"
+    return 2
+  fi
+  case "$anchor" in ''|*[!0-9]*)
+    printf 'no <host>-<pid> anchor to subtract — the caller cannot be told apart from an occupant'
+    return 2 ;;
+  esac
+
+  # ABSENCE vs STARVATION at the root, exactly as owned_wait draws it: a missing wt-<id> under an
+  # EXISTING root is a real "nobody is working this here" (rc 1); a missing ROOT is the convention
+  # itself being unreadable and answers for no item at all (rc 2).
+  local root="${CC_BACKLOG_WT_ROOT:-$HOME/Development/.worktrees}"
+  if [ ! -d "$root" ]; then
+    printf 'worktree root %s is absent — the occupancy oracle could not be asked at all' "$root"
+    return 2
+  fi
+  [ -d "$wt" ] || return 1
+
+  local cwdout cwdrc
+  cwdout="$(procs_cwd_under "$wt")"; cwdrc=$?
+  if [ "$cwdrc" -eq 2 ]; then
+    printf 'the worktree occupancy probe (lsof) never ran or never answered for %s' "$wt"
+    return 2
+  fi
+  [ -n "$cwdout" ] || return 1
+
+  # The process table. An unreadable `ps` is UNRESOLVED and not "everyone is foreign": without the
+  # parent map every occupant — including this process — classifies as somebody else's, which is the
+  # self-conviction this whole function exists to avoid.
+  #
+  # READ AFTER lsof, DELIBERATELY, and the order is the whole reason an occupant missing from it may
+  # be SKIPPED. `procs_cwd_under` forks lsof, which observes this function's own transient children
+  # (subshells, jq, lsof itself) alive; they exit; the pids then appear in NEITHER the ownership sets
+  # NOR the parent map, and "unknown" read as "somebody else's" — measured 2026-08-11, an empty
+  # worktree yielding `another session (4 proc: 7095 7098 7100 7105)`, every one of them ours and
+  # already dead. Because `ps` is the LATER read, an occupant absent from it is provably GONE, which
+  # is not evidence of a live foreign worker (memory: lookup-miss-is-not-absence). Reversing the
+  # order would invert that inference — a pid absent from an EARLIER ps could be one that started
+  # since, i.e. a real occupant skipped — so this sequence is load-bearing, not incidental.
+  local pstab; pstab="$(ps -Ao pid=,ppid= 2>/dev/null || true)"
+  if [ -z "$pstab" ]; then
+    printf 'the process table (ps) could not be read — ownership of %s occupants is unknowable' "$wt"
+    return 2
+  fi
+
+  # BOTH inputs arrive on STDIN, separated by a marker — the occupant list is NOT passed with `-v`.
+  # `-v` runs the value through escape processing and cannot carry a newline at all: awk aborts with
+  # "newline in string" and prints nothing, which this function would then read as "no foreign
+  # occupants" and PROCEED. It fails only when there is more than one occupant, so the single-worker
+  # case — the one an obvious test writes — passes while the storm this guard exists for goes
+  # straight through (measured 2026-08-11: 1 occupant PASS, 4 occupants silently reclaimed).
+  local foreign
+  foreign="$( { printf '%s\n' "$pstab"; printf 'OCC\n'; printf '%s\n' "$cwdout"; } \
+    | awk -v anchor="$anchor" -v self="$$" '
+    function mark_chain(p,   i) {
+      mine[p] = 1                                  # the anchor itself
+      for (i = 0; i < 64 && (p in par) && par[p] > 1; i++) { p = par[p]; mine[p] = 1 }
+    }
+    function reaches(p,   i) {                     # DESCENDANT test — walk UP to an anchor
+      for (i = 0; i < 64; i++) {
+        if (p == anchor + 0 || p == self + 0) return 1
+        if (!(p in par) || par[p] <= 1) return 0
+        p = par[p]
+      }
+      return 0
+    }
+    $1 == "OCC" { inocc = 1; next }
+    !inocc      { par[$1 + 0] = $2 + 0; next }
+                { occ[++n] = $1 + 0 }
+    END {
+      mark_chain(anchor + 0); mark_chain(self + 0)
+      for (i = 1; i <= n; i++) {
+        p = occ[i]
+        if (p <= 0) continue
+        if (!(p in par)) continue                  # GONE — see below; absence is not foreignness
+        if (p in mine) continue                    # SELF/ANCESTOR — exact match only
+        if (reaches(p)) continue                   # DESCENDANT
+        print p
+      }
+    }')"
+
+  [ -n "$foreign" ] || return 1
+  local nf; nf="$(printf '%s\n' "$foreign" | wc -l | tr -d ' ')"
+  printf 'live process cwd in %s belonging to another session (%s proc: %s)' \
+    "$wt" "$nf" "$(printf '%s' "$foreign" | tr '\n' ' ' | sed 's/ $//')"
   return 0
 }
 
