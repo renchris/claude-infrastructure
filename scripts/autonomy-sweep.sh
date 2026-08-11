@@ -16,10 +16,19 @@
 #      NO backlog item — an open item is cc-dispatch's fire predicate, and a worker must never be
 #      spawned on "hold (no change without ruling)". The item is filed against the packet's own
 #      declared `subject_project` when it has one, else this sweep's host project.
-#   3. If anything NEW exists → ONE cc-notify to the desk ROLE (cc-roles/desk, resolved at
-#      send-time — SO-1 role indirection), then mark those records .seen IF AND ONLY IF a delivery
-#      was actually PROVEN — cc-notify's `verdict=` token, never its exit code, and never the mere
-#      existence of a role file (see § DELIVERY IS A VERDICT below; a dead uuid is still non-empty).
+#   3. If anything NEW exists → walk the escalation LADDER (D2, `CC_SWEEP_LADDER=v2`), each rung
+#      gated ONLY on its OWN precondition:
+#        r1 desk push — ONE cc-notify to the desk ROLE (cc-roles/desk, resolved at send-time —
+#           SO-1 role indirection), and ONLY when a role is wired. Marks .seen IF AND ONLY IF
+#           delivery was actually PROVEN — cc-notify's `verdict=` token, never its exit code, and
+#           never the mere existence of a role file (see § DELIVERY IS A VERDICT below; a dead uuid
+#           is still non-empty). A role that is UNSET is a normal configuration, not a fault.
+#        r2 OS banner — fires on new records REGARDLESS of role state (the whole point: with
+#           cc-roles/ empty, r1 does not run at all and the banner used to be nested INSIDE it).
+#           Damped per-record by `.bannered`; never marks .seen (a banner is not a proven read).
+#        r3 loud stderr + IDL row whenever r1 did not REACH — the records are deliberately left
+#           UNSEEN, so the next sweep re-surfaces them until something proves a reader.
+#      `CC_SWEEP_LADDER=legacy` restores the pre-D2 nested logic byte-for-byte (the kill switch).
 #   4. Write ONE {fired|abstained} IDL record (B-3: didn't-fire ≠ never-ran).
 #   5. Age-compact: the .seen markers AND the six write-only event dirs (see below).
 #
@@ -40,6 +49,7 @@
 #   · CC_INBOX_GUARD_STATE_DIR · CC_MAILBOX_DIR · CC_EVENT_TTL_DAYS (default 7)
 #   · CC_NOTIFY_BIN · CC_DECIDE_BIN · CC_BACKLOG_BIN
 #   · CC_SWEEP_OS_CHANNEL (auto|on|off) · CC_SWEEP_NOTIFY_TIMEOUT_S (default 25)
+#   · CC_SWEEP_LADDER (v2|legacy, default v2 — `legacy` is the D2 kill switch)
 #   BSD+GNU portable, no eval, fail-loud.
 set -uo pipefail
 
@@ -51,6 +61,7 @@ ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 SEEN_TTL="${CC_SWEEP_SEEN_TTL_DAYS:-7}"
+LADDER="${CC_SWEEP_LADDER:-v2}"
 # The six write-only event dirs this sweep now age-reaps (defaults match each PRODUCER's own env
 # name, so a test that redirects the producer redirects the reaper with it).
 COMMS_ALARM_DIR="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
@@ -375,9 +386,38 @@ mark_surfaced_seen() { # forget the records — ONLY ever called on a proven del
   printf '%s' "$SURFACED" | while IFS= read -r rec; do [ -n "$rec" ] && mark_seen "$rec"; done
 }
 
+# ── r2 damping (D2) ───────────────────────────────────────────────────────────────────────────────
+# A `.bannered` marker is DELIBERATELY a different store from `.seen`, and the distinction is the
+# whole reason r2 can be safe: a banner proves only that something was PUT IN FRONT OF a human, never
+# that one READ it, so it must not let a record be forgotten (that is the `mark_seen` contract, and
+# spending it on an unprovable read is the data-loss regression task #120 fixed). `.bannered` bounds
+# the POST instead — one banner per record, ever. So a permanently role-less fleet banners each new
+# record exactly once and then goes quiet, while the records themselves stay surfaced until a real
+# reader takes them. That is what dissolves the storm argument which kept r2 nested inside r1.
+mark_surfaced_bannered() {
+  printf '%s' "$SURFACED" | while IFS= read -r rec; do
+    [ -n "$rec" ] && { : > "$SEEN_DIR/$(basename "$rec").bannered" 2>/dev/null || true; }
+  done
+}
+count_unbannered() { # → how many surfaced records have never been on a banner
+  local rec n=0
+  while IFS= read -r rec; do
+    [ -n "$rec" ] || continue
+    [ -f "$SEEN_DIR/$(basename "$rec").bannered" ] && continue
+    n=$((n + 1))
+  done <<EOF
+$SURFACED
+EOF
+  printf '%s' "$n"
+}
+
 DESK_TARGET=""
 [ -f "$ROLES_DIR/desk" ] && DESK_TARGET="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
 
+# ── ladder_legacy — the pre-D2 nested logic, preserved BYTE-FOR-BYTE as the kill switch. ──────────
+# Kept whole rather than deleted so `CC_SWEEP_LADDER=legacy` is a genuine revert of THIS change and
+# not a re-implementation of it from memory, and so the suite can pin both shapes against each other.
+ladder_legacy() {
 if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   # Address the ROLE, never the uuid read above: cc-notify re-reads cc-roles/desk at SEND time and
   # follows the `.forward` chain, so a desk recycled since this sweep started still gets the wake
@@ -423,4 +463,67 @@ else
   log_idl fired '{"notified":"no-desk-role","delivered":false}'
   echo "autonomy-sweep: NEW records but no desk role at $ROLES_DIR/desk — undelivered, will retry" >&2
 fi
+}
+
+# ── ladder_v2 — THREE INDEPENDENT RUNGS ───────────────────────────────────────────────────────────
+# The defect this replaces is STRUCTURAL, not a wording bug: the OS banner — the ONLY channel here
+# with no liveness dependency — lived INSIDE the `[ -n "$DESK_TARGET" ]` arm. With cc-roles/ empty
+# (the operator's deliberate state since 2026-08-07) that arm does not run at all, so the no-role
+# branch logged one IDL row, retried forever, and NEVER bannered. Measured on this box before the
+# fix: 1,009 records (316 pages · 426 alarms · 256 stuck completion pushes · 11 open decisions)
+# re-collected and re-dropped every 300 s for four days, `notification-center` deliveries all-time
+# ZERO, newest .seen marker frozen at the hour the desk role went away. A rung that fires only when a
+# DIFFERENT rung's precondition holds is not a fallback — it is the same single point of failure,
+# spelled twice. (memory: liveness-free-channel-never-gated-behind-liveness; the sibling STALE-desk
+# case was fixed by task #120 and this ABSENT-desk case was left on the old branch — stale and absent
+# are different states selecting different code paths, so a fix for one is not a fix for the other.)
+ladder_v2() {
+  local reached=0 notified_as notify_out notify_rc notify_verdict unbannered
+
+  # ── r1 · DESK PUSH (accelerator) — runs ONLY when a role is wired. Role-unset is a NORMAL
+  # configuration here, never an error and never a fault to repair. ──
+  if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
+    notified_as="role:desk"
+    notify_out="$(CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk "$summary" 2>&1)"
+    notify_rc=$?
+    notify_verdict="$(printf '%s' "$notify_out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+    : "${notify_verdict:=unreadable}"   # a verdict we cannot READ is a THIRD state, never success
+    if [ "$notify_rc" -eq 0 ] && [ "$notify_verdict" = delivered ]; then
+      reached=1
+      mark_surfaced_seen
+      log_idl fired "$(jq -cn --arg summary "$summary" --arg v "$notify_verdict" \
+        '{notified:"role:desk",delivered:true,channel:"desk",verdict:$v,summary:$summary}')"
+    fi
+  else
+    notified_as="no-desk-role"; notify_rc=-1; notify_verdict="no-role"
+  fi
+  [ "$reached" -eq 1 ] && return 0
+
+  # ── r2 · OS BANNER — fires whenever r1 did not REACH, INCLUDING when no role exists at all.
+  # Damped per-record by `.bannered`, so the storm argument that kept this off the REFUSED path no
+  # longer binds: a permanently refusing transport re-surfaces the same records every 300 s, and
+  # every one of them is already bannered, so no second post is possible. ──
+  unbannered="$(count_unbannered)"
+  if [ "$unbannered" -gt 0 ] && sweep_escalate_os "${total_new} new escalation record(s)" \
+       "${unbannered} escalation record(s) nobody has read. ${summary}"; then
+    mark_surfaced_bannered
+    log_idl fired "$(jq -cn --arg summary "$summary" --argjson n "$unbannered" \
+      '{notified:"os-banner",delivered:false,channel:"notification-center-advisory",bannered:$n,
+        summary:$summary,
+        why:"banner is not proof of read — records stay surfaced until something proves a reader"}')"
+  fi
+
+  # ── r3 · LOUD — always, when r1 did not REACH. The wake the operator did not get is itself an
+  # incident record (a17 S-4), and the records are deliberately left UNSEEN. ──
+  log_idl fired "$(jq -cn --arg summary "$summary" --arg v "$notify_verdict" --arg n "$notified_as" \
+    --argjson rc "$notify_rc" \
+    '{notified:$n,delivered:false,channel:"none",verdict:$v,notify_rc:$rc,summary:$summary,
+      why:"nothing proved a reader — records left unseen, the next sweep re-surfaces them"}')"
+  echo "autonomy-sweep: NEW records UNDELIVERED verdict=$notify_verdict rc=$notify_rc target=$notified_as — nothing proved a reader; records left unseen, will retry" >&2
+}
+
+case "$LADDER" in
+  legacy) ladder_legacy ;;
+  *)      ladder_v2 ;;
+esac
 exit 0

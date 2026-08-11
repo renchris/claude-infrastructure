@@ -62,6 +62,42 @@ SH
   echo "desk-pane-uuid-current" > "$CC_ROLES_DIR/desk"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
+# `.seen` (forgotten) and `.bannered` (posted once) share SEEN_DIR — deliberately, so the existing
+# 7-day age-compaction reaps both with no second reaper. That makes `ls -A "$CC_SWEEP_SEEN_DIR"` a
+# WIDER span than the subject every data-loss assertion here is about, so those assertions count the
+# marker CLASS instead: a seen key is a bare 32-char hash, a banner marker ends in `.bannered`.
+# (memory: assertion-span-must-equal-its-subject — a count spanning a mechanism the test does not
+# test is a tripwire for that mechanism's next change, not a guard on this one.)
+# Counted by GLOB, not `ls | grep | wc` — and emphatically not by shellcheck SC2126's suggested
+# `grep -c`, which is the trap this helper already fell into once: grep exits 1 on ZERO matches, so
+# the `|| echo 0` guard that looks like prudence fires ON TOP of the 0 grep already printed, the
+# helper returns the two-line string "0\n0", and `[ … -eq 0 ]` rejects it as "integer expression
+# expected". That breaks precisely on the empty case every data-loss assertion here is about. The
+# glob form has no such edge: the `[ -e ]` guard absorbs a non-matching pattern and the count is a
+# plain arithmetic variable. (memory: prescribed-remedy-worse-than-the-bug — a lint's one-liner is a
+# suggestion about style, not a proof about behaviour; run it where it executes before adopting it.)
+seen_count() {   # `.seen` keys are bare 32-char hashes; banner markers end in `.bannered`
+  local f n=0
+  for f in "$CC_SWEEP_SEEN_DIR"/*; do
+    [ -e "$f" ] || continue
+    case "$f" in *.bannered) continue ;; esac
+    n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+bannered_count() {
+  local f n=0
+  for f in "$CC_SWEEP_SEEN_DIR"/*.bannered; do
+    [ -e "$f" ] || continue
+    n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+osa_posts() {
+  local n=0
+  [ -f "$OSA_LOG" ] && n=$(wc -l < "$OSA_LOG" | tr -d ' ')
+  printf '%s' "$n"
+}
 
 # ── nothing-new → abstain, no notify ───────────────────────────────────────────
 @test "nothing new → abstain, zero notifies" {
@@ -345,8 +381,8 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
   [ "$(notify_count)" -eq 1 ]
-  # the marker store must be EMPTY — nothing proved a reader, so nothing may be forgotten
-  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  # nothing may be FORGOTTEN — no reader was proven (the banner store is a different subject)
+  [ "$(seen_count)" -eq 0 ]
   grep -q '"delivered":false' "$CC_IDL"
   # …and the SAME record re-surfaces on the next sweep. This is the whole point: an escalation that
   # nobody read must keep asking.
@@ -355,38 +391,127 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   [ "$(notify_count)" -eq 2 ]
 }
 
-@test "RECORDED but the liveness-free channel TAKES it → operator reached, records marked seen" {
-  # The other half of the failure-distinct pair. Withholding markers forever against a permanently
-  # desk-less fleet is the 2026-07-19 storm, not a fix — the operator is reached on a channel with
-  # no liveness dependency instead, and only THEN are the records forgotten.
+@test "RECORDED but the liveness-free channel TAKES it → operator bannered, records still NOT seen" {
+  # RE-ORACLED to the D2 contract. The pre-D2 shape marked these records .seen on the strength of the
+  # banner — but a banner proves only that something was PUT IN FRONT OF a human, never that one READ
+  # it, so spending `mark_seen` on it re-created the very data-loss task #120 fixed one layer over.
+  # D2 splits the two: `.bannered` bounds the POST (storm control), `.seen` still requires a PROVEN
+  # reader. The storm argument is satisfied without forgetting anything.
   export CC_STUB_VERDICT=mailbox-only
   export CC_SWEEP_OS_CHANNEL=auto          # resolves the stub osascript on PATH (hermetic)
   echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
-  [ -s "$OSA_LOG" ]                        # something was actually put in front of a human
-  grep -q '"channel":"notification-center"' "$CC_IDL"
-  grep -q '"delivered":true' "$CC_IDL"
-  # marked seen ⇒ no re-surface, so the channel cannot become a per-sweep notification storm
+  [ "$(osa_posts)" -eq 1 ]                 # something was actually put in front of a human
+  grep -q '"channel":"notification-center-advisory"' "$CC_IDL"
+  [ "$(bannered_count)" -ge 1 ]            # damped
+  [ "$(seen_count)" -eq 0 ]                # …but NOT forgotten — no reader was ever proven
+  # the record keeps asking, and yet the banner does NOT repeat: exactly one post, ever.
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
-  [ "$(notify_count)" -eq 1 ]
+  [ "$(notify_count)" -eq 2 ]
+  [ "$(osa_posts)" -eq 1 ]
 }
 
-@test "REFUSED (cc-notify rc != 0) never marks seen, and never posts to the OS channel either" {
-  # rc 3 unresolvable · 5 inbox unwritable · 124 cut at the bound — the transport took NOTHING.
-  # No OS post on this path: a permanently refusing transport re-surfaces its records every 300 s
-  # and there is no damping store here, so a post would be an unbounded notification storm.
+@test "REFUSED (cc-notify rc != 0) never marks seen, but DOES banner once (r2 is independent)" {
+  # RE-ORACLED to the D2 contract. The pre-D2 comment justified withholding the OS post here on
+  # storm grounds — "there is no damping store" — which was true then and is false now: `.bannered`
+  # is that store. Withholding it was how a fleet whose transport permanently refuses got NOTHING at
+  # all, which is strictly worse than one bounded post. The data-loss half of this test's intent is
+  # untouched: rc 3 proves no reader, so nothing may be forgotten.
   export CC_STUB_RC=3
   export CC_STUB_VERDICT=unresolvable
   export CC_SWEEP_OS_CHANNEL=auto
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
-  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
-  [ ! -s "$OSA_LOG" ]
+  [ "$(seen_count)" -eq 0 ]                       # THE data-loss guard — unchanged
+  [ "$(osa_posts)" -eq 1 ]                        # …and the operator is no longer told nothing
   echo "$output" | grep -q 'UNDELIVERED'          # loud, never silent (a17 S-4)
   grep -q '"delivered":false' "$CC_IDL"
+  # bounded: a transport that refuses forever still posts exactly once per record
+  run bash "$SWEEP"
+  [ "$(osa_posts)" -eq 1 ]
+}
+
+# ══ D2 · THE ABSENT-ROLE RUNG (backlog f887a7a507db) ══════════════════════════════════════════════
+# STALE-desk and ABSENT-desk are different states selecting different code paths, and only the stale
+# one was ever fixed. Task #120 taught the sweep to reach the operator on a liveness-free channel
+# when the desk push is RECORDED-not-read — but it wired that rung INSIDE the `[ -n "$DESK_TARGET" ]`
+# arm, so removing the role files (the operator's deliberate state since 2026-08-07) disabled the
+# banner too. Surfacing became strictly WORSE than the dead-uuid state it replaced.
+# Measured on this box before the fix: 1,009 records re-collected and re-dropped every 300 s for four
+# days, all-time `notification-center` deliveries ZERO, newest .seen marker frozen at the hour the
+# role went away. memory: liveness-free-channel-never-gated-behind-liveness.
+
+@test "D2: NO desk role at all → the liveness-free rung STILL fires (the 4-day blackout)" {
+  # THE regression. Pre-D2 this posted nothing whatsoever: r2 was unreachable without r1's precondition.
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm","detail":"comms gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(notify_count)" -eq 0 ]              # r1 correctly did not run — no role is a NORMAL config
+  [ "$(osa_posts)" -eq 1 ]                 # …and the operator was reached anyway
+  grep -q '"notified":"os-banner"' "$CC_IDL"
+  grep -q '"notified":"no-desk-role"' "$CC_IDL"   # r3 still loud, and still names the real state
+  [ "$(seen_count)" -eq 0 ]                # a banner is not a read — nothing forgotten
+}
+
+@test "D2: the absent-role banner is DAMPED — one post per record, not one per sweep" {
+  # Without `.bannered` this fix would be a 300 s notification storm against a permanently role-less
+  # fleet, which is the reason the pre-D2 code gave for withholding the post at all.
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
+  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
+  run bash "$SWEEP"; [ "$(osa_posts)" -eq 1 ]
+  # a genuinely NEW record still gets its own post — damping must not become deafness
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a2.json"
+  run bash "$SWEEP"; [ "$(osa_posts)" -eq 2 ]
+}
+
+@test "D2 CONTROL: re-nesting r2 under r1's precondition FAILS the absent-role test" {
+  # The mutant is the PRE-FIX shape itself — r2 reachable only when a role is wired. Without this,
+  # a change that quietly restored the nesting would leave the test above passing on some other path.
+  # memory: control-must-replay-the-real-artifact — anchor a naive mutant, do not hand-edit an
+  # approximation of one.
+  local mutant="$BATS_TEST_TMPDIR/sweep-mutant.sh"
+  sed 's/^  unbannered="\$(count_unbannered)"$/  unbannered=0/' "$SWEEP" > "$mutant"
+  # The mutation guard asserts the SPECIFIC edit landed — never merely that the two files differ.
+  # TWO defects were in this guard's first form, and the second one is the general lesson:
+  #   1. `! cmp -s "$SWEEP" "$mutant"` only asks "do they differ", which a no-op sed can satisfy for
+  #      reasons that have nothing to do with the mutation. It must name the EDIT.
+  #   2. …but that is not why it passed against the pristine script. A bare `! cmd` is EXEMPT from
+  #      errexit — bash does not exit "if the command's return value is being inverted with !" — so
+  #      a negated assertion in a bats test is UNREACHABLE: it cannot fail the test no matter what
+  #      it finds. The `|| false` is what gives it a reachable failure edge (scripts/
+  #      bats-assert-liveness-fix.py; the land gate's dead-assertion ratchet refuses the bare form).
+  # The first is a bad predicate; the second is a predicate that never runs. Only the second explains
+  # a control that passed against a subject where the mutation cannot apply — and a plausible-but-
+  # wrong first diagnosis is exactly what a control exists to catch (memory:
+  # wrong-cause-corroborated-by-true-metric · verification-harness-vacuous-pass-traps).
+  grep -q '^  unbannered=0$'                  "$mutant"   # the mutation is present…
+  ! grep -q '^  unbannered="\$(count_unbannered)"$' "$mutant" || false # …and the original line is gone
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$mutant"
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 0 ]                 # the mutant is silent — which is what the fix removes
+}
+
+@test "D2 KILL SWITCH: CC_SWEEP_LADDER=legacy restores the pre-D2 silence exactly" {
+  # The revert must be a genuine revert of THIS change, reachable without editing code.
+  rm -f "$CC_ROLES_DIR/desk"
+  export CC_SWEEP_OS_CHANNEL=auto
+  export CC_SWEEP_LADDER=legacy
+  echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 0 ]
+  grep -q 'no-desk-role' "$CC_IDL"
 }
 
 @test "an UNREADABLE verdict is a THIRD state — never promoted to success" {
@@ -401,7 +526,7 @@ SH
   echo '{"kind":"alarm"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
   run bash "$SWEEP"
   [ "$status" -eq 0 ]
-  [ -z "$(ls -A "$CC_SWEEP_SEEN_DIR" 2>/dev/null)" ]
+  [ "$(seen_count)" -eq 0 ]
   grep -q '"verdict":"unreadable"' "$CC_IDL"
 }
 
