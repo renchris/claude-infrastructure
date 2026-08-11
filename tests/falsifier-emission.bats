@@ -356,7 +356,40 @@ assert_state() { # <label> <premise: FALSE|TRUE|UNKNOWN> <rc>
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
-# §3 END TO END — the emitted probe is one cc-premise will actually re-run and act on
+# §3 THE RECORD — a re-run-derived refusal must be legible AS one, months later
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+@test "cc-dispatch's IDL excerpt names the SIGNAL, so a re-run is distinguishable from prose" {
+  # `verdict=premise-refuted` is written both when a stored probe was RE-RUN and exited 0 (a
+  # measurement) and when another item merely DECLARED this one obsolete (filing-time prose).
+  # Measured on the live ledger 2026-08-11: 51 such rows, not one naming which. A record that cannot
+  # answer the only question that decides whether to trust it is the same defect as an unread
+  # premise — so the excerpt carries the contract's own headline marker, verbatim.
+  ex() { bash -c "set -uo pipefail
+$(awk '/^claim_excerpt\(\) \{/,/^\}$/' "$REPO/bin/cc-dispatch")
+claim_excerpt '$1'"; }
+  f="$BATS_TEST_TMPDIR/cerr"
+
+  printf 'cc-backlog claim: REFUSED verdict=premise-refuted - i1\n  x\n  FALSIFIER PASSED - re-run says gone\n' > "$f"
+  run ex "$f"
+  [[ "$output" == *"cause: FALSIFIER PASSED"* ]] || false
+
+  printf 'cc-backlog claim: REFUSED verdict=premise-refuted - i1\n  THIS ITEM DECLARES ITSELF A DUPLICATE of i2\n' > "$f"
+  run ex "$f"
+  # The DISCRIMINATION is the assertion: same verdict token, different cause, and the record says so.
+  [[ "$output" == *"cause: DECLARES ITSELF A DUPLICATE"* ]] || false
+  [[ "$output" != *"FALSIFIER"* ]] || false
+
+  # ABSENT MARKER ⇒ ABSENT CLAUSE. A row that cannot name its cause must say nothing rather than
+  # assert the commonest one — the excerpt is evidence, so a guess in it is worse than a silence.
+  printf 'cc-backlog claim: REFUSED verdict=sibling-held - i1\n  another row is live\n' > "$f"
+  run ex "$f"
+  [[ "$output" != *"cause:"* ]] || false
+  [[ "$output" == *"verdict=sibling-held"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# §4 END TO END — the emitted probe is one cc-premise will actually re-run and act on
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 @test "cc-premise REFUSES a claim on an emitted probe's exit 0, and cites the re-run" {
