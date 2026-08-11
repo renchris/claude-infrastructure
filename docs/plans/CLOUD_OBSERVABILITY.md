@@ -1845,3 +1845,45 @@ sweep. Live example: `session_01QEiWYuB1ygLLcVwCQJoUZE`, whose file has been on 
 HEAD)`. Harmless today, one wasted land per stale declaration per sweep, and unbounded as the fleet
 grows. Filed as backlog `a435e3987fbf`; the fix is a post-hoc `paths` fill from the branch's own
 diff, never a wider `landed()`.
+
+### 13.6 · ✅ The cloud lane joins the local management machinery (W2, 2026-08-11)
+
+§13.5 closed the LAND. What was still missing is everything a local `handoff-fire` gives its
+originator for free, and the shape of the gap was uniform: **a cloud fire returned an id.** No wake,
+no custody, no goal — so a lead either polled `cc-offload ls` or the work sat finished and unnoticed,
+and `✅ SAFE TO CLOSE` was reachable with a cloud session mid-flight because every close rung reads
+LOCAL git state. Built and landed `4285aadc2` (six commits); full record in
+`CLOUD_BACKLOG_PIPELINE.md` §6.
+
+🚨 **`worker_status: idle` PROVES NOTHING — this is the finding the design turns on.** The control
+plane is pollable (§13.1) and it does carry a status, but measured here on two live sessions: one
+that finished **14 hours** earlier and one fired **4 minutes** earlier both read
+`worker_status: idle` / `status_bucket: review_ready`. Idle is the between-turns state as much as the
+finished state — structurally identical to the harness's own `idleReason`, painted "finished" at
+every Stop. A return keyed on it alone lands a half-finished branch and cuts a live session off.
+So completion is a **conjunction**: the VM has pushed (the state function) · the worker is not
+running (the *trigger*) · **the pushed sha has been quiet for 180 s** — the axis that is independent
+of the flag, and therefore the only one carrying weight. Proven live on the demonstration round trip,
+which refused to land at 29 s of quiet with the control plane already reading idle.
+
+**`paths=` is filled POST-HOC, and that is what makes §13.5's closing ⚠️ go away.** `landed()`
+cannot assert anything over an empty path list — by design — and the dispatcher cannot predict at
+fire time what the VM will write. After a successful land the branch is a local head, so its own
+commits state the set exactly: `git diff --name-only --diff-filter=d <merge-base>..<ref>`. Deletions
+are EXCLUDED, because a deleted path is in the diff and absent from trunk after a perfect land, so
+including it would manufacture a declaration that can never read LANDED — the same never-satisfiable
+verdict, re-created from the other side. An empty result is never written.
+
+**The poller cannot live in a session, and this is a hard constraint.** A goal-armed session may not
+hold a backgrounded watcher at all (Claude Code skips `/goal` evaluation while any non-terminal
+background Bash exists; `hooks/validate-bash.sh` denies the park). So the return path is called from
+`scripts/autonomy-sweep.sh` under `com.chrisren.autonomy-sweep` — loaded, 300 s, not a session —
+above its nothing-new early exit, because a finished cloud session produces no page and no alarm and
+would otherwise be measured only on sweeps that already had other news.
+
+⚠️ **The rail is LANDED, not yet LIVE, and that is the ADD rule biting exactly as written.**
+`scripts/cloud-return.sh` is a new file: the live layer is reached by per-file symlinks, so it has no
+link at all and the shared checkout is 8 commits behind. `deploy-live` refuses correctly (no GREEN
+tree descends live HEAD; `postland-verify` has the sha queued and emits ~0.17 greens/day). Until it
+converges, the launchd sweep runs the OLD script and returns nothing — filed `5354fffc4079`.
+
