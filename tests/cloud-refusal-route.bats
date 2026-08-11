@@ -165,8 +165,8 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
 ✗ ship-land: verdict=killed signal=SIGTERM role=outer branch=$BRANCH — this land was TERMINATED from outside; it did not fail a gate and nothing was proven about the tree."
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"arm=cut"* ]]
-  [[ "$output" == *"NOT ROUTED"* ]]
+  [[ "$output" == *"arm=cut"* ]] || false
+  [[ "$output" == *"NOT ROUTED"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 0 ]
   # and it consumed no cycle — the bound is for real evidence
@@ -179,7 +179,7 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -188,7 +188,7 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   artifact 70 1786479000 "$(preamble)
 ✗ ship-land: verdict=killed signal=SIGTERM role=outer — nothing was proven about the tree."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=cut"* ]]
+  [[ "$output" == *"arm=cut"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -197,7 +197,7 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   artifact 9 1786479000 "$(preamble)
 ⛔ ship-land: GATE-KILLED — the gate died without earning a verdict, so this is NOT a red and NOT evidence about your tree."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=cut"* ]]
+  [[ "$output" == *"arm=cut"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -211,8 +211,8 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
   artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   grep -q '9 GATE-KILLED' "$CC_CLOUD_STATE/$ID.land-refused"     # the trap is really in the body
   run "$SUT" --id "$ID"
-  [[ "$output" != *"arm=cut"* ]]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" != *"arm=cut"* ]] || false
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -224,7 +224,7 @@ pings_n() { grep -c . "$PINGS.n" 2>/dev/null; return 0; }
 ⛔ ship-land: GATE-KILLED — the gate died without earning a verdict, so this is NOT a red.
 $(desk_tail 9)"
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=cut"* ]]
+  [[ "$output" == *"arm=cut"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -235,7 +235,7 @@ $(desk_tail 9)"
   artifact 70 1786479000 "✗ $BRANCH — NOT landed. This range is authored by someone GitHub cannot attribute, so githooks/pre-push would refuse the push. It could not be re-authored: no effective git identity."
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"arm=by-design"* ]]
+  [[ "$output" == *"arm=by-design"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 1 ]
   grep -q "NOT the VM's to fix" "$PINGS"
@@ -249,7 +249,7 @@ $(desk_tail 9)"
   decl "tests/probe.bats"
   artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" != *"arm=by-design"* ]]
+  [[ "$output" != *"arm=by-design"* ]] || false
   [[ "$output" == *"arm=vm"* ]]
 }
 
@@ -259,7 +259,7 @@ $(desk_tail 9)"
 ✗ gate: git-identity RED — a file THIS LAND CHANGES can write its test identity into the caller's repo.
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=by-design"* ]]
+  [[ "$output" == *"arm=by-design"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -277,8 +277,8 @@ $(desk_tail 9)"
 $(desk_tail 6)"
   grep -q 'git-identity escape ratchet' "$CC_CLOUD_STATE/$ID.land-refused"   # the trap is present
   run "$SUT" --id "$ID"
-  [[ "$output" != *"arm=by-design"* ]]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" != *"arm=by-design"* ]] || false
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -291,7 +291,7 @@ $(desk_tail 6)"
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
   # the SEND is addressed to the causing session and carries the gate's OWN line
   grep -q "$ID" "$SAYS"
@@ -308,7 +308,7 @@ $(desk_tail 6)"
   decl "tests/probe.bats"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
   grep -q '"match":"basename:probe.bats"' "$CC_CLOUD_STATE/$ID.refusal-route"
   grep -q "does not fixture" "$SAYS"
@@ -329,7 +329,7 @@ $(desk_tail 6)"
   export CC_FILL_PRINT="tests/probe.bats"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -341,7 +341,7 @@ $(desk_tail 6)"
 ✗ gate: bash -n RED: scripts/somebody-elses.sh
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=local-only"* ]]
+  [[ "$output" == *"arm=local-only"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 1 ]
 }
@@ -353,8 +353,8 @@ $(desk_tail 6)"
 ✗ gate: shellcheck RED
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=local-only"* ]]
-  [[ "$output" == *"uncertainty routes home"* ]]
+  [[ "$output" == *"arm=local-only"* ]] || false
+  [[ "$output" == *"uncertainty routes home"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 1 ]
 }
@@ -367,7 +367,7 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(preamble)
 ✗ ship-land: GATE RED — not pushing."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=local-only"* ]]
+  [[ "$output" == *"arm=local-only"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -376,8 +376,8 @@ $(desk_tail 6)"
   artifact 7 1786479000 "$(preamble)
 ✗ ship-land: push to origin/main REJECTED (non-fast-forward — a sibling beat you inside the window)."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=local-only"* ]]
-  [[ "$output" == *"lost a race"* ]]
+  [[ "$output" == *"arm=local-only"* ]] || false
+  [[ "$output" == *"lost a race"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -388,7 +388,7 @@ $(desk_tail 6)"
   artifact 8 1786479000 "$(preamble)
 ✗ ship-land: post-push CONTENT-VERIFY FAILED after 3 auto-retry attempt(s) — your paths are NOT intact on origin/main (docs/vm.md)."
   run "$SUT" --id "$ID"
-  [[ "$output" == *"arm=local-only"* ]]
+  [[ "$output" == *"arm=local-only"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -400,7 +400,7 @@ $(desk_tail 6)"
     hermeticity_red probe.bats; } >"$CC_CLOUD_STATE/$ID.land-refused"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REFUSING TO ROUTE"* ]]
+  [[ "$output" == *"REFUSING TO ROUTE"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 0 ]
 }
@@ -408,7 +408,7 @@ $(desk_tail 6)"
 @test "a refusal with no declaration names no causing session, so nothing is sent" {
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" == *"REFUSING TO ROUTE"* ]]
+  [[ "$output" == *"REFUSING TO ROUTE"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 0 ]
 }
@@ -418,19 +418,21 @@ $(desk_tail 6)"
 @test "the loop is bounded at 2 VM cycles and then wakes a human WITH the chain" {
   decl "tests/probe.bats"
   artifact 6 1786479001 "$(hermeticity_red probe.bats)"
-  run "$SUT" --id "$ID"; [[ "$output" == *"cycle 1/2"* ]]
+  run "$SUT" --id "$ID"
+  [[ "$output" == *"cycle 1/2"* ]] || false
   artifact 6 1786479002 "$(hermeticity_red probe.bats)"
-  run "$SUT" --id "$ID"; [[ "$output" == *"cycle 2/2"* ]]
+  run "$SUT" --id "$ID"
+  [[ "$output" == *"cycle 2/2"* ]] || false
   [ "$(says_n)" -eq 2 ]
   artifact 6 1786479003 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"EXHAUSTED"* ]]
+  [[ "$output" == *"EXHAUSTED"* ]] || false
   [ "$(says_n)" -eq 2 ]          # NOT a third send
   [ "$(pings_n)" -eq 1 ]
   grep -q "REFUSAL LOOP EXHAUSTED" "$PINGS"
   # the chain is PRINTED, not merely referenced — the human gets the evidence, not a pointer
-  [[ "$output" == *"REFUSAL CHAIN"* ]]
+  [[ "$output" == *"REFUSAL CHAIN"* ]] || false
   [[ "$output" == *"arm=vm"* ]]
 }
 
@@ -444,7 +446,7 @@ $(desk_tail 6)"
   run "$SUT" --id "$ID"
   artifact 6 1786479003 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" == *"cycle 1/2"* ]]       # the first REAL refusal is still cycle 1
+  [[ "$output" == *"cycle 1/2"* ]] || false # the first REAL refusal is still cycle 1
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -463,7 +465,7 @@ $(desk_tail 6)"
   decl "tests/probe.bats"
   artifact 6 1786479001 "$(hermeticity_red probe.bats)"; run "$SUT" --id "$ID"
   artifact 6 1786479002 "$(hermeticity_red probe.bats)"; run "$SUT" --id "$ID"
-  [[ "$output" == *"EXHAUSTED"* ]]
+  [[ "$output" == *"EXHAUSTED"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -474,7 +476,7 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"; [ "$(says_n)" -eq 1 ]
   run "$SUT" --id "$ID"
-  [[ "$output" == *"already handled"* ]]
+  [[ "$output" == *"already handled"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -494,9 +496,9 @@ $(desk_tail 6)"
   decl "tests/probe.bats"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   CC_OFFLOAD_RC=8 run "$SUT" --id "$ID"
-  [[ "$output" == *"THE SEND FAILED"* ]]
+  [[ "$output" == *"THE SEND FAILED"* ]] || false
   run "$SUT" --id "$ID"
-  [[ "$output" != *"already handled"* ]]
+  [[ "$output" != *"already handled"* ]] || false
   [ "$(says_n)" -eq 2 ]
 }
 
@@ -513,7 +515,7 @@ $(desk_tail 6)"
     artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"SUPERSEDED"* ]]
+  [[ "$output" == *"SUPERSEDED"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 0 ]
   # and it spends NO cycle — a race must not eat the budget a real refusal needs
@@ -526,8 +528,8 @@ $(desk_tail 6)"
   SEEN_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa SIDE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" != *"SUPERSEDED"* ]]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" != *"SUPERSEDED"* ]] || false
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -537,7 +539,7 @@ $(desk_tail 6)"
   decl "tests/probe.bats"
   SIDE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb artifact 70 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" != *"SUPERSEDED"* ]]
+  [[ "$output" != *"SUPERSEDED"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -567,7 +569,7 @@ $(desk_tail 6)"
 ✗ gate: bash -n RED: docs/vm.md"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"STALE"* ]]
+  [[ "$output" == *"STALE"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -590,7 +592,7 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"STALE"* ]]
+  [[ "$output" == *"STALE"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -609,8 +611,8 @@ $(desk_tail 6)"
   export CC_FILL_PRINT="tests/probe.bats"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID"
-  [[ "$output" != *"STALE"* ]]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" != *"STALE"* ]] || false
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -625,8 +627,8 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(preamble)
 ✗ gate: bash -n RED: docs/vm.md"
   run "$SUT" --id "$ID"
-  [[ "$output" != *"STALE"* ]]
-  [[ "$output" == *"arm=vm"* ]]
+  [[ "$output" != *"STALE"* ]] || false
+  [[ "$output" == *"arm=vm"* ]] || false
   [ "$(says_n)" -eq 1 ]
 }
 
@@ -647,7 +649,7 @@ $(desk_tail 6)"
 @test "a box with no refusals costs nothing to sweep and says so" {
   run "$SUT" --sweep
   [ "$status" -eq 0 ]
-  [[ "$output" == *"no refusal artifacts"* ]]
+  [[ "$output" == *"no refusal artifacts"* ]] || false
   [ "$(says_n)" -eq 0 ]
 }
 
@@ -656,8 +658,8 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --id "$ID" --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Dry run"* ]]
-  [[ "$output" == *"does not fixture"* ]]
+  [[ "$output" == *"Dry run"* ]] || false
+  [[ "$output" == *"does not fixture"* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ "$(pings_n)" -eq 0 ]
   # and a dry run must not latch, or the real pass would skip the refusal it never routed
@@ -670,12 +672,12 @@ $(desk_tail 6)"
   artifact 6 1786479000 "$(hermeticity_red probe.bats)"
   run "$SUT" --classify "$CC_CLOUD_STATE/$ID.land-refused"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"arm=vm"* ]]
-  [[ "$output" == *"match=basename:probe.bats"* ]]
+  [[ "$output" == *"arm=vm"* ]] || false
+  [[ "$output" == *"match=basename:probe.bats"* ]] || false
   # …and it reports the two ROUTING guards beside the classification, because `arm=vm` over a
   # branch already on trunk otherwise reads as "this is about to be sent", which is the opposite.
-  [[ "$output" == *"superseded="* ]]
-  [[ "$output" == *"stale="* ]]
+  [[ "$output" == *"superseded="* ]] || false
+  [[ "$output" == *"stale="* ]] || false
   [ "$(says_n)" -eq 0 ]
   [ ! -f "$CC_CLOUD_STATE/$ID.refusal-route" ]
 }
@@ -686,9 +688,9 @@ $(desk_tail 6)"
   run "$SUT" --id "$ID"
   run "$SUT" --chain "$ID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"REFUSAL CHAIN"* ]]
-  [[ "$output" == *"$BRANCH"* ]]
-  [[ "$output" == *"does not fixture"* ]]
+  [[ "$output" == *"REFUSAL CHAIN"* ]] || false
+  [[ "$output" == *"$BRANCH"* ]] || false
+  [[ "$output" == *"does not fixture"* ]] || false
   [[ "$output" == *"routed=vm"* ]]
 }
 
@@ -701,7 +703,7 @@ $(desk_tail 6)"
     printf '✗ gate: bash -n RED: docs/two.md\n'; } >"$CC_CLOUD_STATE/$ID2.land-refused"
   run "$SUT" --sweep
   [ "$status" -eq 0 ]
-  [[ "$output" == *"2 refusal artifact(s) examined"* ]]
+  [[ "$output" == *"2 refusal artifact(s) examined"* ]] || false
   [ "$(says_n)" -eq 2 ]
   grep -q "$ID" "$SAYS"
   grep -q "$ID2" "$SAYS"
