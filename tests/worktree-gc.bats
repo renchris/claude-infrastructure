@@ -883,3 +883,110 @@ SH
   [ "$status" -eq 2 ]
   echo "$output" | grep -q -- "--reason is only meaningful with --warrant"
 }
+
+# ── LANDED-DIRT: the dirty rung asks CONTENT before it vetoes ────────────────────────────────────
+# The dirty gate used to KEEP any non-empty tree, so a worktree holding nothing but content already
+# on the trunk was immortal. It cannot be settled by `landed()`: that reads COMMITS, and the live
+# dirt is dominated by paths STAGED-or-untracked and never committed — measured 2026-08-10, `git
+# cherry` called 72 of 84 dirty trees landed while four staged paths (three assets/blender/*.webp
+# renders + tools/blender/clawd_bmo.py, in six worktrees each) were absent from origin/main and on
+# NO ref anywhere. So these tests are a DISCRIMINATOR SET on the per-path predicate, and the
+# load-bearing member is the ABSENT one: it is the case that would have destroyed real assets.
+#
+# Fixture shape: trunk gains a file the worktree's branch predates. The branch is therefore an
+# ANCESTOR of trunk (landed by patch-id, idle by its backdated tip), and the working tree is dirty
+# only with respect to that older HEAD — exactly the live shape.
+dirt_wt() { # <name> <branch> <path> <content> → worktree dirty with <path>=<content>
+  git -C "$R" worktree add -q -b "$2" "$BATS_TEST_TMPDIR/$1" HEAD 2>/dev/null
+  printf '%s' "$4" > "$BATS_TEST_TMPDIR/$1/$3"
+  # Canonicalised for the SAME reason warrant() is: on macOS $BATS_TEST_TMPDIR lives under /var,
+  # which is a symlink to /private/var. Once trunk_add() has added and removed a worktree, git
+  # records subsequent paths resolved, so a raw path would never match the subject's own output and
+  # every assertion below would be vacuously un-greppable.
+  (cd "$BATS_TEST_TMPDIR/$1" && pwd -P)
+}
+
+# trunk_add <path> <content> — advance origin/main past the worktrees' branch point.
+trunk_add() {
+  local t="$BATS_TEST_TMPDIR/trunkwt"
+  git -C "$R" worktree add -q --detach "$t" HEAD 2>/dev/null
+  printf '%s' "$2" > "$t/$1"
+  git -C "$t" add "$1"
+  GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" git -C "$t" commit -qm "trunk adds $1"
+  git -C "$R" update-ref refs/remotes/origin/main "$(git -C "$t" rev-parse HEAD)"
+  git -C "$R" worktree remove --force "$t"
+}
+
+@test "dirty BUT every dirty path is byte-identical on trunk → surfaced as a candidate, NOT kept" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-redundant feat/redundant x.md hello)"
+  run_gc
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "DIRT?   $p"
+  echo "$output" | grep -q "dirty worktree(s) hold nothing but content already byte-identical"
+  # The candidate is NOT acted on without its own flag.
+  has_wt "$p"
+}
+
+@test "the same tree IS reaped once --dispose-landed-dirt is passed (the REMOVE half)" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-redundant2 feat/redundant2 x.md hello)"
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "dispose-dirt  $p"
+  run has_wt "$p"
+  [ "$status" -ne 0 ]
+}
+
+@test "RED PROOF: a dirty path ABSENT from trunk is KEPT and NAMED, even with the flag passed" {
+  trunk_add x.md hello
+  # The Blender case: a staged/untracked asset that exists nowhere on the trunk.
+  p="$(dirt_wt wt-asset feat/asset clawd-bmo-hero.webp RENDER)"
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP    $p"
+  echo "$output" | grep -q "absent from origin/main: clawd-bmo-hero.webp"
+  has_wt "$p"
+}
+
+@test "a dirty path that DIFFERS from trunk is KEPT and NAMED, even with the flag passed" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-diff feat/diff x.md CHANGED)"
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP    $p"
+  echo "$output" | grep -q "differs from origin/main: x.md"
+  has_wt "$p"
+}
+
+@test "a DELETION is divergence by construction — kept, never treated as redundant" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-del feat/del x.md hello)"
+  rm -f "$p/f"                                  # f is tracked at the branch HEAD
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP    $p"
+  echo "$output" | grep -q "deletion/unmerged entry"
+  has_wt "$p"
+}
+
+@test "the content gate only drops the dirty VETO — a LIVE oracle still wins over redundant dirt" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-live feat/live x.md hello)"
+  touch "$p/.teammate-busy"
+  run_gc --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP    $p"
+  echo "$output" | grep -q ".teammate-busy marker present"
+  has_wt "$p"
+}
+
+@test "--dry-run reports the landed-dirt disposal and mutates NOTHING" {
+  trunk_add x.md hello
+  p="$(dirt_wt wt-dry feat/dry x.md hello)"
+  run_gc --dispose-landed-dirt --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "dispose-dirt  $p"
+  echo "$output" | grep -q "DRY-RUN — nothing was mutated"
+  has_wt "$p"
+}
