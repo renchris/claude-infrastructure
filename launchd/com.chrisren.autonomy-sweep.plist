@@ -7,7 +7,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>export PATH="$HOME/.claude/bin:$PATH"; ~/.claude/scripts/autonomy-sweep.sh</string>
+    <string>export PATH="$HOME/.claude/bin:$PATH"; export CC_FIRE_CLOUD=on; ~/.claude/scripts/autonomy-sweep.sh</string>
   </array>
   <key>StartInterval</key>    <integer>300</integer>
   <key>RunAtLoad</key>        <false/>
