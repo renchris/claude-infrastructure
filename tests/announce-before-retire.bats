@@ -219,10 +219,14 @@ STUB
   # mutant must produce the exact false negative this item was filed about.
   a="$(grep -n '^      awk -v want=' "$BATS_TEST_TMPDIR/fn.sh" | cut -d: -f1)"
   [ -n "$a" ]
-  b="$(awk -v s="$a" 'NR>s && /\$sent"$/ { print NR; exit }' "$BATS_TEST_TMPDIR/fn.sh")"
+  # CONTAINS, not ends-with: the awk's closing line now carries the errexit guard (`' "$sent" || rc=$?`),
+  # so an `/\$sent"$/` anchor would silently find nothing and this whole mutation would go vacuous.
+  b="$(awk -v s="$a" 'NR>s && /\$sent"/ { print NR; exit }' "$BATS_TEST_TMPDIR/fn.sh")"
   [ -n "$b" ]
   { sed -n "1,$((a-1))p" "$BATS_TEST_TMPDIR/fn.sh"
-    printf '      grep -qF "$nb" "$sent" 2>/dev/null\n'
+    # The `|| rc=$?` rides along for the same reason the subject has it — this mutant restores the
+    # PRE-FIX READ (the substring grep), not the pre-fix errexit exposure, which is its own test below.
+    printf '      grep -qF "$nb" "$sent" 2>/dev/null || rc=$?\n'
     sed -n "$((b+1)),\$p" "$BATS_TEST_TMPDIR/fn.sh"
   } > "$BATS_TEST_TMPDIR/fn-mut.sh"
   # shellcheck source=/dev/null
@@ -243,6 +247,124 @@ STUB
     "$REPO/bin/cc-notify" --mailbox-only "$ORIG" "HANDOFF-PING test: done"
   [ "$(awk 'NR==1{print NF}' "$CC_MAILBOX_DIR/.sent/$PANE")" = 2 ]
   grep -q "$ORIG" "$CC_MAILBOX_DIR/.sent/$PANE"
+}
+
+# ── ERREXIT REACHABILITY (2026-08-11, backlog 5bf8aaaf2f5c) ──────────────────────────────────────
+# WHY EVERY TEST ABOVE WAS BLIND, and it is the harness, not the assertions. This suite sources the
+# extracted function into the BATS process and calls it through `run` — and `run` is a tested context,
+# so errexit is suspended for the whole call. The subject, however, lives in a file that runs
+# `set -euo pipefail`, and it was reached as the LAST command of `[ … ] || sc_announce_before_retire …`
+# — the one position in a `||` list where errexit still applies. The bare `awk` whose rc 1 / rc 3 are
+# ANSWERS therefore aborted handoff-fire outright: `rc=$?` never ran, the verdict case was dead code,
+# and the ONLY reachable outcome was awk rc 0 = verdict sent. Measured on live pane 376: a clean,
+# committed peer whose ping went elsewhere ran `self-close --terminal` and got exit 1, no announce,
+# no close — the unretireable peer the call site's own comment says must never exist.
+#
+# Fourteen tests were green over that. The fixture collapsed the states it was testing, because the
+# axis that fails — errexit — was the one axis the harness removed. So these drive the function the
+# way PRODUCTION does: a real `bash -euo pipefail` script, the real `[ … ] || fn` call shape, and a
+# sentinel AFTER the call that only prints if the script survived.
+
+errexit_drive() {   # $1 = path to the function file → replay the real call-site shape under set -e
+  cat > "$BATS_TEST_TMPDIR/drive.sh" <<DRV
+#!/bin/bash
+set -euo pipefail
+export CC_NOTIFY_BIN="$CC_NOTIFY_BIN"
+. "$1"
+SC_NO_NOTIFY=0
+[ "\$SC_NO_NOTIFY" = 1 ] || sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+echo "SENTINEL-REACHED"
+DRV
+  bash "$BATS_TEST_TMPDIR/drive.sh" 2>&1
+}
+
+# Rebuild the function WITHOUT the errexit guard — i.e. exactly the text that shipped before this fix:
+# the awk bare, its rc captured on the following line. Anchor-checked, so a future refactor that makes
+# the surgery a no-op reds here instead of turning the control vacuous.
+mutant_bare_awk() {  # → writes fn-noguard.sh
+  local line changed=0
+  {
+    while IFS= read -r line; do
+      case "$line" in
+        "      rc=0") changed=1; continue ;;
+        *" || rc=\$?") changed=1; printf '%s\n' "${line% || rc=\$?}"; printf '      rc=$?\n' ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$BATS_TEST_TMPDIR/fn.sh"
+  } > "$BATS_TEST_TMPDIR/fn-noguard.sh"
+  [ "$changed" = 1 ]
+  # Anchored to column 0 of a CODE line, never a bare substring: the subject's own comment block
+  # quotes `|| rc=$?` while explaining it, so an unanchored search matches the prose and this
+  # anchor-check would fail over a perfectly-built mutant.
+  grep -q '^      rc=\$?$'       "$BATS_TEST_TMPDIR/fn-noguard.sh"   # the pre-fix capture is back…
+  ! grep -q '^      rc=0$'       "$BATS_TEST_TMPDIR/fn-noguard.sh"   # …its initializer is gone…
+  ! grep -qF "' \"\$sent\" || " "$BATS_TEST_TMPDIR/fn-noguard.sh"    # …and the awk closer is bare.
+  grep -qF "' \"\$sent\""        "$BATS_TEST_TMPDIR/fn-noguard.sh"   # (the closer still EXISTS)
+}
+
+@test "ERREXIT: the definite not-sent branch is REACHABLE under the script's own set -euo pipefail" {
+  # THE MEASURED CASE. Pre-fix this exited 1 having printed nothing and announced nothing.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-10T09:00:00-0700 99 claude-infrastructure-99\n' > "$MDIR/.sent/$PANE"
+  run errexit_drive "$BATS_TEST_TMPDIR/fn.sh"
+  [ "$status" -eq 0 ]                                    # ← self-close --terminal can complete
+  [[ "$output" == *"SENTINEL-REACHED"* ]] || false       # ← the caller ran on past the announce
+  [[ "$output" == *"NO ping was ever sent"* ]] || false
+  grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "ERREXIT: the legacy-record branch (awk rc 3) is REACHABLE too — both non-zero answers, not one" {
+  # rc 1 and rc 3 abort for the same reason but through different awk exits; a fix that only covered
+  # one would leave every .sent file already on disk (all legacy-format) still unretireable.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6\n' > "$MDIR/.sent/$PANE"
+  run errexit_drive "$BATS_TEST_TMPDIR/fn.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SENTINEL-REACHED"* ]] || false
+  [[ "$output" == *"predates the both-spellings format"* ]] || false
+  grep -q 'UNVERIFIED' "$BATS_TEST_TMPDIR/notify.log"
+}
+
+@test "ERREXIT CONTROL: the sent path (awk rc 0) still returns cleanly under set -e" {
+  # The one branch that ALWAYS worked — pinned so a guard that swallowed the success rc would show up.
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-09T15:27:20-0700 6 claude-infrastructure-6\n' > "$MDIR/.sent/$PANE"
+  run errexit_drive "$BATS_TEST_TMPDIR/fn.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"this pane pinged"* ]] || false
+  [[ "$output" == *"SENTINEL-REACHED"* ]] || false
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ]
+}
+
+@test "ERREXIT MUTATION: removing the guard reproduces the measured failure — exit 1, no announce, no close" {
+  # A control that cannot fail proves nothing, and this is the one the old harness structurally could
+  # not express. Strip `|| rc=$?` and the driver must die exactly as pane 376 did.
+  mutant_bare_awk
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-10T09:00:00-0700 99 claude-infrastructure-99\n' > "$MDIR/.sent/$PANE"
+  run errexit_drive "$BATS_TEST_TMPDIR/fn-noguard.sh"
+  [ "$status" -eq 1 ]                                       # ← the hard-fail this item was filed about
+  [[ "$output" != *"SENTINEL-REACHED"* ]] || false          # ← the close path never resumed
+  [[ "$output" != *"NO ping was ever sent"* ]] || false     # ← and the announce was never made
+  [ ! -f "$BATS_TEST_TMPDIR/notify.log" ]
+}
+
+@test "ERREXIT MUTATION CONTROL: the same mutant is INVISIBLE to the bats `run` harness" {
+  # Names the blindness rather than merely fixing it: driven through `run`, the unguarded function
+  # passes every assertion the suite above makes. This is why the defect shipped.
+  mutant_bare_awk
+  # shellcheck source=/dev/null
+  . "$BATS_TEST_TMPDIR/fn-noguard.sh"
+  stamp_with_notifyback "claude-infrastructure-6"
+  mkdir -p "$MDIR/.sent"
+  printf '2026-08-10T09:00:00-0700 99 claude-infrastructure-99\n' > "$MDIR/.sent/$PANE"
+  run sc_announce_before_retire "$PANE" "$FIRED_DIR" "$MDIR"
+  [ "$status" -eq 0 ]                                       # ← green, over a subject that cannot run
+  grep -q 'UNREPORTED' "$BATS_TEST_TMPDIR/notify.log"
 }
 
 @test "F-1: the .sent record cannot be mistaken for an inbox (leading dot is refused as a box key)" {

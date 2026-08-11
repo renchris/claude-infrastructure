@@ -2645,12 +2645,24 @@ sc_announce_before_retire() { # $1=pane $2=fired-dir $3=mailbox-dir → best-eff
       # store's own history — every .sent file already on disk is in the old format. So a no-match
       # over a legacy line is cannot-tell, while a no-match over a NEW line (which carries the
       # as-given spelling whenever it differs) stays the definite negative the positive control needs.
+      #
+      # `|| rc=$?` IS LOAD-BEARING, and its absence deleted every branch below (2026-08-11, backlog
+      # 5bf8aaaf2f5c). This file runs `set -euo pipefail` (:273), and an awk whose non-zero exits are
+      # ANSWERS is still, to errexit, a failed command: a BARE invocation aborts handoff-fire on the
+      # spot, so `rc=$?` never ran, the whole verdict case was dead code, and the only reachable
+      # outcome was awk rc 0 — verdict=sent. The user-visible shape was the exact pile-up the call
+      # site's own comment (:5598-5610) forbids: `self-close --terminal` exited 1 for ANY peer that
+      # had not pinged its precise armed address, so the pane it was built to let retire could never
+      # retire, and the announce it was built to make was never made. The call site does not save it
+      # either — the function is the LAST command of `[ … ] || sc_announce_before_retire …`, which is
+      # the one position in a `||` list where errexit still applies. Putting the awk in a TESTED
+      # position is what suspends errexit for it; `rc=0` first because `set -u` reads it below.
+      rc=0
       awk -v want="$nb" '
         { for (i = 2; i <= NF; i++) if ($i == want) { hit = 1; exit } }
         NF <= 2 { legacy = 1 }
         END { exit(hit ? 0 : (legacy ? 3 : 1)) }
-      ' "$sent"
-      rc=$?
+      ' "$sent" || rc=$?
       case "$rc" in 0) verdict=sent ;; 1) verdict=not-sent ;; 3) verdict=legacy-record ;; *) verdict=unreadable ;; esac
     else
       verdict=unreadable
