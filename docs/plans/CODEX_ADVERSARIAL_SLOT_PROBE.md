@@ -121,16 +121,16 @@ would be argued out of the finding.
 🚨 **The finding that changes how W1 should have been scoped: "nobody ever fixed it" is not evidence
 a file is sound.** Clean briefs were first selected on the only mechanical basis available — zero
 subsequent commits to the path. Candidates were then put through an independent adversarial pass over
-the same defect classes the corpus scores. **Twelve were screened and nine were convicted** — several
+the same defect classes the corpus scores. **Thirteen were screened and nine were convicted** (as of 2026-08-10; the figure moved twice while late screens landed, so read it as a sample with its denominator, never as a census) — several
 on scored classes, one on a defect already sitting in this repo's own red-team notes as an open
 MED-HIGH finding, and one on an argument-parsing bug that spins forever at 100% CPU on a documented
 flag. Two further candidates were rejected for **disclosure** rather than defects, before screening:
 both were post-fix twins of `cp-01`, one narrating `cp-01`'s defect outright in its own comments and
 the other sharing its subject matter, either of which would prime that brief in a single-context run.
 
-The three survivors are `scripts/pool-floor.sh` (→ `cp-03`), `tests/pane-modal.bats` (→ `cp-07`) and
-`tests/origin-identity.bats`, which arrived after the corpus was fixed and is held as a **vetted
-alternate** should either seat be challenged in W3. The
+The four survivors are `scripts/pool-floor.sh` (→ `cp-03`), `tests/pane-modal.bats` (→ `cp-07`),
+`tests/origin-identity.bats` and `hooks/lib/origin-identity.sh`; the last two arrived after the corpus
+was fixed and are held as **vetted alternates** should either seat be challenged in W3. The
 surviving basis for `clean` is therefore **screened and not convicted**, recorded per record in
 `screen`, and a screen only clears a candidate if it *executed* rather than reasoned — both survivors
 were cleared by running the subject against real data and independently reimplementing the thing
@@ -138,7 +138,7 @@ under test. `cp-03` additionally carries a `known_findings_not_scored` entry: th
 real-but-inert imprecision, with an explicit instruction that an arm reporting it must be CREDITED,
 not scored as a false positive.
 
-Consequence for W3, and it is not a footnote: at a 9-in-12 base rate, a model reporting a defect on a
+Consequence for W3, and it is not a footnote: at a 9-in-13 base rate, a model reporting a defect on a
 clean brief may well be **right**. The judge must adjudicate every such finding against the code
 rather than trust the label.
 
