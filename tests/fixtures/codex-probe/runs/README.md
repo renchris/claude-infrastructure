@@ -53,10 +53,17 @@ and its fix commit.
 The substitute is a per-run measurement harvested from each run's own persisted rollout under
 `~/.codex/sessions/`: `tool_calls_observed` counts `exec_command` / `function_call` /
 `local_shell_call` / `apply_patch` / search items, and `isolation_verified` is `true` only when that
-count is zero. **Read those two fields before trusting any Codex output.** This is a weaker guarantee
-than the Claude arms have, and W3 should treat it as such.
+count is zero.
 
-## 🚨 Arm C's identity is UNVERIFIED — do not read it as "max reasoning"
+**Result: all 18 Codex runs made zero tool calls** (`isolation_verified: true`, 18/18) — only
+reasoning and message items appear in any rollout. No Codex arm read anything. Note what this is:
+evidence that none of them *did*, not a guarantee that none of them *could*. It is a weaker
+guarantee than the Claude arms have, and W3 should treat it as such.
+
+The Anthropic-side equivalent is `num_turns=1` in every arm-A/arm-D note (18/18) — one model turn,
+therefore zero tool round-trips.
+
+## Arm C's identity — RESOLVED by measurement: `ultra` is not a silent alias of `xhigh`
 
 `ultra` is **absent from the API's reasoning-effort enum**. A deliberately bogus value returns
 `400 invalid_request_error … Supported values are: 'none', 'minimal', 'low', 'medium', 'high',
@@ -68,10 +75,23 @@ duplicate of arm B**, and any "C beats B" or "C ties B" reading in W3 is an arti
 config run twice. That is precisely the landmine class this corpus exists to catch: a flag accepted,
 ignored, and reported back as if honoured.
 
-`index.json` therefore records arm C's effort with that caveat inline, plus
-`arm_c_identity_evidence`: a **paired reasoning-token comparison against arm B on the same brief**,
-across every brief where both completed. A coerced `ultra` tracks `xhigh`'s reasoning-token
-distribution. Supporting wall-clock signal on cp-01: arm B 12 min, arm C 24 min.
+The discriminator was a **paired reasoning-token comparison against arm B on the same brief**,
+across all 9 briefs — a coerced `ultra` would track `xhigh`'s distribution. It does not:
+
+| | cp-01 | cp-02 | cp-03 | cp-04 | cp-05 | cp-06 | cp-07 | cp-08 | cp-09 |
+|---|---|---|---|---|---|---|---|---|---|
+| B `xhigh` | 17,692 | 20,840 | 17,610 | 22,777 | 19,682 | 24,862 | 12,694 | 30,560 | 27,100 |
+| C `ultra` | 57,422 | 41,812 | 14,502 | 47,555 | 33,668 | 60,086 | 22,790 | 11,912 | 50,978 |
+
+**C > B on 7 of 9 briefs, 1.76× in sum** (`arm_c_identity_evidence` in every arm-C record).
+Supporting wall-clock signal on cp-01: arm B 12 min, arm C 24 min. So arm C is a genuinely distinct
+configuration and W3 may compare it against B as two different tiers — **the "C is a duplicate of B"
+artifact is ruled out.**
+
+What remains open is narrower, and W3 should not overclaim past it: `ultra` is still absent from the
+documented enum, so **its relation to the enum's `max` is unestablished**. Arm C is "more reasoning
+than `xhigh`", measured — not "the maximum the model offers", which was the plan's stated intent.
+The two briefs where C < B (cp-03, cp-08) are unexplained and left as-is.
 
 *(Credit: this and the Codex-sandbox finding were raised by a second W2 session that ran preflight
 checks and stood down without running the grid — `/private/tmp/rvw/W2-preflight-findings.md`.)*
@@ -89,7 +109,10 @@ Codex arms and have no Anthropic-side equivalent here.
 
 ## Known limitations — read these before drawing conclusions
 
-1. **Some records are RECONSTRUCTED, and say so in their `note`.** The orchestrating shell process
+0. **Completion: 36/36 runs, all `ok:true`.** No arm was dropped, substituted, or missing from any
+   brief. Codex weekly `used_percent` moved **22.0 → 27.0** across the 18 Codex runs.
+
+1. **Two records are RECONSTRUCTED, and say so in their `note`** (`cp-01__C`, `cp-02__C`). The orchestrating shell process
    was killed three times mid-grid by something on this machine that was never identified (its own
    grandchild `codex exec` survived each time and kept working). Where a run's output reached disk
    but its record did not, the record was rebuilt from disk truth — rollout filename for
