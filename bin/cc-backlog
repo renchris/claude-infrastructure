@@ -2517,7 +2517,7 @@ cmd_venue() {
     { printf 'cc-backlog venue: --why "<token>: <detail>" is required\n'
       printf '  usage: cc-backlog venue <id> --venue local|cloud --why "<token>: <detail>"\n'
       printf '  The why is the MACHINE-READABLE record of the routing decision. Lead it with the\n'
-      printf '  verdict token (cc-eligible has the closed set) so `split(": ")[0]` is the class and\n'
+      printf '  verdict token (cc-eligible has the closed set) so a split on ": " gives the class,\n'
       printf '  the rest is the evidence a human needs. Producer: bin/cc-venue.\n'
     } >&2
     return 2

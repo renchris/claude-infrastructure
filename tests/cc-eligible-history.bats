@@ -41,14 +41,25 @@ setup() {
   # A 3-commit horizon over a 6-commit repo: small enough to read, wide enough that "inside" and
   # "outside" are both non-empty. The production default is 50, the measured depth of a real clone.
   export CC_ELIGIBLE_HISTORY_DEPTH=3
+  # Pinned because the test-hermeticity ratchet flags any suite whose TEXT names handoff-fire,
+  # and this one does — inside a FIXTURE TITLE, as the specification of an item the classifier
+  # must refuse. Nothing here fires anything. The pin is a no-op for this suite and it is the
+  # sanctioned fix, so it is taken rather than argued with; the detector reading a quoted
+  # string as an invocation is filed separately.
+  export CC_FIRE_CAPACITY_GATE=off
   G="$HOME/Development/probe"
 }
 
 # mkrepo → a real git repo at $G with 6 commits on main; sets $OLD (commit 1) and $NEW (commit 6).
 mkrepo() {
   mkdir -p "$G"
-  git -C "$G" init -q -b main
-  git -C "$G" config user.email t@e.com; git -C "$G" config user.name t
+  git -C "${G:?repo path required}" init -q -b main
+  # THE ARGUMENT IS ASSERTED, not the chain. `git -C ""` is a documented NO-OP rather than an
+  # error, so an empty $G would drop this identity into whatever repo the process is standing in —
+  # and ~100 linked worktrees here share ONE .git/config, so a single such line re-authors every
+  # session on the box. A `&&`/`||` guard does not rescue it either: `cd ""` exits 0.
+  git -C "${G:?repo path required}" config user.email t@e.com
+  git -C "${G:?repo path required}" config user.name t
   local i
   for i in 1 2 3 4 5 6; do
     echo "$i" > "$G/f$i"; git -C "$G" add "f$i"; git -C "$G" commit -qm "c$i"
