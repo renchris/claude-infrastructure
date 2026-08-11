@@ -510,6 +510,36 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   '{consolidation_trigger_rc:$t, ratchet_rc:$r,
     note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean)"}')"
 
+# ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
+# scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
+# and had ZERO callers for its entire life (measured 2026-08-11, backlog 4ce34a4f703c): absent from
+# all five settings.json, and its only named invocation sat in docs/activation/wiring-all.sh, a
+# bundle that was never run. Meanwhile the drift it names was real — .claude-next was missing the
+# unattended-ask PERMISSION RAIL plus four other hooks. A correct detector nobody calls is
+# indistinguishable from no detector, which is the third instance of that exact shape wired in from
+# this one block.
+#
+# WHY HERE AND NOT IN nightly-regression: that job's plist is NOT loaded (`launchctl list` shows no
+# com.claude.nightly-regression; its activation script is still in the rotting queue), so wiring the
+# checker there would have moved it from one inert home to another while reading like a fix.
+# autonomy-sweep runs every 300s under com.chrisren.autonomy-sweep, which IS loaded.
+#
+# ABOVE THE nothing-new EARLY EXIT, for the reason the block above states: config drift produces no
+# pages and no alarms while it accumulates, so a quiet fleet is exactly when it must be measured.
+#
+# `--file`, not `--assert`: the verdict has to land in a store something already reads. That row is
+# condition-keyed and carries its own falsifier, so repeated drifting sweeps update ONE item and it
+# closes itself once the dirs agree — this block cannot become a per-sweep item generator.
+#
+# The rc is captured, never `|| true`: rc 1 (drift, filed) and rc 3 (could not compare) are different
+# facts, and collapsing them would let a broken checker journal exactly like a clean fleet.
+_drift="$_SWEEP_DIR/settings-drift-assert.sh"
+_drift_rc="skipped"
+if [ -x "$_drift" ]; then _bounded bash "$_drift" --file >/dev/null 2>&1; _drift_rc=$?; fi
+log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
+  '{settings_drift_rc:$d,
+    note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
+
 if [ "$total_new" -eq 0 ]; then
   log_idl abstained '{"reason":"nothing-new"}'
   exit 0
