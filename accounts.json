@@ -52,7 +52,12 @@
     "URGENCY_EXP": 2.0,
     "KWORK_WINDOW_MIN": 10,
     "ASSIGN_TTL_MIN": 15,
-    "PROJ_LOOKAHEAD_H": 1.0
+    "PROJ_LOOKAHEAD_H": 1.0,
+    "_desk": "W1 additions 2026-08-11 (DESK_ROUTER_AND_STARTUP_V1 W1 / docs/research/R2, all OPTIONAL — code defaults match, and range-checked by _validate_router when present). The desk lane (--route interactive, i.e. bare `claude`) is a two-key SORT, not a product of factors: 5h-safe set first, then EARLIEST WEEKLY RESET. DESK_5H_FLOOR = projected 5h utilisation below which an account is 5h-safe; 0.60 is sized by ARGUMENT, not by measurement (below S_CUT=0.85 with margin, above the 61% ceiling three accounts observed in 38h) — the replay was flat for every floor tried because the fleet almost never approaches 60%, so this is absence of evidence, NOT validation. DESK_W_FLOOR = weekly headroom at/above which an account is weekly-safe; it made no difference on this data (0/324) and exists only to stop a pure earliest-reset sort routing the desk to an account with 2% of its week left. Both keys DEGRADE one at a time (safe-set -> 5h-safe -> all eligible) and can never empty the candidate set. DESK_HYST_MARGIN = fraction a rival must beat the incumbent desk account by (churn measured 43.4% over the last 100 decisions; per-account projects/sessions make a flip cost --resume). DESK_HYST_TTL_MIN = minutes a `--assign --src claude-launcher` row still names the incumbent (300 = one 5h window). Kills: CC_ROUTE_DESK_5H_FLOOR=off, CC_ROUTE_DESK_W_FLOOR=off, CC_ROUTE_DESK_HYST=off, CC_ROUTE_DESK_ASSIGN_EXEMPT=off.",
+    "DESK_5H_FLOOR": 0.60,
+    "DESK_W_FLOOR": 0.15,
+    "DESK_HYST_MARGIN": 0.15,
+    "DESK_HYST_TTL_MIN": 300.0
   },
   "accounts": [
     {
