@@ -47,6 +47,7 @@
 # Env (test injection): CC_RELOGIN_POLL_LOG · CC_RELOGIN_POLL_STATE_DIR · CC_REAPER_IDL ·
 # CC_RELOGIN_POLL_ACCOUNTS_BIN · CC_RELOGIN_POLL_RELOGIN_BIN · CC_RELOGIN_POLL_NOW (fixed clock) ·
 # CC_RELOGIN_POLL_MAX_ATTEMPTS (24) · CC_RELOGIN_POLL_TIMEOUT_S (900, child watchdog) ·
+# CC_RELOGIN_POLL_KILL_GRACE_S (20, TERM→KILL escalation delay — see the watchdog) ·
 # CC_RELOGIN_POLL_DEADLINE_EPSILON_H (12, same-cycle tolerance; 0 = exact match).
 set -uo pipefail
 
@@ -94,6 +95,14 @@ ACCOUNTS_BIN="${CC_RELOGIN_POLL_ACCOUNTS_BIN:-claude-accounts}"
 RELOGIN_BIN="${CC_RELOGIN_POLL_RELOGIN_BIN:-cc-relogin}"
 MAX_ATTEMPTS="${CC_RELOGIN_POLL_MAX_ATTEMPTS:-24}"
 TIMEOUT_S="${CC_RELOGIN_POLL_TIMEOUT_S:-900}"
+# How long TERM gets before KILL. Not a second timeout — the bound is TIMEOUT_S, and this is only
+# the courtesy a child gets to unwind (release /tmp/claude-accounts-heal-<acct>.lock, close a
+# browser profile) before the uncatchable signal. A garbage value falls back to the default rather
+# than exiting 1: this knob bounds a watchdog, and refusing to poll at all because a watchdog
+# constant is malformed is strictly worse than polling with the documented one.
+KILL_GRACE_DEFAULT=20
+KILL_GRACE_S="${CC_RELOGIN_POLL_KILL_GRACE_S:-$KILL_GRACE_DEFAULT}"
+case "$KILL_GRACE_S" in ''|*[!0-9]*) KILL_GRACE_S="$KILL_GRACE_DEFAULT" ;; esac
 EPS_H="${CC_RELOGIN_POLL_DEADLINE_EPSILON_H:-12}"
 case "$EPS_H" in ''|*[!0-9]*) echo "cc-relogin-poll: CC_RELOGIN_POLL_DEADLINE_EPSILON_H needs a non-negative integer" >&2; exit 1 ;; esac
 
@@ -436,7 +445,10 @@ fi
 # ONLY a positive integer counts as busy. Unknown/garbage k → attempt anyway and let cc-relogin's
 # authoritative gate refuse: an unreadable pre-filter must never become a silent permanent skip.
 case "$K" in ''|0|*[!0-9]*) K_BUSY=0 ;; *) K_BUSY=1 ;; esac
-ACTION="invoked"; CHILD_RC=""
+# TIMED_OUT is declared HERE, not only where the watchdog sets it: every arm below (dry-run,
+# skipped-busy, the attempt) falls through to one --json emitter under `set -u`, so a variable
+# born inside one branch is an unbound-variable abort on the others.
+ACTION="invoked"; CHILD_RC=""; TIMED_OUT=""
 if [ "$DRYRUN" = 1 ]; then
   ACTION="dry-run"
   log "DRY-RUN $ACCT deadline=$DL_DISP ($T_DISP, k=${K:-?}, attempts=$S_ATT) would run: $RELOGIN_BIN $ACCT"
@@ -447,14 +459,77 @@ elif [ "$K_BUSY" = 1 ]; then
 else
   S_ATT=$((S_ATT + 1))
   log "ATTEMPT #$S_ATT $ACCT deadline=$DL_DISP $T_DISP k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
+  # ── the watchdog is a BOUND, not a request ─────────────────────────────────────────────────
+  # It used to send TERM and nothing else, while `wait "$cp"` below is unbounded — so TIMEOUT_S
+  # bounded exactly one case: a child that dies on a plain TERM. TERM is by definition catchable
+  # and ignorable; $RELOGIN_BIN is env-overridable (CC_RELOGIN_POLL_RELOGIN_BIN, above); and a
+  # child that is SIGSTOPped or blocked in an uninterruptible syscall does not reap on TERM
+  # either. This is NOT a claim that today's child hangs — `bin/cc-relogin` is a python3 script
+  # with no signal handler and dies on a plain TERM. It is that nothing in this file MADE the
+  # bound true, so it held only by a property of a child this file does not own.
+  # When it does not hold, the parent waits forever: no RESULT line, no write_state, no attempt
+  # accounting — and because launchd will not start a second instance of a label while one is
+  # running and this job carries no overlap guard of its own (launchd/staged/
+  # com.claude.relogin.plist, StartInterval 3600), ONE wedged tick wedges the hourly cadence
+  # indefinitely. So: TERM, a bounded grace, then KILL, which is neither catchable nor ignorable.
+  #
+  # WHY the verdict needs the marker AND the exit code, never either alone:
+  #   * the marker alone can lie. The watchdog wakes exactly at the boundary and a child that has
+  #     exited but not yet been reaped is a ZOMBIE, which still answers `kill -0` with 0 — so a
+  #     clean run finishing microseconds early would be booked as a timeout.
+  #   * the exit code alone cannot tell "we TERMed it" from "it exited 143 on its own".
+  # A signal-killed reap ALWAYS produces both, so requiring both makes a clean exit unfalsifiable
+  # while still catching every real timeout — and a child that beats the watchdog keeps its own
+  # true rc, which is the outcome that must never be lost.
+  # No marker ⇒ the CLASSIFICATION degrades, never the BOUND: the watchdog still escalates to KILL
+  # and the parent still returns. What is lost is only the term/kill label, and the failure stays
+  # non-zero (143/137) either way — so a timeout can still never be booked as a clean exit=0. Say
+  # so in the log rather than letting the labelling quietly stop working.
+  WD_MARK="$(mktemp "${TMPDIR:-/tmp}/cc-relogin-poll-wd.XXXXXX" 2>/dev/null || printf '')"
+  [ -n "$WD_MARK" ] || log "WATCHDOG-MARK-UNAVAILABLE $ACCT — cannot mktemp under ${TMPDIR:-/tmp}; the ${TIMEOUT_S}s bound still applies, only the term/kill label is lost"
   "$RELOGIN_BIN" "$ACCT" >>"$LOG" 2>>"$LOG" &
   cp=$!
-  ( sleep "$TIMEOUT_S"; kill -TERM "$cp" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "$TIMEOUT_S"
+    kill -0 "$cp" 2>/dev/null || exit 0            # finished inside the bound — nothing to bound
+    # MARKER BEFORE SIGNAL, in both arms, and the order is load-bearing. The parent is sitting in
+    # `wait "$cp"`, which returns the instant the child dies, and its very next statement is
+    # `kill "$wp"` — so signalling first leaves a window in which the watchdog is reaped before it
+    # can write the marker. Then WD_FIRED is empty, the case below falls through, and a child we
+    # KILLed is booked through the ordinary branch with no timeout label at all. The window is
+    # narrow, which makes it worse: the failure would be rare and therefore invisible.
+    # Writing first is sound because the marker only claims "the watchdog DECIDED to intervene",
+    # which is true at the decision, not at the delivery — and the verdict still requires the
+    # matching 143/137 exit code as its second half, so a marker without a kill cannot convict.
+    [ -n "$WD_MARK" ] && printf 'term\n' > "$WD_MARK"
+    kill -TERM "$cp" 2>/dev/null
+    sleep "$KILL_GRACE_S"
+    kill -0 "$cp" 2>/dev/null || exit 0            # TERM was enough
+    [ -n "$WD_MARK" ] && printf 'kill\n' > "$WD_MARK"
+    kill -KILL "$cp" 2>/dev/null                   # the actual bound: uncatchable, unignorable
+  ) >/dev/null 2>&1 &
   wp=$!
   wait "$cp"; CHILD_RC=$?
   kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
-  log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC$([ "$CHILD_RC" = 0 ] && echo ' PROVEN — deadline should move')"
-  write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC"
+  WD_FIRED=""; [ -n "$WD_MARK" ] && { WD_FIRED="$(cat "$WD_MARK" 2>/dev/null)"; rm -f "$WD_MARK"; }
+  TIMED_OUT=""
+  case "${WD_FIRED}:${CHILD_RC}" in
+    term:143) TIMED_OUT="term" ;;                    # 128+SIGTERM — we sent it, and it landed
+    kill:137) TIMED_OUT="kill" ;;                    # 128+SIGKILL — TERM was ignored or unreachable
+  esac
+  if [ -n "$TIMED_OUT" ]; then
+    # NEVER recorded as `exit=0`: a timeout is a FAILED attempt, and booking it clean would tell
+    # the escalation path (and claude-accounts' board, which reads this log line) that the login
+    # was proven and the deadline should move. The attempt still counts — S_ATT moved before the
+    # fork, and a child that has to be killed is exactly the failure the cap exists to catch.
+    [ "$TIMED_OUT" = kill ] && _how="ignored TERM, KILLed after ${KILL_GRACE_S}s grace" \
+                            || _how="died on TERM"
+    log "TIMEOUT $ACCT attempt=$S_ATT — child exceeded ${TIMEOUT_S}s and was stopped ($_how)"
+    log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC timeout=$TIMED_OUT — NOT proven, deadline has not moved"
+    write_state "$S_ATT" "$S_ESC" "timeout-$TIMED_OUT exit=$CHILD_RC"
+  else
+    log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC$([ "$CHILD_RC" = 0 ] && echo ' PROVEN — deadline should move')"
+    write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC"
+  fi
 fi
 
 if [ "$JSON" = 1 ]; then
@@ -462,13 +537,14 @@ if [ "$JSON" = 1 ]; then
   # will compare, and "T-0h" is exactly the claim this poller must not make; null cannot be
   # mistaken for a countdown, and deadline_known says the emptiness is deliberate.
   jq -nc --arg d "$DETECT" --arg a "$ACCT" --arg dl "$DL_ISO" --arg act "$ACTION" --arg k "${K:-}" \
-         --arg rc "${CHILD_RC:-}" --arg reason "$ESC_REASON" --arg cmd "$RECOVER_CMD" \
+         --arg rc "${CHILD_RC:-}" --arg to "${TIMED_OUT:-}" --arg reason "$ESC_REASON" --arg cmd "$RECOVER_CMD" \
          --arg src "$DLSRC" --arg cause "$CAUSE" --argjson known "$DL_KNOWN" \
          --argjson td "$TRIG_DAYS" --argjson eh "$ESC_HOURS" --argjson hl "$HL_JSON" \
          --argjson att "$S_ATT" --argjson cand "$NCAND" --argjson esc "$ESCALATED" --argjson dry "$DRYRUN" \
     '{ts:(now|todate),detection:$d,trigger_days:$td,escalate_hours:$eh,candidates:$cand,acct:$a,
       deadline:$dl,deadline_known:($known==1),deadline_src:$src,cause:$cause,
       hours_left:$hl,k:$k,attempts:$att,action:$act,child_exit:$rc,
+      child_timeout:(if $to == "" then null else $to end),
       escalated:($esc==1),escalation_reason:$reason,recover_cmd:$cmd,dry_run:($dry==1),
       exit:(if ($esc==1 and $dry==0) then 5 else 0 end)}'
 fi
