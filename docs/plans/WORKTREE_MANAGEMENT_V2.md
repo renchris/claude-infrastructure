@@ -428,3 +428,73 @@ daemon, so a top-level switch would also stop its non-destructive census/watchdo
 
 **Remaining on row 11 after this land:** AC-4/5/6 (verdict tokens + oracle function-verification),
 the AC-2 adjudication (§7.3 — do **not** build AC-2 as written), and §6's R-a…R-d.
+
+## §9 — the LANDED-DIRT class RULED and reaped, 2026-08-11 (§§0-8 untouched; backlog `82dfe711cd09`)
+
+`--dispose-landed-dirt` shipped able to reap this class but was never fired, because the flag is
+**global and not path-scopeable**: firing it meant ruling on 32 directories nobody had looked at.
+This section is that ruling. All 32 are gone, all 32 branches are preserved, 0 refusals.
+
+### 9.1 The population is ONE artifact set, not 32 independent judgements
+
+The single most useful measurement, and the one that collapses the whole ruling: every one of the
+32 carried the **same four paths** — `assets/banner/recycle-bmo.svg`, `assets/demo/recycle-bmo.mp4`,
+`docs/research/recycle-banner-source-fidelity-2026-07-30.md`, `tools/banner/recycle.py` — staged
+(`A `) in 30 and untracked (`??`) in 2. Not 32 directories to adjudicate one at a time: **one
+fleet-wide event**, and all four paths landed together in `b9896b4ea`, byte-identical
+(`git hash-object` == `git rev-parse origin/main:<path>`, verified per path, per directory).
+
+So this *is* the "staged-but-never-committed" shape the item warned about — `git cherry` calls all
+32 branches landed while those staged bytes sit on no commit. It is the benign half of it: the
+bytes are on the trunk at the same paths.
+
+### 9.2 Blast radius: what a removal actually destroyed
+
+Every tracked path was provably on the trunk, so the only losable content was gitignored, which git
+records nowhere else. Measured before acting, across all 32: **zero** non-regenerable regular files.
+`.claude-plans/` was **empty** in all 19 that had it; `.claude-tasks/` held **only symlinks** into
+`~/.claude-secondary/tasks` / `~/.claude-quaternary/tasks`, so the store is outside the worktree and
+survived. Everything else was `node_modules/`, `.ruff_cache/`, `__pycache__/`. No `.env`, no secret,
+no rendered asset.
+
+### 9.3 Ownership was asked even though this class does not gate on it
+
+A2 (owner terminal) belongs to the DISPOSE class; the DIRT class has no ownership rung. Asked
+anyway: of the 30 `wt-<id>` members, **22 `done` and 8 `open`** — and the 8 were disposed
+deliberately. An open item whose branch is 0-ahead by patch-id and whose tree holds nothing unique
+has a directory that is pure residue; re-dispatch builds a fresh worktree off `origin/main`, which
+is strictly better than a 12-day-old stale one. None was claimed, and liveness is re-proven at act
+time regardless.
+
+The **6 owned-parked worktrees are a disjoint set** (`comm -12` on the two path lists = 0). They are
+*unlanded*, which is why they are kept; nothing here touched them.
+
+### 9.4 🚨 The ruling found a hole in the predicate doing the ruling — fixed in the same diff
+
+`dirt_landed()` hashed the **working file** and nothing else, so it was uniformly blind to the one
+place a staged-but-never-committed byte can hide from `hash-object`: an **index entry the working
+file no longer matches**. At `AM`/`MM` the index holds a blob the worktree does not;
+`clear_redundant_dirt`'s `git reset` drops it; it is then reachable from no ref and prunable. The
+class was filed *because* staged bytes can sit on no ref — and the copy at risk was the one the
+predicate never read.
+
+It fired **zero times** over this population (index blob == trunk blob in all 32), so the hole was
+**latent, not active** — this reap destroyed nothing. It is still a hole in a *destroying*
+predicate, and the control proves it was real: the new RED test **fails against the pre-fix
+subject**, which disposes the tree and takes the staged blob with it.
+
+The rule is **reachability, not equality-with-trunk**. A plain unstaged edit (` M`) legitimately
+carries an index blob equal to HEAD and unequal to trunk; a gate keyed on "index == trunk" would
+have passed the RED case *and* retired every ordinary unstaged edit along with it. So a staged blob
+passes iff it is the **trunk's or this HEAD's** — HEAD because every removal path here preserves the
+branch, which is what makes it durable. Both halves are pinned
+(`tests/worktree-gc.bats`, the STAGED-blob RED + the index-equals-HEAD control); suite 79/79.
+
+### 9.5 Carried forward — the DIRT class writes no disposal record
+
+`--dispose-abandoned` appends to `CC_WTGC_DISPOSAL_LOG`, and its own comment says why: that record
+is what later distinguishes an abandoned-BY-DECISION worktree from a dropped-BY-ACCIDENT one, which
+git alone cannot do. The DIRT path removes directories and appends **nothing** — the ledger still
+reads 11 rows after 32 disposals. Lower stakes than the abandoned class (branch preserved *and*
+content on trunk, so recovery is one `git worktree add`), but it is the same asymmetry. Filed
+separately rather than grown into this diff.
