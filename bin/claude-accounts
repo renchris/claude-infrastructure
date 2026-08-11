@@ -49,7 +49,12 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
-  claude-accounts --route general|fable   best account name (bare, on stdout)
+  claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
+      general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
+      interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
+                   5h headroom), NO urgency term, and the login cliff is never yielded. Reusing
+                   `general` here would place the operator nearest exhaustion and manufacture the
+                   very 5-hour wall the lane exists to avoid.
   claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
   claude-accounts --assign ACCT [--src S] record one fire-time assignment (M7). Called by the
       consumer that COMMITS to launching a NEW session (handoff-fire, post-pick): the account
@@ -1484,6 +1489,45 @@ def score_general(r, cfg, cliff=True):
     return (w_rem / (T ** urgency_exp(R))) * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
 
 
+def score_interactive(r, cfg, cliff=True):
+    """SURVIVAL score for a human's long-lived desk. Deliberately NOT score_general.
+
+    🚨 score_general is `headroom / T**2` — deadline-DOMINANT by construction (M7), because a
+    dispatched fire is SHORT and the objective there is to spend quota before it strands. It
+    therefore prefers the account nearest its reset. An interactive desk is the opposite shape: it
+    lives for hours or days, and the cost of a wrong pick is the operator hitting a wall mid-work.
+    Pointing bare `claude` at the dispatch score would place the operator NEAREST exhaustion and
+    manufacture the 5-hour wall this lane exists to prevent — while reading as an ordinary limit
+    hit, with nothing anywhere pointing at routing as the cause.
+
+    So this lane maximises RUNWAY and carries no 1/T urgency term at all:
+      w_rem  absolute weekly headroom  — how much work is left this week
+      s_rem  projected 5h headroom     — the near-term wall, and the one the operator actually feels
+      KF/CF  the shared concurrency and credits factors
+    The login-cliff factor still applies, and the interactive lane never YIELDS it — see ranked().
+
+    Shares every exclusion with general (_excluded), so this is a different objective over the
+    same eligibility, never a second opinion about who is eligible."""
+    R = cfg["router"]
+    reason = _excluded(r, R, cliff)
+    if reason:
+        return None, reason
+    if r.get("weekly_pct") is None:
+        return None, "no-weekly-data"
+    wtgt = 0.98 if r.get("credits_on") else 1.00
+    w_rem = max(0.0, wtgt - r["weekly_pct"] / 100.0)
+    if w_rem <= R["WEEKLY_FLOOR"]:
+        return None, "weekly-exhausted"
+    # Linear 5h headroom rather than _soft's S_SOFT..S_CUT band: the band is a late-stage brake
+    # meant to break ties near the cutoff, whereas this lane wants the difference between a 10%
+    # and a 60% window to dominate the pick from the start.
+    su = _su_projected(r, R)
+    s_rem = clamp((R["S_CUT"] - su) / R["S_CUT"], R["SF_FLOOR"], 1.0)
+    KF = clamp(1 - k_eff(r) / R["KMAX"], R["KFLOOR"], 1.0)
+    CF = (1.0 if (r.get("weekly_pct") or 0) / 100.0 < 0.90 else 0.5) if r.get("credits_on") else 1.0
+    return w_rem * s_rem * KF * CF * (_cliff_factor(r) if cliff else 1.0), None
+
+
 def score_fable(r, cfg, win, cliff=True):
     R, F = cfg["router"], cfg["frontier"]
     reason = _excluded(r, R, cliff)
@@ -1520,6 +1564,7 @@ def _rank_pass(rows, cfg, win, kind, cliff):
     out, reasons = [], {}
     for r in rows:
         s, why = (score_fable(r, cfg, win, cliff) if kind == "fable"
+                  else score_interactive(r, cfg, cliff) if kind == "interactive"
                   else score_general(r, cfg, cliff))
         if s is not None and s > 0:
             out.append((s, r))
@@ -1548,6 +1593,15 @@ def ranked(rows, cfg, win, kind):
     rendered count."""
     out, reasons = _rank_pass(rows, cfg, win, kind, True)
     if out or not any(w == CLIFF_DRAIN_REASON for w in reasons.values()):
+        return out, reasons
+    # 🚨 The INTERACTIVE lane never yields the cliff term. Yielding is right for dispatch — a
+    # drained account still works, the cliff has not passed, and refusing it would turn a
+    # scheduled 4-account cliff calendar into a fleet outage. It is wrong for a human: once the
+    # refresh token expires, `invalid_grant` has NO reset to wait for, so a yielded pick hands the
+    # operator a desk that dies on auth mid-session and whose only recovery is the interactive
+    # /login this whole lane exists to keep them away from. Better to abstain and let the launcher
+    # fall back to its pinned account, which the operator can at least reason about.
+    if kind == "interactive":
         return out, reasons
     yielded, y_reasons = _rank_pass(rows, cfg, win, kind, False)
     if not yielded:
@@ -3136,8 +3190,8 @@ def main():
         # a caller asking for a frontier account silently got a general one.
         i = args.index(flag)
         kind = args[i + 1] if i + 1 < len(args) else None
-        if kind not in ("general", "fable"):
-            sys.exit(f"claude-accounts: {flag} requires general|fable (got {kind!r})")
+        if kind not in ("general", "fable", "interactive"):
+            sys.exit(f"claude-accounts: {flag} requires general|fable|interactive (got {kind!r})")
         cand, reasons = ranked(rows, cfg, win, kind)
         if not cand:
             print("none")
