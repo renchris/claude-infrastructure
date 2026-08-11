@@ -664,6 +664,42 @@ tests/host-ok.bats'
   ! grep -qE '[0-9]+ consecutive|[0-9]{12}' "$CC_BACKLOG_LOG"
 }
 
+# ── THE DOCUMENTED DISABLE, BOTH DIRECTIONS ─────────────────────────────────────────────────────
+# The knob block says "0 disables either half without a separate kill switch". That was true of the
+# COOLOFF half for free (`elapsed -lt 0` is never true) and FALSE of the MAX half, whose guard is
+# `-ge`: `n >= 0` holds on the FIRST cut, so CC_DEPLOY_HOST_CUT_MAX=0 paged immediately and put
+# every cutting suite into cool-off — the exact opposite of off, from the value the comment names as
+# the off switch. Both cases below are needed and neither implies the other: the first proves 0
+# turns the mechanism OFF, the second proves it did not merely shift the threshold by one, which is
+# the mistake this fix could easily have introduced (memory: guard-proxy-fails-in-both-directions).
+# The positive control that the knob is not simply dead is the CUT_MAX test above, which pins the
+# default MAX=3 as silent on ticks 1-2 and paging on tick 3 — not duplicated here.
+@test "CUT_MAX=0 DISABLES the counter: cuts forever ⇒ no page, no backlog, never suppressed" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  tick t1 CC_DEPLOY_HOST_CUT_MAX=0
+  tick t2 CC_DEPLOY_HOST_CUT_MAX=0
+  tick t3 CC_DEPLOY_HOST_CUT_MAX=0                 # past the DEFAULT max, so a leak would show here
+  tick t4 CC_DEPLOY_HOST_CUT_MAX=0
+  [ ! -f "$(cutpage cut)" ]
+  [ ! -s "$CC_BACKLOG_LOG" ]
+  [[ "$output" != *"PAGE"* ]] || false
+  # …and the OTHER half of the same knob: with the alarm off the suite is never cool-off-skipped
+  # either, so it is still being run and still able to produce a verdict on any later tick.
+  [ "$(grep -c 'tests/host-cut.bats' "$CC_SPY_LOG")" -eq 4 ]
+  [[ "$output" != *"cut cool-off"* ]] || false
+}
+
+@test "CUT_MAX=1 pages on the FIRST cut — 0 is DISABLE, never an off-by-one" {
+  auto_setup
+  seed_host_suites 'tests/host-cut.bats'
+  tick t1 CC_DEPLOY_HOST_CUT_MAX=1
+  [ -f "$(cutpage cut)" ]
+  grep -q '1 consecutive deploys' "$(cutpage cut)"
+  grep -q 'post-deploy HOST CUT (no verdict): tests/host-cut.bats' "$CC_BACKLOG_LOG"
+  [[ "$output" == *"PAGE tests/host-cut.bats"* ]] || false
+}
+
 @test "manifest MISSING ⇒ host checks skipped silently, bats never invoked at all" {
   auto_setup
   advance_origin b                               # no manifest is ever committed here
@@ -1554,6 +1590,23 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
   [ -z "$(find "$PAGES" -name 'deploy-refusal-escalation-*' 2>/dev/null)" ] || false
   # ...and the counter WAS running the whole time, so the silence is a budget and not a broken arm.
   [ "$(awk '{print $2}' "$R7_REF")" -eq 6 ] || false
+}
+
+# The SIBLING of the HOST_CUT_MAX=0 case further up, and it is a REGRESSION PIN, not a fix: this
+# knob's comment makes the same "0 disables either half" promise, and unlike HOST_CUT_MAX it already
+# keeps it — refusal_bump's `[ "$REFUSE_MAX" -gt 0 ] || return 0` rejects 0 before the `-lt` guard
+# that would otherwise mis-read it (`n < 0` is never true, so 0 would escalate on the FIRST refusal).
+# Nothing about the counter is otherwise disabled, so the assertion has to be that the LEDGER never
+# appears at all — the function returns before it is written.
+@test "R7 REFUSE_MAX=0 DISABLES the counter — the sibling knob keeps the same promise" {
+  r7_setup; r7_famine
+  R7_MAX=0
+  run dlr; [ "$status" -eq 1 ]                       # tick 1 — the ordinary damped refusal, unchanged
+  [[ "$output" != *"ESCALATED"* ]] || false
+  for _ in 1 2 3 4 5 6 7; do run dlr; [ "$status" -eq 1 ]; [ -z "$output" ] || false; done
+  [ ! -f "$R7_REF" ]                                 # never even opened its ledger, at 8 refusals
+  [ ! -f "$CC_BACKLOG_LOG" ] || ! grep -q "deploy lane refusing on repeat" "$CC_BACKLOG_LOG" || false
+  [ -z "$(find "$PAGES" -name 'deploy-refusal-escalation-*' 2>/dev/null)" ] || false
 }
 
 @test "R7 the STRUCTURAL-BLINDNESS case is its OWN culprit, never 'the verifier is red'" {

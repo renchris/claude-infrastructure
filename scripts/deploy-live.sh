@@ -215,7 +215,14 @@ case "$BLIND_SCAN"     in ''|*[!0-9]*) BLIND_SCAN=2000 ;; esac
 # The suppression is BOUNDED and SPOKEN — the skip is `say`n with its remaining time on every tick
 # it fires, and when it expires the suite runs again and re-pages if it cuts again, so an unresolved
 # condition re-asserts about twice an hour rather than never (page-damp.sh's own TTL rule).
-# 0 disables either half without a separate kill switch: COOLOFF=0 ⇒ `elapsed -lt 0` is never true.
+# 0 disables either half without a separate kill switch. The two halves reach that promise by
+# DIFFERENT routes and only one of them is free: COOLOFF=0 ⇒ `elapsed -lt 0` is never true, so the
+# comparison alone delivers it. MAX has the opposite polarity — its guard is `-ge`, and `n >= 0` is
+# true on the FIRST cut — so left to the comparison, MAX=0 would page immediately and drop every
+# suite into cool-off, i.e. the exact opposite of off. Both MAX sites therefore carry an EXPLICIT
+# `-gt 0` guard (host_in_cut_cooloff, and the page call in host_checks), the same shape and the same
+# reason as refusal_bump's `[ "$REFUSE_MAX" -gt 0 ] || return 0`. A convention promised in a comment
+# and delivered by only one of its two knobs is worse than no convention.
 HOST_CUTS="$POSTLAND_DIR/host-cuts"                              # rows: "<suite> <consecutive-n> <epoch>"
 HOST_CUT_MAX="${CC_DEPLOY_HOST_CUT_MAX:-3}"                      # consecutive cuts on ONE suite before paging
 HOST_CUT_COOLOFF="${CC_DEPLOY_HOST_CUT_COOLOFF:-1800}"           # ...and before that suite is run again
@@ -671,6 +678,10 @@ host_cut_row() { # <suite> → its prior "<consecutive-n> <epoch>", or "0 0" whe
 }
 host_in_cut_cooloff() { # <suite> — 0 = still cooling off, so do not run it this tick
   local row pn pts
+  # THE DISABLE, and it must be spelled here rather than left to the `-ge` below: `pn >= 0` holds for
+  # every suite that has any row at all, so without this line MAX=0 would suppress a suite after its
+  # first cut instead of turning the mechanism off. Returns 1 = not cooling off ⇒ the suite runs.
+  [ "$HOST_CUT_MAX" -gt 0 ] || return 1
   row="$(host_cut_row "$1")"; pn="${row%% *}"; pts="${row##* }"
   [ "$pn" -ge "$HOST_CUT_MAX" ] || return 1
   [ "$(( $(date +%s) - pts ))" -lt "$HOST_CUT_COOLOFF" ]
@@ -802,7 +813,11 @@ host_checks() { # <deployed-sha> — never blocks, never rolls back, never chang
       row="$(host_cut_row "$s")"; cn=$(( ${row%% *} + 1 ))
       newcuts="$newcuts$s $cn $(date +%s)
 "
-      [ "$cn" -ge "$HOST_CUT_MAX" ] && host_cut_page "$s" "$cn" "$sha"
+      # `-gt 0` FIRST: 0 is the documented disable and `cn >= 0` is true on the very first cut, so
+      # the guard has to reject 0 before the threshold is ever compared. The row above is still
+      # counted and still written — disabling the ALARM is not disabling the bookkeeping, and a
+      # streak that kept accruing is what makes re-enabling the knob honest on the next tick.
+      [ "$HOST_CUT_MAX" -gt 0 ] && [ "$cn" -ge "$HOST_CUT_MAX" ] && host_cut_page "$s" "$cn" "$sha"
     fi
   done
   # WRITTEN ONCE, FROM THIS TICK ONLY — the file is rebuilt rather than edited, so it prunes itself:
