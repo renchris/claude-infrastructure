@@ -1747,7 +1747,12 @@ run_gate() {  # $1=range → 0 green / 1 red
     CC_AFUNIX_OWN="$aown" "$AFUNIX_LINT" tests >&2; local arc=$?
     if [[ "$arc" -eq 2 ]]; then
       echo "⛔ gate: afunix-path-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
-      gate_red afunix
+      echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
+      # GATE_KILLED, not gate_red: the line above says this is NOT a claim about the tree,
+      # yet gate_red made it exit 6 (author-fixable RED) instead of 9 (retryable machine
+      # verdict) — the distinction :90 calls load-bearing. The git-identity arm at :1792
+      # had this shape right; these two did not.
+      GATE_KILLED=1
       return 1
     elif [[ "$arc" -ne 0 ]]; then
       echo "✗ gate: AF_UNIX RED — a fixture THIS LAND CHANGES binds a socket by absolute path." >&2
@@ -2241,7 +2246,9 @@ run_gate() {  # $1=range → 0 green / 1 red
     CC_TSVPAD_OWN="$tsvown" "$TSVPAD_LINT" . >&2; local trc=$?
     if [[ "$trc" -eq 2 ]]; then
       echo "⛔ gate: tsv-pad-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
-      gate_red tsv-pad
+      echo "  Nothing is wrong with your files. Re-run /ship when the box is quieter." >&2
+      # GATE_KILLED, not gate_red — see the afunix arm above; same defect, same reason.
+      GATE_KILLED=1
       return 1
     elif [[ "$trc" -ne 0 ]]; then
       echo "✗ gate: TSV field-collapse RED — a file THIS LAND CHANGES reads IFS=tab TSV with nothing" >&2
