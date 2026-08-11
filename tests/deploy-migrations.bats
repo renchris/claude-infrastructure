@@ -160,3 +160,35 @@ setup() {
     || { echo "activation-watch still platters a hand-sync for a converger-owned class"; false; }
   true
 }
+
+@test "9: every migration DECLARES a verify oracle (none may land unanswerable)" {
+  # The sibling of test 3, at the other end of the lifecycle. Test 3 stops a migration reaching a
+  # converge with no CLASS; this stops one reaching the ledger with no ORACLE — scripts/
+  # registration-state.sh then reports it `unverifiable`, and whether its effect ever arrived in the
+  # enforcing store cannot be answered by any check. That is not a hypothetical: 0001, 0003 and 0004
+  # each landed without one and sat unanswerable until 2026-08-11, because the README's header table
+  # documented `class`/`step`/`run` and never mentioned `verify` — the omission propagated by
+  # example. A lint living only in registration-state's summary counts the blindness; the gate has to
+  # sit on the act that creates it (memory: enforcement-must-live-at-the-chokepoint).
+  #
+  # `conflict` is deliberately NOT required. It answers a different question — is a WRONG value set
+  # at this key — which is only sometimes possible, and registration-state consults it solely when
+  # the verifier has already failed everywhere; requiring one would push migrations into declaring
+  # cosmetic conflicts that convert a truthful `staged-pending` into a red `overridden`
+  # (0003's header records exactly that trade being refused).
+  shopt -s nullglob
+  local found=0
+  for f in "$MIGS"/*.sh; do
+    found=$(( found + 1 ))
+    verify="$(sed -n 's/^# *migration-verify: *//p' "$f" | head -1)"
+    [ -n "$verify" ] \
+      || { echo "$(basename "$f"): no '# migration-verify:' — registration-state.sh can only report it unverifiable"; false; }
+    # A tautology satisfies the letter of the rule and inverts its purpose: an always-0 oracle makes
+    # every migration read `registered` forever, which is strictly worse than the blindness above
+    # because it is blindness wearing a pass (memory: sensor-default-off-makes-blindness-the-shipping-path).
+    case "$verify" in
+      true|:|'exit 0'|'/usr/bin/true') echo "$(basename "$f"): migration-verify is the tautology '$verify' — it can never fail"; false ;;
+    esac
+  done
+  [ "$found" -gt 0 ] || { echo "no migrations found under $MIGS — the mechanism has zero instances"; false; }
+}

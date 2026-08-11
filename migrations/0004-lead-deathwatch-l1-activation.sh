@@ -2,6 +2,8 @@
 # migration-class: c10
 # migration-step: L1 death-watch is built + GREEN but cannot be activated yet — its watch-file has no producer; the launchd persistence below is written and waiting on that one missing piece
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0004-lead-deathwatch-l1-activation.sh
+# migration-verify: launchctl list 2>/dev/null | grep -qi deathwatch && [ -s "${CC_DEATHWATCH_WATCHFILE:-$HOME/.claude/deathwatch/watch.tsv}" ]
+# migration-conflict: launchctl list 2>/dev/null | grep -qi deathwatch && [ ! -s "${CC_DEATHWATCH_WATCHFILE:-$HOME/.claude/deathwatch/watch.tsv}" ]
 #
 # 0004 — the L1 half of the never-wait-on-the-dead build (docs/NEVER-WAIT-ACTIVATION.md), staged
 # against its MEASURED state rather than against its doc row.
@@ -37,6 +39,31 @@
 # detector is not the same claim as coverage of the fleet. L1-a already declares this blindness in
 # lead-deathwatch.sh:12 ("BLIND to a pid it never registered ... covered by the P8 registry") — the
 # composition it names is real, and the registry side of it is what is missing.
+#
+# ── THE ORACLE (added 2026-08-11): TWO CLAUSES, BECAUSE ONE OF THEM IS THE WHOLE POINT ───────────
+# `launchctl list` alone would answer the question the activation queue asks — is the job loaded —
+# and that is the question this file spends its length arguing is the WRONG one. A loaded agent over
+# an empty watch-list is the failure described above: kqueue armed on nothing, a heartbeat that
+# stays healthy, and coverage of zero. So the verifier only says `registered` when the job is loaded
+# AND the list it exists to watch has rows, and the missing half gets its own name via the conflict
+# arm — `overridden`, "a different value is set at the same key", which is exactly what a watcher
+# pointed at an empty file is. Loaded-and-blind is thus reported as a FAILING state rather than
+# folded into either "activated" or "still staged"; today, with nothing loaded, both arms return 1
+# and the verdict stays `staged-pending`, which is true. All three states were controlled against a
+# stubbed `launchctl` before landing (loaded+rows ⇒ registered · loaded+empty ⇒ overridden ·
+# not loaded ⇒ neither).
+#
+# The label is matched on the substring `deathwatch` rather than a full `com.claude.*` string on
+# purpose: no plist for this job exists yet in launchd/, so a label pinned here would be one this
+# file INVENTED, and the day someone writes the plist under any other spelling the oracle would read
+# false forever while looking authoritative (MEMORY.md caller-census-keyed-on-path-misses-the-name).
+# The watch-file rides the same `CC_DEATHWATCH_WATCHFILE` seam the body below uses, but the header's
+# fallback deliberately drops the body's inner `${CC_CLAUDE_DIR:-…}` hop and names $HOME/.claude
+# outright. registration-state.sh re-runs each verifier once per config dir with CC_CLAUDE_DIR
+# re-aimed; there is one death-watch, not five, and lead-deathwatch.sh's own records dir is likewise
+# $HOME/.claude/deathwatch — so keeping the indirection here would send the oracle hunting four
+# watch-files that were never meant to exist and manufacture a permanent `partial`. Both spellings
+# resolve to the same path in every context that actually runs this migration.
 #
 # WHY c10. The remaining step loads a launchd agent. migrations/README.md: "A migration that touches
 # settings.json, a launchd plist, or credentials declares c10 and waits for a human." The §3 rescope

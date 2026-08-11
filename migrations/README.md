@@ -34,6 +34,32 @@ set -uo pipefail
 | `# migration-class:` | **always** | `mechanical` \| `c10`. **There is no default** — see below. |
 | `# migration-step:` | `c10` only | One line naming the operator-owned step, filed to `cc-backlog`. |
 | `# migration-run:` | `c10`, optional | The exact command the operator pastes. |
+| `# migration-verify:` | **always** | One command. Exit 0 ⇒ the effect **is live in the enforcing store**. Read by `scripts/registration-state.sh`; a migration without one is reported `unverifiable` and can never be reported live. |
+| `# migration-conflict:` | optional | One command. Exit 0 ⇒ a **different** value is set at the same key ⇒ `overridden`. Declare it only where a wrong value is genuinely possible. |
+| `# migration-subject:` | optional | Path to the arm itself. Absent from disk ⇒ `not-staged` (distinguishes "never written" from "written but nothing registered it"). |
+
+### The verifier is not optional, and it is not the runner's business
+
+`migration-class` governs whether the converger RUNS a migration; `migration-verify` governs whether
+anyone can later ask whether it WORKED. They are separate questions with separate readers —
+`scripts/deploy-migrations.sh` for the first, `scripts/registration-state.sh` for the second — and
+until 2026-08-11 only the first was documented here, so three migrations (`0001`, `0003`, `0004`)
+landed unanswerable and the omission propagated by example. `tests/deploy-migrations.bats` case 9
+now asserts every migration in this directory declares one, and rejects a tautology (`true`, `:`,
+`exit 0`) — an always-passing oracle is blindness wearing a pass.
+
+Three rules the existing headers encode, each paid for:
+
+- **Verify the EFFECT, not the paperwork.** `0004`'s launchd job being loaded is not its effect; a
+  loaded death-watcher over an empty watch-list heartbeats healthily and covers nothing, so its
+  oracle requires both, and names loaded-and-blind through the conflict arm.
+- **Do not re-derive what the subject already derives.** `0003` calls its own script's `--status`
+  rather than re-enumerating accounts in `jq`; a second enumeration is a second source of truth that
+  cannot learn the fleet changed.
+- **Mind the per-config-dir loop.** `registration-state.sh` re-runs each verifier once per config dir
+  with `CC_CLAUDE_DIR` re-aimed. That is right for anything living in `settings.json` and wrong for
+  anything singular (a launchd job, the ledger itself) — spell those with a config-dir-invariant
+  path or the oracle manufactures a permanent `partial`.
 
 ### The two classes
 
