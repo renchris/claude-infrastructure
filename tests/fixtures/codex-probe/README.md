@@ -47,14 +47,17 @@ verdict.
 
    🚨 **This was the hard control, and picking the clean briefs cost more than picking the defective
    ones.** The obvious basis — a file with **zero subsequent commits**, i.e. one nothing ever came
-   back to fix — turns out to be worth almost nothing here. Ten candidates were put through an
-   independent adversarial pass over the same defect classes the corpus scores. **Eight were
-   convicted**, several on scored classes, and one on a defect already sitting in this repo's own
-   red-team notes as an open MED-HIGH finding. A file nobody has fixed is not a file with nothing
-   wrong; it is a file nobody has looked at hard.
+   back to fix — turns out to be worth almost nothing here. Twelve candidates were put through an
+   independent adversarial pass over the same defect classes the corpus scores. **Nine were
+   convicted**, several on scored classes, one on a defect already sitting in this repo's own
+   red-team notes as an open MED-HIGH finding, and one on an argument-parsing bug that spins forever
+   at 100% CPU on a documented flag. A file nobody has fixed is not a file with nothing wrong; it is
+   a file nobody has looked at hard.
 
    So the surviving basis is **screened and not convicted**, recorded per record in `screen` — and
-   the screen that clears a candidate must have *executed* things, not reasoned about them. Two
+   the screen that clears a candidate must have *executed* things, not reasoned about them. The
+   third survivor, `tests/origin-identity.bats`, arrived after the corpus was fixed and is held as a
+   **vetted alternate** should either clean seat be challenged in W3. Two
    further candidates were rejected for **disclosure** rather than defects: both were post-fix twins
    of `cp-01`, and one narrated `cp-01`'s defect outright in its own comments ("the corpus CONVICTS
    the shipped pre-fix hook") while the other shared its subject matter, so a corpus run in one
