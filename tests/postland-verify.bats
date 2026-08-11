@@ -38,8 +38,16 @@
 #               for one is gate_admit again (C19/R1).
 #   C5 target   origin/main of $CC_POSTLAND_REPO; ABSTAIN (exit 0) when that
 #               TREE already has a stamp
-#   C6 mutex    run.lock.d mkdir+pid — a second LIVE instance exits 0 quietly;
+#   C6 mutex    run.lock.d mkdir+{pid,lstart} — a second LIVE instance exits 0 quietly;
 #               a DEAD-pid lock is reaped and the run proceeds
+#   C6b ident   a pid is not an identity. The holder is genuinely alive iff its pid is alive AND
+#               that pid's CURRENT start time equals the lstart recorded at acquire. A live pid
+#               whose lstart DIFFERS is a stranger holding a RECYCLED pid — the real holder is
+#               dead, so the lock is stale and is reaped at any age. A live pid whose lstart
+#               MATCHES is never reaped at any age (H2). A lock carrying a pid but NO lstart was
+#               taken by a pre-fix process: its identity is unverifiable, so it is honoured like a
+#               live holder but ONLY until LOCK_TTL — never forever. Same rule, same dialect, as
+#               land-lock.sh:lock_is_stale, which fixed this class on 2026-07-25.
 #   C7 verdict  bats over the TREE CORPUS inside a DETACHED worktree MINTED FOR THIS RUN
 #               and REMOVED on exit (v2 §4.2.1 — the reused cell carried cross-tree residue)
 #   C18 partition  the corpus is tests/*.bats MINUS scripts/host-suites.manifest, passed to
@@ -501,6 +509,86 @@ second_window() { run bash "$SUT" --run-if-needed; }
   [ "$status" -eq 0 ]
   [ "$(stamps_n)" = "1" ]                          # C6: reaped, verification ran
   [ -f "$CC_POSTLAND_DIR/stamps/$(origin_tree).json" ]
+}
+
+# ── C6b {pid,lstart} identity ───────────────────────────────────────────────────
+# The two tests above cannot tell a RECYCLED pid from the original holder — both write a bare pid,
+# which is exactly the information the pre-fix mutex had. That gap was the wedge: a holder that died
+# and whose pid the OS handed to an unrelated process read as permanently live, and $LOCK_TTL is
+# consulted only on the EMPTY-holder branch, so nothing ever released it. Every test below therefore
+# writes an lstart, because that is the byte the verdict now turns on.
+@test "C6b: a RECYCLED pid (alive, lstart DIFFERS) is a stranger — the lock is reaped, not honoured" {
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  # The recorded identity of the DEAD original holder. A start time in 1970 cannot be any live
+  # process's, so this is a stranger by construction and never by a timing accident.
+  echo "Thu Jan  1 00:00:00 1970" > "$CC_POSTLAND_DIR/run.lock.d/lstart"
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "1" ]                          # C6b: reaped => the run PROCEEDED (no wedge)
+  [ -f "$CC_POSTLAND_DIR/stamps/$(origin_tree).json" ]
+}
+
+@test "C6b CONTROL: a GENUINE live holder (lstart MATCHES) is never reaped — at any age" {
+  # The control that stops the fix from degenerating into "always reap": if this ever passes while
+  # the reap is unconditional, the mutex has silently stopped being a mutex. Aged 6 years past
+  # LOCK_TTL deliberately — H2 is "never at ANY age", not "not yet".
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid"
+  ps -o lstart= -p "$live" > "$CC_POSTLAND_DIR/run.lock.d/lstart"   # the SAME process, still running
+  touch -t 202001010000 "$CC_POSTLAND_DIR/run.lock.d"               # ...and long past LOCK_TTL
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]                              # C6: quiet exit 0
+  [ "$(stamps_n)" = "0" ]                          # it did NOT verify
+  [ ! -f "$CC_POSTLAND_DIR/last-green" ]
+}
+
+@test "C6b compat: a pid-only lock (pre-fix holder) is honoured, but only until LOCK_TTL" {
+  # A lock taken by a process from before the identity rule carries no lstart, so its identity is
+  # unverifiable. Fail-safe direction is too-patient, not too-eager — but bounded, because an
+  # unverifiable holder is precisely what a TTL exists for. Both halves are asserted, since a rule
+  # that only ever honours (or only ever reaps) is not a compatibility rule.
+  mkdir -p "$CC_POSTLAND_DIR/run.lock.d"
+  sleep 300 >/dev/null 2>&1 &
+  live=$!
+  echo "$live" > "$BATS_TEST_TMPDIR/live.pid"      # teardown kills it
+  echo "$live" > "$CC_POSTLAND_DIR/run.lock.d/pid" # pid, NO lstart => pre-fix shape
+  run bash "$SUT" --run-if-needed                  # inside TTL: honoured
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "0" ]
+  touch -t 202001010000 "$CC_POSTLAND_DIR/run.lock.d"   # past TTL: the escape the pre-fix code lacked
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  [ "$(stamps_n)" = "1" ]                          # reaped on age alone => never a permanent wedge
+}
+
+@test "C6b: the acquirer records its OWN {pid,lstart} — the identity the rule compares against" {
+  # Without the lstart WRITE every production lock is a compat lock and the recycled-pid wedge comes
+  # back (bounded by LOCK_TTL rather than forever) — with all three tests above still green, because
+  # each writes its own fixture. Only a lock this SUT took can prove it, and one can only be observed
+  # while the SUT still HOLDS it, so the corpus is made to wedge and the holder is read mid-run.
+  # POLLED, never slept: nothing here depends on how fast the box is.
+  printf '@test "wedge" { sleep 60; }\n' > "$R/tests/wedge.bats"
+  push_commit "a suite that wedges (mutex-identity path)"
+  bash "$SUT" --run-if-needed >/dev/null 2>&1 &    # stdout/stderr detached: a bg job holding bats'
+  runner=$!                                        # pipe open would hang the suite, not this test
+  echo "$runner" > "$BATS_TEST_TMPDIR/live.pid"    # teardown kills it
+  L="$CC_POSTLAND_DIR/run.lock.d"
+  for _ in $(seq 1 120); do [ -s "$L/pid" ] && break; sleep 0.5; done
+  [ -s "$L/pid" ]                                  # the SUT took the lock
+  holder="$(cat "$L/pid")"
+  [ -s "$L/lstart" ]                               # ...and recorded an identity, not just a pid
+  [ "$(cat "$L/lstart")" = "$(ps -o lstart= -p "$holder" 2>/dev/null)" ]   # ...its OWN
+  # `wait` is not politeness: without it bash reports the SIGTERMed job on stderr ("Terminated: 15"),
+  # which lands in this suite's own TAP stream as a non-TAP line.
+  kill "$runner" 2>/dev/null || true
+  wait "$runner" 2>/dev/null || true
 }
 
 # ── C10 red ─────────────────────────────────────────────────────────────────────

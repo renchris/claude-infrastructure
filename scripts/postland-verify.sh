@@ -753,18 +753,55 @@ env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tr
   ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s"}' "${b:-unknown}" "${c:-unknown}" "${l:-?}")"
 }
 
-# ════ mutex — shape copied from land-lock.sh (a LIVE holder is never reaped; dead pid → instant) ═══
+# ════ mutex — {pid,lstart} identity, the same rule land-lock.sh:lock_is_stale uses ════════════════
+# THE COPY THAT DROPPED THE IDENTITY CHECK (fixed 2026-08-11). The header used to read "shape copied
+# from land-lock.sh" while carrying only half of it: the holder was recorded as a bare pid and any
+# `kill -0` success was read as "the holder is alive". A pid is not an identity — the OS recycles it —
+# so a holder that DIED and whose pid was later handed to an unrelated process read as permanently
+# live. And it wedged FOREVER, not just for a while: $LOCK_TTL is consulted ONLY in the empty-holder
+# branch, so the escape every other lock in this repo has was unreachable on exactly the branch that
+# needed it. Reproduced against the pre-fix function: lock dir aged 208572449s with TTL=900 and a live
+# unrelated pid in $LOCK/pid ⇒ try_acquire REFUSED. Both consumers (do_run_if_needed, do_run_one) then
+# `idl abstained lock-held` and return 0, so `--run-if-needed`/`--run` silently stopped stamping —
+# the verifier looks healthy and verifies nothing. Same class land-lock.sh already fixed on 2026-07-25.
+#
+# THE RULE (identical semantics to lock_is_stale; POSIX-test dialect because this file is `[ ]`, not
+# `[[ ]]`): a holder is genuinely alive iff its pid is alive AND that pid's CURRENT start time equals
+# the one recorded when the lock was taken. A live pid with a DIFFERENT lstart is a stranger, so the
+# real holder is dead ⇒ reap. A live pid with a MATCHING lstart is never reaped at any age — H2 is
+# unchanged, and it is what keeps this a mutex instead of "always reap".
+lock_claim() { # write the holder identity into a lock dir THIS process just mkdir'd
+  # ORDER MATTERS: lstart first, pid last. A racing acquirer reads pid first, so publishing pid last
+  # makes "pid present" imply "lstart present" — the mid-acquire window is the empty-holder branch
+  # (5s grace) rather than a lock that looks like a pre-fix one. Hence the no-lstart case below is
+  # exclusively a PRE-FIX process, never a race.
+  printf '%s\n' "$(ps -o lstart= -p $$ 2>/dev/null || true)" > "$LOCK/lstart" 2>/dev/null || true
+  printf '%s\n' "$$" > "$LOCK/pid"
+}
 try_acquire() {
-  mkdir "$LOCK" 2>/dev/null && { printf '%s\n' "$$" > "$LOCK/pid"; return 0; }
-  local holder age stale
+  mkdir "$LOCK" 2>/dev/null && { lock_claim; return 0; }
+  local holder age stale rec cur
   holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  rec="$(cat "$LOCK/lstart" 2>/dev/null || true)"
   age="$(( $(now_epoch) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) ))"
   stale=0
   if [ -z "$holder" ]; then { [ "$age" -ge 5 ] || [ "$age" -gt "$LOCK_TTL" ]; } && stale=1
-  elif kill -0 "$holder" 2>/dev/null; then stale=0     # holder ALIVE → NEVER reaped (wait it out)
-  else stale=1; fi                                     # holder pid DEAD → reap immediately
+  elif ! kill -0 "$holder" 2>/dev/null; then stale=1   # holder pid DEAD → reap immediately
+  elif [ -z "$rec" ]; then
+    # COMPATIBILITY RULE — pid but NO lstart: a lock taken by a PRE-FIX process (only possible
+    # during the one migration window; see the ORDER MATTERS note above). Its identity is
+    # UNVERIFIABLE, so it is honoured like a live holder — but bounded by $LOCK_TTL, never forever.
+    # This DIVERGES from land-lock.sh, which treats a missing lstart as live indefinitely: that is
+    # the very wedge being fixed here, and an unverifiable holder is exactly the case a TTL exists
+    # for. Fail-safe direction: too-patient (a stale pre-fix lock costs up to LOCK_TTL of latency)
+    # rather than too-eager (two live verifiers on one box).
+    [ "$age" -gt "$LOCK_TTL" ] && stale=1
+  else
+    cur="$(ps -o lstart= -p "$holder" 2>/dev/null || true)"
+    [ "$rec" != "$cur" ] && stale=1                    # pid REUSED by a stranger → holder DEAD → reap
+  fi                                                   # rec = cur → genuinely alive → NEVER reaped
   if [ "$stale" = 1 ]; then
-    rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null && { printf '%s\n' "$$" > "$LOCK/pid"; return 0; }
+    rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null && { lock_claim; return 0; }
   fi
   return 1
 }
