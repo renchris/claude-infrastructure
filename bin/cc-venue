@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""cc-venue — the PRODUCER for `cc-backlog claim --venue local|cloud`.
+
+bin/cc-dispatch:470 states the gap in its own words:
+
+    `cc-backlog claim --venue local|cloud` shipped fully built and fully tested with
+    ZERO PRODUCERS.
+
+Everything downstream of the decision exists and is tested — `fire_venue` reads the venue off the
+argv that will actually run, `cloud_declare` makes the off-box session observable, the claim gate
+refuses ineligible work, the fold keys the liveness oracles off the label. Measured 2026-08-11:
+**0 of 294 open items carried a cloud venue.** Nothing decided, so nothing went.
+
+This is the thing that decides. It writes `venuePlan` + `venueWhy` onto open rows
+(`cc-backlog venue`), and cc-dispatch reads the plan at the one seam where a fire is composed.
+
+── WHAT IT IS NOT ──────────────────────────────────────────────────────────────────────────────
+NOT A KEYWORD ROUTER, and the plan says why with numbers rather than principle
+(CLOUD_BACKLOG_PIPELINE.md §2). Of four briefs triaged by hand, one was rejected outright — it
+patches the fleet spawn rail and its premise had gone stale against the same day's landings — and
+one needed 215 commits of history inlined before a VM could attempt it. **A producer that routed
+on keywords would have sent both.** So the decision is four separate questions, and only the first
+is a word list:
+
+    1. does the specification NAME state a VM cannot see?      → bin/cc-eligible spelling classes
+    2. does it CITE history the shallow clone cannot reach?    → bin/cc-eligible measured arm
+    3. is its premise still standing against TODAY's tree?     → bin/cc-premise, re-run here
+    4. can this box CERTIFY 2 at all?                          → the horizon oracle state
+
+NOT A SECOND ELIGIBILITY IMPLEMENTATION. Questions 1, 2 and 4 are answered by importing
+`bin/cc-eligible` — the module object, not a re-derivation of its rules — because that same file is
+what REFUSES at `cc-backlog claim --venue cloud`. A report and a refusal that can disagree is the
+defect the whole predicate was factored out to prevent, and a producer is the easiest place in the
+system to re-create it by accident.
+
+── THE ASYMMETRY: THE GATE FAILS OPEN, THE PRODUCER FAILS CLOSED ────────────────────────────────
+These look contradictory and are not. cc-eligible fails OPEN on anything it cannot read, because a
+classifier that refused on "I could not tell" would block the whole cloud tap on a missing file,
+and because a wrong INELIGIBLE only leaves an item exactly where it already is — claimable locally,
+losing nothing.
+
+The producer is the other side of that trade. It is the thing that PROMOTES work into a venue where
+a wrong answer cannot be seen: a wrongly-routed item burns an account's quota, improvises a
+plausible answer against history it cannot read, and reports success (§5, the anti-goal). So it
+requires a POSITIVE certification for every cloud label, and routes local — with the reason
+recorded — on every uncertainty. Refusing to promote costs nothing; promoting blind costs quota and
+produces a confident wrong answer.
+
+🚨 THE GUARD, KEYED ON THE DANGEROUS EFFECT. A cloud VM must never build or run the venue rule: it
+would be deciding its own admission, and its 50-commit clone cannot read the history that justifies
+the exclusions. The enforcement is NOT "refuse to run somewhere unusual" — a guard keyed on being
+in a strange place fires on its own test harness and misses the real case (memory:
+guard-refusal-fires-on-its-own-harness). It is keyed on the effect: **a cloud label may only be
+written from a certification, and a shallow clone cannot certify.** `HistoryOracle.certify()`
+returns `shallow` on a grafted repo — where every resolvable sha is inside its own horizon by
+construction, so the reach arm would answer REACHABLE to everything — and `--apply` will not write
+`cloud` without `ok`. On a VM that is automatic and needs no rule to be remembered.
+
+Verbs:
+  assess <id> [--json]    the decision for ONE item. Never writes. exit 0 always.
+  run [--apply] [--json] [--project P] [--limit N]
+                          decide over every OPEN item. DRY BY DEFAULT — prints the plan and the
+                          counts; `--apply` writes the labels via `cc-backlog venue`.
+
+Env:
+  CC_VENUE_BACKLOG_BIN / CC_VENUE_ELIGIBLE_BIN / CC_VENUE_PREMISE_BIN — sibling resolution overrides
+  CC_VENUE_PREMISE=off   — skip question 3 (for a fixtured test with no repo to ask about)
+  CC_ELIGIBLE_REPO, CC_ELIGIBLE_HISTORY_DEPTH — read by the imported predicate, not by this file
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def _resolve(env, name):
+    return os.environ.get(env) or os.path.join(HERE, name)
+
+
+def _load_eligible():
+    """Import bin/cc-eligible AS A MODULE — the same code object the claim gate runs.
+
+    By path, because it is an extension-less executable: `import cc_eligible` cannot find it and a
+    copy of its rules here would be the exact drift this file exists to avoid.
+    """
+    import importlib.machinery
+    import importlib.util
+    path = _resolve("CC_VENUE_ELIGIBLE_BIN", "cc-eligible")
+    if not os.path.isfile(path):
+        sys.stderr.write("cc-venue: cannot find the shared predicate at %s — refusing to route "
+                         "from a second implementation\n" % path)
+        sys.exit(3)
+    spec = importlib.util.spec_from_loader(
+        "cc_eligible", importlib.machinery.SourceFileLoader("cc_eligible", path)
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+CE = _load_eligible()
+
+# The closed set of `venueWhy` tokens. Every why is `"<token>: <detail>"`, so `split(": ")[0]` is
+# the class and the rest is the evidence — the same head-biased shape every verdict in this stack
+# uses, for the same reason (a machine reads the first field, a human reads the line).
+WHY_ELIGIBLE = "eligible"
+WHY_UNCERTIFIED = "uncertified-history"
+PREMISE_PREFIX = "premise-"
+
+# cc-premise verdicts that are NOT "the premise is standing". `clear` is the only one this file
+# treats as a green light, which is STRICTER than cc-premise's own gate (it blocks on `superseded`,
+# `self-duplicate` and `falsified` and advises on the rest). Deliberately stricter, and only here:
+# cc-premise advises because its consumer is a worker whose BRIEF carries the correction, so an
+# item with a decayed sub-claim still gets done correctly. A cloud worker has no such reader — the
+# correction lives in this box's ledger and the VM cannot see the ledger at all. `suspect` in
+# particular means "a cited sha or path no longer resolves", which is the same class of unreadable
+# reference that the shallow clone turns into a confident wrong answer.
+PREMISE_OK = "clear"
+
+
+def _run(argv, timeout=60, stdin=None):
+    try:
+        p = subprocess.run(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+            input=stdin.encode() if stdin else None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, "", ""
+    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+
+
+def premise_verdict(item_id):
+    """cc-premise's own verdict token for this item, or None when it could not be asked.
+
+    None and a verdict are different answers and the caller must not collapse them: an unasked
+    premise is an uncertainty (route local, say so), while `clear` is the positive certification
+    this file requires before promoting anything.
+    """
+    if os.environ.get("CC_VENUE_PREMISE") == "off":
+        return "skipped"
+    rc, out, _err = _run([_resolve("CC_VENUE_PREMISE_BIN", "cc-premise"), "check", item_id])
+    if rc is None:
+        return None
+    line = (out.splitlines() or [""])[0].strip()
+    if not line.startswith("verdict="):
+        return None
+    return line[len("verdict="):].strip() or None
+
+
+def _clip(s, n):
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def build_index():
+    """The shared index — with cc-eligible's FAIL-OPEN converted to this file's FAIL-CLOSED.
+
+    `load_records` reaches `_open_unknown` on an unreadable ledger, which prints `verdict=unknown-…`
+    and exits 0. That is exactly right inside a claim (never starve the queue on a missing file) and
+    exactly wrong here: exit 0 from a producer reads as "considered everything, routed nothing",
+    which is indistinguishable from a clean store with no cloud work in it. Same predicate, opposite
+    failure direction, made explicit at the boundary rather than by re-implementing the reader.
+    """
+    try:
+        return CE.build_index(CE.load_records())
+    except SystemExit:
+        sys.stderr.write("cc-venue: the backlog ledger could not be read — refusing to route "
+                         "(cc-eligible fails OPEN here on purpose; a producer must not)\n")
+        sys.exit(3)
+
+
+def decide(item_id, idx):
+    """{venue, why, token, detail, eligible, premise} — the whole routing decision for one item.
+
+    ORDERED CHEAPEST-FIRST and short-circuiting, which is not only a performance choice: an item
+    already refused for naming `launchd` must not have its premise re-run, because running a
+    falsifier is a side effect (cc-premise executes stored probes) and spending one on work that
+    can never go off-box is a cost with no possible verdict attached.
+    """
+    full = CE.assess_full(item_id, idx)
+    hist = full["history"]
+
+    if full["verdict"] == CE.UNKNOWN_ITEM:
+        return {"id": item_id, "venue": "local", "token": CE.UNKNOWN_ITEM,
+                "detail": "no such item in the ledger", "eligible": full, "premise": None}
+
+    if full["classes"]:
+        # EVERY class that fired, not just the winner. The winner is what the gate will say; the
+        # rest is what a reader needs to know before arguing with it, and it costs one line.
+        # The FIRST class is already the token, so its name is not repeated in the detail — a why
+        # reading `ineligible-offbox-lane: ineligible-offbox-lane (off-box)` spends its most
+        # readable field saying nothing. Siblings keep their names, because there the name is the
+        # only thing distinguishing them.
+        parts = [",".join(full["classes"][0]["tokens"][:4])]
+        parts += ["also %s (%s)" % (c["verdict"], ",".join(c["tokens"][:4]))
+                  for c in full["classes"][1:]]
+        return {"id": item_id, "venue": "local", "token": full["verdict"],
+                "detail": _clip("; ".join(parts), 300), "eligible": full, "premise": None}
+
+    if hist["state"] != "ok":
+        # THE GUARD. Nothing named local-only state and nothing cited unreachable history — but the
+        # second of those is only meaningful if the horizon could be measured, and here it could
+        # not. Route local and say which way the instrument failed.
+        return {"id": item_id, "venue": "local", "token": WHY_UNCERTIFIED,
+                "detail": _clip("%s — %s (repo=%s)" % (
+                    hist["state"], CE.HISTORY_NOTE.get(hist["state"], ""), hist["repo"] or "none"),
+                    300),
+                "eligible": full, "premise": None}
+
+    pv = premise_verdict(item_id)
+    if pv != PREMISE_OK and pv != "skipped":
+        return {"id": item_id, "venue": "local", "token": PREMISE_PREFIX + (pv or "unreadable"),
+                "detail": _clip(
+                    "cc-premise says %s — the premise has moved against the current tree, and a "
+                    "cloud worker cannot read the correction (it lives in this ledger)"
+                    % (pv or "nothing readable"), 300),
+                "eligible": full, "premise": pv}
+
+    return {
+        "id": item_id, "venue": "cloud", "token": WHY_ELIGIBLE,
+        "detail": _clip(
+            "no local-only spelling fired; every cited sha is inside the newest %d commits of %s "
+            "(certified from a full clone at %s); premise %s"
+            % (hist["depth"], hist["ref"], hist["repo"], pv), 300),
+        "eligible": full, "premise": pv,
+    }
+
+
+def why_of(d):
+    return "%s: %s" % (d["token"], d["detail"])
+
+
+def _open_items():
+    exe = _resolve("CC_VENUE_BACKLOG_BIN", "cc-backlog")
+    rc, out, _err = _run([exe, "list", "--all", "--json"], timeout=180)
+    if rc != 0:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def write_label(item_id, venue, why):
+    """`cc-backlog venue` is the ONE writer. Returns (ok, message).
+
+    Shelling out rather than appending a line here, so the closed-set check, the done-item refusal
+    and the idempotence live in exactly one place — the actuator is the arbiter (memory:
+    make-the-actuator-the-arbiter).
+    """
+    exe = _resolve("CC_VENUE_BACKLOG_BIN", "cc-backlog")
+    rc, _out, err = _run([exe, "venue", item_id, "--venue", venue, "--why", why])
+    return rc == 0, (err.strip().splitlines() or [""])[-1]
+
+
+def cmd_assess(item_id, as_json):
+    idx = build_index()
+    d = decide(item_id, idx)
+    if as_json:
+        out = {k: d[k] for k in ("id", "venue", "token", "detail")}
+        out["why"] = why_of(d)
+        out["history"] = d["eligible"]["history"]
+        out["classes"] = d["eligible"]["classes"]
+        out["premise"] = d["premise"]
+        sys.stdout.write(json.dumps(out, indent=2) + "\n")
+        sys.exit(0)
+    w = sys.stdout.write
+    w("%s  %s\n" % (d["id"], _clip(d["eligible"]["title"], 110)))
+    w("  venue : %s\n" % d["venue"])
+    w("  why   : %s\n" % why_of(d))
+    sys.exit(0)
+
+
+def cmd_run(argv):
+    apply_ = "--apply" in argv
+    as_json = "--json" in argv
+    project = limit = None
+    for i, a in enumerate(argv):
+        if a == "--project" and i + 1 < len(argv):
+            project = argv[i + 1]
+        if a == "--limit" and i + 1 < len(argv):
+            try:
+                limit = int(argv[i + 1])
+            except ValueError:
+                sys.stderr.write("cc-venue run: --limit wants an integer\n")
+                sys.exit(2)
+
+    items = _open_items()
+    if items is None:
+        sys.stderr.write("cc-venue: `cc-backlog list` failed — refusing to route blind\n")
+        sys.exit(3)
+    idx = build_index()
+
+    # OPEN ONLY. `claimed` work already has a holder and a venue that the fold keys the liveness
+    # oracles off; `blocked` work is outside every dispatch wave by construction, so routing it
+    # would be a decision no dispatcher will ever read.
+    rows = [i for i in items if i.get("status") == "open"]
+    if project:
+        rows = [i for i in rows if i.get("project") == project]
+    if limit is not None:
+        rows = rows[:limit]
+
+    # PRE-WARM the oracle per project, exactly as the census does: one `cat-file --batch-check` for
+    # the whole store instead of one per item.
+    from collections import defaultdict
+    by_project = defaultdict(list)
+    for it in rows:
+        ent = idx.get(it["id"])
+        if ent:
+            by_project[ent.get("project", "")].append(ent["text"])
+    for proj, texts in by_project.items():
+        orc = CE.oracle_for(proj)
+        if orc.certify() == "ok":
+            toks = set()
+            for t in texts:
+                toks.update(CE.HEX.findall(t))
+            orc.resolve_many(toks)
+
+    decisions, counts = [], defaultdict(int)
+    for it in rows:
+        d = decide(it["id"], idx)
+        d["title"] = (it.get("title") or "")[:120]
+        d["project"] = it.get("project") or ""
+        d["written"] = None
+        counts[d["venue"]] += 1
+        counts["token:" + d["token"]] += 1
+        if apply_:
+            ok, msg = write_label(it["id"], d["venue"], why_of(d))
+            d["written"] = ok
+            if not ok:
+                counts["write-failed"] += 1
+                sys.stderr.write("cc-venue: %s NOT labelled — %s\n" % (it["id"], msg))
+        decisions.append(d)
+
+    horizons = {}
+    for proj in by_project:
+        orc = CE.oracle_for(proj)
+        if orc.repo:
+            horizons[orc.repo] = {"state": orc.state, "ref": orc.ref, "depth": orc.depth}
+
+    if as_json:
+        sys.stdout.write(json.dumps({
+            "applied": apply_, "considered": len(rows),
+            "counts": dict(counts), "horizons": horizons,
+            "decisions": [{k: d[k] for k in
+                           ("id", "project", "title", "venue", "token", "detail", "written")}
+                          for d in decisions],
+        }, indent=2) + "\n")
+        sys.exit(0)
+
+    w = sys.stdout.write
+    w("cc-venue run — %d open item(s)%s%s\n"
+      % (len(rows), " · project=%s" % project if project else "",
+         " · APPLIED" if apply_ else " · DRY RUN (nothing written; add --apply)"))
+    for repo, h in sorted(horizons.items()):
+        w("  horizon: %-52s %s (ref=%s depth=%s)\n"
+          % (repo, h["state"], h["ref"] or "-", h["depth"]))
+    w("\n  venue=cloud : %d\n  venue=local : %d\n" % (counts["cloud"], counts["local"]))
+    if counts.get("write-failed"):
+        w("  WRITE FAILED: %d — see stderr\n" % counts["write-failed"])
+    w("\n  why tokens:\n")
+    for k in sorted(k for k in counts if k.startswith("token:")):
+        w("    %-30s %d\n" % (k[len("token:"):], counts[k]))
+    # THE CLOUD BUCKET IS PRINTED IN FULL, and it is the inverse of the census this file leans on:
+    # cc-eligible prints its ELIGIBLE bucket because a missed refusal is the silent error THERE. Here
+    # the promotion is the act, so the promoted set is what a reader must be able to audit line by
+    # line before quota is spent on it.
+    cloud = [d for d in decisions if d["venue"] == "cloud"]
+    w("\n── venue=cloud — READ THESE BEFORE THEY FIRE ─────────────────────────────\n")
+    if not cloud:
+        w("  (none)\n")
+    for d in cloud:
+        w("  %s [%s] %s\n" % (d["id"], d["project"], d["title"]))
+        w("      %s\n" % why_of(d))
+    sys.exit(0)
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        sys.stdout.write(__doc__)
+        sys.exit(0)
+    verb, rest = argv[0], argv[1:]
+    if verb == "assess":
+        if not rest:
+            sys.stderr.write("cc-venue assess: <id> is required\n")
+            sys.exit(2)
+        cmd_assess(rest[0], "--json" in rest)
+    elif verb == "run":
+        cmd_run(rest)
+    else:
+        sys.stderr.write("cc-venue: unknown verb %s\n" % verb)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
