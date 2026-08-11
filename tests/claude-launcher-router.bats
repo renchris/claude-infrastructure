@@ -49,10 +49,24 @@ runlauncher() {
   " 2>/dev/null
 }
 
+# The REAL rc sequence, which the lib-double-source case below cannot reach: ~/.zshrc DEFINES
+# claude(), its last line sources this lib, and a re-source runs both again — REDEFINING claude()
+# between the two sources. V1/V2 marker bodies make "which body actually ran" observable, so a
+# router that quietly un-installed itself cannot pass by taking the pinned branch.
+resource_rc() {
+  CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
+    claude() { print \"cfg=\${CLAUDE_CONFIG_DIR:-unset} body=V1\" }
+    source '$LIB'
+    claude() { print \"cfg=\${CLAUDE_CONFIG_DIR:-unset} body=V2\" }
+    source '$LIB'
+    $1
+  " 2>/dev/null
+}
+
 @test "claude1 pins account 1" {
   mkrouter next4 0
   run runlauncher "claude1"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || false      # unguarded, this would be graded away — only the last line counts
   [[ "$output" == *"cfg=$HOME/.claude-next"* ]]
 }
 
@@ -123,6 +137,40 @@ runlauncher() {
   mkrouter next4 0
   run runlauncher "source '$LIB'; source '$LIB'; claude1"
   [[ "$output" == *"cfg=$HOME/.claude-next"* ]]
+}
+
+# ── D1/D2: the rc re-source, which the case above is structurally blind to ─────────────────────
+# The case above double-sources the LIB, which is genuinely idempotent, and never redefines
+# claude() in between — so it passed on the broken code. These three reproduce what ~/.zshrc
+# actually does.
+
+@test "D1: an rc re-source leaves the router INSTALLED (the marker survives a claude() redefine)" {
+  # The failure this pins: the old guard was `_claude_pinned exists ⇒ installed`, true forever
+  # after the first source, so the second source left the raw pinned body in place and bare
+  # `claude` reverted to account 1 with NO notice line — for the life of that shell.
+  mkrouter next4 0
+  run resource_rc "functions claude | grep -c _CC_ROUTED_DIR || true"
+  # Every assertion is `|| false`-guarded: this suite grades a test on its LAST statement only,
+  # so an unguarded early assertion is decoration. Measured on the pre-fix lib, which passed the
+  # bare-claude case below purely because its failing assertion was not the last one.
+  [ "$status" -eq 0 ] || false
+  [[ "$output" =~ ^[1-9] ]]
+}
+
+@test "D1: after an rc re-source, bare claude still ROUTES (it does not revert to the pin)" {
+  mkrouter next4 0
+  run resource_rc "claude"
+  [[ "$output" == *"cfg=$HOME/.claude-quaternary"* ]] || false
+  [[ "$output" == *"body=V2"* ]]
+}
+
+@test "D2: claude1 tracks the LIVE rc body — it is not frozen at the first source" {
+  # _claude_pinned is the copy claude1 calls forever. Snapshotted once, it kept launching the old
+  # binary/model/effort after every rc edit while claude2/3/4 ran the new one, silently.
+  mkrouter next4 0
+  run resource_rc "claude1"
+  [[ "$output" == *"cfg=$HOME/.claude-next"* ]] || false
+  [[ "$output" == *"body=V2"* ]]
 }
 
 @test "the DECISION is recorded in _CC_ROUTE_NOTE — routed vs pinned are distinguishable" {
