@@ -336,10 +336,89 @@ prescription just because this document is the one being read.
 | AC-2 | **SUPERSEDED, contested** | see 7.3 — shipped as blast-radius recording, not KEEP |
 | AC-3 | **MET** | `CC_WTGC_DISPOSAL_LOG` → `~/.claude/autonomy/worktree-disposals.jsonl`; test at `:779` |
 | AC-4 · AC-5 · AC-6 | **UNPROVEN** | no evidence found for an unresolvable-trunk-ref verdict token or a degraded-oracle refusal; `PGREP_BIN` is parameterised (`:177`) but function-verification is not demonstrated |
-| AC-7 | 🚨 **NOT MET** | **no kill switch exists.** 16 `CC_WTGC_*` vars, none a disable — and the job is now launchd-registered. This breaches the campaign's standing rule *"every new mechanism ships with an env kill switch"* on an **automatically-scheduled destructive** surface. Filed to the ledger by the coordinator |
+| AC-7 | 🚨 **NOT MET** *(as read 2026-08-07 — **MET 2026-08-11, see §8**, and the premise of this cell is corrected there)* | **no kill switch exists.** 16 `CC_WTGC_*` vars, none a disable — and the job is now launchd-registered. This breaches the campaign's standing rule *"every new mechanism ships with an env kill switch"* on an **automatically-scheduled destructive** surface. Filed to the ledger by the coordinator |
 | AC-8 | **MET this commit** | map row 11 corrected in the same land |
 
 **Net re-scope for attempt #3:** the data-loss half is largely done and the map is now accurate, so
 row 11 is no longer a full ground-up rebuild. The live remainder is **AC-7 (kill switch on a
 scheduled destructive job)**, **AC-4/5/6 (verdict tokens + oracle function-verification)**, and the
 **AC-2 adjudication** above — plus §6's R-a…R-d, which nothing since has touched.
+
+---
+
+## §8 — AC-7 SHIPPED, 2026-08-11 (§§0-7 untouched; backlog `d605fd2f4635`)
+
+**AC-7 is MET.** Its own named read, run and quoted:
+
+```
+$ CC_WTGC_DISABLE=1 bash scripts/worktree-gc.sh --prune-branches --dispose-abandoned
+worktree-gc: verdict=disabled env=CC_WTGC_DISABLE — nothing inspected, nothing mutated.
+worktree-gc: clear that switch to re-enable. For ONE read-only look without clearing it:
+worktree-gc:   CC_WTGC_DISABLE=0 CC_WTGC_DISABLE_FILE='' bash scripts/worktree-gc.sh --dry-run
+$ echo $?
+0
+```
+
+(Both destructive flags passed deliberately: the read has to be run against the invocation that
+would have reaped, not against a bare one.)
+
+Asserted in the suite at `tests/worktree-gc.bats:212-296` (6 cases, 64→70) and
+`tests/worktree-gc-infra.bats:189-232` (4 cases, 42→46). Every case carries a paired act-rule, and
+the four that CAN discriminate the fix were red-proved against the real pre-fix artifact
+(`git show HEAD:scripts/worktree-gc.sh` replayed through the same suite → `not ok 12, 14, 16, 17`).
+
+### 8.1 The premise in §7.4's AC-7 cell was half wrong — and the wrong half is the interesting one
+
+The cell reads *"a SCHEDULED destructive job with no kill switch"*. Measured today, the **scheduled
+path was already covered**: `scripts/worktree-gc-infra-run.sh:28,314` honours
+`~/.claude/autonomy/worktree-gc-infra.disabled` and files `verdict=disabled`, shipped with the cron
+itself in `dae60868` and pinned by three tests. §14 of
+`docs/research/memory-econ-rearchitecture-2026-08-10/worktrees.md` had already measured this and
+reached the same correction independently.
+
+So the genuinely uncovered path was never the cron — it was the **direct human invocation**, which
+`hooks/git-worktree-guard.sh` prints to the operator **three times** (`:6`, `:40`, `:57`:
+*"reap it with `bash scripts/worktree-gc.sh --prune`"*). **A switch on a wrapper cannot stop the
+invocation the tooling tells you to type.** That is the generalisable shape: a kill switch belongs
+on the actor, and an audit that enumerates *scheduled* actors will keep missing the advertised
+manual one.
+
+### 8.2 Why the switch has two spellings
+
+| Spelling | Covers | Cannot cover |
+|---|---|---|
+| `CC_WTGC_DISABLE` (unset/`0` = enabled, anything else = disabled) | a shell, a session, any caller that exports it, the hook-advertised manual invocation | **launchd** — a launchd job inherits no shell environment, so `export` is invisible to the 04:15 sweep |
+| `CC_WTGC_DISABLE_FILE` (default `~/.claude/autonomy/worktree-gc.disabled`) | every path, including launchd and cron — it lives on the disk the job runs from | nothing; it is the durable half |
+
+An env-only switch would have satisfied AC-7 *as written* while leaving the surface the ledger item
+was actually filed about — the scheduled destructive job — unreachable by it
+(`conclusion-must-reach-the-enforcing-store`). The wrappers keep their own file flags: belt and
+braces, and they stop the work earlier (before the fetch). Ambiguous values disable, because this
+gate's failure direction must be *not removing things*.
+
+### 8.3 The consumer trap, closed in the same diff
+
+A disabled janitor exits 0 printing no summary line — which is **exactly** the shape
+`worktree-gc-infra-run.sh`'s rc-0 arm files as `verdict=error stage=parse reason=no-summary-line`.
+Shipping the switch alone would have paged the operator every night *for having used the switch*
+(`new-nonverdict-state-strands-its-consumers`). The wrapper now reads the janitor's own
+`verdict=disabled` token and files `verdict=disabled switch=janitor env=…|file=…`. The predicate is
+**not** duplicated into the wrapper's preflight: the janitor is the arbiter of its own switch
+(`make-the-actuator-the-arbiter`).
+
+Both suites stub the other side (harness law L1), so the only thing joining the two files was a
+string literal — a typo on either side would leave **both suites green** with the nightly row
+wrong. `tests/worktree-gc-infra.bats` "CONTRACT" runs the REAL janitor's disabled path (the one
+path that is safe to run for real: it exits above the first git call) and feeds its actual output
+through the wrapper.
+
+### 8.4 Rescope carried forward — the more dangerous actor is NOT this one
+
+`worktree-gc.sh` is the careful actor: no `--force`, no `-D`, git's own refusal deliberately kept
+as a second gate. The actor that is **launchd-loaded AND passes `--force`** — the exact flag this
+janitor refuses on principle — is **`bin/cc-reaper:635`**, and it has no switch at all. Filed as
+backlog `4ed57e48b34f` with the design question a fix must answer first: cc-reaper is a multi-verb
+daemon, so a top-level switch would also stop its non-destructive census/watchdog work.
+
+**Remaining on row 11 after this land:** AC-4/5/6 (verdict tokens + oracle function-verification),
+the AC-2 adjudication (§7.3 — do **not** build AC-2 as written), and §6's R-a…R-d.
