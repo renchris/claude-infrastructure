@@ -242,6 +242,30 @@ systematically disagree about the same output, that disagreement is itself the d
 
 ## Status log
 
+- **2026-08-11** — **W4 DONE. PROBE CLOSED — status: answered.** On a REJECT the encoding IS the
+  written rejection, so `model-config.yaml` is deliberately untouched and `roles.research_adversarial`
+  stays `claude-fable-5`. Verified: T4 in `~/.claude/model-routing-freewin-probe.md`, verdict doc on
+  trunk, corpus and runs unmodified. **The standing rule holds, and this is what it looks like in
+  practice: uncertified means unrouted.** Nothing routes to Codex; its weekly window stays ~idle,
+  which was always the correct resting state rather than a failure to extract value.
+  **What the $20 actually bought:** not capacity, and not the decorrelated verification this probe
+  was written to certify — but a measured answer to *"should anything route here"*, which beats the
+  assumption in either direction. Two results outlive the verdict:
+  (a) **the decorrelation is real but sits at the JUDGING layer, not the finding layer** — Codex
+  judges refute 49–69 citation claims per Codex arm where Anthropic judges refute 2–3, so a
+  single-vendor panel would have reported one of those readings as a confident number without
+  knowing the other existed. That is a reusable argument for mixed-vendor panels generally, and it
+  survives the REJECT.
+  (b) **the incumbent question inverted** — the probe went looking at the candidate and found the
+  problem was the incumbent (T5).
+  **Follow-ons, both filed rather than acted on:** T5 (Fable-vs-Opus in this slot — NOT equal-effort,
+  so it needs its own probe before any reroute) and the four-account Fable probe failure met while
+  firing the successor wave.
+  🚨 **Do not read this REJECT as "Codex is weaker".** Against Fable ALONE it is not a subset — B
+  finds 2 and C finds 3 that A misses. It is contained only once arm D (Opus 5) joins the union,
+  because D finds every one of them. The verdict therefore rests on OPUS's strength, not on Codex's
+  weakness, and a probe against a different incumbent could legitimately reach a different answer.
+  Anyone re-proposing Codex for a verification slot should re-read that sentence first.
 - **2026-08-11** — **W3 DONE. VERDICT: REJECT** `gpt-5.6-sol` for `roles.research_adversarial`.
   Full verdict + every table: `docs/research/codex-probe-w3-verdict-2026-08-11.md`. Recorded in
   `~/.claude/model-routing-freewin-probe.md` as **T4** (live dotfile, not repo-tracked — nothing to
