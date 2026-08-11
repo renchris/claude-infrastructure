@@ -133,7 +133,10 @@ now(){ date -u +%s; }"
   # suite up when the edited file is a PRODUCER rather than the lint itself, which is exactly how the
   # hermeticity leak landed twice in one session.
   grep -q 'utc-stamp-lint.sh' "$REPO/scripts/ship-land.sh" || { echo "run_gate does not invoke the lint"; false; }
-  grep -q 'CC_UTC_OWN=' "$REPO/scripts/ship-land.sh" || { echo "run_gate does not pass the own-scope set"; false; }
+  # Anchored on the own_run ROUTING, not on the assignment spelling — see the note in
+  # tests/test-hermeticity-lint.bats. `CC_UTC_OWN=` was true until the P2 own-scope work made
+  # own_run() the single reader of the kill switch and the variable name an ARGUMENT.
+  grep -q 'own_run UTC CC_UTC_OWN' "$REPO/scripts/ship-land.sh" || { echo "run_gate does not pass the own-scope set"; false; }
   # the gate must also verify the detector still discriminates before trusting a clean verdict
   grep -qE 'UTC_LINT.*--selftest|--selftest.*utc' "$REPO/scripts/ship-land.sh" || {
     echo "run_gate trusts the lint without running its selftest — a clean verdict from a broken detector"; false; }
