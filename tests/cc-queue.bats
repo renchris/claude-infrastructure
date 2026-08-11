@@ -5,6 +5,12 @@
 # below is derived from a contract clause quoted beside the assertion. Reproduce the proof that these
 # assertions can FAIL with:  tests/cc-queue-redproof.py
 #
+# That line used to be the ONLY thing tying this suite to its proof, and a comment is not a caller —
+# measured 2026-08-11, nothing in the repo ran that harness (backlog 9ea31151dd94). The cheap half of
+# it is now part of the contract: tests/anti-vacuity-contract.bats runs `--check-anchors` on every
+# `bats tests/*.bats`, so a bin/cc-queue change that moves a line one of these assertions leans on
+# goes RED instead of leaving the proof silently stale. The full mutant run stays the command above.
+#
 # CONTRACT (the clause each test binds to):
 #   C1  verbs     (none)=table · --json · --check · --attach ROW|SID · --state S · --group-by K
 #                 --account PAT · --cwd PAT · --limit N · --watch [S] · --selftest · --no-color

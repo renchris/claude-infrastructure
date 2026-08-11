@@ -29,6 +29,33 @@ trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
 
+# ── --check-anchors: the half of this harness cheap enough to live in the normal test contract ────
+# tests/anti-vacuity-contract.bats runs this mode, so `bats tests/*.bats` now notices when the proof
+# goes stale. The full mode needs a bats run per case and stays an explicit invocation.
+#
+# An anchor is a literal line of the subject that a load-bearing assertion depends on. 0 matches
+# means the subject moved out from under the proof — exactly when that assertion may have quietly
+# become vacuous, and exactly what "run it by hand sometime" never catches. 2+ means the mutation
+# would sabotage more than it claims. Both are unsound; before this, both were discoverable only by
+# running the whole harness manually, which nothing and nobody did.
+MODE=run
+[ "${1:-}" = "--check-anchors" ] && MODE=anchors
+
+anchor_check() { # $1=label $2=relative file $3=anchor
+  local label="$1" rel="$2"
+  local n
+  n="$(FROM="$3" /usr/bin/python3 - "$REPO/$2" <<'PY'
+import os, sys
+print(open(sys.argv[1]).read().count(os.environ["FROM"]))
+PY
+)"
+  if [ "$n" != "1" ]; then
+    printf '  \033[31mSTALE ANCHOR\033[0m %-42s (matches %sx in %s — must be exactly 1)\n' "$label" "$n" "$rel"
+    fail=$((fail+1)); return
+  fi
+  pass=$((pass+1))
+}
+
 # Literal (non-regex) single-occurrence replace. Refuses on any count != 1, so an anchor that
 # rotted with the source cannot silently degrade this harness into a no-op.
 mutate() { # $1=file $2=from $3=to
@@ -48,6 +75,7 @@ PY
 # $1=label $2=relative file $3=from $4=to $5=substring of the test that MUST go red
 check() {
   local label="$1" rel="$2" from="$3" to="$4" want="$5"
+  if [ "$MODE" = anchors ]; then anchor_check "$label" "$rel" "$from"; return; fi
   local sandbox="$WORK/$RANDOM$$"
   mkdir -p "$sandbox"
   # hooks/ and scripts/ come along because the suite now asserts against REAL consumers (the
@@ -95,7 +123,11 @@ check() {
   pass=$((pass+1))
 }
 
-echo "RED-PROOF — mutating the real bin/cc-pane{,-headless} and requiring the named test to fail"
+if [ "$MODE" = anchors ]; then
+  echo "RED-PROOF --check-anchors — every anchor must still match its subject exactly once"
+else
+  echo "RED-PROOF — mutating the real bin/cc-pane{,-headless} and requiring the named test to fail"
+fi
 echo
 
 # ── the seam ──────────────────────────────────────────────────────────────────────────────
@@ -203,5 +235,13 @@ check "identity-exported-but-wrong-value" bin/cc-pane-headless \
 # work-item-remedy-can-become-forbidden).
 
 echo
-printf 'RED-PROOF: %d caught · %d weak\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || exit 1
+if [ "$MODE" = anchors ]; then
+  printf 'RED-PROOF --check-anchors: %d live · %d STALE\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ] || {
+    echo "The proof is stale: re-anchor it, or the assertions it backs are unproven." >&2
+    exit 1
+  }
+else
+  printf 'RED-PROOF: %d caught · %d weak\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ] || exit 1
+fi
