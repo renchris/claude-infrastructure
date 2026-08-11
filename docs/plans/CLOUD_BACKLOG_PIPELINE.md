@@ -133,11 +133,39 @@ two ways: an 11-hour-idle session's usage is byte-identical across reads, and th
 the cost is tokens from the account's Max quota, which is why an account at 100% weekly is the real
 ceiling.
 
-⚠️ **UNMEASURED, and it must not be asserted: whether cloud costs MORE than local for the same task.**
-n=4 cloud, zero controlled local arms. It IS measurable — `cc-ctx-audit --sessions` gives per-session
-peak tokens locally — so W4 is a real experiment, not a thought experiment. The a priori case cuts
-both ways: a VM starts cold with a shallow clone (inflating cache reads) but does not consume the
-lead's context, which is the resource a long-horizon plan actually runs out of.
+✅ **MEASURED 2026-08-11 — cloud does NOT cost more than local for the same task; it costs slightly
+less, inside the noise.** Full method, raw per-session numbers, controls and threats:
+`docs/research/cloud-local-cost-ab-2026-08-11.md`. The same brief (write one stdlib tool + a unittest
+suite, run it green, commit, push) ran n=2 per arm, same account (next3), same model
+(`claude-opus-5`), measured on the same four axes — the cloud instrument's
+`input/output/cache_read/cache_write` map exactly onto the transcript's
+`input/output/cache_read_input/cache_creation_input`:
+
+| arm (mean of 2) | input | output | cache read | cache write | wall |
+|---|---|---|---|---|---|
+| cloud VM | 24 | 7,423 | 785,160 | 72,557 | 437 s |
+| local dispatched session | 21 | 6,829 | 1,087,033 | 88,916 | 410 s |
+| **cloud ÷ local** | — | **1.09** | **0.72** | **0.82** | 1.07 |
+
+Price-weighted that is **≈0.81× local**, robust to the cache-write TTL multiplier. **But the spread
+within the local arm (877K–1,297K cache read) exceeds the gap between the arms (302K), so the claim
+is parity trending cloud-cheaper, not a win** — the experiment can refute "cloud costs much more"
+and cannot resolve a difference under ~30%.
+
+🚨 **The a priori case in this section's earlier draft was backwards on both halves, and that is the
+finding.** (1) The cold shallow-clone VM is the *lean* arm: the local session's FIRST TURN establishes
+~80K cache-write tokens — 89–92% of everything it caches all session — because `~/.claude`, both
+`CLAUDE.md`s, the hooks, the memory index and the tool schemas load there and do not exist on the VM,
+whose *entire* session cached less than that one turn. What inflates a session is our own laptop
+configuration, not the clone. (2) "Does not consume the lead's context" is a property of
+**dispatching**, not of the cloud — a fired local session's tokens land in its own window too. What
+cloud uniquely spares is this box's CPU, RAM, pane and worktree. **So routing to cloud is a CAPACITY
+decision, not a cost one**, and W1's admission rule should turn on the VM's constraints (shallow
+clone, no `gh`, no `~/.claude`) rather than on a cost penalty that does not exist at this size.
+
+⚠️ Still unmeasured, and named so it is not assumed away: **task-size sensitivity**. This A/B sits at
+the small end of the 28× range in the table above. The local preamble is a FIXED ~80K cost while the
+task-driven term grows, so cloud's relative advantage should *shrink* with task size — untested.
 
 ---
 
@@ -173,3 +201,15 @@ it burns quota, produces a plausible-looking wrong answer against missing histor
   (pane 345). W2 owns the three filed gap items; W4 measures §4's open question. W3 holds for W2's
   return path. One fire-lint lesson: a brief that NAMES the notify binary without a resolvable
   target is refused (F3) — reference the rail generically, the fire materializes the trailer.
+- **2026-08-11** — **W4 DONE.** §4's one unmeasured question is measured: the same brief ran n=2 per
+  arm (cloud VM vs local dispatched session, same account, same model) and cloud came in at 0.72×
+  local cache reads / 0.82× cache writes / 1.09× output — ≈0.81× price-weighted, but inside the
+  local arm's own spread, so the verdict is **parity trending cloud-cheaper, scoped to small
+  self-contained tasks**. Two a priori claims in the original §4 were refuted by the numbers: the
+  cold shallow-clone VM is the LEAN arm (the local preamble alone, ~80K tokens on turn 1, exceeds the
+  VM's whole-session cached context), and "spares the lead's context" is a property of dispatching
+  rather than of the cloud. Cloud is therefore a CAPACITY choice, not a cost one. Deliverable
+  equivalence was controlled, not assumed (all four branches produced the same three files and their
+  suites were executed here: 10/9/9/9 tests, all green). Doc:
+  `docs/research/cloud-local-cost-ab-2026-08-11.md`. Open follow-on named there: task-size
+  sensitivity at the 50K-output end.
