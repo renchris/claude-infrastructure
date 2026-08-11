@@ -556,9 +556,27 @@ cloud_declare() {
 # HEAD-biased on purpose, unlike fire_excerpt: a lease refusal states its verdict in line 1 and
 # spends the rest naming the escape hatches, so a tail-200 excerpt (right for a spawn log, whose
 # error is at the END) would journal the boilerplate and drop the one line that says WHY.
+# claim_excerpt <stderr-file> → the refusal's verdict line, PLUS the signal that produced it.
+#
+# WHY THE SECOND HALF EXISTS. Line 1 of a refusal is `cc-backlog claim: REFUSED verdict=<token>`,
+# which names WHAT happened and is silent on WHY. For `verdict=premise-refuted` that silence is the
+# whole question: the same token is written when a stored probe was RE-RUN and exited 0 (a
+# measurement, made against today's tree) and when another item simply DECLARED this one obsolete
+# (prose, written at filing time). Measured 2026-08-11 on the live ledger — 51 `premise refuted`
+# rows, and not one of them says which. So the durable record could not answer the only question
+# that decides whether to trust it, and the mechanism that re-runs probes was unobservable from the
+# outside no matter how often it fired.
+#
+# The cause markers are the contract's own headline strings (bin/cc-premise). Matched with -oE so a
+# marker is copied VERBATIM or not at all — never paraphrased into a third spelling that a reader
+# would have to map back. Absent marker ⇒ absent clause, never a guess: a row that cannot name its
+# cause must say nothing rather than assert the commonest one.
 claim_excerpt() {
   { [ -n "${1:-}" ] && [ -s "$1" ]; } || return 0
-  head -1 "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200
+  local line1 cause
+  line1="$(head -1 "$1" 2>/dev/null | tr -cd '\40-\176' | cut -c1-200)"
+  cause="$(grep -m1 -oE 'FALSIFIER PASSED|DERIVED FALSIFIER|DECLARES ITSELF A DUPLICATE|SUPERSEDED BY' "$1" 2>/dev/null | cut -c1-40)"
+  printf '%s%s' "$line1" "${cause:+ · cause: $cause}"
 }
 
 # self_release <id> <token> → releases the claim we took but never started work on, and ECHOES the
