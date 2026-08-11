@@ -137,6 +137,15 @@ case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
 [ -f "$TP" ] || abstain "transcript-missing"
 [ -n "$CWD" ] || abstain "no-cwd"
 
+# ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
+# Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close. They are one
+# event, so they should observe one snapshot: handing the ledger this session's transcript is what
+# lets it serve one. Absent (or unreadable) ⇒ that script computes exactly as it always has. This
+# hook is the one caller that passes `--session`, which is a DIFFERENT question (it counts YOURS /
+# BLOCKED for that sid) — the memo keys on the session inputs too, so it is never cross-served the
+# six other call sites' ledger.
+export WRAP_TRANSCRIPT="$TP"
+
 # ── Extract the LAST MAIN-agent text: skip sidechain (subagent) records, and walk back past a
 #    tool_use-only / metadata tail to the last assistant record that actually carries text
 #    (streaming; per-record compact-JSON keeps multi-line text on one line for tail -1). ──

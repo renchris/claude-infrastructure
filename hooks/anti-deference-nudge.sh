@@ -132,6 +132,12 @@ CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac      # expand a leading ~ if present
 [ -f "$TP" ] || abstain "transcript-missing"
 
+# ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
+# Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close. They are one
+# event, so they should observe one snapshot: handing the ledger this session's transcript is what
+# lets it serve one. Absent (or unreadable) ⇒ that script computes exactly as it always has.
+export WRAP_TRANSCRIPT="$TP"
+
 # ── (P0-4a) Extract the LAST MAIN-agent text: skip sidechain (subagent) records, and walk back
 #    past a tool_use-only / metadata tail to the last assistant record that carries text (the
 #    G-P11-1 343c6e77 shape defeated the old tail-1 → 74% no-assistant-text blind rate). Streaming

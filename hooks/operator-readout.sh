@@ -943,6 +943,16 @@ fi
 CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
+# ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
+# Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close, and TWO of them
+# are in this file. They are one event, so they should observe one snapshot: handing the ledger this
+# session's transcript is what lets it serve one. Set HERE and not in --render mode, which has no
+# stdin JSON and therefore no event — /wrap's pull surface keeps computing, as it must.
+# Expanded into its OWN variable: $TP itself feeds session_wrote_here_this_turn below, and this
+# memo has no business changing what the write-turn oracle is handed.
+_or_tp="$TP"; case "$_or_tp" in "~"*) _or_tp="$HOME${_or_tp#\~}" ;; esac
+[ -n "$_or_tp" ] && export WRAP_TRANSCRIPT="$_or_tp"
+
 # ── WRITE-TURN ORACLE (feeds both the certified governing line and the standalone certificate) ────
 # Resolved ONCE, here, before render_block — two independent reads of one value is how they drift
 # (this file's own kill_switch/SC_SID note, :131-134). Any failure leaves CERT_WROTE=2 (cannot tell),

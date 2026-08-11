@@ -213,6 +213,11 @@ fi
 #    abstain, still be RECORDED. Expand a leading ~ here (not only in the conv_age block below) or a
 #    tilde-form transcript_path would silently measure 0 bytes = "unknown" forever. ──
 case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
+# ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
+# Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close. They are one
+# event, so they should observe one snapshot: handing the ledger this session's transcript is what
+# lets it serve one. Absent (or unreadable) ⇒ that script computes exactly as it always has.
+[ -n "$tp" ] && export WRAP_TRANSCRIPT="$tp"
 tx_mb=0; rss_mb=0
 if command -v ce_size >/dev/null 2>&1; then
   _sz="$(ce_size "$tp" "$tel" 2>/dev/null || printf '0 0')"

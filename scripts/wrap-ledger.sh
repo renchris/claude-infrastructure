@@ -116,17 +116,21 @@
 #
 # ── LAW ── fail-LOUD, never fail-silent-open: outside a git repo (or on a read error) this exits
 #   non-zero with a stderr note and NEVER prints RUNG=✅. A consumer that can't get a ledger must
-#   treat that as "cannot confirm", not as "complete". Pure-read: writes nothing anywhere — which is
-#   why the live-layer read never fetches (see compute_live_layer).
+#   treat that as "cannot confirm", not as "complete". Pure-read of the REPO: the only bytes this
+#   writes are its own memo under TMPDIR (below) — which is why the live-layer read never fetches
+#   (see compute_live_layer).
 #
 # Env seams (tests): WRAP_TRUNK · WRAP_DOD_DIR · WRAP_DOD_FILE · WRAP_GATE_GREEN ·
 #                    WRAP_SESSION_ID · CC_BACKLOG_BIN · CC_DECIDE_BIN · WRAP_LIVE_REPO ·
 #                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
-#                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S
+#                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
+#                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
+#                    WRAP_CACHE_LOCK_STALE_S
 set -uo pipefail
 
 MODE="readout"
 SESSION_FLAG=""
+TRANSCRIPT_FLAG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --machine) MODE="machine" ;;
@@ -134,11 +138,231 @@ while [ $# -gt 0 ]; do
     --readout|"") MODE="readout" ;;
     --session) shift; SESSION_FLAG="${1:-}" ;;
     --session=*) SESSION_FLAG="${1#--session=}" ;;
-    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout] [--session <sid>]\n'; exit 0 ;;
+    --transcript) shift; TRANSCRIPT_FLAG="${1:-}" ;;
+    --transcript=*) TRANSCRIPT_FLAG="${1#--transcript=}" ;;
+    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout] [--session <sid>] [--transcript <path>]\n'; exit 0 ;;
     *) printf 'wrap-ledger: unknown arg: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
+
+# ══ THE MEMO — one ledger per Stop EVENT, keyed on the transcript ═══════════════════════════════
+# (scaling-bottlenecks-2026-08-09 §5 P0-4; design docs/research/scaling-bottlenecks-2026-08-09/
+#  04-occupancy-b.md §6. Backlog 9414dfb87233.)
+#
+# THE COST IT REMOVES, measured: this script is ~180 ms CPU / 19 git subprocesses per run, and
+# SEVEN Stop-hook call sites run it on EVERY turn close (session-continue ×2, completion-assert,
+# anti-deference-nudge, boundary-handoff, operator-readout ×2) — ~1.26 s of CPU and ~133 git
+# subprocesses per close, per session, forever. The seven are not independent queries at arbitrary
+# times: they are ONE event, dispatched CONCURRENTLY inside a single ~45 ms window. Within one Stop
+# they SHOULD observe one snapshot; today each takes its own and they can already disagree.
+#
+# TWO PRIOR DESIGNS DIED HERE. Both are structurally excluded, not tuned around:
+#
+#   FAILURE 1 (9adc5120) — benchmarked SEQUENTIALLY (60 → 27 git, "2.22×") and shipped as a
+#   REGRESSION. Six consumers arriving inside 45 ms all MISS together, all compute, and the six
+#   fingerprints are pure added cost: measured 72 git vs 60 uncached — 20% WORSE on the first Stop
+#   after any tree change, i.e. the common case. ⇒ a cache may never make the uncached path worse
+#   than uncached, and that is a property of the ARRIVAL PATTERN, not of the hit rate. The fix,
+#   retained below: a bounded SINGLE-FLIGHT — the first caller takes a `mkdir` lock and computes,
+#   the rest take a small bounded number of SHORT sleeps and re-read the atomically `mv`d result.
+#   Never a poll loop: `sleep` is a fork here, and a 40 ms poll over a 2 s bound forks ~50× per
+#   loser and costs more than the git calls it saves.
+#
+#   FAILURE 2 (5da21949) — WITHDRAWN because its key could not see a real change. It keyed on the
+#   CONTENT of the operator stores via their directory mtimes, and A DIRECTORY'S MTIME DOES NOT
+#   MOVE WHEN A FILE'S CONTENT CHANGES: flipping a class-C packet open→vetoed edits an existing
+#   file, so the memo served the pre-veto ⛔ over a decision the operator had already resolved — on
+#   the HIGHEST-priority rung. Its own 18-test suite (4 mutation controls) was green; the CONSUMER
+#   suite (tests/wrap-ledger.bats) went 3 red. A content digest would see it, but find+stat+cksum
+#   over 115 decision files is 16.46 ms — a NEW unbounded per-Stop cost added by a change whose
+#   whole purpose is removing unbounded per-Stop cost.
+#
+# THE KEY, therefore, is scoped to the EVENT and never to the content:
+#
+#     key = (transcript path ⊕ its mtime,size) ⊕ session-id inputs ⊕ cwd ⊕ the env seams
+#
+#   · NO TTL — the key is not time-derived, so there is no inert-bound to tune.
+#   · NO STORE FINGERPRINT — an operator resolving a decision happens BETWEEN turns, and a new turn
+#     always appends to the transcript ⇒ new key ⇒ a compute. That is what makes the transcript a
+#     sound proxy where a store directory's mtime was not.
+#   · ABSENT KEY ⇒ NO CACHE. Not "cache with a default": no `--transcript`/$WRAP_TRANSCRIPT, an
+#     unstattable transcript, or no `cksum` ⇒ compute, every time. CLI, `/wrap` and the bats suites
+#     pass no transcript, so they are uncached BY CONSTRUCTION rather than by tuning — which is why
+#     tests/wrap-ledger.bats (the suite that refuted FAILURE 2) cannot be affected by this at all.
+#   · MACHINE MODE ONLY — --readout/--full are human surfaces, called once, and a cached block is
+#     not what either of them prints.
+#   · RACE DEGRADES, NEVER LIES — if the harness appends mid-event, consumers compute different
+#     keys and pay two computes. Never a wrong rung.
+#   · THE SEAMS ARE IN THE KEY because two consumers do NOT call this identically:
+#     completion-assert passes `--session $SID`, the other six do not, and the resolved SID changes
+#     YOURS/BLOCKED. Keying on the raw INPUTS (all three session sources, not the resolved one)
+#     cannot drift out of step with the resolution order below the way a duplicated precedence
+#     would.
+#   · THE FULL KEY IS STORED IN THE FILE AND COMPARED ON READ, so a cksum collision costs a miss,
+#     never a wrong ledger.
+#
+# Kill switch: WRAP_CACHE=off|0|no ⇒ never read, never write (the benchmark's control arm).
+WL_KEY=""; WL_FILE=""; WL_LOCK=""; WL_DIR=""; WL_LOCK_HELD=0
+WL_TRANSCRIPT="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
+
+# "<mtime> <size>" for $1, or EMPTY when that cannot be read as exactly two integers. BSD stat
+# first (this fleet is macOS), GNU second — and VALIDATED rather than trusted, because GNU `stat -f`
+# is a different flag entirely (--file-system) and prints a multi-line filesystem block on stdout
+# while returning non-zero. Trusting rc or non-emptiness there would key every session on one
+# constant string, which is precisely the never-invalidates failure this design exists to avoid.
+_wl_stat_ms() {
+  local out m z
+  out="$(stat -f '%m %z' "$1" 2>/dev/null || true)"
+  read -r m z <<WLSTAT
+$out
+WLSTAT
+  case "${m:-}" in ''|*[!0-9]*) m="" ;; esac
+  case "${z:-}" in ''|*[!0-9]*) z="" ;; esac
+  if [ -z "$m" ] || [ -z "$z" ]; then
+    out="$(stat -c '%Y %s' "$1" 2>/dev/null || true)"
+    read -r m z <<WLSTAT2
+$out
+WLSTAT2
+    case "${m:-}" in ''|*[!0-9]*) m="" ;; esac
+    case "${z:-}" in ''|*[!0-9]*) z="" ;; esac
+  fi
+  [ -n "$m" ] && [ -n "$z" ] || return 1
+  printf '%s %s' "$m" "$z"
+}
+
+# ONE fork (cksum, POSIX, on every box this runs on) to turn the key into a filename. The pure-bash
+# alternative was measured at 5.1 ms for a 308-char key — nearly the whole per-consumer budget —
+# against cksum's 3.0 ms. No cksum ⇒ no key ⇒ no cache, per the absent-key law.
+_wl_digest() {
+  local d
+  d="$(printf '%s' "$1" | cksum 2>/dev/null | tr -cd '0-9 ' | tr ' ' '-')" || return 1
+  d="${d%-}"
+  [ -n "$d" ] || return 1
+  printf '%s' "$d"
+}
+
+# Serve: rc 0 and the body on stdout IFF the file exists AND its stored key is byte-equal to ours.
+# Read in pure bash — a `cat` here would spend a fork on the path whose entire point is not
+# spending them.
+_wl_cache_serve() {
+  local first line body="" got=0
+  [ -n "$WL_FILE" ] && [ -s "$WL_FILE" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$got" -eq 0 ]; then first="$line"; got=1; continue; fi
+    body="${body}${line}
+"
+  done < "$WL_FILE"
+  [ "${got:-0}" -eq 1 ] || return 1
+  [ "${first:-}" = "#WLKEY $WL_KEY" ] || return 1
+  [ -n "$body" ] || return 1
+  printf '%s' "$body"
+}
+
+# Store: write-to-temp + atomic `mv`, so a reader can never see a half-written ledger. Every
+# failure is silent and harmless — the caller has already printed its answer.
+_wl_cache_store() {
+  local tmp
+  [ -n "$WL_FILE" ] && [ -n "$WL_DIR" ] || return 0
+  # $WL_DIR, never `dirname "$WL_FILE"` — three dirname calls is three forks on the path whose
+  # entire purpose is not spending them.
+  [ -d "$WL_DIR" ] || mkdir -p "$WL_DIR" 2>/dev/null || return 0
+  tmp="$(mktemp "$WL_DIR/.w.XXXXXX" 2>/dev/null)" || return 0
+  { printf '#WLKEY %s\n' "$WL_KEY"; printf '%s\n' "$1"; } > "$tmp" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null; return 0; }
+  mv -f "$tmp" "$WL_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  # Bound the dir on the MISS path only (one fork, paid by a caller already spending 19 git calls).
+  # Every event mints its own key, so nothing here is ever reused and without this the dir grows for
+  # the life of the box. LOCK DIRS ARE SWEPT TOO: a winner that dies leaves one behind, and since no
+  # later caller can ever present that dead event's key, nothing else would ever clear it.
+  find "$WL_DIR" -mindepth 1 -maxdepth 1 -mmin +240 \( -type f -o -name '*.lock' \) \
+       -exec rm -rf {} + 2>/dev/null || true
+  return 0
+}
+
+_wl_lock_release() {
+  [ "$WL_LOCK_HELD" -eq 1 ] || return 0
+  WL_LOCK_HELD=0
+  rmdir "$WL_LOCK" 2>/dev/null || rm -rf "$WL_LOCK" 2>/dev/null || true
+}
+
+# rc 0 iff the lock dir is older than the stale bound — i.e. its winner died mid-compute. Costs two
+# forks and is asked ONLY after a wait already failed, which is the rare path.
+_wl_lock_stale() {
+  local now ms lm
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$now" -gt 0 ] || return 1
+  ms="$(_wl_stat_ms "$WL_LOCK")" || return 1
+  lm="${ms%% *}"
+  [ $((now - lm)) -gt "${WRAP_CACHE_LOCK_STALE_S:-30}" ]
+}
+
+case "${WRAP_CACHE:-on}" in off|0|no|OFF|NO) WL_TRANSCRIPT="" ;; esac
+if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
+  _wl_ms="$(_wl_stat_ms "$WL_TRANSCRIPT")" || _wl_ms=""
+  if [ -n "$_wl_ms" ]; then
+    # Every input that can change the answer, in one string. The seams are the ones the header's
+    # "Env seams" line lists — a caller that overrides one is asking a different question and must
+    # not be served another caller's.
+    _wl_k="v1|$WL_TRANSCRIPT|$_wl_ms|$PWD|$SESSION_FLAG|${WRAP_SESSION_ID:-}|${CLAUDE_SESSION_ID:-}"
+    _wl_k="$_wl_k|${WRAP_TRUNK:-}|${WRAP_DOD_DIR:-}|${WRAP_DOD_FILE:-}|${WRAP_GATE_GREEN:-}"
+    _wl_k="$_wl_k|${CC_BACKLOG_BIN:-}|${CC_DECIDE_BIN:-}|${CC_CUSTODY_BIN:-}|${CC_CUSTODY_DIR:-}"
+    _wl_k="$_wl_k|${WRAP_LIVE_REPO:-}|${WRAP_LIVE_BUDGET_COMMITS:-}|${WRAP_LIVE_BUDGET_MIN:-}"
+    _wl_k="$_wl_k|${CC_MIGRATIONS_STATE:-}|${WRAP_LAND_INFLIGHT_LIB:-}"
+    if _wl_d="$(_wl_digest "$_wl_k")"; then
+      WL_DIR="${WRAP_CACHE_DIR:-${TMPDIR:-/tmp}/cc-wrap-ledger.${UID:-0}}"
+      # The dir must exist BEFORE the single-flight `mkdir` lock, or the lock cannot be taken and
+      # EVERY caller becomes a loser: measured, that is six waiters that all time out and all
+      # compute — 84 git and 2.8 s of wall where uncached is 84 git and 0.48 s, i.e. FAILURE 1
+      # rebuilt with sleeps on top. `[ -d ]` is a builtin, so this forks once per box, not per call.
+      [ -d "$WL_DIR" ] || mkdir -p "$WL_DIR" 2>/dev/null || true
+      if [ -d "$WL_DIR" ]; then
+        WL_KEY="$_wl_k"
+        WL_FILE="$WL_DIR/m-$_wl_d"
+        WL_LOCK="$WL_FILE.lock"
+      fi
+    fi
+  fi
+fi
+
+if [ -n "$WL_KEY" ]; then
+  if _wl_cache_serve; then exit 0; fi
+  # SINGLE-FLIGHT (the FAILURE-1 fix). Fail-open at EVERY branch: cannot lock ⇒ wait once, then
+  # compute; waited out and still nothing ⇒ compute; a corpse ⇒ clear it and compute. Nothing here
+  # can make a caller wait unboundedly, and nothing here can stop a caller answering.
+  if mkdir "$WL_LOCK" 2>/dev/null; then
+    WL_LOCK_HELD=1
+    trap _wl_lock_release EXIT
+  else
+    # A FIXED wait cannot be right at both ends and a POLL is the fork bomb the header rejects, so
+    # the sleeps DOUBLE: 50, 100, 200, 400 ms — ≤4 forks for a ≤750 ms bound. Measured, six
+    # concurrent callers: a flat 3 × 100 ms woke every loser BEFORE the winner finished, so all six
+    # computed (114 git — the FAILURE-1 shape, with 2× the wall on top). The early rungs cover a
+    # fast box, the late ones a contended one, and 4 forks is a rounding error against the 19 git
+    # calls a compute spends.
+    # THE BOUND IS A WALL-TIME DECISION, and it is the one real trade this design makes. A longer
+    # ladder holds the CPU win when the winner is slow; a shorter one caps how much WALL a loser can
+    # add to a Stop that is already the felt-lag hot spot (3.7 s p50). 750 ms ≈ the uncached cost of
+    # this whole script under six-way contention, so the worst case degrades to "uncached, plus the
+    # wait" — never to an unbounded hold. Tunable, deliberately: a box where the winner routinely
+    # overruns 750 ms wants more rungs, not fewer.
+    _wl_tries="${WRAP_CACHE_WAIT_TRIES:-4}"
+    case "$_wl_tries" in ''|*[!0-9]*) _wl_tries=4 ;; esac
+    _wl_ms_wait="${WRAP_CACHE_WAIT_MS:-50}"
+    case "$_wl_ms_wait" in ''|*[!0-9]*) _wl_ms_wait=50 ;; esac
+    while [ "$_wl_tries" -gt 0 ]; do
+      printf -v _wl_sleep '%d.%03d' "$((_wl_ms_wait / 1000))" "$((_wl_ms_wait % 1000))"
+      sleep "$_wl_sleep" 2>/dev/null || true
+      if _wl_cache_serve; then exit 0; fi
+      _wl_tries=$((_wl_tries - 1))
+      _wl_ms_wait=$((_wl_ms_wait * 2))
+    done
+    # The winner overran the wait or died. Clear a provably stale lock so the NEXT event does not
+    # queue behind a corpse, then compute — never wait behind one.
+    if _wl_lock_stale; then rmdir "$WL_LOCK" 2>/dev/null || rm -rf "$WL_LOCK" 2>/dev/null || true; fi
+  fi
+fi
 
 die_notrepo() {
   printf 'wrap-ledger: not inside a git work tree (%s) — cannot compute a ledger.\n' "$PWD" >&2
@@ -738,8 +962,19 @@ rung_next() {
 }
 
 case "$MODE" in
-  machine) emit_machine ;;
+  machine)
+    if [ -n "$WL_KEY" ]; then
+      # Build once, print once, store once. The store is best-effort and NEVER gates the answer:
+      # this caller has computed a true ledger and must emit it whether or not the memo takes.
+      WL_OUT="$(emit_machine)"
+      _wl_cache_store "$WL_OUT"
+      printf '%s\n' "$WL_OUT"
+    else
+      emit_machine
+    fi
+    ;;
   full)    emit_full ;;
   *)       printf '%s\n' "$READOUT" ;;
 esac
+_wl_lock_release
 exit 0
