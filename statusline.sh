@@ -223,8 +223,20 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-# Parallel-instance indicator — which claude-next<n> launcher this session is,
-# as a circled glyph ①..⑳ (stable claude/cc shows nothing). LEFT-anchored: rendered
+# Parallel-instance indicator — which ACCOUNT this session is on: `(next3)`, the name the
+# whole toolchain uses (accounts.json, /accounts, cc-route, the assignment ledger). It used to
+# render the bare ordinal `(3)` / ③, which required holding `.claude-tertiary → 3 → next3` in
+# your head to answer a question the line was already answering — and said nothing about WHY
+# that account (R6 §4 rank 1, DESK_ROUTER_AND_STARTUP_V1 W2.5). The ordinal is DROPPED rather
+# than carried alongside: `next3` contains its own 3, so printing both spends columns to repeat
+# a fact. The name comes from the SAME literal `case` that already resolved the ordinal — no new
+# fork on a per-render hot path (measured 60–110 ms, unchanged).
+#
+# The ordinal path SURVIVES for the case that has no name: route 1 below is a naming-INDEPENDENT
+# escape hatch, so an instance identified only by number has no account name to print and gets
+# the old glyph exactly as before. That is also where the iTerm2/ASCII ring gate still lives.
+#
+# LEFT-anchored: rendered
 # as GLYPH_PREFIX at the very start of the line (prepended at the final echo) so the
 # number is always visible even when a narrow terminal truncates the line with an
 # ellipsis — the old right-end placement was the first thing to get clipped.
@@ -242,6 +254,7 @@ fi
 # with $CLAUDE_CONFIG_DIR as fallback.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     NIDX=""
+    NNAME=""            # initialised, never inherited: the ambient env must not name an account
     # Route 1: explicit override — accepted only if numeric (else ignored, so a
     # malformed value falls through to the dir map rather than blanking the glyph).
     if [ -n "${CLAUDE_INSTANCE_N:-}" ] && [ "${CLAUDE_INSTANCE_N}" -ge 1 ] 2>/dev/null; then
@@ -251,11 +264,15 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         TPATH="$PAY_TPATH"
         CFG="${TPATH%%/projects/*}"
         if [ -z "$CFG" ] || [ "$CFG" = "$TPATH" ]; then CFG="$CLAUDE_CONFIG_DIR"; fi
+        # NNAME is the account name from accounts.json for the same config dir — set in the
+        # SAME arm as the ordinal, so the two can never drift into disagreement. Arms past the
+        # four provisioned accounts carry no name (there is no account to name yet) and fall
+        # back to the ordinal rendering below.
         case "$CFG" in
-            */.claude-next)       NIDX=1 ;;
-            */.claude-secondary)  NIDX=2 ;;
-            */.claude-tertiary)   NIDX=3 ;;
-            */.claude-quaternary) NIDX=4 ;;
+            */.claude-next)       NIDX=1;  NNAME=next ;;
+            */.claude-secondary)  NIDX=2;  NNAME=next2 ;;
+            */.claude-tertiary)   NIDX=3;  NNAME=next3 ;;
+            */.claude-quaternary) NIDX=4;  NNAME=next4 ;;
             */.claude-quinary)    NIDX=5 ;;
             */.claude-senary)     NIDX=6 ;;
             */.claude-septenary)  NIDX=7 ;;
@@ -297,7 +314,15 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     # ink density is NOT legibility — its numeral is formed by hairline background GAPS,
     # which close under the same downsample that thinned the outline ring), and a solid
     # reverse-video chip ` 3 ` (legible, but a heavy block).
-    if [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
+    if [ -n "$NNAME" ]; then
+        # THE NAME, ringed exactly like the ordinal it replaces (same colours, same one-space
+        # gap) — `(next3)`. No per-terminal branch here and none is possible: the geometry
+        # argument above is about drawing a NUMBER inside a single cell, and a name is not a
+        # glyph, so there is nothing for a circled-digit font path to draw. The ring stays
+        # muted and the name bright, for the same reason the digit was: the identity is what
+        # gets read, the ring only frames it.
+        GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}${NNAME}${NEXT_RING})${RESET} "
+    elif [ -n "$NIDX" ] && [ "$NIDX" -ge 1 ] 2>/dev/null; then
         # Pinned to the LEFT edge (prepended at the final echo) so a narrow terminal's
         # ellipsis never eats it. RESET after it so the following segment keeps its own
         # color (default in the no-context path, or the GRAY the context-% block adds).

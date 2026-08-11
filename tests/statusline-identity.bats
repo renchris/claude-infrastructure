@@ -440,20 +440,51 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
 
 @test "live: the iTerm2 glyph gate keys on TERM_PROGRAM, not on a spoofable ITERM_SESSION_ID" {
   mk_repo "$WORK/live-term" some-branch
+  # MOVED, not weakened (W2.5): every assertion below is unchanged; only the fixture moved onto
+  # the path where the gate still lives. A mapped config dir now renders the ACCOUNT NAME
+  # (`next3`), and a name is not a one-cell glyph — the whole geometry argument the gate exists
+  # for is about drawing a NUMBER inside one cell — so there is no per-terminal choice left to
+  # make there. Route 1 ($CLAUDE_INSTANCE_N) is naming-INDEPENDENT by contract, so an instance
+  # identified only by number still has an ordinal to draw and still takes this gate.
   local base iterm spoof kitty
-  base=$(marker_of  "$(render payload_full "$WORK/live-term")" live-term)
-  iterm=$(marker_of "$(render payload_full "$WORK/live-term" TERM_PROGRAM=iTerm.app)" live-term)
+  ordinal() { marker_of "$(render payload_full "$WORK/live-term" CLAUDE_INSTANCE_N=3 "$@")" live-term; }
+  base=$(ordinal)
+  iterm=$(ordinal TERM_PROGRAM=iTerm.app)
   [ "$iterm" != "$base" ]      # iTerm2 opts IN by name — otherwise the gate is doing nothing
   # 🚨 the 7ab0acb5 regression, stated as an EQUALITY so no glyph literal appears: ~/.zshrc
   # exports ITERM_SESSION_ID inside kitty BY DESIGN (Claude Code gates its pane backend on it),
   # so a render that trusts it hands the unreadable small glyph back to kitty — which shipped,
   # and broke within minutes. Setting it alone must change NOTHING.
-  spoof=$(marker_of "$(render payload_full "$WORK/live-term" ITERM_SESSION_ID=w0t0p0:901)" live-term)
+  spoof=$(ordinal ITERM_SESSION_ID=w0t0p0:901)
   [ "$spoof" = "$base" ]
   # belt-and-braces conjunct: an iTerm2 session launched from a kitty pane inherits the kitty
   # vars permanently, so $TERM — set by the emulator on each attach — wins the tie.
-  kitty=$(marker_of "$(render payload_full "$WORK/live-term" TERM_PROGRAM=iTerm.app TERM=xterm-kitty)" live-term)
+  kitty=$(ordinal TERM_PROGRAM=iTerm.app TERM=xterm-kitty)
   [ "$kitty" = "$base" ]
+}
+
+@test "live: the instance marker names the ACCOUNT, and the ordinal path survives for the unnamed" {
+  mk_repo "$WORK/live-name" some-branch
+  # W2.5 — `(3)` required holding `.claude-tertiary → 3 → next3` in your head to answer a question
+  # the line was already answering. The name is the identity the whole toolchain uses
+  # (accounts.json, /accounts, cc-route, the assignment ledger), so the statusline now prints it.
+  # This is the ONE literal-content assertion in this suite, and it is deliberate: the marker's
+  # DESIGN stays differential above, but "which account am I on" is content, not decoration —
+  # a redesign is free to change the frame, never to stop answering the question.
+  local m3 m1
+  m3=$(marker_of "$(render payload_full   "$WORK/live-name")" live-name)   # .claude-tertiary
+  m1=$(marker_of "$(render payload_legacy "$WORK/live-name")" live-name)   # .claude-next
+  [[ "$m3" == *next3* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
+  [[ "$m1" == *next* ]]  || { printf 'marker: %s\n' "$m1" >&2; false; }
+  # the ordinal is DROPPED, not carried alongside — `next3` already contains its own 3, and the
+  # column budget on a status line is the scarce resource (R6 §4 rank 1 risk note)
+  [[ "$m3" != *"(3)"* ]] || { printf 'marker: %s\n' "$m3" >&2; false; }
+  # ...and an instance with NO name still renders: route 1 is naming-independent by contract, so
+  # dropping its ordinal rendering would have deleted the escape hatch instead of labelling it.
+  local mov
+  mov=$(marker_of "$(render payload_full "$WORK/live-name" CLAUDE_INSTANCE_N=7)" live-name)
+  [ -n "$mov" ]
+  [[ "$mov" != *next* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
 }
 
 @test "live: outside a git repo only the non-git fields render" {

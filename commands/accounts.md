@@ -2,7 +2,7 @@
 name: accounts
 description: Cross-account Claude Max status — per-account 5-hour / weekly / weekly-Fable limits + resets, auth state, live session counts, and optimal work routing across the 4 accounts (next/next2/next3/next4). Detects logged-out accounts with their email + Dia profile mapping and hands off to the account-relogin skill. Use for "which account should I use", "check the quotas", "view usage across accounts", "is any account logged out", or /accounts.
 allowed-tools: Bash, Read, Skill
-argument-hint: "[route general|fable — just the routing answer] [relogin <acct> — jump to re-login] [--fresh]"
+argument-hint: "[route desk|general|fable — just the routing answer] [relogin <acct> — jump to re-login] [--fresh]"
 ---
 
 # /accounts — cross-account usage, auth state + routing
@@ -49,7 +49,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | Fixed column set, both reset columns + `login expires` in every row | 2026-07-11, 2026-07-24 |
    | Absolutes in LOCAL `EEE HH:MM`, dated past ~6 days; derived from `*_reset_at`, never `now + *_reset_h` | 2026-07-11 |
    | Relatives past 24h as `Xd Yh` (never decimal days, never 25+ hours) | 2026-07-30 |
-   | `➤` + bold on the routed account; `➤ᶠ` when the Fable pick differs; `← you` from `is_self` | 2026-07-30 |
+   | `➤` + bold on the **desk** pick (what bare `claude` launches onto); `➤ᵍ`/`➤ᶠ` when the general / Fable pick differs; `← you` from `is_self` | 2026-07-30, re-pointed 2026-08-11 |
    | `⚠` + bold on a `login expires` inside `login_warn_h`; `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30 |
    | `*` on every percent of an inherited row, + the age/exclusion bullet | 2026-07-19 |
    | ONE weekly-resets column (tolerance compare, footnote a genuine split) | 2026-07-11 |
@@ -65,6 +65,14 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    - 🚨 **Never re-derive the routed account yourself from `score_*`.** The footer is the
      adversarially-verified router; report its answer. For wave spread use
      `claude-accounts --rank general|fable` and assign round-robin.
+   - 🚨 **Three lanes, and they are NOT interchangeable — say which one you are answering.**
+     `desk` is what bare `claude` will do (the human's own next session); `general` is what
+     `handoff-fire` will do; `fable` is the frontier lane. They are different objectives over
+     the same eligibility and they diverge in practice — replayed on two accounts they invert
+     completely, and the 2026-08-11 surprise ("routed me to Account3 when /accounts recommends
+     Account1") was exactly this: both answers were correct, for different questions, and only
+     one of them was on screen. If the operator asks "which account do I use", the answer is
+     the **desk** line.
    - 🚨 **Every re-login instruction you write names the MAILBOX it authenticates** — email
      and Dia profile, on the SAME line as the command (operator directive 2026-07-30: *"so we
      don't accidentally authenticate a different account to a wrong profile"*). `next` /
@@ -75,11 +83,16 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      summarise, do not restate the pick in a way that could disagree with the footer.
 
 3. **Interpret** — report to the user, answer-first:
-   - **Routing**: the footer's `➤ general → X` / `➤ fable → Y` is the
+   - **Routing**: the footer's `➤ desk → D` / `➤ general → X` / `➤ fable → Y` is the
      adversarially-verified router (use-it-or-lose-it × Fable-sub-cap coupling ×
      5h-safety × concurrency-spread). Report its answer; never re-rank the accounts
      yourself from the `score_*` fields. For wave spread across several sessions use
      `claude-accounts --rank general|fable` (best-first list) and assign round-robin.
+     The **desk** line reads in its own lane's terms — the two-key rule: among accounts whose
+     projected 5h utilisation is under the floor and whose weekly headroom clears it
+     (`safe set`), take the **earliest weekly reset**; `5h-safe only` / `no floor met` name the
+     rung the ladder degraded to, and `sticky` means hysteresis kept the account the operator is
+     already on. Quote that clause; do not re-explain the pick in general's vocabulary.
    - **Excluded accounts — read them on EVERY invocation, not just when routing fails.**
      `route_reasons` (per row, in `--json`) names why each account was dropped, and the
      footer/stderr report the count. An account excluded for a TRANSIENT reason
@@ -166,8 +179,12 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | 2 | data was fine, nothing routable by POLICY | quote the stderr reasons (exhausted / 5h cutoff / window). Do NOT fire blind, do NOT substitute a remembered account |
    | 3 | data unavailable for every account | report the auth/throttle state; the fleet was never seen, so say so rather than implying it is exhausted |
 
-   `<kind>` must be exactly `general` or `fable` — the CLI rejects anything else rather than
-   silently returning the general pick.
+   `<kind>` must be exactly `general`, `fable` or `interactive` — the CLI rejects anything else
+   rather than silently returning the general pick. `interactive` is the DESK lane (the name the
+   launcher uses at `lib/claude-launcher.zsh`); it is the one the operator means by "which account
+   do I use", and every `--route interactive` decision — pick, runner-up, rung, and an abstention —
+   is appended to `~/.claude/route/route.jsonl` with `slot":"interactive"`, so a past launch can be
+   replayed rather than reconstructed.
 
 ## Non-Claude agent backends (the provider section)
 
