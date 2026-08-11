@@ -26,7 +26,12 @@
 # stale pick is now-excluded in 0.8% of pairs (median score-ratio 1.000), and across 931 recorded
 # routing decisions the band has never once been entered (max observed age 89 s).
 #
-# Kill switch: CC_CLAUDE_ROUTE=off restores byte-identical pinned behaviour.
+# Kill switch: CC_CLAUDE_ROUTE=off restores the pinned ACCOUNT CHOICE exactly — the pinned body is
+# reached with the same arguments and the same environment. It is NOT byte-identical on stderr: the
+# off-branch still sets _CC_ROUTE_NOTE and :121 still prints `◆ routing off (CC_CLAUDE_ROUTE)` when
+# stderr is a TTY. That is deliberate — the whole reason the fallback notice exists is that an inert
+# router and a router that legitimately chose the pinned account are indistinguishable in silence —
+# but it was previously documented here as "byte-identical", which it has never been.
 
 # The generated account-name -> config-dir map (SSOT: accounts.json). Guarded: routing is a
 # convenience, and a missing map must degrade to the pinned default, never to an error.
