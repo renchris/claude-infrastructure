@@ -496,12 +496,38 @@ _TRUNK_BASENAMES = []  # one-slot cache; None inside means "asked and could not 
 
 
 def _trunk_basenames():
-    """Every basename on origin/main, read ONCE. None if the tree cannot be enumerated."""
+    """basename → [every origin/main path carrying it], read ONCE. None if unenumerable.
+
+    IT KEEPS THE PATHS, NOT JUST THE NAMES, and that discard was a silent blind spot rather than a
+    style choice. This built a SET and threw the directory away one line after reading it, and the
+    exclusion downstream then justified itself by the loss: a bare basename "has no known
+    directory, so it is not a usable pathspec". The directory was never unknown.
+
+    MEASURED over the 385 live items on 2026-08-11, which is what turned the judgment around: 132
+    reach the evidence-age arm through a literal path, and 47 MORE cite a basename resolving to
+    exactly ONE file on trunk and were silenced by the discard — 26% of every live item that names
+    a file at all. 22 of those 47 had churn under the resolved file already waiting to be reported
+    (one, 87a515ed087e, has watched 95 commits land on scripts/handoff-fire.sh since it was
+    filed). Ambiguity — the stated reason for the blanket exclusion — covers 19 of 1496 trunk
+    basenames and exactly ONE live item. Same shape as memory
+    caller-census-keyed-on-path-misses-the-name: "zero callers" was false because the census keyed
+    on the PATH while the live caller used the bare NAME.
+
+    `-z` IS LOAD-BEARING NOW THAT A CALLER HANDS THESE TO GIT AS A PATHSPEC. `--name-only` alone
+    C-quotes any path with a non-ASCII byte or an embedded quote — measured, `d/wei"rd.sh` comes
+    back as `"d/wei\\"rd.sh"`. That already mangled the basename set (a live file convicted as "not
+    at that location"); handed on as a pathspec it would silently match nothing instead.
+    """
     if not _TRUNK_BASENAMES:
-        out = _git(["ls-tree", "-r", "--name-only", "origin/main"])
-        _TRUNK_BASENAMES.append(
-            None if out is None else {ln.rsplit("/", 1)[-1] for ln in out.splitlines()}
-        )
+        out = _git(["ls-tree", "-r", "-z", "--name-only", "origin/main"])
+        if out is None:
+            _TRUNK_BASENAMES.append(None)
+        else:
+            by_name = {}
+            for ln in out.split("\0"):
+                if ln:
+                    by_name.setdefault(ln.rsplit("/", 1)[-1], []).append(ln)
+            _TRUNK_BASENAMES.append(by_name)
     return _TRUNK_BASENAMES[0]
 
 
@@ -561,9 +587,19 @@ def evidence_churn_lines(ent, present_paths):
 
     `present_paths` COMES FROM THE CALLER, deliberately. The path arm has already resolved every
     cited path against trunk; re-resolving them here would double the `cat-file` cost of every claim
-    AND let the two arms drift into reporting one file under two headings. It receives only the
-    paths that resolved through `cat-file` — a bare basename the path arm cleared via the trunk
-    basename set has no known directory, so it is not a usable pathspec and is honestly excluded.
+    AND let the two arms drift into reporting one file under two headings. It receives only paths
+    the path arm actually RESOLVED — either literally through `cat-file`, or, for a bare basename,
+    to the single file on trunk carrying that name.
+
+    THAT SECOND CLASS WAS EXCLUDED UNTIL 2026-08-11 and it is worth saying why, because the reason
+    was self-confirming rather than wrong-headed. `_trunk_basenames` cleared a bare name against a
+    SET, discarding the directory, and the exclusion was then justified by the discard: "no known
+    directory, so not a usable pathspec". Measured against the live store, that silenced this arm
+    for 47 of the 179 live items that name a file — 26% — including 22 with churn already waiting
+    to be reported, while the ambiguity it was guarding against reached exactly ONE. An item that
+    writes `statusline.sh` rather than `scripts/statusline.sh` is writing the way a human does, and
+    the arm exists precisely for items nobody has re-read. Ambiguous names are still excluded; see
+    the call site.
 
     SILENT UNLESS IT HAS SOMETHING TO SAY: no resolvable cited path, an item younger than the floor,
     an unparseable stamp, git not answering, nothing landed in the window — all return [], never a
@@ -1116,9 +1152,18 @@ def assess(item_id, idx):
                 )
 
         gone, present = [], []
+
+        def note_present(path):
+            # One file can be cited twice under two spellings — `statusline.sh` beside
+            # `scripts/statusline.sh` — and the two resolve to the same pathspec here. The churn
+            # arm prints this list to a human AND hands it to git, so a duplicate is noise in one
+            # and a repeated pathspec in the other.
+            if path not in present:
+                present.append(path)
+
         for p in cited_paths(text):
             if _git(["cat-file", "-e", "origin/main:" + p]) is not None:
-                present.append(p)  # a usable pathspec — the evidence-age arm below reads these
+                note_present(p)  # a usable pathspec — the evidence-age arm below reads these
                 continue
             # A BARE BASENAME IS NOT A PATH. `deploy-live.sh` lives at `scripts/deploy-live.sh`, so
             # resolving it as a repo-root path fails and reports a live file as missing — which is
@@ -1126,8 +1171,19 @@ def assess(item_id, idx):
             # a directory component gets a basename search before it may be called absent.
             if "/" not in p:
                 names = _trunk_basenames()
-                if names is None or p in names:
-                    continue  # present under some directory, or not enumerable ⇒ cannot convict
+                if names is None:
+                    continue  # could not enumerate ⇒ cannot convict, and cannot resolve either
+                hits = names.get(p)
+                if hits is not None:
+                    # …AND WHERE IT RESOLVED ANSWERS A SECOND QUESTION THIS USED TO THROW AWAY. A
+                    # name carried by exactly ONE file on trunk has a known directory, so it is a
+                    # usable pathspec and the evidence-age arm can finally ask whether trunk moved
+                    # under it. Two or more carriers is the case the blanket exclusion was really
+                    # about: there the directory genuinely is unknown, and picking one would report
+                    # churn from a file the item never meant.
+                    if len(hits) == 1:
+                        note_present(hits[0])
+                    continue  # present under some directory either way ⇒ cannot convict
             gone.append(p)
         if gone:
             if verdict == "clear":
