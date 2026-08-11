@@ -16,13 +16,19 @@
 # WHAT THIS SUITE PINS, MEASURED per-site 2026-08-07 (memory: per-site-mutation-attributes-coverage —
 # one mutant per SITE, because a blanket mutant over redundant siblings under-reports):
 #   remove claimer_live's venue gate ONLY  → 0 red   (survives)
+#   remove foreign_wait's venue gate ONLY  → 0 red   (survives)   [re-measured 2026-08-11]
 #   remove owned_wait's  venue gate ONLY   → 0 red   (survives)
-#   remove BOTH                            → 5 red   (tests 1,2,3,8,12)
-# So the suite pins the PAIR, not either gate. That is not a hole to plug by asserting on internals:
-# the redundancy is the design (siblings over one population must share the state model, or the one
-# left behind re-opens the defect), and these tests assert BEHAVIOUR. But do not read a green board
-# as "both gates are covered" — deleting either one alone is invisible here. A refactor that removes
-# one must be judged by the argument in bin/cc-backlog's VENUE header, not by this suite going green.
+#   remove claimer_live + owned_wait       → 5 red   (tests 1,2,3,8,12)
+# So the suite pins the SET, not any single gate. That is not a hole to plug by asserting on
+# internals: the redundancy is the design (siblings over one population must share the state model,
+# or the one left behind re-opens the defect), and these tests assert BEHAVIOUR. But do not read a
+# green board as "the gates are covered" — deleting any ONE alone is invisible here. A refactor that
+# removes one must be judged by the argument in bin/cc-backlog's VENUE header, not by this suite
+# going green. The 2026-08-11 re-measurement is why this table now names THREE sites: the original
+# said "the PAIR", and `foreign_wait` (reclaim's occupancy oracle) has since been added carrying the
+# same gate. A per-site table is a claim about the code as it was, so it decays as siblings are
+# added — re-run it when this file's kill-set changes, rather than trusting the count
+# (memory: control-calibrated-to-implementation-decays).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -54,10 +60,27 @@ setup() {
 }
 
 # add_and_claim <source> <claimer> [--venue V] → the id, claimed and aged past the stale gate.
+#
+# THE ELIGIBILITY GATE IS PINNED OFF HERE, AND ONLY HERE. These tests ask which ORACLE may judge a
+# claim; admission — may this work go off-box at ALL? — is the prior question, and it has its own
+# section below, with its own controls and the real classifier at its real default. Leaving the gate
+# live up here coupled every cloud assertion to a spelling table, and the coupling fired: the
+# classifier's OFFBOX_LANE class matches `\bvenue\b` (its sharpest case — an item asking to edit the
+# venue rule itself), so every fixture this helper builds was convicted as lane work and the claim
+# never happened. The tests that went red — 1, 2, 3, 8, 12 — are EXACTLY this file's measured
+# mutant-kill set for the pair of venue gates, so the suite stopped being able to tell "the gate
+# refused my fixture" from "both venue gates were deleted": a coverage hole wearing a red board's
+# clothes. The classifier is right about the row, so the HARNESS is what gets fixtured — same lever
+# and same reason as tests/cc-venue.bats and tests/cc-backlog-venue-plan.bats, whose setup()s pin it
+# off suite-wide (this file cannot, because its second half IS the gate's suite and test 23 asserts
+# that OFF is not the default). The spelling stays pinned once, where it belongs:
+# tests/cc-eligible-history.bats "12 OFF-BOX LANE covers an item asking to edit the venue rule
+# ITSELF". `--force` would also get past the refusal and is the wrong lever — it bypasses the LEASE
+# too, which test 8 exists to assert. `add_only` below deliberately keeps the real default.
 add_and_claim() {
   local src="$1" who="$2"; shift 2
   local id; id="$("$CB" add --title "venue probe $src" --project probe --source "$src")"
-  "$CB" claim "$id" --by "$who" "$@" >/dev/null
+  CC_BACKLOG_ELIGIBLE_GATE=off "$CB" claim "$id" --by "$who" "$@" >/dev/null
   printf '%s' "$id"
 }
 
