@@ -179,6 +179,39 @@ stamps, run_s 2737 and 5437, match the *older* 2700 s/5400 s wall bounds). It is
 load-conditional false-cut, and a false cut is indistinguishable from a real one in the ledger.
 *Fix shape:* give the pre-plan phase its own grace and start the stall clock at the `1..N` line.
 
+> **FIXED 2026-08-10** (backlog `cc89fc8dc765`). Landed as the fix shape above: a `PRE_PLAN_*`
+> grace bounds the counting phase, `tap_planned` starts the stall clock at the `1..N` line, and a
+> pre-plan cut still presents as rc 124 so `classify_hang` routes it unchanged. **Three corrections
+> to the paragraph above, each found by reading the producer rather than the report:**
+>
+> 1. **The pass is `bats-gather-tests`, not `bats-exec-suite --dummy-run`.** bats 1.13.0 has no
+>    `--dummy-run` flag at all. `bats-exec-suite` calls `bats-gather-tests` over every file
+>    (`libexec/bats-core/bats-exec-suite:141`) and prints `1..N` only afterwards (`:185`); the
+>    gather pass writes its output to `TESTS_LIST_FILE`, so the TAP stream really is 0 bytes
+>    throughout. The diagnosis was right and its mechanism name was wrong. **Where the wrong name
+>    came from, because it will mislead the next reader too:** `ps` during a run shows
+>    `bats-exec-suite --dummy-flag …`, and `--dummy-flag` is not a mode at all — it is a literal
+>    placeholder bats prepends to every flag array *"to prevent unset variable errors on empty array
+>    expansion in old bash versions"* (`libexec/bats-core/bats:166`), accepted and discarded by
+>    every sub-command. It appears on the REAL suite run, not on a counting pass.
+> 2. **`postland-verify.sh:851-866` no longer points at the watcher** — that range is now inside
+>    `prelint_check`. The file has grown; cite by function (`run_target`), not by line.
+> 3. **It is no longer latent.** The corpus was 141 suites when this was filed and is **403** today.
+>    Re-measured 2026-08-10 under the REAL prefix (`nice -n 19 taskpolicy -c background`, not a
+>    foreground bench): **72 s** to gather 403 suites / 7487 tests at load 5.2 — and the >600 s
+>    observation above was over 141 files at load 33-48. Scaled by corpus, that observation is
+>    already past the 900 s `POSTLAND_STALL_S`. This is the third instance in this repo of the
+>    pattern in memory `bound-must-fit-the-band-not-the-bench`, and specifically of its third tell,
+>    *"the corpus it scans grows, so headroom silently erodes"* — so the landed grace is **derived
+>    from `CORPUS_N`** (15 s/suite = the 0.18 s/suite measured quiet cost times the 84x background-band
+>    tax this repo has measured for long batch work), floored at 900 s and clamped to `SUITE_TO`,
+>    rather than being another constant that will rot as `tests/` keeps growing.
+>
+> Verified as an A/B of `tests/postland-verify.bats` against the pristine `origin/main` script and
+> the edited one, run concurrently in the same load window: all three new tests **fail on pristine
+> and pass on edited**, and the two pre-existing `STALL bound:` tests pass on both — so none of the
+> new tests is vacuous and the existing stall behaviour is untouched.
+
 **2. `waiting-recycle` (445 s alone) cannot survive v1's retry ladder.** ⚠️ **CONVERGENT — already
 found and FIXED by a sibling stream while this bisect ran.** `LANDING_GATE_ROOT_CAUSE_2026-07-26.md` §5
 (backlog `10941179f8ec`) reports the same defect with independent evidence and landed the C23 fix (rc 124

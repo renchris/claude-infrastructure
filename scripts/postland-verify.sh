@@ -273,6 +273,45 @@ SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the prim
 # yields to sessions by design, so a busy box legitimately runs the corpus past any tight wall —
 # measured 2026-07-29, healthy runs CUT at 2737s AND 5437s with zero not-ok. Hangs are caught by the
 # stall bound in ~15 min; this ceiling exists only for the case where the TAP writer itself wedges.
+# THE PRE-PLAN GRACE — the bound for bats' COUNTING phase, the one phase that emits no TAP at all.
+# `bats <403 files>` does not start testing when it starts. bats-exec-suite first runs
+# bats-gather-tests over every file (bats 1.13.0, libexec/bats-core/bats-exec-suite:141), sourcing
+# each one to enumerate its @tests, and only THEN prints `1..N` (:185). Nothing reaches the TAP
+# stream during that pass — the file is 0 bytes — so tap_done is 0 BY CONSTRUCTION, and the stall
+# watcher below, whose clock used to start at t=0, saw a perfectly healthy run as frozen from its
+# very first poll. That is a FALSE CUT of a corpus that was never wedged, and the ledger cannot
+# tell it from a real one (a cut is "nothing proven", so no suite is ever named).
+# MEASURED 2026-08-10 under the REAL prefix (`nice -n 19 taskpolicy -c background` — the band the
+# corpus actually runs in, not a bare foreground bench): 403 suites / 7487 tests gather in 72s at
+# load 5.2. That is the QUIET number and it is NOT the one this bound has to fit. The same box at
+# load 33-48 was measured still inside the counting pass at >600s with a 0-byte TAP and a live
+# bats-exec-suite (docs/research/POSTLAND-CELL-BISECT-2026-07-29.md §3, defect 1) — and that was
+# over 141 files. The corpus is 403 today, so that observation scaled by corpus is already past
+# the 900s POSTLAND_STALL_S. The defect was filed as latent; it is no longer.
+# DERIVED FROM THE CORPUS, NOT A CONSTANT — because a constant is exactly how this class recurs.
+# The third tell in memory bound-must-fit-the-band-not-the-bench is "the corpus it scans GROWS, so
+# headroom silently erodes" (136→218 suites in four days there; 141→403 here in two weeks).
+# CORPUS_N is known one line before the watcher, so the grace sizes itself. 15s/suite = the
+# 72s/403 = 0.18s measured quiet cost times the 84x background-band tax this repo has measured for
+# long batch work (2514226e) — the WORST documented case, not the observed one, because the whole
+# point is that the observed one is a foreground bench. Floored so a small corpus still gets a
+# usable window (and so the `tests/` fallback corpus, which reports CORPUS_N=1 while gathering the
+# whole directory, is never given LESS than the stall bound it has today), and clamped to SUITE_TO
+# so the wall backstop always stays the outer bound. POSTLAND_PRE_PLAN_GRACE_S pins an absolute
+# value; 0 disables the phase entirely and restores the t=0 clock (the kill switch).
+# THE TRADE-OFF, STATED RATHER THAN HIDDEN. At today's 403 suites the grace resolves to 6045s, so a
+# gather that genuinely WEDGES is now caught in up to ~100 min where the old clock caught it in 15.
+# That is the right direction and not a reluctant compromise: a FALSE cut is indistinguishable from
+# a real one in the ledger (a cut names no suite, so nothing is ever traced back to it), while a
+# slow TRUE positive is merely slow — and it is still bounded, by the SUITE_TO wall three times
+# further out. Detection latency for the rare case is the correct thing to spend to stop convicting
+# the common one. If that latency ever needs to come down, the lever is a real progress signal for
+# the counting phase, not a tighter blind wall: bats writes its discovered tests to TESTS_LIST_FILE
+# under BATS_RUN_TMPDIR (which is ours, via TMPDIR=$RUN_TMP), so a future watcher COULD key on that
+# file growing. Deliberately not done here — it reaches into bats' private layout, which is exactly
+# the kind of coupling that silently stops matching when the producer changes shape.
+PRE_PLAN_PER_SUITE_S="${POSTLAND_PRE_PLAN_PER_SUITE_S:-15}"
+PRE_PLAN_FLOOR_S="${POSTLAND_PRE_PLAN_FLOOR_S:-900}"
 FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-TEST retry bound + the hang confirm
 RETRY_TO="${POSTLAND_RETRY_TIMEOUT_S:-5400}"   # WHOLE-FILE retry bound — only the fallback path
 # WHY THE LADDER NEEDS ITS OWN, LARGER BOUND (C23). Until 2026-07-29 the ladder re-ran the whole FILE
@@ -1043,6 +1082,37 @@ record_flake() { # <file> <test> <rc>
 int_or_zero() { case "${1:-}" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
 tap_plan() { # <tap> → N from the `1..N` plan line (0 when it never even planned)
   int_or_zero "$(sed -n 's/^1\.\.\([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1 | tr -d '\n')"
+}
+# HAS bats planned yet? — a PREDICATE, and deliberately NOT spelled `tap_plan > 0`. int_or_zero
+# collapses two genuinely different states onto the same 0: "no plan line has been written yet" and
+# a real, emitted `1..0` (the empty-corpus plan, which this file already treats as a NON-VERDICT at
+# the retry site). The stall watcher is the consumer that must tell them apart — it reads this to
+# decide WHICH bound it is currently under, and taking a `1..0` for "still counting" would hold a
+# finished run inside the pre-plan grace instead of the stall clock. (memory: lookup-miss-is-not-
+# absence — a reader that cannot distinguish "absent" from "zero" will eventually be asked to.)
+# `1\.\.[0-9]` and not `1\.\.[0-9]+`: this asks only whether the line has STARTED, so a plan
+# truncated mid-write still counts as planned — bats writes it in one printf, and the alternative
+# is a torn digit reading as "never planned" and cutting a live run.
+# Same `-a` as the grammar readers below, for the same reason: ugrep 7.5.0 — on the operator's own
+# interactive PATH — counts a NUL-carrying TAP as EMPTY without it.
+tap_planned() { # <tap> → 0 once the `1..N` plan line exists (INCLUDING `1..0`) · 1 before that
+  grep -aqE '^1\.\.[0-9]' "$1" 2>/dev/null
+}
+pre_plan_grace() { # <corpus_n> → seconds bats may spend COUNTING before we call it wedged.
+  # Every input goes through int_or_zero: this file runs under `set -u`, the values are operator-
+  # settable env, and a non-numeric one must degrade to the default rather than make a `[ x -ge y ]`
+  # inside the watcher loop a fatal error mid-run. Clamped to SUITE_TO only when SUITE_TO is itself
+  # a positive number — a 0/garbage backstop must not silently zero the grace and re-open the very
+  # false cut this exists to close.
+  local n per floor g
+  if [ -n "${POSTLAND_PRE_PLAN_GRACE_S:-}" ]; then int_or_zero "$POSTLAND_PRE_PLAN_GRACE_S"; return 0; fi
+  n="$(int_or_zero "${1:-0}")"
+  per="$(int_or_zero "$PRE_PLAN_PER_SUITE_S")"; [ "$per" -gt 0 ] || per=15
+  floor="$(int_or_zero "$PRE_PLAN_FLOOR_S")"
+  g=$(( n * per ))
+  [ "$g" -lt "$floor" ] && g="$floor"
+  [ "$(int_or_zero "$SUITE_TO")" -gt 0 ] && [ "$g" -gt "$SUITE_TO" ] && g="$SUITE_TO"
+  printf '%s' "$g"
 }
 # ════ THE TAP RESULT-LINE GRAMMAR — ONE definition, every reader (C30) ════════════════════════════
 # TAP13 (and bats) spell a result line `ok <N> <desc>` / `not ok <N> <desc>`. The <N> is not
@@ -2229,9 +2299,10 @@ EOF
     # wedges. POSTLAND_STALL_S=0 restores the plain wall bound (the kill switch).
     # exec, not `bounded`: the watcher must signal timeout(1) ITSELF (which kills its child's whole
     # process group) — TERMing a wrapper subshell would orphan the bats tree instead of ending it.
-    local stall poll cpid last ndone still
+    local stall poll cpid last ndone still grace preplan planned cutby
     stall="${POSTLAND_STALL_S:-900}"; poll="${POSTLAND_STALL_POLL_S:-60}"
     case "$stall$poll" in *[!0-9]*) stall=900; poll=60 ;; esac
+    grace="$(pre_plan_grace "$CORPUS_N")"     # see THE PRE-PLAN GRACE by FILE_TO for the arithmetic
     if [ "$stall" -eq 0 ] || [ -z "$TIMEOUT_BIN" ] || [ ! -x "$TIMEOUT_BIN" ]; then
       ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" bounded "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) </dev/null > "$tap" 2>&1; rc=$?
     else
@@ -2240,21 +2311,49 @@ EOF
       # of ambient property that stops being true (one `set -m`, one interactive re-entry). The
       # whole corpus is behind it; it does not get to depend on a default.
       ( cd "$WORKTREE" && TMPDIR="$RUN_TMP" exec "$TIMEOUT_BIN" -k 10 "$SUITE_TO" "${QOS[@]}" "$BATS_BIN" "${bargs[@]}" ) </dev/null > "$tap" 2>&1 &
-      cpid=$!; last=0; still=0
+      # TWO PHASES, TWO CLOCKS. Until the `1..N` line lands, bats is COUNTING and there is no
+      # per-line signal to key on — tap_done is 0 for a healthy run and a wedged one alike, so the
+      # only honest bound on that phase is a wall, and it gets its own (grace, derived above). The
+      # stall clock starts when the plan does. `still=0` on the transition is the load-bearing line:
+      # without it the pre-plan seconds would carry into the progress clock and cut the corpus a
+      # few polls into its first real test.
+      cpid=$!; last=0; still=0; preplan=0; planned=0; cutby=""
+      [ "$grace" -gt 0 ] || planned=1              # grace 0 = kill switch: one clock, from t=0
       while kill -0 "$cpid" 2>/dev/null; do
         sleep "$poll"
+        if [ "$planned" -eq 0 ] && tap_planned "$tap"; then
+          planned=1; still=0
+          log "corpus: bats finished counting after ${preplan}s (plan $(tap_plan "$tap")) — stall clock starts"
+        fi
+        if [ "$planned" -eq 0 ]; then
+          preplan=$(( preplan + poll ))
+          [ "$preplan" -lt "$grace" ] && continue
+          log "PRE-PLAN STALL: no '1..N' plan line after ${preplan}s (grace ${grace}s over $CORPUS_N suite(s)) — bats never finished counting; cutting the run"
+          cutby=preplan; kill -TERM "$cpid" 2>/dev/null || true
+          break
+        fi
         ndone="$(tap_done "$tap")"; ndone="${ndone:-0}"
         if [ "$ndone" -gt "$last" ]; then last="$ndone"; still=0; else still=$(( still + poll )); fi
         if [ "$still" -ge "$stall" ]; then
           log "STALL: no TAP progress for ${stall}s at test $last — cutting the run (a stall, not slowness)"
-          kill -TERM "$cpid" 2>/dev/null || true
+          cutby=stall; kill -TERM "$cpid" 2>/dev/null || true
           break
         fi
       done
       wait "$cpid" 2>/dev/null; rc=$?
-      # A stall-cut presents as the bound firing: classify_hang keys on 124 and will name the
-      # wedged file from the TAP index. timeout's own ceiling already exits 124; unify the TERM path.
-      [ "$still" -ge "$stall" ] && rc=124
+      # EITHER cut presents as the bound firing: classify_hang keys on 124 and will name the wedged
+      # file from the TAP index. A PRE-PLAN cut carries ndone=0, so that index is 1 and the suspect
+      # is the FIRST corpus file — a guess, because a wedge while GATHERING can be on any file. It is
+      # a safe guess only because classify_hang confirms it: the suspect is re-run alone and a
+      # mis-map degrades to a CUT rather than convicting the wrong suite (its own comment, "a
+      # mis-mapped suspect can only LOSE a hang, never invent one"). That is why routing a pre-plan
+      # cut through the SAME 124 is right rather than merely convenient — it inherits the adjudication.
+      # timeout's own ceiling already exits 124; unify both TERM paths onto it.
+      # Keyed on cutby — the LOOP's own record of why it broke — never re-derived from the counters:
+      # re-testing `still -ge stall` here would be a second copy of the predicate that decided, and
+      # the two can disagree at the boundary (a plan line arriving on the same poll that exhausted
+      # the grace resets `still` while `preplan` stays at the limit). memory: make-the-actuator-the-arbiter.
+      [ -n "$cutby" ] && rc=124
     fi
   fi
   adv="$(sc_count)"
@@ -2754,6 +2853,54 @@ selftest() {
   grep -qE '^[[:space:]]*(if|while|until)[[:space:]].*(loadavg|load1)' "$SELF" \
     && badp "C29: a branch tests the recorded load (a quiet-box wait is gate_admit again, R1)" \
     || okp "C29: load is recorded as evidence, never branched on or waited for"
+
+  # ── PRE-PLAN GRACE — the bound for bats' no-TAP COUNTING pass ────────────────────────────────────
+  # Asserted on the FUNCTION, not only through a bats fixture. This is the number that decides
+  # whether a healthy corpus is falsely cut, and a fixture that has to wedge a real bats to reach it
+  # costs ~90s and can exercise exactly ONE corpus size — while the property that matters is that the
+  # window SCALES. A constant is how this class recurs: the corpus went 141 -> 403 suites in two
+  # weeks (memory: bound-must-fit-the-band-not-the-bench, third tell — "headroom silently erodes").
+  # Each case runs in its own command substitution, so the assignments cannot leak into the next.
+  [ "$( unset POSTLAND_PRE_PLAN_GRACE_S; PRE_PLAN_PER_SUITE_S=15 PRE_PLAN_FLOOR_S=900 SUITE_TO=10800; pre_plan_grace 400 )" = 6000 ] \
+    && okp "pre-plan: the grace is DERIVED from corpus size (400 suites x 15s = 6000s)" \
+    || badp "pre-plan: the grace does not scale with the corpus (a constant rots as tests/ grows)"
+  [ "$( unset POSTLAND_PRE_PLAN_GRACE_S; PRE_PLAN_PER_SUITE_S=15 PRE_PLAN_FLOOR_S=900 SUITE_TO=10800; pre_plan_grace 1 )" = 900 ] \
+    && okp "pre-plan: a tiny corpus still gets the floor, never 15s" \
+    || badp "pre-plan: the floor does not bind (the tests/ fallback corpus would get a 15s window)"
+  [ "$( unset POSTLAND_PRE_PLAN_GRACE_S; PRE_PLAN_PER_SUITE_S=15 PRE_PLAN_FLOOR_S=900 SUITE_TO=10800; pre_plan_grace 100000 )" = 10800 ] \
+    && okp "pre-plan: the grace is clamped to SUITE_TO (the wall stays the outer bound)" \
+    || badp "pre-plan: the grace can exceed the wall backstop it is nested inside"
+  [ "$( POSTLAND_PRE_PLAN_GRACE_S=42; pre_plan_grace 400 )" = 42 ] \
+    && okp "pre-plan: an absolute POSTLAND_PRE_PLAN_GRACE_S overrides the derivation" \
+    || badp "pre-plan: the absolute override is ignored (no kill switch, no test seam)"
+  # DEGRADATION, both directions. These are operator-settable env values read into a `[ x -ge y ]`
+  # inside the watcher loop: garbage must fall back to the default, and a 0/garbage SUITE_TO must not
+  # silently CLAMP the grace to zero — that would re-open the exact false cut this exists to close.
+  [ "$( unset POSTLAND_PRE_PLAN_GRACE_S; PRE_PLAN_PER_SUITE_S=abc PRE_PLAN_FLOOR_S=900 SUITE_TO=10800; pre_plan_grace 400 )" = 6000 ] \
+    && okp "pre-plan: a non-numeric per-suite value degrades to the default" \
+    || badp "pre-plan: a non-numeric per-suite value corrupts the grace"
+  [ "$( unset POSTLAND_PRE_PLAN_GRACE_S; PRE_PLAN_PER_SUITE_S=15 PRE_PLAN_FLOOR_S=900 SUITE_TO=0; pre_plan_grace 400 )" = 6000 ] \
+    && okp "pre-plan: a 0 wall backstop does not clamp the grace to nothing" \
+    || badp "pre-plan: SUITE_TO=0 zeroes the grace (every counting pass would be cut instantly)"
+  # THE TWO STATES int_or_zero COLLAPSES. tap_plan returns 0 for "no plan line yet" AND for a real
+  # `1..0`; the watcher must not read a finished empty corpus as "still counting" (nor an empty TAP
+  # as planned, which would put a genuinely wedged gather back on the stall clock it is blind to).
+  printf '' > "$d/preplan-empty.tap"; printf '1..0\n' > "$d/preplan-zero.tap"
+  tap_planned "$d/preplan-empty.tap" \
+    && badp "pre-plan: an EMPTY tap reads as planned (the counting pass would get no grace at all)" \
+    || okp "pre-plan: an empty TAP is not planned"
+  tap_planned "$d/preplan-zero.tap" \
+    && okp "pre-plan: an emitted 1..0 IS planned (a finished empty corpus leaves the grace)" \
+    || badp "pre-plan: a real 1..0 reads as 'still counting' (a finished run held in the grace)"
+  # The cut REASON is the loop's own record. Re-deriving it here would be a second copy of the
+  # predicate that decided, and the two disagree at the boundary — a plan line landing on the same
+  # poll that exhausts the grace resets `still` while `preplan` stays at the limit
+  # (memory: make-the-actuator-the-arbiter).
+  # shellcheck disable=SC2016  # the single quotes are the POINT: this is a source PATTERN to find,
+  # not a string to expand — `$still`/`$stall` must reach grep as literal bytes.
+  grep -qE '\[ "\$still" -ge "\$stall" \] && rc=124' "$SELF" \
+    && badp "pre-plan: the rc unify re-derives the cut predicate instead of reading why the loop broke" \
+    || okp "pre-plan: rc 124 is keyed on the loop's own cut reason, never re-derived"
 
   # ── SHARED-CONFIG IDENTITY — behavioural, through the real corpus path ───────────────────────────
   # The leak suite writes its identity exactly the way the incident did: a bare `git config
