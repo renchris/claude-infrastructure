@@ -877,9 +877,34 @@ lint_tree() {
 
   # -- stuck ratchet entries: a site fixed but never de-listed --
   local stuck=""
+  # OWN-SCOPED, as of land-architecture-100p §5 P2 — this branch was the one place in this lint
+  # where own-scope was simply not consulted, and it is the arm's largest taxing leak.
+  #
+  # An allowlist entry goes "stuck" when its site stops violating, and the three ways that happens
+  # are: (1) THE AUTHOR fixed it — their file is in their own diff, so it must block them, because
+  # the ratchet only shrinks if the person who shrank it also lowers the line; (2) A SIBLING fixed
+  # it, or deleted or renamed that file, in a land of their own; (3) NOBODY changed anything and
+  # the BOX did — `installed_somewhere` searches the caller's live `$PATH` plus Homebrew, so an
+  # entry stops counting as "used" the moment `gtimeout`/`lsof`/`sysctl` becomes unreachable on
+  # this machine (see reachable_on). Unscoped, cases 2 and 3 refused EVERY land on the box, named
+  # a file the author had never opened, and told them to edit an allowlist that was not theirs —
+  # measured on a fixture: rc 1 in all three own-set states, including one that explicitly named a
+  # different file. Case 3 is the worst of them, because the tree was never wrong at all.
+  #
+  # So: a stuck entry BLOCKS when its path is own (or when no own-set was supplied ⇒ strict), and
+  # is ADVISORY otherwise. Case 1 — the only case with an author who can act — is unchanged. This
+  # is the same treatment self-path-lint already gives its own stuck-ratchet branch.
+  local stuck_other=""
   while IFS= read -r key; do
     [ -n "$key" ] || continue
-    has_line "$used_allow" "$key" || stuck="$stuck  $key"$'\n'
+    has_line "$used_allow" "$key" && continue
+    # The allowlist key is `<path>:<binary>`; own-sets hold PATHS, so scope on the path half.
+    # `%:*` and not `%%:*` — a path may contain a colon, the binary name may not.
+    if [ -z "$have_own" ] || has_line "$own" "${key%:*}"; then
+      stuck="$stuck  $key"$'\n'
+    else
+      stuck_other="$stuck_other  $key"$'\n'
+    fi
   done <<< "$allow"
 
   if [ -n "$report" ]; then
@@ -887,6 +912,14 @@ lint_tree() {
     printf '%s' "$report" >&2
     echo "  Fix: resolve it absolutely (bin/cc-kitty-bin / bin/cc-claude-bin are the precedents), or" >&2
     echo "  harden PATH at the top of the file the way the launchd wrappers already do." >&2
+  fi
+  if [ -n "$stuck_other" ]; then
+    # SURFACED, never blocking: the debt is real and someone should discharge it, but the author
+    # standing here is not that someone and refusing them buys nothing. Same disposition every
+    # other non-own finding in this lint already gets.
+    echo "unattended-path-lint: stuck ratchet entries OUTSIDE this land's diff — advisory, not blocking:" >&2
+    printf '%s' "$stuck_other" >&2
+    echo "  (whoever fixed or removed those sites owes the allowlist line; it is not this land's.)" >&2
   fi
   if [ -n "$stuck" ]; then
     echo "unattended-path-lint: STUCK RATCHET — these sites are allowlisted but no longer violate:" >&2

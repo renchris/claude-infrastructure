@@ -339,7 +339,11 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
   cd "$REPO"
   # Present at the chokepoint…
   grep -q 'bats-shellcheck-lint.sh' scripts/ship-land.sh || false
-  grep -q 'CC_BATS_SC_OWN=' scripts/ship-land.sh || false
+  # Keyed on the VARIABLE NAME, not the assignment spelling. This read `CC_BATS_SC_OWN=` until the
+  # P2 own-scope work routed all thirteen arms through own_run(), which passes the name as an
+  # ARGUMENT — so the `=` vanished and this went red. That is the assertion working: the wiring it
+  # guards (the gate hands this lint an own-scope) is intact, only its spelling moved.
+  grep -q 'CC_BATS_SC_OWN' scripts/ship-land.sh || false
   grep -q 'SC_BATS_LINT" --selftest' scripts/ship-land.sh || false
   # …and at the task-quality-gate hook.
   grep -q 'bats-shellcheck-lint.sh' hooks/task-quality-gate.sh || false

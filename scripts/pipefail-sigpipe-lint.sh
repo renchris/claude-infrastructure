@@ -323,9 +323,19 @@ main_scan() {
     cur="$(printf '%s\n' "$hits" | awk -F: -v p="$f" '$1==p' | awk 'NF' | wc -l | tr -d ' ')"
     alw="$(allow_count "$f")"
     # own-scope: only files in THIS land's diff can BLOCK; others are advisory.
+    #
+    # THREE STATES, and `${VAR:-}` could only ever express two (land-architecture-100p §5 P2).
+    # UNSET ⇒ no caller asked for scoping ⇒ strict, every file may block. SET-BUT-EMPTY ⇒ a caller
+    # DID scope and this land touches none of this lint's population — so nothing of theirs is
+    # here and nothing may block. `${CC_PIPEFAIL_OWN:-}` collapsed those into "strict", and
+    # ship-land ALWAYS exports the variable, so the collapsed case was live rather than corner:
+    # measured on a fixture, a land whose own-set was empty (one touching only launchd/ or
+    # commands/, which this arm's pathspec does not list) was refused over a SIBLING's file, with
+    # nothing of its own to fix. `+set` is the idiom every sibling lint already uses.
     local blocking=1
-    if [ -n "${CC_PIPEFAIL_OWN:-}" ]; then
-      printf '%s\n' "$CC_PIPEFAIL_OWN" | grep -Fx -- "$f" >/dev/null 2>&1 || blocking=0
+    if [ -n "${CC_PIPEFAIL_OWN+set}" ]; then
+      blocking=0
+      printf '%s\n' "$CC_PIPEFAIL_OWN" | grep -Fx -- "$f" >/dev/null 2>&1 && blocking=1
     fi
     if [ "$cur" -gt "$alw" ]; then
       over+=("$f|$cur|$alw|$blocking")
