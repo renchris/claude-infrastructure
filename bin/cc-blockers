@@ -38,6 +38,10 @@
 #                           hung run is WORSE than a red one for "is trunk persistently failing".
 #                           For a VERDICT ask "is it red?"; for an ALARM ask "is it green?".
 #                           Kill switch: CC_BLOCKERS_ALARM_POLARITY=legacy restores `red == seen`.
+#   kind=="land-lock-hung" a LIVE holder of the machine-wide landing mutex is past its hold
+#                           budget (ORPHANED-HELD when its ppid is 1 — the observed shape). H2
+#                           forbids reaping it, so the page IS the recovery. Delegated to
+#                           `land-lock.sh --alarms`, which owns the liveness predicate.
 #   kind=="deploy-lag"      LAGGING — a GREEN-stamped commit has sat undeployed past the budget
 #   kind=="deploy-wedged"   NO-GREEN-AHEAD — a green stamp EXISTS but none is a DESCENDANT of live
 #                           HEAD, so deploy-live has nothing it may advance to and refuses every
@@ -1174,7 +1178,25 @@ fi
 # this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
 # `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
 # fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
-ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+# ── LAND-HOLDER alarm (land-architecture-100p §5 P4, defect 5) ──────────────────────────────────
+# H2 — never reap a LIVE holder of the machine-wide landing mutex — is the correct policy and is
+# not touched here. What was missing is its other half: if the machine will never take the lock
+# back, a live holder that never lets go has to reach a HUMAN, and it reached nobody. Measured
+# live: holder pid 82031 held the mutex with ppid 1 (its owning session dead) and no sensor
+# anywhere said a word, while the lands behind it waited 2,362 s and 5,536 s.
+#
+# DELEGATED, NOT RE-DERIVED. The predicate ("is this holder live?" — pid + lstart, because pids
+# recycle) belongs to land-lock.sh, which owns the lock's semantics; a second copy here would be a
+# second oracle that can disagree with the actuator (memory: make-the-actuator-the-arbiter). This
+# function only RENDERS what that verb reports, in the same fact-bound, computed-every-invocation
+# shape as its LAND-PIPELINE siblings above — no board row, no producer, nothing to go stale.
+land_holder_rows() {
+  local ll="${CC_LAND_LOCK_BIN:-$DEPLOY_REPO/scripts/land-lock.sh}"
+  [ -x "$ll" ] || [ -f "$ll" ] || return 0
+  bash "$ll" --alarms 2>/dev/null || true
+}
+
+ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1281,7 +1303,7 @@ na="$(printf '%s' "$ALARMS_JSON" | jq 'length' 2>/dev/null || echo 0)"
 # A kind absent from this selector is EMITTED and then silently dropped from the table — it rides the
 # --json array and vanishes from the one surface the operator reads. That is not hypothetical: the
 # mirror bug has bitten this file before, which is why every kind here carries a render test.
-LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-wedged" or .kind=="deploy-stale" or .kind=="never-green")'
+LAND_SEL='select(.kind=="verifier-inert" or .kind=="trunk-red" or .kind=="deploy-lag" or .kind=="deploy-wedged" or .kind=="deploy-stale" or .kind=="never-green" or .kind=="land-lock-hung")'
 DISP_SEL='select(.kind=="dispatch-inert")'
 # ONE family for both approval kinds, on the same rule that splits LAND from DISPATCH: they share a
 # subsystem and an owner. A stuck assignee and an unwired beacon are the SAME operator question —

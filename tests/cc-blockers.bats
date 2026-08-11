@@ -1293,3 +1293,41 @@ ts_acct() { date -u -v"$1" +%Y-%m-%dT%H:%M:%S.065000+00:00; }
   [ "$(echo "$output" | jq 'length')" = 1 ]
   [ ! -e "$ACCT_MARK" ]
 }
+
+# ── land-lock-hung (land-architecture-100p §5 P4, defect 5) ────────────────────────────────────
+# H2 — never reap a LIVE holder of the machine-wide landing mutex — is correct and unchanged. Its
+# missing half is that a live holder which never lets go must reach a HUMAN: pid 82031 was measured
+# holding the lock with ppid 1 (its owning session dead) while the lands behind it waited 2,362 s
+# and 5,536 s, and not one sensor said a word. The predicate is DELEGATED to land-lock.sh (which
+# owns the lock's semantics); these tests pin that the row reaches the operator's TABLE — a kind
+# missing from LAND_SEL rides the JSON array and vanishes from the only thing anyone reads.
+#
+# NOT a `$( )` helper: the exports below must reach the test shell, and a command substitution runs
+# in a subshell that drops them — the same shape as _ca_live_pid's pipe caveat in
+# tests/completion-assert.bats, one variable class over. It sets $_ccb_pid instead of echoing it.
+_ccb_hold() {  # <age-flag for touch -t, e.g. 2H> → fixtures a lock dir holding a LIVE pid
+  export LAND_LOCK_SCAN="$D/lock-scan/land-lock-*"
+  export CC_LAND_LOCK_BIN="$REPO/scripts/land-lock.sh"
+  mkdir -p "$D/lock-scan/land-lock-fixture/lock.d"
+  sleep 60 >/dev/null 2>&1 & _ccb_pid=$!
+  echo "$_ccb_pid" > "$D/lock-scan/land-lock-fixture/lock.d/pid"
+  ps -o lstart= -p "$_ccb_pid" > "$D/lock-scan/land-lock-fixture/lock.d/lstart"
+  touch -t "$(date -v-"$1" +%Y%m%d%H%M)" "$D/lock-scan/land-lock-fixture/lock.d"
+}
+
+@test "land-lock-hung renders in the LAND-PIPELINE table, not only in --json" {
+  _ccb_hold 2H; p="$_ccb_pid"
+  run ccb
+  kill "$p" 2>/dev/null || true
+  [ "$(echo "$output" | grep -c '^LAND-PIPELINE')" = 1 ]
+  echo "$output" | grep -q 'land-lock-hung' || false
+}
+
+@test "land-lock-hung: a holder INSIDE its budget leaves the board silent" {
+  # The control. An alarm that fires on every held mutex would fire on every land — a backgrounded
+  # land is the normal shape here — and would carry as many bits as one that never fires.
+  _ccb_hold 1M; p="$_ccb_pid"
+  run ccb --json
+  kill "$p" 2>/dev/null || true
+  [ "$(printf '%s' "$output" | jq '[.[] | select(.kind=="land-lock-hung")] | length')" = 0 ]
+}

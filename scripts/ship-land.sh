@@ -82,8 +82,10 @@
 # rebase, the latter rolled back) · 6 GATE RED · 7 push non-ff · 8 content-verify failed after
 # exhausting the bounded auto-retries · 9 GATE-KILLED (now rare — only LANE=v1's corpus can earn
 # it) · 10 IN-LOCK NET TIMEOUT (a fetch/push inside the mutex exceeded SHIP_LAND_NET_TIMEOUT_S —
-# a MACHINE verdict like 9, retryable, nothing proven, tree clean). 42 is INTERNAL (locked child →
-# outer-loop stale-gate signal); it never escapes ship-land.
+# a MACHINE verdict like 9, retryable, nothing proven, tree clean) · 11 A LAND IS ALREADY IN
+# FLIGHT for this worktree (P4 defect 3 — refused BEFORE the mutex, so a double-fire costs nothing)
+# · 128+N a SIGNALLED death, attested (P4 defect 1). 42 is INTERNAL (locked child → outer-loop
+# stale-gate signal); it never escapes ship-land.
 #
 # 6 vs 9 — a VERDICT vs a NON-VERDICT, and the distinction is load-bearing (backlog 9c5d0ba74e79):
 # 6 says "the gate ran and this tree is red" — a claim about YOUR CODE, actionable, do not retry
@@ -548,6 +550,135 @@ rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never ex
   git rebase --abort >/dev/null 2>&1 || true
 }
 
+# ---- P4: EVERY LAND TERMINATES LOUDLY, AUTHOR PRESENT OR NOT ----------------
+# (land-architecture-100p-2026-08-10 §5 P4 / §2.A / §2.F.) Three defects, one lifecycle:
+#
+#   1. NO SIGNAL TRAP. This script installed no TERM/INT/HUP trap, so a harness process-group
+#      SIGKILL — the exit-144 / #127 class — recorded NOTHING: no land.log line, no marker
+#      removed, no notice. And that is the COMMON path, not the rare one: a turn cannot hold a
+#      contended land (Bash-tool ceiling 600 s < episode p90 991 s), so `run_in_background` is
+#      the only workable shape, and it is exactly the shape that sits behind the group kill.
+#      SIGKILL itself is untrappable — nothing can fix that — but every SIGNALLED death that IS
+#      trappable now attests, and the in-flight marker's pid+lstart liveness covers the residue a
+#      SIGKILL leaves behind (see land_inflight_live).
+#   2. NO FAILURE INBOX. A failed land's notice died with its pane: the only record was stderr in
+#      a terminal whose session is gone. Now every non-zero terminal exit past the point where a
+#      land actually STARTED writes a `refs/land/failed/<ts>-<sid>-<branch>` ref (durable, in the
+#      repo, survives the worktree) AND files a `cc-backlog needs` row carrying the EXACT re-land
+#      command — so a dead author's failed land renders at the next close of whoever reads the
+#      ledger, instead of being discovered by its absence.
+#   3. NO IN-FLIGHT MARKER. See hooks/lib/land-inflight.sh for the full statement; the producer
+#      half is here. The refusal below is the "second concurrent fire on the same worktree" arm.
+#
+# The signal handler follows bin/cc-await-ping's `_sig_verdict` dialect deliberately — same shape,
+# same `128 + signum` exit, same "this was TERMINATED from outside, it did not fail" wording — so
+# there is ONE way this fleet attests a signalled death, not two.
+LIFECYCLE_ROLE="outer"   # the locked child sets "locked": it attests, but owns no marker and files no inbox
+INFLIGHT_FILE=""         # non-empty ⇒ THIS process claimed the worktree's in-flight marker
+# shellcheck source=/dev/null
+[[ -r "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh" ]] && . "${SCRIPT_DIR}/../hooks/lib/land-inflight.sh"
+
+inflight_claim() {  # 0 = claimed · refuses (exit 11) when a LIVE land already owns this worktree
+  local f live pid age
+  command -v land_inflight_path >/dev/null 2>&1 || return 0   # lib absent ⇒ no marker, today's behaviour
+  f="$(land_inflight_path .)" || return 0
+  if live="$(land_inflight_live . 2>/dev/null)"; then
+    pid="${live%% *}"; age="$(( $(date +%s) - $(printf '%s' "$live" | cut -d' ' -f2) ))"
+    echo "✗ ship-land: a land is ALREADY IN FLIGHT for this worktree (pid ${pid}, ${age}s) — refusing to fire a second one. Two lands from one worktree share a HEAD and a rebase, and the second only queues behind the first on the machine-wide mutex. Await its verdict (the ledger reports LANDING), or if that pid is wedged see: $LAND_LOCK --status" >&2
+    exit 11
+  fi
+  # A stale marker (its writer SIGKILLed) is simply overwritten — land_inflight_live already
+  # adjudicated it dead by pid+lstart, and re-adjudicating here would be a second predicate.
+  {
+    printf 'pid=%s\n'     "$$"
+    printf 'lstart=%s\n'  "$(ps -o lstart= -p "$$" 2>/dev/null || true)"
+    printf 'started=%s\n' "$(date +%s)"
+    printf 'branch=%s\n'  "${BRANCH:-?}"
+    printf 'head=%s\n'    "$(git rev-parse HEAD 2>/dev/null || echo '?')"
+    printf 'sid=%s\n'     "${CLAUDE_CODE_SESSION_ID:-}"
+  } > "$f" 2>/dev/null || return 0
+  INFLIGHT_FILE="$f"
+  return 0
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
+inflight_release() {  # idempotent · only ever removes a marker THIS process wrote
+  [[ -n "${INFLIGHT_FILE:-}" ]] || return 0
+  rm -f "$INFLIGHT_FILE" 2>/dev/null || true
+  INFLIGHT_FILE=""
+  return 0
+}
+
+# THE FAILURE INBOX. Two stores, because they answer different questions and fail independently:
+# the ref is durable repo state (it survives the pane, the worktree and the machine, and it pins
+# the exact head that failed to land, so the work is recoverable by anyone); the backlog row is
+# what makes it RENDER — an operator-owned step in the store `operator-readout.sh` already reads,
+# so it appears at the next close of whoever reads the ledger (memory:
+# conclusion-must-reach-the-enforcing-store — a ref nothing reads is inert).
+# shellcheck disable=SC2329  # invoked indirectly — its callers are the two trap handlers below.
+land_failure_inbox() {  # $1=exit code $2=cause word
+  local rc="$1" cause="$2" head name ref cmd bl
+  # ONLY past the in-flight claim, i.e. only once a land actually STARTED. Preflight refusals
+  # (dirty tree, shared checkout, a second concurrent fire) are the author's own immediate,
+  # visible feedback and filing them would drown the inbox in noise the author already read.
+  [[ -n "${INFLIGHT_FILE:-}" ]] || return 0
+  head="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$head" ]]; then
+    name="$(printf '%s-%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "${CLAUDE_CODE_SESSION_ID:-nosid}" "${BRANCH:-nobranch}" \
+            | tr -c 'A-Za-z0-9._-' '-')"
+    ref="refs/land/failed/${name}"
+    git update-ref "$ref" "$head" 2>/dev/null || true
+  fi
+  cmd="cd ${REPO_ROOT} && git checkout ${BRANCH} && bash scripts/ship-land.sh"
+  # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
+  # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
+  # bats detection, and `on` forces it so the suite can prove the real thing against its own
+  # CC_BACKLOG_FILE. The REF half is repo-local (a fixture repo is a tmpdir), so it always runs
+  # and is always assertable without a force.
+  if [[ -n "${BATS_TEST_TMPDIR:-}${BATS_SUITE_TMPDIR:-}" && "${SHIP_LAND_FAILURE_INBOX:-auto}" != "on" ]]; then
+    return 0
+  fi
+  [[ "${SHIP_LAND_FAILURE_INBOX:-auto}" = "off" ]] && return 0
+  bl="${CC_BACKLOG_BIN:-$HOME/.claude/bin/cc-backlog}"
+  [[ -x "$bl" ]] || return 0
+  "$bl" needs \
+    "re-land ${BRANCH} (${REPO_ROOT}): ship-land exited ${rc} (${cause}) and its author's pane may be gone — head pinned at ${ref:-<unrecorded>}" \
+    --run "$cmd" --session "${CLAUDE_CODE_SESSION_ID:-}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines at dispatch are its only callers.
+_land_sig_verdict() {  # <signame> <signum>
+  trap - TERM HUP INT EXIT
+  local rc=$(( 128 + $2 ))
+  gate_home_teardown
+  rollback_clean
+  # THE ATTESTATION IS THE WHOLE POINT: without it a killed land is indistinguishable from a land
+  # that never ran, and 100% of the exit-144 population read as absence rather than death.
+  attest_land "killed" "n/a" "n/a" "$rc"
+  if [[ "$LIFECYCLE_ROLE" = "outer" ]]; then
+    land_failure_inbox "$rc" "SIG$1"
+    inflight_release
+  fi
+  echo "✗ ship-land: verdict=killed signal=SIG$1 role=${LIFECYCLE_ROLE} branch=${BRANCH:-?} — this land was TERMINATED from outside; it did not fail a gate and nothing was proven about the tree. The tree is clean and the work is still on ${BRANCH:-the branch}; re-run ship-land when the box is quieter." >&2
+  exit "$rc"
+}
+
+# shellcheck disable=SC2329  # invoked indirectly via `trap _land_exit_trap EXIT` at dispatch.
+_land_exit_trap() {
+  local rc=$?
+  trap - EXIT
+  # COMPOSED, not competing: gate_home_setup used to install its own EXIT trap and its header said
+  # any second one "must compose with this". This IS that composition — one EXIT handler, teardown
+  # first (it is idempotent and refuses to remove anything it did not create), lifecycle second.
+  gate_home_teardown
+  if [[ "$LIFECYCLE_ROLE" = "outer" ]]; then
+    [[ "$rc" -ne 0 ]] && land_failure_inbox "$rc" "exit"
+    inflight_release
+  fi
+  exit "$rc"
+}
+
 # ---- EMPTYING THE MUTEX: the locked child → outer-process handover ----------
 # 2026-08-10 (land-architecture-100p §2.A / §5 P1). stranded-sweep (measured 59-62s, O(497 refs)
 # and growing with every branch anyone ever creates) and ship-backup-reap used to run INSIDE the
@@ -970,10 +1101,14 @@ gate_home_setup() {     # NEVER returns non-zero — isolation is best-effort BY
     fi
   done
   GATE_HOME="$dest"; export GATE_HOME_ISOLATED=1
-  # EXIT only. Trapping INT/TERM would swallow them (a handler without a re-raise turns Ctrl-C into
-  # "keep going"), and the reaper above already covers the signal-death case this script actually
-  # sees. There is no other EXIT trap in this file; adding one must compose with this.
-  trap gate_home_teardown EXIT
+  # NO TRAP HERE ANY MORE — teardown is the FIRST thing _land_exit_trap does, and the signal
+  # handler calls it too. This used to install `trap gate_home_teardown EXIT` and its own comment
+  # required any second EXIT trap to compose with it; P4 needed one (the failure inbox + the
+  # in-flight marker must be discharged on EVERY exit, not only a gated one), and two `trap … EXIT`
+  # lines in one process do not compose — the later one silently REPLACES the earlier. So there is
+  # exactly one EXIT handler, installed at dispatch, and it runs teardown first. The old comment's
+  # other half still binds and is now implemented there: INT/TERM are trapped, but the handler
+  # re-raises the death as `128 + signum` rather than swallowing it, so Ctrl-C still means stop.
   echo "→ gate: \$HOME isolated — APFS clone of ${clone_list// /, } at $dest (bats mutations cannot reach the operator's live ~/)." >&2
   return 0
 }
@@ -2528,6 +2663,13 @@ main_outer() {
     exit 0
   fi
 
+  # --- P4 defect 3: CLAIM THE WORKTREE (a second concurrent fire is refused, exit 11) ---
+  # Placed HERE, and the position is the whole design: every refusal ABOVE is immediate,
+  # author-visible feedback that files nothing (see land_failure_inbox); from this line on a land
+  # has genuinely started, so the close protocol must read LANDING instead of 📦 and any non-zero
+  # terminal exit — including the escalation PARK below — owes the operator an inbox row.
+  inflight_claim
+
   # --- escalation-scan (blast-radius cap, T-P9-6) → PARK, never auto-land ---
   local hits; hits="$(esc_scan "$RANGE")"
   if [[ -n "$hits" ]]; then
@@ -2609,8 +2751,18 @@ main_outer() {
 
 # ---- dispatch --------------------------------------------------------------
 
+# P4 defect 1 — INSTALLED BEFORE ANY WORK, in BOTH roles. The locked child is a separate process
+# behind land-lock, and a process-group signal reaches it too; it attests its own death (the
+# handler knows its role) while ownership of the marker and the inbox stays with the outer, which
+# is the process that knows the re-land command.
+trap _land_exit_trap        EXIT
+trap '_land_sig_verdict TERM 15' TERM
+trap '_land_sig_verdict HUP 1'   HUP
+trap '_land_sig_verdict INT 2'   INT
+
 if [[ "${1:-}" = "__locked" ]]; then
   shift
+  LIFECYCLE_ROLE="locked"
   main_locked "$@"     # always exits internally
 else
   main_outer "$@"      # exec's the locked child, or exits on a preflight refusal

@@ -1043,3 +1043,42 @@ Good to close: yes — complete, durable, deployed live, no loose ends; follow-o
   [ "$status" -eq 0 ]; fired "$output"
   printf '%s' "$output" | grep -q 'dispatched session(s) have NOT returned'
 }
+
+# ── LAND IN FLIGHT (land-architecture-100p §5 P4, defect 3) ──────────────────────────────────────
+# The dual of the LIVE-PEER-OWNED case above, one process closer to home: there the unlanded
+# commits are a live PEER's, here they are THIS session's and its own land is already running.
+# `trunk..HEAD` is unlanded for a land's whole duration, so this term convicted a session mid-land
+# and every compliant answer pushed it toward a SECOND /ship on the same worktree — which can only
+# queue behind its own sibling on the machine-wide mutex. The exoneration asserts nothing about the
+# land's outcome; the moment the marker stops adjudicating live, the conviction returns unaltered.
+
+@test "LAND-IN-FLIGHT: a close over THIS session's own running land must NOT block" {
+  w="$(_ca_repo lif config/kitty.conf)"
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/lif.jsonl" "$w/config/kitty.conf")"   # the commits ARE this session's
+  sleep 300 >/dev/null 2>&1 & lander=$!
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/x\n' \
+    "$lander" "$(ps -o lstart= -p "$lander")" "$(date +%s)" \
+    > "$(git -C "$w" rev-parse --absolute-git-dir)/ship-land-inflight"
+
+  run bash -c "printf '{\"session_id\":\"SL1\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  kill "$lander" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q '"decision":"block"' || false
+  # An exoneration is a decision, not a non-event — the IDL must name the STATE.
+  grep -q 'unlanded-land-in-flight' "$COMPLETION_IDL"
+}
+
+@test "LAND-IN-FLIGHT CONTROL: the SAME close with a STALE marker still convicts" {
+  # Without this the test above passes for the wrong reason. `$$` is alive but its start-time
+  # cannot match, so the marker is a dead land's residue — and residue must not buy an exoneration
+  # that hides genuinely parked work (the FM1 park-and-call-it-done hazard).
+  w="$(_ca_repo lifc config/kitty.conf)"
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/lifc.jsonl" "$w/config/kitty.conf")"
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/x\n' \
+    "$$" 'Thu Jan  1 00:00:00 2020' "$(date +%s)" \
+    > "$(git -C "$w" rev-parse --absolute-git-dir)/ship-land-inflight"
+
+  run bash -c "printf '{\"session_id\":\"SL2\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
+}

@@ -377,7 +377,16 @@ fi
 if [ "$UNLANDED" -eq 1 ]; then
   _ca_mine unlanded; _ca_u=$?
   _ca_peer=""
-  if [ "$_ca_u" -eq 1 ]; then
+  # LAND IN FLIGHT (land-architecture-100p §5 P4, defect 3) — CONSUMED from the ledger, never
+  # re-derived (make-the-actuator-the-arbiter). Commits mid-land are unlanded by every git read, so
+  # this term convicted a session whose land was already running and pushed it toward a SECOND
+  # /ship on the same worktree. Exonerating the term is the whole change: nothing here asserts the
+  # land succeeded, and the moment the marker goes (verdict reached, or the writer died and its
+  # pid+lstart stop matching) the conviction returns unaltered.
+  _ca_landing="$(lfield LANDING)"; case "$_ca_landing" in ''|*[!0-9]*) _ca_landing=0 ;; esac
+  if [ "$_ca_landing" -eq 1 ]; then
+    _ca_exon="${_ca_exon}unlanded-land-in-flight:$(lfield LANDING_PID) "
+  elif [ "$_ca_u" -eq 1 ]; then
     _ca_exon="${_ca_exon}unlanded-not-mine "
   elif [ "$_ca_u" -eq 2 ] && _ca_peer="$(_ca_peer_owned)" && [ -n "$_ca_peer" ]; then
     _ca_exon="${_ca_exon}unlanded-live-peer-owned:${_ca_peer} "

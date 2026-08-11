@@ -1215,3 +1215,49 @@ _cust_stub() { # $1=name $2=body-line → echoes an executable stub path
   printf '%s' "$output" | grep -q '^RUNG=✅'
   printf '%s' "$output" | grep -q '^CUSTODY_SRC=error'
 }
+
+# ── LAND IN FLIGHT (land-architecture-100p §5 P4, defect 3) ──────────────────────────────────────
+# `trunk..HEAD` is unlanded for the WHOLE duration of a land, not only before one. A land is
+# minutes long (episode p90 991 s) and its only workable shape is backgrounded, so the close
+# protocol routinely ran mid-flight, rendered "📦 … /ship to land it" as the ONE command, and
+# pressed for a SECOND /ship on the same worktree — which can only queue behind its own sibling on
+# the machine-wide mutex. The rung is deliberately UNCHANGED (the commits really are unlanded, and
+# 📦 must keep outranking ✅); what inverts is the instruction.
+
+@test "land in flight ⇒ LANDING=1 and the 📦 line says AWAIT, not /ship" {
+  echo more > more.txt; git add more.txt; git commit -q -m "unlanded work"
+  sleep 30 & lander=$!
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/x\n' \
+    "$lander" "$(ps -o lstart= -p "$lander")" "$(date +%s)" > "$(git rev-parse --absolute-git-dir)/ship-land-inflight"
+
+  run bash "$LEDGER" --machine
+  kill "$lander" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LANDING)" = "1" ]
+  [ "$(field "$output" LANDING_PID)" = "$lander" ]
+  [ "$(field "$output" RUNG)" = "📦" ]              # NOT laundered into ✅ — the work is still unlanded
+  [ "$(field "$output" UNLANDED)" = "1" ]
+  printf '%s' "$output" | grep -q "do NOT fire a second /ship"
+}
+
+@test "land in flight: a STALE marker leaves the 📦 instruction exactly as it was" {
+  # THE CONTROL, and the fail direction that matters. A false IN-FLIGHT suppresses the /ship nudge
+  # over genuinely parked work — the FM1 park-and-call-it-done hazard, i.e. losing the commits — so
+  # anything unadjudicable must read as NOT in flight. `$$` is alive; its lstart cannot match.
+  echo more > more.txt; git add more.txt; git commit -q -m "unlanded work"
+  printf 'pid=%s\nlstart=%s\nstarted=%s\nbranch=feat/x\n' \
+    "$$" 'Thu Jan  1 00:00:00 2020' "$(date +%s)" > "$(git rev-parse --absolute-git-dir)/ship-land-inflight"
+
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LANDING)" = "0" ]
+  printf '%s' "$output" | grep -q "/ship to land it"
+}
+
+@test "land in flight: NO marker at all ⇒ LANDING=0 (absence is not an in-flight land)" {
+  echo more > more.txt; git add more.txt; git commit -q -m "unlanded work"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" LANDING)" = "0" ]
+  printf '%s' "$output" | grep -q "/ship to land it"
+}

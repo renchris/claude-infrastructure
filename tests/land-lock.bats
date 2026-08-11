@@ -250,3 +250,135 @@ RUN
   [ -n "$d" ]
   [ ! -d "$d" ]       # introspection must not litter /tmp
 }
+
+# ── P4 defect 6: the verb allowlist (land-architecture-100p §5 P4 / §2.F) ────────────────────────
+# MEASURED: 23 ledger rows are `exit 127` — agents guessing `land-lock.sh status`, which was not a
+# verb and was therefore treated as PAYLOAD: the machine-wide mutex was TAKEN for the whole wait
+# and only then did the exec fail. One such guess waited 2,777 s to run a command that does not
+# exist, and every other lander on the box paid for that wait.
+
+@test "verb guard: a guessed verb is REFUSED (64) and the mutex is never taken" {
+  run bash "$LL" status
+  [ "$status" -eq 64 ]
+  [ ! -d "$LOCK" ]                                   # the whole point: no lock, not even briefly
+  echo "$output" | grep -q "REFUSING before the lock is taken"
+}
+
+@test "verb guard: the refusal does NOT queue behind a live holder (the 2777s pathology)" {
+  # THE DISCRIMINATOR. Refusing at all is cheap to fake; refusing WITHOUT WAITING is the fix. With
+  # the lock held by a live process the pre-guard code path queued for LAND_LOCK_WAIT and then
+  # exited 75 (or 127 on acquire) — here it must come back immediately with EX_USAGE.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  ps -o lstart= -p "$live" > "$LOCK/lstart"
+  start="$(date +%s)"
+  run env LAND_LOCK_WAIT=30 bash "$LL" status
+  elapsed="$(( $(date +%s) - start ))"
+  [ "$status" -eq 64 ]
+  [ "$elapsed" -lt 5 ]
+  [ "$(cat "$LOCK/pid")" = "$live" ]                 # and it touched nothing
+  kill "$live" 2>/dev/null || true
+}
+
+@test "verb guard: a real command is NEVER second-guessed (the guard cannot eat a payload)" {
+  # The too-strong half. A guard keyed on a denylist of guessed words would be out-run by the next
+  # guess; a guard keyed on resolvability could instead swallow a legitimate command. Both shapes
+  # every real caller uses — a bare resolvable name and an absolute path — must still run.
+  run bash "$LL" -- true
+  [ "$status" -eq 0 ]
+  run bash "$LL" -- /bin/echo hello
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q hello
+}
+
+# ── P4 defect 4: waiters are VISIBLE while they wait ─────────────────────────────────────────────
+# MEASURED: land-lock logged only at timeout or the release EXIT trap, so a queued waiter wrote
+# NOTHING until its wait resolved — three live waiters were observed with zero rows and all four
+# rows then appeared at once on release. Waits of 98 / 665 / 2,362 / 5,536 s were invisible for
+# exactly the interval in which someone would have wanted to know.
+
+@test "waiters: a QUEUED waiter registers and gets a ledger row AT ACQUIRE-START, not at release" {
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  ps -o lstart= -p "$live" > "$LOCK/lstart"
+  printf 'held-branch\n' > "$LOCK/branch"
+
+  env LAND_LOCK_WAIT=8 bash "$LL" -- bash -c 'exit 0' >/dev/null 2>&1 &
+  w=$!
+  # Assert WHILE IT IS STILL WAITING — this is the whole defect. Poll rather than sleep-and-hope so
+  # the test cannot pass on a slow box for the wrong reason.
+  seen=0
+  for _ in 1 2 3 4 5 6; do
+    if grep -q '"event":"queued"' "$LAND_LOG" 2>/dev/null; then seen=1; break; fi
+    sleep 1
+  done
+  [ "$seen" -eq 1 ]
+  [ "$(env LAND_LOCK_WAIT=1 bash "$LL" --waiters | grep -c .)" -ge 1 ]
+  # …and the holder is still holding, i.e. nothing about this resolved the wait.
+  [ -d "$LOCK" ]
+
+  wait "$w" 2>/dev/null || true
+  kill "$live" 2>/dev/null || true
+}
+
+@test "waiters: an UNCONTENDED land registers nothing and adds no queue row (signal, not volume)" {
+  # The negative control. A row per land would drown the signal this adds; only a lander that
+  # actually had to WAIT may write one.
+  run bash "$LL" -- bash -c 'exit 0'
+  [ "$status" -eq 0 ]
+  # (plain `if`, not `run !`: the latter needs bats_require_minimum_version 1.5.0, which would
+  # change `run`'s semantics for the other 19 tests in this file to silence one warning.)
+  if grep -q '"event":"queued"' "$LAND_LOG" 2>/dev/null; then false; fi
+  [ ! -e "$LAND_LOCK_DIR/waiters" ] || [ -z "$(ls -A "$LAND_LOCK_DIR/waiters" 2>/dev/null)" ]
+}
+
+# ── P4 defect 5: an over-budget LIVE holder PAGES (H2 stands — it is never reaped) ───────────────
+# MEASURED: holder pid 82031 held the mutex with ppid 1 (its owning session dead) and NOTHING
+# anywhere raised a word, while the lands behind it waited 2,362 s and 5,536 s. H2 (never reap a
+# live holder) is correct and unchanged; what was missing is its other half — if the machine will
+# never take the lock back, a human has to be told.
+
+@test "land-holder alarm: a LIVE holder past its budget emits a page — and is still NOT reaped" {
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  ps -o lstart= -p "$live" > "$LOCK/lstart"
+  touch -t 202001010000 "$LOCK"          # deterministically past ANY budget; no sleep, no flake
+
+  run env LAND_LOCK_SCAN="$LAND_LOCK_DIR" bash "$LL" --alarms
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '"kind":"land-lock-hung"'
+  echo "$output" | grep -q "\"recover_cmd\":\"ps -o pid,ppid,lstart,command -p $live\""
+  # H2 UNWEAKENED, asserted rather than assumed: paging must not have become reaping.
+  [ -d "$LOCK" ]
+  [ "$(cat "$LOCK/pid")" = "$live" ]
+  kill "$live" 2>/dev/null || true
+}
+
+@test "land-holder alarm: a live holder INSIDE its budget is SILENT (the alarm can not-fire)" {
+  # An alarm that always fires carries the same zero bits as one that cannot fire. A backgrounded
+  # land is the NORMAL shape on this box and is reparented to pid 1 exactly like a derelict one, so
+  # the trigger is over-budget, not orphanhood — this control is what pins that.
+  mkdir -p "$LOCK"
+  sleep 30 & live=$!
+  echo "$live" > "$LOCK/pid"
+  ps -o lstart= -p "$live" > "$LOCK/lstart"
+
+  run env LAND_LOCK_SCAN="$LAND_LOCK_DIR" bash "$LL" --alarms
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  kill "$live" 2>/dev/null || true
+}
+
+@test "land-holder alarm: a DEAD holder is not paged either — it is the reaper's business" {
+  mkdir -p "$LOCK"
+  echo 999999 > "$LOCK/pid"                       # a pid nothing can be
+  printf '%s\n' "$SENTINEL_LSTART" > "$LOCK/lstart"
+  touch -t 202001010000 "$LOCK"
+
+  run env LAND_LOCK_SCAN="$LAND_LOCK_DIR" bash "$LL" --alarms
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
